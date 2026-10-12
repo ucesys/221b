@@ -7,7 +7,7 @@ A console for Kubernetes clusters with two assistants built in:
 
 ## Status
 
-This repository holds the **design prototype**. Everything in it runs on sample data; nothing connects to a real cluster yet. The prototype is the specification for the real build.
+This repository holds the **design prototype**. Everything in it runs on sample data; nothing connects to a real cluster yet. The prototype is the specification for the real build, which is planned in seven phases in [docs/requirements.md](docs/requirements.md).
 
 ## What the design covers
 
@@ -28,6 +28,8 @@ The sample cluster, `lakehouse-prod`, runs Dremio, Nessie, MinIO, Superset, Long
 |---|---|
 | `design/Main.dc.html` | The prototype: HTML template, logic and sample data in one file |
 | `design/canvas.json` | Canvas settings for the design |
+| `docs/requirements.md` | Requirements and the seven build phases, each ending in a review |
+| `docs/images/` | The roadmap and architecture diagrams used by the requirements |
 
 `Main.dc.html` is a Claude Design artboard. Its template uses `{{holes}}`, `sc-if` and `sc-for`, and a single component class computes everything the template shows. It renders in the Claude Design canvas.
 
@@ -36,7 +38,7 @@ The sample cluster, `lakehouse-prod`, runs Dremio, Nessie, MinIO, Superset, Long
 - **Server:** Go, using client-go, Helm's Go SDK, kubectl's drain and describe packages, and the Pod Security admission library.
 - **Browser:** TypeScript and React.
 - **Sherlock:** the Claude API, called from the server so keys and cluster data stay off the browser.
-- **Hosting:** inside the cluster it manages, or in a management cluster that reaches other clusters directly or through an agent.
+- **Hosting:** inside the cluster it manages, or in a management cluster that connects to other clusters directly. An agent for clusters it cannot reach is an open question.
 
 ## License
 
