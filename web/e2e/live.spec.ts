@@ -1,7 +1,7 @@
 // Live updates and recovery, as P1-10, P1-11, P1-12 and P1-16 describe
 // them. These tests change the cluster, and put it back.
 import { expect, test, type Page } from '@playwright/test'
-import { cluster, consoleNode, healthyWorkers, inKind, snapshot } from './cluster'
+import { allNodesReady, cluster, consoleNode, healthyWorkers, inKind, podCrashing, snapshot } from './cluster'
 
 async function open(page: Page) {
   await page.goto('/')
@@ -34,7 +34,9 @@ test('a node cordoned with kubectl shows as cordoned within 5 seconds', async ({
 })
 
 test('a node that stops reporting and a crash-looping pod each show as a problem with its cause', async ({ page, request }) => {
-  test.setTimeout(inKind ? 300_000 : 60_000)
+  test.setTimeout(inKind ? 360_000 : 60_000)
+  // A retry starts only once the last attempt's node is back.
+  await allNodesReady()
   await open(page)
   const skip = await consoleNode()
   const workers = healthyWorkers(await snapshot(request)).filter((r) => r.name !== skip)
@@ -48,7 +50,12 @@ test('a node that stops reporting and a crash-looping pod each show as a problem
   try {
     // kind marks the node Unknown after the node monitor grace period.
     await expect(status(page, quiet)).toHaveText('Unknown', { timeout: inKind ? 120_000 : 10_000 })
-    await expect(row(page, crashing)).toContainText(/1 error/, { timeout: inKind ? 120_000 : 10_000 })
+    if (inKind) {
+      // Wait for the cluster itself to say the pod is crash-looping, then
+      // for the console to show it.
+      await expect.poll(() => podCrashing(crash.pod), { timeout: 120_000, intervals: [1000] }).toBe(true)
+    }
+    await expect(row(page, crashing)).toContainText(/1 error/, { timeout: 10_000 })
 
     await row(page, quiet).click()
     const panel = page.getByTestId('node-panel')

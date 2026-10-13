@@ -95,8 +95,13 @@ step "helm upgrade"
 helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reuse-values --set logLevel=debug --wait --timeout 60s
 kubectl -n "$NS" rollout status "deployment/$FULLNAME" --timeout=60s
 [ "$(kubectl -n "$NS" get deployment "$FULLNAME" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="LOG_LEVEL")].value}')" = debug ]
-for _ in $(seq 30); do curl -fs "$BASE_URL/readyz" >/dev/null && break; sleep 1; done
-curl -fsS "$BASE_URL/readyz"
+# Through a port-forward: kube-proxy may still be catching up after the
+# browser tests restarted the API server, which would delay the NodePort.
+kubectl -n "$NS" port-forward "svc/$FULLNAME" 18080:80 > "$WORK/port-forward.log" 2>&1 &
+pf=$!
+for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && break; sleep 1; done
+curl -fsS http://127.0.0.1:18080/readyz
+kill "$pf"
 endstep
 
 step "helm uninstall leaves nothing behind"

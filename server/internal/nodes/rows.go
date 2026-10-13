@@ -127,6 +127,8 @@ var failingReasons = map[string]bool{
 	"ImagePullBackOff":           true,
 	"ErrImagePull":               true,
 	"InvalidImageName":           true,
+	"ErrImageNeverPull":          true,
+	"ImageInspectError":          true,
 	"CreateContainerConfigError": true,
 	"CreateContainerError":       true,
 	"RunContainerError":          true,
@@ -342,6 +344,14 @@ func classify(p *corev1.Pod, now time.Time) (podState, bool) {
 				s.since = startOf(p)
 				return s, true
 			}
+			// Between back-offs a crashing container shows as terminated
+			// with an error before the kubelet restarts it.
+			if t := cs.State.Terminated; t != nil && t.ExitCode != 0 && p.Spec.RestartPolicy != corev1.RestartPolicyNever {
+				s.kind, s.reason = kindFailing, "CrashLoopBackOff"
+				s.message = containerMessage(cs, fmt.Sprintf("It exited with code %d (%s) and is being restarted.", t.ExitCode, orDefault(t.Reason, "Error")))
+				s.since = startOf(p)
+				return s, true
+			}
 		}
 	}
 	ready := podCondition(p, corev1.PodReady)
@@ -378,6 +388,13 @@ func classify(p *corev1.Pod, now time.Time) (podState, bool) {
 		}
 	}
 	return s, true
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
 }
 
 func containerMessage(cs corev1.ContainerStatus, msg string) string {

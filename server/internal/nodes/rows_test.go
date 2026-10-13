@@ -252,6 +252,31 @@ func TestPodProblems(t *testing.T) {
 	}
 }
 
+// Between back-offs a crash-looping container is terminated, not waiting;
+// it is failing all the same.
+func TestCrashingContainerBetweenBackoffs(t *testing.T) {
+	exited := func(p *corev1.Pod) {
+		cs := &p.Status.ContainerStatuses[0]
+		cs.Ready, cs.RestartCount = false, 3
+		cs.State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}
+		p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse, LastTransitionTime: metav1.NewTime(now.Add(-5 * time.Second))}}
+	}
+	r := BuildRow(node("n1"), []*corev1.Pod{pod("crash", "10m", "16Mi", exited)}, nil, now)
+	if r.Errors != 1 || r.Pods.Failing != 1 {
+		t.Fatalf("errors %d, pods %+v", r.Errors, r.Pods)
+	}
+	e := r.Problems[0].Entries[0]
+	if e.Reason != "CrashLoopBackOff" || !strings.Contains(e.Message, "exited with code 1 (Error)") {
+		t.Fatalf("entry %+v", e)
+	}
+
+	// Under restartPolicy Never nothing restarts it: the pod is finishing, not crash-looping.
+	never := pod("job", "10m", "16Mi", exited, func(p *corev1.Pod) { p.Spec.RestartPolicy = corev1.RestartPolicyNever })
+	if r := BuildRow(node("n1"), []*corev1.Pod{never}, nil, now); r.Pods.Failing != 0 {
+		t.Fatalf("pods %+v", r.Pods)
+	}
+}
+
 func TestPodEntriesAreCapped(t *testing.T) {
 	var pods []*corev1.Pod
 	for i := 0; i < 14; i++ {

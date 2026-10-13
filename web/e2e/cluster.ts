@@ -74,6 +74,24 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+/** Waits until every node is Ready again (kind only). */
+export async function allNodesReady(): Promise<void> {
+  if (inKind) await kubectlRetry('wait', '--for=condition=Ready', 'nodes', '--all', '--timeout=180s')
+}
+
+/** Whether the cluster shows a pod's first container crash-looping (kind only). */
+export async function podCrashing(pod: string): Promise<boolean> {
+  const [ns, name] = pod.split('/') as [string, string]
+  type State = { waiting?: { reason?: string }; terminated?: { exitCode?: number } }
+  const out = await kubectl('-n', ns, 'get', 'pod', name, '-o', 'json')
+  const p = JSON.parse(out) as { status?: { containerStatuses?: { restartCount?: number; state?: State; lastState?: State }[] } }
+  const cs = p.status?.containerStatuses?.[0]
+  const crashing =
+    cs?.state?.waiting?.reason === 'CrashLoopBackOff' || ((cs?.restartCount ?? 0) > 0 && (cs?.state?.terminated?.exitCode ?? 0) !== 0)
+  if (!crashing) console.log(`${pod} is not crash-looping yet: ${JSON.stringify(cs ?? p.status ?? {})}`)
+  return crashing
+}
+
 /** The node 221B itself runs on, which the tests leave alone. */
 export async function consoleNode(): Promise<string> {
   if (!inKind) return ''
