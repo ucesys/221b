@@ -1,3 +1,20 @@
 .DS_Store
 node_modules/
 *.log
+
+# Build output
+/bin/
+/web/dist/
+/server/internal/ui/dist/*
+!/server/internal/ui/dist/.gitkeep
+
+# Go modules are fetched, not committed.
+/server/vendor/
+
+# Test output
+/web/test-results/
+/web/playwright-report/
+/web/blob-report/
+
+# Python bytecode
+__pycache__/

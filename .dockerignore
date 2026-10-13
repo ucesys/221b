@@ -1,0 +1,15 @@
+# Only what the image build needs.
+*
+!server/
+!web/
+server/vendor/
+server/internal/ui/dist/*
+!server/internal/ui/dist/.gitkeep
+web/node_modules/
+web/dist/
+web/test-results/
+web/playwright-report/
+**/*_test.go
+**/*.test.ts
+**/*.test.tsx
+web/e2e/

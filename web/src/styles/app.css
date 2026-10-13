@@ -1,0 +1,41 @@
+/* Additions for the real app that the prototype does not need. */
+.rk-clstatic {
+  cursor: default;
+}
+.rk-clstatic:hover {
+  border-color: var(--line);
+  background: var(--surface2);
+}
+.rk-banner[data-tone='info'] {
+  background: var(--info-weak);
+  color: var(--info);
+}
+.rk-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+/* The prototype's .rk-dd menus are positioned against this wrapper. */
+.rk-dd {
+  position: relative;
+}
+@media (max-width: 760px) {
+  .rk-split > .rk-col > section {
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+  }
+}
+/* Large clusters: rows off screen skip layout and paint, so sorting 500
+   nodes re-lays out only the rows in view. */
+.rk-grid > .rk-gr {
+  content-visibility: auto;
+  contain-intrinsic-height: auto 37px;
+}
+/* Below 900px the page scrolls as a whole. The header stays in place so the
+   details panel, fixed just under it, never leaves a gap above itself. */
+@media (max-width: 899px) {
+  .rk-hdr {
+    position: sticky !important;
+    top: 0;
+    z-index: 36;
+  }
+}

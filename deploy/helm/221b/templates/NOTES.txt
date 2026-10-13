@@ -1,0 +1,11 @@
+221B is installed as {{ include "b221.fullname" . }} in namespace {{ .Release.Namespace }}.
+
+Open it with a port-forward (Phase 1 has no sign-in, so it is not exposed):
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "b221.fullname" . }} 8080:{{ .Values.service.port }}
+
+then browse to http://localhost:8080.
+
+Check what it is allowed to read:
+
+  kubectl auth can-i --list --as=system:serviceaccount:{{ .Release.Namespace }}:{{ include "b221.serviceAccountName" . }}

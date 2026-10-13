@@ -1,0 +1,81 @@
+# The name shown in the top bar. Kubernetes has no reliable name for itself.
+clusterName: ""
+
+image:
+  repository: ghcr.io/ucesys/221b
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Resource names default to <release>-221b; set this to use your own.
+fullnameOverride: ""
+
+replicaCount: 1
+
+# How often CPU and memory in use are read from metrics-server, and how
+# often the API server is checked.
+metricsInterval: 15s
+healthInterval: 10s
+logLevel: info
+
+serviceAccount:
+  create: true
+  # Defaults to the full name.
+  name: ""
+  annotations: {}
+
+rbac:
+  # A read-only ClusterRole: get, list and watch on nodes and pods, and get
+  # and list on node metrics. Nothing else, and no Secrets.
+  create: true
+
+service:
+  # ClusterIP: open it with kubectl port-forward. Phase 1 has no sign-in,
+  # so do not expose it more widely.
+  type: ClusterIP
+  port: 80
+  # Only used when type is NodePort.
+  nodePort: null
+
+networkPolicy:
+  enabled: true
+  # Extra peers allowed to reach the console on its HTTP port, as
+  # NetworkPolicy "from" entries. kubectl port-forward needs none.
+  ingressFrom: []
+  # Ports the console may reach the Kubernetes API server on.
+  apiServerPorts: [443, 6443]
+
+# The server keeps a watched copy of every node and pod; 1Gi holds 500
+# nodes and 15,000 pods with room to spare. It sizes its garbage collector
+# to 90% of the memory limit.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  privileged: false
+  capabilities:
+    drop: ["ALL"]
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""
