@@ -1,5 +1,6 @@
 // The Services tab, as P2-05 describes it.
 import { expect, test, type Page } from '@playwright/test'
+import { nWord } from '../src/lib/format'
 import { cluster, serviceRows, snapshot } from './cluster'
 
 async function open(page: Page, hash = '#/services') {
@@ -12,7 +13,7 @@ test('lists every Service with its type, cluster IP, ports, endpoints and the Ex
   await open(page)
   const services = serviceRows(await snapshot(request, ['services']))
   expect(services.length).toBeGreaterThan(0)
-  await expect(page.getByTestId('services-summary')).toHaveText(`${services.length} Services`)
+  await expect(page.getByTestId('services-summary')).toHaveText(nWord(services.length, 'Service', 'Services'))
   // Rows are windowed: the grid knows the total, and the screen shows the first of them.
   await expect(page.locator('.rk-grid[data-total]')).toHaveAttribute('data-total', String(services.length))
   expect(await page.locator('[data-service]').count()).toBeGreaterThanOrEqual(Math.min(services.length, 20))
@@ -32,7 +33,7 @@ test('lists every Service with its type, cluster IP, ports, endpoints and the Ex
   await page.getByTestId('service-namespaces').getByRole('link', { name: new RegExp(`^${ns}\\b`) }).click()
   await expect(page).toHaveURL(new RegExp(`ns=${ns}`))
   const inNs = services.filter((s) => s.namespace === ns)
-  await expect(page.getByTestId('services-summary')).toHaveText(`${inNs.length} Services in ${ns}`)
+  await expect(page.getByTestId('services-summary')).toHaveText(`${nWord(inNs.length, 'Service', 'Services')} in ${ns}`)
   await expect(page.locator('.rk-grid[data-total]')).toHaveAttribute('data-total', String(inNs.length))
 })
 
