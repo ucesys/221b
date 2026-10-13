@@ -1,4 +1,13 @@
-221B is installed as {{ include "b221.fullname" . }} in namespace {{ .Release.Namespace }}.
+221B is installed as {{ include "b221.fullname" . }} in namespace {{ .Release.Namespace }}, running {{ include "b221.image" . }}.
+{{- if include "b221.movingTag" . }}
+That tag moves with every build: each helm upgrade restarts the console on its latest build, and
+
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "b221.fullname" . }} | grep -m1 serving
+
+shows the commit it was built from. Pin one build with --set image.tag=sha-<commit> or --set image.digest=sha256:<digest>.
+{{- end }}
+
+Upgrade with --reset-then-reuse-values to keep your settings and take the chart's new defaults.
 {{- $svc := include "b221.fullname" . }}
 {{- if eq .Values.service.type "LoadBalancer" }}
 

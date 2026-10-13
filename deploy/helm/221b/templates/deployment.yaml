@@ -21,9 +21,18 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.podAnnotations }}
+      {{- if or .Values.podAnnotations (include "b221.movingTag" .) }}
       annotations:
+        {{- if include "b221.movingTag" . }}
+        # A moving tag may point at a new build since the last upgrade, and
+        # an unchanged pod template would not restart the pod to fetch it.
+        # The release revision changes with every helm upgrade, so each one
+        # rolls the pod, which then pulls the tag again.
+        221b/release-revision: {{ .Release.Revision | quote }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
     spec:
       serviceAccountName: {{ include "b221.serviceAccountName" . }}
@@ -41,7 +50,7 @@ spec:
       containers:
         - name: console
           image: {{ include "b221.image" . | quote }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          imagePullPolicy: {{ include "b221.pullPolicy" . }}
           env:
             - name: CLUSTER_NAME
               value: {{ .Values.clusterName | quote }}

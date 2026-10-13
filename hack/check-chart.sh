@@ -37,6 +37,11 @@ render console --set clusterName=ci --set service.type=LoadBalancer --set servic
   tee "$WORK/chart-lb.yaml" | validate
 echo "--- a release name and an override that start with a digit"
 render 221b --set clusterName=ci --set fullnameOverride=2b | validate
+echo "--- image tags that move, tags that do not, a digest and an explicit pull policy"
+render console --set clusterName=ci --set image.tag=pr-7 | tee "$WORK/chart-moving.yaml" | validate
+render console --set clusterName=ci --set image.tag=sha-d548f3953839 | tee "$WORK/chart-sha.yaml" | validate
+render console --set clusterName=ci --set image.digest=sha256:ce75aee9b9c2cde129bb8796ece11c3004b4eaba1d9afceed8b11e6996f0665d | tee "$WORK/chart-digest.yaml" | validate
+render console --set clusterName=ci --set image.tag=main --set image.pullPolicy=IfNotPresent | tee "$WORK/chart-policy.yaml" | validate
 
 fail=0
 check() {
@@ -90,6 +95,18 @@ host_names() {
     grep -A1 'name: ALLOWED_HOSTS' "$WORK/chart-options.yaml" | grep -q ',console.example.com"'
 }
 exposed_port() { grep -q 'port: 8081' "$out" && grep -q 'port: 8081' "$WORK/chart-lb.yaml"; }
+# A release tag (the default) is fetched once; a moving tag is fetched on
+# every pod start and the pod rolls on every upgrade; a sha- tag or a
+# digest is fetched once; an explicit policy wins.
+pull_policy() {
+  grep -q 'image: "ghcr.io/ucesys/221b:0.1.0"' "$out" && grep -q 'imagePullPolicy: IfNotPresent' "$out" && ! grep -q 'release-revision' "$out" &&
+    grep -q 'image: "ghcr.io/ucesys/221b:pr-7"' "$WORK/chart-moving.yaml" && grep -q 'imagePullPolicy: Always' "$WORK/chart-moving.yaml" &&
+    grep -q '221b/release-revision: "1"' "$WORK/chart-moving.yaml" &&
+    grep -q 'imagePullPolicy: IfNotPresent' "$WORK/chart-sha.yaml" && ! grep -q 'release-revision' "$WORK/chart-sha.yaml" &&
+    grep -q 'image: "ghcr.io/ucesys/221b@sha256:ce75aee9b9c2cde129bb8796ece11c3004b4eaba1d9afceed8b11e6996f0665d"' "$WORK/chart-digest.yaml" &&
+    grep -q 'imagePullPolicy: IfNotPresent' "$WORK/chart-digest.yaml" && ! grep -q 'release-revision' "$WORK/chart-digest.yaml" &&
+    grep -q 'imagePullPolicy: IfNotPresent' "$WORK/chart-policy.yaml" && grep -q 'release-revision' "$WORK/chart-policy.yaml"
+}
 lb_service() {
   grep -q 'type: LoadBalancer' "$WORK/chart-lb.yaml" && grep -q 'nodePort: 30081' "$WORK/chart-lb.yaml" &&
     grep -q 'loadBalancerClass: "metallb"' "$WORK/chart-lb.yaml" && grep -q -- '- 10.0.0.22' "$WORK/chart-lb.yaml" &&
@@ -119,6 +136,7 @@ check "API server addresses narrow the egress rule" api_server_addresses
 check "it answers to its Service's names and the names in values" host_names
 check "an override that starts with a digit still gets a valid name" digit_override
 check "the Service listens on 8081" exposed_port
+check "moving tags are pulled on every start and rolled on every upgrade; releases, sha- tags and digests once" pull_policy
 check "a LoadBalancer Service carries its class, address list, node port and annotations" lb_service
 check "nothing may reach a ClusterIP Service through the network policy" closed_by_default
 check "an exposed Service is reachable through the network policy" open_when_exposed

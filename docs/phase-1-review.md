@@ -29,7 +29,7 @@ Decisions worth a look, because they narrow or depart from the requirements:
 **To check by hand** on a test cluster of your choice (open question 1), follow [Try it on a cluster](../README.md#try-it-on-a-cluster) in the README, open <http://localhost:8080>, then:
 
 ```sh
-helm upgrade console deploy/helm/221b -n 221b --reuse-values --set logLevel=debug
+helm upgrade console deploy/helm/221b -n 221b --reset-then-reuse-values --set logLevel=debug
 helm uninstall console -n 221b
 kubectl get all,sa,networkpolicy -n 221b
 kubectl get clusterrole,clusterrolebinding -l app.kubernetes.io/instance=console

@@ -40,8 +40,36 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{- end -}}
 {{- end -}}
 
+{{/* The image: a digest pins one build whatever its tag points at. */}}
 {{- define "b221.image" -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest -}}
+{{- else -}}
 {{- printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* A moving tag (main, pr-7, latest, ci) is republished under the same
+     name with every build; a release (0.1.0, v0.1.0), a sha- tag or a
+     digest names one build for good. Renders "true" or nothing. */}}
+{{- define "b221.movingTag" -}}
+{{- $tag := default .Chart.AppVersion .Values.image.tag -}}
+{{- if and (not .Values.image.digest) (not (regexMatch "^(v?[0-9]+\\.[0-9]+\\.[0-9]+([-+].*)?|sha-[0-9a-f]{7,})$" $tag)) -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* Always for a moving tag, so every pod start fetches the current
+     build; IfNotPresent for a build that cannot change under its name.
+     An explicit image.pullPolicy wins. */}}
+{{- define "b221.pullPolicy" -}}
+{{- if .Values.image.pullPolicy -}}
+{{- .Values.image.pullPolicy -}}
+{{- else if include "b221.movingTag" . -}}
+Always
+{{- else -}}
+IfNotPresent
+{{- end -}}
 {{- end -}}
 
 {{- define "b221.allowedHosts" -}}

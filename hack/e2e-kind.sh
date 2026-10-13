@@ -61,7 +61,7 @@ kubectl label namespace "$NS" pod-security.kubernetes.io/enforce=restricted pod-
 start=$(date +%s)
 helm install "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" \
   --set clusterName=kind-e2e \
-  --set image.repository="${IMAGE%:*}" --set image.tag="${IMAGE##*:}" \
+  --set image.repository="${IMAGE%:*}" --set image.tag="${IMAGE##*:}" --set image.pullPolicy=Never \
   --set service.type=NodePort --set service.nodePort=30080 \
   --wait --timeout 60s
 notice "helm install" "The console was Ready $(( $(date +%s) - start ))s after helm install on Kubernetes $MINOR."
@@ -135,7 +135,7 @@ step "helm upgrade keeps the settings"
 # A setting saved before the upgrade must survive it: the chart owns the
 # ConfigMap but never its data.
 kubectl -n "$NS" patch configmap "$FULLNAME" --type merge -p '{"data":{"settings.json":"{\"refreshSeconds\":11}"}}'
-helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reuse-values --set logLevel=debug --wait --timeout 60s
+helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reset-then-reuse-values --set logLevel=debug --wait --timeout 60s
 kubectl -n "$NS" rollout status "deployment/$FULLNAME" --timeout=60s
 [ "$(kubectl -n "$NS" get deployment "$FULLNAME" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="LOG_LEVEL")].value}')" = debug ]
 kubectl -n "$NS" get configmap "$FULLNAME" -o jsonpath='{.data.settings\.json}' | grep -q '"refreshSeconds":11'

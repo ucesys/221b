@@ -82,7 +82,7 @@ kubectl create namespace "$NS"
 kubectl label namespace "$NS" pod-security.kubernetes.io/enforce=restricted
 helm install console "$ROOT/deploy/helm/221b" -n "$NS" \
   --set clusterName=kwok-scale \
-  --set image.repository="${IMAGE%:*}" --set image.tag="${IMAGE##*:}" \
+  --set image.repository="${IMAGE%:*}" --set image.tag="${IMAGE##*:}" --set image.pullPolicy=Never \
   --set service.type=NodePort --set service.nodePort=30080 \
   --wait --timeout 120s
 for _ in $(seq 60); do curl -fs http://127.0.0.1:8080/readyz >/dev/null && break; sleep 1; done

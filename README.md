@@ -31,11 +31,11 @@ helm install console deploy/helm/221b -n 221b \
 kubectl -n 221b port-forward svc/console-221b 8080:8081
 ```
 
-Then open <http://localhost:8080>. `clusterName` is the name shown in the top bar. Images are tagged `main` and `sha-<commit>` from the main branch, and `pr-<number>` for each pull request.
+Then open <http://localhost:8080>. `clusterName` is the name shown in the top bar. Images are tagged `main` and `sha-<commit>` from the main branch, and `pr-<number>` for each pull request. `main` and `pr-<number>` move to every new build: with one of those the chart pulls the image on every pod start and restarts the console on every `helm upgrade`, so an upgrade always runs the latest build; `kubectl -n 221b logs deploy/console-221b | grep -m1 serving` shows which commit is running. To pin one build, set `image.tag=sha-<commit>` or `image.digest=sha256:<digest>`.
 
 **To put it on the network** instead, on a network where everyone may see the cluster's nodes and the names of its failing pods, add `--set service.type=LoadBalancer`. With a load balancer controller (MetalLB, kube-vip, a cloud provider) the Service gets an address that answers on port 8081; `kubectl -n 221b get svc console-221b` shows it. Without one, every node still answers on the node port shown there, and `--set 'service.externalIPs={10.0.0.21,10.0.0.22}'` with your nodes' addresses makes them answer on 8081 as well. The network policy lets anyone reach an exposed Service unless `networkPolicy.ingressFrom` lists who may.
 
-To see what it may read: `kubectl auth can-i --list --as=system:serviceaccount:221b:console-221b`. To remove it: `helm uninstall console -n 221b`.
+To upgrade after a `git pull`, keep your settings and take the chart's new defaults: `helm upgrade console deploy/helm/221b -n 221b --reset-then-reuse-values` (plain `--reuse-values` keeps the old chart's defaults too, so new ones never apply). To see what it may read: `kubectl auth can-i --list --as=system:serviceaccount:221b:console-221b`. To remove it: `helm uninstall console -n 221b`.
 
 CPU and memory in use come from [metrics-server](https://github.com/kubernetes-sigs/metrics-server) when the cluster has it; without it, the tab says so and shows everything else. Each node's uptime comes from its kubelet, read through the API server once per boot; that needs `get` on `nodes/proxy`, which the chart grants unless you set `kubeletStats=false`.
 

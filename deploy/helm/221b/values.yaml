@@ -3,9 +3,19 @@ clusterName: ""
 
 image:
   repository: ghcr.io/ucesys/221b
-  # Defaults to the chart's appVersion.
+  # Defaults to the chart's appVersion, a release. CI also publishes main
+  # and pr-<number>, which move to every new build, and sha-<commit>, which
+  # names one build for good.
   tag: ""
-  pullPolicy: IfNotPresent
+  # A digest (sha256:...) pins one build whatever its tag points at; it
+  # replaces the tag in the image reference.
+  digest: ""
+  # Empty picks Always for a moving tag (main, pr-7, latest), so every pod
+  # start fetches the current build, and IfNotPresent for a release, a
+  # sha- tag or a digest, which cannot change under their names. With a
+  # moving tag the pod also restarts on every helm upgrade, so an upgrade
+  # always runs the latest build of that tag. Set it to override.
+  pullPolicy: ""
 
 imagePullSecrets: []
 

@@ -116,7 +116,7 @@ All responses carry the security headers below. Every endpoint is `GET` except o
 | On a laptop, simulated | `make dev-sim` | Development and the browser tests, with no cluster at all. |
 | Management mode | Phase 3 | One installation connected to several clusters with stored credentials. |
 
-The image is published to `ghcr.io/ucesys/221b` for `linux/amd64` and `linux/arm64`: `main` and `sha-<commit>` from main, and `pr-<number>` from this repository's pull requests. The package is private while the repository is, so a cluster pulling it needs an image pull secret (see the [README](../README.md#try-it-on-a-cluster)).
+The image is published to `ghcr.io/ucesys/221b` for `linux/amd64` and `linux/arm64`: `main` and `sha-<commit>` from main, and `pr-<number>` from this repository's pull requests. The package is private while the repository is, so a cluster pulling it needs an image pull secret (see the [README](../README.md#try-it-on-a-cluster)). `main` and `pr-<number>` are moving tags, so for them the chart sets `imagePullPolicy: Always` and stamps the pod template with the release revision, which makes every `helm upgrade` restart the console on the tag's latest build; a release, a `sha-` tag or `image.digest` names one build for good and is pulled once. An explicit `image.pullPolicy` overrides the choice.
 
 ## Operations
 
