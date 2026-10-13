@@ -47,8 +47,14 @@ spec:
               value: {{ .Values.clusterName | quote }}
             - name: LISTEN
               value: ":8080"
-            - name: METRICS_INTERVAL
-              value: {{ .Values.metricsInterval | quote }}
+            # The refresh rate until someone changes it in Settings, which
+            # keeps the choice in the ConfigMap named here.
+            - name: REFRESH
+              value: {{ .Values.refresh | quote }}
+            - name: SETTINGS_CONFIGMAP
+              value: {{ printf "%s/%s" .Release.Namespace (include "b221.fullname" .) | quote }}
+            - name: KUBELET_STATS
+              value: {{ .Values.kubeletStats | quote }}
             - name: HEALTH_INTERVAL
               value: {{ .Values.healthInterval | quote }}
             - name: LOG_LEVEL

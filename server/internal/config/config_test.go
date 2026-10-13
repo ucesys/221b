@@ -11,7 +11,7 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Listen != ":8080" || c.ClusterName != "prod" || c.MetricsInterval != 15*time.Second || c.HealthInterval != 10*time.Second || c.LogFormat != "json" {
+	if c.Listen != ":8080" || c.ClusterName != "prod" || c.Refresh != 3*time.Second || c.HealthInterval != 10*time.Second || c.LogFormat != "json" || !c.KubeletStats || c.SettingsConfigMap != "" {
 		t.Fatalf("defaults %+v", c)
 	}
 }
@@ -19,13 +19,15 @@ func TestDefaults(t *testing.T) {
 func TestEnvironment(t *testing.T) {
 	t.Setenv("CLUSTER_NAME", "lakehouse-prod")
 	t.Setenv("LISTEN", ":9090")
-	t.Setenv("METRICS_INTERVAL", "30")
+	t.Setenv("REFRESH", "30")
+	t.Setenv("KUBELET_STATS", "false")
+	t.Setenv("SETTINGS_CONFIGMAP", "consoles/console-221b")
 	t.Setenv("HEALTH_INTERVAL", "5s")
 	c, err := Parse(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ClusterName != "lakehouse-prod" || c.Listen != ":9090" || c.MetricsInterval != 30*time.Second || c.HealthInterval != 5*time.Second {
+	if c.ClusterName != "lakehouse-prod" || c.Listen != ":9090" || c.Refresh != 30*time.Second || c.HealthInterval != 5*time.Second || c.KubeletStats || c.SettingsConfigMap != "consoles/console-221b" {
 		t.Fatalf("env %+v", c)
 	}
 	// Flags win over the environment.
@@ -48,7 +50,8 @@ func TestAllowedHosts(t *testing.T) {
 func TestValidation(t *testing.T) {
 	for _, args := range [][]string{
 		{"-cluster-name", ""},
-		{"-metrics-interval", "100ms"},
+		{"-refresh", "100ms"},
+		{"-refresh", "11m"},
 		{"-log-level", "loud"},
 		{"-log-format", "xml"},
 		{"extra"},

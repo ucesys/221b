@@ -1,5 +1,6 @@
 {{- if .Values.rbac.create }}
-# Read-only: exactly what the Nodes tab reads. No Secrets, no writes.
+# Read-only across the cluster: exactly what the Nodes tab reads. No
+# Secrets, no writes.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -13,6 +14,13 @@ rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["nodes"]
     verbs: ["get", "list"]
+  {{- if .Values.kubeletStats }}
+  # Each node's boot time, read once per boot from its kubelet's Summary
+  # API through the API server's node proxy (uptime in the node details).
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["get"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -24,6 +32,36 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ include "b221.clusterScopedName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "b221.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# The one thing it writes: its own settings, in its own ConfigMap (X-03).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "b221.fullname" . }}-settings
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: [{{ include "b221.fullname" . | quote }}]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "b221.fullname" . }}-settings
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "b221.fullname" . }}-settings
 subjects:
   - kind: ServiceAccount
     name: {{ include "b221.serviceAccountName" . }}

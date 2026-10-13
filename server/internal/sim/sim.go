@@ -32,6 +32,13 @@ type Options struct {
 	Version string
 	// Metrics turns the metrics.k8s.io API on.
 	Metrics bool
+	// KubeletStats serves each node's boot time the way the API server
+	// proxies a kubelet's Summary API. Off, the proxy is refused, as it is
+	// for a ServiceAccount without get on nodes/proxy.
+	KubeletStats bool
+	// SettingsConfigMap is a "namespace/name" ConfigMap that exists from
+	// the start, empty, as the chart's does. Empty means none.
+	SettingsConfigMap string
 	// Problems adds a not-ready node, a cordoned node, a node under disk
 	// pressure and some failing pods, so the problem views have something
 	// to show.
@@ -45,17 +52,19 @@ type Sim struct {
 	opts Options
 	mux  *http.ServeMux
 
-	mu       sync.Mutex
-	rv       int64
-	nodes    map[string]*corev1.Node
-	pods     map[string]*corev1.Pod
-	events   []event
-	watchers map[*watcher]struct{}
-	down     bool
-	refused  int // list and watch requests refused while down
-	metrics  bool
-	usage    map[string][2]int64 // node -> cpu milli, memory bytes
-	rnd      *rand.Rand
+	mu         sync.Mutex
+	rv         int64
+	nodes      map[string]*corev1.Node
+	pods       map[string]*corev1.Pod
+	events     []event
+	watchers   map[*watcher]struct{}
+	down       bool
+	refused    int // list and watch requests refused while down
+	metrics    bool
+	usage      map[string][2]int64 // node -> cpu milli, memory bytes
+	boots      map[string]time.Time
+	configmaps map[string]map[string]string // namespace/name -> data
+	rnd        *rand.Rand
 }
 
 type event struct {
@@ -90,13 +99,18 @@ func New(o Options) *Sim {
 		o.Now = time.Now
 	}
 	s := &Sim{
-		opts:     o,
-		nodes:    map[string]*corev1.Node{},
-		pods:     map[string]*corev1.Pod{},
-		watchers: map[*watcher]struct{}{},
-		metrics:  o.Metrics,
-		usage:    map[string][2]int64{},
-		rnd:      rand.New(rand.NewSource(o.Seed + 221)),
+		opts:       o,
+		nodes:      map[string]*corev1.Node{},
+		pods:       map[string]*corev1.Pod{},
+		watchers:   map[*watcher]struct{}{},
+		metrics:    o.Metrics,
+		usage:      map[string][2]int64{},
+		boots:      map[string]time.Time{},
+		configmaps: map[string]map[string]string{},
+		rnd:        rand.New(rand.NewSource(o.Seed + 221)),
+	}
+	if o.SettingsConfigMap != "" {
+		s.configmaps[o.SettingsConfigMap] = map[string]string{}
 	}
 	s.generate()
 	s.routes()
@@ -115,9 +129,13 @@ func (s *Sim) routes() {
 	m.HandleFunc("GET /api/v1/nodes", s.api(s.listOrWatch("nodes")))
 	m.HandleFunc("GET /api/v1/pods", s.api(s.listOrWatch("pods")))
 	m.HandleFunc("GET /apis/metrics.k8s.io/v1beta1/nodes", s.api(s.nodeMetrics))
+	m.HandleFunc("GET /api/v1/nodes/{name}/proxy/stats/summary", s.api(s.kubeletSummary))
+	m.HandleFunc("GET /api/v1/namespaces/{ns}/configmaps/{name}", s.api(s.getConfigMap))
+	m.HandleFunc("PATCH /api/v1/namespaces/{ns}/configmaps/{name}", s.api(s.patchConfigMap))
 	m.HandleFunc("GET /sim/state", s.state)
 	m.HandleFunc("POST /sim/nodes/{name}/cordon", s.admin(s.cordon))
 	m.HandleFunc("POST /sim/nodes/{name}/ready", s.admin(s.ready))
+	m.HandleFunc("POST /sim/nodes/{name}/reboot", s.admin(s.reboot))
 	m.HandleFunc("POST /sim/nodes/{name}/condition", s.admin(s.condition))
 	m.HandleFunc("POST /sim/nodes", s.admin(s.addNode))
 	m.HandleFunc("DELETE /sim/nodes/{name}", s.admin(s.deleteNode))
@@ -136,7 +154,7 @@ func (s *Sim) api(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		down := s.down
-		if down && strings.HasPrefix(r.URL.Path, "/api/v1/") {
+		if down && (r.URL.Path == "/api/v1/nodes" || r.URL.Path == "/api/v1/pods") {
 			s.refused++
 		}
 		s.mu.Unlock()
@@ -455,6 +473,108 @@ func (s *Sim) nodeMetrics(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, map[string]any{"kind": "NodeMetricsList", "apiVersion": "metrics.k8s.io/v1beta1", "metadata": map[string]string{}, "items": items})
 }
 
+// ---------- kubelet stats, through the API server's node proxy ----------
+
+// kubeletSummary answers as the API server does when it proxies a
+// kubelet's Summary API: the boot time in node.startTime, 403 without the
+// permission, 503 when the kubelet cannot be reached.
+func (s *Sim) kubeletSummary(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !s.opts.KubeletStats {
+		status(w, http.StatusForbidden, "Forbidden", fmt.Sprintf(`nodes %q is forbidden: User "system:serviceaccount:221b:console" cannot get resource "nodes/proxy" in API group "" at the cluster scope`, name))
+		return
+	}
+	s.mu.Lock()
+	n, ok := s.nodes[name]
+	boot := s.boots[name]
+	usage := s.usage[name]
+	s.mu.Unlock()
+	if !ok {
+		status(w, http.StatusNotFound, "NotFound", fmt.Sprintf("nodes %q not found", name))
+		return
+	}
+	if !isReady(n) {
+		status(w, http.StatusServiceUnavailable, "ServiceUnavailable", "error trying to reach service: dial tcp 10.0.0.10:10250: connect: connection refused")
+		return
+	}
+	now := s.opts.Now().UTC().Format(time.RFC3339)
+	writeJSON(w, map[string]any{
+		"node": map[string]any{
+			"nodeName":  name,
+			"startTime": boot.UTC().Format(time.RFC3339),
+			"cpu":       map[string]any{"time": now, "usageNanoCores": usage[0] * 1e6},
+			"memory":    map[string]any{"time": now, "workingSetBytes": usage[1]},
+		},
+		"pods": []any{},
+	})
+}
+
+// reboot gives a node a new boot ID and boot time, as a restart does.
+func (s *Sim) reboot(r *http.Request) error {
+	name := r.PathValue("name")
+	now := s.opts.Now()
+	return s.updateNode(name, func(n *corev1.Node) {
+		n.Status.NodeInfo.BootID = bootID(name, now)
+		s.boots[name] = now
+	})
+}
+
+// ---------- ConfigMaps, for the console's settings ----------
+
+func (s *Sim) getConfigMap(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("ns") + "/" + r.PathValue("name")
+	s.mu.Lock()
+	data, ok := s.configmaps[key]
+	cp := map[string]string{}
+	for k, v := range data {
+		cp[k] = v
+	}
+	s.mu.Unlock()
+	if !ok {
+		status(w, http.StatusNotFound, "NotFound", fmt.Sprintf("configmaps %q not found", r.PathValue("name")))
+		return
+	}
+	writeJSON(w, map[string]any{
+		"kind": "ConfigMap", "apiVersion": "v1",
+		"metadata": map[string]any{"name": r.PathValue("name"), "namespace": r.PathValue("ns")},
+		"data":     cp,
+	})
+}
+
+// patchConfigMap applies a JSON merge patch to the data, as the console
+// sends one.
+func (s *Sim) patchConfigMap(w http.ResponseWriter, r *http.Request) {
+	key := r.PathValue("ns") + "/" + r.PathValue("name")
+	if ct := r.Header.Get("Content-Type"); ct != string(types.MergePatchType) {
+		status(w, http.StatusUnsupportedMediaType, "UnsupportedMediaType", "the simulator takes application/merge-patch+json only, got "+ct)
+		return
+	}
+	var patch struct {
+		Data map[string]*string `json:"data"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		status(w, http.StatusBadRequest, "BadRequest", "invalid patch: "+err.Error())
+		return
+	}
+	s.mu.Lock()
+	data, ok := s.configmaps[key]
+	if ok {
+		for k, v := range patch.Data {
+			if v == nil {
+				delete(data, k)
+			} else {
+				data[k] = *v
+			}
+		}
+	}
+	s.mu.Unlock()
+	if !ok {
+		status(w, http.StatusNotFound, "NotFound", fmt.Sprintf("configmaps %q not found", r.PathValue("name")))
+		return
+	}
+	s.getConfigMap(w, r)
+}
+
 // ---------- admin API ----------
 
 func (s *Sim) state(w http.ResponseWriter, _ *http.Request) {
@@ -522,6 +642,8 @@ func (s *Sim) deleteNode(r *http.Request) error {
 		return fmt.Errorf("no node %s", r.PathValue("name"))
 	}
 	delete(s.nodes, n.Name)
+	delete(s.boots, n.Name)
+	delete(s.usage, n.Name)
 	s.rv++
 	n.ResourceVersion = strconv.FormatInt(s.rv, 10)
 	s.publishLocked("nodes", watch.Deleted, n)
@@ -864,9 +986,12 @@ func (s *Sim) newNode(name string, controlPlane bool, i int, now time.Time) *cor
 			NodeInfo: corev1.NodeSystemInfo{
 				KubeletVersion: kubelet, OSImage: "Ubuntu 24.04.3 LTS", KernelVersion: "6.8.0-79-generic",
 				ContainerRuntimeVersion: "containerd://2.1.4", OperatingSystem: "linux", Architecture: "amd64",
+				BootID: bootID(name, created), MachineID: string(uid("machine-" + name)), SystemUUID: strings.ToUpper(string(uid("system-" + name))),
 			},
 		},
 	}
+	// Booted a minute and a half before the kubelet joined the cluster.
+	s.boots[name] = created.Add(-90 * time.Second).Truncate(time.Second)
 	since := created.Add(3 * time.Minute)
 	for _, t := range []corev1.NodeConditionType{corev1.NodeMemoryPressure, corev1.NodeDiskPressure, corev1.NodePIDPressure} {
 		setCondition(n, t, corev1.ConditionFalse, since)
@@ -1055,6 +1180,12 @@ func removeTaint(ts []corev1.Taint, key string) []corev1.Taint {
 		}
 	}
 	return out
+}
+
+// bootID is what a kernel reports in /proc/sys/kernel/random/boot_id: a
+// UUID that changes with every boot.
+func bootID(name string, at time.Time) string {
+	return string(uid(name + "@" + at.UTC().Format(time.RFC3339)))
 }
 
 func uid(seed string) types.UID {

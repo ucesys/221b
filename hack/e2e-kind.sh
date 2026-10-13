@@ -93,6 +93,32 @@ pf=$!
 for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && break; sleep 1; done
 curl -fsS http://127.0.0.1:18080/readyz
 curl -fsS http://127.0.0.1:18080/ | grep -q '<div id="root">'
+endstep
+
+step "Settings are kept in the ConfigMap and uptime comes from the kubelets"
+curl -fsS http://127.0.0.1:18080/api/v1/settings | tee "$WORK/settings.json"
+grep -q '"refreshSeconds":3' "$WORK/settings.json"
+grep -q '"storage":"configmap"' "$WORK/settings.json"
+curl -fsS -X PUT -H 'Content-Type: application/json' -d '{"refreshSeconds":7}' http://127.0.0.1:18080/api/v1/settings | grep -q '"refreshSeconds":7'
+kubectl -n "$NS" get configmap "$FULLNAME" -o jsonpath='{.data.settings\.json}' | tee "$WORK/settings-cm.json"
+grep -q '"refreshSeconds":7' "$WORK/settings-cm.json"
+# A change made with kubectl is picked up too, within the re-read interval.
+kubectl -n "$NS" patch configmap "$FULLNAME" --type merge -p '{"data":{"settings.json":"{\"refreshSeconds\":9}"}}'
+for _ in $(seq 75); do
+  curl -fsS http://127.0.0.1:18080/api/v1/settings | grep -q '"refreshSeconds":9' && break
+  sleep 1
+done
+curl -fsS http://127.0.0.1:18080/api/v1/settings | grep -q '"refreshSeconds":9'
+curl -fsS -X PUT -H 'Content-Type: application/json' -d '{"refreshSeconds":3}' http://127.0.0.1:18080/api/v1/settings > /dev/null
+# Every kind node has a real kubelet, so every row carries a boot time.
+for _ in $(seq 60); do
+  nodes=$(curl -fsS http://127.0.0.1:18080/api/v1/snapshot | python3 -c 'import json, sys; rows = json.load(sys.stdin)["rows"]; print(sum(1 for r in rows if r.get("bootedAt")), len(rows))')
+  [ "${nodes% *}" = "${nodes#* }" ] && break
+  sleep 2
+done
+echo "nodes with a boot time: $nodes"
+[ "${nodes% *}" = "${nodes#* }" ]
+curl -fsS http://127.0.0.1:18080/api/v1/snapshot | grep -q '"uptime":"available"'
 kill "$pf"
 endstep
 
@@ -105,16 +131,21 @@ step "Browser tests"
 )
 endstep
 
-step "helm upgrade"
+step "helm upgrade keeps the settings"
+# A setting saved before the upgrade must survive it: the chart owns the
+# ConfigMap but never its data.
+kubectl -n "$NS" patch configmap "$FULLNAME" --type merge -p '{"data":{"settings.json":"{\"refreshSeconds\":11}"}}'
 helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reuse-values --set logLevel=debug --wait --timeout 60s
 kubectl -n "$NS" rollout status "deployment/$FULLNAME" --timeout=60s
 [ "$(kubectl -n "$NS" get deployment "$FULLNAME" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="LOG_LEVEL")].value}')" = debug ]
+kubectl -n "$NS" get configmap "$FULLNAME" -o jsonpath='{.data.settings\.json}' | grep -q '"refreshSeconds":11'
 # Through a port-forward: kube-proxy may still be catching up after the
 # browser tests restarted the API server, which would delay the NodePort.
 kubectl -n "$NS" port-forward "svc/$FULLNAME" 18080:8081 > "$WORK/port-forward.log" 2>&1 &
 pf=$!
 for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && break; sleep 1; done
 curl -fsS http://127.0.0.1:18080/readyz
+curl -fsS http://127.0.0.1:18080/api/v1/settings | grep -q '"refreshSeconds":11'
 kill "$pf"
 endstep
 

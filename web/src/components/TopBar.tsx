@@ -1,7 +1,8 @@
-import type { ClusterInfo, NodeRow, Tone } from '../api/types'
+import type { ClusterInfo, NodeRow, Settings, Tone } from '../api/types'
 import type { StreamState } from '../api/live'
+import { refreshLabel } from '../api/settings'
 import { fmtClock, fmtTs } from '../lib/format'
-import { Logo, MoonIcon, SunIcon } from './Icons'
+import { GearIcon, Logo } from './Icons'
 
 export type Theme = 'light' | 'dark'
 
@@ -10,8 +11,10 @@ interface Props {
   rows: NodeRow[]
   stream: StreamState
   updatedAt: Date | null
-  theme: Theme
-  onTheme: (t: Theme) => void
+  refreshedAt: Date | null
+  settings: Settings | null
+  settingsOpen: boolean
+  onSettings: () => void
 }
 
 /** The connection to the cluster as a tone and a sentence. */
@@ -26,7 +29,7 @@ export function connection(cluster: ClusterInfo | null, stream: StreamState): { 
   return { tone: 'ok', label: 'Connected', tip: `Connected to the Kubernetes API server since ${fmtTs(cluster.since)}.` }
 }
 
-export function TopBar({ cluster, rows, stream, updatedAt, theme, onTheme }: Props) {
+export function TopBar({ cluster, rows, stream, updatedAt, refreshedAt, settings, settingsOpen, onSettings }: Props) {
   const conn = connection(cluster, stream)
   const errors = rows.filter((r) => r.errors > 0).length
   const warnings = rows.filter((r) => !r.errors && r.warnings > 0).length
@@ -37,6 +40,13 @@ export function TopBar({ cluster, rows, stream, updatedAt, theme, onTheme }: Pro
   const name = cluster?.name ?? '—'
   const version = cluster?.version ?? ''
   const live = stream === 'open' && cluster?.state === 'connected'
+  const liveTip = [
+    settings ? `Refreshes every ${refreshLabel(settings.refreshSeconds)}, for every open console at once.` : '',
+    refreshedAt ? `Last refresh ${refreshedAt.toLocaleString()}.` : '',
+    updatedAt ? `Last change ${updatedAt.toLocaleString()}.` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
   return (
     <header
       className="rk-hdr"
@@ -70,20 +80,15 @@ export function TopBar({ cluster, rows, stream, updatedAt, theme, onTheme }: Pro
         </div>
       </nav>
       <div className="rk-meta" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, minHeight: 52 }}>
-        <span style={{ fontSize: 12, color: 'var(--fg3)', whiteSpace: 'nowrap' }} title={updatedAt ? `Last change ${updatedAt.toLocaleString()}` : undefined} data-testid="live">
+        <span style={{ fontSize: 12, color: 'var(--fg3)', whiteSpace: 'nowrap' }} title={liveTip || undefined} data-testid="live">
           {live ? 'Live' : conn.label}
           <span className="rk-asof">
             {' '}
-            · updated <span className="rk-mono rk-num">{fmtClock(updatedAt)}</span>
+            · refreshed <span className="rk-mono rk-num">{fmtClock(refreshedAt ?? updatedAt)}</span>
           </span>
         </span>
-        <button
-          className="rk-icon-btn"
-          aria-label={theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'}
-          title={theme === 'dark' ? 'Light theme' : 'Dark theme'}
-          onClick={() => onTheme(theme === 'dark' ? 'light' : 'dark')}
-        >
-          {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+        <button className="rk-icon-btn" aria-label="Settings" aria-haspopup="dialog" aria-expanded={settingsOpen} title="Settings: theme and refresh rate" onClick={onSettings}>
+          <GearIcon />
         </button>
       </div>
     </header>

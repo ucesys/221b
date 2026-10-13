@@ -126,7 +126,7 @@ func TestStatus(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			r := BuildRow(c.node, nil, nil, now)
+			r := BuildRow(c.node, nil, nil, nil, now)
 			if r.Status != c.status || r.Tone != c.tone {
 				t.Fatalf("status = %q/%q, want %q/%q", r.Status, r.Tone, c.status, c.tone)
 			}
@@ -142,7 +142,7 @@ func TestRolesAndFacts(t *testing.T) {
 		n.Labels["node-role.kubernetes.io/control-plane"] = ""
 		n.Labels["node-role.kubernetes.io/etcd"] = ""
 		n.Spec.Taints = []corev1.Taint{{Key: "node-role.kubernetes.io/control-plane", Effect: corev1.TaintEffectNoSchedule}}
-	}), nil, nil, now)
+	}), nil, nil, nil, now)
 	if r.Role != "control-plane" || strings.Join(r.Roles, ",") != "control-plane,etcd" {
 		t.Fatalf("role %q roles %v", r.Role, r.Roles)
 	}
@@ -155,10 +155,10 @@ func TestRolesAndFacts(t *testing.T) {
 	if r.CPU.Allocatable != 3800 || r.CPU.Capacity != 4000 || r.Memory.Allocatable != 15<<30 || r.Pods.Capacity != 110 {
 		t.Fatalf("resources cpu %+v mem %+v pods %+v", r.CPU, r.Memory, r.Pods)
 	}
-	if w := BuildRow(node("w"), nil, nil, now); w.Role != "worker" || len(w.Roles) != 0 {
+	if w := BuildRow(node("w"), nil, nil, nil, now); w.Role != "worker" || len(w.Roles) != 0 {
 		t.Fatalf("worker role %q %v", w.Role, w.Roles)
 	}
-	legacy := BuildRow(node("m", func(n *corev1.Node) { n.Labels["kubernetes.io/role"] = "master" }), nil, nil, now)
+	legacy := BuildRow(node("m", func(n *corev1.Node) { n.Labels["kubernetes.io/role"] = "master" }), nil, nil, nil, now)
 	if legacy.Role != "control-plane" {
 		t.Fatalf("legacy master label gave role %q", legacy.Role)
 	}
@@ -179,7 +179,7 @@ func TestRequestsLimitsAndCounts(t *testing.T) {
 	done := pod("job", "4", "8Gi", phase(corev1.PodSucceeded))
 	failed := pod("evicted", "4", "8Gi", phase(corev1.PodFailed))
 	used := Usage{CPUMilli: 1234, MemoryBytes: 5 << 30}
-	r := BuildRow(node("n1"), []*corev1.Pod{withInit, withSidecar, done, failed}, &used, now)
+	r := BuildRow(node("n1"), []*corev1.Pod{withInit, withSidecar, done, failed}, &used, nil, now)
 	// init pod: max(2000m, 100m) = 2000m; sidecar pod: 250 + 50 + 10 overhead = 310m.
 	if r.CPU.Requested != 2310 {
 		t.Fatalf("cpu requested %d, want 2310", r.CPU.Requested)
@@ -196,7 +196,7 @@ func TestRequestsLimitsAndCounts(t *testing.T) {
 	if r.CPU.Used == nil || *r.CPU.Used != 1234 || *r.Memory.Used != 5<<30 {
 		t.Fatalf("usage not copied: %+v %+v", r.CPU, r.Memory)
 	}
-	if r2 := BuildRow(node("n1"), nil, nil, now); r2.CPU.Used != nil || r2.Memory.Used != nil {
+	if r2 := BuildRow(node("n1"), nil, nil, nil, now); r2.CPU.Used != nil || r2.Memory.Used != nil {
 		t.Fatal("usage should be nil without metrics")
 	}
 }
@@ -212,7 +212,7 @@ func TestPodProblems(t *testing.T) {
 	deadline := metav1.NewTime(now.Add(-10 * time.Minute))
 	terminating := pod("terminating", "100m", "64Mi", func(p *corev1.Pod) { p.DeletionTimestamp = &deadline })
 
-	r := BuildRow(node("n1"), []*corev1.Pod{healthy, crash, slowStart, stuck, unready, terminating}, nil, now)
+	r := BuildRow(node("n1"), []*corev1.Pod{healthy, crash, slowStart, stuck, unready, terminating}, nil, nil, now)
 	if r.Pods.Failing != 1 || r.Pods.Starting != 1 || r.Pods.Unready != 2 || r.Pods.NotReady != 4 {
 		t.Fatalf("counts %+v", r.Pods)
 	}
@@ -246,7 +246,7 @@ func TestPodProblems(t *testing.T) {
 	}
 
 	// Without a failing pod the problem is a warning.
-	r = BuildRow(node("n1"), []*corev1.Pod{unready}, nil, now)
+	r = BuildRow(node("n1"), []*corev1.Pod{unready}, nil, nil, now)
 	if r.Problems[0].Severity != SeverityWarning || r.Problems[0].Title != "1 pod not ready" {
 		t.Fatalf("got %v", titles(r))
 	}
@@ -261,7 +261,7 @@ func TestCrashingContainerBetweenBackoffs(t *testing.T) {
 		cs.State = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error"}}
 		p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse, LastTransitionTime: metav1.NewTime(now.Add(-5 * time.Second))}}
 	}
-	r := BuildRow(node("n1"), []*corev1.Pod{pod("crash", "10m", "16Mi", exited)}, nil, now)
+	r := BuildRow(node("n1"), []*corev1.Pod{pod("crash", "10m", "16Mi", exited)}, nil, nil, now)
 	if r.Errors != 1 || r.Pods.Failing != 1 {
 		t.Fatalf("errors %d, pods %+v", r.Errors, r.Pods)
 	}
@@ -272,7 +272,7 @@ func TestCrashingContainerBetweenBackoffs(t *testing.T) {
 
 	// Under restartPolicy Never nothing restarts it: the pod is finishing, not crash-looping.
 	never := pod("job", "10m", "16Mi", exited, func(p *corev1.Pod) { p.Spec.RestartPolicy = corev1.RestartPolicyNever })
-	if r := BuildRow(node("n1"), []*corev1.Pod{never}, nil, now); r.Pods.Failing != 0 {
+	if r := BuildRow(node("n1"), []*corev1.Pod{never}, nil, nil, now); r.Pods.Failing != 0 {
 		t.Fatalf("pods %+v", r.Pods)
 	}
 }
@@ -282,7 +282,7 @@ func TestPodEntriesAreCapped(t *testing.T) {
 	for i := 0; i < 14; i++ {
 		pods = append(pods, pod("p"+string(rune('a'+i)), "10m", "1Mi", waiting("ImagePullBackOff")))
 	}
-	r := BuildRow(node("n1"), pods, nil, now)
+	r := BuildRow(node("n1"), pods, nil, nil, now)
 	if got := len(r.Problems[0].Entries); got != maxPodEntries {
 		t.Fatalf("entries %d, want %d", got, maxPodEntries)
 	}
@@ -297,7 +297,7 @@ func TestNodeProblems(t *testing.T) {
 		setCond(corev1.NodeDiskPressure, corev1.ConditionTrue, now.Add(-time.Minute)),
 		setCond(corev1.NodeNetworkUnavailable, corev1.ConditionTrue, now.Add(-time.Minute)),
 		cordoned,
-	), []*corev1.Pod{pod("a", "1", "1Gi"), pod("b", "1", "1Gi")}, nil, now)
+	), []*corev1.Pod{pod("a", "1", "1Gi"), pod("b", "1", "1Gi")}, nil, nil, now)
 	got := strings.Join(titles(r), ", ")
 	want := "Kubelet stopped reporting/error, Disk pressure/warning, Network unavailable/error, Cordoned/warning"
 	if got != want {
@@ -315,7 +315,7 @@ func TestNodeProblems(t *testing.T) {
 }
 
 func TestEmptySlicesEncodeAsArrays(t *testing.T) {
-	r := BuildRow(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "bare"}}, nil, nil, now)
+	r := BuildRow(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "bare"}}, nil, nil, nil, now)
 	if r.Problems == nil || r.Taints == nil || r.Conditions == nil || r.Labels == nil || r.Roles == nil {
 		t.Fatalf("nil collections would encode as null: %+v", r)
 	}

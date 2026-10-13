@@ -185,9 +185,11 @@ export function xlsxBytes(sheet: string, head: string[], rows: Cell[][]): Uint8A
   ])
 }
 
+export const XLSX_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
 /** Starts a download of the bytes as a file. */
-export function download(bytes: Uint8Array, file: string): void {
-  const blob = new Blob([bytes as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+export function download(bytes: Uint8Array | string, file: string, type = XLSX_TYPE): void {
+  const blob = new Blob([bytes as BlobPart], { type })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

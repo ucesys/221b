@@ -27,7 +27,9 @@ Open it with a port-forward (Phase 1 has no sign-in, so it is not exposed):
 then browse to http://localhost:8080.
 {{- end }}
 
-Phase 1 has no sign-in: anyone who can reach it sees the cluster's nodes and the names of its failing pods.
+Phase 1 has no sign-in: anyone who can reach it sees the cluster's nodes and the names of its failing pods,
+and can change the refresh rate in its Settings, which applies to everyone and is kept in the ConfigMap
+{{ include "b221.fullname" . }}.
 
 Check what it is allowed to read:
 

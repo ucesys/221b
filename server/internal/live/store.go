@@ -1,7 +1,9 @@
 // Package live keeps the rows the browser shows and streams their changes.
-// It recomputes only the rows of nodes that changed, sends each browser just
-// the rows that differ, and falls back to a full snapshot when a browser
-// falls behind.
+// Changes from the watches are collected and published on a shared refresh
+// tick, so every browser sees the same update at the same moment and the
+// cluster is read once however many browsers are open. Only the rows of
+// nodes that changed are recomputed, each browser gets just the rows that
+// differ, and a browser that falls behind gets a full snapshot.
 package live
 
 import (
@@ -27,6 +29,9 @@ type Source interface {
 	PodsOn(node string) []*corev1.Pod
 	Unscheduled() int
 	Usage(node string) (nodes.Usage, bool)
+	BootedAt(node string) (time.Time, bool)
+	// Poll reads what is not watched, once per refresh, within ctx.
+	Poll(ctx context.Context)
 }
 
 // Delta is one change sent to browsers. Versions increase by one per delta;
@@ -35,20 +40,32 @@ type Delta struct {
 	Version     uint64            `json:"version"`
 	At          time.Time         `json:"at"`
 	Cluster     *kube.Info        `json:"cluster,omitempty"`
+	Settings    json.RawMessage   `json:"settings,omitempty"`
 	Upserts     []json.RawMessage `json:"upserts,omitempty"`
 	Removes     []string          `json:"removes,omitempty"`
 	Unscheduled *int              `json:"unscheduled,omitempty"`
 }
 
+// Refresh is sent on every tick, with or without a delta, so browsers show
+// when the last refresh was and notice if they missed one.
+type Refresh struct {
+	Version uint64    `json:"version"`
+	At      time.Time `json:"at"`
+}
+
 // Options tune a Store.
 type Options struct {
-	// Debounce collects changes for this long before publishing them.
-	Debounce time.Duration
-	// Refresh recomputes every row this often, for problems that depend on
-	// time passing (a pod stuck starting) rather than on an event.
+	// Refresh is how often changes are published and the source polled,
+	// until SetSettings changes it.
 	Refresh time.Duration
-	Logger  *slog.Logger
-	Now     func() time.Time
+	// Recompute rebuilds every row this often, for problems that depend on
+	// time passing (a pod stuck starting) rather than on an event.
+	Recompute time.Duration
+	// Prompt is how long news about the connection waits before it goes
+	// out; it does not wait for the refresh tick.
+	Prompt time.Duration
+	Logger *slog.Logger
+	Now    func() time.Time
 }
 
 // Store holds the current rows and the browsers subscribed to changes.
@@ -60,23 +77,31 @@ type Store struct {
 	rows        map[string][]byte
 	info        kube.Info
 	infoJSON    []byte
+	settings    []byte
 	unscheduled int
 	version     uint64
 	at          time.Time
+	refreshedAt time.Time
 	subs        map[*Sub]struct{}
+	refresh     time.Duration
+	lastFull    time.Time
 
-	pendingMu  sync.Mutex
-	dirty      map[string]struct{}
-	dirtyAll   bool
-	since      time.Time // when the oldest unpublished change arrived
-	kick       chan struct{}
-	recomputes uint64
-	delays     Histogram
+	pendingMu   sync.Mutex
+	dirty       map[string]struct{}
+	dirtyAll    bool
+	dirtyInfo   bool
+	dirtyTotals bool
+	built       bool      // rows have been built since the cluster was listed
+	since       time.Time // when the oldest unpublished change arrived
+	kick        chan struct{}
+	reset       chan struct{}
+	recomputes  uint64
+	delays      Histogram
 }
 
 // DelayBuckets are the upper bounds, in seconds, of the change delay
 // histogram.
-var DelayBuckets = []float64{0.1, 0.25, 0.5, 1, 2, 5, 10}
+var DelayBuckets = []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 30}
 
 // Histogram counts how long changes took to reach browsers.
 type Histogram struct {
@@ -101,11 +126,14 @@ func (h *Histogram) observe(seconds float64) {
 
 // New creates a Store reading from src.
 func New(src Source, o Options) *Store {
-	if o.Debounce <= 0 {
-		o.Debounce = 250 * time.Millisecond
-	}
 	if o.Refresh <= 0 {
-		o.Refresh = 30 * time.Second
+		o.Refresh = 3 * time.Second
+	}
+	if o.Recompute <= 0 {
+		o.Recompute = 30 * time.Second
+	}
+	if o.Prompt <= 0 {
+		o.Prompt = 250 * time.Millisecond
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
@@ -114,60 +142,147 @@ func New(src Source, o Options) *Store {
 		o.Now = time.Now
 	}
 	return &Store{
-		src:   src,
-		opts:  o,
-		rows:  map[string][]byte{},
-		subs:  map[*Sub]struct{}{},
-		dirty: map[string]struct{}{},
-		kick:  make(chan struct{}, 1),
+		src:     src,
+		opts:    o,
+		rows:    map[string][]byte{},
+		subs:    map[*Sub]struct{}{},
+		refresh: o.Refresh,
+		dirty:   map[string]struct{}{},
+		kick:    make(chan struct{}, 1),
+		reset:   make(chan struct{}, 1),
 	}
 }
 
-// Notify records a change; Run publishes it after the debounce interval.
+// Notify records a change. Rows wait for the next refresh; news about the
+// connection goes out promptly, as do the first rows after the cluster is
+// listed.
 func (s *Store) Notify(ch kube.Change) {
 	s.pendingMu.Lock()
 	for _, n := range ch.Nodes {
 		s.dirty[n] = struct{}{}
 	}
 	s.dirtyAll = s.dirtyAll || ch.All
+	s.dirtyInfo = s.dirtyInfo || ch.Info
+	s.dirtyTotals = s.dirtyTotals || ch.Totals
 	if s.since.IsZero() {
 		s.since = s.opts.Now()
 	}
+	prompt := ch.Info || (ch.All && !s.built)
 	s.pendingMu.Unlock()
-	select {
-	case s.kick <- struct{}{}:
-	default:
-	}
-}
-
-// Run publishes changes until ctx is done.
-func (s *Store) Run(ctx context.Context) {
-	refresh := time.NewTicker(s.opts.Refresh)
-	defer refresh.Stop()
-	s.Notify(kube.Change{All: true, Info: true})
-	for {
+	if prompt {
 		select {
-		case <-ctx.Done():
-			return
-		case <-refresh.C:
-			s.Notify(kube.Change{All: true})
-		case <-s.kick:
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(s.opts.Debounce):
-			}
-			s.Process()
+		case s.kick <- struct{}{}:
+		default:
 		}
 	}
 }
 
-// Process applies the recorded changes now. Run calls it; tests call it
-// directly.
-func (s *Store) Process() {
+// SetSettings publishes new shared settings to every browser and applies
+// the refresh interval: the next refresh is one interval from now.
+func (s *Store) SetSettings(refresh time.Duration, raw []byte) {
+	s.mu.Lock()
+	if refresh > 0 {
+		s.refresh = refresh
+	}
+	changed := !bytes.Equal(raw, s.settings)
+	s.settings = append([]byte(nil), raw...)
+	s.mu.Unlock()
+	if changed {
+		s.publish(Delta{Settings: json.RawMessage(raw)}, time.Time{})
+	}
+	select {
+	case s.reset <- struct{}{}:
+	default:
+	}
+}
+
+// RefreshInterval returns the interval in force.
+func (s *Store) RefreshInterval() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refresh
+}
+
+// Run publishes changes until ctx is done.
+func (s *Store) Run(ctx context.Context) {
+	// The cluster details go out at once, so a browser opened before the
+	// first list sees the connection being made.
+	s.Notify(kube.Change{Info: true})
+	timer := time.NewTimer(s.RefreshInterval())
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.reset:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(s.RefreshInterval())
+		case <-timer.C:
+			s.Refresh(ctx)
+			timer.Reset(s.RefreshInterval())
+		case <-s.kick:
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(s.opts.Prompt):
+			}
+			s.pendingMu.Lock()
+			rows := !s.built
+			s.pendingMu.Unlock()
+			s.process(rows)
+		}
+	}
+}
+
+// Refresh is one tick: poll the source, rebuild the rows that changed,
+// publish one delta to every browser and tell them the refresh happened.
+// Run calls it; tests call it directly.
+func (s *Store) Refresh(ctx context.Context) {
+	budget := min(10*time.Second, max(2*time.Second, s.RefreshInterval()))
+	pollCtx, cancel := context.WithTimeout(ctx, budget)
+	s.src.Poll(pollCtx)
+	cancel()
+	if ctx.Err() != nil {
+		return
+	}
+	s.process(true)
+	now := s.opts.Now().UTC()
+	s.mu.Lock()
+	s.refreshedAt = now
+	msg, err := json.Marshal(Refresh{Version: s.version, At: now})
+	if err == nil {
+		for sub := range s.subs {
+			sub.push("refresh", msg)
+		}
+	}
+	s.mu.Unlock()
+}
+
+// Process rebuilds the rows that changed and publishes them now, without
+// polling or a refresh event. Tests use it.
+func (s *Store) Process() { s.process(true) }
+
+// process publishes what is pending: the cluster details always, the rows
+// and totals when rows is true.
+func (s *Store) process(rows bool) {
 	s.pendingMu.Lock()
-	dirty, all, since := s.dirty, s.dirtyAll, s.since
-	s.dirty, s.dirtyAll, s.since = map[string]struct{}{}, false, time.Time{}
+	var dirty map[string]struct{}
+	var all, totals bool
+	if rows {
+		dirty, all, totals = s.dirty, s.dirtyAll, s.dirtyTotals
+		s.dirty, s.dirtyAll, s.dirtyTotals = map[string]struct{}{}, false, false
+	}
+	s.dirtyInfo = false
+	// The delay histogram measures changes to rows, which wait for the tick.
+	var since time.Time
+	if rows {
+		since, s.since = s.since, time.Time{}
+	}
 	s.pendingMu.Unlock()
 
 	info := s.src.Info()
@@ -175,7 +290,15 @@ func (s *Store) Process() {
 	now := s.opts.Now().UTC()
 
 	var names []string
-	if info.Synced {
+	if rows && info.Synced {
+		s.mu.Lock()
+		if !all && now.Sub(s.lastFull) >= s.opts.Recompute {
+			all = true
+		}
+		if all {
+			s.lastFull = now
+		}
+		s.mu.Unlock()
 		if all {
 			names = s.src.NodeNames()
 		} else {
@@ -203,7 +326,11 @@ func (s *Store) Process() {
 		if u, ok := s.src.Usage(name); ok {
 			usage = &u
 		}
-		row := nodes.BuildRow(node, s.src.PodsOn(name), usage, now)
+		var booted *time.Time
+		if b, ok := s.src.BootedAt(name); ok {
+			booted = &b
+		}
+		row := nodes.BuildRow(node, s.src.PodsOn(name), usage, booted, now)
 		b, err := json.Marshal(row)
 		if err != nil {
 			s.opts.Logger.Error("encoding a node row", "node", name, "err", err)
@@ -211,14 +338,15 @@ func (s *Store) Process() {
 		}
 		results = append(results, built{name: name, row: b})
 	}
-	unscheduled := 0
-	if info.Synced {
+	unscheduled := -1
+	if rows && info.Synced && (all || totals || !s.isBuilt()) {
 		unscheduled = s.src.Unscheduled()
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.recomputes++
+	if rows {
+		s.recomputes++
+	}
 	d := Delta{}
 	for _, r := range results {
 		old, had := s.rows[r.name]
@@ -244,13 +372,34 @@ func (s *Store) Process() {
 		s.info, s.infoJSON = info, infoJSON
 		d.Cluster = &info
 	}
-	if unscheduled != s.unscheduled {
+	if unscheduled >= 0 && unscheduled != s.unscheduled {
 		s.unscheduled = unscheduled
 		d.Unscheduled = &unscheduled
 	}
-	if d.Cluster == nil && d.Unscheduled == nil && len(d.Upserts) == 0 && len(d.Removes) == 0 {
+	s.mu.Unlock()
+	if rows && info.Synced {
+		s.pendingMu.Lock()
+		s.built = true
+		s.pendingMu.Unlock()
+	}
+	s.publish(d, since)
+}
+
+func (s *Store) isBuilt() bool {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	return s.built
+}
+
+// publish sends a delta to every browser, unless it is empty. since, when
+// set, is when the oldest change it carries arrived.
+func (s *Store) publish(d Delta, since time.Time) {
+	if d.Cluster == nil && d.Settings == nil && d.Unscheduled == nil && len(d.Upserts) == 0 && len(d.Removes) == 0 {
 		return
 	}
+	now := s.opts.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.version++
 	s.at = now
 	d.Version, d.At = s.version, now
@@ -260,10 +409,10 @@ func (s *Store) Process() {
 		return
 	}
 	for sub := range s.subs {
-		sub.push(msg)
+		sub.push("delta", msg)
 	}
 	if !since.IsZero() {
-		s.delays.observe(s.opts.Now().Sub(since).Seconds())
+		s.delays.observe(now.Sub(since).Seconds())
 	}
 }
 
@@ -292,11 +441,24 @@ func (s *Store) snapshotLocked() []byte {
 	b.WriteString(`,"at":`)
 	at, _ := json.Marshal(s.at)
 	b.Write(at)
+	b.WriteString(`,"refreshedAt":`)
+	if s.refreshedAt.IsZero() {
+		b.WriteString("null")
+	} else {
+		r, _ := json.Marshal(s.refreshedAt)
+		b.Write(r)
+	}
 	b.WriteString(`,"cluster":`)
 	if s.infoJSON == nil {
 		b.WriteString("null")
 	} else {
 		b.Write(s.infoJSON)
+	}
+	b.WriteString(`,"settings":`)
+	if s.settings == nil {
+		b.WriteString("null")
+	} else {
+		b.Write(s.settings)
 	}
 	b.WriteString(`,"unscheduled":`)
 	b.WriteString(jsonNumber(uint64(s.unscheduled)))
@@ -311,7 +473,7 @@ func (s *Store) snapshotLocked() []byte {
 	return b.Bytes()
 }
 
-// Snapshot returns every row and the cluster details as JSON.
+// Snapshot returns every row, the cluster details and the settings as JSON.
 func (s *Store) Snapshot() []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -350,14 +512,20 @@ func (s *Store) Unsubscribe(sub *Sub) {
 	s.mu.Unlock()
 }
 
-// maxPending is how many deltas a slow browser may fall behind before it
+// maxPending is how many events a slow browser may fall behind before it
 // is sent a full snapshot instead.
 const maxPending = 64
+
+// Event is one server-sent event waiting for a browser.
+type Event struct {
+	Name string // "delta" or "refresh"
+	Data []byte
+}
 
 // Sub is one subscribed browser.
 type Sub struct {
 	mu      sync.Mutex
-	pending [][]byte
+	pending []Event
 	resync  bool
 	wake    chan struct{}
 }
@@ -365,23 +533,23 @@ type Sub struct {
 // Wake is signalled when there is something to take.
 func (sub *Sub) Wake() <-chan struct{} { return sub.wake }
 
-// Take returns the deltas waiting for this browser, or resync=true when it
+// Take returns the events waiting for this browser, or resync=true when it
 // fell too far behind and needs a new snapshot.
-func (sub *Sub) Take() (deltas [][]byte, resync bool) {
+func (sub *Sub) Take() (events []Event, resync bool) {
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
-	deltas, resync = sub.pending, sub.resync
+	events, resync = sub.pending, sub.resync
 	sub.pending, sub.resync = nil, false
-	return deltas, resync
+	return events, resync
 }
 
-func (sub *Sub) push(msg []byte) {
+func (sub *Sub) push(name string, msg []byte) {
 	sub.mu.Lock()
 	if !sub.resync {
 		if len(sub.pending) >= maxPending {
 			sub.pending, sub.resync = nil, true
 		} else {
-			sub.pending = append(sub.pending, msg)
+			sub.pending = append(sub.pending, Event{Name: name, Data: msg})
 		}
 	}
 	sub.mu.Unlock()

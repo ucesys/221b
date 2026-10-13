@@ -1,0 +1,11 @@
+# The console's settings, which the Settings dialog changes for everyone:
+# the refresh rate, as settings.json. The chart creates the ConfigMap
+# empty and never writes its data, so helm upgrade keeps what was saved
+# and helm uninstall removes it.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "b221.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}

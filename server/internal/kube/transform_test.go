@@ -59,7 +59,7 @@ func TestStrippedPodsGiveTheSameRow(t *testing.T) {
 		},
 	}
 	pods := []*corev1.Pod{job, crash, resized, sidecar}
-	want := nodes.BuildRow(node, pods, nil, now)
+	want := nodes.BuildRow(node, pods, nil, nil, now)
 	var stripped []*corev1.Pod
 	for _, p := range pods {
 		s, err := StripPod(p.DeepCopy())
@@ -68,7 +68,7 @@ func TestStrippedPodsGiveTheSameRow(t *testing.T) {
 		}
 		stripped = append(stripped, s.(*corev1.Pod))
 	}
-	got := nodes.BuildRow(node, stripped, nil, now)
+	got := nodes.BuildRow(node, stripped, nil, nil, now)
 	if !reflect.DeepEqual(want, got) {
 		t.Fatalf("rows differ after stripping:\n full    %+v\n stripped %+v", want, got)
 	}

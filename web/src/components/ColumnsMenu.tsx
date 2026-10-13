@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { COLUMNS, type ColumnId } from '../lib/nodes'
+import { COLUMNS, DEFAULT_HIDDEN, type ColumnId } from '../lib/nodes'
 import { Chevron, ColumnsIcon } from './Icons'
 
 interface Props {
@@ -9,6 +9,12 @@ interface Props {
   compact: boolean
 }
 
+function sameSet(a: ReadonlySet<ColumnId>, b: ReadonlySet<ColumnId>): boolean {
+  if (a.size !== b.size) return false
+  for (const x of a) if (!b.has(x)) return false
+  return true
+}
+
 /** The prototype's Columns menu: the first column always shows. */
 export function ColumnsMenu({ hidden, onChange, compact }: Props) {
   const [open, setOpen] = useState(false)
@@ -16,7 +22,7 @@ export function ColumnsMenu({ hidden, onChange, compact }: Props) {
   const menu = useRef<HTMLDivElement>(null)
   const optional = COLUMNS.slice(1)
   const shown = optional.filter((c) => !hidden.has(c.id)).length + 1
-  const custom = hidden.size > 0
+  const custom = !sameSet(hidden, DEFAULT_HIDDEN)
 
   useEffect(() => {
     if (open) menu.current?.querySelector('input')?.focus()
@@ -78,7 +84,7 @@ export function ColumnsMenu({ hidden, onChange, compact }: Props) {
             ))}
             <div className="rk-ddsep" />
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '2px 4px 2px 8px' }}>
-              <button className="rk-link" onClick={() => onChange(new Set())} style={{ fontSize: 12 }}>
+              <button className="rk-link" onClick={() => onChange(new Set(DEFAULT_HIDDEN))} style={{ fontSize: 12 }}>
                 Reset to default
               </button>
               <button className="rk-btn" onClick={close} style={{ height: 28 }}>

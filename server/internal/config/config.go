@@ -26,9 +26,15 @@ type Config struct {
 	// APIServer connects to a plain URL without credentials. It is meant for
 	// the simulator (221b-sim) and for tests.
 	APIServer string
-	// MetricsInterval is how often CPU and memory in use are read from
-	// metrics-server.
-	MetricsInterval time.Duration
+	// Refresh is how often browsers are updated and metrics-server read,
+	// until someone changes it in the console's Settings.
+	Refresh time.Duration
+	// SettingsConfigMap is the "namespace/name" of the ConfigMap the
+	// settings are kept in. Empty keeps them in memory until a restart.
+	SettingsConfigMap string
+	// KubeletStats reads each node's boot time from its kubelet, for the
+	// uptime in the node details. It needs get on nodes/proxy.
+	KubeletStats bool
 	// HealthInterval is how often the API server is checked.
 	HealthInterval time.Duration
 	// LogLevel is debug, info, warn or error. LogFormat is json or text.
@@ -48,7 +54,9 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.Kubeconfig, "kubeconfig", env("KUBECONFIG_PATH", ""), "path to a kubeconfig file (outside a cluster only)")
 	fs.StringVar(&c.Context, "context", env("KUBE_CONTEXT", ""), "kubeconfig context to use (outside a cluster only)")
 	fs.StringVar(&c.APIServer, "api-server", env("API_SERVER", ""), "connect to this API server URL without credentials (simulator and tests)")
-	fs.DurationVar(&c.MetricsInterval, "metrics-interval", envDuration("METRICS_INTERVAL", 15*time.Second), "how often to read CPU and memory in use")
+	fs.DurationVar(&c.Refresh, "refresh", envDuration("REFRESH", 3*time.Second), "how often to update browsers and read CPU and memory in use, until changed in Settings")
+	fs.StringVar(&c.SettingsConfigMap, "settings-configmap", env("SETTINGS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the settings in (empty: in memory)")
+	fs.BoolVar(&c.KubeletStats, "kubelet-stats", envBool("KUBELET_STATS", true), "read node boot times from the kubelets, for uptime (needs get on nodes/proxy)")
 	fs.DurationVar(&c.HealthInterval, "health-interval", envDuration("HEALTH_INTERVAL", 10*time.Second), "how often to check the API server")
 	fs.StringVar(&c.LogLevel, "log-level", env("LOG_LEVEL", "info"), "debug, info, warn or error")
 	fs.StringVar(&c.LogFormat, "log-format", env("LOG_FORMAT", "json"), "json or text")
@@ -72,8 +80,8 @@ func (c Config) validate() error {
 	if c.ClusterName == "" {
 		errs = append(errs, errors.New("cluster name must not be empty"))
 	}
-	if c.MetricsInterval < time.Second {
-		errs = append(errs, errors.New("metrics interval must be at least 1s"))
+	if c.Refresh < time.Second || c.Refresh > 10*time.Minute {
+		errs = append(errs, errors.New("refresh must be between 1s and 10m"))
 	}
 	if c.HealthInterval < time.Second {
 		errs = append(errs, errors.New("health interval must be at least 1s"))
@@ -96,6 +104,18 @@ func env(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func envBool(key string, def bool) bool {
+	v, ok := os.LookupEnv(key)
+	if !ok {
+		return def
+	}
+	b, err := strconv.ParseBool(strings.TrimSpace(v))
+	if err != nil {
+		return def
+	}
+	return b
 }
 
 func envDuration(key string, def time.Duration) time.Duration {

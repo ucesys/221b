@@ -26,7 +26,7 @@ func start(t *testing.T, o sim.Options) (*kube.Cluster, *httptest.Server, chan k
 	srv := httptest.NewServer(s)
 	t.Cleanup(srv.Close)
 	cl, err := kube.New(&rest.Config{Host: srv.URL}, kube.Options{
-		Name: "sim", Mode: kube.ModeURL, MetricsInterval: 200 * time.Millisecond, HealthInterval: 200 * time.Millisecond,
+		Name: "sim", Mode: kube.ModeURL, HealthInterval: 200 * time.Millisecond, KubeletStats: true,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
@@ -54,6 +54,21 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+// pollUntil polls the cluster, as the store does on every refresh, until
+// cond holds.
+func pollUntil(t *testing.T, cl *kube.Cluster, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		cl.Poll(context.Background())
+		if cond() {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }
@@ -89,7 +104,10 @@ func TestListsAndWatches(t *testing.T) {
 	if info.State != kube.StateConnected || info.Version != "v1.37.1" || !info.Synced {
 		t.Fatalf("info %+v", info)
 	}
-	waitFor(t, "metrics", func() bool { _, ok := cl.Usage("worker-001"); return ok })
+	pollUntil(t, cl, "metrics", func() bool { _, ok := cl.Usage("worker-001"); return ok })
+	if cl.Info().Metrics != kube.MetricsAvailable || cl.Info().MetricsAt == nil {
+		t.Fatalf("metrics info %+v", cl.Info())
+	}
 
 	// A change made after the list arrives through the watch.
 	post(t, srv.URL+"/sim/nodes/worker-002/cordon")
@@ -189,7 +207,10 @@ func refused(t *testing.T, base string) int {
 
 func TestMetricsUnavailable(t *testing.T) {
 	cl, srv, _ := start(t, sim.Options{Nodes: 3, Pods: 6, Metrics: false})
-	waitFor(t, "metrics state", func() bool { return cl.Info().Metrics == kube.MetricsUnavailable })
+	if cl.Info().Metrics != kube.MetricsUnknown {
+		t.Fatalf("metrics state before the first poll: %q", cl.Info().Metrics)
+	}
+	pollUntil(t, cl, "metrics state", func() bool { return cl.Info().Metrics == kube.MetricsUnavailable })
 	if !strings.Contains(cl.Info().MetricsMessage, "metrics-server is not installed") {
 		t.Fatalf("message %q", cl.Info().MetricsMessage)
 	}
@@ -197,7 +218,47 @@ func TestMetricsUnavailable(t *testing.T) {
 		t.Fatal("usage without metrics")
 	}
 	post(t, srv.URL+"/sim/metrics?on=true")
-	waitFor(t, "metrics to appear", func() bool { return cl.Info().Metrics == kube.MetricsAvailable })
+	pollUntil(t, cl, "metrics to appear", func() bool { return cl.Info().Metrics == kube.MetricsAvailable })
+}
+
+// Boot times come from the kubelets through the API server's node proxy,
+// once per node and boot.
+func TestBootTimesFromTheKubelets(t *testing.T) {
+	cl, srv, changes := start(t, sim.Options{Nodes: 4, Pods: 8, KubeletStats: true})
+	waitFor(t, "boot times", func() bool { _, ok := cl.BootedAt("worker-001"); return ok })
+	if cl.Info().Uptime != kube.UptimeAvailable {
+		t.Fatalf("uptime state %q: %s", cl.Info().Uptime, cl.Info().UptimeMessage)
+	}
+	booted, _ := cl.BootedAt("worker-001")
+	node := cl.Node("worker-001")
+	if !booted.Before(node.CreationTimestamp.Time) {
+		t.Fatalf("booted %v is not before the node joined at %v", booted, node.CreationTimestamp.Time)
+	}
+	// A reboot changes the bootID; the new boot time is read within a poll.
+	for len(changes) > 0 {
+		<-changes
+	}
+	post(t, srv.URL+"/sim/nodes/worker-001/reboot")
+	waitFor(t, "the new boot ID", func() bool {
+		n := cl.Node("worker-001")
+		return n != nil && n.Status.NodeInfo.BootID != node.Status.NodeInfo.BootID
+	})
+	cl.ReadBootsNow(context.Background())
+	after, _ := cl.BootedAt("worker-001")
+	if !after.After(booted) {
+		t.Fatalf("boot time %v did not move after the reboot (was %v)", after, booted)
+	}
+}
+
+func TestBootTimesForbidden(t *testing.T) {
+	cl, _, _ := start(t, sim.Options{Nodes: 2, Pods: 4, KubeletStats: false})
+	waitFor(t, "the uptime state", func() bool { return cl.Info().Uptime == kube.UptimeUnavailable })
+	if !strings.Contains(cl.Info().UptimeMessage, "nodes/proxy") {
+		t.Fatalf("message %q", cl.Info().UptimeMessage)
+	}
+	if _, ok := cl.BootedAt("cp-1"); ok {
+		t.Fatal("a boot time without the permission")
+	}
 }
 
 func TestNotifiesNodeChanges(t *testing.T) {

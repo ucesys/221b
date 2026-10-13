@@ -1,5 +1,5 @@
 // X-12: WCAG 2.2 AA, checked with axe in both themes, with the details
-// panel and the Columns menu open as well as closed.
+// panel, the Columns menu and the Settings dialog open as well as closed.
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 
@@ -26,6 +26,16 @@ for (const theme of ['light', 'dark'] as const) {
     await page.getByRole('button', { name: /^Columns/ }).click()
     await expect(page.getByRole('group', { name: 'Columns to show' })).toBeVisible()
     expect(await violations(page)).toEqual([])
+    await page.keyboard.press('Escape')
+
+    await page.getByRole('button', { name: /^Export/ }).click()
+    await expect(page.getByRole('group', { name: 'Export format' })).toBeVisible()
+    expect(await violations(page)).toEqual([])
+    await page.keyboard.press('Escape')
+
+    await page.getByRole('button', { name: 'Settings' }).click()
+    await expect(page.getByRole('dialog')).toBeVisible()
+    expect(await violations(page)).toEqual([])
   })
 }
 
@@ -49,7 +59,8 @@ test('every control is reachable by keyboard with a visible focus ring', async (
     expect(info.ring, `focus ring on ${info.name}`).toBe(true)
     seen.add(info.name)
   }
-  // The theme switch, the role filter, the column menu, the search box,
+  // The settings button, the role filter, the search box, the column menu,
   // the export, the column headers and the first rows all take focus.
   expect(seen.size).toBeGreaterThan(15)
+  expect(seen.has('Settings')).toBe(true)
 })

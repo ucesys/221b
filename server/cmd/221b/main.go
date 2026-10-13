@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/ui"
 	"github.com/ucesys/221b/server/internal/version"
 )
@@ -54,26 +56,45 @@ func run(args []string) error {
 		return err
 	}
 	cluster, err := kube.New(restCfg, kube.Options{
-		Name:            cfg.ClusterName,
-		Mode:            mode,
-		MetricsInterval: cfg.MetricsInterval,
-		HealthInterval:  cfg.HealthInterval,
-		Protobuf:        mode != kube.ModeURL,
-		Logger:          log.With("component", "cluster"),
+		Name:           cfg.ClusterName,
+		Mode:           mode,
+		HealthInterval: cfg.HealthInterval,
+		KubeletStats:   cfg.KubeletStats,
+		Protobuf:       mode != kube.ModeURL,
+		Logger:         log.With("component", "cluster"),
 	})
 	if err != nil {
 		return err
 	}
-	store := live.New(cluster, live.Options{Logger: log.With("component", "store")})
+	store := live.New(cluster, live.Options{Refresh: cfg.Refresh, Logger: log.With("component", "store")})
 	cluster.OnChange(store.Notify)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// The shared settings: in the chart's ConfigMap when running in a
+	// cluster, otherwise in memory. Every change reaches every browser
+	// through the store.
+	var storage settings.Storage = &settings.Memory{}
+	if cfg.SettingsConfigMap != "" {
+		cm, err := kube.NewConfigMapStorage(restCfg, cfg.SettingsConfigMap)
+		if err != nil {
+			return err
+		}
+		storage = cm
+	}
+	shared := settings.NewService(ctx, storage, settings.Settings{RefreshSeconds: int(cfg.Refresh / time.Second)}, log.With("component", "settings"), func(st settings.State) {
+		b, _ := json.Marshal(st)
+		store.SetSettings(st.Refresh(), b)
+	})
+	go shared.Run(ctx, time.Minute)
+
 	go cluster.Run(ctx)
 	go store.Run(ctx)
 
 	handler := api.New(api.Options{
 		Store:        store,
+		Settings:     shared,
 		Ready:        cluster.Ready,
 		UI:           ui.Handler(),
 		Logger:       log.With("component", "http"),
@@ -92,6 +113,7 @@ func run(args []string) error {
 			return []api.Gauge{
 				{Name: "b221_api_server_up", Help: "1 when the Kubernetes API server answered the last health check.", Value: up},
 				{Name: "b221_metrics_available", Help: "1 when metrics-server answered the last read.", Value: metricsUp},
+				{Name: "b221_refresh_seconds", Help: "The refresh interval in force: how often browsers are updated.", Value: store.RefreshInterval().Seconds()},
 				{Name: "b221_cached_nodes", Help: "Nodes in the watch cache.", Value: float64(nodeCount)},
 				{Name: "b221_cached_pods", Help: "Pods in the watch cache.", Value: float64(podCount)},
 				{Name: "b221_watch_events_total", Help: "Node watch events received.", Value: float64(nodeEvents), Counter: true},

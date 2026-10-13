@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ClusterInfo, Delta, NodeRow, Snapshot } from './types'
+import type { ClusterInfo, Delta, NodeRow, Refresh, Settings, Snapshot } from './types'
 import { compareNatural } from '../lib/format'
 
 /** The browser's own connection to the 221B server. */
@@ -8,19 +8,24 @@ export type StreamState = 'connecting' | 'open' | 'reconnecting'
 export interface LiveState {
   rows: NodeRow[]
   cluster: ClusterInfo | null
+  settings: Settings | null
   unscheduled: number
   version: number
   /** When the server last published a change. */
   updatedAt: Date | null
+  /** When the server last refreshed: every browser gets this at the same moment. */
+  refreshedAt: Date | null
   stream: StreamState
 }
 
 export const initialState: LiveState = {
   rows: [],
   cluster: null,
+  settings: null,
   unscheduled: 0,
   version: 0,
   updatedAt: null,
+  refreshedAt: null,
   stream: 'connecting',
 }
 
@@ -34,9 +39,11 @@ export function applySnapshot(state: LiveState, snap: Snapshot): LiveState {
     ...state,
     rows: sortRows(snap.rows),
     cluster: snap.cluster,
+    settings: snap.settings ?? null,
     unscheduled: snap.unscheduled,
     version: snap.version,
     updatedAt: snap.at ? new Date(snap.at) : null,
+    refreshedAt: snap.refreshedAt ? new Date(snap.refreshedAt) : null,
   }
 }
 
@@ -58,10 +65,20 @@ export function applyDelta(state: LiveState, d: Delta): LiveState | null {
     ...state,
     rows,
     cluster: d.cluster ?? state.cluster,
+    settings: d.settings ?? state.settings,
     unscheduled: d.unscheduled ?? state.unscheduled,
     version: d.version,
     updatedAt: d.at ? new Date(d.at) : state.updatedAt,
   }
+}
+
+/**
+ * Notes a refresh. The server sends its version with it, so a browser that
+ * missed a delta finds out at the next refresh: null means reopen.
+ */
+export function applyRefresh(state: LiveState, r: Refresh): LiveState | null {
+  if (r.version !== state.version) return null
+  return { ...state, refreshedAt: r.at ? new Date(r.at) : state.refreshedAt }
 }
 
 /** Follows the server's event stream and keeps the rows current. */
@@ -108,6 +125,12 @@ export function useLive(url = '/api/v1/events'): LiveState {
         const next = applyDelta(current, d)
         if (next === null) reopen(100)
         else if (next !== current) commit(next)
+      })
+      es.addEventListener('refresh', (e) => {
+        const r = JSON.parse((e as MessageEvent<string>).data) as Refresh
+        const next = applyRefresh(current, r)
+        if (next === null) reopen(100)
+        else commit(next)
       })
     }
     const reopen = (delay: number) => {

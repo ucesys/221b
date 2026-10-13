@@ -73,11 +73,11 @@ chart-lint: ## Lint and render the Helm chart
 dev-sim: build ## Run the console on http://127.0.0.1:8080 against a simulated cluster
 	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) -churn 5s & sim=$$!; \
 	trap 'kill $$sim 2>/dev/null' EXIT INT TERM; \
-	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated -log-format text
+	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated -settings-configmap 221b/console-221b -log-format text
 
 e2e-sim: build ## Run the browser end-to-end tests against a simulated cluster
 	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) & sim=$$!; \
-	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated -health-interval 2s -metrics-interval 2s -log-format text 2> bin/e2e-server.log & srv=$$!; \
+	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated -settings-configmap 221b/console-221b -health-interval 2s -log-format text 2> bin/e2e-server.log & srv=$$!; \
 	trap 'kill $$sim $$srv 2>/dev/null' EXIT INT TERM; \
 	for i in $$(seq 50); do curl -fs http://127.0.0.1:8080/readyz >/dev/null && break; sleep 0.2; done; \
 	cd web && E2E_MODE=sim E2E_SIM_URL=http://127.0.0.1:7443 $(NPM) run e2e

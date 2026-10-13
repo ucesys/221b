@@ -45,6 +45,9 @@ type Row struct {
 	Arch       string            `json:"arch"`
 	Labels     map[string]string `json:"labels"`
 	Conditions []Condition       `json:"conditions"`
+	// BootedAt is when the node last booted, as its kubelet reports it;
+	// absent when the kubelet has not been asked or could not be.
+	BootedAt *time.Time `json:"bootedAt,omitempty"`
 }
 
 // Resource is a node's CPU (in millicores) or memory (in bytes).
@@ -138,8 +141,9 @@ var failingReasons = map[string]bool{
 }
 
 // BuildRow computes a node's row. pods are the pods bound to the node;
-// usage is nil when metrics-server has no reading for it.
-func BuildRow(node *corev1.Node, pods []*corev1.Pod, usage *Usage, now time.Time) Row {
+// usage is nil when metrics-server has no reading for it, and bootedAt nil
+// when its kubelet has not said when it booted.
+func BuildRow(node *corev1.Node, pods []*corev1.Pod, usage *Usage, bootedAt *time.Time, now time.Time) Row {
 	r := Row{
 		Name:       node.Name,
 		Roles:      roles(node.Labels),
@@ -182,6 +186,9 @@ func BuildRow(node *corev1.Node, pods []*corev1.Pod, usage *Usage, now time.Time
 	if usage != nil {
 		cpu, mem := usage.CPUMilli, usage.MemoryBytes
 		r.CPU.Used, r.Memory.Used = &cpu, &mem
+	}
+	if bootedAt != nil {
+		r.BootedAt = timePtr(*bootedAt)
 	}
 
 	var unwell []podState

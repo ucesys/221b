@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
+	"github.com/ucesys/221b/server/internal/settings"
 )
 
 type source struct {
@@ -43,9 +45,11 @@ func (s *source) Node(name string) *corev1.Node {
 	defer s.mu.Unlock()
 	return s.nodes[name]
 }
-func (s *source) PodsOn(string) []*corev1.Pod      { return nil }
-func (s *source) Unscheduled() int                 { return 0 }
-func (s *source) Usage(string) (nodes.Usage, bool) { return nodes.Usage{}, false }
+func (s *source) PodsOn(string) []*corev1.Pod       { return nil }
+func (s *source) Unscheduled() int                  { return 0 }
+func (s *source) Usage(string) (nodes.Usage, bool)  { return nodes.Usage{}, false }
+func (s *source) BootedAt(string) (time.Time, bool) { return time.Time{}, false }
+func (s *source) Poll(context.Context)              {}
 func (s *source) set(name string, f func(*corev1.Node)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -62,7 +66,11 @@ func setup(t *testing.T, ready bool) (*httptest.Server, *live.Store, *source) {
 	store.Notify(kube.Change{All: true, Info: true})
 	store.Process()
 	ui := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "app:"+r.URL.Path) })
-	srv := httptest.NewServer(New(Options{Store: store, Ready: func() bool { return ready }, UI: ui, Heartbeat: 50 * time.Millisecond}))
+	shared := settings.NewService(context.Background(), &settings.Memory{}, settings.Default, slog.New(slog.NewTextHandler(io.Discard, nil)), func(st settings.State) {
+		b, _ := json.Marshal(st)
+		store.SetSettings(st.Refresh(), b)
+	})
+	srv := httptest.NewServer(New(Options{Store: store, Settings: shared, Ready: func() bool { return ready }, UI: ui, Heartbeat: 50 * time.Millisecond, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
 	t.Cleanup(srv.Close)
 	return srv, store, src
 }
@@ -269,7 +277,7 @@ func TestEventStream(t *testing.T) {
 			store.Notify(kube.Change{Nodes: []string{"n1"}})
 			store.Process()
 			ev, data = readEvent(t, br)
-			if ev != "delta" || !strings.Contains(data, `"cordoned":true`) || !strings.Contains(data, `"version":2`) {
+			if ev != "delta" || !strings.Contains(data, `"cordoned":true`) || !strings.Contains(data, `"version":3`) {
 				t.Fatalf("second event %s %.200s", ev, data)
 			}
 		})
@@ -334,5 +342,90 @@ func TestAcceptsGzipWithQualities(t *testing.T) {
 		if got := acceptsGzip(req); got != want {
 			t.Errorf("Accept-Encoding %q: %v, want %v", header, got, want)
 		}
+	}
+}
+
+func put(t *testing.T, url, body string, hdr ...string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodPut, url, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for i := 0; i+1 < len(hdr); i += 2 {
+		req.Header.Set(hdr[i], hdr[i+1])
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { resp.Body.Close() })
+	return resp
+}
+
+func TestSettings(t *testing.T) {
+	srv, _, _ := setup(t, true)
+	r := get(t, srv.URL+"/api/v1/settings")
+	var st settings.State
+	if err := json.Unmarshal([]byte(body(t, r)), &st); err != nil || st.RefreshSeconds != 3 || st.Storage != "memory" || st.ChangedAt != nil {
+		t.Fatalf("settings %+v %v", st, err)
+	}
+
+	// The event stream starts with the settings and carries every change.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/events", nil)
+	req.Header.Set("Accept-Encoding", "identity")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	br := bufio.NewReader(resp.Body)
+	if ev, data := readEvent(t, br); ev != "snapshot" || !strings.Contains(data, `"settings":{"refreshSeconds":3,"storage":"memory"}`) {
+		t.Fatalf("first event %s %.120s", ev, data)
+	}
+
+	host := strings.TrimPrefix(srv.URL, "http://")
+	r = put(t, srv.URL+"/api/v1/settings", `{"refreshSeconds":30}`, "Origin", "http://"+host, "Sec-Fetch-Site", "same-origin")
+	if r.StatusCode != 200 {
+		t.Fatalf("PUT settings %d: %s", r.StatusCode, body(t, r))
+	}
+	if err := json.Unmarshal([]byte(body(t, r)), &st); err != nil || st.RefreshSeconds != 30 || st.ChangedAt == nil {
+		t.Fatalf("settings after PUT %+v %v", st, err)
+	}
+	if ev, data := readEvent(t, br); ev != "delta" || !strings.Contains(data, `"settings":{"refreshSeconds":30,"storage":"memory","changedAt":"`) {
+		t.Fatalf("delta %s %.200s", ev, data)
+	}
+	if r = get(t, srv.URL+"/api/v1/settings"); !strings.Contains(body(t, r), `"refreshSeconds":30`) {
+		t.Fatal("the change was not kept")
+	}
+
+	for name, c := range map[string]struct {
+		body string
+		hdr  []string
+		want int
+	}{
+		"out of range":       {`{"refreshSeconds":0}`, nil, 400},
+		"too long":           {`{"refreshSeconds":601}`, nil, 400},
+		"unknown field":      {`{"refreshSeconds":5,"theme":"dark"}`, nil, 400},
+		"not json":           {`refresh=5`, nil, 400},
+		"from another site":  {`{"refreshSeconds":5}`, []string{"Origin", "http://evil.example", "Sec-Fetch-Site", "cross-site"}, 403},
+		"origin elsewhere":   {`{"refreshSeconds":5}`, []string{"Origin", "http://evil.example"}, 403},
+		"opaque origin":      {`{"refreshSeconds":5}`, []string{"Origin", "null"}, 403},
+		"wrong content type": {`{"refreshSeconds":5}`, []string{"Content-Type", "text/plain"}, 415},
+	} {
+		if r := put(t, srv.URL+"/api/v1/settings", c.body, c.hdr...); r.StatusCode != c.want {
+			t.Errorf("%s: %d, want %d (%s)", name, r.StatusCode, c.want, body(t, r))
+		}
+	}
+	if r := get(t, srv.URL+"/api/v1/settings"); !strings.Contains(body(t, r), `"refreshSeconds":30`) {
+		t.Fatal("a refused change was applied")
+	}
+	// Only PUT changes settings; POST is refused like every other write.
+	resp, err = http.Post(srv.URL+"/api/v1/settings", "application/json", strings.NewReader(`{"refreshSeconds":5}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST settings %d", resp.StatusCode)
 	}
 }

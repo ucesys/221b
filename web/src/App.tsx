@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useLive } from './api/live'
 import { Banners } from './components/Banners'
 import { NodesTab } from './components/NodesTab'
+import { SettingsDialog } from './components/SettingsDialog'
 import { Toast } from './components/Toast'
 import { TopBar, type Theme } from './components/TopBar'
 import { readJSON, writeJSON } from './lib/storage'
@@ -32,8 +33,10 @@ export function App() {
   const live = useLive()
   const now = useNow()
   const [theme, setTheme] = useState<Theme>(initialTheme)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [toast, setToast] = useState('')
   const clearToast = useCallback(() => setToast(''), [])
+  const closeSettings = useCallback(() => setSettingsOpen(false), [])
 
   const changeTheme = (t: Theme) => {
     setTheme(t)
@@ -55,13 +58,23 @@ export function App() {
       data-dock="off"
       style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}
     >
-      <TopBar cluster={live.cluster} rows={live.rows} stream={live.stream} updatedAt={live.updatedAt} theme={theme} onTheme={changeTheme} />
+      <TopBar
+        cluster={live.cluster}
+        rows={live.rows}
+        stream={live.stream}
+        updatedAt={live.updatedAt}
+        refreshedAt={live.refreshedAt}
+        settings={live.settings}
+        settingsOpen={settingsOpen}
+        onSettings={() => setSettingsOpen(true)}
+      />
       <Banners cluster={live.cluster} stream={live.stream} />
       <div className="rk-main" style={{ display: 'flex', flexWrap: 'wrap', flex: '1 1 auto', alignItems: 'stretch' }}>
         <main className="rk-pane" style={{ flex: '999 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <NodesTab rows={live.rows} cluster={live.cluster} unscheduled={live.unscheduled} now={now} onToast={setToast} />
+          <NodesTab rows={live.rows} cluster={live.cluster} now={now} onToast={setToast} />
         </main>
       </div>
+      <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} />
       {toast && <Toast message={toast} onDone={clearToast} />}
     </div>
   )

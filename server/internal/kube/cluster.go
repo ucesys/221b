@@ -66,21 +66,29 @@ type Info struct {
 	Metrics        string     `json:"metrics"`
 	MetricsMessage string     `json:"metricsMessage,omitempty"`
 	MetricsAt      *time.Time `json:"metricsAt,omitempty"`
+	// Uptime says whether node boot times can be read from the kubelets.
+	Uptime        string `json:"uptime"`
+	UptimeMessage string `json:"uptimeMessage,omitempty"`
 }
 
-// Change tells the store which rows may have changed.
+// Change tells the store what may have changed: the rows of some nodes, every
+// row, the cluster details (connection, versions, warnings) or the totals
+// that belong to no row (pods waiting for a node).
 type Change struct {
-	Nodes []string
-	All   bool
-	Info  bool
+	Nodes  []string
+	All    bool
+	Info   bool
+	Totals bool
 }
 
 // Options configure a Cluster.
 type Options struct {
-	Name            string
-	Mode            Mode
-	MetricsInterval time.Duration
-	HealthInterval  time.Duration
+	Name           string
+	Mode           Mode
+	HealthInterval time.Duration
+	// KubeletStats reads each node's boot time from its kubelet through the
+	// API server, which needs get on nodes/proxy. Off, uptime is not shown.
+	KubeletStats bool
 	// Protobuf asks the API server for protobuf, which is smaller and
 	// faster to decode than JSON for large pod lists.
 	Protobuf bool
@@ -93,17 +101,19 @@ type Cluster struct {
 	log             *slog.Logger
 	rest            rest.Interface
 	nodeInf, podInf cache.SharedIndexInformer
-	metricsInterval time.Duration
 	healthInterval  time.Duration
+	kubeletStats    bool
 
-	mu          sync.RWMutex
-	info        Info
-	usage       map[string]nodes.Usage
-	watchErrs   map[string]watchErr
-	notify      func(Change)
-	nodeEvents  uint64
-	podEvents   uint64
-	healthFails int
+	mu                 sync.RWMutex
+	info               Info
+	usage              map[string]nodes.Usage
+	boots              map[string]bootEntry
+	bootForbiddenUntil time.Time
+	watchErrs          map[string]watchErr
+	notify             func(Change)
+	nodeEvents         uint64
+	podEvents          uint64
+	healthFails        int
 }
 
 type watchErr struct {
@@ -133,24 +143,26 @@ func New(cfg *rest.Config, o Options) (*Cluster, error) {
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
-	if o.MetricsInterval <= 0 {
-		o.MetricsInterval = 15 * time.Second
-	}
 	if o.HealthInterval <= 0 {
 		o.HealthInterval = 10 * time.Second
 	}
 	cl := &Cluster{
-		log:             o.Logger,
-		rest:            core.RESTClient(),
-		metricsInterval: o.MetricsInterval,
-		healthInterval:  o.HealthInterval,
+		log:            o.Logger,
+		rest:           core.RESTClient(),
+		healthInterval: o.HealthInterval,
+		kubeletStats:   o.KubeletStats,
 		info: Info{
 			Name: o.Name, Mode: o.Mode, State: StateConnecting, Since: time.Now().UTC(),
-			Metrics: MetricsUnknown, Warnings: []string{},
+			Metrics: MetricsUnknown, Uptime: UptimeUnknown, Warnings: []string{},
 		},
 		usage:     map[string]nodes.Usage{},
+		boots:     map[string]bootEntry{},
 		watchErrs: map[string]watchErr{},
 		notify:    func(Change) {},
+	}
+	if !o.KubeletStats {
+		cl.info.Uptime = UptimeUnavailable
+		cl.info.UptimeMessage = "Uptime is not shown: reading the kubelets' stats is off (kubeletStats in the chart)."
 	}
 
 	cl.nodeInf = cache.NewSharedIndexInformerWithOptions(
@@ -251,8 +263,17 @@ func (c *Cluster) Run(ctx context.Context) {
 		}
 	}()
 	go c.loop(ctx, c.healthInterval, c.checkHealth)
-	go c.loop(ctx, c.metricsInterval, c.readMetrics)
+	if c.kubeletStats {
+		go c.bootLoop(ctx)
+	}
 	<-ctx.Done()
+}
+
+// Poll reads what is not watched: CPU and memory in use from
+// metrics-server. The store calls it once per refresh, so one read serves
+// every browser. ctx bounds how long it may take.
+func (c *Cluster) Poll(ctx context.Context) {
+	c.readMetrics(ctx)
 }
 
 func (c *Cluster) loop(ctx context.Context, every time.Duration, f func(context.Context)) {
@@ -387,10 +408,9 @@ func (c *Cluster) podChanged(old, obj any) {
 		// Unscheduled pods change the cluster totals but no node's row.
 		if n != "" {
 			ch.Nodes = append(ch.Nodes, n)
+		} else {
+			ch.Totals = true
 		}
-	}
-	if len(ch.Nodes) == 0 {
-		ch.Info = true
 	}
 	c.emit(ch)
 }
@@ -479,6 +499,7 @@ type metricsList struct {
 }
 
 // readMetrics reads node usage from metrics-server, when it is installed.
+// It takes at most 10 seconds, or less when ctx ends sooner.
 func (c *Cluster) readMetrics(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -510,6 +531,8 @@ func (c *Cluster) readMetrics(ctx context.Context) {
 			msg = "metrics-server is not responding, so CPU and memory in use are not shown."
 		case apierrors.IsForbidden(err):
 			msg = "Not allowed to read node metrics, so CPU and memory in use are not shown."
+		case errors.Is(err, context.DeadlineExceeded) || apierrors.IsTimeout(err):
+			msg = "metrics-server did not answer in time, so CPU and memory in use are not shown."
 		default:
 			msg = "CPU and memory in use are not available: " + shortError(err)
 		}

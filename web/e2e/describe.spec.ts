@@ -65,10 +65,15 @@ test('the table matches kubectl describe node', async ({ page, request }) => {
     expect(row.taints.length === 0, `${where} taints`).toBe(taints === '<none>')
     expect(row.role, `${where} role`).toBe(field(d, 'Roles').includes('control-plane') ? 'control-plane' : 'worker')
 
+    // Uptime: the boot time each kubelet reports in its Summary API.
+    const summary = JSON.parse(await kubectl('get', '--raw', `/api/v1/nodes/${name}/proxy/stats/summary?only_cpu_and_memory=true`)) as { node: { startTime: string } }
+    expect(row.bootedAt && Date.parse(row.bootedAt), `${where} boot time`).toBe(Date.parse(summary.node.startTime))
+
     // And the screen shows those numbers.
     const cells = page.locator(`[data-node="${name}"] > span`)
-    await expect(cells.nth(3)).toContainText(`${fCores(row.cpu.requested)} / ${fCores(row.cpu.allocatable)}`)
-    await expect(cells.nth(5)).toHaveText(`${row.pods.running} / ${row.pods.capacity}`)
-    await expect(cells.nth(8)).toHaveText(row.kubelet)
+    await expect(cells.nth(4)).toContainText(fCores(row.cpu.requested))
+    await expect(cells.nth(5)).toHaveText(fCores(row.cpu.allocatable))
+    await expect(cells.nth(6)).toHaveText(fCores(Math.max(0, row.cpu.allocatable - row.cpu.requested)))
+    await expect(cells.nth(10)).toHaveText(`${row.pods.running} / ${row.pods.capacity}`)
   }
 })

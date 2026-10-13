@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { controlPlane, row } from '../test/rows'
 import {
   COLUMNS,
-  capacityCards,
+  DEFAULT_HIDDEN,
+  exportJSON,
   exportSheet,
   filterRows,
   gridTemplate,
+  ownLabels,
   problemsCell,
+  resourceSections,
+  roleTag,
   sortRows,
-  summaryLine,
   taintShort,
   visibleColumns,
   type ColumnId,
@@ -80,6 +83,16 @@ describe('sorting', () => {
     expect(names('taints', 'asc').slice(0, 2)).toEqual(['cp-1', 'worker-2'])
   })
 
+  it('sorts roles, free resources and labels', () => {
+    expect(names('role', 'asc')[0]).toBe('cp-1')
+    expect(names('role', 'desc')[3]).toBe('cp-1')
+    // Free CPU: cp-1 3, worker-10 4, worker-2 12, worker-3 14 cores.
+    expect(names('cpuFree', 'desc')).toEqual(['worker-3', 'worker-2', 'worker-10', 'cp-1'])
+    expect(names('cpuAlloc', 'asc')[0]).toBe('cp-1')
+    expect(names('memFree', 'asc')[0]).toBe('cp-1')
+    expect(names('labels', 'desc')[0]).toBe('worker-3')
+  })
+
   it('does not change the input', () => {
     const before = rows.map((r) => r.name)
     sortRows(rows, 'cpu', 'desc', now)
@@ -87,19 +100,7 @@ describe('sorting', () => {
   })
 })
 
-describe('summary', () => {
-  it('counts the whole cluster', () => {
-    expect(summaryLine(rows, rows)).toBe(
-      '1 control-plane node · 3 workers · 63 pods · 1 cordoned · 1 node with errors · 1 with warnings — cluster totals below',
-    )
-  })
-
-  it('counts what a filter shows', () => {
-    const shown = filterRows(rows, 'worker', 'worker-1')
-    expect(summaryLine(rows, shown)).toBe('Showing 1 of 4 nodes · 20 pods — totals below are for these nodes')
-    expect(summaryLine(rows, [])).toBe('No nodes match the filters below')
-  })
-
+describe('cells', () => {
   it('describes problems in the table', () => {
     expect(problemsCell(rows[3]!)).toMatchObject({ text: '1 error · 1 warn', tone: 'err' })
     expect(problemsCell(rows[2]!)).toMatchObject({ text: '1 warning', tone: 'warn' })
@@ -110,46 +111,79 @@ describe('summary', () => {
     expect(taintShort({ key: 'node-role.kubernetes.io/control-plane', effect: 'NoSchedule' })).toBe('control-plane')
     expect(taintShort({ key: 'dedicated', value: 'analytics', effect: 'NoSchedule' })).toBe('dedicated=analytics')
   })
+
+  it('tags roles and lists a node\'s own labels', () => {
+    expect(roleTag(rows[0]!)).toEqual({ text: 'cp', title: 'Control plane' })
+    expect(roleTag(controlPlane('cp-2', { roles: ['control-plane', 'etcd'] }))).toEqual({ text: 'cp', title: 'Control plane (also etcd)' })
+    expect(roleTag(rows[1]!)).toEqual({ text: 'worker', title: 'Worker (worker)' })
+    expect(ownLabels(rows[3]!)).toEqual(['workload=analytics'])
+    expect(ownLabels(rows[1]!)).toEqual([])
+  })
 })
 
-describe('capacity cards', () => {
-  it('totals equal the sums over the rows', () => {
-    const [cpu, memory, pods] = capacityCards(rows, 2, true, '')
-    // Allocatable 4 + 16 + 16 + 16 cores; requested 1 + 12 + 4 + 2.
-    expect(cpu!.total).toBe('52 cores allocatable')
-    expect(cpu!.legend[0]).toMatchObject({ k: 'Requested', v: '19' })
-    expect(cpu!.hero).toBe('33')
-    // Used sums the nodes metrics-server reports on and says so.
-    expect(cpu!.legend[1]).toMatchObject({ k: 'Used', v: '11.5' })
-    expect(cpu!.tip).toContain('the 3 of 4 nodes')
-    expect(memory!.total).toBe('256Gi allocatable')
-    expect(pods!.total).toBe('440 max')
-    expect(pods!.legend[0]).toMatchObject({ k: 'Scheduled', v: '63' })
-    // 1 failing, 1 starting and 2 without a node.
-    expect(pods!.legend[1]).toMatchObject({ k: 'Not ready', v: '4' })
-    expect(pods!.note).toBe('4 pods are not ready: 1 failing, 3 pending (2 without a node).')
+describe('resource sections', () => {
+  it('lists allocatable, requested, free, in use and limits', () => {
+    const [cpu, memory, pods] = resourceSections(rows[1]!, true, '')
+    expect(cpu!.lines.map((l) => [l.k, l.v, l.sub])).toEqual([
+      ['Allocatable', '16 cores', ''],
+      ['Requested', '12', '75%'],
+      ['Free to schedule', '4', '25%'],
+      ['In use', '9', '56%'],
+      ['Limits', '16', '100%'],
+    ])
+    expect(memory!.lines[0]).toMatchObject({ k: 'Allocatable', v: '64Gi' })
+    expect(memory!.lines[2]).toMatchObject({ k: 'Free to schedule', v: '48Gi', sub: '75%' })
+    expect(pods!.lines.map((l) => [l.k, l.v])).toEqual([
+      ['Capacity', '110'],
+      ['Scheduled', '20'],
+      ['Free slots', '90'],
+      ['Not ready', '0'],
+      ['Completed', '0'],
+    ])
   })
 
-  it('marks usage as unavailable without metrics-server', () => {
-    const [cpu] = capacityCards(rows, 0, false, 'metrics-server is not installed, so CPU and memory in use are not shown.')
-    expect(cpu!.legend[1]).toMatchObject({ v: '—', sub: '' })
-    expect(cpu!.usePct).toBe(0)
-    expect(cpu!.note).toContain('metrics-server is not installed')
+  it('says why usage is missing', () => {
+    const [cpu] = resourceSections(rows[3]!, true, '')
+    expect(cpu!.lines[3]).toMatchObject({ k: 'In use', v: '—' })
+    expect(cpu!.note).toBe('metrics-server has no reading for this node.')
+    const [without] = resourceSections(rows[1]!, false, 'metrics-server is not installed, so CPU and memory in use are not shown.')
+    expect(without!.note).toContain('metrics-server is not installed')
+    expect(without!.usePct).toBe(0)
+    const [, , pods] = resourceSections(rows[3]!, false, '')
+    expect(pods!.lines[3]).toMatchObject({ k: 'Not ready', v: '2', sub: '1 failing, 1 still starting', tone: 'err' })
   })
 })
 
 describe('columns and export', () => {
+  it('hides taints, zone, labels and kubelet until picked', () => {
+    expect([...DEFAULT_HIDDEN].sort()).toEqual(['kubelet', 'labels', 'taints', 'zone'])
+    expect(visibleColumns(DEFAULT_HIDDEN, false).map((c) => c.id)).toEqual([
+      'name',
+      'role',
+      'status',
+      'problems',
+      'cpu',
+      'cpuAlloc',
+      'cpuFree',
+      'memory',
+      'memAlloc',
+      'memFree',
+      'pods',
+      'age',
+    ])
+  })
+
   it('always shows the first column and drops wide-only ones beside the panel', () => {
     const all = new Set<ColumnId>(COLUMNS.map((c) => c.id))
     expect(visibleColumns(all, false).map((c) => c.id)).toEqual(['name'])
-    expect(visibleColumns(new Set(), true).map((c) => c.id)).toEqual(['name', 'status', 'problems', 'cpu', 'memory', 'pods'])
+    expect(visibleColumns(new Set(), true).map((c) => c.id)).toEqual(['name', 'role', 'status', 'problems', 'cpu', 'memory', 'pods'])
     expect(visibleColumns(new Set(['zone']), false).map((c) => c.id)).not.toContain('zone')
   })
 
   it('sizes the grid from the columns', () => {
-    const { template, minWidth } = gridTemplate(visibleColumns(new Set(['taints', 'zone', 'kubelet', 'age', 'memory', 'cpu']), false), false)
-    expect(template).toBe('minmax(190px, 1.4fr) 108px 112px 88px')
-    expect(minWidth).toBe(190 + 108 + 112 + 88)
+    const { template, minWidth } = gridTemplate(visibleColumns(new Set(['role', 'taints', 'zone', 'labels', 'kubelet', 'age', 'memory', 'memAlloc', 'memFree', 'cpu', 'cpuAlloc', 'cpuFree']), false), false)
+    expect(template).toBe('minmax(180px, 1.4fr) 100px 106px 84px')
+    expect(minWidth).toBe(180 + 100 + 106 + 84)
   })
 
   it('exports the rows and columns on screen, in screen order', () => {
@@ -161,21 +195,33 @@ describe('columns and export', () => {
       'Role',
       'Status',
       'CPU requested (cores)',
-      'CPU allocatable (cores)',
       'CPU requested %',
       'CPU in use (cores)',
+      'CPU allocatable (cores)',
+      'CPU free (cores)',
       'Memory requested (GiB)',
-      'Memory allocatable (GiB)',
       'Memory requested %',
       'Memory in use (GiB)',
+      'Memory allocatable (GiB)',
+      'Memory free (GiB)',
       'Pods',
       'Pod capacity',
       'Zone',
+      'Labels',
       'Joined',
     ])
     expect(sheet.rows.map((r) => r[0])).toEqual(shown.map((r) => r.name))
-    expect(sheet.rows[0]).toEqual(['worker-10', 'Worker', 'Ready', 12, 16, 75, 9, 16, 64, 25, 8, 20, 110, 'zone-b', '2026-09-01 00:00:00 UTC'])
+    expect(sheet.rows[0]).toEqual(['worker-10', 'Worker', 'Ready', 12, 75, 9, 16, 4, 16, 25, 8, 64, 48, 20, 110, 'zone-b', '', '2026-09-01 00:00:00 UTC'])
     // No reading from metrics-server stays empty rather than 0.
-    expect(sheet.rows[3]![6]).toBeNull()
+    expect(sheet.rows[3]![5]).toBeNull()
+  })
+
+  it('exports the same columns as JSON, with lists as arrays', () => {
+    const cols = visibleColumns(new Set<ColumnId>(['cpu', 'cpuAlloc', 'cpuFree', 'memory', 'memAlloc', 'memFree', 'pods', 'zone', 'kubelet', 'age']), false)
+    const out = exportJSON(rows, cols)
+    expect(out.length).toBe(4)
+    expect(out[0]).toEqual({ Node: 'cp-1', Role: 'Control plane', Status: 'Ready', Problems: [], Taints: ['node-role.kubernetes.io/control-plane:NoSchedule'], Labels: [] })
+    expect(out[3]).toMatchObject({ Node: 'worker-3', Problems: ['Not ready', 'Disk pressure'], Labels: ['workload=analytics'] })
+    expect(JSON.parse(JSON.stringify(out))).toEqual(out)
   })
 })

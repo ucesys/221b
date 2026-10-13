@@ -20,9 +20,20 @@ allowedHosts: []
 
 replicaCount: 1
 
-# How often CPU and memory in use are read from metrics-server, and how
-# often the API server is checked.
-metricsInterval: 15s
+# How often every open console is updated: the server reads CPU and memory
+# in use from metrics-server, rebuilds the rows that changed and sends every
+# browser the same update at the same moment. Nodes and pods are watched,
+# so the rate adds no load there. This is the starting value; the Settings
+# dialog changes it for everyone and keeps the choice in the console's
+# ConfigMap. 1s to 10m.
+refresh: 3s
+# Read each node's boot time from its kubelet, for the uptime in the node
+# details. It is read through the API server's node proxy, once per node
+# and boot, and needs get on nodes/proxy, which also lets the console's
+# ServiceAccount read the kubelets' other endpoints (stats, metrics, logs).
+# Off, the node details show how long the node has been Ready instead.
+kubeletStats: true
+# How often the API server is checked.
 healthInterval: 10s
 logLevel: info
 
@@ -33,8 +44,10 @@ serviceAccount:
   annotations: {}
 
 rbac:
-  # A read-only ClusterRole: get, list and watch on nodes and pods, and get
-  # and list on node metrics. Nothing else, and no Secrets.
+  # A read-only ClusterRole: get, list and watch on nodes and pods, get and
+  # list on node metrics, and get on nodes/proxy when kubeletStats is on.
+  # A Role to get and patch its own settings ConfigMap. Nothing else, and
+  # no Secrets.
   create: true
 
 service:

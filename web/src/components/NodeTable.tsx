@@ -1,7 +1,7 @@
 import { memo, useEffect, useState } from 'react'
 import type { NodeRow } from '../api/types'
-import { clampPct, fmtAge, fmtTs } from '../lib/format'
-import { cpuMeter, memoryMeter, problemsCell, taintId, taintShort, type Column, type ColumnId, type Meter, type SortDir } from '../lib/nodes'
+import { clampPct, fCores, fMem, fmtAge, fmtTs } from '../lib/format'
+import { cpuMeter, free, memoryMeter, ownLabels, problemsCell, roleTag, taintId, taintShort, type Column, type ColumnId, type Meter, type SortDir } from '../lib/nodes'
 
 interface Props {
   rows: NodeRow[]
@@ -34,21 +34,33 @@ function MeterCell({ m }: { m: Meter }) {
   )
 }
 
+/** A free amount, in warning colour when little is left. */
+function FreeCell({ amount, share, title }: { amount: string; share: number; title: string }) {
+  return (
+    <span className="rk-r rk-num" title={title} style={{ color: share < 10 ? 'var(--warn)' : undefined }}>
+      {amount}
+    </span>
+  )
+}
+
 function Cell({ r, id, now }: { r: NodeRow; id: ColumnId; now: number }) {
   switch (id) {
     case 'name':
       return (
+        <span className="rk-mono rk-pname" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {r.name}
+        </span>
+      )
+    case 'role': {
+      const t = roleTag(r)
+      return (
         <span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
-            <span className="rk-mono rk-pname" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {r.name}
-            </span>
-            <span className="rk-role" data-role={r.role}>
-              {r.role}
-            </span>
+          <span className="rk-role" data-role={r.role} title={t.title}>
+            {t.text}
           </span>
         </span>
       )
+    }
     case 'status':
       return (
         <span title={r.statusTip}>
@@ -75,12 +87,28 @@ function Cell({ r, id, now }: { r: NodeRow; id: ColumnId; now: number }) {
           <MeterCell m={cpuMeter(r)} />
         </span>
       )
+    case 'cpuAlloc':
+      return (
+        <span className="rk-r rk-num" style={{ color: 'var(--fg2)' }} title={`${fCores(r.cpu.allocatable)} cores allocatable to pods, of ${fCores(r.cpu.capacity)} on the machine`}>
+          {fCores(r.cpu.allocatable)}
+        </span>
+      )
+    case 'cpuFree':
+      return <FreeCell amount={fCores(free(r.cpu))} share={100 - (r.cpu.allocatable ? (r.cpu.requested / r.cpu.allocatable) * 100 : 100)} title={`${fCores(free(r.cpu))} of ${fCores(r.cpu.allocatable)} cores free to schedule`} />
     case 'memory':
       return (
         <span>
           <MeterCell m={memoryMeter(r)} />
         </span>
       )
+    case 'memAlloc':
+      return (
+        <span className="rk-r rk-num" style={{ color: 'var(--fg2)' }} title={`${fMem(r.memory.allocatable)} allocatable to pods, of ${fMem(r.memory.capacity)} on the machine`}>
+          {fMem(r.memory.allocatable)}
+        </span>
+      )
+    case 'memFree':
+      return <FreeCell amount={fMem(free(r.memory))} share={100 - (r.memory.allocatable ? (r.memory.requested / r.memory.allocatable) * 100 : 100)} title={`${fMem(free(r.memory))} of ${fMem(r.memory.allocatable)} free to schedule`} />
     case 'pods':
       return (
         <span className="rk-r rk-num" title={`${r.pods.running} pods use slots on this node, of ${r.pods.capacity}`}>
@@ -99,6 +127,14 @@ function Cell({ r, id, now }: { r: NodeRow; id: ColumnId; now: number }) {
           {r.zone || '—'}
         </span>
       )
+    case 'labels': {
+      const labels = ownLabels(r)
+      return (
+        <span className="rk-mono" style={{ fontSize: 11.5, color: 'var(--fg2)' }} title={labels.join('\n') || 'Only kubernetes.io labels'}>
+          {labels.length ? labels.join(', ') : '—'}
+        </span>
+      )
+    }
     case 'kubelet':
       return (
         <span className="rk-mono" style={{ fontSize: 12, color: 'var(--fg2)' }}>

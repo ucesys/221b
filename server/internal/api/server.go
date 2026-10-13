@@ -4,6 +4,7 @@ package api
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/settings"
 )
 
 // Store is what the API reads rows from; *live.Store implements it.
@@ -31,9 +33,18 @@ type Store interface {
 	Delays() live.Histogram
 }
 
+// Settings reads and changes the shared settings; *settings.Service
+// implements it.
+type Settings interface {
+	Current() settings.State
+	Update(ctx context.Context, s settings.Settings) (settings.State, error)
+}
+
 // Options configure the HTTP handler.
 type Options struct {
 	Store Store
+	// Settings serves /api/v1/settings; nil leaves the path unserved.
+	Settings Settings
 	// Ready reports whether the cluster has been listed; it drives /readyz.
 	Ready func() bool
 	// UI serves the browser app.
@@ -102,6 +113,10 @@ func New(o Options) *Server {
 	s.handle("GET /api/v1/snapshot", "snapshot", s.snapshot)
 	s.handle("GET /api/v1/nodes/{name}", "node", s.node)
 	s.handle("GET /api/v1/events", "events", s.events)
+	if o.Settings != nil {
+		s.handle("GET /api/v1/settings", "settings", s.getSettings)
+		s.handle("PUT /api/v1/settings", "settings-update", s.putSettings)
+	}
 	s.handle("GET /api/", "api-unknown", s.apiNotFound)
 	s.handle("GET /healthz", "healthz", s.healthz)
 	s.handle("GET /readyz", "readyz", s.readyz)
@@ -218,6 +233,69 @@ func (s *Server) apiNotFound(w http.ResponseWriter, r *http.Request) {
 	jsonError(w, http.StatusNotFound, "no such API path")
 }
 
+func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
+	b, _ := json.Marshal(s.opts.Settings.Current())
+	writeJSON(w, r, b)
+}
+
+// maxSettingsBody bounds a settings update; the settings are a few fields.
+const maxSettingsBody = 4096
+
+// putSettings changes the shared settings. It is the console's only
+// request that changes anything, so it takes JSON only and refuses
+// requests another site made the browser send (X-06).
+func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
+	if !sameSite(r) {
+		jsonError(w, http.StatusForbidden, "settings can only be changed from the console itself")
+		return
+	}
+	if ct, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";"); strings.TrimSpace(strings.ToLower(ct)) != "application/json" {
+		jsonError(w, http.StatusUnsupportedMediaType, "send the settings as application/json")
+		return
+	}
+	var in settings.Settings
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSettingsBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		jsonError(w, http.StatusBadRequest, "the settings are not valid: "+err.Error())
+		return
+	}
+	if err := in.Validate(); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	st, err := s.opts.Settings.Update(r.Context(), in)
+	if err != nil {
+		s.opts.Logger.Warn("settings not saved", "err", err)
+		jsonError(w, http.StatusInternalServerError, "The settings were not saved: "+err.Error())
+		return
+	}
+	s.opts.Logger.Info("settings changed from a browser", "refresh", st.Refresh(), "from", r.RemoteAddr)
+	b, _ := json.Marshal(st)
+	writeJSON(w, r, b)
+}
+
+// sameSite reports whether the browser says the request came from the
+// console's own pages. Browsers send Sec-Fetch-Site on every request and
+// Origin on every cross-site one; a request with neither is not from a
+// current browser, so it is let through for curl and scripts.
+func sameSite(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "same-origin", "none":
+	default:
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" || origin == "null" {
+		return origin == ""
+	}
+	host := origin
+	if i := strings.Index(origin, "://"); i >= 0 {
+		host = origin[i+3:]
+	}
+	return strings.EqualFold(strings.TrimSuffix(host, "/"), r.Host)
+}
+
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	io.WriteString(w, "ok\n")
@@ -234,7 +312,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 // events streams the rows as Server-Sent Events: one "snapshot" event, then
-// a "delta" event per change.
+// a "delta" event per change and a "refresh" event per refresh tick.
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	if n := s.streams.Add(1); n > int64(s.opts.MaxStreams) {
 		s.streams.Add(-1)
@@ -304,15 +382,15 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-sub.Wake():
-			deltas, resync := sub.Take()
+			events, resync := sub.Take()
 			if resync {
 				if err := write("snapshot", s.opts.Store.Snapshot()); err != nil {
 					return
 				}
 				continue
 			}
-			for _, d := range deltas {
-				if err := write("delta", d); err != nil {
+			for _, e := range events {
+				if err := write(e.Name, e.Data); err != nil {
 					return
 				}
 			}

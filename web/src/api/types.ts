@@ -76,6 +76,8 @@ export interface NodeRow {
   arch: string
   labels: Record<string, string>
   conditions: Condition[]
+  /** When the node last booted, from its kubelet; absent until read, or when it cannot be. */
+  bootedAt?: string
 }
 
 export interface ClusterInfo {
@@ -91,12 +93,24 @@ export interface ClusterInfo {
   metrics: 'unknown' | 'available' | 'unavailable'
   metricsMessage?: string
   metricsAt?: string
+  uptime: 'unknown' | 'available' | 'unavailable'
+  uptimeMessage?: string
+}
+
+/** The settings everyone shares, kept on the server. */
+export interface Settings {
+  refreshSeconds: number
+  /** Where the server keeps them: "configmap" survives restarts, "memory" does not. */
+  storage: 'configmap' | 'memory'
+  changedAt?: string
 }
 
 export interface Snapshot {
   version: number
   at: string
+  refreshedAt: string | null
   cluster: ClusterInfo | null
+  settings: Settings | null
   unscheduled: number
   rows: NodeRow[]
 }
@@ -105,7 +119,14 @@ export interface Delta {
   version: number
   at: string
   cluster?: ClusterInfo
+  settings?: Settings
   upserts?: NodeRow[]
   removes?: string[]
   unscheduled?: number
+}
+
+/** Sent on every refresh tick, with or without a delta. */
+export interface Refresh {
+  version: number
+  at: string
 }

@@ -12,9 +12,9 @@ function row(page: Page, node: string) {
   return page.locator(`[data-node="${node}"]`)
 }
 
-/** The status column of a row: its second cell. */
+/** The status column of a row: its third cell, after the name and the role. */
 function status(page: Page, node: string) {
-  return row(page, node).locator(':scope > span').nth(1)
+  return row(page, node).locator(':scope > span').nth(2)
 }
 
 test('a node cordoned with kubectl shows as cordoned within 5 seconds', async ({ page, request }) => {
@@ -75,16 +75,19 @@ test('a node that stops reporting and a crash-looping pod each show as a problem
   await expect(status(page, quiet)).toHaveText('Ready', { timeout: inKind ? 120_000 : 10_000 })
 })
 
-test('works without metrics-server and marks usage as unavailable', async ({ page }) => {
+test('works without metrics-server and marks usage as unavailable', async ({ page, request }) => {
   test.setTimeout(inKind ? 300_000 : 60_000)
   await open(page)
-  const card = page.getByTestId('card-cpu')
-  const used = card.locator('.rk-sw[data-k="use"] + span + span')
+  // The details of a healthy node: "In use" comes from metrics-server.
+  const node = healthyWorkers(await snapshot(request))[0]!.name
+  await row(page, node).click()
+  const panel = page.getByTestId('node-panel')
+  const used = panel.getByTestId('resource-cpu').locator('dt', { hasText: 'In use' }).locator('+ dd')
   await expect(used).not.toHaveText('—', { timeout: inKind ? 120_000 : 20_000 })
 
   await cluster.metricsServer(false)
   try {
-    await expect(card).toContainText('metrics-server is not installed', { timeout: 40_000 })
+    await expect(panel.getByRole('region', { name: 'CPU resources' })).toContainText('metrics-server is not installed', { timeout: 40_000 })
     await expect(used).toHaveText('—')
     await expect(page.locator('[data-node]').first()).toBeVisible()
   } finally {

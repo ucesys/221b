@@ -37,7 +37,9 @@ Then open <http://localhost:8080>. `clusterName` is the name shown in the top ba
 
 To see what it may read: `kubectl auth can-i --list --as=system:serviceaccount:221b:console-221b`. To remove it: `helm uninstall console -n 221b`.
 
-CPU and memory in use come from [metrics-server](https://github.com/kubernetes-sigs/metrics-server) when the cluster has it; without it, the tab says so and shows everything else.
+CPU and memory in use come from [metrics-server](https://github.com/kubernetes-sigs/metrics-server) when the cluster has it; without it, the tab says so and shows everything else. Each node's uptime comes from its kubelet, read through the API server once per boot; that needs `get` on `nodes/proxy`, which the chart grants unless you set `kubeletStats=false`.
+
+**Settings** (the gear in the top bar) hold the theme, for your browser, and the refresh rate, for everyone: the server reads the cluster and updates every open console at the same moment, 3 seconds apart by default, and keeps the choice in its ConfigMap (`console-221b`) so it survives restarts and upgrades. Nodes and pods are watched, so the rate adds no requests to the API server for them.
 
 ## Develop
 
@@ -61,7 +63,7 @@ bin/221b -kubeconfig ~/.kube/config -context my-cluster -cluster-name my-cluster
 
 **The browser app with hot reload:** run `make dev-sim` in one terminal and `npm run dev` in `web/` in another, then open <http://localhost:5173>; Vite sends API calls to the server on port 8080.
 
-**The simulator** (`bin/221b-sim`) serves enough of the Kubernetes API for the server's real informers. It takes `-nodes`, `-pods` and `-churn`, and `POST /sim/...` changes things: cordon a node, make it not ready, crash a pod, take the API server down. See `server/internal/sim`.
+**The simulator** (`bin/221b-sim`) serves enough of the Kubernetes API for the server's real informers, plus the kubelets' boot times through the node proxy and a ConfigMap for the settings. It takes `-nodes`, `-pods` and `-churn`, and `POST /sim/...` changes things: cordon a node, make it not ready, reboot it, crash a pod, take the API server down. See `server/internal/sim`.
 
 **The kind tests** that CI runs: `IMAGE=ghcr.io/ucesys/221b:dev hack/e2e-kind.sh 1.37` after `make image TAG=dev`. `hack/scale-kind.sh` runs the 500-node, 15,000-pod scale test with kwok.
 
@@ -85,7 +87,7 @@ bin/221b -kubeconfig ~/.kube/config -context my-cluster -cluster-name my-cluster
 - **Networks** traces a request from a hostname to the pod that answers it.
 - **Access** reviews RBAC: who can do what, and each identity's effective permissions.
 - **Policies** covers network policies (with a "can A connect to B" checker), disruption budgets and whether each node can be drained, quotas, Pod Security, admission webhooks and priority classes.
-- **Every table** sorts by any column and exports to Excel.
+- **Every table** sorts by any column and exports to Excel or JSON.
 
 The prototype's sample cluster, `lakehouse-prod`, runs Dremio, Nessie, MinIO, Superset, Longhorn, kube-prometheus-stack, cert-manager and ingress-nginx on 10 nodes, with a few realistic problems to find.
 

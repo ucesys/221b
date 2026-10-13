@@ -109,12 +109,13 @@ Phase 1 proves the whole path on one screen. Code becomes an image, the image ru
 
 | ID | Requirement | Done when |
 | --- | --- | --- |
-| P1-13 | Columns as in the prototype: Node and role, Status, Problems, CPU and Memory (requested and in use, against allocatable), Pods (running of capacity), Taints, Zone, Kubelet and Age. | Every value matches `kubectl describe node` on the test cluster. |
-| P1-14 | A summary line and totals: control-plane and worker counts, pods, cordoned nodes, nodes with errors or warnings, and cluster totals for CPU, memory and pods. | The totals equal the sums over the table. |
-| P1-15 | Search by name, role filter (All, Control plane, Workers), sort by any column, column picker, and Excel export of what is on screen. | The exported sheet has the same rows, columns and order as the screen. |
+| P1-13 | Columns: Node, Role (one short column), Status, Problems, CPU and Memory (requested and in use against allocatable; allocatable to Kubernetes; free to schedule), Pods (running of capacity) and Age; Taints, Zone, Labels and Kubelet available but hidden by default. | Every value matches `kubectl describe node` on the test cluster. |
+| P1-14 | The cluster summary (control-plane and worker counts, pods, cordoned nodes, nodes with problems, and totals for CPU, memory and pods) moves to a home page in a later phase; the Nodes tab shows the table only. | The Nodes tab has no summary. |
+| P1-15 | Search by name, role filter (All, Control plane, Workers), sort by any column, column picker, and an Export menu (Excel, JSON) of what is on screen, next to the column picker on the right. | The exported sheet and JSON have the same rows, columns and order as the screen. |
 | P1-16 | Problems come from node conditions (not ready; memory, disk or PID pressure; network unavailable), from cordoning, and from pods on the node that are not ready. | A node made not ready and a crash-looping pod on another node each show as a problem that names its cause. |
-| P1-17 | A details drawer per node: status, conditions, problems, resources, system info (internal IP, zone, OS, kernel, kubelet, runtime, joined), taints, labels with kubernetes.io labels hidden by default, and pod counts. | It opens with Enter, closes with Escape, and returns focus to the row. |
+| P1-17 | A details drawer per node, in this order: status and conditions, problems, taints, labels with kubernetes.io labels hidden by default, then CPU, Memory and Pods as plain sections (allocatable, requested, free, in use, limits; pod counts), then system info (uptime when the kubelet can be asked, internal IP, zone, OS, kernel, kubelet, runtime, joined). | It opens with Enter, closes with Escape, and returns focus to the row. |
 | P1-18 | Works at 500 nodes and 15,000 pods, simulated with kwok. | First screen within 2 seconds, sorting within 200 ms, server memory under 1 GiB. |
+| P1-19 | A Settings button in the top bar (in place of the theme switch) opens a dialog with the theme and the refresh rate. The refresh rate applies to every open console at the same moment and is kept on the server, so the number of browsers does not add requests to the Kubernetes API. | Two browsers show the same refresh time; a rate set in one shows in the other without a reload and survives a restart of the server. |
 
 **Not in Phase 1:** other tabs, the cluster menu and connection editing, sign-in and Ingress, Sherlock and Watson, label and taint filters, and the cordon and drain buttons in the drawer.
 
