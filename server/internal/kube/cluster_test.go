@@ -225,9 +225,11 @@ func TestMetricsUnavailable(t *testing.T) {
 // once per node and boot.
 func TestBootTimesFromTheKubelets(t *testing.T) {
 	cl, srv, changes := start(t, sim.Options{Nodes: 4, Pods: 8, KubeletStats: true})
-	waitFor(t, "boot times", func() bool { _, ok := cl.BootedAt("worker-001"); return ok })
-	if cl.Info().Uptime != kube.UptimeAvailable {
-		t.Fatalf("uptime state %q: %s", cl.Info().Uptime, cl.Info().UptimeMessage)
+	// The state is set once the pass over the nodes is done, after the
+	// entries themselves.
+	waitFor(t, "boot times", func() bool { return cl.Info().Uptime == kube.UptimeAvailable })
+	if _, ok := cl.BootedAt("worker-001"); !ok {
+		t.Fatalf("no boot time for worker-001: %s", cl.Info().UptimeMessage)
 	}
 	booted, _ := cl.BootedAt("worker-001")
 	node := cl.Node("worker-001")
