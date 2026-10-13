@@ -38,17 +38,35 @@ rbac:
   create: true
 
 service:
-  # ClusterIP: open it with kubectl port-forward. Phase 1 has no sign-in,
-  # so do not expose it more widely.
+  # ClusterIP: open it with kubectl port-forward. LoadBalancer or NodePort
+  # put it on the network: with a load balancer controller (MetalLB,
+  # kube-vip, a cloud provider) a LoadBalancer gets an address that answers
+  # on the port below; either type also opens a node port on every node.
+  # Phase 1 has no sign-in, so expose it only on a network where everyone
+  # may see the cluster's nodes and the names of its failing pods.
   type: ClusterIP
-  port: 80
-  # Only used when type is NodePort.
+  port: 8081
+  # NodePort and LoadBalancer: the port opened on every node, 30000 to
+  # 32767 unless the API server allows more. Empty lets Kubernetes pick.
   nodePort: null
+  # LoadBalancer: which controller takes it, and an address to ask for.
+  loadBalancerClass: ""
+  loadBalancerIP: ""
+  # Node addresses on which kube-proxy should also answer on the port, for
+  # clusters without a load balancer controller: list every node's address
+  # to reach the console on each node at the port above.
+  externalIPs: []
+  # Cluster: every node forwards to the console. Local: only the node
+  # running it answers, but the console sees the client's real address.
+  externalTrafficPolicy: Cluster
+  annotations: {}
 
 networkPolicy:
   enabled: true
-  # Extra peers allowed to reach the console on its HTTP port, as
-  # NetworkPolicy "from" entries. kubectl port-forward needs none.
+  # Peers allowed to reach the console on its HTTP port, as NetworkPolicy
+  # "from" entries. kubectl port-forward needs none. With a LoadBalancer or
+  # NodePort Service an empty list allows every address, since that is
+  # what exposing it means; list networks here to narrow it.
   ingressFrom: []
   # The console connects only to the Kubernetes API server, on these ports
   # (6443 is where most API servers listen behind the kubernetes Service;

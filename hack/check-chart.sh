@@ -28,6 +28,11 @@ echo "--- allowed ingress peers, API server addresses, extra host names and a pr
 render console --set clusterName=ci --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.team=platform' \
   --set 'networkPolicy.apiServerCIDRs[0]=10.0.0.10/32' --set 'allowedHosts[0]=console.example.com' \
   --set 'imagePullSecrets[0].name=ghcr' | tee "$WORK/chart-options.yaml" | validate
+echo "--- exposed with a LoadBalancer on every node"
+render console --set clusterName=ci --set service.type=LoadBalancer --set service.nodePort=30081 \
+  --set 'service.externalIPs[0]=10.0.0.21' --set 'service.externalIPs[1]=10.0.0.22' \
+  --set service.loadBalancerClass=metallb --set 'service.annotations.example\.com/pool=office' |
+  tee "$WORK/chart-lb.yaml" | validate
 echo "--- a release name and an override that start with a digit"
 render 221b --set clusterName=ci --set fullnameOverride=2b | validate
 
@@ -65,6 +70,16 @@ host_names() {
   grep -A1 'name: ALLOWED_HOSTS' "$out" | grep -q 'console-221b,console-221b.consoles,console-221b.consoles.svc,console-221b.consoles.svc.cluster.local' &&
     grep -A1 'name: ALLOWED_HOSTS' "$WORK/chart-options.yaml" | grep -q ',console.example.com"'
 }
+exposed_port() { grep -q 'port: 8081' "$out" && grep -q 'port: 8081' "$WORK/chart-lb.yaml"; }
+lb_service() {
+  grep -q 'type: LoadBalancer' "$WORK/chart-lb.yaml" && grep -q 'nodePort: 30081' "$WORK/chart-lb.yaml" &&
+    grep -q 'loadBalancerClass: "metallb"' "$WORK/chart-lb.yaml" && grep -q -- '- 10.0.0.22' "$WORK/chart-lb.yaml" &&
+    grep -q 'externalTrafficPolicy: Cluster' "$WORK/chart-lb.yaml" && grep -q 'example.com/pool: office' "$WORK/chart-lb.yaml"
+}
+# A ClusterIP Service lets nothing in; an exposed one lets everyone in
+# unless peers are listed.
+closed_by_default() { grep -q 'ingress: \[\]' "$out"; }
+open_when_exposed() { ! grep -q 'ingress: \[\]' "$WORK/chart-lb.yaml" && grep -A3 '^  ingress:' "$WORK/chart-lb.yaml" | grep -q 'port: http'; }
 digit_override() { render 221b --set clusterName=ci --set fullnameOverride=2b | grep -A3 '^kind: Service$' | grep -q 'name: console-2b'; }
 
 check "renders a Deployment, Service, ServiceAccount, ClusterRole, ClusterRoleBinding and NetworkPolicy" kinds
@@ -81,4 +96,8 @@ check "no DNS traffic is allowed out" no_dns_egress
 check "API server addresses narrow the egress rule" api_server_addresses
 check "it answers to its Service's names and the names in values" host_names
 check "an override that starts with a digit still gets a valid name" digit_override
+check "the Service listens on 8081" exposed_port
+check "a LoadBalancer Service carries its class, address list, node port and annotations" lb_service
+check "nothing may reach a ClusterIP Service through the network policy" closed_by_default
+check "an exposed Service is reachable through the network policy" open_when_exposed
 exit "$fail"

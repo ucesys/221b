@@ -63,7 +63,6 @@ helm install "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" \
   --set clusterName=kind-e2e \
   --set image.repository="${IMAGE%:*}" --set image.tag="${IMAGE##*:}" \
   --set service.type=NodePort --set service.nodePort=30080 \
-  --set 'networkPolicy.ingressFrom[0].ipBlock.cidr=0.0.0.0/0' \
   --wait --timeout 60s
 notice "helm install" "The console was Ready $(( $(date +%s) - start ))s after helm install on Kubernetes $MINOR."
 kubectl -n "$NS" get all,networkpolicy,serviceaccount
@@ -89,7 +88,7 @@ echo "in-cluster: $incluster"
 endstep
 
 step "Open it through kubectl port-forward"
-kubectl -n "$NS" port-forward "svc/$FULLNAME" 18080:80 > "$WORK/port-forward.log" 2>&1 &
+kubectl -n "$NS" port-forward "svc/$FULLNAME" 18080:8081 > "$WORK/port-forward.log" 2>&1 &
 pf=$!
 for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && break; sleep 1; done
 curl -fsS http://127.0.0.1:18080/readyz
@@ -112,7 +111,7 @@ kubectl -n "$NS" rollout status "deployment/$FULLNAME" --timeout=60s
 [ "$(kubectl -n "$NS" get deployment "$FULLNAME" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="LOG_LEVEL")].value}')" = debug ]
 # Through a port-forward: kube-proxy may still be catching up after the
 # browser tests restarted the API server, which would delay the NodePort.
-kubectl -n "$NS" port-forward "svc/$FULLNAME" 18080:80 > "$WORK/port-forward.log" 2>&1 &
+kubectl -n "$NS" port-forward "svc/$FULLNAME" 18080:8081 > "$WORK/port-forward.log" 2>&1 &
 pf=$!
 for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && break; sleep 1; done
 curl -fsS http://127.0.0.1:18080/readyz

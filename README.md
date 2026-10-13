@@ -13,7 +13,7 @@ The design prototype in `design/` remains the specification for every screen, in
 
 ## Try it on a cluster
 
-The chart installs 221B in the cluster it shows. Phase 1 has no sign-in, so it is reached with `kubectl port-forward` rather than an Ingress.
+The chart installs 221B in the cluster it shows. Phase 1 has no sign-in, so by default it is reached with `kubectl port-forward` rather than exposed.
 
 ```sh
 kubectl create namespace 221b
@@ -28,10 +28,12 @@ helm install console deploy/helm/221b -n 221b \
   --set image.tag=main \
   --set 'imagePullSecrets[0].name=ghcr'
 
-kubectl -n 221b port-forward svc/console-221b 8080:80
+kubectl -n 221b port-forward svc/console-221b 8080:8081
 ```
 
 Then open <http://localhost:8080>. `clusterName` is the name shown in the top bar. Images are tagged `main` and `sha-<commit>` from the main branch, and `pr-<number>` for each pull request.
+
+**To put it on the network** instead, on a network where everyone may see the cluster's nodes and the names of its failing pods, add `--set service.type=LoadBalancer`. With a load balancer controller (MetalLB, kube-vip, a cloud provider) the Service gets an address that answers on port 8081; `kubectl -n 221b get svc console-221b` shows it. Without one, every node still answers on the node port shown there, and `--set 'service.externalIPs={10.0.0.21,10.0.0.22}'` with your nodes' addresses makes them answer on 8081 as well. The network policy lets anyone reach an exposed Service unless `networkPolicy.ingressFrom` lists who may.
 
 To see what it may read: `kubectl auth can-i --list --as=system:serviceaccount:221b:console-221b`. To remove it: `helm uninstall console -n 221b`.
 

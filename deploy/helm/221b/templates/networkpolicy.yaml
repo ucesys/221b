@@ -2,7 +2,8 @@
 {{- if not .Values.networkPolicy.apiServerPorts }}
 {{- fail "networkPolicy.apiServerPorts is empty, which would allow every connection out; list the API server's ports, or set networkPolicy.enabled=false" }}
 {{- end }}
-# Nothing may reach the console except the peers listed in values
+# Nothing may reach the console except the peers listed in values, or
+# anyone when it is exposed with a LoadBalancer or NodePort Service
 # (kubectl port-forward and kubelet probes are not affected), and the
 # console may only connect to the Kubernetes API server's ports, at the
 # addresses in networkPolicy.apiServerCIDRs when given.
@@ -18,11 +19,18 @@ spec:
     matchLabels:
       {{- include "b221.selectorLabels" . | nindent 6 }}
   policyTypes: ["Ingress", "Egress"]
-  {{- with .Values.networkPolicy.ingressFrom }}
+  {{- if .Values.networkPolicy.ingressFrom }}
   ingress:
     - from:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml .Values.networkPolicy.ingressFrom | nindent 8 }}
       ports:
+        - port: http
+          protocol: TCP
+  {{- else if ne .Values.service.type "ClusterIP" }}
+  # Exposed with a LoadBalancer or NodePort Service and no peers listed:
+  # any address may reach it, as exposing it means.
+  ingress:
+    - ports:
         - port: http
           protocol: TCP
   {{- else }}

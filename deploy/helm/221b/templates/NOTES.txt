@@ -1,10 +1,33 @@
 221B is installed as {{ include "b221.fullname" . }} in namespace {{ .Release.Namespace }}.
+{{- $svc := include "b221.fullname" . }}
+{{- if eq .Values.service.type "LoadBalancer" }}
+
+It is exposed with a LoadBalancer Service on port {{ .Values.service.port }}. Find its address with
+
+  kubectl -n {{ .Release.Namespace }} get svc {{ $svc }} -w
+
+and browse to http://<that address>:{{ .Values.service.port }}. Until a load balancer controller gives it an
+address, it also answers on every node's port shown under PORT(S), after the colon.
+{{- else if eq .Values.service.type "NodePort" }}
+
+It is exposed on every node at the port shown after the colon under PORT(S):
+
+  kubectl -n {{ .Release.Namespace }} get svc {{ $svc }}
+{{- end }}
+{{- with .Values.service.externalIPs }}
+
+It also answers on port {{ $.Values.service.port }} at {{ join ", " . }}.
+{{- end }}
+{{- if eq .Values.service.type "ClusterIP" }}
 
 Open it with a port-forward (Phase 1 has no sign-in, so it is not exposed):
 
-  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "b221.fullname" . }} 8080:{{ .Values.service.port }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $svc }} 8080:{{ .Values.service.port }}
 
 then browse to http://localhost:8080.
+{{- end }}
+
+Phase 1 has no sign-in: anyone who can reach it sees the cluster's nodes and the names of its failing pods.
 
 Check what it is allowed to read:
 
