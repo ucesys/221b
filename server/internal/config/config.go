@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,9 @@ type Config struct {
 	// LogLevel is debug, info, warn or error. LogFormat is json or text.
 	LogLevel  string
 	LogFormat string
+	// AllowedHosts are host names the server answers to besides localhost
+	// and IP addresses, such as its Service's DNS names.
+	AllowedHosts []string
 }
 
 // Parse reads the configuration from args (without the program name).
@@ -48,8 +52,14 @@ func Parse(args []string) (Config, error) {
 	fs.DurationVar(&c.HealthInterval, "health-interval", envDuration("HEALTH_INTERVAL", 10*time.Second), "how often to check the API server")
 	fs.StringVar(&c.LogLevel, "log-level", env("LOG_LEVEL", "info"), "debug, info, warn or error")
 	fs.StringVar(&c.LogFormat, "log-format", env("LOG_FORMAT", "json"), "json or text")
+	hosts := fs.String("allowed-hosts", env("ALLOWED_HOSTS", ""), "comma-separated host names to answer to, besides localhost and IP addresses")
 	if err := fs.Parse(args); err != nil {
 		return c, err
+	}
+	for _, h := range strings.Split(*hosts, ",") {
+		if h = strings.TrimSpace(h); h != "" {
+			c.AllowedHosts = append(c.AllowedHosts, h)
+		}
 	}
 	if fs.NArg() > 0 {
 		return c, fmt.Errorf("unexpected arguments: %v", fs.Args())

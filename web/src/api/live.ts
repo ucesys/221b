@@ -71,6 +71,7 @@ export function useLive(url = '/api/v1/events'): LiveState {
   useEffect(() => {
     let es: EventSource | null = null
     let closed = false
+    let failures = 0
     let reopenTimer: ReturnType<typeof setTimeout> | undefined
     // The stream's own copy of the state, so a gap is seen at once rather
     // than inside a deferred React update.
@@ -83,10 +84,20 @@ export function useLive(url = '/api/v1/events'): LiveState {
     const open = () => {
       if (closed) return
       es = new EventSource(url)
-      es.addEventListener('open', () => commit({ ...current, stream: 'open' }))
-      es.addEventListener('error', () => {
-        // EventSource retries by itself; the server asks for 3 seconds.
+      es.addEventListener('open', () => {
+        failures = 0
+        commit({ ...current, stream: 'open' })
+      })
+      es.addEventListener('error', (e) => {
         commit({ ...current, stream: current.version > 0 ? 'reconnecting' : 'connecting' })
+        // EventSource retries a dropped connection by itself (the server
+        // asks for 3 seconds), but gives up for good on an HTTP error such
+        // as a 503 from a busy server or a 502 from a proxy: reopen it then,
+        // waiting longer after each failure, up to 30 seconds.
+        if ((e.target as EventSource).readyState === EventSource.CLOSED) {
+          failures++
+          reopen(Math.min(30_000, 1000 * 2 ** Math.min(failures, 5)) * (0.75 + Math.random() / 2))
+        }
       })
       es.addEventListener('snapshot', (e) => {
         const snap = JSON.parse((e as MessageEvent<string>).data) as Snapshot
@@ -95,14 +106,14 @@ export function useLive(url = '/api/v1/events'): LiveState {
       es.addEventListener('delta', (e) => {
         const d = JSON.parse((e as MessageEvent<string>).data) as Delta
         const next = applyDelta(current, d)
-        if (next === null) reopen()
+        if (next === null) reopen(100)
         else if (next !== current) commit(next)
       })
     }
-    const reopen = () => {
+    const reopen = (delay: number) => {
       es?.close()
       clearTimeout(reopenTimer)
-      reopenTimer = setTimeout(open, 100)
+      reopenTimer = setTimeout(open, delay)
     }
     open()
     return () => {

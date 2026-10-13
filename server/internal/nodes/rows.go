@@ -191,8 +191,10 @@ func BuildRow(node *corev1.Node, pods []*corev1.Pod, usage *Usage, now time.Time
 			continue
 		}
 		r.Pods.Running++
-		reqs := resourcehelper.PodRequests(p, resourcehelper.PodResourcesOptions{})
-		lims := resourcehelper.PodLimits(p, resourcehelper.PodResourcesOptions{})
+		// As the scheduler counts them: with in-place resizes, the larger of
+		// what is asked for and what is allocated or applied.
+		reqs := resourcehelper.PodRequests(p, resourcehelper.PodResourcesOptions{UseStatusResources: true})
+		lims := resourcehelper.PodLimits(p, resourcehelper.PodResourcesOptions{UseStatusResources: true})
 		r.CPU.Requested += reqs.Cpu().MilliValue()
 		r.Memory.Requested += reqs.Memory().Value()
 		r.CPU.Limits += lims.Cpu().MilliValue()

@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { act, renderHook } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { row } from '../test/rows'
-import { applyDelta, applySnapshot, initialState } from './live'
+import { applyDelta, applySnapshot, initialState, useLive } from './live'
 import type { ClusterInfo } from './types'
 
 const cluster: ClusterInfo = {
@@ -60,5 +61,83 @@ describe('live state', () => {
 
   it('reports a gap so the stream reopens', () => {
     expect(applyDelta(snap, { version: 7, at: '' })).toBeNull()
+  })
+})
+
+describe('the event stream', () => {
+  class FakeEventSource extends EventTarget {
+    static CONNECTING = 0
+    static OPEN = 1
+    static CLOSED = 2
+    static made: FakeEventSource[] = []
+    readyState = 0
+    url: string
+    constructor(url: string) {
+      super()
+      this.url = url
+      FakeEventSource.made.push(this)
+    }
+    close() {
+      this.readyState = 2
+    }
+    send(type: string, data: unknown) {
+      this.dispatchEvent(new MessageEvent(type, { data: JSON.stringify(data) }))
+    }
+  }
+
+  beforeEach(() => {
+    FakeEventSource.made = []
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('reopens the stream when the server answers with an error status', () => {
+    const { result, unmount } = renderHook(() => useLive('/events'))
+    const first = FakeEventSource.made[0]!
+    act(() => {
+      first.readyState = 1
+      first.dispatchEvent(new Event('open'))
+      first.send('snapshot', { version: 1, at: '2026-10-12T12:00:00Z', cluster, unscheduled: 0, rows: [row('a')] })
+    })
+    expect(result.current.rows.map((r) => r.name)).toEqual(['a'])
+
+    // A 503 closes an EventSource for good.
+    act(() => {
+      first.readyState = 2
+      first.dispatchEvent(new Event('error'))
+    })
+    expect(result.current.stream).toBe('reconnecting')
+    expect(result.current.rows.map((r) => r.name)).toEqual(['a'])
+    act(() => void vi.advanceTimersByTime(4_000))
+    expect(FakeEventSource.made.length).toBe(2)
+    unmount()
+  })
+
+  it('leaves dropped connections to the browser', () => {
+    const { unmount } = renderHook(() => useLive('/events'))
+    act(() => {
+      FakeEventSource.made[0]!.readyState = 0 // reconnecting by itself
+      FakeEventSource.made[0]!.dispatchEvent(new Event('error'))
+    })
+    act(() => void vi.advanceTimersByTime(60_000))
+    expect(FakeEventSource.made.length).toBe(1)
+    unmount()
+  })
+
+  it('reopens at once on a gap in the versions', () => {
+    const { unmount } = renderHook(() => useLive('/events'))
+    const first = FakeEventSource.made[0]!
+    act(() => {
+      first.send('snapshot', { version: 1, at: '', cluster, unscheduled: 0, rows: [] })
+      first.send('delta', { version: 3, at: '' })
+    })
+    act(() => void vi.advanceTimersByTime(150))
+    expect(FakeEventSource.made.length).toBe(2)
+    expect(first.readyState).toBe(2)
+    unmount()
   })
 })

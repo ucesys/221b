@@ -295,9 +295,11 @@ jobs:
       - name: Build and push for linux/amd64 and linux/arm64
         env:
           PR: ${{ github.event.pull_request.number }}
+          # For a pull request, its branch's commit rather than the merge commit.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           mkdir -p bin
-          sha=${GITHUB_SHA::12}
+          sha=${HEAD_SHA::12}
           if [ -n "$PR" ]; then
             version="pr-$PR"
             refs=("$IMAGE:pr-$PR" "$IMAGE:sha-$sha")
@@ -314,7 +316,7 @@ jobs:
           docker buildx create --name multi --driver docker-container --use
           docker buildx build --platform linux/amd64,linux/arm64 \
             --build-arg VERSION="$version" --build-arg COMMIT="$sha" \
-            --label org.opencontainers.image.revision="$GITHUB_SHA" \
+            --label org.opencontainers.image.revision="$HEAD_SHA" \
             "${tags[@]}" --push . 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
           echo "::notice title=Published::${refs[*]}"
       - name: Report

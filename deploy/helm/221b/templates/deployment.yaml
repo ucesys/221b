@@ -53,6 +53,10 @@ spec:
               value: {{ .Values.healthInterval | quote }}
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
+            # Host names it answers to besides localhost and IP addresses:
+            # its Service's DNS names and any set in values.
+            - name: ALLOWED_HOSTS
+              value: {{ include "b221.allowedHosts" . | quote }}
           ports:
             - name: http
               containerPort: 8080

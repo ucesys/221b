@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"sort"
@@ -45,6 +46,11 @@ type Options struct {
 	// Heartbeat is how often an idle event stream sends a comment, so
 	// proxies do not close it.
 	Heartbeat time.Duration
+	// AllowedHosts are the host names the server answers to, besides
+	// localhost and IP addresses. Any other Host is refused, so a web page
+	// cannot reach the console through DNS rebinding while a port-forward
+	// is open.
+	AllowedHosts []string
 }
 
 // Gauge is one value on the metrics endpoint.
@@ -56,9 +62,10 @@ type Gauge struct {
 
 // Server is the HTTP handler.
 type Server struct {
-	opts    Options
-	mux     *http.ServeMux
-	streams atomic.Int64
+	opts         Options
+	mux          *http.ServeMux
+	streams      atomic.Int64
+	allowedHosts map[string]bool
 
 	reqMu sync.Mutex
 	reqs  map[reqKey]uint64
@@ -86,7 +93,12 @@ func New(o Options) *Server {
 	if o.UI == nil {
 		o.UI = http.NotFoundHandler()
 	}
-	s := &Server{opts: o, mux: http.NewServeMux(), reqs: map[reqKey]uint64{}}
+	s := &Server{opts: o, mux: http.NewServeMux(), reqs: map[reqKey]uint64{}, allowedHosts: map[string]bool{}}
+	for _, h := range o.AllowedHosts {
+		if h = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), "."); h != "" {
+			s.allowedHosts[h] = true
+		}
+	}
 	s.handle("GET /api/v1/snapshot", "snapshot", s.snapshot)
 	s.handle("GET /api/v1/nodes/{name}", "node", s.node)
 	s.handle("GET /api/v1/events", "events", s.events)
@@ -104,6 +116,12 @@ func (s *Server) handle(pattern, route string, h http.HandlerFunc) {
 
 // ServeHTTP adds security headers and recovers from panics.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !s.hostAllowed(r.Host) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusMisdirectedRequest)
+		fmt.Fprintf(w, "221B does not answer to the host name %q. Open it as localhost or by IP address, or add the name to its allowed hosts.\n", r.Host)
+		return
+	}
 	h := w.Header()
 	h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 	h.Set("X-Content-Type-Options", "nosniff")
@@ -122,6 +140,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	s.mux.ServeHTTP(w, r)
+}
+
+// hostAllowed accepts localhost, *.localhost, IP addresses and the
+// configured names. A DNS-rebinding page arrives with its own host name.
+func (s *Server) hostAllowed(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.ToLower(strings.Trim(host, "[]")), ".")
+	switch {
+	case host == "", host == "localhost", strings.HasSuffix(host, ".localhost"):
+		return true
+	case net.ParseIP(host) != nil:
+		return true
+	}
+	return s.allowedHosts[host]
 }
 
 type statusWriter struct {
@@ -338,12 +373,23 @@ func sortKeys(keys []reqKey) {
 	})
 }
 
+// acceptsGzip reports whether the request accepts gzip with a quality
+// above zero ("gzip", "gzip;q=0.8"; not "gzip;q=0").
 func acceptsGzip(r *http.Request) bool {
 	for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
-		enc, q, _ := strings.Cut(strings.TrimSpace(part), ";")
-		if strings.EqualFold(strings.TrimSpace(enc), "gzip") && !strings.Contains(strings.ReplaceAll(q, " ", ""), "q=0") {
-			return true
+		fields := strings.Split(part, ";")
+		if !strings.EqualFold(strings.TrimSpace(fields[0]), "gzip") {
+			continue
 		}
+		q := 1.0
+		for _, f := range fields[1:] {
+			if k, v, ok := strings.Cut(strings.TrimSpace(f), "="); ok && strings.EqualFold(strings.TrimSpace(k), "q") {
+				if parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+					q = parsed
+				}
+			}
+		}
+		return q > 0
 	}
 	return false
 }

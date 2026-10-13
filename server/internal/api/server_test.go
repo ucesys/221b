@@ -293,3 +293,46 @@ func TestMetrics(t *testing.T) {
 		}
 	}
 }
+
+func TestRefusesUnknownHostNames(t *testing.T) {
+	src := &source{nodes: map[string]*corev1.Node{}}
+	store := live.New(src, live.Options{})
+	h := New(Options{Store: store, AllowedHosts: []string{"Console.Example.", " "}})
+	for host, want := range map[string]int{
+		"localhost:8080":      http.StatusOK,
+		"127.0.0.1:8080":      http.StatusOK,
+		"[::1]:8080":          http.StatusOK,
+		"10.244.1.7:8080":     http.StatusOK,
+		"app.localhost:8080":  http.StatusOK,
+		"console.example":     http.StatusOK,
+		"console.example:443": http.StatusOK,
+		"evil.example:8080":   http.StatusMisdirectedRequest,
+		"localhost.evil.test": http.StatusMisdirectedRequest,
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != want {
+			t.Errorf("Host %s: %d, want %d", host, rec.Code, want)
+		}
+	}
+}
+
+func TestAcceptsGzipWithQualities(t *testing.T) {
+	for header, want := range map[string]bool{
+		"gzip":               true,
+		"gzip, deflate, br":  true,
+		"br;q=1, gzip;q=0.8": true,
+		"gzip;q=0":           false,
+		"gzip; q=0.000":      false,
+		"identity":           false,
+		"":                   false,
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Accept-Encoding", header)
+		if got := acceptsGzip(req); got != want {
+			t.Errorf("Accept-Encoding %q: %v, want %v", header, got, want)
+		}
+	}
+}

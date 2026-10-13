@@ -39,6 +39,7 @@ func StripPod(obj any) (any, error) {
 		},
 		Spec: corev1.PodSpec{
 			NodeName:       p.Spec.NodeName,
+			RestartPolicy:  p.Spec.RestartPolicy,
 			Overhead:       p.Spec.Overhead,
 			Resources:      p.Spec.Resources,
 			Containers:     stripContainers(p.Spec.Containers),
@@ -79,6 +80,9 @@ func stripStatuses(in []corev1.ContainerStatus) []corev1.ContainerStatus {
 			RestartCount:         s.RestartCount,
 			State:                s.State,
 			LastTerminationState: s.LastTerminationState,
+			// In-place resizes: what the kubelet allocated and applied.
+			AllocatedResources: s.AllocatedResources,
+			Resources:          s.Resources,
 		}
 	}
 	return out

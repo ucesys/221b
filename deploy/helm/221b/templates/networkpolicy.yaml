@@ -1,7 +1,11 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- if not .Values.networkPolicy.apiServerPorts }}
+{{- fail "networkPolicy.apiServerPorts is empty, which would allow every connection out; list the API server's ports, or set networkPolicy.enabled=false" }}
+{{- end }}
 # Nothing may reach the console except the peers listed in values
 # (kubectl port-forward and kubelet probes are not affected), and the
-# console may only reach DNS and the Kubernetes API server.
+# console may only connect to the Kubernetes API server's ports, at the
+# addresses in networkPolicy.apiServerCIDRs when given.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -26,13 +30,15 @@ spec:
   {{- end }}
   egress:
     - ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
-    - ports:
         {{- range .Values.networkPolicy.apiServerPorts }}
         - port: {{ . }}
           protocol: TCP
         {{- end }}
+      {{- with .Values.networkPolicy.apiServerCIDRs }}
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      {{- end }}
 {{- end }}

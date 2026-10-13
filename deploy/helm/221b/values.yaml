@@ -12,6 +12,12 @@ imagePullSecrets: []
 # Resource names default to <release>-221b; set this to use your own.
 fullnameOverride: ""
 
+# Host names people may use to reach the console, besides localhost, IP
+# addresses and its Service's own DNS names, for example a proxy's. Any
+# other name is refused, which stops DNS-rebinding pages from reading it
+# through a port-forward.
+allowedHosts: []
+
 replicaCount: 1
 
 # How often CPU and memory in use are read from metrics-server, and how
@@ -44,8 +50,14 @@ networkPolicy:
   # Extra peers allowed to reach the console on its HTTP port, as
   # NetworkPolicy "from" entries. kubectl port-forward needs none.
   ingressFrom: []
-  # Ports the console may reach the Kubernetes API server on.
+  # The console connects only to the Kubernetes API server, on these ports
+  # (6443 is where most API servers listen behind the kubernetes Service;
+  # minikube uses 8443 and MicroK8s 16443). It needs no DNS.
   apiServerPorts: [443, 6443]
+  # The API server's addresses, as CIDRs, to allow nothing else. Empty
+  # allows any address on the ports above, since the addresses differ from
+  # cluster to cluster and managed clusters change them.
+  apiServerCIDRs: []
 
 # The server keeps a watched copy of every node and pod; 1Gi holds 500
 # nodes and 15,000 pods with room to spare. It sizes its garbage collector

@@ -34,6 +34,17 @@ func TestEnvironment(t *testing.T) {
 	}
 }
 
+func TestAllowedHosts(t *testing.T) {
+	t.Setenv("ALLOWED_HOSTS", " console-221b, console-221b.consoles.svc ,,")
+	c, err := Parse(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.AllowedHosts) != 2 || c.AllowedHosts[0] != "console-221b" || c.AllowedHosts[1] != "console-221b.consoles.svc" {
+		t.Fatalf("hosts %q", c.AllowedHosts)
+	}
+}
+
 func TestValidation(t *testing.T) {
 	for _, args := range [][]string{
 		{"-cluster-name", ""},

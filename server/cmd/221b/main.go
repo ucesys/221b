@@ -73,10 +73,11 @@ func run(args []string) error {
 	go store.Run(ctx)
 
 	handler := api.New(api.Options{
-		Store:  store,
-		Ready:  cluster.Ready,
-		UI:     ui.Handler(),
-		Logger: log.With("component", "http"),
+		Store:        store,
+		Ready:        cluster.Ready,
+		UI:           ui.Handler(),
+		Logger:       log.With("component", "http"),
+		AllowedHosts: cfg.AllowedHosts,
 		Gauges: func() []api.Gauge {
 			info := cluster.Info()
 			nodeCount, podCount, nodeEvents, podEvents := cluster.Counts()
