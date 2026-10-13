@@ -1,0 +1,45 @@
+221B is installed as {{ include "b221.fullname" . }} in namespace {{ .Release.Namespace }}, running {{ include "b221.image" . }}.
+{{- if include "b221.movingTag" . }}
+That tag moves with every build: each helm upgrade restarts the console on its latest build, and
+
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "b221.fullname" . }} | grep -m1 serving
+
+shows the commit it was built from. Pin one build with --set image.tag=sha-<commit> or --set image.digest=sha256:<digest>.
+{{- end }}
+
+Upgrade with --reset-then-reuse-values to keep your settings and take the chart's new defaults.
+{{- $svc := include "b221.fullname" . }}
+{{- if eq .Values.service.type "LoadBalancer" }}
+
+It is exposed with a LoadBalancer Service on port {{ .Values.service.port }}. Find its address with
+
+  kubectl -n {{ .Release.Namespace }} get svc {{ $svc }} -w
+
+and browse to http://<that address>:{{ .Values.service.port }}. Until a load balancer controller gives it an
+address, it also answers on every node's port shown under PORT(S), after the colon.
+{{- else if eq .Values.service.type "NodePort" }}
+
+It is exposed on every node at the port shown after the colon under PORT(S):
+
+  kubectl -n {{ .Release.Namespace }} get svc {{ $svc }}
+{{- end }}
+{{- with .Values.service.externalIPs }}
+
+It also answers on port {{ $.Values.service.port }} at {{ join ", " . }}.
+{{- end }}
+{{- if eq .Values.service.type "ClusterIP" }}
+
+Open it with a port-forward (Phase 1 has no sign-in, so it is not exposed):
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $svc }} 8080:{{ .Values.service.port }}
+
+then browse to http://localhost:8080.
+{{- end }}
+
+Phase 1 has no sign-in: anyone who can reach it sees the cluster's nodes and the names of its failing pods,
+and can change the refresh rate in its Settings, which applies to everyone and is kept in the ConfigMap
+{{ include "b221.fullname" . }}.
+
+Check what it is allowed to read:
+
+  kubectl auth can-i --list --as=system:serviceaccount:{{ .Release.Namespace }}:{{ include "b221.serviceAccountName" . }}

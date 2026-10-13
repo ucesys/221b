@@ -1,0 +1,13 @@
+apiVersion: v2
+name: 221b
+description: A Kubernetes cluster console with built-in assistants. Phase 1 shows the Nodes tab, read-only.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/ucesys/221b
+sources:
+  - https://github.com/ucesys/221b
+keywords:
+  - kubernetes
+  - console
+  - nodes

@@ -1,0 +1,15 @@
+# The end-to-end cluster: a control plane and two workers. The console's
+# NodePort is published on the host as 127.0.0.1:8080, so the browser still
+# reaches the console while a test stops the API server (a port-forward
+# would go through the API server and stop with it).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+        listenAddress: 127.0.0.1
+        protocol: TCP
+  - role: worker
+  - role: worker

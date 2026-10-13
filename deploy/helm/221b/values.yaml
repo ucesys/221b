@@ -1,0 +1,134 @@
+# The name shown in the top bar. Kubernetes has no reliable name for itself.
+clusterName: ""
+
+image:
+  repository: ghcr.io/ucesys/221b
+  # Defaults to the chart's appVersion, a release. CI also publishes main
+  # and pr-<number>, which move to every new build, and sha-<commit>, which
+  # names one build for good.
+  tag: ""
+  # A digest (sha256:...) pins one build whatever its tag points at; it
+  # replaces the tag in the image reference.
+  digest: ""
+  # Empty picks Always for a moving tag (main, pr-7, latest), so every pod
+  # start fetches the current build, and IfNotPresent for a release, a
+  # sha- tag or a digest, which cannot change under their names. With a
+  # moving tag the pod also restarts on every helm upgrade, so an upgrade
+  # always runs the latest build of that tag. Set it to override.
+  pullPolicy: ""
+
+imagePullSecrets: []
+
+# Resource names default to <release>-221b; set this to use your own.
+fullnameOverride: ""
+
+# Host names people may use to reach the console, besides localhost, IP
+# addresses and its Service's own DNS names, for example a proxy's. Any
+# other name is refused, which stops DNS-rebinding pages from reading it
+# through a port-forward.
+allowedHosts: []
+
+replicaCount: 1
+
+# How often every open console is updated: the server reads CPU and memory
+# in use from metrics-server, rebuilds the rows that changed and sends every
+# browser the same update at the same moment. Nodes and pods are watched,
+# so the rate adds no load there. This is the starting value; the Settings
+# dialog changes it for everyone and keeps the choice in the console's
+# ConfigMap. 1s to 10m.
+refresh: 3s
+# Read each node's boot time from its kubelet, for the uptime in the node
+# details. It is read through the API server's node proxy, once per node
+# and boot, and needs get on nodes/proxy, which also lets the console's
+# ServiceAccount read the kubelets' other endpoints (stats, metrics, logs).
+# Off, the node details show how long the node has been Ready instead.
+kubeletStats: true
+# How often the API server is checked.
+healthInterval: 10s
+logLevel: info
+
+serviceAccount:
+  create: true
+  # Defaults to the full name.
+  name: ""
+  annotations: {}
+
+rbac:
+  # A read-only ClusterRole: get, list and watch on nodes and pods, get and
+  # list on node metrics, and get on nodes/proxy when kubeletStats is on.
+  # A Role to get and patch its own settings ConfigMap. Nothing else, and
+  # no Secrets.
+  create: true
+
+service:
+  # ClusterIP: open it with kubectl port-forward. LoadBalancer or NodePort
+  # put it on the network: with a load balancer controller (MetalLB,
+  # kube-vip, a cloud provider) a LoadBalancer gets an address that answers
+  # on the port below; either type also opens a node port on every node.
+  # Phase 1 has no sign-in, so expose it only on a network where everyone
+  # may see the cluster's nodes and the names of its failing pods.
+  type: ClusterIP
+  port: 8081
+  # NodePort and LoadBalancer: the port opened on every node, 30000 to
+  # 32767 unless the API server allows more. Empty lets Kubernetes pick.
+  nodePort: null
+  # LoadBalancer: which controller takes it, and an address to ask for.
+  loadBalancerClass: ""
+  loadBalancerIP: ""
+  # Node addresses on which kube-proxy should also answer on the port, for
+  # clusters without a load balancer controller: list every node's address
+  # to reach the console on each node at the port above.
+  externalIPs: []
+  # Cluster: every node forwards to the console. Local: only the node
+  # running it answers, but the console sees the client's real address.
+  externalTrafficPolicy: Cluster
+  annotations: {}
+
+networkPolicy:
+  enabled: true
+  # Peers allowed to reach the console on its HTTP port, as NetworkPolicy
+  # "from" entries. kubectl port-forward needs none. With a LoadBalancer or
+  # NodePort Service an empty list allows every address, since that is
+  # what exposing it means; list networks here to narrow it.
+  ingressFrom: []
+  # The console connects only to the Kubernetes API server, on these ports
+  # (6443 is where most API servers listen behind the kubernetes Service;
+  # minikube uses 8443 and MicroK8s 16443). It needs no DNS.
+  apiServerPorts: [443, 6443]
+  # The API server's addresses, as CIDRs, to allow nothing else. Empty
+  # allows any address on the ports above, since the addresses differ from
+  # cluster to cluster and managed clusters change them.
+  apiServerCIDRs: []
+
+# The server keeps a watched copy of every node and pod; 1Gi holds 500
+# nodes and 15,000 pods with room to spare. It sizes its garbage collector
+# to 90% of the memory limit.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  privileged: false
+  capabilities:
+    drop: ["ALL"]
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""

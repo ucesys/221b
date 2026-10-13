@@ -1,0 +1,166 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ClusterInfo, NodeRow } from '../api/types'
+import { fileStamp } from '../lib/format'
+import { COLUMN_BY_ID, DEFAULT_HIDDEN, exportJSON, exportSheet, filterRows, gridTemplate, sortRows, visibleColumns, type ColumnId, type RoleFilter, type SortDir } from '../lib/nodes'
+import { readJSON, writeJSON } from '../lib/storage'
+import { download, xlsxBytes } from '../lib/xlsx'
+import { ColumnsMenu } from './ColumnsMenu'
+import { ExportMenu, type ExportFormat } from './ExportMenu'
+import { SearchIcon } from './Icons'
+import { NodePanel } from './NodePanel'
+import { NodeTable } from './NodeTable'
+
+interface Props {
+  rows: NodeRow[]
+  cluster: ClusterInfo | null
+  now: number
+  onToast: (msg: string) => void
+}
+
+/** The hidden columns, remembered per browser; absent means the defaults. */
+const HIDDEN_KEY = '221b.nodes.hidden'
+
+function initialHidden(): Set<ColumnId> {
+  const saved = readJSON<ColumnId[] | null>(HIDDEN_KEY, null)
+  if (!saved) return new Set(DEFAULT_HIDDEN)
+  return new Set(saved.filter((id) => id in COLUMN_BY_ID))
+}
+
+export function NodesTab({ rows, cluster, now, onToast }: Props) {
+  const [role, setRole] = useState<RoleFilter>('all')
+  const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<{ col: ColumnId; dir: SortDir }>({ col: 'name', dir: 'asc' })
+  const [hidden, setHidden] = useState<Set<ColumnId>>(initialHidden)
+  const [selected, setSelected] = useState<string | null>(null)
+  const rowEls = useRef(new Map<string, HTMLButtonElement>())
+  const lastSelected = useRef<string | null>(null)
+
+  const changeHidden = (next: Set<ColumnId>) => {
+    setHidden(next)
+    writeJSON(HIDDEN_KEY, [...next])
+  }
+
+  const shown = useMemo(() => sortRows(filterRows(rows, role, query), sort.col, sort.dir, now), [rows, role, query, sort, now])
+  const metrics = cluster?.metrics === 'available'
+  const metricsNote = cluster?.metricsMessage ?? ''
+  const selectedRow = selected ? rows.find((r) => r.name === selected) ?? null : null
+  const compact = selectedRow !== null
+  // Stable between renders, so rows only re-render when their own data changes.
+  const cols = useMemo(() => visibleColumns(hidden, compact), [hidden, compact])
+  const { template, minWidth } = useMemo(() => gridTemplate(cols, compact), [cols, compact])
+  const cp = rows.filter((r) => r.role === 'control-plane').length
+
+  const onSort = (col: ColumnId) =>
+    setSort((s) => (s.col === col ? { col, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: COLUMN_BY_ID[col].defaultDir }))
+
+  const close = useCallback(() => {
+    const name = lastSelected.current
+    setSelected(null)
+    // Return focus to the row the panel was opened from.
+    requestAnimationFrame(() => {
+      if (name) rowEls.current.get(name)?.focus()
+    })
+  }, [])
+
+  const onOpen = useCallback(
+    (name: string) => {
+      if (lastSelected.current === name && selected === name) {
+        close()
+        return
+      }
+      lastSelected.current = name
+      setSelected(name)
+    },
+    [selected, close],
+  )
+
+  const rowRef = useCallback((name: string, el: HTMLButtonElement | null) => {
+    if (el) rowEls.current.set(name, el)
+    else rowEls.current.delete(name)
+  }, [])
+
+  // Escape closes the panel from anywhere on the page.
+  useEffect(() => {
+    if (!selected) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !e.defaultPrevented) close()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selected, close])
+
+  const exportRows = (format: ExportFormat) => {
+    const name = (cluster?.name ?? 'cluster').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+    const file = `${name}-nodes-${fileStamp()}.${format}`
+    try {
+      if (format === 'xlsx') {
+        const sheet = exportSheet(shown, cols)
+        download(xlsxBytes('Nodes', sheet.head, sheet.rows), file)
+      } else {
+        download(JSON.stringify(exportJSON(shown, cols), null, 2) + '\n', file, 'application/json')
+      }
+      onToast(`Downloaded ${file}`)
+    } catch {
+      onToast(format === 'xlsx' ? 'Couldn’t build the spreadsheet.' : 'Couldn’t build the JSON file.')
+    }
+  }
+
+  const segs: [RoleFilter, string, number][] = [
+    ['all', 'All', rows.length],
+    ['control-plane', 'Control plane', cp],
+    ['worker', 'Workers', rows.length - cp],
+  ]
+
+  return (
+    <div className="rk-split" style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', alignItems: 'stretch' }}>
+      <div className="rk-col" style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+        <section aria-label="Node list" style={{ padding: '18px 24px 28px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px' }}>
+            <div className="rk-seg" role="group" aria-label="Show nodes by role">
+              {segs.map(([id, label, n]) => (
+                <button key={id} aria-pressed={role === id} onClick={() => setRole(id)}>
+                  {label} <span style={{ color: 'var(--fg3)', fontWeight: 400 }}>{n}</span>
+                </button>
+              ))}
+            </div>
+            <label className="rk-field" style={{ width: 260, maxWidth: '100%' }}>
+              <SearchIcon />
+              <span className="rk-sr">Filter nodes</span>
+              <input type="search" placeholder="Filter by name, label or taint" value={query} onChange={(e) => setQuery(e.target.value)} />
+            </label>
+            <span style={{ fontSize: 12, color: 'var(--fg3)', whiteSpace: 'nowrap' }} data-testid="shown">
+              {!rows.length
+                ? cluster?.synced
+                  ? 'This cluster has no nodes.'
+                  : 'Waiting for the first list of nodes…'
+                : shown.length < rows.length
+                  ? `Showing ${shown.length} of ${rows.length} nodes`
+                  : ''}
+            </span>
+            <div className="rk-tools" style={{ marginLeft: 'auto', gap: 8 }}>
+              <ColumnsMenu hidden={hidden} onChange={changeHidden} compact={compact} />
+              <ExportMenu onExport={exportRows} disabled={!shown.length} />
+            </div>
+          </div>
+          <NodeTable
+            rows={shown}
+            cols={cols}
+            template={template}
+            minWidth={minWidth}
+            sortCol={sort.col}
+            sortDir={sort.dir}
+            onSort={onSort}
+            selected={selected}
+            onOpen={onOpen}
+            rowRef={rowRef}
+            now={now}
+          />
+          <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>
+            Bars: light = requested, solid = in use; the percentage is requested of allocatable. Free = allocatable − requested. Click a node for its details.
+          </p>
+        </section>
+      </div>
+      {selectedRow && <NodePanel r={selectedRow} metrics={metrics} metricsNote={metricsNote} uptimeNote={cluster?.uptimeMessage ?? ''} now={now} onClose={close} />}
+    </div>
+  )
+}

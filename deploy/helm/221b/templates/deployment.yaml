@@ -1,0 +1,106 @@
+{{- if not .Values.clusterName }}
+{{- fail "Set clusterName: the name shown in the console's top bar, such as --set clusterName=staging" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "b221.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      {{- include "b221.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "b221.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- if or .Values.podAnnotations (include "b221.movingTag" .) }}
+      annotations:
+        {{- if include "b221.movingTag" . }}
+        # A moving tag may point at a new build since the last upgrade, and
+        # an unchanged pod template would not restart the pod to fetch it.
+        # The release revision changes with every helm upgrade, so each one
+        # rolls the pod, which then pulls the tag again.
+        221b/release-revision: {{ .Release.Revision | quote }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "b221.serviceAccountName" . }}
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: console
+          image: {{ include "b221.image" . | quote }}
+          imagePullPolicy: {{ include "b221.pullPolicy" . }}
+          env:
+            - name: CLUSTER_NAME
+              value: {{ .Values.clusterName | quote }}
+            - name: LISTEN
+              value: ":8080"
+            # The refresh rate until someone changes it in Settings, which
+            # keeps the choice in the ConfigMap named here.
+            - name: REFRESH
+              value: {{ .Values.refresh | quote }}
+            - name: SETTINGS_CONFIGMAP
+              value: {{ printf "%s/%s" .Release.Namespace (include "b221.fullname" .) | quote }}
+            - name: KUBELET_STATS
+              value: {{ .Values.kubeletStats | quote }}
+            - name: HEALTH_INTERVAL
+              value: {{ .Values.healthInterval | quote }}
+            - name: LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            # Host names it answers to besides localhost and IP addresses:
+            # its Service's DNS names and any set in values.
+            - name: ALLOWED_HOSTS
+              value: {{ include "b221.allowedHosts" . | quote }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

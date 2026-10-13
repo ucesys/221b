@@ -1,0 +1,74 @@
+/* Additions for the real app that the prototype does not need. */
+.rk-clstatic {
+  cursor: default;
+}
+.rk-clstatic:hover {
+  border-color: var(--line);
+  background: var(--surface2);
+}
+.rk-banner[data-tone='info'] {
+  background: var(--info-weak);
+  color: var(--info);
+}
+.rk-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+/* The prototype's .rk-dd menus are positioned against this wrapper. */
+.rk-dd {
+  position: relative;
+}
+@media (max-width: 760px) {
+  .rk-split > .rk-col > section {
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+  }
+}
+/* Large clusters: rows off screen skip layout and paint, so sorting 500
+   nodes re-lays out only the rows in view. */
+.rk-grid > .rk-gr {
+  content-visibility: auto;
+  contain-intrinsic-height: auto 37px;
+}
+/* Below 900px the page scrolls as a whole. The header stays in place so the
+   details panel, fixed just under it, never leaves a gap above itself. */
+@media (max-width: 899px) {
+  .rk-hdr {
+    position: sticky !important;
+    top: 0;
+    z-index: 36;
+  }
+}
+/* The Settings dialog: a native <dialog>, styled like the prototype's menus. */
+.rk-dialog {
+  width: min(460px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  margin: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  overflow: visible;
+}
+.rk-dialog::backdrop {
+  background: rgba(16, 22, 32, 0.34);
+}
+.rk[data-theme='dark'] .rk-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+.rk-dialog-box {
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+.rk-seg > button:disabled {
+  cursor: default;
+  color: var(--fg3);
+}
+.rk-seg > button[aria-busy='true'] {
+  color: var(--accent);
+}
