@@ -33,7 +33,7 @@ kubectl get clusterrole,clusterrolebinding -l app.kubernetes.io/instance=console
 
 ## 3. Permissions and live updates (P1-09, P1-10)
 
-**CI proves:** the ServiceAccount can get, list and watch nodes and pods, and get and list node metrics; `kubectl auth can-i --list` shows nothing more in any namespace beyond what every identity may do (review its own access, read version and discovery URLs); and listing Secrets is refused by the API server. A node cordoned with kubectl shows as cordoned within 5 seconds. With the API server stopped (its static pod removed in kind), the status turns red within 30 seconds; when it comes back, the status turns green and a change made afterwards shows without a reload.
+**CI proves:** the ServiceAccount can get, list and watch nodes and pods, and get and list node metrics; `kubectl auth can-i --list` shows nothing more in any namespace beyond what every identity may do (review its own access, read version and discovery URLs and, from Kubernetes 1.36, public CA bundles); and listing Secrets is refused by the API server. A node cordoned with kubectl shows as cordoned within 5 seconds. With the API server stopped (its static pod removed in kind), the status turns red within 30 seconds; when it comes back, the status turns green and a change made afterwards shows without a reload.
 
 **To check by hand** on the test cluster:
 
