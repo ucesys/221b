@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useEffect, useState } from 'react'
 import type { NodeRow } from '../api/types'
 import { clampPct, fmtAge, fmtTs } from '../lib/format'
 import { cpuMeter, memoryMeter, problemsCell, taintId, taintShort, type Column, type ColumnId, type Meter, type SortDir } from '../lib/nodes'
@@ -151,7 +151,26 @@ const Row = memo(function Row({
   )
 })
 
+/** Rows in the first render: more than a tall screen shows. */
+const FIRST_ROWS = 60
+
+/**
+ * Renders the first screenful at once and the rest over the next few
+ * frames, so a large cluster's first screen does not wait for every row.
+ */
+function useProgressiveCount(total: number): number {
+  const [limit, setLimit] = useState(FIRST_ROWS)
+  useEffect(() => {
+    if (limit >= total) return
+    const frame = requestAnimationFrame(() => setLimit((l) => l * 4))
+    return () => cancelAnimationFrame(frame)
+  }, [limit, total])
+  return Math.min(limit, total)
+}
+
 export function NodeTable({ rows, cols, template, minWidth, sortCol, sortDir, onSort, selected, onOpen, rowRef, now }: Props) {
+  const count = useProgressiveCount(rows.length)
+  const shown = count < rows.length ? rows.slice(0, count) : rows
   return (
     <div className="rk-card" style={{ overflowX: 'auto' }}>
       <div className="rk-grid" style={{ ['--cols' as string]: template, minWidth }} role="group" aria-label="Nodes">
@@ -176,7 +195,7 @@ export function NodeTable({ rows, cols, template, minWidth, sortCol, sortDir, on
             )
           })}
         </div>
-        {rows.map((r) => (
+        {shown.map((r) => (
           <Row key={r.name} r={r} cols={cols} selected={selected === r.name} onOpen={onOpen} rowRef={rowRef} now={now} />
         ))}
         {rows.length === 0 && <p style={{ margin: 0, padding: '28px 16px', textAlign: 'center', fontSize: 12.5, color: 'var(--fg3)' }}>No nodes match this filter.</p>}

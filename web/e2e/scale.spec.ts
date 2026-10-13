@@ -12,13 +12,31 @@ test('first screen within 2 seconds, sorting within 200 ms, memory under 1 GiB',
   await page.goto('/')
   await expect(page.locator('[data-node]')).toHaveCount(nodes, { timeout: 60_000 })
 
-  const loads: number[] = []
+  // Times taken in the page, when the rows appear: the first screenful
+  // (what a 900 px window shows) and then every row.
+  await page.addInitScript((n) => {
+    const w = window as unknown as { __firstScreen?: number; __allRows?: number }
+    new MutationObserver(() => {
+      const rows = document.querySelectorAll('[data-node]').length
+      if (!w.__firstScreen && rows >= 20) w.__firstScreen = performance.now()
+      if (!w.__allRows && rows >= n) w.__allRows = performance.now()
+    }).observe(document, { childList: true, subtree: true })
+  }, nodes)
+  const firsts: number[] = []
+  const alls: number[] = []
   for (let i = 0; i < 3; i++) {
     await page.goto('/')
-    await page.waitForFunction((n) => document.querySelectorAll('[data-node]').length >= n, nodes, { timeout: 30_000 })
-    loads.push(await page.evaluate(() => performance.now()))
+    await page.waitForFunction(() => (window as unknown as { __allRows?: number }).__allRows, undefined, { timeout: 30_000 })
+    const t = await page.evaluate(() => {
+      const w = window as unknown as { __firstScreen: number; __allRows: number }
+      return { first: w.__firstScreen, all: w.__allRows }
+    })
+    firsts.push(t.first)
+    alls.push(t.all)
   }
-  const firstScreen = Math.min(...loads)
+  const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]!
+  const firstScreen = median(firsts)
+  const allRows = median(alls)
 
   const sorts: number[] = []
   for (const col of ['cpu', 'memory', 'name', 'pods', 'status', 'name']) {
@@ -42,7 +60,7 @@ test('first screen within 2 seconds, sorting within 200 ms, memory under 1 GiB',
   const rss = Number(/^b221_resident_memory_bytes (\S+)$/m.exec(metrics)?.[1] ?? NaN)
   const pods = Number(/^b221_cached_pods (\S+)$/m.exec(metrics)?.[1] ?? NaN)
 
-  const summary = `first screen ${Math.round(firstScreen)} ms; sort median ${Math.round(sortMedian)} ms (max ${Math.round(Math.max(...sorts))} ms); server memory ${Math.round(rss / 2 ** 20)} MiB; ${pods} pods cached`
+  const summary = `first screen ${Math.round(firstScreen)} ms, all ${nodes} rows ${Math.round(allRows)} ms; sort median ${Math.round(sortMedian)} ms (max ${Math.round(Math.max(...sorts))} ms); server memory ${Math.round(rss / 2 ** 20)} MiB; ${pods} pods cached`
   test.info().annotations.push({ type: 'scale', description: summary })
   console.log(`SCALE: ${summary}`)
 

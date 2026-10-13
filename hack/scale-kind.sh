@@ -29,7 +29,7 @@ cleanup() {
       kubectl -n "$NS" logs -l app.kubernetes.io/name=221b --tail=100
       kubectl -n kube-system logs deployment/kwok-controller --tail=50
     } > "$WORK/diagnostics.log" 2>&1 || true
-    cat "$WORK/diagnostics.log"
+    if [ -z "${GITHUB_ACTIONS:-}" ]; then cat "$WORK/diagnostics.log"; fi
   fi
   if [ -z "${KEEP:-}" ]; then kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true; fi
   exit "$code"

@@ -33,7 +33,8 @@ cleanup() {
       kubectl -n "$NS" logs -l app.kubernetes.io/name=221b --tail=200 --all-containers
       kubectl get events -A --sort-by=.lastTimestamp | tail -40
     } > "$WORK/diagnostics.log" 2>&1 || true
-    cat "$WORK/diagnostics.log"
+    # CI reports the file on its own, so the log's tail shows the failure.
+    if [ -z "${GITHUB_ACTIONS:-}" ]; then cat "$WORK/diagnostics.log"; fi
     endstep
   fi
   if [ -z "${KEEP:-}" ]; then kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true; fi
