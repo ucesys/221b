@@ -36,9 +36,11 @@ for verb in get list watch; do
   expect no "$verb" configmaps --all-namespaces
   expect no "$verb" pods.metrics.k8s.io --all-namespaces
 done
-for args in "create pods" "delete pods" "patch nodes" "update nodes" "delete nodes" "create pods/exec" \
-  "get pods/log" "create pods/eviction" "create deployments" "impersonate users" "create serviceaccounts/token" \
-  "escalate clusterroles" "bind clusterroles" "get events"; do
+# Subresources need --subresource: "pods/log" would mean the pod named log.
+for args in "create pods" "delete pods" "patch nodes" "update nodes" "delete nodes" \
+  "create pods --subresource=exec" "get pods --subresource=log" "create pods --subresource=portforward" \
+  "create pods --subresource=eviction" "create serviceaccounts --subresource=token" "patch nodes --subresource=status" \
+  "create deployments" "impersonate users" "escalate clusterroles" "bind clusterroles" "get events"; do
   # shellcheck disable=SC2086
   expect no $args --all-namespaces
 done
