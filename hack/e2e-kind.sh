@@ -8,6 +8,7 @@
 # Needs docker, kubectl, helm and, for the browser tests, the web/ packages
 # and Playwright's Chromium. Set KEEP=1 to keep the cluster afterwards.
 set -euo pipefail
+# shellcheck source=hack/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 MINOR=${1:-1.37}

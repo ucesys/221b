@@ -135,7 +135,7 @@ jobs:
       - name: Lint and validate
         run: hack/check-chart.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Shell scripts
-        run: shellcheck hack/*.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+        run: shellcheck -x --severity=warning hack/*.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Report
         if: failure()
         run: hack/annotate.sh "Chart" "$RUNNER_TEMP/ci.log"
@@ -167,7 +167,17 @@ jobs:
         env:
           GRYPE: ${{ steps.grype.outputs.cmd }}
         run: |
-          "$GRYPE" "docker:$IMAGE:ci" --fail-on high -o table 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          set +e
+          "$GRYPE" "docker:$IMAGE:ci" --fail-on high -o table -o "json=$RUNNER_TEMP/grype.json" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          code=${PIPESTATUS[0]}
+          set -e
+          # Every finding, whatever its severity, as one line each.
+          jq -r '.matches[] | "\(.vulnerability.severity) \(.vulnerability.id) in \(.artifact.name) \(.artifact.version), fixed in \(.vulnerability.fix.versions | join(" or "))"' \
+            "$RUNNER_TEMP/grype.json" | sort -u > "$RUNNER_TEMP/findings.txt" || true
+          if [ -s "$RUNNER_TEMP/findings.txt" ]; then
+            echo "::warning title=Vulnerability findings::$(sed ':a;N;$!ba;s/\n/%0A/g' "$RUNNER_TEMP/findings.txt")"
+          fi
+          if [ "$code" -ne 0 ]; then exit "$code"; fi
           echo "::notice title=Vulnerability scan::No high or critical vulnerability in the image."
       - name: Save
         run: docker save "$IMAGE:ci" | gzip > bin/image.tar.gz

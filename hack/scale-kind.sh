@@ -5,6 +5,7 @@
 #
 #   IMAGE=ghcr.io/ucesys/221b:dev hack/scale-kind.sh
 set -euo pipefail
+# shellcheck source=hack/lib.sh
 source "$(dirname "$0")/lib.sh"
 
 MINOR=${MINOR:-1.37}

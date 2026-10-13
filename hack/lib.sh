@@ -1,5 +1,6 @@
+# shellcheck shell=bash disable=SC2034
 # Shared by the hack/ scripts: tool versions, checksums and log helpers.
-# shellcheck shell=bash
+# (The scripts that source this file use its variables, hence SC2034.)
 
 KUBECONFORM_VERSION=v0.8.0
 KUBECONFORM_SHA256=9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
