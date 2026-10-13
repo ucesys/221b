@@ -73,6 +73,21 @@ step "Permissions"
 "$ROOT/hack/check-rbac.sh" "$SA"
 endstep
 
+step "Run from a kubeconfig too: both modes show the same nodes (P1-08)"
+kind get kubeconfig --name "$CLUSTER" > "$WORK/kubeconfig"
+chmod 644 "$WORK/kubeconfig"
+docker run -d --rm --name 221b-kubeconfig --network host -v "$WORK/kubeconfig:/kubeconfig:ro" "$IMAGE" \
+  -kubeconfig /kubeconfig -cluster-name laptop -listen 127.0.0.1:18081 > /dev/null
+for _ in $(seq 60); do curl -fs http://127.0.0.1:18081/readyz >/dev/null && break; sleep 1; done
+names() { curl -fsS "$1/api/v1/snapshot" | python3 -c 'import json, sys; print(" ".join(sorted(r["name"] for r in json.load(sys.stdin)["rows"])))'; }
+laptop=$(names http://127.0.0.1:18081)
+incluster=$(names "$BASE_URL")
+docker rm -f 221b-kubeconfig > /dev/null
+echo "kubeconfig: $laptop"
+echo "in-cluster: $incluster"
+[ -n "$laptop" ] && [ "$laptop" = "$incluster" ]
+endstep
+
 step "Open it through kubectl port-forward"
 kubectl -n "$NS" port-forward "svc/$FULLNAME" 18080:80 > "$WORK/port-forward.log" 2>&1 &
 pf=$!

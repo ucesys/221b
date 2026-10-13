@@ -19,6 +19,7 @@ Decisions worth a look, because they narrow or depart from the requirements:
 
 - `helm install --wait --timeout 60s` brings the pod to Ready within 60 seconds;
 - the console answers through `kubectl port-forward`;
+- the same image, run outside the cluster from a kubeconfig, shows the same nodes (P1-08);
 - `helm upgrade` rolls out a changed setting;
 - after `helm uninstall`, nothing is left: no workload, Service, ServiceAccount, NetworkPolicy, ClusterRole, ClusterRoleBinding or release Secret.
 
