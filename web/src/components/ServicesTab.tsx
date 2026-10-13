@@ -14,7 +14,7 @@ import { ExportMenu } from './ExportMenu'
 import { WarnIcon } from './Icons'
 import { SearchBox } from './SearchBox'
 import { SideList, type SideGroup } from './SideList'
-import { Table, TR } from './Table'
+import { ScrollBox, Table, TR } from './Table'
 import type { TabProps } from './tabs'
 import { YamlView } from './YamlView'
 
@@ -305,7 +305,7 @@ function ServicePanel({ serviceKey, row, gone, now, onClose, onToast }: { servic
             {d.endpoints.length === 0 ? (
               <p style={{ margin: 0, padding: '0 16px 12px', fontSize: 12.5, color: 'var(--fg3)' }}>{d.selectorText.length ? 'No pod matches the selector, so the Service has no endpoints.' : 'No endpoints.'}</p>
             ) : (
-              <div style={{ overflowX: 'auto' }}>
+              <ScrollBox label="Endpoints">
                 <Table label="Endpoints" template="140px 90px minmax(200px, 1.5fr) minmax(130px, 1fr) 140px" minWidth={700} cols={[{ label: 'Address' }, { label: 'Ready' }, { label: 'Pod' }, { label: 'Node' }, { label: 'Pod status' }]}>
                   {d.endpoints.map((e, i) => (
                     <TR key={i}>
@@ -321,7 +321,7 @@ function ServicePanel({ serviceKey, row, gone, now, onClose, onToast }: { servic
                     </TR>
                   ))}
                 </Table>
-              </div>
+              </ScrollBox>
             )}
             {d.endpoints.some((e) => e.pod) && (
               <p style={{ margin: 0, padding: '0 16px 12px', fontSize: 12.5 }}>

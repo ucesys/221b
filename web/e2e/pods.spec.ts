@@ -97,7 +97,10 @@ test('a crash-looping pod shows its last termination reason, and its previous co
   try {
     await open(page, `#/pods?q=${encodeURIComponent(key.split('/')[1]!)}`)
     const row = page.locator(`[data-pod="${key}"]`)
-    await expect(row).toContainText('CrashLoopBackOff', { timeout: 60_000 })
+    // Between two back-offs a real kubelet reports the container as
+    // terminated with an Error, as kubectl does; the back-off itself shows
+    // as CrashLoopBackOff.
+    await expect(row).toContainText(/CrashLoopBackOff|Error/, { timeout: 60_000 })
     const restarts = row.locator('.rk-cell').nth(3)
     await expect(restarts).not.toHaveText(/^0/)
     await expect(restarts.locator('[title]').first()).toHaveAttribute('title', /Last restart .*: (Error|OOMKilled|Completed)/)

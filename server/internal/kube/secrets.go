@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"regexp"
 	"sort"
@@ -123,7 +124,7 @@ func SummarizeSecret(obj any) (any, error) {
 		Keys:       keySizes(s.Data, s.StringData),
 	}
 	out.ManagedFields = nil
-	out.Annotations = trimAnnotations(out.Annotations)
+	out.Annotations = HideSecretValues(out.Annotations, secretValues(s.Data, s.StringData))
 	if s.Type == HelmSecretType {
 		if r, err := DecodeHelmRelease(s.Data["release"]); err == nil {
 			out.Release = r
@@ -155,6 +156,54 @@ func SummarizeConfigMap(obj any) (any, error) {
 	out.ManagedFields = nil
 	out.Annotations = trimAnnotations(out.Annotations)
 	return out, nil
+}
+
+// LastApplied is the annotation kubectl apply keeps the whole object in,
+// values included.
+const LastApplied = "kubectl.kubernetes.io/last-applied-configuration"
+
+// secretValues lists every value a Secret holds, in the forms an annotation
+// might carry it: raw and base64.
+func secretValues(data map[string][]byte, stringData map[string]string) [][]byte {
+	var out [][]byte
+	for _, v := range data {
+		if len(v) > 0 {
+			out = append(out, v, []byte(base64.StdEncoding.EncodeToString(v)))
+		}
+	}
+	for _, v := range stringData {
+		if v != "" {
+			out = append(out, []byte(v), []byte(base64.StdEncoding.EncodeToString([]byte(v))))
+		}
+	}
+	return out
+}
+
+// HideSecretValues returns a Secret's annotations with every value that
+// could carry a Secret value replaced by its size (X-01): the last-applied
+// configuration, which kubectl apply writes with the whole object in it,
+// and any annotation holding one of the Secret's values in raw or base64
+// form, which tools such as kapp keep. Other annotations stay.
+func HideSecretValues(annotations map[string]string, values [][]byte) map[string]string {
+	if annotations == nil {
+		return nil
+	}
+	out := make(map[string]string, len(annotations))
+	for k, v := range annotations {
+		hide := k == LastApplied
+		for _, secret := range values {
+			if hide {
+				break
+			}
+			hide = bytes.Contains([]byte(v), secret)
+		}
+		if hide {
+			out[k] = fmt.Sprintf("<%d bytes, hidden by 221B>", len(v))
+		} else {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func keySizes(data map[string][]byte, stringData map[string]string) []KeySize {

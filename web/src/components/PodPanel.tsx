@@ -7,7 +7,7 @@ import { href } from '../lib/router'
 import { Card, Chips, Drawer, Facts } from './Drawer'
 import { PodIcon, WarnIcon } from './Icons'
 import { PodLogs } from './PodLogs'
-import { Table, TR } from './Table'
+import { ScrollBox, Table, TR } from './Table'
 import { YamlView } from './YamlView'
 
 interface Props {
@@ -121,7 +121,7 @@ function ContainerCard({ c, now, usage }: { c: ContainerDetail; now: number; usa
 function EventsTable({ events, now }: { events: Event[]; now: number }) {
   if (!events.length) return <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>No events in the last hour. Kubernetes keeps events for about an hour.</p>
   return (
-    <div className="rk-card" style={{ overflowX: 'auto' }}>
+    <ScrollBox label="Events" className="rk-card">
       <Table label="Events" template="82px 150px minmax(260px, 2fr) 60px 110px 110px" minWidth={772} cols={[{ label: 'Type' }, { label: 'Reason' }, { label: 'Message' }, { label: 'Count', right: true }, { label: 'Last seen' }, { label: 'From' }]}>
         {events.map((e, i) => (
           <TR key={i} top style={{ minHeight: 34 }}>
@@ -144,7 +144,7 @@ function EventsTable({ events, now }: { events: Event[]; now: number }) {
           </TR>
         ))}
       </Table>
-    </div>
+    </ScrollBox>
   )
 }
 
@@ -373,7 +373,7 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
             </Card>
           </div>
           <Card title="Resources per container" pad={false}>
-            <div style={{ overflowX: 'auto' }}>
+            <ScrollBox label="Resources per container">
               <Table label="Resources per container" template="minmax(190px, 1.6fr) 90px 90px 100px 100px" minWidth={570} cols={[{ label: 'Container' }, { label: 'CPU req', right: true }, { label: 'CPU limit', right: true }, { label: 'Mem req', right: true }, { label: 'Mem limit', right: true }]}>
                 {d.containers.map((c) => (
                   <TR key={c.name}>
@@ -390,7 +390,7 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
                   </TR>
                 ))}
               </Table>
-            </div>
+            </ScrollBox>
             <p style={{ margin: 0, padding: '0 16px 12px', fontSize: 11.5, color: 'var(--fg3)' }}>Pod in use: {usageLine}. metrics-server reports usage per pod; the per-container split is not available here.</p>
           </Card>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(390px, 100%), 1fr))', gap: 16, alignItems: 'start' }}>
@@ -440,7 +440,7 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
               {c.env.length === 0 && c.envFrom.length === 0 ? (
                 <p style={{ margin: 0, padding: '0 16px 12px', fontSize: 12.5, color: 'var(--fg3)' }}>No environment variables set by the pod.</p>
               ) : (
-                <div style={{ overflowX: 'auto' }}>
+                <ScrollBox label={`Environment of ${c.name}`}>
                   <Table label={`Environment of ${c.name}`} template="minmax(180px, 1fr) minmax(260px, 2fr)" minWidth={440} cols={[{ label: 'Name' }, { label: 'Value' }]}>
                     {c.env.map((e) => (
                       <TR key={e.name}>
@@ -488,7 +488,7 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
                       </TR>
                     ))}
                   </Table>
-                </div>
+                </ScrollBox>
               )}
             </Card>
           ))}

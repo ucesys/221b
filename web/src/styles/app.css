@@ -28,12 +28,6 @@
     padding-right: 16px !important;
   }
 }
-/* Large clusters: rows off screen skip layout and paint, so sorting 500
-   nodes re-lays out only the rows in view. */
-.rk-grid > .rk-gr {
-  content-visibility: auto;
-  contain-intrinsic-height: auto 37px;
-}
 /* Below 900px the page scrolls as a whole. The header stays in place so the
    details panel, fixed just under it, never leaves a gap above itself. */
 @media (max-width: 899px) {
@@ -139,4 +133,9 @@ button.rk-card:hover:not(:disabled) {
   .rk-drawer {
     width: 100% !important;
   }
+}
+/* A table that scrolls sideways takes focus; the ring sits inside. */
+[role='region'][tabindex='0']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }

@@ -55,22 +55,47 @@ func (c *Cluster) ObjectYAML(ctx context.Context, k Kind, namespace, name string
 // ErrNotFound is returned for an object that does not exist.
 var ErrNotFound = apierrors.NewNotFound(SecretGVK.GroupVersion().WithResource("objects").GroupResource(), "")
 
-// hideSecretData replaces every value in a Secret's data with its size.
+// hideSecretData replaces every value in a Secret's data with its size, and
+// hides the annotations that could carry a value (the last-applied
+// configuration, or any annotation holding one of the values).
 func hideSecretData(obj map[string]any) {
+	data := map[string][]byte{}
+	stringData := map[string]string{}
 	for _, field := range []string{"data", "stringData"} {
-		data, ok := obj[field].(map[string]any)
+		m, ok := obj[field].(map[string]any)
 		if !ok {
 			continue
 		}
-		for key, v := range data {
+		for key, v := range m {
 			s, _ := v.(string)
 			n := len(s)
 			if field == "data" {
 				if decoded, err := base64.StdEncoding.DecodeString(s); err == nil {
 					n = len(decoded)
+					data[key] = decoded
+				} else {
+					data[key] = []byte(s)
 				}
+			} else {
+				stringData[key] = s
 			}
-			data[key] = fmt.Sprintf("<%d bytes, hidden by 221B>", n)
+			m[key] = fmt.Sprintf("<%d bytes, hidden by 221B>", n)
 		}
+	}
+	meta, ok := obj["metadata"].(map[string]any)
+	if !ok {
+		return
+	}
+	raw, ok := meta["annotations"].(map[string]any)
+	if !ok {
+		return
+	}
+	annotations := make(map[string]string, len(raw))
+	for k, v := range raw {
+		annotations[k], _ = v.(string)
+	}
+	hidden := HideSecretValues(annotations, secretValues(data, stringData))
+	for k, v := range hidden {
+		raw[k] = v
 	}
 }
