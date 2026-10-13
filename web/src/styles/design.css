@@ -2,7 +2,7 @@
    matches the prototype. Change it there first, then copy it here. */
 body{margin:0}
 a{color:#0A6E69}a:hover{color:#075450}
-.rk{--bg:#F2F3F5;--surface:#FFFFFF;--surface2:#F7F8FA;--sunken:#ECEEF1;--line:#E1E4E8;--line2:#C9CFD6;--fg:#13161B;--fg2:#3F4651;--fg3:#5B636E;--accent:#0A6E69;--accent-fg:#FFFFFF;--accent-weak:#E1F0EE;--sel:#E6F2F0;--req:#B5DAD5;--ok:#1C7A3B;--ok-weak:#E3F2E7;--warn:#975300;--warn-weak:#FBEED6;--err:#BF3328;--err-weak:#FBE6E3;--info:#1F5DBD;--info-weak:#E4EDFB;--muted:#5B636E;--muted-weak:#ECEEF1;--y-key:#0B5A86;--y-str:#1C7A3B;--y-num:#975300;--y-bool:#7B3BA8;--y-punc:#7A828D;--shadow:0 18px 50px rgba(16,22,32,.22);--backdrop:rgba(16,22,32,.34);--font:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--row:36px;--rowpad:6px}
+.rk{--bg:#F2F3F5;--surface:#FFFFFF;--surface2:#F7F8FA;--sunken:#ECEEF1;--line:#E1E4E8;--line2:#C9CFD6;--fg:#13161B;--fg2:#3F4651;--fg3:#5B636E;--accent:#0A6E69;--accent-fg:#FFFFFF;--accent-weak:#E1F0EE;--sel:#E6F2F0;--req:#B5DAD5;--ok:#19703A;--ok-weak:#E3F2E7;--warn:#975300;--warn-weak:#FBEED6;--err:#B52C22;--err-weak:#FBE6E3;--info:#1F5DBD;--info-weak:#E4EDFB;--muted:#5B636E;--muted-weak:#ECEEF1;--y-key:#0B5A86;--y-str:#1C7A3B;--y-num:#975300;--y-bool:#7B3BA8;--y-punc:#7A828D;--shadow:0 18px 50px rgba(16,22,32,.22);--backdrop:rgba(16,22,32,.34);--font:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;--row:36px;--rowpad:6px}
 .rk[data-theme=dark]{--bg:#0D1013;--surface:#14181D;--surface2:#191E24;--sunken:#101418;--line:#252B33;--line2:#343C46;--fg:#E6E9ED;--fg2:#B3BAC4;--fg3:#8E97A3;--accent:#4BC2B7;--accent-fg:#052220;--accent-weak:#12332F;--sel:#132E2A;--req:#235049;--ok:#55C67E;--ok-weak:#123020;--warn:#E5A43C;--warn-weak:#38290E;--err:#FF7B70;--err-weak:#3E1A17;--info:#7AAEFF;--info-weak:#15274A;--muted:#8E97A3;--muted-weak:#222830;--y-key:#7EC3EE;--y-str:#90D5A4;--y-num:#EFB865;--y-bool:#D0A2F0;--y-punc:#7E8793;--shadow:0 18px 56px rgba(0,0,0,.55);--backdrop:rgba(0,0,0,.5)}
 .rk[data-accent=blue]{--accent:#2354C4;--accent-weak:#E5ECFA;--sel:#EAF0FB;--req:#BFD0F2}
 .rk[data-accent=violet]{--accent:#6A3DC2;--accent-weak:#EEE8FA;--sel:#F1EDFB;--req:#D3C6F2}
@@ -42,8 +42,8 @@ a{color:#0A6E69}a:hover{color:#075450}
 .rk-palist>:first-child{border-top:0!important}
 .rk-dim{color:var(--fg2)}
 .rk-small{font-size:12px}
-.rk-gr[role=button]{cursor:pointer}
-.rk-gr[role=button]:hover .rk-pname{color:var(--accent);text-decoration:underline}
+.rk-gr[data-open]{cursor:pointer}
+.rk-gr[data-open]:hover .rk-pname{color:var(--accent);text-decoration:underline}
 .rk-hops{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
 .rk-hop{position:relative;display:grid;grid-template-columns:22px 128px minmax(170px,1fr) minmax(240px,2.2fr) minmax(110px,auto);align-items:start;gap:4px 14px;padding:9px 12px 9px 10px;border-radius:8px}
 .rk-hop:not(:last-child)::before{content:"";position:absolute;left:20px;top:33px;bottom:-11px;width:2px;background:var(--line)}
@@ -324,7 +324,8 @@ button.rk-mxc:hover{background:var(--surface2)}
 .rk-gr>.rk-wrap{white-space:normal;overflow:visible;overflow-wrap:anywhere}
 .rk-gr>.rk-wrap>.rk-t{align-items:flex-start!important}
 .rk-gr>.rk-wrap>.rk-t>.rk-dot{margin-top:.45em}
-.rk-th{display:flex;align-items:center;gap:4px;width:100%;border:0;background:transparent;color:inherit;font:inherit;padding:8px 10px;text-align:left;white-space:nowrap}
+.rk-thc{display:flex;min-width:0}
+.rk-th{display:flex;align-items:center;gap:4px;width:100%;min-width:0;border:0;background:transparent;color:inherit;font:inherit;padding:8px 10px;text-align:left;white-space:nowrap}
 .rk-th:hover,.rk-th[data-active=true]{color:var(--fg)}
 .rk-thl{display:block;padding:8px 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rk-arrow{font-size:11px;color:var(--accent);min-width:8px}

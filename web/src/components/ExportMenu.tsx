@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
-import { Chevron, ExcelIcon, ExportIcon, JsonIcon } from './Icons'
+import { EXPORT_FORMATS, type ExportFormat } from '../lib/table'
+import { Chevron, CsvIcon, ExcelIcon, ExportIcon, JsonIcon } from './Icons'
 
-export type ExportFormat = 'xlsx' | 'json'
+export type { ExportFormat }
 
 interface Props {
   onExport: (format: ExportFormat) => void
   disabled: boolean
+  /** What is exported, for the tooltip: "the nodes in view". */
+  what?: string
 }
 
-/** The Export menu: the rows and columns on screen, as Excel or JSON. */
-export function ExportMenu({ onExport, disabled }: Props) {
+/** The Export menu every table has: the rows and columns on screen, as Excel, CSV or JSON. */
+export function ExportMenu({ onExport, disabled, what = 'the rows in view' }: Props) {
   const [open, setOpen] = useState(false)
   const button = useRef<HTMLButtonElement>(null)
   const menu = useRef<HTMLDivElement>(null)
@@ -28,6 +31,7 @@ export function ExportMenu({ onExport, disabled }: Props) {
     onExport(f)
   }
 
+  const icons = { xlsx: <ExcelIcon />, csv: <CsvIcon />, json: <JsonIcon /> }
   return (
     <div
       className="rk-dd"
@@ -39,7 +43,7 @@ export function ExportMenu({ onExport, disabled }: Props) {
         }
       }}
     >
-      <button ref={button} className="rk-btn" aria-expanded={open} aria-haspopup="true" title="Download the nodes in view" disabled={disabled} onClick={() => setOpen(!open)} style={{ height: 32 }}>
+      <button ref={button} className="rk-btn" aria-expanded={open} aria-haspopup="true" title={`Download ${what}`} disabled={disabled} onClick={() => setOpen(!open)} style={{ height: 32 }}>
         <ExportIcon />
         Export
         <Chevron />
@@ -49,20 +53,15 @@ export function ExportMenu({ onExport, disabled }: Props) {
           <button className="rk-ddcatch" tabIndex={-1} aria-hidden="true" onClick={() => setOpen(false)} />
           <div ref={menu} className="rk-ddmenu" data-align="right" role="group" aria-label="Export format" style={{ minWidth: 200 }}>
             <div className="rk-ddhead">The rows and columns on screen, in this order</div>
-            <button className="rk-ddopt" onClick={() => pick('xlsx')}>
-              <ExcelIcon />
-              <span style={{ flex: '1 1 auto' }}>Excel</span>
-              <span className="rk-mono" style={{ fontSize: 11, color: 'var(--fg3)' }}>
-                .xlsx
-              </span>
-            </button>
-            <button className="rk-ddopt" onClick={() => pick('json')}>
-              <JsonIcon />
-              <span style={{ flex: '1 1 auto' }}>JSON</span>
-              <span className="rk-mono" style={{ fontSize: 11, color: 'var(--fg3)' }}>
-                .json
-              </span>
-            </button>
+            {EXPORT_FORMATS.map((f) => (
+              <button key={f.id} className="rk-ddopt" onClick={() => pick(f.id)}>
+                {icons[f.id]}
+                <span style={{ flex: '1 1 auto' }}>{f.label}</span>
+                <span className="rk-mono" style={{ fontSize: 11, color: 'var(--fg3)' }}>
+                  {f.ext}
+                </span>
+              </button>
+            ))}
           </div>
         </>
       )}

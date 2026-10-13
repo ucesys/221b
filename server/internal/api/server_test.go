@@ -5,74 +5,109 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/ucesys/221b/server/internal/fake"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
 	"github.com/ucesys/221b/server/internal/settings"
 )
 
+// source is the fake cache with the two reads that reach the API server.
 type source struct {
-	mu    sync.Mutex
-	nodes map[string]*corev1.Node
+	*fake.Source
+	// logs is what a pod's log stream carries, by "namespace/name"; a
+	// missing pod answers NotFound as the API server would.
+	logs map[string][]string
+	// logErr, when set, is what opening any log stream fails with.
+	logErr error
+	// hold keeps a followed stream open after its lines, until ctx ends.
+	hold bool
 }
 
-func (s *source) Info() kube.Info {
-	return kube.Info{Name: "test", State: kube.StateConnected, Synced: true, Warnings: []string{}}
-}
-func (s *source) NodeNames() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var out []string
-	for n := range s.nodes {
-		out = append(out, n)
+func (s *source) ObjectYAML(ctx context.Context, k kube.Kind, namespace, name string) (string, error) {
+	obj := s.Object(k.Name, namespace, name)
+	if obj == nil {
+		return "", apierrors.NewNotFound(schema.GroupResource{Group: k.Group, Resource: k.Resource}, name)
 	}
-	return out
+	return kube.ToYAML(obj)
 }
-func (s *source) Node(name string) *corev1.Node {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.nodes[name]
+
+func (s *source) Logs(ctx context.Context, namespace, name string, o kube.LogOptions) (io.ReadCloser, error) {
+	if s.logErr != nil {
+		return nil, s.logErr
+	}
+	lines, ok := s.logs[namespace+"/"+name]
+	if !ok {
+		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "pods"}, name)
+	}
+	if o.Tail > 0 && int(o.Tail) < len(lines) {
+		lines = lines[len(lines)-int(o.Tail):]
+	}
+	if o.Previous {
+		lines = []string{"previous " + o.Container}
+	}
+	if !o.Follow {
+		return io.NopCloser(strings.NewReader(strings.Join(lines, "\n") + "\n")), nil
+	}
+	pr, pw := io.Pipe()
+	go func() {
+		for _, l := range lines {
+			if _, err := io.WriteString(pw, l+"\n"); err != nil {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if s.hold {
+			<-ctx.Done()
+		}
+		pw.Close()
+	}()
+	return pr, nil
 }
-func (s *source) PodsOn(string) []*corev1.Pod       { return nil }
-func (s *source) Unscheduled() int                  { return 0 }
-func (s *source) Usage(string) (nodes.Usage, bool)  { return nodes.Usage{}, false }
-func (s *source) BootedAt(string) (time.Time, bool) { return time.Time{}, false }
-func (s *source) Poll(context.Context)              {}
+
 func (s *source) set(name string, f func(*corev1.Node)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	f(s.nodes[name])
+	s.Update("nodes", "", name, func(o runtime.Object) { f(o.(*corev1.Node)) })
 }
 
 func setup(t *testing.T, ready bool) (*httptest.Server, *live.Store, *source) {
 	t.Helper()
-	src := &source{nodes: map[string]*corev1.Node{
-		"n1": {ObjectMeta: metav1.ObjectMeta{Name: "n1"}},
-		"n2": {ObjectMeta: metav1.ObjectMeta{Name: "n2"}},
-	}}
+	src := &source{Source: fake.New("n1", "n2"), logs: map[string][]string{}}
 	store := live.New(src, live.Options{})
-	store.Notify(kube.Change{All: true, Info: true})
+	store.Notify(everything())
 	store.Process()
 	ui := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "app:"+r.URL.Path) })
 	shared := settings.NewService(context.Background(), &settings.Memory{}, settings.Default, slog.New(slog.NewTextHandler(io.Discard, nil)), func(st settings.State) {
 		b, _ := json.Marshal(st)
 		store.SetSettings(st.Refresh(), b)
 	})
-	srv := httptest.NewServer(New(Options{Store: store, Settings: shared, Ready: func() bool { return ready }, UI: ui, Heartbeat: 50 * time.Millisecond, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+	srv := httptest.NewServer(New(Options{Store: store, Cluster: src, Settings: shared, Ready: func() bool { return ready }, UI: ui, Heartbeat: 50 * time.Millisecond, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
 	t.Cleanup(srv.Close)
 	return srv, store, src
+}
+
+func everything() kube.Change {
+	ch := kube.Change{Info: true, Totals: true}
+	for _, v := range []string{live.ViewNodes, live.ViewPods, live.ViewNamespaces, live.ViewServices, live.ViewHelm} {
+		ch.Mark(v, kube.AllRows)
+	}
+	return ch
 }
 
 func get(t *testing.T, url string, hdr ...string) *http.Response {
@@ -146,10 +181,15 @@ func TestSnapshotAndNode(t *testing.T) {
 		t.Fatalf("snapshot %d %v", r.StatusCode, r.Header)
 	}
 	var snap struct {
-		Rows []nodes.Row `json:"rows"`
+		Views map[string]struct {
+			Rows []nodes.Row `json:"rows"`
+		} `json:"views"`
 	}
-	if err := json.Unmarshal([]byte(body(t, r)), &snap); err != nil || len(snap.Rows) != 2 {
-		t.Fatalf("snapshot rows %d err %v", len(snap.Rows), err)
+	if err := json.Unmarshal([]byte(body(t, r)), &snap); err != nil || len(snap.Views["nodes"].Rows) != 2 {
+		t.Fatalf("snapshot rows %d err %v", len(snap.Views["nodes"].Rows), err)
+	}
+	if r := get(t, srv.URL+"/api/v1/snapshot?views=nodes,bogus"); r.StatusCode != 400 {
+		t.Fatalf("unknown view %d", r.StatusCode)
 	}
 
 	r = get(t, srv.URL+"/api/v1/nodes/n2")
@@ -172,11 +212,9 @@ func TestGzip(t *testing.T) {
 	// Make the snapshot big enough to be compressed.
 	for i := 0; i < 50; i++ {
 		name := "node-" + strings.Repeat("x", i)
-		src.mu.Lock()
-		src.nodes[name] = &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
-		src.mu.Unlock()
+		src.Put(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}})
 	}
-	store.Notify(kube.Change{All: true})
+	store.Notify(everything())
 	store.Process()
 	r := get(t, srv.URL+"/api/v1/snapshot", "Accept-Encoding", "gzip")
 	if r.Header.Get("Content-Encoding") != "gzip" {
@@ -274,10 +312,10 @@ func TestEventStream(t *testing.T) {
 				t.Fatalf("first event %s %.80s", ev, data)
 			}
 			src.set("n1", func(n *corev1.Node) { n.Spec.Unschedulable = true })
-			store.Notify(kube.Change{Nodes: []string{"n1"}})
+			store.Notify(kube.Change{Views: map[string][]string{live.ViewNodes: {"n1"}}})
 			store.Process()
 			ev, data = readEvent(t, br)
-			if ev != "delta" || !strings.Contains(data, `"cordoned":true`) || !strings.Contains(data, `"version":3`) {
+			if ev != "rows" || !strings.Contains(data, `"cordoned":true`) || !strings.Contains(data, `"view":"nodes","version":2`) {
 				t.Fatalf("second event %s %.200s", ev, data)
 			}
 		})
@@ -289,7 +327,8 @@ func TestMetrics(t *testing.T) {
 	get(t, srv.URL+"/api/v1/snapshot")
 	text := body(t, get(t, srv.URL+"/metrics"))
 	for _, want := range []string{
-		"b221_rows 2",
+		`b221_rows{view="nodes"} 2`,
+		"# TYPE b221_rows gauge",
 		"# TYPE b221_http_requests_total counter",
 		`b221_http_requests_total{route="snapshot",code="200"} 1`,
 		"# TYPE b221_change_delay_seconds histogram",
@@ -300,11 +339,32 @@ func TestMetrics(t *testing.T) {
 			t.Errorf("metrics lack %q:\n%s", want, text)
 		}
 	}
+	// Prometheus rejects a family described twice, or whose samples are
+	// split by another family's, so every name is described once and all
+	// its samples follow in a block.
+	seen := map[string]bool{}
+	last := ""
+	for _, line := range strings.Split(text, "\n") {
+		switch {
+		case strings.HasPrefix(line, "# HELP "):
+			name := strings.Fields(line)[2]
+			if seen[name] {
+				t.Errorf("metric %s described twice:\n%s", name, text)
+			}
+			seen[name] = true
+			last = name
+		case strings.HasPrefix(line, "# TYPE "), line == "":
+		default:
+			name := line[:strings.IndexAny(line, "{ ")]
+			if !strings.HasPrefix(name, last) {
+				t.Errorf("sample %q outside its family %s:\n%s", line, last, text)
+			}
+		}
+	}
 }
 
 func TestRefusesUnknownHostNames(t *testing.T) {
-	src := &source{nodes: map[string]*corev1.Node{}}
-	store := live.New(src, live.Options{})
+	store := live.New(fake.New(), live.Options{})
 	h := New(Options{Store: store, AllowedHosts: []string{"Console.Example.", " "}})
 	for host, want := range map[string]int{
 		"localhost:8080":      http.StatusOK,
@@ -391,8 +451,8 @@ func TestSettings(t *testing.T) {
 	if err := json.Unmarshal([]byte(body(t, r)), &st); err != nil || st.RefreshSeconds != 30 || st.ChangedAt == nil {
 		t.Fatalf("settings after PUT %+v %v", st, err)
 	}
-	if ev, data := readEvent(t, br); ev != "delta" || !strings.Contains(data, `"settings":{"refreshSeconds":30,"storage":"memory","changedAt":"`) {
-		t.Fatalf("delta %s %.200s", ev, data)
+	if ev, data := readEvent(t, br); ev != "meta" || !strings.Contains(data, `"settings":{"refreshSeconds":30,"storage":"memory","changedAt":"`) {
+		t.Fatalf("meta %s %.200s", ev, data)
 	}
 	if r = get(t, srv.URL+"/api/v1/settings"); !strings.Contains(body(t, r), `"refreshSeconds":30`) {
 		t.Fatal("the change was not kept")
@@ -428,4 +488,217 @@ func TestSettings(t *testing.T) {
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Fatalf("POST settings %d", resp.StatusCode)
 	}
+}
+
+func samplePod(ns, name, node string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: types.UID("uid-" + name), Labels: map[string]string{"app": name}},
+		Spec: corev1.PodSpec{NodeName: node, Containers: []corev1.Container{{
+			Name: "app", Image: "app:1",
+			Env: []corev1.EnvVar{
+				{Name: "PLAIN", Value: "yes"},
+				{Name: "PASSWORD", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "creds"}, Key: "password"}}},
+			},
+		}}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.1.0.5", ContainerStatuses: []corev1.ContainerStatus{{Name: "app", Ready: true, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}},
+	}
+}
+
+func TestPodDetails(t *testing.T) {
+	srv, store, src := setup(t, true)
+	src.Put(samplePod("shop", "web", "n1"))
+	src.Put(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "shop"}, Data: map[string][]byte{"password": []byte("hunter2-planted")}})
+	src.SetPodUsage(map[string]nodes.Usage{"shop/web": {CPUMilli: 12, MemoryBytes: 1 << 20}})
+	store.Notify(everything())
+	store.Process()
+
+	r := get(t, srv.URL+"/api/v1/pods/shop/web")
+	text := body(t, r)
+	if r.StatusCode != 200 {
+		t.Fatalf("pod %d %s", r.StatusCode, text)
+	}
+	var d struct {
+		Name       string `json:"name"`
+		PodIP      string `json:"podIP"`
+		Containers []struct {
+			Name string `json:"name"`
+			Env  []struct {
+				Name, Value, Source, From, Key string
+			} `json:"env"`
+		} `json:"containers"`
+		Usage *nodes.Usage `json:"usage"`
+	}
+	if err := json.Unmarshal([]byte(text), &d); err != nil || d.Name != "web" || d.PodIP != "10.1.0.5" || d.Usage == nil || d.Usage.CPUMilli != 12 {
+		t.Fatalf("details %+v %v", d, err)
+	}
+	if len(d.Containers) != 1 || len(d.Containers[0].Env) != 2 {
+		t.Fatalf("containers %+v", d.Containers)
+	}
+	env := d.Containers[0].Env[1]
+	if env.Name != "PASSWORD" || env.Value != "" || env.Source != "Secret" || env.From != "creds" || env.Key != "password" {
+		t.Fatalf("secret env %+v", env)
+	}
+	if strings.Contains(text, "hunter2") {
+		t.Fatal("a Secret value reached the pod details")
+	}
+	if r := get(t, srv.URL+"/api/v1/pods/shop/gone"); r.StatusCode != 404 || !strings.Contains(body(t, r), "deleted") {
+		t.Fatalf("missing pod %d", r.StatusCode)
+	}
+}
+
+func TestServiceAndReleaseDetails(t *testing.T) {
+	srv, store, src := setup(t, true)
+	src.Put(samplePod("shop", "web", "n1"))
+	src.Put(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop"}, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, ClusterIP: "10.96.0.9", Selector: map[string]string{"app": "web"}, Ports: []corev1.ServicePort{{Name: "http", Port: 80}}}})
+	src.Put(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "sh.helm.release.v1.web.v1", Namespace: "shop", Labels: map[string]string{"owner": "helm", "name": "web", "version": "1", "status": "deployed"}}, Type: kube.HelmSecretType, Data: map[string][]byte{"release": kube.EncodeHelmRelease(helmRecord("web", "shop", 1, "deployed", map[string]any{"replicas": 2, "dbPassword": "planted-pw"}))}})
+	store.Notify(everything())
+	store.Process()
+
+	r := get(t, srv.URL+"/api/v1/services/shop/web")
+	text := body(t, r)
+	if r.StatusCode != 200 || !strings.Contains(text, `"dnsName":"web.shop.svc.cluster.local"`) {
+		t.Fatalf("service %d %s", r.StatusCode, text)
+	}
+	if r := get(t, srv.URL+"/api/v1/services/shop/gone"); r.StatusCode != 404 {
+		t.Fatalf("missing service %d", r.StatusCode)
+	}
+
+	r = get(t, srv.URL+"/api/v1/helm/shop/web")
+	text = body(t, r)
+	if r.StatusCode != 200 || !strings.Contains(text, `"chart":"web"`) || !strings.Contains(text, "replicas: 2") {
+		t.Fatalf("release %d %s", r.StatusCode, text)
+	}
+	if strings.Contains(text, "planted-pw") || !strings.Contains(text, `"maskedValues":["dbPassword"]`) {
+		t.Fatalf("the credential-looking value was not masked: %s", text)
+	}
+	if r := get(t, srv.URL+"/api/v1/helm/shop/gone"); r.StatusCode != 404 {
+		t.Fatalf("missing release %d", r.StatusCode)
+	}
+
+	src.SetSecrets(false)
+	if r := get(t, srv.URL+"/api/v1/helm/shop/web"); r.StatusCode != 404 || !strings.Contains(body(t, r), "off") {
+		t.Fatalf("release with secrets off %d", r.StatusCode)
+	}
+	if r := get(t, srv.URL+"/api/v1/yaml/secrets/shop/creds"); r.StatusCode != 404 {
+		t.Fatalf("secret yaml with secrets off %d", r.StatusCode)
+	}
+}
+
+func TestYAML(t *testing.T) {
+	srv, _, src := setup(t, true)
+	src.Put(samplePod("shop", "web", "n1"))
+	r := get(t, srv.URL+"/api/v1/yaml/pods/shop/web")
+	text := body(t, r)
+	if r.StatusCode != 200 || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/yaml") || !strings.Contains(text, "name: web") || !strings.Contains(text, "nodeName: n1") {
+		t.Fatalf("yaml %d %q %s", r.StatusCode, r.Header.Get("Content-Type"), text)
+	}
+	r = get(t, srv.URL+"/api/v1/yaml/nodes/n1?download=1")
+	if r.StatusCode != 200 || r.Header.Get("Content-Disposition") != `attachment; filename="node-n1.yaml"` {
+		t.Fatalf("node yaml %d %q", r.StatusCode, r.Header.Get("Content-Disposition"))
+	}
+	for path, want := range map[string]int{
+		"/api/v1/yaml/pods/web":         404, // namespaced kind without a namespace
+		"/api/v1/yaml/nodes/shop/n1":    404, // cluster-scoped kind with one
+		"/api/v1/yaml/things/shop/web":  404,
+		"/api/v1/yaml/pods/shop/absent": 404,
+	} {
+		if r := get(t, srv.URL+path); r.StatusCode != want {
+			t.Errorf("%s: %d, want %d", path, r.StatusCode, want)
+		}
+	}
+}
+
+func TestPodLogs(t *testing.T) {
+	srv, _, src := setup(t, true)
+	src.logs["shop/web"] = []string{"one", "two", "three"}
+
+	r := get(t, srv.URL+"/api/v1/pods/shop/web/log?tail=2&download=1")
+	if r.StatusCode != 200 || !strings.HasPrefix(r.Header.Get("Content-Type"), "text/plain") || r.Header.Get("Content-Disposition") != `attachment; filename="web.log"` {
+		t.Fatalf("log %d %v", r.StatusCode, r.Header)
+	}
+	if got := body(t, r); got != "two\nthree\n" {
+		t.Fatalf("log body %q", got)
+	}
+	if got := body(t, get(t, srv.URL+"/api/v1/pods/shop/web/log?previous=1&container=app")); got != "previous app\n" {
+		t.Fatalf("previous log %q", got)
+	}
+	if r := get(t, srv.URL+"/api/v1/pods/shop/web/log?tail=x"); r.StatusCode != 400 {
+		t.Fatalf("bad tail %d", r.StatusCode)
+	}
+	if r := get(t, srv.URL+"/api/v1/pods/shop/gone/log"); r.StatusCode != 404 || !strings.Contains(body(t, r), "deleted") {
+		t.Fatalf("missing pod %d", r.StatusCode)
+	}
+	src.logErr = apierrors.NewBadRequest("container \"app\" in pod \"web\" is waiting to start: ContainerCreating")
+	if r := get(t, srv.URL+"/api/v1/pods/shop/web/log"); r.StatusCode != 400 || !strings.Contains(body(t, r), "waiting to start") {
+		t.Fatalf("waiting container %d %s", r.StatusCode, body(t, r))
+	}
+	src.logErr = apierrors.NewForbidden(schema.GroupResource{Resource: "pods/log"}, "web", errors.New("no"))
+	if r := get(t, srv.URL+"/api/v1/pods/shop/web/log"); r.StatusCode != 403 {
+		t.Fatalf("forbidden %d", r.StatusCode)
+	}
+	src.logErr = nil
+
+	// Following streams the lines as events and says when they end.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/pods/shop/web/log?follow=1", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.Header.Get("Content-Type") != "text/event-stream" {
+		t.Fatalf("content type %q", resp.Header.Get("Content-Type"))
+	}
+	br := bufio.NewReader(resp.Body)
+	var lines []string
+	for {
+		ev, data := readEvent(t, br)
+		if ev == "end" {
+			if !strings.Contains(data, "stopped writing") {
+				t.Fatalf("end %s", data)
+			}
+			break
+		}
+		if ev != "log" {
+			t.Fatalf("event %s", ev)
+		}
+		var batch []string
+		if err := json.Unmarshal([]byte(data), &batch); err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, batch...)
+	}
+	if strings.Join(lines, ",") != "one,two,three" {
+		t.Fatalf("lines %v", lines)
+	}
+}
+
+func TestLogStreamsAreCapped(t *testing.T) {
+	src := &source{Source: fake.New(), logs: map[string][]string{"a/b": {"x"}}, hold: true}
+	store := live.New(src, live.Options{})
+	h := New(Options{Store: store, Cluster: src, MaxLogs: 1})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/pods/a/b/log?follow=1", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	_, _ = readEvent(t, bufio.NewReader(resp.Body))
+	// The first stream is still open (its reader is slow), so a second is refused.
+	if r := get(t, srv.URL+"/api/v1/pods/a/b/log"); r.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("second log stream %d", r.StatusCode)
+	}
+}
+
+func helmRecord(name, ns string, revision int, status string, values map[string]any) kube.HelmRecord {
+	rec := kube.HelmRecord{Name: name, Namespace: ns, Version: revision, Config: values}
+	rec.Info.Status, rec.Info.Description = status, fmt.Sprintf("Install complete (revision %d)", revision)
+	rec.Info.FirstDeployed, rec.Info.LastDeployed = "2026-10-01T08:00:00Z", "2026-10-01T08:00:00Z"
+	rec.Chart.Metadata = kube.HelmChartMetadata{Name: name, Version: "1.2.3", AppVersion: "4.5.6"}
+	return rec
 }

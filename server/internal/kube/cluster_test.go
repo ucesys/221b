@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/kube"
@@ -140,10 +141,29 @@ func TestTransformsKeepTheCacheSmall(t *testing.T) {
 	cl, _, _ := start(t, sim.Options{Nodes: 4, Pods: 20})
 	for _, n := range cl.NodeNames() {
 		for _, p := range cl.PodsOn(n) {
-			if p.Spec.Containers[0].Image != "" {
-				t.Fatalf("pod %s kept its image; the transform did not run", p.Name)
+			if p.ManagedFields != nil || p.Spec.Containers[0].LivenessProbe == nil || p.Spec.Containers[0].Image == "" {
+				t.Fatalf("pod %s: the transform did not run as expected", p.Name)
 			}
 		}
+	}
+	// Secrets are cached as summaries: keys and sizes, never values.
+	for _, o := range cl.Objects("secrets", "default") {
+		sum, ok := o.(*kube.SecretSummary)
+		if !ok {
+			t.Fatalf("secret cached as %T", o)
+		}
+		if sum.Name == "planted-secret" && (len(sum.Keys) != 1 || sum.Keys[0].Key != "token" || sum.Keys[0].Bytes != len(sim.PlantedSecretValue)) {
+			t.Fatalf("planted secret summary %+v", sum.Keys)
+		}
+	}
+	// The long tail is metadata only.
+	for _, o := range cl.Objects("roles", "") {
+		if _, ok := o.(*metav1.PartialObjectMetadata); !ok {
+			t.Fatalf("role cached as %T", o)
+		}
+	}
+	if cl.Count("roles", "") == 0 || cl.Count("namespaces", "") == 0 || cl.Count("services", "") == 0 {
+		t.Fatalf("kinds missing: %v", cl.CachedObjects())
 	}
 }
 
@@ -275,7 +295,7 @@ func TestNotifiesNodeChanges(t *testing.T) {
 	for {
 		select {
 		case c := <-changes:
-			for _, n := range c.Nodes {
+			for _, n := range c.Views["nodes"] {
 				if n == "worker-001" {
 					return
 				}

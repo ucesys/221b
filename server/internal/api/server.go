@@ -19,18 +19,30 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/nodes"
 	"github.com/ucesys/221b/server/internal/settings"
+	"github.com/ucesys/221b/server/internal/views"
 )
 
 // Store is what the API reads rows from; *live.Store implements it.
 type Store interface {
-	Snapshot() []byte
-	Row(name string) ([]byte, bool)
-	Subscribe() (*live.Sub, []byte)
+	Snapshot(views []string) []byte
+	Row(view, key string) ([]byte, bool)
+	Subscribe(views []string) (*live.Sub, []byte, error)
 	Unsubscribe(*live.Sub)
-	Stats() (version uint64, rows, subscribers int, recomputes uint64)
+	Stats() (views []live.ViewStats, subscribers int, recomputes uint64)
 	Delays() live.Histogram
+}
+
+// Cluster is what the detail endpoints read; *kube.Cluster implements it.
+// nil leaves them unserved.
+type Cluster interface {
+	views.Source
+	PodUsageOf(namespace, name string) (nodes.Usage, bool)
+	ObjectYAML(ctx context.Context, k kube.Kind, namespace, name string) (string, error)
+	Logs(ctx context.Context, namespace, name string, o kube.LogOptions) (io.ReadCloser, error)
 }
 
 // Settings reads and changes the shared settings; *settings.Service
@@ -43,6 +55,8 @@ type Settings interface {
 // Options configure the HTTP handler.
 type Options struct {
 	Store Store
+	// Cluster serves the details of pods, services, releases, logs and YAML.
+	Cluster Cluster
 	// Settings serves /api/v1/settings; nil leaves the path unserved.
 	Settings Settings
 	// Ready reports whether the cluster has been listed; it drives /readyz.
@@ -62,13 +76,18 @@ type Options struct {
 	// cannot reach the console through DNS rebinding while a port-forward
 	// is open.
 	AllowedHosts []string
+	// MaxLogs caps concurrent log streams.
+	MaxLogs int
+	Now     func() time.Time
 }
 
 // Gauge is one value on the metrics endpoint.
 type Gauge struct {
 	Name, Help string
-	Value      float64
-	Counter    bool
+	// Labels, when set, go between the braces: `view="nodes"`.
+	Labels  string
+	Value   float64
+	Counter bool
 }
 
 // Server is the HTTP handler.
@@ -76,6 +95,7 @@ type Server struct {
 	opts         Options
 	mux          *http.ServeMux
 	streams      atomic.Int64
+	logs         atomic.Int64
 	allowedHosts map[string]bool
 
 	reqMu sync.Mutex
@@ -104,6 +124,12 @@ func New(o Options) *Server {
 	if o.UI == nil {
 		o.UI = http.NotFoundHandler()
 	}
+	if o.MaxLogs <= 0 {
+		o.MaxLogs = 50
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
 	s := &Server{opts: o, mux: http.NewServeMux(), reqs: map[reqKey]uint64{}, allowedHosts: map[string]bool{}}
 	for _, h := range o.AllowedHosts {
 		if h = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), "."); h != "" {
@@ -113,6 +139,14 @@ func New(o Options) *Server {
 	s.handle("GET /api/v1/snapshot", "snapshot", s.snapshot)
 	s.handle("GET /api/v1/nodes/{name}", "node", s.node)
 	s.handle("GET /api/v1/events", "events", s.events)
+	if o.Cluster != nil {
+		s.handle("GET /api/v1/pods/{namespace}/{name}", "pod", s.pod)
+		s.handle("GET /api/v1/pods/{namespace}/{name}/log", "pod-log", s.podLog)
+		s.handle("GET /api/v1/services/{namespace}/{name}", "service", s.service)
+		s.handle("GET /api/v1/helm/{namespace}/{name}", "release", s.release)
+		s.handle("GET /api/v1/yaml/{kind}/{name}", "yaml", s.yaml)
+		s.handle("GET /api/v1/yaml/{kind}/{namespace}/{name}", "yaml", s.yaml)
+	}
 	if o.Settings != nil {
 		s.handle("GET /api/v1/settings", "settings", s.getSettings)
 		s.handle("PUT /api/v1/settings", "settings-update", s.putSettings)
@@ -216,12 +250,36 @@ func (s *Server) observe(route string, h http.HandlerFunc) http.Handler {
 	})
 }
 
+// viewsOf reads the views a request asks for: ?views=nodes,pods. Without
+// any, it is the nodes.
+func viewsOf(r *http.Request) ([]string, error) {
+	q := r.URL.Query().Get("views")
+	if q == "" {
+		return []string{live.ViewNodes}, nil
+	}
+	var out []string
+	for _, v := range strings.Split(q, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	if len(out) > 8 {
+		return nil, fmt.Errorf("at most 8 views per stream")
+	}
+	return out, live.ValidViews(out)
+}
+
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, r, s.opts.Store.Snapshot())
+	names, err := viewsOf(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, r, s.opts.Store.Snapshot(names))
 }
 
 func (s *Server) node(w http.ResponseWriter, r *http.Request) {
-	row, ok := s.opts.Store.Row(r.PathValue("name"))
+	row, ok := s.opts.Store.Row(live.ViewNodes, r.PathValue("name"))
 	if !ok {
 		jsonError(w, http.StatusNotFound, "no node named "+strconv.Quote(r.PathValue("name")))
 		return
@@ -311,9 +369,16 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "ok\n")
 }
 
-// events streams the rows as Server-Sent Events: one "snapshot" event, then
-// a "delta" event per change and a "refresh" event per refresh tick.
+// events streams the rows of the views asked for (?views=nodes,pods) as
+// Server-Sent Events: one "snapshot" event, then a "rows" event per change
+// of a view, a "meta" event per change of the cluster details or settings
+// and a "refresh" event per refresh tick.
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
+	names, err := viewsOf(r)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if n := s.streams.Add(1); n > int64(s.opts.MaxStreams) {
 		s.streams.Add(-1)
 		w.Header().Set("Retry-After", "10")
@@ -358,7 +423,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return flush()
 	}
 
-	sub, snap := s.opts.Store.Subscribe()
+	sub, snap, err := s.opts.Store.Subscribe(names)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	defer s.opts.Store.Unsubscribe(sub)
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.WriteString(out, "retry: 3000\n\n"); err != nil {
@@ -384,7 +453,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case <-sub.Wake():
 			events, resync := sub.Take()
 			if resync {
-				if err := write("snapshot", s.opts.Store.Snapshot()); err != nil {
+				if err := write("snapshot", s.opts.Store.Snapshot(names)); err != nil {
 					return
 				}
 				continue
@@ -401,22 +470,48 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	var b strings.Builder
-	version, rows, subs, recomputes := s.opts.Store.Stats()
+	viewStats, subs, recomputes := s.opts.Store.Stats()
 	gauges := []Gauge{
-		{Name: "b221_rows_version", Help: "Version of the rows; it increases with every published change.", Value: float64(version), Counter: true},
-		{Name: "b221_rows", Help: "Node rows held.", Value: float64(rows)},
 		{Name: "b221_event_streams", Help: "Open browser event streams.", Value: float64(subs)},
+		{Name: "b221_log_streams", Help: "Open pod log streams.", Value: float64(s.logs.Load())},
 		{Name: "b221_recomputes_total", Help: "Times the rows were recomputed.", Value: float64(recomputes), Counter: true},
+	}
+	for _, v := range viewStats {
+		labels := fmt.Sprintf("view=%q", v.Name)
+		gauges = append(gauges,
+			Gauge{Name: "b221_rows_version", Help: "Version of a view's rows; it increases with every published change.", Labels: labels, Value: float64(v.Version), Counter: true},
+			Gauge{Name: "b221_rows", Help: "Rows held per view.", Labels: labels, Value: float64(v.Rows)},
+			Gauge{Name: "b221_view_subscribers", Help: "Browsers showing each view.", Labels: labels, Value: float64(v.Subscribers)},
+		)
 	}
 	if s.opts.Gauges != nil {
 		gauges = append(gauges, s.opts.Gauges()...)
 	}
+	// The exposition format keeps every sample of a metric together, after
+	// its one HELP and TYPE line, so labelled gauges are grouped by name in
+	// the order their names first appear.
+	var names []string
+	families := map[string][]Gauge{}
 	for _, g := range gauges {
+		if _, ok := families[g.Name]; !ok {
+			names = append(names, g.Name)
+		}
+		families[g.Name] = append(families[g.Name], g)
+	}
+	for _, name := range names {
+		family := families[name]
 		kind := "gauge"
-		if g.Counter {
+		if family[0].Counter {
 			kind = "counter"
 		}
-		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s %s\n%s %s\n", g.Name, g.Help, g.Name, kind, g.Name, strconv.FormatFloat(g.Value, 'f', -1, 64))
+		fmt.Fprintf(&b, "# HELP %s %s\n# TYPE %s %s\n", name, family[0].Help, name, kind)
+		for _, g := range family {
+			if g.Labels != "" {
+				fmt.Fprintf(&b, "%s{%s} %s\n", name, g.Labels, strconv.FormatFloat(g.Value, 'f', -1, 64))
+			} else {
+				fmt.Fprintf(&b, "%s %s\n", name, strconv.FormatFloat(g.Value, 'f', -1, 64))
+			}
+		}
 	}
 	d := s.opts.Store.Delays()
 	b.WriteString("# HELP b221_change_delay_seconds Time from a watch event reaching 221B to the change going out to browsers.\n# TYPE b221_change_delay_seconds histogram\n")

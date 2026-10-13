@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -24,7 +25,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	apiversion "k8s.io/apimachinery/pkg/version"
 	"k8s.io/apimachinery/pkg/watch"
-	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 
@@ -57,7 +59,7 @@ type Info struct {
 	State   string    `json:"state"`
 	Since   time.Time `json:"since"`
 	Message string    `json:"message,omitempty"`
-	// Synced is true once nodes and pods have been listed at least once.
+	// Synced is true once every kind has been listed at least once.
 	Synced bool `json:"synced"`
 	// Warnings are problems reading the cluster that do not stop the
 	// console, such as a missing permission.
@@ -69,16 +71,38 @@ type Info struct {
 	// Uptime says whether node boot times can be read from the kubelets.
 	Uptime        string `json:"uptime"`
 	UptimeMessage string `json:"uptimeMessage,omitempty"`
+	// Secrets says whether Secrets are read (for their keys and sizes, and
+	// for Helm releases): "read", or "off" when the chart turned it off.
+	Secrets string `json:"secrets"`
 }
 
-// Change tells the store what may have changed: the rows of some nodes, every
-// row, the cluster details (connection, versions, warnings) or the totals
-// that belong to no row (pods waiting for a node).
+// Change tells the store which rows may have changed: for each view, the
+// keys of its rows, or "*" for every row. Info marks the cluster details,
+// Totals the counts that belong to no row.
 type Change struct {
-	Nodes  []string
-	All    bool
+	Views  map[string][]string
 	Info   bool
 	Totals bool
+}
+
+// AllRows marks every row of a view.
+const AllRows = "*"
+
+// UsageOnly marks a view's CPU and memory in use, which the store sends
+// apart from the rows, without marking any row.
+const UsageOnly = "@usage"
+
+// Mark adds keys of a view to the change.
+func (ch *Change) Mark(view string, keys ...string) {
+	if ch.Views == nil {
+		ch.Views = map[string][]string{}
+	}
+	ch.Views[view] = append(ch.Views[view], keys...)
+}
+
+// Empty reports whether the change carries nothing.
+func (ch Change) Empty() bool {
+	return !ch.Info && !ch.Totals && len(ch.Views) == 0
 }
 
 // Options configure a Cluster.
@@ -89,30 +113,39 @@ type Options struct {
 	// KubeletStats reads each node's boot time from its kubelet through the
 	// API server, which needs get on nodes/proxy. Off, uptime is not shown.
 	KubeletStats bool
+	// SecretsRead watches Secrets, for their keys and sizes and for Helm
+	// releases (P2-07). Off, Secrets are never read and the Helm tab is
+	// hidden (P2-10).
+	SecretsRead bool
 	// Protobuf asks the API server for protobuf, which is smaller and
 	// faster to decode than JSON for large pod lists.
 	Protobuf bool
 	Logger   *slog.Logger
 }
 
-// Cluster keeps watched copies of the nodes and pods of one cluster and
-// tracks the connection to it.
+// Cluster keeps watched copies of the objects of one cluster and tracks the
+// connection to it.
 type Cluster struct {
-	log             *slog.Logger
-	rest            rest.Interface
-	nodeInf, podInf cache.SharedIndexInformer
-	healthInterval  time.Duration
-	kubeletStats    bool
+	log            *slog.Logger
+	rest           rest.Interface // the core API, for /version, metrics and the node proxy
+	cs             *kubernetes.Clientset
+	mc             metadata.Interface
+	kinds          []Kind
+	informers      map[string]cache.SharedIndexInformer
+	healthInterval time.Duration
+	kubeletStats   bool
+	secretsRead    bool
+	wantPodUsage   atomic.Bool
 
 	mu                 sync.RWMutex
 	info               Info
 	usage              map[string]nodes.Usage
+	podUsage           map[string]nodes.Usage
 	boots              map[string]bootEntry
 	bootForbiddenUntil time.Time
 	watchErrs          map[string]watchErr
 	notify             func(Change)
-	nodeEvents         uint64
-	podEvents          uint64
+	events             map[string]uint64
 	healthFails        int
 }
 
@@ -121,8 +154,6 @@ type watchErr struct {
 	at  time.Time
 }
 
-const podsByNode = "byNode"
-
 // New prepares a Cluster. Nothing talks to the API server until Run.
 func New(cfg *rest.Config, o Options) (*Cluster, error) {
 	c := rest.CopyConfig(cfg)
@@ -130,15 +161,26 @@ func New(cfg *rest.Config, o Options) (*Cluster, error) {
 		c.UserAgent = "221b/" + version.Version
 	}
 	if c.QPS == 0 {
-		c.QPS, c.Burst = 20, 40
+		c.QPS, c.Burst = 50, 100
 	}
 	if o.Protobuf {
 		c.ContentType = "application/vnd.kubernetes.protobuf"
 		c.AcceptContentTypes = "application/vnd.kubernetes.protobuf,application/json"
 	}
-	core, err := corev1client.NewForConfig(c)
+	cs, err := kubernetes.NewForConfig(c)
 	if err != nil {
 		return nil, fmt.Errorf("creating the Kubernetes client: %w", err)
+	}
+	mcfg := rest.CopyConfig(c)
+	if !o.Protobuf {
+		// The metadata client asks for protobuf by default; the simulator
+		// speaks JSON only.
+		mcfg.ContentType = "application/json"
+		mcfg.AcceptContentTypes = "application/json"
+	}
+	mc, err := metadata.NewForConfig(mcfg)
+	if err != nil {
+		return nil, fmt.Errorf("creating the metadata client: %w", err)
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
@@ -148,60 +190,108 @@ func New(cfg *rest.Config, o Options) (*Cluster, error) {
 	}
 	cl := &Cluster{
 		log:            o.Logger,
-		rest:           core.RESTClient(),
+		rest:           cs.CoreV1().RESTClient(),
+		cs:             cs,
+		mc:             mc,
+		informers:      map[string]cache.SharedIndexInformer{},
 		healthInterval: o.HealthInterval,
 		kubeletStats:   o.KubeletStats,
+		secretsRead:    o.SecretsRead,
 		info: Info{
 			Name: o.Name, Mode: o.Mode, State: StateConnecting, Since: time.Now().UTC(),
-			Metrics: MetricsUnknown, Uptime: UptimeUnknown, Warnings: []string{},
+			Metrics: MetricsUnknown, Uptime: UptimeUnknown, Warnings: []string{}, Secrets: "read",
 		},
 		usage:     map[string]nodes.Usage{},
+		podUsage:  map[string]nodes.Usage{},
 		boots:     map[string]bootEntry{},
 		watchErrs: map[string]watchErr{},
+		events:    map[string]uint64{},
 		notify:    func(Change) {},
 	}
 	if !o.KubeletStats {
 		cl.info.Uptime = UptimeUnavailable
 		cl.info.UptimeMessage = "Uptime is not shown: reading the kubelets' stats is off (kubeletStats in the chart)."
 	}
-
-	cl.nodeInf = cache.NewSharedIndexInformerWithOptions(
-		cl.patient(cache.NewListWatchFromClient(core.RESTClient(), "nodes", metav1.NamespaceAll, fields.Everything())),
-		&corev1.Node{},
-		cache.SharedIndexInformerOptions{ObjectDescription: "nodes"},
-	)
-	cl.podInf = cache.NewSharedIndexInformerWithOptions(
-		cl.patient(cache.NewListWatchFromClient(core.RESTClient(), "pods", metav1.NamespaceAll, fields.Everything())),
-		&corev1.Pod{},
-		cache.SharedIndexInformerOptions{ObjectDescription: "pods", Indexers: cache.Indexers{podsByNode: podNodeName}},
-	)
-	if err := cl.nodeInf.SetTransform(StripNode); err != nil {
-		return nil, err
+	if !o.SecretsRead {
+		cl.info.Secrets = "off"
 	}
-	if err := cl.podInf.SetTransform(StripPod); err != nil {
-		return nil, err
-	}
-	if err := cl.nodeInf.SetWatchErrorHandlerWithContext(cl.watchError("nodes")); err != nil {
-		return nil, err
-	}
-	if err := cl.podInf.SetWatchErrorHandlerWithContext(cl.watchError("pods")); err != nil {
-		return nil, err
-	}
-	if _, err := cl.nodeInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { cl.nodeChanged(obj) },
-		UpdateFunc: func(_, obj any) { cl.nodeChanged(obj) },
-		DeleteFunc: func(obj any) { cl.nodeChanged(obj) },
-	}); err != nil {
-		return nil, err
-	}
-	if _, err := cl.podInf.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { cl.podChanged(nil, obj) },
-		UpdateFunc: func(old, obj any) { cl.podChanged(old, obj) },
-		DeleteFunc: func(obj any) { cl.podChanged(nil, obj) },
-	}); err != nil {
-		return nil, err
+	for _, k := range Kinds {
+		if k.Secret && !o.SecretsRead {
+			continue
+		}
+		inf, err := cl.newInformer(k)
+		if err != nil {
+			return nil, err
+		}
+		cl.informers[k.Name] = inf
+		cl.kinds = append(cl.kinds, k)
 	}
 	return cl, nil
+}
+
+// newInformer builds the informer of one kind: a typed list-and-watch for
+// kinds with bodies the screens read, a metadata-only one for the rest.
+func (c *Cluster) newInformer(k Kind) (cache.SharedIndexInformer, error) {
+	var lw *cache.ListWatch
+	if k.Metadata {
+		res := c.mc.Resource(k.GVR())
+		lw = &cache.ListWatch{
+			ListWithContextFunc: func(ctx context.Context, o metav1.ListOptions) (runtime.Object, error) {
+				return res.List(ctx, o)
+			},
+			WatchFuncWithContext: func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
+				return res.Watch(ctx, o)
+			},
+		}
+	} else {
+		client, err := c.clientFor(k)
+		if err != nil {
+			return nil, err
+		}
+		lw = cache.NewListWatchFromClient(client, k.Resource, metav1.NamespaceAll, fields.Everything())
+	}
+	indexers := cache.Indexers{}
+	if k.Namespaced {
+		indexers[cache.NamespaceIndex] = cache.MetaNamespaceIndexFunc
+	}
+	for name, f := range k.Indexers {
+		indexers[name] = f
+	}
+	inf := cache.NewSharedIndexInformerWithOptions(c.patient(lw), k.New(), cache.SharedIndexInformerOptions{ObjectDescription: k.Name, Indexers: indexers})
+	if k.Transform != nil {
+		if err := inf.SetTransform(k.Transform); err != nil {
+			return nil, err
+		}
+	}
+	if err := inf.SetWatchErrorHandlerWithContext(c.watchError(k.Name)); err != nil {
+		return nil, err
+	}
+	kind := k
+	if _, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    func(obj any) { c.changed(kind, nil, obj) },
+		UpdateFunc: func(old, obj any) { c.changed(kind, old, obj) },
+		DeleteFunc: func(obj any) { c.changed(kind, obj, nil) },
+	}); err != nil {
+		return nil, err
+	}
+	return inf, nil
+}
+
+// clientFor returns the REST client of a kind's API group.
+func (c *Cluster) clientFor(k Kind) (rest.Interface, error) {
+	switch k.Group {
+	case "":
+		return c.cs.CoreV1().RESTClient(), nil
+	case "apps":
+		return c.cs.AppsV1().RESTClient(), nil
+	case "batch":
+		return c.cs.BatchV1().RESTClient(), nil
+	case "discovery.k8s.io":
+		return c.cs.DiscoveryV1().RESTClient(), nil
+	case "networking.k8s.io":
+		return c.cs.NetworkingV1().RESTClient(), nil
+	}
+	return nil, fmt.Errorf("no client for API group %q", k.Group)
 }
 
 // patient makes every list and watch wait until the API server answers.
@@ -248,18 +338,35 @@ func (c *Cluster) OnChange(f func(Change)) {
 	c.mu.Unlock()
 }
 
+// coreKinds must be listed before the console is ready; the other kinds
+// fill in as they arrive, and a kind the ServiceAccount may not read shows
+// as a warning rather than stopping everything.
+var coreKinds = []string{"nodes", "pods", "namespaces"}
+
 // Run watches the cluster until ctx is done.
 func (c *Cluster) Run(ctx context.Context) {
-	go c.nodeInf.RunWithContext(ctx)
-	go c.podInf.RunWithContext(ctx)
+	var core, all []cache.InformerSynced
+	for name, inf := range c.informers {
+		go inf.RunWithContext(ctx)
+		all = append(all, inf.HasSynced)
+		for _, k := range coreKinds {
+			if k == name {
+				core = append(core, inf.HasSynced)
+			}
+		}
+	}
 	go func() {
-		if cache.WaitForCacheSync(ctx.Done(), c.nodeInf.HasSynced, c.podInf.HasSynced) {
-			c.mu.Lock()
-			c.info.Synced = true
-			n, p := len(c.nodeInf.GetStore().ListKeys()), len(c.podInf.GetStore().ListKeys())
-			c.mu.Unlock()
-			c.log.Info("nodes and pods listed", "nodes", n, "pods", p)
-			c.emit(Change{All: true, Info: true})
+		if !cache.WaitForCacheSync(ctx.Done(), core...) {
+			return
+		}
+		c.mu.Lock()
+		c.info.Synced = true
+		c.mu.Unlock()
+		c.log.Info("nodes, pods and namespaces listed", "nodes", c.Count("nodes", ""), "pods", c.Count("pods", ""), "namespaces", c.Count("namespaces", ""))
+		c.emit(c.everything())
+		if cache.WaitForCacheSync(ctx.Done(), all...) {
+			c.log.Info("every kind listed", "kinds", len(c.informers), "objects", c.totalObjects())
+			c.emit(c.everything())
 		}
 	}()
 	go c.loop(ctx, c.healthInterval, c.checkHealth)
@@ -269,12 +376,44 @@ func (c *Cluster) Run(ctx context.Context) {
 	<-ctx.Done()
 }
 
+// everything marks every static view, the details and the totals.
+func (c *Cluster) everything() Change {
+	ch := Change{Info: true, Totals: true}
+	for _, v := range []string{"nodes", "pods", "namespaces", "services", "helm"} {
+		ch.Mark(v, AllRows)
+	}
+	return ch
+}
+
+func (c *Cluster) totalObjects() int {
+	n := 0
+	for name := range c.informers {
+		n += c.Count(name, "")
+	}
+	return n
+}
+
 // Poll reads what is not watched: CPU and memory in use from
-// metrics-server. The store calls it once per refresh, so one read serves
-// every browser. ctx bounds how long it may take.
+// metrics-server, for nodes always and for pods while a browser shows
+// them. The store calls it once per refresh, so one read serves every
+// browser. ctx bounds how long it may take.
 func (c *Cluster) Poll(ctx context.Context) {
 	c.readMetrics(ctx)
+	if c.wantPodUsage.Load() {
+		c.readPodMetrics(ctx)
+	} else {
+		c.mu.Lock()
+		had := len(c.podUsage) > 0
+		c.podUsage = map[string]nodes.Usage{}
+		c.mu.Unlock()
+		if had {
+			c.emit(Change{Views: map[string][]string{"pods": {UsageOnly}}})
+		}
+	}
 }
+
+// WantPodUsage says whether pod usage should be read on the next polls.
+func (c *Cluster) WantPodUsage(want bool) { c.wantPodUsage.Store(want) }
 
 func (c *Cluster) loop(ctx context.Context, every time.Duration, f func(context.Context)) {
 	f(ctx)
@@ -310,34 +449,119 @@ func (c *Cluster) Info() Info {
 	return info
 }
 
-// Ready reports whether nodes and pods have been listed.
+// Ready reports whether every kind has been listed.
 func (c *Cluster) Ready() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.info.Synced
 }
 
-// NodeNames returns the names of all cached nodes.
-func (c *Cluster) NodeNames() []string {
-	return c.nodeInf.GetStore().ListKeys()
+// SecretsRead reports whether Secrets are watched.
+func (c *Cluster) SecretsRead() bool { return c.secretsRead }
+
+// Kinds returns the kinds this cluster watches.
+func (c *Cluster) Kinds() []Kind { return c.kinds }
+
+// Objects returns the cached objects of a kind, in one namespace or, with
+// an empty namespace, all of them.
+func (c *Cluster) Objects(kind, namespace string) []runtime.Object {
+	inf, ok := c.informers[kind]
+	if !ok {
+		return nil
+	}
+	var items []any
+	if namespace == "" {
+		items = inf.GetStore().List()
+	} else {
+		var err error
+		if items, err = inf.GetIndexer().ByIndex(cache.NamespaceIndex, namespace); err != nil {
+			return nil
+		}
+	}
+	out := make([]runtime.Object, 0, len(items))
+	for _, it := range items {
+		if o, ok := it.(runtime.Object); ok {
+			out = append(out, o)
+		}
+	}
+	return out
 }
+
+// Object returns one cached object, or nil. namespace is empty for
+// cluster-scoped kinds.
+func (c *Cluster) Object(kind, namespace, name string) runtime.Object {
+	inf, ok := c.informers[kind]
+	if !ok {
+		return nil
+	}
+	key := name
+	if namespace != "" {
+		key = namespace + "/" + name
+	}
+	obj, found, err := inf.GetStore().GetByKey(key)
+	if err != nil || !found {
+		return nil
+	}
+	o, _ := obj.(runtime.Object)
+	return o
+}
+
+// ByIndex returns the cached objects of a kind an index maps a value to.
+func (c *Cluster) ByIndex(kind, index, value string) []runtime.Object {
+	inf, ok := c.informers[kind]
+	if !ok {
+		return nil
+	}
+	items, err := inf.GetIndexer().ByIndex(index, value)
+	if err != nil {
+		return nil
+	}
+	out := make([]runtime.Object, 0, len(items))
+	for _, it := range items {
+		if o, ok := it.(runtime.Object); ok {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// Count counts the cached objects of a kind, in one namespace or all.
+func (c *Cluster) Count(kind, namespace string) int {
+	inf, ok := c.informers[kind]
+	if !ok {
+		return 0
+	}
+	if namespace == "" {
+		return len(inf.GetStore().ListKeys())
+	}
+	keys, err := inf.GetIndexer().IndexKeys(cache.NamespaceIndex, namespace)
+	if err != nil {
+		return 0
+	}
+	return len(keys)
+}
+
+// Keys returns the cache keys ("namespace/name" or "name") of a kind.
+func (c *Cluster) Keys(kind string) []string {
+	inf, ok := c.informers[kind]
+	if !ok {
+		return nil
+	}
+	return inf.GetStore().ListKeys()
+}
+
+// NodeNames returns the names of all cached nodes.
+func (c *Cluster) NodeNames() []string { return c.Keys("nodes") }
 
 // Node returns a cached node, or nil.
 func (c *Cluster) Node(name string) *corev1.Node {
-	obj, ok, err := c.nodeInf.GetStore().GetByKey(name)
-	if err != nil || !ok {
-		return nil
-	}
-	n, _ := obj.(*corev1.Node)
+	n, _ := c.Object("nodes", "", name).(*corev1.Node)
 	return n
 }
 
 // PodsOn returns the cached pods bound to a node.
 func (c *Cluster) PodsOn(node string) []*corev1.Pod {
-	objs, err := c.podInf.GetIndexer().ByIndex(podsByNode, node)
-	if err != nil {
-		return nil
-	}
+	objs := c.ByIndex("pods", IndexPodNode, node)
 	out := make([]*corev1.Pod, 0, len(objs))
 	for _, o := range objs {
 		if p, ok := o.(*corev1.Pod); ok {
@@ -345,6 +569,12 @@ func (c *Cluster) PodsOn(node string) []*corev1.Pod {
 		}
 	}
 	return out
+}
+
+// Pod returns a cached pod, or nil.
+func (c *Cluster) Pod(namespace, name string) *corev1.Pod {
+	p, _ := c.Object("pods", namespace, name).(*corev1.Pod)
+	return p
 }
 
 // Unscheduled counts pods waiting for a node.
@@ -366,53 +596,132 @@ func (c *Cluster) Usage(node string) (nodes.Usage, bool) {
 	return u, ok
 }
 
+// PodUsage returns what metrics-server last reported for every pod, by
+// "namespace/name".
+func (c *Cluster) PodUsage() map[string]nodes.Usage {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make(map[string]nodes.Usage, len(c.podUsage))
+	for k, v := range c.podUsage {
+		out[k] = v
+	}
+	return out
+}
+
 // Counts reports cache sizes and event totals for the metrics endpoint.
 func (c *Cluster) Counts() (nodeCount, podCount int, nodeEvents, podEvents uint64) {
 	c.mu.RLock()
-	nodeEvents, podEvents = c.nodeEvents, c.podEvents
+	nodeEvents, podEvents = c.events["nodes"], c.events["pods"]
 	c.mu.RUnlock()
-	return len(c.nodeInf.GetStore().ListKeys()), len(c.podInf.GetStore().ListKeys()), nodeEvents, podEvents
+	return c.Count("nodes", ""), c.Count("pods", ""), nodeEvents, podEvents
+}
+
+// CachedObjects reports the number of cached objects of every kind.
+func (c *Cluster) CachedObjects() map[string]int {
+	out := make(map[string]int, len(c.informers))
+	for name := range c.informers {
+		out[name] = c.Count(name, "")
+	}
+	return out
 }
 
 func (c *Cluster) emit(ch Change) {
+	if ch.Empty() {
+		return
+	}
 	c.mu.RLock()
 	f := c.notify
 	c.mu.RUnlock()
 	f(ch)
 }
 
-func (c *Cluster) nodeChanged(obj any) {
+// changed turns an object event into the rows it touches.
+func (c *Cluster) changed(k Kind, old, obj any) {
 	c.mu.Lock()
-	c.nodeEvents++
-	delete(c.watchErrs, "nodes")
+	c.events[k.Name]++
+	delete(c.watchErrs, k.Name)
 	c.mu.Unlock()
-	if n := asNode(obj); n != nil {
-		c.emit(Change{Nodes: []string{n.Name}})
-	}
-}
-
-func (c *Cluster) podChanged(old, obj any) {
-	c.mu.Lock()
-	c.podEvents++
-	delete(c.watchErrs, "pods")
-	c.mu.Unlock()
-	names := map[string]bool{}
-	if p := asPod(old); p != nil {
-		names[p.Spec.NodeName] = true
-	}
-	if p := asPod(obj); p != nil {
-		names[p.Spec.NodeName] = true
-	}
 	ch := Change{}
-	for n := range names {
-		// Unscheduled pods change the cluster totals but no node's row.
-		if n != "" {
-			ch.Nodes = append(ch.Nodes, n)
-		} else {
-			ch.Totals = true
+	oldMeta, newMeta := asMeta(old), asMeta(obj)
+	ns := ""
+	if newMeta != nil {
+		ns = newMeta.GetNamespace()
+	} else if oldMeta != nil {
+		ns = oldMeta.GetNamespace()
+	}
+	added, removed := oldMeta == nil, newMeta == nil
+	switch k.Name {
+	case "nodes":
+		for _, m := range []metav1.Object{oldMeta, newMeta} {
+			if m != nil {
+				ch.Mark("nodes", m.GetName())
+			}
+		}
+	case "pods":
+		for _, o := range []any{old, obj} {
+			if p := asPod(o); p != nil {
+				if p.Spec.NodeName != "" {
+					ch.Mark("nodes", p.Spec.NodeName)
+				} else {
+					ch.Totals = true
+				}
+				ch.Mark("pods", p.Namespace+"/"+p.Name)
+				if release := podRelease(p); release != "" {
+					ch.Mark("helm", p.Namespace+"/"+release)
+				}
+			}
+		}
+	case "namespaces":
+		for _, m := range []metav1.Object{oldMeta, newMeta} {
+			if m != nil {
+				ch.Mark("namespaces", m.GetName())
+			}
+		}
+	case "services":
+		for _, m := range []metav1.Object{oldMeta, newMeta} {
+			if m != nil {
+				ch.Mark("services", m.GetNamespace()+"/"+m.GetName())
+			}
+		}
+	case "endpointslices":
+		for _, o := range []any{old, obj} {
+			if m := asMeta(o); m != nil {
+				if svc := m.GetLabels()["kubernetes.io/service-name"]; svc != "" {
+					ch.Mark("services", m.GetNamespace()+"/"+svc)
+				}
+			}
+		}
+	case "ingresses":
+		ch.Mark("services", AllRows)
+	case "secrets":
+		for _, o := range []any{old, obj} {
+			if s, ok := unwrap(o).(*SecretSummary); ok && s.Release != nil {
+				ch.Mark("helm", s.Namespace+"/"+s.Release.Name)
+			}
+		}
+	}
+	if k.Namespaced && ns != "" {
+		ch.Mark("ns:"+ns, AllRows)
+		// Counts change on add and delete; pods also carry a status.
+		if added || removed || k.Name == "pods" {
+			ch.Mark("namespaces", ns)
+		}
+		if k.Name != "events" && (added || removed) {
+			ch.Mark("helm", AllRows)
 		}
 	}
 	c.emit(ch)
+}
+
+// podRelease names the Helm release a pod belongs to, from the labels
+// Helm charts set, or "".
+func podRelease(p *corev1.Pod) string {
+	if p.Labels["app.kubernetes.io/managed-by"] == "Helm" {
+		if r := p.Labels["app.kubernetes.io/instance"]; r != "" {
+			return r
+		}
+	}
+	return p.Annotations["meta.helm.sh/release-name"]
 }
 
 func (c *Cluster) watchError(resource string) cache.WatchErrorHandlerWithContext {
@@ -441,6 +750,8 @@ func describeWatchError(resource string, err error) string {
 		return "Not allowed to list or watch " + resource + ". Check the ClusterRole the chart installs."
 	case apierrors.IsUnauthorized(err):
 		return "The API server rejected the credentials while watching " + resource + "."
+	case apierrors.IsNotFound(err):
+		return "This cluster has no " + resource + " API, so they are not shown."
 	default:
 		return "Watching " + resource + " was interrupted; it resumes automatically. " + shortError(err)
 	}
@@ -491,10 +802,15 @@ func (c *Cluster) checkHealth(ctx context.Context) {
 type metricsList struct {
 	Items []struct {
 		Metadata struct {
-			Name string `json:"name"`
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
 		} `json:"metadata"`
 		Timestamp time.Time         `json:"timestamp"`
 		Usage     map[string]string `json:"usage"`
+		// Pod metrics carry one usage per container instead.
+		Containers []struct {
+			Usage map[string]string `json:"usage"`
+		} `json:"containers"`
 	} `json:"items"`
 }
 
@@ -513,12 +829,9 @@ func (c *Cluster) readMetrics(ctx context.Context) {
 		var list metricsList
 		if err = json.Unmarshal(raw, &list); err == nil {
 			for _, it := range list.Items {
-				cpu, cerr := resource.ParseQuantity(it.Usage["cpu"])
-				mem, merr := resource.ParseQuantity(it.Usage["memory"])
-				if cerr != nil || merr != nil {
-					continue
+				if u, ok := parseUsage(it.Usage); ok {
+					usage[it.Metadata.Name] = u
 				}
-				usage[it.Metadata.Name] = nodes.Usage{CPUMilli: cpu.MilliValue(), MemoryBytes: mem.Value()}
 			}
 		}
 	}
@@ -556,8 +869,55 @@ func (c *Cluster) readMetrics(ctx context.Context) {
 		}
 	}
 	if changed {
-		c.emit(Change{All: true, Info: true})
+		c.emit(Change{Views: map[string][]string{"nodes": {AllRows}}, Info: true})
 	}
+}
+
+// readPodMetrics reads every pod's usage from metrics-server. Pod usage is
+// not part of a pod's row: the store sends it separately, so a usage
+// change does not resend the row.
+func (c *Cluster) readPodMetrics(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	raw, err := c.rest.Get().AbsPath("/apis/metrics.k8s.io/v1beta1/pods").SetHeader("Accept", "application/json").Do(ctx).Raw()
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return
+	}
+	usage := map[string]nodes.Usage{}
+	if err == nil {
+		var list metricsList
+		if err = json.Unmarshal(raw, &list); err == nil {
+			for _, it := range list.Items {
+				var sum nodes.Usage
+				for _, ct := range it.Containers {
+					if u, ok := parseUsage(ct.Usage); ok {
+						sum.CPUMilli += u.CPUMilli
+						sum.MemoryBytes += u.MemoryBytes
+					}
+				}
+				usage[it.Metadata.Namespace+"/"+it.Metadata.Name] = sum
+			}
+		}
+	}
+	if err != nil {
+		c.log.Debug("pod metrics unavailable", "err", err)
+	}
+	c.mu.Lock()
+	changed := !sameUsage(c.podUsage, usage)
+	c.podUsage = usage
+	c.mu.Unlock()
+	if changed {
+		c.emit(Change{Views: map[string][]string{"pods": {UsageOnly}}})
+	}
+}
+
+func parseUsage(u map[string]string) (nodes.Usage, bool) {
+	cpu, cerr := resource.ParseQuantity(u["cpu"])
+	mem, merr := resource.ParseQuantity(u["memory"])
+	if cerr != nil || merr != nil {
+		return nodes.Usage{}, false
+	}
+	return nodes.Usage{CPUMilli: cpu.MilliValue(), MemoryBytes: mem.Value()}, true
 }
 
 func sameUsage(a, b map[string]nodes.Usage) bool {
@@ -572,30 +932,26 @@ func sameUsage(a, b map[string]nodes.Usage) bool {
 	return true
 }
 
-func podNodeName(obj any) ([]string, error) {
-	p, ok := obj.(*corev1.Pod)
-	if !ok {
-		return nil, nil
+func unwrap(obj any) any {
+	if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		return d.Obj
 	}
-	return []string{p.Spec.NodeName}, nil
+	return obj
 }
 
-func asNode(obj any) *corev1.Node {
-	if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
-		obj = d.Obj
+func asMeta(obj any) metav1.Object {
+	if obj == nil {
+		return nil
 	}
-	n, _ := obj.(*corev1.Node)
-	return n
+	m, _ := unwrap(obj).(metav1.Object)
+	return m
 }
 
 func asPod(obj any) *corev1.Pod {
 	if obj == nil {
 		return nil
 	}
-	if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
-		obj = d.Obj
-	}
-	p, _ := obj.(*corev1.Pod)
+	p, _ := unwrap(obj).(*corev1.Pod)
 	return p
 }
 

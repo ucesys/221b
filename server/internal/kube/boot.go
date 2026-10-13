@@ -195,7 +195,11 @@ func (c *Cluster) readBoots(ctx context.Context) {
 	}
 	if len(changed) > 0 || infoChanged {
 		sort.Strings(changed)
-		c.emit(Change{Nodes: changed, Info: infoChanged})
+		ch := Change{Info: infoChanged}
+		if len(changed) > 0 {
+			ch.Mark("nodes", changed...)
+		}
+		c.emit(ch)
 	}
 }
 

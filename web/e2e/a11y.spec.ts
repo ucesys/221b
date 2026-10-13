@@ -6,12 +6,15 @@ import { expect, test, type Page } from '@playwright/test'
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 
 async function violations(page: Page): Promise<string[]> {
+  // Once the drawers have slid in: axe samples colors as painted.
+  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)))
   const results = await new AxeBuilder({ page }).withTags(TAGS).analyze()
   return results.violations.map((v) => `${v.id} (${v.impact}): ${v.help} — ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(', ')}`)
 }
 
 for (const theme of ['light', 'dark'] as const) {
   test(`meets WCAG 2.2 AA in the ${theme} theme`, async ({ page }) => {
+    test.slow() // a dozen axe runs, a few seconds each
     await page.addInitScript((t) => window.localStorage.setItem('221b.theme', JSON.stringify(t)), theme)
     await page.goto('/')
     await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
@@ -19,7 +22,7 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(page.locator('[data-node]').first()).toBeVisible()
     expect(await violations(page)).toEqual([])
 
-    await page.locator('[data-node]').first().click()
+    await page.locator('[data-node] .rk-pname').first().click()
     await expect(page.getByTestId('node-panel')).toBeVisible()
     expect(await violations(page)).toEqual([])
 
@@ -36,6 +39,25 @@ for (const theme of ['light', 'dark'] as const) {
     await page.getByRole('button', { name: 'Settings' }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
     expect(await violations(page)).toEqual([])
+    await page.keyboard.press('Escape')
+
+    // The Phase 2 tabs, and a pod's details with its logs.
+    await page.goto('/#/pods')
+    await expect(page.locator('[data-pod]').first()).toBeVisible()
+    expect(await violations(page)).toEqual([])
+    await page.locator('[data-pod] .rk-pname').first().click()
+    await expect(page.getByTestId('pod-panel')).toBeVisible()
+    await expect(page.getByTestId('pod-panel').locator('dt').first()).toBeVisible()
+    expect(await violations(page)).toEqual([])
+    await page.getByTestId('pod-panel').locator('[data-dtab="logs"]').click()
+    await expect(page.getByTestId('logs')).toBeVisible()
+    expect(await violations(page)).toEqual([])
+    await page.keyboard.press('Escape')
+    for (const hash of ['#/namespaces', '#/services', '#/helm']) {
+      await page.goto('/' + hash)
+      await expect(page.locator('.rk-gr').first()).toBeVisible()
+      expect(await violations(page), hash).toEqual([])
+    }
   })
 }
 

@@ -1,5 +1,6 @@
-// The shapes the server sends. They mirror server/internal/nodes and
-// server/internal/kube; keep the two in step.
+// The shapes the server sends. They mirror server/internal/nodes,
+// server/internal/views, server/internal/live and server/internal/kube;
+// keep the two in step.
 
 export type Tone = 'ok' | 'warn' | 'err' | 'info' | 'muted'
 
@@ -80,6 +81,329 @@ export interface NodeRow {
   bootedAt?: string
 }
 
+/** CPU and memory in use, as metrics-server reports them. */
+export interface Usage {
+  cpuMilli: number
+  memoryBytes: number
+}
+
+/** One pod as the Pods tab lists it. Usage comes apart from the row. */
+export interface PodRow {
+  key: string
+  name: string
+  namespace: string
+  uid: string
+  node: string
+  status: string
+  tone: Tone
+  statusTip?: string
+  phase: string
+  ready: number
+  total: number
+  restarts: number
+  lastRestart?: string
+  lastTermination?: string
+  cpuRequest: number
+  cpuLimit: number
+  memoryRequest: number
+  memoryLimit: number
+  started?: string
+  created: string
+  ownerKind?: string
+  ownerName?: string
+  release?: string
+  qos?: string
+  labels: Record<string, string>
+  done: boolean
+}
+
+/** A pod row with its usage, as the table shows it. */
+export interface PodView extends PodRow {
+  usage: Usage | null
+}
+
+export interface NamespaceRow {
+  name: string
+  status: string
+  created: string
+  group: 'apps' | 'system'
+  counts: Record<string, number>
+  objects: number
+  kinds: number
+  pods: number
+  podsNotRunning: number
+  podsFailing: number
+  releases: string[]
+  labels: Record<string, string>
+}
+
+/** One object of a namespace, in the kind tables of the Namespaces tab. */
+export interface ObjectRow {
+  key: string
+  kind: string
+  kindName: string
+  apiVersion: string
+  name: string
+  namespace: string
+  status: string
+  tone: Tone
+  details: string
+  created: string
+  order: number
+}
+
+export interface ServiceRow {
+  key: string
+  name: string
+  namespace: string
+  uid: string
+  type: string
+  headless: boolean
+  clusterIP: string
+  ports: string[]
+  ready: number
+  total: number
+  selector: boolean
+  externalIPs: string[]
+  pending: boolean
+  pendingWhy?: string
+  nodePorts: number[]
+  hostnames: string[]
+  release?: string
+  created: string
+  status: string
+  tone: Tone
+}
+
+export interface ReleaseRow {
+  key: string
+  name: string
+  namespace: string
+  chart: string
+  chartVersion: string
+  appVersion: string
+  revision: number
+  status: string
+  tone: Tone
+  description: string
+  updated?: string
+  firstDeployed?: string
+  revisions: number
+  pods: number
+  podsReady: number
+  podsFailed: number
+  group: 'apps' | 'addons'
+}
+
+// ---- details ----
+
+export interface Owner {
+  kind: string
+  name: string
+}
+
+export interface Port {
+  name?: string
+  port: number
+  protocol: string
+  hostPort?: number
+}
+
+export interface Quantities {
+  cpu: number
+  memory: number
+  ephemeral: number
+}
+
+export interface Mount {
+  path: string
+  volume: string
+  subPath?: string
+  readOnly: boolean
+}
+
+export interface EnvVar {
+  name: string
+  value?: string
+  /** "Secret", "ConfigMap", "field" or "resource"; Secret values are never sent. */
+  source?: string
+  from?: string
+  key?: string
+  optional?: boolean
+}
+
+export interface EnvFrom {
+  source: string
+  name: string
+  prefix?: string
+  optional?: boolean
+}
+
+export interface ContainerRun {
+  kind: 'running' | 'waiting' | 'terminated'
+  reason?: string
+  message?: string
+  started?: string
+  finished?: string
+  exitCode?: number
+  signal?: number
+}
+
+export interface ContainerDetail {
+  name: string
+  init: boolean
+  sidecar: boolean
+  image: string
+  imageID?: string
+  pullPolicy?: string
+  command?: string[]
+  args?: string[]
+  workingDir?: string
+  ports: Port[]
+  requests: Quantities
+  limits: Quantities
+  securityContext: string[]
+  probes: string[]
+  mounts: Mount[]
+  env: EnvVar[]
+  envFrom: EnvFrom[]
+  state: ContainerRun | null
+  lastState: ContainerRun | null
+  ready: boolean
+  restarts: number
+}
+
+export interface ContainerMount extends Mount {
+  container: string
+}
+
+export interface Claim {
+  name: string
+  phase: string
+  capacity?: string
+  storageClass?: string
+  accessModes: string[]
+  volume?: string
+}
+
+export interface Volume {
+  name: string
+  type: string
+  source: string
+  mounts: ContainerMount[]
+  claim?: Claim
+}
+
+export interface Event {
+  type: string
+  reason: string
+  message: string
+  count: number
+  first?: string
+  last?: string
+  source: string
+}
+
+export interface PodCondition {
+  type: string
+  status: string
+  reason?: string
+  message?: string
+  since?: string
+}
+
+export interface PodDetails extends PodRow {
+  podIP: string
+  hostIP: string
+  priority: number
+  priorityClass?: string
+  serviceAccount: string
+  restartPolicy: string
+  hostNetwork: boolean
+  owners: Owner[]
+  conditions: PodCondition[]
+  nodeSelector: Record<string, string>
+  tolerations: string[]
+  affinity: string[]
+  containers: ContainerDetail[]
+  volumes: Volume[]
+  annotations: Record<string, string>
+  events: Event[]
+  services: string[]
+  message?: string
+  unschedulable?: string
+  usage: Usage | null
+}
+
+export interface ServicePort {
+  name?: string
+  port: number
+  protocol: string
+  targetPort: string
+  nodePort?: number
+}
+
+export interface Endpoint {
+  address: string
+  ready: boolean
+  pod?: string
+  namespace?: string
+  node?: string
+  podStatus?: string
+  tone?: Tone
+}
+
+export interface IngressRef {
+  name: string
+  hosts: string[]
+}
+
+export interface ServiceDetails extends ServiceRow {
+  dnsName: string
+  selectorText: string[]
+  sessionAffinity: string
+  trafficPolicy?: string
+  portDetails: ServicePort[]
+  endpoints: Endpoint[]
+  ingresses: IngressRef[]
+  labels: Record<string, string>
+  annotations: Record<string, string>
+  events: Event[]
+}
+
+export interface Revision {
+  revision: number
+  updated?: string
+  status: string
+  tone: Tone
+  chart: string
+  chartVersion: string
+  appVersion: string
+  description: string
+}
+
+export interface ReleaseResource {
+  kind: string
+  name: string
+  namespace: string
+  status?: string
+  tone?: Tone
+  details?: string
+  watched: boolean
+}
+
+export interface ReleaseDetails extends ReleaseRow {
+  notes: string
+  values: string
+  maskedValues: string[]
+  history: Revision[]
+  resources: ReleaseResource[]
+  podRows: PodRow[]
+  usage?: Record<string, Usage>
+}
+
+// ---- the stream ----
+
 export interface ClusterInfo {
   name: string
   version: string
@@ -95,6 +419,8 @@ export interface ClusterInfo {
   metricsAt?: string
   uptime: 'unknown' | 'available' | 'unavailable'
   uptimeMessage?: string
+  /** "read", or "off" when the chart turned Secret reading off. */
+  secrets: 'read' | 'off'
 }
 
 /** The settings everyone shares, kept on the server. */
@@ -105,28 +431,46 @@ export interface Settings {
   changedAt?: string
 }
 
-export interface Snapshot {
+/** Cluster-wide totals, for the tabs' counts. */
+export type Counts = Record<string, number>
+
+export interface ViewSnapshot<R = unknown> {
   version: number
+  rows: R[]
+  usage?: Record<string, Usage>
+}
+
+export interface Snapshot {
   at: string
   refreshedAt: string | null
   cluster: ClusterInfo | null
   settings: Settings | null
   unscheduled: number
-  rows: NodeRow[]
+  counts?: Counts
+  views: Record<string, ViewSnapshot>
 }
 
-export interface Delta {
+/** A change to one view. Versions increase by one per change of a view. */
+export interface RowsEvent<R = unknown> {
+  view: string
   version: number
+  at: string
+  upserts?: R[]
+  removes?: string[]
+  usage?: Record<string, Usage>
+  usageRemoves?: string[]
+}
+
+export interface MetaEvent {
   at: string
   cluster?: ClusterInfo
   settings?: Settings
-  upserts?: NodeRow[]
-  removes?: string[]
   unscheduled?: number
+  counts?: Counts
 }
 
-/** Sent on every refresh tick, with or without a delta. */
-export interface Refresh {
-  version: number
+/** Sent on every refresh tick, with the versions of the views subscribed. */
+export interface RefreshEvent {
   at: string
+  versions: Record<string, number>
 }

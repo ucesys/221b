@@ -47,6 +47,16 @@ kubeletStats: true
 healthInterval: 10s
 logLevel: info
 
+secrets:
+  # Read Secrets. The Namespaces tab then lists each Secret with its key
+  # names and sizes, and the Helm tab reads release records, which Helm
+  # keeps in Secrets. The server keeps only key names and sizes, and the
+  # decoded release records with credential-like values masked: a Secret's
+  # values never reach a browser, an export or a log. Off, the ClusterRole
+  # grants nothing on Secrets, the Namespaces tab lists no Secrets, the
+  # YAML view refuses them and the Helm tab is hidden.
+  read: true
+
 serviceAccount:
   create: true
   # Defaults to the full name.
@@ -54,10 +64,13 @@ serviceAccount:
   annotations: {}
 
 rbac:
-  # A read-only ClusterRole: get, list and watch on nodes and pods, get and
-  # list on node metrics, and get on nodes/proxy when kubeletStats is on.
-  # A Role to get and patch its own settings ConfigMap. Nothing else, and
-  # no Secrets.
+  # A read-only ClusterRole: get, list and watch on the kinds the tabs show
+  # (nodes, namespaces, pods, workloads, Services and their endpoints,
+  # Ingresses, ConfigMaps, PVCs, events, and the namespace long tail), get
+  # on pod logs, get and list on node and pod metrics, get on nodes/proxy
+  # when kubeletStats is on, and get, list and watch on Secrets only when
+  # secrets.read is on. A Role to get and patch its own settings ConfigMap.
+  # No writes anywhere else.
   create: true
 
 service:
@@ -65,8 +78,9 @@ service:
   # put it on the network: with a load balancer controller (MetalLB,
   # kube-vip, a cloud provider) a LoadBalancer gets an address that answers
   # on the port below; either type also opens a node port on every node.
-  # Phase 1 has no sign-in, so expose it only on a network where everyone
-  # may see the cluster's nodes and the names of its failing pods.
+  # There is no sign-in yet, so expose it only on a network where everyone
+  # may see what the console shows: the cluster's nodes, pods and their
+  # logs, Services, Helm releases and the names of its Secrets' keys.
   type: ClusterIP
   port: 8081
   # NodePort and LoadBalancer: the port opened on every node, 30000 to
@@ -100,9 +114,9 @@ networkPolicy:
   # cluster to cluster and managed clusters change them.
   apiServerCIDRs: []
 
-# The server keeps a watched copy of every node and pod; 1Gi holds 500
-# nodes and 15,000 pods with room to spare. It sizes its garbage collector
-# to 90% of the memory limit.
+# The server keeps a watched copy of every node, pod, workload and Service,
+# trimmed to what the tabs show; 1Gi holds 500 nodes and 15,000 pods with
+# room to spare. It sizes its garbage collector to 90% of the memory limit.
 resources:
   requests:
     cpu: 100m

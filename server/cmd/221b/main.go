@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"runtime/debug"
 	"runtime/metrics"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -60,6 +61,7 @@ func run(args []string) error {
 		Mode:           mode,
 		HealthInterval: cfg.HealthInterval,
 		KubeletStats:   cfg.KubeletStats,
+		SecretsRead:    cfg.SecretsRead,
 		Protobuf:       mode != kube.ModeURL,
 		Logger:         log.With("component", "cluster"),
 	})
@@ -94,6 +96,7 @@ func run(args []string) error {
 
 	handler := api.New(api.Options{
 		Store:        store,
+		Cluster:      cluster,
 		Settings:     shared,
 		Ready:        cluster.Ready,
 		UI:           ui.Handler(),
@@ -110,7 +113,7 @@ func run(args []string) error {
 			if info.Metrics == kube.MetricsAvailable {
 				metricsUp = 1
 			}
-			return []api.Gauge{
+			gauges := []api.Gauge{
 				{Name: "b221_api_server_up", Help: "1 when the Kubernetes API server answered the last health check.", Value: up},
 				{Name: "b221_metrics_available", Help: "1 when metrics-server answered the last read.", Value: metricsUp},
 				{Name: "b221_refresh_seconds", Help: "The refresh interval in force: how often browsers are updated.", Value: store.RefreshInterval().Seconds()},
@@ -121,6 +124,16 @@ func run(args []string) error {
 				{Name: "b221_go_memory_bytes", Help: "Memory the Go runtime has mapped, in bytes.", Value: goMemory()},
 				{Name: "b221_resident_memory_bytes", Help: "Resident memory of the process, in bytes.", Value: residentMemory()},
 			}
+			cached := cluster.CachedObjects()
+			kinds := make([]string, 0, len(cached))
+			for k := range cached {
+				kinds = append(kinds, k)
+			}
+			sort.Strings(kinds)
+			for _, k := range kinds {
+				gauges = append(gauges, api.Gauge{Name: "b221_cached_objects", Help: "Objects in the watch cache, by kind.", Labels: fmt.Sprintf("kind=%q", k), Value: float64(cached[k])})
+			}
+			return gauges
 		},
 	})
 	srv := &http.Server{
@@ -135,7 +148,7 @@ func run(args []string) error {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(mode), "version", version.String())
+		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(mode), "version", version.String(), "secrets_read", cfg.SecretsRead)
 		errCh <- srv.ListenAndServe()
 	}()
 	select {

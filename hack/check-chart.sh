@@ -26,6 +26,8 @@ render console --set clusterName=ci --set service.type=NodePort --set service.no
   --set serviceAccount.name=viewer | validate
 echo "--- without the kubelets' stats"
 render console --set clusterName=ci --set kubeletStats=false | tee "$WORK/chart-nostats.yaml" | validate
+echo "--- without reading Secrets"
+render console --set clusterName=ci --set secrets.read=false | tee "$WORK/chart-nosecrets.yaml" | validate
 echo "--- allowed ingress peers, API server addresses, extra host names and a private registry"
 render console --set clusterName=ci --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.team=platform' \
   --set 'networkPolicy.apiServerCIDRs[0]=10.0.0.10/32' --set 'allowedHosts[0]=console.example.com' \
@@ -64,14 +66,32 @@ probes_and_resources() {
   grep -q 'livenessProbe:' "$out" && grep -q 'readinessProbe:' "$out" && grep -q 'requests:' "$out" && grep -q 'limits:' "$out"
 }
 hardened() { grep -q 'runAsNonRoot: true' "$out" && grep -q 'readOnlyRootFilesystem: true' "$out"; }
-# The ClusterRole reads nodes, pods, node metrics and the kubelets' stats;
-# the Role patches the settings ConfigMap, by name, and nothing else.
-cluster_role() { sed -n '/^kind: ClusterRole$/,/^---/p' "$out"; }
+# The ClusterRole reads the kinds the tabs show, pod logs, metrics and the
+# kubelets' stats, and Secrets only when asked to; the Role patches the
+# settings ConfigMap, by name, and nothing else.
+cluster_role() { sed -n '/^kind: ClusterRole$/,/^---/p' "${1:-$out}"; }
 settings_role() { sed -n '/^kind: Role$/,/^---/p' "$out"; }
-read_only_resources() {
-  [ "$(cluster_role | grep -A2 -E '^  - apiGroups' | grep -E 'resources:' | tr -d ' ' | tr '\n' ' ')" = 'resources:["nodes","pods"] resources:["nodes"] resources:["nodes/proxy"] ' ]
+# Every resource the ClusterRole names, as group/resource, sorted.
+granted() {
+  cluster_role "$1" | python3 -c '
+import sys, yaml
+out = set()
+for rule in next(yaml.safe_load_all(sys.stdin))["rules"]:
+    for g in rule["apiGroups"]:
+        for r in rule["resources"]:
+            out.add(f"{g}/{r}" if g else r)
+print(" ".join(sorted(out)))'
 }
+WANT_READ='apps/controllerrevisions apps/daemonsets apps/deployments apps/replicasets apps/statefulsets autoscaling/horizontalpodautoscalers batch/cronjobs batch/jobs configmaps coordination.k8s.io/leases discovery.k8s.io/endpointslices endpoints events limitranges metrics.k8s.io/nodes metrics.k8s.io/pods namespaces networking.k8s.io/ingresses networking.k8s.io/networkpolicies nodes nodes/proxy persistentvolumeclaims pods pods/log policy/poddisruptionbudgets rbac.authorization.k8s.io/rolebindings rbac.authorization.k8s.io/roles resourcequotas secrets serviceaccounts services'
+read_only_resources() { [ "$(granted "$out")" = "$WANT_READ" ]; }
 read_only_verbs() { ! cluster_role | grep -E 'verbs:' | grep -q -E 'create|update|patch|delete|\*'; }
+# Logs and metrics are read, never listed or watched more than needed.
+log_verbs() { cluster_role | grep -A1 '"pods/log"' | grep -q 'verbs: \["get"\]'; }
+secrets_optional() {
+  cluster_role | grep -A1 '"secrets"' | grep -q 'verbs: \["get", "list", "watch"\]' && grep -A1 'name: SECRETS_READ' "$out" | grep -q '"true"' &&
+    [ "$(granted "$WORK/chart-nosecrets.yaml")" = "${WANT_READ/ secrets/}" ] && ! grep -q '"secrets"' "$WORK/chart-nosecrets.yaml" &&
+    grep -A1 'name: SECRETS_READ' "$WORK/chart-nosecrets.yaml" | grep -q '"false"'
+}
 settings_only() {
   settings_role | grep -q 'resources: \["configmaps"\]' && settings_role | grep -q 'resourceNames: \["console-221b"\]' &&
     [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","patch"] ' ] &&
@@ -99,7 +119,7 @@ exposed_port() { grep -q 'port: 8081' "$out" && grep -q 'port: 8081' "$WORK/char
 # every pod start and the pod rolls on every upgrade; a sha- tag or a
 # digest is fetched once; an explicit policy wins.
 pull_policy() {
-  grep -q 'image: "ghcr.io/ucesys/221b:0.1.0"' "$out" && grep -q 'imagePullPolicy: IfNotPresent' "$out" && ! grep -q 'release-revision' "$out" &&
+  grep -q 'image: "ghcr.io/ucesys/221b:0.2.0"' "$out" && grep -q 'imagePullPolicy: IfNotPresent' "$out" && ! grep -q 'release-revision' "$out" &&
     grep -q 'image: "ghcr.io/ucesys/221b:pr-7"' "$WORK/chart-moving.yaml" && grep -q 'imagePullPolicy: Always' "$WORK/chart-moving.yaml" &&
     grep -q '221b/release-revision: "1"' "$WORK/chart-moving.yaml" &&
     grep -q 'imagePullPolicy: IfNotPresent' "$WORK/chart-sha.yaml" && ! grep -q 'release-revision' "$WORK/chart-sha.yaml" &&
@@ -123,8 +143,10 @@ check "no Ingress" no_ingress
 check "the Service is a ClusterIP" cluster_ip
 check "probes, requests and limits" probes_and_resources
 check "runs as non-root on a read-only root filesystem" hardened
-check "reads nothing but nodes, pods, node metrics and the kubelets' stats" read_only_resources
+check "reads the kinds the tabs show, pod logs, metrics and the kubelets' stats, and nothing else" read_only_resources
 check "the ClusterRole's verbs are read-only" read_only_verbs
+check "pod logs are only read" log_verbs
+check "secrets.read=false grants nothing on Secrets and tells the server" secrets_optional
 check "it writes only its own settings ConfigMap" settings_only
 check "kubeletStats=false grants nothing on the kubelets" no_kubelet_stats
 check "the settings ConfigMap is created empty and named to the server" settings_configmap

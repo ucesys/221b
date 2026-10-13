@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
 type watchEvent struct {
@@ -182,5 +184,34 @@ func TestPlacementRespectsAllocatable(t *testing.T) {
 		if alloc := s.nodes[name].Status.Allocatable.Cpu().MilliValue(); cpu > alloc {
 			t.Fatalf("%s requests %dm of %dm", name, cpu, alloc)
 		}
+	}
+}
+
+func TestChurnBlipsRecover(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	s, _ := newServer(t, Options{Nodes: 4, Pods: 40, Now: func() time.Time { return now }})
+	notReady := func() int {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		n := 0
+		for _, p := range s.pods {
+			if p.Status.Phase == corev1.PodRunning && !podReady(p) {
+				n++
+			}
+		}
+		return n
+	}
+	before := notReady()
+	for i := 0; i < 50; i++ {
+		s.Churn(2)
+	}
+	// However long it churns, only the pods of the last blipFor are not ready.
+	if n := notReady(); n <= before || n > before+100 {
+		t.Fatalf("not ready after churning: %d (was %d)", n, before)
+	}
+	now = now.Add(blipFor + time.Second)
+	s.Churn(0)
+	if n := notReady(); n != before {
+		t.Fatalf("not ready after the blips passed: %d, want %d", n, before)
 	}
 }

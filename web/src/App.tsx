@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useLive } from './api/live'
+import { LiveContext, useLiveMeta, useLiveStore } from './api/live'
 import { Banners } from './components/Banners'
+import { HelmTab } from './components/HelmTab'
+import { NamespacesTab } from './components/NamespacesTab'
 import { NodesTab } from './components/NodesTab'
+import { PodsTab } from './components/PodsTab'
+import { ServicesTab } from './components/ServicesTab'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Toast } from './components/Toast'
 import { TopBar, type Theme } from './components/TopBar'
+import { TABS, useRoute } from './lib/router'
 import { readJSON, writeJSON } from './lib/storage'
 
 const THEME_KEY = '221b.theme'
@@ -30,7 +35,17 @@ function useNow(every = 60_000): number {
 }
 
 export function App() {
-  const live = useLive()
+  const store = useLiveStore()
+  return (
+    <LiveContext.Provider value={store}>
+      <Shell />
+    </LiveContext.Provider>
+  )
+}
+
+function Shell() {
+  const live = useLiveMeta()
+  const route = useRoute()
   const now = useNow()
   const [theme, setTheme] = useState<Theme>(initialTheme)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -43,12 +58,17 @@ export function App() {
     writeJSON(THEME_KEY, t)
   }
 
+  // The Helm tab needs Secrets; with them off it is not offered.
+  const tab = route.tab === 'helm' && live.cluster?.secrets === 'off' ? 'nodes' : route.tab
+  const tabLabel = TABS.find((t) => t.id === tab)?.label ?? 'Nodes'
+
   useEffect(() => {
-    document.title = live.cluster?.name ? `${live.cluster.name} · Nodes · 221B` : '221B'
+    document.title = live.cluster?.name ? `${live.cluster.name} · ${tabLabel} · 221B` : '221B'
     document.documentElement.style.colorScheme = theme
     document.body.style.background = theme === 'dark' ? '#0D1013' : '#F2F3F5'
-  }, [live.cluster?.name, theme])
+  }, [live.cluster?.name, tabLabel, theme])
 
+  const common = { cluster: live.cluster, now, onToast: setToast, route }
   return (
     <div
       className="rk"
@@ -58,21 +78,14 @@ export function App() {
       data-dock="off"
       style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}
     >
-      <TopBar
-        cluster={live.cluster}
-        rows={live.rows}
-        stream={live.stream}
-        updatedAt={live.updatedAt}
-        refreshedAt={live.refreshedAt}
-        settings={live.settings}
-        settingsOpen={settingsOpen}
-        onSettings={() => setSettingsOpen(true)}
-      />
+      <TopBar cluster={live.cluster} counts={live.counts} tab={tab} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} />
       <Banners cluster={live.cluster} stream={live.stream} />
       <div className="rk-main" style={{ display: 'flex', flexWrap: 'wrap', flex: '1 1 auto', alignItems: 'stretch' }}>
-        <main className="rk-pane" style={{ flex: '999 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <NodesTab rows={live.rows} cluster={live.cluster} now={now} onToast={setToast} />
-        </main>
+        {tab === 'nodes' && <NodesTab {...common} />}
+        {tab === 'pods' && <PodsTab {...common} />}
+        {tab === 'namespaces' && <NamespacesTab {...common} />}
+        {tab === 'services' && <ServicesTab {...common} />}
+        {tab === 'helm' && <HelmTab {...common} />}
       </div>
       <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} />
       {toast && <Toast message={toast} onDone={clearToast} />}

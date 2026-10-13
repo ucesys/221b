@@ -2,7 +2,7 @@
 // the kind cluster only, where kubectl can describe the same nodes.
 import { expect, test } from '@playwright/test'
 import { fCores } from '../src/lib/format'
-import { inKind, kubectl, snapshot } from './cluster'
+import { inKind, kubectl, nodeRows, snapshot } from './cluster'
 
 test.skip(!inKind, 'needs kubectl and a real cluster')
 
@@ -28,13 +28,13 @@ function field(text: string, label: string): string {
 test('the table matches kubectl describe node', async ({ page, request }) => {
   await page.goto('/')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
-  const snap = await snapshot(request)
+  const rows = nodeRows(await snapshot(request))
   const names = (await kubectl('get', 'nodes', '-o', 'jsonpath={.items[*].metadata.name}')).trim().split(/\s+/)
-  expect(snap.rows.map((r) => r.name).sort()).toEqual([...names].sort())
+  expect(rows.map((r) => r.name).sort()).toEqual([...names].sort())
 
   for (const name of names) {
     const d = await kubectl('describe', 'node', name)
-    const row = snap.rows.find((r) => r.name === name)!
+    const row = rows.find((r) => r.name === name)!
     const where = `node ${name}`
 
     // Allocated resources: requests and limits, as the scheduler counts them.

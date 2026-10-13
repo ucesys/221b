@@ -1,8 +1,9 @@
 // Package sim is a small fake Kubernetes API server for development, tests
-// and scale checks. It serves nodes, pods and node metrics with the list and
-// watch semantics client-go relies on (resource versions, streaming lists,
-// bookmarks, expiry), and an admin API to change the cluster during a test.
-// It speaks JSON over plain HTTP and needs no credentials.
+// and scale checks. It serves every kind the console watches, with the list
+// and watch semantics client-go relies on (resource versions, streaming
+// lists, bookmarks, expiry, metadata-only lists), node and pod metrics, pod
+// logs, and an admin API to change the cluster during a test. It speaks
+// JSON over plain HTTP and needs no credentials.
 package sim
 
 import (
@@ -17,10 +18,14 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
+
+	"github.com/ucesys/221b/server/internal/kube"
 )
 
 // Options shape the simulated cluster.
@@ -52,32 +57,54 @@ type Sim struct {
 	opts Options
 	mux  *http.ServeMux
 
-	mu         sync.Mutex
-	rv         int64
-	nodes      map[string]*corev1.Node
-	pods       map[string]*corev1.Pod
-	events     []event
-	watchers   map[*watcher]struct{}
-	down       bool
-	refused    int // list and watch requests refused while down
-	metrics    bool
-	usage      map[string][2]int64 // node -> cpu milli, memory bytes
-	boots      map[string]time.Time
-	configmaps map[string]map[string]string // namespace/name -> data
-	rnd        *rand.Rand
+	mu       sync.Mutex
+	rv       int64
+	nodes    map[string]*corev1.Node
+	pods     map[string]*corev1.Pod
+	objects  map[string]map[string]runtime.Object // kind -> key -> every other kind
+	events   []event
+	watchers map[*watcher]struct{}
+	down     bool
+	refused  int // list and watch requests refused while down
+	metrics  bool
+	usage    map[string][2]int64 // node -> cpu milli, memory bytes
+	podUsage map[string][2]int64 // namespace/name -> cpu milli, memory bytes
+	boots    map[string]time.Time
+	blips    map[string]time.Time // pods churn made not ready, and when
+	rnd      *rand.Rand
 }
 
+// event is one change, encoded for watchers of its kind: in full, or as
+// metadata only for watchers that asked for that.
 type event struct {
-	rv   int64
-	kind string // "nodes" or "pods"
-	data []byte // the encoded watch event
+	rv      int64
+	kind    string
+	t       watch.EventType
+	obj     runtime.Object
+	full    []byte
+	partial []byte
+}
+
+func (e *event) data(partial bool) []byte {
+	if partial {
+		if e.partial == nil {
+			e.partial = wrap(e.t, encodePartial(e.obj))
+		}
+		return e.partial
+	}
+	if e.full == nil {
+		b, _ := json.Marshal(e.obj)
+		e.full = wrap(e.t, b)
+	}
+	return e.full
 }
 
 type watcher struct {
-	kind string
-	ch   chan []byte
-	done chan struct{}
-	once sync.Once
+	kind    string
+	partial bool
+	ch      chan []byte
+	done    chan struct{}
+	once    sync.Once
 }
 
 func (w *watcher) close() { w.once.Do(func() { close(w.done) }) }
@@ -99,20 +126,21 @@ func New(o Options) *Sim {
 		o.Now = time.Now
 	}
 	s := &Sim{
-		opts:       o,
-		nodes:      map[string]*corev1.Node{},
-		pods:       map[string]*corev1.Pod{},
-		watchers:   map[*watcher]struct{}{},
-		metrics:    o.Metrics,
-		usage:      map[string][2]int64{},
-		boots:      map[string]time.Time{},
-		configmaps: map[string]map[string]string{},
-		rnd:        rand.New(rand.NewSource(o.Seed + 221)),
-	}
-	if o.SettingsConfigMap != "" {
-		s.configmaps[o.SettingsConfigMap] = map[string]string{}
+		opts:     o,
+		nodes:    map[string]*corev1.Node{},
+		pods:     map[string]*corev1.Pod{},
+		objects:  map[string]map[string]runtime.Object{},
+		watchers: map[*watcher]struct{}{},
+		metrics:  o.Metrics,
+		usage:    map[string][2]int64{},
+		podUsage: map[string][2]int64{},
+		boots:    map[string]time.Time{},
+		rnd:      rand.New(rand.NewSource(o.Seed + 221)),
 	}
 	s.generate()
+	if ns, name, ok := strings.Cut(o.SettingsConfigMap, "/"); ok && ns != "" && name != "" {
+		s.addLocked(&corev1.ConfigMap{TypeMeta: metav1.TypeMeta{Kind: "ConfigMap", APIVersion: "v1"}, ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: uid(ns + "/" + name)}, Data: map[string]string{}})
+	}
 	s.routes()
 	return s
 }
@@ -126,11 +154,20 @@ func (s *Sim) routes() {
 	m.HandleFunc("GET /readyz", s.api(s.ok))
 	m.HandleFunc("GET /livez", s.api(s.ok))
 	m.HandleFunc("GET /healthz", s.api(s.ok))
-	m.HandleFunc("GET /api/v1/nodes", s.api(s.listOrWatch("nodes")))
-	m.HandleFunc("GET /api/v1/pods", s.api(s.listOrWatch("pods")))
+	for _, k := range kube.Kinds {
+		m.HandleFunc("GET "+k.Path(), s.api(s.listOrWatch(k)))
+		if k.Namespaced {
+			m.HandleFunc("GET "+k.Path()+"/{name}", s.api(s.notFound))
+			m.HandleFunc("GET "+namespacedPath(k)+"/{ns}/"+k.Resource, s.api(s.listOrWatch(k)))
+			m.HandleFunc("GET "+namespacedPath(k)+"/{ns}/"+k.Resource+"/{name}", s.api(s.get(k)))
+		} else {
+			m.HandleFunc("GET "+k.Path()+"/{name}", s.api(s.get(k)))
+		}
+	}
 	m.HandleFunc("GET /apis/metrics.k8s.io/v1beta1/nodes", s.api(s.nodeMetrics))
+	m.HandleFunc("GET /apis/metrics.k8s.io/v1beta1/pods", s.api(s.podMetrics))
 	m.HandleFunc("GET /api/v1/nodes/{name}/proxy/stats/summary", s.api(s.kubeletSummary))
-	m.HandleFunc("GET /api/v1/namespaces/{ns}/configmaps/{name}", s.api(s.getConfigMap))
+	m.HandleFunc("GET /api/v1/namespaces/{ns}/pods/{name}/log", s.api(s.podLog))
 	m.HandleFunc("PATCH /api/v1/namespaces/{ns}/configmaps/{name}", s.api(s.patchConfigMap))
 	m.HandleFunc("GET /sim/state", s.state)
 	m.HandleFunc("POST /sim/nodes/{name}/cordon", s.admin(s.cordon))
@@ -141,6 +178,8 @@ func (s *Sim) routes() {
 	m.HandleFunc("DELETE /sim/nodes/{name}", s.admin(s.deleteNode))
 	m.HandleFunc("POST /sim/pods/{ns}/{name}/crash", s.admin(s.crashPod))
 	m.HandleFunc("POST /sim/pods/{ns}/{name}/heal", s.admin(s.healPod))
+	m.HandleFunc("DELETE /sim/pods/{ns}/{name}", s.admin(s.deletePod))
+	m.HandleFunc("POST /sim/services/{ns}/{name}/external-ip", s.admin(s.externalIP))
 	m.HandleFunc("POST /sim/down", s.admin(s.setDown))
 	m.HandleFunc("POST /sim/metrics", s.admin(s.setMetrics))
 	m.HandleFunc("POST /sim/churn", s.admin(s.churnOnce))
@@ -200,30 +239,46 @@ func (s *Sim) version(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// ---------- list and watch ----------
+// ---------- list, get and watch ----------
 
-func (s *Sim) listOrWatch(kind string) http.HandlerFunc {
+// namespacedPath is the prefix of a namespaced kind's paths, before
+// /{namespace}/{resource}.
+func namespacedPath(k kube.Kind) string {
+	if k.Group == "" {
+		return "/api/" + k.Version + "/namespaces"
+	}
+	return "/apis/" + k.Group + "/" + k.Version + "/namespaces"
+}
+
+// wantsPartial reports whether the client asked for metadata only, as the
+// metadata client does.
+func wantsPartial(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept"), "as=PartialObjectMetadata")
+}
+
+func (s *Sim) listOrWatch(k kube.Kind) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if q.Get("watch") == "true" || q.Get("watch") == "1" {
-			s.watch(kind, w, r)
+			s.watch(k, w, r)
 			return
 		}
-		s.list(kind, w)
+		s.list(k, w, r)
 	}
 }
 
-func (s *Sim) list(kind string, w http.ResponseWriter) {
+func (s *Sim) list(k kube.Kind, w http.ResponseWriter, r *http.Request) {
+	partial := wantsPartial(r)
 	s.mu.Lock()
-	items := s.itemsLocked(kind)
+	items := s.itemsLocked(k.Name, r.PathValue("ns"), partial)
 	rv := s.rv
 	s.mu.Unlock()
-	listKind := "NodeList"
-	if kind == "pods" {
-		listKind = "PodList"
+	listKind, apiVersion := k.Kind+"List", k.APIVersion()
+	if partial {
+		listKind, apiVersion = "PartialObjectMetadataList", "meta.k8s.io/v1"
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, `{"kind":%q,"apiVersion":"v1","metadata":{"resourceVersion":"%d"},"items":[`, listKind, rv)
+	fmt.Fprintf(&b, `{"kind":%q,"apiVersion":%q,"metadata":{"resourceVersion":"%d"},"items":[`, listKind, apiVersion, rv)
 	for i, it := range items {
 		if i > 0 {
 			b.WriteByte(',')
@@ -235,33 +290,109 @@ func (s *Sim) list(kind string, w http.ResponseWriter) {
 	w.Write([]byte(b.String()))
 }
 
-// itemsLocked encodes the current objects of a kind, sorted by key.
-func (s *Sim) itemsLocked(kind string) [][]byte {
+// get serves one object.
+func (s *Sim) get(k kube.Kind) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		key := r.PathValue("name")
+		if k.Namespaced {
+			key = r.PathValue("ns") + "/" + key
+		}
+		s.mu.Lock()
+		obj := s.objectLocked(k.Name, key)
+		s.mu.Unlock()
+		if obj == nil {
+			status(w, http.StatusNotFound, "NotFound", fmt.Sprintf("%s %q not found", k.Resource, r.PathValue("name")))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if wantsPartial(r) {
+			w.Write(encodePartial(obj))
+			return
+		}
+		b, _ := json.Marshal(obj)
+		w.Write(b)
+	}
+}
+
+// objectLocked finds one object of a kind by its cache key.
+func (s *Sim) objectLocked(kind, key string) runtime.Object {
+	switch kind {
+	case "nodes":
+		if n, ok := s.nodes[key]; ok {
+			return n
+		}
+	case "pods":
+		if p, ok := s.pods[key]; ok {
+			return p
+		}
+	default:
+		if o, ok := s.objects[kind][key]; ok {
+			return o
+		}
+	}
+	return nil
+}
+
+// keysLocked lists the cache keys of a kind, sorted.
+func (s *Sim) keysLocked(kind string) []string {
 	var keys []string
-	if kind == "nodes" {
+	switch kind {
+	case "nodes":
 		for k := range s.nodes {
 			keys = append(keys, k)
 		}
-	} else {
+	case "pods":
 		for k := range s.pods {
+			keys = append(keys, k)
+		}
+	default:
+		for k := range s.objects[kind] {
 			keys = append(keys, k)
 		}
 	}
 	sort.Strings(keys)
+	return keys
+}
+
+// itemsLocked encodes the current objects of a kind, sorted by key, in one
+// namespace or all.
+func (s *Sim) itemsLocked(kind, namespace string, partial bool) [][]byte {
+	keys := s.keysLocked(kind)
 	out := make([][]byte, 0, len(keys))
 	for _, k := range keys {
-		var b []byte
-		if kind == "nodes" {
-			b, _ = json.Marshal(s.nodes[k])
-		} else {
-			b, _ = json.Marshal(s.pods[k])
+		if namespace != "" && !strings.HasPrefix(k, namespace+"/") {
+			continue
 		}
+		obj := s.objectLocked(kind, k)
+		if partial {
+			out = append(out, encodePartial(obj))
+			continue
+		}
+		b, _ := json.Marshal(obj)
 		out = append(out, b)
 	}
 	return out
 }
 
-func (s *Sim) watch(kind string, w http.ResponseWriter, r *http.Request) {
+// encodePartial encodes an object as the metadata-only form the API server
+// serves to clients that ask for it.
+func encodePartial(obj runtime.Object) []byte {
+	m, err := meta.Accessor(obj)
+	if err != nil {
+		return []byte("{}")
+	}
+	p := metav1.PartialObjectMetadata{TypeMeta: metav1.TypeMeta{Kind: "PartialObjectMetadata", APIVersion: "meta.k8s.io/v1"}}
+	p.ObjectMeta = metav1.ObjectMeta{
+		Name: m.GetName(), Namespace: m.GetNamespace(), UID: m.GetUID(), ResourceVersion: m.GetResourceVersion(),
+		CreationTimestamp: m.GetCreationTimestamp(), DeletionTimestamp: m.GetDeletionTimestamp(),
+		Labels: m.GetLabels(), Annotations: m.GetAnnotations(), OwnerReferences: m.GetOwnerReferences(), Generation: m.GetGeneration(),
+	}
+	b, _ := json.Marshal(p)
+	return b
+}
+
+func (s *Sim) watch(k kube.Kind, w http.ResponseWriter, r *http.Request) {
+	kind := k.Name
 	q := r.URL.Query()
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -275,8 +406,9 @@ func (s *Sim) watch(kind string, w http.ResponseWriter, r *http.Request) {
 	initial := q.Get("sendInitialEvents") == "true"
 	bookmarks := q.Get("allowWatchBookmarks") == "true"
 	rvParam := q.Get("resourceVersion")
+	partial := wantsPartial(r)
 
-	wt := &watcher{kind: kind, ch: make(chan []byte, 4096), done: make(chan struct{})}
+	wt := &watcher{kind: kind, partial: partial, ch: make(chan []byte, 4096), done: make(chan struct{})}
 	var backlog [][]byte
 	s.mu.Lock()
 	current := s.rv
@@ -284,11 +416,11 @@ func (s *Sim) watch(kind string, w http.ResponseWriter, r *http.Request) {
 	case initial || rvParam == "" || rvParam == "0":
 		// Send the current state as ADDED events, as the API server does for
 		// a watch without a resource version and for streaming lists.
-		for _, it := range s.itemsLocked(kind) {
+		for _, it := range s.itemsLocked(kind, r.PathValue("ns"), partial) {
 			backlog = append(backlog, wrap(watch.Added, it))
 		}
 		if initial {
-			backlog = append(backlog, bookmark(kind, current, true))
+			backlog = append(backlog, bookmark(k, current, true, partial))
 		}
 	default:
 		from, err := strconv.ParseInt(rvParam, 10, 64)
@@ -305,9 +437,9 @@ func (s *Sim) watch(kind string, w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("\n"))
 			return
 		}
-		for _, e := range s.events {
-			if e.rv > from && e.kind == kind {
-				backlog = append(backlog, e.data)
+		for i := range s.events {
+			if e := &s.events[i]; e.rv > from && e.kind == kind {
+				backlog = append(backlog, e.data(partial))
 			}
 		}
 	}
@@ -361,7 +493,7 @@ func (s *Sim) watch(kind string, w http.ResponseWriter, r *http.Request) {
 				s.mu.Lock()
 				rv := s.rv
 				s.mu.Unlock()
-				if _, err := w.Write(append(bookmark(kind, rv, false), '\n')); err != nil {
+				if _, err := w.Write(append(bookmark(k, rv, false, partial), '\n')); err != nil {
 					return
 				}
 				flusher.Flush()
@@ -371,9 +503,10 @@ func (s *Sim) watch(kind string, w http.ResponseWriter, r *http.Request) {
 }
 
 // publishLocked records a change and sends it to the watchers of its kind.
-func (s *Sim) publishLocked(kind string, t watch.EventType, obj any) {
-	data, _ := json.Marshal(obj)
-	ev := event{rv: s.rv, kind: kind, data: wrap(t, data)}
+// obj must not change afterwards.
+func (s *Sim) publishLocked(kind string, t watch.EventType, obj runtime.Object) {
+	ev := event{rv: s.rv, kind: kind, t: t, obj: obj}
+	ev.data(false)
 	s.events = append(s.events, ev)
 	if len(s.events) > maxEvents {
 		s.events = append([]event(nil), s.events[len(s.events)-maxEvents/2:]...)
@@ -383,7 +516,7 @@ func (s *Sim) publishLocked(kind string, t watch.EventType, obj any) {
 			continue
 		}
 		select {
-		case wt.ch <- ev.data:
+		case wt.ch <- ev.data(wt.partial):
 		default:
 			// A watcher that cannot keep up is closed; client-go resumes it.
 			wt.close()
@@ -391,20 +524,51 @@ func (s *Sim) publishLocked(kind string, t watch.EventType, obj any) {
 	}
 }
 
+// addLocked stores a new object of any kind but nodes and pods, with a
+// fresh resource version, and tells the watchers.
+func (s *Sim) addLocked(obj runtime.Object) {
+	s.storeLocked(obj, watch.Added)
+}
+
+// storeLocked stores an object of any kind but nodes and pods and tells the
+// watchers.
+func (s *Sim) storeLocked(obj runtime.Object, t watch.EventType) {
+	k, ok := kube.KindOf(obj.GetObjectKind().GroupVersionKind().Kind)
+	if !ok {
+		panic("sim: no kind for " + obj.GetObjectKind().GroupVersionKind().String())
+	}
+	m, _ := meta.Accessor(obj)
+	s.rv++
+	m.SetResourceVersion(strconv.FormatInt(s.rv, 10))
+	key := m.GetName()
+	if k.Namespaced {
+		key = m.GetNamespace() + "/" + key
+	}
+	if s.objects[k.Name] == nil {
+		s.objects[k.Name] = map[string]runtime.Object{}
+	}
+	if t == watch.Deleted {
+		delete(s.objects[k.Name], key)
+	} else {
+		s.objects[k.Name][key] = obj
+	}
+	s.publishLocked(k.Name, t, obj)
+}
+
 func wrap(t watch.EventType, obj []byte) []byte {
 	return []byte(`{"type":"` + string(t) + `","object":` + string(obj) + `}`)
 }
 
-func bookmark(kind string, rv int64, initialEnd bool) []byte {
-	k := "Node"
-	if kind == "pods" {
-		k = "Pod"
+func bookmark(k kube.Kind, rv int64, initialEnd, partial bool) []byte {
+	kind, apiVersion := k.Kind, k.APIVersion()
+	if partial {
+		kind, apiVersion = "PartialObjectMetadata", "meta.k8s.io/v1"
 	}
 	meta := fmt.Sprintf(`{"resourceVersion":"%d"}`, rv)
 	if initialEnd {
 		meta = fmt.Sprintf(`{"resourceVersion":"%d","annotations":{"k8s.io/initial-events-end":"true"}}`, rv)
 	}
-	return []byte(fmt.Sprintf(`{"type":"BOOKMARK","object":{"kind":%q,"apiVersion":"v1","metadata":%s}}`, k, meta))
+	return []byte(fmt.Sprintf(`{"type":"BOOKMARK","object":{"kind":%q,"apiVersion":%q,"metadata":%s}}`, kind, apiVersion, meta))
 }
 
 func expired(from, oldest int64) []byte {
@@ -521,26 +685,6 @@ func (s *Sim) reboot(r *http.Request) error {
 
 // ---------- ConfigMaps, for the console's settings ----------
 
-func (s *Sim) getConfigMap(w http.ResponseWriter, r *http.Request) {
-	key := r.PathValue("ns") + "/" + r.PathValue("name")
-	s.mu.Lock()
-	data, ok := s.configmaps[key]
-	cp := map[string]string{}
-	for k, v := range data {
-		cp[k] = v
-	}
-	s.mu.Unlock()
-	if !ok {
-		status(w, http.StatusNotFound, "NotFound", fmt.Sprintf("configmaps %q not found", r.PathValue("name")))
-		return
-	}
-	writeJSON(w, map[string]any{
-		"kind": "ConfigMap", "apiVersion": "v1",
-		"metadata": map[string]any{"name": r.PathValue("name"), "namespace": r.PathValue("ns")},
-		"data":     cp,
-	})
-}
-
 // patchConfigMap applies a JSON merge patch to the data, as the console
 // sends one.
 func (s *Sim) patchConfigMap(w http.ResponseWriter, r *http.Request) {
@@ -557,22 +701,30 @@ func (s *Sim) patchConfigMap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	data, ok := s.configmaps[key]
+	cm, ok := s.objects["configmaps"][key].(*corev1.ConfigMap)
+	var out []byte
 	if ok {
+		cp := cm.DeepCopy()
+		if cp.Data == nil {
+			cp.Data = map[string]string{}
+		}
 		for k, v := range patch.Data {
 			if v == nil {
-				delete(data, k)
+				delete(cp.Data, k)
 			} else {
-				data[k] = *v
+				cp.Data[k] = *v
 			}
 		}
+		s.storeLocked(cp, watch.Modified)
+		out, _ = json.Marshal(cp)
 	}
 	s.mu.Unlock()
 	if !ok {
 		status(w, http.StatusNotFound, "NotFound", fmt.Sprintf("configmaps %q not found", r.PathValue("name")))
 		return
 	}
-	s.getConfigMap(w, r)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(out)
 }
 
 // ---------- admin API ----------
@@ -580,7 +732,11 @@ func (s *Sim) patchConfigMap(w http.ResponseWriter, r *http.Request) {
 func (s *Sim) state(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	writeJSON(w, map[string]any{"nodes": len(s.nodes), "pods": len(s.pods), "resourceVersion": s.rv, "down": s.down, "refused": s.refused, "metrics": s.metrics, "watchers": len(s.watchers)})
+	objects := map[string]int{}
+	for kind, m := range s.objects {
+		objects[kind] = len(m)
+	}
+	writeJSON(w, map[string]any{"nodes": len(s.nodes), "pods": len(s.pods), "objects": objects, "resourceVersion": s.rv, "down": s.down, "refused": s.refused, "metrics": s.metrics, "watchers": len(s.watchers)})
 }
 
 func (s *Sim) cordon(r *http.Request) error {
@@ -658,6 +814,41 @@ func (s *Sim) healPod(r *http.Request) error {
 	return s.updatePod(r.PathValue("ns"), r.PathValue("name"), func(p *corev1.Pod) { runReady(p, s.opts.Now()) })
 }
 
+func (s *Sim) deletePod(r *http.Request) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := r.PathValue("ns") + "/" + r.PathValue("name")
+	p, ok := s.pods[key]
+	if !ok {
+		return fmt.Errorf("no pod %s", key)
+	}
+	delete(s.pods, key)
+	delete(s.podUsage, key)
+	s.rv++
+	p.ResourceVersion = strconv.FormatInt(s.rv, 10)
+	s.publishLocked("pods", watch.Deleted, p)
+	return nil
+}
+
+// externalIP gives a LoadBalancer Service an external IP (?ip=), or takes
+// it away (?ip= empty), as a cloud controller would.
+func (s *Sim) externalIP(r *http.Request) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := r.PathValue("ns") + "/" + r.PathValue("name")
+	svc, ok := s.objects["services"][key].(*corev1.Service)
+	if !ok {
+		return fmt.Errorf("no service %s", key)
+	}
+	cp := svc.DeepCopy()
+	cp.Status.LoadBalancer.Ingress = nil
+	if ip := r.URL.Query().Get("ip"); ip != "" {
+		cp.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: ip}}
+	}
+	s.storeLocked(cp, watch.Modified)
+	return nil
+}
+
 func (s *Sim) setDown(r *http.Request) error {
 	on := r.URL.Query().Get("on") != "false"
 	s.mu.Lock()
@@ -687,11 +878,35 @@ func (s *Sim) churnOnce(r *http.Request) error {
 	return nil
 }
 
-// Churn changes the usage of every node and flips n random pods between
-// ready and not ready, the way a busy cluster moves.
+// blipFor is how long a pod churn made not ready stays that way.
+const blipFor = 20 * time.Second
+
+// Churn changes the usage of every node and makes n random pods not ready
+// for a short while, the way a busy cluster moves: readiness blips come and
+// go, so the share of pods not ready stays small however long it runs.
 func (s *Sim) Churn(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.opts.Now()
+	if s.blips == nil {
+		s.blips = map[string]time.Time{}
+	}
+	for key, at := range s.blips {
+		p := s.pods[key]
+		if p == nil {
+			delete(s.blips, key)
+			continue
+		}
+		if now.Sub(at) < blipFor {
+			continue
+		}
+		delete(s.blips, key)
+		if p.Status.Phase == corev1.PodRunning && !podReady(p) {
+			cp := p.DeepCopy()
+			setPodReady(cp, true, now) // the container kept running; only readiness returns
+			s.putPodLocked(cp, watch.Modified)
+		}
+	}
 	for name, u := range s.usage {
 		node := s.nodes[name]
 		if node == nil {
@@ -700,6 +915,17 @@ func (s *Sim) Churn(n int) {
 		u[0] = clampInt(u[0]+int64(s.rnd.Intn(401)-200), 0, node.Status.Allocatable.Cpu().MilliValue())
 		u[1] = clampInt(u[1]+int64(s.rnd.Intn(257)-128)*1024*1024, 0, node.Status.Allocatable.Memory().Value())
 		s.usage[name] = u
+	}
+	for key, u := range s.podUsage {
+		p := s.pods[key]
+		if p == nil {
+			delete(s.podUsage, key)
+			continue
+		}
+		req := p.Spec.Containers[0].Resources.Requests
+		u[0] = clampInt(u[0]+int64(s.rnd.Intn(21)-10), 1, max(2, req.Cpu().MilliValue()*2))
+		u[1] = clampInt(u[1]+int64(s.rnd.Intn(9)-4)*1024*1024, 4*1024*1024, max(8*1024*1024, req.Memory().Value()*2))
+		s.podUsage[key] = u
 	}
 	if len(s.pods) == 0 {
 		return
@@ -710,17 +936,15 @@ func (s *Sim) Churn(n int) {
 	}
 	sort.Strings(keys)
 	for i := 0; i < n; i++ {
-		p := s.pods[keys[s.rnd.Intn(len(keys))]]
-		if p.Spec.NodeName == "" || p.Status.Phase != corev1.PodRunning {
+		key := keys[s.rnd.Intn(len(keys))]
+		p := s.pods[key]
+		if p.Spec.NodeName == "" || p.Status.Phase != corev1.PodRunning || !podReady(p) {
 			continue
 		}
 		cp := p.DeepCopy()
-		if podReady(cp) {
-			setPodReady(cp, false, s.opts.Now())
-		} else {
-			runReady(cp, s.opts.Now())
-		}
+		setPodReady(cp, false, now)
 		s.putPodLocked(cp, watch.Modified)
+		s.blips[key] = now
 	}
 }
 
@@ -903,6 +1127,18 @@ func (s *Sim) generate() {
 	for _, name := range all {
 		s.rv++
 		s.nodes[name].ResourceVersion = strconv.FormatInt(s.rv, 10)
+	}
+	s.generateObjects(now)
+
+	// Pod usage: a share of the request, varied per pod. After the objects,
+	// which rename the StatefulSet pods.
+	for key, p := range s.pods {
+		if p.Spec.NodeName == "" || p.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		req := p.Spec.Containers[0].Resources.Requests
+		f := 0.2 + s.rnd.Float64()*0.9
+		s.podUsage[key] = [2]int64{max(1, int64(float64(req.Cpu().MilliValue())*f)), max(4*1024*1024, int64(float64(req.Memory().Value())*f))}
 	}
 	keys := make([]string, 0, len(s.pods))
 	for k := range s.pods {

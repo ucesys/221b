@@ -15,8 +15,8 @@ import (
 
 // Usage is what metrics-server reports a node is using.
 type Usage struct {
-	CPUMilli    int64
-	MemoryBytes int64
+	CPUMilli    int64 `json:"cpuMilli"`
+	MemoryBytes int64 `json:"memoryBytes"`
 }
 
 // Row is one node as the Nodes tab shows it.
