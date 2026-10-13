@@ -62,7 +62,7 @@ sequenceDiagram
 5. **Requests and limits** follow the scheduler's rules (`k8s.io/component-helpers/resource`): the larger of the init containers and the app containers, sidecar init containers added to both, plus pod overhead. Terminated pods do not count, as in `kubectl describe node`.
 6. **Deltas.** Each delta has a version one higher than the last. A browser that misses one (its version jumps) reopens the stream and gets a fresh snapshot. A browser that falls 64 deltas behind is sent a snapshot instead of the backlog, so one slow tab cannot hold memory on the server.
 7. **The event stream.** `GET /api/v1/events` starts with a `snapshot` event, then sends `delta` events as they happen, a comment every 15 seconds so proxies keep it open, and `retry: 3000` so a browser reconnects by itself. It is gzip-compressed when the browser accepts it; the snapshot of 500 nodes is about 850 KB of JSON and 75 KB compressed.
-8. **The browser** keeps the rows in memory, sorts and filters them on the client, and renders them with React. Rows off screen skip layout and paint (`content-visibility: auto`), so re-sorting 500 rows only lays out what is in view.
+8. **The browser** keeps the rows in memory, sorts and filters them on the client, and renders them with React. The first screenful of rows renders at once and the rest over the next few frames, and rows off screen skip layout and paint (`content-visibility: auto`), so re-sorting 500 rows only lays out what is in view.
 
 **Connection status.** The server asks the API server for `/version` every 10 seconds with a 5-second timeout. One failure turns the status red with the cause in plain words ("The connection was refused.", "It did not answer within 5 seconds."), within about 15 seconds of the API server going away (P1-11). While it is away, the informers wait for it, checking every second, instead of retrying with client-go's backoff, which grows to 30 to 60 seconds between attempts. So they resume or relist within a second or two of its return, well inside P1-10's 30 seconds, and the status turns green at the next check. The last known rows stay on screen throughout, marked as such.
 
@@ -114,12 +114,12 @@ The image is published to `ghcr.io/ucesys/221b` for `linux/amd64` and `linux/arm
 - **Probes.** Liveness on `/healthz`, readiness on `/readyz` (see above).
 - **Logs.** Structured JSON on standard error, one line per event; client-go's own logging goes to the same log.
 - **Metrics.** `/metrics`, listed above. `b221_change_delay_seconds` measures X-07's freshness from the server's side; `b221_api_server_up` and `b221_metrics_available` show the connection.
-- **Resources.** Requests 100m CPU and 256 MiB; limits 1 CPU and 1 GiB. At 500 nodes and 15,000 pods the server uses about 170 MiB.
+- **Resources.** Requests 100m CPU and 256 MiB; limits 1 CPU and 1 GiB. At 500 nodes and 15,000 pods the server uses about 200 MiB.
 - **Shutdown.** On SIGTERM the server stops accepting connections, ends the event streams and exits within 10 seconds.
 
 ## Scale
 
-Phase 1's target is 500 nodes and 15,000 pods (P1-18). Measured with the simulator on a 2-core machine: the first screen in about 1 second, a sort in about 70 ms, and 170 MiB of server memory. CI repeats the measurement on every pull request with kwok in kind, and fails if the first screen takes 2 seconds, a sort 200 ms, or the server 1 GiB.
+Phase 1's target is 500 nodes and 15,000 pods (P1-18). CI measures it on every pull request with kwok in kind, on a 2-core runner that is also running the cluster: the first screen shows in under 200 ms, all 501 rows in about 400 ms, a sort takes 80 to 150 ms (median), and the server uses about 200 MiB. The job fails if the first screen takes 2 seconds, a sort 200 ms, or the server 1 GiB.
 
 Phase 7's 5,000 nodes will need two changes the design allows for: virtualizing the table (rendering only the rows in view) and sending each browser only the rows its screen shows.
 
@@ -156,7 +156,7 @@ Records 1 to 9 cover the Architecture table in the requirements; 10 to 15 were m
 - **Status:** Accepted.
 - **Context:** Two images would mean two things to version, scan and keep in step.
 - **Decision:** The browser app is built first and embedded in the binary with `go:embed`; the image holds only that binary.
-- **Consequences:** One version, one scan, one thing to deploy (P1-05). The image is about 31 MB. The app and the API always come from the same build, so their data shapes cannot drift apart in production.
+- **Consequences:** One version, one scan, one thing to deploy (P1-05). The image is about 32 MB. The app and the API always come from the same build, so their data shapes cannot drift apart in production.
 
 ### ADR-4: A Helm chart for deployment
 
@@ -216,9 +216,9 @@ Records 1 to 9 cover the Architecture table in the requirements; 10 to 15 were m
 ### ADR-12: No table virtualization in Phase 1
 
 - **Status:** Accepted for Phase 1; revisit in Phase 7.
-- **Context:** The Architecture table counts on virtualization for large tables. At 500 rows, the measured cost of rendering every row is small once off-screen rows skip layout and paint.
-- **Decision:** Render every row, with `content-visibility: auto` on rows.
-- **Consequences:** Browser find, screen readers and keyboard navigation see the whole table, and tests can count rows. A sort of 500 rows takes about 70 ms. Phase 7's 5,000 nodes will need virtualization.
+- **Context:** The Architecture table counts on virtualization for large tables. At 500 rows, the measured cost of rendering every row is small once off-screen rows skip layout and paint, and the first screenful renders before the rest.
+- **Decision:** Render every row, the first 60 at once and the rest over the next frames, with `content-visibility: auto` on rows.
+- **Consequences:** Browser find, screen readers and keyboard navigation see the whole table, and tests can count rows. A sort of 500 rows takes under 150 ms on a busy CI runner. Phase 7's 5,000 nodes will need virtualization.
 
 ### ADR-13: Excel export written in the browser, without a library
 
