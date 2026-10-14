@@ -1,7 +1,7 @@
 // Navigation as designed (P2-01): Nodes, Namespaces, Pods and Helm in the
 // bar, Services under More, and the More menu takes tabs as the window
 // narrows; the open tab always shows.
-import { expect, test } from '@playwright/test'
+import { expect, test } from './test'
 
 const TABS = ['Nodes', 'Namespaces', 'Pods', 'Helm']
 

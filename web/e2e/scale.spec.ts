@@ -1,6 +1,6 @@
 // P1-18: 500 nodes and 15,000 pods. Runs only with E2E_SCALE set to the
 // number of nodes expected, against the simulator or kind with kwok.
-import { expect, test } from '@playwright/test'
+import { expect, test } from './test'
 
 const nodes = Number(process.env.E2E_SCALE ?? 0)
 

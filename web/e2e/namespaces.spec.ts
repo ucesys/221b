@@ -1,5 +1,6 @@
 // The Namespaces tab, as P2-02 and P2-08 describe it.
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, test } from './test'
 import type { NamespaceRow, ObjectRow } from '../src/api/types'
 import { cluster, countKind, inKind, PLANTED, snapshot } from './cluster'
 

@@ -193,13 +193,15 @@ endstep
 step "helm uninstall leaves nothing behind"
 kubectl -n "$NS" delete pod -l e2e=crashloop --ignore-not-found
 # Foreground deletion: the Deployment goes only once its pods have gone.
-helm uninstall "$RELEASE" -n "$NS" --cascade foreground --wait --timeout 120s
+# Helm 4's wait sometimes gives up on a Deployment still Terminating right
+# after a rollout; what matters is checked below: nothing may remain.
+helm uninstall "$RELEASE" -n "$NS" --cascade foreground --wait --timeout 120s || echo "helm uninstall --wait reported an error; checking what is left"
 leftovers() {
   kubectl -n "$NS" get all,serviceaccount,configmap,secret,networkpolicy,role,rolebinding,ingress -o name |
     grep -v -E '^(serviceaccount/default|configmap/kube-root-ca.crt)$' || true
   kubectl get clusterrole,clusterrolebinding -o name -l "app.kubernetes.io/instance=$RELEASE"
 }
-for _ in $(seq 30); do
+for _ in $(seq 60); do
   left=$(leftovers)
   [ -z "$left" ] && break
   sleep 2

@@ -1,6 +1,7 @@
 // The Pods tab and the pod details, as P2-03, P2-04 and P2-09 describe them.
 import { readFileSync } from 'node:fs'
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, test } from './test'
 import type { PodRow } from '../src/api/types'
 import { cluster, consoleNode, healthyWorkers, inKind, kubectlYAML, podCrashing, podRows, snapshot, stableYAML } from './cluster'
 

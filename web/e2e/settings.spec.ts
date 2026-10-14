@@ -1,6 +1,7 @@
 // The Settings dialog: the theme, kept in the browser, and the refresh rate,
 // kept on the server and applied to every open console at the same moment.
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, test } from './test'
 import type { Settings } from '../src/api/types'
 import { inKind, kubectl, sleep } from './cluster'
 

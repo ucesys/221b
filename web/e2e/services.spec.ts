@@ -1,5 +1,6 @@
 // The Services tab, as P2-05 describes it.
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, test } from './test'
 import { nWord } from '../src/lib/format'
 import { cluster, serviceRows, snapshot } from './cluster'
 

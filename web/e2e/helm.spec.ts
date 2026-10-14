@@ -1,5 +1,6 @@
 // The Helm tab, as P2-06 and P2-07 describe it.
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, test } from './test'
 import type { ReleaseDetails } from '../src/api/types'
 import { cluster, inKind, PLANTED_HELM, releaseRows, snapshot } from './cluster'
 

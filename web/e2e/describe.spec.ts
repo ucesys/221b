@@ -1,6 +1,6 @@
 // P1-13: every value in the table matches `kubectl describe node`. Runs on
 // the kind cluster only, where kubectl can describe the same nodes.
-import { expect, test } from '@playwright/test'
+import { expect, test } from './test'
 import { fCores } from '../src/lib/format'
 import { inKind, kubectl, nodeRows, snapshot } from './cluster'
 

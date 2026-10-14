@@ -1,7 +1,7 @@
 // P2-07 and X-01: a Secret value planted in the cluster appears in no
 // response, no export and no log line of the console.
 import { readFileSync } from 'node:fs'
-import { expect, test } from '@playwright/test'
+import { expect, test } from './test'
 import type { NamespaceRow, PodRow } from '../src/api/types'
 import { cluster, inKind, PLANTED, PLANTED_HELM, snapshot } from './cluster'
 

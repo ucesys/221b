@@ -207,6 +207,12 @@ export class LiveStore {
 
   private connect() {
     if (!this.open) return
+    // A stream opened while the page is still loading keeps some browsers
+    // (Firefox) from ever firing the load event; wait for it first.
+    if (typeof document !== 'undefined' && document.readyState !== 'complete') {
+      window.addEventListener('load', () => this.connect(), { once: true })
+      return
+    }
     this.views = this.wantedViews()
     const url = this.views.length ? `${this.url}?views=${encodeURIComponent(this.views.join(','))}` : this.url
     const es = new EventSource(url)

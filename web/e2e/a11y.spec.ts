@@ -1,7 +1,8 @@
 // X-12: WCAG 2.2 AA, checked with axe in both themes, with the details
 // panel, the Columns menu and the Settings dialog open as well as closed.
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, test } from './test'
 
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 

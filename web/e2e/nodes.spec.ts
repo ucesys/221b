@@ -1,6 +1,7 @@
 // The Nodes tab, as P1-13 to P1-17 describe it.
 import { readFileSync } from 'node:fs'
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, test } from './test'
 import { NODE_COLUMNS, nodeTerms } from '../src/columns/nodes'
 import { compareNatural, fCores, fMem, pct } from '../src/lib/format'
 import { free } from '../src/lib/nodes'
