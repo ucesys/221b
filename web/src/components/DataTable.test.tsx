@@ -75,4 +75,20 @@ describe('the grid', () => {
     fireEvent.keyDown(link, { key: 'ArrowLeft' })
     expect(document.activeElement).toBe(row('b'))
   })
+
+  it('renders the first rows of a long table at once, also when it grows past the window threshold', () => {
+    // jsdom has no layout: the window is measured as zeros, which is the case before layout in a browser.
+    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} })
+    const many = (n: number): R[] => Array.from({ length: n }, (_, i) => ({ name: `r${String(i).padStart(3, '0')}`, ns: 'web' }))
+    const props = { label: 'Things', cols, rowKey: (r: R) => r.name, rowLabel: (r: R) => r.name, sort: { col: 'name', dir: 'asc' as const }, onSort: () => {}, now: 0, empty: 'None', rowAttr: 'thing' }
+    const r = render(<DataTable<R> {...props} rows={many(150)} />)
+    expect(r.container.querySelector('.rk-grid')!.getAttribute('data-total')).toBe('150')
+    expect(r.container.querySelectorAll('[data-thing]').length).toBeGreaterThanOrEqual(40)
+    // A table that starts short and then grows (Show all) is never blank.
+    const g = render(<DataTable<R> {...props} rows={many(8)} />)
+    expect(g.container.querySelectorAll('[data-thing]')).toHaveLength(8)
+    g.rerender(<DataTable<R> {...props} rows={many(150)} />)
+    expect(g.container.querySelector('.rk-grid')!.getAttribute('data-total')).toBe('150')
+    expect(g.container.querySelectorAll('[data-thing]').length).toBeGreaterThanOrEqual(40)
+  })
 })

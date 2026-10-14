@@ -68,6 +68,9 @@ function useWindow(count: number, rowHeight: number, container: React.RefObject<
       const last = Math.min(count, Math.max(first + MIN_WINDOW, Math.ceil((viewHeight - top) / rowHeight) + OVERSCAN))
       setRange((r) => (r[0] === first && r[1] === last ? r : [first, last]))
     }
+    // Measured at once, and again after layout settles: a browser that
+    // delays animation frames (WebKit, headless) must not show no rows.
+    update()
     const frame = requestAnimationFrame(update)
     sp.addEventListener('scroll', update, { passive: true })
     window.addEventListener('resize', update)
@@ -80,7 +83,15 @@ function useWindow(count: number, rowHeight: number, container: React.RefObject<
       ro.disconnect()
     }
   }, [container, count, rowHeight])
-  return [Math.min(range[0], count), Math.min(range[1], count)]
+  let first = Math.min(range[0], count)
+  let last = Math.min(range[1], count)
+  if (last <= first && count > 0) {
+    // Before the first measurement (a table that just grew past the
+    // window threshold started from an empty range): the first rows.
+    first = 0
+    last = Math.min(count, MIN_WINDOW)
+  }
+  return [first, last]
 }
 
 /** The links and buttons in a row, in order. */
