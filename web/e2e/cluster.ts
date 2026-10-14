@@ -74,6 +74,27 @@ export const PLANTED = 'PLANTED-SECRET-VALUE-9f8e7d6c5b4a'
 /** The simulator's Helm value that looks like a credential. */
 export const PLANTED_HELM = 'PLANTED-HELM-PASSWORD-1a2b3c4d'
 
+export interface KubeObject {
+  apiVersion: string
+  kind: string
+  metadata: { name: string; namespace?: string; labels?: Record<string, string> }
+  [k: string]: unknown
+}
+
+const RESOURCES: Record<string, string> = { ClusterRole: 'clusterroles', ClusterRoleBinding: 'clusterrolebindings', Role: 'roles', RoleBinding: 'rolebindings', ServiceAccount: 'serviceaccounts', NetworkPolicy: 'networkpolicies', PodDisruptionBudget: 'poddisruptionbudgets', ResourceQuota: 'resourcequotas', LimitRange: 'limitranges', PriorityClass: 'priorityclasses', Ingress: 'ingresses', IngressClass: 'ingressclasses', Service: 'services', Pod: 'pods', Deployment: 'deployments', Namespace: 'namespaces', Secret: 'secrets', ValidatingWebhookConfiguration: 'validatingwebhookconfigurations', MutatingWebhookConfiguration: 'mutatingwebhookconfigurations' }
+
+/** What kubectl auth can-i answers (kind only). */
+export async function kubectlCanI(...args: string[]): Promise<boolean> {
+  try {
+    const out = await kubectl('auth', 'can-i', ...args)
+    return out.trim() === 'yes'
+  } catch (err) {
+    const out = String((err as { stdout?: string }).stdout ?? '').trim()
+    if (out === 'no' || out.startsWith('no')) return false
+    throw err
+  }
+}
+
 export async function kubectl(...args: string[]): Promise<string> {
   const { stdout } = await run('kubectl', args, { timeout: 60_000, maxBuffer: 64 << 20 })
   return stdout
@@ -536,6 +557,24 @@ export const cluster = {
     const rest = (n.spec.taints ?? []).filter((x) => !(x.key === t.key && x.effect === t.effect))
     n.spec.taints = on ? [...rest, t] : rest
     await simPostJSON('/sim/objects', n)
+  },
+
+  /**
+   * Puts objects into the cluster (P4): kubectl apply in kind, the
+   * simulator's object API otherwise. Returns a cleanup that deletes them.
+   */
+  async applyObjects(objs: KubeObject[]): Promise<() => Promise<void>> {
+    for (const o of objs) {
+      if (inKind) await kubectlApply(o)
+      else await simPostJSON('/sim/objects', o)
+    }
+    return async () => {
+      for (const o of [...objs].reverse()) {
+        const resource = RESOURCES[o.kind] ?? o.kind.toLowerCase() + 's'
+        if (inKind) await kubectlRetry('delete', resource, o.metadata.name, ...(o.metadata.namespace ? ['-n', o.metadata.namespace] : []), '--ignore-not-found', '--wait=false')
+        else await fetch(`${SIM}/sim/objects/${resource}/${o.metadata.namespace ?? '_'}/${o.metadata.name}`, { method: 'DELETE' })
+      }
+    }
   },
 
   /** The server's log so far: the file the Makefile writes (sim) or the pod's (kind). */

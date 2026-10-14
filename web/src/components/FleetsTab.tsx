@@ -332,7 +332,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
         </p>
       </aside>
 
-      <section aria-label="Fleets" style={{ flex: '999 1 640px', minWidth: 0, padding: '20px 24px 32px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <section className="rk-pane" aria-label="Fleets" style={{ flex: '999 1 640px', minWidth: 0, padding: '20px 24px 32px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         {one ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="fleet-header">
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 12px' }}>

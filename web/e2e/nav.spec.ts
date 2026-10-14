@@ -3,7 +3,10 @@
 // tab always shows.
 import { expect, test } from './test'
 
-const TABS = ['Nodes', 'Namespaces', 'Pods', 'Helm', 'Services']
+import { TABS as ALL } from '../src/lib/router'
+
+const TABS = ALL.map((t) => t.label)
+const LAST = TABS[TABS.length - 1]!
 
 test('the bar shows every tab while they fit, and More takes them as the window narrows', async ({ page }) => {
   await page.goto('/')
@@ -19,7 +22,7 @@ test('the bar shows every tab while they fit, and More takes them as the window 
   await expect(nav.getByRole('link', { name: /^Services/ })).toHaveCount(0)
   await page.getByTestId('more').click()
   const menu = page.getByRole('menu', { name: 'More views' })
-  await expect(menu.getByRole('menuitem').last()).toHaveText(/^Services/)
+  await expect(menu.getByRole('menuitem').last()).toHaveText(new RegExp(`^${LAST}`))
   await menu.getByRole('menuitem', { name: /^Services/ }).click()
   await expect(page).toHaveURL(/#\/services/)
   // The open tab rides on the More button when it does not fit.

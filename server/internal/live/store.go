@@ -58,6 +58,9 @@ const (
 	ViewAlerts = "alerts"
 	// ViewFleets are the cluster's fleets with their members (P4-01).
 	ViewFleets = "fleets"
+	// ViewAccess are the roles, bindings and ServiceAccounts the Access
+	// tab reads (P4-03).
+	ViewAccess = "access"
 	// NamespacePrefix starts the view of one namespace's objects.
 	NamespacePrefix = "ns:"
 )
@@ -327,6 +330,12 @@ var staticViews = []viewDef{
 		name:  ViewFleets,
 		lazy:  true,
 		whole: buildFleets,
+	},
+	{
+		name:  ViewAccess,
+		lazy:  true,
+		keys:  func(src Source) []string { return views.AccessKeys(src) },
+		build: func(src Source, key string, now time.Time) (any, bool) { return views.BuildAccess(src, key, now) },
 	},
 }
 

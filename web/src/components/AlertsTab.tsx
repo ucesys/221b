@@ -224,7 +224,7 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
   const close = () => set({ open: undefined })
 
   return (
-    <section aria-label="Alerts" style={{ padding: '20px 24px 32px', display: 'flex', flexDirection: 'column', gap: 14, flex: '1 1 auto', minWidth: 0 }}>
+    <section className="rk-pane" aria-label="Alerts" style={{ padding: '20px 24px 32px', display: 'flex', flexDirection: 'column', gap: 14, flex: '1 1 auto', minWidth: 0 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <h1 style={{ margin: 0, fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>Alerts</h1>
         <p style={{ margin: 0, maxWidth: '100ch', fontSize: 12.5, color: 'var(--fg3)' }}>

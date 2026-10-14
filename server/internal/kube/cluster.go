@@ -300,6 +300,14 @@ func (c *Cluster) clientFor(k Kind) (rest.Interface, error) {
 		return c.cs.DiscoveryV1().RESTClient(), nil
 	case "networking.k8s.io":
 		return c.cs.NetworkingV1().RESTClient(), nil
+	case "rbac.authorization.k8s.io":
+		return c.cs.RbacV1().RESTClient(), nil
+	case "policy":
+		return c.cs.PolicyV1().RESTClient(), nil
+	case "scheduling.k8s.io":
+		return c.cs.SchedulingV1().RESTClient(), nil
+	case "admissionregistration.k8s.io":
+		return c.cs.AdmissionregistrationV1().RESTClient(), nil
 	}
 	return nil, fmt.Errorf("no client for API group %q", k.Group)
 }
@@ -392,7 +400,7 @@ func (c *Cluster) Run(ctx context.Context) {
 // everything marks every static view, the details and the totals.
 func (c *Cluster) everything() Change {
 	ch := Change{Info: true, Totals: true}
-	for _, v := range []string{"nodes", "pods", "namespaces", "services", "helm", "alerts", "fleets"} {
+	for _, v := range []string{"nodes", "pods", "namespaces", "services", "helm", "alerts", "fleets", "access"} {
 		ch.Mark(v, AllRows)
 	}
 	return ch
@@ -714,6 +722,11 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 				}
 				ch.Mark("pods", p.Namespace+"/"+p.Name)
 				ch.Mark("alerts", "pod:"+p.Namespace+"/"+p.Name)
+				sa := p.Spec.ServiceAccountName
+				if sa == "" {
+					sa = "default"
+				}
+				ch.Mark("access", "sa:"+p.Namespace+"/"+sa)
 				for _, claim := range podClaims(p) {
 					ch.Mark("alerts", "pvc:"+p.Namespace+"/"+claim)
 				}
@@ -751,10 +764,18 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 		}
 	case "ingresses":
 		ch.Mark("services", AllRows)
+	case "roles", "rolebindings", "clusterroles", "clusterrolebindings", "serviceaccounts":
+		// A role's change can change the findings of every binding that
+		// grants it, and a ServiceAccount's of every binding that names
+		// it; RBAC changes rarely, so the view is rebuilt whole.
+		ch.Mark("access", AllRows)
 	case "secrets":
 		for _, o := range []any{old, obj} {
 			if s, ok := unwrap(o).(*SecretSummary); ok && s.Release != nil {
 				ch.Mark("helm", s.Namespace+"/"+s.Release.Name)
+			}
+			if s, ok := unwrap(o).(*SecretSummary); ok && s.Type == corev1.SecretTypeServiceAccountToken {
+				ch.Mark("access", "sa:"+s.Namespace+"/"+s.Annotations[corev1.ServiceAccountNameKey])
 			}
 		}
 	}

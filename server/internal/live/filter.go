@@ -47,6 +47,21 @@ func Scope(view, key string) (resource, namespace string, cluster bool) {
 		return "secrets", ns, false
 	case ViewFleets:
 		return "nodes", "", true
+	case ViewAccess:
+		prefix, kind, ns, _, ok := views.SplitAccessKey(key)
+		switch {
+		case !ok:
+			return "", "", false
+		case prefix == views.AccessSA:
+			return "serviceaccounts", ns, false
+		case kind == "ClusterRole":
+			return "clusterroles", "", true
+		case kind == "ClusterRoleBinding":
+			return "clusterrolebindings", "", true
+		case kind == "Role":
+			return "roles", ns, false
+		}
+		return "rolebindings", ns, false
 	case ViewAlerts:
 		kind, ns, _, ok := views.SplitAlertKey(key)
 		switch {
@@ -85,6 +100,8 @@ func Resources(view string) (namespaced, cluster []string) {
 		return []string{"secrets"}, nil
 	case ViewAlerts:
 		return []string{"pods", "persistentvolumeclaims"}, []string{"nodes"}
+	case ViewAccess:
+		return []string{"roles", "rolebindings", "serviceaccounts"}, []string{"clusterroles", "clusterrolebindings"}
 	}
 	if strings.HasPrefix(view, NamespacePrefix) {
 		for _, k := range kube.Kinds {

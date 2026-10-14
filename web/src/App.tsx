@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { useMe } from './api/auth'
 import { useClusters, type ClusterSummary } from './api/clusters'
 import { LiveContext, useLiveMeta, useLiveStore, useView } from './api/live'
-import type { AlertRow } from './api/types'
+import type { AccessRow, AlertRow } from './api/types'
+import { AccessTab } from './components/AccessTab'
 import { AlertsTab } from './components/AlertsTab'
 import { Banners } from './components/Banners'
 import { ClusterEditor } from './components/ClusterEditor'
@@ -17,6 +18,7 @@ import { SettingsDialog } from './components/SettingsDialog'
 import { Toast } from './components/Toast'
 import { TopBar, type Theme } from './components/TopBar'
 import { badgeOf, bannersOf } from './lib/alerts'
+import { accessBadge } from './lib/rbac'
 import { apiPath, clusterHref, clusterPageHref, href, LOCAL, navigate, TABS, useRoute } from './lib/router'
 import { readJSON, writeJSON } from './lib/storage'
 
@@ -110,7 +112,10 @@ function Shell() {
   const alerts = useView<AlertRow>('alerts')
   const alertBadge = badgeOf(alerts.rows)
   const fleetDefs = live.settings?.fleets?.[route.cluster] ?? []
-  const counts = { ...live.counts, fleets: fleetDefs.length, ...(alerts.loaded ? { alerts: alertBadge.count } : {}) }
+  // The Access tab counts its findings while it is open (P4-03).
+  const access = useView<AccessRow>(tab === 'access' && view === 'tabs' ? 'access' : null)
+  const accessCount = accessBadge(access.rows.flatMap((r) => ('findings' in r ? r.findings : [])))
+  const counts = { ...live.counts, fleets: fleetDefs.length, ...(alerts.loaded ? { alerts: alertBadge.count } : {}), ...(access.loaded ? { access: accessCount.count } : {}) }
   const common = { cluster: live.cluster, now, onToast: setToast, route }
   return (
     <div
@@ -121,7 +126,7 @@ function Shell() {
       data-dock="off"
       style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}
     >
-      <TopBar cluster={live.cluster} counts={counts} tones={{ alerts: alertBadge.tone }} tab={view === 'cluster' ? null : tab} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
+      <TopBar cluster={live.cluster} counts={counts} tones={{ alerts: alertBadge.tone, access: accessCount.tone }} tab={view === 'cluster' ? null : tab} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
       <Banners cluster={live.cluster} stream={live.stream} now={now} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} accessError={live.accessError} alerts={view === 'tabs' && tab !== 'alerts' ? bannersOf(alerts.rows, now) : []} alertsHref={href('alerts')} />
       {view === 'cluster' ? (
         <ClusterPage route={route} me={me} now={now} onEdit={(id) => setEditing(id)} />
@@ -134,6 +139,7 @@ function Shell() {
           {tab === 'namespaces' && <NamespacesTab {...common} />}
           {tab === 'services' && <ServicesTab {...common} />}
           {tab === 'helm' && <HelmTab {...common} />}
+          {tab === 'access' && <AccessTab {...common} />}
         </div>
       )}
       <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} canChange={me?.admin ?? true} />

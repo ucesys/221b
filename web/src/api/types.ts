@@ -623,3 +623,78 @@ export interface FleetRow {
   members: string[]
   stats: FleetStats
 }
+
+/** Who made an RBAC object (P4-03), read from its labels. */
+export interface RBACSource {
+  kind: 'k8s' | 'kubeadm' | 'helm' | 'managed' | 'manual'
+  release?: string
+  manager?: string
+}
+
+/** One rule of a role. */
+export interface RBACRule {
+  verbs: string[]
+  apiGroups?: string[]
+  resources?: string[]
+  resourceNames?: string[]
+  nonResourceURLs?: string[]
+}
+
+/** A ClusterRole or Role, in the access view (key "role:…"). */
+export interface RoleRow {
+  key: string
+  kind: 'ClusterRole' | 'Role'
+  namespace?: string
+  name: string
+  rules: RBACRule[]
+  aggregated?: boolean
+  powers: string[]
+  source: RBACSource
+  created?: string
+}
+
+export interface RBACSubject {
+  kind: 'User' | 'Group' | 'ServiceAccount'
+  name: string
+  namespace?: string
+  /** A ServiceAccount that does not exist. */
+  missing?: boolean
+}
+
+export type FindingSeverity = 'high' | 'medium' | 'low' | 'info'
+
+export interface Finding {
+  severity: FindingSeverity
+  title: string
+  text: string
+  subject?: RBACSubject
+  /** What would fix it, to copy; nothing runs it. */
+  command?: string
+}
+
+/** A ClusterRoleBinding or RoleBinding, in the access view (key "binding:…"). */
+export interface BindingRow {
+  key: string
+  kind: 'ClusterRoleBinding' | 'RoleBinding'
+  namespace?: string
+  name: string
+  roleKind: 'ClusterRole' | 'Role'
+  roleName: string
+  roleMissing?: boolean
+  subjects: RBACSubject[]
+  source: RBACSource
+  created?: string
+  findings: Finding[]
+}
+
+/** A ServiceAccount, in the access view (key "sa:ns/name"). */
+export interface SARow {
+  key: string
+  namespace: string
+  name: string
+  created?: string
+  pods: { name: string; status: string; tone: string }[]
+  tokens: { name: string; created?: string }[]
+}
+
+export type AccessRow = RoleRow | BindingRow | SARow

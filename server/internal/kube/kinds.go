@@ -3,11 +3,16 @@ package kube
 import (
 	"fmt"
 
+	admissionv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	schedulingv1 "k8s.io/api/scheduling/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -75,6 +80,9 @@ const (
 	IndexSliceService = "byService"
 	// IndexRelease indexes Helm release records by namespace/name.
 	IndexRelease = "byRelease"
+	// IndexBindingRole indexes role bindings by the role they grant:
+	// "ClusterRole/name", or "Role/namespace/name".
+	IndexBindingRole = "byRole"
 )
 
 func typed[T any, PT interface {
@@ -109,20 +117,28 @@ var Kinds = []Kind{
 	{Name: "endpointslices", Kind: "EndpointSlice", Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices", Plural: "EndpointSlices", Namespaced: true, New: typed[discoveryv1.EndpointSlice](), Transform: stripEndpointSlice, Indexers: cache.Indexers{IndexSliceService: sliceServiceName}, Order: 9},
 	metadataOnly("endpoints", "Endpoints", "", "v1", "endpoints", "Endpoints", 10),
 	{Name: "ingresses", Kind: "Ingress", Group: "networking.k8s.io", Version: "v1", Resource: "ingresses", Plural: "Ingresses", Namespaced: true, New: typed[networkingv1.Ingress](), Transform: stripIngress, Order: 11},
-	metadataOnly("networkpolicies", "NetworkPolicy", "networking.k8s.io", "v1", "networkpolicies", "NetworkPolicies", 12),
+	{Name: "networkpolicies", Kind: "NetworkPolicy", Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies", Plural: "NetworkPolicies", Namespaced: true, New: typed[networkingv1.NetworkPolicy](), Transform: stripObject, Order: 12},
 	{Name: "persistentvolumeclaims", Kind: "PersistentVolumeClaim", Version: "v1", Resource: "persistentvolumeclaims", Plural: "PersistentVolumeClaims", Namespaced: true, New: typed[corev1.PersistentVolumeClaim](), Transform: stripPVC, Order: 13},
 	{Name: "configmaps", Kind: "ConfigMap", Version: "v1", Resource: "configmaps", Plural: "ConfigMaps", Namespaced: true, New: typed[corev1.ConfigMap](), Transform: SummarizeConfigMap, Order: 14},
 	{Name: "secrets", Kind: "Secret", Version: "v1", Resource: "secrets", Plural: "Secrets", Namespaced: true, Secret: true, New: typed[corev1.Secret](), Transform: SummarizeSecret, Indexers: cache.Indexers{IndexRelease: releaseKey}, Order: 15},
-	metadataOnly("serviceaccounts", "ServiceAccount", "", "v1", "serviceaccounts", "ServiceAccounts", 16),
-	metadataOnly("roles", "Role", "rbac.authorization.k8s.io", "v1", "roles", "Roles", 17),
-	metadataOnly("rolebindings", "RoleBinding", "rbac.authorization.k8s.io", "v1", "rolebindings", "RoleBindings", 18),
-	metadataOnly("poddisruptionbudgets", "PodDisruptionBudget", "policy", "v1", "poddisruptionbudgets", "PodDisruptionBudgets", 19),
+	{Name: "serviceaccounts", Kind: "ServiceAccount", Version: "v1", Resource: "serviceaccounts", Plural: "ServiceAccounts", Namespaced: true, New: typed[corev1.ServiceAccount](), Transform: stripObject, Order: 16},
+	{Name: "roles", Kind: "Role", Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "roles", Plural: "Roles", Namespaced: true, New: typed[rbacv1.Role](), Transform: stripObject, Order: 17},
+	{Name: "rolebindings", Kind: "RoleBinding", Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "rolebindings", Plural: "RoleBindings", Namespaced: true, New: typed[rbacv1.RoleBinding](), Transform: stripObject, Indexers: cache.Indexers{IndexBindingRole: bindingRole}, Order: 18},
+	{Name: "poddisruptionbudgets", Kind: "PodDisruptionBudget", Group: "policy", Version: "v1", Resource: "poddisruptionbudgets", Plural: "PodDisruptionBudgets", Namespaced: true, New: typed[policyv1.PodDisruptionBudget](), Transform: stripObject, Order: 19},
 	metadataOnly("horizontalpodautoscalers", "HorizontalPodAutoscaler", "autoscaling", "v2", "horizontalpodautoscalers", "HorizontalPodAutoscalers", 20),
-	metadataOnly("resourcequotas", "ResourceQuota", "", "v1", "resourcequotas", "ResourceQuotas", 21),
-	metadataOnly("limitranges", "LimitRange", "", "v1", "limitranges", "LimitRanges", 22),
+	{Name: "resourcequotas", Kind: "ResourceQuota", Version: "v1", Resource: "resourcequotas", Plural: "ResourceQuotas", Namespaced: true, New: typed[corev1.ResourceQuota](), Transform: stripObject, Order: 21},
+	{Name: "limitranges", Kind: "LimitRange", Version: "v1", Resource: "limitranges", Plural: "LimitRanges", Namespaced: true, New: typed[corev1.LimitRange](), Transform: stripObject, Order: 22},
 	metadataOnly("leases", "Lease", "coordination.k8s.io", "v1", "leases", "Leases", 23),
 	{Name: "events", Kind: "Event", Version: "v1", Resource: "events", Plural: "Events", Namespaced: true, New: typed[corev1.Event](), Transform: stripEvent, Indexers: cache.Indexers{IndexEventObject: eventObjectUID}, Order: 24},
 	{Name: "namespaces", Kind: "Namespace", Version: "v1", Resource: "namespaces", Plural: "Namespaces", New: typed[corev1.Namespace](), Transform: stripNamespace, Order: -1},
+	// Cluster-scoped kinds the analysis tabs read (Phase 4): who may do
+	// what, which policies apply, and how requests reach the cluster.
+	{Name: "clusterroles", Kind: "ClusterRole", Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterroles", Plural: "ClusterRoles", New: typed[rbacv1.ClusterRole](), Transform: stripObject, Order: 30},
+	{Name: "clusterrolebindings", Kind: "ClusterRoleBinding", Group: "rbac.authorization.k8s.io", Version: "v1", Resource: "clusterrolebindings", Plural: "ClusterRoleBindings", New: typed[rbacv1.ClusterRoleBinding](), Transform: stripObject, Indexers: cache.Indexers{IndexBindingRole: bindingRole}, Order: 31},
+	{Name: "priorityclasses", Kind: "PriorityClass", Group: "scheduling.k8s.io", Version: "v1", Resource: "priorityclasses", Plural: "PriorityClasses", New: typed[schedulingv1.PriorityClass](), Transform: stripObject, Order: 32},
+	{Name: "validatingwebhookconfigurations", Kind: "ValidatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations", Plural: "ValidatingWebhookConfigurations", New: typed[admissionv1.ValidatingWebhookConfiguration](), Transform: stripWebhooks, Order: 33},
+	{Name: "mutatingwebhookconfigurations", Kind: "MutatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations", Plural: "MutatingWebhookConfigurations", New: typed[admissionv1.MutatingWebhookConfiguration](), Transform: stripWebhooks, Order: 34},
+	{Name: "ingressclasses", Kind: "IngressClass", Group: "networking.k8s.io", Version: "v1", Resource: "ingressclasses", Plural: "IngressClasses", New: typed[networkingv1.IngressClass](), Transform: stripObject, Order: 35},
 }
 
 // KindByName finds a kind by its name; ok is false for an unknown name.
@@ -189,6 +205,55 @@ func releaseKey(obj any) ([]string, error) {
 		return nil, nil
 	}
 	return []string{s.Namespace + "/" + s.Release.Name}, nil
+}
+
+// stripObject keeps a whole object but its managed fields and the
+// annotation that copies it, for the kinds the analysis tabs read.
+func stripObject(obj any) (any, error) {
+	if m, err := meta.Accessor(obj); err == nil {
+		m.SetManagedFields(nil)
+		m.SetAnnotations(trimAnnotations(m.GetAnnotations()))
+	}
+	return obj, nil
+}
+
+// CABundleSet is what a webhook's CA bundle is cached as: whether one is
+// set matters, its certificates do not.
+var CABundleSet = []byte{1}
+
+// stripWebhooks is stripObject for webhook configurations, which also
+// drops each webhook's CA bundle.
+func stripWebhooks(obj any) (any, error) {
+	switch w := obj.(type) {
+	case *admissionv1.ValidatingWebhookConfiguration:
+		for i := range w.Webhooks {
+			if len(w.Webhooks[i].ClientConfig.CABundle) > 0 {
+				w.Webhooks[i].ClientConfig.CABundle = CABundleSet
+			}
+		}
+	case *admissionv1.MutatingWebhookConfiguration:
+		for i := range w.Webhooks {
+			if len(w.Webhooks[i].ClientConfig.CABundle) > 0 {
+				w.Webhooks[i].ClientConfig.CABundle = CABundleSet
+			}
+		}
+	}
+	return stripObject(obj)
+}
+
+// bindingRole indexes a binding by its role: "ClusterRole/name", or
+// "Role/namespace/name".
+func bindingRole(obj any) ([]string, error) {
+	switch b := obj.(type) {
+	case *rbacv1.ClusterRoleBinding:
+		return []string{b.RoleRef.Kind + "/" + b.RoleRef.Name}, nil
+	case *rbacv1.RoleBinding:
+		if b.RoleRef.Kind == "Role" {
+			return []string{"Role/" + b.Namespace + "/" + b.RoleRef.Name}, nil
+		}
+		return []string{b.RoleRef.Kind + "/" + b.RoleRef.Name}, nil
+	}
+	return nil, nil
 }
 
 // stripMetadata keeps what the Namespaces tab shows of a metadata-only

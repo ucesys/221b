@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 
@@ -156,10 +157,17 @@ func TestTransformsKeepTheCacheSmall(t *testing.T) {
 			t.Fatalf("planted secret summary %+v", sum.Keys)
 		}
 	}
-	// The long tail is metadata only.
-	for _, o := range cl.Objects("roles", "") {
+	// The long tail is metadata only; what the analysis tabs read is kept
+	// whole, without managed fields.
+	for _, o := range cl.Objects("leases", "") {
 		if _, ok := o.(*metav1.PartialObjectMetadata); !ok {
-			t.Fatalf("role cached as %T", o)
+			t.Fatalf("lease cached as %T", o)
+		}
+	}
+	for _, o := range cl.Objects("roles", "") {
+		r, ok := o.(*rbacv1.Role)
+		if !ok || r.ManagedFields != nil || len(r.Rules) == 0 {
+			t.Fatalf("role cached as %T %+v", o, o)
 		}
 	}
 	if cl.Count("roles", "") == 0 || cl.Count("namespaces", "") == 0 || cl.Count("services", "") == 0 {
