@@ -295,9 +295,11 @@ func Pairs(views []string, namespaces []string) []Pair {
 			}
 		}
 	}
-	// The namespace rows and the counts need pods in every namespace.
+	// The namespace rows and the tab counts need pods and Services in
+	// every namespace, whatever tab is open.
 	for _, ns := range namespaces {
 		add(Pair{Resource: "pods", Namespace: ns})
+		add(Pair{Resource: "services", Namespace: ns})
 	}
 	return out
 }

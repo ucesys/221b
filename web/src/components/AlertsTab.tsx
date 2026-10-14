@@ -103,10 +103,12 @@ function AlertCard({ r, now, onOpen, onPod, onXl }: { r: AlertRow; now: number; 
     const act = sort.col === col
     const tip = act ? `Sorted by ${SORT_LABEL[col]}, ${sort.dir === 'asc' ? 'ascending' : 'descending'} — click to reverse` : `Sort by ${SORT_LABEL[col]}`
     return (
-      <button className={'rk-th' + (right ? ' rk-r' : '')} data-active={act} title={tip} onClick={() => setSort(act ? { col, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'asc' })}>
-        {label}
-        <span className="rk-arrow">{act && col !== 'i' ? (sort.dir === 'asc' ? '↑' : '↓') : ''}</span>
-      </button>
+      <span className="rk-contents" role="columnheader" aria-sort={act ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
+        <button className={'rk-th' + (right ? ' rk-r' : '')} data-active={act} title={tip} onClick={() => setSort(act ? { col, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'asc' })}>
+          {label}
+          <span className="rk-arrow">{act && col !== 'i' ? (sort.dir === 'asc' ? '↑' : '↓') : ''}</span>
+        </button>
+      </span>
     )
   }
   return (
@@ -154,12 +156,12 @@ function AlertCard({ r, now, onOpen, onPod, onXl }: { r: AlertRow; now: number; 
             </div>
             {events.map((e, i) => (
               <div key={i} className="rk-gr rk-top" role="row" data-testid="alert-event" data-reason={e.reason}>
-                <span>
+                <span role="cell">
                   <span className="rk-t" data-tone={e.tone} style={{ fontWeight: 600 }}>
                     {e.reason}
                   </span>
                 </span>
-                <span className="rk-wrap" style={{ color: 'var(--fg2)' }}>
+                <span className="rk-wrap" role="cell" style={{ color: 'var(--fg2)' }}>
                   {e.message}
                   {e.pod && (
                     <span className="rk-mono" style={{ display: 'block', marginTop: 3, fontSize: 11.5, color: 'var(--fg3)' }}>
@@ -169,14 +171,16 @@ function AlertCard({ r, now, onOpen, onPod, onXl }: { r: AlertRow; now: number; 
                     </span>
                   )}
                 </span>
-                <span className="rk-r rk-num">{countText(e)}</span>
-                <span className="rk-num" title={e.first ? fmtTs(e.first) : undefined}>
+                <span className="rk-r rk-num" role="cell">
+                  {countText(e)}
+                </span>
+                <span className="rk-num" role="cell" title={e.first ? fmtTs(e.first) : undefined}>
                   {agoText(e.first, now)}
                 </span>
-                <span className="rk-num" title={e.last ? fmtTs(e.last) : undefined}>
+                <span className="rk-num" role="cell" title={e.last ? fmtTs(e.last) : undefined}>
                   {agoText(e.last, now)}
                 </span>
-                <span className="rk-mono rk-wrap" style={{ fontSize: 11.5, color: 'var(--fg3)' }}>
+                <span className="rk-mono rk-wrap" role="cell" style={{ fontSize: 11.5, color: 'var(--fg3)' }}>
                   {e.reportedBy ?? ''}
                 </span>
               </div>

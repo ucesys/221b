@@ -301,7 +301,11 @@ func traceRoute(src Source, key, rest string, now time.Time) (any, bool) {
 			if podReady(p) {
 				ready++
 			} else {
-				notReady = append(notReady, p.Name+": "+BuildPodRow(src, p, now).Status)
+				st := BuildPodRow(src, p, now).Status
+				if st == "Running" {
+					st = "running, not ready"
+				}
+				notReady = append(notReady, p.Name+": "+st)
 			}
 			if p.Spec.NodeName != "" {
 				nodes[p.Spec.NodeName] = true

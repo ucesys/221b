@@ -165,7 +165,10 @@ serviceAccount:
 rbac:
   # A read-only ClusterRole: get, list and watch on the kinds the tabs show
   # (nodes, namespaces, pods, workloads, Services and their endpoints,
-  # Ingresses, ConfigMaps, PVCs, events, and the namespace long tail), get
+  # Ingresses and IngressClasses, ConfigMaps, PVCs, events, the namespace
+  # long tail, and for the analysis tabs roles and bindings, NetworkPolicies,
+  # disruption budgets, quotas, limit ranges, priority classes and admission
+  # webhook configurations), get
   # on pod logs, get and list on node and pod metrics, get on nodes/proxy
   # when kubeletStats is on, and get, list and watch on Secrets only when
   # secrets.read is on. A Role to get and patch its own settings ConfigMap.

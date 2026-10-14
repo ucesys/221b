@@ -521,32 +521,38 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
         <div className="rk-card" style={{ overflowX: 'auto', flex: 'none' }}>
           <div className="rk-mx" role="table" aria-label="Nodes against labels and taints" data-testid="fleet-matrix" style={{ ['--cols' as string]: gridCols, ['--mxh' as string]: `${mxh}px`, minWidth: `calc(${minW}px + var(--mxfw))` }}>
             <div className="rk-mxr rk-mxg" role="row">
-              <span className="rk-mxn" />
-              <span style={{ borderLeft: 0 }} />
+              <span className="rk-mxn" role="columnheader" />
+              <span style={{ borderLeft: 0 }} role="columnheader" />
               {kinds.map((k) => (
-                <span key={k.kind} style={{ gridColumn: `span ${k.span}` }}>
+                <span key={k.kind} role="columnheader" aria-colspan={k.span} style={{ gridColumn: `span ${k.span}` }}>
                   {k.label}
                 </span>
               ))}
             </div>
             <div className="rk-mxr rk-mxhr" role="row">
-              <button className="rk-th rk-mxn" data-active={sort.col === 'node'} title={sortTip('node', 'node name')} onClick={() => sortBy('node')}>
-                Node<span className="rk-arrow">{ind('node')}</span>
-              </button>
-              <button className="rk-th" data-active={sort.col === 'fleet'} title={sortTip('fleet', 'fleet')} onClick={() => sortBy('fleet')}>
-                Fleets<span className="rk-arrow">{ind('fleet')}</span>
-              </button>
+              <span className="rk-contents" role="columnheader">
+                <button className="rk-th rk-mxn" data-active={sort.col === 'node'} title={sortTip('node', 'node name')} onClick={() => sortBy('node')}>
+                  Node<span className="rk-arrow">{ind('node')}</span>
+                </button>
+              </span>
+              <span className="rk-contents" role="columnheader">
+                <button className="rk-th" data-active={sort.col === 'fleet'} title={sortTip('fleet', 'fleet')} onClick={() => sortBy('fleet')}>
+                  Fleets<span className="rk-arrow">{ind('fleet')}</span>
+                </button>
+              </span>
               {visCols.map((c) => {
                 const def = inDefinition(c, one)
                 const tip = `${c.full} — on ${nodesWith(c)} of ${nodes.length} nodes${def ? `\nPart of the fleet “${one!.name}”` : ''}\n${sortTip(c.id, c.label + ' (nodes that have it first)')}`
                 return (
-                  <button key={c.id} className="rk-mxh" data-first={c.first} data-def={def} data-active={sort.col === c.id} aria-label={sortTip(c.id, c.label + ' (nodes that have it first)')} title={tip} onClick={() => sortBy(c.id)} data-col={c.id}>
-                    <span className="rk-vt">
-                      <b>{c.main}</b>
-                      {c.pre && <em>{c.pre}</em>}
-                    </span>
-                    <span className="rk-arrow">{ind(c.id)}</span>
-                  </button>
+                  <span key={c.id} className="rk-contents" role="columnheader">
+                    <button className="rk-mxh" data-first={c.first} data-def={def} data-active={sort.col === c.id} aria-label={sortTip(c.id, c.label + ' (nodes that have it first)')} title={tip} onClick={() => sortBy(c.id)} data-col={c.id}>
+                      <span className="rk-vt">
+                        <b>{c.main}</b>
+                        {c.pre && <em>{c.pre}</em>}
+                      </span>
+                      <span className="rk-arrow">{ind(c.id)}</span>
+                    </button>
+                  </span>
                 )
               })}
             </div>
@@ -555,8 +561,8 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
               return (
                 <div key={g.key} role="rowgroup" data-group={g.key}>
                   {g.title && (
-                    <div className="rk-fgh">
-                      <div style={{ position: 'sticky', left: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 10px', padding: '8px 12px', width: 'max-content', maxWidth: '100vw' }}>
+                    <div className="rk-fgh" role="row">
+                      <div role="cell" aria-colspan={visCols.length + 2} style={{ position: 'sticky', left: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 10px', padding: '8px 12px', width: 'max-content', maxWidth: '100vw' }}>
                         <span className="rk-fdot" data-c={g.row?.kind === 'fleet' ? g.row.color : undefined} />
                         <strong style={{ fontSize: 13, fontWeight: 600 }}>{g.title}</strong>
                         <span className="rk-tag" style={{ fontSize: 11, padding: '1px 7px' }}>
@@ -586,7 +592,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                     const flagTone = errs ? 'err' : 'warn'
                     return (
                       <div key={g.key + n.name} className="rk-mxr" role="row" data-dim={fxOn && !picked(n)} data-node={n.name}>
-                        <span className="rk-mxn">
+                        <span className="rk-mxn" role="rowheader">
                           <a className="rk-link rk-mono" href={href('nodes', [], { open: n.name })} title={`Open ${n.name} in the Nodes tab`} style={{ minWidth: 0, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'none' }}>
                             {n.name}
                           </a>
@@ -597,7 +603,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                             </span>
                           )}
                         </span>
-                        <span className="rk-mxf" title={fls.length ? `In ${listText(fls.map((f) => f.name!))}` : 'Not in any fleet'}>
+                        <span className="rk-mxf" role="cell" title={fls.length ? `In ${listText(fls.map((f) => f.name!))}` : 'Not in any fleet'}>
                           {fls.map((f) => (
                             <span key={f.key} className="rk-fdot" data-c={f.color} />
                           ))}
@@ -605,13 +611,15 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                         </span>
                         {visCols.map((c) =>
                           mxHas(n, c) ? (
-                            <button key={c.id} className="rk-mxc" data-first={c.first} aria-pressed={pickedOn(c)} aria-label={`${n.name} has ${c.label}`} title={`${c.full} — on ${n.name}\n${pickedOn(c) ? 'Click to stop picking nodes by it' : 'Click to pick the nodes that have it'}`} onClick={() => togglePick(c)}>
-                              <span className="rk-cb" data-on="true" data-tone={c.kind === 't' ? effectTone(c.effect ?? '') : undefined}>
-                                <Check />
-                              </span>
-                            </button>
+                            <span key={c.id} className="rk-contents" role="cell">
+                              <button className="rk-mxc" data-first={c.first} aria-pressed={pickedOn(c)} aria-label={`${n.name} has ${c.label}`} title={`${c.full} — on ${n.name}\n${pickedOn(c) ? 'Click to stop picking nodes by it' : 'Click to pick the nodes that have it'}`} onClick={() => togglePick(c)}>
+                                <span className="rk-cb" data-on="true" data-tone={c.kind === 't' ? effectTone(c.effect ?? '') : undefined}>
+                                  <Check />
+                                </span>
+                              </button>
+                            </span>
                           ) : (
-                            <span key={c.id} className="rk-mxc" data-first={c.first}>
+                            <span key={c.id} className="rk-mxc" role="cell" data-first={c.first}>
                               <span className="rk-cb" />
                               <span className="rk-sr">{`${n.name} doesn’t have ${c.label}`}</span>
                             </span>

@@ -197,7 +197,7 @@ Phase 4 adds the tabs that answer questions kubectl leaves to you: which nodes f
 
 **Not in Phase 4:** acting on findings. Fixes appear as the commands Watson will run in Phase 6.
 
-**Review:** you check each tab against kubectl on a test cluster with prepared faults.
+**Review:** you check each tab against kubectl on a test cluster with prepared faults. The guide is [phase-4-review.md](phase-4-review.md).
 
 ## Phase 5: Sherlock
 
