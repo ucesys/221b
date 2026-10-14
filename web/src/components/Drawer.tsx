@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { CloseIcon } from './Icons'
 
 export interface DrawerTab {
@@ -39,6 +39,30 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
   useEffect(() => {
     body.current?.scrollTo(0, 0)
   }, [tab])
+  // While the body scrolls it is a tab stop and a named region, so the
+  // keyboard can reach what scrolls (WCAG 2.1.1), as ScrollBox does. The
+  // content changes with every tab and fetch, so it is measured after each
+  // render and when the drawer is resized.
+  const [scrolls, setScrolls] = useState(false)
+  const observer = useRef<ResizeObserver | null>(null)
+  useEffect(() => {
+    const el = body.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    observer.current = new ResizeObserver(() => setScrolls(el.scrollHeight > el.clientHeight + 1))
+    return () => observer.current?.disconnect()
+  }, [])
+  useLayoutEffect(() => {
+    const el = body.current
+    if (!el) return
+    setScrolls(el.scrollHeight > el.clientHeight + 1)
+    // The sections grow as their own fetches land, so each is watched too.
+    const ro = observer.current
+    if (ro) {
+      ro.disconnect()
+      ro.observe(el)
+      for (const child of el.children) ro.observe(child)
+    }
+  }, [tab, children])
   return (
     <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }}>
       <button aria-label={`Close ${label.toLowerCase()}`} tabIndex={-1} onClick={onClose} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
@@ -82,7 +106,7 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
           {!tabs?.length && <div style={{ height: 6 }} />}
         </div>
         {notice}
-        <div ref={body} className="rk-drawer-body" style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: '18px 20px 32px', display: 'flex', flexDirection: 'column', gap: 16, background: 'var(--bg)' }}>
+        <div ref={body} className="rk-drawer-body" tabIndex={scrolls ? 0 : undefined} role={scrolls ? 'region' : undefined} aria-label={scrolls ? `${label} content` : undefined} style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: '18px 20px 32px', display: 'flex', flexDirection: 'column', gap: 16, background: 'var(--bg)' }}>
           {children}
         </div>
       </aside>
