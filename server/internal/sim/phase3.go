@@ -65,21 +65,25 @@ func (s *Sim) setToken(r *http.Request) error {
 }
 
 // setDeny makes access reviews refuse some things: POST /sim/deny with
-// {"verbs": ["impersonate"], "namespaces": ["kube-system"]}; empty lists
-// allow everything again. A denied namespace refuses every namespaced
-// verb for people (impersonated or named), not for the console's own
-// account, which watches everything.
+// {"verbs": ["impersonate"], "namespaces": ["kube-system"], "users":
+// ["x"], "only": {"dev@corp.example": ["web", "analytics"]}}; empty
+// lists allow everything again. A denied namespace refuses every
+// namespaced verb for people (impersonated or named), a denied user
+// everything, and "only" limits a user to the namespaces listed, with
+// nothing cluster-wide; none of it applies to the console's own account,
+// which watches everything.
 func (s *Sim) setDeny(r *http.Request) error {
 	var in struct {
-		Verbs      []string `json:"verbs"`
-		Namespaces []string `json:"namespaces"`
-		Users      []string `json:"users"`
+		Verbs      []string            `json:"verbs"`
+		Namespaces []string            `json:"namespaces"`
+		Users      []string            `json:"users"`
+		Only       map[string][]string `json:"only"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		return err
 	}
 	s.mu.Lock()
-	s.denyVerbs, s.denyNamespaces, s.denyUsers = in.Verbs, in.Namespaces, in.Users
+	s.denyVerbs, s.denyNamespaces, s.denyUsers, s.onlyNamespaces = in.Verbs, in.Namespaces, in.Users, in.Only
 	s.mu.Unlock()
 	return nil
 }
@@ -191,6 +195,17 @@ func (s *Sim) decide(user string, impersonated bool, attrs *authzv1.ResourceAttr
 			if ns != "" && ns == attrs.Namespace {
 				return false, "the simulator denies " + user + " in " + ns
 			}
+		}
+		if only, ok := s.onlyNamespaces[user]; ok {
+			if attrs.Namespace == "" {
+				return false, "the simulator limits " + user + " to " + strings.Join(only, ", ")
+			}
+			for _, ns := range only {
+				if ns == attrs.Namespace {
+					return true, ""
+				}
+			}
+			return false, "the simulator limits " + user + " to " + strings.Join(only, ", ")
 		}
 	}
 	return true, ""

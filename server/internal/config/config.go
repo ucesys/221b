@@ -74,6 +74,15 @@ type Config struct {
 	// sent with it as a bearer token (P3-10).
 	AuditWebhookURL   string
 	AuditWebhookToken string
+	// ImpersonateUserPrefix and ImpersonateGroupPrefix are what the API
+	// servers' OIDC configuration puts before user names and groups
+	// (--oidc-username-prefix, --oidc-groups-prefix), so the console reads
+	// as the same user RBAC was written for (P3-02).
+	ImpersonateUserPrefix  string
+	ImpersonateGroupPrefix string
+	// AccessTTL is how long an answer about what a person may see stands
+	// before Kubernetes is asked again.
+	AccessTTL time.Duration
 	// HTTPSRedirect sends plain-HTTP requests to HTTPS, behind a
 	// TLS-terminating Ingress (P3-11).
 	HTTPSRedirect bool
@@ -113,6 +122,9 @@ func Parse(args []string) (Config, error) {
 	fs.DurationVar(&c.SessionMax, "session-max", envDuration("SESSION_MAX", 7*24*time.Hour), "sign a session out this long after sign-in whatever happens")
 	fs.StringVar(&c.AuditWebhookURL, "audit-webhook", env("AUDIT_WEBHOOK_URL", ""), "POST every audit record to this URL as JSON")
 	fs.StringVar(&c.AuditWebhookToken, "audit-webhook-token", env("AUDIT_WEBHOOK_TOKEN", ""), "bearer token sent with audit webhook requests")
+	fs.StringVar(&c.ImpersonateUserPrefix, "impersonate-user-prefix", env("IMPERSONATE_USER_PREFIX", ""), "put before user names when reading as a person: the API servers' --oidc-username-prefix")
+	fs.StringVar(&c.ImpersonateGroupPrefix, "impersonate-group-prefix", env("IMPERSONATE_GROUP_PREFIX", ""), "put before group names when reading as a person: the API servers' --oidc-groups-prefix")
+	fs.DurationVar(&c.AccessTTL, "access-ttl", envDuration("ACCESS_TTL", 2*time.Minute), "how long an answer about what a person may see stands before Kubernetes is asked again")
 	fs.BoolVar(&c.HTTPSRedirect, "https-redirect", envBool("HTTPS_REDIRECT", false), "send plain-HTTP requests (by X-Forwarded-Proto) to HTTPS, behind an Ingress with TLS")
 	if err := fs.Parse(args); err != nil {
 		return c, err

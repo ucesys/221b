@@ -113,7 +113,7 @@ function Shell() {
       style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}
     >
       <TopBar cluster={live.cluster} counts={live.counts} tab={view === 'cluster' ? null : tab} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
-      <Banners cluster={live.cluster} stream={live.stream} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} />
+      <Banners cluster={live.cluster} stream={live.stream} now={now} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} accessError={live.accessError} />
       {view === 'cluster' ? (
         <ClusterPage route={route} me={me} now={now} onEdit={(id) => setEditing(id)} />
       ) : (

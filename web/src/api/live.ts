@@ -27,6 +27,8 @@ export interface LiveState {
   /** Counts refresh ticks, so details can be fetched again on each. */
   tick: number
   stream: StreamState
+  /** Why nothing is shown: Kubernetes could not be asked what this person may see (P3-02); "" otherwise. */
+  accessError: string
 }
 
 export const initialState: LiveState = {
@@ -39,6 +41,7 @@ export const initialState: LiveState = {
   refreshedAt: null,
   tick: 0,
   stream: 'connecting',
+  accessError: '',
 }
 
 /** The key of a row: nodes are keyed by name, everything else by key. */
@@ -249,6 +252,10 @@ export class LiveStore {
     })
     es.addEventListener('meta', (e) => {
       this.commit(applyMeta(current(), JSON.parse((e as MessageEvent<string>).data) as MetaEvent))
+    })
+    es.addEventListener('access', (e) => {
+      const a = JSON.parse((e as MessageEvent<string>).data) as { error?: string }
+      this.commit({ ...current(), accessError: a.error ?? '' })
     })
     es.addEventListener('refresh', (e) => {
       const next = applyRefresh(current(), JSON.parse((e as MessageEvent<string>).data) as RefreshEvent)

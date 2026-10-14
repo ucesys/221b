@@ -134,9 +134,23 @@ for rule in next(yaml.safe_load_all(sys.stdin))["rules"]:
             out.add(f"{g}/{r}" if g else r)
 print(" ".join(sorted(out)))'
 }
-WANT_READ='apps/controllerrevisions apps/daemonsets apps/deployments apps/replicasets apps/statefulsets autoscaling/horizontalpodautoscalers batch/cronjobs batch/jobs configmaps coordination.k8s.io/leases discovery.k8s.io/endpointslices endpoints events limitranges metrics.k8s.io/nodes metrics.k8s.io/pods namespaces networking.k8s.io/ingresses networking.k8s.io/networkpolicies nodes nodes/proxy persistentvolumeclaims pods pods/log policy/poddisruptionbudgets rbac.authorization.k8s.io/rolebindings rbac.authorization.k8s.io/roles resourcequotas secrets serviceaccounts services'
+# What it reads, plus, with sign-in, the people it reads as (users and
+# groups, impersonated) and the reviews of their access it creates.
+WANT_READ='apps/controllerrevisions apps/daemonsets apps/deployments apps/replicasets apps/statefulsets authorization.k8s.io/subjectaccessreviews autoscaling/horizontalpodautoscalers batch/cronjobs batch/jobs configmaps coordination.k8s.io/leases discovery.k8s.io/endpointslices endpoints events groups limitranges metrics.k8s.io/nodes metrics.k8s.io/pods namespaces networking.k8s.io/ingresses networking.k8s.io/networkpolicies nodes nodes/proxy persistentvolumeclaims pods pods/log policy/poddisruptionbudgets rbac.authorization.k8s.io/rolebindings rbac.authorization.k8s.io/roles resourcequotas secrets serviceaccounts services users'
 read_only_resources() { [ "$(granted "$out")" = "$WANT_READ" ]; }
-read_only_verbs() { ! cluster_role | grep -E 'verbs:' | grep -q -E 'create|update|patch|delete|\*'; }
+# Read-only, but for the access reviews it creates to ask what a person may see.
+read_only_verbs() {
+  ! cluster_role | awk '/resources:/ { res = $0 } /verbs:/ && res !~ /subjectaccessreviews/ { print }' | grep -q -E 'create|update|patch|delete|\*'
+}
+# With sign-in, it may impersonate people and review their access; with
+# sign-in off there is nobody to read as, and neither is granted.
+impersonation() {
+  cluster_role | grep -A1 '"users", "groups"' | grep -q 'verbs: \["impersonate"\]' &&
+    cluster_role | grep -A1 '"subjectaccessreviews"' | grep -q 'verbs: \["create"\]' &&
+    grep -A1 'name: IMPERSONATE_USER_PREFIX' "$out" | grep -q '""' &&
+    ! cluster_role "$WORK/chart-noauth.yaml" | grep -q -E 'impersonate|subjectaccessreviews' &&
+    ! grep -q 'IMPERSONATE_USER_PREFIX' "$WORK/chart-noauth.yaml"
+}
 # Logs and metrics are read, never listed or watched more than needed.
 log_verbs() { cluster_role | grep -A1 '"pods/log"' | grep -q 'verbs: \["get"\]'; }
 secrets_optional() {
@@ -147,7 +161,7 @@ secrets_optional() {
 settings_only() {
   settings_role | grep -q 'resources: \["configmaps"\]' && settings_role | grep -q 'resourceNames: \["console-221b"\]' &&
     [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","patch"] verbs:["get","list","create","update","delete"] ' ] &&
-    [ "$(grep -E 'verbs:' "$out" | grep -c -E 'create|update|delete|\*')" = 1 ]
+    [ "$(grep -E 'verbs:' "$out" | grep -c -E 'update|delete|\*')" = 1 ]
 }
 # The connections to other clusters: Secrets in the release namespace, by
 # default; in memory on request, and then nothing is granted on Secrets.
@@ -205,7 +219,8 @@ check "the Service is a ClusterIP" cluster_ip
 check "probes, requests and limits" probes_and_resources
 check "runs as non-root on a read-only root filesystem" hardened
 check "reads the kinds the tabs show, pod logs, metrics and the kubelets' stats, and nothing else" read_only_resources
-check "the ClusterRole's verbs are read-only" read_only_verbs
+check "the ClusterRole's verbs are read-only, but for the access reviews" read_only_verbs
+check "with sign-in it impersonates people and reviews their access; without, neither" impersonation
 check "pod logs are only read" log_verbs
 check "secrets.read=false grants nothing on Secrets and tells the server" secrets_optional
 check "it writes only its own settings ConfigMap and the connection Secrets in its namespace" settings_only

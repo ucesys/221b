@@ -29,7 +29,7 @@ export function ServicePanel({ serviceKey, row, gone, now, onClose, onToast }: P
   const details = useDetails<ServiceDetails>(apiPath(`services/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`))
   const d = details.data
   const head = d ?? row
-  const deleted = gone || details.gone
+  const deleted = (gone || details.gone) && !details.forbidden
   return (
     <Drawer
       label="Service details"

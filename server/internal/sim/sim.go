@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	authzv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -68,6 +69,7 @@ type Sim struct {
 	token string
 	// What access reviews refuse (see /sim/deny).
 	denyVerbs, denyNamespaces, denyUsers []string
+	onlyNamespaces                       map[string][]string
 
 	mu       sync.Mutex
 	rv       int64
@@ -233,8 +235,46 @@ func (s *Sim) api(h http.HandlerFunc) http.HandlerFunc {
 			status(w, http.StatusServiceUnavailable, "ServiceUnavailable", "the simulated API server is down")
 			return
 		}
+		// A read made as a person (Impersonate-User) is refused the way
+		// the API server would, by the same rules the access reviews follow.
+		if user, groups, imp := person(r); imp {
+			_ = groups
+			if ok, reason := s.decide(user, true, &authzv1.ResourceAttributes{Verb: verbOf(r.Method), Namespace: namespaceOf(r.URL.Path)}); !ok {
+				status(w, http.StatusForbidden, "Forbidden", user+" is forbidden: "+reason)
+				return
+			}
+		}
 		h(w, r)
 	}
+}
+
+// verbOf is the Kubernetes verb of a request's method.
+func verbOf(method string) string {
+	switch method {
+	case http.MethodGet:
+		return "get"
+	case http.MethodPost:
+		return "create"
+	case http.MethodPut:
+		return "update"
+	case http.MethodPatch:
+		return "patch"
+	case http.MethodDelete:
+		return "delete"
+	}
+	return strings.ToLower(method)
+}
+
+// namespaceOf reads the namespace of an API path, or "" for a
+// cluster-scoped one.
+func namespaceOf(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "namespaces" && i >= 2 {
+			return parts[i+1]
+		}
+	}
+	return ""
 }
 
 func (s *Sim) admin(h func(r *http.Request) error) http.HandlerFunc {

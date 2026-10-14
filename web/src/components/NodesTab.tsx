@@ -62,9 +62,11 @@ export function NodesTab({ cluster, now, onToast, route }: TabProps) {
     ['control-plane', 'Control plane', cp],
     ['worker', 'Workers', rows.length - cp],
   ]
+  // Every cluster has a node: an empty list once synced means Kubernetes
+  // lets this person list none (P3-02).
   const shownText = !rows.length
     ? loaded && cluster?.synced
-      ? 'This cluster has no nodes.'
+      ? 'No nodes to show: Kubernetes does not let you list nodes in this cluster, or it has none.'
       : 'Waiting for the first list of nodes…'
     : table.shown.length < rows.length
       ? `Showing ${table.shown.length} of ${rows.length} nodes`
@@ -93,7 +95,7 @@ export function NodesTab({ cluster, now, onToast, route }: TabProps) {
                 <ExportMenu onExport={(f) => table.exportRows(f, cluster?.name, 'nodes', onToast)} disabled={!table.shown.length} what="the nodes in view" />
               </div>
             </div>
-            <DataTable<NodeRow> label="Nodes" rows={table.shown} cols={table.cols} rowKey={(r) => r.name} rowLabel={nodeLabel} sort={table.sort} onSort={table.onSort} selected={selected} onOpen={onOpen} compact={compact} now={now} empty="No nodes match this filter." rowAttr="node" />
+            <DataTable<NodeRow> label="Nodes" rows={table.shown} cols={table.cols} rowKey={(r) => r.name} rowLabel={nodeLabel} sort={table.sort} onSort={table.onSort} selected={selected} onOpen={onOpen} compact={compact} now={now} empty={rows.length ? 'No nodes match this filter.' : 'No nodes to show: Kubernetes does not let you list nodes in this cluster, or it has none.'} rowAttr="node" />
             <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>
               Bars: light = requested, solid = in use; the percentage is requested of allocatable. Free = allocatable − requested. Click a node for its details, or its pod count for its pods.
             </p>

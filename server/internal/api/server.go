@@ -19,6 +19,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/ucesys/221b/server/internal/access"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
@@ -31,9 +35,9 @@ import (
 
 // Store is what the API reads rows from; *live.Store implements it.
 type Store interface {
-	Snapshot(views []string) []byte
+	Snapshot(views []string, f live.Filter) []byte
 	Row(view, key string) ([]byte, bool)
-	Subscribe(views []string) (*live.Sub, []byte, error)
+	Subscribe(views []string, f live.Filter) (*live.Sub, []byte, error)
 	Unsubscribe(*live.Sub)
 	Stats() (views []live.ViewStats, subscribers int, recomputes uint64)
 	Delays() live.Histogram
@@ -44,8 +48,9 @@ type Store interface {
 type Cluster interface {
 	views.Source
 	PodUsageOf(namespace, name string) (nodes.Usage, bool)
-	ObjectYAML(ctx context.Context, k kube.Kind, namespace, name string) (string, error)
-	Logs(ctx context.Context, namespace, name string, o kube.LogOptions) (io.ReadCloser, error)
+	ObjectYAML(ctx context.Context, p kube.Person, k kube.Kind, namespace, name string) (string, error)
+	Logs(ctx context.Context, p kube.Person, namespace, name string, o kube.LogOptions) (io.ReadCloser, error)
+	CanI(ctx context.Context, p kube.Person, verb, group, resource, namespace string) (bool, error)
 }
 
 // Settings reads and changes the shared settings; *settings.Service
@@ -114,6 +119,47 @@ type Options struct {
 	// HTTPSRedirect sends plain-HTTP requests (by X-Forwarded-Proto) to
 	// HTTPS, for a TLS-terminating Ingress (P3-11).
 	HTTPSRedirect bool
+	// Access keeps what each person may see in each cluster (P3-02); nil
+	// shows everyone everything, as with sign-in off.
+	Access *access.Cache
+	// AccessRecheck is how often an open stream asks again whether its
+	// person's access has changed (what the cache has forgotten).
+	AccessRecheck time.Duration
+	// Impersonation maps the signed-in person to the user and groups the
+	// clusters know them as.
+	Impersonation Impersonation
+}
+
+// Impersonation says how a person's name and groups are given to the API
+// servers: with the prefixes their OIDC configuration adds
+// (--oidc-username-prefix, --oidc-groups-prefix), so RBAC written for the
+// people matches the console's reads for them.
+type Impersonation struct {
+	UserPrefix  string
+	GroupPrefix string
+}
+
+// personOf is the person a session is, as the clusters know them.
+func (i Impersonation) personOf(u auth.User) kube.Person {
+	if u.Username == "" {
+		return kube.Person{}
+	}
+	p := kube.Person{User: i.UserPrefix + u.Username}
+	authenticated := false
+	for _, g := range u.Groups {
+		if strings.HasPrefix(g, "system:") {
+			p.Groups = append(p.Groups, g)
+			authenticated = authenticated || g == "system:authenticated"
+		} else {
+			p.Groups = append(p.Groups, i.GroupPrefix+g)
+		}
+	}
+	// Every signed-in user carries system:authenticated in Kubernetes, and
+	// RBAC bound to it (the discovery role, say) must apply to them.
+	if !authenticated {
+		p.Groups = append(p.Groups, "system:authenticated")
+	}
+	return p
 }
 
 // Gauge is one value on the metrics endpoint.
@@ -149,6 +195,9 @@ func New(o Options) *Server {
 	}
 	if o.MaxStreams <= 0 {
 		o.MaxStreams = 200
+	}
+	if o.AccessRecheck <= 0 {
+		o.AccessRecheck = 30 * time.Second
 	}
 	if o.Heartbeat <= 0 {
 		o.Heartbeat = 15 * time.Second
@@ -247,6 +296,114 @@ func (s *Server) lookup(w http.ResponseWriter, r *http.Request) (Store, Cluster,
 		return nil, nil, false
 	}
 	return st, cl, true
+}
+
+// person is who the request is for, as the clusters know them: nobody
+// with sign-in off, when the console reads as itself.
+func (s *Server) person(r *http.Request) kube.Person {
+	if s.opts.Auth == nil || s.opts.Access == nil {
+		return kube.Person{}
+	}
+	sess, ok := auth.SessionFrom(r.Context())
+	if !ok {
+		return kube.Person{}
+	}
+	return s.opts.Impersonation.personOf(sess.User)
+}
+
+// clusterID is the connection a data request is for.
+func clusterID(r *http.Request) string {
+	if id := r.PathValue("cluster"); id != "" {
+		return id
+	}
+	return clusters.LocalID
+}
+
+// access is what the request's person may see in the cluster; nil for
+// nobody, who sees everything.
+func (s *Server) access(r *http.Request, cl Cluster) *access.Access {
+	p := s.person(r)
+	if p.Nobody() {
+		return nil
+	}
+	return s.opts.Access.For(clusterID(r), cl, p)
+}
+
+// prepareTimeout bounds the reviews before a snapshot or a stream.
+const prepareTimeout = 15 * time.Second
+
+// prepare asks Kubernetes what the person may see of the views, if it
+// has not been asked lately, and reports whether the answers changed.
+func (s *Server) prepare(ctx context.Context, a *access.Access, cl Cluster, names []string) (bool, error) {
+	if a == nil {
+		return false, nil
+	}
+	pairs := access.Pairs(names, namespaceNames(cl))
+	if !a.Stale(pairs) {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, prepareTimeout)
+	defer cancel()
+	return a.Prepare(ctx, pairs, 0)
+}
+
+// namespaceNames lists the namespaces in the cache.
+func namespaceNames(cl Cluster) []string {
+	objs := cl.Objects("namespaces", "")
+	out := make([]string, 0, len(objs))
+	for _, o := range objs {
+		if m, ok := o.(metav1.Object); ok {
+			out = append(out, m.GetName())
+		}
+	}
+	return out
+}
+
+// mayList answers whether the person may list the resource in the
+// namespace, as the detail endpoints need to know; 403 otherwise. The
+// answer is taken from the stream's reviews when there is one, and asked
+// for when there is not.
+func (s *Server) mayList(w http.ResponseWriter, r *http.Request, cl Cluster, resource, namespace string) bool {
+	a := s.access(r, cl)
+	if a == nil {
+		return true
+	}
+	pairs := []access.Pair{{Group: groupOf(resource), Resource: resource, Namespace: namespace}}
+	if a.Stale(pairs) {
+		ctx, cancel := context.WithTimeout(r.Context(), prepareTimeout)
+		defer cancel()
+		if _, err := a.Prepare(ctx, pairs, 0); err != nil {
+			jsonError(w, http.StatusBadGateway, "asking Kubernetes what you may see failed: "+err.Error())
+			return false
+		}
+	}
+	if !a.Namespaced(resource, namespace) {
+		jsonError(w, http.StatusForbidden, fmt.Sprintf("Kubernetes does not let you list %s in %s", resource, namespace))
+		return false
+	}
+	return true
+}
+
+func groupOf(resource string) string {
+	for _, k := range kube.Kinds {
+		if k.Resource == resource {
+			return k.Group
+		}
+	}
+	return ""
+}
+
+// accessState is the "access" stream event: why nothing is shown, or
+// that Kubernetes answers again ("").
+func accessState(err error) map[string]string {
+	if err == nil {
+		return map[string]string{"error": ""}
+	}
+	msg := "Kubernetes could not be asked what you may see: " + err.Error() + "."
+	if apierrors.IsForbidden(err) {
+		msg += " The console's account needs create on subjectaccessreviews there."
+	}
+	return map[string]string{"error": msg}
 }
 
 // ServeHTTP adds security headers and recovers from panics.
@@ -388,7 +545,7 @@ func viewsOf(r *http.Request) ([]string, error) {
 }
 
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
-	st, _, ok := s.lookup(w, r)
+	st, cl, ok := s.lookup(w, r)
 	if !ok {
 		return
 	}
@@ -397,20 +554,44 @@ func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, r, st.Snapshot(names))
+	a := s.access(r, cl)
+	if _, err := s.prepare(r.Context(), a, cl, names); err != nil {
+		// Nothing is shown rather than everything; the stream says why.
+		s.opts.Logger.Warn("asking what a person may see failed", "cluster", clusterID(r), "user", a.Person().User, "err", err)
+	}
+	writeJSON(w, r, st.Snapshot(names, filterOf(a)))
+}
+
+// filterOf is the access as the store takes it: a nil *Access must be a
+// nil Filter, not an interface holding nil.
+func filterOf(a *access.Access) live.Filter {
+	if a == nil {
+		return nil
+	}
+	return a
 }
 
 func (s *Server) node(w http.ResponseWriter, r *http.Request) {
-	st, _, ok := s.lookup(w, r)
+	st, cl, ok := s.lookup(w, r)
 	if !ok {
 		return
+	}
+	if a := s.access(r, cl); a != nil {
+		if _, err := s.prepare(r.Context(), a, cl, []string{live.ViewNodes}); err != nil {
+			jsonError(w, http.StatusBadGateway, accessState(err)["error"])
+			return
+		}
+		if !a.Cluster("nodes") {
+			jsonError(w, http.StatusForbidden, "Kubernetes does not let you list nodes")
+			return
+		}
 	}
 	row, ok := st.Row(live.ViewNodes, r.PathValue("name"))
 	if !ok {
 		jsonError(w, http.StatusNotFound, "no node named "+strconv.Quote(r.PathValue("name")))
 		return
 	}
-	writeJSON(w, r, row)
+	writeJSON(w, r, live.Redact(live.ViewNodes, row, filterOf(s.access(r, cl))))
 }
 
 func (s *Server) apiNotFound(w http.ResponseWriter, r *http.Request) {
@@ -498,7 +679,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 // of a view, a "meta" event per change of the cluster details or settings
 // and a "refresh" event per refresh tick.
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
-	st, _, ok := s.lookup(w, r)
+	st, cl, ok := s.lookup(w, r)
 	if !ok {
 		return
 	}
@@ -506,6 +687,15 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	// What the person may see is asked before the stream opens, and again
+	// as the answers age, so a change in their RBAC reaches them. When
+	// Kubernetes cannot be asked (the API server is away, or the console's
+	// account may not ask), nothing is shown and the stream says why.
+	a := s.access(r, cl)
+	_, prepareErr := s.prepare(r.Context(), a, cl, names)
+	if prepareErr != nil {
+		s.opts.Logger.Warn("asking what a person may see failed", "cluster", clusterID(r), "user", a.Person().User, "err", prepareErr)
 	}
 	if n := s.streams.Add(1); n > int64(s.opts.MaxStreams) {
 		s.streams.Add(-1)
@@ -551,7 +741,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return flush()
 	}
 
-	sub, snap, err := st.Subscribe(names)
+	sub, snap, err := st.Subscribe(names, filterOf(a))
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
@@ -564,13 +754,43 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	if err := write("snapshot", snap); err != nil {
 		return
 	}
+	accessEvent := func(err error) error {
+		b, _ := json.Marshal(accessState(err))
+		return write("access", b)
+	}
+	if prepareErr != nil {
+		if err := accessEvent(prepareErr); err != nil {
+			return
+		}
+	}
 	beat := time.NewTicker(s.opts.Heartbeat)
 	defer beat.Stop()
+	// The person's access is asked again as it ages, or when namespaces
+	// appear; a change sends a fresh snapshot. While Kubernetes cannot be
+	// asked, it is tried again sooner.
+	var recheck <-chan time.Time
+	var recheckTicker *time.Ticker
+	if a != nil {
+		every := s.opts.AccessRecheck
+		if prepareErr != nil {
+			every = min(every, 5*time.Second)
+		}
+		recheckTicker = time.NewTicker(every)
+		defer recheckTicker.Stop()
+		recheck = recheckTicker.C
+	}
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-beat.C:
+			// A connection replaced since (new credentials) has a new store:
+			// ending the stream makes the browser reopen it there.
+			if s.opts.Clusters != nil {
+				if now, _, ok := s.opts.Clusters.Lookup(clusterID(r)); !ok || now != st {
+					return
+				}
+			}
 			_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
 			if _, err := io.WriteString(out, ": ping\n\n"); err != nil {
 				return
@@ -578,10 +798,30 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			if err := flush(); err != nil {
 				return
 			}
+		case <-recheck:
+			changed, err := s.prepare(r.Context(), a, cl, names)
+			if (err == nil) != (prepareErr == nil) {
+				// Kubernetes can be asked again, or no longer: the browser hears.
+				if werr := accessEvent(err); werr != nil {
+					return
+				}
+				if err == nil {
+					recheckTicker.Reset(s.opts.AccessRecheck)
+				} else {
+					recheckTicker.Reset(min(s.opts.AccessRecheck, 5*time.Second))
+				}
+			}
+			if err != nil && prepareErr == nil {
+				s.opts.Logger.Warn("asking what a person may see failed", "cluster", clusterID(r), "user", a.Person().User, "err", err)
+			}
+			prepareErr = err
+			if changed {
+				sub.Resync()
+			}
 		case <-sub.Wake():
 			events, resync := sub.Take()
 			if resync {
-				if err := write("snapshot", st.Snapshot(names)); err != nil {
+				if err := write("snapshot", st.Snapshot(names, filterOf(a))); err != nil {
 					return
 				}
 				continue

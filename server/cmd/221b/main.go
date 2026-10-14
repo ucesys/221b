@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
+	"github.com/ucesys/221b/server/internal/access"
 	"github.com/ucesys/221b/server/internal/api"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
@@ -173,6 +174,12 @@ func run(args []string) error {
 	if err := manager.Start(ctx); err != nil {
 		return fmt.Errorf("cluster connections: %w", err)
 	}
+	// What each person may see (P3-02): Kubernetes is asked and the answers
+	// kept for a while; people who have not asked for an hour are forgotten.
+	var people *access.Cache
+	if authCfg.Mode != auth.ModeNone {
+		people = access.NewCache(access.Options{TTL: cfg.AccessTTL})
+	}
 	go func() {
 		t := time.NewTicker(time.Minute)
 		defer t.Stop()
@@ -182,6 +189,9 @@ func run(args []string) error {
 				return
 			case <-t.C:
 				authSvc.Sweep()
+				if people != nil {
+					people.Sweep(time.Hour)
+				}
 			}
 		}
 	}()
@@ -193,6 +203,8 @@ func run(args []string) error {
 		Clusters:      manager,
 		Auth:          authSvc,
 		Audit:         auditLog,
+		Access:        people,
+		Impersonation: api.Impersonation{UserPrefix: cfg.ImpersonateUserPrefix, GroupPrefix: cfg.ImpersonateGroupPrefix},
 		HTTPSRedirect: cfg.HTTPSRedirect,
 		Ready:         cluster.Ready,
 		UI:            ui.Handler(),
@@ -220,6 +232,7 @@ func run(args []string) error {
 				{Name: "b221_go_memory_bytes", Help: "Memory the Go runtime has mapped, in bytes.", Value: goMemory()},
 				{Name: "b221_resident_memory_bytes", Help: "Resident memory of the process, in bytes.", Value: residentMemory()},
 				{Name: "b221_sessions", Help: "Signed-in sessions.", Value: float64(authSvc.Sessions().Count())},
+				{Name: "b221_people_access", Help: "People whose access to a cluster is kept, per person and cluster.", Value: float64(peopleCount(people))},
 				{Name: "b221_audit_dropped_total", Help: "Audit records the webhook queue had no room for.", Value: float64(auditLog.Dropped()), Counter: true},
 			}
 			cached := cluster.CachedObjects()
@@ -302,6 +315,13 @@ func localSpec(cfg config.Config, restCfg *rest.Config, mode kube.Mode) clusters
 		spec.CA = clusters.CASystem
 	}
 	return spec
+}
+
+func peopleCount(c *access.Cache) int {
+	if c == nil {
+		return 0
+	}
+	return c.Count()
 }
 
 func newLogger(cfg config.Config) *slog.Logger {

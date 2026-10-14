@@ -96,11 +96,13 @@ func (m *Manager) SetLocal(ctx context.Context, spec Spec, cluster Client, store
 	if spec.Env == "" {
 		spec.Env = EnvOther
 	}
-	// What was saved for it (a name or description changed in the console) wins.
+	// What was saved for it (a name or description changed in the console)
+	// wins. A store that cannot be read yet (the API server is still coming
+	// up) is not fatal: the installation's name stands until a restart.
 	if saved, _, err := m.store.Get(ctx, LocalID); err == nil {
 		spec.Name, spec.Env, spec.Description, spec.Added, spec.Updated = saved.Name, saved.Env, saved.Description, saved.Added, saved.Updated
 	} else if !errors.Is(err, ErrNotFound) {
-		return err
+		m.log.Warn("the local connection's saved name could not be read; using the installation's", "err", err)
 	}
 	if spec.Added.IsZero() {
 		spec.Added = m.opts.Now().UTC()
@@ -116,15 +118,42 @@ func (m *Manager) SetLocal(ctx context.Context, spec Spec, cluster Client, store
 }
 
 // Start loads the saved connections and starts their watches. ctx bounds
-// every connection's life.
+// every connection's life. A store that cannot be read yet (the API
+// server is still coming up) is tried again every few seconds in the
+// background, so the console starts and the connections follow.
 func (m *Manager) Start(ctx context.Context) error {
 	m.ctx = ctx
+	if err := m.load(ctx); err != nil {
+		m.log.Warn("the saved connections could not be read; trying again", "err", err)
+		go func() {
+			t := time.NewTicker(10 * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if err := m.load(ctx); err == nil {
+						return
+					}
+				}
+			}
+		}()
+	}
+	return nil
+}
+
+// load starts every saved connection not running yet.
+func (m *Manager) load(ctx context.Context) error {
 	specs, err := m.store.List(ctx)
 	if err != nil {
 		return err
 	}
 	for _, s := range specs {
 		if s.ID == LocalID {
+			continue
+		}
+		if _, ok := m.Get(s.ID); ok {
 			continue
 		}
 		_, cred, err := m.store.Get(ctx, s.ID)
@@ -134,7 +163,10 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 		m.start(s, cred)
 	}
-	m.log.Info("connections loaded", "count", len(m.instances), "storage", m.store.Kind())
+	m.mu.RLock()
+	n := len(m.instances)
+	m.mu.RUnlock()
+	m.log.Info("connections loaded", "count", n, "storage", m.store.Kind())
 	return nil
 }
 

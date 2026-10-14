@@ -126,7 +126,9 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
   const details = useDetails<PodDetails>(apiPath(`pods/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`))
   const d = details.data
   // Deleted while open: the row left the table, or the server says 404.
-  const deleted = gone || details.gone
+  // A row missing from the table is a deleted pod, unless Kubernetes
+  // refused this person the details: then it is one they may not see.
+  const deleted = (gone || details.gone) && !details.forbidden
   const envCount = useMemo(() => (d ? d.containers.reduce((n, c) => n + c.env.length + c.envFrom.length, 0) : 0), [d])
   const head = d ?? row
   const status = head ? { tone: head.tone, text: head.status, tip: head.statusTip } : null

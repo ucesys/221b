@@ -432,6 +432,8 @@ func (t *tester) permissionsStep(ctx context.Context, cs *kubernetes.Clientset, 
 		t.add("Permissions", "err", fmt.Sprintf("The account cannot %s, which the console needs. Bind it to the role below.", strings.Join(missing, ", ")))
 		return
 	}
+	// Reading as people (P3-02) takes impersonating users and groups, and
+	// creating the reviews that ask what each of them may list.
 	imp := true
 	for _, res := range []string{"users", "groups"} {
 		ok, err := permission(ctx, cs, opts.Timeout, "impersonate", "", res, "")
@@ -439,13 +441,22 @@ func (t *tester) permissionsStep(ctx context.Context, cs *kubernetes.Clientset, 
 			imp = false
 		}
 	}
-	r.Impersonate = imp
+	reviews := false
+	if ok, err := permission(ctx, cs, opts.Timeout, "create", "authorization.k8s.io", "subjectaccessreviews", ""); err == nil && ok {
+		reviews = true
+	}
+	r.Impersonate = imp && reviews
 	var notes []string
 	if len(optional) > 0 {
 		notes = append(notes, fmt.Sprintf("it cannot %s, so those parts will be empty", strings.Join(optional, ", ")))
 	}
-	if !imp {
-		notes = append(notes, "it cannot impersonate people, so everyone will see what the account sees rather than what Kubernetes allows them")
+	switch {
+	case !imp && !reviews:
+		notes = append(notes, "it cannot impersonate people or review their access, so nobody will see anything here until it can: bind it to the role below")
+	case !imp:
+		notes = append(notes, "it cannot impersonate people, so their logs and YAML will be refused: bind it to the role below")
+	case !reviews:
+		notes = append(notes, "it cannot create SubjectAccessReviews, so nobody will see anything here until it can: bind it to the role below")
 	}
 	if s.Mode == ModeWrite {
 		var cannot []string
@@ -460,8 +471,8 @@ func (t *tester) permissionsStep(ctx context.Context, cs *kubernetes.Clientset, 
 		}
 	}
 	text := "Can read every resource the console shows"
-	if imp {
-		text += " and impersonate people, so Kubernetes RBAC decides what each person sees"
+	if r.Impersonate {
+		text += " and read as each person, so Kubernetes RBAC decides what each of them sees"
 	}
 	if s.Mode == ModeWrite {
 		text += ", and make the changes Watson runs"

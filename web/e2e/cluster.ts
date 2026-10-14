@@ -14,6 +14,22 @@ export const MODE: Mode = process.env.E2E_MODE === 'kind' ? 'kind' : 'sim'
 export const inKind = MODE === 'kind'
 
 const SIM = process.env.E2E_SIM_URL ?? 'http://127.0.0.1:7443'
+// The person with limited access (P3-02): the simulator's dev account, or
+// the local account the chart in kind is installed with.
+const DEV = process.env.E2E_DEV ?? 'dev@corp.example'
+const DEV_NAMESPACES = ['web', 'analytics']
+
+/** A RoleBinding of the view role for the dev account in a namespace. */
+function devBinding(namespace: string): unknown {
+  return {
+    apiVersion: 'rbac.authorization.k8s.io/v1',
+    kind: 'RoleBinding',
+    metadata: { name: 'e2e-dev-view', namespace, labels: { e2e: 'dev' } },
+    roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'view' },
+    subjects: [{ apiGroup: 'rbac.authorization.k8s.io', kind: 'User', name: DEV }],
+  }
+}
+
 // A second API server for the cluster connections (P3-05 to P3-09): a
 // second simulator, or the kind cluster itself through its in-cluster
 // address, which the console reaches as another connection.
@@ -91,6 +107,12 @@ async function kubectlApply(obj: unknown): Promise<void> {
 async function docker(...args: string[]): Promise<string> {
   const { stdout } = await run('docker', args, { timeout: 60_000 })
   return stdout
+}
+
+/** POSTs JSON to the simulator's admin API. */
+async function simPostJSON(path: string, body: unknown): Promise<void> {
+  const res = await fetch(`${SIM}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  if (!res.ok) throw new Error(`${path}: ${res.status}`)
 }
 
 async function simPost(path: string, method = 'POST'): Promise<void> {
@@ -332,6 +354,30 @@ export const cluster = {
     if (!res.ok) throw new Error(`the second simulator did not take a token: ${res.status}`)
     const list = (await (await fetch(`${OTHER_SIM}/api/v1/nodes`, { headers: { Authorization: `Bearer ${OTHER_TOKEN}` } })).json()) as { items: unknown[] }
     return { server: OTHER_SIM, ca: 'system', caPem: '', token: OTHER_TOKEN, nodes: list.items.length }
+  },
+
+  /**
+   * Limits the dev account to some namespaces (P3-02) and returns them:
+   * the simulator is told, or RoleBindings of the view role are made in
+   * kind, where the dev may list the console's own namespace only.
+   */
+  async limitDev(): Promise<string[]> {
+    if (inKind) {
+      await kubectl('delete', 'rolebinding', '-A', '-l', 'e2e=dev', '--ignore-not-found')
+      await kubectlApply(devBinding(NAMESPACE))
+      return [NAMESPACE]
+    }
+    await simPostJSON('/sim/deny', { only: { [DEV]: DEV_NAMESPACES } })
+    return DEV_NAMESPACES
+  },
+
+  /** Lets the dev account list one more namespace. */
+  async allowDev(namespace: string): Promise<void> {
+    if (inKind) {
+      await kubectlApply(devBinding(namespace))
+      return
+    }
+    await simPostJSON('/sim/deny', { only: { [DEV]: [...DEV_NAMESPACES, namespace] } })
   },
 
   /** Whether the Secret a connection is kept in exists (P3-07, P3-08). */

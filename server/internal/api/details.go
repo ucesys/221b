@@ -37,12 +37,15 @@ func (s *Server) pod(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
+	if !s.mayList(w, r, cl, "pods", ns) {
+		return
+	}
 	p, _ := cl.Object("pods", ns, name).(*corev1.Pod)
 	if p == nil {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("no pod %s/%s: it may have been deleted", ns, name))
 		return
 	}
-	d := podDetails{PodDetails: views.BuildPodDetails(s.opts.Cluster, p, s.opts.Now().UTC())}
+	d := podDetails{PodDetails: views.BuildPodDetails(cl, p, s.opts.Now().UTC())}
 	if u, ok := cl.PodUsageOf(ns, name); ok {
 		d.Usage = &u
 	}
@@ -60,12 +63,15 @@ func (s *Server) service(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
+	if !s.mayList(w, r, cl, "services", ns) {
+		return
+	}
 	svc, _ := cl.Object("services", ns, name).(*corev1.Service)
 	if svc == nil {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("no service %s/%s: it may have been deleted", ns, name))
 		return
 	}
-	b, err := json.Marshal(views.BuildServiceDetails(s.opts.Cluster, svc, s.opts.Now().UTC()))
+	b, err := json.Marshal(views.BuildServiceDetails(cl, svc, s.opts.Now().UTC()))
 	if err != nil {
 		jsonError(w, http.StatusInternalServerError, "encoding the service details: "+err.Error())
 		return
@@ -83,7 +89,10 @@ func (s *Server) release(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	d, ok := views.BuildReleaseDetails(s.opts.Cluster, ns, name, s.opts.Now().UTC())
+	if !s.mayList(w, r, cl, "secrets", ns) {
+		return
+	}
+	d, ok := views.BuildReleaseDetails(cl, ns, name, s.opts.Now().UTC())
 	if !ok {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("no Helm release %s in %s: it may have been uninstalled", name, ns))
 		return
@@ -122,7 +131,10 @@ func (s *Server) object(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	d, ok := views.BuildObjectDetails(s.opts.Cluster, k, ns, name, s.opts.Now().UTC())
+	if !s.mayList(w, r, cl, k.Resource, ns) {
+		return
+	}
+	d, ok := views.BuildObjectDetails(cl, k, ns, name, s.opts.Now().UTC())
 	if !ok {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("no %s %s in %s: it may have been deleted", k.Kind, name, ns))
 		return
@@ -174,14 +186,14 @@ func (s *Server) yaml(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	text, err := cl.ObjectYAML(ctx, k, ns, name)
+	text, err := cl.ObjectYAML(ctx, s.person(r), k, ns, name)
 	if err != nil {
 		code, msg := http.StatusBadGateway, "reading the object from the API server: "+err.Error()
 		switch {
 		case apierrors.IsNotFound(err):
 			code, msg = http.StatusNotFound, fmt.Sprintf("no %s named %s: it may have been deleted", k.Kind, name)
 		case apierrors.IsForbidden(err):
-			code, msg = http.StatusForbidden, fmt.Sprintf("not allowed to read %s %s: %s", k.Kind, name, err.Error())
+			code, msg = http.StatusForbidden, fmt.Sprintf("Kubernetes does not let you read %s %s: %s", k.Kind, name, err.Error())
 		case errors.Is(err, context.DeadlineExceeded):
 			code, msg = http.StatusGatewayTimeout, "the API server did not answer in time"
 		}
@@ -240,7 +252,7 @@ func (s *Server) podLog(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	stream, err := cl.Logs(ctx, ns, name, o)
+	stream, err := cl.Logs(ctx, s.person(r), ns, name, o)
 	if err != nil {
 		code, msg := http.StatusBadGateway, "reading the logs from the API server: "+err.Error()
 		var status *apierrors.StatusError
@@ -248,7 +260,7 @@ func (s *Server) podLog(w http.ResponseWriter, r *http.Request) {
 		case apierrors.IsNotFound(err):
 			code, msg = http.StatusNotFound, fmt.Sprintf("no pod %s/%s: it may have been deleted", ns, name)
 		case apierrors.IsForbidden(err):
-			code, msg = http.StatusForbidden, "not allowed to read pod logs: "+err.Error()
+			code, msg = http.StatusForbidden, "Kubernetes does not let you read this pod's logs: "+err.Error()
 		case apierrors.IsBadRequest(err):
 			// "previous terminated container not found", "container x is
 			// waiting to start": the API server's own words are the clearest.

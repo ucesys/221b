@@ -3,3 +3,5 @@
 export const E2E_USER = process.env.E2E_USER ?? 'admin@corp.example'
 export const E2E_PASSWORD = process.env.E2E_PASSWORD ?? 'password'
 export const E2E_VIEWER = process.env.E2E_VIEWER ?? 'viewer@corp.example'
+/** A person Kubernetes lets list only some namespaces (P3-02). */
+export const E2E_DEV = process.env.E2E_DEV ?? 'dev@corp.example'

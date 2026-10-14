@@ -22,8 +22,13 @@ func ToYAML(v any) (string, error) {
 // ObjectYAML reads an object from the API server as it is now and renders
 // it as YAML the way `kubectl get -o yaml` does, apart from two changes
 // (P2-08): managed fields are left out, and a Secret's values are replaced
-// by their sizes, so no value is ever sent (X-01).
-func (c *Cluster) ObjectYAML(ctx context.Context, k Kind, namespace, name string) (string, error) {
+// by their sizes, so no value is ever sent (X-01). The read is made as the
+// person, so their RBAC decides whether they get it (P3-02).
+func (c *Cluster) ObjectYAML(ctx context.Context, p Person, k Kind, namespace, name string) (string, error) {
+	cs, err := c.as(p)
+	if err != nil {
+		return "", err
+	}
 	path := k.Path()
 	if k.Namespaced {
 		if k.Group == "" {
@@ -32,7 +37,7 @@ func (c *Cluster) ObjectYAML(ctx context.Context, k Kind, namespace, name string
 			path = fmt.Sprintf("/apis/%s/%s/namespaces/%s/%s", k.Group, k.Version, namespace, k.Resource)
 		}
 	}
-	raw, err := c.rest.Get().AbsPath(path+"/"+name).SetHeader("Accept", "application/json").Do(ctx).Raw()
+	raw, err := cs.CoreV1().RESTClient().Get().AbsPath(path+"/"+name).SetHeader("Accept", "application/json").Do(ctx).Raw()
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return "", ErrNotFound

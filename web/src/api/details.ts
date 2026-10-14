@@ -8,6 +8,8 @@ export interface Details<T> {
   error: string
   /** 404: the object is gone (or was never there). */
   gone: boolean
+  /** 403: Kubernetes does not let this person see it (P3-02). */
+  forbidden: boolean
   loading: boolean
 }
 
@@ -31,12 +33,12 @@ export async function errorText(r: Response): Promise<string> {
  */
 export function useDetails<T>(url: string | null): Details<T> {
   const tick = useRefreshTick()
-  const [state, setState] = useState<Details<T>>({ data: null, error: '', gone: false, loading: !!url })
+  const [state, setState] = useState<Details<T>>({ data: null, error: '', gone: false, forbidden: false, loading: !!url })
   const [last, setLast] = useState(url)
   if (url !== last) {
     // Another object: start over rather than show the previous one.
     setLast(url)
-    setState({ data: null, error: '', gone: false, loading: !!url })
+    setState({ data: null, error: '', gone: false, forbidden: false, loading: !!url })
   }
   useEffect(() => {
     if (!url) return
@@ -47,11 +49,11 @@ export function useDetails<T>(url: string | null): Details<T> {
         if (!r.ok) {
           if (unauthorized(r)) return
           const msg = await errorText(r)
-          setState((s) => ({ data: s.data, error: msg, gone: r.status === 404, loading: false }))
+          setState((s) => ({ data: s.data, error: msg, gone: r.status === 404, forbidden: r.status === 403, loading: false }))
           return
         }
         const data = (await r.json()) as T
-        if (!stale) setState({ data, error: '', gone: false, loading: false })
+        if (!stale) setState({ data, error: '', gone: false, forbidden: false, loading: false })
       })
       .catch(() => {
         if (!stale) setState((s) => ({ ...s, error: 'Could not reach the server.', loading: false }))

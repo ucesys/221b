@@ -25,6 +25,7 @@ BASE_URL=http://127.0.0.1:8080
 # use too (web/e2e/accounts.ts).
 E2E_USER=admin@corp.example
 E2E_VIEWER=viewer@corp.example
+E2E_DEV=dev@corp.example
 E2E_PASSWORD=password
 COOKIES=$WORK/cookies
 # Signs the shell in to a console at $1 as the administrator and keeps the
@@ -89,10 +90,17 @@ helm install "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" \
   --set auth.mode=local \
   --set "auth.local.users[0].email=$E2E_USER" --set "auth.local.users[0].name=Ada Admin" --set "auth.local.users[0].passwordHash=$hash" \
   --set "auth.local.users[1].email=$E2E_VIEWER" --set "auth.local.users[1].name=Vera Viewer" --set "auth.local.users[1].passwordHash=$hash" \
+  --set "auth.local.users[2].email=$E2E_DEV" --set "auth.local.users[2].name=Dev Developer" --set "auth.local.users[2].passwordHash=$hash" \
   --set "auth.admins[0]=$E2E_USER" \
+  --set auth.kubernetes.accessTTL=10s \
   --wait --timeout 60s
 notice "helm install" "The console was Ready $(( $(date +%s) - start ))s after helm install on Kubernetes $MINOR."
 kubectl -n "$NS" get all,networkpolicy,serviceaccount
+# What each person may see is what Kubernetes lets them (P3-02): the
+# administrator everything, the viewer everything but Secrets, and the
+# developer one namespace (web/e2e/access.spec.ts binds it).
+kubectl create clusterrolebinding e2e-admin --clusterrole=cluster-admin --user="$E2E_USER"
+kubectl create clusterrolebinding e2e-viewer --clusterrole=view --user="$E2E_VIEWER"
 endstep
 
 step "Permissions"
@@ -179,7 +187,7 @@ step "Browser tests"
   cd "$ROOT/web"
   E2E_MODE=kind E2E_BASE_URL=$BASE_URL E2E_NAMESPACE=$NS E2E_IMAGE=$IMAGE \
     E2E_CONTROL_PLANE=$CLUSTER-control-plane E2E_METRICS_MANIFEST=$METRICS_MANIFEST \
-    E2E_USER=$E2E_USER E2E_VIEWER=$E2E_VIEWER E2E_PASSWORD=$E2E_PASSWORD \
+    E2E_USER=$E2E_USER E2E_VIEWER=$E2E_VIEWER E2E_DEV=$E2E_DEV E2E_PASSWORD=$E2E_PASSWORD \
     npx playwright test 2>&1 | tee "$WORK/playwright.log"
 )
 endstep
@@ -295,6 +303,8 @@ endstep
 
 step "helm uninstall leaves nothing behind"
 kubectl -n "$NS" delete pod -l e2e=crashloop --ignore-not-found
+kubectl delete rolebinding -A -l e2e=dev --ignore-not-found
+kubectl delete clusterrolebinding e2e-admin e2e-viewer --ignore-not-found
 # Foreground deletion: the Deployment goes only once its pods have gone.
 # Helm 4's wait sometimes gives up on a Deployment still Terminating right
 # after a rollout; what matters is checked below: nothing may remain.

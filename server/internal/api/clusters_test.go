@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -12,16 +13,21 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 
+	"github.com/ucesys/221b/server/internal/access"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/fake"
+	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sim"
@@ -47,8 +53,22 @@ func (s *source) RestConfig() *rest.Config { return nil }
 // administrator and a viewer), the fake cache as the local cluster and a
 // manager over a memory store, and returns a client signed in as who.
 func multiSetup(t *testing.T, who string) (*httptest.Server, *http.Client, *clusters.Manager, *bytes.Buffer) {
+	srv, c, m, out, _, _ := multiSetupWith(t, who, nil)
+	return srv, c, m, out
+}
+
+// multiSetupWith is multiSetup with the fake authorizer refusing some
+// "resource/namespace" pairs to every person (P3-02).
+func multiSetupWith(t *testing.T, who string, deny map[string]bool) (*httptest.Server, *http.Client, *clusters.Manager, *bytes.Buffer, *source, *live.Store) {
 	t.Helper()
-	local := &source{Source: fake.New("n1", "n2"), logs: map[string][]string{}}
+	local := &source{Source: fake.New("n1", "n2"), logs: map[string][]string{}, deny: deny}
+	for _, ns := range []string{"default", "kube-system", "web"} {
+		local.Put(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}})
+	}
+	local.Put(samplePod("web", "shop", "n1"))
+	local.Put(samplePod("kube-system", "dns", "n2"))
+	local.logs["web/shop"] = []string{"hello"}
+	local.logs["kube-system/dns"] = []string{"secret things"}
 	store := live.New(local, live.Options{})
 	store.Notify(everything())
 	store.Process()
@@ -81,9 +101,9 @@ func multiSetup(t *testing.T, who string) (*httptest.Server, *http.Client, *clus
 		m.SetSettings(st.Refresh(), b)
 	})
 	ui := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "app:"+r.URL.Path) })
-	srv := httptest.NewServer(New(Options{Store: store, Cluster: local, Settings: shared, Clusters: m, Auth: svc, Audit: audit.New(audit.Options{Out: &auditOut}), Ready: func() bool { return true }, UI: ui, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+	srv := httptest.NewServer(New(Options{Store: store, Cluster: local, Settings: shared, Clusters: m, Auth: svc, Audit: audit.New(audit.Options{Out: &auditOut}), Access: access.NewCache(access.Options{TTL: 400 * time.Millisecond}), AccessRecheck: 50 * time.Millisecond, Heartbeat: 50 * time.Millisecond, Ready: func() bool { return true }, UI: ui, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
 	t.Cleanup(srv.Close)
-	return srv, signIn(t, srv, who), m, &auditOut
+	return srv, signIn(t, srv, who), m, &auditOut, local, store
 }
 
 // signIn returns a client signed in to the console as who.
@@ -302,5 +322,122 @@ func TestClusterConnections(t *testing.T) {
 	}
 	if strings.Contains(log, tok) {
 		t.Error("the token reached the audit log")
+	}
+}
+
+func TestPeopleSeeWhatKubernetesAllows(t *testing.T) {
+	// Nobody may list pods or read anything else in kube-system; the
+	// console itself watches it all.
+	deny := map[string]bool{"pods/kube-system": true, "secrets/kube-system": true, "services/kube-system": true, "configmaps/kube-system": true}
+	srv, viewer, _, _, src, st := multiSetupWith(t, "viewer@corp.example", deny)
+
+	// The snapshot carries web's pod and namespace, not kube-system's, and
+	// the totals to match.
+	resp, b := send(t, viewer, http.MethodGet, srv.URL+"/api/v1/snapshot?views=pods,namespaces,nodes", "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot: %s %s", resp.Status, b)
+	}
+	var snap struct {
+		Counts map[string]int `json:"counts"`
+		Views  map[string]struct {
+			Rows []struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"rows"`
+		} `json:"views"`
+	}
+	if err := json.Unmarshal([]byte(b), &snap); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(snap.Views["pods"].Rows); n != 1 || snap.Views["pods"].Rows[0].Namespace != "web" {
+		t.Fatalf("pods for the viewer: %s", b)
+	}
+	if n := len(snap.Views["namespaces"].Rows); n != 2 {
+		t.Fatalf("namespaces for the viewer: %d", n)
+	}
+	if len(snap.Views["nodes"].Rows) != 2 || snap.Counts["pods"] != 1 || snap.Counts["namespaces"] != 2 || snap.Counts["nodes"] != 2 {
+		t.Fatalf("nodes or counts for the viewer: %+v %s", snap.Counts, b)
+	}
+	if strings.Contains(b, "kube-system") {
+		t.Fatalf("kube-system reached the viewer: %s", b)
+	}
+	// The node rows keep their counts but no longer name the hidden pod.
+	if !strings.Contains(b, `"object":"pod web/shop"`) || !strings.Contains(b, `"title":"1 pod not ready"`) {
+		t.Fatalf("node problems for the viewer: %s", b)
+	}
+	resp, b = send(t, viewer, http.MethodGet, srv.URL+"/api/v1/nodes/n2", "")
+	if resp.StatusCode != http.StatusOK || strings.Contains(b, "kube-system") || !strings.Contains(b, `"entries":[]`) {
+		t.Fatalf("node n2 for the viewer: %s %s", resp.Status, b)
+	}
+	// The reviews were made once per namespace and resource, not per request.
+	asked := src.asked.Load()
+	send(t, viewer, http.MethodGet, srv.URL+"/api/v1/snapshot?views=pods,namespaces,nodes", "")
+	if src.asked.Load() != asked {
+		t.Errorf("reviews repeated: %d then %d", asked, src.asked.Load())
+	}
+	// Details, logs and YAML in kube-system are refused; in web they work,
+	// read as the person with the group every real user carries.
+	for _, path := range []string{"/api/v1/pods/kube-system/dns", "/api/v1/pods/kube-system/dns/log", "/api/v1/yaml/pods/kube-system/dns", "/api/v1/objects/configmaps/kube-system/x"} {
+		resp, b := send(t, viewer, http.MethodGet, srv.URL+path, "")
+		if resp.StatusCode != http.StatusForbidden || !strings.Contains(b, "Kubernetes does not let you") {
+			t.Errorf("%s for the viewer: %s %s", path, resp.Status, b)
+		}
+		if strings.Contains(b, "secret things") {
+			t.Errorf("%s leaked: %s", path, b)
+		}
+	}
+	for _, path := range []string{"/api/v1/pods/web/shop", "/api/v1/pods/web/shop/log", "/api/v1/yaml/pods/web/shop"} {
+		resp, b := send(t, viewer, http.MethodGet, srv.URL+path, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("%s for the viewer: %s %s", path, resp.Status, b)
+		}
+	}
+	if len(src.readAs) == 0 {
+		t.Fatal("no live read was made as the person")
+	}
+	for _, p := range src.readAs {
+		if p.User != "viewer@corp.example" || !slices.Contains(p.Groups, "system:authenticated") {
+			t.Errorf("live read as %+v", p)
+		}
+	}
+
+	// The stream carries only the viewer's rows, and a change in
+	// kube-system does not reach it.
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/events?views=pods", nil)
+	req.Header.Set("Accept-Encoding", "identity")
+	resp, err := viewer.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	br := bufio.NewReader(resp.Body)
+	if ev, data := readEvent(t, br); ev != "snapshot" || strings.Contains(data, "kube-system") || !strings.Contains(data, `"name":"shop"`) {
+		t.Fatalf("stream snapshot: %s %.200s", ev, data)
+	}
+	src.Put(samplePod("kube-system", "proxy", "n1"))
+	src.Put(samplePod("web", "cart", "n1"))
+	// The store is driven by hand here, as the other tests do.
+	st.Notify(kube.Change{Views: map[string][]string{live.ViewPods: {"kube-system/proxy", "web/cart"}}})
+	st.Process()
+	ev, data := readEvent(t, br)
+	for ev == "meta" || ev == "refresh" {
+		ev, data = readEvent(t, br)
+	}
+	if ev != "rows" || strings.Contains(data, "proxy") || !strings.Contains(data, `"name":"cart"`) {
+		t.Fatalf("stream change: %s %.300s", ev, data)
+	}
+
+	// When Kubernetes changes its mind, the stream starts over with what
+	// the person may see now.
+	delete(src.deny, "pods/kube-system")
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		ev, data = readEvent(t, br)
+		if ev == "snapshot" && strings.Contains(data, "proxy") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no fresh snapshot after the access changed: last %s %.200s", ev, data)
+		}
 	}
 }

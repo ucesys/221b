@@ -65,6 +65,17 @@ rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["nodes", "pods"]
     verbs: ["get", "list"]
+  {{- if ne .Values.auth.mode "none" }}
+  # Read as each signed-in person (P3-02): logs and YAML are read with
+  # their name and groups, and before any row reaches them Kubernetes is
+  # asked whether they may list it. Nothing is written in their name.
+  - apiGroups: [""]
+    resources: ["users", "groups"]
+    verbs: ["impersonate"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+  {{- end }}
   {{- if .Values.kubeletStats }}
   # Each node's boot time, read once per boot from its kubelet's Summary
   # API through the API server's node proxy (uptime in the node details).

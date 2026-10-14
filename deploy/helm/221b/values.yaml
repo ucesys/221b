@@ -97,6 +97,17 @@ auth:
   # sign-in whatever happens.
   sessionIdle: 8h
   sessionMax: 168h
+  # What each person sees is what Kubernetes lets them see (P3-02): the
+  # console reads logs and YAML as them, by impersonation, and asks
+  # Kubernetes, per namespace, whether they may list what each tab shows.
+  # Write RBAC for them as users and groups, and set the prefixes the API
+  # servers add to OIDC names (--oidc-username-prefix, --oidc-groups-prefix)
+  # so the console names them the same way. The answers are kept for
+  # accessTTL; an RBAC change reaches people within it.
+  kubernetes:
+    userPrefix: ""
+    groupPrefix: ""
+    accessTTL: 2m
 
 # The audit log (P3-10): every sign-in, sign-out, settings and connection
 # change is one JSON line on the console's standard output (kubectl logs),

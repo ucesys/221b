@@ -7,10 +7,13 @@ import { AlertIcon, ClockIcon } from './Icons'
 interface Props {
   cluster: ClusterInfo | null
   stream: StreamState
+  now: number
   /** The open cluster's connection, for its credentials' expiry (P3-07). */
   summary?: ClusterSummary | null
   /** Where "Fix the connection" leads: the cluster page, when not on it. */
   pageHref?: string
+  /** Why nothing is shown to this person (P3-02); "" otherwise. */
+  accessError?: string
 }
 
 interface Banner {
@@ -21,10 +24,13 @@ interface Banner {
 }
 
 /** Banners under the top bar for anything that makes the view stale or partial. */
-export function banners(cluster: ClusterInfo | null, stream: StreamState, summary?: ClusterSummary | null, pageHref?: string, now = Date.now()): Banner[] {
+export function banners(cluster: ClusterInfo | null, stream: StreamState, summary?: ClusterSummary | null, pageHref?: string, now = Date.now(), accessError = ''): Banner[] {
   const out: Banner[] = []
   if (stream === 'reconnecting') {
     out.push({ tone: 'warn', title: 'Lost contact with the 221B server', detail: 'Reconnecting. The table shows the last state it received.' })
+  }
+  if (accessError) {
+    out.push({ tone: 'err', title: 'Nothing can be shown to you yet', detail: accessError })
   }
   if (cluster?.state === 'disconnected') {
     out.push({ tone: 'err', title: 'Cannot reach the Kubernetes API server', detail: `${cluster.message ?? ''} Showing the last known state, since ${fmtTs(cluster.since)}.`.trim(), link: pageHref ? { href: pageHref, label: 'About the connection' } : undefined })
@@ -41,8 +47,8 @@ export function banners(cluster: ClusterInfo | null, stream: StreamState, summar
   return out
 }
 
-export function Banners({ cluster, stream, summary, pageHref }: Props) {
-  const list = banners(cluster, stream, summary, pageHref)
+export function Banners({ cluster, stream, now, summary, pageHref, accessError }: Props) {
+  const list = banners(cluster, stream, summary, pageHref, now, accessError)
   if (!list.length) return null
   return (
     <div role="status" aria-live="polite" style={{ flex: 'none', display: 'flex', flexDirection: 'column' }}>

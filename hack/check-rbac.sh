@@ -7,16 +7,22 @@
 # was installed with secrets.read (the default); with --no-secrets the
 # script expects the API server to refuse them. With --memory the chart
 # was installed with connections.store=memory and nothing is granted on
-# the namespace's Secrets. Every authenticated identity can also review
-# its own access and read discovery and version URLs; those are allowed.
-#   hack/check-rbac.sh [--no-secrets] [--memory] system:serviceaccount:221b:console-221b
+# the namespace's Secrets. With sign-in on (the default) it may read as
+# the signed-in people: impersonate users and groups, and create
+# SubjectAccessReviews about them (P3-02); with --no-signin the chart was
+# installed with auth.mode=none and neither is granted. Every
+# authenticated identity can also review its own access and read
+# discovery and version URLs; those are allowed.
+#   hack/check-rbac.sh [--no-secrets] [--memory] [--no-signin] system:serviceaccount:221b:console-221b
 set -euo pipefail
 secrets=yes
 connections=yes
+people=yes
 while [ $# -gt 1 ]; do
   case $1 in
     --no-secrets) secrets=no ;;
     --memory) connections=no ;;
+    --no-signin) people=no ;;
     *) echo "unknown option $1"; exit 2 ;;
   esac
   shift
@@ -71,14 +77,27 @@ expect yes get nodes --subresource=proxy
 expect yes get "configmaps/$NAME" -n "$NS"
 expect yes patch "configmaps/$NAME" -n "$NS"
 # The connections to other clusters: Secrets in its own namespace only.
+# (With secrets.read, watch comes from the ClusterRole, and reading them
+# anywhere; the Role adds the writes in this namespace only.)
 for verb in get list create update delete; do
   expect "$connections" "$verb" secrets -n "$NS"
 done
-expect no watch secrets -n "$NS"
+expect "$secrets" watch secrets -n "$NS"
+expect no create secrets -n default
+expect no delete secrets -n kube-system
 if [ "$secrets" = no ]; then
   expect no get secrets -n default
 fi
 
+# Reading as people: impersonating users and groups, and reviewing their
+# access, with sign-in on; nothing of the kind with it off. Never a
+# ServiceAccount or a UID, which would let it become anything.
+expect "$people" impersonate users
+expect "$people" impersonate groups
+expect "$people" create subjectaccessreviews.authorization.k8s.io
+expect no impersonate serviceaccounts
+expect no impersonate uids
+expect no impersonate userextras.authentication.k8s.io
 # The kubelets' endpoints are read-only through the proxy, and only the one
 # ConfigMap is written.
 expect no create nodes --subresource=proxy
@@ -94,7 +113,7 @@ for args in "create pods" "delete pods" "patch nodes" "update nodes" "delete nod
   "create roles.rbac.authorization.k8s.io" "create rolebindings.rbac.authorization.k8s.io" \
   "get clusterroles.rbac.authorization.k8s.io" "get persistentvolumes" "get storageclasses.storage.k8s.io" \
   "get customresourcedefinitions.apiextensions.k8s.io" "get validatingwebhookconfigurations.admissionregistration.k8s.io" \
-  "impersonate users" "escalate clusterroles.rbac.authorization.k8s.io" "bind clusterroles.rbac.authorization.k8s.io"; do
+  "escalate clusterroles.rbac.authorization.k8s.io" "bind clusterroles.rbac.authorization.k8s.io"; do
   # shellcheck disable=SC2086
   expect no $args --all-namespaces
 done
@@ -108,6 +127,9 @@ allowed_kinds=(nodes nodes/proxy pods pods/log "${read_kinds[@]}" nodes.metrics.
   selfsubjectrulesreviews.authorization.k8s.io clustertrustbundles.certificates.k8s.io)
 if [ "$secrets" = yes ]; then
   allowed_kinds+=(secrets)
+fi
+if [ "$people" = yes ]; then
+  allowed_kinds+=(users groups subjectaccessreviews.authorization.k8s.io)
 fi
 allowed="^($(IFS='|'; echo "${allowed_kinds[*]}"))$"
 for ns in default kube-system "$NS"; do
@@ -123,10 +145,13 @@ for ns in default kube-system "$NS"; do
   # Every granted verb list is read-only, except the settings ConfigMap's,
   # the self-reviews every identity may create and, in the console's own
   # namespace, the connection Secrets.
-  own_writes="^(configmaps +\[\] +\[$NAME\]|selfsubject)"
+  # The reviews of people's access are created, with sign-in on.
+  own_writes="^(configmaps +\[\] +\[$NAME\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\])"
   if [ "$ns" = "$NS" ] && [ "$connections" = yes ]; then
-    own_writes="^(configmaps +\[\] +\[$NAME\]|selfsubject|secrets +\[\] +\[\] +\[get list create update delete\])"
-    if ! echo "$list" | grep -E "^secrets +\[\] +\[\] +\[get list create update delete\]" > /dev/null; then
+    # The Role's writes merge with the ClusterRole's reads in the listing:
+    # [get list watch create update delete] with secrets.read, without watch otherwise.
+    own_writes="^(configmaps +\[\] +\[$NAME\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\]|secrets +\[\] +\[\] +\[get list (watch )?create update delete\])"
+    if ! echo "$list" | grep -E "^secrets +\[\] +\[\] +\[get list (watch )?create update delete\]" > /dev/null; then
       failed "the connection Secrets are not listed as get, list, create, update and delete in $ns"
     fi
   fi

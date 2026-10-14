@@ -664,6 +664,8 @@ func (s *Store) build(d viewDef, all bool, keys []string, usage bool, now time.T
 // whether anything did. s.mu must be held.
 func (s *Store) applyLocked(v *view, r rebuilt, now time.Time) bool {
 	ev := Rows{View: v.def.name}
+	// The keys of the upserts, in order, for the filters.
+	var upsertKeys []string
 	for _, b := range r.rows {
 		old, had := v.rows[b.key]
 		switch {
@@ -673,6 +675,7 @@ func (s *Store) applyLocked(v *view, r rebuilt, now time.Time) bool {
 		case b.row != nil && !bytes.Equal(old, b.row):
 			v.rows[b.key] = b.row
 			ev.Upserts = append(ev.Upserts, json.RawMessage(b.row))
+			upsertKeys = append(upsertKeys, b.key)
 		}
 	}
 	if r.all {
@@ -721,12 +724,55 @@ func (s *Store) applyLocked(v *view, r rebuilt, now time.Time) bool {
 		s.opts.Logger.Error("encoding a change", "view", v.def.name, "err", err)
 		return false
 	}
+	// A browser with a filter gets the change with only the rows it may
+	// see; browsers sharing a filter share the encoding.
+	filtered := map[Filter][]byte{}
 	for sub := range s.subs {
-		if sub.has[v.def.name] {
+		if !sub.has[v.def.name] {
+			continue
+		}
+		if sub.filter == nil {
 			sub.push("rows", msg)
+			continue
+		}
+		fm, ok := filtered[sub.filter]
+		if !ok {
+			fm = filterRows(ev, upsertKeys, sub.filter)
+			filtered[sub.filter] = fm
+		}
+		if fm != nil {
+			sub.push("rows", fm)
 		}
 	}
 	return true
+}
+
+// filterRows encodes a change with only the rows a filter allows; nil
+// when nothing of it may be sent. Removes pass: a key the browser never
+// had is nothing to it.
+func filterRows(ev Rows, upsertKeys []string, f Filter) []byte {
+	out := Rows{View: ev.View, Version: ev.Version, At: ev.At, Removes: ev.Removes, UsageRemoves: ev.UsageRemoves}
+	for i, key := range upsertKeys {
+		if f.Allow(ev.View, key) {
+			out.Upserts = append(out.Upserts, Redact(ev.View, ev.Upserts[i], f))
+		}
+	}
+	for key, u := range ev.Usage {
+		if f.Allow(ev.View, key) {
+			if out.Usage == nil {
+				out.Usage = map[string]json.RawMessage{}
+			}
+			out.Usage[key] = u
+		}
+	}
+	if len(out.Upserts) == 0 && len(out.Removes) == 0 && len(out.Usage) == 0 && len(out.UsageRemoves) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 func (s *Store) isBuilt() bool {
@@ -746,9 +792,50 @@ func (s *Store) publishMetaLocked(m Meta) {
 		s.opts.Logger.Error("encoding the cluster details", "err", err)
 		return
 	}
+	// Totals are what each browser may see: a filtered browser gets its own.
+	filtered := map[Filter][]byte{}
 	for sub := range s.subs {
-		sub.push("meta", msg)
+		if sub.filter == nil || m.Counts == nil {
+			sub.push("meta", msg)
+			continue
+		}
+		fm, ok := filtered[sub.filter]
+		if !ok {
+			own := m
+			own.Counts = s.countsForLocked(sub.filter)
+			fm, _ = json.Marshal(own)
+			filtered[sub.filter] = fm
+		}
+		sub.push("meta", fm)
 	}
+}
+
+// countsForLocked are the tab totals as a filter sees them: nodes when
+// they may be listed, and namespaces, pods and services in the namespaces
+// that are theirs. s.mu must be held.
+func (s *Store) countsForLocked(f Filter) map[string]int {
+	out := map[string]int{ViewNodes: 0, ViewNamespaces: 0, ViewPods: 0, ViewServices: 0}
+	if f.AllowCluster("nodes") {
+		out[ViewNodes] = s.counts[ViewNodes]
+	}
+	for _, ns := range s.src.Keys("namespaces") {
+		if !f.AllowNamespace(ns) {
+			continue
+		}
+		out[ViewNamespaces]++
+		out[ViewPods] += s.src.Count("pods", ns)
+		if f.Allow(ViewServices, ns+"/") {
+			out[ViewServices] += s.src.Count("services", ns)
+		}
+	}
+	if v := s.views[ViewHelm]; v != nil {
+		for key := range v.rows {
+			if f.Allow(ViewHelm, key) {
+				out[ViewHelm]++
+			}
+		}
+	}
+	return out
 }
 
 // Delays returns how long published changes took from their watch event
@@ -765,7 +852,7 @@ func (s *Store) Delays() Histogram {
 
 // snapshotLocked encodes the rows of the named views, with the cluster
 // details and the settings. s.mu must be held.
-func (s *Store) snapshotLocked(names []string) []byte {
+func (s *Store) snapshotLocked(names []string, f Filter) []byte {
 	var b bytes.Buffer
 	b.WriteString(`{"at":`)
 	at, _ := json.Marshal(s.at)
@@ -790,9 +877,13 @@ func (s *Store) snapshotLocked(names []string) []byte {
 		b.Write(s.settings)
 	}
 	fmt.Fprintf(&b, `,"unscheduled":%d,"counts":`, s.unscheduled)
-	if s.countsJSON == nil {
+	switch {
+	case s.countsJSON == nil:
 		b.WriteString("{}")
-	} else {
+	case f != nil:
+		cb, _ := json.Marshal(s.countsForLocked(f))
+		b.Write(cb)
+	default:
 		b.Write(s.countsJSON)
 	}
 	b.WriteString(`,"views":{`)
@@ -811,21 +902,25 @@ func (s *Store) snapshotLocked(names []string) []byte {
 		fmt.Fprintf(&b, `{"version":%d,"rows":[`, v.version)
 		keys := make([]string, 0, len(v.rows))
 		for k := range v.rows {
-			keys = append(keys, k)
+			if f == nil || f.Allow(name, k) {
+				keys = append(keys, k)
+			}
 		}
 		sort.Strings(keys)
 		for i, k := range keys {
 			if i > 0 {
 				b.WriteByte(',')
 			}
-			b.Write(v.rows[k])
+			b.Write(Redact(name, v.rows[k], f))
 		}
 		b.WriteByte(']')
 		if v.def.usage != nil {
 			b.WriteString(`,"usage":{`)
 			keys = keys[:0]
 			for k := range v.usage {
-				keys = append(keys, k)
+				if f == nil || f.Allow(name, k) {
+					keys = append(keys, k)
+				}
 			}
 			sort.Strings(keys)
 			for i, k := range keys {
@@ -846,14 +941,15 @@ func (s *Store) snapshotLocked(names []string) []byte {
 }
 
 // Snapshot returns the rows of the named views, the cluster details and
-// the settings as JSON. Views nobody showed are built first.
-func (s *Store) Snapshot(names []string) []byte {
+// the settings as JSON, with the rows the filter allows (nil: every row).
+// Views nobody showed are built first.
+func (s *Store) Snapshot(names []string, f Filter) []byte {
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ensureViewsLocked(names)
-	return s.snapshotLocked(names)
+	return s.snapshotLocked(names, f)
 }
 
 // ensureViewsLocked builds the named views that do not exist yet. buildMu
@@ -925,8 +1021,9 @@ func (s *Store) Stats() (views []ViewStats, subscribers int, recomputes uint64) 
 
 // Subscribe registers a browser showing the named views and returns the
 // snapshot it starts from. Changes published after the snapshot arrive
-// through the Sub. Views nobody showed are built first.
-func (s *Store) Subscribe(names []string) (*Sub, []byte, error) {
+// through the Sub, with the rows the filter allows (nil: every row).
+// Views nobody showed are built first.
+func (s *Store) Subscribe(names []string, f Filter) (*Sub, []byte, error) {
 	if err := ValidViews(names); err != nil {
 		return nil, nil, err
 	}
@@ -935,7 +1032,7 @@ func (s *Store) Subscribe(names []string) (*Sub, []byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ensureViewsLocked(names)
-	sub := &Sub{views: append([]string(nil), names...), has: map[string]bool{}, wake: make(chan struct{}, 1)}
+	sub := &Sub{views: append([]string(nil), names...), has: map[string]bool{}, wake: make(chan struct{}, 1), filter: f}
 	for _, name := range names {
 		if !sub.has[name] {
 			sub.has[name] = true
@@ -944,7 +1041,7 @@ func (s *Store) Subscribe(names []string) (*Sub, []byte, error) {
 	}
 	s.subs[sub] = struct{}{}
 	s.wantUsageLocked()
-	return sub, s.snapshotLocked(names), nil
+	return sub, s.snapshotLocked(names, f), nil
 }
 
 // Unsubscribe removes a browser. Views it alone showed are kept a while,
@@ -1005,13 +1102,26 @@ type Event struct {
 
 // Sub is one subscribed browser.
 type Sub struct {
-	views []string
-	has   map[string]bool
+	views  []string
+	has    map[string]bool
+	filter Filter
 
 	mu      sync.Mutex
 	pending []Event
 	resync  bool
 	wake    chan struct{}
+}
+
+// Resync asks for a fresh snapshot in place of the pending events: what
+// the browser may see has changed.
+func (sub *Sub) Resync() {
+	sub.mu.Lock()
+	sub.pending, sub.resync = nil, true
+	sub.mu.Unlock()
+	select {
+	case sub.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Views returns the views the browser subscribed to.

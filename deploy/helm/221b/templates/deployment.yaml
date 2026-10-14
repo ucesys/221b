@@ -94,6 +94,16 @@ spec:
             # Sign-in (P3-01) and roles (P3-03).
             - name: AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
+            {{- if ne .Values.auth.mode "none" }}
+            # Reading as each person (P3-02): the prefixes the API servers put
+            # before OIDC user and group names.
+            - name: IMPERSONATE_USER_PREFIX
+              value: {{ .Values.auth.kubernetes.userPrefix | quote }}
+            - name: IMPERSONATE_GROUP_PREFIX
+              value: {{ .Values.auth.kubernetes.groupPrefix | quote }}
+            - name: ACCESS_TTL
+              value: {{ .Values.auth.kubernetes.accessTTL | quote }}
+            {{- end }}
             {{- if eq .Values.auth.mode "oidc" }}
             - name: OIDC_ISSUER
               value: {{ .Values.auth.oidc.issuer | quote }}

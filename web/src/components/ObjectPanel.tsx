@@ -51,7 +51,7 @@ export function ObjectPanel({ kind, namespace: ns, name, row, gone, cluster, now
   const [tab, setTab] = useState<DrawerTabId>('details')
   const details = useDetails<ObjectDetails>(apiPath(`objects/${encodeURIComponent(kindName)}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`))
   const d = details.data
-  const deleted = gone || details.gone
+  const deleted = (gone || details.gone) && !details.forbidden
   const head = d ?? row
   const workload = d ? d.workload : WORKLOAD_KINDS.has(kind)
   const pods = useMemo<PodView[]>(() => (d ? d.pods.map((r) => ({ ...r, usage: d.usage?.[r.key] ?? null })) : []), [d])
