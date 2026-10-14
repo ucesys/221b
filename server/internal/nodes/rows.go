@@ -84,6 +84,9 @@ type Problem struct {
 	Severity string  `json:"severity"` // "error" or "warning"
 	Summary  string  `json:"summary"`
 	Entries  []Entry `json:"entries"`
+	// Pods marks the problem about the node's pods rather than the node
+	// itself; the Alerts tab shows those pods on their own (P4-07).
+	Pods bool `json:"pods,omitempty"`
 }
 
 // Entry is one piece of evidence for a problem.
@@ -443,6 +446,7 @@ func podProblem(unwell []podState, counts PodCounts) Problem {
 		Severity: SeverityWarning,
 		Summary:  capitalize(strings.Join(parts, ", ")) + ".",
 		Entries:  []Entry{},
+		Pods:     true,
 	}
 	if counts.Failing > 0 {
 		p.Severity = SeverityError

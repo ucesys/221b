@@ -123,7 +123,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	store := live.New(cluster, live.Options{Refresh: cfg.Refresh, Logger: log.With("component", "store")})
+	store := live.New(cluster, live.Options{Refresh: cfg.Refresh, Logger: log.With("component", "store"), Cluster: clusters.LocalID})
 	cluster.OnChange(store.Notify)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

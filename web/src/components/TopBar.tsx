@@ -14,6 +14,8 @@ export type Theme = 'light' | 'dark'
 interface Props {
   cluster: ClusterInfo | null
   counts: Counts
+  /** The tone of a tab's count, when it is not muted: the Alerts tab's. */
+  tones?: Record<string, string>
   /** The open tab; null on a page that is not a tab, such as a cluster's. */
   tab: Tab | null
   stream: StreamState
@@ -156,7 +158,7 @@ function AccountMenu({ me }: { me: Me }) {
   )
 }
 
-export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, settings, settingsOpen, onSettings, me, route, onEditCluster }: Props) {
+export function TopBar({ cluster, counts, tones, tab, stream, updatedAt, refreshedAt, settings, settingsOpen, onSettings, me, route, onEditCluster }: Props) {
   const conn = connection(cluster, stream)
   const live = stream === 'open' && cluster?.state === 'connected'
   // A clock for the countdown to the next refresh, once a second.
@@ -240,7 +242,7 @@ export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, s
               <a key={t.id} className="rk-tab" href={href(t.id)} aria-current={tab === t.id ? 'page' : undefined} title={t.tip} data-tab={t.id}>
                 {t.label}
                 {countOf(t.id) !== undefined && (
-                  <span className="rk-count" data-tone="muted">
+                  <span className="rk-count" data-tone={tones?.[t.id] ?? 'muted'}>
                     {countOf(t.id)}
                   </span>
                 )}
@@ -271,7 +273,7 @@ export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, s
             >
               {moreTab ? moreTab.label : 'More'}
               {moreTab && countOf(moreTab.id) !== undefined && (
-                <span className="rk-count" data-tone="muted">
+                <span className="rk-count" data-tone={tones?.[moreTab.id] ?? 'muted'}>
                   {countOf(moreTab.id)}
                 </span>
               )}

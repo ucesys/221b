@@ -1,4 +1,5 @@
 import { credText, type ClusterSummary } from '../api/clusters'
+import type { AlertBanner } from '../lib/alerts'
 import type { ClusterInfo } from '../api/types'
 import type { StreamState } from '../api/live'
 import { fmtTs } from '../lib/format'
@@ -14,13 +15,20 @@ interface Props {
   pageHref?: string
   /** Why nothing is shown to this person (P3-02); "" otherwise. */
   accessError?: string
+  /** What the Alerts tab has (P4-07), for every other tab; empty on it. */
+  alerts?: AlertBanner[]
+  /** Where "View alerts →" leads. */
+  alertsHref?: string
 }
 
 interface Banner {
   tone: 'err' | 'warn' | 'info'
   title: string
   detail: string
-  link?: { href: string; label: string }
+  link?: { href: string; label: string; testid?: string }
+  /** Monospace detail, for lists of objects. */
+  mono?: boolean
+  testid?: string
 }
 
 /** Banners under the top bar for anything that makes the view stale or partial. */
@@ -60,20 +68,25 @@ export function banners(cluster: ClusterInfo | null, stream: StreamState, summar
   return out
 }
 
-export function Banners({ cluster, stream, now, summary, pageHref, accessError }: Props) {
+export function Banners({ cluster, stream, now, summary, pageHref, accessError, alerts = [], alertsHref }: Props) {
   const list = banners(cluster, stream, summary, pageHref, now, accessError)
+  // What is failing in the cluster comes after what is wrong with the view
+  // of it, and only while the cluster is connected.
+  if (cluster?.state === 'connected') {
+    for (const a of alerts) list.push({ tone: a.tone, title: a.title, detail: a.detail, mono: true, testid: 'alert-banner', link: alertsHref ? { href: alertsHref, label: 'View alerts →', testid: 'alert-banner-link' } : undefined })
+  }
   if (!list.length) return null
   return (
     <div role="status" aria-live="polite" style={{ flex: 'none', display: 'flex', flexDirection: 'column' }}>
       {list.map((b) => (
-        <div key={b.title + b.detail} className="rk-banner" data-tone={b.tone}>
+        <div key={b.title + b.detail} className="rk-banner" data-tone={b.tone} data-testid={b.testid}>
           {b.tone === 'err' ? <AlertIcon /> : <ClockIcon />}
           <strong style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{b.title}</strong>
-          <span className="rk-banner-detail" title={b.detail}>
+          <span className={'rk-banner-detail' + (b.mono ? ' rk-mono' : '')} title={b.detail}>
             {b.detail}
           </span>
           {b.link && (
-            <a href={b.link.href} data-testid="banner-link">
+            <a href={b.link.href} data-testid={b.link.testid ?? 'banner-link'}>
               {b.link.label}
             </a>
           )}

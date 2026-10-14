@@ -278,13 +278,12 @@ func Pairs(views []string, namespaces []string) []Pair {
 		}
 	}
 	for _, view := range views {
-		resources, cluster := live.Resources(view)
-		for _, r := range resources {
+		namespaced, cluster := live.Resources(view)
+		for _, r := range cluster {
+			add(Pair{Group: groupOf(r), Resource: r})
+		}
+		for _, r := range namespaced {
 			p := Pair{Group: groupOf(r), Resource: r}
-			if cluster {
-				add(p)
-				continue
-			}
 			if ns, ok := live.NamespaceOf(view); ok {
 				p.Namespace = ns
 				add(p)

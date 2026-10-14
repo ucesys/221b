@@ -294,7 +294,7 @@ func TestNamespaceViewsExistWhileShown(t *testing.T) {
 	s := New(src, Options{Idle: time.Minute, Now: func() time.Time { return now }})
 	s.Notify(listed())
 	s.Process()
-	if views := s.Views(); strings.Join(views, ",") != "helm,namespaces,nodes,services" {
+	if views := s.Views(); strings.Join(views, ",") != "alerts,helm,namespaces,nodes,services" {
 		t.Fatalf("views %v", views)
 	}
 
@@ -444,7 +444,7 @@ func TestRowsWaitForTheRefresh(t *testing.T) {
 		t.Fatalf("first rows: %+v", got)
 	}
 	views, subs, _ := s.Stats()
-	if subs != 1 || len(views) != 4 {
+	if subs != 1 || len(views) != 5 {
 		t.Fatalf("stats %+v %d", views, subs)
 	}
 	for _, v := range views {

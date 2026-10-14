@@ -205,6 +205,7 @@ func (s *Sim) routes() {
 	m.HandleFunc("POST /sim/metrics", s.admin(s.setMetrics))
 	m.HandleFunc("POST /sim/churn", s.admin(s.churnOnce))
 	s.phase3Routes(m)
+	s.phase4Routes(m)
 	if s.oidc != nil {
 		m.Handle("/oidc/", s.oidc)
 	}
@@ -848,6 +849,9 @@ func (s *Sim) addNode(r *http.Request) error {
 	var body struct {
 		Name string `json:"name"`
 		Role string `json:"role"`
+		// Labels are added to the ones every node has; Taints too.
+		Labels map[string]string `json:"labels"`
+		Taints []corev1.Taint    `json:"taints"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" {
 		return fmt.Errorf("give a JSON body with a name")
@@ -858,6 +862,12 @@ func (s *Sim) addNode(r *http.Request) error {
 		return fmt.Errorf("node %s exists", body.Name)
 	}
 	n := s.newNode(body.Name, body.Role == "control-plane", len(s.nodes), s.opts.Now())
+	for k, v := range body.Labels {
+		n.Labels[k] = v
+	}
+	for _, t := range body.Taints {
+		n.Spec.Taints = appendTaint(n.Spec.Taints, t)
+	}
 	s.rv++
 	n.ResourceVersion = strconv.FormatInt(s.rv, 10)
 	s.nodes[n.Name] = n
@@ -1152,19 +1162,21 @@ func (s *Sim) generate() {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		bad := max(2, s.opts.Pods/200)
+		bad := max(4, s.opts.Pods/200)
 		for i := 0; i < bad && i < len(keys); i++ {
 			p := s.pods[keys[(i*7919)%len(keys)]]
 			if p.Spec.NodeName == "" || p.Namespace == "kube-system" {
 				continue
 			}
-			switch i % 3 {
+			switch i % 4 {
 			case 0:
 				crashLoop(p, now)
 			case 1:
 				imagePullBackOff(p, now)
-			default:
+			case 2:
 				setPodReady(p, false, now.Add(-9*time.Minute))
+			default:
+				oomKilled(p, now)
 			}
 		}
 		for i := 0; i < 2; i++ {

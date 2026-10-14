@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useMe } from './api/auth'
 import { useClusters, type ClusterSummary } from './api/clusters'
-import { LiveContext, useLiveMeta, useLiveStore } from './api/live'
+import { LiveContext, useLiveMeta, useLiveStore, useView } from './api/live'
+import type { AlertRow } from './api/types'
+import { AlertsTab } from './components/AlertsTab'
 import { Banners } from './components/Banners'
 import { ClusterEditor } from './components/ClusterEditor'
 import { ClusterPage } from './components/ClusterPage'
+import { FleetsTab } from './components/FleetsTab'
 import { HelmTab } from './components/HelmTab'
 import { NamespacesTab } from './components/NamespacesTab'
 import { NodesTab } from './components/NodesTab'
@@ -13,7 +16,8 @@ import { ServicesTab } from './components/ServicesTab'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Toast } from './components/Toast'
 import { TopBar, type Theme } from './components/TopBar'
-import { apiPath, clusterHref, clusterPageHref, LOCAL, navigate, TABS, useRoute } from './lib/router'
+import { badgeOf, bannersOf } from './lib/alerts'
+import { apiPath, clusterHref, clusterPageHref, href, LOCAL, navigate, TABS, useRoute } from './lib/router'
 import { readJSON, writeJSON } from './lib/storage'
 
 const THEME_KEY = '221b.theme'
@@ -102,6 +106,11 @@ function Shell() {
     if (route.cluster === c.id) navigate(clusterHref(LOCAL, route.tab))
   }
 
+  // Every tab shows what the Alerts tab has (P4-07), and the bar counts it.
+  const alerts = useView<AlertRow>('alerts')
+  const alertBadge = badgeOf(alerts.rows)
+  const fleetDefs = live.settings?.fleets?.[route.cluster] ?? []
+  const counts = { ...live.counts, fleets: fleetDefs.length, ...(alerts.loaded ? { alerts: alertBadge.count } : {}) }
   const common = { cluster: live.cluster, now, onToast: setToast, route }
   return (
     <div
@@ -112,13 +121,15 @@ function Shell() {
       data-dock="off"
       style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}
     >
-      <TopBar cluster={live.cluster} counts={live.counts} tab={view === 'cluster' ? null : tab} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
-      <Banners cluster={live.cluster} stream={live.stream} now={now} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} accessError={live.accessError} />
+      <TopBar cluster={live.cluster} counts={counts} tones={{ alerts: alertBadge.tone }} tab={view === 'cluster' ? null : tab} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
+      <Banners cluster={live.cluster} stream={live.stream} now={now} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} accessError={live.accessError} alerts={view === 'tabs' && tab !== 'alerts' ? bannersOf(alerts.rows, now) : []} alertsHref={href('alerts')} />
       {view === 'cluster' ? (
         <ClusterPage route={route} me={me} now={now} onEdit={(id) => setEditing(id)} />
       ) : (
         <div className="rk-main" style={{ display: 'flex', flexWrap: 'wrap', flex: '1 1 auto', alignItems: 'stretch' }}>
           {tab === 'nodes' && <NodesTab {...common} />}
+          {tab === 'fleets' && <FleetsTab {...common} me={me} />}
+          {tab === 'alerts' && <AlertsTab {...common} />}
           {tab === 'pods' && <PodsTab {...common} />}
           {tab === 'namespaces' && <NamespacesTab {...common} />}
           {tab === 'services' && <ServicesTab {...common} />}

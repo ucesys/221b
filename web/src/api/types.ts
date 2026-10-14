@@ -36,6 +36,8 @@ export interface Problem {
   severity: 'error' | 'warning'
   summary: string
   entries: Entry[]
+  /** The problem is the node's pods, not the node itself. */
+  pods?: boolean
 }
 
 export interface Condition {
@@ -456,6 +458,8 @@ export interface ClusterInfo {
 /** The settings everyone shares, kept on the server. */
 export interface Settings {
   refreshSeconds: number
+  /** Each cluster's fleets (P4-01), by connection id. */
+  fleets?: Record<string, Fleet[]>
   /** Where the server keeps them: "configmap" survives restarts, "memory" does not. */
   storage: 'configmap' | 'memory'
   changedAt?: string
@@ -520,4 +524,102 @@ export interface Me {
   method: string
   provider?: string
   sessionIdleSeconds: number
+}
+
+/** One row of an alert's table: an event, or a node's condition or state (P4-07). */
+export interface AlertEntry {
+  source: 'event' | 'condition' | 'state'
+  reason: string
+  message: string
+  tone: string
+  count: number
+  first?: string
+  last?: string
+  reportedBy?: string
+  /** A related pod, "namespace/name". */
+  pod?: string
+}
+
+export interface AlertProblem {
+  title: string
+  severity: 'error' | 'warning'
+  summary: string
+}
+
+/** An object with alerts: a pod, a node or a volume claim (P4-07). */
+export interface AlertRow {
+  key: string
+  kind: 'pod' | 'node' | 'pvc'
+  severity: 'failed' | 'pending' | 'recovered' | 'error' | 'warning'
+  name: string
+  namespace?: string
+  status: string
+  statusTone: string
+  node?: string
+  release?: string
+  ready?: number
+  total?: number
+  restarts?: number
+  started?: string
+  lastReason?: string
+  lastExit?: number
+  lastMessage?: string
+  lastAt?: string
+  waiting?: string
+  waitingMessage?: string
+  why?: string
+  oom?: boolean
+  role?: 'control-plane' | 'worker'
+  ip?: string
+  zone?: string
+  pool?: string
+  problems?: AlertProblem[]
+  volume?: string
+  storageClass?: string
+  capacity?: number
+  requested?: number
+  resizing?: boolean
+  accessModes?: string[]
+  users?: { pod: string; status: string; node?: string }[]
+  events: AlertEntry[]
+}
+
+/** A fleet's definition (P4-01). */
+export interface Fleet {
+  id: string
+  name: string
+  /** One of six swatches, 0 to 5. */
+  color: number
+  desc?: string
+  /** "key=value"; "key=" requires an empty value. */
+  labels: string[]
+  /** "key[=value]:Effect". */
+  taints: string[]
+}
+
+export interface FleetStats {
+  nodes: number
+  cpu: number
+  memory: number
+  cpuReq: number
+  memoryReq: number
+  pods: number
+  cordoned: number
+  errors: number
+  warnings: number
+}
+
+/** A row of the fleets view: a fleet, the nodes in none, or a group worth saving. */
+export interface FleetRow {
+  key: string
+  kind: 'fleet' | 'none' | 'suggestion'
+  id?: string
+  name?: string
+  color: number
+  desc?: string
+  labels: string[]
+  taints: string[]
+  order: number
+  members: string[]
+  stats: FleetStats
 }

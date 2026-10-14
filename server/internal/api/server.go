@@ -29,6 +29,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
+	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/views"
 )
@@ -58,6 +59,8 @@ type Cluster interface {
 type Settings interface {
 	Current() settings.State
 	Update(ctx context.Context, s settings.Settings) (settings.State, error)
+	// UpdateFleets replaces a cluster's fleets (P4-01).
+	UpdateFleets(ctx context.Context, cluster string, list []fleets.Fleet) (settings.State, error)
 }
 
 // Auth gates requests by session and serves the sign-in endpoints;
@@ -246,6 +249,8 @@ func New(o Options) *Server {
 	if o.Settings != nil {
 		s.handle("GET /api/v1/settings", "settings", s.getSettings)
 		s.handle("PUT /api/v1/settings", "settings-update", s.putSettings)
+		s.handle("PUT /api/v1/fleets", "fleets-update", s.putFleets)
+		s.handle("PUT /api/v1/clusters/{cluster}/fleets", "fleets-update", s.putFleets)
 	}
 	if o.Auth != nil {
 		for _, r := range o.Auth.Routes() {

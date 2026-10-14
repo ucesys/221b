@@ -6,6 +6,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/nodes"
+	"github.com/ucesys/221b/server/internal/views"
 )
 
 // Filter decides which rows a browser may see (P3-02): the access of the
@@ -44,6 +45,19 @@ func Scope(view, key string) (resource, namespace string, cluster bool) {
 	case ViewHelm:
 		ns, _, _ := strings.Cut(key, "/")
 		return "secrets", ns, false
+	case ViewFleets:
+		return "nodes", "", true
+	case ViewAlerts:
+		kind, ns, _, ok := views.SplitAlertKey(key)
+		switch {
+		case !ok:
+			return "", "", false
+		case kind == views.AlertNode:
+			return "nodes", "", true
+		case kind == views.AlertPVC:
+			return "persistentvolumeclaims", ns, false
+		}
+		return "pods", ns, false
 	}
 	if ns, ok := strings.CutPrefix(view, NamespacePrefix); ok {
 		kind, _, _ := strings.Cut(key, "/")
@@ -57,28 +71,30 @@ func Scope(view, key string) (resource, namespace string, cluster bool) {
 	return "", "", false
 }
 
-// Resources lists the resources a view's rows stand for, and whether they
-// are cluster-scoped.
-func Resources(view string) (resources []string, cluster bool) {
+// Resources lists the resources a view's rows stand for: those listed in
+// namespaces, and those listed cluster-wide.
+func Resources(view string) (namespaced, cluster []string) {
 	switch view {
-	case ViewNodes:
-		return []string{"nodes"}, true
+	case ViewNodes, ViewFleets:
+		return nil, []string{"nodes"}
 	case ViewNamespaces, ViewPods:
-		return []string{"pods"}, false
+		return []string{"pods"}, nil
 	case ViewServices:
-		return []string{"services"}, false
+		return []string{"services"}, nil
 	case ViewHelm:
-		return []string{"secrets"}, false
+		return []string{"secrets"}, nil
+	case ViewAlerts:
+		return []string{"pods", "persistentvolumeclaims"}, []string{"nodes"}
 	}
 	if strings.HasPrefix(view, NamespacePrefix) {
 		for _, k := range kube.Kinds {
 			if k.Namespaced {
-				resources = append(resources, k.Resource)
+				namespaced = append(namespaced, k.Resource)
 			}
 		}
-		return resources, false
+		return namespaced, nil
 	}
-	return nil, false
+	return nil, nil
 }
 
 // NamespaceOf is the namespace of a one-namespace view ("ns:web" → "web").

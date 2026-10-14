@@ -8,13 +8,15 @@
 
 import { useSyncExternalStore } from 'react'
 
-export type Tab = 'nodes' | 'namespaces' | 'pods' | 'helm' | 'services'
+export type Tab = 'nodes' | 'fleets' | 'namespaces' | 'pods' | 'helm' | 'alerts' | 'services'
 
 export const TABS: { id: Tab; label: string; tip: string }[] = [
   { id: 'nodes', label: 'Nodes', tip: 'Every node: role, status, what is requested and in use' },
+  { id: 'fleets', label: 'Fleets', tip: 'Groups of nodes by the labels and taints they share' },
   { id: 'namespaces', label: 'Namespaces', tip: 'Every namespace and what it holds, by kind' },
   { id: 'pods', label: 'Pods', tip: 'Every pod, filtered by node, namespace and status' },
   { id: 'helm', label: 'Helm', tip: 'Helm releases and their history' },
+  { id: 'alerts', label: 'Alerts', tip: 'Pods failing to start or pending, node problems and warning events' },
   { id: 'services', label: 'Services', tip: 'Every Service, its endpoints and the hostnames that publish it' },
 ]
 

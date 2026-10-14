@@ -392,7 +392,7 @@ func (c *Cluster) Run(ctx context.Context) {
 // everything marks every static view, the details and the totals.
 func (c *Cluster) everything() Change {
 	ch := Change{Info: true, Totals: true}
-	for _, v := range []string{"nodes", "pods", "namespaces", "services", "helm"} {
+	for _, v := range []string{"nodes", "pods", "namespaces", "services", "helm", "alerts", "fleets"} {
 		ch.Mark(v, AllRows)
 	}
 	return ch
@@ -668,6 +668,39 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 		for _, m := range []metav1.Object{oldMeta, newMeta} {
 			if m != nil {
 				ch.Mark("nodes", m.GetName())
+				ch.Mark("alerts", "node:"+m.GetName())
+			}
+		}
+		ch.Mark("fleets", AllRows)
+	case "persistentvolumeclaims":
+		for _, m := range []metav1.Object{oldMeta, newMeta} {
+			if m != nil {
+				ch.Mark("alerts", "pvc:"+m.GetNamespace()+"/"+m.GetName())
+			}
+		}
+	case "events":
+		for _, o := range []any{old, obj} {
+			e, ok := unwrap(o).(*corev1.Event)
+			if !ok {
+				continue
+			}
+			io := e.InvolvedObject
+			switch io.Kind {
+			case "Pod":
+				ch.Mark("alerts", "pod:"+io.Namespace+"/"+io.Name)
+				// What the kubelet reports about a pod's volumes shows under
+				// the claims as well.
+				if strings.Contains(e.Reason, "Attach") || strings.Contains(e.Reason, "Mount") {
+					if p, _ := c.Object("pods", io.Namespace, io.Name).(*corev1.Pod); p != nil {
+						for _, claim := range podClaims(p) {
+							ch.Mark("alerts", "pvc:"+io.Namespace+"/"+claim)
+						}
+					}
+				}
+			case "Node":
+				ch.Mark("alerts", "node:"+io.Name)
+			case "PersistentVolumeClaim":
+				ch.Mark("alerts", "pvc:"+io.Namespace+"/"+io.Name)
 			}
 		}
 	case "pods":
@@ -675,10 +708,15 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 			if p := asPod(o); p != nil {
 				if p.Spec.NodeName != "" {
 					ch.Mark("nodes", p.Spec.NodeName)
+					ch.Mark("fleets", AllRows)
 				} else {
 					ch.Totals = true
 				}
 				ch.Mark("pods", p.Namespace+"/"+p.Name)
+				ch.Mark("alerts", "pod:"+p.Namespace+"/"+p.Name)
+				for _, claim := range podClaims(p) {
+					ch.Mark("alerts", "pvc:"+p.Namespace+"/"+claim)
+				}
 				if release := podRelease(p); release != "" {
 					ch.Mark("helm", p.Namespace+"/"+release)
 				} else {
@@ -1027,4 +1065,15 @@ func shortError(err error) string {
 		s = s[:240] + "…"
 	}
 	return s
+}
+
+// podClaims names the volume claims a pod mounts.
+func podClaims(p *corev1.Pod) []string {
+	var out []string
+	for _, v := range p.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil {
+			out = append(out, v.PersistentVolumeClaim.ClaimName)
+		}
+	}
+	return out
 }

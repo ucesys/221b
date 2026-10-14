@@ -21,6 +21,7 @@ const (
 	ActionSignInFailed  = "signin.failed"
 	ActionSignOut       = "signout"
 	ActionSettings      = "settings.update"
+	ActionFleets        = "fleets.update"
 	ActionClusterAdd    = "cluster.add"
 	ActionClusterUpdate = "cluster.update"
 	ActionClusterRemove = "cluster.remove"
