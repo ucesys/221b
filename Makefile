@@ -70,17 +70,33 @@ chart-lint: ## Lint and render the Helm chart
 	helm lint deploy/helm/221b --strict --set clusterName=ci
 	helm template ci deploy/helm/221b --set clusterName=ci > /dev/null
 
-dev-sim: build ## Run the console on http://127.0.0.1:8080 against a simulated cluster
-	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) -churn 5s & sim=$$!; \
-	trap 'kill $$sim 2>/dev/null' EXIT INT TERM; \
-	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated -settings-configmap 221b/console-221b -log-format text
+# The simulated identity provider (P3-01): the simulator serves it at
+# /oidc, with admin@corp.example, dev@corp.example and viewer@corp.example
+# (password: password); admins are the platform-admins group.
+SIM_OIDC = -oidc-issuer http://127.0.0.1:7443/oidc
+SIM_AUTH = -auth-mode oidc -oidc-issuer http://127.0.0.1:7443/oidc -oidc-client-id 221b -oidc-client-secret 221b-secret -oidc-provider-name "Simulated provider" -admin-groups platform-admins -access-ttl 10s
 
+# The settings ConfigMap and the connection Secrets (P3-07) live in the
+# simulated cluster too, in the namespace 221b.
+SIM_STORE = -settings-configmap 221b/console-221b -connections-secrets 221b/console-221b
+
+dev-sim: build ## Run the console on http://127.0.0.1:8080 against a simulated cluster, signing in through the simulated provider
+	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) -churn 5s $(SIM_OIDC) & sim=$$!; \
+	bin/221b-sim -nodes 4 -pods 40 -seed 3 -listen 127.0.0.1:7444 & sim2=$$!; \
+	trap 'kill $$sim $$sim2 2>/dev/null' EXIT INT TERM; \
+	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) -log-format text $(SIM_AUTH)
+
+# A second simulator on 7444 stands in for another cluster (P3-09); the
+# tests tell it which token to require.
 e2e-sim: build ## Run the browser end-to-end tests against a simulated cluster
-	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) & sim=$$!; \
-	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated -settings-configmap 221b/console-221b -health-interval 2s -log-format text 2> bin/e2e-server.log & srv=$$!; \
-	trap 'kill $$sim $$srv 2>/dev/null' EXIT INT TERM; \
+	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) $(SIM_OIDC) & sim=$$!; \
+	bin/221b-sim -nodes 4 -pods 40 -seed 3 -listen 127.0.0.1:7444 & sim2=$$!; \
+	trap 'kill $$sim $$sim2 2>/dev/null' EXIT INT TERM; \
+	for i in $$(seq 50); do curl -fs http://127.0.0.1:7443/version >/dev/null && curl -fs http://127.0.0.1:7444/version >/dev/null && break; sleep 0.2; done; \
+	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) -health-interval 2s -log-format text $(SIM_AUTH) > bin/e2e-audit.log 2> bin/e2e-server.log & srv=$$!; \
+	trap 'kill $$sim $$sim2 $$srv 2>/dev/null' EXIT INT TERM; \
 	for i in $$(seq 50); do curl -fs http://127.0.0.1:8080/readyz >/dev/null && break; sleep 0.2; done; \
-	cd web && E2E_MODE=sim E2E_SIM_URL=http://127.0.0.1:7443 $(NPM) run e2e
+	cd web && E2E_MODE=sim E2E_SIM_URL=http://127.0.0.1:7443 E2E_OTHER_SIM_URL=http://127.0.0.1:7444 $(NPM) run e2e
 
 clean: ## Remove build output
 	rm -rf bin web/dist

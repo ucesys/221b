@@ -65,6 +65,17 @@ rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["nodes", "pods"]
     verbs: ["get", "list"]
+  {{- if ne .Values.auth.mode "none" }}
+  # Read as each signed-in person (P3-02): logs and YAML are read with
+  # their name and groups, and before any row reaches them Kubernetes is
+  # asked whether they may list it. Nothing is written in their name.
+  - apiGroups: [""]
+    resources: ["users", "groups"]
+    verbs: ["impersonate"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+  {{- end }}
   {{- if .Values.kubeletStats }}
   # Each node's boot time, read once per boot from its kubelet's Summary
   # API through the API server's node proxy (uptime in the node details).
@@ -88,7 +99,11 @@ subjects:
     name: {{ include "b221.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 ---
-# The one thing it writes: its own settings, in its own ConfigMap (X-03).
+# What it writes, all in its own namespace (X-03): its settings, in its
+# own ConfigMap, and the connections to other clusters, one Secret each
+# (P3-04). Kubernetes cannot grant Secrets by name prefix, so the Role
+# covers every Secret in this namespace; keep the console in a namespace
+# of its own.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -101,6 +116,13 @@ rules:
     resources: ["configmaps"]
     resourceNames: [{{ include "b221.fullname" . | quote }}]
     verbs: ["get", "patch"]
+  {{- if eq .Values.connections.store "secrets" }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  {{- else if ne .Values.connections.store "memory" }}
+  {{- fail "connections.store must be secrets or memory" }}
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

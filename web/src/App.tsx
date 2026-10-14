@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useMe } from './api/auth'
+import { useClusters, type ClusterSummary } from './api/clusters'
 import { LiveContext, useLiveMeta, useLiveStore } from './api/live'
 import { Banners } from './components/Banners'
+import { ClusterEditor } from './components/ClusterEditor'
+import { ClusterPage } from './components/ClusterPage'
 import { HelmTab } from './components/HelmTab'
 import { NamespacesTab } from './components/NamespacesTab'
 import { NodesTab } from './components/NodesTab'
@@ -9,7 +13,7 @@ import { ServicesTab } from './components/ServicesTab'
 import { SettingsDialog } from './components/SettingsDialog'
 import { Toast } from './components/Toast'
 import { TopBar, type Theme } from './components/TopBar'
-import { TABS, useRoute } from './lib/router'
+import { apiPath, clusterHref, clusterPageHref, LOCAL, navigate, TABS, useRoute } from './lib/router'
 import { readJSON, writeJSON } from './lib/storage'
 
 const THEME_KEY = '221b.theme'
@@ -35,7 +39,9 @@ function useNow(every = 60_000): number {
 }
 
 export function App() {
-  const store = useLiveStore()
+  const route = useRoute()
+  // One stream per cluster: opening another cluster opens its own (P3-09).
+  const store = useLiveStore(apiPath('events', route.cluster))
   return (
     <LiveContext.Provider value={store}>
       <Shell />
@@ -43,30 +49,58 @@ export function App() {
   )
 }
 
+/** The connection editor's subject: a cluster's id, null for a new one, undefined when closed. */
+type Editing = string | null | undefined
+
 function Shell() {
   const live = useLiveMeta()
   const route = useRoute()
   const now = useNow()
+  const me = useMe()
+  const { clusters, loaded: clustersLoaded } = useClusters()
   const [theme, setTheme] = useState<Theme>(initialTheme)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [editing, setEditing] = useState<Editing>(undefined)
   const [toast, setToast] = useState('')
   const clearToast = useCallback(() => setToast(''), [])
   const closeSettings = useCallback(() => setSettingsOpen(false), [])
+  const closeEditor = useCallback(() => setEditing(undefined), [])
 
   const changeTheme = (t: Theme) => {
     setTheme(t)
     writeJSON(THEME_KEY, t)
   }
 
+  const summary = clusters.find((c) => c.id === route.cluster)
+  const editOrig = editing ? clusters.find((c) => c.id === editing) : undefined
+  // A cluster whose connection could not even start has no data: its page
+  // says why. One that is not there at all gets the same page's notice.
+  const view = route.view === 'cluster' || (clustersLoaded && (!summary || summary.state === 'failed')) ? 'cluster' : 'tabs'
   // The Helm tab needs Secrets; with them off it is not offered.
   const tab = route.tab === 'helm' && live.cluster?.secrets === 'off' ? 'nodes' : route.tab
   const tabLabel = TABS.find((t) => t.id === tab)?.label ?? 'Nodes'
+  const clusterName = summary?.name ?? live.cluster?.name ?? ''
 
   useEffect(() => {
-    document.title = live.cluster?.name ? `${live.cluster.name} · ${tabLabel} · 221B` : '221B'
+    document.title = clusterName ? `${clusterName} · ${view === 'cluster' ? 'Connection' : tabLabel} · 221B` : '221B'
     document.documentElement.style.colorScheme = theme
     document.body.style.background = theme === 'dark' ? '#0D1013' : '#F2F3F5'
-  }, [live.cluster?.name, tabLabel, theme])
+  }, [clusterName, tabLabel, theme, view])
+
+  const onSaved = (c: ClusterSummary, added: boolean) => {
+    setEditing(undefined)
+    if (added) {
+      setToast(`Added ${c.name}.`)
+      navigate(clusterHref(c.id, 'nodes'))
+    } else {
+      setToast(`Saved ${c.name}.${c.state === 'failed' ? ' It cannot start: ' + (c.message ?? '') : ''}`)
+    }
+  }
+  const onRemoved = (c: ClusterSummary) => {
+    setEditing(undefined)
+    setToast(`Removed ${c.name} and its credentials.`)
+    if (route.cluster === c.id) navigate(clusterHref(LOCAL, route.tab))
+  }
 
   const common = { cluster: live.cluster, now, onToast: setToast, route }
   return (
@@ -78,16 +112,22 @@ function Shell() {
       data-dock="off"
       style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}
     >
-      <TopBar cluster={live.cluster} counts={live.counts} tab={tab} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} />
-      <Banners cluster={live.cluster} stream={live.stream} />
-      <div className="rk-main" style={{ display: 'flex', flexWrap: 'wrap', flex: '1 1 auto', alignItems: 'stretch' }}>
-        {tab === 'nodes' && <NodesTab {...common} />}
-        {tab === 'pods' && <PodsTab {...common} />}
-        {tab === 'namespaces' && <NamespacesTab {...common} />}
-        {tab === 'services' && <ServicesTab {...common} />}
-        {tab === 'helm' && <HelmTab {...common} />}
-      </div>
-      <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} />
+      <TopBar cluster={live.cluster} counts={live.counts} tab={view === 'cluster' ? null : tab} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
+      <Banners cluster={live.cluster} stream={live.stream} now={now} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} accessError={live.accessError} />
+      {view === 'cluster' ? (
+        <ClusterPage route={route} me={me} now={now} onEdit={(id) => setEditing(id)} />
+      ) : (
+        <div className="rk-main" style={{ display: 'flex', flexWrap: 'wrap', flex: '1 1 auto', alignItems: 'stretch' }}>
+          {tab === 'nodes' && <NodesTab {...common} />}
+          {tab === 'pods' && <PodsTab {...common} />}
+          {tab === 'namespaces' && <NamespacesTab {...common} />}
+          {tab === 'services' && <ServicesTab {...common} />}
+          {tab === 'helm' && <HelmTab {...common} />}
+        </div>
+      )}
+      <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} canChange={me?.admin ?? true} />
+      {editing === null && <ClusterEditor key="+" orig={null} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
+      {editing && editOrig && <ClusterEditor key={editing} orig={editOrig} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
       {toast && <Toast message={toast} onDone={clearToast} />}
     </div>
   )

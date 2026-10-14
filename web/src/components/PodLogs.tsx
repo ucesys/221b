@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ContainerDetail } from '../api/types'
 import { errorText } from '../api/details'
 import { DownloadIcon } from './Icons'
+import { apiPath } from '../lib/router'
 
 interface Props {
   namespace: string
@@ -26,7 +27,7 @@ export function logURL(namespace: string, name: string, q: Record<string, string
   const params = new URLSearchParams()
   for (const [k, v] of Object.entries(q)) if (v) params.set(k, v)
   const s = params.toString()
-  return `/api/v1/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/log${s ? '?' + s : ''}`
+  return apiPath(`pods/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/log${s ? '?' + s : ''}`)
 }
 
 /**

@@ -127,8 +127,11 @@ type Options struct {
 // connection to it.
 type Cluster struct {
 	log            *slog.Logger
+	cfg            *rest.Config   // as given, for the connection test
+	clientCfg      *rest.Config   // as the clients use it, for per-person clients (P3-02)
 	rest           rest.Interface // the core API, for /version, metrics and the node proxy
 	cs             *kubernetes.Clientset
+	people         personClients
 	mc             metadata.Interface
 	kinds          []Kind
 	informers      map[string]cache.SharedIndexInformer
@@ -166,6 +169,11 @@ func New(cfg *rest.Config, o Options) (*Cluster, error) {
 	if o.Protobuf {
 		c.ContentType = "application/vnd.kubernetes.protobuf"
 		c.AcceptContentTypes = "application/vnd.kubernetes.protobuf,application/json"
+	} else {
+		// Said outright: the typed clients prefer protobuf when the content
+		// type was left to them, and the simulator speaks JSON only.
+		c.ContentType = "application/json"
+		c.AcceptContentTypes = "application/json"
 	}
 	cs, err := kubernetes.NewForConfig(c)
 	if err != nil {
@@ -190,6 +198,8 @@ func New(cfg *rest.Config, o Options) (*Cluster, error) {
 	}
 	cl := &Cluster{
 		log:            o.Logger,
+		cfg:            rest.CopyConfig(cfg),
+		clientCfg:      c,
 		rest:           cs.CoreV1().RESTClient(),
 		cs:             cs,
 		mc:             mc,
@@ -342,6 +352,9 @@ func (c *Cluster) OnChange(f func(Change)) {
 // fill in as they arrive, and a kind the ServiceAccount may not read shows
 // as a warning rather than stopping everything.
 var coreKinds = []string{"nodes", "pods", "namespaces"}
+
+// RestConfig returns a copy of the configuration the cluster was built with.
+func (c *Cluster) RestConfig() *rest.Config { return rest.CopyConfig(c.cfg) }
 
 // Run watches the cluster until ctx is done.
 func (c *Cluster) Run(ctx context.Context) {

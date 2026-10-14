@@ -179,7 +179,7 @@ Phase 3 makes 221B safe to share: people sign in, Kubernetes decides what each p
 
 **Not in Phase 3:** changes to clusters (read-write is stored now and used in Phase 6), and an agent for clusters that 221B cannot reach directly (see Open questions).
 
-**Review:** you sign in, add two clusters with different sign-in methods, test, switch and remove one, and read the audit records.
+**Review:** you sign in, add two clusters with different sign-in methods, test, switch and remove one, and read the audit records. The guide is [phase-3-review.md](phase-3-review.md).
 
 ## Phase 4: Analysis views
 
@@ -263,8 +263,8 @@ Each open decision has a proposal. The first three are needed before Phase 1 sta
 | Where are images published? | GitHub Container Registry under ucesys, private until the repo goes public. | Phase 1 | Open |
 | Which Kubernetes versions does CI test? | Every minor release still maintained upstream, today 1.35 to 1.37. | Phase 1 | Open |
 | May the ServiceAccount read Secrets, for Secret keys and sizes and for Helm releases? | Yes, filtered on the server (P2-07), with a chart setting to turn it off. | Phase 2 | Settled at the Phase 1 review: yes, as proposed; `secrets.read` in the chart turns it off. |
-| How is per-person access enforced? | Impersonation, so Kubernetes RBAC decides. 221B needs the right to impersonate on every cluster, and sign-in groups must match the groups RBAC uses. | Phase 3 | Open |
-| Where do settings live (connections, fleets, Sherlock settings)? | Kubernetes objects in 221B's namespace: Secrets for credentials, ConfigMaps for the rest. No database. | Phase 3 | Open |
+| How is per-person access enforced? | Impersonation, so Kubernetes RBAC decides. 221B needs the right to impersonate on every cluster, and sign-in groups must match the groups RBAC uses. | Phase 3 | Built as proposed in Phase 3, with access reviews deciding what each person sees of the watched data and impersonation for live reads; `auth.kubernetes.userPrefix` and `groupPrefix` match the API server's. To confirm at the Phase 3 review. |
+| Where do settings live (connections, fleets, Sherlock settings)? | Kubernetes objects in 221B's namespace: Secrets for credentials, ConfigMaps for the rest. No database. | Phase 3 | Built as proposed in Phase 3: one Secret per connection, a ConfigMap for the settings. To confirm at the Phase 3 review. |
 | Do clusters behind firewalls need an agent that connects out to 221B? | Not in this plan; decide after Phase 3 from real installations. | After Phase 3 | Open |
 | Which model does Sherlock use, and how long are conversations kept? | The admin picks the model. Conversations last for the session; the audit log keeps questions and tool calls. | Phase 5 | Open |
 | Should Watson ever run kubectl apply, edit or exec, or helm install and upgrade? | Not in the first release; exec carries the most risk. | Phase 6 | Open |

@@ -23,5 +23,9 @@ export default defineConfig({
   },
   projects: browsers
     .filter((b): b is keyof typeof desktop => b in desktop)
-    .map((name) => ({ name, use: { ...desktop[name], viewport: { width: 1440, height: 900 } } })),
+    .flatMap((name) => [
+      // Each browser signs in once (e2e/signin.setup.ts) and every test in it starts with that session.
+      { name: `${name}-signin`, testMatch: /signin\.setup\.ts/, use: { ...desktop[name], viewport: { width: 1440, height: 900 } } },
+      { name, testIgnore: /signin\.setup\.ts/, dependencies: [`${name}-signin`], use: { ...desktop[name], viewport: { width: 1440, height: 900 }, storageState: `e2e/.auth/${name}-signin.json` } },
+    ]),
 })

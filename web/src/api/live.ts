@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { unauthorized } from './auth'
 import type { ClusterInfo, Counts, MetaEvent, RefreshEvent, RowsEvent, Settings, Snapshot, Usage } from './types'
 
 /** The browser's own connection to the 221B server. */
@@ -26,6 +27,8 @@ export interface LiveState {
   /** Counts refresh ticks, so details can be fetched again on each. */
   tick: number
   stream: StreamState
+  /** Why nothing is shown: Kubernetes could not be asked what this person may see (P3-02); "" otherwise. */
+  accessError: string
 }
 
 export const initialState: LiveState = {
@@ -38,6 +41,7 @@ export const initialState: LiveState = {
   refreshedAt: null,
   tick: 0,
   stream: 'connecting',
+  accessError: '',
 }
 
 /** The key of a row: nodes are keyed by name, everything else by key. */
@@ -138,7 +142,7 @@ export class LiveStore {
   private reopenTimer: ReturnType<typeof setTimeout> | undefined
   private views: string[] = []
 
-  constructor(private url = '/api/v1/events') {}
+  constructor(readonly url = '/api/v1/events') {}
 
   subscribe = (fn: Listener): (() => void) => {
     this.listeners.add(fn)
@@ -231,6 +235,9 @@ export class LiveStore {
       // waiting longer after each failure, up to 30 seconds.
       if ((e.target as EventSource).readyState === EventSource.CLOSED) {
         this.failures++
+        // EventSource does not say why: when the session has ended, the
+        // server answers 401 to anything, and sign-in is the way back.
+        void fetch('/api/v1/me', { headers: { Accept: 'application/json' } }).then((r) => unauthorized(r), () => false)
         this.reopen(Math.min(30_000, 1000 * 2 ** Math.min(this.failures, 5)) * (0.75 + Math.random() / 2))
       }
     })
@@ -245,6 +252,10 @@ export class LiveStore {
     })
     es.addEventListener('meta', (e) => {
       this.commit(applyMeta(current(), JSON.parse((e as MessageEvent<string>).data) as MetaEvent))
+    })
+    es.addEventListener('access', (e) => {
+      const a = JSON.parse((e as MessageEvent<string>).data) as { error?: string }
+      this.commit({ ...current(), accessError: a.error ?? '' })
     })
     es.addEventListener('refresh', (e) => {
       const next = applyRefresh(current(), JSON.parse((e as MessageEvent<string>).data) as RefreshEvent)
@@ -299,9 +310,10 @@ export function useRefreshTick(): number {
   return useSyncExternalStore(store.subscribe, () => store.getState().tick, () => 0)
 }
 
-/** A store for the app's lifetime; tests pass their own. */
+/** A store per stream URL: a new one when another cluster is opened; tests pass their own. */
 export function useLiveStore(url?: string): LiveStore {
-  const [store] = useState(() => new LiveStore(url))
+  const [store, setStore] = useState(() => new LiveStore(url))
+  if (store.url !== (url ?? '/api/v1/events')) setStore(new LiveStore(url))
   useEffect(() => store.start(), [store])
   return store
 }

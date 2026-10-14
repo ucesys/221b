@@ -22,6 +22,8 @@ interface Props {
   /** Shown above the body: a notice such as "this pod was deleted". */
   notice?: ReactNode
   children: ReactNode
+  /** Shown under the body, outside the scroll: a form's buttons. */
+  footer?: ReactNode
   width?: number
   testId?: string
 }
@@ -30,7 +32,7 @@ interface Props {
  * The prototype's details drawer: over the page from the right, with a
  * backdrop that closes it, a header with tabs, and a scrolling body.
  */
-export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose, notice, children, width = 1000, testId }: Props) {
+export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const body = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -109,6 +111,7 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
         <div ref={body} className="rk-drawer-body" tabIndex={scrolls ? 0 : undefined} role={scrolls ? 'region' : undefined} aria-label={scrolls ? `${label} content` : undefined} style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: '18px 20px 32px', display: 'flex', flexDirection: 'column', gap: 16, background: 'var(--bg)' }}>
           {children}
         </div>
+        {footer && <div style={{ flex: 'none', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '12px 20px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>{footer}</div>}
       </aside>
     </div>
   )

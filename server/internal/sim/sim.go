@@ -17,15 +17,18 @@ import (
 	"sync"
 	"time"
 
+	authzv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/oidcsim"
 )
 
 // Options shape the simulated cluster.
@@ -50,12 +53,23 @@ type Options struct {
 	Problems bool
 	// Now is the clock; tests can fix it.
 	Now func() time.Time
+	// OIDCIssuer turns the simulated identity provider on at that URL,
+	// which must be this server's address plus /oidc: the console signs
+	// people in against it. Empty leaves it off.
+	OIDCIssuer string
 }
 
 // Sim is the simulated cluster and its HTTP handler.
 type Sim struct {
 	opts Options
 	mux  *http.ServeMux
+	// oidc is the simulated identity provider, when on.
+	oidc *oidcsim.Provider
+	// token, when set, is the bearer token every API request must carry.
+	token string
+	// What access reviews refuse (see /sim/deny).
+	denyVerbs, denyNamespaces, denyUsers []string
+	onlyNamespaces                       map[string][]string
 
 	mu       sync.Mutex
 	rv       int64
@@ -138,6 +152,13 @@ func New(o Options) *Sim {
 		rnd:      rand.New(rand.NewSource(o.Seed + 221)),
 	}
 	s.generate()
+	if o.OIDCIssuer != "" {
+		p, err := oidcsim.New(oidcsim.Options{Issuer: o.OIDCIssuer, Now: o.Now})
+		if err != nil {
+			panic("simulated identity provider: " + err.Error())
+		}
+		s.oidc = p
+	}
 	if ns, name, ok := strings.Cut(o.SettingsConfigMap, "/"); ok && ns != "" && name != "" {
 		s.addLocked(&corev1.ConfigMap{TypeMeta: metav1.TypeMeta{Kind: "ConfigMap", APIVersion: "v1"}, ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: uid(ns + "/" + name)}, Data: map[string]string{}})
 	}
@@ -183,6 +204,10 @@ func (s *Sim) routes() {
 	m.HandleFunc("POST /sim/down", s.admin(s.setDown))
 	m.HandleFunc("POST /sim/metrics", s.admin(s.setMetrics))
 	m.HandleFunc("POST /sim/churn", s.admin(s.churnOnce))
+	s.phase3Routes(m)
+	if s.oidc != nil {
+		m.Handle("/oidc/", s.oidc)
+	}
 	m.HandleFunc("/", s.api(s.notFound))
 	s.mux = m
 }
@@ -191,6 +216,9 @@ func (s *Sim) routes() {
 // an unreachable API server would.
 func (s *Sim) api(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorized(w, r) {
+			return
+		}
 		s.mu.Lock()
 		down := s.down
 		if down && (r.URL.Path == "/api/v1/nodes" || r.URL.Path == "/api/v1/pods") {
@@ -207,8 +235,46 @@ func (s *Sim) api(h http.HandlerFunc) http.HandlerFunc {
 			status(w, http.StatusServiceUnavailable, "ServiceUnavailable", "the simulated API server is down")
 			return
 		}
+		// A read made as a person (Impersonate-User) is refused the way
+		// the API server would, by the same rules the access reviews follow.
+		if user, groups, imp := person(r); imp {
+			_ = groups
+			if ok, reason := s.decide(user, true, &authzv1.ResourceAttributes{Verb: verbOf(r.Method), Namespace: namespaceOf(r.URL.Path)}); !ok {
+				status(w, http.StatusForbidden, "Forbidden", user+" is forbidden: "+reason)
+				return
+			}
+		}
 		h(w, r)
 	}
+}
+
+// verbOf is the Kubernetes verb of a request's method.
+func verbOf(method string) string {
+	switch method {
+	case http.MethodGet:
+		return "get"
+	case http.MethodPost:
+		return "create"
+	case http.MethodPut:
+		return "update"
+	case http.MethodPatch:
+		return "patch"
+	case http.MethodDelete:
+		return "delete"
+	}
+	return strings.ToLower(method)
+}
+
+// namespaceOf reads the namespace of an API path, or "" for a
+// cluster-scoped one.
+func namespaceOf(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if parts[i] == "namespaces" && i >= 2 {
+			return parts[i+1]
+		}
+	}
+	return ""
 }
 
 func (s *Sim) admin(h func(r *http.Request) error) http.HandlerFunc {
@@ -269,8 +335,13 @@ func (s *Sim) listOrWatch(k kube.Kind) http.HandlerFunc {
 
 func (s *Sim) list(k kube.Kind, w http.ResponseWriter, r *http.Request) {
 	partial := wantsPartial(r)
+	selector, err := labels.Parse(r.URL.Query().Get("labelSelector"))
+	if err != nil {
+		status(w, http.StatusBadRequest, "BadRequest", "invalid labelSelector: "+err.Error())
+		return
+	}
 	s.mu.Lock()
-	items := s.itemsLocked(k.Name, r.PathValue("ns"), partial)
+	items := s.itemsLocked(k.Name, r.PathValue("ns"), partial, selector)
 	rv := s.rv
 	s.mu.Unlock()
 	listKind, apiVersion := k.Kind+"List", k.APIVersion()
@@ -356,7 +427,7 @@ func (s *Sim) keysLocked(kind string) []string {
 
 // itemsLocked encodes the current objects of a kind, sorted by key, in one
 // namespace or all.
-func (s *Sim) itemsLocked(kind, namespace string, partial bool) [][]byte {
+func (s *Sim) itemsLocked(kind, namespace string, partial bool, selector labels.Selector) [][]byte {
 	keys := s.keysLocked(kind)
 	out := make([][]byte, 0, len(keys))
 	for _, k := range keys {
@@ -364,6 +435,11 @@ func (s *Sim) itemsLocked(kind, namespace string, partial bool) [][]byte {
 			continue
 		}
 		obj := s.objectLocked(kind, k)
+		if selector != nil && !selector.Empty() {
+			if m, err := meta.Accessor(obj); err != nil || !selector.Matches(labels.Set(m.GetLabels())) {
+				continue
+			}
+		}
 		if partial {
 			out = append(out, encodePartial(obj))
 			continue
@@ -416,7 +492,7 @@ func (s *Sim) watch(k kube.Kind, w http.ResponseWriter, r *http.Request) {
 	case initial || rvParam == "" || rvParam == "0":
 		// Send the current state as ADDED events, as the API server does for
 		// a watch without a resource version and for streaming lists.
-		for _, it := range s.itemsLocked(kind, r.PathValue("ns"), partial) {
+		for _, it := range s.itemsLocked(kind, r.PathValue("ns"), partial, nil) {
 			backlog = append(backlog, wrap(watch.Added, it))
 		}
 		if initial {

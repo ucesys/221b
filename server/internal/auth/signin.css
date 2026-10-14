@@ -1,0 +1,22 @@
+/* The sign-in page, in the console's palette; it loads no app code. */
+:root { --bg: #F2F3F5; --surface: #FFFFFF; --line: #E1E4E8; --line2: #C9CFD6; --fg: #13161B; --fg2: #3F4651; --fg3: #5B636E; --accent: #0A6E69; --accent-fg: #FFFFFF; --err: #B52C22; --err-weak: #FBE6E3; --sunken: #ECEEF1; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0D1013; --surface: #14181D; --line: #252B33; --line2: #343C46; --fg: #E6E9ED; --fg2: #B3BAC4; --fg3: #8E97A3; --accent: #4BC2B7; --accent-fg: #052220; --err: #FF7B70; --err-weak: #3E1A17; --sunken: #101418; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.5 "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.si { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; }
+.si-card { width: min(380px, 100%); background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 28px 28px 24px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 18px 50px rgba(16, 22, 32, .12); }
+.si-brand { width: 44px; height: 44px; border-radius: 10px; background: var(--accent); color: var(--accent-fg); display: flex; align-items: center; justify-content: center; }
+h1 { margin: 4px 0 0; font-size: 20px; font-weight: 600; letter-spacing: -.01em; font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+.si-sub { margin: -6px 0 4px; color: var(--fg3); font-size: 13px; }
+.si-form { display: flex; flex-direction: column; gap: 12px; }
+.si-field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--fg2); }
+.si-field input { font: inherit; color: var(--fg); background: var(--surface); border: 1px solid var(--line2); border-radius: 7px; padding: 8px 10px; height: 36px; }
+.si-field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.si-btn { display: inline-flex; align-items: center; justify-content: center; height: 38px; padding: 0 16px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-fg); font: inherit; font-weight: 600; text-decoration: none; cursor: pointer; }
+.si-btn:hover { filter: brightness(1.06); }
+.si-btn:focus-visible { outline: 2px solid var(--fg); outline-offset: 2px; }
+.si-note { margin: 0; font-size: 12px; color: var(--fg3); }
+.si-error { margin: 0; padding: 8px 10px; border-radius: 7px; background: var(--err-weak); color: var(--err); font-size: 12.5px; }

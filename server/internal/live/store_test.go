@@ -112,7 +112,7 @@ func TestSnapshotAndRows(t *testing.T) {
 	s.Notify(listed())
 	s.Process()
 
-	snap := decodeSnapshot(t, s.Snapshot([]string{ViewNodes}))
+	snap := decodeSnapshot(t, s.Snapshot([]string{ViewNodes}, nil))
 	v := snap.Views[ViewNodes]
 	if v.Version != 1 || len(v.Rows) != 2 || snap.Cluster == nil || snap.Cluster.Name != "test" {
 		t.Fatalf("snapshot %+v", snap)
@@ -124,7 +124,7 @@ func TestSnapshotAndRows(t *testing.T) {
 		t.Fatal("rows are not sorted by name")
 	}
 
-	sub, start, err := s.Subscribe([]string{ViewNodes})
+	sub, start, err := s.Subscribe([]string{ViewNodes}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,9 +210,9 @@ func TestSubscribersGetOnlyTheirViews(t *testing.T) {
 	s.Notify(listed())
 	s.Process()
 
-	nodesSub, _, _ := s.Subscribe([]string{ViewNodes})
+	nodesSub, _, _ := s.Subscribe([]string{ViewNodes}, nil)
 	defer s.Unsubscribe(nodesSub)
-	both, start, err := s.Subscribe([]string{ViewNodes, ViewPods})
+	both, start, err := s.Subscribe([]string{ViewNodes, ViewPods}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestPodUsageIsSentApartFromRows(t *testing.T) {
 	s := New(src, Options{})
 	s.Notify(listed())
 	s.Process()
-	sub, start, _ := s.Subscribe([]string{ViewPods})
+	sub, start, _ := s.Subscribe([]string{ViewPods}, nil)
 	defer s.Unsubscribe(sub)
 	if snap := decodeSnapshot(t, start); len(snap.Views[ViewPods].Rows) != 1 || len(snap.Views[ViewPods].Usage) != 0 {
 		t.Fatalf("snapshot %+v", snap)
@@ -266,7 +266,7 @@ func TestPodUsageIsSentApartFromRows(t *testing.T) {
 	if len(r.Upserts) != 0 || len(r.Removes) != 0 || len(r.Usage) != 1 || string(r.Usage["default/p1"]) != `{"cpuMilli":20,"memoryBytes":1048576}` {
 		t.Fatalf("rows %+v", r)
 	}
-	if snap := decodeSnapshot(t, s.Snapshot([]string{ViewPods})); len(snap.Views[ViewPods].Usage) != 1 {
+	if snap := decodeSnapshot(t, s.Snapshot([]string{ViewPods}, nil)); len(snap.Views[ViewPods].Usage) != 1 {
 		t.Fatalf("snapshot %+v", snap)
 	}
 
@@ -298,16 +298,16 @@ func TestNamespaceViewsExistWhileShown(t *testing.T) {
 		t.Fatalf("views %v", views)
 	}
 
-	if _, _, err := s.Subscribe([]string{"ns:"}); err == nil {
+	if _, _, err := s.Subscribe([]string{"ns:"}, nil); err == nil {
 		t.Fatal("an empty namespace should be refused")
 	}
-	if _, _, err := s.Subscribe([]string{"bogus"}); err == nil {
+	if _, _, err := s.Subscribe([]string{"bogus"}, nil); err == nil {
 		t.Fatal("an unknown view should be refused")
 	}
 	if src.WantsPodUsage() {
 		t.Fatal("nobody shows pods yet")
 	}
-	sub, start, err := s.Subscribe([]string{ViewNamespaces, "ns:shop"})
+	sub, start, err := s.Subscribe([]string{ViewNamespaces, "ns:shop"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestHelmViewIsEmptyWithSecretsOff(t *testing.T) {
 	s := New(src, Options{})
 	s.Notify(listed())
 	s.Process()
-	snap := decodeSnapshot(t, s.Snapshot([]string{ViewHelm}))
+	snap := decodeSnapshot(t, s.Snapshot([]string{ViewHelm}, nil))
 	if len(snap.Views[ViewHelm].Rows) != 0 || snap.Cluster.Secrets != "off" {
 		t.Fatalf("snapshot %+v", snap)
 	}
@@ -377,7 +377,7 @@ func TestFullRecomputeRemovesVanishedNodes(t *testing.T) {
 	src.Delete("nodes", "", "a")
 	s.Notify(kube.Change{Views: map[string][]string{ViewNodes: {kube.AllRows}}})
 	s.Process()
-	snap := decodeSnapshot(t, s.Snapshot([]string{ViewNodes}))
+	snap := decodeSnapshot(t, s.Snapshot([]string{ViewNodes}, nil))
 	if rows := snap.Views[ViewNodes].Rows; len(rows) != 1 || rowName(t, rows[0]) != "b" {
 		t.Fatalf("rows %d", len(rows))
 	}
@@ -389,7 +389,7 @@ func TestNoRowsBeforeSync(t *testing.T) {
 	s := New(src, Options{})
 	s.Notify(listed())
 	s.Process()
-	sub, start, _ := s.Subscribe([]string{ViewNodes, ViewPods})
+	sub, start, _ := s.Subscribe([]string{ViewNodes, ViewPods}, nil)
 	defer s.Unsubscribe(sub)
 	snap := decodeSnapshot(t, start)
 	if len(snap.Views[ViewNodes].Rows) != 0 || len(snap.Views[ViewPods].Rows) != 0 || snap.Cluster == nil || snap.Cluster.Synced {
@@ -409,7 +409,7 @@ func TestNoRowsBeforeSync(t *testing.T) {
 func TestSlowSubscriberResyncs(t *testing.T) {
 	src := fake.New("a")
 	s := New(src, Options{})
-	sub, _, _ := s.Subscribe([]string{ViewNodes})
+	sub, _, _ := s.Subscribe([]string{ViewNodes}, nil)
 	defer s.Unsubscribe(sub)
 	for i := 0; i < maxPending+5; i++ {
 		src.SetUsage("a", nodes.Usage{CPUMilli: int64(i + 1)})
@@ -430,7 +430,7 @@ func TestSlowSubscriberResyncs(t *testing.T) {
 func TestRowsWaitForTheRefresh(t *testing.T) {
 	src := fake.New("a")
 	s := New(src, Options{Refresh: 300 * time.Millisecond, Prompt: 10 * time.Millisecond})
-	sub, _, _ := s.Subscribe([]string{ViewNodes})
+	sub, _, _ := s.Subscribe([]string{ViewNodes}, nil)
 	defer s.Unsubscribe(sub)
 	done := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -508,7 +508,7 @@ func TestRefreshEventsAndSettings(t *testing.T) {
 	}
 	s.Notify(listed())
 	s.Process()
-	sub, start, _ := s.Subscribe([]string{ViewNodes, ViewPods})
+	sub, start, _ := s.Subscribe([]string{ViewNodes, ViewPods}, nil)
 	defer s.Unsubscribe(sub)
 	snap := decodeSnapshot(t, start)
 	if string(snap.Settings) != `{"refreshSeconds":10,"storage":"memory"}` || snap.RefreshedAt != nil || snap.Views[ViewNodes].Version != 1 {
@@ -526,7 +526,7 @@ func TestRefreshEventsAndSettings(t *testing.T) {
 	if !r.At.Equal(now) || len(r.Versions) != 2 || r.Versions[ViewNodes] != 1 || r.Versions[ViewPods] != 0 {
 		t.Fatalf("refresh %+v", r)
 	}
-	if snap := decodeSnapshot(t, s.Snapshot([]string{ViewNodes})); snap.RefreshedAt == nil || !snap.RefreshedAt.Equal(now) {
+	if snap := decodeSnapshot(t, s.Snapshot([]string{ViewNodes}, nil)); snap.RefreshedAt == nil || !snap.RefreshedAt.Equal(now) {
 		t.Fatalf("snapshot %+v", snap)
 	}
 
@@ -548,7 +548,7 @@ func TestRefreshPollsBeforeBuildingRows(t *testing.T) {
 	s := New(src, Options{})
 	s.Notify(listed())
 	s.Process()
-	sub, _, _ := s.Subscribe([]string{ViewNodes})
+	sub, _, _ := s.Subscribe([]string{ViewNodes}, nil)
 	defer s.Unsubscribe(sub)
 	// The poll brings a new usage reading, as metrics-server does, and the
 	// same refresh publishes rows built from it.
@@ -594,5 +594,112 @@ func TestDelaysMeasureEventToPublication(t *testing.T) {
 	}
 	if d.Sum < 0.29 || d.Sum > 0.31 {
 		t.Fatalf("sum %v", d.Sum)
+	}
+}
+
+// onlyNamespaces is a filter for someone who may list everything in some
+// namespaces and nothing cluster-wide. Filters are compared by identity,
+// so it is used through a pointer.
+type onlyNamespaces struct{ in map[string]bool }
+
+func (f *onlyNamespaces) Allow(view, key string) bool {
+	_, ns, cluster := Scope(view, key)
+	if cluster {
+		return false
+	}
+	return f.in[ns]
+}
+func (f *onlyNamespaces) AllowNamespace(ns string) bool { return f.in[ns] }
+func (f *onlyNamespaces) AllowCluster(string) bool      { return false }
+
+func TestFilteredSubscribersSeeTheirNamespacesOnly(t *testing.T) {
+	src := fake.New("a")
+	src.Put(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "web"}})
+	src.Put(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "kube-system"}})
+	src.Put(pod("web", "shop", "a"))
+	src.Put(pod("kube-system", "dns", "a"))
+	s := New(src, Options{})
+	s.Notify(listed())
+	s.Process()
+
+	f := &onlyNamespaces{in: map[string]bool{"web": true}}
+	all, startAll, _ := s.Subscribe([]string{ViewNodes, ViewPods, ViewNamespaces}, nil)
+	defer s.Unsubscribe(all)
+	some, start, _ := s.Subscribe([]string{ViewNodes, ViewPods, ViewNamespaces}, f)
+	defer s.Unsubscribe(some)
+
+	// The snapshot: only web's pod and namespace, no nodes, and totals to match.
+	full := decodeSnapshot(t, startAll)
+	snap := decodeSnapshot(t, start)
+	if len(full.Views[ViewPods].Rows) != 2 || len(full.Views[ViewNodes].Rows) != 1 || full.Counts[ViewPods] != 2 {
+		t.Fatalf("unfiltered snapshot %+v", full)
+	}
+	if n := len(snap.Views[ViewPods].Rows); n != 1 || rowName(t, snap.Views[ViewPods].Rows[0]) != "shop" {
+		t.Fatalf("filtered pods: %d %+v", n, snap.Views[ViewPods])
+	}
+	if len(snap.Views[ViewNodes].Rows) != 0 || len(snap.Views[ViewNamespaces].Rows) != 1 {
+		t.Fatalf("filtered nodes/namespaces: %+v", snap.Views)
+	}
+	if snap.Counts[ViewPods] != 1 || snap.Counts[ViewNamespaces] != 1 || snap.Counts[ViewNodes] != 0 {
+		t.Fatalf("filtered counts: %+v", snap.Counts)
+	}
+	if snap.Views[ViewPods].Version != full.Views[ViewPods].Version {
+		t.Fatal("versions differ by filter")
+	}
+
+	// A change in kube-system reaches the unfiltered browser only; one in
+	// web reaches both. Usage follows the rows.
+	src.Put(pod("kube-system", "proxy", "a"))
+	src.Put(pod("web", "cart", "a"))
+	src.SetPodUsage(map[string]nodes.Usage{"web/cart": {CPUMilli: 5}, "kube-system/proxy": {CPUMilli: 7}})
+	s.Notify(kube.Change{Views: map[string][]string{ViewPods: {"kube-system/proxy", "web/cart", kube.UsageOnly}, ViewNodes: {"a"}}, Totals: true})
+	s.Process()
+	gotAll, gotSome := take(t, all), take(t, some)
+	var podsAll, podsSome *Rows
+	for i := range gotAll.rows {
+		if gotAll.rows[i].View == ViewPods {
+			podsAll = &gotAll.rows[i]
+		}
+	}
+	for i := range gotSome.rows {
+		if gotSome.rows[i].View == ViewPods {
+			podsSome = &gotSome.rows[i]
+		}
+		if gotSome.rows[i].View == ViewNodes {
+			t.Fatalf("a node change reached a browser that may not list nodes: %+v", gotSome.rows[i])
+		}
+	}
+	if podsAll == nil || len(podsAll.Upserts) != 2 || len(podsAll.Usage) != 2 {
+		t.Fatalf("unfiltered change: %+v", podsAll)
+	}
+	if podsSome == nil || len(podsSome.Upserts) != 1 || rowName(t, podsSome.Upserts[0]) != "cart" || len(podsSome.Usage) != 1 || podsSome.Version != podsAll.Version {
+		t.Fatalf("filtered change: %+v", podsSome)
+	}
+	for _, m := range gotSome.meta {
+		if m.Counts != nil && (m.Counts[ViewPods] != 2 || m.Counts[ViewNodes] != 0) {
+			t.Fatalf("filtered totals: %+v", m.Counts)
+		}
+	}
+	for _, m := range gotAll.meta {
+		if m.Counts != nil && m.Counts[ViewPods] != 4 {
+			t.Fatalf("unfiltered totals: %+v", m.Counts)
+		}
+	}
+
+	// A change only in a hidden namespace sends the filtered browser nothing.
+	src.Put(pod("kube-system", "metrics", "a"))
+	s.Notify(kube.Change{Views: map[string][]string{ViewPods: {"kube-system/metrics"}}})
+	s.Process()
+	if got := take(t, some); len(got.rows) != 0 {
+		t.Fatalf("a hidden change reached the filtered browser: %+v", got.rows)
+	}
+	if got := take(t, all); len(got.rows) != 1 {
+		t.Fatalf("the change did not reach the unfiltered browser: %+v", got.rows)
+	}
+
+	// Resync asks for a snapshot instead of the pending events.
+	some.Resync()
+	if _, resync := some.Take(); !resync {
+		t.Fatal("no resync")
 	}
 }

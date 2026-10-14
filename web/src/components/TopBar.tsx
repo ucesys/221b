@@ -1,9 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { ClusterInfo, Counts, Settings, Tone } from '../api/types'
+import { signOut } from '../api/auth'
+import type { ClusterInfo, Counts, Me, Settings } from '../api/types'
 import type { StreamState } from '../api/live'
 import { refreshLabel } from '../api/settings'
-import { fmtClock, fmtTs } from '../lib/format'
-import { href, TABS, type Tab } from '../lib/router'
+import { connection } from '../lib/connection'
+import { fmtClock } from '../lib/format'
+import { href, TABS, type Route, type Tab } from '../lib/router'
+import { ClusterMenu } from './ClusterMenu'
 import { Chevron, GearIcon, Logo } from './Icons'
 
 export type Theme = 'light' | 'dark'
@@ -11,25 +14,19 @@ export type Theme = 'light' | 'dark'
 interface Props {
   cluster: ClusterInfo | null
   counts: Counts
-  tab: Tab
+  /** The open tab; null on a page that is not a tab, such as a cluster's. */
+  tab: Tab | null
   stream: StreamState
   updatedAt: Date | null
   refreshedAt: Date | null
   settings: Settings | null
   settingsOpen: boolean
   onSettings: () => void
-}
-
-/** The connection to the cluster as a tone and a sentence. */
-export function connection(cluster: ClusterInfo | null, stream: StreamState): { tone: Tone; label: string; tip: string } {
-  if (stream === 'reconnecting') return { tone: 'warn', label: 'Reconnecting', tip: 'Lost contact with the 221B server; reconnecting.' }
-  if (!cluster || stream === 'connecting') return { tone: 'muted', label: 'Connecting', tip: 'Connecting to the 221B server.' }
-  if (cluster.state === 'disconnected') {
-    return { tone: 'err', label: 'Disconnected', tip: `Cannot reach the Kubernetes API server. ${cluster.message ? cluster.message + ' ' : ''}Since ${fmtTs(cluster.since)}.` }
-  }
-  if (cluster.state === 'connecting') return { tone: 'muted', label: 'Connecting', tip: 'Connecting to the Kubernetes API server.' }
-  if (!cluster.synced) return { tone: 'info', label: 'Listing', tip: 'Listing nodes and pods for the first time.' }
-  return { tone: 'ok', label: 'Connected', tip: `Connected to the Kubernetes API server since ${fmtTs(cluster.since)}.` }
+  /** Who is signed in; null while unknown. */
+  me: Me | null
+  route: Route
+  /** Opens the connection editor for a cluster, or for a new one (null). */
+  onEditCluster: (id: string | null) => void
 }
 
 interface Measure {
@@ -84,10 +81,83 @@ function RefreshRing({ left, every }: { left: number; every: number }) {
   )
 }
 
-export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, settings, settingsOpen, onSettings }: Props) {
+/** The first letters of a person's name, for the account button. */
+export function initials(me: Me): string {
+  const name = (me.user.name || me.user.username || '?').trim()
+  const parts = name.split(/[\s._@-]+/).filter(Boolean)
+  const first = parts[0]?.[0] ?? '?'
+  const second = parts.length > 1 ? (parts[1]?.[0] ?? '') : ''
+  return (first + second).toUpperCase()
+}
+
+/** The account button and its menu: who is signed in, their role, and sign-out. */
+function AccountMenu({ me }: { me: Me }) {
+  const [open, setOpen] = useState(false)
+  const button = useRef<HTMLButtonElement>(null)
+  if (me.mode === 'none') {
+    return (
+      <span className="rk-tag" data-tone="warn" title="Sign-in is off on this console: everyone who reaches it is an administrator. Turn it on in the chart (auth.mode) before sharing it." data-testid="signin-off">
+        Sign-in off
+      </span>
+    )
+  }
+  const role = me.admin ? 'Administrator' : 'Viewer'
+  const label = me.user.name || me.user.username
+  return (
+    <div
+      className="rk-dd"
+      style={{ position: 'relative', display: 'flex', alignItems: 'center' }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && open) {
+          e.stopPropagation()
+          setOpen(false)
+          button.current?.focus()
+        }
+      }}
+    >
+      <button ref={button} className="rk-avatar-btn" aria-haspopup="menu" aria-expanded={open} aria-label={`Account: ${label}, ${role.toLowerCase()}`} title={`${label} · ${role}`} onClick={() => setOpen(!open)} data-testid="account">
+        {initials(me)}
+      </button>
+      {open && (
+        <>
+          <button className="rk-ddcatch" tabIndex={-1} aria-hidden="true" onClick={() => setOpen(false)} />
+          <div className="rk-ddmenu" role="menu" aria-label="Account" style={{ left: 'auto', right: 0, minWidth: 240 }}>
+            <div className="rk-ddhead" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)' }} data-testid="account-name">
+                {label}
+              </span>
+              {me.user.email && me.user.email !== label && (
+                <span className="rk-mono" style={{ fontSize: 11.5, color: 'var(--fg3)' }}>
+                  {me.user.email}
+                </span>
+              )}
+              <span style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}>
+                <span className="rk-tag" data-tone={me.admin ? 'info' : 'muted'} data-testid="account-role">
+                  {role}
+                </span>
+                <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{me.method === 'oidc' ? `signed in with ${me.provider ?? 'OIDC'}` : 'local account'}</span>
+              </span>
+            </div>
+            {me.user.groups && me.user.groups.length > 0 && (
+              <div style={{ padding: '4px 8px 6px', fontSize: 11.5, color: 'var(--fg3)' }} title={me.user.groups.join('\n')}>
+                {me.user.groups.length === 1 ? 'Group ' : 'Groups '}
+                <span className="rk-mono">{me.user.groups.slice(0, 3).join(', ')}</span>
+                {me.user.groups.length > 3 ? ` and ${me.user.groups.length - 3} more` : ''}
+              </div>
+            )}
+            <div className="rk-ddsep" />
+            <button className="rk-ddopt" role="menuitem" onClick={() => void signOut()} data-testid="signout">
+              Sign out
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, settings, settingsOpen, onSettings, me, route, onEditCluster }: Props) {
   const conn = connection(cluster, stream)
-  const name = cluster?.name ?? '—'
-  const version = cluster?.version ?? ''
   const live = stream === 'open' && cluster?.state === 'connected'
   // A clock for the countdown to the next refresh, once a second.
   const [now, setNow] = useState(() => Date.now())
@@ -148,7 +218,7 @@ export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, s
     setMoreOpen(false)
   }
 
-  const plan = navPlan(ids, tab, measure)
+  const plan = navPlan(ids, tab ?? 'nodes', measure)
   const inMenu = tabs.filter((t) => !plan.vis.includes(t.id))
   const moreTab = plan.moreAs ? tabs.find((t) => t.id === plan.moreAs) : undefined
   const hasMore = inMenu.length > 0
@@ -160,20 +230,7 @@ export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, s
     >
       <div className="rk-brand" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, minHeight: 52 }}>
         <Logo />
-        <div className="rk-clbtn rk-clstatic" title={conn.tip} aria-label={`Cluster ${name}${version ? ', Kubernetes ' + version : ''}: ${conn.label}`} role="status" data-testid="cluster">
-          <span className="rk-t" data-tone={conn.tone} style={{ display: 'inline-flex' }}>
-            <span className="rk-dot" />
-          </span>
-          <span className="rk-mono rk-clname">{name}</span>
-          {version && (
-            <span className="rk-ver rk-mono" style={{ color: 'var(--fg3)' }} data-testid="cluster-version">
-              {version}
-            </span>
-          )}
-          <span className="rk-sr" data-testid="cluster-state">
-            {conn.label}
-          </span>
-        </div>
+        <ClusterMenu cluster={cluster} stream={stream} route={route} me={me} onEdit={onEditCluster} />
       </div>
       <nav ref={nav} className="rk-views" aria-label="Views" style={{ flex: '1 1 0', minWidth: 0, display: 'flex', alignItems: 'stretch' }}>
         <div className="rk-tabs">
@@ -248,6 +305,7 @@ export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, s
         <button className="rk-icon-btn" aria-label="Settings" aria-haspopup="dialog" aria-expanded={settingsOpen} title="Settings: theme and refresh rate" onClick={onSettings}>
           <GearIcon />
         </button>
+        {me && <AccountMenu me={me} />}
       </div>
       <div ref={measureEl} className="rk-tabmeasure" aria-hidden="true">
         {tabs.map((t) => (

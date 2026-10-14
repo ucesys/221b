@@ -1,3 +1,4 @@
+import { unauthorized } from './auth'
 import type { Settings } from './types'
 
 /** The refresh rates the Settings dialog offers, in seconds. */
@@ -25,6 +26,7 @@ export async function saveSettings(patch: { refreshSeconds: number }, url = '/ap
     throw new Error('The server could not be reached.')
   }
   if (!res.ok) {
+    if (unauthorized(res)) throw new Error('Your session has ended; sign in again.')
     let msg = `The server answered ${res.status}.`
     try {
       const body = (await res.json()) as { error?: string }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -20,9 +21,14 @@ import (
 	"syscall"
 	"time"
 
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
+	"github.com/ucesys/221b/server/internal/access"
 	"github.com/ucesys/221b/server/internal/api"
+	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
@@ -32,6 +38,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "hash-password" {
+		if err := hashPassword(); err != nil {
+			fmt.Fprintln(os.Stderr, "221b:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			os.Exit(0)
@@ -41,6 +54,21 @@ func main() {
 	}
 }
 
+// hashPassword prints the hash of a password read from standard input, for
+// the local accounts in the chart's values: 221b hash-password < file.
+func hashPassword() error {
+	b, err := io.ReadAll(io.LimitReader(os.Stdin, 4096))
+	if err != nil {
+		return err
+	}
+	h, err := auth.HashPassword(strings.TrimRight(string(b), "\r\n"))
+	if err != nil {
+		return err
+	}
+	fmt.Println(h)
+	return nil
+}
+
 func run(args []string) error {
 	cfg, err := config.Parse(args)
 	if err != nil {
@@ -48,6 +76,33 @@ func run(args []string) error {
 	}
 	log := newLogger(cfg)
 	slog.SetDefault(log)
+
+	// The audit log (P3-10) owns standard output; the ordinary logs go to
+	// standard error.
+	auditLog := audit.New(audit.Options{Out: os.Stdout, WebhookURL: cfg.AuditWebhookURL, WebhookToken: cfg.AuditWebhookToken, Logger: log.With("component", "audit")})
+	authCfg := auth.Config{
+		Mode:        auth.Mode(cfg.AuthMode),
+		OIDC:        auth.OIDCConfig{Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret, Scopes: cfg.OIDCScopes, RedirectURL: cfg.OIDCRedirectURL, UsernameClaim: cfg.OIDCUsernameClaim, GroupsClaim: cfg.OIDCGroupsClaim, ProviderName: cfg.OIDCProviderName},
+		Admins:      cfg.Admins,
+		AdminGroups: cfg.AdminGroups,
+		SessionIdle: cfg.SessionIdle,
+		SessionMax:  cfg.SessionMax,
+		Title:       "221B · " + cfg.ClusterName,
+	}
+	if cfg.LocalUsersFile != "" {
+		users, err := auth.ReadLocalUsers(cfg.LocalUsersFile)
+		if err != nil {
+			return err
+		}
+		authCfg.Local = users
+	}
+	authSvc, err := auth.New(authCfg, log.With("component", "auth"), auditLog, nil)
+	if err != nil {
+		return err
+	}
+	if authCfg.Mode == auth.ModeNone {
+		log.Warn("sign-in is off: everyone who reaches the console is an administrator; set -auth-mode oidc or local before sharing it")
+	}
 	// client-go logs through klog; send it to the same structured log.
 	klog.SetSlogLogger(log.With("component", "client-go"))
 	setMemoryLimit(log)
@@ -74,9 +129,32 @@ func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// The other clusters (P3-04 to P3-09): their connections live in
+	// Secrets in the console's own namespace when running in a cluster,
+	// otherwise in memory. The cluster the console was started against is
+	// the connection "local".
+	var connStore clusters.Store = clusters.NewMemoryStore()
+	if cfg.ConnectionsSecrets != "" {
+		ns, prefix, ok := strings.Cut(cfg.ConnectionsSecrets, "/")
+		if !ok || ns == "" || prefix == "" {
+			return fmt.Errorf("-connections-secrets must be namespace/prefix, got %q", cfg.ConnectionsSecrets)
+		}
+		ss, err := clusters.NewSecretStore(restCfg, ns, prefix, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/instance": prefix, "app.kubernetes.io/managed-by": "221b"})
+		if err != nil {
+			return err
+		}
+		connStore = ss
+	} else {
+		log.Warn("cluster connections added in the console are kept in memory and lost on restart; set -connections-secrets namespace/prefix to keep them in Secrets")
+	}
+	manager := clusters.New(connStore, clusters.Options{Refresh: cfg.Refresh, HealthInterval: cfg.HealthInterval, KubeletStats: cfg.KubeletStats, SecretsRead: cfg.SecretsRead, Logger: log.With("component", "clusters")})
+	if err := manager.SetLocal(ctx, localSpec(cfg, restCfg, mode), cluster, store); err != nil {
+		return fmt.Errorf("local connection: %w", err)
+	}
+
 	// The shared settings: in the chart's ConfigMap when running in a
 	// cluster, otherwise in memory. Every change reaches every browser
-	// through the store.
+	// through the stores.
 	var storage settings.Storage = &settings.Memory{}
 	if cfg.SettingsConfigMap != "" {
 		cm, err := kube.NewConfigMapStorage(restCfg, cfg.SettingsConfigMap)
@@ -87,21 +165,51 @@ func run(args []string) error {
 	}
 	shared := settings.NewService(ctx, storage, settings.Settings{RefreshSeconds: int(cfg.Refresh / time.Second)}, log.With("component", "settings"), func(st settings.State) {
 		b, _ := json.Marshal(st)
-		store.SetSettings(st.Refresh(), b)
+		manager.SetSettings(st.Refresh(), b)
 	})
 	go shared.Run(ctx, time.Minute)
 
 	go cluster.Run(ctx)
 	go store.Run(ctx)
+	if err := manager.Start(ctx); err != nil {
+		return fmt.Errorf("cluster connections: %w", err)
+	}
+	// What each person may see (P3-02): Kubernetes is asked and the answers
+	// kept for a while; people who have not asked for an hour are forgotten.
+	var people *access.Cache
+	if authCfg.Mode != auth.ModeNone {
+		people = access.NewCache(access.Options{TTL: cfg.AccessTTL})
+	}
+	go func() {
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				authSvc.Sweep()
+				if people != nil {
+					people.Sweep(time.Hour)
+				}
+			}
+		}
+	}()
 
 	handler := api.New(api.Options{
-		Store:        store,
-		Cluster:      cluster,
-		Settings:     shared,
-		Ready:        cluster.Ready,
-		UI:           ui.Handler(),
-		Logger:       log.With("component", "http"),
-		AllowedHosts: cfg.AllowedHosts,
+		Store:         store,
+		Cluster:       cluster,
+		Settings:      shared,
+		Clusters:      manager,
+		Auth:          authSvc,
+		Audit:         auditLog,
+		Access:        people,
+		Impersonation: api.Impersonation{UserPrefix: cfg.ImpersonateUserPrefix, GroupPrefix: cfg.ImpersonateGroupPrefix},
+		HTTPSRedirect: cfg.HTTPSRedirect,
+		Ready:         cluster.Ready,
+		UI:            ui.Handler(),
+		Logger:        log.With("component", "http"),
+		AllowedHosts:  cfg.AllowedHosts,
 		Gauges: func() []api.Gauge {
 			info := cluster.Info()
 			nodeCount, podCount, nodeEvents, podEvents := cluster.Counts()
@@ -123,6 +231,9 @@ func run(args []string) error {
 				{Name: "b221_pod_watch_events_total", Help: "Pod watch events received.", Value: float64(podEvents), Counter: true},
 				{Name: "b221_go_memory_bytes", Help: "Memory the Go runtime has mapped, in bytes.", Value: goMemory()},
 				{Name: "b221_resident_memory_bytes", Help: "Resident memory of the process, in bytes.", Value: residentMemory()},
+				{Name: "b221_sessions", Help: "Signed-in sessions.", Value: float64(authSvc.Sessions().Count())},
+				{Name: "b221_people_access", Help: "People whose access to a cluster is kept, per person and cluster.", Value: float64(peopleCount(people))},
+				{Name: "b221_audit_dropped_total", Help: "Audit records the webhook queue had no room for.", Value: float64(auditLog.Dropped()), Counter: true},
 			}
 			cached := cluster.CachedObjects()
 			kinds := make([]string, 0, len(cached))
@@ -132,6 +243,19 @@ func run(args []string) error {
 			sort.Strings(kinds)
 			for _, k := range kinds {
 				gauges = append(gauges, api.Gauge{Name: "b221_cached_objects", Help: "Objects in the watch cache, by kind.", Labels: fmt.Sprintf("kind=%q", k), Value: float64(cached[k])})
+			}
+			// The other clusters: one gauge each, 1 when its API server answers.
+			conns := manager.List()
+			gauges = append(gauges, api.Gauge{Name: "b221_connections", Help: "Cluster connections, the local one included.", Value: float64(len(conns))})
+			for _, c := range conns {
+				if c.Local {
+					continue
+				}
+				up := 0.0
+				if c.State == kube.StateConnected {
+					up = 1
+				}
+				gauges = append(gauges, api.Gauge{Name: "b221_connection_up", Help: "1 when the connection's API server answered the last health check.", Labels: fmt.Sprintf("cluster=%q", c.ID), Value: up})
 			}
 			return gauges
 		},
@@ -148,7 +272,7 @@ func run(args []string) error {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(mode), "version", version.String(), "secrets_read", cfg.SecretsRead)
+		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(mode), "version", version.String(), "secrets_read", cfg.SecretsRead, "auth", cfg.AuthMode)
 		errCh <- srv.ListenAndServe()
 	}()
 	select {
@@ -162,7 +286,42 @@ func run(args []string) error {
 	log.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return srv.Shutdown(shutdownCtx)
+	err = srv.Shutdown(shutdownCtx)
+	auditLog.Close(shutdownCtx)
+	return err
+}
+
+// localSpec describes the cluster the console was started against as a
+// connection: its address and how the console signs in, for the cluster
+// page; it is not editable beyond its name, environment and description.
+func localSpec(cfg config.Config, restCfg *rest.Config, mode kube.Mode) clusters.Spec {
+	spec := clusters.Spec{Name: cfg.ClusterName, Env: clusters.EnvOther, Server: restCfg.Host, Mode: clusters.ModeRead}
+	switch mode {
+	case kube.ModeInCluster:
+		spec.Auth = clusters.AuthInCluster
+		spec.Description = "The cluster the console runs in."
+	case kube.ModeKubeconfig:
+		spec.Auth = clusters.AuthKubeconfig
+		spec.Cred = clusters.CredInfo{Context: cfg.Context}
+	default:
+		spec.Auth = clusters.AuthNone
+	}
+	switch {
+	case len(restCfg.TLSClientConfig.CAData) > 0, restCfg.TLSClientConfig.CAFile != "":
+		spec.CA = clusters.CAPEM
+	case restCfg.TLSClientConfig.Insecure:
+		spec.CA = clusters.CASkip
+	default:
+		spec.CA = clusters.CASystem
+	}
+	return spec
+}
+
+func peopleCount(c *access.Cache) int {
+	if c == nil {
+		return 0
+	}
+	return c.Count()
 }
 
 func newLogger(cfg config.Config) *slog.Logger {

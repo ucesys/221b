@@ -79,12 +79,17 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
   const nq = nodeQuery.trim().toLowerCase()
   const fxOn = facetsActive(facets)
   const sortedNodes = useMemo(() => [...nodes].sort((a, b) => (a.role === b.role ? a.name.localeCompare(b.name, undefined, { numeric: true }) : a.role === 'control-plane' ? -1 : 1)), [nodes])
+  // Someone Kubernetes lets list pods but not nodes (P3-02) gets no node
+  // rows: the nodes are then known by the names the pods carry, and the
+  // list offers those, without roles, labels or taints.
+  const namesOnly = nodesView.loaded && nodes.length === 0 && rows.some((r) => !!r.node)
+  const podNodeNames = useMemo(() => (namesOnly ? [...new Set(rows.filter((r) => !!r.node).map((r) => r.node))].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) : []), [namesOnly, rows])
   const listed = useMemo(() => {
-    const keys = sortedNodes.filter((n) => (role === 'all' || n.role === role) && nodeMatches(n, nq) && (!fxOn || facetMatch(n, facets))).map((n) => n.name)
+    const keys = namesOnly ? podNodeNames.filter((name) => !nq || name.toLowerCase().includes(nq)) : sortedNodes.filter((n) => (role === 'all' || n.role === role) && nodeMatches(n, nq) && (!fxOn || facetMatch(n, facets))).map((n) => n.name)
     if (unscheduled && role === 'all' && !fxOn && (!nq || 'unscheduled pending'.includes(nq))) keys.push(UNSCHEDULED)
     return keys
-  }, [sortedNodes, role, nq, fxOn, facets, unscheduled])
-  const allKeys = useMemo(() => [...sortedNodes.map((n) => n.name), ...(unscheduled ? [UNSCHEDULED] : [])], [sortedNodes, unscheduled])
+  }, [sortedNodes, role, nq, fxOn, facets, unscheduled, namesOnly, podNodeNames])
+  const allKeys = useMemo(() => [...(namesOnly ? podNodeNames : sortedNodes.map((n) => n.name)), ...(unscheduled ? [UNSCHEDULED] : [])], [sortedNodes, unscheduled, namesOnly, podNodeNames])
   const totalKeys = allKeys.length
   const nodeSel = useMemo(() => readSelection(p, 'node'), [p])
   const inScope = useMemo(() => new Set(listed.filter((k) => !nodeSel || nodeSel.has(k))), [listed, nodeSel])
@@ -162,26 +167,33 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
         <div style={{ padding: '14px 16px 10px', display: 'flex', flexDirection: 'column', gap: 10, borderBottom: '1px solid var(--line)' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
             <h2 className="rk-h">Filter by node</h2>
-            <div className="rk-seg" role="group" aria-label="Nodes by role">
-              {(
-                [
-                  ['all', 'All', nodes.length],
-                  ['control-plane', 'Control plane', cp],
-                  ['worker', 'Workers', nodes.length - cp],
-                ] as [RoleFilter, string, number][]
-              ).map(([id, label, n]) => (
-                <button key={id} aria-pressed={role === id} onClick={() => set({ role: id === 'all' ? undefined : id })}>
-                  {label} <span style={{ color: 'var(--fg3)', fontWeight: 400 }}>{n}</span>
-                </button>
-              ))}
-            </div>
+            {!namesOnly && (
+              <div className="rk-seg" role="group" aria-label="Nodes by role">
+                {(
+                  [
+                    ['all', 'All', nodes.length],
+                    ['control-plane', 'Control plane', cp],
+                    ['worker', 'Workers', nodes.length - cp],
+                  ] as [RoleFilter, string, number][]
+                ).map(([id, label, n]) => (
+                  <button key={id} aria-pressed={role === id} onClick={() => set({ role: id === 'all' ? undefined : id })}>
+                    {label} <span style={{ color: 'var(--fg3)', fontWeight: 400 }}>{n}</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
+          {namesOnly && (
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--fg3)' }} data-testid="nodes-by-name">
+              Kubernetes lets you list pods but not nodes, so the nodes are listed by the names your pods carry, without roles, labels or taints.
+            </p>
+          )}
           <label className="rk-field">
             <SearchIcon />
             <span className="rk-sr">Filter the node list</span>
             <input type="search" placeholder="Find a node, label or taint" value={nodeQuery} onChange={(e) => setNodeQuery(e.target.value)} data-testid="node-filter" />
           </label>
-          <FacetPicker nodes={nodes} value={facets} onChange={(f) => set({ label: f.labels, taint: f.taints })} block />
+          {!namesOnly && <FacetPicker nodes={nodes} value={facets} onChange={(f) => set({ label: f.labels, taint: f.taints })} block />}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12, minHeight: 22 }}>
             <label className="rk-hit" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: 'var(--fg2)' }}>
               <input type="checkbox" checked={allNodesOn} ref={(el) => {
@@ -200,13 +212,14 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
           {listed.map((k) => {
             const n = nodes.find((x) => x.name === k)
             const on = inScope.has(k)
-            const flag = n ? (n.cordoned ? 'cordoned' : '') : 'pending'
+            const flag = n ? (n.cordoned ? 'cordoned' : '') : k === UNSCHEDULED ? 'pending' : ''
+            const label = n ? n.name : k === UNSCHEDULED ? 'Unscheduled' : k
             return (
               <div key={k} className="rk-frow" data-sel={on}>
                 <label className="rk-hit" style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 auto', minWidth: 0, padding: '6px 6px 6px 16px', cursor: 'pointer' }}>
                   <input type="checkbox" checked={on} onChange={() => toggleNode(k)} style={{ width: 15, height: 15, margin: 0, flex: 'none', accentColor: 'var(--accent)', cursor: 'pointer' }} />
                   <span className="rk-mono" style={{ fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-                    {n ? n.name : 'Unscheduled'}
+                    {label}
                   </span>
                   {n && (
                     <span className="rk-role" data-role={n.role}>
@@ -220,7 +233,7 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
                     </span>
                   )}
                 </label>
-                <button className="rk-only" onClick={() => set({ node: [k] })} title={`Show only ${n ? n.name : 'pods without a node'}`}>
+                <button className="rk-only" onClick={() => set({ node: [k] })} title={`Show only ${k === UNSCHEDULED ? 'pods without a node' : label}`}>
                   only
                 </button>
                 <span className="rk-num" style={{ flex: 'none', minWidth: 30, paddingRight: 16, textAlign: 'right', fontSize: 12, color: 'var(--fg3)' }}>

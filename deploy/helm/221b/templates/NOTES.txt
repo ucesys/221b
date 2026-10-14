@@ -27,18 +27,70 @@ It is exposed on every node at the port shown after the colon under PORT(S):
 
 It also answers on port {{ $.Values.service.port }} at {{ join ", " . }}.
 {{- end }}
-{{- if eq .Values.service.type "ClusterIP" }}
+{{- if .Values.ingress.enabled }}
 
-Open it with a port-forward (there is no sign-in yet, so it is not exposed):
+It is published through an Ingress at {{ if .Values.ingress.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}{{ .Values.ingress.path }}
+{{- if not .Values.ingress.tls.enabled }} without TLS: sessions travel in the clear; set ingress.tls.enabled=true with a certificate.{{ end }}
+{{- else if eq .Values.service.type "ClusterIP" }}
+
+Open it with a port-forward:
 
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $svc }} 8080:{{ .Values.service.port }}
 
 then browse to http://localhost:8080.
 {{- end }}
+{{- if eq .Values.auth.mode "oidc" }}
 
-There is no sign-in yet: anyone who can reach it sees the cluster's nodes, namespaces, pods and their logs,
-Services and Helm releases, and can change the refresh rate in its Settings, which applies to everyone and
-is kept in the ConfigMap {{ include "b221.fullname" . }}.
+People sign in with {{ default "the OIDC provider" .Values.auth.oidc.providerName }} at {{ .Values.auth.oidc.issuer }}; register the callback
+{{ if .Values.auth.oidc.redirectURL }}{{ .Values.auth.oidc.redirectURL }}{{ else }}https://<the console's host>/signin/callback{{ end }} with the client {{ .Values.auth.oidc.clientID }}.
+{{- else if eq .Values.auth.mode "local" }}
+
+People sign in with the console's own accounts (auth.local.users){{ if not .Values.auth.local.users }}{{ if not .Values.auth.local.existingSecret }}, of which there are none yet:
+nobody can sign in until you add some. Make a password hash with
+
+  kubectl run hash --rm -it --restart=Never --image={{ include "b221.image" . }} -- hash-password
+
+then add the account and upgrade:
+
+  helm upgrade {{ .Release.Name }} <chart> -n {{ .Release.Namespace }} --reset-then-reuse-values \
+    --set 'auth.local.users[0].email=you@example.com' --set 'auth.local.users[0].passwordHash=<hash>' \
+    --set 'auth.admins[0]=you@example.com'
+
+Or sign in with your identity provider instead: auth.mode=oidc with auth.oidc.issuer, clientID and clientSecret.{{ end }}{{ end }}
+{{- else }}
+
+Sign-in is off (auth.mode=none): anyone who can reach the console sees the cluster and is an administrator.
+Set auth.mode=oidc or auth.mode=local before exposing it.
+{{- end }}
+{{- if or .Values.auth.admins .Values.auth.adminGroups }}
+
+Administrators, who manage connections and the settings: {{ join ", " (concat .Values.auth.admins .Values.auth.adminGroups) }}.
+{{- else if ne .Values.auth.mode "none" }}
+
+No administrators are named (auth.admins, auth.adminGroups): everyone who signs in is a viewer, and nobody
+can change the settings or manage connections until one is.
+{{- end }}
+
+Every sign-in, sign-out and change is in the audit log: one JSON line on the console's standard output,
+
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "b221.fullname" . }} | grep '"action"'
+{{- with .Values.audit.webhook.url }}
+
+and POSTed to {{ . }}.
+{{- end }}
+
+The refresh rate in its Settings applies to everyone and is kept in the ConfigMap {{ include "b221.fullname" . }}.
+{{- if eq .Values.connections.store "secrets" }}
+
+Other clusters are added from the cluster menu by an administrator. Each connection is kept as a Secret
+named {{ include "b221.fullname" . }}-cluster-<id> in this namespace, which the console may manage Secrets in:
+keep it in a namespace of its own. List them with
+
+  kubectl -n {{ .Release.Namespace }} get secrets -l app.kubernetes.io/component=cluster-connection
+{{- else }}
+
+Connections to other clusters are kept in memory (connections.store=memory) and lost on restart.
+{{- end }}
 {{- if .Values.secrets.read }}
 
 Secrets are read (secrets.read), so each namespace lists its Secrets by key name and size and the Helm tab

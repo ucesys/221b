@@ -14,6 +14,28 @@ export const MODE: Mode = process.env.E2E_MODE === 'kind' ? 'kind' : 'sim'
 export const inKind = MODE === 'kind'
 
 const SIM = process.env.E2E_SIM_URL ?? 'http://127.0.0.1:7443'
+// The person with limited access (P3-02): the simulator's dev account, or
+// the local account the chart in kind is installed with.
+const DEV = process.env.E2E_DEV ?? 'dev@corp.example'
+const DEV_NAMESPACES = ['web', 'analytics']
+
+/** A RoleBinding of the view role for the dev account in a namespace. */
+function devBinding(namespace: string): unknown {
+  return {
+    apiVersion: 'rbac.authorization.k8s.io/v1',
+    kind: 'RoleBinding',
+    metadata: { name: 'e2e-dev-view', namespace, labels: { e2e: 'dev' } },
+    roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'view' },
+    subjects: [{ apiGroup: 'rbac.authorization.k8s.io', kind: 'User', name: DEV }],
+  }
+}
+
+// A second API server for the cluster connections (P3-05 to P3-09): a
+// second simulator, or the kind cluster itself through its in-cluster
+// address, which the console reaches as another connection.
+const OTHER_SIM = process.env.E2E_OTHER_SIM_URL ?? 'http://127.0.0.1:7444'
+/** An unsigned token shaped like a ServiceAccount's; the simulator checks it by value only. */
+export const OTHER_TOKEN = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzeXN0ZW06c2VydmljZWFjY291bnQ6a3ViZS1zeXN0ZW06Y2x1c3Rlci1jb25zb2xlIiwiZXhwIjo0MTAyNDQ0ODAwfQ.c2ln'
 const NAMESPACE = process.env.E2E_NAMESPACE ?? '221b'
 const IMAGE = process.env.E2E_IMAGE ?? ''
 const CONTROL_PLANE = process.env.E2E_CONTROL_PLANE ?? 'kind-control-plane'
@@ -85,6 +107,12 @@ async function kubectlApply(obj: unknown): Promise<void> {
 async function docker(...args: string[]): Promise<string> {
   const { stdout } = await run('docker', args, { timeout: 60_000 })
   return stdout
+}
+
+/** POSTs JSON to the simulator's admin API. */
+async function simPostJSON(path: string, body: unknown): Promise<void> {
+  const res = await fetch(`${SIM}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  if (!res.ok) throw new Error(`${path}: ${res.status}`)
 }
 
 async function simPost(path: string, method = 'POST'): Promise<void> {
@@ -308,10 +336,89 @@ export const cluster = {
     return Array.from({ length: r.revision }, (_, i) => ({ revision: i + 1, status: i + 1 === r.revision ? r.status : 'superseded', chart: r.chart }))
   },
 
+  /**
+   * Another cluster to connect to (P3-09): its address, how its certificate
+   * is checked, a token that works there with the account it names, and
+   * its node count. In kind it is the kind cluster itself, reached through
+   * its in-cluster address with a token of the console's own ServiceAccount.
+   */
+  async other(): Promise<{ server: string; ca: 'pem' | 'system'; caPem: string; token: string; who: string; nodes: number }> {
+    if (inKind) {
+      const token = (await kubectl('-n', NAMESPACE, 'create', 'token', 'console-221b', '--duration=2h')).trim()
+      const caPem = await kubectl('-n', NAMESPACE, 'get', 'configmap', 'kube-root-ca.crt', '-o', 'jsonpath={.data.ca\\.crt}')
+      const nodes = (await kubectl('get', 'nodes', '-o', 'name')).trim().split('\n').filter(Boolean).length
+      return { server: 'https://kubernetes.default.svc', ca: 'pem', caPem, token, who: `system:serviceaccount:${NAMESPACE}:console-221b`, nodes }
+    }
+    // The second simulator requires the token, as a real API server would.
+    const res = await fetch(`${OTHER_SIM}/sim/token`, { method: 'POST', body: JSON.stringify({ token: OTHER_TOKEN }) })
+    if (!res.ok) throw new Error(`the second simulator did not take a token: ${res.status}`)
+    const list = (await (await fetch(`${OTHER_SIM}/api/v1/nodes`, { headers: { Authorization: `Bearer ${OTHER_TOKEN}` } })).json()) as { items: unknown[] }
+    return { server: OTHER_SIM, ca: 'system', caPem: '', token: OTHER_TOKEN, who: 'system:serviceaccount:kube-system:cluster-console', nodes: list.items.length }
+  },
+
+  /**
+   * Limits the dev account to some namespaces (P3-02) and returns them:
+   * the simulator is told, or RoleBindings of the view role are made in
+   * kind, where the dev may list the console's own namespace only.
+   */
+  async limitDev(): Promise<string[]> {
+    if (inKind) {
+      await kubectl('delete', 'rolebinding', '-A', '-l', 'e2e=dev', '--ignore-not-found')
+      await kubectlApply(devBinding(NAMESPACE))
+      return [NAMESPACE]
+    }
+    await simPostJSON('/sim/deny', { only: { [DEV]: DEV_NAMESPACES } })
+    return DEV_NAMESPACES
+  },
+
+  /** Lets the dev account list one more namespace. */
+  async allowDev(namespace: string): Promise<void> {
+    if (inKind) {
+      await kubectlApply(devBinding(namespace))
+      return
+    }
+    await simPostJSON('/sim/deny', { only: { [DEV]: [...DEV_NAMESPACES, namespace] } })
+  },
+
+  /** Whether the Secret a connection is kept in exists (P3-07, P3-08). */
+  async connectionSecret(id: string): Promise<boolean> {
+    const name = `console-221b-cluster-${id}`
+    if (inKind) {
+      try {
+        await kubectl('-n', NAMESPACE, 'get', 'secret', name, '-o', 'name')
+        return true
+      } catch {
+        return false
+      }
+    }
+    const res = await fetch(`${SIM}/api/v1/namespaces/221b/secrets/${name}`)
+    return res.ok
+  },
+
   /** The server's log so far: the file the Makefile writes (sim) or the pod's (kind). */
   async serverLog(): Promise<string> {
     if (inKind) return kubectl('-n', NAMESPACE, 'logs', '-l', 'app.kubernetes.io/name=221b', '--tail=-1', '--all-containers')
     const { readFile } = await import('node:fs/promises')
     return readFile(process.env.E2E_SERVER_LOG ?? '../bin/e2e-server.log', 'utf8').catch(() => '')
+  },
+
+  /** The audit records so far (P3-10): the server's standard output, one JSON object per line. */
+  async auditLog(): Promise<Record<string, unknown>[]> {
+    let text: string
+    if (inKind) text = await kubectl('-n', NAMESPACE, 'logs', '-l', 'app.kubernetes.io/name=221b', '--tail=-1', '--all-containers')
+    else {
+      const { readFile } = await import('node:fs/promises')
+      text = await readFile(process.env.E2E_AUDIT_LOG ?? '../bin/e2e-audit.log', 'utf8').catch(() => '')
+    }
+    const out: Record<string, unknown>[] = []
+    for (const line of text.split('\n')) {
+      if (!line.startsWith('{') || !line.includes('"action"')) continue
+      try {
+        out.push(JSON.parse(line) as Record<string, unknown>)
+      } catch {
+        // not a record
+      }
+    }
+    return out
   },
 }

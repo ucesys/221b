@@ -3,7 +3,7 @@ import { useDetails } from '../api/details'
 import type { ClusterInfo, ContainerDetail, ContainerRun, PodDetails, PodView, Tone as ToneKind } from '../api/types'
 import { Tone } from '../columns/cells'
 import { fCores, fMem, fmtAge, fmtTs, nWord } from '../lib/format'
-import { href } from '../lib/router'
+import { apiPath, href } from '../lib/router'
 import { Card, Chips, Drawer, Facts } from './Drawer'
 import { EventsTable } from './EventsTable'
 import { PodIcon, WarnIcon } from './Icons'
@@ -123,10 +123,12 @@ function ContainerCard({ c, now, usage }: { c: ContainerDetail; now: number; usa
 export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: Props) {
   const [ns, name] = podKey.split('/', 2) as [string, string]
   const [tab, setTab] = useState<DrawerTabId>('overview')
-  const details = useDetails<PodDetails>(`/api/v1/pods/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`)
+  const details = useDetails<PodDetails>(apiPath(`pods/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`))
   const d = details.data
   // Deleted while open: the row left the table, or the server says 404.
-  const deleted = gone || details.gone
+  // A row missing from the table is a deleted pod, unless Kubernetes
+  // refused this person the details: then it is one they may not see.
+  const deleted = (gone || details.gone) && !details.forbidden
   const envCount = useMemo(() => (d ? d.containers.reduce((n, c) => n + c.env.length + c.envFrom.length, 0) : 0), [d])
   const head = d ?? row
   const status = head ? { tone: head.tone, text: head.status, tip: head.statusTip } : null

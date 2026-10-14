@@ -5,8 +5,9 @@
 # Nothing may reach the console except the peers listed in values, or
 # anyone when it is exposed with a LoadBalancer or NodePort Service
 # (kubectl port-forward and kubelet probes are not affected), and the
-# console may only connect to the Kubernetes API server's ports, at the
-# addresses in networkPolicy.apiServerCIDRs when given.
+# console may only connect to Kubernetes API servers' ports (at the
+# addresses in networkPolicy.apiServerCIDRs when given), to DNS, and with
+# OIDC sign-in or an audit webhook to their HTTPS port.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -49,4 +50,26 @@ spec:
             cidr: {{ . | quote }}
         {{- end }}
       {{- end }}
+    # DNS, for whatever the console reaches by name: the API servers of the
+    # other clusters it shows, the OIDC provider, the audit webhook.
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if include "b221.outbound" . }}
+    # The OIDC provider or the audit webhook: HTTPS.
+    - ports:
+        {{- range .Values.networkPolicy.outboundPorts }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+      {{- with .Values.networkPolicy.outboundCIDRs }}
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
 {{- end }}

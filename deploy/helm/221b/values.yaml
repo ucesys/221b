@@ -47,6 +47,102 @@ kubeletStats: true
 healthInterval: 10s
 logLevel: info
 
+# Sign-in (P3-01). Every page and API call needs a signed-in person,
+# except the health probes and /metrics.
+auth:
+  # oidc: people sign in with an OpenID Connect provider (Okta, Entra ID,
+  # Google, Keycloak, Dex, ...). local: accounts kept by the console itself,
+  # for evaluations and clusters without a provider. none: no sign-in, as
+  # before Phase 3; everyone who reaches the console is an administrator,
+  # so expose it only on a network where that is acceptable.
+  mode: local
+  oidc:
+    # The provider's issuer URL, where /.well-known/openid-configuration lives.
+    issuer: ""
+    clientID: ""
+    # The client secret, or the name of an existing Secret holding it under
+    # the key client-secret. Register https://<host>/signin/callback as the
+    # client's redirect URI.
+    clientSecret: ""
+    existingSecret: ""
+    # Scopes to ask for; add groups when the provider needs it to send them.
+    scopes: "openid,profile,email"
+    # The claim that names a person to Kubernetes RBAC and the audit log, and
+    # the claim that lists their groups (nested claims use dots:
+    # realm_access.roles).
+    usernameClaim: email
+    groupsClaim: groups
+    # What the sign-in button says: "Sign in with Okta".
+    providerName: ""
+    # The callback URL as registered with the provider; empty derives it
+    # from each request (https://<host>/signin/callback), which is right
+    # behind an Ingress.
+    redirectURL: ""
+  local:
+    # Accounts, with passwords as hashes. Make a hash with
+    #   kubectl run hash --rm -it --restart=Never --image=ghcr.io/ucesys/221b:main -- hash-password
+    # (type the password, then Ctrl-D), or docker run --rm -i <image> hash-password.
+    # Or name an existing Secret holding the list under the key users.yaml.
+    users: []
+    #  - email: ops@corp.example
+    #    name: Ops
+    #    groups: [platform-admins]
+    #    passwordHash: pbkdf2-sha256$600000$...
+    existingSecret: ""
+  # Who manages cluster connections and the settings (P3-03): usernames
+  # (the username claim, an email for local accounts) and groups.
+  admins: []
+  adminGroups: []
+  # A session ends after this long without a request, and this long after
+  # sign-in whatever happens.
+  sessionIdle: 8h
+  sessionMax: 168h
+  # What each person sees is what Kubernetes lets them see (P3-02): the
+  # console reads logs and YAML as them, by impersonation, and asks
+  # Kubernetes, per namespace, whether they may list what each tab shows.
+  # Write RBAC for them as users and groups, and set the prefixes the API
+  # servers add to OIDC names (--oidc-username-prefix, --oidc-groups-prefix)
+  # so the console names them the same way. The answers are kept for
+  # accessTTL; an RBAC change reaches people within it.
+  kubernetes:
+    userPrefix: ""
+    groupPrefix: ""
+    accessTTL: 2m
+
+# The audit log (P3-10): every sign-in, sign-out, settings and connection
+# change is one JSON line on the console's standard output (kubectl logs),
+# naming the person. A webhook receives the same records as JSON POSTs.
+audit:
+  webhook:
+    url: ""
+    # A bearer token sent with each POST, or an existing Secret holding it
+    # under the key token.
+    token: ""
+    existingSecret: ""
+
+# Publish the console through an Ingress (P3-11). With TLS, plain HTTP is
+# redirected to HTTPS and the session cookie is marked Secure.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: console.example.com
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: false
+    # A Secret with the certificate and key, or leave empty for a default
+    # certificate the Ingress controller or cert-manager provides.
+    secretName: ""
+
+# Other clusters (P3-04 to P3-09). An administrator adds them in the
+# console; each connection is kept as a Secret in the release namespace,
+# named <release>-cluster-<id>, and the console's Role may manage Secrets
+# there (and only there). store: memory keeps them in memory instead,
+# losing them on restart, and grants nothing on Secrets.
+connections:
+  store: secrets
+
 secrets:
   # Read Secrets. The Namespaces tab then lists each Secret with its key
   # names and sizes, and the Helm tab reads release records, which Helm
@@ -74,13 +170,12 @@ rbac:
   create: true
 
 service:
-  # ClusterIP: open it with kubectl port-forward. LoadBalancer or NodePort
-  # put it on the network: with a load balancer controller (MetalLB,
-  # kube-vip, a cloud provider) a LoadBalancer gets an address that answers
-  # on the port below; either type also opens a node port on every node.
-  # There is no sign-in yet, so expose it only on a network where everyone
-  # may see what the console shows: the cluster's nodes, pods and their
-  # logs, Services, Helm releases and the names of its Secrets' keys.
+  # ClusterIP: open it with kubectl port-forward or an Ingress. LoadBalancer
+  # or NodePort put it on the network: with a load balancer controller
+  # (MetalLB, kube-vip, a cloud provider) a LoadBalancer gets an address
+  # that answers on the port below; either type also opens a node port on
+  # every node. Without TLS (an Ingress with tls, or a proxy that sets
+  # X-Forwarded-Proto) sessions travel over plain HTTP.
   type: ClusterIP
   port: 8081
   # NodePort and LoadBalancer: the port opened on every node, 30000 to
@@ -105,14 +200,21 @@ networkPolicy:
   # NodePort Service an empty list allows every address, since that is
   # what exposing it means; list networks here to narrow it.
   ingressFrom: []
-  # The console connects only to the Kubernetes API server, on these ports
-  # (6443 is where most API servers listen behind the kubernetes Service;
-  # minikube uses 8443 and MicroK8s 16443). It needs no DNS.
+  # The console connects to Kubernetes API servers, its own and the other
+  # clusters' it shows, on these ports (6443 is where most API servers
+  # listen behind the kubernetes Service; minikube uses 8443 and MicroK8s
+  # 16443).
   apiServerPorts: [443, 6443]
-  # The API server's addresses, as CIDRs, to allow nothing else. Empty
+  # The API servers' addresses, as CIDRs, to allow nothing else. Empty
   # allows any address on the ports above, since the addresses differ from
-  # cluster to cluster and managed clusters change them.
+  # cluster to cluster and managed clusters change them. DNS is always
+  # allowed, for the API servers given by name.
   apiServerCIDRs: []
+  # With OIDC sign-in or an audit webhook the console also needs the
+  # provider's or webhook's HTTPS port; it is allowed then. List CIDRs to
+  # narrow where it may connect for them.
+  outboundPorts: [443]
+  outboundCIDRs: []
 
 # The server keeps a watched copy of every node, pod, workload and Service,
 # trimmed to what the tabs show; 1Gi holds 500 nodes and 15,000 pods with
