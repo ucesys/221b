@@ -399,5 +399,29 @@ func TestManagerAddsUpdatesAndRemoves(t *testing.T) {
 	if err := m.Remove(ctx, "analytics-dev"); err != clusters.ErrNotFound {
 		t.Errorf("remove twice: %v", err)
 	}
+	// A kubeconfig with no address given: the picked context supplies it,
+	// and the connection comes up through it (the simulator is plain HTTP,
+	// where client-go would keep the token back).
+	kc := "apiVersion: v1\nkind: Config\nclusters:\n- name: a\n  cluster:\n    server: " + other.URL + "\n- name: b\n  cluster:\n    server: https://nowhere.invalid:6443\ncontexts:\n- name: here\n  context:\n    cluster: a\n    user: u\n- name: there\n  context:\n    cluster: b\n    user: u\ncurrent-context: there\nusers:\n- name: u\n  user:\n    token: " + sa + "\n"
+	sum, err = m.Add(ctx, clusters.Draft{Spec: clusters.Spec{Name: "from-file", Env: "staging", CA: "system", Auth: "kubeconfig", Mode: "read"}, Credential: clusters.Credential{Kubeconfig: kc, Context: "here"}})
+	if err != nil || sum.Server != other.URL || sum.Cred.Context != "here" || sum.Cred.Cluster != "a" || sum.Cred.Who != "u" {
+		t.Fatalf("from a kubeconfig: %v %+v", err, sum)
+	}
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		s, _ := m.Summary("from-file")
+		if s.State == "connected" && s.Synced && s.Nodes == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not connected through the kubeconfig: %+v", s)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// A context whose cluster has no address is refused for want of one.
+	noServer := strings.Replace(kc, "    server: https://nowhere.invalid:6443\n", "", 1)
+	if _, err := m.Add(ctx, clusters.Draft{Spec: clusters.Spec{Name: "no-address", Env: "staging", CA: "system", Auth: "kubeconfig", Mode: "read"}, Credential: clusters.Credential{Kubeconfig: noServer, Context: "there"}}); err == nil || !strings.Contains(err.Error(), "address") {
+		t.Errorf("a kubeconfig without an address: %v", err)
+	}
 	_ = srv
 }

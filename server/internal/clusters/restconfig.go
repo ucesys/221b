@@ -43,6 +43,23 @@ func RestConfig(s Spec, c Credential) (*rest.Config, error) {
 		if s.Server != "" {
 			cfg.Host = s.Server
 		}
+		// client-go keeps a kubeconfig's credentials back from a plain-HTTP
+		// server, as kubectl does. The only such server is a simulator, whose
+		// test asks for its token all the same.
+		if strings.HasPrefix(cfg.Host, "http://") && cfg.BearerToken == "" {
+			name := c.Context
+			if name == "" {
+				name = kc.CurrentContext
+			}
+			if ctx := kc.Contexts[name]; ctx != nil {
+				if user := kc.AuthInfos[ctx.AuthInfo]; user != nil {
+					cfg.BearerToken = user.Token
+					if user.Exec != nil || user.AuthProvider != nil {
+						return nil, errors.New("the kubeconfig signs in through a plugin, which the console cannot run")
+					}
+				}
+			}
+		}
 	case AuthCert:
 		if c.CertPEM == "" || c.KeyPEM == "" {
 			return nil, errors.New("the connection has no client certificate and key")

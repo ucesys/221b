@@ -29,7 +29,8 @@ export function banners(cluster: ClusterInfo | null, stream: StreamState, summar
   if (stream === 'reconnecting') {
     out.push({ tone: 'warn', title: 'Lost contact with the 221B server', detail: 'Reconnecting. The table shows the last state it received.' })
   }
-  if (accessError) {
+  // While the API server is away, that is the reason nothing is shown.
+  if (accessError && cluster?.state !== 'disconnected') {
     out.push({ tone: 'err', title: 'Nothing can be shown to you yet', detail: accessError })
   }
   if (cluster?.state === 'disconnected') {
@@ -40,7 +41,12 @@ export function banners(cluster: ClusterInfo | null, stream: StreamState, summar
   } else if (summary?.expiring) {
     out.push({ tone: 'warn', title: 'The console’s credentials for this cluster expire soon', detail: credText(summary, now) + '.', link: pageHref ? { href: pageHref, label: 'Fix the connection' } : undefined })
   }
-  for (const w of cluster?.warnings ?? []) out.push({ tone: 'warn', title: 'Partial data', detail: w })
+  // Each kind that cannot be watched is a warning; while the API server is
+  // away or refuses the console, they all say the same thing as the
+  // banner above, so they wait for it to come back.
+  if (cluster?.state === 'connected') {
+    for (const w of cluster.warnings ?? []) out.push({ tone: 'warn', title: 'Partial data', detail: w })
+  }
   if (cluster && cluster.state === 'connected' && !cluster.synced) {
     out.push({ tone: 'info', title: 'Listing nodes and pods', detail: 'The first list of a large cluster can take a few seconds.' })
   }

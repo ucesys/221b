@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -42,12 +43,38 @@ type source struct {
 	// hold keeps a followed stream open after its lines, until ctx ends.
 	hold bool
 	// deny, when set, is what the fake authorizer refuses a person:
-	// "resource/namespace" pairs; nil allows everything.
-	deny map[string]bool
+	// "resource/namespace" pairs; nil allows everything. accessMu guards
+	// it and readAs, which the handlers' goroutines touch.
+	accessMu sync.Mutex
+	deny     map[string]bool
 	// asked counts the access reviews made.
 	asked atomic.Int64
 	// readAs records who the live reads were made as.
 	readAs []kube.Person
+}
+
+func (s *source) denied(resource, namespace string) bool {
+	s.accessMu.Lock()
+	defer s.accessMu.Unlock()
+	return s.deny[resource+"/"+namespace]
+}
+
+func (s *source) allow(resource, namespace string) {
+	s.accessMu.Lock()
+	defer s.accessMu.Unlock()
+	delete(s.deny, resource+"/"+namespace)
+}
+
+func (s *source) readBy(p kube.Person) {
+	s.accessMu.Lock()
+	defer s.accessMu.Unlock()
+	s.readAs = append(s.readAs, p)
+}
+
+func (s *source) readers() []kube.Person {
+	s.accessMu.Lock()
+	defer s.accessMu.Unlock()
+	return append([]kube.Person(nil), s.readAs...)
 }
 
 // CanI is the fake authorizer: the console itself may do anything; a
@@ -57,12 +84,12 @@ func (s *source) CanI(_ context.Context, p kube.Person, verb, _, resource, names
 	if p.Nobody() {
 		return true, nil
 	}
-	return !s.deny[resource+"/"+namespace], nil
+	return !s.denied(resource, namespace), nil
 }
 
 func (s *source) ObjectYAML(ctx context.Context, p kube.Person, k kube.Kind, namespace, name string) (string, error) {
-	s.readAs = append(s.readAs, p)
-	if s.deny[k.Resource+"/"+namespace] && !p.Nobody() {
+	s.readBy(p)
+	if s.denied(k.Resource, namespace) && !p.Nobody() {
 		return "", apierrors.NewForbidden(schema.GroupResource{Group: k.Group, Resource: k.Resource}, name, errors.New("RBAC: no"))
 	}
 	obj := s.Object(k.Name, namespace, name)
@@ -73,8 +100,8 @@ func (s *source) ObjectYAML(ctx context.Context, p kube.Person, k kube.Kind, nam
 }
 
 func (s *source) Logs(ctx context.Context, p kube.Person, namespace, name string, o kube.LogOptions) (io.ReadCloser, error) {
-	s.readAs = append(s.readAs, p)
-	if s.deny["pods/"+namespace] && !p.Nobody() {
+	s.readBy(p)
+	if s.denied("pods", namespace) && !p.Nobody() {
 		return nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, name, errors.New("RBAC: no"))
 	}
 	if s.logErr != nil {

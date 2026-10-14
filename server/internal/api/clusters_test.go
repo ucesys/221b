@@ -392,10 +392,10 @@ func TestPeopleSeeWhatKubernetesAllows(t *testing.T) {
 			t.Errorf("%s for the viewer: %s %s", path, resp.Status, b)
 		}
 	}
-	if len(src.readAs) == 0 {
+	if len(src.readers()) == 0 {
 		t.Fatal("no live read was made as the person")
 	}
-	for _, p := range src.readAs {
+	for _, p := range src.readers() {
 		if p.User != "viewer@corp.example" || !slices.Contains(p.Groups, "system:authenticated") {
 			t.Errorf("live read as %+v", p)
 		}
@@ -429,7 +429,7 @@ func TestPeopleSeeWhatKubernetesAllows(t *testing.T) {
 
 	// When Kubernetes changes its mind, the stream starts over with what
 	// the person may see now.
-	delete(src.deny, "pods/kube-system")
+	src.allow("pods", "kube-system")
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		ev, data = readEvent(t, br)

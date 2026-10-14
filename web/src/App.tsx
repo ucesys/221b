@@ -79,7 +79,7 @@ function Shell() {
   // The Helm tab needs Secrets; with them off it is not offered.
   const tab = route.tab === 'helm' && live.cluster?.secrets === 'off' ? 'nodes' : route.tab
   const tabLabel = TABS.find((t) => t.id === tab)?.label ?? 'Nodes'
-  const clusterName = live.cluster?.name ?? summary?.name ?? ''
+  const clusterName = summary?.name ?? live.cluster?.name ?? ''
 
   useEffect(() => {
     document.title = clusterName ? `${clusterName} · ${view === 'cluster' ? 'Connection' : tabLabel} · 221B` : '221B'

@@ -259,6 +259,33 @@ test('a viewer switches clusters but cannot add, edit or remove them (P3-03)', a
   await page.context().close()
 })
 
+test('a kubeconfig signs in too, with the context picked and the address taken from the file (P3-05, P3-09)', async ({ request, browserName }) => {
+  const other = await cluster.other()
+  const id = `${name(browserName)}-kc`
+  await removeIfThere(request, id)
+  // Two contexts, the current one pointing nowhere: the picked one is used.
+  const ca = other.ca === 'pem' ? `      certificate-authority-data: ${Buffer.from(other.caPem).toString('base64')}\n` : ''
+  const kubeconfig = ['apiVersion: v1', 'kind: Config', 'clusters:', '  - name: other', '    cluster:', `      server: ${other.server}`, ca.trimEnd(), '  - name: nowhere', '    cluster:', '      server: https://nowhere.invalid:6443', 'contexts:', '  - name: e2e', '    context:', '      cluster: other', '      user: console', '  - name: elsewhere', '    context:', '      cluster: nowhere', '      user: console', 'current-context: elsewhere', 'users:', '  - name: console', '    user:', `      token: ${other.token}`, '']
+    .filter((line) => line !== '')
+    .join('\n')
+  const draft = { name: id, env: 'development', description: 'Added by the end-to-end suite, from a kubeconfig', server: '', ca: other.ca, auth: 'kubeconfig', kubeconfig, context: 'e2e', mode: 'read' }
+  const added = await request.post('/api/v1/clusters', { data: draft, headers: { 'Sec-Fetch-Site': 'same-origin' } })
+  expect(added.status(), await added.text()).toBe(201)
+  const summary = (await added.json()) as Record<string, unknown>
+  expect(summary).toMatchObject({ id, auth: 'kubeconfig', server: other.server, cred: { context: 'e2e', cluster: 'other', who: 'console' } })
+  expect(JSON.stringify(summary)).not.toContain(other.token)
+
+  // It connects, serves the other cluster's nodes, and passes its test.
+  await expect.poll(async () => ((await (await request.get(`/api/v1/clusters/${id}`)).json()) as { state: string }).state, { timeout: 30_000 }).toBe('connected')
+  const nodes = async () => ((await (await request.get(`/api/v1/clusters/${id}/snapshot?views=nodes`)).json()) as { views: { nodes?: { rows: unknown[] } } }).views.nodes?.rows.length ?? 0
+  await expect.poll(nodes, { timeout: 30_000 }).toBe(other.nodes)
+  const tested = (await (await request.post(`/api/v1/clusters/${id}/test`, { headers: { 'Sec-Fetch-Site': 'same-origin' } })).json()) as { tone: string; steps: { k: string; tone: string; t: string }[] }
+  expect(tested.tone, JSON.stringify(tested)).toMatch(/ok|warn/)
+  expect(tested.steps.find((s) => s.k === 'Kubernetes')?.t).toContain(`${other.nodes} node`)
+  const removed = await request.delete(`/api/v1/clusters/${id}`, { headers: { 'Sec-Fetch-Site': 'same-origin' } })
+  expect(await removed.json()).toEqual({ removed: true })
+})
+
 test('removing a production cluster asks for its name, and deletes its Secret (P3-08, P3-10)', async ({ page, request, browserName }) => {
   const id = name(browserName)
   await page.goto(`/#/c/${id}/cluster`)

@@ -39,7 +39,9 @@ export function ClusterMenu({ cluster, stream, route, me, onEdit }: Props) {
   const { clusters } = useClusters()
   const here = clusters.find((c) => c.id === route.cluster)
   const conn = connection(cluster, stream)
-  const name = cluster?.name ?? here?.name ?? (route.cluster === 'local' ? '—' : route.cluster)
+  // The connection's name is the one people gave it; the stream's is the
+  // installation's, until the connection list has answered.
+  const name = here?.name ?? cluster?.name ?? (route.cluster === 'local' ? '—' : route.cluster)
   const version = cluster?.version ?? here?.version ?? ''
   const env = here ? envOf(here.env) : null
   const admin = me?.admin ?? false

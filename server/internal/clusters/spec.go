@@ -165,7 +165,10 @@ func ValidateSpec(s Spec) error {
 		return invalid("env", "Choose an environment: production, staging, development or other.")
 	}
 	if !s.Local {
-		if _, err := ServerURL(s.Server); err != nil {
+		// A kubeconfig may supply the address; the connection is checked
+		// for one again once the credential has been read.
+		fromFile := s.Auth == AuthKubeconfig && strings.TrimSpace(s.Server) == ""
+		if _, err := ServerURL(s.Server); err != nil && !fromFile {
 			return invalid("server", err.Error())
 		}
 		if !cas[s.CA] {
