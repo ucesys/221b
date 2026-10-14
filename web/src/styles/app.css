@@ -128,6 +128,12 @@ a.rk-ddopt:focus-visible {
 button.rk-card:hover:not(:disabled) {
   border-color: var(--line2);
 }
+/* The drawer's body scrolls; its cards keep their height. A flex item that
+   hides its overflow would otherwise shrink to fit the window, cutting a
+   long table (environment variables, events) off at the bottom. */
+.rk-drawer-body > * {
+  flex: none;
+}
 /* The drawer must sit above the sticky header on narrow screens. */
 @media (max-width: 899px) {
   .rk-drawer {
@@ -139,3 +145,8 @@ button.rk-card:hover:not(:disabled) {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+
+/* The refresh countdown ring next to "Live": the arc drains as the next refresh comes nearer. */
+.rk-ring { flex: none; color: var(--ok); }
+.rk-ring circle + circle { transition: stroke-dasharray 0.9s linear; }
+@media (prefers-reduced-motion: reduce) { .rk-ring circle + circle { transition: none; } }

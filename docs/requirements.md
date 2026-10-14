@@ -134,14 +134,14 @@ Phase 2 adds the everyday read-only screens: Namespaces, Pods, Services and Helm
 
 | ID | Requirement | Done when |
 | --- | --- | --- |
-| P2-01 | Navigation as designed: Nodes, Namespaces, Pods and Helm in the bar, Services under More, and the More menu takes tabs as the window narrows. | From 390 px wide upward no tab is cut off, and the open tab always shows. |
+| P2-01 | Navigation as designed: Nodes, Namespaces, Pods, Helm and Services in the bar while they fit, and the More menu takes tabs from the right as the window narrows (amended at the Phase 2 review: nothing is rolled up while there is room). | From 390 px wide upward no tab is cut off, and the open tab always shows. |
 | P2-02 | Namespaces tab: every namespace and what it holds, by kind, with the funnel filter for kinds (multi-select, All by default). | Counts match `kubectl get` for each kind. |
 | P2-03 | Pods tab: status, restarts, node, namespace, CPU and memory against requests and limits, and age; filters by namespace, node and status. | A crash-looping pod shows its last termination reason. |
 | P2-04 | Pod details: containers and their states, events, owner chain, volumes, environment, and logs (live, previous container, container picker, download). | Logs start within 2 seconds; a pod deleted while open says so. |
 | P2-05 | Services tab: type, cluster IP, ports, ready endpoints, and the External columns (external IP or pending, node ports, Ingress hostname). Details list endpoints and the pods behind them. | A LoadBalancer without an external IP shows as pending, with the reason. |
 | P2-06 | Helm tab: releases with chart, app version, revision, status and last update. Details show revision history, notes and user-supplied values. | Matches `helm list -A` and `helm history` for every release. |
 | P2-07 | Secret handling: the server reads Secrets only to list keys and sizes and to read Helm release records. Helm values that look like credentials are masked. | An automated test proves a known Secret value appears in no response, log or export. |
-| P2-08 | A YAML view of every object, with Secret data replaced by key names and sizes and managed fields hidden. | The YAML matches `kubectl get -o yaml` apart from those two changes. |
+| P2-08 | A YAML view of every object, with Secret data replaced by key names and sizes and managed fields hidden; every object also opens its own details (facts by kind, conditions, labels, events, a workload's pods), with pods and Services opening their full drawers wherever they are listed (amended at the Phase 2 review). | The YAML matches `kubectl get -o yaml` apart from those two changes. |
 | P2-09 | Links between tabs: a node to its pods, a pod to its Service and Helm release, a Service to its pods. Label and taint filters on Nodes, held back from Phase 1. | Each link opens the right tab with the right filter. |
 | P2-10 | Permissions: get, list and watch on the kinds these tabs show, logs and events. A chart setting turns Secret reading off, which hides Secret keys and the Helm tab. | With the setting off, the ServiceAccount cannot read any Secret. |
 

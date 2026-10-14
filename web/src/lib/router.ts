@@ -14,9 +14,6 @@ export const TABS: { id: Tab; label: string; tip: string }[] = [
   { id: 'services', label: 'Services', tip: 'Every Service, its endpoints and the hostnames that publish it' },
 ]
 
-/** The tabs in the bar from the left; the rest live under More. */
-export const PRIMARY_TABS = 4
-
 export interface Route {
   tab: Tab
   /** Path segments after the tab: #/namespaces/web → ["web"]. */

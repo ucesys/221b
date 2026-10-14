@@ -52,7 +52,7 @@ func pod(ns, name, node string) *corev1.Pod {
 func source() *fake.Source {
 	src := fake.New("worker-1")
 	src.Put(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop", CreationTimestamp: ts(48 * time.Hour)}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}})
-	src.Put(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "uid-deploy"}, Spec: appsv1.DeploymentSpec{Replicas: ptr(int32(2))}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1, Replicas: 2}})
+	src.Put(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "uid-deploy"}, Spec: appsv1.DeploymentSpec{Replicas: ptr(int32(2)), Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "registry.example/web:1.0"}}}}}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1, Replicas: 2}})
 	src.Put(&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-abc", Namespace: "shop", OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "web", Controller: ptr(true)}}}})
 	src.Put(pod("shop", "web-abc-1", "worker-1"))
 	crashing := pod("shop", "web-abc-2", "worker-1")
@@ -87,6 +87,18 @@ func source() *fake.Source {
 	src.Put(&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: "shop"}, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, ClusterIP: corev1.ClusterIPNone, Selector: map[string]string{"app": "cache"}, Ports: []corev1.ServicePort{{Port: 6379, Protocol: corev1.ProtocolTCP}}}})
 	src.Put(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "web-config", Namespace: "shop"}, Data: map[string]string{"config.yaml": "listen: 8080", "mode": "prod"}})
 	src.Put(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "api-credentials", Namespace: "shop"}, Type: corev1.SecretTypeOpaque, Data: map[string][]byte{"token": []byte("PLANTED-TOKEN-VALUE"), "user": []byte("svc")}})
+	// A release whose chart puts no Helm labels on its pods: the pods are
+	// found through the StatefulSet its manifest creates.
+	src.Put(&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: "shop", UID: "uid-sts"}, Spec: appsv1.StatefulSetSpec{Replicas: ptr(int32(1)), ServiceName: "cache"}, Status: appsv1.StatefulSetStatus{ReadyReplicas: 1, CurrentReplicas: 1}})
+	cache0 := pod("shop", "cache-0", "worker-1")
+	cache0.Labels = map[string]string{"app": "cache"}
+	cache0.OwnerReferences = []metav1.OwnerReference{{Kind: "StatefulSet", Name: "cache", Controller: ptr(true)}}
+	src.Put(cache0)
+	cacheRec := kube.HelmRecord{Name: "cache", Namespace: "shop", Version: 1, Config: map[string]any{"replicas": 1}}
+	cacheRec.Info.Status, cacheRec.Info.FirstDeployed, cacheRec.Info.LastDeployed = "deployed", "2026-10-01T08:00:00Z", "2026-10-01T08:00:00Z"
+	cacheRec.Chart.Metadata = kube.HelmChartMetadata{Name: "redis", Version: "19.6.4", AppVersion: "7.4.0"}
+	cacheRec.Manifest = "---\napiVersion: apps/v1\nkind: StatefulSet\nmetadata:\n  name: cache\n  namespace: shop\n"
+	src.Put(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "sh.helm.release.v1.cache.v1", Namespace: "shop", Labels: map[string]string{"owner": "helm", "name": "cache", "version": "1", "status": "deployed"}}, Type: kube.HelmSecretType, Data: map[string][]byte{"release": kube.EncodeHelmRelease(cacheRec)}})
 	for rev, status := range map[int]string{1: "superseded", 2: "failed", 3: "deployed"} {
 		rec := kube.HelmRecord{Name: "shop", Namespace: "shop", Version: rev, Config: map[string]any{"replicas": 2, "db": map[string]any{"password": "PLANTED-PASSWORD", "host": "db.shop"}}}
 		rec.Info.Status, rec.Info.Description, rec.Info.Notes = status, fmt.Sprintf("Upgrade complete (revision %d)", rev), "Thank you for installing shop."
@@ -210,16 +222,16 @@ func TestServiceRowsCarryEndpointsAndTheExternalColumns(t *testing.T) {
 func TestNamespaceRowsCountEveryKindAndListObjectsWithoutSecretValues(t *testing.T) {
 	src := source()
 	row := views.BuildNamespaceRow(src, objectOf[*corev1.Namespace](t, src, "namespaces", "", "shop"), now)
-	want := map[string]int{"pods": 4, "deployments": 1, "replicasets": 1, "services": 2, "endpointslices": 1, "events": 1, "ingresses": 1, "configmaps": 1, "secrets": 4}
+	want := map[string]int{"pods": 5, "deployments": 1, "statefulsets": 1, "replicasets": 1, "services": 2, "endpointslices": 1, "events": 1, "ingresses": 1, "configmaps": 1, "secrets": 5}
 	for kind, n := range want {
 		if row.Counts[kind] != n {
 			t.Errorf("%s: %d, want %d", kind, row.Counts[kind], n)
 		}
 	}
-	if row.Objects != 16 || row.Kinds != len(want) || row.Pods != 3 || row.PodsNotRunning != 2 || row.PodsFailing != 1 {
+	if row.Objects != 19 || row.Kinds != len(want) || row.Pods != 4 || row.PodsNotRunning != 2 || row.PodsFailing != 1 {
 		t.Errorf("row: %+v", row)
 	}
-	if len(row.Releases) != 1 || row.Releases[0] != "shop" || row.Group != "apps" {
+	if len(row.Releases) != 2 || row.Releases[0] != "cache" || row.Releases[1] != "shop" || row.Group != "apps" {
 		t.Errorf("releases and group: %+v", row)
 	}
 	rows := views.BuildObjectRows(src, "shop", now)
@@ -227,8 +239,8 @@ func TestNamespaceRowsCountEveryKindAndListObjectsWithoutSecretValues(t *testing
 	for _, r := range rows {
 		byKey[r.Key] = r
 	}
-	if len(rows) != 16 {
-		t.Errorf("%d object rows, want 16", len(rows))
+	if len(rows) != 19 {
+		t.Errorf("%d object rows, want 19", len(rows))
 	}
 	secret := byKey["Secret/api-credentials"]
 	if secret.Kind != "Secret" || !strings.Contains(secret.Details, "token (19 B)") || !strings.Contains(secret.Details, "user (3 B)") {
@@ -254,7 +266,7 @@ func TestNamespaceRowsCountEveryKindAndListObjectsWithoutSecretValues(t *testing
 
 func TestReleaseRowsMatchHelmListAndHistory(t *testing.T) {
 	src := source()
-	if keys := views.ReleaseKeys(src); len(keys) != 1 || keys[0] != "shop/shop" {
+	if keys := views.ReleaseKeys(src); len(keys) != 2 || keys[0] != "shop/cache" || keys[1] != "shop/shop" {
 		t.Fatalf("release keys: %v", keys)
 	}
 	row, ok := views.BuildReleaseRow(src, "shop", "shop", now)
@@ -290,9 +302,75 @@ func TestReleaseRowsMatchHelmListAndHistory(t *testing.T) {
 	if text := fmt.Sprintf("%+v", d); strings.Contains(text, "PLANTED") {
 		t.Errorf("the planted password reached the release details: %s", text)
 	}
+	// Pods without Helm's labels are found through the release's workloads,
+	// and name their release.
+	cache, ok := views.BuildReleaseRow(src, "shop", "cache", now)
+	if !ok || cache.Pods != 1 || cache.PodsReady != 1 {
+		t.Errorf("release whose chart labels no pods: %+v", cache)
+	}
+	if r := views.BuildPodRow(src, objectOf[*corev1.Pod](t, src, "pods", "shop", "cache-0"), now); r.Release != "cache" || r.OwnerKind != "StatefulSet" {
+		t.Errorf("pod of that release: %+v", r)
+	}
 	// Without Secrets there are no releases at all.
 	src.SetSecrets(false)
 	if keys := views.ReleaseKeys(src); len(keys) != 0 {
 		t.Errorf("releases without Secrets: %v", keys)
+	}
+}
+
+func TestObjectDetailsForEveryKind(t *testing.T) {
+	src := source()
+	kind := func(name string) kube.Kind {
+		k, ok := views.ObjectKindOf(name)
+		if !ok {
+			t.Fatalf("no kind %s", name)
+		}
+		return k
+	}
+	d, ok := views.BuildObjectDetails(src, kind("Deployment"), "shop", "web", now)
+	if !ok || !d.Workload || d.Status != "1/2 ready" {
+		t.Fatalf("deployment: %+v", d)
+	}
+	if len(d.Pods) != 3 || d.Pods[0].Name != "web-abc-1" || d.Pods[2].Name != "web-abc-3" {
+		t.Errorf("pods of the deployment, through its ReplicaSet: %+v", d.Pods)
+	}
+	facts := map[string]string{}
+	for _, f := range d.Facts {
+		facts[f.Label] = f.Value
+	}
+	if facts["Replicas"] != "2 desired · 1 ready · 0 available" || !strings.Contains(facts["Images"], "registry.example/web:1.0") {
+		t.Errorf("facts: %v", facts)
+	}
+	sts, ok := views.BuildObjectDetails(src, kind("statefulsets"), "shop", "cache", now)
+	if !ok || len(sts.Pods) != 1 || sts.Pods[0].Name != "cache-0" {
+		t.Errorf("statefulset: %+v", sts)
+	}
+	// The release comes from the manifest when Helm's labels are missing,
+	// and from the labels when they are there.
+	if sts.Release != "cache" {
+		t.Errorf("statefulset release: %q", sts.Release)
+	}
+	if d.Release != "shop" {
+		t.Errorf("deployment in the shop release's manifest: %q", d.Release)
+	}
+	if cm, ok := views.BuildObjectDetails(src, kind("ConfigMap"), "shop", "web-config", now); !ok || cm.Release != "" {
+		t.Errorf("configmap outside any release: %+v", cm)
+	}
+	secret, ok := views.BuildObjectDetails(src, kind("Secret"), "shop", "api-credentials", now)
+	if !ok || len(secret.Keys) != 2 || secret.Keys[0].Key != "token" || secret.Keys[0].Bytes != 19 || secret.Workload {
+		t.Errorf("secret: %+v", secret)
+	}
+	if text := fmt.Sprintf("%+v", secret); strings.Contains(text, "PLANTED") {
+		t.Errorf("a Secret value reached the details: %s", text)
+	}
+	svc, ok := views.BuildObjectDetails(src, kind("Service"), "shop", "web", now)
+	if !ok || len(svc.Events) != 1 || svc.Events[0].Reason != "SyncLoadBalancerFailed" || svc.Release != "shop" {
+		t.Errorf("service events and release: %+v %q", svc.Events, svc.Release)
+	}
+	if _, ok := views.BuildObjectDetails(src, kind("Deployment"), "shop", "missing", now); ok {
+		t.Error("a missing object has details")
+	}
+	if _, ok := views.ObjectKindOf("Gizmo"); ok {
+		t.Error("an unknown kind is found")
 	}
 }

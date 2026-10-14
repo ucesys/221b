@@ -968,12 +968,13 @@ func (s *Store) Unsubscribe(sub *Sub) {
 	s.wantUsageLocked()
 }
 
-// wantUsageLocked tells the source whether anyone shows pods, in the Pods
-// tab or a Helm release's. s.mu must be held.
+// wantUsageLocked tells the source whether anyone shows pods: the Pods
+// tab, a Helm release's, or a namespace, whose workload drawers list
+// theirs. s.mu must be held.
 func (s *Store) wantUsageLocked() {
 	want := false
-	for _, name := range []string{ViewPods, ViewHelm} {
-		if v := s.views[name]; v != nil && v.subs > 0 {
+	for name, v := range s.views {
+		if v.subs > 0 && (name == ViewPods || name == ViewHelm || strings.HasPrefix(name, NamespacePrefix)) {
 			want = true
 		}
 	}

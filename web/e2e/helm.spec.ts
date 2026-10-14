@@ -32,6 +32,17 @@ test('matches helm list -A: every release with its chart, app version, revision,
     await expect(item).toContainText(`${r.chart}-${r.chartVersion}`)
     await expect(item).toContainText(`rev ${r.revision}`)
   }
+  // A release whose chart sets no Helm labels on its pods still has them,
+  // through the workloads in its manifest (asked at the Phase 2 review).
+  const unlabelled = rows.find((r) => r.name === 'analytics-cache')
+  if (unlabelled) {
+    expect(unlabelled.pods, 'pods of a release found through its StatefulSet').toBeGreaterThan(0)
+    const d = (await (await request.get(`/api/v1/helm/${unlabelled.namespace}/${unlabelled.name}`)).json()) as ReleaseDetails
+    expect(d.podRows.length).toBe(unlabelled.pods)
+    expect(d.podRows.every((p) => /^cache-\d+$/.test(p.name) && p.release === unlabelled.name && p.ownerKind === 'StatefulSet')).toBe(true)
+  } else {
+    expect(inKind, 'the simulator plants analytics-cache').toBe(true)
+  }
 })
 
 test('details show the revision history as helm history lists it, the notes and the user-supplied values', async ({ page, request }) => {
@@ -72,10 +83,28 @@ test('details show the revision history as helm history lists it, the notes and 
   // The release's pods, and its resources with their state.
   await page.locator('[data-subtab="pods"]').click()
   await expect(page.locator('[data-pod]')).toHaveCount(d.podRows.length)
-  if (d.resources.length) {
+  if (d.podRows.length) {
+    // A pod opens its own drawer here, with logs and all (asked at the Phase 2 review).
+    await page.locator('[data-pod]').first().click()
+    const pod = page.getByTestId('pod-panel')
+    await expect(pod.getByRole('heading', { level: 2 })).toHaveText(d.podRows[0]!.name)
+    await expect(pod.locator('[data-dtab="logs"]')).toBeVisible()
+    await expect(page).toHaveURL(/open=Pod%2F/)
+    await page.keyboard.press('Escape')
+    await expect(pod).toHaveCount(0)
+  }
+  const workload = d.resources.find((r) => r.watched && ['Deployment', 'StatefulSet', 'DaemonSet'].includes(r.kind))
+  if (workload) {
+    // A resource opens its details, with its pods, not just its YAML.
     await page.locator('[data-subtab="workloads"]').click()
-    await expect(page.locator('[data-resource]').first()).toBeVisible()
-    await page.locator('[data-resource]').first().click()
-    await expect(page.getByRole('dialog', { name: 'Object YAML' }).getByTestId('yaml')).toContainText('kind:')
+    await page.locator(`[data-resource="${workload.kind}/${workload.namespace}/${workload.name}"]`).click()
+    const panel = page.getByTestId('object-panel')
+    await expect(panel.getByRole('heading', { level: 2 })).toHaveText(workload.name)
+    await expect(panel).toContainText(`${workload.kind} in`)
+    await expect(panel.getByTestId('object-release-link')).toHaveText(d.name)
+    await panel.locator('[data-dtab="pods"]').click()
+    await expect(panel.locator('[data-pod]').first()).toBeVisible()
+    await panel.locator('[data-dtab="yaml"]').click()
+    await expect(panel.getByTestId('yaml')).toContainText(`kind: ${workload.kind}`)
   }
 })

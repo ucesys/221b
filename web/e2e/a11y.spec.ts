@@ -7,8 +7,9 @@ import { expect, test } from './test'
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 
 async function violations(page: Page): Promise<string[]> {
-  // Once the drawers have slid in: axe samples colors as painted.
-  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)))
+  // Once the drawers have slid in: axe samples colors as painted. A transition
+  // restarted midway (the refresh ring's, every second) rejects, which is fine.
+  await page.evaluate(() => Promise.allSettled(document.getAnimations().map((a) => a.finished)))
   const results = await new AxeBuilder({ page }).withTags(TAGS).analyze()
   return results.violations.map((v) => `${v.id} (${v.impact}): ${v.help} — ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(', ')}`)
 }
@@ -59,6 +60,18 @@ for (const theme of ['light', 'dark'] as const) {
       await expect(page.locator('.rk-gr').first()).toBeVisible()
       expect(await violations(page), hash).toEqual([])
     }
+    // An object's details with the pods it controls (asked at the Phase 2 review).
+    await page.goto('/#/namespaces')
+    const deployment = page.locator('[data-kind="Deployment"] [data-object]').first()
+    await expect(deployment).toBeVisible()
+    await deployment.click()
+    const panel = page.getByTestId('object-panel')
+    await expect(panel.locator('dt').first()).toBeVisible()
+    expect(await violations(page), 'object details').toEqual([])
+    await panel.locator('[data-dtab="pods"]').click()
+    await expect(panel.locator('.rk-gr').first().or(panel.getByText(/^No pod/))).toBeVisible()
+    expect(await violations(page), 'object pods').toEqual([])
+    await page.keyboard.press('Escape')
   })
 }
 

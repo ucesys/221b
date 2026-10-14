@@ -124,13 +124,38 @@ func releaseTone(status string) string {
 	return "muted"
 }
 
-// releasePods finds the pods of a release in its namespace, by the labels
-// charts set and the annotation Helm adds.
+// releasePods finds the pods of a release: those carrying the labels
+// charts set and the annotation Helm adds, and those owned, through
+// ReplicaSets and Jobs, by a workload the release's manifest creates.
+// Charts that set neither label on their pod templates (and pods never
+// carry Helm's own annotations, which go on the workload) are still found
+// through the second route.
 func releasePods(src Source, namespace, name string) []*corev1.Pod {
+	owned := map[string]bool{}
+	for _, rev := range releaseRevisions(src, namespace, name) {
+		for _, res := range rev.Resources {
+			if res.Namespace == "" || res.Namespace == namespace {
+				owned[res.Kind+"/"+res.Name] = true
+			}
+		}
+		break // the latest revision's manifest is what runs
+	}
 	var out []*corev1.Pod
 	for _, o := range src.Objects("pods", namespace) {
 		p, ok := o.(*corev1.Pod)
-		if ok && podRelease(p) == name {
+		if !ok {
+			continue
+		}
+		mine := podRelease(p) == name
+		if !mine && len(owned) > 0 {
+			for _, owner := range ownerChain(src, namespace, p.OwnerReferences, 4) {
+				if owned[owner.Kind+"/"+owner.Name] {
+					mine = true
+					break
+				}
+			}
+		}
+		if mine {
 			out = append(out, p)
 		}
 	}

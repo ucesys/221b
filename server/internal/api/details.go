@@ -92,6 +92,45 @@ func (s *Server) release(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, b)
 }
 
+// object serves the details drawer of any namespaced object:
+// /api/v1/objects/{kind}/{namespace}/{name}, where kind is the registry
+// name (deployments) or the kind (Deployment).
+func (s *Server) object(w http.ResponseWriter, r *http.Request) {
+	k, ok := views.ObjectKindOf(r.PathValue("kind"))
+	if !ok {
+		jsonError(w, http.StatusNotFound, "no kind named "+strconv.Quote(r.PathValue("kind")))
+		return
+	}
+	if k.Secret && !s.opts.Cluster.SecretsRead() {
+		jsonError(w, http.StatusNotFound, "Secrets are not read: reading Secrets is off (secrets.read in the chart)")
+		return
+	}
+	ns, name := r.PathValue("namespace"), r.PathValue("name")
+	d, ok := views.BuildObjectDetails(s.opts.Cluster, k, ns, name, s.opts.Now().UTC())
+	if !ok {
+		jsonError(w, http.StatusNotFound, fmt.Sprintf("no %s %s in %s: it may have been deleted", k.Kind, name, ns))
+		return
+	}
+	var usage map[string]nodes.Usage
+	for _, p := range d.Pods {
+		if u, ok := s.opts.Cluster.PodUsageOf(p.Namespace, p.Name); ok {
+			if usage == nil {
+				usage = map[string]nodes.Usage{}
+			}
+			usage[p.Key] = u
+		}
+	}
+	b, err := json.Marshal(struct {
+		views.ObjectDetails
+		Usage map[string]nodes.Usage `json:"usage,omitempty"`
+	}{d, usage})
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, "encoding the object details: "+err.Error())
+		return
+	}
+	writeJSON(w, r, b)
+}
+
 // yaml serves an object as YAML (P2-08): /api/v1/yaml/{kind}/{name} for
 // cluster-scoped kinds, /api/v1/yaml/{kind}/{namespace}/{name} otherwise.
 func (s *Server) yaml(w http.ResponseWriter, r *http.Request) {

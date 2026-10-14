@@ -82,7 +82,7 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
           {!tabs?.length && <div style={{ height: 6 }} />}
         </div>
         {notice}
-        <div ref={body} style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: '18px 20px 32px', display: 'flex', flexDirection: 'column', gap: 16, background: 'var(--bg)' }}>
+        <div ref={body} className="rk-drawer-body" style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: '18px 20px 32px', display: 'flex', flexDirection: 'column', gap: 16, background: 'var(--bg)' }}>
           {children}
         </div>
       </aside>

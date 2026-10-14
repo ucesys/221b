@@ -1,25 +1,37 @@
-// Navigation as designed (P2-01): Nodes, Namespaces, Pods and Helm in the
-// bar, Services under More, and the More menu takes tabs as the window
-// narrows; the open tab always shows.
+// Navigation as designed (P2-01): every tab in the bar while they fit, and
+// the More menu takes tabs from the right as the window narrows; the open
+// tab always shows.
 import { expect, test } from './test'
 
-const TABS = ['Nodes', 'Namespaces', 'Pods', 'Helm']
+const TABS = ['Nodes', 'Namespaces', 'Pods', 'Helm', 'Services']
 
-test('the bar shows the four tabs and Services under More', async ({ page }) => {
+test('the bar shows every tab while they fit, and More takes them as the window narrows', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   const nav = page.getByRole('navigation', { name: 'Views' })
   for (const t of TABS) await expect(nav.getByRole('link', { name: new RegExp(`^${t}`) })).toBeVisible()
+  // Nothing is rolled up while there is room (asked at the Phase 2 review).
+  await expect(page.getByTestId('more')).toHaveCount(0)
+
+  // Narrow: the last tabs move under More, in their order.
+  await page.setViewportSize({ width: 420, height: 844 })
+  await expect(page.getByTestId('more')).toBeVisible()
   await expect(nav.getByRole('link', { name: /^Services/ })).toHaveCount(0)
   await page.getByTestId('more').click()
   const menu = page.getByRole('menu', { name: 'More views' })
-  await expect(menu.getByRole('menuitem', { name: /^Services/ })).toBeVisible()
+  await expect(menu.getByRole('menuitem').last()).toHaveText(/^Services/)
   await menu.getByRole('menuitem', { name: /^Services/ }).click()
   await expect(page).toHaveURL(/#\/services/)
-  // The open tab takes a place of its own when there is room.
+  // The open tab rides on the More button when it does not fit.
+  const more = page.getByTestId('more')
+  await expect(more).toContainText('Services')
+  await expect(more).toHaveAttribute('aria-current', 'page')
+  await expect(page).toHaveTitle(/Services · 221B/)
+
+  // Wide again: Services takes its place in the bar and More goes.
+  await page.setViewportSize({ width: 1280, height: 844 })
   await expect(nav.getByRole('link', { name: /^Services/ })).toHaveAttribute('aria-current', 'page')
   await expect(page.getByTestId('more')).toHaveCount(0)
-  await expect(page).toHaveTitle(/Services · 221B/)
 })
 
 for (const width of [390, 700, 1024]) {

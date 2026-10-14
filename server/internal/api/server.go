@@ -144,6 +144,7 @@ func New(o Options) *Server {
 		s.handle("GET /api/v1/pods/{namespace}/{name}/log", "pod-log", s.podLog)
 		s.handle("GET /api/v1/services/{namespace}/{name}", "service", s.service)
 		s.handle("GET /api/v1/helm/{namespace}/{name}", "release", s.release)
+		s.handle("GET /api/v1/objects/{kind}/{namespace}/{name}", "object", s.object)
 		s.handle("GET /api/v1/yaml/{kind}/{name}", "yaml", s.yaml)
 		s.handle("GET /api/v1/yaml/{kind}/{namespace}/{name}", "yaml", s.yaml)
 	}

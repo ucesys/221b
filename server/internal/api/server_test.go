@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -702,3 +703,61 @@ func helmRecord(name, ns string, revision int, status string, values map[string]
 	rec.Chart.Metadata = kube.HelmChartMetadata{Name: name, Version: "1.2.3", AppVersion: "4.5.6"}
 	return rec
 }
+
+func TestObjectDetails(t *testing.T) {
+	srv, store, src := setup(t, true)
+	web := samplePod("shop", "web", "n1")
+	web.OwnerReferences = []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "web-abc", Controller: ptrBool(true)}}
+	src.Put(web)
+	src.Put(&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-abc", Namespace: "shop", OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "web", Controller: ptrBool(true)}}}})
+	src.Put(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "uid-deploy"}, Spec: appsv1.DeploymentSpec{Replicas: ptrInt32(1)}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1}})
+	src.Put(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "shop"}, Data: map[string][]byte{"password": []byte("hunter2-planted")}})
+	src.SetPodUsage(map[string]nodes.Usage{"shop/web": {CPUMilli: 12, MemoryBytes: 1 << 20}})
+	store.Notify(everything())
+	store.Process()
+
+	for _, kind := range []string{"Deployment", "deployments"} {
+		r := get(t, srv.URL+"/api/v1/objects/"+kind+"/shop/web")
+		text := body(t, r)
+		if r.StatusCode != 200 {
+			t.Fatalf("%s %d %s", kind, r.StatusCode, text)
+		}
+		var d struct {
+			Kind     string `json:"kind"`
+			Status   string `json:"status"`
+			Workload bool   `json:"workload"`
+			Pods     []struct {
+				Key string `json:"key"`
+			} `json:"pods"`
+			Facts []struct{ Label, Value string } `json:"facts"`
+			Usage map[string]nodes.Usage          `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(text), &d); err != nil || d.Kind != "Deployment" || d.Status != "1/1 ready" || !d.Workload {
+			t.Fatalf("%s: %+v %v", kind, d, err)
+		}
+		if len(d.Pods) != 1 || d.Pods[0].Key != "shop/web" || d.Usage["shop/web"].CPUMilli != 12 {
+			t.Fatalf("%s pods and usage: %+v", kind, d)
+		}
+		if len(d.Facts) == 0 || d.Facts[0].Label != "Replicas" {
+			t.Fatalf("%s facts: %+v", kind, d.Facts)
+		}
+	}
+	r := get(t, srv.URL+"/api/v1/objects/secrets/shop/creds")
+	text := body(t, r)
+	if r.StatusCode != 200 || !strings.Contains(text, `"keys":[{"key":"password","bytes":15}]`) || strings.Contains(text, "hunter2") {
+		t.Fatalf("secret details %d %s", r.StatusCode, text)
+	}
+	for path, code := range map[string]int{"/api/v1/objects/deployments/shop/gone": 404, "/api/v1/objects/gizmos/shop/web": 404} {
+		if r := get(t, srv.URL+path); r.StatusCode != code {
+			t.Fatalf("%s: %d, want %d", path, r.StatusCode, code)
+		}
+	}
+	// With Secrets off, a Secret's details are not served either.
+	src.SetSecrets(false)
+	if r := get(t, srv.URL+"/api/v1/objects/secrets/shop/creds"); r.StatusCode != 404 {
+		t.Fatalf("secret with Secrets off: %d", r.StatusCode)
+	}
+}
+
+func ptrBool(b bool) *bool    { return &b }
+func ptrInt32(n int32) *int32 { return &n }

@@ -6,16 +6,19 @@ import { RESOURCE_COLUMNS, REVISION_COLUMNS, resourceLabel, resourceTerms, revis
 import { POD_COLUMNS, podLabel, podStatusGroup, podTerms, type PodStatusFilter } from '../columns/pods'
 import { fCores, fMem, fmtAge, fmtTs, nWord, pct, pctTxt } from '../lib/format'
 import { href, navigate, withParams } from '../lib/router'
+import { isWatchedKind, pluralKind } from '../lib/kinds'
 import { useTable } from '../lib/useTable'
 import { ColumnsMenu } from './ColumnsMenu'
 import { DataTable } from './DataTable'
 import { Card, Drawer } from './Drawer'
+import { ObjectPanel } from './ObjectPanel'
+import { PodPanel } from './PodPanel'
+import { ServicePanel } from './ServicePanel'
 import { ExportMenu } from './ExportMenu'
 import { WarnIcon } from './Icons'
 import { SearchBox } from './SearchBox'
 import { SideList, type SideGroup } from './SideList'
 import type { TabProps } from './tabs'
-import { YamlView } from './YamlView'
 import { colorLine } from './YamlView'
 
 type ReleaseFilter = 'all' | 'deployed' | 'failed'
@@ -124,8 +127,24 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
   const resTable = useTable<ReleaseResource>({ id: 'helm-resources', columns: RESOURCE_COLUMNS, rows: resources, terms: resourceTerms, now, defaultSort: { col: 'kind', dir: 'asc' } })
   const history = useMemo(() => d?.history ?? [], [d])
   const histTable = useTable<Revision>({ id: 'helm-history', columns: REVISION_COLUMNS, rows: history, terms: revisionTerms, now, defaultSort: { col: 'revision', dir: 'desc' } })
-  const [openPod, setOpenPod] = useState<string | null>(null)
-  const [openRes, setOpenRes] = useState<ReleaseResource | null>(null)
+  // The open drawer, from the URL: open=Kind/namespace/name.
+  const open = useMemo<{ kind: string; namespace: string; name: string } | null>(() => {
+    const v = p.get('open')
+    if (!v) return null
+    const [kind = '', namespace = '', name = ''] = v.split('/', 3) as [string?, string?, string?]
+    return kind && name ? { kind, namespace, name } : null
+  }, [p])
+  const openKey = (kind: string, namespace: string, name: string) => withParams(route, { open: `${kind}/${namespace}/${name}` })
+  const openObject = (kind: string, namespace: string, name: string) => {
+    // Cluster-scoped kinds have tabs of their own.
+    if (kind === 'Node') navigate(href('nodes', [], { open: name }))
+    else if (kind === 'Namespace') navigate(href('namespaces', [name]))
+    else navigate(openKey(kind, namespace, name), true)
+  }
+  const openPodKey = open?.kind === 'Pod' ? `${open.namespace}/${open.name}` : null
+  const openResKey = open && open.kind !== 'Pod' ? `${open.kind}/${open.namespace}/${open.name}` : null
+  const openRes = openResKey ? (d?.resources.find((r) => `${r.kind}/${r.namespace}/${r.name}` === openResKey) ?? null) : null
+  const close = () => set({ open: undefined })
   const counts: Partial<Record<SubTab, number>> = { pods: pods.length, history: history.length }
   for (const r of d?.resources ?? []) counts[group(r)] = (counts[group(r)] ?? 0) + 1
   const subtabs: [SubTab, string][] = [
@@ -274,21 +293,21 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
                     <ExportMenu onExport={(f) => podTable.exportRows(f, cluster?.name, `${current.name}-pods`, onToast)} disabled={!podTable.shown.length} what="the pods in view" />
                   </div>
                 </div>
-                <DataTable<PodView> label="Pods in this release" rows={podTable.shown} cols={podTable.cols} rowKey={(r) => r.key} rowLabel={podLabel} sort={podTable.sort} onSort={podTable.onSort} selected={openPod} onOpen={(k) => setOpenPod(k)} now={now} empty="No pods belong to this release." rowAttr="pod" />
-                <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>Pods are matched by the labels Helm charts set (app.kubernetes.io/instance and managed-by) and the release annotation. Usage comes from metrics-server.</p>
+                <DataTable<PodView> label="Pods in this release" rows={podTable.shown} cols={podTable.cols} rowKey={(r) => r.key} rowLabel={podLabel} sort={podTable.sort} onSort={podTable.onSort} selected={openPodKey} onOpen={(k) => openObject('Pod', k.split('/')[0] ?? current.namespace, k.split('/')[1] ?? k)} now={now} empty="No pods belong to this release." rowAttr="pod" />
+                <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>A pod belongs to the release when it carries the labels Helm charts set (app.kubernetes.io/instance and managed-by) or the release annotation, or when its owners lead to a workload in the release manifest. Usage comes from metrics-server.</p>
               </>
             )}
             {d && (sub === 'workloads' || sub === 'storage' || sub === 'network' || sub === 'other') && (
               <>
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px' }}>
-                  <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{nWord(resources.length, 'object', 'objects')} from the release manifest · click one for its YAML</span>
+                  <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{nWord(resources.length, 'object', 'objects')} from the release manifest · click one for its details</span>
                   <SearchBox rows={resources} terms={resourceTerms} value={resTable.query} onChange={resTable.setQuery} placeholder="Search" label="Search resources" width={200} />
                   <div className="rk-tools" style={{ marginLeft: 'auto', gap: 8 }}>
                     <ColumnsMenu cols={RESOURCE_COLUMNS} hidden={resTable.hidden} defaults={resTable.defaults} onChange={resTable.setHidden} compact={false} />
                     <ExportMenu onExport={(f) => resTable.exportRows(f, cluster?.name, `${current.name}-${sub}`, onToast)} disabled={!resTable.shown.length} what="these objects" />
                   </div>
                 </div>
-                <DataTable<ReleaseResource> label={`${sub} of the release`} rows={resTable.shown} cols={resTable.cols} rowKey={(r) => `${r.kind}/${r.namespace}/${r.name}`} rowLabel={resourceLabel} sort={resTable.sort} onSort={resTable.onSort} selected={openRes ? `${openRes.kind}/${openRes.namespace}/${openRes.name}` : null} onOpen={(k) => setOpenRes(resources.find((r) => `${r.kind}/${r.namespace}/${r.name}` === k) ?? null)} now={now} empty="The manifest has no objects of these kinds." rowAttr="resource" />
+                <DataTable<ReleaseResource> label={`${sub} of the release`} rows={resTable.shown} cols={resTable.cols} rowKey={(r) => `${r.kind}/${r.namespace}/${r.name}`} rowLabel={resourceLabel} sort={resTable.sort} onSort={resTable.onSort} selected={openResKey} onOpen={(k) => { const r = resources.find((x) => `${x.kind}/${x.namespace}/${x.name}` === k); if (r) openObject(r.kind, r.namespace || current.namespace, r.name) }} now={now} empty="The manifest has no objects of these kinds." rowAttr="resource" />
               </>
             )}
             {d && sub === 'values' && (
@@ -309,6 +328,9 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
                 ) : (
                   <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>This release was installed with the chart's defaults: no user-supplied values.</p>
                 )}
+                <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }} data-testid="values-note">
+                  The values given at install or upgrade: every values file and --set, merged into one as Helm merged them, which is what helm get values shows. The chart's own defaults are not part of it.
+                </p>
               </Card>
             )}
             {d && sub === 'notes' && (
@@ -338,31 +360,18 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
         )}
         {!current && <p style={{ margin: 0, padding: '28px 24px', fontSize: 12.5, color: 'var(--fg3)' }}>{loaded ? 'No Helm releases: nothing in this cluster was installed with Helm, or 221B cannot read release records.' : 'Waiting for the first list of releases…'}</p>}
       </main>
-      {openPod && (
-        <Drawer label="Pod YAML" title={openPod.split('/')[1] ?? openPod} kicker={<span>Pod in {openPod.split('/')[0]}</span>} onClose={() => setOpenPod(null)} width={860}>
-          <p style={{ margin: 0, fontSize: 12.5 }}>
-            <a className="rk-link" href={href('pods', [], { open: openPod })}>
-              Open in the Pods tab for containers, events and logs →
-            </a>
-          </p>
-          <YamlView kind="pods" namespace={openPod.split('/')[0]} name={openPod.split('/')[1] ?? ''} onToast={onToast} />
-        </Drawer>
+      {open && current && open.kind === 'Pod' && <PodPanel podKey={`${open.namespace}/${open.name}`} row={pods.find((r) => r.key === `${open.namespace}/${open.name}`) ?? null} gone={false} cluster={cluster} now={now} onClose={close} onToast={onToast} />}
+      {open && current && open.kind === 'Service' && <ServicePanel serviceKey={`${open.namespace}/${open.name}`} row={null} gone={false} now={now} onClose={close} onToast={onToast} />}
+      {open && current && open.kind !== 'Pod' && open.kind !== 'Service' && (openRes ? openRes.watched : isWatchedKind(open.kind)) && (
+        <ObjectPanel kind={open.kind} namespace={open.namespace} name={open.name} row={null} gone={false} cluster={cluster} now={now} linkTo={(k, n) => openKey(k, open.namespace, n)} onClose={close} onToast={onToast} />
       )}
-      {openRes && (
-        <Drawer label="Object YAML" title={openRes.name} kicker={<span>{openRes.kind}{openRes.namespace ? ` in ${openRes.namespace}` : ''}</span>} onClose={() => setOpenRes(null)} width={860}>
-          {openRes.watched ? <YamlView kind={kindName(openRes.kind)} namespace={openRes.namespace || undefined} name={openRes.name} onToast={onToast} /> : <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>221B does not watch {openRes.kind}s, so it cannot read this object.</p>}
+      {open && current && open.kind !== 'Pod' && open.kind !== 'Service' && !(openRes ? openRes.watched : isWatchedKind(open.kind)) && (
+        <Drawer label={`${open.kind} details`} title={open.name} kicker={<span>{open.kind}{open.namespace ? ` in ${open.namespace}` : ''}</span>} onClose={close} width={860} testId="object-panel">
+          <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>221B does not watch {pluralKind(open.kind)}, so it cannot read this object. The release manifest lists it{openRes?.status ? ` as ${openRes.status}` : ''}.</p>
         </Drawer>
       )}
     </>
   )
-}
-
-/** The registry name of a kind: Deployment → deployments, Ingress → ingresses. */
-function kindName(kind: string): string {
-  const lower = kind.toLowerCase()
-  if (lower.endsWith('s') || lower.endsWith('x') || lower.endsWith('ch')) return lower + 'es'
-  if (lower.endsWith('y')) return lower.slice(0, -1) + 'ies'
-  return lower + 's'
 }
 
 function StatCard({ title, head, big, unit, pctUse, tone = 'ok', lines }: { title: string; head: string; big: string; unit: string; pctUse: number; tone?: 'ok' | 'warn' | 'err'; lines: [string, string][] }) {

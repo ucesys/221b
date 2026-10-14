@@ -4,11 +4,25 @@ This is the guide for the review that closes Phase 2 ([requirements](requirement
 
 ## What Phase 2 built
 
-Four tabs, the navigation that holds them, and the details behind every row: **Namespaces** (what each namespace holds, by kind, with the kinds funnel), **Pods** (filters by node, namespace and status; details with containers, environment, volumes, events, the owner chain, live logs and YAML), **Services** (the External columns; details with ports, endpoints and the pods behind them) and **Helm** (releases with history, notes, values, resources and pods). Every object opens as YAML. Nodes link to their pods, pods to their node, namespace, Service and release, Services to their pods. The Nodes tab gained the label and taint picker held back from Phase 1.
+Four tabs, the navigation that holds them, and the details behind every row: **Namespaces** (what each namespace holds, by kind, with the kinds funnel), **Pods** (filters by node, namespace and status; details with containers, environment, volumes, events, the owner chain, live logs and YAML), **Services** (the External columns; details with ports, endpoints and the pods behind them) and **Helm** (releases with history, notes, values, resources and pods). Every object opens its own details and its YAML. Nodes link to their pods, pods to their node, namespace, Service and release, Services to their pods. The Nodes tab gained the label and taint picker held back from Phase 1.
 
 The server now watches 27 kinds instead of two, keeps them trimmed to what the screens show, builds the rows as named views that exist only while a browser shows them, and streams logs. Secrets are read as the Phase 1 review settled: reduced to key names and sizes as they enter the cache, Helm release records decoded with credentials masked, and a chart setting (`secrets.read`) that withholds Secrets altogether, which hides the Helm tab.
 
 Asked for at the Phase 1 review and done here: the search box suggests as you type; every table has the same Columns and Export controls, with CSV added to Excel and JSON; a node's pod count links to its pods.
+
+Asked for at this review's first round and done on the same pull request:
+
+- **Every object opens its own details, not just its YAML.** A Deployment, StatefulSet, DaemonSet, ReplicaSet, Job or CronJob opens with its facts, conditions, labels and annotations, its events, the pods it controls (the same table as everywhere else, with Columns and Export) and its YAML; a ConfigMap or Secret with its keys and sizes; an Ingress with its rules; a PersistentVolumeClaim with its capacity and class. A pod opens its full drawer wherever it is listed (a namespace, a release, a workload's pods), and so does a Service. The links between drawers open in place: a pod's owner opens the owner, an owner's pods open the pod, a ReplicaSet's owner opens its Deployment.
+- **A pod's owner link opens the owner's drawer** instead of searching the namespace for its name.
+- **The Environment tab shows every container's variables** at any window height: the cards no longer shrink to fit the drawer (a flex-box default), so the drawer scrolls instead.
+- **A Helm release finds its pods through its workloads too.** A chart that sets none of Helm's labels on its pods (so `kubectl get pods -l app.kubernetes.io/instance=<release>` finds nothing) still gets them: a pod belongs to the release when its owners lead to a workload in the release manifest. The pod's drawer names the release the same way. The simulator plants such a release (`analytics-cache`, whose pods come from the `cache` StatefulSet) and CI checks it.
+- **The bar keeps every tab while they fit.** More appears only when the window is too narrow for all of them, and takes tabs from the right; the open tab always shows.
+- **A countdown ring** beside "Live" drains as the next refresh comes nearer; its tooltip says the seconds.
+- **Kinds are named with their real plurals**: Endpoints, NetworkPolicies, Ingresses.
+- **The Values tab says what it shows**: the values given at install or upgrade, from every values file and `--set`, merged into one as Helm merges them, which is what `helm get values` shows; two values files are one set of values by the time Helm stores the release, so there is nothing more to show. Chart defaults are not part of it.
+- **Services have a Type column** in the table.
+
+Not done here: editing the cluster connection and adding another was never part of the built console (the prototype's cluster menu belongs to Phase 3, with stored credentials and the management mode), so it stays in Phase 3 unless you want it pulled forward.
 
 Decisions worth a look, because they shape what you will see:
 
@@ -23,7 +37,8 @@ Decisions worth a look, because they shape what you will see:
 
 **CI proves** (`web/e2e`, in Chromium, Firefox and WebKit against the simulator, and in Chromium on kind with real Kubernetes 1.35, 1.36 and 1.37):
 
-- the bar shows Nodes, Namespaces, Pods and Helm, Services sits under More, and at 390, 700 and 1024 px no tab is cut off and the open tab always shows, in the bar or as the More button (P2-01);
+- the bar shows every tab while they fit and nothing under More; at 420 px the last tabs move under More and the open tab rides on the More button; at 390, 700 and 1024 px no tab is cut off and the open tab always shows (P2-01, as amended at the review);
+- a Deployment opens its details with its facts and its pods, a pod opens in place from them, the pod's owner link opens its ReplicaSet and that one's owner link the Deployment; Endpoints, NetworkPolicies and Ingresses are labelled so; a release's pods and resources open their own drawers; a release whose chart labels no pods still has them (asked at the review);
 - the Namespaces tab lists every namespace, and for the namespace with the most pods the count of each kind's table matches `kubectl get <kind> -n <ns>`; the kinds funnel narrows the kinds shown and the search filters by name or detail (P2-02);
 - the Pods tab lists every pod with its status, node and namespace, filters by each, and a crash-looping pod shows its last termination reason in the Restarts column and its previous container's logs (P2-03);
 - a pod's details show its containers, environment (a variable taken from a Secret shows the reference only), volumes, events and owner chain; its logs start within 2 seconds, follow live, switch containers and download; a pod deleted while its details are open says so (P2-04);
@@ -53,6 +68,12 @@ More of the console: a pod's logs, a Service's details, a release's values, and 
 | Helm values | More menu at 390 px |
 | --- | --- |
 | ![Helm values, with the password masked](images/phase-2/app-helm-values-light-1440.png) | ![The More menu on a phone](images/phase-2/app-more-light-390.png) |
+
+Added after the review's first round: a Deployment's details and the pods it controls, as every object now opens.
+
+| Deployment details | The Deployment's pods |
+| --- | --- |
+| ![Deployment details](images/phase-2/app-deployment-details-light-1440.png) | ![The pods a Deployment controls](images/phase-2/app-deployment-pods-light-1440.png) |
 
 **To check by hand** on the test cluster, with the console open:
 

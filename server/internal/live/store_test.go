@@ -304,9 +304,16 @@ func TestNamespaceViewsExistWhileShown(t *testing.T) {
 	if _, _, err := s.Subscribe([]string{"bogus"}); err == nil {
 		t.Fatal("an unknown view should be refused")
 	}
+	if src.WantsPodUsage() {
+		t.Fatal("nobody shows pods yet")
+	}
 	sub, start, err := s.Subscribe([]string{ViewNamespaces, "ns:shop"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// A namespace's workload drawers list pods with their usage.
+	if !src.WantsPodUsage() {
+		t.Fatal("showing a namespace should read pod usage")
 	}
 	snap := decodeSnapshot(t, start)
 	rows := snap.Views["ns:shop"].Rows
@@ -335,6 +342,9 @@ func TestNamespaceViewsExistWhileShown(t *testing.T) {
 
 	// Once nobody shows it, the view is dropped after a while.
 	s.Unsubscribe(sub)
+	if src.WantsPodUsage() {
+		t.Fatal("pod usage should stop being read once nobody shows pods")
+	}
 	s.Notify(kube.Change{Views: map[string][]string{"ns:shop": {kube.AllRows}}})
 	s.Process()
 	if views := s.Views(); !strings.Contains(strings.Join(views, ","), "ns:shop") {

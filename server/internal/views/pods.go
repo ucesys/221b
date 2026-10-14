@@ -108,10 +108,40 @@ func BuildPodRow(src Source, p *corev1.Pod, now time.Time) PodRow {
 		}
 	}
 	r.Status, r.Tone, r.StatusTip = podStatus(p, now)
-	if owner := controllerOf(src, p.Namespace, p.OwnerReferences); owner != nil {
+	chain := ownerChain(src, p.Namespace, p.OwnerReferences, 4)
+	if len(chain) > 0 {
+		owner := chain[len(chain)-1]
 		r.OwnerKind, r.OwnerName = owner.Kind, owner.Name
 	}
+	if r.Release == "" {
+		r.Release = releaseOwning(src, p.Namespace, chain)
+	}
 	return r
+}
+
+// releaseOwning names the Helm release whose manifest creates one of the
+// pod's owners, for charts that do not put Helm's labels on their pods.
+func releaseOwning(src Source, namespace string, owners []Owner) string {
+	if len(owners) == 0 {
+		return ""
+	}
+	for _, o := range src.Objects("secrets", namespace) {
+		sum, ok := o.(*kube.SecretSummary)
+		if !ok || sum.Release == nil {
+			continue
+		}
+		for _, res := range sum.Release.Resources {
+			if res.Namespace != "" && res.Namespace != namespace {
+				continue
+			}
+			for _, owner := range owners {
+				if owner.Kind == res.Kind && owner.Name == res.Name {
+					return sum.Release.Name
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func terminationText(t *corev1.ContainerStateTerminated) string {
@@ -322,14 +352,7 @@ func ownerChain(src Source, namespace string, refs []metav1.OwnerReference, dept
 	return out
 }
 
-func podRelease(p *corev1.Pod) string {
-	if p.Labels["app.kubernetes.io/managed-by"] == "Helm" {
-		if r := p.Labels["app.kubernetes.io/instance"]; r != "" {
-			return r
-		}
-	}
-	return p.Annotations["meta.helm.sh/release-name"]
-}
+func podRelease(p *corev1.Pod) string { return objectRelease(p) }
 
 func timePtr(t *metav1.Time) *time.Time {
 	if t == nil || t.IsZero() {

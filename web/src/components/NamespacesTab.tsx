@@ -3,18 +3,20 @@ import { useView } from '../api/live'
 import type { NamespaceRow, ObjectRow } from '../api/types'
 import { OBJECT_COLUMNS, objectLabel, objectTerms } from '../columns/objects'
 import { fmtAge, fmtTs, nWord } from '../lib/format'
+import { pluralKind } from '../lib/kinds'
 import { href, listParam, navigate, withParams } from '../lib/router'
 import { exportFileName, exportTable, csvText, matchesQuery, queryWords, sortRows, nextSort, type ExportFormat, type SortState } from '../lib/table'
 import { download, xlsxBytes } from '../lib/xlsx'
 import { ColumnsMenu } from './ColumnsMenu'
 import { DataTable } from './DataTable'
-import { Drawer } from './Drawer'
 import { ExportMenu } from './ExportMenu'
 import { Chevron, FilterIcon } from './Icons'
 import { SearchBox } from './SearchBox'
 import { SideList, type SideGroup } from './SideList'
+import { ObjectPanel } from './ObjectPanel'
+import { PodPanel } from './PodPanel'
+import { ServicePanel } from './ServicePanel'
 import type { TabProps } from './tabs'
-import { YamlView } from './YamlView'
 import { useTable } from '../lib/useTable'
 
 /** Rows a kind's table shows before "Show all". */
@@ -24,11 +26,12 @@ const FOLD = 8
 function KindCard({ kind, apiVersion, rows, now, cluster, selected, onOpen, onToast, hidden, setHidden, defaults }: { kind: string; apiVersion: string; rows: ObjectRow[]; now: number; cluster: string | undefined; selected: string | null; onOpen: (key: string) => void; onToast: (msg: string) => void; hidden: Set<string>; setHidden: (h: Set<string>) => void; defaults: Set<string> }) {
   const [sort, setSort] = useState<SortState>({ col: 'name', dir: 'asc' })
   const [all, setAll] = useState(false)
+  const plural = pluralKind(kind)
   const sorted = useMemo(() => sortRows(rows, OBJECT_COLUMNS, sort, now), [rows, sort, now])
   const shown = all || sorted.length <= FOLD ? sorted : sorted.slice(0, FOLD)
   const cols = useMemo(() => OBJECT_COLUMNS.filter((c, i) => i === 0 || !hidden.has(c.id)), [hidden])
   const exportRows = (format: ExportFormat) => {
-    const file = exportFileName(cluster, `${kind.toLowerCase()}s`, format)
+    const file = exportFileName(cluster, pluralKind(kind).toLowerCase(), format)
     try {
       const t = exportTable(sorted, cols, now)
       if (format === 'xlsx') download(xlsxBytes(kind, t.head, t.rows), file)
@@ -40,19 +43,19 @@ function KindCard({ kind, apiVersion, rows, now, cluster, selected, onOpen, onTo
     }
   }
   return (
-    <section className="rk-card" aria-label={`${kind}s`} style={{ overflow: 'hidden' }} data-kind={kind}>
+    <section className="rk-card" aria-label={plural} style={{ overflow: 'hidden' }} data-kind={kind}>
       <div className="rk-tbar">
-        <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>{kind}s</h3>
+        <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>{plural}</h3>
         <span className="rk-count">{rows.length}</span>
         <span className="rk-mono" style={{ fontSize: 11, color: 'var(--fg3)' }}>
           {apiVersion}
         </span>
         <span style={{ flex: '1 1 auto' }} />
         <ColumnsMenu cols={OBJECT_COLUMNS} hidden={hidden} defaults={defaults} onChange={setHidden} compact={false} />
-        <ExportMenu onExport={exportRows} disabled={!rows.length} what={`these ${kind}s`} />
+        <ExportMenu onExport={exportRows} disabled={!rows.length} what={`these ${plural}`} />
       </div>
       <DataTable<ObjectRow>
-        label={`${kind}s`}
+        label={plural}
         rows={shown}
         cols={cols}
         rowKey={(r) => r.key}
@@ -153,6 +156,9 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   }
 
   const selectedRow = selected ? (objects.rows.find((r) => r.key === selected) ?? null) : null
+  // The drawer: open=Kind/name opens the object's own details, by kind.
+  const [selKind = '', selName = ''] = (selected ?? '').split('/', 2) as [string?, string?]
+  const closeDrawer = () => set({ open: undefined })
   const toggleKind = (kind: string) => {
     const next = new Set(kindSel ?? kinds.map((k) => k.kind))
     if (next.has(kind)) next.delete(kind)
@@ -223,7 +229,7 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
                       {kinds.map((k) => (
                         <label key={k.kind} className="rk-ddopt">
                           <input type="checkbox" checked={!kindSel || kindSel.has(k.kind)} onChange={() => toggleKind(k.kind)} />
-                          <span style={{ flex: '1 1 auto' }}>{k.kind}s</span>
+                          <span style={{ flex: '1 1 auto' }}>{pluralKind(k.kind)}</span>
                           <span className="rk-cnt">{k.n}</span>
                         </label>
                       ))}
@@ -247,11 +253,9 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
         )}
         {!current && <p style={{ margin: 0, padding: '28px 24px', fontSize: 12.5, color: 'var(--fg3)' }}>{loaded ? 'No namespaces.' : 'Waiting for the first list of namespaces…'}</p>}
       </main>
-      {selected && (
-        <Drawer label="Object YAML" title={selectedRow?.name ?? selected.split('/')[1] ?? selected} kicker={<span>{selectedRow ? `${selectedRow.kind} in ${ns}` : 'Object'}</span>} onClose={() => set({ open: undefined })} width={860} testId="object-drawer">
-          {selectedRow ? <YamlView kind={selectedRow.kindName} namespace={ns} name={selectedRow.name} onToast={onToast} /> : <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>This object is gone.</p>}
-        </Drawer>
-      )}
+      {selected && selKind === 'Pod' && <PodPanel podKey={`${ns}/${selName}`} row={null} gone={objects.loaded && !selectedRow} cluster={cluster} now={now} onClose={closeDrawer} onToast={onToast} />}
+      {selected && selKind === 'Service' && <ServicePanel serviceKey={`${ns}/${selName}`} row={null} gone={objects.loaded && !selectedRow} now={now} onClose={closeDrawer} onToast={onToast} />}
+      {selected && selKind !== 'Pod' && selKind !== 'Service' && <ObjectPanel kind={selKind} namespace={ns} name={selName} row={selectedRow} gone={objects.loaded && !selectedRow} cluster={cluster} now={now} linkTo={(k, n) => withParams(route, { open: `${k}/${n}` })} onClose={closeDrawer} onToast={onToast} />}
     </>
   )
 }

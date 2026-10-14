@@ -38,7 +38,6 @@ export const SERVICE_COLUMNS: ColumnDef<ServiceRow>[] = [
     label: 'Type',
     width: '110px',
     min: 110,
-    hiddenByDefault: true,
     sortValue: (r) => (r.headless ? 'Headless' : r.type),
     cell: (r) => <Mono text={r.headless ? 'Headless' : r.type} size={12} />,
     export: (r) => [{ head: 'Type', cell: r.headless ? 'Headless' : r.type }],

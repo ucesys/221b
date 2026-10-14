@@ -25,9 +25,12 @@ test('lists every Service with its type, cluster IP, ports, endpoints and the Ex
   const svc = services.find((s) => !s.headless && s.total > 0) ?? services[0]!
   const row = page.locator(`[data-service="${svc.key}"]`)
   await expect(row.locator('.rk-cell').nth(1)).toHaveText(svc.namespace)
-  await expect(row.locator('.rk-cell').nth(2)).toHaveText(svc.headless ? 'headless' : svc.clusterIP)
-  await expect(row.locator('.rk-cell').nth(3)).toHaveText(svc.ports.join(', '))
-  await expect(row.locator('.rk-cell').nth(4)).toContainText(svc.status)
+  // The type is a column of its own (asked at the Phase 2 review).
+  await expect(page.locator('.rk-gh [data-col="type"]')).toContainText('Type')
+  await expect(row.locator('.rk-cell').nth(2)).toHaveText(svc.headless ? 'Headless' : svc.type)
+  await expect(row.locator('.rk-cell').nth(3)).toHaveText(svc.headless ? 'headless' : svc.clusterIP)
+  await expect(row.locator('.rk-cell').nth(4)).toHaveText(svc.ports.join(', '))
+  await expect(row.locator('.rk-cell').nth(5)).toContainText(svc.status)
 
   // Namespaces on the left narrow the table.
   const ns = svc.namespace
@@ -44,7 +47,7 @@ test('a LoadBalancer without an external IP shows as pending, with the reason', 
     await open(page, `#/services?ns=${lb.namespace}`)
     const row = page.locator(`[data-service="${lb.namespace}/${lb.name}"]`)
     await expect(row).toBeVisible({ timeout: 15_000 })
-    const ip = row.locator('.rk-cell').nth(5)
+    const ip = row.locator('.rk-cell').nth(6)
     await expect(ip).toHaveText('pending')
     await expect(ip.locator('.rk-t')).toHaveAttribute('title', /.+/)
     const reason = await ip.locator('.rk-t').getAttribute('title')

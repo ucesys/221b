@@ -668,6 +668,13 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 				ch.Mark("pods", p.Namespace+"/"+p.Name)
 				if release := podRelease(p); release != "" {
 					ch.Mark("helm", p.Namespace+"/"+release)
+				} else {
+					// A pod without Helm's labels may still belong to a
+					// release through its workload: the releases of its
+					// namespace are rebuilt, and there are few of those.
+					for _, r := range c.releasesIn(p.Namespace) {
+						ch.Mark("helm", p.Namespace+"/"+r)
+					}
 				}
 			}
 		}
@@ -711,6 +718,19 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 		}
 	}
 	c.emit(ch)
+}
+
+// releasesIn names the Helm releases recorded in a namespace.
+func (c *Cluster) releasesIn(namespace string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, o := range c.Objects("secrets", namespace) {
+		if s, ok := o.(*SecretSummary); ok && s.Release != nil && !seen[s.Release.Name] {
+			seen[s.Release.Name] = true
+			out = append(out, s.Release.Name)
+		}
+	}
+	return out
 }
 
 // podRelease names the Helm release a pod belongs to, from the labels

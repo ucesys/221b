@@ -152,6 +152,36 @@ export interface ObjectRow {
   order: number
 }
 
+/** One line of an object's details. */
+export interface Fact {
+  label: string
+  value: string
+  mono?: boolean
+}
+
+/** A ConfigMap's or Secret's key with its size; values never travel. */
+export interface KeySize {
+  key: string
+  bytes: number
+}
+
+/** The drawer of any namespaced object: GET /api/v1/objects/{kind}/{ns}/{name}. */
+export interface ObjectDetails extends ObjectRow {
+  facts: Fact[]
+  labels: Record<string, string>
+  annotations: Record<string, string>
+  conditions: PodCondition[]
+  owners: Owner[]
+  events: Event[]
+  /** The pods a workload runs; empty for other kinds. */
+  pods: PodRow[]
+  workload: boolean
+  keys?: KeySize[]
+  /** The Helm release the object belongs to, by Helm's labels or the release manifest. */
+  release?: string
+  usage?: Record<string, Usage>
+}
+
 export interface ServiceRow {
   key: string
   name: string

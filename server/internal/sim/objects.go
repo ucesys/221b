@@ -365,6 +365,46 @@ func (s *Sim) dressPod(p *corev1.Pod, g *group) {
 			cs.ContainerID = "containerd://" + strings.Repeat(string(uid(p.Name))[:8], 8)
 		}
 	}
+	if g.app == "gateway" {
+		s.addSidecar(p)
+	}
+}
+
+// addSidecar gives a pod an init container and a sidecar, as a service
+// mesh does, so the Containers and Environment tabs show several
+// containers. The sidecar's state follows the main container's.
+func (s *Sim) addSidecar(p *corev1.Pod) {
+	p.Spec.InitContainers = append(p.Spec.InitContainers, corev1.Container{
+		Name: "wait-for-api", Image: "registry.example/busybox:1.36",
+		Command: []string{"sh", "-c", "until nc -z api 8080; do sleep 1; done"},
+		Env:     []corev1.EnvVar{{Name: "TARGET", Value: "api:8080"}},
+	})
+	p.Spec.Containers = append(p.Spec.Containers, corev1.Container{
+		Name: "proxy", Image: "registry.example/proxy:2.1",
+		Ports: []corev1.ContainerPort{{Name: "proxy", ContainerPort: 15001, Protocol: corev1.ProtocolTCP}},
+		Env: []corev1.EnvVar{
+			{Name: "PROXY_MODE", Value: "sidecar"},
+			{Name: "UPSTREAM", Value: "127.0.0.1:8080"},
+			{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"}}},
+		},
+		VolumeMounts: []corev1.VolumeMount{{Name: "tmp", MountPath: "/tmp"}},
+	})
+	if len(p.Status.ContainerStatuses) == 0 {
+		return
+	}
+	main := p.Status.ContainerStatuses[0]
+	started := p.Status.StartTime
+	if started == nil {
+		started = &metav1.Time{Time: p.CreationTimestamp.Time}
+	}
+	p.Status.InitContainerStatuses = []corev1.ContainerStatus{{
+		Name: "wait-for-api", Image: "registry.example/busybox:1.36", Ready: true,
+		State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed", StartedAt: *started, FinishedAt: metav1.Time{Time: started.Add(3 * time.Second)}}},
+	}}
+	p.Status.ContainerStatuses = append(p.Status.ContainerStatuses, corev1.ContainerStatus{
+		Name: "proxy", Image: "registry.example/proxy:2.1", Ready: main.State.Running != nil,
+		State: corev1.ContainerState{Running: main.State.Running, Waiting: main.State.Waiting},
+	})
 }
 
 func appPort(app string) int32 {
@@ -479,6 +519,10 @@ func (s *Sim) extras(groups map[string]*group, now time.Time) {
 		ing.Status.LoadBalancer.Ingress = []networkingv1.IngressLoadBalancerIngress{{IP: "203.0.113.20"}}
 		add(ing)
 		add(&networkingv1.NetworkPolicy{TypeMeta: typeMeta("NetworkPolicy"), ObjectMeta: objectMeta("web", "default-deny-ingress", created, nil), Spec: networkingv1.NetworkPolicySpec{PodSelector: metav1.LabelSelector{}, PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress}}})
+		// The legacy Endpoints object the endpoints controller keeps beside
+		// every Service: its name is a plural already (asked at the Phase 2
+		// review, when the Namespaces tab said "Endpointss").
+		add(&corev1.Endpoints{TypeMeta: typeMeta("Endpoints"), ObjectMeta: objectMeta("web", "frontend", created, nil), Subsets: []corev1.EndpointSubset{{Addresses: []corev1.EndpointAddress{{IP: "10.244.1.10"}}, Ports: []corev1.EndpointPort{{Name: "http", Port: 8080, Protocol: corev1.ProtocolTCP}}}}})
 	}
 	if g, ok := groups["web/gateway"]; ok {
 		// A LoadBalancer the cloud never gave an address: pending (P2-05).
@@ -521,7 +565,11 @@ func (s *Sim) helmReleases(groups map[string]*group, now time.Time) {
 		manifest                      string
 		notes                         string
 		group                         string
-		revisions                     []string // statuses, oldest first
+		// unlabelled charts do not put Helm's labels on their pods, as
+		// some do not; the console then finds the pods through the
+		// workloads the manifest names.
+		unlabelled bool
+		revisions  []string // statuses, oldest first
 	}
 	releases := []release{
 		{name: "shop", ns: "web", chart: "shop-frontend", version: "3.2.1", app: "3.2.1", group: "web/frontend",
@@ -529,7 +577,7 @@ func (s *Sim) helmReleases(groups map[string]*group, now time.Time) {
 			manifest:  "---\n# Source: shop-frontend/templates/deployment.yaml\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: frontend\n  namespace: web\n---\n# Source: shop-frontend/templates/service.yaml\napiVersion: v1\nkind: Service\nmetadata:\n  name: frontend\n---\n# Source: shop-frontend/templates/ingress.yaml\napiVersion: networking.k8s.io/v1\nkind: Ingress\nmetadata:\n  name: shop\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: frontend-config\n",
 			notes:     "Thank you for installing shop-frontend.\n\nGet the application URL by running:\n  kubectl get ingress -n web shop\n",
 			revisions: []string{"superseded", "failed", "deployed"}},
-		{name: "analytics-cache", ns: "analytics", chart: "redis", version: "19.6.4", app: "7.4.0", group: "analytics/cache",
+		{name: "analytics-cache", ns: "analytics", chart: "redis", version: "19.6.4", app: "7.4.0", group: "analytics/cache", unlabelled: true,
 			values:    map[string]any{"architecture": "standalone", "auth": map[string]any{"enabled": true, "password": PlantedHelmPassword}, "master": map[string]any{"persistence": map[string]any{"size": "20Gi"}}},
 			manifest:  "---\napiVersion: apps/v1\nkind: StatefulSet\nmetadata:\n  name: cache\n  namespace: analytics\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: cache-headless\n---\napiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: data-cache-0\n---\napiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: data-cache-1\n---\napiVersion: v1\nkind: PersistentVolumeClaim\nmetadata:\n  name: data-cache-2\n---\napiVersion: v1\nkind: Secret\nmetadata:\n  name: analytics-cache\n---\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cache-config\n",
 			notes:     "Redis can be accessed on the following DNS name from within your cluster:\n  cache-headless.analytics.svc.cluster.local\n",
@@ -544,7 +592,7 @@ func (s *Sim) helmReleases(groups map[string]*group, now time.Time) {
 			revisions: []string{"deployed"}},
 	}
 	for _, r := range releases {
-		if r.group != "" {
+		if r.group != "" && !r.unlabelled {
 			if g := groups[r.group]; g != nil {
 				for _, p := range g.pods {
 					p.Labels["app.kubernetes.io/managed-by"] = "Helm"
