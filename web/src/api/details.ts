@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { unauthorized } from './auth'
 import { useRefreshTick } from './live'
 
 export interface Details<T> {
@@ -12,6 +13,7 @@ export interface Details<T> {
 
 /** Reads an error body: the server's {"error": ...}, or the status. */
 export async function errorText(r: Response): Promise<string> {
+  if (unauthorized(r)) return 'Your session has ended; sign in again.'
   try {
     const body = (await r.json()) as { error?: string }
     if (body.error) return body.error
@@ -43,6 +45,7 @@ export function useDetails<T>(url: string | null): Details<T> {
       .then(async (r) => {
         if (stale) return
         if (!r.ok) {
+          if (unauthorized(r)) return
           const msg = await errorText(r)
           setState((s) => ({ data: s.data, error: msg, gone: r.status === 404, loading: false }))
           return

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useMe } from './api/auth'
 import { LiveContext, useLiveMeta, useLiveStore } from './api/live'
 import { Banners } from './components/Banners'
 import { HelmTab } from './components/HelmTab'
@@ -47,6 +48,7 @@ function Shell() {
   const live = useLiveMeta()
   const route = useRoute()
   const now = useNow()
+  const me = useMe()
   const [theme, setTheme] = useState<Theme>(initialTheme)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [toast, setToast] = useState('')
@@ -78,7 +80,7 @@ function Shell() {
       data-dock="off"
       style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}
     >
-      <TopBar cluster={live.cluster} counts={live.counts} tab={tab} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} />
+      <TopBar cluster={live.cluster} counts={live.counts} tab={tab} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} me={me} />
       <Banners cluster={live.cluster} stream={live.stream} />
       <div className="rk-main" style={{ display: 'flex', flexWrap: 'wrap', flex: '1 1 auto', alignItems: 'stretch' }}>
         {tab === 'nodes' && <NodesTab {...common} />}
@@ -87,7 +89,7 @@ function Shell() {
         {tab === 'services' && <ServicesTab {...common} />}
         {tab === 'helm' && <HelmTab {...common} />}
       </div>
-      <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} />
+      <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} canChange={me?.admin ?? true} />
       {toast && <Toast message={toast} onDone={clearToast} />}
     </div>
   )

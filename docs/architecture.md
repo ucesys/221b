@@ -82,10 +82,12 @@ sequenceDiagram
 
 ## API
 
-All responses carry the security headers below. Every endpoint is `GET` except one: `PUT /api/v1/settings` changes the shared settings, the only thing that changes state, and the only thing 221B writes to the cluster (X-03).
+All responses carry the security headers below. Every path needs a signed-in session (P3-01) except the health probes, `/metrics`, the sign-in pages and the app's static files; without one the API answers 401 and a page shows the sign-in page. Every endpoint is `GET` except the sign-in forms, sign-out and `PUT /api/v1/settings`, which changes the shared settings, the only thing 221B writes to the cluster (X-03); every request that changes anything is refused when the browser says another site made it (X-06).
 
 | Path | Returns |
 | --- | --- |
+| `/signin` | The sign-in page: a button to the OIDC provider, or the local account form (`POST` with `email`, `password` and `next`). `/signin/start?next=…` begins the OIDC flow (state, nonce and PKCE in a short-lived cookie) and `/signin/callback` ends it; both bring the person back to `next`. `POST /signout` ends the session. |
+| `/api/v1/me` | Who is signed in: the sign-in mode, the person (subject, username, email, name, groups), whether they are an administrator (P3-03), how they signed in and the idle lifetime of sessions. |
 | `/api/v1/snapshot?views=nodes,pods` | The rows and version of each view asked for (`nodes` by default; `pods`, `namespaces`, `services`, `helm`, `ns:<namespace>`), pod usage where it applies, the cluster state, the settings, the counts for the tab bar and the time of the last refresh. |
 | `/api/v1/nodes/{name}` | One Nodes row. |
 | `/api/v1/pods/{namespace}/{name}` | A pod's details: containers and their states, environment (Secret references, never values), volumes, events, owner chain, conditions, scheduling and usage. 404 once the pod is gone. |
@@ -94,7 +96,7 @@ All responses carry the security headers below. Every endpoint is `GET` except o
 | `/api/v1/helm/{namespace}/{name}` | A release's details: history, notes, user-supplied values with credentials masked (and the list of masked keys), resources by kind with their state, pods and their usage. A pod belongs to the release by Helm's labels or annotation, or when its owners lead to a workload in the release manifest. 404 when Secrets are not read. |
 | `/api/v1/objects/{kind}/{namespace}/{name}` | Any other object's details, from the cache: the row, facts by kind (replicas and strategy, schedule, rules, capacity, keys and sizes, …), conditions, labels, annotations, owner chain, events, the Helm release it belongs to, and for a workload the pods it controls with their usage. `kind` is the registry name or the Kind (`deployments` or `Deployment`). 404 for an unknown kind, a missing object, or a Secret when they are not read. |
 | `/api/v1/yaml/{kind}/{name}`, `/api/v1/yaml/{kind}/{namespace}/{name}` | The object as YAML (`application/yaml`), read live, with `managedFields` removed and Secret values replaced by their sizes; `download=1` sends it as a file. `kind` is the registry name (`pods`, `deployments`, …). 404 for Secrets when they are not read. |
-| `/api/v1/settings` | `GET`: the settings in force, where they are kept (`configmap` or `memory`) and when they last changed. `PUT` with `{"refreshSeconds": n}` (1 to 600, JSON only) saves and applies them for everyone; it refuses requests another site made the browser send. |
+| `/api/v1/settings` | `GET`: the settings in force, where they are kept (`configmap` or `memory`) and when they last changed. `PUT` with `{"refreshSeconds": n}` (1 to 600, JSON only), for administrators, saves and applies them for everyone and writes an audit record. |
 | `/api/v1/events?views=…` | The event stream described above, for up to 8 views. |
 | `/healthz` | `ok` while the process runs (liveness). |
 | `/readyz` | `ok` once nodes, pods and namespaces have been listed the first time (readiness); the other kinds fill in behind it. It stays ready during a later API server outage, so the console stays reachable to say so. |
@@ -109,13 +111,15 @@ All responses carry the security headers below. Every endpoint is `GET` except o
 
 **What a browser can see.** Rows and details, and YAML without managed fields or Secret values. The pods on a node, the pods behind a Service and the pods of a release are the same pod rows. Logs are what `kubectl logs` would show the console's ServiceAccount, and the console shows them to anyone who can reach it.
 
-**Who can open it.** There is no sign-in yet, so by default the chart creates a ClusterIP Service and documents `kubectl port-forward`. Opening the console then needs the right to port-forward to a pod in its namespace, which the cluster's own RBAC grants. Anyone with that right sees what the console's ServiceAccount can read: nodes, namespaces, pods and their logs, Services and Helm releases across namespaces, and the names and sizes of Secrets' keys. Keep port-forward rights in the 221B namespace to the people who should see that. The chart can also expose the Service as a LoadBalancer or NodePort (`service.type`), on port 8081; then anyone who can reach that port sees the same, so it belongs only on a network where that is acceptable. Phase 3 adds sign-in and per-person access.
+**Who can open it (P3-01, P3-03).** Everyone signs in: with an OpenID Connect provider (`auth.mode: oidc`), or with accounts the console keeps itself (`auth.mode: local`), for evaluations and clusters without a provider. The sign-in page is served by the server, with no app code; the OIDC flow is the authorization code flow with PKCE and a nonce, and the ID token is verified against the provider's published keys (RSA and ECDSA signatures; never a shared secret). A session is a random 256-bit identifier in an `HttpOnly`, `SameSite=Lax` cookie, marked `Secure` when the request came over TLS (directly, or through a proxy that sets `X-Forwarded-Proto`), and kept in the server's memory: it ends after `auth.sessionIdle` without a request (8 hours by default), after `auth.sessionMax` whatever happens (7 days), at sign-out, or when the server restarts, which signs everyone out. Administrators (`auth.admins` by username, `auth.adminGroups` by group) change the settings and, from the next stage, manage cluster connections; everyone else uses the tabs. `auth.mode: none` keeps the console open as it was before Phase 3, with everyone an anonymous administrator, for development and the simulator; the chart's notes and the server's log warn about it. The chart can still expose the Service as a LoadBalancer or NodePort (`service.type`), or through an Ingress with TLS (`ingress`), behind which plain HTTP is redirected (P3-11).
 
-**Network.** The NetworkPolicy allows no inbound traffic except from peers listed in `networkPolicy.ingressFrom`, or from anyone when the Service is exposed and no peers are listed (port-forward and kubelet probes are not affected by NetworkPolicy), and outbound traffic only on the API server's ports (443 and 6443 by default). 221B needs no DNS and makes no other outbound calls: no telemetry, and the fonts are bundled (X-16).
+**Who did what (P3-10).** Every sign-in, failed sign-in, sign-out and settings change is one JSON record on the server's standard output, naming the person (subject, email, name), the action, its target and outcome, the time and the address it came from; the ordinary logs go to standard error, so the two can be routed apart. The same records go to a webhook when `audit.webhook.url` is set, with a bearer token, three tries each, and a bounded queue that drops with a warning and a counter on `/metrics` rather than block the console. No record carries a credential or a password.
+
+**Network.** The NetworkPolicy allows no inbound traffic except from peers listed in `networkPolicy.ingressFrom`, or from anyone when the Service is exposed and no peers are listed (port-forward and kubelet probes are not affected by NetworkPolicy), and outbound traffic only on the API server's ports (443 and 6443 by default). With OIDC sign-in or an audit webhook it also allows DNS and the provider's or webhook's HTTPS port (`networkPolicy.outboundPorts`, narrowed by `networkPolicy.outboundCIDRs`). 221B makes no other outbound calls: no telemetry, and the fonts are bundled (X-16).
 
 **Container.** A distroless static image with no shell or package manager, running as user 65532 with a read-only root filesystem, no privilege escalation, all capabilities dropped and the RuntimeDefault seccomp profile. It passes the Pod Security `restricted` profile, which CI enforces on the test namespace (X-05). The server sizes Go's memory limit to 90% of the container's.
 
-**Browser.** A strict Content Security Policy (`default-src 'self'`, no inline scripts or styles, `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and cross-origin opener and resource policies (X-06). The server answers only to `localhost`, IP addresses, its Service's DNS names and names set in `allowedHosts`; any other `Host` is refused, so a web page cannot read the console through DNS rebinding while someone has a port-forward open. The one state-changing request, `PUT /api/v1/settings`, takes JSON only and is refused when the browser's `Sec-Fetch-Site` or `Origin` header says another site made the request; the app sets no cookies, so there is no session to ride. Log and YAML downloads are plain `GET`s of what the page already shows.
+**Browser.** A strict Content Security Policy (`default-src 'self'`, no inline scripts or styles, `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, and cross-origin opener and resource policies (X-06). The server answers only to `localhost`, IP addresses, its Service's DNS names, the Ingress host and names set in `allowedHosts`; any other `Host` is refused, so a web page cannot read the console through DNS rebinding while someone has a port-forward open. Every request that changes anything (the settings, sign-out, the local sign-in form) is refused when the browser's `Sec-Fetch-Site` or `Origin` header says another site made it, and the session cookie is `SameSite=Lax`, so another site cannot ride a session either (X-06). Log and YAML downloads are plain `GET`s of what the page already shows. Password guessing against local accounts is slowed to five attempts a minute per address and per account, and unknown accounts take as long to refuse as wrong passwords.
 
 **Supply chain.** GitHub Actions are pinned to commit SHAs and downloaded tools to checksums. CI checks dependency licenses (no GPL, AGPL or LGPL), audits the shipped npm packages, and scans the image with Grype, failing on any high or critical finding (P1-04, P1-05).
 
@@ -212,9 +216,8 @@ Records 1 to 9 cover the Architecture table in the requirements; 10 to 17 were m
 
 ### ADR-8: Sign-in and per-person access by impersonation (Phase 3)
 
-- **Status:** Proposed; an open question in the requirements.
-- **Proposal:** OIDC sign-in, and calls to Kubernetes made as the signed-in person through impersonation, so Kubernetes RBAC decides what each person sees and the audit log names them.
-- **Impact so far:** None in code. Until then, access is gated by who may port-forward (see the security model), and Phase 2 widened what that person sees to pods' logs and Helm values.
+- **Status:** Accepted in Phase 3: sign-in, sessions, roles and the audit log are ADR-25 to ADR-28; per-person access by impersonation follows in the same phase.
+- **Decision:** OIDC sign-in, and calls to Kubernetes made as the signed-in person through impersonation, so Kubernetes RBAC decides what each person sees and the audit log names them.
 
 ### ADR-9: The Claude API is called only from the server (Phase 5)
 
@@ -333,3 +336,32 @@ Records 1 to 9 cover the Architecture table in the requirements; 10 to 17 were m
 - **Context:** The Phase 1 search box took free text and the Export menu offered Excel and JSON. The review asked for the search to fill in as you type, for CSV, and for every table's Columns and Export controls to be the same.
 - **Decision:** Each table's columns declare the *terms* a row can be found by (its name, labels, taints, node, namespace, status, chart…), and the search box suggests the terms that match what is typed, from the rows on screen, as a listbox the keyboard and mouse can pick from; a picked term is added as a word, so several can be combined. Export offers Excel, CSV (UTF-8 with a byte-order mark and CRLF line ends, so Excel opens it directly) and JSON, of exactly the rows and columns on screen, from one `ExportMenu` and one `ColumnsMenu` used by every table.
 - **Consequences:** The same filter, column and export behaviour on every tab, with one set of tests. Suggestions come from what is loaded, so they are instant and never ask the server.
+
+### ADR-25: OIDC sign-in without a client library, and sessions in the server's memory
+
+- **Status:** Accepted (Phase 3).
+- **Context:** P3-01 asks for sign-in with any OIDC provider and sessions in Secure, HttpOnly, SameSite cookies with an idle expiry. The usual Go library brings a JOSE dependency the module cannot build offline, and the part of OIDC a relying party needs is small.
+- **Decision:** The server implements the relying party itself on the standard library and `golang.org/x/oauth2`, which client-go already brings: discovery, the authorization code flow with PKCE (S256) and a nonce, a JWKS cache that refetches on an unknown key, and ID token verification that accepts only asymmetric signatures (RS, PS and ES families), checks issuer, audience, expiry, issue time and nonce, and reads the username and groups from configurable claims. Sessions are random identifiers kept in memory with their user, groups and role, swept every minute; the cookie carries only the identifier.
+- **Consequences:** No new dependency and a small, readable verifier with tests for every refusal (another key, wrong issuer or audience, expired, wrong nonce, `alg: none`, a tampered payload). A restart signs everyone out, which a sign-in puts right in seconds; the chart runs one replica. The sign-in page is server-rendered, so no app code loads before sign-in, and it starts the OIDC flow from a link because Chrome applies the page's `form-action` policy to a form's redirects.
+
+### ADR-26: Two console roles, from the provider's claims
+
+- **Status:** Accepted (Phase 3).
+- **Context:** P3-03 asks for admins who manage connections and settings, and everyone else.
+- **Decision:** A person is an administrator when their username or subject is in `auth.admins` or one of their groups in `auth.adminGroups`, decided at sign-in and kept in the session. The settings endpoint checks the role; the browser disables what a viewer cannot do and says why. With sign-in off everyone is an anonymous administrator.
+- **Consequences:** Roles follow the provider: moving someone out of the admin group takes effect at their next sign-in, within the idle lifetime at most. What a person may see in a cluster is not a console role but Kubernetes RBAC, applied by impersonation (ADR-8).
+
+### ADR-27: An audit log on standard output, and a webhook
+
+- **Status:** Accepted (Phase 3).
+- **Context:** P3-10 asks for a record of sign-ins and connection changes (and later Sherlock questions and Watson commands) naming who, what, when and which cluster: JSON lines on standard output, plus an optional webhook.
+- **Decision:** An `audit` package writes one JSON object per event to standard output, under a mutex, while the ordinary structured logs stay on standard error. A webhook receives the same events from a bounded queue, three tries each with back-off, and drops with a warning and a metric rather than hold up a request. Records name the person (subject, email, name), the action, target, detail, outcome, time and source address, and never a credential.
+- **Consequences:** `kubectl logs` and any log pipeline see the records; a SIEM gets them pushed. Later phases add their actions to the same stream.
+
+### ADR-28: Local accounts for evaluations, and a simulated provider for the tests
+
+- **Status:** Accepted (Phase 3).
+- **Context:** Reviews and evaluations happen on clusters without an identity provider, and CI must exercise the OIDC flow without one either.
+- **Decision:** `auth.mode: local` keeps accounts in the chart's values (or an existing Secret), with passwords as PBKDF2-SHA256 hashes (600,000 iterations, from the standard library) that `221b hash-password` prints; the server never sees or stores a plain password. The simulator serves a small OIDC provider at `/oidc` (discovery, keys, a sign-in form with fixed accounts, the code flow with PKCE, RS256 ID tokens), which the browser tests sign in through, and which the Go tests use in-process; the kind tests install the chart with local accounts.
+- **Consequences:** A console can be reviewed with nothing but the chart; production is expected to use a provider. The simulated provider is not for anything but tests, and says so on its page.
+

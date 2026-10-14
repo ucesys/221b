@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { ClusterInfo, Counts, Settings, Tone } from '../api/types'
+import { signOut } from '../api/auth'
+import type { ClusterInfo, Counts, Me, Settings, Tone } from '../api/types'
 import type { StreamState } from '../api/live'
 import { refreshLabel } from '../api/settings'
 import { fmtClock, fmtTs } from '../lib/format'
@@ -18,6 +19,8 @@ interface Props {
   settings: Settings | null
   settingsOpen: boolean
   onSettings: () => void
+  /** Who is signed in; null while unknown. */
+  me: Me | null
 }
 
 /** The connection to the cluster as a tone and a sentence. */
@@ -84,7 +87,82 @@ function RefreshRing({ left, every }: { left: number; every: number }) {
   )
 }
 
-export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, settings, settingsOpen, onSettings }: Props) {
+/** The first letters of a person's name, for the account button. */
+export function initials(me: Me): string {
+  const name = (me.user.name || me.user.username || '?').trim()
+  const parts = name.split(/[\s._@-]+/).filter(Boolean)
+  const first = parts[0]?.[0] ?? '?'
+  const second = parts.length > 1 ? (parts[1]?.[0] ?? '') : ''
+  return (first + second).toUpperCase()
+}
+
+/** The account button and its menu: who is signed in, their role, and sign-out. */
+function AccountMenu({ me }: { me: Me }) {
+  const [open, setOpen] = useState(false)
+  const button = useRef<HTMLButtonElement>(null)
+  if (me.mode === 'none') {
+    return (
+      <span className="rk-tag" data-tone="warn" title="Sign-in is off on this console: everyone who reaches it is an administrator. Turn it on in the chart (auth.mode) before sharing it." data-testid="signin-off">
+        Sign-in off
+      </span>
+    )
+  }
+  const role = me.admin ? 'Administrator' : 'Viewer'
+  const label = me.user.name || me.user.username
+  return (
+    <div
+      className="rk-dd"
+      style={{ position: 'relative', display: 'flex', alignItems: 'center' }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && open) {
+          e.stopPropagation()
+          setOpen(false)
+          button.current?.focus()
+        }
+      }}
+    >
+      <button ref={button} className="rk-avatar-btn" aria-haspopup="menu" aria-expanded={open} aria-label={`Account: ${label}, ${role.toLowerCase()}`} title={`${label} · ${role}`} onClick={() => setOpen(!open)} data-testid="account">
+        {initials(me)}
+      </button>
+      {open && (
+        <>
+          <button className="rk-ddcatch" tabIndex={-1} aria-hidden="true" onClick={() => setOpen(false)} />
+          <div className="rk-ddmenu" role="menu" aria-label="Account" style={{ left: 'auto', right: 0, minWidth: 240 }}>
+            <div className="rk-ddhead" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)' }} data-testid="account-name">
+                {label}
+              </span>
+              {me.user.email && me.user.email !== label && (
+                <span className="rk-mono" style={{ fontSize: 11.5, color: 'var(--fg3)' }}>
+                  {me.user.email}
+                </span>
+              )}
+              <span style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4 }}>
+                <span className="rk-tag" data-tone={me.admin ? 'info' : 'muted'} data-testid="account-role">
+                  {role}
+                </span>
+                <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{me.method === 'oidc' ? `signed in with ${me.provider ?? 'OIDC'}` : 'local account'}</span>
+              </span>
+            </div>
+            {me.user.groups && me.user.groups.length > 0 && (
+              <div style={{ padding: '4px 8px 6px', fontSize: 11.5, color: 'var(--fg3)' }} title={me.user.groups.join('\n')}>
+                {me.user.groups.length === 1 ? 'Group ' : 'Groups '}
+                <span className="rk-mono">{me.user.groups.slice(0, 3).join(', ')}</span>
+                {me.user.groups.length > 3 ? ` and ${me.user.groups.length - 3} more` : ''}
+              </div>
+            )}
+            <div className="rk-ddsep" />
+            <button className="rk-ddopt" role="menuitem" onClick={() => void signOut()} data-testid="signout">
+              Sign out
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, settings, settingsOpen, onSettings, me }: Props) {
   const conn = connection(cluster, stream)
   const name = cluster?.name ?? '—'
   const version = cluster?.version ?? ''
@@ -248,6 +326,7 @@ export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, s
         <button className="rk-icon-btn" aria-label="Settings" aria-haspopup="dialog" aria-expanded={settingsOpen} title="Settings: theme and refresh rate" onClick={onSettings}>
           <GearIcon />
         </button>
+        {me && <AccountMenu me={me} />}
       </div>
       <div ref={measureEl} className="rk-tabmeasure" aria-hidden="true">
         {tabs.map((t) => (

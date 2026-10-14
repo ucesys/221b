@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/oidcsim"
 )
 
 // Options shape the simulated cluster.
@@ -50,12 +51,18 @@ type Options struct {
 	Problems bool
 	// Now is the clock; tests can fix it.
 	Now func() time.Time
+	// OIDCIssuer turns the simulated identity provider on at that URL,
+	// which must be this server's address plus /oidc: the console signs
+	// people in against it. Empty leaves it off.
+	OIDCIssuer string
 }
 
 // Sim is the simulated cluster and its HTTP handler.
 type Sim struct {
 	opts Options
 	mux  *http.ServeMux
+	// oidc is the simulated identity provider, when on.
+	oidc *oidcsim.Provider
 
 	mu       sync.Mutex
 	rv       int64
@@ -138,6 +145,13 @@ func New(o Options) *Sim {
 		rnd:      rand.New(rand.NewSource(o.Seed + 221)),
 	}
 	s.generate()
+	if o.OIDCIssuer != "" {
+		p, err := oidcsim.New(oidcsim.Options{Issuer: o.OIDCIssuer, Now: o.Now})
+		if err != nil {
+			panic("simulated identity provider: " + err.Error())
+		}
+		s.oidc = p
+	}
 	if ns, name, ok := strings.Cut(o.SettingsConfigMap, "/"); ok && ns != "" && name != "" {
 		s.addLocked(&corev1.ConfigMap{TypeMeta: metav1.TypeMeta{Kind: "ConfigMap", APIVersion: "v1"}, ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: uid(ns + "/" + name)}, Data: map[string]string{}})
 	}
@@ -183,6 +197,9 @@ func (s *Sim) routes() {
 	m.HandleFunc("POST /sim/down", s.admin(s.setDown))
 	m.HandleFunc("POST /sim/metrics", s.admin(s.setMetrics))
 	m.HandleFunc("POST /sim/churn", s.admin(s.churnOnce))
+	if s.oidc != nil {
+		m.Handle("/oidc/", s.oidc)
+	}
 	m.HandleFunc("/", s.api(s.notFound))
 	s.mux = m
 }

@@ -19,6 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
@@ -52,9 +54,22 @@ type Settings interface {
 	Update(ctx context.Context, s settings.Settings) (settings.State, error)
 }
 
+// Auth gates requests by session and serves the sign-in endpoints;
+// *auth.Service implements it. nil leaves everything open, as before
+// Phase 3.
+type Auth interface {
+	// Gate returns the request with its session attached, or nil after
+	// answering it (a 401, or the sign-in page).
+	Gate(w http.ResponseWriter, r *http.Request) *http.Request
+	Routes() []auth.Route
+}
+
 // Options configure the HTTP handler.
 type Options struct {
 	Store Store
+	Auth  Auth
+	// Audit records the settings changes; nil records nothing.
+	Audit *audit.Log
 	// Cluster serves the details of pods, services, releases, logs and YAML.
 	Cluster Cluster
 	// Settings serves /api/v1/settings; nil leaves the path unserved.
@@ -79,6 +94,9 @@ type Options struct {
 	// MaxLogs caps concurrent log streams.
 	MaxLogs int
 	Now     func() time.Time
+	// HTTPSRedirect sends plain-HTTP requests (by X-Forwarded-Proto) to
+	// HTTPS, for a TLS-terminating Ingress (P3-11).
+	HTTPSRedirect bool
 }
 
 // Gauge is one value on the metrics endpoint.
@@ -152,6 +170,11 @@ func New(o Options) *Server {
 		s.handle("GET /api/v1/settings", "settings", s.getSettings)
 		s.handle("PUT /api/v1/settings", "settings-update", s.putSettings)
 	}
+	if o.Auth != nil {
+		for _, r := range o.Auth.Routes() {
+			s.handle(r.Pattern, r.Name, r.Handler)
+		}
+	}
 	s.handle("GET /api/", "api-unknown", s.apiNotFound)
 	s.handle("GET /healthz", "healthz", s.healthz)
 	s.handle("GET /readyz", "readyz", s.readyz)
@@ -173,7 +196,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h := w.Header()
-	h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Referrer-Policy", "no-referrer")
@@ -189,7 +212,39 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
 	}()
+	if s.opts.HTTPSRedirect && !secureRequest(r) && r.Method == http.MethodGet && r.URL.Path != "/healthz" && r.URL.Path != "/readyz" {
+		// Behind a proxy that terminates TLS, plain HTTP is sent to HTTPS (P3-11).
+		u := *r.URL
+		u.Scheme, u.Host = "https", r.Host
+		http.Redirect(w, r, u.String(), http.StatusPermanentRedirect)
+		return
+	}
+	if s.opts.Auth != nil {
+		if r = s.opts.Auth.Gate(w, r); r == nil {
+			s.observeOnly("gate", http.StatusUnauthorized)
+			return
+		}
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions && strings.HasPrefix(r.URL.Path, "/api/") && !auth.SameSite(r) {
+		// Every request that changes anything must come from the console's
+		// own pages (X-06).
+		jsonError(w, http.StatusForbidden, "this can only be done from the console itself")
+		return
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+// secureRequest says whether a request came over TLS, directly or through
+// a proxy that says so.
+func secureRequest(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
+// observeOnly counts a request the gate answered.
+func (s *Server) observeOnly(route string, code int) {
+	s.reqMu.Lock()
+	s.reqs[reqKey{route, code}]++
+	s.reqMu.Unlock()
 }
 
 // hostAllowed accepts localhost, *.localhost, IP addresses and the
@@ -300,12 +355,13 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 // maxSettingsBody bounds a settings update; the settings are a few fields.
 const maxSettingsBody = 4096
 
-// putSettings changes the shared settings. It is the console's only
-// request that changes anything, so it takes JSON only and refuses
-// requests another site made the browser send (X-06).
+// putSettings changes the shared settings, for admins (P3-03). It takes
+// JSON only; ServeHTTP already refused requests another site made the
+// browser send (X-06).
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
-	if !sameSite(r) {
-		jsonError(w, http.StatusForbidden, "settings can only be changed from the console itself")
+	sess, ok := auth.SessionFrom(r.Context())
+	if s.opts.Auth != nil && (!ok || !sess.Admin) {
+		jsonError(w, http.StatusForbidden, "only an administrator can change the settings")
 		return
 	}
 	if ct, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";"); strings.TrimSpace(strings.ToLower(ct)) != "application/json" {
@@ -329,30 +385,23 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusInternalServerError, "The settings were not saved: "+err.Error())
 		return
 	}
-	s.opts.Logger.Info("settings changed from a browser", "refresh", st.Refresh(), "from", r.RemoteAddr)
+	s.opts.Logger.Info("settings changed from a browser", "refresh", st.Refresh(), "from", r.RemoteAddr, "user", sess.User.Username)
+	s.record(r, audit.ActionSettings, "settings", fmt.Sprintf("refresh %s", st.Refresh()))
 	b, _ := json.Marshal(st)
 	writeJSON(w, r, b)
 }
 
-// sameSite reports whether the browser says the request came from the
-// console's own pages. Browsers send Sec-Fetch-Site on every request and
-// Origin on every cross-site one; a request with neither is not from a
-// current browser, so it is let through for curl and scripts.
-func sameSite(r *http.Request) bool {
-	switch r.Header.Get("Sec-Fetch-Site") {
-	case "", "same-origin", "none":
-	default:
-		return false
+// record writes an audit event for the request's session.
+func (s *Server) record(r *http.Request, action, target, detail string) {
+	if s.opts.Audit == nil {
+		return
 	}
-	origin := r.Header.Get("Origin")
-	if origin == "" || origin == "null" {
-		return origin == ""
+	sess, _ := auth.SessionFrom(r.Context())
+	from := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(from); err == nil {
+		from = h
 	}
-	host := origin
-	if i := strings.Index(origin, "://"); i >= 0 {
-		host = origin[i+3:]
-	}
-	return strings.EqualFold(strings.TrimSuffix(host, "/"), r.Host)
+	s.opts.Audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, Target: target, Detail: detail, From: from})
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {

@@ -46,6 +46,33 @@ type Config struct {
 	// AllowedHosts are host names the server answers to besides localhost
 	// and IP addresses, such as its Service's DNS names.
 	AllowedHosts []string
+
+	// AuthMode is how people sign in (P3-01): none, oidc or local.
+	AuthMode string
+	// OIDC settings, for AuthMode oidc.
+	OIDCIssuer        string
+	OIDCClientID      string
+	OIDCClientSecret  string
+	OIDCScopes        []string
+	OIDCRedirectURL   string
+	OIDCUsernameClaim string
+	OIDCGroupsClaim   string
+	OIDCProviderName  string
+	// LocalUsersFile holds the local accounts, for AuthMode local.
+	LocalUsersFile string
+	// Admins and AdminGroups say who manages clusters and settings (P3-03).
+	Admins      []string
+	AdminGroups []string
+	// SessionIdle and SessionMax bound a session's life.
+	SessionIdle time.Duration
+	SessionMax  time.Duration
+	// AuditWebhookURL receives every audit record; AuditWebhookToken is
+	// sent with it as a bearer token (P3-10).
+	AuditWebhookURL   string
+	AuditWebhookToken string
+	// HTTPSRedirect sends plain-HTTP requests to HTTPS, behind a
+	// TLS-terminating Ingress (P3-11).
+	HTTPSRedirect bool
 }
 
 // Parse reads the configuration from args (without the program name).
@@ -65,6 +92,23 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.LogLevel, "log-level", env("LOG_LEVEL", "info"), "debug, info, warn or error")
 	fs.StringVar(&c.LogFormat, "log-format", env("LOG_FORMAT", "json"), "json or text")
 	hosts := fs.String("allowed-hosts", env("ALLOWED_HOSTS", ""), "comma-separated host names to answer to, besides localhost and IP addresses")
+	fs.StringVar(&c.AuthMode, "auth-mode", env("AUTH_MODE", "none"), "how people sign in: oidc, local (accounts from -local-users) or none (no sign-in; everyone is an admin)")
+	fs.StringVar(&c.OIDCIssuer, "oidc-issuer", env("OIDC_ISSUER", ""), "the OIDC provider's issuer URL")
+	fs.StringVar(&c.OIDCClientID, "oidc-client-id", env("OIDC_CLIENT_ID", ""), "the OIDC client ID")
+	fs.StringVar(&c.OIDCClientSecret, "oidc-client-secret", env("OIDC_CLIENT_SECRET", ""), "the OIDC client secret (better set through the environment)")
+	scopes := fs.String("oidc-scopes", env("OIDC_SCOPES", "openid,profile,email"), "comma-separated scopes to ask for; add groups when the provider needs it")
+	fs.StringVar(&c.OIDCRedirectURL, "oidc-redirect-url", env("OIDC_REDIRECT_URL", ""), "the callback URL registered with the provider (empty: https://<host>/signin/callback from each request)")
+	fs.StringVar(&c.OIDCUsernameClaim, "oidc-username-claim", env("OIDC_USERNAME_CLAIM", "email"), "the claim that names a person to Kubernetes and the audit log")
+	fs.StringVar(&c.OIDCGroupsClaim, "oidc-groups-claim", env("OIDC_GROUPS_CLAIM", "groups"), "the claim that lists a person's groups")
+	fs.StringVar(&c.OIDCProviderName, "oidc-provider-name", env("OIDC_PROVIDER_NAME", ""), "what the sign-in button calls the provider")
+	fs.StringVar(&c.LocalUsersFile, "local-users", env("LOCAL_USERS_FILE", ""), "a JSON or YAML file of local accounts (email, name, groups, passwordHash), for -auth-mode local")
+	admins := fs.String("admins", env("ADMINS", ""), "comma-separated usernames that manage clusters and settings")
+	adminGroups := fs.String("admin-groups", env("ADMIN_GROUPS", ""), "comma-separated groups that manage clusters and settings")
+	fs.DurationVar(&c.SessionIdle, "session-idle", envDuration("SESSION_IDLE", 8*time.Hour), "sign a session out after this long without a request")
+	fs.DurationVar(&c.SessionMax, "session-max", envDuration("SESSION_MAX", 7*24*time.Hour), "sign a session out this long after sign-in whatever happens")
+	fs.StringVar(&c.AuditWebhookURL, "audit-webhook", env("AUDIT_WEBHOOK_URL", ""), "POST every audit record to this URL as JSON")
+	fs.StringVar(&c.AuditWebhookToken, "audit-webhook-token", env("AUDIT_WEBHOOK_TOKEN", ""), "bearer token sent with audit webhook requests")
+	fs.BoolVar(&c.HTTPSRedirect, "https-redirect", envBool("HTTPS_REDIRECT", false), "send plain-HTTP requests (by X-Forwarded-Proto) to HTTPS, behind an Ingress with TLS")
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}
@@ -73,16 +117,45 @@ func Parse(args []string) (Config, error) {
 			c.AllowedHosts = append(c.AllowedHosts, h)
 		}
 	}
+	c.OIDCScopes = splitList(*scopes)
+	c.Admins = splitList(*admins)
+	c.AdminGroups = splitList(*adminGroups)
 	if fs.NArg() > 0 {
 		return c, fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}
 	return c, c.validate()
 }
 
+// splitList reads a comma-separated list, trimming and dropping blanks.
+func splitList(s string) []string {
+	var out []string
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func (c Config) validate() error {
 	var errs []error
 	if c.ClusterName == "" {
 		errs = append(errs, errors.New("cluster name must not be empty"))
+	}
+	switch c.AuthMode {
+	case "none", "local":
+	case "oidc":
+		if c.OIDCIssuer == "" || c.OIDCClientID == "" {
+			errs = append(errs, errors.New("OIDC sign-in needs -oidc-issuer and -oidc-client-id"))
+		}
+	default:
+		errs = append(errs, fmt.Errorf("unknown auth mode %q: use oidc, local or none", c.AuthMode))
+	}
+	if c.AuthMode == "local" && c.LocalUsersFile == "" {
+		errs = append(errs, errors.New("local sign-in needs -local-users, a file of accounts"))
+	}
+	if c.SessionIdle < time.Minute || c.SessionMax < time.Minute {
+		errs = append(errs, errors.New("session lifetimes must be at least 1m"))
 	}
 	if c.Refresh < time.Second || c.Refresh > 10*time.Minute {
 		errs = append(errs, errors.New("refresh must be between 1s and 10m"))

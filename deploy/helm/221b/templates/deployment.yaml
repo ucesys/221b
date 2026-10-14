@@ -1,6 +1,15 @@
 {{- if not .Values.clusterName }}
 {{- fail "Set clusterName: the name shown in the console's top bar, such as --set clusterName=staging" }}
 {{- end }}
+{{- if and (ne .Values.auth.mode "oidc") (ne .Values.auth.mode "local") (ne .Values.auth.mode "none") }}
+{{- fail "auth.mode must be oidc, local or none" }}
+{{- end }}
+{{- if and (eq .Values.auth.mode "oidc") (or (not .Values.auth.oidc.issuer) (not .Values.auth.oidc.clientID)) }}
+{{- fail "OIDC sign-in needs auth.oidc.issuer and auth.oidc.clientID" }}
+{{- end }}
+{{- if and (eq .Values.auth.mode "oidc") (not .Values.auth.oidc.clientSecret) (not .Values.auth.oidc.existingSecret) }}
+{{- fail "OIDC sign-in needs the client secret: auth.oidc.clientSecret, or auth.oidc.existingSecret naming a Secret with the key client-secret" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -76,6 +85,65 @@ spec:
             # its Service's DNS names and any set in values.
             - name: ALLOWED_HOSTS
               value: {{ include "b221.allowedHosts" . | quote }}
+            # Sign-in (P3-01) and roles (P3-03).
+            - name: AUTH_MODE
+              value: {{ .Values.auth.mode | quote }}
+            {{- if eq .Values.auth.mode "oidc" }}
+            - name: OIDC_ISSUER
+              value: {{ .Values.auth.oidc.issuer | quote }}
+            - name: OIDC_CLIENT_ID
+              value: {{ .Values.auth.oidc.clientID | quote }}
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "b221.authSecret" .) .Values.auth.oidc.existingSecret | quote }}
+                  key: client-secret
+            - name: OIDC_SCOPES
+              value: {{ .Values.auth.oidc.scopes | quote }}
+            - name: OIDC_USERNAME_CLAIM
+              value: {{ .Values.auth.oidc.usernameClaim | quote }}
+            - name: OIDC_GROUPS_CLAIM
+              value: {{ .Values.auth.oidc.groupsClaim | quote }}
+            - name: OIDC_PROVIDER_NAME
+              value: {{ .Values.auth.oidc.providerName | quote }}
+            - name: OIDC_REDIRECT_URL
+              value: {{ .Values.auth.oidc.redirectURL | quote }}
+            {{- end }}
+            {{- if eq .Values.auth.mode "local" }}
+            - name: LOCAL_USERS_FILE
+              value: /etc/221b/auth/users.yaml
+            {{- end }}
+            - name: ADMINS
+              value: {{ join "," .Values.auth.admins | quote }}
+            - name: ADMIN_GROUPS
+              value: {{ join "," .Values.auth.adminGroups | quote }}
+            - name: SESSION_IDLE
+              value: {{ .Values.auth.sessionIdle | quote }}
+            - name: SESSION_MAX
+              value: {{ .Values.auth.sessionMax | quote }}
+            {{- if .Values.audit.webhook.url }}
+            # The audit webhook (P3-10).
+            - name: AUDIT_WEBHOOK_URL
+              value: {{ .Values.audit.webhook.url | quote }}
+            {{- if or .Values.audit.webhook.token .Values.audit.webhook.existingSecret }}
+            - name: AUDIT_WEBHOOK_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "b221.authSecret" .) .Values.audit.webhook.existingSecret | quote }}
+                  key: token
+            {{- end }}
+            {{- end }}
+            {{- if and .Values.ingress.enabled .Values.ingress.tls.enabled }}
+            # Behind an Ingress with TLS, plain HTTP is redirected (P3-11).
+            - name: HTTPS_REDIRECT
+              value: "true"
+            {{- end }}
+          {{- if eq .Values.auth.mode "local" }}
+          volumeMounts:
+            - name: auth
+              mountPath: /etc/221b/auth
+              readOnly: true
+          {{- end }}
           ports:
             - name: http
               containerPort: 8080
@@ -96,6 +164,15 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      {{- if eq .Values.auth.mode "local" }}
+      volumes:
+        - name: auth
+          secret:
+            secretName: {{ default (include "b221.authSecret" .) .Values.auth.local.existingSecret | quote }}
+            items:
+              - key: users.yaml
+                path: users.yaml
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

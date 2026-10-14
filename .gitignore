@@ -18,3 +18,4 @@ node_modules/
 
 # Python bytecode
 __pycache__/
+/web/e2e/.auth/

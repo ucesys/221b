@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -23,6 +24,8 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/ucesys/221b/server/internal/api"
+	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
@@ -32,6 +35,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "hash-password" {
+		if err := hashPassword(); err != nil {
+			fmt.Fprintln(os.Stderr, "221b:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(os.Args[1:]); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			os.Exit(0)
@@ -41,6 +51,21 @@ func main() {
 	}
 }
 
+// hashPassword prints the hash of a password read from standard input, for
+// the local accounts in the chart's values: 221b hash-password < file.
+func hashPassword() error {
+	b, err := io.ReadAll(io.LimitReader(os.Stdin, 4096))
+	if err != nil {
+		return err
+	}
+	h, err := auth.HashPassword(strings.TrimRight(string(b), "\r\n"))
+	if err != nil {
+		return err
+	}
+	fmt.Println(h)
+	return nil
+}
+
 func run(args []string) error {
 	cfg, err := config.Parse(args)
 	if err != nil {
@@ -48,6 +73,33 @@ func run(args []string) error {
 	}
 	log := newLogger(cfg)
 	slog.SetDefault(log)
+
+	// The audit log (P3-10) owns standard output; the ordinary logs go to
+	// standard error.
+	auditLog := audit.New(audit.Options{Out: os.Stdout, WebhookURL: cfg.AuditWebhookURL, WebhookToken: cfg.AuditWebhookToken, Logger: log.With("component", "audit")})
+	authCfg := auth.Config{
+		Mode:        auth.Mode(cfg.AuthMode),
+		OIDC:        auth.OIDCConfig{Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret, Scopes: cfg.OIDCScopes, RedirectURL: cfg.OIDCRedirectURL, UsernameClaim: cfg.OIDCUsernameClaim, GroupsClaim: cfg.OIDCGroupsClaim, ProviderName: cfg.OIDCProviderName},
+		Admins:      cfg.Admins,
+		AdminGroups: cfg.AdminGroups,
+		SessionIdle: cfg.SessionIdle,
+		SessionMax:  cfg.SessionMax,
+		Title:       "221B · " + cfg.ClusterName,
+	}
+	if cfg.LocalUsersFile != "" {
+		users, err := auth.ReadLocalUsers(cfg.LocalUsersFile)
+		if err != nil {
+			return err
+		}
+		authCfg.Local = users
+	}
+	authSvc, err := auth.New(authCfg, log.With("component", "auth"), auditLog, nil)
+	if err != nil {
+		return err
+	}
+	if authCfg.Mode == auth.ModeNone {
+		log.Warn("sign-in is off: everyone who reaches the console is an administrator; set -auth-mode oidc or local before sharing it")
+	}
 	// client-go logs through klog; send it to the same structured log.
 	klog.SetSlogLogger(log.With("component", "client-go"))
 	setMemoryLimit(log)
@@ -93,15 +145,30 @@ func run(args []string) error {
 
 	go cluster.Run(ctx)
 	go store.Run(ctx)
+	go func() {
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				authSvc.Sweep()
+			}
+		}
+	}()
 
 	handler := api.New(api.Options{
-		Store:        store,
-		Cluster:      cluster,
-		Settings:     shared,
-		Ready:        cluster.Ready,
-		UI:           ui.Handler(),
-		Logger:       log.With("component", "http"),
-		AllowedHosts: cfg.AllowedHosts,
+		Store:         store,
+		Cluster:       cluster,
+		Settings:      shared,
+		Auth:          authSvc,
+		Audit:         auditLog,
+		HTTPSRedirect: cfg.HTTPSRedirect,
+		Ready:         cluster.Ready,
+		UI:            ui.Handler(),
+		Logger:        log.With("component", "http"),
+		AllowedHosts:  cfg.AllowedHosts,
 		Gauges: func() []api.Gauge {
 			info := cluster.Info()
 			nodeCount, podCount, nodeEvents, podEvents := cluster.Counts()
@@ -123,6 +190,8 @@ func run(args []string) error {
 				{Name: "b221_pod_watch_events_total", Help: "Pod watch events received.", Value: float64(podEvents), Counter: true},
 				{Name: "b221_go_memory_bytes", Help: "Memory the Go runtime has mapped, in bytes.", Value: goMemory()},
 				{Name: "b221_resident_memory_bytes", Help: "Resident memory of the process, in bytes.", Value: residentMemory()},
+				{Name: "b221_sessions", Help: "Signed-in sessions.", Value: float64(authSvc.Sessions().Count())},
+				{Name: "b221_audit_dropped_total", Help: "Audit records the webhook queue had no room for.", Value: float64(auditLog.Dropped()), Counter: true},
 			}
 			cached := cluster.CachedObjects()
 			kinds := make([]string, 0, len(cached))
@@ -148,7 +217,7 @@ func run(args []string) error {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(mode), "version", version.String(), "secrets_read", cfg.SecretsRead)
+		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(mode), "version", version.String(), "secrets_read", cfg.SecretsRead, "auth", cfg.AuthMode)
 		errCh <- srv.ListenAndServe()
 	}()
 	select {
@@ -162,7 +231,9 @@ func run(args []string) error {
 	log.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return srv.Shutdown(shutdownCtx)
+	err = srv.Shutdown(shutdownCtx)
+	auditLog.Close(shutdownCtx)
+	return err
 }
 
 func newLogger(cfg config.Config) *slog.Logger {

@@ -76,5 +76,21 @@ IfNotPresent
 {{- $svc := include "b221.fullname" . -}}
 {{- $ns := .Release.Namespace -}}
 {{- $hosts := list $svc (printf "%s.%s" $svc $ns) (printf "%s.%s.svc" $svc $ns) (printf "%s.%s.svc.cluster.local" $svc $ns) -}}
+{{- if and .Values.ingress.enabled .Values.ingress.host -}}
+{{- $hosts = concat $hosts (list .Values.ingress.host) -}}
+{{- end -}}
 {{- concat $hosts .Values.allowedHosts | uniq | join "," -}}
+{{- end -}}
+
+{{/* Whether the console must reach something besides the API server: an
+     OIDC provider or an audit webhook. Renders "true" or nothing. */}}
+{{- define "b221.outbound" -}}
+{{- if or (eq .Values.auth.mode "oidc") .Values.audit.webhook.url -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* The Secret that holds the sign-in credentials. */}}
+{{- define "b221.authSecret" -}}
+{{- printf "%s-auth" (include "b221.fullname" .) -}}
 {{- end -}}

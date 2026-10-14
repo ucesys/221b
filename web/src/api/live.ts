@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { unauthorized } from './auth'
 import type { ClusterInfo, Counts, MetaEvent, RefreshEvent, RowsEvent, Settings, Snapshot, Usage } from './types'
 
 /** The browser's own connection to the 221B server. */
@@ -231,6 +232,9 @@ export class LiveStore {
       // waiting longer after each failure, up to 30 seconds.
       if ((e.target as EventSource).readyState === EventSource.CLOSED) {
         this.failures++
+        // EventSource does not say why: when the session has ended, the
+        // server answers 401 to anything, and sign-in is the way back.
+        void fetch('/api/v1/me', { headers: { Accept: 'application/json' } }).then((r) => unauthorized(r), () => false)
         this.reopen(Math.min(30_000, 1000 * 2 ** Math.min(this.failures, 5)) * (0.75 + Math.random() / 2))
       }
     })

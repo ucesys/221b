@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Sign in · {{.Title}}</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/signin.css">
+</head>
+<body>
+<main class="si" aria-labelledby="si-title">
+  <div class="si-card">
+    <div class="si-brand" aria-hidden="true">
+      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6"></circle><path d="m15 15 5 5"></path></svg>
+    </div>
+    <h1 id="si-title">{{.Title}}</h1>
+    <p class="si-sub">The cluster console. Sign in to continue.</p>
+    {{if .Error}}<p class="si-error" role="alert" data-testid="signin-error">{{.Error}}</p>{{end}}
+    {{if .OIDC}}
+    <a class="si-btn" href="/signin/start?next={{.Next}}" data-next-link data-testid="signin-oidc">Sign in with {{.Provider}}</a>
+    <p class="si-note">You will be sent to {{.Provider}} and brought back here.</p>
+    {{end}}
+    {{if .Local}}
+    <form method="post" action="/signin" class="si-form" data-testid="signin-form">
+      <input type="hidden" name="next" value="{{.Next}}" data-next>
+      <label class="si-field"><span>Email</span><input name="email" type="email" autocomplete="username" required autofocus value="{{.Email}}"></label>
+      <label class="si-field"><span>Password</span><input name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit" class="si-btn" data-testid="signin-submit">Sign in</button>
+    </form>
+    <p class="si-note">Accounts are kept by the console itself; an administrator adds them in the chart's values.</p>
+    {{end}}
+    {{if .Off}}
+    <p class="si-note">Sign-in is off on this console.</p>
+    <a class="si-btn" href="/">Open the console</a>
+    {{end}}
+  </div>
+</main>
+<script src="/signin.js"></script>
+</body>
+</html>

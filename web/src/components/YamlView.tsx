@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { unauthorized } from '../api/auth'
 import { useRefreshTick } from '../api/live'
 import { download } from '../lib/xlsx'
 import { CopyIcon, DownloadIcon } from './Icons'
@@ -62,6 +63,7 @@ export function YamlView({ kind, namespace, name, live = true, onToast }: Props)
         const body = await r.text()
         if (gone) return
         if (!r.ok) {
+          if (unauthorized(r)) return
           let msg = `The server answered ${r.status}.`
           try {
             msg = (JSON.parse(body) as { error?: string }).error ?? msg

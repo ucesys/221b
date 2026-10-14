@@ -314,4 +314,24 @@ export const cluster = {
     const { readFile } = await import('node:fs/promises')
     return readFile(process.env.E2E_SERVER_LOG ?? '../bin/e2e-server.log', 'utf8').catch(() => '')
   },
+
+  /** The audit records so far (P3-10): the server's standard output, one JSON object per line. */
+  async auditLog(): Promise<Record<string, unknown>[]> {
+    let text: string
+    if (inKind) text = await kubectl('-n', NAMESPACE, 'logs', '-l', 'app.kubernetes.io/name=221b', '--tail=-1', '--all-containers')
+    else {
+      const { readFile } = await import('node:fs/promises')
+      text = await readFile(process.env.E2E_AUDIT_LOG ?? '../bin/e2e-audit.log', 'utf8').catch(() => '')
+    }
+    const out: Record<string, unknown>[] = []
+    for (const line of text.split('\n')) {
+      if (!line.startsWith('{') || !line.includes('"action"')) continue
+      try {
+        out.push(JSON.parse(line) as Record<string, unknown>)
+      } catch {
+        // not a record
+      }
+    }
+    return out
+  },
 }

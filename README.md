@@ -23,17 +23,24 @@ kubectl label namespace 221b pod-security.kubernetes.io/enforce=restricted   # o
 kubectl -n 221b create secret docker-registry ghcr \
   --docker-server=ghcr.io --docker-username=<github-user> --docker-password=<token with read:packages>
 
+# An account to sign in with: the console keeps its own (auth.mode=local), with a password hash it makes for you.
+HASH=$(kubectl run hash --rm -i --quiet --restart=Never --image=ghcr.io/ucesys/221b:main --overrides='{"spec":{"imagePullSecrets":[{"name":"ghcr"}]}}' -- hash-password <<< 'a password of your choosing')
+
 helm install console deploy/helm/221b -n 221b \
   --set clusterName=staging \
   --set image.tag=main \
-  --set 'imagePullSecrets[0].name=ghcr'
+  --set 'imagePullSecrets[0].name=ghcr' \
+  --set 'auth.local.users[0].email=you@example.com' --set "auth.local.users[0].passwordHash=$HASH" \
+  --set 'auth.admins[0]=you@example.com'
 
 kubectl -n 221b port-forward svc/console-221b 8080:8081
 ```
 
-Then open <http://localhost:8080>. `clusterName` is the name shown in the top bar. Images are tagged `main` and `sha-<commit>` from the main branch, and `pr-<number>` for each pull request. `main` and `pr-<number>` move to every new build: with one of those the chart pulls the image on every pod start and restarts the console on every `helm upgrade`, so an upgrade always runs the latest build; `kubectl -n 221b logs deploy/console-221b | grep -m1 serving` shows which commit is running. To pin one build, set `image.tag=sha-<commit>` or `image.digest=sha256:<digest>`.
+Then open <http://localhost:8080> and sign in. `clusterName` is the name shown in the top bar. Images are tagged `main` and `sha-<commit>` from the main branch, and `pr-<number>` for each pull request. `main` and `pr-<number>` move to every new build: with one of those the chart pulls the image on every pod start and restarts the console on every `helm upgrade`, so an upgrade always runs the latest build; `kubectl -n 221b logs deploy/console-221b | grep -m1 serving` shows which commit is running. To pin one build, set `image.tag=sha-<commit>` or `image.digest=sha256:<digest>`.
 
-**To put it on the network** instead, on a network where everyone may see what the console shows (the cluster's nodes, pods and their logs, Services, Helm releases and the names of its Secrets' keys), add `--set service.type=LoadBalancer`. With a load balancer controller (MetalLB, kube-vip, a cloud provider) the Service gets an address that answers on port 8081; `kubectl -n 221b get svc console-221b` shows it. Without one, every node still answers on the node port shown there, and `--set 'service.externalIPs={10.0.0.21,10.0.0.22}'` with your nodes' addresses makes them answer on 8081 as well. The network policy lets anyone reach an exposed Service unless `networkPolicy.ingressFrom` lists who may.
+**Sign-in** is on from Phase 3: every page and API call needs a signed-in person (the health probes and `/metrics` excepted). `auth.mode=oidc` sends people to your OpenID Connect provider (Okta, Microsoft Entra ID, Google, Keycloak, Dex, …): set `auth.oidc.issuer`, `clientID` and `clientSecret` (or `existingSecret`), register `https://<the console's host>/signin/callback` with the provider, and add `groups` to `auth.oidc.scopes` if it needs that to send groups. `auth.mode=local` (the default) keeps accounts in the chart's values with password hashes, which `221b hash-password` prints, for evaluations and clusters without a provider. Administrators (`auth.admins`, `auth.adminGroups`) change the settings and manage cluster connections; everyone else uses the tabs. Sessions end after 8 hours without a request (`auth.sessionIdle`). Every sign-in, sign-out and change is in the audit log, one JSON line on the console's standard output (`kubectl -n 221b logs deploy/console-221b | grep '"action"'`), and goes to a webhook if `audit.webhook.url` is set. `auth.mode=none` turns sign-in off, as the console was before Phase 3; everyone who reaches it is then an administrator.
+
+**To put it on the network** instead, add `--set service.type=LoadBalancer`. With a load balancer controller (MetalLB, kube-vip, a cloud provider) the Service gets an address that answers on port 8081; `kubectl -n 221b get svc console-221b` shows it. Without one, every node still answers on the node port shown there, and `--set 'service.externalIPs={10.0.0.21,10.0.0.22}'` with your nodes' addresses makes them answer on 8081 as well. The network policy lets anyone reach an exposed Service unless `networkPolicy.ingressFrom` lists who may. For TLS, publish it through an Ingress: `--set ingress.enabled=true --set ingress.host=console.example.com --set ingress.tls.enabled=true --set ingress.tls.secretName=<certificate Secret>`; plain HTTP is then redirected and the session cookie marked Secure. Without TLS, sessions travel in the clear.
 
 To upgrade after a `git pull`, keep your settings and take the chart's new defaults: `helm upgrade console deploy/helm/221b -n 221b --reset-then-reuse-values` (plain `--reuse-values` keeps the old chart's defaults too, so new ones never apply). To see what it may read: `kubectl auth can-i --list --as=system:serviceaccount:221b:console-221b`. To remove it: `helm uninstall console -n 221b`.
 

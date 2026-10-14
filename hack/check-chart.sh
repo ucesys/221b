@@ -39,6 +39,18 @@ render console --set clusterName=ci --set service.type=LoadBalancer --set servic
   tee "$WORK/chart-lb.yaml" | validate
 echo "--- a release name and an override that start with a digit"
 render 221b --set clusterName=ci --set fullnameOverride=2b | validate
+echo "--- OIDC sign-in, an Ingress with TLS, named administrators and an audit webhook (P3-01, P3-03, P3-10, P3-11)"
+render console --set clusterName=ci --set auth.mode=oidc --set auth.oidc.issuer=https://login.example/realms/data \
+  --set auth.oidc.clientID=console --set auth.oidc.clientSecret=hunter22 --set auth.oidc.providerName=Keycloak \
+  --set 'auth.adminGroups[0]=platform-admins' --set 'auth.admins[0]=ops@corp.example' \
+  --set ingress.enabled=true --set ingress.className=nginx --set ingress.host=console.example.com --set ingress.tls.enabled=true --set ingress.tls.secretName=console-tls \
+  --set audit.webhook.url=https://hooks.example/221b --set audit.webhook.token=hook-token |
+  tee "$WORK/chart-oidc.yaml" | validate
+echo "--- local accounts, from values and from an existing Secret; sign-in off"
+render console --set clusterName=ci --set auth.mode=local --set 'auth.local.users[0].email=ops@corp.example' \
+  --set 'auth.local.users[0].passwordHash=pbkdf2-sha256$600000$c2FsdA$aGFzaA' --set 'auth.admins[0]=ops@corp.example' | tee "$WORK/chart-local.yaml" | validate
+render console --set clusterName=ci --set auth.mode=local --set auth.local.existingSecret=my-accounts | tee "$WORK/chart-local-existing.yaml" | validate
+render console --set clusterName=ci --set auth.mode=none | tee "$WORK/chart-noauth.yaml" | validate
 echo "--- image tags that move, tags that do not, a digest and an explicit pull policy"
 render console --set clusterName=ci --set image.tag=pr-7 | tee "$WORK/chart-moving.yaml" | validate
 render console --set clusterName=ci --set image.tag=sha-d548f3953839 | tee "$WORK/chart-sha.yaml" | validate
@@ -58,7 +70,46 @@ check() {
 }
 out=$WORK/chart-default.yaml
 kinds() {
-  [ "$(grep -E '^kind: ' "$out" | sort | tr '\n' ' ')" = "kind: ClusterRole kind: ClusterRoleBinding kind: ConfigMap kind: Deployment kind: NetworkPolicy kind: Role kind: RoleBinding kind: Service kind: ServiceAccount " ]
+  [ "$(grep -E '^kind: ' "$out" | sort | tr '\n' ' ')" = "kind: ClusterRole kind: ClusterRoleBinding kind: ConfigMap kind: Deployment kind: NetworkPolicy kind: Role kind: RoleBinding kind: Secret kind: Service kind: ServiceAccount " ]
+}
+# Sign-in: local accounts by default, with the (empty) account list in a
+# Secret mounted as a file; OIDC with its client secret from a Secret;
+# the probes and metrics stay open to the kubelet and Prometheus.
+local_accounts() {
+  grep -A1 'name: AUTH_MODE' "$out" | grep -q '"local"' && grep -A1 'name: LOCAL_USERS_FILE' "$out" | grep -q '/etc/221b/auth/users.yaml' &&
+    grep -q 'secretName: "console-221b-auth"' "$out" && grep -q 'users.yaml: |' "$out" &&
+    grep -q 'email: ops@corp.example' "$WORK/chart-local.yaml" && grep -q 'passwordHash: pbkdf2-sha256' "$WORK/chart-local.yaml" &&
+    grep -A1 'name: ADMINS' "$WORK/chart-local.yaml" | grep -q '"ops@corp.example"' &&
+    grep -q 'secretName: "my-accounts"' "$WORK/chart-local-existing.yaml" && ! grep -q '^kind: Secret' "$WORK/chart-local-existing.yaml" &&
+    ! grep -q 'LOCAL_USERS_FILE' "$WORK/chart-noauth.yaml" && grep -A1 'name: AUTH_MODE' "$WORK/chart-noauth.yaml" | grep -q '"none"' && ! grep -q '^kind: Secret' "$WORK/chart-noauth.yaml"
+}
+oidc_signin() {
+  local o=$WORK/chart-oidc.yaml
+  grep -A1 'name: AUTH_MODE' "$o" | grep -q '"oidc"' && grep -A1 'name: OIDC_ISSUER' "$o" | grep -q 'https://login.example/realms/data' &&
+    grep -A5 'name: OIDC_CLIENT_SECRET' "$o" | grep -q 'key: client-secret' && grep -q 'client-secret: "hunter22"' "$o" && ! grep -q 'value: "hunter22"' "$o" &&
+    grep -A1 'name: ADMIN_GROUPS' "$o" | grep -q '"platform-admins"' && grep -A1 'name: OIDC_PROVIDER_NAME' "$o" | grep -q '"Keycloak"' &&
+    ! grep -q 'LOCAL_USERS_FILE' "$o"
+}
+oidc_requires_client() {
+  ! render console --set clusterName=ci --set auth.mode=oidc --set auth.oidc.issuer=https://login.example > /dev/null 2>&1 &&
+    ! render console --set clusterName=ci --set auth.mode=magic > /dev/null 2>&1
+}
+audit_webhook() {
+  local o=$WORK/chart-oidc.yaml
+  grep -A1 'name: AUDIT_WEBHOOK_URL' "$o" | grep -q 'https://hooks.example/221b' && grep -A5 'name: AUDIT_WEBHOOK_TOKEN' "$o" | grep -q 'key: token' &&
+    grep -q 'token: "hook-token"' "$o" && ! grep -q 'AUDIT_WEBHOOK' "$out"
+}
+ingress_tls() {
+  local o=$WORK/chart-oidc.yaml
+  grep -q '^kind: Ingress' "$o" && grep -q 'ingressClassName: "nginx"' "$o" && grep -q 'secretName: "console-tls"' "$o" &&
+    grep -q 'host: "console.example.com"' "$o" && grep -A1 'name: HTTPS_REDIRECT' "$o" | grep -q '"true"' &&
+    grep -A1 'name: ALLOWED_HOSTS' "$o" | grep -q ',console.example.com"' && ! grep -q 'HTTPS_REDIRECT' "$out" &&
+    ! render console --set clusterName=ci --set ingress.enabled=true --set ingress.host= > /dev/null 2>&1
+}
+# Outbound traffic: only the API server by default; with OIDC or a webhook
+# also DNS and HTTPS.
+outbound() {
+  ! grep -q 'port: 53' "$out" && grep -q 'port: 53' "$WORK/chart-oidc.yaml" && grep -c 'port: 443' "$WORK/chart-oidc.yaml" | grep -q 2
 }
 no_ingress() { ! grep -q '^kind: Ingress' "$out"; }
 cluster_ip() { grep -q 'type: ClusterIP' "$out"; }
@@ -153,7 +204,13 @@ check "the settings ConfigMap is created empty and named to the server" settings
 check "a release named after the chart still gets a valid Service name" service_name
 check "clusterName is required" name_required
 check "an empty list of API server ports is refused" no_open_egress
-check "no DNS traffic is allowed out" no_dns_egress
+check "no DNS traffic is allowed out unless sign-in or the webhook needs it" no_dns_egress
+check "outbound traffic: the API server only, or also DNS and HTTPS with OIDC or a webhook" outbound
+check "local accounts are mounted from a Secret, or an existing one; none with sign-in off" local_accounts
+check "OIDC sign-in takes its client secret from a Secret and names the administrators" oidc_signin
+check "OIDC without a client secret, and an unknown mode, are refused" oidc_requires_client
+check "the audit webhook and its token" audit_webhook
+check "an Ingress with TLS redirects HTTP, allows its host and needs a host" ingress_tls
 check "API server addresses narrow the egress rule" api_server_addresses
 check "it answers to its Service's names and the names in values" host_names
 check "an override that starts with a digit still gets a valid name" digit_override

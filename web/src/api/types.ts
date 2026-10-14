@@ -504,3 +504,20 @@ export interface RefreshEvent {
   at: string
   versions: Record<string, number>
 }
+
+/** Who is signed in: GET /api/v1/me (P3-01, P3-03). */
+export interface Me {
+  /** How people sign in: none (sign-in off), oidc or local. */
+  mode: 'none' | 'oidc' | 'local'
+  user: {
+    subject: string
+    username: string
+    email?: string
+    name?: string
+    groups?: string[]
+  }
+  admin: boolean
+  method: string
+  provider?: string
+  sessionIdleSeconds: number
+}

@@ -32,9 +32,10 @@ func main() {
 	settingsCM := flag.String("settings-configmap", "221b/console-221b", "namespace/name of an empty ConfigMap to serve for the console's settings (empty: none)")
 	problems := flag.Bool("problems", true, "include a few unhealthy nodes and pods")
 	churn := flag.Duration("churn", 0, "change usage and some pods this often (0 = never)")
+	oidc := flag.String("oidc-issuer", "", "serve a simulated OpenID Connect provider at this URL, which must be this server's address plus /oidc (for example http://127.0.0.1:7443/oidc); accounts: admin@corp.example, dev@corp.example and viewer@corp.example with the password \"password\"")
 	flag.Parse()
 
-	s := sim.New(sim.Options{Nodes: *nodes, Pods: *pods, Seed: *seed, Metrics: *metrics, KubeletStats: *kubeletStats, SettingsConfigMap: *settingsCM, Problems: *problems})
+	s := sim.New(sim.Options{Nodes: *nodes, Pods: *pods, Seed: *seed, Metrics: *metrics, KubeletStats: *kubeletStats, SettingsConfigMap: *settingsCM, Problems: *problems, OIDCIssuer: *oidc})
 	srv := &http.Server{Addr: *listen, Handler: s, ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

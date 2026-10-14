@@ -12,6 +12,8 @@ interface Props {
   onTheme: (t: Theme) => void
   settings: Settings | null
   refreshedAt: Date | null
+  /** Whether this person may change the shared settings: administrators do (P3-03). */
+  canChange?: boolean
 }
 
 /**
@@ -19,7 +21,7 @@ interface Props {
  * rate, kept on the server for everyone. Both apply as soon as they are
  * picked.
  */
-export function SettingsDialog({ open, onClose, theme, onTheme, settings, refreshedAt }: Props) {
+export function SettingsDialog({ open, onClose, theme, onTheme, settings, refreshedAt, canChange = true }: Props) {
   const ref = useRef<HTMLDialogElement>(null)
   const [saving, setSaving] = useState<number | null>(null)
   const [error, setError] = useState('')
@@ -98,14 +100,15 @@ export function SettingsDialog({ open, onClose, theme, onTheme, settings, refres
             <h3 className="rk-h">Refresh rate</h3>
             <div className="rk-seg" role="group" aria-label="Refresh rate" style={{ alignSelf: 'flex-start' }}>
               {choices.map((s) => (
-                <button key={s} aria-pressed={current === s} aria-busy={saving === s} disabled={!settings || saving !== null} onClick={() => void pick(s)}>
+                <button key={s} aria-pressed={current === s} aria-busy={saving === s} disabled={!settings || saving !== null || !canChange} onClick={() => void pick(s)}>
                   {refreshLabel(s)}
                 </button>
               ))}
             </div>
             <p className="rk-fhint" style={{ margin: 0 }}>
-              For everyone: the server reads what it does not watch, rebuilds the rows that changed and updates every open console at the same moment. Nodes and pods are watched,
-              so the rate adds no requests to the Kubernetes API for them.
+              {canChange
+                ? 'For everyone: the server reads what it does not watch, rebuilds the rows that changed and updates every open console at the same moment. Nodes and pods are watched, so the rate adds no requests to the Kubernetes API for them.'
+                : 'For everyone; an administrator sets it.'}
             </p>
             {error ? (
               <p className="rk-t" data-tone="err" style={{ margin: 0, fontSize: 12 }} role="alert">
