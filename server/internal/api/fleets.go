@@ -64,10 +64,10 @@ func (s *Server) putFleets(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Audit != nil {
 		s.opts.Audit.Record(audit.Event{Action: audit.ActionFleets, Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, Cluster: id, Target: "fleets", Outcome: "ok", Detail: detail, From: fromAddr(r)})
 	}
-	out := map[string]any{"fleets": st.Fleets[id]}
-	if out["fleets"] == nil {
-		out["fleets"] = []fleets.Fleet{}
+	saved := st.Fleets[id]
+	if saved == nil {
+		saved = []fleets.Fleet{}
 	}
-	b, _ := json.Marshal(out)
+	b, _ := json.Marshal(map[string]any{"fleets": saved})
 	writeJSON(w, r, b)
 }

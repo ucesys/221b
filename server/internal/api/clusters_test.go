@@ -69,7 +69,7 @@ func multiSetupWith(t *testing.T, who string, deny map[string]bool) (*httptest.S
 	local.Put(samplePod("kube-system", "dns", "n2"))
 	local.logs["web/shop"] = []string{"hello"}
 	local.logs["kube-system/dns"] = []string{"secret things"}
-	store := live.New(local, live.Options{})
+	store := live.New(local, live.Options{Cluster: clusters.LocalID})
 	store.Notify(everything())
 	store.Process()
 	ctx, cancel := context.WithCancel(context.Background())

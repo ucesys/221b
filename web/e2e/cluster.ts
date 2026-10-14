@@ -395,6 +395,149 @@ export const cluster = {
     return res.ok
   },
 
+  /**
+   * The three faults P4-07 names, on one node: a pod whose image cannot be
+   * pulled, one no node can take, and one the kernel kills for running out
+   * of memory. In kind they are real pods in the console's namespace; the
+   * simulator is given pods in the states those faults leave, with the
+   * events the kubelet and the scheduler would write.
+   */
+  async alertFaults(node: string): Promise<{ pull: string; unschedulable: string; oom: string; cleanup: () => Promise<void> }> {
+    const id = Date.now().toString(36)
+    const names = { pull: `e2e-pull-${id}`, unschedulable: `e2e-nowhere-${id}`, oom: `e2e-oom-${id}` }
+    if (inKind) {
+      const restricted = { runAsNonRoot: true, runAsUser: 65534, seccompProfile: { type: 'RuntimeDefault' } }
+      const container = { allowPrivilegeEscalation: false, capabilities: { drop: ['ALL'] } }
+      const pod = (name: string, spec: Record<string, unknown>, c: Record<string, unknown>) => ({
+        apiVersion: 'v1',
+        kind: 'Pod',
+        metadata: { name, namespace: NAMESPACE, labels: { e2e: 'alerts' } },
+        spec: { terminationGracePeriodSeconds: 0, securityContext: restricted, ...spec, containers: [{ name: 'main', securityContext: container, ...c }] },
+      })
+      await kubectlApply(pod(names.pull, { nodeName: node }, { image: 'registry.invalid/e2e/nope:1', resources: { requests: { cpu: '10m', memory: '16Mi' } } }))
+      await kubectlApply(pod(names.unschedulable, { nodeSelector: { 'e2e.221b/nowhere': 'true' } }, { image: IMAGE, imagePullPolicy: 'Never', resources: { requests: { cpu: '10m', memory: '16Mi' } } }))
+      // tail keeps everything after the last newline, and /dev/zero has none.
+      await kubectlApply(pod(names.oom, { nodeName: node }, { image: 'registry.k8s.io/e2e-test-images/busybox:1.36.1-1', command: ['sh', '-c', 'tail /dev/zero'], resources: { requests: { cpu: '10m', memory: '24Mi' }, limits: { memory: '24Mi' } } }))
+      const ns = NAMESPACE
+      return {
+        pull: `${ns}/${names.pull}`,
+        unschedulable: `${ns}/${names.unschedulable}`,
+        oom: `${ns}/${names.oom}`,
+        cleanup: async () => void (await kubectlRetry('-n', ns, 'delete', 'pods', '-l', 'e2e=alerts', '--wait=false', '--grace-period=0', '--ignore-not-found')),
+      }
+    }
+    const ns = 'default'
+    const now = Date.now()
+    const ts = (agoMs: number) => new Date(now - agoMs).toISOString().replace(/\.\d+Z$/, 'Z')
+    const res = { requests: { cpu: '10m', memory: '16Mi' } }
+    const pod = (name: string, spec: Record<string, unknown>, status: Record<string, unknown>) => ({
+      apiVersion: 'v1',
+      kind: 'Pod',
+      metadata: { name, namespace: ns, labels: { e2e: 'alerts' }, uid: `e2e-${name}`, creationTimestamp: ts(20_000) },
+      spec: { containers: [{ name: 'main', image: 'registry.example/e2e:1', resources: res }], ...spec },
+      status,
+    })
+    const event = (name: string, kind: string, reason: string, message: string, component: string) => ({
+      apiVersion: 'v1',
+      kind: 'Event',
+      metadata: { name: `${name}.${reason.toLowerCase()}`, namespace: ns },
+      involvedObject: { kind, namespace: ns, name, uid: `e2e-${name}`, apiVersion: 'v1' },
+      type: 'Warning',
+      reason,
+      message,
+      count: 3,
+      firstTimestamp: ts(18_000),
+      lastTimestamp: ts(2_000),
+      source: { component, host: component === 'kubelet' ? node : undefined },
+    })
+    const image = 'registry.invalid/e2e/nope:1'
+    await simPostJSON('/sim/objects', pod(names.pull, { nodeName: node, containers: [{ name: 'main', image, resources: res }] }, {
+      phase: 'Pending',
+      startTime: ts(20_000),
+      conditions: [{ type: 'PodScheduled', status: 'True' }, { type: 'Ready', status: 'False', reason: 'ContainersNotReady' }],
+      containerStatuses: [{ name: 'main', image, imageID: '', ready: false, restartCount: 0, state: { waiting: { reason: 'ImagePullBackOff', message: `Back-off pulling image "${image}"` } } }],
+    }))
+    await simPostJSON('/sim/objects', event(names.pull, 'Pod', 'Failed', `Failed to pull image "${image}": failed to resolve reference "${image}": no such host`, 'kubelet'))
+    await simPostJSON('/sim/objects', pod(names.unschedulable, { nodeSelector: { 'e2e.221b/nowhere': 'true' } }, {
+      phase: 'Pending',
+      conditions: [{ type: 'PodScheduled', status: 'False', reason: 'Unschedulable', message: "0/40 nodes are available: 40 node(s) didn't match Pod's node affinity/selector." }],
+    }))
+    await simPostJSON('/sim/objects', event(names.unschedulable, 'Pod', 'FailedScheduling', "0/40 nodes are available: 40 node(s) didn't match Pod's node affinity/selector.", 'default-scheduler'))
+    await simPostJSON('/sim/objects', pod(names.oom, { nodeName: node }, {
+      phase: 'Running',
+      startTime: ts(20_000),
+      conditions: [{ type: 'PodScheduled', status: 'True' }, { type: 'Ready', status: 'True' }],
+      containerStatuses: [
+        {
+          name: 'main',
+          image: 'registry.example/e2e:1',
+          imageID: '',
+          ready: true,
+          started: true,
+          restartCount: 1,
+          state: { running: { startedAt: ts(5_000) } },
+          lastState: { terminated: { exitCode: 137, reason: 'OOMKilled', startedAt: ts(19_000), finishedAt: ts(6_000) } },
+        },
+      ],
+    }))
+    return {
+      pull: `${ns}/${names.pull}`,
+      unschedulable: `${ns}/${names.unschedulable}`,
+      oom: `${ns}/${names.oom}`,
+      cleanup: async () => {
+        for (const n of Object.values(names)) await simPost(`/sim/objects/pods/${ns}/${n}`, 'DELETE')
+      },
+    }
+  },
+
+  /** How many nodes a label selector picks, as the cluster counts them. */
+  async countNodes(selector: string): Promise<number> {
+    if (inKind) {
+      const out = await kubectl('get', 'nodes', '-l', selector, '-o', 'name')
+      return out.trim() ? out.trim().split('\n').length : 0
+    }
+    const res = await fetch(`${SIM}/api/v1/nodes?labelSelector=${encodeURIComponent(selector)}`)
+    return ((await res.json()) as { items: unknown[] }).items.length
+  },
+
+  /**
+   * A node with these labels and taints (P4-01): a new node in the
+   * simulator, or a kind worker given them; the cleanup takes it away or
+   * takes them off.
+   */
+  async nodeWith(worker: string, labels: Record<string, string>, taints: { key: string; value: string; effect: string }[] = []): Promise<{ node: string; cleanup: () => Promise<void> }> {
+    if (inKind) {
+      if (Object.keys(labels).length) await kubectlRetry('label', 'node', worker, '--overwrite', ...Object.entries(labels).map(([k, v]) => `${k}=${v}`))
+      for (const t of taints) await kubectlRetry('taint', 'node', worker, '--overwrite', `${t.key}=${t.value}:${t.effect}`)
+      return {
+        node: worker,
+        cleanup: async () => {
+          if (Object.keys(labels).length) await kubectlRetry('label', 'node', worker, ...Object.keys(labels).map((k) => `${k}-`))
+          for (const t of taints) await kubectl('taint', 'node', worker, `${t.key}:${t.effect}-`).catch(() => '')
+        },
+      }
+    }
+    const node = `e2e-fleet-${Date.now().toString(36)}`
+    await simPostJSON('/sim/nodes', { name: node, labels, taints })
+    return { node, cleanup: () => simPost(`/sim/nodes/${node}`, 'DELETE') }
+  },
+
+  /** Adds a taint to a node, or takes it off. */
+  async taint(node: string, t: { key: string; value: string; effect: string }, on: boolean): Promise<void> {
+    if (inKind) {
+      if (on) await kubectlRetry('taint', 'node', node, '--overwrite', `${t.key}=${t.value}:${t.effect}`)
+      else await kubectl('taint', 'node', node, `${t.key}:${t.effect}-`).catch(() => '')
+      return
+    }
+    const res = await fetch(`${SIM}/api/v1/nodes/${node}`)
+    const n = (await res.json()) as { apiVersion?: string; kind?: string; spec: { taints?: { key: string; value?: string; effect: string }[] } }
+    n.apiVersion = 'v1'
+    n.kind = 'Node'
+    const rest = (n.spec.taints ?? []).filter((x) => !(x.key === t.key && x.effect === t.effect))
+    n.spec.taints = on ? [...rest, t] : rest
+    await simPostJSON('/sim/objects', n)
+  },
+
   /** The server's log so far: the file the Makefile writes (sim) or the pod's (kind). */
   async serverLog(): Promise<string> {
     if (inKind) return kubectl('-n', NAMESPACE, 'logs', '-l', 'app.kubernetes.io/name=221b', '--tail=-1', '--all-containers')
