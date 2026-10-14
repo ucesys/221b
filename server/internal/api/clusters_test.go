@@ -11,6 +11,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -90,7 +91,17 @@ func signIn(t *testing.T, srv *httptest.Server, who string) *http.Client {
 	t.Helper()
 	jar, _ := cookiejar.New(nil)
 	c := &http.Client{Jar: jar}
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/signin", strings.NewReader(url.Values{"email": {who}, "password": {"correct horse battery staple"}, "next": {"/"}}.Encode()))
+	page, err := c.Get(srv.URL + "/signin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html, _ := io.ReadAll(page.Body)
+	page.Body.Close()
+	m := regexp.MustCompile(`name="form" value="([^"]+)"`).FindSubmatch(html)
+	if m == nil {
+		t.Fatalf("no form token on the sign-in page")
+	}
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/signin", strings.NewReader(url.Values{"email": {who}, "password": {"correct horse battery staple"}, "next": {"/"}, "form": {string(m[1])}}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := c.Do(req)

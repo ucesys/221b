@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,22 @@ func console(t *testing.T, svc *auth.Service) *httptest.Server {
 			mux.ServeHTTP(w, r)
 		}
 	}))
+}
+
+// formToken opens the sign-in page with the client and returns the form's
+// token, which the page's cookie now matches.
+func formToken(t *testing.T, c *http.Client, app string) string {
+	t.Helper()
+	resp, err := c.Get(app + "/signin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := readAll(t, resp)
+	m := regexp.MustCompile(`name="form" value="([^"]+)"`).FindStringSubmatch(b)
+	if m == nil {
+		t.Fatalf("no form token in the sign-in page:\n%s", b)
+	}
+	return m[1]
 }
 
 func client(t *testing.T) *http.Client {
@@ -249,9 +266,12 @@ func TestLocalAccounts(t *testing.T) {
 	c := client(t)
 
 	post := func(email, password string) *http.Response {
-		req, _ := http.NewRequest(http.MethodPost, app.URL+"/signin", strings.NewReader(url.Values{"email": {email}, "password": {password}, "next": {"/#/nodes"}}.Encode()))
+		req, _ := http.NewRequest(http.MethodPost, app.URL+"/signin", strings.NewReader(url.Values{"email": {email}, "password": {password}, "next": {"/#/nodes"}, "form": {formToken(t, c, app.URL)}}.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		// What a browser sends for a form posted by the page: no Sec-Fetch-Site
+		// over plain HTTP to a non-local address, and Origin: null under the
+		// console's referrer policy.
+		req.Header.Set("Origin", "null")
 		resp, err := c.Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -281,13 +301,38 @@ func TestLocalAccounts(t *testing.T) {
 		t.Fatalf("audit: %s", auditOut.String())
 	}
 
-	// A cross-site form post is refused.
+	// A cross-site form post is refused: by its headers when the browser
+	// sends them, and without them by the missing token (a form from
+	// another site has no cookie to pair with).
 	req, _ := http.NewRequest(http.MethodPost, app.URL+"/signin", strings.NewReader(url.Values{"email": {"dev@corp.example"}, "password": {"correct horse battery staple"}}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Sec-Fetch-Site", "cross-site")
 	resp, _ = client(t).Do(req)
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("cross-site sign-in: %s", resp.Status)
+	}
+	resp.Body.Close()
+	stranger := client(t)
+	tok := formToken(t, stranger, app.URL)
+	for _, form := range []url.Values{
+		{"email": {"dev@corp.example"}, "password": {"correct horse battery staple"}},
+		{"email": {"dev@corp.example"}, "password": {"correct horse battery staple"}, "form": {"not-the-token"}},
+	} {
+		req, _ := http.NewRequest(http.MethodPost, app.URL+"/signin", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", "null")
+		resp, _ = stranger.Do(req)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("sign-in without the form token: %s", resp.Status)
+		}
+		resp.Body.Close()
+	}
+	// The token without its cookie is no better.
+	req, _ = http.NewRequest(http.MethodPost, app.URL+"/signin", strings.NewReader(url.Values{"email": {"dev@corp.example"}, "password": {"correct horse battery staple"}, "form": {tok}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, _ = client(t).Do(req)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("sign-in with the token but no cookie: %s", resp.Status)
 	}
 	resp.Body.Close()
 
@@ -303,7 +348,7 @@ func TestLocalAccounts(t *testing.T) {
 	c2 := client(t)
 	var last int
 	for i := 0; i < 7; i++ {
-		req, _ := http.NewRequest(http.MethodPost, app.URL+"/signin", strings.NewReader(url.Values{"email": {"dev@corp.example"}, "password": {"wrong"}}.Encode()))
+		req, _ := http.NewRequest(http.MethodPost, app.URL+"/signin", strings.NewReader(url.Values{"email": {"dev@corp.example"}, "password": {"wrong"}, "form": {formToken(t, c2, app.URL)}}.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 		resp, _ := c2.Do(req)

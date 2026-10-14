@@ -31,7 +31,11 @@ COOKIES=$WORK/cookies
 # session cookie for api().
 signin() {
   rm -f "$COOKIES"
-  curl -fsS -c "$COOKIES" -o /dev/null -X POST --data-urlencode "email=$E2E_USER" --data-urlencode "password=$E2E_PASSWORD" --data-urlencode "next=/" "$1/signin"
+  # The form carries a token the page's cookie must match (X-06).
+  local form
+  form=$(curl -fsS -c "$COOKIES" "$1/signin" | grep -o 'name="form" value="[^"]*"' | cut -d'"' -f4)
+  [ -n "$form" ]
+  curl -fsS -b "$COOKIES" -c "$COOKIES" -o /dev/null -X POST --data-urlencode "email=$E2E_USER" --data-urlencode "password=$E2E_PASSWORD" --data-urlencode "next=/" --data-urlencode "form=$form" "$1/signin"
   grep -q 221b_session "$COOKIES"
 }
 # A signed-in curl: api [curl options] URL
@@ -122,7 +126,11 @@ curl -fsS http://127.0.0.1:18080/readyz
 curl -fsS http://127.0.0.1:18080/ | grep -q 'data-testid="signin-form"'
 [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/v1/snapshot)" = 401 ]
 # A wrong password is refused and recorded; the right one gets the app.
-[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST --data-urlencode "email=$E2E_USER" --data-urlencode "password=wrong" http://127.0.0.1:18080/signin)" = 401 ]
+# A form posted from elsewhere, without the page's token, is refused; the
+# page's own form with a wrong password is 401.
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST --data-urlencode "email=$E2E_USER" --data-urlencode "password=$E2E_PASSWORD" http://127.0.0.1:18080/signin)" = 403 ]
+form=$(curl -fsS -c "$WORK/form-cookies" http://127.0.0.1:18080/signin | grep -o 'name="form" value="[^"]*"' | cut -d'"' -f4)
+[ "$(curl -s -b "$WORK/form-cookies" -o /dev/null -w '%{http_code}' -X POST --data-urlencode "email=$E2E_USER" --data-urlencode "password=wrong" --data-urlencode "form=$form" http://127.0.0.1:18080/signin)" = 401 ]
 signin http://127.0.0.1:18080
 api http://127.0.0.1:18080/ | grep -q '<div id="root">'
 api http://127.0.0.1:18080/api/v1/me | tee "$WORK/me.json" | grep -q '"admin":true'

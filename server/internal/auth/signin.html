@@ -24,6 +24,7 @@
     {{if .Local}}
     <form method="post" action="/signin" class="si-form" data-testid="signin-form">
       <input type="hidden" name="next" value="{{.Next}}" data-next>
+      <input type="hidden" name="form" value="{{.Form}}">
       <label class="si-field"><span>Email</span><input name="email" type="email" autocomplete="username" required autofocus value="{{.Email}}"></label>
       <label class="si-field"><span>Password</span><input name="password" type="password" autocomplete="current-password" required></label>
       <button type="submit" class="si-btn" data-testid="signin-submit">Sign in</button>

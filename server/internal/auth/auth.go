@@ -58,6 +58,10 @@ type Config struct {
 const (
 	cookieSession = "221b_session"
 	cookieSignIn  = "221b_signin"
+	// cookieForm pairs the local sign-in form with the browser it was
+	// served to: the form carries the same token in a hidden field, and a
+	// POST without the pair did not come from this page (X-06).
+	cookieForm = "221b_form"
 )
 
 // Service signs people in and out and checks sessions.
@@ -66,11 +70,15 @@ type Service struct {
 	sessions *Sessions
 	provider *Provider
 	local    map[string]LocalUser
-	limiter  *limiter
-	audit    *audit.Log
-	log      *slog.Logger
-	now      func() time.Time
-	page     *template.Template
+	// perAccount slows guessing at one account; perAddress slows spraying
+	// many accounts from one address, which is also many people behind one
+	// NAT, so it is the looser of the two.
+	perAccount *limiter
+	perAddress *limiter
+	audit      *audit.Log
+	log        *slog.Logger
+	now        func() time.Time
+	page       *template.Template
 }
 
 //go:embed signin.html signin.css signin.js
@@ -94,7 +102,7 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 	if cfg.Title == "" {
 		cfg.Title = "221B"
 	}
-	s := &Service{cfg: cfg, sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, limiter: newLimiter(5, time.Minute, now)}
+	s := &Service{cfg: cfg, sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now)}
 	switch cfg.Mode {
 	case ModeNone:
 	case ModeOIDC:
@@ -272,6 +280,7 @@ type pageData struct {
 	Local    bool
 	OIDC     bool
 	Off      bool
+	Form     string
 }
 
 func (s *Service) renderSignIn(w http.ResponseWriter, r *http.Request, msg string, code int) {
@@ -282,6 +291,13 @@ func (s *Service) renderSignIn(w http.ResponseWriter, r *http.Request, msg strin
 	if r.Method == http.MethodPost {
 		d.Email = r.PostFormValue("email")
 		d.Next = safeNext(r.PostFormValue("next"))
+	}
+	if d.Local {
+		// A fresh token for the form, in the page and in a cookie only this
+		// site's pages send (SameSite=Strict): a form posted from elsewhere
+		// cannot carry both.
+		d.Form = randomID()
+		http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: 3600})
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
@@ -325,17 +341,21 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "local sign-in is off", http.StatusNotFound)
 		return
 	}
-	if !SameSite(r) {
-		s.renderSignIn(w, r, "That sign-in did not come from this console. Try again from this page.", http.StatusForbidden)
-		return
-	}
 	if err := r.ParseForm(); err != nil {
 		s.renderSignIn(w, r, "The form could not be read.", http.StatusBadRequest)
 		return
 	}
+	// The headers, where the browser sends them, and the form's token
+	// (a form post carries Origin: null under the console's referrer
+	// policy, and plain HTTP to a non-local address no Sec-Fetch-Site at
+	// all, so the token is what every browser can be held to).
+	if !sameSiteHeaders(r, true) || !s.formToken(r) {
+		s.renderSignIn(w, r, "That sign-in did not come from this console. Try again from this page.", http.StatusForbidden)
+		return
+	}
 	email := strings.ToLower(strings.TrimSpace(r.PostFormValue("email")))
 	password := r.PostFormValue("password")
-	if !s.limiter.allow("ip:"+from(r)) || !s.limiter.allow("user:"+email) {
+	if !s.perAddress.allow(from(r)) || !s.perAccount.allow(email) {
 		s.record(r, audit.ActionSignInFailed, User{Username: email, Email: email}, audit.OutcomeDenied, "too many attempts")
 		s.renderSignIn(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)
 		return
@@ -355,6 +375,7 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 	user := User{Subject: "local:" + email, Username: email, Email: email, Name: u.Name, Groups: append([]string(nil), u.Groups...)}
 	sess := s.sessions.Create(user, s.isAdmin(user), string(ModeLocal))
 	s.setSession(w, r, sess)
+	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: "", Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: -1})
 	s.record(r, audit.ActionSignIn, user, audit.OutcomeOK, "local account")
 	s.log.Info("signed in", "user", user.Username, "method", "local", "admin", sess.Admin)
 	http.Redirect(w, r, safeNext(r.PostFormValue("next")), http.StatusSeeOther)
@@ -523,6 +544,15 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 // A request with neither header is not from a browser page; the cookie
 // alone gets it in, as it did before Phase 3.
 func SameSite(r *http.Request) bool {
+	return sameSiteHeaders(r, false)
+}
+
+// sameSiteHeaders reads Sec-Fetch-Site and Origin. nullOrigin says whether
+// "Origin: null" passes: a form posted by the console's own pages carries
+// it, because the Referrer-Policy is no-referrer, so the sign-in form
+// relies on its token instead; a fetch from the app carries the real
+// origin, so the API does not take null.
+func sameSiteHeaders(r *http.Request, nullOrigin bool) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "", "same-origin", "none":
 	default:
@@ -533,8 +563,18 @@ func SameSite(r *http.Request) bool {
 		return true
 	}
 	if origin == "null" {
-		return false
+		return nullOrigin
 	}
 	u, err := url.Parse(origin)
 	return err == nil && strings.EqualFold(u.Host, r.Host)
+}
+
+// formToken says whether a posted sign-in form carries the token of the
+// page it was served with, in the field and in the cookie alike.
+func (s *Service) formToken(r *http.Request) bool {
+	c, err := r.Cookie(cookieForm)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(r.PostFormValue("form"))) == 1
 }

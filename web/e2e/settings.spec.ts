@@ -34,7 +34,7 @@ test.afterEach(async ({ request }) => {
   await request.put('/api/v1/settings', { data: { refreshSeconds: 3 } })
 })
 
-test('switches theme in Settings and remembers it in this browser', async ({ page }) => {
+test('switches theme in Settings and remembers it in this browser', async ({ page, context }) => {
   await open(page)
   const root = page.locator('.rk')
   const before = (await root.getAttribute('data-theme')) ?? 'light'
@@ -45,8 +45,13 @@ test('switches theme in Settings and remembers it in this browser', async ({ pag
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toBeHidden()
   await expect(page.getByRole('button', { name: 'Settings' })).toBeFocused()
-  await page.reload()
-  await expect(page.locator('.rk')).toHaveAttribute('data-theme', after)
+  // The choice is this browser's: another tab of it opens with the theme.
+  // (A new tab rather than a reload: Firefox in CI has been seen never
+  // finishing a reload of a page that just switched its color scheme.)
+  const other = await context.newPage()
+  await other.goto('/', { waitUntil: 'domcontentloaded' })
+  await expect(other.locator('.rk')).toHaveAttribute('data-theme', after)
+  await other.close()
 })
 
 test('the refresh rate is kept on the server and reaches every open console', async ({ browser, page, request }) => {
