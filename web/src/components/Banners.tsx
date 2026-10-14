@@ -33,10 +33,17 @@ export function banners(cluster: ClusterInfo | null, stream: StreamState, summar
   if (accessError && cluster?.state !== 'disconnected') {
     out.push({ tone: 'err', title: 'Nothing can be shown to you yet', detail: accessError })
   }
+  // A cluster that cannot be reached gets one banner: expired credentials
+  // are the likely cause when they have, and the page says the rest.
   if (cluster?.state === 'disconnected') {
-    out.push({ tone: 'err', title: 'Cannot reach the Kubernetes API server', detail: `${cluster.message ?? ''} Showing the last known state, since ${fmtTs(cluster.since)}.`.trim(), link: pageHref ? { href: pageHref, label: 'About the connection' } : undefined })
-  }
-  if (summary?.expired) {
+    const expired = summary?.expired ? `${credText(summary, now)}. ` : ''
+    out.push({
+      tone: 'err',
+      title: expired ? 'The console’s credentials for this cluster have expired' : 'Cannot reach the Kubernetes API server',
+      detail: `${expired}${cluster.message ?? ''} Showing the last known state, since ${fmtTs(cluster.since)}.`.trim(),
+      link: pageHref ? { href: pageHref, label: expired ? 'Fix the connection' : 'About the connection' } : undefined,
+    })
+  } else if (summary?.expired) {
     out.push({ tone: 'err', title: 'The console’s credentials for this cluster have expired', detail: credText(summary, now) + '.', link: pageHref ? { href: pageHref, label: 'Fix the connection' } : undefined })
   } else if (summary?.expiring) {
     out.push({ tone: 'warn', title: 'The console’s credentials for this cluster expire soon', detail: credText(summary, now) + '.', link: pageHref ? { href: pageHref, label: 'Fix the connection' } : undefined })
