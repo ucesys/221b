@@ -146,11 +146,14 @@ connections:
 secrets:
   # Read Secrets. The Namespaces tab then lists each Secret with its key
   # names and sizes, and the Helm tab reads release records, which Helm
-  # keeps in Secrets. The server keeps only key names and sizes, and the
+  # keeps in Secrets. The server keeps only key names and sizes, the
+  # public facts of a kubernetes.io/tls Secret's certificate (its names,
+  # issuer and validity, for the Networks tab; never tls.key), and the
   # decoded release records with credential-like values masked: a Secret's
   # values never reach a browser, an export or a log. Off, the ClusterRole
   # grants nothing on Secrets, the Namespaces tab lists no Secrets, the
-  # YAML view refuses them and the Helm tab is hidden.
+  # YAML view refuses them, the Helm tab is hidden and the Networks tab
+  # doesn't check certificates.
   read: true
 
 serviceAccount:

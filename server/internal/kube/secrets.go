@@ -3,8 +3,10 @@ package kube
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"regexp"
@@ -37,6 +39,38 @@ type SecretSummary struct {
 	Immutable bool
 	Keys      []KeySize
 	Release   *HelmRelease
+	// Cert is what a TLS Secret's certificate says of itself: the public
+	// half only, read from tls.crt (P4-02). Nothing of tls.key is read.
+	Cert *CertInfo
+}
+
+// CertInfo is the public facts of a certificate: whom it names, who
+// issued it, and when it is valid.
+type CertInfo struct {
+	Subject   string    `json:"subject,omitempty"`
+	Issuer    string    `json:"issuer,omitempty"`
+	DNSNames  []string  `json:"dnsNames"`
+	NotBefore time.Time `json:"notBefore"`
+	NotAfter  time.Time `json:"notAfter"`
+	// Error says why tls.crt could not be read as a certificate.
+	Error string `json:"error,omitempty"`
+}
+
+// certInfo reads the first certificate of a PEM bundle.
+func certInfo(pemBytes []byte) *CertInfo {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return &CertInfo{DNSNames: []string{}, Error: "tls.crt holds no PEM certificate"}
+	}
+	c, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return &CertInfo{DNSNames: []string{}, Error: "tls.crt is not a valid certificate"}
+	}
+	names := append([]string{}, c.DNSNames...)
+	if len(names) == 0 && c.Subject.CommonName != "" {
+		names = []string{c.Subject.CommonName}
+	}
+	return &CertInfo{Subject: c.Subject.CommonName, Issuer: c.Issuer.CommonName, DNSNames: names, NotBefore: c.NotBefore.UTC(), NotAfter: c.NotAfter.UTC()}
 }
 
 // DeepCopyObject implements runtime.Object.
@@ -47,6 +81,11 @@ func (s *SecretSummary) DeepCopyObject() runtime.Object {
 	out := *s
 	out.ObjectMeta = *s.ObjectMeta.DeepCopy()
 	out.Keys = append([]KeySize(nil), s.Keys...)
+	if s.Cert != nil {
+		c := *s.Cert
+		c.DNSNames = append([]string(nil), s.Cert.DNSNames...)
+		out.Cert = &c
+	}
 	if s.Release != nil {
 		r := *s.Release
 		r.Resources = append([]ReleaseResource(nil), s.Release.Resources...)
@@ -125,6 +164,13 @@ func SummarizeSecret(obj any) (any, error) {
 	}
 	out.ManagedFields = nil
 	out.Annotations = HideSecretValues(out.Annotations, secretValues(s.Data, s.StringData))
+	if s.Type == corev1.SecretTypeTLS {
+		if crt, ok := s.Data[corev1.TLSCertKey]; ok {
+			out.Cert = certInfo(crt)
+		} else if crt, ok := s.StringData[corev1.TLSCertKey]; ok {
+			out.Cert = certInfo([]byte(crt))
+		}
+	}
 	if s.Type == HelmSecretType {
 		if r, err := DecodeHelmRelease(s.Data["release"]); err == nil {
 			out.Release = r

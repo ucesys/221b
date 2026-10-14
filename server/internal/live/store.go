@@ -63,6 +63,8 @@ const (
 	ViewAccess = "access"
 	// ViewPolicies are what the Policies tab reads (P4-04 to P4-06).
 	ViewPolicies = "policies"
+	// ViewNetworks are the Networks tab's traces and nodes (P4-02).
+	ViewNetworks = "networks"
 	// NamespacePrefix starts the view of one namespace's objects.
 	NamespacePrefix = "ns:"
 )
@@ -338,6 +340,12 @@ var staticViews = []viewDef{
 		lazy:  true,
 		keys:  func(src Source) []string { return views.PolicyKeys(src) },
 		build: func(src Source, key string, now time.Time) (any, bool) { return views.BuildPolicy(src, key, now) },
+	},
+	{
+		name:  ViewNetworks,
+		lazy:  true,
+		keys:  func(src Source) []string { return views.NetworkKeys(src) },
+		build: func(src Source, key string, now time.Time) (any, bool) { return views.BuildNetwork(src, key, now) },
 	},
 	{
 		name:  ViewAccess,

@@ -401,7 +401,7 @@ func (c *Cluster) Run(ctx context.Context) {
 // everything marks every static view, the details and the totals.
 func (c *Cluster) everything() Change {
 	ch := Change{Info: true, Totals: true}
-	for _, v := range []string{"nodes", "pods", "namespaces", "services", "helm", "alerts", "fleets", "access", "policies"} {
+	for _, v := range []string{"nodes", "pods", "namespaces", "services", "helm", "alerts", "fleets", "access", "policies", "networks"} {
 		ch.Mark(v, AllRows)
 	}
 	return ch
@@ -815,6 +815,17 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 		}
 		if k.Name != "events" && (added || removed) {
 			ch.Mark("helm", AllRows)
+		}
+	}
+	switch k.Name {
+	case "ingresses", "ingressclasses", "services", "endpointslices", "networkpolicies", "pods", "nodes", "daemonsets":
+		// The traces read all of these; there are few of them.
+		ch.Mark("networks", AllRows)
+	case "secrets":
+		for _, o := range []any{old, obj} {
+			if s, ok := unwrap(o).(*SecretSummary); ok && s.Type == corev1.SecretTypeTLS {
+				ch.Mark("networks", AllRows)
+			}
 		}
 	}
 	c.emit(ch)

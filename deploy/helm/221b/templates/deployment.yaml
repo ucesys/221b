@@ -79,8 +79,9 @@ spec:
             {{- end }}
             - name: KUBELET_STATS
               value: {{ .Values.kubeletStats | quote }}
-            # Whether Secrets are read at all (key names and sizes, and
-            # Helm release records; never values). Off hides the Helm tab.
+            # Whether Secrets are read at all (key names and sizes, TLS
+            # certificates' names and validity, and Helm release records;
+            # never values). Off hides the Helm tab.
             - name: SECRETS_READ
               value: {{ .Values.secrets.read | quote }}
             - name: HEALTH_INTERVAL

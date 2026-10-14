@@ -913,3 +913,76 @@ export interface NetCheckResult {
   service?: { name: string; port: number; portName?: string; targetPort: string; protocol: string }
   allowed: number
 }
+
+// ---------- Networks (P4-02) ----------
+
+export interface HopLink {
+  kind: 'ingress' | 'ingressclass' | 'service' | 'pod' | 'secret' | 'netpol' | 'release' | 'node'
+  namespace?: string
+  name: string
+}
+
+export interface Hop {
+  k: string
+  t: string
+  d: string
+  s: string
+  tone: Tone
+  link?: HopLink
+}
+
+export interface Health {
+  text: string
+  tone: Tone
+  tip?: string
+}
+
+export interface TraceRow {
+  key: string
+  host: string
+  path: string
+  pathType?: string
+  url: string
+  namespace: string
+  ingress: string
+  class?: string
+  backend: string
+  verdict: string
+  tone: Tone
+  text: string
+  hops: Hop[]
+  endpoints: Health
+  policy: Health
+  cert: Health
+  notAfter?: string
+  created?: string
+}
+
+export interface NodeNetRow {
+  key: string
+  name: string
+  role: 'control-plane' | 'worker'
+  internalIP: string
+  externalIP?: string
+  podCIDR: string
+  capacity: number
+  podIPs: number
+  hostNetwork: number
+  zone?: string
+}
+
+export interface NetFactsRow {
+  key: string
+  cni: CNIRow
+  podCIDRs: string[]
+  serviceIP?: string
+  clusterIPs: number
+  dns?: { service: string; ip: string; ready: number; total: number; nodes: string[] }
+  kubeProxy?: string
+  classes: { name: string; controller: string; default?: boolean; ready: number; total: number; hosts: number }[]
+  pendingLBs: string[]
+  policies: number
+  policyNamespaces: string[]
+}
+
+export type NetworkRow = TraceRow | NodeNetRow | NetFactsRow

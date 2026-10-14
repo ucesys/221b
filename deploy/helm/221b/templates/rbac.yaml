@@ -1,8 +1,9 @@
 {{- if .Values.rbac.create }}
 # Read-only across the cluster: exactly the kinds the tabs show, which the
 # server watches, and the YAML view reads live. No writes. Secrets only
-# with secrets.read, and then only their key names and sizes, and Helm's
-# release records, leave the server.
+# with secrets.read, and then only their key names and sizes, a TLS
+# certificate's names and validity, and Helm's release records, leave the
+# server.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:

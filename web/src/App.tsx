@@ -4,6 +4,7 @@ import { useClusters, type ClusterSummary } from './api/clusters'
 import { LiveContext, useLiveMeta, useLiveStore, useView } from './api/live'
 import type { AccessRow, AlertRow, PolicyRow } from './api/types'
 import { AccessTab } from './components/AccessTab'
+import { NetworksTab } from './components/NetworksTab'
 import { PoliciesTab } from './components/PoliciesTab'
 import { AlertsTab } from './components/AlertsTab'
 import { Banners } from './components/Banners'
@@ -144,6 +145,7 @@ function Shell() {
           {tab === 'services' && <ServicesTab {...common} />}
           {tab === 'helm' && <HelmTab {...common} />}
           {tab === 'access' && <AccessTab {...common} />}
+          {tab === 'networks' && <NetworksTab {...common} />}
           {tab === 'policies' && <PoliciesTab {...common} />}
         </div>
       )}

@@ -145,6 +145,7 @@ func (s *Sim) generateObjects(now time.Time) {
 	// Who may do what, and what limits it.
 	s.rbacSeed(now)
 	s.policySeed(now)
+	s.networkSeed(now)
 
 	// Helm releases, as Secrets, and the labels Helm puts on their pods.
 	s.helmReleases(groups, now)

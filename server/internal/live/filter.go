@@ -62,6 +62,16 @@ func Scope(view, key string) (resource, namespace string, cluster bool) {
 			return "roles", ns, false
 		}
 		return "rolebindings", ns, false
+	case ViewNetworks:
+		prefix, rest, ok := views.SplitNetworkKey(key)
+		if !ok {
+			return "", "", false
+		}
+		if prefix == views.NetRoute {
+			ns, _, _ := strings.Cut(rest, "/")
+			return "ingresses", ns, false
+		}
+		return "nodes", "", true
 	case ViewPolicies:
 		prefix, rest, ok := views.SplitPolicyKey(key)
 		if !ok {
@@ -134,6 +144,8 @@ func Resources(view string) (namespaced, cluster []string) {
 		return []string{"pods", "persistentvolumeclaims"}, []string{"nodes"}
 	case ViewAccess:
 		return []string{"roles", "rolebindings", "serviceaccounts"}, []string{"clusterroles", "clusterrolebindings"}
+	case ViewNetworks:
+		return []string{"ingresses"}, []string{"nodes"}
 	case ViewPolicies:
 		return []string{"pods", "networkpolicies", "poddisruptionbudgets", "resourcequotas", "deployments", "limitranges"}, []string{"pods", "validatingwebhookconfigurations", "mutatingwebhookconfigurations", "priorityclasses"}
 	}
