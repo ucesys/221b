@@ -48,12 +48,13 @@ cleanup() {
   local code=$?
   if [ "$code" -ne 0 ]; then
     step "Diagnostics"
+    # The console's own log comes last: CI reports the file's tail.
     {
       kubectl get nodes -o wide
       kubectl get pods -A -o wide
       kubectl -n "$NS" describe pods
-      kubectl -n "$NS" logs -l app.kubernetes.io/name=221b --tail=200 --all-containers
       kubectl get events -A --sort-by=.lastTimestamp | tail -40
+      kubectl -n "$NS" logs -l app.kubernetes.io/name=221b --tail=200 --all-containers
     } > "$WORK/diagnostics.log" 2>&1 || true
     # CI reports the file on its own, so the log's tail shows the failure.
     if [ -z "${GITHUB_ACTIONS:-}" ]; then cat "$WORK/diagnostics.log"; fi
@@ -209,11 +210,12 @@ api -X POST -H 'Content-Type: application/json' -H 'Sec-Fetch-Site: same-origin'
 ! grep -q "$TOKEN" "$WORK/kept.json"
 kubectl -n "$NS" get secret "$FULLNAME-cluster-kept" -o jsonpath='{.data}' | grep -q '"token"'
 echo "the connection's Secret holds the token; the API answered without it"
+# Connected, then synced a moment later, once the informers have listed.
 for _ in $(seq 60); do
-  api http://127.0.0.1:18080/api/v1/clusters/kept | grep -q '"state":"connected"' && break
+  api http://127.0.0.1:18080/api/v1/clusters/kept | tee "$WORK/kept-state.json" | grep -q '"synced":true' && break
   sleep 1
 done
-api http://127.0.0.1:18080/api/v1/clusters/kept | tee "$WORK/kept-state.json" | grep -q '"synced":true'
+grep -q '"synced":true' "$WORK/kept-state.json" || { echo "the connection did not come up: $(cat "$WORK/kept-state.json")"; exit 1; }
 api 'http://127.0.0.1:18080/api/v1/clusters/kept/snapshot?views=nodes' | grep -q "\"$CLUSTER-control-plane\""
 echo "the connection serves the cluster's nodes under its own route"
 # Its test passes every step with the CA and token given.
