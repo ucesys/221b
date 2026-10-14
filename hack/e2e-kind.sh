@@ -175,14 +175,18 @@ kubectl -n "$NS" port-forward "svc/$FULLNAME" 18080:8081 > "$WORK/port-forward.l
 pf=$!
 for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && break; sleep 1; done
 curl -fsS http://127.0.0.1:18080/api/v1/snapshot | tee "$WORK/snapshot-nosecrets.json" | grep -q '"secrets":"off"'
+echo "the console reports Secrets as off"
 # No release records are read, so the Helm view is empty and a release is not found.
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080/api/v1/helm/$NS/$RELEASE")" = 404 ]
 curl -fsS 'http://127.0.0.1:18080/api/v1/snapshot?views=helm' | python3 -c 'import json, sys; d = json.load(sys.stdin); assert d["views"]["helm"]["rows"] == [], d["views"]["helm"]'
+echo "no Helm release is served"
 # The namespace lists no Secrets, and their YAML is refused.
 ! curl -fsS "http://127.0.0.1:18080/api/v1/snapshot?views=ns:$NS" | grep -q '"kind":"Secret"'
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080/api/v1/yaml/secrets/$NS/sh.helm.release.v1.$RELEASE.v1")" = 404 ]
+echo "no Secret is listed or served"
 # The console still works without Secrets: nodes and pods are served.
-curl -fsS 'http://127.0.0.1:18080/api/v1/snapshot?views=nodes,pods' | grep -q '"kind-e2e-control-plane"'
+curl -fsS 'http://127.0.0.1:18080/api/v1/snapshot?views=nodes,pods' | grep -q "\"$CLUSTER-control-plane\""
+echo "nodes and pods are served without Secrets"
 kill "$pf"
 endstep
 
