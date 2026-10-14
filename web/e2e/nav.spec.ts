@@ -32,7 +32,7 @@ test('the bar shows every tab while they fit, and More takes them as the window 
   await expect(page).toHaveTitle(/Services · 221B/)
 
   // Wide again: Services takes its place in the bar and More goes.
-  await page.setViewportSize({ width: 1280, height: 844 })
+  await page.setViewportSize({ width: 1440, height: 844 })
   await expect(nav.getByRole('link', { name: /^Services/ })).toHaveAttribute('aria-current', 'page')
   await expect(page.getByTestId('more')).toHaveCount(0)
 })

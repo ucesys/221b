@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { useMe } from './api/auth'
 import { useClusters, type ClusterSummary } from './api/clusters'
 import { LiveContext, useLiveMeta, useLiveStore, useView } from './api/live'
-import type { AccessRow, AlertRow } from './api/types'
+import type { AccessRow, AlertRow, PolicyRow } from './api/types'
 import { AccessTab } from './components/AccessTab'
+import { PoliciesTab } from './components/PoliciesTab'
 import { AlertsTab } from './components/AlertsTab'
 import { Banners } from './components/Banners'
 import { ClusterEditor } from './components/ClusterEditor'
@@ -19,6 +20,7 @@ import { Toast } from './components/Toast'
 import { TopBar, type Theme } from './components/TopBar'
 import { badgeOf, bannersOf } from './lib/alerts'
 import { accessBadge } from './lib/rbac'
+import { findings as policyFindings, flagOf as policyFlag, modelOf as policyModel } from './lib/policies'
 import { apiPath, clusterHref, clusterPageHref, href, LOCAL, navigate, TABS, useRoute } from './lib/router'
 import { readJSON, writeJSON } from './lib/storage'
 
@@ -115,7 +117,9 @@ function Shell() {
   // The Access tab counts its findings while it is open (P4-03).
   const access = useView<AccessRow>(tab === 'access' && view === 'tabs' ? 'access' : null)
   const accessCount = accessBadge(access.rows.flatMap((r) => ('findings' in r ? r.findings : [])))
-  const counts = { ...live.counts, fleets: fleetDefs.length, ...(alerts.loaded ? { alerts: alertBadge.count } : {}), ...(access.loaded ? { access: accessCount.count } : {}) }
+  const policies = useView<PolicyRow>(tab === 'policies' && view === 'tabs' ? 'policies' : null)
+  const policyCount = policyFlag(policies.loaded ? policyFindings(policyModel(policies.rows)) : [])
+  const counts = { ...live.counts, fleets: fleetDefs.length, ...(alerts.loaded ? { alerts: alertBadge.count } : {}), ...(access.loaded ? { access: accessCount.count } : {}), ...(policies.loaded ? { policies: policyCount.count } : {}) }
   const common = { cluster: live.cluster, now, onToast: setToast, route }
   return (
     <div
@@ -126,7 +130,7 @@ function Shell() {
       data-dock="off"
       style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}
     >
-      <TopBar cluster={live.cluster} counts={counts} tones={{ alerts: alertBadge.tone, access: accessCount.tone }} tab={view === 'cluster' ? null : tab} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
+      <TopBar cluster={live.cluster} counts={counts} tones={{ alerts: alertBadge.tone, access: accessCount.tone, policies: policyCount.tone === 'info' ? 'muted' : policyCount.tone }} tab={view === 'cluster' ? null : tab} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
       <Banners cluster={live.cluster} stream={live.stream} now={now} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} accessError={live.accessError} alerts={view === 'tabs' && tab !== 'alerts' ? bannersOf(alerts.rows, now) : []} alertsHref={href('alerts')} />
       {view === 'cluster' ? (
         <ClusterPage route={route} me={me} now={now} onEdit={(id) => setEditing(id)} />
@@ -140,6 +144,7 @@ function Shell() {
           {tab === 'services' && <ServicesTab {...common} />}
           {tab === 'helm' && <HelmTab {...common} />}
           {tab === 'access' && <AccessTab {...common} />}
+          {tab === 'policies' && <PoliciesTab {...common} />}
         </div>
       )}
       <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} canChange={me?.admin ?? true} />

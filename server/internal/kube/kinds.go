@@ -297,17 +297,18 @@ func trimAnnotations(in map[string]string) map[string]string {
 }
 
 // templateImages keeps a pod template's container names and images, which
-// is what the Namespaces tab shows of a workload.
+// is what the Namespaces tab shows of a workload, and what its pods
+// request, which a quota must have room for during a rollout (P4-06).
 func templateImages(t *corev1.PodTemplateSpec) {
 	t.ObjectMeta = metav1.ObjectMeta{Labels: t.Labels}
 	keep := func(cs []corev1.Container) []corev1.Container {
 		out := make([]corev1.Container, len(cs))
 		for i, c := range cs {
-			out[i] = corev1.Container{Name: c.Name, Image: c.Image}
+			out[i] = corev1.Container{Name: c.Name, Image: c.Image, Resources: c.Resources, RestartPolicy: c.RestartPolicy}
 		}
 		return out
 	}
-	t.Spec = corev1.PodSpec{Containers: keep(t.Spec.Containers), InitContainers: keep(t.Spec.InitContainers), NodeSelector: t.Spec.NodeSelector}
+	t.Spec = corev1.PodSpec{Containers: keep(t.Spec.Containers), InitContainers: keep(t.Spec.InitContainers), NodeSelector: t.Spec.NodeSelector, Overhead: t.Spec.Overhead}
 }
 
 func stripDeployment(obj any) (any, error) {

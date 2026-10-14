@@ -142,8 +142,9 @@ func (s *Sim) generateObjects(now time.Time) {
 	// The long tail, in the namespaces that have those apps.
 	s.extras(groups, now)
 
-	// Who may do what.
+	// Who may do what, and what limits it.
 	s.rbacSeed(now)
+	s.policySeed(now)
 
 	// Helm releases, as Secrets, and the labels Helm puts on their pods.
 	s.helmReleases(groups, now)

@@ -83,6 +83,27 @@ export interface KubeObject {
 
 const RESOURCES: Record<string, string> = { ClusterRole: 'clusterroles', ClusterRoleBinding: 'clusterrolebindings', Role: 'roles', RoleBinding: 'rolebindings', ServiceAccount: 'serviceaccounts', NetworkPolicy: 'networkpolicies', PodDisruptionBudget: 'poddisruptionbudgets', ResourceQuota: 'resourcequotas', LimitRange: 'limitranges', PriorityClass: 'priorityclasses', Ingress: 'ingresses', IngressClass: 'ingressclasses', Service: 'services', Pod: 'pods', Deployment: 'deployments', Namespace: 'namespaces', Secret: 'secrets', ValidatingWebhookConfiguration: 'validatingwebhookconfigurations', MutatingWebhookConfiguration: 'mutatingwebhookconfigurations' }
 
+/** Runs a command in a pod (kind only); resolves to whether it succeeded. */
+export async function kubectlExecOK(namespace: string, pod: string, ...cmd: string[]): Promise<boolean> {
+  try {
+    await run('kubectl', ['-n', namespace, 'exec', pod, '--', ...cmd], { timeout: 20_000 })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** kubectl with its exit status and both streams, for commands that fail on purpose (kind only). */
+export async function kubectlResult(...args: string[]): Promise<{ ok: boolean; out: string; err: string }> {
+  try {
+    const { stdout, stderr } = await run('kubectl', args, { timeout: 120_000, maxBuffer: 16 << 20 })
+    return { ok: true, out: stdout, err: stderr }
+  } catch (e) {
+    const x = e as { stdout?: string; stderr?: string }
+    return { ok: false, out: x.stdout ?? '', err: x.stderr ?? '' }
+  }
+}
+
 /** What kubectl auth can-i answers (kind only). */
 export async function kubectlCanI(...args: string[]): Promise<boolean> {
   try {

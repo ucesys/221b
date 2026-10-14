@@ -236,6 +236,7 @@ func New(o Options) *Server {
 		s.data("objects/{kind}/{namespace}/{name}", "object", s.object)
 		s.data("yaml/{kind}/{name}", "yaml", s.yaml)
 		s.data("yaml/{kind}/{namespace}/{name}", "yaml", s.yaml)
+		s.data("netcheck", "netcheck", s.netCheck)
 	}
 	if o.Clusters != nil {
 		s.handle("GET /api/v1/clusters", "clusters", s.listClusters)

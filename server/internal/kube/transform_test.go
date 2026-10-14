@@ -43,7 +43,7 @@ func TestStrippedPodsGiveTheSameRow(t *testing.T) {
 		[]corev1.Container{{Name: "main", Image: "job:1", Resources: res("100m", "64Mi")}, {Name: "proxy", Image: "proxy:1", Resources: res("50m", "32Mi")}},
 		[]corev1.ContainerStatus{{Name: "main", State: exited}, {Name: "proxy", Ready: true, State: running}})
 	crash := pod("crash", corev1.RestartPolicyAlways,
-		[]corev1.Container{{Name: "app", Image: "app:1", Env: []corev1.EnvVar{{Name: "TOKEN", Value: "literal"}}, Resources: res("200m", "128Mi"), Lifecycle: &corev1.Lifecycle{PreStop: &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{"sleep", "5"}}}}}},
+		[]corev1.Container{{Name: "app", Image: "app:1", Env: []corev1.EnvVar{{Name: "TOKEN", Value: "literal"}}, Resources: res("200m", "128Mi"), TerminationMessagePath: "/dev/termination-log"}},
 		[]corev1.ContainerStatus{{Name: "app", RestartCount: 4, State: exited}})
 	// Being resized in place: 500m asked for, 1 core still allocated.
 	resized := pod("resized", corev1.RestartPolicyAlways,
@@ -84,7 +84,7 @@ func TestStrippedPodsGiveTheSameRow(t *testing.T) {
 		t.Fatalf("CPU requested %d", got.CPU.Requested)
 	}
 	for _, p := range stripped {
-		if p.ManagedFields != nil || p.Annotations["kubectl.kubernetes.io/last-applied-configuration"] != "" || p.Spec.Containers[0].Lifecycle != nil {
+		if p.ManagedFields != nil || p.Annotations["kubectl.kubernetes.io/last-applied-configuration"] != "" || p.Spec.Containers[0].TerminationMessagePath != "" {
 			t.Fatalf("pod %s kept fields the console never shows", p.Name)
 		}
 		// The pod details show these (P2-04), so they stay.

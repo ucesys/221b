@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	admissionv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -400,7 +401,7 @@ func (c *Cluster) Run(ctx context.Context) {
 // everything marks every static view, the details and the totals.
 func (c *Cluster) everything() Change {
 	ch := Change{Info: true, Totals: true}
-	for _, v := range []string{"nodes", "pods", "namespaces", "services", "helm", "alerts", "fleets", "access"} {
+	for _, v := range []string{"nodes", "pods", "namespaces", "services", "helm", "alerts", "fleets", "access", "policies"} {
 		ch.Mark(v, AllRows)
 	}
 	return ch
@@ -677,6 +678,7 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 			if m != nil {
 				ch.Mark("nodes", m.GetName())
 				ch.Mark("alerts", "node:"+m.GetName())
+				ch.Mark("policies", "drain:"+m.GetName())
 			}
 		}
 		ch.Mark("fleets", AllRows)
@@ -727,6 +729,7 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 					sa = "default"
 				}
 				ch.Mark("access", "sa:"+p.Namespace+"/"+sa)
+				c.markPodPolicies(&ch, p)
 				for _, claim := range podClaims(p) {
 					ch.Mark("alerts", "pvc:"+p.Namespace+"/"+claim)
 				}
@@ -746,12 +749,14 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 		for _, m := range []metav1.Object{oldMeta, newMeta} {
 			if m != nil {
 				ch.Mark("namespaces", m.GetName())
+				ch.Mark("policies", "ns:"+m.GetName())
 			}
 		}
 	case "services":
 		for _, m := range []metav1.Object{oldMeta, newMeta} {
 			if m != nil {
 				ch.Mark("services", m.GetNamespace()+"/"+m.GetName())
+				c.markHooks(&ch, m.GetNamespace(), m.GetName())
 			}
 		}
 	case "endpointslices":
@@ -759,11 +764,34 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 			if m := asMeta(o); m != nil {
 				if svc := m.GetLabels()["kubernetes.io/service-name"]; svc != "" {
 					ch.Mark("services", m.GetNamespace()+"/"+svc)
+					c.markHooks(&ch, m.GetNamespace(), svc)
 				}
 			}
 		}
 	case "ingresses":
 		ch.Mark("services", AllRows)
+	case "networkpolicies", "limitranges":
+		prefix := map[string]string{"networkpolicies": "np", "limitranges": "limits"}[k.Name]
+		for _, m := range []metav1.Object{oldMeta, newMeta} {
+			if m != nil {
+				ch.Mark("policies", prefix+":"+m.GetNamespace()+"/"+m.GetName())
+				ch.Mark("policies", "ns:"+m.GetNamespace())
+			}
+		}
+	case "poddisruptionbudgets":
+		// A budget decides the drains of the nodes its pods run on.
+		ch.Mark("policies", AllRows)
+	case "resourcequotas", "priorityclasses", "validatingwebhookconfigurations", "mutatingwebhookconfigurations":
+		ch.Mark("policies", AllRows)
+	case "deployments":
+		for _, m := range []metav1.Object{oldMeta, newMeta} {
+			if m != nil {
+				ch.Mark("policies", "rollout:"+m.GetNamespace()+"/"+m.GetName())
+			}
+		}
+	case "daemonsets":
+		// A DaemonSet that goes leaves its pods orphaned, which stops a drain.
+		ch.Mark("policies", AllRows)
 	case "roles", "rolebindings", "clusterroles", "clusterrolebindings", "serviceaccounts":
 		// A role's change can change the findings of every binding that
 		// grants it, and a ServiceAccount's of every binding that names
@@ -790,6 +818,52 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 		}
 	}
 	c.emit(ch)
+}
+
+// markPodPolicies marks the policy rows a pod's change touches: its
+// namespace's, its node's drain, the policies and budgets that may select
+// it, the LimitRanges that may have filled it in, its PriorityClass.
+func (c *Cluster) markPodPolicies(ch *Change, p *corev1.Pod) {
+	ch.Mark("policies", "ns:"+p.Namespace)
+	ch.Mark("policies", "pcnone:cluster")
+	if p.Spec.NodeName != "" {
+		ch.Mark("policies", "drain:"+p.Spec.NodeName)
+	}
+	if p.Spec.PriorityClassName != "" {
+		ch.Mark("policies", "pc:"+p.Spec.PriorityClassName)
+	}
+	for kind, prefix := range map[string]string{"networkpolicies": "np", "poddisruptionbudgets": "pdb", "limitranges": "limits"} {
+		for _, o := range c.Objects(kind, p.Namespace) {
+			if m := asMeta(o); m != nil {
+				ch.Mark("policies", prefix+":"+m.GetNamespace()+"/"+m.GetName())
+			}
+		}
+	}
+	if p.Namespace == "kube-system" {
+		ch.Mark("policies", "cni:cluster")
+	}
+}
+
+// markHooks marks the webhooks whose backend is a Service.
+func (c *Cluster) markHooks(ch *Change, ns, name string) {
+	for _, o := range c.Objects("validatingwebhookconfigurations", "") {
+		if w, ok := o.(*admissionv1.ValidatingWebhookConfiguration); ok {
+			for _, h := range w.Webhooks {
+				if s := h.ClientConfig.Service; s != nil && s.Namespace == ns && s.Name == name {
+					ch.Mark("policies", "hook:Validating/"+w.Name+"/"+h.Name)
+				}
+			}
+		}
+	}
+	for _, o := range c.Objects("mutatingwebhookconfigurations", "") {
+		if w, ok := o.(*admissionv1.MutatingWebhookConfiguration); ok {
+			for _, h := range w.Webhooks {
+				if s := h.ClientConfig.Service; s != nil && s.Namespace == ns && s.Name == name {
+					ch.Mark("policies", "hook:Mutating/"+w.Name+"/"+h.Name)
+				}
+			}
+		}
+	}
 }
 
 // releasesIn names the Helm releases recorded in a namespace.

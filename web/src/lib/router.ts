@@ -19,6 +19,7 @@ export const TABS: { id: Tab; label: string; tip: string }[] = [
   { id: 'alerts', label: 'Alerts', tip: 'Pods failing to start or pending, node problems and warning events' },
   { id: 'services', label: 'Services', tip: 'Every Service, its endpoints and the hostnames that publish it' },
   { id: 'access', label: 'Access', tip: 'Access Control: who can do what in the cluster' },
+  { id: 'policies', label: 'Policies', tip: 'Network policies, disruption budgets, quotas, Pod Security and admission webhooks' },
 ]
 
 /** The connection of the cluster the console was started against. */

@@ -698,3 +698,218 @@ export interface SARow {
 }
 
 export type AccessRow = RoleRow | BindingRow | SARow
+
+// ---------- Policies (P4-04 to P4-06) ----------
+
+export interface CNIRow {
+  key: string
+  name?: string
+  enforces: 'yes' | 'no' | 'unknown'
+  note?: string
+}
+
+export interface NoClassRow {
+  key: string
+  pods: number
+  waiting?: string
+  default?: string
+}
+
+export interface PSAPod {
+  name: string
+  reasons: string[]
+  detail: string
+}
+
+export interface PSAResult {
+  level: string
+  version: string
+  fail: PSAPod[]
+  warnings: string[]
+}
+
+export interface PolicyNSRow {
+  key: string
+  name: string
+  system?: boolean
+  pods: number
+  hostNetwork: number
+  policies: number
+  isolatedIn: number
+  isolatedOut: number
+  denyIn?: boolean
+  denyOut?: boolean
+  open: string[]
+  enforce?: string
+  enforceVersion?: string
+  warn?: string
+  warnVersion?: string
+  audit?: string
+  auditVersion?: string
+  baseline: PSAResult
+  restricted: PSAResult
+  quotas: string[]
+  limitRanges: string[]
+  budgets: number
+}
+
+export interface NetPolRow {
+  key: string
+  namespace: string
+  name: string
+  selector: string
+  ingress: boolean
+  egress: boolean
+  allows?: string
+  allowsOut?: string
+  pods: string[]
+  created?: string
+}
+
+export interface PDBRow {
+  key: string
+  namespace: string
+  name: string
+  selector: string
+  rule: string
+  currentHealthy: number
+  desiredHealthy: number
+  expectedPods: number
+  disruptionsAllowed: number
+  unhealthyPolicy?: string
+  pods: { name: string; node?: string; ready: boolean }[]
+  overlap: string[]
+  release?: string
+  created?: string
+}
+
+export interface DrainPod {
+  namespace: string
+  name: string
+  workload?: string
+  emptyDir?: boolean
+  budget?: string
+  error?: string
+}
+
+export interface DrainRow {
+  key: string
+  node: string
+  cordoned?: boolean
+  evict: DrainPod[]
+  daemonSet: string[]
+  mirror: number
+  blockers: DrainPod[]
+  budgets: string[]
+  verdict: 'blocked' | 'waits' | 'clean'
+  why: string
+  command: string
+}
+
+export interface QuotaItem {
+  resource: string
+  used: string
+  hard: string
+  pct: number
+  tone: Tone
+  usedValue: number
+  hardValue: number
+}
+
+export interface QuotaRow {
+  key: string
+  namespace: string
+  name: string
+  items: QuotaItem[]
+  scopes: string[]
+  release?: string
+  created?: string
+}
+
+export interface RolloutRow {
+  key: string
+  namespace: string
+  name: string
+  replicas: number
+  strategy: string
+  surge: number
+  unavailable: number
+  requests: Record<string, string>
+  limits: Record<string, string>
+  short: { quota: string; resource: string; need: string; left: string }[]
+  stalls: boolean
+}
+
+export interface LimitsRow {
+  key: string
+  namespace: string
+  name: string
+  items: { type: string; defaultRequest?: Record<string, string>; default?: Record<string, string>; max?: Record<string, string>; min?: Record<string, string>; maxLimitRequestRatio?: Record<string, string> }[]
+  atDefaults: string[]
+  created?: string
+}
+
+export interface HookRow {
+  key: string
+  kind: 'Validating' | 'Mutating'
+  config: string
+  webhook: string
+  rules: string[]
+  service?: string
+  serviceNamespace?: string
+  serviceName?: string
+  url?: string
+  failurePolicy: string
+  timeout: number
+  sideEffects?: string
+  matchPolicy?: string
+  namespaces: string
+  objects: string
+  reinvocation?: string
+  caBundle: boolean
+  reach: { state: string; ready: number; total: number; text: string; tone: Tone; pods: { name: string; node?: string; ready: boolean }[] }
+  release?: string
+  created?: string
+}
+
+export interface PriorityRow {
+  key: string
+  name: string
+  value: number
+  globalDefault?: boolean
+  preemption: string
+  description?: string
+  builtIn?: boolean
+  pods: number
+  workloads: string[]
+  created?: string
+}
+
+export type PolicyRow = CNIRow | NoClassRow | PolicyNSRow | NetPolRow | PDBRow | DrainRow | QuotaRow | RolloutRow | LimitsRow | HookRow | PriorityRow
+
+export interface NetSide {
+  isolated: boolean
+  allowed: boolean
+  selecting: string[]
+  allowedBy: string[]
+  rules?: Record<string, string>
+}
+
+export interface NetCheck {
+  from: string
+  to: string
+  port: number
+  protocol: string
+  allowed: boolean
+  egress: NetSide
+  ingress: NetSide
+  fromHost?: boolean
+  toHost?: boolean
+  toIP?: string
+}
+
+export interface NetCheckResult {
+  checks: NetCheck[]
+  service?: { name: string; port: number; portName?: string; targetPort: string; protocol: string }
+  allowed: number
+}

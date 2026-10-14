@@ -62,6 +62,38 @@ func Scope(view, key string) (resource, namespace string, cluster bool) {
 			return "roles", ns, false
 		}
 		return "rolebindings", ns, false
+	case ViewPolicies:
+		prefix, rest, ok := views.SplitPolicyKey(key)
+		if !ok {
+			return "", "", false
+		}
+		ns, _, _ := strings.Cut(rest, "/")
+		switch prefix {
+		case views.PolCNI:
+			return "pods", "kube-system", false
+		case views.PolNoClass, views.PolDrain:
+			return "pods", "", true
+		case views.PolNamespace:
+			return "pods", rest, false
+		case views.PolNetPol:
+			return "networkpolicies", ns, false
+		case views.PolPDB:
+			return "poddisruptionbudgets", ns, false
+		case views.PolQuota:
+			return "resourcequotas", ns, false
+		case views.PolRollout:
+			return "deployments", ns, false
+		case views.PolLimits:
+			return "limitranges", ns, false
+		case views.PolHook:
+			if strings.HasPrefix(rest, "Mutating/") {
+				return "mutatingwebhookconfigurations", "", true
+			}
+			return "validatingwebhookconfigurations", "", true
+		case views.PolPriority:
+			return "priorityclasses", "", true
+		}
+		return "", "", false
 	case ViewAlerts:
 		kind, ns, _, ok := views.SplitAlertKey(key)
 		switch {
@@ -102,6 +134,8 @@ func Resources(view string) (namespaced, cluster []string) {
 		return []string{"pods", "persistentvolumeclaims"}, []string{"nodes"}
 	case ViewAccess:
 		return []string{"roles", "rolebindings", "serviceaccounts"}, []string{"clusterroles", "clusterrolebindings"}
+	case ViewPolicies:
+		return []string{"pods", "networkpolicies", "poddisruptionbudgets", "resourcequotas", "deployments", "limitranges"}, []string{"pods", "validatingwebhookconfigurations", "mutatingwebhookconfigurations", "priorityclasses"}
 	}
 	if strings.HasPrefix(view, NamespacePrefix) {
 		for _, k := range kube.Kinds {

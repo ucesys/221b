@@ -61,6 +61,8 @@ const (
 	// ViewAccess are the roles, bindings and ServiceAccounts the Access
 	// tab reads (P4-03).
 	ViewAccess = "access"
+	// ViewPolicies are what the Policies tab reads (P4-04 to P4-06).
+	ViewPolicies = "policies"
 	// NamespacePrefix starts the view of one namespace's objects.
 	NamespacePrefix = "ns:"
 )
@@ -330,6 +332,12 @@ var staticViews = []viewDef{
 		name:  ViewFleets,
 		lazy:  true,
 		whole: buildFleets,
+	},
+	{
+		name:  ViewPolicies,
+		lazy:  true,
+		keys:  func(src Source) []string { return views.PolicyKeys(src) },
+		build: func(src Source, key string, now time.Time) (any, bool) { return views.BuildPolicy(src, key, now) },
 	},
 	{
 		name:  ViewAccess,
