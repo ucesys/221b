@@ -72,10 +72,14 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(panel.locator('.rk-gr').first().or(panel.getByText(/^No pod/))).toBeVisible()
     expect(await violations(page), 'object pods').toEqual([])
     await page.keyboard.press('Escape')
+  })
 
-    // The Phase 4 tabs, and an access review's details.
+  test(`the Phase 4 tabs meet WCAG 2.2 AA in the ${theme} theme`, async ({ page }) => {
+    test.slow()
+    await page.addInitScript((t) => window.localStorage.setItem('221b.theme', JSON.stringify(t)), theme)
     for (const hash of ['#/fleets', '#/alerts', '#/networks', '#/access', '#/policies', '#/policies/netpol', '#/policies/pdb', '#/policies/quota', '#/policies/psa', '#/policies/webhooks']) {
       await page.goto('/' + hash)
+      await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
       await expect(page.locator('.rk-gr, .rk-card').first()).toBeVisible()
       await page.waitForTimeout(500)
       expect(await violations(page), hash).toEqual([])
