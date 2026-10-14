@@ -273,6 +273,11 @@ func (m *Manager) summarize(inst *Instance) Summary {
 	} else {
 		info := inst.Cluster.Info()
 		s.State, s.Message, s.Since, s.Version, s.Synced = info.State, info.Message, info.Since, info.Version, info.Synced
+		// Synced once the rows are in the store: the cluster says so a
+		// moment before, and a snapshot read then would be empty.
+		if inst.Store != nil {
+			s.Synced = s.Synced && inst.Store.Synced()
+		}
 		s.Nodes, s.Pods, _, _ = inst.Cluster.Counts()
 	}
 	if inst.lastTest != nil {

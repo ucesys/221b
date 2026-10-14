@@ -988,6 +988,15 @@ func (s *Store) ensureViewsLocked(names []string) {
 	}
 }
 
+// Synced reports whether the store has taken the cluster's first full
+// listing, so a snapshot has every row: the cluster says it is synced a
+// moment before the rows reach the store.
+func (s *Store) Synced() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.info.Synced
+}
+
 // Row returns one row of a view as JSON.
 func (s *Store) Row(view, key string) ([]byte, bool) {
 	s.mu.Lock()
