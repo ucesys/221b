@@ -148,6 +148,10 @@ kubectl -n "$NS" rollout status "deployment/$FULLNAME" --timeout=60s
 kubectl -n "$NS" get configmap "$FULLNAME" -o jsonpath='{.data.settings\.json}' | grep -q '"refreshSeconds":11'
 # Through a port-forward: kube-proxy may still be catching up after the
 # browser tests restarted the API server, which would delay the NodePort.
+for _ in $(seq 60); do
+  [ "$(kubectl -n "$NS" get pods -l app.kubernetes.io/name=221b -o name | wc -l)" = 1 ] && break
+  sleep 1
+done
 kubectl -n "$NS" port-forward "svc/$FULLNAME" 18080:8081 > "$WORK/port-forward.log" 2>&1 &
 pf=$!
 for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && break; sleep 1; done
@@ -160,10 +164,17 @@ step "secrets.read=false grants nothing on Secrets, lists none and hides the Hel
 helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reset-then-reuse-values --set secrets.read=false --wait --timeout 60s
 kubectl -n "$NS" rollout status "deployment/$FULLNAME" --timeout=60s
 "$ROOT/hack/check-rbac.sh" --no-secrets "$SA"
+# The pod of the previous revision answers while it terminates, so wait
+# until the new one is the only pod before forwarding to the Service.
+for _ in $(seq 60); do
+  [ "$(kubectl -n "$NS" get pods -l app.kubernetes.io/name=221b -o name | wc -l)" = 1 ] && break
+  sleep 1
+done
+kubectl -n "$NS" get pods -l app.kubernetes.io/name=221b
 kubectl -n "$NS" port-forward "svc/$FULLNAME" 18080:8081 > "$WORK/port-forward.log" 2>&1 &
 pf=$!
 for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && break; sleep 1; done
-curl -fsS http://127.0.0.1:18080/api/v1/snapshot | grep -q '"secrets":"off"'
+curl -fsS http://127.0.0.1:18080/api/v1/snapshot | tee "$WORK/snapshot-nosecrets.json" | grep -q '"secrets":"off"'
 # No release records are read, so the Helm view is empty and a release is not found.
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080/api/v1/helm/$NS/$RELEASE")" = 404 ]
 curl -fsS 'http://127.0.0.1:18080/api/v1/snapshot?views=helm' | python3 -c 'import json, sys; d = json.load(sys.stdin); assert d["views"]["helm"]["rows"] == [], d["views"]["helm"]'
