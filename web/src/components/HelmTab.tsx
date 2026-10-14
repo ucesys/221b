@@ -5,7 +5,7 @@ import type { PodView, ReleaseDetails, ReleaseResource, ReleaseRow, Revision } f
 import { RESOURCE_COLUMNS, REVISION_COLUMNS, resourceLabel, resourceTerms, revisionTerms } from '../columns/objects'
 import { POD_COLUMNS, podLabel, podStatusGroup, podTerms, type PodStatusFilter } from '../columns/pods'
 import { fCores, fMem, fmtAge, fmtTs, nWord, pct, pctTxt } from '../lib/format'
-import { href, navigate, withParams } from '../lib/router'
+import { apiPath, href, navigate, withParams } from '../lib/router'
 import { isWatchedKind, pluralKind } from '../lib/kinds'
 import { useTable } from '../lib/useTable'
 import { ColumnsMenu } from './ColumnsMenu'
@@ -50,7 +50,7 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
   const current = sorted.find((r) => r.namespace === wantNs && r.name === wantName) ?? sorted.find((r) => r.group === 'apps') ?? sorted[0] ?? null
   const sub: SubTab = SUBTABS.includes(p.get('tab') as SubTab) ? (p.get('tab') as SubTab) : 'pods'
   const set = useCallback((changes: Record<string, string | string[] | undefined>) => navigate(withParams(route, changes), true), [route])
-  const details = useDetails<ReleaseDetails>(current ? `/api/v1/helm/${encodeURIComponent(current.namespace)}/${encodeURIComponent(current.name)}` : null)
+  const details = useDetails<ReleaseDetails>(current ? apiPath(`helm/${encodeURIComponent(current.namespace)}/${encodeURIComponent(current.name)}`) : null)
   const d = details.data
 
   const lq = listQuery.trim().toLowerCase()

@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { signOut } from '../api/auth'
-import type { ClusterInfo, Counts, Me, Settings, Tone } from '../api/types'
+import type { ClusterInfo, Counts, Me, Settings } from '../api/types'
 import type { StreamState } from '../api/live'
 import { refreshLabel } from '../api/settings'
-import { fmtClock, fmtTs } from '../lib/format'
-import { href, TABS, type Tab } from '../lib/router'
+import { connection } from '../lib/connection'
+import { fmtClock } from '../lib/format'
+import { href, TABS, type Route, type Tab } from '../lib/router'
+import { ClusterMenu } from './ClusterMenu'
 import { Chevron, GearIcon, Logo } from './Icons'
 
 export type Theme = 'light' | 'dark'
@@ -12,7 +14,8 @@ export type Theme = 'light' | 'dark'
 interface Props {
   cluster: ClusterInfo | null
   counts: Counts
-  tab: Tab
+  /** The open tab; null on a page that is not a tab, such as a cluster's. */
+  tab: Tab | null
   stream: StreamState
   updatedAt: Date | null
   refreshedAt: Date | null
@@ -21,18 +24,9 @@ interface Props {
   onSettings: () => void
   /** Who is signed in; null while unknown. */
   me: Me | null
-}
-
-/** The connection to the cluster as a tone and a sentence. */
-export function connection(cluster: ClusterInfo | null, stream: StreamState): { tone: Tone; label: string; tip: string } {
-  if (stream === 'reconnecting') return { tone: 'warn', label: 'Reconnecting', tip: 'Lost contact with the 221B server; reconnecting.' }
-  if (!cluster || stream === 'connecting') return { tone: 'muted', label: 'Connecting', tip: 'Connecting to the 221B server.' }
-  if (cluster.state === 'disconnected') {
-    return { tone: 'err', label: 'Disconnected', tip: `Cannot reach the Kubernetes API server. ${cluster.message ? cluster.message + ' ' : ''}Since ${fmtTs(cluster.since)}.` }
-  }
-  if (cluster.state === 'connecting') return { tone: 'muted', label: 'Connecting', tip: 'Connecting to the Kubernetes API server.' }
-  if (!cluster.synced) return { tone: 'info', label: 'Listing', tip: 'Listing nodes and pods for the first time.' }
-  return { tone: 'ok', label: 'Connected', tip: `Connected to the Kubernetes API server since ${fmtTs(cluster.since)}.` }
+  route: Route
+  /** Opens the connection editor for a cluster, or for a new one (null). */
+  onEditCluster: (id: string | null) => void
 }
 
 interface Measure {
@@ -162,10 +156,8 @@ function AccountMenu({ me }: { me: Me }) {
   )
 }
 
-export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, settings, settingsOpen, onSettings, me }: Props) {
+export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, settings, settingsOpen, onSettings, me, route, onEditCluster }: Props) {
   const conn = connection(cluster, stream)
-  const name = cluster?.name ?? '—'
-  const version = cluster?.version ?? ''
   const live = stream === 'open' && cluster?.state === 'connected'
   // A clock for the countdown to the next refresh, once a second.
   const [now, setNow] = useState(() => Date.now())
@@ -226,7 +218,7 @@ export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, s
     setMoreOpen(false)
   }
 
-  const plan = navPlan(ids, tab, measure)
+  const plan = navPlan(ids, tab ?? 'nodes', measure)
   const inMenu = tabs.filter((t) => !plan.vis.includes(t.id))
   const moreTab = plan.moreAs ? tabs.find((t) => t.id === plan.moreAs) : undefined
   const hasMore = inMenu.length > 0
@@ -238,20 +230,7 @@ export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, s
     >
       <div className="rk-brand" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, minHeight: 52 }}>
         <Logo />
-        <div className="rk-clbtn rk-clstatic" title={conn.tip} aria-label={`Cluster ${name}${version ? ', Kubernetes ' + version : ''}: ${conn.label}`} role="status" data-testid="cluster">
-          <span className="rk-t" data-tone={conn.tone} style={{ display: 'inline-flex' }}>
-            <span className="rk-dot" />
-          </span>
-          <span className="rk-mono rk-clname">{name}</span>
-          {version && (
-            <span className="rk-ver rk-mono" style={{ color: 'var(--fg3)' }} data-testid="cluster-version">
-              {version}
-            </span>
-          )}
-          <span className="rk-sr" data-testid="cluster-state">
-            {conn.label}
-          </span>
-        </div>
+        <ClusterMenu cluster={cluster} stream={stream} route={route} me={me} onEdit={onEditCluster} />
       </div>
       <nav ref={nav} className="rk-views" aria-label="Views" style={{ flex: '1 1 0', minWidth: 0, display: 'flex', alignItems: 'stretch' }}>
         <div className="rk-tabs">

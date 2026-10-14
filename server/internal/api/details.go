@@ -32,14 +32,18 @@ type podDetails struct {
 }
 
 func (s *Server) pod(w http.ResponseWriter, r *http.Request) {
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	p, _ := s.opts.Cluster.Object("pods", ns, name).(*corev1.Pod)
+	p, _ := cl.Object("pods", ns, name).(*corev1.Pod)
 	if p == nil {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("no pod %s/%s: it may have been deleted", ns, name))
 		return
 	}
 	d := podDetails{PodDetails: views.BuildPodDetails(s.opts.Cluster, p, s.opts.Now().UTC())}
-	if u, ok := s.opts.Cluster.PodUsageOf(ns, name); ok {
+	if u, ok := cl.PodUsageOf(ns, name); ok {
 		d.Usage = &u
 	}
 	b, err := json.Marshal(d)
@@ -51,8 +55,12 @@ func (s *Server) pod(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) service(w http.ResponseWriter, r *http.Request) {
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	svc, _ := s.opts.Cluster.Object("services", ns, name).(*corev1.Service)
+	svc, _ := cl.Object("services", ns, name).(*corev1.Service)
 	if svc == nil {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("no service %s/%s: it may have been deleted", ns, name))
 		return
@@ -66,7 +74,11 @@ func (s *Server) service(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) release(w http.ResponseWriter, r *http.Request) {
-	if !s.opts.Cluster.SecretsRead() {
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	if !cl.SecretsRead() {
 		jsonError(w, http.StatusNotFound, "Helm releases are not read: reading Secrets is off (secrets.read in the chart)")
 		return
 	}
@@ -77,7 +89,7 @@ func (s *Server) release(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, p := range d.PodRows {
-		if u, ok := s.opts.Cluster.PodUsageOf(p.Namespace, p.Name); ok {
+		if u, ok := cl.PodUsageOf(p.Namespace, p.Name); ok {
 			if d.Usage == nil {
 				d.Usage = map[string]nodes.Usage{}
 			}
@@ -96,12 +108,16 @@ func (s *Server) release(w http.ResponseWriter, r *http.Request) {
 // /api/v1/objects/{kind}/{namespace}/{name}, where kind is the registry
 // name (deployments) or the kind (Deployment).
 func (s *Server) object(w http.ResponseWriter, r *http.Request) {
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
 	k, ok := views.ObjectKindOf(r.PathValue("kind"))
 	if !ok {
 		jsonError(w, http.StatusNotFound, "no kind named "+strconv.Quote(r.PathValue("kind")))
 		return
 	}
-	if k.Secret && !s.opts.Cluster.SecretsRead() {
+	if k.Secret && !cl.SecretsRead() {
 		jsonError(w, http.StatusNotFound, "Secrets are not read: reading Secrets is off (secrets.read in the chart)")
 		return
 	}
@@ -113,7 +129,7 @@ func (s *Server) object(w http.ResponseWriter, r *http.Request) {
 	}
 	var usage map[string]nodes.Usage
 	for _, p := range d.Pods {
-		if u, ok := s.opts.Cluster.PodUsageOf(p.Namespace, p.Name); ok {
+		if u, ok := cl.PodUsageOf(p.Namespace, p.Name); ok {
 			if usage == nil {
 				usage = map[string]nodes.Usage{}
 			}
@@ -134,12 +150,16 @@ func (s *Server) object(w http.ResponseWriter, r *http.Request) {
 // yaml serves an object as YAML (P2-08): /api/v1/yaml/{kind}/{name} for
 // cluster-scoped kinds, /api/v1/yaml/{kind}/{namespace}/{name} otherwise.
 func (s *Server) yaml(w http.ResponseWriter, r *http.Request) {
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
 	k, ok := kube.KindByName(r.PathValue("kind"))
 	if !ok {
 		jsonError(w, http.StatusNotFound, "no kind named "+strconv.Quote(r.PathValue("kind")))
 		return
 	}
-	if k.Secret && !s.opts.Cluster.SecretsRead() {
+	if k.Secret && !cl.SecretsRead() {
 		jsonError(w, http.StatusNotFound, "Secrets are not read: reading Secrets is off (secrets.read in the chart)")
 		return
 	}
@@ -154,7 +174,7 @@ func (s *Server) yaml(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	text, err := s.opts.Cluster.ObjectYAML(ctx, k, ns, name)
+	text, err := cl.ObjectYAML(ctx, k, ns, name)
 	if err != nil {
 		code, msg := http.StatusBadGateway, "reading the object from the API server: "+err.Error()
 		switch {
@@ -190,6 +210,10 @@ const maxLogLine = 1 << 20
 // when the container stops writing. ?container=, ?previous=1, ?tail=N and
 // ?timestamps=1 select what is read.
 func (s *Server) podLog(w http.ResponseWriter, r *http.Request) {
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
 	q := r.URL.Query()
 	o := kube.LogOptions{
@@ -216,7 +240,7 @@ func (s *Server) podLog(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	stream, err := s.opts.Cluster.Logs(ctx, ns, name, o)
+	stream, err := cl.Logs(ctx, ns, name, o)
 	if err != nil {
 		code, msg := http.StatusBadGateway, "reading the logs from the API server: "+err.Error()
 		var status *apierrors.StatusError

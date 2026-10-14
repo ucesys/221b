@@ -32,6 +32,10 @@ type Config struct {
 	// SettingsConfigMap is the "namespace/name" of the ConfigMap the
 	// settings are kept in. Empty keeps them in memory until a restart.
 	SettingsConfigMap string
+	// ConnectionsSecrets is the "namespace/prefix" of the Secrets the
+	// cluster connections added in the console are kept in, one Secret
+	// <prefix>-cluster-<id> each. Empty keeps them in memory until a restart.
+	ConnectionsSecrets string
 	// KubeletStats reads each node's boot time from its kubelet, for the
 	// uptime in the node details. It needs get on nodes/proxy.
 	KubeletStats bool
@@ -86,6 +90,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.APIServer, "api-server", env("API_SERVER", ""), "connect to this API server URL without credentials (simulator and tests)")
 	fs.DurationVar(&c.Refresh, "refresh", envDuration("REFRESH", 3*time.Second), "how often to update browsers and read CPU and memory in use, until changed in Settings")
 	fs.StringVar(&c.SettingsConfigMap, "settings-configmap", env("SETTINGS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the settings in (empty: in memory)")
+	fs.StringVar(&c.ConnectionsSecrets, "connections-secrets", env("CONNECTIONS_SECRETS", ""), "namespace/prefix of the Secrets to keep cluster connections in, one <prefix>-cluster-<id> each (empty: in memory, lost on restart)")
 	fs.BoolVar(&c.KubeletStats, "kubelet-stats", envBool("KUBELET_STATS", true), "read node boot times from the kubelets, for uptime (needs get on nodes/proxy)")
 	fs.BoolVar(&c.SecretsRead, "secrets-read", envBool("SECRETS_READ", true), "read Secrets for their keys and sizes and for Helm releases; values are never shown (off hides the Helm tab)")
 	fs.DurationVar(&c.HealthInterval, "health-interval", envDuration("HEALTH_INTERVAL", 10*time.Second), "how often to check the API server")

@@ -3,7 +3,7 @@ import { useDetails } from '../api/details'
 import type { ServiceDetails, ServiceRow } from '../api/types'
 import { Tone } from '../columns/cells'
 import { fmtAge, fmtTs } from '../lib/format'
-import { href } from '../lib/router'
+import { apiPath, href } from '../lib/router'
 import { Card, Chips, Drawer, Facts } from './Drawer'
 import { EventsTable } from './EventsTable'
 import { WarnIcon } from './Icons'
@@ -26,7 +26,7 @@ interface Props {
 export function ServicePanel({ serviceKey, row, gone, now, onClose, onToast }: Props) {
   const [ns, name] = serviceKey.split('/', 2) as [string, string]
   const [tab, setTab] = useState<'overview' | 'yaml'>('overview')
-  const details = useDetails<ServiceDetails>(`/api/v1/services/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`)
+  const details = useDetails<ServiceDetails>(apiPath(`services/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`))
   const d = details.data
   const head = d ?? row
   const deleted = gone || details.gone

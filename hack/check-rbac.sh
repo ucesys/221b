@@ -1,18 +1,26 @@
 #!/usr/bin/env bash
 # Checks that a ServiceAccount can read what the tabs show (nodes, pods and
 # their logs, namespaces, workloads, Services, metrics, the kubelets'
-# stats), patch its own settings ConfigMap, and nothing else (P1-09, X-03,
-# P2-10). Secrets are readable only when the chart was installed with
-# secrets.read (the default); with --no-secrets the script expects the API
-# server to refuse them. Every authenticated identity can also review its
-# own access and read discovery and version URLs; those are allowed here.
-#   hack/check-rbac.sh [--no-secrets] system:serviceaccount:221b:console-221b
+# stats), patch its own settings ConfigMap, manage the Secrets of its own
+# namespace (the connections to other clusters, P3-04), and nothing else
+# (P1-09, X-03, P2-10). Secrets elsewhere are readable only when the chart
+# was installed with secrets.read (the default); with --no-secrets the
+# script expects the API server to refuse them. With --memory the chart
+# was installed with connections.store=memory and nothing is granted on
+# the namespace's Secrets. Every authenticated identity can also review
+# its own access and read discovery and version URLs; those are allowed.
+#   hack/check-rbac.sh [--no-secrets] [--memory] system:serviceaccount:221b:console-221b
 set -euo pipefail
 secrets=yes
-if [ "${1:-}" = "--no-secrets" ]; then
-  secrets=no
+connections=yes
+while [ $# -gt 1 ]; do
+  case $1 in
+    --no-secrets) secrets=no ;;
+    --memory) connections=no ;;
+    *) echo "unknown option $1"; exit 2 ;;
+  esac
   shift
-fi
+done
 SA=$1
 # system:serviceaccount:<namespace>:<name>: the ConfigMap is named after
 # the ServiceAccount, in its namespace.
@@ -62,6 +70,14 @@ done
 expect yes get nodes --subresource=proxy
 expect yes get "configmaps/$NAME" -n "$NS"
 expect yes patch "configmaps/$NAME" -n "$NS"
+# The connections to other clusters: Secrets in its own namespace only.
+for verb in get list create update delete; do
+  expect "$connections" "$verb" secrets -n "$NS"
+done
+expect no watch secrets -n "$NS"
+if [ "$secrets" = no ]; then
+  expect no get secrets -n default
+fi
 
 # The kubelets' endpoints are read-only through the proxy, and only the one
 # ConfigMap is written.
@@ -104,9 +120,17 @@ for ns in default kube-system "$NS"; do
       failed "the settings ConfigMap is not listed as get and patch by name in $ns"
     fi
   fi
-  # Every granted verb list is read-only, except the settings ConfigMap's
-  # and the self-reviews every identity may create.
-  writes=$(echo "$list" | awk 'NR > 1 && $1 !~ /^\[/' | grep -v -E "^(configmaps +\[\] +\[$NAME\]|selfsubject)" | grep -E '\[[^]]*(create|update|patch|delete|deletecollection|\*)[^]]*\]$' || true)
+  # Every granted verb list is read-only, except the settings ConfigMap's,
+  # the self-reviews every identity may create and, in the console's own
+  # namespace, the connection Secrets.
+  own_writes="^(configmaps +\[\] +\[$NAME\]|selfsubject)"
+  if [ "$ns" = "$NS" ] && [ "$connections" = yes ]; then
+    own_writes="^(configmaps +\[\] +\[$NAME\]|selfsubject|secrets +\[\] +\[\] +\[get list create update delete\])"
+    if ! echo "$list" | grep -E "^secrets +\[\] +\[\] +\[get list create update delete\]" > /dev/null; then
+      failed "the connection Secrets are not listed as get, list, create, update and delete in $ns"
+    fi
+  fi
+  writes=$(echo "$list" | awk 'NR > 1 && $1 !~ /^\[/' | grep -v -E "$own_writes" | grep -E '\[[^]]*(create|update|patch|delete|deletecollection|\*)[^]]*\]$' || true)
   if [ -n "$writes" ]; then
     failed "writes granted in $ns: $writes"
   fi

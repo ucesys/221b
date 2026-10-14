@@ -3,12 +3,12 @@
    (#1C7A3B and #BF3328), so 11.5 px text on the pale pill backgrounds keeps
    a 5:1 contrast with margin (WCAG 2.2 AA asks 4.5:1); the dark theme's
    tones already have it. Set in design.css, next to the other tokens. */
-.rk-clstatic {
-  cursor: default;
-}
-.rk-clstatic:hover {
-  border-color: var(--line);
-  background: var(--surface2);
+/* A banner's action, such as "Fix the connection". */
+.rk-banner > a {
+  flex: none;
+  color: inherit;
+  font-weight: 600;
+  white-space: nowrap;
 }
 .rk-banner[data-tone='info'] {
   background: var(--info-weak);

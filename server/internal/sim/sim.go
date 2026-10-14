@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
@@ -63,6 +64,10 @@ type Sim struct {
 	mux  *http.ServeMux
 	// oidc is the simulated identity provider, when on.
 	oidc *oidcsim.Provider
+	// token, when set, is the bearer token every API request must carry.
+	token string
+	// What access reviews refuse (see /sim/deny).
+	denyVerbs, denyNamespaces, denyUsers []string
 
 	mu       sync.Mutex
 	rv       int64
@@ -197,6 +202,7 @@ func (s *Sim) routes() {
 	m.HandleFunc("POST /sim/down", s.admin(s.setDown))
 	m.HandleFunc("POST /sim/metrics", s.admin(s.setMetrics))
 	m.HandleFunc("POST /sim/churn", s.admin(s.churnOnce))
+	s.phase3Routes(m)
 	if s.oidc != nil {
 		m.Handle("/oidc/", s.oidc)
 	}
@@ -208,6 +214,9 @@ func (s *Sim) routes() {
 // an unreachable API server would.
 func (s *Sim) api(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.authorized(w, r) {
+			return
+		}
 		s.mu.Lock()
 		down := s.down
 		if down && (r.URL.Path == "/api/v1/nodes" || r.URL.Path == "/api/v1/pods") {
@@ -286,8 +295,13 @@ func (s *Sim) listOrWatch(k kube.Kind) http.HandlerFunc {
 
 func (s *Sim) list(k kube.Kind, w http.ResponseWriter, r *http.Request) {
 	partial := wantsPartial(r)
+	selector, err := labels.Parse(r.URL.Query().Get("labelSelector"))
+	if err != nil {
+		status(w, http.StatusBadRequest, "BadRequest", "invalid labelSelector: "+err.Error())
+		return
+	}
 	s.mu.Lock()
-	items := s.itemsLocked(k.Name, r.PathValue("ns"), partial)
+	items := s.itemsLocked(k.Name, r.PathValue("ns"), partial, selector)
 	rv := s.rv
 	s.mu.Unlock()
 	listKind, apiVersion := k.Kind+"List", k.APIVersion()
@@ -373,7 +387,7 @@ func (s *Sim) keysLocked(kind string) []string {
 
 // itemsLocked encodes the current objects of a kind, sorted by key, in one
 // namespace or all.
-func (s *Sim) itemsLocked(kind, namespace string, partial bool) [][]byte {
+func (s *Sim) itemsLocked(kind, namespace string, partial bool, selector labels.Selector) [][]byte {
 	keys := s.keysLocked(kind)
 	out := make([][]byte, 0, len(keys))
 	for _, k := range keys {
@@ -381,6 +395,11 @@ func (s *Sim) itemsLocked(kind, namespace string, partial bool) [][]byte {
 			continue
 		}
 		obj := s.objectLocked(kind, k)
+		if selector != nil && !selector.Empty() {
+			if m, err := meta.Accessor(obj); err != nil || !selector.Matches(labels.Set(m.GetLabels())) {
+				continue
+			}
+		}
 		if partial {
 			out = append(out, encodePartial(obj))
 			continue
@@ -433,7 +452,7 @@ func (s *Sim) watch(k kube.Kind, w http.ResponseWriter, r *http.Request) {
 	case initial || rvParam == "" || rvParam == "0":
 		// Send the current state as ADDED events, as the API server does for
 		// a watch without a resource version and for streaming lists.
-		for _, it := range s.itemsLocked(kind, r.PathValue("ns"), partial) {
+		for _, it := range s.itemsLocked(kind, r.PathValue("ns"), partial, nil) {
 			backlog = append(backlog, wrap(watch.Added, it))
 		}
 		if initial {

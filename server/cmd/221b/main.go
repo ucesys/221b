@@ -21,11 +21,13 @@ import (
 	"syscall"
 	"time"
 
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
 	"github.com/ucesys/221b/server/internal/api"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
@@ -126,9 +128,32 @@ func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// The other clusters (P3-04 to P3-09): their connections live in
+	// Secrets in the console's own namespace when running in a cluster,
+	// otherwise in memory. The cluster the console was started against is
+	// the connection "local".
+	var connStore clusters.Store = clusters.NewMemoryStore()
+	if cfg.ConnectionsSecrets != "" {
+		ns, prefix, ok := strings.Cut(cfg.ConnectionsSecrets, "/")
+		if !ok || ns == "" || prefix == "" {
+			return fmt.Errorf("-connections-secrets must be namespace/prefix, got %q", cfg.ConnectionsSecrets)
+		}
+		ss, err := clusters.NewSecretStore(restCfg, ns, prefix, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/instance": prefix, "app.kubernetes.io/managed-by": "221b"})
+		if err != nil {
+			return err
+		}
+		connStore = ss
+	} else {
+		log.Warn("cluster connections added in the console are kept in memory and lost on restart; set -connections-secrets namespace/prefix to keep them in Secrets")
+	}
+	manager := clusters.New(connStore, clusters.Options{Refresh: cfg.Refresh, HealthInterval: cfg.HealthInterval, KubeletStats: cfg.KubeletStats, SecretsRead: cfg.SecretsRead, Logger: log.With("component", "clusters")})
+	if err := manager.SetLocal(ctx, localSpec(cfg, restCfg, mode), cluster, store); err != nil {
+		return fmt.Errorf("local connection: %w", err)
+	}
+
 	// The shared settings: in the chart's ConfigMap when running in a
 	// cluster, otherwise in memory. Every change reaches every browser
-	// through the store.
+	// through the stores.
 	var storage settings.Storage = &settings.Memory{}
 	if cfg.SettingsConfigMap != "" {
 		cm, err := kube.NewConfigMapStorage(restCfg, cfg.SettingsConfigMap)
@@ -139,12 +164,15 @@ func run(args []string) error {
 	}
 	shared := settings.NewService(ctx, storage, settings.Settings{RefreshSeconds: int(cfg.Refresh / time.Second)}, log.With("component", "settings"), func(st settings.State) {
 		b, _ := json.Marshal(st)
-		store.SetSettings(st.Refresh(), b)
+		manager.SetSettings(st.Refresh(), b)
 	})
 	go shared.Run(ctx, time.Minute)
 
 	go cluster.Run(ctx)
 	go store.Run(ctx)
+	if err := manager.Start(ctx); err != nil {
+		return fmt.Errorf("cluster connections: %w", err)
+	}
 	go func() {
 		t := time.NewTicker(time.Minute)
 		defer t.Stop()
@@ -162,6 +190,7 @@ func run(args []string) error {
 		Store:         store,
 		Cluster:       cluster,
 		Settings:      shared,
+		Clusters:      manager,
 		Auth:          authSvc,
 		Audit:         auditLog,
 		HTTPSRedirect: cfg.HTTPSRedirect,
@@ -202,6 +231,19 @@ func run(args []string) error {
 			for _, k := range kinds {
 				gauges = append(gauges, api.Gauge{Name: "b221_cached_objects", Help: "Objects in the watch cache, by kind.", Labels: fmt.Sprintf("kind=%q", k), Value: float64(cached[k])})
 			}
+			// The other clusters: one gauge each, 1 when its API server answers.
+			conns := manager.List()
+			gauges = append(gauges, api.Gauge{Name: "b221_connections", Help: "Cluster connections, the local one included.", Value: float64(len(conns))})
+			for _, c := range conns {
+				if c.Local {
+					continue
+				}
+				up := 0.0
+				if c.State == kube.StateConnected {
+					up = 1
+				}
+				gauges = append(gauges, api.Gauge{Name: "b221_connection_up", Help: "1 when the connection's API server answered the last health check.", Labels: fmt.Sprintf("cluster=%q", c.ID), Value: up})
+			}
 			return gauges
 		},
 	})
@@ -234,6 +276,32 @@ func run(args []string) error {
 	err = srv.Shutdown(shutdownCtx)
 	auditLog.Close(shutdownCtx)
 	return err
+}
+
+// localSpec describes the cluster the console was started against as a
+// connection: its address and how the console signs in, for the cluster
+// page; it is not editable beyond its name, environment and description.
+func localSpec(cfg config.Config, restCfg *rest.Config, mode kube.Mode) clusters.Spec {
+	spec := clusters.Spec{Name: cfg.ClusterName, Env: clusters.EnvOther, Server: restCfg.Host, Mode: clusters.ModeRead}
+	switch mode {
+	case kube.ModeInCluster:
+		spec.Auth = clusters.AuthInCluster
+		spec.Description = "The cluster the console runs in."
+	case kube.ModeKubeconfig:
+		spec.Auth = clusters.AuthKubeconfig
+		spec.Cred = clusters.CredInfo{Context: cfg.Context}
+	default:
+		spec.Auth = clusters.AuthNone
+	}
+	switch {
+	case len(restCfg.TLSClientConfig.CAData) > 0, restCfg.TLSClientConfig.CAFile != "":
+		spec.CA = clusters.CAPEM
+	case restCfg.TLSClientConfig.Insecure:
+		spec.CA = clusters.CASkip
+	default:
+		spec.CA = clusters.CASystem
+	}
+	return spec
 }
 
 func newLogger(cfg config.Config) *slog.Logger {

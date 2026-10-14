@@ -139,7 +139,7 @@ export class LiveStore {
   private reopenTimer: ReturnType<typeof setTimeout> | undefined
   private views: string[] = []
 
-  constructor(private url = '/api/v1/events') {}
+  constructor(readonly url = '/api/v1/events') {}
 
   subscribe = (fn: Listener): (() => void) => {
     this.listeners.add(fn)
@@ -303,9 +303,10 @@ export function useRefreshTick(): number {
   return useSyncExternalStore(store.subscribe, () => store.getState().tick, () => 0)
 }
 
-/** A store for the app's lifetime; tests pass their own. */
+/** A store per stream URL: a new one when another cluster is opened; tests pass their own. */
 export function useLiveStore(url?: string): LiveStore {
-  const [store] = useState(() => new LiveStore(url))
+  const [store, setStore] = useState(() => new LiveStore(url))
+  if (store.url !== (url ?? '/api/v1/events')) setStore(new LiveStore(url))
   useEffect(() => store.start(), [store])
   return store
 }

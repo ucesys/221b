@@ -80,6 +80,17 @@ and POSTed to {{ . }}.
 {{- end }}
 
 The refresh rate in its Settings applies to everyone and is kept in the ConfigMap {{ include "b221.fullname" . }}.
+{{- if eq .Values.connections.store "secrets" }}
+
+Other clusters are added from the cluster menu by an administrator. Each connection is kept as a Secret
+named {{ include "b221.fullname" . }}-cluster-<id> in this namespace, which the console may manage Secrets in:
+keep it in a namespace of its own. List them with
+
+  kubectl -n {{ .Release.Namespace }} get secrets -l app.kubernetes.io/component=cluster-connection
+{{- else }}
+
+Connections to other clusters are kept in memory (connections.store=memory) and lost on restart.
+{{- end }}
 {{- if .Values.secrets.read }}
 
 Secrets are read (secrets.read), so each namespace lists its Secrets by key name and size and the Helm tab

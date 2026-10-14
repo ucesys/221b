@@ -21,6 +21,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
@@ -64,10 +65,26 @@ type Auth interface {
 	Routes() []auth.Route
 }
 
+// Clusters resolves connections (P3-09) and manages them (P3-05 to
+// P3-08); *clusters.Manager implements it.
+type Clusters interface {
+	Lookup(id string) (*live.Store, clusters.Client, bool)
+	List() []clusters.Summary
+	Summary(id string) (clusters.Summary, bool)
+	Add(ctx context.Context, d clusters.Draft) (clusters.Summary, error)
+	Update(ctx context.Context, id string, d clusters.Draft) (clusters.Summary, error)
+	Remove(ctx context.Context, id string) error
+	TestDraft(ctx context.Context, id string, d clusters.Draft) (clusters.TestResult, error)
+	TestSaved(ctx context.Context, id string) (clusters.TestResult, error)
+}
+
 // Options configure the HTTP handler.
 type Options struct {
-	Store Store
-	Auth  Auth
+	// Store and Cluster are the local cluster's; Clusters, when set,
+	// resolves every connection, the local one included.
+	Store    Store
+	Clusters Clusters
+	Auth     Auth
 	// Audit records the settings changes; nil records nothing.
 	Audit *audit.Log
 	// Cluster serves the details of pods, services, releases, logs and YAML.
@@ -154,17 +171,28 @@ func New(o Options) *Server {
 			s.allowedHosts[h] = true
 		}
 	}
-	s.handle("GET /api/v1/snapshot", "snapshot", s.snapshot)
-	s.handle("GET /api/v1/nodes/{name}", "node", s.node)
-	s.handle("GET /api/v1/events", "events", s.events)
-	if o.Cluster != nil {
-		s.handle("GET /api/v1/pods/{namespace}/{name}", "pod", s.pod)
-		s.handle("GET /api/v1/pods/{namespace}/{name}/log", "pod-log", s.podLog)
-		s.handle("GET /api/v1/services/{namespace}/{name}", "service", s.service)
-		s.handle("GET /api/v1/helm/{namespace}/{name}", "release", s.release)
-		s.handle("GET /api/v1/objects/{kind}/{namespace}/{name}", "object", s.object)
-		s.handle("GET /api/v1/yaml/{kind}/{name}", "yaml", s.yaml)
-		s.handle("GET /api/v1/yaml/{kind}/{namespace}/{name}", "yaml", s.yaml)
+	// Every data path exists for the local cluster as /api/v1/<path> and
+	// for any connection as /api/v1/clusters/{cluster}/<path> (P3-09).
+	s.data("snapshot", "snapshot", s.snapshot)
+	s.data("nodes/{name}", "node", s.node)
+	s.data("events", "events", s.events)
+	if o.Cluster != nil || o.Clusters != nil {
+		s.data("pods/{namespace}/{name}", "pod", s.pod)
+		s.data("pods/{namespace}/{name}/log", "pod-log", s.podLog)
+		s.data("services/{namespace}/{name}", "service", s.service)
+		s.data("helm/{namespace}/{name}", "release", s.release)
+		s.data("objects/{kind}/{namespace}/{name}", "object", s.object)
+		s.data("yaml/{kind}/{name}", "yaml", s.yaml)
+		s.data("yaml/{kind}/{namespace}/{name}", "yaml", s.yaml)
+	}
+	if o.Clusters != nil {
+		s.handle("GET /api/v1/clusters", "clusters", s.listClusters)
+		s.handle("POST /api/v1/clusters", "cluster-add", s.addCluster)
+		s.handle("POST /api/v1/clusters/test", "cluster-test", s.testClusterDraft)
+		s.handle("GET /api/v1/clusters/{cluster}", "cluster", s.getCluster)
+		s.handle("PUT /api/v1/clusters/{cluster}", "cluster-update", s.updateCluster)
+		s.handle("DELETE /api/v1/clusters/{cluster}", "cluster-remove", s.removeCluster)
+		s.handle("POST /api/v1/clusters/{cluster}/test", "cluster-test", s.testCluster)
 	}
 	if o.Settings != nil {
 		s.handle("GET /api/v1/settings", "settings", s.getSettings)
@@ -185,6 +213,40 @@ func New(o Options) *Server {
 
 func (s *Server) handle(pattern, route string, h http.HandlerFunc) {
 	s.mux.Handle(pattern, s.observe(route, h))
+}
+
+// data registers a GET path for the local cluster and for any connection.
+func (s *Server) data(path, route string, h http.HandlerFunc) {
+	s.handle("GET /api/v1/"+path, route, h)
+	s.handle("GET /api/v1/clusters/{cluster}/"+path, route, h)
+}
+
+// lookup finds the store and cluster a request is for: the {cluster} path
+// value, or the local cluster without one. It answers 404 for an unknown
+// connection and 503 for one whose watches are not running.
+func (s *Server) lookup(w http.ResponseWriter, r *http.Request) (Store, Cluster, bool) {
+	id := r.PathValue("cluster")
+	if id == "" {
+		id = clusters.LocalID
+	}
+	if s.opts.Clusters == nil {
+		if id != clusters.LocalID || s.opts.Store == nil {
+			jsonError(w, http.StatusNotFound, "no cluster "+strconv.Quote(id))
+			return nil, nil, false
+		}
+		return s.opts.Store, s.opts.Cluster, true
+	}
+	st, client, ok := s.opts.Clusters.Lookup(id)
+	if !ok {
+		jsonError(w, http.StatusNotFound, "no cluster "+strconv.Quote(id))
+		return nil, nil, false
+	}
+	cl, _ := client.(Cluster)
+	if st == nil || cl == nil {
+		jsonError(w, http.StatusServiceUnavailable, "the connection to "+strconv.Quote(id)+" is not running; see its cluster page")
+		return nil, nil, false
+	}
+	return st, cl, true
 }
 
 // ServeHTTP adds security headers and recovers from panics.
@@ -326,16 +388,24 @@ func viewsOf(r *http.Request) ([]string, error) {
 }
 
 func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
+	st, _, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
 	names, err := viewsOf(r)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, r, s.opts.Store.Snapshot(names))
+	writeJSON(w, r, st.Snapshot(names))
 }
 
 func (s *Server) node(w http.ResponseWriter, r *http.Request) {
-	row, ok := s.opts.Store.Row(live.ViewNodes, r.PathValue("name"))
+	st, _, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	row, ok := st.Row(live.ViewNodes, r.PathValue("name"))
 	if !ok {
 		jsonError(w, http.StatusNotFound, "no node named "+strconv.Quote(r.PathValue("name")))
 		return
@@ -397,11 +467,15 @@ func (s *Server) record(r *http.Request, action, target, detail string) {
 		return
 	}
 	sess, _ := auth.SessionFrom(r.Context())
-	from := r.RemoteAddr
-	if h, _, err := net.SplitHostPort(from); err == nil {
-		from = h
+	s.opts.Audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, Target: target, Detail: detail, From: fromAddr(r)})
+}
+
+// fromAddr is the address a request came from, without the port.
+func fromAddr(r *http.Request) string {
+	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return h
 	}
-	s.opts.Audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, Target: target, Detail: detail, From: from})
+	return r.RemoteAddr
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
@@ -424,6 +498,10 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 // of a view, a "meta" event per change of the cluster details or settings
 // and a "refresh" event per refresh tick.
 func (s *Server) events(w http.ResponseWriter, r *http.Request) {
+	st, _, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
 	names, err := viewsOf(r)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
@@ -473,12 +551,12 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		return flush()
 	}
 
-	sub, snap, err := s.opts.Store.Subscribe(names)
+	sub, snap, err := st.Subscribe(names)
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	defer s.opts.Store.Unsubscribe(sub)
+	defer st.Unsubscribe(sub)
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.WriteString(out, "retry: 3000\n\n"); err != nil {
 		return
@@ -503,7 +581,7 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case <-sub.Wake():
 			events, resync := sub.Take()
 			if resync {
-				if err := write("snapshot", s.opts.Store.Snapshot(names)); err != nil {
+				if err := write("snapshot", st.Snapshot(names)); err != nil {
 					return
 				}
 				continue

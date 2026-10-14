@@ -14,6 +14,12 @@ export const MODE: Mode = process.env.E2E_MODE === 'kind' ? 'kind' : 'sim'
 export const inKind = MODE === 'kind'
 
 const SIM = process.env.E2E_SIM_URL ?? 'http://127.0.0.1:7443'
+// A second API server for the cluster connections (P3-05 to P3-09): a
+// second simulator, or the kind cluster itself through its in-cluster
+// address, which the console reaches as another connection.
+const OTHER_SIM = process.env.E2E_OTHER_SIM_URL ?? 'http://127.0.0.1:7444'
+/** An unsigned token shaped like a ServiceAccount's; the simulator checks it by value only. */
+export const OTHER_TOKEN = 'eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzeXN0ZW06c2VydmljZWFjY291bnQ6a3ViZS1zeXN0ZW06Y2x1c3Rlci1jb25zb2xlIiwiZXhwIjo0MTAyNDQ0ODAwfQ.c2ln'
 const NAMESPACE = process.env.E2E_NAMESPACE ?? '221b'
 const IMAGE = process.env.E2E_IMAGE ?? ''
 const CONTROL_PLANE = process.env.E2E_CONTROL_PLANE ?? 'kind-control-plane'
@@ -306,6 +312,41 @@ export const cluster = {
     }
     const r = (await this.helmList()).find((x) => x.name === name && x.namespace === namespace)!
     return Array.from({ length: r.revision }, (_, i) => ({ revision: i + 1, status: i + 1 === r.revision ? r.status : 'superseded', chart: r.chart }))
+  },
+
+  /**
+   * Another cluster to connect to (P3-09): its address, how its certificate
+   * is checked, a token that works there, and its node count. In kind it is
+   * the kind cluster itself, reached through its in-cluster address with a
+   * token of the console's own ServiceAccount.
+   */
+  async other(): Promise<{ server: string; ca: 'pem' | 'system'; caPem: string; token: string; nodes: number }> {
+    if (inKind) {
+      const token = (await kubectl('-n', NAMESPACE, 'create', 'token', 'console-221b', '--duration=2h')).trim()
+      const caPem = await kubectl('-n', NAMESPACE, 'get', 'configmap', 'kube-root-ca.crt', '-o', 'jsonpath={.data.ca\\.crt}')
+      const nodes = (await kubectl('get', 'nodes', '-o', 'name')).trim().split('\n').filter(Boolean).length
+      return { server: 'https://kubernetes.default.svc', ca: 'pem', caPem, token, nodes }
+    }
+    // The second simulator requires the token, as a real API server would.
+    const res = await fetch(`${OTHER_SIM}/sim/token`, { method: 'POST', body: JSON.stringify({ token: OTHER_TOKEN }) })
+    if (!res.ok) throw new Error(`the second simulator did not take a token: ${res.status}`)
+    const list = (await (await fetch(`${OTHER_SIM}/api/v1/nodes`, { headers: { Authorization: `Bearer ${OTHER_TOKEN}` } })).json()) as { items: unknown[] }
+    return { server: OTHER_SIM, ca: 'system', caPem: '', token: OTHER_TOKEN, nodes: list.items.length }
+  },
+
+  /** Whether the Secret a connection is kept in exists (P3-07, P3-08). */
+  async connectionSecret(id: string): Promise<boolean> {
+    const name = `console-221b-cluster-${id}`
+    if (inKind) {
+      try {
+        await kubectl('-n', NAMESPACE, 'get', 'secret', name, '-o', 'name')
+        return true
+      } catch {
+        return false
+      }
+    }
+    const res = await fetch(`${SIM}/api/v1/namespaces/221b/secrets/${name}`)
+    return res.ok
   },
 
   /** The server's log so far: the file the Makefile writes (sim) or the pod's (kind). */

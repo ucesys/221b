@@ -3,6 +3,7 @@ import { unauthorized } from '../api/auth'
 import { useRefreshTick } from '../api/live'
 import { download } from '../lib/xlsx'
 import { CopyIcon, DownloadIcon } from './Icons'
+import { apiPath } from '../lib/router'
 
 interface Props {
   /** The kind's registry name: "pods", "services", "nodes". */
@@ -15,7 +16,7 @@ interface Props {
 }
 
 export function yamlURL(kind: string, namespace: string | undefined, name: string): string {
-  return `/api/v1/yaml/${encodeURIComponent(kind)}/${namespace ? encodeURIComponent(namespace) + '/' : ''}${encodeURIComponent(name)}`
+  return apiPath(`yaml/${encodeURIComponent(kind)}/${namespace ? encodeURIComponent(namespace) + '/' : ''}${encodeURIComponent(name)}`)
 }
 
 type Seg = [string, string]

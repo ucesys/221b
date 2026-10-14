@@ -71,6 +71,12 @@ spec:
               value: {{ .Values.refresh | quote }}
             - name: SETTINGS_CONFIGMAP
               value: {{ printf "%s/%s" .Release.Namespace (include "b221.fullname" .) | quote }}
+            {{- if eq .Values.connections.store "secrets" }}
+            # The connections to other clusters, one Secret each, named
+            # after the release: <release>-cluster-<id>.
+            - name: CONNECTIONS_SECRETS
+              value: {{ printf "%s/%s" .Release.Namespace (include "b221.fullname" .) | quote }}
+            {{- end }}
             - name: KUBELET_STATS
               value: {{ .Values.kubeletStats | quote }}
             # Whether Secrets are read at all (key names and sizes, and

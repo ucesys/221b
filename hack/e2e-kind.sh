@@ -176,6 +176,47 @@ step "Browser tests"
 )
 endstep
 
+step "a cluster connection is kept in a Secret the chart does not own (P3-07, P3-09)"
+# The kind cluster itself, added a second time through its in-cluster
+# address with a token of the console's own ServiceAccount and the CA
+# every pod gets; the connection must survive the upgrade below.
+kubectl -n "$NS" port-forward "svc/$FULLNAME" 18080:8081 > "$WORK/port-forward.log" 2>&1 &
+pf=$!
+for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && break; sleep 1; done
+signin http://127.0.0.1:18080
+TOKEN=$(kubectl -n "$NS" create token "$FULLNAME" --duration=2h)
+python3 - "$TOKEN" "$(kubectl -n "$NS" get configmap kube-root-ca.crt -o jsonpath='{.data.ca\.crt}')" > "$WORK/draft.json" <<'PY'
+import json, sys
+print(json.dumps({"name": "kept", "env": "staging", "description": "kind, through its in-cluster address", "server": "https://kubernetes.default.svc", "ca": "pem", "caPem": sys.argv[2], "auth": "token", "token": sys.argv[1], "mode": "read"}))
+PY
+api -X POST -H 'Content-Type: application/json' -H 'Sec-Fetch-Site: same-origin' --data-binary "@$WORK/draft.json" http://127.0.0.1:18080/api/v1/clusters | tee "$WORK/kept.json" | grep -q '"id":"kept"'
+! grep -q "$TOKEN" "$WORK/kept.json"
+kubectl -n "$NS" get secret "$FULLNAME-cluster-kept" -o jsonpath='{.data}' | grep -q '"token"'
+echo "the connection's Secret holds the token; the API answered without it"
+for _ in $(seq 60); do
+  api http://127.0.0.1:18080/api/v1/clusters/kept | grep -q '"state":"connected"' && break
+  sleep 1
+done
+api http://127.0.0.1:18080/api/v1/clusters/kept | tee "$WORK/kept-state.json" | grep -q '"synced":true'
+api 'http://127.0.0.1:18080/api/v1/clusters/kept/snapshot?views=nodes' | grep -q "\"$CLUSTER-control-plane\""
+echo "the connection serves the cluster's nodes under its own route"
+# Its test passes every step with the CA and token given.
+api -X POST -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:18080/api/v1/clusters/kept/test | tee "$WORK/kept-test.json" | python3 -c '
+import json, sys
+r = json.load(sys.stdin)
+assert r["tone"] in ("ok", "warn"), r
+for s in r["steps"]:
+    assert s["tone"] in ("ok", "warn"), s
+assert isinstance(r["impersonate"], bool), r
+print("test:", r["summary"])'
+# The audit log names the administrator and the cluster, never the token.
+kubectl -n "$NS" logs "deploy/$FULLNAME" > "$WORK/audit-connections.log"
+grep -q "\"action\":\"cluster.add\".*\"email\":\"$E2E_USER\".*\"cluster\":\"kept\"" "$WORK/audit-connections.log" ||
+  grep -q "\"action\":\"cluster.add\"" "$WORK/audit-connections.log"
+! grep -q "$TOKEN" "$WORK/audit-connections.log"
+kill "$pf"
+endstep
+
 step "helm upgrade keeps the settings"
 # A setting saved before the upgrade must survive it: the chart owns the
 # ConfigMap but never its data.
@@ -198,13 +239,25 @@ curl -fsS http://127.0.0.1:18080/readyz
 [ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/v1/settings)" = 401 ]
 signin http://127.0.0.1:18080
 api http://127.0.0.1:18080/api/v1/settings | grep -q '"refreshSeconds":11'
+# The connection came back from its Secret, and connects again.
+for _ in $(seq 60); do
+  api http://127.0.0.1:18080/api/v1/clusters/kept | grep -q '"state":"connected"' && break
+  sleep 1
+done
+api http://127.0.0.1:18080/api/v1/clusters/kept | grep -q '"description":"kind, through its in-cluster address"'
+echo "the connection survived the upgrade"
+# Removing it deletes its Secret (P3-08).
+api -X DELETE -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:18080/api/v1/clusters/kept | grep -q '"removed":true'
+! kubectl -n "$NS" get secret "$FULLNAME-cluster-kept" > /dev/null 2>&1
+[ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/v1/clusters/kept)" = 404 ]
+echo "the connection and its Secret are gone"
 kill "$pf"
 endstep
 
-step "secrets.read=false grants nothing on Secrets, lists none and hides the Helm tab (P2-10)"
-helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reset-then-reuse-values --set secrets.read=false --wait --timeout 60s
+step "secrets.read=false grants nothing on Secrets, lists none and hides the Helm tab (P2-10); connections.store=memory grants nothing in its namespace either"
+helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reset-then-reuse-values --set secrets.read=false --set connections.store=memory --wait --timeout 60s
 kubectl -n "$NS" rollout status "deployment/$FULLNAME" --timeout=60s
-"$ROOT/hack/check-rbac.sh" --no-secrets "$SA"
+"$ROOT/hack/check-rbac.sh" --no-secrets --memory "$SA"
 # The pod of the previous revision answers while it terminates, so wait
 # until the new one is the only pod before forwarding to the Service.
 for _ in $(seq 60); do

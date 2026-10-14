@@ -5,7 +5,7 @@ import { Tone } from '../columns/cells'
 import { POD_COLUMNS, podLabel, podTerms } from '../columns/pods'
 import { fMem, fmtAge, fmtTs, nWord } from '../lib/format'
 import { kindNameOf, WORKLOAD_KINDS } from '../lib/kinds'
-import { href, navigate } from '../lib/router'
+import { apiPath, href, navigate } from '../lib/router'
 import { useTable } from '../lib/useTable'
 import { ColumnsMenu } from './ColumnsMenu'
 import { DataTable } from './DataTable'
@@ -49,7 +49,7 @@ function fBytes(n: number): string {
 export function ObjectPanel({ kind, namespace: ns, name, row, gone, cluster, now, linkTo, onClose, onToast }: Props) {
   const kindName = kindNameOf(kind)
   const [tab, setTab] = useState<DrawerTabId>('details')
-  const details = useDetails<ObjectDetails>(`/api/v1/objects/${encodeURIComponent(kindName)}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`)
+  const details = useDetails<ObjectDetails>(apiPath(`objects/${encodeURIComponent(kindName)}/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`))
   const d = details.data
   const deleted = gone || details.gone
   const head = d ?? row

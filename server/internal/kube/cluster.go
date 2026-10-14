@@ -127,6 +127,7 @@ type Options struct {
 // connection to it.
 type Cluster struct {
 	log            *slog.Logger
+	cfg            *rest.Config   // as given, for per-person clients (Phase 3)
 	rest           rest.Interface // the core API, for /version, metrics and the node proxy
 	cs             *kubernetes.Clientset
 	mc             metadata.Interface
@@ -190,6 +191,7 @@ func New(cfg *rest.Config, o Options) (*Cluster, error) {
 	}
 	cl := &Cluster{
 		log:            o.Logger,
+		cfg:            rest.CopyConfig(cfg),
 		rest:           cs.CoreV1().RESTClient(),
 		cs:             cs,
 		mc:             mc,
@@ -342,6 +344,9 @@ func (c *Cluster) OnChange(f func(Change)) {
 // fill in as they arrive, and a kind the ServiceAccount may not read shows
 // as a warning rather than stopping everything.
 var coreKinds = []string{"nodes", "pods", "namespaces"}
+
+// RestConfig returns a copy of the configuration the cluster was built with.
+func (c *Cluster) RestConfig() *rest.Config { return rest.CopyConfig(c.cfg) }
 
 // Run watches the cluster until ctx is done.
 func (c *Cluster) Run(ctx context.Context) {

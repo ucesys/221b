@@ -28,6 +28,7 @@ echo "--- without the kubelets' stats"
 render console --set clusterName=ci --set kubeletStats=false | tee "$WORK/chart-nostats.yaml" | validate
 echo "--- without reading Secrets"
 render console --set clusterName=ci --set secrets.read=false | tee "$WORK/chart-nosecrets.yaml" | validate
+render console --set clusterName=ci --set connections.store=memory | tee "$WORK/chart-memory.yaml" | validate
 echo "--- allowed ingress peers, API server addresses, extra host names and a private registry"
 render console --set clusterName=ci --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.team=platform' \
   --set 'networkPolicy.apiServerCIDRs[0]=10.0.0.10/32' --set 'allowedHosts[0]=console.example.com' \
@@ -140,13 +141,22 @@ read_only_verbs() { ! cluster_role | grep -E 'verbs:' | grep -q -E 'create|updat
 log_verbs() { cluster_role | grep -A1 '"pods/log"' | grep -q 'verbs: \["get"\]'; }
 secrets_optional() {
   cluster_role | grep -A1 '"secrets"' | grep -q 'verbs: \["get", "list", "watch"\]' && grep -A1 'name: SECRETS_READ' "$out" | grep -q '"true"' &&
-    [ "$(granted "$WORK/chart-nosecrets.yaml")" = "${WANT_READ/ secrets/}" ] && ! grep -q '"secrets"' "$WORK/chart-nosecrets.yaml" &&
+    [ "$(granted "$WORK/chart-nosecrets.yaml")" = "${WANT_READ/ secrets/}" ] && ! cluster_role "$WORK/chart-nosecrets.yaml" | grep -q '"secrets"' &&
     grep -A1 'name: SECRETS_READ' "$WORK/chart-nosecrets.yaml" | grep -q '"false"'
 }
 settings_only() {
   settings_role | grep -q 'resources: \["configmaps"\]' && settings_role | grep -q 'resourceNames: \["console-221b"\]' &&
-    [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","patch"] ' ] &&
-    ! grep -E 'verbs:' "$out" | grep -q -E 'create|update|delete|\*'
+    [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","patch"] verbs:["get","list","create","update","delete"] ' ] &&
+    [ "$(grep -E 'verbs:' "$out" | grep -c -E 'create|update|delete|\*')" = 1 ]
+}
+# The connections to other clusters: Secrets in the release namespace, by
+# default; in memory on request, and then nothing is granted on Secrets.
+connections_store() {
+  settings_role | grep -A1 'resources: \["secrets"\]' | grep -q 'verbs: \["get", "list", "create", "update", "delete"\]' &&
+    grep -A1 'name: CONNECTIONS_SECRETS' "$out" | grep -q '"consoles/console-221b"' &&
+    ! sed -n '/^kind: Role$/,/^---/p' "$WORK/chart-memory.yaml" | grep -q 'secrets' &&
+    ! grep -q 'CONNECTIONS_SECRETS' "$WORK/chart-memory.yaml" &&
+    ! render console --set clusterName=ci --set connections.store=disk > /dev/null 2>&1
 }
 no_kubelet_stats() {
   grep -q 'nodes/proxy' "$out" && ! grep -q 'nodes/proxy' "$WORK/chart-nostats.yaml" &&
@@ -198,7 +208,8 @@ check "reads the kinds the tabs show, pod logs, metrics and the kubelets' stats,
 check "the ClusterRole's verbs are read-only" read_only_verbs
 check "pod logs are only read" log_verbs
 check "secrets.read=false grants nothing on Secrets and tells the server" secrets_optional
-check "it writes only its own settings ConfigMap" settings_only
+check "it writes only its own settings ConfigMap and the connection Secrets in its namespace" settings_only
+check "connections are kept in Secrets in the release namespace, or in memory on request" connections_store
 check "kubeletStats=false grants nothing on the kubelets" no_kubelet_stats
 check "the settings ConfigMap is created empty and named to the server" settings_configmap
 check "a release named after the chart still gets a valid Service name" service_name

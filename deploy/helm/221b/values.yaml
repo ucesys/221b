@@ -124,6 +124,14 @@ ingress:
     # certificate the Ingress controller or cert-manager provides.
     secretName: ""
 
+# Other clusters (P3-04 to P3-09). An administrator adds them in the
+# console; each connection is kept as a Secret in the release namespace,
+# named <release>-cluster-<id>, and the console's Role may manage Secrets
+# there (and only there). store: memory keeps them in memory instead,
+# losing them on restart, and grants nothing on Secrets.
+connections:
+  store: secrets
+
 secrets:
   # Read Secrets. The Namespaces tab then lists each Secret with its key
   # names and sizes, and the Helm tab reads release records, which Helm
