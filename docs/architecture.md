@@ -141,7 +141,7 @@ The image is published to `ghcr.io/ucesys/221b` for `linux/amd64` and `linux/arm
 
 ## Scale
 
-Phase 1's target is 500 nodes and 15,000 pods (P1-18). CI measures it on every pull request with kwok in kind, on a 2-core runner that is also running the cluster: the first screen of nodes shows in under 200 ms, a sort takes 50 to 150 ms (median), and the server uses about 360 MiB with every Phase 2 kind watched (450 MiB with the Pods tab open). The job fails if the first screen takes 2 seconds, a sort 200 ms, or the server 1 GiB. Against the simulator with the same numbers, the Pods tab shows its first rows 1.1 seconds after opening, a sort of 15,000 pods takes about 65 ms, a search narrows them in about 200 ms, and the page holds about 35 MB of JavaScript heap, because only the rows in view are rendered.
+Phase 1's target is 500 nodes and 15,000 pods (P1-18). CI measures it on every pull request with kwok in kind, on a 2-core runner that is also running the cluster: the first screen of nodes shows in about 130 ms, a sort takes about 30 ms (median), and the server uses about 300 MiB with every Phase 2 kind watched (against the simulator, whose pods carry more, about 360 MiB, and 450 MiB with the Pods tab open). The job fails if the first screen takes 2 seconds, a sort 200 ms, or the server 1 GiB. Against the simulator with the same numbers, the Pods tab shows its first rows 1.1 seconds after opening, a sort of 15,000 pods takes about 65 ms, a search narrows them in about 200 ms, and the page holds about 35 MB of JavaScript heap, because only the rows in view are rendered.
 
 Phase 7's 5,000 nodes and 150,000 pods will need the second change the design allows for: sending each browser only the rows its screen shows, instead of every row of a view.
 

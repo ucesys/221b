@@ -108,7 +108,7 @@ helm upgrade console deploy/helm/221b -n 221b --reset-then-reuse-values --set se
 
 ## 5. Scale and footprint
 
-**CI proves** with kwok in kind, on every pull request: 500 nodes and 15,000 pods, the first screen of nodes within 2 seconds, sorting within 200 ms and server memory under 1 GiB with every Phase 2 kind watched. The job's summary reports the measured numbers (about 170 ms, 60 ms and 360 MiB on the CI runner). Against the simulator with the same numbers, the Pods tab shows its first rows about a second after opening, sorts 15,000 pods in about 65 ms and narrows them by search in about 200 ms; the server holds about 450 MiB while the Pods tab is open.
+**CI proves** with kwok in kind, on every pull request: 500 nodes and 15,000 pods, the first screen of nodes within 2 seconds, sorting within 200 ms and server memory under 1 GiB with every Phase 2 kind watched. The job's summary reports the measured numbers (about 130 ms, 30 ms and 300 MiB on the CI runner). Against the simulator with the same numbers, the Pods tab shows its first rows about a second after opening, sorts 15,000 pods in about 65 ms and narrows them by search in about 200 ms; the server holds about 450 MiB while the Pods tab is open.
 
 ## Still open
 
