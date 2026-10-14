@@ -1,6 +1,7 @@
 // Live updates and recovery, as P1-10, P1-11, P1-12 and P1-16 describe
 // them. These tests change the cluster, and put it back.
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, test } from './test'
 import { allNodesReady, cluster, consoleNode, healthyWorkers, inKind, podCrashing, snapshot } from './cluster'
 
 async function open(page: Page) {

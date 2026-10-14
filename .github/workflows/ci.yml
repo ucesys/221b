@@ -118,7 +118,9 @@ jobs:
       - name: Report
         if: failure()
         run: |
-          hack/annotate.sh "Browser tests" "$RUNNER_TEMP/ci.log" 5000
+          hack/failures.sh "$RUNNER_TEMP/ci.log" > "$RUNNER_TEMP/failures.log" || true
+          hack/annotate.sh "Browser test failures" "$RUNNER_TEMP/failures.log" 14000
+          hack/annotate.sh "Browser tests" "$RUNNER_TEMP/ci.log" 4000
           hack/annotate.sh "Server log" bin/e2e-server.log 2000
 
   chart:
@@ -227,7 +229,9 @@ jobs:
       - name: Report
         if: failure()
         run: |
-          hack/annotate.sh "Browser tests on ${{ matrix.k8s }}" bin/e2e/playwright.log 5000
+          hack/failures.sh bin/e2e/playwright.log > "$RUNNER_TEMP/failures.log" || true
+          hack/annotate.sh "Browser test failures on ${{ matrix.k8s }}" "$RUNNER_TEMP/failures.log" 14000
+          hack/annotate.sh "Browser tests on ${{ matrix.k8s }}" bin/e2e/playwright.log 4000
           hack/annotate.sh "Cluster on ${{ matrix.k8s }}" bin/e2e/diagnostics.log 3000
           hack/annotate.sh "e2e on ${{ matrix.k8s }}" "$RUNNER_TEMP/ci.log" 4000
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

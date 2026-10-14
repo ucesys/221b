@@ -13,22 +13,25 @@ func StripNode(obj any) (any, error) {
 		return obj, nil
 	}
 	n.ManagedFields = nil
-	n.Annotations = nil
+	n.Annotations = trimAnnotations(n.Annotations)
 	n.Status.Images = nil
 	n.Status.VolumesAttached = nil
 	n.Status.VolumesInUse = nil
 	return n, nil
 }
 
-// StripPod keeps only what the Nodes tab needs from a pod: where it runs,
-// what it requests and whether it is healthy. With 15,000 pods this keeps
-// the cache to a few megabytes. It returns a new object and is idempotent.
+// StripPod keeps what the Nodes and Pods tabs and the pod details show:
+// where the pod runs, what it requests, its containers with their
+// commands, environment and mounts, its volumes, scheduling and status.
+// It drops managed fields, the last-applied annotation, lifecycle hooks and
+// other fields no screen reads. It returns a new object and is idempotent.
 func StripPod(obj any) (any, error) {
 	p, ok := obj.(*corev1.Pod)
 	if !ok {
 		return obj, nil
 	}
 	out := &corev1.Pod{
+		TypeMeta: metav1.TypeMeta{Kind: "Pod", APIVersion: "v1"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              p.Name,
 			Namespace:         p.Namespace,
@@ -36,22 +39,44 @@ func StripPod(obj any) (any, error) {
 			ResourceVersion:   p.ResourceVersion,
 			CreationTimestamp: p.CreationTimestamp,
 			DeletionTimestamp: p.DeletionTimestamp,
+			Labels:            p.Labels,
+			Annotations:       trimAnnotations(p.Annotations),
+			OwnerReferences:   p.OwnerReferences,
 		},
 		Spec: corev1.PodSpec{
-			NodeName:       p.Spec.NodeName,
-			RestartPolicy:  p.Spec.RestartPolicy,
-			Overhead:       p.Spec.Overhead,
-			Resources:      p.Spec.Resources,
-			Containers:     stripContainers(p.Spec.Containers),
-			InitContainers: stripContainers(p.Spec.InitContainers),
+			NodeName:                      p.Spec.NodeName,
+			RestartPolicy:                 p.Spec.RestartPolicy,
+			Overhead:                      p.Spec.Overhead,
+			Resources:                     p.Spec.Resources,
+			Containers:                    stripContainers(p.Spec.Containers),
+			InitContainers:                stripContainers(p.Spec.InitContainers),
+			Volumes:                       p.Spec.Volumes,
+			ServiceAccountName:            p.Spec.ServiceAccountName,
+			NodeSelector:                  p.Spec.NodeSelector,
+			Tolerations:                   p.Spec.Tolerations,
+			Affinity:                      p.Spec.Affinity,
+			PriorityClassName:             p.Spec.PriorityClassName,
+			Priority:                      p.Spec.Priority,
+			HostNetwork:                   p.Spec.HostNetwork,
+			HostPID:                       p.Spec.HostPID,
+			SecurityContext:               p.Spec.SecurityContext,
+			TerminationGracePeriodSeconds: p.Spec.TerminationGracePeriodSeconds,
+			SchedulerName:                 p.Spec.SchedulerName,
+			RuntimeClassName:              p.Spec.RuntimeClassName,
 		},
 		Status: corev1.PodStatus{
 			Phase:                 p.Status.Phase,
 			Reason:                p.Status.Reason,
+			Message:               p.Status.Message,
 			StartTime:             p.Status.StartTime,
 			Conditions:            p.Status.Conditions,
 			ContainerStatuses:     stripStatuses(p.Status.ContainerStatuses),
 			InitContainerStatuses: stripStatuses(p.Status.InitContainerStatuses),
+			PodIP:                 p.Status.PodIP,
+			PodIPs:                p.Status.PodIPs,
+			HostIP:                p.Status.HostIP,
+			QOSClass:              p.Status.QOSClass,
+			NominatedNodeName:     p.Status.NominatedNodeName,
 		},
 	}
 	return out, nil
@@ -63,7 +88,24 @@ func stripContainers(in []corev1.Container) []corev1.Container {
 	}
 	out := make([]corev1.Container, len(in))
 	for i, c := range in {
-		out[i] = corev1.Container{Name: c.Name, Resources: c.Resources, RestartPolicy: c.RestartPolicy}
+		out[i] = corev1.Container{
+			Name:            c.Name,
+			Image:           c.Image,
+			Command:         c.Command,
+			Args:            c.Args,
+			WorkingDir:      c.WorkingDir,
+			Ports:           c.Ports,
+			Env:             c.Env,
+			EnvFrom:         c.EnvFrom,
+			Resources:       c.Resources,
+			RestartPolicy:   c.RestartPolicy,
+			VolumeMounts:    c.VolumeMounts,
+			ImagePullPolicy: c.ImagePullPolicy,
+			SecurityContext: c.SecurityContext,
+			LivenessProbe:   c.LivenessProbe,
+			ReadinessProbe:  c.ReadinessProbe,
+			StartupProbe:    c.StartupProbe,
+		}
 	}
 	return out
 }
@@ -77,9 +119,13 @@ func stripStatuses(in []corev1.ContainerStatus) []corev1.ContainerStatus {
 		out[i] = corev1.ContainerStatus{
 			Name:                 s.Name,
 			Ready:                s.Ready,
+			Started:              s.Started,
 			RestartCount:         s.RestartCount,
 			State:                s.State,
 			LastTerminationState: s.LastTerminationState,
+			Image:                s.Image,
+			ImageID:              s.ImageID,
+			ContainerID:          s.ContainerID,
 			// In-place resizes: what the kubelet allocated and applied.
 			AllocatedResources: s.AllocatedResources,
 			Resources:          s.Resources,

@@ -5,7 +5,7 @@
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { APIRequestContext } from '@playwright/test'
-import type { NodeRow, Snapshot } from '../src/api/types'
+import type { NodeRow, PodRow, ReleaseRow, ServiceRow, Snapshot } from '../src/api/types'
 
 const run = promisify(execFile)
 
@@ -19,16 +19,38 @@ const IMAGE = process.env.E2E_IMAGE ?? ''
 const CONTROL_PLANE = process.env.E2E_CONTROL_PLANE ?? 'kind-control-plane'
 const METRICS_MANIFEST = process.env.E2E_METRICS_MANIFEST ?? ''
 
-export async function snapshot(request: APIRequestContext): Promise<Snapshot> {
-  const res = await request.get('/api/v1/snapshot')
+export async function snapshot(request: APIRequestContext, views: string[] = ['nodes']): Promise<Snapshot> {
+  const res = await request.get(`/api/v1/snapshot?views=${encodeURIComponent(views.join(','))}`)
   if (!res.ok()) throw new Error(`snapshot: ${res.status()}`)
   return (await res.json()) as Snapshot
 }
 
+export function nodeRows(snap: Snapshot): NodeRow[] {
+  return (snap.views.nodes?.rows ?? []) as NodeRow[]
+}
+
+export function podRows(snap: Snapshot): PodRow[] {
+  return (snap.views.pods?.rows ?? []) as PodRow[]
+}
+
+export function serviceRows(snap: Snapshot): ServiceRow[] {
+  return (snap.views.services?.rows ?? []) as ServiceRow[]
+}
+
+export function releaseRows(snap: Snapshot): ReleaseRow[] {
+  return (snap.views.helm?.rows ?? []) as ReleaseRow[]
+}
+
 /** Workers with no problems, which the tests may change. */
 export function healthyWorkers(snap: Snapshot): NodeRow[] {
-  return snap.rows.filter((r) => r.role === 'worker' && r.status === 'Ready' && r.problems.length === 0)
+  return nodeRows(snap).filter((r) => r.role === 'worker' && r.status === 'Ready' && r.problems.length === 0)
 }
+
+/** The Secret value planted for P2-07, which must never appear anywhere. */
+export const PLANTED = 'PLANTED-SECRET-VALUE-9f8e7d6c5b4a'
+
+/** The simulator's Helm value that looks like a credential. */
+export const PLANTED_HELM = 'PLANTED-HELM-PASSWORD-1a2b3c4d'
 
 export async function kubectl(...args: string[]): Promise<string> {
   const { stdout } = await run('kubectl', args, { timeout: 60_000, maxBuffer: 64 << 20 })
@@ -65,13 +87,56 @@ async function docker(...args: string[]): Promise<string> {
   return stdout
 }
 
-async function simPost(path: string): Promise<void> {
-  const res = await fetch(SIM + path, { method: 'POST' })
+async function simPost(path: string, method = 'POST'): Promise<void> {
+  const res = await fetch(SIM + path, { method })
   if (!res.ok) throw new Error(`${path}: ${res.status} ${await res.text()}`)
+}
+
+/** Objects of a kind in a namespace, as the cluster itself counts them. */
+export async function countKind(namespace: string, kind: string): Promise<number> {
+  if (inKind) {
+    const out = await kubectl('-n', namespace, 'get', kind, '-o', 'name', '--ignore-not-found')
+    return out.trim() ? out.trim().split('\n').length : 0
+  }
+  const paths: Record<string, string> = { pods: '/api/v1', services: '/api/v1', configmaps: '/api/v1', secrets: '/api/v1', deployments: '/apis/apps/v1', replicasets: '/apis/apps/v1' }
+  const res = await fetch(`${SIM}${paths[kind] ?? '/api/v1'}/namespaces/${namespace}/${kind}`)
+  const list = (await res.json()) as { items: unknown[] }
+  return list.items.length
 }
 
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+/** `kubectl get -o yaml` of one object (kind only). */
+export async function kubectlYAML(kind: string, name: string, namespace?: string): Promise<string> {
+  return kubectl(...(namespace ? ['-n', namespace] : []), 'get', kind, name, '-o', 'yaml')
+}
+
+/**
+ * YAML without what differs between two reads or by design: managed fields,
+ * the resource version and the status, which changes under heartbeats.
+ * What remains (apiVersion, kind, metadata, spec, data) must match exactly
+ * between the console's YAML view and kubectl (P2-08).
+ */
+export function stableYAML(text: string): string {
+  const out: string[] = []
+  let skip: number | null = null
+  for (const line of text.split('\n')) {
+    const indent = line.length - line.trimStart().length
+    const body = line.trim()
+    if (skip !== null) {
+      if (body === '' || indent > skip || (indent === skip && body.startsWith('- '))) continue
+      skip = null
+    }
+    if (body.startsWith('managedFields:') || body === 'status:') {
+      skip = indent
+      continue
+    }
+    if (body.startsWith('resourceVersion:')) continue
+    out.push(line)
+  }
+  return out.join('\n').trim()
 }
 
 /** Waits until every node is Ready again (kind only). */
@@ -184,5 +249,69 @@ export const cluster = {
     if (!inKind) return simPost(`/sim/metrics?on=${on}`)
     if (on) await kubectlRetry('apply', '-f', METRICS_MANIFEST)
     else await kubectl('delete', 'apiservice', 'v1beta1.metrics.k8s.io')
+  },
+
+  /** Deletes a pod for good (not through a controller that would replace it). */
+  async deletePod(pod: string): Promise<void> {
+    const [ns, name] = pod.split('/') as [string, string]
+    if (inKind) await kubectlRetry('-n', ns, 'delete', 'pod', name, '--wait=false')
+    else await simPost(`/sim/pods/${ns}/${name}`, 'DELETE')
+  },
+
+  /**
+   * A Secret holding the planted value, and the namespace it is in: the
+   * simulator has one from the start; kind gets one made here.
+   */
+  async plantedSecret(): Promise<{ namespace: string; name: string; cleanup: () => Promise<void> }> {
+    if (!inKind) return { namespace: 'default', name: 'planted-secret', cleanup: async () => {} }
+    const name = `e2e-planted-${Date.now().toString(36)}`
+    await kubectlApply({ apiVersion: 'v1', kind: 'Secret', metadata: { name, namespace: NAMESPACE, labels: { e2e: 'planted' } }, type: 'Opaque', stringData: { token: PLANTED, 'database-url': `postgres://app:${PLANTED}@db:5432/app` } })
+    return { namespace: NAMESPACE, name, cleanup: async () => void (await kubectlRetry('-n', NAMESPACE, 'delete', 'secret', name, '--ignore-not-found')) }
+  },
+
+  /** A LoadBalancer Service no controller will ever give an address (P2-05). */
+  async pendingLoadBalancer(): Promise<{ namespace: string; name: string; cleanup: () => Promise<void> }> {
+    if (!inKind) return { namespace: 'web', name: 'gateway-lb', cleanup: async () => {} }
+    const name = `e2e-lb-${Date.now().toString(36)}`
+    await kubectlApply({ apiVersion: 'v1', kind: 'Service', metadata: { name, namespace: NAMESPACE, labels: { e2e: 'lb' } }, spec: { type: 'LoadBalancer', selector: { 'app.kubernetes.io/name': '221b' }, ports: [{ name: 'http', port: 80, targetPort: 8081 }] } })
+    return { namespace: NAMESPACE, name, cleanup: async () => void (await kubectlRetry('-n', NAMESPACE, 'delete', 'service', name, '--ignore-not-found')) }
+  },
+
+  /** What `helm list -A` says (kind), or what the simulator planted. */
+  async helmList(): Promise<{ name: string; namespace: string; revision: number; status: string; chart: string; app_version: string }[]> {
+    if (inKind) {
+      const out = await run('helm', ['list', '-A', '-o', 'json'], { timeout: 60_000 })
+      return (JSON.parse(out.stdout) as { name: string; namespace: string; revision: string; status: string; chart: string; app_version: string }[]).map((r) => ({ ...r, revision: Number(r.revision) }))
+    }
+    return [
+      { name: 'analytics-cache', namespace: 'analytics', revision: 1, status: 'deployed', chart: 'redis-19.6.4', app_version: '7.4.0' },
+      { name: 'metrics-server', namespace: 'kube-system', revision: 1, status: 'deployed', chart: 'metrics-server-3.12.2', app_version: '0.7.2' },
+      { name: 'node-agent', namespace: 'kube-system', revision: 2, status: 'deployed', chart: 'node-agent-0.9.2', app_version: '0.9.2' },
+      { name: 'shop', namespace: 'web', revision: 3, status: 'deployed', chart: 'shop-frontend-3.2.1', app_version: '3.2.1' },
+    ]
+  },
+
+  /** What `helm history` says for a release (kind), or what the simulator planted. */
+  async helmHistory(namespace: string, name: string): Promise<{ revision: number; status: string; chart: string }[]> {
+    if (inKind) {
+      const out = await run('helm', ['history', name, '-n', namespace, '-o', 'json'], { timeout: 60_000 })
+      return (JSON.parse(out.stdout) as { revision: number; status: string; chart: string }[]).map((r) => ({ revision: r.revision, status: r.status, chart: r.chart }))
+    }
+    if (name === 'shop') {
+      return [
+        { revision: 1, status: 'superseded', chart: 'shop-frontend-3.1.9' },
+        { revision: 2, status: 'failed', chart: 'shop-frontend-3.2.0' },
+        { revision: 3, status: 'deployed', chart: 'shop-frontend-3.2.1' },
+      ]
+    }
+    const r = (await this.helmList()).find((x) => x.name === name && x.namespace === namespace)!
+    return Array.from({ length: r.revision }, (_, i) => ({ revision: i + 1, status: i + 1 === r.revision ? r.status : 'superseded', chart: r.chart }))
+  },
+
+  /** The server's log so far: the file the Makefile writes (sim) or the pod's (kind). */
+  async serverLog(): Promise<string> {
+    if (inKind) return kubectl('-n', NAMESPACE, 'logs', '-l', 'app.kubernetes.io/name=221b', '--tail=-1', '--all-containers')
+    const { readFile } = await import('node:fs/promises')
+    return readFile(process.env.E2E_SERVER_LOG ?? '../bin/e2e-server.log', 'utf8').catch(() => '')
   },
 }

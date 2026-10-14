@@ -25,8 +25,12 @@ func TestStrippedPodsGiveTheSameRow(t *testing.T) {
 	always := corev1.ContainerRestartPolicyAlways
 	pod := func(name string, policy corev1.RestartPolicy, containers []corev1.Container, statuses []corev1.ContainerStatus) *corev1.Pod {
 		return &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "apps", CreationTimestamp: started, Annotations: map[string]string{"a": "b"}},
-			Spec:       corev1.PodSpec{NodeName: "n1", RestartPolicy: policy, Containers: containers},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: "apps", CreationTimestamp: started,
+				Annotations:   map[string]string{"a": "b", "kubectl.kubernetes.io/last-applied-configuration": "{...}"},
+				ManagedFields: []metav1.ManagedFieldsEntry{{Manager: "kubectl"}},
+			},
+			Spec: corev1.PodSpec{NodeName: "n1", RestartPolicy: policy, Containers: containers},
 			Status: corev1.PodStatus{
 				Phase: corev1.PodRunning, StartTime: &started, ContainerStatuses: statuses,
 				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionFalse, LastTransitionTime: metav1.NewTime(now.Add(-10 * time.Second))}},
@@ -39,7 +43,7 @@ func TestStrippedPodsGiveTheSameRow(t *testing.T) {
 		[]corev1.Container{{Name: "main", Image: "job:1", Resources: res("100m", "64Mi")}, {Name: "proxy", Image: "proxy:1", Resources: res("50m", "32Mi")}},
 		[]corev1.ContainerStatus{{Name: "main", State: exited}, {Name: "proxy", Ready: true, State: running}})
 	crash := pod("crash", corev1.RestartPolicyAlways,
-		[]corev1.Container{{Name: "app", Image: "app:1", Env: []corev1.EnvVar{{Name: "TOKEN", Value: "literal"}}, Resources: res("200m", "128Mi")}},
+		[]corev1.Container{{Name: "app", Image: "app:1", Env: []corev1.EnvVar{{Name: "TOKEN", Value: "literal"}}, Resources: res("200m", "128Mi"), Lifecycle: &corev1.Lifecycle{PreStop: &corev1.LifecycleHandler{Exec: &corev1.ExecAction{Command: []string{"sleep", "5"}}}}}},
 		[]corev1.ContainerStatus{{Name: "app", RestartCount: 4, State: exited}})
 	// Being resized in place: 500m asked for, 1 core still allocated.
 	resized := pod("resized", corev1.RestartPolicyAlways,
@@ -80,8 +84,12 @@ func TestStrippedPodsGiveTheSameRow(t *testing.T) {
 		t.Fatalf("CPU requested %d", got.CPU.Requested)
 	}
 	for _, p := range stripped {
-		if len(p.Annotations) > 0 || p.Spec.Containers[0].Image != "" || p.Spec.Containers[0].Env != nil {
+		if p.ManagedFields != nil || p.Annotations["kubectl.kubernetes.io/last-applied-configuration"] != "" || p.Spec.Containers[0].Lifecycle != nil {
 			t.Fatalf("pod %s kept fields the console never shows", p.Name)
+		}
+		// The pod details show these (P2-04), so they stay.
+		if p.Annotations["a"] != "b" || p.Spec.Containers[0].Image == "" {
+			t.Fatalf("pod %s lost fields the pod details show", p.Name)
 		}
 	}
 }

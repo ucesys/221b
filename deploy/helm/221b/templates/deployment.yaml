@@ -64,6 +64,10 @@ spec:
               value: {{ printf "%s/%s" .Release.Namespace (include "b221.fullname" .) | quote }}
             - name: KUBELET_STATS
               value: {{ .Values.kubeletStats | quote }}
+            # Whether Secrets are read at all (key names and sizes, and
+            # Helm release records; never values). Off hides the Helm tab.
+            - name: SECRETS_READ
+              value: {{ .Values.secrets.read | quote }}
             - name: HEALTH_INTERVAL
               value: {{ .Values.healthInterval | quote }}
             - name: LOG_LEVEL

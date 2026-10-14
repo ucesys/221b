@@ -1,10 +1,15 @@
 // The Nodes tab, as P1-13 to P1-17 describe it.
 import { readFileSync } from 'node:fs'
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, test } from './test'
+import { NODE_COLUMNS, nodeTerms } from '../src/columns/nodes'
 import { compareNatural, fCores, fMem, pct } from '../src/lib/format'
-import { DEFAULT_HIDDEN, exportJSON, exportSheet, filterRows, free, visibleColumns, type ColumnId } from '../src/lib/nodes'
-import { inKind, kubectl, snapshot } from './cluster'
+import { free } from '../src/lib/nodes'
+import { defaultHidden, exportTable, matchesQuery, queryWords, visibleColumns } from '../src/lib/table'
+import { inKind, kubectl, kubectlYAML, nodeRows, snapshot, stableYAML } from './cluster'
 import { readSheet } from './xlsx'
+
+const DEFAULT_HIDDEN = defaultHidden(NODE_COLUMNS)
 
 const shownNames = (page: Page) => page.locator('[data-node]').evaluateAll((els) => els.map((e) => e.getAttribute('data-node') ?? ''))
 
@@ -19,19 +24,20 @@ test.beforeEach(async ({ page }) => {
 
 test('shows the cluster and every node', async ({ page, request }) => {
   const snap = await snapshot(request)
+  const rows = nodeRows(snap)
   await expect(page.getByTestId('cluster')).toContainText(snap.cluster!.name)
   await expect(page.getByTestId('cluster-version')).toHaveText(snap.cluster!.version)
   if (inKind) {
     const v = JSON.parse(await kubectl('version', '-o', 'json')) as { serverVersion: { gitVersion: string } }
     expect(snap.cluster!.version).toBe(v.serverVersion.gitVersion)
   }
-  await expect(page.locator('[data-node]')).toHaveCount(snap.rows.length)
-  const cp = snap.rows.filter((r) => r.role === 'control-plane').length
-  await expect(page.getByRole('button', { name: /^Nodes/ })).toContainText(String(snap.rows.length))
+  await expect(page.locator('[data-node]')).toHaveCount(rows.length)
+  const cp = rows.filter((r) => r.role === 'control-plane').length
+  await expect(page.getByRole('link', { name: /^Nodes/ })).toContainText(String(rows.length))
   const roles = page.getByRole('group', { name: 'Show nodes by role' })
-  await expect(roles.getByRole('button', { name: /^All/ })).toContainText(String(snap.rows.length))
+  await expect(roles.getByRole('button', { name: /^All/ })).toContainText(String(rows.length))
   await expect(roles.getByRole('button', { name: /Control plane/ })).toContainText(String(cp))
-  await expect(roles.getByRole('button', { name: /Workers/ })).toContainText(String(snap.rows.length - cp))
+  await expect(roles.getByRole('button', { name: /Workers/ })).toContainText(String(rows.length - cp))
   // No summary line and no capacity cards: the home page will have them.
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(0)
   await expect(page.getByTestId('shown')).toHaveText('')
@@ -39,7 +45,7 @@ test('shows the cluster and every node', async ({ page, request }) => {
 
 test('shows the role, allocatable and free resources of every node', async ({ page, request }) => {
   const snap = await snapshot(request)
-  for (const r of snap.rows.slice(0, 3)) {
+  for (const r of nodeRows(snap).slice(0, 3)) {
     const cells = page.locator(`[data-node="${r.name}"] > span`)
     await expect(cells.nth(1)).toHaveText(r.role === 'control-plane' ? 'cp' : 'worker')
     await expect(cells.nth(4)).toContainText(fCores(r.cpu.requested))
@@ -55,15 +61,15 @@ test('shows the role, allocatable and free resources of every node', async ({ pa
 })
 
 test('sorts by any column', async ({ page, request }) => {
-  const snap = await snapshot(request)
-  const byName = new Map(snap.rows.map((r) => [r.name, r]))
+  const rows = nodeRows(await snapshot(request))
+  const byName = new Map(rows.map((r) => [r.name, r]))
 
   const name = page.locator('.rk-gh [data-col="name"]')
   await expect(name).toHaveAttribute('aria-label', /sorted ascending/)
-  expect(await shownNames(page)).toEqual(snap.rows.map((r) => r.name).sort(compareNatural))
+  expect(await shownNames(page)).toEqual(rows.map((r) => r.name).sort(compareNatural))
   await name.click()
   await expect(name).toHaveAttribute('aria-label', /sorted descending/)
-  expect(await shownNames(page)).toEqual(snap.rows.map((r) => r.name).sort(compareNatural).reverse())
+  expect(await shownNames(page)).toEqual(rows.map((r) => r.name).sort(compareNatural).reverse())
 
   await page.locator('.rk-gh [data-col="cpu"]').click()
   await expect(page.locator('.rk-gh [data-col="cpu"]')).toHaveAttribute('aria-label', /sorted descending/)
@@ -81,28 +87,65 @@ test('sorts by any column', async ({ page, request }) => {
     const header = page.locator(`.rk-gh [data-col="${col}"]`)
     await header.click()
     await expect(header).toHaveAttribute('aria-label', /sorted/)
-    await expect(page.locator('[data-node]')).toHaveCount(snap.rows.length)
+    await expect(page.locator('[data-node]')).toHaveCount(rows.length)
   }
 })
 
-test('filters by role and by search', async ({ page, request }) => {
-  const snap = await snapshot(request)
-  const cp = snap.rows.filter((r) => r.role === 'control-plane')
+test('filters by role and by search, which suggests as you type', async ({ page, request }) => {
+  const rows = nodeRows(await snapshot(request))
+  const cp = rows.filter((r) => r.role === 'control-plane')
   await page.getByRole('group', { name: 'Show nodes by role' }).getByRole('button', { name: /Control plane/ }).click()
   expect(await shownNames(page)).toEqual(cp.map((r) => r.name).sort(compareNatural))
-  await expect(page.getByTestId('shown')).toHaveText(`Showing ${cp.length} of ${snap.rows.length} nodes`)
+  await expect(page.getByTestId('shown')).toHaveText(`Showing ${cp.length} of ${rows.length} nodes`)
+  await expect(page).toHaveURL(/role=control-plane/)
   await page.getByRole('group', { name: 'Show nodes by role' }).getByRole('button', { name: /Workers/ }).click()
-  await expect(page.locator('[data-node]')).toHaveCount(snap.rows.length - cp.length)
+  await expect(page.locator('[data-node]')).toHaveCount(rows.length - cp.length)
   await page.getByRole('group', { name: 'Show nodes by role' }).getByRole('button', { name: /^All/ }).click()
 
-  const target = snap.rows.find((r) => r.role === 'worker')!.name
-  await page.getByPlaceholder('Filter by name, label or taint').fill(target)
-  const expected = filterRows(snap.rows, 'all', target).map((r) => r.name).sort(compareNatural)
+  const target = rows.find((r) => r.role === 'worker')!.name
+  const search = page.getByTestId('node-search')
+  await search.fill(target)
+  const expected = rows.filter((r) => matchesQuery(nodeTerms(r), queryWords(target))).map((r) => r.name).sort(compareNatural)
   expect(await shownNames(page)).toEqual(expected)
-  await expect(page.getByTestId('shown')).toHaveText(`Showing ${expected.length} of ${snap.rows.length} nodes`)
+  await expect(page.getByTestId('shown')).toHaveText(`Showing ${expected.length} of ${rows.length} nodes`)
 
-  await page.getByPlaceholder('Filter by name, label or taint').fill('no-node-has-this-name')
+  // Suggestions complete what the nodes carry: a taint, picked by keyboard.
+  const taint = rows.flatMap((r) => r.taints)[0]
+  if (taint) {
+    await search.fill(taint.key.slice(0, 6))
+    const list = page.getByRole('listbox', { name: 'Suggestions' })
+    await expect(list).toBeVisible()
+    await expect(list.getByRole('option').first()).toContainText(taint.key.slice(0, 6))
+    await search.press('ArrowDown')
+    await search.press('Enter')
+    const picked = (await search.inputValue()).trim()
+    expect(picked.length).toBeGreaterThan(6)
+    await expect(list).toHaveCount(0)
+    const expectedPicked = rows.filter((r) => matchesQuery(nodeTerms(r), queryWords(picked))).map((r) => r.name).sort(compareNatural)
+    expect(await shownNames(page)).toEqual(expectedPicked)
+  }
+
+  await search.fill('no-node-has-this-name')
   await expect(page.getByText('No nodes match this filter.')).toBeVisible()
+})
+
+test('narrows the nodes by label and taint, and keeps that in the link (P2-09)', async ({ page, request }) => {
+  const rows = nodeRows(await snapshot(request))
+  const taint = rows.flatMap((r) => r.taints.map((t) => ({ node: r.name, id: `${t.key}${t.value ? '=' + t.value : ''}:${t.effect}` })))[0]
+  test.skip(!taint, 'no tainted node to pick')
+  await page.getByRole('button', { name: /Select nodes by label and taint/ }).click()
+  const picker = page.getByRole('group', { name: 'Select nodes by label and taint' })
+  await expect(picker).toBeVisible()
+  await picker.locator(`[data-taint="${taint!.id}"]`).click()
+  await expect(picker.locator(`[data-taint="${taint!.id}"]`)).toHaveAttribute('aria-pressed', 'true')
+  const expected = rows.filter((r) => r.taints.some((t) => `${t.key}${t.value ? '=' + t.value : ''}:${t.effect}` === taint!.id)).map((r) => r.name).sort(compareNatural)
+  await expect(picker.getByTestId('facet-match')).toHaveText(`${expected.length} of ${rows.length} nodes match`)
+  await page.getByRole('button', { name: 'Done', exact: true }).click()
+  expect(await shownNames(page)).toEqual(expected)
+  await expect(page).toHaveURL(new RegExp(`taint=${encodeURIComponent(taint!.id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
+  // The chip removes the taint again.
+  await page.getByTestId('facet-chips').getByRole('button', { name: `Remove ${taint!.id}` }).click()
+  await expect(page.locator('[data-node]')).toHaveCount(rows.length)
 })
 
 test('hides taints, zone, labels and kubelet until picked, and remembers the choice', async ({ page }) => {
@@ -137,6 +180,7 @@ test('hides taints, zone, labels and kubelet until picked, and remembers the cho
 
 test('exports what is on screen to Excel', async ({ page, request }) => {
   const snap = await snapshot(request)
+  const rows = nodeRows(snap)
   // A filter, a sort and a hidden column, so the sheet has to follow all three.
   await page.getByRole('group', { name: 'Show nodes by role' }).getByRole('button', { name: /Workers/ }).click()
   await page.locator('.rk-gh [data-col="memory"]').click()
@@ -150,10 +194,11 @@ test('exports what is on screen to Excel', async ({ page, request }) => {
   expect(download.suggestedFilename()).toMatch(new RegExp(`^${snap.cluster!.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-nodes-\\d{8}-\\d{4}\\.xlsx$`))
   const sheet = readSheet(readFileSync(await download.path()))
 
-  const byName = new Map(snap.rows.map((r) => [r.name, r]))
-  const expected = exportSheet(
+  const byName = new Map(rows.map((r) => [r.name, r]))
+  const expected = exportTable(
     names.map((n) => byName.get(n)!),
-    visibleColumns(new Set<ColumnId>([...DEFAULT_HIDDEN, 'pods']), false),
+    visibleColumns(NODE_COLUMNS, new Set([...DEFAULT_HIDDEN, 'pods']), false),
+    Date.now(),
   )
   expect(sheet[0]).toEqual(expected.head)
   expect(sheet.slice(1).map((r) => r[0])).toEqual(names)
@@ -165,7 +210,7 @@ test('exports what is on screen to Excel', async ({ page, request }) => {
 })
 
 test('exports what is on screen as JSON', async ({ page, request }) => {
-  const snap = await snapshot(request)
+  const rows = nodeRows(await snapshot(request))
   await page.locator('.rk-gh [data-col="name"]').click() // descending
   await page.getByRole('button', { name: /^Columns/ }).click()
   await page.getByRole('checkbox', { name: 'Taints' }).check()
@@ -177,13 +222,14 @@ test('exports what is on screen as JSON', async ({ page, request }) => {
   expect(download.suggestedFilename()).toMatch(/-nodes-\d{8}-\d{4}\.json$/)
   const got = JSON.parse(readFileSync(await download.path(), 'utf8')) as Record<string, unknown>[]
 
-  const byName = new Map(snap.rows.map((r) => [r.name, r]))
-  const hidden = new Set<ColumnId>(DEFAULT_HIDDEN)
+  const byName = new Map(rows.map((r) => [r.name, r]))
+  const hidden = new Set(DEFAULT_HIDDEN)
   hidden.delete('taints')
-  const expected = exportJSON(
+  const expected = exportTable(
     names.map((n) => byName.get(n)!),
-    visibleColumns(hidden, false),
-  )
+    visibleColumns(NODE_COLUMNS, hidden, false),
+    Date.now(),
+  ).json
   expect(got.map((r) => r['Node'])).toEqual(names)
   expect(Object.keys(got[0]!)).toEqual(Object.keys(expected[0]!))
   expect(got[0]!['Taints']).toEqual(expected[0]!['Taints'])
@@ -191,9 +237,25 @@ test('exports what is on screen as JSON', async ({ page, request }) => {
   expect(strip(got)).toEqual(strip(expected))
 })
 
+test('exports what is on screen as CSV, with the columns shown', async ({ page }) => {
+  await page.getByRole('button', { name: /^Columns/ }).click()
+  await page.getByRole('checkbox', { name: 'Zone' }).check()
+  await page.keyboard.press('Escape')
+  const names = await shownNames(page)
+  await page.getByRole('button', { name: /^Export/ }).click()
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'CSV' }).click()])
+  expect(download.suggestedFilename()).toMatch(/-nodes-\d{8}-\d{4}\.csv$/)
+  const text = readFileSync(await download.path(), 'utf8')
+  expect(text.startsWith('\uFEFF')).toBe(true)
+  const lines = text.slice(1).split('\r\n').filter(Boolean)
+  expect(lines[0]).toBe('Node,Role,Status,Problems,CPU requested (cores),CPU requested %,CPU in use (cores),CPU allocatable (cores),CPU free (cores),Memory requested (GiB),Memory requested %,Memory in use (GiB),Memory allocatable (GiB),Memory free (GiB),Pods,Pod capacity,Zone,Joined')
+  expect(lines.length - 1).toBe(names.length)
+  expect(lines.slice(1).map((l) => l.split(',')[0])).toEqual(names)
+})
+
 test('opens node details with Enter and closes them with Escape', async ({ page, request }) => {
   const snap = await snapshot(request)
-  const target = snap.rows.find((r) => r.role === 'worker')!
+  const target = nodeRows(snap).find((r) => r.role === 'worker')!
   const row = page.locator(`[data-node="${target.name}"]`)
   await row.focus()
   await page.keyboard.press('Enter')
@@ -202,7 +264,7 @@ test('opens node details with Enter and closes them with Escape', async ({ page,
   await expect(panel).toBeVisible()
   await expect(panel.getByRole('heading', { level: 2 })).toHaveText(target.name)
   await expect(page.getByRole('button', { name: 'Close node details' })).toBeFocused()
-  await expect(row).toHaveAttribute('aria-pressed', 'true')
+  await expect(row).toHaveAttribute('aria-selected', 'true')
 
   // Status first, then taints and labels, then the resources, then the system.
   const headings = await panel.locator('h3').allTextContents()
@@ -235,6 +297,19 @@ test('opens node details with Enter and closes them with Escape', async ({ page,
   }
   // Wide-only columns step aside while the panel is open.
   await expect(page.locator('.rk-gh [data-col="cpuAlloc"]')).toHaveCount(0)
+  // The node links to its pods (P2-09), and shows its YAML (P2-08).
+  await expect(panel.getByTestId('node-pods-link')).toHaveAttribute('href', `#/pods?node=${target.name}`)
+  await panel.locator('[data-dtab="yaml"]').click()
+  await expect(panel.getByTestId('yaml')).toContainText('kind: Node')
+  await expect(panel.getByTestId('yaml')).toContainText(`name: ${target.name}`)
+  await expect(panel.getByRole('region', { name: 'YAML' })).not.toContainText('managedFields')
+  // Apart from managed fields (and what changes between two reads), the
+  // YAML is what kubectl shows (P2-08).
+  const yaml = await (await request.get(`/api/v1/yaml/nodes/${target.name}`)).text()
+  expect(yaml).not.toContain('managedFields')
+  if (inKind) expect(stableYAML(yaml)).toBe(stableYAML(await kubectlYAML('node', target.name)))
+  await panel.locator('[data-dtab="details"]').click()
+  await expect(panel.getByTestId('node-status')).toBeVisible()
 
   await page.keyboard.press('Escape')
   await expect(panel).toHaveCount(0)
@@ -259,9 +334,10 @@ test.describe('on a phone', () => {
     const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
     await expect(page.locator('[data-node]').first()).toBeVisible()
     expect(await overflow()).toBeLessThanOrEqual(0)
-    await page.locator('[data-node]').first().click()
+    await page.locator('[data-node] .rk-pname').first().click()
     await expect(page.getByTestId('node-panel')).toBeVisible()
     expect(await overflow()).toBeLessThanOrEqual(0)
+    await page.getByTestId('node-panel').evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((a) => a.finished)))
     const box = await page.getByTestId('node-panel').boundingBox()
     expect(box!.x).toBeGreaterThanOrEqual(0)
     expect(box!.x + box!.width).toBeLessThanOrEqual(390.5)

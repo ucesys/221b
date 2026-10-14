@@ -1,6 +1,6 @@
 // P1-18: 500 nodes and 15,000 pods. Runs only with E2E_SCALE set to the
 // number of nodes expected, against the simulator or kind with kwok.
-import { expect, test } from '@playwright/test'
+import { expect, test } from './test'
 
 const nodes = Number(process.env.E2E_SCALE ?? 0)
 
@@ -10,17 +10,19 @@ test('first screen within 2 seconds, sorting within 200 ms, memory under 1 GiB',
   // Warm up once, so the timing is the console's and not the first TLS or
   // font fetch of a fresh browser.
   await page.goto('/')
-  await expect(page.locator('[data-node]')).toHaveCount(nodes, { timeout: 60_000 })
+  await expect(page.locator('.rk-grid[data-total]')).toHaveAttribute('data-total', String(nodes), { timeout: 60_000 })
 
   // Times taken in the page, when the rows appear: the first screenful
-  // (what a 900 px window shows) and then every row.
+  // (what a 900 px window shows; rows past the window are not rendered until
+  // scrolled to) and then the moment the grid holds every node.
   await page.addInitScript((n) => {
     const w = window as unknown as { __firstScreen?: number; __allRows?: number }
     new MutationObserver(() => {
       const rows = document.querySelectorAll('[data-node]').length
       if (!w.__firstScreen && rows >= 20) w.__firstScreen = performance.now()
-      if (!w.__allRows && rows >= n) w.__allRows = performance.now()
-    }).observe(document, { childList: true, subtree: true })
+      const total = Number(document.querySelector('.rk-grid[data-total]')?.getAttribute('data-total') ?? 0)
+      if (!w.__allRows && total >= n && rows >= 20) w.__allRows = performance.now()
+    }).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-total'] })
   }, nodes)
   const firsts: number[] = []
   const alls: number[] = []
@@ -42,19 +44,21 @@ test('first screen within 2 seconds, sorting within 200 ms, memory under 1 GiB',
   for (const col of ['cpu', 'memory', 'name', 'pods', 'status', 'name']) {
     sorts.push(
       await page.evaluate(async (c) => {
-        const before = document.querySelector('[data-node]')?.getAttribute('data-node')
         const header = document.querySelector<HTMLButtonElement>(`.rk-gh [data-col="${c}"]`)!
         const t0 = performance.now()
         header.click()
         // Until the next frame is painted.
         await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))
-        const t1 = performance.now()
-        void before
-        return t1 - t0
+        return performance.now() - t0
       }, col),
     )
   }
   const sortMedian = [...sorts].sort((a, b) => a - b)[Math.floor(sorts.length / 2)]!
+
+  // Scrolling to the end renders the last rows, and the grid stays whole.
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+  await expect(page.locator('[data-node]').last()).toBeVisible()
+  await expect(page.locator('.rk-grid[data-total]')).toHaveAttribute('data-total', String(nodes))
 
   const metrics = await (await request.get('/metrics')).text()
   const rss = Number(/^b221_resident_memory_bytes (\S+)$/m.exec(metrics)?.[1] ?? NaN)

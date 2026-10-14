@@ -1,6 +1,8 @@
 {{- if .Values.rbac.create }}
-# Read-only across the cluster: exactly what the Nodes tab reads. No
-# Secrets, no writes.
+# Read-only across the cluster: exactly the kinds the tabs show, which the
+# server watches, and the YAML view reads live. No writes. Secrets only
+# with secrets.read, and then only their key names and sizes, and Helm's
+# release records, leave the server.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -8,11 +10,60 @@ metadata:
   labels:
     {{- include "b221.labels" . | nindent 4 }}
 rules:
+  # Nodes, namespaces and pods, Services and what they front, and the kinds
+  # each namespace lists: ConfigMaps as key names only.
   - apiGroups: [""]
-    resources: ["nodes", "pods"]
+    resources:
+      - nodes
+      - namespaces
+      - pods
+      - services
+      - endpoints
+      - persistentvolumeclaims
+      - configmaps
+      - serviceaccounts
+      - resourcequotas
+      - limitranges
+      - events
     verbs: ["get", "list", "watch"]
+  {{- if .Values.secrets.read }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  # Pod logs, streamed to the pod details.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # Workloads: the owners of pods, and what a namespace runs.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets", "controllerrevisions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch"]
+  # The namespace long tail, listed by name only.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch"]
+  # CPU and memory in use, per node and per pod, from metrics-server.
   - apiGroups: ["metrics.k8s.io"]
-    resources: ["nodes"]
+    resources: ["nodes", "pods"]
     verbs: ["get", "list"]
   {{- if .Values.kubeletStats }}
   # Each node's boot time, read once per boot from its kubelet's Summary

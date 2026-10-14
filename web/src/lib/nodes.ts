@@ -1,85 +1,18 @@
-// What the Nodes tab computes from the rows: filtering, sorting, the
-// columns and the exports. Ported from the prototype's nodesView.
+// What the Nodes tab computes from the rows: the meters, the problem
+// cells, the details' sections and the label and taint facets. Ported from
+// the prototype's nodesView. The columns are in columns/nodes.tsx.
 
 import type { NodeRow, Taint, Tone } from '../api/types'
-import { compareNatural, compareValues, fCores, fMem, fmtTs, minutesSince, nWord, pct, pctTxt, round } from './format'
-import type { Cell } from './xlsx'
-
-export type ColumnId =
-  | 'name'
-  | 'role'
-  | 'status'
-  | 'problems'
-  | 'cpu'
-  | 'cpuAlloc'
-  | 'cpuFree'
-  | 'memory'
-  | 'memAlloc'
-  | 'memFree'
-  | 'pods'
-  | 'taints'
-  | 'zone'
-  | 'labels'
-  | 'kubelet'
-  | 'age'
-export type SortDir = 'asc' | 'desc'
-
-export interface Column {
-  id: ColumnId
-  label: string
-  /** How the sort tooltip names the column. */
-  sortName: string
-  /** Grid track when all columns show, and when the details panel is open. */
-  width: string
-  compactWidth: string
-  /** Minimum width in px, for the table's min-width. */
-  min: number
-  compactMin: number
-  right?: boolean
-  /** Dropped while the details panel is open, as in the prototype. */
-  wideOnly?: boolean
-  /** Off until picked in the Columns menu. */
-  hiddenByDefault?: boolean
-  defaultDir: SortDir
-}
-
-export const COLUMNS: Column[] = [
-  { id: 'name', label: 'Node', sortName: 'node name', width: 'minmax(180px, 1.4fr)', compactWidth: 'minmax(160px, 1.3fr)', min: 180, compactMin: 160, defaultDir: 'asc' },
-  { id: 'role', label: 'Role', sortName: 'role (control plane first)', width: '80px', compactWidth: '76px', min: 80, compactMin: 76, defaultDir: 'asc' },
-  { id: 'status', label: 'Status', sortName: 'status (problems first)', width: '100px', compactWidth: '96px', min: 100, compactMin: 96, defaultDir: 'desc' },
-  { id: 'problems', label: 'Problems', sortName: 'problems (errors first)', width: '106px', compactWidth: '100px', min: 106, compactMin: 100, defaultDir: 'desc' },
-  { id: 'cpu', label: 'CPU requested', sortName: 'CPU requested (% of allocatable)', width: '164px', compactWidth: '154px', min: 164, compactMin: 154, defaultDir: 'desc' },
-  { id: 'cpuAlloc', label: 'CPU allocatable', sortName: 'CPU allocatable to pods', width: '104px', compactWidth: '96px', min: 104, compactMin: 96, right: true, wideOnly: true, defaultDir: 'desc' },
-  { id: 'cpuFree', label: 'CPU free', sortName: 'CPU free to schedule', width: '82px', compactWidth: '76px', min: 82, compactMin: 76, right: true, wideOnly: true, defaultDir: 'desc' },
-  { id: 'memory', label: 'Memory requested', sortName: 'memory requested (% of allocatable)', width: '174px', compactWidth: '164px', min: 174, compactMin: 164, defaultDir: 'desc' },
-  { id: 'memAlloc', label: 'Memory allocatable', sortName: 'memory allocatable to pods', width: '124px', compactWidth: '112px', min: 124, compactMin: 112, right: true, wideOnly: true, defaultDir: 'desc' },
-  { id: 'memFree', label: 'Memory free', sortName: 'memory free to schedule', width: '100px', compactWidth: '92px', min: 100, compactMin: 92, right: true, wideOnly: true, defaultDir: 'desc' },
-  { id: 'pods', label: 'Pods', sortName: 'pod count', width: '84px', compactWidth: '78px', min: 84, compactMin: 78, right: true, defaultDir: 'desc' },
-  { id: 'taints', label: 'Taints', sortName: 'taints (tainted nodes first)', width: 'minmax(150px, 1fr)', compactWidth: 'minmax(150px, 1fr)', min: 150, compactMin: 150, wideOnly: true, hiddenByDefault: true, defaultDir: 'asc' },
-  { id: 'zone', label: 'Zone', sortName: 'zone', width: '96px', compactWidth: '96px', min: 96, compactMin: 96, wideOnly: true, hiddenByDefault: true, defaultDir: 'asc' },
-  { id: 'labels', label: 'Labels', sortName: 'labels', width: 'minmax(170px, 1.2fr)', compactWidth: 'minmax(170px, 1.2fr)', min: 170, compactMin: 170, wideOnly: true, hiddenByDefault: true, defaultDir: 'asc' },
-  { id: 'kubelet', label: 'Kubelet', sortName: 'kubelet version', width: '110px', compactWidth: '110px', min: 110, compactMin: 110, wideOnly: true, hiddenByDefault: true, defaultDir: 'asc' },
-  { id: 'age', label: 'Age', sortName: 'age', width: '64px', compactWidth: '64px', min: 64, compactMin: 64, wideOnly: true, defaultDir: 'desc' },
-]
-
-export const COLUMN_BY_ID = Object.fromEntries(COLUMNS.map((c) => [c.id, c])) as Record<ColumnId, Column>
-
-/** The columns hidden until picked: taints, zone, labels and kubelet. */
-export const DEFAULT_HIDDEN: ReadonlySet<ColumnId> = new Set(COLUMNS.filter((c) => c.hiddenByDefault).map((c) => c.id))
-
-/** The columns on screen: the user's choice, less the wide-only ones while the panel is open. */
-export function visibleColumns(hidden: ReadonlySet<ColumnId>, compact: boolean): Column[] {
-  return COLUMNS.filter((c) => c.id === 'name' || (!hidden.has(c.id) && !(compact && c.wideOnly)))
-}
-
-export function gridTemplate(cols: Column[], compact: boolean): { template: string; minWidth: number } {
-  return {
-    template: cols.map((c) => (compact ? c.compactWidth : c.width)).join(' '),
-    minWidth: cols.reduce((s, c) => s + (compact ? c.compactMin : c.min), 0),
-  }
-}
+import { fCores, fMem, nWord, pct, pctTxt } from './format'
 
 export type RoleFilter = 'all' | 'control-plane' | 'worker'
+
+export const toneRank: Record<Tone, number> = { err: 3, warn: 2, info: 1, muted: 0, ok: 0 }
+
+/** Allocatable less requested: what the scheduler can still place. */
+export function free(res: { allocatable: number; requested: number }): number {
+  return Math.max(0, res.allocatable - res.requested)
+}
 
 export function taintId(t: Taint): string {
   return t.key + (t.value ? '=' + t.value : '') + ':' + t.effect
@@ -102,69 +35,77 @@ export function ownLabels(r: NodeRow): string[] {
     .map((k) => (r.labels[k] ? `${k}=${r.labels[k]}` : k))
 }
 
-/** Matches the name, a label as key=value, or a taint as key=value:Effect. */
-export function matches(r: NodeRow, query: string): boolean {
-  const q = query.trim().toLowerCase()
-  if (!q) return true
-  if (r.name.toLowerCase().includes(q)) return true
-  if (Object.entries(r.labels).some(([k, v]) => `${k}=${v}`.toLowerCase().includes(q))) return true
-  return r.taints.some((t) => `${t.key}=${t.value ?? ''}:${t.effect}`.toLowerCase().includes(q))
+/** A label as the facets name it: key=value, or the key alone for an empty value. */
+export function labelText(k: string, v: string): string {
+  return v ? `${k}=${v}` : k
 }
 
-export function filterRows(rows: NodeRow[], role: RoleFilter, query: string): NodeRow[] {
-  return rows.filter((r) => (role === 'all' || r.role === role) && matches(r, query))
+/** The label and taint facets a node list offers, with how many nodes carry each (P2-09). */
+export interface Facets {
+  labels: { key: string; values: { text: string; value: string; count: number }[] }[]
+  taints: { id: string; key: string; value: string; effect: string; count: number }[]
 }
 
-const toneRank: Record<Tone, number> = { err: 3, warn: 2, info: 1, muted: 0, ok: 0 }
-
-/** Allocatable less requested: what the scheduler can still place. */
-export function free(res: { allocatable: number; requested: number }): number {
-  return Math.max(0, res.allocatable - res.requested)
-}
-
-function sortValue(r: NodeRow, col: ColumnId, now: number): number | string {
-  switch (col) {
-    case 'name':
-      return r.name
-    case 'role':
-      return r.role === 'control-plane' ? 0 : 1
-    case 'status':
-      return toneRank[r.tone] ?? 0
-    case 'problems':
-      return r.errors * 10 + r.warnings
-    case 'cpu':
-      return pct(r.cpu.requested, r.cpu.allocatable)
-    case 'cpuAlloc':
-      return r.cpu.allocatable
-    case 'cpuFree':
-      return free(r.cpu)
-    case 'memory':
-      return pct(r.memory.requested, r.memory.allocatable)
-    case 'memAlloc':
-      return r.memory.allocatable
-    case 'memFree':
-      return free(r.memory)
-    case 'pods':
-      return r.pods.running
-    case 'taints':
-      return r.taints.length ? '0 ' + r.taints.map(taintId).sort().join(',') : '1'
-    case 'zone':
-      return r.zone
-    case 'labels':
-      return ownLabels(r).join(',')
-    case 'kubelet':
-      return r.kubelet
-    case 'age':
-      return minutesSince(r.created, now)
+export function nodeFacets(rows: NodeRow[]): Facets {
+  const labels = new Map<string, Map<string, number>>()
+  const taints = new Map<string, { id: string; key: string; value: string; effect: string; count: number }>()
+  for (const r of rows) {
+    for (const [k, v] of Object.entries(r.labels)) {
+      if (isSystemLabel(k) || k.startsWith('node-role.kubernetes.io/')) continue
+      const m = labels.get(k) ?? new Map<string, number>()
+      m.set(v, (m.get(v) ?? 0) + 1)
+      labels.set(k, m)
+    }
+    for (const t of r.taints) {
+      const id = taintId(t)
+      const e = taints.get(id) ?? { id, key: t.key, value: t.value ?? '', effect: t.effect, count: 0 }
+      e.count++
+      taints.set(id, e)
+    }
+  }
+  return {
+    labels: [...labels.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([key, m]) => ({ key, values: [...m.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([value, count]) => ({ text: labelText(key, value), value, count })) })),
+    taints: [...taints.values()].sort((a, b) => a.id.localeCompare(b.id)),
   }
 }
 
-/** Sorts by a column; ties fall back to the node name. */
-export function sortRows(rows: NodeRow[], col: ColumnId, dir: SortDir, now: number): NodeRow[] {
-  const sign = dir === 'asc' ? 1 : -1
-  const keyed = rows.map((r) => ({ r, v: sortValue(r, col, now) }))
-  keyed.sort((a, b) => compareValues(a.v, b.v) * sign || compareNatural(a.r.name, b.r.name))
-  return keyed.map((k) => k.r)
+/** The selected facets: labels as key=value, taints as key=value:Effect. */
+export interface FacetSelection {
+  labels: string[]
+  taints: string[]
+}
+
+export function facetsActive(f: FacetSelection): boolean {
+  return f.labels.length > 0 || f.taints.length > 0
+}
+
+/**
+ * Whether a node has the selected facets: any of the values chosen for a
+ * label key, every key chosen, and every taint chosen.
+ */
+export function facetMatch(r: NodeRow, f: FacetSelection): boolean {
+  const byKey = new Map<string, string[]>()
+  for (const l of f.labels) {
+    const [k, v = ''] = l.split('=', 2) as [string, string?]
+    byKey.set(k, [...(byKey.get(k) ?? []), v])
+  }
+  for (const [k, values] of byKey) {
+    const have = r.labels[k]
+    if (have === undefined || !values.includes(have)) return false
+  }
+  return f.taints.every((id) => r.taints.some((t) => taintId(t) === id))
+}
+
+/** "zone=a or zone=b, dedicated=analytics:NoSchedule" */
+export function facetText(f: FacetSelection): string {
+  const byKey = new Map<string, string[]>()
+  for (const l of f.labels) {
+    const [k, v = ''] = l.split('=', 2) as [string, string?]
+    byKey.set(k, [...(byKey.get(k) ?? []), labelText(k, v)])
+  }
+  return [...[...byKey.values()].map((vs) => vs.join(' or ')), ...f.taints].join(', ')
 }
 
 export interface ProblemsCell {
@@ -224,106 +165,6 @@ export function memoryMeter(r: NodeRow): Meter {
       `Memory requested ${fMem(r.memory.requested)} of ${fMem(r.memory.allocatable)} (${pctTxt(req)}); ${fMem(free(r.memory))} free to schedule` +
       (use == null ? '; in use unknown' : `; in use ${fMem(r.memory.used)} (${pctTxt(use)})`),
   }
-}
-
-const GIB = 1024 * 1024 * 1024
-
-interface ExportColumn {
-  head: string
-  cell: (r: NodeRow) => Cell
-  /** For JSON, when a value is a list rather than lines of text. */
-  json?: (r: NodeRow) => unknown
-}
-
-/**
- * The export columns: each column on screen, in screen order, becomes one
- * or more. CPU and memory carry their numbers rather than the bar.
- */
-export function exportColumns(cols: Column[]): ExportColumn[] {
-  const out: ExportColumn[] = []
-  const add = (head: string, cell: (r: NodeRow) => Cell, json?: (r: NodeRow) => unknown) => out.push({ head, cell, json })
-  for (const c of cols) {
-    switch (c.id) {
-      case 'name':
-        add('Node', (r) => r.name)
-        break
-      case 'role':
-        add('Role', (r) => (r.role === 'control-plane' ? 'Control plane' : 'Worker'))
-        break
-      case 'status':
-        add('Status', (r) => r.status)
-        break
-      case 'problems':
-        add(
-          'Problems',
-          (r) => r.problems.map((p) => p.title).join('\n'),
-          (r) => r.problems.map((p) => p.title),
-        )
-        break
-      case 'cpu':
-        add('CPU requested (cores)', (r) => round(r.cpu.requested / 1000, 3))
-        add('CPU requested %', (r) => round(pct(r.cpu.requested, r.cpu.allocatable), 1))
-        add('CPU in use (cores)', (r) => (r.cpu.used == null ? null : round(r.cpu.used / 1000, 3)))
-        break
-      case 'cpuAlloc':
-        add('CPU allocatable (cores)', (r) => round(r.cpu.allocatable / 1000, 3))
-        break
-      case 'cpuFree':
-        add('CPU free (cores)', (r) => round(free(r.cpu) / 1000, 3))
-        break
-      case 'memory':
-        add('Memory requested (GiB)', (r) => round(r.memory.requested / GIB, 2))
-        add('Memory requested %', (r) => round(pct(r.memory.requested, r.memory.allocatable), 1))
-        add('Memory in use (GiB)', (r) => (r.memory.used == null ? null : round(r.memory.used / GIB, 2)))
-        break
-      case 'memAlloc':
-        add('Memory allocatable (GiB)', (r) => round(r.memory.allocatable / GIB, 2))
-        break
-      case 'memFree':
-        add('Memory free (GiB)', (r) => round(free(r.memory) / GIB, 2))
-        break
-      case 'pods':
-        add('Pods', (r) => r.pods.running)
-        add('Pod capacity', (r) => r.pods.capacity)
-        break
-      case 'taints':
-        add(
-          'Taints',
-          (r) => r.taints.map(taintId).join('\n'),
-          (r) => r.taints.map(taintId),
-        )
-        break
-      case 'zone':
-        add('Zone', (r) => r.zone)
-        break
-      case 'labels':
-        add(
-          'Labels',
-          (r) => ownLabels(r).join('\n'),
-          (r) => ownLabels(r),
-        )
-        break
-      case 'kubelet':
-        add('Kubelet', (r) => r.kubelet)
-        break
-      case 'age':
-        add('Joined', (r) => fmtTs(r.created))
-        break
-    }
-  }
-  return out
-}
-
-/** The Excel export: a header row and one row per node. */
-export function exportSheet(rows: NodeRow[], cols: Column[]): { head: string[]; rows: Cell[][] } {
-  const ec = exportColumns(cols)
-  return { head: ec.map((c) => c.head), rows: rows.map((r) => ec.map((c) => c.cell(r))) }
-}
-
-/** The JSON export: one object per node, keyed like the sheet's headers, lists as arrays. */
-export function exportJSON(rows: NodeRow[], cols: Column[]): Record<string, unknown>[] {
-  const ec = exportColumns(cols)
-  return rows.map((r) => Object.fromEntries(ec.map((c) => [c.head, c.json ? c.json(r) : c.cell(r)])))
 }
 
 /** The note under a node's taints, from the prototype. */

@@ -134,20 +134,30 @@ Phase 2 adds the everyday read-only screens: Namespaces, Pods, Services and Helm
 
 | ID | Requirement | Done when |
 | --- | --- | --- |
-| P2-01 | Navigation as designed: Nodes, Namespaces, Pods and Helm in the bar, Services under More, and the More menu takes tabs as the window narrows. | From 390 px wide upward no tab is cut off, and the open tab always shows. |
+| P2-01 | Navigation as designed: Nodes, Namespaces, Pods, Helm and Services in the bar while they fit, and the More menu takes tabs from the right as the window narrows (amended at the Phase 2 review: nothing is rolled up while there is room). | From 390 px wide upward no tab is cut off, and the open tab always shows. |
 | P2-02 | Namespaces tab: every namespace and what it holds, by kind, with the funnel filter for kinds (multi-select, All by default). | Counts match `kubectl get` for each kind. |
 | P2-03 | Pods tab: status, restarts, node, namespace, CPU and memory against requests and limits, and age; filters by namespace, node and status. | A crash-looping pod shows its last termination reason. |
 | P2-04 | Pod details: containers and their states, events, owner chain, volumes, environment, and logs (live, previous container, container picker, download). | Logs start within 2 seconds; a pod deleted while open says so. |
 | P2-05 | Services tab: type, cluster IP, ports, ready endpoints, and the External columns (external IP or pending, node ports, Ingress hostname). Details list endpoints and the pods behind them. | A LoadBalancer without an external IP shows as pending, with the reason. |
 | P2-06 | Helm tab: releases with chart, app version, revision, status and last update. Details show revision history, notes and user-supplied values. | Matches `helm list -A` and `helm history` for every release. |
 | P2-07 | Secret handling: the server reads Secrets only to list keys and sizes and to read Helm release records. Helm values that look like credentials are masked. | An automated test proves a known Secret value appears in no response, log or export. |
-| P2-08 | A YAML view of every object, with Secret data replaced by key names and sizes and managed fields hidden. | The YAML matches `kubectl get -o yaml` apart from those two changes. |
+| P2-08 | A YAML view of every object, with Secret data replaced by key names and sizes and managed fields hidden; every object also opens its own details (facts by kind, conditions, labels, events, a workload's pods), with pods and Services opening their full drawers wherever they are listed (amended at the Phase 2 review). | The YAML matches `kubectl get -o yaml` apart from those two changes. |
 | P2-09 | Links between tabs: a node to its pods, a pod to its Service and Helm release, a Service to its pods. Label and taint filters on Nodes, held back from Phase 1. | Each link opens the right tab with the right filter. |
 | P2-10 | Permissions: get, list and watch on the kinds these tabs show, logs and events. A chart setting turns Secret reading off, which hides Secret keys and the Helm tab. | With the setting off, the ServiceAccount cannot read any Secret. |
 
 **Not in Phase 2:** changes to clusters, more than one cluster, sign-in, and the Fleets, Alerts, Networks, Access and Policies tabs.
 
-**Review:** you check the four new tabs on the test cluster against the prototype and kubectl, and approve Phase 3.
+**Asked for at the Phase 1 review, built in Phase 2:** the search box fills in suggestions as you type; every table has the same Columns and Export controls, and Export offers CSV besides Excel and JSON; a node's pod count links to the Pods tab filtered to that node.
+
+### Your review
+
+- [ ] Navigation and the four new tabs checked against the prototype and kubectl on the test cluster (P2-01 to P2-06)
+- [ ] Secret handling and the YAML view checked: keys and sizes only, Helm credentials masked, managed fields hidden (P2-07, P2-08)
+- [ ] Links between tabs and the label and taint filters checked (P2-09)
+- [ ] Permissions checked with Secrets on and off (P2-10)
+- [ ] Go-ahead for Phase 3
+
+**Review:** you check the four new tabs on the test cluster against the prototype and kubectl, and approve Phase 3. The guide is [phase-2-review.md](phase-2-review.md).
 
 ## Phase 3: People and clusters
 
@@ -252,7 +262,7 @@ Each open decision has a proposal. The first three are needed before Phase 1 sta
 | Which cluster hosts the Phase 1 test deployment? | A non-production cluster you choose, reached by port-forward; CI uses kind. | Phase 1 | Open |
 | Where are images published? | GitHub Container Registry under ucesys, private until the repo goes public. | Phase 1 | Open |
 | Which Kubernetes versions does CI test? | Every minor release still maintained upstream, today 1.35 to 1.37. | Phase 1 | Open |
-| May the ServiceAccount read Secrets, for Secret keys and sizes and for Helm releases? | Yes, filtered on the server (P2-07), with a chart setting to turn it off. | Phase 2 | Open |
+| May the ServiceAccount read Secrets, for Secret keys and sizes and for Helm releases? | Yes, filtered on the server (P2-07), with a chart setting to turn it off. | Phase 2 | Settled at the Phase 1 review: yes, as proposed; `secrets.read` in the chart turns it off. |
 | How is per-person access enforced? | Impersonation, so Kubernetes RBAC decides. 221B needs the right to impersonate on every cluster, and sign-in groups must match the groups RBAC uses. | Phase 3 | Open |
 | Where do settings live (connections, fleets, Sherlock settings)? | Kubernetes objects in 221B's namespace: Secrets for credentials, ConfigMaps for the rest. No database. | Phase 3 | Open |
 | Do clusters behind firewalls need an agent that connects out to 221B? | Not in this plan; decide after Phase 3 from real installations. | After Phase 3 | Open |

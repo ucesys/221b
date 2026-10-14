@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { NodeRow, Tone } from '../api/types'
 import { clampPct, fmtAge, fmtTs, nWord } from '../lib/format'
 import { effectTone, isSystemLabel, resourceSections, roleTag, taintNote, type ResourceSection } from '../lib/nodes'
+import { href } from '../lib/router'
 import { CloseIcon } from './Icons'
+import { YamlView } from './YamlView'
 
 interface Props {
   r: NodeRow
@@ -12,6 +14,7 @@ interface Props {
   uptimeNote: string
   now: number
   onClose: () => void
+  onToast?: (msg: string) => void
 }
 
 function podSummary(r: NodeRow): string {
@@ -89,9 +92,10 @@ function Resource({ s }: { s: ResourceSection }) {
 }
 
 /** The details panel for one node, without the actions later phases add. */
-export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose }: Props) {
+export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, onToast }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const [showSys, setShowSys] = useState(false)
+  const [tab, setTab] = useState<'details' | 'yaml'>('details')
 
   useEffect(() => {
     closeRef.current?.focus()
@@ -142,8 +146,26 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose }:
             <CloseIcon />
           </button>
         </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 14px', fontSize: 12 }}>
+          <a className="rk-link" href={href('pods', [], { node: r.name })} data-testid="node-pods-link">
+            {nWord(r.pods.running, 'pod', 'pods')} on this node →
+          </a>
+          <nav aria-label="Node sections" style={{ display: 'flex', gap: '0 16px', marginLeft: 'auto' }}>
+            <button className="rk-tab" aria-current={tab === 'details' ? 'page' : undefined} onClick={() => setTab('details')} style={{ height: 30 }} data-dtab="details">
+              Details
+            </button>
+            <button className="rk-tab" aria-current={tab === 'yaml' ? 'page' : undefined} onClick={() => setTab('yaml')} style={{ height: 30 }} data-dtab="yaml">
+              YAML
+            </button>
+          </nav>
+        </div>
       </div>
-      <div style={{ padding: '16px 20px 28px', display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {tab === 'yaml' && (
+        <div style={{ padding: '16px 20px 28px' }}>
+          <YamlView kind="nodes" name={r.name} onToast={onToast} />
+        </div>
+      )}
+      <div style={{ padding: '16px 20px 28px', display: tab === 'yaml' ? 'none' : 'flex', flexDirection: 'column', gap: 18 }}>
         <Section title="Status">
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }} data-testid="node-status">
             <span className="rk-pill" data-tone={r.tone} title={r.statusTip} style={{ height: 24, fontSize: 12.5 }}>

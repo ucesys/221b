@@ -35,6 +35,9 @@ type Config struct {
 	// KubeletStats reads each node's boot time from its kubelet, for the
 	// uptime in the node details. It needs get on nodes/proxy.
 	KubeletStats bool
+	// SecretsRead watches Secrets, for their keys and sizes and for Helm
+	// releases. Off, no Secret is ever read and the Helm tab is hidden.
+	SecretsRead bool
 	// HealthInterval is how often the API server is checked.
 	HealthInterval time.Duration
 	// LogLevel is debug, info, warn or error. LogFormat is json or text.
@@ -57,6 +60,7 @@ func Parse(args []string) (Config, error) {
 	fs.DurationVar(&c.Refresh, "refresh", envDuration("REFRESH", 3*time.Second), "how often to update browsers and read CPU and memory in use, until changed in Settings")
 	fs.StringVar(&c.SettingsConfigMap, "settings-configmap", env("SETTINGS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the settings in (empty: in memory)")
 	fs.BoolVar(&c.KubeletStats, "kubelet-stats", envBool("KUBELET_STATS", true), "read node boot times from the kubelets, for uptime (needs get on nodes/proxy)")
+	fs.BoolVar(&c.SecretsRead, "secrets-read", envBool("SECRETS_READ", true), "read Secrets for their keys and sizes and for Helm releases; values are never shown (off hides the Helm tab)")
 	fs.DurationVar(&c.HealthInterval, "health-interval", envDuration("HEALTH_INTERVAL", 10*time.Second), "how often to check the API server")
 	fs.StringVar(&c.LogLevel, "log-level", env("LOG_LEVEL", "info"), "debug, info, warn or error")
 	fs.StringVar(&c.LogFormat, "log-format", env("LOG_FORMAT", "json"), "json or text")

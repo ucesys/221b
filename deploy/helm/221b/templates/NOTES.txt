@@ -29,16 +29,26 @@ It also answers on port {{ $.Values.service.port }} at {{ join ", " . }}.
 {{- end }}
 {{- if eq .Values.service.type "ClusterIP" }}
 
-Open it with a port-forward (Phase 1 has no sign-in, so it is not exposed):
+Open it with a port-forward (there is no sign-in yet, so it is not exposed):
 
   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ $svc }} 8080:{{ .Values.service.port }}
 
 then browse to http://localhost:8080.
 {{- end }}
 
-Phase 1 has no sign-in: anyone who can reach it sees the cluster's nodes and the names of its failing pods,
-and can change the refresh rate in its Settings, which applies to everyone and is kept in the ConfigMap
-{{ include "b221.fullname" . }}.
+There is no sign-in yet: anyone who can reach it sees the cluster's nodes, namespaces, pods and their logs,
+Services and Helm releases, and can change the refresh rate in its Settings, which applies to everyone and
+is kept in the ConfigMap {{ include "b221.fullname" . }}.
+{{- if .Values.secrets.read }}
+
+Secrets are read (secrets.read), so each namespace lists its Secrets by key name and size and the Helm tab
+reads release records; a Secret's values never leave the server. Set secrets.read=false to grant no access
+to Secrets at all, which also hides the Helm tab.
+{{- else }}
+
+Secrets are not read (secrets.read=false): the ClusterRole grants nothing on Secrets, namespaces list no
+Secrets and there is no Helm tab, since Helm keeps its release records in Secrets.
+{{- end }}
 
 Check what it is allowed to read:
 

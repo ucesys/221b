@@ -1,4 +1,8 @@
 /* Additions for the real app that the prototype does not need. */
+/* The light theme's ok and err tones are a shade darker than the prototype's
+   (#1C7A3B and #BF3328), so 11.5 px text on the pale pill backgrounds keeps
+   a 5:1 contrast with margin (WCAG 2.2 AA asks 4.5:1); the dark theme's
+   tones already have it. Set in design.css, next to the other tokens. */
 .rk-clstatic {
   cursor: default;
 }
@@ -23,12 +27,6 @@
     padding-left: 16px !important;
     padding-right: 16px !important;
   }
-}
-/* Large clusters: rows off screen skip layout and paint, so sorting 500
-   nodes re-lays out only the rows in view. */
-.rk-grid > .rk-gr {
-  content-visibility: auto;
-  contain-intrinsic-height: auto 37px;
 }
 /* Below 900px the page scrolls as a whole. The header stays in place so the
    details panel, fixed just under it, never leaves a gap above itself. */
@@ -72,3 +70,83 @@
 .rk-seg > button[aria-busy='true'] {
   color: var(--accent);
 }
+/* Phase 2: tabs and side rows are links, so they work in a new window. */
+a.rk-tab,
+a.rk-ddopt,
+a.rk-rrow {
+  text-decoration: none;
+  cursor: pointer;
+}
+a.rk-ddopt:hover,
+a.rk-ddopt:focus-visible {
+  background: var(--surface2);
+}
+.rk-cell-link {
+  color: inherit;
+  text-decoration: none;
+}
+.rk-cell-link:hover,
+.rk-cell-link:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}
+/* Rows are focusable: a visible ring inside the card. */
+.rk-gr[role='row']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.rk-gr > .rk-cell {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.rk-gr > .rk-cell > * {
+  min-width: 0;
+}
+.rk-gr > .rk-cell.rk-r {
+  justify-content: flex-end;
+}
+/* The suggestions list under a search field. */
+.rk-ddopt[data-active='true'] {
+  background: var(--surface2);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* Code boxes (logs, YAML, values) scroll, so they take focus; the ring sits inside. */
+.rk-code:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* Logs. */
+.rk-logbox {
+  font-family: var(--mono);
+  color: var(--fg);
+}
+.rk-logline {
+  white-space: pre;
+}
+/* Card buttons (the Services summary). */
+button.rk-card:hover:not(:disabled) {
+  border-color: var(--line2);
+}
+/* The drawer's body scrolls; its cards keep their height. A flex item that
+   hides its overflow would otherwise shrink to fit the window, cutting a
+   long table (environment variables, events) off at the bottom. */
+.rk-drawer-body > * {
+  flex: none;
+}
+/* The drawer must sit above the sticky header on narrow screens. */
+@media (max-width: 899px) {
+  .rk-drawer {
+    width: 100% !important;
+  }
+}
+/* A table that scrolls sideways takes focus; the ring sits inside. */
+[role='region'][tabindex='0']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The refresh countdown ring next to "Live": the arc drains as the next refresh comes nearer. */
+.rk-ring { flex: none; color: var(--ok); }
+.rk-ring circle + circle { transition: stroke-dasharray 0.9s linear; }
+@media (prefers-reduced-motion: reduce) { .rk-ring circle + circle { transition: none; } }
