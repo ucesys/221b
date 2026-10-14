@@ -9,8 +9,11 @@ const SIM = process.env.E2E_SIM_URL ?? 'http://127.0.0.1:7443'
 const NAMESPACE = process.env.E2E_NAMESPACE ?? '221b'
 const CONFIGMAP = 'console-221b'
 
+// The console's own state is what to wait for, not the page's load event,
+// which Firefox in CI has been seen never firing for a second console open
+// in the same browser.
 async function open(page: Page) {
-  await page.goto('/')
+  await page.goto('/', { waitUntil: 'domcontentloaded' })
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
 }
 
