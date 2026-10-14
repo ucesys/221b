@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks that a ServiceAccount can read what the tabs show (nodes, pods and
 # their logs, namespaces, workloads, Services, metrics, the kubelets'
-# stats), patch its own settings ConfigMap, manage the Secrets of its own
+# stats, and from Phase 4 roles, bindings and the policy kinds), patch its own settings ConfigMap, manage the Secrets of its own
 # namespace (the connections to other clusters, P3-04), and nothing else
 # (P1-09, X-03, P2-10). Secrets elsewhere are readable only when the chart
 # was installed with secrets.read (the default); with --no-secrets the
@@ -57,7 +57,10 @@ read_kinds=(nodes namespaces pods services endpoints persistentvolumeclaims conf
   jobs.batch cronjobs.batch endpointslices.discovery.k8s.io
   ingresses.networking.k8s.io networkpolicies.networking.k8s.io
   roles.rbac.authorization.k8s.io rolebindings.rbac.authorization.k8s.io
-  poddisruptionbudgets.policy horizontalpodautoscalers.autoscaling leases.coordination.k8s.io)
+  poddisruptionbudgets.policy horizontalpodautoscalers.autoscaling leases.coordination.k8s.io
+  clusterroles.rbac.authorization.k8s.io clusterrolebindings.rbac.authorization.k8s.io
+  priorityclasses.scheduling.k8s.io ingressclasses.networking.k8s.io
+  validatingwebhookconfigurations.admissionregistration.k8s.io mutatingwebhookconfigurations.admissionregistration.k8s.io)
 for kind in "${read_kinds[@]}"; do
   for verb in get list watch; do
     expect yes "$verb" "$kind" --all-namespaces
@@ -111,8 +114,8 @@ for args in "create pods" "delete pods" "patch nodes" "update nodes" "delete nod
   "create deployments.apps" "patch deployments.apps" "delete jobs.batch" "create secrets" "patch secrets" "delete secrets" \
   "patch services" "delete services" "create configmaps" "patch configmaps" "delete configmaps" \
   "create roles.rbac.authorization.k8s.io" "create rolebindings.rbac.authorization.k8s.io" \
-  "get clusterroles.rbac.authorization.k8s.io" "get persistentvolumes" "get storageclasses.storage.k8s.io" \
-  "get customresourcedefinitions.apiextensions.k8s.io" "get validatingwebhookconfigurations.admissionregistration.k8s.io" \
+  "create clusterrolebindings.rbac.authorization.k8s.io" "get persistentvolumes" "get storageclasses.storage.k8s.io" \
+  "get customresourcedefinitions.apiextensions.k8s.io" "patch validatingwebhookconfigurations.admissionregistration.k8s.io" \
   "escalate clusterroles.rbac.authorization.k8s.io" "bind clusterroles.rbac.authorization.k8s.io"; do
   # shellcheck disable=SC2086
   expect no $args --all-namespaces
