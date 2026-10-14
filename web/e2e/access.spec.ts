@@ -60,9 +60,10 @@ test('a person sees only the namespaces Kubernetes lets them list, in every tab,
 
   // The Pods tab lists them (the table renders a window of a long list,
   // so the counts are what is checked), and search finds nothing of the rest.
+  const count = `${myPods.length} ${myPods.length === 1 ? 'pod' : 'pods'}`
   await page.goto('/#/pods')
   await expect(page.locator('[data-pod]').first()).toBeVisible({ timeout: 20_000 })
-  await expect(page.getByTestId('pods-count')).toHaveText(`${myPods.length} pods`)
+  await expect(page.getByTestId('pods-count')).toHaveText(count)
   await expect(page.locator('.rk-tabs [data-tab=pods] .rk-count')).toHaveText(String(myPods.length))
   await page.getByTestId('pod-search').fill(hidden!.name)
   await expect(page.locator('[data-pod]')).toHaveCount(0)
@@ -70,7 +71,7 @@ test('a person sees only the namespaces Kubernetes lets them list, in every tab,
   await page.getByTestId('pod-search').fill(shown!.name)
   await expect(page.locator('[data-pod]').first()).toBeVisible()
   await page.getByTestId('pod-search').fill('')
-  await expect(page.getByTestId('pods-count')).toHaveText(`${myPods.length} pods`)
+  await expect(page.getByTestId('pods-count')).toHaveText(count)
 
   // An export carries their pods only.
   await page.getByRole('button', { name: /^Export/ }).click()

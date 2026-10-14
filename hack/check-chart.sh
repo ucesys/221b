@@ -23,7 +23,7 @@ render console --set clusterName=ci | tee "$WORK/chart-default.yaml" | validate
 echo "--- NodePort, no NetworkPolicy, no RBAC, an existing ServiceAccount"
 render console --set clusterName=ci --set service.type=NodePort --set service.nodePort=30080 \
   --set networkPolicy.enabled=false --set rbac.create=false --set serviceAccount.create=false \
-  --set serviceAccount.name=viewer | validate
+  --set serviceAccount.name=viewer | tee "$WORK/chart-nopolicy.yaml" | validate
 echo "--- without the kubelets' stats"
 render console --set clusterName=ci --set kubeletStats=false | tee "$WORK/chart-nostats.yaml" | validate
 echo "--- without reading Secrets"
@@ -110,7 +110,7 @@ ingress_tls() {
 # Outbound traffic: only the API server by default; with OIDC or a webhook
 # also DNS and HTTPS.
 outbound() {
-  ! grep -q 'port: 53' "$out" && grep -q 'port: 53' "$WORK/chart-oidc.yaml" && grep -c 'port: 443' "$WORK/chart-oidc.yaml" | grep -q 2
+  grep -c 'port: 53' "$out" | grep -q 2 && grep -c 'port: 443' "$out" | grep -q 1 && grep -c 'port: 443' "$WORK/chart-oidc.yaml" | grep -q 2
 }
 no_ingress() { ! grep -q '^kind: Ingress' "$out"; }
 cluster_ip() { grep -q 'type: ClusterIP' "$out"; }
@@ -183,7 +183,7 @@ settings_configmap() {
 service_name() { render 221b --set clusterName=ci | grep -A3 '^kind: Service$' | grep -q 'name: console-221b'; }
 name_required() { ! render console > /dev/null 2>&1; }
 no_open_egress() { ! render console --set clusterName=ci --set networkPolicy.apiServerPorts=null > /dev/null 2>&1; }
-no_dns_egress() { ! grep -q 'port: 53' "$out"; }
+dns_egress() { grep -B1 'protocol: UDP' "$out" | grep -q 'port: 53' && ! grep -q 'port: 53' "$WORK/chart-nopolicy.yaml"; }
 api_server_addresses() { grep -q 'cidr: "10.0.0.10/32"' "$WORK/chart-options.yaml"; }
 host_names() {
   grep -A1 'name: ALLOWED_HOSTS' "$out" | grep -q 'console-221b,console-221b.consoles,console-221b.consoles.svc,console-221b.consoles.svc.cluster.local' &&
@@ -230,8 +230,8 @@ check "the settings ConfigMap is created empty and named to the server" settings
 check "a release named after the chart still gets a valid Service name" service_name
 check "clusterName is required" name_required
 check "an empty list of API server ports is refused" no_open_egress
-check "no DNS traffic is allowed out unless sign-in or the webhook needs it" no_dns_egress
-check "outbound traffic: the API server only, or also DNS and HTTPS with OIDC or a webhook" outbound
+check "DNS is allowed out, for the clusters given by name" dns_egress
+check "outbound traffic: API servers and DNS only, or also HTTPS with OIDC or a webhook" outbound
 check "local accounts are mounted from a Secret, or an existing one; none with sign-in off" local_accounts
 check "OIDC sign-in takes its client secret from a Secret and names the administrators" oidc_signin
 check "OIDC without a client secret, and an unknown mode, are refused" oidc_requires_client

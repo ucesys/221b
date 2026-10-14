@@ -338,22 +338,22 @@ export const cluster = {
 
   /**
    * Another cluster to connect to (P3-09): its address, how its certificate
-   * is checked, a token that works there, and its node count. In kind it is
-   * the kind cluster itself, reached through its in-cluster address with a
-   * token of the console's own ServiceAccount.
+   * is checked, a token that works there with the account it names, and
+   * its node count. In kind it is the kind cluster itself, reached through
+   * its in-cluster address with a token of the console's own ServiceAccount.
    */
-  async other(): Promise<{ server: string; ca: 'pem' | 'system'; caPem: string; token: string; nodes: number }> {
+  async other(): Promise<{ server: string; ca: 'pem' | 'system'; caPem: string; token: string; who: string; nodes: number }> {
     if (inKind) {
       const token = (await kubectl('-n', NAMESPACE, 'create', 'token', 'console-221b', '--duration=2h')).trim()
       const caPem = await kubectl('-n', NAMESPACE, 'get', 'configmap', 'kube-root-ca.crt', '-o', 'jsonpath={.data.ca\\.crt}')
       const nodes = (await kubectl('get', 'nodes', '-o', 'name')).trim().split('\n').filter(Boolean).length
-      return { server: 'https://kubernetes.default.svc', ca: 'pem', caPem, token, nodes }
+      return { server: 'https://kubernetes.default.svc', ca: 'pem', caPem, token, who: `system:serviceaccount:${NAMESPACE}:console-221b`, nodes }
     }
     // The second simulator requires the token, as a real API server would.
     const res = await fetch(`${OTHER_SIM}/sim/token`, { method: 'POST', body: JSON.stringify({ token: OTHER_TOKEN }) })
     if (!res.ok) throw new Error(`the second simulator did not take a token: ${res.status}`)
     const list = (await (await fetch(`${OTHER_SIM}/api/v1/nodes`, { headers: { Authorization: `Bearer ${OTHER_TOKEN}` } })).json()) as { items: unknown[] }
-    return { server: OTHER_SIM, ca: 'system', caPem: '', token: OTHER_TOKEN, nodes: list.items.length }
+    return { server: OTHER_SIM, ca: 'system', caPem: '', token: OTHER_TOKEN, who: 'system:serviceaccount:kube-system:cluster-console', nodes: list.items.length }
   },
 
   /**

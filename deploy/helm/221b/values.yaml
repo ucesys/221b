@@ -200,17 +200,19 @@ networkPolicy:
   # NodePort Service an empty list allows every address, since that is
   # what exposing it means; list networks here to narrow it.
   ingressFrom: []
-  # The console connects to the Kubernetes API server, on these ports
-  # (6443 is where most API servers listen behind the kubernetes Service;
-  # minikube uses 8443 and MicroK8s 16443).
+  # The console connects to Kubernetes API servers, its own and the other
+  # clusters' it shows, on these ports (6443 is where most API servers
+  # listen behind the kubernetes Service; minikube uses 8443 and MicroK8s
+  # 16443).
   apiServerPorts: [443, 6443]
-  # The API server's addresses, as CIDRs, to allow nothing else. Empty
+  # The API servers' addresses, as CIDRs, to allow nothing else. Empty
   # allows any address on the ports above, since the addresses differ from
-  # cluster to cluster and managed clusters change them.
+  # cluster to cluster and managed clusters change them. DNS is always
+  # allowed, for the API servers given by name.
   apiServerCIDRs: []
-  # With OIDC sign-in or an audit webhook the console also needs DNS and
-  # the provider's or webhook's HTTPS port; these are allowed then. List
-  # CIDRs to narrow where it may connect for them.
+  # With OIDC sign-in or an audit webhook the console also needs the
+  # provider's or webhook's HTTPS port; it is allowed then. List CIDRs to
+  # narrow where it may connect for them.
   outboundPorts: [443]
   outboundCIDRs: []
 

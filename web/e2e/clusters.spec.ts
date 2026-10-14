@@ -155,7 +155,7 @@ test('a connected cluster shows its data under its own routes, and switching kee
   // The credentials are kept in a Secret of the console's namespace and never come back.
   const saved = (await (await request.get(`/api/v1/clusters/${id}`)).json()) as Record<string, unknown>
   expect(saved).toMatchObject({ id, name: id, env: 'staging', auth: 'token', mode: 'read', description: 'Added by the end-to-end suite', state: 'connected' })
-  expect((saved.cred as { who?: string }).who).toContain('cluster-console')
+  expect((saved.cred as { who?: string }).who).toBe(other.who)
   expect(JSON.stringify(saved)).not.toContain(other.token)
   expect(JSON.stringify(saved)).not.toContain(other.token.slice(-20))
   expect(await cluster.connectionSecret(id), 'the connection has its Secret').toBe(true)
@@ -220,7 +220,7 @@ test('the cluster page shows the connection, tests it again, and the editor keep
   await expect(card.getByTestId('cluster-page-state')).toContainText('Connected', { timeout: 30_000 })
   const after = (await (await request.get(`/api/v1/clusters/${id}`)).json()) as { mode: string; cred: { who?: string } }
   expect(after.mode).toBe('write')
-  expect(after.cred.who, 'the credential was kept').toContain('cluster-console')
+  expect(after.cred.who, 'the credential was kept').toBe((await cluster.other()).who)
 
   // Replacing the credentials asks for them, and "Keep the saved credentials" backs out.
   await card.getByTestId('cluster-edit').click()
