@@ -6,7 +6,7 @@
 import AxeBuilder from '@axe-core/playwright'
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
-import { cluster, inKind, PLANTED, PLANTED_HELM, podRows, snapshot } from './cluster'
+import { cluster, healthyWorkers, inKind, PLANTED, PLANTED_HELM, podRows, snapshot } from './cluster'
 import { E2E_DEV, signInAs } from './accounts'
 import type { PodRow, ReleaseRow } from '../src/api/types'
 
@@ -41,9 +41,13 @@ async function done(page: Page) {
   await expect(lastAnswer(page)).toHaveAttribute('data-status', /done|stopped|failed/, { timeout: 20_000 })
 }
 
+// A healthy kind cluster has no alerts; the simulator has its own.
+let faults: { cleanup: () => Promise<void> } | undefined
+
 test.beforeAll(async ({ browser }) => {
   const page = await browser.newPage()
   await open(page)
+  if (inKind) faults = await cluster.alertFaults(healthyWorkers(await snapshot(page.context().request))[0]!.name)
   expect(await put(page, '/api/v1/sherlock/config', { ...ON, clusters: {} })).toBe(200)
   expect(await put(page, '/api/v1/sherlock/key', null, 'DELETE')).toBe(200)
   await page.evaluate(() => localStorage.removeItem('221b.dock'))
@@ -56,11 +60,12 @@ test.afterAll(async ({ browser }) => {
   await open(page)
   await put(page, '/api/v1/sherlock/config', { ...ON, clusters: {} })
   await page.close()
+  await faults?.cleanup()
 })
 
 test('Sherlock stays away until an administrator turns it on, and the key is never shown again (P5-05)', async ({ page }) => {
   await open(page, '#/alerts')
-  await expect(page.getByTestId('alert').first()).toBeVisible()
+  await expect(page.getByTestId('alert').first()).toBeVisible({ timeout: 45_000 })
   await expect(dock(page)).toHaveCount(0)
   await expect(page.getByTestId('ask-sherlock')).toHaveCount(0)
 
