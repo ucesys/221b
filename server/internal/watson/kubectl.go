@@ -197,9 +197,24 @@ func mergeCtx(r, stop context.Context) context.Context {
 	return ctx
 }
 
+// syncWriter serializes writes to w.
+type syncWriter struct {
+	w  io.Writer
+	mu *sync.Mutex
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
 // runKubectl runs one kubectl command and returns its exit code.
 func runKubectl(ctx context.Context, c *Command, t Target, out, errOut io.Writer, extra ...string) (code int) {
 	catchFatal()
+	// kubectl writes from several goroutines in places (a drain's evictions).
+	var mu sync.Mutex
+	out, errOut = &syncWriter{w: out, mu: &mu}, &syncWriter{w: errOut, mu: &mu}
 	g := newGetter(ctx, t, c.Namespace, errOut)
 	f := cmdutil.NewFactory(g)
 	streams := genericiooptions.IOStreams{In: strings.NewReader(""), Out: out, ErrOut: errOut}
@@ -251,7 +266,7 @@ func runKubectl(ctx context.Context, c *Command, t Target, out, errOut io.Writer
 	case "kubectl uncordon":
 		cmd = drain.NewCmdUncordon(f, streams)
 	case "kubectl drain":
-		cmd = drain.NewCmdDrain(f, streams)
+		cmd = newCmdDrain(ctx, f, streams)
 	case "kubectl scale":
 		cmd = scale.NewCmdScale(f, streams)
 	case "kubectl rollout restart", "kubectl rollout undo":

@@ -744,6 +744,11 @@ func (s *Sim) rolloutLocked(d *appsv1.Deployment) {
 		}
 		tmpl.Labels[appsv1.DefaultDeploymentUniqueLabelKey] = hash
 		sel := d.Spec.Selector.DeepCopy()
+		if sel == nil {
+			// A Deployment the API server would refuse; the simulator takes
+			// it and selects its template's labels.
+			sel = &metav1.LabelSelector{MatchLabels: copyLabels(d.Spec.Template.Labels)}
+		}
 		if sel.MatchLabels == nil {
 			sel.MatchLabels = map[string]string{}
 		}

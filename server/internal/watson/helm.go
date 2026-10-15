@@ -40,6 +40,11 @@ func MaskValues(v map[string]any) map[string]any {
 // CLI's own printers (helm.sh/helm/v4/pkg/cmd, Apache License 2.0), which
 // the SDK does not export: the same columns, time formats and wording.
 
+// Helm's changes are owned by the field manager the helm CLI uses, so a
+// release installed with helm can be rolled back here, and the reverse,
+// without conflicts over who manages a field.
+func init() { kube.ManagedFieldsManager = "helm" }
+
 // helmConfig prepares the SDK against the cluster, as the person.
 func helmConfig(ctx context.Context, c *Command, t Target, errOut io.Writer, namespace string) (*action.Configuration, error) {
 	g := newGetter(ctx, t, c.Namespace, errOut)
