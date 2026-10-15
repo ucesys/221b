@@ -59,7 +59,13 @@ func main() {
 	only := flag.String("only", "", "run only the cases whose id contains this")
 	flag.Parse()
 	c := &client{base: strings.TrimSuffix(*console, "/"), http: &http.Client{Timeout: 30 * time.Second}}
+	// The console builds its views as they are first asked for, so the
+	// first look may come before the problems are in them.
 	cases, err := discover(c)
+	for i := 0; err != nil && i < 30; i++ {
+		time.Sleep(time.Second)
+		cases, err = discover(c)
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "221b-eval:", err)
 		os.Exit(2)
