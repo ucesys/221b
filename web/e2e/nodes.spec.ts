@@ -62,15 +62,29 @@ test('shows the role, allocatable and free resources of every node', async ({ pa
       })
       .toBe(true)
   }
-  // The role is not repeated in the node column.
-  await expect(page.locator('[data-node] > span').first()).not.toContainText('worker')
+  // The role is not repeated in the node column: it holds the name alone.
+  const first = (await shownNames(page))[0]!
+  await expect(page.locator(`[data-node="${first}"] > span`).first()).toHaveText(first)
 })
 
 test('sorts by any column', async ({ page, request }) => {
   const rows = nodeRows(await snapshot(request))
   const byName = new Map(rows.map((r) => [r.name, r]))
 
+  // Nodes with problems come first until someone sorts: errors, then
+  // warnings, then by name (asked at the Phase 6 review).
+  const problems = page.locator('.rk-gh [data-col="problems"]')
+  await expect(problems).toHaveAttribute('aria-label', /sorted descending/)
+  await expect
+    .poll(async () => {
+      const latest = new Map(nodeRows(await snapshot(request)).map((r) => [r.name, r]))
+      const shown = await shownNames(page)
+      const want = [...shown].sort((a, b) => latest.get(b)!.errors * 10 + latest.get(b)!.warnings - (latest.get(a)!.errors * 10 + latest.get(a)!.warnings) || compareNatural(a, b))
+      return shown.join(' ') === want.join(' ')
+    })
+    .toBe(true)
   const name = page.locator('.rk-gh [data-col="name"]')
+  await name.click()
   await expect(name).toHaveAttribute('aria-label', /sorted ascending/)
   expect(await shownNames(page)).toEqual(rows.map((r) => r.name).sort(compareNatural))
   await name.click()
@@ -101,7 +115,8 @@ test('filters by role and by search, which suggests as you type', async ({ page,
   const rows = nodeRows(await snapshot(request))
   const cp = rows.filter((r) => r.role === 'control-plane')
   await page.getByRole('group', { name: 'Show nodes by role' }).getByRole('button', { name: /Control plane/ }).click()
-  expect(await shownNames(page)).toEqual(cp.map((r) => r.name).sort(compareNatural))
+  // Problems first, then by name: compare the sets.
+  expect((await shownNames(page)).sort(compareNatural)).toEqual(cp.map((r) => r.name).sort(compareNatural))
   await expect(page.getByTestId('shown')).toHaveText(`Showing ${cp.length} of ${rows.length} nodes`)
   await expect(page).toHaveURL(/role=control-plane/)
   await page.getByRole('group', { name: 'Show nodes by role' }).getByRole('button', { name: /Workers/ }).click()
@@ -112,7 +127,7 @@ test('filters by role and by search, which suggests as you type', async ({ page,
   const search = page.getByTestId('node-search')
   await search.fill(target)
   const expected = rows.filter((r) => matchesQuery(nodeTerms(r), queryWords(target))).map((r) => r.name).sort(compareNatural)
-  expect(await shownNames(page)).toEqual(expected)
+  expect((await shownNames(page)).sort(compareNatural)).toEqual(expected)
   await expect(page.getByTestId('shown')).toHaveText(`Showing ${expected.length} of ${rows.length} nodes`)
 
   // Suggestions complete what the nodes carry: a taint, picked by keyboard.
@@ -128,7 +143,7 @@ test('filters by role and by search, which suggests as you type', async ({ page,
     expect(picked.length).toBeGreaterThan(6)
     await expect(list).toHaveCount(0)
     const expectedPicked = rows.filter((r) => matchesQuery(nodeTerms(r), queryWords(picked))).map((r) => r.name).sort(compareNatural)
-    expect(await shownNames(page)).toEqual(expectedPicked)
+    expect((await shownNames(page)).sort(compareNatural)).toEqual(expectedPicked)
   }
 
   await search.fill('no-node-has-this-name')
@@ -147,7 +162,7 @@ test('narrows the nodes by label and taint, and keeps that in the link (P2-09)',
   const expected = rows.filter((r) => r.taints.some((t) => `${t.key}${t.value ? '=' + t.value : ''}:${t.effect}` === taint!.id)).map((r) => r.name).sort(compareNatural)
   await expect(picker.getByTestId('facet-match')).toHaveText(`${expected.length} of ${rows.length} nodes match`)
   await page.getByRole('button', { name: 'Done', exact: true }).click()
-  expect(await shownNames(page)).toEqual(expected)
+  expect((await shownNames(page)).sort(compareNatural)).toEqual(expected)
   await expect(page).toHaveURL(new RegExp(`taint=${encodeURIComponent(taint!.id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
   // The chip removes the taint again.
   await page.getByTestId('facet-chips').getByRole('button', { name: `Remove ${taint!.id}` }).click()

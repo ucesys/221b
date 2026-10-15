@@ -142,14 +142,18 @@ export function tilesOf(rows: AlertRow[]): Tile[] {
   ]
 }
 
-/** The tab's badge: what needs attention now, recovered and acknowledged alerts aside. */
+/**
+ * The tab's badge: every active alert, acknowledged ones included (asked at
+ * the Phase 6 review), recovered pods aside. Red while something
+ * unacknowledged is failing.
+ */
 export function badgeOf(rows: AlertRow[]): { count: number; tone: string } {
   let count = 0
   let err = false
   for (const r of rows) {
-    if (!isActive(r) || r.ack) continue
+    if (!isActive(r)) continue
     count++
-    if ((r.kind === 'pod' && r.severity === 'failed') || (r.kind === 'node' && r.severity === 'error')) err = true
+    if (!r.ack && ((r.kind === 'pod' && r.severity === 'failed') || (r.kind === 'node' && r.severity === 'error'))) err = true
   }
   return { count, tone: err ? 'err' : count ? 'warn' : 'muted' }
 }

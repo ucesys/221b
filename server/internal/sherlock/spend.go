@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ucesys/221b/server/internal/prefs"
+	"github.com/ucesys/221b/server/internal/kv"
 )
 
 // SpendKey is the key of the settings ConfigMap the spend is kept under.
@@ -29,7 +29,7 @@ type Spend struct {
 // Ledger counts the spend and keeps it next to the settings, so a
 // restart does not reset it.
 type Ledger struct {
-	backend prefs.Backend
+	backend kv.Backend
 	now     func() time.Time
 	log     *slog.Logger
 
@@ -40,9 +40,9 @@ type Ledger struct {
 }
 
 // NewLedger returns a ledger over the backend (memory when nil).
-func NewLedger(b prefs.Backend, now func() time.Time, log *slog.Logger) *Ledger {
+func NewLedger(b kv.Backend, now func() time.Time, log *slog.Logger) *Ledger {
 	if b == nil {
-		b = &prefs.Memory{}
+		b = &kv.Memory{}
 	}
 	if now == nil {
 		now = time.Now
@@ -76,7 +76,7 @@ func (l *Ledger) load(ctx context.Context) {
 			l.spend = Spend{}
 		}
 		l.loaded = true
-	case errors.Is(err, prefs.ErrNotFound):
+	case errors.Is(err, kv.ErrNotFound):
 		l.loaded = true
 	default:
 		// Not loaded: tried again next time. Until then the caps count what

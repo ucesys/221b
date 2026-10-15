@@ -107,8 +107,8 @@ test('a question streams from the tools, cites what it read, and every cited lin
   await expect(lastAnswer(page).getByTestId('sherlock-text')).toContainText(/There are \d+ alerts/)
   await expect(lastAnswer(page).getByTestId('sherlock-meta')).toContainText('claude-opus-5-5')
 
-  // Questions to ask next, as chips; the line they came in is gone.
-  await expect(lastAnswer(page).getByTestId('sherlock-follow')).toContainText('Which pods use the most memory?')
+  // No follow-up questions under an answer (removed at the Phase 6 review).
+  await expect(lastAnswer(page).getByTestId('sherlock-follow')).toHaveCount(0)
   await expect(lastAnswer(page).getByTestId('sherlock-text')).not.toContainText('Ask next:')
   await expect(lastAnswer(page).getByTestId('sherlock-refs').locator('a').first()).toContainText(/^Open (node|pod) /)
 

@@ -31,8 +31,6 @@ export interface SherlockMsg {
   text: string
   steps?: SherlockStep[]
   refs?: SherlockRef[]
-  /** Questions to ask next, offered as chips. */
-  follow?: string[]
   status?: 'thinking' | 'answering' | 'done' | 'stopped' | 'failed'
   error?: string
   at: string

@@ -398,14 +398,6 @@ func script(question string, round int, results []string) reply {
 		// A link to something no tool showed, which the console must not
 		// keep as a link.
 		b.WriteString("\nNothing is wrong with [ghost](221b://Pod/nowhere/ghost).\n")
-		if len(r.Alerts) > 0 {
-			a := r.Alerts[0]
-			if a.Kind == "pod" {
-				fmt.Fprintf(&b, "\nAsk next: Tell me about pod %s/%s | Which pods use the most memory?\n", a.Namespace, a.Name)
-			} else {
-				fmt.Fprintf(&b, "\nAsk next: What is wrong with node %s? | Which pods use the most memory?\n", a.Name)
-			}
-		}
 		return reply{text: []string{b.String()}}
 	}
 }

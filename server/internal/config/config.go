@@ -31,9 +31,6 @@ type Config struct {
 	Refresh time.Duration
 	// SettingsConfigMap is the "namespace/name" of the ConfigMap the
 	// settings are kept in. Empty keeps them in memory until a restart.
-	// UserPrefs keeps each signed-in person's preferences with their
-	// account instead of in each browser.
-	UserPrefs         bool
 	SettingsConfigMap string
 	// ConnectionsSecrets is the "namespace/prefix" of the Secrets the
 	// cluster connections added in the console are kept in, one Secret
@@ -145,7 +142,6 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.LocalMode, "local-mode", env("LOCAL_MODE", "read"), "what Watson may do in the cluster the console runs in: read, or write to allow changes after approval")
 	fs.StringVar(&c.SherlockSecret, "sherlock-secret", env("SHERLOCK_SECRET", ""), "namespace/name of the Secret to keep the Claude API key in (empty: in memory, lost on restart)")
 	c.SherlockAPIKey = os.Getenv("SHERLOCK_API_KEY")
-	fs.BoolVar(&c.UserPrefs, "user-prefs", envBool("USER_PREFS", true), "keep each signed-in person's preferences, such as table columns, with their account (in the settings ConfigMap); off, or with sign-in off, each browser keeps its own")
 	fs.BoolVar(&c.HTTPSRedirect, "https-redirect", envBool("HTTPS_REDIRECT", false), "send plain-HTTP requests (by X-Forwarded-Proto) to HTTPS, behind an Ingress with TLS")
 	if err := fs.Parse(args); err != nil {
 		return c, err

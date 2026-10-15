@@ -42,15 +42,13 @@ type Step struct {
 
 // Msg is one message of a conversation as the browser shows it.
 type Msg struct {
-	ID    int    `json:"id"`
-	Role  string `json:"role"` // user or sherlock
-	Text  string `json:"text"`
-	Steps []Step `json:"steps,omitempty"`
-	Refs  []Ref  `json:"refs,omitempty"`
-	// Follow are questions the person may want to ask next.
-	Follow []string `json:"follow,omitempty"`
-	Status string   `json:"status,omitempty"` // thinking, answering, done, stopped, failed
-	Error  string   `json:"error,omitempty"`
+	ID     int    `json:"id"`
+	Role   string `json:"role"` // user or sherlock
+	Text   string `json:"text"`
+	Steps  []Step `json:"steps,omitempty"`
+	Refs   []Ref  `json:"refs,omitempty"`
+	Status string `json:"status,omitempty"` // thinking, answering, done, stopped, failed
+	Error  string `json:"error,omitempty"`
 	// Asker names who asked, for a conversation seen in another window.
 	At time.Time `json:"at"`
 	// FirstAt is when the first step or word arrived; DoneAt when the
@@ -108,7 +106,6 @@ func (c *Conversation) viewLocked() View {
 		cp := *m
 		cp.Steps = append([]Step(nil), m.Steps...)
 		cp.Refs = append([]Ref(nil), m.Refs...)
-		cp.Follow = append([]string(nil), m.Follow...)
 		out[i] = &cp
 	}
 	return View{ID: c.ID, Messages: out, Busy: c.busy, Rev: c.rev}
@@ -386,9 +383,8 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		now := s.opts.Now()
-		text, follow := FollowUps(ans.Text)
-		text, cited := Cite(text, c.known)
-		ans.Text, ans.Refs, ans.Follow = text, cited, follow
+		text, cited := Cite(ans.Text, c.known)
+		ans.Text, ans.Refs = text, cited
 		for i := range ans.Steps {
 			if ans.Steps[i].Status == "running" {
 				ans.Steps[i].Status = "failed"

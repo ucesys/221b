@@ -41,7 +41,7 @@ export function useTable<R>({ id, columns, rows, terms, now, compact = false, de
   const [innerQuery, setInnerQuery] = useState('')
   const query = outerQuery ?? innerQuery
   const setQuery = onQuery ?? setInnerQuery
-  // Kept in this browser, or with the person's account (lib/prefs).
+  // Kept in this browser (lib/prefs).
   const [saved, setSaved] = usePref<string[] | null>(key, null)
   const hidden = useMemo(() => {
     if (!saved) return new Set(defaults)

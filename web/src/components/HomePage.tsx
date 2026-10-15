@@ -12,9 +12,12 @@ interface Props {
   onAdd: () => void
 }
 
-function Bar({ line, testid }: { line: UseLine; testid: string }) {
+/** How to read the bars, on hover (asked at the Phase 6 review, in place of a note under them). */
+const BAR_LEGEND = 'Light bar: requested. Solid bar: in use. The percentage is what is requested of what is allocatable.'
+
+function Bar({ line, testid, note }: { line: UseLine; testid: string; note?: string }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '64px minmax(0, 1fr)', alignItems: 'center', gap: '4px 10px' }} data-testid={testid} title={line.tip}>
+    <div style={{ display: 'grid', gridTemplateColumns: '64px minmax(0, 1fr)', alignItems: 'center', gap: '4px 10px' }} data-testid={testid} title={[line.tip, line.reqPct > 0 ? BAR_LEGEND : '', note ?? ''].filter(Boolean).join('\n\n')}>
       <span style={{ fontSize: 12, color: 'var(--fg2)' }}>{line.label}</span>
       <span className="rk-bar" style={{ height: 8, borderRadius: 4, width: '100%' }} role="img" aria-label={`${line.label}: ${line.text}`}>
         {line.reqPct > 0 && <span className="rk-req" style={{ width: `${Math.min(100, line.reqPct).toFixed(1)}%` }} />}
@@ -49,6 +52,7 @@ function ClusterCard({ c, now }: { c: HomeCluster; now: number }) {
   const at = (tab: Parameters<typeof clusterHref>[1], params: Record<string, string> = {}) => clusterHref(c.id, tab, [], params)
   const nodeTone = c.nodes.total - c.nodes.ready > 0 || c.nodes.errors > 0 ? 'err' : c.nodes.warnings > 0 || c.nodes.cordoned > 0 ? 'warn' : undefined
   const podTone = c.pods.failing > 0 ? 'err' : c.pods.notReady > 0 ? 'warn' : undefined
+  const noUsage = metrics ? undefined : `No usage figures: metrics-server ${c.metrics === 'unavailable' ? 'does not answer' : 'has not answered yet'}, so the bars show only what is requested.`
   return (
     <section className="rk-card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }} aria-labelledby={`home-${c.id}`} data-testid="home-card" data-cluster={c.id} data-health={health.tone}>
       <header style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minWidth: 0 }}>
@@ -85,14 +89,9 @@ function ClusterCard({ c, now }: { c: HomeCluster; now: number }) {
             <Stat label="Namespaces" value={c.namespaces} sub={`${c.services} Service${c.services === 1 ? '' : 's'}`} href={at('namespaces')} testid="home-namespaces" />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }} aria-label="Resources">
-            <Bar line={resourceLine('CPU', c.cpu, metrics)} testid="home-cpu" />
-            <Bar line={resourceLine('Memory', c.memory, metrics)} testid="home-memory" />
+            <Bar line={resourceLine('CPU', c.cpu, metrics)} testid="home-cpu" note={noUsage} />
+            <Bar line={resourceLine('Memory', c.memory, metrics)} testid="home-memory" note={noUsage} />
             <Bar line={podLine(c)} testid="home-podroom" />
-            {!metrics && (
-              <span style={{ fontSize: 11.5, color: 'var(--fg3)' }} data-testid="home-nometrics">
-                No usage figures: metrics-server {c.metrics === 'unavailable' ? 'does not answer' : 'has not answered yet'}. Bars show what is requested.
-              </span>
-            )}
           </div>
         </>
       ) : (

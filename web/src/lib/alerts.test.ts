@@ -52,10 +52,11 @@ describe('alerts', () => {
     expect(bannersOf([oom], now)).toEqual([])
   })
 
-  it('leaves acknowledged alerts out of the badge and the banners, after the others but before the recovered', () => {
+  it('counts acknowledged alerts on the badge but leaves them off the banners, after the others but before the recovered', () => {
     const acked: AlertRow = { ...pull, key: 'pod:web/d', name: 'd', ack: { by: 'dana@corp.example', at: ago(1) } }
     const rows = [acked, pull, oom]
-    expect(badgeOf(rows)).toEqual({ count: 1, tone: 'err' })
+    expect(badgeOf(rows)).toEqual({ count: 2, tone: 'err' })
+    expect(badgeOf([acked])).toEqual({ count: 1, tone: 'warn' })
     expect(bannersOf(rows, now).map((b) => b.detail).join(' ')).not.toContain('web/d')
     expect(sectionsOf(rows).pods.map((r) => r.name)).toEqual(['a', 'd', 'c'])
     expect(sevLabel(oom)).toEqual({ label: 'Recovered', tone: 'ok' })

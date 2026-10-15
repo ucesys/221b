@@ -54,7 +54,7 @@ CPU and memory in use come from [metrics-server](https://github.com/kubernetes-s
 
 **Watson** runs reads in any cluster. It changes the cluster the console runs in only when installed with `--set localCluster.mode=write`, and another cluster only when its connection is set to *Read and change*. With sign-in on, each change runs as the person who approves it, so their own RBAC decides; with `auth.mode=none`, changes run as the console's ServiceAccount, which the chart then binds to the built-in `edit` ClusterRole (`localCluster.writeClusterRole`) and a small role to cordon and drain nodes.
 
-**Every table** sorts by any column, picks columns and exports what is on screen to Excel, CSV or JSON, with the same controls everywhere. The search box suggests names, labels, nodes, namespaces and statuses as you type. Rows are keyboard-navigable: Enter opens a row's details, the arrow keys move between rows and into a row's links, and Escape closes the details.
+**Every table** sorts by any column, picks columns and exports what is on screen to Excel, CSV or JSON, with the same controls everywhere. Column choices are kept in your browser. The search box suggests names, labels, nodes, namespaces and statuses as you type. Rows are keyboard-navigable: Enter opens a row's details, the arrow keys move between rows and into a row's links, and Escape closes the details.
 
 **Settings** (the gear in the top bar) hold the theme, for your browser, and the refresh rate, for everyone: the server reads the cluster and updates every open console at the same moment, 3 seconds apart by default, and keeps the choice in its ConfigMap (`console-221b`) so it survives restarts and upgrades. Nodes and pods are watched, so the rate adds no requests to the API server for them.
 

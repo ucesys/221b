@@ -137,7 +137,7 @@ function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: n
         </span>
         <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{metaText(r)}</span>
         {r.ack && (
-          <span className="rk-tag" data-tone="warn" style={{ fontSize: 11, padding: '2px 8px' }} title={`Acknowledged by ${r.ack.by}, ${fmtTs(r.ack.at)}. It stays off the banners and the tab's count until it changes or clears.`} data-testid="alert-acked">
+          <span className="rk-tag" data-tone="warn" style={{ fontSize: 11, padding: '2px 8px' }} title={`Acknowledged by ${r.ack.by}, ${fmtTs(r.ack.at)}. It stays off the banners until it changes or clears; the tab still counts it.`} data-testid="alert-acked">
             Acknowledged by {r.ack.by} · {agoText(r.ack.at, now)}
           </span>
         )}
@@ -153,7 +153,7 @@ function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: n
             className="rk-btn"
             disabled={busy}
             onClick={() => void ack(!r.ack)}
-            title={r.ack ? 'Put it back on the banners and the tab’s count, for everyone' : 'Take it off the banners and the tab’s count, for everyone, until it changes or clears. It stays here.'}
+            title={r.ack ? 'Put it back on the banners, for everyone' : 'Take it off the banners at the top of every tab, for everyone, until it changes or clears. It stays here and in the tab’s count.'}
             data-testid="alert-ack"
           >
             {r.ack ? 'Undo acknowledge' : 'Acknowledge'}

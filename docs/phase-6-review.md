@@ -125,6 +125,17 @@ Each step writes one JSON record on standard output (and to the webhook) naming 
 
 Either window can hold both panes: **With Sherlock** (or **With Watson**) adds the other, the new-window button splits them into windows of their own, and the dock-back button returns one to the main window.
 
+## Changed after your first look
+
+Six changes you asked for, in the same pull request:
+
+1. **Alerts count.** The Alerts tab counts every active alert, acknowledged ones included; acknowledged alerts still stay off the banners at the top of the other tabs. CI: `alerts.spec.ts` acknowledges an alert and checks that the count still includes it and the banners do not.
+2. **Nodes order.** Nodes with problems come first (errors, then warnings, then by name) until you sort by a column; the Problems heading shows the sort. CI: `nodes.spec.ts`.
+3. **Column choices in the browser.** Which columns each table shows is kept in this browser only, signed in or not. The server's per-person preferences are gone: `/api/v1/prefs`, the chart's `preferences.perUser` and the `USER_PREFS` setting (ADR-40 is marked superseded). Keys named `prefs.*.json` that earlier versions left in the settings ConfigMap are ignored and can be deleted. CI: `fleets.spec.ts` checks that a choice survives a reload and does not reach another browser of the same person.
+4. **Legends as tooltips.** The line under the Nodes table is gone; hovering a CPU or memory bar, or the headings of those columns and of the Free columns, explains them. On the home page the bars' tooltip explains them, and the note about missing usage figures moved into it.
+5. **Services.** The summary tiles are gone; the type filters above the table do their job.
+6. **Sherlock.** Answers no longer end with questions to ask next; the prompt no longer asks the model for them.
+
 ## Not in Phase 6
 
 Commands outside the list, `kubectl apply` and `edit` among them. Watson's commands and cards are kept in the server's memory for 12 hours and do not survive a restart; a command running during a restart stops, and the audit log shows it without a result. With several console replicas (Phase 7), a card raised on one would not show on another.

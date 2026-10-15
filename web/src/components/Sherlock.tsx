@@ -118,17 +118,12 @@ function seconds(from?: string, to?: string): string {
   return s < 10 ? `${s.toFixed(1)} s` : `${Math.round(s)} s`
 }
 
-/** The "Ask next" line the server takes off a finished answer, hidden while it arrives. */
-function withoutAskNext(text: string): string {
-  return text.replace(/\n[ \t*_]*Ask(?: n(?:e(?:x(?:t(?::[^\n]*)?)?)?)?)?\s*$/, '')
-}
-
 function refLabel(r: SherlockRef): string {
   const kind = r.kind === 'HelmRelease' ? 'release' : r.kind === 'PersistentVolumeClaim' ? 'claim' : r.kind.toLowerCase()
   return `Open ${kind} ${r.name}`
 }
 
-function Answer({ m, link, admin, onAsk, canAsk, question }: { m: SherlockMsg; link: (url: string, label: string) => ReactNode | null; admin: boolean; onAsk: (q: string) => void; canAsk: boolean; question?: string }) {
+function Answer({ m, link, admin, question }: { m: SherlockMsg; link: (url: string, label: string) => ReactNode | null; admin: boolean; question?: string }) {
   const thinking = (m.status === 'thinking' || m.status === 'answering') && !m.text
   const meta = [m.model, m.doneAt ? seconds(m.at, m.doneAt) : '', admin && m.costUSD ? usd(m.costUSD) : ''].filter(Boolean).join(' · ')
   return (
@@ -152,7 +147,7 @@ function Answer({ m, link, admin, onAsk, canAsk, question }: { m: SherlockMsg; l
       )}
       {m.text && (
         <div className="rk-ans-body" data-testid="sherlock-text">
-          <Markdown text={m.status === 'done' ? m.text : withoutAskNext(m.text)} link={link} code={(text, lang, open, key) => <CodeBlock key={key} text={text} lang={lang} open={open && m.status !== 'done'} why={question ? `Sherlock proposed this answering “${question}”.` : undefined} />} />
+          <Markdown text={m.text} link={link} code={(text, lang, open, key) => <CodeBlock key={key} text={text} lang={lang} open={open && m.status !== 'done'} why={question ? `Sherlock proposed this answering “${question}”.` : undefined} />} />
         </div>
       )}
       {m.status === 'stopped' && (
@@ -171,16 +166,6 @@ function Answer({ m, link, admin, onAsk, canAsk, question }: { m: SherlockMsg; l
             const el = link(`221b://${r.kind}/${r.namespace ? r.namespace + '/' : ''}${r.name}`, refLabel(r) + ' →')
             return el ? <span key={`${r.kind}/${r.namespace}/${r.name}`} className="rk-refbtn">{el}</span> : null
           })}
-        </div>
-      )}
-      {m.status === 'done' && (m.follow?.length ?? 0) > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, paddingTop: 2 }} data-testid="sherlock-follow">
-          <span style={{ fontSize: 12, color: 'var(--fg3)', marginRight: 2 }}>Ask next</span>
-          {m.follow!.map((q) => (
-            <button key={q} className="rk-fchip" onClick={() => onAsk(q)} disabled={!canAsk} style={{ fontFamily: 'var(--font)', fontSize: 12 }}>
-              {q}
-            </button>
-          ))}
         </div>
       )}
       {m.status === 'done' && meta && (
@@ -363,7 +348,7 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
                   {m.text}
                 </div>
               ) : (
-                <Answer key={m.id} m={m} link={link} admin={!!status?.admin} onAsk={(q) => void send(q)} canAsk={canAsk} question={questionBefore(msgs, m.id)} />
+                <Answer key={m.id} m={m} link={link} admin={!!status?.admin} question={questionBefore(msgs, m.id)} />
               ),
             )}
           </div>

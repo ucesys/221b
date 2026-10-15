@@ -29,7 +29,6 @@ render console --set clusterName=ci --set kubeletStats=false | tee "$WORK/chart-
 echo "--- without reading Secrets"
 render console --set clusterName=ci --set secrets.read=false | tee "$WORK/chart-nosecrets.yaml" | validate
 render console --set clusterName=ci --set connections.store=memory | tee "$WORK/chart-memory.yaml" | validate
-render console --set clusterName=ci --set preferences.perUser=false | tee "$WORK/chart-noprefs.yaml" | validate
 render console --set clusterName=ci --set sherlock.existingSecret=claude --set sherlock.egress=false --set connections.store=memory | tee "$WORK/chart-sherlock.yaml" | validate
 echo "--- allowed ingress peers, API server addresses, extra host names and a private registry"
 render console --set clusterName=ci --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.team=platform' \
@@ -163,9 +162,8 @@ secrets_optional() {
     [ "$(granted "$WORK/chart-nosecrets.yaml")" = "${WANT_READ/ secrets/}" ] && ! cluster_role "$WORK/chart-nosecrets.yaml" | grep -q '"secrets"' &&
     grep -A1 'name: SECRETS_READ' "$WORK/chart-nosecrets.yaml" | grep -q '"false"'
 }
-user_prefs() {
-  grep -A1 'name: USER_PREFS' "$out" | grep -q '"true"' && grep -A1 'name: USER_PREFS' "$WORK/chart-noprefs.yaml" | grep -q '"false"'
-}
+# Column choices are kept in each browser (asked at the Phase 6 review).
+no_user_prefs() { ! grep -q 'USER_PREFS' "$out"; }
 # Sherlock (Phase 5): the Claude API's address; its key in the release's
 # own Secret, or from a Secret the chart is given, never in the values.
 sherlock_key() {
@@ -260,7 +258,7 @@ check "it writes only its own settings ConfigMap and the connection Secrets in i
 check "connections are kept in Secrets in the release namespace, or in memory on request" connections_store
 check "kubeletStats=false grants nothing on the kubelets" no_kubelet_stats
 check "the settings ConfigMap is created empty and named to the server" settings_configmap
-check "each signed-in person's preferences are kept with their account, unless preferences.perUser=false" user_prefs
+check "column choices stay in the browser: nothing about preferences reaches the server" no_user_prefs
 check "Sherlock's API key is kept in the release's Secret or taken from sherlock.existingSecret, never in the values" sherlock_key
 check "a release named after the chart still gets a valid Service name" service_name
 check "clusterName is required" name_required

@@ -277,14 +277,3 @@ func TestKeys(t *testing.T) {
 		t.Fatalf("fixed: %v %+v", err, fixed.Info())
 	}
 }
-
-func TestFollowUps(t *testing.T) {
-	text, f := FollowUps("The cause is X.\n\nAsk next: Why is pod a/b pending? | Which nodes are full? | What changed? | One too many\n")
-	if text != "The cause is X." || len(f) != 3 || f[0] != "Why is pod a/b pending?" {
-		t.Fatalf("%q %q", text, f)
-	}
-	// Only a last line counts.
-	if text, f := FollowUps("Ask next: a | b\n\nMore text."); f != nil || text != "Ask next: a | b\n\nMore text." {
-		t.Fatalf("%q %q", text, f)
-	}
-}

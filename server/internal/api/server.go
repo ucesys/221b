@@ -31,7 +31,6 @@ import (
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
-	"github.com/ucesys/221b/server/internal/prefs"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/views"
@@ -107,9 +106,6 @@ type Options struct {
 	Audit *audit.Log
 	// Cluster serves the details of pods, services, releases, logs and YAML.
 	Cluster Cluster
-	// Prefs keeps each signed-in person's own preferences (/api/v1/prefs);
-	// nil, or sign-in off, leaves them to the browser.
-	Prefs *prefs.Store
 	// Settings serves /api/v1/settings; nil leaves the path unserved.
 	Settings Settings
 	// Sherlock answers questions (Phase 5); nil leaves it out.
@@ -294,12 +290,6 @@ func New(o Options) *Server {
 	}
 	if o.Watson != nil {
 		s.watsonRoutes()
-	}
-	if o.Prefs != nil && o.Auth != nil {
-		s.handle("GET /api/v1/prefs", "prefs", s.getPrefs)
-		s.handle("PUT /api/v1/prefs", "prefs-update", s.putPrefs)
-		// The same as a beacon, which can only POST, when a page goes away.
-		s.handle("POST /api/v1/prefs", "prefs-update", s.putPrefs)
 	}
 	if o.Auth != nil {
 		for _, r := range o.Auth.Routes() {

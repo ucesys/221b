@@ -157,14 +157,6 @@ ingress:
 connections:
   store: secrets
 
-preferences:
-  # Keep each signed-in person's own preferences, such as the columns each
-  # table shows, with their account, so they follow them to any browser.
-  # They are kept in the settings ConfigMap, one key per person named by a
-  # hash of their subject (16 KiB at most each). Off, or with sign-in off,
-  # each browser keeps its own.
-  perUser: true
-
 sherlock:
   # Sherlock answers questions about a cluster through the Claude API
   # (Phase 5). It is off for every cluster until an administrator turns it

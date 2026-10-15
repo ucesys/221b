@@ -86,11 +86,6 @@ spec:
             # never values). Off hides the Helm tab.
             - name: SECRETS_READ
               value: {{ .Values.secrets.read | quote }}
-            # Whether each signed-in person's preferences, such as the
-            # columns each table shows, are kept with their account (in the
-            # settings ConfigMap) rather than in each browser.
-            - name: USER_PREFS
-              value: {{ .Values.preferences.perUser | quote }}
             # Sherlock (Phase 5): the Claude API, and where its key is kept.
             - name: SHERLOCK_API_URL
               value: {{ .Values.sherlock.apiURL | quote }}

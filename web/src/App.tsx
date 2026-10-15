@@ -32,7 +32,6 @@ import { openTarget, SherlockContext, SherlockPane } from './components/Sherlock
 import { Dock, PoppedOutFab, type DockMode } from './components/Dock'
 import { autoRunReads, WatsonContext, WatsonPane } from './components/Watson'
 import { AssistantWindow } from './components/AssistantWindow'
-import { loadPrefs } from './lib/prefs'
 import { readJSON, writeJSON } from './lib/storage'
 
 const THEME_KEY = '221b.theme'
@@ -113,11 +112,6 @@ function Shell() {
   const route = useRoute()
   const now = useNow()
   const me = useMe()
-  // A signed-in person's own preferences, when the console keeps them with their account.
-  const signedIn = !!me && me.mode !== 'none'
-  useEffect(() => {
-    if (signedIn) void loadPrefs()
-  }, [signedIn])
   const { clusters, loaded: clustersLoaded } = useClusters()
   const [theme, setTheme] = useState<Theme>(initialTheme)
   const [settingsOpen, setSettingsOpen] = useState(false)

@@ -31,8 +31,8 @@ import (
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/live"
-	"github.com/ucesys/221b/server/internal/prefs"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/ui"
@@ -199,16 +199,6 @@ func run(args []string) error {
 		}
 	}()
 
-	// Each signed-in person's own preferences, next to the settings.
-	var userPrefs *prefs.Store
-	if cfg.UserPrefs && authCfg.Mode != auth.ModeNone {
-		var backend prefs.Backend = &prefs.Memory{}
-		if cm, ok := storage.(*kube.ConfigMapStorage); ok {
-			backend = cm
-		}
-		userPrefs = prefs.New(backend)
-	}
-
 	// Sherlock (Phase 5): off for every cluster until an administrator turns
 	// it on and gives it a Claude API key, which is kept in a Secret.
 	var keyBackend sherlock.KeyBackend = &sherlock.MemoryKey{}
@@ -232,7 +222,7 @@ func run(args []string) error {
 	if err := keys.Load(ctx); err != nil {
 		log.Warn("reading the Claude API key failed; Sherlock has no key until it is saved again", "err", err)
 	}
-	var spendBackend prefs.Backend = &prefs.Memory{}
+	var spendBackend kv.Backend = &kv.Memory{}
 	if cm, ok := storage.(*kube.ConfigMapStorage); ok {
 		spendBackend = cm
 	}
@@ -284,7 +274,6 @@ func run(args []string) error {
 		Sherlock:      sherlockSvc,
 		SherlockKeys:  keys,
 		Store:         store,
-		Prefs:         userPrefs,
 		Cluster:       cluster,
 		Settings:      shared,
 		Clusters:      manager,

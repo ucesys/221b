@@ -288,7 +288,7 @@ export function DataTable<R>({ label, rows, cols, rowKey, rowLabel, sort, onSort
             const name = c.sortName ?? c.label.toLowerCase()
             return (
               <div key={c.id} role="columnheader" aria-colindex={i + 1} aria-sort={on ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'} className="rk-thc">
-                <button className={c.right ? 'rk-th rk-r' : 'rk-th'} data-active={on} data-col={c.id} title={(on ? 'Sorted by ' : 'Sort by ') + name} aria-label={`${c.group ? c.group + ' ' : ''}${c.label}: ${on ? `sorted ${sort.dir === 'asc' ? 'ascending' : 'descending'}` : 'sort'}`} onClick={() => onSort(c.id)}>
+                <button className={c.right ? 'rk-th rk-r' : 'rk-th'} data-active={on} data-col={c.id} title={(on ? 'Sorted by ' : 'Sort by ') + name + (c.hint ? '\n\n' + c.hint : '')} aria-label={`${c.group ? c.group + ' ' : ''}${c.label}: ${on ? `sorted ${sort.dir === 'asc' ? 'ascending' : 'descending'}` : 'sort'}`} onClick={() => onSort(c.id)}>
                   {c.label}
                   <span className="rk-arrow" aria-hidden="true">
                     {on ? (sort.dir === 'asc' ? '↑' : '↓') : ''}

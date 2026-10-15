@@ -1,19 +1,13 @@
-// Each person's own preferences, such as the columns each table shows
-// (asked at the Phase 4 review). Someone signed in keeps them with their
-// account on the server, when the console is set up to (preferences.perUser
-// in the chart), so they follow them to any browser; otherwise this browser
-// keeps them.
+// Each person's own preferences, such as the columns each table shows,
+// kept in this browser (localStorage), whether or not they are signed in
+// (decided at the Phase 6 review). Every table and picker that uses one
+// re-renders when it changes, here or in another tab of this browser.
 
 import { useCallback, useSyncExternalStore } from 'react'
 import { readJSON, writeJSON } from './storage'
 
-type Where = 'browser' | 'account'
-
-let where: Where = 'browser'
-let values: Record<string, unknown> = {}
 let version = 0
-const browserCache = new Map<string, unknown>()
-let timer: ReturnType<typeof setTimeout> | undefined
+const cache = new Map<string, unknown>()
 const listeners = new Set<() => void>()
 
 function changed() {
@@ -26,97 +20,28 @@ function subscribe(fn: () => void) {
   return () => listeners.delete(fn)
 }
 
-/** Where preferences are kept now. */
-export function prefsWhere(): Where {
-  return where
+// Another tab of this browser changed one.
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key && cache.has(e.key)) {
+      cache.delete(e.key)
+      changed()
+    }
+  })
 }
 
 /** A preference, or the fallback when none is kept. */
 export function getPref<T>(key: string, fallback: T): T {
-  if (where === 'account') return key in values ? (values[key] as T) : fallback
   // Read once and kept, so a value is the same object on every render.
-  if (!browserCache.has(key)) browserCache.set(key, readJSON<unknown>(key, undefined))
-  const v = browserCache.get(key)
+  if (!cache.has(key)) cache.set(key, readJSON<unknown>(key, undefined))
+  const v = cache.get(key)
   return v === undefined ? fallback : (v as T)
 }
 
-/** Keeps a preference: in this browser, or with the account a moment later. */
+/** Keeps a preference in this browser. */
 export function setPref(key: string, value: unknown): void {
-  if (where === 'account') {
-    values = { ...values, [key]: value }
-    clearTimeout(timer)
-    pending = true
-    timer = setTimeout(() => void save(), 400)
-  } else {
-    browserCache.set(key, value)
-    writeJSON(key, value)
-  }
-  changed()
-}
-
-let pending = false
-
-async function save(): Promise<void> {
-  clearTimeout(timer)
-  pending = false
-  try {
-    // keepalive: a save started as the page goes away still arrives.
-    await fetch('/api/v1/prefs', { method: 'PUT', keepalive: true, headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ prefs: values }) })
-  } catch {
-    // A preference is a convenience; the next change saves them all again.
-  }
-}
-
-// A change made just before a reload or a closed tab is saved at once, as
-// a beacon, which the browser delivers after the page has gone.
-if (typeof window !== 'undefined') {
-  window.addEventListener('pagehide', () => {
-    if (!pending) return
-    clearTimeout(timer)
-    pending = false
-    const body = new Blob([JSON.stringify({ prefs: values })], { type: 'application/json' })
-    if (typeof navigator.sendBeacon !== 'function' || !navigator.sendBeacon('/api/v1/prefs', body)) void save()
-  })
-}
-
-/** The preferences this browser keeps, for the first sign-in with account preferences. */
-function browserPrefs(): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  try {
-    for (let i = 0; i < window.localStorage.length; i++) {
-      const k = window.localStorage.key(i)
-      if (k && k.startsWith('221b.') && k.endsWith('.hidden')) out[k] = readJSON<unknown>(k, null)
-    }
-  } catch {
-    // No storage: nothing to bring along.
-  }
-  return out
-}
-
-/**
- * Asks the server whether this person's preferences are kept with their
- * account, and loads them. The first time, the columns this browser had
- * become the account's.
- */
-export async function loadPrefs(): Promise<void> {
-  let res: Response
-  try {
-    res = await fetch('/api/v1/prefs', { headers: { Accept: 'application/json' } })
-  } catch {
-    return
-  }
-  if (!res.ok) return
-  const body = (await res.json().catch(() => null)) as { prefs?: Record<string, unknown>; store?: string } | null
-  if (!body || body.store !== 'account') return
-  where = 'account'
-  values = body.prefs ?? {}
-  if (Object.keys(values).length === 0) {
-    const local = browserPrefs()
-    if (Object.keys(local).length) {
-      values = local
-      void save()
-    }
-  }
+  cache.set(key, value)
+  writeJSON(key, value)
   changed()
 }
 
@@ -126,12 +51,4 @@ export function usePref<T>(key: string, fallback: T): [T, (v: T) => void] {
   const value = getPref<T>(key, fallback)
   const set = useCallback((v: T) => setPref(key, v), [key])
   return [value, set]
-}
-
-/** For tests: back to this browser's storage. */
-export function resetPrefsForTests(): void {
-  where = 'browser'
-  values = {}
-  browserCache.clear()
-  changed()
 }
