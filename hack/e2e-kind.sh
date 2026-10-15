@@ -332,6 +332,10 @@ step "helm uninstall leaves nothing behind"
 kubectl -n "$NS" delete pod -l e2e=crashloop --ignore-not-found
 kubectl delete rolebinding -A -l e2e=dev --ignore-not-found
 kubectl delete clusterrolebinding e2e-admin e2e-viewer --ignore-not-found
+# The Watson tests set the local cluster's environment to production and
+# back: what is shown for it is kept like a connection, in a Secret the
+# chart does not own, which survives an uninstall as connections do.
+kubectl -n "$NS" delete secret "$FULLNAME-cluster-local" --ignore-not-found
 # Foreground deletion: the Deployment goes only once its pods have gone.
 # Helm 4's wait sometimes gives up on a Deployment still Terminating right
 # after a rollout; what matters is checked below: nothing may remain.
