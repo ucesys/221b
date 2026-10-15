@@ -9,7 +9,7 @@ import type { APIRequestContext, Page } from '@playwright/test'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { expect, test } from './test'
-import { cluster, consoleNode, healthyWorkers, inKind, kubectl, snapshot } from './cluster'
+import { cluster, consoleNode, healthyWorkers, inKind, kubectl, nodeRows, snapshot } from './cluster'
 import { E2E_DEV, E2E_USER, E2E_VIEWER, signInAs } from './accounts'
 import type { WatsonItem } from '../src/api/watson'
 
@@ -84,12 +84,30 @@ async function open(page: Page, hash = '#/nodes') {
 const pane = (page: Page) => page.getByTestId('watson')
 const lastRan = (page: Page) => pane(page).getByTestId('watson-ran').last()
 
+/** A ready worker the console does not run on, not cordoned, to cordon and drain. */
+async function spareWorker(request: APIRequestContext): Promise<string> {
+  const skip = await consoleNode()
+  let name = ''
+  await expect
+    .poll(
+      async () => {
+        const rows = nodeRows(await snapshot(request)).filter((r) => r.role === 'worker' && r.status === 'Ready' && !r.cordoned && r.name !== skip)
+        name = (rows.find((r) => r.problems.length === 0) ?? rows[0])?.name ?? ''
+        return name
+      },
+      { timeout: 30_000 },
+    )
+    .not.toBe('')
+  return name
+}
+
 let play: Awaited<ReturnType<typeof cluster.watsonPlayground>>
 
 test.beforeAll(async ({ browser, browserName }) => {
   play = await cluster.watsonPlayground(browserName)
   const page = await browser.newPage()
-  await page.goto('/#/nodes')
+  // The document, not the load event, which Firefox holds while a stream opens.
+  await page.goto('/#/nodes', { waitUntil: 'domcontentloaded' })
   // A clean slate: the second-person rule off, and no commands left over.
   await page.request.put('/api/v1/watson/config', { data: { twoPerson: false }, headers: SAME })
   await page.request.post('/api/v1/watson/clear', { headers: SAME })
@@ -192,8 +210,7 @@ test('every supported change runs once approved, as the approver, and does what 
   const deployment = async () => (await cluster.getObject<Deploy>(dPath))!
 
   // A worker that does not run the console, to cordon and drain.
-  const skip = await consoleNode()
-  const node = healthyWorkers(await snapshot(request)).find((r) => r.name !== skip)!.name
+  const node = await spareWorker(request)
   const unschedulable = async () => !!(await cluster.getObject<{ spec: { unschedulable?: boolean } }>(`/api/v1/nodes/${node}`))!.spec.unschedulable
   try {
     await ok(request, `kubectl cordon ${node}`)
@@ -253,8 +270,7 @@ test('every supported change runs once approved, as the approver, and does what 
 })
 
 test('a node’s Cordon button asks on a card that names the node, the pods, and the dry run; approving runs it (P6-04, P6-06, P6-08)', async ({ page }) => {
-  const skip = await consoleNode()
-  const node = healthyWorkers(await snapshot(page.request)).find((r) => r.name !== skip)!.name
+  const node = await spareWorker(page.request)
   await open(page, `#/nodes?open=${node}`)
   try {
     await page.getByTestId('node-cordon').click()
@@ -296,8 +312,7 @@ test('a node’s Cordon button asks on a card that names the node, the pods, and
 })
 
 test('the Drain button’s card names the pods it evicts and the budgets that may hold it up (P6-04)', async ({ page }) => {
-  const skip = await consoleNode()
-  const node = healthyWorkers(await snapshot(page.request)).find((r) => r.name !== skip)!.name
+  const node = await spareWorker(page.request)
   await open(page, `#/nodes?open=${node}`)
   await page.getByTestId('node-drain').click()
   const card = pane(page).getByTestId('watson-card').last()
@@ -310,8 +325,7 @@ test('the Drain button’s card names the pods it evicts and the budgets that ma
 })
 
 test('a card lapses when its objects change before anyone approves it (P6-04)', async ({ page }) => {
-  const skip = await consoleNode()
-  const node = healthyWorkers(await snapshot(page.request)).find((r) => r.name !== skip)!.name
+  const node = await spareWorker(page.request)
   await open(page)
   await pane(page).getByTestId('watson-input').fill(`kubectl cordon ${node}`)
   await pane(page).getByTestId('watson-input').press('Enter')
@@ -359,9 +373,9 @@ test('a read-only connection runs reads and refuses changes, naming the rule (P6
   }
 })
 
-test('a change runs as the person who approves it, so their own access decides (P6-05)', async ({ browser }) => {
+test('a change runs as the person who approves it, so their own access decides (P6-05)', async ({ browser, request }) => {
   await cluster.limitDev()
-  const node = healthyWorkers(await snapshot((await browser.newContext()).request)).at(-1)!.name
+  const node = await spareWorker(request)
   const dev = await signInAs(browser, E2E_DEV)
   try {
     await expect(dev.getByTestId('cluster-state')).toHaveText('Connected', { timeout: 30_000 })
@@ -377,8 +391,7 @@ test('a change runs as the person who approves it, so their own access decides (
 test('on a production cluster with the rule on, a second person approves (P6-07)', async ({ page, browser }) => {
   const local = (await (await page.request.get('/api/v1/clusters/local')).json()) as { name: string; env: string; description: string }
   const setEnv = (env: string) => page.request.put('/api/v1/clusters/local', { data: { name: local.name, env, description: local.description, ca: 'system', auth: 'token', mode: 'read' }, headers: SAME })
-  const skip = await consoleNode()
-  const node = healthyWorkers(await snapshot(page.request)).find((r) => r.name !== skip)!.name
+  const node = await spareWorker(page.request)
   const revoke = await cluster.allowNodeChanges(E2E_VIEWER)
   let viewer: Page | undefined
   try {
@@ -439,8 +452,7 @@ test('Watson moves to a window of its own, approvals there run, and it docks bac
   await expect(page.getByTestId('watson')).toHaveCount(0)
 
   // A change asked for in the main window waits in the other, and runs there.
-  const skip = await consoleNode()
-  const node = healthyWorkers(await snapshot(page.request)).find((r) => r.name !== skip)!.name
+  const node = await spareWorker(page.request)
   try {
     await page.goto(`/#/nodes?open=${node}`)
     await page.getByTestId('node-cordon').click()
