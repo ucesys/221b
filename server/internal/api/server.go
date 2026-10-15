@@ -287,6 +287,8 @@ func New(o Options) *Server {
 	if o.Prefs != nil && o.Auth != nil {
 		s.handle("GET /api/v1/prefs", "prefs", s.getPrefs)
 		s.handle("PUT /api/v1/prefs", "prefs-update", s.putPrefs)
+		// The same as a beacon, which can only POST, when a page goes away.
+		s.handle("POST /api/v1/prefs", "prefs-update", s.putPrefs)
 	}
 	if o.Auth != nil {
 		for _, r := range o.Auth.Routes() {

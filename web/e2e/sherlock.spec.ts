@@ -159,8 +159,9 @@ test('the panel resizes, maximizes over the page and minimizes to an icon (P5-01
   await page.getByTestId('sherlock-minimize').click()
   await expect(dock(page)).toHaveCount(0)
   await expect(page.getByTestId('sherlock-fab')).toBeVisible()
-  // Kept for this browser.
-  await page.reload()
+  // Kept for this browser, in a fresh load.
+  await page.goto('about:blank')
+  await open(page)
   await expect(page.getByTestId('sherlock-fab')).toBeVisible()
   await page.getByTestId('sherlock-fab').click()
   await expect(dock(page)).toBeVisible()
@@ -299,8 +300,9 @@ test('Sherlock moves to a window of its own and back, and the main window asks t
   await page.keyboard.press('Escape')
 
   // Docking it back closes the window, and the conversation is here.
-  await popup.getByTestId('sherlock-dock-back').click()
-  await expect.poll(() => popup.isClosed()).toBe(true)
+  // The window closes as the click lands, which the click may report.
+  await Promise.all([popup.waitForEvent('close'), popup.getByTestId('sherlock-dock-back').click().catch(() => undefined)])
+  expect(popup.isClosed()).toBe(true)
   await expect(dock(page)).toBeVisible({ timeout: 10_000 })
   await expect(page.getByTestId('sherlock-question').last()).toHaveText(q)
 })

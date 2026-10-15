@@ -284,6 +284,15 @@ api -X DELETE -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:18080/api/v1/clu
 ! kubectl -n "$NS" get secret "$FULLNAME-cluster-kept" > /dev/null 2>&1
 [ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/v1/clusters/kept)" = 404 ]
 echo "the connection and its Secret are gone"
+# Sherlock's API key, saved by the browser tests, is kept in the release's
+# Secret, survived the upgrade and is never served (P5-05, X-04); removing
+# it in Settings deletes the Secret.
+[ "$(kubectl -n "$NS" get secret "$FULLNAME-sherlock" -o jsonpath='{.data.apiKey}' | base64 -d)" = sk-ant-e2e-fake-key-0123456789 ]
+api http://127.0.0.1:18080/api/v1/sherlock/config | tee "$WORK/sherlock-config.json" | grep -q '"set":true'
+! grep -q sk-ant-e2e-fake-key "$WORK/sherlock-config.json"
+api -X DELETE -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:18080/api/v1/sherlock/key | grep -q '"set":false'
+! kubectl -n "$NS" get secret "$FULLNAME-sherlock" > /dev/null 2>&1
+echo "the Sherlock key survived the upgrade, was never served, and its Secret is gone with it"
 kill "$pf"
 endstep
 
