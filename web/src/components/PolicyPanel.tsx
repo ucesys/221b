@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { fmtAge, fmtTs, nWord } from '../lib/format'
 import { shortReasons, type PolicyModel } from '../lib/policies'
+import { objectLink } from '../lib/peek'
 import { href } from '../lib/router'
 import { Card, Drawer, Facts } from './Drawer'
 import { WarnIcon } from './Icons'
@@ -14,7 +15,7 @@ interface Props {
   onToast: (msg: string) => void
 }
 
-function List({ items, empty }: { items: { main: string; sub?: string; tone?: string; status?: string; href?: string }[]; empty: string }) {
+function List({ items, empty }: { items: { main: string; sub?: string; tone?: string; status?: string; link?: { href: string; 'data-peek'?: string } }[]; empty: string }) {
   if (!items.length) return <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>{empty}</p>
   return (
     <div>
@@ -32,8 +33,8 @@ function List({ items, empty }: { items: { main: string; sub?: string; tone?: st
               {it.status}
             </span>
           )}
-          {it.href && (
-            <a className="rk-link" href={it.href} style={{ fontSize: 12.5, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+          {it.link && (
+            <a className="rk-link" {...it.link} style={{ fontSize: 12.5, textDecoration: 'none', whiteSpace: 'nowrap' }}>
               Open pod
             </a>
           )}
@@ -71,7 +72,7 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
             <Facts items={[['Applies to', r.selector === 'every pod' ? `every pod in ${r.namespace}` : r.selector], ['Restricts', [r.ingress && 'Ingress', r.egress && 'Egress'].filter(Boolean).join(' and ') + (!r.egress ? ' (egress isn’t restricted)' : '')], ...(r.allows ? ([['Allows in', r.allows]] as [string, string][]) : []), ...(r.allowsOut ? ([['Allows out', r.allowsOut]] as [string, string][]) : [])]} />
           </Card>
           <Card title="Pods it selects">
-            <List items={r.pods.map((p) => ({ main: p, href: href('pods', [], { open: `${r.namespace}/${p}` }) }))} empty="No running pod has these labels." />
+            <List items={r.pods.map((p) => ({ main: p, link: objectLink('pods', [], { open: `${r.namespace}/${p}` }) }))} empty="No running pod has these labels." />
           </Card>
         </>
       )
@@ -96,7 +97,7 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
             <Facts items={[['Selector', r.selector], ['Rule', r.rule], ['Current healthy', String(r.currentHealthy)], ['Desired healthy', String(r.desiredHealthy)], ['Expected pods', String(r.expectedPods)], ['Disruptions allowed', String(r.disruptionsAllowed)], ['Unhealthy pods', r.unhealthyPolicy === 'AlwaysAllow' ? 'always evictable' : 'evictable while the budget is healthy'], ...(nodes.length ? ([['Constrains the drain of', nodes.join(', ')]] as [string, string][]) : [])]} />
           </Card>
           <Card title="Pods it selects">
-            <List items={r.pods.map((p) => ({ main: p.name, sub: p.node ?? 'no node', status: p.ready ? 'ready' : 'not ready', tone: p.ready ? 'ok' : 'warn', href: href('pods', [], { open: `${r.namespace}/${p.name}` }) }))} empty="It selects no running pod." />
+            <List items={r.pods.map((p) => ({ main: p.name, sub: p.node ?? 'no node', status: p.ready ? 'ready' : 'not ready', tone: p.ready ? 'ok' : 'warn', link: objectLink('pods', [], { open: `${r.namespace}/${p.name}` }) }))} empty="It selects no running pod." />
           </Card>
         </>
       )
@@ -175,7 +176,7 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
                   ['CA bundle', h.caBundle ? 'set' : 'not set: the API server must trust the backend’s certificate another way'],
                 ]}
               />
-              <List items={h.reach.pods.map((p) => ({ main: p.name, sub: p.node, status: p.ready ? 'ready' : 'not ready', tone: p.ready ? 'ok' : 'warn', href: h.serviceNamespace ? href('pods', [], { open: `${h.serviceNamespace}/${p.name}` }) : undefined }))} empty="No pod behind it." />
+              <List items={h.reach.pods.map((p) => ({ main: p.name, sub: p.node, status: p.ready ? 'ready' : 'not ready', tone: p.ready ? 'ok' : 'warn', link: h.serviceNamespace ? objectLink('pods', [], { open: `${h.serviceNamespace}/${p.name}` }) : undefined }))} empty="No pod behind it." />
             </Card>
           ))}
         </>
@@ -221,7 +222,7 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
                   <pre className="rk-mono" style={{ margin: 0, padding: '10px 12px', fontSize: 11.5, whiteSpace: 'pre-wrap', background: 'var(--surface2)', border: '1px solid var(--line)', borderRadius: 8 }} data-testid={`psa-warnings-${lvl}`}>
                     {r[lvl].warnings.map((w) => `Warning: ${w}`).join('\n')}
                   </pre>
-                  <List items={r[lvl].fail.map((p) => ({ main: p.name, sub: p.detail, href: href('pods', [], { open: `${r.name}/${p.name}` }) }))} empty="" />
+                  <List items={r[lvl].fail.map((p) => ({ main: p.name, sub: p.detail, link: objectLink('pods', [], { open: `${r.name}/${p.name}` }) }))} empty="" />
                 </>
               ) : (
                 <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }} data-testid={`psa-warnings-${lvl}`}>

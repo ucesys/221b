@@ -27,6 +27,7 @@ for (const theme of ['light', 'dark'] as const) {
     await page.locator('[data-node] .rk-pname').first().click()
     await expect(page.getByTestId('node-panel')).toBeVisible()
     expect(await violations(page)).toEqual([])
+    await page.keyboard.press('Escape')
 
     await page.getByRole('button', { name: /^Columns/ }).click()
     await expect(page.getByRole('group', { name: 'Columns to show' })).toBeVisible()

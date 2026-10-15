@@ -17,7 +17,7 @@ export function sevLabel(r: AlertRow): { label: string; tone: string } {
     case 'pending':
       return { label: 'Pending', tone: 'warn' }
     case 'recovered':
-      return { label: 'Recovered', tone: 'muted' }
+      return { label: 'Recovered', tone: 'ok' }
     case 'error':
       return { label: 'Error', tone: 'err' }
   }
@@ -99,11 +99,21 @@ export interface AlertSections {
   volumes: AlertRow[]
 }
 
-/** The rows in their sections and order: failed, pending, recovered, newest first; nodes with errors first. */
+/** Whether an alert is still going on: everything but a pod that recovered. */
+export function isActive(r: AlertRow): boolean {
+  return r.severity !== 'recovered'
+}
+
+/** Where an alert goes in its section: what nobody has acknowledged, then what someone has, then what recovered. */
+function stage(r: AlertRow): number {
+  return !isActive(r) ? 2 : r.ack ? 1 : 0
+}
+
+/** The rows in their sections and order: unacknowledged, acknowledged, recovered; within those failed, then pending, newest first; nodes with errors first. */
 export function sectionsOf(rows: AlertRow[]): AlertSections {
-  const pods = rows.filter((r) => r.kind === 'pod').sort((a, b) => (SEV_RANK[a.severity] ?? 3) - (SEV_RANK[b.severity] ?? 3) || lastOf(b) - lastOf(a) || a.name.localeCompare(b.name))
-  const nodes = rows.filter((r) => r.kind === 'node').sort((a, b) => (a.severity === 'error' ? 0 : 1) - (b.severity === 'error' ? 0 : 1) || a.name.localeCompare(b.name, undefined, { numeric: true }))
-  const volumes = rows.filter((r) => r.kind === 'pvc').sort((a, b) => (a.severity === 'error' ? 0 : 1) - (b.severity === 'error' ? 0 : 1) || lastOf(b) - lastOf(a) || a.name.localeCompare(b.name))
+  const pods = rows.filter((r) => r.kind === 'pod').sort((a, b) => stage(a) - stage(b) || (SEV_RANK[a.severity] ?? 3) - (SEV_RANK[b.severity] ?? 3) || lastOf(b) - lastOf(a) || a.name.localeCompare(b.name))
+  const nodes = rows.filter((r) => r.kind === 'node').sort((a, b) => stage(a) - stage(b) || (a.severity === 'error' ? 0 : 1) - (b.severity === 'error' ? 0 : 1) || a.name.localeCompare(b.name, undefined, { numeric: true }))
+  const volumes = rows.filter((r) => r.kind === 'pvc').sort((a, b) => stage(a) - stage(b) || (a.severity === 'error' ? 0 : 1) - (b.severity === 'error' ? 0 : 1) || lastOf(b) - lastOf(a) || a.name.localeCompare(b.name))
   return { pods, controlPlane: nodes.filter((r) => r.role === 'control-plane'), workers: nodes.filter((r) => r.role !== 'control-plane'), volumes }
 }
 
@@ -128,16 +138,16 @@ export function tilesOf(rows: AlertRow[]): Tile[] {
     { count: nodeErr, label: nodeErr === 1 ? 'node with errors' : 'nodes with errors', tone: nodeErr ? 'err' : 'muted' },
     { count: nodeWarn, label: nodeWarn === 1 ? 'node with warnings' : 'nodes with warnings', tone: nodeWarn ? 'warn' : 'muted' },
     { count: vols, label: vols === 1 ? 'volume with warnings' : 'volumes with warnings', tone: vols ? 'warn' : 'muted' },
-    { count: recovered, label: recovered === 1 ? 'pod recovered after warnings' : 'pods recovered after warnings', tone: 'muted' },
+    { count: recovered, label: recovered === 1 ? 'pod recovered after warnings' : 'pods recovered after warnings', tone: recovered ? 'ok' : 'muted' },
   ]
 }
 
-/** The tab's badge: what needs attention now, recovered pods aside. */
+/** The tab's badge: what needs attention now, recovered and acknowledged alerts aside. */
 export function badgeOf(rows: AlertRow[]): { count: number; tone: string } {
   let count = 0
   let err = false
   for (const r of rows) {
-    if (r.kind === 'pod' && r.severity === 'recovered') continue
+    if (!isActive(r) || r.ack) continue
     count++
     if ((r.kind === 'pod' && r.severity === 'failed') || (r.kind === 'node' && r.severity === 'error')) err = true
   }
@@ -154,8 +164,9 @@ function lowerFirst(s: string): string {
   return s ? s[0]!.toLowerCase() + s.slice(1) : s
 }
 
-/** The banners every other tab shows: red for what is failing, amber for what waits. */
-export function bannersOf(rows: AlertRow[], now: number): AlertBanner[] {
+/** The banners every other tab shows: red for what is failing, amber for what waits. Acknowledged alerts stay on the Alerts tab only. */
+export function bannersOf(all: AlertRow[], now: number): AlertBanner[] {
+  const rows = all.filter((r) => !r.ack)
   const failed = rows.filter((r) => r.kind === 'pod' && r.severity === 'failed')
   const pending = rows.filter((r) => r.kind === 'pod' && r.severity === 'pending')
   const nodeErr = rows.filter((r) => r.kind === 'node' && r.severity === 'error')

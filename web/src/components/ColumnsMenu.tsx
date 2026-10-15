@@ -67,7 +67,15 @@ export function ColumnsMenu<R>({ cols, hidden, defaults, onChange, compact }: Pr
         <>
           <button className="rk-ddcatch" tabIndex={-1} aria-hidden="true" onClick={() => setOpen(false)} />
           <div ref={menu} className="rk-ddmenu" data-align="right" role="group" aria-label="Columns to show">
-            <div className="rk-ddhead">The first column always shows</div>
+            <div className="rk-ddhead" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ flex: '1 1 auto' }}>The first column always shows</span>
+              <button className="rk-link" onClick={() => onChange(new Set())} style={{ fontSize: 12 }} data-testid="cols-all">
+                Select all
+              </button>
+              <button className="rk-link" onClick={() => onChange(new Set(optional.map((c) => c.id)))} style={{ fontSize: 12 }} data-testid="cols-none">
+                Clear all
+              </button>
+            </div>
             {optional.map((c) => (
               <label key={c.id} className="rk-ddopt">
                 <input type="checkbox" checked={!hidden.has(c.id)} onChange={() => toggle(c.id)} />

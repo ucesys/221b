@@ -181,8 +181,10 @@ test.describe('tracing a request', () => {
     await expect(page.getByTestId('trace-verdict')).toHaveText('Works')
     await expect(page.getByTestId('hop')).toHaveCount(8)
     await expect(page.locator(`[data-route="${KEY}"]`)).toContainText(HOST)
+    // The Service's details open over the tab (asked at the Phase 4 review).
     await page.locator('[data-hop="Service"] a').click()
-    await expect(page).toHaveURL(new RegExp(`#/services\\?.*open=${encodeURIComponent(`${N}/web`)}`))
+    await expect(page.getByTestId('service-panel').getByRole('heading', { level: 2 })).toHaveText('web')
+    await expect(page).toHaveURL(new RegExp(`#/networks\\?.*peek=${encodeURIComponent(`service:${N}/web`)}`))
   })
 
   test('no address', async ({ request }) => {

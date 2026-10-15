@@ -123,6 +123,29 @@ type AlertRow struct {
 	Users        []AlertUser `json:"users,omitempty"`
 
 	Events []AlertEntry `json:"events"`
+
+	// Ack says who acknowledged the alert as it is now, if anyone did.
+	Ack *AlertAck `json:"ack,omitempty"`
+}
+
+// AlertAck is an acknowledgement of an alert.
+type AlertAck struct {
+	By string    `json:"by"`
+	At time.Time `json:"at"`
+}
+
+// AlertFingerprint is what an alert is, for acknowledgements: an
+// acknowledgement lapses when it changes. It is the severity, the status
+// and, for a node, its problems; not counts or times, which move while the
+// alert stays the same.
+func AlertFingerprint(r AlertRow) string {
+	parts := []string{r.Severity, r.Status}
+	titles := make([]string, 0, len(r.Problems))
+	for _, p := range r.Problems {
+		titles = append(titles, p.Severity+" "+p.Title)
+	}
+	sort.Strings(titles)
+	return strings.Join(append(parts, titles...), "|")
 }
 
 // AlertKey is a row's key.

@@ -31,7 +31,8 @@ export function NodesTab({ cluster, now, onToast, route }: TabProps) {
 
   const inScope = useMemo(() => rows.filter((r) => (role === 'all' || r.role === role) && (!facetsActive(facets) || facetMatch(r, facets))), [rows, role, facets])
   const selectedRow = selected ? (rows.find((r) => r.name === selected) ?? null) : null
-  const compact = selectedRow !== null
+  // The details pane lies over the table, so every column keeps its place.
+  const compact = false
   const table = useTable<NodeRow>({ id: 'nodes', columns: NODE_COLUMNS, rows: inScope, terms: nodeTerms, now, compact, defaultSort: { col: 'name', dir: 'asc' }, query, onQuery: (q) => set({ q }) })
   const metrics = cluster?.metrics === 'available'
   const cp = rows.filter((r) => r.role === 'control-plane').length

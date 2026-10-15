@@ -295,8 +295,8 @@ test('opens node details with Enter and closes them with Escape', async ({ page,
     await panel.getByRole('button', { name: `Show ${system.length} kubernetes.io labels` }).click()
     await expect(panel.locator('.rk-chip', { hasText: system[0]! }).first()).toBeVisible()
   }
-  // Wide-only columns step aside while the panel is open.
-  await expect(page.locator('.rk-gh [data-col="cpuAlloc"]')).toHaveCount(0)
+  // The panel lies over the table, which keeps every column (asked at the Phase 4 review).
+  await expect(page.locator('.rk-gh [data-col="cpuAlloc"]')).toHaveCount(1)
   // The node links to its pods (P2-09), and shows its YAML (P2-08).
   await expect(panel.getByTestId('node-pods-link')).toHaveAttribute('href', `#/pods?node=${target.name}`)
   await panel.locator('[data-dtab="yaml"]').click()

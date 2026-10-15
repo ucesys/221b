@@ -5,6 +5,7 @@ import { LiveContext, useLiveMeta, useLiveStore, useView } from './api/live'
 import type { AccessRow, AlertRow, PolicyRow } from './api/types'
 import { AccessTab } from './components/AccessTab'
 import { NetworksTab } from './components/NetworksTab'
+import { PeekPane } from './components/PeekPane'
 import { PoliciesTab } from './components/PoliciesTab'
 import { AlertsTab } from './components/AlertsTab'
 import { Banners } from './components/Banners'
@@ -149,6 +150,7 @@ function Shell() {
           {tab === 'policies' && <PoliciesTab {...common} />}
         </div>
       )}
+      {view === 'tabs' && <PeekPane route={route} cluster={live.cluster} now={now} onToast={setToast} />}
       <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} canChange={me?.admin ?? true} />
       {editing === null && <ClusterEditor key="+" orig={null} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
       {editing && editOrig && <ClusterEditor key={editing} orig={editOrig} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/acks"
 	"github.com/ucesys/221b/server/internal/fleets"
 )
 
@@ -26,6 +27,9 @@ type Settings struct {
 	// Fleets are each cluster's fleets (P4-01), by the cluster's
 	// connection id.
 	Fleets map[string][]fleets.Fleet `json:"fleets,omitempty"`
+	// Acks are each cluster's acknowledged alerts, by the cluster's
+	// connection id.
+	Acks map[string][]acks.Ack `json:"acks,omitempty"`
 }
 
 // Refresh limits: a second keeps the server from spinning; ten minutes keeps
@@ -50,6 +54,11 @@ func (s Settings) Validate() error {
 	for cluster, list := range s.Fleets {
 		if err := fleets.Validate(list); err != nil {
 			return fmt.Errorf("the fleets of %s: %w", cluster, err)
+		}
+	}
+	for cluster, list := range s.Acks {
+		if err := acks.Validate(list); err != nil {
+			return fmt.Errorf("the acknowledged alerts of %s: %w", cluster, err)
 		}
 	}
 	return nil
@@ -155,6 +164,35 @@ func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
 	if in.Fleets == nil {
 		in.Fleets = s.Current().Fleets
 	}
+	if in.Acks == nil {
+		in.Acks = s.Current().Acks
+	}
+	return s.update(ctx, in)
+}
+
+// UpdateAcks changes one cluster's acknowledged alerts: change gets the
+// list as it is and returns the new one.
+func (s *Service) UpdateAcks(ctx context.Context, cluster string, change func([]acks.Ack) []acks.Ack) (State, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	in := s.Current().Settings
+	list := change(append([]acks.Ack(nil), in.Acks[cluster]...))
+	if err := acks.Validate(list); err != nil {
+		return State{}, err
+	}
+	all := map[string][]acks.Ack{}
+	for k, v := range in.Acks {
+		all[k] = v
+	}
+	if len(list) == 0 {
+		delete(all, cluster)
+	} else {
+		all[cluster] = list
+	}
+	if len(all) == 0 {
+		all = nil
+	}
+	in.Acks = all
 	return s.update(ctx, in)
 }
 

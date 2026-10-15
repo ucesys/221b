@@ -20,6 +20,7 @@ import { SearchBox } from './SearchBox'
 import { SideList, type SideGroup } from './SideList'
 import type { TabProps } from './tabs'
 import { colorLine } from './YamlView'
+import { peekHref } from '../lib/peek'
 
 type ReleaseFilter = 'all' | 'deployed' | 'failed'
 const SUBTABS = ['pods', 'workloads', 'storage', 'network', 'other', 'values', 'notes', 'history'] as const
@@ -137,7 +138,7 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
   const openKey = (kind: string, namespace: string, name: string) => withParams(route, { open: `${kind}/${namespace}/${name}` })
   const openObject = (kind: string, namespace: string, name: string) => {
     // Cluster-scoped kinds have tabs of their own.
-    if (kind === 'Node') navigate(href('nodes', [], { open: name }))
+    if (kind === 'Node') navigate(peekHref({ kind: 'node', name }))
     else if (kind === 'Namespace') navigate(href('namespaces', [name]))
     else navigate(openKey(kind, namespace, name), true)
   }

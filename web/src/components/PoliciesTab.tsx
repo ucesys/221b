@@ -14,6 +14,7 @@ import { CopyIcon, WarnIcon } from './Icons'
 import { PolicyPanel } from './PolicyPanel'
 import { Select } from './Select'
 import type { TabProps } from './tabs'
+import { objectLink } from '../lib/peek'
 
 function copy(text: string, onToast: (m: string) => void, what = 'Copied') {
   void navigator.clipboard?.writeText(text).then(
@@ -150,7 +151,7 @@ function Review({ fs, set, onToast, go, empty = 'Nothing to review.' }: { fs: Po
                     {p.text}
                   </button>
                 ) : (
-                  <a key={i} className="rk-chip rk-chipbtn" href={p.link ? href(p.link.tab, p.link.path ?? [], p.link.params ?? {}) : undefined} style={{ textDecoration: 'none' }}>
+                  <a key={i} className="rk-chip rk-chipbtn" {...(p.link ? objectLink(p.link.tab, p.link.path ?? [], p.link.params ?? {}) : {})} style={{ textDecoration: 'none' }}>
                     {p.text}
                   </a>
                 ),
@@ -352,7 +353,7 @@ function Answer({ data, from, fromPod, to, set }: { data: NetCheckResult; from: 
         {why.join(' ')}
       </p>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        <a className="rk-chip rk-chipbtn" href={href('pods', [], { open: fromPod.key })} style={{ textDecoration: 'none' }}>
+        <a className="rk-chip rk-chipbtn" {...objectLink('pods', [], { open: fromPod.key })} style={{ textDecoration: 'none' }}>
           pod {fromPod.key}
         </a>
         {policies.map((pk) => (
@@ -364,7 +365,7 @@ function Answer({ data, from, fromPod, to, set }: { data: NetCheckResult; from: 
           </span>
         ))}
         <span style={{ color: 'var(--fg3)' }}>→</span>
-        <a className="rk-chip rk-chipbtn" href={href('services', [], { open: to })} style={{ textDecoration: 'none' }}>
+        <a className="rk-chip rk-chipbtn" {...objectLink('services', [], { open: to })} style={{ textDecoration: 'none' }}>
           Service {to}:{data.service?.port}
         </a>
       </div>

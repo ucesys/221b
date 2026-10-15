@@ -63,6 +63,8 @@ test('a node that stops reporting and a crash-looping pod each show as a problem
     await expect(panel.getByRole('region', { name: 'Problems' })).toContainText('Kubelet stopped reporting')
     await expect(panel.getByRole('region', { name: 'Problems' })).toContainText('NodeStatusUnknown')
 
+    // The pane lies over the table: close it to pick another node.
+    await page.keyboard.press('Escape')
     await row(page, crashing).click()
     await expect(panel.getByRole('heading', { level: 2 })).toHaveText(crashing)
     const problems = panel.getByRole('region', { name: 'Problems' })

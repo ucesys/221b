@@ -115,6 +115,11 @@ function subscribe(fn: () => void) {
   }
 }
 
+/** The route as it is now, outside React: for links built at click time. */
+export function currentRoute(): Route {
+  return current
+}
+
 export function useRoute(): Route {
   return useSyncExternalStore(subscribe, () => current, () => current)
 }

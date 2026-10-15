@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { badgeOf, bannersOf, contextOf, sectionsOf, tilesOf } from './alerts'
+import { badgeOf, bannersOf, contextOf, sectionsOf, sevLabel, tilesOf } from './alerts'
 import type { AlertRow } from '../api/types'
 
 const now = Date.parse('2026-10-14T12:00:00Z')
@@ -42,5 +42,14 @@ describe('alerts', () => {
     expect(b[1]).toMatchObject({ tone: 'warn', title: '1 pod pending · 1 node warning' })
     expect(b[1]!.detail).toBe('web/b — Unschedulable for 12m  ·  w2 — cordoned')
     expect(bannersOf([oom], now)).toEqual([])
+  })
+
+  it('leaves acknowledged alerts out of the badge and the banners, after the others but before the recovered', () => {
+    const acked: AlertRow = { ...pull, key: 'pod:web/d', name: 'd', ack: { by: 'dana@corp.example', at: ago(1) } }
+    const rows = [acked, pull, oom]
+    expect(badgeOf(rows)).toEqual({ count: 1, tone: 'err' })
+    expect(bannersOf(rows, now).map((b) => b.detail).join(' ')).not.toContain('web/d')
+    expect(sectionsOf(rows).pods.map((r) => r.name)).toEqual(['a', 'd', 'c'])
+    expect(sevLabel(oom)).toEqual({ label: 'Recovered', tone: 'ok' })
   })
 })

@@ -385,9 +385,12 @@ export interface Endpoint {
   tone?: Tone
 }
 
+/** One Ingress path that sends traffic to a Service. */
 export interface IngressRef {
   name: string
-  hosts: string[]
+  host: string
+  path: string
+  tls: boolean
 }
 
 export interface ServiceDetails extends ServiceRow {
@@ -582,6 +585,8 @@ export interface AlertRow {
   accessModes?: string[]
   users?: { pod: string; status: string; node?: string }[]
   events: AlertEntry[]
+  /** Who acknowledged the alert as it is now, if anyone did. */
+  ack?: { by: string; at: string }
 }
 
 /** A fleet's definition (P4-01). */

@@ -153,3 +153,31 @@ test('the fleets cannot be changed by someone who is not an administrator', asyn
   expect([401, 403]).toContain(status)
   await ctx.close()
 })
+
+test('a saved fleet shows at once; a node opens its details here; the columns can all be picked or cleared', async ({ page, request }) => {
+  const worker = healthyWorkers(await snapshot(request))[0]!
+  const label = Object.entries(worker.labels).find(([k]) => k === 'kubernetes.io/hostname') ?? Object.entries(worker.labels)[0]!
+  const saved = Date.now()
+  expect(await putFleets(page, [{ id: 'e2e-now', name: 'E2E now', color: 1, labels: [`${label[0]}=${label[1]}`], taints: [] }])).toBe(200)
+  // Not a refresh later (asked at the Phase 4 review).
+  await expect(row(page, 'e2e-now')).toBeVisible({ timeout: 2_000 })
+  expect(Date.now() - saved).toBeLessThan(2_000)
+  await row(page, 'e2e-now').getByTestId('fleet-pick').click()
+  await expect(page.getByTestId('fleet-header')).toContainText('E2E now')
+
+  // A node's name opens its details over the Fleets tab.
+  await page.getByTestId('fleet-matrix').locator(`[data-node="${worker.name}"] a`).click()
+  await expect(page.getByTestId('node-panel')).toContainText(worker.name)
+  await expect(page).toHaveURL(/#\/fleets\?.*peek=node/)
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('node-panel')).toHaveCount(0)
+
+  // Columns: clear all, then select all.
+  await page.getByRole('button', { name: /^Columns/ }).click()
+  await page.getByTestId('fleet-cols-none').click()
+  await expect(page.getByRole('button', { name: /^Columns/ })).toContainText(/(^|\D)0\/\d+/)
+  await page.getByTestId('fleet-cols-all').click()
+  const text = (await page.getByRole('button', { name: /^Columns/ }).textContent()) ?? ''
+  const [shown, all] = text.match(/(\d+)\/(\d+)/)!.slice(1)
+  expect(shown).toBe(all)
+})

@@ -1,5 +1,6 @@
 // Cells shared by every table.
 import type { Tone as ToneKind } from '../api/types'
+import { peekLink, type Peek } from '../lib/peek'
 
 /** A status with its dot: "● Running". */
 export function Tone({ tone, text, tip, weight = 500 }: { tone: ToneKind; text: string; tip?: string; weight?: number }) {
@@ -20,10 +21,16 @@ export function Mono({ text, tip, dim = true, size }: { text: string; tip?: stri
   )
 }
 
-/** A link into another tab, in the table's own monospace style. */
-export function CellLink({ href, text, tip }: { href: string; text: string; tip?: string }) {
+/** A link's attributes for one object's details over the current tab. */
+export function peekCell(p: Peek): { href: string; peek: string } {
+  const l = peekLink(p)
+  return { href: l.href, peek: l['data-peek'] }
+}
+
+/** A link into another tab, or to one object's details, in the table's own monospace style. */
+export function CellLink({ href, text, tip, peek }: { href: string; text: string; tip?: string; peek?: string }) {
   return (
-    <a className="rk-mono rk-cell-link" href={href} title={tip} style={{ fontSize: 12 }}>
+    <a className="rk-mono rk-cell-link" href={href} data-peek={peek} title={tip} style={{ fontSize: 12 }}>
       {text}
     </a>
   )

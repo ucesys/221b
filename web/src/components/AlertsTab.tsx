@@ -1,15 +1,15 @@
 import { useMemo, useState } from 'react'
 import { useView } from '../api/live'
 import type { AlertEntry, AlertRow } from '../api/types'
-import { agoText, contextOf, countText, kindLabel, metaText, minutesOf, openLabel, searchText, sectionsOf, sevLabel, tilesOf, type AlertKind } from '../lib/alerts'
+import { agoText, contextOf, countText, isActive, kindLabel, metaText, minutesOf, openLabel, searchText, sectionsOf, sevLabel, tilesOf, type AlertKind } from '../lib/alerts'
 import { fileStamp, fmtTs } from '../lib/format'
-import { href, navigate, withParams } from '../lib/router'
+import { navigate, withParams } from '../lib/router'
+import { peekHref, type Peek } from '../lib/peek'
+import { acknowledge } from '../api/acks'
 import { csvText, type ExportFormat } from '../lib/table'
 import { download, xlsxBytes, type Cell } from '../lib/xlsx'
 import { ExportMenu } from './ExportMenu'
 import { ExcelIcon, SearchIcon } from './Icons'
-import { ObjectPanel } from './ObjectPanel'
-import { PodPanel } from './PodPanel'
 import type { TabProps } from './tabs'
 
 const KINDS: [AlertKind, string][] = [
@@ -94,8 +94,17 @@ function exportEvents(rows: AlertRow[], format: ExportFormat, cluster: string | 
   onToast(`Downloaded ${base}.${format}`)
 }
 
-function AlertCard({ r, now, onOpen, onPod, onXl }: { r: AlertRow; now: number; onOpen: () => void; onPod: (key: string) => void; onXl: () => void }) {
+function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: number; onOpen: () => void; onPod: (key: string) => void; onXl: () => void; onAck: (acknowledge: boolean) => Promise<void> }) {
   const [sort, setSort] = useState<Sort>({ col: 'i', dir: 'asc' })
+  const [busy, setBusy] = useState(false)
+  const ack = async (on: boolean) => {
+    setBusy(true)
+    try {
+      await onAck(on)
+    } finally {
+      setBusy(false)
+    }
+  }
   const sev = sevLabel(r)
   const ctx = contextOf(r, now)
   const events = sortEvents(r.events, sort, now)
@@ -112,7 +121,7 @@ function AlertCard({ r, now, onOpen, onPod, onXl }: { r: AlertRow; now: number; 
     )
   }
   return (
-    <div className="rk-card" style={{ overflow: 'hidden' }} data-testid="alert" data-alert={r.key} data-severity={r.severity}>
+    <div className="rk-card" style={{ overflow: 'hidden' }} data-testid="alert" data-alert={r.key} data-severity={r.severity} data-acked={r.ack ? 'true' : undefined}>
       <div style={{ padding: '12px 16px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px', borderBottom: '1px solid var(--line)' }}>
         <span className="rk-tag" data-tone={sev.tone} style={{ fontSize: 11, padding: '2px 8px' }}>
           {sev.label}
@@ -124,12 +133,28 @@ function AlertCard({ r, now, onOpen, onPod, onXl }: { r: AlertRow; now: number; 
           {r.name}
         </span>
         <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{metaText(r)}</span>
+        {r.ack && (
+          <span className="rk-tag" data-tone="info" style={{ fontSize: 11, padding: '2px 8px' }} title={`Acknowledged by ${r.ack.by}, ${fmtTs(r.ack.at)}. It stays off the banners and the tab's count until it changes or clears.`} data-testid="alert-acked">
+            Acknowledged by {r.ack.by} · {agoText(r.ack.at, now)}
+          </span>
+        )}
         <span style={{ flex: '1 1 auto' }} />
         {r.status && (
           <span className="rk-pill" data-tone={r.statusTone}>
             <span className="rk-dot" />
             {r.status}
           </span>
+        )}
+        {isActive(r) && (
+          <button
+            className="rk-btn"
+            disabled={busy}
+            onClick={() => void ack(!r.ack)}
+            title={r.ack ? 'Put it back on the banners and the tab’s count, for everyone' : 'Take it off the banners and the tab’s count, for everyone, until it changes or clears. It stays here.'}
+            data-testid="alert-ack"
+          >
+            {r.ack ? 'Undo acknowledge' : 'Acknowledge'}
+          </button>
         )}
         <button className="rk-btn" onClick={onOpen} data-testid="alert-open">
           {openLabel(r)}
@@ -192,18 +217,24 @@ function AlertCard({ r, now, onOpen, onPod, onXl }: { r: AlertRow; now: number; 
   )
 }
 
+/** The section an alert is listed in. */
+function sectionOf(r: AlertRow): string {
+  return r.kind === 'pod' ? 'pods' : r.kind === 'pvc' ? 'volumes' : r.role === 'control-plane' ? 'control-plane' : 'workers'
+}
+
 /** The Alerts tab (P4-07): pods failing to start, pending and recently recovered, node problems and volume warnings, each with its events. */
 export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
   const { rows, loaded } = useView<AlertRow>('alerts')
   const p = route.params
   const kind: AlertKind = KINDS.some(([k]) => k === p.get('kind')) ? (p.get('kind') as AlertKind) : 'all'
   const query = p.get('q') ?? ''
-  const open = p.get('open') ?? ''
+  // Active alerts only, unless asked for the recovered ones too.
+  const activeOnly = p.get('show') !== 'all'
   const set = (changes: Record<string, string | undefined>) => navigate(withParams(route, changes), true)
 
   const tiles = useMemo(() => tilesOf(rows), [rows])
   const q = query.trim().toLowerCase()
-  const shown = useMemo(() => (q ? rows.filter((r) => searchText(r).includes(q)) : rows), [rows, q])
+  const shown = useMemo(() => rows.filter((r) => (!activeOnly || isActive(r)) && (!q || searchText(r).includes(q))), [rows, q, activeOnly])
   const sec = useMemo(() => sectionsOf(shown), [shown])
   const counts: Record<AlertKind, number> = {
     all: shown.length,
@@ -212,20 +243,35 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
     volumes: sec.volumes.length,
   }
   const sections: { id: string; title: string; what: string; rows: AlertRow[]; show: boolean }[] = [
-    { id: 'pods', title: 'Pods', what: 'pod', rows: sec.pods, show: kind === 'all' || kind === 'pods' },
+    { id: 'pods', title: 'Pods', what: 'pod', rows: sec.pods.filter(isActive), show: kind === 'all' || kind === 'pods' },
     { id: 'control-plane', title: 'Control-plane nodes', what: 'control-plane', rows: sec.controlPlane, show: kind === 'all' || kind === 'nodes' },
     { id: 'workers', title: 'Worker nodes', what: 'worker', rows: sec.workers, show: kind === 'all' || kind === 'nodes' },
     { id: 'volumes', title: 'Persistent volumes and claims', what: 'volume', rows: sec.volumes, show: kind === 'all' || kind === 'volumes' },
   ]
-  const visible = sections.filter((s) => s.show).flatMap((s) => s.rows)
+  const recovered = { id: 'recovered', title: 'Recovered pods', what: 'recovered pod', rows: sec.pods.filter((r) => !isActive(r)), show: kind === 'all' || kind === 'pods' }
+  // What is going on first, then the pods that recovered, then the groups
+  // with nothing to show.
+  const ordered = [...sections.filter((s) => s.rows.length), ...(recovered.rows.length ? [recovered] : []), ...sections.filter((s) => !s.rows.length)]
+  const visible = ordered.filter((s) => s.show).flatMap((s) => s.rows)
+  const hiddenRecovered = activeOnly ? rows.filter((r) => !isActive(r) && (!q || searchText(r).includes(q))).length : 0
 
+  // The object's details over this tab.
   const openRow = (r: AlertRow) => {
-    if (r.kind === 'node') navigate(href('nodes', [], { open: r.name }))
-    else set({ open: `${r.kind}:${r.namespace}/${r.name}` })
+    const target: Peek = r.kind === 'node' ? { kind: 'node', name: r.name } : r.kind === 'pod' ? { kind: 'pod', namespace: r.namespace!, name: r.name } : { kind: 'object', type: 'PersistentVolumeClaim', namespace: r.namespace!, name: r.name }
+    navigate(peekHref(target))
   }
-  const [openKind, openRest = ''] = open.split(':', 2) as [string, string?]
-  const [openNs = '', openName = ''] = openRest.split('/', 2) as [string?, string?]
-  const close = () => set({ open: undefined })
+  const openPod = (key: string) => {
+    const [ns = '', name = ''] = key.split('/', 2)
+    navigate(peekHref({ kind: 'pod', namespace: ns, name }))
+  }
+  const ack = async (r: AlertRow, on: boolean) => {
+    try {
+      await acknowledge(route.cluster, r.key, on)
+      onToast(on ? `Acknowledged ${r.namespace ? r.namespace + '/' : ''}${r.name}: it is off the banners for everyone until it changes or clears.` : `${r.namespace ? r.namespace + '/' : ''}${r.name} is back on the banners.`)
+    } catch (e) {
+      onToast(`Not saved: ${(e as Error).message}`)
+    }
+  }
 
   return (
     <section className="rk-pane" aria-label="Alerts" style={{ padding: '20px 24px 32px', display: 'flex', flexDirection: 'column', gap: 14, flex: '1 1 auto', minWidth: 0 }}>
@@ -253,6 +299,11 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
             </button>
           ))}
         </div>
+        <label className="rk-check" title="Leave out the pods that recovered after warnings" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+          <input type="checkbox" checked={activeOnly} onChange={(e) => set({ show: e.target.checked ? undefined : 'all' })} data-testid="alert-active" />
+          Active alerts only
+          {hiddenRecovered > 0 && <span className="rk-cnt" title={`${hiddenRecovered} recovered not shown`}>+{hiddenRecovered} recovered</span>}
+        </label>
         <label className="rk-field" style={{ width: 260 }}>
           <SearchIcon />
           <span className="rk-sr">Search alerts</span>
@@ -262,7 +313,7 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
       </div>
       {!loaded && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Waiting for the first list of alerts…</p>}
       {loaded &&
-        sections
+        ordered
           .filter((s) => s.show)
           .map((s) => (
             <div key={s.id} style={{ display: 'flex', flexDirection: 'column', gap: 14 }} data-testid={`alert-section-${s.id}`}>
@@ -271,17 +322,15 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
                 <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{s.rows.length}</span>
               </div>
               {s.rows.map((r) => (
-                <AlertCard key={r.key} r={r} now={now} onOpen={() => openRow(r)} onPod={(k) => set({ open: `pod:${k}` })} onXl={() => exportEvents([r], 'xlsx', cluster?.name, `${r.kind}-${r.name}-events`, onToast)} />
+                <AlertCard key={r.key} r={r} now={now} onOpen={() => openRow(r)} onPod={openPod} onXl={() => exportEvents([r], 'xlsx', cluster?.name, `${r.kind}-${r.name}-events`, onToast)} onAck={(on) => ack(r, on)} />
               ))}
               {s.rows.length === 0 && (
                 <p style={{ margin: 0, padding: '18px 16px', fontSize: 12.5, color: 'var(--fg3)', border: '1px dashed var(--line2)', borderRadius: 10 }} data-testid="alert-empty">
-                  {q ? `No ${s.what} alerts match this search.` : `No ${s.what} problems right now.`}
+                  {q ? `No ${s.what} alerts match this search.` : activeOnly && rows.some((r) => !isActive(r) && sectionOf(r) === s.id) ? `No active ${s.what} alerts; the recovered ones are hidden.` : `No ${s.what} problems right now.`}
                 </p>
               )}
             </div>
           ))}
-      {openKind === 'pod' && openName && <PodPanel podKey={`${openNs}/${openName}`} row={null} gone={false} cluster={cluster} now={now} onClose={close} onToast={onToast} />}
-      {openKind === 'pvc' && openName && <ObjectPanel kind="PersistentVolumeClaim" namespace={openNs} name={openName} row={null} gone={false} cluster={cluster} now={now} linkTo={(k, n) => href('namespaces', [openNs], { open: `${k}/${n}` })} onClose={close} onToast={onToast} />}
     </section>
   )
 }

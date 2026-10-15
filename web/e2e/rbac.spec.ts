@@ -166,4 +166,8 @@ test('an identity page says what it has and through which bindings', async ({ pa
   await expect(grants.locator('[data-grant]').filter({ hasText: 'e2e-deployer' })).toContainText('names it directly')
   await openAccess(page, `?id=${encodeURIComponent(`ServiceAccount:${NS1}/e2e-ghost`)}`)
   await expect(page.getByTestId('identity-missing')).toBeVisible()
+  // Its findings show whole, not squeezed by the page (asked at the Phase 4 review).
+  const finding = page.getByTestId('finding').first()
+  await expect(finding).toBeVisible()
+  expect(await finding.evaluate((el) => el.scrollHeight - el.clientHeight)).toBeLessThanOrEqual(1)
 })

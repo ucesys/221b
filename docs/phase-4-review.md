@@ -1,6 +1,6 @@
 # Phase 4 review
 
-This is the guide for the review that closes Phase 4 ([requirements](requirements.md#phase-4-analysis-views)). For each item on the review list it says what was built, what CI already proves on every pull request, and what is left for you to check by hand. The Phase 3 guide is [phase-3-review.md](phase-3-review.md); [architecture.md](architecture.md) has been brought up to date and gained six decision records (ADR-32 to ADR-37).
+This is the guide for the review that closes Phase 4 ([requirements](requirements.md#phase-4-analysis-views)). For each item on the review list it says what was built, what CI already proves on every pull request, and what is left for you to check by hand. The Phase 3 guide is [phase-3-review.md](phase-3-review.md); [architecture.md](architecture.md) has been brought up to date and gained eight decision records (ADR-32 to ADR-39, the last two from the first review round).
 
 ## What Phase 4 built
 
@@ -25,6 +25,15 @@ Decisions worth a look, because they shape what you will see:
 - **ADR-37:** the Access and Policies tabs show their count in the tab bar only once opened, so a page that never opens them never builds them.
 
 Smaller changes came with it. The chart's ClusterRole now reads ClusterRoles, ClusterRoleBindings, priority classes, admission webhook configurations and IngressClasses, and roles, bindings, ServiceAccounts, NetworkPolicies, disruption budgets, quotas and limit ranges in full rather than by name; it still writes nothing but its settings and connections (`hack/check-rbac.sh` checks it, and checks it may not create ClusterRoleBindings or patch webhook configurations). And with ten tabs, the bar at 1440 px puts the last ones under **More** when the counts are long, as the prototype does at that width; the Services count in the bar was 0 for a signed-in person until the Services tab had been opened, which is fixed.
+
+## Changes from the first review round
+
+- **Details over the tab you are on (ADR-38).** A link to one node, pod, Service, object or policy opens its details pane over the current tab instead of switching tabs: a node from a fleet, a pod or node from an alert, a hop of a trace, a pod from a policy or an identity. Links whose result is several objects still go to the tab that lists them, filtered. Every pane now lies over the page, the node details included, so no table is shortened.
+- **Fleets.** A saved fleet shows at once: changes made in the console are published within a fraction of a second instead of at the next refresh. Before, a fleet saved under a long refresh appeared only a refresh later, and picking it before then did nothing. The Columns panel has **Select all** and **Clear all** (for the columns matching the search, when there is one), and every other table's Columns menu has them too.
+- **Alerts (ADR-39).** **Active alerts only** is on by default; unticked, recovered pods follow in a group of their own, after everything that is going on, with a green *Recovered* tag, and the groups with nothing to show come last. **Acknowledge** takes an alert off the banners and the tab's count for everyone, until it changes or clears; it stays on the Alerts tab, marked with who acknowledged it and when, and **Undo acknowledge** puts it back. Both are audited.
+- **Pod details.** The container and amount pickers look like the drop-downs they are.
+- **Access.** On an identity's page, its findings were squeezed to a sliver and cut off at the bottom by the page's own layout; they now keep their height.
+- **Services.** A Service published by an Ingress failed to open its details (the browser read the Ingresses in a shape the server did not send); it opens, and lists the URLs that publish it.
 
 ## 1. Fleets (P4-01)
 

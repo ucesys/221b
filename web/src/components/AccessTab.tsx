@@ -40,6 +40,7 @@ import { CopyIcon, SearchIcon, ShieldIcon, WarnIcon } from './Icons'
 import { RbacPanel } from './RbacPanel'
 import { Select } from './Select'
 import type { TabProps } from './tabs'
+import { objectLink } from '../lib/peek'
 
 type KindFilter = 'all' | 'users' | 'groups' | 'sas'
 const KIND_OF: Record<KindFilter, string | null> = { all: null, users: 'User', groups: 'Group', sas: 'ServiceAccount' }
@@ -493,7 +494,7 @@ function IdentityPage({ id, bindings, roles, items, namespaces, now, route, set,
           </span>
           <span>
             Secret{' '}
-            <a className="rk-link rk-mono" href={href('namespaces', [id.namespace!], { open: `Secret/${t.name}` })}>
+            <a className="rk-link rk-mono" {...objectLink('namespaces', [id.namespace!], { open: `Secret/${t.name}` })}>
               {t.name}
             </a>{' '}
             holds a token for it that never expires{t.created ? `; created ${fmtAge(t.created, now)} ago` : ''}.
@@ -504,7 +505,7 @@ function IdentityPage({ id, bindings, roles, items, namespaces, now, route, set,
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }} data-testid="identity-pods">
           <span style={{ fontSize: 12, color: 'var(--fg3)' }}>Pods using it</span>
           {id.sa.pods.map((pod) => (
-            <a key={pod.name} className="rk-chip" href={href('pods', [], { open: `${id.namespace}/${pod.name}` })} style={{ textDecoration: 'none' }} title={pod.status}>
+            <a key={pod.name} className="rk-chip" {...objectLink('pods', [], { open: `${id.namespace}/${pod.name}` })} style={{ textDecoration: 'none' }} title={pod.status}>
               <span className="rk-t" data-tone={pod.tone}>
                 <span className="rk-dot" />
               </span>

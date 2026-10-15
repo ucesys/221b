@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/ucesys/221b/server/internal/access"
+	"github.com/ucesys/221b/server/internal/acks"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
@@ -61,6 +62,8 @@ type Settings interface {
 	Update(ctx context.Context, s settings.Settings) (settings.State, error)
 	// UpdateFleets replaces a cluster's fleets (P4-01).
 	UpdateFleets(ctx context.Context, cluster string, list []fleets.Fleet) (settings.State, error)
+	// UpdateAcks changes a cluster's acknowledged alerts.
+	UpdateAcks(ctx context.Context, cluster string, change func([]acks.Ack) []acks.Ack) (settings.State, error)
 }
 
 // Auth gates requests by session and serves the sign-in endpoints;
@@ -251,6 +254,8 @@ func New(o Options) *Server {
 		s.handle("GET /api/v1/settings", "settings", s.getSettings)
 		s.handle("PUT /api/v1/settings", "settings-update", s.putSettings)
 		s.handle("PUT /api/v1/fleets", "fleets-update", s.putFleets)
+		s.handle("POST /api/v1/alerts/ack", "alert-ack", s.postAck)
+		s.handle("POST /api/v1/clusters/{cluster}/alerts/ack", "alert-ack", s.postAck)
 		s.handle("PUT /api/v1/clusters/{cluster}/fleets", "fleets-update", s.putFleets)
 	}
 	if o.Auth != nil {

@@ -11,6 +11,7 @@ import { download, xlsxBytes, type Cell } from '../lib/xlsx'
 import { FleetEditor, type EditorSeed } from './FleetEditor'
 import { Chevron, ExcelIcon, FilterIcon, PlusIcon, SearchIcon } from './Icons'
 import type { TabProps } from './tabs'
+import { peekLink } from '../lib/peek'
 
 
 const HIDE_KEY = '221b.fleets.hidden'
@@ -444,11 +445,11 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                 <span className="rk-sr">Find a column</span>
                 <input type="search" placeholder="Find a label or taint" value={colQuery} onChange={(e) => setColQuery(e.target.value)} />
               </label>
-              <button className="rk-link" onClick={() => setHidden(new Set())} style={{ fontSize: 12 }}>
-                Show all
+              <button className="rk-btn" onClick={() => setHidden(new Set([...hidden].filter((id) => !cols.some((c) => c.id === id && colMatches(c)))))} title={cq ? 'Show every column that matches the search' : 'Show every column'} data-testid="fleet-cols-all">
+                Select all
               </button>
-              <button className="rk-link" onClick={() => setHidden(new Set(cols.map((c) => c.id)))} style={{ fontSize: 12 }}>
-                Hide all
+              <button className="rk-btn" onClick={() => setHidden(new Set([...hidden, ...cols.filter(colMatches).map((c) => c.id)]))} title={cq ? 'Hide every column that matches the search' : 'Hide every column'} data-testid="fleet-cols-none">
+                Clear all
               </button>
               <button className="rk-btn" onClick={() => setColsOpen(false)}>
                 Done
@@ -593,7 +594,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                     return (
                       <div key={g.key + n.name} className="rk-mxr" role="row" data-dim={fxOn && !picked(n)} data-node={n.name}>
                         <span className="rk-mxn" role="rowheader">
-                          <a className="rk-link rk-mono" href={href('nodes', [], { open: n.name })} title={`Open ${n.name} in the Nodes tab`} style={{ minWidth: 0, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'none' }}>
+                          <a className="rk-link rk-mono" {...peekLink({ kind: 'node', name: n.name })} title={`Open the details of ${n.name}`} style={{ minWidth: 0, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'none' }}>
                             {n.name}
                           </a>
                           {flag && (

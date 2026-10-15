@@ -4,7 +4,7 @@ import { listText } from '../lib/rbac'
 import { nextLevel, PSA_RANK, PSA_TONE, qtyNice, shortReasons, VERDICT } from '../lib/policies'
 import { href } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
-import { CellLink, Mono } from './cells'
+import { CellLink, Mono, peekCell } from './cells'
 
 function age<R extends { created?: string }>(): ColumnDef<R> {
   return {
@@ -108,7 +108,7 @@ export const netpolTerms = (r: NetPolRow): Term[] => [
 // ---------- disruption budgets and drains ----------
 
 export const DRAIN_COLUMNS: ColumnDef<DrainRow>[] = [
-  { id: 'node', label: 'Node', width: 'minmax(130px, .8fr)', min: 130, sortValue: (r) => r.node, cell: (r) => <CellLink href={href('nodes', [], { open: r.node })} text={r.node + (r.cordoned ? ' (cordoned)' : '')} tip={`Open ${r.node} in the Nodes tab`} />, export: (r) => [{ head: 'Node', cell: r.node }] },
+  { id: 'node', label: 'Node', width: 'minmax(130px, .8fr)', min: 130, sortValue: (r) => r.node, cell: (r) => <CellLink {...peekCell({ kind: 'node', name: r.node })} text={r.node + (r.cordoned ? ' (cordoned)' : '')} tip={`Node ${r.node}: open its details`} />, export: (r) => [{ head: 'Node', cell: r.node }] },
   { id: 'ev', label: 'Pods to evict', sortName: 'pods to evict (most first)', width: '110px', min: 110, right: true, defaultDir: 'desc', sortValue: (r) => r.evict.length, cell: (r) => <span className="rk-num" title={`${r.daemonSet.length} DaemonSet and ${r.mirror} static pods stay`}>{r.evict.length}</span>, export: (r) => [{ head: 'Pods to evict', cell: r.evict.length }] },
   { id: 'budgets', label: 'Budgets involved', width: 'minmax(150px, 1fr)', min: 150, sortValue: (r) => r.budgets.join(', '), cell: (r) => <Small text={r.budgets.join(', ') || 'none'} />, export: (r) => [{ head: 'Budgets involved', cell: r.budgets.join(', ') }] },
   {

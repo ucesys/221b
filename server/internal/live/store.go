@@ -22,6 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/ucesys/221b/server/internal/acks"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/nodes"
@@ -136,6 +137,9 @@ type viewDef struct {
 	// usage reads CPU and memory in use by row key, sent apart from the
 	// rows because it changes on every read.
 	usage func(src Source) map[string]nodes.Usage
+	// decorate adds to a built row what is not in the cluster: an alert's
+	// acknowledgement.
+	decorate func(s *Store, key string, row any) any
 }
 
 // view is one view's current rows.
@@ -173,6 +177,7 @@ type Store struct {
 	refresh     time.Duration
 	// fleets are this cluster's fleets, from the settings.
 	fleets     atomic.Pointer[[]fleets.Fleet]
+	acks       atomic.Pointer[map[string]acks.Ack]
 	recomputes uint64
 	delays     Histogram
 
@@ -181,6 +186,7 @@ type Store struct {
 	dirtyInfo   bool
 	dirtyTotals bool
 	built       bool      // rows have been built since the cluster was listed
+	rowsNow     bool      // a change someone made here: publish rows without waiting for the tick
 	since       time.Time // when the oldest unpublished change arrived
 	kick        chan struct{}
 	reset       chan struct{}
@@ -329,6 +335,7 @@ var staticViews = []viewDef{
 		build: func(src Source, key string, now time.Time) (any, bool) {
 			return views.BuildAlert(src, key, now)
 		},
+		decorate: decorateAlert,
 	},
 	{
 		name:  ViewFleets,
@@ -436,16 +443,37 @@ func (s *Store) SetSettings(refresh time.Duration, raw []byte) {
 	if changed {
 		var in struct {
 			Fleets map[string][]fleets.Fleet `json:"fleets"`
+			Acks   map[string][]acks.Ack     `json:"acks"`
 		}
 		_ = json.Unmarshal(raw, &in)
 		list := in.Fleets[s.opts.Cluster]
 		if old := s.fleets.Load(); old == nil || !reflect.DeepEqual(*old, list) {
 			s.fleets.Store(&list)
+			// Someone saved them here: they see them at once, not a refresh later.
 			s.Notify(kube.Change{Views: map[string][]string{ViewFleets: {kube.AllRows}}})
+			s.PublishSoon()
+		}
+		ackd := acks.Index(in.Acks[s.opts.Cluster])
+		if old := s.acks.Load(); (old == nil && len(ackd) > 0) || (old != nil && !reflect.DeepEqual(*old, ackd)) {
+			s.acks.Store(&ackd)
+			s.Notify(kube.Change{Views: map[string][]string{ViewAlerts: {kube.AllRows}}})
+			s.PublishSoon()
 		}
 	}
 	select {
 	case s.reset <- struct{}{}:
+	default:
+	}
+}
+
+// PublishSoon publishes the pending rows within the prompt delay instead
+// of at the next refresh, for changes made through the console itself.
+func (s *Store) PublishSoon() {
+	s.pendingMu.Lock()
+	s.rowsNow = true
+	s.pendingMu.Unlock()
+	select {
+	case s.kick <- struct{}{}:
 	default:
 	}
 }
@@ -486,7 +514,8 @@ func (s *Store) Run(ctx context.Context) {
 			case <-time.After(s.opts.Prompt):
 			}
 			s.pendingMu.Lock()
-			rows := !s.built
+			rows := !s.built || s.rowsNow
+			s.rowsNow = false
 			s.pendingMu.Unlock()
 			s.process(rows)
 		}
@@ -705,6 +734,9 @@ func (s *Store) build(d viewDef, all bool, keys []string, usage bool, now time.T
 			if !ok {
 				r.rows = append(r.rows, built{key: k})
 				continue
+			}
+			if d.decorate != nil {
+				row = d.decorate(s, k, row)
 			}
 			r.present[k] = struct{}{}
 			encode(k, row)
@@ -1223,6 +1255,23 @@ func (sub *Sub) push(name string, msg []byte) {
 	case sub.wake <- struct{}{}:
 	default:
 	}
+}
+
+// decorateAlert marks an alert acknowledged while it is still what was
+// acknowledged.
+func decorateAlert(s *Store, key string, row any) any {
+	r, ok := row.(views.AlertRow)
+	if !ok {
+		return row
+	}
+	m := s.acks.Load()
+	if m == nil {
+		return row
+	}
+	if a, ok := (*m)[key]; ok && a.Fingerprint == views.AlertFingerprint(r) {
+		r.Ack = &views.AlertAck{By: a.By, At: a.At}
+	}
+	return r
 }
 
 // buildFleets works out the cluster's fleets from its nodes as they are

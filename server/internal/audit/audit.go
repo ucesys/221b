@@ -22,6 +22,8 @@ const (
 	ActionSignOut       = "signout"
 	ActionSettings      = "settings.update"
 	ActionFleets        = "fleets.update"
+	ActionAlertAck      = "alert.ack"
+	ActionAlertUnack    = "alert.unack"
 	ActionClusterAdd    = "cluster.add"
 	ActionClusterUpdate = "cluster.update"
 	ActionClusterRemove = "cluster.remove"

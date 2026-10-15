@@ -87,7 +87,7 @@ sequenceDiagram
 
 ## API
 
-All responses carry the security headers below. Every path needs a signed-in session (P3-01) except the health probes, `/metrics`, the sign-in pages and the app's static files; without one the API answers 401 and a page shows the sign-in page. Every endpoint is `GET` except the sign-in forms, sign-out and `PUT /api/v1/settings` and `PUT /api/v1/fleets`, which change the shared settings, the only thing 221B writes to the cluster (X-03); every request that changes anything is refused when the browser says another site made it (X-06).
+All responses carry the security headers below. Every path needs a signed-in session (P3-01) except the health probes, `/metrics`, the sign-in pages and the app's static files; without one the API answers 401 and a page shows the sign-in page. Every endpoint is `GET` except the sign-in forms, sign-out and `PUT /api/v1/settings`, `PUT /api/v1/fleets` and `POST /api/v1/alerts/ack`, which change the shared settings, the only thing 221B writes to the cluster (X-03); every request that changes anything is refused when the browser says another site made it (X-06).
 
 | Path | Returns |
 | --- | --- |
@@ -102,6 +102,7 @@ All responses carry the security headers below. Every path needs a signed-in ses
 | `/api/v1/objects/{kind}/{namespace}/{name}` | Any other object's details, from the cache: the row, facts by kind (replicas and strategy, schedule, rules, capacity, keys and sizes, …), conditions, labels, annotations, owner chain, events, the Helm release it belongs to, and for a workload the pods it controls with their usage. `kind` is the registry name or the Kind (`deployments` or `Deployment`). 404 for an unknown kind, a missing object, or a Secret when they are not read. |
 | `/api/v1/yaml/{kind}/{name}`, `/api/v1/yaml/{kind}/{namespace}/{name}` | The object as YAML (`application/yaml`), read live, with `managedFields` removed and Secret values replaced by their sizes; `download=1` sends it as a file. `kind` is the registry name (`pods`, `deployments`, …). 404 for Secrets when they are not read. |
 | `/api/v1/netcheck?from=<ns>/<pod>&to=<ns>/<pod>&port=<n or name>&protocol=TCP` | Whether a connection is let through by the NetworkPolicies (P4-04): for each side, the policies that select the pod, whether it is isolated, the policies that admit the connection, and the verdict. `toService=<ns>/<service>` with a Service port checks each pod behind it instead. Answers what the policies say; whether the network plugin enforces them is on the Policies tab. |
+| `/api/v1/alerts/ack` | `POST` with `{"key": "pod:web/api-0", "acknowledge": true}`, for anyone signed in who may list the alert's object: acknowledges the alert as it is now, for everyone, or takes that back, and writes an audit record (`alert.ack`, `alert.unack`). The acknowledgement is kept with the settings and lapses when the alert changes or clears (ADR-39). `/api/v1/clusters/{id}/alerts/ack` for a connection. |
 | `/api/v1/fleets` | `PUT` with `{"fleets": [...]}` (each a name, color, description, labels and taints), for administrators: validates and saves the cluster's fleets with the settings and writes an audit record (P4-01). `/api/v1/clusters/{id}/fleets` for a connection. |
 | `/api/v1/settings` | `GET`: the settings in force, where they are kept (`configmap` or `memory`) and when they last changed. `PUT` with `{"refreshSeconds": n}` (1 to 600, JSON only), for administrators, saves and applies them for everyone and writes an audit record. |
 | `/api/v1/clusters` | `GET`: every connection as the cluster menu shows it (name, environment, description, API server, how the certificate is checked and the console signs in, what the credential says about itself, the state of its watches, version, node and pod counts, whether the credential expires within a week or has, the last test). Never a credential. `POST` with a draft (the same fields plus the credential: `token`, `kubeconfig` and `context`, `certPem` and `keyPem`, `caPem`), for administrators, validates it, inspects the credential, saves it, starts the connection and answers 201 with its summary, or 400 with `{"error", "field"}`. |
@@ -177,7 +178,7 @@ Phase 7's 5,000 nodes and 150,000 pods will need the second change the design al
 
 ## Decision records
 
-Records 1 to 9 cover the Architecture table in the requirements; 10 to 17 were made while building Phase 1, 18 to 24 while building Phase 2 25 to 31 while building Phase 3, and 32 to 37 while building Phase 4. Proposed records are not decided yet; they are listed so the review can see where they fit.
+Records 1 to 9 cover the Architecture table in the requirements; 10 to 17 were made while building Phase 1, 18 to 24 while building Phase 2 25 to 31 while building Phase 3, and 32 to 39 while building Phase 4 and at its review. Proposed records are not decided yet; they are listed so the review can see where they fit.
 
 ### ADR-1: Go for the server
 
@@ -442,4 +443,18 @@ Records 1 to 9 cover the Architecture table in the requirements; 10 to 17 were m
 - **Context:** The analysis tabs read many kinds at once (the Policies tab nine), and the tab bar shows a badge for alerts and findings.
 - **Decision:** `alerts`, `access`, `policies` and `networks` are lazy views like `pods` (ADR-19): built when a browser opens the tab, marked changed by the kinds they read, dropped a minute after the last browser leaves. Each row is filtered per person by the resource it comes from (ADR-31). The Alerts badge and banners need the `alerts` view on every tab; the Access and Policies badges show only while their tab is open.
 - **Consequences:** A console nobody looks at the analyses of costs nothing for them. The Access and Policies counts are not in the tab bar until those tabs have been opened, a deliberate trade against building them for every page.
+
+### ADR-38: One object's details open over the tab you are on
+
+- **Status:** Accepted (Phase 4 review).
+- **Context:** Links to one node, pod, Service or object went to that object's tab, so following a link from a fleet, an alert or a trace left the page you were working on. The node details shortened the Nodes table while the other drawers lay over theirs.
+- **Decision:** A link to a single object adds `peek=‹target›` to the current page's URL (`node:‹name›`, `pod:‹ns›/‹name›`, `service:‹ns›/‹name›`, `object:‹Kind›/‹ns›/‹name›`, `policy:‹key›`), and the app draws that object's details pane over whatever tab is open, the same pane its own tab draws. A link whose result is several objects (a node's pods, a namespace, a fleet's nodes) still goes to the tab that lists them, filtered; a Helm release is a page of its own and still opens on the Helm tab. Every details pane, the node's included, now lies over the page with a backdrop rather than beside the table.
+- **Consequences:** Closing a pane leaves the tab as it was, filters and scroll included, and the URL can be shared. A pane opened from inside another pane replaces it on top; Escape closes the top one. Links carry `data-peek`, so the target is added to the page as it is when clicked, not as it was drawn.
+
+### ADR-39: Acknowledged alerts are shared, kept with the settings, and lapse when the alert changes
+
+- **Status:** Accepted (Phase 4 review).
+- **Context:** An alert someone is already handling should leave the banners and the tab's count without disappearing from the Alerts tab.
+- **Decision:** Anyone signed in who may list an alert's object acknowledges it with `POST /api/v1/alerts/ack`. The acknowledgement is shared by everyone: it names who and when, is kept per cluster with the settings (in the settings ConfigMap, at most 500 at a time) and is audited. It holds the alert's fingerprint (its severity, status and, for a node, its problems), and the alert row carries it only while the fingerprint matches: a pod that fails differently, a node with another problem or an alert that clears and comes back is unacknowledged again. Lapsed acknowledgements are dropped when the next one is saved. Acknowledged alerts stay on the Alerts tab, marked, after the unacknowledged ones; they leave the banners and the tab's count.
+- **Consequences:** One person's acknowledgement spares everyone the banner, which is what an on-call team expects, and anyone can take it back. Nothing is written to the cluster's objects. More restarts of the same failure keep an alert acknowledged, so an acknowledged crash loop does not come back on its own until it changes.
 

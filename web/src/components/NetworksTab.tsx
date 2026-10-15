@@ -4,30 +4,32 @@ import type { HopLink, NetFactsRow, NetworkRow, NodeNetRow, TraceRow } from '../
 import { Mono } from '../columns/cells'
 import { fmtAge, fmtTs, minutesSince, nWord } from '../lib/format'
 import { listText } from '../lib/rbac'
-import { href, navigate, withParams } from '../lib/router'
+import { navigate, withParams } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
 import { useTable } from '../lib/useTable'
 import { DataTable } from './DataTable'
 import { ExportMenu } from './ExportMenu'
 import { Select } from './Select'
 import type { TabProps } from './tabs'
+import { peekHref, peekLink, type Peek } from '../lib/peek'
 
 const TONE_RANK: Record<string, number> = { err: 0, warn: 1, ok: 2, muted: 2, info: 2 }
 
-export function linkOf(l: HopLink): string | null {
+/** What a hop's target opens: its details over this tab. */
+export function linkOf(l: HopLink): Peek | null {
   switch (l.kind) {
     case 'ingress':
-      return href('namespaces', [l.namespace!], { open: `Ingress/${l.name}` })
+      return { kind: 'object', type: 'Ingress', namespace: l.namespace!, name: l.name }
     case 'secret':
-      return href('namespaces', [l.namespace!], { open: `Secret/${l.name}` })
+      return { kind: 'object', type: 'Secret', namespace: l.namespace!, name: l.name }
     case 'service':
-      return href('services', [], { open: `${l.namespace}/${l.name}` })
+      return { kind: 'service', namespace: l.namespace!, name: l.name }
     case 'pod':
-      return href('pods', [], { open: `${l.namespace}/${l.name}` })
+      return { kind: 'pod', namespace: l.namespace!, name: l.name }
     case 'netpol':
-      return href('policies', ['netpol'], { open: `np:${l.namespace}/${l.name}` })
+      return { kind: 'policy', key: `np:${l.namespace}/${l.name}` }
     case 'node':
-      return href('nodes', [], { open: l.name })
+      return { kind: 'node', name: l.name }
   }
   return null
 }
@@ -183,7 +185,7 @@ export function NetworksTab({ cluster, now, onToast, route }: TabProps) {
                     <span className="rk-hop-k">{h.k}</span>
                     <span className="rk-hop-t rk-mono" style={{ fontWeight: 600, fontSize: 12.5, overflowWrap: 'anywhere' }}>
                       {to ? (
-                        <a className="rk-link" href={to} title={`Open ${h.t}`} style={{ textDecoration: 'none' }}>
+                        <a className="rk-link" {...peekLink(to)} title={`Open the details of ${h.t}`} style={{ textDecoration: 'none' }}>
                           {h.t}
                         </a>
                       ) : (
@@ -234,7 +236,7 @@ export function NetworksTab({ cluster, now, onToast, route }: TabProps) {
             <ExportMenu onExport={(f) => nt.exportRows(f, cluster?.name, 'node-addresses', onToast)} disabled={!nt.shown.length} what="the nodes" />
           </span>
         </div>
-        <DataTable<NodeNetRow> label="Node addresses" rows={nt.shown} cols={nt.cols} rowKey={(r) => r.name} rowLabel={(r) => `${r.name} — open in the Nodes tab`} sort={nt.sort} onSort={nt.onSort} onOpen={(k) => navigate(href('nodes', [], { open: k }))} now={now} empty="No nodes." rowAttr="netnode" />
+        <DataTable<NodeNetRow> label="Node addresses" rows={nt.shown} cols={nt.cols} rowKey={(r) => r.name} rowLabel={(r) => `${r.name} — open its details`} sort={nt.sort} onSort={nt.onSort} onOpen={(k) => navigate(peekHref({ kind: 'node', name: k }))} now={now} empty="No nodes." rowAttr="netnode" />
       </section>
     </section>
   )
