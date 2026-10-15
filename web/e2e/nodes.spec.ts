@@ -54,7 +54,13 @@ test('shows the role, allocatable and free resources of every node', async ({ pa
     await expect(cells.nth(7)).toContainText(fMem(r.memory.requested))
     await expect(cells.nth(8)).toHaveText(fMem(r.memory.allocatable))
     await expect(cells.nth(9)).toHaveText(fMem(free(r.memory)))
-    await expect(cells.nth(10)).toHaveText(`${r.pods.running} / ${r.pods.capacity}`)
+    // Pods come and go on a real cluster: the figure is the one the server has now.
+    await expect
+      .poll(async () => {
+        const now = nodeRows(await snapshot(request)).find((n) => n.name === r.name)!
+        return (await cells.nth(10).textContent()) === `${now.pods.running} / ${now.pods.capacity}`
+      })
+      .toBe(true)
   }
   // The role is not repeated in the node column.
   await expect(page.locator('[data-node] > span').first()).not.toContainText('worker')

@@ -27,6 +27,8 @@ test('first screen within 2 seconds, sorting within 200 ms, memory under 1 GiB',
   const firsts: number[] = []
   const alls: number[] = []
   for (let i = 0; i < 3; i++) {
+    // A fresh load each time: going to the same hash again would not reload.
+    await page.goto('about:blank')
     await page.goto('/#/nodes')
     await page.waitForFunction(() => (window as unknown as { __allRows?: number }).__allRows, undefined, { timeout: 30_000 })
     const t = await page.evaluate(() => {

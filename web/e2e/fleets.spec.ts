@@ -190,7 +190,14 @@ test('fleets are the cluster’s, the same for everyone who signs in', async ({ 
   const other = await signInAs(browser, E2E_VIEWER)
   try {
     await other.goto('/#/fleets')
-    await expect(other.locator('[data-fleet="e2e-shared"]')).toBeVisible()
+    await expect(other.getByTestId('fleet-list')).toBeVisible()
+    // The definition reaches them with the settings, whatever nodes they may list; the tab counts it.
+    await expect(other.getByRole('link', { name: /^Fleets/ })).toContainText('1')
+    const shared = await other.evaluate(async () => {
+      const snap = (await (await fetch('/api/v1/snapshot?views=nodes')).json()) as { settings?: { fleets?: Record<string, { id: string }[]> } }
+      return (snap.settings?.fleets?.local ?? []).map((f) => f.id)
+    })
+    expect(shared).toEqual(['e2e-shared'])
     expect(await other.evaluate(() => Object.keys(localStorage).filter((k) => localStorage.getItem(k)?.includes('e2e-shared')))).toEqual([])
   } finally {
     await other.context().close()
