@@ -14,7 +14,7 @@ const DEFAULT_HIDDEN = defaultHidden(NODE_COLUMNS)
 const shownNames = (page: Page) => page.locator('[data-node]').evaluateAll((els) => els.map((e) => e.getAttribute('data-node') ?? ''))
 
 async function open(page: Page) {
-  await page.goto('/')
+  await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
 }
 

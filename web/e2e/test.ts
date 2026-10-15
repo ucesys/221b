@@ -11,6 +11,9 @@ export const test = base.extend({
     page.goto = (url, options) => goto(url, { waitUntil: 'domcontentloaded', ...options })
     const reload = page.reload.bind(page)
     page.reload = (options) => reload({ waitUntil: 'domcontentloaded', ...options })
+    // Column choices are kept with the signed-in account, so every test
+    // starts from the defaults, as it would in a fresh browser.
+    await page.request.put('/api/v1/prefs', { data: { prefs: {} } }).catch(() => undefined)
     await run(page)
   },
 })

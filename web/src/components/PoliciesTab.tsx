@@ -60,7 +60,6 @@ export function PoliciesTab({ cluster, now, onToast, route }: TabProps) {
             )
           })}
         </div>
-        <p style={{ margin: 'auto 0 0', padding: '10px 16px 14px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg3)', borderTop: '1px solid var(--line)' }}>Policies decide what may run, connect and be disrupted. 221B reads them and runs nothing; commands are shown to copy.</p>
       </aside>
       <section className="rk-pane" aria-label={SECTIONS.find(([s]) => s === sel)![1]} data-testid="policies-main" style={{ flex: '999 1 640px', minWidth: 0, padding: '20px 24px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {sel === 'overview' && <Overview {...common} go={go} />}
@@ -87,7 +86,7 @@ interface SecProps {
   route: TabProps['route']
 }
 
-function Head({ title, summary, intro }: { title: string; summary: string; intro: ReactNode }) {
+function Head({ title, summary }: { title: string; summary: string }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
@@ -96,7 +95,6 @@ function Head({ title, summary, intro }: { title: string; summary: string; intro
           {summary}
         </span>
       </div>
-      <p style={{ margin: 0, maxWidth: '112ch', fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg2)' }}>{intro}</p>
     </div>
   )
 }
@@ -209,7 +207,7 @@ function Overview(p: SecProps & { go: (s: Section) => void }) {
   const blocked = m.drains.filter((d) => d.verdict === 'blocked').length
   return (
     <>
-      <Head title="Policies" summary={countsText(fs)} intro="What may connect to what, what can be disrupted, how much a namespace may use and what may run there, worked out from the cluster’s NetworkPolicies, disruption budgets, quotas, Pod Security labels and admission webhooks." />
+      <Head title="Policies" summary={countsText(fs)} />
       <Tiles
         tiles={[
           { count: open, label: open === 1 ? 'app namespace open to every pod' : 'app namespaces open to every pod', tone: open ? 'warn' : 'muted' },
@@ -227,14 +225,12 @@ function Overview(p: SecProps & { go: (s: Section) => void }) {
 function NetPolicies(p: SecProps) {
   const { m } = p
   const cni = m.cni
-  const egress = m.netpols.some((n) => n.egress)
   const enforcedBy = cni?.name ? (cni.enforces === 'yes' ? ` · enforced by ${cni.name}` : cni.enforces === 'no' ? ` · ${cni.name} does not enforce them` : ` · ${cni.name}: enforcement unknown`) : ''
   return (
     <>
       <Head
         title="Network policies"
         summary={sectionSub('netpol', m, p.fs) + enforcedBy}
-        intro={`A pod selected by an ingress policy accepts only the connections some policy here allows; a pod no policy selects accepts them from anywhere. ${egress ? 'Pods selected by an egress policy may open only the connections it allows.' : 'No policy restricts egress, so outgoing traffic is never blocked.'}`}
       />
       {cni && cni.enforces !== 'yes' && (
         <div className="rk-callout" data-tone="warn" data-testid="cni-callout">
@@ -377,7 +373,7 @@ function Budgets(p: SecProps) {
   const { m } = p
   return (
     <>
-      <Head title="Disruption budgets" summary={sectionSub('pdb', m, p.fs)} intro="A PodDisruptionBudget limits how many of a workload’s pods voluntary evictions (a node drain, an autoscaler) may take down at once. A budget that allows 0 disruptions makes kubectl drain wait; a pod with no controller stops it." />
+      <Head title="Disruption budgets" summary={sectionSub('pdb', m, p.fs)} />
       <Review fs={p.fs.filter((f) => f.section === 'pdb')} set={p.set} onToast={p.onToast} />
       <Table title="Can each node be drained?" sub={`kubectl drain --ignore-daemonsets --delete-emptydir-data`} id="policy-drains" columns={DRAIN_COLUMNS} rows={m.drains} terms={drainTerms} sort={{ col: 'verdict', dir: 'asc' }} now={p.now} rowAttr="drain" rowKey={(r) => r.node} rowLabel={(r) => `${r.node}: ${r.verdict}`} cluster={p.cluster} onToast={p.onToast} note="The verdicts follow kubectl’s drain logic and the eviction API: what a server-side dry run of the drain refuses is Blocked; a drain that needs more disruptions than a budget allows at once waits for replacements." />
       <Table title="PodDisruptionBudgets" id="policy-pdbs" columns={PDB_COLUMNS} rows={m.pdbs} terms={pdbTerms} sort={{ col: 'ns', dir: 'asc' }} now={p.now} onOpen={(k) => p.set({ open: k })} rowAttr="pdb" rowKey={(r) => r.key} rowLabel={(r) => `PodDisruptionBudget ${r.namespace}/${r.name} — open details`} cluster={p.cluster} onToast={p.onToast} empty="No PodDisruptionBudgets in this cluster." />
@@ -421,7 +417,7 @@ function Quotas(p: SecProps) {
   const { m } = p
   return (
     <>
-      <Head title="Quotas and limits" summary={sectionSub('quota', m, p.fs)} intro="A ResourceQuota caps what a namespace’s pods may request and how many objects it may hold; the API server rejects a pod that would go over. A LimitRange fills in requests and limits for containers that state none." />
+      <Head title="Quotas and limits" summary={sectionSub('quota', m, p.fs)} />
       <Review fs={p.fs.filter((f) => f.section === 'quota')} set={p.set} onToast={p.onToast} />
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
         <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>ResourceQuotas</h2>
@@ -448,7 +444,7 @@ function PodSecurity(p: SecProps) {
   const { m } = p
   return (
     <>
-      <Head title="Pod Security" summary={sectionSub('psa', m, p.fs)} intro="Pod Security admission checks every new pod against the level a namespace’s labels name: privileged allows anything, baseline blocks host access and privileged containers, restricted also demands a hardened securityContext. Warn and audit only report. The checks here are the API server’s own." />
+      <Head title="Pod Security" summary={sectionSub('psa', m, p.fs)} />
       <Review fs={p.fs.filter((f) => f.section === 'psa')} set={p.set} onToast={p.onToast} />
       <Table<PolicyNSRow> title="Pod Security by namespace" id="policy-psa" columns={PSA_COLUMNS} rows={m.namespaces} terms={nsTerms} sort={{ col: 'enforce', dir: 'asc' }} now={p.now} onOpen={(k) => p.set({ open: `ns:${k}` })} rowAttr="psa" rowKey={(r) => r.name} rowLabel={(r) => `Namespace ${r.name} — what each level would reject`} cluster={p.cluster} onToast={p.onToast} />
       <p style={{ margin: 0, fontSize: 12, color: 'var(--fg3)' }}>{appNamespaces(m).length} application namespaces; open one for the pods each level rejects and what kubectl warns when the enforce label changes.</p>
@@ -460,7 +456,7 @@ function Webhooks(p: SecProps) {
   const { m } = p
   return (
     <>
-      <Head title="Admission webhooks" summary={sectionSub('webhooks', m, p.fs)} intro="Admission webhooks see each matching create, update or delete before it is stored, and may change or reject it. With failurePolicy Fail, the request is rejected whenever the webhook’s service can’t answer. 221B checks the Service and its endpoints; it never calls a webhook." />
+      <Head title="Admission webhooks" summary={sectionSub('webhooks', m, p.fs)} />
       <Review fs={p.fs.filter((f) => f.section === 'webhooks')} set={p.set} onToast={p.onToast} />
       <Table title="Admission webhooks" id="policy-hooks" columns={HOOK_COLUMNS} rows={m.hooks} terms={hookTerms} sort={{ col: 'reach', dir: 'asc' }} now={p.now} onOpen={(k) => p.set({ open: k })} rowAttr="hook" rowKey={(r) => r.key} rowLabel={(r) => `${r.kind}WebhookConfiguration ${r.config} — open details`} cluster={p.cluster} onToast={p.onToast} empty="No admission webhooks in this cluster." />
     </>
@@ -473,7 +469,7 @@ function Priorities(p: SecProps) {
   const def = m.priorities.find((x) => x.globalDefault)
   return (
     <>
-      <Head title="Priority classes" summary={sectionSub('prio', m, p.fs)} intro={`When no node has room for a pod, the scheduler may evict pods of lower priority to make it. ${def ? `Pods without a class get ${def.name}’s value, ${def.value}.` : 'Pods without a class run at priority 0, so they can neither preempt others nor be protected from preemption.'}`} />
+      <Head title="Priority classes" summary={sectionSub('prio', m, p.fs)} />
       <Table
         title="PriorityClasses"
         id="policy-priorities"

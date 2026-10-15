@@ -31,6 +31,9 @@ type Config struct {
 	Refresh time.Duration
 	// SettingsConfigMap is the "namespace/name" of the ConfigMap the
 	// settings are kept in. Empty keeps them in memory until a restart.
+	// UserPrefs keeps each signed-in person's preferences with their
+	// account instead of in each browser.
+	UserPrefs         bool
 	SettingsConfigMap string
 	// ConnectionsSecrets is the "namespace/prefix" of the Secrets the
 	// cluster connections added in the console are kept in, one Secret
@@ -125,6 +128,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.ImpersonateUserPrefix, "impersonate-user-prefix", env("IMPERSONATE_USER_PREFIX", ""), "put before user names when reading as a person: the API servers' --oidc-username-prefix")
 	fs.StringVar(&c.ImpersonateGroupPrefix, "impersonate-group-prefix", env("IMPERSONATE_GROUP_PREFIX", ""), "put before group names when reading as a person: the API servers' --oidc-groups-prefix")
 	fs.DurationVar(&c.AccessTTL, "access-ttl", envDuration("ACCESS_TTL", 2*time.Minute), "how long an answer about what a person may see stands before Kubernetes is asked again")
+	fs.BoolVar(&c.UserPrefs, "user-prefs", envBool("USER_PREFS", true), "keep each signed-in person's preferences, such as table columns, with their account (in the settings ConfigMap); off, or with sign-in off, each browser keeps its own")
 	fs.BoolVar(&c.HTTPSRedirect, "https-redirect", envBool("HTTPS_REDIRECT", false), "send plain-HTTP requests (by X-Forwarded-Proto) to HTTPS, behind an Ingress with TLS")
 	if err := fs.Parse(args); err != nil {
 		return c, err

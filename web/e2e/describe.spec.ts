@@ -26,7 +26,7 @@ function field(text: string, label: string): string {
 }
 
 test('the table matches kubectl describe node', async ({ page, request }) => {
-  await page.goto('/')
+  await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   const rows = nodeRows(await snapshot(request))
   const names = (await kubectl('get', 'nodes', '-o', 'jsonpath={.items[*].metadata.name}')).trim().split(/\s+/)

@@ -6,7 +6,7 @@ import { capText, fleetOf, fleetsOfNode, inDefinition, listText, metaText, mxCol
 import { compareNatural, fileStamp, nWord } from '../lib/format'
 import { effectTone, facetMatch, labelText } from '../lib/nodes'
 import { href, listParam, navigate, withParams } from '../lib/router'
-import { readJSON, writeJSON } from '../lib/storage'
+import { usePref } from '../lib/prefs'
 import { download, xlsxBytes, type Cell } from '../lib/xlsx'
 import { FleetEditor, type EditorSeed } from './FleetEditor'
 import { Chevron, ExcelIcon, FilterIcon, PlusIcon, SearchIcon } from './Icons'
@@ -69,11 +69,10 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
   const fxOn = fx.labels.length + fx.taints.length > 0
   const set = (changes: Record<string, string | string[] | undefined>) => navigate(withParams(route, changes), true)
 
-  const [hidden, setHiddenState] = useState<Set<string>>(() => new Set(readJSON<string[]>(HIDE_KEY, [])))
-  const setHidden = (s: Set<string>) => {
-    setHiddenState(s)
-    writeJSON(HIDE_KEY, [...s])
-  }
+  // Kept in this browser, or with the person's account (lib/prefs).
+  const [hiddenList, setHiddenList] = usePref<string[]>(HIDE_KEY, [])
+  const hidden = useMemo(() => new Set(hiddenList), [hiddenList])
+  const setHidden = (s: Set<string>) => setHiddenList([...s])
   const [colsOpen, setColsOpen] = useState(false)
   const [colQuery, setColQuery] = useState('')
   const [sort, setSort] = useState<Sort>({ col: 'node', dir: 'asc' })
@@ -243,7 +242,6 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
               </button>
             )}
           </div>
-          <p style={{ margin: 0, fontSize: 11.5, lineHeight: 1.45, color: 'var(--fg3)' }}>A fleet is a set of labels and taints. Every node that has all of them belongs to it.</p>
         </div>
         <div style={{ padding: '0 0 6px' }}>
           <button className="rk-fl rk-fl-main" data-sel={sel.length === 0} aria-pressed={sel.length === 0} onClick={() => set({ fleet: undefined })} style={{ borderTop: 0, padding: '11px 16px 11px 36px' }}>
@@ -328,9 +326,6 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
             ))}
           </div>
         )}
-        <p style={{ margin: 'auto 0 0', padding: '10px 16px 14px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg3)', borderTop: '1px solid var(--line)' }}>
-          Click a fleet to show only its nodes, or tick several to see them together. Fleets are saved in this console; a node joins a fleet by having its labels and taints.
-        </p>
       </aside>
 
       <section className="rk-pane" aria-label="Fleets" style={{ flex: '999 1 640px', minWidth: 0, padding: '20px 24px 32px', display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -399,7 +394,6 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                 {summary}
               </span>
             </div>
-            <p style={{ margin: 0, maxWidth: '112ch', fontSize: 12.5, color: 'var(--fg3)' }}>Every node against every label value and taint, one column each. A tick means the node has it. Click a column to sort by it, or a tick to pick the nodes that have it.</p>
           </div>
         )}
 
@@ -635,9 +629,6 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
           </div>
           {emptyText && <p style={{ margin: 0, padding: '18px 16px', fontSize: 12.5, color: 'var(--fg3)' }}>{emptyText}</p>}
         </div>
-        <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>
-          Showing {nWord(rowCount, 'row', 'rows')} and {visCols.length} of {cols.length} label and taint columns. Label ticks use the accent color; taint ticks are amber for NoSchedule and red for NoExecute.
-        </p>
 
         {fxOn && (
           <div className="rk-card rk-pickbar" role="status" data-testid="fleet-pickbar">

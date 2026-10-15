@@ -1,7 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useView } from '../api/live'
-import type { NamespaceRow, ObjectRow } from '../api/types'
+import type { NamespaceRow, ObjectRow, ReleaseRow } from '../api/types'
 import { OBJECT_COLUMNS, objectLabel, objectTerms } from '../columns/objects'
+import { RELEASE_COLUMNS } from '../columns/releases'
 import { fmtAge, fmtTs, nWord } from '../lib/format'
 import { pluralKind } from '../lib/kinds'
 import { href, listParam, navigate, withParams } from '../lib/router'
@@ -18,9 +19,74 @@ import { PodPanel } from './PodPanel'
 import { ServicePanel } from './ServicePanel'
 import type { TabProps } from './tabs'
 import { useTable } from '../lib/useTable'
+import { usePref } from '../lib/prefs'
 
 /** Rows a kind's table shows before "Show all". */
 const FOLD = 8
+
+/** The kind the funnel lists Helm releases under. */
+const RELEASES = 'Helm release'
+
+/** The namespace's Helm releases, listed as its other kinds are; a row opens the release on the Helm tab. */
+function ReleasesCard({ rows, now, cluster, onToast }: { rows: ReleaseRow[]; now: number; cluster: string | undefined; onToast: (msg: string) => void }) {
+  const [sort, setSort] = useState<SortState>({ col: 'name', dir: 'asc' })
+  const [all, setAll] = useState(false)
+  const [hiddenList, setHiddenList] = usePref<string[]>('221b.ns-releases.hidden', [])
+  const hidden = useMemo(() => new Set(hiddenList), [hiddenList])
+  const setHidden = (h: Set<string>) => setHiddenList([...h])
+  const sorted = useMemo(() => sortRows(rows, RELEASE_COLUMNS, sort, now), [rows, sort, now])
+  const shown = all || sorted.length <= FOLD ? sorted : sorted.slice(0, FOLD)
+  const cols = useMemo(() => RELEASE_COLUMNS.filter((c, i) => i === 0 || !hidden.has(c.id)), [hidden])
+  const exportRows = (format: ExportFormat) => {
+    const file = exportFileName(cluster, 'helm-releases', format)
+    try {
+      const t = exportTable(sorted, cols, now)
+      if (format === 'xlsx') download(xlsxBytes('Helm releases', t.head, t.rows), file)
+      else if (format === 'csv') download(csvText(t.head, t.rows), file, 'text/csv;charset=utf-8')
+      else download(JSON.stringify(t.json, null, 2) + '\n', file, 'application/json')
+      onToast(`Downloaded ${file}`)
+    } catch {
+      onToast('Couldn’t build the file.')
+    }
+  }
+  return (
+    <section className="rk-card" aria-label="Helm releases" style={{ overflow: 'hidden' }} data-testid="namespace-releases">
+      <div className="rk-tbar">
+        <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>Helm releases</h3>
+        <span className="rk-count">{rows.length}</span>
+        <span className="rk-mono" style={{ fontSize: 11, color: 'var(--fg3)' }}>
+          helm.sh/release.v1
+        </span>
+        <span style={{ flex: '1 1 auto' }} />
+        <ColumnsMenu cols={RELEASE_COLUMNS} hidden={hidden} defaults={new Set()} onChange={setHidden} compact={false} />
+        <ExportMenu onExport={exportRows} disabled={!rows.length} what="these Helm releases" />
+      </div>
+      <DataTable<ReleaseRow>
+        label="Helm releases"
+        rows={shown}
+        cols={cols}
+        rowKey={(r) => r.key}
+        rowLabel={(r) => `Helm release ${r.name}, ${r.status} — open it on the Helm tab`}
+        sort={sort}
+        onSort={(c) => setSort((s) => nextSort(RELEASE_COLUMNS, s, c))}
+        onOpen={(key) => {
+          const r = rows.find((x) => x.key === key)
+          if (r) navigate(href('helm', [r.namespace, r.name]))
+        }}
+        now={now}
+        empty="Nothing matches."
+        rowAttr="release"
+        footer={
+          sorted.length > FOLD && (
+            <button className="rk-link" onClick={() => setAll(!all)} style={{ padding: '10px 16px', fontSize: 12.5 }}>
+              {all ? `Show the first ${FOLD}` : `Show all ${sorted.length}`}
+            </button>
+          )
+        }
+      />
+    </section>
+  )
+}
 
 /** A kind's table in the namespace: the shared table, folded past FOLD rows. */
 function KindCard({ kind, apiVersion, rows, now, cluster, selected, onOpen, onToast, hidden, setHidden, defaults }: { kind: string; apiVersion: string; rows: ObjectRow[]; now: number; cluster: string | undefined; selected: string | null; onOpen: (key: string) => void; onToast: (msg: string) => void; hidden: Set<string>; setHidden: (h: Set<string>) => void; defaults: Set<string> }) {
@@ -100,6 +166,9 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   const funnelButton = useRef<HTMLButtonElement>(null)
 
   // The kinds present, in the registry's order, with their counts.
+  // Helm releases, read where Helm keeps them (P2-07), listed like the namespace's other kinds.
+  const releases = useView<ReleaseRow>(current?.releases.length ? 'helm' : null)
+  const nsReleases = useMemo(() => releases.rows.filter((r) => r.namespace === ns), [releases.rows, ns])
   const kinds = useMemo(() => {
     const m = new Map<string, { kind: string; apiVersion: string; order: number; n: number }>()
     for (const r of objects.rows) {
@@ -188,16 +257,6 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
                 {current.podsNotRunning ? `, ${current.podsNotRunning} not running` : ''}
               </span>
             </div>
-            {current.releases.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 10px', fontSize: 12.5, color: 'var(--fg3)' }}>
-                <span>Helm releases</span>
-                {current.releases.map((r) => (
-                  <a key={r} className="rk-link rk-mono" href={href('helm', [ns, r])} style={{ fontSize: 12.5 }}>
-                    {r}
-                  </a>
-                ))}
-              </div>
-            )}
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px' }}>
               <div
                 className="rk-dd"
@@ -243,6 +302,7 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
                 <ExportMenu onExport={exportAll} disabled={!filtered.length} what="every object shown, with its kind" />
               </div>
             </div>
+            {nsReleases.length > 0 && (!kindSel || kindSel.has(RELEASES)) && <ReleasesCard rows={nsReleases.filter((r) => !query.trim() || `${r.name} ${r.chart} ${r.status}`.toLowerCase().includes(query.trim().toLowerCase()))} now={now} cluster={cluster?.name} onToast={onToast} />}
             {kinds
               .filter((k) => byKind.has(k.kind))
               .map((k) => (

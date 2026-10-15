@@ -154,6 +154,17 @@ export function badgeOf(rows: AlertRow[]): { count: number; tone: string } {
   return { count, tone: err ? 'err' : count ? 'warn' : 'muted' }
 }
 
+/**
+ * The colour of the Alerts tab's name: red while something unacknowledged
+ * is failing, yellow while anything else is going on, acknowledged alerts
+ * included, so the tab still says so when the banners do not.
+ */
+export function tabTone(rows: AlertRow[]): 'err' | 'warn' | undefined {
+  const active = rows.filter(isActive)
+  if (active.some((r) => !r.ack && (r.severity === 'failed' || r.severity === 'error'))) return 'err'
+  return active.length ? 'warn' : undefined
+}
+
 export interface AlertBanner {
   tone: 'err' | 'warn'
   title: string

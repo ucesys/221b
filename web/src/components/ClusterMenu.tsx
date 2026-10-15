@@ -53,6 +53,8 @@ export function ClusterMenu({ cluster, stream, route, me, onEdit }: Props) {
   }
   const pick = (c: ClusterSummary) => {
     setOpen(false)
+    // From the home page, a cluster opens on its first tab.
+    if (route.view === 'home') return navigate(clusterHref(c.id, route.tab))
     if (c.id === route.cluster) return
     const params: Record<string, string> = {}
     for (const [k, v] of route.params.entries()) params[k] = v

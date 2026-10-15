@@ -71,7 +71,7 @@ function sectionName(r: AlertRow): string {
 }
 
 function eventCells(r: AlertRow): Cell[][] {
-  const sev = sevLabel(r).label
+  const sev = sevLabel(r).label + (r.ack ? ' (acknowledged)' : '')
   const where = r.kind === 'node' ? metaText(r) : (r.namespace ?? '')
   return r.events.map((e) => [sectionName(r), sev, kindLabel(r), r.name, where, e.reason, e.message, e.count, e.first ? fmtTs(e.first) : '', e.last ? fmtTs(e.last) : '', e.reportedBy ?? ''])
 }
@@ -105,7 +105,8 @@ function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: n
       setBusy(false)
     }
   }
-  const sev = sevLabel(r)
+  // An acknowledged alert is yellow, whatever it was.
+  const sev = r.ack ? { ...sevLabel(r), tone: 'warn' } : sevLabel(r)
   const ctx = contextOf(r, now)
   const events = sortEvents(r.events, sort, now)
   const th = (col: SortCol, label: string, right = false) => {
@@ -123,7 +124,7 @@ function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: n
   return (
     <div className="rk-card" style={{ overflow: 'hidden' }} data-testid="alert" data-alert={r.key} data-severity={r.severity} data-acked={r.ack ? 'true' : undefined}>
       <div style={{ padding: '12px 16px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px', borderBottom: '1px solid var(--line)' }}>
-        <span className="rk-tag" data-tone={sev.tone} style={{ fontSize: 11, padding: '2px 8px' }}>
+        <span className="rk-tag" data-tone={sev.tone} style={{ fontSize: 11, padding: '2px 8px' }} data-testid="alert-sev">
           {sev.label}
         </span>
         <span className="rk-tag" style={{ fontSize: 11, padding: '2px 7px' }}>
@@ -134,13 +135,13 @@ function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: n
         </span>
         <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{metaText(r)}</span>
         {r.ack && (
-          <span className="rk-tag" data-tone="info" style={{ fontSize: 11, padding: '2px 8px' }} title={`Acknowledged by ${r.ack.by}, ${fmtTs(r.ack.at)}. It stays off the banners and the tab's count until it changes or clears.`} data-testid="alert-acked">
+          <span className="rk-tag" data-tone="warn" style={{ fontSize: 11, padding: '2px 8px' }} title={`Acknowledged by ${r.ack.by}, ${fmtTs(r.ack.at)}. It stays off the banners and the tab's count until it changes or clears.`} data-testid="alert-acked">
             Acknowledged by {r.ack.by} · {agoText(r.ack.at, now)}
           </span>
         )}
         <span style={{ flex: '1 1 auto' }} />
         {r.status && (
-          <span className="rk-pill" data-tone={r.statusTone}>
+          <span className="rk-pill" data-tone={r.ack ? 'warn' : r.statusTone}>
             <span className="rk-dot" />
             {r.status}
           </span>
@@ -277,9 +278,6 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
     <section className="rk-pane" aria-label="Alerts" style={{ padding: '20px 24px 32px', display: 'flex', flexDirection: 'column', gap: 14, flex: '1 1 auto', minWidth: 0 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <h1 style={{ margin: 0, fontSize: 18, fontWeight: 600, letterSpacing: '-0.01em' }}>Alerts</h1>
-        <p style={{ margin: 0, maxWidth: '100ch', fontSize: 12.5, color: 'var(--fg3)' }}>
-          Warning events from the last hour, grouped by the pod, node or volume they concern, with what each node reports about itself: its conditions, and whether it is cordoned. Kubernetes keeps events for only one hour, so a pod that recovered stays here until its warnings expire.
-        </p>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(190px, 100%), 1fr))', gap: 10 }} data-testid="alert-tiles">
         {tiles.map((t) => (

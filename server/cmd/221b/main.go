@@ -32,6 +32,7 @@ import (
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/prefs"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/ui"
 	"github.com/ucesys/221b/server/internal/version"
@@ -196,8 +197,19 @@ func run(args []string) error {
 		}
 	}()
 
+	// Each signed-in person's own preferences, next to the settings.
+	var userPrefs *prefs.Store
+	if cfg.UserPrefs && authCfg.Mode != auth.ModeNone {
+		var backend prefs.Backend = &prefs.Memory{}
+		if cm, ok := storage.(*kube.ConfigMapStorage); ok {
+			backend = cm
+		}
+		userPrefs = prefs.New(backend)
+	}
+
 	handler := api.New(api.Options{
 		Store:         store,
+		Prefs:         userPrefs,
 		Cluster:       cluster,
 		Settings:      shared,
 		Clusters:      manager,

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ageText, AUTH_LABELS, CA_LABELS, ClusterError, credText, envOf, expiryText, stateOf, testCluster, useClusters, type ClusterSummary, type TestResult } from '../api/clusters'
 import type { Me } from '../api/types'
 import { fmtTs } from '../lib/format'
-import { clusterHref, LOCAL, type Route } from '../lib/router'
+import { HOME, type Route } from '../lib/router'
 import { ErrorIcon, WarnIcon } from './Icons'
 import { TestSteps } from './TestSteps'
 
@@ -61,8 +61,8 @@ export function ClusterPage({ route, me, now, onEdit }: Props) {
           <h1 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>{loaded ? `No cluster named “${route.cluster}”` : 'Loading…'}</h1>
           {loaded && <p style={{ margin: 0, maxWidth: '60ch', fontSize: 13, color: 'var(--fg2)' }}>{error ? error : 'It may have been removed, or the link may be from another console.'}</p>}
           {loaded && (
-            <a className="rk-btn" href={clusterHref(LOCAL, 'nodes')} style={{ height: 32 }}>
-              Back to the console’s own cluster
+            <a className="rk-btn" href={HOME} style={{ height: 32 }}>
+              Back to every cluster
             </a>
           )}
         </section>

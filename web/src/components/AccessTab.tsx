@@ -239,7 +239,7 @@ interface OverviewProps {
   loaded: boolean
 }
 
-function Overview({ roles, bindings, ids, items, roleIdx, namespaces, now, route, set, onToast, cluster, clusterName, loaded }: OverviewProps) {
+function Overview({ roles, bindings, ids, items, roleIdx, namespaces, now, route, set, onToast, cluster, loaded }: OverviewProps) {
   return (
     <>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -249,7 +249,6 @@ function Overview({ roles, bindings, ids, items, roleIdx, namespaces, now, route
             {nWord(bindings.length, 'binding', 'bindings')} · {nWord(roles.length, 'role', 'roles')} · {nWord(ids.length, 'identity', 'identities')}
           </span>
         </div>
-        <p style={{ margin: 0, maxWidth: 860, fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg2)' }}>Who can do what in {clusterName}, worked out from its ClusterRoles, Roles and the bindings that grant them, as the API server matches their rules.</p>
       </div>
       <ReviewCard items={items} onToast={onToast} open={(k) => set({ open: k })} loaded={loaded} />
       <WhoCanCard bindings={bindings} ids={ids} items={items} roleIdx={roleIdx} namespaces={namespaces} now={now} route={route} set={set} onToast={onToast} cluster={cluster} />

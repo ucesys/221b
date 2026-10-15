@@ -3,6 +3,7 @@
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
 import { cluster, consoleNode, healthyWorkers, nodeRows, snapshot } from './cluster'
+import { E2E_USER, E2E_VIEWER, signInAs } from './accounts'
 import type { Fleet } from '../src/api/types'
 
 async function open(page: Page) {
@@ -180,4 +181,39 @@ test('a saved fleet shows at once; a node opens its details here; the columns ca
   const text = (await page.getByRole('button', { name: /^Columns/ }).textContent()) ?? ''
   const [shown, all] = text.match(/(\d+)\/(\d+)/)!.slice(1)
   expect(shown).toBe(all)
+})
+
+test('fleets are the cluster’s, the same for everyone who signs in', async ({ page, browser }) => {
+  expect(await putFleets(page, [{ id: 'e2e-shared', name: 'E2E shared', color: 4, labels: ['kubernetes.io/os=linux'], taints: [] }])).toBe(200)
+  await expect(row(page, 'e2e-shared')).toBeVisible()
+  // Someone else, in another browser, sees the same fleet: it is kept on the server, not in a browser.
+  const other = await signInAs(browser, E2E_VIEWER)
+  try {
+    await other.goto('/#/fleets')
+    await expect(other.locator('[data-fleet="e2e-shared"]')).toBeVisible()
+    expect(await other.evaluate(() => Object.keys(localStorage).filter((k) => localStorage.getItem(k)?.includes('e2e-shared')))).toEqual([])
+  } finally {
+    await other.context().close()
+  }
+})
+
+test('column choices follow a signed-in person to another browser, and stay theirs', async ({ page, browser }) => {
+  await page.goto('/#/fleets')
+  await expect(page.getByTestId('fleet-list')).toBeVisible()
+  await page.getByRole('button', { name: /^Columns/ }).click()
+  await page.getByTestId('fleet-cols-none').click()
+  await expect(page.getByRole('button', { name: /^Columns/ })).toContainText(/(^|\D)0\/\d+/)
+  await page.waitForTimeout(1_000)
+  const same = await signInAs(browser, E2E_USER)
+  const other = await signInAs(browser, E2E_VIEWER)
+  try {
+    await same.goto('/#/fleets')
+    await expect(same.getByRole('button', { name: /^Columns/ })).toContainText(/(^|\D)0\/\d+/)
+    await other.goto('/#/fleets')
+    await expect(other.getByTestId('fleet-list')).toBeVisible()
+    await expect(other.getByRole('button', { name: /^Columns/ })).not.toContainText(/(^|\D)0\/\d+/)
+  } finally {
+    await same.context().close()
+    await other.context().close()
+  }
 })

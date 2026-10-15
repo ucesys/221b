@@ -5,7 +5,7 @@ import { expect, test } from './test'
 import { allNodesReady, cluster, consoleNode, healthyWorkers, inKind, podCrashing, snapshot } from './cluster'
 
 async function open(page: Page) {
-  await page.goto('/')
+  await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
 }
 

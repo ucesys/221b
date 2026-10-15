@@ -13,6 +13,7 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 
+	"github.com/ucesys/221b/server/internal/prefs"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/version"
 )
@@ -63,13 +64,26 @@ func (c *ConfigMapStorage) Ref() string { return c.namespace + "/" + c.name }
 
 func (c *ConfigMapStorage) Kind() string { return "configmap" }
 
-// Load reads the key; a ConfigMap without it, or none at all, means
-// nothing has been saved yet.
+// Load reads the settings; a ConfigMap without them, or none at all,
+// means nothing has been saved yet.
 func (c *ConfigMapStorage) Load(ctx context.Context) ([]byte, error) {
+	b, err := c.LoadKey(ctx, c.key)
+	if errors.Is(err, prefs.ErrNotFound) {
+		return nil, settings.ErrNotFound
+	}
+	return b, err
+}
+
+// Save writes the settings.
+func (c *ConfigMapStorage) Save(ctx context.Context, b []byte) error { return c.SaveKey(ctx, c.key, b) }
+
+// LoadKey reads one key of the ConfigMap: the settings, or a person's
+// preferences.
+func (c *ConfigMapStorage) LoadKey(ctx context.Context, key string) ([]byte, error) {
 	raw, err := c.rest.Get().Namespace(c.namespace).Resource("configmaps").Name(c.name).Do(ctx).Raw()
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, settings.ErrNotFound
+			return nil, prefs.ErrNotFound
 		}
 		return nil, describeConfigMapError("reading", c.Ref(), err)
 	}
@@ -79,17 +93,17 @@ func (c *ConfigMapStorage) Load(ctx context.Context) ([]byte, error) {
 	if err := json.Unmarshal(raw, &cm); err != nil {
 		return nil, fmt.Errorf("the settings ConfigMap %s is not valid JSON: %w", c.Ref(), err)
 	}
-	v, ok := cm.Data[c.key]
+	v, ok := cm.Data[key]
 	if !ok {
-		return nil, settings.ErrNotFound
+		return nil, prefs.ErrNotFound
 	}
 	return []byte(v), nil
 }
 
-// Save writes the key with a merge patch, which leaves any other keys and
-// the chart's labels as they are.
-func (c *ConfigMapStorage) Save(ctx context.Context, b []byte) error {
-	patch, _ := json.Marshal(map[string]any{"data": map[string]string{c.key: string(b)}})
+// SaveKey writes one key with a merge patch, which leaves the other keys
+// and the chart's labels as they are.
+func (c *ConfigMapStorage) SaveKey(ctx context.Context, key string, b []byte) error {
+	patch, _ := json.Marshal(map[string]any{"data": map[string]string{key: string(b)}})
 	err := c.rest.Patch(types.MergePatchType).Namespace(c.namespace).Resource("configmaps").Name(c.name).Body(patch).Do(ctx).Error()
 	if err != nil {
 		return describeConfigMapError("saving to", c.Ref(), err)

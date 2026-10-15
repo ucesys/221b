@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { badgeOf, bannersOf, contextOf, sectionsOf, sevLabel, tilesOf } from './alerts'
+import { badgeOf, bannersOf, contextOf, sectionsOf, sevLabel, tabTone, tilesOf } from './alerts'
 import type { AlertRow } from '../api/types'
 
 const now = Date.parse('2026-10-14T12:00:00Z')
@@ -12,6 +12,14 @@ const cordoned: AlertRow = { key: 'node:w2', kind: 'node', severity: 'warning', 
 const down: AlertRow = { key: 'node:cp', kind: 'node', severity: 'error', name: 'cp', role: 'control-plane', status: 'Unknown', statusTone: 'err', problems: [{ title: 'Kubelet stopped reporting', severity: 'error', summary: 'No heartbeat.' }], events: [] }
 
 describe('alerts', () => {
+  it('colours the Alerts tab’s name: red for failures, amber once they are acknowledged, nothing when all is well', () => {
+    expect(tabTone([pull, pending])).toBe('err')
+    expect(tabTone([{ ...pull, ack: { by: 'ops@corp.example', at: ago(1) } }, pending])).toBe('warn')
+    expect(tabTone([{ ...pull, ack: { by: 'ops@corp.example', at: ago(1) } }])).toBe('warn')
+    expect(tabTone([oom])).toBeUndefined()
+    expect(tabTone([])).toBeUndefined()
+  })
+
   it('says why each pod is here', () => {
     expect(contextOf(pull, now)).toEqual({ text: 'ImagePullBackOff: Back-off pulling image "x"', mono: true })
     expect(contextOf(pending, now).text).toBe("Pending for 12m. 0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/selector.")

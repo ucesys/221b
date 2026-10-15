@@ -143,6 +143,14 @@ ingress:
 connections:
   store: secrets
 
+preferences:
+  # Keep each signed-in person's own preferences, such as the columns each
+  # table shows, with their account, so they follow them to any browser.
+  # They are kept in the settings ConfigMap, one key per person named by a
+  # hash of their subject (16 KiB at most each). Off, or with sign-in off,
+  # each browser keeps its own.
+  perUser: true
+
 secrets:
   # Read Secrets. The Namespaces tab then lists each Secret with its key
   # names and sizes, and the Helm tab reads release records, which Helm

@@ -152,7 +152,6 @@ export function NetworksTab({ cluster, now, onToast, route }: TabProps) {
           <h1 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Networks</h1>
           <span style={{ fontSize: 12.5, color: 'var(--fg3)' }}>{summary}</span>
         </div>
-        <p style={{ margin: 0, maxWidth: '112ch', fontSize: 12.5, lineHeight: 1.5, color: 'var(--fg2)' }}>How requests reach {cluster?.name ?? 'the cluster'} and move inside it. Pick a route to follow a request hop by hop, from the address its Ingress publishes down to the pod that answers; a failing hop names the cause. The trace reads the cluster’s objects and sends no request, so a backend’s own errors or a DNS record pointing elsewhere don’t show here.</p>
       </div>
 
       <section className="rk-card" aria-label="Trace a request" style={{ overflow: 'hidden', flex: 'none' }} data-testid="trace">

@@ -35,6 +35,16 @@ Smaller changes came with it. The chart's ClusterRole now reads ClusterRoles, Cl
 - **Access.** On an identity's page, its findings were squeezed to a sliver and cut off at the bottom by the page's own layout; they now keep their height.
 - **Services.** A Service published by an Ingress failed to open its details (the browser read the Ingresses in a shape the server did not send); it opens, and lists the URLs that publish it.
 
+## Changes from the second review round
+
+- **Home page.** The console now opens on a home page, also reached from the logo at the top left: every cluster it is set up for, each with its health in a word and why (nodes not ready, pods failing to start, node errors, then warnings and acknowledged alerts), its nodes ready, pods, alerts, namespaces and Services, and bars for the CPU and memory requested and in use and the pods placed, of what its nodes can take. Each figure leads to the tab that lists it; a cluster that cannot connect leads to its connection. The figures are filtered, like every tab, by what the person may see (`GET /api/v1/home`). **Alerts** is now the first tab, and a cluster opened without a tab opens on it.
+  ![Console, home page](images/phase-4/app-home-light-1440.png)
+- **Fewer words.** The descriptions at the top of the Alerts, Services, Networks and Access tabs, and at the top and bottom of the Fleets and Policies tabs, are gone.
+- **Alerts.** Acknowledged alerts are yellow: their card's edge, status and tag. The tab's name is red while an unacknowledged failure is on, and yellow while any alert is on, even when every one is acknowledged and so off the banners and the count.
+- **Fleets are the cluster's, for everyone (checked).** Fleet definitions were already kept on the server, per cluster, in the settings ConfigMap (`settings.json`, under `fleets`), the same for everyone; a new end-to-end test signs a second person in from another browser and finds the fleet there and nothing about it in that browser's storage.
+- **Columns per person (ADR-40).** Which columns each table and the Fleets matrix show was kept by each browser. Someone signed in now keeps them with their account, on the server, so they follow them to any browser and are theirs alone; with sign-in off, or with `preferences.perUser: false` in the chart, each browser keeps its own as before. The first time someone signs in, the choices that browser had become theirs.
+- **Namespaces.** A namespace's Helm releases are a table like the other lists on the page, with Columns, and their status, chart, app version, revision, pods and when they were last updated.
+
 ## 1. Fleets (P4-01)
 
 **CI proves** (`web/e2e/fleets.spec.ts` in the simulator and in kind; `server/internal/fleets`, `server/internal/api/fleets_test.go`, `web/src/lib/fleets.test.ts`): an administrator creates a fleet in the drawer from a node's labels, sees the nodes it takes before saving, and after saving its members are exactly the nodes with those labels; a node that gets the labels (`kubectl label`) joins within 5 seconds and leaves when they go; a fleet with a taint takes only nodes with both and says what the others lack; a viewer sees no New, Edit or Delete and the API answers 403; every change writes one audit record naming the fleets.

@@ -116,7 +116,12 @@ test('an acknowledged alert leaves the banners and the badge for everyone, and s
     await pull.getByTestId('alert-ack').click()
     await expect(pull.getByTestId('alert-acked')).toContainText('Acknowledged by')
     await expect(pull).toHaveAttribute('data-acked', 'true')
+    // Yellow, not red (asked at the Phase 4 review).
+    await expect(pull.getByTestId('alert-sev')).toHaveAttribute('data-tone', 'warn')
+    await expect(pull.getByTestId('alert-acked')).toHaveAttribute('data-tone', 'warn')
     await expect.poll(badge).toBe(before - 1)
+    // The tab's name keeps its colour while any alert is on, acknowledged or not.
+    await expect(page.locator('[data-tab="alerts"]').first()).toHaveAttribute('data-tone', /^(err|warn)$/)
     // Everyone sees it: the server marks the row.
     await expect
       .poll(async () => ((await snapshot(request, ['alerts'])).views.alerts?.rows as { key: string; ack?: { by: string } }[]).find((r) => r.key === `pod:${f.pull}`)?.ack?.by ?? '')
@@ -132,6 +137,8 @@ test('an acknowledged alert leaves the banners and the badge for everyone, and s
     await open(page)
     await pull.getByTestId('alert-ack').click()
     await expect(pull).not.toHaveAttribute('data-acked', 'true')
+    await expect(pull.getByTestId('alert-sev')).toHaveAttribute('data-tone', 'err')
+    await expect(page.locator('[data-tab="alerts"]').first()).toHaveAttribute('data-tone', 'err')
     await open(page, '#/nodes')
     await expect(page.getByTestId('alert-banner').filter({ hasText: /failed to start/ })).toContainText(f.pull)
   } finally {

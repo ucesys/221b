@@ -301,7 +301,7 @@ export function ageText(at: number, now: number): string {
 }
 
 /** The connection's state as the menu and the page show it. */
-export function stateOf(c: ClusterSummary): { tone: Tone; text: string } {
+export function stateOf(c: Pick<ClusterSummary, 'state' | 'synced' | 'expired' | 'expiring'>): { tone: Tone; text: string } {
   if (c.state === 'failed') return { tone: 'err', text: 'Can’t start' }
   if (c.state === 'disconnected') return { tone: 'err', text: 'Can’t connect' }
   if (c.state === 'connecting') return { tone: 'muted', text: 'Connecting' }
