@@ -36,8 +36,36 @@ type Block struct {
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Content   string `json:"content,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
+	// Thinking and Signature are a thinking block's; Data a
+	// redacted_thinking block's. The models think before they answer and
+	// between tool calls; the API wants these blocks back exactly as it
+	// sent them, with the tool results that follow.
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"`
 	// CacheControl marks the end of a prefix to cache.
 	CacheControl *CacheControl `json:"cache_control,omitempty"`
+}
+
+// MarshalJSON writes a block with the fields its type has: a thinking
+// block always carries its thinking, empty when the model keeps it to
+// itself, and its signature.
+func (b Block) MarshalJSON() ([]byte, error) {
+	switch b.Type {
+	case "thinking":
+		return json.Marshal(struct {
+			Type      string `json:"type"`
+			Thinking  string `json:"thinking"`
+			Signature string `json:"signature"`
+		}{b.Type, b.Thinking, b.Signature})
+	case "redacted_thinking":
+		return json.Marshal(struct {
+			Type string `json:"type"`
+			Data string `json:"data"`
+		}{b.Type, b.Data})
+	}
+	type plain Block
+	return json.Marshal(plain(b))
 }
 
 // CacheControl asks the API to cache the prompt up to here.
@@ -232,6 +260,8 @@ func readStream(r io.Reader, onDelta func(Delta)) (Response, bool, error) {
 				Type        string `json:"type"`
 				Text        string `json:"text"`
 				PartialJSON string `json:"partial_json"`
+				Thinking    string `json:"thinking"`
+				Signature   string `json:"signature"`
 				StopReason  string `json:"stop_reason"`
 			} `json:"delta"`
 			Usage *Usage `json:"usage"`
@@ -282,6 +312,10 @@ func readStream(r io.Reader, onDelta func(Delta)) (Response, bool, error) {
 				if p := partial[ev.Index]; p != nil {
 					p.WriteString(ev.Delta.PartialJSON)
 				}
+			case "thinking_delta":
+				out.Content[ev.Index].Thinking += ev.Delta.Thinking
+			case "signature_delta":
+				out.Content[ev.Index].Signature += ev.Delta.Signature
 			}
 		case "content_block_stop":
 			if p := partial[ev.Index]; p != nil && ev.Index < len(out.Content) {

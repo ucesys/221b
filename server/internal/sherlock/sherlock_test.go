@@ -143,6 +143,33 @@ func TestClientStreams(t *testing.T) {
 	if in["namespace"] != "web" || in["name"] != "api-0" || resp.Usage.InputTokens == 0 {
 		t.Fatalf("tool input %v usage %+v", in, resp.Usage)
 	}
+	// The thinking the model keeps to itself comes back with the tool
+	// result exactly as it was sent: an empty thinking with its signature,
+	// and the redacted data.
+	if len(resp.Content) != 4 || resp.Content[0].Type != "thinking" || resp.Content[0].Signature == "" || resp.Content[1].Type != "redacted_thinking" || resp.Content[1].Data == "" {
+		t.Fatalf("content %+v", resp.Content)
+	}
+	sent, _ := json.Marshal(resp.Content[:2])
+	want := `[{"type":"thinking","thinking":"","signature":"` + resp.Content[0].Signature + `"},{"type":"redacted_thinking","data":"` + resp.Content[1].Data + `"}]`
+	if string(sent) != want {
+		t.Fatalf("thinking sent back as %s", sent)
+	}
+	var id string
+	for _, b := range resp.Content {
+		if b.Type == "tool_use" {
+			id = b.ID
+		}
+	}
+	next := req
+	next.Messages = append(next.Messages, Message{Role: "assistant", Content: resp.Content}, Message{Role: "user", Content: []Block{{Type: "tool_result", ToolUseID: id, Content: `{"name":"api-0","namespace":"web","phase":"Running"}`}}})
+	if resp, err := c.Stream(context.Background(), next, nil); err != nil || resp.StopReason != "end_turn" {
+		t.Fatalf("after the tool: %+v %v", resp, err)
+	}
+	// Without its thinking, the API refuses the turn, as the real one does.
+	next.Messages[1].Content = append([]Block{{Type: "thinking", Signature: "x"}}, resp.Content[1:]...)
+	if _, err := c.Stream(context.Background(), next, nil); err == nil || !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("a changed thinking block: %v", err)
+	}
 	// A refused key is an API error, not retried.
 	bad := &Client{BaseURL: srv.URL, Key: func() string { return "sk-ant-invalid-0123456789" }, Retries: 2, Backoff: time.Millisecond}
 	_, err = bad.Stream(context.Background(), req, nil)

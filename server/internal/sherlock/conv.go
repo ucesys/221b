@@ -158,7 +158,7 @@ type Options struct {
 	Logger  *slog.Logger
 	// MaxRounds bounds the tool rounds of one answer.
 	MaxRounds int
-	// MaxTokens bounds one reply.
+	// MaxTokens bounds one reply, its thinking included.
 	MaxTokens int
 	// Idle is how long an unused conversation is kept.
 	Idle time.Duration
@@ -190,7 +190,7 @@ func New(o Options) *Service {
 		o.MaxRounds = 12
 	}
 	if o.MaxTokens <= 0 {
-		o.MaxTokens = 4096
+		o.MaxTokens = 16000
 	}
 	if o.Idle <= 0 {
 		o.Idle = 12 * time.Hour
@@ -538,7 +538,7 @@ func (s *Service) trimLocked(c *Conversation) {
 		n := 0
 		for _, m := range c.history {
 			for _, b := range m.Content {
-				n += len(b.Text) + len(b.Content) + len(b.Input)
+				n += len(b.Text) + len(b.Content) + len(b.Input) + len(b.Thinking) + len(b.Signature) + len(b.Data)
 			}
 		}
 		return n

@@ -123,6 +123,10 @@ func (f *Fake) messages(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 400, "invalid_request_error", "this fake only streams")
 		return
 	}
+	if msg := checkThinking(body); msg != "" {
+		apiError(w, 400, "invalid_request_error", msg)
+		return
+	}
 	question, round, results := where(req.Messages)
 	if strings.Contains(strings.ToLower(question), "overloaded") {
 		apiError(w, 529, "overloaded_error", "Overloaded")
@@ -130,6 +134,49 @@ func (f *Fake) messages(w http.ResponseWriter, r *http.Request) {
 	}
 	reply := script(question, round, results)
 	f.stream(w, r, len(body), reply)
+}
+
+// sigPrefix starts the signature of every thinking block the fake sends.
+const sigPrefix = "fakesig-"
+
+// checkThinking holds a request to what the API asks of the thinking
+// blocks it sent: back exactly as they were, a thinking block with its
+// thinking (empty, as the models send it by default) and signature, a
+// redacted one with its data.
+func checkThinking(body []byte) string {
+	var req struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return ""
+	}
+	for i, m := range req.Messages {
+		var blocks []map[string]json.RawMessage
+		if m.Role != "assistant" || json.Unmarshal(m.Content, &blocks) != nil {
+			continue
+		}
+		for j, b := range blocks {
+			var typ, sig, data string
+			_ = json.Unmarshal(b["type"], &typ)
+			switch typ {
+			case "thinking":
+				if _, ok := b["thinking"]; !ok {
+					return fmt.Sprintf("messages.%d.content.%d.thinking.thinking: Field required", i, j)
+				}
+				if json.Unmarshal(b["signature"], &sig) != nil || !strings.HasPrefix(sig, sigPrefix) {
+					return fmt.Sprintf("messages.%d.content.%d: Invalid signature in thinking block", i, j)
+				}
+			case "redacted_thinking":
+				if json.Unmarshal(b["data"], &data) != nil || !strings.HasPrefix(data, sigPrefix) {
+					return fmt.Sprintf("messages.%d.content.%d.redacted_thinking.data: Field required", i, j)
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // where reads the conversation: the question being answered, how many
@@ -413,6 +460,21 @@ func (f *Fake) stream(w http.ResponseWriter, r *http.Request, inBytes int, rep r
 		return
 	}
 	idx, out := 0, 0
+	// The models think first, and by default keep the thinking to
+	// themselves: an empty thinking block with its signature. Between tool
+	// calls some of it may come redacted.
+	sig := fmt.Sprintf("%s%d", sigPrefix, time.Now().UnixNano())
+	send("content_block_start", map[string]any{"type": "content_block_start", "index": idx, "content_block": map[string]any{"type": "thinking", "thinking": "", "signature": ""}})
+	send("content_block_delta", map[string]any{"type": "content_block_delta", "index": idx, "delta": map[string]any{"type": "thinking_delta", "thinking": ""}})
+	send("content_block_delta", map[string]any{"type": "content_block_delta", "index": idx, "delta": map[string]any{"type": "signature_delta", "signature": sig}})
+	send("content_block_stop", map[string]any{"type": "content_block_stop", "index": idx})
+	idx++
+	out += 20
+	if rep.tool != "" {
+		send("content_block_start", map[string]any{"type": "content_block_start", "index": idx, "content_block": map[string]any{"type": "redacted_thinking", "data": sig + "-redacted"}})
+		send("content_block_stop", map[string]any{"type": "content_block_stop", "index": idx})
+		idx++
+	}
 	if len(rep.text) > 0 {
 		send("content_block_start", map[string]any{"type": "content_block_start", "index": idx, "content_block": map[string]any{"type": "text", "text": ""}})
 		for _, t := range rep.text {
