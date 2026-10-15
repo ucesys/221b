@@ -212,6 +212,7 @@ Phase 5 adds Sherlock, which answers questions about a cluster from live data. I
 | P5-05 | Admin settings: Sherlock on or off per cluster, the Claude API key (kept in a Kubernetes Secret), the model, and daily and monthly spending caps. Each question is audited with its tools and token use. | Reaching a cap stops new questions with a clear message. |
 | P5-06 | An evaluation set built from the prototype's sample problems, such as a pending pod, a failed Helm upgrade, a drain blocked by a budget and a LoadBalancer without an IP. | Sherlock finds the cause in at least 9 of 10 cases, measured nightly. |
 | P5-07 | When a fix needs a change, Sherlock proposes the command and hands it to Watson in Phase 6. | Sherlock's toolset contains no tool that writes. |
+| P5-08 | Where the browser allows it, the Sherlock panel moves to a window of its own, for example on another monitor, and back. The conversation carries on in it, and Ask Sherlock buttons in the main window send their questions there. | A question asked from the main window is answered in the separate window, and closing that window brings the panel back with the conversation. |
 
 **Not in Phase 5:** running any command. Watson arrives in Phase 6.
 
@@ -231,6 +232,7 @@ Phase 6 adds Watson, the first part of 221B that changes clusters. Reads run at 
 | P6-06 | Buttons that change things, such as Cordon and Drain on a node, Rollback on a Helm release, and fixes Sherlock proposes, all go through the same card. | No button changes a cluster without a card. |
 | P6-07 | An optional setting requires a second person to approve changes on production clusters. | With it on, nobody can approve their own change. |
 | P6-08 | Every command, approval, refusal and result is audited. | Each step writes one record naming the person and cluster. |
+| P6-09 | Where the browser allows it, the Watson panel moves to a window of its own, with Sherlock or apart from it, for example on another monitor, and back. Commands sent from the main window wait for approval there. | An approval made in the separate window runs the command, and closing the window brings the panel back with its commands. |
 
 **Not in Phase 6:** `kubectl apply`, `edit` and `exec`, and helm install or upgrade (see Open questions).
 
@@ -266,6 +268,6 @@ Each open decision has a proposal. The first three are needed before Phase 1 sta
 | How is per-person access enforced? | Impersonation, so Kubernetes RBAC decides. 221B needs the right to impersonate on every cluster, and sign-in groups must match the groups RBAC uses. | Phase 3 | Built as proposed in Phase 3, with access reviews deciding what each person sees of the watched data and impersonation for live reads; `auth.kubernetes.userPrefix` and `groupPrefix` match the API server's. To confirm at the Phase 3 review. |
 | Where do settings live (connections, fleets, Sherlock settings)? | Kubernetes objects in 221B's namespace: Secrets for credentials, ConfigMaps for the rest. No database. | Phase 3 | Built as proposed in Phase 3: one Secret per connection, a ConfigMap for the settings. To confirm at the Phase 3 review. |
 | Do clusters behind firewalls need an agent that connects out to 221B? | Not in this plan; decide after Phase 3 from real installations. | After Phase 3 | Open |
-| Which model does Sherlock use, and how long are conversations kept? | The admin picks the model. Conversations last for the session; the audit log keeps questions and tool calls. | Phase 5 | Open |
+| Which model does Sherlock use, and how long are conversations kept? | The admin picks the model. Conversations last for the session; the audit log keeps questions and tool calls. | Phase 5 | Built as proposed in Phase 5: Claude Opus 5.5 by default, any model in Settings; conversations kept on the server for the session (ADR-42). To confirm at the Phase 5 review. |
 | Should Watson ever run kubectl apply, edit or exec, or helm install and upgrade? | Not in the first release; exec carries the most risk. | Phase 6 | Open |
 | How do outside contributors sign off on their work once the repo is public? | A Developer Certificate of Origin sign-off on each commit. | Phase 7 | Open |

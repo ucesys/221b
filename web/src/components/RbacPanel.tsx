@@ -63,6 +63,7 @@ export function RbacPanel({ keyOf, roles, bindings, now, onClose, onOpen, onToas
 
   return (
     <Drawer
+      ask={`What does ${kind} ${name} allow, and who has it?`}
       label={`${kind} details`}
       testId="rbac-panel"
       kicker={

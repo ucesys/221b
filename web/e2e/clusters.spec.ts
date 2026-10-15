@@ -122,7 +122,7 @@ test('the editor reports a bad address and a wrong token at the step that fails;
   await expect(homeCard.getByTestId('home-health')).toHaveText('Can’t connect', { timeout: 30_000 })
   await expect(homeCard.getByRole('link', { name: 'See its connection' })).toHaveAttribute('href', `#/c/${id}/cluster`)
   await expect(page.locator('[data-testid=home-card][data-cluster=local]')).toBeVisible()
-  await page.goBack()
+  await page.goBack({ waitUntil: 'commit' })
   await expect(page).toHaveURL(new RegExp(`#/c/${id}/alerts$`))
   await page.getByTestId('banner-link').click()
   const card = page.getByTestId('cluster-page')

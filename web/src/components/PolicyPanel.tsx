@@ -239,6 +239,7 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
 
   return (
     <Drawer
+      ask={`Explain ${kind} ${namespaced && ns ? ns + '/' : ''}${title}`}
       label={`${kind} details`}
       testId="policy-panel"
       kicker={

@@ -34,6 +34,7 @@ import (
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/prefs"
 	"github.com/ucesys/221b/server/internal/settings"
+	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/ui"
 	"github.com/ucesys/221b/server/internal/version"
 )
@@ -207,7 +208,60 @@ func run(args []string) error {
 		userPrefs = prefs.New(backend)
 	}
 
+	// Sherlock (Phase 5): off for every cluster until an administrator turns
+	// it on and gives it a Claude API key, which is kept in a Secret.
+	var keyBackend sherlock.KeyBackend = &sherlock.MemoryKey{}
+	secretRef := cfg.SherlockSecret
+	if secretRef == "" && cfg.ConnectionsSecrets != "" {
+		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
+		secretRef = ns + "/" + prefix + "-sherlock"
+	}
+	if secretRef != "" {
+		ns, name, ok := strings.Cut(secretRef, "/")
+		if !ok || ns == "" || name == "" {
+			return fmt.Errorf("-sherlock-secret must be namespace/name, got %q", secretRef)
+		}
+		sk, err := kube.NewSecretKey(restCfg, ns, name, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "sherlock", "app.kubernetes.io/managed-by": "221b"})
+		if err != nil {
+			return err
+		}
+		keyBackend = sk
+	}
+	keys := sherlock.NewKeys(keyBackend, cfg.SherlockAPIKey, nil)
+	if err := keys.Load(ctx); err != nil {
+		log.Warn("reading the Claude API key failed; Sherlock has no key until it is saved again", "err", err)
+	}
+	var spendBackend prefs.Backend = &prefs.Memory{}
+	if cm, ok := storage.(*kube.ConfigMapStorage); ok {
+		spendBackend = cm
+	}
+	sherlockSvc := sherlock.New(sherlock.Options{
+		Client: &sherlock.Client{BaseURL: cfg.SherlockAPIURL, Key: keys.Key, HTTP: &http.Client{Timeout: 5 * time.Minute}, Retries: 2, Backoff: 2 * time.Second},
+		Ledger: sherlock.NewLedger(spendBackend, nil, log.With("component", "sherlock")),
+		Settings: func() sherlock.Settings {
+			sh := shared.Current().SherlockOrDefault()
+			return sherlock.Settings{Model: sh.Model, Caps: sherlock.Caps{DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD}}
+		},
+		Secrets: func() []string { return []string{keys.Key()} },
+		Audit:   auditLog,
+		Logger:  log.With("component", "sherlock"),
+	})
+	go func() {
+		t := time.NewTicker(time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				sherlockSvc.Sweep(authSvc.Sessions().Alive)
+			}
+		}
+	}()
+
 	handler := api.New(api.Options{
+		Sherlock:      sherlockSvc,
+		SherlockKeys:  keys,
 		Store:         store,
 		Prefs:         userPrefs,
 		Cluster:       cluster,
@@ -246,6 +300,10 @@ func run(args []string) error {
 				{Name: "b221_sessions", Help: "Signed-in sessions.", Value: float64(authSvc.Sessions().Count())},
 				{Name: "b221_people_access", Help: "People whose access to a cluster is kept, per person and cluster.", Value: float64(peopleCount(people))},
 				{Name: "b221_audit_dropped_total", Help: "Audit records the webhook queue had no room for.", Value: float64(auditLog.Dropped()), Counter: true},
+				{Name: "b221_sherlock_conversations", Help: "Sherlock conversations kept, one per session and cluster.", Value: float64(sherlockSvc.Count())},
+				{Name: "b221_sherlock_answering", Help: "Sherlock answers in progress.", Value: float64(sherlockSvc.Running())},
+				{Name: "b221_sherlock_spend_today_usd", Help: "What Sherlock has cost today (UTC), in US dollars.", Value: sherlockSvc.Ledger().Now(context.Background()).DayUSD},
+				{Name: "b221_sherlock_spend_month_usd", Help: "What Sherlock has cost this month (UTC), in US dollars.", Value: sherlockSvc.Ledger().Now(context.Background()).MonthUSD},
 			}
 			cached := cluster.CachedObjects()
 			kinds := make([]string, 0, len(cached))

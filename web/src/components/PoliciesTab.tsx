@@ -15,6 +15,7 @@ import { PolicyPanel } from './PolicyPanel'
 import { Select } from './Select'
 import type { TabProps } from './tabs'
 import { objectLink } from '../lib/peek'
+import { AskSherlock } from './Sherlock'
 
 function copy(text: string, onToast: (m: string) => void, what = 'Copied') {
   void navigator.clipboard?.writeText(text).then(
@@ -344,6 +345,9 @@ function Answer({ data, from, fromPod, to, set }: { data: NetCheckResult; from: 
           {from} {none ? 'can’t open' : 'can open'} {target} on {to}
           {data.service && data.service.targetPort !== String(data.service.port) ? ` (pod port ${c.port})` : ''}
         </strong>
+        <span style={{ marginLeft: 'auto' }}>
+          <AskSherlock question={`Can pod ${fromPod.namespace}/${fromPod.name} connect to Service ${to} on port ${data.service?.port ?? c.port}? Which policies decide?`} compact />
+        </span>
       </div>
       <p style={{ margin: 0, maxWidth: 880, fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg2)' }} data-testid="netcheck-why">
         {why.join(' ')}

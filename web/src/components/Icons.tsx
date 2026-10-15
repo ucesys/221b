@@ -225,3 +225,97 @@ export function ErrorIcon() {
     </svg>
   )
 }
+
+/** Sherlock's magnifier, as in the prototype. */
+export function SherlockIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" aria-hidden="true">
+      <circle cx="10.5" cy="10.5" r="6" />
+      <path d="m15 15 5 5" />
+    </svg>
+  )
+}
+
+/** The panel's icon when minimized. */
+export function DockIcon() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="10.5" cy="10.5" r="7" />
+      <path d="m15.6 15.6 4.9 4.9" />
+      <path d="M7.5 10.5h6" />
+      <path d="M10.5 7.5v6" />
+    </svg>
+  )
+}
+
+export function MinimizeIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <path d="M6 17h12" />
+    </svg>
+  )
+}
+
+export function MaximizeIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">
+      <rect x="4.5" y="4.5" width="15" height="15" rx="2" />
+    </svg>
+  )
+}
+
+export function RestoreIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" aria-hidden="true">
+      <rect x="4.5" y="8.5" width="11" height="11" rx="1.5" />
+      <path d="M8.5 8.5V6a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 19.5 6v8a1.5 1.5 0 0 1-1.5 1.5h-2.5" />
+    </svg>
+  )
+}
+
+/** A window of its own: a box with an arrow out of it. */
+export function PopOutIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 4.5h5.5V10" />
+      <path d="M19.5 4.5 11 13" />
+      <path d="M17.5 13.5v4a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2h4" />
+    </svg>
+  )
+}
+
+/** Back into the main window: an arrow into a box. */
+export function PopInIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M11 13.5V8" />
+      <path d="M11 13.5H5.5" />
+      <path d="M11 13.5 19.5 5" />
+      <path d="M13.5 19.5h4a2 2 0 0 0 2-2v-4" />
+    </svg>
+  )
+}
+
+export function SendIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 12h15M13 6l6 6-6 6" />
+    </svg>
+  )
+}
+
+export function CheckIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ flex: 'none' }}>
+      <path d="M5 12.5 10 17.5 19 7" />
+    </svg>
+  )
+}
+
+export function CrossIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" aria-hidden="true" style={{ flex: 'none' }}>
+      <path d="M6 6l12 12M18 6 6 18" />
+    </svg>
+  )
+}

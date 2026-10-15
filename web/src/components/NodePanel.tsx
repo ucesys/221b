@@ -4,6 +4,7 @@ import { clampPct, fmtAge, fmtTs, nWord } from '../lib/format'
 import { effectTone, isSystemLabel, resourceSections, roleTag, taintNote, type ResourceSection } from '../lib/nodes'
 import { href } from '../lib/router'
 import { CloseIcon } from './Icons'
+import { AskSherlock } from './Sherlock'
 import { YamlView } from './YamlView'
 
 interface Props {
@@ -147,6 +148,7 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
                 {r.name}
               </h2>
             </div>
+            <AskSherlock question={r.problems.length ? `What is wrong with node ${r.name}?` : `Tell me about node ${r.name}`} compact over />
             <button ref={closeRef} className="rk-icon-btn" aria-label="Close node details" title="Close (Esc)" onClick={onClose}>
               <CloseIcon />
             </button>

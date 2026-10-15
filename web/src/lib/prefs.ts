@@ -67,10 +67,15 @@ async function save(): Promise<void> {
   }
 }
 
-// A change made just before a reload or a closed tab is saved at once.
+// A change made just before a reload or a closed tab is saved at once, as
+// a beacon, which the browser delivers after the page has gone.
 if (typeof window !== 'undefined') {
   window.addEventListener('pagehide', () => {
-    if (pending) void save()
+    if (!pending) return
+    clearTimeout(timer)
+    pending = false
+    const body = new Blob([JSON.stringify({ prefs: values })], { type: 'application/json' })
+    if (typeof navigator.sendBeacon !== 'function' || !navigator.sendBeacon('/api/v1/prefs', body)) void save()
   })
 }
 

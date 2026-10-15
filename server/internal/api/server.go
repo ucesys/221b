@@ -33,6 +33,7 @@ import (
 	"github.com/ucesys/221b/server/internal/nodes"
 	"github.com/ucesys/221b/server/internal/prefs"
 	"github.com/ucesys/221b/server/internal/settings"
+	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/views"
 )
 
@@ -65,6 +66,8 @@ type Settings interface {
 	UpdateFleets(ctx context.Context, cluster string, list []fleets.Fleet) (settings.State, error)
 	// UpdateAcks changes a cluster's acknowledged alerts.
 	UpdateAcks(ctx context.Context, cluster string, change func([]acks.Ack) []acks.Ack) (settings.State, error)
+	// UpdateSherlock replaces Sherlock's settings (P5-05).
+	UpdateSherlock(ctx context.Context, sh settings.Sherlock) (settings.State, error)
 }
 
 // Auth gates requests by session and serves the sign-in endpoints;
@@ -106,6 +109,10 @@ type Options struct {
 	Prefs *prefs.Store
 	// Settings serves /api/v1/settings; nil leaves the path unserved.
 	Settings Settings
+	// Sherlock answers questions (Phase 5); nil leaves it out.
+	Sherlock *sherlock.Service
+	// SherlockKeys holds the Claude API key.
+	SherlockKeys *sherlock.Keys
 	// Ready reports whether the cluster has been listed; it drives /readyz.
 	Ready func() bool
 	// UI serves the browser app.
@@ -263,9 +270,25 @@ func New(o Options) *Server {
 		s.handle("POST /api/v1/clusters/{cluster}/alerts/ack", "alert-ack", s.postAck)
 		s.handle("PUT /api/v1/clusters/{cluster}/fleets", "fleets-update", s.putFleets)
 	}
+	if o.Sherlock != nil && o.Settings != nil {
+		for _, base := range []string{"/api/v1/", "/api/v1/clusters/{cluster}/"} {
+			s.handle("GET "+base+"sherlock", "sherlock", s.getSherlock)
+			s.handle("GET "+base+"sherlock/events", "sherlock-events", s.sherlockEvents)
+			s.handle("GET "+base+"sherlock/conversation", "sherlock-conversation", s.getSherlockConversation)
+			s.handle("POST "+base+"sherlock/ask", "sherlock-ask", s.postSherlockAsk)
+			s.handle("POST "+base+"sherlock/stop", "sherlock-stop", s.postSherlockStop)
+			s.handle("POST "+base+"sherlock/new", "sherlock-new", s.postSherlockNew)
+		}
+		s.handle("GET /api/v1/sherlock/config", "sherlock-config", s.getSherlockConfig)
+		s.handle("PUT /api/v1/sherlock/config", "sherlock-config-update", s.putSherlockConfig)
+		s.handle("PUT /api/v1/sherlock/key", "sherlock-key", s.putSherlockKey)
+		s.handle("DELETE /api/v1/sherlock/key", "sherlock-key", s.deleteSherlockKey)
+	}
 	if o.Prefs != nil && o.Auth != nil {
 		s.handle("GET /api/v1/prefs", "prefs", s.getPrefs)
 		s.handle("PUT /api/v1/prefs", "prefs-update", s.putPrefs)
+		// The same as a beacon, which can only POST, when a page goes away.
+		s.handle("POST /api/v1/prefs", "prefs-update", s.putPrefs)
 	}
 	if o.Auth != nil {
 		for _, r := range o.Auth.Routes() {

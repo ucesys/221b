@@ -160,6 +160,12 @@ func SessionFrom(ctx context.Context) (Session, bool) {
 	return sess, ok
 }
 
+// WithSession attaches a session to a context: for the console's own
+// requests made on a person's behalf, such as Sherlock's reads.
+func WithSession(ctx context.Context, sess Session) context.Context {
+	return context.WithValue(ctx, ctxKey{}, sess)
+}
+
 // anonymous is the session every request gets when sign-in is off.
 var anonymous = Session{ID: "", User: User{Subject: "anonymous", Username: "anonymous", Name: "Anonymous"}, Admin: true, Method: "none"}
 

@@ -24,7 +24,11 @@ import { TopBar, type Theme } from './components/TopBar'
 import { badgeOf, bannersOf, tabTone } from './lib/alerts'
 import { accessBadge } from './lib/rbac'
 import { findings as policyFindings, flagOf as policyFlag, modelOf as policyModel } from './lib/policies'
-import { apiPath, clusterHref, clusterPageHref, FIRST_TAB, HOME, href, navigate, TABS, useRoute } from './lib/router'
+import { apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, useRoute } from './lib/router'
+import { askSherlock, useSherlock } from './api/sherlock'
+import { canPopOut, focusPopup, onPop, popOut, post, usePoppedOut } from './lib/sherlock'
+import { openTarget, PoppedOutFab, SherlockContext, SherlockDock, type DockMode } from './components/Sherlock'
+import { SherlockWindow } from './components/SherlockWindow'
 import { loadPrefs } from './lib/prefs'
 import { readJSON, writeJSON } from './lib/storage'
 
@@ -52,6 +56,13 @@ function useNow(every = 60_000): number {
 
 export function App() {
   const route = useRoute()
+  // Sherlock in a window of its own has no tabs (P5-08).
+  if (route.view === 'sherlock') return <SherlockShell />
+  return <Console />
+}
+
+function Console() {
+  const route = useRoute()
   // One stream per cluster: opening another cluster opens its own (P3-09).
   const store = useLiveStore(apiPath('events', route.cluster))
   return (
@@ -59,6 +70,33 @@ export function App() {
       <Shell />
     </LiveContext.Provider>
   )
+}
+
+/** Sherlock's own window: the pane alone, in the console's theme. */
+function SherlockShell() {
+  const route = useRoute()
+  const { clusters } = useClusters()
+  const [theme] = useState<Theme>(initialTheme)
+  const [toast, setToast] = useState('')
+  const clearToast = useCallback(() => setToast(''), [])
+  useEffect(() => {
+    document.documentElement.style.colorScheme = theme
+    document.body.style.background = theme === 'dark' ? '#0D1013' : '#F2F3F5'
+  }, [theme])
+  const name = clusters.find((c) => c.id === route.cluster)?.name ?? (route.cluster === LOCAL ? '' : route.cluster)
+  return (
+    <div className="rk" data-theme={theme} data-accent="teal" data-density="comfortable" data-dock="off" style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}>
+      <SherlockWindow cluster={route.cluster} clusterName={name} onToast={setToast} />
+      {toast && <Toast message={toast} onDone={clearToast} />}
+    </div>
+  )
+}
+
+const DOCK_KEY = '221b.dock'
+
+interface DockState {
+  mode: DockMode
+  h: number
 }
 
 /** The connection editor's subject: a cluster's id, null for a new one, undefined when closed. */
@@ -131,14 +169,58 @@ function Shell() {
   const policyCount = policyFlag(policies.loaded ? policyFindings(policyModel(policies.rows)) : [])
   const counts = { ...live.counts, fleets: fleetDefs.length, ...(alerts.loaded ? { alerts: alertBadge.count } : {}), ...(access.loaded ? { access: accessCount.count } : {}), ...(policies.loaded ? { policies: policyCount.count } : {}) }
   const common = { cluster: live.cluster, now, onToast: setToast, route }
+
+  // Sherlock (Phase 5): docked at the bottom of every tab, or in a window
+  // of its own (P5-08).
+  const sherlock = useSherlock(route.cluster)
+  const popped = usePoppedOut()
+  const [dock, setDockState] = useState<DockState>(() => {
+    const d = readJSON<DockState | null>(DOCK_KEY, null)
+    return d && (d.mode === 'open' || d.mode === 'min' || d.mode === 'max') && typeof d.h === 'number' ? d : { mode: 'open', h: 300 }
+  })
+  const setDock = useCallback((d: DockState) => {
+    setDockState(d)
+    writeJSON(DOCK_KEY, { mode: d.mode === 'max' ? 'open' : d.mode, h: d.h })
+  }, [])
+  const dockShown = view === 'tabs' && !!sherlock.status?.enabled && !popped
+  useEffect(() => {
+    if (popped) post({ type: 'cluster', cluster: route.cluster })
+  }, [popped, route.cluster])
+  useEffect(
+    () =>
+      onPop((m) => {
+        if (m.type !== 'open') return
+        const here = currentRoute()
+        const hash = m.cluster === here.cluster ? openTarget(m.target) : 'peek' in m.target ? clusterHref(m.cluster, FIRST_TAB, [], { peek: m.target.peek }) : m.target.href
+        if (hash) navigate(hash)
+        window.focus()
+      }),
+    [],
+  )
+  const sherlockApi = {
+    available: !!sherlock.status?.available && view === 'tabs',
+    ask: (q: string, over?: boolean) => {
+      if (!popped && (over || dock.mode === 'min')) setDock({ ...dock, mode: over ? 'max' : 'open' })
+      askSherlock(route.cluster, q)
+        .then(() => {
+          if (popped) focusPopup()
+        })
+        .catch((e: unknown) => setToast(e instanceof Error ? e.message : String(e)))
+    },
+  }
+  const popOutNow = () => {
+    if (popOut(route.cluster)) setDock({ ...dock, mode: dock.mode === 'max' ? 'open' : dock.mode })
+    else setToast('The browser did not open a new window. Allow pop-ups for the console to move Sherlock to a window of its own.')
+  }
   return (
+    <SherlockContext.Provider value={sherlockApi}>
     <div
       className="rk"
       data-theme={theme}
       data-accent="teal"
       data-density="comfortable"
-      data-dock="off"
-      style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}
+      data-dock={dockShown ? dock.mode : 'off'}
+      style={{ ['--dock-h' as string]: `${dock.h}px`, minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}
     >
       <TopBar cluster={live.cluster} counts={counts} labelTones={{ alerts: alertTab }} tones={{ alerts: alertBadge.tone, access: accessCount.tone, policies: policyCount.tone === 'info' ? 'muted' : policyCount.tone }} tab={view === 'tabs' ? tab : null} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
       {view !== 'home' && <Banners cluster={live.cluster} stream={live.stream} now={now} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} accessError={live.accessError} alerts={view === 'tabs' && tab !== 'alerts' ? bannersOf(alerts.rows, now) : []} alertsHref={href('alerts')} />}
@@ -160,11 +242,14 @@ function Shell() {
           {tab === 'policies' && <PoliciesTab {...common} />}
         </div>
       )}
+      {dockShown && <SherlockDock mode={dock.mode} onMode={(mode) => setDock({ ...dock, mode })} height={dock.h} onHeight={(h) => setDock({ ...dock, h })} cluster={route.cluster} clusterName={clusterName} state={sherlock} onToast={setToast} onPopOut={canPopOut() ? popOutNow : undefined} />}
+      {view === 'tabs' && popped && <PoppedOutFab onFocus={focusPopup} onDock={() => post({ type: 'close' })} />}
       {view === 'tabs' && <PeekPane route={route} cluster={live.cluster} now={now} onToast={setToast} />}
       <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} canChange={me?.admin ?? true} />
       {editing === null && <ClusterEditor key="+" orig={null} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
       {editing && editOrig && <ClusterEditor key={editing} orig={editOrig} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
       {toast && <Toast message={toast} onDone={clearToast} />}
     </div>
+    </SherlockContext.Provider>
   )
 }

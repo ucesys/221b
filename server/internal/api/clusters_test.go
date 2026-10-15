@@ -60,7 +60,7 @@ func multiSetup(t *testing.T, who string) (*httptest.Server, *http.Client, *clus
 
 // multiSetupWith is multiSetup with the fake authorizer refusing some
 // "resource/namespace" pairs to every person (P3-02).
-func multiSetupWith(t *testing.T, who string, deny map[string]bool) (*httptest.Server, *http.Client, *clusters.Manager, *bytes.Buffer, *source, *live.Store) {
+func multiSetupWith(t *testing.T, who string, deny map[string]bool, mods ...func(*Options)) (*httptest.Server, *http.Client, *clusters.Manager, *bytes.Buffer, *source, *live.Store) {
 	t.Helper()
 	local := &source{Source: fake.New("n1", "n2"), logs: map[string][]string{}, deny: deny}
 	for _, ns := range []string{"default", "kube-system", "web"} {
@@ -102,7 +102,11 @@ func multiSetupWith(t *testing.T, who string, deny map[string]bool) (*httptest.S
 		m.SetSettings(st.Refresh(), b)
 	})
 	ui := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "app:"+r.URL.Path) })
-	srv := httptest.NewServer(New(Options{Store: store, Cluster: local, Settings: shared, Prefs: prefs.New(nil), Clusters: m, Auth: svc, Audit: audit.New(audit.Options{Out: &auditOut}), Access: access.NewCache(access.Options{TTL: 400 * time.Millisecond}), AccessRecheck: 50 * time.Millisecond, Heartbeat: 50 * time.Millisecond, Ready: func() bool { return true }, UI: ui, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+	opts := Options{Store: store, Cluster: local, Settings: shared, Prefs: prefs.New(nil), Clusters: m, Auth: svc, Audit: audit.New(audit.Options{Out: &auditOut}), Access: access.NewCache(access.Options{TTL: 400 * time.Millisecond}), AccessRecheck: 50 * time.Millisecond, Heartbeat: 50 * time.Millisecond, Ready: func() bool { return true }, UI: ui, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	for _, mod := range mods {
+		mod(&opts)
+	}
+	srv := httptest.NewServer(New(opts))
 	t.Cleanup(srv.Close)
 	return srv, signIn(t, srv, who), m, &auditOut, local, store
 }

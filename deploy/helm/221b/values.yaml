@@ -151,6 +151,21 @@ preferences:
   # each browser keeps its own.
   perUser: true
 
+sherlock:
+  # Sherlock answers questions about a cluster through the Claude API
+  # (Phase 5). It is off for every cluster until an administrator turns it
+  # on in Settings and gives it an API key, which the console keeps in a
+  # Secret of its own namespace (<release>-sherlock) with connections.store
+  # secrets, otherwise in memory until a restart. Nothing is sent to the
+  # API for a cluster where it is off.
+  apiURL: https://api.anthropic.com
+  # Or take the key from a Secret you manage; the Settings then show it as
+  # set by the chart and cannot change it.
+  existingSecret: ""
+  existingSecretKey: api-key
+  # Allow the console's network policy to reach the Claude API (HTTPS).
+  egress: true
+
 secrets:
   # Read Secrets. The Namespaces tab then lists each Secret with its key
   # names and sizes, and the Helm tab reads release records, which Helm
@@ -224,9 +239,10 @@ networkPolicy:
   # cluster to cluster and managed clusters change them. DNS is always
   # allowed, for the API servers given by name.
   apiServerCIDRs: []
-  # With OIDC sign-in or an audit webhook the console also needs the
-  # provider's or webhook's HTTPS port; it is allowed then. List CIDRs to
-  # narrow where it may connect for them.
+  # With OIDC sign-in, an audit webhook or Sherlock (sherlock.egress) the
+  # console also needs the provider's, webhook's or Claude API's HTTPS
+  # port; it is allowed then. List CIDRs to narrow where it may connect
+  # for them.
   outboundPorts: [443]
   outboundCIDRs: []
 

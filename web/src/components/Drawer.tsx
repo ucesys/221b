@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { CloseIcon } from './Icons'
+import { AskSherlock } from './Sherlock'
 
 export interface DrawerTab {
   id: string
@@ -26,13 +27,15 @@ interface Props {
   footer?: ReactNode
   width?: number
   testId?: string
+  /** A question for Sherlock about what the drawer shows (P5-01). */
+  ask?: string
 }
 
 /**
  * The prototype's details drawer: over the page from the right, with a
  * backdrop that closes it, a header with tabs, and a scrolling body.
  */
-export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId }: Props) {
+export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId, ask }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const body = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -90,6 +93,7 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
                 {title}
               </h2>
             </div>
+            {ask && <AskSherlock question={ask} compact over />}
             <button ref={closeRef} className="rk-icon-btn" aria-label={`Close ${label.toLowerCase()}`} title="Close (Esc)" onClick={onClose}>
               <CloseIcon />
             </button>

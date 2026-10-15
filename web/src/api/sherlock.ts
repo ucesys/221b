@@ -1,0 +1,174 @@
+// Sherlock (Phase 5): a conversation per person and cluster, kept on the
+// server, streamed to every window of the session (P5-08).
+
+import { useEffect, useState } from 'react'
+import { unauthorized } from './auth'
+import { apiPath } from '../lib/router'
+
+export interface SherlockRef {
+  kind: string
+  namespace?: string
+  name: string
+}
+
+export interface SherlockStep {
+  label: string
+  tool: string
+  status: 'running' | 'done' | 'failed'
+}
+
+export interface SherlockUsage {
+  input_tokens: number
+  output_tokens: number
+  cache_creation_input_tokens: number
+  cache_read_input_tokens: number
+}
+
+export interface SherlockMsg {
+  id: number
+  role: 'user' | 'sherlock'
+  text: string
+  steps?: SherlockStep[]
+  refs?: SherlockRef[]
+  /** Questions to ask next, offered as chips. */
+  follow?: string[]
+  status?: 'thinking' | 'answering' | 'done' | 'stopped' | 'failed'
+  error?: string
+  at: string
+  firstAt?: string
+  doneAt?: string
+  model?: string
+  usage?: SherlockUsage
+  costUSD?: number
+}
+
+export interface Conversation {
+  id: string
+  messages: SherlockMsg[]
+  busy: boolean
+  rev: number
+}
+
+export interface SherlockStatus {
+  available: boolean
+  enabled: boolean
+  key: boolean
+  reason?: string
+  capped?: string
+  model: string
+  admin: boolean
+}
+
+export interface SherlockModel {
+  id: string
+  label: string
+  in: number
+  out: number
+  longIn?: number
+  longOut?: number
+  longAbove?: number
+  note?: string
+}
+
+export interface SherlockSettings {
+  clusters?: Record<string, boolean>
+  model: string
+  dailyUSD: number
+  monthlyUSD: number
+}
+
+export interface SherlockConfig {
+  settings: SherlockSettings
+  key: { set: boolean; source?: 'console' | 'chart'; setAt?: string; setBy?: string; store: 'secret' | 'memory' }
+  spend: { day: string; dayUSD: number; dayAsked: number; month: string; monthUSD: number; monthAsked: number }
+  models: SherlockModel[]
+  clusters: { id: string; name: string; env: string }[]
+  running: number
+}
+
+export class SherlockError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message)
+  }
+}
+
+async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+  let res: Response
+  try {
+    res = await fetch(path, {
+      method,
+      headers: body === undefined ? { Accept: 'application/json' } : { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    })
+  } catch {
+    throw new SherlockError('The console did not answer. Check the connection and try again.', 0)
+  }
+  if (unauthorized(res)) throw new SherlockError('Your session has ended; sign in again.', 401)
+  const data = (await res.json().catch(() => null)) as (T & { error?: string }) | null
+  if (!res.ok) throw new SherlockError(data?.error || `The console answered ${res.status}.`, res.status)
+  return data as T
+}
+
+export const askSherlock = (cluster: string, question: string) => call<Conversation>('POST', apiPath('sherlock/ask', cluster), { question })
+export const stopSherlock = (cluster: string) => call<{ stopped: boolean }>('POST', apiPath('sherlock/stop', cluster), {})
+export const newSherlockChat = (cluster: string) => call<Conversation>('POST', apiPath('sherlock/new', cluster), {})
+export const fetchSherlockConfig = () => call<SherlockConfig>('GET', '/api/v1/sherlock/config')
+export const saveSherlockConfig = (s: SherlockSettings) => call<SherlockConfig>('PUT', '/api/v1/sherlock/config', s)
+export const saveSherlockKey = (key: string) => call<SherlockConfig>('PUT', '/api/v1/sherlock/key', { key })
+export const deleteSherlockKey = () => call<SherlockConfig>('DELETE', '/api/v1/sherlock/key')
+
+export interface SherlockState {
+  status: SherlockStatus | null
+  conv: Conversation | null
+  /** Whether the stream is open. */
+  live: boolean
+}
+
+/** Sherlock in a cluster: its status and the conversation, as they change. */
+export function useSherlock(cluster: string, on = true): SherlockState {
+  // State is kept with the cluster it is for, so another cluster starts empty.
+  const [state, setState] = useState<SherlockState & { cluster: string }>({ cluster, status: null, conv: null, live: false })
+  useEffect(() => {
+    if (!on || typeof EventSource === 'undefined') return
+    const mine = (s: SherlockState & { cluster: string }) => (s.cluster === cluster ? s : { cluster, status: null, conv: null, live: false })
+    const es = new EventSource(apiPath('sherlock/events', cluster))
+    es.addEventListener('open', () => setState((s) => ({ ...mine(s), live: true })))
+    es.addEventListener('error', () => setState((s) => ({ ...mine(s), live: false })))
+    es.addEventListener('status', (e) => {
+      const status = JSON.parse((e as MessageEvent<string>).data) as SherlockStatus
+      setState((s) => ({ ...mine(s), status }))
+    })
+    es.addEventListener('conversation', (e) => {
+      const conv = JSON.parse((e as MessageEvent<string>).data) as Conversation
+      setState((s) => ({ ...mine(s), conv, live: true }))
+    })
+    es.addEventListener('answer', (e) => {
+      const { rev, message } = JSON.parse((e as MessageEvent<string>).data) as { rev: number; message: SherlockMsg }
+      setState((s) => {
+        const cur = mine(s)
+        if (!cur.conv) return cur
+        const msgs = cur.conv.messages.slice()
+        const i = msgs.findIndex((m) => m.id === message.id)
+        if (i >= 0) msgs[i] = message
+        else msgs.push(message)
+        return { ...cur, conv: { ...cur.conv, messages: msgs, rev } }
+      })
+    })
+    return () => es.close()
+  }, [cluster, on])
+  return state.cluster === cluster ? state : { status: null, conv: null, live: false }
+}
+
+/** The price of a model, for the settings: "$4 in · $20 out per million tokens". */
+export function priceText(m: SherlockModel): string {
+  const f = (n: number) => (n >= 1 ? `$${n}` : `$${n.toFixed(2)}`)
+  return `${f(m.in)} in · ${f(m.out)} out per million tokens`
+}
+
+/** Dollars as the settings show them. */
+export function usd(n: number): string {
+  return n < 0.01 && n > 0 ? '<$0.01' : `$${n.toFixed(2)}`
+}

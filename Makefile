@@ -16,7 +16,7 @@ LDFLAGS := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT)
 UI_DIST := server/internal/ui/dist
 
 .DEFAULT_GOAL := build
-.PHONY: help build web ui server sim test test-go test-web lint lint-go lint-web licenses image chart-lint dev-sim e2e-sim clean
+.PHONY: help build web ui server sim test test-go test-web lint lint-go lint-web licenses image chart-lint dev-sim e2e-sim sherlock-eval clean
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -80,11 +80,15 @@ SIM_AUTH = -auth-mode oidc -oidc-issuer http://127.0.0.1:7443/oidc -oidc-client-
 # simulated cluster too, in the namespace 221b.
 SIM_STORE = -settings-configmap 221b/console-221b -connections-secrets 221b/console-221b
 
+# Sherlock (Phase 5) talks to the simulator's fake Claude API; an
+# administrator turns it on in Settings with any key of the right shape.
+SIM_SHERLOCK = -sherlock-api-url http://127.0.0.1:7443/claude
+
 dev-sim: build ## Run the console on http://127.0.0.1:8080 against a simulated cluster, signing in through the simulated provider
 	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) -churn 5s $(SIM_OIDC) & sim=$$!; \
 	bin/221b-sim -nodes 4 -pods 40 -seed 3 -listen 127.0.0.1:7444 & sim2=$$!; \
 	trap 'kill $$sim $$sim2 2>/dev/null' EXIT INT TERM; \
-	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) -log-format text $(SIM_AUTH)
+	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) $(SIM_SHERLOCK) -log-format text $(SIM_AUTH)
 
 # A second simulator on 7444 stands in for another cluster (P3-09); the
 # tests tell it which token to require.
@@ -93,10 +97,13 @@ e2e-sim: build ## Run the browser end-to-end tests against a simulated cluster
 	bin/221b-sim -nodes 4 -pods 40 -seed 3 -listen 127.0.0.1:7444 & sim2=$$!; \
 	trap 'kill $$sim $$sim2 2>/dev/null' EXIT INT TERM; \
 	for i in $$(seq 50); do curl -fs http://127.0.0.1:7443/version >/dev/null && curl -fs http://127.0.0.1:7444/version >/dev/null && break; sleep 0.2; done; \
-	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) -health-interval 2s -log-format text $(SIM_AUTH) > bin/e2e-audit.log 2> bin/e2e-server.log & srv=$$!; \
+	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) $(SIM_SHERLOCK) -health-interval 2s -log-format text $(SIM_AUTH) > bin/e2e-audit.log 2> bin/e2e-server.log & srv=$$!; \
 	trap 'kill $$sim $$sim2 $$srv 2>/dev/null' EXIT INT TERM; \
 	for i in $$(seq 50); do curl -fs http://127.0.0.1:8080/readyz >/dev/null && break; sleep 0.2; done; \
 	cd web && E2E_MODE=sim E2E_SIM_URL=http://127.0.0.1:7443 E2E_OTHER_SIM_URL=http://127.0.0.1:7444 $(NPM) run e2e
+
+sherlock-eval: ## Ask Sherlock about the simulator's sample problems (P5-06); with ANTHROPIC_API_KEY, through the Claude API
+	hack/sherlock-eval.sh
 
 clean: ## Remove build output
 	rm -rf bin web/dist
