@@ -3,6 +3,7 @@ import { useView } from '../api/live'
 import type { AccessRow, BindingRow, NamespaceRow, RoleRow, SARow } from '../api/types'
 import { BINDING_COLUMNS, bindingTerms, GRANT_COLUMNS, grantTerms, IdentityName, ROLE_COLUMNS, roleTerms, Sev, WHO_COLUMNS, whoTerms, type BindingView, type GrantView, type RoleView, type WhoView } from '../columns/access'
 import { fmtAge, nWord } from '../lib/format'
+import { FixCommand } from './Watson'
 import { AskSherlock } from './Sherlock'
 import {
   AC_RES,
@@ -270,17 +271,7 @@ function FindingBlock({ f, path, onToast, card = false }: { f: ReviewItem; path?
       </div>
       <p style={{ margin: 0, maxWidth: 880, fontSize: 12.5, lineHeight: 1.55, color: 'var(--fg2)' }}>{f.text}</p>
       {path}
-      {f.command && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <code className="rk-mono" style={{ fontSize: 11.5, color: 'var(--fg2)', overflowWrap: 'anywhere' }}>
-            {f.command}
-          </code>
-          <button className="rk-btn" onClick={() => copy(f.command!, onToast)} title="Copy the command; 221B runs nothing" style={{ height: 26 }}>
-            <CopyIcon />
-            Copy the command
-          </button>
-        </div>
-      )}
+      {f.command && <FixCommand command={f.command} from={`Access finding: ${f.title}`} why={f.text} onCopy={() => copy(f.command!, onToast)} />}
     </div>
   )
 }

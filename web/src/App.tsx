@@ -26,9 +26,12 @@ import { accessBadge } from './lib/rbac'
 import { findings as policyFindings, flagOf as policyFlag, modelOf as policyModel } from './lib/policies'
 import { apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, useRoute } from './lib/router'
 import { askSherlock, useSherlock } from './api/sherlock'
-import { canPopOut, focusPopup, onPop, popOut, post, usePoppedOut } from './lib/sherlock'
-import { openTarget, PoppedOutFab, SherlockContext, SherlockDock, type DockMode } from './components/Sherlock'
-import { SherlockWindow } from './components/SherlockWindow'
+import { sendToWatson, useWatson, WatsonError, type Send } from './api/watson'
+import { canPopOut, focusPopup, onPop, panesOf, popOut, post, usePopped, type Pane } from './lib/sherlock'
+import { openTarget, SherlockContext, SherlockPane } from './components/Sherlock'
+import { Dock, PoppedOutFab, type DockMode } from './components/Dock'
+import { autoRunReads, WatsonContext, WatsonPane } from './components/Watson'
+import { AssistantWindow } from './components/AssistantWindow'
 import { loadPrefs } from './lib/prefs'
 import { readJSON, writeJSON } from './lib/storage'
 
@@ -56,8 +59,8 @@ function useNow(every = 60_000): number {
 
 export function App() {
   const route = useRoute()
-  // Sherlock in a window of its own has no tabs (P5-08).
-  if (route.view === 'sherlock') return <SherlockShell />
+  // Sherlock and Watson in a window of their own have no tabs (P5-08, P6-09).
+  if (route.view === 'sherlock' || route.view === 'watson' || route.view === 'assistants') return <AssistantShell />
   return <Console />
 }
 
@@ -72,8 +75,8 @@ function Console() {
   )
 }
 
-/** Sherlock's own window: the pane alone, in the console's theme. */
-function SherlockShell() {
+/** Sherlock's and Watson's own window: the panels alone, in the console's theme. */
+function AssistantShell() {
   const route = useRoute()
   const { clusters } = useClusters()
   const [theme] = useState<Theme>(initialTheme)
@@ -86,7 +89,7 @@ function SherlockShell() {
   const name = clusters.find((c) => c.id === route.cluster)?.name ?? (route.cluster === LOCAL ? '' : route.cluster)
   return (
     <div className="rk" data-theme={theme} data-accent="teal" data-density="comfortable" data-dock="off" style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}>
-      <SherlockWindow cluster={route.cluster} clusterName={name} onToast={setToast} />
+      <AssistantWindow cluster={route.cluster} clusterName={name} panes={panesOf(route.view)} onToast={setToast} />
       {toast && <Toast message={toast} onDone={clearToast} />}
     </div>
   )
@@ -97,6 +100,9 @@ const DOCK_KEY = '221b.dock'
 interface DockState {
   mode: DockMode
   h: number
+  /** Sherlock's share of the width, and the panel a narrow screen shows. */
+  split?: number
+  pane?: Pane
 }
 
 /** The connection editor's subject: a cluster's id, null for a new one, undefined when closed. */
@@ -170,22 +176,28 @@ function Shell() {
   const counts = { ...live.counts, fleets: fleetDefs.length, ...(alerts.loaded ? { alerts: alertBadge.count } : {}), ...(access.loaded ? { access: accessCount.count } : {}), ...(policies.loaded ? { policies: policyCount.count } : {}) }
   const common = { cluster: live.cluster, now, onToast: setToast, route }
 
-  // Sherlock (Phase 5): docked at the bottom of every tab, or in a window
-  // of its own (P5-08).
+  // Sherlock (Phase 5) and Watson (Phase 6): docked at the bottom of every
+  // tab, or in windows of their own (P5-08, P6-09).
   const sherlock = useSherlock(route.cluster)
-  const popped = usePoppedOut()
+  const watson = useWatson(route.cluster, view === 'tabs')
+  const popped = usePopped()
   const [dock, setDockState] = useState<DockState>(() => {
     const d = readJSON<DockState | null>(DOCK_KEY, null)
     return d && (d.mode === 'open' || d.mode === 'min' || d.mode === 'max') && typeof d.h === 'number' ? d : { mode: 'open', h: 300 }
   })
   const setDock = useCallback((d: DockState) => {
     setDockState(d)
-    writeJSON(DOCK_KEY, { mode: d.mode === 'max' ? 'open' : d.mode, h: d.h })
+    writeJSON(DOCK_KEY, { ...d, mode: d.mode === 'max' ? 'open' : d.mode })
   }, [])
-  const dockShown = view === 'tabs' && !!sherlock.status?.enabled && !popped
+  const sherlockOn = !!sherlock.status?.enabled
+  const watsonOn = !!watson.status?.available
+  const sherlockDocked = sherlockOn && !popped.has('sherlock')
+  const watsonDocked = watsonOn && !popped.has('watson')
+  const dockShown = view === 'tabs' && (sherlockDocked || watsonDocked)
+  const anyPopped = popped.size > 0
   useEffect(() => {
-    if (popped) post({ type: 'cluster', cluster: route.cluster })
-  }, [popped, route.cluster])
+    if (anyPopped) post({ type: 'cluster', cluster: route.cluster })
+  }, [anyPopped, route.cluster])
   useEffect(
     () =>
       onPop((m) => {
@@ -200,20 +212,47 @@ function Shell() {
   const sherlockApi = {
     available: !!sherlock.status?.available && view === 'tabs',
     ask: (q: string, over?: boolean) => {
-      if (!popped && (over || dock.mode === 'min')) setDock({ ...dock, mode: over ? 'max' : 'open' })
+      const away = popped.has('sherlock')
+      if (!away && (over || dock.mode === 'min')) setDock({ ...dock, mode: over ? 'max' : 'open', pane: 'sherlock' })
+      else if (!away) setDock({ ...dock, pane: 'sherlock' })
       askSherlock(route.cluster, q)
         .then(() => {
-          if (popped) focusPopup()
+          if (away) focusPopup('sherlock')
         })
         .catch((e: unknown) => setToast(e instanceof Error ? e.message : String(e)))
     },
   }
-  const popOutNow = () => {
-    if (popOut(route.cluster)) setDock({ ...dock, mode: dock.mode === 'max' ? 'open' : dock.mode })
-    else setToast('The browser did not open a new window. Allow pop-ups for the console to move Sherlock to a window of its own.')
+  // Buttons and Sherlock hand commands to Watson (P6-06): the panel opens,
+  // or Watson's window comes forward, with the card to approve.
+  const watsonApi = {
+    available: watsonOn && view === 'tabs',
+    readOnly: !!watson.status?.readOnly,
+    send: (command: string, o: Send = {}) => {
+      const away = popped.has('watson')
+      if (!away) setDock({ ...dock, mode: o.over ? 'max' : dock.mode === 'min' ? 'open' : dock.mode, pane: 'watson' })
+      sendToWatson(route.cluster, command, { run: autoRunReads(), ...o })
+        .then(() => {
+          if (away) focusPopup('watson')
+        })
+        .catch((e: unknown) => setToast(e instanceof WatsonError ? e.message : String(e)))
+    },
   }
+  const popOutNow = (pane: Pane) => {
+    const other: Pane = pane === 'sherlock' ? 'watson' : 'sherlock'
+    // With the other panel already in a window, this one joins it.
+    if (popped.has(other)) {
+      post({ type: 'add', pane })
+      focusPopup(other)
+      return
+    }
+    if (popOut(route.cluster, [pane])) setDock({ ...dock, mode: dock.mode === 'max' ? 'open' : dock.mode })
+    else setToast(`The browser did not open a new window. Allow pop-ups for the console to move ${pane === 'sherlock' ? 'Sherlock' : 'Watson'} to a window of its own.`)
+  }
+  const waiting = watson.items.filter((x) => x.status === 'pending' && x.kind === 'change' && x.canApprove).length
+  const busy = !!sherlock.conv?.busy || watson.items.some((x) => x.status === 'running' || x.status === 'queued')
   return (
     <SherlockContext.Provider value={sherlockApi}>
+    <WatsonContext.Provider value={watsonApi}>
     <div
       className="rk"
       data-theme={theme}
@@ -242,14 +281,34 @@ function Shell() {
           {tab === 'policies' && <PoliciesTab {...common} />}
         </div>
       )}
-      {dockShown && <SherlockDock mode={dock.mode} onMode={(mode) => setDock({ ...dock, mode })} height={dock.h} onHeight={(h) => setDock({ ...dock, h })} cluster={route.cluster} clusterName={clusterName} state={sherlock} onToast={setToast} onPopOut={canPopOut() ? popOutNow : undefined} />}
-      {view === 'tabs' && popped && <PoppedOutFab onFocus={focusPopup} onDock={() => post({ type: 'close' })} />}
+      {dockShown && (
+        <Dock
+          mode={dock.mode}
+          onMode={(mode) => setDock({ ...dock, mode })}
+          height={dock.h}
+          onHeight={(h) => setDock({ ...dock, h })}
+          split={dock.split ?? 0.5}
+          onSplit={(split) => setDock({ ...dock, split })}
+          pane={dock.pane ?? 'sherlock'}
+          onPane={(pane) => setDock({ ...dock, pane })}
+          sherlock={sherlockDocked ? (controls, switcher) => <SherlockPane cluster={route.cluster} clusterName={clusterName} state={sherlock} onToast={setToast} controls={controls} switcher={switcher} /> : null}
+          watson={watsonDocked ? (controls, switcher) => <WatsonPane cluster={route.cluster} clusterName={clusterName} state={watson} onToast={setToast} controls={controls} switcher={switcher} /> : null}
+          popped={[...popped].filter((p) => (p === 'sherlock' ? sherlockOn : watsonOn))}
+          onFocusPopped={(p) => focusPopup(p)}
+          onDockHere={(p) => post({ type: 'close', panes: [p] })}
+          onPopOut={canPopOut() ? popOutNow : undefined}
+          waiting={waiting}
+          busy={busy}
+        />
+      )}
+      {view === 'tabs' && anyPopped && !dockShown && <PoppedOutFab panes={[...popped]} onFocus={() => focusPopup()} onDock={() => post({ type: 'close' })} />}
       {view === 'tabs' && <PeekPane route={route} cluster={live.cluster} now={now} onToast={setToast} />}
       <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} canChange={me?.admin ?? true} />
       {editing === null && <ClusterEditor key="+" orig={null} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
       {editing && editOrig && <ClusterEditor key={editing} orig={editOrig} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
       {toast && <Toast message={toast} onDone={clearToast} />}
     </div>
+    </WatsonContext.Provider>
     </SherlockContext.Provider>
   )
 }

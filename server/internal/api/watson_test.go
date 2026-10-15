@@ -163,6 +163,25 @@ func TestWatsonReadOnlyClusterRefusesChanges(t *testing.T) {
 	if !strings.Contains(auditOut.String(), `"action":"watson.refuse"`) {
 		t.Fatal("refusal not audited")
 	}
+	// The installation decides, not an edit of the connection.
+	if r, b := send(t, c, http.MethodPut, srv.URL+"/api/v1/clusters/local", `{"name":"Here","env":"staging","description":"","ca":"system","auth":"token","mode":"write"}`); r.StatusCode != 200 || !strings.Contains(b, `"mode":"read"`) {
+		t.Fatalf("edit %d %s", r.StatusCode, b)
+	}
+	if it := submit(t, srv, c, "kubectl cordon worker-002", true); it.Status != watson.StatusRefused {
+		t.Fatalf("an edit made the local cluster writable: %+v", it)
+	}
+	// One command, with its output, as its own JSON.
+	read := submit(t, srv, c, "kubectl get node worker-002 -o name", true)
+	watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[read.ID].Status == watson.StatusDone })
+	r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/watson/commands/"+read.ID, "")
+	var got watsonItem
+	if r.StatusCode != 200 || json.Unmarshal([]byte(b), &got) != nil || len(got.Lines) != 1 || got.Lines[0].T != "node/worker-002" {
+		t.Fatalf("get %d %s", r.StatusCode, b)
+	}
+	other := signIn(t, srv, "viewer@corp.example")
+	if r, _ := send(t, other, http.MethodGet, srv.URL+"/api/v1/watson/commands/"+read.ID, ""); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("someone else read the command: %d", r.StatusCode)
+	}
 }
 
 func TestWatsonSecondPerson(t *testing.T) {

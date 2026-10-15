@@ -4,6 +4,7 @@ import type { Settings } from '../api/types'
 import { fmtClock } from '../lib/format'
 import { CloseIcon } from './Icons'
 import { SherlockSettings } from './SherlockSettings'
+import { WatsonSettings } from './WatsonSettings'
 import type { Theme } from './TopBar'
 
 interface Props {
@@ -129,6 +130,7 @@ export function SettingsDialog({ open, onClose, theme, onTheme, settings, refres
             )}
           </section>
           {canChange && <SherlockSettings open={open} />}
+          {canChange && <WatsonSettings open={open} />}
         </div>
       </div>
     </dialog>

@@ -66,7 +66,8 @@ test.afterAll(async ({ browser }) => {
 test('Sherlock stays away until an administrator turns it on, and the key is never shown again (P5-05)', async ({ page }) => {
   await open(page, '#/alerts')
   await expect(page.getByTestId('alert').first()).toBeVisible({ timeout: 45_000 })
-  await expect(dock(page)).toHaveCount(0)
+  // Watson docks on its own; Sherlock is not there.
+  await expect(page.getByTestId('sherlock')).toHaveCount(0)
   await expect(page.getByTestId('ask-sherlock')).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Settings' }).click()
@@ -150,13 +151,13 @@ test('the panel resizes, maximizes over the page and minimizes to an icon (P5-01
   await page.mouse.up()
   await expect.poll(box).toBeGreaterThan(h0 + 80)
 
-  await page.getByTestId('sherlock-maximize').click()
+  await page.locator('[data-testid=sherlock-maximize]:visible').click()
   await expect(dock(page)).toHaveAttribute('data-mode', 'max')
   await expect(dock(page)).toHaveAttribute('role', 'dialog')
   await page.keyboard.press('Escape')
   await expect(dock(page)).toHaveAttribute('data-mode', 'open')
 
-  await page.getByTestId('sherlock-minimize').click()
+  await page.locator('[data-testid=sherlock-minimize]:visible').click()
   await expect(dock(page)).toHaveCount(0)
   await expect(page.getByTestId('sherlock-fab')).toBeVisible()
   // Kept for this browser, in a fresh load.
@@ -277,6 +278,20 @@ test('a spending cap stops new questions with a clear message (P5-05)', async ({
   await expect(page.getByTestId('sherlock-input')).toBeVisible({ timeout: 15_000 })
 })
 
+test('a command in an answer goes to Watson, with Sherlock’s reason, and runs there (P6-06)', async ({ page }) => {
+  await open(page)
+  if (await page.getByTestId('sherlock-new').count()) await page.getByTestId('sherlock-new').click()
+  const pod = podRows(await snapshot(request(page), ['pods']))[0]!.key
+  await ask(page, 'Tell me about pod ' + pod)
+  await done(page)
+  const [ns, name] = pod.split('/')
+  await lastAnswer(page).getByTestId('sherlock-send-watson').click()
+  const ran = page.getByTestId('watson').getByTestId('watson-ran').last()
+  await expect(ran).toContainText(`kubectl -n ${ns} describe pod ${name}`)
+  await expect(ran).toHaveAttribute('data-status', 'done', { timeout: 30_000 })
+  await expect(ran.getByTestId('watson-output')).toContainText(new RegExp(`Name:\\s+${name}`))
+})
+
 test('Sherlock moves to a window of its own and back, and the main window asks there (P5-08)', async ({ page, context }) => {
   await open(page, '#/alerts')
   if (await page.getByTestId('sherlock-new').count()) await page.getByTestId('sherlock-new').click()
@@ -285,7 +300,8 @@ test('Sherlock moves to a window of its own and back, and the main window asks t
   await expect(popup).toHaveURL(/#\/sherlock$/)
   await expect(popup.getByTestId('sherlock')).toBeVisible()
   await expect(page.getByTestId('sherlock-popped')).toBeVisible()
-  await expect(dock(page)).toHaveCount(0)
+  // Watson stays docked; Sherlock is in the other window.
+  await expect(page.getByTestId('sherlock')).toHaveCount(0)
 
   // Asked in the main window, answered in the other.
   const button = page.getByTestId('alert').getByTestId('ask-sherlock').first()
@@ -320,7 +336,7 @@ test('the panel meets WCAG 2.2 AA, docked, maximized and in the settings (X-12)'
     await ask(page, 'Tell me about pod ' + podRows(await snapshot(request(page), ['pods']))[0]!.key)
     await done(page)
     expect(await violations(), theme).toEqual([])
-    await page.getByTestId('sherlock-maximize').click()
+    await page.locator('[data-testid=sherlock-maximize]:visible').click()
     expect(await violations(), theme + ' maximized').toEqual([])
     await page.keyboard.press('Escape')
     await page.getByRole('button', { name: 'Settings' }).click()

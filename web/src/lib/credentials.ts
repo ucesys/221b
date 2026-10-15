@@ -215,10 +215,14 @@ rules:
 `
   }
   if (mode === 'write') {
-    y += `  # Changes people approve in later phases.
+    y += `  # Changes people approve in Watson. With sign-in on they run as
+  # the person who approves them, whose own RBAC decides; these
+  # rules are for a console with sign-in off. Label, annotate and
+  # Helm rollbacks need patch on whatever they touch: bind the
+  # built-in edit role too for those.
   - apiGroups: [""]
     resources: ["nodes"]
-    verbs: ["patch", "update"] # cordon, label, taint
+    verbs: ["patch", "update"] # cordon, label
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["delete"]
@@ -226,11 +230,11 @@ rules:
     resources: ["pods/eviction"]
     verbs: ["create"] # drain
   - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "daemonsets"]
-    verbs: ["patch"] # rollout restart, scale
-  - apiGroups: [""]
-    resources: ["namespaces", "resourcequotas"]
-    verbs: ["patch"] # Pod Security labels, quotas
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["patch"] # rollout restart and undo
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
+    verbs: ["patch", "update"] # scale
 `
   }
   y += `---

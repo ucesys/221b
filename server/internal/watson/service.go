@@ -642,7 +642,8 @@ func (s *Service) Clear(cl Cluster, who Who) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, it := range s.items {
-		if it.Cluster == cl.ID && it.Requester.Session == who.Session && finished(it.Status) {
+		mine := it.Requester.Session == who.Session || (who.User != "" && it.Requester.User == who.User)
+		if it.Cluster == cl.ID && mine && finished(it.Status) {
 			delete(s.items, id)
 			for sub := range s.subs {
 				if sub.Cluster == cl.ID {

@@ -63,6 +63,8 @@ spec:
           env:
             - name: CLUSTER_NAME
               value: {{ .Values.clusterName | quote }}
+            - name: LOCAL_MODE
+              value: {{ .Values.localCluster.mode | quote }}
             - name: LISTEN
               value: ":8080"
             # The refresh rate until someone changes it in Settings, which

@@ -673,7 +673,7 @@ export interface Finding {
   title: string
   text: string
   subject?: RBACSubject
-  /** What would fix it, to copy; nothing runs it. */
+  /** What would fix it, to copy, or to send to Watson when it runs that command. */
   command?: string
 }
 

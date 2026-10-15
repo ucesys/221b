@@ -145,6 +145,23 @@ func dryRun(r *http.Request) bool {
 	return false
 }
 
+// deleteDryRun is dryRun for a DELETE, whose options client-go sends in
+// the body.
+func deleteDryRun(r *http.Request) bool {
+	if dryRun(r) {
+		return true
+	}
+	var o metav1.DeleteOptions
+	if json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&o) == nil {
+		for _, v := range o.DryRun {
+			if v == "All" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func notFound(w http.ResponseWriter, k kube.Kind, name string) {
 	res := k.Resource
 	if k.Group != "" {
@@ -431,7 +448,7 @@ func (s *Sim) remove(k kube.Kind) http.HandlerFunc {
 		m, _ := meta.Accessor(old)
 		st := &metav1.Status{TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"}, Status: metav1.StatusSuccess,
 			Details: &metav1.StatusDetails{Name: m.GetName(), Group: k.Group, Kind: k.Resource, UID: m.GetUID()}}
-		if dryRun(r) {
+		if deleteDryRun(r) {
 			respond(w, http.StatusOK, st)
 			return
 		}
@@ -469,7 +486,8 @@ func (s *Sim) evict(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	ok201 := &metav1.Status{TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"}, Status: metav1.StatusSuccess, Code: http.StatusCreated}
-	if dryRun(r) {
+	evDry := ev.DeleteOptions != nil && len(ev.DeleteOptions.DryRun) > 0 && ev.DeleteOptions.DryRun[0] == "All"
+	if dryRun(r) || evDry {
 		respond(w, http.StatusCreated, ok201)
 		return
 	}
@@ -570,6 +588,21 @@ func (s *Sim) suffixLocked() string {
 func (s *Sim) reactLocked(k kube.Kind, old, next runtime.Object) {
 	switch k.Name {
 	case "deployments":
+		// A new Deployment gets its first ReplicaSet; a deleted one takes
+		// its ReplicaSets and their pods with it, as the garbage collector would.
+		if d, ok := next.(*appsv1.Deployment); ok && old == nil {
+			s.rolloutLocked(d)
+			s.syncStatusLocked(d.Namespace)
+		}
+		if od, ok := old.(*appsv1.Deployment); ok && next == nil {
+			for _, rs := range s.replicaSetsLocked(od) {
+				for _, p := range s.ownedPodsLocked(rs.Namespace, rs.UID) {
+					s.putLocked(mustKind("pods"), p, watch.Deleted)
+				}
+				s.putLocked(mustKind("replicasets"), rs, watch.Deleted)
+			}
+			s.syncStatusLocked(od.Namespace)
+		}
 		if d, ok := next.(*appsv1.Deployment); ok && old != nil {
 			od := old.(*appsv1.Deployment)
 			if !equality.Semantic.DeepEqual(od.Spec.Template, d.Spec.Template) {

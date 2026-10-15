@@ -28,6 +28,7 @@ func (s *Server) watsonRoutes() {
 		s.handle("GET "+base+"watson", "watson", s.getWatson)
 		s.handle("GET "+base+"watson/events", "watson-events", s.watsonEvents)
 		s.handle("POST "+base+"watson/commands", "watson-submit", s.postWatsonCommands)
+		s.handle("GET "+base+"watson/commands/{id}", "watson-command", s.getWatsonCommand)
 		s.handle("POST "+base+"watson/commands/{id}/approve", "watson-approve", s.postWatsonApprove)
 		s.handle("POST "+base+"watson/commands/{id}/discard", "watson-discard", s.postWatsonDiscard)
 		s.handle("POST "+base+"watson/commands/{id}/stop", "watson-stop", s.postWatsonStop)
@@ -419,6 +420,22 @@ func (s *Server) watsonAnswer(w http.ResponseWriter, c watson.Cluster, who watso
 	b, _ := json.Marshal(s.watsonView(snap, who, c, lines, 0))
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(b)
+}
+
+// getWatsonCommand is one command with all its output, for scripts and
+// tests; the panel follows the stream.
+func (s *Server) getWatsonCommand(w http.ResponseWriter, r *http.Request) {
+	c, who, ok := s.watsonReady(w, r)
+	if !ok {
+		return
+	}
+	snap, lines, ok := s.opts.Watson.Snapshot(r.PathValue("id"), 0)
+	if !ok || snap.Cluster != c.ID || !s.opts.Watson.Visible(&snap, who, c) {
+		s.watsonAnswer(w, c, who, nil, watson.ErrNotFound)
+		return
+	}
+	b, _ := json.Marshal(s.watsonView(snap, who, c, lines, 0))
+	writeJSON(w, r, b)
 }
 
 func (s *Server) postWatsonApprove(w http.ResponseWriter, r *http.Request) {

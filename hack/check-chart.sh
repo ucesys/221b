@@ -54,6 +54,9 @@ render console --set clusterName=ci --set auth.mode=local --set 'auth.local.user
   --set 'auth.local.users[0].passwordHash=pbkdf2-sha256$600000$c2FsdA$aGFzaA' --set 'auth.admins[0]=ops@corp.example' | tee "$WORK/chart-local.yaml" | validate
 render console --set clusterName=ci --set auth.mode=local --set auth.local.existingSecret=my-accounts | tee "$WORK/chart-local-existing.yaml" | validate
 render console --set clusterName=ci --set auth.mode=none | tee "$WORK/chart-noauth.yaml" | validate
+echo "--- Watson's changes in the local cluster, with sign-in off and on (Phase 6)"
+render console --set clusterName=ci --set auth.mode=none --set localCluster.mode=write | tee "$WORK/chart-write.yaml" | validate
+render console --set clusterName=ci --set localCluster.mode=write | tee "$WORK/chart-write-signin.yaml" | validate
 echo "--- image tags that move, tags that do not, a digest and an explicit pull policy"
 render console --set clusterName=ci --set image.tag=pr-7 | tee "$WORK/chart-moving.yaml" | validate
 render console --set clusterName=ci --set image.tag=sha-d548f3953839 | tee "$WORK/chart-sha.yaml" | validate
@@ -225,6 +228,22 @@ lb_service() {
 # unless peers are listed.
 closed_by_default() { grep -q 'ingress: \[\]' "$out"; }
 open_when_exposed() { ! grep -q 'ingress: \[\]' "$WORK/chart-lb.yaml" && grep -A3 '^  ingress:' "$WORK/chart-lb.yaml" | grep -q 'port: http'; }
+# Watson (Phase 6): reads only by default. With localCluster.mode=write and
+# sign-in off, changes run as the console, bound to the write role and a
+# small role for nodes; with sign-in they run as the approver, and the
+# console is granted nothing more.
+watson_write() {
+  local w=$WORK/chart-write.yaml
+  grep -A1 'name: LOCAL_MODE' "$out" | grep -q '"read"' && ! grep -q 'watson' "$out" && ! grep -q 'watson' "$WORK/chart-noauth.yaml" &&
+    grep -A1 'name: LOCAL_MODE' "$w" | grep -q '"write"' &&
+    sed -n '/name: consoles-console-221b-watson-nodes$/,/^---/p' "$w" | grep -A1 '"nodes"' | grep -q 'verbs: \["patch", "update"\]' &&
+    sed -n '/name: consoles-console-221b-watson-nodes$/,/^---/p' "$w" | grep -A1 '"pods/eviction"' | grep -q 'verbs: \["create"\]' &&
+    sed -n '/^kind: ClusterRoleBinding$/,/^---/p' "$w" | grep -q "name: consoles-console-221b-watson$" &&
+    grep -A12 "name: consoles-console-221b-watson$" "$w" | grep -q 'name: edit' &&
+    grep -A1 'name: LOCAL_MODE' "$WORK/chart-write-signin.yaml" | grep -q '"write"' && ! grep -q 'watson' "$WORK/chart-write-signin.yaml" &&
+    ! render console --set clusterName=ci --set auth.mode=none --set localCluster.mode=write --set localCluster.writeClusterRole= | grep -q 'name: edit' &&
+    ! render console --set clusterName=ci --set localCluster.mode=admin > /dev/null 2>&1
+}
 digit_override() { render 221b --set clusterName=ci --set fullnameOverride=2b | grep -A3 '^kind: Service$' | grep -q 'name: console-2b'; }
 
 check "renders a Deployment, Service, ServiceAccount, ConfigMap, ClusterRole, Role, their bindings and a NetworkPolicy" kinds
@@ -255,6 +274,7 @@ check "the audit webhook and its token" audit_webhook
 check "an Ingress with TLS redirects HTTP, allows its host and needs a host" ingress_tls
 check "API server addresses narrow the egress rule" api_server_addresses
 check "it answers to its Service's names and the names in values" host_names
+check "Watson reads only by default; with mode write and sign-in off it is bound to the write role and may cordon and drain" watson_write
 check "an override that starts with a digit still gets a valid name" digit_override
 check "the Service listens on 8081" exposed_port
 check "moving tags are pulled on every start and rolled on every upgrade; releases, sha- tags and digests once" pull_policy

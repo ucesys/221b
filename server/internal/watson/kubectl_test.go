@@ -60,6 +60,40 @@ func TestKubectlReadsAgainstTheSimulator(t *testing.T) {
 			t.Errorf("%s: exit %d\n%s", line, code, out)
 		}
 	}
+	// Every kind describe and logs meet, with flags before the verb too.
+	debugPanics = true
+	defer func() { debugPanics = false }()
+	names, _ := run(t, tg, "kubectl get pods -n web -o name")
+	pod := strings.TrimPrefix(strings.SplitN(strings.TrimSpace(names), "\n", 2)[0], "pod/")
+	for _, line := range []string{
+		"kubectl describe pod " + pod + " -n web",
+		"kubectl -n web describe pod " + pod,
+		"kubectl describe pods -n web",
+		"kubectl describe deployment -n web",
+		"kubectl describe service -n web",
+		"kubectl describe namespace web",
+		"kubectl describe node worker-001",
+		"kubectl describe pvc -A",
+		"kubectl describe ingress -A",
+		"kubectl describe statefulset -A",
+		"kubectl describe daemonset -A",
+		"kubectl describe job -A",
+		"kubectl describe cronjob -A",
+		"kubectl describe configmap -n web",
+		"kubectl describe secret -n web",
+		"kubectl describe pdb -A",
+		"kubectl describe hpa -A",
+		"kubectl describe networkpolicy -A",
+		"kubectl describe serviceaccount -n web",
+		"kubectl describe clusterrole view",
+		"kubectl logs " + pod + " -n web --tail=5",
+		"kubectl get pod " + pod + " -n web -o yaml",
+	} {
+		out, code := run(t, tg, line)
+		if code != 0 || strings.Contains(out, "runtime error") {
+			t.Errorf("$ %s  (exit %d)\n%s", line, code, out)
+		}
+	}
 	_ = kube.Person{}
 	_ = strings.TrimSpace
 }
@@ -88,13 +122,6 @@ func TestKubectlChangesAgainstTheSimulator(t *testing.T) {
 		out, code := run(t, tg, line)
 		t.Logf("$ %s  (exit %d)\n%s", line, code, out)
 	}
-}
-
-func TestScaleDebug(t *testing.T) {
-	debugPanics = true
-	tg, _ := simTarget(t)
-	out, code := run(t, tg, "kubectl scale deploy/api -n web --replicas=3")
-	t.Logf("%d %s", code, out)
 }
 
 func TestHelmAgainstTheSimulator(t *testing.T) {

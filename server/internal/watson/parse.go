@@ -213,16 +213,19 @@ func Parse(line string) (*Command, error) {
 	if tool != "kubectl" && tool != "helm" {
 		return nil, refuse("not supported", "Watson runs kubectl and helm commands only; %q is not one.", tool)
 	}
-	sp, rest := match(tool, words[1:])
+	// Flags may come before the verb, as in kubectl -n web get pods: they
+	// are taken out and parsed with the rest.
+	args, lead := leadingFlags(words[1:])
+	sp, rest := match(tool, args)
 	if sp == nil {
 		sub := ""
-		if len(words) > 1 {
-			sub = " " + words[1]
+		if len(args) > 0 {
+			sub = " " + args[0]
 		}
 		return nil, refuse("not supported", "Watson does not run %s%s. It runs %s, and changes with %s.", tool, sub, strings.Join(Supported(false), ", "), strings.Join(Supported(true), ", "))
 	}
 	c := &Command{Line: line, Tool: tool, Verb: sp.verb, Change: sp.change, Flags: map[string][]string{}, spec: sp}
-	if err := c.parseArgs(rest); err != nil {
+	if err := c.parseArgs(append(append([]string(nil), lead...), rest...)); err != nil {
 		return nil, err
 	}
 	n := len(c.Positionals)
@@ -235,6 +238,28 @@ func Parse(line string) (*Command, error) {
 		}
 	}
 	return c, nil
+}
+
+// valueFlags are the flags that take a value when they come before the
+// verb, written apart from it (-n web); the rest are taken to stand alone.
+var valueFlags = map[string]bool{"n": true, "namespace": true, "context": true, "kubeconfig": true, "cluster": true, "user": true, "server": true, "s": true,
+	"token": true, "as": true, "as-group": true, "as-uid": true, "kube-context": true, "kube-apiserver": true, "kube-token": true, "kube-as-user": true,
+	"kube-as-group": true, "kube-ca-file": true, "request-timeout": true, "username": true, "password": true}
+
+// leadingFlags splits the flags before the verb from the words after them.
+func leadingFlags(words []string) (rest, lead []string) {
+	i := 0
+	for i < len(words) && strings.HasPrefix(words[i], "-") && words[i] != "-" && words[i] != "--" {
+		w := words[i]
+		lead = append(lead, w)
+		i++
+		name := strings.TrimLeft(w, "-")
+		if !strings.Contains(name, "=") && valueFlags[name] && i < len(words) {
+			lead = append(lead, words[i])
+			i++
+		}
+	}
+	return words[i:], lead
 }
 
 // match finds the spec for a tool's words, longest verb first.

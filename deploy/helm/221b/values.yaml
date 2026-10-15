@@ -1,6 +1,20 @@
 # The name shown in the top bar. Kubernetes has no reliable name for itself.
 clusterName: ""
 
+localCluster:
+  # What Watson may do in the cluster the console runs in (Phase 6): read
+  # runs reads only and refuses every change; write lets changes run once
+  # someone approves them. Other clusters set this per connection.
+  mode: read
+  # With sign-in on, a change runs as the person who approved it, so their
+  # own RBAC decides, and the console needs nothing more than impersonation.
+  # With sign-in off (auth.mode none) and mode write, changes run as the
+  # console's ServiceAccount: it is bound to this ClusterRole (the built-in
+  # edit role: workloads, pods and their evictions, Secrets for Helm's
+  # records, no RBAC) and to a small role to cordon, drain and label nodes.
+  # Empty grants nothing, and the API server refuses the changes.
+  writeClusterRole: edit
+
 image:
   repository: ghcr.io/ucesys/221b
   # Defaults to the chart's appVersion, a release. CI also publishes main
@@ -195,7 +209,8 @@ rbac:
   # on pod logs, get and list on node and pod metrics, get on nodes/proxy
   # when kubeletStats is on, and get, list and watch on Secrets only when
   # secrets.read is on. A Role to get and patch its own settings ConfigMap.
-  # No writes anywhere else.
+  # No other writes, except Watson's with sign-in off and localCluster.mode
+  # write (see localCluster.writeClusterRole).
   create: true
 
 service:

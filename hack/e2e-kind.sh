@@ -107,6 +107,7 @@ helm install "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" \
   --set "auth.local.users[2].email=$E2E_DEV" --set "auth.local.users[2].name=Dev Developer" --set "auth.local.users[2].passwordHash=$hash" \
   --set "auth.admins[0]=$E2E_USER" \
   --set auth.kubernetes.accessTTL=10s \
+  --set localCluster.mode=write \
   --set sherlock.apiURL="http://$GATEWAY:7445/claude" --set 'networkPolicy.outboundPorts={443,7445}' \
   --wait --timeout 60s
 notice "helm install" "The console was Ready $(( $(date +%s) - start ))s after helm install on Kubernetes $MINOR."
