@@ -85,7 +85,7 @@ IfNotPresent
 {{/* Whether the console must reach something besides the API server: an
      OIDC provider or an audit webhook. Renders "true" or nothing. */}}
 {{- define "b221.outbound" -}}
-{{- if or (eq .Values.auth.mode "oidc") .Values.audit.webhook.url -}}
+{{- if or (eq .Values.auth.mode "oidc") .Values.audit.webhook.url .Values.sherlock.egress -}}
 true
 {{- end -}}
 {{- end -}}

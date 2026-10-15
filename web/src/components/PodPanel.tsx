@@ -11,6 +11,7 @@ import { PodLogs } from './PodLogs'
 import { ScrollBox, Table, TR } from './Table'
 import { YamlView } from './YamlView'
 import { objectLink, peekLink } from '../lib/peek'
+import { podQuestion } from '../lib/sherlock'
 
 interface Props {
   podKey: string
@@ -149,6 +150,7 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
 
   return (
     <Drawer
+      ask={podQuestion(head ? { ...head, namespace: ns, name } : null, ns, name)}
       label="Pod details"
       testId="pod-panel"
       kicker={

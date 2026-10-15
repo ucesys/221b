@@ -591,6 +591,13 @@ func (s *Sim) helmReleases(groups map[string]*group, now time.Time) {
 			values:    map[string]any{"tolerations": []any{map[string]any{"operator": "Exists"}}, "resources": map[string]any{"requests": map[string]any{"cpu": "50m"}}},
 			manifest:  "---\napiVersion: apps/v1\nkind: DaemonSet\nmetadata:\n  name: node-agent\n  namespace: kube-system\n---\napiVersion: v1\nkind: ServiceAccount\nmetadata:\n  name: node-agent\n",
 			revisions: []string{"superseded", "deployed"}},
+		// An upgrade that failed and was not rolled back, as in the
+		// prototype: Sherlock's evaluation asks why (P5-06).
+		{name: "superset", ns: "analytics", chart: "superset", version: "0.14.1", app: "4.1.1",
+			values:    map[string]any{"replicaCount": 2, "image": map[string]any{"tag": "4.1.1"}, "postgresql": map[string]any{"enabled": false}},
+			manifest:  "---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: superset\n  namespace: analytics\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: superset\n",
+			notes:     "Superset is starting. Run kubectl -n analytics get pods to follow it.\n",
+			revisions: []string{"superseded", "deployed", "failed"}},
 		{name: "metrics-server", ns: "kube-system", chart: "metrics-server", version: "3.12.2", app: "0.7.2",
 			values:    map[string]any{"args": []any{"--kubelet-insecure-tls"}, "apiService": map[string]any{"insecureSkipTLSVerify": true}},
 			manifest:  "---\napiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: metrics-server\n  namespace: kube-system\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: metrics-server\n",

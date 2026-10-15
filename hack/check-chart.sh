@@ -30,6 +30,7 @@ echo "--- without reading Secrets"
 render console --set clusterName=ci --set secrets.read=false | tee "$WORK/chart-nosecrets.yaml" | validate
 render console --set clusterName=ci --set connections.store=memory | tee "$WORK/chart-memory.yaml" | validate
 render console --set clusterName=ci --set preferences.perUser=false | tee "$WORK/chart-noprefs.yaml" | validate
+render console --set clusterName=ci --set sherlock.existingSecret=claude --set sherlock.egress=false --set connections.store=memory | tee "$WORK/chart-sherlock.yaml" | validate
 echo "--- allowed ingress peers, API server addresses, extra host names and a private registry"
 render console --set clusterName=ci --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.team=platform' \
   --set 'networkPolicy.apiServerCIDRs[0]=10.0.0.10/32' --set 'allowedHosts[0]=console.example.com' \
@@ -111,7 +112,7 @@ ingress_tls() {
 # Outbound traffic: only the API server by default; with OIDC or a webhook
 # also DNS and HTTPS.
 outbound() {
-  grep -c 'port: 53' "$out" | grep -q 2 && grep -c 'port: 443' "$out" | grep -q 1 && grep -c 'port: 443' "$WORK/chart-oidc.yaml" | grep -q 2
+  grep -c 'port: 53' "$out" | grep -q 2 && grep -c 'port: 443' "$out" | grep -q 2 && grep -c 'port: 443' "$WORK/chart-sherlock.yaml" | grep -q 1 && grep -c 'port: 443' "$WORK/chart-oidc.yaml" | grep -q 2
 }
 no_ingress() { ! grep -q '^kind: Ingress' "$out"; }
 cluster_ip() { grep -q 'type: ClusterIP' "$out"; }
@@ -161,6 +162,15 @@ secrets_optional() {
 }
 user_prefs() {
   grep -A1 'name: USER_PREFS' "$out" | grep -q '"true"' && grep -A1 'name: USER_PREFS' "$WORK/chart-noprefs.yaml" | grep -q '"false"'
+}
+# Sherlock (Phase 5): the Claude API's address; its key in the release's
+# own Secret, or from a Secret the chart is given, never in the values.
+sherlock_key() {
+  grep -A1 'name: SHERLOCK_API_URL' "$out" | grep -q '"https://api.anthropic.com"' &&
+    grep -A1 'name: SHERLOCK_SECRET' "$out" | grep -q '/console-221b-sherlock"' &&
+    ! grep -q 'name: SHERLOCK_API_KEY' "$out" &&
+    grep -A4 'name: SHERLOCK_API_KEY' "$WORK/chart-sherlock.yaml" | grep -q 'name: "claude"' &&
+    ! grep -q 'name: SHERLOCK_SECRET' "$WORK/chart-sherlock.yaml"
 }
 settings_only() {
   settings_role | grep -q 'resources: \["configmaps"\]' && settings_role | grep -q 'resourceNames: \["console-221b"\]' &&
@@ -232,11 +242,12 @@ check "connections are kept in Secrets in the release namespace, or in memory on
 check "kubeletStats=false grants nothing on the kubelets" no_kubelet_stats
 check "the settings ConfigMap is created empty and named to the server" settings_configmap
 check "each signed-in person's preferences are kept with their account, unless preferences.perUser=false" user_prefs
+check "Sherlock's API key is kept in the release's Secret or taken from sherlock.existingSecret, never in the values" sherlock_key
 check "a release named after the chart still gets a valid Service name" service_name
 check "clusterName is required" name_required
 check "an empty list of API server ports is refused" no_open_egress
 check "DNS is allowed out, for the clusters given by name" dns_egress
-check "outbound traffic: API servers and DNS only, or also HTTPS with OIDC or a webhook" outbound
+check "outbound traffic: API servers and DNS only, or also HTTPS for OIDC, a webhook or Sherlock" outbound
 check "local accounts are mounted from a Secret, or an existing one; none with sign-in off" local_accounts
 check "OIDC sign-in takes its client secret from a Secret and names the administrators" oidc_signin
 check "OIDC without a client secret, and an unknown mode, are refused" oidc_requires_client

@@ -14,6 +14,8 @@ export const MODE: Mode = process.env.E2E_MODE === 'kind' ? 'kind' : 'sim'
 export const inKind = MODE === 'kind'
 
 const SIM = process.env.E2E_SIM_URL ?? 'http://127.0.0.1:7443'
+/** The fake Claude API: the simulator's, or the kind run's own. */
+const CLAUDE = process.env.E2E_CLAUDE_URL ?? SIM + '/claude'
 // The person with limited access (P3-02): the simulator's dev account, or
 // the local account the chart in kind is installed with.
 const DEV = process.env.E2E_DEV ?? 'dev@corp.example'
@@ -358,6 +360,7 @@ export const cluster = {
       { name: 'metrics-server', namespace: 'kube-system', revision: 1, status: 'deployed', chart: 'metrics-server-3.12.2', app_version: '0.7.2' },
       { name: 'node-agent', namespace: 'kube-system', revision: 2, status: 'deployed', chart: 'node-agent-0.9.2', app_version: '0.9.2' },
       { name: 'shop', namespace: 'web', revision: 3, status: 'deployed', chart: 'shop-frontend-3.2.1', app_version: '3.2.1' },
+      { name: 'superset', namespace: 'analytics', revision: 3, status: 'failed', chart: 'superset-0.14.1', app_version: '4.1.1' },
     ]
   },
 
@@ -603,6 +606,20 @@ export const cluster = {
     if (inKind) return kubectl('-n', NAMESPACE, 'logs', '-l', 'app.kubernetes.io/name=221b', '--tail=-1', '--all-containers')
     const { readFile } = await import('node:fs/promises')
     return readFile(process.env.E2E_SERVER_LOG ?? '../bin/e2e-server.log', 'utf8').catch(() => '')
+  },
+
+  /**
+   * The requests the console sent to the Claude API (Phase 5): the fake
+   * the simulator serves at /claude, or the one the kind run starts.
+   */
+  async claudeRequests(): Promise<string[]> {
+    const res = await fetch(`${CLAUDE}/requests`)
+    if (!res.ok) throw new Error(`the fake Claude API answered ${res.status}`)
+    return ((await res.json()) as unknown[]).map((r) => JSON.stringify(r))
+  },
+
+  async resetClaude(): Promise<void> {
+    await fetch(`${CLAUDE}/requests`, { method: 'DELETE' })
   },
 
   /** The audit records so far (P3-10): the server's standard output, one JSON object per line. */

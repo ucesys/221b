@@ -28,6 +28,11 @@ const (
 	ActionClusterUpdate = "cluster.update"
 	ActionClusterRemove = "cluster.remove"
 	ActionClusterTest   = "cluster.test"
+	// Sherlock (Phase 5): each question, and the changes to its settings
+	// and API key.
+	ActionSherlockAsk      = "sherlock.ask"
+	ActionSherlockSettings = "sherlock.settings"
+	ActionSherlockKey      = "sherlock.key"
 )
 
 // Outcomes of an action.
@@ -35,6 +40,8 @@ const (
 	OutcomeOK     = "ok"
 	OutcomeFailed = "failed"
 	OutcomeDenied = "denied"
+	// OutcomeStopped is an answer the person stopped.
+	OutcomeStopped = "stopped"
 )
 
 // Who names the person an action is attributed to.

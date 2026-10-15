@@ -3,6 +3,7 @@ import { REFRESH_CHOICES, refreshLabel, saveSettings } from '../api/settings'
 import type { Settings } from '../api/types'
 import { fmtClock } from '../lib/format'
 import { CloseIcon } from './Icons'
+import { SherlockSettings } from './SherlockSettings'
 import type { Theme } from './TopBar'
 
 interface Props {
@@ -127,6 +128,7 @@ export function SettingsDialog({ open, onClose, theme, onTheme, settings, refres
               </p>
             )}
           </section>
+          {canChange && <SherlockSettings open={open} />}
         </div>
       </div>
     </dialog>

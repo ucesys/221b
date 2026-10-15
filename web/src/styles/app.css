@@ -39,7 +39,7 @@
 }
 /* The Settings dialog: a native <dialog>, styled like the prototype's menus. */
 .rk-dialog {
-  width: min(460px, calc(100vw - 32px));
+  width: min(520px, calc(100vw - 32px));
   max-height: calc(100vh - 32px);
   margin: auto;
   padding: 0;

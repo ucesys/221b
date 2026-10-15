@@ -86,6 +86,19 @@ func (s *Sessions) Get(id string) (Session, bool) {
 	return *sess, true
 }
 
+// Alive says whether a session exists and has not expired, without
+// counting as activity.
+func (s *Sessions) Alive(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.byID[id]
+	if !ok {
+		return false
+	}
+	now := s.now()
+	return now.Sub(sess.LastSeen) <= s.idle && !now.After(sess.Expires)
+}
+
 // Delete ends a session.
 func (s *Sessions) Delete(id string) {
 	s.mu.Lock()

@@ -77,6 +77,7 @@ export function ObjectPanel({ kind, namespace: ns, name, row, gone, cluster, now
 
   return (
     <Drawer
+      ask={failing > 0 || head?.tone === 'err' || head?.tone === 'warn' ? `What is wrong with ${kind} ${ns}/${name}?` : `Tell me about ${kind} ${ns}/${name}`}
       label={`${kind} details`}
       testId="object-panel"
       kicker={

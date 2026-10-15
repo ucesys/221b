@@ -6,7 +6,7 @@
 #
 #   IMAGE=ghcr.io/ucesys/221b:dev hack/e2e-kind.sh 1.37
 #
-# Needs docker, kubectl, helm and, for the browser tests, the web/ packages
+# Needs docker, kubectl, helm, Go (for the fake Claude API) and, for the browser tests, the web/ packages
 # and Playwright's Chromium. Set KEEP=1 to keep the cluster afterwards.
 set -euo pipefail
 # shellcheck source=hack/lib.sh
@@ -44,8 +44,18 @@ api() { curl -fsS -b "$COOKIES" "$@"; }
 
 install_kind "$MINOR"
 
+# Sherlock's tests (web/e2e/sherlock.spec.ts) talk to the simulator's fake
+# Claude API, run here and reached from the cluster through the kind
+# network's gateway.
+step "Start the fake Claude API"
+(cd "$ROOT/server" && go build -o ../bin/221b-sim ./cmd/221b-sim)
+"$ROOT/bin/221b-sim" -claude-only -listen 0.0.0.0:7445 > "$WORK/fake-claude.log" 2>&1 &
+fake_claude=$!
+endstep
+
 cleanup() {
   local code=$?
+  kill "$fake_claude" 2>/dev/null || true
   if [ "$code" -ne 0 ]; then
     step "Diagnostics"
     # The console's own log comes last: CI reports the file's tail.
@@ -70,6 +80,9 @@ kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
 kind create cluster --name "$CLUSTER" --image "${KIND_NODE_IMAGE[$MINOR]}" --config "$ROOT/hack/kind.yaml" --wait 120s
 kind load docker-image "$IMAGE" --name "$CLUSTER"
 kubectl version
+GATEWAY=$(docker network inspect kind -f '{{range .IPAM.Config}}{{.Gateway}} {{end}}' | tr ' ' '\n' | grep -E '^[0-9]+([.][0-9]+){3}$' | head -1)
+echo "the fake Claude API is at http://$GATEWAY:7445/claude for the cluster"
+docker exec "$CLUSTER-control-plane" curl -fsS -o /dev/null "http://$GATEWAY:7445/claude/requests"
 endstep
 
 step "Install metrics-server"
@@ -94,6 +107,7 @@ helm install "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" \
   --set "auth.local.users[2].email=$E2E_DEV" --set "auth.local.users[2].name=Dev Developer" --set "auth.local.users[2].passwordHash=$hash" \
   --set "auth.admins[0]=$E2E_USER" \
   --set auth.kubernetes.accessTTL=10s \
+  --set sherlock.apiURL="http://$GATEWAY:7445/claude" --set 'networkPolicy.outboundPorts={443,7445}' \
   --wait --timeout 60s
 notice "helm install" "The console was Ready $(( $(date +%s) - start ))s after helm install on Kubernetes $MINOR."
 kubectl -n "$NS" get all,networkpolicy,serviceaccount
@@ -189,6 +203,7 @@ step "Browser tests"
   E2E_MODE=kind E2E_BASE_URL=$BASE_URL E2E_NAMESPACE=$NS E2E_IMAGE=$IMAGE \
     E2E_CONTROL_PLANE=$CLUSTER-control-plane E2E_METRICS_MANIFEST=$METRICS_MANIFEST \
     E2E_USER=$E2E_USER E2E_VIEWER=$E2E_VIEWER E2E_DEV=$E2E_DEV E2E_PASSWORD=$E2E_PASSWORD \
+    E2E_CLAUDE_URL=http://127.0.0.1:7445/claude \
     npx playwright test 2>&1 | tee "$WORK/playwright.log"
 )
 endstep

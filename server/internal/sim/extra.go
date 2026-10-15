@@ -162,6 +162,14 @@ func (s *Sim) podLog(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// Credentials planted in every pod's log, for the tests that check they
+// never leave the console.
+const (
+	PlantedLogPassword = "LogPlanted-9f3K2xQ"
+	PlantedLogURL      = "postgres://orders:" + PlantedLogPassword + "@db.internal:5432/orders"
+	PlantedLogKey      = "LogPlantedKey-77QzXwv4"
+)
+
 // logLines makes n lines of a plausible application log ending at about
 // now, deterministic for a pod.
 func (s *Sim) logLines(p *corev1.Pod, app string, from time.Time, n int, timestamps bool) []string {
@@ -179,6 +187,10 @@ func (s *Sim) logLines(p *corev1.Pod, app string, from time.Time, n int, timesta
 			level, msg = "WARN", "slow query took 1.8s: SELECT * FROM orders WHERE status = 'pending'"
 		case 19:
 			level, msg = "ERROR", "upstream timeout calling cache: context deadline exceeded"
+		case 11:
+			// Credentials an application should not log, but some do: Sherlock
+			// must never send them to the Claude API (P5-03).
+			level, msg = "DEBUG", "connecting to "+PlantedLogURL+" with api_key="+PlantedLogKey
 		}
 		lines = append(lines, logLine(at, level, app, msg, timestamps))
 	}

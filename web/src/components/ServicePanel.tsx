@@ -33,6 +33,7 @@ export function ServicePanel({ serviceKey, row, gone, now, onClose, onToast }: P
   const deleted = (gone || details.gone) && !details.forbidden
   return (
     <Drawer
+      ask={head?.pending ? `Why has Service ${ns}/${name} no external IP?` : head && head.tone !== 'ok' && head.tone !== 'muted' ? `What is wrong with Service ${ns}/${name}?` : `Tell me about Service ${ns}/${name}`}
       label="Service details"
       testId="service-panel"
       kicker={

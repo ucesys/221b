@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/fakeclaude"
 	"github.com/ucesys/221b/server/internal/sim"
 )
 
@@ -32,14 +33,33 @@ func main() {
 	settingsCM := flag.String("settings-configmap", "221b/console-221b", "namespace/name of an empty ConfigMap to serve for the console's settings (empty: none)")
 	problems := flag.Bool("problems", true, "include a few unhealthy nodes and pods")
 	churn := flag.Duration("churn", 0, "change usage and some pods this often (0 = never)")
+	claude := flag.Bool("fake-claude", true, "serve a fake Claude Messages API under /claude, for Sherlock (the console's -sherlock-api-url http://<listen>/claude)")
+	claudeOnly := flag.Bool("claude-only", false, "serve only the fake Claude API, at / and /claude")
 	oidc := flag.String("oidc-issuer", "", "serve a simulated OpenID Connect provider at this URL, which must be this server's address plus /oidc (for example http://127.0.0.1:7443/oidc); accounts: admin@corp.example, dev@corp.example and viewer@corp.example with the password \"password\"")
 	flag.Parse()
 
-	s := sim.New(sim.Options{Nodes: *nodes, Pods: *pods, Seed: *seed, Metrics: *metrics, KubeletStats: *kubeletStats, SettingsConfigMap: *settingsCM, Problems: *problems, OIDCIssuer: *oidc})
-	srv := &http.Server{Addr: *listen, Handler: s, ReadHeaderTimeout: 10 * time.Second}
+	var handler http.Handler
+	var s *sim.Sim
+	if *claudeOnly {
+		fake := fakeclaude.New()
+		mux := http.NewServeMux()
+		mux.Handle("/claude/", http.StripPrefix("/claude", fake))
+		mux.Handle("/", fake)
+		handler = mux
+	} else {
+		s = sim.New(sim.Options{Nodes: *nodes, Pods: *pods, Seed: *seed, Metrics: *metrics, KubeletStats: *kubeletStats, SettingsConfigMap: *settingsCM, Problems: *problems, OIDCIssuer: *oidc})
+		handler = s
+		if *claude {
+			mux := http.NewServeMux()
+			mux.Handle("/claude/", http.StripPrefix("/claude", fakeclaude.New()))
+			mux.Handle("/", s)
+			handler = mux
+		}
+	}
+	srv := &http.Server{Addr: *listen, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if *churn > 0 {
+	if *churn > 0 && s != nil {
 		go func() {
 			t := time.NewTicker(*churn)
 			defer t.Stop()
@@ -59,7 +79,11 @@ func main() {
 		defer cancel()
 		srv.Shutdown(shutdown)
 	}()
-	log.Printf("simulating %d nodes and %d pods on http://%s", *nodes, *pods, *listen)
+	if s == nil {
+		log.Printf("serving a fake Claude API on http://%s", *listen)
+	} else {
+		log.Printf("simulating %d nodes and %d pods on http://%s", *nodes, *pods, *listen)
+	}
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

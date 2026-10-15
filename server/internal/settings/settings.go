@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"reflect"
+	"regexp"
 	"sync"
 	"time"
 
@@ -30,6 +32,57 @@ type Settings struct {
 	// Acks are each cluster's acknowledged alerts, by the cluster's
 	// connection id.
 	Acks map[string][]acks.Ack `json:"acks,omitempty"`
+	// Sherlock is how Sherlock answers (P5-05); nil is the defaults, with
+	// Sherlock off everywhere.
+	Sherlock *Sherlock `json:"sherlock,omitempty"`
+}
+
+// Sherlock is what an administrator chooses for Sherlock. The API key is
+// not here: it is kept in a Secret and never sent to a browser.
+type Sherlock struct {
+	// Clusters turns Sherlock on per cluster, by connection id.
+	Clusters map[string]bool `json:"clusters,omitempty"`
+	// Model is the Claude model it uses.
+	Model string `json:"model"`
+	// DailyUSD and MonthlyUSD cap what it may spend, in US dollars; 0 is
+	// no cap.
+	DailyUSD   float64 `json:"dailyUSD"`
+	MonthlyUSD float64 `json:"monthlyUSD"`
+}
+
+// DefaultSherlock is a fresh installation's: off, with caps in place.
+var DefaultSherlock = Sherlock{Model: "claude-opus-5-5", DailyUSD: 20, MonthlyUSD: 200}
+
+// SherlockOrDefault returns the Sherlock settings in force.
+func (s Settings) SherlockOrDefault() Sherlock {
+	if s.Sherlock == nil {
+		return DefaultSherlock
+	}
+	return *s.Sherlock
+}
+
+var modelRE = regexp.MustCompile(`^[a-z0-9][a-z0-9.:@_-]{1,79}$`)
+
+// MaxCapUSD bounds a cap, so a typo does not remove it in effect.
+const MaxCapUSD = 100_000
+
+// Validate reports what is wrong with the Sherlock settings.
+func (s Sherlock) Validate() error {
+	if !modelRE.MatchString(s.Model) {
+		return fmt.Errorf("%q is not a model name", s.Model)
+	}
+	for _, v := range []float64{s.DailyUSD, s.MonthlyUSD} {
+		if v < 0 || v > MaxCapUSD || math.IsNaN(v) {
+			return fmt.Errorf("a spending cap must be between $0 (no cap) and $%d", MaxCapUSD)
+		}
+	}
+	if s.DailyUSD > 0 && s.MonthlyUSD > 0 && s.DailyUSD > s.MonthlyUSD {
+		return fmt.Errorf("the daily cap is above the monthly cap")
+	}
+	if len(s.Clusters) > 1000 {
+		return fmt.Errorf("too many clusters")
+	}
+	return nil
 }
 
 // Refresh limits: a second keeps the server from spinning; ten minutes keeps
@@ -59,6 +112,11 @@ func (s Settings) Validate() error {
 	for cluster, list := range s.Acks {
 		if err := acks.Validate(list); err != nil {
 			return fmt.Errorf("the acknowledged alerts of %s: %w", cluster, err)
+		}
+	}
+	if s.Sherlock != nil {
+		if err := s.Sherlock.Validate(); err != nil {
+			return fmt.Errorf("Sherlock: %w", err)
 		}
 	}
 	return nil
@@ -167,6 +225,21 @@ func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
 	if in.Acks == nil {
 		in.Acks = s.Current().Acks
 	}
+	if in.Sherlock == nil {
+		in.Sherlock = s.Current().Sherlock
+	}
+	return s.update(ctx, in)
+}
+
+// UpdateSherlock replaces the Sherlock settings.
+func (s *Service) UpdateSherlock(ctx context.Context, sh Sherlock) (State, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := sh.Validate(); err != nil {
+		return State{}, err
+	}
+	in := s.Current().Settings
+	in.Sherlock = &sh
 	return s.update(ctx, in)
 }
 

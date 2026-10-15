@@ -11,6 +11,8 @@ import { download, xlsxBytes, type Cell } from '../lib/xlsx'
 import { ExportMenu } from './ExportMenu'
 import { ExcelIcon, SearchIcon } from './Icons'
 import type { TabProps } from './tabs'
+import { AskSherlock } from './Sherlock'
+import { alertQuestion } from '../lib/sherlock'
 
 const KINDS: [AlertKind, string][] = [
   ['all', 'All'],
@@ -157,6 +159,7 @@ function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: n
             {r.ack ? 'Undo acknowledge' : 'Acknowledge'}
           </button>
         )}
+        {isActive(r) && <AskSherlock question={alertQuestion(r)} />}
         <button className="rk-btn" onClick={onOpen} data-testid="alert-open">
           {openLabel(r)}
         </button>

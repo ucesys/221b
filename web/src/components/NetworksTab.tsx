@@ -12,6 +12,7 @@ import { ExportMenu } from './ExportMenu'
 import { Select } from './Select'
 import type { TabProps } from './tabs'
 import { peekHref, peekLink, type Peek } from '../lib/peek'
+import { AskSherlock } from './Sherlock'
 
 const TONE_RANK: Record<string, number> = { err: 0, warn: 1, ok: 2, muted: 2, info: 2 }
 
@@ -173,6 +174,9 @@ export function NetworksTab({ cluster, now, onToast, route }: TabProps) {
               </strong>
               <span style={{ fontSize: 12.5, color: 'var(--fg2)' }} data-testid="trace-text">
                 {sel.text}
+              </span>
+              <span style={{ marginLeft: 'auto' }}>
+                <AskSherlock question={sel.tone === 'ok' ? `Trace a request to ${sel.url}` : `Why does a request to ${sel.url} fail?`} compact />
               </span>
             </div>
             <ol className="rk-hops" data-testid="hops">

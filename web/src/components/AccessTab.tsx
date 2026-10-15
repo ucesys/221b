@@ -3,6 +3,7 @@ import { useView } from '../api/live'
 import type { AccessRow, BindingRow, NamespaceRow, RoleRow, SARow } from '../api/types'
 import { BINDING_COLUMNS, bindingTerms, GRANT_COLUMNS, grantTerms, IdentityName, ROLE_COLUMNS, roleTerms, Sev, WHO_COLUMNS, whoTerms, type BindingView, type GrantView, type RoleView, type WhoView } from '../columns/access'
 import { fmtAge, nWord } from '../lib/format'
+import { AskSherlock } from './Sherlock'
 import {
   AC_RES,
   AC_VERBS,
@@ -463,7 +464,8 @@ function IdentityPage({ id, bindings, roles, items, namespaces, now, route, set,
           <IdentityName kind={id.kind} name={id.name} namespace={id.namespace} size={19} />
         </h1>
         {id.system && <span className="rk-tag" data-tone="info">Kubernetes system identity</span>}
-        <span style={{ marginLeft: 'auto' }}>
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8 }}>
+          <AskSherlock question={`What can ${id.kind} ${id.namespace ? id.namespace + '/' : ''}${id.name} do?`} />
           <button className="rk-btn" onClick={() => copy(listCmd, onToast)} title={listCmd}>
             <CopyIcon />
             Copy kubectl auth can-i --list
