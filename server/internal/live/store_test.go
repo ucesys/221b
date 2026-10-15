@@ -294,7 +294,7 @@ func TestNamespaceViewsExistWhileShown(t *testing.T) {
 	s := New(src, Options{Idle: time.Minute, Now: func() time.Time { return now }})
 	s.Notify(listed())
 	s.Process()
-	if views := s.Views(); strings.Join(views, ",") != "helm,namespaces,nodes,services" {
+	if views := s.Views(); strings.Join(views, ",") != "alerts,helm,namespaces,nodes,services" {
 		t.Fatalf("views %v", views)
 	}
 
@@ -444,7 +444,7 @@ func TestRowsWaitForTheRefresh(t *testing.T) {
 		t.Fatalf("first rows: %+v", got)
 	}
 	views, subs, _ := s.Stats()
-	if subs != 1 || len(views) != 4 {
+	if subs != 1 || len(views) != 5 {
 		t.Fatalf("stats %+v %d", views, subs)
 	}
 	for _, v := range views {
@@ -701,5 +701,39 @@ func TestFilteredSubscribersSeeTheirNamespacesOnly(t *testing.T) {
 	some.Resync()
 	if _, resync := some.Take(); !resync {
 		t.Fatal("no resync")
+	}
+}
+
+// Fleets saved in the console reach the browsers at once, not a refresh
+// later (asked at the Phase 4 review).
+func TestSavedFleetsGoOutAtOnce(t *testing.T) {
+	src := fake.New("a")
+	s := New(src, Options{Cluster: "local", Refresh: time.Hour, Prompt: 10 * time.Millisecond})
+	sub, _, _ := s.Subscribe([]string{ViewFleets}, nil)
+	defer s.Unsubscribe(sub)
+	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { s.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	s.Notify(listed())
+	waitWake(t, sub)
+	take(t, sub)
+
+	saved := time.Now()
+	s.SetSettings(time.Hour, []byte(`{"fleets":{"local":[{"id":"workers","name":"Workers","color":0,"labels":["role=worker"],"taints":[]}]}}`))
+	var rows []Rows
+	for len(rows) == 0 {
+		waitWake(t, sub)
+		rows = take(t, sub).rows
+	}
+	if since := time.Since(saved); since > time.Second {
+		t.Fatalf("the fleet went out %v after it was saved", since)
+	}
+	found := false
+	for _, u := range rows[0].Upserts {
+		found = found || strings.Contains(string(u), `"Workers"`)
+	}
+	if !found {
+		t.Fatalf("rows %+v", rows[0])
 	}
 }

@@ -81,8 +81,8 @@ test('details list the endpoints and link to the pods behind them', async ({ pag
   await expect(endpoints.locator('.rk-gr')).toHaveCount(svc.total)
   const pod = endpoints.getByTestId('endpoint-pod').first()
   await expect(pod).toBeVisible()
-  const href = await pod.getAttribute('href')
-  expect(href).toMatch(/^#\/pods\?open=/)
+  // One pod: its details open over this tab (asked at the Phase 4 review).
+  expect(await pod.getAttribute('data-peek')).toMatch(/^pod:/)
   await expect(panel.getByTestId('service-pods-link')).toHaveAttribute('href', new RegExp(`^#/pods\\?ns=${svc.namespace}`))
 
   // The link opens the pod's details.
@@ -95,4 +95,13 @@ test('details list the endpoints and link to the pods behind them', async ({ pag
   await panel.locator('[data-dtab="yaml"]').click()
   await expect(panel.getByTestId('yaml')).toContainText('kind: Service')
   await expect(panel.getByTestId('yaml')).toContainText(`clusterIP: ${svc.clusterIP}`)
+})
+
+test('a Service an Ingress publishes opens, with the hostnames that publish it', async ({ page, request }) => {
+  const svc = serviceRows(await snapshot(request, ['services'])).find((s) => s.hostnames.length > 0)
+  test.skip(!svc, 'no Ingress publishes a Service here')
+  await open(page, `#/services?open=${encodeURIComponent(svc!.key)}`)
+  const panel = page.getByTestId('service-panel')
+  await expect(panel.getByRole('heading', { level: 2 })).toHaveText(svc!.name)
+  await expect(panel.getByTestId('service-ingress').first()).toContainText(svc!.hostnames[0]!)
 })

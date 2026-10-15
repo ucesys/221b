@@ -201,7 +201,7 @@ func (m *Manager) start(spec Spec, cred Credential) *Instance {
 		m.log.Warn("connection cannot start", "cluster", spec.ID, "err", err)
 		return inst
 	}
-	store := live.New(cluster, live.Options{Refresh: m.opts.Refresh, Logger: m.log.With("cluster", spec.ID, "component", "store"), Now: m.opts.Now})
+	store := live.New(cluster, live.Options{Refresh: m.opts.Refresh, Logger: m.log.With("cluster", spec.ID, "component", "store"), Now: m.opts.Now, Cluster: spec.ID})
 	if m.settingsRaw != nil {
 		store.SetSettings(m.settingsRefresh, m.settingsRaw)
 	}

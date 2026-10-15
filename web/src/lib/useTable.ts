@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react'
 import { defaultHidden, exportFileName, exportTable, csvText, matchesQuery, nextSort, queryWords, sortRows, visibleColumns, type ColumnDef, type ExportFormat, type SortState, type Term } from './table'
-import { readJSON, writeJSON } from './storage'
+import { usePref } from './prefs'
 import { download, xlsxBytes } from './xlsx'
 
 export interface TableState<R> {
@@ -41,19 +41,14 @@ export function useTable<R>({ id, columns, rows, terms, now, compact = false, de
   const [innerQuery, setInnerQuery] = useState('')
   const query = outerQuery ?? innerQuery
   const setQuery = onQuery ?? setInnerQuery
-  const [hidden, setHiddenState] = useState<Set<string>>(() => {
-    const saved = readJSON<string[] | null>(key, null)
+  // Kept in this browser, or with the person's account (lib/prefs).
+  const [saved, setSaved] = usePref<string[] | null>(key, null)
+  const hidden = useMemo(() => {
     if (!saved) return new Set(defaults)
     const ids = new Set(columns.map((c) => c.id))
     return new Set(saved.filter((c) => ids.has(c)))
-  })
-  const setHidden = useCallback(
-    (h: Set<string>) => {
-      setHiddenState(h)
-      writeJSON(key, [...h])
-    },
-    [key],
-  )
+  }, [saved, columns, defaults])
+  const setHidden = useCallback((h: Set<string>) => setSaved([...h]), [setSaved])
   const onSort = useCallback((col: string) => setSort((s) => nextSort(columns, s, col)), [columns])
   const cols = useMemo(() => visibleColumns(columns, hidden, compact), [columns, hidden, compact])
   const words = useMemo(() => queryWords(query), [query])

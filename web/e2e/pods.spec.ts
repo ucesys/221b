@@ -74,7 +74,15 @@ test('a node links to its pods, and a pod links to its node, namespace, Service 
   await page.goto(`/#/pods?open=${encodeURIComponent(withLinks.key)}`)
   const panel = page.getByTestId('pod-panel')
   await expect(panel.getByRole('heading', { level: 2 })).toHaveText(withLinks.name)
-  await expect(panel.getByRole('link', { name: withLinks.node })).toHaveAttribute('href', `#/nodes?open=${withLinks.node}`)
+  // One node: its details open over this tab (asked at the Phase 4 review).
+  const nodeLink = panel.getByTestId('pod-node-link')
+  await expect(nodeLink).toHaveAttribute('data-peek', `node:${withLinks.node}`)
+  await nodeLink.click()
+  await expect(page.getByTestId('node-panel')).toContainText(withLinks.node!)
+  await expect(page).toHaveURL(/#\/pods\?/)
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('node-panel')).toHaveCount(0)
+  await expect(panel).toBeVisible()
   await expect(panel.getByRole('link', { name: withLinks.namespace, exact: true }).first()).toHaveAttribute('href', `#/namespaces/${withLinks.namespace}`)
   if (withLinks.release) {
     await expect(panel.getByTestId('pod-release-link')).toHaveAttribute('href', `#/helm/${withLinks.namespace}/${withLinks.release}`)
@@ -110,6 +118,10 @@ test('a crash-looping pod shows its last termination reason, and its previous co
     const panel = page.getByTestId('pod-panel')
     await expect(panel).toContainText(/Last restart: (Error|Completed|OOMKilled)/)
     await panel.locator('[data-dtab="logs"]').click()
+    // The container picker looks like a drop-down (asked at the Phase 4 review).
+    const picker = panel.getByTestId('log-container')
+    await expect(picker).toHaveJSProperty('tagName', 'SELECT')
+    await expect(picker.locator('xpath=..').locator('.rk-selchev')).toBeVisible()
     const previous = panel.getByTestId('log-previous')
     await expect(previous).toBeEnabled()
     await previous.check()

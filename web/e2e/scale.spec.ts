@@ -9,7 +9,7 @@ test.skip(!nodes, 'set E2E_SCALE to run the scale test')
 test('first screen within 2 seconds, sorting within 200 ms, memory under 1 GiB', async ({ page, request }) => {
   // Warm up once, so the timing is the console's and not the first TLS or
   // font fetch of a fresh browser.
-  await page.goto('/')
+  await page.goto('/#/nodes')
   await expect(page.locator('.rk-grid[data-total]')).toHaveAttribute('data-total', String(nodes), { timeout: 60_000 })
 
   // Times taken in the page, when the rows appear: the first screenful
@@ -27,7 +27,9 @@ test('first screen within 2 seconds, sorting within 200 ms, memory under 1 GiB',
   const firsts: number[] = []
   const alls: number[] = []
   for (let i = 0; i < 3; i++) {
-    await page.goto('/')
+    // A fresh load each time: going to the same hash again would not reload.
+    await page.goto('about:blank')
+    await page.goto('/#/nodes')
     await page.waitForFunction(() => (window as unknown as { __allRows?: number }).__allRows, undefined, { timeout: 30_000 })
     const t = await page.evaluate(() => {
       const w = window as unknown as { __firstScreen: number; __allRows: number }

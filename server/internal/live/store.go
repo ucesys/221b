@@ -13,13 +13,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/ucesys/221b/server/internal/acks"
+	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/nodes"
 	"github.com/ucesys/221b/server/internal/views"
@@ -51,6 +55,17 @@ const (
 	ViewNamespaces = "namespaces"
 	ViewServices   = "services"
 	ViewHelm       = "helm"
+	// ViewAlerts are the objects with something wrong (P4-07).
+	ViewAlerts = "alerts"
+	// ViewFleets are the cluster's fleets with their members (P4-01).
+	ViewFleets = "fleets"
+	// ViewAccess are the roles, bindings and ServiceAccounts the Access
+	// tab reads (P4-03).
+	ViewAccess = "access"
+	// ViewPolicies are what the Policies tab reads (P4-04 to P4-06).
+	ViewPolicies = "policies"
+	// ViewNetworks are the Networks tab's traces and nodes (P4-02).
+	ViewNetworks = "networks"
 	// NamespacePrefix starts the view of one namespace's objects.
 	NamespacePrefix = "ns:"
 )
@@ -103,6 +118,9 @@ type Options struct {
 	Idle   time.Duration
 	Logger *slog.Logger
 	Now    func() time.Time
+	// Cluster is the connection's id, under which the settings keep its
+	// fleets.
+	Cluster string
 }
 
 // viewDef says how a view's rows are built.
@@ -115,10 +133,13 @@ type viewDef struct {
 	build func(src Source, key string, now time.Time) (any, bool)
 	// whole renders every row at once, for views whose rows are not rebuilt
 	// one by one.
-	whole func(src Source, now time.Time) map[string]any
+	whole func(s *Store, now time.Time) map[string]any
 	// usage reads CPU and memory in use by row key, sent apart from the
 	// rows because it changes on every read.
 	usage func(src Source) map[string]nodes.Usage
+	// decorate adds to a built row what is not in the cluster: an alert's
+	// acknowledgement.
+	decorate func(s *Store, key string, row any) any
 }
 
 // view is one view's current rows.
@@ -154,14 +175,18 @@ type Store struct {
 	refreshedAt time.Time
 	subs        map[*Sub]struct{}
 	refresh     time.Duration
-	recomputes  uint64
-	delays      Histogram
+	// fleets are this cluster's fleets, from the settings.
+	fleets     atomic.Pointer[[]fleets.Fleet]
+	acks       atomic.Pointer[map[string]acks.Ack]
+	recomputes uint64
+	delays     Histogram
 
 	pendingMu   sync.Mutex
 	dirty       map[string]map[string]struct{}
 	dirtyInfo   bool
 	dirtyTotals bool
 	built       bool      // rows have been built since the cluster was listed
+	rowsNow     bool      // a change someone made here: publish rows without waiting for the tick
 	since       time.Time // when the oldest unpublished change arrived
 	kick        chan struct{}
 	reset       chan struct{}
@@ -304,6 +329,37 @@ var staticViews = []viewDef{
 			return views.BuildReleaseRow(src, ns, name, now)
 		},
 	},
+	{
+		name: ViewAlerts,
+		keys: func(src Source) []string { return views.AlertKeys(src) },
+		build: func(src Source, key string, now time.Time) (any, bool) {
+			return views.BuildAlert(src, key, now)
+		},
+		decorate: decorateAlert,
+	},
+	{
+		name:  ViewFleets,
+		lazy:  true,
+		whole: buildFleets,
+	},
+	{
+		name:  ViewPolicies,
+		lazy:  true,
+		keys:  func(src Source) []string { return views.PolicyKeys(src) },
+		build: func(src Source, key string, now time.Time) (any, bool) { return views.BuildPolicy(src, key, now) },
+	},
+	{
+		name:  ViewNetworks,
+		lazy:  true,
+		keys:  func(src Source) []string { return views.NetworkKeys(src) },
+		build: func(src Source, key string, now time.Time) (any, bool) { return views.BuildNetwork(src, key, now) },
+	},
+	{
+		name:  ViewAccess,
+		lazy:  true,
+		keys:  func(src Source) []string { return views.AccessKeys(src) },
+		build: func(src Source, key string, now time.Time) (any, bool) { return views.BuildAccess(src, key, now) },
+	},
 }
 
 // viewDefFor returns the definition of a view name, or an error for a name
@@ -318,8 +374,8 @@ func viewDefFor(name string) (viewDef, error) {
 		return viewDef{
 			name: name,
 			lazy: true,
-			whole: func(src Source, now time.Time) map[string]any {
-				rows := views.BuildObjectRows(src, ns, now)
+			whole: func(s *Store, now time.Time) map[string]any {
+				rows := views.BuildObjectRows(s.src, ns, now)
 				out := make(map[string]any, len(rows))
 				for _, r := range rows {
 					out[r.Key] = r
@@ -384,8 +440,40 @@ func (s *Store) SetSettings(refresh time.Duration, raw []byte) {
 		s.publishMetaLocked(Meta{Settings: json.RawMessage(raw)})
 	}
 	s.mu.Unlock()
+	if changed {
+		var in struct {
+			Fleets map[string][]fleets.Fleet `json:"fleets"`
+			Acks   map[string][]acks.Ack     `json:"acks"`
+		}
+		_ = json.Unmarshal(raw, &in)
+		list := in.Fleets[s.opts.Cluster]
+		if old := s.fleets.Load(); old == nil || !reflect.DeepEqual(*old, list) {
+			s.fleets.Store(&list)
+			// Someone saved them here: they see them at once, not a refresh later.
+			s.Notify(kube.Change{Views: map[string][]string{ViewFleets: {kube.AllRows}}})
+			s.PublishSoon()
+		}
+		ackd := acks.Index(in.Acks[s.opts.Cluster])
+		if old := s.acks.Load(); (old == nil && len(ackd) > 0) || (old != nil && !reflect.DeepEqual(*old, ackd)) {
+			s.acks.Store(&ackd)
+			s.Notify(kube.Change{Views: map[string][]string{ViewAlerts: {kube.AllRows}}})
+			s.PublishSoon()
+		}
+	}
 	select {
 	case s.reset <- struct{}{}:
+	default:
+	}
+}
+
+// PublishSoon publishes the pending rows within the prompt delay instead
+// of at the next refresh, for changes made through the console itself.
+func (s *Store) PublishSoon() {
+	s.pendingMu.Lock()
+	s.rowsNow = true
+	s.pendingMu.Unlock()
+	select {
+	case s.kick <- struct{}{}:
 	default:
 	}
 }
@@ -426,7 +514,8 @@ func (s *Store) Run(ctx context.Context) {
 			case <-time.After(s.opts.Prompt):
 			}
 			s.pendingMu.Lock()
-			rows := !s.built
+			rows := !s.built || s.rowsNow
+			s.rowsNow = false
 			s.pendingMu.Unlock()
 			s.process(rows)
 		}
@@ -623,7 +712,7 @@ func (s *Store) build(d viewDef, all bool, keys []string, usage bool, now time.T
 	case d.whole != nil && !all && len(keys) == 0:
 	case d.whole != nil:
 		r.all = true
-		rows := d.whole(s.src, now)
+		rows := d.whole(s, now)
 		r.present = make(map[string]struct{}, len(rows))
 		keys := make([]string, 0, len(rows))
 		for k := range rows {
@@ -645,6 +734,9 @@ func (s *Store) build(d viewDef, all bool, keys []string, usage bool, now time.T
 			if !ok {
 				r.rows = append(r.rows, built{key: k})
 				continue
+			}
+			if d.decorate != nil {
+				row = d.decorate(s, k, row)
 			}
 			r.present[k] = struct{}{}
 			encode(k, row)
@@ -1163,4 +1255,58 @@ func (sub *Sub) push(name string, msg []byte) {
 	case sub.wake <- struct{}{}:
 	default:
 	}
+}
+
+// decorateAlert marks an alert acknowledged while it is still what was
+// acknowledged.
+func decorateAlert(s *Store, key string, row any) any {
+	r, ok := row.(views.AlertRow)
+	if !ok {
+		return row
+	}
+	m := s.acks.Load()
+	if m == nil {
+		return row
+	}
+	if a, ok := (*m)[key]; ok && a.Fingerprint == views.AlertFingerprint(r) {
+		r.Ack = &views.AlertAck{By: a.By, At: a.At}
+	}
+	return r
+}
+
+// buildFleets works out the cluster's fleets from its nodes as they are
+// now (P4-01).
+func buildFleets(s *Store, now time.Time) map[string]any {
+	var defs []fleets.Fleet
+	if p := s.fleets.Load(); p != nil {
+		defs = *p
+	}
+	var ns []fleets.Node
+	for _, name := range s.src.Keys("nodes") {
+		node := s.src.Node(name)
+		if node == nil {
+			continue
+		}
+		r := nodes.BuildRow(node, s.src.PodsOn(name), nil, nil, now)
+		n := fleets.Node{
+			Name: name, Labels: node.Labels, Taints: node.Spec.Taints,
+			CPU: r.CPU.Allocatable, Memory: r.Memory.Allocatable, CPUReq: r.CPU.Requested, MemoryReq: r.Memory.Requested,
+			Pods: r.Pods.Running, Cordoned: node.Spec.Unschedulable,
+		}
+		for _, p := range r.Problems {
+			switch {
+			case p.Pods:
+			case p.Severity == nodes.SeverityError:
+				n.Errors++
+			default:
+				n.Warnings++
+			}
+		}
+		ns = append(ns, n)
+	}
+	out := map[string]any{}
+	for _, r := range fleets.Build(defs, ns) {
+		out[r.Key] = r
+	}
+	return out
 }

@@ -119,9 +119,6 @@ export function ServicesTab({ cluster, now, onToast, route }: TabProps) {
               {loaded ? `${nWord(inNs.length, 'Service', 'Services')}${ns ? ` in ${ns}` : ''}` : 'Waiting for the first list of services…'}
             </span>
           </div>
-          <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)', maxWidth: 900 }}>
-            Every Service{cluster?.name ? ` in ${cluster.name}` : ''}: its cluster and external addresses, its ports and node ports, how many of its endpoints are ready and the hostnames that publish it. Open one for its endpoints and YAML; Columns shows the type and the release that manages it.
-          </p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }} data-testid="service-cards">
             {cards.map((c) => (
               <button

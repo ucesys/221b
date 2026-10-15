@@ -8,21 +8,32 @@
 
 import { useSyncExternalStore } from 'react'
 
-export type Tab = 'nodes' | 'namespaces' | 'pods' | 'helm' | 'services'
+export type Tab = 'nodes' | 'fleets' | 'namespaces' | 'pods' | 'helm' | 'alerts' | 'services' | 'networks' | 'access' | 'policies'
 
 export const TABS: { id: Tab; label: string; tip: string }[] = [
+  { id: 'alerts', label: 'Alerts', tip: 'Pods failing to start or pending, node problems and warning events' },
   { id: 'nodes', label: 'Nodes', tip: 'Every node: role, status, what is requested and in use' },
+  { id: 'fleets', label: 'Fleets', tip: 'Groups of nodes by the labels and taints they share' },
   { id: 'namespaces', label: 'Namespaces', tip: 'Every namespace and what it holds, by kind' },
   { id: 'pods', label: 'Pods', tip: 'Every pod, filtered by node, namespace and status' },
   { id: 'helm', label: 'Helm', tip: 'Helm releases and their history' },
   { id: 'services', label: 'Services', tip: 'Every Service, its endpoints and the hostnames that publish it' },
+  { id: 'networks', label: 'Networks', tip: 'Ingress, DNS, pod and service networks — trace a request hop by hop' },
+  { id: 'access', label: 'Access', tip: 'Access Control: who can do what in the cluster' },
+  { id: 'policies', label: 'Policies', tip: 'Network policies, disruption budgets, quotas, Pod Security and admission webhooks' },
 ]
 
 /** The connection of the cluster the console was started against. */
 export const LOCAL = 'local'
 
-/** The page: the tabs, or a cluster's own page (its connection, P3-07). */
-export type View = 'tabs' | 'cluster'
+/** The page: every cluster at a glance (the landing page), a cluster's tabs, or its own page (its connection, P3-07). */
+export type View = 'home' | 'tabs' | 'cluster'
+
+/** The first tab, where a cluster opens. */
+export const FIRST_TAB: Tab = 'alerts'
+
+/** The home page: every cluster at a glance. */
+export const HOME = '#/'
 
 export interface Route {
   /** The cluster's connection id; "local" without a prefix. */
@@ -44,8 +55,10 @@ export function parseHash(hash: string): Route {
     segs = segs.slice(2)
   }
   const first = segs[0] ?? ''
-  if (first === 'cluster') return { cluster, view: 'cluster', tab: 'nodes', path: [], params: new URLSearchParams(query) }
-  const tab: Tab = TABS.some((t) => t.id === first) ? (first as Tab) : 'nodes'
+  // Nothing at all, or #/home: the home page.
+  if (cluster === LOCAL && !h.startsWith('c/') && (first === '' || first === 'home')) return { cluster, view: 'home', tab: FIRST_TAB, path: [], params: new URLSearchParams(query) }
+  if (first === 'cluster') return { cluster, view: 'cluster', tab: FIRST_TAB, path: [], params: new URLSearchParams(query) }
+  const tab: Tab = TABS.some((t) => t.id === first) ? (first as Tab) : FIRST_TAB
   return { cluster, view: 'tabs', tab, path: tab === first ? segs.slice(1) : [], params: new URLSearchParams(query) }
 }
 
@@ -110,6 +123,11 @@ function subscribe(fn: () => void) {
   }
 }
 
+/** The route as it is now, outside React: for links built at click time. */
+export function currentRoute(): Route {
+  return current
+}
+
 export function useRoute(): Route {
   return useSyncExternalStore(subscribe, () => current, () => current)
 }
@@ -130,6 +148,7 @@ export function withParams(route: Route, changes: Record<string, string | string
   const merged: Record<string, string | string[] | undefined> = {}
   for (const [k, v] of route.params.entries()) merged[k] = v
   Object.assign(merged, changes)
+  if (route.view === 'home') return HOME + query(merged)
   return clusterHref(route.cluster, route.tab, route.path, merged)
 }
 

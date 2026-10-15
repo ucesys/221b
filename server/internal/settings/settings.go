@@ -10,8 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sync"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/acks"
+	"github.com/ucesys/221b/server/internal/fleets"
 )
 
 // Settings is what the Settings dialog changes for everyone.
@@ -20,6 +24,12 @@ type Settings struct {
 	// (CPU and memory in use), rebuilds the rows that changed and sends every
 	// browser the same update at the same moment.
 	RefreshSeconds int `json:"refreshSeconds"`
+	// Fleets are each cluster's fleets (P4-01), by the cluster's
+	// connection id.
+	Fleets map[string][]fleets.Fleet `json:"fleets,omitempty"`
+	// Acks are each cluster's acknowledged alerts, by the cluster's
+	// connection id.
+	Acks map[string][]acks.Ack `json:"acks,omitempty"`
 }
 
 // Refresh limits: a second keeps the server from spinning; ten minutes keeps
@@ -41,8 +51,21 @@ func (s Settings) Validate() error {
 	if r := s.Refresh(); r < MinRefresh || r > MaxRefresh {
 		return fmt.Errorf("refreshSeconds must be between %d and %d", int(MinRefresh/time.Second), int(MaxRefresh/time.Second))
 	}
+	for cluster, list := range s.Fleets {
+		if err := fleets.Validate(list); err != nil {
+			return fmt.Errorf("the fleets of %s: %w", cluster, err)
+		}
+	}
+	for cluster, list := range s.Acks {
+		if err := acks.Validate(list); err != nil {
+			return fmt.Errorf("the acknowledged alerts of %s: %w", cluster, err)
+		}
+	}
 	return nil
 }
+
+// Equal says whether two settings are the same.
+func (s Settings) Equal(o Settings) bool { return reflect.DeepEqual(s, o) }
 
 // ErrNotFound is what a Storage returns when nothing has been saved yet.
 var ErrNotFound = errors.New("no settings saved")
@@ -104,6 +127,9 @@ type Service struct {
 	mu      sync.Mutex
 	current State
 	loaded  []byte // what storage last held, to notice outside edits
+	// writeMu orders updates, so a change to one part of the settings
+	// does not lose a change made to another part at the same time.
+	writeMu sync.Mutex
 }
 
 // NewService loads the settings from storage, falling back to defaults.
@@ -130,8 +156,72 @@ func (s *Service) Current() State {
 	return s.current
 }
 
-// Update validates, saves and applies new settings.
+// Update validates, saves and applies new settings. What it is not given
+// it keeps: the Settings dialog sends the refresh rate, not the fleets.
 func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if in.Fleets == nil {
+		in.Fleets = s.Current().Fleets
+	}
+	if in.Acks == nil {
+		in.Acks = s.Current().Acks
+	}
+	return s.update(ctx, in)
+}
+
+// UpdateAcks changes one cluster's acknowledged alerts: change gets the
+// list as it is and returns the new one.
+func (s *Service) UpdateAcks(ctx context.Context, cluster string, change func([]acks.Ack) []acks.Ack) (State, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	in := s.Current().Settings
+	list := change(append([]acks.Ack(nil), in.Acks[cluster]...))
+	if err := acks.Validate(list); err != nil {
+		return State{}, err
+	}
+	all := map[string][]acks.Ack{}
+	for k, v := range in.Acks {
+		all[k] = v
+	}
+	if len(list) == 0 {
+		delete(all, cluster)
+	} else {
+		all[cluster] = list
+	}
+	if len(all) == 0 {
+		all = nil
+	}
+	in.Acks = all
+	return s.update(ctx, in)
+}
+
+// UpdateFleets replaces one cluster's fleets.
+func (s *Service) UpdateFleets(ctx context.Context, cluster string, list []fleets.Fleet) (State, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	list = fleets.Clean(list)
+	if err := fleets.Validate(list); err != nil {
+		return State{}, err
+	}
+	in := s.Current().Settings
+	all := map[string][]fleets.Fleet{}
+	for k, v := range in.Fleets {
+		all[k] = v
+	}
+	if len(list) == 0 {
+		delete(all, cluster)
+	} else {
+		all[cluster] = list
+	}
+	if len(all) == 0 {
+		all = nil
+	}
+	in.Fleets = all
+	return s.update(ctx, in)
+}
+
+func (s *Service) update(ctx context.Context, in Settings) (State, error) {
 	if err := in.Validate(); err != nil {
 		return State{}, err
 	}
@@ -188,7 +278,7 @@ func (s *Service) reload(ctx context.Context, initial bool) {
 	}
 	s.mu.Lock()
 	s.loaded = b
-	changed := in != s.current.Settings
+	changed := !in.Equal(s.current.Settings)
 	s.current.Settings = in
 	if !initial && changed {
 		now := time.Now().UTC()

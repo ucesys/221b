@@ -1,8 +1,9 @@
 {{- if .Values.rbac.create }}
 # Read-only across the cluster: exactly the kinds the tabs show, which the
 # server watches, and the YAML view reads live. No writes. Secrets only
-# with secrets.read, and then only their key names and sizes, and Helm's
-# release records, leave the server.
+# with secrets.read, and then only their key names and sizes, a TLS
+# certificate's names and validity, and Helm's release records, leave the
+# server.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -46,14 +47,24 @@ rules:
     resources: ["endpointslices"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses", "networkpolicies"]
+    resources: ["ingresses", "ingressclasses", "networkpolicies"]
     verbs: ["get", "list", "watch"]
-  # The namespace long tail, listed by name only.
+  # Who may do what (the Access tab): roles and the bindings that grant
+  # them, read to work out each identity's permissions.
   - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["roles", "rolebindings"]
+    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
     verbs: ["get", "list", "watch"]
+  # What limits workloads (the Policies tab): disruption budgets, priority
+  # classes and admission webhooks; quotas, limit ranges and network
+  # policies are above.
   - apiGroups: ["policy"]
     resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["priorityclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingwebhookconfigurations", "mutatingwebhookconfigurations"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["autoscaling"]
     resources: ["horizontalpodautoscalers"]

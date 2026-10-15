@@ -10,6 +10,7 @@ import { PodIcon, WarnIcon } from './Icons'
 import { PodLogs } from './PodLogs'
 import { ScrollBox, Table, TR } from './Table'
 import { YamlView } from './YamlView'
+import { objectLink, peekLink } from '../lib/peek'
 
 interface Props {
   podKey: string
@@ -190,7 +191,7 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
             {head.node ? (
               <span>
                 Node{' '}
-                <a className="rk-link rk-mono" href={href('nodes', [], { open: head.node })} style={{ fontSize: 12 }}>
+                <a className="rk-link rk-mono" {...peekLink({ kind: 'node', name: head.node })} style={{ fontSize: 12 }} data-testid="pod-node-link">
                   {head.node}
                 </a>
               </span>
@@ -205,7 +206,7 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
             {head.ownerKind && (
               <span>
                 {head.ownerKind}{' '}
-                <a className="rk-link rk-mono" href={href('namespaces', [ns], { open: `${head.ownerKind}/${head.ownerName}` })} style={{ fontSize: 12 }} title={`Open the ${head.ownerKind}`} data-testid="pod-owner-link">
+                <a className="rk-link rk-mono" {...objectLink('namespaces', [ns], { open: `${head.ownerKind}/${head.ownerName}` })} style={{ fontSize: 12 }} title={`Open the ${head.ownerKind}`} data-testid="pod-owner-link">
                   {head.ownerName}
                 </a>
               </span>
@@ -224,7 +225,7 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
                 {d.services.map((s, i) => (
                   <span key={s}>
                     {i > 0 && ', '}
-                    <a className="rk-link rk-mono" href={href('services', [], { ns, open: `${ns}/${s}` })} style={{ fontSize: 12 }} data-testid="pod-service-link">
+                    <a className="rk-link rk-mono" {...peekLink({ kind: 'service', namespace: ns, name: s })} style={{ fontSize: 12 }} data-testid="pod-service-link">
                       {s}
                     </a>
                   </span>

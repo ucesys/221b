@@ -121,154 +121,160 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
   const warnings = r.problems.length - errors
   const problemCount = [errors ? nWord(errors, 'error', 'errors') : '', warnings ? nWord(warnings, 'warning', 'warnings') : ''].filter(Boolean).join(' · ')
 
+  // Over the page, as every details pane is (asked at the Phase 4 review).
   return (
-    <aside
-      className="rk-npanel"
-      aria-label={`Node details: ${r.name}`}
-      data-testid="node-panel"
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.stopPropagation()
-          onClose()
-        }
-      }}
-      style={{ flex: 'none', width: 460, maxWidth: '100%', overflow: 'auto', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderLeft: '1px solid var(--line)' }}
-    >
-      <div style={{ padding: '18px 20px 14px', display: 'flex', flexDirection: 'column', gap: 10, borderBottom: '1px solid var(--line)' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-          <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Node details</span>
-            <h2 className="rk-mono" style={{ margin: 0, fontSize: 17, fontWeight: 600, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
-              {r.name}
-            </h2>
-          </div>
-          <button ref={closeRef} className="rk-icon-btn" aria-label="Close node details" title="Close (Esc)" onClick={onClose}>
-            <CloseIcon />
-          </button>
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 14px', fontSize: 12 }}>
-          <a className="rk-link" href={href('pods', [], { node: r.name })} data-testid="node-pods-link">
-            {nWord(r.pods.running, 'pod', 'pods')} on this node →
-          </a>
-          <nav aria-label="Node sections" style={{ display: 'flex', gap: '0 16px', marginLeft: 'auto' }}>
-            <button className="rk-tab" aria-current={tab === 'details' ? 'page' : undefined} onClick={() => setTab('details')} style={{ height: 30 }} data-dtab="details">
-              Details
-            </button>
-            <button className="rk-tab" aria-current={tab === 'yaml' ? 'page' : undefined} onClick={() => setTab('yaml')} style={{ height: 30 }} data-dtab="yaml">
-              YAML
-            </button>
-          </nav>
-        </div>
-      </div>
-      {tab === 'yaml' && (
-        <div style={{ padding: '16px 20px 28px' }}>
-          <YamlView kind="nodes" name={r.name} onToast={onToast} />
-        </div>
-      )}
-      <div style={{ padding: '16px 20px 28px', display: tab === 'yaml' ? 'none' : 'flex', flexDirection: 'column', gap: 18 }}>
-        <Section title="Status">
-          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }} data-testid="node-status">
-            <span className="rk-pill" data-tone={r.tone} title={r.statusTip} style={{ height: 24, fontSize: 12.5 }}>
-              <span className="rk-dot" />
-              {r.status}
-            </span>
-            <span className="rk-role" data-role={r.role} title={tag.title}>
-              {tag.text}
-            </span>
-            <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{podSummary(r)}</span>
-          </div>
-          <p style={{ margin: 0, fontSize: 12, color: 'var(--fg2)' }}>{r.statusTip}</p>
-          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }} aria-label="Conditions">
-            {conditionTags(r).map((c) => (
-              <span key={c.label} className="rk-tag" data-tone={c.tone} title={c.tip} style={{ fontSize: 11, padding: '2px 7px' }}>
-                {c.label}
-              </span>
-            ))}
-          </div>
-        </Section>
-        {r.problems.length > 0 && (
-          <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Problems">
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-              <h3 className="rk-h">Problems</h3>
-              <span className="rk-t" data-tone={errors ? 'err' : 'warn'} style={{ fontSize: 11.5, fontWeight: 500 }}>
-                {problemCount}
-              </span>
+    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }}>
+      <button aria-label={`Close the details of ${r.name}`} tabIndex={-1} onClick={onClose} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
+      <aside
+        className="rk-npanel rk-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Node details: ${r.name}`}
+        data-testid="node-panel"
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.stopPropagation()
+            onClose()
+          }
+        }}
+        style={{ position: 'relative', width: 'min(560px, 100%)', height: '100%', overflow: 'auto', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}
+      >
+        <div style={{ padding: '18px 20px 14px', display: 'flex', flexDirection: 'column', gap: 10, borderBottom: '1px solid var(--line)' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+            <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Node details</span>
+              <h2 className="rk-mono" style={{ margin: 0, fontSize: 17, fontWeight: 600, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
+                {r.name}
+              </h2>
             </div>
-            {r.problems.map((pb) => (
-              <div key={pb.title} className="rk-callout" data-tone={pb.severity === 'error' ? 'err' : 'warn'} style={{ flexDirection: 'column', gap: 6 }}>
-                <strong style={{ fontSize: 12.5, fontWeight: 600 }}>{pb.title}</strong>
-                <span style={{ fontSize: 12, color: 'var(--fg2)' }}>{pb.summary}</span>
-                {pb.entries.map((e, i) => (
-                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%', paddingTop: 7, borderTop: '1px solid var(--line)' }}>
-                    <span className="rk-t" data-tone={pb.severity === 'error' ? 'err' : 'warn'} style={{ fontSize: 11.5, fontWeight: 600 }}>
-                      {e.reason}
-                    </span>
-                    {e.message && <span style={{ fontSize: 11.5, color: 'var(--fg2)', overflowWrap: 'anywhere' }}>{e.message}</span>}
-                    <span style={{ fontSize: 11, color: 'var(--fg3)' }} title={e.since ? fmtTs(e.since) : undefined}>
-                      {[e.object, e.since ? `since ${fmtAge(e.since, now)} ago` : ''].filter(Boolean).join(' · ')}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </section>
+            <button ref={closeRef} className="rk-icon-btn" aria-label="Close node details" title="Close (Esc)" onClick={onClose}>
+              <CloseIcon />
+            </button>
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 14px', fontSize: 12 }}>
+            <a className="rk-link" href={href('pods', [], { node: r.name })} data-testid="node-pods-link">
+              {nWord(r.pods.running, 'pod', 'pods')} on this node →
+            </a>
+            <nav aria-label="Node sections" style={{ display: 'flex', gap: '0 16px', marginLeft: 'auto' }}>
+              <button className="rk-tab" aria-current={tab === 'details' ? 'page' : undefined} onClick={() => setTab('details')} style={{ height: 30 }} data-dtab="details">
+                Details
+              </button>
+              <button className="rk-tab" aria-current={tab === 'yaml' ? 'page' : undefined} onClick={() => setTab('yaml')} style={{ height: 30 }} data-dtab="yaml">
+                YAML
+              </button>
+            </nav>
+          </div>
+        </div>
+        {tab === 'yaml' && (
+          <div style={{ padding: '16px 20px 28px' }}>
+            <YamlView kind="nodes" name={r.name} onToast={onToast} />
+          </div>
         )}
-        <Section title="Taints" count={r.taints.length}>
-          {r.taints.length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {r.taints.map((t) => (
-                <span key={t.key + t.effect} className="rk-chip">
-                  {t.key}
-                  <em>{t.value ? '=' + t.value : ''}</em>
-                  <span className="rk-tag" data-tone={effectTone(t.effect)}>
-                    {t.effect}
-                  </span>
+        <div style={{ padding: '16px 20px 28px', display: tab === 'yaml' ? 'none' : 'flex', flexDirection: 'column', gap: 18 }}>
+          <Section title="Status">
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }} data-testid="node-status">
+              <span className="rk-pill" data-tone={r.tone} title={r.statusTip} style={{ height: 24, fontSize: 12.5 }}>
+                <span className="rk-dot" />
+                {r.status}
+              </span>
+              <span className="rk-role" data-role={r.role} title={tag.title}>
+                {tag.text}
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{podSummary(r)}</span>
+            </div>
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--fg2)' }}>{r.statusTip}</p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }} aria-label="Conditions">
+              {conditionTags(r).map((c) => (
+                <span key={c.label} className="rk-tag" data-tone={c.tone} title={c.tip} style={{ fontSize: 11, padding: '2px 7px' }}>
+                  {c.label}
                 </span>
               ))}
             </div>
-          )}
-          <p style={{ margin: 0, fontSize: 12, color: 'var(--fg3)' }}>{taintNote(r)}</p>
-        </Section>
-        <Section
-          title="Labels"
-          count={labels.length}
-          aside={
-            sysCount > 0 && (
-              <button className="rk-link" onClick={() => setShowSys(!showSys)} style={{ fontSize: 12 }}>
-                {showSys ? 'Hide kubernetes.io labels' : `Show ${sysCount} kubernetes.io labels`}
-              </button>
-            )
-          }
-        >
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {shownLabels.map((k) => (
-              <span key={k} className="rk-chip" data-dim={isSystemLabel(k)}>
-                {k}
-                <em>{r.labels[k] !== '' ? '=' + r.labels[k] : ''}</em>
-              </span>
-            ))}
-            {shownLabels.length === 0 && <span style={{ fontSize: 12, color: 'var(--fg3)' }}>Only kubernetes.io labels.</span>}
-          </div>
-        </Section>
-        {resourceSections(r, metrics, metricsNote).map((s) => (
-          <Resource key={s.label} s={s} />
-        ))}
-        <Section title="System">
-          <dl className="rk-kv">
-            {system.map(([k, v, tip]) => (
-              <div key={k} style={{ display: 'contents' }}>
-                <dt>{k}</dt>
-                <dd className="rk-mono" title={tip}>
-                  {v}
-                </dd>
+          </Section>
+          {r.problems.length > 0 && (
+            <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Problems">
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                <h3 className="rk-h">Problems</h3>
+                <span className="rk-t" data-tone={errors ? 'err' : 'warn'} style={{ fontSize: 11.5, fontWeight: 500 }}>
+                  {problemCount}
+                </span>
               </div>
-            ))}
-          </dl>
-          {!r.bootedAt && uptimeNote && (
-            <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>{uptimeNote}</p>
+              {r.problems.map((pb) => (
+                <div key={pb.title} className="rk-callout" data-tone={pb.severity === 'error' ? 'err' : 'warn'} style={{ flexDirection: 'column', gap: 6 }}>
+                  <strong style={{ fontSize: 12.5, fontWeight: 600 }}>{pb.title}</strong>
+                  <span style={{ fontSize: 12, color: 'var(--fg2)' }}>{pb.summary}</span>
+                  {pb.entries.map((e, i) => (
+                    <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%', paddingTop: 7, borderTop: '1px solid var(--line)' }}>
+                      <span className="rk-t" data-tone={pb.severity === 'error' ? 'err' : 'warn'} style={{ fontSize: 11.5, fontWeight: 600 }}>
+                        {e.reason}
+                      </span>
+                      {e.message && <span style={{ fontSize: 11.5, color: 'var(--fg2)', overflowWrap: 'anywhere' }}>{e.message}</span>}
+                      <span style={{ fontSize: 11, color: 'var(--fg3)' }} title={e.since ? fmtTs(e.since) : undefined}>
+                        {[e.object, e.since ? `since ${fmtAge(e.since, now)} ago` : ''].filter(Boolean).join(' · ')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </section>
           )}
-        </Section>
-      </div>
-    </aside>
+          <Section title="Taints" count={r.taints.length}>
+            {r.taints.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {r.taints.map((t) => (
+                  <span key={t.key + t.effect} className="rk-chip">
+                    {t.key}
+                    <em>{t.value ? '=' + t.value : ''}</em>
+                    <span className="rk-tag" data-tone={effectTone(t.effect)}>
+                      {t.effect}
+                    </span>
+                  </span>
+                ))}
+              </div>
+            )}
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--fg3)' }}>{taintNote(r)}</p>
+          </Section>
+          <Section
+            title="Labels"
+            count={labels.length}
+            aside={
+              sysCount > 0 && (
+                <button className="rk-link" onClick={() => setShowSys(!showSys)} style={{ fontSize: 12 }}>
+                  {showSys ? 'Hide kubernetes.io labels' : `Show ${sysCount} kubernetes.io labels`}
+                </button>
+              )
+            }
+          >
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {shownLabels.map((k) => (
+                <span key={k} className="rk-chip" data-dim={isSystemLabel(k)}>
+                  {k}
+                  <em>{r.labels[k] !== '' ? '=' + r.labels[k] : ''}</em>
+                </span>
+              ))}
+              {shownLabels.length === 0 && <span style={{ fontSize: 12, color: 'var(--fg3)' }}>Only kubernetes.io labels.</span>}
+            </div>
+          </Section>
+          {resourceSections(r, metrics, metricsNote).map((s) => (
+            <Resource key={s.label} s={s} />
+          ))}
+          <Section title="System">
+            <dl className="rk-kv">
+              {system.map(([k, v, tip]) => (
+                <div key={k} style={{ display: 'contents' }}>
+                  <dt>{k}</dt>
+                  <dd className="rk-mono" title={tip}>
+                    {v}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            {!r.bootedAt && uptimeNote && (
+              <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>{uptimeNote}</p>
+            )}
+          </Section>
+        </div>
+      </aside>
+    </div>
   )
 }

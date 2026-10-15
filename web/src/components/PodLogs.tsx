@@ -3,6 +3,7 @@ import type { ContainerDetail } from '../api/types'
 import { errorText } from '../api/details'
 import { DownloadIcon } from './Icons'
 import { apiPath } from '../lib/router'
+import { Select } from './Select'
 
 interface Props {
   namespace: string
@@ -145,18 +146,14 @@ export function PodLogs({ namespace, name, containers, gone, onToast }: Props) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, flex: '1 1 auto', minHeight: 0 }} data-testid="logs">
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 14px', fontSize: 12.5 }}>
-        <label className="rk-field" style={{ width: 'auto', minWidth: 180 }}>
-          <span className="rk-sr">Container</span>
-          <select value={container} onChange={(e) => setContainer(e.target.value)} data-testid="log-container">
-            {containers.map((c) => (
-              <option key={c.name} value={c.name}>
-                {c.name}
-                {c.init ? ' (init)' : ''}
-                {c.state?.kind === 'running' ? '' : c.state?.kind === 'waiting' ? ' — waiting' : c.state?.kind === 'terminated' ? ' — terminated' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
+        <Select
+          label="Container"
+          value={container}
+          options={containers.map((c) => [c.name, `${c.name}${c.init ? ' (init)' : ''}${c.state?.kind === 'running' ? '' : c.state?.kind === 'waiting' ? ' — waiting' : c.state?.kind === 'terminated' ? ' — terminated' : ''}`])}
+          onChange={setContainer}
+          testId="log-container"
+          width="auto"
+        />
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
           <input type="checkbox" checked={follow && canFollow} disabled={!canFollow || previous || gone} onChange={(e) => setFollow(e.target.checked)} style={{ margin: 0, accentColor: 'var(--accent)' }} />
           Follow
@@ -169,16 +166,7 @@ export function PodLogs({ namespace, name, containers, gone, onToast }: Props) {
           <input type="checkbox" checked={timestamps} onChange={(e) => setTimestamps(e.target.checked)} style={{ margin: 0, accentColor: 'var(--accent)' }} />
           Timestamps
         </label>
-        <label className="rk-field" style={{ width: 'auto' }}>
-          <span className="rk-sr">How much to read</span>
-          <select value={tail} onChange={(e) => setTail(Number(e.target.value))}>
-            {TAILS.map(([n, label]) => (
-              <option key={n} value={n}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <Select label="How much to read" value={String(tail)} options={TAILS.map(([n, label]) => [String(n), label])} onChange={(v) => setTail(Number(v))} width="auto" />
         <span style={{ flex: '1 1 auto' }} />
         <span className="rk-num" style={{ fontSize: 12, color: 'var(--fg3)' }} data-testid="log-state">
           {state === 'loading' ? 'Reading…' : state === 'live' ? `Live · ${lines.length} lines` : `${lines.length} lines`}

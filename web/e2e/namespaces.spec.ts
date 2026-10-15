@@ -1,7 +1,7 @@
 // The Namespaces tab, as P2-02 and P2-08 describe it.
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
-import type { NamespaceRow, ObjectRow } from '../src/api/types'
+import type { NamespaceRow, ObjectRow, ReleaseRow } from '../src/api/types'
 import { pluralKind } from '../src/lib/kinds'
 import { cluster, countKind, inKind, PLANTED, snapshot } from './cluster'
 
@@ -185,4 +185,22 @@ test('an object opens its details, with Secret data replaced by key names and si
   }
   // Secrets are read by a server flag; the UI says so when they are off.
   if (!inKind) await expect(page.getByRole('link', { name: /^Helm/ })).toBeVisible()
+})
+
+test('a namespace’s Helm releases are a table like its other lists (asked at the Phase 4 review)', async ({ page, request }) => {
+  const releases = (await snapshot(request, ['helm'])).views.helm?.rows as ReleaseRow[] | undefined
+  test.skip(!releases?.length, 'no Helm releases (Secrets not read)')
+  const r = releases![0]!
+  await open(page, `#/namespaces/${encodeURIComponent(r.namespace)}`)
+  const card = page.getByTestId('namespace-releases')
+  await expect(card.locator('.rk-gh [data-col="chart"]')).toBeVisible()
+  await expect(card.getByRole('button', { name: /^Columns/ })).toBeVisible()
+  await expect(card.getByRole('button', { name: /^Export/ })).toBeVisible()
+  const row = card.locator(`[data-key="${r.key}"]`)
+  await expect(row).toContainText(r.name)
+  await expect(row).toContainText(`${r.chart}-${r.chartVersion}`)
+  await expect(row).toContainText(r.status)
+  // A release opens on the Helm tab.
+  await row.click()
+  await expect(page).toHaveURL(new RegExp(`#/helm/${r.namespace}/${r.name}$`))
 })

@@ -3,7 +3,7 @@ import { fCores, fMem, fmtAge, fmtTs, minutesSince, round } from '../lib/format'
 import { toneRank } from '../lib/nodes'
 import { href } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
-import { CellLink, Mono, Tone, UsageBar } from './cells'
+import { CellLink, Mono, peekCell, Tone, UsageBar } from './cells'
 
 const GIB = 1024 * 1024 * 1024
 
@@ -179,7 +179,7 @@ export const POD_COLUMNS: ColumnDef<PodView>[] = [
     compactWidth: '110px',
     min: 110,
     sortValue: (r) => r.node || null,
-    cell: (r) => (r.node ? <CellLink href={href('nodes', [], { open: r.node })} text={r.node} tip={`Open node ${r.node}`} /> : <Tone tone="warn" text="not scheduled" />),
+    cell: (r) => (r.node ? <CellLink {...peekCell({ kind: 'node', name: r.node })} text={r.node} tip={`Node ${r.node}: open its details`} /> : <Tone tone="warn" text="not scheduled" />),
     export: (r) => [{ head: 'Node', cell: r.node || null }],
   },
   {

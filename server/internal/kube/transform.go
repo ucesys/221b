@@ -23,8 +23,9 @@ func StripNode(obj any) (any, error) {
 // StripPod keeps what the Nodes and Pods tabs and the pod details show:
 // where the pod runs, what it requests, its containers with their
 // commands, environment and mounts, its volumes, scheduling and status.
-// It drops managed fields, the last-applied annotation, lifecycle hooks and
-// other fields no screen reads. It returns a new object and is idempotent.
+// Pod Security's checks read the rest of the security-related fields
+// (P4-06). It drops managed fields, the last-applied annotation and other
+// fields no screen reads. It returns a new object and is idempotent.
 func StripPod(obj any) (any, error) {
 	p, ok := obj.(*corev1.Pod)
 	if !ok {
@@ -59,6 +60,10 @@ func StripPod(obj any) (any, error) {
 			Priority:                      p.Spec.Priority,
 			HostNetwork:                   p.Spec.HostNetwork,
 			HostPID:                       p.Spec.HostPID,
+			HostIPC:                       p.Spec.HostIPC,
+			HostUsers:                     p.Spec.HostUsers,
+			OS:                            p.Spec.OS,
+			EphemeralContainers:           stripEphemeral(p.Spec.EphemeralContainers),
 			SecurityContext:               p.Spec.SecurityContext,
 			TerminationGracePeriodSeconds: p.Spec.TerminationGracePeriodSeconds,
 			SchedulerName:                 p.Spec.SchedulerName,
@@ -105,7 +110,23 @@ func stripContainers(in []corev1.Container) []corev1.Container {
 			LivenessProbe:   c.LivenessProbe,
 			ReadinessProbe:  c.ReadinessProbe,
 			StartupProbe:    c.StartupProbe,
+			// Pod Security reads the hooks' host fields.
+			Lifecycle: c.Lifecycle,
 		}
+	}
+	return out
+}
+
+// stripEphemeral keeps of debug containers what Pod Security checks.
+func stripEphemeral(in []corev1.EphemeralContainer) []corev1.EphemeralContainer {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]corev1.EphemeralContainer, len(in))
+	for i, c := range in {
+		out[i] = corev1.EphemeralContainer{EphemeralContainerCommon: corev1.EphemeralContainerCommon{
+			Name: c.Name, Image: c.Image, Ports: c.Ports, SecurityContext: c.SecurityContext, Lifecycle: c.Lifecycle,
+		}, TargetContainerName: c.TargetContainerName}
 	}
 	return out
 }

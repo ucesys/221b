@@ -79,10 +79,16 @@ spec:
             {{- end }}
             - name: KUBELET_STATS
               value: {{ .Values.kubeletStats | quote }}
-            # Whether Secrets are read at all (key names and sizes, and
-            # Helm release records; never values). Off hides the Helm tab.
+            # Whether Secrets are read at all (key names and sizes, TLS
+            # certificates' names and validity, and Helm release records;
+            # never values). Off hides the Helm tab.
             - name: SECRETS_READ
               value: {{ .Values.secrets.read | quote }}
+            # Whether each signed-in person's preferences, such as the
+            # columns each table shows, are kept with their account (in the
+            # settings ConfigMap) rather than in each browser.
+            - name: USER_PREFS
+              value: {{ .Values.preferences.perUser | quote }}
             - name: HEALTH_INTERVAL
               value: {{ .Values.healthInterval | quote }}
             - name: LOG_LEVEL

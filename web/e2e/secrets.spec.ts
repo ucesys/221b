@@ -16,7 +16,7 @@ test('the planted Secret value reaches no response, export or log', async ({ pag
   try {
     // Every view the browser can subscribe to, including the namespace the Secret is in.
     const namespaces = (await snapshot(request, ['namespaces'])).views.namespaces!.rows as NamespaceRow[]
-    const views = ['nodes', 'pods', 'namespaces', 'services', 'helm', ...namespaces.map((n) => `ns:${n.name}`)]
+    const views = ['nodes', 'pods', 'namespaces', 'services', 'helm', 'fleets', 'alerts', 'access', 'policies', 'networks', ...namespaces.map((n) => `ns:${n.name}`)]
     for (let i = 0; i < views.length; i += 8) {
       const res = await request.get(`/api/v1/snapshot?views=${views.slice(i, i + 8).join(',')}`)
       expect(res.ok()).toBe(true)

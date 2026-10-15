@@ -29,6 +29,7 @@ import (
 	"github.com/ucesys/221b/server/internal/fake"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/prefs"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sim"
 )
@@ -69,7 +70,7 @@ func multiSetupWith(t *testing.T, who string, deny map[string]bool) (*httptest.S
 	local.Put(samplePod("kube-system", "dns", "n2"))
 	local.logs["web/shop"] = []string{"hello"}
 	local.logs["kube-system/dns"] = []string{"secret things"}
-	store := live.New(local, live.Options{})
+	store := live.New(local, live.Options{Cluster: clusters.LocalID})
 	store.Notify(everything())
 	store.Process()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -101,7 +102,7 @@ func multiSetupWith(t *testing.T, who string, deny map[string]bool) (*httptest.S
 		m.SetSettings(st.Refresh(), b)
 	})
 	ui := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "app:"+r.URL.Path) })
-	srv := httptest.NewServer(New(Options{Store: store, Cluster: local, Settings: shared, Clusters: m, Auth: svc, Audit: audit.New(audit.Options{Out: &auditOut}), Access: access.NewCache(access.Options{TTL: 400 * time.Millisecond}), AccessRecheck: 50 * time.Millisecond, Heartbeat: 50 * time.Millisecond, Ready: func() bool { return true }, UI: ui, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
+	srv := httptest.NewServer(New(Options{Store: store, Cluster: local, Settings: shared, Prefs: prefs.New(nil), Clusters: m, Auth: svc, Audit: audit.New(audit.Options{Out: &auditOut}), Access: access.NewCache(access.Options{TTL: 400 * time.Millisecond}), AccessRecheck: 50 * time.Millisecond, Heartbeat: 50 * time.Millisecond, Ready: func() bool { return true }, UI: ui, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}))
 	t.Cleanup(srv.Close)
 	return srv, signIn(t, srv, who), m, &auditOut, local, store
 }

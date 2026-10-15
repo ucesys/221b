@@ -18,7 +18,7 @@ for (const theme of ['light', 'dark'] as const) {
   test(`meets WCAG 2.2 AA in the ${theme} theme`, async ({ page }) => {
     test.slow() // a dozen axe runs, a few seconds each
     await page.addInitScript((t) => window.localStorage.setItem('221b.theme', JSON.stringify(t)), theme)
-    await page.goto('/')
+    await page.goto('/#/nodes')
     await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
     await expect(page.locator('.rk')).toHaveAttribute('data-theme', theme)
     await expect(page.locator('[data-node]').first()).toBeVisible()
@@ -27,6 +27,7 @@ for (const theme of ['light', 'dark'] as const) {
     await page.locator('[data-node] .rk-pname').first().click()
     await expect(page.getByTestId('node-panel')).toBeVisible()
     expect(await violations(page)).toEqual([])
+    await page.keyboard.press('Escape')
 
     await page.getByRole('button', { name: /^Columns/ }).click()
     await expect(page.getByRole('group', { name: 'Columns to show' })).toBeVisible()
@@ -73,12 +74,24 @@ for (const theme of ['light', 'dark'] as const) {
     expect(await violations(page), 'object pods').toEqual([])
     await page.keyboard.press('Escape')
   })
+
+  test(`the Phase 4 tabs meet WCAG 2.2 AA in the ${theme} theme`, async ({ page }) => {
+    test.slow()
+    await page.addInitScript((t) => window.localStorage.setItem('221b.theme', JSON.stringify(t)), theme)
+    for (const hash of ['#/', '#/fleets', '#/alerts', '#/networks', '#/access', '#/policies', '#/policies/netpol', '#/policies/pdb', '#/policies/quota', '#/policies/psa', '#/policies/webhooks']) {
+      await page.goto('/' + hash)
+      await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+      await expect(page.locator('.rk-gr, .rk-card').first()).toBeVisible()
+      await page.waitForTimeout(500)
+      expect(await violations(page), hash).toEqual([])
+    }
+  })
 }
 
 test('every control is reachable by keyboard with a visible focus ring', async ({ page, browserName }) => {
   // Safari's Tab key skips buttons unless the user turns on full keyboard access.
   test.skip(browserName === 'webkit', 'Tab skips buttons in Safari by default')
-  await page.goto('/')
+  await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   const seen = new Set<string>()
   for (let i = 0; i < 25; i++) {

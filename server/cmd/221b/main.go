@@ -32,6 +32,7 @@ import (
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/prefs"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/ui"
 	"github.com/ucesys/221b/server/internal/version"
@@ -123,7 +124,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	store := live.New(cluster, live.Options{Refresh: cfg.Refresh, Logger: log.With("component", "store")})
+	store := live.New(cluster, live.Options{Refresh: cfg.Refresh, Logger: log.With("component", "store"), Cluster: clusters.LocalID})
 	cluster.OnChange(store.Notify)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -196,8 +197,19 @@ func run(args []string) error {
 		}
 	}()
 
+	// Each signed-in person's own preferences, next to the settings.
+	var userPrefs *prefs.Store
+	if cfg.UserPrefs && authCfg.Mode != auth.ModeNone {
+		var backend prefs.Backend = &prefs.Memory{}
+		if cm, ok := storage.(*kube.ConfigMapStorage); ok {
+			backend = cm
+		}
+		userPrefs = prefs.New(backend)
+	}
+
 	handler := api.New(api.Options{
 		Store:         store,
+		Prefs:         userPrefs,
 		Cluster:       cluster,
 		Settings:      shared,
 		Clusters:      manager,

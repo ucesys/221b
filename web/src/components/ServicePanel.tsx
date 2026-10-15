@@ -9,6 +9,7 @@ import { EventsTable } from './EventsTable'
 import { WarnIcon } from './Icons'
 import { ScrollBox, Table, TR } from './Table'
 import { YamlView } from './YamlView'
+import { peekLink } from '../lib/peek'
 
 interface Props {
   /** namespace/name. */
@@ -149,9 +150,10 @@ export function ServicePanel({ serviceKey, row, gone, now, onClose, onToast }: P
               {d.ingresses.length > 0 && (
                 <div style={{ padding: '0 16px 12px', display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5 }}>
                   <span className="rk-h">Published by</span>
-                  {d.ingresses.map((i) => (
-                    <span key={i.name} className="rk-mono" style={{ fontSize: 12 }}>
-                      Ingress {i.name}: {i.hosts.join(', ')}
+                  {d.ingresses.map((i, n) => (
+                    <span key={`${i.name}-${n}`} className="rk-mono" style={{ fontSize: 12 }} data-testid="service-ingress">
+                      Ingress {i.name}: {i.tls ? 'https' : 'http'}://{i.host || '*'}
+                      {i.path && i.path !== '/' ? i.path : ''}
                     </span>
                   ))}
                 </div>
@@ -170,7 +172,7 @@ export function ServicePanel({ serviceKey, row, gone, now, onClose, onToast }: P
                       <span>
                         <Tone tone={e.ready ? 'ok' : 'warn'} text={e.ready ? 'ready' : 'not ready'} />
                       </span>
-                      <span>{e.pod ? <a className="rk-mono rk-cell-link" href={href('pods', [], { open: `${e.namespace ?? ns}/${e.pod}` })} style={{ fontSize: 12 }} data-testid="endpoint-pod">{e.pod}</a> : <span style={{ color: 'var(--fg3)' }}>—</span>}</span>
+                      <span>{e.pod ? <a className="rk-mono rk-cell-link" {...peekLink({ kind: 'pod', namespace: e.namespace ?? ns, name: e.pod })} style={{ fontSize: 12 }} data-testid="endpoint-pod">{e.pod}</a> : <span style={{ color: 'var(--fg3)' }}>—</span>}</span>
                       <span className="rk-mono" style={{ fontSize: 12, color: 'var(--fg2)' }}>
                         {e.node || '—'}
                       </span>

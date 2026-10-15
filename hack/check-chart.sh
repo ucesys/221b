@@ -29,6 +29,7 @@ render console --set clusterName=ci --set kubeletStats=false | tee "$WORK/chart-
 echo "--- without reading Secrets"
 render console --set clusterName=ci --set secrets.read=false | tee "$WORK/chart-nosecrets.yaml" | validate
 render console --set clusterName=ci --set connections.store=memory | tee "$WORK/chart-memory.yaml" | validate
+render console --set clusterName=ci --set preferences.perUser=false | tee "$WORK/chart-noprefs.yaml" | validate
 echo "--- allowed ingress peers, API server addresses, extra host names and a private registry"
 render console --set clusterName=ci --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.team=platform' \
   --set 'networkPolicy.apiServerCIDRs[0]=10.0.0.10/32' --set 'allowedHosts[0]=console.example.com' \
@@ -136,7 +137,7 @@ print(" ".join(sorted(out)))'
 }
 # What it reads, plus, with sign-in, the people it reads as (users and
 # groups, impersonated) and the reviews of their access it creates.
-WANT_READ='apps/controllerrevisions apps/daemonsets apps/deployments apps/replicasets apps/statefulsets authorization.k8s.io/subjectaccessreviews autoscaling/horizontalpodautoscalers batch/cronjobs batch/jobs configmaps coordination.k8s.io/leases discovery.k8s.io/endpointslices endpoints events groups limitranges metrics.k8s.io/nodes metrics.k8s.io/pods namespaces networking.k8s.io/ingresses networking.k8s.io/networkpolicies nodes nodes/proxy persistentvolumeclaims pods pods/log policy/poddisruptionbudgets rbac.authorization.k8s.io/rolebindings rbac.authorization.k8s.io/roles resourcequotas secrets serviceaccounts services users'
+WANT_READ='admissionregistration.k8s.io/mutatingwebhookconfigurations admissionregistration.k8s.io/validatingwebhookconfigurations apps/controllerrevisions apps/daemonsets apps/deployments apps/replicasets apps/statefulsets authorization.k8s.io/subjectaccessreviews autoscaling/horizontalpodautoscalers batch/cronjobs batch/jobs configmaps coordination.k8s.io/leases discovery.k8s.io/endpointslices endpoints events groups limitranges metrics.k8s.io/nodes metrics.k8s.io/pods namespaces networking.k8s.io/ingressclasses networking.k8s.io/ingresses networking.k8s.io/networkpolicies nodes nodes/proxy persistentvolumeclaims pods pods/log policy/poddisruptionbudgets rbac.authorization.k8s.io/clusterrolebindings rbac.authorization.k8s.io/clusterroles rbac.authorization.k8s.io/rolebindings rbac.authorization.k8s.io/roles resourcequotas scheduling.k8s.io/priorityclasses secrets serviceaccounts services users'
 read_only_resources() { [ "$(granted "$out")" = "$WANT_READ" ]; }
 # Read-only, but for the access reviews it creates to ask what a person may see.
 read_only_verbs() {
@@ -157,6 +158,9 @@ secrets_optional() {
   cluster_role | grep -A1 '"secrets"' | grep -q 'verbs: \["get", "list", "watch"\]' && grep -A1 'name: SECRETS_READ' "$out" | grep -q '"true"' &&
     [ "$(granted "$WORK/chart-nosecrets.yaml")" = "${WANT_READ/ secrets/}" ] && ! cluster_role "$WORK/chart-nosecrets.yaml" | grep -q '"secrets"' &&
     grep -A1 'name: SECRETS_READ' "$WORK/chart-nosecrets.yaml" | grep -q '"false"'
+}
+user_prefs() {
+  grep -A1 'name: USER_PREFS' "$out" | grep -q '"true"' && grep -A1 'name: USER_PREFS' "$WORK/chart-noprefs.yaml" | grep -q '"false"'
 }
 settings_only() {
   settings_role | grep -q 'resources: \["configmaps"\]' && settings_role | grep -q 'resourceNames: \["console-221b"\]' &&
@@ -227,6 +231,7 @@ check "it writes only its own settings ConfigMap and the connection Secrets in i
 check "connections are kept in Secrets in the release namespace, or in memory on request" connections_store
 check "kubeletStats=false grants nothing on the kubelets" no_kubelet_stats
 check "the settings ConfigMap is created empty and named to the server" settings_configmap
+check "each signed-in person's preferences are kept with their account, unless preferences.perUser=false" user_prefs
 check "a release named after the chart still gets a valid Service name" service_name
 check "clusterName is required" name_required
 check "an empty list of API server ports is refused" no_open_egress

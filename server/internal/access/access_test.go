@@ -43,6 +43,7 @@ func TestPairsCoverTheViews(t *testing.T) {
 		{Resource: "nodes"}:                                                   true,
 		{Resource: "pods", Namespace: "web"}:                                  true,
 		{Resource: "pods", Namespace: "kube-system"}:                          true,
+		{Resource: "services", Namespace: "kube-system"}:                      true,
 		{Resource: "secrets", Namespace: "web"}:                               true,
 		{Resource: "secrets", Namespace: "kube-system"}:                       true,
 		{Group: "apps", Resource: "deployments", Namespace: "web"}:            true,

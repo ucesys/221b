@@ -5,7 +5,7 @@ import type { StreamState } from '../api/live'
 import { refreshLabel } from '../api/settings'
 import { connection } from '../lib/connection'
 import { fmtClock } from '../lib/format'
-import { href, TABS, type Route, type Tab } from '../lib/router'
+import { HOME, href, TABS, type Route, type Tab } from '../lib/router'
 import { ClusterMenu } from './ClusterMenu'
 import { Chevron, GearIcon, Logo } from './Icons'
 
@@ -14,6 +14,10 @@ export type Theme = 'light' | 'dark'
 interface Props {
   cluster: ClusterInfo | null
   counts: Counts
+  /** The tone of a tab's count, when it is not muted: the Alerts tab's. */
+  tones?: Record<string, string>
+  /** The tone of a tab's name: the Alerts tab's while it has alerts, acknowledged or not. */
+  labelTones?: Record<string, string | undefined>
   /** The open tab; null on a page that is not a tab, such as a cluster's. */
   tab: Tab | null
   stream: StreamState
@@ -156,7 +160,7 @@ function AccountMenu({ me }: { me: Me }) {
   )
 }
 
-export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, settings, settingsOpen, onSettings, me, route, onEditCluster }: Props) {
+export function TopBar({ cluster, counts, tones, labelTones, tab, stream, updatedAt, refreshedAt, settings, settingsOpen, onSettings, me, route, onEditCluster }: Props) {
   const conn = connection(cluster, stream)
   const live = stream === 'open' && cluster?.state === 'connected'
   // A clock for the countdown to the next refresh, once a second.
@@ -218,7 +222,7 @@ export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, s
     setMoreOpen(false)
   }
 
-  const plan = navPlan(ids, tab ?? 'nodes', measure)
+  const plan = navPlan(ids, tab ?? ids[0]!, measure)
   const inMenu = tabs.filter((t) => !plan.vis.includes(t.id))
   const moreTab = plan.moreAs ? tabs.find((t) => t.id === plan.moreAs) : undefined
   const hasMore = inMenu.length > 0
@@ -229,7 +233,9 @@ export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, s
       style={{ flex: 'none', position: 'relative', display: 'flex', flexWrap: 'wrap', alignItems: 'stretch', columnGap: 24, padding: '0 20px', background: 'var(--surface)', borderBottom: '1px solid var(--line)' }}
     >
       <div className="rk-brand" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, minHeight: 52 }}>
-        <Logo />
+        <a className="rk-home" href={HOME} aria-label="Home: every cluster" title="Home: every cluster at a glance" aria-current={route.view === 'home' ? 'page' : undefined} data-testid="home-link">
+          <Logo />
+        </a>
         <ClusterMenu cluster={cluster} stream={stream} route={route} me={me} onEdit={onEditCluster} />
       </div>
       <nav ref={nav} className="rk-views" aria-label="Views" style={{ flex: '1 1 0', minWidth: 0, display: 'flex', alignItems: 'stretch' }}>
@@ -237,10 +243,10 @@ export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, s
           {tabs
             .filter((t) => plan.vis.includes(t.id))
             .map((t) => (
-              <a key={t.id} className="rk-tab" href={href(t.id)} aria-current={tab === t.id ? 'page' : undefined} title={t.tip} data-tab={t.id}>
+              <a key={t.id} className="rk-tab" href={href(t.id)} aria-current={tab === t.id ? 'page' : undefined} title={t.tip} data-tab={t.id} data-tone={labelTones?.[t.id]}>
                 {t.label}
                 {countOf(t.id) !== undefined && (
-                  <span className="rk-count" data-tone="muted">
+                  <span className="rk-count" data-tone={tones?.[t.id] ?? 'muted'}>
                     {countOf(t.id)}
                   </span>
                 )}
@@ -271,7 +277,7 @@ export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, s
             >
               {moreTab ? moreTab.label : 'More'}
               {moreTab && countOf(moreTab.id) !== undefined && (
-                <span className="rk-count" data-tone="muted">
+                <span className="rk-count" data-tone={tones?.[moreTab.id] ?? 'muted'}>
                   {countOf(moreTab.id)}
                 </span>
               )}
@@ -282,7 +288,7 @@ export function TopBar({ cluster, counts, tab, stream, updatedAt, refreshedAt, s
                 <button className="rk-ddcatch" tabIndex={-1} aria-hidden="true" onClick={() => setMoreOpen(false)} />
                 <div className="rk-ddmenu" role="menu" aria-label="More views">
                   {inMenu.map((t) => (
-                    <a key={t.id} className="rk-ddopt" role="menuitem" href={href(t.id)} aria-current={tab === t.id ? 'page' : undefined} title={t.tip} onClick={() => setMoreOpen(false)} data-tab={t.id}>
+                    <a key={t.id} className="rk-ddopt" role="menuitem" href={href(t.id)} aria-current={tab === t.id ? 'page' : undefined} title={t.tip} onClick={() => setMoreOpen(false)} data-tab={t.id} data-tone={labelTones?.[t.id]}>
                       <span style={{ flex: '1 1 auto' }}>{t.label}</span>
                       {countOf(t.id) !== undefined && <span className="rk-cnt">{countOf(t.id)}</span>}
                     </a>

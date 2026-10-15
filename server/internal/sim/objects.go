@@ -142,6 +142,11 @@ func (s *Sim) generateObjects(now time.Time) {
 	// The long tail, in the namespaces that have those apps.
 	s.extras(groups, now)
 
+	// Who may do what, and what limits it.
+	s.rbacSeed(now)
+	s.policySeed(now)
+	s.networkSeed(now)
+
 	// Helm releases, as Secrets, and the labels Helm puts on their pods.
 	s.helmReleases(groups, now)
 
@@ -680,6 +685,16 @@ func (s *Sim) problemEvents(now time.Time) {
 		}
 		if p.Status.Phase == corev1.PodRunning && !podReady(p) && len(p.Status.ContainerStatuses) > 0 && p.Status.ContainerStatuses[0].State.Running != nil {
 			s.event(p.Namespace, "Pod", p.Name, p.UID, corev1.EventTypeWarning, "Unhealthy", "Readiness probe failed: HTTP probe failed with statuscode: 503", 108, now.Add(-9*time.Minute), now.Add(-5*time.Second), "kubelet", p.Spec.NodeName)
+		}
+	}
+	// The kubelet's warnings about a node short of disk name the node by
+	// its name in the event's UID.
+	for _, name := range s.sortedNodeNames() {
+		n := s.nodes[name]
+		for _, c := range n.Status.Conditions {
+			if c.Type == corev1.NodeDiskPressure && c.Status == corev1.ConditionTrue {
+				s.event("", "Node", name, types.UID(name), corev1.EventTypeWarning, "ImageGCFailed", "failed to garbage collect required amount of images. Attempted to free 4523145216 bytes, but only found 0 bytes eligible to free.", 11, now.Add(-50*time.Minute), now.Add(-4*time.Minute), "kubelet", name)
+			}
 		}
 	}
 	for _, key := range s.keysLocked("services") {

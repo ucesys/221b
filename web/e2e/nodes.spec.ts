@@ -14,7 +14,7 @@ const DEFAULT_HIDDEN = defaultHidden(NODE_COLUMNS)
 const shownNames = (page: Page) => page.locator('[data-node]').evaluateAll((els) => els.map((e) => e.getAttribute('data-node') ?? ''))
 
 async function open(page: Page) {
-  await page.goto('/')
+  await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
 }
 
@@ -54,7 +54,13 @@ test('shows the role, allocatable and free resources of every node', async ({ pa
     await expect(cells.nth(7)).toContainText(fMem(r.memory.requested))
     await expect(cells.nth(8)).toHaveText(fMem(r.memory.allocatable))
     await expect(cells.nth(9)).toHaveText(fMem(free(r.memory)))
-    await expect(cells.nth(10)).toHaveText(`${r.pods.running} / ${r.pods.capacity}`)
+    // Pods come and go on a real cluster: the figure is the one the server has now.
+    await expect
+      .poll(async () => {
+        const now = nodeRows(await snapshot(request)).find((n) => n.name === r.name)!
+        return (await cells.nth(10).textContent()) === `${now.pods.running} / ${now.pods.capacity}`
+      })
+      .toBe(true)
   }
   // The role is not repeated in the node column.
   await expect(page.locator('[data-node] > span').first()).not.toContainText('worker')
@@ -295,8 +301,8 @@ test('opens node details with Enter and closes them with Escape', async ({ page,
     await panel.getByRole('button', { name: `Show ${system.length} kubernetes.io labels` }).click()
     await expect(panel.locator('.rk-chip', { hasText: system[0]! }).first()).toBeVisible()
   }
-  // Wide-only columns step aside while the panel is open.
-  await expect(page.locator('.rk-gh [data-col="cpuAlloc"]')).toHaveCount(0)
+  // The panel lies over the table, which keeps every column (asked at the Phase 4 review).
+  await expect(page.locator('.rk-gh [data-col="cpuAlloc"]')).toHaveCount(1)
   // The node links to its pods (P2-09), and shows its YAML (P2-08).
   await expect(panel.getByTestId('node-pods-link')).toHaveAttribute('href', `#/pods?node=${target.name}`)
   await panel.locator('[data-dtab="yaml"]').click()

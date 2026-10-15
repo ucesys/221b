@@ -12,6 +12,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/prefs"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sim"
 )
@@ -111,6 +112,22 @@ func TestConfigMapStorage(t *testing.T) {
 	}
 	if b, _ := cm.Load(ctx); string(b) != `{"refreshSeconds":60}` {
 		t.Fatalf("ConfigMap holds %q", b)
+	}
+
+	// A person's preferences go in a key of their own, leaving the
+	// settings as they were.
+	people := prefs.New(cm)
+	if err := people.Put(ctx, "oidc:dana", prefs.Prefs{"221b.pods.hidden": []byte(`["ip"]`)}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := cm.Load(ctx); string(b) != `{"refreshSeconds":60}` {
+		t.Fatalf("preferences changed the settings: %q", b)
+	}
+	if b, err := cm.LoadKey(ctx, prefs.KeyFor("oidc:dana")); err != nil || string(b) != `{"221b.pods.hidden":["ip"]}` {
+		t.Fatalf("preferences %q %v", b, err)
+	}
+	if p, err := prefs.New(cm).Get(ctx, "oidc:dana"); err != nil || string(p["221b.pods.hidden"]) != `["ip"]` {
+		t.Fatalf("read back %v %v", p, err)
 	}
 
 	// Without the API server, saving fails with a message, not a hang.
