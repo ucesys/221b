@@ -37,6 +37,7 @@ import (
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/ui"
 	"github.com/ucesys/221b/server/internal/version"
+	"github.com/ucesys/221b/server/internal/watson"
 )
 
 func main() {
@@ -259,7 +260,27 @@ func run(args []string) error {
 		}
 	}()
 
+	// Watson (Phase 6): commands run as the person who approved them.
+	watsonSvc := watson.New(watson.Options{
+		Audit:  auditLog,
+		Logger: log.With("component", "watson"),
+		TwoPerson: func(c watson.Cluster) bool {
+			return c.Env == clusters.EnvProduction && shared.Current().WatsonOrDefault().TwoPerson
+		},
+	})
+	go watsonSvc.Watch(ctx, func(id string) (watson.Cluster, bool) {
+		sum, ok := manager.Summary(id)
+		if !ok {
+			return watson.Cluster{}, false
+		}
+		_, client, ok := manager.Lookup(id)
+		if !ok || client == nil {
+			return watson.Cluster{}, false
+		}
+		return watson.Cluster{ID: id, Name: sum.Name, Env: sum.Env, ReadOnly: sum.Mode != clusters.ModeWrite, Config: client.RestConfig()}, true
+	})
 	handler := api.New(api.Options{
+		Watson:        watsonSvc,
 		Sherlock:      sherlockSvc,
 		SherlockKeys:  keys,
 		Store:         store,
@@ -365,7 +386,7 @@ func run(args []string) error {
 // connection: its address and how the console signs in, for the cluster
 // page; it is not editable beyond its name, environment and description.
 func localSpec(cfg config.Config, restCfg *rest.Config, mode kube.Mode) clusters.Spec {
-	spec := clusters.Spec{Name: cfg.ClusterName, Env: clusters.EnvOther, Server: restCfg.Host, Mode: clusters.ModeRead}
+	spec := clusters.Spec{Name: cfg.ClusterName, Env: clusters.EnvOther, Server: restCfg.Host, Mode: cfg.LocalMode}
 	switch mode {
 	case kube.ModeInCluster:
 		spec.Auth = clusters.AuthInCluster

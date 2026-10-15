@@ -48,7 +48,7 @@ func (s *source) Counts() (int, int, uint64, uint64) {
 	return len(s.Objects("nodes", "")), len(s.Objects("pods", "")), 0, 0
 }
 
-func (s *source) RestConfig() *rest.Config { return nil }
+func (s *source) RestConfig() *rest.Config { return s.restCfg }
 
 // multiSetup runs the console with sign-in by local accounts (an
 // administrator and a viewer), the fake cache as the local cluster and a

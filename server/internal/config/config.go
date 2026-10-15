@@ -42,6 +42,9 @@ type Config struct {
 	// SherlockAPIURL is the Claude API's address (Phase 5); a test points
 	// it at a fake.
 	SherlockAPIURL string
+	// LocalMode is what Watson may do in the cluster the console runs in
+	// (Phase 6): read, or write to allow changes after approval.
+	LocalMode string
 	// SherlockSecret is the "namespace/name" of the Secret the Claude API
 	// key is kept in once an administrator saves it. Empty keeps it in
 	// memory until a restart.
@@ -139,6 +142,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.ImpersonateGroupPrefix, "impersonate-group-prefix", env("IMPERSONATE_GROUP_PREFIX", ""), "put before group names when reading as a person: the API servers' --oidc-groups-prefix")
 	fs.DurationVar(&c.AccessTTL, "access-ttl", envDuration("ACCESS_TTL", 2*time.Minute), "how long an answer about what a person may see stands before Kubernetes is asked again")
 	fs.StringVar(&c.SherlockAPIURL, "sherlock-api-url", env("SHERLOCK_API_URL", "https://api.anthropic.com"), "the Claude API's address, for Sherlock")
+	fs.StringVar(&c.LocalMode, "local-mode", env("LOCAL_MODE", "read"), "what Watson may do in the cluster the console runs in: read, or write to allow changes after approval")
 	fs.StringVar(&c.SherlockSecret, "sherlock-secret", env("SHERLOCK_SECRET", ""), "namespace/name of the Secret to keep the Claude API key in (empty: in memory, lost on restart)")
 	c.SherlockAPIKey = os.Getenv("SHERLOCK_API_KEY")
 	fs.BoolVar(&c.UserPrefs, "user-prefs", envBool("USER_PREFS", true), "keep each signed-in person's preferences, such as table columns, with their account (in the settings ConfigMap); off, or with sign-in off, each browser keeps its own")
@@ -173,6 +177,9 @@ func splitList(s string) []string {
 
 func (c Config) validate() error {
 	var errs []error
+	if c.LocalMode != "read" && c.LocalMode != "write" {
+		errs = append(errs, fmt.Errorf("-local-mode must be read or write, not %q", c.LocalMode))
+	}
 	if c.ClusterName == "" {
 		errs = append(errs, errors.New("cluster name must not be empty"))
 	}

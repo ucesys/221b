@@ -35,6 +35,24 @@ type Settings struct {
 	// Sherlock is how Sherlock answers (P5-05); nil is the defaults, with
 	// Sherlock off everywhere.
 	Sherlock *Sherlock `json:"sherlock,omitempty"`
+	// Watson is how Watson approves changes (Phase 6); nil is the
+	// defaults.
+	Watson *Watson `json:"watson,omitempty"`
+}
+
+// Watson is what an administrator chooses for Watson.
+type Watson struct {
+	// TwoPerson requires a second person to approve every change on a
+	// cluster tagged production (P6-07).
+	TwoPerson bool `json:"twoPerson"`
+}
+
+// WatsonOrDefault returns the Watson settings in force.
+func (s Settings) WatsonOrDefault() Watson {
+	if s.Watson == nil {
+		return Watson{}
+	}
+	return *s.Watson
 }
 
 // Sherlock is what an administrator chooses for Sherlock. The API key is
@@ -228,6 +246,18 @@ func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
 	if in.Sherlock == nil {
 		in.Sherlock = s.Current().Sherlock
 	}
+	if in.Watson == nil {
+		in.Watson = s.Current().Watson
+	}
+	return s.update(ctx, in)
+}
+
+// UpdateWatson replaces the Watson settings.
+func (s *Service) UpdateWatson(ctx context.Context, w Watson) (State, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	in := s.Current().Settings
+	in.Watson = &w
 	return s.update(ctx, in)
 }
 

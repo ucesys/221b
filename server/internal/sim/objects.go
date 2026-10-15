@@ -264,7 +264,13 @@ func (s *Sim) workload(g *group, now time.Time) {
 		// An older, scaled-down ReplicaSet, as a rollout leaves behind.
 		oldLabels := map[string]string{"app": g.app, "pod-template-hash": "6b7c8d9e0"}
 		zero := int32(0)
-		old := &appsv1.ReplicaSet{TypeMeta: typeMeta("ReplicaSet"), ObjectMeta: objectMeta(g.ns, g.app+"-6b7c8d9e0", created, oldLabels), Spec: appsv1.ReplicaSetSpec{Replicas: &zero, Selector: &metav1.LabelSelector{MatchLabels: oldLabels}, Template: template}}
+		// It ran the image before the current one, so a rollback changes it.
+		oldTemplate := *template.DeepCopy()
+		oldTemplate.Labels = copyLabels(oldLabels)
+		if repo, _, ok := strings.Cut(image, ":"); ok {
+			oldTemplate.Spec.Containers[0].Image = repo + ":0.9"
+		}
+		old := &appsv1.ReplicaSet{TypeMeta: typeMeta("ReplicaSet"), ObjectMeta: objectMeta(g.ns, g.app+"-6b7c8d9e0", created, oldLabels), Spec: appsv1.ReplicaSetSpec{Replicas: &zero, Selector: &metav1.LabelSelector{MatchLabels: oldLabels}, Template: oldTemplate}}
 		old.Annotations = map[string]string{"deployment.kubernetes.io/revision": "2"}
 		old.OwnerReferences = rs.OwnerReferences
 		add(old)

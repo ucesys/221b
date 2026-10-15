@@ -47,6 +47,9 @@ func (p Person) groups() []string {
 	return append(out, "system:authenticated")
 }
 
+// ImpersonationGroups are the groups to impersonate the person with.
+func (p Person) ImpersonationGroups() []string { return p.groups() }
+
 // personClients keeps one client per person who read something live, so
 // the transport is built once for them. The TLS transport underneath is
 // shared across them by client-go; only the impersonation differs.

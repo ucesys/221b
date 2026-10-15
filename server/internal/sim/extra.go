@@ -14,7 +14,8 @@ import (
 
 // ---------- pod metrics ----------
 
-func (s *Sim) podMetrics(w http.ResponseWriter, _ *http.Request) {
+func (s *Sim) podMetrics(w http.ResponseWriter, r *http.Request) {
+	ns, name := r.PathValue("ns"), r.PathValue("name")
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.metrics {
@@ -40,7 +41,7 @@ func (s *Sim) podMetrics(w http.ResponseWriter, _ *http.Request) {
 	items := []item{}
 	for _, k := range keys {
 		p := s.pods[k]
-		if p == nil || p.Spec.NodeName == "" || !isReady(s.nodes[p.Spec.NodeName]) {
+		if p == nil || p.Spec.NodeName == "" || !isReady(s.nodes[p.Spec.NodeName]) || (ns != "" && p.Namespace != ns) || (name != "" && p.Name != name) {
 			continue
 		}
 		u := s.podUsage[k]
@@ -52,6 +53,14 @@ func (s *Sim) podMetrics(w http.ResponseWriter, _ *http.Request) {
 				"memory": resource.NewQuantity(u[1], resource.BinarySI).String(),
 			}}},
 		})
+	}
+	if name != "" {
+		if len(items) == 0 {
+			status(w, http.StatusNotFound, "NotFound", fmt.Sprintf("podmetrics.metrics.k8s.io %q not found", name))
+			return
+		}
+		writeJSON(w, map[string]any{"kind": "PodMetrics", "apiVersion": "metrics.k8s.io/v1beta1", "metadata": items[0].Metadata, "timestamp": items[0].Timestamp, "window": items[0].Window, "containers": items[0].Containers})
+		return
 	}
 	writeJSON(w, map[string]any{"kind": "PodMetricsList", "apiVersion": "metrics.k8s.io/v1beta1", "metadata": map[string]string{}, "items": items})
 }

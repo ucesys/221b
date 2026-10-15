@@ -35,6 +35,7 @@ import (
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/views"
+	"github.com/ucesys/221b/server/internal/watson"
 )
 
 // Store is what the API reads rows from; *live.Store implements it.
@@ -68,6 +69,8 @@ type Settings interface {
 	UpdateAcks(ctx context.Context, cluster string, change func([]acks.Ack) []acks.Ack) (settings.State, error)
 	// UpdateSherlock replaces Sherlock's settings (P5-05).
 	UpdateSherlock(ctx context.Context, sh settings.Sherlock) (settings.State, error)
+	// UpdateWatson replaces Watson's settings (P6-07).
+	UpdateWatson(ctx context.Context, w settings.Watson) (settings.State, error)
 }
 
 // Auth gates requests by session and serves the sign-in endpoints;
@@ -113,6 +116,11 @@ type Options struct {
 	Sherlock *sherlock.Service
 	// SherlockKeys holds the Claude API key.
 	SherlockKeys *sherlock.Keys
+	// Watson runs kubectl and helm commands (Phase 6); nil leaves it out.
+	Watson *watson.Service
+	// WatsonLocalWrite allows changes in the one cluster of a console
+	// without connections (tests).
+	WatsonLocalWrite bool
 	// Ready reports whether the cluster has been listed; it drives /readyz.
 	Ready func() bool
 	// UI serves the browser app.
@@ -283,6 +291,9 @@ func New(o Options) *Server {
 		s.handle("PUT /api/v1/sherlock/config", "sherlock-config-update", s.putSherlockConfig)
 		s.handle("PUT /api/v1/sherlock/key", "sherlock-key", s.putSherlockKey)
 		s.handle("DELETE /api/v1/sherlock/key", "sherlock-key", s.deleteSherlockKey)
+	}
+	if o.Watson != nil {
+		s.watsonRoutes()
 	}
 	if o.Prefs != nil && o.Auth != nil {
 		s.handle("GET /api/v1/prefs", "prefs", s.getPrefs)
