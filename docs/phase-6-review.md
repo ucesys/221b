@@ -16,7 +16,7 @@ Decisions worth a look, because they shape what you will see:
 - **ADR-52:** the dry run runs as the requester, the change as the approver.
 - **ADR-53:** every button that changes something only hands Watson a command line.
 - **ADR-54:** one dock for Sherlock and Watson, and windows that hold either or both (P6-09).
-- **ADR-55:** P1-05's image limit rises from 60 MB to 80 MB, as you decided; the image is about 67 MB.
+- **ADR-55:** P1-05's image limit rises from 60 MB to 80 MB, as you decided; the image is about 70 MB.
 
 ## Setting up for the review
 

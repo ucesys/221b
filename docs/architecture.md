@@ -549,7 +549,7 @@ Records 1 to 9 cover the Architecture table in the requirements; 10 to 17 were m
 - **Status:** Accepted (Phase 6).
 - **Context:** P6-01 asks for output identical to the CLIs', and P6-03 for no shell. Shipping the `kubectl` and `helm` binaries and starting them would give the output for free, but each start is a process that reads its own configuration and environment, and the image has no shell to quote arguments safely.
 - **Decision:** The server imports `k8s.io/kubectl` (v0.37) and `helm.sh/helm/v4` (v4.3). For kubectl it builds the command's own cobra command under a root `kubectl`, gives it a factory whose `RESTClientGetter` returns the cluster's REST config with the person's impersonation headers, and runs it with the parsed arguments, writing to the command's output; kubectl's fatal-error handler is replaced with a panic the runner catches, since it would otherwise exit the server. For Helm it calls the SDK's actions (list, status, history, get values, rollback) with a configuration from the same getter and prints the results the way the helm CLI does, with the same table and YAML writers. Arguments are split with shell-like quoting, but nothing is ever run through a shell, and flags that would point a command elsewhere (`--kubeconfig`, `--server`, `--as`, `--token`, files) are refused.
-- **Consequences:** The output is the CLIs' own, as kind tests show against the real binaries. kubectl's and Helm's packages add about 14 MB to the image, so P1-05's limit rises from 60 MB to 80 MB (ADR-55). Commands that read files, start editors or attach to pods are out of reach by construction. A kubectl upgrade is a module upgrade, tested like any other.
+- **Consequences:** The output is the CLIs' own, as kind tests show against the real binaries. kubectl's and Helm's packages add about 16 MB to the image, so P1-05's limit rises from 60 MB to 80 MB (ADR-55). Commands that read files, start editors or attach to pods are out of reach by construction. A kubectl upgrade is a module upgrade, tested like any other.
 
 ### ADR-50: Commands and cards live on the server, per person and cluster
 
@@ -589,6 +589,6 @@ Records 1 to 9 cover the Architecture table in the requirements; 10 to 17 were m
 ### ADR-55: The image may be up to 80 MB
 
 - **Status:** Accepted (Phase 6, changes P1-05).
-- **Context:** P1-05 set 60 MB. kubectl's command packages and the Helm SDK (ADR-49) bring the image to about 67 MB.
+- **Context:** P1-05 set 60 MB. kubectl's command packages and the Helm SDK (ADR-49) bring the image to about 70 MB.
 - **Decision:** The limit is 80 MB, checked in CI as before.
 - **Consequences:** A larger download on first install; nothing else changes.
