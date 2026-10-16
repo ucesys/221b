@@ -291,6 +291,11 @@ func New(o Options) *Server {
 	if o.Watson != nil {
 		s.watsonRoutes()
 	}
+	if (o.Sherlock != nil && o.Settings != nil) || o.Watson != nil {
+		for _, base := range []string{"/api/v1/", "/api/v1/clusters/{cluster}/"} {
+			s.handle("GET "+base+"assistants/events", "assistants-events", s.assistantsEvents)
+		}
+	}
 	if o.Auth != nil {
 		for _, r := range o.Auth.Routes() {
 			s.handle(r.Pattern, r.Name, r.Handler)

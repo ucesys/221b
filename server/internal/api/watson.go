@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -205,116 +204,89 @@ func (s *Server) watsonEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if n := s.streams.Add(1); n > int64(s.opts.MaxStreams) {
-		s.streams.Add(-1)
-		w.Header().Set("Retry-After", "10")
-		jsonError(w, http.StatusServiceUnavailable, "too many open event streams")
-		return
-	}
-	defer s.streams.Add(-1)
-	who := s.watsonWho(r)
-	sub := s.opts.Watson.Subscribe(c.ID)
-	defer s.opts.Watson.Unsubscribe(sub)
+	s.serveStream(w, r, map[string]streamPart{"": s.watsonPart(r, c)})
+}
 
-	rc := http.NewResponseController(w)
-	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-store")
-	h.Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	write := func(event string, v any) error {
-		b, _ := json.Marshal(v)
-		_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
-		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b); err != nil {
-			return err
-		}
-		return rc.Flush()
-	}
-	if _, err := io.WriteString(w, "retry: 3000\n\n"); err != nil {
-		return
-	}
-	status := s.watsonStatusFor(r, c)
-	if write("status", status) != nil {
-		return
-	}
-	// What each item has had: its revision and how many lines.
-	sent := map[string][2]int{}
-	var all []watsonItem
-	for _, it := range s.opts.Watson.Items(c, who) {
-		snap, lines, ok := s.opts.Watson.Snapshot(it.ID, 0)
-		if !ok {
-			continue
-		}
-		all = append(all, s.watsonView(snap, who, c, lines, 0))
-		sent[it.ID] = [2]int{snap.Rev, len(lines)}
-	}
-	if all == nil {
-		all = []watsonItem{}
-	}
-	if write("items", all) != nil {
-		return
-	}
-	beat := time.NewTicker(s.opts.Heartbeat)
-	defer beat.Stop()
-	statusTick := time.NewTicker(5 * time.Second)
-	defer statusTick.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
+// watsonPart streams the person's commands on a cluster: Watson's status,
+// every command, then each change.
+func (s *Server) watsonPart(r *http.Request, c watson.Cluster) streamPart {
+	return func(ctx context.Context, write func(string, any) error) {
+		who := s.watsonWho(r)
+		sub := s.opts.Watson.Subscribe(c.ID)
+		defer s.opts.Watson.Unsubscribe(sub)
+		status := s.watsonStatusFor(r, c)
+		if write("status", status) != nil {
 			return
-		case <-beat.C:
-			_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
-			if _, err := io.WriteString(w, ": keep-alive\n\n"); err != nil {
+		}
+		// What each item has had: its revision and how many lines.
+		sent := map[string][2]int{}
+		var all []watsonItem
+		for _, it := range s.opts.Watson.Items(c, who) {
+			snap, lines, ok := s.opts.Watson.Snapshot(it.ID, 0)
+			if !ok {
+				continue
+			}
+			all = append(all, s.watsonView(snap, who, c, lines, 0))
+			sent[it.ID] = [2]int{snap.Rev, len(lines)}
+		}
+		if all == nil {
+			all = []watsonItem{}
+		}
+		if write("items", all) != nil {
+			return
+		}
+		statusTick := time.NewTicker(5 * time.Second)
+		defer statusTick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
 				return
-			}
-			if rc.Flush() != nil {
-				return
-			}
-		case <-statusTick.C:
-			c2, ok := s.watsonClusterQuiet(r)
-			if ok {
-				c = c2
-			}
-			if now := s.watsonStatusFor(r, c); fmt.Sprint(now) != fmt.Sprint(status) {
-				status = now
-				if write("status", status) != nil {
-					return
+			case <-statusTick.C:
+				c2, ok := s.watsonClusterQuiet(r)
+				if ok {
+					c = c2
 				}
-			}
-		case id := <-sub.C:
-			// Batch what changes within 60 ms: output arrives a line at a time.
-			changed := map[string]bool{id: true}
-			timer := time.After(60 * time.Millisecond)
-		batch:
-			for {
-				select {
-				case id := <-sub.C:
-					changed[id] = true
-				case <-timer:
-					break batch
-				case <-r.Context().Done():
-					return
-				}
-			}
-			for id := range changed {
-				prev, known := sent[id]
-				snap, lines, ok := s.opts.Watson.Snapshot(id, prev[1])
-				if !ok || !s.opts.Watson.Visible(&snap, who, c) {
-					if known {
-						delete(sent, id)
-						if write("gone", map[string]string{"id": id}) != nil {
-							return
-						}
+				if now := s.watsonStatusFor(r, c); fmt.Sprint(now) != fmt.Sprint(status) {
+					status = now
+					if write("status", status) != nil {
+						return
 					}
-					continue
 				}
-				if known && snap.Rev == prev[0] {
-					continue
+			case id := <-sub.C:
+				// Batch what changes within 60 ms: output arrives a line at a time.
+				changed := map[string]bool{id: true}
+				timer := time.After(60 * time.Millisecond)
+			batch:
+				for {
+					select {
+					case id := <-sub.C:
+						changed[id] = true
+					case <-timer:
+						break batch
+					case <-ctx.Done():
+						return
+					}
 				}
-				v := s.watsonView(snap, who, c, lines, prev[1])
-				sent[id] = [2]int{snap.Rev, prev[1] + len(lines)}
-				if write("item", v) != nil {
-					return
+				for id := range changed {
+					prev, known := sent[id]
+					snap, lines, ok := s.opts.Watson.Snapshot(id, prev[1])
+					if !ok || !s.opts.Watson.Visible(&snap, who, c) {
+						if known {
+							delete(sent, id)
+							if write("gone", map[string]string{"id": id}) != nil {
+								return
+							}
+						}
+						continue
+					}
+					if known && snap.Rev == prev[0] {
+						continue
+					}
+					v := s.watsonView(snap, who, c, lines, prev[1])
+					sent[id] = [2]int{snap.Rev, prev[1] + len(lines)}
+					if write("item", v) != nil {
+						return
+					}
 				}
 			}
 		}

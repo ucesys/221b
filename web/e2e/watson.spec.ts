@@ -153,6 +153,21 @@ test('a typed read runs at once and prints what kubectl prints; shell syntax is 
   await expect(pane(page).getByTestId('watson-input')).toHaveValue('kubectl exec -it web-0 -- sh')
 })
 
+test('a page holds two event streams: its views, and Sherlock and Watson together (Phase 6 review)', async ({ page }) => {
+  // A browser opens at most six connections to a host over HTTP/1.1, for
+  // all its tabs: each stream a page holds open takes one of them.
+  const held = new Set<string>()
+  const stream = (u: string) => new URL(u).pathname.endsWith('/events')
+  page.on('request', (r) => {
+    if (stream(r.url())) held.add(r.url())
+  })
+  page.on('requestfinished', (r) => held.delete(r.url()))
+  page.on('requestfailed', (r) => held.delete(r.url()))
+  await open(page)
+  await page.waitForTimeout(1500)
+  expect([...held].map((u) => new URL(u).pathname).sort()).toEqual(['/api/v1/assistants/events', '/api/v1/events'])
+})
+
 test('every supported read runs as kubectl and helm would (P6-02)', async ({ request }) => {
   const ns = play.namespace
   const node = healthyWorkers(await snapshot(request))[0]!.name

@@ -60,9 +60,15 @@ func enableSherlock(t *testing.T, srv *httptest.Server, admin *http.Client, body
 // conversation reads the first event of the stream: the conversation.
 func conversation(t *testing.T, srv *httptest.Server, c *http.Client) sherlock.View {
 	t.Helper()
+	return conversationAt(t, srv, c, "/api/v1/sherlock/events", "conversation")
+}
+
+// conversationAt reads the conversation from a stream, by its event's name.
+func conversationAt(t *testing.T, srv *httptest.Server, c *http.Client, path, event string) sherlock.View {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/sherlock/events", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+path, nil)
 	r, err := c.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -73,8 +79,8 @@ func conversation(t *testing.T, srv *httptest.Server, c *http.Client) sherlock.V
 	for {
 		n, err := r.Body.Read(tmp)
 		buf = append(buf, tmp[:n]...)
-		if i := bytes.Index(buf, []byte("event: conversation\ndata: ")); i >= 0 {
-			rest := buf[i+len("event: conversation\ndata: "):]
+		if i := bytes.Index(buf, []byte("event: "+event+"\ndata: ")); i >= 0 {
+			rest := buf[i+len("event: "+event+"\ndata: "):]
 			if j := bytes.Index(rest, []byte("\n\n")); j >= 0 {
 				var v sherlock.View
 				if err := json.Unmarshal(rest[:j], &v); err != nil {
@@ -154,6 +160,10 @@ func TestSherlockAnswersAndAudits(t *testing.T) {
 	}
 	if m.FirstAt == nil || m.Usage == nil || m.Usage.OutputTokens == 0 || m.CostUSD <= 0 {
 		t.Fatalf("timing and use: %+v", m)
+	}
+	// The page reads the same conversation on the stream it shares with Watson.
+	if v := conversationAt(t, srv, ops, "/api/v1/assistants/events", "sherlock-conversation"); len(v.Messages) == 0 || v.Messages[len(v.Messages)-1].ID != m.ID {
+		t.Fatalf("shared stream: %+v", v)
 	}
 	// The default question cites something no tool showed: it is not a link.
 	m = askAndRead(t, srv, ops, svc, "What needs attention right now?")

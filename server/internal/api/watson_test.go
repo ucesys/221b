@@ -45,9 +45,15 @@ func watsonSetup(t *testing.T, who string, env, mode string) (*httptest.Server, 
 // says the items are as wanted.
 func watsonStream(t *testing.T, srv *httptest.Server, c *http.Client, ok func(map[string]watsonItem) bool) map[string]watsonItem {
 	t.Helper()
+	return watsonStreamAt(t, srv, c, "/api/v1/watson/events", "", ok)
+}
+
+// watsonStreamAt reads Watson's events from a stream, named with a prefix.
+func watsonStreamAt(t *testing.T, srv *httptest.Server, c *http.Client, path, prefix string, ok func(map[string]watsonItem) bool) map[string]watsonItem {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/watson/events", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+path, nil)
 	r, err := c.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +80,10 @@ func watsonStream(t *testing.T, srv *httptest.Server, c *http.Client, ok func(ma
 				if v, ok := strings.CutPrefix(l, "data: "); ok {
 					data = v
 				}
+			}
+			name, mine := strings.CutPrefix(name, prefix)
+			if !mine {
+				continue
 			}
 			switch name {
 			case "items":
@@ -129,7 +139,8 @@ func TestWatsonReadsAndApprovedChanges(t *testing.T) {
 	if ch.Status != watson.StatusPending || ch.Kind != "change" {
 		t.Fatalf("change %+v", ch)
 	}
-	watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[ch.ID].Plan != nil && m[ch.ID].Plan.Ready })
+	// The page reads Watson on the stream it shares with Sherlock.
+	watsonStreamAt(t, srv, c, "/api/v1/assistants/events", "watson-", func(m map[string]watsonItem) bool { return m[ch.ID].Plan != nil && m[ch.ID].Plan.Ready })
 	if s.Node("worker-001").Spec.Unschedulable {
 		t.Fatal("cordoned before approval")
 	}

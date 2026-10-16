@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -174,92 +173,65 @@ func (s *Server) sherlockEvents(w http.ResponseWriter, r *http.Request) {
 	if _, _, ok := s.lookup(w, r); !ok {
 		return
 	}
-	if n := s.streams.Add(1); n > int64(s.opts.MaxStreams) {
-		s.streams.Add(-1)
-		w.Header().Set("Retry-After", "10")
-		jsonError(w, http.StatusServiceUnavailable, "too many open event streams")
-		return
-	}
-	defer s.streams.Add(-1)
-	conv := s.opts.Sherlock.Conversation(convKey(r))
-	ch := conv.Subscribe()
-	defer conv.Unsubscribe(ch)
+	s.serveStream(w, r, map[string]streamPart{"": s.sherlockPart(r)})
+}
 
-	rc := http.NewResponseController(w)
-	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-store")
-	h.Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	write := func(event string, v any) error {
-		b, _ := json.Marshal(v)
-		_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
-		if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, b); err != nil {
-			return err
-		}
-		return rc.Flush()
-	}
-	if _, err := io.WriteString(w, "retry: 3000\n\n"); err != nil {
-		return
-	}
-	id := clusterID(r)
-	status := s.sherlockStatusFor(r, id)
-	if write("status", status) != nil {
-		return
-	}
-	last := conv.View()
-	if write("conversation", last) != nil {
-		return
-	}
-	beat := time.NewTicker(s.opts.Heartbeat)
-	defer beat.Stop()
-	statusTick := time.NewTicker(5 * time.Second)
-	defer statusTick.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
+// sherlockPart streams the person's conversation about the request's
+// cluster: its status, the conversation, then each change.
+func (s *Server) sherlockPart(r *http.Request) streamPart {
+	return func(ctx context.Context, write func(string, any) error) {
+		conv := s.opts.Sherlock.Conversation(convKey(r))
+		ch := conv.Subscribe()
+		defer conv.Unsubscribe(ch)
+		id := clusterID(r)
+		status := s.sherlockStatusFor(r, id)
+		if write("status", status) != nil {
 			return
-		case <-beat.C:
-			_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
-			if _, err := io.WriteString(w, ": keep-alive\n\n"); err != nil {
+		}
+		last := conv.View()
+		if write("conversation", last) != nil {
+			return
+		}
+		statusTick := time.NewTicker(5 * time.Second)
+		defer statusTick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
 				return
-			}
-			if rc.Flush() != nil {
-				return
-			}
-		case <-statusTick.C:
-			if now := s.sherlockStatusFor(r, id); now != status {
-				status = now
-				if write("status", status) != nil {
+			case <-statusTick.C:
+				if now := s.sherlockStatusFor(r, id); now != status {
+					status = now
+					if write("status", status) != nil {
+						return
+					}
+				}
+			case <-ch:
+				// Changes come faster than a browser needs them while an
+				// answer streams; one update per 50 ms is plenty.
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(50 * time.Millisecond):
+				}
+				select {
+				case <-ch:
+				default:
+				}
+				v := conv.View()
+				if v.Rev == last.Rev {
+					continue
+				}
+				var err error
+				if len(v.Messages) == len(last.Messages) && len(v.Messages) > 0 && v.ID == last.ID && v.Busy == last.Busy {
+					err = write("answer", map[string]any{"rev": v.Rev, "message": v.Messages[len(v.Messages)-1]})
+				} else {
+					err = write("conversation", v)
+				}
+				if err != nil {
 					return
 				}
+				last = v
 			}
-		case <-ch:
-			// Changes come faster than a browser needs them while an
-			// answer streams; one update per 50 ms is plenty.
-			select {
-			case <-r.Context().Done():
-				return
-			case <-time.After(50 * time.Millisecond):
-			}
-			select {
-			case <-ch:
-			default:
-			}
-			v := conv.View()
-			if v.Rev == last.Rev {
-				continue
-			}
-			var err error
-			if len(v.Messages) == len(last.Messages) && len(v.Messages) > 0 && v.ID == last.ID && v.Busy == last.Busy {
-				err = write("answer", map[string]any{"rev": v.Rev, "message": v.Messages[len(v.Messages)-1]})
-			} else {
-				err = write("conversation", v)
-			}
-			if err != nil {
-				return
-			}
-			last = v
 		}
 	}
 }

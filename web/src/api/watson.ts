@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from 'react'
 import { unauthorized } from './auth'
-import { whenLoaded } from '../lib/loaded'
+import { subscribeAssistant } from './assistants'
 import { apiPath } from '../lib/router'
 
 export interface WatsonLine {
@@ -138,39 +138,31 @@ export function useWatson(cluster: string, on = true): WatsonState {
   useEffect(() => {
     if (!on || typeof EventSource === 'undefined') return
     const mine = (s: WatsonState & { cluster: string }) => (s.cluster === cluster ? s : { cluster, status: null, items: [], live: false })
-    let es: EventSource | null = null
-    const cancel = whenLoaded(() => {
-      const src = new EventSource(apiPath('watson/events', cluster))
-      es = src
-      src.addEventListener('open', () => setState((s) => ({ ...mine(s), live: true })))
-      src.addEventListener('error', () => setState((s) => ({ ...mine(s), live: false })))
-      src.addEventListener('status', (e) => {
-        const status = JSON.parse((e as MessageEvent<string>).data) as WatsonStatus
-        setState((s) => ({ ...mine(s), status }))
-      })
-      src.addEventListener('items', (e) => {
-        const items = JSON.parse((e as MessageEvent<string>).data) as WatsonItem[]
-        setState((s) => ({ ...mine(s), items, live: true }))
-      })
-      src.addEventListener('item', (e) => {
-        const item = JSON.parse((e as MessageEvent<string>).data) as WatsonItem
-        setState((s) => {
-          const cur = mine(s)
-          return { ...cur, items: mergeItem(cur.items, item) }
-        })
-      })
-      src.addEventListener('gone', (e) => {
-        const { id } = JSON.parse((e as MessageEvent<string>).data) as { id: string }
-        setState((s) => {
-          const cur = mine(s)
-          return { ...cur, items: cur.items.filter((x) => x.id !== id) }
-        })
-      })
+    return subscribeAssistant(cluster, 'watson', {
+      open: () => setState((s) => ({ ...mine(s), live: true })),
+      error: () => setState((s) => ({ ...mine(s), live: false })),
+      event: (name, data) => {
+        if (name === 'status') {
+          const status = JSON.parse(data) as WatsonStatus
+          setState((s) => ({ ...mine(s), status }))
+        } else if (name === 'items') {
+          const items = JSON.parse(data) as WatsonItem[]
+          setState((s) => ({ ...mine(s), items, live: true }))
+        } else if (name === 'item') {
+          const item = JSON.parse(data) as WatsonItem
+          setState((s) => {
+            const cur = mine(s)
+            return { ...cur, items: mergeItem(cur.items, item) }
+          })
+        } else if (name === 'gone') {
+          const { id } = JSON.parse(data) as { id: string }
+          setState((s) => {
+            const cur = mine(s)
+            return { ...cur, items: cur.items.filter((x) => x.id !== id) }
+          })
+        }
+      },
     })
-    return () => {
-      cancel()
-      es?.close()
-    }
   }, [cluster, on])
   return state.cluster === cluster ? state : { status: null, items: [], live: false }
 }

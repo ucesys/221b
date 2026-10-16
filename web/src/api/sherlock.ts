@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from 'react'
 import { unauthorized } from './auth'
-import { whenLoaded } from '../lib/loaded'
+import { subscribeAssistant } from './assistants'
 import { apiPath } from '../lib/router'
 
 export interface SherlockRef {
@@ -133,37 +133,30 @@ export function useSherlock(cluster: string, on = true): SherlockState {
   useEffect(() => {
     if (!on || typeof EventSource === 'undefined') return
     const mine = (s: SherlockState & { cluster: string }) => (s.cluster === cluster ? s : { cluster, status: null, conv: null, live: false })
-    let es: EventSource | null = null
-    const cancel = whenLoaded(() => {
-      const src = new EventSource(apiPath('sherlock/events', cluster))
-      es = src
-      src.addEventListener('open', () => setState((s) => ({ ...mine(s), live: true })))
-      src.addEventListener('error', () => setState((s) => ({ ...mine(s), live: false })))
-      src.addEventListener('status', (e) => {
-        const status = JSON.parse((e as MessageEvent<string>).data) as SherlockStatus
-        setState((s) => ({ ...mine(s), status }))
-      })
-      src.addEventListener('conversation', (e) => {
-        const conv = JSON.parse((e as MessageEvent<string>).data) as Conversation
-        setState((s) => ({ ...mine(s), conv, live: true }))
-      })
-      src.addEventListener('answer', (e) => {
-        const { rev, message } = JSON.parse((e as MessageEvent<string>).data) as { rev: number; message: SherlockMsg }
-        setState((s) => {
-          const cur = mine(s)
-          if (!cur.conv) return cur
-          const msgs = cur.conv.messages.slice()
-          const i = msgs.findIndex((m) => m.id === message.id)
-          if (i >= 0) msgs[i] = message
-          else msgs.push(message)
-          return { ...cur, conv: { ...cur.conv, messages: msgs, rev } }
-        })
-      })
+    return subscribeAssistant(cluster, 'sherlock', {
+      open: () => setState((s) => ({ ...mine(s), live: true })),
+      error: () => setState((s) => ({ ...mine(s), live: false })),
+      event: (name, data) => {
+        if (name === 'status') {
+          const status = JSON.parse(data) as SherlockStatus
+          setState((s) => ({ ...mine(s), status }))
+        } else if (name === 'conversation') {
+          const conv = JSON.parse(data) as Conversation
+          setState((s) => ({ ...mine(s), conv, live: true }))
+        } else if (name === 'answer') {
+          const { rev, message } = JSON.parse(data) as { rev: number; message: SherlockMsg }
+          setState((s) => {
+            const cur = mine(s)
+            if (!cur.conv) return cur
+            const msgs = cur.conv.messages.slice()
+            const i = msgs.findIndex((m) => m.id === message.id)
+            if (i >= 0) msgs[i] = message
+            else msgs.push(message)
+            return { ...cur, conv: { ...cur.conv, messages: msgs, rev } }
+          })
+        }
+      },
     })
-    return () => {
-      cancel()
-      es?.close()
-    }
   }, [cluster, on])
   return state.cluster === cluster ? state : { status: null, conv: null, live: false }
 }

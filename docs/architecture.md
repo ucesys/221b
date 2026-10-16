@@ -117,6 +117,7 @@ All responses carry the security headers below. Every path needs a signed-in ses
 | `/api/v1/sherlock/key` | For administrators. `PUT` with `{"key": "…"}` saves the Claude API key in the Secret `<release>-sherlock`; `DELETE` removes it. Both are audited (`sherlock.key`), without the key. `409` when the chart supplies the key (`sherlock.existingSecret`). |
 | `/api/v1/watson` | Watson in this cluster for the person: whether it runs here, whether the cluster is read-only and how to change that, whether changes need a second person, the prompt, how long a card lasts, and the commands it runs. `/api/v1/clusters/{id}/watson` for a connection, as for every Watson path below. |
 | `/api/v1/watson/events` | The person's commands on the cluster as Server-Sent Events: `status`, then `items` with every command, then `item` as one changes (its new output lines only, at most every 60 ms) and `gone` when one is cleared. Every window of the session gets the same stream (P6-09). Cards waiting for a second person show to every other signed-in person. |
+| `/api/v1/assistants/events` | The two streams above on one connection, their events named `sherlock-status`, `sherlock-conversation`, …, `watson-items`, … (ADR-56). The browser uses this one; each part starts again with its status and full state whenever the stream connects. |
 | `/api/v1/watson/commands` | `POST` with `{"command": "…", "from": "…", "why": "…", "run": true}`: parses the line (several, one per line, from Sherlock), refuses what Watson does not run, starts reads at once when `run` is set, and puts each change on a card, working out its impact and server dry run as the requester; `202` with the commands. `GET …/{id}` is one command with all its output, for scripts. |
 | `/api/v1/watson/commands/{id}/approve`, `…/discard`, `…/stop` | `POST`: approves a card (it is checked again, then queued to run as the approver), discards it, or stops a command while it runs. `PUT /api/v1/watson/commands/{id}` with `{"command": "…"}` edits a card's command, which makes a new card. `POST /api/v1/watson/clear` removes the person's finished commands. |
 | `/api/v1/watson/config` | For administrators. `GET` and `PUT` with `{"twoPerson": true}`: whether changes on production clusters need a second person (P6-07), kept with the shared settings and audited (`watson.settings`). |
@@ -583,7 +584,7 @@ Records 1 to 9 cover the Architecture table in the requirements; 10 to 17 were m
 - **Status:** Accepted (Phase 6, extends ADR-47; changed at the Phase 6 review).
 - **Context:** The prototype docks Watson beside Sherlock, and P6-09 asks for Watson in a window of its own. As built first, each pane could leave on its own, share a window or split apart again; at the review, one window for both was asked for.
 - **Decision:** One dock holds both panes side by side, with a grip between them; on a narrow screen a switch shows one at a time. One button moves both to a single window of their own (`#/assistants`; `#/sherlock` and `#/watson` open the same window), with Sherlock only where it is on, and one button docks both back. While the window is open the main window shows an icon to bring it forward or dock them here. Ask Sherlock and the buttons that send Watson a command bring the window forward, where the answer or the card waits.
-- **Consequences:** Watson is in the dock wherever it runs, even with Sherlock off. Its stream is open while a tab shows the dock.
+- **Consequences:** Watson is in the dock wherever it runs, even with Sherlock off. Its stream is open while a tab shows the dock (ADR-56).
 
 ### ADR-55: The image may be up to 80 MB
 
@@ -591,3 +592,11 @@ Records 1 to 9 cover the Architecture table in the requirements; 10 to 17 were m
 - **Context:** P1-05 set 60 MB. kubectl's command packages and the Helm SDK (ADR-49) bring the image to about 70 MB.
 - **Decision:** The limit is 80 MB, checked in CI as before.
 - **Consequences:** A larger download on first install; nothing else changes.
+
+### ADR-56: A page holds two event streams
+
+- **Status:** Accepted (changed at the Phase 6 review).
+- **Context:** A browser opens at most six connections to a host over HTTP/1.1, for all its tabs, and an event stream holds one for as long as it is open. With Watson's stream beside the live views' and Sherlock's, each page held three: two tabs used every connection, and a third tab, or a page opened in another window, waited without loading. The browser tests in Firefox showed it as pages that never finished loading. Behind an Ingress with TLS the browser speaks HTTP/2 and the limit does not apply, but a port-forward or a plain-HTTP Service does not.
+- **Decision:** Sherlock and Watson share one stream per cluster, `assistants/events`, with their events named `sherlock-…` and `watson-…`. In the browser both panels subscribe to it; it opens with the first, once the page has loaded, and closes with the last. A panel that joins an open stream connects it again, so every panel starts from its status and full state. The live views keep their own stream, which reconnects when the views change. Sherlock's and Watson's own streams stay, for other clients and tests.
+- **Consequences:** A page holds two connections, as before Phase 6, so three tabs fit in HTTP/1.1. A browser test checks that a page holds exactly these two.
+

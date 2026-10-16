@@ -15,8 +15,9 @@ Decisions worth a look, because they shape what you will see:
 - **ADR-51:** how a card works out the impact, and the guards that make it lapse.
 - **ADR-52:** the dry run runs as the requester, the change as the approver.
 - **ADR-53:** every button that changes something only hands Watson a command line.
-- **ADR-54:** one dock for Sherlock and Watson, and windows that hold either or both (P6-09).
+- **ADR-54:** one dock for Sherlock and Watson, and one window for both (P6-09).
 - **ADR-55:** P1-05's image limit rises from 60 MB to 80 MB, as you decided; the image is about 70 MB.
+- **ADR-56:** Sherlock and Watson share one event stream, so a page holds two connections, not three.
 
 ## Setting up for the review
 
@@ -137,6 +138,10 @@ Changes you asked for, in the same pull request:
 7. **Helm tab.** A release has no **Roll back** or **Ask Sherlock** button; `helm rollback` typed in Watson still gets its card.
 8. **One window.** Sherlock and Watson move to a window of their own together, and dock back together (section 9).
 9. **Release name.** The README, scripts and CI install the chart as `k8s-console`, so its objects are named `k8s-console-221b`, as in your installation. A release whose name starts with a digit is now prefixed `k8s-console-`.
+
+Found while making these, and fixed:
+
+10. **Two event streams per page.** Watson's stream made three per page. A browser opens at most six connections to a host over plain HTTP/1.1 (a port-forward, or a Service without TLS), for all its tabs, so a third tab of the console waited without loading. Sherlock and Watson now share one stream (ADR-56). Behind an Ingress with TLS this never applied. CI: `watson.spec.ts` checks that a page holds exactly two streams; the Go tests read both assistants from the shared stream.
 
 ## Not in Phase 6
 
