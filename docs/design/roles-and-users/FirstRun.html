@@ -33,7 +33,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
         <div style="display: flex; flex-direction: column; gap: 5px;">
           <label for="tok" style="font-weight: 500;">Setup token</label>
           <input id="tok" type="password" autocomplete="off" style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 7px 10px; font-size: 13px; font-family: 'IBM Plex Mono', monospace; color: #13161B;">
-          <span style="color: #5B636E; font-size: 12px;">Not a password for you. A code the installer chose (<span style="font-family: 'IBM Plex Mono', monospace;">auth.setupToken</span>), so only they can create the first account. Ask whoever installed 221B.</span>
+          <span style="color: #5B636E; font-size: 12px;">Enter <span style="font-family: 'IBM Plex Mono', monospace;">auth.setupToken</span> if specified on deployment, if not leave blank.</span>
         </div>
         <div style="display: flex; flex-direction: column; gap: 5px;">
           <label for="uname" style="font-weight: 500;">Username</label>
@@ -56,11 +56,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
 
         <button type="button" style="border: 1px solid #0A6E69; background: #0A6E69; color: #FFFFFF; border-radius: 8px; padding: 9px 14px; font-size: 13.5px; font-weight: 500; cursor: pointer;">Create administrator</button>
 
-        <div style="display: flex; align-items: flex-start; gap: 8px; padding: 9px 11px; border-radius: 8px; background: #FBEFD9; color: #6B3A00; font-size: 12px;">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 2px;"><path d="M12 4l9 16H3L12 4z"/><path d="M12 10v4M12 17h.01"/></svg>
-          <span>This console is reachable from the network (Service type NodePort). Until the first account exists, anyone who can open this page can create it. That is what the setup token guards against.</span>
-        </div>
-        <p style="margin: 0; color: #5B636E; font-size: 12px;">Attempts are rate-limited and written to the audit log.</p>
       </section>
     </div>
 
@@ -69,7 +64,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
       <section aria-labelledby="sign-h" style="background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 6px 20px rgba(19,22,27,.06);">
         <div style="display: flex; flex-direction: column; gap: 6px;">
           <h1 id="sign-h" style="margin: 0; font-size: 18px; font-weight: 600;">Sign in</h1>
-          <p style="margin: 0; color: #3F4651;">Use your directory account.</p>
         </div>
 
         <div role="alert" style="display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 8px; background: #FBE6E4; color: #8E1F17;">
@@ -89,7 +83,6 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
           <input id="p2" type="password" autocomplete="current-password" style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 7px 10px; font-size: 13px; color: #13161B;">
         </div>
         <button type="button" style="border: 1px solid #0A6E69; background: #0A6E69; color: #FFFFFF; border-radius: 8px; padding: 9px 14px; font-size: 13.5px; font-weight: 500; cursor: pointer;">Sign in</button>
-        <p style="margin: 0; color: #5B636E; font-size: 12px;">The same message appears for a wrong password, an unknown user and a person in no listed group, so it reveals nothing about the directory. The audit log records which it was.</p>
       </section>
     </div>
 
