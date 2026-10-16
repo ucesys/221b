@@ -198,7 +198,7 @@ func BuildRoles(in RolesInput) RolesResponse {
 		out.Roles = append(out.Roles, row)
 	}
 	if missing == len(All) {
-		out.Message = "The four 221B roles are not on this cluster, so people see an empty console here. Apply the roles from the connection's page, or install the chart on this cluster."
+		out.Message = "The four 221B roles are not on this cluster, so people see an empty console here. Download the roles as YAML from this page and apply them, or install the chart on this cluster."
 	} else if missing > 0 {
 		out.Message = "Some of the 221B roles are missing on this cluster; the Permissions page names them."
 	}

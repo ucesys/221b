@@ -66,9 +66,17 @@ export function PermissionsPage({ route, now, cluster, onToast }: AdminProps) {
           </div>
         )}
         {differing.length > 0 && (
-          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }} data-testid="drift-details">
-            {differing.flatMap((r) => r.differences.map((d) => <li key={`${r.id}:${d}`}>{`${ROLE_NAME[r.id]}: ${d}`}</li>))}
-          </ul>
+          <>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }} data-testid="drift-details">
+              {differing.flatMap((r) => r.differences.map((d) => <li key={`${r.id}:${d}`}>{`${ROLE_NAME[r.id]}: ${d}`}</li>))}
+            </ul>
+            <div style={{ fontSize: 12.5 }}>
+              <a className="rk-link" href="/api/v1/admin/roles/manifest" download="221b-roles.yaml" data-testid="roles-yaml">
+                Download the roles as YAML
+              </a>{' '}
+              to put them back; 221B never writes a role itself.
+            </div>
+          </>
         )}
         {data && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 10 }}>

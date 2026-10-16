@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 
@@ -29,6 +30,9 @@ type RolesOptions struct {
 	Prefixes roles.Prefixes
 	// Monitor keeps the last comparison per cluster; nil makes one.
 	Monitor *roles.Monitor
+	// Bindings are the RoleBindings the chart renders, for the YAML of a
+	// cluster the chart is not installed in (RB-29).
+	Bindings []roles.BindingSpec
 }
 
 // RoleSource is what the Roles page asks of the sign-in side; *auth.Service
@@ -235,7 +239,24 @@ func (s *Server) getPermissions(w http.ResponseWriter, r *http.Request) {
 	writeValue(w, r, roles.BuildPermissions(s.opts.Roles.Templates, dep, nodes, s.opts.Roles.Enforce, d))
 }
 
+// getRolesManifest is the YAML of the four roles and the bindings of the
+// groups in values, in the definitions in use, for a cluster the chart is
+// not installed in (RB-29). Nothing writes it: a person who may create roles
+// applies it.
+func (s *Server) getRolesManifest(w http.ResponseWriter, r *http.Request) {
+	if !s.superAdmin(w, r) {
+		return
+	}
+	body := roles.Manifest(roles.ManifestInput{Templates: s.opts.Roles.Templates, Secrets: s.opts.Roles.Secrets, Bindings: s.opts.Roles.Bindings})
+	h := w.Header()
+	h.Set("Content-Type", "application/yaml; charset=utf-8")
+	h.Set("Content-Disposition", `attachment; filename="221b-roles.yaml"`)
+	h.Set("Cache-Control", "no-store")
+	_, _ = io.WriteString(w, body)
+}
+
 func (s *Server) rolesRoutes() {
+	s.handle("GET /api/v1/admin/roles/manifest", "admin-roles-manifest", s.getRolesManifest)
 	s.data("admin/roles", "admin-roles", s.getRoles)
 	s.data("admin/permissions", "admin-permissions", s.getPermissions)
 }

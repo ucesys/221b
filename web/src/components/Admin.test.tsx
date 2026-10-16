@@ -131,6 +131,10 @@ describe('Roles (RB-42)', () => {
     expect(container.querySelector('[data-role="admin"]')!.textContent).toContain('221b-admin')
     // Nothing on the page edits a role (RB-01).
     expect(screen.queryByText(/edit role|delete role|new role/i)).toBeNull()
+    // The YAML for a cluster the chart is not installed in is a download (RB-29).
+    const yaml = screen.getByTestId('roles-yaml')
+    expect(yaml.getAttribute('href')).toBe('/api/v1/admin/roles/manifest')
+    expect(yaml.getAttribute('download')).toBe('221b-roles.yaml')
   })
 
   it('opens a role: its holders, a local group with Add member for a SuperAdmin, and a binding by hand with no remove', async () => {
@@ -166,6 +170,7 @@ describe('Permissions (RB-44)', () => {
     await waitFor(() => expect(container.querySelectorAll('[data-perm]').length).toBeGreaterThan(0))
     expect(screen.getByTestId('drift').textContent).toContain('Differs from the shipped definitions: Admin.')
     expect(screen.getByTestId('drift-details').textContent).toContain('Admin: adds delete on nodes')
+    expect(screen.getByTestId('roles-yaml').getAttribute('href')).toBe('/api/v1/admin/roles/manifest')
     expect(container.querySelector('[data-role-summary="admin"]')!.textContent).toContain('reads 1 kind, changes 1')
     expect(screen.getByText('Strict mode: off')).toBeTruthy()
     expect(screen.getByText('SuperAdmin: read-only')).toBeTruthy()

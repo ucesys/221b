@@ -148,6 +148,10 @@ check("the file the console reads lists the groups of each role",
       cfg["lists"] == {"viewer": ["team-a-readers"], "admin": ["team-a-ops"], "superViewer": ["auditors"], "superAdmin": ["platform-admins"]} and
       cfg["ldap"]["userSearch"]["filter"] == "(uid=%s)" and cfg["ldap"]["groupSearch"]["filter"] == "(member=%s)", cfg)
 
+check("the file carries the RoleBindings it renders, for the YAML of other clusters (RB-29)",
+      sorted(b["name"] for b in cfg["bindings"]) == sorted(b["metadata"]["name"] for b in rbs) and
+      all(b["role"] in ("viewer", "admin") and b["subject"].startswith("221b-ldap:") for b in cfg["bindings"]), cfg["bindings"])
+
 # ---- OIDC with role lists keeps the provider's prefix
 d = docs("chart-oidc-roles.yaml")
 rbs = settings_bindings(d)

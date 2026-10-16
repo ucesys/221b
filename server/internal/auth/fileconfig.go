@@ -32,6 +32,10 @@ type FileConfig struct {
 		LDAP  string `json:"ldap"`
 	} `json:"prefixes"`
 	LDAP *LDAPFile `json:"ldap"`
+	// Bindings are the RoleBindings the chart renders, so that the console
+	// can write the same YAML for a cluster the chart is not installed in
+	// (RB-29). They grant nothing by being here.
+	Bindings []roles.BindingSpec `json:"bindings"`
 }
 
 // LDAPFile is auth.ldap.
@@ -101,6 +105,11 @@ func ReadFileConfig(path string) (FileConfig, error) {
 	for _, t := range []roles.Template{f.Templates.Admin, f.Templates.SuperAdmin} {
 		if t != "" && !t.Valid() {
 			return f, fmt.Errorf("%s: a role template must be full or readOnly, not %q", path, t)
+		}
+	}
+	for _, b := range f.Bindings {
+		if !b.Role.Bound() || b.Name == "" || b.Subject == "" || b.Namespace == "" {
+			return f, fmt.Errorf("%s: a binding needs a name, a group, a namespace and the role viewer or admin", path)
 		}
 	}
 	if f.RBACEnforce != "" && f.RBACEnforce != "off" && f.RBACEnforce != "strict" {

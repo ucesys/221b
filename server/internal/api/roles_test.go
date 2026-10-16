@@ -41,7 +41,10 @@ func getJSON(t *testing.T, c *http.Client, url string, into any) int {
 // The Roles and Permissions pages are for a SuperAdmin, show what the
 // cluster has, and report a role that allows more than the shipped one.
 func TestRolesPages(t *testing.T) {
-	mods := func(o *Options) { o.Roles = RolesOptions{Prefixes: roles.DefaultPrefixes(), Enforce: "strict"} }
+	mods := func(o *Options) {
+		o.Roles = RolesOptions{Prefixes: roles.DefaultPrefixes(), Enforce: "strict", Bindings: []roles.BindingSpec{
+			{Name: "221b-viewer-local-web-readers-1", Role: roles.Viewer, Subject: "221b-local:web-readers", Namespace: "web"}}}
+	}
 	srv, ops, _, auditOut, local, _ := multiSetupWith(t, "ops@corp.example", nil, mods)
 	viewer := signIn(t, srv, "viewer@corp.example")
 
@@ -78,6 +81,20 @@ func TestRolesPages(t *testing.T) {
 	}
 	if viewerRow == nil || len(viewerRow.Subjects) != 1 || viewerRow.Subjects[0].Name != "web-readers" || !viewerRow.Subjects[0].Managed {
 		t.Fatalf("Viewer subjects = %+v", viewerRow)
+	}
+
+	// The YAML for a cluster the chart is not installed in: SuperAdmin only.
+	if code := getJSON(t, viewer, srv.URL+"/api/v1/admin/roles/manifest", nil); code != http.StatusForbidden {
+		t.Errorf("a Viewer's manifest = %d, want 403", code)
+	}
+	if resp, err := ops.Get(srv.URL + "/api/v1/admin/roles/manifest"); err != nil || resp.StatusCode != http.StatusOK {
+		t.Errorf("manifest: %v %v", resp, err)
+	} else {
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if !strings.Contains(string(b), `name: "221b-admin"`) || !strings.Contains(string(b), "221b-local:web-readers") {
+			t.Errorf("the manifest lacks the roles or the bindings:\n%s", b)
+		}
 	}
 
 	var perms roles.PermissionsResponse

@@ -408,7 +408,7 @@ func run(args []string) error {
 		Audit:                   auditLog,
 		Access:                  people,
 		Impersonation:           api.Impersonation{UserPrefix: cfg.ImpersonateUserPrefix, GroupPrefix: cfg.ImpersonateGroupPrefix},
-		Roles:                   api.RolesOptions{Templates: authFile.RoleTemplates(), Secrets: cfg.SecretsRead, Enforce: authFile.RBACEnforce, Prefixes: rolePrefixes},
+		Roles:                   api.RolesOptions{Templates: authFile.RoleTemplates(), Secrets: cfg.SecretsRead, Enforce: authFile.RBACEnforce, Prefixes: rolePrefixes, Bindings: authFile.Bindings},
 		HTTPSRedirect:           cfg.HTTPSRedirect,
 		Ready:                   cluster.Ready,
 		UI:                      ui.Handler(),

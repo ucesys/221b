@@ -46,3 +46,26 @@ func TestFileConfig(t *testing.T) {
 		t.Error("a sync every 5 seconds was accepted")
 	}
 }
+
+func TestFileConfigBindings(t *testing.T) {
+	dir := t.TempDir()
+	write := func(body string) string {
+		p := filepath.Join(dir, "auth.json")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	f, err := auth.ReadFileConfig(write(`{"bindings":[{"name":"221b-viewer-x-1","role":"viewer","subject":"221b-local:x","group":"x","namespace":"web"}]}`))
+	if err != nil || len(f.Bindings) != 1 || f.Bindings[0].Subject != "221b-local:x" {
+		t.Fatalf("%+v %v", f.Bindings, err)
+	}
+	for _, bad := range []string{
+		`{"bindings":[{"name":"n","role":"superAdmin","subject":"g","namespace":"web"}]}`,
+		`{"bindings":[{"name":"n","role":"viewer","subject":"g"}]}`,
+	} {
+		if _, err := auth.ReadFileConfig(write(bad)); err == nil {
+			t.Errorf("%s was accepted", bad)
+		}
+	}
+}

@@ -245,6 +245,8 @@ before, and so cannot be. Renders "true" or nothing.
 {{- $cfg := dict "lists" $lists "localGroups" $groups "rbacEnforce" $v.rbac.enforce -}}
 {{- $_ := set $cfg "templates" (dict "admin" $v.rbac.roles.admin.template "superAdmin" $v.rbac.roles.superAdmin.template) -}}
 {{- $_ := set $cfg "prefixes" (dict "local" $v.auth.prefixes.local "ldap" $v.auth.prefixes.ldap) -}}
+{{- /* The RoleBindings this chart renders, so the console can write the same YAML for a cluster the chart is not installed in. */ -}}
+{{- $_ := set $cfg "bindings" (include "b221.bindingSpecs" . | fromJsonArray) -}}
 {{- if eq $v.auth.mode "ldap" -}}
 {{- $l := $v.auth.ldap -}}
 {{- $d := dict "url" $l.url "startTLS" (default false $l.startTLS) "bindDN" $l.bindDN "pageSize" ($l.pageSize | default 500 | int) "syncInterval" ($l.syncInterval | default "1h") -}}
