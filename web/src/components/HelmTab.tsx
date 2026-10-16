@@ -21,7 +21,6 @@ import { SideList, type SideGroup } from './SideList'
 import type { TabProps } from './tabs'
 import { colorLine } from './YamlView'
 import { peekHref } from '../lib/peek'
-import { AskSherlock } from './Sherlock'
 
 type ReleaseFilter = 'all' | 'deployed' | 'failed'
 const SUBTABS = ['pods', 'workloads', 'storage', 'network', 'other', 'values', 'notes', 'history'] as const
@@ -201,9 +200,6 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
               </span>
               <span className="rk-tag" style={{ fontSize: 11, padding: '2px 7px' }}>
                 revision {current.revision}
-              </span>
-              <span style={{ marginLeft: 'auto' }}>
-                <AskSherlock question={current.status === 'failed' ? `Why did the last upgrade of Helm release ${current.namespace}/${current.name} fail?` : `Tell me about Helm release ${current.namespace}/${current.name}`} />
               </span>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 18px', fontSize: 12.5, color: 'var(--fg3)' }} data-testid="release-facts">

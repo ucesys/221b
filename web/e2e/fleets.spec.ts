@@ -204,23 +204,25 @@ test('fleets are the cluster’s, the same for everyone who signs in', async ({ 
   }
 })
 
-test('column choices follow a signed-in person to another browser, and stay theirs', async ({ page, browser }) => {
+test('column choices stay in this browser, signed in or not (Phase 6 review)', async ({ page, browser }) => {
   await page.goto('/#/fleets')
   await expect(page.getByTestId('fleet-list')).toBeVisible()
   await page.getByRole('button', { name: /^Columns/ }).click()
   await page.getByTestId('fleet-cols-none').click()
   await expect(page.getByRole('button', { name: /^Columns/ })).toContainText(/(^|\D)0\/\d+/)
-  await page.waitForTimeout(1_000)
+  // Kept here, across a reload.
+  await page.reload()
+  await expect(page.getByTestId('fleet-list')).toBeVisible()
+  await expect(page.getByRole('button', { name: /^Columns/ })).toContainText(/(^|\D)0\/\d+/)
+  // Another browser, even signed in as the same person, starts from the defaults.
   const same = await signInAs(browser, E2E_USER)
-  const other = await signInAs(browser, E2E_VIEWER)
   try {
-    await same.goto('/#/fleets')
-    await expect(same.getByRole('button', { name: /^Columns/ })).toContainText(/(^|\D)0\/\d+/)
-    await other.goto('/#/fleets')
-    await expect(other.getByTestId('fleet-list')).toBeVisible()
-    await expect(other.getByRole('button', { name: /^Columns/ })).not.toContainText(/(^|\D)0\/\d+/)
+    await same.goto('/#/fleets', { waitUntil: 'domcontentloaded' })
+    await expect(same.getByTestId('fleet-list')).toBeVisible()
+    await expect(same.getByRole('button', { name: /^Columns/ })).not.toContainText(/(^|\D)0\/\d+/)
+    // And the server keeps no preferences.
+    expect((await same.request.get('/api/v1/prefs')).status()).toBe(404)
   } finally {
     await same.context().close()
-    await other.context().close()
   }
 })

@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from 'react'
 import { unauthorized } from './auth'
+import { subscribeAssistant } from './assistants'
 import { apiPath } from '../lib/router'
 
 export interface SherlockRef {
@@ -30,8 +31,6 @@ export interface SherlockMsg {
   text: string
   steps?: SherlockStep[]
   refs?: SherlockRef[]
-  /** Questions to ask next, offered as chips. */
-  follow?: string[]
   status?: 'thinking' | 'answering' | 'done' | 'stopped' | 'failed'
   error?: string
   at: string
@@ -40,6 +39,8 @@ export interface SherlockMsg {
   model?: string
   usage?: SherlockUsage
   costUSD?: number
+  /** What the answer changed in the asking window's view (P6U-10). */
+  view?: { label: string }[]
 }
 
 export interface Conversation {
@@ -75,10 +76,40 @@ export interface SherlockSettings {
   model: string
   dailyUSD: number
   monthlyUSD: number
+  /** Whether Sherlock may change the asking person's view (P6U-14); absent is on. */
+  viewControl?: boolean
+  /** The model's API and how to reach it; absent is the Claude API. */
+  provider?: SherlockProvider
+  /** Prices in US dollars per million tokens for a model that is not listed. */
+  priceIn?: number
+  priceOut?: number
+}
+
+export type ProviderKind = 'anthropic' | 'openai' | 'bedrock' | 'vertex'
+export type ProviderAuth = 'header' | 'aws' | 'google' | 'none'
+
+/** Where the model runs and how the console reaches it (Phase 6 review). */
+export interface SherlockProvider {
+  kind: ProviderKind
+  endpoint?: string
+  auth?: ProviderAuth
+  authHeader?: string
+  authPrefix?: string
+  headers?: Record<string, string>
+  query?: string
+  region?: string
+  project?: string
+  caCert?: string
 }
 
 export interface SherlockConfig {
   settings: SherlockSettings
+  /** The provider in force, with its defaults filled in. */
+  provider: SherlockProvider
+  /** The chart fixes the provider (sherlock.lockProvider). */
+  providerLocked: boolean
+  /** Whether the provider needs a stored credential. */
+  needsKey: boolean
   key: { set: boolean; source?: 'console' | 'chart'; setAt?: string; setBy?: string; store: 'secret' | 'memory' }
   spend: { day: string; dayUSD: number; dayAsked: number; month: string; monthUSD: number; monthAsked: number }
   models: SherlockModel[]
@@ -112,7 +143,30 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return data as T
 }
 
-export const askSherlock = (cluster: string, question: string) => call<Conversation>('POST', apiPath('sherlock/ask', cluster), { question })
+/** The console window whose view Sherlock may change, and that view (P6U-03, P6U-08). */
+export interface AskContext {
+  window: string
+  view: string
+}
+
+export const askSherlock = (cluster: string, question: string, ctx?: AskContext) =>
+  call<Conversation>('POST', apiPath('sherlock/ask', cluster), { question, ...(ctx ? { window: ctx.window, view: ctx.view } : {}) })
+
+/** Sends a window's result of a UI action back to the answer waiting for it (P6U-17). */
+export async function postUIResult(cluster: string, id: string, result: unknown): Promise<void> {
+  try {
+    await fetch(apiPath('sherlock/ui/' + encodeURIComponent(id), cluster), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(result) })
+  } catch {
+    // The answer gives up after 5 seconds and says so.
+  }
+}
+
+/** Where a main console window runs the UI actions sent to it. */
+let uiHandler: ((req: unknown, cluster: string) => void) | null = null
+
+export function setUIHandler(fn: ((req: unknown, cluster: string) => void) | null): void {
+  uiHandler = fn
+}
 export const stopSherlock = (cluster: string) => call<{ stopped: boolean }>('POST', apiPath('sherlock/stop', cluster), {})
 export const newSherlockChat = (cluster: string) => call<Conversation>('POST', apiPath('sherlock/new', cluster), {})
 export const fetchSherlockConfig = () => call<SherlockConfig>('GET', '/api/v1/sherlock/config')
@@ -134,30 +188,32 @@ export function useSherlock(cluster: string, on = true): SherlockState {
   useEffect(() => {
     if (!on || typeof EventSource === 'undefined') return
     const mine = (s: SherlockState & { cluster: string }) => (s.cluster === cluster ? s : { cluster, status: null, conv: null, live: false })
-    const es = new EventSource(apiPath('sherlock/events', cluster))
-    es.addEventListener('open', () => setState((s) => ({ ...mine(s), live: true })))
-    es.addEventListener('error', () => setState((s) => ({ ...mine(s), live: false })))
-    es.addEventListener('status', (e) => {
-      const status = JSON.parse((e as MessageEvent<string>).data) as SherlockStatus
-      setState((s) => ({ ...mine(s), status }))
+    return subscribeAssistant(cluster, 'sherlock', {
+      open: () => setState((s) => ({ ...mine(s), live: true })),
+      error: () => setState((s) => ({ ...mine(s), live: false })),
+      event: (name, data) => {
+        if (name === 'status') {
+          const status = JSON.parse(data) as SherlockStatus
+          setState((s) => ({ ...mine(s), status }))
+        } else if (name === 'conversation') {
+          const conv = JSON.parse(data) as Conversation
+          setState((s) => ({ ...mine(s), conv, live: true }))
+        } else if (name === 'ui') {
+          uiHandler?.(JSON.parse(data), cluster)
+        } else if (name === 'answer') {
+          const { rev, message } = JSON.parse(data) as { rev: number; message: SherlockMsg }
+          setState((s) => {
+            const cur = mine(s)
+            if (!cur.conv) return cur
+            const msgs = cur.conv.messages.slice()
+            const i = msgs.findIndex((m) => m.id === message.id)
+            if (i >= 0) msgs[i] = message
+            else msgs.push(message)
+            return { ...cur, conv: { ...cur.conv, messages: msgs, rev } }
+          })
+        }
+      },
     })
-    es.addEventListener('conversation', (e) => {
-      const conv = JSON.parse((e as MessageEvent<string>).data) as Conversation
-      setState((s) => ({ ...mine(s), conv, live: true }))
-    })
-    es.addEventListener('answer', (e) => {
-      const { rev, message } = JSON.parse((e as MessageEvent<string>).data) as { rev: number; message: SherlockMsg }
-      setState((s) => {
-        const cur = mine(s)
-        if (!cur.conv) return cur
-        const msgs = cur.conv.messages.slice()
-        const i = msgs.findIndex((m) => m.id === message.id)
-        if (i >= 0) msgs[i] = message
-        else msgs.push(message)
-        return { ...cur, conv: { ...cur.conv, messages: msgs, rev } }
-      })
-    })
-    return () => es.close()
   }, [cluster, on])
   return state.cluster === cluster ? state : { status: null, conv: null, live: false }
 }

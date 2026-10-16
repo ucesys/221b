@@ -109,6 +109,60 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "b221.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- if and (ne .Values.localCluster.mode "read") (ne .Values.localCluster.mode "write") }}
+{{- fail "localCluster.mode must be read or write" }}
+{{- end }}
+{{- if and (eq .Values.localCluster.mode "write") (eq .Values.auth.mode "none") }}
+---
+# Watson's changes with sign-in off (Phase 6): nobody is signed in to run
+# them as, so they run as the console itself. Nodes, to cordon, drain and
+# label them; the rest comes from localCluster.writeClusterRole.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "b221.clusterScopedName" . }}-watson-nodes
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "b221.clusterScopedName" . }}-watson-nodes
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "b221.clusterScopedName" . }}-watson-nodes
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "b221.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- if .Values.localCluster.writeClusterRole }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "b221.clusterScopedName" . }}-watson
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Values.localCluster.writeClusterRole }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "b221.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}
 ---
 # What it writes, all in its own namespace (X-03): its settings, in its
 # own ConfigMap, and the connections to other clusters, one Secret each

@@ -53,10 +53,9 @@ test('a LoadBalancer without an external IP shows as pending, with the reason', 
     const reason = await ip.locator('.rk-t').getAttribute('title')
     expect(reason).toMatch(/SyncLoadBalancerFailed|no load-balancer|waiting|controller/i)
 
-    // The summary card counts it, and filters on it.
-    const card = page.getByTestId('service-cards').getByRole('button', { name: /LoadBalancer without an external IP/ })
-    await expect(card).toContainText('1')
-    await card.click()
+    // No summary cards (removed at the Phase 6 review); the type filter finds it.
+    await expect(page.getByTestId('service-cards')).toHaveCount(0)
+    await page.getByRole('group', { name: 'Services by type' }).locator('[data-type="LoadBalancer"]').click()
     await expect(page).toHaveURL(/type=LoadBalancer/)
     await expect(page.locator('[data-service]')).toHaveCount((await snapshot(request, ['services'])).views.services!.rows.filter((r) => (r as { namespace: string; type: string; headless: boolean }).namespace === lb.namespace && (r as { type: string }).type === 'LoadBalancer').length)
 

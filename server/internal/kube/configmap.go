@@ -13,7 +13,7 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 
-	"github.com/ucesys/221b/server/internal/prefs"
+	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/version"
 )
@@ -68,7 +68,7 @@ func (c *ConfigMapStorage) Kind() string { return "configmap" }
 // means nothing has been saved yet.
 func (c *ConfigMapStorage) Load(ctx context.Context) ([]byte, error) {
 	b, err := c.LoadKey(ctx, c.key)
-	if errors.Is(err, prefs.ErrNotFound) {
+	if errors.Is(err, kv.ErrNotFound) {
 		return nil, settings.ErrNotFound
 	}
 	return b, err
@@ -77,13 +77,13 @@ func (c *ConfigMapStorage) Load(ctx context.Context) ([]byte, error) {
 // Save writes the settings.
 func (c *ConfigMapStorage) Save(ctx context.Context, b []byte) error { return c.SaveKey(ctx, c.key, b) }
 
-// LoadKey reads one key of the ConfigMap: the settings, or a person's
-// preferences.
+// LoadKey reads one key of the ConfigMap: the settings, or Sherlock's
+// spend.
 func (c *ConfigMapStorage) LoadKey(ctx context.Context, key string) ([]byte, error) {
 	raw, err := c.rest.Get().Namespace(c.namespace).Resource("configmaps").Name(c.name).Do(ctx).Raw()
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, prefs.ErrNotFound
+			return nil, kv.ErrNotFound
 		}
 		return nil, describeConfigMapError("reading", c.Ref(), err)
 	}
@@ -95,7 +95,7 @@ func (c *ConfigMapStorage) LoadKey(ctx context.Context, key string) ([]byte, err
 	}
 	v, ok := cm.Data[key]
 	if !ok {
-		return nil, prefs.ErrNotFound
+		return nil, kv.ErrNotFound
 	}
 	return []byte(v), nil
 }

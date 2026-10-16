@@ -95,17 +95,6 @@ export function ServicesTab({ cluster, now, onToast, route }: TabProps) {
     { title: 'Kubernetes', items: namespaces.filter((n) => systemNamespace(n) && (!lq || n.includes(lq))).map(item) },
   ]
 
-  const ingressed = inNs.filter((r) => r.hostnames.length).length
-  const nodePorts = inNs.filter((r) => r.nodePorts.length).length
-  const pendingLB = inNs.filter((r) => r.pending).length
-  const notReady = inNs.filter((r) => r.tone !== 'ok' && r.tone !== 'muted').length
-  const cards: { n: number; label: string; tone?: 'warn'; filter?: ServiceFilter }[] = [
-    { n: inNs.length, label: ns ? `Services in ${ns}` : `Services in ${nWord(namespaces.length, 'namespace', 'namespaces')}` },
-    { n: ingressed, label: 'published by an Ingress' },
-    { n: nodePorts, label: 'open on node ports of every node', filter: 'NodePort' },
-    { n: pendingLB, label: 'LoadBalancer without an external IP', tone: pendingLB ? 'warn' : undefined, filter: 'LoadBalancer' },
-    { n: notReady, label: 'not fully ready', tone: notReady ? 'warn' : undefined, filter: 'notReady' },
-  ]
   const selectedRow = selected ? (rows.find((r) => r.key === selected) ?? null) : null
 
   return (
@@ -118,23 +107,6 @@ export function ServicesTab({ cluster, now, onToast, route }: TabProps) {
             <span style={{ fontSize: 12.5, color: 'var(--fg3)' }} data-testid="services-summary">
               {loaded ? `${nWord(inNs.length, 'Service', 'Services')}${ns ? ` in ${ns}` : ''}` : 'Waiting for the first list of services…'}
             </span>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }} data-testid="service-cards">
-            {cards.map((c) => (
-              <button
-                key={c.label}
-                className="rk-card"
-                onClick={() => c.filter && set({ type: filter === c.filter ? undefined : c.filter })}
-                disabled={!c.filter}
-                aria-pressed={c.filter ? filter === c.filter : undefined}
-                style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 4, textAlign: 'left', font: 'inherit', color: 'inherit', cursor: c.filter ? 'pointer' : 'default', background: c.tone === 'warn' ? 'var(--warn-weak)' : undefined, borderColor: c.filter && filter === c.filter ? 'var(--accent)' : undefined }}
-              >
-                <span className="rk-num" style={{ fontSize: 22, fontWeight: 600, color: c.tone === 'warn' ? 'var(--warn)' : undefined }}>
-                  {c.n}
-                </span>
-                <span style={{ fontSize: 12, color: c.tone === 'warn' ? 'var(--warn)' : 'var(--fg3)' }}>{c.label}</span>
-              </button>
-            ))}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px' }}>
             <div className="rk-seg" role="group" aria-label="Services by type">

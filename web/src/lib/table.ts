@@ -20,6 +20,8 @@ export interface ColumnDef<R> {
   label: string
   /** How the sort tooltip names the column; the label, lower-cased, when absent. */
   sortName?: string
+  /** What the column shows, added to the heading's tooltip. */
+  hint?: string
   /** Grid track, and a narrower one while a details panel is open. */
   width: string
   compactWidth?: string

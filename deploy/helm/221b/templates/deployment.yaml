@@ -63,6 +63,8 @@ spec:
           env:
             - name: CLUSTER_NAME
               value: {{ .Values.clusterName | quote }}
+            - name: LOCAL_MODE
+              value: {{ .Values.localCluster.mode | quote }}
             - name: LISTEN
               value: ":8080"
             # The refresh rate until someone changes it in Settings, which
@@ -84,14 +86,18 @@ spec:
             # never values). Off hides the Helm tab.
             - name: SECRETS_READ
               value: {{ .Values.secrets.read | quote }}
-            # Whether each signed-in person's preferences, such as the
-            # columns each table shows, are kept with their account (in the
-            # settings ConfigMap) rather than in each browser.
-            - name: USER_PREFS
-              value: {{ .Values.preferences.perUser | quote }}
             # Sherlock (Phase 5): the Claude API, and where its key is kept.
             - name: SHERLOCK_API_URL
               value: {{ .Values.sherlock.apiURL | quote }}
+            {{- with .Values.sherlock.provider }}
+            # The model's API when the settings name none (Phase 6 review).
+            - name: SHERLOCK_PROVIDER
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- if .Values.sherlock.lockProvider }}
+            - name: SHERLOCK_LOCK_PROVIDER
+              value: "true"
+            {{- end }}
             {{- if eq .Values.connections.store "secrets" }}
             - name: SHERLOCK_SECRET
               value: {{ printf "%s/%s-sherlock" .Release.Namespace (include "b221.fullname" .) | quote }}

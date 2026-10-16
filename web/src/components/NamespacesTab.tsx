@@ -187,7 +187,7 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
     return m
   }, [filtered])
   // One Columns choice for every kind table, kept with the shared table state.
-  const table = useTable<ObjectRow>({ id: 'namespace-objects', columns: OBJECT_COLUMNS, rows: filtered, terms: objectTerms, now, defaultSort: { col: 'name', dir: 'asc' } })
+  const table = useTable<ObjectRow>({ id: 'namespace-objects', columns: OBJECT_COLUMNS, rows: filtered, terms: objectTerms, now, defaultSort: { col: 'name', dir: 'asc' }, drives: ['columns'] })
 
   const lq = listQuery.trim().toLowerCase()
   const listed = sorted.filter((n) => !lq || n.name.includes(lq) || n.releases.some((r) => r.includes(lq)))

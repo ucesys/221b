@@ -46,7 +46,8 @@ test('the cluster menu lists the console’s own cluster, and the API lists it w
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected', { timeout: 20_000 })
   const list = (await (await request.get('/api/v1/clusters')).json()) as { clusters: Record<string, unknown>[] }
   const local = list.clusters.find((c) => c.id === 'local')!
-  expect(local).toMatchObject({ local: true, mode: 'read' })
+  // The tests run it with Watson allowed to change it (localCluster.mode=write).
+  expect(local).toMatchObject({ local: true, mode: 'write' })
   expect(typeof local.server).toBe('string')
   // Nothing secret about the local connection leaves the server.
   expect(JSON.stringify(local)).not.toMatch(/token|kubeconfig|BEGIN/i)

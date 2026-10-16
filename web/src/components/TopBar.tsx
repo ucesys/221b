@@ -308,7 +308,7 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
             · refreshed <span className="rk-mono rk-num">{fmtClock(refreshedAt ?? updatedAt)}</span>
           </span>
         </span>
-        <button className="rk-icon-btn" aria-label="Settings" aria-haspopup="dialog" aria-expanded={settingsOpen} title="Settings: theme and refresh rate" onClick={onSettings}>
+        <button className="rk-icon-btn" aria-label="Settings" aria-current={settingsOpen ? 'page' : undefined} title="Settings" onClick={onSettings} data-testid="settings-btn">
           <GearIcon />
         </button>
         {me && <AccountMenu me={me} />}

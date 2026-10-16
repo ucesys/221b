@@ -20,7 +20,7 @@ export function parseRef(url: string): SherlockRef | null {
 export type RefTarget = { peek: string } | { href: string }
 
 /** The kinds whose details the console opens by name. */
-const OBJECT_KINDS = new Set([
+export const OBJECT_KINDS = new Set([
   'Deployment',
   'StatefulSet',
   'DaemonSet',
@@ -65,18 +65,32 @@ export function refTarget(r: SherlockRef, cluster: string): RefTarget | null {
   return p ? { peek: peekParam(p) } : null
 }
 
-// ---------- the panel in a window of its own ----------
+// ---------- the assistants' window ----------
+//
+// Sherlock (P5-08) and Watson (P6-09) leave the main window together, for
+// another monitor: one window holds both (decided at the Phase 6 review).
+// The window and the main one talk over a BroadcastChannel: the window says
+// hello every two seconds, and the main one docks nothing while it does.
+
+/** A panel of the dock. */
+export type Pane = 'sherlock' | 'watson'
 
 const CHANNEL = '221b-sherlock'
-const WINDOW = '221b-sherlock'
 
 export type PopMessage =
-  | { type: 'hello'; cluster: string }
-  | { type: 'bye' }
+  | { type: 'hello'; cluster: string; win?: string }
+  | { type: 'bye'; win?: string }
   | { type: 'cluster'; cluster: string }
   | { type: 'focus' }
+  /** The window closes, and the main window docks the panels again. */
   | { type: 'close' }
   | { type: 'open'; cluster: string; target: RefTarget }
+  /** Sherlock's window asks the main window it follows for its view (P6U-03), and it answers. */
+  | { type: 'view?'; req: string; window: string }
+  | { type: 'view'; req: string; window: string; view: string }
+  /** Undo of an answer's view changes, asked from any window (P6U-10), and its result. */
+  | { type: 'undo'; answer: number }
+  | { type: 'undone'; answer: number }
 
 let channel: BroadcastChannel | null = null
 const listeners = new Set<(m: PopMessage) => void>()
@@ -90,7 +104,7 @@ function chan(): BroadcastChannel | null {
   return channel
 }
 
-/** Whether this browser can move the panel to its own window. */
+/** Whether this browser can move the panels to a window of their own. */
 export function canPopOut(): boolean {
   return typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined' && typeof window.open === 'function'
 }
@@ -105,46 +119,59 @@ export function onPop(fn: (m: PopMessage) => void): () => void {
   return () => listeners.delete(fn)
 }
 
-let popup: Window | null = null
+/** The views that open the assistants' window; the first is the one to use. */
+export const WINDOW_VIEWS = ['assistants', 'sherlock', 'watson'] as const
 
-/** The hash of Sherlock's own window for a cluster. */
-export function sherlockHash(cluster: string): string {
-  return cluster === LOCAL ? '#/sherlock' : '#/c/' + encodeURIComponent(cluster) + '/sherlock'
+/** The hash of the assistants' window for a cluster. */
+export function windowHash(cluster: string): string {
+  return cluster === LOCAL ? '#/assistants' : '#/c/' + encodeURIComponent(cluster) + '/assistants'
 }
 
-/** Opens Sherlock in a window of its own; false when the browser refused. */
+const NAME = '221b-assistants'
+let popup: Window | null = null
+
+/** Opens the assistants' window; false when the browser refused. */
 export function popOut(cluster: string): boolean {
   if (popup && !popup.closed) {
     popup.focus()
     return true
   }
-  const url = window.location.pathname + window.location.search + sherlockHash(cluster)
-  popup = window.open(url, WINDOW, 'popup,width=760,height=900')
-  if (!popup) return false
-  popup.focus()
+  const url = window.location.pathname + window.location.search + windowHash(cluster)
+  const w = window.open(url, NAME, 'popup,width=1280,height=900')
+  if (!w) return false
+  popup = w
+  w.focus()
   return true
 }
 
-/** Brings the separate window forward, from a click in the main one. */
+/** Brings the assistants' window forward, from a click in the main one. */
 export function focusPopup(): void {
-  if (popup && !popup.closed) popup.focus()
-  else post({ type: 'focus' })
+  if (popup && !popup.closed) {
+    popup.focus()
+    return
+  }
+  post({ type: 'focus' })
 }
 
-/** How long a separate window may stay silent before it counts as gone. */
+/** How long the window may stay silent before it counts as gone. */
 const STALE_MS = 5000
 
 /**
- * In the main window: whether Sherlock is in a window of its own now. The
- * separate window says hello every 2 seconds and goodbye when it closes.
+ * In the main window: whether the assistants are in their own window now.
+ * The window says hello every 2 seconds and goodbye when it closes.
  */
-export function usePoppedOut(): boolean {
-  const [seen, setSeen] = useState(0)
+export function usePopped(): boolean {
+  const [wins, setWins] = useState<Record<string, number>>({})
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const off = onPop((m) => {
-      if (m.type === 'hello') setSeen(Date.now())
-      if (m.type === 'bye') setSeen(0)
+      if (m.type === 'hello') setWins((w) => ({ ...w, [m.win ?? 'assistants']: Date.now() }))
+      if (m.type === 'bye')
+        setWins((w) => {
+          const next = { ...w }
+          delete next[m.win ?? 'assistants']
+          return next
+        })
     })
     const t = setInterval(() => setNow(Date.now()), 1000)
     return () => {
@@ -152,22 +179,24 @@ export function usePoppedOut(): boolean {
       clearInterval(t)
     }
   }, [])
-  return seen > 0 && now - seen < STALE_MS
+  return Object.values(wins).some((at) => now - at < STALE_MS)
 }
 
-/** In the separate window: says hello until it closes. */
-export function useAnnounce(cluster: string): void {
+/** In the assistants' window: says it is open until it closes. */
+export function useAnnounce(cluster: string): string {
+  const [win] = useState(() => Math.random().toString(36).slice(2, 10))
   useEffect(() => {
-    const hello = () => post({ type: 'hello', cluster })
+    const hello = () => post({ type: 'hello', cluster, win })
     hello()
     const t = setInterval(hello, 2000)
-    const bye = () => post({ type: 'bye' })
+    const bye = () => post({ type: 'bye', win })
     window.addEventListener('pagehide', bye)
     return () => {
       clearInterval(t)
       window.removeEventListener('pagehide', bye)
     }
-  }, [cluster])
+  }, [cluster, win])
+  return win
 }
 
 /** The question an Ask Sherlock button asks about a pod, by what is wrong with it. */
@@ -184,9 +213,24 @@ export function podQuestion(p: { namespace: string; name: string; status?: strin
 }
 
 /** The question an alert's Ask Sherlock button asks. */
+/**
+ * The question an alert's Troubleshoot button asks (Phase 6 review): a
+ * troubleshooting report, in the format the system prompt gives for one.
+ */
+export function troubleshootQuestion(r: { kind: string; name: string; namespace?: string; status?: string; oom?: boolean; restarts?: number }): string {
+  const what = r.kind === 'node' ? `node ${r.name}` : r.kind === 'pvc' ? `volume claim ${r.namespace}/${r.name}` : `pod ${r.namespace}/${r.name}`
+  const why = [r.oom ? 'OOM-killed' : r.status, r.restarts ? `${r.restarts} restarts` : ''].filter(Boolean).join(', ')
+  return `Troubleshooting report for ${what}${why ? ` (${why})` : ''}`
+}
+
 export function alertQuestion(r: { kind: string; name: string; namespace?: string; status?: string; restarts?: number; oom?: boolean }): string {
   if (r.kind === 'node') return `What is wrong with node ${r.name}?`
   if (r.kind === 'pvc') return `Why is volume claim ${r.namespace}/${r.name} not bound?`
   if (r.oom) return `Why was pod ${r.namespace}/${r.name} OOM-killed?`
   return podQuestion({ namespace: r.namespace ?? '', name: r.name, status: r.status, restarts: r.restarts }, r.namespace ?? '', r.name)
+}
+
+/** The question a home card's Find deficiencies button asks (Phase 6 review). */
+export function reviewQuestion(cluster: string): string {
+  return `Deficiency review of cluster ${cluster}: where does its Kubernetes setup fall short of good practice, and what should change first?`
 }

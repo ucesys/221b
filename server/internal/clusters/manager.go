@@ -347,7 +347,8 @@ func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Cred
 		spec.ID, spec.Local, spec.Added = orig.ID, orig.Local, orig.Added
 		if spec.Local {
 			// The local cluster keeps its own connection; only how it is shown changes.
-			spec.Server, spec.CA, spec.CAInfo, spec.Auth, spec.Cred = orig.Server, orig.CA, orig.CAInfo, orig.Auth, orig.Cred
+			// Whether Watson may change it is the installation's (localCluster.mode).
+			spec.Server, spec.CA, spec.CAInfo, spec.Auth, spec.Cred, spec.Mode = orig.Server, orig.CA, orig.CAInfo, orig.Auth, orig.Cred, orig.Mode
 		}
 	} else {
 		spec.ID = Slug(spec.Name)

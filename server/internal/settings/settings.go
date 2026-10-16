@@ -18,6 +18,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/acks"
 	"github.com/ucesys/221b/server/internal/fleets"
+	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
 // Settings is what the Settings dialog changes for everyone.
@@ -35,6 +36,24 @@ type Settings struct {
 	// Sherlock is how Sherlock answers (P5-05); nil is the defaults, with
 	// Sherlock off everywhere.
 	Sherlock *Sherlock `json:"sherlock,omitempty"`
+	// Watson is how Watson approves changes (Phase 6); nil is the
+	// defaults.
+	Watson *Watson `json:"watson,omitempty"`
+}
+
+// Watson is what an administrator chooses for Watson.
+type Watson struct {
+	// TwoPerson requires a second person to approve every change on a
+	// cluster tagged production (P6-07).
+	TwoPerson bool `json:"twoPerson"`
+}
+
+// WatsonOrDefault returns the Watson settings in force.
+func (s Settings) WatsonOrDefault() Watson {
+	if s.Watson == nil {
+		return Watson{}
+	}
+	return *s.Watson
 }
 
 // Sherlock is what an administrator chooses for Sherlock. The API key is
@@ -48,7 +67,21 @@ type Sherlock struct {
 	// no cap.
 	DailyUSD   float64 `json:"dailyUSD"`
 	MonthlyUSD float64 `json:"monthlyUSD"`
+	// ViewControl lets Sherlock change the asking person's view (P6U-14);
+	// nil is on.
+	ViewControl *bool `json:"viewControl,omitempty"`
+	// Provider is the model's API and how to reach it (Phase 6 review); nil
+	// is the Claude API at the chart's sherlock.apiURL.
+	Provider *sherlock.Provider `json:"provider,omitempty"`
+	// PriceIn and PriceOut are the model's prices in US dollars per million
+	// tokens, for the spending caps, when it is not a listed Claude model;
+	// 0 counts it at the highest listed price.
+	PriceIn  float64 `json:"priceIn,omitempty"`
+	PriceOut float64 `json:"priceOut,omitempty"`
 }
+
+// ChangesView says whether Sherlock may change the asking person's view.
+func (s Sherlock) ChangesView() bool { return s.ViewControl == nil || *s.ViewControl }
 
 // DefaultSherlock is a fresh installation's: off, with caps in place.
 var DefaultSherlock = Sherlock{Model: "claude-opus-5-5", DailyUSD: 20, MonthlyUSD: 200}
@@ -61,7 +94,10 @@ func (s Settings) SherlockOrDefault() Sherlock {
 	return *s.Sherlock
 }
 
-var modelRE = regexp.MustCompile(`^[a-z0-9][a-z0-9.:@_-]{1,79}$`)
+// modelRE takes the model names of the providers Sherlock speaks: Claude's,
+// OpenAI's and Azure deployments', Bedrock's ids and inference profiles
+// (us.anthropic.claude-…-v1:0) and Vertex's publisher/model.
+var modelRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.:@_/+-]{0,127}$`)
 
 // MaxCapUSD bounds a cap, so a typo does not remove it in effect.
 const MaxCapUSD = 100_000
@@ -78,6 +114,16 @@ func (s Sherlock) Validate() error {
 	}
 	if s.DailyUSD > 0 && s.MonthlyUSD > 0 && s.DailyUSD > s.MonthlyUSD {
 		return fmt.Errorf("the daily cap is above the monthly cap")
+	}
+	for _, v := range []float64{s.PriceIn, s.PriceOut} {
+		if v < 0 || v > 10_000 || math.IsNaN(v) {
+			return fmt.Errorf("a price must be between $0 and $10,000 per million tokens")
+		}
+	}
+	if s.Provider != nil {
+		if err := s.Provider.Validate(); err != nil {
+			return err
+		}
 	}
 	if len(s.Clusters) > 1000 {
 		return fmt.Errorf("too many clusters")
@@ -228,6 +274,18 @@ func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
 	if in.Sherlock == nil {
 		in.Sherlock = s.Current().Sherlock
 	}
+	if in.Watson == nil {
+		in.Watson = s.Current().Watson
+	}
+	return s.update(ctx, in)
+}
+
+// UpdateWatson replaces the Watson settings.
+func (s *Service) UpdateWatson(ctx context.Context, w Watson) (State, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	in := s.Current().Settings
+	in.Watson = &w
 	return s.update(ctx, in)
 }
 

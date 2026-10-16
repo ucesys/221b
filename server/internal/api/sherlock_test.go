@@ -24,6 +24,11 @@ import (
 // key set and turned on for the local cluster, talking to a fake Claude.
 func sherlockSetup(t *testing.T, who string, deny map[string]bool) (*httptest.Server, *http.Client, *fakeclaude.Fake, *bytes.Buffer, *source, *sherlock.Service) {
 	t.Helper()
+	return sherlockSetupWith(t, who, deny, nil)
+}
+
+func sherlockSetupWith(t *testing.T, who string, deny map[string]bool, mod func(*sherlock.Options)) (*httptest.Server, *http.Client, *fakeclaude.Fake, *bytes.Buffer, *source, *sherlock.Service) {
+	t.Helper()
 	fake := fakeclaude.New()
 	fake.Delay = time.Millisecond
 	api := httptest.NewServer(fake)
@@ -31,7 +36,7 @@ func sherlockSetup(t *testing.T, who string, deny map[string]bool) (*httptest.Se
 	keys := sherlock.NewKeys(nil, "", nil)
 	var svc *sherlock.Service
 	srv, c, _, auditOut, local, _ := multiSetupWith(t, who, deny, func(o *Options) {
-		svc = sherlock.New(sherlock.Options{
+		so := sherlock.Options{
 			Client: &sherlock.Client{BaseURL: api.URL, Key: keys.Key},
 			Settings: func() sherlock.Settings {
 				sh := o.Settings.Current().SherlockOrDefault()
@@ -40,7 +45,11 @@ func sherlockSetup(t *testing.T, who string, deny map[string]bool) (*httptest.Se
 			Secrets: func() []string { return []string{keys.Key()} },
 			Audit:   o.Audit,
 			Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
-		})
+		}
+		if mod != nil {
+			mod(&so)
+		}
+		svc = sherlock.New(so)
 		o.Sherlock, o.SherlockKeys = svc, keys
 	})
 	t.Cleanup(svc.Wait)
@@ -60,9 +69,15 @@ func enableSherlock(t *testing.T, srv *httptest.Server, admin *http.Client, body
 // conversation reads the first event of the stream: the conversation.
 func conversation(t *testing.T, srv *httptest.Server, c *http.Client) sherlock.View {
 	t.Helper()
+	return conversationAt(t, srv, c, "/api/v1/sherlock/events", "conversation")
+}
+
+// conversationAt reads the conversation from a stream, by its event's name.
+func conversationAt(t *testing.T, srv *httptest.Server, c *http.Client, path, event string) sherlock.View {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/sherlock/events", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+path, nil)
 	r, err := c.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -73,8 +88,8 @@ func conversation(t *testing.T, srv *httptest.Server, c *http.Client) sherlock.V
 	for {
 		n, err := r.Body.Read(tmp)
 		buf = append(buf, tmp[:n]...)
-		if i := bytes.Index(buf, []byte("event: conversation\ndata: ")); i >= 0 {
-			rest := buf[i+len("event: conversation\ndata: "):]
+		if i := bytes.Index(buf, []byte("event: "+event+"\ndata: ")); i >= 0 {
+			rest := buf[i+len("event: "+event+"\ndata: "):]
 			if j := bytes.Index(rest, []byte("\n\n")); j >= 0 {
 				var v sherlock.View
 				if err := json.Unmarshal(rest[:j], &v); err != nil {
@@ -104,9 +119,13 @@ func askAndRead(t *testing.T, srv *httptest.Server, c *http.Client, svc *sherloc
 	return v.Messages[len(v.Messages)-1]
 }
 
-// The toolset reads and nothing else (P5-07). The names are listed here so
-// that a new tool is a reviewed change; and the Cluster interface they
-// reach has no method that writes, which the compiler holds them to.
+// Sherlock's toolset contains no tool that writes to a cluster or to
+// settings shared with others; its UI tools change only the asking
+// person's own view (P5-07 as reworded by P6U-16). The cluster tools are
+// listed here, so that a new one is a reviewed change, and the Cluster
+// interface they reach has no method that writes, which the compiler holds
+// them to. The UI tools are listed in TestSherlockUIActionsList and run in
+// the browser, which has no way to change a cluster but Watson's card.
 func TestSherlockToolsOnlyRead(t *testing.T) {
 	var names []string
 	for _, tl := range sherlockTools {
@@ -122,7 +141,7 @@ func TestSherlockToolsOnlyRead(t *testing.T) {
 		}
 	}
 	sort.Strings(names)
-	want := []string{"check_connection", "cluster_overview", "get_helm_release", "get_node", "get_object", "get_pod", "get_service", "get_yaml", "list_access", "list_alerts", "list_events", "list_fleets", "list_helm_releases", "list_nodes", "list_objects", "list_pods", "list_policies", "list_services", "pod_logs", "top", "trace_ingress", "who_can"}
+	want := []string{"check_connection", "cluster_overview", "get_helm_release", "get_node", "get_object", "get_pod", "get_service", "get_yaml", "list_access", "list_alerts", "list_events", "list_fleets", "list_helm_releases", "list_nodes", "list_objects", "list_pods", "list_policies", "list_services", "pod_logs", "review_cluster", "top", "trace_ingress", "who_can"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("the toolset changed; review that each new tool only reads, then update this list:\n got %v\nwant %v", names, want)
 	}
@@ -154,6 +173,10 @@ func TestSherlockAnswersAndAudits(t *testing.T) {
 	}
 	if m.FirstAt == nil || m.Usage == nil || m.Usage.OutputTokens == 0 || m.CostUSD <= 0 {
 		t.Fatalf("timing and use: %+v", m)
+	}
+	// The page reads the same conversation on the stream it shares with Watson.
+	if v := conversationAt(t, srv, ops, "/api/v1/assistants/events", "sherlock-conversation"); len(v.Messages) == 0 || v.Messages[len(v.Messages)-1].ID != m.ID {
+		t.Fatalf("shared stream: %+v", v)
 	}
 	// The default question cites something no tool showed: it is not a link.
 	m = askAndRead(t, srv, ops, svc, "What needs attention right now?")

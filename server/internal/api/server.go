@@ -31,10 +31,10 @@ import (
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
-	"github.com/ucesys/221b/server/internal/prefs"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/views"
+	"github.com/ucesys/221b/server/internal/watson"
 )
 
 // Store is what the API reads rows from; *live.Store implements it.
@@ -68,6 +68,8 @@ type Settings interface {
 	UpdateAcks(ctx context.Context, cluster string, change func([]acks.Ack) []acks.Ack) (settings.State, error)
 	// UpdateSherlock replaces Sherlock's settings (P5-05).
 	UpdateSherlock(ctx context.Context, sh settings.Sherlock) (settings.State, error)
+	// UpdateWatson replaces Watson's settings (P6-07).
+	UpdateWatson(ctx context.Context, w settings.Watson) (settings.State, error)
 }
 
 // Auth gates requests by session and serves the sign-in endpoints;
@@ -104,15 +106,17 @@ type Options struct {
 	Audit *audit.Log
 	// Cluster serves the details of pods, services, releases, logs and YAML.
 	Cluster Cluster
-	// Prefs keeps each signed-in person's own preferences (/api/v1/prefs);
-	// nil, or sign-in off, leaves them to the browser.
-	Prefs *prefs.Store
 	// Settings serves /api/v1/settings; nil leaves the path unserved.
 	Settings Settings
 	// Sherlock answers questions (Phase 5); nil leaves it out.
 	Sherlock *sherlock.Service
 	// SherlockKeys holds the Claude API key.
 	SherlockKeys *sherlock.Keys
+	// Watson runs kubectl and helm commands (Phase 6); nil leaves it out.
+	Watson *watson.Service
+	// WatsonLocalWrite allows changes in the one cluster of a console
+	// without connections (tests).
+	WatsonLocalWrite bool
 	// Ready reports whether the cluster has been listed; it drives /readyz.
 	Ready func() bool
 	// UI serves the browser app.
@@ -122,6 +126,14 @@ type Options struct {
 	Logger *slog.Logger
 	// MaxStreams caps concurrent event streams.
 	MaxStreams int
+	// SherlockDefaultURL is the Claude API's address when the settings name
+	// no provider; SherlockProviderLocked keeps the settings from changing
+	// the provider (the chart's sherlock.lockProvider).
+	SherlockDefaultURL     string
+	SherlockProviderLocked bool
+	// SherlockDefaultProvider is the provider when the settings name none
+	// (the chart's sherlock.provider), and the only one when locked.
+	SherlockDefaultProvider sherlock.Provider
 	// Heartbeat is how often an idle event stream sends a comment, so
 	// proxies do not close it.
 	Heartbeat time.Duration
@@ -278,17 +290,20 @@ func New(o Options) *Server {
 			s.handle("POST "+base+"sherlock/ask", "sherlock-ask", s.postSherlockAsk)
 			s.handle("POST "+base+"sherlock/stop", "sherlock-stop", s.postSherlockStop)
 			s.handle("POST "+base+"sherlock/new", "sherlock-new", s.postSherlockNew)
+			s.handle("POST "+base+"sherlock/ui/{id}", "sherlock-ui", s.postSherlockUI)
 		}
 		s.handle("GET /api/v1/sherlock/config", "sherlock-config", s.getSherlockConfig)
 		s.handle("PUT /api/v1/sherlock/config", "sherlock-config-update", s.putSherlockConfig)
 		s.handle("PUT /api/v1/sherlock/key", "sherlock-key", s.putSherlockKey)
 		s.handle("DELETE /api/v1/sherlock/key", "sherlock-key", s.deleteSherlockKey)
 	}
-	if o.Prefs != nil && o.Auth != nil {
-		s.handle("GET /api/v1/prefs", "prefs", s.getPrefs)
-		s.handle("PUT /api/v1/prefs", "prefs-update", s.putPrefs)
-		// The same as a beacon, which can only POST, when a page goes away.
-		s.handle("POST /api/v1/prefs", "prefs-update", s.putPrefs)
+	if o.Watson != nil {
+		s.watsonRoutes()
+	}
+	if (o.Sherlock != nil && o.Settings != nil) || o.Watson != nil {
+		for _, base := range []string{"/api/v1/", "/api/v1/clusters/{cluster}/"} {
+			s.handle("GET "+base+"assistants/events", "assistants-events", s.assistantsEvents)
+		}
 	}
 	if o.Auth != nil {
 		for _, r := range o.Auth.Routes() {

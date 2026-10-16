@@ -154,3 +154,43 @@ button.rk-card:hover:not(:disabled) {
 /* The account button: the person's initials in a circle. */
 .rk-avatar-btn { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line2); background: var(--accent-weak); color: var(--accent); font: inherit; font-size: 11.5px; font-weight: 600; letter-spacing: .02em; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }
 .rk-avatar-btn:hover, .rk-avatar-btn[aria-expanded="true"] { border-color: var(--accent); }
+
+/* A row Sherlock highlights (P6U-05, P6U-18): a thick outline and a bar at
+   its start, so it is not shown by colour alone; it fades unless motion is
+   reduced. */
+.rk-gr[data-highlight='true'] {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  box-shadow: inset 5px 0 0 var(--accent);
+  background: var(--accent-weak);
+  animation: rk-hl 4s ease-out forwards;
+}
+@keyframes rk-hl {
+  0%, 75% { outline-color: var(--accent); }
+  100% { outline-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rk-gr[data-highlight='true'] { animation: none; }
+}
+
+/* What Sherlock changed in the view, with Undo (P6U-10). */
+.rk-viewnote {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.rk-viewnote .rk-btn { flex: none; }
+
+/* Settings page: on a narrow screen the sections sit in a row above. */
+@media (max-width: 720px) {
+  .rk-setnav { flex: 1 1 100% !important; flex-direction: row !important; overflow-x: auto; position: static !important; }
+  .rk-setnav a { flex: 1 0 auto; }
+}
+.rk-frow > .rk-ffield { flex: 1 1 220px; }
+.rk-frow > .rk-fwide { flex-basis: 100%; }

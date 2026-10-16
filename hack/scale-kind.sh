@@ -80,7 +80,7 @@ endstep
 step "Install the console"
 kubectl create namespace "$NS"
 kubectl label namespace "$NS" pod-security.kubernetes.io/enforce=restricted
-helm install console "$ROOT/deploy/helm/221b" -n "$NS" \
+helm install k8s-console "$ROOT/deploy/helm/221b" -n "$NS" \
   --set clusterName=kwok-scale \
   --set image.repository="${IMAGE%:*}" --set image.tag="${IMAGE##*:}" --set image.pullPolicy=Never \
   --set service.type=NodePort --set service.nodePort=30080 \

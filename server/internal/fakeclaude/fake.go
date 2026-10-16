@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -57,6 +58,9 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case strings.HasSuffix(r.URL.Path, "/v1/messages") && r.Method == http.MethodPost:
 		f.messages(w, r)
+		return
+	case strings.HasSuffix(r.URL.Path, "/chat/completions") && r.Method == http.MethodPost:
+		f.chat(w, r)
 		return
 	}
 	http.NotFound(w, r)
@@ -128,11 +132,12 @@ func (f *Fake) messages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	question, round, results := where(req.Messages)
+	question, view := splitView(question)
 	if strings.Contains(strings.ToLower(question), "overloaded") {
 		apiError(w, 529, "overloaded_error", "Overloaded")
 		return
 	}
-	reply := script(question, round, results)
+	reply := scripted(question, view, round, results)
 	f.stream(w, r, len(body), reply)
 }
 
@@ -212,12 +217,174 @@ func where(msgs []message) (question string, round int, results []string) {
 	return "", round, results
 }
 
+// splitView takes the console's view state (P6U-03) out of a question.
+func splitView(q string) (question, view string) {
+	i := strings.Index(q, "<console-view>")
+	if i < 0 {
+		return q, ""
+	}
+	j := strings.Index(q[i:], "</console-view>")
+	if j < 0 {
+		return q[:i], q[i+len("<console-view>"):]
+	}
+	return strings.TrimSpace(q[:i] + q[i+j+len("</console-view>"):]), strings.TrimSpace(q[i+len("<console-view>") : i+j])
+}
+
+// reDirective is a scripted tool call in a question: [[view_filter {...}]].
+var reDirective = regexp.MustCompile(`\[\[([a-z_]+)(?:\s+(\{.*?\}))?\]\]`)
+
+// scripted answers questions that script their tool calls, one per round,
+// and questions about what the console shows; script answers the rest.
+func scripted(question, view string, round int, results []string) reply {
+	last := ""
+	if len(results) > 0 {
+		last = results[0]
+	}
+	if found := reDirective.FindAllStringSubmatch(question, -1); len(found) > 0 {
+		// [[sleep 2000]] waits before the next call, as a slow model would.
+		type call struct {
+			tool, input string
+			pause       time.Duration
+		}
+		var calls []call
+		var pause time.Duration
+		for _, c := range found {
+			if c[1] == "sleep" {
+				continue
+			}
+			calls = append(calls, call{tool: c[1], input: c[2], pause: pause})
+			pause = 0
+		}
+		for _, c := range regexp.MustCompile(`\[\[sleep (\d+)\]\]`).FindAllStringSubmatchIndex(question, -1) {
+			ms, _ := strconv.Atoi(question[c[2]:c[3]])
+			// The pause goes before the first call after it.
+			before := 0
+			for _, d := range reDirective.FindAllStringSubmatchIndex(question[:c[0]], -1) {
+				if question[d[2]:d[3]] != "sleep" {
+					before++
+				}
+			}
+			if before < len(calls) {
+				calls[before].pause += time.Duration(ms) * time.Millisecond
+			} else {
+				pause += time.Duration(ms) * time.Millisecond
+			}
+		}
+		if round < len(calls) {
+			c := calls[round]
+			var input any = map[string]any{}
+			if c.input != "" {
+				_ = json.Unmarshal([]byte(c.input), &input)
+			}
+			return reply{text: []string{fmt.Sprintf("Step %d.", round+1)}, tool: c.tool, input: input, pause: c.pause}
+		}
+		return reply{text: []string{uiSummary(last)}, pause: pause}
+	}
+	// Two of the evaluation's UI tasks, so its run against this fake
+	// checks the stand-in window too.
+	for phrase, call := range map[string][2]string{
+		"only the control-plane nodes": {"view_open", `{"tab":"nodes","filters":{"role":"control-plane"}}`},
+		"only the alerts about nodes":  {"view_open", `{"tab":"alerts","filters":{"kind":"nodes"}}`},
+	} {
+		if strings.Contains(strings.ToLower(question), phrase) {
+			if round == 0 {
+				var input any
+				_ = json.Unmarshal([]byte(call[1]), &input)
+				return reply{text: []string{"Opening it."}, tool: call[0], input: input}
+			}
+			return reply{text: []string{uiSummary(last)}}
+		}
+	}
+	// The home page's deficiency review.
+	if strings.Contains(strings.ToLower(question), "deficiency review") {
+		if round == 0 {
+			return reply{text: []string{"Reviewing the cluster."}, tool: "review_cluster", input: map[string]any{}}
+		}
+		var r struct {
+			Findings []struct {
+				Area     string `json:"area"`
+				Severity string `json:"severity"`
+				Title    string `json:"title"`
+				Count    int    `json:"count"`
+			} `json:"findings"`
+		}
+		_ = json.Unmarshal([]byte(last), &r)
+		var b strings.Builder
+		fmt.Fprintf(&b, "**Deficiency review**: %d findings.\n\n", len(r.Findings))
+		for i, f := range r.Findings {
+			if i == 8 {
+				break
+			}
+			fmt.Fprintf(&b, "- %s (%s, %s): %d\n", f.Title, f.Area, f.Severity, f.Count)
+		}
+		return reply{text: []string{b.String()}}
+	}
+	if strings.Contains(strings.ToLower(question), "this node") {
+		var v struct {
+			Details struct {
+				Open string `json:"open"`
+			} `json:"details"`
+		}
+		_ = json.Unmarshal([]byte(view), &v)
+		if name, ok := strings.CutPrefix(v.Details.Open, "node:"); ok && name != "" {
+			if round == 0 {
+				return reply{tool: "get_node", input: map[string]any{"name": name}}
+			}
+			return reply{text: []string{fmt.Sprintf("[%s](221b://Node/%s), the node you have open: %s", name, name, summarize(last))}}
+		}
+		return reply{text: []string{"No node is open on your screen; name the node."}}
+	}
+	return script(question, round, results)
+}
+
+// uiSummary words the result of the last scripted call.
+func uiSummary(last string) string {
+	var r struct {
+		Applied bool   `json:"applied"`
+		Error   string `json:"error"`
+		Note    string `json:"note"`
+		Link    string `json:"link"`
+		View    struct {
+			Tab     string `json:"tab"`
+			Details struct {
+				State string `json:"state"`
+			} `json:"details"`
+		} `json:"view"`
+	}
+	if json.Unmarshal([]byte(last), &r) != nil {
+		return "Done: " + summarize(last)
+	}
+	var b strings.Builder
+	switch {
+	case r.Error != "":
+		b.WriteString("I could not: " + r.Error)
+	case r.Note != "":
+		b.WriteString("You changed the view yourself, so I left it as it is.")
+	case r.Applied:
+		b.WriteString("Done.")
+		if r.View.Tab != "" {
+			b.WriteString(" You are on " + r.View.Tab + ".")
+		}
+	default:
+		b.WriteString("Done: " + summarize(last))
+	}
+	if r.View.Details.State == "not available" {
+		b.WriteString(" That object is not available to you.")
+	}
+	if r.Link != "" {
+		fmt.Fprintf(&b, " [Open it there](%s).", r.Link)
+	}
+	return b.String()
+}
+
 // reply is what the fake answers: text, then optionally a tool call.
 type reply struct {
 	text  []string
 	tool  string
 	input any
 	slow  bool
+	// pause is waited before the reply starts.
+	pause time.Duration
 }
 
 var (
@@ -398,14 +565,6 @@ func script(question string, round int, results []string) reply {
 		// A link to something no tool showed, which the console must not
 		// keep as a link.
 		b.WriteString("\nNothing is wrong with [ghost](221b://Pod/nowhere/ghost).\n")
-		if len(r.Alerts) > 0 {
-			a := r.Alerts[0]
-			if a.Kind == "pod" {
-				fmt.Fprintf(&b, "\nAsk next: Tell me about pod %s/%s | Which pods use the most memory?\n", a.Namespace, a.Name)
-			} else {
-				fmt.Fprintf(&b, "\nAsk next: What is wrong with node %s? | Which pods use the most memory?\n", a.Name)
-			}
-		}
 		return reply{text: []string{b.String()}}
 	}
 }
@@ -428,6 +587,13 @@ func summarize(s string) string {
 }
 
 func (f *Fake) stream(w http.ResponseWriter, r *http.Request, inBytes int, rep reply) {
+	if rep.pause > 0 {
+		select {
+		case <-time.After(rep.pause):
+		case <-r.Context().Done():
+			return
+		}
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -525,4 +691,107 @@ func chunks(s string, n int) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// chat serves the Chat Completions API with the same scripts, for a
+// console set to an OpenAI-compatible provider (Phase 6 review): the
+// conversation is read back into the Messages API's shape, and the reply
+// streams as chat completion chunks.
+func (f *Fake) chat(w http.ResponseWriter, r *http.Request) {
+	var body json.RawMessage
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<20)).Decode(&body); err != nil {
+		apiError(w, 400, "invalid_request_error", "the body is not JSON")
+		return
+	}
+	f.mu.Lock()
+	f.requests = append(f.requests, body)
+	if len(f.requests) > MaxRequests {
+		f.requests = f.requests[len(f.requests)-MaxRequests:]
+	}
+	f.mu.Unlock()
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") || strings.Contains(auth, "invalid") {
+		apiError(w, 401, "invalid_api_key", "Incorrect API key provided")
+		return
+	}
+	var req struct {
+		Model    string `json:"model"`
+		Stream   bool   `json:"stream"`
+		Messages []struct {
+			Role       string  `json:"role"`
+			Content    *string `json:"content"`
+			ToolCallID string  `json:"tool_call_id"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil || len(req.Messages) == 0 || !req.Stream {
+		apiError(w, 400, "invalid_request_error", "messages and stream are required")
+		return
+	}
+	var msgs []message
+	for _, m := range req.Messages {
+		text := ""
+		if m.Content != nil {
+			text = *m.Content
+		}
+		switch m.Role {
+		case "system":
+		case "assistant":
+			msgs = append(msgs, message{Role: "assistant", Content: []block{{Type: "text", Text: text}}})
+		case "tool":
+			c, _ := json.Marshal(text)
+			b := block{Type: "tool_result", ToolUseID: m.ToolCallID, Content: c}
+			if n := len(msgs); n > 0 && msgs[n-1].Role == "user" && len(msgs[n-1].Content) > 0 && msgs[n-1].Content[0].Type == "tool_result" {
+				msgs[n-1].Content = append(msgs[n-1].Content, b)
+			} else {
+				msgs = append(msgs, message{Role: "user", Content: []block{b}})
+			}
+		default:
+			msgs = append(msgs, message{Role: "user", Content: []block{{Type: "text", Text: text}}})
+		}
+	}
+	question, round, results := where(msgs)
+	question, view := splitView(question)
+	rep := scripted(question, view, round, results)
+	if rep.pause > 0 {
+		select {
+		case <-time.After(rep.pause):
+		case <-r.Context().Done():
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	fl, _ := w.(http.Flusher)
+	send := func(v any) {
+		b, _ := json.Marshal(v)
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		if fl != nil {
+			fl.Flush()
+		}
+	}
+	chunk := func(delta map[string]any, finish any) map[string]any {
+		return map[string]any{"id": "chatcmpl-fake", "object": "chat.completion.chunk", "model": req.Model, "choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}}
+	}
+	out := 0
+	for _, t := range rep.text {
+		for _, piece := range chunks(t, 24) {
+			send(chunk(map[string]any{"content": piece}, nil))
+			out += len(piece) / 4
+			if f.Delay > 0 {
+				time.Sleep(f.Delay)
+			}
+		}
+	}
+	finish := "stop"
+	if rep.tool != "" {
+		args, _ := json.Marshal(rep.input)
+		id := fmt.Sprintf("call_%d", time.Now().UnixNano())
+		send(chunk(map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": id, "type": "function", "function": map[string]any{"name": rep.tool, "arguments": ""}}}}, nil))
+		send(chunk(map[string]any{"tool_calls": []any{map[string]any{"index": 0, "function": map[string]any{"arguments": string(args)}}}}, nil))
+		finish = "tool_calls"
+		out += 20
+	}
+	send(chunk(map[string]any{}, finish))
+	send(map[string]any{"id": "chatcmpl-fake", "object": "chat.completion.chunk", "choices": []any{}, "usage": map[string]int{"prompt_tokens": len(body) / 4, "completion_tokens": out + 1, "total_tokens": len(body)/4 + out + 1}})
+	fmt.Fprint(w, "data: [DONE]\n\n")
 }

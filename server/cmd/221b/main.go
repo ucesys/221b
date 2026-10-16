@@ -31,12 +31,13 @@ import (
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/live"
-	"github.com/ucesys/221b/server/internal/prefs"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/ui"
 	"github.com/ucesys/221b/server/internal/version"
+	"github.com/ucesys/221b/server/internal/watson"
 )
 
 func main() {
@@ -198,16 +199,6 @@ func run(args []string) error {
 		}
 	}()
 
-	// Each signed-in person's own preferences, next to the settings.
-	var userPrefs *prefs.Store
-	if cfg.UserPrefs && authCfg.Mode != auth.ModeNone {
-		var backend prefs.Backend = &prefs.Memory{}
-		if cm, ok := storage.(*kube.ConfigMapStorage); ok {
-			backend = cm
-		}
-		userPrefs = prefs.New(backend)
-	}
-
 	// Sherlock (Phase 5): off for every cluster until an administrator turns
 	// it on and gives it a Claude API key, which is kept in a Secret.
 	var keyBackend sherlock.KeyBackend = &sherlock.MemoryKey{}
@@ -231,18 +222,34 @@ func run(args []string) error {
 	if err := keys.Load(ctx); err != nil {
 		log.Warn("reading the Claude API key failed; Sherlock has no key until it is saved again", "err", err)
 	}
-	var spendBackend prefs.Backend = &prefs.Memory{}
+	var spendBackend kv.Backend = &kv.Memory{}
 	if cm, ok := storage.(*kube.ConfigMapStorage); ok {
 		spendBackend = cm
 	}
+	// The chart may name Sherlock's provider (sherlock.provider), and lock it.
+	var chartProvider sherlock.Provider
+	if cfg.SherlockProvider != "" {
+		if err := json.Unmarshal([]byte(cfg.SherlockProvider), &chartProvider); err != nil {
+			return fmt.Errorf("-sherlock-provider is not valid JSON: %w", err)
+		}
+		if err := chartProvider.Validate(); err != nil {
+			return fmt.Errorf("-sherlock-provider: %w", err)
+		}
+	}
 	sherlockSvc := sherlock.New(sherlock.Options{
-		Client: &sherlock.Client{BaseURL: cfg.SherlockAPIURL, Key: keys.Key, HTTP: &http.Client{Timeout: 5 * time.Minute}, Retries: 2, Backoff: 2 * time.Second},
+		Client: &sherlock.Client{BaseURL: cfg.SherlockAPIURL, Key: keys.Key, HTTP: &http.Client{Timeout: 5 * time.Minute}, Retries: 2, Backoff: 2 * time.Second,
+			Provider: func() sherlock.Provider {
+				if p := shared.Current().SherlockOrDefault().Provider; p != nil && !cfg.SherlockLockProvider {
+					return *p
+				}
+				return chartProvider
+			}},
 		Ledger: sherlock.NewLedger(spendBackend, nil, log.With("component", "sherlock")),
 		Settings: func() sherlock.Settings {
 			sh := shared.Current().SherlockOrDefault()
-			return sherlock.Settings{Model: sh.Model, Caps: sherlock.Caps{DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD}}
+			return sherlock.Settings{Model: sh.Model, Caps: sherlock.Caps{DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD}, PriceIn: sh.PriceIn, PriceOut: sh.PriceOut}
 		},
-		Secrets: func() []string { return []string{keys.Key()} },
+		Secrets: func() []string { return sherlock.SecretsOf(keys.Key()) },
 		Audit:   auditLog,
 		Logger:  log.With("component", "sherlock"),
 	})
@@ -259,23 +266,45 @@ func run(args []string) error {
 		}
 	}()
 
+	// Watson (Phase 6): commands run as the person who approved them.
+	watsonSvc := watson.New(watson.Options{
+		Audit:  auditLog,
+		Logger: log.With("component", "watson"),
+		TwoPerson: func(c watson.Cluster) bool {
+			return c.Env == clusters.EnvProduction && shared.Current().WatsonOrDefault().TwoPerson
+		},
+	})
+	go watsonSvc.Watch(ctx, func(id string) (watson.Cluster, bool) {
+		sum, ok := manager.Summary(id)
+		if !ok {
+			return watson.Cluster{}, false
+		}
+		_, client, ok := manager.Lookup(id)
+		if !ok || client == nil {
+			return watson.Cluster{}, false
+		}
+		return watson.Cluster{ID: id, Name: sum.Name, Env: sum.Env, ReadOnly: sum.Mode != clusters.ModeWrite, Config: client.RestConfig()}, true
+	})
 	handler := api.New(api.Options{
-		Sherlock:      sherlockSvc,
-		SherlockKeys:  keys,
-		Store:         store,
-		Prefs:         userPrefs,
-		Cluster:       cluster,
-		Settings:      shared,
-		Clusters:      manager,
-		Auth:          authSvc,
-		Audit:         auditLog,
-		Access:        people,
-		Impersonation: api.Impersonation{UserPrefix: cfg.ImpersonateUserPrefix, GroupPrefix: cfg.ImpersonateGroupPrefix},
-		HTTPSRedirect: cfg.HTTPSRedirect,
-		Ready:         cluster.Ready,
-		UI:            ui.Handler(),
-		Logger:        log.With("component", "http"),
-		AllowedHosts:  cfg.AllowedHosts,
+		Watson:                  watsonSvc,
+		Sherlock:                sherlockSvc,
+		SherlockKeys:            keys,
+		SherlockDefaultURL:      cfg.SherlockAPIURL,
+		SherlockProviderLocked:  cfg.SherlockLockProvider,
+		SherlockDefaultProvider: chartProvider,
+		Store:                   store,
+		Cluster:                 cluster,
+		Settings:                shared,
+		Clusters:                manager,
+		Auth:                    authSvc,
+		Audit:                   auditLog,
+		Access:                  people,
+		Impersonation:           api.Impersonation{UserPrefix: cfg.ImpersonateUserPrefix, GroupPrefix: cfg.ImpersonateGroupPrefix},
+		HTTPSRedirect:           cfg.HTTPSRedirect,
+		Ready:                   cluster.Ready,
+		UI:                      ui.Handler(),
+		Logger:                  log.With("component", "http"),
+		AllowedHosts:            cfg.AllowedHosts,
 		Gauges: func() []api.Gauge {
 			info := cluster.Info()
 			nodeCount, podCount, nodeEvents, podEvents := cluster.Counts()
@@ -365,7 +394,7 @@ func run(args []string) error {
 // connection: its address and how the console signs in, for the cluster
 // page; it is not editable beyond its name, environment and description.
 func localSpec(cfg config.Config, restCfg *rest.Config, mode kube.Mode) clusters.Spec {
-	spec := clusters.Spec{Name: cfg.ClusterName, Env: clusters.EnvOther, Server: restCfg.Host, Mode: clusters.ModeRead}
+	spec := clusters.Spec{Name: cfg.ClusterName, Env: clusters.EnvOther, Server: restCfg.Host, Mode: cfg.LocalMode}
 	switch mode {
 	case kube.ModeInCluster:
 		spec.Auth = clusters.AuthInCluster

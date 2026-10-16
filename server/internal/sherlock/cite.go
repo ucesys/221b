@@ -91,26 +91,3 @@ func Cite(text string, known Known) (string, []Ref) {
 	})
 	return out, cited
 }
-
-var askNextRE = regexp.MustCompile(`(?m)^[ \t*_]*Ask next:[ \t*_]*(.+?)[ \t]*$`)
-
-// FollowUps takes the "Ask next:" line off the end of an answer: up to
-// three questions, separated by " | ", which the console offers as chips.
-func FollowUps(text string) (string, []string) {
-	locs := askNextRE.FindAllStringSubmatchIndex(text, -1)
-	if len(locs) == 0 {
-		return text, nil
-	}
-	last := locs[len(locs)-1]
-	if strings.TrimSpace(text[last[1]:]) != "" {
-		return text, nil
-	}
-	var out []string
-	for _, q := range strings.Split(text[last[2]:last[3]], "|") {
-		q = strings.TrimSpace(strings.Trim(q, "*_ "))
-		if q != "" && len(q) <= 200 && len(out) < 3 {
-			out = append(out, q)
-		}
-	}
-	return strings.TrimRight(text[:last[0]], " \t\n"), out
-}

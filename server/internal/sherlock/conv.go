@@ -42,15 +42,13 @@ type Step struct {
 
 // Msg is one message of a conversation as the browser shows it.
 type Msg struct {
-	ID    int    `json:"id"`
-	Role  string `json:"role"` // user or sherlock
-	Text  string `json:"text"`
-	Steps []Step `json:"steps,omitempty"`
-	Refs  []Ref  `json:"refs,omitempty"`
-	// Follow are questions the person may want to ask next.
-	Follow []string `json:"follow,omitempty"`
-	Status string   `json:"status,omitempty"` // thinking, answering, done, stopped, failed
-	Error  string   `json:"error,omitempty"`
+	ID     int    `json:"id"`
+	Role   string `json:"role"` // user or sherlock
+	Text   string `json:"text"`
+	Steps  []Step `json:"steps,omitempty"`
+	Refs   []Ref  `json:"refs,omitempty"`
+	Status string `json:"status,omitempty"` // thinking, answering, done, stopped, failed
+	Error  string `json:"error,omitempty"`
 	// Asker names who asked, for a conversation seen in another window.
 	At time.Time `json:"at"`
 	// FirstAt is when the first step or word arrived; DoneAt when the
@@ -60,6 +58,8 @@ type Msg struct {
 	Model   string     `json:"model,omitempty"`
 	Usage   *Usage     `json:"usage,omitempty"`
 	CostUSD float64    `json:"costUSD,omitempty"`
+	// View is what the answer changed in the asking window's view (P6U-10).
+	View []ViewChange `json:"view,omitempty"`
 }
 
 // Key names a conversation: one per session and cluster.
@@ -85,6 +85,10 @@ type Conversation struct {
 	lastUsed time.Time
 	subs     map[chan struct{}]struct{}
 	rev      int
+	// The UI actions sent to the browser, and those waiting for a result.
+	uiOut  []UIRequest
+	uiSeq  int
+	uiWait map[string]chan UIResult
 }
 
 // View is a conversation as the browser receives it.
@@ -108,7 +112,7 @@ func (c *Conversation) viewLocked() View {
 		cp := *m
 		cp.Steps = append([]Step(nil), m.Steps...)
 		cp.Refs = append([]Ref(nil), m.Refs...)
-		cp.Follow = append([]string(nil), m.Follow...)
+		cp.View = append([]ViewChange(nil), m.View...)
 		out[i] = &cp
 	}
 	return View{ID: c.ID, Messages: out, Busy: c.busy, Rev: c.rev}
@@ -144,6 +148,18 @@ func (c *Conversation) changedLocked() {
 type Settings struct {
 	Model string
 	Caps  Caps
+	// PriceIn and PriceOut, when set, price the model in US dollars per
+	// million tokens; otherwise the listed price, or the highest.
+	PriceIn, PriceOut float64
+}
+
+// Price is the model with the price its spend is counted at.
+func (s Settings) Price() Model {
+	m, _ := ModelOf(s.Model)
+	if s.PriceIn > 0 || s.PriceOut > 0 {
+		m.In, m.Out, m.LongAbove = s.PriceIn, s.PriceOut, 0
+	}
+	return m
 }
 
 // Options configure the service.
@@ -166,6 +182,8 @@ type Options struct {
 	MaxResult int
 	// MaxHistory bounds what is sent of the conversation, in characters.
 	MaxHistory int
+	// UITimeout is how long a UI action waits for the browser.
+	UITimeout time.Duration
 }
 
 // Service keeps the conversations and answers questions.
@@ -201,6 +219,9 @@ func New(o Options) *Service {
 	if o.MaxHistory <= 0 {
 		o.MaxHistory = 360_000
 	}
+	if o.UITimeout <= 0 {
+		o.UITimeout = UITimeout
+	}
 	if o.Settings == nil {
 		o.Settings = func() Settings { return Settings{Model: DefaultModel} }
 	}
@@ -219,7 +240,7 @@ func (s *Service) Conversation(k Key) *Conversation {
 	defer s.mu.Unlock()
 	c := s.convs[k]
 	if c == nil {
-		c = &Conversation{ID: newID(), known: Known{}, subs: map[chan struct{}]struct{}{}}
+		c = &Conversation{ID: newID(), known: Known{}, subs: map[chan struct{}]struct{}{}, uiWait: map[string]chan UIResult{}}
 		s.convs[k] = c
 	}
 	c.lastUsed = s.opts.Now()
@@ -268,6 +289,14 @@ type Question struct {
 	Tools   Toolbox
 	Who     audit.Who
 	From    string
+	// Window is the console window whose view the UI actions change: the
+	// one that asked, or the main window Sherlock's own window follows
+	// (P6U-08). Empty when there is none.
+	Window string
+	// View is that window's view state when asked (P6U-03).
+	View string
+	// ViewChanges offers the UI actions that change the view (P6U-14).
+	ViewChanges bool
 }
 
 // MaxQuestion bounds a question, in characters.
@@ -301,7 +330,11 @@ func (s *Service) Ask(q Question) (*Conversation, error) {
 	ans := &Msg{ID: c.seq, Role: "sherlock", Status: "thinking", At: now, Model: set.Model}
 	c.msgs = append(c.msgs, ans)
 	c.starts = append(c.starts, len(c.history))
-	c.history = append(c.history, Message{Role: "user", Content: []Block{{Type: "text", Text: text}}})
+	content := []Block{{Type: "text", Text: text}}
+	if v := s.viewBlock(q.View); v != "" {
+		content = append(content, Block{Type: "text", Text: v})
+	}
+	c.history = append(c.history, Message{Role: "user", Content: content})
 	ctx, cancel := context.WithCancel(context.Background())
 	c.busy, c.cancel = true, cancel
 	c.changedLocked()
@@ -362,20 +395,21 @@ func (s *Service) Wait() { s.wg.Wait() }
 // answer runs the rounds of one answer: the model replies, the tools it
 // asks for run, their results go back, until it is done.
 func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Question, set Settings) {
-	model, _ := ModelOf(set.Model)
+	model := set.Price()
 	var (
 		total   Usage
 		cost    float64
 		tools   []string
 		outcome = audit.OutcomeOK
 		detail  string
+		ui      uiLog
 	)
-	defs := q.Tools.Defs()
+	defs := append(append([]ToolDef(nil), q.Tools.Defs()...), uiDefs(q.ViewChanges)...)
 	if n := len(defs); n > 0 {
 		defs = append([]ToolDef(nil), defs...)
 		defs[n-1].CacheControl = &CacheControl{Type: "ephemeral"}
 	}
-	system := []Block{{Type: "text", Text: systemPrompt(q.Cluster, q.Version, s.opts.Now()), CacheControl: &CacheControl{Type: "ephemeral"}}}
+	system := []Block{{Type: "text", Text: systemPrompt(q.Cluster, q.Version, s.opts.Now(), q.ViewChanges), CacheControl: &CacheControl{Type: "ephemeral"}}}
 	first := func() {
 		if ans.FirstAt == nil {
 			t := s.opts.Now()
@@ -386,9 +420,8 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		now := s.opts.Now()
-		text, follow := FollowUps(ans.Text)
-		text, cited := Cite(text, c.known)
-		ans.Text, ans.Refs, ans.Follow = text, cited, follow
+		text, cited := Cite(ans.Text, c.known)
+		ans.Text, ans.Refs = text, cited
 		for i := range ans.Steps {
 			if ans.Steps[i].Status == "running" {
 				ans.Steps[i].Status = "failed"
@@ -405,6 +438,9 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 	defer func() {
 		if err := s.opts.Ledger.Save(context.Background()); err != nil {
 			s.opts.Logger.Warn("saving the Sherlock spend failed", "err", err)
+		}
+		if u := ui.String(); u != "" {
+			detail = strings.TrimPrefix(detail+"; "+u, "; ")
 		}
 		s.record(q, set.Model, tools, total, cost, outcome, detail)
 	}()
@@ -480,7 +516,13 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		ans.Status = "thinking"
 		start := len(ans.Steps)
 		for _, b := range calls {
-			ans.Steps = append(ans.Steps, Step{Label: q.Tools.Label(b.Name, b.Input), Tool: b.Name, Status: "running"})
+			label := ""
+			if IsUITool(b.Name) {
+				label = uiLabel(b.Name)
+			} else {
+				label = q.Tools.Label(b.Name, b.Input)
+			}
+			ans.Steps = append(ans.Steps, Step{Label: label, Tool: b.Name, Status: "running"})
 			tools = append(tools, b.Name)
 		}
 		first()
@@ -489,7 +531,12 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 
 		results := make([]Block, 0, len(calls))
 		for i, b := range calls {
-			r := q.Tools.Run(ctx, b.Name, b.Input)
+			var r ToolResult
+			if IsUITool(b.Name) {
+				r = s.runUI(ctx, c, ans, q, b, &ui)
+			} else {
+				r = q.Tools.Run(ctx, b.Name, b.Input)
+			}
 			if ctx.Err() != nil {
 				outcome, detail = audit.OutcomeStopped, "stopped by the person asking"
 				finish("stopped", "")
@@ -582,23 +629,28 @@ func (c *Conversation) repairLocked(status string) {
 func explain(err error) string {
 	var ae *APIError
 	if errors.As(err, &ae) {
+		who := ae.Provider
+		if who == "" {
+			who = "the Claude API"
+		}
+		Who := strings.ToUpper(who[:1]) + who[1:]
 		switch {
-		case ae.Status == 401 || ae.Type == "authentication_error":
-			return "The Claude API refused the API key. An administrator can set a new one in Settings."
-		case ae.Status == 403 || ae.Type == "permission_error":
-			return "The Claude API key is not allowed to use this model. An administrator can pick another in Settings."
-		case ae.Status == 404 || ae.Type == "not_found_error":
-			return "The Claude API does not know the model in Settings. An administrator can pick another."
-		case ae.Status == 429 || ae.Type == "rate_limit_error":
-			return "The Claude API is limiting how fast this key may ask. Try again in a minute."
+		case ae.Status == 401 || ae.Type == "authentication_error" || ae.Type == "UNAUTHENTICATED":
+			return Who + " refused the credential. An administrator can set a new one in Settings."
+		case ae.Status == 403 || ae.Type == "permission_error" || ae.Type == "PERMISSION_DENIED" || ae.Type == "AccessDeniedException":
+			return Who + " does not let this credential use the model. An administrator can pick another, or grant access, in Settings."
+		case ae.Status == 404 || ae.Type == "not_found_error" || ae.Type == "NOT_FOUND":
+			return Who + " does not know the model in Settings. An administrator can pick another."
+		case ae.Status == 429 || ae.Type == "rate_limit_error" || ae.Type == "RESOURCE_EXHAUSTED" || strings.Contains(ae.Type, "Throttling"):
+			return Who + " is limiting how fast this credential may ask. Try again in a minute."
 		case ae.Status == 529 || ae.Type == "overloaded_error":
-			return "The Claude API is overloaded. Try again in a minute."
+			return Who + " is overloaded. Try again in a minute."
 		case ae.Status == 400 && strings.Contains(strings.ToLower(ae.Message), "credit"):
-			return "The Claude API account has no credit left. " + ae.Message
+			return Who + " has no credit left on this account. " + ae.Message
 		}
 		return ae.Error()
 	}
-	return "Sherlock could not reach the Claude API: " + err.Error()
+	return "Sherlock could not reach the model's API: " + err.Error()
 }
 
 // record writes the question's audit record: what was asked, the tools

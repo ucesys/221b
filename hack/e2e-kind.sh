@@ -16,8 +16,8 @@ MINOR=${1:-1.37}
 IMAGE=${IMAGE:?set IMAGE to the image to test, already in the local docker}
 CLUSTER=${CLUSTER:-221b-e2e}
 NS=221b
-RELEASE=console
-FULLNAME=console-221b
+RELEASE=k8s-console
+FULLNAME=k8s-console-221b
 SA=system:serviceaccount:$NS:$FULLNAME
 BASE_URL=http://127.0.0.1:8080
 # The console is installed with local accounts (P3-01): an administrator
@@ -107,6 +107,7 @@ helm install "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" \
   --set "auth.local.users[2].email=$E2E_DEV" --set "auth.local.users[2].name=Dev Developer" --set "auth.local.users[2].passwordHash=$hash" \
   --set "auth.admins[0]=$E2E_USER" \
   --set auth.kubernetes.accessTTL=10s \
+  --set localCluster.mode=write \
   --set sherlock.apiURL="http://$GATEWAY:7445/claude" --set 'networkPolicy.outboundPorts={443,7445}' \
   --wait --timeout 60s
 notice "helm install" "The console was Ready $(( $(date +%s) - start ))s after helm install on Kubernetes $MINOR."
@@ -191,7 +192,7 @@ api http://127.0.0.1:18080/api/v1/snapshot | grep -q '"uptime":"available"'
 # Secrets are read (the default): the console's own Helm release shows,
 # with its values, and the record's Secret is listed by key name and size.
 api http://127.0.0.1:18080/api/v1/snapshot | grep -q '"secrets":"read"'
-api "http://127.0.0.1:18080/api/v1/helm/$NS/$RELEASE" | tee "$WORK/release.json" | grep -q '"name":"console"'
+api "http://127.0.0.1:18080/api/v1/helm/$NS/$RELEASE" | tee "$WORK/release.json" | grep -q '"name":"k8s-console"'
 grep -q 'clusterName: kind-e2e' "$WORK/release.json"
 api "http://127.0.0.1:18080/api/v1/snapshot?views=ns:$NS" | grep -q '"kind":"Secret"'
 kill "$pf"
@@ -331,6 +332,10 @@ step "helm uninstall leaves nothing behind"
 kubectl -n "$NS" delete pod -l e2e=crashloop --ignore-not-found
 kubectl delete rolebinding -A -l e2e=dev --ignore-not-found
 kubectl delete clusterrolebinding e2e-admin e2e-viewer --ignore-not-found
+# The Watson tests set the local cluster's environment to production and
+# back: what is shown for it is kept like a connection, in a Secret the
+# chart does not own, which survives an uninstall as connections do.
+kubectl -n "$NS" delete secret "$FULLNAME-cluster-local" --ignore-not-found
 # Foreground deletion: the Deployment goes only once its pods have gone.
 # Helm 4's wait sometimes gives up on a Deployment still Terminating right
 # after a rollout; what matters is checked below: nothing may remain.

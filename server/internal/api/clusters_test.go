@@ -29,7 +29,6 @@ import (
 	"github.com/ucesys/221b/server/internal/fake"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
-	"github.com/ucesys/221b/server/internal/prefs"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sim"
 )
@@ -48,7 +47,7 @@ func (s *source) Counts() (int, int, uint64, uint64) {
 	return len(s.Objects("nodes", "")), len(s.Objects("pods", "")), 0, 0
 }
 
-func (s *source) RestConfig() *rest.Config { return nil }
+func (s *source) RestConfig() *rest.Config { return s.restCfg }
 
 // multiSetup runs the console with sign-in by local accounts (an
 // administrator and a viewer), the fake cache as the local cluster and a
@@ -102,7 +101,7 @@ func multiSetupWith(t *testing.T, who string, deny map[string]bool, mods ...func
 		m.SetSettings(st.Refresh(), b)
 	})
 	ui := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "app:"+r.URL.Path) })
-	opts := Options{Store: store, Cluster: local, Settings: shared, Prefs: prefs.New(nil), Clusters: m, Auth: svc, Audit: audit.New(audit.Options{Out: &auditOut}), Access: access.NewCache(access.Options{TTL: 400 * time.Millisecond}), AccessRecheck: 50 * time.Millisecond, Heartbeat: 50 * time.Millisecond, Ready: func() bool { return true }, UI: ui, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	opts := Options{Store: store, Cluster: local, Settings: shared, Clusters: m, Auth: svc, Audit: audit.New(audit.Options{Out: &auditOut}), Access: access.NewCache(access.Options{TTL: 400 * time.Millisecond}), AccessRecheck: 50 * time.Millisecond, Heartbeat: 50 * time.Millisecond, Ready: func() bool { return true }, UI: ui, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	for _, mod := range mods {
 		mod(&opts)
 	}

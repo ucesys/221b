@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/fake"
 	"github.com/ucesys/221b/server/internal/kube"
@@ -51,6 +52,8 @@ type source struct {
 	asked atomic.Int64
 	// readAs records who the live reads were made as.
 	readAs []kube.Person
+	// restCfg is the cluster Watson talks to, when a test gives one.
+	restCfg *rest.Config
 }
 
 func (s *source) denied(resource, namespace string) bool {

@@ -10,11 +10,12 @@ import type { ColumnDef, Term } from '../lib/table'
 import { useTable } from '../lib/useTable'
 import { DataTable } from './DataTable'
 import { ExportMenu } from './ExportMenu'
-import { CopyIcon, WarnIcon } from './Icons'
+import { WarnIcon } from './Icons'
 import { PolicyPanel } from './PolicyPanel'
 import { Select } from './Select'
 import type { TabProps } from './tabs'
 import { objectLink } from '../lib/peek'
+import { FixCommand } from './Watson'
 import { AskSherlock } from './Sherlock'
 
 function copy(text: string, onToast: (m: string) => void, what = 'Copied') {
@@ -131,17 +132,7 @@ function Review({ fs, set, onToast, go, empty = 'Nothing to review.' }: { fs: Po
               {f.codeNote && <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{f.codeNote}</span>}
             </div>
           )}
-          {f.command && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <code className="rk-mono" style={{ fontSize: 11.5, color: 'var(--fg2)', overflowWrap: 'anywhere' }}>
-                {f.command}
-              </code>
-              <button className="rk-btn" onClick={() => copy(f.command!, onToast, 'Copied the command')} title="Copy the command; 221B runs nothing" style={{ height: 26 }}>
-                <CopyIcon />
-                Copy the command
-              </button>
-            </div>
-          )}
+          {f.command && <FixCommand command={f.command} from={`Policy finding: ${f.title}`} why={f.text} onCopy={() => copy(f.command!, onToast, 'Copied the command')} />}
           {(f.path.length > 0 || go) && (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
               {f.path.map((p, i) =>

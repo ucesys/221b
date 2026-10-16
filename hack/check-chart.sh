@@ -19,46 +19,49 @@ validate() {
 }
 
 echo "--- defaults"
-render console --set clusterName=ci | tee "$WORK/chart-default.yaml" | validate
+render k8s-console --set clusterName=ci | tee "$WORK/chart-default.yaml" | validate
 echo "--- NodePort, no NetworkPolicy, no RBAC, an existing ServiceAccount"
-render console --set clusterName=ci --set service.type=NodePort --set service.nodePort=30080 \
+render k8s-console --set clusterName=ci --set service.type=NodePort --set service.nodePort=30080 \
   --set networkPolicy.enabled=false --set rbac.create=false --set serviceAccount.create=false \
   --set serviceAccount.name=viewer | tee "$WORK/chart-nopolicy.yaml" | validate
 echo "--- without the kubelets' stats"
-render console --set clusterName=ci --set kubeletStats=false | tee "$WORK/chart-nostats.yaml" | validate
+render k8s-console --set clusterName=ci --set kubeletStats=false | tee "$WORK/chart-nostats.yaml" | validate
 echo "--- without reading Secrets"
-render console --set clusterName=ci --set secrets.read=false | tee "$WORK/chart-nosecrets.yaml" | validate
-render console --set clusterName=ci --set connections.store=memory | tee "$WORK/chart-memory.yaml" | validate
-render console --set clusterName=ci --set preferences.perUser=false | tee "$WORK/chart-noprefs.yaml" | validate
-render console --set clusterName=ci --set sherlock.existingSecret=claude --set sherlock.egress=false --set connections.store=memory | tee "$WORK/chart-sherlock.yaml" | validate
+render k8s-console --set clusterName=ci --set secrets.read=false | tee "$WORK/chart-nosecrets.yaml" | validate
+render k8s-console --set clusterName=ci --set connections.store=memory | tee "$WORK/chart-memory.yaml" | validate
+render k8s-console --set clusterName=ci --set sherlock.existingSecret=claude --set sherlock.egress=false --set connections.store=memory | tee "$WORK/chart-sherlock.yaml" | validate
+render k8s-console --set clusterName=ci --set sherlock.provider.kind=bedrock --set sherlock.provider.region=eu-west-1 --set sherlock.lockProvider=true | tee "$WORK/chart-provider.yaml" | validate
 echo "--- allowed ingress peers, API server addresses, extra host names and a private registry"
-render console --set clusterName=ci --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.team=platform' \
+render k8s-console --set clusterName=ci --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.team=platform' \
   --set 'networkPolicy.apiServerCIDRs[0]=10.0.0.10/32' --set 'allowedHosts[0]=console.example.com' \
   --set 'imagePullSecrets[0].name=ghcr' | tee "$WORK/chart-options.yaml" | validate
 echo "--- exposed with a LoadBalancer on every node"
-render console --set clusterName=ci --set service.type=LoadBalancer --set service.nodePort=30081 \
+render k8s-console --set clusterName=ci --set service.type=LoadBalancer --set service.nodePort=30081 \
   --set 'service.externalIPs[0]=10.0.0.21' --set 'service.externalIPs[1]=10.0.0.22' \
   --set service.loadBalancerClass=metallb --set 'service.annotations.example\.com/pool=office' |
   tee "$WORK/chart-lb.yaml" | validate
 echo "--- a release name and an override that start with a digit"
 render 221b --set clusterName=ci --set fullnameOverride=2b | validate
 echo "--- OIDC sign-in, an Ingress with TLS, named administrators and an audit webhook (P3-01, P3-03, P3-10, P3-11)"
-render console --set clusterName=ci --set auth.mode=oidc --set auth.oidc.issuer=https://login.example/realms/data \
+render k8s-console --set clusterName=ci --set auth.mode=oidc --set auth.oidc.issuer=https://login.example/realms/data \
   --set auth.oidc.clientID=console --set auth.oidc.clientSecret=hunter22 --set auth.oidc.providerName=Keycloak \
   --set 'auth.adminGroups[0]=platform-admins' --set 'auth.admins[0]=ops@corp.example' \
   --set ingress.enabled=true --set ingress.className=nginx --set ingress.host=console.example.com --set ingress.tls.enabled=true --set ingress.tls.secretName=console-tls \
   --set audit.webhook.url=https://hooks.example/221b --set audit.webhook.token=hook-token |
   tee "$WORK/chart-oidc.yaml" | validate
 echo "--- local accounts, from values and from an existing Secret; sign-in off"
-render console --set clusterName=ci --set auth.mode=local --set 'auth.local.users[0].email=ops@corp.example' \
+render k8s-console --set clusterName=ci --set auth.mode=local --set 'auth.local.users[0].email=ops@corp.example' \
   --set 'auth.local.users[0].passwordHash=pbkdf2-sha256$600000$c2FsdA$aGFzaA' --set 'auth.admins[0]=ops@corp.example' | tee "$WORK/chart-local.yaml" | validate
-render console --set clusterName=ci --set auth.mode=local --set auth.local.existingSecret=my-accounts | tee "$WORK/chart-local-existing.yaml" | validate
-render console --set clusterName=ci --set auth.mode=none | tee "$WORK/chart-noauth.yaml" | validate
+render k8s-console --set clusterName=ci --set auth.mode=local --set auth.local.existingSecret=my-accounts | tee "$WORK/chart-local-existing.yaml" | validate
+render k8s-console --set clusterName=ci --set auth.mode=none | tee "$WORK/chart-noauth.yaml" | validate
+echo "--- Watson's changes in the local cluster, with sign-in off and on (Phase 6)"
+render k8s-console --set clusterName=ci --set auth.mode=none --set localCluster.mode=write | tee "$WORK/chart-write.yaml" | validate
+render k8s-console --set clusterName=ci --set localCluster.mode=write | tee "$WORK/chart-write-signin.yaml" | validate
 echo "--- image tags that move, tags that do not, a digest and an explicit pull policy"
-render console --set clusterName=ci --set image.tag=pr-7 | tee "$WORK/chart-moving.yaml" | validate
-render console --set clusterName=ci --set image.tag=sha-d548f3953839 | tee "$WORK/chart-sha.yaml" | validate
-render console --set clusterName=ci --set image.digest=sha256:ce75aee9b9c2cde129bb8796ece11c3004b4eaba1d9afceed8b11e6996f0665d | tee "$WORK/chart-digest.yaml" | validate
-render console --set clusterName=ci --set image.tag=main --set image.pullPolicy=IfNotPresent | tee "$WORK/chart-policy.yaml" | validate
+render k8s-console --set clusterName=ci --set image.tag=pr-7 | tee "$WORK/chart-moving.yaml" | validate
+render k8s-console --set clusterName=ci --set image.tag=sha-d548f3953839 | tee "$WORK/chart-sha.yaml" | validate
+render k8s-console --set clusterName=ci --set image.digest=sha256:ce75aee9b9c2cde129bb8796ece11c3004b4eaba1d9afceed8b11e6996f0665d | tee "$WORK/chart-digest.yaml" | validate
+render k8s-console --set clusterName=ci --set image.tag=main --set image.pullPolicy=IfNotPresent | tee "$WORK/chart-policy.yaml" | validate
 
 fail=0
 check() {
@@ -80,7 +83,7 @@ kinds() {
 # the probes and metrics stay open to the kubelet and Prometheus.
 local_accounts() {
   grep -A1 'name: AUTH_MODE' "$out" | grep -q '"local"' && grep -A1 'name: LOCAL_USERS_FILE' "$out" | grep -q '/etc/221b/auth/users.yaml' &&
-    grep -q 'secretName: "console-221b-auth"' "$out" && grep -q 'users.yaml: |' "$out" &&
+    grep -q 'secretName: "k8s-console-221b-auth"' "$out" && grep -q 'users.yaml: |' "$out" &&
     grep -q 'email: ops@corp.example' "$WORK/chart-local.yaml" && grep -q 'passwordHash: pbkdf2-sha256' "$WORK/chart-local.yaml" &&
     grep -A1 'name: ADMINS' "$WORK/chart-local.yaml" | grep -q '"ops@corp.example"' &&
     grep -q 'secretName: "my-accounts"' "$WORK/chart-local-existing.yaml" && ! grep -q '^kind: Secret' "$WORK/chart-local-existing.yaml" &&
@@ -94,8 +97,8 @@ oidc_signin() {
     ! grep -q 'LOCAL_USERS_FILE' "$o"
 }
 oidc_requires_client() {
-  ! render console --set clusterName=ci --set auth.mode=oidc --set auth.oidc.issuer=https://login.example > /dev/null 2>&1 &&
-    ! render console --set clusterName=ci --set auth.mode=magic > /dev/null 2>&1
+  ! render k8s-console --set clusterName=ci --set auth.mode=oidc --set auth.oidc.issuer=https://login.example > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set auth.mode=magic > /dev/null 2>&1
 }
 audit_webhook() {
   local o=$WORK/chart-oidc.yaml
@@ -107,7 +110,7 @@ ingress_tls() {
   grep -q '^kind: Ingress' "$o" && grep -q 'ingressClassName: "nginx"' "$o" && grep -q 'secretName: "console-tls"' "$o" &&
     grep -q 'host: "console.example.com"' "$o" && grep -A1 'name: HTTPS_REDIRECT' "$o" | grep -q '"true"' &&
     grep -A1 'name: ALLOWED_HOSTS' "$o" | grep -q ',console.example.com"' && ! grep -q 'HTTPS_REDIRECT' "$out" &&
-    ! render console --set clusterName=ci --set ingress.enabled=true --set ingress.host= > /dev/null 2>&1
+    ! render k8s-console --set clusterName=ci --set ingress.enabled=true --set ingress.host= > /dev/null 2>&1
 }
 # Outbound traffic: only the API server by default; with OIDC or a webhook
 # also DNS and HTTPS.
@@ -160,20 +163,25 @@ secrets_optional() {
     [ "$(granted "$WORK/chart-nosecrets.yaml")" = "${WANT_READ/ secrets/}" ] && ! cluster_role "$WORK/chart-nosecrets.yaml" | grep -q '"secrets"' &&
     grep -A1 'name: SECRETS_READ' "$WORK/chart-nosecrets.yaml" | grep -q '"false"'
 }
-user_prefs() {
-  grep -A1 'name: USER_PREFS' "$out" | grep -q '"true"' && grep -A1 'name: USER_PREFS' "$WORK/chart-noprefs.yaml" | grep -q '"false"'
-}
+# Column choices are kept in each browser (asked at the Phase 6 review).
+no_user_prefs() { ! grep -q 'USER_PREFS' "$out"; }
 # Sherlock (Phase 5): the Claude API's address; its key in the release's
 # own Secret, or from a Secret the chart is given, never in the values.
+# Sherlock's provider from the chart, locked; none by default.
+sherlock_provider() {
+  grep -A1 'name: SHERLOCK_PROVIDER' "$WORK/chart-provider.yaml" | grep -q '"kind\\":\\"bedrock\\"' &&
+    grep -A1 'name: SHERLOCK_LOCK_PROVIDER' "$WORK/chart-provider.yaml" | grep -q '"true"' &&
+    ! grep -q 'SHERLOCK_PROVIDER\|SHERLOCK_LOCK_PROVIDER' "$out"
+}
 sherlock_key() {
   grep -A1 'name: SHERLOCK_API_URL' "$out" | grep -q '"https://api.anthropic.com"' &&
-    grep -A1 'name: SHERLOCK_SECRET' "$out" | grep -q '/console-221b-sherlock"' &&
+    grep -A1 'name: SHERLOCK_SECRET' "$out" | grep -q '/k8s-console-221b-sherlock"' &&
     ! grep -q 'name: SHERLOCK_API_KEY' "$out" &&
     grep -A4 'name: SHERLOCK_API_KEY' "$WORK/chart-sherlock.yaml" | grep -q 'name: "claude"' &&
     ! grep -q 'name: SHERLOCK_SECRET' "$WORK/chart-sherlock.yaml"
 }
 settings_only() {
-  settings_role | grep -q 'resources: \["configmaps"\]' && settings_role | grep -q 'resourceNames: \["console-221b"\]' &&
+  settings_role | grep -q 'resources: \["configmaps"\]' && settings_role | grep -q 'resourceNames: \["k8s-console-221b"\]' &&
     [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","patch"] verbs:["get","list","create","update","delete"] ' ] &&
     [ "$(grep -E 'verbs:' "$out" | grep -c -E 'update|delete|\*')" = 1 ]
 }
@@ -181,26 +189,26 @@ settings_only() {
 # default; in memory on request, and then nothing is granted on Secrets.
 connections_store() {
   settings_role | grep -A1 'resources: \["secrets"\]' | grep -q 'verbs: \["get", "list", "create", "update", "delete"\]' &&
-    grep -A1 'name: CONNECTIONS_SECRETS' "$out" | grep -q '"consoles/console-221b"' &&
+    grep -A1 'name: CONNECTIONS_SECRETS' "$out" | grep -q '"consoles/k8s-console-221b"' &&
     ! sed -n '/^kind: Role$/,/^---/p' "$WORK/chart-memory.yaml" | grep -q 'secrets' &&
     ! grep -q 'CONNECTIONS_SECRETS' "$WORK/chart-memory.yaml" &&
-    ! render console --set clusterName=ci --set connections.store=disk > /dev/null 2>&1
+    ! render k8s-console --set clusterName=ci --set connections.store=disk > /dev/null 2>&1
 }
 no_kubelet_stats() {
   grep -q 'nodes/proxy' "$out" && ! grep -q 'nodes/proxy' "$WORK/chart-nostats.yaml" &&
     grep -A1 'name: KUBELET_STATS' "$WORK/chart-nostats.yaml" | grep -q '"false"'
 }
 settings_configmap() {
-  grep -A3 '^kind: ConfigMap$' "$out" | grep -q 'name: console-221b' && ! sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | grep -q '^data:' &&
-    grep -A1 'name: SETTINGS_CONFIGMAP' "$out" | grep -q '"consoles/console-221b"' && grep -A1 'name: REFRESH' "$out" | grep -q '"3s"'
+  grep -A3 '^kind: ConfigMap$' "$out" | grep -q 'name: k8s-console-221b' && ! sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | grep -q '^data:' &&
+    grep -A1 'name: SETTINGS_CONFIGMAP' "$out" | grep -q '"consoles/k8s-console-221b"' && grep -A1 'name: REFRESH' "$out" | grep -q '"3s"'
 }
-service_name() { render 221b --set clusterName=ci | grep -A3 '^kind: Service$' | grep -q 'name: console-221b'; }
-name_required() { ! render console > /dev/null 2>&1; }
-no_open_egress() { ! render console --set clusterName=ci --set networkPolicy.apiServerPorts=null > /dev/null 2>&1; }
+service_name() { render 221b --set clusterName=ci | grep -A3 '^kind: Service$' | grep -q 'name: k8s-console-221b'; }
+name_required() { ! render k8s-console > /dev/null 2>&1; }
+no_open_egress() { ! render k8s-console --set clusterName=ci --set networkPolicy.apiServerPorts=null > /dev/null 2>&1; }
 dns_egress() { grep -B1 'protocol: UDP' "$out" | grep -q 'port: 53' && ! grep -q 'port: 53' "$WORK/chart-nopolicy.yaml"; }
 api_server_addresses() { grep -q 'cidr: "10.0.0.10/32"' "$WORK/chart-options.yaml"; }
 host_names() {
-  grep -A1 'name: ALLOWED_HOSTS' "$out" | grep -q 'console-221b,console-221b.consoles,console-221b.consoles.svc,console-221b.consoles.svc.cluster.local' &&
+  grep -A1 'name: ALLOWED_HOSTS' "$out" | grep -q 'k8s-console-221b,k8s-console-221b.consoles,k8s-console-221b.consoles.svc,k8s-console-221b.consoles.svc.cluster.local' &&
     grep -A1 'name: ALLOWED_HOSTS' "$WORK/chart-options.yaml" | grep -q ',console.example.com"'
 }
 exposed_port() { grep -q 'port: 8081' "$out" && grep -q 'port: 8081' "$WORK/chart-lb.yaml"; }
@@ -225,7 +233,23 @@ lb_service() {
 # unless peers are listed.
 closed_by_default() { grep -q 'ingress: \[\]' "$out"; }
 open_when_exposed() { ! grep -q 'ingress: \[\]' "$WORK/chart-lb.yaml" && grep -A3 '^  ingress:' "$WORK/chart-lb.yaml" | grep -q 'port: http'; }
-digit_override() { render 221b --set clusterName=ci --set fullnameOverride=2b | grep -A3 '^kind: Service$' | grep -q 'name: console-2b'; }
+# Watson (Phase 6): reads only by default. With localCluster.mode=write and
+# sign-in off, changes run as the console, bound to the write role and a
+# small role for nodes; with sign-in they run as the approver, and the
+# console is granted nothing more.
+watson_write() {
+  local w=$WORK/chart-write.yaml
+  grep -A1 'name: LOCAL_MODE' "$out" | grep -q '"read"' && ! grep -q 'watson' "$out" && ! grep -q 'watson' "$WORK/chart-noauth.yaml" &&
+    grep -A1 'name: LOCAL_MODE' "$w" | grep -q '"write"' &&
+    sed -n '/name: consoles-k8s-console-221b-watson-nodes$/,/^---/p' "$w" | grep -A1 '"nodes"' | grep -q 'verbs: \["patch", "update"\]' &&
+    sed -n '/name: consoles-k8s-console-221b-watson-nodes$/,/^---/p' "$w" | grep -A1 '"pods/eviction"' | grep -q 'verbs: \["create"\]' &&
+    sed -n '/^kind: ClusterRoleBinding$/,/^---/p' "$w" | grep -q "name: consoles-k8s-console-221b-watson$" &&
+    grep -A12 "name: consoles-k8s-console-221b-watson$" "$w" | grep -q 'name: edit' &&
+    grep -A1 'name: LOCAL_MODE' "$WORK/chart-write-signin.yaml" | grep -q '"write"' && ! grep -q 'watson' "$WORK/chart-write-signin.yaml" &&
+    ! render k8s-console --set clusterName=ci --set auth.mode=none --set localCluster.mode=write --set localCluster.writeClusterRole= | grep -q 'name: edit' &&
+    ! render k8s-console --set clusterName=ci --set localCluster.mode=admin > /dev/null 2>&1
+}
+digit_override() { render 221b --set clusterName=ci --set fullnameOverride=2b | grep -A3 '^kind: Service$' | grep -q 'name: k8s-console-2b'; }
 
 check "renders a Deployment, Service, ServiceAccount, ConfigMap, ClusterRole, Role, their bindings and a NetworkPolicy" kinds
 check "no Ingress" no_ingress
@@ -241,8 +265,9 @@ check "it writes only its own settings ConfigMap and the connection Secrets in i
 check "connections are kept in Secrets in the release namespace, or in memory on request" connections_store
 check "kubeletStats=false grants nothing on the kubelets" no_kubelet_stats
 check "the settings ConfigMap is created empty and named to the server" settings_configmap
-check "each signed-in person's preferences are kept with their account, unless preferences.perUser=false" user_prefs
+check "column choices stay in the browser: nothing about preferences reaches the server" no_user_prefs
 check "Sherlock's API key is kept in the release's Secret or taken from sherlock.existingSecret, never in the values" sherlock_key
+check "Sherlock's provider from the chart, locked when asked (Phase 6 review)" sherlock_provider
 check "a release named after the chart still gets a valid Service name" service_name
 check "clusterName is required" name_required
 check "an empty list of API server ports is refused" no_open_egress
@@ -255,6 +280,7 @@ check "the audit webhook and its token" audit_webhook
 check "an Ingress with TLS redirects HTTP, allows its host and needs a host" ingress_tls
 check "API server addresses narrow the egress rule" api_server_addresses
 check "it answers to its Service's names and the names in values" host_names
+check "Watson reads only by default; with mode write and sign-in off it is bound to the write role and may cordon and drain" watson_write
 check "an override that starts with a digit still gets a valid name" digit_override
 check "the Service listens on 8081" exposed_port
 check "moving tags are pulled on every start and rolled on every upgrade; releases, sha- tags and digests once" pull_policy

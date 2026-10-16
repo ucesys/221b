@@ -309,6 +309,8 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
             <dd className="rk-mono">{orig.server}</dd>
             <dt>Sign-in</dt>
             <dd>{credText(orig, now)}</dd>
+            <dt>Changes</dt>
+            <dd data-testid="cluster-local-mode">{orig.mode === 'write' ? 'Read and change: Watson runs the changes people approve.' : 'Read only. To let Watson run approved changes, install the chart with localCluster.mode=write.'}</dd>
           </dl>
         </Card>
       ) : (
@@ -454,7 +456,7 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
               value={f.mode}
               onChange={(mode) => upd({ mode })}
             />
-            <span style={{ fontSize: 12.5, color: 'var(--fg2)' }}>{f.mode === 'write' ? 'The console will run the changes people approve, once later phases offer them: cordon and drain nodes, labels and taints, restarts, pod deletes, quota and namespace-label patches. Until then it only reads.' : 'The console only reads. Anything that would change the cluster is refused before it is sent.'}</span>
+            <span style={{ fontSize: 12.5, color: 'var(--fg2)' }}>{f.mode === 'write' ? 'Watson runs the changes people approve: cordon and drain, scale, rollout restarts and undos, pod deletes, labels, annotations and Helm rollbacks. With sign-in on, each runs as the person who approves it, so their own RBAC decides.' : 'The console only reads. Watson refuses anything that would change the cluster before it is sent.'}</span>
             {f.auth !== 'oidc' && (
               <>
                 <button className="rk-link" aria-expanded={showRbac} onClick={() => setShowRbac(!showRbac)} style={{ alignSelf: 'flex-start', fontSize: 12 }} data-testid="rbac-toggle">

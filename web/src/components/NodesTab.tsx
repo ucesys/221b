@@ -33,7 +33,9 @@ export function NodesTab({ cluster, now, onToast, route }: TabProps) {
   const selectedRow = selected ? (rows.find((r) => r.name === selected) ?? null) : null
   // The details pane lies over the table, so every column keeps its place.
   const compact = false
-  const table = useTable<NodeRow>({ id: 'nodes', columns: NODE_COLUMNS, rows: inScope, terms: nodeTerms, now, compact, defaultSort: { col: 'name', dir: 'asc' }, query, onQuery: (q) => set({ q }) })
+  // Nodes with problems first, errors before warnings, until someone sorts
+  // (asked at the Phase 6 review).
+  const table = useTable<NodeRow>({ id: 'nodes', columns: NODE_COLUMNS, rows: inScope, terms: nodeTerms, now, compact, defaultSort: { col: 'problems', dir: 'desc' }, query, onQuery: (q) => set({ q }) })
   const metrics = cluster?.metrics === 'available'
   const cp = rows.filter((r) => r.role === 'control-plane').length
 
@@ -97,9 +99,6 @@ export function NodesTab({ cluster, now, onToast, route }: TabProps) {
               </div>
             </div>
             <DataTable<NodeRow> label="Nodes" rows={table.shown} cols={table.cols} rowKey={(r) => r.name} rowLabel={nodeLabel} sort={table.sort} onSort={table.onSort} selected={selected} onOpen={onOpen} compact={compact} now={now} empty={rows.length ? 'No nodes match this filter.' : 'No nodes to show: Kubernetes does not let you list nodes in this cluster, or it has none.'} rowAttr="node" />
-            <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>
-              Bars: light = requested, solid = in use; the percentage is requested of allocatable. Free = allocatable − requested. Click a node for its details, or its pod count for its pods.
-            </p>
           </section>
         </div>
         {selectedRow && <NodePanel r={selectedRow} metrics={metrics} metricsNote={cluster?.metricsMessage ?? ''} uptimeNote={cluster?.uptimeMessage ?? ''} now={now} onClose={close} onToast={onToast} />}

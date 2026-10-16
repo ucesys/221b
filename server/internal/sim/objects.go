@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 
 	"github.com/ucesys/221b/server/internal/kube"
 )
@@ -264,7 +265,13 @@ func (s *Sim) workload(g *group, now time.Time) {
 		// An older, scaled-down ReplicaSet, as a rollout leaves behind.
 		oldLabels := map[string]string{"app": g.app, "pod-template-hash": "6b7c8d9e0"}
 		zero := int32(0)
-		old := &appsv1.ReplicaSet{TypeMeta: typeMeta("ReplicaSet"), ObjectMeta: objectMeta(g.ns, g.app+"-6b7c8d9e0", created, oldLabels), Spec: appsv1.ReplicaSetSpec{Replicas: &zero, Selector: &metav1.LabelSelector{MatchLabels: oldLabels}, Template: template}}
+		// It ran the image before the current one, so a rollback changes it.
+		oldTemplate := *template.DeepCopy()
+		oldTemplate.Labels = copyLabels(oldLabels)
+		if repo, _, ok := strings.Cut(image, ":"); ok {
+			oldTemplate.Spec.Containers[0].Image = repo + ":0.9"
+		}
+		old := &appsv1.ReplicaSet{TypeMeta: typeMeta("ReplicaSet"), ObjectMeta: objectMeta(g.ns, g.app+"-6b7c8d9e0", created, oldLabels), Spec: appsv1.ReplicaSetSpec{Replicas: &zero, Selector: &metav1.LabelSelector{MatchLabels: oldLabels}, Template: oldTemplate}}
 		old.Annotations = map[string]string{"deployment.kubernetes.io/revision": "2"}
 		old.OwnerReferences = rs.OwnerReferences
 		add(old)
@@ -330,7 +337,7 @@ func (s *Sim) dressPod(p *corev1.Pod, g *group) {
 	p.Spec.Volumes = append(p.Spec.Volumes,
 		corev1.Volume{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: g.app + "-config"}}}},
 		corev1.Volume{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		corev1.Volume{Name: "kube-api-access", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{Path: "token"}}}}}},
+		corev1.Volume{Name: "kube-api-access", VolumeSource: corev1.VolumeSource{Projected: &corev1.ProjectedVolumeSource{Sources: []corev1.VolumeProjection{{ServiceAccountToken: &corev1.ServiceAccountTokenProjection{Path: "token", ExpirationSeconds: ptr.To[int64](3607)}}}}}},
 	)
 	if g.app == "api" {
 		p.Spec.Volumes = append(p.Spec.Volumes, corev1.Volume{Name: "tls", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: g.app + "-credentials"}}})

@@ -7,9 +7,13 @@ import { Tone } from './cells'
 
 const GIB = 1024 * 1024 * 1024
 
+/** How to read the bars, on hover (asked at the Phase 6 review, in place of a legend under the table). */
+export const BAR_LEGEND = 'Light bar: requested. Solid bar: in use. The percentage is what is requested of what is allocatable.'
+const FREE_LEGEND = 'Free = allocatable − requested.'
+
 function MeterCell({ m }: { m: Meter }) {
   return (
-    <span className="rk-meter" title={m.tip}>
+    <span className="rk-meter" title={`${m.tip}\n\n${BAR_LEGEND}`}>
       <span className="rk-bar" style={{ width: 56 }}>
         <span className="rk-req" style={{ width: `${clampPct(m.reqPct).toFixed(1)}%` }} />
         <span className="rk-use" style={{ width: `${clampPct(m.usePct).toFixed(1)}%` }} />
@@ -27,7 +31,7 @@ function MeterCell({ m }: { m: Meter }) {
 /** A free amount, in warning colour when little is left. */
 function FreeCell({ amount, share, title }: { amount: string; share: number; title: string }) {
   return (
-    <span className="rk-num" title={title} style={{ color: share < 10 ? 'var(--warn)' : undefined }}>
+    <span className="rk-num" title={`${title}\n\n${FREE_LEGEND}`} style={{ color: share < 10 ? 'var(--warn)' : undefined }}>
       {amount}
     </span>
   )
@@ -103,6 +107,7 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     id: 'cpu',
     label: 'CPU requested',
     sortName: 'CPU requested (% of allocatable)',
+    hint: BAR_LEGEND,
     width: '164px',
     compactWidth: '154px',
     min: 164,
@@ -139,6 +144,7 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     id: 'cpuFree',
     label: 'CPU free',
     sortName: 'CPU free to schedule',
+    hint: FREE_LEGEND,
     width: '82px',
     compactWidth: '76px',
     min: 82,
@@ -154,6 +160,7 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     id: 'memory',
     label: 'Memory requested',
     sortName: 'memory requested (% of allocatable)',
+    hint: BAR_LEGEND,
     width: '174px',
     compactWidth: '164px',
     min: 174,
@@ -190,6 +197,7 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     id: 'memFree',
     label: 'Memory free',
     sortName: 'memory free to schedule',
+    hint: FREE_LEGEND,
     width: '100px',
     compactWidth: '92px',
     min: 100,

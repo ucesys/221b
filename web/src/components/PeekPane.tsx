@@ -45,6 +45,16 @@ export function PeekPane({ route, cluster, now, onToast }: Props) {
   }, [])
 
   if (!peek) return null
+  // Marked, so Sherlock's view state can say whether the pane shows the
+  // object or could not (P6U-07); it adds nothing to the layout.
+  return (
+    <div data-peek-pane="" style={{ display: 'contents' }}>
+      {panel()}
+    </div>
+  )
+
+  function panel() {
+  if (!peek) return null
   switch (peek.kind) {
     case 'node': {
       const r = nodes.rows.find((n) => n.name === peek.name)
@@ -74,12 +84,13 @@ export function PeekPane({ route, cluster, now, onToast }: Props) {
     case 'policy':
       return policies.loaded ? <PolicyPanel key={peek.key} keyOf={peek.key} m={modelOf(policies.rows)} now={now} onClose={close} onToast={onToast} /> : null
   }
+  }
 }
 
 function Missing({ what, onClose }: { what: string; onClose: () => void }) {
   return (
     <Drawer label="Details" kicker="Not found" title={what} onClose={onClose} width={560}>
-      <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>It is not in this cluster any more, or Kubernetes does not let you see it.</p>
+      <p data-peek-error="" style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>It is not in this cluster any more, or Kubernetes does not let you see it.</p>
     </Drawer>
   )
 }

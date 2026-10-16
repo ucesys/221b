@@ -1,7 +1,7 @@
 import { unauthorized } from './auth'
 import type { Settings } from './types'
 
-/** The refresh rates the Settings dialog offers, in seconds. */
+/** The refresh rates the Settings page offers, in seconds. */
 export const REFRESH_CHOICES = [2, 3, 5, 10, 30, 60, 300] as const
 
 /** "5 s", "1 min", "5 min". */

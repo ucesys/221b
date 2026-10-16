@@ -5,6 +5,7 @@ import { effectTone, isSystemLabel, resourceSections, roleTag, taintNote, type R
 import { href } from '../lib/router'
 import { CloseIcon } from './Icons'
 import { AskSherlock } from './Sherlock'
+import { WatsonButton } from './Watson'
 import { YamlView } from './YamlView'
 
 interface Props {
@@ -92,7 +93,7 @@ function Resource({ s }: { s: ResourceSection }) {
   )
 }
 
-/** The details panel for one node, without the actions later phases add. */
+/** The details panel for one node, with Cordon and Drain through Watson (P6-06). */
 export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, onToast }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const [showSys, setShowSys] = useState(false)
@@ -149,6 +150,8 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
               </h2>
             </div>
             <AskSherlock question={r.problems.length ? `What is wrong with node ${r.name}?` : `Tell me about node ${r.name}`} compact over />
+            <WatsonButton command={r.cordoned ? `kubectl uncordon ${r.name}` : `kubectl cordon ${r.name}`} from={`${r.cordoned ? 'Uncordon' : 'Cordon'} button on node ${r.name}`} label={r.cordoned ? 'Uncordon' : 'Cordon'} title={r.cordoned ? 'Lets new pods be scheduled here again. Watson asks before it runs.' : 'Stops new pods being scheduled here; running pods stay. Watson asks before it runs.'} testid="node-cordon" over />
+            <WatsonButton command={`kubectl drain ${r.name} --ignore-daemonsets --delete-emptydir-data`} from={`Drain button on node ${r.name}`} label="Drain" title="Evicts its pods so you can take it down for maintenance. Watson asks before it runs." testid="node-drain" over />
             <button ref={closeRef} className="rk-icon-btn" aria-label="Close node details" title="Close (Esc)" onClick={onClose}>
               <CloseIcon />
             </button>

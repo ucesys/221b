@@ -215,3 +215,54 @@ func TestChurnBlipsRecover(t *testing.T) {
 		t.Fatalf("not ready after the blips passed: %d, want %d", n, before)
 	}
 }
+
+// A Deployment created through the API gets its pods, a dry-run delete
+// (its options in the body, as client-go sends them) keeps the object,
+// and deleting the Deployment takes its pods with it.
+func TestDeploymentLifecycleAndDryRunDeletes(t *testing.T) {
+	_, srv := newServer(t, Options{Nodes: 3, Pods: 10, Seed: 1})
+	do := func(method, path, body string) (int, string) {
+		t.Helper()
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		b, _ := io.ReadAll(r.Body)
+		return r.StatusCode, string(b)
+	}
+	do("POST", "/api/v1/namespaces", `{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"t"}}`)
+	if c, b := do("POST", "/apis/apps/v1/namespaces/t/deployments", `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"d","namespace":"t"},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"d"}},"template":{"metadata":{"labels":{"app":"d"}},"spec":{"containers":[{"name":"c","image":"x"}]}}}}`); c != 201 {
+		t.Fatalf("create %d %s", c, b)
+	}
+	pods := func() []string {
+		_, b := do("GET", "/api/v1/namespaces/t/pods", "")
+		var l struct {
+			Items []struct {
+				Metadata struct{ Name string } `json:"metadata"`
+			} `json:"items"`
+		}
+		_ = json.Unmarshal([]byte(b), &l)
+		var out []string
+		for _, p := range l.Items {
+			out = append(out, p.Metadata.Name)
+		}
+		return out
+	}
+	ps := pods()
+	if len(ps) != 2 {
+		t.Fatalf("pods %v", ps)
+	}
+	if c, _ := do("DELETE", "/api/v1/namespaces/t/pods/"+ps[0], `{"kind":"DeleteOptions","apiVersion":"v1","dryRun":["All"]}`); c != 200 {
+		t.Fatalf("dry-run delete %d", c)
+	}
+	if c, _ := do("GET", "/api/v1/namespaces/t/pods/"+ps[0], ""); c != 200 {
+		t.Fatal("a dry-run delete deleted the pod")
+	}
+	do("DELETE", "/apis/apps/v1/namespaces/t/deployments/d", "")
+	if ps := pods(); len(ps) != 0 {
+		t.Fatalf("pods left after their Deployment went: %v", ps)
+	}
+}

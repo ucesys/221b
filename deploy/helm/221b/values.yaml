@@ -1,6 +1,20 @@
 # The name shown in the top bar. Kubernetes has no reliable name for itself.
 clusterName: ""
 
+localCluster:
+  # What Watson may do in the cluster the console runs in (Phase 6): read
+  # runs reads only and refuses every change; write lets changes run once
+  # someone approves them. Other clusters set this per connection.
+  mode: read
+  # With sign-in on, a change runs as the person who approved it, so their
+  # own RBAC decides, and the console needs nothing more than impersonation.
+  # With sign-in off (auth.mode none) and mode write, changes run as the
+  # console's ServiceAccount: it is bound to this ClusterRole (the built-in
+  # edit role: workloads, pods and their evictions, Secrets for Helm's
+  # records, no RBAC) and to a small role to cordon, drain and label nodes.
+  # Empty grants nothing, and the API server refuses the changes.
+  writeClusterRole: edit
+
 image:
   repository: ghcr.io/ucesys/221b
   # Defaults to the chart's appVersion, a release. CI also publishes main
@@ -143,14 +157,6 @@ ingress:
 connections:
   store: secrets
 
-preferences:
-  # Keep each signed-in person's own preferences, such as the columns each
-  # table shows, with their account, so they follow them to any browser.
-  # They are kept in the settings ConfigMap, one key per person named by a
-  # hash of their subject (16 KiB at most each). Off, or with sign-in off,
-  # each browser keeps its own.
-  perUser: true
-
 sherlock:
   # Sherlock answers questions about a cluster through the Claude API
   # (Phase 5). It is off for every cluster until an administrator turns it
@@ -159,6 +165,24 @@ sherlock:
   # secrets, otherwise in memory until a restart. Nothing is sent to the
   # API for a cluster where it is off.
   apiURL: https://api.anthropic.com
+  # Another model API, or an enterprise gateway in front of one. Empty is
+  # the Claude API at apiURL; an administrator can change it in Settings
+  # unless lockProvider is true. For example:
+  #   provider: {kind: openai, endpoint: https://ai-gateway.corp.example/v1}
+  #   provider: {kind: bedrock, region: eu-west-1}
+  #   provider: {kind: vertex, region: europe-west1, project: my-project}
+  # kind is anthropic, openai (Chat Completions: OpenAI, Azure OpenAI,
+  # Gemini, vLLM, Ollama, LiteLLM, …), bedrock or vertex. Optional: endpoint,
+  # auth (header, aws, google or none), authHeader and authPrefix (such as
+  # api-key, or Authorization with "Bearer "), headers (not secret), query
+  # (such as api-version=2024-10-21), region, project, and caCert (a PEM
+  # bundle for a gateway with a private CA). Bedrock and Vertex use the
+  # ServiceAccount's cloud identity (serviceAccount.annotations for IRSA or
+  # Workload Identity) when no credential is saved. A gateway on a port
+  # other than 443 also needs networkPolicy.outboundPorts.
+  provider: {}
+  # Keep administrators from changing the provider in Settings.
+  lockProvider: false
   # Or take the key from a Secret you manage; the Settings then show it as
   # set by the chart and cannot change it.
   existingSecret: ""
@@ -195,7 +219,8 @@ rbac:
   # on pod logs, get and list on node and pod metrics, get on nodes/proxy
   # when kubeletStats is on, and get, list and watch on Secrets only when
   # secrets.read is on. A Role to get and patch its own settings ConfigMap.
-  # No writes anywhere else.
+  # No other writes, except Watson's with sign-in off and localCluster.mode
+  # write (see localCluster.writeClusterRole).
   create: true
 
 service:

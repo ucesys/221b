@@ -12,7 +12,6 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/kube"
-	"github.com/ucesys/221b/server/internal/prefs"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sim"
 )
@@ -71,16 +70,16 @@ func TestServiceInMemory(t *testing.T) {
 // The ConfigMap storage reads and patches one key through the API server,
 // here the simulator's.
 func TestConfigMapStorage(t *testing.T) {
-	s := sim.New(sim.Options{Nodes: 1, Pods: 1, SettingsConfigMap: "consoles/console-221b"})
+	s := sim.New(sim.Options{Nodes: 1, Pods: 1, SettingsConfigMap: "consoles/k8s-console-221b"})
 	srv := httptest.NewServer(s)
 	defer srv.Close()
 	ctx := context.Background()
 
-	cm, err := kube.NewConfigMapStorage(&rest.Config{Host: srv.URL}, "consoles/console-221b")
+	cm, err := kube.NewConfigMapStorage(&rest.Config{Host: srv.URL}, "consoles/k8s-console-221b")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cm.Kind() != "configmap" || cm.Ref() != "consoles/console-221b" {
+	if cm.Kind() != "configmap" || cm.Ref() != "consoles/k8s-console-221b" {
 		t.Fatalf("kind %q ref %q", cm.Kind(), cm.Ref())
 	}
 	if _, err := cm.Load(ctx); !errors.Is(err, settings.ErrNotFound) {
@@ -114,20 +113,16 @@ func TestConfigMapStorage(t *testing.T) {
 		t.Fatalf("ConfigMap holds %q", b)
 	}
 
-	// A person's preferences go in a key of their own, leaving the
+	// Another key (Sherlock's spend) goes in a key of its own, leaving the
 	// settings as they were.
-	people := prefs.New(cm)
-	if err := people.Put(ctx, "oidc:dana", prefs.Prefs{"221b.pods.hidden": []byte(`["ip"]`)}); err != nil {
+	if err := cm.SaveKey(ctx, "sherlock-spend.json", []byte(`{"day":"2026-10-15"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if b, _ := cm.Load(ctx); string(b) != `{"refreshSeconds":60}` {
-		t.Fatalf("preferences changed the settings: %q", b)
+		t.Fatalf("another key changed the settings: %q", b)
 	}
-	if b, err := cm.LoadKey(ctx, prefs.KeyFor("oidc:dana")); err != nil || string(b) != `{"221b.pods.hidden":["ip"]}` {
-		t.Fatalf("preferences %q %v", b, err)
-	}
-	if p, err := prefs.New(cm).Get(ctx, "oidc:dana"); err != nil || string(p["221b.pods.hidden"]) != `["ip"]` {
-		t.Fatalf("read back %v %v", p, err)
+	if b, err := cm.LoadKey(ctx, "sherlock-spend.json"); err != nil || string(b) != `{"day":"2026-10-15"}` {
+		t.Fatalf("read back %q %v", b, err)
 	}
 
 	// Without the API server, saving fails with a message, not a hang.

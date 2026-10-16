@@ -389,10 +389,10 @@ export const cluster = {
    */
   async other(): Promise<{ server: string; ca: 'pem' | 'system'; caPem: string; token: string; who: string; nodes: number }> {
     if (inKind) {
-      const token = (await kubectl('-n', NAMESPACE, 'create', 'token', 'console-221b', '--duration=2h')).trim()
+      const token = (await kubectl('-n', NAMESPACE, 'create', 'token', 'k8s-console-221b', '--duration=2h')).trim()
       const caPem = await kubectl('-n', NAMESPACE, 'get', 'configmap', 'kube-root-ca.crt', '-o', 'jsonpath={.data.ca\\.crt}')
       const nodes = (await kubectl('get', 'nodes', '-o', 'name')).trim().split('\n').filter(Boolean).length
-      return { server: 'https://kubernetes.default.svc', ca: 'pem', caPem, token, who: `system:serviceaccount:${NAMESPACE}:console-221b`, nodes }
+      return { server: 'https://kubernetes.default.svc', ca: 'pem', caPem, token, who: `system:serviceaccount:${NAMESPACE}:k8s-console-221b`, nodes }
     }
     // The second simulator requires the token, as a real API server would.
     const res = await fetch(`${OTHER_SIM}/sim/token`, { method: 'POST', body: JSON.stringify({ token: OTHER_TOKEN }) })
@@ -427,7 +427,7 @@ export const cluster = {
 
   /** Whether the Secret a connection is kept in exists (P3-07, P3-08). */
   async connectionSecret(id: string): Promise<boolean> {
-    const name = `console-221b-cluster-${id}`
+    const name = `k8s-console-221b-cluster-${id}`
     if (inKind) {
       try {
         await kubectl('-n', NAMESPACE, 'get', 'secret', name, '-o', 'name')
@@ -615,11 +615,99 @@ export const cluster = {
   async claudeRequests(): Promise<string[]> {
     const res = await fetch(`${CLAUDE}/requests`)
     if (!res.ok) throw new Error(`the fake Claude API answered ${res.status}`)
-    return ((await res.json()) as unknown[]).map((r) => JSON.stringify(r))
+    return (((await res.json()) as unknown[] | null) ?? []).map((r) => JSON.stringify(r))
   },
 
   async resetClaude(): Promise<void> {
     await fetch(`${CLAUDE}/requests`, { method: 'DELETE' })
+  },
+
+  /**
+   * An object as the API server has it, by its path (/api/v1/nodes/x),
+   * or null when it is not there.
+   */
+  async getObject<T = Record<string, unknown>>(path: string): Promise<T | null> {
+    if (inKind) {
+      const r = await kubectlResult('get', '--raw', path)
+      if (!r.ok) return null
+      return JSON.parse(r.out) as T
+    }
+    const res = await fetch(SIM + path)
+    if (res.status === 404) return null
+    if (!res.ok) throw new Error(`${path}: ${res.status}`)
+    return (await res.json()) as T
+  },
+
+  /**
+   * What Watson's tests change (Phase 6): a namespace of their own with a
+   * Deployment of two replicas that log a line. In kind, a small Helm
+   * release there too, upgraded once, so it can be rolled back.
+   */
+  async watsonPlayground(suffix: string): Promise<{ namespace: string; deployment: string; release: string; cleanup: () => Promise<void> }> {
+    const namespace = `e2e-watson-${suffix}`
+    const deployment = 'greeter'
+    const release = 'e2e-tiny'
+    const labels = { app: deployment, e2e: 'watson' }
+    const deploy = {
+      apiVersion: 'apps/v1',
+      kind: 'Deployment',
+      metadata: { name: deployment, namespace, labels },
+      spec: {
+        replicas: 2,
+        selector: { matchLabels: { app: deployment } },
+        template: {
+          metadata: { labels },
+          spec: {
+            terminationGracePeriodSeconds: 0,
+            containers: [{ name: 'main', image: 'registry.k8s.io/e2e-test-images/busybox:1.36.1-1', command: ['sh', '-c', 'echo hello from watson; sleep 3600'], resources: { requests: { cpu: '5m', memory: '8Mi' } } }],
+          },
+        },
+      },
+    }
+    if (inKind) {
+      await kubectl('delete', 'namespace', namespace, '--ignore-not-found', '--wait=true', '--timeout=120s')
+      await kubectl('create', 'namespace', namespace)
+      await kubectlApply(deploy)
+      await kubectlRetry('-n', namespace, 'rollout', 'status', `deployment/${deployment}`, '--timeout=120s')
+      const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const dir = await mkdtemp(join(tmpdir(), 'e2e-tiny-'))
+      await mkdir(join(dir, 'templates'))
+      await writeFile(join(dir, 'Chart.yaml'), 'apiVersion: v2\nname: e2e-tiny\nversion: 0.1.0\nappVersion: "1"\n')
+      await writeFile(join(dir, 'values.yaml'), 'greeting: hello\n')
+      await writeFile(join(dir, 'templates', 'configmap.yaml'), 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\ndata:\n  greeting: {{ .Values.greeting | quote }}\n')
+      await run('helm', ['install', release, dir, '-n', namespace, '--set', 'greeting=first', '--wait'], { timeout: 120_000 })
+      await run('helm', ['upgrade', release, dir, '-n', namespace, '--set', 'greeting=second', '--wait'], { timeout: 120_000 })
+      return { namespace, deployment, release, cleanup: async () => void (await kubectl('delete', 'namespace', namespace, '--ignore-not-found', '--wait=false')) }
+    }
+    // The simulator: a namespace and a Deployment, whose controllers it plays.
+    await fetch(`${SIM}/apis/apps/v1/namespaces/${namespace}/deployments/${deployment}`, { method: 'DELETE' })
+    const ns = await fetch(`${SIM}/api/v1/namespaces`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ apiVersion: 'v1', kind: 'Namespace', metadata: { name: namespace } }) })
+    if (!ns.ok && ns.status !== 409) throw new Error(`namespace: ${ns.status} ${await ns.text()}`)
+    const d = await fetch(`${SIM}/apis/apps/v1/namespaces/${namespace}/deployments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(deploy) })
+    if (!d.ok) throw new Error(`deployment: ${d.status} ${await d.text()}`)
+    const ready = async () => ((await (await fetch(`${SIM}/apis/apps/v1/namespaces/${namespace}/deployments/${deployment}`)).json()) as { status?: { readyReplicas?: number } }).status?.readyReplicas ?? 0
+    for (let i = 0; i < 60 && (await ready()) < 2; i++) await sleep(250)
+    // The simulator's own releases: the first with more than one revision.
+    const rel = (await this.helmList()).find((r) => r.revision > 1)
+    return {
+      namespace,
+      deployment,
+      release: rel ? `${rel.namespace}/${rel.name}` : '',
+      cleanup: async () => {
+        await fetch(`${SIM}/apis/apps/v1/namespaces/${namespace}/deployments/${deployment}`, { method: 'DELETE' })
+      },
+    }
+  },
+
+  /** Lets someone cordon and drain nodes (P6-05, P6-07): a ClusterRole bound in kind; the simulator lets everyone. */
+  async allowNodeChanges(user: string): Promise<() => Promise<void>> {
+    if (!inKind) return async () => undefined
+    const name = 'e2e-watson-nodes'
+    await kubectlApply({ apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'ClusterRole', metadata: { name }, rules: [{ apiGroups: [''], resources: ['nodes'], verbs: ['get', 'list', 'watch', 'patch', 'update'] }] })
+    await kubectlApply({ apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'ClusterRoleBinding', metadata: { name }, roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name }, subjects: [{ apiGroup: 'rbac.authorization.k8s.io', kind: 'User', name: user }] })
+    return async () => void (await kubectl('delete', 'clusterrolebinding,clusterrole', name, '--ignore-not-found'))
   },
 
   /** The audit records so far (P3-10): the server's standard output, one JSON object per line. */

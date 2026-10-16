@@ -174,7 +174,7 @@ func TestClientStreams(t *testing.T) {
 	bad := &Client{BaseURL: srv.URL, Key: func() string { return "sk-ant-invalid-0123456789" }, Retries: 2, Backoff: time.Millisecond}
 	_, err = bad.Stream(context.Background(), req, nil)
 	var ae *APIError
-	if !errors.As(err, &ae) || ae.Status != 401 || !strings.Contains(explain(err), "refused the API key") {
+	if !errors.As(err, &ae) || ae.Status != 401 || !strings.Contains(explain(err), "The Claude API refused the credential") {
 		t.Fatalf("bad key: %v", err)
 	}
 }
@@ -275,16 +275,5 @@ func TestKeys(t *testing.T) {
 	fixed := NewKeys(nil, "sk-ant-from-the-chart-0123", nil)
 	if err := fixed.Set(context.Background(), "sk-ant-a-good-key-0123456789", "me"); !errors.Is(err, ErrFixed) || fixed.Info().Source != "chart" {
 		t.Fatalf("fixed: %v %+v", err, fixed.Info())
-	}
-}
-
-func TestFollowUps(t *testing.T) {
-	text, f := FollowUps("The cause is X.\n\nAsk next: Why is pod a/b pending? | Which nodes are full? | What changed? | One too many\n")
-	if text != "The cause is X." || len(f) != 3 || f[0] != "Why is pod a/b pending?" {
-		t.Fatalf("%q %q", text, f)
-	}
-	// Only a last line counts.
-	if text, f := FollowUps("Ask next: a | b\n\nMore text."); f != nil || text != "Ask next: a | b\n\nMore text." {
-		t.Fatalf("%q %q", text, f)
 	}
 }

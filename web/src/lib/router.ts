@@ -27,7 +27,7 @@ export const TABS: { id: Tab; label: string; tip: string }[] = [
 export const LOCAL = 'local'
 
 /** The page: every cluster at a glance (the landing page), a cluster's tabs, its own page (its connection, P3-07), or Sherlock in a window of its own (P5-08). */
-export type View = 'home' | 'tabs' | 'cluster' | 'sherlock'
+export type View = 'home' | 'tabs' | 'cluster' | 'sherlock' | 'watson' | 'assistants' | 'settings'
 
 /** The first tab, where a cluster opens. */
 export const FIRST_TAB: Tab = 'alerts'
@@ -58,8 +58,10 @@ export function parseHash(hash: string): Route {
   // Nothing at all, or #/home: the home page.
   if (cluster === LOCAL && !h.startsWith('c/') && (first === '' || first === 'home')) return { cluster, view: 'home', tab: FIRST_TAB, path: [], params: new URLSearchParams(query) }
   if (first === 'cluster') return { cluster, view: 'cluster', tab: FIRST_TAB, path: [], params: new URLSearchParams(query) }
+  // The settings, a page of their own (asked at the Phase 6 review): #/settings/<section>.
+  if (cluster === LOCAL && first === 'settings') return { cluster, view: 'settings', tab: FIRST_TAB, path: segs.slice(1), params: new URLSearchParams(query) }
   // Sherlock in a window of its own (P5-08).
-  if (first === 'sherlock') return { cluster, view: 'sherlock', tab: FIRST_TAB, path: [], params: new URLSearchParams(query) }
+  if (first === 'sherlock' || first === 'watson' || first === 'assistants') return { cluster, view: first, tab: FIRST_TAB, path: [], params: new URLSearchParams(query) }
   const tab: Tab = TABS.some((t) => t.id === first) ? (first as Tab) : FIRST_TAB
   return { cluster, view: 'tabs', tab, path: tab === first ? segs.slice(1) : [], params: new URLSearchParams(query) }
 }
@@ -123,6 +125,11 @@ function subscribe(fn: () => void) {
     listeners.delete(fn)
     if (listeners.size === 0 && typeof window !== 'undefined') window.removeEventListener('hashchange', onChange)
   }
+}
+
+/** Calls fn after every change of route, outside React. */
+export function onRouteChange(fn: () => void): () => void {
+  return subscribe(fn)
 }
 
 /** The route as it is now, outside React: for links built at click time. */

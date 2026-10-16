@@ -13,7 +13,7 @@
 # installed with auth.mode=none and neither is granted. Every
 # authenticated identity can also review its own access and read
 # discovery and version URLs; those are allowed.
-#   hack/check-rbac.sh [--no-secrets] [--memory] [--no-signin] system:serviceaccount:221b:console-221b
+#   hack/check-rbac.sh [--no-secrets] [--memory] [--no-signin] system:serviceaccount:221b:k8s-console-221b
 set -euo pipefail
 secrets=yes
 connections=yes

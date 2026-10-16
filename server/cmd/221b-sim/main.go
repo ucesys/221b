@@ -30,8 +30,9 @@ func main() {
 	seed := flag.Int64("seed", 1, "random seed, for repeatable clusters")
 	metrics := flag.Bool("metrics", true, "serve metrics.k8s.io node metrics")
 	kubeletStats := flag.Bool("kubelet-stats", true, "serve each node's boot time through the node proxy, as the API server does")
-	settingsCM := flag.String("settings-configmap", "221b/console-221b", "namespace/name of an empty ConfigMap to serve for the console's settings (empty: none)")
+	settingsCM := flag.String("settings-configmap", "221b/k8s-console-221b", "namespace/name of an empty ConfigMap to serve for the console's settings (empty: none)")
 	problems := flag.Bool("problems", true, "include a few unhealthy nodes and pods")
+	planted := flag.Bool("planted", false, "add a crash-looping pod whose annotation and log carry instructions to Sherlock, for the evaluation")
 	churn := flag.Duration("churn", 0, "change usage and some pods this often (0 = never)")
 	claude := flag.Bool("fake-claude", true, "serve a fake Claude Messages API under /claude, for Sherlock (the console's -sherlock-api-url http://<listen>/claude)")
 	claudeOnly := flag.Bool("claude-only", false, "serve only the fake Claude API, at / and /claude")
@@ -47,7 +48,7 @@ func main() {
 		mux.Handle("/", fake)
 		handler = mux
 	} else {
-		s = sim.New(sim.Options{Nodes: *nodes, Pods: *pods, Seed: *seed, Metrics: *metrics, KubeletStats: *kubeletStats, SettingsConfigMap: *settingsCM, Problems: *problems, OIDCIssuer: *oidc})
+		s = sim.New(sim.Options{Nodes: *nodes, Pods: *pods, Seed: *seed, Metrics: *metrics, KubeletStats: *kubeletStats, SettingsConfigMap: *settingsCM, Problems: *problems, Planted: *planted, OIDCIssuer: *oidc})
 		handler = s
 		if *claude {
 			mux := http.NewServeMux()

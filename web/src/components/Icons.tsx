@@ -319,3 +319,25 @@ export function CrossIcon() {
     </svg>
   )
 }
+
+/** Watson: a prompt. */
+export function WatsonIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m5 7 5 5-5 5" />
+      <path d="M12.5 18h6.5" />
+    </svg>
+  )
+}
+
+/** Sherlock and Watson together, minimized: a lens with a prompt in it. */
+export function AssistantsIcon() {
+  return (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="10.5" cy="10.5" r="7" />
+      <path d="m15.6 15.6 4.9 4.9" />
+      <path d="m7.6 8.4 2.4 2.1-2.4 2.1" />
+      <path d="M11.2 13h2.6" />
+    </svg>
+  )
+}

@@ -13,6 +13,9 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Sherlock's UI actions are one list the server and the app share
+    // (P6U-04): server/internal/sherlock/ui_actions.json.
+    fs: { allow: ['..'] },
     proxy: {
       '/api': { target: 'http://127.0.0.1:8080', changeOrigin: false },
     },

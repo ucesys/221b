@@ -103,7 +103,7 @@ test('a cordoned node is a node warning until it is uncordoned', async ({ page, 
   await expect(card(page, `node:${node}`)).toHaveCount(0, { timeout: 15_000 })
 })
 
-test('an acknowledged alert leaves the banners and the badge for everyone, and stays here', async ({ page, request }) => {
+test('an acknowledged alert leaves the banners for everyone, and stays here and in the count', async ({ page, request }) => {
   const node = await worker(request)
   await open(page)
   const f = await cluster.alertFaults(node)
@@ -111,7 +111,7 @@ test('an acknowledged alert leaves the banners and the badge for everyone, and s
     const pull = card(page, `pod:${f.pull}`)
     await expect(pull).toHaveAttribute('data-severity', 'failed', { timeout: 30_000 })
     const badge = async () => Number(((await page.locator('[data-tab="alerts"]').first().textContent()) ?? '').replace(/\D+/g, '') || 0)
-    const needsAttention = async () => ((await snapshot(request, ['alerts'])).views.alerts?.rows as { severity: string; ack?: unknown }[]).filter((r) => r.severity !== 'recovered' && !r.ack).length
+    const active = async () => ((await snapshot(request, ['alerts'])).views.alerts?.rows as { severity: string }[]).filter((r) => r.severity !== 'recovered').length
 
     await pull.getByTestId('alert-ack').click()
     await expect(pull.getByTestId('alert-acked')).toContainText('Acknowledged by')
@@ -125,8 +125,9 @@ test('an acknowledged alert leaves the banners and the badge for everyone, and s
     await expect
       .poll(async () => ((await snapshot(request, ['alerts'])).views.alerts?.rows as { key: string; ack?: { by: string } }[]).find((r) => r.key === `pod:${f.pull}`)?.ack?.by ?? '')
       .not.toBe('')
-    // Off the badge, which counts what needs attention, acknowledged alerts aside (others may come and go meanwhile).
-    await expect.poll(async () => (await badge()) === (await needsAttention())).toBe(true)
+    // Still on the badge, which counts every active alert, acknowledged or not
+    // (asked at the Phase 6 review; others may come and go meanwhile).
+    await expect.poll(async () => (await badge()) === (await active())).toBe(true)
     expect((await cluster.auditLog()).some((r) => r.action === 'alert.ack' && r.target === `pod:${f.pull}`)).toBe(true)
 
     // Not on the other tabs' banners; the pending pod still is.
