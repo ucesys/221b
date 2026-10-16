@@ -106,7 +106,7 @@ func TestRolesPages(t *testing.T) {
 	// with rbac.enforce strict every change on the cluster is refused.
 	wide := clusterRoleOf(roles.Viewer.ClusterRole(), []roles.Rule{{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"*"}}})
 	local.Put(wide)
-	if code := getJSON(t, ops, srv.URL+"/api/v1/admin/permissions", &perms); code != http.StatusOK || perms.Drift.State != "differs" || !perms.Drift.More {
+	if code := getJSON(t, ops, srv.URL+"/api/v1/admin/permissions", &perms); code != http.StatusOK || perms.Drift.State != "differs" || len(perms.Drift.Roles) != 1 || len(perms.Drift.Roles[0].Differences) == 0 || !strings.Contains(perms.Drift.Roles[0].Differences[0], "which the shipped role does not") {
 		t.Fatalf("after widening: %d, drift %+v", code, perms.Drift)
 	}
 	if !strings.Contains(auditOut.String(), "roles.drift") {
