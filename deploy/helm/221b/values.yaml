@@ -61,15 +61,35 @@ kubeletStats: true
 healthInterval: 10s
 logLevel: info
 
-# Sign-in (P3-01). Every page and API call needs a signed-in person,
-# except the health probes and /metrics.
+# Sign-in (P3-01) and roles (Phase 6.1). Every page and API call needs a
+# signed-in person, except the health probes and /metrics.
+#
+# There are four roles. Admin and Viewer apply in the namespaces a group is
+# bound to; SuperAdmin and SuperViewer apply everywhere and are given in the
+# console (a local user) or by a directory group (LDAP). Every binding is
+# written here and rendered by this chart; nothing in the console or in
+# Watson creates one, so a change of who may do what is a helm upgrade.
 auth:
   # oidc: people sign in with an OpenID Connect provider (Okta, Entra ID,
-  # Google, Keycloak, Dex, ...). local: accounts kept by the console itself,
-  # for evaluations and clusters without a provider. none: no sign-in, as
-  # before Phase 3; everyone who reaches the console is an administrator,
-  # so expose it only on a network where that is acceptable.
+  # Google, Keycloak, Dex, ...). ldap: with their directory account, and
+  # only members of a group listed in auth.ldap.roles may sign in. local:
+  # accounts kept by the console itself, for evaluations and clusters
+  # without a provider. none: no sign-in, as before Phase 3; everyone who
+  # reaches the console is an administrator, so expose it only on a network
+  # where that is acceptable.
   mode: local
+  # The names Kubernetes sees for people and groups from each source, so a
+  # local "ops" and an LDAP "ops" are different subjects. OIDC names carry
+  # auth.kubernetes.userPrefix and groupPrefix. Names that start with
+  # system: or 221b: are never accepted from any source.
+  prefixes:
+    local: "221b-local:"
+    ldap: "221b-ldap:"
+  # An optional code that must be typed on the first-run page, which asks
+  # for the first administrator while no user exists. Empty asks for none.
+  # Or name an existing Secret holding it under the key setup-token.
+  setupToken: ""
+  setupTokenSecret: ""
   oidc:
     # The provider's issuer URL, where /.well-known/openid-configuration lives.
     issuer: ""
@@ -92,19 +112,78 @@ auth:
     # from each request (https://<host>/signin/callback), which is right
     # behind an Ingress.
     redirectURL: ""
+    # Groups of the provider for each role, as under auth.ldap.roles. With
+    # none listed, every group in the token reaches Kubernetes by its own
+    # name, as before, and auth.admins and auth.adminGroups are the
+    # SuperAdmins. With some, only the listed groups do, and the console's
+    # right to impersonate groups is limited to them.
+    roles: {}
+  ldap:
+    # ldaps://host:636, or ldap://host:389 with startTLS: true. A plain
+    # ldap:// URL without startTLS is refused: passwords would cross the
+    # network in the clear.
+    url: ""
+    startTLS: false
+    # An optional Secret holding the CA bundle that signed the server's
+    # certificate, under the key ca.crt.
+    caSecret: ""
+    caSecretKey: ca.crt
+    # The search account, and the Secret holding its password under the key
+    # bind-password. The password is never in values.
+    bindDN: ""
+    existingSecret: ""
+    # {username} is what the person typed, escaped. {dn} is the DN of the
+    # person or group whose groups are being looked for.
+    userSearch:
+      baseDN: ""
+      filter: "(uid={username})"
+      usernameAttr: uid
+      emailAttr: mail
+      nameAttr: cn
+    groupSearch:
+      baseDN: ""
+      filter: "(member={dn})"
+      nameAttr: cn
+      # Active Directory: member of a group is a DN under "member" and
+      # nested groups are groups of groups; true resolves them.
+      nested: true
+    pageSize: 500
+    # How often the Users page's list of people is read from the directory.
+    syncInterval: 1h
+    # The groups of each role, written as the directory has them. Any listed
+    # group lets its members sign in. viewer and admin entries may carry
+    # namespaces, which become RoleBindings; superViewer and superAdmin
+    # apply everywhere and take none.
+    roles: {}
+    #  viewer:      [ { group: team-a-readers, namespaces: [web, api] } ]
+    #  admin:       [ { group: team-a-ops,     namespaces: [web, api] } ]
+    #  superViewer: [ { group: auditors } ]
+    #  superAdmin:  [ { group: platform-admins } ]
   local:
+    # Groups for local users: a name, a role (viewer or admin) and the
+    # namespaces it is bound to. Who is in a group is kept in the console
+    # (the Users page, or groups below) and changes without an upgrade.
+    groups: []
+    #  - { name: web-readers,  role: viewer, namespaces: [web] }
+    #  - { name: checkout-ops, role: admin,  namespaces: [checkout, web] }
     # Accounts, with passwords as hashes. Make a hash with
     #   kubectl run hash --rm -it --restart=Never --image=ghcr.io/ucesys/221b:main -- hash-password
-    # (type the password, then Ctrl-D), or docker run --rm -i <image> hash-password.
+    # (type the password, then Ctrl-D, at least 12 characters), or
+    # docker run --rm -i <image> hash-password.
     # Or name an existing Secret holding the list under the key users.yaml.
+    # Accounts made in the console are kept in a Secret of this namespace
+    # (with connections.store secrets); these stay read-only there.
     users: []
     #  - email: ops@corp.example
     #    name: Ops
-    #    groups: [platform-admins]
+    #    roles: [superAdmin]          # superAdmin and/or superViewer
+    #    groups: [checkout-ops]       # names of auth.local.groups
     #    passwordHash: pbkdf2-sha256$600000$...
     existingSecret: ""
-  # Who manages cluster connections and the settings (P3-03): usernames
-  # (the username claim, an email for local accounts) and groups.
+  # Who manages cluster connections and the settings (P3-03): the
+  # SuperAdmins that are not made in the console. Usernames (the username
+  # claim, an email for local accounts) and groups. With LDAP, list the
+  # directory's SuperAdmin groups under auth.ldap.roles.superAdmin instead.
   admins: []
   adminGroups: []
   # A session ends after this long without a request, and this long after
@@ -114,10 +193,10 @@ auth:
   # What each person sees is what Kubernetes lets them see (P3-02): the
   # console reads logs and YAML as them, by impersonation, and asks
   # Kubernetes, per namespace, whether they may list what each tab shows.
-  # Write RBAC for them as users and groups, and set the prefixes the API
-  # servers add to OIDC names (--oidc-username-prefix, --oidc-groups-prefix)
-  # so the console names them the same way. The answers are kept for
-  # accessTTL; an RBAC change reaches people within it.
+  # Set the prefixes the API servers add to OIDC names (--oidc-username-prefix,
+  # --oidc-groups-prefix) so the console names OIDC people the same way. The
+  # answers are kept for accessTTL; a change of groups reaches people within
+  # it, in open sessions too.
   kubernetes:
     userPrefix: ""
     groupPrefix: ""
@@ -210,18 +289,40 @@ serviceAccount:
   annotations: {}
 
 rbac:
-  # A read-only ClusterRole: get, list and watch on the kinds the tabs show
-  # (nodes, namespaces, pods, workloads, Services and their endpoints,
-  # Ingresses and IngressClasses, ConfigMaps, PVCs, events, the namespace
-  # long tail, and for the analysis tabs roles and bindings, NetworkPolicies,
-  # disruption budgets, quotas, limit ranges, priority classes and admission
-  # webhook configurations), get
-  # on pod logs, get and list on node and pod metrics, get on nodes/proxy
-  # when kubeletStats is on, and get, list and watch on Secrets only when
-  # secrets.read is on. A Role to get and patch its own settings ConfigMap.
-  # No other writes, except Watson's with sign-in off and localCluster.mode
-  # write (see localCluster.writeClusterRole).
+  # Creates the console's own ClusterRole and Role, and the four roles for
+  # people (Viewer, SuperViewer, Admin, SuperAdmin; ClusterRoles named
+  # 221b-viewer, 221b-super-viewer, 221b-admin and 221b-super-admin) with
+  # their bindings. The console's ClusterRole is read-only: get, list and
+  # watch on the kinds the tabs show (nodes, namespaces, pods, workloads,
+  # Services and their endpoints, Ingresses and IngressClasses, ConfigMaps,
+  # PVCs, events, the namespace long tail, and for the analysis tabs roles
+  # and bindings, NetworkPolicies, disruption budgets, quotas, limit
+  # ranges, priority classes and admission webhook configurations), get on
+  # pod logs, get and list on node and pod metrics, get on nodes/proxy when
+  # kubeletStats is on, and get, list and watch on Secrets only when
+  # secrets.read is on. With sign-in it may impersonate users, and the
+  # groups listed in auth, and create access reviews. A Role to get and
+  # patch its own settings ConfigMap. It has no right on roles or
+  # bindings, and no other writes, except Watson's with sign-in off and
+  # localCluster.mode write (see localCluster.writeClusterRole).
   create: true
+  # Which definition of the two roles that can change things is installed.
+  # full: Admin may do the namespaced changes Watson supports; SuperAdmin
+  # may do everything. readOnly: the role exists, with no write verb, so
+  # nobody can change anything through the console. Both readOnly with
+  # localCluster.mode read is the fully protected read-only deployment; the
+  # chart refuses to render both readOnly with localCluster.mode write.
+  # Switching is a helm upgrade and changes no binding.
+  roles:
+    admin:
+      template: full
+    superAdmin:
+      template: full
+  # strict: when a cluster's 221b roles allow more than the ones this chart
+  # installs (someone edited them), the console refuses every change there
+  # and says what differs. off only reports it, on the Permissions page and
+  # in the audit log.
+  enforce: "off"
 
 service:
   # ClusterIP: open it with kubectl port-forward or an Ingress. LoadBalancer

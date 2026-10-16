@@ -1,0 +1,22 @@
+# LDAP sign-in with roles by directory group, a break-glass local account and
+# a CA bundle (hack/check-chart.sh).
+clusterName: ci
+auth:
+  mode: ldap
+  ldap:
+    url: ldaps://ldap.corp.example:636
+    caSecret: ldap-ca
+    bindDN: cn=221b,ou=service,dc=corp,dc=example
+    existingSecret: 221b-ldap
+    userSearch: { baseDN: "ou=people,dc=corp,dc=example" }
+    groupSearch: { baseDN: "ou=groups,dc=corp,dc=example" }
+    roles:
+      viewer: [{ group: team-a-readers, namespaces: [web, api] }]
+      admin: [{ group: team-a-ops, namespaces: [web] }]
+      superViewer: [{ group: auditors }]
+      superAdmin: [{ group: platform-admins }]
+  local:
+    users:
+      - username: breakglass
+        roles: [superAdmin]
+        passwordHash: "pbkdf2-sha256$600000$c2FsdA$aGFzaA"

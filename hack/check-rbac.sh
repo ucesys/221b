@@ -8,7 +8,7 @@
 # script expects the API server to refuse them. With --memory the chart
 # was installed with connections.store=memory and nothing is granted on
 # the namespace's Secrets. With sign-in on (the default) it may read as
-# the signed-in people: impersonate users and groups, and create
+# the signed-in people: impersonate users and the groups listed in values, and create
 # SubjectAccessReviews about them (P3-02); with --no-signin the chart was
 # installed with auth.mode=none and neither is granted. Every
 # authenticated identity can also review its own access and read
@@ -95,8 +95,14 @@ fi
 # Reading as people: impersonating users and groups, and reviewing their
 # access, with sign-in on; nothing of the kind with it off. Never a
 # ServiceAccount or a UID, which would let it become anything.
+# The groups it may assert are the reserved ones and those listed in values
+# (RB-37); never system:masters, whatever a token or a directory says.
 expect "$people" impersonate users
-expect "$people" impersonate groups
+for group in 221b:console-users 221b:superadmins 221b:superviewers system:authenticated; do
+  expect "$people" impersonate "groups/$group"
+done
+expect no impersonate groups/system:masters
+expect no impersonate groups/not-in-values
 expect "$people" create subjectaccessreviews.authorization.k8s.io
 expect no impersonate serviceaccounts
 expect no impersonate uids
@@ -114,7 +120,9 @@ for args in "create pods" "delete pods" "patch nodes" "update nodes" "delete nod
   "create deployments.apps" "patch deployments.apps" "delete jobs.batch" "create secrets" "patch secrets" "delete secrets" \
   "patch services" "delete services" "create configmaps" "patch configmaps" "delete configmaps" \
   "create roles.rbac.authorization.k8s.io" "create rolebindings.rbac.authorization.k8s.io" \
-  "create clusterrolebindings.rbac.authorization.k8s.io" "get persistentvolumes" "get storageclasses.storage.k8s.io" \
+  "create clusterrolebindings.rbac.authorization.k8s.io" "delete rolebindings.rbac.authorization.k8s.io" \
+  "patch rolebindings.rbac.authorization.k8s.io" "patch clusterroles.rbac.authorization.k8s.io" \
+  "delete clusterrolebindings.rbac.authorization.k8s.io" "get persistentvolumes" "get storageclasses.storage.k8s.io" \
   "get customresourcedefinitions.apiextensions.k8s.io" "patch validatingwebhookconfigurations.admissionregistration.k8s.io" \
   "escalate clusterroles.rbac.authorization.k8s.io" "bind clusterroles.rbac.authorization.k8s.io"; do
   # shellcheck disable=SC2086

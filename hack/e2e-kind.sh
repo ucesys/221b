@@ -26,6 +26,8 @@ BASE_URL=http://127.0.0.1:8080
 E2E_USER=admin@corp.example
 E2E_VIEWER=viewer@corp.example
 E2E_DEV=dev@corp.example
+# A local user is known to Kubernetes with the prefix of its source (RB-15).
+E2E_DEV_KUBE=221b-local:$E2E_DEV
 E2E_PASSWORD=password
 COOKIES=$WORK/cookies
 # Signs the shell in to a console at $1 as the administrator and keeps the
@@ -103,7 +105,9 @@ helm install "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" \
   --set service.type=NodePort --set service.nodePort=30080 \
   --set auth.mode=local \
   --set "auth.local.users[0].email=$E2E_USER" --set "auth.local.users[0].name=Ada Admin" --set "auth.local.users[0].passwordHash=$hash" \
+  --set 'auth.local.users[0].roles[0]=superAdmin' \
   --set "auth.local.users[1].email=$E2E_VIEWER" --set "auth.local.users[1].name=Vera Viewer" --set "auth.local.users[1].passwordHash=$hash" \
+  --set 'auth.local.users[1].roles[0]=superViewer' \
   --set "auth.local.users[2].email=$E2E_DEV" --set "auth.local.users[2].name=Dev Developer" --set "auth.local.users[2].passwordHash=$hash" \
   --set "auth.admins[0]=$E2E_USER" \
   --set auth.kubernetes.accessTTL=10s \
@@ -113,10 +117,10 @@ helm install "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" \
 notice "helm install" "The console was Ready $(( $(date +%s) - start ))s after helm install on Kubernetes $MINOR."
 kubectl -n "$NS" get all,networkpolicy,serviceaccount
 # What each person may see is what Kubernetes lets them (P3-02): the
-# administrator everything, the viewer everything but Secrets, and the
-# developer one namespace (web/e2e/access.spec.ts binds it).
-kubectl create clusterrolebinding e2e-admin --clusterrole=cluster-admin --user="$E2E_USER"
-kubectl create clusterrolebinding e2e-viewer --clusterrole=view --user="$E2E_VIEWER"
+# administrator everything (SuperAdmin, 221b-super-admin), the viewer
+# everything but Secrets (SuperViewer, 221b-super-viewer), and the developer
+# one namespace at a time (web/e2e/access.spec.ts binds it, to the name the
+# clusters know a local user by).
 endstep
 
 step "Permissions"
@@ -203,7 +207,7 @@ step "Browser tests"
   cd "$ROOT/web"
   E2E_MODE=kind E2E_BASE_URL=$BASE_URL E2E_NAMESPACE=$NS E2E_IMAGE=$IMAGE \
     E2E_CONTROL_PLANE=$CLUSTER-control-plane E2E_METRICS_MANIFEST=$METRICS_MANIFEST \
-    E2E_USER=$E2E_USER E2E_VIEWER=$E2E_VIEWER E2E_DEV=$E2E_DEV E2E_PASSWORD=$E2E_PASSWORD \
+    E2E_USER=$E2E_USER E2E_VIEWER=$E2E_VIEWER E2E_DEV=$E2E_DEV E2E_DEV_KUBE=$E2E_DEV_KUBE E2E_PASSWORD=$E2E_PASSWORD \
     E2E_CLAUDE_URL=http://127.0.0.1:7445/claude \
     npx playwright test 2>&1 | tee "$WORK/playwright.log"
 )

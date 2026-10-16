@@ -1,9 +1,7 @@
 {{- if not .Values.clusterName }}
 {{- fail "Set clusterName: the name shown in the console's top bar, such as --set clusterName=staging" }}
 {{- end }}
-{{- if and (ne .Values.auth.mode "oidc") (ne .Values.auth.mode "local") (ne .Values.auth.mode "none") }}
-{{- fail "auth.mode must be oidc, local or none" }}
-{{- end }}
+{{- include "b221.validate" . }}
 {{- if and (eq .Values.auth.mode "oidc") (or (not .Values.auth.oidc.issuer) (not .Values.auth.oidc.clientID)) }}
 {{- fail "OIDC sign-in needs auth.oidc.issuer and auth.oidc.clientID" }}
 {{- end }}
@@ -30,8 +28,10 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- if or .Values.podAnnotations (include "b221.movingTag" .) }}
       annotations:
+        # The roles' groups and the directory are read at start-up, so a
+        # change of them restarts the console.
+        checksum/auth-config: {{ include "b221.authConfig" . | sha256sum }}
         {{- if include "b221.movingTag" . }}
         # A moving tag may point at a new build since the last upgrade, and
         # an unchanged pod template would not restart the pod to fetch it.
@@ -42,7 +42,6 @@ spec:
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- end }}
     spec:
       serviceAccountName: {{ include "b221.serviceAccountName" . }}
       automountServiceAccountToken: true
@@ -151,9 +150,28 @@ spec:
             - name: OIDC_REDIRECT_URL
               value: {{ .Values.auth.oidc.redirectURL | quote }}
             {{- end }}
-            {{- if eq .Values.auth.mode "local" }}
+            # The roles' groups, the local groups and the directory.
+            - name: AUTH_CONFIG_FILE
+              value: /etc/221b/auth-config/auth.json
+            {{- if include "b221.localUsers" . }}
             - name: LOCAL_USERS_FILE
               value: /etc/221b/auth/users.yaml
+            {{- end }}
+            {{- if and (ne .Values.auth.mode "none") (or .Values.auth.setupToken .Values.auth.setupTokenSecret) }}
+            # Typed on the first-run page, when it is asked for.
+            - name: SETUP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "b221.authSecret" .) .Values.auth.setupTokenSecret | quote }}
+                  key: setup-token
+            {{- end }}
+            {{- if eq .Values.auth.mode "ldap" }}
+            # The search account's password, from the Secret named in values.
+            - name: LDAP_BIND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.ldap.existingSecret | quote }}
+                  key: bind-password
             {{- end }}
             - name: ADMINS
               value: {{ join "," .Values.auth.admins | quote }}
@@ -180,12 +198,20 @@ spec:
             - name: HTTPS_REDIRECT
               value: "true"
             {{- end }}
-          {{- if eq .Values.auth.mode "local" }}
           volumeMounts:
+            - name: auth-config
+              mountPath: /etc/221b/auth-config
+              readOnly: true
+            {{- if include "b221.localUsers" . }}
             - name: auth
               mountPath: /etc/221b/auth
               readOnly: true
-          {{- end }}
+            {{- end }}
+            {{- if and (eq .Values.auth.mode "ldap") .Values.auth.ldap.caSecret }}
+            - name: ldap-ca
+              mountPath: /etc/221b/ldap-ca
+              readOnly: true
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
@@ -206,15 +232,26 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      {{- if eq .Values.auth.mode "local" }}
       volumes:
+        - name: auth-config
+          configMap:
+            name: {{ include "b221.fullname" . }}-auth-config
+        {{- if include "b221.localUsers" . }}
         - name: auth
           secret:
             secretName: {{ default (include "b221.authSecret" .) .Values.auth.local.existingSecret | quote }}
             items:
               - key: users.yaml
                 path: users.yaml
-      {{- end }}
+        {{- end }}
+        {{- if and (eq .Values.auth.mode "ldap") .Values.auth.ldap.caSecret }}
+        - name: ldap-ca
+          secret:
+            secretName: {{ .Values.auth.ldap.caSecret | quote }}
+            items:
+              - key: {{ .Values.auth.ldap.caSecretKey | quote }}
+                path: {{ .Values.auth.ldap.caSecretKey | quote }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

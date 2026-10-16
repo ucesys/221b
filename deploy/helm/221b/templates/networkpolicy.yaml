@@ -72,4 +72,17 @@ spec:
         {{- end }}
       {{- end }}
     {{- end }}
+    {{- if eq .Values.auth.mode "ldap" }}
+    # The directory (LDAP sign-in): its port, from auth.ldap.url.
+    - ports:
+        - port: {{ include "b221.ldapPort" . }}
+          protocol: TCP
+      {{- with .Values.networkPolicy.outboundCIDRs }}
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
 {{- end }}

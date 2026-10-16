@@ -1,0 +1,14 @@
+{{- /* The roles' groups, the local groups and the directory, as a file the
+console reads. Nothing secret is in it: the search account's password and
+the setup token reach the console as environment variables from Secrets. */ -}}
+{{- include "b221.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "b221.fullname" . }}-auth-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+data:
+  auth.json: |
+    {{- include "b221.authConfig" . | nindent 4 }}
