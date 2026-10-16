@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -128,11 +129,12 @@ func (f *Fake) messages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	question, round, results := where(req.Messages)
+	question, view := splitView(question)
 	if strings.Contains(strings.ToLower(question), "overloaded") {
 		apiError(w, 529, "overloaded_error", "Overloaded")
 		return
 	}
-	reply := script(question, round, results)
+	reply := scripted(question, view, round, results)
 	f.stream(w, r, len(body), reply)
 }
 
@@ -212,12 +214,150 @@ func where(msgs []message) (question string, round int, results []string) {
 	return "", round, results
 }
 
+// splitView takes the console's view state (P6U-03) out of a question.
+func splitView(q string) (question, view string) {
+	i := strings.Index(q, "<console-view>")
+	if i < 0 {
+		return q, ""
+	}
+	j := strings.Index(q[i:], "</console-view>")
+	if j < 0 {
+		return q[:i], q[i+len("<console-view>"):]
+	}
+	return strings.TrimSpace(q[:i] + q[i+j+len("</console-view>"):]), strings.TrimSpace(q[i+len("<console-view>") : i+j])
+}
+
+// reDirective is a scripted tool call in a question: [[view_filter {...}]].
+var reDirective = regexp.MustCompile(`\[\[([a-z_]+)(?:\s+(\{.*?\}))?\]\]`)
+
+// scripted answers questions that script their tool calls, one per round,
+// and questions about what the console shows; script answers the rest.
+func scripted(question, view string, round int, results []string) reply {
+	last := ""
+	if len(results) > 0 {
+		last = results[0]
+	}
+	if found := reDirective.FindAllStringSubmatch(question, -1); len(found) > 0 {
+		// [[sleep 2000]] waits before the next call, as a slow model would.
+		type call struct {
+			tool, input string
+			pause       time.Duration
+		}
+		var calls []call
+		var pause time.Duration
+		for _, c := range found {
+			if c[1] == "sleep" {
+				continue
+			}
+			calls = append(calls, call{tool: c[1], input: c[2], pause: pause})
+			pause = 0
+		}
+		for _, c := range regexp.MustCompile(`\[\[sleep (\d+)\]\]`).FindAllStringSubmatchIndex(question, -1) {
+			ms, _ := strconv.Atoi(question[c[2]:c[3]])
+			// The pause goes before the first call after it.
+			before := 0
+			for _, d := range reDirective.FindAllStringSubmatchIndex(question[:c[0]], -1) {
+				if question[d[2]:d[3]] != "sleep" {
+					before++
+				}
+			}
+			if before < len(calls) {
+				calls[before].pause += time.Duration(ms) * time.Millisecond
+			} else {
+				pause += time.Duration(ms) * time.Millisecond
+			}
+		}
+		if round < len(calls) {
+			c := calls[round]
+			var input any = map[string]any{}
+			if c.input != "" {
+				_ = json.Unmarshal([]byte(c.input), &input)
+			}
+			return reply{text: []string{fmt.Sprintf("Step %d.", round+1)}, tool: c.tool, input: input, pause: c.pause}
+		}
+		return reply{text: []string{uiSummary(last)}, pause: pause}
+	}
+	// Two of the evaluation's UI tasks, so its run against this fake
+	// checks the stand-in window too.
+	for phrase, call := range map[string][2]string{
+		"only the control-plane nodes": {"view_open", `{"tab":"nodes","filters":{"role":"control-plane"}}`},
+		"only the alerts about nodes":  {"view_open", `{"tab":"alerts","filters":{"kind":"nodes"}}`},
+	} {
+		if strings.Contains(strings.ToLower(question), phrase) {
+			if round == 0 {
+				var input any
+				_ = json.Unmarshal([]byte(call[1]), &input)
+				return reply{text: []string{"Opening it."}, tool: call[0], input: input}
+			}
+			return reply{text: []string{uiSummary(last)}}
+		}
+	}
+	if strings.Contains(strings.ToLower(question), "this node") {
+		var v struct {
+			Details struct {
+				Open string `json:"open"`
+			} `json:"details"`
+		}
+		_ = json.Unmarshal([]byte(view), &v)
+		if name, ok := strings.CutPrefix(v.Details.Open, "node:"); ok && name != "" {
+			if round == 0 {
+				return reply{tool: "get_node", input: map[string]any{"name": name}}
+			}
+			return reply{text: []string{fmt.Sprintf("[%s](221b://Node/%s), the node you have open: %s", name, name, summarize(last))}}
+		}
+		return reply{text: []string{"No node is open on your screen; name the node."}}
+	}
+	return script(question, round, results)
+}
+
+// uiSummary words the result of the last scripted call.
+func uiSummary(last string) string {
+	var r struct {
+		Applied bool   `json:"applied"`
+		Error   string `json:"error"`
+		Note    string `json:"note"`
+		Link    string `json:"link"`
+		View    struct {
+			Tab     string `json:"tab"`
+			Details struct {
+				State string `json:"state"`
+			} `json:"details"`
+		} `json:"view"`
+	}
+	if json.Unmarshal([]byte(last), &r) != nil {
+		return "Done: " + summarize(last)
+	}
+	var b strings.Builder
+	switch {
+	case r.Error != "":
+		b.WriteString("I could not: " + r.Error)
+	case r.Note != "":
+		b.WriteString("You changed the view yourself, so I left it as it is.")
+	case r.Applied:
+		b.WriteString("Done.")
+		if r.View.Tab != "" {
+			b.WriteString(" You are on " + r.View.Tab + ".")
+		}
+	default:
+		b.WriteString("Done: " + summarize(last))
+	}
+	if r.View.Details.State == "not available" {
+		b.WriteString(" That object is not available to you.")
+	}
+	if r.Link != "" {
+		fmt.Fprintf(&b, " [Open it there](%s).", r.Link)
+	}
+	return b.String()
+}
+
 // reply is what the fake answers: text, then optionally a tool call.
 type reply struct {
 	text  []string
 	tool  string
 	input any
 	slow  bool
+	// pause is waited before the reply starts.
+	pause time.Duration
 }
 
 var (
@@ -420,6 +560,13 @@ func summarize(s string) string {
 }
 
 func (f *Fake) stream(w http.ResponseWriter, r *http.Request, inBytes int, rep reply) {
+	if rep.pause > 0 {
+		select {
+		case <-time.After(rep.pause):
+		case <-r.Context().Done():
+			return
+		}
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)

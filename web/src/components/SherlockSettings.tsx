@@ -124,6 +124,16 @@ export function SherlockSettings({ open }: { open: boolean }) {
         </div>
       </div>
 
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <label className="rk-tcheck" style={{ color: 'var(--fg)' }}>
+          <input type="checkbox" checked={draft.viewControl !== false} onChange={(e) => setDraft({ ...draft, viewControl: e.target.checked })} data-testid="sherlock-view-control" aria-describedby="sherlock-view-control-hint" />
+          <span>Let Sherlock change the view</span>
+        </label>
+        <p className="rk-fhint" style={{ margin: 0 }} id="sherlock-view-control-hint">
+          Sherlock may open tabs and details, set filters, search, sort, show columns and highlight rows in the asking person’s own window while it answers. It never changes a cluster or what others see. Off, it still reads what the person sees.
+        </p>
+      </div>
+
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <span style={{ fontSize: 12.5, fontWeight: 600 }}>Model</span>
         <Select label="Model" value={draft.model} options={options} onChange={(v) => setDraft({ ...draft, model: v })} testId="sherlock-model" width="100%" />

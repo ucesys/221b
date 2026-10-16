@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { drivenRecently } from '../lib/tables'
 import { CloseIcon } from './Icons'
 import { AskSherlock } from './Sherlock'
 
@@ -37,9 +38,13 @@ interface Props {
  */
 export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId, ask }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null)
+  // Opened by Sherlock (P6U-05), it stops above the dock and is not modal,
+  // so its answer, Undo and the question box stay in reach (P6U-09).
+  const [bySherlock] = useState(() => drivenRecently())
   const body = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    closeRef.current?.focus()
+    // Opened by Sherlock, it leaves focus where the person has it (P6U-09).
+    if (!drivenRecently()) closeRef.current?.focus()
   }, [title])
   useEffect(() => {
     body.current?.scrollTo(0, 0)
@@ -69,12 +74,12 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
     }
   }, [tab, children])
   return (
-    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }}>
+    <div style={{ position: 'fixed', top: 0, right: 0, bottom: bySherlock ? 'var(--dock-space, 0px)' : 0, left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }} data-by-sherlock={bySherlock ? 'true' : undefined}>
       <button aria-label={`Close ${label.toLowerCase()}`} tabIndex={-1} onClick={onClose} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
       <aside
         className="rk-drawer"
         role="dialog"
-        aria-modal="true"
+        aria-modal={bySherlock ? undefined : 'true'}
         aria-label={label}
         data-testid={testId}
         onKeyDown={(e) => {

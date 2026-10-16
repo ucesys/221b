@@ -125,6 +125,11 @@ function subscribe(fn: () => void) {
   }
 }
 
+/** Calls fn after every change of route, outside React. */
+export function onRouteChange(fn: () => void): () => void {
+  return subscribe(fn)
+}
+
 /** The route as it is now, outside React: for links built at click time. */
 export function currentRoute(): Route {
   return current

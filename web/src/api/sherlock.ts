@@ -39,6 +39,8 @@ export interface SherlockMsg {
   model?: string
   usage?: SherlockUsage
   costUSD?: number
+  /** What the answer changed in the asking window's view (P6U-10). */
+  view?: { label: string }[]
 }
 
 export interface Conversation {
@@ -74,6 +76,8 @@ export interface SherlockSettings {
   model: string
   dailyUSD: number
   monthlyUSD: number
+  /** Whether Sherlock may change the asking person's view (P6U-14); absent is on. */
+  viewControl?: boolean
 }
 
 export interface SherlockConfig {
@@ -111,7 +115,30 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return data as T
 }
 
-export const askSherlock = (cluster: string, question: string) => call<Conversation>('POST', apiPath('sherlock/ask', cluster), { question })
+/** The console window whose view Sherlock may change, and that view (P6U-03, P6U-08). */
+export interface AskContext {
+  window: string
+  view: string
+}
+
+export const askSherlock = (cluster: string, question: string, ctx?: AskContext) =>
+  call<Conversation>('POST', apiPath('sherlock/ask', cluster), { question, ...(ctx ? { window: ctx.window, view: ctx.view } : {}) })
+
+/** Sends a window's result of a UI action back to the answer waiting for it (P6U-17). */
+export async function postUIResult(cluster: string, id: string, result: unknown): Promise<void> {
+  try {
+    await fetch(apiPath('sherlock/ui/' + encodeURIComponent(id), cluster), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(result) })
+  } catch {
+    // The answer gives up after 5 seconds and says so.
+  }
+}
+
+/** Where a main console window runs the UI actions sent to it. */
+let uiHandler: ((req: unknown, cluster: string) => void) | null = null
+
+export function setUIHandler(fn: ((req: unknown, cluster: string) => void) | null): void {
+  uiHandler = fn
+}
 export const stopSherlock = (cluster: string) => call<{ stopped: boolean }>('POST', apiPath('sherlock/stop', cluster), {})
 export const newSherlockChat = (cluster: string) => call<Conversation>('POST', apiPath('sherlock/new', cluster), {})
 export const fetchSherlockConfig = () => call<SherlockConfig>('GET', '/api/v1/sherlock/config')
@@ -143,6 +170,8 @@ export function useSherlock(cluster: string, on = true): SherlockState {
         } else if (name === 'conversation') {
           const conv = JSON.parse(data) as Conversation
           setState((s) => ({ ...mine(s), conv, live: true }))
+        } else if (name === 'ui') {
+          uiHandler?.(JSON.parse(data), cluster)
         } else if (name === 'answer') {
           const { rev, message } = JSON.parse(data) as { rev: number; message: SherlockMsg }
           setState((s) => {

@@ -1,4 +1,4 @@
-import { createContext, useContext, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { askSherlock, newSherlockChat, stopSherlock, SherlockError, usd, type SherlockMsg, type SherlockRef, type SherlockState } from '../api/sherlock'
 import { Markdown } from '../lib/markdown'
 import { peekClickHash } from '../lib/peek'
@@ -6,6 +6,8 @@ import { canPopOut, parseRef, post, refTarget, type RefTarget } from '../lib/she
 import { CheckIcon, CopyIcon, CrossIcon, SendIcon, SherlockIcon, WatsonIcon } from './Icons'
 import { isCommands } from '../api/watson'
 import { useWatsonApi } from './Watson'
+import { isUndone, onUndone } from '../lib/uiControl'
+import { askContext, askUndo } from '../lib/uiWindow'
 
 // ---------- asking from anywhere ----------
 
@@ -118,12 +120,53 @@ function seconds(from?: string, to?: string): string {
   return s < 10 ? `${s.toFixed(1)} s` : `${Math.round(s)} s`
 }
 
+/** A link inside this console: a tab of this cluster or another, with plain parameters. */
+const CONSOLE_HASH = /^#\/(?:c\/[a-z0-9][a-z0-9-]*\/)?[a-z]+(?:\/[A-Za-z0-9._~%-]+)*(?:\?[A-Za-z0-9._~%=&,:+-]*)?$/
+
 function refLabel(r: SherlockRef): string {
   const kind = r.kind === 'HelmRelease' ? 'release' : r.kind === 'PersistentVolumeClaim' ? 'claim' : r.kind.toLowerCase()
   return `Open ${kind} ${r.name}`
 }
 
-function Answer({ m, link, admin, question }: { m: SherlockMsg; link: (url: string, label: string) => ReactNode | null; admin: boolean; question?: string }) {
+/**
+ * Under an answer that changed the view (P6U-10): what it changed, read
+ * out as each change lands, and Undo, which puts the view back as it was
+ * before the answer's first change. Neither takes focus.
+ */
+function ViewNotice({ m, onToast }: { m: SherlockMsg; onToast: (msg: string) => void }) {
+  const done = useSyncExternalStore(onUndone, () => isUndone(m.id))
+  const [busy, setBusy] = useState(false)
+  const changes = m.view ?? []
+  return (
+    <div className="rk-viewnote" data-testid="sherlock-view-changed">
+      <div role="status" aria-live="polite" style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+        <strong style={{ fontSize: 12, fontWeight: 600 }}>{done ? 'Sherlock’s changes to this view were undone' : 'Sherlock changed this view'}</strong>
+        <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12, color: 'var(--fg2)' }} data-testid="sherlock-view-changes">
+          {changes.map((c, i) => (
+            <li key={i}>{c.label}</li>
+          ))}
+        </ul>
+      </div>
+      {!done && (
+        <button
+          className="rk-btn"
+          data-testid="sherlock-view-undo"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true)
+            const ok = await askUndo(m.id)
+            setBusy(false)
+            if (!ok) onToast('That view is not open in any window now, so there is nothing to undo.')
+          }}
+        >
+          Undo
+        </button>
+      )}
+    </div>
+  )
+}
+
+function Answer({ m, link, admin, question, onToast }: { m: SherlockMsg; link: (url: string, label: string) => ReactNode | null; admin: boolean; question?: string; onToast: (msg: string) => void }) {
   const thinking = (m.status === 'thinking' || m.status === 'answering') && !m.text
   const meta = [m.model, m.doneAt ? seconds(m.at, m.doneAt) : '', admin && m.costUSD ? usd(m.costUSD) : ''].filter(Boolean).join(' · ')
   return (
@@ -150,6 +193,7 @@ function Answer({ m, link, admin, question }: { m: SherlockMsg; link: (url: stri
           <Markdown text={m.text} link={link} code={(text, lang, open, key) => <CodeBlock key={key} text={text} lang={lang} open={open && m.status !== 'done'} why={question ? `Sherlock proposed this answering “${question}”.` : undefined} />} />
         </div>
       )}
+      {(m.view?.length ?? 0) > 0 && <ViewNotice m={m} onToast={onToast} />}
       {m.status === 'stopped' && (
         <p className="rk-t" data-tone="muted" style={{ fontSize: 12.5 }} data-testid="sherlock-stopped">
           {m.error || 'Stopped.'}
@@ -224,7 +268,7 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
     setError('')
     pinned.current = true
     try {
-      await askSherlock(cluster, q)
+      await askSherlock(cluster, q, await askContext())
       setDraft('')
     } catch (e) {
       setError(e instanceof SherlockError ? e.message : String(e))
@@ -237,6 +281,25 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
     if (/^https?:\/\//.test(url)) {
       return (
         <a href={url} target="_blank" rel="noreferrer noopener" className="rk-link">
+          {label}
+        </a>
+      )
+    }
+    // A link to another tab or cluster of this console, which Sherlock
+    // offers rather than switching clusters (P6U-06).
+    if (CONSOLE_HASH.test(url)) {
+      const t: RefTarget = { href: url }
+      return (
+        <a
+          href={url}
+          className="rk-link"
+          data-testid="sherlock-console-link"
+          onClick={(e) => {
+            if (!inWindow) return
+            e.preventDefault()
+            post({ type: 'open', cluster, target: t })
+          }}
+        >
           {label}
         </a>
       )
@@ -348,7 +411,7 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
                   {m.text}
                 </div>
               ) : (
-                <Answer key={m.id} m={m} link={link} admin={!!status?.admin} question={questionBefore(msgs, m.id)} />
+                <Answer key={m.id} m={m} link={link} admin={!!status?.admin} question={questionBefore(msgs, m.id)} onToast={onToast} />
               ),
             )}
           </div>

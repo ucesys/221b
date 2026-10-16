@@ -9,6 +9,8 @@ WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY web/ ./
+# Sherlock's UI actions, the one list the server and the app share.
+COPY server/internal/sherlock/ui_actions.json /src/server/internal/sherlock/ui_actions.json
 RUN npm run build
 
 # The server, with the browser app embedded.

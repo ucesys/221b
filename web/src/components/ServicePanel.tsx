@@ -90,7 +90,7 @@ export function ServicePanel({ serviceKey, row, gone, now, onClose, onToast }: P
       onClose={onClose}
       notice={
         deleted && (
-          <div className="rk-callout" data-tone="warn" style={{ margin: '12px 20px 0' }}>
+          <div className="rk-callout" data-tone="warn" data-peek-error={d ? undefined : ''} style={{ margin: '12px 20px 0' }}>
             <WarnIcon />
             <span style={{ fontSize: 12.5 }}>This Service was deleted. What is shown is the last state 221B saw.</span>
           </div>
@@ -98,11 +98,11 @@ export function ServicePanel({ serviceKey, row, gone, now, onClose, onToast }: P
       }
     >
       {details.error && !deleted && !d && (
-        <p className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }}>
+        <p className="rk-callout" data-tone="warn" data-peek-error="" style={{ margin: 0, fontSize: 12.5 }}>
           {details.error}
         </p>
       )}
-      {!d && !details.error && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Loading…</p>}
+      {!d && !details.error && <p data-peek-loading="" style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Loading…</p>}
       {d && tab === 'overview' && (
         <>
           {d.pending && (

@@ -66,7 +66,13 @@ type Sherlock struct {
 	// no cap.
 	DailyUSD   float64 `json:"dailyUSD"`
 	MonthlyUSD float64 `json:"monthlyUSD"`
+	// ViewControl lets Sherlock change the asking person's view (P6U-14);
+	// nil is on.
+	ViewControl *bool `json:"viewControl,omitempty"`
 }
+
+// ChangesView says whether Sherlock may change the asking person's view.
+func (s Sherlock) ChangesView() bool { return s.ViewControl == nil || *s.ViewControl }
 
 // DefaultSherlock is a fresh installation's: off, with caps in place.
 var DefaultSherlock = Sherlock{Model: "claude-opus-5-5", DailyUSD: 20, MonthlyUSD: 200}

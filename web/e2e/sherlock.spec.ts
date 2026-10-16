@@ -243,7 +243,10 @@ test('a person without access to a namespace learns nothing about it through She
   const all = podRows(await snapshot(request(page), ['pods']))
   const hidden = all.filter((p) => !allowed.includes(p.namespace))
   const target = hidden[0]!
-  const others = hidden.filter((p) => p.namespace === target.namespace && p.name !== target.name)
+  // Names the person may also see in another namespace, as the view state
+  // sent with each question shows them (P6U-03), do not count.
+  const seen = new Set(all.filter((p) => allowed.includes(p.namespace)).map((p) => p.name))
+  const others = hidden.filter((p) => p.namespace === target.namespace && p.name !== target.name && !seen.has(p.name))
   const dev = await signInAs(browser, E2E_DEV)
   try {
     await dev.goto('/#/pods')

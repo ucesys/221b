@@ -1,5 +1,6 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { gridTemplate, type ColumnDef, type SortState } from '../lib/table'
+import { currentHighlight, onHighlight, tableOfRows } from '../lib/tables'
 
 interface Props<R> {
   /** Names the table for assistive technology: "Nodes", "Pods". */
@@ -117,7 +118,9 @@ const Row = memo(function Row<R>({
   now,
   rowAttr,
   style,
+  highlighted = false,
 }: {
+  highlighted?: boolean
   r: R
   cols: ColumnDef<R>[]
   rowKey: string
@@ -142,6 +145,8 @@ const Row = memo(function Row<R>({
       data-sel={selected}
       data-key={rowKey}
       data-open={onOpen ? 'true' : undefined}
+      data-highlight={highlighted ? 'true' : undefined}
+      aria-description={highlighted ? 'Highlighted by Sherlock' : undefined}
       style={style}
       onClick={(e) => {
         // Links and buttons inside a cell act on their own.
@@ -215,6 +220,7 @@ const Row = memo(function Row<R>({
   now: number
   rowAttr?: string
   style?: React.CSSProperties
+  highlighted?: boolean
 }) => ReactNode
 
 /**
@@ -270,6 +276,26 @@ export function DataTable<R>({ label, rows, cols, rowKey, rowLabel, sort, onSort
     requestAnimationFrame(() => focus(6))
   }, [])
 
+  // A row Sherlock highlights (P6U-05): scrolled into view and marked for a
+  // few seconds, without taking focus (P6U-09).
+  const hl = useSyncExternalStore(onHighlight, currentHighlight, () => null)
+  const tableId = tableOfRows.get(rows as object)
+  const hlIndex = hl && tableId && hl.table === tableId ? rows.indexOf(hl.row as R) : -1
+  const hlKey = hlIndex >= 0 ? rowKey(rows[hlIndex]!) : null
+  const hlSeq = hlIndex >= 0 ? hl!.seq : 0
+  useEffect(() => {
+    if (!hlSeq) return
+    const el = container.current
+    if (!el) return
+    const { rowHeight } = latest.current
+    const sp = scrollParent(el)
+    const viewTop = sp === window ? 0 : (sp as HTMLElement).getBoundingClientRect().top
+    const viewHeight = sp === window ? window.innerHeight : (sp as HTMLElement).clientHeight
+    const rowTop = el.getBoundingClientRect().top + hlIndex * rowHeight - viewTop
+    if (rowTop < 0 || rowTop + rowHeight > viewHeight) sp.scrollBy({ top: rowTop - viewHeight / 3 })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hlSeq])
+
   return (
     <div className="rk-card" style={{ overflowX: 'auto' }}>
       <div className="rk-grid" style={{ ['--cols' as string]: template, minWidth }} role="grid" aria-label={label} aria-rowcount={rows.length + 1} aria-colcount={cols.length} data-total={rows.length}>
@@ -302,7 +328,7 @@ export function DataTable<R>({ label, rows, cols, rowKey, rowLabel, sort, onSort
           {above > 0 && <div style={{ height: above }} aria-hidden="true" />}
           {shown.map((r, i) => {
             const k = rowKey(r)
-            return <Row<R> key={k} r={r} cols={cols} rowKey={k} index={first + i} label={rowLabel(r, selected === k)} selected={selected === k} onOpen={onOpen} onJump={jump} now={now} rowAttr={rowAttr} style={{ height: rowHeight }} />
+            return <Row<R> key={k} r={r} cols={cols} rowKey={k} index={first + i} label={rowLabel(r, selected === k)} selected={selected === k} onOpen={onOpen} onJump={jump} now={now} rowAttr={rowAttr} style={{ height: rowHeight }} highlighted={k === hlKey} />
           })}
           {below > 0 && <div style={{ height: below }} aria-hidden="true" />}
         </div>

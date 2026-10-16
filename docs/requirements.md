@@ -211,7 +211,7 @@ Phase 5 adds Sherlock, which answers questions about a cluster from live data. I
 | P5-04 | Answers stream, cite the objects they rely on as links into the console, and can be stopped. | 90% of answers start within 5 seconds, and every cited link opens its object. |
 | P5-05 | Admin settings: Sherlock on or off per cluster, the Claude API key (kept in a Kubernetes Secret), the model, and daily and monthly spending caps. Each question is audited with its tools and token use. | Reaching a cap stops new questions with a clear message. |
 | P5-06 | An evaluation set built from the prototype's sample problems, such as a pending pod, a failed Helm upgrade, a drain blocked by a budget and a LoadBalancer without an IP. | Sherlock finds the cause in at least 9 of 10 cases, measured nightly. |
-| P5-07 | When a fix needs a change, Sherlock proposes the command and hands it to Watson in Phase 6. | Sherlock's toolset contains no tool that writes. |
+| P5-07 | When a fix needs a change, Sherlock proposes the command and hands it to Watson in Phase 6. | Sherlock's toolset contains no tool that writes to a cluster or to settings shared with others. Its UI tools change only the asking person's own view (reworded by P6U-16). |
 | P5-08 | Where the browser allows it, the Sherlock panel moves to a window of its own, for example on another monitor, and back. The conversation carries on in it, and Ask Sherlock buttons in the main window send their questions there. | A question asked from the main window is answered in the separate window, and closing that window brings the panel back with the conversation. |
 
 **Not in Phase 5:** running any command. Watson arrives in Phase 6.
@@ -233,6 +233,8 @@ Phase 6 adds Watson, the first part of 221B that changes clusters. Reads run at 
 | P6-07 | An optional setting requires a second person to approve changes on production clusters. | With it on, nobody can approve their own change. |
 | P6-08 | Every command, approval, refusal and result is audited. | Each step writes one record naming the person and cluster. |
 | P6-09 | Where the browser allows it, the Watson panel moves to a window of its own, with Sherlock or apart from it, for example on another monitor, and back. Commands sent from the main window wait for approval there. | An approval made in the separate window runs the command, and closing the window brings the panel back with its commands. |
+
+**Sherlock UI control (P6U-01 to P6U-20), added to Phase 6:** Sherlock reads what the asking person's console window shows and, while it answers, may change that person's own view: open a tab or an object's details, set filters, search, sort, show or hide columns and highlight a row, through a fixed list of eight actions run in that window. It never changes a cluster or what others see; an administrator can turn view changes off. The requirements, with their Done-when, are in [Sherlock UI control](sherlock-ui-control.md); its open questions were settled as proposed there.
 
 **Not in Phase 6:** `kubectl apply`, `edit` and `exec`, and helm install or upgrade (see Open questions).
 

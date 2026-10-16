@@ -24,6 +24,11 @@ import (
 // key set and turned on for the local cluster, talking to a fake Claude.
 func sherlockSetup(t *testing.T, who string, deny map[string]bool) (*httptest.Server, *http.Client, *fakeclaude.Fake, *bytes.Buffer, *source, *sherlock.Service) {
 	t.Helper()
+	return sherlockSetupWith(t, who, deny, nil)
+}
+
+func sherlockSetupWith(t *testing.T, who string, deny map[string]bool, mod func(*sherlock.Options)) (*httptest.Server, *http.Client, *fakeclaude.Fake, *bytes.Buffer, *source, *sherlock.Service) {
+	t.Helper()
 	fake := fakeclaude.New()
 	fake.Delay = time.Millisecond
 	api := httptest.NewServer(fake)
@@ -31,7 +36,7 @@ func sherlockSetup(t *testing.T, who string, deny map[string]bool) (*httptest.Se
 	keys := sherlock.NewKeys(nil, "", nil)
 	var svc *sherlock.Service
 	srv, c, _, auditOut, local, _ := multiSetupWith(t, who, deny, func(o *Options) {
-		svc = sherlock.New(sherlock.Options{
+		so := sherlock.Options{
 			Client: &sherlock.Client{BaseURL: api.URL, Key: keys.Key},
 			Settings: func() sherlock.Settings {
 				sh := o.Settings.Current().SherlockOrDefault()
@@ -40,7 +45,11 @@ func sherlockSetup(t *testing.T, who string, deny map[string]bool) (*httptest.Se
 			Secrets: func() []string { return []string{keys.Key()} },
 			Audit:   o.Audit,
 			Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
-		})
+		}
+		if mod != nil {
+			mod(&so)
+		}
+		svc = sherlock.New(so)
 		o.Sherlock, o.SherlockKeys = svc, keys
 	})
 	t.Cleanup(svc.Wait)
@@ -110,9 +119,13 @@ func askAndRead(t *testing.T, srv *httptest.Server, c *http.Client, svc *sherloc
 	return v.Messages[len(v.Messages)-1]
 }
 
-// The toolset reads and nothing else (P5-07). The names are listed here so
-// that a new tool is a reviewed change; and the Cluster interface they
-// reach has no method that writes, which the compiler holds them to.
+// Sherlock's toolset contains no tool that writes to a cluster or to
+// settings shared with others; its UI tools change only the asking
+// person's own view (P5-07 as reworded by P6U-16). The cluster tools are
+// listed here, so that a new one is a reviewed change, and the Cluster
+// interface they reach has no method that writes, which the compiler holds
+// them to. The UI tools are listed in TestSherlockUIActionsList and run in
+// the browser, which has no way to change a cluster but Watson's card.
 func TestSherlockToolsOnlyRead(t *testing.T) {
 	var names []string
 	for _, tl := range sherlockTools {

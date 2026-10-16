@@ -16,7 +16,7 @@ export interface AssistantHandlers {
 }
 
 const EVENTS: Record<Assistant, string[]> = {
-  sherlock: ['status', 'conversation', 'answer'],
+  sherlock: ['status', 'conversation', 'answer', 'ui'],
   watson: ['status', 'items', 'item', 'gone'],
 }
 

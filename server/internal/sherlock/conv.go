@@ -58,6 +58,8 @@ type Msg struct {
 	Model   string     `json:"model,omitempty"`
 	Usage   *Usage     `json:"usage,omitempty"`
 	CostUSD float64    `json:"costUSD,omitempty"`
+	// View is what the answer changed in the asking window's view (P6U-10).
+	View []ViewChange `json:"view,omitempty"`
 }
 
 // Key names a conversation: one per session and cluster.
@@ -83,6 +85,10 @@ type Conversation struct {
 	lastUsed time.Time
 	subs     map[chan struct{}]struct{}
 	rev      int
+	// The UI actions sent to the browser, and those waiting for a result.
+	uiOut  []UIRequest
+	uiSeq  int
+	uiWait map[string]chan UIResult
 }
 
 // View is a conversation as the browser receives it.
@@ -106,6 +112,7 @@ func (c *Conversation) viewLocked() View {
 		cp := *m
 		cp.Steps = append([]Step(nil), m.Steps...)
 		cp.Refs = append([]Ref(nil), m.Refs...)
+		cp.View = append([]ViewChange(nil), m.View...)
 		out[i] = &cp
 	}
 	return View{ID: c.ID, Messages: out, Busy: c.busy, Rev: c.rev}
@@ -163,6 +170,8 @@ type Options struct {
 	MaxResult int
 	// MaxHistory bounds what is sent of the conversation, in characters.
 	MaxHistory int
+	// UITimeout is how long a UI action waits for the browser.
+	UITimeout time.Duration
 }
 
 // Service keeps the conversations and answers questions.
@@ -198,6 +207,9 @@ func New(o Options) *Service {
 	if o.MaxHistory <= 0 {
 		o.MaxHistory = 360_000
 	}
+	if o.UITimeout <= 0 {
+		o.UITimeout = UITimeout
+	}
 	if o.Settings == nil {
 		o.Settings = func() Settings { return Settings{Model: DefaultModel} }
 	}
@@ -216,7 +228,7 @@ func (s *Service) Conversation(k Key) *Conversation {
 	defer s.mu.Unlock()
 	c := s.convs[k]
 	if c == nil {
-		c = &Conversation{ID: newID(), known: Known{}, subs: map[chan struct{}]struct{}{}}
+		c = &Conversation{ID: newID(), known: Known{}, subs: map[chan struct{}]struct{}{}, uiWait: map[string]chan UIResult{}}
 		s.convs[k] = c
 	}
 	c.lastUsed = s.opts.Now()
@@ -265,6 +277,14 @@ type Question struct {
 	Tools   Toolbox
 	Who     audit.Who
 	From    string
+	// Window is the console window whose view the UI actions change: the
+	// one that asked, or the main window Sherlock's own window follows
+	// (P6U-08). Empty when there is none.
+	Window string
+	// View is that window's view state when asked (P6U-03).
+	View string
+	// ViewChanges offers the UI actions that change the view (P6U-14).
+	ViewChanges bool
 }
 
 // MaxQuestion bounds a question, in characters.
@@ -298,7 +318,11 @@ func (s *Service) Ask(q Question) (*Conversation, error) {
 	ans := &Msg{ID: c.seq, Role: "sherlock", Status: "thinking", At: now, Model: set.Model}
 	c.msgs = append(c.msgs, ans)
 	c.starts = append(c.starts, len(c.history))
-	c.history = append(c.history, Message{Role: "user", Content: []Block{{Type: "text", Text: text}}})
+	content := []Block{{Type: "text", Text: text}}
+	if v := s.viewBlock(q.View); v != "" {
+		content = append(content, Block{Type: "text", Text: v})
+	}
+	c.history = append(c.history, Message{Role: "user", Content: content})
 	ctx, cancel := context.WithCancel(context.Background())
 	c.busy, c.cancel = true, cancel
 	c.changedLocked()
@@ -366,13 +390,14 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		tools   []string
 		outcome = audit.OutcomeOK
 		detail  string
+		ui      uiLog
 	)
-	defs := q.Tools.Defs()
+	defs := append(append([]ToolDef(nil), q.Tools.Defs()...), uiDefs(q.ViewChanges)...)
 	if n := len(defs); n > 0 {
 		defs = append([]ToolDef(nil), defs...)
 		defs[n-1].CacheControl = &CacheControl{Type: "ephemeral"}
 	}
-	system := []Block{{Type: "text", Text: systemPrompt(q.Cluster, q.Version, s.opts.Now()), CacheControl: &CacheControl{Type: "ephemeral"}}}
+	system := []Block{{Type: "text", Text: systemPrompt(q.Cluster, q.Version, s.opts.Now(), q.ViewChanges), CacheControl: &CacheControl{Type: "ephemeral"}}}
 	first := func() {
 		if ans.FirstAt == nil {
 			t := s.opts.Now()
@@ -401,6 +426,9 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 	defer func() {
 		if err := s.opts.Ledger.Save(context.Background()); err != nil {
 			s.opts.Logger.Warn("saving the Sherlock spend failed", "err", err)
+		}
+		if u := ui.String(); u != "" {
+			detail = strings.TrimPrefix(detail+"; "+u, "; ")
 		}
 		s.record(q, set.Model, tools, total, cost, outcome, detail)
 	}()
@@ -476,7 +504,13 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		ans.Status = "thinking"
 		start := len(ans.Steps)
 		for _, b := range calls {
-			ans.Steps = append(ans.Steps, Step{Label: q.Tools.Label(b.Name, b.Input), Tool: b.Name, Status: "running"})
+			label := ""
+			if IsUITool(b.Name) {
+				label = uiLabel(b.Name)
+			} else {
+				label = q.Tools.Label(b.Name, b.Input)
+			}
+			ans.Steps = append(ans.Steps, Step{Label: label, Tool: b.Name, Status: "running"})
 			tools = append(tools, b.Name)
 		}
 		first()
@@ -485,7 +519,12 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 
 		results := make([]Block, 0, len(calls))
 		for i, b := range calls {
-			r := q.Tools.Run(ctx, b.Name, b.Input)
+			var r ToolResult
+			if IsUITool(b.Name) {
+				r = s.runUI(ctx, c, ans, q, b, &ui)
+			} else {
+				r = q.Tools.Run(ctx, b.Name, b.Input)
+			}
 			if ctx.Err() != nil {
 				outcome, detail = audit.OutcomeStopped, "stopped by the person asking"
 				finish("stopped", "")

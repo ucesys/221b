@@ -20,7 +20,7 @@ export function parseRef(url: string): SherlockRef | null {
 export type RefTarget = { peek: string } | { href: string }
 
 /** The kinds whose details the console opens by name. */
-const OBJECT_KINDS = new Set([
+export const OBJECT_KINDS = new Set([
   'Deployment',
   'StatefulSet',
   'DaemonSet',
@@ -85,6 +85,12 @@ export type PopMessage =
   /** The window closes, and the main window docks the panels again. */
   | { type: 'close' }
   | { type: 'open'; cluster: string; target: RefTarget }
+  /** Sherlock's window asks the main window it follows for its view (P6U-03), and it answers. */
+  | { type: 'view?'; req: string; window: string }
+  | { type: 'view'; req: string; window: string; view: string }
+  /** Undo of an answer's view changes, asked from any window (P6U-10), and its result. */
+  | { type: 'undo'; answer: number }
+  | { type: 'undone'; answer: number }
 
 let channel: BroadcastChannel | null = null
 const listeners = new Set<(m: PopMessage) => void>()

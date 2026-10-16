@@ -243,7 +243,7 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
       onClose={onClose}
       notice={
         deleted && (
-          <div className="rk-callout" data-tone="warn" style={{ margin: '12px 20px 0', borderRadius: 8 }} data-testid="pod-deleted">
+          <div className="rk-callout" data-tone="warn" data-peek-error={d ? undefined : ''} style={{ margin: '12px 20px 0', borderRadius: 8 }} data-testid="pod-deleted">
             <WarnIcon />
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
               <strong style={{ fontSize: 12.5, fontWeight: 600 }}>This pod was deleted</strong>
@@ -254,11 +254,11 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
       }
     >
       {details.error && !deleted && !d && (
-        <p className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }}>
+        <p className="rk-callout" data-tone="warn" data-peek-error="" style={{ margin: 0, fontSize: 12.5 }}>
           {details.error}
         </p>
       )}
-      {!d && !details.error && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Loading…</p>}
+      {!d && !details.error && <p data-peek-loading="" style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Loading…</p>}
       {d && tab === 'overview' && (
         <>
           {d.unschedulable && (

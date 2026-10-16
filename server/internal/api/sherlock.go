@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -76,6 +77,42 @@ func (s *Server) getSherlock(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, b)
 }
 
+var windowRE = regexp.MustCompile(`^[a-z0-9]{8,32}$`)
+
+// windowID is a console window's id as the browser makes it, or empty.
+func windowID(s string) string {
+	if windowRE.MatchString(s) {
+		return s
+	}
+	return ""
+}
+
+// postSherlockUI takes a console window's result of a UI action (P6U-17).
+// It must come from the session that asked: the conversation is looked
+// up by the poster's own session, so another person's result, or one that
+// comes after the action gave up, finds nothing.
+func (s *Server) postSherlockUI(w http.ResponseWriter, r *http.Request) {
+	if _, _, ok := s.lookup(w, r); !ok {
+		return
+	}
+	if ct, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";"); strings.TrimSpace(strings.ToLower(ct)) != "application/json" {
+		jsonError(w, http.StatusUnsupportedMediaType, "send the result as application/json")
+		return
+	}
+	var in sherlock.UIResult
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		jsonError(w, http.StatusBadRequest, "the result is not valid: "+err.Error())
+		return
+	}
+	if err := s.opts.Sherlock.DeliverUI(convKey(r), r.PathValue("id"), in); err != nil {
+		jsonError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // maxQuestionBody bounds a question.
 const maxQuestionBody = 16 << 10
 
@@ -96,6 +133,10 @@ func (s *Server) postSherlockAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	var in struct {
 		Question string `json:"question"`
+		// Window and View are the console window whose view Sherlock may
+		// change and its view state (P6U-03, P6U-08).
+		Window string `json:"window"`
+		View   string `json:"view"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxQuestionBody))
 	dec.DisallowUnknownFields()
@@ -118,6 +159,10 @@ func (s *Server) postSherlockAsk(w http.ResponseWriter, r *http.Request) {
 		Tools:   s.toolboxFor(r, id, cl),
 		Who:     audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name},
 		From:    fromAddr(r),
+		Window:  windowID(in.Window),
+		View:    in.View,
+		// Read once per question, so a change applies to the next one.
+		ViewChanges: s.sherlockSettings().ChangesView(),
 	})
 	var capErr *sherlock.ErrCap
 	switch {
@@ -192,6 +237,9 @@ func (s *Server) sherlockPart(r *http.Request) streamPart {
 		if write("conversation", last) != nil {
 			return
 		}
+		// UI actions go to the window named in each; a window that connects
+		// later does not get earlier ones.
+		_, uiSeq := conv.UIRequestsAfter(1 << 62)
 		statusTick := time.NewTicker(5 * time.Second)
 		defer statusTick.Stop()
 		for {
@@ -216,6 +264,13 @@ func (s *Server) sherlockPart(r *http.Request) streamPart {
 				select {
 				case <-ch:
 				default:
+				}
+				var reqs []sherlock.UIRequest
+				reqs, uiSeq = conv.UIRequestsAfter(uiSeq)
+				for _, q := range reqs {
+					if write("ui", q) != nil {
+						return
+					}
 				}
 				v := conv.View()
 				if v.Rev == last.Rev {
@@ -337,6 +392,13 @@ func sherlockChange(a, b settings.Sherlock) string {
 	}
 	if a.MonthlyUSD != b.MonthlyUSD {
 		parts = append(parts, fmt.Sprintf("monthly cap $%.2f → $%.2f", a.MonthlyUSD, b.MonthlyUSD))
+	}
+	if a.ChangesView() != b.ChangesView() {
+		if b.ChangesView() {
+			parts = append(parts, "view changes on")
+		} else {
+			parts = append(parts, "view changes off")
+		}
 	}
 	ids := map[string]bool{}
 	for id := range a.Clusters {

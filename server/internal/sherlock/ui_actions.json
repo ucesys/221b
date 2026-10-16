@@ -1,0 +1,116 @@
+{
+  "about": "Sherlock's UI actions (P6U-04, P6U-05): the one list that both the server's tool definitions and the browser's registry use. They run in the asking person's console window and change only that person's view. Edit here; the browser imports this file.",
+  "actions": [
+    {
+      "name": "view_state",
+      "changes": false,
+      "description": "Reads the person's console view as it is now: the tab and path, its filters, each table on screen (its id, search text, sort, shown and hidden columns, rows shown against rows in the table, the names of the first rows shown) and the open details pane. The view when the question was asked is already attached to it; call this after changing the view, or when the person may have moved.",
+      "input_schema": { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
+    },
+    {
+      "name": "view_open",
+      "changes": true,
+      "description": "Opens a tab of the cluster the person is on, with an optional path and filters, replacing the filters there. Tabs: alerts, nodes, fleets, namespaces (path: [namespace]), pods, helm (path: [namespace, release]), services, networks, access, policies (path: [section]). The filters each tab accepts are those view_filter accepts. It cannot open another cluster: for that, give the person a link instead.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tab": { "type": "string", "enum": ["alerts", "nodes", "fleets", "namespaces", "pods", "helm", "services", "networks", "access", "policies"], "description": "The tab." },
+          "path": { "type": "array", "items": { "type": "string" }, "description": "The tab's path, such as [\"web\"] for the namespace web or [\"web\", \"shop\"] for a Helm release." },
+          "filters": { "type": "object", "additionalProperties": { "type": ["string", "array"], "items": { "type": "string" } }, "description": "Filters by name, such as {\"status\": \"failing\", \"ns\": [\"web\"]}." },
+          "cluster": { "type": "string", "description": "Only the cluster the person is on; any other is refused with a link to offer instead." }
+        },
+        "required": ["tab"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "view_filter",
+      "changes": true,
+      "description": "Changes the filters of the tab the person is on. Nodes: role (all, control-plane, worker), label and taint (lists). Pods: role, status (all, running, pending, failing, completed), ns and node (lists of names), label, taint. Services: ns, type (all, ClusterIP, Headless, NodePort, LoadBalancer, notReady). Namespaces: kinds (list of object kinds). Alerts: kind (all, pods, nodes, volumes), show (active, all). Fleets: fleet, pl, pt (lists), group (fleet, none). Helm: tab (pods, workloads, storage, network, other, values, notes, history). Access: kind (all, users, groups, sas), verb, res, wns, tbl (bindings, roles), sys and defaults (\"1\" or \"\"). Search text has its own action, view_search.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "set": { "type": "object", "additionalProperties": { "type": ["string", "array"], "items": { "type": "string" } }, "description": "Filters to set, replacing their values." },
+          "add": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "string" } }, "description": "Values to add to list filters." },
+          "clear": { "type": "array", "items": { "type": "string" }, "description": "Filters to clear; [\"*\"] clears them all." }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "view_search",
+      "changes": true,
+      "description": "Sets or clears the search text of a table on screen, which shows only the rows that contain every word. Without a table, the tab's main search box.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "table": { "type": "string", "description": "The table's id from the view state." },
+          "text": { "type": "string", "maxLength": 200, "description": "The search text; empty clears it." }
+        },
+        "required": ["text"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "view_sort",
+      "changes": true,
+      "description": "Sorts a table on screen by one of its columns.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "table": { "type": "string", "description": "The table's id from the view state; without it, the tab's first table." },
+          "column": { "type": "string", "description": "A column id of that table, from the view state." },
+          "direction": { "type": "string", "enum": ["asc", "desc"], "description": "Ascending or descending." }
+        },
+        "required": ["column", "direction"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "view_columns",
+      "changes": true,
+      "description": "Shows or hides columns of a table on screen until the page reloads; the person's saved column choices stay as they were.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "table": { "type": "string", "description": "The table's id from the view state; without it, the tab's first table." },
+          "show": { "type": "array", "items": { "type": "string" }, "description": "Column ids to show." },
+          "hide": { "type": "array", "items": { "type": "string" }, "description": "Column ids to hide." }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "view_details",
+      "changes": true,
+      "description": "Opens the details pane of an object over the page, as clicking its link does, or closes it. Kinds: Node, Pod, Service, and namespaced objects such as Deployment, StatefulSet, DaemonSet, Job, CronJob, Ingress, PersistentVolumeClaim, ConfigMap, Secret (key names only).",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "kind": { "type": "string", "description": "The object's kind." },
+          "namespace": { "type": "string", "description": "Its namespace, for a namespaced object." },
+          "name": { "type": "string", "description": "Its name." },
+          "close": { "type": "boolean", "description": "Close the details pane instead." }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "view_highlight",
+      "changes": true,
+      "description": "Scrolls a row of a table on screen into view and marks it for a few seconds.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "table": { "type": "string", "description": "The table's id from the view state; without it, the tab's first table." },
+          "row": { "type": "string", "description": "The row's name, as the view state lists it." }
+        },
+        "required": ["row"],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

@@ -18,6 +18,7 @@ Decisions worth a look, because they shape what you will see:
 - **ADR-54:** one dock for Sherlock and Watson, and one window for both (P6-09).
 - **ADR-55:** P1-05's image limit rises from 60 MB to 80 MB, as you decided; the image is about 70 MB.
 - **ADR-56:** Sherlock and Watson share one event stream, so a page holds two connections, not three.
+- **ADR-57:** Sherlock changes the asking person's own view through eight typed actions run in that window, never by clicking or reading the page.
 
 ## Setting up for the review
 
@@ -124,6 +125,25 @@ Sherlock and Watson leave the main window together, into one window, and come ba
 - The new-window button in the dock opens one window with both panes; the main window shows an icon to bring it forward or **Dock here**.
 - Cordon pressed in the main window puts its card in the other window, where **Approve and run** runs it; Ask Sherlock in the main window is answered there, and a link there opens in the main window.
 - The dock-back button closes the window, and both panes return to the main window with their commands and conversation.
+
+## 10. Sherlock changes the view (Sherlock UI control, P6U-01 to P6U-20)
+
+![Sherlock filtered the Nodes tab to the control plane, and says so with Undo](images/phase-6/sherlock-view-light-1440.png)
+
+Built from [Sherlock UI control](sherlock-ui-control.md), with its five open questions settled as proposed: no switching clusters (Sherlock gives a link), no acknowledging alerts, no filling in editors, **Let Sherlock change the view** on by default, and P5-07 reworded. Its [As built](sherlock-ui-control.md#as-built) section lists what was decided along the way.
+
+**Try it:** with Sherlock on, ask "Show me the failing pods in web", "Sort the nodes by free memory", "Open the node with the most problems" or, with a node's details open, "Why is this node not ready?". Change tabs while it answers, and it stops changing the view. Press **Undo** under the answer. Turn the switch off in Settings → Sherlock and ask again: it answers in words with links.
+
+**CI proves:**
+- The view goes with each question, scrubbed: "this node" is the node open, and a token typed in a search box arrives as `[REDACTED]`.
+- Each action works docked and from Sherlock's own window. Focus stays where it was. Undo restores the tab, filters, search, sort, columns and details. After a reload the columns are the person's own again.
+- Unknown filters, columns, tabs and fields are refused with nothing changed; another cluster is offered as a link. Markup in a value stays text.
+- Only the window that asked changes. From Sherlock's own window, the main window it follows changes. With that window closed, Sherlock says so.
+- A person limited to two namespaces who asks for a pod elsewhere hears only that it is not available. With the switch off, only `view_state` is offered.
+- Server: another session's result and a late one are refused, an action times out after 5 seconds, an eleventh action is refused, and one audit record names every action with what came of it.
+- Every table is registered, and 10,000 rows sort and search through the registry in under 200 ms.
+
+**Nightly:** `221b-eval` asks nine UI questions and grades the view each leaves, and asks about a pod whose annotation and log tell Sherlock to open the Access tab and hide every column. It fails below 90% of the UI tasks, or if any planted instruction is followed. CI runs it against the fake API, which checks the plumbing only.
 
 ## Changed after your first look
 

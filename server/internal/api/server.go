@@ -282,6 +282,7 @@ func New(o Options) *Server {
 			s.handle("POST "+base+"sherlock/ask", "sherlock-ask", s.postSherlockAsk)
 			s.handle("POST "+base+"sherlock/stop", "sherlock-stop", s.postSherlockStop)
 			s.handle("POST "+base+"sherlock/new", "sherlock-new", s.postSherlockNew)
+			s.handle("POST "+base+"sherlock/ui/{id}", "sherlock-ui", s.postSherlockUI)
 		}
 		s.handle("GET /api/v1/sherlock/config", "sherlock-config", s.getSherlockConfig)
 		s.handle("PUT /api/v1/sherlock/config", "sherlock-config-update", s.putSherlockConfig)

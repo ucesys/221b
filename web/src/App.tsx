@@ -31,6 +31,8 @@ import { canPopOut, focusPopup, onPop, popOut, post, usePopped, WINDOW_VIEWS, ty
 import { openTarget, SherlockContext, SherlockPane } from './components/Sherlock'
 import { Dock, PoppedOutFab, type DockMode } from './components/Dock'
 import { autoRunReads, WatsonContext, WatsonPane } from './components/Watson'
+import { askContext, useUIControl } from './lib/uiWindow'
+import { ViewAnnouncer } from './components/ViewAnnouncer'
 import { AssistantWindow } from './components/AssistantWindow'
 import { readJSON, writeJSON } from './lib/storage'
 
@@ -175,6 +177,8 @@ function Shell() {
   const sherlock = useSherlock(route.cluster)
   const watson = useWatson(route.cluster, view === 'tabs')
   const popped = usePopped()
+  // Sherlock's UI actions run in this window (P6U-08).
+  useUIControl(route.cluster, sherlock.conv)
   const [dock, setDockState] = useState<DockState>(() => {
     const d = readJSON<DockState | null>(DOCK_KEY, null)
     return d && (d.mode === 'open' || d.mode === 'min' || d.mode === 'max') && typeof d.h === 'number' ? d : { mode: 'open', h: 300 }
@@ -209,7 +213,8 @@ function Shell() {
       const away = popped
       if (!away && (over || dock.mode === 'min')) setDock({ ...dock, mode: over ? 'max' : 'open', pane: 'sherlock' })
       else if (!away) setDock({ ...dock, pane: 'sherlock' })
-      askSherlock(route.cluster, q)
+      askContext()
+        .then((ctx) => askSherlock(route.cluster, q, ctx))
         .then(() => {
           if (away) focusPopup()
         })
@@ -287,6 +292,7 @@ function Shell() {
       )}
       {view === 'tabs' && popped && <PoppedOutFab onFocus={() => focusPopup()} onDock={() => post({ type: 'close' })} />}
       {view === 'tabs' && <PeekPane route={route} cluster={live.cluster} now={now} onToast={setToast} />}
+      {popped && <ViewAnnouncer />}
       <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} canChange={me?.admin ?? true} />
       {editing === null && <ClusterEditor key="+" orig={null} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
       {editing && editOrig && <ClusterEditor key={editing} orig={editOrig} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}

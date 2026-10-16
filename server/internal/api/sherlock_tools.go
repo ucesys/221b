@@ -30,7 +30,8 @@ import (
 // them are the console's own API, called in-process with the person's
 // session, so they see exactly what the person's tabs show and nothing
 // more. None of them writes (P5-07); TestSherlockToolsOnlyRead checks
-// each one is a read.
+// each one is a read. Sherlock's other tools, the UI actions
+// (sherlock/ui.go), change only the asking person's own view.
 
 type toolbox struct {
 	s       *Server

@@ -2,7 +2,7 @@
 
 Oct 15, 2026 · Mikhail Stolpner
 
-An addition to [Phase 6](requirements.md#phase-6-watson), written against the `phase-6` branch at commit `067f67c`. It lets Sherlock read what you are looking at, move you around the console, and change what a table shows, so that "show me the crash-looping pods in web" or "why is this node not ready?" works on the screen you have open. It changes nothing in a cluster and nothing other people see. The requirement IDs start with P6U so they cannot clash with the P6 numbers; they fold into the P6 list when this is merged into the requirements.
+An addition to [Phase 6](requirements.md#phase-6-watson), written against the `phase-6` branch at commit `067f67c`, and built on that branch (see [As built](#as-built)). It lets Sherlock read what you are looking at, move you around the console, and change what a table shows, so that "show me the crash-looping pods in web" or "why is this node not ready?" works on the screen you have open. It changes nothing in a cluster and nothing other people see. The requirement IDs start with P6U so they cannot clash with the P6 numbers; they fold into the P6 list when this is merged into the requirements.
 
 ## Scope
 
@@ -120,11 +120,25 @@ Mostly new files, to keep clear of the other changes to Phase 6 that are going i
 
 | Question | Proposal | Status |
 | --- | --- | --- |
-| May Sherlock switch to another cluster? | No (P6U-06). It offers a link, since a conversation belongs to one cluster and would otherwise be lost on the switch. | Open |
-| May Sherlock acknowledge an alert? | No. It opens the alert and you acknowledge it. | Open |
-| Should Sherlock be able to fill in, but not submit, editors such as the fleet editor? | Not now. Maybe later, never for credential fields. | Open |
-| Is the administrator switch (P6U-14) on or off by default? | On, wherever Sherlock is on. | Open |
-| Is the rewording of P5-07 (P6U-16) acceptable? | Yes: the rule that matters is that nothing Sherlock can call writes to a cluster or to what others share. | Open |
+| May Sherlock switch to another cluster? | No (P6U-06). It offers a link, since a conversation belongs to one cluster and would otherwise be lost on the switch. | Decided as proposed |
+| May Sherlock acknowledge an alert? | No. It opens the alert and you acknowledge it. | Decided as proposed |
+| Should Sherlock be able to fill in, but not submit, editors such as the fleet editor? | Not now. Maybe later, never for credential fields. | Decided as proposed |
+| Is the administrator switch (P6U-14) on or off by default? | On, wherever Sherlock is on. | Decided as proposed |
+| Is the rewording of P5-07 (P6U-16) acceptable? | Yes: the rule that matters is that nothing Sherlock can call writes to a cluster or to what others share. | Decided as proposed |
+
+## As built
+
+Built as specified, with the open questions settled as proposed. Where the work landed and what was decided along the way:
+
+- **One list.** `server/internal/sherlock/ui_actions.json` holds the eight actions with their descriptions and input schemas. The server embeds it as the tool definitions; the browser imports the same file for its registry (`web/src/lib/uiControl.ts`), and the image build copies it into the browser's build. A Go test and a unit test fail if the lists differ or grow.
+- **The view state** goes with the question inside `<console-view>`, after scrubbing. The details pane is reported as open, loading or not available, and nothing more about an object the person may not see.
+- **Which window.** Each console window has an id. A question from a main window names that window; one from Sherlock's own window names the main window that opened it, and asks it for its view. A `ui` event names its window, and only that window runs it.
+- **The tables.** Every table built with `useTable` registers under its id (`web/src/lib/tables.ts`). The Namespaces tab's table of objects drives only the columns of its kind cards. Tables built without `useTable` (the kind cards, the Fleets matrix, the alert cards' event lists and the release list on Namespaces) are not sorted or searched by Sherlock, though their tabs' filters can be set.
+- **A drawer Sherlock opens** stops above the dock and is not modal, so the answer, Undo and the question box stay in reach. Drawers the person opens are unchanged.
+- **Undo** is offered under the answer in any window; the main window that ran the changes holds what to restore, so Undo from Sherlock's own window puts that main window back.
+- **Tests.** The fake Claude API runs the tool calls a question scripts as `[[tool {input}]]`, one per round, and `[[sleep ms]]` waits before the next. With the details of a node open, "this node" is answered about it. `web/e2e/sherlock-ui.spec.ts` covers each requirement in the simulator and in kind, in Chromium, Firefox and WebKit; `server/internal/api/sherlock_ui_test.go` covers the transport, limits, switch and audit.
+- **Evaluation.** `221b-eval` gained UI tasks graded by the view they leave and two cases with instructions planted in a pod's annotation and log (`221b-sim -planted`). A stand-in console window answers the `ui` events. The nightly run fails below 90% of the UI tasks or if any planted instruction is followed.
+- **One existing test changed.** The P5-02 browser test checks that no hidden pod's name reaches the Claude API. The view state now names the rows on screen, and a pod the person may see can share its name with a hidden one (`cache-0` in two namespaces). The test now skips names that are also visible.
 
 ## Your review
 
