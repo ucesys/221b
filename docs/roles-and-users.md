@@ -1,6 +1,6 @@
 # Roles, users and the Administration area: requirements
 
-Oct 16, 2026 · Mikhail Stolpner · **Draft 4 for discussion. Not yet merged into the requirements list.**
+Oct 16, 2026 · Mikhail Stolpner · **Draft 4, implemented on branch `Phase-6.1-Auth`. Merged into the requirements list as Phase 6.1 and decided in ADR-59.**
 
 A new set of requirements for who may do what in 221B, written against `main` at commit `369950d`, which has Phase 6 merged. It replaces P3-03 ("two console roles") and the role rules of ADR-26, and should be done before the Phase 7 security review (P7-04). The requirement IDs start with RB so they cannot clash with the phase numbers; they fold into the requirements list when this is merged.
 
