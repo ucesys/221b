@@ -5,7 +5,14 @@ import { defineConfig, devices } from '@playwright/test'
 // (chromium, firefox, webkit); Chromium alone by default.
 const baseURL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:8080'
 const browsers = (process.env.E2E_BROWSERS ?? 'chromium').split(',').map((b) => b.trim())
-const desktop = { chromium: devices['Desktop Chrome'], firefox: devices['Desktop Firefox'], webkit: devices['Desktop Safari'] } as const
+// In CI, Firefox under Playwright now and then stalls a page before its
+// script loads, late in the serial run that opens many pages and
+// contexts, each page holding two event streams (ADR-56). The likely cause
+// is its limit of six connections per host, with streams of pages already
+// closed still counted. Real browsers have the same limit over HTTP/1.1;
+// the tests raise it so they measure the console, not that.
+const firefox = { ...devices['Desktop Firefox'], launchOptions: { firefoxUserPrefs: { 'network.http.max-persistent-connections-per-server': 32 } } }
+const desktop = { chromium: devices['Desktop Chrome'], firefox, webkit: devices['Desktop Safari'] } as const
 
 export default defineConfig({
   testDir: './e2e',
