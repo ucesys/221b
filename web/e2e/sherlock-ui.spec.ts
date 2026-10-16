@@ -295,11 +295,13 @@ test('the change notice and the highlight meet WCAG 2.2 AA in both themes and at
     await open(page, '#/pods')
     const name = (await page.locator('[data-testid=rows] [role=row]').nth(3).getAttribute('data-key'))!
     await ask(page, `[[view_sort {"table":"pods","column":"name","direction":"asc"}]] [[view_highlight {"table":"pods","row":"${name}"}]]`)
-    await done(page)
+    // A highlight lasts four seconds, which a slow runner can spend
+    // finishing the answer: it is checked, with the page, as it shows.
     await expect(page.locator('[data-highlight=true]')).toHaveCount(1)
     await expect(lastAnswer(page).getByTestId('sherlock-view-changed')).toBeVisible()
     const results = await new AxeBuilder({ page }).withTags(TAGS).analyze()
     expect(results.violations, `${theme}: ${results.violations.map((v) => v.id).join(', ')}`).toEqual([])
+    await done(page)
   }
   // At 390 px the pods table is long; the notice is what is new there.
   await page.setViewportSize({ width: 390, height: 844 })

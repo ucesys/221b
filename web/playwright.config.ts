@@ -11,7 +11,7 @@ const browsers = (process.env.E2E_BROWSERS ?? 'chromium').split(',').map((b) => 
 // is its limit of six connections per host, with streams of pages already
 // closed still counted. Real browsers have the same limit over HTTP/1.1;
 // the tests raise it so they measure the console, not that.
-const firefox = { ...devices['Desktop Firefox'], launchOptions: { firefoxUserPrefs: { 'network.http.max-persistent-connections-per-server': 32 } } }
+const firefox = { ...devices['Desktop Firefox'], launchOptions: { firefoxUserPrefs: { 'network.http.max-persistent-connections-per-server': 255 } } }
 const desktop = { chromium: devices['Desktop Chrome'], firefox, webkit: devices['Desktop Safari'] } as const
 
 export default defineConfig({

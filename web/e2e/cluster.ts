@@ -615,7 +615,7 @@ export const cluster = {
   async claudeRequests(): Promise<string[]> {
     const res = await fetch(`${CLAUDE}/requests`)
     if (!res.ok) throw new Error(`the fake Claude API answered ${res.status}`)
-    return ((await res.json()) as unknown[]).map((r) => JSON.stringify(r))
+    return (((await res.json()) as unknown[] | null) ?? []).map((r) => JSON.stringify(r))
   },
 
   async resetClaude(): Promise<void> {

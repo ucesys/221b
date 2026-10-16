@@ -173,7 +173,9 @@ function Shell() {
   // Sherlock (Phase 5) and Watson (Phase 6): docked at the bottom of every
   // tab, or in windows of their own (P5-08, P6-09).
   const sherlock = useSherlock(route.cluster)
-  const watson = useWatson(route.cluster, view === 'tabs')
+  // Kept on the settings page too, so going there and back does not
+  // reconnect the shared stream (ADR-56).
+  const watson = useWatson(route.cluster, view === 'tabs' || view === 'settings')
   const popped = usePopped()
   // Sherlock's UI actions run in this window (P6U-08).
   useUIControl(route.cluster, sherlock.conv)
