@@ -10,7 +10,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { expect, test } from './test'
 import { cluster, consoleNode, healthyWorkers, inKind, kubectl, nodeRows, snapshot } from './cluster'
-import { E2E_DEV, E2E_DEV_KUBE, E2E_USER, E2E_VIEWER, signInAs } from './accounts'
+import { E2E_DEV, E2E_DEV_KUBE, E2E_USER, E2E_VIEWER, E2E_VIEWER_KUBE, signInAs } from './accounts'
 import type { WatsonItem } from '../src/api/watson'
 
 test.describe.configure({ mode: 'serial' })
@@ -372,7 +372,7 @@ test('a read-only connection runs reads and refuses changes, naming the rule (P6
   try {
     await expect.poll(async () => ((await (await request.get(`/api/v1/clusters/${id}`)).json()) as { state: string }).state, { timeout: 30_000 }).toBe('connected')
     await page.goto(`/#/c/${id}/nodes`)
-    const statusNow = await (await request.get(`/api/v1/clusters/${id}/watson/status`)).text()
+    const statusNow = await (await request.get(`/api/v1/clusters/${id}/watson`)).text()
     await expect(pane(page).getByTestId('watson-readonly'), `watson status: ${statusNow.slice(0, 400)}`).toContainText('read-only')
     await pane(page).getByTestId('watson-input').fill('kubectl get nodes -o name')
     await pane(page).getByTestId('watson-input').press('Enter')
@@ -411,7 +411,7 @@ test('on a production cluster with the rule on, a second person approves (P6-07)
   const local = (await (await page.request.get('/api/v1/clusters/local')).json()) as { name: string; env: string; description: string }
   const setEnv = (env: string) => page.request.put('/api/v1/clusters/local', { data: { name: local.name, env, description: local.description, ca: 'system', auth: 'token', mode: 'read' }, headers: SAME })
   const node = await spareWorker(page.request)
-  const revoke = await cluster.allowNodeChanges(E2E_VIEWER)
+  const revoke = await cluster.allowNodeChanges(E2E_VIEWER_KUBE)
   let viewer: Page | undefined
   try {
     expect((await setEnv('production')).status()).toBe(200)

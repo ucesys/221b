@@ -28,6 +28,7 @@ E2E_VIEWER=viewer@corp.example
 E2E_DEV=dev@corp.example
 # A local user is known to Kubernetes with the prefix of its source (RB-15).
 E2E_DEV_KUBE=221b-local:$E2E_DEV
+E2E_VIEWER_KUBE=221b-local:$E2E_VIEWER
 E2E_PASSWORD=e2e-password-12
 COOKIES=$WORK/cookies
 # Signs the shell in to a console at $1 as the administrator and keeps the
@@ -207,7 +208,7 @@ step "Browser tests"
   cd "$ROOT/web"
   E2E_MODE=kind E2E_BASE_URL=$BASE_URL E2E_NAMESPACE=$NS E2E_IMAGE=$IMAGE \
     E2E_CONTROL_PLANE=$CLUSTER-control-plane E2E_METRICS_MANIFEST=$METRICS_MANIFEST \
-    E2E_USER=$E2E_USER E2E_VIEWER=$E2E_VIEWER E2E_DEV=$E2E_DEV E2E_DEV_KUBE=$E2E_DEV_KUBE E2E_PASSWORD=$E2E_PASSWORD \
+    E2E_USER=$E2E_USER E2E_VIEWER=$E2E_VIEWER E2E_DEV=$E2E_DEV E2E_DEV_KUBE=$E2E_DEV_KUBE E2E_VIEWER_KUBE=$E2E_VIEWER_KUBE E2E_PASSWORD=$E2E_PASSWORD \
     E2E_CLAUDE_URL=http://127.0.0.1:7445/claude \
     npx playwright test 2>&1 | tee "$WORK/playwright.log"
 )
