@@ -10,7 +10,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { expect, test } from './test'
 import { cluster, consoleNode, healthyWorkers, inKind, kubectl, nodeRows, snapshot } from './cluster'
-import { E2E_DEV, E2E_USER, E2E_VIEWER, signInAs } from './accounts'
+import { E2E_DEV, E2E_DEV_KUBE, E2E_USER, E2E_VIEWER, signInAs } from './accounts'
 import type { WatsonItem } from '../src/api/watson'
 
 test.describe.configure({ mode: 'serial' })
@@ -372,7 +372,8 @@ test('a read-only connection runs reads and refuses changes, naming the rule (P6
   try {
     await expect.poll(async () => ((await (await request.get(`/api/v1/clusters/${id}`)).json()) as { state: string }).state, { timeout: 30_000 }).toBe('connected')
     await page.goto(`/#/c/${id}/nodes`)
-    await expect(pane(page).getByTestId('watson-readonly')).toContainText('read-only')
+    const statusNow = await (await request.get(`/api/v1/clusters/${id}/watson/status`)).text()
+    await expect(pane(page).getByTestId('watson-readonly'), `watson status: ${statusNow.slice(0, 400)}`).toContainText('read-only')
     await pane(page).getByTestId('watson-input').fill('kubectl get nodes -o name')
     await pane(page).getByTestId('watson-input').press('Enter')
     await expect(lastRan(page)).toHaveAttribute('data-status', 'done', { timeout: 30_000 })
@@ -394,8 +395,11 @@ test('a change runs as the person who approves it, so their own access decides (
   const dev = await signInAs(browser, E2E_DEV)
   try {
     await expect(dev.getByTestId('cluster-state')).toHaveText('Connected', { timeout: 30_000 })
+    const can = inKind
+      ? await kubectl('auth', 'can-i', 'patch', 'nodes', `--as=${E2E_DEV_KUBE}`, '--as-group=221b:console-users', '--as-group=system:authenticated').catch((e: unknown) => String(e))
+      : 'n/a'
     const it = await watson(dev.request, `kubectl cordon ${node}`)
-    expect(it.status).toBe('failed')
+    expect(it.status, `can-i patch nodes as ${E2E_DEV_KUBE}: ${can} ${JSON.stringify({ status: it.status, exit: it.exit, reason: it.reason, plan: it.plan?.dryRun })} ${text(it)}`).toBe('failed')
     expect(text(it, 'err')).toMatch(/forbidden/i)
     expect((await cluster.getObject<{ spec: { unschedulable?: boolean } }>(`/api/v1/nodes/${node}`))!.spec.unschedulable ?? false).toBe(false)
   } finally {
