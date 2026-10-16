@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Administration: Add access</title>
+<title>Administration: Add a member to a group</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
 body{margin:0}
@@ -73,130 +73,78 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
     <div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start;">
 
       <div style="flex: 1 1 420px; max-width: 520px; min-width: 0; display: flex; flex-direction: column; gap: 8px;">
-        <span style="font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">Step 1 · Add access, from the Roles page</span>
-        <section aria-label="Add access" style="background: #FFFFFF; border: 1px solid #C9CFD6; border-radius: 10px; box-shadow: 0 10px 28px rgba(19,22,27,.10); overflow: hidden;">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">Step 1 · Add a member, from a user's details or a group on the Roles page</span>
+        <section aria-label="Add to a group" style="background: #FFFFFF; border: 1px solid #C9CFD6; border-radius: 10px; box-shadow: 0 10px 28px rgba(19,22,27,.10); overflow: hidden;">
           <div style="display: flex; align-items: center; gap: 9px; padding: 14px 16px; border-bottom: 1px solid #E1E4E8;">
-            <h2 style="margin: 0; font-size: 15px; font-weight: 600; flex: 1 1 0;">Add access</h2>
+            <h2 style="margin: 0; font-size: 15px; font-weight: 600; flex: 1 1 0;">Add to a local group</h2>
             <button type="button" aria-label="Close" style="border: 0; background: transparent; color: #5B636E; padding: 4px; cursor: pointer;">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
             </button>
           </div>
           <div style="padding: 16px; display: flex; flex-direction: column; gap: 16px;">
-
             <div style="display: flex; flex-direction: column; gap: 6px;">
               <label for="who" style="font-weight: 500;">Local user</label>
               <select id="who" style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 6px 10px; font-size: 13px; background: #FFFFFF; color: #13161B;">
                 <option>bob (bob@corp.example)</option>
                 <option>carol</option>
-                <option>break-glass</option>
               </select>
-              <span style="color: #5B636E; font-size: 12px;">LDAP groups are set in <span style="font-family: 'IBM Plex Mono', monospace;">values.yaml</span> and do not appear here. Super roles are set on the Users page.</span>
+              <span style="color: #5B636E; font-size: 12px;">LDAP people get their groups from the directory and do not appear here.</span>
             </div>
-
             <div style="display: flex; flex-direction: column; gap: 6px;">
-              <span style="font-weight: 500;" id="role-l">Role</span>
-              <div role="group" aria-labelledby="role-l" style="display: inline-flex; align-self: flex-start; background: #ECEEF1; border-radius: 8px; padding: 2px; gap: 2px;">
-                <button type="button" aria-pressed="false" style="border: 0; background: transparent; color: #5B636E; border-radius: 6px; padding: 4px 14px; font-size: 12.5px; font-weight: 500; cursor: pointer;">Viewer</button>
-                <button type="button" aria-pressed="true" style="border: 0; background: #FFFFFF; color: #13161B; border-radius: 6px; padding: 4px 14px; font-size: 12.5px; font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 0 0 1px #E1E4E8; cursor: pointer;">Admin</button>
-              </div>
-              <span style="color: #5B636E; font-size: 12px;">Admin uses the full definition: reads, plus scale, restart, roll back, delete a pod, label and annotate, Helm rollback.</span>
+              <label for="grp" style="font-weight: 500;">Group</label>
+              <select id="grp" style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 6px 10px; font-size: 13px; background: #FFFFFF; color: #13161B;">
+                <option>web-readers · Viewer · web</option>
+                <option>payments-readers · Viewer · payments</option>
+                <option>checkout-ops · Admin · checkout, web (already a member)</option>
+              </select>
+              <span style="color: #5B636E; font-size: 12px;">The groups, their role and their namespaces are defined in <span style="font-family: 'IBM Plex Mono', monospace;">auth.local.groups</span>. To give a different set of namespaces, add a group there and run <span style="font-family: 'IBM Plex Mono', monospace;">helm upgrade</span>. A group may have one member.</span>
             </div>
-
-            <div style="display: flex; flex-direction: column; gap: 6px;">
-              <label for="ns" style="font-weight: 500;">Namespaces</label>
-              <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; border: 1px solid #C9CFD6; border-radius: 7px; padding: 5px 7px; background: #FFFFFF;">
-                <span style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; border-radius: 6px; border: 1px solid #E1E4E8; background: #F7F8FA; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">web
-                  <button type="button" aria-label="Remove web" style="border: 0; background: transparent; color: #5B636E; padding: 2px; cursor: pointer; display: inline-flex;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></span>
-                <span style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 4px 1px 8px; border-radius: 6px; border: 1px solid #E1E4E8; background: #F7F8FA; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">checkout
-                  <button type="button" aria-label="Remove checkout" style="border: 0; background: transparent; color: #5B636E; padding: 2px; cursor: pointer; display: inline-flex;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></span>
-                <input id="ns" type="text" placeholder="Add a namespace" style="flex: 1 1 100px; border: 0; outline: none; background: transparent; font-size: 12.5px; padding: 3px 2px; color: #13161B;">
-              </div>
-              <span style="color: #5B636E; font-size: 12px;">Only namespaces that exist can be chosen: api, checkout, payments, web.</span>
-            </div>
-
             <div style="border: 1px solid #E1E4E8; border-radius: 8px; background: #F7F8FA; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;">
-              <div style="font-weight: 500;">2 RoleBindings will be created</div>
-              <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651; line-height: 1.6;">
-                web: 221b-admin-bob → 221b-admin<br>
-                checkout: 221b-admin-bob → 221b-admin
+              <div style="font-weight: 500;">After this, bob can</div>
+              <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
+                <span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500;">Admin</span><span style="color: #5B636E; font-size: 12px;">in</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;">checkout, web</span>
+                <span style="color: #5B636E; font-size: 12px;">through checkout-ops</span>
               </div>
-              <div style="color: #5B636E; font-size: 12px;">Subject <span style="font-family: 'IBM Plex Mono', monospace;">221b-local:bob</span>, labelled <span style="font-family: 'IBM Plex Mono', monospace;">app.kubernetes.io/managed-by=221b</span>.</div>
+              <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
+                <span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500;">Viewer</span><span style="color: #5B636E; font-size: 12px;">in</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;">web</span>
+                <span style="color: #5B636E; font-size: 12px;">through web-readers (adds nothing: Admin already reads web)</span>
+              </div>
+              <div style="color: #5B636E; font-size: 12px;">Plus the nodes, for everyone who signs in.</div>
             </div>
-
             <div style="display: flex; align-items: flex-start; gap: 8px; color: #3F4651; font-size: 12px;">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1F5DBD" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 2px;"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
-              <span>This changes the cluster, so it goes to Watson as an approval card. Nothing happens until it is approved.</span>
+              <span>This changes 221B, not the cluster. The bindings for the group already exist from Helm.</span>
             </div>
           </div>
           <div style="display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid #E1E4E8; background: #F7F8FA;">
             <button type="button" style="border: 1px solid #E1E4E8; background: #FFFFFF; color: #3F4651; border-radius: 7px; padding: 6px 13px; font-size: 12.5px; font-weight: 500; cursor: pointer;">Cancel</button>
-            <button type="button" style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid #0A6E69; background: #0A6E69; color: #FFFFFF; border-radius: 7px; padding: 6px 13px; font-size: 12.5px; font-weight: 500; cursor: pointer;">
-              Send to Watson
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-            </button>
+            <button type="button" style="border: 1px solid #0A6E69; background: #0A6E69; color: #FFFFFF; border-radius: 7px; padding: 6px 13px; font-size: 12.5px; font-weight: 500; cursor: pointer;">Add to group</button>
           </div>
         </section>
       </div>
 
-      <div style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 8px;">
-        <span style="font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">Step 2 · The card in the Watson panel</span>
-        <section aria-label="Watson" style="background: #090C10; color: #C9D1D9; border: 1px solid #252B33; border-radius: 10px; overflow: hidden; font-family: 'IBM Plex Mono', ui-monospace, monospace;">
-          <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 9px 14px; background: #121820; border-bottom: 1px solid #252B33; font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;">
-            <span style="font-weight: 600; color: #E6EDF3;">Watson</span>
-            <span style="padding: 1px 8px; border: 1px solid #343C46; border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #C9D1D9;">local-rke2</span>
-            <span style="padding: 1px 7px; border-radius: 5px; background: #3A2A08; color: #E5A43C; font-size: 11px; font-weight: 500;">production</span>
-            <span style="flex: 1 1 0;"></span>
-            <span style="color: #8E97A3; font-size: 12px;">1 card waiting</span>
+      <div style="flex: 1 1 420px; max-width: 520px; min-width: 0; display: flex; flex-direction: column; gap: 8px;">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">Step 2 · A confirmation, then the audit record</span>
+        <div role="dialog" aria-modal="true" aria-labelledby="cd-h" style="background: #FFFFFF; border: 1px solid #C9CFD6; border-radius: 12px; box-shadow: 0 18px 44px rgba(19,22,27,.20); padding: 20px; display: flex; flex-direction: column; gap: 12px;">
+          <h2 id="cd-h" style="margin: 0; font-size: 16px; font-weight: 600;">Add bob to web-readers?</h2>
+          <p style="margin: 0; color: #3F4651;">bob will be a Viewer in <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;">web</span>, on every cluster that has the group's bindings. The change applies within 2 minutes, while bob is signed in.</p>
+          <div style="display: flex; align-items: flex-start; gap: 8px; padding: 9px 11px; border-radius: 8px; background: #F7F8FA; color: #3F4651; font-size: 12px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1F5DBD" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 2px;"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+            <span>Nothing is written to Kubernetes. The change is kept by 221B and recorded in the audit log with your name.</span>
           </div>
-
-          <div style="padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 12px; font-size: 12px; line-height: 1.55;">
-            <div style="color: #8E97A3;">Sent from Roles by mikhail@stolpner.com · 12:11</div>
-
-            <div style="border: 1px solid #E5A43C; border-radius: 8px; background: #121820; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif; font-size: 12.5px;">
-              <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
-                <span style="font-weight: 600; color: #E6EDF3;">Approval needed</span>
-                <span style="padding: 1px 7px; border-radius: 5px; background: #3A2A08; color: #E5A43C; font-size: 11px; font-weight: 500;">Role assignment</span>
-                <span style="flex: 1 1 0;"></span>
-                <span style="color: #8E97A3; font-size: 12px;">Lapses in 9:41 or when these objects change</span>
-              </div>
-
-              <pre style="margin: 0; padding: 10px 12px; background: #090C10; border: 1px solid #252B33; border-radius: 6px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.6; color: #E6EDF3; white-space: pre-wrap; overflow-wrap: anywhere;">kubectl create rolebinding 221b-admin-bob -n web \
-  --clusterrole=221b-admin --user=221b-local:bob
-kubectl create rolebinding 221b-admin-bob -n checkout \
-  --clusterrole=221b-admin --user=221b-local:bob</pre>
-
-              <div style="display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 6px 12px;">
-                <span style="color: #8E97A3;">Objects</span>
-                <span style="color: #E6EDF3;">2 RoleBindings, labelled <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">managed-by=221b</span>, to the Admin role</span>
-                <span style="color: #8E97A3;">Dry run</span>
-                <span style="color: #55C67E; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; line-height: 1.6;">rolebinding/221b-admin-bob created (server dry run)<br>rolebinding/221b-admin-bob created (server dry run)</span>
-                <span style="color: #8E97A3;">Impact</span>
-                <span style="color: #E6EDF3;">bob can scale, restart, roll back and delete pods, label and annotate, and roll back Helm releases in <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">web</span> and <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px;">checkout</span>. bob cannot change roles or nodes.</span>
-                <span style="color: #8E97A3;">Runs as</span>
-                <span style="color: #E6EDF3;">the person who approves it; their own rights decide (SuperAdmin, full definition, is needed)</span>
-              </div>
-
-              <div style="display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; background: #2A200A; color: #E5A43C;">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none;"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5h.01"/></svg>
-                <span>Waiting for a second person. This cluster is tagged production and nobody approves their own change.</span>
-              </div>
-
-              <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
-                <button type="button" disabled style="display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid #343C46; border-radius: 6px; background: #1B232C; color: #8E97A3; font-family: inherit; font-size: 12px; font-weight: 500; cursor: not-allowed;">Approve and run</button>
-                <button type="button" style="display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid #343C46; border-radius: 6px; background: #1B232C; color: #E6EDF3; font-family: inherit; font-size: 12px; font-weight: 500; cursor: pointer;">Edit</button>
-                <button type="button" style="display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border: 1px solid #343C46; border-radius: 6px; background: #1B232C; color: #E6EDF3; font-family: inherit; font-size: 12px; font-weight: 500; cursor: pointer;">Discard</button>
-              </div>
-            </div>
-
-            <div style="display: flex; align-items: center; gap: 8px; padding-top: 4px; color: #55C67E;">
-              <span aria-hidden="true">$</span>
-              <span style="display: inline-block; width: 8px; height: 15px; background: #55C67E;"></span>
-            </div>
+          <div style="display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding-top: 4px;">
+            <button type="button" style="border: 1px solid #E1E4E8; background: #FFFFFF; color: #3F4651; border-radius: 7px; padding: 6px 13px; font-size: 12.5px; font-weight: 500; cursor: pointer;">Cancel</button>
+            <button type="button" style="border: 1px solid #0A6E69; background: #0A6E69; color: #FFFFFF; border-radius: 7px; padding: 6px 13px; font-size: 12.5px; font-weight: 500; cursor: pointer;">Add to group</button>
           </div>
-        </section>
+        </div>
+
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E; margin-top: 14px;">The audit record</span>
+        <pre style="margin: 0; padding: 12px 14px; background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 10px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 1.6; color: #13161B; white-space: pre-wrap; overflow-wrap: anywhere;">{"time":"2026-10-16T12:11:04Z","actor":"mikhail@stolpner.com",
+ "action":"group.member.add","user":"221b-local:bob",
+ "group":"221b-local:web-readers","result":"ok"}</pre>
         <div style="display: flex; align-items: flex-start; gap: 8px; color: #3F4651; font-size: 12px;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1F5DBD" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 2px;"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
-          <span>On a read-only cluster, or with the read-only definitions, this card cannot run and the Roles page shows the YAML to apply by hand instead.</span>
+          <span>No second person is asked for a group of an Admin or Viewer role. Super roles may ask for one on a production cluster (open question).</span>
         </div>
       </div>
 
