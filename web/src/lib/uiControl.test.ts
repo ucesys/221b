@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ACTIONS, checkInput, REGISTRY, TAB_SPECS, viewState, type ActionDef } from './uiControl'
-import { setRouteForTests, TABS } from './router'
+import { currentRoute, setRouteForTests, TABS } from './router'
 import { tableHandle, tableHandles } from './tables'
 import { useTable } from './useTable'
 import type { ColumnDef } from './table'
@@ -33,6 +33,18 @@ describe('Sherlock’s UI actions are one list (P6U-04, P6U-12)', () => {
     expect(checkInput(sort, { column: 'name', direction: 'asc' })).toEqual({ column: 'name', direction: 'asc' })
     const search = ACTIONS.find((a) => a.name === 'view_search')!
     expect(() => checkInput(search, { text: 'x'.repeat(201) })).toThrow('longer than 200')
+  })
+
+  it('cannot reach the Administration area (RB-48)', () => {
+    const open = ACTIONS.find((a) => a.name === 'view_open')!
+    const tabs = (open.input_schema.properties as Record<string, { enum?: string[] }>).tab!.enum!
+    expect(tabs).not.toContain('admin')
+    expect(tabs.sort()).toEqual(TABS.map((t) => t.id).sort())
+    setRouteForTests('#/pods')
+    expect(() => REGISTRY.view_open!(currentRoute(), { tab: 'admin' })).toThrow('There is no tab "admin"')
+    // Nothing else drives a page that is not a tab: sorting and searching need one.
+    setRouteForTests('#/admin/users')
+    expect(() => REGISTRY.view_sort!(currentRoute(), { column: 'name', direction: 'asc' })).toThrow('not on a tab')
   })
 
   it('declares the filters of every tab', () => {

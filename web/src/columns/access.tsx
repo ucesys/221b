@@ -1,6 +1,7 @@
+import type { RoleId } from '../api/admin'
 import type { BindingRow, RoleRow } from '../api/types'
 import { fmtAge, fmtTs, minutesSince } from '../lib/format'
-import { href } from '../lib/router'
+import { adminHref, href } from '../lib/router'
 import { listText, powersTone, purpose, SEV_ORDER, SEV_TEXT, SEV_TONE, SOURCE_SHORT, sourceText, type Grant, type ReviewItem, type WhoRow } from '../lib/rbac'
 import type { ColumnDef, Term } from '../lib/table'
 import { Mono } from './cells'
@@ -162,6 +163,25 @@ export interface RoleView extends RoleRow {
   bindings: number
 }
 
+/** The id of the 221B role a ClusterRole is, or null: the four roles and the nodes role the chart installs (RB-01, RB-49). */
+export function ownRole(r: Pick<RoleView, 'name' | 'kind'>): RoleId | 'nodes' | null {
+  if (r.kind !== 'ClusterRole') return null
+  switch (r.name) {
+    case '221b-super-admin':
+      return 'superAdmin'
+    case '221b-super-viewer':
+      return 'superViewer'
+    case '221b-admin':
+      return 'admin'
+    case '221b-viewer':
+      return 'viewer'
+    case '221b-nodes':
+      return 'nodes'
+    default:
+      return null
+  }
+}
+
 export const ROLE_COLUMNS: ColumnDef<RoleView>[] = [
   {
     id: 'name',
@@ -169,7 +189,19 @@ export const ROLE_COLUMNS: ColumnDef<RoleView>[] = [
     width: 'minmax(230px, 1.4fr)',
     min: 230,
     sortValue: (r) => r.name,
-    cell: (r) => <Mono text={r.name} tip={purpose(r) || r.name} dim={false} />,
+    cell: (r) => {
+      const own = ownRole(r)
+      return (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <Mono text={r.name} tip={purpose(r) || r.name} dim={false} />
+          {own && (
+            <a className="rk-tag" data-tone="info" href={adminHref('roles', own === 'nodes' ? [] : [own])} title="One of 221B's four roles, installed by its chart. Open it in Administration" data-testid="own-role">
+              221B role
+            </a>
+          )}
+        </span>
+      )
+    },
     export: (r) => [
       { head: 'Role', cell: r.name },
       { head: 'Kind', cell: r.kind },

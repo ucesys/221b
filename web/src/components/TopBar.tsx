@@ -5,9 +5,11 @@ import type { StreamState } from '../api/live'
 import { refreshLabel } from '../api/settings'
 import { connection } from '../lib/connection'
 import { fmtClock } from '../lib/format'
-import { HOME, href, TABS, type Route, type Tab } from '../lib/router'
+import { ROLE_NAME, topRole } from '../lib/admin'
+import { adminHref, HOME, href, TABS, type Route, type Tab } from '../lib/router'
+import { isSuperAdmin, openAdmin, pagesFor } from './AdminPage'
 import { ClusterMenu } from './ClusterMenu'
-import { Chevron, GearIcon, Logo } from './Icons'
+import { Chevron, GearIcon, Logo, MoonIcon, ShieldIcon, SunIcon } from './Icons'
 
 export type Theme = 'light' | 'dark'
 
@@ -24,8 +26,8 @@ interface Props {
   updatedAt: Date | null
   refreshedAt: Date | null
   settings: Settings | null
-  settingsOpen: boolean
-  onSettings: () => void
+  theme: Theme
+  onTheme: (t: Theme) => void
   /** Who is signed in; null while unknown. */
   me: Me | null
   route: Route
@@ -94,18 +96,48 @@ export function initials(me: Me): string {
   return (first + second).toUpperCase()
 }
 
-/** The account button and its menu: who is signed in, their role, and sign-out. */
-function AccountMenu({ me }: { me: Me }) {
+/** The theme choice, personal and kept in this browser (RB-47). */
+function ThemeChoice({ theme, onTheme }: { theme: Theme; onTheme: (t: Theme) => void }) {
+  return (
+    <div style={{ padding: '6px 8px 8px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Theme</span>
+      <div className="rk-seg" role="group" aria-label="Theme" style={{ alignSelf: 'flex-start' }}>
+        {(['light', 'dark'] as const).map((t) => (
+          <button key={t} aria-pressed={theme === t} onClick={() => onTheme(t)} data-testid={`theme-${t}`}>
+            {t === 'light' ? <SunIcon /> : <MoonIcon />}
+            {t === 'light' ? 'Light' : 'Dark'}
+          </button>
+        ))}
+      </div>
+      <span className="rk-fhint">For this browser.</span>
+    </div>
+  )
+}
+
+/** The name of the highest role a person holds, for the account menu. */
+export function roleLabel(me: Me): string {
+  const top = topRole((me.roles ?? []).map((role) => ({ role })))
+  if (top) return ROLE_NAME[top]
+  return me.admin ? ROLE_NAME.superAdmin : 'No role'
+}
+
+/** The account button and its menu: who is signed in, their role, the theme, and sign-out. */
+function AccountMenu({ me, theme, onTheme }: { me: Me; theme: Theme; onTheme: (t: Theme) => void }) {
   const [open, setOpen] = useState(false)
   const button = useRef<HTMLButtonElement>(null)
   if (me.mode === 'none') {
     return (
-      <span className="rk-tag" data-tone="warn" title="Sign-in is off on this console: everyone who reaches it is an administrator. Turn it on in the chart (auth.mode) before sharing it." data-testid="signin-off">
-        Sign-in off
-      </span>
+      <>
+        <span className="rk-tag" data-tone="warn" title="Sign-in is off on this console: everyone who reaches it is an administrator. Turn it on in the chart (auth.mode) before sharing it." data-testid="signin-off">
+          Sign-in off
+        </span>
+        <button className="rk-icon-btn" aria-label={theme === 'light' ? 'Switch to the dark theme' : 'Switch to the light theme'} title="Theme, for this browser" onClick={() => onTheme(theme === 'light' ? 'dark' : 'light')} data-testid="theme-toggle">
+          {theme === 'light' ? <MoonIcon /> : <SunIcon />}
+        </button>
+      </>
     )
   }
-  const role = me.admin ? 'Administrator' : 'Viewer'
+  const role = roleLabel(me)
   const label = me.user.name || me.user.username
   return (
     <div
@@ -119,7 +151,7 @@ function AccountMenu({ me }: { me: Me }) {
         }
       }}
     >
-      <button ref={button} className="rk-avatar-btn" aria-haspopup="menu" aria-expanded={open} aria-label={`Account: ${label}, ${role.toLowerCase()}`} title={`${label} · ${role}`} onClick={() => setOpen(!open)} data-testid="account">
+      <button ref={button} className="rk-avatar-btn" aria-haspopup="menu" aria-expanded={open} aria-label={`Account: ${label}, ${role}`} title={`${label} · ${role}`} onClick={() => setOpen(!open)} data-testid="account">
         {initials(me)}
       </button>
       {open && (
@@ -139,7 +171,7 @@ function AccountMenu({ me }: { me: Me }) {
                 <span className="rk-tag" data-tone={me.admin ? 'info' : 'muted'} data-testid="account-role">
                   {role}
                 </span>
-                <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{me.method === 'oidc' ? `signed in with ${me.provider ?? 'OIDC'}` : 'local account'}</span>
+                <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{me.method === 'oidc' ? `signed in with ${me.provider ?? 'OIDC'}` : me.method === 'ldap' ? 'signed in with LDAP' : 'local account'}</span>
               </span>
             </div>
             {me.user.groups && me.user.groups.length > 0 && (
@@ -149,6 +181,8 @@ function AccountMenu({ me }: { me: Me }) {
                 {me.user.groups.length > 3 ? ` and ${me.user.groups.length - 3} more` : ''}
               </div>
             )}
+            <div className="rk-ddsep" />
+            <ThemeChoice theme={theme} onTheme={onTheme} />
             <div className="rk-ddsep" />
             <button className="rk-ddopt" role="menuitem" onClick={() => void signOut()} data-testid="signout">
               Sign out
@@ -160,7 +194,7 @@ function AccountMenu({ me }: { me: Me }) {
   )
 }
 
-export function TopBar({ cluster, counts, tones, labelTones, tab, stream, updatedAt, refreshedAt, settings, settingsOpen, onSettings, me, route, onEditCluster }: Props) {
+export function TopBar({ cluster, counts, tones, labelTones, tab, stream, updatedAt, refreshedAt, settings, theme, onTheme, me, route, onEditCluster }: Props) {
   const conn = connection(cluster, stream)
   const live = stream === 'open' && cluster?.state === 'connected'
   // A clock for the countdown to the next refresh, once a second.
@@ -308,10 +342,29 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
             · refreshed <span className="rk-mono rk-num">{fmtClock(refreshedAt ?? updatedAt)}</span>
           </span>
         </span>
-        <button className="rk-icon-btn" aria-label="Settings" aria-current={settingsOpen ? 'page' : undefined} title="Settings" onClick={onSettings} data-testid="settings-btn">
-          <GearIcon />
-        </button>
-        {me && <AccountMenu me={me} />}
+        {me && pagesFor(me).length > 0 && (
+          <a
+            className="rk-tab"
+            href={adminHref(pagesFor(me)[0]!)}
+            aria-current={route.view === 'admin' ? 'page' : undefined}
+            title="Administration: roles, permissions, users and settings"
+            onClick={(e) => {
+              e.preventDefault()
+              openAdmin(pagesFor(me)[0]!)
+            }}
+            data-testid="admin-link"
+            style={{ gap: 7 }}
+          >
+            <ShieldIcon />
+            Administration
+          </a>
+        )}
+        {isSuperAdmin(me) && (
+          <button className="rk-icon-btn" aria-label="Settings" title="Settings" onClick={() => openAdmin('settings')} data-testid="settings-btn">
+            <GearIcon />
+          </button>
+        )}
+        {me && <AccountMenu me={me} theme={theme} onTheme={onTheme} />}
       </div>
       <div ref={measureEl} className="rk-tabmeasure" aria-hidden="true">
         {tabs.map((t) => (

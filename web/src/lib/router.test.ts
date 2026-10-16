@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { apiPath, clusterHref, clusterPageHref, href, listParam, parseHash, setRouteForTests, TABS, withParams } from './router'
+import { adminHref, apiPath, clusterHref, clusterPageHref, href, listParam, parseHash, setRouteForTests, TABS, withParams } from './router'
 
 describe('routes', () => {
   it('parses the tab, path and parameters', () => {
@@ -56,5 +56,28 @@ describe('clusters in routes', () => {
       setRouteForTests('')
     }
     expect(href('nodes')).toBe('#/nodes')
+  })
+})
+
+describe('the Administration area', () => {
+  it('reads its pages, with or without a cluster', () => {
+    expect(parseHash('#/admin')).toMatchObject({ view: 'admin', cluster: 'local', path: [] })
+    expect(parseHash('#/admin/roles/admin')).toMatchObject({ view: 'admin', path: ['roles', 'admin'] })
+    expect(parseHash('#/c/dev/admin/permissions')).toMatchObject({ view: 'admin', cluster: 'dev', path: ['permissions'] })
+    expect(parseHash('#/admin/settings/watson').path).toEqual(['settings', 'watson'])
+  })
+
+  it('sends an old settings link to the page under Administration (RB-47)', () => {
+    expect(parseHash('#/settings')).toMatchObject({ view: 'admin', path: ['settings'] })
+    expect(parseHash('#/settings/sherlock')).toMatchObject({ view: 'admin', path: ['settings', 'sherlock'] })
+  })
+
+  it('builds links and keeps the page when a parameter changes', () => {
+    expect(adminHref('roles')).toBe('#/admin/roles')
+    expect(adminHref('users', ['bob'])).toBe('#/admin/users/bob')
+    expect(adminHref('permissions', [], 'dev')).toBe('#/c/dev/admin/permissions')
+    expect(adminHref('users', [], 'local', { q: 'ldap' })).toBe('#/admin/users?q=ldap')
+    expect(withParams(parseHash('#/admin/users/bob?q=a'), { q: 'b' })).toBe('#/admin/users/bob?q=b')
+    expect(withParams(parseHash('#/c/dev/admin/roles'), { x: '1' })).toBe('#/c/dev/admin/roles?x=1')
   })
 })

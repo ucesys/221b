@@ -344,7 +344,7 @@ test('Sherlock answers through an OpenAI-compatible gateway set on the Settings 
   try {
     await page.getByRole('button', { name: 'Settings' }).click()
     await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
-    await expect(page).toHaveURL(/#\/settings\/sherlock$/)
+    await expect(page).toHaveURL(/#\/admin\/settings\/sherlock$/)
     const s = page.getByTestId('sherlock-settings')
     await s.getByTestId('sherlock-provider-kind').selectOption('compatible')
     await s.getByTestId('sherlock-endpoint').fill(base + '/v1')
