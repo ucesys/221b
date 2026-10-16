@@ -208,7 +208,13 @@ no_kubelet_stats() {
     grep -A1 'name: KUBELET_STATS' "$WORK/chart-nostats.yaml" | grep -q '"false"'
 }
 settings_configmap() {
-  grep -A3 '^kind: ConfigMap$' "$out" | grep -q 'name: k8s-console-221b' && ! sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | grep -q '^data:' &&
+  # Only the settings ConfigMap: the auth-config ConfigMap beside it has data.
+  awk 'function done() { if (cm && nm) { found = 1; if (data) bad = 1 } cm = nm = data = 0 }
+       /^---$/ { done(); next }
+       /^kind: ConfigMap$/ { cm = 1 }
+       /^  name: k8s-console-221b$/ { nm = 1 }
+       /^data:/ { data = 1 }
+       END { done(); exit !(found && !bad) }' "$out" &&
     grep -A1 'name: SETTINGS_CONFIGMAP' "$out" | grep -q '"consoles/k8s-console-221b"' && grep -A1 'name: REFRESH' "$out" | grep -q '"3s"'
 }
 service_name() { render 221b --set clusterName=ci | grep -A3 '^kind: Service$' | grep -q 'name: k8s-console-221b'; }
