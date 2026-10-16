@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -32,6 +33,7 @@ import (
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
+	"github.com/ucesys/221b/server/internal/ldap"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
@@ -55,6 +57,64 @@ func main() {
 		fmt.Fprintln(os.Stderr, "221b:", err)
 		os.Exit(1)
 	}
+}
+
+// usersSecret keeps the users created in the console in one key of a Secret.
+type usersSecret struct{ sk *kube.SecretKey }
+
+const usersKey = "users.json"
+
+func (u usersSecret) Load(ctx context.Context) ([]byte, error) {
+	data, err := u.sk.Load(ctx)
+	if errors.Is(err, sherlock.ErrNoKey) {
+		return nil, auth.ErrNoAccounts
+	}
+	if err != nil {
+		return nil, err
+	}
+	b, ok := data[usersKey]
+	if !ok {
+		return nil, auth.ErrNoAccounts
+	}
+	return b, nil
+}
+
+func (u usersSecret) Save(ctx context.Context, b []byte) error {
+	return u.sk.Save(ctx, map[string][]byte{usersKey: b})
+}
+
+// newDirectory builds the LDAP client from auth.ldap (RB-19).
+func newDirectory(f auth.FileConfig, bindPassword string) (auth.Directory, time.Duration, error) {
+	l := f.LDAP
+	if l == nil {
+		return nil, 0, errors.New("-auth-mode ldap needs auth.ldap in the auth config file")
+	}
+	every, err := l.SyncEvery()
+	if err != nil {
+		return nil, 0, err
+	}
+	o := ldap.Options{
+		Config:       ldap.Config{URL: l.URL, StartTLS: l.StartTLS, Timeout: 15 * time.Second},
+		BindDN:       l.BindDN,
+		BindPassword: bindPassword,
+		UserBase:     l.UserSearch.Base, UserFilter: l.UserSearch.Filter, UsernameAttr: l.UserSearch.UsernameAttr, NameAttr: l.UserSearch.NameAttr, EmailAttr: l.UserSearch.EmailAttr,
+		GroupBase: l.GroupSearch.Base, GroupFilter: l.GroupSearch.Filter, GroupAttr: l.GroupSearch.NameAttr, MemberAttr: l.GroupSearch.MemberAttr,
+		Nested:   l.GroupSearch.Nested == nil || *l.GroupSearch.Nested,
+		PageSize: l.PageSize,
+	}
+	if l.CAFile != "" {
+		pem, err := os.ReadFile(l.CAFile)
+		if err != nil {
+			return nil, 0, fmt.Errorf("reading the LDAP CA: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, 0, fmt.Errorf("%s holds no certificate", l.CAFile)
+		}
+		o.RootCAs = pool
+	}
+	d, err := ldap.New(o)
+	return d, every, err
 }
 
 // hashPassword prints the hash of a password read from standard input, for
@@ -99,18 +159,55 @@ func run(args []string) error {
 		}
 		authCfg.Local = users
 	}
-	authSvc, err := auth.New(authCfg, log.With("component", "auth"), auditLog, nil)
+	// The roles, the groups and the directory (Phase 6.1) come in a file the
+	// chart renders; the secrets come through the environment.
+	authFile, err := auth.ReadFileConfig(cfg.AuthConfigFile)
 	if err != nil {
 		return err
 	}
+	authFile.Apply(&authCfg)
+	authCfg.Prefixes.OIDCUser, authCfg.Prefixes.OIDCGroup = cfg.ImpersonateUserPrefix, cfg.ImpersonateGroupPrefix
+	authCfg.SetupToken = cfg.SetupToken
+	authCfg.AccessTTL = cfg.AccessTTL
+	if authCfg.Mode == auth.ModeLDAP {
+		dir, every, err := newDirectory(authFile, cfg.LDAPBindPassword)
+		if err != nil {
+			return err
+		}
+		authCfg.Directory, authCfg.SyncInterval = dir, every
+	}
 	if authCfg.Mode == auth.ModeNone {
-		log.Warn("sign-in is off: everyone who reaches the console is an administrator; set -auth-mode oidc or local before sharing it")
+		log.Warn("sign-in is off: everyone who reaches the console is an administrator; set -auth-mode oidc, ldap or local before sharing it")
 	}
 	// client-go logs through klog; send it to the same structured log.
 	klog.SetSlogLogger(log.With("component", "client-go"))
 	setMemoryLimit(log)
 
 	restCfg, mode, err := kube.RestConfig(kube.ConnectOptions{Kubeconfig: cfg.Kubeconfig, Context: cfg.Context, APIServer: cfg.APIServer})
+	if err != nil {
+		return err
+	}
+	// The users created in the console are kept in a Secret of the console's
+	// own namespace when running in a cluster, otherwise in memory (RB-46).
+	usersRef := cfg.UsersSecret
+	if usersRef == "" && cfg.ConnectionsSecrets != "" {
+		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
+		usersRef = ns + "/" + prefix + "-users"
+	}
+	if usersRef != "" && authCfg.Mode == auth.ModeLocal {
+		ns, name, ok := strings.Cut(usersRef, "/")
+		if !ok || ns == "" || name == "" {
+			return fmt.Errorf("-users-secret must be namespace/name, got %q", usersRef)
+		}
+		sk, err := kube.NewSecretKey(restCfg, ns, name, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "users", "app.kubernetes.io/managed-by": "221b"})
+		if err != nil {
+			return err
+		}
+		authCfg.Accounts = usersSecret{sk}
+	} else if authCfg.Mode == auth.ModeLocal {
+		log.Warn("users created in the console are kept in memory and lost on restart; set -users-secret namespace/name, or -connections-secrets, to keep them in a Secret")
+	}
+	authSvc, err := auth.New(authCfg, log.With("component", "auth"), auditLog, nil)
 	if err != nil {
 		return err
 	}
@@ -131,6 +228,7 @@ func run(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go authSvc.RunDirectory(ctx)
 
 	// The other clusters (P3-04 to P3-09): their connections live in
 	// Secrets in the console's own namespace when running in a cluster,

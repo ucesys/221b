@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -62,8 +61,8 @@ const (
 
 // HashPassword derives a hash to keep in place of a password.
 func HashPassword(password string) (string, error) {
-	if len(password) < 8 {
-		return "", errors.New("use at least 8 characters")
+	if len([]rune(password)) < MinPassword {
+		return "", fmt.Errorf("use at least %d characters", MinPassword)
 	}
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {

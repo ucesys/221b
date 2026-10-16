@@ -117,23 +117,32 @@ func TestAdminHasNoRBACNoExecNothingClusterWide(t *testing.T) {
 
 func TestAdminFullCoversWatsonsChanges(t *testing.T) {
 	d := Definition(Admin, Full, Options{Secrets: true}).Rules
-	grants := Grants(d)
+	has := func(want string) bool {
+		for _, g := range Grants(d) {
+			if g.String() == want {
+				return true
+			}
+		}
+		return false
+	}
 	for _, g := range []string{
 		"update deployments/scale.apps", "patch deployments.apps", "patch statefulsets.apps", "patch daemonsets.apps",
 		"delete pods", "patch pods", "create secrets", "update secrets",
 	} {
-		if !grants[g] {
+		if !has(g) {
 			t.Errorf("Admin full lacks %q", g)
 		}
 	}
-	if Grants(Definition(Admin, ReadOnly, Options{Secrets: true}).Rules)["delete pods"] {
-		t.Error("Admin read-only deletes pods")
+	for _, g := range Grants(Definition(Admin, ReadOnly, Options{Secrets: true}).Rules) {
+		if g.String() == "delete pods" {
+			t.Error("Admin read-only deletes pods")
+		}
 	}
 }
 
 func TestSuperAdmin(t *testing.T) {
 	full := Definition(SuperAdmin, Full, Options{})
-	if len(full.Rules) != 1 || !full.Rules[0].Wildcard() {
+	if len(full.Rules) != 2 || !full.Rules[0].Wildcard() || full.Rules[1].NonResourceURLs[0] != "*" {
 		t.Errorf("SuperAdmin full = %+v", full.Rules)
 	}
 	ro := Definition(SuperAdmin, ReadOnly, Options{})
@@ -146,15 +155,14 @@ func TestSuperAdmin(t *testing.T) {
 }
 
 func TestEveryWatchedKindIsReadByViewerOrSuperViewer(t *testing.T) {
-	grants := Grants(Definition(SuperViewer, ReadOnly, Options{}).Rules)
+	reads := func(id ID, w Resource) bool {
+		return covered(Grants(Definition(id, ReadOnly, Options{}).Rules), Grant{Verb: "get", Group: w.Group, Resource: w.Resource})
+	}
 	for _, w := range Watched {
-		if !grants[grant("get", w.Group, w.Resource, "")] {
+		if !reads(SuperViewer, w) {
 			t.Errorf("SuperViewer cannot read %s %s", w.Group, w.Resource)
 		}
-	}
-	vg := Grants(Definition(Viewer, ReadOnly, Options{}).Rules)
-	for _, w := range Watched {
-		if has := vg[grant("get", w.Group, w.Resource, "")]; has != w.Namespaced {
+		if has := reads(Viewer, w); has != w.Namespaced {
 			t.Errorf("Viewer reads %s %s = %v, namespaced is %v", w.Group, w.Resource, has, w.Namespaced)
 		}
 	}

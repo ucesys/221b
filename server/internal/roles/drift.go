@@ -34,28 +34,45 @@ func (d Difference) Lines() []string {
 	return out
 }
 
-// Grants expands rules to one entry for each group, resource, name and verb.
-// A wildcard stays a wildcard, so a rule with "*" never matches one that
-// lists what it covers: a cluster that widens a role is always reported.
-func Grants(rules []Rule) map[string]bool {
-	out := map[string]bool{}
+// Grant is one thing a rule allows: a verb on a resource of a group, for any
+// object or one by name; or a verb on a non-resource URL.
+type Grant struct {
+	Verb, Group, Resource, Name, URL string
+}
+
+// String is the grant in words: "delete pods", "get on /healthz".
+func (g Grant) String() string {
+	if g.URL != "" {
+		return g.Verb + " on " + g.URL
+	}
+	what := g.Resource
+	if g.Group != "" {
+		what += "." + g.Group
+	}
+	if g.Name != "" {
+		what += " " + g.Name
+	}
+	return g.Verb + " " + what
+}
+
+// Grants expands rules to one grant for each group, resource, name and verb.
+func Grants(rules []Rule) []Grant {
+	var out []Grant
 	for _, r := range rules {
+		for _, u := range r.NonResourceURLs {
+			for _, v := range r.Verbs {
+				out = append(out, Grant{Verb: v, URL: u})
+			}
+		}
 		names := r.ResourceNames
 		if len(names) == 0 {
 			names = []string{""}
-		}
-		if len(r.NonResourceURLs) > 0 {
-			for _, u := range r.NonResourceURLs {
-				for _, v := range r.Verbs {
-					out[fmt.Sprintf("%s on %s", v, u)] = true
-				}
-			}
 		}
 		for _, g := range r.APIGroups {
 			for _, res := range r.Resources {
 				for _, n := range names {
 					for _, v := range r.Verbs {
-						out[grant(v, g, res, n)] = true
+						out = append(out, Grant{Verb: v, Group: g, Resource: res, Name: n})
 					}
 				}
 			}
@@ -64,29 +81,42 @@ func Grants(rules []Rule) map[string]bool {
 	return out
 }
 
-func grant(verb, group, resource, name string) string {
-	what := resource
-	if group != "" {
-		what += "." + group
+// covers says whether the grant h allows everything g does: equal, or with a
+// wildcard where g has a value, or for any object where g names one.
+func (h Grant) covers(g Grant) bool {
+	if h.URL != "" || g.URL != "" {
+		return h.URL != "" && g.URL != "" && (h.Verb == g.Verb || h.Verb == "*") && (h.URL == g.URL || h.URL == "*" || (strings.HasSuffix(h.URL, "*") && strings.HasPrefix(g.URL, strings.TrimSuffix(h.URL, "*"))))
 	}
-	if name != "" {
-		what += " " + name
-	}
-	return verb + " " + what
+	return (h.Verb == g.Verb || h.Verb == "*") && (h.Group == g.Group || h.Group == "*") && (h.Resource == g.Resource || h.Resource == "*") && (h.Name == "" || h.Name == g.Name)
 }
 
-// Compare says how a deployed role differs from the shipped one.
+func covered(set []Grant, g Grant) bool {
+	for _, h := range set {
+		if h.covers(g) {
+			return true
+		}
+	}
+	return false
+}
+
+// Compare says how a deployed role differs from the shipped one. A grant is
+// extra when nothing the shipped role has covers it, so a wildcard on the
+// cluster where the definition lists verbs is always reported, and a
+// read-only role next to a full definition is only missing grants.
 func Compare(shipped, deployed []Rule) Difference {
 	s, d := Grants(shipped), Grants(deployed)
 	var out Difference
-	for g := range d {
-		if !s[g] {
-			out.Extra = append(out.Extra, g)
+	seen := map[string]bool{}
+	for _, g := range d {
+		if str := g.String(); !seen[str] && !covered(s, g) {
+			seen[str] = true
+			out.Extra = append(out.Extra, str)
 		}
 	}
-	for g := range s {
-		if !d[g] {
-			out.Missing = append(out.Missing, g)
+	for _, g := range s {
+		if str := g.String(); !seen["-"+str] && !covered(d, g) {
+			seen["-"+str] = true
+			out.Missing = append(out.Missing, str)
 		}
 	}
 	sort.Strings(out.Extra)

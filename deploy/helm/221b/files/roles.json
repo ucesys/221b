@@ -505,6 +505,14 @@
               "verbs": [
                 "*"
               ]
+            },
+            {
+              "nonResourceURLs": [
+                "*"
+              ],
+              "verbs": [
+                "*"
+              ]
             }
           ]
         },

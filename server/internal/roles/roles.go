@@ -299,7 +299,10 @@ func Definition(id ID, t Template, o Options) Role {
 		}
 	case SuperAdmin:
 		if t == Full {
-			r.Rules = []Rule{{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"*"}}}
+			r.Rules = []Rule{
+				{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"*"}},
+				{NonResourceURLs: []string{"*"}, Verbs: []string{"*"}},
+			}
 		} else {
 			r.Template = ReadOnly
 			r.Rules = []Rule{

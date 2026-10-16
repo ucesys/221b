@@ -61,3 +61,34 @@ func TestValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthModes(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		ok   bool
+	}{
+		{[]string{"-auth-mode", "local"}, true}, // the first-run page makes the first user
+		{[]string{"-auth-mode", "ldap"}, false},
+		{[]string{"-auth-mode", "ldap", "-auth-config", "/etc/221b/auth.json"}, true},
+		{[]string{"-auth-mode", "magic"}, false},
+	} {
+		if _, err := Parse(tc.args); (err == nil) != tc.ok {
+			t.Errorf("%v: %v", tc.args, err)
+		}
+	}
+}
+
+func TestSecretsComeFromTheEnvironmentOnly(t *testing.T) {
+	t.Setenv("SETUP_TOKEN", "tok")
+	t.Setenv("LDAP_BIND_PASSWORD", "pw")
+	c, err := Parse(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SetupToken != "tok" || c.LDAPBindPassword != "pw" {
+		t.Fatalf("%+v", c)
+	}
+	if _, err := Parse([]string{"-setup-token", "x"}); err == nil {
+		t.Error("a setup token was accepted as an argument, where ps shows it")
+	}
+}

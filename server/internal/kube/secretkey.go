@@ -34,7 +34,7 @@ func NewSecretKey(cfg *rest.Config, namespace, name string, labels map[string]st
 	}
 	cs, err := kubernetes.NewForConfig(c)
 	if err != nil {
-		return nil, fmt.Errorf("creating the client for the Sherlock Secret: %w", err)
+		return nil, fmt.Errorf("creating the client for the Secret: %w", err)
 	}
 	return &SecretKey{secrets: cs.CoreV1().Secrets(namespace), ref: namespace + "/" + name, name: name, labels: labels}, nil
 }
@@ -47,7 +47,7 @@ func (s *SecretKey) Load(ctx context.Context) (map[string][]byte, error) {
 		return nil, sherlock.ErrNoKey
 	}
 	if err != nil {
-		return nil, fmt.Errorf("reading the Sherlock Secret %s: %w", s.ref, err)
+		return nil, fmt.Errorf("reading the Secret %s: %w", s.ref, err)
 	}
 	if len(sec.Data) == 0 {
 		return nil, sherlock.ErrNoKey
@@ -67,24 +67,24 @@ func (s *SecretKey) Save(ctx context.Context, data map[string][]byte) error {
 			existing.Labels[k] = v
 		}
 		if _, err := s.secrets.Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
-			return fmt.Errorf("saving the Sherlock Secret %s: %w", s.ref, err)
+			return fmt.Errorf("saving the Secret %s: %w", s.ref, err)
 		}
 		return nil
 	case apierrors.IsNotFound(err):
 		sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: s.name, Labels: s.labels}, Type: corev1.SecretTypeOpaque, Data: data}
 		if _, err := s.secrets.Create(ctx, sec, metav1.CreateOptions{}); err != nil {
-			return fmt.Errorf("creating the Sherlock Secret %s: %w", s.ref, err)
+			return fmt.Errorf("creating the Secret %s: %w", s.ref, err)
 		}
 		return nil
 	default:
-		return fmt.Errorf("reading the Sherlock Secret %s: %w", s.ref, err)
+		return fmt.Errorf("reading the Secret %s: %w", s.ref, err)
 	}
 }
 
 func (s *SecretKey) Delete(ctx context.Context) error {
 	err := s.secrets.Delete(ctx, s.name, metav1.DeleteOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("deleting the Sherlock Secret %s: %w", s.ref, err)
+		return fmt.Errorf("deleting the Secret %s: %w", s.ref, err)
 	}
 	return nil
 }
