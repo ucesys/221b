@@ -59,6 +59,9 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(r.URL.Path, "/v1/messages") && r.Method == http.MethodPost:
 		f.messages(w, r)
 		return
+	case strings.HasSuffix(r.URL.Path, "/chat/completions") && r.Method == http.MethodPost:
+		f.chat(w, r)
+		return
 	}
 	http.NotFound(w, r)
 }
@@ -291,6 +294,30 @@ func scripted(question, view string, round int, results []string) reply {
 			}
 			return reply{text: []string{uiSummary(last)}}
 		}
+	}
+	// The home page's deficiency review.
+	if strings.Contains(strings.ToLower(question), "deficiency review") {
+		if round == 0 {
+			return reply{text: []string{"Reviewing the cluster."}, tool: "review_cluster", input: map[string]any{}}
+		}
+		var r struct {
+			Findings []struct {
+				Area     string `json:"area"`
+				Severity string `json:"severity"`
+				Title    string `json:"title"`
+				Count    int    `json:"count"`
+			} `json:"findings"`
+		}
+		_ = json.Unmarshal([]byte(last), &r)
+		var b strings.Builder
+		fmt.Fprintf(&b, "**Deficiency review**: %d findings.\n\n", len(r.Findings))
+		for i, f := range r.Findings {
+			if i == 8 {
+				break
+			}
+			fmt.Fprintf(&b, "- %s (%s, %s): %d\n", f.Title, f.Area, f.Severity, f.Count)
+		}
+		return reply{text: []string{b.String()}}
 	}
 	if strings.Contains(strings.ToLower(question), "this node") {
 		var v struct {
@@ -664,4 +691,107 @@ func chunks(s string, n int) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+// chat serves the Chat Completions API with the same scripts, for a
+// console set to an OpenAI-compatible provider (Phase 6 review): the
+// conversation is read back into the Messages API's shape, and the reply
+// streams as chat completion chunks.
+func (f *Fake) chat(w http.ResponseWriter, r *http.Request) {
+	var body json.RawMessage
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<20)).Decode(&body); err != nil {
+		apiError(w, 400, "invalid_request_error", "the body is not JSON")
+		return
+	}
+	f.mu.Lock()
+	f.requests = append(f.requests, body)
+	if len(f.requests) > MaxRequests {
+		f.requests = f.requests[len(f.requests)-MaxRequests:]
+	}
+	f.mu.Unlock()
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") || strings.Contains(auth, "invalid") {
+		apiError(w, 401, "invalid_api_key", "Incorrect API key provided")
+		return
+	}
+	var req struct {
+		Model    string `json:"model"`
+		Stream   bool   `json:"stream"`
+		Messages []struct {
+			Role       string  `json:"role"`
+			Content    *string `json:"content"`
+			ToolCallID string  `json:"tool_call_id"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil || len(req.Messages) == 0 || !req.Stream {
+		apiError(w, 400, "invalid_request_error", "messages and stream are required")
+		return
+	}
+	var msgs []message
+	for _, m := range req.Messages {
+		text := ""
+		if m.Content != nil {
+			text = *m.Content
+		}
+		switch m.Role {
+		case "system":
+		case "assistant":
+			msgs = append(msgs, message{Role: "assistant", Content: []block{{Type: "text", Text: text}}})
+		case "tool":
+			c, _ := json.Marshal(text)
+			b := block{Type: "tool_result", ToolUseID: m.ToolCallID, Content: c}
+			if n := len(msgs); n > 0 && msgs[n-1].Role == "user" && len(msgs[n-1].Content) > 0 && msgs[n-1].Content[0].Type == "tool_result" {
+				msgs[n-1].Content = append(msgs[n-1].Content, b)
+			} else {
+				msgs = append(msgs, message{Role: "user", Content: []block{b}})
+			}
+		default:
+			msgs = append(msgs, message{Role: "user", Content: []block{{Type: "text", Text: text}}})
+		}
+	}
+	question, round, results := where(msgs)
+	question, view := splitView(question)
+	rep := scripted(question, view, round, results)
+	if rep.pause > 0 {
+		select {
+		case <-time.After(rep.pause):
+		case <-r.Context().Done():
+			return
+		}
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	fl, _ := w.(http.Flusher)
+	send := func(v any) {
+		b, _ := json.Marshal(v)
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		if fl != nil {
+			fl.Flush()
+		}
+	}
+	chunk := func(delta map[string]any, finish any) map[string]any {
+		return map[string]any{"id": "chatcmpl-fake", "object": "chat.completion.chunk", "model": req.Model, "choices": []any{map[string]any{"index": 0, "delta": delta, "finish_reason": finish}}}
+	}
+	out := 0
+	for _, t := range rep.text {
+		for _, piece := range chunks(t, 24) {
+			send(chunk(map[string]any{"content": piece}, nil))
+			out += len(piece) / 4
+			if f.Delay > 0 {
+				time.Sleep(f.Delay)
+			}
+		}
+	}
+	finish := "stop"
+	if rep.tool != "" {
+		args, _ := json.Marshal(rep.input)
+		id := fmt.Sprintf("call_%d", time.Now().UnixNano())
+		send(chunk(map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": id, "type": "function", "function": map[string]any{"name": rep.tool, "arguments": ""}}}}, nil))
+		send(chunk(map[string]any{"tool_calls": []any{map[string]any{"index": 0, "function": map[string]any{"arguments": string(args)}}}}, nil))
+		finish = "tool_calls"
+		out += 20
+	}
+	send(chunk(map[string]any{}, finish))
+	send(map[string]any{"id": "chatcmpl-fake", "object": "chat.completion.chunk", "choices": []any{}, "usage": map[string]int{"prompt_tokens": len(body) / 4, "completion_tokens": out + 1, "total_tokens": len(body)/4 + out + 1}})
+	fmt.Fprint(w, "data: [DONE]\n\n")
 }

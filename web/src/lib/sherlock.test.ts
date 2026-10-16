@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { alertQuestion, parseRef, podQuestion, refTarget } from './sherlock'
+import { alertQuestion, parseRef, podQuestion, refTarget, troubleshootQuestion } from './sherlock'
 
 describe('sherlock', () => {
   it('reads 221b:// links and says where each object opens', () => {
@@ -22,5 +22,9 @@ describe('sherlock', () => {
     expect(podQuestion(null, 'web', 'a')).toBe('Tell me about pod web/a')
     expect(alertQuestion({ kind: 'node', name: 'w1' })).toBe('What is wrong with node w1?')
     expect(alertQuestion({ kind: 'pod', name: 'a', namespace: 'web', status: 'ImagePullBackOff' })).toBe("Why can't pod web/a pull its image?")
+    expect(troubleshootQuestion({ kind: 'pod', name: 'a', namespace: 'web', status: 'CrashLoopBackOff', restarts: 7 })).toBe('Troubleshooting report for pod web/a (CrashLoopBackOff, 7 restarts)')
+    expect(troubleshootQuestion({ kind: 'pod', name: 'a', namespace: 'web', status: 'Running', oom: true })).toBe('Troubleshooting report for pod web/a (OOM-killed)')
+    expect(troubleshootQuestion({ kind: 'node', name: 'w1', status: 'NotReady' })).toBe('Troubleshooting report for node w1 (NotReady)')
+    expect(troubleshootQuestion({ kind: 'pvc', name: 'data', namespace: 'db', status: '' })).toBe('Troubleshooting report for volume claim db/data')
   })
 })

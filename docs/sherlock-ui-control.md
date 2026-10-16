@@ -110,7 +110,7 @@ Mostly new files, to keep clear of the other changes to Phase 6 that are going i
 
 ## Not in this addition
 
-- Switching clusters, exporting, and anything in the Settings dialog, the fleet editor or the connection editor.
+- Switching clusters, exporting, and anything on the Settings page, the fleet editor or the connection editor.
 - Acknowledging alerts, which is shared and audited (ADR-39).
 - Anything in Watson: typing commands, approving, discarding.
 - Acting without a question, on a schedule, or while no console window is open.

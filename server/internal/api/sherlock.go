@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -50,17 +51,28 @@ func (s *Server) sherlockStatusFor(r *http.Request, cluster string) sherlockStat
 	sh := s.sherlockSettings()
 	sess, _ := auth.SessionFrom(r.Context())
 	st := sherlockStatus{Enabled: sh.Clusters[cluster], Key: s.opts.SherlockKeys != nil && s.opts.SherlockKeys.Key() != "", Model: sh.Model, Admin: s.opts.Auth == nil || sess.Admin}
+	p := s.sherlockProvider(sh)
 	switch {
 	case !st.Enabled:
 		st.Reason = "Sherlock is off for this cluster. An administrator turns it on in Settings."
-	case !st.Key:
-		st.Reason = "Sherlock has no Claude API key. An administrator adds one in Settings."
+	case !st.Key && p.NeedsKey():
+		st.Reason = "Sherlock has no API key. An administrator adds one in Settings."
 	}
 	if err := (sherlock.Caps{DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD}).Check(s.opts.Sherlock.Ledger().Now(r.Context())); err != nil {
 		st.Capped = err.Error()
 	}
 	st.Available = st.Reason == "" && st.Capped == ""
 	return st
+}
+
+// sherlockProvider is the provider in force: the settings', or the
+// Claude API at the server's default address.
+func (s *Server) sherlockProvider(sh settings.Sherlock) sherlock.Provider {
+	p := s.opts.SherlockDefaultProvider
+	if sh.Provider != nil && !s.opts.SherlockProviderLocked {
+		p = *sh.Provider
+	}
+	return p.Normalized(s.opts.SherlockDefaultURL)
 }
 
 // convKey is the conversation a request is about.
@@ -294,6 +306,13 @@ func (s *Server) sherlockPart(r *http.Request) streamPart {
 // sherlockConfig is the administrator's view of Sherlock's settings.
 type sherlockConfig struct {
 	Settings settings.Sherlock `json:"settings"`
+	// Provider is the provider in force, with its defaults filled in.
+	Provider sherlock.Provider `json:"provider"`
+	// ProviderLocked says the chart fixed the provider
+	// (sherlock.lockProvider): the settings cannot change it.
+	ProviderLocked bool `json:"providerLocked"`
+	// NeedsKey says whether the provider needs a stored credential.
+	NeedsKey bool              `json:"needsKey"`
 	Key      sherlock.KeyInfo  `json:"key"`
 	Spend    sherlock.Spend    `json:"spend"`
 	Models   []sherlock.Model  `json:"models"`
@@ -320,7 +339,9 @@ func (s *Server) getSherlockConfig(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.sherlockAdmin(w, r); !ok {
 		return
 	}
-	cfg := sherlockConfig{Settings: s.sherlockSettings(), Spend: s.opts.Sherlock.Ledger().Now(r.Context()), Models: sherlock.Models, Running: s.opts.Sherlock.Running()}
+	sh := s.sherlockSettings()
+	p := s.sherlockProvider(sh)
+	cfg := sherlockConfig{Settings: sh, Provider: p, ProviderLocked: s.opts.SherlockProviderLocked, NeedsKey: p.NeedsKey(), Spend: s.opts.Sherlock.Ledger().Now(r.Context()), Models: sherlock.Models, Running: s.opts.Sherlock.Running()}
 	if s.opts.SherlockKeys != nil {
 		cfg.Key = s.opts.SherlockKeys.Info()
 	}
@@ -372,6 +393,10 @@ func (s *Server) putSherlockConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	before := s.sherlockSettings()
+	if s.opts.SherlockProviderLocked && !reflect.DeepEqual(before.Provider, in.Provider) {
+		jsonError(w, http.StatusForbidden, "the chart fixes Sherlock's provider (sherlock.lockProvider); change it there")
+		return
+	}
 	if _, err := s.opts.Settings.UpdateSherlock(r.Context(), in); err != nil {
 		s.opts.Logger.Warn("Sherlock settings not saved", "err", err)
 		jsonError(w, http.StatusInternalServerError, "The settings were not saved: "+err.Error())
@@ -392,6 +417,12 @@ func sherlockChange(a, b settings.Sherlock) string {
 	}
 	if a.MonthlyUSD != b.MonthlyUSD {
 		parts = append(parts, fmt.Sprintf("monthly cap $%.2f → $%.2f", a.MonthlyUSD, b.MonthlyUSD))
+	}
+	if pa, pb := providerText(a.Provider), providerText(b.Provider); pa != pb {
+		parts = append(parts, fmt.Sprintf("provider %s → %s", pa, pb))
+	}
+	if a.PriceIn != b.PriceIn || a.PriceOut != b.PriceOut {
+		parts = append(parts, fmt.Sprintf("prices $%g/$%g → $%g/$%g per million tokens", a.PriceIn, a.PriceOut, b.PriceIn, b.PriceOut))
 	}
 	if a.ChangesView() != b.ChangesView() {
 		if b.ChangesView() {
@@ -427,6 +458,39 @@ func sherlockChange(a, b settings.Sherlock) string {
 	return strings.Join(parts, "; ")
 }
 
+// providerText says what a provider is, for the audit record: never a
+// credential, which the settings do not hold.
+func providerText(p *sherlock.Provider) string {
+	if p == nil {
+		return "Claude API (default)"
+	}
+	parts := []string{p.Kind}
+	if p.Endpoint != "" {
+		parts = append(parts, p.Endpoint)
+	}
+	if p.Auth != "" {
+		parts = append(parts, "auth "+p.Auth)
+	}
+	if p.Region != "" {
+		parts = append(parts, p.Region)
+	}
+	if p.Project != "" {
+		parts = append(parts, p.Project)
+	}
+	if len(p.Headers) > 0 {
+		names := make([]string, 0, len(p.Headers))
+		for k := range p.Headers {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		parts = append(parts, "headers "+strings.Join(names, ","))
+	}
+	if p.CACert != "" {
+		parts = append(parts, "own CA")
+	}
+	return strings.Join(parts, " ")
+}
+
 func (s *Server) putSherlockKey(w http.ResponseWriter, r *http.Request) {
 	sess, ok := s.sherlockAdmin(w, r)
 	if !ok {
@@ -443,20 +507,21 @@ func (s *Server) putSherlockKey(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Key string `json:"key"`
 	}
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<10))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
 		jsonError(w, http.StatusBadRequest, "the key is not valid: "+err.Error())
 		return
 	}
+	auth := s.sherlockProvider(s.sherlockSettings()).Auth
 	by := firstOf(sess.User.Email, sess.User.Username, sess.User.Name)
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	if err := s.opts.SherlockKeys.Set(ctx, in.Key, by); err != nil {
+	if err := s.opts.SherlockKeys.SetFor(ctx, auth, in.Key, by); err != nil {
 		code := http.StatusBadRequest
 		if errors.Is(err, sherlock.ErrFixed) {
 			code = http.StatusConflict
-		} else if !strings.Contains(err.Error(), "does not look like") && !strings.Contains(err.Error(), "paste") {
+		} else if !strings.Contains(err.Error(), "does not look like") && !strings.Contains(err.Error(), "paste") && !strings.Contains(err.Error(), "service account") {
 			code = http.StatusInternalServerError
 			s.opts.Logger.Warn("Sherlock key not saved", "err", err)
 		}
@@ -464,7 +529,7 @@ func (s *Server) putSherlockKey(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, code, err.Error())
 		return
 	}
-	s.record(r, audit.ActionSherlockKey, "sherlock key", "a new Claude API key was saved")
+	s.record(r, audit.ActionSherlockKey, "sherlock key", "a new credential was saved for the "+auth+" authentication")
 	s.getSherlockConfig(w, r)
 }
 

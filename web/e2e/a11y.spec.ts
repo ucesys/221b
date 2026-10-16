@@ -40,7 +40,7 @@ for (const theme of ['light', 'dark'] as const) {
     await page.keyboard.press('Escape')
 
     await page.getByRole('button', { name: 'Settings' }).click()
-    await expect(page.getByRole('dialog')).toBeVisible()
+    await expect(page.getByTestId('settings-page')).toBeVisible()
     expect(await violations(page)).toEqual([])
     await page.keyboard.press('Escape')
 

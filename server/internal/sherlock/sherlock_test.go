@@ -174,7 +174,7 @@ func TestClientStreams(t *testing.T) {
 	bad := &Client{BaseURL: srv.URL, Key: func() string { return "sk-ant-invalid-0123456789" }, Retries: 2, Backoff: time.Millisecond}
 	_, err = bad.Stream(context.Background(), req, nil)
 	var ae *APIError
-	if !errors.As(err, &ae) || ae.Status != 401 || !strings.Contains(explain(err), "refused the API key") {
+	if !errors.As(err, &ae) || ae.Status != 401 || !strings.Contains(explain(err), "The Claude API refused the credential") {
 		t.Fatalf("bad key: %v", err)
 	}
 }

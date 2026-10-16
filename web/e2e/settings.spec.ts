@@ -19,9 +19,9 @@ async function open(page: Page) {
 
 async function openSettings(page: Page) {
   await page.getByRole('button', { name: 'Settings' }).click()
-  const dialog = page.getByRole('dialog')
-  await expect(dialog).toBeVisible()
-  return dialog
+  const settings = page.getByTestId('settings-page')
+  await expect(settings).toBeVisible()
+  return settings
 }
 
 /** What the server keeps: the ConfigMap's settings.json, through kubectl or the simulator. */
@@ -45,8 +45,11 @@ test('switches theme in Settings and remembers it in this browser', async ({ pag
   const dialog = await openSettings(page)
   await dialog.getByRole('group', { name: 'Theme' }).getByRole('button', { name: after === 'dark' ? 'Dark' : 'Light' }).click()
   await expect(root).toHaveAttribute('data-theme', after)
+  // A page of its own: Escape goes back to where it was opened from.
+  expect(new URL(page.url()).hash).toBe('#/settings')
   await page.keyboard.press('Escape')
-  await expect(page.getByRole('dialog')).toBeHidden()
+  await expect(page.getByTestId('settings-page')).toBeHidden()
+  expect(new URL(page.url()).hash).toMatch(/^(#\/?)?$/)
   await expect(page.getByRole('button', { name: 'Settings' })).toBeFocused()
   // The choice is this browser's: another tab of it opens with the theme.
   // (A new tab rather than a reload: Firefox in CI has been seen never

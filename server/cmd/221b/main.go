@@ -226,14 +226,30 @@ func run(args []string) error {
 	if cm, ok := storage.(*kube.ConfigMapStorage); ok {
 		spendBackend = cm
 	}
+	// The chart may name Sherlock's provider (sherlock.provider), and lock it.
+	var chartProvider sherlock.Provider
+	if cfg.SherlockProvider != "" {
+		if err := json.Unmarshal([]byte(cfg.SherlockProvider), &chartProvider); err != nil {
+			return fmt.Errorf("-sherlock-provider is not valid JSON: %w", err)
+		}
+		if err := chartProvider.Validate(); err != nil {
+			return fmt.Errorf("-sherlock-provider: %w", err)
+		}
+	}
 	sherlockSvc := sherlock.New(sherlock.Options{
-		Client: &sherlock.Client{BaseURL: cfg.SherlockAPIURL, Key: keys.Key, HTTP: &http.Client{Timeout: 5 * time.Minute}, Retries: 2, Backoff: 2 * time.Second},
+		Client: &sherlock.Client{BaseURL: cfg.SherlockAPIURL, Key: keys.Key, HTTP: &http.Client{Timeout: 5 * time.Minute}, Retries: 2, Backoff: 2 * time.Second,
+			Provider: func() sherlock.Provider {
+				if p := shared.Current().SherlockOrDefault().Provider; p != nil && !cfg.SherlockLockProvider {
+					return *p
+				}
+				return chartProvider
+			}},
 		Ledger: sherlock.NewLedger(spendBackend, nil, log.With("component", "sherlock")),
 		Settings: func() sherlock.Settings {
 			sh := shared.Current().SherlockOrDefault()
-			return sherlock.Settings{Model: sh.Model, Caps: sherlock.Caps{DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD}}
+			return sherlock.Settings{Model: sh.Model, Caps: sherlock.Caps{DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD}, PriceIn: sh.PriceIn, PriceOut: sh.PriceOut}
 		},
-		Secrets: func() []string { return []string{keys.Key()} },
+		Secrets: func() []string { return sherlock.SecretsOf(keys.Key()) },
 		Audit:   auditLog,
 		Logger:  log.With("component", "sherlock"),
 	})
@@ -270,22 +286,25 @@ func run(args []string) error {
 		return watson.Cluster{ID: id, Name: sum.Name, Env: sum.Env, ReadOnly: sum.Mode != clusters.ModeWrite, Config: client.RestConfig()}, true
 	})
 	handler := api.New(api.Options{
-		Watson:        watsonSvc,
-		Sherlock:      sherlockSvc,
-		SherlockKeys:  keys,
-		Store:         store,
-		Cluster:       cluster,
-		Settings:      shared,
-		Clusters:      manager,
-		Auth:          authSvc,
-		Audit:         auditLog,
-		Access:        people,
-		Impersonation: api.Impersonation{UserPrefix: cfg.ImpersonateUserPrefix, GroupPrefix: cfg.ImpersonateGroupPrefix},
-		HTTPSRedirect: cfg.HTTPSRedirect,
-		Ready:         cluster.Ready,
-		UI:            ui.Handler(),
-		Logger:        log.With("component", "http"),
-		AllowedHosts:  cfg.AllowedHosts,
+		Watson:                  watsonSvc,
+		Sherlock:                sherlockSvc,
+		SherlockKeys:            keys,
+		SherlockDefaultURL:      cfg.SherlockAPIURL,
+		SherlockProviderLocked:  cfg.SherlockLockProvider,
+		SherlockDefaultProvider: chartProvider,
+		Store:                   store,
+		Cluster:                 cluster,
+		Settings:                shared,
+		Clusters:                manager,
+		Auth:                    authSvc,
+		Audit:                   auditLog,
+		Access:                  people,
+		Impersonation:           api.Impersonation{UserPrefix: cfg.ImpersonateUserPrefix, GroupPrefix: cfg.ImpersonateGroupPrefix},
+		HTTPSRedirect:           cfg.HTTPSRedirect,
+		Ready:                   cluster.Ready,
+		UI:                      ui.Handler(),
+		Logger:                  log.With("component", "http"),
+		AllowedHosts:            cfg.AllowedHosts,
 		Gauges: func() []api.Gauge {
 			info := cluster.Info()
 			nodeCount, podCount, nodeEvents, podEvents := cluster.Counts()

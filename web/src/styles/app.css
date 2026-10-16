@@ -186,3 +186,11 @@ button.rk-card:hover:not(:disabled) {
   background: var(--surface);
 }
 .rk-viewnote .rk-btn { flex: none; }
+
+/* Settings page: on a narrow screen the sections sit in a row above. */
+@media (max-width: 720px) {
+  .rk-setnav { flex: 1 1 100% !important; flex-direction: row !important; overflow-x: auto; position: static !important; }
+  .rk-setnav a { flex: 1 0 auto; }
+}
+.rk-frow > .rk-ffield { flex: 1 1 220px; }
+.rk-frow > .rk-fwide { flex-basis: 100%; }

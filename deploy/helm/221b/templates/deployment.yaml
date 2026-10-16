@@ -89,6 +89,15 @@ spec:
             # Sherlock (Phase 5): the Claude API, and where its key is kept.
             - name: SHERLOCK_API_URL
               value: {{ .Values.sherlock.apiURL | quote }}
+            {{- with .Values.sherlock.provider }}
+            # The model's API when the settings name none (Phase 6 review).
+            - name: SHERLOCK_PROVIDER
+              value: {{ toJson . | quote }}
+            {{- end }}
+            {{- if .Values.sherlock.lockProvider }}
+            - name: SHERLOCK_LOCK_PROVIDER
+              value: "true"
+            {{- end }}
             {{- if eq .Values.connections.store "secrets" }}
             - name: SHERLOCK_SECRET
               value: {{ printf "%s/%s-sherlock" .Release.Namespace (include "b221.fullname" .) | quote }}

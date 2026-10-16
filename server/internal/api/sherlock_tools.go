@@ -247,6 +247,13 @@ var sherlockTools = []tool{
 		},
 		run: (*toolbox).access,
 	},
+	{
+		def: sherlock.ToolDef{Name: "review_cluster", Description: "A review of how the cluster is set up, as counted findings with examples and advice, most severe first: reliability (failing and restarting pods, single replicas, workloads without disruption budgets, blocked drains), resources (missing requests and limits, quotas, LimitRanges), security (NetworkPolicies, Pod Security, host networking, RBAC grants) and platform health (nodes, kubelet versions, admission webhooks, Services, Helm releases, DNS). Use it first for questions about deficiencies, best practices or the cluster's overall health.", InputSchema: toolSchema(nil, map[string]string{"namespace": "string|Only this namespace; by default every namespace but the system ones."})},
+		label: func(in map[string]any) string {
+			return "Review the cluster's setup" + suffixIf(" in ", str(in, "namespace"))
+		},
+		run: (*toolbox).review,
+	},
 }
 
 func suffixIf(prefix, v string) string {

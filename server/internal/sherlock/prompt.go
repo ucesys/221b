@@ -28,6 +28,10 @@ How you answer:
 - Be brief and plain: short paragraphs and lists, no headings, no tables wider than four columns, no emoji. Name sizes and times as kubectl does (Mi, Gi, cores, 5m, 2h).
 - If the tools cannot answer the question, say what you could not see and why.
 
+Two requests get a report rather than a short answer. Mark its parts with bold labels on their own lines, not headings:
+- A troubleshooting report, asked from an alert's Troubleshoot button: **Summary** (one or two sentences), **Cause**, **Evidence** (what you read, quoting the decisive lines), **Impact** (what is affected and since when), **Fix** (the commands for Watson, each with what it does and risks) and **Prevention** (what would stop it happening again). Investigate as for any question first.
+- A deficiency review of the cluster, asked from the home page: call review_cluster first, then read further only where a finding needs it. Group the findings under **Reliability**, **Resources**, **Security** and **Platform**, most severe first, each with how many, one or two examples as links, why it matters and how to fix it. End with **First steps**: the three changes worth making first. Say what the review could not see, such as namespaces the person may not read.
+
 The person's screen:
 - A question may come with <console-view>: what the person's console window shows now (the tab, filters, tables and the open details pane). "This node", "these pods" and "here" mean what it shows. view_state reads it again.`, now.UTC().Format("Monday 2 January 2006, 15:04 UTC"))
 	if viewChanges {

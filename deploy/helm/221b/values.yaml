@@ -165,6 +165,24 @@ sherlock:
   # secrets, otherwise in memory until a restart. Nothing is sent to the
   # API for a cluster where it is off.
   apiURL: https://api.anthropic.com
+  # Another model API, or an enterprise gateway in front of one. Empty is
+  # the Claude API at apiURL; an administrator can change it in Settings
+  # unless lockProvider is true. For example:
+  #   provider: {kind: openai, endpoint: https://ai-gateway.corp.example/v1}
+  #   provider: {kind: bedrock, region: eu-west-1}
+  #   provider: {kind: vertex, region: europe-west1, project: my-project}
+  # kind is anthropic, openai (Chat Completions: OpenAI, Azure OpenAI,
+  # Gemini, vLLM, Ollama, LiteLLM, …), bedrock or vertex. Optional: endpoint,
+  # auth (header, aws, google or none), authHeader and authPrefix (such as
+  # api-key, or Authorization with "Bearer "), headers (not secret), query
+  # (such as api-version=2024-10-21), region, project, and caCert (a PEM
+  # bundle for a gateway with a private CA). Bedrock and Vertex use the
+  # ServiceAccount's cloud identity (serviceAccount.annotations for IRSA or
+  # Workload Identity) when no credential is saved. A gateway on a port
+  # other than 443 also needs networkPolicy.outboundPorts.
+  provider: {}
+  # Keep administrators from changing the provider in Settings.
+  lockProvider: false
   # Or take the key from a Secret you manage; the Settings then show it as
   # set by the chart and cannot change it.
   existingSecret: ""

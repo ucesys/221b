@@ -30,6 +30,7 @@ echo "--- without reading Secrets"
 render k8s-console --set clusterName=ci --set secrets.read=false | tee "$WORK/chart-nosecrets.yaml" | validate
 render k8s-console --set clusterName=ci --set connections.store=memory | tee "$WORK/chart-memory.yaml" | validate
 render k8s-console --set clusterName=ci --set sherlock.existingSecret=claude --set sherlock.egress=false --set connections.store=memory | tee "$WORK/chart-sherlock.yaml" | validate
+render k8s-console --set clusterName=ci --set sherlock.provider.kind=bedrock --set sherlock.provider.region=eu-west-1 --set sherlock.lockProvider=true | tee "$WORK/chart-provider.yaml" | validate
 echo "--- allowed ingress peers, API server addresses, extra host names and a private registry"
 render k8s-console --set clusterName=ci --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.team=platform' \
   --set 'networkPolicy.apiServerCIDRs[0]=10.0.0.10/32' --set 'allowedHosts[0]=console.example.com' \
@@ -166,6 +167,12 @@ secrets_optional() {
 no_user_prefs() { ! grep -q 'USER_PREFS' "$out"; }
 # Sherlock (Phase 5): the Claude API's address; its key in the release's
 # own Secret, or from a Secret the chart is given, never in the values.
+# Sherlock's provider from the chart, locked; none by default.
+sherlock_provider() {
+  grep -A1 'name: SHERLOCK_PROVIDER' "$WORK/chart-provider.yaml" | grep -q '"kind\\":\\"bedrock\\"' &&
+    grep -A1 'name: SHERLOCK_LOCK_PROVIDER' "$WORK/chart-provider.yaml" | grep -q '"true"' &&
+    ! grep -q 'SHERLOCK_PROVIDER\|SHERLOCK_LOCK_PROVIDER' "$out"
+}
 sherlock_key() {
   grep -A1 'name: SHERLOCK_API_URL' "$out" | grep -q '"https://api.anthropic.com"' &&
     grep -A1 'name: SHERLOCK_SECRET' "$out" | grep -q '/k8s-console-221b-sherlock"' &&
@@ -260,6 +267,7 @@ check "kubeletStats=false grants nothing on the kubelets" no_kubelet_stats
 check "the settings ConfigMap is created empty and named to the server" settings_configmap
 check "column choices stay in the browser: nothing about preferences reaches the server" no_user_prefs
 check "Sherlock's API key is kept in the release's Secret or taken from sherlock.existingSecret, never in the values" sherlock_key
+check "Sherlock's provider from the chart, locked when asked (Phase 6 review)" sherlock_provider
 check "a release named after the chart still gets a valid Service name" service_name
 check "clusterName is required" name_required
 check "an empty list of API server ports is refused" no_open_egress

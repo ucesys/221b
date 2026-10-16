@@ -68,9 +68,10 @@ test('Sherlock stays away until an administrator turns it on, and the key is nev
   await expect(page.getByTestId('alert').first()).toBeVisible({ timeout: 45_000 })
   // Watson docks on its own; Sherlock is not there.
   await expect(page.getByTestId('sherlock')).toHaveCount(0)
-  await expect(page.getByTestId('ask-sherlock')).toHaveCount(0)
+  await expect(page.getByTestId('alert-troubleshoot')).toHaveCount(0)
 
   await page.getByRole('button', { name: 'Settings' }).click()
+  await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
   const settings = page.getByTestId('sherlock-settings')
   await expect(settings.getByTestId('sherlock-key-state')).toContainText('No key yet')
   await settings.getByTestId('sherlock-key').fill(KEY)
@@ -87,7 +88,7 @@ test('Sherlock stays away until an administrator turns it on, and the key is nev
   await expect(settings.getByText('Saved.')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(dock(page)).toBeVisible()
-  await expect(page.getByTestId('ask-sherlock').first()).toBeVisible()
+  await expect(page.getByTestId('alert-troubleshoot').first()).toBeVisible()
   await expect
     .poll(async () => (await cluster.auditLog()).filter((r) => r.action === 'sherlock.key' || r.action === 'sherlock.settings').length, { timeout: 15_000 })
     .toBeGreaterThanOrEqual(2)
@@ -168,10 +169,14 @@ test('the panel resizes, maximizes over the page and minimizes to an icon (P5-01
   await expect(dock(page)).toBeVisible()
 })
 
-test('Ask Sherlock on a card or in a drawer asks about what it shows (P5-01)', async ({ page }) => {
+test('Troubleshoot on an alert asks for a report, and Ask Sherlock in a drawer asks about what it shows (P5-01, Phase 6 review)', async ({ page }) => {
   await open(page, '#/alerts')
-  const button = page.getByTestId('alert').getByTestId('ask-sherlock').first()
+  const button = page.getByTestId('alert').getByTestId('alert-troubleshoot').first()
   const q = (await button.getAttribute('data-question'))!
+  expect(q).toMatch(/^Troubleshooting report for (pod|node|volume claim) /)
+  await expect(button).toHaveText('Troubleshoot')
+  // It replaced Ask Sherlock on the alerts.
+  await expect(page.getByTestId('alert').getByTestId('ask-sherlock')).toHaveCount(0)
   await button.click()
   await expect(page.getByTestId('sherlock-question').last()).toHaveText(q)
   await done(page)
@@ -309,7 +314,7 @@ test('Sherlock moves to a window of its own, with Watson, and back, and the main
   await expect(page.getByTestId('watson')).toHaveCount(0)
 
   // Asked in the main window, answered in the other.
-  const button = page.getByTestId('alert').getByTestId('ask-sherlock').first()
+  const button = page.getByTestId('alert').getByTestId('alert-troubleshoot').first()
   const q = (await button.getAttribute('data-question'))!
   await button.click()
   await expect(popup.getByTestId('sherlock-question').last()).toHaveText(q)
@@ -331,6 +336,63 @@ test('Sherlock moves to a window of its own, with Watson, and back, and the main
   await expect(page.getByTestId('sherlock-question').last()).toHaveText(q)
 })
 
+test('Sherlock answers through an OpenAI-compatible gateway set on the Settings page, and a home card asks for a deficiency review (Phase 6 review)', async ({ page }) => {
+  await open(page, '#/alerts')
+  // The fake's address as the console reaches it: the default provider's.
+  const cfg = (await page.evaluate(async () => (await fetch('/api/v1/sherlock/config')).json())) as { provider: { endpoint: string } }
+  const base = cfg.provider.endpoint.replace(/\/$/, '')
+  try {
+    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
+    await expect(page).toHaveURL(/#\/settings\/sherlock$/)
+    const s = page.getByTestId('sherlock-settings')
+    await s.getByTestId('sherlock-provider-kind').selectOption('compatible')
+    await s.getByTestId('sherlock-endpoint').fill(base + '/v1')
+    await s.getByText('Gateway options').click()
+    await s.getByTestId('sherlock-headers').fill('X-Team: platform')
+    await s.getByTestId('sherlock-model-name').fill('gpt-5')
+    await s.getByTestId('sherlock-price-in').fill('1.25')
+    await s.getByTestId('sherlock-price-out').fill('10')
+    await s.getByTestId('sherlock-save').click()
+    await expect(s.getByText('Saved.')).toBeVisible()
+    await expect(s.getByTestId('sherlock-provider-kind')).toHaveValue('compatible')
+    await s.getByTestId('sherlock-key').fill(KEY)
+    await s.getByTestId('sherlock-key-save').click()
+    await expect(s.getByTestId('sherlock-key-state')).toContainText(/Saved by/)
+    const saved = (await page.evaluate(async () => (await fetch('/api/v1/sherlock/config')).text())) as string
+    expect(saved).not.toContain(KEY)
+    expect(saved).toContain('"kind":"openai"')
+
+    // An alert's Troubleshoot asks for a report, answered through the gateway.
+    await cluster.resetClaude()
+    await open(page, '#/alerts')
+    await page.getByTestId('alert').getByTestId('alert-troubleshoot').first().click()
+    await done(page)
+    await expect(lastAnswer(page)).toHaveAttribute('data-status', 'done')
+    await expect(lastAnswer(page).getByTestId('sherlock-meta')).toContainText('gpt-5')
+    const sent = await cluster.claudeRequests()
+    expect(sent.length).toBeGreaterThan(1)
+    expect(sent[0]).toContain('"model":"gpt-5"')
+    expect(sent[0]).toContain('"role":"system"')
+    expect(sent.join('\n')).toContain('Troubleshooting report for')
+    expect(sent.join('\n')).toContain('"tool_call_id"')
+    expect(sent.join('\n')).not.toContain(KEY)
+
+    // A home card's Find deficiencies opens the cluster and asks for the review.
+    await page.goto('/#/')
+    await page.locator('[data-testid=home-card][data-cluster=local]').getByTestId('home-review').click()
+    await expect(page.getByTestId('sherlock-question').last()).toContainText('Deficiency review of cluster')
+    await done(page)
+    await expect(lastAnswer(page)).toHaveAttribute('data-status', 'done')
+    await expect(lastAnswer(page).getByTestId('sherlock-steps')).toContainText(/Review the cluster.s setup/)
+    await expect(lastAnswer(page).getByTestId('sherlock-text')).toContainText('Deficiency review')
+    expect(new URL(page.url()).hash).not.toContain('ask=')
+  } finally {
+    expect(await put(page, '/api/v1/sherlock/config', ON)).toBe(200)
+    expect(await put(page, '/api/v1/sherlock/key', { key: KEY })).toBe(200)
+  }
+})
+
 test('the panel meets WCAG 2.2 AA, docked, maximized and in the settings (X-12)', async ({ page }) => {
   const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
   const violations = async () => {
@@ -348,6 +410,7 @@ test('the panel meets WCAG 2.2 AA, docked, maximized and in the settings (X-12)'
     expect(await violations(), theme + ' maximized').toEqual([])
     await page.keyboard.press('Escape')
     await page.getByRole('button', { name: 'Settings' }).click()
+    await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
     await expect(page.getByTestId('sherlock-settings').getByTestId('sherlock-save')).toBeVisible()
     expect(await violations(), theme + ' settings').toEqual([])
     await page.keyboard.press('Escape')

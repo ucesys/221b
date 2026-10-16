@@ -17,6 +17,8 @@ export interface HomeUse {
 export interface HomeCluster {
   id: string
   name: string
+  /** Whether Sherlock can answer about it now, for the person asking. */
+  sherlock?: boolean
   env: Env
   description?: string
   local?: boolean

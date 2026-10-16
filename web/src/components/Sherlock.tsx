@@ -29,11 +29,11 @@ export function useSherlockApi(): SherlockApi {
  * panel opens, or the separate window comes forward, with the answer.
  * Nothing shows while Sherlock is off for the cluster.
  */
-export function AskSherlock({ question, label = 'Ask Sherlock', compact, over }: { question: string; label?: string; compact?: boolean; over?: boolean }) {
+export function AskSherlock({ question, label = 'Ask Sherlock', compact, over, testId = 'ask-sherlock' }: { question: string; label?: string; compact?: boolean; over?: boolean; testId?: string }) {
   const { available, ask } = useSherlockApi()
   if (!available) return null
   return (
-    <button className="rk-btn rk-ask" onClick={() => ask(question, over)} title={`Ask Sherlock: “${question}”`} style={{ height: compact ? 26 : 30 }} data-testid="ask-sherlock" data-question={question}>
+    <button className="rk-btn rk-ask" onClick={() => ask(question, over)} title={`Ask Sherlock: “${question}”`} style={{ height: compact ? 26 : 30 }} data-testid={testId} data-question={question}>
       <span className="rk-avatar" style={{ width: 18, height: 18 }} aria-hidden="true">
         <SherlockIcon size={10} />
       </span>

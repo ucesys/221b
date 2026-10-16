@@ -19,6 +19,7 @@ Decisions worth a look, because they shape what you will see:
 - **ADR-55:** P1-05's image limit rises from 60 MB to 80 MB, as you decided; the image is about 70 MB.
 - **ADR-56:** Sherlock and Watson share one event stream, so a page holds two connections, not three.
 - **ADR-57:** Sherlock changes the asking person's own view through eight typed actions run in that window, never by clicking or reading the page.
+- **ADR-58:** Sherlock speaks to the Claude API, OpenAI-compatible APIs, Amazon Bedrock and Google Vertex AI, each at any address, so an enterprise gateway in front of one works.
 
 ## Setting up for the review
 
@@ -159,9 +160,14 @@ Changes you asked for, in the same pull request:
 8. **One window.** Sherlock and Watson move to a window of their own together, and dock back together (section 9).
 9. **Release name.** The README, scripts and CI install the chart as `k8s-console`, so its objects are named `k8s-console-221b`, as in your installation. A release whose name starts with a digit is now prefixed `k8s-console-`.
 
+10. **Other AI providers.** Under **Settings → Sherlock**, **Provider** offers Anthropic, OpenAI, Azure OpenAI, Amazon Bedrock, Google Vertex AI, another OpenAI-compatible API or gateway (vLLM, Ollama, LiteLLM, Portkey, Kong, …) and a gateway in front of the Claude API. Each takes an **Endpoint**, so a gateway in front of any of them is the same choice at your gateway's address; **Authentication** sends the key in a header you name (with a prefix such as `Bearer `), signs with AWS credentials, uses a Google identity, or sends nothing; **Gateway options** add headers, a query string such as Azure's `api-version`, and a CA certificate for a gateway your own authority signed. A model not on the list takes its prices, for the caps. The credential below changes with the authentication: an API key, AWS keys (or none, to use the pod's IAM role through IRSA or EKS Pod Identity), or a service account's key file (or none, for Workload Identity). The chart can set the provider (`sherlock.provider`, examples in `values.yaml`) and fix it (`sherlock.lockProvider: true`). CI talks to the fake through its Chat Completions endpoint; Bedrock and Vertex AI are tested in Go against stand-ins, not against the real services, which are worth a try in your account.
+11. **Settings is a page.** The gear opens `#/settings`, with **General**, **Sherlock** and **Watson** (the last two for administrators); **Back** or Escape returns to where you were. CI: `settings.spec.ts`.
+12. **Troubleshoot.** Each active alert's **Ask Sherlock** became **Troubleshoot**, which asks for a troubleshooting report: summary, cause, evidence, impact, fix (commands for Watson) and prevention. CI: `sherlock.spec.ts`.
+13. **Find deficiencies.** Each cluster card on the home page has **Find deficiencies** where Sherlock is on. It opens the cluster and asks for a review of its setup: a new read-only tool, `review_cluster`, counts what is missing (failing pods, single replicas and workloads without disruption budgets, missing requests and limits, namespaces without NetworkPolicies or Pod Security labels, privileged and host-network pods, broad RBAC grants, nodes and webhooks in trouble, failed Helm releases), and Sherlock groups the findings under Reliability, Resources, Security and Platform, ending with the first three changes to make. CI: `sherlock.spec.ts`; in Go, `sherlock_review_test.go`.
+
 Found while making these, and fixed:
 
-10. **Two event streams per page.** Watson's stream made three per page. A browser opens at most six connections to a host over plain HTTP/1.1 (a port-forward, or a Service without TLS), for all its tabs, so a third tab of the console waited without loading. Sherlock and Watson now share one stream (ADR-56). Behind an Ingress with TLS this never applied. CI: `watson.spec.ts` checks that a page holds exactly two streams; the Go tests read both assistants from the shared stream.
+14. **Two event streams per page.** Watson's stream made three per page. A browser opens at most six connections to a host over plain HTTP/1.1 (a port-forward, or a Service without TLS), for all its tabs, so a third tab of the console waited without loading. Sherlock and Watson now share one stream (ADR-56). Behind an Ingress with TLS this never applied. CI: `watson.spec.ts` checks that a page holds exactly two streams; the Go tests read both assistants from the shared stream.
 
 ## Not in Phase 6
 

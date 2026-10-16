@@ -364,7 +364,7 @@ test.describe('on a phone', () => {
     expect(box!.x + box!.width).toBeLessThanOrEqual(390.5)
     await page.keyboard.press('Escape')
     await page.getByRole('button', { name: 'Settings' }).click()
-    await expect(page.getByRole('dialog')).toBeVisible()
+    await expect(page.getByTestId('settings-page')).toBeVisible()
     expect(await overflow()).toBeLessThanOrEqual(0)
   })
 })

@@ -4,6 +4,7 @@ import type { Me } from '../api/types'
 import { fmtAge } from '../lib/format'
 import { activeAlerts, alertTone, healthOf, podLine, resourceLine, type UseLine } from '../lib/home'
 import { clusterHref, clusterPageHref } from '../lib/router'
+import { SherlockIcon } from './Icons'
 
 interface Props {
   now: number
@@ -93,6 +94,20 @@ function ClusterCard({ c, now }: { c: HomeCluster; now: number }) {
             <Bar line={resourceLine('Memory', c.memory, metrics)} testid="home-memory" note={noUsage} />
             <Bar line={podLine(c)} testid="home-podroom" />
           </div>
+          {c.sherlock && (
+            <a
+              className="rk-btn rk-ask"
+              href={at('alerts', { ask: 'review' })}
+              style={{ alignSelf: 'flex-start', height: 30, textDecoration: 'none' }}
+              title={`Sherlock reviews ${c.name} for gaps in its Kubernetes setup: probes, limits, disruption budgets, security, and more, with what to change first`}
+              data-testid="home-review"
+            >
+              <span className="rk-avatar" style={{ width: 18, height: 18 }} aria-hidden="true">
+                <SherlockIcon size={10} />
+              </span>
+              Find deficiencies
+            </a>
+          )}
         </>
       ) : (
         <a className="rk-btn" href={clusterPageHref(c.id)} style={{ alignSelf: 'flex-start', height: 30 }}>

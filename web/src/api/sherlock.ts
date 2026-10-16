@@ -78,10 +78,38 @@ export interface SherlockSettings {
   monthlyUSD: number
   /** Whether Sherlock may change the asking person's view (P6U-14); absent is on. */
   viewControl?: boolean
+  /** The model's API and how to reach it; absent is the Claude API. */
+  provider?: SherlockProvider
+  /** Prices in US dollars per million tokens for a model that is not listed. */
+  priceIn?: number
+  priceOut?: number
+}
+
+export type ProviderKind = 'anthropic' | 'openai' | 'bedrock' | 'vertex'
+export type ProviderAuth = 'header' | 'aws' | 'google' | 'none'
+
+/** Where the model runs and how the console reaches it (Phase 6 review). */
+export interface SherlockProvider {
+  kind: ProviderKind
+  endpoint?: string
+  auth?: ProviderAuth
+  authHeader?: string
+  authPrefix?: string
+  headers?: Record<string, string>
+  query?: string
+  region?: string
+  project?: string
+  caCert?: string
 }
 
 export interface SherlockConfig {
   settings: SherlockSettings
+  /** The provider in force, with its defaults filled in. */
+  provider: SherlockProvider
+  /** The chart fixes the provider (sherlock.lockProvider). */
+  providerLocked: boolean
+  /** Whether the provider needs a stored credential. */
+  needsKey: boolean
   key: { set: boolean; source?: 'console' | 'chart'; setAt?: string; setBy?: string; store: 'secret' | 'memory' }
   spend: { day: string; dayUSD: number; dayAsked: number; month: string; monthUSD: number; monthAsked: number }
   models: SherlockModel[]

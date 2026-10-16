@@ -7,14 +7,11 @@ package sherlock
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"strings"
-	"time"
 )
 
 // APIVersion is the Messages API version the client speaks.
@@ -127,13 +124,23 @@ type APIError struct {
 	Status  int
 	Type    string
 	Message string
+	// Provider names who answered, for the message: "the Claude API" when
+	// empty.
+	Provider string
 }
 
 func (e *APIError) Error() string {
-	if e.Message == "" {
-		return fmt.Sprintf("the Claude API answered %d", e.Status)
+	who := e.Provider
+	if who == "" {
+		who = "the Claude API"
 	}
-	return fmt.Sprintf("the Claude API answered %d (%s): %s", e.Status, e.Type, e.Message)
+	if e.Message == "" {
+		return fmt.Sprintf("%s answered %d", who, e.Status)
+	}
+	if e.Type == "" {
+		return fmt.Sprintf("%s answered %d: %s", who, e.Status, e.Message)
+	}
+	return fmt.Sprintf("%s answered %d (%s): %s", who, e.Status, e.Type, e.Message)
 }
 
 // Retryable says whether the request may be sent again: overloaded, rate
@@ -142,96 +149,40 @@ func (e *APIError) Retryable() bool {
 	return e.Status == 429 || e.Status == 529 || e.Status >= 500 || e.Type == "overloaded_error" || e.Type == "rate_limit_error"
 }
 
-// Client calls the Messages API.
-type Client struct {
-	BaseURL string
-	// Key returns the API key; it is read for every request, so a new key
-	// takes effect at once.
-	Key  func() string
-	HTTP *http.Client
-	// Retries is how many times a retryable failure before any output is
-	// tried again.
-	Retries int
-	// Backoff is the first wait before a retry; it doubles.
-	Backoff time.Duration
-}
-
-// Delta is what arrives while a message streams: a piece of text, or the
-// start of a tool call.
-type Delta struct {
-	Text string
-	// Tool names a tool the model has started to call.
-	Tool string
-}
-
-// Stream sends the request and calls onDelta as the answer arrives. It
-// returns the whole message once it is complete.
-func (c *Client) Stream(ctx context.Context, req Request, onDelta func(Delta)) (Response, error) {
-	req.Stream = true
-	body, err := json.Marshal(req)
-	if err != nil {
-		return Response{}, err
-	}
-	wait := c.Backoff
-	if wait <= 0 {
-		wait = time.Second
-	}
-	for attempt := 0; ; attempt++ {
-		resp, started, err := c.once(ctx, body, onDelta)
-		var ae *APIError
-		if err != nil && !started && attempt < c.Retries && errors.As(err, &ae) && ae.Retryable() {
-			select {
-			case <-ctx.Done():
-				return Response{}, ctx.Err()
-			case <-time.After(wait):
-			}
-			wait *= 2
-			continue
-		}
-		return resp, err
-	}
-}
-
-func (c *Client) once(ctx context.Context, body []byte, onDelta func(Delta)) (Response, bool, error) {
-	base := strings.TrimSuffix(c.BaseURL, "/")
-	if base == "" {
-		base = DefaultBaseURL
-	}
-	hr, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/messages", bytes.NewReader(body))
-	if err != nil {
-		return Response{}, false, err
-	}
-	hr.Header.Set("Content-Type", "application/json")
-	hr.Header.Set("Accept", "text/event-stream")
-	hr.Header.Set("anthropic-version", APIVersion)
-	if c.Key != nil {
-		hr.Header.Set("x-api-key", c.Key())
-	}
-	hc := c.HTTP
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-	res, err := hc.Do(hr)
-	if err != nil {
-		return Response{}, false, fmt.Errorf("reaching the Claude API: %w", err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
-		return Response{}, false, apiError(res.StatusCode, b)
-	}
-	return readStream(res.Body, onDelta)
-}
-
+// apiError reads an error answer: the Messages and Chat Completions APIs'
+// {"error": {"type", "message"}}, Vertex's {"error": {"status", "message"}}
+// and Bedrock's {"message"}.
 func apiError(status int, b []byte) *APIError {
 	var e struct {
-		Error struct {
-			Type    string `json:"type"`
-			Message string `json:"message"`
-		} `json:"error"`
+		Error   json.RawMessage `json:"error"`
+		Message string          `json:"message"`
 	}
 	_ = json.Unmarshal(b, &e)
-	return &APIError{Status: status, Type: e.Error.Type, Message: e.Error.Message}
+	var inner struct {
+		Type    string `json:"type"`
+		Status  string `json:"status"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(e.Error, &inner) != nil {
+		var s string
+		if json.Unmarshal(e.Error, &s) == nil {
+			inner.Message = s
+		}
+	}
+	out := &APIError{Status: status, Type: inner.Type, Message: inner.Message}
+	if out.Type == "" {
+		out.Type = inner.Status
+	}
+	if out.Message == "" {
+		out.Message = e.Message
+	}
+	if out.Message == "" && len(b) > 0 && b[0] != '{' {
+		out.Message = strings.TrimSpace(string(b))
+		if len(out.Message) > 300 {
+			out.Message = out.Message[:300] + "…"
+		}
+	}
+	return out
 }
 
 // readStream reads the server-sent events of a streamed message.

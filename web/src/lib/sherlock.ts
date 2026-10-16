@@ -213,9 +213,24 @@ export function podQuestion(p: { namespace: string; name: string; status?: strin
 }
 
 /** The question an alert's Ask Sherlock button asks. */
+/**
+ * The question an alert's Troubleshoot button asks (Phase 6 review): a
+ * troubleshooting report, in the format the system prompt gives for one.
+ */
+export function troubleshootQuestion(r: { kind: string; name: string; namespace?: string; status?: string; oom?: boolean; restarts?: number }): string {
+  const what = r.kind === 'node' ? `node ${r.name}` : r.kind === 'pvc' ? `volume claim ${r.namespace}/${r.name}` : `pod ${r.namespace}/${r.name}`
+  const why = [r.oom ? 'OOM-killed' : r.status, r.restarts ? `${r.restarts} restarts` : ''].filter(Boolean).join(', ')
+  return `Troubleshooting report for ${what}${why ? ` (${why})` : ''}`
+}
+
 export function alertQuestion(r: { kind: string; name: string; namespace?: string; status?: string; restarts?: number; oom?: boolean }): string {
   if (r.kind === 'node') return `What is wrong with node ${r.name}?`
   if (r.kind === 'pvc') return `Why is volume claim ${r.namespace}/${r.name} not bound?`
   if (r.oom) return `Why was pod ${r.namespace}/${r.name} OOM-killed?`
   return podQuestion({ namespace: r.namespace ?? '', name: r.name, status: r.status, restarts: r.restarts }, r.namespace ?? '', r.name)
+}
+
+/** The question a home card's Find deficiencies button asks (Phase 6 review). */
+export function reviewQuestion(cluster: string): string {
+  return `Deficiency review of cluster ${cluster}: where does its Kubernetes setup fall short of good practice, and what should change first?`
 }

@@ -148,6 +148,18 @@ func (c *Conversation) changedLocked() {
 type Settings struct {
 	Model string
 	Caps  Caps
+	// PriceIn and PriceOut, when set, price the model in US dollars per
+	// million tokens; otherwise the listed price, or the highest.
+	PriceIn, PriceOut float64
+}
+
+// Price is the model with the price its spend is counted at.
+func (s Settings) Price() Model {
+	m, _ := ModelOf(s.Model)
+	if s.PriceIn > 0 || s.PriceOut > 0 {
+		m.In, m.Out, m.LongAbove = s.PriceIn, s.PriceOut, 0
+	}
+	return m
 }
 
 // Options configure the service.
@@ -383,7 +395,7 @@ func (s *Service) Wait() { s.wg.Wait() }
 // answer runs the rounds of one answer: the model replies, the tools it
 // asks for run, their results go back, until it is done.
 func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Question, set Settings) {
-	model, _ := ModelOf(set.Model)
+	model := set.Price()
 	var (
 		total   Usage
 		cost    float64
@@ -617,23 +629,28 @@ func (c *Conversation) repairLocked(status string) {
 func explain(err error) string {
 	var ae *APIError
 	if errors.As(err, &ae) {
+		who := ae.Provider
+		if who == "" {
+			who = "the Claude API"
+		}
+		Who := strings.ToUpper(who[:1]) + who[1:]
 		switch {
-		case ae.Status == 401 || ae.Type == "authentication_error":
-			return "The Claude API refused the API key. An administrator can set a new one in Settings."
-		case ae.Status == 403 || ae.Type == "permission_error":
-			return "The Claude API key is not allowed to use this model. An administrator can pick another in Settings."
-		case ae.Status == 404 || ae.Type == "not_found_error":
-			return "The Claude API does not know the model in Settings. An administrator can pick another."
-		case ae.Status == 429 || ae.Type == "rate_limit_error":
-			return "The Claude API is limiting how fast this key may ask. Try again in a minute."
+		case ae.Status == 401 || ae.Type == "authentication_error" || ae.Type == "UNAUTHENTICATED":
+			return Who + " refused the credential. An administrator can set a new one in Settings."
+		case ae.Status == 403 || ae.Type == "permission_error" || ae.Type == "PERMISSION_DENIED" || ae.Type == "AccessDeniedException":
+			return Who + " does not let this credential use the model. An administrator can pick another, or grant access, in Settings."
+		case ae.Status == 404 || ae.Type == "not_found_error" || ae.Type == "NOT_FOUND":
+			return Who + " does not know the model in Settings. An administrator can pick another."
+		case ae.Status == 429 || ae.Type == "rate_limit_error" || ae.Type == "RESOURCE_EXHAUSTED" || strings.Contains(ae.Type, "Throttling"):
+			return Who + " is limiting how fast this credential may ask. Try again in a minute."
 		case ae.Status == 529 || ae.Type == "overloaded_error":
-			return "The Claude API is overloaded. Try again in a minute."
+			return Who + " is overloaded. Try again in a minute."
 		case ae.Status == 400 && strings.Contains(strings.ToLower(ae.Message), "credit"):
-			return "The Claude API account has no credit left. " + ae.Message
+			return Who + " has no credit left on this account. " + ae.Message
 		}
 		return ae.Error()
 	}
-	return "Sherlock could not reach the Claude API: " + err.Error()
+	return "Sherlock could not reach the model's API: " + err.Error()
 }
 
 // record writes the question's audit record: what was asked, the tools

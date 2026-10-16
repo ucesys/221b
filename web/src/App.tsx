@@ -18,16 +18,16 @@ import { NamespacesTab } from './components/NamespacesTab'
 import { NodesTab } from './components/NodesTab'
 import { PodsTab } from './components/PodsTab'
 import { ServicesTab } from './components/ServicesTab'
-import { SettingsDialog } from './components/SettingsDialog'
+import { SettingsPage, openSettings } from './components/SettingsPage'
 import { Toast } from './components/Toast'
 import { TopBar, type Theme } from './components/TopBar'
 import { badgeOf, bannersOf, tabTone } from './lib/alerts'
 import { accessBadge } from './lib/rbac'
 import { findings as policyFindings, flagOf as policyFlag, modelOf as policyModel } from './lib/policies'
-import { apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, useRoute } from './lib/router'
+import { apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, useRoute, withParams } from './lib/router'
 import { askSherlock, useSherlock } from './api/sherlock'
 import { sendToWatson, useWatson, WatsonError, type Send } from './api/watson'
-import { canPopOut, focusPopup, onPop, popOut, post, usePopped, WINDOW_VIEWS, type Pane } from './lib/sherlock'
+import { canPopOut, focusPopup, onPop, popOut, post, reviewQuestion, usePopped, WINDOW_VIEWS, type Pane } from './lib/sherlock'
 import { openTarget, SherlockContext, SherlockPane } from './components/Sherlock'
 import { Dock, PoppedOutFab, type DockMode } from './components/Dock'
 import { autoRunReads, WatsonContext, WatsonPane } from './components/Watson'
@@ -116,11 +116,9 @@ function Shell() {
   const me = useMe()
   const { clusters, loaded: clustersLoaded } = useClusters()
   const [theme, setTheme] = useState<Theme>(initialTheme)
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const [editing, setEditing] = useState<Editing>(undefined)
   const [toast, setToast] = useState('')
   const clearToast = useCallback(() => setToast(''), [])
-  const closeSettings = useCallback(() => setSettingsOpen(false), [])
   const closeEditor = useCallback(() => setEditing(undefined), [])
 
   const changeTheme = (t: Theme) => {
@@ -132,14 +130,14 @@ function Shell() {
   const editOrig = editing ? clusters.find((c) => c.id === editing) : undefined
   // A cluster whose connection could not even start has no data: its page
   // says why. One that is not there at all gets the same page's notice.
-  const view = route.view === 'home' ? 'home' : route.view === 'cluster' || (clustersLoaded && (!summary || summary.state === 'failed')) ? 'cluster' : 'tabs'
+  const view = route.view === 'home' ? 'home' : route.view === 'settings' ? 'settings' : route.view === 'cluster' || (clustersLoaded && (!summary || summary.state === 'failed')) ? 'cluster' : 'tabs'
   // The Helm tab needs Secrets; with them off it is not offered.
   const tab = route.tab === 'helm' && live.cluster?.secrets === 'off' ? FIRST_TAB : route.tab
   const tabLabel = TABS.find((t) => t.id === tab)?.label ?? 'Alerts'
   const clusterName = summary?.name ?? live.cluster?.name ?? ''
 
   useEffect(() => {
-    document.title = view === 'home' ? 'Clusters · 221B' : clusterName ? `${clusterName} · ${view === 'cluster' ? 'Connection' : tabLabel} · 221B` : '221B'
+    document.title = view === 'home' ? 'Clusters · 221B' : view === 'settings' ? 'Settings · 221B' : clusterName ? `${clusterName} · ${view === 'cluster' ? 'Connection' : tabLabel} · 221B` : '221B'
     document.documentElement.style.colorScheme = theme
     document.body.style.background = theme === 'dark' ? '#0D1013' : '#F2F3F5'
   }, [clusterName, tabLabel, theme, view])
@@ -236,6 +234,19 @@ function Shell() {
         .catch((e: unknown) => setToast(e instanceof WatsonError ? e.message : String(e)))
     },
   }
+  // A home card's Find deficiencies button (Phase 6 review) opens the
+  // cluster with ?ask=review: Sherlock asks for the review once it can.
+  const reviewAsked = view === 'tabs' && route.params.get('ask') === 'review'
+  const reviewReady = reviewAsked && sherlockApi.available && clusterName !== ''
+  const reviewRefused = reviewAsked && !!sherlock.status && !sherlock.status.available
+  useEffect(() => {
+    if (!reviewReady && !reviewRefused) return
+    navigate(withParams(currentRoute(), { ask: undefined }), true)
+    // Refused (Sherlock went off since the home page showed the button), the
+    // dock says why.
+    if (reviewReady) sherlockApi.ask(reviewQuestion(clusterName), true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewReady, reviewRefused])
   const popOutNow = () => {
     if (popOut(route.cluster)) setDock({ ...dock, mode: dock.mode === 'max' ? 'open' : dock.mode })
     else setToast('The browser did not open a new window. Allow pop-ups for the console to move Sherlock and Watson to a window of their own.')
@@ -253,10 +264,12 @@ function Shell() {
       data-dock={dockShown ? dock.mode : 'off'}
       style={{ ['--dock-h' as string]: `${dock.h}px`, minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}
     >
-      <TopBar cluster={live.cluster} counts={counts} labelTones={{ alerts: alertTab }} tones={{ alerts: alertBadge.tone, access: accessCount.tone, policies: policyCount.tone === 'info' ? 'muted' : policyCount.tone }} tab={view === 'tabs' ? tab : null} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={settingsOpen} onSettings={() => setSettingsOpen(true)} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
-      {view !== 'home' && <Banners cluster={live.cluster} stream={live.stream} now={now} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} accessError={live.accessError} alerts={view === 'tabs' && tab !== 'alerts' ? bannersOf(alerts.rows, now) : []} alertsHref={href('alerts')} />}
+      <TopBar cluster={live.cluster} counts={counts} labelTones={{ alerts: alertTab }} tones={{ alerts: alertBadge.tone, access: accessCount.tone, policies: policyCount.tone === 'info' ? 'muted' : policyCount.tone }} tab={view === 'tabs' ? tab : null} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} settingsOpen={view === 'settings'} onSettings={openSettings} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
+      {view !== 'home' && view !== 'settings' && <Banners cluster={live.cluster} stream={live.stream} now={now} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} accessError={live.accessError} alerts={view === 'tabs' && tab !== 'alerts' ? bannersOf(alerts.rows, now) : []} alertsHref={href('alerts')} />}
       {view === 'home' ? (
         <HomePage now={now} me={me} onAdd={() => setEditing(null)} />
+      ) : view === 'settings' ? (
+        <SettingsPage route={route} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} canChange={me?.admin ?? true} />
       ) : view === 'cluster' ? (
         <ClusterPage route={route} me={me} now={now} onEdit={(id) => setEditing(id)} />
       ) : (
@@ -293,7 +306,6 @@ function Shell() {
       {view === 'tabs' && popped && <PoppedOutFab onFocus={() => focusPopup()} onDock={() => post({ type: 'close' })} />}
       {view === 'tabs' && <PeekPane route={route} cluster={live.cluster} now={now} onToast={setToast} />}
       {popped && <ViewAnnouncer />}
-      <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} canChange={me?.admin ?? true} />
       {editing === null && <ClusterEditor key="+" orig={null} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
       {editing && editOrig && <ClusterEditor key={editing} orig={editOrig} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
       {toast && <Toast message={toast} onDone={clearToast} />}

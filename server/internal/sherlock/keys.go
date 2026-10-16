@@ -2,7 +2,9 @@ package sherlock
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -113,13 +115,19 @@ func (k *Keys) Fixed() bool { return k.fixed != "" }
 // ErrFixed is returned when the chart sets the key.
 var ErrFixed = errors.New("the key is set by the chart (sherlock.existingSecret); change it there")
 
-// Set saves a new key.
+// Set saves a new API key.
 func (k *Keys) Set(ctx context.Context, key, by string) error {
+	return k.SetFor(ctx, AuthHeader, key, by)
+}
+
+// SetFor saves a new credential of the kind the provider's authentication
+// takes: an API key, AWS credentials or a Google service account key.
+func (k *Keys) SetFor(ctx context.Context, auth, key, by string) error {
 	if k.fixed != "" {
 		return ErrFixed
 	}
 	key = strings.TrimSpace(key)
-	if err := ValidKey(key); err != nil {
+	if err := ValidCredential(auth, key); err != nil {
 		return err
 	}
 	now := k.now().UTC()
@@ -147,21 +155,60 @@ func (k *Keys) Delete(ctx context.Context) error {
 	return nil
 }
 
-// ValidKey checks a key's shape: printable, without spaces, of a sensible
-// length. Whether the API accepts it shows at the first question.
+// ValidKey checks an API key's shape: printable, without spaces, of a
+// sensible length. Whether the API accepts it shows at the first question.
 func ValidKey(key string) error {
 	if key == "" {
 		return errors.New("paste the API key")
 	}
-	if len(key) < 20 || len(key) > 512 {
-		return errors.New("that does not look like a Claude API key: it is too short or too long")
+	if len(key) < 8 || len(key) > 2048 {
+		return errors.New("that does not look like an API key: it is too short or too long")
 	}
 	for _, r := range key {
 		if r <= ' ' || r > '~' {
-			return errors.New("that does not look like a Claude API key: it has spaces or other characters a key does not have")
+			return errors.New("that does not look like an API key: it has spaces or other characters a key does not have")
 		}
 	}
 	return nil
+}
+
+// SecretsOf are the parts of a credential never to send anywhere: the key
+// itself, and the secret fields of AWS credentials or a service account key.
+func SecretsOf(key string) []string {
+	out := []string{key}
+	var m map[string]any
+	if json.Unmarshal([]byte(key), &m) == nil {
+		for _, f := range []string{"secretAccessKey", "sessionToken", "accessKeyId", "private_key", "private_key_id"} {
+			if v, ok := m[f].(string); ok && v != "" {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+var reAccessKey = regexp.MustCompile(`^[A-Z0-9]{16,128}$`)
+
+// ValidCredential checks a credential of the kind an authentication takes.
+func ValidCredential(auth, key string) error {
+	switch auth {
+	case AuthAWS:
+		var k AWSCredentials
+		if err := json.Unmarshal([]byte(key), &k); err != nil || !reAccessKey.MatchString(k.AccessKeyID) || len(k.SecretAccessKey) < 16 || len(k.SecretAccessKey) > 128 || len(k.SessionToken) > 4096 {
+			return errors.New("that does not look like AWS credentials: give the access key ID and the secret access key")
+		}
+		return nil
+	case AuthGoogle:
+		if key == "" {
+			return errors.New("paste the service account key file")
+		}
+		if len(key) > 16<<10 {
+			return errors.New("that does not look like a service account key: it is too long")
+		}
+		_, _, err := ParseGoogleKey(key)
+		return err
+	}
+	return ValidKey(key)
 }
 
 // MemoryKey keeps the key until the server restarts.

@@ -38,6 +38,9 @@ type homeCluster struct {
 	Namespaces int        `json:"namespaces"`
 	Services   int        `json:"services"`
 	Alerts     homeAlerts `json:"alerts"`
+	// Sherlock says whether Sherlock can answer about the cluster now, for
+	// the card's Find deficiencies (Phase 6 review).
+	Sherlock bool `json:"sherlock,omitempty"`
 }
 
 type homeNodes struct {
@@ -86,6 +89,9 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	out := []homeCluster{}
 	for _, sum := range s.opts.Clusters.List() {
 		h := homeOf(sum)
+		if s.opts.Sherlock != nil {
+			h.Sherlock = s.sherlockStatusFor(r, sum.ID).Available
+		}
 		st, client, ok := s.opts.Clusters.Lookup(sum.ID)
 		cl, _ := client.(Cluster)
 		if ok && st != nil && cl != nil {

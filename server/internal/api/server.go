@@ -126,6 +126,14 @@ type Options struct {
 	Logger *slog.Logger
 	// MaxStreams caps concurrent event streams.
 	MaxStreams int
+	// SherlockDefaultURL is the Claude API's address when the settings name
+	// no provider; SherlockProviderLocked keeps the settings from changing
+	// the provider (the chart's sherlock.lockProvider).
+	SherlockDefaultURL     string
+	SherlockProviderLocked bool
+	// SherlockDefaultProvider is the provider when the settings name none
+	// (the chart's sherlock.provider), and the only one when locked.
+	SherlockDefaultProvider sherlock.Provider
 	// Heartbeat is how often an idle event stream sends a comment, so
 	// proxies do not close it.
 	Heartbeat time.Duration
