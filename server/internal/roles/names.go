@@ -118,7 +118,7 @@ type Identity struct {
 type GroupSet struct {
 	Prefixes Prefixes
 	// Allowed lists the groups, by source and unprefixed name, that values
-	// name. A nil Allowed asserts every group the source gives, which is
+	// name. A source with no entry asserts every group it gives, which is
 	// how OIDC works today when no role lists are set.
 	Allowed map[Source][]string
 }
@@ -131,7 +131,7 @@ func (g GroupSet) Build(id Identity) (groups, dropped []string) {
 		case name == "":
 		case g.Prefixes.Reserved(name):
 			dropped = append(dropped, name)
-		case g.Allowed != nil && !slices.Contains(g.Allowed[id.Source], name):
+		case !g.allows(id.Source, name):
 		default:
 			full := g.Prefixes.Group(id.Source, name)
 			if full != "system:masters" && !slices.Contains(groups, full) {
@@ -146,6 +146,13 @@ func (g GroupSet) Build(id Identity) (groups, dropped []string) {
 		}
 	}
 	return groups, dropped
+}
+
+// allows says whether a group of a source may be asserted. A source with no
+// entry in Allowed is not limited.
+func (g GroupSet) allows(src Source, name string) bool {
+	list, limited := g.Allowed[src]
+	return !limited || slices.Contains(list, name)
 }
 
 // Impersonable are the groups the chart lets the console impersonate when

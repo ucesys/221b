@@ -29,7 +29,7 @@ func console(t *testing.T, svc *auth.Service) *httptest.Server {
 	}
 	mux.HandleFunc("GET /api/v1/snapshot", func(w http.ResponseWriter, r *http.Request) {
 		sess, _ := auth.SessionFrom(r.Context())
-		_ = json.NewEncoder(w).Encode(map[string]any{"user": sess.User.Username, "admin": sess.Admin})
+		_ = json.NewEncoder(w).Encode(map[string]any{"user": sess.User.Username, "admin": sess.Admin, "roles": sess.Roles, "kubeName": sess.User.KubeName, "kubeGroups": sess.User.KubeGroups})
 	})
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("<html>the app</html>")) })
@@ -279,7 +279,7 @@ func TestLocalAccounts(t *testing.T) {
 		return resp
 	}
 	resp := post("ops@corp.example", "wrong")
-	if b := readAll(t, resp); resp.StatusCode != http.StatusUnauthorized || !strings.Contains(b, "do not match") {
+	if b := readAll(t, resp); resp.StatusCode != http.StatusUnauthorized || !strings.Contains(b, "cannot sign in") {
 		t.Fatalf("wrong password: %s %s", resp.Status, b)
 	}
 	resp = post("nobody@corp.example", "whatever")
