@@ -28,7 +28,7 @@ E2E_VIEWER=viewer@corp.example
 E2E_DEV=dev@corp.example
 # A local user is known to Kubernetes with the prefix of its source (RB-15).
 E2E_DEV_KUBE=221b-local:$E2E_DEV
-E2E_PASSWORD=password
+E2E_PASSWORD=e2e-password-12
 COOKIES=$WORK/cookies
 # Signs the shell in to a console at $1 as the administrator and keeps the
 # session cookie for api().
