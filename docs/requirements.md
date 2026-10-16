@@ -236,7 +236,7 @@ Phase 6 adds Watson, the first part of 221B that changes clusters. Reads run at 
 
 **Not in Phase 6:** `kubectl apply`, `edit` and `exec`, and helm install or upgrade (see Open questions).
 
-**Changed at the Phase 6 review:** the Alerts tab's count includes acknowledged alerts, which still stay off the banners at the top of every tab; the Nodes tab lists nodes with problems first until someone sorts; column choices are kept in each browser, also for people who sign in, and no longer with their account (which the Phase 4 review had asked for); the bar legends under the Nodes table and on the home page became tooltips on the bars and their headings; the Services tab lost its summary tiles; and Sherlock no longer suggests questions to ask next.
+**Changed at the Phase 6 review:** the Alerts tab's count includes acknowledged alerts, which still stay off the banners at the top of every tab; the Nodes tab lists nodes with problems first until someone sorts; column choices are kept in each browser, also for people who sign in, and no longer with their account (which the Phase 4 review had asked for); the bar legends under the Nodes table and on the home page became tooltips on the bars and their headings; the Services tab lost its summary tiles; Sherlock no longer suggests questions to ask next; a Helm release no longer has Roll back and Ask Sherlock buttons (P6-06's rollback is typed in Watson); and Sherlock and Watson leave the main window together, in one window, rather than each on its own (P5-08, P6-09).
 
 **Review:** you run each supported change on a test cluster, approve some, let others lapse, and check the audit log.
 

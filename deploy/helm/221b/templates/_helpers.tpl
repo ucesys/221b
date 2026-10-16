@@ -9,7 +9,7 @@
 {{- end -}}
 {{- end -}}
 {{- if regexMatch "^[0-9]" $name -}}
-{{- $name = printf "console-%s" $name -}}
+{{- $name = printf "k8s-console-%s" $name -}}
 {{- end -}}
 {{- $name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}

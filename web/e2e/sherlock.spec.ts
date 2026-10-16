@@ -292,16 +292,18 @@ test('a command in an answer goes to Watson, with Sherlock’s reason, and runs 
   await expect(ran.getByTestId('watson-output')).toContainText(new RegExp(`Name:\\s+${name}`))
 })
 
-test('Sherlock moves to a window of its own and back, and the main window asks there (P5-08)', async ({ page, context }) => {
+test('Sherlock moves to a window of its own, with Watson, and back, and the main window asks there (P5-08, Phase 6 review)', async ({ page, context }) => {
   await open(page, '#/alerts')
   if (await page.getByTestId('sherlock-new').count()) await page.getByTestId('sherlock-new').click()
-  const [popup] = await Promise.all([context.waitForEvent('page'), page.getByTestId('sherlock-popout').click()])
+  const [popup] = await Promise.all([context.waitForEvent('page'), page.locator('[data-testid=dock-popout]:visible').click()])
   await popup.waitForLoadState('domcontentloaded')
-  await expect(popup).toHaveURL(/#\/sherlock$/)
+  await expect(popup).toHaveURL(/#\/assistants$/)
+  // One window for both (decided at the Phase 6 review).
   await expect(popup.getByTestId('sherlock')).toBeVisible()
-  await expect(page.getByTestId('sherlock-popped')).toBeVisible()
-  // Watson stays docked; Sherlock is in the other window.
+  await expect(popup.getByTestId('watson')).toBeVisible()
+  await expect(page.getByTestId('assistants-popped')).toBeVisible()
   await expect(page.getByTestId('sherlock')).toHaveCount(0)
+  await expect(page.getByTestId('watson')).toHaveCount(0)
 
   // Asked in the main window, answered in the other.
   const button = page.getByTestId('alert').getByTestId('ask-sherlock').first()
@@ -309,6 +311,9 @@ test('Sherlock moves to a window of its own and back, and the main window asks t
   await button.click()
   await expect(popup.getByTestId('sherlock-question').last()).toHaveText(q)
   await expect(popup.getByTestId('sherlock-answer').last()).toHaveAttribute('data-status', 'done', { timeout: 20_000 })
+  // Its command goes to Watson beside it, in the same window.
+  await popup.getByTestId('sherlock-answer').last().getByTestId('sherlock-send-watson').click()
+  await expect(popup.getByTestId('watson').getByTestId('watson-ran').last()).toContainText('describe pod', { timeout: 30_000 })
 
   // A citation there opens in the main window.
   await popup.locator('a[data-cite]').first().click()
@@ -317,7 +322,7 @@ test('Sherlock moves to a window of its own and back, and the main window asks t
 
   // Docking it back closes the window, and the conversation is here.
   // The window closes as the click lands, which the click may report.
-  await Promise.all([popup.waitForEvent('close'), popup.getByTestId('sherlock-dock-back').click().catch(() => undefined)])
+  await Promise.all([popup.waitForEvent('close'), popup.locator('[data-testid=assistants-dock-back]:visible').click().catch(() => undefined)])
   expect(popup.isClosed()).toBe(true)
   await expect(dock(page)).toBeVisible({ timeout: 10_000 })
   await expect(page.getByTestId('sherlock-question').last()).toHaveText(q)

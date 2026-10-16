@@ -4,7 +4,7 @@ This is the guide for the review that closes Phase 6 ([requirements](requirement
 
 ## What Phase 6 built
 
-**Watson** runs kubectl and helm commands, beside Sherlock in the panel at the bottom of every tab, as the prototype has it. Type a read (`kubectl get pods -n web`, `helm history shop -n web`) and it runs at once, printing what kubectl or helm would print. Type a change, press **Cordon** or **Drain** in a node's details, **Roll back** on a Helm release, or **Send to Watson** on a command in Sherlock's answer or in an RBAC or policy fix, and the command waits on an **approval card**: the exact command, the objects it acts on, its impact (the pods a drain evicts, the disruption budgets they meet, replicas before and after, what a rollback adds and removes) and the result of a server-side dry run. Nothing changes until someone presses **Approve and run**; it then runs as that person, and its output streams into the panel. A card lapses after 10 minutes, or at once if one of its objects changes before anyone approves it.
+**Watson** runs kubectl and helm commands, beside Sherlock in the panel at the bottom of every tab, as the prototype has it. Type a read (`kubectl get pods -n web`, `helm history shop -n web`) and it runs at once, printing what kubectl or helm would print. Type a change, press **Cordon** or **Drain** in a node's details, or **Send to Watson** on a command in Sherlock's answer or in an RBAC or policy fix, and the command waits on an **approval card**: the exact command, the objects it acts on, its impact (the pods a drain evicts, the disruption budgets they meet, replicas before and after, what a rollback adds and removes) and the result of a server-side dry run. Nothing changes until someone presses **Approve and run**; it then runs as that person, and its output streams into the panel. A card lapses after 10 minutes, or at once if one of its objects changes before anyone approves it.
 
 Behind it, the server parses each line against the fixed list of commands P6-02 names and refuses everything else, naming the rule. It never starts a shell or any other process: kubectl's own command code and the Helm SDK run inside the server, against a client that impersonates the person, so Kubernetes decides what each person may do. Clusters connected read-only refuse every change, and the cluster the console runs in is read-only unless the chart says otherwise (`localCluster.mode: write`). An optional setting makes changes on production clusters wait for a second person. Every command, approval, refusal, lapse and result is audited.
 
@@ -88,7 +88,7 @@ Reads: `kubectl get`, `describe`, `logs`, `top`, `events` and `auth can-i`; `hel
 ## 6. Buttons and Sherlock's fixes go through the card (P6-06)
 
 **CI proves:**
-- **Cordon**, **Uncordon** and **Drain** on a node, and **Roll back to N-1** on a Helm release, put a card in the panel and change nothing by themselves (the rollback card names the release, the revisions and what changes).
+- **Cordon**, **Uncordon** and **Drain** on a node put a card in the panel and change nothing by themselves. A Helm release has no button of its own (removed at your first look); a typed `helm rollback` gets a card that names the release, the revisions and what changes.
 - **Send to Watson** on a command in Sherlock's answer sends it to Watson with the question as its reason; a read runs at once (with **Auto-run reads** on, the default), a change waits on its card.
 - A fix on the Policies tab (labelling a namespace for Pod Security) offers **Send to Watson** beside **Copy the command**. A fix on the Access tab deletes a binding, which Watson does not run, so it offers **Copy the command** only.
 
@@ -109,25 +109,24 @@ Each step writes one JSON record on standard output (and to the webhook) naming 
 
 **CI proves** that the cordon test's request, approval and result are each in the audit log with the person's email and the cluster, and that refusals and lapses are recorded.
 
-**To check by hand:** `kubectl -n 221b logs deploy/console-221b | grep '"watson\.'`.
+**To check by hand:** `kubectl -n 221b logs deploy/k8s-console-221b | grep '"watson\.'`.
 
-## 9. Watson in a window of its own (P6-09)
+## 9. Sherlock and Watson in a window of their own (P6-09)
 
-| The main window | Watson's window |
+| The main window | Their window |
 | --- | --- |
-| ![Main window while Watson is apart](images/phase-6/app-popped-light-1440.png) | ![Watson's own window](images/phase-6/app-window-light.png) |
+| ![Main window while they are apart](images/phase-6/app-popped-light-1440.png) | ![Sherlock and Watson's own window](images/phase-6/app-window-light.png) |
+
+Sherlock and Watson leave the main window together, into one window, and come back together (changed at your first look).
 
 **CI proves:**
-- Watson's new-window button opens it alone in a window of its own; the main window keeps Sherlock docked (or shows an icon when both are away).
-- Cordon pressed in the main window puts its card in the other window, where **Approve and run** runs it.
-- **Dock back** closes the window, and the panel returns to the main window with its commands.
-- The Sherlock tests check the same for Sherlock with Watson still docked.
-
-Either window can hold both panes: **With Sherlock** (or **With Watson**) adds the other, the new-window button splits them into windows of their own, and the dock-back button returns one to the main window.
+- The new-window button in the dock opens one window with both panes; the main window shows an icon to bring it forward or **Dock here**.
+- Cordon pressed in the main window puts its card in the other window, where **Approve and run** runs it; Ask Sherlock in the main window is answered there, and a link there opens in the main window.
+- The dock-back button closes the window, and both panes return to the main window with their commands and conversation.
 
 ## Changed after your first look
 
-Six changes you asked for, in the same pull request:
+Changes you asked for, in the same pull request:
 
 1. **Alerts count.** The Alerts tab counts every active alert, acknowledged ones included; acknowledged alerts still stay off the banners at the top of the other tabs. CI: `alerts.spec.ts` acknowledges an alert and checks that the count still includes it and the banners do not.
 2. **Nodes order.** Nodes with problems come first (errors, then warnings, then by name) until you sort by a column; the Problems heading shows the sort. CI: `nodes.spec.ts`.
@@ -135,6 +134,9 @@ Six changes you asked for, in the same pull request:
 4. **Legends as tooltips.** The line under the Nodes table is gone; hovering a CPU or memory bar, or the headings of those columns and of the Free columns, explains them. On the home page the bars' tooltip explains them, and the note about missing usage figures moved into it.
 5. **Services.** The summary tiles are gone; the type filters above the table do their job.
 6. **Sherlock.** Answers no longer end with questions to ask next; the prompt no longer asks the model for them.
+7. **Helm tab.** A release has no **Roll back** or **Ask Sherlock** button; `helm rollback` typed in Watson still gets its card.
+8. **One window.** Sherlock and Watson move to a window of their own together, and dock back together (section 9).
+9. **Release name.** The README, scripts and CI install the chart as `k8s-console`, so its objects are named `k8s-console-221b`, as in your installation. A release whose name starts with a digit is now prefixed `k8s-console-`.
 
 ## Not in Phase 6
 

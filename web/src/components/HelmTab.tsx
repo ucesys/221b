@@ -21,8 +21,6 @@ import { SideList, type SideGroup } from './SideList'
 import type { TabProps } from './tabs'
 import { colorLine } from './YamlView'
 import { peekHref } from '../lib/peek'
-import { AskSherlock } from './Sherlock'
-import { WatsonButton } from './Watson'
 
 type ReleaseFilter = 'all' | 'deployed' | 'failed'
 const SUBTABS = ['pods', 'workloads', 'storage', 'network', 'other', 'values', 'notes', 'history'] as const
@@ -202,12 +200,6 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
               </span>
               <span className="rk-tag" style={{ fontSize: 11, padding: '2px 7px' }}>
                 revision {current.revision}
-              </span>
-              <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
-                <AskSherlock question={current.status === 'failed' ? `Why did the last upgrade of Helm release ${current.namespace}/${current.name} fail?` : `Tell me about Helm release ${current.namespace}/${current.name}`} />
-                {current.revision > 1 && (
-                  <WatsonButton command={`helm rollback ${current.name} ${current.revision - 1} -n ${current.namespace}`} from={`Rollback button on release ${current.namespace}/${current.name}`} label={`Roll back to ${current.revision - 1}`} title={`Rolls ${current.name} back to revision ${current.revision - 1}. Watson asks before it runs.`} testid="release-rollback" />
-                )}
               </span>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 18px', fontSize: 12.5, color: 'var(--fg3)' }} data-testid="release-facts">

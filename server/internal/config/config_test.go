@@ -21,13 +21,13 @@ func TestEnvironment(t *testing.T) {
 	t.Setenv("LISTEN", ":9090")
 	t.Setenv("REFRESH", "30")
 	t.Setenv("KUBELET_STATS", "false")
-	t.Setenv("SETTINGS_CONFIGMAP", "consoles/console-221b")
+	t.Setenv("SETTINGS_CONFIGMAP", "consoles/k8s-console-221b")
 	t.Setenv("HEALTH_INTERVAL", "5s")
 	c, err := Parse(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.ClusterName != "lakehouse-prod" || c.Listen != ":9090" || c.Refresh != 30*time.Second || c.HealthInterval != 5*time.Second || c.KubeletStats || c.SettingsConfigMap != "consoles/console-221b" {
+	if c.ClusterName != "lakehouse-prod" || c.Listen != ":9090" || c.Refresh != 30*time.Second || c.HealthInterval != 5*time.Second || c.KubeletStats || c.SettingsConfigMap != "consoles/k8s-console-221b" {
 		t.Fatalf("env %+v", c)
 	}
 	// Flags win over the environment.
@@ -37,12 +37,12 @@ func TestEnvironment(t *testing.T) {
 }
 
 func TestAllowedHosts(t *testing.T) {
-	t.Setenv("ALLOWED_HOSTS", " console-221b, console-221b.consoles.svc ,,")
+	t.Setenv("ALLOWED_HOSTS", " k8s-console-221b, k8s-console-221b.consoles.svc ,,")
 	c, err := Parse(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.AllowedHosts) != 2 || c.AllowedHosts[0] != "console-221b" || c.AllowedHosts[1] != "console-221b.consoles.svc" {
+	if len(c.AllowedHosts) != 2 || c.AllowedHosts[0] != "k8s-console-221b" || c.AllowedHosts[1] != "k8s-console-221b.consoles.svc" {
 		t.Fatalf("hosts %q", c.AllowedHosts)
 	}
 }

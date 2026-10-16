@@ -27,7 +27,7 @@ import { findings as policyFindings, flagOf as policyFlag, modelOf as policyMode
 import { apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, useRoute } from './lib/router'
 import { askSherlock, useSherlock } from './api/sherlock'
 import { sendToWatson, useWatson, WatsonError, type Send } from './api/watson'
-import { canPopOut, focusPopup, onPop, panesOf, popOut, post, usePopped, type Pane } from './lib/sherlock'
+import { canPopOut, focusPopup, onPop, popOut, post, usePopped, WINDOW_VIEWS, type Pane } from './lib/sherlock'
 import { openTarget, SherlockContext, SherlockPane } from './components/Sherlock'
 import { Dock, PoppedOutFab, type DockMode } from './components/Dock'
 import { autoRunReads, WatsonContext, WatsonPane } from './components/Watson'
@@ -58,8 +58,8 @@ function useNow(every = 60_000): number {
 
 export function App() {
   const route = useRoute()
-  // Sherlock and Watson in a window of their own have no tabs (P5-08, P6-09).
-  if (route.view === 'sherlock' || route.view === 'watson' || route.view === 'assistants') return <AssistantShell />
+  // Sherlock and Watson in their window have no tabs (P5-08, P6-09).
+  if ((WINDOW_VIEWS as readonly string[]).includes(route.view)) return <AssistantShell />
   return <Console />
 }
 
@@ -88,7 +88,7 @@ function AssistantShell() {
   const name = clusters.find((c) => c.id === route.cluster)?.name ?? (route.cluster === LOCAL ? '' : route.cluster)
   return (
     <div className="rk" data-theme={theme} data-accent="teal" data-density="comfortable" data-dock="off" style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}>
-      <AssistantWindow cluster={route.cluster} clusterName={name} panes={panesOf(route.view)} onToast={setToast} />
+      <AssistantWindow cluster={route.cluster} clusterName={name} onToast={setToast} />
       {toast && <Toast message={toast} onDone={clearToast} />}
     </div>
   )
@@ -185,13 +185,13 @@ function Shell() {
   }, [])
   const sherlockOn = !!sherlock.status?.enabled
   const watsonOn = !!watson.status?.available
-  const sherlockDocked = sherlockOn && !popped.has('sherlock')
-  const watsonDocked = watsonOn && !popped.has('watson')
+  // Both leave the main window together, for one window of their own.
+  const sherlockDocked = sherlockOn && !popped
+  const watsonDocked = watsonOn && !popped
   const dockShown = view === 'tabs' && (sherlockDocked || watsonDocked)
-  const anyPopped = popped.size > 0
   useEffect(() => {
-    if (anyPopped) post({ type: 'cluster', cluster: route.cluster })
-  }, [anyPopped, route.cluster])
+    if (popped) post({ type: 'cluster', cluster: route.cluster })
+  }, [popped, route.cluster])
   useEffect(
     () =>
       onPop((m) => {
@@ -206,12 +206,12 @@ function Shell() {
   const sherlockApi = {
     available: !!sherlock.status?.available && view === 'tabs',
     ask: (q: string, over?: boolean) => {
-      const away = popped.has('sherlock')
+      const away = popped
       if (!away && (over || dock.mode === 'min')) setDock({ ...dock, mode: over ? 'max' : 'open', pane: 'sherlock' })
       else if (!away) setDock({ ...dock, pane: 'sherlock' })
       askSherlock(route.cluster, q)
         .then(() => {
-          if (away) focusPopup('sherlock')
+          if (away) focusPopup()
         })
         .catch((e: unknown) => setToast(e instanceof Error ? e.message : String(e)))
     },
@@ -222,25 +222,18 @@ function Shell() {
     available: watsonOn && view === 'tabs',
     readOnly: !!watson.status?.readOnly,
     send: (command: string, o: Send = {}) => {
-      const away = popped.has('watson')
+      const away = popped
       if (!away) setDock({ ...dock, mode: o.over ? 'max' : dock.mode === 'min' ? 'open' : dock.mode, pane: 'watson' })
       sendToWatson(route.cluster, command, { run: autoRunReads(), ...o })
         .then(() => {
-          if (away) focusPopup('watson')
+          if (away) focusPopup()
         })
         .catch((e: unknown) => setToast(e instanceof WatsonError ? e.message : String(e)))
     },
   }
-  const popOutNow = (pane: Pane) => {
-    const other: Pane = pane === 'sherlock' ? 'watson' : 'sherlock'
-    // With the other panel already in a window, this one joins it.
-    if (popped.has(other)) {
-      post({ type: 'add', pane })
-      focusPopup(other)
-      return
-    }
-    if (popOut(route.cluster, [pane])) setDock({ ...dock, mode: dock.mode === 'max' ? 'open' : dock.mode })
-    else setToast(`The browser did not open a new window. Allow pop-ups for the console to move ${pane === 'sherlock' ? 'Sherlock' : 'Watson'} to a window of its own.`)
+  const popOutNow = () => {
+    if (popOut(route.cluster)) setDock({ ...dock, mode: dock.mode === 'max' ? 'open' : dock.mode })
+    else setToast('The browser did not open a new window. Allow pop-ups for the console to move Sherlock and Watson to a window of their own.')
   }
   const waiting = watson.items.filter((x) => x.status === 'pending' && x.kind === 'change' && x.canApprove).length
   const busy = !!sherlock.conv?.busy || watson.items.some((x) => x.status === 'running' || x.status === 'queued')
@@ -287,15 +280,12 @@ function Shell() {
           onPane={(pane) => setDock({ ...dock, pane })}
           sherlock={sherlockDocked ? (controls, switcher) => <SherlockPane cluster={route.cluster} clusterName={clusterName} state={sherlock} onToast={setToast} controls={controls} switcher={switcher} /> : null}
           watson={watsonDocked ? (controls, switcher) => <WatsonPane cluster={route.cluster} clusterName={clusterName} state={watson} onToast={setToast} controls={controls} switcher={switcher} /> : null}
-          popped={[...popped].filter((p) => (p === 'sherlock' ? sherlockOn : watsonOn))}
-          onFocusPopped={(p) => focusPopup(p)}
-          onDockHere={(p) => post({ type: 'close', panes: [p] })}
           onPopOut={canPopOut() ? popOutNow : undefined}
           waiting={waiting}
           busy={busy}
         />
       )}
-      {view === 'tabs' && anyPopped && !dockShown && <PoppedOutFab panes={[...popped]} onFocus={() => focusPopup()} onDock={() => post({ type: 'close' })} />}
+      {view === 'tabs' && popped && <PoppedOutFab onFocus={() => focusPopup()} onDock={() => post({ type: 'close' })} />}
       {view === 'tabs' && <PeekPane route={route} cluster={live.cluster} now={now} onToast={setToast} />}
       <SettingsDialog open={settingsOpen} onClose={closeSettings} theme={theme} onTheme={changeTheme} settings={live.settings} refreshedAt={live.refreshedAt} canChange={me?.admin ?? true} />
       {editing === null && <ClusterEditor key="+" orig={null} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}

@@ -70,16 +70,16 @@ func TestServiceInMemory(t *testing.T) {
 // The ConfigMap storage reads and patches one key through the API server,
 // here the simulator's.
 func TestConfigMapStorage(t *testing.T) {
-	s := sim.New(sim.Options{Nodes: 1, Pods: 1, SettingsConfigMap: "consoles/console-221b"})
+	s := sim.New(sim.Options{Nodes: 1, Pods: 1, SettingsConfigMap: "consoles/k8s-console-221b"})
 	srv := httptest.NewServer(s)
 	defer srv.Close()
 	ctx := context.Background()
 
-	cm, err := kube.NewConfigMapStorage(&rest.Config{Host: srv.URL}, "consoles/console-221b")
+	cm, err := kube.NewConfigMapStorage(&rest.Config{Host: srv.URL}, "consoles/k8s-console-221b")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cm.Kind() != "configmap" || cm.Ref() != "consoles/console-221b" {
+	if cm.Kind() != "configmap" || cm.Ref() != "consoles/k8s-console-221b" {
 		t.Fatalf("kind %q ref %q", cm.Kind(), cm.Ref())
 	}
 	if _, err := cm.Load(ctx); !errors.Is(err, settings.ErrNotFound) {

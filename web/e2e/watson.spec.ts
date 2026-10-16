@@ -430,26 +430,32 @@ test('on a production cluster with the rule on, a second person approves (P6-07)
   }
 })
 
-test('a Helm release’s Roll back button asks on a card with what changes (P6-06)', async ({ page }) => {
+test('a helm rollback asks on a card with what changes; the Helm tab has no buttons for it (P6-04, Phase 6 review)', async ({ page }) => {
   test.skip(!play.release, 'no release with more than one revision')
   const [ns, name] = inKind ? [play.namespace, play.release] : play.release.split('/')
   await open(page, `#/helm/${ns}/${name}`)
-  await page.getByTestId('release-rollback').click()
+  await expect(page.getByTestId('release-name')).toHaveText(name!)
+  // Removed at the Phase 6 review: no Roll back and no Ask Sherlock on a release.
+  await expect(page.getByTestId('release-rollback')).toHaveCount(0)
+  await expect(page.getByTestId('ask-sherlock')).toHaveCount(0)
+  await pane(page).getByTestId('watson-input').fill(`helm rollback ${name} 1 -n ${ns}`)
+  await pane(page).getByTestId('watson-input').press('Enter')
   const card = pane(page).getByTestId('watson-card').last()
-  await expect(card).toHaveAttribute('data-command', new RegExp(`^helm rollback ${name} \\d+ -n ${ns}$`))
+  await expect(card).toHaveAttribute('data-command', `helm rollback ${name} 1 -n ${ns}`)
   await expect(card.getByTestId('watson-targets')).toContainText(`release ${ns}/${name}`)
   await expect(card.getByTestId('watson-impact')).toContainText(/revision/i, { timeout: 30_000 })
   await expect(card.getByTestId('watson-dryrun')).toContainText(/dry run/i, { timeout: 30_000 })
   await card.getByTestId('watson-discard').click()
 })
 
-test('Watson moves to a window of its own, approvals there run, and it docks back (P6-09)', async ({ page, context }) => {
+test('Watson moves to a window of its own, with Sherlock, approvals there run, and it docks back (P6-09)', async ({ page, context }) => {
   await open(page)
-  const [popup] = await Promise.all([context.waitForEvent('page'), page.getByTestId('watson-popout').click()])
+  const [popup] = await Promise.all([context.waitForEvent('page'), page.locator('[data-testid=dock-popout]:visible').click()])
   await popup.waitForLoadState('domcontentloaded')
-  await expect(popup).toHaveURL(/#\/watson$/)
+  await expect(popup).toHaveURL(/#\/assistants$/)
   await expect(popup.getByTestId('watson')).toBeVisible()
   await expect(page.getByTestId('watson')).toHaveCount(0)
+  await expect(page.getByTestId('assistants-popped')).toBeVisible()
 
   // A change asked for in the main window waits in the other, and runs there.
   const node = await spareWorker(page.request)
@@ -465,7 +471,7 @@ test('Watson moves to a window of its own, approvals there run, and it docks bac
   }
 
   // Docking it back closes the window; the commands are in the panel.
-  await Promise.all([popup.waitForEvent('close'), popup.getByTestId('watson-dock-back').click().catch(() => undefined)])
+  await Promise.all([popup.waitForEvent('close'), popup.locator('[data-testid=assistants-dock-back]:visible').click().catch(() => undefined)])
   await expect(pane(page)).toBeVisible({ timeout: 10_000 })
   await expect(lastRan(page)).toContainText(`node/${node} cordoned`)
 })

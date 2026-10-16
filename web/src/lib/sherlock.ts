@@ -65,12 +65,12 @@ export function refTarget(r: SherlockRef, cluster: string): RefTarget | null {
   return p ? { peek: peekParam(p) } : null
 }
 
-// ---------- the panels in windows of their own ----------
+// ---------- the assistants' window ----------
 //
-// Sherlock (P5-08) and Watson (P6-09) can each move to a window of their
-// own, or share one, for another monitor. The windows and the main one
-// talk over a BroadcastChannel: each window says which panels it holds
-// every two seconds, so the main one docks only the others.
+// Sherlock (P5-08) and Watson (P6-09) leave the main window together, for
+// another monitor: one window holds both (decided at the Phase 6 review).
+// The window and the main one talk over a BroadcastChannel: the window says
+// hello every two seconds, and the main one docks nothing while it does.
 
 /** A panel of the dock. */
 export type Pane = 'sherlock' | 'watson'
@@ -78,14 +78,12 @@ export type Pane = 'sherlock' | 'watson'
 const CHANNEL = '221b-sherlock'
 
 export type PopMessage =
-  | { type: 'hello'; cluster: string; panes?: Pane[]; win?: string }
+  | { type: 'hello'; cluster: string; win?: string }
   | { type: 'bye'; win?: string }
   | { type: 'cluster'; cluster: string }
-  | { type: 'focus'; pane?: Pane }
-  /** Windows holding these panels let them go: the main window docks them. */
-  | { type: 'close'; panes?: Pane[] }
-  /** A window that holds the other panel takes this one too. */
-  | { type: 'add'; pane: Pane }
+  | { type: 'focus' }
+  /** The window closes, and the main window docks the panels again. */
+  | { type: 'close' }
   | { type: 'open'; cluster: string; target: RefTarget }
 
 let channel: BroadcastChannel | null = null
@@ -100,7 +98,7 @@ function chan(): BroadcastChannel | null {
   return channel
 }
 
-/** Whether this browser can move a panel to its own window. */
+/** Whether this browser can move the panels to a window of their own. */
 export function canPopOut(): boolean {
   return typeof window !== 'undefined' && typeof BroadcastChannel !== 'undefined' && typeof window.open === 'function'
 }
@@ -115,80 +113,57 @@ export function onPop(fn: (m: PopMessage) => void): () => void {
   return () => listeners.delete(fn)
 }
 
-/** The view of a window holding some panels. */
-export function windowView(panes: Pane[]): 'sherlock' | 'watson' | 'assistants' {
-  if (panes.includes('sherlock') && panes.includes('watson')) return 'assistants'
-  return panes.includes('watson') ? 'watson' : 'sherlock'
+/** The views that open the assistants' window; the first is the one to use. */
+export const WINDOW_VIEWS = ['assistants', 'sherlock', 'watson'] as const
+
+/** The hash of the assistants' window for a cluster. */
+export function windowHash(cluster: string): string {
+  return cluster === LOCAL ? '#/assistants' : '#/c/' + encodeURIComponent(cluster) + '/assistants'
 }
 
-/** The panels a window's view holds. */
-export function panesOf(view: string): Pane[] {
-  if (view === 'assistants') return ['sherlock', 'watson']
-  if (view === 'watson') return ['watson']
-  return ['sherlock']
-}
+const NAME = '221b-assistants'
+let popup: Window | null = null
 
-/** The hash of a window holding some panels, for a cluster. */
-export function windowHash(cluster: string, panes: Pane[]): string {
-  const v = windowView(panes)
-  return cluster === LOCAL ? `#/${v}` : '#/c/' + encodeURIComponent(cluster) + '/' + v
-}
-
-/** The hash of Sherlock's own window for a cluster. */
-export function sherlockHash(cluster: string): string {
-  return windowHash(cluster, ['sherlock'])
-}
-
-const popups = new Map<string, Window>()
-
-/** Opens panels in a window of their own; false when the browser refused. */
-export function popOut(cluster: string, panes: Pane[]): boolean {
-  const name = '221b-' + windowView(panes)
-  const open = popups.get(name)
-  if (open && !open.closed) {
-    open.focus()
+/** Opens the assistants' window; false when the browser refused. */
+export function popOut(cluster: string): boolean {
+  if (popup && !popup.closed) {
+    popup.focus()
     return true
   }
-  const url = window.location.pathname + window.location.search + windowHash(cluster, panes)
-  const w = window.open(url, name, `popup,width=${panes.length > 1 ? 1280 : 760},height=900`)
+  const url = window.location.pathname + window.location.search + windowHash(cluster)
+  const w = window.open(url, NAME, 'popup,width=1280,height=900')
   if (!w) return false
-  popups.set(name, w)
+  popup = w
   w.focus()
   return true
 }
 
-/** Brings a panel's window forward, from a click in the main one. */
-export function focusPopup(pane?: Pane): void {
-  for (const [name, w] of popups) {
-    if (w.closed) {
-      popups.delete(name)
-      continue
-    }
-    if (!pane || name === '221b-assistants' || name === '221b-' + pane) {
-      w.focus()
-      return
-    }
+/** Brings the assistants' window forward, from a click in the main one. */
+export function focusPopup(): void {
+  if (popup && !popup.closed) {
+    popup.focus()
+    return
   }
-  post({ type: 'focus', pane })
+  post({ type: 'focus' })
 }
 
-/** How long a separate window may stay silent before it counts as gone. */
+/** How long the window may stay silent before it counts as gone. */
 const STALE_MS = 5000
 
 /**
- * In the main window: the panels in windows of their own now. Each window
- * says hello every 2 seconds and goodbye when it closes.
+ * In the main window: whether the assistants are in their own window now.
+ * The window says hello every 2 seconds and goodbye when it closes.
  */
-export function usePopped(): Set<Pane> {
-  const [wins, setWins] = useState<Record<string, { panes: Pane[]; at: number }>>({})
+export function usePopped(): boolean {
+  const [wins, setWins] = useState<Record<string, number>>({})
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const off = onPop((m) => {
-      if (m.type === 'hello') setWins((w) => ({ ...w, [m.win ?? 'sherlock']: { panes: m.panes ?? ['sherlock'], at: Date.now() } }))
+      if (m.type === 'hello') setWins((w) => ({ ...w, [m.win ?? 'assistants']: Date.now() }))
       if (m.type === 'bye')
         setWins((w) => {
           const next = { ...w }
-          delete next[m.win ?? 'sherlock']
+          delete next[m.win ?? 'assistants']
           return next
         })
     })
@@ -198,25 +173,14 @@ export function usePopped(): Set<Pane> {
       clearInterval(t)
     }
   }, [])
-  const out = new Set<Pane>()
-  for (const w of Object.values(wins)) {
-    if (now - w.at < STALE_MS) for (const p of w.panes) out.add(p)
-  }
-  return out
+  return Object.values(wins).some((at) => now - at < STALE_MS)
 }
 
-/** In the main window: whether Sherlock is in a window of its own now. */
-export function usePoppedOut(): boolean {
-  return usePopped().has('sherlock')
-}
-
-/** In a separate window: says which panels it holds until it closes. */
-export function useAnnounce(cluster: string, panes: Pane[] = ['sherlock']): string {
+/** In the assistants' window: says it is open until it closes. */
+export function useAnnounce(cluster: string): string {
   const [win] = useState(() => Math.random().toString(36).slice(2, 10))
-  const key = panes.join(',')
   useEffect(() => {
-    const list = key.split(',') as Pane[]
-    const hello = () => post({ type: 'hello', cluster, panes: list, win })
+    const hello = () => post({ type: 'hello', cluster, win })
     hello()
     const t = setInterval(hello, 2000)
     const bye = () => post({ type: 'bye', win })
@@ -225,7 +189,7 @@ export function useAnnounce(cluster: string, panes: Pane[] = ['sherlock']): stri
       clearInterval(t)
       window.removeEventListener('pagehide', bye)
     }
-  }, [cluster, key, win])
+  }, [cluster, win])
   return win
 }
 

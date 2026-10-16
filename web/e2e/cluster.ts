@@ -389,10 +389,10 @@ export const cluster = {
    */
   async other(): Promise<{ server: string; ca: 'pem' | 'system'; caPem: string; token: string; who: string; nodes: number }> {
     if (inKind) {
-      const token = (await kubectl('-n', NAMESPACE, 'create', 'token', 'console-221b', '--duration=2h')).trim()
+      const token = (await kubectl('-n', NAMESPACE, 'create', 'token', 'k8s-console-221b', '--duration=2h')).trim()
       const caPem = await kubectl('-n', NAMESPACE, 'get', 'configmap', 'kube-root-ca.crt', '-o', 'jsonpath={.data.ca\\.crt}')
       const nodes = (await kubectl('get', 'nodes', '-o', 'name')).trim().split('\n').filter(Boolean).length
-      return { server: 'https://kubernetes.default.svc', ca: 'pem', caPem, token, who: `system:serviceaccount:${NAMESPACE}:console-221b`, nodes }
+      return { server: 'https://kubernetes.default.svc', ca: 'pem', caPem, token, who: `system:serviceaccount:${NAMESPACE}:k8s-console-221b`, nodes }
     }
     // The second simulator requires the token, as a real API server would.
     const res = await fetch(`${OTHER_SIM}/sim/token`, { method: 'POST', body: JSON.stringify({ token: OTHER_TOKEN }) })
@@ -427,7 +427,7 @@ export const cluster = {
 
   /** Whether the Secret a connection is kept in exists (P3-07, P3-08). */
   async connectionSecret(id: string): Promise<boolean> {
-    const name = `console-221b-cluster-${id}`
+    const name = `k8s-console-221b-cluster-${id}`
     if (inKind) {
       try {
         await kubectl('-n', NAMESPACE, 'get', 'secret', name, '-o', 'name')

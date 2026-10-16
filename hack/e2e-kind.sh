@@ -16,8 +16,8 @@ MINOR=${1:-1.37}
 IMAGE=${IMAGE:?set IMAGE to the image to test, already in the local docker}
 CLUSTER=${CLUSTER:-221b-e2e}
 NS=221b
-RELEASE=console
-FULLNAME=console-221b
+RELEASE=k8s-console
+FULLNAME=k8s-console-221b
 SA=system:serviceaccount:$NS:$FULLNAME
 BASE_URL=http://127.0.0.1:8080
 # The console is installed with local accounts (P3-01): an administrator
@@ -192,7 +192,7 @@ api http://127.0.0.1:18080/api/v1/snapshot | grep -q '"uptime":"available"'
 # Secrets are read (the default): the console's own Helm release shows,
 # with its values, and the record's Secret is listed by key name and size.
 api http://127.0.0.1:18080/api/v1/snapshot | grep -q '"secrets":"read"'
-api "http://127.0.0.1:18080/api/v1/helm/$NS/$RELEASE" | tee "$WORK/release.json" | grep -q '"name":"console"'
+api "http://127.0.0.1:18080/api/v1/helm/$NS/$RELEASE" | tee "$WORK/release.json" | grep -q '"name":"k8s-console"'
 grep -q 'clusterName: kind-e2e' "$WORK/release.json"
 api "http://127.0.0.1:18080/api/v1/snapshot?views=ns:$NS" | grep -q '"kind":"Secret"'
 kill "$pf"

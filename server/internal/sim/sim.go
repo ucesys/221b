@@ -803,7 +803,7 @@ func (s *Sim) nodeMetrics(w http.ResponseWriter, r *http.Request) {
 func (s *Sim) kubeletSummary(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if !s.opts.KubeletStats {
-		status(w, http.StatusForbidden, "Forbidden", fmt.Sprintf(`nodes %q is forbidden: User "system:serviceaccount:221b:console" cannot get resource "nodes/proxy" in API group "" at the cluster scope`, name))
+		status(w, http.StatusForbidden, "Forbidden", fmt.Sprintf(`nodes %q is forbidden: User "system:serviceaccount:221b:k8s-console-221b" cannot get resource "nodes/proxy" in API group "" at the cluster scope`, name))
 		return
 	}
 	s.mu.Lock()

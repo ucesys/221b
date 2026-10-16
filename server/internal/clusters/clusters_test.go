@@ -196,7 +196,7 @@ func TestConnectionTestSteps(t *testing.T) {
 	if keys(r) != "Address:ok TLS:warn Sign-in:ok Kubernetes:ok Permissions:ok" || r.Tone != "warn" || r.Nodes != 3 || !strings.HasPrefix(r.Version, "v1.37") || !r.Impersonate {
 		t.Fatalf("steps: %s %+v", keys(r), r)
 	}
-	if r.Who != "system:serviceaccount:221b:console-221b" || !strings.Contains(r.Summary, "3 nodes") {
+	if r.Who != "system:serviceaccount:221b:k8s-console-221b" || !strings.Contains(r.Summary, "3 nodes") {
 		t.Errorf("who/summary: %q %q", r.Who, r.Summary)
 	}
 
@@ -255,7 +255,7 @@ func (*dnsErr) Error() string { return "lookup no-such-host.invalid: no such hos
 
 func TestSecretStoreRoundTrip(t *testing.T) {
 	_, srv := simServer(t)
-	store, err := clusters.NewSecretStore(&rest.Config{Host: srv.URL}, "221b", "console-221b", map[string]string{"app.kubernetes.io/instance": "console"})
+	store, err := clusters.NewSecretStore(&rest.Config{Host: srv.URL}, "221b", "k8s-console-221b", map[string]string{"app.kubernetes.io/instance": "k8s-console"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestSecretStoreRoundTrip(t *testing.T) {
 		t.Fatalf("list: %v %v", err, list)
 	}
 	// The Secret carries the labels and never the credential in spec.json.
-	resp, err := http.Get(srv.URL + "/api/v1/namespaces/221b/secrets/console-221b-cluster-staging")
+	resp, err := http.Get(srv.URL + "/api/v1/namespaces/221b/secrets/k8s-console-221b-cluster-staging")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestSecretStoreRoundTrip(t *testing.T) {
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&sec)
 	resp.Body.Close()
-	if sec.Metadata.Labels["app.kubernetes.io/component"] != "cluster-connection" || sec.Metadata.Labels["221b.ucesys.com/cluster"] != "staging" || sec.Metadata.Labels["app.kubernetes.io/instance"] != "console" {
+	if sec.Metadata.Labels["app.kubernetes.io/component"] != "cluster-connection" || sec.Metadata.Labels["221b.ucesys.com/cluster"] != "staging" || sec.Metadata.Labels["app.kubernetes.io/instance"] != "k8s-console" {
 		t.Errorf("labels: %v", sec.Metadata.Labels)
 	}
 	specJSON, _ := base64.StdEncoding.DecodeString(sec.Data["spec.json"])

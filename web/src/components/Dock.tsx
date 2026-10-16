@@ -21,25 +21,20 @@ interface Props {
   /** The panels docked here; null when off or in a window of its own. */
   sherlock: RenderPane | null
   watson: RenderPane | null
-  /** Panels in windows of their own, with how to reach and dock them. */
-  popped: Pane[]
-  onFocusPopped: (p: Pane) => void
-  onDockHere: (p: Pane) => void
-  /** Moves a panel to a window of its own; undefined where the browser cannot. */
-  onPopOut?: (p: Pane) => void
+  /** Moves Sherlock and Watson to a window of their own; undefined where the browser cannot. */
+  onPopOut?: () => void
   /** Commands waiting for approval, and whether anything is running. */
   waiting: number
   busy: boolean
 }
 
 const MIN_H = 150
-const NAMES: Record<Pane, string> = { sherlock: 'Sherlock', watson: 'Watson' }
 
 /**
  * The panel docked at the bottom of every tab: Sherlock and Watson side
  * by side (P5-01, P6-01), resizable by the top edge and the line between
  * them (the arrow keys too), maximized over the page or minimized to an
- * icon. Each can move to a window of its own (P5-08, P6-09).
+ * icon. Together they move to a window of their own (P5-08, P6-09).
  */
 export function Dock(p: Props) {
   const { mode, onMode, height, onHeight, split, onSplit } = p
@@ -53,6 +48,7 @@ export function Dock(p: Props) {
   }, [mode])
 
   const both = !!p.sherlock && !!p.watson
+  const names = [p.sherlock && 'Sherlock', p.watson && 'Watson'].filter(Boolean).join(' and ')
   const shown: Pane = both ? p.pane : p.sherlock ? 'sherlock' : 'watson'
 
   if (mode === 'min') {
@@ -105,23 +101,11 @@ export function Dock(p: Props) {
       </button>
     </>
   )
-  const popOut = (pane: Pane) =>
-    p.onPopOut && (
-      <button className="rk-icon-btn" aria-label={`Open ${NAMES[pane]} in a window of its own`} title={`Open ${NAMES[pane]} in a window of its own — for another monitor`} onClick={() => p.onPopOut!(pane)} data-testid={`${pane}-popout`}>
-        <PopOutIcon />
-      </button>
-    )
-  const poppedNote = p.popped.map((pane) => (
-    <span key={pane} className="rk-popnote" data-testid={`${pane}-popped`}>
-      <button className="rk-link" onClick={() => p.onFocusPopped(pane)} title={`${NAMES[pane]} is in a window of its own — bring it forward`} style={{ fontSize: 12 }}>
-        {NAMES[pane]} ↗
-      </button>
-      <button className="rk-btn rk-popback" onClick={() => p.onDockHere(pane)} title={`Close ${NAMES[pane]}’s window and dock it here again`} data-testid={`${pane}-dock-here`}>
-        <PopInIcon />
-        Dock here
-      </button>
-    </span>
-  ))
+  const popOut = p.onPopOut && (
+    <button className="rk-icon-btn" aria-label={`Open ${names} in a window of their own`} title={`Open ${names} in a window of their own — for another monitor`} onClick={() => p.onPopOut!()} data-testid="dock-popout">
+      <PopOutIcon />
+    </button>
+  )
   const switcher = both ? (
     <div className="rk-seg rk-narrow" role="group" aria-label="Show">
       <button aria-pressed={shown === 'sherlock'} onClick={() => p.onPane('sherlock')} data-testid="dock-show-sherlock">
@@ -139,21 +123,23 @@ export function Dock(p: Props) {
   ) : null
   // The window controls sit at the right end: in the right panel when both
   // show, and in each panel on a narrow screen, where one shows at a time.
-  const sherlockControls = (
+  const sherlockControls = both ? (
+    <span className="rk-narrow" style={{ gap: 2 }}>
+      {popOut}
+      {minMax()}
+    </span>
+  ) : (
     <>
-      {!p.watson && poppedNote}
-      {popOut('sherlock')}
-      {both ? minMax('rk-narrow') : minMax()}
+      {popOut}
+      {minMax()}
     </>
   )
   const watsonControls = (
     <>
-      {!p.sherlock && poppedNote}
-      {popOut('watson')}
+      {popOut}
       {minMax()}
     </>
   )
-  const names = [p.sherlock && 'Sherlock', p.watson && 'Watson'].filter(Boolean).join(' and ')
   return (
     <>
       {mode === 'max' && <button className="rk-dock-bd" aria-label={`Restore the ${names} panel`} tabIndex={-1} onClick={() => onMode('open')} />}
@@ -192,15 +178,14 @@ export function Dock(p: Props) {
   )
 }
 
-/** In the main window when every panel is in a window of its own. */
-export function PoppedOutFab({ panes, onFocus, onDock }: { panes: Pane[]; onFocus: () => void; onDock: () => void }) {
-  const what = panes.map((x) => NAMES[x]).join(' and ')
+/** In the main window while Sherlock and Watson are in their own window. */
+export function PoppedOutFab({ onFocus, onDock }: { onFocus: () => void; onDock: () => void }) {
   return (
-    <div className="rk-popfab" data-testid="sherlock-popped">
-      <button className="rk-fab" aria-label={`${what} ${panes.length > 1 ? 'are' : 'is'} in a window of its own — bring it forward`} title={`${what} in a window of its own — bring it forward`} onClick={onFocus}>
+    <div className="rk-popfab" data-testid="assistants-popped">
+      <button className="rk-fab" aria-label="Sherlock and Watson are in a window of their own — bring it forward" title="Sherlock and Watson are in a window of their own — bring it forward" onClick={onFocus} data-testid="assistants-focus">
         <AssistantsIcon />
       </button>
-      <button className="rk-btn rk-popback" onClick={onDock} title={`Close the window and dock ${what} here again`} data-testid="sherlock-dock-here">
+      <button className="rk-btn rk-popback" onClick={onDock} title="Close their window and dock Sherlock and Watson here again" data-testid="assistants-dock-here">
         <PopInIcon />
         Dock here
       </button>

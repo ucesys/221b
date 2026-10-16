@@ -167,7 +167,7 @@ func person(r *http.Request) (user string, groups []string, impersonated bool) {
 	if u := r.Header.Get("Impersonate-User"); u != "" {
 		return u, r.Header.Values("Impersonate-Group"), true
 	}
-	return "system:serviceaccount:221b:console-221b", []string{"system:serviceaccounts", "system:authenticated"}, false
+	return "system:serviceaccount:221b:k8s-console-221b", []string{"system:serviceaccounts", "system:authenticated"}, false
 }
 
 // decide answers an access review: the console's own account may do

@@ -30,7 +30,7 @@ func main() {
 	seed := flag.Int64("seed", 1, "random seed, for repeatable clusters")
 	metrics := flag.Bool("metrics", true, "serve metrics.k8s.io node metrics")
 	kubeletStats := flag.Bool("kubelet-stats", true, "serve each node's boot time through the node proxy, as the API server does")
-	settingsCM := flag.String("settings-configmap", "221b/console-221b", "namespace/name of an empty ConfigMap to serve for the console's settings (empty: none)")
+	settingsCM := flag.String("settings-configmap", "221b/k8s-console-221b", "namespace/name of an empty ConfigMap to serve for the console's settings (empty: none)")
 	problems := flag.Bool("problems", true, "include a few unhealthy nodes and pods")
 	churn := flag.Duration("churn", 0, "change usage and some pods this often (0 = never)")
 	claude := flag.Bool("fake-claude", true, "serve a fake Claude Messages API under /claude, for Sherlock (the console's -sherlock-api-url http://<listen>/claude)")

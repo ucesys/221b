@@ -136,7 +136,7 @@ test('a crash-looping pod shows its last termination reason, and its previous co
 test('pod details: containers, environment, volumes, events and logs that start within 2 seconds', async ({ page, request }) => {
   const pods = podRows(await snapshot(request, ['pods']))
   // A running pod with an environment: the console's own in kind, any with a Secret in the simulator.
-  const target = inKind ? pods.find((p) => p.name.startsWith('console-221b') && p.status === 'Running')! : pods.find((p) => p.status === 'Running' && p.name.startsWith('api-'))!
+  const target = inKind ? pods.find((p) => p.name.startsWith('k8s-console-221b') && p.status === 'Running')! : pods.find((p) => p.status === 'Running' && p.name.startsWith('api-'))!
   await open(page, `#/pods?open=${encodeURIComponent(target.key)}`)
   const panel = page.getByTestId('pod-panel')
   await expect(panel.getByRole('heading', { level: 2 })).toHaveText(target.name)
