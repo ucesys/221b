@@ -816,7 +816,15 @@ func TestLDAPRefreshRunsOneSyncAtATimeAndKeepsTheListOnFailure(t *testing.T) {
 		t.Fatalf("statuses: %v", st)
 	}
 
-	// The directory stops: the list stays, and the page says so.
+	// The directory stops: the list stays, and the page says so. The sync
+	// that disabled Omar may still be finishing; a second one is not
+	// started while one runs, so wait for it.
+	waitFor(t, func() bool {
+		var out struct{ LDAP struct{ Running bool } }
+		_, b := e.api(root, "GET", "/api/v1/admin/users", nil)
+		_ = json.Unmarshal(b, &out)
+		return !out.LDAP.Running
+	})
 	d.mu.Lock()
 	d.down = true
 	d.mu.Unlock()
