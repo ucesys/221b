@@ -46,3 +46,21 @@ func TestFlagsBeforeTheVerb(t *testing.T) {
 		}
 	}
 }
+
+// Roles and bindings are not Watson's to change (RB-52).
+func TestLabelRefusesAccessRules(t *testing.T) {
+	for _, line := range []string{
+		"kubectl label clusterrole 221b-viewer a=b",
+		"kubectl annotate rolebinding/web-readers -n web a=b",
+		"kubectl label clusterrolebindings.rbac.authorization.k8s.io x a=b",
+	} {
+		_, err := Parse(line)
+		var r *Refusal
+		if !errors.As(err, &r) || r.Rule != "access rules" {
+			t.Errorf("%s: %v", line, err)
+		}
+	}
+	if _, err := Parse("kubectl label pod api-0 a=b -n web"); err != nil {
+		t.Errorf("a pod can be labelled: %v", err)
+	}
+}

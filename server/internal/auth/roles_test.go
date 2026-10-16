@@ -856,3 +856,30 @@ func TestLDAPNeedsADirectoryAndAListedGroup(t *testing.T) {
 		t.Error("a local group with a super role")
 	}
 }
+
+func TestRolesViewHelpers(t *testing.T) {
+	cfg := auth.Config{
+		Mode:        auth.ModeLocal,
+		LocalGroups: []auth.LocalGroup{{Name: "web-readers", Role: roles.Viewer, Namespaces: []string{"web"}}},
+		Local: []auth.LocalUser{
+			{Username: "root", PasswordHash: hashOf(t, goodPassword), Roles: []string{"superAdmin"}},
+			{Username: "vic", PasswordHash: hashOf(t, goodPassword), Roles: []string{"superViewer"}, Groups: []string{"web-readers"}},
+			{Username: "wes", PasswordHash: hashOf(t, goodPassword), Groups: []string{"web-readers"}},
+		},
+		Lists: auth.RoleLists{roles.SuperViewer: {"auditors"}},
+	}
+	e := newEnv(t, cfg)
+	h := e.svc.Holders()
+	if h[roles.SuperAdmin] != (roles.Holders{Users: 1}) {
+		t.Errorf("SuperAdmin holders = %+v", h[roles.SuperAdmin])
+	}
+	if h[roles.SuperViewer] != (roles.Holders{Users: 1, Groups: 1}) {
+		t.Errorf("SuperViewer holders = %+v", h[roles.SuperViewer])
+	}
+	if n := e.svc.Members("web-readers"); n != 2 {
+		t.Errorf("web-readers has %d members, want 2", n)
+	}
+	if !e.svc.UserExists("wes") || e.svc.UserExists("nobody") {
+		t.Error("UserExists is wrong")
+	}
+}

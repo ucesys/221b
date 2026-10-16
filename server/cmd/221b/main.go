@@ -35,6 +35,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/ldap"
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/ui"
@@ -383,6 +384,15 @@ func run(args []string) error {
 		}
 		return watson.Cluster{ID: id, Name: sum.Name, Env: sum.Env, ReadOnly: sum.Mode != clusters.ModeWrite, Config: client.RestConfig()}, true
 	})
+	rolePrefixes := authCfg.Prefixes
+	if def := roles.DefaultPrefixes(); rolePrefixes.Local == "" || rolePrefixes.LDAP == "" {
+		if rolePrefixes.Local == "" {
+			rolePrefixes.Local = def.Local
+		}
+		if rolePrefixes.LDAP == "" {
+			rolePrefixes.LDAP = def.LDAP
+		}
+	}
 	handler := api.New(api.Options{
 		Watson:                  watsonSvc,
 		Sherlock:                sherlockSvc,
@@ -398,6 +408,7 @@ func run(args []string) error {
 		Audit:                   auditLog,
 		Access:                  people,
 		Impersonation:           api.Impersonation{UserPrefix: cfg.ImpersonateUserPrefix, GroupPrefix: cfg.ImpersonateGroupPrefix},
+		Roles:                   api.RolesOptions{Templates: authFile.RoleTemplates(), Secrets: cfg.SecretsRead, Enforce: authFile.RBACEnforce, Prefixes: rolePrefixes},
 		HTTPSRedirect:           cfg.HTTPSRedirect,
 		Ready:                   cluster.Ready,
 		UI:                      ui.Handler(),
@@ -457,6 +468,9 @@ func run(args []string) error {
 			return gauges
 		},
 	})
+	// The deployed roles are compared with the shipped ones every five
+	// minutes, for the Permissions page, the audit log and rbac.enforce.
+	go handler.RunRoleChecks(ctx)
 	srv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           handler,

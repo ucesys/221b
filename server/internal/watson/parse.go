@@ -716,6 +716,15 @@ func checkLabel(c *Command) *Refusal {
 	if c.Has("list") {
 		return nil
 	}
+	// The access rules are written by the chart, and by a person who holds
+	// that right; Watson never changes them, whatever the person's role
+	// would let (RB-52).
+	types, _ := targets(c.Positionals)
+	for _, t := range types {
+		if isAccessRule(t) {
+			return refuse("access rules", "Watson does not change roles or bindings: they are set by the chart's values, and 221B never writes them.")
+		}
+	}
 	var changes int
 	for _, p := range c.Positionals {
 		if strings.Contains(p, "=") || strings.HasSuffix(p, "-") {
@@ -726,6 +735,16 @@ func checkLabel(c *Command) *Refusal {
 		return refuse("usage", "Say what to change: KEY=VALUE to set, KEY- to remove. Usage: %s", c.spec.usage)
 	}
 	return nil
+}
+
+// isAccessRule says whether a TYPE names Kubernetes' own access rules.
+func isAccessRule(t string) bool {
+	t, _, _ = strings.Cut(strings.ToLower(t), ".")
+	switch t {
+	case "role", "roles", "rolebinding", "rolebindings", "clusterrole", "clusterroles", "clusterrolebinding", "clusterrolebindings":
+		return true
+	}
+	return false
 }
 
 // Help is what Watson prints for "help".
