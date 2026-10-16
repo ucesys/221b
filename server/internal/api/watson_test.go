@@ -148,7 +148,7 @@ func TestWatsonReadsAndApprovedChanges(t *testing.T) {
 		t.Fatalf("approve %d %s", r.StatusCode, b)
 	}
 	watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[ch.ID].Status == watson.StatusDone })
-	if !s.Node("worker-001").Spec.Unschedulable || s.LastImpersonated() != "ops@corp.example" {
+	if !s.Node("worker-001").Spec.Unschedulable || s.LastImpersonated() != "221b-local:ops@corp.example" {
 		t.Fatalf("cordoned %v as %q", s.Node("worker-001").Spec.Unschedulable, s.LastImpersonated())
 	}
 	log := auditOut.String()
@@ -220,7 +220,7 @@ func TestWatsonSecondPerson(t *testing.T) {
 		t.Fatalf("approve %d %s", r.StatusCode, b)
 	}
 	watsonStream(t, srv, viewer, func(m map[string]watsonItem) bool { return m[it.ID].Status == watson.StatusDone })
-	if s.LastImpersonated() != "viewer@corp.example" {
+	if s.LastImpersonated() != "221b-local:viewer@corp.example" {
 		t.Fatalf("ran as %q", s.LastImpersonated())
 	}
 }

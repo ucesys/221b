@@ -400,7 +400,7 @@ func TestPeopleSeeWhatKubernetesAllows(t *testing.T) {
 		t.Fatal("no live read was made as the person")
 	}
 	for _, p := range src.readers() {
-		if p.User != "viewer@corp.example" || !slices.Contains(p.Groups, "system:authenticated") {
+		if p.User != "221b-local:viewer@corp.example" || !slices.Contains(p.Groups, "system:authenticated") || !slices.Contains(p.Groups, "221b:console-users") {
 			t.Errorf("live read as %+v", p)
 		}
 	}
