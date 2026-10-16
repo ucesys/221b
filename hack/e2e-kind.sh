@@ -21,7 +21,7 @@ FULLNAME=k8s-console-221b
 SA=system:serviceaccount:$NS:$FULLNAME
 BASE_URL=http://127.0.0.1:8080
 # The console is installed with local accounts (P3-01): an administrator
-# and a viewer, both with the password "password", which the browser tests
+# and a viewer, both with the password "e2e-password-12", which the browser tests
 # use too (web/e2e/accounts.ts).
 E2E_USER=admin@corp.example
 E2E_VIEWER=viewer@corp.example
