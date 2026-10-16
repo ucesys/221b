@@ -48,7 +48,7 @@ test('a wrong password is refused, and the right one comes back to the page aske
   const me = (await (await request.get('/api/v1/me')).json()) as { mode: string }
   test.skip(me.mode === 'none', 'sign-in is off on this console')
   const page = await signIn(browser, E2E_USER, 'not-the-password')
-  await expect(page.getByText(/Wrong email or password|wrong user name or password|do not match/i)).toBeVisible()
+  await expect(page.getByText(/Wrong email or password|You cannot sign in|do not match/i)).toBeVisible()
   await page.context().close()
 
   const ok = await signIn(browser, E2E_USER, E2E_PASSWORD)

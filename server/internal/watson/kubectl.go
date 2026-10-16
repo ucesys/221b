@@ -1,6 +1,7 @@
 package watson
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -215,6 +217,14 @@ func runKubectl(ctx context.Context, c *Command, t Target, out, errOut io.Writer
 	// kubectl writes from several goroutines in places (a drain's evictions).
 	var mu sync.Mutex
 	out, errOut = &syncWriter{w: out, mu: &mu}, &syncWriter{w: errOut, mu: &mu}
+	// kubectl cordon and uncordon print "error: unable to cordon node ..."
+	// for a node the person may not patch, and still return success. A card
+	// that says done for a refused change would be wrong, so that line fails
+	// the command.
+	var refused atomic.Bool
+	if n := c.Name(); n == "kubectl cordon" || n == "kubectl uncordon" {
+		errOut = &refusalSniffer{w: errOut, hit: &refused}
+	}
 	g := newGetter(ctx, t, c.Namespace, errOut)
 	f := cmdutil.NewFactory(g)
 	streams := genericiooptions.IOStreams{In: strings.NewReader(""), Out: out, ErrOut: errOut}
@@ -300,7 +310,24 @@ func runKubectl(ctx context.Context, c *Command, t Target, out, errOut io.Writer
 	if ctx.Err() != nil {
 		return 130
 	}
+	if refused.Load() {
+		return 1
+	}
 	return 0
+}
+
+// refusalSniffer passes what is written through and notes kubectl's
+// "error: unable to ..." line for a node it could not change.
+type refusalSniffer struct {
+	w   io.Writer
+	hit *atomic.Bool
+}
+
+func (r *refusalSniffer) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte("error: unable to ")) {
+		r.hit.Store(true)
+	}
+	return r.w.Write(p)
 }
 
 // canI runs kubectl auth can-i through its options: the command itself
