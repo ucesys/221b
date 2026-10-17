@@ -189,7 +189,8 @@ function Shell() {
     writeJSON(DOCK_KEY, { ...d, mode: d.mode === 'max' ? 'open' : d.mode })
   }, [])
   const sherlockOn = !!sherlock.status?.enabled
-  const watsonOn = !!watson.status?.available
+  // Watson shows only beside Sherlock: where Sherlock is off, so is Watson.
+  const watsonOn = sherlockOn && !!watson.status?.available
   // Both leave the main window together, for one window of their own.
   const sherlockDocked = sherlockOn && !popped
   const watsonDocked = watsonOn && !popped

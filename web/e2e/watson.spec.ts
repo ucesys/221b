@@ -17,6 +17,8 @@ test.describe.configure({ mode: 'serial' })
 
 const run = promisify(execFile)
 const SAME = { 'Sec-Fetch-Site': 'same-origin' }
+// Watson shows only where Sherlock is on (Phase 6.2); no key is needed for that.
+const SHERLOCK_ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
 const FINAL = ['done', 'failed', 'stopped', 'refused', 'lapsed', 'discarded']
 
 const base = (c = 'local') => (c === 'local' ? '/api/v1/' : `/api/v1/clusters/${encodeURIComponent(c)}/`)
@@ -111,12 +113,35 @@ test.beforeAll(async ({ browser, browserName }) => {
   // A clean slate: the second-person rule off, and no commands left over.
   await page.request.put('/api/v1/watson/config', { data: { twoPerson: false }, headers: SAME })
   await page.request.post('/api/v1/watson/clear', { headers: SAME })
+  const on = await page.request.put('/api/v1/sherlock/config', { data: SHERLOCK_ON, headers: SAME })
+  expect(on.status(), await on.text()).toBe(200)
   await page.evaluate(() => localStorage.removeItem('221b.dock'))
   await page.close()
 })
 
-test.afterAll(async () => {
+test.afterAll(async ({ browser }) => {
+  const page = await browser.newPage()
+  await page.request.put('/api/v1/sherlock/config', { data: { ...SHERLOCK_ON, clusters: {} }, headers: SAME })
+  await page.close()
   await play?.cleanup()
+})
+
+test('Watson is not shown where Sherlock is off (Phase 6.2)', async ({ page }) => {
+  await page.request.put('/api/v1/sherlock/config', { data: { ...SHERLOCK_ON, clusters: {} }, headers: SAME })
+  try {
+    // The assistants' stream starts with their status: once it has answered, the dock has decided.
+    const stream = page.waitForResponse((r) => new URL(r.url()).pathname.endsWith('/assistants/events'))
+    await page.goto('/#/nodes')
+    await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+    await stream
+    await expect(page.getByTestId('sherlock-dock')).toHaveCount(0)
+    await expect(page.getByTestId('watson')).toHaveCount(0)
+    await expect(page.getByTestId('sherlock-fab')).toHaveCount(0)
+  } finally {
+    const on = await page.request.put('/api/v1/sherlock/config', { data: SHERLOCK_ON, headers: SAME })
+    expect(on.status(), await on.text()).toBe(200)
+  }
+  await open(page)
 })
 
 test('a typed read runs at once and prints what kubectl prints; shell syntax is refused (P6-01, P6-03)', async ({ page }) => {
@@ -370,6 +395,9 @@ test('a read-only connection runs reads and refuses changes, naming the rule (P6
   expect(added.status(), await added.text()).toBe(201)
   try {
     await expect.poll(async () => ((await (await request.get(`/api/v1/clusters/${id}`)).json()) as { state: string }).state, { timeout: 30_000 }).toBe('connected')
+    // Watson shows only where Sherlock is on; settings for a removed connection are dropped with it.
+    const on = await request.put('/api/v1/sherlock/config', { data: { ...SHERLOCK_ON, clusters: { local: true, [id]: true } }, headers: SAME })
+    expect(on.status(), await on.text()).toBe(200)
     await page.goto(`/#/c/${id}/nodes`)
     const statusNow = await (await request.get(`/api/v1/clusters/${id}/watson`)).text()
     await expect(pane(page).getByTestId('watson-readonly'), `watson status: ${statusNow.slice(0, 400)}`).toContainText('read-only')

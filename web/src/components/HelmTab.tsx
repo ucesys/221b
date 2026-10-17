@@ -23,17 +23,19 @@ import { colorLine } from './YamlView'
 import { peekHref } from '../lib/peek'
 
 type ReleaseFilter = 'all' | 'deployed' | 'failed'
-const SUBTABS = ['pods', 'workloads', 'storage', 'network', 'other', 'values', 'notes', 'history'] as const
+const SUBTABS = ['pods', 'workloads', 'storage', 'network', 'roles', 'other', 'values', 'notes', 'history'] as const
 type SubTab = (typeof SUBTABS)[number]
 
 const WORKLOADS = new Set(['Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Job', 'CronJob', 'Pod', 'HorizontalPodAutoscaler', 'PodDisruptionBudget'])
 const STORAGE = new Set(['PersistentVolumeClaim', 'PersistentVolume', 'ConfigMap', 'Secret', 'StorageClass'])
 const NETWORK = new Set(['Service', 'Ingress', 'NetworkPolicy', 'EndpointSlice', 'Endpoints', 'IngressClass'])
+const ROLES = new Set(['Role', 'ClusterRole', 'RoleBinding', 'ClusterRoleBinding'])
 
 function group(r: ReleaseResource): SubTab {
   if (WORKLOADS.has(r.kind)) return 'workloads'
   if (STORAGE.has(r.kind)) return 'storage'
   if (NETWORK.has(r.kind)) return 'network'
+  if (ROLES.has(r.kind)) return 'roles'
   return 'other'
 }
 
@@ -153,6 +155,7 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
     ['workloads', 'Workloads'],
     ['storage', 'Storage'],
     ['network', 'Network'],
+    ['roles', 'Roles'],
     ['other', 'Other'],
     ['values', 'Values'],
     ['notes', 'Notes'],
@@ -297,7 +300,7 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
                 <DataTable<PodView> label="Pods in this release" rows={podTable.shown} cols={podTable.cols} rowKey={(r) => r.key} rowLabel={podLabel} sort={podTable.sort} onSort={podTable.onSort} selected={openPodKey} onOpen={(k) => openObject('Pod', k.split('/')[0] ?? current.namespace, k.split('/')[1] ?? k)} now={now} empty="No pods belong to this release." rowAttr="pod" />
               </>
             )}
-            {d && (sub === 'workloads' || sub === 'storage' || sub === 'network' || sub === 'other') && (
+            {d && (sub === 'workloads' || sub === 'storage' || sub === 'network' || sub === 'roles' || sub === 'other') && (
               <>
                 <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px' }}>
                   <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{nWord(resources.length, 'object', 'objects')} from the release manifest · click one for its details</span>

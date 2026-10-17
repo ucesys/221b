@@ -146,10 +146,16 @@ button.rk-card:hover:not(:disabled) {
   outline-offset: -2px;
 }
 
-/* The refresh countdown ring next to "Live": the arc drains as the next refresh comes nearer. */
+/* The refresh countdown ring next to "Live": the arc drains as the next refresh comes nearer,
+   one full sweep from a refresh to the next, and stays empty if that one is late. With motion
+   reduced it drains a step a second instead. */
 .rk-ring { flex: none; color: var(--ok); }
-.rk-ring circle + circle { transition: stroke-dasharray 0.9s linear; }
-@media (prefers-reduced-motion: reduce) { .rk-ring circle + circle { transition: none; } }
+.rk-ring-arc { animation: rk-ring-drain linear forwards; }
+@keyframes rk-ring-drain {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: 100; }
+}
+@media (prefers-reduced-motion: reduce) { .rk-ring-arc { animation-timing-function: steps(var(--steps), end); } }
 
 /* The account button: the person's initials in a circle. */
 .rk-avatar-btn { width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--line2); background: var(--accent-weak); color: var(--accent); font: inherit; font-size: 11.5px; font-weight: 600; letter-spacing: .02em; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex: none; }

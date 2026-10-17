@@ -17,6 +17,27 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{- regexReplaceAll "[^a-z0-9.-]+" (lower .) "-" | trunc 40 | trimAll "-." -}}
 {{- end -}}
 
+{{/*
+Whether this release renders a cluster-scoped object with a fixed name, one
+every release of the chart in the cluster shares (the people's roles and
+their cluster-wide bindings): renders "true" or nothing. It does when the
+object is not there, or is this release's own; one another release installed
+is left to it, so a second console (another namespace) installs beside the
+first and uses its roles. Without a cluster to ask (helm template) it always
+does. Takes a dict: top (the root context), kind, name.
+*/}}
+{{- define "b221.ownsShared" -}}
+{{- $o := lookup "rbac.authorization.k8s.io/v1" .kind "" .name -}}
+{{- if not $o -}}
+true
+{{- else -}}
+{{- $a := default dict $o.metadata.annotations -}}
+{{- if and (eq (get $a "meta.helm.sh/release-name") .top.Release.Name) (eq (get $a "meta.helm.sh/release-namespace") .top.Release.Namespace) -}}
+true
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Whether a role entry (a map) names a group: renders "true" or nothing. */}}
 {{- define "b221.hasGroup" -}}
 {{- if and (kindIs "map" .) .group (kindIs "string" .group) -}}true{{- end -}}

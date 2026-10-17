@@ -28,7 +28,8 @@ export function AssistantWindow({ cluster, clusterName, onToast }: Props) {
   const watson = useWatson(cluster)
   const win = useAnnounce(cluster)
   const hasS = !!sherlock.status?.enabled
-  const hasW = !!watson.status?.available
+  // Watson shows only beside Sherlock, as in the main window.
+  const hasW = hasS && !!watson.status?.available
   const [pane, setPane] = useState<Pane>('watson')
   useEffect(() => {
     document.title = `${[hasS && 'Sherlock', hasW && 'Watson'].filter(Boolean).join(' and ') || 'Assistants'} · ${clusterName || cluster} · 221B`
