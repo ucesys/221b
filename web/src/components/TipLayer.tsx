@@ -28,10 +28,15 @@ export function TipLayer() {
     document.addEventListener('mouseout', hide)
     document.addEventListener('focusin', show)
     document.addEventListener('focusout', hide)
+    // A page change or a click removes what was hovered without a mouseout.
     const gone = () => setTip(null)
     window.addEventListener('scroll', gone, true)
+    window.addEventListener('hashchange', gone)
+    document.addEventListener('pointerdown', gone, true)
     return () => {
       window.removeEventListener('scroll', gone, true)
+      window.removeEventListener('hashchange', gone)
+      document.removeEventListener('pointerdown', gone, true)
       document.removeEventListener('mouseover', show)
       document.removeEventListener('mouseout', hide)
       document.removeEventListener('focusin', show)

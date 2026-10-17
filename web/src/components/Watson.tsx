@@ -452,7 +452,7 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
               Watson · kubectl and helm on {clusterName}
             </div>
             <div className="rk-tl" data-k="dim">
-              Reads run at once. Changes wait here on a card until someone approves them, and run as that person. They come from Sherlock’s answers, from buttons such as Cordon on a node, or from the line below.
+              Reads run at once. Changes wait here on a card until someone approves them, and run as that person. They come from Sherlock’s answers or from the line below.
             </div>
             {status?.readOnly && (
               <div className="rk-tl" data-k="warn" data-testid="watson-readonly">

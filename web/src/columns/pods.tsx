@@ -122,7 +122,7 @@ export const POD_COLUMNS: ColumnDef<PodView>[] = [
         request={r.cpuRequest}
         limit={r.cpuLimit}
         text={r.usage ? cores(r.usage.cpuMilli) : '—'}
-        tip={r.usage ? `${cores(r.usage.cpuMilli)} in use of ${cores(r.cpuRequest)} requested${r.cpuLimit ? `, limit ${cores(r.cpuLimit)}` : ''}` : 'No reading from metrics-server'}
+        tip={r.usage ? `${cores(r.usage.cpuMilli)} in use, ${r.cpuRequest ? `${cores(r.cpuRequest)} requested` : 'no request'}${r.cpuLimit ? `, limit ${cores(r.cpuLimit)}` : ', no limit'}` : 'No reading from metrics-server'}
       />
     ),
     export: (r) => [{ head: 'CPU in use (cores)', cell: r.usage ? round(r.usage.cpuMilli / 1000, 3) : null }],
@@ -156,7 +156,7 @@ export const POD_COLUMNS: ColumnDef<PodView>[] = [
         request={r.memoryRequest}
         limit={r.memoryLimit}
         text={r.usage ? fMem(r.usage.memoryBytes) : '—'}
-        tip={r.usage ? `${fMem(r.usage.memoryBytes)} in use of ${fMem(r.memoryRequest)} requested${r.memoryLimit ? `, limit ${fMem(r.memoryLimit)}` : ''}` : 'No reading from metrics-server'}
+        tip={r.usage ? `${fMem(r.usage.memoryBytes)} in use, ${r.memoryRequest ? `${fMem(r.memoryRequest)} requested` : 'no request'}${r.memoryLimit ? `, limit ${fMem(r.memoryLimit)}` : ', no limit'}` : 'No reading from metrics-server'}
       />
     ),
     export: (r) => [{ head: 'Memory in use (GiB)', cell: r.usage ? round(r.usage.memoryBytes / GIB, 3) : null }],
