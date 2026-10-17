@@ -20,6 +20,9 @@ function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
 /** The Columns menu every table has: the first column always shows. */
 export function ColumnsMenu<R>({ cols, hidden, defaults, onChange, compact }: Props<R>) {
   const [open, setOpen] = useState(false)
+  // Where the menu goes: fixed to the window, so a short table's card does
+  // not clip it, below the button or above it when there is more room there.
+  const [place, setPlace] = useState<React.CSSProperties>({})
   const button = useRef<HTMLButtonElement>(null)
   const menu = useRef<HTMLDivElement>(null)
   const optional = cols.slice(1)
@@ -29,6 +32,27 @@ export function ColumnsMenu<R>({ cols, hidden, defaults, onChange, compact }: Pr
   useEffect(() => {
     if (open) menu.current?.querySelector('input')?.focus()
   }, [open])
+  useEffect(() => {
+    if (!open) return
+    const shut = () => setOpen(false)
+    window.addEventListener('resize', shut)
+    return () => window.removeEventListener('resize', shut)
+  }, [open])
+
+  const openMenu = () => {
+    const r = button.current?.getBoundingClientRect()
+    if (r) {
+      const below = window.innerHeight - r.bottom - 12
+      const above = r.top - 12
+      const right = Math.max(8, window.innerWidth - r.right)
+      setPlace(
+        below >= 280 || below >= above
+          ? { position: 'fixed', top: r.bottom + 4, right, left: 'auto', bottom: 'auto', maxHeight: below, overflowY: 'auto' }
+          : { position: 'fixed', bottom: window.innerHeight - r.top + 4, right, left: 'auto', top: 'auto', maxHeight: above, overflowY: 'auto' },
+      )
+    }
+    setOpen(true)
+  }
 
   const close = () => {
     setOpen(false)
@@ -53,7 +77,7 @@ export function ColumnsMenu<R>({ cols, hidden, defaults, onChange, compact }: Pr
         }
       }}
     >
-      <button ref={button} className="rk-btn" aria-expanded={open} aria-haspopup="true" data-on={custom} title="Choose which columns to show" onClick={() => setOpen(!open)} style={{ height: 32 }}>
+      <button ref={button} className="rk-btn" aria-expanded={open} aria-haspopup="true" data-on={custom} title="Choose which columns to show" onClick={() => (open ? setOpen(false) : openMenu())} style={{ height: 32 }}>
         <ColumnsIcon />
         Columns
         {custom && (
@@ -66,7 +90,7 @@ export function ColumnsMenu<R>({ cols, hidden, defaults, onChange, compact }: Pr
       {open && (
         <>
           <button className="rk-ddcatch" tabIndex={-1} aria-hidden="true" onClick={() => setOpen(false)} />
-          <div ref={menu} className="rk-ddmenu" data-align="right" role="group" aria-label="Columns to show">
+          <div ref={menu} className="rk-ddmenu" data-align="right" role="group" aria-label="Columns to show" style={place}>
             <div className="rk-ddhead" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <span style={{ flex: '1 1 auto' }}>The first column always shows</span>
               <button className="rk-link" onClick={() => onChange(new Set())} style={{ fontSize: 12 }} data-testid="cols-all">

@@ -80,9 +80,10 @@ function RefreshRing({ left, every }: { left: number; every: number }) {
   const c = 2 * Math.PI * r
   const frac = every > 0 ? Math.min(1, left / every) : 0
   return (
-    <svg className="rk-ring" width={16} height={16} viewBox="0 0 16 16" aria-hidden="true" data-testid="refresh-ring" data-left={left}>
-      <circle cx={8} cy={8} r={r} fill="none" stroke="var(--line)" strokeWidth={2} />
-      <circle cx={8} cy={8} r={r} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeDasharray={`${(c * frac).toFixed(2)} ${c.toFixed(2)}`} transform="rotate(-90 8 8)" />
+    <svg className="rk-ring" width={18} height={18} viewBox="0 0 16 16" aria-hidden="true" data-testid="refresh-ring" data-left={left}>
+      <circle cx={8} cy={8} r={r} fill="none" stroke="var(--line2)" strokeWidth={2.2} />
+      <circle cx={8} cy={8} r={r} fill="none" stroke="var(--accent)" strokeWidth={2.2} strokeLinecap="round" strokeDasharray={`${(c * frac).toFixed(2)} ${c.toFixed(2)}`} transform="rotate(-90 8 8)" />
+      <circle cx={8} cy={8} r={1.6} fill="var(--accent)" />
     </svg>
   )
 }
@@ -223,7 +224,8 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
   const [measure, setMeasure] = useState<Measure | null>(null)
   const [moreOpen, setMoreOpen] = useState(false)
   const moreButton = useRef<HTMLButtonElement>(null)
-  const countOf = (id: Tab) => counts[id]
+  // Only Alerts carries a count in the bar; the other tabs say theirs on the page.
+  const countOf = (id: Tab) => (id === 'alerts' ? counts[id] : undefined)
 
   useLayoutEffect(() => {
     const el = nav.current
@@ -334,7 +336,7 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
         )}
       </nav>
       <div className="rk-meta" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, minHeight: 52 }}>
-        <span style={{ fontSize: 12, color: 'var(--fg3)', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6 }} title={liveTip || undefined} data-testid="live">
+        <span style={{ fontSize: 12, color: 'var(--fg3)', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'default', userSelect: 'none' }} title={liveTip || undefined} data-testid="live">
           {left !== null && <RefreshRing left={left} every={every} />}
           {live ? 'Live' : conn.label}
           <span className="rk-asof">

@@ -19,6 +19,7 @@ import { NodesTab } from './components/NodesTab'
 import { PodsTab } from './components/PodsTab'
 import { ServicesTab } from './components/ServicesTab'
 import { AdminPageView } from './components/AdminPage'
+import { TipLayer } from './components/TipLayer'
 import { Toast } from './components/Toast'
 import { TopBar, type Theme } from './components/TopBar'
 import { badgeOf, bannersOf, tabTone } from './lib/alerts'
@@ -175,7 +176,7 @@ function Shell() {
   const sherlock = useSherlock(route.cluster)
   // Kept on the settings page too, so going there and back does not
   // reconnect the shared stream (ADR-56).
-  const watson = useWatson(route.cluster, view === 'tabs' || view === 'admin')
+  const watson = useWatson(route.cluster, view !== 'cluster' || !!summary)
   const popped = usePopped()
   // Sherlock's UI actions run in this window (P6U-08).
   useUIControl(route.cluster, sherlock.conv)
@@ -192,7 +193,9 @@ function Shell() {
   // Both leave the main window together, for one window of their own.
   const sherlockDocked = sherlockOn && !popped
   const watsonDocked = watsonOn && !popped
-  const dockShown = view === 'tabs' && (sherlockDocked || watsonDocked)
+  // The same on the home page and a cluster's page as on the tabs; the
+  // Administration area has its own Back and Escape, so it leaves them.
+  const dockShown = view !== 'admin' && (sherlockDocked || watsonDocked)
   useEffect(() => {
     if (popped) post({ type: 'cluster', cluster: route.cluster })
   }, [popped, route.cluster])
@@ -269,7 +272,7 @@ function Shell() {
       <TopBar cluster={live.cluster} counts={counts} labelTones={{ alerts: alertTab }} tones={{ alerts: alertBadge.tone, access: accessCount.tone, policies: policyCount.tone === 'info' ? 'muted' : policyCount.tone }} tab={view === 'tabs' ? tab : null} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} theme={theme} onTheme={changeTheme} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
       {view !== 'home' && view !== 'admin' && <Banners cluster={live.cluster} stream={live.stream} now={now} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} accessError={live.accessError} alerts={view === 'tabs' && tab !== 'alerts' ? bannersOf(alerts.rows, now) : []} alertsHref={href('alerts')} />}
       {view === 'home' ? (
-        <HomePage now={now} me={me} onAdd={() => setEditing(null)} />
+        <HomePage now={now} me={me} onAdd={() => setEditing(null)} onEdit={(id) => setEditing(id)} />
       ) : view === 'admin' ? (
         <AdminPageView route={route} me={me} now={now} cluster={live.cluster} onToast={setToast} settings={live.settings} refreshedAt={live.refreshedAt} />
       ) : view === 'cluster' ? (
@@ -305,12 +308,13 @@ function Shell() {
           busy={busy}
         />
       )}
-      {view === 'tabs' && popped && <PoppedOutFab onFocus={() => focusPopup()} onDock={() => post({ type: 'close' })} />}
+      {view !== 'admin' && popped && <PoppedOutFab onFocus={() => focusPopup()} onDock={() => post({ type: 'close' })} />}
       {view === 'tabs' && <PeekPane route={route} cluster={live.cluster} now={now} onToast={setToast} />}
       {popped && <ViewAnnouncer />}
       {editing === null && <ClusterEditor key="+" orig={null} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
       {editing && editOrig && <ClusterEditor key={editing} orig={editOrig} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
       {toast && <Toast message={toast} onDone={clearToast} />}
+      <TipLayer />
     </div>
     </WatsonContext.Provider>
     </SherlockContext.Provider>

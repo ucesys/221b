@@ -67,7 +67,6 @@ test('a person sees only the namespaces Kubernetes lets them list, in every tab,
   await page.goto('/#/pods')
   await expect(page.locator('[data-pod]').first()).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('pods-count')).toHaveText(count)
-  await expect(page.locator('.rk-tabs [data-tab=pods] .rk-count')).toHaveText(String(myPods.length))
   await page.getByTestId('pod-search').fill(hidden!.name)
   await expect(page.locator('[data-pod]')).toHaveCount(0)
   await expect(page.getByText('No pods match these filters.')).toBeVisible()
@@ -86,7 +85,7 @@ test('a person sees only the namespaces Kubernetes lets them list, in every tab,
   // The Nodes tab shows the nodes everyone sees (none in the simulator);
   // the Namespaces tab their namespaces.
   await page.goto('/#/nodes')
-  await expect(page.locator('.rk-tabs [data-tab=nodes] .rk-count')).toHaveText(String(myNodes))
+  await expect(page.locator('[data-node]')).toHaveCount(myNodes)
   if (!inKind) await expect(page.locator('[data-node]')).toHaveCount(0)
   await page.goto('/#/namespaces')
   const list = page.getByTestId('namespace-list')

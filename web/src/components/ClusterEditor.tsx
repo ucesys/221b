@@ -283,7 +283,7 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
   )
 
   return (
-    <Drawer label="Cluster connection" kicker={orig ? 'Cluster connection' : 'Add a cluster'} title={title} onClose={onClose} width={680} footer={footer} testId="cluster-editor">
+    <Drawer label="Cluster connection" kicker={orig ? 'Cluster connection' : 'Add a cluster'} title={title} onClose={onClose} width={680} footer={footer} testId="cluster-editor" copy={false}>
       <Card title="Cluster">
         <Field label="Name" hint="Shown in the console only; the cluster doesn’t know this name.">
           <span className="rk-field">

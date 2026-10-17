@@ -295,7 +295,6 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
                   </div>
                 </div>
                 <DataTable<PodView> label="Pods in this release" rows={podTable.shown} cols={podTable.cols} rowKey={(r) => r.key} rowLabel={podLabel} sort={podTable.sort} onSort={podTable.onSort} selected={openPodKey} onOpen={(k) => openObject('Pod', k.split('/')[0] ?? current.namespace, k.split('/')[1] ?? k)} now={now} empty="No pods belong to this release." rowAttr="pod" />
-                <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>A pod belongs to the release when it carries the labels Helm charts set (app.kubernetes.io/instance and managed-by) or the release annotation, or when its owners lead to a workload in the release manifest. Usage comes from metrics-server.</p>
               </>
             )}
             {d && (sub === 'workloads' || sub === 'storage' || sub === 'network' || sub === 'other') && (

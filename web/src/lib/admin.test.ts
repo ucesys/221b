@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Drift, LocalGroup, PermRole, UserRow } from '../api/admin'
-import { afterJoining, permRowsOf, roleTotalsText, driftText, groupChoice, holdingText, isRead, joinable, passwordProblem, permTotals, roleRank, splitRule, topRole, totalsText, usernameProblem } from './admin'
+import { afterJoining, matrixOf, roleTotalsText, driftText, groupChoice, holdingText, isRead, joinable, passwordProblem, permTotals, roleRank, splitRule, topRole, totalsText, usernameProblem } from './admin'
 
 const groups: LocalGroup[] = [
   { name: 'web-readers', role: 'viewer', namespaces: ['web'], members: 1 },
@@ -92,13 +92,9 @@ describe('local users', () => {
   })
 })
 
-describe('the permission rows', () => {
-  it('has a row per role, resource and access, with where the role has it', () => {
-    const rows = permRowsOf([
-      {
-        id: 'viewer',
-        rules: [{ group: 'apps', resource: 'deployments', verbs: ['get', 'list', 'watch'], kind: 'read', scope: 'bound', flags: [] }],
-      },
+describe('the permission matrix', () => {
+  it('has a row per resource and access, with a cell for each role that has it', () => {
+    const rows = matrixOf([
       {
         id: 'superAdmin',
         rules: [
@@ -106,12 +102,18 @@ describe('the permission rows', () => {
           { group: '', resource: 'secrets', verbs: ['get'], kind: 'read', scope: 'all', flags: ['Secrets'] },
         ],
       },
+      { id: 'viewer', rules: [{ group: 'apps', resource: 'deployments', verbs: ['get', 'list', 'watch'], kind: 'read', scope: 'bound', flags: [] }] },
+      { id: 'admin', rules: [{ group: 'apps', resource: 'deployments', verbs: ['get', 'patch'], kind: 'write', scope: 'bound', flags: [] }] },
     ])
-    expect(rows.map((r) => r.key)).toEqual(['superAdmin|read:apps/deployments', 'superAdmin|read:/secrets', 'superAdmin|write:apps/deployments', 'viewer|read:apps/deployments'])
-    expect(rows[0]!.verbs).toEqual(['get', 'list', 'watch'])
-    expect(rows[2]!.verbs).toEqual(['patch', 'delete'])
-    expect(rows[3]!.scope).toBe('bound')
-    expect(rows[1]!.flags).toEqual(['Secrets'])
+    expect(rows.map((r) => r.key)).toEqual(['read:apps/deployments', 'read:/secrets', 'write:apps/deployments'])
+    const read = rows.find((r) => r.key === 'read:apps/deployments')!
+    expect(read.cells.superAdmin).toEqual({ scope: 'all', verbs: ['get', 'list', 'watch'] })
+    expect(read.cells.viewer).toEqual({ scope: 'bound', verbs: ['get', 'list', 'watch'] })
+    expect(read.cells.admin).toEqual({ scope: 'bound', verbs: ['get'] })
+    const write = rows.find((r) => r.key === 'write:apps/deployments')!
+    expect(write.verbs).toEqual(['patch', 'delete'])
+    expect(write.cells.viewer).toBeUndefined()
+    expect(rows.find((r) => r.key === 'read:/secrets')!.flags).toEqual(['Secrets'])
   })
 
   it('says a wildcard role reads and changes everything rather than counting kinds', () => {

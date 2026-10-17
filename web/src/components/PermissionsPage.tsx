@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { fetchPermissions, fetchRoles, useAdmin, type PermRole, type RoleId, type RoleRow } from '../api/admin'
-import { PERM_COLUMNS, permTerms } from '../columns/admin'
-import { driftText, permRowsOf, permTotals, reachText, ROLE_NAME, roleTotalsText, strictText, type PermRow } from '../lib/admin'
+import { MATRIX_COLUMNS, matrixTerms } from '../columns/admin'
+import { driftText, matrixOf, permTotals, reachText, ROLE_NAME, roleTotalsText, strictText, type MatrixRow } from '../lib/admin'
 import { fmtClock } from '../lib/format'
 import { adminHref, navigate } from '../lib/router'
 import { useTable } from '../lib/useTable'
@@ -119,11 +119,11 @@ export function PermissionsPage({ route, now, cluster, onToast }: AdminProps) {
   const [show, setShow] = useState<Show>('all')
   const [role, setRole] = useState<RoleId | null>(null)
   const [sensitive, setSensitive] = useState(false)
-  const all = useMemo(() => (data ? permRowsOf(data.roles) : []), [data])
-  const rows = useMemo(() => all.filter((r) => (!role || r.role === role) && (show === 'all' || r.access === show) && (!sensitive || r.flags.length > 0)), [all, role, show, sensitive])
-  // With one role chosen, its name in every row says nothing.
-  const columns = useMemo(() => (role ? PERM_COLUMNS.filter((c) => c.id !== 'role') : PERM_COLUMNS), [role])
-  const table = useTable<PermRow>({ id: 'admin-permissions', columns, rows, terms: permTerms, now, defaultSort: { col: 'role', dir: 'asc' } })
+  const all = useMemo(() => (data ? matrixOf(data.roles) : []), [data])
+  // A role's tile keeps the rows it has, and only its column of the four.
+  const rows = useMemo(() => all.filter((r) => (!role || !!r.cells[role]) && (show === 'all' || r.access === show) && (!sensitive || r.flags.length > 0)), [all, role, show, sensitive])
+  const columns = useMemo(() => (role ? MATRIX_COLUMNS.filter((c) => !c.id.startsWith('role-') || c.id === `role-${role}`) : MATRIX_COLUMNS), [role])
+  const table = useTable<MatrixRow>({ id: 'admin-permissions', columns, rows, terms: matrixTerms, now, defaultSort: { col: 'resource', dir: 'asc' } })
   const opened = data?.roles.find((r) => r.id === route.path[1]) ?? null
   const open = (id: RoleId) => navigate(adminHref('permissions', route.path[1] === id ? [] : [id], name), true)
   const close = () => navigate(adminHref('permissions', [], name), true)
@@ -190,7 +190,7 @@ export function PermissionsPage({ route, now, cluster, onToast }: AdminProps) {
                     aria-pressed={on}
                     onClick={() => setRole(on ? null : r.id)}
                     title={on ? 'Show every role' : `Show only ${ROLE_NAME[r.id]}`}
-                    className="rk-tile"
+                    className="rk-roletile"
                     data-testid={`role-filter-${r.id}`}
                   >
                     <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
@@ -223,7 +223,7 @@ export function PermissionsPage({ route, now, cluster, onToast }: AdminProps) {
               </button>
             ))}
           </div>
-          <SearchBox rows={rows} terms={permTerms} value={table.query} onChange={table.setQuery} placeholder="Filter resources" label="Filter resources" />
+          <SearchBox rows={rows} terms={matrixTerms} value={table.query} onChange={table.setQuery} placeholder="Filter resources" label="Filter resources" />
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
             <input type="checkbox" checked={sensitive} onChange={(e) => setSensitive(e.target.checked)} />
             Sensitive only
@@ -237,18 +237,15 @@ export function PermissionsPage({ route, now, cluster, onToast }: AdminProps) {
           <ColumnsMenu cols={columns} hidden={table.hidden} defaults={table.defaults} onChange={table.setHidden} compact={false} />
           <ExportMenu onExport={(f) => table.exportRows(f, cluster?.name, role ? `permissions-${role}` : 'permissions', onToast)} disabled={!table.shown.length} what="the permissions shown" />
         </div>
-        <DataTable<PermRow>
+        <DataTable<MatrixRow>
           label={role ? `Permissions of ${ROLE_NAME[role]}` : 'Permissions of the four roles'}
           rows={table.shown}
           cols={table.cols}
           rowKey={(r) => r.key}
-          rowLabel={(r) => `${ROLE_NAME[r.role]}: ${r.resource}, ${r.access === 'read' ? 'read' : 'write'}`}
+          rowLabel={(r) => `${r.resource}, ${r.access === 'read' ? 'read' : 'write'}`}
           sort={table.sort}
           onSort={table.onSort}
-          onOpen={(key) => {
-            const r = rows.find((x) => x.key === key)
-            if (r) open(r.role)
-          }}
+          onOpen={role ? () => open(role) : undefined}
           now={now}
           empty={loaded.loading ? 'Loading the permissions…' : 'Nothing matches.'}
           rowAttr="perm"

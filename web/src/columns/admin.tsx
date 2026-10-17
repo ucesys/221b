@@ -3,9 +3,9 @@
 // exports, so the tables sort, pick columns and export as every other
 // table does (RB-55, X-13).
 
-import type { RoleRow, UserRow } from '../api/admin'
+import type { RoleId, RoleRow, UserRow } from '../api/admin'
 import { fmtAge, fmtTs } from '../lib/format'
-import { groupText, holdingParts, ROLE_NAME, ROLE_ORDER, roleRank, SCOPE_NAME, SOURCE_NAME, type PermRow } from '../lib/admin'
+import { groupText, holdingParts, ROLE_NAME, ROLE_ORDER, roleRank, SCOPE_NAME, SOURCE_NAME, type MatrixRow } from '../lib/admin'
 import type { ColumnDef, Term } from '../lib/table'
 import { Mono } from './cells'
 
@@ -97,18 +97,39 @@ export const ROLE_COLUMNS: ColumnDef<RoleRow>[] = [
 
 const ACCESS = { read: 'Read', write: 'Write' } as const
 
-/** The Permissions table (RB-44): one role's read or write of one resource, with where it applies. */
-export const PERM_COLUMNS: ColumnDef<PermRow>[] = [
-  {
-    id: 'role',
-    label: 'Role',
-    hint: 'Click a row for the role’s details and its YAML',
-    width: 'minmax(110px, .6fr)',
-    min: 110,
-    sortValue: (r) => ROLE_ORDER.indexOf(r.role),
-    cell: (r) => <span style={{ fontWeight: 500 }}>{ROLE_NAME[r.role]}</span>,
-    export: (r) => [{ head: 'Role', cell: ROLE_NAME[r.role] }],
+const roleCol = (id: RoleId): ColumnDef<MatrixRow> => ({
+  id: `role-${id}`,
+  label: ROLE_NAME[id],
+  hint: `Where ${ROLE_NAME[id]} has it`,
+  width: 'minmax(120px, .8fr)',
+  min: 120,
+  sortValue: (r) => {
+    const c = r.cells[id]
+    return c ? Object.keys(SCOPE_NAME).indexOf(c.scope) : null
   },
+  cell: (r) => {
+    const c = r.cells[id]
+    if (!c) return <span style={{ color: 'var(--fg3)' }}>—</span>
+    const partial = c.verbs.join() !== r.verbs.join()
+    return (
+      <span title={c.verbs.join(', ')} style={{ display: 'inline-flex', flexDirection: 'column', minWidth: 0 }}>
+        <span>{SCOPE_NAME[c.scope]}</span>
+        {partial && (
+          <span className="rk-mono" style={{ fontSize: 11, color: 'var(--fg3)' }}>
+            {c.verbs.join(', ')}
+          </span>
+        )}
+      </span>
+    )
+  },
+  export: (r) => {
+    const c = r.cells[id]
+    return [{ head: ROLE_NAME[id], cell: c ? SCOPE_NAME[c.scope] + (c.verbs.join() !== r.verbs.join() ? ` (${c.verbs.join(', ')})` : '') : 'None' }]
+  },
+})
+
+/** The matrix of RB-44: a resource, what it is, the verbs, and each role's reach. */
+export const MATRIX_COLUMNS: ColumnDef<MatrixRow>[] = [
   {
     id: 'resource',
     label: 'Resource',
@@ -142,39 +163,22 @@ export const PERM_COLUMNS: ColumnDef<PermRow>[] = [
   {
     id: 'verbs',
     label: 'Verbs',
-    width: 'minmax(150px, 1fr)',
-    min: 150,
+    width: 'minmax(140px, 1fr)',
+    min: 140,
     sortValue: (r) => r.verbs.length,
     cell: (r) => <Mono text={r.verbs.includes('*') ? 'every verb' : r.verbs.join(', ')} size={12} />,
     export: (r) => [{ head: 'Verbs', cell: r.verbs.join(', ') }],
   },
-  {
-    id: 'scope',
-    label: 'Where',
-    hint: 'Cluster-wide kinds, every namespace, or only the namespaces the role is bound in',
-    width: 'minmax(140px, .9fr)',
-    min: 140,
-    sortValue: (r) => Object.keys(SCOPE_NAME).indexOf(r.scope),
-    cell: (r) => <span>{SCOPE_NAME[r.scope]}</span>,
-    export: (r) => [{ head: 'Where', cell: SCOPE_NAME[r.scope] }],
-  },
-  {
-    id: 'names',
-    label: 'Limited to',
-    hint: 'Objects the rule names; empty means every object of the kind',
-    width: 'minmax(130px, .8fr)',
-    min: 130,
-    hiddenByDefault: true,
-    sortValue: (r) => r.names.length,
-    cell: (r) => <span className="rk-mono" style={{ fontSize: 12 }}>{r.names.join(', ') || '—'}</span>,
-    export: (r) => [{ head: 'Limited to', cell: r.names.join(', ') }],
-  },
+  roleCol('superAdmin'),
+  roleCol('superViewer'),
+  roleCol('admin'),
+  roleCol('viewer'),
   {
     id: 'flags',
     label: 'Sensitive',
     hint: 'Wildcards, Secrets, escalate, bind, impersonate, exec, attach, port-forward, node proxy and service account tokens',
-    width: 'minmax(120px, .8fr)',
-    min: 120,
+    width: 'minmax(110px, .7fr)',
+    min: 110,
     sortValue: (r) => r.flags.length,
     cell: (r) => (r.flags.length ? <span style={{ color: 'var(--warn)' }}>{r.flags.join(', ')}</span> : <span style={{ color: 'var(--fg3)' }}>—</span>),
     export: (r) => [{ head: 'Sensitive', cell: r.flags.join(', ') }],
@@ -182,14 +186,12 @@ export const PERM_COLUMNS: ColumnDef<PermRow>[] = [
 ]
 
 /** What a Permissions search matches. */
-export function permTerms(r: PermRow): Term[] {
+export function matrixTerms(r: MatrixRow): Term[] {
   return [
     { kind: 'name', text: r.resource },
     { kind: 'type', text: groupText(r.group) },
-    { kind: 'detail', text: ROLE_NAME[r.role] },
     ...r.verbs.map((v) => ({ kind: 'detail', text: v })),
     ...r.flags.map((f) => ({ kind: 'detail', text: f })),
-    ...r.names.map((n) => ({ kind: 'name', text: n })),
   ]
 }
 

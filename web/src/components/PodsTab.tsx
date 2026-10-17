@@ -316,9 +316,6 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
             </div>
           </div>
           <DataTable<PodView> label="Pods" rows={table.shown} cols={table.cols} rowKey={(r) => r.key} rowLabel={podLabel} sort={table.sort} onSort={table.onSort} selected={selected} onOpen={onOpen} now={now} empty={waiting ? 'Waiting for the first list of pods…' : 'No pods match these filters.'} rowAttr="pod" />
-          <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>
-            Usage comes from metrics-server. Bars compare usage with the pod’s request: amber means above request, red means within 10% of its limit. Click a pod for its details and logs.
-          </p>
         </section>
       </main>
       {selected && <PodPanel podKey={selected} row={selectedRow} gone={pods.loaded && !selectedRow} cluster={cluster} now={now} onClose={close} onToast={onToast} />}

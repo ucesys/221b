@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { drivenRecently } from '../lib/tables'
 import { CloseIcon } from './Icons'
+import { CopyName } from './CopyName'
 import { AskSherlock } from './Sherlock'
 
 export interface DrawerTab {
@@ -30,13 +31,15 @@ interface Props {
   testId?: string
   /** A question for Sherlock about what the drawer shows (P5-01). */
   ask?: string
+  /** What the copy icon beside the title copies: the title, unless given, or nothing for a form. */
+  copy?: string | false
 }
 
 /**
  * The prototype's details drawer: over the page from the right, with a
  * backdrop that closes it, a header with tabs, and a scrolling body.
  */
-export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId, ask }: Props) {
+export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId, ask, copy }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null)
   // Opened by Sherlock (P6U-05), it stops above the dock and is not modal,
   // so its answer, Undo and the question box stay in reach (P6U-09).
@@ -96,6 +99,7 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--fg3)' }}>{kicker}</div>
               <h2 className="rk-mono" style={{ margin: 0, fontSize: 17, fontWeight: 600, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
                 {title}
+                {copy !== false && <CopyName text={copy ?? title} />}
               </h2>
             </div>
             {ask && <AskSherlock question={ask} compact over />}

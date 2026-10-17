@@ -36,7 +36,9 @@ export function CellLink({ href, text, tip, peek }: { href: string; text: string
   )
 }
 
-/** A usage bar against a request: amber above the request, red near the limit. */
+const USAGE_LEGEND = 'The bar compares usage with the request: amber above the request, red within 10% of the limit. Usage comes from metrics-server.'
+
+/** A usage bar against a request: amber above the request, red near the limit; hovering says what it shows. */
 export function UsageBar({ used, request, limit, text, tip }: { used: number | null; request: number; limit: number; text: string; tip: string }) {
   const base = request || limit || (used ?? 0)
   const pctUsed = used == null || !base ? 0 : Math.min(100, (used / base) * 100)
@@ -46,7 +48,7 @@ export function UsageBar({ used, request, limit, text, tip }: { used: number | n
     else if (request && used > request) tone = 'warn'
   }
   return (
-    <span className="rk-meter" title={tip} style={{ gap: 6 }}>
+    <span className="rk-meter" data-tip={`${tip}\n\n${USAGE_LEGEND}`} aria-label={tip} style={{ gap: 6 }}>
       <span className="rk-num" style={{ minWidth: 42, textAlign: 'right' }}>
         {text}
       </span>

@@ -185,25 +185,26 @@ describe('Permissions (RB-44)', () => {
 
   it('splits Read from Write and finds the sensitive rows', async () => {
     const { container } = render(<PermissionsPage {...common('#/admin/permissions')} />)
-    await waitFor(() => expect(container.querySelectorAll('[data-perm]').length).toBe(4))
+    await waitFor(() => expect(container.querySelectorAll('[data-perm]').length).toBe(3))
     fireEvent.click(screen.getByRole('button', { name: 'Write' }))
-    expect(keys(container)).toEqual(['admin|write:apps/deployments'])
+    expect(keys(container)).toEqual(['write:apps/deployments'])
     fireEvent.click(screen.getByRole('button', { name: 'All' }))
     fireEvent.click(screen.getByLabelText('Sensitive only'))
-    expect(keys(container)).toEqual(['superAdmin|read:/secrets'])
+    expect(keys(container)).toEqual(['read:/secrets'])
   })
 
-  it('filters the table by the role tile clicked, without a Role column, and back', async () => {
+  it('has a column per role, and a role tile keeps that role’s rows and column, and back', async () => {
     const { container } = render(<PermissionsPage {...common('#/admin/permissions')} />)
-    await waitFor(() => expect(container.querySelectorAll('[data-perm]').length).toBe(4))
+    await waitFor(() => expect(container.querySelectorAll('[data-perm]').length).toBe(3))
     const heads = () => screen.getAllByRole('columnheader').map((h) => (h.textContent ?? '').replace(/[↑↓]/g, ''))
-    expect(heads()).toContain('Role')
+    expect(heads()).toEqual(expect.arrayContaining(['SuperAdmin', 'SuperViewer', 'Admin', 'Viewer']))
     fireEvent.click(screen.getByTestId('role-filter-viewer'))
     expect(screen.getByTestId('role-filter-viewer').getAttribute('aria-pressed')).toBe('true')
-    expect(keys(container)).toEqual(['viewer|read:apps/deployments'])
-    expect(heads()).not.toContain('Role')
+    expect(keys(container)).toEqual(['read:apps/deployments'])
+    expect(heads()).toContain('Viewer')
+    expect(heads()).not.toContain('Admin')
     fireEvent.click(screen.getByTestId('role-filter-viewer'))
-    expect(keys(container).length).toBe(4)
+    expect(keys(container).length).toBe(3)
   })
 
   it('opens a role in a pane with its description and its ClusterRole as YAML', async () => {

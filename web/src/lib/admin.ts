@@ -165,21 +165,19 @@ export const SCOPE_NAME: Record<PermRule['scope'], string> = {
   own: 'Own only',
 }
 
-/** One row of the Permissions table: one role's read or write of one resource (RB-44). */
-export interface PermRow {
+/** One row of the Permissions matrix: a resource and what each role may do with it (RB-44). */
+export interface MatrixRow {
   key: string
-  role: RoleId
   group: string
   resource: string
   access: 'read' | 'write'
+  /** Every verb any role has on it, in the order Kubernetes lists them. */
   verbs: string[]
-  /** Where the role has it: the whole cluster, every namespace, the bound namespaces, or only the person's own. */
-  scope: PermRule['scope']
   flags: string[]
-  /** The objects it is limited to by name; empty for every object of the kind. */
-  names: string[]
   /** A URL path such as /healthz rather than a kind. */
   nonResource: boolean
+  /** What each role has: where, and its verbs; absent when it has none. */
+  cells: Partial<Record<RoleId, { scope: PermRule['scope']; verbs: string[] }>>
 }
 
 const VERB_ORDER = ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete', 'deletecollection', '*']
@@ -189,19 +187,23 @@ function verbRank(v: string): number {
   return i < 0 ? VERB_ORDER.length : i
 }
 
-/** The rows of the Permissions table: each role's rules, reads apart from changes, merged per role, resource and access. */
-export function permRowsOf(roles: Pick<PermRole, 'id' | 'rules'>[]): PermRow[] {
-  const rows = new Map<string, PermRow>()
+const byVerb = (a: string, b: string) => verbRank(a) - verbRank(b) || a.localeCompare(b)
+
+/** Builds the matrix from the four roles' rules: one row per resource and access, one cell per role. */
+export function matrixOf(roles: Pick<PermRole, 'id' | 'rules'>[]): MatrixRow[] {
+  const rows = new Map<string, MatrixRow>()
   for (const role of roles) {
     for (const part of role.rules.flatMap((r) => splitRule(r))) {
-      const names = [...(part.resourceNames ?? [])].sort()
-      const key = `${role.id}|${part.kind}:${part.group}/${part.resource}${names.length ? '#' + names.join(',') : ''}`
-      const had = rows.get(key)
-      const verbs = [...new Set([...(had?.verbs ?? []), ...part.verbs])].sort((a, b) => verbRank(a) - verbRank(b) || a.localeCompare(b))
-      rows.set(key, { key, role: role.id, group: part.group, resource: part.resource, access: part.kind, verbs, scope: part.scope, flags: [...new Set([...(had?.flags ?? []), ...part.flags])], names, nonResource: !!part.nonResource })
+      const key = `${part.kind}:${part.group}/${part.resource}`
+      const row = rows.get(key) ?? { key, group: part.group, resource: part.resource, access: part.kind, verbs: [], flags: [], nonResource: !!part.nonResource, cells: {} }
+      row.verbs = [...new Set([...row.verbs, ...part.verbs])].sort(byVerb)
+      row.flags = [...new Set([...row.flags, ...part.flags])]
+      const had = row.cells[role.id]
+      row.cells[role.id] = { scope: part.scope, verbs: [...new Set([...(had?.verbs ?? []), ...part.verbs])].sort(byVerb) }
+      rows.set(key, row)
     }
   }
-  return [...rows.values()].sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role) || (a.access === b.access ? 0 : a.access === 'read' ? -1 : 1) || a.resource.localeCompare(b.resource) || a.group.localeCompare(b.group))
+  return [...rows.values()].sort((a, b) => (a.access === b.access ? 0 : a.access === 'read' ? -1 : 1) || a.resource.localeCompare(b.resource) || a.group.localeCompare(b.group))
 }
 
 /** What a role's tile and details say about where it applies. */

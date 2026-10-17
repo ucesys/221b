@@ -284,11 +284,15 @@ test('every supported change runs once approved, as the approver, and does what 
   expect(JSON.stringify(results.at(-1))).toMatch(/"cluster":"local"/)
 })
 
-test('a node’s Cordon button asks on a card that names the node, the pods, and the dry run; approving runs it (P6-04, P6-06, P6-08)', async ({ page }) => {
+test('a cordon asks on a card that names the node, the pods, and the dry run; approving runs it (P6-04, P6-06, P6-08)', async ({ page }) => {
   const node = await spareWorker(page.request)
+  // Changes come from Watson's line or Sherlock's answers; the node details have no buttons for them.
   await open(page, `#/nodes?open=${node}`)
+  await expect(page.getByTestId('node-cordon')).toHaveCount(0)
+  await page.keyboard.press('Escape')
   try {
-    await page.getByTestId('node-cordon').click()
+    await pane(page).getByTestId('watson-input').fill(`kubectl cordon ${node}`)
+    await pane(page).getByTestId('watson-input').press('Enter')
     const card = pane(page).getByTestId('watson-card').last()
     await expect(card).toHaveAttribute('data-command', `kubectl cordon ${node}`)
     await expect(card.getByTestId('watson-targets')).toContainText(`node ${node}`)
@@ -303,14 +307,8 @@ test('a node’s Cordon button asks on a card that names the node, the pods, and
     await expect(ran.getByTestId('watson-output')).toHaveText(`node/${node} cordoned`)
     await expect(ran.getByTestId('watson-status')).toContainText('approved by')
     await expect.poll(async () => (await cluster.getObject<{ spec: { unschedulable?: boolean } }>(`/api/v1/nodes/${node}`))!.spec.unschedulable ?? false).toBe(true)
-    // The panel came up over the drawer, as Ask Sherlock's answers do;
-    // restoring it shows the drawer, which now offers Uncordon, through
-    // Watson too.
-    await expect(page.getByTestId('sherlock-dock')).toHaveAttribute('data-mode', 'max')
-    await page.locator('[data-testid=sherlock-maximize]:visible').click()
-    await expect(page.getByTestId('sherlock-dock')).toHaveAttribute('data-mode', 'open')
-    await expect(page.getByTestId('node-cordon')).toHaveText(/Uncordon/, { timeout: 15_000 })
-    await page.getByTestId('node-cordon').click()
+    await pane(page).getByTestId('watson-input').fill(`kubectl uncordon ${node}`)
+    await pane(page).getByTestId('watson-input').press('Enter')
     await pane(page).getByTestId('watson-card').last().getByTestId('watson-approve').click()
     await expect(lastRan(page)).toContainText(`node/${node} uncordoned`, { timeout: 30_000 })
 
@@ -326,10 +324,11 @@ test('a node’s Cordon button asks on a card that names the node, the pods, and
   }
 })
 
-test('the Drain button’s card names the pods it evicts and the budgets that may hold it up (P6-04)', async ({ page }) => {
+test('a drain’s card names the pods it evicts and the budgets that may hold it up (P6-04)', async ({ page }) => {
   const node = await spareWorker(page.request)
-  await open(page, `#/nodes?open=${node}`)
-  await page.getByTestId('node-drain').click()
+  await open(page)
+  await pane(page).getByTestId('watson-input').fill(`kubectl drain ${node} --ignore-daemonsets --delete-emptydir-data`)
+  await pane(page).getByTestId('watson-input').press('Enter')
   const card = pane(page).getByTestId('watson-card').last()
   await expect(card).toHaveAttribute('data-command', new RegExp(`^kubectl drain ${node} `))
   await expect(card.getByTestId('watson-impact')).toContainText(/Cordons .+ (evicts \d+ pods?|no pod needs to be evicted)/, { timeout: 30_000 })
@@ -478,11 +477,11 @@ test('Watson moves to a window of its own, with Sherlock, approvals there run, a
   await expect(page.getByTestId('watson')).toHaveCount(0)
   await expect(page.getByTestId('assistants-popped')).toBeVisible()
 
-  // A change asked for in the main window waits in the other, and runs there.
+  // A change typed in the window runs there.
   const node = await spareWorker(page.request)
   try {
-    await page.goto(`/#/nodes?open=${node}`)
-    await page.getByTestId('node-cordon').click()
+    await popup.getByTestId('watson-input').fill(`kubectl cordon ${node}`)
+    await popup.getByTestId('watson-input').press('Enter')
     const card = popup.getByTestId('watson-card').last()
     await expect(card).toHaveAttribute('data-command', `kubectl cordon ${node}`)
     await card.getByTestId('watson-approve').click()
