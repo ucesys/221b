@@ -279,11 +279,18 @@ test('every table on the tabs is registered, with its sort and search (P6U-01)',
   ]
   for (const [hash, ids] of tabs) {
     await open(page, hash)
-    await cluster.resetClaude()
-    // A details pane the person opened covers the dock; the box keeps focus there.
-    await ask(page, '[[view_state]]', !hash.includes('peek'))
-    await done(page)
-    const sent = await lastResults()
+    // A table registers once its rows have loaded, which on a slow cluster
+    // can be after the page says Connected: ask again until it is there.
+    let sent = ''
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await cluster.resetClaude()
+      // A details pane the person opened covers the dock; the box keeps focus there.
+      await ask(page, '[[view_state]]', !hash.includes('peek'))
+      await done(page)
+      sent = await lastResults()
+      if (ids.every((id) => sent.includes(`\\"id\\":\\"${id}\\"`))) break
+      await page.waitForTimeout(2000)
+    }
     for (const id of ids) expect(sent, `${id} on ${hash}`).toContain(`\\"id\\":\\"${id}\\"`)
   }
 })
