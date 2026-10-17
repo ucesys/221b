@@ -109,8 +109,8 @@ test('every control is reachable by keyboard with a visible focus ring', async (
     expect(info.ring, `focus ring on ${info.name}`).toBe(true)
     seen.add(info.name)
   }
-  // The settings button, the role filter, the search box, the column menu,
+  // The Administration gear, the role filter, the search box, the column menu,
   // the export, the column headers and the first rows all take focus.
   expect(seen.size).toBeGreaterThan(15)
-  expect(seen.has('Settings')).toBe(true)
+  expect(seen.has('Administration')).toBe(true)
 })

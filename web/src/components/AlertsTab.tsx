@@ -107,9 +107,9 @@ function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: n
       setBusy(false)
     }
   }
-  // An acknowledged alert keeps its severity and its object's state; the
-  // yellow bar on the left and the Acknowledged tag are what mark it.
-  const sev = sevLabel(r)
+  // An acknowledged alert is yellow (asked at the Phase 4 review); its
+  // object's state keeps its own colour, so Ready and Unknown still differ.
+  const sev = r.ack ? { ...sevLabel(r), tone: 'warn' } : sevLabel(r)
   const ctx = contextOf(r, now)
   const events = sortEvents(r.events, sort, now)
   const th = (col: SortCol, label: string, right = false) => {
