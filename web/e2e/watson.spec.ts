@@ -395,6 +395,9 @@ test('a read-only connection runs reads and refuses changes, naming the rule (P6
   expect(added.status(), await added.text()).toBe(201)
   try {
     await expect.poll(async () => ((await (await request.get(`/api/v1/clusters/${id}`)).json()) as { state: string }).state, { timeout: 30_000 }).toBe('connected')
+    // Watson shows only where Sherlock is on; settings for a removed connection are dropped with it.
+    const on = await request.put('/api/v1/sherlock/config', { data: { ...SHERLOCK_ON, clusters: { local: true, [id]: true } }, headers: SAME })
+    expect(on.status(), await on.text()).toBe(200)
     await page.goto(`/#/c/${id}/nodes`)
     const statusNow = await (await request.get(`/api/v1/clusters/${id}/watson`)).text()
     await expect(pane(page).getByTestId('watson-readonly'), `watson status: ${statusNow.slice(0, 400)}`).toContainText('read-only')
