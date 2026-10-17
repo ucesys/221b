@@ -2,7 +2,7 @@
 // roles and sources, the totals the Permissions page shows, and what a
 // person can do after joining a group.
 
-import type { Drift, Holding, LocalGroup, PermissionsResponse, PermRole, PermRule, RoleId, Source, SuperRole, UserRow } from '../api/admin'
+import type { Drift, Holding, LocalGroup, PermRole, PermRule, RoleId, Source, SuperRole, UserRow } from '../api/admin'
 
 export const ROLE_NAME: Record<RoleId, string> = {
   superAdmin: 'SuperAdmin',
@@ -64,6 +64,14 @@ export function permTotals(role: Pick<PermRole, 'rules'>): { reads: number; writ
   }
   const kinds = new Set([...read, ...write])
   return { reads: read.size, writes: write.size, kinds: kinds.size }
+}
+
+/** What a role's tile says it may do: "reads 40 kinds, changes 0", or "everything" for a wildcard. */
+export function roleTotalsText(role: Pick<PermRole, 'rules'>): string {
+  const wild = role.rules.filter((r) => r.resource === '*' && !r.nonResource)
+  if (wild.some((r) => r.verbs.includes('*'))) return 'reads and changes everything'
+  if (wild.length) return `reads everything, changes ${permTotals(role).writes}`
+  return totalsText(permTotals(role))
 }
 
 /** "reads 40 kinds, changes 0" for a role's heading. */
@@ -156,17 +164,21 @@ export const SCOPE_NAME: Record<PermRule['scope'], string> = {
   own: 'Own only',
 }
 
-/** One row of the Permissions matrix: a resource and whether each role reads or changes it (RB-44). */
-export interface MatrixRow {
+/** One row of the Permissions table: one role's read or write of one resource (RB-44). */
+export interface PermRow {
   key: string
+  role: RoleId
   group: string
   resource: string
   access: 'read' | 'write'
-  /** Every verb any role has on it, in the order Kubernetes lists them. */
   verbs: string[]
+  /** Where the role has it: the whole cluster, every namespace, the bound namespaces, or only the person's own. */
+  scope: PermRule['scope']
   flags: string[]
-  /** What each role has: its scope and verbs; absent when it has none. */
-  cells: Partial<Record<RoleId, { scope: PermRule['scope']; verbs: string[] }>>
+  /** The objects it is limited to by name; empty for every object of the kind. */
+  names: string[]
+  /** A URL path such as /healthz rather than a kind. */
+  nonResource: boolean
 }
 
 const VERB_ORDER = ['get', 'list', 'watch', 'create', 'update', 'patch', 'delete', 'deletecollection', '*']
@@ -176,24 +188,29 @@ function verbRank(v: string): number {
   return i < 0 ? VERB_ORDER.length : i
 }
 
-/** Builds the matrix from the four roles' rules: one row per resource and access, one cell per role. */
-export function matrixOf(roles: Pick<PermRole, 'id' | 'rules'>[]): MatrixRow[] {
-  const rows = new Map<string, MatrixRow>()
+/** The rows of the Permissions table: each role's rules, reads apart from changes, merged per role, resource and access. */
+export function permRowsOf(roles: Pick<PermRole, 'id' | 'rules'>[]): PermRow[] {
+  const rows = new Map<string, PermRow>()
   for (const role of roles) {
     for (const part of role.rules.flatMap((r) => splitRule(r))) {
-      const key = `${part.kind}:${part.group}/${part.resource}`
-      const row = rows.get(key) ?? { key, group: part.group, resource: part.resource, access: part.kind, verbs: [], flags: [], cells: {} }
-      row.verbs = [...new Set([...row.verbs, ...part.verbs])].sort((a, b) => verbRank(a) - verbRank(b) || a.localeCompare(b))
-      row.flags = [...new Set([...row.flags, ...part.flags])]
-      const had = row.cells[role.id]
-      row.cells[role.id] = { scope: part.scope, verbs: [...new Set([...(had?.verbs ?? []), ...part.verbs])] }
-      rows.set(key, row)
+      const names = [...(part.resourceNames ?? [])].sort()
+      const key = `${role.id}|${part.kind}:${part.group}/${part.resource}${names.length ? '#' + names.join(',') : ''}`
+      const had = rows.get(key)
+      const verbs = [...new Set([...(had?.verbs ?? []), ...part.verbs])].sort((a, b) => verbRank(a) - verbRank(b) || a.localeCompare(b))
+      rows.set(key, { key, role: role.id, group: part.group, resource: part.resource, access: part.kind, verbs, scope: part.scope, flags: [...new Set([...(had?.flags ?? []), ...part.flags])], names, nonResource: !!part.nonResource })
     }
   }
-  return [...rows.values()].sort((a, b) => (a.access === b.access ? 0 : a.access === 'read' ? -1 : 1) || a.resource.localeCompare(b.resource) || a.group.localeCompare(b.group))
+  return [...rows.values()].sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role) || (a.access === b.access ? 0 : a.access === 'read' ? -1 : 1) || a.resource.localeCompare(b.resource) || a.group.localeCompare(b.group))
 }
 
-/** The summary line of each role on the Permissions page: its totals. */
-export function summaryOf(p: PermissionsResponse): { id: RoleId; name: string; definition: PermRole['definition']; totals: ReturnType<typeof permTotals> }[] {
-  return p.roles.map((r) => ({ id: r.id, name: ROLE_NAME[r.id], definition: r.definition, totals: permTotals(r) }))
+/** What a role's tile and details say about where it applies. */
+export function reachText(id: RoleId): string {
+  return perNamespace(id) ? 'In the namespaces its groups are bound to' : 'Every namespace, and cluster-wide kinds'
+}
+
+/** What strict mode is, in a sentence for the Permissions page (RB-36). */
+export function strictText(enforce: 'off' | 'strict'): string {
+  return enforce === 'strict'
+    ? 'Strict mode is on (rbac.enforce): if someone edits these roles to allow more than 221B ships, Watson refuses every change on this cluster until they are put back.'
+    : 'Strict mode is off (rbac.enforce): if someone edits these roles to allow more than 221B ships, this page says so, and Watson still runs approved changes. Set rbac.enforce to strict to refuse them.'
 }

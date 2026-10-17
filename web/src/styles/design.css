@@ -66,6 +66,10 @@ a{color:#0A6E69}a:hover{color:#075450}
 .rk-link:hover{text-decoration:underline}
 .rk-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;flex:none;border:0;border-radius:7px;background:transparent;color:var(--fg3)}
 .rk-icon-btn:hover{background:var(--sunken);color:var(--fg)}
+.rk-icon-btn[aria-current=page]{background:var(--accent-weak);color:var(--accent)}
+.rk-tile{display:flex;flex-direction:column;gap:4px;width:100%;padding:10px 64px 10px 12px;border:0;border-radius:8px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.rk-tile:hover{background:var(--sunken)}
+.rk-tile:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .rk-field{position:relative;display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--fg3)}
 .rk-field:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
 .rk-field input,.rk-field select{flex:1 1 auto;min-width:0;border:0;outline:0;background:transparent;font-size:12.5px;color:var(--fg);height:100%;padding:0}

@@ -107,8 +107,9 @@ function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: n
       setBusy(false)
     }
   }
-  // An acknowledged alert is yellow, whatever it was.
-  const sev = r.ack ? { ...sevLabel(r), tone: 'warn' } : sevLabel(r)
+  // An acknowledged alert keeps its severity and its object's state; the
+  // yellow bar on the left and the Acknowledged tag are what mark it.
+  const sev = sevLabel(r)
   const ctx = contextOf(r, now)
   const events = sortEvents(r.events, sort, now)
   const th = (col: SortCol, label: string, right = false) => {
@@ -143,7 +144,7 @@ function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: n
         )}
         <span style={{ flex: '1 1 auto' }} />
         {r.status && (
-          <span className="rk-pill" data-tone={r.ack ? 'warn' : r.statusTone}>
+          <span className="rk-pill" data-tone={r.statusTone}>
             <span className="rk-dot" />
             {r.status}
           </span>
@@ -300,10 +301,19 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
             </button>
           ))}
         </div>
-        <label className="rk-check" title="Leave out the pods that recovered after warnings" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
-          <input type="checkbox" checked={activeOnly} onChange={(e) => set({ show: e.target.checked ? undefined : 'all' })} data-testid="alert-active" />
-          Active alerts only
-          {hiddenRecovered > 0 && <span className="rk-cnt" title={`${hiddenRecovered} recovered not shown`}>+{hiddenRecovered} recovered</span>}
+        <label className="rk-check" title="Leave out the pods that recovered after warnings. Acknowledged alerts are still active and stay." style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+          <input
+            type="checkbox"
+            checked={activeOnly}
+            onChange={(e) => {
+              set({ show: e.target.checked ? undefined : 'all' })
+              // Shown, they come after the active ones: bring them into view, so the change is seen.
+              if (!e.target.checked) requestAnimationFrame(() => document.querySelector('[data-testid="alert-section-recovered"]')?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
+            }}
+            data-testid="alert-active"
+          />
+          Hide recovered pods
+          {hiddenRecovered > 0 && <span className="rk-cnt" title={`${hiddenRecovered} recovered pods not shown`}>{hiddenRecovered} hidden</span>}
         </label>
         <label className="rk-field" style={{ width: 260 }}>
           <SearchIcon />

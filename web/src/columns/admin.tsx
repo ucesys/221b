@@ -1,11 +1,11 @@
 // The columns of the Administration tables (RB-42, RB-44, RB-45): Roles,
-// the Permissions matrix and Users. Each defines what it shows and what it
+// Permissions and Users. Each defines what it shows and what it
 // exports, so the tables sort, pick columns and export as every other
 // table does (RB-55, X-13).
 
-import type { RoleId, RoleRow, UserRow } from '../api/admin'
+import type { RoleRow, UserRow } from '../api/admin'
 import { fmtAge, fmtTs } from '../lib/format'
-import { holdingParts, ROLE_NAME, ROLE_ORDER, roleRank, SCOPE_NAME, SOURCE_NAME, type MatrixRow } from '../lib/admin'
+import { groupText, holdingParts, ROLE_NAME, ROLE_ORDER, roleRank, SCOPE_NAME, SOURCE_NAME, type PermRow } from '../lib/admin'
 import type { ColumnDef, Term } from '../lib/table'
 import { Mono } from './cells'
 
@@ -95,78 +95,49 @@ export const ROLE_COLUMNS: ColumnDef<RoleRow>[] = [
   },
 ]
 
-const roleCol = (id: RoleId): ColumnDef<MatrixRow> => ({
-  id,
-  label: ROLE_NAME[id],
-  width: 'minmax(130px, .8fr)',
-  min: 130,
-  sortValue: (r) => {
-    const c = r.cells[id]
-    return c ? Object.keys(SCOPE_NAME).indexOf(c.scope) : null
-  },
-  cell: (r) => {
-    const c = r.cells[id]
-    if (!c) return <span style={{ color: 'var(--fg3)' }}>—</span>
-    const partial = c.verbs.length !== r.verbs.length
-    return (
-      <span title={c.verbs.join(', ')} style={{ display: 'inline-flex', flexDirection: 'column', minWidth: 0 }}>
-        <span>{SCOPE_NAME[c.scope]}</span>
-        {partial && (
-          <span className="rk-mono" style={{ fontSize: 11, color: 'var(--fg3)' }}>
-            {c.verbs.join(', ')}
-          </span>
-        )}
-      </span>
-    )
-  },
-  export: (r) => {
-    const c = r.cells[id]
-    return [{ head: ROLE_NAME[id], cell: c ? SCOPE_NAME[c.scope] + (c.verbs.length !== r.verbs.length ? ` (${c.verbs.join(', ')})` : '') : 'None' }]
-  },
-})
+const ACCESS = { read: 'Read', write: 'Write' } as const
 
-/** The matrix of RB-44: a resource, what it is, the verbs, and each role's reach. */
-export const MATRIX_COLUMNS: ColumnDef<MatrixRow>[] = [
+/** The Permissions table (RB-44): one role's read or write of one resource, with where it applies. */
+export const PERM_COLUMNS: ColumnDef<PermRow>[] = [
+  {
+    id: 'role',
+    label: 'Role',
+    hint: 'Click a row for the role’s details and its YAML',
+    width: 'minmax(110px, .6fr)',
+    min: 110,
+    sortValue: (r) => ROLE_ORDER.indexOf(r.role),
+    cell: (r) => <span style={{ fontWeight: 500 }}>{ROLE_NAME[r.role]}</span>,
+    export: (r) => [{ head: 'Role', cell: ROLE_NAME[r.role] }],
+  },
   {
     id: 'resource',
     label: 'Resource',
-    width: 'minmax(220px, 1.6fr)',
-    min: 220,
+    width: 'minmax(200px, 1.4fr)',
+    min: 200,
     sortValue: (r) => r.resource,
     cell: (r) => (
       <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-          <span className="rk-mono" style={{ fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {r.resource}
-          </span>
-          {r.flags.map((f) => (
-            <span key={f} className="rk-tag" data-tone="warn">
-              {f}
-            </span>
-          ))}
+        <span className="rk-mono" style={{ fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {r.resource === '*' ? (r.nonResource ? 'every URL path' : 'every kind') : r.resource}
         </span>
         <span className="rk-mono" style={{ fontSize: 11, color: 'var(--fg3)' }}>
-          {r.group === '' ? 'core' : r.group}
+          {r.nonResource ? 'non-resource URL' : r.group === '*' ? 'every API group' : groupText(r.group)}
         </span>
       </span>
     ),
     export: (r) => [
       { head: 'Resource', cell: r.resource },
-      { head: 'API group', cell: r.group === '' ? 'core' : r.group },
+      { head: 'API group', cell: r.nonResource ? '' : groupText(r.group) },
     ],
   },
   {
     id: 'access',
     label: 'Access',
-    width: '90px',
-    min: 90,
+    width: '80px',
+    min: 80,
     sortValue: (r) => (r.access === 'read' ? 0 : 1),
-    cell: (r) => (
-      <span className="rk-tag" data-tone={r.access === 'read' ? 'muted' : 'warn'}>
-        {r.access === 'read' ? 'Read' : 'Write'}
-      </span>
-    ),
-    export: (r) => [{ head: 'Access', cell: r.access === 'read' ? 'Read' : 'Write' }],
+    cell: (r) => <span>{ACCESS[r.access]}</span>,
+    export: (r) => [{ head: 'Access', cell: ACCESS[r.access] }],
   },
   {
     id: 'verbs',
@@ -174,33 +145,51 @@ export const MATRIX_COLUMNS: ColumnDef<MatrixRow>[] = [
     width: 'minmax(150px, 1fr)',
     min: 150,
     sortValue: (r) => r.verbs.length,
-    cell: (r) => <Mono text={r.verbs.join(', ')} size={12} />,
+    cell: (r) => <Mono text={r.verbs.includes('*') ? 'every verb' : r.verbs.join(', ')} size={12} />,
     export: (r) => [{ head: 'Verbs', cell: r.verbs.join(', ') }],
   },
-  roleCol('superAdmin'),
-  roleCol('superViewer'),
-  roleCol('admin'),
-  roleCol('viewer'),
+  {
+    id: 'scope',
+    label: 'Where',
+    hint: 'Cluster-wide kinds, every namespace, or only the namespaces the role is bound in',
+    width: 'minmax(140px, .9fr)',
+    min: 140,
+    sortValue: (r) => Object.keys(SCOPE_NAME).indexOf(r.scope),
+    cell: (r) => <span>{SCOPE_NAME[r.scope]}</span>,
+    export: (r) => [{ head: 'Where', cell: SCOPE_NAME[r.scope] }],
+  },
+  {
+    id: 'names',
+    label: 'Limited to',
+    hint: 'Objects the rule names; empty means every object of the kind',
+    width: 'minmax(130px, .8fr)',
+    min: 130,
+    hiddenByDefault: true,
+    sortValue: (r) => r.names.length,
+    cell: (r) => <span className="rk-mono" style={{ fontSize: 12 }}>{r.names.join(', ') || '—'}</span>,
+    export: (r) => [{ head: 'Limited to', cell: r.names.join(', ') }],
+  },
   {
     id: 'flags',
     label: 'Sensitive',
     hint: 'Wildcards, Secrets, escalate, bind, impersonate, exec, attach, port-forward, node proxy and service account tokens',
     width: 'minmax(120px, .8fr)',
     min: 120,
-    hiddenByDefault: true,
     sortValue: (r) => r.flags.length,
-    cell: (r) => <span>{r.flags.join(', ') || '—'}</span>,
+    cell: (r) => (r.flags.length ? <span style={{ color: 'var(--warn)' }}>{r.flags.join(', ')}</span> : <span style={{ color: 'var(--fg3)' }}>—</span>),
     export: (r) => [{ head: 'Sensitive', cell: r.flags.join(', ') }],
   },
 ]
 
 /** What a Permissions search matches. */
-export function matrixTerms(r: MatrixRow): Term[] {
+export function permTerms(r: PermRow): Term[] {
   return [
     { kind: 'name', text: r.resource },
-    { kind: 'type', text: r.group === '' ? 'core' : r.group },
+    { kind: 'type', text: groupText(r.group) },
+    { kind: 'detail', text: ROLE_NAME[r.role] },
     ...r.verbs.map((v) => ({ kind: 'detail', text: v })),
     ...r.flags.map((f) => ({ kind: 'detail', text: f })),
+    ...r.names.map((n) => ({ kind: 'name', text: n })),
   ]
 }
 

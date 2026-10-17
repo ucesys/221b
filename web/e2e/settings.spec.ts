@@ -19,7 +19,8 @@ async function open(page: Page) {
 }
 
 async function openSettings(page: Page) {
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByTestId('admin-link').click()
+  await page.locator('[data-admin-page=settings]').click()
   const settings = page.getByTestId('settings-page')
   await expect(settings).toBeVisible()
   return settings

@@ -11,6 +11,9 @@ import { PermissionsPage } from './PermissionsPage'
 import { RolesPage } from './RolesPage'
 import { UsersPage } from './UsersPage'
 
+// The YAML view reads live from the cluster; here it only says what it would show.
+vi.mock('./YamlView', () => ({ YamlView: ({ kind, name }: { kind: string; name: string }) => <pre data-testid="yaml-view">{`${kind}/${name}`}</pre> }))
+
 const me = (over: Partial<Me> = {}): Me => ({ mode: 'local', user: { subject: 'mikhail', username: 'mikhail', name: 'Mikhail' }, admin: true, roles: ['superAdmin'], method: 'local', sessionIdleSeconds: 3600, ...over })
 const viewer = me({ admin: false, roles: ['viewer'], user: { subject: 'bob', username: 'bob' } })
 
@@ -127,7 +130,7 @@ describe('Roles (RB-42)', () => {
   it('lists the four roles with the definitions in use', async () => {
     const { container } = render(<RolesPage {...common('#/admin/roles')} />)
     await waitFor(() => expect(container.querySelectorAll('[data-role]')).toHaveLength(4))
-    expect(screen.getByTestId('role-definitions').textContent).toContain('SuperAdmin: read-only')
+    expect(screen.getByTestId('role-definitions').textContent).toContain('SuperAdmin read-only')
     expect(container.querySelector('[data-role="admin"]')!.textContent).toContain('221b-admin')
     // Nothing on the page edits a role (RB-01).
     expect(screen.queryByText(/edit role|delete role|new role/i)).toBeNull()
@@ -165,25 +168,52 @@ describe('Roles (RB-42)', () => {
 })
 
 describe('Permissions (RB-44)', () => {
-  it('says the live roles differ and names the rule, with totals for each role', async () => {
+  const keys = (c: HTMLElement) => [...c.querySelectorAll('[data-perm]')].map((r) => r.getAttribute('data-perm'))
+
+  it('says the live roles differ and names the rule, with totals for each role and what strict mode does', async () => {
     const { container } = render(<PermissionsPage {...common('#/admin/permissions')} />)
     await waitFor(() => expect(container.querySelectorAll('[data-perm]').length).toBeGreaterThan(0))
     expect(screen.getByTestId('drift').textContent).toContain('Differs from the shipped definitions: Admin.')
     expect(screen.getByTestId('drift-details').textContent).toContain('Admin: adds delete on nodes')
     expect(screen.getByTestId('roles-yaml').getAttribute('href')).toBe('/api/v1/admin/roles/manifest')
     expect(container.querySelector('[data-role-summary="admin"]')!.textContent).toContain('reads 1 kind, changes 1')
-    expect(screen.getByText('Strict mode: off')).toBeTruthy()
-    expect(screen.getByText('SuperAdmin: read-only')).toBeTruthy()
+    expect(screen.getByTestId('strict').textContent).toContain('Strict mode is off')
+    // The definitions are said on each tile in words, not as coloured tags.
+    expect(screen.queryByText('SuperAdmin: read-only')).toBeNull()
+    expect(container.querySelector('[data-role-summary="superAdmin"]')!.textContent).toContain('Read-only')
   })
 
   it('splits Read from Write and finds the sensitive rows', async () => {
     const { container } = render(<PermissionsPage {...common('#/admin/permissions')} />)
-    await waitFor(() => expect(container.querySelectorAll('[data-perm]').length).toBe(3))
+    await waitFor(() => expect(container.querySelectorAll('[data-perm]').length).toBe(4))
     fireEvent.click(screen.getByRole('button', { name: 'Write' }))
-    expect([...container.querySelectorAll('[data-perm]')].map((r) => r.getAttribute('data-perm'))).toEqual(['write:apps/deployments'])
+    expect(keys(container)).toEqual(['admin|write:apps/deployments'])
     fireEvent.click(screen.getByRole('button', { name: 'All' }))
     fireEvent.click(screen.getByLabelText('Sensitive only'))
-    expect([...container.querySelectorAll('[data-perm]')].map((r) => r.getAttribute('data-perm'))).toEqual(['read:/secrets'])
+    expect(keys(container)).toEqual(['superAdmin|read:/secrets'])
+  })
+
+  it('filters the table by the role tile clicked, without a Role column, and back', async () => {
+    const { container } = render(<PermissionsPage {...common('#/admin/permissions')} />)
+    await waitFor(() => expect(container.querySelectorAll('[data-perm]').length).toBe(4))
+    const heads = () => screen.getAllByRole('columnheader').map((h) => (h.textContent ?? '').replace(/[↑↓]/g, ''))
+    expect(heads()).toContain('Role')
+    fireEvent.click(screen.getByTestId('role-filter-viewer'))
+    expect(screen.getByTestId('role-filter-viewer').getAttribute('aria-pressed')).toBe('true')
+    expect(keys(container)).toEqual(['viewer|read:apps/deployments'])
+    expect(heads()).not.toContain('Role')
+    fireEvent.click(screen.getByTestId('role-filter-viewer'))
+    expect(keys(container).length).toBe(4)
+  })
+
+  it('opens a role in a pane with its description and its ClusterRole as YAML', async () => {
+    render(<PermissionsPage {...common('#/admin/permissions/admin')} />)
+    const pane = await screen.findByTestId('perm-role-drawer')
+    await waitFor(() => expect(pane.textContent).toContain('Viewer plus changes'))
+    expect(pane.textContent).toContain('ClusterRole 221b-admin')
+    expect(within(pane).getByTestId('perm-role-drift').textContent).toContain('adds delete on nodes')
+    fireEvent.click(within(pane).getByRole('button', { name: 'YAML' }))
+    expect(within(pane).getByTestId('yaml-view').textContent).toBe('clusterroles/221b-admin')
   })
 })
 

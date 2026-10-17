@@ -7,9 +7,9 @@ import { connection } from '../lib/connection'
 import { fmtClock } from '../lib/format'
 import { ROLE_NAME, topRole } from '../lib/admin'
 import { adminHref, HOME, href, TABS, type Route, type Tab } from '../lib/router'
-import { isSuperAdmin, openAdmin, pagesFor } from './AdminPage'
+import { openAdmin, pagesFor } from './AdminPage'
 import { ClusterMenu } from './ClusterMenu'
-import { Chevron, GearIcon, Logo, MoonIcon, ShieldIcon, SunIcon } from './Icons'
+import { Chevron, GearIcon, Logo, MoonIcon, SunIcon } from './Icons'
 
 export type Theme = 'light' | 'dark'
 
@@ -343,26 +343,22 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
           </span>
         </span>
         {me && pagesFor(me).length > 0 && (
+          // Administration: roles, permissions, users and settings, behind
+          // the gear (the Settings page is one of its pages).
           <a
-            className="rk-tab"
+            className="rk-icon-btn"
             href={adminHref(pagesFor(me)[0]!)}
             aria-current={route.view === 'admin' ? 'page' : undefined}
+            aria-label="Administration"
             title="Administration: roles, permissions, users and settings"
             onClick={(e) => {
               e.preventDefault()
               openAdmin(pagesFor(me)[0]!)
             }}
             data-testid="admin-link"
-            style={{ gap: 7 }}
           >
-            <ShieldIcon />
-            Administration
-          </a>
-        )}
-        {isSuperAdmin(me) && (
-          <button className="rk-icon-btn" aria-label="Settings" title="Settings" onClick={() => openAdmin('settings')} data-testid="settings-btn">
             <GearIcon />
-          </button>
+          </a>
         )}
         {me && <AccountMenu me={me} theme={theme} onTheme={onTheme} />}
       </div>

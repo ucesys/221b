@@ -39,7 +39,8 @@ for (const theme of ['light', 'dark'] as const) {
     expect(await violations(page)).toEqual([])
     await page.keyboard.press('Escape')
 
-    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByTestId('admin-link').click()
+    await page.locator('[data-admin-page=settings]').click()
     await expect(page.getByTestId('settings-page')).toBeVisible()
     expect(await violations(page)).toEqual([])
     await page.keyboard.press('Escape')

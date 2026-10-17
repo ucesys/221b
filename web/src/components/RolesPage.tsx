@@ -166,12 +166,8 @@ export function RolesPage({ route, me, now, cluster, onToast }: AdminProps) {
         </div>
         {defs && (
           <div style={{ padding: '10px 16px 0', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 12.5 }} data-testid="role-definitions">
-            <span style={{ color: 'var(--fg3)' }}>Definitions in use</span>
-            <span className="rk-tag" data-tone="info">
-              Admin: {defs.admin === 'full' ? 'full' : 'read-only'}
-            </span>
-            <span className="rk-tag" data-tone="info">
-              SuperAdmin: {defs.superAdmin === 'full' ? 'full' : 'read-only'}
+            <span style={{ color: 'var(--fg3)' }}>
+              Definitions in use: Admin {defs.admin === 'full' ? 'full' : 'read-only'}, SuperAdmin {defs.superAdmin === 'full' ? 'full' : 'read-only'}.
             </span>
             <span style={{ color: 'var(--fg3)' }}>
               Chosen in <span className="rk-mono">values.yaml</span> under <span className="rk-mono">rbac.roles</span>.

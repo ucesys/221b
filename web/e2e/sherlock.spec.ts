@@ -70,7 +70,8 @@ test('Sherlock stays away until an administrator turns it on, and the key is nev
   await expect(page.getByTestId('sherlock')).toHaveCount(0)
   await expect(page.getByTestId('alert-troubleshoot')).toHaveCount(0)
 
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByTestId('admin-link').click()
+  await page.locator('[data-admin-page=settings]').click()
   await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
   const settings = page.getByTestId('sherlock-settings')
   await expect(settings.getByTestId('sherlock-key-state')).toContainText('No key yet')
@@ -342,7 +343,8 @@ test('Sherlock answers through an OpenAI-compatible gateway set on the Settings 
   const cfg = (await page.evaluate(async () => (await fetch('/api/v1/sherlock/config')).json())) as { provider: { endpoint: string } }
   const base = cfg.provider.endpoint.replace(/\/$/, '')
   try {
-    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByTestId('admin-link').click()
+    await page.locator('[data-admin-page=settings]').click()
     await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
     await expect(page).toHaveURL(/#\/admin\/settings\/sherlock$/)
     const s = page.getByTestId('sherlock-settings')
@@ -409,7 +411,8 @@ test('the panel meets WCAG 2.2 AA, docked, maximized and in the settings (X-12)'
     await page.locator('[data-testid=sherlock-maximize]:visible').click()
     expect(await violations(), theme + ' maximized').toEqual([])
     await page.keyboard.press('Escape')
-    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByTestId('admin-link').click()
+    await page.locator('[data-admin-page=settings]').click()
     await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
     await expect(page.getByTestId('sherlock-settings').getByTestId('sherlock-save')).toBeVisible()
     expect(await violations(), theme + ' settings').toEqual([])

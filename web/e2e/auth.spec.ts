@@ -67,8 +67,10 @@ test('a viewer uses the tabs but has no Settings; a SuperAdmin can change them (
   await page.getByTestId('account').click()
   await expect(page.getByTestId('account-role')).toHaveText(/^(Viewer|SuperViewer|Admin|No role)$/)
   await page.keyboard.press('Escape')
-  // Settings is for SuperAdmins (RB-47): no gear, and the page refuses a link to it.
-  await expect(page.getByRole('button', { name: 'Settings' })).toHaveCount(0)
+  // Settings is for SuperAdmins (RB-47): Administration does not offer it, and the page refuses a link to it.
+  await page.getByTestId('admin-link').click()
+  await expect(page.getByTestId('admin-page')).toBeVisible()
+  await expect(page.locator('[data-admin-page=settings]')).toHaveCount(0)
   await page.goto('/#/admin/settings')
   await expect(page.getByTestId('admin-refusal')).toContainText('Settings is for SuperAdmins')
   const denied = await page.context().request.put('/api/v1/settings', { data: { refreshSeconds: 5 }, headers: { 'Sec-Fetch-Site': 'same-origin' } })
