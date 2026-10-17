@@ -292,7 +292,12 @@ rbac:
   # Creates the console's own ClusterRole and Role, and the four roles for
   # people (Viewer, SuperViewer, Admin, SuperAdmin; ClusterRoles named
   # 221b-viewer, 221b-super-viewer, 221b-admin and 221b-super-admin) with
-  # their bindings. The console's ClusterRole is read-only: get, list and
+  # their bindings. Those names are fixed, one set per cluster: a second
+  # console, in another namespace, leaves the ones another release installed
+  # and uses them (it asks the cluster at install and upgrade, so helm
+  # template always renders them).
+  #
+  # The console's ClusterRole is read-only: get, list and
   # watch on the kinds the tabs show (nodes, namespaces, pods, workloads,
   # Services and their endpoints, Ingresses and IngressClasses, ConfigMaps,
   # PVCs, events, the namespace long tail, and for the analysis tabs roles

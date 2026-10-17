@@ -74,17 +74,44 @@ export function secondsToRefresh(refreshedAt: Date | null, every: number, now: n
   return Math.max(0, Math.ceil(every - elapsed))
 }
 
-/** A small ring that drains as the next refresh comes nearer, next to "Live". */
-function RefreshRing({ left, every }: { left: number; every: number }) {
-  const r = 6
-  const c = 2 * Math.PI * r
-  const frac = every > 0 ? Math.min(1, left / every) : 0
+/**
+ * A small ring that drains as the next refresh comes nearer, next to "Live":
+ * full at a refresh, empty when the next is due, one smooth sweep between
+ * them. Each refresh starts a new sweep; the first starts where the
+ * countdown already is.
+ */
+function RefreshRing({ left, every, refreshedAt, now }: { left: number; every: number; refreshedAt: Date; now: number }) {
+  const at = refreshedAt.getTime()
+  const [first] = useState(at)
+  const elapsed = at === first ? Math.min(every, Math.max(0, (now - at) / 1000)) : 0
   return (
     <svg className="rk-ring" width={18} height={18} viewBox="0 0 16 16" aria-hidden="true" data-testid="refresh-ring" data-left={left}>
-      <circle cx={8} cy={8} r={r} fill="none" stroke="var(--line2)" strokeWidth={2.2} />
-      <circle cx={8} cy={8} r={r} fill="none" stroke="var(--accent)" strokeWidth={2.2} strokeLinecap="round" strokeDasharray={`${(c * frac).toFixed(2)} ${c.toFixed(2)}`} transform="rotate(-90 8 8)" />
+      <circle cx={8} cy={8} r={6} fill="none" stroke="var(--line2)" strokeWidth={2.2} />
+      <RingArc key={at} every={every} elapsed={elapsed} />
       <circle cx={8} cy={8} r={1.6} fill="var(--accent)" />
     </svg>
+  )
+}
+
+/** One sweep of the ring, from the refresh it was drawn for. */
+function RingArc({ every, elapsed }: { every: number; elapsed: number }) {
+  // Where the sweep started is fixed when it is drawn; the clock's ticks must not move it.
+  const [start] = useState(elapsed)
+  return (
+    <circle
+      className="rk-ring-arc"
+      cx={8}
+      cy={8}
+      r={6}
+      fill="none"
+      stroke="var(--accent)"
+      strokeWidth={2.2}
+      strokeLinecap="round"
+      pathLength={100}
+      strokeDasharray="100 100"
+      transform="rotate(-90 8 8)"
+      style={{ animationDuration: `${every}s`, animationDelay: `${-start}s`, ['--steps' as string]: Math.max(1, Math.round(every)) }}
+    />
   )
 }
 
@@ -337,7 +364,7 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
       </nav>
       <div className="rk-meta" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, minHeight: 52 }}>
         <span style={{ fontSize: 12, color: 'var(--fg3)', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'default', userSelect: 'none' }} title={liveTip || undefined} data-testid="live">
-          {left !== null && <RefreshRing left={left} every={every} />}
+          {left !== null && refreshedAt && <RefreshRing left={left} every={every} refreshedAt={refreshedAt} now={now} />}
           {live ? 'Live' : conn.label}
           <span className="rk-asof">
             {' '}
