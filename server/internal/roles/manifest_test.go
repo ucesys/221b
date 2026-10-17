@@ -15,7 +15,7 @@ func TestManifestHasTheRolesAndBindings(t *testing.T) {
 		`kind: ClusterRole`, `name: "221b-admin"`, `name: "221b-super-admin"`, `name: "221b-super-viewer"`, `name: "221b-viewer"`, `name: "221b-nodes"`,
 		`kind: ClusterRoleBinding`, `name: "221b:console-users"`, `name: "221b:superadmins"`, `name: "221b:superviewers"`,
 		`kind: RoleBinding`, `namespace: "web"`, `name: "221b-local:web-readers"`, `name: "221b-ldap:ops"`,
-		`app.kubernetes.io/managed-by: "221b"`, `apiGroups: [""]`,
+		`app.kubernetes.io/managed-by: "221b"`, `221b/managed: "true"`, `apiGroups: [""]`,
 	} {
 		if !strings.Contains(m, want) {
 			t.Errorf("the manifest lacks %s", want)

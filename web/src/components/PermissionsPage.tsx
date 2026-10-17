@@ -76,7 +76,7 @@ function RoleDrawer({ perm, row, differences, onClose, onToast }: { perm: PermRo
                 ['Where it applies', row?.scope ?? reachText(perm.id)],
                 ['How people get it', perm.id === 'admin' || perm.id === 'viewer' ? 'A group listed for it in values (auth.ldap.roles, auth.oidc.roles or auth.local.groups), bound by Helm in each of its namespaces' : 'Held in 221B: a directory group listed for it, or given to a local user on the Users page'],
                 ['On this cluster', perm.present ? 'Installed' : 'Not installed: people with it see nothing here'],
-                ['Permissions', `${roleTotalsText(perm)} · ${t.kinds} ${t.kinds === 1 ? 'rule' : 'rules'} in all`],
+                ['Permissions', `${roleTotalsText(perm)} · ${t.kinds} ${t.kinds === 1 ? 'kind' : 'kinds'} in all`],
                 ['Sensitive', sensitive.length ? sensitive.join(', ') : 'None'],
               ]}
             />

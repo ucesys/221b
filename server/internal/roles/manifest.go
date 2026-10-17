@@ -74,7 +74,7 @@ func header(b *strings.Builder, kind, name, namespace string, extra map[string]s
 	if namespace != "" {
 		b.WriteString("  namespace: " + q(namespace) + "\n")
 	}
-	b.WriteString("  labels:\n    app.kubernetes.io/name: \"221b\"\n    app.kubernetes.io/managed-by: \"221b\"\n")
+	b.WriteString("  labels:\n    app.kubernetes.io/name: \"221b\"\n    app.kubernetes.io/managed-by: \"221b\"\n    221b/managed: \"true\"\n")
 	keys := make([]string, 0, len(extra))
 	for k := range extra {
 		keys = append(keys, k)

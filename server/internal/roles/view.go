@@ -317,7 +317,11 @@ func permRules(id ID, rules []Rule) []PermRule {
 		for _, g := range r.APIGroups {
 			for _, res := range r.Resources {
 				s := scope
-				if id.Super() && isClusterScoped(g, res) {
+				switch {
+				case id.Super() && res == "*":
+					// Every kind: the cluster-scoped ones and every namespace.
+					s = "everywhere"
+				case id.Super() && isClusterScoped(g, res):
 					s = "cluster"
 				}
 				out = append(out, PermRule{Group: g, Resource: res, Verbs: r.Verbs, Kind: kind, Scope: s, Flags: flags, ResourceNames: r.ResourceNames})

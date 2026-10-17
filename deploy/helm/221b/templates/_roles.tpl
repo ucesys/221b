@@ -7,7 +7,8 @@ nothing in the console or in Watson creates a binding.
 {{- define "b221.roleLabels" -}}
 app.kubernetes.io/name: {{ .Chart.Name | quote }}
 app.kubernetes.io/instance: {{ .Release.Name | quote }}
-app.kubernetes.io/managed-by: "221b"
+app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+221b/managed: "true"
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | quote }}
 {{- end -}}
 

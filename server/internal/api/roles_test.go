@@ -58,7 +58,7 @@ func TestRolesPages(t *testing.T) {
 	}
 	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
 	local.Put(&rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "web-readers", Namespace: "web", Labels: map[string]string{managedByLabel: managedByValue}},
+		ObjectMeta: metav1.ObjectMeta{Name: "web-readers", Namespace: "web", Labels: map[string]string{managedLabel: "true", managedByLabel: "Helm"}},
 		RoleRef:    rbacv1.RoleRef{Kind: "ClusterRole", Name: roles.Viewer.ClusterRole()},
 		Subjects:   []rbacv1.Subject{{Kind: "Group", Name: "221b-local:web-readers"}},
 	})

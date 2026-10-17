@@ -58,8 +58,8 @@ for key, role in SHIPPED["roles"].items():
     got = by.get(role["clusterRole"])
     check(f"{role['clusterRole']} is installed with the shipped {template} definition",
           got is not None and got["rules"] == role_rules(key, template, True))
-    check(f"{role['clusterRole']} is labelled managed-by 221b",
-          got is not None and got["metadata"]["labels"].get("app.kubernetes.io/managed-by") == "221b")
+    check(f"{role['clusterRole']} is labelled 221b/managed",
+          got is not None and got["metadata"]["labels"].get("221b/managed") == "true")
 check("the nodes role is installed and bound to the group 221b:console-users",
       by.get("221b-nodes", {}).get("rules") == SHIPPED["nodes"]["rules"] and
       of(d, "ClusterRoleBinding", "221b-nodes")[0]["subjects"][0]["name"] == "221b:console-users")
@@ -116,7 +116,7 @@ check("a local group yields one RoleBinding per namespace",
       [(b["metadata"]["namespace"], b["roleRef"]["name"]) for b in rbs])
 check("every binding names a group, never a user or a service account",
       all(len(b["subjects"]) == 1 and b["subjects"][0]["kind"] == "Group" for b in rbs))
-check("the bindings are labelled managed-by 221b", all(b["metadata"]["labels"]["app.kubernetes.io/managed-by"] == "221b" for b in rbs))
+check("the bindings are labelled 221b/managed", all(b["metadata"]["labels"].get("221b/managed") == "true" for b in rbs))
 check("no ClusterRoleBinding gives Admin or Viewer",
       not [b for b in of(d, "ClusterRoleBinding") if b["roleRef"]["name"] in ("221b-admin", "221b-viewer")])
 groups = [r for r in console_role(d)["rules"] if r.get("resources") == ["groups"]][0]

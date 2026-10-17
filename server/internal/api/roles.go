@@ -45,6 +45,9 @@ type RoleSource interface {
 
 // managedBy is the label the chart puts on the bindings it renders (RB-49).
 const (
+	// The chart marks what it renders for the roles with this label; Helm
+	// sets app.kubernetes.io/managed-by itself, so that cannot say it.
+	managedLabel   = "221b/managed"
 	managedByLabel = "app.kubernetes.io/managed-by"
 	managedByValue = "221b"
 	// driftEvery is how often the roles of every cluster are compared with
@@ -108,15 +111,22 @@ func bindingsOf(src views.Source) []roles.Binding {
 	}
 	for _, o := range src.Objects("clusterrolebindings", "") {
 		if b, ok := o.(*rbacv1.ClusterRoleBinding); ok && b.RoleRef.Kind == "ClusterRole" && isOurRole(b.RoleRef.Name) {
-			out = append(out, roles.Binding{Role: b.RoleRef.Name, Subjects: subjects(b.Subjects), Managed: b.Labels[managedByLabel] == managedByValue})
+			out = append(out, roles.Binding{Role: b.RoleRef.Name, Subjects: subjects(b.Subjects), Managed: managedBy221b(b.Labels)})
 		}
 	}
 	for _, o := range src.Objects("rolebindings", "") {
 		if b, ok := o.(*rbacv1.RoleBinding); ok && b.RoleRef.Kind == "ClusterRole" && isOurRole(b.RoleRef.Name) {
-			out = append(out, roles.Binding{Role: b.RoleRef.Name, Namespace: b.Namespace, Subjects: subjects(b.Subjects), Managed: b.Labels[managedByLabel] == managedByValue})
+			out = append(out, roles.Binding{Role: b.RoleRef.Name, Namespace: b.Namespace, Subjects: subjects(b.Subjects), Managed: managedBy221b(b.Labels)})
 		}
 	}
 	return out
+}
+
+// managedBy221b says whether 221B's chart (or its YAML for other clusters)
+// made an object: the 221b/managed label, or managed-by 221b as earlier
+// drafts wrote it.
+func managedBy221b(labels map[string]string) bool {
+	return labels[managedLabel] == "true" || labels[managedByLabel] == managedByValue
 }
 
 func (s *Server) rolesOptions() roles.Options { return roles.Options{Secrets: s.opts.Roles.Secrets} }

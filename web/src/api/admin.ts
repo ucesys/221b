@@ -71,7 +71,7 @@ export interface PermRule {
   verbs: string[]
   kind: 'read' | 'write'
   /** Where it applies for this role: the whole cluster, every namespace, the bound namespaces, or only the person's own (RB-07, RB-08). */
-  scope: 'cluster' | 'all' | 'bound' | 'own'
+  scope: 'everywhere' | 'cluster' | 'all' | 'bound' | 'own'
   flags: string[]
   resourceNames?: string[]
   nonResource?: boolean

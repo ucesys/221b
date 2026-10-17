@@ -158,6 +158,7 @@ export function usernameProblem(name: string): string {
 export const SUPER_ROLES: SuperRole[] = ['superAdmin', 'superViewer']
 
 export const SCOPE_NAME: Record<PermRule['scope'], string> = {
+  everywhere: 'Everywhere',
   cluster: 'Cluster-wide',
   all: 'All namespaces',
   bound: 'Bound namespaces',
