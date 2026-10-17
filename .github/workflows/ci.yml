@@ -164,14 +164,33 @@ jobs:
     name: Image
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Build
+      - name: Build, or take the build pushed for this tree
+        # hack/push-prebuilt.sh pushes a build made elsewhere as
+        # prebuilt-<tree>; with one labelled for exactly this tree it is
+        # checked and tested below instead of building again. A pull
+        # request is tested as its merge commit, whose tree is the branch's
+        # while the branch is up to date with its base.
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
         run: |
           mkdir -p bin
-          docker build --build-arg VERSION="ci-${GITHUB_SHA::12}" --build-arg COMMIT="${GITHUB_SHA::12}" -t "$IMAGE:ci" . 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          tree=$(git rev-parse 'HEAD^{tree}')
+          pre="$IMAGE:prebuilt-${tree::12}"
+          echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin >/dev/null 2>&1 || true
+          if docker pull -q "$pre" >/dev/null 2>&1 && [ "$(docker image inspect "$pre" --format '{{index .Config.Labels "dev.221b.tree"}}')" = "$tree" ]; then
+            echo "::notice title=Prebuilt image::$pre was built from this tree; it is tested instead of a new build."
+            docker tag "$pre" "$IMAGE:ci"
+          else
+            docker build --build-arg VERSION="ci-${GITHUB_SHA::12}" --build-arg COMMIT="${GITHUB_SHA::12}" -t "$IMAGE:ci" . 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          fi
       - name: Size, user and contents
         run: |
           size=$(docker image inspect "$IMAGE:ci" --format '{{.Size}}')
@@ -304,7 +323,8 @@ jobs:
     needs: [go, web, browsers, chart, image, e2e]
     # Main, and pull requests from this repository (not forks), so a pull
     # request can be tried on a test cluster before it merges; a run started
-    # by hand publishes its branch as branch-<name>. Every job must
+    # by hand publishes its branch as branch-<name>. A build pushed with
+    # hack/push-prebuilt.sh for this tree is published as it is. Every job must
     # pass, except that a pull request's image is published when only the
     # browser tests failed (Firefox times out on page.goto in CI); main and
     # release tags still need them all.
@@ -356,6 +376,17 @@ jobs:
           fi
           tags=()
           for r in "${refs[@]}"; do tags+=(-t "$r"); done
+          # The build the image job tested, when it was pushed for this tree
+          # (hack/push-prebuilt.sh): published under these tags as it is,
+          # for linux/amd64 only. A release is always built here.
+          tree=$(git rev-parse 'HEAD^{tree}')
+          pre="$IMAGE:prebuilt-${tree::12}"
+          if [[ "$GITHUB_REF" != refs/tags/v* ]] && docker pull -q "$pre" >/dev/null 2>&1 \
+            && [ "$(docker image inspect "$pre" --format '{{index .Config.Labels "dev.221b.tree"}}')" = "$tree" ]; then
+            docker buildx imagetools create "${tags[@]}" "$pre" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+            echo "::notice title=Published::${refs[*]} (the prebuilt $pre, linux/amd64)"
+            exit 0
+          fi
           docker buildx create --name multi --driver docker-container --use
           docker buildx build --platform linux/amd64,linux/arm64 \
             --build-arg VERSION="$version" --build-arg COMMIT="$sha" \
