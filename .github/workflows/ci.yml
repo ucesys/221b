@@ -2,8 +2,9 @@
 # build, license checks, the image with its size and vulnerability gates,
 # the chart installed in kind on each maintained Kubernetes minor with the
 # browser tests, and the scale test with kwok. Images are published to
-# GitHub Container Registry from main, from version tags and from this
-# repository's pull requests.
+# GitHub Container Registry from main, from version tags, from this
+# repository's pull requests and from runs started by hand on a branch
+# (branch-<name>, never main).
 name: CI
 
 on:
@@ -302,7 +303,8 @@ jobs:
     name: Publish image
     needs: [go, web, browsers, chart, image, e2e]
     # Main, and pull requests from this repository (not forks), so a pull
-    # request can be tried on a test cluster before it merges. Every job must
+    # request can be tried on a test cluster before it merges; a run started
+    # by hand publishes its branch as branch-<name>. Every job must
     # pass, except that a pull request's image is published when only the
     # browser tests failed (Firefox times out on page.goto in CI); main and
     # release tags still need them all.
@@ -341,9 +343,16 @@ jobs:
             # A release: v0.1.0 is published as 0.1.0, the chart's appVersion.
             version="${GITHUB_REF_NAME#v}"
             refs=("$IMAGE:$version")
-          else
+          elif [[ "$GITHUB_REF" == refs/heads/main ]]; then
             version="main-$sha"
             refs=("$IMAGE:main" "$IMAGE:sha-$sha")
+          else
+            # Run by hand on another branch: named after the branch, never
+            # main. The prefix keeps it apart from main, pr-, sha- and
+            # release tags; Docker allows [a-z0-9_.-] after it.
+            branch="branch-$(printf '%s' "$GITHUB_REF_NAME" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_.-' '-' | cut -c1-100)"
+            version="$branch-$sha"
+            refs=("$IMAGE:$branch" "$IMAGE:sha-$sha")
           fi
           tags=()
           for r in "${refs[@]}"; do tags+=(-t "$r"); done

@@ -36,7 +36,7 @@ helm install k8s-console deploy/helm/221b -n 221b \
 kubectl -n 221b port-forward svc/k8s-console-221b 8080:8081
 ```
 
-Then open <http://localhost:8080> and sign in. `clusterName` is the name shown in the top bar. Images are tagged `main` and `sha-<commit>` from the main branch, and `pr-<number>` for each pull request. `main` and `pr-<number>` move to every new build: with one of those the chart pulls the image on every pod start and restarts the console on every `helm upgrade`, so an upgrade always runs the latest build; `kubectl -n 221b logs deploy/k8s-console-221b | grep -m1 serving` shows which commit is running. To pin one build, set `image.tag=sha-<commit>` or `image.digest=sha256:<digest>`.
+Then open <http://localhost:8080> and sign in. `clusterName` is the name shown in the top bar. Images are tagged `main` and `sha-<commit>` from the main branch, `pr-<number>` for each pull request, and `branch-<name>` when CI is run by hand on another branch. `main`, `pr-<number>` and `branch-<name>` move to every new build: with one of those the chart pulls the image on every pod start and restarts the console on every `helm upgrade`, so an upgrade always runs the latest build; `kubectl -n 221b logs deploy/k8s-console-221b | grep -m1 serving` shows which commit is running. To pin one build, set `image.tag=sha-<commit>` or `image.digest=sha256:<digest>`.
 
 **Sign-in** is on from Phase 3: every page and API call needs a signed-in person (the health probes and `/metrics` excepted). `auth.mode` is one of:
 
