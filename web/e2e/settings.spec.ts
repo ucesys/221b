@@ -1,5 +1,6 @@
-// The Settings dialog: the theme, kept in the browser, and the refresh rate,
-// kept on the server and applied to every open console at the same moment.
+// The Settings page under Administration (RB-47): the refresh rate, kept on the
+// server and applied to every open console at the same moment; and the theme,
+// personal and kept in the browser, which is chosen from the account menu.
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
 import type { Settings } from '../src/api/types'
@@ -18,7 +19,8 @@ async function open(page: Page) {
 }
 
 async function openSettings(page: Page) {
-  await page.getByRole('button', { name: 'Settings' }).click()
+  await page.getByTestId('admin-link').click()
+  await page.locator('[data-admin-page=settings]').click()
   const settings = page.getByTestId('settings-page')
   await expect(settings).toBeVisible()
   return settings
@@ -37,20 +39,19 @@ test.afterEach(async ({ request }) => {
   await request.put('/api/v1/settings', { data: { refreshSeconds: 3 } })
 })
 
-test('switches theme in Settings and remembers it in this browser', async ({ page, context }) => {
+test('switches theme from the account menu and remembers it in this browser', async ({ page, context }) => {
   await open(page)
   const root = page.locator('.rk')
   const before = (await root.getAttribute('data-theme')) ?? 'light'
   const after = before === 'dark' ? 'light' : 'dark'
-  const dialog = await openSettings(page)
-  await dialog.getByRole('group', { name: 'Theme' }).getByRole('button', { name: after === 'dark' ? 'Dark' : 'Light' }).click()
+  // With sign-in off there is no account menu; a button beside "Sign-in off" switches it.
+  const toggle = page.getByTestId('theme-toggle')
+  if (await toggle.count()) await toggle.click()
+  else {
+    await page.getByTestId('account').click()
+    await page.getByTestId(`theme-${after}`).click()
+  }
   await expect(root).toHaveAttribute('data-theme', after)
-  // A page of its own: Escape goes back to where it was opened from.
-  expect(new URL(page.url()).hash).toBe('#/settings')
-  await page.keyboard.press('Escape')
-  await expect(page.getByTestId('settings-page')).toBeHidden()
-  expect(new URL(page.url()).hash).toMatch(/^(#\/?)?$/)
-  await expect(page.getByRole('button', { name: 'Settings' })).toBeFocused()
   // The choice is this browser's: another tab of it opens with the theme.
   // (A new tab rather than a reload: Firefox in CI has been seen never
   // finishing a reload of a page that just switched its color scheme.)
@@ -58,6 +59,20 @@ test('switches theme in Settings and remembers it in this browser', async ({ pag
   await other.goto('/', { waitUntil: 'domcontentloaded' })
   await expect(other.locator('.rk')).toHaveAttribute('data-theme', after)
   await other.close()
+})
+
+test('Settings is a page under Administration: Escape goes back, and an old link lands on it', async ({ page }) => {
+  await open(page)
+  const dialog = await openSettings(page)
+  await expect(dialog).toBeVisible()
+  expect(new URL(page.url()).hash).toBe('#/admin/settings')
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('settings-page')).toBeHidden()
+  expect(new URL(page.url()).hash).toMatch(/^(#\/?)?$/)
+  await expect(page.getByTestId('admin-link')).toBeFocused()
+  await page.goto('/#/settings/watson', { waitUntil: 'domcontentloaded' })
+  await expect(page.getByTestId('settings-page')).toBeVisible()
+  await expect(page.locator('[data-testid=settings-section][data-section=watson]')).toHaveAttribute('aria-current', 'page')
 })
 
 test('the refresh rate is kept on the server and reaches every open console', async ({ browser, page, request }) => {

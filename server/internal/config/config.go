@@ -70,8 +70,22 @@ type Config struct {
 	// and IP addresses, such as its Service's DNS names.
 	AllowedHosts []string
 
-	// AuthMode is how people sign in (P3-01): none, oidc or local.
+	// AuthMode is how people sign in (P3-01): none, oidc, local or ldap.
 	AuthMode string
+	// AuthConfigFile is the JSON file the chart renders for the roles: which
+	// groups hold which role, the local groups, the LDAP server, which
+	// definition of Admin and SuperAdmin is installed, rbac.enforce
+	// (Phase 6.1). Empty for the defaults.
+	AuthConfigFile string
+	// UsersSecret is namespace/name of the Secret that keeps the users
+	// created in the console; empty keeps them in memory (RB-46).
+	UsersSecret string
+	// SetupToken must be typed on the first-run page when set (RB-27). It is
+	// read from the environment only, never from an argument.
+	SetupToken string
+	// LDAPBindPassword is the search account's password, from the
+	// environment only (RB-19).
+	LDAPBindPassword string
 	// OIDC settings, for AuthMode oidc.
 	OIDCIssuer        string
 	OIDCClientID      string
@@ -125,7 +139,11 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.LogLevel, "log-level", env("LOG_LEVEL", "info"), "debug, info, warn or error")
 	fs.StringVar(&c.LogFormat, "log-format", env("LOG_FORMAT", "json"), "json or text")
 	hosts := fs.String("allowed-hosts", env("ALLOWED_HOSTS", ""), "comma-separated host names to answer to, besides localhost and IP addresses")
-	fs.StringVar(&c.AuthMode, "auth-mode", env("AUTH_MODE", "none"), "how people sign in: oidc, local (accounts from -local-users) or none (no sign-in; everyone is an admin)")
+	fs.StringVar(&c.AuthMode, "auth-mode", env("AUTH_MODE", "none"), "how people sign in: oidc, ldap, local (accounts kept by the console) or none (no sign-in; everyone is an admin)")
+	fs.StringVar(&c.AuthConfigFile, "auth-config", env("AUTH_CONFIG_FILE", ""), "a JSON file with the roles' groups, the local groups and the LDAP server (the chart renders it)")
+	fs.StringVar(&c.UsersSecret, "users-secret", env("USERS_SECRET", ""), "namespace/name of the Secret to keep users created in the console in (empty: with -connections-secrets, <prefix>-users there; else in memory, lost on restart)")
+	c.SetupToken = os.Getenv("SETUP_TOKEN")
+	c.LDAPBindPassword = os.Getenv("LDAP_BIND_PASSWORD")
 	fs.StringVar(&c.OIDCIssuer, "oidc-issuer", env("OIDC_ISSUER", ""), "the OIDC provider's issuer URL")
 	fs.StringVar(&c.OIDCClientID, "oidc-client-id", env("OIDC_CLIENT_ID", ""), "the OIDC client ID")
 	fs.StringVar(&c.OIDCClientSecret, "oidc-client-secret", env("OIDC_CLIENT_SECRET", ""), "the OIDC client secret (better set through the environment)")
@@ -134,7 +152,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.OIDCUsernameClaim, "oidc-username-claim", env("OIDC_USERNAME_CLAIM", "email"), "the claim that names a person to Kubernetes and the audit log")
 	fs.StringVar(&c.OIDCGroupsClaim, "oidc-groups-claim", env("OIDC_GROUPS_CLAIM", "groups"), "the claim that lists a person's groups")
 	fs.StringVar(&c.OIDCProviderName, "oidc-provider-name", env("OIDC_PROVIDER_NAME", ""), "what the sign-in button calls the provider")
-	fs.StringVar(&c.LocalUsersFile, "local-users", env("LOCAL_USERS_FILE", ""), "a JSON or YAML file of local accounts (email, name, groups, passwordHash), for -auth-mode local")
+	fs.StringVar(&c.LocalUsersFile, "local-users", env("LOCAL_USERS_FILE", ""), "a JSON or YAML file of local accounts defined in values (username or email, name, groups, roles, passwordHash)")
 	admins := fs.String("admins", env("ADMINS", ""), "comma-separated usernames that manage clusters and settings")
 	adminGroups := fs.String("admin-groups", env("ADMIN_GROUPS", ""), "comma-separated groups that manage clusters and settings")
 	fs.DurationVar(&c.SessionIdle, "session-idle", envDuration("SESSION_IDLE", 8*time.Hour), "sign a session out after this long without a request")
@@ -189,15 +207,16 @@ func (c Config) validate() error {
 	}
 	switch c.AuthMode {
 	case "none", "local":
+	case "ldap":
+		if c.AuthConfigFile == "" {
+			errs = append(errs, errors.New("LDAP sign-in needs -auth-config, the file with the server and the groups"))
+		}
 	case "oidc":
 		if c.OIDCIssuer == "" || c.OIDCClientID == "" {
 			errs = append(errs, errors.New("OIDC sign-in needs -oidc-issuer and -oidc-client-id"))
 		}
 	default:
-		errs = append(errs, fmt.Errorf("unknown auth mode %q: use oidc, local or none", c.AuthMode))
-	}
-	if c.AuthMode == "local" && c.LocalUsersFile == "" {
-		errs = append(errs, errors.New("local sign-in needs -local-users, a file of accounts"))
+		errs = append(errs, fmt.Errorf("unknown auth mode %q: use oidc, ldap, local or none", c.AuthMode))
 	}
 	if c.SessionIdle < time.Minute || c.SessionMax < time.Minute {
 		errs = append(errs, errors.New("session lifetimes must be at least 1m"))

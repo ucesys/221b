@@ -25,11 +25,11 @@
     <form method="post" action="/signin" class="si-form" data-testid="signin-form">
       <input type="hidden" name="next" value="{{.Next}}" data-next>
       <input type="hidden" name="form" value="{{.Form}}">
-      <label class="si-field"><span>Email</span><input name="email" type="email" autocomplete="username" required autofocus value="{{.Email}}"></label>
+      <label class="si-field"><span>Username</span><input name="email" type="text" autocomplete="username" required autofocus value="{{.Email}}" autocapitalize="none" spellcheck="false"></label>
       <label class="si-field"><span>Password</span><input name="password" type="password" autocomplete="current-password" required></label>
       <button type="submit" class="si-btn" data-testid="signin-submit">Sign in</button>
     </form>
-    <p class="si-note">Accounts are kept by the console itself; an administrator adds them in the chart's values.</p>
+    
     {{end}}
     {{if .Off}}
     <p class="si-note">Sign-in is off on this console.</p>

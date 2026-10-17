@@ -18,9 +18,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/roles"
 	"golang.org/x/oauth2"
 )
 
@@ -35,6 +37,8 @@ const (
 	ModeOIDC Mode = "oidc"
 	// ModeLocal signs people in with the console's own accounts.
 	ModeLocal Mode = "local"
+	// ModeLDAP signs people in with a directory (RB-19 to RB-25).
+	ModeLDAP Mode = "ldap"
 )
 
 // Config is everything sign-in needs.
@@ -52,6 +56,25 @@ type Config struct {
 	SessionMax  time.Duration
 	// Title is the console's name on the sign-in page.
 	Title string
+
+	// Lists name the groups of each role, for LDAP and OIDC (RB-20).
+	Lists RoleLists
+	// LocalGroups are the groups of local users, defined in values (RB-50).
+	LocalGroups []LocalGroup
+	// Prefixes go before the names Kubernetes sees (RB-15).
+	Prefixes roles.Prefixes
+	// SetupToken, when set, must be typed on the first-run page (RB-27).
+	SetupToken string
+	// Accounts keeps the users created in the console; nil keeps them in
+	// memory.
+	Accounts Backend
+	// Directory is the LDAP server, for ModeLDAP.
+	Directory Directory
+	// SyncInterval is how often the directory's groups are read again.
+	SyncInterval time.Duration
+	// AccessTTL is how long a person's groups stand before the directory is
+	// asked again (RB-23).
+	AccessTTL time.Duration
 }
 
 // Cookie names.
@@ -69,7 +92,13 @@ type Service struct {
 	cfg      Config
 	sessions *Sessions
 	provider *Provider
-	local    map[string]LocalUser
+	accounts *Accounts
+	dir      Directory
+	people   *people
+	// reread serializes reading a person's groups again.
+	reread sync.Mutex
+	// setup slows guessing at the first-run page.
+	setup *limiter
 	// perAccount slows guessing at one account; perAddress slows spraying
 	// many accounts from one address, which is also many people behind one
 	// NAT, so it is the looser of the two.
@@ -79,9 +108,10 @@ type Service struct {
 	log        *slog.Logger
 	now        func() time.Time
 	page       *template.Template
+	setupPage  *template.Template
 }
 
-//go:embed signin.html signin.css signin.js
+//go:embed signin.html setup.html signin.css signin.js
 var pageFS embed.FS
 
 // New builds the service. OIDC discovery is lazy, so a provider that is
@@ -102,7 +132,19 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 	if cfg.Title == "" {
 		cfg.Title = "221B"
 	}
-	s := &Service{cfg: cfg, sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now)}
+	if cfg.Prefixes.Local == "" {
+		cfg.Prefixes.Local = roles.DefaultPrefixes().Local
+	}
+	if cfg.Prefixes.LDAP == "" {
+		cfg.Prefixes.LDAP = roles.DefaultPrefixes().LDAP
+	}
+	if cfg.AccessTTL <= 0 {
+		cfg.AccessTTL = 2 * time.Minute
+	}
+	if cfg.SyncInterval <= 0 {
+		cfg.SyncInterval = time.Hour
+	}
+	s := &Service{cfg: cfg, setup: newLimiter(5, time.Minute, now), sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now)}
 	switch cfg.Mode {
 	case ModeNone:
 	case ModeOIDC:
@@ -113,18 +155,45 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 			return nil, fmt.Errorf("the OIDC issuer %q is not a URL", cfg.OIDC.Issuer)
 		}
 		s.provider = NewProvider(cfg.OIDC, nil, now)
-	case ModeLocal:
+	case ModeLocal, ModeLDAP:
 		if err := ValidateLocalUsers(cfg.Local); err != nil {
 			return nil, err
 		}
-		s.local = map[string]LocalUser{}
-		for _, u := range cfg.Local {
-			s.local[strings.ToLower(strings.TrimSpace(u.Email))] = u
+		if cfg.Mode == ModeLDAP {
+			if cfg.Directory == nil {
+				return nil, errors.New("LDAP sign-in needs a directory; set auth.ldap")
+			}
+			if cfg.Lists.Empty() {
+				return nil, errors.New("LDAP sign-in needs at least one group under auth.ldap.roles: only members of a listed group may sign in")
+			}
+			s.dir = cfg.Directory
+			s.people = newPeople(cfg.Directory.URL(), now)
 		}
+		for _, g := range cfg.LocalGroups {
+			if !roles.ValidGroupName(g.Name) || (g.Role != roles.Viewer && g.Role != roles.Admin) {
+				return nil, fmt.Errorf("local group %q: a name of lowercase letters, digits, dot, dash and underscore, and the role viewer or admin", g.Name)
+			}
+		}
+		var managed []Account
+		for _, u := range cfg.Local {
+			managed = append(managed, u.Account())
+		}
+		backend := cfg.Accounts
+		if backend == nil {
+			backend = &MemoryBackend{}
+		}
+		external := len(cfg.Admins) > 0 || len(cfg.AdminGroups) > 0 || len(cfg.Lists[roles.SuperAdmin]) > 0
+		s.accounts = NewAccounts(backend, managed, cfg.LocalGroups, external, now)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if err := s.accounts.Load(ctx); err != nil {
+			s.log.Error("reading the saved accounts failed; the first-run page stays closed and accounts cannot change until they can be read", "err", err)
+		}
+		cancel()
 	default:
 		return nil, fmt.Errorf("unknown sign-in mode %q: use none, oidc or local", cfg.Mode)
 	}
 	s.page = template.Must(template.ParseFS(pageFS, "signin.html"))
+	s.setupPage = template.Must(template.ParseFS(pageFS, "setup.html"))
 	return s, nil
 }
 
@@ -134,8 +203,18 @@ func (s *Service) Mode() Mode { return s.cfg.Mode }
 // Sessions exposes the session store, for metrics and tests.
 func (s *Service) Sessions() *Sessions { return s.sessions }
 
-// Sweep drops expired sessions; call it now and then.
-func (s *Service) Sweep() { s.sessions.Sweep() }
+// Sweep drops expired sessions and tries again to read the saved accounts if
+// they could not be read at start; call it now and then.
+func (s *Service) Sweep() {
+	s.sessions.Sweep()
+	if s.accounts != nil && !s.accounts.Loaded() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := s.accounts.Load(ctx); err != nil {
+			s.log.Warn("the saved accounts still cannot be read", "err", err)
+		}
+	}
+}
 
 // isAdmin says whether a person manages the console.
 func (s *Service) isAdmin(u User) bool {
@@ -167,7 +246,7 @@ func WithSession(ctx context.Context, sess Session) context.Context {
 }
 
 // anonymous is the session every request gets when sign-in is off.
-var anonymous = Session{ID: "", User: User{Subject: "anonymous", Username: "anonymous", Name: "Anonymous"}, Admin: true, Method: "none"}
+var anonymous = Session{ID: "", User: User{Subject: "anonymous", Username: "anonymous", Name: "Anonymous"}, Admin: true, Roles: []roles.ID{roles.SuperAdmin}, Super: []roles.ID{roles.SuperAdmin}, Method: "none"}
 
 // Open paths need no session: the health probes and metrics, the sign-in
 // pages with their assets, and the browser app's static files, which are
@@ -176,7 +255,7 @@ func openPath(p string) bool {
 	switch {
 	case p == "/healthz", p == "/readyz", p == "/metrics":
 		return true
-	case p == "/signin", strings.HasPrefix(p, "/signin/"), p == "/signin.css", p == "/signin.js", p == "/signout":
+	case p == "/signin", strings.HasPrefix(p, "/signin/"), p == "/signin.css", p == "/signin.js", p == "/signout", p == "/setup":
 		return true
 	case strings.HasPrefix(p, "/assets/"), p == "/favicon.svg", p == "/favicon.ico", p == "/manifest.webmanifest":
 		return true
@@ -204,6 +283,10 @@ func (s *Service) Gate(w http.ResponseWriter, r *http.Request) *http.Request {
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "sign in to use the console", "signin": "/signin"})
 		return nil
 	}
+	if s.firstRun() {
+		s.renderSetup(w, r, "", http.StatusOK)
+		return nil
+	}
 	s.renderSignIn(w, r, "", http.StatusOK)
 	return nil
 }
@@ -213,7 +296,11 @@ func (s *Service) sessionOf(r *http.Request) (Session, bool) {
 	if err != nil || c.Value == "" {
 		return Session{}, false
 	}
-	return s.sessions.Get(c.Value)
+	sess, ok := s.sessions.Get(c.Value)
+	if !ok {
+		return Session{}, false
+	}
+	return s.live(sess)
 }
 
 // secure says whether the request came over TLS, directly or through a
@@ -250,7 +337,7 @@ type Route struct {
 
 // Routes lists the sign-in endpoints for the API mux.
 func (s *Service) Routes() []Route {
-	return []Route{
+	routes := []Route{
 		{"GET /signin", "signin", s.getSignIn},
 		{"POST /signin", "signin-local", s.postSignIn},
 		{"GET /signin/start", "signin-start", s.startOIDC},
@@ -260,7 +347,10 @@ func (s *Service) Routes() []Route {
 		{"GET /signin.css", "signin-asset", s.asset("signin.css", "text/css; charset=utf-8")},
 		{"GET /signin.js", "signin-asset", s.asset("signin.js", "text/javascript; charset=utf-8")},
 		{"GET /api/v1/me", "me", s.me},
+		{"GET /setup", "setup", s.getSetup},
+		{"POST /setup", "setup-create", s.postSetup},
 	}
+	return append(routes, s.adminRoutes()...)
 }
 
 func (s *Service) asset(name, ctype string) http.HandlerFunc {
@@ -290,7 +380,7 @@ type pageData struct {
 }
 
 func (s *Service) renderSignIn(w http.ResponseWriter, r *http.Request, msg string, code int) {
-	d := pageData{Title: s.cfg.Title, Mode: s.cfg.Mode, Error: msg, Next: safeNext(r.URL.Query().Get("next")), Local: s.cfg.Mode == ModeLocal, OIDC: s.cfg.Mode == ModeOIDC, Off: s.cfg.Mode == ModeNone}
+	d := pageData{Title: s.cfg.Title, Mode: s.cfg.Mode, Error: msg, Next: safeNext(r.URL.Query().Get("next")), Local: s.cfg.Mode == ModeLocal || s.cfg.Mode == ModeLDAP, OIDC: s.cfg.Mode == ModeOIDC, Off: s.cfg.Mode == ModeNone}
 	if s.provider != nil {
 		d.Provider = s.provider.Name()
 	}
@@ -323,6 +413,10 @@ func (s *Service) getSignIn(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, safeNext(r.URL.Query().Get("next")), http.StatusFound)
 		return
 	}
+	if s.firstRun() {
+		http.Redirect(w, r, "/setup", http.StatusFound)
+		return
+	}
 	s.renderSignIn(w, r, "", http.StatusOK)
 }
 
@@ -341,9 +435,14 @@ func (s *Service) record(r *http.Request, action string, who User, outcome, deta
 	s.audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: who.Subject, Email: who.Email, Name: who.Name}, Outcome: outcome, Detail: detail, From: from(r)})
 }
 
-// postSignIn signs a local account in.
+// refusedText is what a person is told when they cannot sign in, whatever
+// the reason: a wrong password, a disabled account, a directory person in no
+// listed group (RB-21). The audit record has the reason.
+const refusedText = "You cannot sign in. Check your username and password. If they are right, you may not have access to this console; ask an administrator."
+
+// postSignIn signs a local account or a directory person in.
 func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Mode != ModeLocal {
+	if s.cfg.Mode != ModeLocal && s.cfg.Mode != ModeLDAP {
 		http.Error(w, "local sign-in is off", http.StatusNotFound)
 		return
 	}
@@ -359,32 +458,78 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 		s.renderSignIn(w, r, "That sign-in did not come from this console. Try again from this page.", http.StatusForbidden)
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(r.PostFormValue("email")))
+	login := Login(r.PostFormValue("email"))
 	password := r.PostFormValue("password")
-	if !s.perAddress.allow(from(r)) || !s.perAccount.allow(email) {
-		s.record(r, audit.ActionSignInFailed, User{Username: email, Email: email}, audit.OutcomeDenied, "too many attempts")
+	if !s.perAddress.allow(from(r)) || !s.perAccount.allow(login) {
+		s.record(r, audit.ActionSignInFailed, User{Username: login, Email: login}, audit.OutcomeDenied, "too many attempts")
 		s.renderSignIn(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)
 		return
 	}
-	u, ok := s.local[email]
-	// The check runs on a dummy hash when the account is unknown, so the
-	// answer takes as long either way.
-	hash := u.PasswordHash
-	if !ok {
-		hash = dummyHash
+	refuse := func(reason string) {
+		s.record(r, audit.ActionSignInFailed, User{Username: login, Email: login}, audit.OutcomeFailed, reason)
+		s.renderSignIn(w, r, refusedText, http.StatusUnauthorized)
 	}
-	if !CheckPassword(hash, password) || !ok {
-		s.record(r, audit.ActionSignInFailed, User{Username: email, Email: email}, audit.OutcomeFailed, "wrong email or password")
-		s.renderSignIn(w, r, "That email and password do not match an account.", http.StatusUnauthorized)
+	acct, local := s.accounts.Find(login)
+	if !local && s.dir != nil {
+		s.signInDirectory(w, r, login, password, refuse)
 		return
 	}
-	user := User{Subject: "local:" + email, Username: email, Email: email, Name: u.Name, Groups: append([]string(nil), u.Groups...)}
-	sess := s.sessions.Create(user, s.isAdmin(user), string(ModeLocal))
-	s.setSession(w, r, sess)
+	// The check runs on a dummy hash when the account is unknown, so the
+	// answer takes as long either way.
+	hash := acct.PasswordHash
+	if !local {
+		hash = dummyHash
+	}
+	if !CheckPassword(hash, password) || !local {
+		refuse("wrong user name or password")
+		return
+	}
+	if acct.Disabled {
+		refuse("the account is disabled")
+		return
+	}
+	user := User{Subject: "local:" + acct.Username, Username: acct.Username, Email: acct.Email, Name: acct.Name, Groups: append([]string(nil), acct.Groups...)}
+	s.start(w, r, Session{User: user, Method: string(ModeLocal)}, roles.Local, acct.Super, "local account")
+	s.accounts.SignedIn(acct.Username, s.now())
+}
+
+// start gives a person their session: roles worked out, cookie set, audit
+// record written, and on to the page they asked for.
+func (s *Service) start(w http.ResponseWriter, r *http.Request, sess Session, src roles.Source, supers []roles.ID, how string) {
+	g := s.grant(src, sess.User, supers)
+	g.apply(&sess)
+	started := s.sessions.Start(sess)
+	s.setSession(w, r, started)
 	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: "", Path: "/signin", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: -1})
-	s.record(r, audit.ActionSignIn, user, audit.OutcomeOK, "local account")
-	s.log.Info("signed in", "user", user.Username, "method", "local", "admin", sess.Admin)
+	if len(g.Dropped) > 0 {
+		s.record(r, audit.ActionNameRefused, sess.User, audit.OutcomeDenied, "reserved group names dropped: "+strings.Join(g.Dropped, ", "))
+	}
+	s.record(r, audit.ActionSignIn, sess.User, audit.OutcomeOK, how)
+	s.log.Info("signed in", "user", sess.User.Username, "method", sess.Method, "admin", started.Admin, "roles", len(started.Roles))
 	http.Redirect(w, r, safeNext(r.PostFormValue("next")), http.StatusSeeOther)
+}
+
+// signInDirectory signs a person in with the directory (RB-21, RB-22).
+func (s *Service) signInDirectory(w http.ResponseWriter, r *http.Request, login, password string, refuse func(string)) {
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	p, err := s.dir.Authenticate(ctx, login, password)
+	switch {
+	case errors.Is(err, ErrDirectoryDown):
+		s.record(r, audit.ActionSignInFailed, User{Username: login}, audit.OutcomeFailed, "the directory cannot be reached: "+cleanErr(err))
+		s.renderSignIn(w, r, "The directory cannot be reached, so nobody can sign in just now. People already signed in can keep working. Try again in a minute.", http.StatusServiceUnavailable)
+		return
+	case err != nil:
+		refuse("the directory refused the user name or password")
+		return
+	}
+	user := User{Subject: "ldap:" + p.Username, Username: p.Username, Email: p.Email, Name: p.Name, Groups: p.Groups}
+	if g := s.grant(roles.LDAP, user, nil); len(g.Roles) == 0 {
+		refuse("signed in to the directory, but in none of the groups listed for a role")
+		return
+	}
+	s.people.seen(p)
+	s.start(w, r, Session{User: user, Method: string(ModeLDAP), Ref: p.Ref}, roles.LDAP, nil, "directory, "+s.dir.URL())
 }
 
 // dummyHash is checked against when the account does not exist.
@@ -489,10 +634,16 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := User{Subject: id.Subject, Username: id.Username, Email: id.Email, Name: id.Name, Groups: id.Groups}
-	sess := s.sessions.Create(user, s.isAdmin(user), string(ModeOIDC))
-	s.setSession(w, r, sess)
+	g := s.grant(roles.OIDC, user, nil)
+	sess := Session{User: user, Method: string(ModeOIDC)}
+	g.apply(&sess)
+	started := s.sessions.Start(sess)
+	s.setSession(w, r, started)
+	if len(g.Dropped) > 0 {
+		s.record(r, audit.ActionNameRefused, user, audit.OutcomeDenied, "reserved group names dropped: "+strings.Join(g.Dropped, ", "))
+	}
 	s.record(r, audit.ActionSignIn, user, audit.OutcomeOK, "OIDC, "+s.provider.Name())
-	s.log.Info("signed in", "user", user.Username, "method", "oidc", "admin", sess.Admin, "groups", len(user.Groups))
+	s.log.Info("signed in", "user", user.Username, "method", "oidc", "admin", started.Admin, "groups", len(user.Groups))
 	http.Redirect(w, r, safeNext(st.Next), http.StatusSeeOther)
 }
 
@@ -517,11 +668,14 @@ func (s *Service) signOut(w http.ResponseWriter, r *http.Request) {
 
 // Me is what /api/v1/me tells the browser.
 type Me struct {
-	Mode     Mode   `json:"mode"`
-	User     User   `json:"user"`
-	Admin    bool   `json:"admin"`
-	Method   string `json:"method"`
-	Provider string `json:"provider,omitempty"`
+	Mode  Mode `json:"mode"`
+	User  User `json:"user"`
+	Admin bool `json:"admin"`
+	// Roles are the roles the person holds, from the most to the least
+	// privileged (RB-41).
+	Roles    []roles.ID `json:"roles,omitempty"`
+	Method   string     `json:"method"`
+	Provider string     `json:"provider,omitempty"`
 	// SessionIdle is how long the session lives without a request, in
 	// seconds.
 	SessionIdle int `json:"sessionIdleSeconds"`
@@ -535,7 +689,7 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"error":"sign in to use the console","signin":"/signin"}` + "\n"))
 		return
 	}
-	me := Me{Mode: s.cfg.Mode, User: sess.User, Admin: sess.Admin, Method: sess.Method, SessionIdle: int(s.cfg.SessionIdle / time.Second)}
+	me := Me{Mode: s.cfg.Mode, User: sess.User, Admin: sess.Admin, Roles: sess.Roles, Method: sess.Method, SessionIdle: int(s.cfg.SessionIdle / time.Second)}
 	if s.provider != nil {
 		me.Provider = s.provider.Name()
 	}

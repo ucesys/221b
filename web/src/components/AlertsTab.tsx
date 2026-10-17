@@ -107,7 +107,8 @@ function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: n
       setBusy(false)
     }
   }
-  // An acknowledged alert is yellow, whatever it was.
+  // An acknowledged alert is yellow (asked at the Phase 4 review); its
+  // object's state keeps its own colour, so Ready and Unknown still differ.
   const sev = r.ack ? { ...sevLabel(r), tone: 'warn' } : sevLabel(r)
   const ctx = contextOf(r, now)
   const events = sortEvents(r.events, sort, now)
@@ -143,7 +144,7 @@ function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: n
         )}
         <span style={{ flex: '1 1 auto' }} />
         {r.status && (
-          <span className="rk-pill" data-tone={r.ack ? 'warn' : r.statusTone}>
+          <span className="rk-pill" data-tone={r.statusTone}>
             <span className="rk-dot" />
             {r.status}
           </span>
@@ -232,13 +233,15 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
   const p = route.params
   const kind: AlertKind = KINDS.some(([k]) => k === p.get('kind')) ? (p.get('kind') as AlertKind) : 'all'
   const query = p.get('q') ?? ''
-  // Active alerts only, unless asked for the recovered ones too.
+  // Resolved alerts (pods that recovered) are hidden unless asked for;
+  // acknowledged ones show unless hidden.
   const activeOnly = p.get('show') !== 'all'
+  const hideAcked = p.get('acked') === 'hide'
   const set = (changes: Record<string, string | undefined>) => navigate(withParams(route, changes), true)
 
   const tiles = useMemo(() => tilesOf(rows), [rows])
   const q = query.trim().toLowerCase()
-  const shown = useMemo(() => rows.filter((r) => (!activeOnly || isActive(r)) && (!q || searchText(r).includes(q))), [rows, q, activeOnly])
+  const shown = useMemo(() => rows.filter((r) => (!activeOnly || isActive(r)) && (!hideAcked || !r.ack) && (!q || searchText(r).includes(q))), [rows, q, activeOnly, hideAcked])
   const sec = useMemo(() => sectionsOf(shown), [shown])
   const counts: Record<AlertKind, number> = {
     all: shown.length,
@@ -252,12 +255,13 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
     { id: 'workers', title: 'Worker nodes', what: 'worker', rows: sec.workers, show: kind === 'all' || kind === 'nodes' },
     { id: 'volumes', title: 'Persistent volumes and claims', what: 'volume', rows: sec.volumes, show: kind === 'all' || kind === 'volumes' },
   ]
-  const recovered = { id: 'recovered', title: 'Recovered pods', what: 'recovered pod', rows: sec.pods.filter((r) => !isActive(r)), show: kind === 'all' || kind === 'pods' }
+  const recovered = { id: 'recovered', title: 'Resolved', what: 'resolved', rows: sec.pods.filter((r) => !isActive(r)), show: kind === 'all' || kind === 'pods' }
   // What is going on first, then the pods that recovered, then the groups
   // with nothing to show.
   const ordered = [...sections.filter((s) => s.rows.length), ...(recovered.rows.length ? [recovered] : []), ...sections.filter((s) => !s.rows.length)]
   const visible = ordered.filter((s) => s.show).flatMap((s) => s.rows)
   const hiddenRecovered = activeOnly ? rows.filter((r) => !isActive(r) && (!q || searchText(r).includes(q))).length : 0
+  const hiddenAcked = hideAcked ? rows.filter((r) => r.ack && (!activeOnly || isActive(r)) && (!q || searchText(r).includes(q))).length : 0
 
   // The object's details over this tab.
   const openRow = (r: AlertRow) => {
@@ -301,9 +305,23 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
           ))}
         </div>
         <label className="rk-check" title="Leave out the pods that recovered after warnings" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
-          <input type="checkbox" checked={activeOnly} onChange={(e) => set({ show: e.target.checked ? undefined : 'all' })} data-testid="alert-active" />
-          Active alerts only
-          {hiddenRecovered > 0 && <span className="rk-cnt" title={`${hiddenRecovered} recovered not shown`}>+{hiddenRecovered} recovered</span>}
+          <input
+            type="checkbox"
+            checked={activeOnly}
+            onChange={(e) => {
+              set({ show: e.target.checked ? undefined : 'all' })
+              // Shown, they come after the active ones: bring them into view, so the change is seen.
+              if (!e.target.checked) requestAnimationFrame(() => document.querySelector('[data-testid="alert-section-recovered"]')?.scrollIntoView({ block: 'start', behavior: 'smooth' }))
+            }}
+            data-testid="alert-active"
+          />
+          Hide resolved
+          {hiddenRecovered > 0 && <span className="rk-cnt" title={`${hiddenRecovered} resolved alerts not shown`}>{hiddenRecovered} hidden</span>}
+        </label>
+        <label className="rk-check" title="Leave out the alerts someone acknowledged" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+          <input type="checkbox" checked={hideAcked} onChange={(e) => set({ acked: e.target.checked ? 'hide' : undefined })} data-testid="alert-hide-acked" />
+          Hide acknowledged
+          {hiddenAcked > 0 && <span className="rk-cnt" title={`${hiddenAcked} acknowledged alerts not shown`}>{hiddenAcked} hidden</span>}
         </label>
         <label className="rk-field" style={{ width: 260 }}>
           <SearchIcon />
@@ -327,7 +345,7 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
               ))}
               {s.rows.length === 0 && (
                 <p style={{ margin: 0, padding: '18px 16px', fontSize: 12.5, color: 'var(--fg3)', border: '1px dashed var(--line2)', borderRadius: 10 }} data-testid="alert-empty">
-                  {q ? `No ${s.what} alerts match this search.` : activeOnly && rows.some((r) => !isActive(r) && sectionOf(r) === s.id) ? `No active ${s.what} alerts; the recovered ones are hidden.` : `No ${s.what} problems right now.`}
+                  {q ? `No ${s.what} alerts match this search.` : activeOnly && rows.some((r) => !isActive(r) && sectionOf(r) === s.id) ? `No active ${s.what} alerts; the resolved ones are hidden.` : `No ${s.what} problems right now.`}
                 </p>
               )}
             </div>

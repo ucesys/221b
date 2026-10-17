@@ -19,6 +19,10 @@ const CLAUDE = process.env.E2E_CLAUDE_URL ?? SIM + '/claude'
 // The person with limited access (P3-02): the simulator's dev account, or
 // the local account the chart in kind is installed with.
 const DEV = process.env.E2E_DEV ?? 'dev@corp.example'
+// The name the clusters know that account by: with local sign-in it carries
+// the prefix of its source (221b-local:); the simulator's OIDC accounts keep
+// theirs.
+const DEV_KUBE = process.env.E2E_DEV_KUBE ?? DEV
 const DEV_NAMESPACES = ['web', 'analytics']
 
 /** A RoleBinding of the view role for the dev account in a namespace. */
@@ -28,7 +32,7 @@ function devBinding(namespace: string): unknown {
     kind: 'RoleBinding',
     metadata: { name: 'e2e-dev-view', namespace, labels: { e2e: 'dev' } },
     roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'view' },
-    subjects: [{ apiGroup: 'rbac.authorization.k8s.io', kind: 'User', name: DEV }],
+    subjects: [{ apiGroup: 'rbac.authorization.k8s.io', kind: 'User', name: DEV_KUBE }],
   }
 }
 
@@ -412,7 +416,7 @@ export const cluster = {
       await kubectlApply(devBinding(NAMESPACE))
       return [NAMESPACE]
     }
-    await simPostJSON('/sim/deny', { only: { [DEV]: DEV_NAMESPACES } })
+    await simPostJSON('/sim/deny', { only: { [DEV_KUBE]: DEV_NAMESPACES } })
     return DEV_NAMESPACES
   },
 
@@ -422,7 +426,7 @@ export const cluster = {
       await kubectlApply(devBinding(namespace))
       return
     }
-    await simPostJSON('/sim/deny', { only: { [DEV]: [...DEV_NAMESPACES, namespace] } })
+    await simPostJSON('/sim/deny', { only: { [DEV_KUBE]: [...DEV_NAMESPACES, namespace] } })
   },
 
   /** Whether the Secret a connection is kept in exists (P3-07, P3-08). */

@@ -68,6 +68,7 @@ func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.C
 		return c, false
 	}
 	c.Config = cfg
+	c.Locked = s.RoleRefusal(id)
 	return c, true
 }
 
@@ -411,6 +412,12 @@ func (s *Server) getWatsonCommand(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) postWatsonApprove(w http.ResponseWriter, r *http.Request) {
+	// A change is approved with the groups the directory gives now, not
+	// the ones from a few minutes ago (RB-37).
+	r, ok := s.rereadSession(w, r)
+	if !ok {
+		return
+	}
 	c, who, ok := s.watsonReady(w, r)
 	if !ok {
 		return
@@ -532,3 +539,24 @@ func (s *Server) putWatsonConfig(w http.ResponseWriter, r *http.Request) {
 
 // ActionWatsonSettings is the audit action of a change to Watson's settings.
 const ActionWatsonSettings = "watson.settings"
+
+// rereadSession reads the person's directory groups again before a change
+// is approved; a person no longer in a listed group is signed out.
+func (s *Server) rereadSession(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
+	again, ok := s.opts.Auth.(interface {
+		Reread(auth.Session) (auth.Session, bool)
+	})
+	if !ok {
+		return r, true
+	}
+	sess, has := auth.SessionFrom(r.Context())
+	if !has || sess.ID == "" {
+		return r, true
+	}
+	fresh, ok := again.Reread(sess)
+	if !ok {
+		jsonError(w, http.StatusUnauthorized, "Your session has ended: you are no longer in a group that may use the console. Sign in again.")
+		return r, false
+	}
+	return r.WithContext(auth.WithSession(r.Context(), fresh)), true
+}

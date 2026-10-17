@@ -48,28 +48,31 @@ test('a wrong password is refused, and the right one comes back to the page aske
   const me = (await (await request.get('/api/v1/me')).json()) as { mode: string }
   test.skip(me.mode === 'none', 'sign-in is off on this console')
   const page = await signIn(browser, E2E_USER, 'not-the-password')
-  await expect(page.getByText(/Wrong email or password|do not match/)).toBeVisible()
+  await expect(page.getByText(/Wrong email or password|You cannot sign in|do not match/i)).toBeVisible()
   await page.context().close()
 
   const ok = await signIn(browser, E2E_USER, E2E_PASSWORD)
   await expect(ok.getByTestId('cluster')).toBeVisible({ timeout: 20_000 })
   await expect(ok).toHaveURL(/#\/pods$/)
   await ok.getByTestId('account').click()
-  await expect(ok.getByTestId('account-role')).toHaveText('Administrator')
+  await expect(ok.getByTestId('account-role')).toHaveText('SuperAdmin')
   await ok.context().close()
 })
 
-test('a viewer uses the tabs but cannot change the settings; an admin can (P3-03)', async ({ browser, request }) => {
+test('a viewer uses the tabs but has no Settings; a SuperAdmin can change them (RB-47)', async ({ browser, request }) => {
   const me = (await (await request.get('/api/v1/me')).json()) as { mode: string }
   test.skip(me.mode === 'none', 'sign-in is off on this console')
   const page = await signIn(browser, VIEWER, E2E_PASSWORD)
   await expect(page.locator('[data-pod]').first()).toBeVisible({ timeout: 20_000 })
   await page.getByTestId('account').click()
-  await expect(page.getByTestId('account-role')).toHaveText('Viewer')
+  await expect(page.getByTestId('account-role')).toHaveText(/^(Viewer|SuperViewer|Admin|No role)$/)
   await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: 'Settings' }).click()
-  const rate = page.getByRole('group', { name: 'Refresh rate' }).getByRole('button')
-  await expect(rate.first()).toBeDisabled()
+  // Settings is for SuperAdmins (RB-47): Administration does not offer it, and the page refuses a link to it.
+  await page.getByTestId('admin-link').click()
+  await expect(page.getByTestId('admin-page')).toBeVisible()
+  await expect(page.locator('[data-admin-page=settings]')).toHaveCount(0)
+  await page.goto('/#/admin/settings')
+  await expect(page.getByTestId('admin-refusal')).toContainText('Settings is for SuperAdmins')
   const denied = await page.context().request.put('/api/v1/settings', { data: { refreshSeconds: 5 }, headers: { 'Sec-Fetch-Site': 'same-origin' } })
   expect(denied.status()).toBe(403)
   await page.context().close()

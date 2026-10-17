@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
+	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/views"
@@ -157,6 +159,9 @@ type Options struct {
 	// Impersonation maps the signed-in person to the user and groups the
 	// clusters know them as.
 	Impersonation Impersonation
+	// Roles configure the Roles and Permissions pages and the check of the
+	// deployed roles (RB-36, RB-41 to RB-44).
+	Roles RolesOptions
 }
 
 // Impersonation says how a person's name and groups are given to the API
@@ -172,6 +177,16 @@ type Impersonation struct {
 func (i Impersonation) personOf(u auth.User) kube.Person {
 	if u.Username == "" {
 		return kube.Person{}
+	}
+	// The sign-in works out the name and groups the clusters get, with the
+	// prefixes of where the person comes from, and only the groups the
+	// chart lists (RB-15, RB-37); nothing is added or prefixed again here.
+	if u.KubeName != "" {
+		p := kube.Person{User: u.KubeName, Groups: append([]string(nil), u.KubeGroups...)}
+		if !slices.Contains(p.Groups, "system:authenticated") {
+			p.Groups = append(p.Groups, "system:authenticated")
+		}
+		return p
 	}
 	p := kube.Person{User: i.UserPrefix + u.Username}
 	authenticated := false
@@ -243,6 +258,9 @@ func New(o Options) *Server {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	if o.Roles.Monitor == nil {
+		o.Roles.Monitor = &roles.Monitor{}
+	}
 	s := &Server{opts: o, mux: http.NewServeMux(), reqs: map[reqKey]uint64{}, allowedHosts: map[string]bool{}}
 	for _, h := range o.AllowedHosts {
 		if h = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), "."); h != "" {
@@ -305,6 +323,7 @@ func New(o Options) *Server {
 			s.handle("GET "+base+"assistants/events", "assistants-events", s.assistantsEvents)
 		}
 	}
+	s.rolesRoutes()
 	if o.Auth != nil {
 		for _, r := range o.Auth.Routes() {
 			s.handle(r.Pattern, r.Name, r.Handler)

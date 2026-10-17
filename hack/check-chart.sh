@@ -54,6 +54,14 @@ render k8s-console --set clusterName=ci --set auth.mode=local --set 'auth.local.
   --set 'auth.local.users[0].passwordHash=pbkdf2-sha256$600000$c2FsdA$aGFzaA' --set 'auth.admins[0]=ops@corp.example' | tee "$WORK/chart-local.yaml" | validate
 render k8s-console --set clusterName=ci --set auth.mode=local --set auth.local.existingSecret=my-accounts | tee "$WORK/chart-local-existing.yaml" | validate
 render k8s-console --set clusterName=ci --set auth.mode=none | tee "$WORK/chart-noauth.yaml" | validate
+echo "--- the four roles (Phase 6.1): local groups, LDAP, OIDC role lists, both definitions read-only"
+render k8s-console --set clusterName=ci -f "$ROOT/hack/chart-values/groups.yaml" | tee "$WORK/chart-groups.yaml" | validate
+render k8s-console --set clusterName=ci -f "$ROOT/hack/chart-values/ldap.yaml" | tee "$WORK/chart-ldap.yaml" | validate
+render k8s-console --set clusterName=ci --set rbac.roles.admin.template=readOnly --set rbac.roles.superAdmin.template=readOnly \
+  --set rbac.enforce=strict | tee "$WORK/chart-protected.yaml" | validate
+render k8s-console --set clusterName=ci --set auth.mode=oidc --set auth.oidc.issuer=https://login.example/realms/data \
+  --set auth.oidc.clientID=console --set auth.oidc.clientSecret=hunter22 --set auth.kubernetes.groupPrefix='oidc:' \
+  --set 'auth.oidc.roles.viewer[0].group=devs' --set 'auth.oidc.roles.viewer[0].namespaces[0]=web' | tee "$WORK/chart-oidc-roles.yaml" | validate
 echo "--- Watson's changes in the local cluster, with sign-in off and on (Phase 6)"
 render k8s-console --set clusterName=ci --set auth.mode=none --set localCluster.mode=write | tee "$WORK/chart-write.yaml" | validate
 render k8s-console --set clusterName=ci --set localCluster.mode=write | tee "$WORK/chart-write-signin.yaml" | validate
@@ -76,7 +84,7 @@ check() {
 }
 out=$WORK/chart-default.yaml
 kinds() {
-  [ "$(grep -E '^kind: ' "$out" | sort | tr '\n' ' ')" = "kind: ClusterRole kind: ClusterRoleBinding kind: ConfigMap kind: Deployment kind: NetworkPolicy kind: Role kind: RoleBinding kind: Secret kind: Service kind: ServiceAccount " ]
+  [ "$(grep -E '^kind: ' "$out" | sort | uniq -c | awk '{ printf "%s=%s ", $3, $1 }')" = "ClusterRole=6 ClusterRoleBinding=4 ConfigMap=2 Deployment=1 NetworkPolicy=1 Role=1 RoleBinding=1 Secret=1 Service=1 ServiceAccount=1 " ]
 }
 # Sign-in: local accounts by default, with the (empty) account list in a
 # Secret mounted as a file; OIDC with its client secret from a Secret;
@@ -150,7 +158,8 @@ read_only_verbs() {
 # With sign-in, it may impersonate people and review their access; with
 # sign-in off there is nobody to read as, and neither is granted.
 impersonation() {
-  cluster_role | grep -A1 '"users", "groups"' | grep -q 'verbs: \["impersonate"\]' &&
+  cluster_role | grep -A1 '"users"' | grep -q 'verbs: \["impersonate"\]' &&
+    cluster_role | grep -A1 '"groups"' | grep -q 'verbs: \["impersonate"\]' &&
     cluster_role | grep -A1 '"subjectaccessreviews"' | grep -q 'verbs: \["create"\]' &&
     grep -A1 'name: IMPERSONATE_USER_PREFIX' "$out" | grep -q '""' &&
     ! cluster_role "$WORK/chart-noauth.yaml" | grep -q -E 'impersonate|subjectaccessreviews' &&
@@ -199,7 +208,13 @@ no_kubelet_stats() {
     grep -A1 'name: KUBELET_STATS' "$WORK/chart-nostats.yaml" | grep -q '"false"'
 }
 settings_configmap() {
-  grep -A3 '^kind: ConfigMap$' "$out" | grep -q 'name: k8s-console-221b' && ! sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | grep -q '^data:' &&
+  # Only the settings ConfigMap: the auth-config ConfigMap beside it has data.
+  awk 'function done() { if (cm && nm) { found = 1; if (data) bad = 1 } cm = nm = data = 0 }
+       /^---$/ { done(); next }
+       /^kind: ConfigMap$/ { cm = 1 }
+       /^  name: k8s-console-221b$/ { nm = 1 }
+       /^data:/ { data = 1 }
+       END { done(); exit !(found && !bad) }' "$out" &&
     grep -A1 'name: SETTINGS_CONFIGMAP' "$out" | grep -q '"consoles/k8s-console-221b"' && grep -A1 'name: REFRESH' "$out" | grep -q '"3s"'
 }
 service_name() { render 221b --set clusterName=ci | grep -A3 '^kind: Service$' | grep -q 'name: k8s-console-221b'; }
@@ -249,6 +264,31 @@ watson_write() {
     ! render k8s-console --set clusterName=ci --set auth.mode=none --set localCluster.mode=write --set localCluster.writeClusterRole= | grep -q 'name: edit' &&
     ! render k8s-console --set clusterName=ci --set localCluster.mode=admin > /dev/null 2>&1
 }
+# Phase 6.1: the four roles are installed from the definitions the console
+# ships, bound to groups from values; the console gains no right on RBAC;
+# the combinations that cannot protect anything are refused.
+roles_and_bindings() { python3 "$ROOT/hack/chart_roles_check.py" "$WORK"; }
+roles_refused() {
+  local ldap="-f $ROOT/hack/chart-values/ldap.yaml"
+  ! render k8s-console --set clusterName=ci --set rbac.roles.admin.template=readOnly --set rbac.roles.superAdmin.template=readOnly --set localCluster.mode=write > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set auth.mode=none --set localCluster.mode=write --set rbac.roles.admin.template=readOnly > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set rbac.roles.admin.template=sometimes > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set rbac.enforce=maybe > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.local.groups[0].name=g' --set 'auth.local.groups[0].role=superAdmin' --set 'auth.local.groups[0].namespaces[0]=a' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.local.users[0].username=a' --set 'auth.local.users[0].passwordHash=h' --set 'auth.local.users[0].groups[0]=undefined' > /dev/null 2>&1 &&
+    ! render k8s-console $ldap --set 'auth.ldap.roles.superAdmin[0].namespaces[0]=a' > /dev/null 2>&1 &&
+    ! render k8s-console $ldap --set 'auth.ldap.roles.viewer[0].group=system:masters' > /dev/null 2>&1 &&
+    ! render k8s-console $ldap --set auth.ldap.url=ldap://ldap.corp.example > /dev/null 2>&1 &&
+    ! render k8s-console $ldap --set auth.ldap.existingSecret= > /dev/null 2>&1 &&
+    render k8s-console $ldap --set auth.ldap.url=ldap://ldap.corp.example --set auth.ldap.startTLS=true > /dev/null 2>&1
+}
+# The setup token reaches the console as a Secret's value, never as a plain
+# environment value.
+setup_token() {
+  local o=$WORK/chart-groups.yaml
+  grep -A5 'name: SETUP_TOKEN' "$o" | grep -q 'key: setup-token' && grep -q 'setup-token: "first-run-code"' "$o" &&
+    ! grep -q 'value: "first-run-code"' "$o" && ! grep -q 'SETUP_TOKEN' "$out"
+}
 digit_override() { render 221b --set clusterName=ci --set fullnameOverride=2b | grep -A3 '^kind: Service$' | grep -q 'name: k8s-console-2b'; }
 
 check "renders a Deployment, Service, ServiceAccount, ConfigMap, ClusterRole, Role, their bindings and a NetworkPolicy" kinds
@@ -281,6 +321,9 @@ check "an Ingress with TLS redirects HTTP, allows its host and needs a host" ing
 check "API server addresses narrow the egress rule" api_server_addresses
 check "it answers to its Service's names and the names in values" host_names
 check "Watson reads only by default; with mode write and sign-in off it is bound to the write role and may cordon and drain" watson_write
+check "the four roles are installed from the shipped definitions and bound to groups; the console gains no right on RBAC" roles_and_bindings
+check "contradictory or unsafe role settings are refused" roles_refused
+check "the setup token is a Secret's value, not an environment value" setup_token
 check "an override that starts with a digit still gets a valid name" digit_override
 check "the Service listens on 8081" exposed_port
 check "moving tags are pulled on every start and rolled on every upgrade; releases, sha- tags and digests once" pull_policy

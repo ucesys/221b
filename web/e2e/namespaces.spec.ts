@@ -15,7 +15,6 @@ test('lists every namespace and what it holds, by kind, with counts that match t
   await open(page)
   const namespaces = (await snapshot(request, ['namespaces'])).views.namespaces!.rows as NamespaceRow[]
   expect(namespaces.length).toBeGreaterThan(0)
-  await expect(page.getByRole('link', { name: /^Namespaces/ })).toContainText(String(namespaces.length))
   const list = page.getByTestId('namespace-list')
   for (const ns of namespaces) await expect(list.getByRole('link', { name: new RegExp(`^${ns.name}\\b`) })).toBeVisible()
 

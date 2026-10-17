@@ -1,0 +1,856 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Administration: Permissions</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+body{margin:0}
+a{color:#0A6E69}a:hover{color:#074B48}
+button,input,select{font-family:inherit}
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #0A6E69;outline-offset:2px}
+</style>
+
+</head>
+<body>
+<div style="min-height: 100%; background: #F2F3F5; color: #13161B; font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif; font-size: 13px; line-height: 1.45; display: flex; flex-direction: column;">
+
+  <header style="background: #FFFFFF; border-bottom: 1px solid #E1E4E8; display: flex; align-items: stretch; flex-wrap: wrap; gap: 4px 22px; padding: 0 20px;">
+    <div style="display: flex; align-items: center; gap: 10px; min-height: 52px;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 15px; letter-spacing: .02em;">221B</span>
+      <span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border: 1px solid #E1E4E8; border-radius: 6px; background: #F7F8FA; font-family: 'IBM Plex Mono', monospace; font-size: 12px;"><span style="width: 7px; height: 7px; border-radius: 50%; background: #19703A;"></span>local-rke2</span>
+    </div>
+    <nav aria-label="Cluster tabs" style="display: flex; align-items: stretch; gap: 18px; flex-wrap: wrap;">
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Alerts</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Nodes</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Fleets</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Namespaces</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Pods</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Helm</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Services</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Networks</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Access</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Policies</a>
+      
+    </nav>
+    <div style="flex: 1 1 0; min-width: 0;"></div>
+    <a href="#" aria-current="page" style="display: inline-flex; align-items: center; gap: 7px; min-height: 52px; color: #13161B; font-weight: 500; text-decoration: none; box-shadow: inset 0 -2px 0 #0A6E69;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z"/></svg>
+      Administration
+    </a>
+    <div style="display: flex; align-items: center; gap: 9px; min-height: 52px;">
+      <span aria-hidden="true" style="width: 26px; height: 26px; border-radius: 50%; background: #E1F0EE; color: #0A6E69; font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center;">MS</span>
+      <span style="font-size: 12px; color: #3F4651;">mikhail@stolpner.com</span>
+      <span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11px; font-weight: 500;">SuperAdmin</span>
+    </div>
+  </header>
+
+  <main style="flex: 1 1 auto; width: 100%; max-width: 1440px; margin: 0 auto; box-sizing: border-box; padding: 20px; display: flex; flex-direction: column; gap: 18px;">
+
+    <div style="display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px 28px; border-bottom: 1px solid #E1E4E8;">
+      <h1 style="margin: 0 0 9px; font-size: 17px; font-weight: 600;">Administration</h1>
+      <nav aria-label="Administration pages" style="display: flex; gap: 22px; flex-wrap: wrap;">
+        <a href="#" style="padding: 0 1px 9px; color: #5B636E; font-weight: 500; text-decoration: none;">Roles</a>
+        <a href="#" aria-current="page" style="padding: 0 1px 9px; color: #13161B; font-weight: 500; text-decoration: none; box-shadow: inset 0 -2px 0 #0A6E69;">Permissions</a>
+        <a href="#" title="SuperAdmin only" style="padding: 0 1px 9px; color: #5B636E; font-weight: 500; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">Users
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></a>
+        <a href="#" title="SuperAdmin only" style="padding: 0 1px 9px; color: #5B636E; font-weight: 500; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">Settings
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></a>
+      </nav>
+    </div>
+
+    <section aria-label="Summary" style="display: flex; flex-direction: column; gap: 12px;">
+      <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;">
+        <h2 style="margin: 0; font-size: 14px; font-weight: 600;">Permissions of the four roles</h2>
+        <span style="display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px; border: 1px solid #E1E4E8; border-radius: 6px; background: #F7F8FA; font-family: 'IBM Plex Mono', monospace; font-size: 12px;">local-rke2</span>
+        <span style="color: #5B636E;">Generated from the roles deployed on this cluster. Read-only; nobody edits it here.</span>
+      </div>
+      <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding: 9px 12px; background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 10px;">
+        <span style="display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11.5px; font-weight: 500;">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7"/></svg>
+          Matches the definitions shipped with this console
+        </span>
+        <span style="color: #5B636E; font-size: 12px;">Checked 12:04, every 5 minutes</span>
+        <span style="width: 1px; height: 16px; background: #E1E4E8;"></span>
+        <span style="padding: 1px 8px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11.5px; font-weight: 500;">Admin: full</span>
+        <span style="padding: 1px 8px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11.5px; font-weight: 500;">SuperAdmin: full</span>
+        <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500;">Strict mode: off</span>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px;">
+        <div style="background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;">
+          <div style="display: flex; align-items: center; gap: 8px;"><span style="font-weight: 600; font-size: 14px;">SuperAdmin</span><span style="padding: 1px 7px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11px; font-weight: 500;">Full</span></div>
+          <div style="color: #3F4651;"><strong style="font-weight: 600;">Reads</strong> everything, Secrets included.</div>
+          <div style="color: #3F4651;"><strong style="font-weight: 600;">Changes</strong> everything, in every namespace.</div>
+        </div>
+        <div style="background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;">
+          <div style="display: flex; align-items: center; gap: 8px;"><span style="font-weight: 600; font-size: 14px;">SuperViewer</span><span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11px; font-weight: 500;">Read-only</span></div>
+          <div style="color: #3F4651;"><strong style="font-weight: 600;">Reads</strong> everything except Secrets.</div>
+          <div style="color: #3F4651;"><strong style="font-weight: 600;">Changes</strong> nothing.</div>
+        </div>
+        <div style="background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;">
+          <div style="display: flex; align-items: center; gap: 8px;"><span style="font-weight: 600; font-size: 14px;">Admin</span><span style="padding: 1px 7px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11px; font-weight: 500;">Full</span></div>
+          <div style="color: #3F4651;"><strong style="font-weight: 600;">Reads</strong> the shown kinds in bound namespaces.</div>
+          <div style="color: #3F4651;"><strong style="font-weight: 600;">Changes</strong> pods, workloads and Helm releases there.</div>
+        </div>
+        <div style="background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;">
+          <div style="display: flex; align-items: center; gap: 8px;"><span style="font-weight: 600; font-size: 14px;">Viewer</span><span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11px; font-weight: 500;">Read-only</span></div>
+          <div style="color: #3F4651;"><strong style="font-weight: 600;">Reads</strong> the shown kinds in bound namespaces.</div>
+          <div style="color: #3F4651;"><strong style="font-weight: 600;">Changes</strong> nothing.</div>
+        </div>
+      </div>
+    </section>
+
+    <section aria-label="Permission matrix" style="background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 10px; overflow: hidden;">
+      <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; padding: 10px 12px; border-bottom: 1px solid #E1E4E8;">
+        <div role="group" aria-label="Show" style="display: inline-flex; background: #ECEEF1; border-radius: 8px; padding: 2px; gap: 2px;">
+          <button type="button" aria-pressed="true" style="border: 0; background: #FFFFFF; color: #13161B; border-radius: 6px; padding: 3px 11px; font-size: 12px; font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 0 0 1px #E1E4E8; cursor: pointer;">All</button>
+          <button type="button" aria-pressed="false" style="border: 0; background: transparent; color: #5B636E; border-radius: 6px; padding: 3px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">Read</button>
+          <button type="button" aria-pressed="false" style="border: 0; background: transparent; color: #5B636E; border-radius: 6px; padding: 3px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">Write</button>
+        </div>
+        <label style="display: inline-flex; align-items: center; gap: 7px; border: 1px solid #E1E4E8; border-radius: 7px; padding: 4px 10px; background: #FFFFFF; min-width: 220px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5B636E" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/></svg>
+          <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);">Filter resources</span>
+          <input type="text" placeholder="Filter resources" style="border: 0; outline: none; background: transparent; font-size: 12.5px; width: 100%; color: #13161B;">
+        </label>
+        <label style="display: inline-flex; align-items: center; gap: 7px; color: #3F4651; font-size: 12px;"><input type="checkbox"> Sensitive only</label>
+        <span style="flex: 1 1 0;"></span>
+        <span style="position: relative; display: inline-flex;">
+            <button type="button" aria-haspopup="menu" aria-expanded="false" title="Download the rows in view" style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid #E1E4E8; background: #FFFFFF; color: #3F4651; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 500; cursor: pointer;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>Export<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+            
+          </span>
+      </div>
+
+      <div style="overflow-x: auto;">
+        <div role="table" aria-label="Permissions of the four roles" style="min-width: 1040px;">
+          <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; padding: 9px 14px; background: #F7F8FA; border-bottom: 1px solid #E1E4E8; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">
+            <div role="columnheader">Resource</div>
+            <div role="columnheader">Verbs</div>
+            <div role="columnheader">SuperAdmin</div>
+            <div role="columnheader">SuperViewer</div>
+            <div role="columnheader">Admin</div>
+            <div role="columnheader">Viewer</div>
+          </div>
+
+          <div role="rowgroup">
+            <div style="display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: #E6F2F0; border-bottom: 1px solid #E1E4E8;">
+              <span style="font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #0A6E69;">Can read</span>
+              <span style="color: #3F4651; font-size: 12px;">get, list and watch</span>
+            </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Nodes</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">core</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">get, list, watch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Cluster-wide</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Cluster-wide</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Cluster-wide</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Cluster-wide</span>
+                  
+                  
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Namespaces</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">core</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">get, list, watch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Cluster-wide</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Cluster-wide</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Own only</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Own only</span>
+                  
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Pods and pod logs</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">core</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">get, list, watch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Deployments, StatefulSets, DaemonSets, ReplicaSets</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">apps</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">get, list, watch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Services, Endpoints, Ingresses</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">core, networking.k8s.io</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">get, list, watch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">ConfigMaps, events, volume claims</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">core</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">get, list, watch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Network policies, disruption budgets, quotas</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">networking.k8s.io, policy, core</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">get, list, watch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Pod and node metrics</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">metrics.k8s.io</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">get, list</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Roles and RoleBindings</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">rbac.authorization.k8s.io</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">get, list, watch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Secrets (keys and sizes only)</span>
+                    <span style="padding: 0 6px; border-radius: 5px; background: #FBEFD9; color: #8A4B00; font-size: 11px; font-weight: 500;">Sensitive</span>
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">core</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">get, list, watch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Volumes and storage classes</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">core, storage.k8s.io</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">get, list, watch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Cluster-wide</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Cluster-wide</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">ClusterRoles and ClusterRoleBindings</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">rbac.authorization.k8s.io</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">get, list, watch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Cluster-wide</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Cluster-wide</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Custom resource definitions</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">apiextensions.k8s.io</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">get, list, watch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Cluster-wide</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Cluster-wide</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+              </div>
+            
+          </div>
+
+          <div role="rowgroup">
+            <div style="display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: #FBEFD9; border-bottom: 1px solid #E1E4E8;">
+              <span style="font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #8A4B00;">Can change</span>
+              <span style="color: #3F4651; font-size: 12px;">every other verb: create, update, patch, delete and the special ones</span>
+            </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Delete a pod</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">core: pods</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">delete</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Scale</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">apps: deployments/scale, statefulsets/scale</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">update, patch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Roll out a restart or an undo</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">apps: deployments, statefulsets, daemonsets</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">patch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Label and annotate</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">the shown kinds</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">patch</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Roll back a Helm release</span>
+                    <span style="padding: 0 6px; border-radius: 5px; background: #FBEFD9; color: #8A4B00; font-size: 11px; font-weight: 500;">Sensitive</span>
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">core: secrets (Helm keeps releases there)</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">create, update</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Bound namespaces</span>
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Cordon, uncordon, drain, label nodes</span>
+                    
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">core: nodes, pods/eviction</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">patch, create</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">Cluster-wide</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Create and delete roles and bindings</span>
+                    <span style="padding: 0 6px; border-radius: 5px; background: #FBEFD9; color: #8A4B00; font-size: 11px; font-weight: 500;">Sensitive</span>
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">rbac.authorization.k8s.io</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">create, update, delete</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Open a shell in a pod</span>
+                    <span style="padding: 0 6px; border-radius: 5px; background: #FBEFD9; color: #8A4B00; font-size: 11px; font-weight: 500;">Sensitive</span>
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">core: pods/exec</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">create</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+              </div>
+            
+              <div role="row" style="display: grid; grid-template-columns: minmax(250px, 2.2fr) minmax(120px, 1fr) repeat(4, minmax(130px, 1fr)); gap: 0 10px; align-items: center; padding: 8px 14px; border-bottom: 1px solid #E1E4E8;">
+                <div role="cell" style="min-width: 0;">
+                  <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px;">
+                    <span style="font-weight: 500;">Everything else</span>
+                    <span style="padding: 0 6px; border-radius: 5px; background: #FBEFD9; color: #8A4B00; font-size: 11px; font-weight: 500;">Wildcard</span>
+                  </div>
+                  <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #5B636E;">all groups, all resources</div>
+                </div>
+                <div role="cell" style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">*</div>
+                <div role="cell">
+                  <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500; white-space: nowrap;">All namespaces</span>
+                  
+                  
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+                <div role="cell">
+                  
+                  
+                  <span style="color: #5B636E; font-size: 12px;">None</span>
+                </div>
+              </div>
+            
+          </div>
+        </div>
+      </div>
+
+      <div style="padding: 11px 14px; background: #F7F8FA; color: #3F4651; font-size: 12px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px;">
+        <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500;">All namespaces</span> and <span style="padding: 1px 8px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500;">Cluster-wide</span> hold in every namespace of every connected cluster.</span>
+        <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="padding: 1px 8px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500;">Bound namespaces</span> only where the person has a binding.</span>
+        <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="padding: 0 6px; border-radius: 5px; background: #FBEFD9; color: #8A4B00; font-size: 11px; font-weight: 500;">Sensitive</span> marks the rows the Access tab also flags.</span>
+        <span>Secret values are never shown by the console, whatever the role.</span>
+      </div>
+    </section>
+  </main>
+</div>
+
+
+</body>
+</html>

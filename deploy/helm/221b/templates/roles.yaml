@@ -1,0 +1,98 @@
+{{- /*
+The four roles for people (Phase 6.1), as ClusterRoles named 221b-viewer,
+221b-super-viewer, 221b-admin and 221b-super-admin, with the rules of the
+definitions the console ships (files/roles.json, which the console compares
+them with), and the bindings that give them to groups. Everything here comes
+from values; nothing in the console or in Watson writes any of it.
+*/ -}}
+{{- include "b221.validate" . -}}
+{{- if .Values.rbac.create }}
+{{- $shipped := .Files.Get "files/roles.json" | fromJson }}
+{{- range $key := (keys $shipped.roles | sortAlpha) }}
+{{- $role := get $shipped.roles $key }}
+{{- $template := "readOnly" }}
+{{- if eq $key "admin" }}{{ $template = $.Values.rbac.roles.admin.template }}{{ end }}
+{{- if eq $key "superAdmin" }}{{ $template = $.Values.rbac.roles.superAdmin.template }}{{ end }}
+{{- $def := get $role.templates $template }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $role.clusterRole }}
+  labels:
+    {{- include "b221.roleLabels" $ | nindent 4 }}
+    221b/role: {{ $key | quote }}
+    221b/definition: {{ $template | quote }}
+rules:
+  {{- toYaml $def.rules | nindent 2 }}
+  {{- if and $.Values.secrets.read $def.secretRules }}
+  {{- toYaml $def.secretRules | nindent 2 }}
+  {{- end }}
+{{- end }}
+---
+# Everyone who signs in sees the nodes, and no other cluster-scoped kind.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $shipped.nodes.clusterRole }}
+  labels:
+    {{- include "b221.roleLabels" . | nindent 4 }}
+    221b/role: "nodes"
+rules:
+  {{- toYaml $shipped.nodes.rules | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $shipped.nodes.clusterRole }}
+  labels:
+    {{- include "b221.roleLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $shipped.nodes.clusterRole }}
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: "221b:console-users"
+{{- /* SuperAdmin and SuperViewer are held in the console, which adds the
+       reserved group of each to the people who hold it. */}}
+{{- range $key := list "superAdmin" "superViewer" }}
+{{- $role := get $shipped.roles $key }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $role.clusterRole }}
+  labels:
+    {{- include "b221.roleLabels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $role.clusterRole }}
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: {{ $role.group | quote }}
+{{- end }}
+{{- /* Admin and Viewer are bound one namespace at a time, to a group. */}}
+{{- range $b := (include "b221.bindingSpecs" . | fromJsonArray) }}
+{{- $role := get $shipped.roles $b.role }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $b.name }}
+  namespace: {{ $b.namespace }}
+  labels:
+    {{- include "b221.roleLabels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $role.clusterRole }}
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: {{ $b.subject | quote }}
+{{- end }}
+{{- end }}

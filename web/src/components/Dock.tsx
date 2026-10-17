@@ -41,7 +41,7 @@ export function Dock(p: Props) {
   const drag = useRef<{ kind: 'h' | 's'; x0: number; y0: number; h0: number; w: number; s0: number } | null>(null)
   const section = useRef<HTMLElement>(null)
   const clamp = (h: number) => Math.round(Math.max(MIN_H, Math.min(window.innerHeight - 150, h)))
-  const clampS = (s: number) => Math.max(0.28, Math.min(0.72, s))
+  const clampS = (s: number) => Math.max(0.18, Math.min(0.82, s))
 
   useEffect(() => {
     if (mode === 'max') section.current?.querySelector<HTMLElement>('textarea, input[type=text]')?.focus()
@@ -151,7 +151,7 @@ export function Dock(p: Props) {
         role={mode === 'max' ? 'dialog' : 'region'}
         aria-modal={mode === 'max' ? true : undefined}
         aria-label={`${names} panel`}
-        style={{ ['--dock-cols' as string]: both ? `minmax(0, ${split.toFixed(3)}fr) 6px minmax(0, ${(1 - split).toFixed(3)}fr)` : 'minmax(0, 1fr)' }}
+        style={{ ['--dock-cols' as string]: both ? `minmax(0, ${split.toFixed(3)}fr) 8px minmax(0, ${(1 - split).toFixed(3)}fr)` : 'minmax(0, 1fr)' }}
         onKeyDown={(e) => {
           if (e.key === 'Escape' && mode === 'max') {
             e.stopPropagation()

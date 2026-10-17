@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Administration: Users</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+body{margin:0}
+a{color:#0A6E69}a:hover{color:#074B48}
+table{border-collapse:collapse;width:100%}
+th{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#5B636E;text-align:left;padding:9px 12px;background:#F7F8FA;border-bottom:1px solid #E1E4E8;white-space:nowrap}
+td{padding:9px 12px;border-top:1px solid #E1E4E8;vertical-align:middle;font-size:13px}
+button,input,select{font-family:inherit}
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #0A6E69;outline-offset:2px}
+</style>
+
+</head>
+<body>
+<div style="min-height: 100%; background: #F2F3F5; color: #13161B; font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif; font-size: 13px; line-height: 1.45; display: flex; flex-direction: column;">
+
+  <header style="background: #FFFFFF; border-bottom: 1px solid #E1E4E8; display: flex; align-items: stretch; flex-wrap: wrap; gap: 4px 22px; padding: 0 20px;">
+    <div style="display: flex; align-items: center; gap: 10px; min-height: 52px;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 15px; letter-spacing: .02em;">221B</span>
+      <span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border: 1px solid #E1E4E8; border-radius: 6px; background: #F7F8FA; font-family: 'IBM Plex Mono', monospace; font-size: 12px;"><span style="width: 7px; height: 7px; border-radius: 50%; background: #19703A;"></span>local-rke2</span>
+    </div>
+    <nav aria-label="Cluster tabs" style="display: flex; align-items: stretch; gap: 18px; flex-wrap: wrap;">
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Alerts</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Nodes</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Fleets</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Namespaces</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Pods</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Helm</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Services</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Networks</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Access</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Policies</a>
+      
+    </nav>
+    <div style="flex: 1 1 0; min-width: 0;"></div>
+    <a href="#" aria-current="page" style="display: inline-flex; align-items: center; gap: 7px; min-height: 52px; color: #13161B; font-weight: 500; text-decoration: none; box-shadow: inset 0 -2px 0 #0A6E69;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z"/></svg>
+      Administration
+    </a>
+    <div style="display: flex; align-items: center; gap: 9px; min-height: 52px;">
+      <span aria-hidden="true" style="width: 26px; height: 26px; border-radius: 50%; background: #E1F0EE; color: #0A6E69; font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center;">MS</span>
+      <span style="font-size: 12px; color: #3F4651;">mikhail@stolpner.com</span>
+      <span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11px; font-weight: 500;">SuperAdmin</span>
+    </div>
+  </header>
+
+  <main style="flex: 1 1 auto; width: 100%; max-width: 1440px; margin: 0 auto; box-sizing: border-box; padding: 20px; display: flex; flex-direction: column; gap: 18px;">
+
+    <div style="display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px 28px; border-bottom: 1px solid #E1E4E8;">
+      <h1 style="margin: 0 0 9px; font-size: 17px; font-weight: 600;">Administration</h1>
+      <nav aria-label="Administration pages" style="display: flex; gap: 22px; flex-wrap: wrap;">
+        <a href="#" style="padding: 0 1px 9px; color: #5B636E; font-weight: 500; text-decoration: none;">Roles</a>
+        <a href="#" style="padding: 0 1px 9px; color: #5B636E; font-weight: 500; text-decoration: none;">Permissions</a>
+        <a href="#" aria-current="page" title="SuperAdmin only" style="padding: 0 1px 9px; color: #13161B; font-weight: 500; text-decoration: none; box-shadow: inset 0 -2px 0 #0A6E69; display: inline-flex; align-items: center; gap: 6px;">Users
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></a>
+        <a href="#" title="SuperAdmin only" style="padding: 0 1px 9px; color: #5B636E; font-weight: 500; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">Settings
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></a>
+      </nav>
+    </div>
+
+    <section aria-label="Directory sync" style="background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 10px; padding: 12px 16px; display: flex; align-items: center; flex-wrap: wrap; gap: 10px 22px;">
+      <div style="display: flex; flex-direction: column; gap: 2px; min-width: 0;">
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+          <span style="font-weight: 600; font-size: 14px;">LDAP</span>
+          <span style="padding: 1px 7px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11px; font-weight: 500;">Connected</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #3F4651;">ldaps://ldap.corp.example:636</span>
+        </div>
+        <div style="color: #5B636E; font-size: 12px;">Last sync 12:04 · 214 people in 6 listed groups · 0 errors · next sync 13:04</div>
+      </div>
+      <div style="flex: 1 1 0;"></div>
+      <button type="button" style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid #E1E4E8; background: #FFFFFF; color: #3F4651; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 10-2.3 5.7"/><path d="M20 5v6h-6"/></svg>
+        Refresh from LDAP
+      </button>
+    </section>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start;">
+
+      <section aria-label="Users" style="flex: 999 1 600px; min-width: 0; background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 10px;">
+        <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; padding: 10px 12px; border-bottom: 1px solid #E1E4E8;">
+          <h2 style="margin: 0 6px 0 4px; font-size: 14px; font-weight: 600;">Users</h2>
+          <span style="padding: 0 6px; border-radius: 8px; background: #ECEEF1; color: #5B636E; font-size: 10.5px;">8 shown</span>
+          <label style="display: inline-flex; align-items: center; gap: 7px; border: 1px solid #E1E4E8; border-radius: 7px; padding: 4px 10px; background: #FFFFFF; min-width: 200px;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#5B636E" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/></svg>
+            <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);">Search people</span>
+            <input type="text" placeholder="Search people" style="border: 0; outline: none; background: transparent; font-size: 12.5px; width: 100%; color: #13161B;">
+          </label>
+          <div role="group" aria-label="Source" style="display: inline-flex; background: #ECEEF1; border-radius: 8px; padding: 2px; gap: 2px;">
+            <button type="button" aria-pressed="true" style="border: 0; background: #FFFFFF; color: #13161B; border-radius: 6px; padding: 3px 11px; font-size: 12px; font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 0 0 1px #E1E4E8; cursor: pointer;">All</button>
+            <button type="button" aria-pressed="false" style="border: 0; background: transparent; color: #5B636E; border-radius: 6px; padding: 3px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">LDAP</button>
+            <button type="button" aria-pressed="false" style="border: 0; background: transparent; color: #5B636E; border-radius: 6px; padding: 3px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">Local</button>
+          </div>
+          <span style="flex: 1 1 0;"></span>
+          <button type="button" style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid #0A6E69; background: #0A6E69; color: #FFFFFF; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        Create local user
+      </button>
+          <button type="button" style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid #E1E4E8; background: #FFFFFF; color: #3F4651; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">Columns</button>
+          <span style="position: relative; display: inline-flex;">
+            <button type="button" aria-haspopup="menu" aria-expanded="true" title="Download the rows in view" style="display: inline-flex; align-items: center; gap: 6px; border: 1px solid #E1E4E8; background: #F7F8FA; color: #3F4651; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 500; cursor: pointer;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>Export<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+            <div role="menu" aria-label="Export" style="position: absolute; right: 0; top: 36px; z-index: 3; min-width: 220px; background: #FFFFFF; border: 1px solid #C9CFD6; border-radius: 10px; box-shadow: 0 10px 28px rgba(19,22,27,.16); padding: 6px 0;">
+              <div style="padding: 4px 12px 6px; font-size: 11.5px; color: #5B636E; border-bottom: 1px solid #E1E4E8; margin-bottom: 4px;">The rows and columns on screen, in this order</div>
+              <button type="button" role="menuitem" style="display: flex; align-items: center; gap: 9px; width: 100%; border: 0; background: #F2F3F5; color: #13161B; padding: 7px 12px; font-size: 12.5px; text-align: left; cursor: pointer;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg><span style="flex: 1 1 0;">Excel</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #5B636E;">.xlsx</span></button><button type="button" role="menuitem" style="display: flex; align-items: center; gap: 9px; width: 100%; border: 0; background: transparent; color: #13161B; padding: 7px 12px; font-size: 12.5px; text-align: left; cursor: pointer;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg><span style="flex: 1 1 0;">CSV</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #5B636E;">.csv</span></button><button type="button" role="menuitem" style="display: flex; align-items: center; gap: 9px; width: 100%; border: 0; background: transparent; color: #13161B; padding: 7px 12px; font-size: 12.5px; text-align: left; cursor: pointer;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg><span style="flex: 1 1 0;">JSON</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #5B636E;">.json</span></button>
+            </div>
+          </span>
+        </div>
+        <div style="overflow-x: auto;">
+          <table style="min-width: 760px;">
+            <thead>
+              <tr><th scope="col">Name</th><th scope="col">Source</th><th scope="col">Status</th><th scope="col">Last sign-in</th><th scope="col">Roles</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><div style="font-weight: 500;">Mikhail Stolpner</div><div style="font-size: 12px; color: #5B636E;">mikhail@stolpner.com</div></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11px; font-weight: 500;">Local</span></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11px; font-weight: 500;">Active</span></td>
+                <td>Today 12:02</td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500;">SuperAdmin</span></td>
+              </tr>
+              <tr>
+                <td><div style="font-weight: 500;">Priya Raman</div><div style="font-size: 12px; color: #5B636E;">priya.raman@corp.example</div></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E4EDFA; color: #1F5DBD; font-size: 11px; font-weight: 500;">LDAP</span></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11px; font-weight: 500;">Active</span></td>
+                <td>Today 09:41</td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500;">SuperAdmin</span> <span style="font-size: 11.5px; color: #5B636E;">via platform-admins</span></td>
+              </tr>
+              <tr>
+                <td><div style="font-weight: 500;">Daniel Okafor</div><div style="font-size: 12px; color: #5B636E;">daniel.okafor@corp.example</div></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E4EDFA; color: #1F5DBD; font-size: 11px; font-weight: 500;">LDAP</span></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11px; font-weight: 500;">Active</span></td>
+                <td>Yesterday 16:20</td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500;">Admin</span> <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">web, api</span></td>
+              </tr>
+              <tr>
+                <td><div style="font-weight: 500;">Ines Moreau</div><div style="font-size: 12px; color: #5B636E;">ines.moreau@corp.example</div></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E4EDFA; color: #1F5DBD; font-size: 11px; font-weight: 500;">LDAP</span></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11px; font-weight: 500;">Active</span></td>
+                <td>2 days ago</td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500;">Viewer</span> <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">payments</span></td>
+              </tr>
+              <tr>
+                <td><div style="font-weight: 500;">Alex Chen</div><div style="font-size: 12px; color: #5B636E;">alex.chen@corp.example</div></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E4EDFA; color: #1F5DBD; font-size: 11px; font-weight: 500;">LDAP</span></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11px; font-weight: 500;">Active</span></td>
+                <td>Today 08:15</td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500;">SuperViewer</span> <span style="font-size: 11.5px; color: #5B636E;">via auditors</span></td>
+              </tr>
+              <tr>
+                <td><div style="font-weight: 500;">Tomás Herrera</div><div style="font-size: 12px; color: #5B636E;">tomas.herrera@corp.example</div></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E4EDFA; color: #1F5DBD; font-size: 11px; font-weight: 500;">LDAP</span></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #FBEFD9; color: #8A4B00; font-size: 11px; font-weight: 500;">Disabled</span><div style="font-size: 11.5px; color: #5B636E; margin-top: 2px;">Not in a listed group since the 12:04 sync</div></td>
+                <td>14 days ago</td>
+                <td><span style="color: #5B636E;">None</span></td>
+              </tr>
+              <tr style="background: #E6F2F0;">
+                <td><div style="font-weight: 500;">bob</div><div style="font-size: 12px; color: #3F4651;">bob@corp.example</div></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11px; font-weight: 500;">Local</span></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11px; font-weight: 500;">Active</span></td>
+                <td>3 days ago</td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11.5px; font-weight: 500;">Admin</span> <span style="font-size: 11.5px; color: #5B636E;">via checkout-ops</span> <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">checkout, web</span></td>
+              </tr>
+              <tr>
+                <td><div style="font-weight: 500;">break-glass</div><div style="font-size: 12px; color: #5B636E;">Defined in values.yaml</div></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11px; font-weight: 500;">Local</span> <span style="padding: 1px 7px; border-radius: 5px; background: #E4EDFA; color: #1F5DBD; font-size: 11px; font-weight: 500;">Helm</span></td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11px; font-weight: 500;">Active</span></td>
+                <td>Never</td>
+                <td><span style="padding: 1px 7px; border-radius: 5px; background: #E1F0EE; color: #0A6E69; font-size: 11.5px; font-weight: 500;">SuperAdmin</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <aside aria-label="bob details" style="flex: 1 1 380px; max-width: 480px; min-width: 0; background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 10px;">
+        <div style="padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid #E1E4E8;">
+          <div style="display: flex; align-items: center; gap: 9px; flex-wrap: wrap;">
+            <h2 style="margin: 0; font-size: 15px; font-weight: 600;">bob</h2>
+            <span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11px; font-weight: 500;">Local</span>
+            <span style="padding: 1px 7px; border-radius: 5px; background: #E3F3E8; color: #19703A; font-size: 11px; font-weight: 500;">Active</span>
+            <span style="flex: 1 1 0;"></span>
+            <button type="button" aria-label="Close details" style="border: 0; background: transparent; color: #5B636E; padding: 4px; cursor: pointer;">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+          <dl style="margin: 0; display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 5px 12px; font-size: 12.5px;">
+            <dt style="color: #5B636E;">Email</dt><dd style="margin: 0;">bob@corp.example</dd>
+            <dt style="color: #5B636E;">Seen by Kubernetes as</dt><dd style="margin: 0; font-family: 'IBM Plex Mono', monospace; font-size: 12px;">221b-local:bob</dd>
+            <dt style="color: #5B636E;">Last sign-in</dt><dd style="margin: 0;">3 days ago · no open session</dd>
+          </dl>
+        </div>
+
+        <div style="padding: 12px 16px 6px;">
+          <h3 style="margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">Groups</h3>
+          <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 9px 11px; border: 1px solid #E1E4E8; border-radius: 8px; background: #F7F8FA;">
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;">checkout-ops</span>
+            <span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11px; font-weight: 500;">Admin</span>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #3F4651;">checkout, web</span>
+            <span style="padding: 1px 7px; border-radius: 5px; background: #E4EDFA; color: #1F5DBD; font-size: 11px; font-weight: 500;">Helm</span>
+            <span style="flex: 1 1 0;"></span>
+            <button type="button" aria-label="Remove bob from checkout-ops" style="border: 1px solid #E1E4E8; background: #FFFFFF; color: #3F4651; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 500; cursor: pointer; padding: 3px 9px;">Remove</button>
+          </div>
+          <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px;">
+            <label for="addgrp" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);">Add to a local group</label>
+            <select id="addgrp" style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 5px 10px; font-size: 12.5px; background: #FFFFFF; color: #13161B; flex: 1 1 180px;">
+              <option>Add to a local group…</option>
+              <option>web-readers · Viewer · web</option>
+              <option>payments-readers · Viewer · payments</option>
+            </select>
+            <button type="button" style="border: 1px solid #E1E4E8; background: #FFFFFF; color: #3F4651; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">Add</button>
+          </div>
+          <div style="margin-top: 6px; color: #5B636E; font-size: 12px;">Groups, their role and their namespaces are set in <span style="font-family: 'IBM Plex Mono', monospace;">values.yaml</span>. Joining one changes this console, not the cluster, and takes effect within 2 minutes.</div>
+        </div>
+
+        <div style="padding: 10px 16px 6px;">
+          <h3 style="margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">What this person can do</h3>
+          <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
+            <span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11px; font-weight: 500;">Admin</span>
+            <span style="color: #5B636E; font-size: 12px;">in</span>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px;">checkout, web</span>
+            <a href="#" style="margin-left: auto; font-size: 12px; font-weight: 500; text-decoration: none;">Open in Roles</a>
+          </div>
+          <div style="margin-top: 6px; color: #5B636E; font-size: 12px;">Plus the nodes, for everyone who signs in.</div>
+        </div>
+
+        <div style="padding: 10px 16px 14px;">
+          <h3 style="margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">Super role</h3>
+          <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
+            <span style="color: #5B636E;">None</span>
+            <span style="flex: 1 1 0;"></span>
+            <select aria-label="Super role" style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 5px 10px; font-size: 12.5px; background: #FFFFFF; color: #13161B;">
+              <option>Give a super role…</option>
+              <option>SuperViewer</option>
+              <option>SuperAdmin</option>
+            </select>
+          </div>
+          <div style="margin-top: 6px; color: #5B636E; font-size: 12px;">A super role applies on every cluster.</div>
+        </div>
+
+        <div style="padding: 12px 16px; border-top: 1px solid #E1E4E8; display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
+          <button type="button" style="border: 1px solid #E1E4E8; background: #FFFFFF; color: #3F4651; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">Reset password</button>
+          <button type="button" style="border: 1px solid #E1E4E8; background: #FFFFFF; color: #3F4651; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">Sign out of all sessions</button>
+          <button type="button" style="border: 1px solid #E1E4E8; background: #FFFFFF; color: #3F4651; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">Disable</button>
+          <button type="button" style="border: 1px solid #E1E4E8; background: #FFFFFF; color: #B52C22; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">Delete</button>
+        </div>
+      </aside>
+
+    </div>
+  </main>
+</div>
+
+
+</body>
+</html>

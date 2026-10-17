@@ -61,6 +61,10 @@ type Cluster struct {
 	// ReadOnlyHow says where that is set.
 	ReadOnly    bool
 	ReadOnlyHow string
+	// Locked, when set, is why every change here is refused although the
+	// connection allows them: the cluster's roles allow more than the ones
+	// 221B ships, and rbac.enforce is strict (RB-36).
+	Locked string
 	// Config is the console's connection to it.
 	Config *rest.Config
 }
@@ -357,6 +361,9 @@ func (s *Service) submitOne(cl Cluster, who Who, line, from, why string, run boo
 // refusalFor checks the rules a change must pass (P6-05, P6-07); with an
 // approver, whether that person may approve it.
 func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who) *Refusal {
+	if cl.Locked != "" {
+		return refuse("roles", "Refused: %s", cl.Locked)
+	}
 	if cl.ReadOnly {
 		how := cl.ReadOnlyHow
 		if how == "" {

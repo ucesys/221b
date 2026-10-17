@@ -39,36 +39,59 @@ Open it with a port-forward:
 
 then browse to http://localhost:8080.
 {{- end }}
+{{- $exposed := or (ne .Values.service.type "ClusterIP") .Values.ingress.enabled }}
 {{- if eq .Values.auth.mode "oidc" }}
 
 People sign in with {{ default "the OIDC provider" .Values.auth.oidc.providerName }} at {{ .Values.auth.oidc.issuer }}; register the callback
 {{ if .Values.auth.oidc.redirectURL }}{{ .Values.auth.oidc.redirectURL }}{{ else }}https://<the console's host>/signin/callback{{ end }} with the client {{ .Values.auth.oidc.clientID }}.
+{{- else if eq .Values.auth.mode "ldap" }}
+
+People sign in with their directory account ({{ .Values.auth.ldap.url }}). Only members of a group listed under
+auth.ldap.roles may sign in; the console reads their groups again every {{ .Values.auth.kubernetes.accessTTL }}.
+The search account's password is read from the Secret {{ .Values.auth.ldap.existingSecret }}, key bind-password.
 {{- else if eq .Values.auth.mode "local" }}
 
-People sign in with the console's own accounts (auth.local.users){{ if not .Values.auth.local.users }}{{ if not .Values.auth.local.existingSecret }}, of which there are none yet:
-nobody can sign in until you add some. Make a password hash with
+People sign in with the console's own accounts.
+{{- if not (or .Values.auth.local.users .Values.auth.local.existingSecret) }}
+No account exists yet: the first visit to the console shows a page that asks for the first administrator's
+name and password. That person becomes a SuperAdmin, and the page never shows again.
+{{- if or .Values.auth.setupToken .Values.auth.setupTokenSecret }}
+It also asks for the setup token you gave (auth.setupToken).
+{{- else if $exposed }}
 
-  kubectl run hash --rm -it --restart=Never --image={{ include "b221.image" . }} -- hash-password
-
-then add the account and upgrade:
-
-  helm upgrade {{ .Release.Name }} <chart> -n {{ .Release.Namespace }} --reset-then-reuse-values \
-    --set 'auth.local.users[0].email=you@example.com' --set 'auth.local.users[0].passwordHash=<hash>' \
-    --set 'auth.admins[0]=you@example.com'
-
-Or sign in with your identity provider instead: auth.mode=oidc with auth.oidc.issuer, clientID and clientSecret.{{ end }}{{ end }}
+WARNING: the console is reachable from outside the cluster and auth.setupToken is empty, so whoever reaches it
+first can create the administrator. Set auth.setupToken before exposing it, or create the first account in values
+(auth.local.users) instead.
+{{- end }}
+{{- end }}
 {{- else }}
 
 Sign-in is off (auth.mode=none): anyone who can reach the console sees the cluster and is an administrator.
-Set auth.mode=oidc or auth.mode=local before exposing it.
+Set auth.mode=oidc, ldap or local before exposing it.
 {{- end }}
-{{- if or .Values.auth.admins .Values.auth.adminGroups }}
+{{- if and (eq .Values.auth.mode "oidc") (not (or .Values.auth.admins .Values.auth.adminGroups .Values.auth.oidc.roles.superAdmin)) }}
 
-Administrators, who manage connections and the settings: {{ join ", " (concat .Values.auth.admins .Values.auth.adminGroups) }}.
-{{- else if ne .Values.auth.mode "none" }}
+No administrators are named (auth.admins, auth.adminGroups): everyone who signs in can only read what Kubernetes lets
+them read, and nobody can change the settings or manage connections until one is.
+{{- else if or .Values.auth.admins .Values.auth.adminGroups }}
 
-No administrators are named (auth.admins, auth.adminGroups): everyone who signs in is a viewer, and nobody
-can change the settings or manage connections until one is.
+SuperAdmins named in values, who manage connections, settings and users: {{ join ", " (concat .Values.auth.admins .Values.auth.adminGroups) }}.
+{{- end }}
+{{- if .Values.rbac.create }}
+
+Roles: the ClusterRoles 221b-viewer, 221b-super-viewer, 221b-admin and 221b-super-admin are installed, Admin as the
+{{ .Values.rbac.roles.admin.template }} definition and SuperAdmin as the {{ .Values.rbac.roles.superAdmin.template }} one. Admin and Viewer are bound to groups, one namespace at
+a time, from auth.local.groups{{ if or (eq .Values.auth.mode "ldap") (eq .Values.auth.mode "oidc") }} and auth.{{ .Values.auth.mode }}.roles{{ end }}; nothing in the console writes a binding.
+{{- if and (eq .Values.rbac.roles.admin.template "readOnly") (eq .Values.rbac.roles.superAdmin.template "readOnly") }}
+Both changing roles are readOnly: no identity the console uses holds a write right, so nothing can be changed through it.
+{{- end }}
+{{- if eq .Values.rbac.enforce "strict" }}
+rbac.enforce is strict: a cluster whose roles allow more than these refuses every change.
+{{- end }}
+{{- else }}
+
+rbac.create is false: the four roles and their bindings are not installed, so people see an empty console until you
+create them (the Roles page shows what is missing).
 {{- end }}
 
 Every sign-in, sign-out and change is in the audit log: one JSON line on the console's standard output,

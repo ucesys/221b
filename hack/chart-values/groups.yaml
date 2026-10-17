@@ -1,0 +1,16 @@
+# Local users in local groups (hack/check-chart.sh).
+clusterName: ci
+auth:
+  mode: local
+  setupToken: first-run-code
+  local:
+    groups:
+      - { name: web-readers, role: viewer, namespaces: [web] }
+      - { name: checkout-ops, role: admin, namespaces: [checkout, web] }
+    users:
+      - username: alice
+        groups: [web-readers]
+        passwordHash: "pbkdf2-sha256$600000$c2FsdA$aGFzaA"
+      - username: root
+        roles: [superAdmin]
+        passwordHash: "pbkdf2-sha256$600000$c2FsdA$aGFzaA"

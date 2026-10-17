@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>First run and refused sign-in</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+body{margin:0}
+a{color:#0A6E69}a:hover{color:#074B48}
+button,input,select{font-family:inherit}
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #0A6E69;outline-offset:2px}
+</style>
+
+</head>
+<body>
+<div style="min-height: 100%; background: #F2F3F5; color: #13161B; font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif; font-size: 13px; line-height: 1.45; display: flex; flex-direction: column;">
+
+  <header style="background: #FFFFFF; border-bottom: 1px solid #E1E4E8; display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 0 20px;">
+    <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 15px; letter-spacing: .02em;">221B</span>
+    <span style="color: #5B636E; font-size: 12px;">Cluster console</span>
+  </header>
+
+  <main style="flex: 1 1 auto; width: 100%; max-width: 1100px; margin: 0 auto; box-sizing: border-box; padding: 40px 20px 48px; display: flex; flex-wrap: wrap; justify-content: center; align-items: flex-start; gap: 40px;">
+
+    <div style="flex: 1 1 400px; max-width: 460px; min-width: 0; display: flex; flex-direction: column; gap: 8px;">
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">First run, local accounts, no one exists yet</span>
+      <section aria-labelledby="first-h" style="background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 6px 20px rgba(19,22,27,.06);">
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <h1 id="first-h" style="margin: 0; font-size: 18px; font-weight: 600;">Create the first administrator</h1>
+          <p style="margin: 0; color: #3F4651;">No one can sign in yet. The account you create here becomes a SuperAdmin. This page closes for good as soon as it exists.</p>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 5px;">
+          <label for="tok" style="font-weight: 500;">Setup token</label>
+          <input id="tok" type="password" autocomplete="off" style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 7px 10px; font-size: 13px; font-family: 'IBM Plex Mono', monospace; color: #13161B;">
+          <span style="color: #5B636E; font-size: 12px;">Enter <span style="font-family: 'IBM Plex Mono', monospace;">auth.setupToken</span> if specified on deployment, if not leave blank.</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 5px;">
+          <label for="uname" style="font-weight: 500;">Username</label>
+          <input id="uname" type="text" autocomplete="username" style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 7px 10px; font-size: 13px; color: #13161B;">
+          <span style="color: #5B636E; font-size: 12px;">Lowercase letters, digits, dot, dash and underscore.</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 5px;">
+          <label for="dname" style="font-weight: 500;">Display name</label>
+          <input id="dname" type="text" autocomplete="name" style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 7px 10px; font-size: 13px; color: #13161B;">
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 5px;">
+          <label for="pw" style="font-weight: 500;">Password</label>
+          <input id="pw" type="password" autocomplete="new-password" style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 7px 10px; font-size: 13px; color: #13161B;">
+          <span style="color: #5B636E; font-size: 12px;">At least 12 characters, and not your username.</span>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 5px;">
+          <label for="pw2" style="font-weight: 500;">Repeat the password</label>
+          <input id="pw2" type="password" autocomplete="new-password" style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 7px 10px; font-size: 13px; color: #13161B;">
+        </div>
+
+        <button type="button" style="border: 1px solid #0A6E69; background: #0A6E69; color: #FFFFFF; border-radius: 8px; padding: 9px 14px; font-size: 13.5px; font-weight: 500; cursor: pointer;">Create administrator</button>
+
+      </section>
+    </div>
+
+    <div style="flex: 1 1 400px; max-width: 460px; min-width: 0; display: flex; flex-direction: column; gap: 8px;">
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">Also new: a refused LDAP sign-in</span>
+      <section aria-labelledby="sign-h" style="background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 12px; padding: 24px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 6px 20px rgba(19,22,27,.06);">
+        <div style="display: flex; flex-direction: column; gap: 6px;">
+          <h1 id="sign-h" style="margin: 0; font-size: 18px; font-weight: 600;">Sign in</h1>
+        </div>
+
+        <div role="alert" style="display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 8px; background: #FBE6E4; color: #8E1F17;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 1px;"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5h.01"/></svg>
+          <div>
+            <div style="font-weight: 600;">You cannot sign in.</div>
+            <div style="font-size: 12.5px;">Check your username and password. If they are right, you may not have access to this console; ask an administrator.</div>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 5px;">
+          <label for="u2" style="font-weight: 500;">Username</label>
+          <input id="u2" type="text" autocomplete="username" style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 7px 10px; font-size: 13px; color: #13161B;">
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 5px;">
+          <label for="p2" style="font-weight: 500;">Password</label>
+          <input id="p2" type="password" autocomplete="current-password" style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 7px 10px; font-size: 13px; color: #13161B;">
+        </div>
+        <button type="button" style="border: 1px solid #0A6E69; background: #0A6E69; color: #FFFFFF; border-radius: 8px; padding: 9px 14px; font-size: 13.5px; font-weight: 500; cursor: pointer;">Sign in</button>
+      </section>
+    </div>
+
+  </main>
+</div>
+
+
+</body>
+</html>

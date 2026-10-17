@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -14,17 +13,43 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/roles"
 	"sigs.k8s.io/yaml"
 )
 
-// LocalUser is an account kept by the console itself, for evaluations and
-// clusters without an identity provider. The password is stored as a
-// PBKDF2 hash, which 221b hash-password prints.
+// LocalUser is an account defined in values or in a file: kept by the
+// console's chart, never changed in the console (RB-46). The password is
+// stored as a PBKDF2 hash, which 221b hash-password prints. Accounts made
+// before roles existed name themselves by their email, which stays their
+// user name.
 type LocalUser struct {
-	Email        string   `json:"email"`
-	Name         string   `json:"name,omitempty"`
-	Groups       []string `json:"groups,omitempty"`
+	// Username is the name Kubernetes sees; it defaults to the email.
+	Username string `json:"username,omitempty"`
+	Email    string `json:"email,omitempty"`
+	Name     string `json:"name,omitempty"`
+	// Groups are names of local groups (RB-50).
+	Groups []string `json:"groups,omitempty"`
+	// Roles are super roles the account holds: superAdmin, superViewer.
+	Roles        []string `json:"roles,omitempty"`
 	PasswordHash string   `json:"passwordHash"`
+}
+
+// Login is the name the account signs in with, in lowercase.
+func (u LocalUser) Login() string {
+	n := u.Username
+	if n == "" {
+		n = u.Email
+	}
+	return strings.ToLower(strings.TrimSpace(n))
+}
+
+// Account turns the definition into an account.
+func (u LocalUser) Account() Account {
+	a := Account{Username: u.Login(), Name: u.Name, Email: strings.ToLower(strings.TrimSpace(u.Email)), PasswordHash: u.PasswordHash, Groups: append([]string(nil), u.Groups...), Managed: true}
+	for _, r := range u.Roles {
+		a.Super = append(a.Super, roles.ID(r))
+	}
+	return a
 }
 
 // The hash format: pbkdf2-sha256$<iterations>$<salt>$<hash>, base64 raw URL.
@@ -36,8 +61,8 @@ const (
 
 // HashPassword derives a hash to keep in place of a password.
 func HashPassword(password string) (string, error) {
-	if len(password) < 8 {
-		return "", errors.New("use at least 8 characters")
+	if len([]rune(password)) < MinPassword {
+		return "", fmt.Errorf("use at least %d characters", MinPassword)
 	}
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
@@ -80,16 +105,24 @@ func CheckPassword(hash, password string) bool {
 func ValidateLocalUsers(users []LocalUser) error {
 	seen := map[string]bool{}
 	for i, u := range users {
-		email := strings.ToLower(strings.TrimSpace(u.Email))
-		if email == "" || !strings.Contains(email, "@") {
-			return fmt.Errorf("local user %d: an email address is needed", i+1)
+		name := u.Login()
+		if name == "" {
+			return fmt.Errorf("local user %d: a username or an email address is needed", i+1)
 		}
-		if seen[email] {
-			return fmt.Errorf("local user %s appears twice", email)
+		if !roles.ValidUsername(name, false) {
+			return fmt.Errorf("local user %s: use lowercase letters, digits, dot, dash, underscore and @", name)
 		}
-		seen[email] = true
+		if seen[name] {
+			return fmt.Errorf("local user %s appears twice", name)
+		}
+		seen[name] = true
 		if !strings.HasPrefix(u.PasswordHash, hashPrefix+"$") {
-			return fmt.Errorf("local user %s: passwordHash is not a %s hash; make one with: 221b hash-password", email, hashPrefix)
+			return fmt.Errorf("local user %s: passwordHash is not a %s hash; make one with: 221b hash-password", name, hashPrefix)
+		}
+		for _, r := range u.Roles {
+			if !roles.ID(r).Super() {
+				return fmt.Errorf("local user %s: %q is not a role that can be given to a user; use superAdmin or superViewer", name, r)
+			}
 		}
 	}
 	return nil

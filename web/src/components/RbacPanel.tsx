@@ -55,11 +55,6 @@ export function RbacPanel({ keyOf, roles, bindings, now, onClose, onOpen, onToas
   const status = role ? roleStatus(role.powers) : null
   const boundBy = role ? bindings.filter((b) => roleKeyOf(b) === role.key) : []
 
-  const copyName = () =>
-    void navigator.clipboard?.writeText(name).then(
-      () => onToast('Copied the name'),
-      () => onToast('Could not copy: the clipboard is not available.'),
-    )
 
   return (
     <Drawer
@@ -120,9 +115,6 @@ export function RbacPanel({ keyOf, roles, bindings, now, onClose, onOpen, onToas
               Age <span style={{ color: 'var(--fg)' }}>{fmtAge(binding?.created ?? role?.created, now)}</span>
             </span>
           )}
-          <button className="rk-btn" onClick={copyName} style={{ height: 26, marginLeft: 'auto' }}>
-            Copy name
-          </button>
         </>
       }
       tabs={[

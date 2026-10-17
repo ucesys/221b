@@ -80,9 +80,22 @@ rules:
   # Read as each signed-in person (P3-02): logs and YAML are read with
   # their name and groups, and before any row reaches them Kubernetes is
   # asked whether they may list it. Nothing is written in their name.
+  # User names are dynamic, so any may be asserted; the groups are exactly
+  # the ones values list, with their prefixes, plus the reserved ones, so
+  # the console cannot assert system:masters or any other group (RB-37).
+  # OIDC without role lists keeps every group of a token, as before.
   - apiGroups: [""]
-    resources: ["users", "groups"]
+    resources: ["users"]
     verbs: ["impersonate"]
+  - apiGroups: [""]
+    resources: ["groups"]
+    verbs: ["impersonate"]
+    {{- if include "b221.groupsLimited" . }}
+    resourceNames:
+      {{- range (include "b221.assertedGroups" . | fromJsonArray) }}
+      - {{ . | quote }}
+      {{- end }}
+    {{- end }}
   - apiGroups: ["authorization.k8s.io"]
     resources: ["subjectaccessreviews"]
     verbs: ["create"]

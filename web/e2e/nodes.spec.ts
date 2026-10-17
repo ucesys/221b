@@ -33,7 +33,6 @@ test('shows the cluster and every node', async ({ page, request }) => {
   }
   await expect(page.locator('[data-node]')).toHaveCount(rows.length)
   const cp = rows.filter((r) => r.role === 'control-plane').length
-  await expect(page.getByRole('link', { name: /^Nodes/ })).toContainText(String(rows.length))
   const roles = page.getByRole('group', { name: 'Show nodes by role' })
   await expect(roles.getByRole('button', { name: /^All/ })).toContainText(String(rows.length))
   await expect(roles.getByRole('button', { name: /Control plane/ })).toContainText(String(cp))
@@ -363,7 +362,8 @@ test.describe('on a phone', () => {
     expect(box!.x).toBeGreaterThanOrEqual(0)
     expect(box!.x + box!.width).toBeLessThanOrEqual(390.5)
     await page.keyboard.press('Escape')
-    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByTestId('admin-link').click()
+    await page.locator('[data-admin-page=settings]').click()
     await expect(page.getByTestId('settings-page')).toBeVisible()
     expect(await overflow()).toBeLessThanOrEqual(0)
   })

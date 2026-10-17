@@ -514,8 +514,8 @@ export interface RefreshEvent {
 
 /** Who is signed in: GET /api/v1/me (P3-01, P3-03). */
 export interface Me {
-  /** How people sign in: none (sign-in off), oidc or local. */
-  mode: 'none' | 'oidc' | 'local'
+  /** How people sign in: none (sign-in off), oidc, ldap or local. */
+  mode: 'none' | 'oidc' | 'local' | 'ldap'
   user: {
     subject: string
     username: string
@@ -523,7 +523,10 @@ export interface Me {
     name?: string
     groups?: string[]
   }
+  /** True for a SuperAdmin: the console administrator of ADR-26 (RB-13). */
   admin: boolean
+  /** The roles this person holds (RB-04), highest first; empty for someone with no assignment. */
+  roles?: ('superAdmin' | 'superViewer' | 'admin' | 'viewer')[]
   method: string
   provider?: string
   sessionIdleSeconds: number

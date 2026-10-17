@@ -10,7 +10,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { expect, test } from './test'
 import { cluster, consoleNode, healthyWorkers, inKind, kubectl, nodeRows, snapshot } from './cluster'
-import { E2E_DEV, E2E_USER, E2E_VIEWER, signInAs } from './accounts'
+import { E2E_DEV, E2E_DEV_KUBE, E2E_USER, E2E_VIEWER, E2E_VIEWER_KUBE, signInAs } from './accounts'
 import type { WatsonItem } from '../src/api/watson'
 
 test.describe.configure({ mode: 'serial' })
@@ -284,11 +284,15 @@ test('every supported change runs once approved, as the approver, and does what 
   expect(JSON.stringify(results.at(-1))).toMatch(/"cluster":"local"/)
 })
 
-test('a node’s Cordon button asks on a card that names the node, the pods, and the dry run; approving runs it (P6-04, P6-06, P6-08)', async ({ page }) => {
+test('a cordon asks on a card that names the node, the pods, and the dry run; approving runs it (P6-04, P6-06, P6-08)', async ({ page }) => {
   const node = await spareWorker(page.request)
+  // Changes come from Watson's line or Sherlock's answers; the node details have no buttons for them.
   await open(page, `#/nodes?open=${node}`)
+  await expect(page.getByTestId('node-cordon')).toHaveCount(0)
+  await page.keyboard.press('Escape')
   try {
-    await page.getByTestId('node-cordon').click()
+    await pane(page).getByTestId('watson-input').fill(`kubectl cordon ${node}`)
+    await pane(page).getByTestId('watson-input').press('Enter')
     const card = pane(page).getByTestId('watson-card').last()
     await expect(card).toHaveAttribute('data-command', `kubectl cordon ${node}`)
     await expect(card.getByTestId('watson-targets')).toContainText(`node ${node}`)
@@ -303,14 +307,8 @@ test('a node’s Cordon button asks on a card that names the node, the pods, and
     await expect(ran.getByTestId('watson-output')).toHaveText(`node/${node} cordoned`)
     await expect(ran.getByTestId('watson-status')).toContainText('approved by')
     await expect.poll(async () => (await cluster.getObject<{ spec: { unschedulable?: boolean } }>(`/api/v1/nodes/${node}`))!.spec.unschedulable ?? false).toBe(true)
-    // The panel came up over the drawer, as Ask Sherlock's answers do;
-    // restoring it shows the drawer, which now offers Uncordon, through
-    // Watson too.
-    await expect(page.getByTestId('sherlock-dock')).toHaveAttribute('data-mode', 'max')
-    await page.locator('[data-testid=sherlock-maximize]:visible').click()
-    await expect(page.getByTestId('sherlock-dock')).toHaveAttribute('data-mode', 'open')
-    await expect(page.getByTestId('node-cordon')).toHaveText(/Uncordon/, { timeout: 15_000 })
-    await page.getByTestId('node-cordon').click()
+    await pane(page).getByTestId('watson-input').fill(`kubectl uncordon ${node}`)
+    await pane(page).getByTestId('watson-input').press('Enter')
     await pane(page).getByTestId('watson-card').last().getByTestId('watson-approve').click()
     await expect(lastRan(page)).toContainText(`node/${node} uncordoned`, { timeout: 30_000 })
 
@@ -326,10 +324,11 @@ test('a node’s Cordon button asks on a card that names the node, the pods, and
   }
 })
 
-test('the Drain button’s card names the pods it evicts and the budgets that may hold it up (P6-04)', async ({ page }) => {
+test('a drain’s card names the pods it evicts and the budgets that may hold it up (P6-04)', async ({ page }) => {
   const node = await spareWorker(page.request)
-  await open(page, `#/nodes?open=${node}`)
-  await page.getByTestId('node-drain').click()
+  await open(page)
+  await pane(page).getByTestId('watson-input').fill(`kubectl drain ${node} --ignore-daemonsets --delete-emptydir-data`)
+  await pane(page).getByTestId('watson-input').press('Enter')
   const card = pane(page).getByTestId('watson-card').last()
   await expect(card).toHaveAttribute('data-command', new RegExp(`^kubectl drain ${node} `))
   await expect(card.getByTestId('watson-impact')).toContainText(/Cordons .+ (evicts \d+ pods?|no pod needs to be evicted)/, { timeout: 30_000 })
@@ -372,7 +371,8 @@ test('a read-only connection runs reads and refuses changes, naming the rule (P6
   try {
     await expect.poll(async () => ((await (await request.get(`/api/v1/clusters/${id}`)).json()) as { state: string }).state, { timeout: 30_000 }).toBe('connected')
     await page.goto(`/#/c/${id}/nodes`)
-    await expect(pane(page).getByTestId('watson-readonly')).toContainText('read-only')
+    const statusNow = await (await request.get(`/api/v1/clusters/${id}/watson`)).text()
+    await expect(pane(page).getByTestId('watson-readonly'), `watson status: ${statusNow.slice(0, 400)}`).toContainText('read-only')
     await pane(page).getByTestId('watson-input').fill('kubectl get nodes -o name')
     await pane(page).getByTestId('watson-input').press('Enter')
     await expect(lastRan(page)).toHaveAttribute('data-status', 'done', { timeout: 30_000 })
@@ -394,8 +394,11 @@ test('a change runs as the person who approves it, so their own access decides (
   const dev = await signInAs(browser, E2E_DEV)
   try {
     await expect(dev.getByTestId('cluster-state')).toHaveText('Connected', { timeout: 30_000 })
+    const can = inKind
+      ? await kubectl('auth', 'can-i', 'patch', 'nodes', `--as=${E2E_DEV_KUBE}`, '--as-group=221b:console-users', '--as-group=system:authenticated').catch((e: unknown) => String(e))
+      : 'n/a'
     const it = await watson(dev.request, `kubectl cordon ${node}`)
-    expect(it.status).toBe('failed')
+    expect(it.status, `can-i patch nodes as ${E2E_DEV_KUBE}: ${can} ${JSON.stringify({ status: it.status, exit: it.exit, reason: it.reason, plan: it.plan?.dryRun })} ${text(it)}`).toBe('failed')
     expect(text(it, 'err')).toMatch(/forbidden/i)
     expect((await cluster.getObject<{ spec: { unschedulable?: boolean } }>(`/api/v1/nodes/${node}`))!.spec.unschedulable ?? false).toBe(false)
   } finally {
@@ -407,12 +410,13 @@ test('on a production cluster with the rule on, a second person approves (P6-07)
   const local = (await (await page.request.get('/api/v1/clusters/local')).json()) as { name: string; env: string; description: string }
   const setEnv = (env: string) => page.request.put('/api/v1/clusters/local', { data: { name: local.name, env, description: local.description, ca: 'system', auth: 'token', mode: 'read' }, headers: SAME })
   const node = await spareWorker(page.request)
-  const revoke = await cluster.allowNodeChanges(E2E_VIEWER)
+  const revoke = await cluster.allowNodeChanges(E2E_VIEWER_KUBE)
   let viewer: Page | undefined
   try {
     expect((await setEnv('production')).status()).toBe(200)
     await open(page)
-    await page.getByRole('button', { name: 'Settings' }).click()
+    await page.getByTestId('admin-link').click()
+    await page.locator('[data-admin-page=settings]').click()
     await page.locator('[data-testid=settings-section][data-section=watson]').click()
     await page.getByTestId('watson-settings').getByTestId('watson-two-person').check()
     await page.getByTestId('watson-settings').getByTestId('watson-settings-save').click()
@@ -473,11 +477,11 @@ test('Watson moves to a window of its own, with Sherlock, approvals there run, a
   await expect(page.getByTestId('watson')).toHaveCount(0)
   await expect(page.getByTestId('assistants-popped')).toBeVisible()
 
-  // A change asked for in the main window waits in the other, and runs there.
+  // A change typed in the window runs there.
   const node = await spareWorker(page.request)
   try {
-    await page.goto(`/#/nodes?open=${node}`)
-    await page.getByTestId('node-cordon').click()
+    await popup.getByTestId('watson-input').fill(`kubectl cordon ${node}`)
+    await popup.getByTestId('watson-input').press('Enter')
     const card = popup.getByTestId('watson-card').last()
     await expect(card).toHaveAttribute('data-command', `kubectl cordon ${node}`)
     await card.getByTestId('watson-approve').click()

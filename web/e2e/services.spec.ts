@@ -71,7 +71,7 @@ test('a LoadBalancer without an external IP shows as pending, with the reason', 
 
 test('details list the endpoints and link to the pods behind them', async ({ page, request }) => {
   const services = serviceRows(await snapshot(request, ['services']))
-  const svc = services.find((s) => s.selector && s.ready > 0)!
+  const svc = services.find((s) => s.selector && s.ready > 0 && !s.name.startsWith('e2e-'))!
   await open(page, `#/services?open=${encodeURIComponent(svc.key)}`)
   const panel = page.getByTestId('service-panel')
   await expect(panel.getByRole('heading', { level: 2 })).toHaveText(svc.name)

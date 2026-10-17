@@ -26,8 +26,8 @@ export const TABS: { id: Tab; label: string; tip: string }[] = [
 /** The connection of the cluster the console was started against. */
 export const LOCAL = 'local'
 
-/** The page: every cluster at a glance (the landing page), a cluster's tabs, its own page (its connection, P3-07), or Sherlock in a window of its own (P5-08). */
-export type View = 'home' | 'tabs' | 'cluster' | 'sherlock' | 'watson' | 'assistants' | 'settings'
+/** The page: every cluster at a glance (the landing page), a cluster's tabs, its own page (its connection, P3-07), the Administration area (RB-41), or Sherlock in a window of its own (P5-08). */
+export type View = 'home' | 'tabs' | 'cluster' | 'sherlock' | 'watson' | 'assistants' | 'admin'
 
 /** The first tab, where a cluster opens. */
 export const FIRST_TAB: Tab = 'alerts'
@@ -58,8 +58,11 @@ export function parseHash(hash: string): Route {
   // Nothing at all, or #/home: the home page.
   if (cluster === LOCAL && !h.startsWith('c/') && (first === '' || first === 'home')) return { cluster, view: 'home', tab: FIRST_TAB, path: [], params: new URLSearchParams(query) }
   if (first === 'cluster') return { cluster, view: 'cluster', tab: FIRST_TAB, path: [], params: new URLSearchParams(query) }
-  // The settings, a page of their own (asked at the Phase 6 review): #/settings/<section>.
-  if (cluster === LOCAL && first === 'settings') return { cluster, view: 'settings', tab: FIRST_TAB, path: segs.slice(1), params: new URLSearchParams(query) }
+  // The Administration area (RB-41): #/admin/roles, #/admin/permissions, #/admin/users and #/admin/settings/<section>.
+  // Roles and Permissions describe a cluster, so they take the cluster prefix; Users and Settings belong to the console.
+  if (first === 'admin') return { cluster, view: 'admin', tab: FIRST_TAB, path: segs.slice(1), params: new URLSearchParams(query) }
+  // Settings moved under Administration (RB-47): an old #/settings link lands on it.
+  if (cluster === LOCAL && first === 'settings') return { cluster, view: 'admin', tab: FIRST_TAB, path: ['settings', ...segs.slice(1)], params: new URLSearchParams(query) }
   // Sherlock in a window of its own (P5-08).
   if (first === 'sherlock' || first === 'watson' || first === 'assistants') return { cluster, view: first, tab: FIRST_TAB, path: [], params: new URLSearchParams(query) }
   const tab: Tab = TABS.some((t) => t.id === first) ? (first as Tab) : FIRST_TAB
@@ -92,6 +95,16 @@ export function href(tab: Tab, path: string[] = [], params: Record<string, strin
 /** A hash in a given cluster, for the cluster menu (P3-04). */
 export function clusterHref(cluster: string, tab: Tab, path: string[] = [], params: Record<string, string | string[] | undefined> = {}): string {
   return prefix(cluster) + [tab, ...path.map(encodeURIComponent)].join('/') + query(params)
+}
+
+/** The pages of the Administration area, in order (RB-41). */
+export type AdminPage = 'roles' | 'permissions' | 'users' | 'settings'
+
+export const ADMIN_PAGES: AdminPage[] = ['roles', 'permissions', 'users', 'settings']
+
+/** A page of the Administration area: "#/admin/roles/admin", or "#/c/dev/admin/permissions" for another cluster. */
+export function adminHref(page: AdminPage, path: string[] = [], cluster: string = LOCAL, params: Record<string, string | undefined> = {}): string {
+  return prefix(cluster) + ['admin', page, ...path.map(encodeURIComponent)].join('/') + query(params)
 }
 
 /** A cluster's own page: "#/cluster", or "#/c/dev/cluster". */
@@ -158,6 +171,7 @@ export function withParams(route: Route, changes: Record<string, string | string
   for (const [k, v] of route.params.entries()) merged[k] = v
   Object.assign(merged, changes)
   if (route.view === 'home') return HOME + query(merged)
+  if (route.view === 'admin') return prefix(route.cluster) + ['admin', ...route.path.map(encodeURIComponent)].join('/') + query(merged)
   return clusterHref(route.cluster, route.tab, route.path, merged)
 }
 

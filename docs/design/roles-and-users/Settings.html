@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Administration: Settings</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+body{margin:0}
+a{color:#0A6E69}a:hover{color:#074B48}
+button,input,select{font-family:inherit}
+a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #0A6E69;outline-offset:2px}
+</style>
+
+</head>
+<body>
+<div style="min-height: 100%; background: #F2F3F5; color: #13161B; font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif; font-size: 13px; line-height: 1.45; display: flex; flex-direction: column;">
+
+  <header style="position: relative; z-index: 2; background: #FFFFFF; border-bottom: 1px solid #E1E4E8; display: flex; align-items: stretch; flex-wrap: wrap; gap: 4px 22px; padding: 0 20px;">
+    <div style="display: flex; align-items: center; gap: 10px; min-height: 52px;">
+      <span style="font-family: 'IBM Plex Mono', monospace; font-weight: 600; font-size: 15px; letter-spacing: .02em;">221B</span>
+      <span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border: 1px solid #E1E4E8; border-radius: 6px; background: #F7F8FA; font-family: 'IBM Plex Mono', monospace; font-size: 12px;"><span style="width: 7px; height: 7px; border-radius: 50%; background: #19703A;"></span>local-rke2</span>
+    </div>
+    <nav aria-label="Cluster tabs" style="display: flex; align-items: stretch; gap: 18px; flex-wrap: wrap;">
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Alerts</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Nodes</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Fleets</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Namespaces</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Pods</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Helm</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Services</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Networks</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Access</a>
+      
+        <a href="#" style="display: inline-flex; align-items: center; min-height: 52px; color: #5B636E; font-weight: 500; text-decoration: none; white-space: nowrap;">Policies</a>
+      
+    </nav>
+    <div style="flex: 1 1 0; min-width: 0;"></div>
+    <a href="#" aria-current="page" style="display: inline-flex; align-items: center; gap: 7px; min-height: 52px; color: #13161B; font-weight: 500; text-decoration: none; box-shadow: inset 0 -2px 0 #0A6E69;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3z"/></svg>
+      Administration
+    </a>
+    <div style="position: relative; display: flex; align-items: center; min-height: 52px;">
+      <button type="button" aria-haspopup="menu" aria-expanded="true" style="display: flex; align-items: center; gap: 9px; border: 1px solid #C9CFD6; background: #F7F8FA; border-radius: 8px; padding: 4px 9px; cursor: pointer; color: inherit; font-size: 12px;">
+        <span aria-hidden="true" style="width: 26px; height: 26px; border-radius: 50%; background: #E1F0EE; color: #0A6E69; font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; justify-content: center;">MS</span>
+        <span style="color: #3F4651;">mikhail@stolpner.com</span>
+        <span style="padding: 1px 7px; border-radius: 5px; background: #ECEEF1; color: #3F4651; font-size: 11px; font-weight: 500;">SuperAdmin</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div role="menu" aria-label="Account" style="position: absolute; right: 0; top: 48px; width: 280px; background: #FFFFFF; border: 1px solid #C9CFD6; border-radius: 10px; box-shadow: 0 10px 28px rgba(19,22,27,.16); padding: 12px; display: flex; flex-direction: column; gap: 10px;">
+        <div>
+          <div style="font-weight: 600;">mikhail@stolpner.com</div>
+          <div style="color: #5B636E; font-size: 12px;">Signed in with a local account · SuperAdmin</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid #E1E4E8;">
+          <span style="font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">Theme</span>
+          <div role="group" aria-label="Theme" style="display: inline-flex; align-self: flex-start; background: #ECEEF1; border-radius: 8px; padding: 2px; gap: 2px;">
+            <button type="button" aria-pressed="true" style="border: 0; background: #FFFFFF; color: #13161B; border-radius: 6px; padding: 3px 11px; font-size: 12px; font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,.08), 0 0 0 1px #E1E4E8; cursor: pointer;">Light</button>
+            <button type="button" aria-pressed="false" style="border: 0; background: transparent; color: #5B636E; border-radius: 6px; padding: 3px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">Dark</button>
+          </div>
+          <span style="color: #5B636E; font-size: 12px;">For this browser.</span>
+        </div>
+        <div style="padding-top: 10px; border-top: 1px solid #E1E4E8;">
+          <button type="button" role="menuitem" style="border: 1px solid #E1E4E8; background: #FFFFFF; color: #3F4651; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 500; cursor: pointer;">Sign out</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main style="flex: 1 1 auto; width: 100%; max-width: 1440px; margin: 0 auto; box-sizing: border-box; padding: 20px; display: flex; flex-direction: column; gap: 18px;">
+
+    <div style="display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px 28px; border-bottom: 1px solid #E1E4E8;">
+      <h1 style="margin: 0 0 9px; font-size: 17px; font-weight: 600;">Administration</h1>
+      <nav aria-label="Administration pages" style="display: flex; gap: 22px; flex-wrap: wrap;">
+        <a href="#" style="padding: 0 1px 9px; color: #5B636E; font-weight: 500; text-decoration: none;">Roles</a>
+        <a href="#" style="padding: 0 1px 9px; color: #5B636E; font-weight: 500; text-decoration: none;">Permissions</a>
+        <a href="#" title="SuperAdmin only" style="padding: 0 1px 9px; color: #5B636E; font-weight: 500; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">Users
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></a>
+        <a href="#" aria-current="page" title="SuperAdmin only" style="padding: 0 1px 9px; color: #13161B; font-weight: 500; text-decoration: none; box-shadow: inset 0 -2px 0 #0A6E69; display: inline-flex; align-items: center; gap: 6px;">Settings
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg></a>
+      </nav>
+    </div>
+
+    <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; width: min(1040px, 100%);">
+      <nav aria-label="Settings sections" style="flex: 0 0 200px; display: flex; flex-direction: column; gap: 2px;">
+        <a href="#" style="display: flex; flex-direction: column; padding: 8px 12px; border-radius: 8px; text-decoration: none; color: #13161B;"><span style="font-weight: 600; font-size: 13px;">General</span><span style="font-size: 11.5px; color: #5B636E;">Refresh rate</span></a>
+        <a href="#" aria-current="page" style="display: flex; flex-direction: column; padding: 8px 12px; border-radius: 8px; text-decoration: none; color: #13161B; background: #FFFFFF; box-shadow: inset 3px 0 0 #0A6E69;"><span style="font-weight: 600; font-size: 13px;">Sherlock</span><span style="font-size: 11.5px; color: #5B636E;">AI provider, model, clusters, caps</span></a>
+        <a href="#" style="display: flex; flex-direction: column; padding: 8px 12px; border-radius: 8px; text-decoration: none; color: #13161B;"><span style="font-weight: 600; font-size: 13px;">Watson</span><span style="font-size: 11.5px; color: #5B636E;">Commands and approvals</span></a>
+      </nav>
+
+      <section aria-labelledby="sherlock-h" style="flex: 1 1 480px; min-width: 0; background: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 10px; padding: 20px 24px 20px; display: flex; flex-direction: column; gap: 18px;">
+        <h2 id="sherlock-h" style="margin: 0; font-size: 16px; font-weight: 600;">Sherlock</h2>
+        <p style="margin: 0; color: #5B636E; font-size: 12px;">Sherlock answers questions about a cluster through the AI model chosen here, reading only what the person asking may read. Nothing is sent to the model for a cluster where Sherlock is off.</p>
+
+        <section aria-label="AI provider" style="display: flex; flex-direction: column; gap: 10px;">
+          <h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">AI provider and model</h3>
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;">
+            <label style="display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 600; min-width: 0;">Provider<span style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 6px 10px; font-size: 12.5px; color: #13161B; background: #FFFFFF; display: flex; align-items: center; justify-content: space-between; font-weight: 400;">Anthropic — the Claude API<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5B636E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span><span style="font-size: 11.5px; font-weight: 400; color: #5B636E;">Each provider’s own API, or an enterprise gateway in front of one.</span></label>
+            <label style="display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 600; min-width: 0;">Model<span style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 6px 10px; font-size: 12.5px; color: #13161B; background: #FFFFFF; display: flex; align-items: center; justify-content: space-between; font-weight: 400;">Claude Sonnet 5.5 — $3 in · $15 out<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#5B636E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></span><span style="font-size: 11.5px; font-weight: 400; color: #5B636E;">Priced per million tokens, for the spending caps.</span></label>
+          </div>
+        </section>
+
+        <section aria-label="Credential" style="display: flex; flex-direction: column; gap: 6px;">
+          <h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">API key</h3>
+          <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px;">
+            <span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 6px; background: #F7F8FA; border: 1px solid #E1E4E8; font-family: 'IBM Plex Mono', monospace; font-size: 12px;">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>
+              set by the chart · existing Secret
+            </span>
+            <span style="margin: 0; color: #5B636E; font-size: 12px;">It cannot be changed here, and is never shown.</span>
+          </div>
+        </section>
+
+        <section aria-label="Clusters" style="display: flex; flex-direction: column; gap: 6px;">
+          <h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">On for</h3>
+          <div role="group" aria-label="Clusters Sherlock answers about" style="display: flex; flex-direction: column; gap: 6px;">
+            <label style="display: inline-flex; align-items: center; gap: 8px;"><span style="width: 14px; height: 14px; border-radius: 3px; background: #0A6E69; display: inline-flex; align-items: center; justify-content: center;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg></span><span><span style="font-family: &quot;IBM Plex Mono&quot;, monospace; font-size: 12.5px;">local-rke2</span></span></label>
+            <label style="display: inline-flex; align-items: center; gap: 8px;"><span style="width: 14px; height: 14px; border-radius: 3px; border: 1px solid #8E97A3; background: #fff;"></span><span><span style="font-family: &quot;IBM Plex Mono&quot;, monospace; font-size: 12.5px;">analytics-dev</span></span></label>
+          </div>
+        </section>
+
+        <section aria-label="View changes" style="display: flex; flex-direction: column; gap: 6px;">
+          <h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">The person’s view</h3>
+          <label style="display: inline-flex; align-items: center; gap: 8px;"><span style="width: 14px; height: 14px; border-radius: 3px; background: #0A6E69; display: inline-flex; align-items: center; justify-content: center;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg></span><span>Let Sherlock change the view</span></label>
+          <p style="margin: 0; color: #5B636E; font-size: 12px;">Sherlock may open tabs and details, set filters, search, sort, show columns and highlight rows in the asking person’s own window while it answers. It never changes a cluster or what others see, and it cannot open Administration. Off, it still reads what the person sees.</p>
+        </section>
+
+        <section aria-label="Spending caps" style="display: flex; flex-direction: column; gap: 8px;">
+          <h3 style="margin: 0; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #5B636E;">Spending caps</h3>
+          <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+            <label style="display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 600;">Daily cap (US$)<span style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 6px 10px; font-size: 12.5px; color: #13161B; background: #FFFFFF; width: 140px; box-sizing: border-box; font-weight: 400;">25</span></label>
+            <label style="display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; font-weight: 600;">Monthly cap (US$)<span style="border: 1px solid #C9CFD6; border-radius: 7px; padding: 6px 10px; font-size: 12.5px; color: #13161B; background: #FFFFFF; width: 140px; box-sizing: border-box; font-weight: 400;">400</span></label>
+          </div>
+          <p style="margin: 0; color: #5B636E; font-size: 12px;">Spent today $3.12 of $25.00 (41 questions); this month $96.40 of $400.00. Counted from the tokens each answer used, at the model’s price; 0 is no cap. At a cap, new questions are refused until the day or month ends (UTC).</p>
+        </section>
+
+        <div style="display: flex; align-items: center; gap: 10px; padding-top: 12px; border-top: 1px solid #E1E4E8;">
+          <button type="button" disabled style="border: 1px solid #E1E4E8; background: #F7F8FA; color: #5B636E; border-radius: 7px; padding: 5px 11px; font-size: 12px; font-weight: 500; cursor: not-allowed;">Save Sherlock settings</button>
+        </div>
+      </section>
+    </div>
+
+    <div style="display: flex; align-items: flex-start; gap: 8px; color: #3F4651; max-width: 1040px;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1F5DBD" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 3px;"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+      <span>Same sections as the Settings page on main, now under Administration, so only a SuperAdmin sees them. The theme stays with the person, in the account menu above; the refresh rate stays under General.</span>
+    </div>
+  </main>
+</div>
+
+
+</body>
+</html>

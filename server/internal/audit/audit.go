@@ -33,6 +33,20 @@ const (
 	ActionSherlockAsk      = "sherlock.ask"
 	ActionSherlockSettings = "sherlock.settings"
 	ActionSherlockKey      = "sherlock.key"
+	// Roles and users (Phase 6.1, RB-54): first-run setup, changes to local
+	// users, their groups and super roles, the directory's syncs, the
+	// reserved names refused, and drift of the deployed roles.
+	ActionSetup        = "setup"
+	ActionSetupFailed  = "setup.failed"
+	ActionUserCreate   = "user.create"
+	ActionUserUpdate   = "user.update"
+	ActionUserDelete   = "user.delete"
+	ActionUserGroups   = "user.groups"
+	ActionUserSuper    = "user.super"
+	ActionUserSessions = "user.sessions"
+	ActionNameRefused  = "name.refused"
+	ActionLDAPSync     = "ldap.sync"
+	ActionRolesDrift   = "roles.drift"
 )
 
 // Outcomes of an action.

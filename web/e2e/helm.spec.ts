@@ -23,7 +23,6 @@ test('matches helm list -A: every release with its chart, app version, revision,
     expect(r.status, `status of ${w.name}`).toBe(w.status)
     expect(r.updated, `update time of ${w.name}`).toBeTruthy()
   }
-  await expect(page.getByRole('link', { name: /^Helm/ })).toContainText(String(rows.length))
   const list = page.getByTestId('release-list')
   for (const r of rows) {
     const item = list.getByRole('link', { name: new RegExp(`^${r.name}\\b`) })

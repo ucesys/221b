@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"sync"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/roles"
 )
 
 // User is who a session belongs to, as Kubernetes and the audit log name
@@ -18,14 +20,29 @@ type User struct {
 	Email    string   `json:"email,omitempty"`
 	Name     string   `json:"name,omitempty"`
 	Groups   []string `json:"groups,omitempty"`
+	// KubeName and KubeGroups are the user and groups the clusters know the
+	// person as, with their prefixes and the reserved groups (RB-15, RB-05).
+	// Impersonation and access reviews send these and nothing else (RB-37).
+	KubeName   string   `json:"-"`
+	KubeGroups []string `json:"-"`
 }
 
 // Session is one signed-in browser.
 type Session struct {
-	ID       string
-	User     User
-	Admin    bool
-	Method   string // "oidc" or "local"
+	ID   string
+	User User
+	// Admin is true for a SuperAdmin: the console administrator of ADR-26
+	// (RB-13).
+	Admin bool
+	// Roles are every role the person holds, from the most to the least
+	// privileged; Super are the ones held in 221B (RB-05).
+	Roles  []roles.ID
+	Super  []roles.ID
+	Method string // "oidc", "ldap" or "local"
+	// Ref names the person in their directory, to read their groups again.
+	Ref string
+	// GroupsAt is when the groups were last read from the source (RB-23).
+	GroupsAt time.Time
 	Created  time.Time
 	LastSeen time.Time
 	// Expires is the latest the session may live, whatever the activity.
@@ -66,6 +83,58 @@ func (s *Sessions) Create(u User, admin bool, method string) *Session {
 	s.byID[sess.ID] = sess
 	s.mu.Unlock()
 	return sess
+}
+
+// Start stores a session made by the caller, giving it an ID and its times.
+func (s *Sessions) Start(sess Session) *Session {
+	now := s.now()
+	sess.ID, sess.Created, sess.LastSeen, sess.Expires = randomID(), now, now, now.Add(s.max)
+	if sess.GroupsAt.IsZero() {
+		sess.GroupsAt = now
+	}
+	s.mu.Lock()
+	s.byID[sess.ID] = &sess
+	s.mu.Unlock()
+	return &sess
+}
+
+// Update changes a live session in place; it reports whether there was one.
+func (s *Sessions) Update(id string, fn func(*Session)) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.byID[id]
+	if ok {
+		fn(sess)
+	}
+	return ok
+}
+
+// Live returns copies of the sessions that have not expired.
+func (s *Sessions) Live() []Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	var out []Session
+	for _, sess := range s.byID {
+		if now.Sub(sess.LastSeen) <= s.idle && !now.After(sess.Expires) {
+			out = append(out, *sess)
+		}
+	}
+	return out
+}
+
+// DeleteWhere ends every session the test selects and says how many.
+func (s *Sessions) DeleteWhere(match func(Session) bool) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for id, sess := range s.byID {
+		if match(*sess) {
+			delete(s.byID, id)
+			n++
+		}
+	}
+	return n
 }
 
 // Get finds a live session and notes the activity; an expired one is

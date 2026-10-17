@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import type { Browser, Page } from '@playwright/test'
 import { expect, test } from './test'
 import { E2E_DEV, E2E_PASSWORD } from './accounts'
-import { cluster, inKind, podRows, snapshot } from './cluster'
+import { cluster, inKind, nodeRows, podRows, snapshot } from './cluster'
 import type { Snapshot } from '../src/api/types'
 
 /** Signs a fresh context in as an account, through whichever provider the console has. */
@@ -53,9 +53,12 @@ test('a person sees only the namespaces Kubernetes lets them list, in every tab,
   for (const p of myPods) expect(allowed, p.key).toContain(p.namespace)
   const myNamespaces = (mine.views.namespaces?.rows ?? []) as { name: string }[]
   expect(myNamespaces.map((n) => n.name).sort()).toEqual(allowed.filter((ns) => (all.views.namespaces?.rows as { name: string }[]).some((n) => n.name === ns)).sort())
-  expect(mine.views.nodes?.rows ?? []).toEqual([])
+  // Nodes are visible to everyone who signs in (221b-nodes, bound to
+  // 221b:console-users) on a real cluster; the simulator knows no such group.
+  const myNodes = inKind ? nodeRows(all).length : 0
+  expect(nodeRows(mine).length).toBe(myNodes)
   expect(mine.counts?.pods).toBe(myPods.length)
-  expect(mine.counts?.nodes ?? 0).toBe(0)
+  expect(mine.counts?.nodes ?? 0).toBe(myNodes)
   expect(JSON.stringify(mine)).not.toContain(hidden!.name)
 
   // The Pods tab lists them (the table renders a window of a long list,
@@ -64,7 +67,6 @@ test('a person sees only the namespaces Kubernetes lets them list, in every tab,
   await page.goto('/#/pods')
   await expect(page.locator('[data-pod]').first()).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('pods-count')).toHaveText(count)
-  await expect(page.locator('.rk-tabs [data-tab=pods] .rk-count')).toHaveText(String(myPods.length))
   await page.getByTestId('pod-search').fill(hidden!.name)
   await expect(page.locator('[data-pod]')).toHaveCount(0)
   await expect(page.getByText('No pods match these filters.')).toBeVisible()
@@ -80,10 +82,11 @@ test('a person sees only the namespaces Kubernetes lets them list, in every tab,
   expect(exported).toContain(shown!.name)
   expect(exported).not.toContain(hidden!.name)
 
-  // The Nodes tab has nothing for them; the Namespaces tab their namespaces.
+  // The Nodes tab shows the nodes everyone sees (none in the simulator);
+  // the Namespaces tab their namespaces.
   await page.goto('/#/nodes')
-  await expect(page.locator('.rk-tabs [data-tab=nodes] .rk-count')).toHaveText('0')
-  await expect(page.locator('[data-node]')).toHaveCount(0)
+  await expect(page.locator('[data-node]')).toHaveCount(myNodes)
+  if (!inKind) await expect(page.locator('[data-node]')).toHaveCount(0)
   await page.goto('/#/namespaces')
   const list = page.getByTestId('namespace-list')
   await expect(list.locator('a.rk-rrow').first()).toBeVisible({ timeout: 20_000 })

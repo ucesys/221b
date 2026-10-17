@@ -11,6 +11,8 @@ interface Props {
   me: Me | null
   /** Opens the connection editor for a new cluster. */
   onAdd: () => void
+  /** Opens the connection editor; offered to a SuperAdmin. */
+  onEdit?: (id: string) => void
 }
 
 /** How to read the bars, on hover (asked at the Phase 6 review, in place of a note under them). */
@@ -18,7 +20,7 @@ const BAR_LEGEND = 'Light bar: requested. Solid bar: in use. The percentage is w
 
 function Bar({ line, testid, note }: { line: UseLine; testid: string; note?: string }) {
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '64px minmax(0, 1fr)', alignItems: 'center', gap: '4px 10px' }} data-testid={testid} title={[line.tip, line.reqPct > 0 ? BAR_LEGEND : '', note ?? ''].filter(Boolean).join('\n\n')}>
+    <div style={{ display: 'grid', gridTemplateColumns: '64px minmax(0, 1fr)', alignItems: 'center', gap: '4px 10px' }} data-testid={testid} data-tip={[line.tip, line.reqPct > 0 ? BAR_LEGEND : '', note ?? ''].filter(Boolean).join('\n\n')}>
       <span style={{ fontSize: 12, color: 'var(--fg2)' }}>{line.label}</span>
       <span className="rk-bar" style={{ height: 8, borderRadius: 4, width: '100%' }} role="img" aria-label={`${line.label}: ${line.text}`}>
         {line.reqPct > 0 && <span className="rk-req" style={{ width: `${Math.min(100, line.reqPct).toFixed(1)}%` }} />}
@@ -44,7 +46,7 @@ function Stat({ label, value, sub, tone, href, testid }: { label: string; value:
   )
 }
 
-function ClusterCard({ c, now }: { c: HomeCluster; now: number }) {
+function ClusterCard({ c, now, onEdit }: { c: HomeCluster; now: number; onEdit?: () => void }) {
   const env = envOf(c.env)
   const health = healthOf(c)
   const up = c.state === 'connected' && c.synced
@@ -94,6 +96,7 @@ function ClusterCard({ c, now }: { c: HomeCluster; now: number }) {
             <Bar line={resourceLine('Memory', c.memory, metrics)} testid="home-memory" note={noUsage} />
             <Bar line={podLine(c)} testid="home-podroom" />
           </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {c.sherlock && (
             <a
               className="rk-btn rk-ask"
@@ -108,11 +111,24 @@ function ClusterCard({ c, now }: { c: HomeCluster; now: number }) {
               Find deficiencies
             </a>
           )}
+          {onEdit && (
+            <button className="rk-btn" onClick={onEdit} style={{ height: 30 }} title={`Edit the connection to ${c.name}`} data-testid="home-edit">
+              Edit cluster
+            </button>
+          )}
+          </div>
         </>
       ) : (
-        <a className="rk-btn" href={clusterPageHref(c.id)} style={{ alignSelf: 'flex-start', height: 30 }}>
-          See its connection
-        </a>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          <a className="rk-btn" href={clusterPageHref(c.id)} style={{ height: 30 }}>
+            See its connection
+          </a>
+          {onEdit && (
+            <button className="rk-btn" onClick={onEdit} style={{ height: 30 }} title={`Edit the connection to ${c.name}`} data-testid="home-edit">
+              Edit cluster
+            </button>
+          )}
+        </div>
       )}
     </section>
   )
@@ -123,7 +139,7 @@ function ClusterCard({ c, now }: { c: HomeCluster; now: number }) {
  * cluster the console is set up for, with its health and what its nodes'
  * CPU, memory and pod room hold, as the person may see them.
  */
-export function HomePage({ now, me, onAdd }: Props) {
+export function HomePage({ now, me, onAdd, onEdit }: Props) {
   const { clusters, loaded, error } = useHome()
   const up = clusters.filter((c) => c.state === 'connected')
   const sum = (f: (c: HomeCluster) => number) => clusters.reduce((n, c) => n + f(c), 0)
@@ -155,7 +171,7 @@ export function HomePage({ now, me, onAdd }: Props) {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(460px, 100%), 1fr))', gap: 14, alignItems: 'start' }} data-testid="home-cards">
           {clusters.map((c) => (
-            <ClusterCard key={c.id} c={c} now={now} />
+            <ClusterCard key={c.id} c={c} now={now} onEdit={me?.admin && onEdit ? () => onEdit(c.id) : undefined} />
           ))}
         </div>
       )}
