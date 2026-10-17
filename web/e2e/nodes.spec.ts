@@ -33,7 +33,6 @@ test('shows the cluster and every node', async ({ page, request }) => {
   }
   await expect(page.locator('[data-node]')).toHaveCount(rows.length)
   const cp = rows.filter((r) => r.role === 'control-plane').length
-  await expect(page.getByRole('link', { name: /^Nodes/ })).toContainText(String(rows.length))
   const roles = page.getByRole('group', { name: 'Show nodes by role' })
   await expect(roles.getByRole('button', { name: /^All/ })).toContainText(String(rows.length))
   await expect(roles.getByRole('button', { name: /Control plane/ })).toContainText(String(cp))

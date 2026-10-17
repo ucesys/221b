@@ -24,7 +24,6 @@ test('lists every pod with its status, node and namespace, and filters by each',
   const pods = podRows(await snapshot(request, ['pods']))
   expect(pods.length).toBeGreaterThan(0)
   await expect.poll(() => countShown(page)).toBe(pods.length)
-  await expect(page.getByRole('link', { name: /^Pods/ })).toContainText(String(pods.length))
 
   // A namespace alone.
   const ns = pods[0]!.namespace

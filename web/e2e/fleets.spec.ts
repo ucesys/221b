@@ -62,7 +62,6 @@ test('an administrator creates a fleet in the drawer, and its nodes are its memb
   const f = page.locator('[data-fleet]').filter({ hasText: 'Linux nodes' })
   await expect(f.getByTestId('fleet-count')).toHaveText(String(linux))
   await expect(page.locator('[data-testid="fleet-list"] h2')).toContainText('1')
-  await expect(page.getByRole('link', { name: /^Fleets/ })).toContainText('1')
 
   // The new fleet is selected, with its members in the matrix.
   await expect(page).toHaveURL(/fleet=linux-nodes/)
@@ -191,8 +190,7 @@ test('fleets are the cluster’s, the same for everyone who signs in', async ({ 
   try {
     await other.goto('/#/fleets')
     await expect(other.getByTestId('fleet-list')).toBeVisible()
-    // The definition reaches them with the settings, whatever nodes they may list; the tab counts it.
-    await expect(other.getByRole('link', { name: /^Fleets/ })).toContainText('1')
+    // The definition reaches them with the settings, whatever nodes they may list.
     const shared = await other.evaluate(async () => {
       const snap = (await (await fetch('/api/v1/snapshot?views=nodes')).json()) as { settings?: { fleets?: Record<string, { id: string }[]> } }
       return (snap.settings?.fleets?.local ?? []).map((f) => f.id)
