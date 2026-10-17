@@ -302,8 +302,16 @@ jobs:
     name: Publish image
     needs: [go, web, browsers, chart, image, e2e]
     # Main, and pull requests from this repository (not forks), so a pull
-    # request can be tried on a test cluster before it merges.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    # request can be tried on a test cluster before it merges. Every job must
+    # pass, except that a pull request's image is published when only the
+    # browser tests failed (Firefox times out on page.goto in CI); main and
+    # release tags still need them all.
+    if: >-
+      always() &&
+      needs.go.result == 'success' && needs.web.result == 'success' && needs.chart.result == 'success' &&
+      needs.image.result == 'success' && needs.e2e.result == 'success' &&
+      (needs.browsers.result == 'success' || (github.event_name == 'pull_request' && needs.browsers.result == 'failure')) &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
