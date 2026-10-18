@@ -148,7 +148,7 @@ test('an acknowledged alert leaves the banners for everyone, and stays here and 
   }
 })
 
-test('only active alerts by default; recovered pods go last, and the empty groups after them', async ({ page, request }) => {
+test('only active alerts by default; the acknowledged after the others, then the resolved, then the empty groups', async ({ page, request }) => {
   await open(page)
   const active = page.getByTestId('alert-active')
   await expect(active).toBeChecked()
@@ -159,15 +159,14 @@ test('only active alerts by default; recovered pods go last, and the empty group
   await expect(page).toHaveURL(/show=all/)
   if (recovered.length) {
     const tag = card(page, recovered[0]!.key).locator('.rk-tag').first()
-    await expect(tag).toHaveText('Recovered')
+    await expect(tag).toHaveText('Resolved')
     await expect(tag).toHaveAttribute('data-tone', 'ok')
   }
-  // The groups in order: what is going on, then recovered pods, then the empty ones.
+  // The groups in order (6.5): what nobody acknowledged, then the
+  // acknowledged, then the resolved, then the kinds with nothing to show.
   const ids = await page.locator('[data-testid^="alert-section-"]').evaluateAll((els) => els.map((e) => ({ id: e.getAttribute('data-testid')!.slice('alert-section-'.length), empty: !!e.querySelector('[data-testid="alert-empty"]') })))
-  const firstEmpty = ids.findIndex((x) => x.empty)
-  if (firstEmpty >= 0) expect(ids.slice(firstEmpty).every((x) => x.empty)).toBe(true)
-  const rec = ids.findIndex((x) => x.id === 'recovered')
-  if (rec >= 0) expect(ids.slice(0, rec).every((x) => !x.empty)).toBe(true)
+  const rank = (x: { id: string; empty: boolean }) => (x.empty ? 3 : x.id === 'recovered' ? 2 : x.id === 'acknowledged' ? 1 : 0)
+  expect(ids.map(rank)).toEqual([...ids.map(rank)].sort((a, b) => a - b))
   await active.check()
   await expect(page).not.toHaveURL(/show=all/)
 })

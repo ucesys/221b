@@ -17,7 +17,7 @@ export function sevLabel(r: AlertRow): { label: string; tone: string } {
     case 'pending':
       return { label: 'Pending', tone: 'warn' }
     case 'recovered':
-      return { label: 'Recovered', tone: 'ok' }
+      return { label: 'Resolved', tone: 'ok' }
     case 'error':
       return { label: 'Error', tone: 'err' }
   }
@@ -99,7 +99,7 @@ export interface AlertSections {
   volumes: AlertRow[]
 }
 
-/** Whether an alert is still going on: everything but a pod that recovered. */
+/** Whether an alert is still going on. The server marks one resolved once its object is green with nothing going on (6.5): a pod running again, a node ready with only past warnings, a claim bound with its pods running. */
 export function isActive(r: AlertRow): boolean {
   return r.severity !== 'recovered'
 }
@@ -123,28 +123,28 @@ export interface Tile {
   tone: string
 }
 
-/** The six tiles; search and the kind filter do not change them. */
+/** The six tiles; search and the kind filter do not change them. Resolved alerts count only on the last. */
 export function tilesOf(rows: AlertRow[]): Tile[] {
   const n = (f: (r: AlertRow) => boolean) => rows.filter(f).length
   const failed = n((r) => r.kind === 'pod' && r.severity === 'failed')
   const pending = n((r) => r.kind === 'pod' && r.severity === 'pending')
   const nodeErr = n((r) => r.kind === 'node' && r.severity === 'error')
-  const nodeWarn = n((r) => r.kind === 'node' && r.severity !== 'error')
-  const vols = n((r) => r.kind === 'pvc')
-  const recovered = n((r) => r.kind === 'pod' && r.severity === 'recovered')
+  const nodeWarn = n((r) => r.kind === 'node' && r.severity === 'warning')
+  const vols = n((r) => r.kind === 'pvc' && isActive(r))
+  const recovered = n((r) => !isActive(r))
   return [
     { count: failed, label: failed === 1 ? 'pod failed to start' : 'pods failed to start', tone: failed ? 'err' : 'muted' },
     { count: pending, label: pending === 1 ? 'pod pending' : 'pods pending', tone: pending ? 'warn' : 'muted' },
     { count: nodeErr, label: nodeErr === 1 ? 'node with errors' : 'nodes with errors', tone: nodeErr ? 'err' : 'muted' },
     { count: nodeWarn, label: nodeWarn === 1 ? 'node with warnings' : 'nodes with warnings', tone: nodeWarn ? 'warn' : 'muted' },
     { count: vols, label: vols === 1 ? 'volume with warnings' : 'volumes with warnings', tone: vols ? 'warn' : 'muted' },
-    { count: recovered, label: recovered === 1 ? 'pod recovered after warnings' : 'pods recovered after warnings', tone: recovered ? 'ok' : 'muted' },
+    { count: recovered, label: recovered === 1 ? 'alert resolved' : 'alerts resolved', tone: recovered ? 'ok' : 'muted' },
   ]
 }
 
 /**
  * The tab's badge: every active alert, acknowledged ones included (asked at
- * the Phase 6 review), recovered pods aside. Red while something
+ * the Phase 6 review), resolved ones aside (6.5). Red while something
  * unacknowledged is failing.
  */
 export function badgeOf(rows: AlertRow[]): { count: number; tone: string } {
@@ -179,13 +179,13 @@ function lowerFirst(s: string): string {
   return s ? s[0]!.toLowerCase() + s.slice(1) : s
 }
 
-/** The banners every other tab shows: red for what is failing, amber for what waits. Acknowledged alerts stay on the Alerts tab only. */
+/** The banners every other tab shows: red for what is failing, amber for what waits. Acknowledged and resolved alerts stay on the Alerts tab only. */
 export function bannersOf(all: AlertRow[], now: number): AlertBanner[] {
-  const rows = all.filter((r) => !r.ack)
+  const rows = all.filter((r) => !r.ack && isActive(r))
   const failed = rows.filter((r) => r.kind === 'pod' && r.severity === 'failed')
   const pending = rows.filter((r) => r.kind === 'pod' && r.severity === 'pending')
   const nodeErr = rows.filter((r) => r.kind === 'node' && r.severity === 'error')
-  const nodeWarn = rows.filter((r) => r.kind === 'node' && r.severity !== 'error')
+  const nodeWarn = rows.filter((r) => r.kind === 'node' && r.severity === 'warning')
   const nodeItem = (r: AlertRow, sev: string) =>
     `${r.name} — ${(r.problems ?? [])
       .filter((p) => sev === 'any' || p.severity === sev)

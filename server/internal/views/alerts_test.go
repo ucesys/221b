@@ -110,8 +110,29 @@ func TestNodeAndVolumeAlerts(t *testing.T) {
 	user.Status.ContainerStatuses = []corev1.ContainerStatus{{Name: "main", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}}}
 	src.Put(user)
 	src.Put(warning("uid-grafana-0", "Pod", "shop", "grafana-0", "FailedAttachVolume", `Multi-Attach error for volume "pvc-1234" Volume is already exclusively attached to one node`, 1, 14*time.Minute, 14*time.Minute))
+	// Green objects with only past warnings are resolved (6.5): a ready
+	// node, and a bound claim whose pod runs now.
+	src.Put(&corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-3", UID: "uid-worker-3", Labels: map[string]string{"node-role.kubernetes.io/worker": ""}},
+		Status:     corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue, LastTransitionTime: ts(48 * time.Hour)}}},
+	})
+	src.Put(warning("worker-3", "Node", "", "worker-3", "ImageGCFailed", "failed to garbage collect required amount of images", 2, 50*time.Minute, 30*time.Minute))
+	src.Put(&corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "data", Namespace: "shop", UID: "uid-pvc-data"},
+		Spec:       corev1.PersistentVolumeClaimSpec{VolumeName: "pvc-5678", StorageClassName: &sc},
+		Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	})
+	db := pod("shop", "db-0", "worker-1")
+	db.Spec.Volumes = []corev1.Volume{{Name: "data", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "data"}}}}
+	src.Put(db)
+	src.Put(warning("uid-db-0", "Pod", "shop", "db-0", "FailedMount", `MountVolume.SetUp failed for volume "pvc-5678": timed out`, 1, 40*time.Minute, 40*time.Minute))
 
 	got := alerts(t, src)
+	for _, k := range []string{"node:worker-3", "pvc:shop/data"} {
+		if a, ok := got[k]; !ok || a.Severity != views.SevRecovered || a.StatusTone != "ok" {
+			t.Errorf("%s is not resolved: %+v", k, a)
+		}
+	}
 	n, ok := got["node:worker-2"]
 	if !ok || n.Severity != views.SevWarning || n.Role != "worker" || n.Pool != "general" || n.IP != "10.20.2.33" || n.Status != "Cordoned" {
 		t.Fatalf("node: %+v", n)

@@ -42,6 +42,15 @@ describe('alerts', () => {
     expect(s.workers.map((r) => r.name)).toEqual(['w2'])
   })
 
+  it('leaves resolved alerts of any kind out of the badge, the banners and the warning tiles (6.5)', () => {
+    const quiet: AlertRow = { ...cordoned, key: 'node:w3', name: 'w3', severity: 'recovered', status: 'Ready', statusTone: 'ok' }
+    const bound: AlertRow = { key: 'pvc:web/data', kind: 'pvc', severity: 'recovered', name: 'data', namespace: 'web', status: 'Bound', statusTone: 'ok', events: [] }
+    expect(badgeOf([quiet, bound])).toEqual({ count: 0, tone: 'muted' })
+    expect(bannersOf([quiet, bound], now)).toEqual([])
+    expect(tilesOf([quiet, bound, oom]).map((t) => t.count)).toEqual([0, 0, 0, 0, 0, 3])
+    expect(tabTone([quiet, bound])).toBeUndefined()
+  })
+
   it('makes one banner for errors and one for warnings', () => {
     const b = bannersOf([pull, pending, oom, cordoned, down], now)
     expect(b).toHaveLength(2)
@@ -59,6 +68,6 @@ describe('alerts', () => {
     expect(badgeOf([acked])).toEqual({ count: 1, tone: 'warn' })
     expect(bannersOf(rows, now).map((b) => b.detail).join(' ')).not.toContain('web/d')
     expect(sectionsOf(rows).pods.map((r) => r.name)).toEqual(['a', 'd', 'c'])
-    expect(sevLabel(oom)).toEqual({ label: 'Recovered', tone: 'ok' })
+    expect(sevLabel(oom)).toEqual({ label: 'Resolved', tone: 'ok' })
   })
 })
