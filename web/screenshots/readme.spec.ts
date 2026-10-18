@@ -93,8 +93,6 @@ test('pod details', async () => {
 
 for (const [name, hash] of [
   ['admin-roles', '#/admin/roles'],
-  ['admin-permissions', '#/admin/permissions'],
-  ['admin-users', '#/admin/users'],
 ] as const) {
   test(name, async () => {
     await shot(name, hash)
@@ -124,8 +122,16 @@ test('sherlock', async () => {
   await expect(input).toBeVisible({ timeout: 15_000 })
   await input.fill(`Why is ${pod.namespace}/${pod.name} ${pod.status === 'Pending' ? 'pending' : 'not running'}?`)
   await input.press('Enter')
-  await expect(page.getByTestId('sherlock-answer').last()).toHaveAttribute('data-status', 'done', { timeout: 30_000 })
+  const answer = page.getByTestId('sherlock-answer').last()
+  await expect(answer).toHaveAttribute('data-status', 'done', { timeout: 30_000 })
+  await page.getByTestId('sherlock-maximize').first().click()
+  await answer.evaluate((el) => el.scrollIntoView({ block: 'start' }))
   await save('sherlock')
+  await page.keyboard.press('Escape')
+})
+
+test('admin settings', async () => {
+  await shot('admin-settings', '#/admin/settings')
 })
 
 test('watson approval card', async () => {
@@ -138,10 +144,10 @@ test('watson approval card', async () => {
   expect(res.status(), await res.text()).toBe(202)
   await page.goto('/#/nodes')
   await connected(page)
-  if (await page.getByTestId('dock-show-watson').count()) await page.getByTestId('dock-show-watson').click()
   const card = page.getByTestId('watson-card').last()
   await expect(card).toBeVisible({ timeout: 15_000 })
   await expect(card.getByTestId('watson-approve')).toBeEnabled({ timeout: 60_000 })
-  await card.scrollIntoViewIfNeeded()
+  await page.getByTestId('watson').getByTestId('sherlock-maximize').first().click()
+  await card.evaluate((el) => el.scrollIntoView({ block: 'start' }))
   await save('watson-approval')
 })
