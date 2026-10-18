@@ -40,7 +40,8 @@ func (s *Server) watsonRoutes() {
 
 // watsonCluster describes the request's cluster to Watson.
 func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.Cluster, bool) {
-	if _, _, ok := s.lookup(w, r); !ok {
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
 		return watson.Cluster{}, false
 	}
 	id := clusterID(r)
@@ -68,6 +69,14 @@ func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.C
 		return c, false
 	}
 	c.Config = cfg
+	// With rbac.enforce strict, a cluster whose roles have not been compared
+	// yet refuses changes (RB-36). A connection just made or a console just
+	// started is compared now, from the cache, rather than at the next round.
+	if s.opts.Roles.Enforce == "strict" {
+		if _, ok := s.monitor().Get(id); !ok {
+			s.checkRoles(id, cl)
+		}
+	}
 	c.Locked = s.RoleRefusal(id)
 	return c, true
 }
@@ -411,6 +420,15 @@ func (s *Server) getWatsonCommand(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, b)
 }
 
+// ofCluster says whether the command was planned on the cluster in the
+// URL. It is approved, discarded, stopped or edited only there, where its
+// card, dry run and guards were made; asked through another cluster's URL
+// it does not exist.
+func (s *Server) ofCluster(c watson.Cluster, id string) bool {
+	snap, _, ok := s.opts.Watson.Snapshot(id, 0)
+	return ok && snap.Cluster == c.ID
+}
+
 func (s *Server) postWatsonApprove(w http.ResponseWriter, r *http.Request) {
 	// A change is approved with the groups the directory gives now, not
 	// the ones from a few minutes ago (RB-37).
@@ -420,6 +438,10 @@ func (s *Server) postWatsonApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	c, who, ok := s.watsonReady(w, r)
 	if !ok {
+		return
+	}
+	if !s.ofCluster(c, r.PathValue("id")) {
+		s.watsonAnswer(w, c, who, nil, watson.ErrNotFound)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
@@ -433,6 +455,10 @@ func (s *Server) postWatsonDiscard(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.ofCluster(c, r.PathValue("id")) {
+		s.watsonAnswer(w, c, who, nil, watson.ErrNotFound)
+		return
+	}
 	it, err := s.opts.Watson.Discard(c, who, r.PathValue("id"))
 	s.watsonAnswer(w, c, who, it, err)
 }
@@ -442,6 +468,10 @@ func (s *Server) postWatsonStop(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.ofCluster(c, r.PathValue("id")) {
+		s.watsonAnswer(w, c, who, nil, watson.ErrNotFound)
+		return
+	}
 	it, err := s.opts.Watson.Stop(c, who, r.PathValue("id"))
 	s.watsonAnswer(w, c, who, it, err)
 }
@@ -449,6 +479,10 @@ func (s *Server) postWatsonStop(w http.ResponseWriter, r *http.Request) {
 func (s *Server) putWatsonCommand(w http.ResponseWriter, r *http.Request) {
 	c, who, ok := s.watsonReady(w, r)
 	if !ok {
+		return
+	}
+	if !s.ofCluster(c, r.PathValue("id")) {
+		s.watsonAnswer(w, c, who, nil, watson.ErrNotFound)
 		return
 	}
 	var in struct {

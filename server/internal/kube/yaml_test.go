@@ -124,3 +124,62 @@ func TestTLSSecretKeepsOnlyCertificateFacts(t *testing.T) {
 		t.Errorf("garbage: %+v", c)
 	}
 }
+
+// A name is one path segment: "..", "/" or "%" would steer the read onto
+// another kind's object, a Secret's values unhidden (X-01).
+func TestCheckPathNames(t *testing.T) {
+	for _, c := range []struct {
+		ns, name string
+		ok       bool
+	}{
+		{"shop", "web", true},
+		{"", "n1", true},
+		{"shop", "web-0.v2", true},
+		{"default", "../secrets/db", false},
+		{"default", "..", false},
+		{"default", "a/b", false},
+		{"default", "a%2Fb", false},
+		{"..", "web", false},
+		{"shop", "", false},
+	} {
+		if err := CheckPathNames(c.ns, c.name); (err == nil) != c.ok {
+			t.Errorf("%q/%q: %v", c.ns, c.name, err)
+		}
+	}
+}
+
+// Under a credential-looking key every string and number is hidden, in
+// lists and maps too; other keys keep their values (P2-07).
+func TestMaskValuesUnderCredentialKeys(t *testing.T) {
+	vals := map[string]any{
+		"replicas":  float64(2),
+		"password":  float64(12345678),
+		"passwords": []any{"hunter2", "swordfish"},
+		"apiTokens": map[string]any{"ci": "abc", "enabled": true},
+		"db":        map[string]any{"host": "db.shop", "secretName": ""},
+	}
+	var masked []string
+	text, err := ToYAML(MaskValues(vals, "", &masked))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"12345678", "hunter2", "swordfish", "abc"} {
+		if strings.Contains(text, leak) {
+			t.Errorf("the values carry %q:\n%s", leak, text)
+		}
+	}
+	for _, keep := range []string{"replicas: 2", "host: db.shop", "enabled: true"} {
+		if !strings.Contains(text, keep) {
+			t.Errorf("the values lost %q:\n%s", keep, text)
+		}
+	}
+	want := map[string]bool{"password": true, "passwords[0]": true, "passwords[1]": true, "apiTokens.ci": true}
+	if len(masked) != len(want) {
+		t.Errorf("masked %v", masked)
+	}
+	for _, m := range masked {
+		if !want[m] {
+			t.Errorf("masked %q", m)
+		}
+	}
+}

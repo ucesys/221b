@@ -67,8 +67,12 @@ func TestMonitorRefusesOnlyWhenStrictAndWider(t *testing.T) {
 	if !m.Set("local", d) || m.Set("local", d) {
 		t.Fatal("Set must report a change once")
 	}
-	if m.Refusal("local", "off") != "" || m.Refusal("other", "strict") != "" {
+	if m.Refusal("local", "off") != "" || m.Refusal("other", "off") != "" {
 		t.Error("refused when it should not")
+	}
+	// A cluster not compared yet: strict fails closed (RB-36).
+	if msg := m.Refusal("other", "strict"); !strings.Contains(msg, "until 221B has compared its roles") {
+		t.Errorf("an unchecked cluster under strict: %q", msg)
 	}
 	msg := m.Refusal("local", "strict")
 	if !strings.Contains(msg, "refused") || !strings.Contains(msg, "delete nodes") || !strings.Contains(msg, "Admin") {

@@ -164,6 +164,12 @@ func TestOIDCSignInEndToEnd(t *testing.T) {
 	if sessionCookie == nil {
 		t.Fatal("no session cookie")
 	}
+	// The sign-in's own cookie is gone once it has done its work.
+	for _, ck := range c.Jar.Cookies(mustURL(app.URL + "/signin/callback")) {
+		if ck.Name == "221b_signin" {
+			t.Error("the sign-in state cookie was left behind")
+		}
+	}
 
 	// The audit log has the sign-in, naming the person.
 	if !strings.Contains(auditOut.String(), `"action":"signin"`) || !strings.Contains(auditOut.String(), `"email":"admin@corp.example"`) {
@@ -189,6 +195,53 @@ func TestOIDCSignInEndToEnd(t *testing.T) {
 	}
 }
 
+// A provider that names someone with a name Kubernetes or 221B reserves
+// does not sign them in (RB-17): the console would act as that name.
+func TestOIDCRefusesAReservedUserName(t *testing.T) {
+	var idp *oidcsim.Provider
+	idpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { idp.ServeHTTP(w, r) }))
+	defer idpSrv.Close()
+	var err error
+	idp, err = oidcsim.New(oidcsim.Options{Issuer: idpSrv.URL + "/oidc", Users: []oidcsim.User{{Email: "system:kube-controller-manager", Name: "Mallory", Password: "password"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var auditOut syncBuffer
+	svc, err := auth.New(auth.Config{
+		Mode: auth.ModeOIDC,
+		OIDC: auth.OIDCConfig{Issuer: idpSrv.URL + "/oidc", ClientID: "221b", ClientSecret: "221b-secret"},
+	}, nil, audit.New(audit.Options{Out: &auditOut}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := console(t, svc)
+	defer app.Close()
+	c := client(t)
+	resp, err := c.Get(app.URL + "/signin/start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	readAll(t, resp)
+	q := resp.Request.URL.Query()
+	q.Set("email", "system:kube-controller-manager")
+	q.Set("password", "password")
+	resp, err = c.PostForm(idpSrv.URL+"/oidc/auth", q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := readAll(t, resp); resp.StatusCode != http.StatusForbidden || !strings.Contains(b, "reserved") {
+		t.Fatalf("a reserved name: %s %s", resp.Status, b)
+	}
+	resp, _ = c.Get(app.URL + "/api/v1/me")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a session was made: %s", resp.Status)
+	}
+	if !strings.Contains(auditOut.String(), `"action":"name.refused"`) {
+		t.Errorf("audit: %s", auditOut.String())
+	}
+}
+
 func TestOIDCRefusesBadTokens(t *testing.T) {
 	var idp *oidcsim.Provider
 	idpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { idp.ServeHTTP(w, r) }))
@@ -210,6 +263,8 @@ func TestOIDCRefusesBadTokens(t *testing.T) {
 		"expired":        func(c map[string]any) (string, error) { c["exp"] = now.Add(-time.Hour).Unix(); return idp.Token(c) },
 		"wrong nonce":    func(c map[string]any) (string, error) { c["nonce"] = "n2"; return idp.Token(c) },
 		"no subject":     func(c map[string]any) (string, error) { delete(c, "sub"); return idp.Token(c) },
+		// Named by an email the provider has not verified.
+		"unverified email": func(c map[string]any) (string, error) { c["email_verified"] = false; return idp.Token(c) },
 		"alg none": func(c map[string]any) (string, error) {
 			h, _ := json.Marshal(map[string]string{"alg": "none"})
 			b, _ := json.Marshal(c)
@@ -231,6 +286,21 @@ func TestOIDCRefusesBadTokens(t *testing.T) {
 		s, _ := make(c)
 		if _, err := p.Verify(context.Background(), s, "n1"); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+
+	// Named by another claim, an unverified email is left out, so it cannot
+	// match an administrator's; a verified one, as a string, is kept.
+	byName := auth.NewProvider(auth.OIDCConfig{Issuer: idpSrv.URL, ClientID: "221b", UsernameClaim: "preferred_username"}, nil, func() time.Time { return now })
+	for verified, want := range map[any]string{false: "", "false": "", true: "u1@corp.example", "true": "u1@corp.example"} {
+		c := map[string]any{"preferred_username": "u1", "email_verified": verified}
+		for k, v := range good {
+			c[k] = v
+		}
+		s, _ := idp.Token(c)
+		id, err := byName.Verify(context.Background(), s, "n1")
+		if err != nil || id.Username != "u1" || id.Email != want {
+			t.Errorf("email_verified %v: %v %+v", verified, err, id)
 		}
 	}
 }
@@ -371,6 +441,37 @@ func TestModeNoneIsAnAnonymousAdmin(t *testing.T) {
 	getJSON(t, client(t), app.URL+"/api/v1/me", &me)
 	if me.Mode != auth.ModeNone || !me.Admin || me.User.Username != "anonymous" {
 		t.Fatalf("me: %+v", me)
+	}
+}
+
+// The page to go on to after sign-in stays on this site, including the
+// forms http.Redirect would clean into one a browser reads as another host.
+func TestSignInNextStaysOnSite(t *testing.T) {
+	svc, err := auth.New(auth.Config{Mode: auth.ModeNone}, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := console(t, svc)
+	defer app.Close()
+	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	for next, want := range map[string]string{
+		"/#/nodes":               "/#/nodes",
+		"/c/prod/#/pods?ns=a":    "/c/prod/#/pods?ns=a",
+		"//evil.example":         "/",
+		"/\\evil.example":        "/",
+		"/./\\evil.example":      "/",
+		"/a/../\\evil.example":   "/",
+		"/\tevil.example":        "/",
+		"https://evil.example/x": "/",
+	} {
+		resp, err := c.Get(app.URL + "/signin?next=" + url.QueryEscape(next))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if got := resp.Header.Get("Location"); got != want {
+			t.Errorf("next %q: went to %q, want %q", next, got, want)
+		}
 	}
 }
 

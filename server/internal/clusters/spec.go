@@ -274,6 +274,13 @@ func CheckCredential(auth string, c Credential, server string, now time.Time) (C
 		if user != nil && user.AuthProvider != nil {
 			return CredentialCheck{}, server, invalid("kubeconfig", fmt.Sprintf("Context %s signs in through the %s auth provider, which the console can’t run. Use a token or a client certificate for it instead.", name, user.AuthProvider.Name))
 		}
+		// A file reference is refused even beside an inline token or
+		// certificate: client-go prefers the file, and on the console's
+		// machine a path such as its ServiceAccount token would be sent to
+		// the kubeconfig's server.
+		if user != nil && (user.ClientCertificate != "" || user.ClientKey != "" || user.TokenFile != "") {
+			return CredentialCheck{}, server, invalid("kubeconfig", fmt.Sprintf("Context %s refers to files on the machine it came from (%s); paste a kubeconfig with the certificate and key, or the token, inline (kubectl config view --flatten --minify).", name, firstNonEmpty(user.ClientCertificate, user.ClientKey, user.TokenFile)))
+		}
 		if user != nil {
 			if user.Token != "" {
 				if exp, ok := jwtClaims(user.Token)["exp"].(float64); ok && exp > 0 {
@@ -284,8 +291,6 @@ func CheckCredential(auth string, c Credential, server string, now time.Time) (C
 				if e, ok := certExpiry(user.ClientCertificateData); ok {
 					info.Expires = &e
 				}
-			} else if user.ClientCertificate != "" || user.TokenFile != "" {
-				return CredentialCheck{}, server, invalid("kubeconfig", fmt.Sprintf("Context %s refers to files on the machine it came from (%s); paste a kubeconfig with the certificate and key, or the token, inline (kubectl config view --flatten --minify).", name, firstNonEmpty(user.ClientCertificate, user.TokenFile)))
 			}
 		}
 		cl := kc.Clusters[ctx.Cluster]

@@ -34,6 +34,8 @@ spec:
     - ports:
         - port: http
           protocol: TCP
+  {{- else if .Values.ingress.enabled }}
+  {{- fail "ingress.enabled with a ClusterIP Service needs networkPolicy.ingressFrom: list the Ingress controller's pods or namespace there (or set networkPolicy.enabled=false), or the network policy lets no traffic in" }}
   {{- else }}
   ingress: []
   {{- end }}

@@ -28,8 +28,9 @@ const (
 // Severities.
 const (
 	SevFailed  = "failed"  // a pod that fails to start now
-	SevPending = "pending" // a pod not running yet
-	// SevRecovered is resolved: a pod that runs now after warnings, a node
+	SevPending = "pending" // a pod not running yet, or running but not ready
+	// SevRecovered is resolved: a pod that runs and is ready now after
+	// warnings, a node
 	// that is ready with only past warnings, a claim that is bound and
 	// whose pods run (6.5: a green object's alert is resolved).
 	SevRecovered = "recovered"
@@ -298,7 +299,13 @@ func podAlert(src Source, p *corev1.Pod, now time.Time) (AlertRow, bool) {
 		}
 	}
 	if sev == "" && (len(events) > 0 || a.OOM) {
-		sev = SevRecovered
+		// Warnings on a pod that runs and is ready are past. One that runs
+		// but is not ready, failing its readiness check, say, still has
+		// the problem they describe.
+		sev = SevPending
+		if row.Tone == "ok" {
+			sev = SevRecovered
+		}
 	}
 	if sev == "" {
 		return AlertRow{}, false

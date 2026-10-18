@@ -305,13 +305,49 @@ func Definition(id ID, t Template, o Options) Role {
 			}
 		} else {
 			r.Template = ReadOnly
-			r.Rules = []Rule{
-				{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: readVerbs},
-				{NonResourceURLs: []string{"*"}, Verbs: []string{"get"}},
-			}
+			r.Rules = superReadOnly()
 		}
 	}
 	return r
+}
+
+// superGetCore are the core kinds and subresources the read-only SuperAdmin
+// may get, Secrets included (RB-13). get on "*" would also grant
+// nodes/proxy, pods/exec, pods/attach, pods/portforward, pods/proxy and
+// services/proxy, and the API server and the kubelet authorize a GET (a
+// WebSocket upgrade included) on those as get: a command in any pod, which
+// no read-only role may run. RBAC cannot deny, so the core group is listed.
+var superGetCore = []string{
+	"componentstatuses", "configmaps", "endpoints", "events", "limitranges",
+	"namespaces", "namespaces/status", "nodes", "nodes/status",
+	"persistentvolumeclaims", "persistentvolumeclaims/status", "persistentvolumes", "persistentvolumes/status",
+	"pods", "pods/ephemeralcontainers", "pods/log", "pods/status", "podtemplates",
+	"replicationcontrollers", "replicationcontrollers/scale", "replicationcontrollers/status",
+	"resourcequotas", "resourcequotas/status", "secrets", "serviceaccounts", "services", "services/status",
+}
+
+// superGetGroups are the built-in API groups, whose kinds the read-only
+// SuperAdmin may get whole: none has a subresource that opens a shell or a
+// proxy. Custom resources are listed and watched through the first rule;
+// getting one by name needs its group here or the full definition.
+var superGetGroups = []string{
+	"admissionregistration.k8s.io", "apiextensions.k8s.io", "apiregistration.k8s.io", "apps",
+	"autoscaling", "batch", "certificates.k8s.io", "coordination.k8s.io", "discovery.k8s.io",
+	"events.k8s.io", "flowcontrol.apiserver.k8s.io", "internal.apiserver.k8s.io", "metrics.k8s.io",
+	"networking.k8s.io", "node.k8s.io", "policy", "rbac.authorization.k8s.io", "resource.k8s.io",
+	"scheduling.k8s.io", "storage.k8s.io", "storagemigration.k8s.io",
+}
+
+// superReadOnly is the read-only SuperAdmin (RB-13): list and watch on
+// everything, get on everything but the subresources that run commands,
+// and get on non-resource URLs.
+func superReadOnly() []Rule {
+	return []Rule{
+		{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"list", "watch"}},
+		{APIGroups: []string{""}, Resources: slices.Clone(superGetCore), Verbs: []string{"get"}},
+		{APIGroups: slices.Clone(superGetGroups), Resources: []string{"*"}, Verbs: []string{"get"}},
+		{NonResourceURLs: []string{"*"}, Verbs: []string{"get"}},
+	}
 }
 
 // For is the definition of a role under the deployment's templates.

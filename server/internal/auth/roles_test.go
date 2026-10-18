@@ -718,6 +718,8 @@ type fakeDir struct {
 	members []auth.Person
 	syncs   int
 	block   chan struct{}
+	// slow holds Groups for a person's ref until the channel closes.
+	slow map[string]chan struct{}
 }
 
 func (d *fakeDir) URL() string { return "ldaps://ldap.example:636" }
@@ -735,7 +737,16 @@ func (d *fakeDir) Authenticate(_ context.Context, login, password string) (auth.
 	return *p, nil
 }
 
-func (d *fakeDir) Groups(_ context.Context, ref string) ([]string, error) {
+func (d *fakeDir) Groups(ctx context.Context, ref string) ([]string, error) {
+	d.mu.Lock()
+	hold := d.slow[ref]
+	d.mu.Unlock()
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+		}
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.down {
@@ -869,6 +880,43 @@ func TestLDAPGroupsAreReadAgainWhenTheyHaveStood(t *testing.T) {
 	*e.now = e.now.Add(3 * time.Minute)
 	if _, code := e.whoami(omar); code != http.StatusUnauthorized {
 		t.Fatalf("a person in no listed group kept the session: %d", code)
+	}
+}
+
+// A directory slow to answer about one person holds up only that person:
+// everyone else's groups are read again as usual (RB-22).
+func TestLDAPSlowAnswerForOnePersonHoldsUpNoOneElse(t *testing.T) {
+	e, d := ldapEnv(t)
+	priya := e.mustSignIn("priya", goodPassword)
+	omar := e.mustSignIn("omar", goodPassword)
+	*e.now = e.now.Add(3 * time.Minute)
+	hold := make(chan struct{})
+	d.mu.Lock()
+	d.slow = map[string]chan struct{}{"uid=omar": hold}
+	d.mu.Unlock()
+	done := make(chan int)
+	go func() {
+		_, code := e.whoami(omar)
+		done <- code
+	}()
+	// Wait until omar's request is in the directory.
+	time.Sleep(50 * time.Millisecond)
+	answered := make(chan int)
+	go func() {
+		_, code := e.whoami(priya)
+		answered <- code
+	}()
+	select {
+	case code := <-answered:
+		if code != http.StatusOK {
+			t.Fatalf("priya: %d", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("priya waited on the directory's answer about omar")
+	}
+	close(hold)
+	if code := <-done; code != http.StatusOK {
+		t.Fatalf("omar: %d", code)
 	}
 }
 

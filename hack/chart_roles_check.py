@@ -103,6 +103,12 @@ for key in ("admin", "superAdmin"):
     check(f"{key} readOnly has no write verb and keeps its name", not writes(role["rules"]) and role["rules"] == role_rules(key, "readOnly", True), writes(role["rules"]))
 check("the read-only SuperAdmin may only get non-resource URLs",
       all(set(r["verbs"]) <= {"get", "list", "watch"} for r in by["221b-super-admin"]["rules"]))
+# get on nodes/proxy or pods/exec runs a command through a kubelet or the
+# API server: no get on "*" in the core group, and none of them by name.
+RUNS = {"nodes/proxy", "pods/exec", "pods/attach", "pods/portforward", "pods/proxy", "services/proxy"}
+check("the read-only SuperAdmin cannot get what runs a command",
+      not [r for r in by["221b-super-admin"]["rules"] if "get" in r["verbs"] and
+           ({"", "*"} & set(r.get("apiGroups", []))) and ("*" in r.get("resources", []) or RUNS & set(r.get("resources", [])))])
 cm = [x for x in of(d, "ConfigMap") if x["metadata"]["name"].endswith("-auth-config")][0]
 check("it tells the console which definitions are in use",
       json.loads(cm["data"]["auth.json"])["templates"] == {"admin": "readOnly", "superAdmin": "readOnly"})

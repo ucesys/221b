@@ -52,6 +52,11 @@ func TestAlertsForTheThreeFaults(t *testing.T) {
 	old.Status.ContainerStatuses[0].LastTerminationState = corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Reason: "OOMKilled", FinishedAt: ts(3 * time.Hour)}}
 	src.Put(old)
 	src.Put(warning("uid-web-abc-3", "Pod", "shop", "web-abc-3", "FailedScheduling", "0/3 nodes are available: 3 Insufficient cpu.", 58, 59*time.Minute, 40*time.Second))
+	// One that runs but fails its readiness check is not resolved.
+	unready := pod("shop", "web-abc-7", "worker-1")
+	unready.Status.Conditions[0].Status = corev1.ConditionFalse
+	src.Put(unready)
+	src.Put(warning("uid-web-abc-7", "Pod", "shop", "web-abc-7", "Unhealthy", "Readiness probe failed: HTTP probe failed with statuscode: 503", 12, 10*time.Minute, 20*time.Second))
 
 	got := alerts(t, src)
 	cases := []struct{ key, sev, status string }{
@@ -59,6 +64,7 @@ func TestAlertsForTheThreeFaults(t *testing.T) {
 		{"pod:shop/web-abc-3", views.SevPending, "Pending"},
 		{"pod:shop/web-abc-4", views.SevFailed, "ImagePullBackOff"},
 		{"pod:shop/web-abc-5", views.SevRecovered, "Running"},
+		{"pod:shop/web-abc-7", views.SevPending, "Running"},
 	}
 	for _, c := range cases {
 		a, ok := got[c.key]
@@ -79,6 +85,9 @@ func TestAlertsForTheThreeFaults(t *testing.T) {
 	}
 	if a := got["pod:shop/web-abc-3"]; a.Node != "" || a.Why != "0/3 nodes are available: 3 Insufficient cpu." || a.Events[0].Reason != "FailedScheduling" {
 		t.Errorf("pending: %+v", a)
+	}
+	if a := got["pod:shop/web-abc-7"]; a.StatusTone != "warn" || !strings.Contains(a.Why, "Readiness probe failed") {
+		t.Errorf("not ready: %+v", a)
 	}
 	if a := got["pod:shop/web-abc-2"]; a.LastReason != "Error" || *a.LastExit != 1 || a.Restarts != 6 {
 		t.Errorf("crash: %+v", a)

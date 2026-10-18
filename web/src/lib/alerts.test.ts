@@ -69,5 +69,7 @@ describe('alerts', () => {
     expect(bannersOf(rows, now).map((b) => b.detail).join(' ')).not.toContain('web/d')
     expect(sectionsOf(rows).pods.map((r) => r.name)).toEqual(['a', 'd', 'c'])
     expect(sevLabel(oom)).toEqual({ label: 'Resolved', tone: 'ok' })
+    expect(sevLabel(pending)).toEqual({ label: 'Pending', tone: 'warn' })
+    expect(sevLabel({ ...pending, status: 'Running', node: 'w1' })).toEqual({ label: 'Not ready', tone: 'warn' })
   })
 })

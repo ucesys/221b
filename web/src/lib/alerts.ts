@@ -15,7 +15,8 @@ export function sevLabel(r: AlertRow): { label: string; tone: string } {
     case 'failed':
       return { label: 'Failed to start', tone: 'err' }
     case 'pending':
-      return { label: 'Pending', tone: 'warn' }
+      // A pod that runs but fails its readiness check waits too.
+      return { label: r.status === 'Running' ? 'Not ready' : 'Pending', tone: 'warn' }
     case 'recovered':
       return { label: 'Resolved', tone: 'ok' }
     case 'error':

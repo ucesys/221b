@@ -64,3 +64,37 @@ func TestLabelRefusesAccessRules(t *testing.T) {
 		t.Errorf("a pod can be labelled: %v", err)
 	}
 }
+
+// Secret values stay hidden whatever spelling of the type kubectl takes.
+func TestGetRefusesSecretValuesInAnySpelling(t *testing.T) {
+	for _, line := range []string{
+		"kubectl get secrets -o yaml -n prod",
+		"kubectl get secrets. -o yaml -n prod",
+		"kubectl get secret.v1. -o json -n prod",
+		"kubectl get SECRET.v1./db -o json -n prod",
+	} {
+		_, err := Parse(line)
+		var r *Refusal
+		if !errors.As(err, &r) || r.Rule != "secret values" {
+			t.Errorf("%s: %v", line, err)
+		}
+	}
+	for line, want := range map[string]string{"secrets.": "secrets", "secret.v1.": "secrets", "deployment.v1.apps": "deployments", "deployments.apps": "deployments", "pods.v1.apps": "pods.v1.apps", "secrets.example.com": "secrets.example.com"} {
+		if got := resourceOf(line); got != want {
+			t.Errorf("resourceOf(%q) = %q, want %q", line, got, want)
+		}
+	}
+}
+
+// Label and annotate arguments are changes or objects as kubectl reads
+// them: a prefixed key ending in - removes that key.
+func TestIsChange(t *testing.T) {
+	for p, want := range map[string]bool{
+		"a=b": true, "a-": true, "pod-security.kubernetes.io/enforce-": true, "example.com/x=y": true,
+		"ns": false, "prod": false, "pod/api-0": false, "-": false, "=x": false,
+	} {
+		if got := isChange(p); got != want {
+			t.Errorf("isChange(%q) = %v, want %v", p, got, want)
+		}
+	}
+}

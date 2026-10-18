@@ -288,6 +288,14 @@ func (m *Manager) summarize(inst *Instance) Summary {
 	return s
 }
 
+// summaryOf summarizes an instance under the lock that TestSaved and
+// Update write it under.
+func (m *Manager) summaryOf(inst *Instance) Summary {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.summarize(inst)
+}
+
 // List summarizes every connection: the local one first, then by name.
 func (m *Manager) List() []Summary {
 	m.mu.RLock()
@@ -398,6 +406,11 @@ func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Cred
 			return Spec{}, nil, invalid("server", err.Error())
 		}
 		spec.Cred = check.Info
+		// A kubeconfig without a current context signs in with the one the
+		// check chose, which the rest config must use too.
+		if spec.Auth == AuthKubeconfig && strings.TrimSpace(c.Context) == "" {
+			c.Context = check.Info.Context
+		}
 		// The CA travels with the credential in the Secret.
 		c.CAPEM = strings.TrimSpace(d.Credential.CAPEM)
 		if c.CAPEM == "" && orig != nil && orig.CA == CAPEM && spec.CA == CAPEM {
@@ -462,7 +475,7 @@ func (m *Manager) Add(ctx context.Context, d Draft) (Summary, error) {
 		return Summary{}, err
 	}
 	inst := m.start(spec, *cred)
-	return m.summarize(inst), nil
+	return m.summaryOf(inst), nil
 }
 
 // Update changes a connection; a credential given replaces the saved one.
@@ -483,14 +496,14 @@ func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, erro
 		inst := m.instances[LocalID]
 		inst.Spec = spec
 		m.mu.Unlock()
-		return m.summarize(inst), nil
+		return m.summaryOf(inst), nil
 	}
 	if err := m.store.Save(ctx, spec, cred); err != nil {
 		return Summary{}, err
 	}
 	changed := orig.Server != spec.Server || orig.CA != spec.CA || orig.Auth != spec.Auth || !d.Credential.Empty() || d.Credential.CAPEM != ""
 	if changed {
-		return m.summarize(m.start(spec, *cred)), nil
+		return m.summaryOf(m.start(spec, *cred)), nil
 	}
 	m.mu.Lock()
 	inst := m.instances[id]
@@ -499,9 +512,9 @@ func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, erro
 	}
 	m.mu.Unlock()
 	if inst == nil {
-		return m.summarize(m.start(spec, *cred)), nil
+		return m.summaryOf(m.start(spec, *cred)), nil
 	}
-	return m.summarize(inst), nil
+	return m.summaryOf(inst), nil
 }
 
 // getSpec reads a connection from the store, or the local one from memory.

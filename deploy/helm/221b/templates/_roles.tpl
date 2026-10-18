@@ -24,10 +24,12 @@ their cluster-wide bindings): renders "true" or nothing. It does when the
 object is not there, or is this release's own; one another release installed
 is left to it, so a second console (another namespace) installs beside the
 first and uses its roles. Without a cluster to ask (helm template) it always
-does. Takes a dict: top (the root context), kind, name.
+does. Takes a dict: top (the root context), kind, name, and namespace for
+a RoleBinding (two consoles that bind the same group in the same namespace
+render the same name).
 */}}
 {{- define "b221.ownsShared" -}}
-{{- $o := lookup "rbac.authorization.k8s.io/v1" .kind "" .name -}}
+{{- $o := lookup "rbac.authorization.k8s.io/v1" .kind (.namespace | default "") .name -}}
 {{- if not $o -}}
 true
 {{- else -}}

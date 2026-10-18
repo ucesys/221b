@@ -377,6 +377,10 @@ func (s *Service) update(ctx context.Context, in Settings) (State, error) {
 func (s *Service) Reload(ctx context.Context) { s.reload(ctx, false) }
 
 func (s *Service) reload(ctx context.Context, initial bool) {
+	// Ordered with updates: a read that started before a change was saved
+	// would otherwise put the old settings back once the change is in.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	b, err := s.storage.Load(ctx)
 	switch {
 	case errors.Is(err, ErrNotFound):

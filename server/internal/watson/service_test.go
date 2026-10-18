@@ -13,6 +13,9 @@ import (
 	"testing"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/audit"
@@ -345,3 +348,115 @@ func TestStopAndQueue(t *testing.T) {
 type ioWriter = io.Writer
 
 func errorsAs(err error, target any) bool { return errors.As(err, target) }
+
+// A card belongs to the cluster it was planned for: approved, stopped or
+// discarded through another cluster's address, it is not found there.
+func TestACardActsOnlyOnItsCluster(t *testing.T) {
+	svc, cl, s, _, _ := setup(t, Options{})
+	it := svc.Submit(context.Background(), cl, alice(), "kubectl cordon worker-001", "typed", "", true)[0]
+	wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	other := cl
+	other.ID, other.Name = "prod", "prod"
+	if _, err := svc.Approve(context.Background(), other, alice(), it.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("approve on another cluster: %v", err)
+	}
+	if _, err := svc.Discard(other, alice(), it.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("discard on another cluster: %v", err)
+	}
+	if _, err := svc.Stop(other, alice(), it.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stop on another cluster: %v", err)
+	}
+	if len(svc.Items(other, alice())) != 0 {
+		t.Fatal("listed on another cluster")
+	}
+	if s.Node("worker-001").Spec.Unschedulable {
+		t.Fatal("cordoned through another cluster")
+	}
+	if got, _, _ := svc.Snapshot(it.ID, 0); got.Status != StatusPending {
+		t.Fatalf("status %s", got.Status)
+	}
+}
+
+// A card for a selector shows the objects it matched; one that joins the
+// set before the approval voids the card rather than change unseen.
+func TestASelectorCardLapsesWhenItsSetChanges(t *testing.T) {
+	svc, cl, s, srv, _ := setup(t, Options{})
+	k := kubernetes.NewForConfigOrDie(&rest.Config{Host: srv.URL})
+	label := func(node string) {
+		t.Helper()
+		patch := []byte(`{"metadata":{"labels":{"test-pool":"gpu"}}}`)
+		if _, err := k.CoreV1().Nodes().Patch(context.Background(), node, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	label("worker-002")
+	it := svc.Submit(context.Background(), cl, alice(), "kubectl cordon -l test-pool=gpu", "typed", "", true)[0]
+	card := wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	if len(card.Plan.Targets) != 1 || card.Plan.Targets[0] != "node worker-002" {
+		t.Fatalf("targets %v", card.Plan.Targets)
+	}
+	label("worker-003")
+	lapsed := wait(t, svc, it.ID, func(i Item) bool { return i.Status == StatusLapsed })
+	if !strings.Contains(lapsed.Reason, "the set of nodes matching test-pool=gpu changed") {
+		t.Fatalf("reason %q", lapsed.Reason)
+	}
+	if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err == nil {
+		t.Fatal("a lapsed card was approved")
+	}
+	if s.Node("worker-003").Spec.Unschedulable {
+		t.Fatal("the node that joined the set was cordoned")
+	}
+}
+
+// A change approved while another of the approver's commands runs waits
+// in the queue; if its objects change meanwhile, it lapses instead of
+// running against what the card never showed.
+func TestAQueuedChangeLapsesWhenItsObjectsChange(t *testing.T) {
+	block := make(chan struct{})
+	var mu sync.Mutex
+	var ran []string
+	run := func(ctx context.Context, c *Command, tg Target, out, errOut ioWriter, extra ...string) int {
+		if len(extra) > 0 {
+			return 0
+		}
+		mu.Lock()
+		ran = append(ran, c.Line)
+		mu.Unlock()
+		if strings.Contains(c.Line, "get nodes") {
+			select {
+			case <-ctx.Done():
+				return 130
+			case <-block:
+			}
+		}
+		return 0
+	}
+	svc, cl, _, srv, _ := setup(t, Options{Run: run})
+	first := svc.Submit(context.Background(), cl, alice(), "kubectl get nodes", "typed", "", true)[0]
+	wait(t, svc, first.ID, func(i Item) bool { return i.Status == StatusRunning })
+	it := svc.Submit(context.Background(), cl, alice(), "kubectl cordon worker-002", "typed", "", true)[0]
+	wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := svc.Snapshot(it.ID, 0); got.Status != StatusQueued {
+		t.Fatalf("status %s, want queued", got.Status)
+	}
+	resp, err := http.Post(srv.URL+"/sim/nodes/worker-002/cordon", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	close(block)
+	lapsed := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) })
+	if lapsed.Status != StatusLapsed || !strings.Contains(lapsed.Reason, "node worker-002 changed after this card appeared") {
+		t.Fatalf("status %s reason %q", lapsed.Status, lapsed.Reason)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, l := range ran {
+		if strings.Contains(l, "cordon") {
+			t.Fatalf("ran %q", l)
+		}
+	}
+}

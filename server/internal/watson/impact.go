@@ -138,8 +138,9 @@ func (cs *clients) resolveType(typ string) (schema.GroupVersionResource, string,
 
 // targetsOf reads the objects a command names: TYPE NAME..., TYPE/NAME...
 // or TYPE -l SELECTOR. fixedType is the type of commands that take only
-// names (nodes for cordon).
-func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, pos []string) ([]target, error) {
+// names (nodes for cordon). The guards hold each selector to the objects
+// it matched for the card.
+func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, pos []string) ([]target, []guard, error) {
 	ns := c.Namespace
 	if ns == "" {
 		ns = "default"
@@ -169,10 +170,11 @@ func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, 
 		}
 	}
 	var out []target
+	var sets []guard
 	for _, p := range pairs {
 		gvr, kind, namespaced, err := cs.resolveType(p.typ)
 		if err != nil {
-			return out, fmt.Errorf("the server doesn't have a resource type %q", p.typ)
+			return out, sets, fmt.Errorf("the server doesn't have a resource type %q", p.typ)
 		}
 		res := cs.dyn.Resource(gvr)
 		var ri dynamic.ResourceInterface = res
@@ -187,12 +189,15 @@ func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, 
 			}
 			list, err := ri.List(ctx, metav1.ListOptions{LabelSelector: sel})
 			if err != nil {
-				return out, err
+				return out, sets, err
 			}
+			var names []string
 			for i := range list.Items {
 				o := &list.Items[i]
 				out = append(out, target{gvr: gvr, kind: kind, ns: tns, name: o.GetName(), obj: o})
+				names = append(names, o.GetName())
 			}
+			sets = append(sets, selectorGuard(gvr, tns, sel, names))
 			continue
 		}
 		o, err := ri.Get(ctx, p.name, metav1.GetOptions{})
@@ -201,11 +206,38 @@ func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, 
 				out = append(out, target{gvr: gvr, kind: kind, ns: tns, name: p.name})
 				continue
 			}
-			return out, err
+			return out, sets, err
 		}
 		out = append(out, target{gvr: gvr, kind: kind, ns: tns, name: p.name, obj: o})
 	}
-	return out, nil
+	return out, sets, nil
+}
+
+// selectorGuard voids a card when the set of objects a selector matches
+// changes: a node joining the pool, a pod a scale-up starts. The card
+// showed the objects it matched then, and only those may change.
+func selectorGuard(gvr schema.GroupVersionResource, ns, sel string, names []string) guard {
+	sort.Strings(names)
+	what := fmt.Sprintf("the set of %s matching %s", gvr.Resource, sel)
+	if ns != "" {
+		what += " in " + ns
+	}
+	return guard{what: what, want: digest(names), read: func(ctx context.Context, cs *clients) (string, error) {
+		var ri dynamic.ResourceInterface = cs.dyn.Resource(gvr)
+		if ns != "" {
+			ri = cs.dyn.Resource(gvr).Namespace(ns)
+		}
+		list, err := ri.List(ctx, metav1.ListOptions{LabelSelector: sel})
+		if err != nil {
+			return "", err
+		}
+		var now []string
+		for i := range list.Items {
+			now = append(now, list.Items[i].GetName())
+		}
+		sort.Strings(now)
+		return digest(now), nil
+	}}
 }
 
 // objectGuard voids a card when the parts of an object a command depends
@@ -268,7 +300,8 @@ func cardFor(ctx context.Context, cs *clients, c *Command) (targets []string, gu
 	add := func(format string, a ...any) { impact = append(impact, fmt.Sprintf(format, a...)) }
 	switch c.Name() {
 	case "kubectl cordon", "kubectl uncordon", "kubectl drain":
-		nodes, err := cs.targetsOf(ctx, c, "nodes", c.Positionals)
+		nodes, sets, err := cs.targetsOf(ctx, c, "nodes", c.Positionals)
+		guards = append(guards, sets...)
 		if err != nil {
 			add("Watson could not read the nodes: %v", err)
 		}
@@ -335,7 +368,8 @@ func cardFor(ctx context.Context, cs *clients, c *Command) (targets []string, gu
 			}
 		}
 	case "kubectl scale":
-		ts, err := cs.targetsOf(ctx, c, "", c.Positionals)
+		ts, sets, err := cs.targetsOf(ctx, c, "", c.Positionals)
+		guards = append(guards, sets...)
 		if err != nil {
 			add("%v", err)
 		}
@@ -378,7 +412,8 @@ func cardFor(ctx context.Context, cs *clients, c *Command) (targets []string, gu
 			}
 		}
 	case "kubectl rollout restart", "kubectl rollout undo":
-		ts, err := cs.targetsOf(ctx, c, "", c.Positionals)
+		ts, sets, err := cs.targetsOf(ctx, c, "", c.Positionals)
+		guards = append(guards, sets...)
 		if err != nil {
 			add("%v", err)
 		}
@@ -396,7 +431,8 @@ func cardFor(ctx context.Context, cs *clients, c *Command) (targets []string, gu
 			}
 		}
 	case "kubectl delete":
-		ts, err := cs.targetsOf(ctx, c, "", c.Positionals)
+		ts, sets, err := cs.targetsOf(ctx, c, "", c.Positionals)
+		guards = append(guards, sets...)
 		if err != nil {
 			add("%v", err)
 		}
@@ -418,13 +454,14 @@ func cardFor(ctx context.Context, cs *clients, c *Command) (targets []string, gu
 	case "kubectl label", "kubectl annotate":
 		var pos, changes []string
 		for _, p := range c.Positionals {
-			if strings.Contains(p, "=") || (strings.HasSuffix(p, "-") && !strings.Contains(p, "/")) {
+			if isChange(p) {
 				changes = append(changes, p)
 			} else {
 				pos = append(pos, p)
 			}
 		}
-		ts, err := cs.targetsOf(ctx, c, "", pos)
+		ts, sets, err := cs.targetsOf(ctx, c, "", pos)
+		guards = append(guards, sets...)
 		if err != nil {
 			add("%v", err)
 		}

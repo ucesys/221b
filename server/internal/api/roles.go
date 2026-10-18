@@ -192,20 +192,25 @@ func (s *Server) checkAllRoles() {
 // superAdmin lets only a SuperAdmin through; with sign-in off everyone is
 // one, as for every other administration page.
 func (s *Server) superAdmin(w http.ResponseWriter, r *http.Request) bool {
-	if s.opts.Auth == nil {
-		return true
-	}
-	if sess, _ := auth.SessionFrom(r.Context()); !sess.Admin {
+	if !s.isSuperAdmin(r) {
 		jsonError(w, http.StatusForbidden, "Only a SuperAdmin sees the roles.")
 		return false
 	}
 	return true
 }
 
-func (s *Server) getRoles(w http.ResponseWriter, r *http.Request) {
-	if !s.superAdmin(w, r) {
-		return
+func (s *Server) isSuperAdmin(r *http.Request) bool {
+	if s.opts.Auth == nil {
+		return true
 	}
+	sess, _ := auth.SessionFrom(r.Context())
+	return sess.Admin
+}
+
+// getRoles is the Roles page for everyone who signs in; it follows
+// Kubernetes, so the bindings are shown only to a person who may list them,
+// and the super-role holders only to a SuperAdmin (RB-41, RB-42).
+func (s *Server) getRoles(w http.ResponseWriter, r *http.Request) {
 	_, cl, ok := s.lookup(w, r)
 	if !ok {
 		return
@@ -217,7 +222,10 @@ func (s *Server) getRoles(w http.ResponseWriter, r *http.Request) {
 	}
 	in := roles.RolesInput{Templates: s.opts.Roles.Templates, Deployed: dep, Bindings: bindingsOf(cl), Prefixes: s.opts.Roles.Prefixes, Visible: true}
 	if src, ok := s.opts.Auth.(RoleSource); ok {
-		in.Members, in.Exists, in.Holders = src.Members, src.UserExists, src.Holders()
+		in.Members, in.Exists = src.Members, src.UserExists
+		if s.isSuperAdmin(r) {
+			in.Holders = src.Holders()
+		}
 	}
 	// The bindings are shown only to a person Kubernetes lets list them.
 	if p := s.person(r); !p.Nobody() {
@@ -233,10 +241,9 @@ func (s *Server) getRoles(w http.ResponseWriter, r *http.Request) {
 	writeValue(w, r, roles.BuildRoles(in))
 }
 
+// getPermissions is the Permissions page, read-only for everyone who signs
+// in (RB-44).
 func (s *Server) getPermissions(w http.ResponseWriter, r *http.Request) {
-	if !s.superAdmin(w, r) {
-		return
-	}
 	_, cl, ok := s.lookup(w, r)
 	if !ok {
 		return

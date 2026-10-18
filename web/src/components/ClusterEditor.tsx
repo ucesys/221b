@@ -172,10 +172,16 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
   const kc = needCred && f.auth === 'kubeconfig' && f.kubeconfig.trim() ? parseKubeconfig(f.kubeconfig) : null
 
   // Any change to the connection makes the last test stale.
+  // Counts form changes, so a test still running when the form changes
+  // does not show its result against values it never tried.
+  const edits = useRef(0)
   const upd = (patch: Partial<Form>, keepTest = false) => {
     setF((cur) => ({ ...cur, ...patch }))
     setSaveErr(null)
-    if (!keepTest) setTest(null)
+    if (!keepTest) {
+      edits.current++
+      setTest(null)
+    }
   }
   const onKubeconfig = (text: string) => {
     const k = parseKubeconfig(text)
@@ -214,10 +220,12 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
     }
     setTesting(true)
     setTest(null)
+    const at = edits.current
     try {
-      setTest(await testDraft(toDraft(f, orig)))
+      const res = await testDraft(toDraft(f, orig))
+      if (edits.current === at) setTest(res)
     } catch (e) {
-      setSaveErr(e instanceof ClusterError ? { field: e.field, msg: e.message } : { msg: String(e) })
+      if (edits.current === at) setSaveErr(e instanceof ClusterError ? { field: e.field, msg: e.message } : { msg: String(e) })
     } finally {
       setTesting(false)
     }

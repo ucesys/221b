@@ -54,8 +54,12 @@ refresh: 3s
 # Read each node's boot time from its kubelet, for the uptime in the node
 # details. It is read through the API server's node proxy, once per node
 # and boot, and needs get on nodes/proxy, which also lets the console's
-# ServiceAccount read the kubelets' other endpoints (stats, metrics, logs).
-# Off, the node details show how long the node has been Ready instead.
+# ServiceAccount reach the kubelets' other endpoints (stats, metrics, logs),
+# and run a command in any pod through a kubelet's exec endpoint, which
+# kubelets authorize as get on nodes/proxy. Turn it off where the console's
+# own account must not be able to run anything (the read-only lock-down in
+# the README). Off, the node details show how long the node has been Ready
+# instead.
 kubeletStats: true
 # How often the API server is checked.
 healthInterval: 10s
@@ -276,10 +280,14 @@ secrets:
   # public facts of a kubernetes.io/tls Secret's certificate (its names,
   # issuer and validity, for the Networks tab; never tls.key), and the
   # decoded release records with credential-like values masked: a Secret's
-  # values never reach a browser, an export or a log. Off, the ClusterRole
-  # grants nothing on Secrets, the Namespaces tab lists no Secrets, the
-  # YAML view refuses them, the Helm tab is hidden and the Networks tab
-  # doesn't check certificates.
+  # values never reach a browser, an export or a log. Off, the console's
+  # ClusterRole and the Viewer and Admin roles grant nothing on Secrets,
+  # the Namespaces tab lists no Secrets, the YAML view refuses them, the
+  # Helm tab is hidden and the Networks tab doesn't check certificates.
+  # Two grants stay: the console's Role on the Secrets of its own namespace
+  # (its connections, unless connections.store is memory), and SuperAdmin,
+  # whose definitions both read every Secret (make people SuperViewers to
+  # withhold Secrets).
   read: true
 
 serviceAccount:
@@ -305,8 +313,10 @@ rbac:
   # ranges, priority classes and admission webhook configurations), get on
   # pod logs, get and list on node and pod metrics, get on nodes/proxy when
   # kubeletStats is on, and get, list and watch on Secrets only when
-  # secrets.read is on. With sign-in it may impersonate users, and the
-  # groups listed in auth, and create access reviews. A Role to get and
+  # secrets.read is on. With sign-in it may impersonate any user name
+  # (Kubernetes cannot narrow that by rule, so the server alone decides
+  # which name it sends; guard its token), only the groups listed in auth,
+  # and create access reviews. A Role to get and
   # patch its own settings ConfigMap. It has no right on roles or
   # bindings, and no other writes, except Watson's with sign-in off and
   # localCluster.mode write (see localCluster.writeClusterRole).
@@ -314,7 +324,10 @@ rbac:
   # Which definition of the two roles that can change things is installed.
   # full: Admin may do the namespaced changes Watson supports; SuperAdmin
   # may do everything. readOnly: the role exists, with no write verb, so
-  # nobody can change anything through the console. Both readOnly with
+  # nobody can change anything through the console; the read-only
+  # SuperAdmin lists and watches everything and gets everything except
+  # the subresources that run a command or proxy to one (pods/exec,
+  # pods/attach, pods/portforward, pods/proxy, services/proxy, nodes/proxy). Both readOnly with
   # localCluster.mode read is the fully protected read-only deployment; the
   # chart refuses to render both readOnly with localCluster.mode write.
   # Switching is a helm upgrade and changes no binding.
@@ -358,7 +371,13 @@ networkPolicy:
   # Peers allowed to reach the console on its HTTP port, as NetworkPolicy
   # "from" entries. kubectl port-forward needs none. With a LoadBalancer or
   # NodePort Service an empty list allows every address, since that is
-  # what exposing it means; list networks here to narrow it.
+  # what exposing it means; list networks here to narrow it. With
+  # ingress.enabled and a ClusterIP Service, list the Ingress controller
+  # here (the chart refuses an empty list then, which would admit nothing),
+  # for example:
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: ingress-nginx
   ingressFrom: []
   # The console connects to Kubernetes API servers, its own and the other
   # clusters' it shows, on these ports (6443 is where most API servers

@@ -210,6 +210,10 @@ func BuildReleaseDetails(src Source, namespace, name string, now time.Time) (Rel
 		return ReleaseDetails{}, false
 	}
 	revs := releaseRevisions(src, namespace, name)
+	if len(revs) == 0 {
+		// Uninstalled between the two reads.
+		return ReleaseDetails{}, false
+	}
 	latest := revs[0]
 	d := ReleaseDetails{ReleaseRow: row, Notes: latest.Notes, MaskedValues: latest.Masked, History: []Revision{}, Resources: []ReleaseResource{}, PodRows: []PodRow{}}
 	if d.MaskedValues == nil {

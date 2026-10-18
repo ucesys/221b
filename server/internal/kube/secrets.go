@@ -365,9 +365,9 @@ var credentialKey = regexp.MustCompile(`(?i)(password|passwd|secret|token|apikey
 // MaskedValue replaces a credential in masked values.
 const MaskedValue = "•••••• (hidden by 221B)"
 
-// MaskValues returns a copy of Helm values with every string under a
-// credential-looking key replaced, and lists the keys it masked (P2-07).
-// Keys are paths like "auth.password".
+// MaskValues returns a copy of Helm values with every string or number
+// under a credential-looking key replaced, in lists and maps under it too,
+// and lists the keys it masked (P2-07). Keys are paths like "auth.password".
 func MaskValues(v any, path string, masked *[]string) any {
 	switch x := v.(type) {
 	case map[string]any:
@@ -377,9 +377,8 @@ func MaskValues(v any, path string, masked *[]string) any {
 			if path != "" {
 				p = path + "." + k
 			}
-			if s, isString := val.(string); isString && s != "" && credentialKey.MatchString(k) {
-				out[k] = MaskedValue
-				*masked = append(*masked, p)
+			if credentialKey.MatchString(k) {
+				out[k] = maskAll(val, p, masked)
 				continue
 			}
 			out[k] = MaskValues(val, p, masked)
@@ -400,6 +399,34 @@ func MaskValues(v any, path string, masked *[]string) any {
 	default:
 		return v
 	}
+}
+
+// maskAll replaces every string and number in a value under a
+// credential-looking key: passwords: [...] or password: 12345678 as much as
+// password: "...". Booleans and empty values say nothing and are kept.
+func maskAll(v any, path string, masked *[]string) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			out[k] = maskAll(val, path+"."+k, masked)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, val := range x {
+			out[i] = maskAll(val, fmt.Sprintf("%s[%d]", path, i), masked)
+		}
+		return out
+	case string:
+		if x == "" {
+			return x
+		}
+	case nil, bool:
+		return v
+	}
+	*masked = append(*masked, path)
+	return MaskedValue
 }
 
 // manifestResources lists the objects a release's manifest creates.

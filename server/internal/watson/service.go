@@ -486,9 +486,15 @@ func (s *Service) itemLocked(id string) (*Item, error) {
 	return it, nil
 }
 
-// Visible says whether a person sees a command: their own, and, where
-// two people are needed, everyone's changes waiting for approval.
+// Visible says whether a person sees a command on a cluster: their own,
+// and, where two people are needed, everyone's changes waiting for
+// approval. A command is only ever seen, approved, stopped or discarded on
+// the cluster it was planned for, so a card checked on one cluster never
+// runs on another.
 func (s *Service) Visible(it *Item, who Who, cl Cluster) bool {
+	if it.Cluster != cl.ID {
+		return false
+	}
 	if it.Requester.Session == who.Session {
 		return true
 	}
@@ -757,6 +763,29 @@ func (s *Service) work(cl Cluster, key string, q *runQueue) {
 		if it == nil || it.Status != StatusQueued {
 			s.mu.Unlock()
 			continue
+		}
+		var guards []guard
+		if it.Change && it.Plan != nil {
+			guards = it.Plan.guards
+		}
+		if len(guards) > 0 {
+			// A change that waited behind another, a drain held up by a
+			// budget, say, must still find its objects as the card showed
+			// them when it starts (P6-04).
+			s.mu.Unlock()
+			why := checkGuards(context.Background(), s.consoleClients(context.Background(), cl), guards)
+			s.mu.Lock()
+			if it.Status != StatusQueued {
+				s.mu.Unlock()
+				continue
+			}
+			if why != "" {
+				it.Status, it.Reason, it.Finished = StatusLapsed, why, s.opts.Now()
+				s.changedLocked(it)
+				go s.record(ActionLapse, it, *it.Approver, audit.OutcomeDenied, "reason="+quote(why))
+				s.mu.Unlock()
+				continue
+			}
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		it.cancel = cancel

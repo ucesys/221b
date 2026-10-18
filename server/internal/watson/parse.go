@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // MaxLine bounds a command's length.
@@ -589,14 +591,35 @@ func init() {
 	}
 }
 
+// groupOf is the API group of each resource in resourceNames.
+var groupOf = map[string]string{"deployments": "apps", "statefulsets": "apps", "daemonsets": "apps", "replicasets": "apps"}
+
 // resourceOf names the resource of a TYPE argument, as far as Watson
-// needs to know it; other types come back as typed.
+// needs to know it; other types come back as typed. kubectl also takes a
+// type with its group, or with its version and group, the core group
+// being empty: secrets. and secret.v1. name Secrets as secret does.
 func resourceOf(t string) string {
 	t = strings.ToLower(t)
 	if r, ok := resourceNames[t]; ok {
 		return r
 	}
+	gvr, gr := schema.ParseResourceArg(t)
+	if gvr != nil {
+		if r, ok := resourceNames[gvr.Resource]; ok && gvr.Group == groupOf[r] {
+			return r
+		}
+	}
+	if r, ok := resourceNames[gr.Resource]; ok && gr.Group == groupOf[r] {
+		return r
+	}
 	return t
+}
+
+// isChange says whether an argument of kubectl label or annotate is a
+// change rather than an object, as kubectl tells them apart: KEY=VALUE
+// sets, and KEY- removes, prefixed keys such as a/b- included.
+func isChange(p string) bool {
+	return (strings.Contains(p, "=") && p[0] != '=') || (strings.HasSuffix(p, "-") && p != "-")
 }
 
 // targets reads TYPE NAME... or TYPE/NAME... into the types they name.
@@ -727,7 +750,7 @@ func checkLabel(c *Command) *Refusal {
 	}
 	var changes int
 	for _, p := range c.Positionals {
-		if strings.Contains(p, "=") || strings.HasSuffix(p, "-") {
+		if isChange(p) {
 			changes++
 		}
 	}

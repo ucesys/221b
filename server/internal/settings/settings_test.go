@@ -67,6 +67,54 @@ func TestServiceInMemory(t *testing.T) {
 	}
 }
 
+// heldLoad is storage whose next Load, once armed, reads and then waits.
+type heldLoad struct {
+	settings.Memory
+	armed   chan struct{} // closed by the Load it holds, once it has read
+	release chan struct{}
+}
+
+func (h *heldLoad) Load(ctx context.Context) ([]byte, error) {
+	b, err := h.Memory.Load(ctx)
+	if h.armed != nil {
+		armed := h.armed
+		h.armed = nil
+		close(armed)
+		<-h.release
+	}
+	return b, err
+}
+
+// A reload that read storage before a change was saved does not put the
+// old settings back after it.
+func TestReloadDoesNotUndoAChangeSavedWhileItRead(t *testing.T) {
+	h := &heldLoad{}
+	_ = h.Save(context.Background(), []byte(`{"refreshSeconds":15}`))
+	svc := settings.NewService(context.Background(), h, settings.Default, quiet, nil)
+	h.armed, h.release = make(chan struct{}), make(chan struct{})
+	armed := h.armed
+	reloaded := make(chan struct{})
+	go func() {
+		svc.Reload(context.Background())
+		close(reloaded)
+	}()
+	<-armed
+	updated := make(chan error)
+	go func() {
+		_, err := svc.Update(context.Background(), settings.Settings{RefreshSeconds: 30})
+		updated <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(h.release)
+	<-reloaded
+	if err := <-updated; err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.Current().RefreshSeconds; got != 30 {
+		t.Fatalf("the change was undone: refresh %d", got)
+	}
+}
+
 // The ConfigMap storage reads and patches one key through the API server,
 // here the simulator's.
 func TestConfigMapStorage(t *testing.T) {

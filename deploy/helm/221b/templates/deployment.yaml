@@ -32,6 +32,11 @@ spec:
         # The roles' groups and the directory are read at start-up, so a
         # change of them restarts the console.
         checksum/auth-config: {{ include "b221.authConfig" . | sha256sum }}
+        # The local accounts, the OIDC client secret, the setup code and the
+        # webhook token are read at start-up too. A Secret named by an
+        # existingSecret value is not the chart's: after changing one, run
+        # kubectl rollout restart.
+        checksum/auth-secret: {{ include (print $.Template.BasePath "/secret-auth.yaml") . | sha256sum }}
         {{- if include "b221.movingTag" . }}
         # A moving tag may point at a new build since the last upgrade, and
         # an unchanged pod template would not restart the pod to fetch it.
