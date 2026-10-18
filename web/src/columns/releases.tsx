@@ -2,7 +2,7 @@ import type { ReleaseRow } from '../api/types'
 import { fmtAge, fmtTs, minutesSince } from '../lib/format'
 import { toneRank } from '../lib/nodes'
 import type { ColumnDef } from '../lib/table'
-import { Mono, Tone } from './cells'
+import { Mono, NameCell, Tone } from './cells'
 
 /** A namespace's Helm releases, as its other kinds are listed: Name, Status, Chart, App version, Revision, Pods, Updated. */
 export const RELEASE_COLUMNS: ColumnDef<ReleaseRow>[] = [
@@ -12,11 +12,7 @@ export const RELEASE_COLUMNS: ColumnDef<ReleaseRow>[] = [
     width: 'minmax(200px, 1.4fr)',
     min: 200,
     sortValue: (r) => r.name,
-    cell: (r) => (
-      <span className="rk-mono rk-pname" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {r.name}
-      </span>
-    ),
+    cell: (r) => <NameCell name={r.name} what="release name" />,
     export: (r) => [{ head: 'Name', cell: r.name }],
   },
   {

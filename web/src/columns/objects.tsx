@@ -2,7 +2,7 @@ import type { ObjectRow, ReleaseResource, Revision } from '../api/types'
 import { fmtAge, fmtTs, minutesSince } from '../lib/format'
 import { toneRank } from '../lib/nodes'
 import type { ColumnDef, Term } from '../lib/table'
-import { Mono, Tone } from './cells'
+import { Mono, NameCell, Tone } from './cells'
 
 /** The columns of a kind's table in the Namespaces tab: Name, Status, Details, Age. */
 export const OBJECT_COLUMNS: ColumnDef<ObjectRow>[] = [
@@ -12,11 +12,7 @@ export const OBJECT_COLUMNS: ColumnDef<ObjectRow>[] = [
     width: 'minmax(200px, 1.4fr)',
     min: 200,
     sortValue: (r) => r.name,
-    cell: (r) => (
-      <span className="rk-mono rk-pname" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {r.name}
-      </span>
-    ),
+    cell: (r) => <NameCell name={r.name} what={`${r.kind} name`} />,
     export: (r) => [
       { head: 'Kind', cell: r.kind },
       { head: 'Name', cell: r.name },
@@ -84,11 +80,7 @@ export const RESOURCE_COLUMNS: ColumnDef<ReleaseResource>[] = [
     width: 'minmax(200px, 1.4fr)',
     min: 200,
     sortValue: (r) => r.name,
-    cell: (r) => (
-      <span className="rk-mono rk-pname" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {r.name}
-      </span>
-    ),
+    cell: (r) => <NameCell name={r.name} what={`${r.kind} name`} />,
     export: (r) => [{ head: 'Name', cell: r.name }],
   },
   {

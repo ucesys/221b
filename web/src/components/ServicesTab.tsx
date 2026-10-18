@@ -63,6 +63,7 @@ export function ServicesTab({ cluster, now, onToast, route }: TabProps) {
       href: href('services', [], { ns: name }),
       current: ns === name,
       name,
+      copy: 'namespace name',
       right: e.notReady ? (
         <span className="rk-t" data-tone="warn" style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11 }}>
           <span className="rk-dot" />

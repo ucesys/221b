@@ -3,7 +3,7 @@ import { fCores, fMem, fmtAge, fmtTs, minutesSince, round } from '../lib/format'
 import { toneRank } from '../lib/nodes'
 import { href } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
-import { CellLink, Mono, peekCell, Tone, UsageBar } from './cells'
+import { CellLink, Mono, NameCell, peekCell, Tone, UsageBar } from './cells'
 
 const GIB = 1024 * 1024 * 1024
 
@@ -22,11 +22,7 @@ export const POD_COLUMNS: ColumnDef<PodView>[] = [
     min: 170,
     compactMin: 160,
     sortValue: (r) => r.name,
-    cell: (r) => (
-      <span className="rk-mono rk-pname" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {r.name}
-      </span>
-    ),
+    cell: (r) => <NameCell name={r.name} what="pod name" />,
     export: (r) => [{ head: 'Pod', cell: r.name }],
   },
   {

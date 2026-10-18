@@ -3,7 +3,7 @@ import { fmtAge, fmtTs, minutesSince } from '../lib/format'
 import { toneRank } from '../lib/nodes'
 import { href } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
-import { CellLink, Mono, Tone } from './cells'
+import { CellLink, Mono, NameCell, Tone } from './cells'
 
 /** The Services table's columns, with the External group (P2-05). */
 export const SERVICE_COLUMNS: ColumnDef<ServiceRow>[] = [
@@ -16,11 +16,7 @@ export const SERVICE_COLUMNS: ColumnDef<ServiceRow>[] = [
     min: 160,
     compactMin: 140,
     sortValue: (r) => r.name,
-    cell: (r) => (
-      <span className="rk-mono rk-pname" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {r.name}
-      </span>
-    ),
+    cell: (r) => <NameCell name={r.name} what="service name" />,
     export: (r) => [{ head: 'Service', cell: r.name }],
   },
   {

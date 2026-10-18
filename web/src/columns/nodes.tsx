@@ -1,10 +1,9 @@
 import type { NodeRow } from '../api/types'
-import { CopyName } from '../components/CopyName'
 import { clampPct, fCores, fMem, fmtAge, fmtTs, minutesSince, pct, round } from '../lib/format'
 import { cpuMeter, free, memoryMeter, ownLabels, problemsCell, roleTag, taintId, taintShort, toneRank, type Meter } from '../lib/nodes'
 import { href } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
-import { Tone } from './cells'
+import { NameCell, Tone } from './cells'
 
 const GIB = 1024 * 1024 * 1024
 
@@ -49,15 +48,7 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     min: 180,
     compactMin: 160,
     sortValue: (r) => r.name,
-    // An experiment: a copy icon beside the name while it is hovered.
-    cell: (r) => (
-      <span className="rk-namecopy">
-        <span className="rk-mono rk-pname" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {r.name}
-        </span>
-        <CopyName text={r.name} what="node name" />
-      </span>
-    ),
+    cell: (r) => <NameCell name={r.name} what="node name" />,
     export: (r) => [{ head: 'Node', cell: r.name }],
   },
   {
