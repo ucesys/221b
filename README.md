@@ -134,6 +134,87 @@ The console reaches another cluster's API server directly with an account you cr
 
 5. **Check it and turn Sherlock on there.** The new cluster is on the home page and in the cluster menu in the top bar. With it selected, **Administration → Permissions** should say the roles match. To have Sherlock (and Watson) on it, tick it in **Administration → Settings → Sherlock**. A cluster's tile on the home page has **Edit cluster** to change the connection later; removing a cluster deletes its stored credential.
 
+## Security: why an AI model cannot hurt the cluster
+
+An AI model can be wrong with confidence: it can invent a pod name, pick the wrong namespace, misread a log, or propose a command that would make things worse. 221B is built on the assumption that this *will* happen. The model is never trusted to be right; it is kept away from anything that changes the cluster, and every change has to pass a human and then Kubernetes itself. Each layer below holds on its own, so a mistake has to get past all of them to do harm.
+
+1. **The model only reads, and only what the person asking may read.** Sherlock gets a fixed set of read-only tools. Each tool call runs through the console's own API *as the signed-in person* (Kubernetes impersonation), so the model sees exactly what that person's RBAC lets them see and nothing more. Secret values are never sent to it (only key names and sizes), and text that looks like a credential in logs, YAML or the question is replaced by `[REDACTED]` before it leaves the console. Nothing is sent at all for a cluster where Sherlock is off.
+
+2. **The model cannot run commands.** When a fix needs a change, Sherlock writes the commands as text in its answer. It has no tool that runs them. A person has to send them to Watson.
+
+3. **Watson runs a short, fixed list of commands, and never through a shell.** `kubectl` and `helm` are compiled into the server and called directly; no shell is started, so pipes, redirections, `;`, `$(…)`, variables and arguments after `--` are refused rather than interpreted. Each command and each flag is checked against an allow-list:
+   - reads: `kubectl get`, `describe`, `logs`, `top`, `events`, `auth can-i`; `helm list`, `status`, `history`, `get values`;
+   - changes: `kubectl cordon`, `uncordon`, `drain`, `scale`, `rollout restart`, `rollout undo`, `delete pod`, `label`, `annotate`; `helm rollback`.
+
+   Everything else (`apply`, `create`, `edit`, `patch`, `exec`, `port-forward`, `delete` of anything but pods, `helm install` or `upgrade`, any RBAC change) is refused with the rule that refused it. A hallucinated command or flag fails here, before it reaches the cluster.
+
+4. **Every change waits on an approval card.** The card shows the exact command, the objects it touches, the result of a **server-side dry run** and its impact (for example, which pods a drain evicts and which disruption budgets block it). A made-up object name shows up here as a dry run that fails. The approval lapses after ten minutes, or sooner if any of those objects change, so an old card cannot run against a cluster that has moved on. On production clusters an administrator can require a **second person** to approve (Administration → Settings → Watson).
+
+5. **The change runs as the person who approved it, and Kubernetes decides.** Watson does not use the console's own account for changes: it impersonates the approver, so the API server applies *their* RBAC. If they may not do it, Kubernetes refuses it, whatever the card said. People get their rights only from the four ClusterRoles and the bindings the Helm chart renders from values; nothing in the console, in Sherlock or in Watson can create or edit a role or binding (the console's account has no write on RBAC at all). The groups the console may assert on the local cluster are limited to the ones in your values plus `221b:superadmins`, `221b:superviewers`, `221b:console-users` and `system:authenticated`, so it cannot claim `system:masters` for anyone.
+
+6. **Clusters and roles can be switched to read-only** at three independent levels (next section): the role definitions, each cluster connection, and the console's own Kubernetes account.
+
+7. **Drift is caught and everything is recorded.** The console compares the live `221b-*` roles with the definitions it ships; with `rbac.enforce=strict` it refuses every change on a cluster whose roles were edited to allow more. Every question, command, approval, refusal, lapse and result is in the audit log with the person's name, the cluster and the outcome (`kubectl -n 221b logs deploy/k8s-console-221b | grep '"watson.'`), and is sent to `audit.webhook.url` if set.
+
+What remains trusted is the console server itself and its namespace: it holds the connections' credentials and may impersonate. Give it a namespace of its own, limit who can read Secrets or exec into pods there, and keep the network policy on.
+
+### Lock it down to read-only
+
+For a deployment where nothing can change any cluster through the console, even when a person approves it, set all three levels. Each one alone already stops changes; together they mean a mistake in one is still caught by the others.
+
+| Level | Read-only setting | What refuses a change |
+|---|---|---|
+| Role definitions | `rbac.roles.admin.template=readOnly`, `rbac.roles.superAdmin.template=readOnly` | The Kubernetes API server: the four roles have no write verb (SuperAdmin keeps `get`, `list`, `watch` on everything) |
+| Cluster connection | `localCluster.mode=read`; *Read only* on each remote connection | Watson: refuses every change on that cluster before a card is made |
+| Console account | the chart's read-only ClusterRole; `cluster-console-read` on remote clusters | The Kubernetes API server: the console's own account cannot write, so even with sign-in off nothing runs |
+
+1. **Install or upgrade the local cluster read-only.**
+
+   ```yaml
+   # read-only.yaml
+   localCluster:
+     mode: read                 # Watson refuses every change here
+   rbac:
+     roles:
+       admin:
+         template: readOnly     # Admin: read their namespaces, change nothing
+       superAdmin:
+         template: readOnly     # SuperAdmin: read everything, change nothing
+     enforce: strict            # refuse changes if anyone edits a 221b-* role to allow more
+   auth:
+     mode: local                # keep sign-in on (local, ldap or oidc), never none
+   secrets:
+     read: false                # optional: the console and the roles get nothing on Secrets
+   ```
+
+   ```sh
+   helm upgrade --install k8s-console deploy/helm/221b -n 221b --reset-then-reuse-values -f read-only.yaml
+   ```
+
+   The chart refuses to render the contradiction of read-only roles with `localCluster.mode=write`, and of `auth.mode=none` with write mode and any read-only role, so a typo in values cannot quietly reopen changes.
+
+2. **Check it with Kubernetes, not with the console.**
+
+   ```sh
+   kubectl get clusterrole -l 221b/managed=true -L 221b/definition          # every role says readOnly
+   kubectl auth can-i delete pods -A --as=probe --as-group=221b:superadmins  # no
+   kubectl auth can-i patch deployments -A --as=probe --as-group=221b:superadmins  # no
+   kubectl auth can-i --list --as=system:serviceaccount:221b:k8s-console-221b | grep -v -E 'get|list|watch'
+   ```
+
+   The last line shows the console account's only writes: its settings ConfigMap and its connection Secrets, both in its own namespace. In the console, **Administration → Roles** says *Definitions in use: Admin read-only, SuperAdmin read-only*, and a change sent to Watson is refused with *read-only cluster*.
+
+3. **Do the same on every remote cluster.** In step 1 of [Set up a remote cluster](#3-set-up-a-remote-cluster), choose **Read only** so the console's account there is bound to `cluster-console-read` (get, list and watch only). Download the roles YAML from this read-only deployment (it carries the definitions in use, so `readOnly`) and apply it there. In the connection editor, set *What the console may do* to **Read only**. Then check:
+
+   ```sh
+   kubectl --kubeconfig remote.yaml get clusterrole -l 221b/managed=true -L 221b/definition
+   kubectl --kubeconfig remote.yaml auth can-i --list --as=system:serviceaccount:kube-system:cluster-console
+   ```
+
+   On a remote cluster the generated account may impersonate any group. To narrow it to the same groups as the local cluster, replace its `groups` impersonation rule with one that lists them under `resourceNames`; the list to copy is in the local cluster's console ClusterRole (`kubectl get clusterrole 221b-k8s-console-221b -o yaml`).
+
+To open changes again later, reverse one level at a time (for example `localCluster.mode=write` with `rbac.roles.admin.template=full`), so it is always a deliberate `helm upgrade` that shows up in your change history.
+
 ## Reference
 
 **Images** are tagged `main` and `sha-<commit>` from the main branch, `pr-<number>` for each pull request, and `branch-<name>` when CI is run by hand on another branch. `hack/push-prebuilt.sh` pushes a build made on your own machine as `prebuilt-<tree>`; CI then tests that build instead of making one, and publishes it for `linux/amd64` only.
