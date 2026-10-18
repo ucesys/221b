@@ -354,9 +354,7 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
             <div key={s.id} style={{ display: 'flex', flexDirection: 'column', gap: 14 }} data-testid={`alert-section-${s.id}`}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
                 <h2 className="rk-h">{s.title}</h2>
-                <span style={{ fontSize: 12, color: 'var(--fg3)' }} data-testid="alert-section-count">
-                  {s.rows.length}
-                </span>
+                <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{s.rows.length}</span>
               </div>
               {s.rows.map((r) => (
                 <AlertCard key={r.key} r={r} now={now} onOpen={() => openRow(r)} onPod={openPod} onExport={(f) => exportEvents([r], f, cluster?.name, `${r.kind}-${r.name}-events`, onToast)} onAck={(on) => ack(r, on)} />
