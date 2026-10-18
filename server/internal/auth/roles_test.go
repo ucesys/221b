@@ -26,14 +26,14 @@ type env struct {
 	t     *testing.T
 	svc   *auth.Service
 	app   *httptest.Server
-	audit *bytes.Buffer
+	audit *syncBuffer
 	now   *time.Time
 }
 
 func newEnv(t *testing.T, cfg auth.Config) *env {
 	t.Helper()
 	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
-	e := &env{t: t, audit: &bytes.Buffer{}, now: &now}
+	e := &env{t: t, audit: &syncBuffer{}, now: &now}
 	clock := func() time.Time { return *e.now }
 	svc, err := auth.New(cfg, nil, audit.New(audit.Options{Out: e.audit, Now: clock}), clock)
 	if err != nil {
@@ -43,6 +43,25 @@ func newEnv(t *testing.T, cfg auth.Config) *env {
 	e.app = console(t, svc)
 	t.Cleanup(e.app.Close)
 	return e
+}
+
+// syncBuffer is the audit log's output in tests: the directory's syncs
+// write to it from their own goroutine while a test reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // formIn reads the token of a page the client was served.

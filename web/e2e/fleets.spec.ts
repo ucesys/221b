@@ -177,9 +177,8 @@ test('a saved fleet shows at once; a node opens its details here; the columns ca
   await page.getByTestId('fleet-cols-none').click()
   await expect(page.getByRole('button', { name: /^Columns/ })).toContainText(/(^|\D)0\/\d+/)
   await page.getByTestId('fleet-cols-all').click()
-  const text = (await page.getByRole('button', { name: /^Columns/ }).textContent()) ?? ''
-  const [shown, all] = text.match(/(\d+)\/(\d+)/)!.slice(1)
-  expect(shown).toBe(all)
+  // Every column shown: the icon alone, without a count (6.4).
+  await expect(page.getByRole('button', { name: 'Columns', exact: true })).not.toContainText(/\d+\/\d+/)
 })
 
 test('fleets are the cluster’s, the same for everyone who signs in', async ({ page, browser }) => {

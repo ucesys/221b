@@ -80,7 +80,7 @@ function ClusterCard({ c, onEdit }: { c: HomeCluster; onEdit?: () => void }) {
           {health.reasons.slice(0, 4).map((r) => (
             <li key={r.text} style={r.tone ? { color: `var(--${r.tone})` } : undefined}>
               {r.alerts ? (
-                <a href={at('alerts')} style={{ color: 'inherit' }} data-testid="home-reason-link">
+                <a href={at('alerts')} style={{ color: 'inherit', display: 'inline-flex', alignItems: 'center', minHeight: 24 }} data-testid="home-reason-link">
                   {r.text}
                 </a>
               ) : (
