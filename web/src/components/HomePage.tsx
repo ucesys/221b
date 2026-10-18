@@ -115,7 +115,7 @@ function ClusterCard({ c, onEdit }: { c: HomeCluster; onEdit?: () => void }) {
               <span className="rk-avatar" style={{ width: 18, height: 18 }} aria-hidden="true">
                 <SherlockIcon size={10} />
               </span>
-              Find deficiencies
+              Audit
             </a>
           )}
           {onEdit && (

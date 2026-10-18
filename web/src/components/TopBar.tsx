@@ -4,7 +4,6 @@ import type { ClusterInfo, Counts, Me, Settings } from '../api/types'
 import type { StreamState } from '../api/live'
 import { refreshLabel } from '../api/settings'
 import { connection } from '../lib/connection'
-import { fmtClock } from '../lib/format'
 import { ROLE_NAME, topRole } from '../lib/admin'
 import { adminHref, HOME, href, TABS, type Route, type Tab } from '../lib/router'
 import { openAdmin, pagesFor } from './AdminPage'
@@ -365,10 +364,6 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
         <span style={{ fontSize: 12, color: 'var(--fg3)', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'default', userSelect: 'none' }} title={liveTip || undefined} data-testid="live">
           {left !== null && refreshedAt && <RefreshRing left={left} every={every} refreshedAt={refreshedAt} now={now} />}
           {live ? 'Live' : conn.label}
-          <span className="rk-asof">
-            {' '}
-            · refreshed <span className="rk-mono rk-num">{fmtClock(refreshedAt ?? updatedAt)}</span>
-          </span>
         </span>
         {me && pagesFor(me).length > 0 && (
           // Administration: roles, permissions, users and settings, behind

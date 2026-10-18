@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compareNatural, compareValues, fCores, fMem, fmtAge, fmtMinutes, fmtTs, nWord, pct, pctTxt, round, trimNum } from './format'
+import { compareNatural, compareValues, fCores, fMem, fmtAge, fmtLocal, fmtMinutes, fmtTs, nWord, pct, pctTxt, round, trimNum } from './format'
 
 describe('numbers', () => {
   it('trims trailing zeros', () => {
@@ -69,5 +69,14 @@ describe('ordering', () => {
   it('compares numbers numerically and text naturally', () => {
     expect(compareValues(9, 10)).toBeLessThan(0)
     expect(compareValues('v1.9', 'v1.10')).toBeLessThan(0)
+  })
+})
+
+describe('local times', () => {
+  it('shows a date and a 12-hour time in the browser’s time zone', () => {
+    expect(fmtLocal(new Date(2026, 4, 3, 13, 34).toISOString())).toBe('2026-05-03 1:34pm')
+    expect(fmtLocal(new Date(2026, 0, 9, 0, 5).toISOString())).toBe('2026-01-09 12:05am')
+    expect(fmtLocal(new Date(2026, 0, 9, 12, 0).toISOString())).toBe('2026-01-09 12:00pm')
+    expect(fmtLocal(undefined)).toBe('—')
   })
 })

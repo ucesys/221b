@@ -383,7 +383,7 @@ test('Sherlock answers through an OpenAI-compatible gateway set on the Settings 
     expect(sent.join('\n')).toContain('"tool_call_id"')
     expect(sent.join('\n')).not.toContain(KEY)
 
-    // A home card's Find deficiencies opens the cluster and asks for the review.
+    // A home card's Audit opens the cluster and asks for the review.
     await page.goto('/#/')
     await page.locator('[data-testid=home-card][data-cluster=local]').getByTestId('home-review').click()
     await expect(page.getByTestId('sherlock-question').last()).toContainText('Deficiency review of cluster')

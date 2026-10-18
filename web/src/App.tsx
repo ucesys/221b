@@ -242,7 +242,7 @@ function Shell() {
         .catch((e: unknown) => setToast(e instanceof WatsonError ? e.message : String(e)))
     },
   }
-  // A home card's Find deficiencies button (Phase 6 review) opens the
+  // A home card's Audit button (Phase 6 review) opens the
   // cluster with ?ask=review: Sherlock asks for the review once it can.
   const reviewAsked = view === 'tabs' && route.params.get('ask') === 'review'
   const reviewReady = reviewAsked && sherlockApi.available && clusterName !== ''

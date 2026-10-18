@@ -73,6 +73,15 @@ export function fmtTs(iso: string | undefined): string {
   return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())} UTC`
 }
 
+/** A local date and time of day, in the browser's time zone: "2026-05-03 1:34pm". */
+export function fmtLocal(iso: string | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const h = d.getHours() % 12 || 12
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${h}:${pad2(d.getMinutes())}${d.getHours() < 12 ? 'am' : 'pm'}`
+}
+
 /** A local time of day: "14:03:07". */
 export function fmtClock(d: Date | null): string {
   if (!d) return '—'

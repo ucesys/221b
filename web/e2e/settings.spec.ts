@@ -111,8 +111,9 @@ test('every open console refreshes at the same moment', async ({ browser, page }
   await open(page)
   const other = await browser.newPage()
   await open(other)
-  const clock = async (p: Page) => (await p.getByTestId('live').locator('.rk-num').textContent()) ?? ''
-  await expect(page.getByTestId('live')).toContainText(/refreshed \d/)
+  // The time of the last refresh is in the live indicator's tooltip.
+  const clock = async (p: Page) => /Last refresh ([^.]+)\./.exec((await p.getByTestId('live').getAttribute('title')) ?? '')?.[1] ?? ''
+  await expect(page.getByTestId('live')).toHaveAttribute('title', /Last refresh \d/)
   // Sample both clocks for a few ticks. The server stamps every refresh with
   // one time and sends it to every browser at once, so both show the same
   // sequence of times, give or take the tick a sample straddles.
