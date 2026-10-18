@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { menuPlace } from '../lib/menu'
 import { EXPORT_FORMATS, type ExportFormat } from '../lib/table'
 import { Chevron, CsvIcon, ExcelIcon, ExportIcon, JsonIcon } from './Icons'
 
@@ -11,15 +12,27 @@ interface Props {
   what?: string
 }
 
-/** The Export menu every table has: the rows and columns on screen, as Excel, CSV or JSON. */
+/** The Export menu every table has: the rows and columns on screen, as Excel, CSV or JSON. Its button is an icon, named Export for screen readers. */
 export function ExportMenu({ onExport, disabled, what = 'the rows in view' }: Props) {
   const [open, setOpen] = useState(false)
+  const [place, setPlace] = useState<React.CSSProperties>({})
   const button = useRef<HTMLButtonElement>(null)
   const menu = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (open) menu.current?.querySelector('button')?.focus()
   }, [open])
+  useEffect(() => {
+    if (!open) return
+    const shut = () => setOpen(false)
+    window.addEventListener('resize', shut)
+    return () => window.removeEventListener('resize', shut)
+  }, [open])
+
+  const openMenu = () => {
+    setPlace(menuPlace(button.current))
+    setOpen(true)
+  }
 
   const close = () => {
     setOpen(false)
@@ -43,15 +56,14 @@ export function ExportMenu({ onExport, disabled, what = 'the rows in view' }: Pr
         }
       }}
     >
-      <button ref={button} className="rk-btn" aria-expanded={open} aria-haspopup="true" title={`Download ${what}`} disabled={disabled} onClick={() => setOpen(!open)} style={{ height: 32 }}>
+      <button ref={button} className="rk-btn" aria-expanded={open} aria-haspopup="true" aria-label="Export" title={`Download ${what}`} disabled={disabled} onClick={() => (open ? setOpen(false) : openMenu())} style={{ height: 32 }}>
         <ExportIcon />
-        Export
         <Chevron />
       </button>
       {open && (
         <>
           <button className="rk-ddcatch" tabIndex={-1} aria-hidden="true" onClick={() => setOpen(false)} />
-          <div ref={menu} className="rk-ddmenu" data-align="right" role="group" aria-label="Export format" style={{ minWidth: 200 }}>
+          <div ref={menu} className="rk-ddmenu" data-align="right" role="group" aria-label="Export format" style={{ minWidth: 200, ...place }}>
             <div className="rk-ddhead">The rows and columns on screen, in this order</div>
             {EXPORT_FORMATS.map((f) => (
               <button key={f.id} className="rk-ddopt" onClick={() => pick(f.id)}>

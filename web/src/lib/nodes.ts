@@ -122,11 +122,11 @@ export function problemsCell(r: NodeRow): ProblemsCell {
   return { text, tone: e ? 'err' : w ? 'warn' : 'muted', tip: r.problems.map((p) => p.title).join('\n') || 'No known problems' }
 }
 
-/** The short role tag: control-plane nodes are "cp", as in many node names. */
+/** The short role tag: control-plane nodes are "master", as RKE2 and kubectl get nodes call them (6.4). */
 export function roleTag(r: NodeRow): { text: string; title: string } {
   if (r.role === 'control-plane') {
     const extra = r.roles.filter((x) => x !== 'control-plane' && x !== 'master')
-    return { text: 'cp', title: 'Control plane' + (extra.length ? ` (also ${extra.join(', ')})` : '') }
+    return { text: 'master', title: 'Control plane' + (extra.length ? ` (also ${extra.join(', ')})` : '') }
   }
   return { text: 'worker', title: r.roles.length ? `Worker (${r.roles.join(', ')})` : 'Worker' }
 }

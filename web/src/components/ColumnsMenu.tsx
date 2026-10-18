@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { menuPlace } from '../lib/menu'
 import type { ColumnDef } from '../lib/table'
 import { Chevron, ColumnsIcon } from './Icons'
 
@@ -20,8 +21,6 @@ function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
 /** The Columns menu every table has: the first column always shows. */
 export function ColumnsMenu<R>({ cols, hidden, defaults, onChange, compact }: Props<R>) {
   const [open, setOpen] = useState(false)
-  // Where the menu goes: fixed to the window, so a short table's card does
-  // not clip it, below the button or above it when there is more room there.
   const [place, setPlace] = useState<React.CSSProperties>({})
   const button = useRef<HTMLButtonElement>(null)
   const menu = useRef<HTMLDivElement>(null)
@@ -40,17 +39,7 @@ export function ColumnsMenu<R>({ cols, hidden, defaults, onChange, compact }: Pr
   }, [open])
 
   const openMenu = () => {
-    const r = button.current?.getBoundingClientRect()
-    if (r) {
-      const below = window.innerHeight - r.bottom - 12
-      const above = r.top - 12
-      const right = Math.max(8, window.innerWidth - r.right)
-      setPlace(
-        below >= 280 || below >= above
-          ? { position: 'fixed', top: r.bottom + 4, right, left: 'auto', bottom: 'auto', maxHeight: below, overflowY: 'auto' }
-          : { position: 'fixed', bottom: window.innerHeight - r.top + 4, right, left: 'auto', top: 'auto', maxHeight: above, overflowY: 'auto' },
-      )
-    }
+    setPlace(menuPlace(button.current))
     setOpen(true)
   }
 
@@ -77,9 +66,18 @@ export function ColumnsMenu<R>({ cols, hidden, defaults, onChange, compact }: Pr
         }
       }}
     >
-      <button ref={button} className="rk-btn" aria-expanded={open} aria-haspopup="true" data-on={custom} title="Choose which columns to show" onClick={() => (open ? setOpen(false) : openMenu())} style={{ height: 32 }}>
+      <button
+        ref={button}
+        className="rk-btn"
+        aria-expanded={open}
+        aria-haspopup="true"
+        aria-label={custom ? `Columns, ${shown} of ${cols.length} shown` : 'Columns'}
+        data-on={custom}
+        title="Choose which columns to show"
+        onClick={() => (open ? setOpen(false) : openMenu())}
+        style={{ height: 32 }}
+      >
         <ColumnsIcon />
-        Columns
         {custom && (
           <span className="rk-cnt">
             {shown}/{cols.length}

@@ -33,17 +33,21 @@ describe('home', () => {
     const bad = cluster({ nodes: { total: 3, ready: 2, controlPlane: 1, cordoned: 0, errors: 1, warnings: 0 }, alerts: { failed: 2, pending: 1, nodeErrors: 1, nodeWarnings: 0, volumes: 0, acknowledged: 0, recovered: 0 } })
     const h = healthOf(bad)
     expect(h.tone).toBe('err')
-    expect(h.reasons).toEqual(['1 node is not ready.', '2 pods fail to start.', '1 node has errors.'])
+    expect(h.reasons).toEqual([
+      { text: '1 node is not ready.', tone: 'err', alerts: true },
+      { text: '2 pods fail to start.', tone: 'err', alerts: true },
+      { text: '1 node has errors.', tone: 'err', alerts: true },
+    ])
     expect(activeAlerts(bad)).toBe(4)
     expect(alertTone(bad)).toBe('err')
     const acked = cluster({ alerts: { failed: 0, pending: 0, nodeErrors: 0, nodeWarnings: 0, volumes: 0, acknowledged: 1, recovered: 2 } })
-    expect(healthOf(acked)).toMatchObject({ tone: 'warn', reasons: ['1 alert is acknowledged.'] })
+    expect(healthOf(acked)).toMatchObject({ tone: 'warn', reasons: [{ text: '1 alert is acknowledged.', tone: 'warn', alerts: true }] })
     expect(alertTone(acked)).toBe('warn')
     expect(activeAlerts(acked)).toBe(0)
   })
 
   it('says why a cluster it cannot reach has no figures', () => {
-    expect(healthOf(cluster({ state: 'disconnected', message: 'dial tcp: i/o timeout' }))).toEqual({ tone: 'err', text: 'Can’t connect', reasons: ['dial tcp: i/o timeout'] })
+    expect(healthOf(cluster({ state: 'disconnected', message: 'dial tcp: i/o timeout' }))).toEqual({ tone: 'err', text: 'Can’t connect', reasons: [{ text: 'dial tcp: i/o timeout' }] })
     expect(healthOf(cluster({ synced: false })).tone).toBe('info')
   })
 

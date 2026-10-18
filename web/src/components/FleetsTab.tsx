@@ -10,8 +10,9 @@ import { usePref } from '../lib/prefs'
 import { csvText, type ExportFormat } from '../lib/table'
 import { download, xlsxBytes, type Cell } from '../lib/xlsx'
 import { FleetEditor, type EditorSeed } from './FleetEditor'
+import { ErrorsOnly } from './ErrorsOnly'
 import { ExportMenu } from './ExportMenu'
-import { Chevron, FilterIcon, PlusIcon, SearchIcon } from './Icons'
+import { Chevron, ColumnsIcon, PlusIcon, SearchIcon } from './Icons'
 import type { TabProps } from './tabs'
 import { peekLink } from '../lib/peek'
 
@@ -59,6 +60,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
   const sel = listParam(p, 'fleet').filter((id) => id === 'none' || fleets.some((f) => f.id === id))
   const group = p.get('group') === 'none' ? 'none' : 'fleet'
   const query = p.get('q') ?? ''
+  const errOnly = p.get('err') === '1'
   const fx = { labels: listParam(p, 'pl'), taints: listParam(p, 'pt') }
   const fxOn = fx.labels.length + fx.taints.length > 0
   const set = (changes: Record<string, string | string[] | undefined>) => navigate(withParams(route, changes), true)
@@ -78,7 +80,9 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
   const cols = useMemo(() => mxColumns(nodes), [nodes])
   const visCols = cols.filter((c) => !hidden.has(c.id))
   const q = query.trim().toLowerCase()
-  const scope = scopeNames(sel, fleetRows, allNames).filter((n) => byName.has(n) && (!q || n.toLowerCase().includes(q)))
+  const scope = scopeNames(sel, fleetRows, allNames).filter((n) => byName.has(n) && (!q || n.toLowerCase().includes(q)) && (!errOnly || byName.get(n)!.errors > 0))
+  const narrowed = !!q || errOnly
+  const withErrors = nodes.filter((n) => n.errors > 0).length
 
   const sortVal = (n: NodeRow, col: string): string | number | null => {
     if (col === 'node') return n.name
@@ -113,12 +117,12 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
     for (const f of fleets) {
       if (sel.length && !sel.includes(f.id!)) continue
       const rows = ordered(f.members.filter((m) => inScope.has(m)))
-      if (q && rows.length === 0) continue
+      if (narrowed && rows.length === 0) continue
       out.push({ key: f.key, row: f, title: f.name, rows })
     }
     if (!sel.length && none && none.members.length) {
       const rows = ordered(none.members.filter((m) => inScope.has(m)))
-      if (!q || rows.length) out.push({ key: 'none', row: none, title: 'Not in any fleet', rows })
+      if (!narrowed || rows.length) out.push({ key: 'none', row: none, title: 'Not in any fleet', rows })
     }
     return out
   })()
@@ -407,13 +411,23 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
             <span className="rk-sr">Filter nodes</span>
             <input type="search" placeholder="Filter nodes by name" value={query} onChange={(e) => set({ q: e.target.value || undefined })} data-testid="fleet-filter" />
           </label>
+          <ErrorsOnly on={errOnly} count={withErrors} onChange={(on) => set({ err: on ? '1' : undefined })} />
           <span style={{ flex: '1 1 auto' }} />
-          <button className="rk-btn" aria-expanded={colsOpen} data-on={hidden.size > 0} onClick={() => setColsOpen(!colsOpen)} style={{ height: 32 }} title="Choose which label and taint columns to show">
-            <FilterIcon />
-            Columns
-            <span className="rk-cnt">
-              {visCols.length}/{cols.length}
-            </span>
+          <button
+            className="rk-btn"
+            aria-expanded={colsOpen}
+            aria-label={hidden.size > 0 ? `Columns, ${visCols.length} of ${cols.length} shown` : 'Columns'}
+            data-on={hidden.size > 0}
+            onClick={() => setColsOpen(!colsOpen)}
+            style={{ height: 32 }}
+            title="Choose which label and taint columns to show"
+          >
+            <ColumnsIcon />
+            {hidden.size > 0 && (
+              <span className="rk-cnt">
+                {visCols.length}/{cols.length}
+              </span>
+            )}
             <Chevron />
           </button>
           <ExportMenu onExport={exportAs} disabled={!rowCount || !visCols.length} what="what the table shows" />

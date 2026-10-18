@@ -275,7 +275,7 @@ function Shell() {
       <TopBar cluster={live.cluster} counts={counts} labelTones={{ alerts: alertTab }} tones={{ alerts: alertBadge.tone, access: accessCount.tone, policies: policyCount.tone === 'info' ? 'muted' : policyCount.tone }} tab={view === 'tabs' ? tab : null} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} theme={theme} onTheme={changeTheme} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
       {view !== 'home' && view !== 'admin' && <Banners cluster={live.cluster} stream={live.stream} now={now} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} accessError={live.accessError} alerts={view === 'tabs' && tab !== 'alerts' ? bannersOf(alerts.rows, now) : []} alertsHref={href('alerts')} />}
       {view === 'home' ? (
-        <HomePage now={now} me={me} onAdd={() => setEditing(null)} onEdit={(id) => setEditing(id)} />
+        <HomePage me={me} onAdd={() => setEditing(null)} onEdit={(id) => setEditing(id)} />
       ) : view === 'admin' ? (
         <AdminPageView route={route} me={me} now={now} cluster={live.cluster} onToast={setToast} settings={live.settings} refreshedAt={live.refreshedAt} />
       ) : view === 'cluster' ? (

@@ -26,14 +26,14 @@ type env struct {
 	t     *testing.T
 	svc   *auth.Service
 	app   *httptest.Server
-	audit *bytes.Buffer
+	audit *syncBuffer
 	now   *time.Time
 }
 
 func newEnv(t *testing.T, cfg auth.Config) *env {
 	t.Helper()
 	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
-	e := &env{t: t, audit: &bytes.Buffer{}, now: &now}
+	e := &env{t: t, audit: &syncBuffer{}, now: &now}
 	clock := func() time.Time { return *e.now }
 	svc, err := auth.New(cfg, nil, audit.New(audit.Options{Out: e.audit, Now: clock}), clock)
 	if err != nil {
@@ -43,6 +43,25 @@ func newEnv(t *testing.T, cfg auth.Config) *env {
 	e.app = console(t, svc)
 	t.Cleanup(e.app.Close)
 	return e
+}
+
+// syncBuffer is the audit log's output in tests: the directory's syncs
+// write to it from their own goroutine while a test reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // formIn reads the token of a page the client was served.
@@ -448,8 +467,14 @@ func TestDisableResetAndDeleteEndSessions(t *testing.T) {
 			t.Errorf("%s left the session open: %d", what, code)
 		}
 	}
+	// A change needs the SuperAdmin's own password (6.4).
+	for _, own := range []map[string]any{{"password": "another long password"}, {"password": "another long password", "currentPassword": "not my password"}} {
+		if code, b := e.api(root, "PATCH", "/api/v1/admin/users/dave", own); code != http.StatusForbidden || !strings.Contains(string(b), "Your password is not right") {
+			t.Fatalf("without the SuperAdmin's own password: %d %s", code, b)
+		}
+	}
 	check("a reset", func() {
-		if code, b := e.api(root, "PATCH", "/api/v1/admin/users/dave", map[string]any{"password": "another long password"}); code != http.StatusOK {
+		if code, b := e.api(root, "PATCH", "/api/v1/admin/users/dave", map[string]any{"password": "another long password", "currentPassword": goodPassword}); code != http.StatusOK {
 			t.Fatalf("%d %s", code, b)
 		}
 	})
@@ -458,7 +483,7 @@ func TestDisableResetAndDeleteEndSessions(t *testing.T) {
 	}
 	goodPW := "another long password"
 	e.mustSignIn("dave", goodPW)
-	if code, _ := e.api(root, "PATCH", "/api/v1/admin/users/dave", map[string]any{"password": "short"}); code != http.StatusBadRequest {
+	if code, _ := e.api(root, "PATCH", "/api/v1/admin/users/dave", map[string]any{"password": "short", "currentPassword": goodPassword}); code != http.StatusBadRequest {
 		t.Error("a short reset was accepted")
 	}
 	pw := goodPW
@@ -489,6 +514,61 @@ func TestDisableResetAndDeleteEndSessions(t *testing.T) {
 	})
 	if _, resp := e.signIn("dave", pw); resp.StatusCode != http.StatusUnauthorized {
 		t.Error("a deleted user signed in")
+	}
+}
+
+// changePassword posts the sign-in page's change-password form with a fresh
+// client.
+func (e *env) changePassword(user, current, password, again string) *http.Response {
+	e.t.Helper()
+	c := client(e.t)
+	return e.post(c, "/signin/password", url.Values{"form": {formIn(e.t, c, e.app.URL+"/signin/password")}, "username": {user}, "current": {current}, "password": {password}, "again": {again}})
+}
+
+func TestPeopleChangeTheirOwnPasswordFromTheSignInPage(t *testing.T) {
+	e, root := adminEnv(t)
+	e.api(root, "POST", "/api/v1/admin/users", map[string]any{"username": "gina", "password": goodPassword})
+	page, err := client(t).Get(e.app.URL + "/signin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := readAll(t, page); !strings.Contains(b, `href="/signin/password`) {
+		t.Fatalf("no Change password link on the sign-in page: %s", b)
+	}
+	const next = "a new long password"
+	for _, c := range []struct {
+		name, user, current, password, again string
+		code                                 int
+		says                                 string
+	}{
+		{"wrong current password", "gina", "wrong wrong wrong", next, next, http.StatusUnauthorized, "Your password was not changed"},
+		{"unknown account", "nobody", goodPassword, next, next, http.StatusUnauthorized, "Your password was not changed"},
+		{"too short", "gina", goodPassword, "short", "short", http.StatusBadRequest, `id="password-error"`},
+		{"the same as before", "gina", goodPassword, goodPassword, goodPassword, http.StatusBadRequest, "not the current one"},
+		{"repeat differs", "gina", goodPassword, next, next + "x", http.StatusBadRequest, `id="again-error"`},
+		{"defined in values", "root", goodPassword, next, next, http.StatusBadRequest, "helm upgrade"},
+	} {
+		*e.now = e.now.Add(time.Minute)
+		r := e.changePassword(c.user, c.current, c.password, c.again)
+		if b := readAll(t, r); r.StatusCode != c.code || !strings.Contains(b, c.says) {
+			t.Errorf("%s: %d, want %d saying %q: %s", c.name, r.StatusCode, c.code, c.says, b)
+		}
+	}
+	*e.now = e.now.Add(time.Minute)
+	gina := e.mustSignIn("gina", goodPassword)
+	r := e.changePassword("gina", goodPassword, next, next)
+	if b := readAll(t, r); r.Request.URL.Path != "/signin" || !strings.Contains(b, "Your password is changed") {
+		t.Fatalf("after a change: %s %s", r.Request.URL, b)
+	}
+	if _, code := e.whoami(gina); code != http.StatusUnauthorized {
+		t.Error("the change left a session open")
+	}
+	if _, resp := e.signIn("gina", goodPassword); resp.StatusCode != http.StatusUnauthorized {
+		t.Error("the old password still works")
+	}
+	e.mustSignIn("gina", next)
+	if !strings.Contains(e.audit.String(), `"action":"password.change"`) {
+		t.Error("no audit record")
 	}
 }
 

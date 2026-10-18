@@ -1,13 +1,11 @@
 import { envOf } from '../api/clusters'
 import { useHome, type HomeCluster } from '../api/home'
 import type { Me } from '../api/types'
-import { fmtAge } from '../lib/format'
 import { activeAlerts, alertTone, healthOf, podLine, resourceLine, type UseLine } from '../lib/home'
 import { clusterHref, clusterPageHref } from '../lib/router'
 import { SherlockIcon } from './Icons'
 
 interface Props {
-  now: number
   me: Me | null
   /** Opens the connection editor for a new cluster. */
   onAdd: () => void
@@ -46,7 +44,7 @@ function Stat({ label, value, sub, tone, href, testid }: { label: string; value:
   )
 }
 
-function ClusterCard({ c, now, onEdit }: { c: HomeCluster; now: number; onEdit?: () => void }) {
+function ClusterCard({ c, onEdit }: { c: HomeCluster; onEdit?: () => void }) {
   const env = envOf(c.env)
   const health = healthOf(c)
   const up = c.state === 'connected' && c.synced
@@ -70,17 +68,25 @@ function ClusterCard({ c, now, onEdit }: { c: HomeCluster; now: number; onEdit?:
             </span>
           </h2>
           <span style={{ fontSize: 12, color: 'var(--fg3)' }}>
-            {[c.version, c.local ? 'the console’s own cluster' : '', c.refreshedAt ? `refreshed ${fmtAge(c.refreshedAt, now)} ago` : ''].filter(Boolean).join(' · ')}
+            {[c.version, c.local ? 'the console’s own cluster' : ''].filter(Boolean).join(' · ')}
           </span>
         </div>
-        <span className="rk-pill" data-tone={health.tone} title={health.reasons.join('\n') || undefined} data-testid="home-health">
+        <span className="rk-pill" data-tone={health.tone} title={health.reasons.map((r) => r.text).join('\n') || undefined} data-testid="home-health">
           {health.text}
         </span>
       </header>
       {health.reasons.length > 0 && (
         <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--fg2)', display: 'flex', flexDirection: 'column', gap: 2 }} data-testid="home-reasons">
           {health.reasons.slice(0, 4).map((r) => (
-            <li key={r}>{r}</li>
+            <li key={r.text} style={r.tone ? { color: `var(--${r.tone})` } : undefined}>
+              {r.alerts ? (
+                <a href={at('alerts')} style={{ color: 'inherit', display: 'inline-flex', alignItems: 'center', minHeight: 24 }} data-testid="home-reason-link">
+                  {r.text}
+                </a>
+              ) : (
+                r.text
+              )}
+            </li>
           ))}
         </ul>
       )}
@@ -140,7 +146,7 @@ function ClusterCard({ c, now, onEdit }: { c: HomeCluster; now: number; onEdit?:
  * cluster the console is set up for, with its health and what its nodes'
  * CPU, memory and pod room hold, as the person may see them.
  */
-export function HomePage({ now, me, onAdd, onEdit }: Props) {
+export function HomePage({ me, onAdd, onEdit }: Props) {
   const { clusters, loaded, error } = useHome()
   const up = clusters.filter((c) => c.state === 'connected')
   const sum = (f: (c: HomeCluster) => number) => clusters.reduce((n, c) => n + f(c), 0)
@@ -172,7 +178,7 @@ export function HomePage({ now, me, onAdd, onEdit }: Props) {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(460px, 100%), 1fr))', gap: 14, alignItems: 'start' }} data-testid="home-cards">
           {clusters.map((c) => (
-            <ClusterCard key={c.id} c={c} now={now} onEdit={me?.admin && onEdit ? () => onEdit(c.id) : undefined} />
+            <ClusterCard key={c.id} c={c} onEdit={me?.admin && onEdit ? () => onEdit(c.id) : undefined} />
           ))}
         </div>
       )}

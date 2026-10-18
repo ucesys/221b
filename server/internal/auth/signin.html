@@ -17,6 +17,7 @@
     <h1 id="si-title">{{.Title}}</h1>
     <p class="si-sub">The cluster console. Sign in to continue.</p>
     {{if .Error}}<p class="si-error" role="alert" data-testid="signin-error">{{.Error}}</p>{{end}}
+    {{if .Notice}}<p class="si-ok" role="status" data-testid="signin-notice">{{.Notice}}</p>{{end}}
     {{if .OIDC}}
     <a class="si-btn" href="/signin/start?next={{.Next}}" data-next-link data-testid="signin-oidc">Sign in with {{.Provider}}</a>
     <p class="si-note">You will be sent to {{.Provider}} and brought back here.</p>
@@ -29,6 +30,7 @@
       <label class="si-field"><span>Password</span><input name="password" type="password" autocomplete="current-password" required></label>
       <button type="submit" class="si-btn" data-testid="signin-submit">Sign in</button>
     </form>
+    <p class="si-links"><a href="/signin/password?next={{.Next}}" data-testid="signin-change-password">Change password</a></p>
     
     {{end}}
     {{if .Off}}
