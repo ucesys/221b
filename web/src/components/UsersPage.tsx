@@ -26,7 +26,7 @@ type Ask =
   | { kind: 'disable'; user: UserRow }
   | { kind: 'enable'; user: UserRow }
   | { kind: 'delete'; user: UserRow }
-  | { kind: 'reset'; user: UserRow }
+  | { kind: 'password'; user: UserRow }
   | { kind: 'signout'; user: UserRow }
 
 /** Users (RB-45, RB-46): the people 221B knows, and a local user's groups, super roles and account. */
@@ -155,6 +155,18 @@ export function UsersPage({ route, now, cluster, onToast }: AdminProps) {
   )
 }
 
+function PasswordField({ label, hint, autoComplete, value, onChange, testId }: { label: string; hint?: string; autoComplete: string; value: string; onChange: (v: string) => void; testId: string }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--fg3)' }}>
+      {label}
+      <span className="rk-field">
+        <input type="password" autoComplete={autoComplete} value={value} onChange={(e) => onChange(e.target.value)} data-testid={testId} />
+      </span>
+      {hint && <span className="rk-fhint">{hint}</span>}
+    </label>
+  )
+}
+
 /** Whether a user is the only active local SuperAdmin, whom the server keeps (RB-30). */
 function isLastSuperAdmin(user: UserRow, users: UserRow[]): boolean {
   const supers = users.filter((u) => u.source === 'local' && u.status === 'active' && u.superRoles.includes('superAdmin'))
@@ -175,6 +187,8 @@ function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onA
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [password, setPassword] = useState('')
+  const [again, setAgain] = useState('')
+  const [own, setOwn] = useState('')
   const [superPick, setSuperPick] = useState('')
   const local = user.source === 'local' && !user.managed
   const name = user.name || user.username
@@ -184,6 +198,8 @@ function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onA
     setAsk(null)
     setError('')
     setPassword('')
+    setAgain('')
+    setOwn('')
   }
   const run = async (fn: () => Promise<unknown>, message: string) => {
     setBusy(true)
@@ -213,13 +229,13 @@ function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onA
         return run(() => deleteUser(user.username), `Deleted ${user.username}.`)
       case 'signout':
         return run(() => endSessions(user.username), `Ended the sessions of ${user.username}.`)
-      case 'reset': {
-        const problem = passwordProblem(password, user.username)
+      case 'password': {
+        const problem = !own ? 'Enter your own password.' : passwordProblem(password, user.username) || (password !== again ? 'The two new passwords are not the same.' : '')
         if (problem) {
           setError(problem)
           return
         }
-        return run(() => changeUser(user.username, { password }), `Reset the password of ${user.username} and ended their sessions.`)
+        return run(() => changeUser(user.username, { password, currentPassword: own }), `Changed the password of ${user.username} and ended their sessions.`)
       }
     }
   }
@@ -231,7 +247,7 @@ function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onA
     disable: `Disable ${user.username}?`,
     enable: `Enable ${user.username}?`,
     delete: `Delete ${user.username}?`,
-    reset: `Reset the password of ${user.username}`,
+    password: `Change the password of ${user.username}`,
     signout: `Sign ${user.username} out everywhere?`,
   }
   return (
@@ -378,8 +394,8 @@ function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onA
       )}
       {local && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          <button className="rk-btn" onClick={() => setAsk({ kind: 'reset', user })}>
-            Reset password
+          <button className="rk-btn" onClick={() => setAsk({ kind: 'password', user })}>
+            Change password
           </button>
           <button className="rk-btn" onClick={() => setAsk({ kind: 'signout', user })}>
             Sign out of all sessions
@@ -395,7 +411,7 @@ function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onA
       {user.managed && <span className="rk-fhint">Defined in values.yaml; change it with helm upgrade.</span>}
       {user.source === 'ldap' && <span className="rk-fhint">The directory owns this person: groups and status follow the next sync.</span>}
       {ask && (
-        <ConfirmDialog title={titles[ask.kind]} confirm={ask.kind === 'reset' ? 'Reset password' : ask.kind === 'remove' ? 'Remove' : ask.kind === 'super' ? 'Change' : ask.kind === 'signout' ? 'Sign out' : ask.kind === 'delete' ? 'Delete' : ask.kind === 'disable' ? 'Disable' : 'Enable'} danger={ask.kind === 'delete' || ask.kind === 'disable'} busy={busy} error={error} onConfirm={() => void confirm()} onCancel={cancel}>
+        <ConfirmDialog title={titles[ask.kind]} confirm={ask.kind === 'password' ? 'Change password' : ask.kind === 'remove' ? 'Remove' : ask.kind === 'super' ? 'Change' : ask.kind === 'signout' ? 'Sign out' : ask.kind === 'delete' ? 'Delete' : ask.kind === 'disable' ? 'Disable' : 'Enable'} danger={ask.kind === 'delete' || ask.kind === 'disable'} busy={busy} error={error} onConfirm={() => void confirm()} onCancel={cancel}>
           {ask.kind === 'remove' && <p style={{ margin: 0 }}>{name} loses what {ask.group} gives within 2 minutes, while signed in. Nothing is written to Kubernetes; the change is kept by 221B and recorded in the audit log.</p>}
           {ask.kind === 'super' && (
             <p style={{ margin: 0 }}>
@@ -406,14 +422,12 @@ function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onA
           {ask.kind === 'enable' && <p style={{ margin: 0 }}>{name} can sign in again with the current password.</p>}
           {ask.kind === 'delete' && <p style={{ margin: 0 }}>{name} is removed from every group and signed out. Nothing is left in any cluster, because no binding names a user. This cannot be undone.</p>}
           {ask.kind === 'signout' && <p style={{ margin: 0 }}>Every open session of {name} ends; they can sign in again.</p>}
-          {ask.kind === 'reset' && (
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--fg3)' }}>
-              New password
-              <span className="rk-field">
-                <input type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} data-testid="reset-password" />
-              </span>
-              <span className="rk-fhint">At least 12 characters, and not the user name. Their open sessions end.</span>
-            </label>
+          {ask.kind === 'password' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <PasswordField label="Your password" hint="Yours, as you sign in: it confirms the change is yours." autoComplete="current-password" value={own} onChange={setOwn} testId="password-own" />
+              <PasswordField label={`New password for ${user.username}`} hint="At least 12 characters, and not the user name. Their open sessions end." autoComplete="new-password" value={password} onChange={setPassword} testId="reset-password" />
+              <PasswordField label="Repeat the new password" autoComplete="new-password" value={again} onChange={setAgain} testId="password-again" />
+            </div>
           )}
         </ConfirmDialog>
       )}

@@ -10,7 +10,15 @@ export interface Health {
   tone: Tone
   text: string
   /** Why, one short line each. */
-  reasons: string[]
+  reasons: Reason[]
+}
+
+export interface Reason {
+  text: string
+  /** err or warn; none for a cluster that is not up. */
+  tone?: Tone
+  /** The Alerts tab lists what it counts (6.4). */
+  alerts?: boolean
 }
 
 const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many}`
@@ -32,21 +40,23 @@ export function alertTone(c: HomeCluster): Tone | undefined {
 /** A cluster's health in a word, worst first. */
 export function healthOf(c: HomeCluster): Health {
   const s = stateOf(c)
-  if (c.state !== 'connected') return { tone: s.tone, text: s.text, reasons: c.message ? [c.message] : [] }
-  if (!c.synced) return { tone: 'info', text: 'Listing', reasons: ['Still listing what the cluster has.'] }
+  if (c.state !== 'connected') return { tone: s.tone, text: s.text, reasons: c.message ? [{ text: c.message }] : [] }
+  if (!c.synced) return { tone: 'info', text: 'Listing', reasons: [{ text: 'Still listing what the cluster has.' }] }
   const a = c.alerts
-  const reasons: string[] = []
+  const reasons: Reason[] = []
+  const err = (text: string, alerts = true) => reasons.push({ text, tone: 'err', alerts })
+  const warn = (text: string, alerts = true) => reasons.push({ text, tone: 'warn', alerts })
   const notReady = c.nodes.total - c.nodes.ready
-  if (c.expired) reasons.push('Its credentials have expired.')
-  if (notReady > 0) reasons.push(`${n(notReady, 'node is', 'nodes are')} not ready.`)
-  if (a.failed) reasons.push(`${n(a.failed, 'pod fails', 'pods fail')} to start.`)
-  if (a.nodeErrors) reasons.push(`${n(a.nodeErrors, 'node has', 'nodes have')} errors.`)
+  if (c.expired) err('Its credentials have expired.', false)
+  if (notReady > 0) err(`${n(notReady, 'node is', 'nodes are')} not ready.`)
+  if (a.failed) err(`${n(a.failed, 'pod fails', 'pods fail')} to start.`)
+  if (a.nodeErrors) err(`${n(a.nodeErrors, 'node has', 'nodes have')} errors.`)
   if (reasons.length) return { tone: 'err', text: 'Needs attention', reasons }
-  if (c.expiring) reasons.push('Its credentials expire soon.')
-  if (a.pending) reasons.push(`${n(a.pending, 'pod is', 'pods are')} pending.`)
-  if (a.nodeWarnings) reasons.push(`${n(a.nodeWarnings, 'node has', 'nodes have')} warnings.`)
-  if (a.volumes) reasons.push(`${n(a.volumes, 'volume claim waits', 'volume claims wait')}.`)
-  if (a.acknowledged) reasons.push(`${n(a.acknowledged, 'alert is', 'alerts are')} acknowledged.`)
+  if (c.expiring) warn('Its credentials expire soon.', false)
+  if (a.pending) warn(`${n(a.pending, 'pod is', 'pods are')} pending.`)
+  if (a.nodeWarnings) warn(`${n(a.nodeWarnings, 'node has', 'nodes have')} warnings.`)
+  if (a.volumes) warn(`${n(a.volumes, 'volume claim waits', 'volume claims wait')}.`)
+  if (a.acknowledged) warn(`${n(a.acknowledged, 'alert is', 'alerts are')} acknowledged.`)
   if (reasons.length) return { tone: 'warn', text: 'Warnings', reasons }
   return { tone: 'ok', text: 'Healthy', reasons: [] }
 }

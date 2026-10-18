@@ -46,7 +46,7 @@ test('shows the role, allocatable and free resources of every node', async ({ pa
   const snap = await snapshot(request)
   for (const r of nodeRows(snap).slice(0, 3)) {
     const cells = page.locator(`[data-node="${r.name}"] > span`)
-    await expect(cells.nth(1)).toHaveText(r.role === 'control-plane' ? 'cp' : 'worker')
+    await expect(cells.nth(1)).toHaveText(r.role === 'control-plane' ? 'master' : 'worker')
     await expect(cells.nth(4)).toContainText(fCores(r.cpu.requested))
     await expect(cells.nth(5)).toHaveText(fCores(r.cpu.allocatable))
     await expect(cells.nth(6)).toHaveText(fCores(free(r.cpu)))

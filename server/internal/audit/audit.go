@@ -44,9 +44,12 @@ const (
 	ActionUserGroups   = "user.groups"
 	ActionUserSuper    = "user.super"
 	ActionUserSessions = "user.sessions"
-	ActionNameRefused  = "name.refused"
-	ActionLDAPSync     = "ldap.sync"
-	ActionRolesDrift   = "roles.drift"
+	// ActionPasswordChange is a person changing their own password from
+	// the sign-in page (6.4).
+	ActionPasswordChange = "password.change"
+	ActionNameRefused    = "name.refused"
+	ActionLDAPSync       = "ldap.sync"
+	ActionRolesDrift     = "roles.drift"
 )
 
 // Outcomes of an action.

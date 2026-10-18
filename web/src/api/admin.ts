@@ -172,8 +172,10 @@ export interface UserChange {
   disabled?: boolean
   name?: string
   email?: string
-  /** A reset: the new password; it ends the person's sessions (RB-46). */
+  /** A new password; it ends the person's sessions (RB-46). */
   password?: string
+  /** The SuperAdmin's own password, which a new password needs (6.4). */
+  currentPassword?: string
 }
 
 /** The server's refusal, with its message and status. */

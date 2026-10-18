@@ -88,7 +88,6 @@ function RefreshRing({ left, every, refreshedAt, now }: { left: number; every: n
     <svg className="rk-ring" width={18} height={18} viewBox="0 0 16 16" aria-hidden="true" data-testid="refresh-ring" data-left={left}>
       <circle cx={8} cy={8} r={6} fill="none" stroke="var(--line2)" strokeWidth={2.2} />
       <RingArc key={at} every={every} elapsed={elapsed} />
-      <circle cx={8} cy={8} r={1.6} fill="var(--accent)" />
     </svg>
   )
 }

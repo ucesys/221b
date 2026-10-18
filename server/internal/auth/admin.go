@@ -315,8 +315,14 @@ func (s *Service) patchUser(w http.ResponseWriter, r *http.Request) {
 		Name     *string `json:"name"`
 		Email    *string `json:"email"`
 		Password *string `json:"password"`
+		// CurrentPassword is the SuperAdmin's own, which a password change
+		// asks for (6.4).
+		CurrentPassword string `json:"currentPassword"`
 	}
 	if !decode(w, r, &in) {
+		return
+	}
+	if in.Password != nil && !s.ownPassword(w, r, sess, in.CurrentPassword) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
@@ -329,7 +335,7 @@ func (s *Service) patchUser(w http.ResponseWriter, r *http.Request) {
 	}
 	var what []string
 	if in.Password != nil {
-		what = append(what, "password reset")
+		what = append(what, "password changed")
 	}
 	if in.Disabled != nil {
 		what = append(what, map[bool]string{true: "disabled", false: "enabled"}[*in.Disabled])
@@ -343,6 +349,27 @@ func (s *Service) patchUser(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordUser(r, sess, audit.ActionUserUpdate, name, strings.Join(what, ", "), audit.OutcomeOK)
 	writeJSON(w, http.StatusOK, s.row(name, sess))
+}
+
+// ownPassword checks the password a SuperAdmin gives to change someone's
+// password: their own, as they sign in with it, and as often as a sign-in.
+func (s *Service) ownPassword(w http.ResponseWriter, r *http.Request, sess Session, password string) bool {
+	if sess.Method != string(ModeLocal) {
+		fail(w, http.StatusForbidden, "Sign in with a local account to change passwords.")
+		return false
+	}
+	if !s.perAccount.allow(sess.User.Username) {
+		s.recordUser(r, sess, audit.ActionUserUpdate, r.PathValue("username"), "too many attempts at the SuperAdmin’s own password", audit.OutcomeDenied)
+		fail(w, http.StatusTooManyRequests, "Too many attempts. Wait a minute and try again.")
+		return false
+	}
+	acct, ok := s.accounts.Find(sess.User.Username)
+	if !ok || !CheckPassword(acct.PasswordHash, password) {
+		s.recordUser(r, sess, audit.ActionUserUpdate, r.PathValue("username"), "the SuperAdmin’s own password was wrong", audit.OutcomeDenied)
+		fail(w, http.StatusForbidden, "Your password is not right.")
+		return false
+	}
+	return true
 }
 
 // endSessions signs a local user out everywhere.

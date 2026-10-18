@@ -64,8 +64,8 @@ describe('cells', () => {
   })
 
   it('tags roles and lists a node\'s own labels', () => {
-    expect(roleTag(rows[0]!)).toEqual({ text: 'cp', title: 'Control plane' })
-    expect(roleTag(controlPlane('cp-2', { roles: ['control-plane', 'etcd'] }))).toEqual({ text: 'cp', title: 'Control plane (also etcd)' })
+    expect(roleTag(rows[0]!)).toEqual({ text: 'master', title: 'Control plane' })
+    expect(roleTag(controlPlane('cp-2', { roles: ['control-plane', 'etcd'] }))).toEqual({ text: 'master', title: 'Control plane (also etcd)' })
     expect(roleTag(rows[1]!)).toEqual({ text: 'worker', title: 'Worker (worker)' })
     expect(ownLabels(rows[3]!)).toEqual(['workload=analytics'])
     expect(ownLabels(rows[1]!)).toEqual([])

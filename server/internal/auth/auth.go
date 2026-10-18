@@ -109,9 +109,11 @@ type Service struct {
 	now        func() time.Time
 	page       *template.Template
 	setupPage  *template.Template
+	// passwordPage changes one's own password (6.4).
+	passwordPage *template.Template
 }
 
-//go:embed signin.html setup.html signin.css signin.js
+//go:embed signin.html setup.html password.html signin.css signin.js
 var pageFS embed.FS
 
 // New builds the service. OIDC discovery is lazy, so a provider that is
@@ -194,6 +196,7 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 	}
 	s.page = template.Must(template.ParseFS(pageFS, "signin.html"))
 	s.setupPage = template.Must(template.ParseFS(pageFS, "setup.html"))
+	s.passwordPage = template.Must(template.ParseFS(pageFS, "password.html"))
 	return s, nil
 }
 
@@ -340,6 +343,8 @@ func (s *Service) Routes() []Route {
 	routes := []Route{
 		{"GET /signin", "signin", s.getSignIn},
 		{"POST /signin", "signin-local", s.postSignIn},
+		{"GET /signin/password", "signin-password", s.getPassword},
+		{"POST /signin/password", "signin-password", s.postPassword},
 		{"GET /signin/start", "signin-start", s.startOIDC},
 		{"POST /signin/start", "signin-start", s.startOIDC},
 		{"GET /signin/callback", "signin-callback", s.callback},
@@ -371,12 +376,14 @@ type pageData struct {
 	Mode     Mode
 	Provider string
 	Error    string
-	Next     string
-	Email    string
-	Local    bool
-	OIDC     bool
-	Off      bool
-	Form     string
+	// Notice says what went right: a password changed (6.4).
+	Notice string
+	Next   string
+	Email  string
+	Local  bool
+	OIDC   bool
+	Off    bool
+	Form   string
 }
 
 func (s *Service) renderSignIn(w http.ResponseWriter, r *http.Request, msg string, code int) {
@@ -387,6 +394,8 @@ func (s *Service) renderSignIn(w http.ResponseWriter, r *http.Request, msg strin
 	if r.Method == http.MethodPost {
 		d.Email = r.PostFormValue("email")
 		d.Next = safeNext(r.PostFormValue("next"))
+	} else if r.URL.Query().Get("changed") == "1" && msg == "" {
+		d.Notice = "Your password is changed. Sign in with the new one."
 	}
 	if d.Local {
 		// A fresh token for the form, in the page and in a cookie only this
