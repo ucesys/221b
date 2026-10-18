@@ -125,7 +125,9 @@ function AlertCard({ r, now, onOpen, onPod, onExport, onAck }: { r: AlertRow; no
     )
   }
   return (
-    <div className="rk-card" style={{ overflow: 'hidden' }} data-testid="alert" data-alert={r.key} data-severity={r.severity} data-acked={r.ack ? 'true' : undefined}>
+    // A border in the alert's colour around the whole card, so each alert
+    // stands apart and its title reads as the head of what follows (6.5).
+    <div className="rk-card" style={{ overflow: 'hidden', borderColor: isActive(r) ? `var(--${sev.tone})` : undefined }} data-testid="alert" data-alert={r.key} data-severity={r.severity} data-acked={r.ack ? 'true' : undefined} data-tone={isActive(r) ? sev.tone : undefined}>
       <div style={{ padding: '12px 16px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px', borderBottom: '1px solid var(--line)' }}>
         <span className="rk-tag" data-tone={sev.tone} style={{ fontSize: 11, padding: '2px 8px' }} data-testid="alert-sev">
           {sev.label}
@@ -174,7 +176,7 @@ function AlertCard({ r, now, onOpen, onPod, onExport, onAck }: { r: AlertRow; no
       {events.length > 0 && (
         <div style={{ overflowX: 'auto' }}>
           <div className="rk-grid" role="table" aria-label={`Events about ${r.name}`} style={{ ['--cols' as string]: '150px minmax(300px, 3fr) 72px 110px 110px 180px', minWidth: 940 }}>
-            <div className="rk-gh" role="row">
+            <div className="rk-gh" role="row" style={{ background: 'transparent' }}>
               {th('reason', 'Reason')}
               {th('msg', 'Message')}
               {th('count', 'Count', true)}
@@ -241,25 +243,41 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
   const q = query.trim().toLowerCase()
   const shown = useMemo(() => rows.filter((r) => (!activeOnly || isActive(r)) && (!hideAcked || !r.ack) && (!q || searchText(r).includes(q))), [rows, q, activeOnly, hideAcked])
   const sec = useMemo(() => sectionsOf(shown), [shown])
+  // The counts leave resolved alerts out, as the tab's name does (6.5).
+  const live = (rs: AlertRow[]) => rs.filter(isActive).length
   const counts: Record<AlertKind, number> = {
-    all: shown.length,
-    pods: sec.pods.length,
-    nodes: sec.controlPlane.length + sec.workers.length,
-    volumes: sec.volumes.length,
+    all: live(shown),
+    pods: live(sec.pods),
+    nodes: live(sec.controlPlane) + live(sec.workers),
+    volumes: live(sec.volumes),
   }
-  const sections: { id: string; title: string; what: string; rows: AlertRow[]; show: boolean }[] = [
-    { id: 'pods', title: 'Pods', what: 'pod', rows: sec.pods.filter(isActive), show: kind === 'all' || kind === 'pods' },
+  const fresh = (r: AlertRow) => isActive(r) && !r.ack
+  const kinds: { id: string; title: string; what: string; rows: AlertRow[]; show: boolean }[] = [
+    { id: 'pods', title: 'Pods', what: 'pod', rows: sec.pods, show: kind === 'all' || kind === 'pods' },
     { id: 'control-plane', title: 'Control-plane nodes', what: 'control-plane', rows: sec.controlPlane, show: kind === 'all' || kind === 'nodes' },
     { id: 'workers', title: 'Worker nodes', what: 'worker', rows: sec.workers, show: kind === 'all' || kind === 'nodes' },
     { id: 'volumes', title: 'Persistent volumes and claims', what: 'volume', rows: sec.volumes, show: kind === 'all' || kind === 'volumes' },
   ]
-  const recovered = { id: 'recovered', title: 'Resolved', what: 'resolved', rows: sec.pods.filter((r) => !isActive(r)), show: kind === 'all' || kind === 'pods' }
-  // What is going on first, then the pods that recovered, then the groups
-  // with nothing to show.
-  const ordered = [...sections.filter((s) => s.rows.length), ...(recovered.rows.length ? [recovered] : []), ...sections.filter((s) => !s.rows.length)]
+  const sections = kinds.map((k) => ({ ...k, rows: k.rows.filter(fresh), all: k.rows }))
+  const inView = kinds.filter((k) => k.show).flatMap((k) => k.rows)
+  // What nobody has acknowledged first, by kind; then what someone has;
+  // then what resolved; then the kinds with nothing to show (6.5).
+  const acked = { id: 'acknowledged', title: 'Acknowledged', what: 'acknowledged', rows: inView.filter((r) => isActive(r) && r.ack), show: true, all: [] as AlertRow[] }
+  const recovered = { id: 'recovered', title: 'Resolved', what: 'resolved', rows: inView.filter((r) => !isActive(r)), show: true, all: [] as AlertRow[] }
+  const ordered = [...sections.filter((s) => s.rows.length), ...(acked.rows.length ? [acked] : []), ...(recovered.rows.length ? [recovered] : []), ...sections.filter((s) => !s.rows.length)]
   const visible = ordered.filter((s) => s.show).flatMap((s) => s.rows)
   const hiddenRecovered = activeOnly ? rows.filter((r) => !isActive(r) && (!q || searchText(r).includes(q))).length : 0
   const hiddenAcked = hideAcked ? rows.filter((r) => r.ack && (!activeOnly || isActive(r)) && (!q || searchText(r).includes(q))).length : 0
+  const emptyText = (s: (typeof ordered)[number]) =>
+    q
+      ? `No ${s.what} alerts match this search.`
+      : s.all.some((r) => isActive(r) && r.ack)
+        ? `No new ${s.what} alerts; the acknowledged ones are above.`
+        : s.all.some((r) => !isActive(r))
+          ? `No active ${s.what} alerts; the resolved ones are above.`
+          : activeOnly && rows.some((r) => !isActive(r) && sectionOf(r) === s.id)
+            ? `No active ${s.what} alerts; the resolved ones are hidden.`
+            : `No ${s.what} problems right now.`
 
   // The object's details over this tab.
   const openRow = (r: AlertRow) => {
@@ -302,7 +320,7 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
             </button>
           ))}
         </div>
-        <label className="rk-check" title="Leave out the pods that recovered after warnings" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+        <label className="rk-check" title="Leave out the alerts whose object is healthy again: a pod running, a node ready, a claim bound with its pods running" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
           <input
             type="checkbox"
             checked={activeOnly}
@@ -336,14 +354,16 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
             <div key={s.id} style={{ display: 'flex', flexDirection: 'column', gap: 14 }} data-testid={`alert-section-${s.id}`}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
                 <h2 className="rk-h">{s.title}</h2>
-                <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{s.rows.length}</span>
+                <span style={{ fontSize: 12, color: 'var(--fg3)' }} data-testid="alert-section-count">
+                  {s.rows.length}
+                </span>
               </div>
               {s.rows.map((r) => (
                 <AlertCard key={r.key} r={r} now={now} onOpen={() => openRow(r)} onPod={openPod} onExport={(f) => exportEvents([r], f, cluster?.name, `${r.kind}-${r.name}-events`, onToast)} onAck={(on) => ack(r, on)} />
               ))}
               {s.rows.length === 0 && (
                 <p style={{ margin: 0, padding: '18px 16px', fontSize: 12.5, color: 'var(--fg3)', border: '1px dashed var(--line2)', borderRadius: 10 }} data-testid="alert-empty">
-                  {q ? `No ${s.what} alerts match this search.` : activeOnly && rows.some((r) => !isActive(r) && sectionOf(r) === s.id) ? `No active ${s.what} alerts; the resolved ones are hidden.` : `No ${s.what} problems right now.`}
+                  {emptyText(s)}
                 </p>
               )}
             </div>

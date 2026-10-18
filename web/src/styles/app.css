@@ -231,3 +231,9 @@ button.rk-card:hover:not(:disabled) {
 .rk-mk[data-tone='info'] {
   background: var(--info);
 }
+
+/* A card that holds one table on a page of several, as on Namespaces (6.5): a gray border around
+   it, as the alerts have one in their colour, and a plain table heading, so its title bar reads
+   as the head of the rows. */
+.rk-boxed { border-color: color-mix(in srgb, var(--fg3) 45%, var(--surface)); }
+.rk-boxed .rk-gh { background: transparent; }

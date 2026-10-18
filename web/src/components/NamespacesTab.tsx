@@ -50,7 +50,7 @@ function ReleasesCard({ rows, now, cluster, onToast }: { rows: ReleaseRow[]; now
     }
   }
   return (
-    <section className="rk-card" aria-label="Helm releases" style={{ overflow: 'hidden' }} data-testid="namespace-releases">
+    <section className="rk-card rk-boxed" aria-label="Helm releases" style={{ overflow: 'hidden' }} data-testid="namespace-releases">
       <div className="rk-tbar">
         <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>Helm releases</h3>
         <span className="rk-count">{rows.length}</span>
@@ -109,7 +109,7 @@ function KindCard({ kind, apiVersion, rows, now, cluster, selected, onOpen, onTo
     }
   }
   return (
-    <section className="rk-card" aria-label={plural} style={{ overflow: 'hidden' }} data-kind={kind}>
+    <section className="rk-card rk-boxed" aria-label={plural} style={{ overflow: 'hidden' }} data-kind={kind}>
       <div className="rk-tbar">
         <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>{plural}</h3>
         <span className="rk-count">{rows.length}</span>

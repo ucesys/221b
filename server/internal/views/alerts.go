@@ -27,11 +27,14 @@ const (
 
 // Severities.
 const (
-	SevFailed    = "failed"    // a pod that fails to start now
-	SevPending   = "pending"   // a pod not running yet
-	SevRecovered = "recovered" // a pod that runs now, after warnings
-	SevError     = "error"     // a node or volume with errors
-	SevWarning   = "warning"   // a node or volume with warnings
+	SevFailed  = "failed"  // a pod that fails to start now
+	SevPending = "pending" // a pod not running yet
+	// SevRecovered is resolved: a pod that runs now after warnings, a node
+	// that is ready with only past warnings, a claim that is bound and
+	// whose pods run (6.5: a green object's alert is resolved).
+	SevRecovered = "recovered"
+	SevError     = "error"   // a node or volume with errors
+	SevWarning   = "warning" // a node or volume with warnings
 )
 
 // RecoveredWindow is how long a pod that ran out of memory and runs again
@@ -406,10 +409,14 @@ func nodeAlert(src Source, n *corev1.Node, now time.Time) (AlertRow, bool) {
 		a.Role = "control-plane"
 	}
 	sev := ""
+	// current is a problem the node has now: a condition or a cordon, not
+	// only warnings it reported.
+	current := false
 	for _, p := range nr.Problems {
 		if p.Pods {
 			continue
 		}
+		current = true
 		a.Problems = append(a.Problems, AlertProblem{Title: p.Title, Severity: p.Severity, Summary: p.Summary})
 		if p.Severity == nodes.SeverityError {
 			sev = SevError
@@ -440,6 +447,9 @@ func nodeAlert(src Source, n *corev1.Node, now time.Time) (AlertRow, bool) {
 	}
 	a.Events = append(a.Events, events...)
 	sortEntries(a.Events)
+	if a.StatusTone == "ok" && !current {
+		sev = SevRecovered
+	}
 	a.Severity = sev
 	return a, true
 }
@@ -526,6 +536,7 @@ func claimAlert(src Source, c *corev1.PersistentVolumeClaim, now time.Time) (Ale
 	case c.Status.Phase == corev1.ClaimLost:
 		a.StatusTone = "err"
 	}
+	usersUnwell := false
 	// The pods that mount it, and what was reported for them about
 	// attaching or mounting this volume.
 	for _, o := range src.Objects("pods", c.Namespace) {
@@ -542,7 +553,10 @@ func claimAlert(src Source, c *corev1.PersistentVolumeClaim, now time.Time) (Ale
 		if !uses {
 			continue
 		}
-		status, _, _ := podStatus(p, now)
+		status, tone, _ := podStatus(p, now)
+		if tone != "ok" {
+			usersUnwell = true
+		}
 		a.Users = append(a.Users, AlertUser{Pod: p.Name, Status: status, Node: p.Spec.NodeName})
 		for _, e := range warnings(src, string(p.UID)) {
 			if !attachMount.MatchString(e.Reason) {
@@ -561,8 +575,11 @@ func claimAlert(src Source, c *corev1.PersistentVolumeClaim, now time.Time) (Ale
 	sortEntries(events)
 	a.Events = events
 	a.Severity = SevWarning
-	if c.Status.Phase == corev1.ClaimLost {
+	switch {
+	case c.Status.Phase == corev1.ClaimLost:
 		a.Severity = SevError
+	case a.StatusTone == "ok" && !usersUnwell:
+		a.Severity = SevRecovered
 	}
 	return a, true
 }
