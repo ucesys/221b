@@ -340,12 +340,15 @@ func BuildObjectDetails(src Source, k kube.Kind, namespace, name string, now tim
 // objectRelease reads the Helm release an object was installed by from the
 // labels and annotation Helm sets.
 func objectRelease(m metav1.Object) string {
-	if m.GetLabels()["app.kubernetes.io/managed-by"] == "Helm" {
-		if r := m.GetLabels()["app.kubernetes.io/instance"]; r != "" {
-			return r
-		}
+	// Helm writes the annotation itself; charts set the instance label, and
+	// some set it to something else.
+	if r := m.GetAnnotations()["meta.helm.sh/release-name"]; r != "" {
+		return r
 	}
-	return m.GetAnnotations()["meta.helm.sh/release-name"]
+	if m.GetLabels()["app.kubernetes.io/managed-by"] == "Helm" {
+		return m.GetLabels()["app.kubernetes.io/instance"]
+	}
+	return ""
 }
 
 // podsOwnedBy lists a workload's pods: those whose controlling owners, up

@@ -148,14 +148,29 @@ export function UsersPage({ route, now, cluster, onToast }: AdminProps) {
           rowHeight={52}
         />
       </section>
-      {selected && data && <UserDrawer user={selected} groups={data.groups} now={now} onClose={close} onChanged={done} onAdd={() => setAdding(selected.username)} />}
+      {selected && data && <UserDrawer user={selected} groups={data.groups} lastSuperAdmin={isLastSuperAdmin(selected, data.users)} now={now} onClose={close} onChanged={done} onAdd={() => setAdding(selected.username)} />}
       {creating && data && <CreateUser groups={data.groups} onClose={() => setCreating(false)} onDone={done} />}
       {adding && data && <AddToGroup users={data.users} groups={data.groups} user={adding} onClose={() => setAdding(null)} onDone={done} />}
     </>
   )
 }
 
-function UserDrawer({ user, groups, now, onClose, onChanged, onAdd }: { user: UserRow; groups: LocalGroup[]; now: number; onClose: () => void; onChanged: (message: string) => void; onAdd: () => void }) {
+/** Whether a user is the only active local SuperAdmin, whom the server keeps (RB-30). */
+function isLastSuperAdmin(user: UserRow, users: UserRow[]): boolean {
+  const supers = users.filter((u) => u.source === 'local' && u.status === 'active' && u.superRoles.includes('superAdmin'))
+  return supers.length === 1 && supers[0]!.username === user.username
+}
+
+/** "Signed in now, since 2 hours ago", "3 days ago · no open session", "Never". */
+function signInText(user: UserRow, now: number): string {
+  const last = user.lastSignIn ? `${fmtAge(user.lastSignIn, now)} ago` : ''
+  if (user.signedIn) return last ? `Signed in now, since ${last}` : 'Signed in now'
+  return last ? `${last} · no open session` : 'Never'
+}
+
+const LAST_SUPER = 'The only SuperAdmin: make someone else SuperAdmin before taking the role away, disabling or deleting this user, or nobody could run the console.'
+
+function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onAdd }: { user: UserRow; groups: LocalGroup[]; lastSuperAdmin: boolean; now: number; onClose: () => void; onChanged: (message: string) => void; onAdd: () => void }) {
   const [ask, setAsk] = useState<Ask | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -255,8 +270,7 @@ function UserDrawer({ user, groups, now, onClose, onChanged, onAdd }: { user: Us
           </dd>
           <dt style={{ color: 'var(--fg3)' }}>Last sign-in</dt>
           <dd style={{ margin: 0 }} title={fmtTs(user.lastSignIn)}>
-            {user.lastSignIn ? `${fmtAge(user.lastSignIn, now)} ago` : 'Never'}
-            {user.signedIn ? ' · signed in now' : ' · no open session'}
+            {signInText(user, now)}
           </dd>
           {user.statusNote && (
             <>
@@ -336,7 +350,7 @@ function UserDrawer({ user, groups, now, onClose, onChanged, onAdd }: { user: Us
                 <span className="rk-tag" data-tone="info">
                   {ROLE_NAME[r]}
                 </span>
-                <button className="rk-btn" aria-label={`Take ${ROLE_NAME[r]} from ${user.username}`} onClick={() => setAsk({ kind: 'super', user, roles: nextSuper(r, false) })}>
+                <button className="rk-btn" aria-label={`Take ${ROLE_NAME[r]} from ${user.username}`} disabled={r === 'superAdmin' && lastSuperAdmin} title={r === 'superAdmin' && lastSuperAdmin ? LAST_SUPER : undefined} onClick={() => setAsk({ kind: 'super', user, roles: nextSuper(r, false) })}>
                   Take away
                 </button>
               </span>
@@ -355,6 +369,11 @@ function UserDrawer({ user, groups, now, onClose, onChanged, onAdd }: { user: Us
             )}
           </div>
           <span className="rk-fhint">A super role applies on every cluster.</span>
+          {lastSuperAdmin && (
+            <span className="rk-fhint" data-testid="last-super-admin">
+              {LAST_SUPER}
+            </span>
+          )}
         </Card>
       )}
       {local && (
@@ -365,10 +384,10 @@ function UserDrawer({ user, groups, now, onClose, onChanged, onAdd }: { user: Us
           <button className="rk-btn" onClick={() => setAsk({ kind: 'signout', user })}>
             Sign out of all sessions
           </button>
-          <button className="rk-btn" onClick={() => setAsk({ kind: user.status === 'active' ? 'disable' : 'enable', user })}>
+          <button className="rk-btn" disabled={lastSuperAdmin && user.status === 'active'} title={lastSuperAdmin ? LAST_SUPER : undefined} onClick={() => setAsk({ kind: user.status === 'active' ? 'disable' : 'enable', user })}>
             {user.status === 'active' ? 'Disable' : 'Enable'}
           </button>
-          <button className="rk-btn" style={{ borderColor: 'var(--err)', color: 'var(--err)' }} onClick={() => setAsk({ kind: 'delete', user })}>
+          <button className="rk-btn" disabled={lastSuperAdmin} title={lastSuperAdmin ? LAST_SUPER : undefined} style={lastSuperAdmin ? undefined : { borderColor: 'var(--err)', color: 'var(--err)' }} onClick={() => setAsk({ kind: 'delete', user })}>
             Delete
           </button>
         </div>

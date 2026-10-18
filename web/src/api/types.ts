@@ -636,7 +636,10 @@ export interface FleetRow {
 export interface RBACSource {
   kind: 'k8s' | 'kubeadm' | 'helm' | 'managed' | 'manual'
   release?: string
+  releaseNamespace?: string
   manager?: string
+  /** What the cluster runs on made it (Rancher, or RKE2's Helm controller): its access is expected. */
+  platform?: string
 }
 
 /** One rule of a role. */

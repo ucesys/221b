@@ -21,4 +21,6 @@ h1 { margin: 4px 0 0; font-size: 20px; font-weight: 600; letter-spacing: -.01em;
 .si-note { margin: 0; font-size: 12px; color: var(--fg3); }
 .si-error { margin: 0; padding: 8px 10px; border-radius: 7px; background: var(--err-weak); color: var(--err); font-size: 12.5px; }
 .si-field small { color: var(--fg3); font-size: 12px; }
+.si-field small.si-ferr { color: var(--err); }
+.si-field input[aria-invalid="true"] { border-color: var(--err); }
 .si-field small code { font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }

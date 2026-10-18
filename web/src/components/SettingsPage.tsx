@@ -3,6 +3,7 @@ import { REFRESH_CHOICES, refreshLabel, saveSettings } from '../api/settings'
 import type { Settings } from '../api/types'
 import { fmtClock } from '../lib/format'
 import { adminHref, navigate, type Route } from '../lib/router'
+import { SaveBar } from './SaveBar'
 import { SherlockSettings } from './SherlockSettings'
 import { WatsonSettings } from './WatsonSettings'
 
@@ -10,8 +11,8 @@ type Section = 'general' | 'sherlock' | 'watson'
 
 const SECTIONS: { id: Section; label: string; hint: string }[] = [
   { id: 'general', label: 'General', hint: 'Refresh rate' },
-  { id: 'sherlock', label: 'Sherlock', hint: 'AI provider, model, clusters, caps' },
-  { id: 'watson', label: 'Watson', hint: 'Commands and approvals' },
+  { id: 'sherlock', label: 'Sherlock', hint: 'On per cluster, API key, model, caps' },
+  { id: 'watson', label: 'Watson', hint: 'Where it runs, approvals' },
 ]
 
 const settingsHref = (section: Section) => adminHref('settings', section === 'general' ? [] : [section])
@@ -72,8 +73,10 @@ export function SettingsPanel({ route, settings, refreshedAt }: Props) {
 }
 
 function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
-  const [saving, setSaving] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [saved, setSaved] = useState('')
+  const [draft, setDraft] = useState<number | undefined>(undefined)
   // Another browser's change arrives through the stream; the page follows
   // it and drops a stale error.
   const [seen, setSeen] = useState(settings?.refreshSeconds)
@@ -81,17 +84,21 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
     setSeen(settings?.refreshSeconds)
     setError('')
   }
+  const picked = draft ?? settings?.refreshSeconds
 
-  const pick = async (seconds: number) => {
-    if (saving !== null || seconds === settings?.refreshSeconds) return
-    setSaving(seconds)
+  const save = async () => {
+    if (picked === undefined) return
+    setBusy(true)
     setError('')
+    setSaved('')
     try {
-      await saveSettings({ refreshSeconds: seconds })
+      await saveSettings({ refreshSeconds: picked })
+      setDraft(undefined)
+      setSaved('Saved.')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
-      setSaving(null)
+      setBusy(false)
     }
   }
 
@@ -111,7 +118,7 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
         <h3 className="rk-h">Refresh rate</h3>
         <div className="rk-seg" role="group" aria-label="Refresh rate" style={{ alignSelf: 'flex-start', flexWrap: 'wrap' }}>
           {choices.map((s) => (
-            <button key={s} aria-pressed={current === s} aria-busy={saving === s} disabled={!settings || saving !== null} onClick={() => void pick(s)}>
+            <button key={s} aria-pressed={picked === s} disabled={!settings || busy} onClick={() => setDraft(s === current ? undefined : s)}>
               {refreshLabel(s)}
             </button>
           ))}
@@ -119,23 +126,18 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
         <p className="rk-fhint" style={{ margin: 0 }}>
           For everyone: the server reads what it does not watch, rebuilds the rows that changed and updates every open console at the same moment. Nodes and pods are watched, so the rate adds no requests to the Kubernetes API for them.
         </p>
-        {error ? (
-          <p className="rk-t" data-tone="err" style={{ margin: 0, fontSize: 12 }} role="alert">
-            {error}
-          </p>
-        ) : (
-          <p className="rk-fhint" style={{ margin: 0 }} data-testid="settings-status">
-            {settings ? (
-              <>
-                Every {refreshLabel(settings.refreshSeconds)}
-                {refreshedAt ? ` · last refresh ${fmtClock(refreshedAt)}` : ''}. {kept}
-              </>
-            ) : (
-              'Loading the settings from the server…'
-            )}
-          </p>
-        )}
+        <p className="rk-fhint" style={{ margin: 0 }} data-testid="settings-status">
+          {settings ? (
+            <>
+              Now every {refreshLabel(settings.refreshSeconds)}
+              {refreshedAt ? ` · last refresh ${fmtClock(refreshedAt)}` : ''}. {kept}
+            </>
+          ) : (
+            'Loading the settings from the server…'
+          )}
+        </p>
       </section>
+      <SaveBar changed={draft !== undefined && draft !== current} busy={busy} onSave={() => void save()} onUndo={() => setDraft(undefined)} error={error} saved={saved} testId="settings-save" />
     </>
   )
 }

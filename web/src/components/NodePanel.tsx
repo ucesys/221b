@@ -6,6 +6,7 @@ import { href } from '../lib/router'
 import { CloseIcon } from './Icons'
 import { CopyName } from './CopyName'
 import { AskSherlock } from './Sherlock'
+import { FixCommand } from './Watson'
 import { YamlView } from './YamlView'
 
 interface Props {
@@ -47,6 +48,23 @@ function conditionTags(r: NodeRow): { label: string; tone: Tone; tip: string }[]
   }
   if (r.cordoned) out.push({ label: 'SchedulingDisabled', tone: 'warn', tip: r.statusTip })
   return out
+}
+
+/** What can be done to a node (6.3 review): through Watson, or copied. */
+function nodeActions(r: NodeRow): { what: string; command: string }[] {
+  return [
+    r.cordoned
+      ? { what: 'Let new pods be scheduled here again.', command: `kubectl uncordon ${r.name}` }
+      : { what: 'Stop new pods being scheduled here; the pods running here stay.', command: `kubectl cordon ${r.name}` },
+    { what: 'Move its pods to other nodes, for maintenance: it cordons the node first.', command: `kubectl drain ${r.name} --ignore-daemonsets --delete-emptydir-data` },
+  ]
+}
+
+function copyCommand(text: string, onToast?: (m: string) => void) {
+  void navigator.clipboard?.writeText(text).then(
+    () => onToast?.('Copied the command'),
+    () => onToast?.('Could not copy: the clipboard is not available.'),
+  )
 }
 
 function Section({ title, count, aside, children, label }: { title: string; count?: number | string; aside?: ReactNode; children: ReactNode; label?: string }) {
@@ -222,6 +240,14 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
               ))}
             </section>
           )}
+          <Section title="Actions">
+            {nodeActions(r).map((a) => (
+              <div key={a.command} style={{ display: 'flex', flexDirection: 'column', gap: 4 }} data-testid="node-action">
+                <span style={{ fontSize: 12, color: 'var(--fg2)' }}>{a.what}</span>
+                <FixCommand command={a.command} from={`Node ${r.name}`} why={a.what} onCopy={() => copyCommand(a.command, onToast)} />
+              </div>
+            ))}
+          </Section>
           <Section title="Taints" count={r.taints.length}>
             {r.taints.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>

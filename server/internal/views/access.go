@@ -112,25 +112,79 @@ type RBACSource struct {
 	// Kind is k8s, kubeadm, helm, managed or manual.
 	Kind    string `json:"kind"`
 	Release string `json:"release,omitempty"`
+	// ReleaseNamespace is the namespace of a Helm release.
+	ReleaseNamespace string `json:"releaseNamespace,omitempty"`
 	// Manager is the app.kubernetes.io/managed-by label of a managed object.
 	Manager string `json:"manager,omitempty"`
+	// Platform names what the cluster itself runs on that made the object:
+	// Rancher, or the Helm controller of RKE2 and K3s. Its access is how
+	// the platform works, not a choice to review.
+	Platform string `json:"platform,omitempty"`
 }
+
+// Platforms.
+const (
+	PlatformRancher = "Rancher"
+	PlatformHelmCtl = "the RKE2 and K3s Helm controller"
+	PlatformRKE2    = "RKE2"
+)
 
 func rbacSource(m metav1.Object) RBACSource {
 	l := m.GetLabels()
 	switch {
 	case l["kubernetes.io/bootstrapping"] == "rbac-defaults":
 		return RBACSource{Kind: "k8s"}
+	case l["rke2.io/bootstrapping"] == "rbac-defaults":
+		// RKE2 adds these to Kubernetes' defaults for its own components.
+		return RBACSource{Kind: "k8s", Platform: PlatformRKE2}
 	case strings.HasPrefix(m.GetName(), "kubeadm:"):
 		return RBACSource{Kind: "kubeadm"}
 	}
+	a := m.GetAnnotations()
+	// The Helm controller of RKE2 and K3s installs their bundled charts
+	// with a job whose account it binds to cluster-admin.
+	if strings.HasSuffix(a["objectset.rio.cattle.io/owner-gvk"], "Kind=HelmChart") {
+		return RBACSource{Kind: "managed", Manager: "HelmChart " + a["objectset.rio.cattle.io/owner-namespace"] + "/" + a["objectset.rio.cattle.io/owner-name"], Platform: PlatformHelmCtl}
+	}
+	var out RBACSource
 	if r := objectRelease(m); r != "" {
-		return RBACSource{Kind: "helm", Release: r}
+		out = RBACSource{Kind: "helm", Release: r, ReleaseNamespace: a["meta.helm.sh/release-namespace"]}
+	} else if mgr := l["app.kubernetes.io/managed-by"]; mgr != "" {
+		out = RBACSource{Kind: "managed", Manager: mgr}
+	} else if _, ok := l["clusterctl.cluster.x-k8s.io"]; ok {
+		out = RBACSource{Kind: "managed", Manager: "clusterctl"}
+	} else {
+		out = RBACSource{Kind: "manual"}
 	}
-	if mgr := l["app.kubernetes.io/managed-by"]; mgr != "" {
-		return RBACSource{Kind: "managed", Manager: mgr}
+	if rancherMade(m, out.ReleaseNamespace) {
+		out.Platform = PlatformRancher
+		if out.Kind == "manual" {
+			out = RBACSource{Kind: "managed", Manager: PlatformRancher, Platform: PlatformRancher}
+		}
 	}
-	return RBACSource{Kind: "manual"}
+	return out
+}
+
+// rancherMade says whether Rancher made an object: it marks what it makes
+// with cattle.io labels or annotations, or has one of its own objects own
+// it, and installs its charts in its cattle-* namespaces.
+func rancherMade(o metav1.Object, releaseNS string) bool {
+	if strings.HasPrefix(releaseNS, "cattle-") {
+		return true
+	}
+	for _, m := range []map[string]string{o.GetLabels(), o.GetAnnotations()} {
+		for k := range m {
+			if strings.Contains(k, "cattle.io/") {
+				return true
+			}
+		}
+	}
+	for _, r := range o.GetOwnerReferences() {
+		if strings.HasSuffix(strings.SplitN(r.APIVersion, "/", 2)[0], "cattle.io") {
+			return true
+		}
+	}
+	return false
 }
 
 // Default says whether Kubernetes or kubeadm made the object.
@@ -321,6 +375,14 @@ func bindingRow(src Source, key, kind string, m *metav1.ObjectMeta, ref rbacv1.R
 	return out
 }
 
+// platformName is "Rancher", or "RKE2" for RKE2 and its Helm controller.
+func platformName(b BindingRow) string {
+	if b.Source.Platform == PlatformHelmCtl {
+		return PlatformRKE2
+	}
+	return b.Source.Platform
+}
+
 // SubjectText names a subject: "ServiceAccount web/api", "Group ops".
 func SubjectText(s RBACSubject) string {
 	if s.Kind == rbacv1.ServiceAccountKind {
@@ -337,11 +399,47 @@ func bindingText(b BindingRow) string {
 	return b.Kind + " " + b.Namespace + "/" + b.Name
 }
 
+// deleteCommand is the fix for a binding made by hand. Anything else made
+// it, so deleting it breaks what made it, which puts it back: fixHow says
+// where to change it instead.
 func deleteCommand(b BindingRow) string {
+	if b.Source.Kind != "manual" {
+		return ""
+	}
 	if b.Namespace == "" {
 		return "kubectl delete clusterrolebinding " + b.Name
 	}
 	return "kubectl delete rolebinding " + b.Name + " -n " + b.Namespace
+}
+
+// fixHow is the end of a finding's text for a binding that something
+// other than a person made: where to change it.
+func fixHow(b BindingRow) string {
+	switch b.Source.Kind {
+	case "helm":
+		return fmt.Sprintf(" Helm release %s made this binding, so change it in the release’s values: deleting it by hand breaks %s, and the next upgrade puts it back.", b.Source.Release, b.Source.Release)
+	case "managed":
+		return fmt.Sprintf(" %s manages this binding, so change it there: deleting it by hand breaks what needs it, and %s puts it back.", b.Source.Manager, b.Source.Manager)
+	}
+	return ""
+}
+
+// platformText explains a binding that the platform needs.
+func platformText(b BindingRow, s RBACSubject) string {
+	switch b.Source.Platform {
+	case PlatformRKE2:
+		return fmt.Sprintf("RKE2 made this binding when it set up the cluster: its own components run as %s. Don’t delete the binding: they stop working, and RKE2 puts it back when it restarts.", SubjectText(s))
+	case PlatformHelmCtl:
+		return fmt.Sprintf("The RKE2 and K3s Helm controller runs the installer of %s as %s. RKE2 and K3s install their bundled charts this way, and the installer needs every permission to install them. Don’t delete the binding: the controller needs it for every upgrade and puts it back.", strings.TrimPrefix(b.Source.Manager, "HelmChart "), SubjectText(s))
+	}
+	what := "Rancher made this binding"
+	if b.Source.Kind == "helm" {
+		what = "Rancher’s chart " + b.Source.Release + " made this binding"
+	}
+	if s.Kind == rbacv1.ServiceAccountKind {
+		return fmt.Sprintf("%s: Rancher manages the cluster through it. Anyone who can read its token, or run a pod as %s/%s, can do anything in the cluster, so keep %s to Rancher’s administrators. Don’t delete the binding: Rancher stops working, and Rancher or its next upgrade puts it back.", what, s.Namespace, s.Name, s.Namespace)
+	}
+	return fmt.Sprintf("%s for a Rancher user or group, from their global or cluster role. Change their access in Rancher: Rancher puts back bindings deleted here.", what)
 }
 
 // findings reviews a binding (P4-03): who it gives everything, Secrets or
@@ -358,6 +456,7 @@ func findings(b BindingRow, powers []string) []Finding {
 		return false
 	}
 	cluster := b.Kind == "ClusterRoleBinding"
+	platform := b.Source.Platform != ""
 	where := "everywhere"
 	if !cluster {
 		where = "in " + b.Namespace
@@ -368,23 +467,31 @@ func findings(b BindingRow, powers []string) []Finding {
 		case s.Kind == rbacv1.GroupKind && s.Name == "system:masters":
 			out = append(out, Finding{Severity: "info", Title: "system:masters bypasses RBAC", Subject: &b.Subjects[i],
 				Text: "Kubernetes allows every request from a member of system:masters before it looks at any role, so removing this binding takes nothing away from them. A client certificate that names the group cannot be revoked until it expires; keep such certificates for break-glass use."})
+		case platform && cluster && (has(rbac.PowerEverything) || has(rbac.PowerSecrets)):
+			how := "as " + platformName(b) + " needs"
+			if s.Kind != rbacv1.ServiceAccountKind && b.Source.Platform == PlatformRancher {
+				how = "through " + platformName(b)
+			}
+			out = append(out, Finding{Severity: "info", Title: fmt.Sprintf("%s has %s, %s", SubjectText(s), b.RoleName, how), Subject: &b.Subjects[i],
+				Text: platformText(b, s)})
+			continue
 		case cluster && has(rbac.PowerEverything) && s.Kind == rbacv1.ServiceAccountKind:
 			out = append(out, Finding{Severity: "high", Title: fmt.Sprintf("ServiceAccount %s/%s has %s", s.Namespace, s.Name, b.RoleName), Subject: &b.Subjects[i], Command: deleteCommand(b),
-				Text: fmt.Sprintf("%s grants it every permission in every namespace. Its token is a password that its pods carry: anyone who can read the token, or run a pod as %s/%s, can do anything in the cluster. Bind it to a role with only what it needs, in the namespaces it works in.", bindingText(b), s.Namespace, s.Name)})
+				Text: fmt.Sprintf("%s grants it every permission in every namespace. Its token is a password that its pods carry: anyone who can read the token, or run a pod as %s/%s, can do anything in the cluster. Bind it to a role with only what it needs, in the namespaces it works in.", bindingText(b), s.Namespace, s.Name) + fixHow(b)})
 		case cluster && !b.Source.Default() && !has(rbac.PowerEverything) && has(rbac.PowerSecrets) && s.Kind == rbacv1.ServiceAccountKind:
 			out = append(out, Finding{Severity: "medium", Title: fmt.Sprintf("ServiceAccount %s/%s can read every Secret in the cluster", s.Namespace, s.Name), Subject: &b.Subjects[i],
-				Text: fmt.Sprintf("%s grants %s %s, which reads Secrets in every namespace: list counts as read, since kubectl get secrets -o yaml returns every value. If it needs only some, grant them in their namespaces, or by name.", bindingText(b), SubjectText(s), roleText(b))})
+				Text: fmt.Sprintf("%s grants %s %s, which reads Secrets in every namespace: list counts as read, since kubectl get secrets -o yaml returns every value. If it needs only some, grant them in their namespaces, or by name.", bindingText(b), SubjectText(s), roleText(b)) + fixHow(b)})
 		}
 		if s.Kind == rbacv1.ServiceAccountKind && s.Missing && !b.Source.Default() {
 			out = append(out, Finding{Severity: "medium", Title: bindingText(b) + " names a ServiceAccount that doesn’t exist", Subject: &b.Subjects[i], Command: deleteCommand(b),
-				Text: fmt.Sprintf("There is no ServiceAccount %s/%s, so whoever creates one with that name gets %s %s. Delete the binding if nothing needs it, or remove the subject.", s.Namespace, s.Name, roleText(b), where)})
+				Text: fmt.Sprintf("There is no ServiceAccount %s/%s, so whoever creates one with that name gets %s %s. Delete the binding if nothing needs it, or remove the subject.", s.Namespace, s.Name, roleText(b), where) + fixHow(b)})
 		}
-		if s.Kind == rbacv1.UserKind && !strings.HasPrefix(s.Name, "system:") && !b.Source.Default() {
+		if s.Kind == rbacv1.UserKind && !strings.HasPrefix(s.Name, "system:") && !b.Source.Default() && !platform {
 			out = append(out, Finding{Severity: "low", Title: fmt.Sprintf("%s has %s %s directly", s.Name, b.RoleName, where), Subject: &b.Subjects[i], Command: deleteCommand(b),
-				Text: fmt.Sprintf("Access granted to one person outlives their job changes and is easy to miss in reviews. Grant it through a group from the identity provider instead, then remove %s.", bindingText(b))})
+				Text: fmt.Sprintf("Access granted to one person outlives their job changes and is easy to miss in reviews. Grant it through a group from the identity provider instead, then remove %s.", bindingText(b)) + fixHow(b)})
 		}
 	}
-	if cluster && !b.Source.Default() && !has(rbac.PowerEverything) && len(b.Subjects) > 0 {
+	if cluster && !b.Source.Default() && !platform && !has(rbac.PowerEverything) && len(b.Subjects) > 0 {
 		var what []string
 		for _, p := range []string{rbac.PowerChangesRBAC, rbac.PowerEscalate, rbac.PowerBind, rbac.PowerImpersonate} {
 			if has(p) {

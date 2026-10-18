@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { deleteSherlockKey, fetchSherlockConfig, priceText, saveSherlockConfig, saveSherlockKey, usd, type ProviderAuth, type ProviderKind, type SherlockConfig, type SherlockProvider, type SherlockSettings as Settings } from '../api/sherlock'
 import { fmtTs } from '../lib/format'
+import { SaveBar } from './SaveBar'
 import { Select } from './Select'
 
 // ---------- the provider ----------
@@ -282,89 +283,107 @@ function ProviderForm({ draft, setDraft, cfg }: { draft: Settings; setDraft: (s:
 
 // ---------- the credential ----------
 
-function Credential({ cfg, draft, busy, run }: { cfg: SherlockConfig; draft: Settings; busy: string; run: (what: string, fn: () => Promise<SherlockConfig>, done: string) => Promise<void> }) {
-  const [key, setKey] = useState('')
-  const [secret, setSecret] = useState('')
-  const [token, setToken] = useState('')
+/** A credential being typed: an API key, AWS keys, or a Google key file. */
+interface Typed {
+  key: string
+  secret: string
+  token: string
+}
+
+const NOTHING_TYPED: Typed = { key: '', secret: '', token: '' }
+
+/** What a credential's saved state is, in words, and its tone. */
+export function keyState(cfg: SherlockConfig): { text: string; short: string; tone: string } {
+  const auth = cfg.provider.auth ?? 'header'
+  const k = cfg.key
+  const ambient = auth === 'aws' ? 'Without saved keys, the console uses its ServiceAccount’s IAM role (IRSA or EKS Pod Identity).' : auth === 'google' ? 'Without a saved key, the console uses its ServiceAccount’s Google identity (Workload Identity).' : ''
+  if (auth === 'none') return { text: 'This provider takes no credential.', short: 'No credential needed', tone: 'ok' }
+  if (!k.set) {
+    return auth === 'header' ? { text: 'No key yet. Sherlock answers nothing until one is saved.', short: `No ${credentialName(cfg)}`, tone: 'warn' } : { text: `Nothing saved. ${ambient}`, short: 'The pod’s own identity', tone: 'muted' }
+  }
+  if (k.source === 'chart') return { text: 'Set by the chart (sherlock.existingSecret); change it there.', short: `${credentialName(cfg)} set by the chart`, tone: 'ok' }
+  return {
+    text: `Saved${k.setBy ? ` by ${k.setBy}` : ''}${k.setAt ? `, ${fmtTs(k.setAt)}` : ''}. ${k.store === 'secret' ? 'Kept in a Secret in the console’s namespace.' : 'Kept in memory: it is lost when the console restarts.'} It is never shown again.`,
+    short: `${credentialName(cfg)} saved`,
+    tone: 'ok',
+  }
+}
+
+/** "Claude API key", "API key", "AWS credentials" or "Google service account key". */
+function credentialName(cfg: SherlockConfig): string {
+  const auth = cfg.provider.auth ?? 'header'
+  if (auth === 'aws') return 'AWS credentials'
+  if (auth === 'google') return 'Google service account key'
+  return cfg.provider.kind === 'anthropic' && presetOf(cfg.provider) === 'anthropic' ? 'Claude API key' : 'API key'
+}
+
+/** What is typed, as the server takes it, or '' while it is incomplete. */
+function typedValue(cfg: SherlockConfig, t: Typed): string {
+  const auth = cfg.provider.auth ?? 'header'
+  if (auth === 'aws') return t.key.trim() && t.secret.trim() ? JSON.stringify({ accessKeyId: t.key.trim(), secretAccessKey: t.secret.trim(), ...(t.token.trim() ? { sessionToken: t.token.trim() } : {}) }) : ''
+  return t.key.trim() ? t.key : ''
+}
+
+function Credential({ cfg, draft, busy, typed, setTyped, remove }: { cfg: SherlockConfig; draft: Settings; busy: boolean; typed: Typed; setTyped: (t: Typed) => void; remove: () => void }) {
   const auth = cfg.provider.auth ?? 'header'
   const draftAuth = draft.provider?.auth ?? defaultAuth(draft.provider?.kind ?? 'anthropic')
   const pending = JSON.stringify(draft.provider ?? null) !== JSON.stringify(cfg.settings.provider ?? null)
   const k = cfg.key
-  const ambient = auth === 'aws' ? 'Without saved keys, the console uses its ServiceAccount’s IAM role (IRSA or EKS Pod Identity).' : auth === 'google' ? 'Without a saved key, the console uses its ServiceAccount’s Google identity (Workload Identity).' : ''
-  const keyText = !k.set
-    ? auth === 'header'
-      ? 'No key yet. Sherlock answers nothing until one is saved.'
-      : `Nothing saved. ${ambient}`
-    : k.source === 'chart'
-      ? 'Set by the chart (sherlock.existingSecret); change it there.'
-      : `Saved${k.setBy ? ` by ${k.setBy}` : ''}${k.setAt ? `, ${fmtTs(k.setAt)}` : ''}. ${k.store === 'secret' ? 'Kept in a Secret in the console’s namespace.' : 'Kept in memory: it is lost when the console restarts.'} It is never shown again.`
-  const label = auth === 'aws' ? 'AWS credentials' : auth === 'google' ? 'Google service account key' : 'API key'
-  const value = auth === 'aws' ? JSON.stringify({ accessKeyId: key.trim(), secretAccessKey: secret.trim(), ...(token.trim() ? { sessionToken: token.trim() } : {}) }) : key
-  const ready = auth === 'aws' ? key.trim() && secret.trim() : key.trim()
+  const state = keyState(cfg)
+  const label = credentialName(cfg)
   return (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: 6 }} aria-label="Credential" data-testid="sherlock-credential">
-      <h3 className="rk-h">{label}</h3>
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Credential" data-testid="sherlock-credential">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <h3 className="rk-h">{label}</h3>
+        <span className="rk-pill" data-tone={state.tone} data-testid="sherlock-key-pill">
+          <span className="rk-dot" />
+          {k.set ? 'Saved' : auth === 'none' ? 'Not needed' : auth === 'header' ? 'Missing' : 'Not saved'}
+        </span>
+      </div>
       {pending && draftAuth !== auth ? (
         <p className="rk-fhint" style={{ margin: 0 }} data-testid="sherlock-credential-pending">
           Save the provider first; then enter its credential here.
         </p>
-      ) : auth === 'none' ? (
-        <p className="rk-fhint" style={{ margin: 0 }}>
-          This provider takes no credential.
-        </p>
       ) : (
         <>
           <p className="rk-fhint" style={{ margin: 0 }} data-testid="sherlock-key-state">
-            {keyText}
+            {state.text}
           </p>
-          {k.source !== 'chart' && (
-            <form
-              style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}
-              onSubmit={(e) => {
-                e.preventDefault()
-                void run('key', () => saveSherlockKey(value), 'The credential is saved.').then(() => {
-                  setKey('')
-                  setSecret('')
-                  setToken('')
-                })
-              }}
-            >
+          {auth !== 'none' && k.source !== 'chart' && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
               {auth === 'google' ? (
                 <label style={{ flex: '1 1 100%', display: 'flex', flexDirection: 'column' }}>
                   <span className="rk-sr">{label}</span>
-                  <textarea rows={4} spellCheck={false} autoComplete="off" placeholder={'{"type": "service_account", …} — the key file’s JSON'} value={key} onChange={(e) => setKey(e.target.value)} data-testid="sherlock-key" className="rk-area" style={{ width: '100%' }} />
+                  <textarea rows={4} spellCheck={false} autoComplete="off" placeholder={k.set ? 'A key is saved. Paste a new key file’s JSON to replace it' : '{"type": "service_account", …} — the key file’s JSON'} value={typed.key} onChange={(e) => setTyped({ ...typed, key: e.target.value })} data-testid="sherlock-key" className="rk-area" style={{ width: '100%' }} />
                 </label>
               ) : (
                 <label className="rk-field" style={{ flex: '1 1 240px' }}>
                   <span className="rk-sr">{auth === 'aws' ? 'Access key ID' : label}</span>
-                  <input type={auth === 'aws' ? 'text' : 'password'} autoComplete="off" spellCheck={false} placeholder={auth === 'aws' ? 'Access key ID (AKIA…)' : k.set ? 'Paste a new key to replace it' : 'Paste the key'} value={key} onChange={(e) => setKey(e.target.value)} data-testid="sherlock-key" />
+                  <input type={auth === 'aws' ? 'text' : 'password'} autoComplete="off" spellCheck={false} placeholder={auth === 'aws' ? 'Access key ID (AKIA…)' : k.set ? '•••••••• saved. Paste a new key to replace it' : 'Paste the key'} value={typed.key} onChange={(e) => setTyped({ ...typed, key: e.target.value })} data-testid="sherlock-key" />
                 </label>
               )}
               {auth === 'aws' && (
                 <>
                   <label className="rk-field" style={{ flex: '1 1 240px' }}>
                     <span className="rk-sr">Secret access key</span>
-                    <input type="password" autoComplete="off" spellCheck={false} placeholder="Secret access key" value={secret} onChange={(e) => setSecret(e.target.value)} data-testid="sherlock-key-secret" />
+                    <input type="password" autoComplete="off" spellCheck={false} placeholder="Secret access key" value={typed.secret} onChange={(e) => setTyped({ ...typed, secret: e.target.value })} data-testid="sherlock-key-secret" />
                   </label>
                   <label className="rk-field" style={{ flex: '1 1 240px' }}>
                     <span className="rk-sr">Session token (optional)</span>
-                    <input type="password" autoComplete="off" spellCheck={false} placeholder="Session token (optional)" value={token} onChange={(e) => setToken(e.target.value)} data-testid="sherlock-key-token" />
+                    <input type="password" autoComplete="off" spellCheck={false} placeholder="Session token (optional)" value={typed.token} onChange={(e) => setTyped({ ...typed, token: e.target.value })} data-testid="sherlock-key-token" />
                   </label>
                 </>
               )}
-              <button className="rk-btn" type="submit" disabled={!ready || busy !== ''} data-on="true" data-testid="sherlock-key-save">
-                Save
-              </button>
               {k.set && (
-                <button className="rk-btn" type="button" disabled={busy !== ''} onClick={() => void run('key', deleteSherlockKey, 'The credential is removed.')} data-testid="sherlock-key-remove">
-                  Remove
+                <button className="rk-btn" type="button" disabled={busy} onClick={remove} data-testid="sherlock-key-remove">
+                  Remove the saved {label === 'AWS credentials' ? 'credentials' : 'key'}
                 </button>
               )}
-            </form>
+            </div>
           )}
-          {k.set && ambient && (
+          {auth !== 'none' && k.source !== 'chart' && (
             <p className="rk-fhint" style={{ margin: 0 }}>
-              Remove it to use the pod’s identity instead.
+              {k.set && auth !== 'header' ? 'Remove it to use the pod’s identity instead. ' : ''}A new {auth === 'aws' ? 'credential' : 'key'} is saved with Save changes, below.
             </p>
           )}
         </>
@@ -376,15 +395,17 @@ function Credential({ cfg, draft, busy, run }: { cfg: SherlockConfig; draft: Set
 // ---------- the whole ----------
 
 /**
- * Sherlock's settings, for administrators (P5-05): the provider and its
- * credential (kept in a Secret, never shown again), the model, on or off
- * per cluster, view changes, and the daily and monthly spending caps, with
- * what has been spent.
+ * Sherlock's settings, for administrators (P5-05): on or off per cluster
+ * and the credential first, as most visits are for them (6.3 review), then
+ * the provider and model, view changes, and the daily and monthly spending
+ * caps, with what has been spent. One Save saves it all; the credential is
+ * kept in a Secret and never shown again.
  */
 export function SherlockSettings({ open }: { open: boolean }) {
   const [cfg, setCfg] = useState<SherlockConfig | null>(null)
   const [draft, setDraft] = useState<Settings | null>(null)
-  const [busy, setBusy] = useState('')
+  const [typed, setTyped] = useState<Typed>(NOTHING_TYPED)
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState('')
   const [formKey, setFormKey] = useState(0)
@@ -417,40 +438,67 @@ export function SherlockSettings({ open }: { open: boolean }) {
     )
   }
 
-  const run = async (what: string, fn: () => Promise<SherlockConfig>, done: string) => {
-    setBusy(what)
+  const settingsChanged = JSON.stringify(draft) !== JSON.stringify(cfg.settings)
+  const value = typedValue(cfg, typed)
+  const changed = settingsChanged || value !== ''
+  const run = async (fn: () => Promise<string>) => {
+    setBusy(true)
     setError('')
     setSaved('')
     try {
-      const c = await fn()
-      setCfg(c)
-      setDraft(c.settings)
-      setFormKey((n) => n + 1)
-      setSaved(done)
+      setSaved(await fn())
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setBusy('')
+      setBusy(false)
     }
   }
-  const changed = JSON.stringify(draft) !== JSON.stringify(cfg.settings)
+  const took = (c: SherlockConfig) => {
+    setCfg(c)
+    setDraft(c.settings)
+    setFormKey((n) => n + 1)
+  }
+  const save = () =>
+    run(async () => {
+      if (settingsChanged) took(await saveSherlockConfig(draft))
+      if (value) {
+        took(await saveSherlockKey(value))
+        setTyped(NOTHING_TYPED)
+        return settingsChanged ? 'Saved, with the new key.' : 'Saved the new key.'
+      }
+      return 'Saved.'
+    })
+  const remove = () =>
+    run(async () => {
+      took(await deleteSherlockKey())
+      return 'Removed the saved key.'
+    })
   const cap = (n: number) => (n > 0 ? usd(n) : 'no cap')
   const num = (v: string) => {
     const n = Number(v)
     return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : 0
   }
+  const on = cfg.clusters.filter((c) => cfg.settings.clusters?.[c.id])
+  const state = keyState(cfg)
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }} data-testid="sherlock-settings">
       <p className="rk-fhint" style={{ margin: 0 }}>
-        Sherlock answers questions about a cluster through the AI model chosen here, reading only what the person asking may read. Nothing is sent to the model for a cluster where Sherlock is off.
+        Sherlock answers questions about a cluster through the AI model chosen here, reading only what the person asking may read. Nothing is sent to the model for a cluster where Sherlock is off. Watson, which runs commands, is on where Sherlock is.
       </p>
 
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }} aria-label="AI provider">
-        <h3 className="rk-h">AI provider and model</h3>
-        <ProviderForm key={formKey} draft={draft} setDraft={setDraft} cfg={cfg} />
-      </section>
-
-      <Credential cfg={cfg} draft={draft} busy={busy} run={run} />
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }} data-testid="sherlock-summary" aria-label="Sherlock now">
+        <span className="rk-pill" data-tone={on.length ? 'ok' : 'muted'}>
+          <span className="rk-dot" />
+          {on.length ? `On for ${on.map((c) => c.name).join(', ')}` : 'Off for every cluster'}
+        </span>
+        <span className="rk-pill" data-tone={state.tone}>
+          <span className="rk-dot" />
+          {state.short}
+        </span>
+        <span className="rk-pill" data-tone="muted">
+          {cfg.models.find((m) => m.id === cfg.settings.model)?.label ?? cfg.settings.model}
+        </span>
+      </div>
 
       <section style={{ display: 'flex', flexDirection: 'column', gap: 6 }} aria-label="Clusters">
         <h3 className="rk-h">On for</h3>
@@ -462,6 +510,13 @@ export function SherlockSettings({ open }: { open: boolean }) {
             </label>
           ))}
         </div>
+      </section>
+
+      <Credential cfg={cfg} draft={draft} busy={busy} typed={typed} setTyped={setTyped} remove={() => void remove()} />
+
+      <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }} aria-label="AI provider">
+        <h3 className="rk-h">AI provider and model</h3>
+        <ProviderForm key={formKey} draft={draft} setDraft={setDraft} cfg={cfg} />
       </section>
 
       <section style={{ display: 'flex', flexDirection: 'column', gap: 4 }} aria-label="View changes">
@@ -496,34 +551,19 @@ export function SherlockSettings({ open }: { open: boolean }) {
         </p>
       </section>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', position: 'sticky', bottom: 0, padding: '10px 0', background: 'var(--surface)', borderTop: '1px solid var(--line)' }}>
-        <button className="rk-btn" data-on="true" disabled={!changed || busy !== ''} onClick={() => void run('settings', () => saveSherlockConfig(draft), 'Saved.')} data-testid="sherlock-save">
-          Save Sherlock settings
-        </button>
-        {changed && (
-          <button
-            className="rk-link"
-            onClick={() => {
-              setDraft(cfg.settings)
-              setFormKey((n) => n + 1)
-            }}
-            style={{ fontSize: 12.5 }}
-          >
-            Undo changes
-          </button>
-        )}
-        {error ? (
-          <span className="rk-t" data-tone="err" role="alert" style={{ fontSize: 12.5 }} data-testid="sherlock-settings-error">
-            {error}
-          </span>
-        ) : (
-          saved && (
-            <span className="rk-t" data-tone="ok" role="status" style={{ fontSize: 12.5 }}>
-              {saved}
-            </span>
-          )
-        )}
-      </div>
+      <SaveBar
+        changed={changed}
+        busy={busy}
+        onSave={() => void save()}
+        onUndo={() => {
+          setDraft(cfg.settings)
+          setTyped(NOTHING_TYPED)
+          setFormKey((n) => n + 1)
+        }}
+        error={error}
+        saved={saved}
+        testId="sherlock-save"
+      />
     </div>
   )
 }

@@ -119,6 +119,51 @@ func TestTraceWorks(t *testing.T) {
 	}
 }
 
+// RKE2 bundles ingress-nginx as rke2-ingress-nginx, so its pods carry
+// other labels; they are found by them or by their --controller-class
+// flag. A pod whose flag names another controller serves a different
+// class, whatever its labels.
+func TestTraceFindsTheControllerByFlagOrRenamedLabels(t *testing.T) {
+	cases := []struct {
+		name   string
+		labels map[string]string
+		args   []string
+		s      string
+	}{
+		{"rke2 labels", map[string]string{"app.kubernetes.io/name": "rke2-ingress-nginx", "app.kubernetes.io/component": "controller"}, nil, "1 of 1 ready"},
+		{"flag", map[string]string{"app": "edge"}, []string{"/nginx-ingress-controller", "--controller-class=k8s.io/ingress-nginx", "--ingress-class=nginx"}, "1 of 1 ready"},
+		{"flag names another controller", map[string]string{"app.kubernetes.io/name": "ingress-nginx", "app.kubernetes.io/component": "controller"}, []string{"--controller-class=k8s.io/internal-nginx"}, "no controller"},
+	}
+	// An Ingress without a class, and no default class: RKE2's controller
+	// serves it, as it watches Ingresses without one.
+	t.Run("no class, watched without one", func(t *testing.T) {
+		src := netSource(t)
+		cls := src.Object("ingressclasses", "", "nginx").(*networkingv1.IngressClass).DeepCopy()
+		cls.Annotations = nil
+		src.Put(cls)
+		p := src.Object("pods", "ingress", "controller-1").(*corev1.Pod).DeepCopy()
+		p.Spec.Containers[0].Args = []string{"--controller-class=k8s.io/ingress-nginx", "--watch-ingress-without-class=true"}
+		src.Put(p)
+		r := trace(t, src)
+		if h := hopOf(t, r, "Ingress controller"); h.Tone != "ok" || !strings.Contains(h.D, "serves Ingresses that name no class") || r.Verdict != "Works" {
+			t.Fatalf("%s: hop %+v", r.Verdict, h)
+		}
+	})
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := netSource(t)
+			p := src.Object("pods", "ingress", "controller-1").(*corev1.Pod).DeepCopy()
+			p.Labels = c.labels
+			p.Spec.Containers[0].Args = c.args
+			src.Put(p)
+			h := hopOf(t, trace(t, src), "Ingress controller")
+			if !strings.HasSuffix(h.S, c.s) {
+				t.Fatalf("hop %+v", h)
+			}
+		})
+	}
+}
+
 func TestTraceNamesTheFailingHop(t *testing.T) {
 	cases := []struct {
 		name   string

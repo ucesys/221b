@@ -20,17 +20,45 @@ func (s *Service) firstRun() bool {
 }
 
 type setupData struct {
-	Title    string
-	Error    string
-	Form     string
-	Username string
-	Name     string
+	Title string
+	Error string
+	// Field is the field the error is about, shown beside it; with none,
+	// the error is shown above the form.
+	Field string
+	Form  string
+	// NeedToken asks for the setup token: only when the deployment set one.
+	NeedToken bool
+	Username  string
+	Name      string
+	// Password and Again are given back when the error is not about them,
+	// so a wrong token or name does not cost typing them again.
+	Password string
+	Again    string
 }
 
+// Fields of the first-run form an error can be about.
+const (
+	fieldToken    = "token"
+	fieldUsername = "username"
+	fieldPassword = "password"
+	fieldAgain    = "again"
+)
+
 func (s *Service) renderSetup(w http.ResponseWriter, r *http.Request, msg string, code int) {
-	d := setupData{Title: s.cfg.Title, Error: msg, Form: randomID()}
+	s.renderSetupField(w, r, msg, "", code)
+}
+
+func (s *Service) renderSetupField(w http.ResponseWriter, r *http.Request, msg, field string, code int) {
+	d := setupData{Title: s.cfg.Title, Error: msg, Field: field, Form: randomID(), NeedToken: s.cfg.SetupToken != ""}
 	if r.Method == http.MethodPost {
 		d.Username, d.Name = r.PostFormValue("username"), r.PostFormValue("name")
+		switch field {
+		case fieldPassword:
+		case fieldAgain:
+			d.Password = r.PostFormValue("password")
+		default:
+			d.Password, d.Again = r.PostFormValue("password"), r.PostFormValue("again")
+		}
 	}
 	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: d.Form, Path: "/setup", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: 3600})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -72,12 +100,20 @@ func (s *Service) postSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	if tok := s.cfg.SetupToken; tok != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(r.PostFormValue("token"))) != 1 {
 		s.record(r, audit.ActionSetupFailed, who, audit.OutcomeDenied, "the setup token was wrong or missing")
-		s.renderSetup(w, r, "The setup token is wrong. Enter the value of auth.setupToken from the deployment.", http.StatusUnauthorized)
+		s.renderSetupField(w, r, "The setup token is wrong. Ask whoever installed the console: it is auth.setupToken in the deployment’s values.", fieldToken, http.StatusUnauthorized)
 		return
 	}
 	password := r.PostFormValue("password")
+	if !roles.ValidUsername(who.Username, true) {
+		s.renderSetupField(w, r, "Use lowercase letters, digits, dot, dash and underscore.", fieldUsername, http.StatusBadRequest)
+		return
+	}
+	if err := CheckPasswordRules(who.Username, password); err != nil {
+		s.renderSetupField(w, r, sentence(err.Error()), fieldPassword, http.StatusBadRequest)
+		return
+	}
 	if password != r.PostFormValue("again") {
-		s.renderSetup(w, r, "The two passwords are not the same.", http.StatusBadRequest)
+		s.renderSetupField(w, r, "The two passwords are not the same.", fieldAgain, http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
@@ -93,6 +129,7 @@ func (s *Service) postSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := User{Subject: "local:" + acct.Username, Username: acct.Username, Name: acct.Name}
+	s.accounts.SignedIn(acct.Username, s.now())
 	s.record(r, audit.ActionSetup, user, audit.OutcomeOK, "the first administrator was created")
 	http.SetCookie(w, &http.Cookie{Name: cookieForm, Value: "", Path: "/setup", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteStrictMode, MaxAge: -1})
 	s.start(w, r, Session{User: user, Method: string(ModeLocal)}, roles.Local, acct.Super, "first-run setup")

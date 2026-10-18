@@ -402,7 +402,7 @@ function TablesCard({ roles, bindings, items, now, route, set, onToast, cluster 
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
           <input type="checkbox" checked={withDefaults} onChange={(e) => set({ defaults: e.target.checked ? '1' : undefined })} data-testid="tbl-defaults" />
-          Kubernetes and kubeadm defaults ({withDefaults ? 'shown' : hiddenDefaults})
+          Kubernetes, kubeadm and RKE2 defaults ({withDefaults ? 'shown' : hiddenDefaults})
         </label>
         <span style={{ marginLeft: 'auto' }}>
           {tbl === 'bindings' ? (

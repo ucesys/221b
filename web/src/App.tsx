@@ -25,13 +25,13 @@ import { TopBar, type Theme } from './components/TopBar'
 import { badgeOf, bannersOf, tabTone } from './lib/alerts'
 import { accessBadge } from './lib/rbac'
 import { findings as policyFindings, flagOf as policyFlag, modelOf as policyModel } from './lib/policies'
-import { apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, useRoute, withParams } from './lib/router'
+import { adminHref, apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, useRoute, withParams } from './lib/router'
 import { askSherlock, useSherlock } from './api/sherlock'
 import { sendToWatson, useWatson, WatsonError, type Send } from './api/watson'
 import { canPopOut, focusPopup, onPop, popOut, post, reviewQuestion, usePopped, WINDOW_VIEWS, type Pane } from './lib/sherlock'
 import { openTarget, SherlockContext, SherlockPane } from './components/Sherlock'
 import { Dock, PoppedOutFab, type DockMode } from './components/Dock'
-import { autoRunReads, WatsonContext, WatsonPane } from './components/Watson'
+import { autoRunReads, WatsonContext, watsonOff, WatsonPane } from './components/Watson'
 import { askContext, useUIControl } from './lib/uiWindow'
 import { ViewAnnouncer } from './components/ViewAnnouncer'
 import { AssistantWindow } from './components/AssistantWindow'
@@ -230,6 +230,8 @@ function Shell() {
   const watsonApi = {
     available: watsonOn && view === 'tabs',
     readOnly: !!watson.status?.readOnly,
+    how: watson.status?.how,
+    off: watsonOff({ installed: !!watson.status?.available, sherlockOn, admin: !!sherlock.status?.admin, settingsHref: adminHref('settings', ['sherlock']) }),
     send: (command: string, o: Send = {}) => {
       const away = popped
       if (!away) setDock({ ...dock, mode: o.over ? 'max' : dock.mode === 'min' ? 'open' : dock.mode, pane: 'watson' })

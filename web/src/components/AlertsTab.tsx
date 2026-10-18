@@ -9,7 +9,7 @@ import { acknowledge } from '../api/acks'
 import { csvText, type ExportFormat } from '../lib/table'
 import { download, xlsxBytes, type Cell } from '../lib/xlsx'
 import { ExportMenu } from './ExportMenu'
-import { ExcelIcon, SearchIcon } from './Icons'
+import { SearchIcon } from './Icons'
 import type { TabProps } from './tabs'
 import { AskSherlock } from './Sherlock'
 import { troubleshootQuestion } from '../lib/sherlock'
@@ -96,7 +96,7 @@ function exportEvents(rows: AlertRow[], format: ExportFormat, cluster: string | 
   onToast(`Downloaded ${base}.${format}`)
 }
 
-function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: number; onOpen: () => void; onPod: (key: string) => void; onXl: () => void; onAck: (acknowledge: boolean) => Promise<void> }) {
+function AlertCard({ r, now, onOpen, onPod, onExport, onAck }: { r: AlertRow; now: number; onOpen: () => void; onPod: (key: string) => void; onExport: (format: ExportFormat) => void; onAck: (acknowledge: boolean) => Promise<void> }) {
   const [sort, setSort] = useState<Sort>({ col: 'i', dir: 'asc' })
   const [busy, setBusy] = useState(false)
   const ack = async (on: boolean) => {
@@ -164,9 +164,7 @@ function AlertCard({ r, now, onOpen, onPod, onXl, onAck }: { r: AlertRow; now: n
         <button className="rk-btn" onClick={onOpen} data-testid="alert-open">
           {openLabel(r)}
         </button>
-        <button className="rk-icon-btn" onClick={onXl} aria-label="Download these events as an Excel workbook" title="Download these events as an Excel workbook" style={{ width: 30, height: 30 }}>
-          <ExcelIcon />
-        </button>
+        <ExportMenu onExport={onExport} disabled={!r.events.length} what="these events" />
       </div>
       {ctx.text && (
         <p className={ctx.mono ? 'rk-mono' : undefined} data-testid="alert-context" style={{ margin: 0, padding: '10px 16px', fontSize: 12, color: 'var(--fg2)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', background: 'var(--surface2)', borderBottom: '1px solid var(--line)' }}>
@@ -341,7 +339,7 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
                 <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{s.rows.length}</span>
               </div>
               {s.rows.map((r) => (
-                <AlertCard key={r.key} r={r} now={now} onOpen={() => openRow(r)} onPod={openPod} onXl={() => exportEvents([r], 'xlsx', cluster?.name, `${r.kind}-${r.name}-events`, onToast)} onAck={(on) => ack(r, on)} />
+                <AlertCard key={r.key} r={r} now={now} onOpen={() => openRow(r)} onPod={openPod} onExport={(f) => exportEvents([r], f, cluster?.name, `${r.kind}-${r.name}-events`, onToast)} onAck={(on) => ack(r, on)} />
               ))}
               {s.rows.length === 0 && (
                 <p style={{ margin: 0, padding: '18px 16px', fontSize: 12.5, color: 'var(--fg3)', border: '1px dashed var(--line2)', borderRadius: 10 }} data-testid="alert-empty">

@@ -7,22 +7,16 @@ import { compareNatural, fileStamp, nWord } from '../lib/format'
 import { effectTone, facetMatch, labelText } from '../lib/nodes'
 import { href, listParam, navigate, withParams } from '../lib/router'
 import { usePref } from '../lib/prefs'
+import { csvText, type ExportFormat } from '../lib/table'
 import { download, xlsxBytes, type Cell } from '../lib/xlsx'
 import { FleetEditor, type EditorSeed } from './FleetEditor'
-import { Chevron, ExcelIcon, FilterIcon, PlusIcon, SearchIcon } from './Icons'
+import { ExportMenu } from './ExportMenu'
+import { Chevron, FilterIcon, PlusIcon, SearchIcon } from './Icons'
 import type { TabProps } from './tabs'
 import { peekLink } from '../lib/peek'
 
 
 const HIDE_KEY = '221b.fleets.hidden'
-
-function Check() {
-  return (
-    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M5 12.5 10 17.5 19 7" />
-    </svg>
-  )
-}
 
 function Pencil() {
   return (
@@ -168,7 +162,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
     else kinds.push({ kind: c.kind, label, span: 1 })
   }
 
-  const exportXl = () => {
+  const exportAs = (format: ExportFormat) => {
     const seen = new Set<string>()
     const rows: NodeRow[] = []
     for (const g of groups)
@@ -180,9 +174,11 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
     const head = ['Node', 'Fleets', ...visCols.map((c) => (c.kind === 'r' ? `${c.main} (role)` : c.label))]
     const cells: Cell[][] = rows.map((r) => [r.name, fleetsOfNode(r.name, fleetRows).map((f) => f.name).join(', '), ...visCols.map((c) => mxHas(r, c))])
     const title = one ? one.name! : sel[0] === 'none' ? 'Not in any fleet' : 'Fleets'
-    const file = `${(cluster?.name || 'cluster').replace(/[^A-Za-z0-9._-]+/g, '-')}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${fileStamp()}.xlsx`
-    download(xlsxBytes(title.slice(0, 31), head, cells), file)
-    onToast(`Downloaded ${file}`)
+    const base = `${(cluster?.name || 'cluster').replace(/[^A-Za-z0-9._-]+/g, '-')}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${fileStamp()}`
+    if (format === 'xlsx') download(xlsxBytes(title.slice(0, 31), head, cells), base + '.xlsx')
+    else if (format === 'csv') download(csvText(head, cells), base + '.csv', 'text/csv')
+    else download(JSON.stringify(cells.map((c) => Object.fromEntries(head.map((h, i) => [h, c[i]]))), null, 2), base + '.json', 'application/json')
+    onToast(`Downloaded ${base}.${format}`)
   }
 
   const summary = (() => {
@@ -420,10 +416,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
             </span>
             <Chevron />
           </button>
-          <button className="rk-btn rk-xl" onClick={exportXl} title="Download what the table shows as an Excel workbook" style={{ height: 32 }}>
-            <ExcelIcon />
-            Excel
-          </button>
+          <ExportMenu onExport={exportAs} disabled={!rowCount || !visCols.length} what="what the table shows" />
         </div>
 
         {colsOpen && (
@@ -513,6 +506,15 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
           </div>
         )}
 
+        <p style={{ margin: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 14px', fontSize: 12, color: 'var(--fg3)' }} data-testid="fleet-legend">
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span className="rk-mk" aria-hidden="true" /> The node has this label or role
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span className="rk-mk" data-tone="warn" aria-hidden="true" /> It has this taint
+          </span>
+          <span>Click a dot to pick every node that has it; click a column’s name to sort by it.</span>
+        </p>
         <div className="rk-card" style={{ overflowX: 'auto', flex: 'none' }}>
           <div className="rk-mx" role="table" aria-label="Nodes against labels and taints" data-testid="fleet-matrix" style={{ ['--cols' as string]: gridCols, ['--mxh' as string]: `${mxh}px`, minWidth: `calc(${minW}px + var(--mxfw))` }}>
             <div className="rk-mxr rk-mxg" role="row">
@@ -608,14 +610,11 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                           mxHas(n, c) ? (
                             <span key={c.id} className="rk-contents" role="cell">
                               <button className="rk-mxc" data-first={c.first} aria-pressed={pickedOn(c)} aria-label={`${n.name} has ${c.label}`} title={`${c.full} — on ${n.name}\n${pickedOn(c) ? 'Click to stop picking nodes by it' : 'Click to pick the nodes that have it'}`} onClick={() => togglePick(c)}>
-                                <span className="rk-cb" data-on="true" data-tone={c.kind === 't' ? effectTone(c.effect ?? '') : undefined}>
-                                  <Check />
-                                </span>
+                                <span className="rk-mk" data-tone={c.kind === 't' ? effectTone(c.effect ?? '') : undefined} aria-hidden="true" />
                               </button>
                             </span>
                           ) : (
                             <span key={c.id} className="rk-mxc" role="cell" data-first={c.first}>
-                              <span className="rk-cb" />
                               <span className="rk-sr">{`${n.name} doesn’t have ${c.label}`}</span>
                             </span>
                           ),

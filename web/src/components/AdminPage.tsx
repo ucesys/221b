@@ -1,7 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { ClusterInfo, Me, Settings } from '../api/types'
 import { ADMIN_PAGES, adminHref, currentRoute, HOME, navigate, type AdminPage as Page, type Route } from '../lib/router'
-import { LockIcon } from './Icons'
 import { PermissionsPage } from './PermissionsPage'
 import { RolesPage } from './RolesPage'
 import { SettingsPanel } from './SettingsPage'
@@ -113,7 +112,6 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
             {PAGES.filter((p) => offered.includes(p.id)).map((p) => (
               <a key={p.id} className="rk-tab" href={adminHref(p.id, [], p.id === 'roles' || p.id === 'permissions' ? route.cluster : 'local')} aria-current={p.id === page ? 'page' : undefined} title={p.tip} data-admin-page={p.id} style={{ height: 36 }}>
                 {p.label}
-                {p.superOnly && <LockIcon />}
               </a>
             ))}
           </nav>

@@ -42,6 +42,8 @@ export function SourceCell({ s }: { s: RoleRow['source'] }) {
         </>
       ) : s.kind === 'managed' ? (
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.manager}</span>
+      ) : s.kind === 'k8s' && s.platform ? (
+        s.platform
       ) : (
         SOURCE_SHORT[s.kind]
       )}
