@@ -163,7 +163,7 @@ CPU and memory in use come from [metrics-server](https://github.com/kubernetes-s
 
 **Every table** sorts by any column, picks columns and exports what is on screen to Excel, CSV or JSON, with the same controls everywhere. Column choices are kept in your browser. The search box suggests names, labels, nodes, namespaces and statuses as you type. Rows are keyboard-navigable: Enter opens a row's details, the arrow keys move between rows and into a row's links, and Escape closes the details.
 
-**Settings** (the gear in the top bar opens Administration; Settings is one of its pages, for SuperAdmins) hold the refresh rate, for everyone, and Sherlock's and Watson's settings; the theme is personal and in the account menu. The refresh rate: the server reads the cluster and updates every open console at the same moment, 3 seconds apart by default, and keeps the choice in its ConfigMap (`k8s-console-221b`) so it survives restarts and upgrades. Nodes and pods are watched, so the rate adds no requests to the API server for them.
+**Settings** (the gear in the top bar opens Administration; Settings is one of its pages, for SuperAdmins) hold the refresh rate, for everyone, and Sherlock's and Watson's settings; the theme is personal and in the account menu. For the refresh rate, the server reads the cluster and updates every open console at the same moment, 3 seconds apart by default, and keeps the choice in its ConfigMap (`k8s-console-221b`) so it survives restarts and upgrades. Nodes and pods are watched, so the rate adds no requests to the API server for them.
 
 ## Develop
 
