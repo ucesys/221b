@@ -16,17 +16,18 @@
     </div>
     <h1 id="si-title">Create the first administrator</h1>
     <p class="si-sub">No one can sign in yet. The account you create here becomes a SuperAdmin. This page closes for good as soon as it exists.</p>
-    {{if .Error}}<p class="si-error" role="alert" data-testid="setup-error">{{.Error}}</p>{{end}}
+    {{if and .Error (not .Field)}}<p class="si-error" role="alert" data-testid="setup-error">{{.Error}}</p>{{end}}
     <form method="post" action="/setup" class="si-form" data-testid="setup-form">
       <input type="hidden" name="form" value="{{.Form}}">
-      <label class="si-field"><span>Setup token</span><input name="token" type="password" autocomplete="off" data-testid="setup-token"><small>Enter <code>auth.setupToken</code> if specified on deployment, if not leave blank.</small></label>
-      <label class="si-field"><span>Username</span><input name="username" type="text" autocomplete="username" required autofocus value="{{.Username}}" data-testid="setup-username"><small>Lowercase letters, digits, dot, dash and underscore.</small></label>
-      <label class="si-field"><span>Display name</span><input name="name" type="text" autocomplete="name" value="{{.Name}}"></label>
-      <label class="si-field"><span>Password</span><input name="password" type="password" autocomplete="new-password" required minlength="12" data-testid="setup-password"><small>At least 12 characters, and not your username.</small></label>
-      <label class="si-field"><span>Repeat the password</span><input name="again" type="password" autocomplete="new-password" required minlength="12" data-testid="setup-again"></label>
+      {{if .NeedToken}}<label class="si-field"><span>Setup token</span><input name="token" type="password" autocomplete="off" required{{if eq .Field "token"}} autofocus aria-invalid="true" aria-describedby="token-error"{{end}} data-testid="setup-token">{{if eq .Field "token"}}<small class="si-ferr" id="token-error" role="alert" data-testid="setup-field-error">{{.Error}}</small>{{else}}<small>The deployment asks for one. Whoever installed the console has it.</small>{{end}}</label>{{end}}
+      <label class="si-field"><span>Username</span><input name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required pattern="[a-z0-9._\-]+" title="Lowercase letters, digits, dot, dash and underscore." {{if or (not .Field) (eq .Field "username")}}autofocus {{end}}value="{{.Username}}"{{if eq .Field "username"}} aria-invalid="true" aria-describedby="username-error"{{end}} data-testid="setup-username">{{if eq .Field "username"}}<small class="si-ferr" id="username-error" role="alert" data-testid="setup-field-error">{{.Error}}</small>{{else}}<small>Lowercase letters, digits, dot, dash and underscore.</small>{{end}}</label>
+      <label class="si-field"><span>Display name (optional)</span><input name="name" type="text" autocomplete="name" value="{{.Name}}"></label>
+      <label class="si-field"><span>Password</span><input name="password" type="password" autocomplete="new-password" required minlength="12" value="{{.Password}}"{{if eq .Field "password"}} autofocus aria-invalid="true" aria-describedby="password-error"{{end}} data-testid="setup-password">{{if eq .Field "password"}}<small class="si-ferr" id="password-error" role="alert" data-testid="setup-field-error">{{.Error}}</small>{{else}}<small>At least 12 characters, and not your username.</small>{{end}}</label>
+      <label class="si-field"><span>Repeat the password</span><input name="again" type="password" autocomplete="new-password" required minlength="12" value="{{.Again}}"{{if eq .Field "again"}} autofocus aria-invalid="true" aria-describedby="again-error"{{end}} data-testid="setup-again">{{if eq .Field "again"}}<small class="si-ferr" id="again-error" role="alert" data-testid="setup-field-error">{{.Error}}</small>{{end}}</label>
       <button type="submit" class="si-btn" data-testid="setup-submit">Create administrator</button>
     </form>
   </div>
 </main>
+<script src="/signin.js"></script>
 </body>
 </html>

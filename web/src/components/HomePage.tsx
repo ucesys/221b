@@ -61,8 +61,9 @@ function ClusterCard({ c, now, onEdit }: { c: HomeCluster; now: number; onEdit?:
       <header style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minWidth: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: '1 1 auto' }}>
           <h2 id={`home-${c.id}`} style={{ margin: 0, fontSize: 15, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <a href={at('alerts')} style={{ color: 'inherit', textDecoration: 'none' }} className="rk-homename" data-testid="home-open">
+            <a href={at('alerts')} style={{ color: 'var(--accent)', textDecoration: 'none' }} className="rk-homename" title={`Open ${c.name}`} data-testid="home-open">
               {c.name}
+              <span aria-hidden="true"> →</span>
             </a>
             <span className="rk-tag" data-tone={env.tone}>
               {env.label}

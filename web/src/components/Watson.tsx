@@ -10,8 +10,29 @@ export interface WatsonApi {
   available: boolean
   /** Whether changes are refused here (a read-only connection). */
   readOnly: boolean
+  /** Where changes are refused, how to allow them. */
+  how?: string
+  /** Where Watson is off, why and how to turn it on, for the fixes that would use it. */
+  off?: WatsonOff
   /** Hands commands to Watson: changes get an approval card, reads run. */
   send: (command: string, o?: Send) => void
+}
+
+/** Why Watson is not offered here, and where to turn it on. */
+export interface WatsonOff {
+  text: string
+  link?: { label: string; href: string }
+}
+
+/**
+ * Where Watson is off (6.3 review), a fix says so, rather than offering
+ * only Copy: Watson runs where Sherlock is on, which an administrator
+ * turns on in Settings.
+ */
+export function watsonOff(o: { installed: boolean; sherlockOn: boolean; admin: boolean; settingsHref: string }): WatsonOff | undefined {
+  if (!o.installed || o.sherlockOn) return undefined
+  if (o.admin) return { text: 'To run it from here, turn on Sherlock for this cluster: Watson runs commands where Sherlock is on.', link: { label: 'Turn on Sherlock', href: o.settingsHref } }
+  return { text: 'To run it from here, ask an administrator to turn on Sherlock for this cluster: Watson runs commands where Sherlock is on.' }
 }
 
 export const WatsonContext = createContext<WatsonApi>({ available: false, readOnly: true, send: () => undefined })
@@ -48,7 +69,7 @@ export function WatsonButton({ command, from, why, label, title, testid, over }:
  * only be copied.
  */
 export function FixCommand({ command, from, why, onCopy }: { command: string; from: string; why?: string; onCopy: () => void }) {
-  const { available, readOnly, send } = useWatsonApi()
+  const { available, readOnly, how, off, send } = useWatsonApi()
   const [sent, setSent] = useState(false)
   const runs = available && watsonSupports(command)
   return (
@@ -76,6 +97,24 @@ export function FixCommand({ command, from, why, onCopy }: { command: string; fr
         <CopyIcon />
         Copy the command
       </button>
+      {runs && readOnly && (
+        <span className="rk-fhint" style={{ flexBasis: '100%' }} data-testid="fix-read-only">
+          This cluster is connected read-only, so Watson changes nothing here.{how ? ` ${how}` : ''}
+        </span>
+      )}
+      {!available && off && watsonSupports(command) && (
+        <span className="rk-fhint" style={{ flexBasis: '100%' }} data-testid="fix-watson-off">
+          {off.text}
+          {off.link && (
+            <>
+              {' '}
+              <a className="rk-link" href={off.link.href}>
+                {off.link.label}
+              </a>
+            </>
+          )}
+        </span>
+      )}
     </div>
   )
 }

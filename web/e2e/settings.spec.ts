@@ -83,12 +83,15 @@ test('the refresh rate is kept on the server and reaches every open console', as
   const dialog = await openSettings(page)
   const rates = dialog.getByRole('group', { name: 'Refresh rate' })
   await expect(rates.getByRole('button', { name: '3 s' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(dialog.getByTestId('settings-status')).toContainText('Every 3 s')
+  await expect(dialog.getByTestId('settings-status')).toContainText('Now every 3 s')
   await expect(dialog.getByTestId('settings-status')).toContainText('Kept on the server in its ConfigMap')
 
+  // Like every Settings section, it waits for Save (6.3 review).
   await rates.getByRole('button', { name: '10 s' }).click()
   await expect(rates.getByRole('button', { name: '10 s' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(dialog.getByTestId('settings-status')).toContainText('Every 10 s')
+  await expect(dialog.getByTestId('settings-status')).toContainText('Now every 3 s')
+  await dialog.getByTestId('settings-save').click()
+  await expect(dialog.getByTestId('settings-status')).toContainText('Now every 10 s')
 
   // The server has it, and so does its ConfigMap.
   const saved = (await (await request.get('/api/v1/settings')).json()) as Settings

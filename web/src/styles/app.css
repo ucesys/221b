@@ -18,6 +18,17 @@
   opacity: 0.55;
   cursor: default;
 }
+/* The one action a form or page is for (6.3 review): solid, as on the sign-in pages. */
+.rk-btn[data-primary='true'],
+.rk-btn[data-primary='true']:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+.rk-btn[data-primary='true']:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
 /* The prototype's .rk-dd menus are positioned against this wrapper. */
 .rk-dd {
   position: relative;
@@ -200,3 +211,23 @@ button.rk-card:hover:not(:disabled) {
 }
 .rk-frow > .rk-ffield { flex: 1 1 220px; }
 .rk-frow > .rk-fwide { flex-basis: 100%; }
+
+/* What a fleet matrix cell marks (6.3 review): a dot, not a checkbox, since
+   the cell is not a setting. Taints take their effect's tone. */
+.rk-mk {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.rk-mk[data-tone='warn'] {
+  background: var(--warn);
+}
+.rk-mk[data-tone='err'] {
+  background: var(--err);
+}
+.rk-mk[data-tone='info'] {
+  background: var(--info);
+}

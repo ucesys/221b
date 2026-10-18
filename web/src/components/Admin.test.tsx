@@ -246,9 +246,10 @@ describe('Users (RB-45, RB-46)', () => {
     await waitFor(() => expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1))
   })
 
-  it('creates a local user, refusing a reserved name and a short password before it asks the server', async () => {
+  it('creates a local user with a super role, refusing a reserved name, a short password and a mistyped repeat before it asks the server', async () => {
     serve((method, url, body) => {
       if (method === 'POST' && url.endsWith('/admin/users')) return { body: { ...users.users[0], username: (body as { username: string }).username } }
+      if (method === 'PUT' && url.endsWith('/super')) return { body: users.users[0] }
       return { body: users }
     })
     render(<UsersPage {...common('#/admin/users')} />)
@@ -262,9 +263,16 @@ describe('Users (RB-45, RB-46)', () => {
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
     fireEvent.change(within(form).getByTestId('new-username'), { target: { value: 'dana' } })
     fireEvent.change(within(form).getByTestId('new-password'), { target: { value: 'a-long-enough-password' } })
+    fireEvent.change(within(form).getByTestId('new-again'), { target: { value: 'a-long-enough-passwore' } })
     fireEvent.click(within(form).getByTestId('create-submit'))
-    await waitFor(() => expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1))
+    expect(within(form).getByText('The two passwords are not the same.')).toBeTruthy()
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(0)
+    fireEvent.change(within(form).getByTestId('new-again'), { target: { value: 'a-long-enough-password' } })
+    fireEvent.click(within(form).getByLabelText(/^SuperViewer/))
+    fireEvent.click(within(form).getByTestId('create-submit'))
+    await waitFor(() => expect(calls.filter((c) => c.method === 'PUT')).toHaveLength(1))
     expect(calls.find((c) => c.method === 'POST')!.body).toMatchObject({ username: 'dana', password: 'a-long-enough-password', groups: [] })
+    expect(calls.find((c) => c.method === 'PUT')).toMatchObject({ url: '/api/v1/admin/users/dana/super', body: { roles: ['superViewer'] } })
   })
 
   it('removes a local user from a group only after a confirmation that says what happens (RB-51)', async () => {

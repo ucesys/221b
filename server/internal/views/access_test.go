@@ -49,6 +49,24 @@ func TestAccessRowsAndFindings(t *testing.T) {
 	p.Spec.ServiceAccountName = "ci"
 	src.Put(p)
 
+	// Rancher, its charts and RKE2's Helm controller need cluster-admin:
+	// info, with no command to delete what they would put back. A chart
+	// that is not the platform's is still high, fixed in its values.
+	src.Put(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "rancher", Labels: map[string]string{"app.kubernetes.io/managed-by": "Helm"}, Annotations: map[string]string{"meta.helm.sh/release-name": "rancher", "meta.helm.sh/release-namespace": "cattle-system"}}, RoleRef: ref("ClusterRole", "cluster-admin"), Subjects: []rbacv1.Subject{sa("cattle-system", "rancher")}})
+	src.Put(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "globaladmin-u-1", Annotations: map[string]string{"authz.cluster.cattle.io/globalrole": "admin"}}, RoleRef: ref("ClusterRole", "cluster-admin"), Subjects: []rbacv1.Subject{{Kind: "User", Name: "u-1"}}})
+	src.Put(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "helm-kube-system-rke2-canal", Annotations: map[string]string{"objectset.rio.cattle.io/owner-gvk": "helm.cattle.io/v1, Kind=HelmChart", "objectset.rio.cattle.io/owner-namespace": "kube-system", "objectset.rio.cattle.io/owner-name": "rke2-canal"}}, RoleRef: ref("ClusterRole", "cluster-admin"), Subjects: []rbacv1.Subject{sa("kube-system", "helm-rke2-canal")}})
+	src.Put(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "argo", Labels: map[string]string{"app.kubernetes.io/managed-by": "Helm", "app.kubernetes.io/instance": "argo"}}, RoleRef: ref("ClusterRole", "cluster-admin"), Subjects: []rbacv1.Subject{sa("argo", "argo")}})
+	// Rancher's per-user bindings name only their owner; RKE2 marks the
+	// bindings it adds to Kubernetes' defaults; clusterctl labels its own.
+	src.Put(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "grb-u-1-view", OwnerReferences: []metav1.OwnerReference{{APIVersion: "management.cattle.io/v3", Kind: "User", Name: "u-1"}}}, RoleRef: ref("ClusterRole", "view"), Subjects: []rbacv1.Subject{{Kind: "User", Name: "u-1"}}})
+	src.Put(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver-kubelet-admin", Labels: map[string]string{"rke2.io/bootstrapping": "rbac-defaults"}}, RoleRef: ref("ClusterRole", "system:kubelet-api-admin"), Subjects: []rbacv1.Subject{{Kind: "User", Name: "kube-apiserver"}}})
+	src.Put(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "capi", Labels: map[string]string{"clusterctl.cluster.x-k8s.io": ""}}, RoleRef: ref("ClusterRole", "secret-reader"), Subjects: []rbacv1.Subject{sa("capi", "manager")}})
+	src.Put(&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "turtles", Labels: map[string]string{"app.kubernetes.io/managed-by": "Helm", "app.kubernetes.io/instance": "manager-rolebinding"}, Annotations: map[string]string{"meta.helm.sh/release-name": "rancher-turtles", "meta.helm.sh/release-namespace": "cattle-turtles-system"}}, RoleRef: ref("ClusterRole", "cluster-admin"), Subjects: []rbacv1.Subject{sa("cattle-turtles-system", "manager")}})
+	for _, n := range []string{"cattle-system/rancher", "kube-system/helm-rke2-canal", "argo/argo", "capi/manager", "cattle-turtles-system/manager"} {
+		ns, name, _ := strings.Cut(n, "/")
+		src.Put(&corev1.ServiceAccount{ObjectMeta: meta(ns, name, nil)})
+	}
+
 	rows := accessRows(t, src)
 	find := func(key string) views.BindingRow {
 		b, ok := rows[key].(views.BindingRow)
@@ -72,6 +90,38 @@ func TestAccessRowsAndFindings(t *testing.T) {
 	}
 	if got := sev(find("binding:ClusterRoleBinding/mon")); got != "medium: ServiceAccount mon/exporter can read every Secret in the cluster" {
 		t.Errorf("mon: %s", got)
+	}
+	for key, want := range map[string]string{
+		"rancher":                     "info: ServiceAccount cattle-system/rancher has cluster-admin, as Rancher needs",
+		"globaladmin-u-1":             "info: User u-1 has cluster-admin, through Rancher",
+		"helm-kube-system-rke2-canal": "info: ServiceAccount kube-system/helm-rke2-canal has cluster-admin, as RKE2 needs",
+		"argo":                        "high: ServiceAccount argo/argo has cluster-admin",
+	} {
+		b := find("binding:ClusterRoleBinding/" + key)
+		if got := sev(b); got != want {
+			t.Errorf("%s: %s", key, got)
+		}
+		if b.Findings[0].Command != "" {
+			t.Errorf("%s: command %q", key, b.Findings[0].Command)
+		}
+	}
+	if b := find("binding:ClusterRoleBinding/grb-u-1-view"); b.Source.Platform != views.PlatformRancher || len(b.Findings) != 0 {
+		t.Errorf("grb-u-1-view: %+v %s", b.Source, sev(b))
+	}
+	if b := find("binding:ClusterRoleBinding/kube-apiserver-kubelet-admin"); !b.Source.Default() || b.Source.Platform != views.PlatformRKE2 || len(b.Findings) != 0 {
+		t.Errorf("kubelet-admin: %+v %s", b.Source, sev(b))
+	}
+	if f := find("binding:ClusterRoleBinding/capi").Findings[0]; f.Severity != "medium" || f.Command != "" || !strings.Contains(f.Text, "clusterctl manages this binding") {
+		t.Errorf("capi: %+v", f)
+	}
+	if f := find("binding:ClusterRoleBinding/turtles").Findings[0]; !strings.Contains(f.Text, "Rancher’s chart rancher-turtles made") {
+		t.Errorf("turtles: %s", f.Text)
+	}
+	if f := find("binding:ClusterRoleBinding/argo").Findings[0]; !strings.Contains(f.Text, "Helm release argo made this binding, so change it in the release’s values") {
+		t.Errorf("argo: %s", f.Text)
+	}
+	if c := find("binding:ClusterRoleBinding/ci").Findings[0].Command; c != "kubectl delete clusterrolebinding ci" {
+		t.Errorf("ci command %q", c)
 	}
 	dana := find("binding:RoleBinding/web/dana")
 	if got := sev(dana); got != "medium: RoleBinding web/dana names a ServiceAccount that doesn’t exist | low: dana@corp.example has admin in web directly" {

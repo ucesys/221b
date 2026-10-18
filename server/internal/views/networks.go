@@ -132,12 +132,17 @@ type TraceRow struct {
 }
 
 // controllers maps an IngressClass's controller to the labels of its pods.
-var controllers = map[string]labels.Set{
-	"k8s.io/ingress-nginx":           {"app.kubernetes.io/name": "ingress-nginx", "app.kubernetes.io/component": "controller"},
-	"traefik.io/ingress-controller":  {"app.kubernetes.io/name": "traefik"},
-	"nginx.org/ingress-controller":   {"app.kubernetes.io/name": "nginx-ingress"},
-	"haproxy.org/ingress-controller": {"app.kubernetes.io/name": "kubernetes-ingress"},
-	"projectcontour.io/contour":      {"app.kubernetes.io/name": "contour"},
+// Distributions rename the charts they bundle, so a controller can have
+// more than one name: RKE2's are rke2-ingress-nginx and rke2-traefik.
+var controllers = map[string][]labels.Set{
+	"k8s.io/ingress-nginx": {
+		{"app.kubernetes.io/name": "ingress-nginx", "app.kubernetes.io/component": "controller"},
+		{"app.kubernetes.io/name": "rke2-ingress-nginx", "app.kubernetes.io/component": "controller"},
+	},
+	"traefik.io/ingress-controller":  {{"app.kubernetes.io/name": "traefik"}, {"app.kubernetes.io/name": "rke2-traefik"}},
+	"nginx.org/ingress-controller":   {{"app.kubernetes.io/name": "nginx-ingress"}},
+	"haproxy.org/ingress-controller": {{"app.kubernetes.io/name": "kubernetes-ingress"}},
+	"projectcontour.io/contour":      {{"app.kubernetes.io/name": "contour"}},
 }
 
 // cloudControllers serve Ingresses from outside the cluster.
@@ -147,7 +152,11 @@ var cloudControllers = map[string]string{
 	"azure/application-gateway": "Azure Application Gateway",
 }
 
-func ingressClass(src Source, ing *networkingv1.Ingress) (name string, cls *networkingv1.IngressClass, isDefault bool) {
+// ingressClass finds the class that serves an Ingress: the one it names,
+// or the default. With neither, a controller started with
+// --watch-ingress-without-class serves it, as RKE2's ingress-nginx is:
+// unclassed says so.
+func ingressClass(src Source, ing *networkingv1.Ingress) (name string, cls *networkingv1.IngressClass, isDefault, unclassed bool) {
 	if ing.Spec.IngressClassName != nil {
 		name = *ing.Spec.IngressClassName
 	} else if a := ing.Annotations["kubernetes.io/ingress.class"]; a != "" {
@@ -158,31 +167,83 @@ func ingressClass(src Source, ing *networkingv1.Ingress) (name string, cls *netw
 		if cls != nil {
 			isDefault = cls.Annotations[networkingv1.AnnotationIsDefaultIngressClass] == "true"
 		}
-		return name, cls, isDefault
+		return name, cls, isDefault, false
 	}
+	var classes []*networkingv1.IngressClass
 	for _, o := range src.Objects("ingressclasses", "") {
-		if c, ok := o.(*networkingv1.IngressClass); ok && c.Annotations[networkingv1.AnnotationIsDefaultIngressClass] == "true" {
-			return c.Name, c, true
+		if c, ok := o.(*networkingv1.IngressClass); ok {
+			if c.Annotations[networkingv1.AnnotationIsDefaultIngressClass] == "true" {
+				return c.Name, c, true, false
+			}
+			classes = append(classes, c)
 		}
 	}
-	return "", nil, false
+	sort.Slice(classes, func(i, j int) bool { return classes[i].Name < classes[j].Name })
+	for _, c := range classes {
+		for _, p := range controllerPods(src, c) {
+			if watchesUnclassed(p) {
+				return c.Name, c, false, true
+			}
+		}
+	}
+	return "", nil, false, false
 }
 
-// controllerPods are the pods of an IngressClass's controller.
+// watchesUnclassed says whether an ingress-nginx pod serves Ingresses that
+// name no class.
+func watchesUnclassed(p *corev1.Pod) bool {
+	for _, c := range p.Spec.Containers {
+		for _, a := range append(append([]string{}, c.Command...), c.Args...) {
+			if a == "--watch-ingress-without-class" || a == "--watch-ingress-without-class=true" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// controllerPods are the pods of an IngressClass's controller: the pods
+// started with --controller-class set to it, or, for a controller that is
+// started without the flag, the pods with its labels.
 func controllerPods(src Source, cls *networkingv1.IngressClass) []*corev1.Pod {
-	set, ok := controllers[cls.Spec.Controller]
+	sets, ok := controllers[cls.Spec.Controller]
 	if !ok {
 		return nil
 	}
-	sel := labels.SelectorFromSet(set)
 	var out []*corev1.Pod
 	for _, o := range src.Objects("pods", "") {
-		if p, ok := o.(*corev1.Pod); ok && live(p) && sel.Matches(labels.Set(p.Labels)) {
-			out = append(out, p)
+		p, ok := o.(*corev1.Pod)
+		if !ok || !live(p) {
+			continue
+		}
+		if class, set := controllerClass(p); set {
+			if class == cls.Spec.Controller {
+				out = append(out, p)
+			}
+			continue
+		}
+		for _, s := range sets {
+			if labels.SelectorFromSet(s).Matches(labels.Set(p.Labels)) {
+				out = append(out, p)
+				break
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Namespace+"/"+out[i].Name < out[j].Namespace+"/"+out[j].Name })
 	return out
+}
+
+// controllerClass reads a pod's --controller-class flag, which
+// ingress-nginx is started with.
+func controllerClass(p *corev1.Pod) (string, bool) {
+	for _, c := range p.Spec.Containers {
+		for _, a := range append(append([]string{}, c.Command...), c.Args...) {
+			if v, ok := strings.CutPrefix(a, "--controller-class="); ok {
+				return v, true
+			}
+		}
+	}
+	return "", false
 }
 
 func hostMatches(pattern, host string) bool {
@@ -271,7 +332,7 @@ func traceRoute(src Source, key, rest string, now time.Time) (any, bool) {
 	}
 
 	// 2. Ingress controller.
-	clsName, cls, isDefault := ingressClass(src, ing)
+	clsName, cls, isDefault, unclassed := ingressClass(src, ing)
 	r.Class = clsName
 	var ctl []*corev1.Pod
 	switch {
@@ -284,6 +345,8 @@ func traceRoute(src Source, key, rest string, now time.Time) (any, bool) {
 		def := ""
 		if isDefault {
 			def = " (default)"
+		} else if unclassed {
+			def = " (it serves Ingresses that name no class)"
 		}
 		if where, ok := cloudControllers[cls.Spec.Controller]; ok {
 			r.Hops = append(r.Hops, Hop{K: "Ingress controller", T: cls.Name, S: "outside the cluster", Tone: "ok", Link: link, D: fmt.Sprintf("%s serve class %s%s.", where, cls.Name, def)})
@@ -847,7 +910,7 @@ func netFacts(src Source) NetFactsRow {
 	hosts := map[string]int{}
 	for _, o := range src.Objects("ingresses", "") {
 		if ing, ok := o.(*networkingv1.Ingress); ok {
-			name, _, _ := ingressClass(src, ing)
+			name, _, _, _ := ingressClass(src, ing)
 			hosts[name] += len(ing.Spec.Rules)
 		}
 	}

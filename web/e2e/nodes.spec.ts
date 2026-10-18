@@ -286,9 +286,9 @@ test('opens node details with Enter and closes them with Escape', async ({ page,
   await expect(page.getByRole('button', { name: 'Close node details' })).toBeFocused()
   await expect(row).toHaveAttribute('aria-selected', 'true')
 
-  // Status first, then taints and labels, then the resources, then the system.
+  // Status first, then what to do, taints and labels, the resources, then the system.
   const headings = await panel.locator('h3').allTextContents()
-  expect(headings.filter((h) => h !== 'Problems')).toEqual(['Status', 'Taints', 'Labels', 'CPU', 'Memory', 'Pods', 'System'])
+  expect(headings.filter((h) => h !== 'Problems')).toEqual(['Status', 'Actions', 'Taints', 'Labels', 'CPU', 'Memory', 'Pods', 'System'])
   await expect(panel.getByTestId('node-status')).toContainText(target.status)
   await expect(panel.getByTestId('node-status')).toContainText('worker')
   await expect(panel.getByRole('region', { name: 'Taints' })).toBeVisible()

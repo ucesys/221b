@@ -58,6 +58,7 @@ export function AssistantWindow({ cluster, clusterName, onToast }: Props) {
   const watsonApi: WatsonApi = {
     available: hasW,
     readOnly: !!watson.status?.readOnly,
+    how: watson.status?.how,
     send: (command, o = {}) => {
       setPane('watson')
       sendToWatson(cluster, command, { run: autoRunReads(), ...o }).catch((e: unknown) => onToast(e instanceof WatsonError ? e.message : String(e)))

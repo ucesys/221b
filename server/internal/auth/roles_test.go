@@ -155,7 +155,7 @@ func TestFirstRunCreatesTheFirstSuperAdminOnce(t *testing.T) {
 	// Every page is the first-run page, the API is a 401, and sign-in sends
 	// people there.
 	resp, _ := c.Get(e.app.URL + "/")
-	if b := readAll(t, resp); !strings.Contains(b, "Create the first administrator") || !strings.Contains(b, "Enter <code>auth.setupToken</code> if specified on deployment, if not leave blank.") {
+	if b := readAll(t, resp); !strings.Contains(b, "Create the first administrator") || !strings.Contains(b, `data-testid="setup-token"`) {
 		t.Fatalf("first-run page: %s", b)
 	}
 	if code, _ := e.api(client(t), http.MethodGet, "/api/v1/me", nil); code != http.StatusUnauthorized {
@@ -217,6 +217,43 @@ func TestFirstRunCreatesTheFirstSuperAdminOnce(t *testing.T) {
 	readAll(t, r)
 	if _, resp := e.signIn("intruder", goodPassword); resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("intruder: %s", resp.Status)
+	}
+}
+
+// The first-run page (6.3 review) asks for the setup token only when the
+// deployment set one, shows an error beside its field, and keeps the
+// passwords when the error is not about them.
+func TestFirstRunPageAsksOnlyWhatItNeeds(t *testing.T) {
+	cfg := localConfig(t)
+	cfg.SetupToken = ""
+	e := newEnv(t, cfg)
+	resp, _ := client(t).Get(e.app.URL + "/setup")
+	if b := readAll(t, resp); strings.Contains(b, `name="token"`) || !strings.Contains(b, `pattern="[a-z0-9._\-]+"`) {
+		t.Fatalf("no token set: %s", b)
+	}
+
+	e = newEnv(t, localConfig(t))
+	c := client(t)
+	post := func(token, name, pw, again string) string {
+		*e.now = e.now.Add(time.Minute)
+		r := e.post(c, "/setup", url.Values{"form": {formIn(t, c, e.app.URL+"/setup")}, "token": {token}, "username": {name}, "password": {pw}, "again": {again}})
+		return readAll(t, r)
+	}
+	b := post("nope", "mikhail", goodPassword, goodPassword)
+	if !strings.Contains(b, `id="token-error"`) || strings.Contains(b, `data-testid="setup-error"`) || strings.Count(b, `value="`+goodPassword+`"`) != 2 {
+		t.Fatalf("wrong token: %s", b)
+	}
+	b = post("s3cret", "Mikhail", goodPassword, goodPassword)
+	if !strings.Contains(b, `id="username-error"`) || strings.Count(b, `value="`+goodPassword+`"`) != 2 {
+		t.Fatalf("bad name: %s", b)
+	}
+	b = post("s3cret", "mikhail", goodPassword, goodPassword+"x")
+	if !strings.Contains(b, `id="again-error"`) || strings.Count(b, `value="`+goodPassword+`"`) != 1 || strings.Contains(b, goodPassword+"x") {
+		t.Fatalf("passwords differ: %s", b)
+	}
+	b = post("s3cret", "mikhail", "short", "short")
+	if !strings.Contains(b, `id="password-error"`) || strings.Contains(b, `value="short"`) {
+		t.Fatalf("short password: %s", b)
 	}
 }
 

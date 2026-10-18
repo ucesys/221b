@@ -75,10 +75,13 @@ test('Sherlock stays away until an administrator turns it on, and the key is nev
   await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
   const settings = page.getByTestId('sherlock-settings')
   await expect(settings.getByTestId('sherlock-key-state')).toContainText('No key yet')
+  await expect(settings.getByTestId('sherlock-summary')).toContainText(/No (Claude )?API key/)
   await settings.getByTestId('sherlock-key').fill(KEY)
-  await settings.getByTestId('sherlock-key-save').click()
+  await settings.getByTestId('sherlock-save').click()
   await expect(settings.getByTestId('sherlock-key-state')).toContainText(/Saved by .+\. Kept in/)
   await expect(settings.getByTestId('sherlock-key')).toHaveValue('')
+  await expect(settings.getByTestId('sherlock-summary')).toContainText(/API key saved/)
+  await expect(settings.getByTestId('sherlock-key-pill')).toHaveText('Saved')
   // The key never comes back, from any endpoint.
   const cfg = await page.evaluate(async () => (await fetch('/api/v1/sherlock/config')).text())
   expect(cfg).not.toContain(KEY)
@@ -359,7 +362,7 @@ test('Sherlock answers through an OpenAI-compatible gateway set on the Settings 
     await expect(s.getByText('Saved.')).toBeVisible()
     await expect(s.getByTestId('sherlock-provider-kind')).toHaveValue('compatible')
     await s.getByTestId('sherlock-key').fill(KEY)
-    await s.getByTestId('sherlock-key-save').click()
+    await s.getByTestId('sherlock-save').click()
     await expect(s.getByTestId('sherlock-key-state')).toContainText(/Saved by/)
     const saved = (await page.evaluate(async () => (await fetch('/api/v1/sherlock/config')).text())) as string
     expect(saved).not.toContain(KEY)

@@ -385,13 +385,18 @@ export function accessBadge(items: Finding[]): { count: number; tone: string } {
 export const SOURCE_SHORT: Record<RBACSource['kind'], string> = { k8s: 'Kubernetes', kubeadm: 'kubeadm', helm: 'Helm', managed: 'Managed', manual: 'By hand' }
 
 export function sourceText(s: RBACSource): string {
+  const own = baseSourceText(s)
+  return s.platform && s.platform !== s.manager && s.kind !== 'k8s' ? `${own}, part of ${s.platform}` : own
+}
+
+function baseSourceText(s: RBACSource): string {
   switch (s.kind) {
     case 'k8s':
-      return 'Kubernetes default'
+      return s.platform ? `${s.platform} default` : 'Kubernetes default'
     case 'kubeadm':
       return 'kubeadm'
     case 'helm':
-      return `Helm release ${s.release}`
+      return `Helm release ${s.release}${s.releaseNamespace ? ` in ${s.releaseNamespace}` : ''}`
     case 'managed':
       return `Managed by ${s.manager}`
   }
