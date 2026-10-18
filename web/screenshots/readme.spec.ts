@@ -124,14 +124,18 @@ test('sherlock', async () => {
   await input.press('Enter')
   const answer = page.getByTestId('sherlock-answer').last()
   await expect(answer).toHaveAttribute('data-status', 'done', { timeout: 30_000 })
-  await page.getByTestId('sherlock-maximize').first().click()
+  // The dock's controls sit in the right-hand pane's header (Watson's).
+  await page.getByTestId('watson').getByTestId('sherlock-maximize').first().click()
   await answer.evaluate((el) => el.scrollIntoView({ block: 'start' }))
   await save('sherlock')
   await page.keyboard.press('Escape')
 })
 
 test('admin settings', async () => {
-  await shot('admin-settings', '#/admin/settings')
+  await page.goto('/#/admin/settings')
+  await expect(page.getByTestId('cluster')).toBeVisible({ timeout: 20_000 })
+  await page.getByText('On per cluster, API key, model, caps').click()
+  await save('admin-settings')
 })
 
 test('watson approval card', async () => {
