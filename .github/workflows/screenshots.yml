@@ -1,0 +1,65 @@
+# Takes the README's screenshots (docs/screenshots) against the simulated
+# cluster, so they show sample data only, and commits them to the branch.
+# Runs when the screenshot script changes on a branch, or by hand.
+name: Screenshots
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - web/screenshots/**
+      - .github/workflows/screenshots.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GO_VERSION: '1.26.9'
+  NODE_VERSION: '24'
+
+jobs:
+  screenshots:
+    name: Screenshots
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: server/go.sum
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Browser
+        working-directory: web
+        run: npm ci --no-fund && npx playwright install --with-deps chromium
+      - name: Take the screenshots
+        id: shots
+        continue-on-error: true
+        run: make screenshots 2>&1 | tee "$RUNNER_TEMP/shots.log"; exit "${PIPESTATUS[0]}"
+      - name: Commit them
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/screenshots
+          if git diff --cached --quiet; then echo 'No changes.'; exit 0; fi
+          git commit -m 'docs: refresh the README screenshots' -m "Taken by the Screenshots workflow from ${GITHUB_SHA::7} against the simulated cluster."
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+      - name: Report
+        if: steps.shots.outcome == 'failure'
+        run: |
+          hack/annotate.sh "Screenshots" "$RUNNER_TEMP/shots.log" 8000
+          hack/annotate.sh "Server log" bin/shots-server.log 2000
+          exit 1

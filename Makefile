@@ -16,7 +16,7 @@ LDFLAGS := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT)
 UI_DIST := server/internal/ui/dist
 
 .DEFAULT_GOAL := build
-.PHONY: help build web ui server sim test test-go test-web lint lint-go lint-web licenses image chart-lint dev-sim e2e-sim sherlock-eval clean
+.PHONY: help build web ui server sim test test-go test-web lint lint-go lint-web licenses image chart-lint dev-sim e2e-sim screenshots sherlock-eval clean
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -103,6 +103,15 @@ e2e-sim: build ## Run the browser end-to-end tests against a simulated cluster
 	trap 'kill $$sim $$sim2 $$srv 2>/dev/null' EXIT INT TERM; \
 	for i in $$(seq 50); do curl -fs http://127.0.0.1:8080/readyz >/dev/null && break; sleep 0.2; done; \
 	cd web && E2E_MODE=sim E2E_SIM_URL=http://127.0.0.1:7443 E2E_OTHER_SIM_URL=http://127.0.0.1:7444 $(NPM) run e2e
+
+screenshots: build ## Take the README's screenshots (docs/screenshots) against a simulated cluster
+	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) $(SIM_OIDC) & sim=$$!; \
+	trap 'kill $$sim 2>/dev/null' EXIT INT TERM; \
+	for i in $$(seq 50); do curl -fs http://127.0.0.1:7443/version >/dev/null && break; sleep 0.2; done; \
+	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) $(SIM_SHERLOCK) $(SIM_WATSON) -log-format text $(SIM_AUTH) > bin/shots-audit.log 2> bin/shots-server.log & srv=$$!; \
+	trap 'kill $$sim $$srv 2>/dev/null' EXIT INT TERM; \
+	for i in $$(seq 50); do curl -fs http://127.0.0.1:8080/readyz >/dev/null && break; sleep 0.2; done; \
+	cd web && E2E_MODE=sim E2E_SIM_URL=http://127.0.0.1:7443 npx playwright test -c screenshots/playwright.config.ts
 
 sherlock-eval: ## Ask Sherlock about the simulator's sample problems (P5-06); with ANTHROPIC_API_KEY, through the Claude API
 	hack/sherlock-eval.sh
