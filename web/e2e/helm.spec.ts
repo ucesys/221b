@@ -26,9 +26,11 @@ test('matches helm list -A: every release with its chart, app version, revision,
   const list = page.getByTestId('release-list')
   for (const r of rows) {
     // The link is the release's name; the row under it says the rest.
-    const item = list.getByRole('link', { name: new RegExp(`^${r.name}\\b`) })
+    const name = new RegExp(`^${r.name}\\b`)
+    const item = list.getByRole('link', { name })
     await expect(item).toBeVisible()
-    const row = list.locator('.rk-rrow', { has: item })
+    // An inner locator is matched inside the outer one, so it starts from the page.
+    const row = list.locator('.rk-rrow', { has: page.getByRole('link', { name }) })
     await expect(row).toContainText(r.status)
     await expect(row).toContainText(`${r.chart}-${r.chartVersion}`)
     await expect(row).toContainText(`rev ${r.revision}`)
