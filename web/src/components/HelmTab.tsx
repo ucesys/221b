@@ -64,6 +64,7 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
     href: href('helm', [r.namespace, r.name]),
     current: current?.key === r.key,
     name: r.name,
+    copy: 'release name',
     right: (
       <span className="rk-t" data-tone={r.tone} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 500, whiteSpace: 'nowrap' }}>
         <span className="rk-dot" />
