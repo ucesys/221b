@@ -13,11 +13,13 @@ import (
 	"math"
 	"reflect"
 	"regexp"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/acks"
 	"github.com/ucesys/221b/server/internal/fleets"
+	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
@@ -206,12 +208,25 @@ func (s Settings) Equal(o Settings) bool { return reflect.DeepEqual(s, o) }
 // ErrNotFound is what a Storage returns when nothing has been saved yet.
 var ErrNotFound = errors.New("no settings saved")
 
-// Storage keeps the settings between restarts.
+// ErrConflict is what a Storage returns when the settings changed since
+// the version a save was based on: another replica saved first.
+var ErrConflict = kv.ErrConflict
+
+// ErrNewer refuses a change to settings a newer 221B saved, whose fields
+// this one does not know (P7-03).
+var ErrNewer = errors.New("the settings were saved by a newer 221B; upgrade this one")
+
+// Storage keeps the settings between restarts, and shares them between
+// replicas (P7-02): every value carries a version, and a save is made only
+// over the version it was based on.
 type Storage interface {
-	// Load returns the saved settings as JSON, or ErrNotFound.
-	Load(ctx context.Context) ([]byte, error)
-	// Save writes the settings as JSON.
-	Save(ctx context.Context, b []byte) error
+	// Load returns the saved settings as JSON and the storage's version,
+	// or ErrNotFound (with the version, so a first save is conditional too).
+	Load(ctx context.Context) ([]byte, string, error)
+	// Save writes the settings when the storage is still at version ("" saves
+	// over whatever it holds) and returns the new version; ErrConflict when
+	// another writer came first.
+	Save(ctx context.Context, b []byte, version string) (string, error)
 	// Kind names the storage for the browser: "configmap" or "memory".
 	Kind() string
 }
@@ -219,24 +234,30 @@ type Storage interface {
 // Memory keeps settings until the server restarts: the laptop and
 // simulator modes.
 type Memory struct {
-	mu sync.Mutex
-	b  []byte
+	mu      sync.Mutex
+	b       []byte
+	version int
 }
 
-func (m *Memory) Load(context.Context) ([]byte, error) {
+func (m *Memory) Load(context.Context) ([]byte, string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	v := strconv.Itoa(m.version)
 	if m.b == nil {
-		return nil, ErrNotFound
+		return nil, v, ErrNotFound
 	}
-	return m.b, nil
+	return append([]byte(nil), m.b...), v, nil
 }
 
-func (m *Memory) Save(_ context.Context, b []byte) error {
+func (m *Memory) Save(_ context.Context, b []byte, version string) (string, error) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if version != "" && version != strconv.Itoa(m.version) {
+		return "", ErrConflict
+	}
 	m.b = append([]byte(nil), b...)
-	m.mu.Unlock()
-	return nil
+	m.version++
+	return strconv.Itoa(m.version), nil
 }
 
 func (m *Memory) Kind() string { return "memory" }
@@ -253,18 +274,25 @@ type State struct {
 }
 
 // Service holds the current settings, loads them from storage and saves
-// changes to it.
+// changes to it. With several replicas over one ConfigMap, each change is
+// made to what the storage holds at that moment, never to this replica's
+// copy, so no replica puts back what another one changed; Run picks up
+// the others' changes.
 type Service struct {
-	storage Storage
-	log     *slog.Logger
+	storage  Storage
+	log      *slog.Logger
+	defaults Settings
 	// onChange is told about every change, including the initial load.
 	onChange func(State)
 
 	mu      sync.Mutex
 	current State
-	loaded  []byte // what storage last held, to notice outside edits
-	// writeMu orders updates, so a change to one part of the settings
-	// does not lose a change made to another part at the same time.
+	// loaded and version are what storage last held, to notice changes
+	// made elsewhere cheaply; newer says it was a newer 221B's format.
+	loaded  []byte
+	version string
+	newer   bool
+	// writeMu orders this replica's updates and reloads.
 	writeMu sync.Mutex
 }
 
@@ -280,7 +308,7 @@ func NewService(ctx context.Context, storage Storage, defaults Settings, log *sl
 	if defaults.Validate() != nil {
 		defaults = Default
 	}
-	s := &Service{storage: storage, log: log, onChange: onChange, current: State{Settings: defaults, Storage: storage.Kind()}}
+	s := &Service{storage: storage, log: log, defaults: defaults, onChange: onChange, current: State{Settings: defaults, Storage: storage.Kind()}}
 	s.reload(ctx, true)
 	return s
 }
@@ -295,120 +323,163 @@ func (s *Service) Current() State {
 // Update validates, saves and applies new settings. What it is not given
 // it keeps: the Settings dialog sends the refresh rate, not the fleets.
 func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if in.Fleets == nil {
-		in.Fleets = s.Current().Fleets
-	}
-	if in.Acks == nil {
-		in.Acks = s.Current().Acks
-	}
-	if in.Sherlock == nil {
-		in.Sherlock = s.Current().Sherlock
-	}
-	if in.Watson == nil {
-		in.Watson = s.Current().Watson
-	}
-	if in.TimeFormat == nil {
-		in.TimeFormat = s.Current().TimeFormat
-	}
-	return s.update(ctx, in)
+	return s.change(ctx, func(cur *Settings) error {
+		next := in
+		if next.Fleets == nil {
+			next.Fleets = cur.Fleets
+		}
+		if next.Acks == nil {
+			next.Acks = cur.Acks
+		}
+		if next.Sherlock == nil {
+			next.Sherlock = cur.Sherlock
+		}
+		if next.Watson == nil {
+			next.Watson = cur.Watson
+		}
+		if next.TimeFormat == nil {
+			next.TimeFormat = cur.TimeFormat
+		}
+		*cur = next
+		return nil
+	})
 }
 
 // UpdateWatson replaces the Watson settings.
 func (s *Service) UpdateWatson(ctx context.Context, w Watson) (State, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	in := s.Current().Settings
-	in.Watson = &w
-	return s.update(ctx, in)
+	return s.change(ctx, func(cur *Settings) error {
+		cur.Watson = &w
+		return nil
+	})
 }
 
 // UpdateSherlock replaces the Sherlock settings.
 func (s *Service) UpdateSherlock(ctx context.Context, sh Sherlock) (State, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	if err := sh.Validate(); err != nil {
 		return State{}, err
 	}
-	in := s.Current().Settings
-	in.Sherlock = &sh
-	return s.update(ctx, in)
+	return s.change(ctx, func(cur *Settings) error {
+		cur.Sherlock = &sh
+		return nil
+	})
 }
 
 // UpdateAcks changes one cluster's acknowledged alerts: change gets the
-// list as it is and returns the new one.
+// list as it is and returns the new one. It may be called more than once,
+// when another replica saved in between.
 func (s *Service) UpdateAcks(ctx context.Context, cluster string, change func([]acks.Ack) []acks.Ack) (State, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	in := s.Current().Settings
-	list := change(append([]acks.Ack(nil), in.Acks[cluster]...))
-	if err := acks.Validate(list); err != nil {
-		return State{}, err
-	}
-	all := map[string][]acks.Ack{}
-	for k, v := range in.Acks {
-		all[k] = v
-	}
-	if len(list) == 0 {
-		delete(all, cluster)
-	} else {
-		all[cluster] = list
-	}
-	if len(all) == 0 {
-		all = nil
-	}
-	in.Acks = all
-	return s.update(ctx, in)
+	return s.change(ctx, func(cur *Settings) error {
+		list := change(append([]acks.Ack(nil), cur.Acks[cluster]...))
+		if err := acks.Validate(list); err != nil {
+			return err
+		}
+		all := map[string][]acks.Ack{}
+		for k, v := range cur.Acks {
+			all[k] = v
+		}
+		if len(list) == 0 {
+			delete(all, cluster)
+		} else {
+			all[cluster] = list
+		}
+		if len(all) == 0 {
+			all = nil
+		}
+		cur.Acks = all
+		return nil
+	})
 }
 
 // UpdateFleets replaces one cluster's fleets.
 func (s *Service) UpdateFleets(ctx context.Context, cluster string, list []fleets.Fleet) (State, error) {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 	list = fleets.Clean(list)
 	if err := fleets.Validate(list); err != nil {
 		return State{}, err
 	}
-	in := s.Current().Settings
-	all := map[string][]fleets.Fleet{}
-	for k, v := range in.Fleets {
-		all[k] = v
-	}
-	if len(list) == 0 {
-		delete(all, cluster)
-	} else {
-		all[cluster] = list
-	}
-	if len(all) == 0 {
-		all = nil
-	}
-	in.Fleets = all
-	return s.update(ctx, in)
+	return s.change(ctx, func(cur *Settings) error {
+		all := map[string][]fleets.Fleet{}
+		for k, v := range cur.Fleets {
+			all[k] = v
+		}
+		if len(list) == 0 {
+			delete(all, cluster)
+		} else {
+			all[cluster] = list
+		}
+		if len(all) == 0 {
+			all = nil
+		}
+		cur.Fleets = all
+		return nil
+	})
 }
 
-func (s *Service) update(ctx context.Context, in Settings) (State, error) {
-	if err := in.Validate(); err != nil {
-		return State{}, err
+// saveAttempts bounds the retries of a change that keeps meeting another
+// replica's saves.
+const saveAttempts = 5
+
+// change reads what the storage holds now, applies edit to it, and saves
+// the result over that version; when another replica saved first, it
+// reads again and applies the edit to that. A change thus never puts
+// back what this replica last read.
+func (s *Service) change(ctx context.Context, edit func(*Settings) error) (State, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	for attempt := 1; ; attempt++ {
+		b, version, err := s.storage.Load(ctx)
+		if err != nil && !errors.Is(err, ErrNotFound) {
+			return State{}, err
+		}
+		in, extra := s.Current().Settings, map[string]json.RawMessage(nil)
+		if err == nil {
+			doc, derr := decode(b)
+			switch {
+			case derr != nil:
+				// Storage that cannot be read is replaced, starting from what
+				// is in force here.
+				s.log.Warn("the saved settings cannot be read; saving over them", "err", derr)
+			case doc.newer:
+				return State{}, ErrNewer
+			case doc.settings.Validate() != nil:
+				// Out of range (edited by hand): start from what is in force,
+				// keeping the fields it does not know.
+				extra = doc.extra
+			default:
+				in, extra = doc.settings, doc.extra
+			}
+		} else {
+			in = s.defaults
+		}
+		if err := edit(&in); err != nil {
+			return State{}, err
+		}
+		if err := in.Validate(); err != nil {
+			return State{}, err
+		}
+		out := encode(in, extra)
+		next, err := s.storage.Save(ctx, out, version)
+		if errors.Is(err, ErrConflict) && attempt < saveAttempts {
+			continue
+		}
+		if err != nil {
+			return State{}, err
+		}
+		now := time.Now().UTC()
+		s.mu.Lock()
+		s.current.Settings = in
+		s.current.ChangedAt = &now
+		s.loaded, s.version, s.newer = out, next, false
+		st := s.current
+		s.mu.Unlock()
+		s.log.Info("settings changed", "refresh", in.Refresh(), "storage", s.storage.Kind())
+		s.onChange(st)
+		return st, nil
 	}
-	b, _ := json.Marshal(in)
-	if err := s.storage.Save(ctx, b); err != nil {
-		return State{}, err
-	}
-	now := time.Now().UTC()
-	s.mu.Lock()
-	s.current.Settings = in
-	s.current.ChangedAt = &now
-	s.loaded = b
-	st := s.current
-	s.mu.Unlock()
-	s.log.Info("settings changed", "refresh", in.Refresh(), "storage", s.storage.Kind())
-	s.onChange(st)
-	return st, nil
 }
 
-// Reload reads the storage again, so a ConfigMap edited by hand takes
-// effect. Run calls it periodically.
+// Reload reads the storage again, so a change saved by another replica,
+// or a ConfigMap edited by hand, takes effect. It is cheap when nothing
+// changed, so Run can call it every few seconds.
 func (s *Service) Reload(ctx context.Context) { s.reload(ctx, false) }
 
 func (s *Service) reload(ctx context.Context, initial bool) {
@@ -416,9 +487,12 @@ func (s *Service) reload(ctx context.Context, initial bool) {
 	// would otherwise put the old settings back once the change is in.
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	b, err := s.storage.Load(ctx)
+	b, version, err := s.storage.Load(ctx)
 	switch {
 	case errors.Is(err, ErrNotFound):
+		s.mu.Lock()
+		s.version = version
+		s.mu.Unlock()
 		if initial {
 			s.log.Info("no saved settings; using defaults", "refresh", s.Current().Refresh(), "storage", s.storage.Kind())
 			s.onChange(s.Current())
@@ -432,22 +506,27 @@ func (s *Service) reload(ctx context.Context, initial bool) {
 		return
 	}
 	s.mu.Lock()
-	same := string(b) == string(s.loaded)
+	same := (version != "" && version == s.version) || string(b) == string(s.loaded)
+	s.version = version
 	s.mu.Unlock()
-	if same {
+	if same && !initial {
 		return
 	}
-	var in Settings
-	if err := json.Unmarshal(b, &in); err != nil {
+	doc, err := decode(b)
+	if err != nil {
 		s.log.Warn("the saved settings are not valid JSON; keeping the current ones", "err", err)
 		return
 	}
+	if doc.newer {
+		s.log.Warn("the settings were saved by a newer 221B; reading what this one knows of them and saving nothing until it is upgraded", "format", doc.version, "known", FormatVersion)
+	}
+	in := doc.settings
 	if err := in.Validate(); err != nil {
 		s.log.Warn("the saved settings are out of range; keeping the current ones", "err", err)
 		return
 	}
 	s.mu.Lock()
-	s.loaded = b
+	s.loaded, s.newer = b, doc.newer
 	changed := !in.Equal(s.current.Settings)
 	s.current.Settings = in
 	if !initial && changed {
@@ -457,9 +536,9 @@ func (s *Service) reload(ctx context.Context, initial bool) {
 	st := s.current
 	s.mu.Unlock()
 	if initial {
-		s.log.Info("settings loaded", "refresh", in.Refresh(), "storage", s.storage.Kind())
+		s.log.Info("settings loaded", "refresh", in.Refresh(), "storage", s.storage.Kind(), "format", doc.version)
 	} else if changed {
-		s.log.Info("settings changed outside the console", "refresh", in.Refresh())
+		s.log.Info("settings changed elsewhere", "refresh", in.Refresh())
 	}
 	if initial || changed {
 		s.onChange(st)

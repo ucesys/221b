@@ -68,6 +68,9 @@ type Config struct {
 	// Accounts keeps the users created in the console; nil keeps them in
 	// memory.
 	Accounts Backend
+	// SessionStore keeps the sessions where every replica sees them
+	// (P7-02); nil keeps them in this process's memory.
+	SessionStore SharedStore
 	// Directory is the LDAP server, for ModeLDAP.
 	Directory Directory
 	// SyncInterval is how often the directory's groups are read again.
@@ -150,6 +153,9 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 		cfg.SyncInterval = time.Hour
 	}
 	s := &Service{cfg: cfg, setup: newLimiter(5, time.Minute, now), sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now)}
+	if cfg.SessionStore != nil {
+		s.sessions.Share(cfg.SessionStore, log.With("store", "sessions"))
+	}
 	switch cfg.Mode {
 	case ModeNone:
 	case ModeOIDC:
@@ -220,6 +226,18 @@ func (s *Service) Sweep() {
 			s.log.Warn("the saved accounts still cannot be read", "err", err)
 		}
 	}
+}
+
+// RunAccounts reads the saved accounts again every interval until ctx is
+// done, so a change made on another replica counts here within that time
+// (P7-02). It does nothing without local accounts.
+func (s *Service) RunAccounts(ctx context.Context, every time.Duration) {
+	if s.accounts == nil || !s.accounts.Persistent() {
+		return
+	}
+	s.accounts.Run(ctx, every, func(err error) {
+		s.log.Warn("reading the saved accounts again failed; the last ones read stand", "err", err)
+	})
 }
 
 // isAdmin says whether a person manages the console.

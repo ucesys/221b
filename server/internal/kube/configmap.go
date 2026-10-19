@@ -22,7 +22,10 @@ const serviceAccountNamespace = "/var/run/secrets/kubernetes.io/serviceaccount/n
 
 // ConfigMapStorage keeps the console's settings in one key of a ConfigMap
 // the chart creates in the console's namespace. It needs get and patch on
-// that one ConfigMap, and nothing else.
+// that one ConfigMap, and nothing else. Every save carries the version
+// (resourceVersion) of the ConfigMap it was based on, so with several
+// replicas one never overwrites another's change (P7-02): the API server
+// refuses a stale one with a conflict, and the writer reads again.
 type ConfigMapStorage struct {
 	rest      rest.Interface
 	namespace string
@@ -64,51 +67,71 @@ func (c *ConfigMapStorage) Ref() string { return c.namespace + "/" + c.name }
 
 func (c *ConfigMapStorage) Kind() string { return "configmap" }
 
-// Load reads the settings; a ConfigMap without them, or none at all,
-// means nothing has been saved yet.
-func (c *ConfigMapStorage) Load(ctx context.Context) ([]byte, error) {
-	b, err := c.LoadKey(ctx, c.key)
+// Load reads the settings and the ConfigMap's version; a ConfigMap
+// without them, or none at all, means nothing has been saved yet.
+func (c *ConfigMapStorage) Load(ctx context.Context) ([]byte, string, error) {
+	b, version, err := c.LoadKey(ctx, c.key)
 	if errors.Is(err, kv.ErrNotFound) {
-		return nil, settings.ErrNotFound
+		return nil, version, settings.ErrNotFound
 	}
-	return b, err
+	return b, version, err
 }
 
-// Save writes the settings.
-func (c *ConfigMapStorage) Save(ctx context.Context, b []byte) error { return c.SaveKey(ctx, c.key, b) }
+// Save writes the settings if the ConfigMap is still at version.
+func (c *ConfigMapStorage) Save(ctx context.Context, b []byte, version string) (string, error) {
+	return c.SaveKey(ctx, c.key, b, version)
+}
 
-// LoadKey reads one key of the ConfigMap: the settings, or Sherlock's
-// spend.
-func (c *ConfigMapStorage) LoadKey(ctx context.Context, key string) ([]byte, error) {
+// configMap is the part of a ConfigMap the storage reads.
+type configMap struct {
+	Metadata struct {
+		ResourceVersion string `json:"resourceVersion"`
+	} `json:"metadata"`
+	Data map[string]string `json:"data"`
+}
+
+// LoadKey reads one key of the ConfigMap (the settings, or Sherlock's
+// spend) and the ConfigMap's resourceVersion.
+func (c *ConfigMapStorage) LoadKey(ctx context.Context, key string) ([]byte, string, error) {
 	raw, err := c.rest.Get().Namespace(c.namespace).Resource("configmaps").Name(c.name).Do(ctx).Raw()
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, kv.ErrNotFound
+			return nil, "", kv.ErrNotFound
 		}
-		return nil, describeConfigMapError("reading", c.Ref(), err)
+		return nil, "", describeConfigMapError("reading", c.Ref(), err)
 	}
-	var cm struct {
-		Data map[string]string `json:"data"`
-	}
+	var cm configMap
 	if err := json.Unmarshal(raw, &cm); err != nil {
-		return nil, fmt.Errorf("the settings ConfigMap %s is not valid JSON: %w", c.Ref(), err)
+		return nil, "", fmt.Errorf("the settings ConfigMap %s is not valid JSON: %w", c.Ref(), err)
 	}
 	v, ok := cm.Data[key]
 	if !ok {
-		return nil, kv.ErrNotFound
+		return nil, cm.Metadata.ResourceVersion, kv.ErrNotFound
 	}
-	return []byte(v), nil
+	return []byte(v), cm.Metadata.ResourceVersion, nil
 }
 
 // SaveKey writes one key with a merge patch, which leaves the other keys
-// and the chart's labels as they are.
-func (c *ConfigMapStorage) SaveKey(ctx context.Context, key string, b []byte) error {
-	patch, _ := json.Marshal(map[string]any{"data": map[string]string{key: string(b)}})
-	err := c.rest.Patch(types.MergePatchType).Namespace(c.namespace).Resource("configmaps").Name(c.name).Body(patch).Do(ctx).Error()
-	if err != nil {
-		return describeConfigMapError("saving to", c.Ref(), err)
+// and the chart's labels as they are. With a version, the patch carries it
+// as the ConfigMap's resourceVersion, which the API server checks: a
+// ConfigMap changed since is a conflict (kv.ErrConflict). It returns the
+// ConfigMap's new version.
+func (c *ConfigMapStorage) SaveKey(ctx context.Context, key string, b []byte, version string) (string, error) {
+	body := map[string]any{"data": map[string]string{key: string(b)}}
+	if version != "" {
+		body["metadata"] = map[string]string{"resourceVersion": version}
 	}
-	return nil
+	patch, _ := json.Marshal(body)
+	raw, err := c.rest.Patch(types.MergePatchType).Namespace(c.namespace).Resource("configmaps").Name(c.name).Body(patch).Do(ctx).Raw()
+	if err != nil {
+		if apierrors.IsConflict(err) {
+			return "", kv.ErrConflict
+		}
+		return "", describeConfigMapError("saving to", c.Ref(), err)
+	}
+	var cm configMap
+	_ = json.Unmarshal(raw, &cm)
+	return cm.Metadata.ResourceVersion, nil
 }
 
 func describeConfigMapError(doing, ref string, err error) error {

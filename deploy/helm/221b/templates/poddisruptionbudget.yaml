@@ -1,0 +1,16 @@
+{{- if gt (int .Values.replicaCount) 1 }}
+# Several replicas (P7-02): a node drain or a cluster upgrade takes one at a
+# time, so the others keep serving.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "b221.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "b221.selectorLabels" . | nindent 6 }}
+{{- end }}

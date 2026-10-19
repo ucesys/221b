@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/ldap"
+	"github.com/ucesys/221b/server/internal/leader"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/settings"
@@ -60,29 +62,7 @@ func main() {
 	}
 }
 
-// usersSecret keeps the users created in the console in one key of a Secret.
-type usersSecret struct{ sk *kube.SecretKey }
-
 const usersKey = "users.json"
-
-func (u usersSecret) Load(ctx context.Context) ([]byte, error) {
-	data, err := u.sk.Load(ctx)
-	if errors.Is(err, sherlock.ErrNoKey) {
-		return nil, auth.ErrNoAccounts
-	}
-	if err != nil {
-		return nil, err
-	}
-	b, ok := data[usersKey]
-	if !ok {
-		return nil, auth.ErrNoAccounts
-	}
-	return b, nil
-}
-
-func (u usersSecret) Save(ctx context.Context, b []byte) error {
-	return u.sk.Save(ctx, map[string][]byte{usersKey: b})
-}
 
 // newDirectory builds the LDAP client from auth.ldap (RB-19).
 func newDirectory(f auth.FileConfig, bindPassword string) (auth.Directory, time.Duration, error) {
@@ -204,9 +184,21 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		authCfg.Accounts = usersSecret{sk}
+		authCfg.Accounts = auth.SecretBackend(sk, usersKey)
 	} else if authCfg.Mode == auth.ModeLocal {
 		log.Warn("users created in the console are kept in memory and lost on restart; set -users-secret namespace/name, or -connections-secrets, to keep them in a Secret")
+	}
+	// Sign-ins are kept in Secrets of the console's namespace when running
+	// in a cluster, one per session, so every replica knows them and they
+	// survive a restart (P7-02); otherwise in memory.
+	var sessionStore *kube.SessionStore
+	if cfg.ConnectionsSecrets != "" && authCfg.Mode != auth.ModeNone {
+		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
+		sessionStore, err = kube.NewSessionStore(restCfg, ns, prefix, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/instance": prefix, "app.kubernetes.io/managed-by": "221b"})
+		if err != nil {
+			return err
+		}
+		authCfg.SessionStore = sessionStore
 	}
 	authSvc, err := auth.New(authCfg, log.With("component", "auth"), auditLog, nil)
 	if err != nil {
@@ -229,7 +221,42 @@ func run(args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if sessionStore != nil {
+		go sessionStore.Run(ctx)
+		syncCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		if !sessionStore.Synced(syncCtx) {
+			log.Warn("the shared sessions are not cached yet; reading them one by one")
+		}
+		cancel()
+	}
+	// Accounts created, changed or removed through another replica take
+	// effect here within seconds.
+	go authSvc.RunAccounts(ctx, 5*time.Second)
 	go authSvc.RunDirectory(ctx)
+
+	// --- Several replicas (P7-02): the one holding the Lease runs Sherlock
+	// and Watson, and the others forward those requests to it. Without a
+	// Lease this is the only replica, and always the leader.
+	// Becoming the leader is signalled here; the shared state Sherlock and
+	// Watson rely on is read again before they serve (see below).
+	leading := make(chan struct{}, 1)
+	elector, err := newElector(cfg, restCfg, log, func() {
+		select {
+		case leading <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		return err
+	}
+	leaderDone := make(chan struct{})
+	go func() {
+		defer close(leaderDone)
+		if err := elector.Run(ctx); err != nil {
+			log.Error("leader election stopped", "err", err)
+		}
+	}()
+	// --- end of the replicas' election.
 
 	// The other clusters (P3-04 to P3-09): their connections live in
 	// Secrets in the console's own namespace when running in a cluster,
@@ -269,13 +296,17 @@ func run(args []string) error {
 		b, _ := json.Marshal(st)
 		manager.SetSettings(st.Refresh(), b)
 	})
-	go shared.Run(ctx, time.Minute)
+	// Read again every few seconds: a change saved through another replica,
+	// or by hand, reaches this one's browsers within seconds (P7-02).
+	go shared.Run(ctx, 3*time.Second)
 
 	go cluster.Run(ctx)
 	go store.Run(ctx)
 	if err := manager.Start(ctx); err != nil {
 		return fmt.Errorf("cluster connections: %w", err)
 	}
+	// Connections added, changed or removed through another replica.
+	go manager.Run(ctx, 5*time.Second)
 	// What each person may see (P3-02): Kubernetes is asked and the answers
 	// kept for a while; people who have not asked for an hour are forgotten.
 	var people *access.Cache
@@ -321,6 +352,7 @@ func run(args []string) error {
 	if err := keys.Load(ctx); err != nil {
 		log.Warn("reading the Claude API key failed; Sherlock has no key until it is saved again", "err", err)
 	}
+	go keys.Run(ctx, 10*time.Second, func(err error) { log.Warn("reading the Claude API key failed", "err", err) })
 	var spendBackend kv.Backend = &kv.Memory{}
 	if cm, ok := storage.(*kube.ConfigMapStorage); ok {
 		spendBackend = cm
@@ -361,6 +393,27 @@ func run(args []string) error {
 				return
 			case <-t.C:
 				sherlockSvc.Sweep(authSvc.Sessions().Alive)
+			}
+		}
+	}()
+	// A replica that becomes the leader reads again what Sherlock and
+	// Watson rely on, which another replica may have changed: the spend so
+	// far, the API key, the settings and each cluster's environment and
+	// mode, which decide the two-person rule and read-only (P7-02).
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-leading:
+				sherlockSvc.Ledger().Reload()
+				if err := keys.Reload(ctx); err != nil {
+					log.Warn("reading the Claude API key failed", "err", err)
+				}
+				shared.Reload(ctx)
+				if err := manager.Sync(ctx); err != nil {
+					log.Warn("reading the cluster connections failed", "err", err)
+				}
 			}
 		}
 	}()
@@ -410,6 +463,8 @@ func run(args []string) error {
 		Impersonation:           api.Impersonation{UserPrefix: cfg.ImpersonateUserPrefix, GroupPrefix: cfg.ImpersonateGroupPrefix},
 		Roles:                   api.RolesOptions{Templates: authFile.RoleTemplates(), Secrets: cfg.SecretsRead, Enforce: authFile.RBACEnforce, Prefixes: rolePrefixes, Bindings: authFile.Bindings},
 		HTTPSRedirect:           cfg.HTTPSRedirect,
+		Leader:                  elector,
+		ProxyToken:              cfg.ProxyToken,
 		Ready:                   cluster.Ready,
 		UI:                      ui.Handler(),
 		Logger:                  log.With("component", "http"),
@@ -499,7 +554,31 @@ func run(args []string) error {
 	defer cancel()
 	err = srv.Shutdown(shutdownCtx)
 	auditLog.Close(shutdownCtx)
+	// The leader gives its Lease up on the way out, so another replica
+	// takes over at once.
+	select {
+	case <-leaderDone:
+	case <-shutdownCtx.Done():
+	}
 	return err
+}
+
+// newElector joins the election of -leader-lease, or stands alone. The
+// leader's address is the pod's IP and the port it listens on.
+func newElector(cfg config.Config, restCfg *rest.Config, log *slog.Logger, onLead func()) (*leader.Elector, error) {
+	if cfg.LeaderLease == "" {
+		return leader.New(leader.Options{Logger: log.With("component", "leader"), OnStartedLeading: onLead}), nil
+	}
+	ns, name, _ := strings.Cut(cfg.LeaderLease, "/")
+	_, port, err := net.SplitHostPort(cfg.Listen)
+	if err != nil {
+		return nil, fmt.Errorf("-listen %q: %w", cfg.Listen, err)
+	}
+	client, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		return nil, err
+	}
+	return leader.New(leader.Options{Client: client, Namespace: ns, Name: name, Pod: cfg.PodName, Addr: net.JoinHostPort(cfg.PodIP, port), Logger: log.With("component", "leader"), OnStartedLeading: onLead}), nil
 }
 
 // localSpec describes the cluster the console was started against as a

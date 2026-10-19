@@ -2,6 +2,7 @@ package settings_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -11,6 +12,8 @@ import (
 
 	"k8s.io/client-go/rest"
 
+	"github.com/ucesys/221b/server/internal/acks"
+	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sim"
@@ -73,20 +76,20 @@ func TestServiceInMemory(t *testing.T) {
 	}
 	// A second service over the same storage starts from what was saved.
 	mem := &settings.Memory{}
-	_ = mem.Save(context.Background(), []byte(`{"refreshSeconds":120}`))
+	_, _ = mem.Save(context.Background(), []byte(`{"refreshSeconds":120}`), "")
 	again := settings.NewService(context.Background(), mem, settings.Default, quiet, nil)
 	if again.Current().RefreshSeconds != 120 {
 		t.Fatalf("loaded %+v", again.Current())
 	}
 	// Storage edited behind its back is picked up by Reload, nonsense is not.
-	_ = mem.Save(context.Background(), []byte(`{"refreshSeconds":15}`))
+	_, _ = mem.Save(context.Background(), []byte(`{"refreshSeconds":15}`), "")
 	again.Reload(context.Background())
 	if again.Current().RefreshSeconds != 15 || again.Current().ChangedAt == nil {
 		t.Fatalf("reloaded %+v", again.Current())
 	}
-	_ = mem.Save(context.Background(), []byte(`{"refreshSeconds":99999}`))
+	_, _ = mem.Save(context.Background(), []byte(`{"refreshSeconds":99999}`), "")
 	again.Reload(context.Background())
-	_ = mem.Save(context.Background(), []byte(`not json`))
+	_, _ = mem.Save(context.Background(), []byte(`not json`), "")
 	again.Reload(context.Background())
 	if again.Current().RefreshSeconds != 15 {
 		t.Fatalf("bad storage changed the settings: %+v", again.Current())
@@ -100,22 +103,22 @@ type heldLoad struct {
 	release chan struct{}
 }
 
-func (h *heldLoad) Load(ctx context.Context) ([]byte, error) {
-	b, err := h.Memory.Load(ctx)
+func (h *heldLoad) Load(ctx context.Context) ([]byte, string, error) {
+	b, v, err := h.Memory.Load(ctx)
 	if h.armed != nil {
 		armed := h.armed
 		h.armed = nil
 		close(armed)
 		<-h.release
 	}
-	return b, err
+	return b, v, err
 }
 
 // A reload that read storage before a change was saved does not put the
 // old settings back after it.
 func TestReloadDoesNotUndoAChangeSavedWhileItRead(t *testing.T) {
 	h := &heldLoad{}
-	_ = h.Save(context.Background(), []byte(`{"refreshSeconds":15}`))
+	_, _ = h.Save(context.Background(), []byte(`{"refreshSeconds":15}`), "")
 	svc := settings.NewService(context.Background(), h, settings.Default, quiet, nil)
 	h.armed, h.release = make(chan struct{}), make(chan struct{})
 	armed := h.armed
@@ -156,22 +159,30 @@ func TestConfigMapStorage(t *testing.T) {
 	if cm.Kind() != "configmap" || cm.Ref() != "consoles/k8s-console-221b" {
 		t.Fatalf("kind %q ref %q", cm.Kind(), cm.Ref())
 	}
-	if _, err := cm.Load(ctx); !errors.Is(err, settings.ErrNotFound) {
-		t.Fatalf("empty ConfigMap: %v", err)
+	_, v0, err := cm.Load(ctx)
+	if !errors.Is(err, settings.ErrNotFound) || v0 == "" {
+		t.Fatalf("empty ConfigMap: version %q %v", v0, err)
 	}
-	if err := cm.Save(ctx, []byte(`{"refreshSeconds":30}`)); err != nil {
+	if _, err := cm.Save(ctx, []byte(`{"refreshSeconds":30}`), v0); err != nil {
 		t.Fatal(err)
 	}
-	b, err := cm.Load(ctx)
-	if err != nil || string(b) != `{"refreshSeconds":30}` {
-		t.Fatalf("loaded %q %v", b, err)
+	b, v1, err := cm.Load(ctx)
+	if err != nil || string(b) != `{"refreshSeconds":30}` || v1 == v0 {
+		t.Fatalf("loaded %q at %q %v", b, v1, err)
+	}
+	// A save based on what was read before another one is refused (P7-02).
+	if _, err := cm.Save(ctx, []byte(`{"refreshSeconds":40}`), v0); !errors.Is(err, settings.ErrConflict) {
+		t.Fatalf("a stale save: %v", err)
+	}
+	if b, _, _ := cm.Load(ctx); string(b) != `{"refreshSeconds":30}` {
+		t.Fatalf("a stale save changed the ConfigMap: %q", b)
 	}
 
 	missing, _ := kube.NewConfigMapStorage(&rest.Config{Host: srv.URL}, "consoles/absent")
-	if _, err := missing.Load(ctx); !errors.Is(err, settings.ErrNotFound) {
+	if _, _, err := missing.Load(ctx); !errors.Is(err, settings.ErrNotFound) {
 		t.Fatalf("absent ConfigMap on load: %v", err)
 	}
-	if err := missing.Save(ctx, []byte(`{}`)); err == nil || err.Error() != "the settings ConfigMap consoles/absent does not exist; the chart creates it" {
+	if _, err := missing.Save(ctx, []byte(`{}`), ""); err == nil || err.Error() != "the settings ConfigMap consoles/absent does not exist; the chart creates it" {
 		t.Fatalf("absent ConfigMap on save: %v", err)
 	}
 
@@ -183,20 +194,27 @@ func TestConfigMapStorage(t *testing.T) {
 	if _, err := svc.Update(ctx, settings.Settings{RefreshSeconds: 60}); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := cm.Load(ctx); string(b) != `{"refreshSeconds":60}` {
+	if b, _, _ := cm.Load(ctx); string(b) != `{"version":1,"refreshSeconds":60}` {
 		t.Fatalf("ConfigMap holds %q", b)
 	}
 
 	// Another key (Sherlock's spend) goes in a key of its own, leaving the
 	// settings as they were.
-	if err := cm.SaveKey(ctx, "sherlock-spend.json", []byte(`{"day":"2026-10-15"}`)); err != nil {
+	if _, err := cm.SaveKey(ctx, "sherlock-spend.json", []byte(`{"day":"2026-10-15"}`), ""); err != nil {
 		t.Fatal(err)
 	}
-	if b, _ := cm.Load(ctx); string(b) != `{"refreshSeconds":60}` {
+	if b, _, _ := cm.Load(ctx); string(b) != `{"version":1,"refreshSeconds":60}` {
 		t.Fatalf("another key changed the settings: %q", b)
 	}
-	if b, err := cm.LoadKey(ctx, "sherlock-spend.json"); err != nil || string(b) != `{"day":"2026-10-15"}` {
+	if b, _, err := cm.LoadKey(ctx, "sherlock-spend.json"); err != nil || string(b) != `{"day":"2026-10-15"}` {
 		t.Fatalf("read back %q %v", b, err)
+	}
+	// The service, which read before that save, still saves: it reads again.
+	if _, err := svc.Update(ctx, settings.Settings{RefreshSeconds: 45}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _, _ := cm.LoadKey(ctx, "sherlock-spend.json"); string(b) != `{"day":"2026-10-15"}` {
+		t.Fatalf("the settings changed another key: %q", b)
 	}
 
 	// Without the API server, saving fails with a message, not a hang.
@@ -208,5 +226,146 @@ func TestConfigMapStorage(t *testing.T) {
 		t.Fatal("saving without the API server worked")
 	} else if down.Current().RefreshSeconds != settings.Default.RefreshSeconds {
 		t.Fatalf("a failed save changed the settings: %+v", down.Current())
+	}
+}
+
+// Two replicas over one ConfigMap: each change is made to what is saved,
+// so neither puts back what the other changed, even before it reloads
+// (P7-02).
+func TestReplicasKeepEachOthersChanges(t *testing.T) {
+	ctx := context.Background()
+	mem := &settings.Memory{}
+	a := settings.NewService(ctx, mem, settings.Default, quiet, nil)
+	b := settings.NewService(ctx, mem, settings.Default, quiet, nil)
+	if _, err := a.UpdateFleets(ctx, "local", []fleets.Fleet{{ID: "gpu", Name: "GPU", Color: 1, Labels: []string{"pool=gpu"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.UpdateWatson(ctx, settings.Watson{TwoPerson: true}); err != nil {
+		t.Fatal(err)
+	}
+	// b has not reloaded: it has never seen the fleet or the rule.
+	if _, err := b.UpdateAcks(ctx, "local", func(l []acks.Ack) []acks.Ack {
+		return acks.Set(l, acks.Ack{Key: "pod:web/a", Fingerprint: "f", By: "ann", At: time.Now().UTC()})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := b.Update(ctx, settings.Settings{RefreshSeconds: 9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Fleets["local"]) != 1 || st.Watson == nil || !st.Watson.TwoPerson || len(st.Acks["local"]) != 1 || st.RefreshSeconds != 9 {
+		t.Fatalf("b lost a's changes: %+v", st.Settings)
+	}
+	// a picks up b's changes on its next reload.
+	a.Reload(ctx)
+	if got := a.Current(); got.RefreshSeconds != 9 || len(got.Acks["local"]) != 1 || got.ChangedAt == nil {
+		t.Fatalf("a after reload %+v", got.Settings)
+	}
+}
+
+// racing is storage where another replica saves between a change's read
+// and its save, once.
+type racing struct {
+	settings.Memory
+	before func()
+}
+
+func (r *racing) Save(ctx context.Context, b []byte, version string) (string, error) {
+	if f := r.before; f != nil {
+		r.before = nil
+		f()
+	}
+	return r.Memory.Save(ctx, b, version)
+}
+
+func TestAChangeThatMeetsAnotherIsAppliedToIt(t *testing.T) {
+	ctx := context.Background()
+	r := &racing{}
+	svc := settings.NewService(ctx, r, settings.Default, quiet, nil)
+	other := settings.NewService(ctx, &r.Memory, settings.Default, quiet, nil)
+	r.before = func() {
+		if _, err := other.UpdateWatson(ctx, settings.Watson{TwoPerson: true}); err != nil {
+			t.Error(err)
+		}
+	}
+	st, err := svc.Update(ctx, settings.Settings{RefreshSeconds: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.RefreshSeconds != 20 || st.Watson == nil || !st.Watson.TwoPerson {
+		t.Fatalf("the other save was lost: %+v", st.Settings)
+	}
+}
+
+// Formats (P7-03): a document from before formats were numbered loads and
+// is saved in the current one; fields this console does not know are
+// written back as they were.
+func TestFormatMigratesAndKeepsUnknownFields(t *testing.T) {
+	ctx := context.Background()
+	mem := &settings.Memory{}
+	_, _ = mem.Save(ctx, []byte(`{"refreshSeconds":15,"watson":{"twoPerson":true},"dashboards":{"home":["nodes"]}}`), "")
+	svc := settings.NewService(ctx, mem, settings.Default, quiet, nil)
+	if got := svc.Current(); got.RefreshSeconds != 15 || got.Watson == nil || !got.Watson.TwoPerson {
+		t.Fatalf("loaded %+v", got.Settings)
+	}
+	if _, err := svc.Update(ctx, settings.Settings{RefreshSeconds: 30}); err != nil {
+		t.Fatal(err)
+	}
+	b, _, _ := mem.Load(ctx)
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if string(doc["version"]) != "1" || string(doc["refreshSeconds"]) != "30" || string(doc["dashboards"]) != `{"home":["nodes"]}` || string(doc["watson"]) != `{"twoPerson":true}` {
+		t.Fatalf("saved %s", b)
+	}
+	if settings.FormatVersion != 1 {
+		t.Fatalf("format %d: add a migration test for the new format", settings.FormatVersion)
+	}
+}
+
+// A newer 221B's document (after a rollback) is read for what this one
+// knows and never saved over.
+func TestNewerFormatIsReadButNotSaved(t *testing.T) {
+	ctx := context.Background()
+	mem := &settings.Memory{}
+	newer := `{"version":7,"refreshSeconds":20,"dashboards":{}}`
+	_, _ = mem.Save(ctx, []byte(newer), "")
+	svc := settings.NewService(ctx, mem, settings.Default, quiet, nil)
+	if svc.Current().RefreshSeconds != 20 {
+		t.Fatalf("loaded %+v", svc.Current().Settings)
+	}
+	if _, err := svc.Update(ctx, settings.Settings{RefreshSeconds: 30}); !errors.Is(err, settings.ErrNewer) {
+		t.Fatalf("saving over a newer format: %v", err)
+	}
+	if _, err := svc.UpdateAcks(ctx, "local", func(l []acks.Ack) []acks.Ack { return l }); !errors.Is(err, settings.ErrNewer) {
+		t.Fatalf("acknowledging over a newer format: %v", err)
+	}
+	if b, _, _ := mem.Load(ctx); string(b) != newer {
+		t.Fatalf("the newer document changed: %s", b)
+	}
+}
+
+// fixedVersion is storage whose version does not change when its bytes
+// do, to show a reload with the same version reads nothing more.
+type fixedVersion struct {
+	b []byte
+}
+
+func (f *fixedVersion) Load(context.Context) ([]byte, string, error) { return f.b, "7", nil }
+func (f *fixedVersion) Save(_ context.Context, b []byte, _ string) (string, error) {
+	f.b = b
+	return "7", nil
+}
+func (f *fixedVersion) Kind() string { return "configmap" }
+
+func TestReloadSkipsAnUnchangedVersion(t *testing.T) {
+	ctx := context.Background()
+	f := &fixedVersion{b: []byte(`{"refreshSeconds":15}`)}
+	svc := settings.NewService(ctx, f, settings.Default, quiet, nil)
+	f.b = []byte(`{"refreshSeconds":25}`)
+	svc.Reload(ctx)
+	if svc.Current().RefreshSeconds != 15 {
+		t.Fatalf("a reload at the same version decoded the settings again: %+v", svc.Current().Settings)
 	}
 }

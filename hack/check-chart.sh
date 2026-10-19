@@ -66,6 +66,11 @@ render k8s-console --set clusterName=ci --set auth.mode=oidc --set auth.oidc.iss
 echo "--- Watson's changes in the local cluster, with sign-in off and on (Phase 6)"
 render k8s-console --set clusterName=ci --set auth.mode=none --set localCluster.mode=write | tee "$WORK/chart-write.yaml" | validate
 render k8s-console --set clusterName=ci --set localCluster.mode=write | tee "$WORK/chart-write-signin.yaml" | validate
+echo "--- several replicas (P7-02)"
+render k8s-console --set clusterName=ci --set replicaCount=2 | tee "$WORK/chart-ha.yaml" | validate
+render k8s-console --set clusterName=ci --set replicaCount=3 --set 'topologySpreadConstraints[0].maxSkew=1' \
+  --set 'topologySpreadConstraints[0].topologyKey=topology.kubernetes.io/zone' --set 'topologySpreadConstraints[0].whenUnsatisfiable=DoNotSchedule' \
+  --set 'topologySpreadConstraints[0].labelSelector.matchLabels.app=x' | tee "$WORK/chart-ha-zones.yaml" | validate
 echo "--- image tags that move, tags that do not, a digest and an explicit pull policy"
 render k8s-console --set clusterName=ci --set image.tag=pr-7 | tee "$WORK/chart-moving.yaml" | validate
 render k8s-console --set clusterName=ci --set image.tag=sha-d548f3953839 | tee "$WORK/chart-sha.yaml" | validate
@@ -84,8 +89,11 @@ check() {
   fi
 }
 out=$WORK/chart-default.yaml
+# The Secret with the local accounts, the OIDC client secret and such; the
+# replicas' proxy token is a Secret of its own, always there.
+auth_secret() { sed -n '/^kind: Secret$/,/^---/p' "$1" | grep -q '^  name: k8s-console-221b-auth$'; }
 kinds() {
-  [ "$(grep -E '^kind: ' "$out" | sort | uniq -c | awk '{ printf "%s=%s ", $3, $1 }')" = "ClusterRole=6 ClusterRoleBinding=4 ConfigMap=2 Deployment=1 NetworkPolicy=1 Role=1 RoleBinding=1 Secret=1 Service=1 ServiceAccount=1 " ]
+  [ "$(grep -E '^kind: ' "$out" | sort | uniq -c | awk '{ printf "%s=%s ", $3, $1 }')" = "ClusterRole=6 ClusterRoleBinding=4 ConfigMap=2 Deployment=1 Lease=1 NetworkPolicy=1 Role=1 RoleBinding=1 Secret=2 Service=1 ServiceAccount=1 " ]
 }
 # Sign-in: local accounts by default, with the (empty) account list in a
 # Secret mounted as a file; OIDC with its client secret from a Secret;
@@ -95,8 +103,8 @@ local_accounts() {
     grep -q 'secretName: "k8s-console-221b-auth"' "$out" && grep -q 'users.yaml: |' "$out" &&
     grep -q 'email: ops@corp.example' "$WORK/chart-local.yaml" && grep -q 'passwordHash: pbkdf2-sha256' "$WORK/chart-local.yaml" &&
     grep -A1 'name: ADMINS' "$WORK/chart-local.yaml" | grep -q '"ops@corp.example"' &&
-    grep -q 'secretName: "my-accounts"' "$WORK/chart-local-existing.yaml" && ! grep -q '^kind: Secret' "$WORK/chart-local-existing.yaml" &&
-    ! grep -q 'LOCAL_USERS_FILE' "$WORK/chart-noauth.yaml" && grep -A1 'name: AUTH_MODE' "$WORK/chart-noauth.yaml" | grep -q '"none"' && ! grep -q '^kind: Secret' "$WORK/chart-noauth.yaml"
+    grep -q 'secretName: "my-accounts"' "$WORK/chart-local-existing.yaml" && ! auth_secret "$WORK/chart-local-existing.yaml" &&
+    ! grep -q 'LOCAL_USERS_FILE' "$WORK/chart-noauth.yaml" && grep -A1 'name: AUTH_MODE' "$WORK/chart-noauth.yaml" | grep -q '"none"' && ! auth_secret "$WORK/chart-noauth.yaml"
 }
 oidc_signin() {
   local o=$WORK/chart-oidc.yaml
@@ -125,7 +133,7 @@ ingress_tls() {
 # a peer: a policy that admits nothing would answer every request with 502.
 ingress_peers() {
   local peers refused
-  peers=$(grep -A6 '^  ingress:' "$WORK/chart-oidc.yaml")
+  peers=$(ingress_rules "$WORK/chart-oidc.yaml")
   refused=$(render k8s-console --set clusterName=ci --set ingress.enabled=true --set ingress.host=console.example.com 2>&1 || true)
   [[ $peers == *ingress-nginx* && $refused == *'needs networkPolicy.ingressFrom'* ]] &&
     render k8s-console --set clusterName=ci --set ingress.enabled=true --set ingress.host=console.example.com --set networkPolicy.enabled=false > /dev/null
@@ -201,13 +209,13 @@ sherlock_key() {
 }
 settings_only() {
   settings_role | grep -q 'resources: \["configmaps"\]' && settings_role | grep -q 'resourceNames: \["k8s-console-221b"\]' &&
-    [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","patch"] verbs:["get","list","create","update","delete"] ' ] &&
-    [ "$(grep -E 'verbs:' "$out" | grep -c -E 'update|delete|\*')" = 1 ]
+    [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","list","watch","patch","update"] verbs:["create"] verbs:["get","update"] verbs:["get","list","watch","create","update","delete"] ' ] &&
+    [ "$(grep -E 'verbs:' "$out" | grep -c -E 'update|delete|\*')" = 3 ]
 }
 # The connections to other clusters: Secrets in the release namespace, by
 # default; in memory on request, and then nothing is granted on Secrets.
 connections_store() {
-  settings_role | grep -A1 'resources: \["secrets"\]' | grep -q 'verbs: \["get", "list", "create", "update", "delete"\]' &&
+  settings_role | grep -A1 'resources: \["secrets"\]' | grep -q 'verbs: \["get", "list", "watch", "create", "update", "delete"\]' &&
     grep -A1 'name: CONNECTIONS_SECRETS' "$out" | grep -q '"consoles/k8s-console-221b"' &&
     ! sed -n '/^kind: Role$/,/^---/p' "$WORK/chart-memory.yaml" | grep -q 'secrets' &&
     ! grep -q 'CONNECTIONS_SECRETS' "$WORK/chart-memory.yaml" &&
@@ -241,7 +249,9 @@ exposed_port() { grep -q 'port: 8081' "$out" && grep -q 'port: 8081' "$WORK/char
 # every pod start and the pod rolls on every upgrade; a sha- tag or a
 # digest is fetched once; an explicit policy wins.
 pull_policy() {
-  grep -q 'image: "ghcr.io/ucesys/221b:0.2.0"' "$out" && grep -q 'imagePullPolicy: IfNotPresent' "$out" && ! grep -q 'release-revision' "$out" &&
+  local app
+  app=$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' "$CHART/Chart.yaml")
+  grep -q "image: \"ghcr.io/ucesys/221b:$app\"" "$out" && grep -q 'imagePullPolicy: IfNotPresent' "$out" && ! grep -q 'release-revision' "$out" &&
     grep -q 'image: "ghcr.io/ucesys/221b:pr-7"' "$WORK/chart-moving.yaml" && grep -q 'imagePullPolicy: Always' "$WORK/chart-moving.yaml" &&
     grep -q '221b/release-revision: "1"' "$WORK/chart-moving.yaml" &&
     grep -q 'imagePullPolicy: IfNotPresent' "$WORK/chart-sha.yaml" && ! grep -q 'release-revision' "$WORK/chart-sha.yaml" &&
@@ -254,10 +264,36 @@ lb_service() {
     grep -q 'loadBalancerClass: "metallb"' "$WORK/chart-lb.yaml" && grep -q -- '- 10.0.0.22' "$WORK/chart-lb.yaml" &&
     grep -q 'externalTrafficPolicy: Cluster' "$WORK/chart-lb.yaml" && grep -q 'example.com/pool: office' "$WORK/chart-lb.yaml"
 }
-# A ClusterIP Service lets nothing in; an exposed one lets everyone in
-# unless peers are listed.
-closed_by_default() { grep -q 'ingress: \[\]' "$out"; }
-open_when_exposed() { ! grep -q 'ingress: \[\]' "$WORK/chart-lb.yaml" && grep -A3 '^  ingress:' "$WORK/chart-lb.yaml" | grep -q 'port: http'; }
+# A ClusterIP Service lets in only the console's other replicas; an exposed
+# one lets everyone in unless peers are listed.
+ingress_rules() { sed -n '/^kind: NetworkPolicy$/,/^---/p' "$1" | sed -n '/^  ingress:/,/^  egress:/p'; }
+closed_by_default() {
+  [ "$(ingress_rules "$out" | grep -c -E '^    - ')" = 1 ] && ingress_rules "$out" | grep -q 'podSelector:' &&
+    ingress_rules "$out" | grep -q -E 'app.kubernetes.io/instance: "?k8s-console"?$'
+}
+open_when_exposed() {
+  [ "$(ingress_rules "$WORK/chart-lb.yaml" | grep -c -E '^    - ')" = 2 ] &&
+    ingress_rules "$WORK/chart-lb.yaml" | grep -B1 -A2 '^    - ports:' | grep -q 'port: http'
+}
+# Several replicas (P7-02): every pod joins the election, the leader is
+# reached at its pod IP with the shared token, the replicas reach each
+# other through the network policy, and with more than one a disruption
+# budget and a spread over nodes; connections in memory cannot be shared.
+replicas() {
+  local ha=$WORK/chart-ha.yaml
+  grep -A1 'name: LEADER_LEASE' "$out" | grep -q '"consoles/k8s-console-221b-leader"' &&
+    grep -A3 'name: POD_IP' "$out" | grep -q 'fieldPath: status.podIP' &&
+    grep -A4 'name: PROXY_TOKEN' "$out" | grep -q 'name: k8s-console-221b-proxy' &&
+    sed -n '/^kind: Secret$/,/^---/p' "$out" | grep -q '^  name: k8s-console-221b-proxy$' &&
+    settings_role | grep -A1 'resourceNames: \["k8s-console-221b-leader"\]' | grep -q 'verbs: \["get", "update"\]' &&
+    sed -n '/^kind: NetworkPolicy$/,/^---/p' "$out" | sed -n '/^  egress:/,$p' | grep -q 'podSelector:' &&
+    grep -q 'terminationGracePeriodSeconds: 20' "$out" &&
+    ! grep -q '^kind: PodDisruptionBudget' "$out" && ! grep -q 'topologySpreadConstraints' "$out" &&
+    grep -q 'replicas: 2' "$ha" && grep -A1 '^kind: PodDisruptionBudget' -A12 "$ha" | grep -q 'maxUnavailable: 1' &&
+    grep -A3 'topologySpreadConstraints:' "$ha" | grep -q 'topologyKey: kubernetes.io/hostname' && grep -q 'whenUnsatisfiable: ScheduleAnyway' "$ha" &&
+    grep -q 'topologyKey: topology.kubernetes.io/zone' "$WORK/chart-ha-zones.yaml" && ! grep -q 'kubernetes.io/hostname' "$WORK/chart-ha-zones.yaml" &&
+    { render k8s-console --set clusterName=ci --set replicaCount=2 --set connections.store=memory 2>&1 || true; } | grep -q 'needs connections.store=secrets'
+}
 # Watson (Phase 6): reads only by default. With localCluster.mode=write and
 # sign-in off, changes run as the console, bound to the write role and a
 # small role for nodes; with sign-in they run as the approver, and the
@@ -301,7 +337,7 @@ setup_token() {
 }
 digit_override() { render 221b --set clusterName=ci --set fullnameOverride=2b | grep -A3 '^kind: Service$' | grep -q 'name: k8s-console-2b'; }
 
-check "renders a Deployment, Service, ServiceAccount, ConfigMap, ClusterRole, Role, their bindings and a NetworkPolicy" kinds
+check "renders a Deployment, Service, ServiceAccount, ConfigMap, ClusterRole, Role, their bindings, a Lease and a NetworkPolicy" kinds
 check "no Ingress" no_ingress
 check "the Service is a ClusterIP" cluster_ip
 check "probes, requests and limits" probes_and_resources
@@ -339,6 +375,7 @@ check "an override that starts with a digit still gets a valid name" digit_overr
 check "the Service listens on 8081" exposed_port
 check "moving tags are pulled on every start and rolled on every upgrade; releases, sha- tags and digests once" pull_policy
 check "a LoadBalancer Service carries its class, address list, node port and annotations" lb_service
-check "nothing may reach a ClusterIP Service through the network policy" closed_by_default
+check "only the console's own replicas may reach a ClusterIP Service through the network policy" closed_by_default
 check "an exposed Service is reachable through the network policy" open_when_exposed
+check "the replicas elect a leader and reach each other; more than one adds a budget and a spread, and needs Secrets" replicas
 exit "$fail"

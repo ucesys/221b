@@ -2,12 +2,13 @@
 {{- if not .Values.networkPolicy.apiServerPorts }}
 {{- fail "networkPolicy.apiServerPorts is empty, which would allow every connection out; list the API server's ports, or set networkPolicy.enabled=false" }}
 {{- end }}
-# Nothing may reach the console except the peers listed in values, or
-# anyone when it is exposed with a LoadBalancer or NodePort Service
-# (kubectl port-forward and kubelet probes are not affected), and the
-# console may only connect to Kubernetes API servers' ports (at the
-# addresses in networkPolicy.apiServerCIDRs when given), to DNS, and with
-# OIDC sign-in, an audit webhook or Sherlock to their HTTPS port.
+# Nothing may reach the console except its own replicas, the peers listed
+# in values, or anyone when it is exposed with a LoadBalancer or NodePort
+# Service (kubectl port-forward and kubelet probes are not affected), and
+# the console may only connect to its other replicas, Kubernetes API
+# servers' ports (at the addresses in networkPolicy.apiServerCIDRs when
+# given), DNS, and with OIDC sign-in, an audit webhook or Sherlock their
+# HTTPS port.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -20,26 +21,41 @@ spec:
     matchLabels:
       {{- include "b221.selectorLabels" . | nindent 6 }}
   policyTypes: ["Ingress", "Egress"]
-  {{- if .Values.networkPolicy.ingressFrom }}
+  {{- if and (not .Values.networkPolicy.ingressFrom) (eq .Values.service.type "ClusterIP") .Values.ingress.enabled }}
+  {{- fail "ingress.enabled with a ClusterIP Service needs networkPolicy.ingressFrom: list the Ingress controller's pods or namespace there (or set networkPolicy.enabled=false), or the network policy lets no traffic in" }}
+  {{- end }}
   ingress:
+    # The replicas pass Sherlock's and Watson's requests to the leader
+    # (P7-02); nothing else reaches a ClusterIP Service unless listed.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "b221.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: http
+          protocol: TCP
+    {{- if .Values.networkPolicy.ingressFrom }}
     - from:
         {{- toYaml .Values.networkPolicy.ingressFrom | nindent 8 }}
       ports:
         - port: http
           protocol: TCP
-  {{- else if ne .Values.service.type "ClusterIP" }}
-  # Exposed with a LoadBalancer or NodePort Service and no peers listed:
-  # any address may reach it, as exposing it means.
-  ingress:
+    {{- else if ne .Values.service.type "ClusterIP" }}
+    # Exposed with a LoadBalancer or NodePort Service and no peers listed:
+    # any address may reach it, as exposing it means.
     - ports:
         - port: http
           protocol: TCP
-  {{- else if .Values.ingress.enabled }}
-  {{- fail "ingress.enabled with a ClusterIP Service needs networkPolicy.ingressFrom: list the Ingress controller's pods or namespace there (or set networkPolicy.enabled=false), or the network policy lets no traffic in" }}
-  {{- else }}
-  ingress: []
-  {{- end }}
+    {{- end }}
   egress:
+    # To the other replicas: the leader (P7-02).
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "b221.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: http
+          protocol: TCP
     - ports:
         {{- range .Values.networkPolicy.apiServerPorts }}
         - port: {{ . }}

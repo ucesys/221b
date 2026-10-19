@@ -274,9 +274,9 @@ kubectl -n "$NS" port-forward "svc/$FULLNAME" 18080:8081 > "$WORK/port-forward.l
 pf=$!
 for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && break; sleep 1; done
 curl -fsS http://127.0.0.1:18080/readyz
-# Sessions live in the console's memory, so the restart signed everyone out.
-[ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/v1/settings)" = 401 ]
-signin http://127.0.0.1:18080
+# Sessions are kept in the cluster (P7-02), so the restart signed nobody
+# out: the session from before the upgrade still works.
+[ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/v1/settings)" = 200 ]
 api http://127.0.0.1:18080/api/v1/settings | grep -q '"refreshSeconds":11'
 # The connection came back from its Secret, and connects again.
 for _ in $(seq 60); do
@@ -341,6 +341,9 @@ kubectl delete clusterrolebinding e2e-admin e2e-viewer --ignore-not-found
 # back: what is shown for it is kept like a connection, in a Secret the
 # chart does not own, which survives an uninstall as connections do.
 kubectl -n "$NS" delete secret "$FULLNAME-cluster-local" --ignore-not-found
+# Sign-ins are kept one per Secret (P7-02); the chart does not own them
+# either, and they would let a reinstall keep its sessions.
+kubectl -n "$NS" delete secret -l app.kubernetes.io/component=session --ignore-not-found
 # Foreground deletion: the Deployment goes only once its pods have gone.
 # Helm 4's wait sometimes gives up on a Deployment still Terminating right
 # after a rollout; what matters is checked below: nothing may remain.

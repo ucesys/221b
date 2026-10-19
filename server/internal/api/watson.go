@@ -560,7 +560,7 @@ func (s *Server) putWatsonConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	before := s.opts.Settings.Current().WatsonOrDefault()
 	if _, err := s.opts.Settings.UpdateWatson(r.Context(), in); err != nil {
-		jsonError(w, http.StatusBadGateway, "The settings were not saved: "+err.Error())
+		jsonError(w, settingsStatus(err, http.StatusBadGateway), "The settings were not saved: "+err.Error())
 		return
 	}
 	detail := "no change"

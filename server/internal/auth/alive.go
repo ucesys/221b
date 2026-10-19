@@ -14,18 +14,3 @@ func (s *Service) Current(sess Session) (Session, bool) {
 	}
 	return s.live(cur)
 }
-
-// peek is Get without counting as activity.
-func (s *Sessions) peek(id string) (Session, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sess, ok := s.byID[id]
-	if !ok {
-		return Session{}, false
-	}
-	now := s.now()
-	if now.Sub(sess.LastSeen) > s.idle || now.After(sess.Expires) {
-		return Session{}, false
-	}
-	return *sess, true
-}

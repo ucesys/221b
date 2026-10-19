@@ -49,7 +49,7 @@ func (s *Server) putFleets(w http.ResponseWriter, r *http.Request) {
 	st, err := s.opts.Settings.UpdateFleets(r.Context(), id, list)
 	if err != nil {
 		s.opts.Logger.Warn("fleets not saved", "cluster", id, "err", err)
-		jsonError(w, http.StatusInternalServerError, "The fleets were not saved: "+err.Error())
+		jsonError(w, settingsStatus(err, http.StatusInternalServerError), "The fleets were not saved: "+err.Error())
 		return
 	}
 	names := make([]string, len(list))

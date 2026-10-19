@@ -2,6 +2,9 @@ package clusters
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -41,6 +44,9 @@ type Instance struct {
 	// lastTest is the latest test's result, kept for the cluster page.
 	lastTest   *TestResult
 	lastTested time.Time
+	// conn fingerprints what the instance connects with, so a sync
+	// restarts it only when that changed.
+	conn string
 }
 
 // Options configure the manager.
@@ -63,6 +69,13 @@ type Manager struct {
 
 	mu        sync.RWMutex
 	instances map[string]*Instance
+	// syncMu orders this replica's own changes with Sync, which applies
+	// the other replicas' (P7-02); seen is each saved connection's
+	// revision as last applied here.
+	syncMu sync.Mutex
+	seen   map[string]string
+	// syncErr is the last sync error said in the log, to say it once.
+	syncErr string
 	// settings are the shared settings every store follows.
 	settingsRefresh time.Duration
 	settingsRaw     []byte
@@ -79,7 +92,7 @@ func New(store Store, o Options) *Manager {
 	if o.Refresh <= 0 {
 		o.Refresh = 3 * time.Second
 	}
-	return &Manager{store: store, opts: o, log: o.Logger, instances: map[string]*Instance{}, ctx: context.Background()}
+	return &Manager{store: store, opts: o, log: o.Logger, instances: map[string]*Instance{}, seen: map[string]string{}, ctx: context.Background()}
 }
 
 // Store is the connection store, for the API's tests.
@@ -145,29 +158,139 @@ func (m *Manager) Start(ctx context.Context) error {
 
 // load starts every saved connection not running yet.
 func (m *Manager) load(ctx context.Context) error {
-	specs, err := m.store.List(ctx)
-	if err != nil {
+	if err := m.Sync(ctx); err != nil {
 		return err
-	}
-	for _, s := range specs {
-		if s.ID == LocalID {
-			continue
-		}
-		if _, ok := m.Get(s.ID); ok {
-			continue
-		}
-		_, cred, err := m.store.Get(ctx, s.ID)
-		if err != nil {
-			m.log.Warn("connection not loaded", "cluster", s.ID, "err", err)
-			continue
-		}
-		m.start(s, cred)
 	}
 	m.mu.RLock()
 	n := len(m.instances)
 	m.mu.RUnlock()
 	m.log.Info("connections loaded", "count", n, "storage", m.store.Kind())
 	return nil
+}
+
+// Sync brings the running connections in line with the saved ones, so a
+// connection added, changed or removed through another replica is here
+// too (P7-02): a new one starts, one whose server or credentials changed
+// restarts, one whose name, environment or mode changed keeps running
+// with the new spec (Watson's two-person and read-only rules follow it),
+// and one deleted stops. The local cluster's saved name and environment
+// are read again too.
+func (m *Manager) Sync(ctx context.Context) error {
+	revs, err := m.store.Revisions(ctx)
+	if err != nil {
+		return err
+	}
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
+	for id, rev := range revs {
+		if m.seen[id] == rev {
+			continue
+		}
+		spec, cred, err := m.store.Get(ctx, id)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		// Applied or not, this revision is not read again: an unreadable
+		// one is said once, not every few seconds.
+		m.seen[id] = rev
+		if err != nil {
+			m.log.Warn("connection not loaded", "cluster", id, "err", err)
+			continue
+		}
+		if id == LocalID {
+			m.applyLocal(spec)
+			continue
+		}
+		m.mu.RLock()
+		inst := m.instances[id]
+		m.mu.RUnlock()
+		switch {
+		case inst == nil:
+			m.start(spec, cred)
+		case inst.conn != connKey(spec, cred):
+			m.log.Info("connection changed elsewhere; restarting it", "cluster", id)
+			m.start(spec, cred)
+		default:
+			m.mu.Lock()
+			inst.Spec = spec
+			m.mu.Unlock()
+		}
+	}
+	// Connections deleted elsewhere: only those seen saved before, so one
+	// this replica has just added, which a list taken before its save
+	// misses, stays.
+	m.mu.Lock()
+	for id, inst := range m.instances {
+		if _, ok := revs[id]; ok || id == LocalID || inst.Spec.Local || m.seen[id] == "" {
+			continue
+		}
+		if inst.cancel != nil {
+			inst.cancel()
+		}
+		delete(m.instances, id)
+		m.log.Info("connection removed elsewhere", "cluster", id)
+	}
+	m.mu.Unlock()
+	for id := range m.seen {
+		if _, ok := revs[id]; !ok {
+			delete(m.seen, id)
+		}
+	}
+	return nil
+}
+
+// applyLocal takes the local cluster's saved name, environment and
+// description; its server, credentials and mode are the installation's.
+func (m *Manager) applyLocal(saved Spec) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inst := m.instances[LocalID]
+	if inst == nil {
+		return
+	}
+	spec := inst.Spec
+	spec.Name, spec.Env, spec.Description, spec.Added, spec.Updated = saved.Name, saved.Env, saved.Description, saved.Added, saved.Updated
+	inst.Spec = spec
+}
+
+// Run syncs with the saved connections every interval until ctx is done.
+func (m *Manager) Run(ctx context.Context, every time.Duration) {
+	if every <= 0 {
+		return
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			err := m.Sync(ctx)
+			msg := ""
+			if err != nil {
+				msg = err.Error()
+			}
+			if msg != m.syncErr {
+				if err != nil {
+					m.log.Warn("the saved connections could not be read", "err", err)
+				} else {
+					m.log.Info("the saved connections can be read again")
+				}
+				m.syncErr = msg
+			}
+		}
+	}
+}
+
+// connKey fingerprints what a connection connects with: the server, how
+// its certificate is checked and the credential.
+func connKey(spec Spec, cred Credential) string {
+	b, _ := json.Marshal(struct {
+		Server, CA, Auth string
+		Cred             Credential
+	}{spec.Server, spec.CA, spec.Auth, cred})
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // start builds and runs an instance for a connection, replacing a running one.
@@ -177,7 +300,7 @@ func (m *Manager) start(spec Spec, cred Credential) *Instance {
 	if old := m.instances[spec.ID]; old != nil && old.cancel != nil {
 		old.cancel()
 	}
-	inst := &Instance{Spec: spec}
+	inst := &Instance{Spec: spec, conn: connKey(spec, cred)}
 	cfg, err := RestConfig(spec, cred)
 	if err != nil {
 		inst.startErr = err.Error()
@@ -467,6 +590,8 @@ func kubeconfigCA(kubeconfig, context string) string {
 
 // Add saves and starts a new connection (P3-05).
 func (m *Manager) Add(ctx context.Context, d Draft) (Summary, error) {
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
 	spec, cred, err := m.prepare(d, nil, Credential{})
 	if err != nil {
 		return Summary{}, err
@@ -480,6 +605,8 @@ func (m *Manager) Add(ctx context.Context, d Draft) (Summary, error) {
 
 // Update changes a connection; a credential given replaces the saved one.
 func (m *Manager) Update(ctx context.Context, id string, d Draft) (Summary, error) {
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
 	orig, origCred, err := m.getSpec(ctx, id)
 	if err != nil {
 		return Summary{}, err
@@ -538,6 +665,8 @@ func (m *Manager) getSpec(ctx context.Context, id string) (Spec, Credential, err
 // Remove stops a connection and deletes its Secret (P3-08). The local
 // cluster cannot be removed.
 func (m *Manager) Remove(ctx context.Context, id string) error {
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
 	m.mu.Lock()
 	inst, ok := m.instances[id]
 	if !ok {

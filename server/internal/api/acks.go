@@ -91,7 +91,7 @@ func (s *Server) postAck(w http.ResponseWriter, r *http.Request) {
 		return acks.Remove(list, in.Key)
 	})
 	if err != nil {
-		jsonError(w, http.StatusBadRequest, "The acknowledgement was not saved: "+err.Error())
+		jsonError(w, settingsStatus(err, http.StatusBadRequest), "The acknowledgement was not saved: "+err.Error())
 		return
 	}
 	action, verb := audit.ActionAlertAck, "acknowledged"

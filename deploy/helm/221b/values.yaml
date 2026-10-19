@@ -42,6 +42,16 @@ fullnameOverride: ""
 # through a port-forward.
 allowedHosts: []
 
+# Replicas (P7-02). One is enough for most clusters; two or more keep the
+# console up while a node drains or a pod is replaced. The replicas share
+# sign-ins, settings, accounts and connections through Kubernetes (so
+# connections.store must be secrets), and elect one, through a Lease, to
+# run Sherlock and Watson, whose conversations and approval cards live in
+# its memory; the others pass those requests to it. Losing a replica costs
+# its viewers a reconnect; losing the leader also loses open Sherlock
+# conversations and Watson cards not yet run, as a restart does. With more
+# than one, the chart adds a PodDisruptionBudget and spreads the pods over
+# nodes.
 replicaCount: 1
 
 # How often every open console is updated: the server reads CPU and memory
@@ -422,6 +432,12 @@ securityContext:
   capabilities:
     drop: ["ALL"]
 
+# Where the pods may land. With more than one replica and none given, the
+# pods are spread over nodes when there is room (a soft constraint).
+topologySpreadConstraints: []
+# How long a pod has to finish when it stops: it ends its event streams and,
+# as the leader, hands Sherlock and Watson to another replica first.
+terminationGracePeriodSeconds: 20
 podAnnotations: {}
 podLabels: {}
 nodeSelector: {}

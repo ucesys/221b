@@ -1,0 +1,95 @@
+# A version tag (v0.7.0) makes a release (P7-08): the tag must match the
+# chart's version and have a section in CHANGELOG.md; the chart is
+# packaged and pushed to oci://ghcr.io/ucesys/charts, and a GitHub release
+# is made with that section as its notes and the chart attached. The image
+# for the tag (ghcr.io/ucesys/221b:0.7.0) is built, tested and published by
+# CI's publish job for the same tag. See docs/releasing.md.
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  HELM_VERSION: 'v4.3.0'
+  CHARTS: oci://ghcr.io/ucesys/charts
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
+      - name: The tag, the chart and the changelog agree
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=${TAG#v}
+          chart=$(sed -n 's/^version: *//p' deploy/helm/221b/Chart.yaml)
+          app=$(sed -n 's/^appVersion: *"\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' deploy/helm/221b/Chart.yaml)
+          if [ "$chart" != "$version" ] || [ "$app" != "$version" ]; then
+            echo "::error::The tag $TAG is not the chart's version ($chart) and appVersion ($app). Bump deploy/helm/221b/Chart.yaml first (docs/releasing.md)."
+            exit 1
+          fi
+          # The notes are the version's section of CHANGELOG.md, up to the next one.
+          awk -v v="$version" '
+            $0 ~ "^## " && found { exit }
+            $0 ~ "^## " v "( |$)" { found = 1; next }
+            found { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if ! grep -q '[^[:space:]]' "$RUNNER_TEMP/notes.md"; then
+            echo "::error::CHANGELOG.md has no section \"## $version\". Move the Unreleased notes under it (docs/releasing.md)."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Package and push the chart
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          mkdir -p bin
+          helm package deploy/helm/221b -d bin
+          echo "$TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
+          helm push "bin/221b-$VERSION.tgz" "$CHARTS"
+          helm registry logout ghcr.io
+          echo "::notice title=Chart::Pushed $CHARTS/221b:$VERSION"
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          {
+            cat "$RUNNER_TEMP/notes.md"
+            echo
+            echo "## Install"
+            echo
+            echo '```sh'
+            echo "helm upgrade --install k8s-console $CHARTS/221b --version $VERSION -n 221b --create-namespace"
+            echo '```'
+            echo
+            echo "The image is \`ghcr.io/ucesys/221b:$VERSION\`. Upgrading from an earlier release: [docs/upgrading.md](https://github.com/${{ github.repository }}/blob/$TAG/docs/upgrading.md)."
+          } > "$RUNNER_TEMP/release.md"
+          gh release create "$TAG" "bin/221b-$VERSION.tgz" --repo "${{ github.repository }}" --title "221B $VERSION" --notes-file "$RUNNER_TEMP/release.md" --verify-tag

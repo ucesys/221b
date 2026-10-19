@@ -399,7 +399,7 @@ func (s *Server) putSherlockConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, err := s.opts.Settings.UpdateSherlock(r.Context(), in); err != nil {
 		s.opts.Logger.Warn("Sherlock settings not saved", "err", err)
-		jsonError(w, http.StatusInternalServerError, "The settings were not saved: "+err.Error())
+		jsonError(w, settingsStatus(err, http.StatusInternalServerError), "The settings were not saved: "+err.Error())
 		return
 	}
 	s.record(r, audit.ActionSherlockSettings, "sherlock", sherlockChange(before, in))
