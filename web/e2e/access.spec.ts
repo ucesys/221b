@@ -89,8 +89,9 @@ test('a person sees only the namespaces Kubernetes lets them list, in every tab,
   if (!inKind) await expect(page.locator('[data-node]')).toHaveCount(0)
   await page.goto('/#/namespaces')
   const list = page.getByTestId('namespace-list')
-  await expect(list.locator('a.rk-rrow').first()).toBeVisible({ timeout: 20_000 })
-  await expect(list.locator('a.rk-rrow')).toHaveCount(myNamespaces.length)
+  // Each row's link is its namespace's name.
+  await expect(list.locator('a.rk-rname').first()).toBeVisible({ timeout: 20_000 })
+  await expect(list.locator('a.rk-rname')).toHaveCount(myNamespaces.length)
   await expect(list).not.toContainText(hidden!.namespace)
 
   // What they may not list is refused by name too: details, logs and YAML.
