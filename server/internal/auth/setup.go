@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
@@ -180,8 +181,7 @@ func (s *Service) live(sess Session) (Session, bool) {
 // cannot answer leaves the groups as they were and is asked again soon; a
 // person no longer in any listed group loses the session (RB-23).
 func (s *Service) rereadGroups(sess Session, force bool) (Session, bool) {
-	s.reread.Lock()
-	defer s.reread.Unlock()
+	defer s.lockReread(sess.ID)()
 	// Another request may have done it while this one waited.
 	if cur, ok := s.sessions.Get(sess.ID); ok {
 		sess = cur
@@ -218,6 +218,38 @@ func (s *Service) rereadGroups(sess Session, force bool) (Session, bool) {
 	sess.User.Groups, sess.GroupsAt = groups, now
 	g.apply(&sess)
 	return sess, true
+}
+
+// rereadLock is one session's lock for reading its groups again, kept
+// while a request holds or waits for it.
+type rereadLock struct {
+	sync.Mutex
+	users int
+}
+
+// lockReread takes the session's reread lock; the returned function
+// releases it.
+func (s *Service) lockReread(id string) func() {
+	s.rereadMu.Lock()
+	if s.rereads == nil {
+		s.rereads = map[string]*rereadLock{}
+	}
+	l := s.rereads[id]
+	if l == nil {
+		l = &rereadLock{}
+		s.rereads[id] = l
+	}
+	l.users++
+	s.rereadMu.Unlock()
+	l.Lock()
+	return func() {
+		l.Unlock()
+		s.rereadMu.Lock()
+		if l.users--; l.users == 0 {
+			delete(s.rereads, id)
+		}
+		s.rereadMu.Unlock()
+	}
 }
 
 func (s *Service) withGrant(sess Session) Session {

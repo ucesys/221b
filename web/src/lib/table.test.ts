@@ -60,6 +60,11 @@ describe('exports', () => {
     expect(text).toBe('﻿Name,Note\r\na,plain\r\n"b,c","says ""hi""\nthen"\r\n,3\r\n')
   })
 
+  it('keeps text a spreadsheet would run as a formula as text', () => {
+    const text = csvText(['Message'], [['=HYPERLINK("http://x")'], ['@SUM(A1)'], ['+1 more'], ['-'], ['-5'], ['12%'], [-3]])
+    expect(text).toBe('﻿Message\r\n"\'=HYPERLINK(""http://x"")"\r\n\'@SUM(A1)\r\n\'+1 more\r\n-\r\n-5\r\n12%\r\n-3\r\n')
+  })
+
   it('names files after the cluster and the table', () => {
     expect(exportFileName('Lakehouse Prod!', 'nodes', 'csv')).toMatch(/^lakehouse-prod-nodes-\d{8}-\d{4}\.csv$/)
     expect(exportFileName(undefined, 'pods', 'xlsx')).toMatch(/^cluster-pods-.*\.xlsx$/)

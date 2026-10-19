@@ -113,6 +113,15 @@ func TestCredentialsSayWhatTheyAre(t *testing.T) {
 	if _, _, err := clusters.CheckCredential(clusters.AuthKubeconfig, clusters.Credential{Kubeconfig: kc, Context: "nope"}, "", now); err == nil || !strings.Contains(err.Error(), "no context") {
 		t.Errorf("unknown context: %v", err)
 	}
+	// A file beside an inline token: client-go would send the file's token,
+	// read on the console's own machine.
+	withFile := strings.Replace(kc, "token: "+sa, "token: "+sa+"\n    tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token", 1)
+	if withFile == kc {
+		t.Fatal("the kubeconfig sample has no token line to extend")
+	}
+	if _, _, err := clusters.CheckCredential(clusters.AuthKubeconfig, clusters.Credential{Kubeconfig: withFile}, "", now); err == nil || !strings.Contains(err.Error(), "refers to files") {
+		t.Errorf("token file beside a token accepted: %v", err)
+	}
 	names, current := clusters.Contexts(kc)
 	if strings.Join(names, ",") != "dev,staging" || current != "staging" {
 		t.Errorf("contexts: %v %s", names, current)
@@ -288,6 +297,13 @@ func TestSecretStoreRoundTrip(t *testing.T) {
 	if gotCred.Token != "new-token" || gotCred.CAPEM != "" {
 		t.Fatalf("after credential change: %+v", gotCred)
 	}
+	// A Secret with the label and no readable spec is skipped, not fatal.
+	stray := `{"apiVersion":"v1","kind":"Secret","metadata":{"name":"stray","namespace":"221b","labels":{"app.kubernetes.io/component":"cluster-connection"}},"data":{"spec.json":"bm90IGpzb24="}}`
+	if resp, err := http.Post(srv.URL+"/api/v1/namespaces/221b/secrets", "application/json", strings.NewReader(stray)); err != nil || resp.StatusCode >= 300 {
+		t.Fatalf("stray secret: %v %v", err, resp)
+	} else {
+		resp.Body.Close()
+	}
 	list, err := store.List(ctx)
 	if err != nil || len(list) != 1 || list[0].ID != "staging" {
 		t.Fatalf("list: %v %v", err, list)
@@ -424,4 +440,29 @@ func TestManagerAddsUpdatesAndRemoves(t *testing.T) {
 		t.Errorf("a kubeconfig without an address: %v", err)
 	}
 	_ = srv
+}
+
+// A kubeconfig without a current context is saved with the context the
+// check chose, so the connection starts with it.
+func TestKubeconfigWithoutCurrentContext(t *testing.T) {
+	_, other := simServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := clusters.NewMemoryStore()
+	m := clusters.New(store, clusters.Options{Refresh: time.Second, HealthInterval: time.Second, SecretsRead: true})
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sa := token(map[string]any{"sub": "system:serviceaccount:kube-system:cluster-console", "exp": time.Now().Add(24 * time.Hour).Unix()})
+	kc := "apiVersion: v1\nkind: Config\nclusters:\n- name: a\n  cluster:\n    server: " + other.URL + "\ncontexts:\n- name: only\n  context:\n    cluster: a\n    user: u\nusers:\n- name: u\n  user:\n    token: " + sa + "\n"
+	sum, err := m.Add(ctx, clusters.Draft{Spec: clusters.Spec{Name: "nocontext", Env: "development", CA: "system", Auth: "kubeconfig", Mode: "read"}, Credential: clusters.Credential{Kubeconfig: kc}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.State == "failed" {
+		t.Fatalf("the connection cannot start: %s", sum.Message)
+	}
+	if _, cred, err := store.Get(ctx, sum.ID); err != nil || cred.Context != "only" {
+		t.Fatalf("saved context %q: %v", cred.Context, err)
+	}
 }

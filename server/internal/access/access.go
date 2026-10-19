@@ -98,8 +98,13 @@ func (c *Cache) For(cluster string, checker Checker, p kube.Person) *Access {
 		c.entries[key] = a
 	}
 	a.mu.Lock()
-	// The connection may have been replaced since (new credentials): the
-	// questions go to the one running now.
+	// The connection may have been replaced since (new credentials, or
+	// another server under the same name): the questions go to the one
+	// running now, and the old one's verdicts no longer hold.
+	if a.checker != nil && a.checker != checker {
+		a.verdicts = map[Pair]verdict{}
+		a.version++
+	}
 	a.checker = checker
 	a.lastUse = c.opts.Now()
 	a.mu.Unlock()

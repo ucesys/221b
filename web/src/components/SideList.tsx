@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { CopyName } from './CopyName'
 import { SearchIcon } from './Icons'
 
 export interface SideItem {
@@ -7,6 +8,8 @@ export interface SideItem {
   current: boolean
   /** The first line: name, and whatever sits to its right. */
   name: string
+  /** What the name is, for a copy icon beside it: "namespace name". */
+  copy?: string
   right?: ReactNode
   /** The lines under the name. */
   sub?: ReactNode
@@ -68,10 +71,15 @@ export function SideList({ label, title, aside, query, onQuery, placeholder, ext
                   </div>
                 )}
                 {g.items.map((it) => (
-                  <a key={it.key} className="rk-rrow" href={it.href} data-sel={it.current} aria-current={it.current ? 'page' : undefined} style={{ display: 'flex', flexDirection: 'column', gap: 3, width: '100%', padding: '9px 16px', borderTop: '1px solid var(--line)', textAlign: 'left', textDecoration: 'none', color: 'inherit', boxSizing: 'border-box' }}>
+                  // The name is the link, stretched over the whole row, so a
+                  // copy icon can sit beside it outside the link.
+                  <div key={it.key} className="rk-rrow rk-rrow-link" data-sel={it.current} style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 3, width: '100%', padding: '9px 16px', borderTop: '1px solid var(--line)', textAlign: 'left', boxSizing: 'border-box' }}>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', minWidth: 0 }}>
-                      <span className="rk-mono" style={{ fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-                        {it.name}
+                      <span className="rk-namecopy">
+                        <a className="rk-mono rk-rname" href={it.href} aria-current={it.current ? 'page' : undefined} style={{ fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, color: 'inherit', textDecoration: 'none' }}>
+                          {it.name}
+                        </a>
+                        {it.copy && <CopyName text={it.name} what={it.copy} />}
                       </span>
                       <span style={{ flex: '1 1 auto' }} />
                       {it.right}
@@ -82,7 +90,7 @@ export function SideList({ label, title, aside, query, onQuery, placeholder, ext
                         {it.sub2}
                       </span>
                     )}
-                  </a>
+                  </div>
                 ))}
               </div>
             ),

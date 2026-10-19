@@ -4,6 +4,8 @@ import { adminHref, apiPath, clusterHref, clusterPageHref, href, listParam, pars
 describe('routes', () => {
   it('parses the tab, path and parameters', () => {
     expect(parseHash('')).toMatchObject({ view: 'home', path: [] })
+    // A malformed escape, as in a link Sherlock wrote, is kept as written.
+    expect(parseHash('#/namespaces/50%').path).toEqual(['50%'])
     expect(parseHash('#/')).toMatchObject({ view: 'home' })
     expect(parseHash('#/home')).toMatchObject({ view: 'home' })
     expect(parseHash('#/nodes')).toMatchObject({ view: 'tabs', tab: 'nodes' })

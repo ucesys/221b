@@ -1,4 +1,5 @@
 import { unauthorized } from './auth'
+import type { TimeFormat } from '../lib/format'
 import type { Settings } from './types'
 
 /** The refresh rates the Settings page offers, in seconds. */
@@ -14,7 +15,7 @@ export function refreshLabel(seconds: number): string {
  * Saves the shared settings on the server, which applies them to every
  * open console at once. Rejects with the server's message.
  */
-export async function saveSettings(patch: { refreshSeconds: number }, url = '/api/v1/settings'): Promise<Settings> {
+export async function saveSettings(patch: { refreshSeconds: number; timeFormat?: TimeFormat }, url = '/api/v1/settings'): Promise<Settings> {
   let res: Response
   try {
     res = await fetch(url, {

@@ -1,9 +1,9 @@
 import type { NodeRow } from '../api/types'
-import { clampPct, fCores, fMem, fmtAge, fmtTs, minutesSince, pct, round } from '../lib/format'
+import { clampPct, fCores, fMem, fmtAge, fmtTs, localTimes, minutesSince, pct, round } from '../lib/format'
 import { cpuMeter, free, memoryMeter, ownLabels, problemsCell, roleTag, taintId, taintShort, toneRank, type Meter } from '../lib/nodes'
 import { href } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
-import { Tone } from './cells'
+import { NameCell, Tone } from './cells'
 
 const GIB = 1024 * 1024 * 1024
 
@@ -48,11 +48,7 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     min: 180,
     compactMin: 160,
     sortValue: (r) => r.name,
-    cell: (r) => (
-      <span className="rk-mono rk-pname" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        {r.name}
-      </span>
-    ),
+    cell: (r) => <NameCell name={r.name} what="node name" />,
     export: (r) => [{ head: 'Node', cell: r.name }],
   },
   {
@@ -84,7 +80,7 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     compactMin: 96,
     defaultDir: 'desc',
     sortValue: (r) => toneRank[r.tone] ?? 0,
-    cell: (r) => <Tone tone={r.tone} text={r.status} tip={r.statusTip} />,
+    cell: (r) => <Tone tone={r.tone} text={r.status} tip={localTimes(r.statusTip)} />,
     export: (r) => [{ head: 'Status', cell: r.status }],
   },
   {

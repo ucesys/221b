@@ -182,6 +182,9 @@ type Options struct {
 	MaxResult int
 	// MaxHistory bounds what is sent of the conversation, in characters.
 	MaxHistory int
+	// MaxQuestions bounds the questions, with their answers, a
+	// conversation shows; older ones are dropped.
+	MaxQuestions int
 	// UITimeout is how long a UI action waits for the browser.
 	UITimeout time.Duration
 }
@@ -218,6 +221,9 @@ func New(o Options) *Service {
 	}
 	if o.MaxHistory <= 0 {
 		o.MaxHistory = 360_000
+	}
+	if o.MaxQuestions <= 0 {
+		o.MaxQuestions = 100
 	}
 	if o.UITimeout <= 0 {
 		o.UITimeout = UITimeout
@@ -329,6 +335,12 @@ func (s *Service) Ask(q Question) (*Conversation, error) {
 	c.seq++
 	ans := &Msg{ID: c.seq, Role: "sherlock", Status: "thinking", At: now, Model: set.Model}
 	c.msgs = append(c.msgs, ans)
+	// A conversation kept open for days shows its last questions only, as
+	// the history sent to the model holds the last ones only: each change
+	// sends the whole conversation to every panel that shows it.
+	if n := len(c.msgs) - 2*s.opts.MaxQuestions; n > 0 {
+		c.msgs = append([]*Msg(nil), c.msgs[n:]...)
+	}
 	c.starts = append(c.starts, len(c.history))
 	content := []Block{{Type: "text", Text: text}}
 	if v := s.viewBlock(q.View); v != "" {

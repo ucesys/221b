@@ -3,7 +3,7 @@ import { useDetails } from '../api/details'
 import type { ClusterInfo, ObjectDetails, ObjectRow, PodView } from '../api/types'
 import { Tone } from '../columns/cells'
 import { POD_COLUMNS, podLabel, podTerms } from '../columns/pods'
-import { fMem, fmtAge, fmtTs, nWord } from '../lib/format'
+import { fMem, fmtAge, fmtTs, localTimes, nWord } from '../lib/format'
 import { kindNameOf, WORKLOAD_KINDS } from '../lib/kinds'
 import { apiPath, href, navigate } from '../lib/router'
 import { useTable } from '../lib/useTable'
@@ -67,7 +67,7 @@ export function ObjectPanel({ kind, namespace: ns, name, row, gone, cluster, now
   ]
 
   const facts: [string, string][] = [
-    ...(d?.facts ?? []).map((f) => [f.label, f.value] as [string, string]),
+    ...(d?.facts ?? []).map((f) => [f.label, localTimes(f.value)] as [string, string]),
     ['Namespace', ns],
     ...(head ? ([['Created', `${fmtTs(head.created)} · ${fmtAge(head.created, now)} ago`]] as [string, string][]) : []),
     ...(d ? ([['Controlled by', d.owners.length ? d.owners.map((o) => `${o.kind}/${o.name}`).join(' → ') : 'nothing: created directly']] as [string, string][]) : []),

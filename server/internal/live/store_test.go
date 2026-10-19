@@ -697,6 +697,17 @@ func TestFilteredSubscribersSeeTheirNamespacesOnly(t *testing.T) {
 		t.Fatalf("the change did not reach the unfiltered browser: %+v", got.rows)
 	}
 
+	// Its going does not either: the key names the hidden pod (P3-02).
+	src.Delete("pods", "kube-system", "metrics")
+	s.Notify(kube.Change{Views: map[string][]string{ViewPods: {"kube-system/metrics"}}})
+	s.Process()
+	if got := take(t, some); len(got.rows) != 0 {
+		t.Fatalf("a hidden removal reached the filtered browser: %+v", got.rows)
+	}
+	if got := take(t, all); len(got.rows) != 1 || len(got.rows[0].Removes) != 1 {
+		t.Fatalf("the removal did not reach the unfiltered browser: %+v", got.rows)
+	}
+
 	// Resync asks for a snapshot instead of the pending events.
 	some.Resync()
 	if _, resync := some.Take(); !resync {

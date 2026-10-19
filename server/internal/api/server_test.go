@@ -817,3 +817,15 @@ func TestObjectDetails(t *testing.T) {
 
 func ptrBool(b bool) *bool    { return &b }
 func ptrInt32(n int32) *int32 { return &n }
+
+func TestWriteJSONStatusKeepsItsHeaders(t *testing.T) {
+	// A large answer with another status is gzipped and says so; a 201
+	// that lost its Content-Encoding could not be read.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/clusters", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	writeJSONStatus(rec, req, http.StatusCreated, []byte(`{"description":"`+strings.Repeat("x", 2000)+`"}`))
+	if rec.Code != http.StatusCreated || rec.Header().Get("Content-Encoding") != "gzip" || rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("status %d, headers %v", rec.Code, rec.Header())
+	}
+}

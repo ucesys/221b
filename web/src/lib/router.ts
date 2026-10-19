@@ -45,10 +45,19 @@ export interface Route {
   params: URLSearchParams
 }
 
+/** A path segment decoded; a malformed escape such as "50%" is kept as written. */
+function decodeSeg(seg: string): string {
+  try {
+    return decodeURIComponent(seg)
+  } catch {
+    return seg
+  }
+}
+
 export function parseHash(hash: string): Route {
   const h = hash.replace(/^#\/?/, '')
   const [pathPart = '', query = ''] = h.split('?', 2) as [string?, string?]
-  let segs = pathPart.split('/').filter(Boolean).map(decodeURIComponent)
+  let segs = pathPart.split('/').filter(Boolean).map(decodeSeg)
   let cluster = LOCAL
   if (segs[0] === 'c' && segs[1]) {
     cluster = segs[1]

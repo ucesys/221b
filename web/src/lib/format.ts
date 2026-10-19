@@ -65,18 +65,104 @@ function pad2(n: number): string {
   return (n < 10 ? '0' : '') + n
 }
 
-/** A timestamp in UTC: "2026-10-12 14:03:07 UTC". */
-export function fmtTs(iso: string | undefined): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())} UTC`
+// ---- dates and times ----
+//
+// Every date and time the console shows is in the browser's time zone, with
+// its short name, in the one format the Settings page sets for everyone:
+// "2026-05-03 1:34pm PDT" by default.
+
+/** How dates and times read, as the Settings page sets it for everyone. */
+export interface TimeFormat {
+  /** iso 2026-05-03 · us 05/03/2026 · eu 03/05/2026 · long May 3, 2026 */
+  date: 'iso' | 'us' | 'eu' | 'long'
+  /** 12h 1:34pm · 24h 13:34 */
+  clock: '12h' | '24h'
 }
 
-/** A local time of day: "14:03:07". */
-export function fmtClock(d: Date | null): string {
+export const DEFAULT_TIME_FORMAT: TimeFormat = { date: 'iso', clock: '12h' }
+
+let timeFormat: TimeFormat = DEFAULT_TIME_FORMAT
+
+/** Uses the format the server's settings carry; the app sets it as they arrive. */
+export function setTimeFormat(f: TimeFormat | undefined): void {
+  timeFormat = f ?? DEFAULT_TIME_FORMAT
+}
+
+export function getTimeFormat(): TimeFormat {
+  return timeFormat
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+function dateText(d: Date, f: TimeFormat): string {
+  const y = d.getFullYear()
+  const m = pad2(d.getMonth() + 1)
+  const day = pad2(d.getDate())
+  switch (f.date) {
+    case 'us':
+      return `${m}/${day}/${y}`
+    case 'eu':
+      return `${day}/${m}/${y}`
+    case 'long':
+      return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${y}`
+  }
+  return `${y}-${m}-${day}`
+}
+
+function clockText(d: Date, f: TimeFormat, seconds: boolean): string {
+  const ss = seconds ? `:${pad2(d.getSeconds())}` : ''
+  if (f.clock === '24h') return `${pad2(d.getHours())}:${pad2(d.getMinutes())}${ss}`
+  return `${d.getHours() % 12 || 12}:${pad2(d.getMinutes())}${ss}${d.getHours() < 12 ? 'am' : 'pm'}`
+}
+
+const zoneNames = new Map<string, Intl.DateTimeFormat>()
+
+/**
+ * The browser time zone's short name at that moment: "PDT", "EST", "CEST",
+ * "UTC". A zone with no common short name reads as its offset, "GMT+9".
+ */
+export function zoneText(d: Date): string {
+  for (const locale of ['en-US', 'en-GB']) {
+    let f = zoneNames.get(locale)
+    if (!f) {
+      f = new Intl.DateTimeFormat(locale, { timeZoneName: 'short' })
+      zoneNames.set(locale, f)
+    }
+    const z = f.formatToParts(d).find((p) => p.type === 'timeZoneName')?.value ?? ''
+    if (z && !/^(GMT|UTC)[+-]/.test(z)) return z
+    if (locale === 'en-GB') return z
+  }
+  return ''
+}
+
+function parse(at: string | Date | null | undefined): Date | null {
+  if (!at) return null
+  const d = at instanceof Date ? at : new Date(at)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+/** A date and time: "2026-05-03 1:34pm PDT"; with seconds where they matter, "1:34:07pm". */
+export function fmtTs(at: string | Date | null | undefined, opts: { seconds?: boolean } = {}): string {
+  const d = parse(at)
   if (!d) return '—'
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
+  return `${dateText(d, timeFormat)} ${clockText(d, timeFormat, !!opts.seconds)} ${zoneText(d)}`.trim()
+}
+
+/** A time of day: "1:34pm PDT"; with seconds where they matter, "1:34:07pm PDT". */
+export function fmtClock(at: string | Date | null | undefined, opts: { seconds?: boolean } = {}): string {
+  const d = parse(at)
+  if (!d) return '—'
+  return `${clockText(d, timeFormat, !!opts.seconds)} ${zoneText(d)}`.trim()
+}
+
+/**
+ * Times the server writes into its own sentences, "Ready since 2026-10-12
+ * 14:03:07 UTC.", in the console's format and the browser's time zone.
+ */
+export function localTimes(text: string): string
+export function localTimes(text: string | undefined): string | undefined
+export function localTimes(text: string | undefined): string | undefined {
+  return text?.replace(/\b(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}) UTC\b/g, (_, day: string, time: string) => fmtTs(`${day}T${time}Z`))
 }
 
 export function nWord(n: number, one: string, many: string): string {

@@ -57,6 +57,14 @@ export function YamlView({ kind, namespace, name, live = true, onToast }: Props)
   const [text, setText] = useState<string | null>(null)
   const [error, setError] = useState('')
   const url = yamlURL(kind, namespace, name)
+  // Another object in the same panel: forget the last one's YAML at once,
+  // so it never shows, or is copied, under this one's name.
+  const [last, setLast] = useState(url)
+  if (last !== url) {
+    setLast(url)
+    setText(null)
+    setError('')
+  }
   useEffect(() => {
     let gone = false
     fetch(url, { headers: { Accept: 'application/yaml' } })

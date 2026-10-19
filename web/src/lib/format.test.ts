@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { compareNatural, compareValues, fCores, fMem, fmtAge, fmtMinutes, fmtTs, nWord, pct, pctTxt, round, trimNum } from './format'
+import { afterEach, describe, expect, it } from 'vitest'
+import { compareNatural, compareValues, fCores, fMem, fmtAge, fmtClock, fmtMinutes, fmtTs, localTimes, setTimeFormat, nWord, pct, pctTxt, round, trimNum } from './format'
 
 describe('numbers', () => {
   it('trims trailing zeros', () => {
@@ -54,8 +54,7 @@ describe('time', () => {
     expect(fmtAge(undefined, now)).toBe('—')
   })
 
-  it('writes timestamps in UTC', () => {
-    expect(fmtTs('2026-10-12T14:03:07Z')).toBe('2026-10-12 14:03:07 UTC')
+  it('shows no time for a missing or broken one', () => {
     expect(fmtTs('not a time')).toBe('—')
   })
 })
@@ -69,5 +68,36 @@ describe('ordering', () => {
   it('compares numbers numerically and text naturally', () => {
     expect(compareValues(9, 10)).toBeLessThan(0)
     expect(compareValues('v1.9', 'v1.10')).toBeLessThan(0)
+  })
+})
+
+describe('dates and times', () => {
+  const at = new Date(2026, 4, 3, 13, 34, 7).toISOString()
+  const zone = /^[A-Z]{2,5}$|^GMT[+-]\d/
+  afterEach(() => setTimeFormat(undefined))
+
+  it('reads in the browser’s time zone, with its short name and am or pm', () => {
+    const [day, time, z] = fmtTs(at).split(' ')
+    expect(`${day} ${time}`).toBe('2026-05-03 1:34pm')
+    expect(z).toMatch(zone)
+    expect(fmtTs(at, { seconds: true })).toMatch(/^2026-05-03 1:34:07pm \S+$/)
+    expect(fmtClock(at)).toMatch(/^1:34pm \S+$/)
+    expect(fmtTs(new Date(2026, 0, 9, 0, 5).toISOString())).toMatch(/^2026-01-09 12:05am /)
+    expect(fmtTs(undefined)).toBe('—')
+  })
+
+  it('follows the format the settings set', () => {
+    setTimeFormat({ date: 'us', clock: '12h' })
+    expect(fmtTs(at)).toMatch(/^05\/03\/2026 1:34pm /)
+    setTimeFormat({ date: 'eu', clock: '24h' })
+    expect(fmtTs(at)).toMatch(/^03\/05\/2026 13:34 /)
+    setTimeFormat({ date: 'long', clock: '12h' })
+    expect(fmtTs(at)).toMatch(/^May 3, 2026 1:34pm /)
+  })
+
+  it('turns the server’s UTC times in its sentences into local ones', () => {
+    const utc = new Date(Date.UTC(2026, 9, 12, 14, 3, 7))
+    expect(localTimes('Ready since 2026-10-12 14:03:07 UTC.')).toBe(`Ready since ${fmtTs(utc)}.`)
+    expect(localTimes(undefined)).toBeUndefined()
   })
 })

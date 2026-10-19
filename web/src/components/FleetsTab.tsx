@@ -6,6 +6,7 @@ import { capText, fleetOf, fleetsOfNode, inDefinition, listText, metaText, mxCol
 import { compareNatural, fileStamp, nWord } from '../lib/format'
 import { effectTone, facetMatch, labelText } from '../lib/nodes'
 import { href, listParam, navigate, withParams } from '../lib/router'
+import { CopyName } from './CopyName'
 import { usePref } from '../lib/prefs'
 import { csvText, type ExportFormat } from '../lib/table'
 import { download, xlsxBytes, type Cell } from '../lib/xlsx'
@@ -604,9 +605,12 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                     return (
                       <div key={g.key + n.name} className="rk-mxr" role="row" data-dim={fxOn && !picked(n)} data-node={n.name}>
                         <span className="rk-mxn" role="rowheader">
-                          <a className="rk-link rk-mono" {...peekLink({ kind: 'node', name: n.name })} title={`Open the details of ${n.name}`} style={{ minWidth: 0, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'none' }}>
-                            {n.name}
-                          </a>
+                          <span className="rk-namecopy">
+                            <a className="rk-link rk-mono" {...peekLink({ kind: 'node', name: n.name })} title={`Open the details of ${n.name}`} style={{ minWidth: 0, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'none' }}>
+                              {n.name}
+                            </a>
+                            <CopyName text={n.name} what="node name" />
+                          </span>
                           {flag && (
                             <span className="rk-t" data-tone={flagTone} title={own.map((x) => x.title).join('\n')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, whiteSpace: 'nowrap' }}>
                               <span className="rk-dot" />

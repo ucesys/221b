@@ -1,6 +1,7 @@
 // Cells shared by every table.
 import type { Tone as ToneKind } from '../api/types'
 import { peekLink, type Peek } from '../lib/peek'
+import { CopyName } from '../components/CopyName'
 
 /** A status with its dot: "● Running". */
 export function Tone({ tone, text, tip, weight = 500 }: { tone: ToneKind; text: string; tip?: string; weight?: number }) {
@@ -8,6 +9,18 @@ export function Tone({ tone, text, tip, weight = 500 }: { tone: ToneKind; text: 
     <span className="rk-t" data-tone={tone} title={tip} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontWeight: weight, maxWidth: '100%' }}>
       <span className="rk-dot" />
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{text}</span>
+    </span>
+  )
+}
+
+/** An object's name in a table, with a copy icon that shows while the name is hovered. */
+export function NameCell({ name, what = 'name' }: { name: string; what?: string }) {
+  return (
+    <span className="rk-namecopy">
+      <span className="rk-mono rk-pname" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {name}
+      </span>
+      <CopyName text={name} what={what} />
     </span>
   )
 }

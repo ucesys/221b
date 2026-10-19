@@ -245,6 +245,16 @@ func TestConversation(t *testing.T) {
 	if st := v.Messages[len(v.Messages)-1].Status; st != "done" {
 		t.Fatalf("after a stop: %s %s", st, v.Messages[len(v.Messages)-1].Error)
 	}
+	// It shows its last questions only.
+	s.opts.MaxQuestions = 2
+	if _, err := s.Ask(Question{Key: k, Text: "Is pod web/api-0 ready?", Tools: stubTools{}}); err != nil {
+		t.Fatal(err)
+	}
+	s.Wait()
+	v = s.Conversation(k).View()
+	if len(v.Messages) != 4 || v.Messages[0].Text != "Tell me about pod web/api-0" || v.Messages[2].Text != "Is pod web/api-0 ready?" {
+		t.Fatalf("after the cap: %d messages, first %q", len(v.Messages), v.Messages[0].Text)
+	}
 	// New chat starts over.
 	s.Reset(k)
 	if v := s.Conversation(k).View(); len(v.Messages) != 0 {

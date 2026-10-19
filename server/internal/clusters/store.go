@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 
@@ -162,7 +163,11 @@ func (s *SecretStore) List(ctx context.Context) ([]Spec, error) {
 	for i := range list.Items {
 		spec, err := UnmarshalSpec(list.Items[i].Data[keySpec])
 		if err != nil {
-			return nil, fmt.Errorf("reading the connection Secret %s: %w", list.Items[i].Name, err)
+			// One unreadable Secret (a newer console's format after a
+			// rollback, or a stray label) must not hide every other
+			// connection: it is skipped and said in the log.
+			slog.Warn("connection Secret skipped: it cannot be read", "secret", list.Items[i].Name, "err", err)
+			continue
 		}
 		out = append(out, spec)
 	}

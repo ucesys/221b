@@ -1,3 +1,5 @@
+import type { TimeFormat } from '../lib/format'
+
 // The shapes the server sends. They mirror server/internal/nodes,
 // server/internal/views, server/internal/live and server/internal/kube;
 // keep the two in step.
@@ -461,6 +463,8 @@ export interface ClusterInfo {
 /** The settings everyone shares, kept on the server. */
 export interface Settings {
   refreshSeconds: number
+  /** How every console shows dates and times; absent is the default. */
+  timeFormat?: TimeFormat
   /** Each cluster's fleets (P4-01), by connection id. */
   fleets?: Record<string, Fleet[]>
   /** Where the server keeps them: "configmap" survives restarts, "memory" does not. */

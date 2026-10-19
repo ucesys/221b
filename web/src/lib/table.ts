@@ -182,7 +182,11 @@ export function exportTable<R>(rows: R[], cols: ColumnDef<R>[], now: number): { 
 
 function csvField(c: Cell): string {
   if (c == null) return ''
-  const s = typeof c === 'string' ? c : String(c)
+  let s = typeof c === 'string' ? c : String(c)
+  // Text that a spreadsheet would run as a formula, such as an event
+  // message that starts with =HYPERLINK(: a leading ' keeps it text.
+  // Numbers, negative ones too, and a lone dash stay as they are.
+  if (typeof c === 'string' && /^[=+\-@\t\r]/.test(s) && s !== '-' && !/^[-+]?\d[\d.,]*%?$/.test(s)) s = "'" + s
   return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
 }
 

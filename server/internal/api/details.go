@@ -131,7 +131,9 @@ func (s *Server) object(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	if !s.mayList(w, r, cl, k.Resource, ns) {
+	// A cluster-scoped object (a ClusterRole of a release) is asked about
+	// cluster-wide: a namespaced grant must not open it.
+	if !s.mayListScope(w, r, cl, k.Resource, ns, !k.Namespaced) {
 		return
 	}
 	d, ok := views.BuildObjectDetails(cl, k, ns, name, s.opts.Now().UTC())
@@ -182,6 +184,10 @@ func (s *Server) yaml(w http.ResponseWriter, r *http.Request) {
 		} else {
 			jsonError(w, http.StatusNotFound, k.Kind+" is cluster-scoped: it has no namespace")
 		}
+		return
+	}
+	if err := kube.CheckPathNames(ns, name); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
@@ -363,6 +369,9 @@ func (s *Server) podLog(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-beat.C:
+			if !s.sessionStands(r) {
+				return
+			}
 			_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
 			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
 				return

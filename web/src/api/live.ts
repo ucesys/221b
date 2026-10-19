@@ -140,6 +140,8 @@ export class LiveStore {
   private open = false
   private failures = 0
   private reopenTimer: ReturnType<typeof setTimeout> | undefined
+  /** A connect is waiting for the page's load event. */
+  private awaitingLoad = false
   private views: string[] = []
 
   constructor(readonly url = '/api/v1/events') {}
@@ -213,8 +215,19 @@ export class LiveStore {
     if (!this.open) return
     // A stream opened while the page is still loading keeps some browsers
     // (Firefox) from ever firing the load event; wait for it first.
+    // One wait is enough: the connect then opens the views wanted by then,
+    // and a second listener would open a second stream nothing closes.
     if (typeof document !== 'undefined' && document.readyState !== 'complete') {
-      window.addEventListener('load', () => this.connect(), { once: true })
+      if (this.awaitingLoad) return
+      this.awaitingLoad = true
+      window.addEventListener(
+        'load',
+        () => {
+          this.awaitingLoad = false
+          this.connect()
+        },
+        { once: true },
+      )
       return
     }
     this.views = this.wantedViews()

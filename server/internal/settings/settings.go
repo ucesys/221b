@@ -27,6 +27,9 @@ type Settings struct {
 	// (CPU and memory in use), rebuilds the rows that changed and sends every
 	// browser the same update at the same moment.
 	RefreshSeconds int `json:"refreshSeconds"`
+	// TimeFormat is how every console shows dates and times, each in its
+	// browser's time zone; nil is the default, 2026-05-03 1:34pm PDT.
+	TimeFormat *TimeFormat `json:"timeFormat,omitempty"`
 	// Fleets are each cluster's fleets (P4-01), by the cluster's
 	// connection id.
 	Fleets map[string][]fleets.Fleet `json:"fleets,omitempty"`
@@ -39,6 +42,30 @@ type Settings struct {
 	// Watson is how Watson approves changes (Phase 6); nil is the
 	// defaults.
 	Watson *Watson `json:"watson,omitempty"`
+}
+
+// TimeFormat is how dates and times read in every console.
+type TimeFormat struct {
+	// Date is iso (2026-05-03), us (05/03/2026), eu (03/05/2026) or long
+	// (May 3, 2026).
+	Date string `json:"date"`
+	// Clock is 12h (1:34pm) or 24h (13:34).
+	Clock string `json:"clock"`
+}
+
+// Validate reports what is wrong with the time format.
+func (t TimeFormat) Validate() error {
+	switch t.Date {
+	case "iso", "us", "eu", "long":
+	default:
+		return fmt.Errorf("the date format must be iso, us, eu or long")
+	}
+	switch t.Clock {
+	case "12h", "24h":
+	default:
+		return fmt.Errorf("the clock must be 12h or 24h")
+	}
+	return nil
 }
 
 // Watson is what an administrator chooses for Watson.
@@ -165,6 +192,11 @@ func (s Settings) Validate() error {
 			return fmt.Errorf("Sherlock: %w", err)
 		}
 	}
+	if s.TimeFormat != nil {
+		if err := s.TimeFormat.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -277,6 +309,9 @@ func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
 	if in.Watson == nil {
 		in.Watson = s.Current().Watson
 	}
+	if in.TimeFormat == nil {
+		in.TimeFormat = s.Current().TimeFormat
+	}
 	return s.update(ctx, in)
 }
 
@@ -377,6 +412,10 @@ func (s *Service) update(ctx context.Context, in Settings) (State, error) {
 func (s *Service) Reload(ctx context.Context) { s.reload(ctx, false) }
 
 func (s *Service) reload(ctx context.Context, initial bool) {
+	// Ordered with updates: a read that started before a change was saved
+	// would otherwise put the old settings back once the change is in.
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	b, err := s.storage.Load(ctx)
 	switch {
 	case errors.Is(err, ErrNotFound):

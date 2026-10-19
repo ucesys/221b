@@ -230,7 +230,7 @@ export function alertQuestion(r: { kind: string; name: string; namespace?: strin
   return podQuestion({ namespace: r.namespace ?? '', name: r.name, status: r.status, restarts: r.restarts }, r.namespace ?? '', r.name)
 }
 
-/** The question a home card's Find deficiencies button asks (Phase 6 review). */
+/** The question a home card's Audit button asks (Phase 6 review). */
 export function reviewQuestion(cluster: string): string {
   return `Deficiency review of cluster ${cluster}: where does its Kubernetes setup fall short of good practice, and what should change first?`
 }

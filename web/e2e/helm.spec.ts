@@ -25,11 +25,15 @@ test('matches helm list -A: every release with its chart, app version, revision,
   }
   const list = page.getByTestId('release-list')
   for (const r of rows) {
-    const item = list.getByRole('link', { name: new RegExp(`^${r.name}\\b`) })
+    // The link is the release's name; the row under it says the rest.
+    const name = new RegExp(`^${r.name}\\b`)
+    const item = list.getByRole('link', { name })
     await expect(item).toBeVisible()
-    await expect(item).toContainText(r.status)
-    await expect(item).toContainText(`${r.chart}-${r.chartVersion}`)
-    await expect(item).toContainText(`rev ${r.revision}`)
+    // An inner locator is matched inside the outer one, so it starts from the page.
+    const row = list.locator('.rk-rrow', { has: page.getByRole('link', { name }) })
+    await expect(row).toContainText(r.status)
+    await expect(row).toContainText(`${r.chart}-${r.chartVersion}`)
+    await expect(row).toContainText(`rev ${r.revision}`)
   }
   // A release whose chart sets no Helm labels on its pods still has them,
   // through the workloads in its manifest (asked at the Phase 2 review).

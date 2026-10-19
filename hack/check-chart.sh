@@ -47,6 +47,7 @@ render k8s-console --set clusterName=ci --set auth.mode=oidc --set auth.oidc.iss
   --set auth.oidc.clientID=console --set auth.oidc.clientSecret=hunter22 --set auth.oidc.providerName=Keycloak \
   --set 'auth.adminGroups[0]=platform-admins' --set 'auth.admins[0]=ops@corp.example' \
   --set ingress.enabled=true --set ingress.className=nginx --set ingress.host=console.example.com --set ingress.tls.enabled=true --set ingress.tls.secretName=console-tls \
+  --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.kubernetes\.io/metadata\.name=ingress-nginx' \
   --set audit.webhook.url=https://hooks.example/221b --set audit.webhook.token=hook-token |
   tee "$WORK/chart-oidc.yaml" | validate
 echo "--- local accounts, from values and from an existing Secret; sign-in off"
@@ -119,6 +120,15 @@ ingress_tls() {
     grep -q 'host: "console.example.com"' "$o" && grep -A1 'name: HTTPS_REDIRECT' "$o" | grep -q '"true"' &&
     grep -A1 'name: ALLOWED_HOSTS' "$o" | grep -q ',console.example.com"' && ! grep -q 'HTTPS_REDIRECT' "$out" &&
     ! render k8s-console --set clusterName=ci --set ingress.enabled=true --set ingress.host= > /dev/null 2>&1
+}
+# An Ingress in front of a ClusterIP Service needs its controller listed as
+# a peer: a policy that admits nothing would answer every request with 502.
+ingress_peers() {
+  local peers refused
+  peers=$(grep -A6 '^  ingress:' "$WORK/chart-oidc.yaml")
+  refused=$(render k8s-console --set clusterName=ci --set ingress.enabled=true --set ingress.host=console.example.com 2>&1 || true)
+  [[ $peers == *ingress-nginx* && $refused == *'needs networkPolicy.ingressFrom'* ]] &&
+    render k8s-console --set clusterName=ci --set ingress.enabled=true --set ingress.host=console.example.com --set networkPolicy.enabled=false > /dev/null
 }
 # Outbound traffic: only the API server by default; with OIDC or a webhook
 # also DNS and HTTPS.
@@ -318,6 +328,7 @@ check "OIDC sign-in takes its client secret from a Secret and names the administ
 check "OIDC without a client secret, and an unknown mode, are refused" oidc_requires_client
 check "the audit webhook and its token" audit_webhook
 check "an Ingress with TLS redirects HTTP, allows its host and needs a host" ingress_tls
+check "an Ingress needs its controller among the network policy's peers" ingress_peers
 check "API server addresses narrow the egress rule" api_server_addresses
 check "it answers to its Service's names and the names in values" host_names
 check "Watson reads only by default; with mode write and sign-in off it is bound to the write role and may cordon and drain" watson_write

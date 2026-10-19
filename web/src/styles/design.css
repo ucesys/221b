@@ -70,6 +70,15 @@ a{color:#0A6E69}a:hover{color:#075450}
 .rk-copy{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;flex:none;margin-left:6px;padding:0;border:0;border-radius:5px;background:transparent;color:var(--fg3);opacity:.5;vertical-align:middle;cursor:pointer}
 .rk-copy:hover,.rk-copy:focus-visible{opacity:1;background:var(--sunken);color:var(--fg)}
 .rk-copy[data-copied=ok]{opacity:1;color:var(--ok)}
+/* A name with a copy icon that shows while it is hovered: tables, side lists and the fleet matrix. */
+.rk-namecopy{display:inline-flex;align-items:center;min-width:0;max-width:100%}
+.rk-namecopy .rk-copy{margin-left:4px;opacity:0}
+.rk-rrow-link{cursor:pointer}
+.rk-rrow-link .rk-rname::after{content:'';position:absolute;inset:0}
+.rk-rrow-link .rk-rname:focus-visible{outline:none}
+.rk-rrow-link .rk-rname:focus-visible::after{outline:2px solid var(--accent);outline-offset:-2px}
+.rk-rrow-link .rk-copy{position:relative;z-index:1}
+.rk-namecopy:hover .rk-copy,.rk-namecopy .rk-copy:focus-visible,.rk-namecopy .rk-copy[data-copied]{opacity:1}
 .rk-tiplayer{position:fixed;z-index:200;max-width:300px;padding:7px 10px;border-radius:7px;background:var(--fg);color:var(--bg);font-size:12px;line-height:1.4;white-space:pre-line;pointer-events:none;box-shadow:0 4px 14px rgba(0,0,0,.18)}
 .rk-roletile{display:flex;flex-direction:column;gap:4px;width:100%;padding:10px 64px 10px 12px;border:0;border-radius:8px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .rk-roletile:hover{background:var(--sunken)}
@@ -135,7 +144,6 @@ button.rk-chip:hover{border-color:var(--line2);background:var(--sunken)}
 .rk-mdot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--warn);margin-left:-2px}
 .rk-mdot[data-tone=err]{background:var(--err)}
 @media (max-width:1180px){.rk-ver{display:none}}
-@media (max-width:1180px){.rk-asof{display:none}}
 .rk{--hdr-h:53px}
 @media (max-width:760px){.rk{--hdr-h:91px}.rk-hdr{column-gap:12px;padding:0 16px!important}.rk-views{order:3;flex:1 1 100%!important;gap:16px}.rk-tabs>.rk-tab,.rk-views>.rk-dd>.rk-tab{min-height:42px}.rk-views .rk-ddmenu{left:auto;right:0}.rk-brand,.rk-meta{min-height:48px!important}.rk-meta{margin-left:auto}}
 .rk-dd{position:relative}

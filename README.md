@@ -180,7 +180,7 @@ For a deployment where nothing can change any cluster through the console, even 
 |---|---|---|
 | Role definitions | `rbac.roles.admin.template=readOnly`, `rbac.roles.superAdmin.template=readOnly` | The Kubernetes API server: the four roles have no write verb (SuperAdmin keeps `get`, `list`, `watch` on everything) |
 | Cluster connection | `localCluster.mode=read`; *Read only* on each remote connection | Watson: refuses every change on that cluster before a card is made |
-| Console account | the chart's read-only ClusterRole; `cluster-console-read` on remote clusters | The Kubernetes API server: the console's own account cannot write, so even with sign-in off nothing runs |
+| Console account | the chart's read-only ClusterRole with `kubeletStats=false`; `cluster-console-read` on remote clusters | The Kubernetes API server: the console's own account writes nothing but its own settings and connections, so even with sign-in off nothing runs |
 
 1. **Install or upgrade the local cluster read-only.**
 
@@ -197,9 +197,12 @@ For a deployment where nothing can change any cluster through the console, even 
      enforce: strict            # refuse changes if anyone edits a 221b-* role to allow more
    auth:
      mode: local                # keep sign-in on (local, ldap or oidc), never none
+   kubeletStats: false          # no get on nodes/proxy: kubelets authorize exec in any pod as that get
    secrets:
-     read: false                # optional: the console and the roles get nothing on Secrets
+     read: false                # optional: the console, Viewer and Admin get nothing on Secrets cluster-wide
    ```
+
+   `kubeletStats: false` matters here: the node uptime it reads needs `get` on `nodes/proxy`, and a kubelet authorizes a command in any of its pods (the exec endpoint, opened as a WebSocket) as that same `get`. Without it the node details show how long each node has been Ready instead of its uptime. The read-only SuperAdmin never has `get` on `nodes/proxy`, `pods/exec`, `pods/attach`, `pods/portforward`, `pods/proxy` or `services/proxy`; it still reads every Secret, in both definitions, so people who must not read Secrets are SuperViewers.
 
    ```sh
    helm upgrade --install k8s-console deploy/helm/221b -n 221b --reset-then-reuse-values -f read-only.yaml
@@ -213,10 +216,12 @@ For a deployment where nothing can change any cluster through the console, even 
    kubectl get clusterrole -l 221b/managed=true -L 221b/definition          # every role says readOnly
    kubectl auth can-i delete pods -A --as=probe --as-group=221b:superadmins  # no
    kubectl auth can-i patch deployments -A --as=probe --as-group=221b:superadmins  # no
-   kubectl auth can-i --list --as=system:serviceaccount:221b:k8s-console-221b | grep -v -E 'get|list|watch'
+   kubectl auth can-i get nodes/proxy --as=system:serviceaccount:221b:k8s-console-221b          # no
+   kubectl auth can-i get pods/exec -A --as=probe --as-group=221b:superadmins                 # no
+   kubectl auth can-i --list --as=system:serviceaccount:221b:k8s-console-221b | grep -E 'create|update|patch|delete|impersonate|\*'
    ```
 
-   The last line shows the console account's only writes: its settings ConfigMap and its connection Secrets, both in its own namespace. In the console, **Administration → Roles** says *Definitions in use: Admin read-only, SuperAdmin read-only*, and a change sent to Watson is refused with *read-only cluster*.
+   The last line lists every grant of the console account beyond reading: its settings ConfigMap (`get`, `patch`, by name) and the Secrets of its own namespace (its connections; `connections.store=memory` removes that grant), `impersonate` on users and on the groups 221B asserts, and `create` on the access reviews every account may create. Kubernetes cannot limit which user names an account impersonates, so the console's token is as powerful as the most powerful user in the cluster: guard the console's namespace accordingly. In the console, **Administration → Roles** says *Definitions in use: Admin read-only, SuperAdmin read-only*, and a change sent to Watson is refused with *read-only cluster*.
 
 3. **Do the same on every remote cluster.** In step 1 of [Set up a remote cluster](#3-set-up-a-remote-cluster), choose **Read only** so the console's account there is bound to `cluster-console-read` (get, list and watch only). Download the roles YAML from this read-only deployment (it carries the definitions in use, so `readOnly`) and apply it there. In the connection editor, set *What the console may do* to **Read only**. Then check:
 
@@ -246,13 +251,13 @@ To open changes again later, reverse one level at a time (for example `localClus
 
 **Other clusters** are added in the console, from **Add a cluster** on the home page or the cluster menu in the top bar (SuperAdmins only; step by step in [Set up a remote cluster](#3-set-up-a-remote-cluster)): the cluster's API server address, its CA certificate (or the image's trust store), and how the console signs in there, with a ServiceAccount token, a kubeconfig context or a client certificate. The editor shows the RBAC to grant that account and tests the connection step by step (address, TLS, sign-in, Kubernetes, permissions) before saving. Each connection is kept as a Secret in the console's namespace (`kubectl -n 221b get secrets -l app.kubernetes.io/component=cluster-connection`), the credential never comes back out, and removing the cluster deletes it. The cluster the console runs in is the connection named `local`, with its own credentials. A token that expires within a week is flagged in the menu and on the cluster page. Give the console a namespace of its own: the Role that lets it keep connections covers every Secret in that namespace.
 
-**To put it on the network** instead, add `--set service.type=LoadBalancer`. With a load balancer controller (MetalLB, kube-vip, a cloud provider) the Service gets an address that answers on port 8081; `kubectl -n 221b get svc k8s-console-221b` shows it. Without one, every node still answers on the node port shown there, and `--set 'service.externalIPs={10.0.0.21,10.0.0.22}'` with your nodes' addresses makes them answer on 8081 as well. The network policy lets anyone reach an exposed Service unless `networkPolicy.ingressFrom` lists who may. For TLS, publish it through an Ingress: `--set ingress.enabled=true --set ingress.host=console.example.com --set ingress.tls.enabled=true --set ingress.tls.secretName=<certificate Secret>`; plain HTTP is then redirected and the session cookie marked Secure. Without TLS, sessions travel in the clear.
+**To put it on the network** instead, add `--set service.type=LoadBalancer`. With a load balancer controller (MetalLB, kube-vip, a cloud provider) the Service gets an address that answers on port 8081; `kubectl -n 221b get svc k8s-console-221b` shows it. Without one, every node still answers on the node port shown there, and `--set 'service.externalIPs={10.0.0.21,10.0.0.22}'` with your nodes' addresses makes them answer on 8081 as well. The network policy lets anyone reach an exposed Service unless `networkPolicy.ingressFrom` lists who may. For TLS, publish it through an Ingress: `--set ingress.enabled=true --set ingress.host=console.example.com --set ingress.tls.enabled=true --set ingress.tls.secretName=<certificate Secret>`; plain HTTP is then redirected and the session cookie marked Secure. With the default ClusterIP Service the network policy admits only the peers in `networkPolicy.ingressFrom`, so list your Ingress controller there (for ingress-nginx, `--set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.kubernetes\.io/metadata\.name=ingress-nginx'`); the chart refuses an Ingress with an empty list, which would let no traffic in. Without TLS, sessions travel in the clear.
 
 To upgrade after a `git pull`, keep your settings and take the chart's new defaults: `helm upgrade k8s-console deploy/helm/221b -n 221b --reset-then-reuse-values` (plain `--reuse-values` keeps the old chart's defaults too, so new ones never apply). To see what it may read: `kubectl auth can-i --list --as=system:serviceaccount:221b:k8s-console-221b`. To remove it: `helm uninstall k8s-console -n 221b`.
 
 CPU and memory in use come from [metrics-server](https://github.com/kubernetes-sigs/metrics-server) when the cluster has it; without it, the tabs say so and show everything else. Each node's uptime comes from its kubelet, read through the API server once per boot; that needs `get` on `nodes/proxy`, which the chart grants unless you set `kubeletStats=false`.
 
-**Secrets** are read by default (`secrets.read`), so that each namespace lists its Secrets by key name and size and the Helm tab can read release records, which Helm keeps in Secrets. The server keeps only key names and sizes, the names, issuer and validity of a TLS Secret's certificate (which the Networks tab checks; `tls.key` is never read), decodes release records with credential-looking values masked, and never shows, logs or exports a Secret's value; CI plants a known value and checks it appears nowhere. `--set secrets.read=false` grants the console nothing on Secrets at all: namespaces then list no Secrets and there is no Helm tab.
+**Secrets** are read by default (`secrets.read`), so that each namespace lists its Secrets by key name and size and the Helm tab can read release records, which Helm keeps in Secrets. The server keeps only key names and sizes, the names, issuer and validity of a TLS Secret's certificate (which the Networks tab checks; `tls.key` is never read), decodes release records with credential-looking values masked, and never shows, logs or exports a Secret's value; CI plants a known value and checks it appears nowhere. `--set secrets.read=false` takes Secrets out of the console's ClusterRole and out of the Viewer and Admin roles: namespaces then list no Secrets and there is no Helm tab. The console still keeps its connections as Secrets of its own namespace (unless `connections.store=memory`), and SuperAdmin, in both definitions, still reads every Secret.
 
 **Watson** shows only where Sherlock is on, and runs reads in any cluster. It changes the cluster the console runs in only when installed with `--set localCluster.mode=write`, and another cluster only when its connection is set to *Read and change*. With sign-in on, each change runs as the person who approves it, so their own RBAC decides; with `auth.mode=none`, changes run as the console's ServiceAccount, which the chart then binds to the built-in `edit` ClusterRole (`localCluster.writeClusterRole`) and a small role to cordon and drain nodes.
 

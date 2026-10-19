@@ -140,8 +140,8 @@ function AlertCard({ r, now, onOpen, onPod, onExport, onAck }: { r: AlertRow; no
         </span>
         <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{metaText(r)}</span>
         {r.ack && (
-          <span className="rk-tag" data-tone="warn" style={{ fontSize: 11, padding: '2px 8px' }} title={`Acknowledged by ${r.ack.by}, ${fmtTs(r.ack.at)}. It stays off the banners until it changes or clears; the tab still counts it.`} data-testid="alert-acked">
-            Acknowledged by {r.ack.by} · {agoText(r.ack.at, now)}
+          <span className="rk-tag" data-tone="warn" style={{ fontSize: 11, padding: '2px 8px' }} title={`Acknowledged by ${r.ack.by} at ${fmtTs(r.ack.at, { seconds: true })}. It stays off the banners until it changes or clears; the tab still counts it.`} data-testid="alert-acked">
+            Acknowledged by {r.ack.by} at {fmtTs(r.ack.at)}
           </span>
         )}
         <span style={{ flex: '1 1 auto' }} />

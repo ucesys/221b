@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/validation/path"
 	"sigs.k8s.io/yaml"
 )
 
@@ -25,6 +26,11 @@ func ToYAML(v any) (string, error) {
 // by their sizes, so no value is ever sent (X-01). The read is made as the
 // person, so their RBAC decides whether they get it (P3-02).
 func (c *Cluster) ObjectYAML(ctx context.Context, p Person, k Kind, namespace, name string) (string, error) {
+	// The names go into the request path as they are: a "../secrets/x"
+	// would read another kind's object, a Secret unhidden (X-01).
+	if err := CheckPathNames(namespace, name); err != nil {
+		return "", err
+	}
 	cs, err := c.as(p)
 	if err != nil {
 		return "", err
@@ -51,10 +57,28 @@ func (c *Cluster) ObjectYAML(ctx context.Context, p Person, k Kind, namespace, n
 	if meta, ok := obj["metadata"].(map[string]any); ok {
 		delete(meta, "managedFields")
 	}
-	if k.Kind == "Secret" {
+	// By what the API server returned, not only what was asked for.
+	if k.Kind == "Secret" || obj["kind"] == "Secret" {
 		hideSecretData(obj)
 	}
 	return ToYAML(obj)
+}
+
+// CheckPathNames refuses a namespace or name that is not a single path
+// segment, such as "..", or one holding a "/" or a "%".
+func CheckPathNames(namespace, name string) error {
+	if name == "" {
+		return apierrors.NewBadRequest("no name given")
+	}
+	for _, n := range []string{namespace, name} {
+		if n == "" {
+			continue
+		}
+		if bad := path.IsValidPathSegmentName(n); len(bad) > 0 {
+			return apierrors.NewBadRequest(fmt.Sprintf("%q is not a valid name: %s", n, bad[0]))
+		}
+	}
+	return nil
 }
 
 // ErrNotFound is returned for an object that does not exist.

@@ -95,8 +95,11 @@ type Service struct {
 	accounts *Accounts
 	dir      Directory
 	people   *people
-	// reread serializes reading a person's groups again.
-	reread sync.Mutex
+	// rereads serializes reading one person's groups again. Each person
+	// has their own lock, so a directory slow to answer holds up only the
+	// person it is answering about, not everyone signed in from it (RB-22).
+	rereadMu sync.Mutex
+	rereads  map[string]*rereadLock
 	// setup slows guessing at the first-run page.
 	setup *limiter
 	// perAccount slows guessing at one account; perAddress slows spraying
@@ -316,13 +319,17 @@ func (s *Service) setSession(w http.ResponseWriter, r *http.Request, sess *Sessi
 	http.SetCookie(w, &http.Cookie{Name: cookieSession, Value: sess.ID, Path: "/", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteLaxMode, MaxAge: int(s.cfg.SessionMax / time.Second)})
 }
 
-func clearCookie(w http.ResponseWriter, r *http.Request, name string) {
-	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: "/", HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteLaxMode, MaxAge: -1})
+// clearCookie removes a cookie; the path must be the one it was set with.
+func clearCookie(w http.ResponseWriter, r *http.Request, name, path string) {
+	http.SetCookie(w, &http.Cookie{Name: name, Value: "", Path: path, HttpOnly: true, Secure: secure(r), SameSite: http.SameSiteLaxMode, MaxAge: -1})
 }
 
 // safeNext keeps a redirect on this site: a path, with its query and hash.
+// A backslash or control character anywhere is refused: http.Redirect
+// cleans the path, so /./\evil.example would become /\evil.example, which
+// browsers read as //evil.example.
 func safeNext(next string) string {
-	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") {
+	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.ContainsFunc(next, func(c rune) bool { return c == '\\' || c < 0x20 || c == 0x7f }) {
 		return "/"
 	}
 	if u, err := url.Parse(next); err != nil || u.Host != "" || u.Scheme != "" {
@@ -616,7 +623,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		s.renderSignIn(w, r, "This sign-in has expired or did not start here. Try again.", http.StatusBadRequest)
 		return
 	}
-	clearCookie(w, r, cookieSignIn)
+	clearCookie(w, r, cookieSignIn, "/signin")
 	q := r.URL.Query()
 	if subtle.ConstantTimeCompare([]byte(q.Get("state")), []byte(st.State)) != 1 {
 		s.renderSignIn(w, r, "This sign-in does not match the one that started. Try again.", http.StatusBadRequest)
@@ -643,6 +650,13 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := User{Subject: id.Subject, Username: id.Username, Email: id.Email, Name: id.Name, Groups: id.Groups}
+	// A user name Kubernetes or 221B reserves is refused (RB-17): the
+	// console would act as system:… or as a local or directory person.
+	if s.cfg.Prefixes.Reserved(user.Username) {
+		s.record(r, audit.ActionNameRefused, user, audit.OutcomeDenied, "reserved user name refused: "+user.Username)
+		s.renderSignIn(w, r, "You cannot sign in: the provider names you "+user.Username+", a name reserved for Kubernetes or 221B. Ask an administrator.", http.StatusForbidden)
+		return
+	}
 	g := s.grant(roles.OIDC, user, nil)
 	sess := Session{User: user, Method: string(ModeOIDC)}
 	g.apply(&sess)
@@ -666,7 +680,7 @@ func (s *Service) signOut(w http.ResponseWriter, r *http.Request) {
 		s.sessions.Delete(sess.ID)
 		s.record(r, audit.ActionSignOut, sess.User, audit.OutcomeOK, "")
 	}
-	clearCookie(w, r, cookieSession)
+	clearCookie(w, r, cookieSession, "/")
 	if strings.Contains(r.Header.Get("Accept"), "application/json") {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_, _ = w.Write([]byte(`{"signedOut":true}` + "\n"))

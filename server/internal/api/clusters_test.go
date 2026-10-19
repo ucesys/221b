@@ -445,3 +445,64 @@ func TestPeopleSeeWhatKubernetesAllows(t *testing.T) {
 		}
 	}
 }
+
+func TestClusterScopedDetailsAskClusterWide(t *testing.T) {
+	// The person may list namespaces in web (a namespaced grant) but not
+	// cluster-wide: the drawer of a cluster-scoped object stays closed.
+	srv, viewer, _, _, _, _ := multiSetupWith(t, "viewer@corp.example", map[string]bool{"namespaces/": true})
+	if resp, b := send(t, viewer, http.MethodGet, srv.URL+"/api/v1/objects/namespaces/web/web", ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("namespace web through a namespaced grant: %s %s", resp.Status, b)
+	}
+	srv, viewer, _, _, _, _ = multiSetupWith(t, "viewer@corp.example", nil)
+	if resp, b := send(t, viewer, http.MethodGet, srv.URL+"/api/v1/objects/namespaces/web/web", ""); resp.StatusCode != http.StatusOK {
+		t.Fatalf("namespace web with a cluster-wide grant: %s %s", resp.Status, b)
+	}
+}
+
+func TestStreamsEndWithTheSession(t *testing.T) {
+	// With Watson, so the assistants' stream is there too.
+	srv, ops, _, _, _ := watsonSetup(t, "ops@corp.example", clusters.EnvStaging, clusters.ModeWrite)
+	other := signIn(t, srv, "ops@corp.example")
+	// open reads a stream until it ends; the channel closes then.
+	open := func(c *http.Client, path string) <-chan struct{} {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		t.Cleanup(cancel)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+path, nil)
+		resp, err := c.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %v %v", path, err, resp)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			defer resp.Body.Close()
+			io.Copy(io.Discard, resp.Body)
+		}()
+		return done
+	}
+	live, assistants := open(ops, "/api/v1/events?views=nodes"), open(ops, "/api/v1/assistants/events")
+	kept := open(other, "/api/v1/events?views=nodes")
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/signout", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Accept", "application/json")
+	if resp, err := ops.Do(req); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("sign out: %v %v", err, resp)
+	} else {
+		resp.Body.Close()
+	}
+	// Both streams of the ended session stop at their next heartbeat...
+	for name, done := range map[string]<-chan struct{}{"events": live, "assistants": assistants} {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("the %s stream outlived its session", name)
+		}
+	}
+	// ...and the same person's other session goes on.
+	select {
+	case <-kept:
+		t.Fatal("another session's stream ended")
+	case <-time.After(300 * time.Millisecond):
+	}
+}

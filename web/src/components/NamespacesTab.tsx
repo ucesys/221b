@@ -196,6 +196,7 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
     href: href('namespaces', [n.name]),
     current: n.name === ns,
     name: n.name,
+    copy: 'namespace name',
     right:
       n.podsFailing || n.podsNotRunning ? (
         <span className="rk-t" data-tone={n.podsFailing ? 'err' : 'warn'} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, whiteSpace: 'nowrap' }}>

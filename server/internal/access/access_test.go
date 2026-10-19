@@ -118,6 +118,16 @@ func TestAccessAsksOnceAndAgainAfterTheTTL(t *testing.T) {
 	if !a.Allow(live.ViewPods, "web/shop") || a.Version() != v {
 		t.Fatal("a failing review changed the verdicts")
 	}
+	// A replaced connection (a new checker) starts over: its namespaces
+	// may share names with the old one's and mean something else.
+	now = now.Add(2 * time.Minute)
+	c.fail.Store(false)
+	if _, err := a.Prepare(context.Background(), pairs, 0); err != nil || !a.Allow(live.ViewPods, "web/shop") {
+		t.Fatal("not allowed again after the failure ended")
+	}
+	if b := cache.For("local", &checker{}, dev); b != a || b.Allow(live.ViewPods, "web/shop") || b.Version() == v {
+		t.Fatal("verdicts outlived the connection they were asked of")
+	}
 	// People who have not asked for a while are forgotten.
 	if cache.Count() != 2 {
 		t.Fatalf("%d people kept", cache.Count())

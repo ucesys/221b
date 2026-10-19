@@ -36,6 +36,7 @@ import { askContext, useUIControl } from './lib/uiWindow'
 import { ViewAnnouncer } from './components/ViewAnnouncer'
 import { AssistantWindow } from './components/AssistantWindow'
 import { readJSON, writeJSON } from './lib/storage'
+import { setTimeFormat } from './lib/format'
 
 const THEME_KEY = '221b.theme'
 
@@ -112,6 +113,8 @@ type Editing = string | null | undefined
 
 function Shell() {
   const live = useLiveMeta()
+  // Every date and time follows the format the settings carry.
+  setTimeFormat(live.settings?.timeFormat)
   const route = useRoute()
   const now = useNow()
   const me = useMe()
@@ -242,7 +245,7 @@ function Shell() {
         .catch((e: unknown) => setToast(e instanceof WatsonError ? e.message : String(e)))
     },
   }
-  // A home card's Find deficiencies button (Phase 6 review) opens the
+  // A home card's Audit button (Phase 6 review) opens the
   // cluster with ?ask=review: Sherlock asks for the review once it can.
   const reviewAsked = view === 'tabs' && route.params.get('ask') === 'review'
   const reviewReady = reviewAsked && sherlockApi.available && clusterName !== ''

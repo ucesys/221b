@@ -450,13 +450,18 @@ func (m *Monitor) Get(cluster string) (Drift, bool) {
 
 // Refusal says why every change on a cluster is refused, or "" when it is
 // not: with rbac.enforce strict, a cluster whose roles allow more than the
-// shipped ones refuses every change, naming the difference (RB-36).
+// shipped ones refuses every change, naming the difference, and so does a
+// cluster whose roles have not been compared yet: strict fails closed
+// (RB-36).
 func (m *Monitor) Refusal(cluster, enforce string) string {
 	if enforce != "strict" {
 		return ""
 	}
 	d, ok := m.Get(cluster)
-	if !ok || !d.More {
+	if !ok {
+		return "Changes are refused on this cluster until 221B has compared its roles with the ones it ships (rbac.enforce is strict). Try again in a minute; if this stays, check that the console can read ClusterRoles there."
+	}
+	if !d.More {
 		return ""
 	}
 	var lines []string

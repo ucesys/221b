@@ -714,7 +714,11 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.opts.Logger.Info("settings changed from a browser", "refresh", st.Refresh(), "from", r.RemoteAddr, "user", sess.User.Username)
-	s.record(r, audit.ActionSettings, "settings", fmt.Sprintf("refresh %s", st.Refresh()))
+	detail := fmt.Sprintf("refresh %s", st.Refresh())
+	if f := st.TimeFormat; f != nil {
+		detail += fmt.Sprintf(", time format %s %s", f.Date, f.Clock)
+	}
+	s.record(r, audit.ActionSettings, "settings", detail)
 	b, _ := json.Marshal(st)
 	writeJSON(w, r, b)
 }
@@ -861,6 +865,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-beat.C:
+			if !s.sessionStands(r) {
+				return
+			}
 			// A connection replaced since (new credentials) has a new store:
 			// ending the stream makes the browser reopen it there.
 			if s.opts.Clusters != nil {
@@ -1013,18 +1020,27 @@ func acceptsGzip(r *http.Request) bool {
 }
 
 func writeJSON(w http.ResponseWriter, r *http.Request, body []byte) {
+	writeJSONStatus(w, r, http.StatusOK, body)
+}
+
+// writeJSONStatus is writeJSON with another status. The status is sent
+// after the headers are set: once it is, later headers are dropped, and a
+// gzipped body without its Content-Encoding cannot be read.
+func writeJSONStatus(w http.ResponseWriter, r *http.Request, code int, body []byte) {
 	h := w.Header()
 	h.Set("Content-Type", "application/json")
 	h.Set("Cache-Control", "no-store")
 	h.Set("Vary", "Accept-Encoding")
 	if len(body) > 1024 && acceptsGzip(r) {
 		h.Set("Content-Encoding", "gzip")
+		w.WriteHeader(code)
 		gz, _ := gzip.NewWriterLevel(w, gzip.BestSpeed)
 		gz.Write(body)
 		gz.Close()
 		return
 	}
 	h.Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(code)
 	w.Write(body)
 }
 

@@ -40,6 +40,11 @@ func RestConfig(s Spec, c Credential) (*rest.Config, error) {
 		if cfg.ExecProvider != nil || cfg.AuthProvider != nil {
 			return nil, errors.New("the kubeconfig signs in through a plugin, which the console cannot run")
 		}
+		// Files would be read on the console's machine: its own token, sent
+		// to whatever server the kubeconfig names.
+		if cfg.BearerTokenFile != "" || cfg.CertFile != "" || cfg.KeyFile != "" {
+			return nil, errors.New("the kubeconfig refers to files; paste one with the credentials inline")
+		}
 		if s.Server != "" {
 			cfg.Host = s.Server
 		}

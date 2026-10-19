@@ -35,6 +35,8 @@ interface Props {
   copy?: string | false
 }
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
 /**
  * The prototype's details drawer: over the page from the right, with a
  * backdrop that closes it, a header with tabs, and a scrolling body.
@@ -49,6 +51,17 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
     // Opened by Sherlock, it leaves focus where the person has it (P6U-09).
     if (!drivenRecently()) closeRef.current?.focus()
   }, [title])
+  // Closed, focus goes back to what opened it, unless the page has already
+  // put it somewhere (the Nodes tab returns it to the node's row).
+  useEffect(() => {
+    const opener = document.activeElement
+    return () => {
+      requestAnimationFrame(() => {
+        const lost = !document.activeElement || document.activeElement === document.body
+        if (lost && opener instanceof HTMLElement && opener.isConnected) opener.focus()
+      })
+    }
+  }, [])
   useEffect(() => {
     body.current?.scrollTo(0, 0)
   }, [tab])
@@ -89,6 +102,20 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
           if (e.key === 'Escape') {
             e.stopPropagation()
             onClose()
+          } else if (e.key === 'Tab' && !bySherlock) {
+            // Modal: Tab goes round the drawer and never into the page
+            // behind the backdrop, where Escape would no longer close it.
+            const all = [...e.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.getClientRects().length > 0)
+            const first = all[0]
+            const last = all[all.length - 1]
+            if (!first || !last) return
+            if (e.shiftKey && document.activeElement === first) {
+              e.preventDefault()
+              last.focus()
+            } else if (!e.shiftKey && document.activeElement === last) {
+              e.preventDefault()
+              first.focus()
+            }
           }
         }}
         style={{ position: 'relative', width: `min(${width}px, 100%)`, height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}

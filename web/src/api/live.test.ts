@@ -173,6 +173,26 @@ describe('the event stream', () => {
     stop()
   })
 
+  it('opens one stream when the page loads, however often the views changed before', () => {
+    Object.defineProperty(document, 'readyState', { value: 'loading', configurable: true })
+    try {
+      const { store, hook, stop } = mount(['nodes'])
+      act(() => void vi.advanceTimersByTime(30))
+      // Another tab before the load event: the views change again.
+      const off = store.want('pods')
+      act(() => void vi.advanceTimersByTime(30))
+      expect(FakeEventSource.made.length).toBe(0)
+      Object.defineProperty(document, 'readyState', { value: 'complete', configurable: true })
+      act(() => void window.dispatchEvent(new Event('load')))
+      expect(FakeEventSource.made.map((e) => e.url)).toEqual(['/events?views=nodes%2Cpods'])
+      off()
+      hook.unmount()
+      stop()
+    } finally {
+      Reflect.deleteProperty(document, 'readyState')
+    }
+  })
+
   it('leaves dropped connections to the browser', () => {
     const { hook, stop } = mount(['nodes'])
     act(() => void vi.advanceTimersByTime(30))

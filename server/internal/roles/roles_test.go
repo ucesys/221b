@@ -149,8 +149,27 @@ func TestSuperAdmin(t *testing.T) {
 	if len(writes(ro.Rules)) != 0 {
 		t.Errorf("SuperAdmin read-only writes: %+v", ro.Rules)
 	}
-	if !slices.Contains(ro.Rules[1].NonResourceURLs, "*") || ro.Rules[1].Verbs[0] != "get" {
-		t.Errorf("non-resource rule = %+v", ro.Rules[1])
+	last := ro.Rules[len(ro.Rules)-1]
+	if !slices.Contains(last.NonResourceURLs, "*") || last.Verbs[0] != "get" {
+		t.Errorf("non-resource rule = %+v", last)
+	}
+	// get on these opens a shell or a proxy (exec through the kubelet); the
+	// read-only SuperAdmin must not have it.
+	g := Grants(ro.Rules)
+	for _, res := range []string{"nodes/proxy", "pods/exec", "pods/attach", "pods/portforward", "pods/proxy", "services/proxy"} {
+		if covered(g, Grant{Verb: "get", Resource: res}) {
+			t.Errorf("SuperAdmin read-only can get %s", res)
+		}
+	}
+	for _, w := range append(slices.Clone(Watched), Resource{Resource: "secrets"}) {
+		for _, v := range []string{"get", "list", "watch"} {
+			if !covered(g, Grant{Verb: v, Group: w.Group, Resource: w.Resource}) {
+				t.Errorf("SuperAdmin read-only cannot %s %s %s", v, w.Group, w.Resource)
+			}
+		}
+	}
+	if !covered(g, Grant{Verb: "list", Group: "example.com", Resource: "widgets"}) {
+		t.Error("SuperAdmin read-only cannot list custom resources")
 	}
 }
 

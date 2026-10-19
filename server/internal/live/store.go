@@ -840,10 +840,21 @@ func (s *Store) applyLocked(v *view, r rebuilt, now time.Time) bool {
 }
 
 // filterRows encodes a change with only the rows a filter allows; nil
-// when nothing of it may be sent. Removes pass: a key the browser never
-// had is nothing to it.
+// when nothing of it may be sent. Removes are filtered too: a key names
+// its namespace and object, which a person who may not see them must not
+// learn from its going (P3-02).
 func filterRows(ev Rows, upsertKeys []string, f Filter) []byte {
-	out := Rows{View: ev.View, Version: ev.Version, At: ev.At, Removes: ev.Removes, UsageRemoves: ev.UsageRemoves}
+	out := Rows{View: ev.View, Version: ev.Version, At: ev.At}
+	for _, key := range ev.Removes {
+		if f.Allow(ev.View, key) {
+			out.Removes = append(out.Removes, key)
+		}
+	}
+	for _, key := range ev.UsageRemoves {
+		if f.Allow(ev.View, key) {
+			out.UsageRemoves = append(out.UsageRemoves, key)
+		}
+	}
 	for i, key := range upsertKeys {
 		if f.Allow(ev.View, key) {
 			out.Upserts = append(out.Upserts, Redact(ev.View, ev.Upserts[i], f))

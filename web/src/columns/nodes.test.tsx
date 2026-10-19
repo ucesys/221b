@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { fmtTs } from '../lib/format'
 import { controlPlane, row } from '../test/rows'
 import { defaultHidden, exportTable, gridTemplate, matchesQuery, queryWords, sortRows, visibleColumns } from '../lib/table'
 import { NODE_COLUMNS, nodeTerms } from './nodes'
@@ -129,7 +130,7 @@ describe('columns and export', () => {
       'Joined',
     ])
     expect(sheet.rows.map((r) => r[0])).toEqual(shown.map((r) => r.name))
-    expect(sheet.rows[0]).toEqual(['worker-10', 'Worker', 'Ready', 12, 75, 9, 16, 4, 16, 25, 8, 64, 48, 20, 110, 'zone-b', '', '2026-09-01 00:00:00 UTC'])
+    expect(sheet.rows[0]).toEqual(['worker-10', 'Worker', 'Ready', 12, 75, 9, 16, 4, 16, 25, 8, 64, 48, 20, 110, 'zone-b', '', fmtTs('2026-09-01T00:00:00Z')])
     // No reading from metrics-server stays empty rather than 0.
     expect(sheet.rows[3]![5]).toBeNull()
   })

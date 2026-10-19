@@ -125,8 +125,7 @@ func (s *Server) addCluster(w http.ResponseWriter, r *http.Request) {
 	s.recordCluster(r, audit.ActionClusterAdd, sum.ID, audit.OutcomeOK, fmt.Sprintf("%s (%s), %s, sign-in by %s, %s", sum.Name, sum.Env, sum.Server, sum.Auth, sum.Mode))
 	s.opts.Logger.Info("cluster connection added", "cluster", sum.ID, "server", sum.Server, "auth", sum.Auth)
 	b, _ := json.Marshal(sum)
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, r, b)
+	writeJSONStatus(w, r, http.StatusCreated, b)
 }
 
 func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {

@@ -9,6 +9,7 @@ import { apiPath, href, navigate, withParams } from '../lib/router'
 import { isWatchedKind, pluralKind } from '../lib/kinds'
 import { useTable } from '../lib/useTable'
 import { ColumnsMenu } from './ColumnsMenu'
+import { CopyName } from './CopyName'
 import { DataTable } from './DataTable'
 import { Card, Drawer } from './Drawer'
 import { ObjectPanel } from './ObjectPanel'
@@ -63,6 +64,7 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
     href: href('helm', [r.namespace, r.name]),
     current: current?.key === r.key,
     name: r.name,
+    copy: 'release name',
     right: (
       <span className="rk-t" data-tone={r.tone} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 500, whiteSpace: 'nowrap' }}>
         <span className="rk-dot" />
@@ -196,6 +198,7 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 12px' }}>
               <h2 className="rk-mono" style={{ margin: 0, fontSize: 18, fontWeight: 600 }} data-testid="release-name">
                 {current.name}
+                <CopyName text={current.name} what="release name" />
               </h2>
               <span className="rk-pill" data-tone={current.tone} title={current.description}>
                 <span className="rk-dot" />

@@ -29,6 +29,32 @@ func TestValidation(t *testing.T) {
 	}
 }
 
+func TestTimeFormat(t *testing.T) {
+	for _, c := range []struct {
+		f  settings.TimeFormat
+		ok bool
+	}{
+		{settings.TimeFormat{Date: "iso", Clock: "12h"}, true},
+		{settings.TimeFormat{Date: "long", Clock: "24h"}, true},
+		{settings.TimeFormat{Date: "us", Clock: "12"}, false},
+		{settings.TimeFormat{Date: "", Clock: "12h"}, false},
+	} {
+		f := c.f
+		if err := (settings.Settings{RefreshSeconds: 3, TimeFormat: &f}).Validate(); (err == nil) != c.ok {
+			t.Errorf("%+v: %v", c.f, err)
+		}
+	}
+	// An update that leaves the format out keeps the one in force.
+	svc := settings.NewService(context.Background(), &settings.Memory{}, settings.Default, quiet, nil)
+	if _, err := svc.Update(context.Background(), settings.Settings{RefreshSeconds: 3, TimeFormat: &settings.TimeFormat{Date: "eu", Clock: "24h"}}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := svc.Update(context.Background(), settings.Settings{RefreshSeconds: 5})
+	if err != nil || st.TimeFormat == nil || st.TimeFormat.Date != "eu" || st.TimeFormat.Clock != "24h" {
+		t.Fatalf("after a refresh change %+v %v", st.TimeFormat, err)
+	}
+}
+
 func TestServiceInMemory(t *testing.T) {
 	var seen []settings.State
 	svc := settings.NewService(context.Background(), &settings.Memory{}, settings.Settings{RefreshSeconds: 7}, quiet, func(st settings.State) { seen = append(seen, st) })
@@ -64,6 +90,54 @@ func TestServiceInMemory(t *testing.T) {
 	again.Reload(context.Background())
 	if again.Current().RefreshSeconds != 15 {
 		t.Fatalf("bad storage changed the settings: %+v", again.Current())
+	}
+}
+
+// heldLoad is storage whose next Load, once armed, reads and then waits.
+type heldLoad struct {
+	settings.Memory
+	armed   chan struct{} // closed by the Load it holds, once it has read
+	release chan struct{}
+}
+
+func (h *heldLoad) Load(ctx context.Context) ([]byte, error) {
+	b, err := h.Memory.Load(ctx)
+	if h.armed != nil {
+		armed := h.armed
+		h.armed = nil
+		close(armed)
+		<-h.release
+	}
+	return b, err
+}
+
+// A reload that read storage before a change was saved does not put the
+// old settings back after it.
+func TestReloadDoesNotUndoAChangeSavedWhileItRead(t *testing.T) {
+	h := &heldLoad{}
+	_ = h.Save(context.Background(), []byte(`{"refreshSeconds":15}`))
+	svc := settings.NewService(context.Background(), h, settings.Default, quiet, nil)
+	h.armed, h.release = make(chan struct{}), make(chan struct{})
+	armed := h.armed
+	reloaded := make(chan struct{})
+	go func() {
+		svc.Reload(context.Background())
+		close(reloaded)
+	}()
+	<-armed
+	updated := make(chan error)
+	go func() {
+		_, err := svc.Update(context.Background(), settings.Settings{RefreshSeconds: 30})
+		updated <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(h.release)
+	<-reloaded
+	if err := <-updated; err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.Current().RefreshSeconds; got != 30 {
+		t.Fatalf("the change was undone: refresh %d", got)
 	}
 }
 

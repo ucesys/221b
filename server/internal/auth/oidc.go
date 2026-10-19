@@ -266,7 +266,17 @@ func (p *Provider) Verify(ctx context.Context, raw, nonce string) (Identity, err
 		return Identity{}, errors.New("the ID token names no subject")
 	}
 	id := Identity{Subject: c.Subject, Expires: time.Unix(c.Expires, 0), IDToken: raw}
-	id.Email = stringClaim(c.All, "email")
+	// An email the provider says it has not verified is not used: it could
+	// name an administrator in auth.admins. As the API server does, a token
+	// without email_verified is taken as verified, and one that names the
+	// person by an unverified email is refused.
+	if unverifiedEmail(c.All) {
+		if p.cfg.UsernameClaim == "email" {
+			return Identity{}, errors.New("the provider has not verified the email address that names you")
+		}
+	} else {
+		id.Email = stringClaim(c.All, "email")
+	}
 	id.Name = stringClaim(c.All, "name")
 	id.Username = stringClaim(c.All, p.cfg.UsernameClaim)
 	if id.Username == "" {
@@ -277,6 +287,22 @@ func (p *Provider) Verify(ctx context.Context, raw, nonce string) (Identity, err
 	}
 	id.Groups = stringsClaim(c.All, p.cfg.GroupsClaim)
 	return id, nil
+}
+
+// unverifiedEmail says whether the token's email_verified claim is there
+// and not true; some providers send it as the string "true".
+func unverifiedEmail(all map[string]any) bool {
+	v, ok := all["email_verified"]
+	if !ok {
+		return false
+	}
+	switch b := v.(type) {
+	case bool:
+		return !b
+	case string:
+		return !strings.EqualFold(b, "true")
+	}
+	return true
 }
 
 func contains(list []string, s string) bool {

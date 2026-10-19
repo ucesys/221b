@@ -38,8 +38,8 @@ func getJSON(t *testing.T, c *http.Client, url string, into any) int {
 	return resp.StatusCode
 }
 
-// The Roles and Permissions pages are for a SuperAdmin, show what the
-// cluster has, and report a role that allows more than the shipped one.
+// The Roles and Permissions pages are for everyone who signs in, show what
+// the cluster has, and report a role that allows more than the shipped one.
 func TestRolesPages(t *testing.T) {
 	mods := func(o *Options) {
 		o.Roles = RolesOptions{Prefixes: roles.DefaultPrefixes(), Enforce: "strict", Bindings: []roles.BindingSpec{
@@ -63,8 +63,18 @@ func TestRolesPages(t *testing.T) {
 		Subjects:   []rbacv1.Subject{{Kind: "Group", Name: "221b-local:web-readers"}},
 	})
 
-	if code := getJSON(t, viewer, srv.URL+"/api/v1/admin/roles", nil); code != http.StatusForbidden {
-		t.Errorf("a Viewer's roles page = %d, want 403", code)
+	// A Viewer sees both pages (RB-41), but not who holds the super roles (RB-42).
+	var seen roles.RolesResponse
+	if code := getJSON(t, viewer, srv.URL+"/api/v1/admin/roles", &seen); code != http.StatusOK || len(seen.Roles) != 4 {
+		t.Errorf("a Viewer's roles page = %d %+v, want 200 with the four roles", code, seen)
+	}
+	for _, row := range seen.Roles {
+		if row.Holders != (roles.Holders{}) {
+			t.Errorf("a Viewer sees the holders of %s: %+v", row.ID, row.Holders)
+		}
+	}
+	if code := getJSON(t, viewer, srv.URL+"/api/v1/admin/permissions", nil); code != http.StatusOK {
+		t.Errorf("a Viewer's permissions page = %d, want 200", code)
 	}
 	var page roles.RolesResponse
 	if code := getJSON(t, ops, srv.URL+"/api/v1/admin/roles", &page); code != http.StatusOK {

@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/sim"
 	"github.com/ucesys/221b/server/internal/watson"
 )
@@ -222,5 +223,79 @@ func TestWatsonSecondPerson(t *testing.T) {
 	watsonStream(t, srv, viewer, func(m map[string]watsonItem) bool { return m[it.ID].Status == watson.StatusDone })
 	if s.LastImpersonated() != "221b-local:viewer@corp.example" {
 		t.Fatalf("ran as %q", s.LastImpersonated())
+	}
+}
+
+func TestWatsonCommandsStayOnTheirCluster(t *testing.T) {
+	// The other cluster closes last, after the console has stopped watching it.
+	other := httptest.NewServer(sim.New(sim.Options{Nodes: 3, Pods: 20, Seed: 7}))
+	t.Cleanup(other.Close)
+	srv, c, s, _, _ := watsonSetup(t, "ops@corp.example", clusters.EnvStaging, clusters.ModeWrite)
+	tok := saToken(time.Now().Add(48 * time.Hour))
+	resp, err := http.Post(other.URL+"/sim/token", "application/json", strings.NewReader(`{"token":"`+tok+`"}`))
+	if err != nil || resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("sim token: %v %v", err, resp)
+	}
+	resp.Body.Close()
+	draft, _ := json.Marshal(map[string]any{"name": "prod-b", "env": "staging", "description": "", "server": other.URL, "ca": "system", "auth": "token", "mode": "write", "token": tok})
+	if r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/clusters", string(draft)); r.StatusCode != http.StatusCreated {
+		t.Fatalf("add: %d %s", r.StatusCode, b)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/clusters/prod-b/snapshot", "")
+		if r.StatusCode == http.StatusOK && strings.Contains(b, `"synced":true`) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("prod-b snapshot: %d %.200s", r.StatusCode, b)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// A card planned on the local cluster is not approved, discarded,
+	// stopped or edited through another cluster's URL: there it does not
+	// exist.
+	ch := submit(t, srv, c, "kubectl cordon worker-001", true)
+	watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[ch.ID].Plan != nil && m[ch.ID].Plan.Ready })
+	base := srv.URL + "/api/v1/clusters/prod-b/watson/commands/" + ch.ID
+	for _, a := range []struct{ method, url, body string }{
+		{http.MethodPost, base + "/approve", ""},
+		{http.MethodPost, base + "/discard", ""},
+		{http.MethodPost, base + "/stop", ""},
+		{http.MethodPut, base, `{"command":"kubectl cordon worker-002"}`},
+	} {
+		if r, b := send(t, c, a.method, a.url, a.body); r.StatusCode != http.StatusNotFound {
+			t.Errorf("%s %s: %d %s", a.method, a.url, r.StatusCode, b)
+		}
+	}
+	if s.Node("worker-001").Spec.Unschedulable {
+		t.Fatal("cordoned through another cluster's URL")
+	}
+	// Through its own cluster it still is.
+	if r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/clusters/local/watson/commands/"+ch.ID+"/approve", ""); r.StatusCode != http.StatusOK {
+		t.Fatalf("approve on local: %d %s", r.StatusCode, b)
+	}
+}
+
+func TestWatsonStrictComparesANewClusterAtOnce(t *testing.T) {
+	// With rbac.enforce strict, a cluster not compared yet refuses changes
+	// (RB-36); the first command compares it rather than wait for the round.
+	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
+	simSrv := httptest.NewServer(s)
+	t.Cleanup(simSrv.Close)
+	srv, c, m, _, local, store := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), CheckEvery: 50 * time.Millisecond})
+		o.Roles = RolesOptions{Prefixes: roles.DefaultPrefixes(), Enforce: "strict"}
+	})
+	for _, id := range roles.All {
+		local.Put(clusterRoleOf(id.ClusterRole(), (roles.Templates{}).For(id, roles.Options{}).Rules))
+	}
+	local.Put(clusterRoleOf(roles.NodesClusterRole, roles.Nodes().Rules))
+	local.restCfg = &rest.Config{Host: simSrv.URL}
+	if err := m.SetLocal(context.Background(), clusters.Spec{Name: "Here", Env: clusters.EnvStaging, Mode: clusters.ModeWrite, Server: simSrv.URL, Auth: clusters.AuthInCluster, CA: clusters.CAPEM}, local, store); err != nil {
+		t.Fatal(err)
+	}
+	if it := submit(t, srv, c, "kubectl cordon worker-001", true); it.Status == watson.StatusRefused {
+		t.Fatalf("a cluster whose roles match was refused: %+v", it)
 	}
 }

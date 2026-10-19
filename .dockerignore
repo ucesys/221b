@@ -13,3 +13,4 @@ web/playwright-report/
 **/*.test.ts
 **/*.test.tsx
 web/e2e/
+web/screenshots/

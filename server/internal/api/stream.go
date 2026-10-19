@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/auth"
 )
 
 // A browser opens at most six connections to a host over HTTP/1.1, for
@@ -41,6 +43,29 @@ func (e *eventStream) raw(s string) error {
 func (e *eventStream) send(event string, v any) error {
 	b, _ := json.Marshal(v)
 	return e.raw(fmt.Sprintf("event: %s\ndata: %s\n\n", event, b))
+}
+
+// sessionStands says whether the request's session still stands as it did
+// when the response began: it has not ended (signed out, reset, disabled,
+// deleted, expired) and Kubernetes would see the same person. A stream that
+// outlives it ends at its next heartbeat; the browser, connecting again, is
+// sent to sign in or sees what the person may see now (RB-05, RB-46, RB-53).
+func (s *Server) sessionStands(r *http.Request) bool {
+	cur, ok := s.opts.Auth.(interface {
+		Current(auth.Session) (auth.Session, bool)
+	})
+	if !ok {
+		return true
+	}
+	sess, has := auth.SessionFrom(r.Context())
+	if !has || sess.ID == "" {
+		return true
+	}
+	now, ok := cur.Current(sess)
+	if !ok {
+		return false
+	}
+	return now.Admin == sess.Admin && s.opts.Impersonation.personOf(now.User).Key() == s.opts.Impersonation.personOf(sess.User).Key()
 }
 
 // serveStream answers with an event stream that each part writes to, its
@@ -82,7 +107,7 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, parts map[s
 		select {
 		case <-ctx.Done():
 		case <-beat.C:
-			if es.raw(": keep-alive\n\n") != nil {
+			if !s.sessionStands(r) || es.raw(": keep-alive\n\n") != nil {
 				cancel()
 			}
 		}
