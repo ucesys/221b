@@ -19,4 +19,4 @@ In every project space (issues, pull requests, discussions, chat) and when someo
 
 ## Reporting
 
-Report anything that breaks this code to the maintainers at **CONDUCT_CONTACT**. Every report is reviewed promptly and kept confidential. The maintainers decide on the response, from a private warning to a permanent ban, following the Contributor Covenant's enforcement guidelines, and they respect the privacy and safety of whoever reported it.
+Report anything that breaks this code to the maintainers at [info@ucesys.com](mailto:info@ucesys.com). Every report is reviewed promptly and kept confidential. The maintainers decide on the response, from a private warning to a permanent ban, following the Contributor Covenant's enforcement guidelines, and they respect the privacy and safety of whoever reported it.
