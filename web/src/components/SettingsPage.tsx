@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { REFRESH_CHOICES, refreshLabel, saveSettings } from '../api/settings'
 import type { Settings } from '../api/types'
-import { fmtClock } from '../lib/format'
+import { DEFAULT_TIME_FORMAT, fmtClock, fmtTs, setTimeFormat, type TimeFormat } from '../lib/format'
 import { adminHref, navigate, type Route } from '../lib/router'
 import { SaveBar } from './SaveBar'
 import { SherlockSettings } from './SherlockSettings'
@@ -85,6 +85,10 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
     setError('')
   }
   const picked = draft ?? settings?.refreshSeconds
+  const [formatDraft, setFormatDraft] = useState<TimeFormat | undefined>(undefined)
+  const currentFormat = settings?.timeFormat ?? DEFAULT_TIME_FORMAT
+  const pickedFormat = formatDraft ?? currentFormat
+  const changed = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined
 
   const save = async () => {
     if (picked === undefined) return
@@ -92,8 +96,9 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
     setError('')
     setSaved('')
     try {
-      await saveSettings({ refreshSeconds: picked })
+      await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat })
       setDraft(undefined)
+      setFormatDraft(undefined)
       setSaved('Saved.')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -130,14 +135,60 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
           {settings ? (
             <>
               Now every {refreshLabel(settings.refreshSeconds)}
-              {refreshedAt ? ` · last refresh ${fmtClock(refreshedAt)}` : ''}. {kept}
+              {refreshedAt ? ` · last refresh ${fmtClock(refreshedAt, { seconds: true })}` : ''}. {kept}
             </>
           ) : (
             'Loading the settings from the server…'
           )}
         </p>
       </section>
-      <SaveBar changed={draft !== undefined && draft !== current} busy={busy} onSave={() => void save()} onUndo={() => setDraft(undefined)} error={error} saved={saved} testId="settings-save" />
+      <TimeFormatSection picked={pickedFormat} current={currentFormat} disabled={!settings || busy} onPick={(f) => setFormatDraft(f.date === currentFormat.date && f.clock === currentFormat.clock ? undefined : f)} />
+      <SaveBar changed={changed} busy={busy} onSave={() => void save()} onUndo={() => { setDraft(undefined); setFormatDraft(undefined) }} error={error} saved={saved} testId="settings-save" />
     </>
+  )
+}
+
+const DATE_CHOICES: { id: TimeFormat['date']; label: string }[] = [
+  { id: 'iso', label: '2026-05-03' },
+  { id: 'us', label: '05/03/2026' },
+  { id: 'eu', label: '03/05/2026' },
+  { id: 'long', label: 'May 3, 2026' },
+]
+const CLOCK_CHOICES: { id: TimeFormat['clock']; label: string }[] = [
+  { id: '12h', label: '1:34pm' },
+  { id: '24h', label: '13:34' },
+]
+
+/** How every console shows dates and times, each in its browser's time zone. */
+function TimeFormatSection({ picked, current, disabled, onPick }: { picked: TimeFormat; current: TimeFormat; disabled: boolean; onPick: (f: TimeFormat) => void }) {
+  // The example shows the picked format; the console keeps the saved one
+  // until it is saved.
+  setTimeFormat(picked)
+  const example = fmtTs(new Date())
+  setTimeFormat(current)
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Date and time">
+      <h3 className="rk-h">Date and time</h3>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+        <div className="rk-seg" role="group" aria-label="Date" style={{ flexWrap: 'wrap' }}>
+          {DATE_CHOICES.map((c) => (
+            <button key={c.id} aria-pressed={picked.date === c.id} disabled={disabled} onClick={() => onPick({ ...picked, date: c.id })}>
+              {c.label}
+            </button>
+          ))}
+        </div>
+        <div className="rk-seg" role="group" aria-label="Clock">
+          {CLOCK_CHOICES.map((c) => (
+            <button key={c.id} aria-pressed={picked.clock === c.id} disabled={disabled} onClick={() => onPick({ ...picked, clock: c.id })}>
+              {c.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="rk-fhint" style={{ margin: 0 }} data-testid="time-format-example">
+        Now: <span className="rk-mono">{example}</span>
+      </p>
+      <p className="rk-fhint" style={{ margin: 0 }}>For everyone: every date and time in the console reads this way, each in the time zone of the browser that shows it.</p>
+    </section>
   )
 }

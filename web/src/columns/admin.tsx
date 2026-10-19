@@ -4,7 +4,7 @@
 // table does (RB-55, X-13).
 
 import type { RoleId, RoleRow, UserRow } from '../api/admin'
-import { fmtAge, fmtTs } from '../lib/format'
+import { fmtAge, fmtTs, localTimes } from '../lib/format'
 import { groupText, holdingParts, ROLE_NAME, ROLE_ORDER, roleRank, SCOPE_NAME, SOURCE_NAME, type MatrixRow } from '../lib/admin'
 import type { ColumnDef, Term } from '../lib/table'
 import { Mono } from './cells'
@@ -268,10 +268,10 @@ export const USER_COLUMNS: ColumnDef<UserRow>[] = [
           <span className="rk-dot" />
           {u.status === 'active' ? 'Active' : 'Disabled'}
         </span>
-        {u.statusNote && <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{u.statusNote}</span>}
+        {u.statusNote && <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{localTimes(u.statusNote)}</span>}
       </span>
     ),
-    export: (u) => [{ head: 'Status', cell: (u.status === 'active' ? 'Active' : 'Disabled') + (u.statusNote ? ` — ${u.statusNote}` : '') }],
+    export: (u) => [{ head: 'Status', cell: (u.status === 'active' ? 'Active' : 'Disabled') + (u.statusNote ? ` — ${localTimes(u.statusNote)}` : '') }],
   },
   {
     id: 'lastSignIn',

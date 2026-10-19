@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { fmtTs } from '../lib/format'
 import type { PodView } from '../api/types'
 import { exportTable, sortRows, visibleColumns, defaultHidden } from '../lib/table'
 import { POD_COLUMNS, podStatusGroup, podTerms } from './pods'
@@ -54,7 +55,7 @@ describe('pod columns', () => {
     const cols = visibleColumns(POD_COLUMNS, defaultHidden(POD_COLUMNS), false)
     const t = exportTable(rows, cols, now)
     expect(t.head.slice(0, 8)).toEqual(['Pod', 'Namespace', 'Status', 'Ready', 'Restarts', 'Last restart', 'Last termination', 'CPU requested (cores)'])
-    expect(t.rows[1]!.slice(2, 7)).toEqual(['CrashLoopBackOff', '1/1', 6, '2026-10-13 11:59:00 UTC', 'Error, exit 1'])
+    expect(t.rows[1]!.slice(2, 7)).toEqual(['CrashLoopBackOff', '1/1', 6, fmtTs('2026-10-13T11:59:00Z'), 'Error, exit 1'])
     expect(t.json[0]).toMatchObject({ Pod: 'web-1', 'CPU in use (cores)': 0.12 })
     expect(t.json[1]).toMatchObject({ 'CPU in use (cores)': null, Node: 'worker-1' })
   })

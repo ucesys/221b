@@ -29,6 +29,32 @@ func TestValidation(t *testing.T) {
 	}
 }
 
+func TestTimeFormat(t *testing.T) {
+	for _, c := range []struct {
+		f  settings.TimeFormat
+		ok bool
+	}{
+		{settings.TimeFormat{Date: "iso", Clock: "12h"}, true},
+		{settings.TimeFormat{Date: "long", Clock: "24h"}, true},
+		{settings.TimeFormat{Date: "us", Clock: "12"}, false},
+		{settings.TimeFormat{Date: "", Clock: "12h"}, false},
+	} {
+		f := c.f
+		if err := (settings.Settings{RefreshSeconds: 3, TimeFormat: &f}).Validate(); (err == nil) != c.ok {
+			t.Errorf("%+v: %v", c.f, err)
+		}
+	}
+	// An update that leaves the format out keeps the one in force.
+	svc := settings.NewService(context.Background(), &settings.Memory{}, settings.Default, quiet, nil)
+	if _, err := svc.Update(context.Background(), settings.Settings{RefreshSeconds: 3, TimeFormat: &settings.TimeFormat{Date: "eu", Clock: "24h"}}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := svc.Update(context.Background(), settings.Settings{RefreshSeconds: 5})
+	if err != nil || st.TimeFormat == nil || st.TimeFormat.Date != "eu" || st.TimeFormat.Clock != "24h" {
+		t.Fatalf("after a refresh change %+v %v", st.TimeFormat, err)
+	}
+}
+
 func TestServiceInMemory(t *testing.T) {
 	var seen []settings.State
 	svc := settings.NewService(context.Background(), &settings.Memory{}, settings.Settings{RefreshSeconds: 7}, quiet, func(st settings.State) { seen = append(seen, st) })

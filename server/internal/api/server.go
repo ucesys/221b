@@ -714,7 +714,11 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.opts.Logger.Info("settings changed from a browser", "refresh", st.Refresh(), "from", r.RemoteAddr, "user", sess.User.Username)
-	s.record(r, audit.ActionSettings, "settings", fmt.Sprintf("refresh %s", st.Refresh()))
+	detail := fmt.Sprintf("refresh %s", st.Refresh())
+	if f := st.TimeFormat; f != nil {
+		detail += fmt.Sprintf(", time format %s %s", f.Date, f.Clock)
+	}
+	s.record(r, audit.ActionSettings, "settings", detail)
 	b, _ := json.Marshal(st)
 	writeJSON(w, r, b)
 }

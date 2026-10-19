@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { changeGroups, changeUser, deleteUser, endSessions, fetchUsers, refreshLdap, setSuperRoles, useAdmin, type LocalGroup, type SuperRole, type UserRow } from '../api/admin'
 import { USER_COLUMNS, userTerms } from '../columns/admin'
 import { holdingParts, joinable, passwordProblem, ROLE_NAME, SOURCE_NAME, SUPER_ROLES } from '../lib/admin'
-import { fmtAge, fmtClock, fmtTs, nWord } from '../lib/format'
+import { fmtAge, fmtClock, fmtTs, localTimes, nWord } from '../lib/format'
 import { adminHref, navigate } from '../lib/router'
 import { useTable } from '../lib/useTable'
 import type { AdminProps } from './AdminPage'
@@ -291,7 +291,7 @@ function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onA
           {user.statusNote && (
             <>
               <dt style={{ color: 'var(--fg3)' }}>Status</dt>
-              <dd style={{ margin: 0 }}>{user.statusNote}</dd>
+              <dd style={{ margin: 0 }}>{localTimes(user.statusNote)}</dd>
             </>
           )}
         </dl>

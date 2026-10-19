@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { NodeRow, Tone } from '../api/types'
-import { clampPct, fmtAge, fmtTs, nWord } from '../lib/format'
+import { clampPct, fmtAge, fmtTs, localTimes, nWord } from '../lib/format'
 import { effectTone, isSystemLabel, resourceSections, roleTag, taintNote, type ResourceSection } from '../lib/nodes'
 import { href } from '../lib/router'
 import { CloseIcon } from './Icons'
@@ -46,7 +46,7 @@ function conditionTags(r: NodeRow): { label: string; tone: Tone; tip: string }[]
     const on = c.status === 'True'
     out.push({ label: l ? (on ? l[1] : l[0]) : `${c.type}: ${c.status}`, tone: on ? (c.type === 'NetworkUnavailable' ? 'err' : 'warn') : 'muted', tip })
   }
-  if (r.cordoned) out.push({ label: 'SchedulingDisabled', tone: 'warn', tip: r.statusTip })
+  if (r.cordoned) out.push({ label: 'SchedulingDisabled', tone: 'warn', tip: localTimes(r.statusTip) })
   return out
 }
 
@@ -195,7 +195,7 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
         <div style={{ padding: '16px 20px 28px', display: tab === 'yaml' ? 'none' : 'flex', flexDirection: 'column', gap: 18 }}>
           <Section title="Status">
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }} data-testid="node-status">
-              <span className="rk-pill" data-tone={r.tone} title={r.statusTip} style={{ height: 24, fontSize: 12.5 }}>
+              <span className="rk-pill" data-tone={r.tone} title={localTimes(r.statusTip)} style={{ height: 24, fontSize: 12.5 }}>
                 <span className="rk-dot" />
                 {r.status}
               </span>
@@ -204,7 +204,7 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
               </span>
               <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{podSummary(r)}</span>
             </div>
-            <p style={{ margin: 0, fontSize: 12, color: 'var(--fg2)' }}>{r.statusTip}</p>
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--fg2)' }}>{localTimes(r.statusTip)}</p>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }} aria-label="Conditions">
               {conditionTags(r).map((c) => (
                 <span key={c.label} className="rk-tag" data-tone={c.tone} title={c.tip} style={{ fontSize: 11, padding: '2px 7px' }}>

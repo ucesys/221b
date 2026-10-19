@@ -112,7 +112,7 @@ func (p *people) apply(members []Person, listedGroups int, next time.Time) {
 	}
 	for name, d := range p.byName {
 		if !in[name] && !d.Disabled {
-			d.Disabled, d.Note = true, "Not in a listed group since the "+at.Format("15:04")+" sync"
+			d.Disabled, d.Note = true, "Not in a listed group since the "+at.UTC().Format("2006-01-02 15:04:05 UTC")+" sync"
 		}
 	}
 	p.state = DirectoryState{URL: p.state.URL, State: "connected", Last: at, Next: next, People: len(members), Groups: listedGroups, Errors: []string{}}
