@@ -141,8 +141,10 @@ func (s *SessionStore) Get(ctx context.Context, key string) ([]byte, bool, error
 	return b, ok, nil
 }
 
-// Put writes a session record, creating its Secret or replacing it.
-func (s *SessionStore) Put(ctx context.Context, key string, b []byte) error {
+// Put writes a session record, creating its Secret, or replacing it when
+// replace, given the record as the API server has it now, says so. It
+// reports whether it wrote.
+func (s *SessionStore) Put(ctx context.Context, key string, b []byte, replace func(current []byte) bool) (bool, error) {
 	name := s.name(key)
 	s.mu.Lock()
 	delete(s.missed, key)
@@ -156,12 +158,15 @@ func (s *SessionStore) Put(ctx context.Context, key string, b []byte) error {
 				continue
 			}
 			if err != nil {
-				return fmt.Errorf("creating the session Secret: %w", err)
+				return false, fmt.Errorf("creating the session Secret: %w", err)
 			}
-			return nil
+			return true, nil
 		}
 		if err != nil {
-			return fmt.Errorf("reading the session Secret: %w", err)
+			return false, fmt.Errorf("reading the session Secret: %w", err)
+		}
+		if replace != nil && !replace(cur.Data[sessionKey]) {
+			return false, nil
 		}
 		cur.Data = map[string][]byte{sessionKey: b}
 		if cur.Labels == nil {
@@ -175,11 +180,11 @@ func (s *SessionStore) Put(ctx context.Context, key string, b []byte) error {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("saving the session Secret: %w", err)
+			return false, fmt.Errorf("saving the session Secret: %w", err)
 		}
-		return nil
+		return true, nil
 	}
-	return fmt.Errorf("saving the session Secret: it kept changing")
+	return false, fmt.Errorf("saving the session Secret: it kept changing")
 }
 
 // Delete removes a session record; one already gone is not an error.

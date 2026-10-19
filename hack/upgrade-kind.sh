@@ -190,7 +190,12 @@ check_kept() {
   done
   api "$URL/api/v1/clusters/kept" | tee "$WORK/upgrade-kept.json" | grep -q '"state":"connected"' ||
     { echo "the connection did not come back $1: $(cat "$WORK/upgrade-kept.json")"; exit 1; }
-  api "$URL/api/v1/sherlock/config" | grep -q '"set":true'
+  # Sherlock answers once the new pod holds the Lease (P7-02).
+  for _ in $(seq 30); do
+    api "$URL/api/v1/sherlock/config" > "$WORK/upgrade-sherlock.json" 2>/dev/null && break
+    sleep 1
+  done
+  grep -q '"set":true' "$WORK/upgrade-sherlock.json"
   [ "$(kubectl -n "$NS" get secret "$FULLNAME-sherlock" -o jsonpath='{.data.apiKey}' | base64 -d)" = "$SHERLOCK_KEY" ]
   # The user made on the Users page signs in with the same password.
   signin "$URL" "$USER2"

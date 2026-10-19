@@ -176,6 +176,42 @@ func TestANewerSessionFormatIsReadAndNotWritten(t *testing.T) {
 	}
 }
 
+// staleGets serves a record as it was, as a replica's cache does for a
+// moment after another replica writes it.
+type staleGets struct {
+	SharedStore
+	b []byte
+}
+
+func (s staleGets) Get(context.Context, string) ([]byte, bool, error) { return s.b, true, nil }
+
+func TestAReplicaThatHasNotSeenANewerSessionDoesNotOverwriteIt(t *testing.T) {
+	a, _, cs := sharedPair(t, nil)
+	sess := a.Start(Session{User: User{Username: "ann"}, Method: "local"})
+	name := "k8s-console-221b-session-" + keyOf(sess.ID)
+	sec, _ := cs.CoreV1().Secrets("221b").Get(context.Background(), name, metav1.GetOptions{})
+	old := sec.Data["session.json"]
+	var rec map[string]any
+	_ = json.Unmarshal(old, &rec)
+	rec["version"] = 2
+	sec.Data["session.json"], _ = json.Marshal(rec)
+	if _, err := cs.CoreV1().Secrets("221b").Update(context.Background(), sec, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// This replica still has the record as version 1 wrote it.
+	c := NewSessions(8*time.Hour, 7*24*time.Hour, nil)
+	c.Share(staleGets{kube.NewSessionStoreFor(cs, "221b", "k8s-console-221b", nil), old}, nil)
+	for range 2 {
+		if !c.Update(sess.ID, func(x *Session) { x.Ref = "changed" }) {
+			t.Fatal("the session is not found")
+		}
+		after, _ := cs.CoreV1().Secrets("221b").Get(context.Background(), name, metav1.GetOptions{})
+		if !strings.Contains(string(after.Data["session.json"]), `"version":2`) {
+			t.Fatalf("a newer session was overwritten: %s", after.Data["session.json"])
+		}
+	}
+}
+
 func TestSessionFieldsThisVersionDoesNotKnowAreKept(t *testing.T) {
 	sess := Session{User: User{Username: "ann"}, Method: "local"}
 	b, _ := encodeSession(sess, map[string]json.RawMessage{"device": json.RawMessage(`"laptop"`)})

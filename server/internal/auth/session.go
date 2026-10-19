@@ -60,8 +60,9 @@ type Session struct {
 type SharedStore interface {
 	// Get returns a record; ok is false when there is none.
 	Get(ctx context.Context, key string) (b []byte, ok bool, err error)
-	// Put creates or replaces a record.
-	Put(ctx context.Context, key string, b []byte) error
+	// Put creates a record, or replaces the stored one when replace, given
+	// it as it is now, says so; it reports whether it wrote.
+	Put(ctx context.Context, key string, b []byte, replace func(current []byte) bool) (bool, error)
 	// Delete removes a record; one already gone is not an error.
 	Delete(ctx context.Context, key string) error
 	// List returns the records this replica knows of, by key.
@@ -184,8 +185,23 @@ func (s *Sessions) store(key string, sess Session) {
 	}
 	ctx, cancel := timeout()
 	defer cancel()
-	if err := shared.Put(ctx, key, b); err != nil {
+	// This replica's copy can lag the store: the record as stored now
+	// decides whether a newer console wrote it since (P7-03).
+	written, err := shared.Put(ctx, key, b, func(current []byte) bool {
+		_, _, version, err := decodeSession(current)
+		if err != nil || version <= sessionVersion {
+			return true
+		}
+		s.mu.Lock()
+		s.newer[key] = true
+		s.mu.Unlock()
+		return false
+	})
+	if err != nil {
 		s.log.Warn("a session was not stored; the other replicas do not see it", "err", err)
+		return
+	}
+	if !written {
 		return
 	}
 	s.mu.Lock()

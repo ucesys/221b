@@ -294,7 +294,13 @@ echo "the connection and its Secret are gone"
 # Secret, survived the upgrade and is never served (P5-05, X-04); removing
 # it in Settings deletes the Secret.
 [ "$(kubectl -n "$NS" get secret "$FULLNAME-sherlock" -o jsonpath='{.data.apiKey}' | base64 -d)" = sk-ant-e2e-fake-key-0123456789 ]
-api http://127.0.0.1:18080/api/v1/sherlock/config | tee "$WORK/sherlock-config.json" | grep -q '"set":true'
+# Sherlock runs on the replica that holds the Lease (P7-02), which the new
+# pod takes when the old one lets it go, a moment after the rollout.
+for _ in $(seq 30); do
+  api http://127.0.0.1:18080/api/v1/sherlock/config > "$WORK/sherlock-config.json" 2>/dev/null && break
+  sleep 1
+done
+grep -q '"set":true' "$WORK/sherlock-config.json"
 ! grep -q sk-ant-e2e-fake-key "$WORK/sherlock-config.json"
 api -X DELETE -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:18080/api/v1/sherlock/key | grep -q '"set":false'
 ! kubectl -n "$NS" get secret "$FULLNAME-sherlock" > /dev/null 2>&1
