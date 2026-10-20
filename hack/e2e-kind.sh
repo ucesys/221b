@@ -293,7 +293,17 @@ echo "the connection and its Secret are gone"
 # Sherlock's API key, saved by the browser tests, is kept in the release's
 # Secret, survived the upgrade and is never served (P5-05, X-04); removing
 # it in Settings deletes the Secret.
-[ "$(kubectl -n "$NS" get secret "$FULLNAME-sherlock" -o jsonpath='{.data.apiKey}' | base64 -d)" = sk-ant-e2e-fake-key-0123456789 ]
+if [ "$(kubectl -n "$NS" get secret "$FULLNAME-sherlock" -o jsonpath='{.data.apiKey}' | base64 -d)" != sk-ant-e2e-fake-key-0123456789 ]; then
+  # Who wrote the Secret last, and every key change before the upgrade.
+  echo "Sherlock's key is not in its Secret after the upgrade:"
+  kubectl -n "$NS" get secret "$FULLNAME-sherlock" -o json --show-managed-fields | python3 -c '
+import json, sys
+s = json.load(sys.stdin)
+print("keys:", sorted(s.get("data", {})))
+print(json.dumps(s["metadata"], indent=1))' || true
+  grep '"action":"sherlock.key' "$WORK/audit-connections.log" || echo "no sherlock.key records before the upgrade"
+  exit 1
+fi
 # Sherlock runs on the replica that holds the Lease (P7-02), which the new
 # pod takes when the old one lets it go, a moment after the rollout.
 for _ in $(seq 30); do
