@@ -208,7 +208,7 @@ function Shell() {
       onPop((m) => {
         if (m.type !== 'open') return
         const here = currentRoute()
-        const hash = m.cluster === here.cluster ? openTarget(m.target) : 'peek' in m.target ? clusterHref(m.cluster, FIRST_TAB, [], { peek: m.target.peek }) : m.target.href
+        const hash = m.cluster === here.cluster && here.view === 'tabs' ? openTarget(m.target) : 'peek' in m.target ? clusterHref(m.cluster, FIRST_TAB, [], { peek: m.target.peek }) : m.target.href
         if (hash) navigate(hash)
         window.focus()
       }),
@@ -229,9 +229,10 @@ function Shell() {
     },
   }
   // Buttons and Sherlock hand commands to Watson (P6-06): the panel opens,
-  // or Watson's window comes forward, with the card to approve.
+  // or Watson's window comes forward, with the card to approve. Wherever
+  // the dock is, so an answer read on the home page can be sent too.
   const watsonApi = {
-    available: watsonOn && view === 'tabs',
+    available: watsonOn && dockShown,
     readOnly: !!watson.status?.readOnly,
     how: watson.status?.how,
     off: watsonOff({ installed: !!watson.status?.available, sherlockOn, admin: !!sherlock.status?.admin, settingsHref: adminHref('settings', ['sherlock']) }),

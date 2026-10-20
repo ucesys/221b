@@ -2,6 +2,7 @@ import { createContext, useContext, useLayoutEffect, useRef, useState, useSyncEx
 import { askSherlock, newSherlockChat, stopSherlock, SherlockError, usd, type SherlockMsg, type SherlockRef, type SherlockState } from '../api/sherlock'
 import { Markdown } from '../lib/markdown'
 import { peekClickHash } from '../lib/peek'
+import { clusterHref, currentRoute, FIRST_TAB } from '../lib/router'
 import { canPopOut, parseRef, post, refTarget, type RefTarget } from '../lib/sherlock'
 import { CheckIcon, CopyIcon, CrossIcon, SendIcon, SherlockIcon, WatsonIcon } from './Icons'
 import { isCommands } from '../api/watson'
@@ -325,6 +326,15 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
       )
     }
     if ('peek' in t) {
+      // The drawer opens over a cluster's tabs; from the home page or a
+      // connection's page, the link goes to the first tab with it open.
+      if (currentRoute().view !== 'tabs') {
+        return (
+          <a href={clusterHref(cluster, FIRST_TAB, [], { peek: t.peek })} className="rk-link rk-cite" title={title} data-cite={url}>
+            {label}
+          </a>
+        )
+      }
       return (
         <a href={peekClickHash(t.peek)} data-peek={t.peek} className="rk-link rk-cite" title={title} data-cite={url}>
           {label}
