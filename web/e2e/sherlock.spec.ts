@@ -302,6 +302,13 @@ test('a command in an answer goes to Watson, with Sherlock’s reason, and runs 
   await expect(ran).toContainText(`kubectl -n ${ns} describe pod ${name}`)
   await expect(ran).toHaveAttribute('data-status', 'done', { timeout: 30_000 })
   await expect(ran.getByTestId('watson-output')).toContainText(new RegExp(`Name:\\s+${name}`))
+  // The dock is the same on the home page, and so is the way to Watson.
+  await page.goto('/#/')
+  await expect(lastAnswer(page).getByTestId('sherlock-send-watson')).toBeVisible()
+  // A cited pod opens there too: on the cluster's tabs, with the pod over them.
+  await lastAnswer(page).getByTestId('sherlock-refs').locator('a[data-cite*="/Pod/"]').first().click()
+  await expect(page.getByTestId('pod-panel')).toBeVisible()
+  await expect(page).toHaveURL(/peek=/)
 })
 
 test('Sherlock moves to a window of its own, with Watson, and back, and the main window asks there (P5-08, Phase 6 review)', async ({ page, context }) => {
