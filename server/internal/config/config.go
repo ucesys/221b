@@ -119,6 +119,17 @@ type Config struct {
 	// HTTPSRedirect sends plain-HTTP requests to HTTPS, behind a
 	// TLS-terminating Ingress (P3-11).
 	HTTPSRedirect bool
+	// LeaderLease is the "namespace/name" of the Lease the replicas elect
+	// the one that runs Sherlock and Watson with (P7-02). Empty: a single
+	// replica, always the leader.
+	LeaderLease string
+	// PodName and PodIP name this replica, from the downward API; the
+	// leader's address is PodIP and the listen port.
+	PodName string
+	PodIP   string
+	// ProxyToken is shared by the replicas, so the leader believes the
+	// client address a follower forwards; from the environment only.
+	ProxyToken string
 }
 
 // Parse reads the configuration from args (without the program name).
@@ -169,6 +180,10 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.SherlockSecret, "sherlock-secret", env("SHERLOCK_SECRET", ""), "namespace/name of the Secret to keep the Claude API key in (empty: in memory, lost on restart)")
 	c.SherlockAPIKey = os.Getenv("SHERLOCK_API_KEY")
 	fs.BoolVar(&c.HTTPSRedirect, "https-redirect", envBool("HTTPS_REDIRECT", false), "send plain-HTTP requests (by X-Forwarded-Proto) to HTTPS, behind an Ingress with TLS")
+	fs.StringVar(&c.LeaderLease, "leader-lease", env("LEADER_LEASE", ""), "namespace/name of the Lease the replicas elect the one that runs Sherlock and Watson with (empty: a single replica)")
+	c.PodName = os.Getenv("POD_NAME")
+	c.PodIP = os.Getenv("POD_IP")
+	c.ProxyToken = os.Getenv("PROXY_TOKEN")
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}
@@ -226,6 +241,14 @@ func (c Config) validate() error {
 	}
 	if c.HealthInterval < time.Second {
 		errs = append(errs, errors.New("health interval must be at least 1s"))
+	}
+	if c.LeaderLease != "" {
+		if ns, name, ok := strings.Cut(c.LeaderLease, "/"); !ok || ns == "" || name == "" {
+			errs = append(errs, fmt.Errorf("-leader-lease must be namespace/name, got %q", c.LeaderLease))
+		}
+		if c.PodName == "" || c.PodIP == "" {
+			errs = append(errs, errors.New("-leader-lease needs POD_NAME and POD_IP from the downward API"))
+		}
 	}
 	switch c.LogLevel {
 	case "debug", "info", "warn", "error":

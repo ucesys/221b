@@ -178,10 +178,12 @@ subjects:
 {{- end }}
 ---
 # What it writes, all in its own namespace (X-03): its settings, in its
-# own ConfigMap, and the connections to other clusters, one Secret each
-# (P3-04). Kubernetes cannot grant Secrets by name prefix, so the Role
-# covers every Secret in this namespace; keep the console in a namespace
-# of its own.
+# own ConfigMap, the connections to other clusters, one Secret each
+# (P3-04), and the Lease its replicas elect a leader with (P7-02).
+# Kubernetes cannot grant Secrets by name prefix, so the Role covers every
+# Secret in this namespace; keep the console in a namespace of its own. The
+# replicas watch the ConfigMap and the Secrets, so a change made through
+# one reaches the others at once.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -193,11 +195,20 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     resourceNames: [{{ include "b221.fullname" . | quote }}]
-    verbs: ["get", "patch"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  # The election: the chart creates the Lease; a replica creates it again
+  # if someone deleted it, and renews or takes over only this one.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    resourceNames: [{{ printf "%s-leader" (include "b221.fullname" .) | quote }}]
+    verbs: ["get", "update"]
   {{- if eq .Values.connections.store "secrets" }}
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "create", "update", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
   {{- else if ne .Values.connections.store "memory" }}
   {{- fail "connections.store must be secrets or memory" }}
   {{- end }}

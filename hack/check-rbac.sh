@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Checks that a ServiceAccount can read what the tabs show (nodes, pods and
 # their logs, namespaces, workloads, Services, metrics, the kubelets'
-# stats, and from Phase 4 roles, bindings and the policy kinds), patch its own settings ConfigMap, manage the Secrets of its own
-# namespace (the connections to other clusters, P3-04), and nothing else
+# stats, and from Phase 4 roles, bindings and the policy kinds), patch and
+# update its own settings ConfigMap, hold its replicas' Lease (P7-02),
+# manage the Secrets of its own namespace (the connections to other
+# clusters, P3-04), and nothing else
 # (P1-09, X-03, P2-10). Secrets elsewhere are readable only when the chart
 # was installed with secrets.read (the default); with --no-secrets the
 # script expects the API server to refuse them. With --memory the chart
@@ -79,13 +81,26 @@ done
 expect yes get nodes --subresource=proxy
 expect yes get "configmaps/$NAME" -n "$NS"
 expect yes patch "configmaps/$NAME" -n "$NS"
+expect yes update "configmaps/$NAME" -n "$NS"
+# The replicas' election (P7-02): the one Lease, in its own namespace.
+expect yes create leases.coordination.k8s.io -n "$NS"
+expect yes update "leases.coordination.k8s.io/$NAME-leader" -n "$NS"
+expect no update leases.coordination.k8s.io/kube-scheduler -n kube-system
+expect no update leases.coordination.k8s.io/someone-else -n "$NS"
+expect no create leases.coordination.k8s.io -n default
+expect no delete "leases.coordination.k8s.io/$NAME-leader" -n "$NS"
 # The connections to other clusters: Secrets in its own namespace only.
 # (With secrets.read, watch comes from the ClusterRole, and reading them
 # anywhere; the Role adds the writes in this namespace only.)
 for verb in get list create update delete; do
   expect "$connections" "$verb" secrets -n "$NS"
 done
-expect "$secrets" watch secrets -n "$NS"
+# The replicas watch them, so a change made through one reaches the others.
+if [ "$connections" = yes ]; then
+  expect yes watch secrets -n "$NS"
+else
+  expect "$secrets" watch secrets -n "$NS"
+fi
 expect no create secrets -n default
 expect no delete secrets -n kube-system
 if [ "$secrets" = no ]; then
@@ -111,7 +126,6 @@ expect no impersonate userextras.authentication.k8s.io
 # ConfigMap is written.
 expect no create nodes --subresource=proxy
 expect no patch configmaps/kube-root-ca.crt -n "$NS"
-expect no update "configmaps/$NAME" -n "$NS"
 expect no delete "configmaps/$NAME" -n "$NS"
 # Subresources need --subresource: "pods/log" would mean the pod named log.
 for args in "create pods" "delete pods" "patch nodes" "update nodes" "delete nodes" "delete namespaces" \
@@ -149,8 +163,11 @@ for ns in default kube-system "$NS"; do
   echo "$list"
   extra=$(echo "$list" | awk 'NR > 1 && $1 !~ /^\[/ {print $1}' | grep -v -E "$allowed" || true)
   if [ "$ns" = "$NS" ]; then
-    if ! echo "$list" | grep -E "^configmaps +\[\] +\[$NAME\] +\[get patch\]" > /dev/null; then
-      failed "the settings ConfigMap is not listed as get and patch by name in $ns"
+    if ! echo "$list" | grep -E "^configmaps +\[\] +\[$NAME\] +\[get list watch patch update\]" > /dev/null; then
+      failed "the settings ConfigMap is not listed as get, list, watch, patch and update by name in $ns"
+    fi
+    if ! echo "$list" | grep -E "^leases.coordination.k8s.io +\[\] +\[$NAME-leader\] +\[get update\]" > /dev/null; then
+      failed "the replicas' Lease is not listed as get and update by name in $ns"
     fi
   fi
   # Every granted verb list is read-only, except the settings ConfigMap's,
@@ -158,10 +175,15 @@ for ns in default kube-system "$NS"; do
   # namespace, the connection Secrets.
   # The reviews of people's access are created, with sign-in on.
   own_writes="^(configmaps +\[\] +\[$NAME\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\])"
+  if [ "$ns" = "$NS" ]; then
+    # The Lease: created when none exists (the listing may merge the
+    # create with the ClusterRole's reads), then only this one renewed.
+    own_writes="^(configmaps +\[\] +\[$NAME\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\]|leases.coordination.k8s.io +\[\] +\[\] +\[(get list watch )?create\]|leases.coordination.k8s.io +\[\] +\[$NAME-leader\] +\[get update\])"
+  fi
   if [ "$ns" = "$NS" ] && [ "$connections" = yes ]; then
     # The Role's writes merge with the ClusterRole's reads in the listing:
     # [get list watch create update delete] with secrets.read, without watch otherwise.
-    own_writes="^(configmaps +\[\] +\[$NAME\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\]|secrets +\[\] +\[\] +\[get list (watch )?create update delete\])"
+    own_writes="$own_writes|^secrets +\[\] +\[\] +\[get list (watch )?create update delete\]"
     if ! echo "$list" | grep -E "^secrets +\[\] +\[\] +\[get list (watch )?create update delete\]" > /dev/null; then
       failed "the connection Secrets are not listed as get, list, create, update and delete in $ns"
     fi

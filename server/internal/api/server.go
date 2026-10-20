@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -128,6 +129,13 @@ type Options struct {
 	Logger *slog.Logger
 	// MaxStreams caps concurrent event streams.
 	MaxStreams int
+	// Leader, with several replicas, says whether this one runs Sherlock
+	// and Watson; the others forward those requests to it (P7-02). nil is
+	// a single replica.
+	Leader Leader
+	// ProxyToken is shared by the replicas: a forwarded request carries it,
+	// and only then is its client address believed.
+	ProxyToken string
 	// SherlockDefaultURL is the Claude API's address when the settings name
 	// no provider; SherlockProviderLocked keeps the settings from changing
 	// the provider (the chart's sherlock.lockProvider).
@@ -225,6 +233,9 @@ type Server struct {
 
 	reqMu sync.Mutex
 	reqs  map[reqKey]uint64
+
+	// leaderChecks is how often a forwarded stream checks the leader.
+	leaderChecks time.Duration
 }
 
 type reqKey struct {
@@ -261,7 +272,7 @@ func New(o Options) *Server {
 	if o.Roles.Monitor == nil {
 		o.Roles.Monitor = &roles.Monitor{}
 	}
-	s := &Server{opts: o, mux: http.NewServeMux(), reqs: map[reqKey]uint64{}, allowedHosts: map[string]bool{}}
+	s := &Server{opts: o, mux: http.NewServeMux(), reqs: map[reqKey]uint64{}, allowedHosts: map[string]bool{}, leaderChecks: leaderChecks}
 	for _, h := range o.AllowedHosts {
 		if h = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), "."); h != "" {
 			s.allowedHosts[h] = true
@@ -491,14 +502,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "221B does not answer to the host name %q. Open it as localhost or by IP address, or add the name to its allowed hosts.\n", r.Host)
 		return
 	}
+	// A request another replica forwarded says whose it is (P7-02).
+	s.trustForwarded(r)
 	h := w.Header()
-	h.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
-	h.Set("X-Content-Type-Options", "nosniff")
-	h.Set("X-Frame-Options", "DENY")
-	h.Set("Referrer-Policy", "no-referrer")
-	h.Set("Cross-Origin-Opener-Policy", "same-origin")
-	h.Set("Cross-Origin-Resource-Policy", "same-origin")
-	h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
+	for _, kv := range securityHeaders {
+		h.Set(kv[0], kv[1])
+	}
 	defer func() {
 		if v := recover(); v != nil {
 			if v == http.ErrAbortHandler {
@@ -527,7 +536,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusForbidden, "this can only be done from the console itself")
 		return
 	}
+	if s.forwardToLeader(w, r) {
+		return
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+// securityHeaders go on every answer.
+var securityHeaders = [][2]string{
+	{"Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"},
+	{"X-Content-Type-Options", "nosniff"},
+	{"X-Frame-Options", "DENY"},
+	{"Referrer-Policy", "no-referrer"},
+	{"Cross-Origin-Opener-Policy", "same-origin"},
+	{"Cross-Origin-Resource-Policy", "same-origin"},
+	{"Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()"},
 }
 
 // secureRequest says whether a request came over TLS, directly or through
@@ -710,7 +733,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	st, err := s.opts.Settings.Update(r.Context(), in)
 	if err != nil {
 		s.opts.Logger.Warn("settings not saved", "err", err)
-		jsonError(w, http.StatusInternalServerError, "The settings were not saved: "+err.Error())
+		jsonError(w, settingsStatus(err, http.StatusInternalServerError), "The settings were not saved: "+err.Error())
 		return
 	}
 	s.opts.Logger.Info("settings changed from a browser", "refresh", st.Refresh(), "from", r.RemoteAddr, "user", sess.User.Username)
@@ -721,6 +744,15 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	s.record(r, audit.ActionSettings, "settings", detail)
 	b, _ := json.Marshal(st)
 	writeJSON(w, r, b)
+}
+
+// settingsStatus is the status for a settings save that failed: 409 when
+// a newer 221B saved them, which this one does not overwrite (P7-03).
+func settingsStatus(err error, otherwise int) int {
+	if errors.Is(err, settings.ErrNewer) {
+		return http.StatusConflict
+	}
+	return otherwise
 }
 
 // record writes an audit event for the request's session.

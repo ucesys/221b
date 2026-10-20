@@ -247,7 +247,7 @@ func refuseChange(w http.ResponseWriter, err error) {
 		fail(w, http.StatusForbidden, sentence(err.Error()))
 	case errors.Is(err, ErrLastSuperAdmin):
 		fail(w, http.StatusConflict, sentence(err.Error()))
-	case errors.Is(err, ErrUnavailable):
+	case errors.Is(err, ErrUnavailable), errors.Is(err, ErrNewerAccounts):
 		fail(w, http.StatusServiceUnavailable, sentence(err.Error()))
 	default:
 		fail(w, http.StatusBadRequest, sentence(err.Error()))

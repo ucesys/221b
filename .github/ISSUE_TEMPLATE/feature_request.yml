@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest something 221B should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you would like
+      description: How you would like it to work. A sketch or a screenshot of a similar tool helps.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do instead today
+      description: kubectl commands, other tools, workarounds.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Touches
+      description: Changes in these areas need a careful design; tick any that apply.
+      options:
+        - label: Writes to a cluster (Watson)
+        - label: What is sent to the AI model (Sherlock)
+        - label: Sign-in, roles or who can see what

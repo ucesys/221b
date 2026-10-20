@@ -87,6 +87,35 @@ func (k *Keys) Load(ctx context.Context) error {
 	return nil
 }
 
+// Reload reads the saved key again, so a key set or removed through
+// another replica takes effect here (P7-02). A failed read keeps the key
+// in force.
+func (k *Keys) Reload(ctx context.Context) error {
+	if k.fixed != "" {
+		return nil
+	}
+	return k.Load(ctx)
+}
+
+// Run reloads the key every interval until ctx is done.
+func (k *Keys) Run(ctx context.Context, every time.Duration, onErr func(error)) {
+	if every <= 0 || k.fixed != "" {
+		return
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := k.Reload(ctx); err != nil && onErr != nil {
+				onErr(err)
+			}
+		}
+	}
+}
+
 // Key returns the key to send, or "" when there is none.
 func (k *Keys) Key() string {
 	if k.fixed != "" {

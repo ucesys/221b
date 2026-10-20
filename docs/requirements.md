@@ -367,6 +367,11 @@ Phase 7 makes 221B ready for other people's production clusters and for the publ
 | P7-07 | Docs: install, upgrade, connecting clusters, sign-in providers, RBAC templates, what Sherlock sends to the Claude API, Watson's commands, and troubleshooting. | Someone new to the project installs 221B and connects a cluster using the docs alone. |
 | P7-08 | Public-repo readiness: contributing guide, code of conduct, security policy for reporting vulnerabilities, issue templates, semantic versions and release notes. | You switch the repository to public. |
 
+**Built in Phase 7, first part:**
+
+- **P7-03:** `hack/upgrade-kind.sh` installs each of the two releases before the build (from their tags' charts and their published images), gives it a local user, settings, a fleet, an acknowledged alert, a connection and Sherlock's key, upgrades, rolls back and upgrades again, checking that all of it comes through each time. CI's *Upgrade from earlier releases* job runs it on every pull request and release tag, and publishing waits for it. The settings and the accounts carry a format version, and fields a console does not know are kept when it saves ([docs/upgrading.md](upgrading.md)).
+- **P7-08:** [CONTRIBUTING.md](../CONTRIBUTING.md), [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md), [SECURITY.md](../SECURITY.md) with private reporting through GitHub, bug and feature issue templates and a pull request template. Releases follow semantic versions, from 0.6.5 and 0.6.6 (Phases 6.5 and 6.6) to 0.7.0; [CHANGELOG.md](../CHANGELOG.md) has the notes, and a version tag pushes the chart to `oci://ghcr.io/ucesys/charts` and makes a GitHub release ([docs/releasing.md](releasing.md)).
+
 **Review:** you approve the release and the switch to public.
 
 ## Open questions
@@ -384,4 +389,4 @@ Each open decision has a proposal. The first three are needed before Phase 1 sta
 | Do clusters behind firewalls need an agent that connects out to 221B? | Not in this plan; decide after Phase 3 from real installations. | After Phase 3 | Open |
 | Which model does Sherlock use, and how long are conversations kept? | The admin picks the model. Conversations last for the session; the audit log keeps questions and tool calls. | Phase 5 | Built as proposed in Phase 5: Claude Opus 5.5 by default, any model in Settings; conversations kept on the server for the session (ADR-42). To confirm at the Phase 5 review. |
 | Should Watson ever run kubectl apply, edit or exec, or helm install and upgrade? | Not in the first release; exec carries the most risk. | Phase 6 | Open |
-| How do outside contributors sign off on their work once the repo is public? | A Developer Certificate of Origin sign-off on each commit. | Phase 7 | Open |
+| How do outside contributors sign off on their work once the repo is public? | A Developer Certificate of Origin sign-off on each commit. | Phase 7 | Settled in Phase 7: a DCO sign-off (`git commit -s`) on every commit of a pull request from a fork, checked by CI's *Sign-off* job; the maintainers' own branches need none (CONTRIBUTING.md). |

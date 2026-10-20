@@ -1,10 +1,23 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
+import type { Plugin } from 'vite'
+
+// Every browser 221B supports reads WOFF2, so the fonts' WOFF fallbacks are
+// left out of the build: they are never loaded, and the server embeds every
+// file the build makes, so they would add about 250 KB to the image (P1-05).
+const woff2Only: Plugin = {
+  name: '221b-woff2-only',
+  enforce: 'pre',
+  transform(code, id) {
+    if (!id.includes('/@fontsource/') || !id.endsWith('.css')) return
+    return code.replace(/,\s*url\([^)]*\.woff\) format\('woff'\)/g, '')
+  },
+}
 
 // The Go server serves the built app; in development Vite proxies the API
 // to a server on :8080 (see the Makefile's dev targets).
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), woff2Only],
   build: {
     outDir: 'dist',
     assetsDir: 'assets',

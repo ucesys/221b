@@ -71,7 +71,7 @@ Three steps: deploy the console into a cluster, set up that cluster (the "local"
 
    **Check:** the home page shows the cluster with its nodes, pods and alerts, and the top bar says *Live* ([screenshot](docs/screenshots/home.png)).
 
-To upgrade after a `git pull`, keep your settings and take the chart's new defaults: `helm upgrade k8s-console deploy/helm/221b -n 221b --reset-then-reuse-values` (plain `--reuse-values` keeps the old chart's defaults too). Images tagged `main`, `pr-<number>` and `branch-<name>` move to every new build, so the console pulls the image again on every restart and upgrade; to pin one build use `image.tag=sha-<commit>`. To remove it: `helm uninstall k8s-console -n 221b`. Users, connections and Sherlock's key that the console created are Secrets in its namespace that the uninstall leaves; delete the namespace to remove them too.
+**Upgrade** to a release with `helm upgrade k8s-console oci://ghcr.io/ucesys/charts/221b --version <version> -n 221b --reset-then-reuse-values`; [docs/upgrading.md](docs/upgrading.md) says which upgrades are tested, what each release changes and how to go back. To upgrade after a `git pull`, keep your settings and take the chart's new defaults: `helm upgrade k8s-console deploy/helm/221b -n 221b --reset-then-reuse-values` (plain `--reuse-values` keeps the old chart's defaults too). Images tagged `main`, `pr-<number>` and `branch-<name>` move to every new build, so the console pulls the image again on every restart and upgrade; to pin one build use `image.tag=sha-<commit>`. To remove it: `helm uninstall k8s-console -n 221b`. Users, connections, sign-ins and Sherlock's key that the console created are Secrets in its namespace that the uninstall leaves; delete the namespace to remove them too.
 
 ### 2. Set up the local cluster
 
@@ -238,6 +238,8 @@ To open changes again later, reverse one level at a time (for example `localClus
 
 **Images** are tagged `main` and `sha-<commit>` from the main branch, `pr-<number>` for each pull request, and `branch-<name>` when CI is run by hand on another branch. `hack/push-prebuilt.sh` pushes a build made on your own machine as `prebuilt-<tree>`; CI then tests that build instead of making one, and publishes it for `linux/amd64` only.
 
+**Replicas** (P7-02): one is enough for most clusters; `--set replicaCount=2` (or more) keeps the console up while a node drains or a pod is replaced, and needs `connections.store=secrets` (the default). The replicas share sign-ins, settings, accounts and connections through the Kubernetes objects they are kept in, so a person signed in through one is signed in through all, and a change made through one reaches the others within seconds. Sherlock's conversations and Watson's cards live in one replica's memory, so the replicas elect a leader with a Lease (`<release>-221b-leader`) and the others pass those requests to it. Losing a replica costs its viewers a reconnect, which the page makes by itself; losing the leader also loses open Sherlock conversations and Watson cards not yet run, as a restart does, and another replica takes over within seconds. With more than one replica the chart adds a PodDisruptionBudget and spreads the pods over nodes; the network policy lets the replicas reach each other.
+
 **Sign-in** is on from Phase 3: every page and API call needs a signed-in person (the health probes and `/metrics` excepted). `auth.mode` is one of:
 
 - `local` (the default): accounts kept by the console, for evaluations and clusters without a provider. On a fresh install with no user, the console shows a first-run page that creates the first SuperAdmin; if you set `auth.setupToken` (or `auth.setupTokenSecret`) it asks for that code, otherwise leave the field blank. Passwords are at least 12 characters; `221b hash-password` prints a hash for `auth.local.users`.
@@ -314,6 +316,10 @@ bin/221b -kubeconfig ~/.kube/config -context my-cluster -cluster-name my-cluster
 - **Every table** sorts by any column and exports to Excel, CSV or JSON.
 
 The prototype's sample cluster, `lakehouse-prod`, runs Dremio, Nessie, MinIO, Superset, Longhorn, kube-prometheus-stack, cert-manager and ingress-nginx on 10 nodes, with a few realistic problems to find.
+
+## Releases and contributing
+
+Releases follow semantic versions; what each one changed is in [CHANGELOG.md](CHANGELOG.md), and [docs/releasing.md](docs/releasing.md) says how one is cut. To contribute, read [CONTRIBUTING.md](CONTRIBUTING.md); report security problems as [SECURITY.md](SECURITY.md) says, never in a public issue.
 
 ## License
 

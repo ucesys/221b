@@ -8,6 +8,9 @@
 {{- if and (eq .Values.auth.mode "oidc") (not .Values.auth.oidc.clientSecret) (not .Values.auth.oidc.existingSecret) }}
 {{- fail "OIDC sign-in needs the client secret: auth.oidc.clientSecret, or auth.oidc.existingSecret naming a Secret with the key client-secret" }}
 {{- end }}
+{{- if and (gt (int .Values.replicaCount) 1) (eq .Values.connections.store "memory") }}
+{{- fail "replicaCount above 1 needs connections.store=secrets: the replicas share sign-ins, accounts and connections through Secrets" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,9 +42,9 @@ spec:
         checksum/auth-secret: {{ include (print $.Template.BasePath "/secret-auth.yaml") . | sha256sum }}
         {{- if include "b221.movingTag" . }}
         # A moving tag may point at a new build since the last upgrade, and
-        # an unchanged pod template would not restart the pod to fetch it.
+        # an unchanged pod template would not restart the pods to fetch it.
         # The release revision changes with every helm upgrade, so each one
-        # rolls the pod, which then pulls the tag again.
+        # rolls the pods, which then pull the tag again.
         221b/release-revision: {{ .Release.Revision | quote }}
         {{- end }}
         {{- with .Values.podAnnotations }}
@@ -49,6 +52,7 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "b221.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       automountServiceAccountToken: true
       enableServiceLinks: false
       {{- with .Values.imagePullSecrets }}
@@ -71,6 +75,27 @@ spec:
               value: {{ .Values.localCluster.mode | quote }}
             - name: LISTEN
               value: ":8080"
+            # The replicas elect the one that runs Sherlock and Watson with
+            # this Lease (P7-02), even when there is one: a rolling update
+            # runs two for a while, and the old one hands over as it stops.
+            # The others reach the leader at its pod IP.
+            - name: LEADER_LEASE
+              value: {{ printf "%s/%s-leader" .Release.Namespace (include "b221.fullname" .) | quote }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            # Shared by the replicas, so the leader believes the person's
+            # address a replica forwards with a request.
+            - name: PROXY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "b221.fullname" . }}-proxy
+                  key: token
             # The refresh rate until someone changes it in Settings, which
             # keeps the choice in the ConfigMap named here.
             - name: REFRESH
@@ -268,4 +293,18 @@ spec:
       {{- with .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml .Values.topologySpreadConstraints | nindent 8 }}
+      {{- else if gt (int .Values.replicaCount) 1 }}
+      # Several replicas: on different nodes when there is room, so one node
+      # going down leaves the others.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "b221.selectorLabels" . | nindent 14 }}
       {{- end }}

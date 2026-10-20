@@ -40,8 +40,9 @@ type Backend interface {
 
 // MemoryBackend keeps the accounts until the server restarts.
 type MemoryBackend struct {
-	mu sync.Mutex
-	b  []byte
+	mu    sync.Mutex
+	b     []byte
+	saves int
 }
 
 // Load returns what was saved.
@@ -59,6 +60,7 @@ func (m *MemoryBackend) Save(_ context.Context, b []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.b = append([]byte(nil), b...)
+	m.saves++
 	return nil
 }
 
@@ -103,21 +105,27 @@ func CheckPasswordRules(username, password string) error {
 	return nil
 }
 
-// stored is what the backend holds.
-type stored struct {
-	Users []Account `json:"users"`
-}
-
 // Accounts holds the local users: those from values, and those created in
 // the console. All changes go through it, so the rules of RB-30, RB-46 and
 // RB-51 are kept in one place.
 type Accounts struct {
 	mu      sync.Mutex
-	backend Backend
-	managed map[string]*Account
-	stored  map[string]*Account
-	groups  map[string]LocalGroup
-	loaded  bool
+	writeMu sync.Mutex
+	backend VersionedBackend
+	// persistent says the backend outlives the process.
+	persistent bool
+	managed    map[string]*Account
+	stored     map[string]*Account
+	groups     map[string]LocalGroup
+	loaded     bool
+	// version is the backend's version of what is in memory, "" when it
+	// must be read again; extra and userExtra are the saved fields this
+	// version does not know; newer says a newer console saved them, so
+	// they are read but not written (P7-03).
+	version   string
+	extra     map[string]json.RawMessage
+	userExtra map[string]map[string]json.RawMessage
+	newer     bool
 	// external says that SuperAdmins exist that are not accounts (the
 	// listed groups of LDAP and OIDC, auth.admins), so the last account may
 	// lose the role.
@@ -130,7 +138,8 @@ func NewAccounts(backend Backend, managed []Account, groups []LocalGroup, extern
 	if now == nil {
 		now = time.Now
 	}
-	a := &Accounts{backend: backend, managed: map[string]*Account{}, stored: map[string]*Account{}, groups: map[string]LocalGroup{}, external: external, now: now}
+	_, memory := backend.(*MemoryBackend)
+	a := &Accounts{backend: versioned(backend), persistent: !memory, managed: map[string]*Account{}, stored: map[string]*Account{}, groups: map[string]LocalGroup{}, external: external, now: now}
 	for i := range managed {
 		m := managed[i]
 		m.Managed = true
@@ -143,50 +152,12 @@ func NewAccounts(backend Backend, managed []Account, groups []LocalGroup, extern
 }
 
 // Persistent says whether accounts created here survive a restart.
-func (a *Accounts) Persistent() bool {
-	_, memory := a.backend.(*MemoryBackend)
-	return !memory
-}
+func (a *Accounts) Persistent() bool { return a.persistent }
 
 // Load reads the accounts kept by the backend. Until it has succeeded,
 // nothing can be created and the first-run page stays closed: an unreadable
-// backend is not an empty one.
-func (a *Accounts) Load(ctx context.Context) error {
-	b, err := a.backend.Load(ctx)
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	switch {
-	case errors.Is(err, ErrNoAccounts):
-		a.loaded = true
-		return nil
-	case err != nil:
-		return err
-	}
-	var s stored
-	if err := json.Unmarshal(b, &s); err != nil {
-		return fmt.Errorf("the saved accounts are not valid JSON: %w", err)
-	}
-	a.stored = map[string]*Account{}
-	for i := range s.Users {
-		u := s.Users[i]
-		a.stored[u.Username] = &u
-	}
-	a.loaded = true
-	return nil
-}
-
-func (a *Accounts) save(ctx context.Context) error {
-	var s stored
-	for _, u := range a.stored {
-		s.Users = append(s.Users, *u)
-	}
-	sort.Slice(s.Users, func(i, j int) bool { return s.Users[i].Username < s.Users[j].Username })
-	b, err := json.Marshal(s)
-	if err != nil {
-		return err
-	}
-	return a.backend.Save(ctx, b)
-}
+// backend is not an empty one. Run keeps reading them after that.
+func (a *Accounts) Load(ctx context.Context) error { return a.load(ctx) }
 
 // get finds an account; callers hold the lock.
 func (a *Accounts) get(username string) *Account {
@@ -326,21 +297,19 @@ func (a *Accounts) Setup(ctx context.Context, n NewAccount) (Account, error) {
 	if err != nil {
 		return Account{}, err
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if !a.loaded {
-		return Account{}, ErrUnavailable
-	}
-	if len(a.managed) > 0 || len(a.stored) > 0 {
-		return Account{}, ErrFirstRunClosed
-	}
-	u := &Account{Username: n.Username, Name: strings.TrimSpace(n.Name), Email: strings.ToLower(strings.TrimSpace(n.Email)), PasswordHash: hash, Super: []roles.ID{roles.SuperAdmin}, Created: a.now()}
-	a.stored[u.Username] = u
-	if err := a.save(ctx); err != nil {
-		delete(a.stored, u.Username)
-		return Account{}, err
-	}
-	return *u, nil
+	var out Account
+	// Checked again on the accounts as saved, under the conditional
+	// write: two replicas cannot both create a first administrator.
+	err = a.change(ctx, func() error {
+		if len(a.managed) > 0 || len(a.stored) > 0 {
+			return ErrFirstRunClosed
+		}
+		u := &Account{Username: n.Username, Name: strings.TrimSpace(n.Name), Email: strings.ToLower(strings.TrimSpace(n.Email)), PasswordHash: hash, Super: []roles.ID{roles.SuperAdmin}, Created: a.now()}
+		a.stored[u.Username] = u
+		out = *u
+		return nil
+	})
+	return out, err
 }
 
 // Create adds a local user (RB-46).
@@ -353,21 +322,17 @@ func (a *Accounts) Create(ctx context.Context, n NewAccount) (Account, error) {
 	if err != nil {
 		return Account{}, err
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if !a.loaded {
-		return Account{}, ErrUnavailable
-	}
-	if a.get(n.Username) != nil {
-		return Account{}, fmt.Errorf("%s exists already", n.Username)
-	}
-	u := &Account{Username: n.Username, Name: strings.TrimSpace(n.Name), Email: strings.ToLower(strings.TrimSpace(n.Email)), PasswordHash: hash, Groups: slices.Clone(n.Groups), Created: a.now()}
-	a.stored[u.Username] = u
-	if err := a.save(ctx); err != nil {
-		delete(a.stored, u.Username)
-		return Account{}, err
-	}
-	return *u, nil
+	var out Account
+	err = a.change(ctx, func() error {
+		if a.get(n.Username) != nil {
+			return fmt.Errorf("%s exists already", n.Username)
+		}
+		u := &Account{Username: n.Username, Name: strings.TrimSpace(n.Name), Email: strings.ToLower(strings.TrimSpace(n.Email)), PasswordHash: hash, Groups: slices.Clone(n.Groups), Created: a.now()}
+		a.stored[u.Username] = u
+		out = *u
+		return nil
+	})
+	return out, err
 }
 
 // Change is an edit to an account; nil fields stay as they are.
@@ -378,38 +343,34 @@ type Change struct {
 	Disabled *bool
 }
 
-// edit applies fn to a copy of a stored account, saves, and puts it back, or
-// leaves everything as it was when the save fails.
+// edit applies fn to a copy of a stored account, as saved now, and saves
+// it, or leaves everything as it was when that fails.
 func (a *Accounts) edit(ctx context.Context, username string, fn func(u *Account) error) (Account, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if !a.loaded {
-		return Account{}, ErrUnavailable
-	}
-	cur := a.get(username)
-	if cur == nil {
-		return Account{}, ErrNotFound
-	}
-	if cur.Managed {
-		return Account{}, ErrManaged
-	}
-	next := *cur
-	next.Groups = slices.Clone(cur.Groups)
-	next.Super = slices.Clone(cur.Super)
-	if err := fn(&next); err != nil {
-		return Account{}, err
-	}
-	wasSuper := !cur.Disabled && slices.Contains(cur.Super, roles.SuperAdmin)
-	isSuper := !next.Disabled && slices.Contains(next.Super, roles.SuperAdmin)
-	if wasSuper && !isSuper && !a.external && a.superAdmins(username, &next) == 0 {
-		return Account{}, ErrLastSuperAdmin
-	}
-	a.stored[username] = &next
-	if err := a.save(ctx); err != nil {
-		a.stored[username] = cur
-		return Account{}, err
-	}
-	return next, nil
+	var out Account
+	err := a.change(ctx, func() error {
+		cur := a.get(username)
+		if cur == nil {
+			return ErrNotFound
+		}
+		if cur.Managed {
+			return ErrManaged
+		}
+		next := *cur
+		next.Groups = slices.Clone(cur.Groups)
+		next.Super = slices.Clone(cur.Super)
+		if err := fn(&next); err != nil {
+			return err
+		}
+		wasSuper := !cur.Disabled && slices.Contains(cur.Super, roles.SuperAdmin)
+		isSuper := !next.Disabled && slices.Contains(next.Super, roles.SuperAdmin)
+		if wasSuper && !isSuper && !a.external && a.superAdmins(username, &next) == 0 {
+			return ErrLastSuperAdmin
+		}
+		a.stored[username] = &next
+		out = next
+		return nil
+	})
+	return out, err
 }
 
 // superAdmins counts the enabled SuperAdmins, with account `name` taken as
@@ -473,27 +434,21 @@ func (a *Accounts) Update(ctx context.Context, username string, c Change) (Accou
 // Delete removes a local user, their group memberships and super roles with
 // them.
 func (a *Accounts) Delete(ctx context.Context, username string) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if !a.loaded {
-		return ErrUnavailable
-	}
-	cur := a.get(username)
-	if cur == nil {
-		return ErrNotFound
-	}
-	if cur.Managed {
-		return ErrManaged
-	}
-	if !a.external && slices.Contains(cur.Super, roles.SuperAdmin) && !cur.Disabled && a.superAdmins(username, &Account{Disabled: true}) == 0 {
-		return ErrLastSuperAdmin
-	}
-	delete(a.stored, username)
-	if err := a.save(ctx); err != nil {
-		a.stored[username] = cur
-		return err
-	}
-	return nil
+	return a.change(ctx, func() error {
+		cur := a.get(username)
+		if cur == nil {
+			return ErrNotFound
+		}
+		if cur.Managed {
+			return ErrManaged
+		}
+		if !a.external && slices.Contains(cur.Super, roles.SuperAdmin) && !cur.Disabled && a.superAdmins(username, &Account{Disabled: true}) == 0 {
+			return ErrLastSuperAdmin
+		}
+		delete(a.stored, username)
+		delete(a.userExtra, username)
+		return nil
+	})
 }
 
 // ChangeGroups adds a local user to groups and removes them from others
@@ -537,12 +492,25 @@ func (a *Accounts) SetSuper(ctx context.Context, username string, set []roles.ID
 	})
 }
 
-// SignedIn notes a sign-in, in memory: it is saved with the next change,
-// since a Secret should not be written at every sign-in.
+// SignedIn notes a sign-in. A stored account's is saved, so every replica
+// shows it (sign-ins are rare); one defined in values keeps it in memory.
+// Failing to save it does not stop the sign-in.
 func (a *Accounts) SignedIn(username string, at time.Time) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if u := a.get(username); u != nil {
+	if u := a.managed[username]; u != nil {
 		u.LastSignIn = at
+		a.mu.Unlock()
+		return
 	}
+	a.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = a.change(ctx, func() error {
+		if u := a.stored[username]; u != nil {
+			next := *u
+			next.LastSignIn = at
+			a.stored[username] = &next
+		}
+		return nil
+	})
 }

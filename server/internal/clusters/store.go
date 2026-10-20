@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -32,6 +34,10 @@ type Store interface {
 	Save(ctx context.Context, s Spec, c *Credential) error
 	// Delete removes a connection and its credential (P3-08).
 	Delete(ctx context.Context, id string) error
+	// Revisions returns each saved connection's revision, which changes
+	// with every save, so a replica notices what another one changed
+	// (P7-02). The local cluster's saved name is among them.
+	Revisions(ctx context.Context) (map[string]string, error)
 	// Kind names the storage for the logs: "secrets" or "memory".
 	Kind() string
 }
@@ -42,11 +48,23 @@ type MemoryStore struct {
 	mu    sync.Mutex
 	specs map[string]Spec
 	creds map[string]Credential
+	revs  map[string]int
+	saves int
 }
 
 // NewMemoryStore makes an empty store.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{specs: map[string]Spec{}, creds: map[string]Credential{}}
+	return &MemoryStore{specs: map[string]Spec{}, creds: map[string]Credential{}, revs: map[string]int{}}
+}
+
+func (m *MemoryStore) Revisions(context.Context) (map[string]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]string, len(m.revs))
+	for id, r := range m.revs {
+		out[id] = strconv.Itoa(r)
+	}
+	return out, nil
 }
 
 func (m *MemoryStore) Kind() string { return "memory" }
@@ -79,6 +97,8 @@ func (m *MemoryStore) Save(_ context.Context, s Spec, c *Credential) error {
 	if c != nil {
 		m.creds[s.ID] = *c
 	}
+	m.saves++
+	m.revs[s.ID] = m.saves
 	return nil
 }
 
@@ -90,6 +110,7 @@ func (m *MemoryStore) Delete(_ context.Context, id string) error {
 	}
 	delete(m.specs, id)
 	delete(m.creds, id)
+	delete(m.revs, id)
 	return nil
 }
 
@@ -175,6 +196,27 @@ func (s *SecretStore) List(ctx context.Context) ([]Spec, error) {
 	return out, nil
 }
 
+// Revisions lists the connection Secrets' resourceVersions, by the
+// connection each one holds.
+func (s *SecretStore) Revisions(ctx context.Context) (map[string]string, error) {
+	list, err := s.secrets.List(ctx, metav1.ListOptions{LabelSelector: LabelComponent + "=" + ComponentValue})
+	if err != nil {
+		return nil, fmt.Errorf("listing the connection Secrets in %s: %w", s.namespace, err)
+	}
+	out := make(map[string]string, len(list.Items))
+	for i := range list.Items {
+		sec := &list.Items[i]
+		id := sec.Labels[LabelCluster]
+		if id == "" {
+			id = strings.TrimPrefix(sec.Name, s.prefix+"-cluster-")
+		}
+		if id != "" && sec.Name == s.name(id) {
+			out[id] = sec.ResourceVersion
+		}
+	}
+	return out, nil
+}
+
 func (s *SecretStore) Get(ctx context.Context, id string) (Spec, Credential, error) {
 	sec, err := s.secrets.Get(ctx, s.name(id), metav1.GetOptions{})
 	if err != nil {
@@ -217,12 +259,16 @@ func dataOf(c Credential) map[string][]byte {
 }
 
 func (s *SecretStore) Save(ctx context.Context, spec Spec, c *Credential) error {
-	raw, err := MarshalSpec(spec)
-	if err != nil {
-		return err
-	}
 	name := s.name(spec.ID)
 	existing, err := s.secrets.Get(ctx, name, metav1.GetOptions{})
+	var prev []byte
+	if err == nil {
+		prev = existing.Data[keySpec]
+	}
+	raw, merr := MarshalSpecOver(spec, prev)
+	if merr != nil {
+		return merr
+	}
 	switch {
 	case err == nil:
 		data := existing.Data

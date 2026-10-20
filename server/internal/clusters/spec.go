@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -396,21 +397,59 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// StorageVersion marks the spec.json format in the Secret.
+// StorageVersion marks the spec.json format in the Secret (P7-03). A
+// Secret of a newer format (after a rollback) is refused, never saved
+// over; an older one is migrated as it is read. To change the format, add
+// a step to specMigrations, raise StorageVersion, and test that a Secret
+// of the old format loads.
 const StorageVersion = 1
+
+// specMigrations[i] turns a stored spec of format i into format i+1,
+// working on the raw JSON object.
+var specMigrations = []func(spec map[string]json.RawMessage) error{
+	// 0 → 1: specs saved before the format was numbered are the same.
+	func(map[string]json.RawMessage) error { return nil },
+}
 
 // stored is the Secret's spec.json.
 type stored struct {
-	Version int  `json:"version"`
-	Spec    Spec `json:"spec"`
+	Version int             `json:"version"`
+	Spec    json.RawMessage `json:"spec"`
 }
 
 // MarshalSpec encodes a spec for the Secret.
 func MarshalSpec(s Spec) ([]byte, error) {
-	return json.Marshal(stored{Version: StorageVersion, Spec: s})
+	return MarshalSpecOver(s, nil)
 }
 
-// UnmarshalSpec decodes a spec from the Secret.
+// MarshalSpecOver encodes a spec for a Secret that held prev, keeping the
+// fields of prev's spec this console does not know, so a newer console's
+// fields survive a save here after a rollback and re-upgrade.
+func MarshalSpecOver(s Spec, prev []byte) ([]byte, error) {
+	b, err := json.Marshal(s)
+	if err != nil {
+		return nil, err
+	}
+	var old stored
+	var oldSpec map[string]json.RawMessage
+	if prev != nil && json.Unmarshal(prev, &old) == nil && old.Version > StorageVersion {
+		return nil, fmt.Errorf("the connection was saved by a newer console (format %d); upgrade this one to change it", old.Version)
+	}
+	if prev != nil && json.Unmarshal(prev, &old) == nil && json.Unmarshal(old.Spec, &oldSpec) == nil && len(oldSpec) > 0 {
+		var cur map[string]json.RawMessage
+		if err := json.Unmarshal(b, &cur); err == nil {
+			for k, v := range oldSpec {
+				if _, ok := cur[k]; !ok && !specFields[k] {
+					cur[k] = v
+				}
+			}
+			b, _ = json.Marshal(cur)
+		}
+	}
+	return json.Marshal(stored{Version: StorageVersion, Spec: b})
+}
+
+// UnmarshalSpec decodes a spec from the Secret, migrating an older format.
 func UnmarshalSpec(b []byte) (Spec, error) {
 	var st stored
 	if err := json.Unmarshal(b, &st); err != nil {
@@ -419,5 +458,51 @@ func UnmarshalSpec(b []byte) (Spec, error) {
 	if st.Version > StorageVersion {
 		return Spec{}, fmt.Errorf("the connection was saved by a newer console (format %d)", st.Version)
 	}
-	return st.Spec, nil
+	if st.Version < 0 {
+		return Spec{}, fmt.Errorf("the connection's format %d is not one 221B wrote", st.Version)
+	}
+	var raw map[string]json.RawMessage
+	if len(st.Spec) > 0 {
+		if err := json.Unmarshal(st.Spec, &raw); err != nil {
+			return Spec{}, err
+		}
+	}
+	if raw == nil {
+		raw = map[string]json.RawMessage{}
+	}
+	for v := st.Version; v < StorageVersion; v++ {
+		if err := specMigrations[v](raw); err != nil {
+			return Spec{}, fmt.Errorf("migrating the connection from format %d: %w", v, err)
+		}
+	}
+	known, _ := json.Marshal(raw)
+	var spec Spec
+	if err := json.Unmarshal(known, &spec); err != nil {
+		return Spec{}, err
+	}
+	return spec, nil
 }
+
+// specFields are the JSON names of the Spec fields, embedded ones included.
+var specFields = func() map[string]bool {
+	out := map[string]bool{}
+	var walk func(t reflect.Type)
+	walk = func(t reflect.Type) {
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			if f.Anonymous && name == "" && f.Type.Kind() == reflect.Struct {
+				walk(f.Type)
+				continue
+			}
+			if name == "" {
+				name = f.Name
+			}
+			if name != "-" {
+				out[name] = true
+			}
+		}
+	}
+	walk(reflect.TypeOf(Spec{}))
+	return out
+}()
