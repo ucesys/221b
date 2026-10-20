@@ -12,7 +12,7 @@ How versions are numbered, how a release is cut, and what CI does with it (P7-08
 
 Every release upgrades from each of the two releases before it; CI tests this ([upgrading.md](upgrading.md#which-upgrades-are-tested)).
 
-Releases so far: **0.6.5** (Phase 6.5, `f789452`), **0.6.6** (Phase 6.6, `ad0b568`) and **0.7.0** (Phase 7). Earlier phases were not released as versions.
+Releases so far: **0.6.5** (Phase 6.5, `f789452`), **0.6.6** (Phase 6.6, `ad0b568`), **0.7.0** (Phase 7, released without an image) and **0.7.1** (0.7.0 with its image). Earlier phases were not released as versions.
 
 ## Cut a release
 
