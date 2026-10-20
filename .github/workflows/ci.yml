@@ -101,6 +101,10 @@ jobs:
     name: Browser tests (${{ matrix.name }})
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # Firefox's page loads stall in CI, failing a different test each run:
+    # its job still shows red, but does not fail the run or hold back an
+    # image. Chromium and WebKit must pass.
+    continue-on-error: ${{ matrix.browser == 'firefox' }}
     strategy:
       fail-fast: false
       matrix:
@@ -387,13 +391,23 @@ jobs:
           persist-credentials: false
       - name: The two newest releases before this commit
         id: from
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
         run: |
+          echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin > /dev/null
           here=$(git rev-parse HEAD)
           from=()
           while read -r tag; do
             [ -n "$tag" ] || continue
             [ "$(git rev-list -n 1 "$tag")" = "$here" ] && continue
             git merge-base --is-ancestor "$tag" HEAD || continue
+            # A release whose image was never published (0.7.0) cannot be
+            # installed, so nobody upgrades from it.
+            if ! docker manifest inspect "$IMAGE:${tag#v}" > /dev/null 2>&1; then
+              echo "::notice title=Upgrade::$tag has no image $IMAGE:${tag#v}; skipped."
+              continue
+            fi
             from+=("$tag")
             [ "${#from[@]}" -lt 2 ] || break
           done < <(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)

@@ -4,6 +4,13 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## Unreleased
 
+## 0.7.1 (2026-10-20)
+
+### Fixed
+
+- **0.7.0 has no image.** Its release ran, but the image was held back by the Firefox browser tests, which stall in CI. 0.7.1 is 0.7.0 with an image: install or upgrade to 0.7.1.
+- CI: Firefox's browser tests still run and show their failures, but no longer hold back a release; Chromium and WebKit must pass. The upgrade test skips a release that has no image.
+
 ## 0.7.0 (2026-10-20)
 
 ### Added

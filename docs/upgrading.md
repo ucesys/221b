@@ -7,13 +7,13 @@ An upgrade is a `helm upgrade`. Everything the console keeps in the cluster (its
 From the published chart:
 
 ```sh
-helm upgrade k8s-console oci://ghcr.io/ucesys/charts/221b --version 0.7.0 -n 221b --reset-then-reuse-values
+helm upgrade k8s-console oci://ghcr.io/ucesys/charts/221b --version 0.7.1 -n 221b --reset-then-reuse-values
 ```
 
 From a checkout of the repository, at the release's tag:
 
 ```sh
-git checkout v0.7.0
+git checkout v0.7.1
 helm upgrade k8s-console deploy/helm/221b -n 221b --reset-then-reuse-values
 ```
 
@@ -46,6 +46,10 @@ helm rollback k8s-console -n 221b    # to the previous revision
 The earlier release reads what the newer one saved: it ignores fields it does not know. A console that finds a document saved in a **newer format than it knows** keeps reading it but refuses to save it, so it cannot destroy what the newer release wrote: the Settings page and the Users page say so until you upgrade again. CI checks a rollback from this release to each of the two before it.
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
+
+## 0.7.1
+
+- The same as 0.7.0, which was released without an image: upgrade from 0.6.x to 0.7.1, and everything under 0.7.0 below applies.
 
 ## 0.7.0
 
