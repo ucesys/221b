@@ -2,13 +2,23 @@
 
 What changed in each release of 221B, for people who use it and people who install it. Versions follow [semantic versioning](https://semver.org/): while the major version is 0, a minor version (0.7.0) may change behaviour and chart values, and a patch version (0.7.1) only fixes. [docs/upgrading.md](docs/upgrading.md) says how to upgrade and what each upgrade changes.
 
-## Unreleased (0.7.0)
+## Unreleased
+
+## 0.7.0 (2026-10-20)
 
 ### Added
 
 - **Several replicas** (P7-02): `replicaCount: 2` or more, with a PodDisruptionBudget. One replica, chosen through a Kubernetes Lease, runs Sherlock and Watson, and the others pass those requests to it; sign-ins, settings and accounts are shared, so losing a replica costs a viewer a reconnect.
 - **Upgrades from the two previous releases** (P7-03) are tested in CI: upgrade, roll back and upgrade again, keeping settings, users, connections and Sherlock's key. Stored settings and local accounts carry a format version; a console migrates older formats, keeps fields it does not know when it saves, and refuses to overwrite a format newer than it knows.
 - **Releases** (P7-08): semantic versions, this changelog, the chart published to `oci://ghcr.io/ucesys/charts/221b`, and a GitHub release for every version tag ([docs/releasing.md](docs/releasing.md)). A contributing guide, a code of conduct, a security policy, issue and pull request templates, and a Developer Certificate of Origin check for pull requests from forks.
+
+### Changed
+
+- Everyone signs in once more after upgrading to 0.7.0: sign-ins used to live in the console's memory and are now kept in the cluster, where they survive restarts and upgrades.
+
+### Fixed
+
+- Sherlock on the home page and on a connection's page: *Send to Watson* shows under a command, and a cited object (*Open deployment … →*) opens on the cluster's tabs.
 
 ## 0.6.6 (2026-10-18)
 
