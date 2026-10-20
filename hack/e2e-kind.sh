@@ -77,6 +77,8 @@ cleanup() {
   exit "$code"
 }
 trap cleanup EXIT
+# Which check failed, since many have no message of their own.
+trap 'echo "failed at hack/e2e-kind.sh:$LINENO: $BASH_COMMAND" >&2' ERR
 
 step "Create a kind cluster with Kubernetes $MINOR"
 kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
@@ -307,10 +309,12 @@ fi
 # Sherlock runs on the replica that holds the Lease (P7-02), which the new
 # pod takes when the old one lets it go, a moment after the rollout.
 for _ in $(seq 30); do
-  api http://127.0.0.1:18080/api/v1/sherlock/config > "$WORK/sherlock-config.json" 2>/dev/null && break
+  code=$(curl -s -b "$COOKIES" -o "$WORK/sherlock-config.json" -w '%{http_code}' http://127.0.0.1:18080/api/v1/sherlock/config || true)
+  [ "$code" = 200 ] && break
   sleep 1
 done
-grep -q '"set":true' "$WORK/sherlock-config.json"
+grep -q '"set":true' "$WORK/sherlock-config.json" ||
+  { echo "Sherlock's config after the upgrade, HTTP $code: $(cat "$WORK/sherlock-config.json")"; exit 1; }
 ! grep -q sk-ant-e2e-fake-key "$WORK/sherlock-config.json"
 api -X DELETE -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:18080/api/v1/sherlock/key | grep -q '"set":false'
 ! kubectl -n "$NS" get secret "$FULLNAME-sherlock" > /dev/null 2>&1

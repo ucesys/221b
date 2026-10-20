@@ -90,8 +90,20 @@ func (s *Server) forwardToLeader(w http.ResponseWriter, r *http.Request) bool {
 	addr := s.opts.Leader.LeaderAddr()
 	if addr == "" {
 		s.leaderUnavailable(w)
+		s.opts.Logger.Debug("request", "method", r.Method, "path", r.URL.Path, "code", http.StatusServiceUnavailable, "leader", "none")
 		return true
 	}
+	// Logged here, since the leader answers it: which leader, and how.
+	sw := &statusWriter{ResponseWriter: w}
+	w = sw
+	start := time.Now()
+	defer func() {
+		code := sw.code
+		if code == 0 {
+			code = http.StatusOK
+		}
+		s.opts.Logger.Debug("request forwarded", "method", r.Method, "path", r.URL.Path, "leader", addr, "code", code, "duration", time.Since(start))
+	}()
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	go func() {
