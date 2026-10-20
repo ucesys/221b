@@ -64,33 +64,37 @@ func leaderOnly(path string) bool {
 
 // trustForwarded takes the client's address from a request another
 // replica forwarded, and drops the headers from any other request, so no
-// browser can claim an address.
-func (s *Server) trustForwarded(r *http.Request) {
+// browser can claim an address. It reports whether a replica sent it.
+func (s *Server) trustForwarded(r *http.Request) bool {
 	client := r.Header.Get(clientHeader)
 	token := r.Header.Get(proxyHeader)
 	r.Header.Del(clientHeader)
 	r.Header.Del(proxyHeader)
 	if client == "" || s.opts.ProxyToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.opts.ProxyToken)) != 1 {
-		return
+		return false
 	}
 	if net.ParseIP(client) == nil {
-		return
+		return false
 	}
 	// Everything after this reads the address from RemoteAddr: the audit
 	// log, the sign-in limits.
 	r.RemoteAddr = net.JoinHostPort(client, "0")
+	return true
 }
 
 // forwardToLeader sends a Sherlock or Watson request on to the leader and
 // says whether it did; the leader itself, and a single replica, keep it.
-func (s *Server) forwardToLeader(w http.ResponseWriter, r *http.Request) bool {
+// A request another replica forwarded is not sent on again: while the
+// leader changes, two replicas could each take the other for it and pass
+// a request back and forth.
+func (s *Server) forwardToLeader(w http.ResponseWriter, r *http.Request, forwarded bool) bool {
 	if s.opts.Leader == nil || s.opts.Leader.IsLeader() || !leaderOnly(r.URL.Path) {
 		return false
 	}
 	addr := s.opts.Leader.LeaderAddr()
-	if addr == "" {
+	if addr == "" || forwarded {
 		s.leaderUnavailable(w)
-		s.opts.Logger.Debug("request", "method", r.Method, "path", r.URL.Path, "code", http.StatusServiceUnavailable, "leader", "none")
+		s.opts.Logger.Debug("request", "method", r.Method, "path", r.URL.Path, "code", http.StatusServiceUnavailable, "leader", addr, "forwarded", forwarded)
 		return true
 	}
 	// Logged here, since the leader answers it: which leader, and how.
@@ -154,11 +158,13 @@ func (s *Server) proxyFor(addr string) *httputil.ReverseProxy {
 		},
 		// Event streams pass every event on as it comes.
 		FlushInterval: -1,
+		// Before the leader answered: it is gone, or moved while it was
+		// asked, and the app tries again. Saying nothing would be an empty
+		// 200.
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			if errors.Is(err, context.Canceled) {
-				return
+			if !errors.Is(err, context.Canceled) {
+				s.opts.Logger.Warn("the leader did not answer a forwarded request", "leader", addr, "path", r.URL.Path, "err", err)
 			}
-			s.opts.Logger.Warn("the leader did not answer a forwarded request", "leader", addr, "path", r.URL.Path, "err", err)
 			s.leaderUnavailable(w)
 		},
 	}

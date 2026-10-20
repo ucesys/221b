@@ -216,6 +216,51 @@ func TestForwardedStreamEndsWhenTheLeaderMoves(t *testing.T) {
 	}
 }
 
+// While the leader changes, two replicas can each take the other for it: a
+// request one forwarded is answered 503, never sent back, and a leader that
+// moves before it answers gives 503 too, never an empty 200.
+func TestAHandoverAnswersRetry(t *testing.T) {
+	hits := make(chan string, 10)
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits <- r.URL.Path
+		<-r.Context().Done()
+	}))
+	defer slow.Close()
+	lead := &testLeader{addr: strings.TrimPrefix(slow.URL, "http://")}
+	api := New(Options{Leader: lead, ProxyToken: "t", Logger: quietLog()})
+	api.leaderChecks = 20 * time.Millisecond
+	follower := httptest.NewServer(api)
+	defer follower.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, follower.URL+"/api/v1/sherlock/config", nil)
+	req.Header.Set(clientHeader, "203.0.113.9")
+	req.Header.Set(proxyHeader, "t")
+	// Before the fix, the request went on to the leader and hung there.
+	client := &http.Client{Timeout: 5 * time.Second}
+	r, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.StatusCode != http.StatusServiceUnavailable || r.Header.Get("Retry-After") == "" {
+		t.Fatalf("a forwarded request: %d", r.StatusCode)
+	}
+	r.Body.Close()
+	select {
+	case p := <-hits:
+		t.Fatalf("forwarded again: %s", p)
+	default:
+	}
+
+	go func() {
+		<-hits
+		lead.set("10.0.0.9:8080")
+	}()
+	r = get(t, follower.URL+"/api/v1/sherlock/config")
+	if r.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body(t, r), "moving to another replica") {
+		t.Fatalf("the leader moved: %d", r.StatusCode)
+	}
+}
+
 // The leader believes a forwarded client address only with the replicas'
 // token; a browser that sends the header is ignored.
 func TestClientAddressNeedsTheToken(t *testing.T) {

@@ -503,7 +503,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A request another replica forwarded says whose it is (P7-02).
-	s.trustForwarded(r)
+	forwarded := s.trustForwarded(r)
 	h := w.Header()
 	for _, kv := range securityHeaders {
 		h.Set(kv[0], kv[1])
@@ -536,7 +536,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusForbidden, "this can only be done from the console itself")
 		return
 	}
-	if s.forwardToLeader(w, r) {
+	if s.forwardToLeader(w, r, forwarded) {
 		return
 	}
 	s.mux.ServeHTTP(w, r)
