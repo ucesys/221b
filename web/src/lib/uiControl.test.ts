@@ -51,6 +51,21 @@ describe('Sherlock’s UI actions are one list (P6U-04, P6U-12)', () => {
     expect(Object.keys(TAB_SPECS).sort()).toEqual(TABS.map((t) => t.id).sort())
     for (const spec of Object.values(TAB_SPECS)) expect(spec.filters).not.toHaveProperty('peek')
   })
+
+  // A filter a tab reads but Sherlock cannot set left it showing every
+  // node when asked for the nodes with problems: each one a tab reads
+  // from its URL is declared, but open (the row whose pane is open, which
+  // view_details opens) and the search boxes, which view_search sets.
+  it('declares every filter a tab reads from its URL', () => {
+    const files: Record<string, string> = { alerts: 'AlertsTab', nodes: 'NodesTab', fleets: 'FleetsTab', namespaces: 'NamespacesTab', pods: 'PodsTab', helm: 'HelmTab', services: 'ServicesTab', networks: 'NetworksTab', access: 'AccessTab', policies: 'PoliciesTab' }
+    for (const [tab, file] of Object.entries(files)) {
+      const src = readFileSync(resolve(__dirname, `../components/${file}.tsx`), 'utf8')
+      const read = new Set([...src.matchAll(/(?:\.get\(|listParam\(\w+, )'([a-z]+)'/g)].map((m) => m[1]!))
+      const spec = TAB_SPECS[tab as keyof typeof TAB_SPECS]
+      const searched = new Set(['open', spec.search, tab === 'access' ? 'tq' : undefined])
+      for (const name of read) if (!searched.has(name)) expect(spec.filters, `${tab} reads ${name}`).toHaveProperty(name)
+    }
+  })
 })
 
 describe('the actions', () => {
@@ -72,6 +87,17 @@ describe('the actions', () => {
       expect((e as { link?: string }).link).toBe('#/c/staging/nodes')
     }
     expect(window.location.hash).toBe('#/pods?status=failing')
+  })
+
+  it('shows only the nodes with errors, and hides acknowledged alerts', () => {
+    const on = (tab: 'nodes' | 'fleets' | 'alerts') => ({ cluster: 'local', view: 'tabs' as const, tab, path: [], params: new URLSearchParams() })
+    REGISTRY.view_filter!(on('nodes'), { set: { err: '1' } })
+    expect(window.location.hash).toBe('#/nodes?err=1')
+    REGISTRY.view_open!(on('alerts'), { tab: 'fleets', filters: { err: '1' } })
+    expect(window.location.hash).toBe('#/fleets?err=1')
+    REGISTRY.view_filter!(on('alerts'), { set: { acked: 'hide' } })
+    expect(window.location.hash).toBe('#/alerts?acked=hide')
+    expect(() => REGISTRY.view_filter!(on('nodes'), { set: { err: 'yes' } })).toThrow('err is "1" or ""')
   })
 })
 
