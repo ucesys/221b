@@ -10,9 +10,11 @@ What changed in each release of 221B, for people who use it and people who insta
 - Sherlock's prompt is cached for longer: the time comes last, so asking again a minute later costs less.
 - Chart: `antiAffinity` (`soft` or `hard`, off by default) keeps several replicas on different nodes: soft prefers it more strongly than the spread the chart already asks for, hard requires it.
 
+- **Nodes and Fleets: All, With problems, With errors.** The Nodes with errors checkbox is now a switch of three: every node, the nodes with an error or a warning (cordoned, under pressure, pods not ready), or only those with an error. Links with err=1 still show the nodes with errors.
+
 ### Fixed
 
-- **"Show me the nodes with problems" showed every node.** Sherlock could not set the Nodes and Fleets tabs' Nodes with errors filter or the Alerts tab's Hide acknowledged, so it guessed at taints and search words and then cleared the filters. It can now set them, leaves a filtered view empty when nothing matches, and cannot take off a filter it set while the filter shows something: it had shown the one node with a problem, then every node with that one highlighted.
+- **"Show me the nodes with problems" showed every node.** Sherlock could not set the Nodes and Fleets tabs' filter or the Alerts tab's Hide acknowledged, so it guessed at taints and search words and then cleared the filters; and with only an errors filter, a node with warnings alone left it no filter that fit. It now shows the nodes with problems, or with errors, as asked, leaves a filtered view empty when nothing matches, and cannot take off a filter it set while the filter shows something.
 
 ## 0.7.1 (2026-10-20)
 

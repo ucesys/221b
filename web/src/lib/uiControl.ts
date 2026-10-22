@@ -48,11 +48,12 @@ interface TabSpec {
 }
 
 const ROLE: FilterSpec = { type: 'enum', values: ['all', 'control-plane', 'worker'], none: 'all' }
+const PROBLEMS: FilterSpec = { type: 'enum', values: ['all', 'problems', 'errors'], none: 'all' }
 
 /** The filters each tab reads from its URL, as the tabs declare them (P6U-04). */
 export const TAB_SPECS: Record<Tab, TabSpec> = {
   alerts: { search: 'q', filters: { kind: { type: 'enum', values: ['all', 'pods', 'nodes', 'volumes'], none: 'all' }, show: { type: 'enum', values: ['active', 'all'], none: 'active' }, acked: { type: 'enum', values: ['show', 'hide'], none: 'show' } } },
-  nodes: { search: 'q', filters: { role: ROLE, err: { type: 'flag' }, label: { type: 'list' }, taint: { type: 'list' } } },
+  nodes: { search: 'q', filters: { role: ROLE, err: PROBLEMS, label: { type: 'list' }, taint: { type: 'list' } } },
   pods: {
     search: 'q',
     filters: { role: ROLE, status: { type: 'enum', values: ['all', 'running', 'pending', 'failing', 'completed'], none: 'all' }, ns: { type: 'list' }, node: { type: 'list' }, label: { type: 'list' }, taint: { type: 'list' } },
@@ -66,7 +67,7 @@ export const TAB_SPECS: Record<Tab, TabSpec> = {
       { name: 'release', type: 'text' },
     ],
   },
-  fleets: { search: 'q', filters: { fleet: { type: 'list' }, pl: { type: 'list' }, pt: { type: 'list' }, group: { type: 'enum', values: ['fleet', 'none'], none: 'fleet' }, err: { type: 'flag' } } },
+  fleets: { search: 'q', filters: { fleet: { type: 'list' }, pl: { type: 'list' }, pt: { type: 'list' }, group: { type: 'enum', values: ['fleet', 'none'], none: 'fleet' }, err: PROBLEMS } },
   networks: { filters: { route: { type: 'text' } } },
   access: {
     search: 'q',

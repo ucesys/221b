@@ -54,8 +54,8 @@ var evalTables = map[string]struct {
 
 // The filters each tab accepts, as lib/uiControl.ts declares them.
 var evalFilters = map[string][]string{
-	"alerts": {"kind", "show", "q"}, "nodes": {"role", "label", "taint", "q"}, "pods": {"role", "status", "ns", "node", "label", "taint", "q"},
-	"services": {"ns", "type", "q"}, "namespaces": {"kinds", "q"}, "helm": {"tab"}, "fleets": {"fleet", "pl", "pt", "group", "q"},
+	"alerts": {"kind", "show", "acked", "q"}, "nodes": {"role", "err", "label", "taint", "q"}, "pods": {"role", "status", "ns", "node", "label", "taint", "q"},
+	"services": {"ns", "type", "q"}, "namespaces": {"kinds", "q"}, "helm": {"tab"}, "fleets": {"fleet", "pl", "pt", "group", "err", "q"},
 	"networks": {"route"}, "access": {"kind", "verb", "res", "wns", "tbl", "sys", "defaults", "id", "scope", "q"}, "policies": {"from", "to", "port"},
 }
 
@@ -353,6 +353,12 @@ func uiCases(c *client) []uiCase {
 		)
 	}
 	out = append(out,
+		// Asked for the nodes with problems, Sherlock once showed every
+		// node: the simulator has nodes with errors and with warnings only.
+		uiCase{ID: "ui-nodes-problems", Question: "Show me the nodes with problems.", Start: "nodes", Want: "Nodes, err problems",
+			Check: func(v viewModel) bool { return v.Tab == "nodes" && v.Filters["err"] == "problems" }},
+		uiCase{ID: "ui-nodes-down", Question: "Which nodes are down?", Start: "alerts", Want: "Nodes, err errors",
+			Check: func(v viewModel) bool { return v.Tab == "nodes" && v.Filters["err"] == "errors" }},
 		uiCase{ID: "ui-control-plane", Question: "Show me only the control-plane nodes.", Start: "alerts", Want: "Nodes, role control-plane",
 			Check: func(v viewModel) bool { return v.Tab == "nodes" && v.Filters["role"] == "control-plane" }},
 		uiCase{ID: "ui-sort-memory", Question: "Sort the nodes by free memory, least first.", Start: "nodes", Want: "nodes sorted by memFree ascending",

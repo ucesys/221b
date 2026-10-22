@@ -11,7 +11,7 @@ import { usePref } from '../lib/prefs'
 import { csvText, type ExportFormat } from '../lib/table'
 import { download, xlsxBytes, type Cell } from '../lib/xlsx'
 import { FleetEditor, type EditorSeed } from './FleetEditor'
-import { ErrorsOnly } from './ErrorsOnly'
+import { ProblemFilter, problemLevel, showsNode } from './ProblemFilter'
 import { ExportMenu } from './ExportMenu'
 import { Chevron, ColumnsIcon, PlusIcon, SearchIcon } from './Icons'
 import type { TabProps } from './tabs'
@@ -61,7 +61,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
   const sel = listParam(p, 'fleet').filter((id) => id === 'none' || fleets.some((f) => f.id === id))
   const group = p.get('group') === 'none' ? 'none' : 'fleet'
   const query = p.get('q') ?? ''
-  const errOnly = p.get('err') === '1'
+  const level = problemLevel(p.get('err'))
   const fx = { labels: listParam(p, 'pl'), taints: listParam(p, 'pt') }
   const fxOn = fx.labels.length + fx.taints.length > 0
   const set = (changes: Record<string, string | string[] | undefined>) => navigate(withParams(route, changes), true)
@@ -81,9 +81,10 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
   const cols = useMemo(() => mxColumns(nodes), [nodes])
   const visCols = cols.filter((c) => !hidden.has(c.id))
   const q = query.trim().toLowerCase()
-  const scope = scopeNames(sel, fleetRows, allNames).filter((n) => byName.has(n) && (!q || n.toLowerCase().includes(q)) && (!errOnly || byName.get(n)!.errors > 0))
-  const narrowed = !!q || errOnly
+  const scope = scopeNames(sel, fleetRows, allNames).filter((n) => byName.has(n) && (!q || n.toLowerCase().includes(q)) && showsNode(level, byName.get(n)!))
+  const narrowed = !!q || level !== 'all'
   const withErrors = nodes.filter((n) => n.errors > 0).length
+  const withProblems = nodes.filter((n) => n.errors + n.warnings > 0).length
 
   const sortVal = (n: NodeRow, col: string): string | number | null => {
     if (col === 'node') return n.name
@@ -412,7 +413,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
             <span className="rk-sr">Filter nodes</span>
             <input type="search" placeholder="Filter nodes by name" value={query} onChange={(e) => set({ q: e.target.value || undefined })} data-testid="fleet-filter" />
           </label>
-          <ErrorsOnly on={errOnly} count={withErrors} onChange={(on) => set({ err: on ? '1' : undefined })} />
+          <ProblemFilter level={level} problems={withProblems} errors={withErrors} onChange={(l) => set({ err: l === 'all' ? undefined : l })} />
           <span style={{ flex: '1 1 auto' }} />
           <button
             className="rk-btn"
