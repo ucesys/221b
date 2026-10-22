@@ -12,7 +12,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Fixed
 
-- **"Show me the nodes with problems" showed every node.** Sherlock could not set the Nodes and Fleets tabs' Nodes with errors filter or the Alerts tab's Hide acknowledged, so it guessed at taints and search words and then cleared the filters. It can now set them, leaves a filtered view empty when nothing matches, and never clears every filter to start again.
+- **"Show me the nodes with problems" showed every node.** Sherlock could not set the Nodes and Fleets tabs' Nodes with errors filter or the Alerts tab's Hide acknowledged, so it guessed at taints and search words and then cleared the filters. It can now set them, leaves a filtered view empty when nothing matches, and cannot take off a filter it set while the filter shows something: it had shown the one node with a problem, then every node with that one highlighted.
 
 ## 0.7.1 (2026-10-20)
 

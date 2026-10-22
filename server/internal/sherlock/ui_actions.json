@@ -101,7 +101,7 @@
     {
       "name": "view_highlight",
       "changes": true,
-      "description": "Scrolls a row of a table on screen into view and marks it for a few seconds.",
+      "description": "Scrolls a row of a table on screen into view and marks it for a few seconds. Use it in the view as it is: never widen a filtered view to highlight a row among the others.",
       "input_schema": {
         "type": "object",
         "properties": {

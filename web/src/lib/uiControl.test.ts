@@ -2,7 +2,7 @@ import { act, renderHook } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ACTIONS, checkInput, REGISTRY, TAB_SPECS, viewState, type ActionDef } from './uiControl'
+import { ACTIONS, checkInput, REGISTRY, setAnswering, TAB_SPECS, viewState, type ActionDef } from './uiControl'
 import { currentRoute, setRouteForTests, TABS } from './router'
 import { tableHandle, tableHandles } from './tables'
 import { useTable } from './useTable'
@@ -97,7 +97,39 @@ describe('the actions', () => {
     expect(window.location.hash).toBe('#/fleets?err=1')
     REGISTRY.view_filter!(on('alerts'), { set: { acked: 'hide' } })
     expect(window.location.hash).toBe('#/alerts?acked=hide')
+    expect(() => REGISTRY.view_filter!(on('nodes'), { set: { err: '1' } })).not.toThrow()
     expect(() => REGISTRY.view_filter!(on('nodes'), { set: { err: 'yes' } })).toThrow('err is "1" or ""')
+  })
+
+  // Asked for the nodes with problems, Sherlock set the filter, saw the one
+  // node, then took the filter off to highlight it among every node.
+  it('keeps a filter it set in this answer while the table shows rows', () => {
+    const nodes = (q: string) => ({ cluster: 'local', view: 'tabs' as const, tab: 'nodes' as const, path: [], params: new URLSearchParams(q) })
+    setAnswering(41)
+    const one = renderHook(() => useTable({ id: 'nodes', columns: COLS, rows: rowsOf(1), terms, now: 0, defaultSort: { col: 'name', dir: 'asc' } }))
+    REGISTRY.view_open!(nodes(''), { tab: 'nodes', filters: { err: '1' } })
+    expect(window.location.hash).toBe('#/nodes?err=1')
+    expect(() => REGISTRY.view_filter!(nodes('err=1'), { clear: ['err'] })).toThrow('table shows 1 row: that is the answer')
+    expect(() => REGISTRY.view_filter!(nodes('err=1'), { clear: ['*'] })).toThrow('that is the answer')
+    expect(() => REGISTRY.view_open!(nodes('err=1'), { tab: 'nodes' })).toThrow('that is the answer')
+    expect(window.location.hash).toBe('#/nodes?err=1')
+    // A filter the person set may go; so may another tab.
+    REGISTRY.view_filter!(nodes('err=1&role=worker'), { clear: ['role'] })
+    REGISTRY.view_open!(nodes('err=1'), { tab: 'pods' })
+    one.unmount()
+    // A filter that left nothing to show may go, to correct it.
+    setAnswering(42)
+    const none = renderHook(() => useTable({ id: 'nodes', columns: COLS, rows: [], terms, now: 0, defaultSort: { col: 'name', dir: 'asc' } }))
+    REGISTRY.view_open!(nodes(''), { tab: 'nodes', filters: { err: '1' } })
+    REGISTRY.view_filter!(nodes('err=1'), { clear: ['err'] })
+    expect(window.location.hash).toBe('#/nodes')
+    none.unmount()
+    // The next answer may change what the last one set.
+    setAnswering(43)
+    const again = renderHook(() => useTable({ id: 'nodes', columns: COLS, rows: rowsOf(3), terms, now: 0, defaultSort: { col: 'name', dir: 'asc' } }))
+    REGISTRY.view_filter!(nodes('err=1'), { clear: ['err'] })
+    again.unmount()
+    setAnswering(null)
   })
 })
 
