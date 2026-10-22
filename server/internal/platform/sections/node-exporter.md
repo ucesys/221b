@@ -1,0 +1,2 @@
+Prometheus node-exporter:
+- Its metrics in Prometheus settle many node questions: filesystems (node_filesystem_avail_bytes, node_filesystem_files_free), memory errors (node_edac_*), RAID (node_md_*), network errors and drops (node_network_*_errs_total), conntrack (node_nf_conntrack_entries against node_nf_conntrack_entries_limit), clock (node_timex_offset_seconds), hardware temperature (node_hwmon_*). Suggest the query when it would settle the cause.

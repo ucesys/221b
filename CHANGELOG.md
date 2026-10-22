@@ -4,6 +4,15 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## Unreleased
 
+### Changed
+
+- **Sherlock knows the cluster it is asked about.** Its prompt now names the cluster's Kubernetes distribution (RKE2, K3s, kubeadm, kind, EKS, GKE, AKS, OpenShift, Talos), the operating system and kernel of each node, and its network plugin, load balancer, storage and GPU plugin, and gives the guidance for those alone: the distribution's own services, log files and commands, and each operating system's. It troubleshoots down to the node's operating system and hardware, and gives the checks to run on a node in a block of their own. A console with several clusters gives each its own prompt. Node details are included only for people who may list nodes.
+- Sherlock's prompt is cached for longer: the time comes last, so asking again a minute later costs less.
+
+### Fixed
+
+- **"Show me the nodes with problems" showed every node.** Sherlock could not set the Nodes and Fleets tabs' Nodes with errors filter or the Alerts tab's Hide acknowledged, so it guessed at taints and search words and then cleared the filters. It can now set them, leaves a filtered view empty when nothing matches, and never clears every filter to start again.
+
 ## 0.7.1 (2026-10-20)
 
 ### Fixed

@@ -292,9 +292,14 @@ type Question struct {
 	Text    string
 	Cluster string // the cluster's name, for the prompt
 	Version string
-	Tools   Toolbox
-	Who     audit.Who
-	From    string
+	// Platform describes the cluster for the prompt: its distribution,
+	// the operating systems of its nodes and its add-ons, with the
+	// guidance for each (platform.Profile.Prompt). Empty, the prompt
+	// names only the cluster and its version.
+	Platform string
+	Tools    Toolbox
+	Who      audit.Who
+	From     string
 	// Window is the console window whose view the UI actions change: the
 	// one that asked, or the main window Sherlock's own window follows
 	// (P6U-08). Empty when there is none.
@@ -421,7 +426,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		defs = append([]ToolDef(nil), defs...)
 		defs[n-1].CacheControl = &CacheControl{Type: "ephemeral"}
 	}
-	system := []Block{{Type: "text", Text: systemPrompt(q.Cluster, q.Version, s.opts.Now(), q.ViewChanges), CacheControl: &CacheControl{Type: "ephemeral"}}}
+	system := systemPrompt(q, s.opts.Now())
 	first := func() {
 		if ans.FirstAt == nil {
 			t := s.opts.Now()
