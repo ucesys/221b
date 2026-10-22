@@ -8,6 +8,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 - **Sherlock knows the cluster it is asked about.** Its prompt now names the cluster's Kubernetes distribution (RKE2, K3s, kubeadm, kind, EKS, GKE, AKS, OpenShift, Talos), the operating system and kernel of each node, and its network plugin, load balancer, storage and GPU plugin, and gives the guidance for those alone: the distribution's own services, log files and commands, and each operating system's. It troubleshoots down to the node's operating system and hardware, and gives the checks to run on a node in a block of their own. A console with several clusters gives each its own prompt. Node details are included only for people who may list nodes.
 - Sherlock's prompt is cached for longer: the time comes last, so asking again a minute later costs less.
+- Chart: `antiAffinity` (`soft` or `hard`, off by default) keeps several replicas on different nodes: soft prefers it more strongly than the spread the chart already asks for, hard requires it.
 
 ### Fixed
 
