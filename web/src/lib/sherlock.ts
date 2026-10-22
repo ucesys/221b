@@ -230,7 +230,12 @@ export function alertQuestion(r: { kind: string; name: string; namespace?: strin
   return podQuestion({ namespace: r.namespace ?? '', name: r.name, status: r.status, restarts: r.restarts }, r.namespace ?? '', r.name)
 }
 
-/** The question a home card's Audit button asks (Phase 6 review). */
+/** The question a home card's Troubleshoot button asks, in place of Audit while the cluster has errors or warnings. */
+export function clusterTroubleshootQuestion(cluster: string): string {
+  return `Troubleshooting report for cluster ${cluster}: what is wrong now, why, and how to fix it, most severe first`
+}
+
+/** The question a home card's Audit button asks (Phase 6 review), while the cluster is healthy. */
 export function reviewQuestion(cluster: string): string {
   return `Deficiency review of cluster ${cluster}: where does its Kubernetes setup fall short of good practice, and what should change first?`
 }

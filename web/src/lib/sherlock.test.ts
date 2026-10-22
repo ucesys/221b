@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { alertQuestion, parseRef, podQuestion, refTarget, troubleshootQuestion } from './sherlock'
+import { alertQuestion, clusterTroubleshootQuestion, parseRef, podQuestion, refTarget, troubleshootQuestion } from './sherlock'
 
 describe('sherlock', () => {
   it('reads 221b:// links and says where each object opens', () => {
@@ -26,5 +26,6 @@ describe('sherlock', () => {
     expect(troubleshootQuestion({ kind: 'pod', name: 'a', namespace: 'web', status: 'Running', oom: true })).toBe('Troubleshooting report for pod web/a (OOM-killed)')
     expect(troubleshootQuestion({ kind: 'node', name: 'w1', status: 'NotReady' })).toBe('Troubleshooting report for node w1 (NotReady)')
     expect(troubleshootQuestion({ kind: 'pvc', name: 'data', namespace: 'db', status: '' })).toBe('Troubleshooting report for volume claim db/data')
+    expect(clusterTroubleshootQuestion('prod')).toBe('Troubleshooting report for cluster prod: what is wrong now, why, and how to fix it, most severe first')
   })
 })
