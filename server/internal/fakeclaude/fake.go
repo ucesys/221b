@@ -295,6 +295,13 @@ func scripted(question, view string, round int, results []string) reply {
 			return reply{text: []string{uiSummary(last)}}
 		}
 	}
+	// The home page's troubleshooting of a cluster with errors or warnings.
+	if strings.Contains(strings.ToLower(question), "troubleshooting report for cluster") {
+		if round == 0 {
+			return reply{text: []string{"Reading the alerts."}, tool: "list_alerts", input: map[string]any{}}
+		}
+		return reply{text: []string{"**Summary**: the cluster's problems, most severe first."}}
+	}
 	// The home page's deficiency review.
 	if strings.Contains(strings.ToLower(question), "deficiency review") {
 		if round == 0 {

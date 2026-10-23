@@ -1,0 +1,9 @@
+RKE2:
+- The kubelet and containerd run inside the rke2-server service on server nodes and rke2-agent on the others, not as their own systemd services. Restarting that service restarts both, and on a server also etcd and the API server.
+- The control plane runs as static pods in kube-system: etcd-<node>, kube-apiserver-<node>, kube-controller-manager-<node>, kube-scheduler-<node>, and kube-proxy-<node> on every node. Their manifests are in /var/lib/rancher/rke2/agent/pod-manifests. Read them with get_pod and pod_logs like any pod.
+- Bundled components (rke2-canal or another CNI, rke2-coredns, rke2-ingress-nginx, rke2-metrics-server, rke2-snapshot-controller) are HelmChart objects in kube-system installed by RKE2's Helm controller. A helm-install-<name> Job shows why one failed. They are changed with a HelmChartConfig in kube-system, never with helm upgrade, which RKE2 undoes.
+- etcd: a slow member shows "apply request took too long", "slow fdatasync" or leader changes in its etcd pod's log, usually from slow or busy disk on that node. "mvcc: database space exceeded" stops all writes. Three servers survive one failure, not two.
+- Certificates last a year and are renewed when rke2 restarts close to expiry. x509 "certificate has expired" or "not yet valid" means an expired certificate or clock skew.
+- Ports: 9345 for nodes joining, 6443 for the API, 2379-2380 for etcd, 10250 for the kubelet.
+- Node files: /etc/rancher/rke2/config.yaml (settings), /etc/rancher/rke2/registries.yaml (registry mirrors and credentials: check it for image pull failures that only some nodes have).
+- Checks on a node: journalctl -u rke2-server (or -u rke2-agent); /var/lib/rancher/rke2/agent/logs/kubelet.log; /var/lib/rancher/rke2/agent/containerd/containerd.log; /var/lib/rancher/rke2/bin/crictl --runtime-endpoint unix:///run/k3s/containerd/containerd.sock ps -a; on a server, rke2 certificate check and rke2 etcd-snapshot list.

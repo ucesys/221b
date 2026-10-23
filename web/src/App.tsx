@@ -28,7 +28,7 @@ import { findings as policyFindings, flagOf as policyFlag, modelOf as policyMode
 import { adminHref, apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, useRoute, withParams } from './lib/router'
 import { askSherlock, useSherlock } from './api/sherlock'
 import { sendToWatson, useWatson, WatsonError, type Send } from './api/watson'
-import { canPopOut, focusPopup, onPop, popOut, post, reviewQuestion, usePopped, WINDOW_VIEWS, type Pane } from './lib/sherlock'
+import { canPopOut, clusterTroubleshootQuestion, focusPopup, onPop, popOut, post, reviewQuestion, usePopped, WINDOW_VIEWS, type Pane } from './lib/sherlock'
 import { openTarget, SherlockContext, SherlockPane } from './components/Sherlock'
 import { Dock, PoppedOutFab, type DockMode } from './components/Dock'
 import { autoRunReads, WatsonContext, watsonOff, WatsonPane } from './components/Watson'
@@ -246,9 +246,11 @@ function Shell() {
         .catch((e: unknown) => setToast(e instanceof WatsonError ? e.message : String(e)))
     },
   }
-  // A home card's Audit button (Phase 6 review) opens the
-  // cluster with ?ask=review: Sherlock asks for the review once it can.
-  const reviewAsked = view === 'tabs' && route.params.get('ask') === 'review'
+  // A home card's Audit button (Phase 6 review) opens the cluster with
+  // ?ask=review, its Troubleshoot button with ?ask=troubleshoot: Sherlock
+  // asks for the review or the troubleshooting once it can.
+  const askFor = view === 'tabs' ? route.params.get('ask') : null
+  const reviewAsked = askFor === 'review' || askFor === 'troubleshoot'
   const reviewReady = reviewAsked && sherlockApi.available && clusterName !== ''
   const reviewRefused = reviewAsked && !!sherlock.status && !sherlock.status.available
   useEffect(() => {
@@ -256,7 +258,7 @@ function Shell() {
     navigate(withParams(currentRoute(), { ask: undefined }), true)
     // Refused (Sherlock went off since the home page showed the button), the
     // dock says why.
-    if (reviewReady) sherlockApi.ask(reviewQuestion(clusterName), true)
+    if (reviewReady) sherlockApi.ask(askFor === 'troubleshoot' ? clusterTroubleshootQuestion(clusterName) : reviewQuestion(clusterName), true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewReady, reviewRefused])
   const popOutNow = () => {

@@ -347,7 +347,7 @@ test('Sherlock moves to a window of its own, with Watson, and back, and the main
   await expect(page.getByTestId('sherlock-question').last()).toHaveText(q)
 })
 
-test('Sherlock answers through an OpenAI-compatible gateway set on the Settings page, and a home card asks for a deficiency review (Phase 6 review)', async ({ page }) => {
+test('Sherlock answers through an OpenAI-compatible gateway set on the Settings page, and a home card asks to troubleshoot the cluster, or audit it when healthy (Phase 6 review)', async ({ page }) => {
   await open(page, '#/alerts')
   // The fake's address as the console reaches it: the default provider's.
   const cfg = (await page.evaluate(async () => (await fetch('/api/v1/sherlock/config')).json())) as { provider: { endpoint: string } }
@@ -390,14 +390,25 @@ test('Sherlock answers through an OpenAI-compatible gateway set on the Settings 
     expect(sent.join('\n')).toContain('"tool_call_id"')
     expect(sent.join('\n')).not.toContain(KEY)
 
-    // A home card's Audit opens the cluster and asks for the review.
+    // A home card's button opens the cluster and asks: Troubleshoot while
+    // it has errors or warnings, Audit, the review, while it is healthy.
     await page.goto('/#/')
-    await page.locator('[data-testid=home-card][data-cluster=local]').getByTestId('home-review').click()
-    await expect(page.getByTestId('sherlock-question').last()).toContainText('Deficiency review of cluster')
-    await done(page)
-    await expect(lastAnswer(page)).toHaveAttribute('data-status', 'done')
-    await expect(lastAnswer(page).getByTestId('sherlock-steps')).toContainText(/Review the cluster.s setup/)
-    await expect(lastAnswer(page).getByTestId('sherlock-text')).toContainText('Deficiency review')
+    const card = page.locator('[data-testid=home-card][data-cluster=local]')
+    const healthy = (await card.getAttribute('data-health')) === 'ok'
+    await expect(card.getByTestId('home-review')).toHaveText(healthy ? 'Audit' : 'Troubleshoot')
+    await card.getByTestId('home-review').click()
+    if (healthy) {
+      await expect(page.getByTestId('sherlock-question').last()).toContainText('Deficiency review of cluster')
+      await done(page)
+      await expect(lastAnswer(page)).toHaveAttribute('data-status', 'done')
+      await expect(lastAnswer(page).getByTestId('sherlock-steps')).toContainText(/Review the cluster.s setup/)
+      await expect(lastAnswer(page).getByTestId('sherlock-text')).toContainText('Deficiency review')
+    } else {
+      await expect(page.getByTestId('sherlock-question').last()).toContainText('Troubleshooting report for cluster')
+      await done(page)
+      await expect(lastAnswer(page)).toHaveAttribute('data-status', 'done')
+      await expect(lastAnswer(page).getByTestId('sherlock-text')).toContainText('Summary')
+    }
     expect(new URL(page.url()).hash).not.toContain('ask=')
   } finally {
     expect(await put(page, '/api/v1/sherlock/config', ON)).toBe(200)

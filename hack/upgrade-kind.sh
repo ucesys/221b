@@ -26,8 +26,10 @@ FULLNAME=k8s-console-221b
 URL=http://127.0.0.1:18090
 ADMIN=admin@corp.example
 # Made on the Users page of the earlier release, so it lives only in the
-# accounts Secret the console writes.
-USER2=una@corp.example
+# accounts Secret the console writes. A user name has no @: the console
+# refuses one.
+USER2=una
+USER2_EMAIL=una@corp.example
 PASSWORD=upgrade-password-12
 COOKIES=$WORK/upgrade-cookies
 SHERLOCK_KEY=sk-ant-upgrade-fake-key-0123456789
@@ -139,7 +141,7 @@ endstep
 
 step "Give $FROM_TAG something to keep"
 # A local user made on the Users page.
-change -X POST -d "{\"username\":\"$USER2\",\"name\":\"Una Upgrade\",\"email\":\"$USER2\",\"password\":\"$PASSWORD\",\"groups\":[]}" "$URL/api/v1/admin/users" > /dev/null
+change -X POST -d "{\"username\":\"$USER2\",\"name\":\"Una Upgrade\",\"email\":\"$USER2_EMAIL\",\"password\":\"$PASSWORD\",\"groups\":[]}" "$URL/api/v1/admin/users" > /dev/null
 kubectl -n "$NS" get secret "$FULLNAME-users" -o jsonpath='{.data.users\.json}' | base64 -d | grep -q "\"$USER2\""
 # Settings and a fleet.
 change -X PUT -d '{"refreshSeconds":13}' "$URL/api/v1/settings" | grep -q '"refreshSeconds":13'

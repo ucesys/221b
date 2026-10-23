@@ -48,11 +48,12 @@ interface TabSpec {
 }
 
 const ROLE: FilterSpec = { type: 'enum', values: ['all', 'control-plane', 'worker'], none: 'all' }
+const PROBLEMS: FilterSpec = { type: 'enum', values: ['all', 'problems', 'errors'], none: 'all' }
 
 /** The filters each tab reads from its URL, as the tabs declare them (P6U-04). */
 export const TAB_SPECS: Record<Tab, TabSpec> = {
-  alerts: { search: 'q', filters: { kind: { type: 'enum', values: ['all', 'pods', 'nodes', 'volumes'], none: 'all' }, show: { type: 'enum', values: ['active', 'all'], none: 'active' } } },
-  nodes: { search: 'q', filters: { role: ROLE, label: { type: 'list' }, taint: { type: 'list' } } },
+  alerts: { search: 'q', filters: { kind: { type: 'enum', values: ['all', 'pods', 'nodes', 'volumes'], none: 'all' }, show: { type: 'enum', values: ['active', 'all'], none: 'active' }, acked: { type: 'enum', values: ['show', 'hide'], none: 'show' } } },
+  nodes: { search: 'q', filters: { role: ROLE, err: PROBLEMS, label: { type: 'list' }, taint: { type: 'list' } } },
   pods: {
     search: 'q',
     filters: { role: ROLE, status: { type: 'enum', values: ['all', 'running', 'pending', 'failing', 'completed'], none: 'all' }, ns: { type: 'list' }, node: { type: 'list' }, label: { type: 'list' }, taint: { type: 'list' } },
@@ -66,7 +67,7 @@ export const TAB_SPECS: Record<Tab, TabSpec> = {
       { name: 'release', type: 'text' },
     ],
   },
-  fleets: { search: 'q', filters: { fleet: { type: 'list' }, pl: { type: 'list' }, pt: { type: 'list' }, group: { type: 'enum', values: ['fleet', 'none'], none: 'fleet' } } },
+  fleets: { search: 'q', filters: { fleet: { type: 'list' }, pl: { type: 'list' }, pt: { type: 'list' }, group: { type: 'enum', values: ['fleet', 'none'], none: 'fleet' }, err: PROBLEMS } },
   networks: { filters: { route: { type: 'text' } } },
   access: {
     search: 'q',
@@ -277,6 +278,36 @@ function tabLabel(tab: Tab): string {
 
 const CLUSTER_ID = /^[a-z0-9][a-z0-9-]{0,62}$/
 
+// ---- what Sherlock narrowed in this answer ----
+
+/**
+ * The filters and searches Sherlock set in the answer it is giving, by
+ * tab. Asked for the nodes with problems, it set the filter, saw the one
+ * node it should show, then took the filter off to highlight that node
+ * among all of them: a filter it set stays while the table shows rows.
+ */
+const narrowed = new Map<number, Map<Tab, Set<string>>>()
+
+function noteNarrowed(tab: Tab, f: Record<string, string | undefined>) {
+  if (answering === null) return
+  let byTab = narrowed.get(answering)
+  if (!byTab) narrowed.set(answering, (byTab = new Map()))
+  const keys = byTab.get(tab) ?? new Set<string>()
+  for (const [k, v] of Object.entries(f)) if (v) keys.add(k)
+  byTab.set(tab, keys)
+}
+
+/** Refuses taking off a filter this answer set while the table shows rows: they are the answer. One that left nothing to show may go. */
+function keepNarrowed(tab: Tab, removed: string[]) {
+  if (answering === null) return
+  const mine = narrowed.get(answering)?.get(tab)
+  const hit = removed.filter((k) => mine?.has(k))
+  if (!hit.length) return
+  const shown = tableHandles().find((t) => t.drives.has('search'))?.shown() ?? 0
+  if (!shown) return
+  throw new ActionError(`This answer set ${hit.join(', ')} to show what was asked, and the table shows ${shown} ${shown === 1 ? 'row' : 'rows'}: that is the answer. Leave the filter as it is; to point at a row, highlight it in this view.`)
+}
+
 function viewOpen(route: Route, input: Record<string, unknown>): Applied {
   const tab = text(input.tab, 'tab')
   if (!TAB_IDS.has(tab)) throw new ActionError(`There is no tab ${JSON.stringify(tab)}.`)
@@ -298,6 +329,7 @@ function viewOpen(route: Route, input: Record<string, unknown>): Applied {
       else filters[k] = filterValue(t, k, v)
     }
   }
+  if (route.view === 'tabs' && route.tab === t) keepNarrowed(t, [...route.params.keys()].filter((k) => route.params.get(k) && !filters[k]))
   if (input.cluster !== undefined) {
     const c = text(input.cluster, 'cluster').trim()
     if (c && c !== route.cluster) {
@@ -307,6 +339,7 @@ function viewOpen(route: Route, input: Record<string, unknown>): Applied {
     }
   }
   navigate(clusterHref(route.cluster, t, path, filters))
+  noteNarrowed(t, filters)
   return { label: `Opened ${tabLabel(t)}${path.length ? ' ' + path.join('/') : ''}${describeFilters(filters)}` }
 }
 
@@ -337,7 +370,9 @@ function viewFilter(route: Route, input: Record<string, unknown>): Applied {
     }
   }
   if (!Object.keys(changes).length) throw new ActionError('Nothing to change: give set, add or clear.')
+  keepNarrowed(tab, Object.keys(changes).filter((k) => !changes[k]))
   navigate(withParams(route, changes), true)
+  noteNarrowed(tab, changes)
   const parts = Object.entries(changes).map(([k, v]) => (v ? `${k} ${v}` : `cleared ${k}`))
   return { label: `Filtered ${tabLabel(tab)}: ${parts.join(', ')}` }
 }
@@ -348,7 +383,9 @@ function viewSearch(route: Route, input: Record<string, unknown>): Applied {
   if (input.table === undefined) {
     const param = TAB_SPECS[tab].search
     if (param) {
+      if (!q) keepNarrowed(tab, [param])
       navigate(withParams(route, { [param]: q || undefined }), true)
+      noteNarrowed(tab, { [param]: q || undefined })
       return { label: q ? `Searched ${tabLabel(tab)} for “${q}”` : `Cleared the search on ${tabLabel(tab)}` }
     }
   }
@@ -454,6 +491,7 @@ function capture(): Saved {
 /** The answer Sherlock is giving now, from the conversation; null when it is not answering. */
 export function setAnswering(id: number | null): void {
   answering = id
+  for (const k of narrowed.keys()) if (k !== id) narrowed.delete(k)
   if (id !== null && !answers.has(id)) answers.set(id, { touched: false, before: null })
 }
 

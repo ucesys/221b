@@ -68,6 +68,12 @@ render k8s-console --set clusterName=ci --set auth.mode=none --set localCluster.
 render k8s-console --set clusterName=ci --set localCluster.mode=write | tee "$WORK/chart-write-signin.yaml" | validate
 echo "--- several replicas (P7-02)"
 render k8s-console --set clusterName=ci --set replicaCount=2 | tee "$WORK/chart-ha.yaml" | validate
+render k8s-console --set clusterName=ci --set replicaCount=2 --set antiAffinity=soft | tee "$WORK/chart-ha-soft.yaml" | validate
+render k8s-console --set clusterName=ci --set replicaCount=2 --set antiAffinity=hard \
+  --set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key=kubernetes.io/os' \
+  --set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].operator=In' \
+  --set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].values[0]=linux' \
+  | tee "$WORK/chart-ha-hard.yaml" | validate
 render k8s-console --set clusterName=ci --set replicaCount=3 --set 'topologySpreadConstraints[0].maxSkew=1' \
   --set 'topologySpreadConstraints[0].topologyKey=topology.kubernetes.io/zone' --set 'topologySpreadConstraints[0].whenUnsatisfiable=DoNotSchedule' \
   --set 'topologySpreadConstraints[0].labelSelector.matchLabels.app=x' | tee "$WORK/chart-ha-zones.yaml" | validate
@@ -292,6 +298,12 @@ replicas() {
     grep -q 'replicas: 2' "$ha" && grep -A1 '^kind: PodDisruptionBudget' -A12 "$ha" | grep -q 'maxUnavailable: 1' &&
     grep -A3 'topologySpreadConstraints:' "$ha" | grep -q 'topologyKey: kubernetes.io/hostname' && grep -q 'whenUnsatisfiable: ScheduleAnyway' "$ha" &&
     grep -q 'topologyKey: topology.kubernetes.io/zone' "$WORK/chart-ha-zones.yaml" && ! grep -q 'kubernetes.io/hostname' "$WORK/chart-ha-zones.yaml" &&
+    ! grep -q 'podAntiAffinity' "$ha" && ! grep -q 'podAntiAffinity' "$out" &&
+    grep -A10 'podAntiAffinity:' "$WORK/chart-ha-soft.yaml" | grep -q 'weight: 100' && grep -A12 'podAntiAffinity:' "$WORK/chart-ha-soft.yaml" | grep -q 'topologyKey: kubernetes.io/hostname' &&
+    grep -A1 'podAntiAffinity:' "$WORK/chart-ha-hard.yaml" | grep -q 'requiredDuringSchedulingIgnoredDuringExecution' &&
+    grep -q 'nodeAffinity:' "$WORK/chart-ha-hard.yaml" && grep -A6 'podAntiAffinity:' "$WORK/chart-ha-hard.yaml" | grep -q 'app.kubernetes.io/instance: k8s-console' &&
+    ! render k8s-console --set clusterName=ci --set antiAffinity=hard | grep -q 'podAntiAffinity' &&
+    { render k8s-console --set clusterName=ci --set replicaCount=2 --set antiAffinity=always 2>&1 || true; } | grep -q 'antiAffinity must be soft, hard or empty' &&
     { render k8s-console --set clusterName=ci --set replicaCount=2 --set connections.store=memory 2>&1 || true; } | grep -q 'needs connections.store=secrets'
 }
 # Watson (Phase 6): reads only by default. With localCluster.mode=write and

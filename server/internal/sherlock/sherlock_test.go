@@ -287,3 +287,35 @@ func TestKeys(t *testing.T) {
 		t.Fatalf("fixed: %v %+v", err, fixed.Info())
 	}
 }
+
+// The prompt is how Sherlock works, the same for every cluster; then the
+// cluster's own platform; then the time. The first two are cached, so a
+// question a minute later, or about another cluster of the same console,
+// reuses what it can.
+func TestThePromptIsCoreClusterAndTime(t *testing.T) {
+	now := time.Date(2026, 10, 22, 9, 30, 0, 0, time.UTC)
+	rke2 := systemPrompt(Question{Cluster: "local", Platform: "This cluster: \"local\", RKE2, Kubernetes v1.31.14+rke2r1.\n\nRKE2:\n- rke2-server", ViewChanges: true}, now)
+	eks := systemPrompt(Question{Cluster: "prod", Platform: "This cluster: \"prod\", Amazon EKS.", ViewChanges: true}, now.Add(time.Minute))
+	if len(rke2) != 3 || rke2[0].CacheControl == nil || rke2[1].CacheControl == nil || rke2[2].CacheControl != nil {
+		t.Fatalf("blocks: %+v", rke2)
+	}
+	if rke2[0].Text != eks[0].Text {
+		t.Error("the core differs between clusters, so it is not cached across them")
+	}
+	if !strings.Contains(rke2[1].Text, "rke2-server") || strings.Contains(eks[1].Text, "rke2") {
+		t.Errorf("cluster blocks: %q, %q", rke2[1].Text, eks[1].Text)
+	}
+	if rke2[2].Text != "It is Thursday 22 October 2026, 09:30 UTC." {
+		t.Errorf("time: %q", rke2[2].Text)
+	}
+	for _, s := range []string{"rke2", "RKE2", "EKS", "Debian"} {
+		if strings.Contains(rke2[0].Text, s) {
+			t.Errorf("the core names %s", s)
+		}
+	}
+	// Without a platform, the cluster's name and version.
+	plain := systemPrompt(Question{Cluster: "lab", Version: "v1.34.1"}, now)
+	if plain[1].Text != "This cluster: \"lab\", Kubernetes v1.34.1." || strings.Contains(plain[0].Text, "view_* tools") {
+		t.Errorf("plain: %q", plain[1].Text)
+	}
+}

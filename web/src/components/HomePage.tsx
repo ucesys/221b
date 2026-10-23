@@ -50,6 +50,7 @@ function ClusterCard({ c, onEdit }: { c: HomeCluster; onEdit?: () => void }) {
   const up = c.state === 'connected' && c.synced
   const metrics = c.metrics === 'available'
   const active = activeAlerts(c)
+  const trouble = health.tone !== 'ok'
   const at = (tab: Parameters<typeof clusterHref>[1], params: Record<string, string> = {}) => clusterHref(c.id, tab, [], params)
   const nodeTone = c.nodes.total - c.nodes.ready > 0 || c.nodes.errors > 0 ? 'err' : c.nodes.warnings > 0 || c.nodes.cordoned > 0 ? 'warn' : undefined
   const podTone = c.pods.failing > 0 ? 'err' : c.pods.notReady > 0 ? 'warn' : undefined
@@ -105,17 +106,24 @@ function ClusterCard({ c, onEdit }: { c: HomeCluster; onEdit?: () => void }) {
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {c.sherlock && (
+            // With errors or warnings, Sherlock troubleshoots them; with
+            // none, it audits the setup.
             <a
               className="rk-btn rk-ask"
-              href={at('alerts', { ask: 'review' })}
+              href={at('alerts', { ask: trouble ? 'troubleshoot' : 'review' })}
               style={{ alignSelf: 'flex-start', height: 30, textDecoration: 'none' }}
-              title={`Sherlock reviews ${c.name} for gaps in its Kubernetes setup: probes, limits, disruption budgets, security, and more, with what to change first`}
+              title={
+                trouble
+                  ? `Sherlock finds why ${c.name} has ${health.tone === 'err' ? 'errors' : 'warnings'} and how to fix each, most severe first`
+                  : `Sherlock reviews ${c.name} for gaps in its Kubernetes setup: probes, limits, disruption budgets, security, and more, with what to change first`
+              }
               data-testid="home-review"
+              data-ask={trouble ? 'troubleshoot' : 'review'}
             >
               <span className="rk-avatar" style={{ width: 18, height: 18 }} aria-hidden="true">
                 <SherlockIcon size={10} />
               </span>
-              Audit
+              {trouble ? 'Troubleshoot' : 'Audit'}
             </a>
           )}
           {onEdit && (

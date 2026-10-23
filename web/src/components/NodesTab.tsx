@@ -7,10 +7,10 @@ import { listParam, navigate, withParams } from '../lib/router'
 import { useTable } from '../lib/useTable'
 import { ColumnsMenu } from './ColumnsMenu'
 import { DataTable } from './DataTable'
-import { ErrorsOnly } from './ErrorsOnly'
 import { ExportMenu } from './ExportMenu'
 import { FacetPicker } from './FacetPicker'
 import { NodePanel } from './NodePanel'
+import { ProblemFilter, problemLevel, showsNode } from './ProblemFilter'
 import { SearchBox } from './SearchBox'
 import type { TabProps } from './tabs'
 
@@ -25,13 +25,13 @@ export function NodesTab({ cluster, now, onToast, route }: TabProps) {
   const { rows, loaded } = useView<NodeRow>('nodes')
   const p = route.params
   const role: RoleFilter = ROLES.includes(p.get('role') as RoleFilter) ? (p.get('role') as RoleFilter) : 'all'
-  const errOnly = p.get('err') === '1'
+  const level = problemLevel(p.get('err'))
   const query = p.get('q') ?? ''
   const facets = useMemo<FacetSelection>(() => ({ labels: listParam(p, 'label'), taints: listParam(p, 'taint') }), [p])
   const selected = p.get('open')
   const set = useCallback((changes: Record<string, string | string[] | undefined>) => navigate(withParams(route, changes), true), [route])
 
-  const inScope = useMemo(() => rows.filter((r) => (role === 'all' || r.role === role) && (!errOnly || r.errors > 0) && (!facetsActive(facets) || facetMatch(r, facets))), [rows, role, errOnly, facets])
+  const inScope = useMemo(() => rows.filter((r) => (role === 'all' || r.role === role) && showsNode(level, r) && (!facetsActive(facets) || facetMatch(r, facets))), [rows, role, level, facets])
   const selectedRow = selected ? (rows.find((r) => r.name === selected) ?? null) : null
   // The details pane lies over the table, so every column keeps its place.
   const compact = false
@@ -41,6 +41,7 @@ export function NodesTab({ cluster, now, onToast, route }: TabProps) {
   const metrics = cluster?.metrics === 'available'
   const cp = rows.filter((r) => r.role === 'control-plane').length
   const withErrors = rows.filter((r) => r.errors > 0).length
+  const withProblems = rows.filter((r) => r.errors + r.warnings > 0).length
 
   const close = useCallback(() => {
     const name = selected
@@ -91,7 +92,7 @@ export function NodesTab({ cluster, now, onToast, route }: TabProps) {
                   </button>
                 ))}
               </div>
-              <ErrorsOnly on={errOnly} count={withErrors} onChange={(on) => set({ err: on ? '1' : undefined })} />
+              <ProblemFilter level={level} problems={withProblems} errors={withErrors} onChange={(l) => set({ err: l === 'all' ? undefined : l })} />
               <SearchBox rows={inScope} terms={nodeTerms} value={table.query} onChange={table.setQuery} placeholder="Search by name, label or taint" label="Search nodes" testId="node-search" />
               <FacetPicker nodes={rows} value={facets} onChange={(f) => set({ label: f.labels, taint: f.taints })} />
               <span style={{ fontSize: 12, color: 'var(--fg3)', whiteSpace: 'nowrap' }} data-testid="shown">

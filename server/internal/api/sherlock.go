@@ -15,6 +15,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/platform"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
@@ -164,15 +165,16 @@ func (s *Server) postSherlockAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, _ := auth.SessionFrom(r.Context())
 	conv, err := s.opts.Sherlock.Ask(sherlock.Question{
-		Key:     convKey(r),
-		Text:    in.Question,
-		Cluster: name,
-		Version: version,
-		Tools:   s.toolboxFor(r, id, cl),
-		Who:     audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name},
-		From:    fromAddr(r),
-		Window:  windowID(in.Window),
-		View:    in.View,
+		Key:      convKey(r),
+		Text:     in.Question,
+		Cluster:  name,
+		Version:  version,
+		Platform: s.platformPrompt(r, cl, name, version),
+		Tools:    s.toolboxFor(r, id, cl),
+		Who:      audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name},
+		From:     fromAddr(r),
+		Window:   windowID(in.Window),
+		View:     in.View,
 		// Read once per question, so a change applies to the next one.
 		ViewChanges: s.sherlockSettings().ChangesView(),
 	})
@@ -192,6 +194,20 @@ func (s *Server) postSherlockAsk(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	w.Write(b)
+}
+
+// platformPrompt describes the cluster a question is about, so Sherlock
+// speaks of its own distribution, operating systems and add-ons: one
+// console serves clusters of many kinds. It tells only what the person
+// may see: the nodes if they may list nodes, the add-ons if they may
+// list DaemonSets in kube-system; the distribution, which the version
+// everyone sees already tells, always.
+func (s *Server) platformPrompt(r *http.Request, cl Cluster, name, version string) string {
+	p := s.person(r)
+	can := platform.Can{}
+	can.Nodes, _ = cl.CanI(r.Context(), p, "list", "", "nodes", "")
+	can.AddOns, _ = cl.CanI(r.Context(), p, "list", "apps", "daemonsets", "kube-system")
+	return platform.Detect(cl, version, can).Prompt(name)
 }
 
 // getSherlockConversation returns the conversation as it is now, for

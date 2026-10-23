@@ -8,6 +8,9 @@
 {{- if and (eq .Values.auth.mode "oidc") (not .Values.auth.oidc.clientSecret) (not .Values.auth.oidc.existingSecret) }}
 {{- fail "OIDC sign-in needs the client secret: auth.oidc.clientSecret, or auth.oidc.existingSecret naming a Secret with the key client-secret" }}
 {{- end }}
+{{- if not (has (toString .Values.antiAffinity) (list "" "soft" "hard")) }}
+{{- fail (printf "antiAffinity must be soft, hard or empty, not %q" (toString .Values.antiAffinity)) }}
+{{- end }}
 {{- if and (gt (int .Values.replicaCount) 1) (eq .Values.connections.store "memory") }}
 {{- fail "replicaCount above 1 needs connections.store=secrets: the replicas share sign-ins, accounts and connections through Secrets" }}
 {{- end }}
@@ -286,7 +289,16 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- $affinity := deepCopy (.Values.affinity | default dict) }}
+      {{- if and (gt (int .Values.replicaCount) 1) (not (hasKey $affinity "podAntiAffinity")) }}
+      {{- $term := dict "topologyKey" "kubernetes.io/hostname" "labelSelector" (dict "matchLabels" (include "b221.selectorLabels" . | fromYaml)) }}
+      {{- if eq .Values.antiAffinity "hard" }}
+      {{- $_ := set $affinity "podAntiAffinity" (dict "requiredDuringSchedulingIgnoredDuringExecution" (list $term)) }}
+      {{- else if eq .Values.antiAffinity "soft" }}
+      {{- $_ := set $affinity "podAntiAffinity" (dict "preferredDuringSchedulingIgnoredDuringExecution" (list (dict "weight" 100 "podAffinityTerm" $term))) }}
+      {{- end }}
+      {{- end }}
+      {{- with $affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}

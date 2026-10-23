@@ -435,6 +435,13 @@ securityContext:
 # Where the pods may land. With more than one replica and none given, the
 # pods are spread over nodes when there is room (a soft constraint).
 topologySpreadConstraints: []
+# With more than one replica, keeps them off each other's nodes as well:
+# soft asks the scheduler to prefer a node without one, more strongly than
+# the spread above; hard requires it, so a replica with no such node left
+# stays Pending, and a rolling update needs one node more than
+# replicaCount. Empty (the default) adds nothing. A podAntiAffinity in
+# affinity below replaces it.
+antiAffinity: ""
 # How long a pod has to finish when it stops: it ends its event streams and,
 # as the leader, hands Sherlock and Watson to another replica first.
 terminationGracePeriodSeconds: 20
