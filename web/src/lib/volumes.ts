@@ -5,7 +5,7 @@
 // arranges them.
 
 import type { PairState, StorageClassInfo, StoragePair, StorageQuota, StorageRow } from '../api/storage'
-import { compareNatural, nWord } from './format'
+import { compareNatural, minutesSince, nWord } from './format'
 import type { Term } from './table'
 
 export type StorageView = 'class' | 'namespace' | 'all'
@@ -412,4 +412,13 @@ export function classTail(t: Totals): string[] {
 /** "a, b and c". */
 export function listText(items: string[]): string {
   return list(items)
+}
+
+/** An age as the Age column shows it, in one unit: "45m", "2h", "41d" (ST-06). */
+export function ageShort(iso: string | undefined, now: number): string {
+  if (!iso) return '—'
+  const m = Math.max(0, minutesSince(iso, now))
+  if (m < 60) return `${Math.max(1, Math.round(m))}m`
+  if (m < 24 * 60) return `${Math.floor(m / 60)}h`
+  return `${Math.floor(m / (24 * 60))}d`
 }

@@ -3,7 +3,7 @@ import { useView } from '../api/live'
 import type { StoragePair, StorageRow } from '../api/storage'
 import { useStorageScope } from '../api/storage'
 import { storageColumns, viewColumns } from '../columns/storage'
-import { fmtAge, nWord } from '../lib/format'
+import { nWord } from '../lib/format'
 import { parsePeek, peekLink } from '../lib/peek'
 import { href, listParam, navigate, withParams } from '../lib/router'
 import { readJSON, writeJSON } from '../lib/storage'
@@ -11,6 +11,7 @@ import { csvText, exportFileName, exportTable, type ExportFormat } from '../lib/
 import { useTable } from '../lib/useTable'
 import {
   accessShort,
+  ageShort,
   byClass,
   byNamespace,
   bytes,
@@ -311,7 +312,7 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
         return t.endsWith(' nodes') ? t : <span className="rk-mono">{t}</span>
       }
       case 'age':
-        return fmtAge(x.created, now)
+        return ageShort(x.created, now)
       case 'mode':
         return x.volumeMode ?? <span className="rk-dim">—</span>
       case 'source':
@@ -359,7 +360,7 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
                 </span>
               </td>
               <td className="rk-mono">{y.node ?? <span className="rk-dim">—</span>}</td>
-              <td className="rk-r rk-num">{y.since ? fmtAge(y.since, now) : ''}</td>
+              <td className="rk-r rk-num">{y.since ? ageShort(y.since, now) : ''}</td>
             </tr>
           ))
         : []),

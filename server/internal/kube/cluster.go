@@ -147,10 +147,14 @@ type Cluster struct {
 	podUsage           map[string]nodes.Usage
 	boots              map[string]bootEntry
 	bootForbiddenUntil time.Time
-	watchErrs          map[string]watchErr
-	notify             func(Change)
-	events             map[string]uint64
-	healthFails        int
+	// volumes is what the kubelets report about mounted claims (ST-08),
+	// by "namespace/claim"; volumesAt when they were last read.
+	volumes     map[string]VolumeStats
+	volumesAt   time.Time
+	watchErrs   map[string]watchErr
+	notify      func(Change)
+	events      map[string]uint64
+	healthFails int
 }
 
 type watchErr struct {
@@ -215,6 +219,7 @@ func New(cfg *rest.Config, o Options) (*Cluster, error) {
 		usage:     map[string]nodes.Usage{},
 		podUsage:  map[string]nodes.Usage{},
 		boots:     map[string]bootEntry{},
+		volumes:   map[string]VolumeStats{},
 		watchErrs: map[string]watchErr{},
 		events:    map[string]uint64{},
 		notify:    func(Change) {},
@@ -423,6 +428,9 @@ func (c *Cluster) totalObjects() int {
 // browser. ctx bounds how long it may take.
 func (c *Cluster) Poll(ctx context.Context) {
 	c.readMetrics(ctx)
+	if c.kubeletStats {
+		c.pollVolumes(ctx)
+	}
 	if c.wantPodUsage.Load() {
 		c.readPodMetrics(ctx)
 	} else {
