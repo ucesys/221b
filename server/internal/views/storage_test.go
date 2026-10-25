@@ -1,6 +1,7 @@
 package views_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -272,5 +273,101 @@ func TestStorageKeysAndSizes(t *testing.T) {
 		if got := views.Bytes(n); got != want {
 			t.Errorf("Bytes(%d) = %s, want %s", n, got, want)
 		}
+	}
+}
+
+func segText(ss []views.Seg) string {
+	out := ""
+	for _, s := range ss {
+		out += s.T
+	}
+	return out
+}
+
+func tones(hs []views.StorageHop) string {
+	out := []string{}
+	for _, h := range hs {
+		out = append(out, h.Key+"="+h.Tone)
+	}
+	return strings.Join(out, " ")
+}
+
+var all = views.StorageCan{Volumes: true, Classes: true, Attachments: true, Pods: true}
+
+// ST-14: the chain of a claim the provisioner cannot satisfy breaks at the
+// volume, the claim and its pod wait, the node cannot be reached yet; the
+// intro names the cause. ST-15: the claim's events and its pod's
+// FailedScheduling, warnings first.
+func TestStorageChainBreaksAtTheFirstHopThatDoesNotHold(t *testing.T) {
+	src := storageSource()
+	src.Put(&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "cache", Namespace: "analytics"}, Spec: appsv1.StatefulSetSpec{Replicas: ptr(int32(4)), VolumeClaimTemplates: []corev1.PersistentVolumeClaim{{ObjectMeta: metav1.ObjectMeta{Name: "data"}}}}})
+	src.Put(pvc("analytics", "data-cache-2", ptr("longhorn"), "20Gi", corev1.ClaimPending, ""))
+	src.Put(warning("uid-analytics-data-cache-2", "PersistentVolumeClaim", "analytics", "data-cache-2", "ProvisioningFailed", `failed to provision volume with StorageClass "longhorn": rpc error: code = ResourceExhausted desc = not enough disk space on any node for a 20Gi volume with 3 replicas`, 14, 2*time.Hour, 2*time.Minute))
+	cache2 := pendingPod("analytics", "cache-2", "data-cache-2", "0/10 nodes are available: pod has unbound immediate PersistentVolumeClaims. preemption: 0/10 nodes are available: 10 Preemption is not helpful for scheduling.")
+	src.Put(cache2)
+	src.Put(warning("uid-cache-2", "Pod", "analytics", "cache-2", "FailedScheduling", "0/10 nodes are available: pod has unbound immediate PersistentVolumeClaims.", 9, 2*time.Hour, 4*time.Minute))
+	lh, _ := src.Object("storageclasses", "", "longhorn").(*storagev1.StorageClass)
+	lh.Parameters = map[string]string{"numberOfReplicas": "3"}
+
+	d, ok := views.ClaimDetails(src, "analytics", "data-cache-2", all, now)
+	if !ok {
+		t.Fatal("no details")
+	}
+	if got := tones(d.Hops); got != "class=ok volume=err claim=warn pods=warn node=muted" {
+		t.Errorf("tones %s", got)
+	}
+	if got := segText(d.Hops[1].Desc); got != "longhorn could not create a 20Gi volume: not enough disk space on any node. 14 attempts in 2h, the last 2m ago; it retries with backoff. With 3 replicas it needs 60Gi free across three nodes." {
+		t.Errorf("volume hop: %s", got)
+	}
+	if got := segText(d.Intro); got != "The chain breaks at the volume: longhorn has tried 14 times to create one and keeps retrying. Nothing below it can move until it does." {
+		t.Errorf("intro: %s", got)
+	}
+	if got := segText(d.Hops[3].Desc); got != "waits for the claim: pod has unbound immediate PersistentVolumeClaims · the StatefulSet will not start cache-3 before cache-2 is ready" {
+		t.Errorf("pod hop: %s", got)
+	}
+	if len(d.Events) != 2 || d.Events[0].Reason != "ProvisioningFailed" || d.Events[0].Tone != "err" || d.Events[1].Pod != "cache-2" || d.NoWarningDays != -1 || !d.Broken {
+		t.Errorf("events %+v", d.Events)
+	}
+	// A class that does not exist breaks the chain at the class.
+	src.Put(pvc("batch", "scratch-report", ptr("fast-ssd"), "100Gi", corev1.ClaimPending, ""))
+	d, _ = views.ClaimDetails(src, "batch", "scratch-report", all, now)
+	if got := tones(d.Hops); got != "class=err volume=muted claim=warn pods=muted node=muted" || !strings.HasPrefix(segText(d.Intro), "The chain breaks at the class: no class named fast-ssd") {
+		t.Errorf("missing class: %s / %s", got, segText(d.Intro))
+	}
+}
+
+// A bound claim's chain holds all the way to its usage; the Lifecycle card
+// says what the reclaim policy and expansion mean (ST-16).
+func TestStorageChainOfABoundClaim(t *testing.T) {
+	src := storageSource()
+	c := pvc("storage", "data-postgres-0", ptr("longhorn"), "100Gi", corev1.ClaimBound, "pvc-pg0")
+	src.Put(c)
+	v := pv("pvc-pg0", "longhorn", "100Gi", corev1.VolumeBound, "storage", "data-postgres-0", corev1.PersistentVolumeReclaimDelete)
+	v.Annotations = map[string]string{"pv.kubernetes.io/provisioned-by": "driver.longhorn.io"}
+	src.Put(v)
+	src.Put(mounting("storage", "postgres-0", "worker-1", "data-postgres-0"))
+	att := &storagev1.VolumeAttachment{ObjectMeta: metav1.ObjectMeta{Name: "csi-3a9f1e7c0b2d", CreationTimestamp: ts(41 * 24 * time.Hour)}, Spec: storagev1.VolumeAttachmentSpec{NodeName: "worker-1", Source: storagev1.VolumeAttachmentSource{PersistentVolumeName: ptr("pvc-pg0")}}, Status: storagev1.VolumeAttachmentStatus{Attached: true}}
+	src.Put(att)
+	src.SetVolumeStats("storage", "data-postgres-0", kube.VolumeStats{UsedBytes: 62 * (1 << 30), CapacityBytes: 100 * (1 << 30), InodesUsed: 1_100_000, Inodes: 6_400_000, Node: "worker-1"})
+	d, _ := views.ClaimDetails(src, "storage", "data-postgres-0", all, now)
+	if got := tones(d.Hops); got != "class=ok volume=ok claim=ok pods=ok node=ok usage=ok" || d.Broken {
+		t.Errorf("tones %s", got)
+	}
+	if got := segText(d.Intro); got != "Every link in the chain that has to hold for postgres-0 to read and write this volume, from the class down to the node." {
+		t.Errorf("intro %s", got)
+	}
+	if got := segText(d.Hops[4].Desc); got != "VolumeAttachment csi-3a9f1e7c0b2d · attached 41d ago, when postgres-0 was scheduled here · one node at a time" {
+		t.Errorf("node hop %s", got)
+	}
+	if got := segText(d.Hops[5].Desc); got != "62% used · 1.1M of 6.4M inodes · reported by the kubelet on worker-1" || d.Hops[5].State != "room to grow" {
+		t.Errorf("usage hop %s %s", got, d.Hops[5].State)
+	}
+	if len(d.Lifecycle) != 3 || segText(d.Lifecycle[0]) != "Reclaim policy Delete — deleting the claim deletes the volume and its data. To keep the data, set the volume to Retain first." {
+		t.Errorf("lifecycle %v", d.Lifecycle)
+	}
+	// Without the volume and class reads, the drawer says what the claim says.
+	d, _ = views.ClaimDetails(src, "storage", "data-postgres-0", views.StorageCan{Pods: true}, now)
+	if d.Pair.Reclaim != "" || d.Pair.Source != nil || d.Class != nil || d.Attachment != nil || d.Hops[1].Value[0].L != nil {
+		t.Errorf("redacted drawer %+v", d.Pair)
 	}
 }
