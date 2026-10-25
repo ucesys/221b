@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { HomeCluster } from '../api/home'
-import { activeAlerts, alertTone, healthOf, podLine, resourceLine } from './home'
+import { activeAlerts, alertTone, healthOf, nodeTone, podLine, podsText, podTone, resourceLine } from './home'
 
 const GI = 1024 * 1024 * 1024
 
@@ -15,7 +15,7 @@ function cluster(over: Partial<HomeCluster> = {}): HomeCluster {
     nodes: { total: 3, ready: 3, controlPlane: 1, cordoned: 0, errors: 0, warnings: 0 },
     cpu: { allocatable: 12000, requested: 3000, used: 1500, usedNodes: 3 },
     memory: { allocatable: 48 * GI, requested: 12 * GI, used: 40 * GI, usedNodes: 3 },
-    pods: { total: 30, running: 30, capacity: 330, notReady: 0, failing: 0 },
+    pods: { total: 30, running: 30, capacity: 330, notReady: 0, failing: 0, ready: 30, unready: 0, pending: 0, completed: 0 },
     namespaces: 5,
     services: 8,
     alerts: { failed: 0, pending: 0, nodeErrors: 0, nodeWarnings: 0, volumes: 0, acknowledged: 0, recovered: 0 },
@@ -27,6 +27,24 @@ describe('home', () => {
   it('says a cluster is healthy when nothing is wrong', () => {
     expect(healthOf(cluster())).toEqual({ tone: 'ok', text: 'Healthy', reasons: [] })
     expect(alertTone(cluster())).toBeUndefined()
+  })
+
+  it('leaves the Nodes, Pods and Alerts boxes plain when nothing is wrong, and colours each by its own trouble', () => {
+    const ok = cluster({ alerts: { failed: 0, pending: 0, nodeErrors: 0, nodeWarnings: 0, volumes: 0, acknowledged: 0, recovered: 4 } })
+    expect([nodeTone(ok), podTone(ok), alertTone(ok)]).toEqual([undefined, undefined, undefined])
+    expect(nodeTone(cluster({ nodes: { total: 3, ready: 3, controlPlane: 1, cordoned: 1, errors: 0, warnings: 0 } }))).toBe('warn')
+    expect(nodeTone(cluster({ nodes: { total: 3, ready: 2, controlPlane: 1, cordoned: 0, errors: 0, warnings: 0 } }))).toBe('err')
+    const pods = (over: Partial<HomeCluster['pods']>) => cluster({ pods: { ...cluster().pods, ...over } })
+    expect(podTone(pods({ ready: 20, unready: 10 }))).toBe('warn')
+    expect(podTone(pods({ ready: 28, pending: 2 }))).toBe('warn')
+    expect(podTone(pods({ ready: 29, failing: 1 }))).toBe('err')
+    // Completed pods are no trouble.
+    expect(podTone(pods({ total: 33, ready: 30, completed: 3 }))).toBeUndefined()
+  })
+
+  it('counts the pods as the Pods tab does, adding up to the total', () => {
+    const c = cluster({ pods: { total: 109, running: 106, capacity: 990, notReady: 10, failing: 0, ready: 96, unready: 10, pending: 0, completed: 3 } })
+    expect(podsText(c)).toBe('96 running · 10 not ready · 3 completed')
   })
 
   it('puts failures before warnings, and acknowledged alerts among the warnings', () => {

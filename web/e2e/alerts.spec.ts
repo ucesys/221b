@@ -125,6 +125,8 @@ test('an acknowledged alert leaves the banners for everyone, and stays here and 
     const active = async () => ((await snapshot(request, ['alerts'])).views.alerts?.rows as { severity: string }[]).filter((r) => r.severity !== 'recovered').length
 
     await pull.getByTestId('alert-ack').click()
+    // At once, not when the server's rows come round (asked after 0.7.1).
+    await expect(pull).toHaveAttribute('data-acked', 'true', { timeout: 500 })
     await expect(pull.getByTestId('alert-acked')).toContainText('Acknowledged by')
     await expect(pull).toHaveAttribute('data-acked', 'true')
     // Yellow, not red (asked at the Phase 4 review).
@@ -149,7 +151,7 @@ test('an acknowledged alert leaves the banners for everyone, and stays here and 
     // Taken back, it is on them again.
     await open(page)
     await pull.getByTestId('alert-ack').click()
-    await expect(pull).not.toHaveAttribute('data-acked', 'true')
+    await expect(pull).not.toHaveAttribute('data-acked', 'true', { timeout: 500 })
     await expect(pull.getByTestId('alert-sev')).toHaveAttribute('data-tone', 'err')
     await expect(page.locator('[data-tab="alerts"]').first()).toHaveAttribute('data-tone', 'err')
     await open(page, '#/nodes')

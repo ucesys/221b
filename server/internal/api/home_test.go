@@ -41,6 +41,10 @@ func TestHome(t *testing.T) {
 	if all.ID != "local" || !all.Local || all.Nodes.Total != 2 || all.Pods.Total != 2 || all.CPU.Allocatable != 4000 || all.Memory.Allocatable != 8<<30 || all.Namespaces != 3 {
 		t.Fatalf("ops sees %+v", all)
 	}
+	// The pods by state add up to all of them, as the tile shows them.
+	if p := all.Pods; p.Ready+p.Unready+p.Pending+p.Failing+p.Completed != p.Total {
+		t.Fatalf("the pods' states do not add up: %+v", p)
+	}
 	// Someone who may not list kube-system's pods does not count them.
 	limited, viewer, _, _, _, _ := multiSetupWith(t, "viewer@corp.example", map[string]bool{"pods/kube-system": true})
 	if mine := read(limited, viewer); mine.Pods.Total != 1 {

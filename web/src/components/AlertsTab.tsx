@@ -5,7 +5,7 @@ import { agoText, byNode, contextOf, countText, isActive, kindLabel, metaText, m
 import { fileStamp, fmtTs, nWord } from '../lib/format'
 import { navigate, withParams } from '../lib/router'
 import { peekHref, type Peek } from '../lib/peek'
-import { acknowledge } from '../api/acks'
+import { acknowledge, useAlerts } from '../api/acks'
 import { csvText, type ExportFormat } from '../lib/table'
 import { download, xlsxBytes, type Cell } from '../lib/xlsx'
 import { ExportMenu } from './ExportMenu'
@@ -258,7 +258,7 @@ function sectionOf(r: AlertRow): string {
 
 /** The Alerts tab (P4-07): pods failing to start, pending and recently recovered, node problems and volume warnings, each with its events. */
 export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
-  const { rows, loaded } = useView<AlertRow>('alerts')
+  const { rows, loaded } = useAlerts()
   const { rows: nodeRows } = useView<NodeRow>('nodes')
   const p = route.params
   // Pods under the node they run on, or the alerts by kind as before.

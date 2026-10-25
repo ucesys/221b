@@ -210,7 +210,7 @@ var sherlockTools = []tool{
 		run:   (*toolbox).top,
 	},
 	{
-		def:   sherlock.ToolDef{Name: "list_fleets", Description: "The fleets (groups of nodes by labels and taints) with their members, capacity and problems, and the nodes in no fleet.", InputSchema: toolSchema(nil, map[string]string{})},
+		def:   sherlock.ToolDef{Name: "list_fleets", Description: "The fleets (groups of nodes by labels and taints, or lists of nodes by name kept in the console) with their members, capacity and problems, and the nodes in no fleet.", InputSchema: toolSchema(nil, map[string]string{})},
 		label: func(map[string]any) string { return "Read the fleets" },
 		run:   (*toolbox).fleets,
 	},

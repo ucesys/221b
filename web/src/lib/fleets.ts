@@ -1,6 +1,6 @@
 // The Fleets tab's model (P4-01), ported from the prototype: a fleet is a
 // set of labels and taints, and every node that has all of them belongs to
-// it. The server works out the saved fleets' members and totals; this file
+// it, or a list of nodes by name (asked after 0.7.1). The server works out the saved fleets' members and totals; this file
 // draws the matrix of nodes against labels and taints, and previews a draft
 // in the editor before it is saved.
 
@@ -37,8 +37,14 @@ export function taintKeyText(id: string): string {
   return t.key + (t.value ? '=' + t.value : '')
 }
 
-/** Whether a node has every label and taint of a fleet. */
-export function has(f: Pick<Fleet, 'labels' | 'taints'>, n: Pick<NodeRow, 'labels' | 'taints'>): boolean {
+/** Whether a fleet lists its nodes by name. */
+export function isList(f: Pick<Fleet, 'kind'>): boolean {
+  return f.kind === 'nodes'
+}
+
+/** Whether a node is in a fleet: on its list, or with every one of its labels and taints. */
+export function has(f: Pick<Fleet, 'labels' | 'taints' | 'kind' | 'nodes'>, n: Pick<NodeRow, 'labels' | 'taints'> & { name?: string }): boolean {
+  if (isList(f)) return !!n.name && (f.nodes ?? []).includes(n.name)
   return f.labels.every((l) => {
     const [k, v] = splitLabel(l)
     return k in n.labels && n.labels[k] === v
@@ -75,8 +81,9 @@ export function fixCommand(node: string, m: Missing): string {
   return `kubectl taint nodes ${node} ${m.id} --overwrite`
 }
 
-/** "workload=general, taint dedicated=dremio:NoSchedule". */
-export function reqText(f: Pick<Fleet, 'labels' | 'taints'>): string {
+/** "workload=general, taint dedicated=dremio:NoSchedule", or "a list of 3 nodes". */
+export function reqText(f: Pick<Fleet, 'labels' | 'taints' | 'kind' | 'nodes'>): string {
+  if (isList(f)) return `a list of ${nWord(f.nodes?.length ?? 0, 'node', 'nodes')}`
   const parts = [...f.labels.map((l) => labelText(...splitLabel(l))), ...f.taints.map((t) => 'taint ' + t)]
   return parts.length ? parts.join(', ') : 'no requirements'
 }
@@ -300,7 +307,8 @@ export function fleetsOfNode(name: string, rows: FleetRow[]): FleetRow[] {
 }
 
 export function fleetOf(r: FleetRow): Fleet {
-  return { id: r.id ?? '', name: r.name ?? '', color: r.color, desc: r.desc ?? '', labels: r.labels, taints: r.taints }
+  const f: Fleet = { id: r.id ?? '', name: r.name ?? '', color: r.color, desc: r.desc ?? '', labels: r.labels, taints: r.taints }
+  return r.by === 'nodes' ? { ...f, kind: 'nodes', nodes: r.listed ?? [] } : f
 }
 
 // ---------- nodes picked in the matrix ----------

@@ -607,6 +607,9 @@ export interface Fleet {
   labels: string[]
   /** "key[=value]:Effect". */
   taints: string[]
+  /** "nodes" for a list of nodes by name, kept in the console, which has no labels or taints. */
+  kind?: 'nodes'
+  nodes?: string[]
 }
 
 export interface FleetStats {
@@ -631,6 +634,9 @@ export interface FleetRow {
   desc?: string
   labels: string[]
   taints: string[]
+  /** "nodes" for a list of nodes; listed is the list, nodes gone from the cluster included. */
+  by?: 'nodes'
+  listed?: string[]
   order: number
   members: string[]
   stats: FleetStats

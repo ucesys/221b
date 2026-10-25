@@ -43,6 +43,8 @@ describe('pod columns', () => {
   it('groups statuses for the segments', () => {
     expect(rows.map(podStatusGroup)).toEqual(['running', 'failing', 'completed', 'pending'])
     expect(podStatusGroup(pod('x', { status: 'Init:1/2', phase: 'Pending' }))).toBe('pending')
+    // Running but not ready, as on a node that stopped reporting: apart from running, as the home page counts it.
+    expect(podStatusGroup(pod('x', { status: 'Running', tone: 'warn' }))).toBe('notready')
   })
 
   it('sorts failing pods first and missing usage last', () => {

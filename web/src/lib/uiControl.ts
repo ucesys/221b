@@ -56,7 +56,7 @@ export const TAB_SPECS: Record<Tab, TabSpec> = {
   nodes: { search: 'q', filters: { role: ROLE, err: PROBLEMS, label: { type: 'list' }, taint: { type: 'list' } } },
   pods: {
     search: 'q',
-    filters: { role: ROLE, status: { type: 'enum', values: ['all', 'running', 'pending', 'failing', 'completed'], none: 'all' }, ns: { type: 'list' }, node: { type: 'list' }, label: { type: 'list' }, taint: { type: 'list' } },
+    filters: { role: ROLE, status: { type: 'enum', values: ['all', 'running', 'notready', 'pending', 'failing', 'completed'], none: 'all' }, ns: { type: 'list' }, node: { type: 'list' }, label: { type: 'list' }, taint: { type: 'list' } },
   },
   services: { search: 'q', filters: { ns: { type: 'text' }, type: { type: 'enum', values: ['all', 'ClusterIP', 'Headless', 'NodePort', 'LoadBalancer', 'notReady'], none: 'all' } } },
   namespaces: { search: 'q', filters: { kinds: { type: 'list' } }, path: [{ name: 'namespace', type: 'text' }] },

@@ -229,7 +229,7 @@ test('column choices stay in this browser, signed in or not (Phase 6 review)', a
   }
 })
 
-test('picked nodes make a new fleet, and leave it and join it again through Watson (asked after 0.7.1)', async ({ page, request }) => {
+test('picked nodes make a list of nodes, kept in 221B, or a fleet of labels changed through Watson (asked after 0.7.1)', async ({ page, request }) => {
   const skip = await consoleNode()
   const [w1, w2] = healthyWorkers(await snapshot(request))
     .filter((r) => r.name !== skip)
@@ -241,6 +241,8 @@ test('picked nodes make a new fleet, and leave it and join it again through Wats
   expect(on.status(), await on.text()).toBe(200)
   const matrix = page.getByTestId('fleet-matrix')
   const pick = (node: string) => matrix.locator(`[data-node="${node}"]`).first().getByTestId('fleet-pick-node')
+  const bar = page.getByTestId('fleet-nodebar')
+  const dlg = page.getByTestId('fleet-nodes')
   const approve = async (command: string) => {
     const card = page.getByTestId('watson').locator(`[data-testid=watson-card][data-command="${command}"]`)
     await card.getByTestId('watson-approve').click({ timeout: 30_000 })
@@ -249,53 +251,96 @@ test('picked nodes make a new fleet, and leave it and join it again through Wats
     await open(page)
     await pick(a.node).check()
     await pick(b.node).check()
-    await expect(page.getByTestId('fleet-nodebar')).toContainText('Picked 2 nodes')
-    // The picks stay while another tab is open.
+    await expect(bar).toContainText('Picked 2 nodes')
+    // The picks stay while another tab is open; Cancel drops them.
     await page.locator('[data-tab="nodes"]').first().click()
     await page.locator('[data-tab="fleets"]').first().click()
-    await expect(page.getByTestId('fleet-nodebar')).toContainText('Picked 2 nodes')
+    await expect(bar).toContainText('Picked 2 nodes')
+    await bar.getByTestId('fleet-nodebar-cancel').click()
+    await expect(bar).toHaveCount(0)
+    await expect(pick(a.node)).not.toBeChecked()
 
-    // A label only they have defines the fleet: nothing to run.
-    await page.getByTestId('fleet-nodebar-new').click()
-    const dlg = page.getByTestId('fleet-nodes')
+    // A list of the picked nodes: nothing to run, nothing changes in the cluster.
+    await pick(a.node).check()
+    await pick(b.node).check()
+    await bar.getByTestId('fleet-nodebar-new').click()
     await dlg.getByTestId('fleet-nodes-name').fill('E2E picked')
-    await expect(dlg.getByTestId('fleet-nodes-own')).toBeChecked()
-    await expect(dlg).toContainText('e2e.221b/picked=yes')
+    await expect(dlg.getByTestId('fleet-nodes-list')).toBeChecked()
     await expect(dlg.getByTestId('fleet-nodes-commands')).toHaveCount(0)
     // The dialog meets WCAG 2.2 AA.
     const axe = await new AxeBuilder({ page }).include('[data-testid=fleet-nodes]').withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze()
     expect(axe.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([])
     await dlg.getByTestId('fleet-nodes-go').click()
     await expect(dlg).toHaveCount(0)
-    const f = row(page, 'e2e-picked')
-    await expect(f.getByTestId('fleet-count')).toHaveText('2', { timeout: 5_000 })
+    const list = row(page, 'e2e-picked')
+    await expect(list.getByTestId('fleet-count')).toHaveText('2', { timeout: 5_000 })
     await expect(page).toHaveURL(/fleet=e2e-picked/)
+    await expect(page.getByTestId('fleet-list-note')).toContainText('A list of 2 nodes')
 
-    // Out of the fleet shown: the label comes off, once Watson's card is approved.
+    // Off the list and on again: the console alone changes.
     await pick(b.node).check()
-    await page.getByTestId('fleet-nodebar-remove').click()
+    await bar.getByTestId('fleet-nodebar-remove').click()
+    await expect(dlg.getByTestId('fleet-nodes-fleet')).toHaveValue('e2e-picked')
+    await expect(dlg.getByTestId('fleet-nodes-go')).toHaveText('Remove from fleet')
+    await dlg.getByTestId('fleet-nodes-go').click()
+    await expect(list.getByTestId('fleet-count')).toHaveText('1', { timeout: 5_000 })
+    await page.locator('.rk-fl-main').first().click()
+    await pick(b.node).check()
+    await bar.getByTestId('fleet-nodebar-add').click()
+    await expect(dlg.getByTestId('fleet-nodes-fleet')).toHaveValue('e2e-picked')
+    await dlg.getByTestId('fleet-nodes-go').click()
+    await expect(list.getByTestId('fleet-count')).toHaveText('2', { timeout: 5_000 })
+
+    // A fleet of the label only they have; the same nodes are in both.
+    await pick(a.node).check()
+    await pick(b.node).check()
+    await bar.getByTestId('fleet-nodebar-new').click()
+    await dlg.getByTestId('fleet-nodes-name').fill('E2E labelled')
+    await dlg.getByTestId('fleet-nodes-own').check()
+    await expect(dlg).toContainText('e2e.221b/picked=yes')
+    await dlg.getByTestId('fleet-nodes-go').click()
+    const labelled = row(page, 'e2e-labelled')
+    await expect(labelled.getByTestId('fleet-count')).toHaveText('2', { timeout: 5_000 })
+    await expect(list.getByTestId('fleet-count')).toHaveText('2')
+
+    // Out of the fleet of labels: the label comes off, once Watson's card is approved; the list keeps the node.
+    await pick(b.node).check()
+    await bar.getByTestId('fleet-nodebar-remove').click()
+    await dlg.getByTestId('fleet-nodes-fleet').selectOption('e2e-labelled')
     const leave = `kubectl label nodes ${b.node} e2e.221b/picked-`
     await expect(dlg.getByTestId('fleet-nodes-commands')).toHaveText(leave)
     // Once Watson is on here, the dialog hands it the commands rather than copying them.
     await expect(dlg.getByTestId('fleet-nodes-go')).toHaveText('Send to Watson', { timeout: 15_000 })
     await dlg.getByTestId('fleet-nodes-go').click()
     await approve(leave)
-    await expect(f.getByTestId('fleet-count')).toHaveText('1', { timeout: 30_000 })
-
-    // And into it again from All nodes.
-    await page.locator('.rk-fl-main').first().click()
-    await pick(b.node).check()
-    await page.getByTestId('fleet-nodebar-add').click()
-    await expect(dlg.getByTestId('fleet-nodes-fleet')).toHaveValue('e2e-picked')
-    const join = `kubectl label nodes ${b.node} e2e.221b/picked=yes`
-    await expect(dlg.getByTestId('fleet-nodes-commands')).toHaveText(join)
-    await expect(dlg.getByTestId('fleet-nodes-go')).toHaveText('Send to Watson')
-    await dlg.getByTestId('fleet-nodes-go').click()
-    await approve(join)
-    await expect(f.getByTestId('fleet-count')).toHaveText('2', { timeout: 30_000 })
+    await expect(labelled.getByTestId('fleet-count')).toHaveText('1', { timeout: 30_000 })
+    await expect(list.getByTestId('fleet-count')).toHaveText('2')
   } finally {
     await page.request.put('/api/v1/sherlock/config', { data: { ...SHERLOCK_ON, clusters: {} }, headers: SAME })
     await a.cleanup()
     await b.cleanup().catch(() => undefined)
   }
+})
+
+test('a list of nodes is made and changed in the editor, by name', async ({ page, request }) => {
+  const skip = await consoleNode()
+  // Not a node another test made, which may be on its way out.
+  const [w1] = healthyWorkers(await snapshot(request))
+    .filter((r) => r.name !== skip && !r.name.startsWith('e2e-'))
+    .map((r) => r.name)
+  await page.getByTestId('fleet-new').click()
+  const editor = page.getByTestId('fleet-editor')
+  await editor.getByTestId('fleet-name').fill('E2E listed')
+  await editor.getByTestId('fleet-kind-nodes').click()
+  await editor.locator(`[data-testid=fleet-nodelist-node][data-node="${w1}"]`).check()
+  await editor.getByTestId('fleet-save').click()
+  await expect(editor).toHaveCount(0)
+  const f = row(page, 'e2e-listed')
+  await expect(f.getByTestId('fleet-count')).toHaveText('1', { timeout: 5_000 })
+  await expect(f).toContainText('a list of 1 node')
+  await f.getByTestId('fleet-edit').click()
+  await expect(editor.getByTestId('fleet-kind-nodes')).toHaveCount(0)
+  await editor.locator(`[data-testid=fleet-nodelist-node][data-node="${w1}"]`).uncheck()
+  await editor.getByTestId('fleet-save').click()
+  await expect(f.getByTestId('fleet-count')).toHaveText('0', { timeout: 5_000 })
 })

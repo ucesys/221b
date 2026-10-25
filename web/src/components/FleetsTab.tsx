@@ -226,7 +226,9 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
       ? q
         ? `No node in view matches “${query.trim()}”.`
         : one
-          ? 'No node has all of these labels and taints yet.'
+          ? one.by === 'nodes'
+            ? 'No node on this list is in the cluster.'
+            : 'No node has all of these labels and taints yet.'
           : loaded
             ? 'No nodes.'
             : 'Waiting for the first list of nodes…'
@@ -296,7 +298,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                       {f.members.length}
                     </span>
                   </span>
-                  <span className="rk-fl-def">{reqText(f)}</span>
+                  <span className="rk-fl-def">{reqText(fleetOf(f))}</span>
                   <span className="rk-fl-cap">
                     <span className="rk-bar" style={{ width: 56 }} title={cap.tip}>
                       <span className="rk-use" style={{ width: `${cap.pct}%` }} />
@@ -340,7 +342,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                   {s.name} · {nWord(s.members.length, 'node', 'nodes')}
                 </span>
                 <span className="rk-mono" style={{ fontSize: 11, color: 'var(--fg3)', overflowWrap: 'anywhere' }}>
-                  {reqText(s)}
+                  {reqText({ labels: s.labels, taints: s.taints })}
                 </span>
                 {admin && (
                   <span>
@@ -376,7 +378,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                   Edit fleet
                 </button>
               )}
-              {one.members.length > 0 && (
+              {one.members.length > 0 && one.by !== 'nodes' && (
                 <>
                   <a className="rk-btn" href={nodesHref(one.labels, one.taints)}>
                     Nodes →
@@ -386,8 +388,19 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                   </a>
                 </>
               )}
+              {one.members.length > 0 && one.by === 'nodes' && (
+                <a className="rk-btn" href={href('pods', [], { node: one.members })}>
+                  Pods →
+                </a>
+              )}
             </div>
             {one.desc && <p style={{ margin: 0, maxWidth: '100ch', fontSize: 12.5, color: 'var(--fg2)' }}>{one.desc}</p>}
+            {one.by === 'nodes' ? (
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--fg3)' }} data-testid="fleet-list-note">
+                A list of {nWord(one.listed?.length ?? 0, 'node', 'nodes')} kept in 221B
+                {(one.listed?.length ?? 0) > one.members.length ? `, ${(one.listed?.length ?? 0) - one.members.length} of them no longer in the cluster` : ''}. Nodes join and leave it only here; their labels and taints do not change.
+              </p>
+            ) : (
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 8px' }}>
               <span style={{ fontSize: 12, color: 'var(--fg3)', marginRight: 2 }}>Nodes that have all of</span>
               {reqsOf(one).map((r) => (
@@ -401,6 +414,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                 </span>
               ))}
             </div>
+            )}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 18px', fontSize: 12, color: 'var(--fg3)' }}>
               <span data-testid="fleet-stats">{metaText(one.stats)}</span>
               {one.labels.length > 0 && (
@@ -706,21 +720,19 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
             <span style={{ fontSize: 12, color: 'var(--fg2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '40ch' }} title={picks.join(', ')}>
               {listText(picks.length > 4 ? [...picks.slice(0, 3), `${picks.length - 3} more`] : picks)}
             </span>
-            <button className="rk-link" onClick={() => setPicks([])} style={{ fontSize: 12 }} data-testid="fleet-nodebar-clear">
-              Clear
-            </button>
             <span style={{ flex: '1 1 auto' }} />
             <button className="rk-btn" onClick={() => setDialog('new')} title="A new fleet of these nodes, by a label they share or a new one" data-testid="fleet-nodebar-new">
               New fleet…
             </button>
-            <button className="rk-btn" onClick={() => setDialog('add')} disabled={!defs.some((f) => f.labels.length + f.taints.length > 0)} title="Give these nodes a fleet’s labels and taints" data-testid="fleet-nodebar-add">
+            <button className="rk-btn" onClick={() => setDialog('add')} disabled={!defs.some((f) => pickedRows.some((n) => !has(f, n)))} title={defs.length ? 'Put these nodes in a fleet you choose' : 'No fleets yet: make one first'} data-testid="fleet-nodebar-add">
               Add to a fleet…
             </button>
-            {oneDef && (
-              <button className="rk-btn" onClick={() => setDialog('remove')} disabled={!pickedRows.some((n) => has(oneDef, n))} title={pickedRows.some((n) => has(oneDef, n)) ? `Take ${oneDef.name}’s labels and taints off these nodes` : `None of these nodes is in ${oneDef.name}`} data-testid="fleet-nodebar-remove">
-                Remove from {oneDef.name}…
-              </button>
-            )}
+            <button className="rk-btn" onClick={() => setDialog('remove')} disabled={!defs.some((f) => pickedRows.some((n) => has(f, n)))} title={defs.some((f) => pickedRows.some((n) => has(f, n))) ? 'Take these nodes out of a fleet you choose' : 'None of these nodes is in a fleet'} data-testid="fleet-nodebar-remove">
+              Remove from a fleet…
+            </button>
+            <button className="rk-btn" onClick={() => setPicks([])} title="Unpick every node" data-testid="fleet-nodebar-cancel">
+              Cancel
+            </button>
           </div>
         )}
         {fxOn && (
@@ -767,6 +779,9 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
           onCreate={async (f) => {
             await saveFleets(route.cluster, [...defs, f])
             set({ fleet: f.id, pl: undefined, pt: undefined })
+          }}
+          onSave={async (next) => {
+            await saveFleets(route.cluster, next)
           }}
           onDone={(m) => {
             setDialog(null)

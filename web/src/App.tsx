@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { useMe } from './api/auth'
 import { useClusters, type ClusterSummary } from './api/clusters'
 import { LiveContext, useLiveMeta, useLiveStore, useView } from './api/live'
-import type { AccessRow, AlertRow, PolicyRow } from './api/types'
+import type { AccessRow, PolicyRow } from './api/types'
+import { useAlerts } from './api/acks'
 import { AccessTab } from './components/AccessTab'
 import { NetworksTab } from './components/NetworksTab'
 import { PeekPane } from './components/PeekPane'
@@ -162,7 +163,7 @@ function Shell() {
   }
 
   // Every tab shows what the Alerts tab has (P4-07), and the bar counts it.
-  const alerts = useView<AlertRow>('alerts')
+  const alerts = useAlerts()
   const alertBadge = badgeOf(alerts.rows)
   const alertTab = alerts.loaded ? tabTone(alerts.rows) : undefined
   const fleetDefs = live.settings?.fleets?.[route.cluster] ?? []

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Fleet, FleetRow, NodeRow } from '../api/types'
 import { copyText } from '../lib/clipboard'
-import { has, joinCommands, joinNotes, LABEL_KEY_RE, LABEL_VAL_RE, labelValueOf, leaveCommands, leaveNotes, listText, newId, nextColor, ownLabels, reqText, splitLabel } from '../lib/fleets'
+import { has, isList, joinCommands, joinNotes, LABEL_KEY_RE, LABEL_VAL_RE, labelValueOf, leaveCommands, leaveNotes, listText, newId, nextColor, ownLabels, reqText, splitLabel } from '../lib/fleets'
 import { nWord } from '../lib/format'
 import { labelText } from '../lib/nodes'
 import { CopyIcon } from './Icons'
@@ -17,30 +17,33 @@ interface Props {
   all: NodeRow[]
   fleets: Fleet[]
   rows: FleetRow[]
-  /** The fleet the page shows, for removing from it and as the first choice to add to. */
+  /** The fleet the page shows: the first choice to add to or remove from. */
   current?: Fleet
   onClose: () => void
   /** Saves a new fleet; the page then shows it. */
   onCreate: (f: Fleet) => Promise<void>
+  /** Saves the fleets after a list changed. */
+  onSave: (next: Fleet[]) => Promise<void>
   onDone: (message: string) => void
 }
 
 /**
- * Picked nodes into a new fleet, into a fleet, or out of the fleet shown
- * (asked after 0.7.1). A fleet is its labels and taints, so a node joins
- * or leaves one only by its own: the dialog says which commands that takes
+ * Picked nodes into a new fleet, into a fleet, or out of one (asked after
+ * 0.7.1). A list of nodes changes in the console alone, and a node may be
+ * on any number of lists. A fleet of labels and taints takes a node only
+ * by its own labels and taints: the dialog says which commands that takes
  * and what else they change, and hands them to Watson, where nothing runs
  * until someone approves each card.
  */
-export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, onCreate, onDone }: Props) {
+export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, onCreate, onSave, onDone }: Props) {
   const watson = useWatsonApi()
   const runs = watson.available && !watson.readOnly
-  // Adding: the fleet shown, when some picked node is not in it; else the first one they are not all in.
-  const open = fleets.filter((f) => f.labels.length + f.taints.length > 0)
-  const [fleetId, setFleetId] = useState(() => (current && nodes.some((n) => !has(current, n)) ? current.id : (open.find((f) => nodes.some((n) => !has(f, n)))?.id ?? open[0]?.id ?? '')))
+  // The fleets to choose from: to add to, those not every picked node is in; to remove from, those one of them is in.
+  const choices = mode === 'remove' ? fleets.filter((f) => nodes.some((n) => has(f, n))) : fleets.filter((f) => nodes.some((n) => !has(f, n)))
+  const [fleetId, setFleetId] = useState(() => (current && choices.some((f) => f.id === current.id) ? current.id : (choices[0]?.id ?? '')))
   const own = ownLabels(nodes, all)
   const [name, setName] = useState('')
-  const [how, setHow] = useState<'own' | 'new'>(own.length ? 'own' : 'new')
+  const [how, setHow] = useState<'list' | 'own' | 'new'>('list')
   const [ownPick, setOwnPick] = useState(own[0] ?? '')
   const [key, setKey] = useState('fleet')
   const [val, setVal] = useState('')
@@ -53,19 +56,23 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
     first.current?.focus()
   }, [])
 
+  const names = nodes.map((n) => n.name)
   const value = valTouched ? val : labelValueOf(name)
   const nameTaken = fleets.some((f) => f.name.toLowerCase() === name.trim().toLowerCase())
   const keyBad = !LABEL_KEY_RE.test(key.trim())
   const valBad = !LABEL_VAL_RE.test(value)
   const label = how === 'own' ? ownPick : `${key.trim()}=${value}`
-  const draft: Fleet | null = mode === 'new' ? { id: newId(name.trim(), fleets), name: name.trim(), color: nextColor(fleets), labels: label ? [label] : [], taints: [] } : null
-  const fleet = mode === 'remove' ? current : mode === 'add' ? fleets.find((f) => f.id === fleetId) : (draft ?? undefined)
+  const draft: Fleet | null =
+    mode !== 'new' ? null : how === 'list' ? { id: newId(name.trim(), fleets), name: name.trim(), color: nextColor(fleets), labels: [], taints: [], kind: 'nodes', nodes: names } : { id: newId(name.trim(), fleets), name: name.trim(), color: nextColor(fleets), labels: label ? [label] : [], taints: [] }
+  const fleet = mode === 'new' ? (draft ?? undefined) : fleets.find((f) => f.id === fleetId)
+  const list = !!fleet && isList(fleet)
 
   const inIt = fleet && mode !== 'new' ? nodes.filter((n) => has(fleet, n)) : []
-  const commands = !fleet ? [] : mode === 'remove' ? leaveCommands(fleet, inIt) : joinCommands(fleet, nodes)
-  const notes = !fleet ? [] : mode === 'remove' ? leaveNotes(fleet, inIt, rows) : joinNotes(fleet, nodes, rows)
+  const outOf = fleet && mode !== 'new' ? nodes.filter((n) => !has(fleet, n)) : []
+  const commands = !fleet || list ? [] : mode === 'remove' ? leaveCommands(fleet, inIt) : joinCommands(fleet, nodes)
+  const notes = !fleet || list ? [] : mode === 'remove' ? leaveNotes(fleet, inIt, rows) : joinNotes(fleet, nodes, rows)
   // Nodes outside the selection that already have a new fleet's label join it too.
-  const alsoIn = mode === 'new' && how === 'new' && !keyBad && !valBad ? all.filter((n) => !nodes.some((m) => m.name === n.name) && n.labels[key.trim()] === value && key.trim() in n.labels) : []
+  const alsoIn = mode === 'new' && how === 'new' && !keyBad && !valBad ? all.filter((n) => !names.includes(n.name) && key.trim() in n.labels && n.labels[key.trim()] === value) : []
   if (alsoIn.length) notes.push(`${listText(alsoIn.map((n) => n.name))} already ${alsoIn.length === 1 ? 'has' : 'have'} ${label}, so ${alsoIn.length === 1 ? 'it is' : 'they are'} in the fleet too.`)
 
   const problem =
@@ -81,15 +88,12 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
               : ''
       : !fleet
         ? mode === 'add'
-          ? 'No fleet to add to: every fleet needs a label or a taint first.'
-          : 'Pick one fleet on the left to remove nodes from it.'
-        : mode === 'remove' && !inIt.length
-          ? `None of these nodes is in ${fleet.name}.`
-          : mode === 'add' && !commands.length
-            ? `Every one of these nodes is in ${fleet.name} already.`
-            : ''
+          ? 'Every one of these nodes is in every fleet already.'
+          : 'None of these nodes is in a fleet.'
+        : ''
 
-  const title = mode === 'new' ? `New fleet from ${nWord(nodes.length, 'node', 'nodes')}` : mode === 'add' ? `Add ${nWord(nodes.length, 'node', 'nodes')} to a fleet` : `Remove ${nWord(inIt.length || nodes.length, 'node', 'nodes')} from ${current?.name ?? 'a fleet'}`
+  const pickedText = nWord(nodes.length, 'node', 'nodes')
+  const title = mode === 'new' ? `New fleet from ${pickedText}` : mode === 'add' ? `Add ${pickedText} to a fleet` : `Remove ${pickedText} from a fleet`
   const why = mode === 'new' ? `Puts ${nodes.length === 1 ? 'this node' : 'these nodes'} in the new fleet “${draft?.name}”.` : mode === 'add' ? `Adds ${nodes.length === 1 ? 'this node' : 'these nodes'} to the fleet “${fleet?.name}”.` : `Takes ${inIt.length === 1 ? 'this node' : 'these nodes'} out of the fleet “${fleet?.name}”.`
 
   const copy = async () => {
@@ -104,18 +108,25 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
     setError('')
     try {
       if (mode === 'new' && draft) await onCreate(draft)
+      if (mode !== 'new' && list) {
+        const next = mode === 'add' ? [...(fleet.nodes ?? []), ...outOf.map((n) => n.name)] : (fleet.nodes ?? []).filter((n) => !names.includes(n))
+        await onSave(fleets.map((f) => (f.id === fleet.id ? { ...f, nodes: next } : f)))
+        onDone(mode === 'add' ? `Added ${nWord(outOf.length, 'node', 'nodes')} to “${fleet.name}”.` : `Removed ${nWord(inIt.length, 'node', 'nodes')} from “${fleet.name}”.`)
+        return
+      }
       if (commands.length && runs) watson.send(commands.join('\n'), { from: 'Fleets', why })
+      if (commands.length && !runs) await copyText(commands.join('\n'))
       const n = commands.length
-      const sent = n ? (runs ? ` Watson has ${nWord(n, 'command', 'commands')} for approval; ${mode === 'remove' ? 'the nodes leave' : 'the nodes join'} once ${n === 1 ? 'it runs' : 'they run'}.` : ` Run the ${nWord(n, 'command', 'commands')} to ${mode === 'remove' ? 'take the nodes out' : 'bring the nodes in'}.`) : ''
-      if (n && !runs) await copyText(commands.join('\n'))
-      onDone(mode === 'new' ? `Created the fleet “${draft?.name}”.${sent}${n && !runs ? ' The commands are copied.' : ''}` : `${sent.trim()}${n && !runs ? ' The commands are copied.' : ''}`)
+      const sent = n ? (runs ? ` Watson has ${nWord(n, 'command', 'commands')} for approval; ${mode === 'remove' ? 'the nodes leave' : 'the nodes join'} once ${n === 1 ? 'it runs' : 'they run'}.` : ` The ${nWord(n, 'command is', 'commands are')} copied: run ${n === 1 ? 'it' : 'them'} to ${mode === 'remove' ? 'take the nodes out' : 'bring the nodes in'}.`) : ''
+      onDone(mode === 'new' ? `Created the fleet “${draft?.name}”.${sent}` : sent.trim())
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setBusy(false)
     }
   }
 
-  const goLabel = mode === 'new' ? (commands.length && runs ? 'Create and send to Watson' : commands.length ? 'Create and copy the commands' : 'Create fleet') : runs ? 'Send to Watson' : 'Copy the commands'
+  const goLabel = mode === 'new' ? (commands.length && runs ? 'Create and send to Watson' : commands.length ? 'Create and copy the commands' : 'Create fleet') : list ? (mode === 'add' ? 'Add to fleet' : 'Remove from fleet') : runs ? 'Send to Watson' : 'Copy the commands'
+  const fleetOption = (f: Fleet): [string, string] => [f.id, `${f.name} — ${reqText(f)}`]
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
@@ -157,12 +168,21 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
                 <input ref={first} value={name} onChange={(e) => setName(e.target.value)} placeholder="Database nodes" data-testid="fleet-nodes-name" />
               </span>
             </label>
-            <fieldset style={{ border: 0, margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <legend style={{ fontSize: 12, color: 'var(--fg3)', marginBottom: 6 }}>The fleet takes the nodes that have</legend>
+            <fieldset style={{ border: 0, margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <legend style={{ fontSize: 12, color: 'var(--fg3)', marginBottom: 6 }}>The fleet is</legend>
+              <label style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '2px 8px', fontSize: 12.5 }}>
+                <input type="radio" name="fleet-how" checked={how === 'list'} onChange={() => setHow('list')} data-testid="fleet-nodes-list" />
+                <span>
+                  A list of {nodes.length === 1 ? 'this node' : 'these nodes'}, kept in 221B
+                  <span className="rk-fhint" style={{ display: 'block' }}>
+                    Nothing changes in the cluster. A node may be on any number of lists; a new node joins only when someone adds it.
+                  </span>
+                </span>
+              </label>
               {own.length > 0 && (
                 <label style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
                   <input type="radio" name="fleet-how" checked={how === 'own'} onChange={() => setHow('own')} data-testid="fleet-nodes-own" />
-                  A label only these nodes have, so no node changes:
+                  Every node with a label only these have:
                   {own.length === 1 ? (
                     <span className="rk-mono">{labelText(...splitLabel(own[0]!))}</span>
                   ) : (
@@ -172,7 +192,7 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
               )}
               <label style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
                 <input type="radio" name="fleet-how" checked={how === 'new'} onChange={() => setHow('new')} data-testid="fleet-nodes-newlabel" />
-                A new label on them
+                Every node with a new label, put on these
                 <span className="rk-field" style={{ width: 150 }}>
                   <span className="rk-sr">Label key</span>
                   <input className="rk-mono" value={key} onChange={(e) => setKey(e.target.value)} onFocus={() => setHow('new')} aria-invalid={how === 'new' && keyBad} data-testid="fleet-nodes-key" />
@@ -197,15 +217,17 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
           </>
         )}
 
-        {mode === 'add' && (
+        {mode !== 'new' && (
           <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--fg3)' }}>
             Fleet
-            <Select label="Fleet" value={fleetId} options={open.length ? open.map((f): [string, string] => [f.id, `${f.name} — ${reqText(f)}`]) : [['', 'No fleet with labels or taints']]} onChange={setFleetId} disabled={!open.length} width="100%" testId="fleet-nodes-fleet" />
+            <Select label="Fleet" value={fleetId} options={choices.length ? choices.map(fleetOption) : [['', mode === 'add' ? 'No fleet to add them to' : 'They are in no fleet']]} onChange={setFleetId} disabled={!choices.length} width="100%" testId="fleet-nodes-fleet" />
           </label>
         )}
-        {mode === 'remove' && fleet && (
-          <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>
-            {fleet.name} takes the nodes that have {reqText(fleet)}. To take nodes out, these come off them.
+        {mode !== 'new' && fleet && (
+          <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }} data-testid="fleet-nodes-how">
+            {list
+              ? `${fleet.name} is a list kept in 221B: ${mode === 'add' ? `${nWord(outOf.length, 'node goes', 'nodes go')} on it` : `${nWord(inIt.length, 'node comes', 'nodes come')} off it`}, and nothing changes in the cluster.`
+              : `${fleet.name} takes the nodes that have ${reqText(fleet)}. ${mode === 'add' ? 'To bring nodes in, these go on them.' : 'To take nodes out, these come off them.'}`}
           </p>
         )}
 
@@ -217,7 +239,7 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
             </pre>
           </div>
         )}
-        {mode === 'new' && !problem && commands.length === 0 && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>No node changes: the fleet is saved in this console and takes these nodes at once.</p>}
+        {mode === 'new' && how === 'own' && !problem && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>No node changes: the fleet is saved in this console and takes these nodes at once.</p>}
         {notes.length > 0 && (
           <ul style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, color: 'var(--fg2)' }} data-testid="fleet-nodes-notes">
             {notes.map((n) => (
@@ -228,7 +250,7 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
         {commands.length > 0 && (
           <p className="rk-fhint" style={{ margin: 0 }}>
             {runs
-              ? 'Watson makes a card for each command, with what it changes and a dry run. Nothing changes until someone approves it. Fleets follow the nodes’ labels and taints, so the change shows here once it runs.'
+              ? 'Watson makes a card for each command, with what it changes and a dry run. Nothing changes until someone approves it. Fleets of labels and taints follow the nodes’ own, so the change shows here once it runs.'
               : watson.available
                 ? `Watson changes nothing on this cluster${watson.how ? `: ${watson.how}` : ''}. Run the commands yourself; the button copies them.`
                 : `${watson.off?.text ?? 'Watson is not on for this cluster.'} The button copies the commands to run yourself.`}

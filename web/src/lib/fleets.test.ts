@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fixCommand, has, joinCommands, joinNotes, labelValueOf, leaveCommands, leaveNotes, missing, newId, nextColor, ownLabels, parseReq, reqText, withLabel } from './fleets'
+import { fixCommand, fleetOf, has, joinCommands, joinNotes, labelValueOf, leaveCommands, leaveNotes, missing, newId, nextColor, ownLabels, parseReq, reqText, withLabel } from './fleets'
 import type { Fleet, FleetRow } from '../api/types'
 
 const fleet = (id: string, color = 0): Fleet => ({ id, name: id, color, labels: [], taints: [] })
@@ -23,6 +23,15 @@ describe('fleets', () => {
     expect(fixCommand('w1', m[0]!)).toBe('kubectl label nodes w1 pool=gpu --overwrite')
     expect(fixCommand('w1', m[1]!)).toBe('kubectl taint nodes w1 nvidia.com/gpu=true:NoSchedule --overwrite')
     expect(fixCommand('w1', missing({ labels: ['pool=gpu'], taints: [] }, { labels: {}, taints: [] })[0]!)).toBe('kubectl label nodes w1 pool=gpu')
+  })
+
+  it('takes a list’s nodes by name, whatever their labels', () => {
+    const list: Fleet = { id: 'batch', name: 'Batch', color: 0, labels: [], taints: [], kind: 'nodes', nodes: ['w1', 'w3'] }
+    expect(has(list, { name: 'w1', labels: {}, taints: [] })).toBe(true)
+    expect(has(list, { name: 'w2', labels: { pool: 'gpu' }, taints: [] })).toBe(false)
+    expect(reqText(list)).toBe('a list of 2 nodes')
+    const row: FleetRow = { key: 'fleet:batch', kind: 'fleet', id: 'batch', name: 'Batch', color: 0, labels: [], taints: [], by: 'nodes', listed: ['w1', 'gone'], order: 0, members: ['w1'], stats: { nodes: 1, cpu: 0, memory: 0, cpuReq: 0, memoryReq: 0, pods: 0, cordoned: 0, errors: 0, warnings: 0 } }
+    expect(fleetOf(row)).toMatchObject({ kind: 'nodes', nodes: ['w1', 'gone'] })
   })
 
   it('brings picked nodes into a fleet and out of it with one command per label and taint', () => {

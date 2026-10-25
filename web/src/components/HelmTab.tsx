@@ -122,7 +122,7 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
   const claims = d ? d.resources.filter((r) => r.kind === 'PersistentVolumeClaim') : []
   const [podStatus, setPodStatus] = useState<PodStatusFilter>('all')
   const podCounts = useMemo(() => {
-    const c: Record<PodStatusFilter, number> = { all: pods.length, running: 0, pending: 0, failing: 0, completed: 0 }
+    const c: Record<PodStatusFilter, number> = { all: pods.length, running: 0, notready: 0, pending: 0, failing: 0, completed: 0 }
     for (const r of pods) c[podStatusGroup(r)]++
     return c
   }, [pods])
@@ -282,6 +282,7 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
                       [
                         ['all', 'All'],
                         ['running', 'Running'],
+                        ['notready', 'Not ready'],
                         ['pending', 'Pending'],
                         ['failing', 'Failing'],
                         ['completed', 'Completed'],

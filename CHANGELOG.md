@@ -6,7 +6,8 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Added
 
-- **Fleets: pick nodes and put them in a fleet.** Administrators tick nodes in the matrix, then make a new fleet of them, add them to a fleet, or remove them from the fleet shown. A fleet is its labels and taints, so the dialog lists the `kubectl label` and `kubectl taint` commands that does it and what else they change (fleets the nodes leave, pods a taint keeps off or evicts), and sends them to Watson, where each waits for approval. A new fleet can use a label only those nodes have, so no node changes at all.
+- **Fleets by name.** A fleet can now be a list of nodes kept in 221B, as well as a set of labels and taints. A list changes nothing in the cluster, a node may be on any number of lists, and a new node joins one only when someone adds it; the editor offers both kinds.
+- **Fleets: pick nodes and put them in a fleet.** Administrators tick nodes in the matrix, then make a new fleet of them (a list, by default), add them to a fleet or remove them from one, choosing the fleet in the dialog; Cancel drops the picks. For a fleet of labels and taints the dialog lists the `kubectl label` and `kubectl taint` commands, and what else they change (fleets the nodes leave, pods a taint keeps off or evicts), and sends them to Watson, where each waits for approval.
 - Watson runs `kubectl taint` on nodes. Its card says what changes and, for NoExecute, which pods are evicted.
 - **Alerts by node.** Each pod's alert sits under the node it runs on, below the node's own alert when it has one, and a node whose pods fail comes near the top even when the node itself is fine. Pods that no node took and volumes keep their own sections; By kind shows the alerts as before.
 
@@ -23,6 +24,8 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Fixed
 
+- **An acknowledgement took a second or two to show.** It is saved with the settings, and the replica serving the page, when it is not the one that saved it, reads them every 3 seconds. The Alerts tab, its badge and its colour now show it at once, and the server's rows take over when they come.
+- **The home page's pod counts did not add up**, and differed from the Pods tab's: "109 pods · 106 running · 10 not ready" counted the not-ready pods among the running ones. The tile now reads "96 running · 10 not ready · 3 completed", and the Pods and Helm tabs have a Not ready status beside Running: pods running but failing a readiness check, or on a node that stopped reporting. The Nodes, Pods and Alerts boxes stay plain when nothing is wrong.
 - **Copy buttons copied nothing** when the console is reached over plain HTTP, as at http://<address>: browsers offer their clipboard API only to HTTPS and localhost. Copying now falls back to the older way, which works there too.
 - The refresh ring kept the old pace after the refresh rate changed, until the next refresh. It now starts again at the new rate at once, as the server does.
 - **"Show me the nodes with problems" showed every node.** Sherlock could not set the Nodes and Fleets tabs' filter or the Alerts tab's Hide acknowledged, so it guessed at taints and search words and then cleared the filters; and with only an errors filter, a node with warnings alone left it no filter that fit. It now shows the nodes with problems, or with errors, as asked, leaves a filtered view empty when nothing matches, and cannot take off a filter it set while the filter shows something.
