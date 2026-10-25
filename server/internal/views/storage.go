@@ -465,6 +465,23 @@ func (ix *storageIndex) claimPair(c *corev1.PersistentVolumeClaim) StoragePair {
 	}
 	events := eventsFor(ix.src, string(c.UID))
 	p.Reason, p.Attention = diagnoseClaim(c, pv, cls, p.ClassMissing, events, pods, ix.now)
+	// ADR-64: a claim the Alerts tab raises needs attention here too. Its
+	// rule also counts the attach and mount warnings of the pods that mount
+	// the claim; a Bound claim with no reason line and whose pods are well
+	// is never raised, so only the others are asked about.
+	if !p.Attention && (p.State != StateBound || p.Resizing || p.Reason != nil || anyUnwell(pods, ix.now)) {
+		if a, ok := claimAlert(ix.src, c, ix.now); ok && a.Severity != SevRecovered {
+			p.Attention = true
+			if p.Reason == nil && len(a.Events) > 0 {
+				e := a.Events[0]
+				text := e.Reason
+				if e.Pod != "" {
+					text = e.Pod[strings.Index(e.Pod, "/")+1:] + " · " + e.Reason
+				}
+				p.Reason = &Diagnosis{Text: text + " · " + shortCause(e.Message), Tone: "warn"}
+			}
+		}
+	}
 	if p.Reason != nil && p.Reason.Tone == "info" && p.State == StatePending {
 		p.Tone = "info"
 	}
@@ -747,6 +764,17 @@ func diagnoseClaim(c *corev1.PersistentVolumeClaim, pv *corev1.PersistentVolume,
 		return &Diagnosis{Text: "no volume matches (size, access mode or selector)", Tone: "warn"}, warned
 	}
 	return &Diagnosis{Text: "waiting for the provisioner", Tone: "warn"}, warned
+}
+
+// anyUnwell says whether a pod that mounts a claim is not well, as the
+// Pods tab shows it.
+func anyUnwell(pods []*corev1.Pod, now time.Time) bool {
+	for _, p := range pods {
+		if _, tone, _ := podStatus(p, now); tone != "ok" {
+			return true
+		}
+	}
+	return false
 }
 
 func anyScheduled(pods []*corev1.Pod) bool {

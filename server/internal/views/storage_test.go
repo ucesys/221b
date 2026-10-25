@@ -398,3 +398,52 @@ func TestStorageBuildsTwoThousandClaimsQuickly(t *testing.T) {
 	}
 	t.Logf("2,000 claims in %v", took)
 }
+
+// ADR-64: every claim the Alerts tab raises is a row that needs attention,
+// including a Bound claim whose pod cannot mount it and a resizing claim
+// with a warning, which the ST-14 rules alone do not flag.
+func TestStorageNeedsAttentionCoversTheClaimAlerts(t *testing.T) {
+	src := storageSource()
+	bound := func(name, size string) {
+		src.Put(pvc("web", name, ptr("longhorn"), size, corev1.ClaimBound, "pv-"+name))
+		src.Put(pv("pv-"+name, "longhorn", size, corev1.VolumeBound, "web", name, corev1.PersistentVolumeReclaimDelete))
+	}
+	bound("stuck", "10Gi")
+	p := mounting("web", "uses-stuck", "worker-1", "stuck")
+	p.Status = corev1.PodStatus{Phase: corev1.PodPending, ContainerStatuses: []corev1.ContainerStatus{{Name: "main", State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}}}}
+	src.Put(p)
+	src.Put(warning("uid-uses-stuck", "Pod", "web", "uses-stuck", "FailedMount", `MountVolume.SetUp failed for volume "pv-stuck" : rpc error: code = Internal desc = mount failed`, 4, 10*time.Minute, time.Minute))
+
+	bound("growing", "20Gi")
+	g, _ := src.Object("persistentvolumeclaims", "web", "growing").(*corev1.PersistentVolumeClaim)
+	g.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("10Gi")}
+	src.Put(g)
+	src.Put(warning("uid-web-growing", "PersistentVolumeClaim", "web", "growing", "VolumeResizeFailed", "rpc error: code = Internal desc = no space left", 2, 5*time.Minute, time.Minute))
+
+	src.Put(pvc("web", "fresh", ptr("longhorn"), "5Gi", corev1.ClaimPending, ""))
+	src.Put(warning("uid-web-fresh", "PersistentVolumeClaim", "web", "fresh", "ProvisioningFailed", "rpc error: code = ResourceExhausted desc = not enough disk space", 1, time.Minute, time.Minute))
+
+	bound("fine", "5Gi")
+	src.Put(mounting("web", "uses-fine", "worker-1", "fine"))
+
+	rows := views.BuildStorage(src, now)
+	raised := 0
+	for _, a := range alerts(t, src) {
+		if a.Kind != views.AlertPVC || a.Severity == views.SevRecovered {
+			continue
+		}
+		raised++
+		if !pairOf(t, rows, "pvc:"+a.Namespace+"/"+a.Name).Attention {
+			t.Errorf("the Alerts tab raises %s/%s; the Storage tab does not", a.Namespace, a.Name)
+		}
+	}
+	if raised != 3 {
+		t.Errorf("%d claim alerts, want stuck, growing and fresh", raised)
+	}
+	if pairOf(t, rows, "pvc:web/fine").Attention {
+		t.Error("a well claim needs attention")
+	}
+	if r := reason(pairOf(t, rows, "pvc:web/stuck")); r != "warn uses-stuck · FailedMount · mount failed" {
+		t.Errorf("stuck: %q", r)
+	}
+}
