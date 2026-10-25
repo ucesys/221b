@@ -76,6 +76,25 @@ for (const theme of ['light', 'dark'] as const) {
     await page.keyboard.press('Escape')
   })
 
+  test(`the Storage tab and its drawers meet WCAG 2.2 AA in the ${theme} theme (ST-01)`, async ({ page }) => {
+    test.slow()
+    await page.addInitScript((t) => window.localStorage.setItem('221b.theme', JSON.stringify(t)), theme)
+    for (const view of ['class', 'namespace', 'all']) {
+      await page.goto(`/#/storage?view=${view}`)
+      await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+      await expect(page.getByTestId('storage-row').first()).toBeVisible()
+      expect(await violations(page), view).toEqual([])
+    }
+    await page.getByTestId('storage-claim').first().click()
+    await expect(page.getByTestId('storage-chain')).toBeVisible()
+    expect(await violations(page), 'claim drawer').toEqual([])
+    await page.keyboard.press('Escape')
+    await page.goto('/#/storage?view=class')
+    await page.getByTestId('storage-class-link').first().click()
+    await expect(page.getByTestId('storage-class-panel')).toBeVisible()
+    expect(await violations(page), 'class drawer').toEqual([])
+  })
+
   test(`the Phase 4 tabs meet WCAG 2.2 AA in the ${theme} theme`, async ({ page }) => {
     test.slow()
     await page.addInitScript((t) => window.localStorage.setItem('221b.theme', JSON.stringify(t)), theme)
