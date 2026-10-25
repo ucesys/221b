@@ -226,7 +226,8 @@
                 ""
               ],
               "resources": [
-                "pods"
+                "pods",
+                "persistentvolumeclaims"
               ],
               "verbs": [
                 "delete"

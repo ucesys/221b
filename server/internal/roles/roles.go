@@ -261,13 +261,15 @@ var labelled = []Rule{
 }
 
 // adminChanges are the namespaced changes of Watson (P6-02): scale, restart
-// and undo, delete a pod, label and annotate. Nothing on RBAC, no
-// pods/exec, no pods/eviction (draining needs nodes), nothing cluster-wide.
+// and undo, delete a pod, label and annotate, and the Storage tab's expand
+// and delete a claim (ST-18; patch on claims is among labelled). Nothing on
+// RBAC, no pods/exec, no pods/eviction (draining needs nodes), nothing
+// cluster-wide.
 func adminChanges() []Rule {
 	return []Rule{
 		{APIGroups: []string{"apps"}, Resources: []string{"deployments/scale", "statefulsets/scale", "replicasets/scale"}, Verbs: []string{"get", "update", "patch"}},
 		{APIGroups: []string{"apps"}, Resources: workloadKinds, Verbs: []string{"patch"}},
-		{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"delete"}},
+		{APIGroups: []string{""}, Resources: []string{"pods", "persistentvolumeclaims"}, Verbs: []string{"delete"}},
 		labelled[0], labelled[1], labelled[2], labelled[3],
 	}
 }
