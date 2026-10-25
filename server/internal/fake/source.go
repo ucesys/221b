@@ -27,6 +27,7 @@ type Source struct {
 	usage    map[string]nodes.Usage
 	podUsage map[string]nodes.Usage
 	boots    map[string]time.Time
+	volumes  map[string]kube.VolumeStats
 	secrets  bool
 	polls    int
 	wantPods bool
@@ -42,6 +43,7 @@ func New(nodeNames ...string) *Source {
 		usage:    map[string]nodes.Usage{},
 		podUsage: map[string]nodes.Usage{},
 		boots:    map[string]time.Time{},
+		volumes:  map[string]kube.VolumeStats{},
 		secrets:  true,
 	}
 	for _, n := range nodeNames {
@@ -362,4 +364,19 @@ func metaOf(o runtime.Object) metav1.Object {
 		return &metav1.ObjectMeta{}
 	}
 	return m
+}
+
+// SetVolumeStats sets what the kubelets report about a mounted claim.
+func (s *Source) SetVolumeStats(namespace, claim string, v kube.VolumeStats) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.volumes[namespace+"/"+claim] = v
+}
+
+// VolumeStats returns what the kubelets report about a mounted claim.
+func (s *Source) VolumeStats(namespace, claim string) (kube.VolumeStats, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.volumes[namespace+"/"+claim]
+	return v, ok
 }

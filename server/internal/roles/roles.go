@@ -193,6 +193,7 @@ var Watched = []Resource{
 	{"", "namespaces", false, nil},
 	{"", "persistentvolumes", false, nil},
 	{"storage.k8s.io", "storageclasses", false, nil},
+	{"storage.k8s.io", "volumeattachments", false, nil},
 	{"apiextensions.k8s.io", "customresourcedefinitions", false, nil},
 	{"rbac.authorization.k8s.io", "clusterroles", false, nil},
 	{"rbac.authorization.k8s.io", "clusterrolebindings", false, nil},

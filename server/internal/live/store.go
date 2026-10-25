@@ -66,6 +66,9 @@ const (
 	ViewPolicies = "policies"
 	// ViewNetworks are the Networks tab's traces and nodes (P4-02).
 	ViewNetworks = "networks"
+	// ViewStorage is the Storage tab's classes, volumes, claims and
+	// storage quotas (ST-01 to ST-12).
+	ViewStorage = "storage"
 	// NamespacePrefix starts the view of one namespace's objects.
 	NamespacePrefix = "ns:"
 )
@@ -353,6 +356,11 @@ var staticViews = []viewDef{
 		lazy:  true,
 		keys:  func(src Source) []string { return views.NetworkKeys(src) },
 		build: func(src Source, key string, now time.Time) (any, bool) { return views.BuildNetwork(src, key, now) },
+	},
+	{
+		name:  ViewStorage,
+		lazy:  true,
+		whole: buildStorage,
 	},
 	{
 		name:  ViewAccess,
@@ -1287,6 +1295,18 @@ func decorateAlert(s *Store, key string, row any) any {
 
 // buildFleets works out the cluster's fleets from its nodes as they are
 // now (P4-01).
+// buildStorage builds the storage view in one pass: a claim's row reads
+// every pod that mounts it, which one pass over the pods finds for all of
+// them (ST-25).
+func buildStorage(s *Store, now time.Time) map[string]any {
+	rows := views.BuildStorage(s.src, now)
+	out := make(map[string]any, len(rows))
+	for k, r := range rows {
+		out[k] = r
+	}
+	return out
+}
+
 func buildFleets(s *Store, now time.Time) map[string]any {
 	var defs []fleets.Fleet
 	if p := s.fleets.Load(); p != nil {

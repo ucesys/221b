@@ -309,6 +309,8 @@ func (c *Cluster) clientFor(k Kind) (rest.Interface, error) {
 		return c.cs.SchedulingV1().RESTClient(), nil
 	case "admissionregistration.k8s.io":
 		return c.cs.AdmissionregistrationV1().RESTClient(), nil
+	case "storage.k8s.io":
+		return c.cs.StorageV1().RESTClient(), nil
 	}
 	return nil, fmt.Errorf("no client for API group %q", k.Group)
 }
@@ -401,7 +403,7 @@ func (c *Cluster) Run(ctx context.Context) {
 // everything marks every static view, the details and the totals.
 func (c *Cluster) everything() Change {
 	ch := Change{Info: true, Totals: true}
-	for _, v := range []string{"nodes", "pods", "namespaces", "services", "helm", "alerts", "fleets", "access", "policies", "networks"} {
+	for _, v := range []string{"nodes", "pods", "namespaces", "services", "helm", "alerts", "fleets", "access", "policies", "networks", "storage"} {
 		ch.Mark(v, AllRows)
 	}
 	return ch
@@ -815,6 +817,25 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 		}
 		if k.Name != "events" && (added || removed) {
 			ch.Mark("helm", AllRows)
+		}
+	}
+	switch k.Name {
+	case "persistentvolumeclaims", "persistentvolumes", "storageclasses", "volumeattachments", "resourcequotas", "statefulsets":
+		// The storage view is built whole (ST-25).
+		ch.Mark("storage", AllRows)
+	case "pods":
+		for _, o := range []any{old, obj} {
+			if p := asPod(o); p != nil && len(podClaims(p)) > 0 {
+				ch.Mark("storage", AllRows)
+				break
+			}
+		}
+	case "events":
+		for _, o := range []any{old, obj} {
+			if e, ok := unwrap(o).(*corev1.Event); ok && (e.InvolvedObject.Kind == "PersistentVolumeClaim" || e.InvolvedObject.Kind == "PersistentVolume") {
+				ch.Mark("storage", AllRows)
+				break
+			}
 		}
 	}
 	switch k.Name {

@@ -12,6 +12,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	schedulingv1 "k8s.io/api/scheduling/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -139,6 +140,11 @@ var Kinds = []Kind{
 	{Name: "validatingwebhookconfigurations", Kind: "ValidatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations", Plural: "ValidatingWebhookConfigurations", New: typed[admissionv1.ValidatingWebhookConfiguration](), Transform: stripWebhooks, Order: 33},
 	{Name: "mutatingwebhookconfigurations", Kind: "MutatingWebhookConfiguration", Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations", Plural: "MutatingWebhookConfigurations", New: typed[admissionv1.MutatingWebhookConfiguration](), Transform: stripWebhooks, Order: 34},
 	{Name: "ingressclasses", Kind: "IngressClass", Group: "networking.k8s.io", Version: "v1", Resource: "ingressclasses", Plural: "IngressClasses", New: typed[networkingv1.IngressClass](), Transform: stripObject, Order: 35},
+	// What the Storage tab reads (ST-19): classes, volumes and the
+	// attachments of CSI volumes to nodes, all cluster-scoped.
+	{Name: "storageclasses", Kind: "StorageClass", Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses", Plural: "StorageClasses", New: typed[storagev1.StorageClass](), Transform: stripObject, Order: 36},
+	{Name: "persistentvolumes", Kind: "PersistentVolume", Version: "v1", Resource: "persistentvolumes", Plural: "PersistentVolumes", New: typed[corev1.PersistentVolume](), Transform: stripObject, Order: 37},
+	{Name: "volumeattachments", Kind: "VolumeAttachment", Group: "storage.k8s.io", Version: "v1", Resource: "volumeattachments", Plural: "VolumeAttachments", New: typed[storagev1.VolumeAttachment](), Transform: stripObject, Order: 38},
 }
 
 // KindByName finds a kind by its name; ok is false for an unknown name.
@@ -330,7 +336,11 @@ func stripStatefulSet(obj any) (any, error) {
 	s.ManagedFields = nil
 	s.Annotations = trimAnnotations(s.Annotations)
 	templateImages(&s.Spec.Template)
-	s.Spec.VolumeClaimTemplates = nil
+	// The claim templates' names say which claims are the set's (ST-13);
+	// the rest of each template is dropped.
+	for i, t := range s.Spec.VolumeClaimTemplates {
+		s.Spec.VolumeClaimTemplates[i] = corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: t.Name}}
+	}
 	return s, nil
 }
 
