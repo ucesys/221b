@@ -91,7 +91,7 @@ Phase 1 proves the whole path on one screen. Code becomes an image, the image ru
 | ID | Requirement | Done when |
 | --- | --- | --- |
 | P1-04 | CI on every pull request and push to main: lint, unit tests, browser build, image build, license check and vulnerability scan. | All checks pass on a pull request; a critical or high vulnerability fails the build. |
-| P1-05 | One container image: the Go binary serving the built browser app, on a distroless base, non-root, read-only root filesystem. Pushed to GitHub Container Registry, private while the repo is private. | The image is under 80 MB (raised from 60 MB in Phase 6, for kubectl and the Helm SDK) and its scan is clean. |
+| P1-05 | One container image: the Go binary serving the built browser app, on a distroless base, non-root, read-only root filesystem. Pushed to GitHub Container Registry, private while the repo is private. | The image is under 200 MB (raised from 60 MB to 80 MB in Phase 6, for kubectl and the Helm SDK, and to 200 MB in Phase 8) and its scan is clean. |
 | P1-06 | A Helm chart: Deployment, Service (ClusterIP), ServiceAccount, read-only ClusterRole and binding, NetworkPolicy, probes, resource requests and limits. No Ingress yet. | `helm install` brings the pod to Ready within 60 seconds; `helm upgrade` works and `helm uninstall` leaves nothing behind. |
 | P1-07 | A test deployment on a cluster you choose, opened through `kubectl port-forward`. CI also installs the chart in a kind cluster and runs the end-to-end tests there. | You open the Nodes tab of the test cluster in your browser. |
 

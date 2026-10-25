@@ -591,12 +591,12 @@ Records 1 to 9 cover the Architecture table in the requirements; 10 to 17 were m
 - **Decision:** One dock holds both panes side by side, with a grip between them; on a narrow screen a switch shows one at a time. One button moves both to a single window of their own (`#/assistants`; `#/sherlock` and `#/watson` open the same window), with Sherlock only where it is on, and one button docks both back. While the window is open the main window shows an icon to bring it forward or dock them here. Ask Sherlock and the buttons that send Watson a command bring the window forward, where the answer or the card waits.
 - **Consequences:** Watson is in the dock wherever it runs, even with Sherlock off. Its stream is open while a tab shows the dock (ADR-56).
 
-### ADR-55: The image may be up to 80 MB
+### ADR-55: The image may be up to 200 MB
 
-- **Status:** Accepted (Phase 6, changes P1-05).
-- **Context:** P1-05 set 60 MB. kubectl's command packages and the Helm SDK (ADR-49) bring the image to about 70 MB.
-- **Decision:** The limit is 80 MB, checked in CI as before.
-- **Consequences:** A larger download on first install; nothing else changes.
+- **Status:** Accepted (Phase 6, changes P1-05). Raised in Phase 8.
+- **Context:** P1-05 set 60 MB. kubectl's command packages and the Helm SDK (ADR-49) bring the image to about 70 MB. By the end of Phase 7 it was 79.96 MB, and the Storage tab (Phase 8) brings it to 80.3 MB.
+- **Decision:** The limit was 80 MB in Phase 6; from Phase 8 it is 200 MB, as you decided, checked in CI as before.
+- **Consequences:** A larger download on first install; nothing else changes. The image is far from the limit again, so a feature no longer fails CI by a few hundred kilobytes; the Image job still reports the size of every build.
 
 ### ADR-56: A page holds two event streams
 

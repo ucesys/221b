@@ -219,7 +219,7 @@ jobs:
         run: |
           size=$(docker image inspect "$IMAGE:ci" --format '{{.Size}}')
           echo "::notice title=Image size::$(( size / 1000 / 1000 )) MB ($size bytes)"
-          [ "$size" -lt 80000000 ] || { echo "The image is $size bytes; the limit is 80 MB." | tee -a "$RUNNER_TEMP/ci.log"; exit 1; }
+          [ "$size" -lt 200000000 ] || { echo "The image is $size bytes; the limit is 200 MB." | tee -a "$RUNNER_TEMP/ci.log"; exit 1; }
           [ "$(docker image inspect "$IMAGE:ci" --format '{{.Config.User}}')" = "65532:65532" ]
           # Distroless: there is no shell to run.
           if docker run --rm --entrypoint /bin/sh "$IMAGE:ci" -c true 2>/dev/null; then echo "The image has a shell." | tee -a "$RUNNER_TEMP/ci.log"; exit 1; fi
