@@ -1,5 +1,6 @@
 import { credText, type ClusterSummary } from '../api/clusters'
-import type { AlertBanner } from '../lib/alerts'
+import type { AlertBanner, BannerItem } from '../lib/alerts'
+import { peekClickHash } from '../lib/peek'
 import type { ClusterInfo } from '../api/types'
 import type { StreamState } from '../api/live'
 import { fmtTs } from '../lib/format'
@@ -28,6 +29,8 @@ interface Banner {
   link?: { href: string; label: string; testid?: string }
   /** Monospace detail, for lists of objects. */
   mono?: boolean
+  /** The detail as items, some of which open a drawer (ST-21). */
+  items?: BannerItem[]
   testid?: string
 }
 
@@ -73,7 +76,7 @@ export function Banners({ cluster, stream, now, summary, pageHref, accessError, 
   // What is failing in the cluster comes after what is wrong with the view
   // of it, and only while the cluster is connected.
   if (cluster?.state === 'connected') {
-    for (const a of alerts) list.push({ tone: a.tone, title: a.title, detail: a.detail, mono: true, testid: 'alert-banner', link: alertsHref ? { href: alertsHref, label: 'View alerts →', testid: 'alert-banner-link' } : undefined })
+    for (const a of alerts) list.push({ tone: a.tone, title: a.title, detail: a.detail, items: a.items, mono: true, testid: 'alert-banner', link: alertsHref ? { href: alertsHref, label: 'View alerts →', testid: 'alert-banner-link' } : undefined })
   }
   if (!list.length) return null
   return (
@@ -83,7 +86,20 @@ export function Banners({ cluster, stream, now, summary, pageHref, accessError, 
           {b.tone === 'err' ? <AlertIcon /> : <ClockIcon />}
           <strong style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{b.title}</strong>
           <span className={'rk-banner-detail' + (b.mono ? ' rk-mono' : '')} title={b.detail}>
-            {b.detail}
+            {b.items
+              ? b.items.map((it, i) => (
+                  <span key={it.text}>
+                    {i > 0 && '  ·  '}
+                    {it.peek ? (
+                      <a href={peekClickHash(it.peek)} data-peek={it.peek} style={{ color: 'inherit' }} data-testid="alert-banner-volume">
+                        {it.text}
+                      </a>
+                    ) : (
+                      it.text
+                    )}
+                  </span>
+                ))
+              : b.detail}
           </span>
           {b.link && (
             <a href={b.link.href} data-testid={b.link.testid ?? 'banner-link'}>

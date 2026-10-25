@@ -3,7 +3,7 @@ import { useView } from '../api/live'
 import type { AlertEntry, AlertRow } from '../api/types'
 import { agoText, contextOf, countText, isActive, kindLabel, metaText, minutesOf, openLabel, searchText, sectionsOf, sevLabel, tilesOf, type AlertKind } from '../lib/alerts'
 import { fileStamp, fmtTs } from '../lib/format'
-import { navigate, withParams } from '../lib/router'
+import { href, navigate, withParams } from '../lib/router'
 import { peekHref, type Peek } from '../lib/peek'
 import { acknowledge } from '../api/acks'
 import { csvText, type ExportFormat } from '../lib/table'
@@ -166,6 +166,12 @@ function AlertCard({ r, now, onOpen, onPod, onExport, onAck }: { r: AlertRow; no
         <button className="rk-btn" onClick={onOpen} data-testid="alert-open">
           {openLabel(r)}
         </button>
+        {r.kind === 'pvc' && (
+          // ST-21: the claim's drawer on the Storage tab, its row selected.
+          <a className="rk-btn" href={href('storage', [], { peek: `claim:${r.namespace}/${r.name}` })} data-testid="alert-open-volume">
+            Open volume
+          </a>
+        )}
         <ExportMenu onExport={onExport} disabled={!r.events.length} what="these events" />
       </div>
       {ctx.text && (

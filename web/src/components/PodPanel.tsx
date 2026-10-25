@@ -484,12 +484,13 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
                   {v.source}
                 </span>
                 {v.claim && (
-                  <span className="rk-pill" data-tone={v.claim.phase === 'Bound' ? 'ok' : 'warn'}>
+                  // ST-21: the claim's pill opens its drawer on the Storage tab.
+                  <a className="rk-pill" data-tone={v.claim.phase === 'Bound' ? 'ok' : 'warn'} href={href('storage', [], { peek: `claim:${ns}/${v.claim.name}` })} title={`Open the claim ${v.claim.name} on the Storage tab`} style={{ textDecoration: 'none' }} data-testid="pod-claim-link">
                     <span className="rk-dot" />
                     {v.claim.phase}
                     {v.claim.capacity ? ` · ${v.claim.capacity}` : ''}
                     {v.claim.storageClass ? ` · ${v.claim.storageClass}` : ''}
-                  </span>
+                  </a>
                 )}
               </div>
               {v.mounts.length > 0 ? (

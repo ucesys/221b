@@ -235,7 +235,7 @@ func (s *Sim) storageSeed(now time.Time) {
 			p := s.storagePod(v.ns, sp, worker(sp.worker), day(float64(sp.age)), v.claim, now)
 			if v.class == "longhorn" && i == 0 && p.Spec.NodeName != "" {
 				// The CSI driver attaches a block device to the pod's node.
-				att := &storagev1.VolumeAttachment{TypeMeta: typeMeta("VolumeAttachment"), ObjectMeta: objectMeta("", fmt.Sprintf("csi-%x", uid("attach/"+v.name))[:16], created, nil)}
+				att := &storagev1.VolumeAttachment{TypeMeta: typeMeta("VolumeAttachment"), ObjectMeta: objectMeta("", "csi-"+strings.ReplaceAll(string(uid("attach/"+v.name)), "-", "")[:12], created, nil)}
 				att.Spec = storagev1.VolumeAttachmentSpec{Attacher: "driver.longhorn.io", NodeName: p.Spec.NodeName, Source: storagev1.VolumeAttachmentSource{PersistentVolumeName: ptr.To(v.name)}}
 				att.Status = storagev1.VolumeAttachmentStatus{Attached: true}
 				s.addLocked(att)

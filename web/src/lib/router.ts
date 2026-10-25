@@ -8,7 +8,7 @@
 
 import { useSyncExternalStore } from 'react'
 
-export type Tab = 'nodes' | 'fleets' | 'namespaces' | 'pods' | 'helm' | 'alerts' | 'services' | 'networks' | 'access' | 'policies'
+export type Tab = 'nodes' | 'fleets' | 'namespaces' | 'pods' | 'helm' | 'alerts' | 'services' | 'networks' | 'storage' | 'access' | 'policies'
 
 export const TABS: { id: Tab; label: string; tip: string }[] = [
   { id: 'alerts', label: 'Alerts', tip: 'Pods failing to start or pending, node problems and warning events' },
@@ -19,6 +19,8 @@ export const TABS: { id: Tab; label: string; tip: string }[] = [
   { id: 'helm', label: 'Helm', tip: 'Helm releases and their history' },
   { id: 'services', label: 'Services', tip: 'Every Service, its endpoints and the hostnames that publish it' },
   { id: 'networks', label: 'Networks', tip: 'Ingress, DNS, pod and service networks — trace a request hop by hop' },
+  // ST-01: after Networks; More takes it from the right with the others.
+  { id: 'storage', label: 'Storage', tip: 'Storage classes, volumes, claims and the pods that mount them' },
   { id: 'access', label: 'Access', tip: 'Access Control: who can do what in the cluster' },
   { id: 'policies', label: 'Policies', tip: 'Network policies, disruption budgets, quotas, Pod Security and admission webhooks' },
 ]

@@ -10,6 +10,8 @@ import { ObjectPanel } from './ObjectPanel'
 import { PodPanel } from './PodPanel'
 import { PolicyPanel } from './PolicyPanel'
 import { ServicePanel } from './ServicePanel'
+import { StorageClassPanel } from './StorageClassPanel'
+import { StoragePanel } from './StoragePanel'
 
 interface Props {
   route: Route
@@ -61,6 +63,12 @@ export function PeekPane({ route, cluster, now, onToast }: Props) {
       if (!r) return nodes.loaded ? <Missing what={`Node ${peek.name}`} onClose={close} /> : null
       return <NodePanel r={r} metrics={cluster?.metrics === 'available'} metricsNote={cluster?.metricsMessage ?? ''} uptimeNote={cluster?.uptimeMessage ?? ''} now={now} onClose={close} onToast={onToast} />
     }
+    // The Storage drawers (ST-13, ST-17), over whatever tab is open.
+    case 'claim':
+    case 'volume':
+      return <StoragePanel key={peek.kind === 'claim' ? `claim:${peek.namespace}/${peek.name}` : `volume:${peek.name}`} target={peek} cluster={cluster} clusterId={route.cluster} now={now} onClose={close} onToast={onToast} />
+    case 'class':
+      return <StorageClassPanel key={`class:${peek.name}`} name={peek.name} now={now} onClose={close} onToast={onToast} />
     case 'pod':
       return <PodPanel key={`${peek.namespace}/${peek.name}`} podKey={`${peek.namespace}/${peek.name}`} row={null} gone={false} cluster={cluster} now={now} onClose={close} onToast={onToast} />
     case 'service':

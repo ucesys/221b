@@ -7,6 +7,7 @@ import { AccessTab } from './components/AccessTab'
 import { NetworksTab } from './components/NetworksTab'
 import { PeekPane } from './components/PeekPane'
 import { PoliciesTab } from './components/PoliciesTab'
+import { StorageTab } from './components/StorageTab'
 import { AlertsTab } from './components/AlertsTab'
 import { Banners } from './components/Banners'
 import { ClusterEditor } from './components/ClusterEditor'
@@ -297,6 +298,7 @@ function Shell() {
           {tab === 'helm' && <HelmTab {...common} />}
           {tab === 'access' && <AccessTab {...common} />}
           {tab === 'networks' && <NetworksTab {...common} />}
+          {tab === 'storage' && <StorageTab {...common} />}
           {tab === 'policies' && <PoliciesTab {...common} />}
         </div>
       )}

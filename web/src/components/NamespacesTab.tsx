@@ -238,7 +238,12 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
 
   return (
     <>
-      <SideList label="Namespaces" title="Namespaces" query={listQuery} onQuery={setListQuery} placeholder="Filter namespaces" groups={groups} empty={loaded ? 'No namespaces match.' : 'Waiting for the first list…'} testId="namespace-list" foot="Cluster-scoped objects such as nodes, persistent volumes, storage classes and cluster roles belong to no namespace; find nodes in the Nodes tab." />
+      <SideList label="Namespaces" title="Namespaces" query={listQuery} onQuery={setListQuery} placeholder="Filter namespaces" groups={groups} empty={loaded ? 'No namespaces match.' : 'Waiting for the first list…'} testId="namespace-list" foot={
+        <>
+          Cluster-scoped objects such as nodes, persistent volumes, storage classes and cluster roles belong to no namespace; find nodes in the <a href={href('nodes')}>Nodes</a> tab, and volumes, claims and classes in the <a href={href('storage')}>Storage</a> tab.
+        </>
+      }
+    />
       <main className="rk-pane" aria-label="Namespace" style={{ flex: '999 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         {current && (
           <section aria-label={`Namespace ${ns}`} style={{ padding: '18px 24px 28px', display: 'flex', flexDirection: 'column', gap: 12 }}>
