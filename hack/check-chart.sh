@@ -155,7 +155,8 @@ probes_and_resources() {
   grep -q 'livenessProbe:' "$out" && grep -q 'readinessProbe:' "$out" && grep -q 'requests:' "$out" && grep -q 'limits:' "$out"
 }
 hardened() { grep -q 'runAsNonRoot: true' "$out" && grep -q 'readOnlyRootFilesystem: true' "$out"; }
-# The ClusterRole reads the kinds the tabs show, pod logs, metrics and the
+# The ClusterRole reads the kinds the tabs show (from Phase 8 volumes,
+# storage classes and volume attachments too), pod logs, metrics and the
 # kubelets' stats, and Secrets only when asked to; the Role patches the
 # settings ConfigMap, by name, and nothing else.
 cluster_role() { sed -n '/^kind: ClusterRole$/,/^---/p' "${1:-$out}"; }
@@ -173,7 +174,7 @@ print(" ".join(sorted(out)))'
 }
 # What it reads, plus, with sign-in, the people it reads as (users and
 # groups, impersonated) and the reviews of their access it creates.
-WANT_READ='admissionregistration.k8s.io/mutatingwebhookconfigurations admissionregistration.k8s.io/validatingwebhookconfigurations apps/controllerrevisions apps/daemonsets apps/deployments apps/replicasets apps/statefulsets authorization.k8s.io/subjectaccessreviews autoscaling/horizontalpodautoscalers batch/cronjobs batch/jobs configmaps coordination.k8s.io/leases discovery.k8s.io/endpointslices endpoints events groups limitranges metrics.k8s.io/nodes metrics.k8s.io/pods namespaces networking.k8s.io/ingressclasses networking.k8s.io/ingresses networking.k8s.io/networkpolicies nodes nodes/proxy persistentvolumeclaims pods pods/log policy/poddisruptionbudgets rbac.authorization.k8s.io/clusterrolebindings rbac.authorization.k8s.io/clusterroles rbac.authorization.k8s.io/rolebindings rbac.authorization.k8s.io/roles resourcequotas scheduling.k8s.io/priorityclasses secrets serviceaccounts services users'
+WANT_READ='admissionregistration.k8s.io/mutatingwebhookconfigurations admissionregistration.k8s.io/validatingwebhookconfigurations apps/controllerrevisions apps/daemonsets apps/deployments apps/replicasets apps/statefulsets authorization.k8s.io/subjectaccessreviews autoscaling/horizontalpodautoscalers batch/cronjobs batch/jobs configmaps coordination.k8s.io/leases discovery.k8s.io/endpointslices endpoints events groups limitranges metrics.k8s.io/nodes metrics.k8s.io/pods namespaces networking.k8s.io/ingressclasses networking.k8s.io/ingresses networking.k8s.io/networkpolicies nodes nodes/proxy persistentvolumeclaims persistentvolumes pods pods/log policy/poddisruptionbudgets rbac.authorization.k8s.io/clusterrolebindings rbac.authorization.k8s.io/clusterroles rbac.authorization.k8s.io/rolebindings rbac.authorization.k8s.io/roles resourcequotas scheduling.k8s.io/priorityclasses secrets serviceaccounts services storage.k8s.io/storageclasses storage.k8s.io/volumeattachments users'
 read_only_resources() { [ "$(granted "$out")" = "$WANT_READ" ]; }
 # Read-only, but for the access reviews it creates to ask what a person may see.
 read_only_verbs() {
