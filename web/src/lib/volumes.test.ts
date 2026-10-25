@@ -79,4 +79,18 @@ describe('storage', () => {
     expect(openByDefault({ ...g, attention: 0 }, 13)).toBe(false)
     expect(openByDefault(g, 50)).toBe(true)
   })
+
+  it('groups and sorts 2,000 claims in 50 classes within 200 ms (ST-12, ST-25)', () => {
+    const classes = Array.from({ length: 50 }, (_, i) => cls(`class-${i}`, i === 0))
+    const pairs = Array.from({ length: 2000 }, (_, i) => pair({ claim: `data-${i}`, namespace: `ns-${i % 40}`, volume: `pvc-${i}`, class: `class-${i % 50}`, capacity: (i % 100) * GI, state: i % 97 ? 'bound' : 'pending', phase: i % 97 ? 'Bound' : 'Pending' }))
+    const start = performance.now()
+    const groups = byClass(classes, pairs)
+    byNamespace(pairs, [])
+    ;[...pairs].sort(comparePairs)
+    ;[...pairs].sort((a, b) => (b.capacity ?? 0) - (a.capacity ?? 0))
+    const took = performance.now() - start
+    expect(groups).toHaveLength(50)
+    expect(groups.reduce((n, g) => n + g.pairs.length, 0)).toBe(2000)
+    expect(took).toBeLessThan(200)
+  })
 })

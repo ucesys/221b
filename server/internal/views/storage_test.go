@@ -1,6 +1,7 @@
 package views_test
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -370,4 +371,30 @@ func TestStorageChainOfABoundClaim(t *testing.T) {
 	if d.Pair.Reclaim != "" || d.Pair.Source != nil || d.Class != nil || d.Attachment != nil || d.Hops[1].Value[0].L != nil {
 		t.Errorf("redacted drawer %+v", d.Pair)
 	}
+}
+
+// ST-25: 2,000 claims in 50 classes, each mounted by a pod, build in well
+// under the 2 seconds the first screen has. The budget is loose for CI's
+// race detector; a plain run takes a few tens of milliseconds.
+func TestStorageBuildsTwoThousandClaimsQuickly(t *testing.T) {
+	src := fake.New("worker-1")
+	for i := range 50 {
+		src.Put(sc("class-"+strconv.Itoa(i), "driver.longhorn.io", storagev1.VolumeBindingImmediate, i == 0))
+	}
+	for i := range 2000 {
+		ns, name, vol, class := "ns-"+strconv.Itoa(i%40), "data-"+strconv.Itoa(i), "pvc-"+strconv.Itoa(i), "class-"+strconv.Itoa(i%50)
+		src.Put(pvc(ns, name, ptr(class), "10Gi", corev1.ClaimBound, vol))
+		src.Put(pv(vol, class, "10Gi", corev1.VolumeBound, ns, name, corev1.PersistentVolumeReclaimDelete))
+		src.Put(mounting(ns, "pod-"+strconv.Itoa(i), "worker-1", name))
+	}
+	start := time.Now()
+	rows := views.BuildStorage(src, now)
+	took := time.Since(start)
+	if len(rows) != 2000+50 {
+		t.Fatalf("%d rows, want 2,050", len(rows))
+	}
+	if took > 2*time.Second {
+		t.Errorf("building 2,000 claims took %v", took)
+	}
+	t.Logf("2,000 claims in %v", took)
 }
