@@ -3,6 +3,7 @@
 import AxeBuilder from '@axe-core/playwright'
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
+import { cluster } from './cluster'
 
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 
@@ -78,21 +79,26 @@ for (const theme of ['light', 'dark'] as const) {
 
   test(`the Storage tab and its drawers meet WCAG 2.2 AA in the ${theme} theme (ST-01)`, async ({ page }) => {
     test.slow()
-    await page.addInitScript((t) => window.localStorage.setItem('221b.theme', JSON.stringify(t)), theme)
-    for (const view of ['class', 'namespace', 'all']) {
-      await page.goto(`/#/storage?view=${view}`)
-      await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
-      await expect(page.getByTestId('storage-row').first()).toBeVisible()
-      expect(await violations(page), view).toEqual([])
+    const cleanup = await cluster.storageClaim(`e2e-storage-a11y-${theme}`)
+    try {
+      await page.addInitScript((t) => window.localStorage.setItem('221b.theme', JSON.stringify(t)), theme)
+      for (const view of ['class', 'namespace', 'all']) {
+        await page.goto(`/#/storage?view=${view}`)
+        await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+        await expect(page.getByTestId('storage-row').first()).toBeVisible({ timeout: 20_000 })
+        expect(await violations(page), view).toEqual([])
+      }
+      await page.getByTestId('storage-claim').first().click()
+      await expect(page.getByTestId('storage-chain')).toBeVisible()
+      expect(await violations(page), 'claim drawer').toEqual([])
+      await page.keyboard.press('Escape')
+      await page.goto('/#/storage?view=class')
+      await page.getByTestId('storage-class-link').first().click()
+      await expect(page.getByTestId('storage-class-panel')).toBeVisible()
+      expect(await violations(page), 'class drawer').toEqual([])
+    } finally {
+      await cleanup()
     }
-    await page.getByTestId('storage-claim').first().click()
-    await expect(page.getByTestId('storage-chain')).toBeVisible()
-    expect(await violations(page), 'claim drawer').toEqual([])
-    await page.keyboard.press('Escape')
-    await page.goto('/#/storage?view=class')
-    await page.getByTestId('storage-class-link').first().click()
-    await expect(page.getByTestId('storage-class-panel')).toBeVisible()
-    expect(await violations(page), 'class drawer').toEqual([])
   })
 
   test(`the Phase 4 tabs meet WCAG 2.2 AA in the ${theme} theme`, async ({ page }) => {

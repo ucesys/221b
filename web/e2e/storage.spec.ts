@@ -110,16 +110,22 @@ test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
 
   test('the Storage tab and a claim’s drawer fit 390 px', async ({ page }) => {
-    await open(page, '#/storage?view=namespace')
-    const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
-    expect(await overflow()).toBeLessThanOrEqual(0)
-    await page.getByTestId('storage-claim').first().click()
-    const panel = page.getByTestId('storage-panel')
-    await expect(panel).toBeVisible()
-    await panel.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)))
-    expect(await overflow()).toBeLessThanOrEqual(0)
-    const box = await panel.boundingBox()
-    expect(box!.x + box!.width).toBeLessThanOrEqual(390.5)
+    const cleanup = await cluster.storageClaim('e2e-storage-phone')
+    try {
+      await open(page, '#/storage?view=namespace')
+      await expect(page.getByTestId('storage-claim').first()).toBeVisible()
+      const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
+      expect(await overflow()).toBeLessThanOrEqual(0)
+      await page.getByTestId('storage-claim').first().click()
+      const panel = page.getByTestId('storage-panel')
+      await expect(panel).toBeVisible()
+      await panel.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)))
+      expect(await overflow()).toBeLessThanOrEqual(0)
+      const box = await panel.boundingBox()
+      expect(box!.x + box!.width).toBeLessThanOrEqual(390.5)
+    } finally {
+      await cleanup()
+    }
   })
 })
 
