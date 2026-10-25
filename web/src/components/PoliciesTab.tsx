@@ -17,12 +17,10 @@ import type { TabProps } from './tabs'
 import { objectLink } from '../lib/peek'
 import { FixCommand } from './Watson'
 import { AskSherlock } from './Sherlock'
+import { copyText } from '../lib/clipboard'
 
 function copy(text: string, onToast: (m: string) => void, what = 'Copied') {
-  void navigator.clipboard?.writeText(text).then(
-    () => onToast(what),
-    () => onToast('Could not copy: the clipboard is not available.'),
-  )
+  void copyText(text).then((ok) => onToast(ok ? what : 'Could not copy: the browser refused the clipboard.'))
 }
 
 /** The Policies tab (P4-04 to P4-06). */

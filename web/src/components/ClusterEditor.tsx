@@ -4,6 +4,7 @@ import { credentialNote, kubeconfigCA, kubeContext, NAME_RE, parseKubeconfig, rb
 import { Card, Drawer } from './Drawer'
 import { CopyIcon, LockIcon, ShieldIcon, WarnIcon } from './Icons'
 import { TestSteps } from './TestSteps'
+import { copyText } from '../lib/clipboard'
 
 interface Props {
   /** The connection edited, or null to add one. */
@@ -248,13 +249,10 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
     }
   }
   const copyRbac = async () => {
-    try {
-      await navigator.clipboard.writeText(rbacYAML(f.mode, true))
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch {
-      // The clipboard is not always available; the text is on screen.
-    }
+    // When the browser refuses, the text is on screen.
+    if (!(await copyText(rbacYAML(f.mode, true)))) return
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
   }
   const bad = (field: string) => (saveErr?.field === field ? { 'aria-invalid': true as const, 'data-invalid': 'true' } : {})
 

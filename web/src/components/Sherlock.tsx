@@ -9,6 +9,7 @@ import { isCommands } from '../api/watson'
 import { useWatsonApi } from './Watson'
 import { isUndone, onUndone } from '../lib/uiControl'
 import { askContext, askUndo } from '../lib/uiWindow'
+import { copyText } from '../lib/clipboard'
 
 // ---------- asking from anywhere ----------
 
@@ -59,13 +60,12 @@ function CodeBlock({ text, lang, open, why }: { text: string; lang: string; open
   const [sent, setSent] = useState(false)
   const watson = useWatsonApi()
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1600)
-    } catch {
+    if (!(await copyText(text))) {
       setCopied(false)
+      return
     }
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1600)
   }
   const shell = /^(sh|bash|shell|console|zsh)?$/.test(lang) && /^\s*(kubectl|helm)\s/m.test(text)
   const commands = shell && isCommands(text)

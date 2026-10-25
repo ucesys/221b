@@ -65,3 +65,19 @@ for (const width of [390, 700, 1024]) {
     }
   })
 }
+
+test('a tab opens as it was left: its filters and selection, not a details pane over it', async ({ page }) => {
+  await page.goto('/#/pods?status=failing')
+  await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  await page.locator('[data-tab="nodes"]:visible').first().click()
+  await expect(page).toHaveURL(/#\/nodes$/)
+  await page.goto('/#/nodes?role=worker&peek=node%3Anowhere')
+  // The details pane is left out; the tab's own state is not.
+  await expect(page.locator('[data-tab="nodes"]:visible').first()).toHaveAttribute('href', '#/nodes?role=worker')
+  await expect(page.locator('[data-tab="pods"]:visible').first()).toHaveAttribute('href', '#/pods?status=failing')
+  await page.keyboard.press('Escape')
+  await page.locator('[data-tab="pods"]:visible').first().click()
+  await expect(page).toHaveURL(/#\/pods\?status=failing$/)
+  await page.locator('[data-tab="nodes"]:visible').first().click()
+  await expect(page).toHaveURL(/#\/nodes\?role=worker$/)
+})

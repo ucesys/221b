@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useView } from '../api/live'
-import type { AlertEntry, AlertRow } from '../api/types'
-import { agoText, contextOf, countText, isActive, kindLabel, metaText, minutesOf, openLabel, searchText, sectionsOf, sevLabel, tilesOf, type AlertKind } from '../lib/alerts'
-import { fileStamp, fmtTs } from '../lib/format'
+import type { AlertEntry, AlertRow, NodeRow } from '../api/types'
+import { agoText, byNode, contextOf, countText, isActive, kindLabel, metaText, minutesOf, openLabel, searchText, sectionsOf, sevLabel, tilesOf, type AlertKind, type NodeGroup } from '../lib/alerts'
+import { fileStamp, fmtTs, nWord } from '../lib/format'
 import { navigate, withParams } from '../lib/router'
 import { peekHref, type Peek } from '../lib/peek'
 import { acknowledge } from '../api/acks'
@@ -222,6 +222,35 @@ function AlertCard({ r, now, onOpen, onPod, onExport, onAck }: { r: AlertRow; no
   )
 }
 
+/**
+ * A node's head in the hierarchy when the node has no alert of its own,
+ * or only its pods are asked for: its name, role and state, and how many
+ * of its pods have alerts.
+ */
+function NodeHead({ name, node, pods, onOpen }: { name: string; node?: NodeRow; pods: number; onOpen: () => void }) {
+  return (
+    <div className="rk-card" style={{ padding: '10px 16px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px' }} data-testid="alert-node-head" data-node={name}>
+      <span className="rk-tag" style={{ fontSize: 11, padding: '2px 7px' }}>
+        {node?.role === 'control-plane' ? 'Control plane' : 'Worker'}
+      </span>
+      <span className="rk-mono" style={{ fontSize: 13, fontWeight: 600, overflowWrap: 'anywhere' }}>
+        {name}
+      </span>
+      <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{[node?.internalIP, node?.zone, nWord(pods, 'pod with alerts', 'pods with alerts')].filter(Boolean).join(' · ')}</span>
+      <span style={{ flex: '1 1 auto' }} />
+      {node && (
+        <span className="rk-pill" data-tone={node.tone} title={node.statusTip}>
+          <span className="rk-dot" />
+          {node.status}
+        </span>
+      )}
+      <button className="rk-btn" onClick={onOpen} data-testid="alert-node-open">
+        Open node
+      </button>
+    </div>
+  )
+}
+
 /** The section an alert is listed in. */
 function sectionOf(r: AlertRow): string {
   return r.kind === 'pod' ? 'pods' : r.kind === 'pvc' ? 'volumes' : r.role === 'control-plane' ? 'control-plane' : 'workers'
@@ -230,7 +259,10 @@ function sectionOf(r: AlertRow): string {
 /** The Alerts tab (P4-07): pods failing to start, pending and recently recovered, node problems and volume warnings, each with its events. */
 export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
   const { rows, loaded } = useView<AlertRow>('alerts')
+  const { rows: nodeRows } = useView<NodeRow>('nodes')
   const p = route.params
+  // Pods under the node they run on, or the alerts by kind as before.
+  const by = p.get('by') === 'kind' ? 'kind' : 'node'
   const kind: AlertKind = KINDS.some(([k]) => k === p.get('kind')) ? (p.get('kind') as AlertKind) : 'all'
   const query = p.get('q') ?? ''
   // Resolved alerts (pods that recovered) are hidden unless asked for;
@@ -265,7 +297,15 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
   const acked = { id: 'acknowledged', title: 'Acknowledged', what: 'acknowledged', rows: inView.filter((r) => isActive(r) && r.ack), show: true, all: [] as AlertRow[] }
   const recovered = { id: 'recovered', title: 'Resolved', what: 'resolved', rows: inView.filter((r) => !isActive(r)), show: true, all: [] as AlertRow[] }
   const ordered = [...sections.filter((s) => s.rows.length), ...(acked.rows.length ? [acked] : []), ...(recovered.rows.length ? [recovered] : []), ...sections.filter((s) => !s.rows.length)]
-  const visible = ordered.filter((s) => s.show).flatMap((s) => s.rows)
+  // The hierarchy (asked after 0.7.1): a node, its own alert if it has
+  // one, and the pods with alerts on it, indented under it.
+  const tree = useMemo(() => byNode(shown), [shown])
+  const nodeOf = useMemo(() => new Map(nodeRows.map((n) => [n.name, n])), [nodeRows])
+  const withNodes = kind === 'all' || kind === 'nodes'
+  const withPods = kind === 'all' || kind === 'pods'
+  const groups: NodeGroup[] = tree.groups.map((g) => ({ node: g.node, row: withNodes ? g.row : undefined, pods: withPods ? g.pods : [] })).filter((g) => g.row || g.pods.length)
+  const treeRows = [...groups.flatMap((g) => [...(g.row ? [g.row] : []), ...g.pods]), ...(withPods ? tree.unscheduled : []), ...(kind === 'all' || kind === 'volumes' ? tree.volumes : [])]
+  const visible = by === 'node' ? treeRows : ordered.filter((s) => s.show).flatMap((s) => s.rows)
   const hiddenRecovered = activeOnly ? rows.filter((r) => !isActive(r) && (!q || searchText(r).includes(q))).length : 0
   const hiddenAcked = hideAcked ? rows.filter((r) => r.ack && (!activeOnly || isActive(r)) && (!q || searchText(r).includes(q))).length : 0
   const emptyText = (s: (typeof ordered)[number]) =>
@@ -284,6 +324,10 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
     const target: Peek = r.kind === 'node' ? { kind: 'node', name: r.name } : r.kind === 'pod' ? { kind: 'pod', namespace: r.namespace!, name: r.name } : { kind: 'object', type: 'PersistentVolumeClaim', namespace: r.namespace!, name: r.name }
     navigate(peekHref(target))
   }
+  const openNode = (name: string) => navigate(peekHref({ kind: 'node', name }))
+  const card = (r: AlertRow) => <AlertCard key={r.key} r={r} now={now} onOpen={() => openRow(r)} onPod={openPod} onExport={(f) => exportEvents([r], f, cluster?.name, `${r.kind}-${r.name}-events`, onToast)} onAck={(on) => ack(r, on)} />
+  const groupTitle = kind === 'pods' ? 'Pods by node' : kind === 'nodes' ? 'Nodes' : 'Nodes and their pods'
+  const groupEmpty = q ? `No ${kind === 'pods' ? 'pod' : kind === 'nodes' ? 'node' : 'node or pod'} alerts match this search.` : `No ${kind === 'pods' ? 'pod' : kind === 'nodes' ? 'node' : 'node or pod'} problems right now.`
   const openPod = (key: string) => {
     const [ns = '', name = ''] = key.split('/', 2)
     navigate(peekHref({ kind: 'pod', namespace: ns, name }))
@@ -320,6 +364,14 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
             </button>
           ))}
         </div>
+        <div className="rk-seg" role="group" aria-label="Group alerts">
+          <button aria-pressed={by === 'node'} onClick={() => set({ by: undefined })} title="Each pod under the node it runs on" data-testid="alert-by-node">
+            By node
+          </button>
+          <button aria-pressed={by === 'kind'} onClick={() => set({ by: 'kind' })} title="Pods, control-plane nodes, worker nodes and volumes apart" data-testid="alert-by-kind">
+            By kind
+          </button>
+        </div>
         <label className="rk-check" title="Leave out the alerts whose object is healthy again: a pod running, a node ready, a claim bound with its pods running" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
           <input
             type="checkbox"
@@ -347,7 +399,58 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
         <ExportMenu onExport={(f) => exportEvents(visible, f, cluster?.name, 'alerts', onToast)} disabled={!visible.length} what="every event shown below" />
       </div>
       {!loaded && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Waiting for the first list of alerts…</p>}
+      {loaded && by === 'node' && (
+        <>
+          {withNodes || withPods ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }} data-testid="alert-section-nodes">
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
+                <h2 className="rk-h">{groupTitle}</h2>
+                <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{nWord(groups.length, 'node', 'nodes')}</span>
+              </div>
+              {groups.map((g) => (
+                <div key={g.node} style={{ display: 'flex', flexDirection: 'column', gap: 10 }} data-testid="alert-group" data-node={g.node}>
+                  {g.row ? card(g.row) : <NodeHead name={g.node} node={nodeOf.get(g.node)} pods={g.pods.length} onOpen={() => openNode(g.node)} />}
+                  {g.pods.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginLeft: 18, paddingLeft: 16, borderLeft: '2px solid var(--line2)' }} role="group" aria-label={`Pods with alerts on ${g.node}`} data-testid="alert-node-pods">
+                      {g.pods.map(card)}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {groups.length === 0 && (
+                <p style={{ margin: 0, padding: '18px 16px', fontSize: 12.5, color: 'var(--fg3)', border: '1px dashed var(--line2)', borderRadius: 10 }} data-testid="alert-empty">
+                  {groupEmpty}
+                </p>
+              )}
+            </div>
+          ) : null}
+          {withPods && tree.unscheduled.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }} data-testid="alert-section-unscheduled">
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
+                <h2 className="rk-h">Pods not on any node</h2>
+                <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{tree.unscheduled.length}</span>
+              </div>
+              {tree.unscheduled.map(card)}
+            </div>
+          )}
+          {(kind === 'all' || kind === 'volumes') && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }} data-testid="alert-section-volumes">
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 6 }}>
+                <h2 className="rk-h">Persistent volumes and claims</h2>
+                <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{tree.volumes.length}</span>
+              </div>
+              {tree.volumes.map(card)}
+              {tree.volumes.length === 0 && (
+                <p style={{ margin: 0, padding: '18px 16px', fontSize: 12.5, color: 'var(--fg3)', border: '1px dashed var(--line2)', borderRadius: 10 }} data-testid="alert-empty">
+                  {q ? 'No volume alerts match this search.' : 'No volume problems right now.'}
+                </p>
+              )}
+            </div>
+          )}
+        </>
+      )}
       {loaded &&
+        by === 'kind' &&
         ordered
           .filter((s) => s.show)
           .map((s) => (
@@ -356,9 +459,7 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
                 <h2 className="rk-h">{s.title}</h2>
                 <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{s.rows.length}</span>
               </div>
-              {s.rows.map((r) => (
-                <AlertCard key={r.key} r={r} now={now} onOpen={() => openRow(r)} onPod={openPod} onExport={(f) => exportEvents([r], f, cluster?.name, `${r.kind}-${r.name}-events`, onToast)} onAck={(on) => ack(r, on)} />
-              ))}
+              {s.rows.map(card)}
               {s.rows.length === 0 && (
                 <p style={{ margin: 0, padding: '18px 16px', fontSize: 12.5, color: 'var(--fg3)', border: '1px dashed var(--line2)', borderRadius: 10 }} data-testid="alert-empty">
                   {emptyText(s)}

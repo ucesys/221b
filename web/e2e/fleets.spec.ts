@@ -1,9 +1,14 @@
 // The Fleets tab (P4-01): groups of nodes by labels and taints, kept with
 // the console's settings.
+import AxeBuilder from '@axe-core/playwright'
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
 import { cluster, consoleNode, healthyWorkers, nodeRows, snapshot } from './cluster'
 import { E2E_USER, E2E_VIEWER, signInAs } from './accounts'
+
+const SAME = { 'Sec-Fetch-Site': 'same-origin' }
+// Watson, which changes the nodes' labels, runs where Sherlock is on; no key is needed for that.
+const SHERLOCK_ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
 import type { Fleet } from '../src/api/types'
 
 async function open(page: Page) {
@@ -221,5 +226,76 @@ test('column choices stay in this browser, signed in or not (Phase 6 review)', a
     expect((await same.request.get('/api/v1/prefs')).status()).toBe(404)
   } finally {
     await same.context().close()
+  }
+})
+
+test('picked nodes make a new fleet, and leave it and join it again through Watson (asked after 0.7.1)', async ({ page, request }) => {
+  const skip = await consoleNode()
+  const [w1, w2] = healthyWorkers(await snapshot(request))
+    .filter((r) => r.name !== skip)
+    .map((r) => r.name)
+  const a = await cluster.nodeWith(w1!, { 'e2e.221b/picked': 'yes' })
+  await page.waitForTimeout(5)
+  const b = await cluster.nodeWith(w2!, { 'e2e.221b/picked': 'yes' })
+  const on = await page.request.put('/api/v1/sherlock/config', { data: SHERLOCK_ON, headers: SAME })
+  expect(on.status(), await on.text()).toBe(200)
+  const matrix = page.getByTestId('fleet-matrix')
+  const pick = (node: string) => matrix.locator(`[data-node="${node}"]`).first().getByTestId('fleet-pick-node')
+  const approve = async (command: string) => {
+    const card = page.getByTestId('watson').locator(`[data-testid=watson-card][data-command="${command}"]`)
+    await card.getByTestId('watson-approve').click({ timeout: 30_000 })
+  }
+  try {
+    await open(page)
+    await pick(a.node).check()
+    await pick(b.node).check()
+    await expect(page.getByTestId('fleet-nodebar')).toContainText('Picked 2 nodes')
+    // The picks stay while another tab is open.
+    await page.locator('[data-tab="nodes"]').first().click()
+    await page.locator('[data-tab="fleets"]').first().click()
+    await expect(page.getByTestId('fleet-nodebar')).toContainText('Picked 2 nodes')
+
+    // A label only they have defines the fleet: nothing to run.
+    await page.getByTestId('fleet-nodebar-new').click()
+    const dlg = page.getByTestId('fleet-nodes')
+    await dlg.getByTestId('fleet-nodes-name').fill('E2E picked')
+    await expect(dlg.getByTestId('fleet-nodes-own')).toBeChecked()
+    await expect(dlg).toContainText('e2e.221b/picked=yes')
+    await expect(dlg.getByTestId('fleet-nodes-commands')).toHaveCount(0)
+    // The dialog meets WCAG 2.2 AA.
+    const axe = await new AxeBuilder({ page }).include('[data-testid=fleet-nodes]').withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze()
+    expect(axe.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(' ')).join(', ')}`)).toEqual([])
+    await dlg.getByTestId('fleet-nodes-go').click()
+    await expect(dlg).toHaveCount(0)
+    const f = row(page, 'e2e-picked')
+    await expect(f.getByTestId('fleet-count')).toHaveText('2', { timeout: 5_000 })
+    await expect(page).toHaveURL(/fleet=e2e-picked/)
+
+    // Out of the fleet shown: the label comes off, once Watson's card is approved.
+    await pick(b.node).check()
+    await page.getByTestId('fleet-nodebar-remove').click()
+    const leave = `kubectl label nodes ${b.node} e2e.221b/picked-`
+    await expect(dlg.getByTestId('fleet-nodes-commands')).toHaveText(leave)
+    // Once Watson is on here, the dialog hands it the commands rather than copying them.
+    await expect(dlg.getByTestId('fleet-nodes-go')).toHaveText('Send to Watson', { timeout: 15_000 })
+    await dlg.getByTestId('fleet-nodes-go').click()
+    await approve(leave)
+    await expect(f.getByTestId('fleet-count')).toHaveText('1', { timeout: 30_000 })
+
+    // And into it again from All nodes.
+    await page.locator('.rk-fl-main').first().click()
+    await pick(b.node).check()
+    await page.getByTestId('fleet-nodebar-add').click()
+    await expect(dlg.getByTestId('fleet-nodes-fleet')).toHaveValue('e2e-picked')
+    const join = `kubectl label nodes ${b.node} e2e.221b/picked=yes`
+    await expect(dlg.getByTestId('fleet-nodes-commands')).toHaveText(join)
+    await expect(dlg.getByTestId('fleet-nodes-go')).toHaveText('Send to Watson')
+    await dlg.getByTestId('fleet-nodes-go').click()
+    await approve(join)
+    await expect(f.getByTestId('fleet-count')).toHaveText('2', { timeout: 30_000 })
+  } finally {
+    await page.request.put('/api/v1/sherlock/config', { data: { ...SHERLOCK_ON, clusters: {} }, headers: SAME })
+    await a.cleanup()
+    await b.cleanup().catch(() => undefined)
   }
 })

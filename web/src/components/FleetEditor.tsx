@@ -3,6 +3,7 @@ import type { Fleet, NodeRow } from '../api/types'
 import { COLOR_NAMES, fixCommand, has, missing, newId, nextColor, parseReq, reqsOf, withLabel } from '../lib/fleets'
 import { effectTone, labelText, taintId } from '../lib/nodes'
 import { CloseIcon, CopyIcon, SearchIcon } from './Icons'
+import { copyText } from '../lib/clipboard'
 
 /** What the editor opens with: a saved fleet, or a new one, perhaps prefilled. */
 export interface EditorSeed {
@@ -148,10 +149,7 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: 
     }
   }
   const copy = (cmd: string) => {
-    void navigator.clipboard?.writeText(cmd).then(
-      () => setCopied(cmd),
-      () => undefined,
-    )
+    void copyText(cmd).then((ok) => ok && setCopied(cmd))
   }
 
   const matchText = !reqCount ? 'Pick a label or taint to see which nodes match.' : members.length ? `${members.length} ${members.length === 1 ? 'node matches' : 'nodes match'} today` : 'No node has all of these yet'

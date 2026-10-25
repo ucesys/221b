@@ -483,6 +483,27 @@ func cardFor(ctx context.Context, cs *clients, c *Command) (targets []string, gu
 			}))
 			impact = append(impact, labelImpact(ctx, cs, c, t, changes, annot)...)
 		}
+	case "kubectl taint":
+		pos, changes := splitTaints(c.Positionals)
+		ts, sets, err := cs.targetsOf(ctx, c, "", pos)
+		guards = append(guards, sets...)
+		if err != nil {
+			add("%v", err)
+		}
+		if len(ts) == 0 {
+			add("No node matches.")
+		}
+		for _, t := range ts {
+			targets = append(targets, t.String())
+			if t.obj == nil {
+				add("There is no %s.", t.String())
+				continue
+			}
+			guards = append(guards, objectGuard(t, func(o *unstructured.Unstructured) any {
+				return field(o, "spec", "taints")
+			}))
+			impact = append(impact, taintImpact(ctx, cs, c, toTyped[corev1.Node](t.obj), changes)...)
+		}
 	case "helm rollback":
 		ts, gs, im := rollbackImpact(ctx, cs, c)
 		targets, guards, impact = ts, gs, im
@@ -714,6 +735,121 @@ func deleteImpact(p *corev1.Pod, c *Command) string {
 }
 
 const psaPrefix = "pod-security.kubernetes.io/"
+
+// readTaint reads KEY[=VALUE][:EFFECT] as kubectl taint writes it.
+func readTaint(s string) corev1.Taint {
+	var t corev1.Taint
+	if i := strings.LastIndex(s, ":"); i >= 0 {
+		s, t.Effect = s[:i], corev1.TaintEffect(s[i+1:])
+	}
+	t.Key, t.Value, _ = strings.Cut(s, "=")
+	return t
+}
+
+func taintText(t corev1.Taint) string {
+	s := t.Key
+	if t.Value != "" {
+		s += "=" + t.Value
+	}
+	if t.Effect != "" {
+		s += ":" + string(t.Effect)
+	}
+	return s
+}
+
+// taintImpact says what kubectl taint changes on a node, and what that
+// means for its pods: NoExecute evicts those that do not tolerate it.
+func taintImpact(ctx context.Context, cs *clients, c *Command, n *corev1.Node, changes []string) []string {
+	var diffs, out []string
+	for _, ch := range changes {
+		if strings.HasSuffix(ch, "-") {
+			want := readTaint(strings.TrimSuffix(ch, "-"))
+			var gone []string
+			for _, t := range n.Spec.Taints {
+				if t.Key == want.Key && (want.Effect == "" || t.Effect == want.Effect) {
+					gone = append(gone, taintText(t))
+				}
+			}
+			if len(gone) == 0 {
+				diffs = append(diffs, "has no taint "+taintText(want)+": kubectl will refuse")
+				continue
+			}
+			diffs = append(diffs, "removes "+joinAnd(gone))
+			out = append(out, fmt.Sprintf("Pods that do not tolerate %s may be scheduled on %s again.", want.Key, n.Name))
+			continue
+		}
+		want := readTaint(ch)
+		var same *corev1.Taint
+		for i, t := range n.Spec.Taints {
+			if t.Key == want.Key && t.Effect == want.Effect {
+				same = &n.Spec.Taints[i]
+			}
+		}
+		switch {
+		case same != nil && same.Value == want.Value:
+			diffs = append(diffs, taintText(want)+" is already there")
+			continue
+		case same != nil && !c.Has("overwrite"):
+			diffs = append(diffs, fmt.Sprintf("it has %s, and --overwrite is false: kubectl will refuse", taintText(*same)))
+			continue
+		case same != nil:
+			diffs = append(diffs, fmt.Sprintf("%s → %s", taintText(*same), taintText(want)))
+		default:
+			diffs = append(diffs, "adds "+taintText(want))
+		}
+		switch want.Effect {
+		case corev1.TaintEffectNoSchedule:
+			out = append(out, fmt.Sprintf("New pods that do not tolerate %s will not be scheduled on %s. Its running pods keep running.", want.Key, n.Name))
+		case corev1.TaintEffectPreferNoSchedule:
+			out = append(out, fmt.Sprintf("The scheduler avoids %s for new pods that do not tolerate %s.", n.Name, want.Key))
+		case corev1.TaintEffectNoExecute:
+			pods, _ := cs.cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{FieldSelector: "spec.nodeName=" + n.Name})
+			var evicted []string
+			if pods != nil {
+				for _, p := range pods.Items {
+					if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+						continue
+					}
+					tolerated := false
+					for _, tol := range p.Spec.Tolerations {
+						if tolerates(tol, want) {
+							tolerated = true
+							break
+						}
+					}
+					if !tolerated {
+						evicted = append(evicted, p.Namespace+"/"+p.Name)
+					}
+				}
+			}
+			sort.Strings(evicted)
+			if len(evicted) == 0 {
+				out = append(out, fmt.Sprintf("Every pod on %s tolerates %s; none is evicted.", n.Name, want.Key))
+			} else {
+				out = append(out, fmt.Sprintf("Evicts the %s on %s that do not tolerate %s: %s.", plural(len(evicted), "pod", "pods"), n.Name, want.Key, listText(evicted, 5)))
+			}
+		}
+	}
+	return append([]string{"Node " + n.Name + ": " + strings.Join(diffs, "; ") + "."}, out...)
+}
+
+// tolerates says whether a toleration matches a taint, as the scheduler
+// reads it: an empty key with Exists matches every taint.
+func tolerates(tol corev1.Toleration, t corev1.Taint) bool {
+	if tol.Effect != "" && tol.Effect != t.Effect {
+		return false
+	}
+	if tol.Key != "" && tol.Key != t.Key {
+		return false
+	}
+	switch tol.Operator {
+	case corev1.TolerationOpExists:
+		return true
+	case "", corev1.TolerationOpEqual:
+		return tol.Key != "" && tol.Value == t.Value
+	}
+	return false
+}
 
 func labelImpact(ctx context.Context, cs *clients, c *Command, t target, changes []string, annot bool) []string {
 	cur := t.obj.GetLabels()

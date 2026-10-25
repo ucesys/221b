@@ -40,6 +40,17 @@ test('each injected fault appears within 30 seconds', async ({ page, request }) 
     // out-of-memory kill is named either way.
     await expect(oom).toContainText('OOMKilled', { timeout: 30_000 })
 
+    // Each pod under the node it runs on; the pod no node took apart.
+    await expect(page.locator(`[data-testid="alert-group"][data-node="${node}"] [data-testid="alert-node-pods"] [data-alert="pod:${f.pull}"]`)).toBeVisible()
+    await expect(page.getByTestId('alert-section-unscheduled').locator(`[data-alert="pod:${f.unschedulable}"]`)).toBeVisible()
+    // By kind, as before: the pods together.
+    await page.getByTestId('alert-by-kind').click()
+    await expect(page).toHaveURL(/by=kind/)
+    await expect(page.getByTestId('alert-section-pods').locator(`[data-alert="pod:${f.pull}"]`)).toBeVisible()
+    await expect(page.getByTestId('alert-node-pods')).toHaveCount(0)
+    await page.getByTestId('alert-by-node').click()
+    await expect(page).not.toHaveURL(/by=kind/)
+
     // Grouped by object, with counts and first and last seen.
     const ev = nowhere.locator('[data-testid="alert-event"]').first()
     await expect(ev).toContainText(/×\d+/)
@@ -148,8 +159,8 @@ test('an acknowledged alert leaves the banners for everyone, and stays here and 
   }
 })
 
-test('only active alerts by default; the acknowledged after the others, then the resolved, then the empty groups', async ({ page, request }) => {
-  await open(page)
+test('only active alerts by default; by kind, the acknowledged after the others, then the resolved, then the empty groups', async ({ page, request }) => {
+  await open(page, '#/alerts?by=kind')
   const active = page.getByTestId('alert-active')
   await expect(active).toBeChecked()
   const rows = (await snapshot(request, ['alerts'])).views.alerts?.rows as { key: string; severity: string }[]

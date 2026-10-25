@@ -4,7 +4,15 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## Unreleased
 
+### Added
+
+- **Fleets: pick nodes and put them in a fleet.** Administrators tick nodes in the matrix, then make a new fleet of them, add them to a fleet, or remove them from the fleet shown. A fleet is its labels and taints, so the dialog lists the `kubectl label` and `kubectl taint` commands that does it and what else they change (fleets the nodes leave, pods a taint keeps off or evicts), and sends them to Watson, where each waits for approval. A new fleet can use a label only those nodes have, so no node changes at all.
+- Watson runs `kubectl taint` on nodes. Its card says what changes and, for NoExecute, which pods are evicted.
+- **Alerts by node.** Each pod's alert sits under the node it runs on, below the node's own alert when it has one, and a node whose pods fail comes near the top even when the node itself is fine. Pods that no node took and volumes keep their own sections; By kind shows the alerts as before.
+
 ### Changed
+
+- **Tabs open as they were left.** A tab in the bar opens with the filters, selection and sort it had, per cluster, for the rest of the session; a details pane over it is not kept.
 
 - **Sherlock knows the cluster it is asked about.** Its prompt now names the cluster's Kubernetes distribution (RKE2, K3s, kubeadm, kind, EKS, GKE, AKS, OpenShift, Talos), the operating system and kernel of each node, and its network plugin, load balancer, storage and GPU plugin, and gives the guidance for those alone: the distribution's own services, log files and commands, and each operating system's. It troubleshoots down to the node's operating system and hardware, and gives the checks to run on a node in a block of their own. A console with several clusters gives each its own prompt. Node details are included only for people who may list nodes.
 - **Home: Troubleshoot or Audit.** A cluster card's Sherlock button reads Troubleshoot while the cluster has errors or warnings, and asks Sherlock why and how to fix each, most severe first; while it is healthy it reads Audit and asks for the review of its setup, as before.
@@ -15,6 +23,8 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Fixed
 
+- **Copy buttons copied nothing** when the console is reached over plain HTTP, as at http://<address>: browsers offer their clipboard API only to HTTPS and localhost. Copying now falls back to the older way, which works there too.
+- The refresh ring kept the old pace after the refresh rate changed, until the next refresh. It now starts again at the new rate at once, as the server does.
 - **"Show me the nodes with problems" showed every node.** Sherlock could not set the Nodes and Fleets tabs' filter or the Alerts tab's Hide acknowledged, so it guessed at taints and search words and then cleared the filters; and with only an errors filter, a node with warnings alone left it no filter that fit. It now shows the nodes with problems, or with errors, as asked, leaves a filtered view empty when nothing matches, and cannot take off a filter it set while the filter shows something.
 
 ## 0.7.1 (2026-10-20)

@@ -65,6 +65,31 @@ func TestLabelRefusesAccessRules(t *testing.T) {
 	}
 }
 
+// Only nodes have taints, and a taint command names one.
+func TestTaintTakesNodesAndATaint(t *testing.T) {
+	for _, line := range []string{
+		"kubectl taint nodes w1 dedicated=db:NoSchedule",
+		"kubectl taint node w1 w2 nvidia.com/gpu=true:NoSchedule --overwrite",
+		"kubectl taint no w1 dedicated:NoSchedule-",
+		"kubectl taint nodes w1 dedicated-",
+		"kubectl taint nodes -l pool=db dedicated=db:NoExecute",
+	} {
+		if _, err := Parse(line); err != nil {
+			t.Errorf("%s: %v", line, err)
+		}
+	}
+	for _, line := range []string{
+		"kubectl taint pods api-0 a=b:NoSchedule",
+		"kubectl taint nodes w1",
+	} {
+		_, err := Parse(line)
+		var r *Refusal
+		if !errors.As(err, &r) || r.Rule != "usage" {
+			t.Errorf("%s: %v", line, err)
+		}
+	}
+}
+
 // Secret values stay hidden whatever spelling of the type kubectl takes.
 func TestGetRefusesSecretValuesInAnySpelling(t *testing.T) {
 	for _, line := range []string{
