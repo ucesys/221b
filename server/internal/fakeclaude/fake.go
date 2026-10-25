@@ -418,6 +418,50 @@ func script(question string, round int, results []string) reply {
 			parts = append(parts, fmt.Sprintf("Part %d of a long answer. ", i))
 		}
 		return reply{text: parts, slow: true}
+	case strings.Contains(q, "storage class"):
+		// The Storage tab's classes (ST-22).
+		if round == 0 {
+			return reply{text: []string{"Reading the storage classes."}, tool: "list_storage_classes", input: map[string]any{}}
+		}
+		return reply{text: []string{"The storage classes: " + summarize(last)}}
+	case strings.Contains(q, "claims") || strings.Contains(q, "volumes"):
+		// The Storage tab's volumes and claims, with why each is not
+		// healthy (ST-22, ST-14).
+		if round == 0 {
+			in := map[string]any{}
+			if strings.Contains(q, "pending") || strings.Contains(q, "attention") {
+				in["needs_attention"] = true
+			}
+			return reply{text: []string{"Reading the volumes and claims."}, tool: "list_volumes", input: in}
+		}
+		var r struct {
+			Total   int `json:"total"`
+			Volumes []struct {
+				Claim  string `json:"claim"`
+				Volume string `json:"volume"`
+				Status string `json:"status"`
+				Why    string `json:"why"`
+			} `json:"volumes"`
+		}
+		_ = json.Unmarshal([]byte(last), &r)
+		var b strings.Builder
+		fmt.Fprintf(&b, "%d volumes and claims:\n\n", r.Total)
+		for i, v := range r.Volumes {
+			if i == 8 {
+				break
+			}
+			if v.Claim != "" {
+				ns, name, _ := strings.Cut(v.Claim, "/")
+				fmt.Fprintf(&b, "- [%s](221b://PersistentVolumeClaim/%s/%s): %s", v.Claim, ns, name, v.Status)
+			} else {
+				fmt.Fprintf(&b, "- %s: %s", v.Volume, v.Status)
+			}
+			if v.Why != "" {
+				b.WriteString(", " + v.Why)
+			}
+			b.WriteString("\n")
+		}
+		return reply{text: []string{b.String()}}
 	case reLogs.MatchString(q):
 		m := reLogs.FindStringSubmatch(q)
 		if round == 0 {

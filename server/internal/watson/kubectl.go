@@ -31,6 +31,7 @@ import (
 	"k8s.io/kubectl/pkg/cmd/get"
 	"k8s.io/kubectl/pkg/cmd/label"
 	"k8s.io/kubectl/pkg/cmd/logs"
+	"k8s.io/kubectl/pkg/cmd/patch"
 	"k8s.io/kubectl/pkg/cmd/rollout"
 	"k8s.io/kubectl/pkg/cmd/scale"
 	"k8s.io/kubectl/pkg/cmd/top"
@@ -287,6 +288,8 @@ func runKubectl(ctx context.Context, c *Command, t Target, out, errOut io.Writer
 		cmd = label.NewCmdLabel(f, streams)
 	case "kubectl annotate":
 		cmd = annotate.NewCmdAnnotate("kubectl", f, streams)
+	case "kubectl patch":
+		cmd = patch.NewCmdPatch(f, streams)
 	default:
 		fmt.Fprintf(errOut, "watson: %s is not supported\n", c.Name())
 		return 1

@@ -215,6 +215,21 @@ var sherlockTools = []tool{
 		run:   (*toolbox).fleets,
 	},
 	{
+		// ST-22: the Storage tab's classes, as the person may read them.
+		def:   sherlock.ToolDef{Name: "list_storage_classes", Description: "The storage classes: provisioner, reclaim policy, binding mode, whether they allow expansion, which is the default, parameters, and their totals: volumes, capacity provisioned and used, claims and claims pending.", InputSchema: toolSchema(nil, map[string]string{})},
+		label: func(map[string]any) string { return "Read the storage classes" },
+		run:   (*toolbox).storageClasses,
+	},
+	{
+		// ST-22: the Storage tab's rows, with the diagnosis of ST-14.
+		def: sherlock.ToolDef{Name: "list_volumes", Description: "Persistent volumes and the claims that hold them, as pairs: status and, when not healthy, why (provisioning failed and the provisioner's message, no such class, waits for a pod, no volume matches, Released, Lost, resizing), capacity or the size requested, usage from the kubelets, access modes, class, reclaim policy, the Helm release, and the pods that mount each with their state and node.",
+			InputSchema: toolSchema(nil, map[string]string{"namespace": "string|Only claims in this namespace.", "class": "string|Only this storage class (an empty string: volumes made by hand).", "needs_attention": "boolean|Only what needs attention: claims pending with a warning or naming a class that does not exist, lost claims, Released or Failed volumes, volumes 85% full or more.", "query": "string|Only rows whose text contains this.", "limit": "integer|How many (default 60)."})},
+		label: func(in map[string]any) string {
+			return "List volumes and claims" + suffixIf(" in ", str(in, "namespace"))
+		},
+		run: (*toolbox).volumes,
+	},
+	{
 		def:   sherlock.ToolDef{Name: "trace_ingress", Description: "The path of a request to an Ingress host, hop by hop: address, Ingress controller, TLS certificate, rule, Service, endpoints, network policy, pods, each with its state and the cause when it fails. Also the network facts: plugin, DNS, IngressClasses.", InputSchema: toolSchema(nil, map[string]string{"host": "string|Only routes for this hostname (or part of it)."})},
 		label: func(in map[string]any) string { return "Trace requests" + suffixIf(" to ", str(in, "host")) },
 		run:   (*toolbox).trace,
@@ -971,6 +986,170 @@ func (tb *toolbox) fleets(ctx context.Context, _ map[string]any) sherlock.ToolRe
 		return sherlock.ToolResult{Text: err.Error(), Error: true}
 	}
 	return listResult("fleets", rows, 100, nil)
+}
+
+// storageRows reads the storage view as the person, so it holds only what
+// they may list, as the tab does (ST-20).
+func (tb *toolbox) storageRows(ctx context.Context) ([]views.StorageRow, error) {
+	rows, _, err := tb.rows(ctx, live.ViewStorage)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]views.StorageRow, 0, len(rows))
+	for _, r := range rows {
+		b, _ := json.Marshal(r)
+		var sr views.StorageRow
+		if json.Unmarshal(b, &sr) == nil {
+			out = append(out, sr)
+		}
+	}
+	return out, nil
+}
+
+func (tb *toolbox) storageClasses(ctx context.Context, _ map[string]any) sherlock.ToolResult {
+	rows, err := tb.storageRows(ctx)
+	if err != nil {
+		return sherlock.ToolResult{Text: err.Error(), Error: true}
+	}
+	type totals struct {
+		volumes, claims, pending int
+		provisioned, used        int64
+	}
+	by := map[string]*totals{}
+	for _, r := range rows {
+		if p := r.Pair; p != nil {
+			t := by[p.Class]
+			if t == nil {
+				t = &totals{}
+				by[p.Class] = t
+			}
+			if p.Volume != "" && p.State != views.StatePending {
+				t.volumes++
+				t.provisioned += p.Capacity
+			}
+			if p.Claim != "" {
+				t.claims++
+			}
+			if p.State == views.StatePending {
+				t.pending++
+			}
+			if p.Usage != nil {
+				t.used += p.Usage.Used
+			}
+		}
+	}
+	var out []map[string]any
+	var refs []sherlock.Ref
+	for _, r := range rows {
+		c := r.Class
+		if c == nil {
+			continue
+		}
+		t := by[c.Name]
+		if t == nil {
+			t = &totals{}
+		}
+		out = append(out, map[string]any{"name": c.Name, "default": c.Default, "provisioner": c.Provisioner, "reclaimPolicy": c.Reclaim, "bindingMode": c.Binding, "allowsExpansion": c.Expansion, "parameters": c.Parameters, "mountOptions": c.MountOptions,
+			"volumes": t.volumes, "provisioned": views.Bytes(t.provisioned), "used": views.Bytes(t.used), "claims": t.claims, "claimsPending": t.pending})
+		refs = append(refs, ref("StorageClass", "", c.Name))
+	}
+	if len(out) == 0 && len(rows) > 0 {
+		return sherlock.ToolResult{Text: `{"total":0,"note":"The person may not read storage classes: their role is bound to namespaces. list_volumes shows their claims."}`}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i]["name"].(string) < out[j]["name"].(string) })
+	return listResult("classes", out, 100, refs)
+}
+
+func (tb *toolbox) volumes(ctx context.Context, in map[string]any) sherlock.ToolResult {
+	rows, err := tb.storageRows(ctx)
+	if err != nil {
+		return sherlock.ToolResult{Text: err.Error(), Error: true}
+	}
+	ns, query, attention := str(in, "namespace"), str(in, "query"), flag(in, "needs_attention")
+	class, byClass := in["class"].(string)
+	limit := 60
+	if n, ok := in["limit"].(float64); ok && n > 0 {
+		limit = int(n)
+	}
+	var out []map[string]any
+	var refs []sherlock.Ref
+	for _, r := range rows {
+		p := r.Pair
+		if p == nil || (ns != "" && p.Namespace != ns) || (byClass && p.Class != class) || (attention && !p.Attention) {
+			continue
+		}
+		m := map[string]any{"state": p.State, "status": p.Phase, "class": p.Class}
+		if p.Claim != "" {
+			m["claim"] = p.Namespace + "/" + p.Claim
+			refs = append(refs, ref("PersistentVolumeClaim", p.Namespace, p.Claim))
+		}
+		if p.Volume != "" && p.State != views.StatePending {
+			m["volume"] = p.Volume
+		}
+		if p.WasClaim != "" {
+			m["wasClaim"] = p.WasClaim
+		}
+		if p.ClassMissing {
+			m["classNotFound"] = true
+		}
+		if p.Reason != nil {
+			m["why"] = p.Reason.Text
+		}
+		if p.Attention {
+			m["needsAttention"] = true
+		}
+		if p.State == views.StatePending {
+			m["requested"] = views.Bytes(p.Requested)
+		} else if p.Capacity > 0 {
+			m["capacity"] = views.Bytes(p.Capacity)
+		}
+		if u := p.Usage; u != nil {
+			m["used"] = fmt.Sprintf("%s of %s (%.0f%%)", views.Bytes(u.Used), views.Bytes(u.Capacity), u.Pct)
+		}
+		m["access"] = views.AccessText(p.AccessModes)
+		if p.Reclaim != "" {
+			m["reclaimPolicy"] = p.Reclaim
+		}
+		if p.Release != "" {
+			m["helmRelease"] = p.Release
+		}
+		if p.Owner != nil {
+			m["owner"] = p.Owner.Kind + " " + p.Owner.Name
+		}
+		if len(p.Pods) > 0 {
+			var pods []map[string]any
+			for _, x := range p.Pods {
+				pm := map[string]any{"pod": x.Name, "status": x.Status}
+				if x.Node != "" {
+					pm["node"] = x.Node
+				}
+				if x.MountPath != "" {
+					pm["mountPath"] = x.MountPath
+				}
+				if x.Note != "" {
+					pm["note"] = x.Note
+				}
+				if x.Why != "" {
+					pm["scheduler"] = x.Why
+				}
+				pods = append(pods, pm)
+			}
+			m["pods"] = pods
+		}
+		if !matches(m, query) {
+			continue
+		}
+		out = append(out, m)
+	}
+	// What needs attention first, then by claim or volume.
+	sort.SliceStable(out, func(i, j int) bool {
+		ai, aj := out[i]["needsAttention"] == true, out[j]["needsAttention"] == true
+		if ai != aj {
+			return ai
+		}
+		return fmt.Sprint(out[i]["claim"], out[i]["volume"]) < fmt.Sprint(out[j]["claim"], out[j]["volume"])
+	})
+	return listResult("volumes", out, limit, refs)
 }
 
 func (tb *toolbox) trace(ctx context.Context, in map[string]any) sherlock.ToolResult {

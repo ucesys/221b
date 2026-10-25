@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -188,6 +190,80 @@ func TestChangesWaitForApprovalAndRunAsTheApprover(t *testing.T) {
 	// It ran as the approver, impersonated.
 	if s.LastImpersonated() != "alice@corp.example" {
 		t.Fatalf("ran as %q", s.LastImpersonated())
+	}
+}
+
+// The Storage tab's three changes run once approved, with cards that say
+// what each does (ST-18): a claim grows when its class allows it, a
+// deleted claim's volume follows its reclaim policy, and the default class
+// moves by its annotation.
+func TestStorageChangesWaitForApprovalAndRun(t *testing.T) {
+	svc, cl, _, srv, buf := setup(t, Options{})
+	get := func(path string, v any) {
+		t.Helper()
+		r, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Body.Close()
+		if r.StatusCode != http.StatusOK {
+			t.Fatalf("%s: %d", path, r.StatusCode)
+		}
+		if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := func(line string, wants ...string) {
+		t.Helper()
+		it := svc.Submit(context.Background(), cl, alice(), line, "Storage", "", true)[0]
+		if it.Status != StatusPending {
+			t.Fatalf("%s: %s %s", line, it.Status, it.Reason)
+		}
+		card := wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+		im := strings.Join(card.Plan.Impact, " ")
+		for _, w := range wants {
+			if !strings.Contains(im, w) {
+				t.Fatalf("%s: impact %q lacks %q", line, im, w)
+			}
+		}
+		if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err != nil {
+			t.Fatal(err)
+		}
+		if done := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) }); done.Status != StatusDone {
+			t.Fatalf("%s: %s %q", line, done.Status, outputOf(svc, it.ID))
+		}
+	}
+
+	run(`kubectl patch pvc data-postgres-1 -n storage --type merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'`, "Grows claim storage/data-postgres-1 from 100Gi to 150Gi.", "Its class longhorn allows expansion.")
+	var c corev1.PersistentVolumeClaim
+	get("/api/v1/namespaces/storage/persistentvolumeclaims/data-postgres-1", &c)
+	if q := c.Status.Capacity[corev1.ResourceStorage]; q.String() != "150Gi" {
+		t.Errorf("the claim has %s", q.String())
+	}
+
+	run("kubectl delete pvc data-kafka-2 -n ingest", "Deletes claim ingest/data-kafka-2 and, under its reclaim policy Delete, the volume pvc-d2f84b19-7c6e-4a35-b1d8-9e0a4c6f2b71 and all its data.", "kafka-2 mount it")
+	run("kubectl delete pvc hdfs-export -n ingest", "Its volume legacy-hdfs-export and the data stay, Released (reclaim policy Retain)")
+	var pv corev1.PersistentVolume
+	get("/api/v1/persistentvolumes/legacy-hdfs-export", &pv)
+	if pv.Status.Phase != corev1.VolumeReleased {
+		t.Errorf("the volume is %s", pv.Status.Phase)
+	}
+
+	run("kubectl annotate storageclass longhorn storageclass.kubernetes.io/is-default-class=false --overwrite", "longhorn is no longer the default class")
+	run("kubectl annotate storageclass nfs-shared storageclass.kubernetes.io/is-default-class=true --overwrite", "nfs-shared becomes the default class")
+	var sc storagev1.StorageClass
+	get("/apis/storage.k8s.io/v1/storageclasses/nfs-shared", &sc)
+	if sc.Annotations["storageclass.kubernetes.io/is-default-class"] != "true" {
+		t.Errorf("annotations %v", sc.Annotations)
+	}
+	approvals := 0
+	for _, e := range buf.events() {
+		if e.Action == ActionApprove {
+			approvals++
+		}
+	}
+	if approvals != 5 {
+		t.Errorf("%d approvals audited, want one per change", approvals)
 	}
 }
 

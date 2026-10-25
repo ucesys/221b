@@ -222,7 +222,8 @@ export function watsonSupports(command: string): boolean {
     /^kubectl\s+(get|describe|logs|top|events|cordon|uncordon|drain|scale|label|annotate)\b/.test(c) ||
     /^kubectl\s+auth\s+can-i\b/.test(c) ||
     /^kubectl\s+rollout\s+(restart|undo)\b/.test(c) ||
-    /^kubectl\s+delete\s+(pods?|po)([\s/]|$)/.test(c) ||
+    /^kubectl\s+delete\s+(pods?|po|pvc|persistentvolumeclaims?)([\s/]|$)/.test(c) ||
+    /^kubectl\s+patch\s+(pvc|persistentvolumeclaims?)[\s/]/.test(c) ||
     /^helm\s+(list|ls|status|history|hist|rollback)\b/.test(c) ||
     /^helm\s+get\s+values\b/.test(c)
   )

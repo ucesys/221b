@@ -7,10 +7,13 @@
 package watson
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
@@ -155,9 +158,11 @@ var specs = []*spec{
 		flags: flags(map[string]flag{"selector": fSelector, "dry-run": fDryRun}), check: checkRollout},
 	{tool: "kubectl", verb: []string{"rollout", "undo"}, change: true, min: 1, max: 2, usage: "kubectl rollout undo deployment/NAME [--to-revision=N]",
 		flags: flags(map[string]flag{"to-revision": {value: true}, "dry-run": fDryRun}), check: checkRollout},
-	{tool: "kubectl", verb: []string{"delete"}, change: true, min: 1, max: -1, usage: "kubectl delete pod NAME [NAME...]",
+	{tool: "kubectl", verb: []string{"delete"}, change: true, min: 1, max: -1, usage: "kubectl delete pod NAME [NAME...] | kubectl delete pvc NAME",
 		flags: flags(map[string]flag{"selector": fSelector, "grace-period": {value: true}, "now": {}, "force": {}, "wait": {optional: true, value: true, values: []string{"true", "false"}}, "timeout": {value: true}, "dry-run": fDryRun, "ignore-not-found": {}}),
 		check: checkDelete},
+	{tool: "kubectl", verb: []string{"patch"}, change: true, min: 1, max: 2, usage: `kubectl patch pvc NAME -n NAMESPACE --type merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'`,
+		flags: flags(map[string]flag{"type": {value: true, values: []string{"merge", "strategic"}}, "patch": {short: "p", value: true}, "dry-run": fDryRun}), check: checkPatch},
 	{tool: "kubectl", verb: []string{"label"}, change: true, min: 2, max: -1, usage: "kubectl label TYPE NAME KEY=VALUE|KEY- [--overwrite]",
 		flags: flags(map[string]flag{"overwrite": {}, "selector": fSelector, "resource-version": {value: true}, "dry-run": fDryRun, "list": {}}), check: checkLabel},
 	{tool: "kubectl", verb: []string{"annotate"}, change: true, min: 2, max: -1, usage: "kubectl annotate TYPE NAME KEY=VALUE|KEY- [--overwrite]",
@@ -583,6 +588,8 @@ func init() {
 		"pods": {"po", "pod"}, "nodes": {"no", "node"}, "deployments": {"deploy", "deployment", "deployments.apps", "deployment.apps"},
 		"statefulsets": {"sts", "statefulset", "statefulsets.apps", "statefulset.apps"}, "daemonsets": {"ds", "daemonset", "daemonsets.apps", "daemonset.apps"},
 		"replicasets": {"rs", "replicaset", "replicasets.apps", "replicaset.apps"}, "secrets": {"secret"}, "namespaces": {"ns", "namespace"},
+		"persistentvolumeclaims": {"pvc", "persistentvolumeclaim"}, "persistentvolumes": {"pv", "persistentvolume"},
+		"storageclasses": {"sc", "storageclass", "storageclasses.storage.k8s.io", "storageclass.storage.k8s.io"},
 	} {
 		resourceNames[res] = res
 		for _, n := range names {
@@ -592,7 +599,7 @@ func init() {
 }
 
 // groupOf is the API group of each resource in resourceNames.
-var groupOf = map[string]string{"deployments": "apps", "statefulsets": "apps", "daemonsets": "apps", "replicasets": "apps"}
+var groupOf = map[string]string{"deployments": "apps", "statefulsets": "apps", "daemonsets": "apps", "replicasets": "apps", "storageclasses": "storage.k8s.io"}
 
 // resourceOf names the resource of a TYPE argument, as far as Watson
 // needs to know it; other types come back as typed. kubectl also takes a
@@ -724,15 +731,70 @@ func checkRollout(c *Command) *Refusal {
 
 func checkDelete(c *Command) *Refusal {
 	types, names := targets(c.Positionals)
+	claims := false
 	for _, t := range types {
-		if t != "pods" {
-			return refuse("not supported", "Watson deletes only pods; deleting %s is not supported.", t)
+		switch t {
+		case "pods":
+		case "persistentvolumeclaims":
+			// The Storage tab's Delete claim (ST-18), one claim by name.
+			claims = true
+		default:
+			return refuse("not supported", "Watson deletes only pods and volume claims; deleting %s is not supported.", t)
 		}
+	}
+	if claims && (len(types) > 1 || c.Has("selector") || len(names) != 1) {
+		return refuse("usage", "Name the one claim to delete: kubectl delete pvc NAME -n NAMESPACE.")
 	}
 	if len(names) == 0 && !c.Has("selector") {
 		return refuse("usage", "Name the pods to delete, or select them with -l. Watson does not delete every pod at once.")
 	}
 	return nil
+}
+
+// checkPatch holds kubectl patch to the one patch the Storage tab makes
+// (ST-18): a claim's requested size, nothing else.
+func checkPatch(c *Command) *Refusal {
+	types, names := targets(c.Positionals)
+	if len(types) != 1 || types[0] != "persistentvolumeclaims" || len(names) != 1 {
+		return refuse("not supported", "Watson patches only a volume claim's size: %s", c.spec.usage)
+	}
+	if t := c.Flag("type"); t != "" && t != "merge" && t != "strategic" {
+		return refuse("flag", "Patch the size with --type merge, not %q.", t)
+	}
+	if _, err := ClaimSize(c.Flag("patch")); err != nil {
+		return refuse("not supported", "%v Usage: %s", err, c.spec.usage)
+	}
+	return nil
+}
+
+// ClaimSize reads the size a claim patch asks for; the patch must set
+// spec.resources.requests.storage and nothing else.
+func ClaimSize(patch string) (resource.Quantity, error) {
+	var p map[string]any
+	if err := json.Unmarshal([]byte(patch), &p); err != nil {
+		return resource.Quantity{}, errors.New("The patch is not JSON.")
+	}
+	size, ok := only(p, "spec", "resources", "requests", "storage").(string)
+	if !ok {
+		return resource.Quantity{}, errors.New(`The patch may set only the requested size: {"spec":{"resources":{"requests":{"storage":"150Gi"}}}}.`)
+	}
+	q, err := resource.ParseQuantity(size)
+	if err != nil || q.Sign() <= 0 {
+		return resource.Quantity{}, fmt.Errorf("%q is not a size such as 150Gi.", size)
+	}
+	return q, nil
+}
+
+// only walks a JSON object along keys that must each be the only key.
+func only(v any, keys ...string) any {
+	for _, k := range keys {
+		m, ok := v.(map[string]any)
+		if !ok || len(m) != 1 {
+			return nil
+		}
+		v = m[k]
+	}
+	return v
 }
 
 func checkLabel(c *Command) *Refusal {

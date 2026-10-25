@@ -445,11 +445,35 @@ func cardFor(ctx context.Context, cs *clients, c *Command) (targets []string, gu
 				add("There is no %s.", t.String())
 				continue
 			}
+			if t.kind == "PersistentVolumeClaim" {
+				guards = append(guards, objectGuard(t, func(o *unstructured.Unstructured) any {
+					return []any{field(o, "spec", "volumeName"), field(o, "status", "phase"), o.GetDeletionTimestamp() != nil}
+				}))
+				impact = append(impact, claimDeleteImpact(ctx, cs, toTyped[corev1.PersistentVolumeClaim](t.obj))...)
+				continue
+			}
 			guards = append(guards, objectGuard(t, func(o *unstructured.Unstructured) any {
 				return []any{field(o, "spec", "nodeName"), o.GetDeletionTimestamp() != nil}
 			}))
 			p := toTyped[corev1.Pod](t.obj)
 			add("%s", deleteImpact(p, c))
+		}
+	case "kubectl patch":
+		ts, sets, err := cs.targetsOf(ctx, c, "", c.Positionals)
+		guards = append(guards, sets...)
+		if err != nil {
+			add("%v", err)
+		}
+		for _, t := range ts {
+			targets = append(targets, t.String())
+			if t.obj == nil {
+				add("There is no %s.", t.String())
+				continue
+			}
+			guards = append(guards, objectGuard(t, func(o *unstructured.Unstructured) any {
+				return []any{field(o, "spec", "resources"), field(o, "status", "capacity")}
+			}))
+			impact = append(impact, claimExpandImpact(ctx, cs, c, toTyped[corev1.PersistentVolumeClaim](t.obj))...)
 		}
 	case "kubectl label", "kubectl annotate":
 		var pos, changes []string
@@ -715,6 +739,124 @@ func deleteImpact(p *corev1.Pod, c *Command) string {
 
 const psaPrefix = "pod-security.kubernetes.io/"
 
+// claimDeleteImpact says what deleting a claim does to its data (ST-18):
+// the reclaim policy of its volume decides, a pod that mounts it holds it,
+// and a StatefulSet's template makes it again.
+func claimDeleteImpact(ctx context.Context, cs *clients, c *corev1.PersistentVolumeClaim) []string {
+	id := c.Namespace + "/" + c.Name
+	var out []string
+	switch {
+	case c.Spec.VolumeName == "":
+		out = append(out, fmt.Sprintf("Claim %s has no volume yet: deleting it deletes no data.", id))
+	default:
+		pv, err := cs.cs.CoreV1().PersistentVolumes().Get(ctx, c.Spec.VolumeName, metav1.GetOptions{})
+		switch {
+		case err != nil:
+			out = append(out, fmt.Sprintf("Deletes claim %s. Its volume %s could not be read, so what happens to the data is not known: %v", id, c.Spec.VolumeName, err))
+		case pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimDelete:
+			out = append(out, fmt.Sprintf("Deletes claim %s and, under its reclaim policy Delete, the volume %s and all its data.", id, pv.Name))
+		default:
+			out = append(out, fmt.Sprintf("Deletes claim %s. Its volume %s and the data stay, Released (reclaim policy %s), until someone reuses or deletes it.", id, pv.Name, pv.Spec.PersistentVolumeReclaimPolicy))
+		}
+	}
+	if pods, err := cs.cs.CoreV1().Pods(c.Namespace).List(ctx, metav1.ListOptions{}); err == nil {
+		var users []string
+		for _, p := range pods.Items {
+			if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+				continue
+			}
+			for _, v := range p.Spec.Volumes {
+				if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == c.Name {
+					users = append(users, p.Name)
+				}
+			}
+		}
+		if len(users) > 0 {
+			sort.Strings(users)
+			out = append(out, fmt.Sprintf("%s mount it: the claim stays Terminating until %s, and only then goes.", listText(users, 5), plural(len(users), "that pod is gone", "those pods are gone")))
+		}
+	}
+	if sets, err := cs.cs.AppsV1().StatefulSets(c.Namespace).List(ctx, metav1.ListOptions{}); err == nil {
+		for _, set := range sets.Items {
+			for _, t := range set.Spec.VolumeClaimTemplates {
+				if strings.HasPrefix(c.Name, t.Name+"-"+set.Name+"-") {
+					out = append(out, fmt.Sprintf("StatefulSet %s makes it from its %s template: it creates the claim again, empty, for its pod.", set.Name, t.Name))
+				}
+			}
+		}
+	}
+	return out
+}
+
+// claimExpandImpact says what growing a claim does (ST-18): whether its
+// class allows it, and when the filesystem follows.
+func claimExpandImpact(ctx context.Context, cs *clients, c *Command, pvc *corev1.PersistentVolumeClaim) []string {
+	id := pvc.Namespace + "/" + pvc.Name
+	want, err := ClaimSize(c.Flag("patch"))
+	if err != nil {
+		return []string{err.Error()}
+	}
+	have := pvc.Status.Capacity[corev1.ResourceStorage]
+	if req, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok && req.Cmp(have) > 0 {
+		have = req
+	}
+	if want.Cmp(have) <= 0 {
+		return []string{fmt.Sprintf("Claim %s has %s; a claim only grows, so the API server will refuse %s.", id, have.String(), want.String())}
+	}
+	out := []string{fmt.Sprintf("Grows claim %s from %s to %s.", id, have.String(), want.String())}
+	class := ""
+	if pvc.Spec.StorageClassName != nil {
+		class = *pvc.Spec.StorageClassName
+	}
+	if class == "" {
+		return append(out, "It has no class, so nothing grows its volume: the API server will refuse.")
+	}
+	sc, err := cs.cs.StorageV1().StorageClasses().Get(ctx, class, metav1.GetOptions{})
+	switch {
+	case err != nil:
+		out = append(out, fmt.Sprintf("Its class %s could not be read: whether it allows expansion is not known.", class))
+	case sc.AllowVolumeExpansion == nil || !*sc.AllowVolumeExpansion:
+		out = append(out, fmt.Sprintf("Its class %s does not allow expansion: the API server will refuse.", class))
+	default:
+		out = append(out, fmt.Sprintf("Its class %s allows expansion. %s grows the volume; the filesystem follows while the pod runs if the driver expands online, otherwise when the pod next starts. A volume never shrinks.", class, sc.Provisioner))
+	}
+	return out
+}
+
+// defaultClassImpact says what changing the default-class annotation does
+// (ST-18): claims that name no class get the default, and two defaults
+// leave Kubernetes to pick the newest.
+func defaultClassImpact(ctx context.Context, cs *clients, name string, changes []string) []string {
+	const key = "storageclass.kubernetes.io/is-default-class"
+	on, touched := false, false
+	for _, ch := range changes {
+		if k, v, ok := strings.Cut(ch, "="); ok && k == key {
+			on, touched = v == "true", true
+		} else if strings.TrimSuffix(ch, "-") == key {
+			touched = true
+		}
+	}
+	if !touched {
+		return nil
+	}
+	if !on {
+		return []string{fmt.Sprintf("%s is no longer the default class: new claims that name no class get none until another class is set as the default. Bound claims keep their class.", name)}
+	}
+	out := []string{fmt.Sprintf("%s becomes the default class: new claims that name no class get it. Bound claims keep their class.", name)}
+	if list, err := cs.cs.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{}); err == nil {
+		var others []string
+		for _, sc := range list.Items {
+			if sc.Name != name && (sc.Annotations[key] == "true" || sc.Annotations["storageclass.beta.kubernetes.io/is-default-class"] == "true") {
+				others = append(others, sc.Name)
+			}
+		}
+		if len(others) > 0 {
+			out = append(out, fmt.Sprintf("%s is the default too: with two, Kubernetes gives new claims the newest. Remove the default there first.", joinAnd(others)))
+		}
+	}
+	return out
+}
+
 func labelImpact(ctx context.Context, cs *clients, c *Command, t target, changes []string, annot bool) []string {
 	cur := t.obj.GetLabels()
 	word := "label"
@@ -752,6 +894,9 @@ func labelImpact(ctx context.Context, cs *clients, c *Command, t target, changes
 		}
 	}
 	out = append(out, t.title()+": "+strings.Join(diffs, "; ")+".")
+	if annot && t.kind == "StorageClass" {
+		return append(out, defaultClassImpact(ctx, cs, t.name, changes)...)
+	}
 	if annot {
 		return out
 	}
