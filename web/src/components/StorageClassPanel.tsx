@@ -216,7 +216,7 @@ export function StorageClassPanel({ name, now, onClose, onToast }: Props) {
                 {failing.map((p, i) => (
                   <span key={p.claim}>
                     {i > 0 && ', '}
-                    <a className="rk-mono" {...peekLink({ kind: 'claim', namespace: p.namespace!, name: p.claim! })}>
+                    <a className="rk-mono rk-st-a" {...peekLink({ kind: 'claim', namespace: p.namespace!, name: p.claim! })}>
                       {p.namespace}/{p.claim}
                     </a>
                   </span>

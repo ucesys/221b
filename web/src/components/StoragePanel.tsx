@@ -225,7 +225,7 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
     <>
       <DiskIcon />
       Volume claim in{' '}
-      <a className="rk-mono" href={href('namespaces', [ns])}>
+      <a className="rk-mono rk-st-a" href={href('namespaces', [ns])}>
         {ns}
       </a>
       {p.volume && p.state !== 'pending' ? (
@@ -233,7 +233,7 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
           {' '}
           · bound to{' '}
           {scope?.volumes ?? true ? (
-            <a className="rk-mono" {...peekLink({ kind: 'volume', name: p.volume })}>
+            <a className="rk-mono rk-st-a" {...peekLink({ kind: 'volume', name: p.volume })}>
               {p.volume}
             </a>
           ) : (
@@ -282,7 +282,7 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
         Class{' '}
         {p.class ? (
           data.class ? (
-            <a className="rk-mono" {...peekLink({ kind: 'class', name: p.class })}>
+            <a className="rk-mono rk-st-a" {...peekLink({ kind: 'class', name: p.class })}>
               {p.class}
             </a>
           ) : (
@@ -299,7 +299,7 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
         <span>
           {p.owner.kind}{' '}
           {p.owner.kind === 'StatefulSet' ? (
-            <a className="rk-mono" {...peekLink({ kind: 'object', type: 'StatefulSet', namespace: ns, name: p.owner.name })}>
+            <a className="rk-mono rk-st-a" {...peekLink({ kind: 'object', type: 'StatefulSet', namespace: ns, name: p.owner.name })}>
               {p.owner.name}
             </a>
           ) : (
@@ -312,7 +312,7 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
       {p.release && (
         <span>
           Release{' '}
-          <a className="rk-mono" href={href('helm', [ns, p.release])}>
+          <a className="rk-mono rk-st-a" href={href('helm', [ns, p.release])}>
             {p.release}
           </a>
         </span>
@@ -465,7 +465,7 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
                 {pods.map((x) => (
                   <tr key={x.name}>
                     <td>
-                      <a className="rk-mono" {...peekLink({ kind: 'pod', namespace: ns, name: x.name })}>
+                      <a className="rk-mono rk-st-a" {...peekLink({ kind: 'pod', namespace: ns, name: x.name })}>
                         {x.name}
                       </a>
                     </td>

@@ -128,6 +128,8 @@ button.rk-chip:hover{border-color:var(--line2);background:var(--sunken)}
 .rk-banner[data-tone=err]{background:var(--err-weak);color:var(--err)}
 .rk-banner[data-tone=warn]{background:var(--warn-weak);color:var(--warn)}
 .rk-banner-detail{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg2);font-size:12px}
+.rk-banner-title{font-weight:600;white-space:nowrap}
+@media (max-width:760px){.rk-banner-title{white-space:normal}}
 .rk-banner-cta{flex:none;font-weight:600;white-space:nowrap}
 .rk-banner:hover .rk-banner-cta{text-decoration:underline}
 .rk-frow{position:relative;display:flex;align-items:center;min-height:32px}
@@ -606,6 +608,7 @@ button.rk-gr:hover .rk-pname{color:var(--accent);text-decoration:underline}
 .rk-st-foot .rk-hint{flex:1 1 280px;min-width:0;font-size:11.5px;color:var(--fg3);line-height:1.45}
 .rk-st-intro{margin:0;font-size:12.5px;color:var(--fg3);line-height:1.5}
 .rk-st-intro b{color:var(--fg);font-weight:500}
+.rk-st-a,.rk-st-intro a,.rk-st-ev a{color:var(--accent);text-decoration:none}.rk-st-a:hover,.rk-st-intro a:hover,.rk-st-ev a:hover{text-decoration:underline}
 .rk-st-chips{display:flex;flex-wrap:wrap;gap:6px}
 .rk-st-chips .rk-btn{padding:3px 9px;font-size:11.5px;height:auto}
 .rk-btn[data-danger=true]{color:var(--err)}

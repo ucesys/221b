@@ -346,7 +346,7 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
             <tr key={k + '/' + y.name} className="rk-st-pod" data-testid="storage-pod">
               <td>
                 <span className="rk-st-elbow" />
-                <a className="rk-mono" {...peekLink({ kind: 'pod', namespace: x.namespace ?? '', name: y.name })}>
+                <a className="rk-mono rk-st-a" {...peekLink({ kind: 'pod', namespace: x.namespace ?? '', name: y.name })}>
                   {y.name}
                 </a>
               </td>

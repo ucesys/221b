@@ -240,7 +240,7 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
     <>
       <SideList label="Namespaces" title="Namespaces" query={listQuery} onQuery={setListQuery} placeholder="Filter namespaces" groups={groups} empty={loaded ? 'No namespaces match.' : 'Waiting for the first list…'} testId="namespace-list" foot={
         <>
-          Cluster-scoped objects such as nodes, persistent volumes, storage classes and cluster roles belong to no namespace; find nodes in the <a href={href('nodes')}>Nodes</a> tab, and volumes, claims and classes in the <a href={href('storage')}>Storage</a> tab.
+          Cluster-scoped objects such as nodes, persistent volumes, storage classes and cluster roles belong to no namespace; find nodes in the <a href={href('nodes')} style={{ color: 'var(--accent)' }}>Nodes</a> tab, and volumes, claims and classes in the <a href={href('storage')} style={{ color: 'var(--accent)' }}>Storage</a> tab.
         </>
       }
     />

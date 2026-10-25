@@ -84,7 +84,7 @@ export function Banners({ cluster, stream, now, summary, pageHref, accessError, 
       {list.map((b) => (
         <div key={b.title + b.detail} className="rk-banner" data-tone={b.tone} data-testid={b.testid}>
           {b.tone === 'err' ? <AlertIcon /> : <ClockIcon />}
-          <strong style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{b.title}</strong>
+          <strong className="rk-banner-title">{b.title}</strong>
           <span className={'rk-banner-detail' + (b.mono ? ' rk-mono' : '')} title={b.detail}>
             {b.items
               ? b.items.map((it, i) => (
