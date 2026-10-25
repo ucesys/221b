@@ -324,7 +324,7 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
       )}
       {data.alert && (
         <span>
-          Alert <a href={href('alerts', [], { q: p.claim })}>open on the Alerts tab</a>
+          Alert <a className="rk-st-a" href={href('alerts', [], { q: p.claim })}>open on the Alerts tab</a>
         </span>
       )}
     </>

@@ -88,7 +88,8 @@ for (const theme of ['light', 'dark'] as const) {
         await expect(page.getByTestId('storage-row').first()).toBeVisible({ timeout: 20_000 })
         expect(await violations(page), view).toEqual([])
       }
-      await page.getByTestId('storage-claim').first().click()
+      // A claim that needs attention: its drawer has the most to show, its alert link included.
+      await page.locator('[data-attention] [data-testid=storage-claim]').first().click()
       await expect(page.getByTestId('storage-chain')).toBeVisible()
       expect(await violations(page), 'claim drawer').toEqual([])
       await page.keyboard.press('Escape')
