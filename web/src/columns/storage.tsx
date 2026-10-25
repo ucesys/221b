@@ -81,9 +81,18 @@ export function viewColumns(all: ColumnDef<StoragePair>[], view: StorageView): C
     namespace: ['claim', 'status', 'capacity', 'used', 'access', 'class', 'volume', 'mounted', 'node', 'age', 'reclaim', 'mode', 'source', 'labels', 'release', 'binding'],
     all: ['volume', 'claim', 'class', 'status', 'capacity', 'used', 'access', 'reclaim', 'mounted', 'node', 'age', 'mode', 'source', 'labels', 'release', 'binding'],
   }
+  // By namespace takes the mockup's narrower widths, and All volumes, with
+  // a Class column too, narrower still, so each fits 1440 px.
+  const widths: Record<StorageView, Record<string, number>> = {
+    class: {},
+    namespace: { claim: 236, class: 110, volume: 196, mounted: 190 },
+    all: { claim: 226, class: 110, volume: 196, mounted: 190, status: 160, used: 150 },
+  }
   const byId = new Map(all.map((c) => [c.id, c]))
   return order[view].map((id) => {
-    const c = byId.get(id)!
+    let c = byId.get(id)!
+    const w = widths[view][id]
+    if (w) c = { ...c, width: `${w}px`, min: w }
     // Reclaim is optional in By namespace, where the mockup leaves it out.
     return view === 'namespace' && id === 'reclaim' ? { ...c, hiddenByDefault: true } : c
   })

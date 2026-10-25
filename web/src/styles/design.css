@@ -129,7 +129,7 @@ button.rk-chip:hover{border-color:var(--line2);background:var(--sunken)}
 .rk-banner[data-tone=warn]{background:var(--warn-weak);color:var(--warn)}
 .rk-banner-detail{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg2);font-size:12px}
 .rk-banner-title{font-weight:600;white-space:nowrap}
-@media (max-width:760px){.rk-banner-title{white-space:normal}}
+@media (max-width:760px){.rk-banner{flex-wrap:wrap;row-gap:2px}.rk-banner-title{white-space:normal;flex:1 1 0;min-width:0}.rk-banner-detail{order:3;flex-basis:100%}}
 .rk-banner-cta{flex:none;font-weight:600;white-space:nowrap}
 .rk-banner:hover .rk-banner-cta{text-decoration:underline}
 .rk-frow{position:relative;display:flex;align-items:center;min-height:32px}
