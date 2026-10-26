@@ -268,14 +268,40 @@ export function podLabel(r: PodView, open: boolean): string {
   return `${r.name} in ${r.namespace}, ${r.status}${r.restarts ? `, ${r.restarts} restarts` : ''}${r.node ? `, on ${r.node}` : ', not scheduled'}${open ? ' — details open, press to close' : ' — show details'}`
 }
 
-/** The status segments of the Pods tab: All, Running, Not ready, Pending, Failing, Completed. */
-export type PodStatusFilter = 'all' | 'running' | 'notready' | 'pending' | 'failing' | 'completed'
+/** The status segments of the Pods tab: All, Running, Not ready, Pending, Unknown, Failing, Completed. */
+export type PodStatusFilter = 'all' | 'running' | 'notready' | 'pending' | 'unknown' | 'failing' | 'completed'
+
+/** The segments in order, with their names. */
+export const POD_STATUSES: [PodStatusFilter, string][] = [
+  ['all', 'All'],
+  ['running', 'Running'],
+  ['notready', 'Not ready'],
+  ['pending', 'Pending'],
+  ['unknown', 'Unknown'],
+  ['failing', 'Failing'],
+  ['completed', 'Completed'],
+]
+
+/** A count of zero for each segment. */
+export function podStatusZero(all: number): Record<PodStatusFilter, number> {
+  return { all, running: 0, notready: 0, pending: 0, unknown: 0, failing: 0, completed: 0 }
+}
+
+/**
+ * The segments to show: All, those with pods, and the one selected even
+ * when its pods are gone, until another is chosen.
+ */
+export function podStatusesShown(counts: Record<PodStatusFilter, number>, selected: PodStatusFilter): [PodStatusFilter, string][] {
+  return POD_STATUSES.filter(([id]) => id === 'all' || id === selected || counts[id] > 0)
+}
 
 export function podStatusGroup(r: PodView): Exclude<PodStatusFilter, 'all'> {
   if (r.done) return 'completed'
+  // Its node stopped reporting: nobody knows how it is.
+  if (r.readyUnknown || r.status === 'Unknown') return 'unknown'
   if (r.tone === 'err') return 'failing'
   if (r.phase === 'Pending' || r.status === 'ContainerCreating' || r.status === 'PodInitializing' || r.status.startsWith('Init:')) return 'pending'
-  // Running but not ready: a readiness check fails, or its node stopped reporting.
+  // Running but not ready: a readiness check fails.
   if (r.tone === 'warn') return 'notready'
   return 'running'
 }

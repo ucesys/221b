@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { fmtTs } from '../lib/format'
 import type { PodView } from '../api/types'
 import { exportTable, sortRows, visibleColumns, defaultHidden } from '../lib/table'
-import { POD_COLUMNS, podStatusGroup, podTerms } from './pods'
+import { POD_COLUMNS, podStatusesShown, podStatusGroup, podStatusZero, podTerms } from './pods'
 
 const now = Date.parse('2026-10-13T12:00:00Z')
 
@@ -43,8 +43,16 @@ describe('pod columns', () => {
   it('groups statuses for the segments', () => {
     expect(rows.map(podStatusGroup)).toEqual(['running', 'failing', 'completed', 'pending'])
     expect(podStatusGroup(pod('x', { status: 'Init:1/2', phase: 'Pending' }))).toBe('pending')
-    // Running but not ready, as on a node that stopped reporting: apart from running, as the home page counts it.
+    // Running but not ready: apart from running, as the home page counts it.
     expect(podStatusGroup(pod('x', { status: 'Running', tone: 'warn' }))).toBe('notready')
+    // On a node that stopped reporting: unknown, not failing.
+    expect(podStatusGroup(pod('x', { status: 'Unknown', tone: 'err', readyUnknown: true }))).toBe('unknown')
+  })
+
+  it('shows the segments with pods, and the selected one until another is chosen', () => {
+    const counts = { ...podStatusZero(3), running: 2, unknown: 1 }
+    expect(podStatusesShown(counts, 'all').map(([id]) => id)).toEqual(['all', 'running', 'unknown'])
+    expect(podStatusesShown({ ...counts, unknown: 0 }, 'unknown').map(([id]) => id)).toEqual(['all', 'running', 'unknown'])
   })
 
   it('sorts failing pods first and missing usage last', () => {

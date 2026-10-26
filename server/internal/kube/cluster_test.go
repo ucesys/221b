@@ -313,3 +313,29 @@ func TestNotifiesNodeChanges(t *testing.T) {
 		}
 	}
 }
+
+func TestANodeThatStopsReportingRebuildsItsPods(t *testing.T) {
+	cl, srv, changes := start(t, sim.Options{Nodes: 2, Pods: 12})
+	pods := cl.PodsOn("worker-001")
+	if len(pods) == 0 {
+		t.Fatal("no pods on worker-001")
+	}
+	want := pods[0].Namespace + "/" + pods[0].Name
+	for len(changes) > 0 {
+		<-changes
+	}
+	post(t, srv.URL+"/sim/nodes/worker-001/ready?status=Unknown")
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case c := <-changes:
+			for _, k := range c.Views["pods"] {
+				if k == want {
+					return
+				}
+			}
+		case <-deadline:
+			t.Fatalf("no change for pod %s", want)
+		}
+	}
+}
