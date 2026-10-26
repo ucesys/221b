@@ -6,7 +6,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Added
 
-- **Storage tab.** Storage classes, persistent volumes and claims, and the pods that mount them, as one tree: by class, by namespace or all volumes, with how full each volume is (from the kubelets), a Needs attention filter, and a drawer that traces a claim from its class to its node and says where it breaks. A class has a drawer of its own. Expand a claim, delete a claim, and set or remove the default class through Watson, each after an approval. People bound to namespaces see their claims only. Alerts, the pod drawer and the banner link to it. Full Admin gains `delete` on claims, and the chart's ClusterRole reads VolumeAttachments.
+- **Storage tab.** Storage classes, persistent volumes and claims, and the pods that mount them, in one table beside a filter sidebar by namespace, node and storage class, as on the Pods tab, with how full each volume is (from the kubelets), a Needs attention filter, and a drawer that traces a claim from its class to its node and says where it breaks. A class has a drawer of its own. Expand a claim, delete a claim, and set or remove the default class through Watson, each after an approval. People bound to namespaces see their claims only. Alerts, the pod drawer and the banner link to it. Full Admin gains `delete` on claims, and the chart's ClusterRole reads VolumeAttachments.
 
 ### Changed
 
