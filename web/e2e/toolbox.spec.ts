@@ -1,7 +1,9 @@
 // The Toolbox (Phase 9): the Tools button beside a pod or a node opens a
-// menu of tools; each opens a dialog whose request becomes a Watson card,
-// and once approved a session opens as a tab in the dock. Against the
-// simulator, exec is a pretend shell; port forwards are not simulated.
+// menu of tools; each opens a dialog, and sending it opens a session as a
+// tab in the dock: the person's own dialog is the approval, and only a
+// second person's goes through Watson. The menu's fixed changes (Cordon,
+// Drain, Delete) run at once. Against the simulator, exec is a pretend
+// shell; port forwards are not simulated.
 import { expect, test } from './test'
 import { inKind } from './cluster'
 
@@ -22,7 +24,7 @@ test.beforeAll(async ({ browser }) => {
   await page.close()
 })
 
-test('a shell opens through a Watson card and runs in the dock', async ({ page }) => {
+test('a shell opens from its dialog and runs in the dock', async ({ page }) => {
   test.skip(inKind, 'the pretend shell is the simulator’s')
   await page.goto('/#/pods', { waitUntil: 'domcontentloaded' })
   const row = page.locator('[data-testid^="tools-pod-"]').first()
@@ -37,17 +39,12 @@ test('a shell opens through a Watson card and runs in the dock', async ({ page }
   const dlg = page.getByTestId('tool-dialog')
   await expect(dlg).toBeVisible()
   await expect(dlg.getByRole('heading')).toContainText('Shell in pod')
-  // Not production: no reason, no approval note.
+  // Not production: no reason, no approval note, no card.
   await expect(dlg.getByLabel('Reason')).toHaveCount(0)
+  await expect(dlg.getByTestId('tool-send')).toHaveText('Open shell')
   if (shots) await page.screenshot({ path: `${shots}/shell-dialog.png` })
   await dlg.getByTestId('tool-send').click()
   await expect(dlg).toHaveCount(0)
-
-  const card = page.getByTestId('watson-card').filter({ hasText: 'Opens a session' }).last()
-  await expect(card).toBeVisible({ timeout: 20_000 })
-  await expect(card.getByTestId('watson-approve')).toBeEnabled({ timeout: 30_000 })
-  if (shots) await page.screenshot({ path: `${shots}/shell-card.png` })
-  await card.getByTestId('watson-approve').click()
 
   const term = page.getByTestId('session-terminal')
   await expect(term).toBeVisible({ timeout: 20_000 })
@@ -69,30 +66,49 @@ test('a shell opens through a Watson card and runs in the dock', async ({ page }
   await expect(page.getByTestId('session-pane')).toContainText(/Ended by its owner|ended/i, { timeout: 10_000 })
 })
 
-test('a node’s menu runs one command on it through Watson', async ({ page }) => {
-  test.skip(inKind, 'the canned output is the simulator’s')
-  await page.goto('/#/nodes', { waitUntil: 'domcontentloaded' })
-  const btn = page.locator('[data-testid^="tools-node-"]').nth(3)
+test('the pod menu: tools, a port forward with the pod’s ports, and Delete', async ({ page }) => {
+  await page.goto('/#/pods', { waitUntil: 'domcontentloaded' })
+  const btn = page.locator('[data-testid^="tools-pod-"]').first()
   await expect(btn).toBeAttached({ timeout: 20_000 })
   await btn.hover()
   await btn.click()
   const menu = page.getByTestId('tools-menu')
-  await expect(menu.getByTestId('tool-node-command')).not.toHaveAttribute('aria-disabled', 'true', { timeout: 10_000 })
-  await menu.getByTestId('tool-node-command').hover()
-  if (shots) await page.screenshot({ path: `${shots}/node-menu.png` })
-  await menu.getByRole('menuitem', { name: /^df -h/ }).click()
+  await expect(menu.getByTestId('tool-shell')).not.toHaveAttribute('aria-disabled', 'true', { timeout: 10_000 })
+  await expect(menu.getByRole('menuitem')).toHaveText([/^Shell/, /^Port forward/, /^Debug container/, /^Delete/])
+  await expect(menu).not.toContainText('Watson')
+  await menu.getByTestId('tool-forward').click()
   const dlg = page.getByTestId('tool-dialog')
-  await expect(dlg).toBeVisible()
-  await expect(dlg.getByRole('textbox', { name: 'Command' })).toHaveValue(/^df -h/)
-  // A node command needs a second SuperAdmin on every cluster: a reason too.
-  await dlg.getByLabel('Reason').fill('Disk pressure warnings on this node since 09:40')
-  if (shots) await page.screenshot({ path: `${shots}/node-command-dialog.png` })
-  await dlg.getByTestId('tool-send').click()
-  const card = page.getByTestId('watson-card').filter({ hasText: 'Opens a session' }).last()
-  await expect(card).toBeVisible({ timeout: 20_000 })
-  await expect(card).toContainText('df -h')
-  if (shots) await page.screenshot({ path: `${shots}/node-card.png` })
-  // Leave Watson as it was for the specs after this one.
-  await card.getByTestId('watson-discard').click()
-  await expect(card).toHaveCount(0)
+  await expect(dlg.getByRole('heading')).toContainText('Port forward from pod')
+  await dlg.getByRole('button', { name: 'Cancel' }).click()
+  await expect(dlg).toHaveCount(0)
+
+  await btn.click()
+  await menu.getByTestId('tool-delete').click()
+  const confirm = page.getByTestId('confirm')
+  await expect(confirm).toContainText('Delete pod')
+  // Focus starts on Cancel, so Enter never deletes by accident.
+  await expect(confirm.getByRole('button', { name: 'Cancel' })).toBeFocused()
+  await confirm.getByRole('button', { name: 'Cancel' }).click()
+  await expect(confirm).toHaveCount(0)
+})
+
+test('a node’s menu cordons it at once, without a card to approve', async ({ page }) => {
+  await page.goto('/#/nodes', { waitUntil: 'domcontentloaded' })
+  const btn = page.locator('[data-testid^="tools-node-"]').nth(3)
+  await expect(btn).toBeAttached({ timeout: 20_000 })
+  const node = ((await btn.getAttribute('data-testid')) ?? '').replace('tools-node-', '')
+  await btn.hover()
+  await btn.click()
+  const menu = page.getByTestId('tools-menu')
+  await expect(menu.getByTestId('tool-node-shell')).toBeVisible()
+  await expect(menu.getByTestId('tool-node-command')).toHaveCount(0)
+  if (shots) await page.screenshot({ path: `${shots}/node-menu.png` })
+  const cordon = menu.getByTestId('tool-cordon')
+  const undo = (await cordon.textContent())?.startsWith('Uncordon') ? 'cordon' : 'uncordon'
+  await cordon.click()
+  await expect(page.getByText(new RegExp(`(Cordoning|Uncordoning) node ${node}`))).toBeVisible({ timeout: 10_000 })
+  // Put the node back as it was, the same way.
+  const back = await page.request.post('/api/v1/watson/actions', { data: { action: undo, node }, headers: SAME })
+  expect(back.status(), await back.text()).toBe(202)
+  expect((await back.json()).status).not.toBe('pending')
 })

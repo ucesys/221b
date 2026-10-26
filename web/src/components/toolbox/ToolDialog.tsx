@@ -10,16 +10,15 @@ interface Props {
   clusterName: string
   open: OpenTool
   onClose: () => void
-  /** The card is in Watson: the dock shows it. */
-  onSent: (summary: string) => void
+  /** The session opened, or its card waits in Watson for a second person. */
+  onSent: (r: { opened?: string; summary: string }) => void
 }
 
 const DURATIONS = [15, 30, 60]
 
 const PROFILE_WORDS: Record<string, string> = {
-  general: 'Every capability the image asks for',
-  baseline: 'What Pod Security baseline allows: the image’s capabilities that baseline admits',
-  restricted: 'Non-root, no added capability: what a restricted namespace admits',
+  general: 'Runs as the image’s own user, as capable as the namespace allows',
+  restricted: 'Runs as non-root (user 65532) and can’t escalate',
   netadmin: 'NET_ADMIN and NET_RAW, for tcpdump and iptables',
   sysadmin: 'Privileged',
 }
@@ -32,8 +31,9 @@ const NODE_PROFILES: Record<string, { title: string; words: string }> = {
 
 /**
  * A tool's dialog (TB-06): what to open, for how long, and on production
- * or for a node why (TB-33). Sending makes a Watson card (TB-36); nothing
- * opens until it is approved.
+ * or for a node why (TB-33). Sending opens the session: the person filled
+ * it in, so it needs no other approval, unless a second person's is
+ * required, when it becomes a Watson card (TB-36).
  */
 export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Props) {
   const { tool, pod: podRef, node } = open
@@ -95,12 +95,13 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   const containerV = container || containers[0]?.name || ''
   const targetV = target || containers[0]?.name || ''
   const imageV = image || (tool === 'debug-container' ? pick(info?.debugContainerImages) : tool === 'debug-pod' ? pick(info?.debugPodProfiles) : '')
-  const profileV = profile || (tool === 'node-shell' ? (info?.nodeProfiles[0] ?? 'general') : tool === 'debug-container' ? (level === 'restricted' ? 'restricted' : 'baseline') : '')
+  const profileV = profile || (tool === 'node-shell' ? (info?.nodeProfiles[0] ?? 'general') : tool === 'debug-container' ? (level === 'restricted' ? 'restricted' : 'general') : '')
   const minutesV = info ? Math.min(minutes, info.maxMinutes) : minutes
 
   const needsTwo = (tool === 'node-shell' || tool === 'node-command') && info?.nodeApproval === 'always'
   const askReason = !!info && (info.twoPerson || needsTwo)
   const interactive = tool !== 'command' && tool !== 'node-command'
+  const approvers = !!info?.twoPerson || needsTwo
 
   const request = (): ToolRequest => {
     const r: ToolRequest = { tool, reason: reason.trim() || undefined, minutes: interactive ? minutesV : undefined }
@@ -143,11 +144,16 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
     requestSession(cluster, request(), open.from ?? 'Tools menu').then(
       (it) => {
         setBusy(false)
+        if (it.opened) {
+          onSent({ opened: it.opened.id, summary: it.opened.summary })
+          onClose()
+          return
+        }
         if (it.status === 'refused') {
           setErr(it.reason || 'Watson refused it.')
           return
         }
-        onSent(it.command.replace(/^session: /, ''))
+        onSent({ summary: it.command.replace(/^session: /, '') })
         onClose()
       },
       (e: unknown) => {
@@ -167,7 +173,9 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
     'node-shell': <>Node shell on <span className="rk-mono">{node}</span></>,
     'node-command': <>Run a command on node <span className="rk-mono">{node}</span></>,
   }[tool]
-  const verb = { shell: 'Request shell', command: 'Request command', forward: 'Request forward', 'debug-container': 'Request debug container', 'debug-pod': 'Request debug pod', 'node-shell': 'Request node shell', 'node-command': 'Request command' }[tool]
+  const verb = approvers
+    ? { shell: 'Request shell', command: 'Request command', forward: 'Request forward', 'debug-container': 'Request debug container', 'debug-pod': 'Request debug pod', 'node-shell': 'Request node shell', 'node-command': 'Request command' }[tool]
+    : { shell: 'Open shell', command: 'Run', forward: 'Start forward', 'debug-container': 'Attach and open shell', 'debug-pod': 'Start debug pod', 'node-shell': 'Open node shell', 'node-command': 'Run' }[tool]
   const durationField = interactive && info && (
     <label className="tb-lbl" style={{ flex: '0 0 auto' }}>
       <span>For how long</span>
@@ -282,14 +290,14 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
             </div>
           )}
           <p className="tb-hint" style={{ margin: 0 }}>
-            Once approved, the dock shows one command to run on your computer: the <span className="rk-mono">221b</span> command{info?.cliMinVersion ? ` (${info.cliMinVersion} or newer)` : ''} listens on the local port, and any program there reaches the pod through the console. It ends after {Math.round((info?.idleSeconds ?? 600) / 60)} min without traffic.
+            The dock then shows one command to run on your computer: the <span className="rk-mono">221b</span> command{info?.cliMinVersion ? ` (${info.cliMinVersion} or newer)` : ''} listens on the local port, and any program there reaches the pod through the console. It ends after {Math.round((info?.idleSeconds ?? 600) / 60)} min without traffic.
           </p>
         </>
       )
       break
     }
     case 'debug-container': {
-      const allowed = level === 'restricted' ? ['restricted'] : level === 'baseline' ? ['baseline', 'restricted'] : ['general', 'baseline', 'restricted']
+      const allowed = level === 'restricted' ? ['restricted'] : ['general', 'restricted']
       body = (
         <>
           <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
@@ -430,7 +438,6 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   }
 
   const idleMin = Math.round((info?.idleSeconds ?? 600) / 60)
-  const approvers = info?.twoPerson || needsTwo
   return (
     <div className="tb-dlg-wrap">
       <button className="tb-dlg-bd" aria-label="Cancel" tabIndex={-1} onClick={onClose} />
@@ -515,7 +522,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
           )}
         </div>
         <div className="tb-dlg-foot">
-          <span className="tb-hint">{interactive ? 'The card goes to Watson; once approved, the session opens as a tab in the dock.' : 'The card goes to Watson; once approved, the output shows in the dock.'}</span>
+          <span className="tb-hint" />
           <button className="rk-btn" onClick={onClose} disabled={busy}>
             Cancel
           </button>

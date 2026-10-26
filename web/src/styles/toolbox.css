@@ -2,7 +2,7 @@
    dock's session tabs and panes, after docs/design/toolbox. */
 
 /* The Tools button beside a pod's or a node's name. */
-.tb-namecell{display:flex;align-items:center;gap:4px;min-width:0;max-width:100%}
+.tb-namecell{display:flex;align-items:center;gap:4px;min-width:0;width:100%}
 .tb-namecell>.rk-namecopy{flex:0 1 auto;min-width:0}
 .tb-tools{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;margin-left:auto;flex:none;border:0;border-radius:6px;background:transparent;color:var(--fg3);opacity:.45;padding:0}
 [role=row]:hover .tb-tools,tr:hover .tb-tools,.tb-tools:focus-visible,.tb-tools:hover{opacity:1}
@@ -11,7 +11,6 @@
 
 /* The menu and its flyouts. */
 .tb-menu{position:fixed;z-index:70;min-width:280px;max-width:min(440px,calc(100vw - 16px));padding:6px;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:1px}
-.tb-menu[data-sub=true]{min-width:300px}
 .tb-mhead{padding:5px 10px 7px;font-size:11px;color:var(--fg3);display:flex;gap:6px;align-items:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tb-mhead .rk-mono{color:var(--fg2)}
 .tb-mi{display:flex;align-items:center;gap:10px;min-height:32px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--fg);font-size:12.5px;font-weight:500;text-align:left;width:100%;white-space:nowrap}
@@ -19,6 +18,7 @@
 .tb-mi>svg{color:var(--fg3);flex:none}
 .tb-mi .tb-mh{margin-left:auto;font-size:11.5px;font-weight:400;color:var(--fg3);display:inline-flex;gap:8px;align-items:center;padding-left:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60%}
 .tb-mi[aria-disabled=true]{color:var(--fg3);font-weight:400;cursor:default}
+.tb-mi[data-danger=true]:not([aria-disabled=true]),.tb-mi[data-danger=true]:not([aria-disabled=true])>svg{color:var(--err)}
 .tb-mi[aria-disabled=true]:hover{background:transparent}
 .tb-mi .rk-mono{font-size:12px}
 .tb-msep{height:1px;background:var(--line);margin:5px 4px}
@@ -71,6 +71,13 @@
 .tb-ttl{font-family:var(--mono);font-size:11px;color:var(--fg3);background:var(--sunken);border-radius:4px;padding:0 5px;line-height:16px}
 .tb-x{display:inline-flex;width:24px;height:24px;align-items:center;justify-content:center;border-radius:4px;color:var(--fg3);border:0;background:transparent;padding:0}
 .tb-x:hover{background:var(--sunken);color:var(--fg)}
+/* A session's tab and its × read as one tab. */
+.tb-sgroup{display:inline-flex;align-items:center;flex:none;padding-right:5px;box-shadow:inset 0 -2px 0 transparent}
+.tb-sgroup>.tb-stab{align-self:stretch;padding-right:5px}
+.tb-sgroup:hover>.tb-stab{color:var(--fg)}
+.tb-sgroup[data-current=true]{background:var(--surface);box-shadow:inset 0 -2px 0 var(--accent)}
+.tb-sgroup[data-current=true]>.tb-stab{background:transparent;box-shadow:none}
+.tb-sgroup>.tb-x{width:20px;height:20px}
 .tb-ssep{width:1px;background:var(--line);margin:9px 6px;flex:none}
 .tb-strip-right{margin-left:auto;display:flex;align-items:center;gap:2px;flex:none;padding-left:8px}
 .tb-strip-right .rk-icon-btn{width:30px;height:30px}

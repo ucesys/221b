@@ -206,8 +206,17 @@ export function fetchToolbox(cluster: string, namespaces: string[] = [], nodes =
   return info
 }
 
-/** Sends a dialog's request to Watson as a card (TB-36). */
-export const requestSession = (cluster: string, req: ToolRequest, from = '') => call<WatsonItem>('POST', apiPath('watson/sessions', cluster), { ...req, from })
+/**
+ * Sends a dialog's request: the session opens at once (opened), or where a
+ * second person must approve it, it becomes a Watson card (TB-36).
+ */
+export const requestSession = (cluster: string, req: ToolRequest, from = '') => call<WatsonItem & { opened?: SessionView }>('POST', apiPath('watson/sessions', cluster), { ...req, from })
+
+/** A Tools menu's fixed change: the server writes the command from it. */
+export type ToolAction = { action: 'cordon' | 'uncordon' | 'drain'; node: string } | { action: 'delete-pod'; namespace: string; pod: string }
+
+/** Runs a fixed change as the person, at once unless a second person must approve; Watson shows it. */
+export const runToolAction = (cluster: string, a: ToolAction) => call<WatsonItem>('POST', apiPath('watson/actions', cluster), a)
 export const endSession = (cluster: string, id: string, reason = '') => call<SessionView>('POST', apiPath(`sessions/${encodeURIComponent(id)}/end`, cluster), { reason })
 export const keepSession = (cluster: string, id: string) => call<SessionView>('POST', apiPath(`sessions/${encodeURIComponent(id)}/keep`, cluster), {})
 export const extendSession = (cluster: string, id: string) => call<SessionView>('POST', apiPath(`sessions/${encodeURIComponent(id)}/extend`, cluster), {})

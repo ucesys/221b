@@ -246,7 +246,7 @@ export function AdminToolbox({ route, cluster }: AdminProps) {
         </div>
         <div className="tb-stat">
           <span>Approval</span>
-          <b style={{ fontSize: 13 }}>{info.twoPerson ? 'a second person' : 'self-approval'}</b>
+          <b style={{ fontSize: 13 }}>{info.twoPerson ? 'a second person' : 'none: the person sends the dialog'}</b>
         </div>
         <div className="tb-stat">
           <span>Node tools</span>

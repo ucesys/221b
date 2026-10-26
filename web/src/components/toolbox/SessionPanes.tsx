@@ -207,7 +207,7 @@ function ForwardBody({ s, now }: { s: SessionView; now: number }) {
   return (
     <div className="tb-pane-body">
       <div className="rk-steps">
-        <span data-status="done">✓ Approved{s.approver ? ` by ${s.approver}` : ''}</span>
+        {s.approver && <span data-status="done">✓ Approved by {s.approver}</span>}
         <span data-status={connected ? 'done' : s.state === 'ended' ? undefined : 'now'}>{connected ? `✓ 221b connected from ${f!.cli}` : '● Run the command on your computer'}</span>
         {connected && f?.listen && <span data-status="done">✓ Listening on {f.listen}: point any program there</span>}
       </div>

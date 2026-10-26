@@ -1,20 +1,31 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
-import { fetchToolbox, type ToolboxInfo, type ToolName } from '../../api/toolbox'
+import { fetchToolbox, type ToolAction, type ToolboxInfo, type ToolName } from '../../api/toolbox'
 import type { PodDetails } from '../../api/types'
 import { apiPath } from '../../lib/router'
-import { BoltIcon, BoxIcon, ChevronRightIcon, CordonIcon, DrainIcon, ForwardIcon, TerminalIcon, WrenchIcon } from '../Icons'
+import { ConfirmDialog } from '../ConfirmDialog'
+import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
 import { useToolbox, type ToolboxApi } from './context'
 
 export type ToolsTarget = { kind: 'pod'; name: string; namespace: string } | { kind: 'node'; name: string; cordoned?: boolean; role?: string }
 
+/** A change the menu asks about before making it: Drain, Delete. */
+interface Confirm {
+  title: string
+  body: ReactNode
+  confirm: string
+  action: ToolAction
+  what: string
+}
+
 /**
  * The Tools button beside a pod's or a node's name (TB-01): a menu of the
- * tools, each opening its dialog; nothing else is in it. Each item says why
- * when it cannot be used, as the server would refuse it (TB-05).
+ * tools, each opening its dialog, and the row's fixed changes. Each item
+ * says why when it cannot be used, as the server would refuse it (TB-05).
  */
 export function ToolsButton({ target }: { target: ToolsTarget }) {
   const tb = useToolbox()
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+  const [confirm, setConfirm] = useState<Confirm | null>(null)
   const open = anchor !== null
   if (!tb) return null
   const what = target.kind === 'pod' ? `pod ${target.name}` : `node ${target.name}`
@@ -37,7 +48,21 @@ export function ToolsButton({ target }: { target: ToolsTarget }) {
       >
         <WrenchIcon />
       </button>
-      {open && <ToolsMenu tb={tb} target={target} anchor={anchor} onClose={() => setAnchor(null)} />}
+      {open && <ToolsMenu tb={tb} target={target} anchor={anchor} onClose={() => setAnchor(null)} onConfirm={setConfirm} />}
+      {confirm && (
+        <ConfirmDialog
+          title={confirm.title}
+          confirm={confirm.confirm}
+          danger
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => {
+            setConfirm(null)
+            tb.action(confirm.action, confirm.what)
+          }}
+        >
+          {confirm.body}
+        </ConfirmDialog>
+      )}
     </>
   )
 }
@@ -66,17 +91,15 @@ interface Item {
   label: string
   hint?: ReactNode
   off?: string
-  sub?: { label: string; hint?: string; run: () => void }[]
-  subHead?: ReactNode
-  run?: () => void
+  run: () => void
+  danger?: boolean
   sepBefore?: boolean
 }
 
-function ToolsMenu({ tb, target, anchor, onClose }: { tb: ToolboxApi; target: ToolsTarget; anchor: HTMLElement | null; onClose: () => void }) {
+function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi; target: ToolsTarget; anchor: HTMLElement | null; onClose: () => void; onConfirm: (c: Confirm) => void }) {
   const [info, setInfo] = useState<ToolboxInfo | null>(null)
   const [err, setErr] = useState('')
   const [pod, setPod] = useState<PodDetails | null>(null)
-  const [sub, setSub] = useState('')
   const menu = useRef<HTMLDivElement>(null)
   const [style] = useState(() => place(anchor))
 
@@ -134,61 +157,68 @@ function ToolsMenu({ tb, target, anchor, onClose }: { tb: ToolboxApi; target: To
 
   let items: Item[]
   if (target.kind === 'pod') {
-    const ports = (pod?.containers ?? []).filter((c) => !c.init).flatMap((c) => c.ports.filter((p) => p.protocol === 'TCP').map((p) => ({ c: c.name, p })))
+    const ports = (pod?.containers ?? []).filter((c) => !c.init).flatMap((c) => c.ports.filter((p) => p.protocol === 'TCP').map((p) => p.port))
     const images = info?.debugContainerImages.map((n) => info.images.find((i) => i.name === n)?.image.split('/').pop()?.split(':')[0] ?? n).join(', ')
     items = [
       { key: 'shell', icon: <TerminalIcon />, label: 'Shell…', hint: pod ? `${pod.containers.find((c) => !c.init)?.name ?? ''}` : undefined, off: why('shell'), run: () => open('shell') },
-      { key: 'command', icon: <BoltIcon />, label: 'Run a command…', hint: 'output in the dock', off: why('command'), run: () => open('command') },
-      {
-        key: 'forward',
-        icon: <ForwardIcon />,
-        label: 'Port forward',
-        hint: ports.length ? `${ports.length} port${ports.length === 1 ? '' : 's'}` : undefined,
-        off: why('forward'),
-        subHead: 'Forward to your computer',
-        sub: [
-          ...ports.map(({ c, p }) => ({ label: `${p.port}/TCP${p.name ? '  ' + p.name : ''}`, hint: `container ${c}`, run: () => open('forward', { port: p.port, localPort: p.port }) })),
-          { label: 'Another port…', run: () => open('forward') },
-        ],
-      },
+      // The dialog lists the pod's ports; the first is chosen.
+      { key: 'forward', icon: <ForwardIcon />, label: 'Port forward…', hint: ports.length ? `${ports.length} port${ports.length === 1 ? '' : 's'}` : undefined, off: why('forward'), run: () => open('forward', ports.length ? { port: ports[0], localPort: ports[0] } : {}) },
       { key: 'debug-container', icon: <BoxIcon />, label: 'Debug container…', hint: images, off: why('debug-container'), run: () => open('debug-container') },
+      {
+        key: 'delete',
+        icon: <TrashIcon />,
+        label: 'Delete…',
+        sepBefore: true,
+        danger: true,
+        run: () => {
+          onClose()
+          onConfirm({
+            title: `Delete pod ${target.name}?`,
+            confirm: 'Delete pod',
+            action: { action: 'delete-pod', namespace: target.namespace, pod: target.name },
+            what: `pod ${target.name}`,
+            body: (
+              <p style={{ margin: 0 }}>
+                In <span className="rk-mono">{target.namespace}</span>. Its controller, if it has one, starts a new pod in its place; a pod without one is gone. Kubernetes decides, as you.
+              </p>
+            ),
+          })
+        },
+      },
     ]
   } else {
-    const cmds = info?.nodeCommands ?? []
     items = [
       { key: 'node-shell', icon: <TerminalIcon />, label: 'Node shell…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('node-shell'), run: () => open('node-shell') },
-      {
-        key: 'node-command',
-        icon: <BoltIcon />,
-        label: 'Run a command',
-        off: why('node-command'),
-        subHead: (
-          <>
-            One command on <span className="rk-mono">{target.name}</span> · each is its own Watson card
-          </>
-        ),
-        sub: [...cmds.map((c) => ({ label: c, run: () => open('node-command', { command: c }) })), { label: 'Another command…', run: () => open('node-command') }],
-      },
       { key: 'debug-pod', icon: <BoxIcon />, label: 'Debug pod on this node…', off: why('debug-pod'), run: () => open('debug-pod') },
       {
         key: 'cordon',
         icon: <CordonIcon />,
-        label: target.cordoned ? 'Uncordon…' : 'Cordon…',
-        hint: 'Watson card',
+        label: target.cordoned ? 'Uncordon' : 'Cordon',
+        hint: target.cordoned ? 'take new pods again' : 'no new pods',
         sepBefore: true,
         run: () => {
           onClose()
-          tb.watson(`kubectl ${target.cordoned ? 'uncordon' : 'cordon'} ${target.name}`, 'Tools menu')
+          tb.action({ action: target.cordoned ? 'uncordon' : 'cordon', node: target.name }, `node ${target.name}`)
         },
       },
       {
         key: 'drain',
         icon: <DrainIcon />,
         label: 'Drain…',
-        hint: 'Watson card',
+        danger: true,
         run: () => {
           onClose()
-          tb.watson(`kubectl drain ${target.name} --ignore-daemonsets --delete-emptydir-data`, 'Tools menu')
+          onConfirm({
+            title: `Drain node ${target.name}?`,
+            confirm: 'Drain node',
+            action: { action: 'drain', node: target.name },
+            what: `node ${target.name}`,
+            body: (
+              <p style={{ margin: 0 }}>
+                Cordons the node, then evicts every pod on it except DaemonSets’; data in their emptyDir volumes is lost. A PodDisruptionBudget can hold it up. Watson shows its progress.
+              </p>
+            ),
+          })
         },
       },
     ]
@@ -197,11 +227,8 @@ function ToolsMenu({ tb, target, anchor, onClose }: { tb: ToolboxApi; target: To
   const keys = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Escape') {
       e.stopPropagation()
-      if (sub) setSub('')
-      else {
-        onClose()
-        anchor?.focus()
-      }
+      onClose()
+      anchor?.focus()
       return
     }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
@@ -211,7 +238,6 @@ function ToolsMenu({ tb, target, anchor, onClose }: { tb: ToolboxApi; target: To
     all[(i + (e.key === 'ArrowDown' ? 1 : all.length - 1)) % all.length]?.focus()
   }
 
-  const subItem = items.find((x) => x.key === sub)
   const head =
     target.kind === 'pod' ? (
       <>
@@ -243,56 +269,21 @@ function ToolsMenu({ tb, target, anchor, onClose }: { tb: ToolboxApi; target: To
                 role="menuitem"
                 className="tb-mi"
                 aria-disabled={!info || it.off ? true : undefined}
-                aria-haspopup={it.sub ? 'menu' : undefined}
-                aria-expanded={it.sub ? sub === it.key : undefined}
-                data-active={sub === it.key}
+                data-danger={it.danger || undefined}
                 title={it.off ? `${it.label.replace('…', '')}: ${it.off}` : undefined}
                 onClick={() => {
                   if (!info || it.off) return
-                  if (it.sub) setSub(sub === it.key ? '' : it.key)
-                  else it.run?.()
-                }}
-                onMouseEnter={() => it.sub && !it.off && info && setSub(it.key)}
-                onKeyDown={(e) => {
-                  if (e.key === 'ArrowRight' && it.sub && !it.off) {
-                    setSub(it.key)
-                    setTimeout(() => menu.current?.querySelector<HTMLElement>('[data-sub=true] [role=menuitem]')?.focus(), 0)
-                  }
+                  it.run()
                 }}
                 data-testid={`tool-${it.key}`}
               >
                 {it.icon}
                 {it.label}
-                <span className="tb-mh">
-                  {it.off ? it.off : it.hint}
-                  {it.sub && <ChevronRightIcon />}
-                </span>
+                <span className="tb-mh">{it.off ? it.off : it.hint}</span>
               </button>
             </div>
           ))}
-          <div className="tb-msep" role="separator" />
-          <p className="tb-mnote">Every item makes a Watson card; sessions open in the dock.</p>
         </>
-      )}
-      {subItem?.sub && (
-        <div className="tb-menu" data-sub="true" role="menu" aria-label={subItem.label} style={{ position: 'absolute', top: 40, left: 'calc(100% - 8px)' }} onMouseLeave={() => setSub('')}>
-          {subItem.subHead && <div className="tb-mhead">{subItem.subHead}</div>}
-          {subItem.sub.map((s, i) => (
-            <button
-              key={s.label}
-              role="menuitem"
-              className="tb-mi"
-              onClick={s.run}
-              onKeyDown={(e) => {
-                if (e.key === 'ArrowLeft') setSub('')
-              }}
-              style={i === subItem.sub!.length - 1 && subItem.sub!.length > 1 ? { borderTop: '1px solid var(--line)', borderRadius: 0, marginTop: 4, paddingTop: 4 } : undefined}
-            >
-              <span className={i < subItem.sub!.length - 1 ? 'rk-mono' : undefined}>{s.label}</span>
-              {s.hint && <span className="tb-mh">{s.hint}</span>}
-            </button>
-          ))}
-        </div>
       )}
     </div>
   )

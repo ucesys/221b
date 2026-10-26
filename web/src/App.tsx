@@ -40,7 +40,7 @@ import type { ToolName } from './api/toolbox'
 import { ViewAnnouncer } from './components/ViewAnnouncer'
 import { AssistantWindow } from './components/AssistantWindow'
 import { readJSON, writeJSON } from './lib/storage'
-import { useSessions } from './api/toolbox'
+import { runToolAction, useSessions } from './api/toolbox'
 import { ToolboxContext, type OpenTool, type ToolboxApi } from './components/toolbox/context'
 import { ToolDialog } from './components/toolbox/ToolDialog'
 import { SessionPane, SessionsPane } from './components/toolbox/SessionPanes'
@@ -295,6 +295,13 @@ function Shell() {
     if (popOut(route.cluster)) setDock({ ...dock, mode: dock.mode === 'max' ? 'open' : dock.mode })
     else setToast('The browser did not open a new window. Allow pop-ups for the console to move Sherlock and Watson to a window of their own.')
   }
+  const showWatson = () => {
+    if (popped) focusPopup()
+    else {
+      setDockTab('assistants')
+      setDock({ ...dock, mode: dock.mode === 'min' ? 'open' : dock.mode, pane: 'watson' })
+    }
+  }
   const showSession = (id: string) => {
     setTabs({ ...tabsHere, closed: tabsHere.closed.filter((x) => x !== id), opened: tabsHere.opened.includes(id) ? tabsHere.opened : [...tabsHere.opened, id] })
     setDockTab(id)
@@ -305,7 +312,19 @@ function Shell() {
     off: !watsonOn ? (watsonApi.off?.text.replace('To run it from here', 'To use the tools') ?? 'The tools need Watson, which is off here.') : watson.status?.readOnly ? watson.status.how || 'This cluster is connected read-only.' : undefined,
     cluster: route.cluster,
     openTool: (o) => setToolDialog(o),
-    watson: (command, from) => watsonApi.send(command, { from }),
+    action: (a, what) => {
+      const doing = { cordon: 'Cordoning', uncordon: 'Uncordoning', drain: 'Draining', 'delete-pod': 'Deleting' }[a.action]
+      runToolAction(route.cluster, a).then(
+        (it) => {
+          if (it.status === 'refused') setToast(it.reason || 'Watson refused it.')
+          else if (it.status === 'pending') {
+            setToast(`${it.command} waits in Watson for a second person to approve it.`)
+            showWatson()
+          } else setToast(`${doing} ${what}. Watson shows how it goes.`)
+        },
+        (e: unknown) => setToast(e instanceof Error ? e.message : String(e)),
+      )
+    },
     showSession,
   }
   // Sherlock may open a tool's dialog, filled in, for the person to send (TB-42).
@@ -406,13 +425,13 @@ function Shell() {
           clusterName={clusterName}
           open={toolDialog}
           onClose={() => setToolDialog(null)}
-          onSent={(what) => {
-            setToast(`Sent to Watson: ${what}. It opens once approved.`)
-            if (popped) focusPopup()
-            else {
-              setDockTab('assistants')
-              setDock({ ...dock, mode: dock.mode === 'min' ? 'open' : dock.mode, pane: 'watson' })
+          onSent={(r) => {
+            if (r.opened) {
+              showSession(r.opened)
+              return
             }
+            setToast(`Sent to Watson: ${r.summary}. It opens once a second person approves it.`)
+            showWatson()
           }}
         />
       )}

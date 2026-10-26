@@ -289,9 +289,6 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
             )
           })}
         </div>
-        <p style={{ margin: 'auto 0 0', padding: '10px 16px 14px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg3)', borderTop: '1px solid var(--line)' }}>
-          Pods are listed for the nodes shown above that are ticked, in the ticked namespaces. Counts already apply the other filter.
-        </p>
       </aside>
       <main className="rk-pane" aria-label="Pods" style={{ flex: '999 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <section aria-label="Pod list" style={{ padding: '18px 24px 28px', display: 'flex', flexDirection: 'column', gap: 10 }}>

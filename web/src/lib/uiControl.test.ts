@@ -20,6 +20,7 @@ describe('Sherlock opens a tool’s dialog, never a session (TB-42)', () => {
     expect(done.dialog).toBe(true)
     expect(asked[0]).toEqual({ tool: 'debug-container', pod: { name: 'api-1', namespace: 'web' }, prefill: { target: 'api', image: 'network', reason: 'distroless', namespace: 'web' } })
     expect(() => REGISTRY.open_tool_dialog!(currentRoute(), { tool: 'shell', pod: 'api-1' })).toThrow('needs the pod and its namespace')
+    expect(() => REGISTRY.open_tool_dialog!(currentRoute(), { tool: 'command', namespace: 'web', pod: 'api-1', command: 'rm -rf /' })).toThrow('is not a tool')
     expect(() => REGISTRY.open_tool_dialog!(currentRoute(), { tool: 'node-shell', node: '../etc' })).toThrow('is not a name')
     setToolOpener(() => 'your role does not allow it here')
     expect(() => REGISTRY.open_tool_dialog!(currentRoute(), { tool: 'node-shell', node: 'worker-1' })).toThrow('your role')

@@ -267,10 +267,12 @@ export function setToolOpener(f: ((a: ToolDialogAsk) => string | null) | null): 
   toolOpener = f
 }
 
-const POD_TOOLS = ['shell', 'command', 'forward', 'debug-container']
+const POD_TOOLS = ['shell', 'forward', 'debug-container']
+const TOOLS = [...POD_TOOLS, 'debug-pod', 'node-shell']
 
 function openToolDialog(_route: Route, input: Record<string, unknown>): Applied {
   const tool = text(input.tool, 'tool')
+  if (!TOOLS.includes(tool)) throw new ActionError(`${tool} is not a tool: ${TOOLS.join(', ')}.`)
   if (!toolOpener) throw new ActionError('The Toolbox is not available in this console window: its tools need Watson, which is off here.')
   const name = (k: string) => {
     const v = input[k]
@@ -284,7 +286,6 @@ function openToolDialog(_route: Route, input: Record<string, unknown>): Applied 
   const node = name('node')
   const prefill: Record<string, unknown> = {}
   for (const k of ['container', 'image', 'profile', 'labelsFrom']) if (name(k)) prefill[k === 'container' && tool === 'debug-container' ? 'target' : k] = name(k)
-  if (typeof input.command === 'string') prefill.command = input.command
   if (typeof input.reason === 'string') prefill.reason = input.reason
   if (typeof input.port === 'number') {
     if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new ActionError('port is 1 to 65535.')

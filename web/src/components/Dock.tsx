@@ -218,13 +218,13 @@ export function Dock(p: Props) {
             {ss.tabs.map((t) => {
               const st = tabState(t, ss.now)
               return (
-                <span key={t.id} style={{ display: 'inline-flex', alignItems: 'stretch' }}>
+                <span key={t.id} className="tb-sgroup" data-current={active === t.id}>
                   <button className="tb-stab" data-state={st} aria-current={active === t.id} onClick={() => ss.onActive(t.id)} title={t.summary + (t.mine ? '' : ` — ${t.owner}’s`)} data-testid={`dock-tab-${t.id}`}>
                     <span className="rk-dot" />
                     <span className="rk-mono">{tabLabel(t)}</span>
                     {st === 'ended' ? <span className="tb-ttl">ended</span> : st === 'starting' ? <span className="tb-ttl">opening</span> : t.ends ? <span className="tb-ttl">ends {new Date(t.ends).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> : null}
                   </button>
-                  <button className="tb-x" aria-label={`Close the tab of ${tabLabel(t)}${t.state === 'ended' ? '' : ' (the session goes on)'}`} title={t.state === 'ended' ? 'Close the tab' : 'Close the tab; the session goes on, in Sessions'} onClick={() => ss.onCloseTab(t.id)} style={{ alignSelf: 'center' }}>
+                  <button className="tb-x" aria-label={`Close the tab of ${tabLabel(t)}${t.state === 'ended' ? '' : ' (the session goes on)'}`} title={t.state === 'ended' ? 'Close the tab' : 'Close the tab; the session goes on, in Sessions'} onClick={() => ss.onCloseTab(t.id)}>
                     <CloseIcon />
                   </button>
                 </span>
