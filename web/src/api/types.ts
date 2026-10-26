@@ -467,6 +467,8 @@ export interface Settings {
   refreshSeconds: number
   /** How every console shows dates and times; absent is the default. */
   timeFormat?: TimeFormat
+  /** How long a pod may wait before it is an alert; absent is 120. */
+  pendingGraceSeconds?: number
   /** Each cluster's fleets (P4-01), by connection id. */
   fleets?: Record<string, Fleet[]>
   /** Where the server keeps them: "configmap" survives restarts, "memory" does not. */

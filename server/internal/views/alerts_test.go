@@ -27,7 +27,7 @@ func alerts(t *testing.T, src views.Source) map[string]views.AlertRow {
 	t.Helper()
 	out := map[string]views.AlertRow{}
 	for _, k := range views.AlertKeys(src) {
-		if a, ok := views.BuildAlert(src, k, now); ok {
+		if a, ok := views.BuildAlert(src, k, now, 0); ok {
 			out[k] = a
 		}
 	}
@@ -161,5 +161,37 @@ func TestNodeAndVolumeAlerts(t *testing.T) {
 	c, ok := got["pvc:shop/grafana"]
 	if !ok || c.Severity != views.SevWarning || len(c.Events) != 1 || c.Events[0].Pod != "shop/grafana-0" || c.Volume != "pvc-1234" || len(c.Users) != 1 || c.Users[0].Status != "ContainerCreating" {
 		t.Errorf("claim: %+v", c)
+	}
+}
+
+func TestPendingPodsAlertOnlyAfterTheGracePeriod(t *testing.T) {
+	src := source()
+	pending := func(name string, age time.Duration) {
+		p := pod("shop", name, "")
+		p.CreationTimestamp = ts(age)
+		p.Status.Phase = corev1.PodPending
+		p.Status.Conditions = nil
+		p.Status.ContainerStatuses = nil
+		src.Put(p)
+	}
+	pending("young", time.Minute)
+	pending("old", 3*time.Minute)
+	// A pod that has run for hours and stopped being ready a minute ago
+	// waits too; one that stopped three minutes ago does not.
+	for name, since := range map[string]time.Duration{"flaky": time.Minute, "stuck": 3 * time.Minute} {
+		p := pod("shop", name, "worker-1")
+		p.Status.Conditions[0].Status = corev1.ConditionFalse
+		p.Status.Conditions[0].LastTransitionTime = ts(since)
+		src.Put(p)
+		src.Put(warning("uid-"+name, "Pod", "shop", name, "Unhealthy", "Readiness probe failed", 3, since, 10*time.Second))
+	}
+	got := map[string]bool{}
+	for _, name := range []string{"young", "old", "flaky", "stuck"} {
+		if a, ok := views.BuildAlert(src, views.AlertKey(views.AlertPod, "shop", name), now, 2*time.Minute); ok {
+			got[name] = a.Severity == views.SevPending
+		}
+	}
+	if len(got) != 2 || !got["old"] || !got["stuck"] {
+		t.Errorf("pending alerts after a 2-minute grace: %v, want old and stuck", got)
 	}
 }

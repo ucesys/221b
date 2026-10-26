@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { REFRESH_CHOICES, refreshLabel, saveSettings } from '../api/settings'
+import { DEFAULT_GRACE, GRACE_CHOICES, REFRESH_CHOICES, refreshLabel, saveSettings } from '../api/settings'
 import type { Settings } from '../api/types'
 import { DEFAULT_TIME_FORMAT, fmtClock, fmtTs, setTimeFormat, type TimeFormat } from '../lib/format'
 import { adminHref, navigate, type Route } from '../lib/router'
@@ -88,7 +88,10 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
   const [formatDraft, setFormatDraft] = useState<TimeFormat | undefined>(undefined)
   const currentFormat = settings?.timeFormat ?? DEFAULT_TIME_FORMAT
   const pickedFormat = formatDraft ?? currentFormat
-  const changed = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined
+  const [graceDraft, setGraceDraft] = useState<number | undefined>(undefined)
+  const currentGrace = settings?.pendingGraceSeconds ?? DEFAULT_GRACE
+  const pickedGrace = graceDraft ?? currentGrace
+  const changed = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined
 
   const save = async () => {
     if (picked === undefined) return
@@ -96,9 +99,10 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
     setError('')
     setSaved('')
     try {
-      await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat })
+      await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace })
       setDraft(undefined)
       setFormatDraft(undefined)
+      setGraceDraft(undefined)
       setSaved('Saved.')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -143,8 +147,31 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
         </p>
       </section>
       <TimeFormatSection picked={pickedFormat} current={currentFormat} disabled={!settings || busy} onPick={(f) => setFormatDraft(f.date === currentFormat.date && f.clock === currentFormat.clock ? undefined : f)} />
-      <SaveBar changed={changed} busy={busy} onSave={() => void save()} onUndo={() => { setDraft(undefined); setFormatDraft(undefined) }} error={error} saved={saved} testId="settings-save" />
+      <GraceSection picked={pickedGrace} current={currentGrace} disabled={!settings || busy} onPick={(g) => setGraceDraft(g === currentGrace ? undefined : g)} />
+      <SaveBar changed={changed} busy={busy} onSave={() => void save()} onUndo={() => { setDraft(undefined); setFormatDraft(undefined); setGraceDraft(undefined) }} error={error} saved={saved} testId="settings-save" />
     </>
+  )
+}
+
+/** How long a pod may be pending, or running but not ready, before it is an alert. */
+function GraceSection({ picked, current, disabled, onPick }: { picked: number; current: number; disabled: boolean; onPick: (g: number) => void }) {
+  const choices: number[] = [...GRACE_CHOICES]
+  if (!choices.includes(current)) choices.push(current)
+  choices.sort((a, b) => a - b)
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Pending pods">
+      <h3 className="rk-h">Pending pods</h3>
+      <div className="rk-seg" role="group" aria-label="Alert on a pending pod after" style={{ alignSelf: 'flex-start', flexWrap: 'wrap' }}>
+        {choices.map((g) => (
+          <button key={g} aria-pressed={picked === g} disabled={disabled} onClick={() => onPick(g)}>
+            {g === 0 ? 'At once' : refreshLabel(g)}
+          </button>
+        ))}
+      </div>
+      <p className="rk-fhint" style={{ margin: 0 }}>
+        For everyone: a pod that is pending, or running but not ready, is an alert only after this long, so pods that are starting do not raise one.
+      </p>
+    </section>
   )
 }
 

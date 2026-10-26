@@ -100,6 +100,16 @@ test('the refresh rate is kept on the server and reaches every open console', as
   expect(saved.changedAt).toBeTruthy()
   await expect.poll(savedSettings).toContain('"refreshSeconds":10')
 
+  // The Pending grace period: 2 minutes until changed, saved the same way.
+  const grace = dialog.getByRole('group', { name: 'Alert on a pending pod after' })
+  await expect(grace.getByRole('button', { name: '2 min' })).toHaveAttribute('aria-pressed', 'true')
+  await grace.getByRole('button', { name: '5 min' }).click()
+  await dialog.getByTestId('settings-save').click()
+  await expect.poll(async () => ((await (await request.get('/api/v1/settings')).json()) as Settings).pendingGraceSeconds).toBe(300)
+  await grace.getByRole('button', { name: '2 min' }).click()
+  await dialog.getByTestId('settings-save').click()
+  await expect.poll(async () => ((await (await request.get('/api/v1/settings')).json()) as Settings).pendingGraceSeconds).toBe(120)
+
   // The other console learns it through its stream, without a reload.
   const otherDialog = await openSettings(other)
   await expect(otherDialog.getByRole('group', { name: 'Refresh rate' }).getByRole('button', { name: '10 s' })).toHaveAttribute('aria-pressed', 'true')

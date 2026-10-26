@@ -196,7 +196,9 @@ func AlertKeys(src Source) []string {
 }
 
 // BuildAlert computes an object's alert; ok is false when it has none.
-func BuildAlert(src Source, key string, now time.Time) (AlertRow, bool) {
+// grace is how long a pod may wait, pending or running but not ready,
+// before that is an alert.
+func BuildAlert(src Source, key string, now time.Time, grace time.Duration) (AlertRow, bool) {
 	kind, ns, name, ok := SplitAlertKey(key)
 	if !ok {
 		return AlertRow{}, false
@@ -207,7 +209,7 @@ func BuildAlert(src Source, key string, now time.Time) (AlertRow, bool) {
 		if p == nil {
 			return AlertRow{}, false
 		}
-		return podAlert(src, p, now)
+		return podAlert(src, p, now, grace)
 	case AlertNode:
 		n, _ := src.Object("nodes", "", name).(*corev1.Node)
 		if n == nil {
@@ -266,7 +268,7 @@ func sortEntries(es []AlertEntry) {
 	sort.SliceStable(es, func(i, j int) bool { return at(es[i]).After(at(es[j])) })
 }
 
-func podAlert(src Source, p *corev1.Pod, now time.Time) (AlertRow, bool) {
+func podAlert(src Source, p *corev1.Pod, now time.Time, grace time.Duration) (AlertRow, bool) {
 	row := BuildPodRow(src, p, now)
 	if row.Done || p.DeletionTimestamp != nil {
 		return AlertRow{}, false
@@ -307,7 +309,7 @@ func podAlert(src Source, p *corev1.Pod, now time.Time) (AlertRow, bool) {
 			sev = SevRecovered
 		}
 	}
-	if sev == "" {
+	if sev == "" || (sev == SevPending && now.Sub(waitingSince(p)) < grace) {
 		return AlertRow{}, false
 	}
 	a.Severity = sev
@@ -315,6 +317,19 @@ func podAlert(src Source, p *corev1.Pod, now time.Time) (AlertRow, bool) {
 		a.Why = pendingWhy(p, events)
 	}
 	return a, true
+}
+
+// waitingSince is when a pod began to wait: when it was made while it is
+// pending, when it last stopped being ready once it runs.
+func waitingSince(p *corev1.Pod) time.Time {
+	if p.Status.Phase != corev1.PodPending {
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodReady && c.Status != corev1.ConditionTrue && !c.LastTransitionTime.IsZero() {
+				return c.LastTransitionTime.Time
+			}
+		}
+	}
+	return p.CreationTimestamp.Time
 }
 
 // lastTermination finds how a container of the pod last stopped.

@@ -26,6 +26,7 @@ import (
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/nodes"
+	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/views"
 )
 
@@ -134,6 +135,9 @@ type viewDef struct {
 	// keys lists every row; build renders one, or ok=false when it is gone.
 	keys  func(src Source) []string
 	build func(src Source, key string, now time.Time) (any, bool)
+	// buildFrom renders one row with the store's settings at hand, in
+	// place of build: an alert reads the Pending grace period.
+	buildFrom func(s *Store, key string, now time.Time) (any, bool)
 	// whole renders every row at once, for views whose rows are not rebuilt
 	// one by one.
 	whole func(s *Store, now time.Time) map[string]any
@@ -179,8 +183,10 @@ type Store struct {
 	subs        map[*Sub]struct{}
 	refresh     time.Duration
 	// fleets are this cluster's fleets, from the settings.
-	fleets     atomic.Pointer[[]fleets.Fleet]
-	acks       atomic.Pointer[map[string]acks.Ack]
+	fleets atomic.Pointer[[]fleets.Fleet]
+	acks   atomic.Pointer[map[string]acks.Ack]
+	// grace is the Pending grace period of the alerts, in nanoseconds.
+	grace      atomic.Int64
 	recomputes uint64
 	delays     Histogram
 
@@ -250,6 +256,7 @@ func New(src Source, o Options) *Store {
 		kick:    make(chan struct{}, 1),
 		reset:   make(chan struct{}, 1),
 	}
+	s.grace.Store(int64(settings.DefaultPendingGrace))
 	for _, d := range staticViews {
 		if !d.lazy {
 			s.views[d.name] = &view{def: d, rows: map[string][]byte{}, usage: map[string][]byte{}}
@@ -335,8 +342,8 @@ var staticViews = []viewDef{
 	{
 		name: ViewAlerts,
 		keys: func(src Source) []string { return views.AlertKeys(src) },
-		build: func(src Source, key string, now time.Time) (any, bool) {
-			return views.BuildAlert(src, key, now)
+		buildFrom: func(s *Store, key string, now time.Time) (any, bool) {
+			return views.BuildAlert(s.src, key, now, time.Duration(s.grace.Load()))
 		},
 		decorate: decorateAlert,
 	},
@@ -450,10 +457,15 @@ func (s *Store) SetSettings(refresh time.Duration, raw []byte) {
 	s.mu.Unlock()
 	if changed {
 		var in struct {
-			Fleets map[string][]fleets.Fleet `json:"fleets"`
-			Acks   map[string][]acks.Ack     `json:"acks"`
+			Fleets              map[string][]fleets.Fleet `json:"fleets"`
+			Acks                map[string][]acks.Ack     `json:"acks"`
+			PendingGraceSeconds *int                      `json:"pendingGraceSeconds"`
 		}
 		_ = json.Unmarshal(raw, &in)
+		if g := int64(settings.Settings{PendingGraceSeconds: in.PendingGraceSeconds}.PendingGrace()); g != s.grace.Swap(g) {
+			s.Notify(kube.Change{Views: map[string][]string{ViewAlerts: {kube.AllRows}}})
+			s.PublishSoon()
+		}
 		list := in.Fleets[s.opts.Cluster]
 		if old := s.fleets.Load(); old == nil || !reflect.DeepEqual(*old, list) {
 			s.fleets.Store(&list)
@@ -738,7 +750,13 @@ func (s *Store) build(d viewDef, all bool, keys []string, usage bool, now time.T
 		sort.Strings(keys)
 		r.present = make(map[string]struct{}, len(keys))
 		for _, k := range keys {
-			row, ok := d.build(s.src, k, now)
+			var row any
+			var ok bool
+			if d.buildFrom != nil {
+				row, ok = d.buildFrom(s, k, now)
+			} else {
+				row, ok = d.build(s.src, k, now)
+			}
 			if !ok {
 				r.rows = append(r.rows, built{key: k})
 				continue
