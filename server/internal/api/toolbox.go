@@ -324,6 +324,15 @@ func (s *Server) postSessionCard(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusForbidden, "Only a SuperAdmin may open a node shell or run a command on a node.")
 		return
 	}
+	// A debug pod that names a ServiceAccount carries that account's token,
+	// and so its rights: a shell in it is a shell as the account. Admin may
+	// create Jobs in its namespaces (TB-50), which would make that the way
+	// to any account there, so naming one is a SuperAdmin's choice; without
+	// one the pod mounts no token.
+	if req.Tool == tb.ToolDebugPod && req.ServiceAccount != "" && !sw.Admin {
+		jsonError(w, http.StatusForbidden, "Only a SuperAdmin may run a debug pod as a ServiceAccount: the pod would carry the account's token, and a shell in it the account's rights. Leave the account empty to run it with no token.")
+		return
+	}
 	// A reason is asked for whoever approves, and for a node on production.
 	onNode := req.Tool == tb.ToolNodeShell || req.Tool == tb.ToolNodeCommand
 	if err := req.Validate(cfg, s.watsonTwoPerson(c) || needsTwo || (onNode && c.Env == clusters.EnvProduction)); err != nil {
@@ -479,36 +488,42 @@ func (s *Server) startSession(cl watson.Cluster, it watson.Item, approver watson
 // ---------- the sessions ----------
 
 type sessionView struct {
-	ID          string                 `json:"id"`
-	Cluster     string                 `json:"cluster"`
-	Tool        string                 `json:"tool"`
-	Summary     string                 `json:"summary"`
-	Request     sessions.Request       `json:"request"`
-	Owner       string                 `json:"owner"`
-	Mine        bool                   `json:"mine"`
-	Approver    string                 `json:"approver,omitempty"`
-	Card        string                 `json:"card,omitempty"`
-	State       string                 `json:"state"`
-	Created     time.Time              `json:"created"`
-	Started     *time.Time             `json:"started,omitempty"`
-	LastActive  time.Time              `json:"lastActive"`
-	Ends        *time.Time             `json:"ends,omitempty"`
-	Ended       *time.Time             `json:"ended,omitempty"`
-	EndedBy     string                 `json:"endedBy,omitempty"`
-	EndNote     string                 `json:"endNote,omitempty"`
-	Exit        *int                   `json:"exit,omitempty"`
-	Namespace   string                 `json:"namespace,omitempty"`
-	Pod         string                 `json:"pod,omitempty"`
-	Container   string                 `json:"container,omitempty"`
-	Notes       []string               `json:"notes,omitempty"`
-	Objects     []sessions.Created     `json:"objects,omitempty"`
-	Forward     *sessions.ForwardStats `json:"forward,omitempty"`
-	CLI         string                 `json:"cli,omitempty"`
-	Watchers    []string               `json:"watchers,omitempty"`
-	Recorded    bool                   `json:"recorded"`
-	Interactive bool                   `json:"interactive"`
-	IdleSeconds int                    `json:"idleSeconds"`
-	Rev         int                    `json:"rev"`
+	ID         string                 `json:"id"`
+	Cluster    string                 `json:"cluster"`
+	Tool       string                 `json:"tool"`
+	Summary    string                 `json:"summary"`
+	Request    sessions.Request       `json:"request"`
+	Owner      string                 `json:"owner"`
+	Mine       bool                   `json:"mine"`
+	Approver   string                 `json:"approver,omitempty"`
+	Card       string                 `json:"card,omitempty"`
+	State      string                 `json:"state"`
+	Created    time.Time              `json:"created"`
+	Started    *time.Time             `json:"started,omitempty"`
+	LastActive time.Time              `json:"lastActive"`
+	Ends       *time.Time             `json:"ends,omitempty"`
+	Ended      *time.Time             `json:"ended,omitempty"`
+	EndedBy    string                 `json:"endedBy,omitempty"`
+	EndNote    string                 `json:"endNote,omitempty"`
+	Exit       *int                   `json:"exit,omitempty"`
+	Namespace  string                 `json:"namespace,omitempty"`
+	Pod        string                 `json:"pod,omitempty"`
+	Container  string                 `json:"container,omitempty"`
+	Notes      []string               `json:"notes,omitempty"`
+	Objects    []sessions.Created     `json:"objects,omitempty"`
+	Forward    *sessions.ForwardStats `json:"forward,omitempty"`
+	// CLI is the command the owner runs for a port forward, and Token the
+	// forward's own credential, which the command asks for: apart, so the
+	// token stays out of shell histories and process lists (TB-20).
+	CLI         string   `json:"cli,omitempty"`
+	Token       string   `json:"token,omitempty"`
+	Watchers    []string `json:"watchers,omitempty"`
+	Recorded    bool     `json:"recorded"`
+	Interactive bool     `json:"interactive"`
+	// CanExtend says Extend would move the hard limit (TB-22).
+	CanExtend   bool `json:"canExtend"`
+	IdleSeconds int  `json:"idleSeconds"`
+	Rev         int  `json:"rev"`
 }
 
 func (s *Server) sessionViewOf(r *http.Request, ss sessions.Session, who sessions.Who) sessionView {
@@ -527,6 +542,7 @@ func (s *Server) sessionViewOf(r *http.Request, ss sessions.Session, who session
 	if !ss.Ends.IsZero() {
 		t := ss.Ends
 		v.Ends = &t
+		v.CanExtend = v.Mine && ss.State == sessions.StateLive && ss.Ends.Before(ss.MaxEnds)
 	}
 	if !ss.Ended.IsZero() {
 		t := ss.Ended
@@ -537,21 +553,22 @@ func (s *Server) sessionViewOf(r *http.Request, ss sessions.Session, who session
 		v.Forward = &f
 		if v.Mine && ss.State != sessions.StateEnded {
 			if tok, err := s.opts.Sessions.Token(ss.ID, who); err == nil {
-				v.CLI = cliCommand(r, ss, tok)
+				v.CLI, v.Token = cliCommand(r, ss), tok
 			}
 		}
 	}
 	return v
 }
 
-// cliCommand is the one line the owner of a forward runs (TB-21).
-func cliCommand(r *http.Request, ss sessions.Session, token string) string {
+// cliCommand is the one line the owner of a forward runs (TB-21). The
+// token is not in it: the command asks for it, hidden.
+func cliCommand(r *http.Request, ss sessions.Session) string {
 	scheme := "http"
 	if secureRequest(r) {
 		scheme = "https"
 	}
 	base := scheme + "://" + r.Host
-	cmd := fmt.Sprintf("221b forward %s --cluster %s --session %s --token %s", base, ss.Cluster, ss.ID, token)
+	cmd := fmt.Sprintf("221b forward %s --cluster %s --session %s", base, ss.Cluster, ss.ID)
 	if ss.Req.LocalPort > 0 {
 		cmd += fmt.Sprintf(" --local %d", ss.Req.LocalPort)
 	}
@@ -616,6 +633,9 @@ func (s *Server) sessionAnswer(w http.ResponseWriter, r *http.Request, ss *sessi
 		return
 	case errors.Is(err, sessions.ErrEnded):
 		jsonError(w, http.StatusConflict, "The session has ended.")
+		return
+	case errors.Is(err, sessions.ErrLimit):
+		jsonError(w, http.StatusConflict, "It cannot be extended: "+strings.TrimPrefix(err.Error(), sessions.ErrLimit.Error()+": ")+".")
 		return
 	case err != nil:
 		jsonError(w, http.StatusBadRequest, err.Error())
@@ -745,6 +765,8 @@ func (s *Server) sessionAttach(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 	defer s.opts.Sessions.Detach(ss.ID, v)
+	// Keystrokes and pastes: one message is never larger than this.
+	conn.SetReadLimit(64 << 10)
 	var wmu sync.Mutex
 	send := func(kind int, b []byte) error {
 		wmu.Lock()
@@ -796,7 +818,9 @@ func (s *Server) sessionAttach(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-v.Done():
-			// Drain what is still queued, then say how it ended.
+			// Drain what is still queued, then say how it ended: the session,
+			// or only this window, which fell behind the output and
+			// reconnects to replay (TB-14).
 		drain:
 			for {
 				select {
@@ -805,6 +829,11 @@ func (s *Server) sessionAttach(w http.ResponseWriter, r *http.Request) {
 				default:
 					break drain
 				}
+			}
+			if v.Dropped() {
+				b, _ := json.Marshal(control{Type: "dropped", Note: "The output ran ahead of this window"})
+				_ = send(websocket.TextMessage, b)
+				return
 			}
 			ended()
 			return

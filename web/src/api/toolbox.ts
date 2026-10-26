@@ -125,11 +125,14 @@ export interface SessionView {
   notes?: string[]
   objects?: { kind: string; namespace: string; name: string }[]
   forward?: ForwardStats
-  /** The command its owner runs for a port forward. */
+  /** The command its owner runs for a port forward, and the token it asks for, given to the owner only. */
   cli?: string
+  token?: string
   watchers?: string[]
   recorded: boolean
   interactive: boolean
+  /** Extend can still move the hard limit (TB-22): below the console's maximum, and no second person fixed the duration. */
+  canExtend?: boolean
   idleSeconds: number
   rev: number
 }

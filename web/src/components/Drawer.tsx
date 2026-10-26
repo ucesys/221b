@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { trapTab } from '../lib/focus'
 import { drivenRecently } from '../lib/tables'
 import { CloseIcon } from './Icons'
 import { CopyName } from './CopyName'
@@ -35,7 +36,6 @@ interface Props {
   copy?: string | false
 }
 
-const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
 /**
  * The prototype's details drawer: over the page from the right, with a
@@ -105,17 +105,7 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
           } else if (e.key === 'Tab' && !bySherlock) {
             // Modal: Tab goes round the drawer and never into the page
             // behind the backdrop, where Escape would no longer close it.
-            const all = [...e.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.getClientRects().length > 0)
-            const first = all[0]
-            const last = all[all.length - 1]
-            if (!first || !last) return
-            if (e.shiftKey && document.activeElement === first) {
-              e.preventDefault()
-              last.focus()
-            } else if (!e.shiftKey && document.activeElement === last) {
-              e.preventDefault()
-              first.focus()
-            }
+            trapTab(e)
           }
         }}
         style={{ position: 'relative', width: `min(${width}px, 100%)`, height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}

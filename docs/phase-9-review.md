@@ -8,6 +8,8 @@ The requirements are in [toolbox.md](toolbox.md); its *As built* table already l
 
 The design holds: every session runs as the person, impersonated, so Kubernetes decides; the port-forward tunnel keeps credentials off the laptop; nothing a model writes runs unseen; the Tools menu's changes are an action and a name, never text; the chart values are a ceiling the server checks again. The code is clean, well commented and well tested for the paths it covers, and `go vet`, the race detector, `tsc`, `eslint`, the 200 browser unit tests and `helm lint` are all clean.
 
+**Fixed on `phase-9.1-review` (October 26, 2026):** H-1, H-2, M-1, M-2, M-3, M-9, M-10, and the Delete dialog's text, which inherited the table cell's `white-space: nowrap` because the dialog and the Tools menu rendered inside the cell; both now render at the end of the document and keep their keys to themselves (the row used to take the menu's arrow keys as its own). L-4, L-5, L-6 and L-20 went with M-1 and M-3. The rest stands as written.
+
 Three things need fixing before 9.1 is merged, in this order:
 
 1. **Any signed-in person can approve a production session, which then runs as the requester.** The second person was meant to be a SuperAdmin (TB-07, TB-37, ADR-66); the code only requires one for `nodeShell.approval: always`. A Viewer can approve a SuperAdmin's node shell on production. (H-1)
@@ -27,7 +29,7 @@ Severity: **High** is a security or correctness problem a person will hit; **Med
 
 ## High
 
-### H-1. Any signed-in person approves a session card on production
+### H-1. Any signed-in person approves a session card on production — *fixed*
 
 `server/internal/watson/service.go:442-473` (`refusalFor`), `:691-705` (`Visible`), `:708+` (`Approve`); `server/internal/api/toolbox.go:364` (`SubmitSession`).
 
@@ -39,7 +41,7 @@ TB-07 ("the footer names the possible approvers: the SuperAdmins other than the 
 
 **Fix:** in `refusalFor`, when `approver != nil` and the item is a session card (`it.Session != nil`), require `approver.Admin` on every two-person path, not only under `needsTwo`; `Visible` should show a pending session card to admins only (commands stay as they are). Change the test so Bob is refused until `Admin: true`, and add one for a node shell with `approval: cluster` on production. The dialog's callout (`ToolDialog.tsx:522-529`) and the Watson card should say "another SuperAdmin".
 
-### H-2. Admin's new `create jobs` is `create pods` with any ServiceAccount of the namespace
+### H-2. Admin's new `create jobs` is `create pods` with any ServiceAccount of the namespace — *fixed*
 
 `server/internal/roles/roles.go:280-287` (`adminTools`), `deploy/helm/221b/files/roles.json`; `server/internal/sessions/spec.go:474-496` (`DebugJob`, no `automountServiceAccountToken: false`, `ServiceAccountName: r.ServiceAccount`); `web/src/components/toolbox/ToolDialog.tsx:389-395` (a free-text ServiceAccount field).
 
@@ -49,7 +51,7 @@ Until this phase the full Admin could create nothing but Secrets (its test said 
 
 ## Medium
 
-### M-1. A viewer that falls behind is told "The session ended" while it is live *(probed)*
+### M-1. A viewer that falls behind is told "The session ended" while it is live *(probed)* — *fixed*
 
 `server/internal/sessions/session.go:690-714` (`termWriter.Write`), `server/internal/api/toolbox.go:798-810` (`sessionAttach`), `web/src/components/toolbox/Terminal.tsx:101-120`.
 
@@ -57,13 +59,13 @@ Each browser gets a channel of 512 chunks. Output that arrives faster than the W
 
 **Fix:** tell the two apart. Send `{"type":"dropped"}` (or close with a distinct WebSocket close code) when the viewer was dropped and the session lives, and make `Terminal.tsx` reconnect on it with a short back-off, replaying what it missed; keep `ended` for the real end. Better still, do not drop at all: block the writer briefly with a deadline, since backpressure to the pod is what a real terminal does. Add a Go test that writes 600 chunks and checks the session's state against what the API sends, and an e2e test that `cat`s the simulator's long output.
 
-### M-2. The `221b forward` command carries the token on the command line
+### M-2. The `221b forward` command carries the token on the command line — *fixed*
 
 `server/internal/api/toolbox.go:548-559` (`cliCommand`), `server/cmd/221b-cli/main.go:86`.
 
-The pane shows `221b forward https://… --cluster … --session … --token <24 random bytes>` for the person to paste. The token then lives in their shell history and in `ps` output for every user of the computer for as long as the forward runs. The CLI already reads `$TWOTWENTYONEB_TOKEN`, so the fix is small: show `TWOTWENTYONEB_TOKEN=… 221b forward …` (a leading assignment stays out of most histories and out of `ps`), or make `221b forward` read the token from stdin or a prompt when `--token` is absent, and have the pane's Copy button copy the token separately. Also truncate `hello.Host` (`forward.go:78`) to something sane before it is shown and audited.
+The pane shows `221b forward https://… --cluster … --session … --token <24 random bytes>` for the person to paste. The token then lives in their shell history and in `ps` output for every user of the computer for as long as the forward runs. The CLI already reads `$TWOTWENTYONEB_TOKEN`, so the fix is small: make `221b forward` ask for the token, hidden, when `--token` and the variable are absent (or read it from a pipe), and have the pane show the token beside the command with a Copy of its own. (A leading `VAR=… cmd` assignment is no help: the shell's history keeps the whole line.) Also truncate `hello.Host` (`forward.go:78`) to something sane before it is shown and audited.
 
-### M-3. Extend extends the wrong clock
+### M-3. Extend extends the wrong clock — *fixed*
 
 `server/internal/sessions/session.go:852-860` (`Extend` calls `Keep`), `web/src/components/toolbox/SessionPanes.tsx:130-134`.
 
@@ -99,13 +101,13 @@ TB-42: the action "runs only when the target exists and the person may see it (t
 
 `/sessions/{id}/output` returns the replay ring, which for a terminal is the last 256 KiB of everything shown, for up to an hour after the session ended, to its owner and every SuperAdmin. TB-54 says that with `transcripts: none` "no transcript is kept". The ring is needed for replay (TB-14), but the route should serve command sessions only; a terminal's end is already in the pane. Low effort: `if sessions.Interactive(ss.Req.Tool) { 404 }`.
 
-### M-9. A forward does not end when its pod goes
+### M-9. A forward does not end when its pod goes — *fixed*
 
 `server/internal/sessions/forward.go:181-184`, `session.go:544-558`.
 
 TB-13: a session ends "when the pod or node is gone". A terminal's exec stream errors out when the pod dies, so it ends (as `failed`, with Kubernetes' message, which TB-10 would rather call `Ended · pod gone`). A forward keeps the kubelet connection in `s.fwd`; after the pod is replaced every `Dial` fails and the CLI gets a Close per connection, but the session stays `live` until the idle clock runs out, up to 10 minutes, with the pane saying all is well. Watch the pod (the live store already has it) or end the session on the first `Dial` error that is not a refused port, with `EndGone`.
 
-### M-10. The tool dialog is not a modal
+### M-10. The tool dialog is not a modal — *fixed*
 
 `web/src/components/toolbox/ToolDialog.tsx:459-547`.
 
@@ -131,19 +133,19 @@ Past `MaxOutput`, `limitWriter` returns the truncated count; `io.Copy` in remote
 
 A second `221b forward` with the same token reuses `s.fwd` and works, but whichever disconnects first sets `Forward.CLI = ""` and `Open = 0` for both. Refuse a second CLI while one is connected (`ErrCLI`, "another 221b is connected from …"), or end the first.
 
-### L-4. The terminal does not reconnect after a network blip
+### L-4. The terminal does not reconnect after a network blip — *fixed with M-1*
 
 `web/src/components/toolbox/Terminal.tsx:118-120`.
 
 TB-14 wants a browser to reconnect "after a reload or a network blip within the idle limit". A reload works (the tab remounts and replays). A blip prints "Disconnected from the console." and stops; leaving and re-entering the tab is the workaround. Reconnect with back-off while the stream still lists the session as live (this is the same mechanism M-1 needs).
 
-### L-5. The theme toggle restarts the terminal
+### L-5. The theme toggle restarts the terminal — *fixed with M-1*
 
 `web/src/components/toolbox/Terminal.tsx:151`.
 
 `dark` is in the effect's dependencies, so switching themes disposes the terminal and reopens the WebSocket (with a replay). `term.options.theme = …` in its own effect keeps the session's scrollback.
 
-### L-6. No read limit on the terminal WebSocket
+### L-6. No read limit on the terminal WebSocket — *fixed*
 
 `server/internal/api/toolbox.go:741-747`.
 
@@ -227,7 +229,7 @@ A session card waiting for a second person is good for `LapseWaiting` (30 minute
 
 `shellRE` accepts `auto`, `bash`, `sh`, `ash` and `zsh`; the refusal says "auto, bash or sh".
 
-### L-20. Audit records of a short session can arrive out of order
+### L-20. Audit records of a short session can arrive out of order — *fixed*
 
 `server/internal/sessions/session.go:478` (`go m.record(ActionOpen, …)`), `forward.go:97`.
 
@@ -254,8 +256,8 @@ These are in the TB rows but not in the *As built* table's *Differs* column. Eit
 | TB-07 | A reason is required only where a second person approves and for node tools on production; the footer's approver list is empty (`ToolDialog.tsx:537`; `toolboxView.ApproverNames` is never filled). | A production dialog always has Reason and For how long; the footer names the possible approvers. |
 | TB-08 | Dialogs start from the prefill only. | Dialogs remember the last choices per tool and per pod or node in the browser (no `localStorage` use in `components/toolbox`). |
 | TB-09 | The tab's × closes the tab and the session goes on, as its tooltip says. | The × ends a live session after a confirmation. |
-| TB-13 | Forwards do not notice a replaced pod (M-9); a terminal's end says `failed` with Kubernetes' words. | Sessions end when the pod is gone, as `Ended · pod gone`. |
-| TB-14 | A reload reconnects; a blip does not (L-4). | Reconnects after a reload or a network blip. |
+| TB-13 | Built in 9.1: a forward looks at its pod every 5 seconds, a shell at its stream's end; gone, being deleted or made again under the same name ends the session as `gone`. | Sessions end when the pod is gone, as `Ended · pod gone`. |
+| TB-14 | Built in 9.1: the terminal reconnects with a back-off while the stream says the session is live, and after being dropped for falling behind, replaying what it missed. | Reconnects after a reload or a network blip. |
 | TB-24 | The dialog hides the forbidden profile; the server builds any (M-6). | Disabled with the reason, and refused by the server. |
 | TB-42 | Names are checked; existence and visibility are not (M-7). | Access-filtered lookup first. |
 | TB-45 | The settings ConfigMap, `keep: 300` (M-5). | A ConfigMap of its own, 2,000 records. |

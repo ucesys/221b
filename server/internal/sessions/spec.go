@@ -474,8 +474,14 @@ func DebugJob(c toolbox.Config, id, owner string, r Request, level string, copie
 	pod := corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: m.Labels, Annotations: m.Annotations},
 		Spec: corev1.PodSpec{
-			RestartPolicy:                 corev1.RestartPolicyNever,
-			ServiceAccountName:            r.ServiceAccount,
+			RestartPolicy:      corev1.RestartPolicyNever,
+			ServiceAccountName: r.ServiceAccount,
+			// A pod carries its ServiceAccount's token, and with it the
+			// account's rights. A debug pod gets one only when a
+			// SuperAdmin named the account (the API checks who asks);
+			// otherwise it runs as the namespace's default account with
+			// no token mounted, so a shell in it holds no credential.
+			AutomountServiceAccountToken:  ptr(r.ServiceAccount != ""),
 			NodeName:                      r.Node,
 			TerminationGracePeriodSeconds: ptr(int64(5)),
 			ReadinessGates:                []corev1.PodReadinessGate{{ConditionType: NeverReady}},

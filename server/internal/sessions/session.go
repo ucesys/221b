@@ -13,9 +13,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/audit"
@@ -129,8 +132,11 @@ type Session struct {
 	Started time.Time
 	// LastActive is the last keystroke, output or byte.
 	LastActive time.Time
-	// Ends is the hard limit.
+	// Ends is the hard limit; MaxEnds is the furthest Extend may move it
+	// (TB-22): the chart's maxDuration from the start, or Ends itself
+	// where a second person approved the duration.
 	Ends      time.Time
+	MaxEnds   time.Time
 	Ended     time.Time
 	EndedBy   string
 	EndNote   string
@@ -149,6 +155,9 @@ type Session struct {
 	token   string
 	limit   time.Duration
 	backend Backend
+	// podUID is the pod the session runs in, as it was: a pod made again
+	// under the same name is another pod, and the session ends (TB-13).
+	podUID  types.UID
 	cancel  context.CancelFunc
 	stdin   *io.PipeWriter
 	sizes   chan Size
@@ -185,6 +194,11 @@ type Options struct {
 	MaxOutput int
 	// CLIWait is how long a port forward waits for the CLI (TB-21).
 	CLIWait time.Duration
+	// ViewerWait is how long output waits for a browser that has fallen
+	// behind before the browser is dropped to reconnect and replay.
+	ViewerWait time.Duration
+	// PodCheck is how often a port forward looks at its pod (TB-13).
+	PodCheck time.Duration
 }
 
 // Sub follows the changes of a cluster's sessions.
@@ -215,6 +229,12 @@ func New(o Options) *Manager {
 	}
 	if o.CLIWait <= 0 {
 		o.CLIWait = 5 * time.Minute
+	}
+	if o.ViewerWait <= 0 {
+		o.ViewerWait = 250 * time.Millisecond
+	}
+	if o.PodCheck <= 0 {
+		o.PodCheck = 5 * time.Second
 	}
 	return &Manager{opts: o, all: map[string]*Session{}, subs: map[*Sub]struct{}{}}
 }
@@ -341,7 +361,7 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 				return
 			}
 		}
-		m.located(s, r.Namespace, r.Pod, container)
+		m.located(s, pod, container)
 		switch r.Tool {
 		case toolbox.ToolShell:
 			m.terminal(ctx, s, ShellCommand(r.Shell))
@@ -370,11 +390,12 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 			return
 		}
 		m.note(s, fmt.Sprintf("Debug container %s attached to pod %s: it stays until the pod restarts.", ec.Name, r.Pod))
-		if _, err := waitRunning(ctx, func(c context.Context) (*corev1.Pod, error) { return b.Pod(c, r.Namespace, r.Pod) }, ec.Name, m.opts.StartWithin); err != nil {
+		running, err := waitRunning(ctx, func(c context.Context) (*corev1.Pod, error) { return b.Pod(c, r.Namespace, r.Pod) }, ec.Name, m.opts.StartWithin)
+		if err != nil {
 			fail(err)
 			return
 		}
-		m.located(s, r.Namespace, r.Pod, ec.Name)
+		m.located(s, running, ec.Name)
 		m.terminal(ctx, s, ShellCommand("auto"))
 	case toolbox.ToolDebugPod:
 		level := LevelPrivileged
@@ -408,7 +429,7 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 			fail(err)
 			return
 		}
-		m.located(s, pod.Namespace, pod.Name, "debug")
+		m.located(s, pod, "debug")
 		m.terminal(ctx, s, ShellCommand("auto"))
 	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand:
 		pod, err := NodePod(m.opts.Config, s.ID, s.Owner.Name, r, s.limit)
@@ -421,11 +442,12 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 			return
 		}
 		m.created(s, Created{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name})
-		if _, err := waitRunning(ctx, func(c context.Context) (*corev1.Pod, error) { return b.Pod(c, pod.Namespace, pod.Name) }, "node", m.opts.StartWithin); err != nil {
+		running, err := waitRunning(ctx, func(c context.Context) (*corev1.Pod, error) { return b.Pod(c, pod.Namespace, pod.Name) }, "node", m.opts.StartWithin)
+		if err != nil {
 			fail(err)
 			return
 		}
-		m.located(s, pod.Namespace, pod.Name, "node")
+		m.located(s, running, "node")
 		if r.Tool == toolbox.ToolNodeShell {
 			m.note(s, fmt.Sprintf("Pod %s in %s on node %s, %s profile: the node's filesystem is at /host (chroot /host for its own tools).", pod.Name, pod.Namespace, r.Node, r.Profile))
 			m.terminal(ctx, s, ShellCommand("auto"))
@@ -437,11 +459,35 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 	}
 }
 
-func (m *Manager) located(s *Session, ns, pod, container string) {
+func (m *Manager) located(s *Session, pod *corev1.Pod, container string) {
 	m.mu.Lock()
-	s.Ns, s.Pod, s.Container = ns, pod, container
+	s.Ns, s.Pod, s.Container, s.podUID = pod.Namespace, pod.Name, container, pod.UID
 	m.changedLocked(s)
 	m.mu.Unlock()
+}
+
+// podGone says why the session's pod is no longer the one it started in,
+// or "" while it is (TB-13): gone, being deleted, or made again under the
+// same name. A passing error says nothing.
+func (m *Manager) podGone(ctx context.Context, s *Session) string {
+	m.mu.Lock()
+	ns, name, uid, b := s.Ns, s.Pod, s.podUID, s.backend
+	m.mu.Unlock()
+	if name == "" {
+		return ""
+	}
+	p, err := b.Pod(ctx, ns, name)
+	switch {
+	case apierrors.IsNotFound(err):
+		return "The pod is gone."
+	case err != nil:
+		return ""
+	case p.DeletionTimestamp != nil:
+		return "The pod is being deleted."
+	case uid != "" && p.UID != uid:
+		return "The pod was replaced."
+	}
+	return ""
 }
 
 func (m *Manager) created(s *Session, c Created) {
@@ -467,6 +513,10 @@ func (m *Manager) live(s *Session) bool {
 	}
 	now := m.opts.Now()
 	s.State, s.Started, s.LastActive, s.Ends = StateLive, now, now, now.Add(s.limit)
+	s.MaxEnds = s.Ends
+	if s.Approver == "" {
+		s.MaxEnds = now.Add(m.opts.Config.MaxDuration.D())
+	}
 	m.changedLocked(s)
 	if m.opts.Config.Transcripts == toolbox.TranscriptsPVC && Interactive(s.Req.Tool) {
 		if t, err := newTranscript(m.opts.Config.TranscriptDir, s, now); err == nil {
@@ -475,7 +525,7 @@ func (m *Manager) live(s *Session) bool {
 			m.opts.Logger.Warn("transcript not kept", "session", s.ID, "err", err)
 		}
 	}
-	go m.record(ActionOpen, s, s.Owner, audit.OutcomeOK, fmt.Sprintf("approved_by=%q pod=%s/%s container=%s limit=%s", s.Approver, s.Ns, s.Pod, s.Container, s.limit))
+	m.record(ActionOpen, s, s.Owner, audit.OutcomeOK, fmt.Sprintf("approved_by=%q pod=%s/%s container=%s limit=%s", s.Approver, s.Ns, s.Pod, s.Container, s.limit))
 	return true
 }
 
@@ -491,9 +541,17 @@ func (m *Manager) terminal(ctx context.Context, s *Session, cmd []string) {
 	}
 	out := &termWriter{m: m, s: s}
 	err := s.backend.Exec(ctx, s.Ns, s.Pod, s.Container, cmd, true, pr, out, out, sizes)
-	switch {
-	case ctx.Err() != nil:
+	if ctx.Err() != nil {
 		// Ended from outside: the reason is already set.
+		return
+	}
+	// A shell that ends with its pod is the pod's end, not the shell's.
+	gone, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	why := m.podGone(gone, s)
+	cancel()
+	switch {
+	case why != "":
+		m.end(s, EndGone, why, Who{})
 	case err != nil:
 		msg := statusMessage(err)
 		if strings.Contains(msg, "executable file not found") || strings.Contains(msg, "no such file or directory") {
@@ -541,18 +599,33 @@ func (m *Manager) command(ctx context.Context, s *Session, cmd []string) {
 }
 
 // forward waits for the CLI; the tunnel does the rest (TB-19 to TB-22).
+// It also watches the pod, which a forward has no stream to notice by: a
+// forward to a pod that is gone, or made again, ends (TB-13).
 func (m *Manager) forward(ctx context.Context, s *Session) {
 	if !m.live(s) {
 		return
 	}
-	select {
-	case <-ctx.Done():
-	case <-time.After(m.opts.CLIWait):
-		m.mu.Lock()
-		connected := s.Forward.CLI != ""
-		m.mu.Unlock()
-		if !connected {
-			m.end(s, EndNoCLI, fmt.Sprintf("No CLI connected within %s.", short(m.opts.CLIWait)), Who{})
+	cli := time.NewTimer(m.opts.CLIWait)
+	defer cli.Stop()
+	pod := time.NewTicker(m.opts.PodCheck)
+	defer pod.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-cli.C:
+			m.mu.Lock()
+			connected := s.Forward.CLI != ""
+			m.mu.Unlock()
+			if !connected {
+				m.end(s, EndNoCLI, fmt.Sprintf("No CLI connected within %s.", short(m.opts.CLIWait)), Who{})
+				return
+			}
+		case <-pod.C:
+			if why := m.podGone(ctx, s); why != "" {
+				m.end(s, EndGone, why, Who{})
+				return
+			}
 		}
 	}
 }
@@ -673,10 +746,18 @@ type Viewer struct {
 	Name     string
 	once     sync.Once
 	done     chan struct{}
+	// dropped says the viewer fell behind the output and was let go while
+	// the session went on: it reconnects and replays. Done closes either
+	// way; this tells the two apart.
+	dropped atomic.Bool
 }
 
-// Done is closed when the viewer is dropped.
+// Done is closed when the viewer is dropped, or the session ends.
 func (v *Viewer) Done() <-chan struct{} { return v.done }
+
+// Dropped says Done closed because the viewer fell behind, not because the
+// session ended: the browser reconnects and replays (TB-14).
+func (v *Viewer) Dropped() bool { return v.dropped.Load() }
 
 func (v *Viewer) close() { v.once.Do(func() { close(v.done) }) }
 
@@ -694,14 +775,9 @@ func (w *termWriter) Write(p []byte) (int, error) {
 	s.ring.Write(b)
 	s.LastActive = m.opts.Now()
 	cast := s.cast
+	viewers := make([]*Viewer, 0, len(s.viewers))
 	for v := range s.viewers {
-		select {
-		case v.Out <- b:
-		default:
-			// A viewer that cannot keep up reconnects and replays.
-			v.close()
-			delete(s.viewers, v)
-		}
+		viewers = append(viewers, v)
 	}
 	if m.opts.Now().Sub(s.lastRev) > 5*time.Second {
 		m.changedLocked(s)
@@ -710,7 +786,52 @@ func (w *termWriter) Write(p []byte) (int, error) {
 	if cast != nil {
 		cast.event("o", b)
 	}
+	for _, v := range viewers {
+		select {
+		case v.Out <- b:
+			continue
+		case <-v.done:
+			continue
+		default:
+		}
+		// The browser is behind. Wait for it a moment, as a terminal waits
+		// for its screen, so a burst of output slows the shell rather than
+		// losing a window; a browser still behind after that is dropped,
+		// and reconnects to replay what it missed.
+		select {
+		case v.Out <- b:
+		case <-v.done:
+		case <-time.After(m.opts.ViewerWait):
+			m.drop(s, v)
+		}
+	}
 	return len(p), nil
+}
+
+// drop lets a viewer go that cannot keep up: it is told so, and reconnects.
+func (m *Manager) drop(s *Session, v *Viewer) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := s.viewers[v]; !ok {
+		return
+	}
+	delete(s.viewers, v)
+	if v.ReadOnly {
+		s.Watchers = without(s.Watchers, v.Name)
+		m.changedLocked(s)
+	}
+	v.dropped.Store(true)
+	v.close()
+}
+
+// without removes one occurrence of a name.
+func without(names []string, name string) []string {
+	for i, n := range names {
+		if n == name {
+			return append(names[:i:i], names[i+1:]...)
+		}
+	}
+	return names
 }
 
 // limitWriter keeps a command's output up to a limit.
@@ -773,12 +894,7 @@ func (m *Manager) Detach(id string, v *Viewer) {
 	if _, ok := s.viewers[v]; ok {
 		delete(s.viewers, v)
 		if v.ReadOnly {
-			for i, n := range s.Watchers {
-				if n == v.Name {
-					s.Watchers = append(s.Watchers[:i], s.Watchers[i+1:]...)
-					break
-				}
-			}
+			s.Watchers = without(s.Watchers, v.Name)
 			m.changedLocked(s)
 		}
 	}
@@ -849,14 +965,43 @@ func (m *Manager) Keep(id string, who Who) (*Session, error) {
 	return s, nil
 }
 
-// Extend adds ten minutes to a port forward's idle allowance, within its
-// hard limit (TB-22): it counts as activity.
+// ExtendBy is what one Extend adds to a session's hard limit.
+const ExtendBy = 10 * time.Minute
+
+// ErrLimit says a session cannot be extended: it is at the chart's
+// limit, or a second person approved its duration.
+var ErrLimit = errors.New("the session cannot be extended")
+
+// Extend adds ten minutes to a session's hard limit, up to the chart's
+// maxDuration from its start (TB-22); where a second person approved the
+// duration, that is the limit. It counts as activity.
 func (m *Manager) Extend(id string, who Who) (*Session, error) {
-	s, err := m.Keep(id, who)
-	if err == nil {
-		go m.record(ActionExtend, s, who, audit.OutcomeOK, "")
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.all[id]
+	if s == nil {
+		return nil, ErrNotFound
 	}
-	return s, err
+	if !s.Owner.same(who) {
+		return s, ErrNotYours
+	}
+	if s.State != StateLive {
+		return s, ErrEnded
+	}
+	if !s.Ends.Before(s.MaxEnds) {
+		if s.Approver != "" {
+			return s, fmt.Errorf("%w: %s approved it for %s", ErrLimit, s.Approver, short(s.limit))
+		}
+		return s, fmt.Errorf("%w: sessions here last %s at most", ErrLimit, short(m.opts.Config.MaxDuration.D()))
+	}
+	ends := s.Ends.Add(ExtendBy)
+	if ends.After(s.MaxEnds) {
+		ends = s.MaxEnds
+	}
+	s.Ends, s.LastActive = ends, m.opts.Now()
+	m.changedLocked(s)
+	m.record(ActionExtend, s, who, audit.OutcomeOK, "ends="+ends.UTC().Format(time.RFC3339))
+	return s, nil
 }
 
 // ---------- the limits ----------

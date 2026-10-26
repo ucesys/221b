@@ -197,8 +197,15 @@ func (s *Server) watsonView(it watson.Item, who watson.Who, c watson.Cluster, li
 	}
 	if it.Status == watson.StatusPending {
 		v.CanAct = true
-		if it.Change && s.watsonTwoPerson(c) && v.Mine {
-			v.CanAct, v.Waiting = false, "Waiting for a second person: changes to "+c.Name+" need someone else's approval."
+		if it.Change && v.Mine && s.opts.Watson.NeedsTwo(c, &it) {
+			v.CanAct = false
+			if it.Session != nil {
+				// A session opens as the requester, so its second person
+				// is a SuperAdmin (TB-07, TB-37).
+				v.Waiting = "Waiting for another SuperAdmin: a session on " + c.Name + " needs one to approve it."
+			} else {
+				v.Waiting = "Waiting for a second person: changes to " + c.Name + " need someone else's approval."
+			}
 		}
 		if !it.Change && !v.Mine {
 			v.CanAct = false

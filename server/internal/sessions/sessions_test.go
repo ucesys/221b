@@ -14,7 +14,9 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/exec"
 
 	"github.com/ucesys/221b/server/internal/audit"
@@ -49,7 +51,7 @@ func newFake() *fakeBackend {
 }
 
 func (f *fakeBackend) addPod(ns, name string, containers ...string) *corev1.Pod {
-	p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, Labels: map[string]string{"app": "api", "pod-template-hash": "abc"}}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
+	p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name, UID: types.UID(ns + "/" + name + "#1"), Labels: map[string]string{"app": "api", "pod-template-hash": "abc"}}, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
 	for _, c := range containers {
 		p.Spec.Containers = append(p.Spec.Containers, corev1.Container{Name: c, VolumeMounts: []corev1.VolumeMount{{Name: "data", MountPath: "/data"}, {Name: "cfg", MountPath: "/etc/x", SubPath: "x"}}})
 		p.Status.ContainerStatuses = append(p.Status.ContainerStatuses, corev1.ContainerStatus{Name: c, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}})
@@ -64,7 +66,7 @@ func (f *fakeBackend) Pod(_ context.Context, ns, name string) (*corev1.Pod, erro
 	defer f.mu.Unlock()
 	p := f.pods[ns+"/"+name]
 	if p == nil {
-		return nil, errors.New(`pods "` + name + `" not found`)
+		return nil, apierrors.NewNotFound(corev1.Resource("pods"), name)
 	}
 	return p.DeepCopy(), nil
 }
@@ -410,6 +412,94 @@ func TestIdleAndLimitAndKeep(t *testing.T) {
 	}
 }
 
+func TestExtendMovesTheHardLimitWithinTheCharts(t *testing.T) {
+	m, _, c, buf := setup(t)
+	// Asked for 15 minutes on an ordinary cluster: Extend adds 10 at a
+	// time, up to the chart's 60 from the start (TB-22).
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1", Minutes: 15}, alice(), "", "")
+	live := waitState(t, m, s.ID, StateLive)
+	if want := live.Started.Add(time.Hour); !live.MaxEnds.Equal(want) {
+		t.Fatalf("max ends %v, want %v", live.MaxEnds, want)
+	}
+	c.add(12 * time.Minute)
+	if _, err := m.Extend(s.ID, bob()); !errors.Is(err, ErrNotYours) {
+		t.Fatalf("bob extended alice's session: %v", err)
+	}
+	got, err := m.Extend(s.ID, alice())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := live.Started.Add(25 * time.Minute); !got.Ends.Equal(want) || !got.LastActive.Equal(c.now()) {
+		t.Fatalf("ends %v (want %v), last active %v", got.Ends, want, got.LastActive)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := m.Extend(s.ID, alice()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 55, then the cap at 60.
+	if got, _ = m.Extend(s.ID, alice()); !got.Ends.Equal(live.MaxEnds) {
+		t.Fatalf("ends %v, want the chart's limit %v", got.Ends, live.MaxEnds)
+	}
+	if _, err := m.Extend(s.ID, alice()); !errors.Is(err, ErrLimit) {
+		t.Fatalf("extended past the chart's limit: %v", err)
+	}
+	if !strings.Contains(buf.text(), ActionExtend) {
+		t.Fatal("extending was not audited")
+	}
+	// A duration a second person approved is the limit.
+	s2, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1", Minutes: 30}, alice(), "Bob", "card2")
+	live2 := waitState(t, m, s2.ID, StateLive)
+	if !live2.MaxEnds.Equal(live2.Ends) {
+		t.Fatalf("an approved session may be extended: %v past %v", live2.MaxEnds, live2.Ends)
+	}
+	if _, err := m.Extend(s2.ID, alice()); !errors.Is(err, ErrLimit) || !strings.Contains(err.Error(), "Bob") {
+		t.Fatalf("an approved duration was extended: %v", err)
+	}
+}
+
+func TestASessionEndsWithItsPod(t *testing.T) {
+	m, f, _, _ := setup(t)
+	m.opts.PodCheck = 20 * time.Millisecond
+	// A forward has no stream to notice by: it looks at its pod (TB-13).
+	fwd, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolForward, Namespace: "web", Pod: "api-1", Port: 80}, alice(), "", "")
+	waitState(t, m, fwd.ID, StateLive)
+	f.mu.Lock()
+	delete(f.pods, "web/api-1")
+	f.mu.Unlock()
+	if got := waitState(t, m, fwd.ID, StateEnded); got.EndedBy != EndGone || got.EndNote != "The pod is gone." {
+		t.Fatalf("%s: %s", got.EndedBy, got.EndNote)
+	}
+	// A pod made again under the same name is another pod.
+	f.mu.Lock()
+	f.addPod("web", "api-1", "api")
+	f.mu.Unlock()
+	fwd2, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolForward, Namespace: "web", Pod: "api-1", Port: 80}, alice(), "", "")
+	waitState(t, m, fwd2.ID, StateLive)
+	f.mu.Lock()
+	f.pods["web/api-1"].UID = "web/api-1#2"
+	f.mu.Unlock()
+	if got := waitState(t, m, fwd2.ID, StateEnded); got.EndedBy != EndGone || got.EndNote != "The pod was replaced." {
+		t.Fatalf("%s: %s", got.EndedBy, got.EndNote)
+	}
+	// A shell whose pod goes ends as the pod's end, not the shell's.
+	sh, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, alice(), "", "")
+	waitState(t, m, sh.ID, StateLive)
+	v, replay, _ := m.Attach(sh.ID, alice(), false)
+	if !strings.Contains(string(replay), "$ ") {
+		read(t, v, "$ ")
+	}
+	f.mu.Lock()
+	delete(f.pods, "web/api-1")
+	f.mu.Unlock()
+	if err := m.Input(sh.ID, v, []byte("exit\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitState(t, m, sh.ID, StateEnded); got.EndedBy != EndGone {
+		t.Fatalf("%s: %s", got.EndedBy, got.EndNote)
+	}
+}
+
 func TestEndsWithTheSignIn(t *testing.T) {
 	m, _, _, _ := setup(t)
 	signedIn := true
@@ -470,6 +560,93 @@ func TestAdminEndsAndWatches(t *testing.T) {
 	}
 }
 
+func TestAViewerThatFallsBehindIsDroppedNotEnded(t *testing.T) {
+	m, _, _, _ := setup(t)
+	m.opts.ViewerWait = 20 * time.Millisecond
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, alice(), "", "")
+	waitState(t, m, s.ID, StateLive)
+	slow, _, err := m.Attach(s.ID, alice(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quick, _, err := m.Attach(s.ID, alice(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The quick browser drains as the output comes.
+	var qmu sync.Mutex
+	var got []byte
+	go func() {
+		for {
+			select {
+			case b := <-quick.Out:
+				qmu.Lock()
+				got = append(got, b...)
+				qmu.Unlock()
+			case <-quick.Done():
+				return
+			}
+		}
+	}()
+	// Output waits briefly for a browser that is behind, so a burst slows
+	// the shell rather than losing a window.
+	w := &termWriter{m: m, s: m.all[s.ID]}
+	start := time.Now()
+	for i := 0; i < 520; i++ {
+		w.Write([]byte("y"))
+	}
+	if time.Since(start) < 20*time.Millisecond {
+		t.Fatal("the writer did not wait for the slow viewer")
+	}
+	// Still behind after the wait: dropped, and told it was only this
+	// window, not the session, that ended.
+	select {
+	case <-slow.Done():
+	default:
+		t.Fatal("the slow viewer was not dropped")
+	}
+	if !slow.Dropped() {
+		t.Fatal("the dropped viewer reads as the session's end")
+	}
+	if cur, _ := m.Get(s.ID); cur.State != StateLive {
+		t.Fatalf("the session %s", cur.State)
+	}
+	// The other browser kept everything.
+	deadline := time.Now().Add(time.Second)
+	for {
+		qmu.Lock()
+		n := len(got)
+		qmu.Unlock()
+		if n >= 520 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the quick viewer got %d bytes", n)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	select {
+	case <-quick.Done():
+		t.Fatal("the quick viewer was dropped")
+	default:
+	}
+	// Reattaching replays what was shown and goes on from there.
+	again, replay, err := m.Attach(s.ID, alice(), false)
+	if err != nil || len(replay) < 520 {
+		t.Fatalf("replay %d bytes: %v", len(replay), err)
+	}
+	w.Write([]byte("z"))
+	if b := <-again.Out; string(b) != "z" {
+		t.Fatalf("after the replay: %q", b)
+	}
+	// The session's end, by contrast, is not a drop.
+	m.End(s.ID, alice(), "")
+	<-again.Done()
+	if again.Dropped() {
+		t.Fatal("the end reads as a drop")
+	}
+}
+
 func TestCommandKeepsItsOutput(t *testing.T) {
 	m, f, _, buf := setup(t)
 	f.output, f.exitCode = "hello\n", 3
@@ -526,6 +703,15 @@ func TestDebugPodCopiesLabelsAndIsRemoved(t *testing.T) {
 	}
 	if *job.Spec.ActiveDeadlineSeconds != 1800 || job.Spec.Template.Spec.ReadinessGates[0].ConditionType != NeverReady {
 		t.Fatalf("job spec = %+v", job.Spec)
+	}
+	// No ServiceAccount named: no token, so a shell in the pod holds no
+	// credential; a named account mounts its own (TB-28, H-2 of the Phase
+	// 9 review).
+	if auto := job.Spec.Template.Spec.AutomountServiceAccountToken; auto == nil || *auto {
+		t.Fatalf("a debug pod without a ServiceAccount mounts a token: %v", auto)
+	}
+	if j, _, err := DebugJob(toolbox.Default(), "abcdef0123456789", "Alice", Request{Tool: toolbox.ToolDebugPod, Namespace: "web", Image: "general", ServiceAccount: "ops"}, LevelPrivileged, nil, time.Hour); err != nil || j.Spec.Template.Spec.ServiceAccountName != "ops" || !*j.Spec.Template.Spec.AutomountServiceAccountToken {
+		t.Fatalf("a named ServiceAccount is not mounted: %v %+v", err, j.Spec.Template.Spec)
 	}
 	// netshoot's NET_RAW and NET_ADMIN are not baseline capabilities.
 	if add := job.Spec.Template.Spec.Containers[0].SecurityContext.Capabilities.Add; len(add) != 0 {

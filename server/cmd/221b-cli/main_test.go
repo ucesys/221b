@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,8 +38,33 @@ func TestParse(t *testing.T) {
 	if err != nil || o.console != "https://c.example" || o.cluster != "prod" || o.local != "15432" {
 		t.Fatalf("%+v %v", o, err)
 	}
-	if _, err := parse([]string{"https://c.example", "--session", "s1"}); err == nil {
-		t.Fatal("no token passed")
+	if _, err := parse([]string{"https://c.example", "--token", "tk"}); err == nil {
+		t.Fatal("no session passed")
+	}
+	// The token need not be on the command line: it is asked for (TB-20).
+	if o, err := parse([]string{"https://c.example", "--session", "s1"}); err != nil || o.token != "" {
+		t.Fatalf("%+v %v", o, err)
+	}
+}
+
+// Without --token or the environment, the token comes from the terminal,
+// hidden, or from a pipe: either way it stays out of the shell's history.
+func TestAskTokenReadsAPipe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		io.WriteString(w, "  tk-from-a-pipe \n")
+		w.Close()
+	}()
+	var prompt strings.Builder
+	got, err := askToken(r, &prompt)
+	if err != nil || got != "tk-from-a-pipe" {
+		t.Fatalf("%q %v", got, err)
+	}
+	if prompt.Len() != 0 {
+		t.Fatalf("a pipe was prompted: %q", prompt.String())
 	}
 }
 

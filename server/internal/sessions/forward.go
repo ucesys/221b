@@ -26,6 +26,15 @@ var ErrCLI = errors.New("the CLI cannot be used")
 // keepConns bounds the connections listed in a forward's pane.
 const keepConns = 20
 
+// clip bounds what the CLI says about itself, which the pane shows and the
+// audit log keeps.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
 // Tunnel serves the CLI of a port forward until it disconnects or the
 // session ends (TB-19). The token is the forward's own, shown only in
 // its owner's pane.
@@ -75,7 +84,7 @@ func (m *Manager) Tunnel(ctx context.Context, id, token string, fc FrameConn) er
 		return ErrEnded
 	}
 	fwd := s.fwd
-	s.Forward.CLI, s.Forward.Listen = hello.Host, hello.Listen
+	s.Forward.CLI, s.Forward.Listen = clip(hello.Host, 120), clip(hello.Listen, 120)
 	s.LastActive = m.opts.Now()
 	m.changedLocked(s)
 	m.mu.Unlock()
@@ -94,7 +103,8 @@ func (m *Manager) Tunnel(ctx context.Context, id, token string, fc FrameConn) er
 		s.fwd = fwd
 		m.mu.Unlock()
 	}
-	go m.record(ActionOpen, s, s.Owner, audit.OutcomeOK, fmt.Sprintf("cli=%q listen=%q version=%q", hello.Host, hello.Listen, hello.Version))
+	// Inline, as every record is: the log keeps the order things happened in.
+	m.record(ActionOpen, s, s.Owner, audit.OutcomeOK, fmt.Sprintf("cli=%q listen=%q version=%q", clip(hello.Host, 120), clip(hello.Listen, 120), clip(hello.Version, 40)))
 	info, _ := json.Marshal(tunnel.InfoBody{Session: s.ID, Target: fmt.Sprintf("%s/%s:%d", s.Ns, s.Pod, s.Req.Port), Port: s.Req.Port, Ends: s.Ends.UTC().Format("2006-01-02T15:04:05Z"), Idle: m.opts.Config.IdleTimeout.D().String()})
 	if err := write(tunnel.Frame{Type: tunnel.Info, Payload: info}); err != nil {
 		return err

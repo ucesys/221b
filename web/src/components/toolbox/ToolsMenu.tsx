@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { fetchToolbox, type ToolAction, type ToolboxInfo, type ToolName } from '../../api/toolbox'
 import type { PodDetails } from '../../api/types'
 import { apiPath } from '../../lib/router'
@@ -225,10 +226,16 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
   }
 
   const keys = (e: KeyboardEvent<HTMLDivElement>) => {
+    // The menu's keys are its own: the row it opened from moves between
+    // rows on the same arrows, and must not.
+    e.stopPropagation()
     if (e.key === 'Escape') {
-      e.stopPropagation()
       onClose()
       anchor?.focus()
+      return
+    }
+    if (e.key === 'Tab') {
+      onClose()
       return
     }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
@@ -249,8 +256,10 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
         {target.role ? ` · ${target.role}` : ''}
       </>
     )
-  return (
-    <div ref={menu} className="tb-menu" role="menu" aria-label={`Tools for ${target.kind} ${target.name}`} style={style} onKeyDown={keys} onClick={(e) => e.stopPropagation()} data-testid="tools-menu">
+  // At the end of the document: a table cell's styles (its text does not
+  // wrap) and keyboard handling stay out of it.
+  return createPortal(
+    <div ref={menu} className="tb-menu" role="menu" aria-label={`Tools for ${target.kind} ${target.name}`} style={style} onKeyDown={keys} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} data-testid="tools-menu">
       <div className="tb-mhead">{head}</div>
       {!tb.available ? (
         <p className="tb-mnote" style={{ maxWidth: 300 }}>
@@ -285,6 +294,7 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
           ))}
         </>
       )}
-    </div>
+    </div>,
+    document.body,
   )
 }

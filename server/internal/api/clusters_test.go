@@ -87,9 +87,10 @@ func multiSetupWith(t *testing.T, who string, deny map[string]bool, mods ...func
 		Mode: auth.ModeLocal,
 		Local: []auth.LocalUser{
 			{Email: "ops@corp.example", Name: "Ops", PasswordHash: hash},
+			{Email: "ops2@corp.example", Name: "Ops Two", PasswordHash: hash},
 			{Email: "viewer@corp.example", Name: "Viewer", PasswordHash: hash},
 		},
-		Admins:      []string{"ops@corp.example"},
+		Admins:      []string{"ops@corp.example", "ops2@corp.example"},
 		SessionIdle: 30 * time.Minute,
 		SessionMax:  2 * time.Hour,
 	}, nil, audit.New(audit.Options{Out: &auditOut}), nil)

@@ -4,6 +4,7 @@ import type { PodDetails } from '../../api/types'
 import { apiPath } from '../../lib/router'
 import { BoltIcon, BoxIcon, CloseIcon, ForwardIcon, ShieldSmallIcon, TerminalIcon } from '../Icons'
 import type { OpenTool } from './context'
+import { trapTab } from '../../lib/focus'
 
 interface Props {
   cluster: string
@@ -386,12 +387,14 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
                 <input ref={(el) => void (first.current ??= el)} value={namespace} onChange={(e) => setNamespace(e.target.value.trim())} aria-label="Namespace" />
               </span>
             </label>
-            <label className="tb-lbl">
-              <span>Service account</span>
-              <span className="rk-field" data-mono="true">
-                <input value={serviceAccount} onChange={(e) => setServiceAccount(e.target.value.trim())} placeholder="default" aria-label="Service account" />
-              </span>
-            </label>
+            {info?.admin && (
+              <label className="tb-lbl">
+                <span>Service account · its token goes with it</span>
+                <span className="rk-field" data-mono="true">
+                  <input value={serviceAccount} onChange={(e) => setServiceAccount(e.target.value.trim())} placeholder="none: no token" aria-label="Service account" />
+                </span>
+              </label>
+            )}
             {durationField}
           </div>
           <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
@@ -420,7 +423,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
             </span>
           </label>
           <p className="tb-hint" style={{ margin: 0 }}>
-            Use for troubleshooting containers, services, and other objects in a Kubernetes namespace. Automatically deleted when the session ends.
+            A pod of its own in the namespace, for looking at its Services and the network from inside. {info?.admin && serviceAccount.trim() ? 'It carries that account’s token, and a shell in it the account’s rights.' : 'It carries no ServiceAccount token.'} It is deleted when the session ends.
           </p>
         </>
       )
@@ -465,6 +468,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
         aria-labelledby="tb-dlg-title"
         ref={dlg}
         tabIndex={-1}
+        onKeyDown={trapTab}
         data-testid="tool-dialog"
       >
         <div className="tb-dlg-head">
@@ -523,7 +527,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
             <div className="rk-callout" data-tone="info">
               <ShieldSmallIcon />
               <span>
-                <b>Needs a second {needsTwo ? 'SuperAdmin' : 'person'}.</b> The card appears in Watson for {needsTwo ? 'another SuperAdmin' : 'someone else'} to approve; nothing opens until they do. It lapses after 30 minutes unanswered.
+                <b>Needs another SuperAdmin.</b> The session would open as you, with your rights, so the card appears in Watson for another SuperAdmin to approve; nothing opens until they do. It lapses after 30 minutes unanswered.
               </span>
             </div>
           )}
