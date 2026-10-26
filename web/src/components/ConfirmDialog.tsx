@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { trapTab } from '../lib/focus'
+import { layer } from '../lib/layer'
 
 interface Props {
   title: string
@@ -20,7 +21,8 @@ interface Props {
  * never confirms by accident, Tab kept inside, and Escape cancelling. It
  * renders at the end of the document, so that opening it from a table cell
  * or a menu gives it neither their styles (a cell's text does not wrap) nor
- * their keyboard handling; its own events stop at it.
+ * their keyboard handling; its own events stop at it. The end of the app's
+ * root, to keep the theme's colours.
  */
 export function ConfirmDialog({ title, children, confirm, danger, busy, error, onConfirm, onCancel }: Props) {
   const cancel = useRef<HTMLButtonElement>(null)
@@ -63,6 +65,6 @@ export function ConfirmDialog({ title, children, confirm, danger, busy, error, o
         </div>
       </div>
     </div>,
-    document.body,
+    layer(),
   )
 }

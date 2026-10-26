@@ -25,12 +25,12 @@ test('lists every pod with its status, node and namespace, and filters by each',
   expect(pods.length).toBeGreaterThan(0)
   await expect.poll(() => countShown(page)).toBe(pods.length)
 
-  // A namespace alone.
+  // A namespace alone: clear the namespaces, then tick one.
   const ns = pods[0]!.namespace
   const inNs = pods.filter((p) => p.namespace === ns)
   const nsRow = page.getByTestId('namespace-list').locator('.rk-frow', { hasText: ns }).first()
-  await nsRow.hover()
-  await nsRow.getByRole('button', { name: 'only' }).click()
+  await page.getByRole('checkbox', { name: /Select all/ }).last().uncheck()
+  await nsRow.getByRole('checkbox').check()
   await expect(page).toHaveURL(new RegExp(`ns=${ns}`))
   await expect.poll(() => countShown(page)).toBe(inNs.length)
   for (const k of await shownKeys(page)) expect(k.startsWith(ns + '/')).toBe(true)
@@ -41,8 +41,8 @@ test('lists every pod with its status, node and namespace, and filters by each',
   const node = pods.find((p) => p.node)!.node
   const onNode = pods.filter((p) => p.node === node)
   const nodeRow = page.getByTestId('node-list').locator('.rk-frow', { hasText: node }).first()
-  await nodeRow.hover()
-  await nodeRow.getByRole('button', { name: 'only' }).click()
+  await page.getByRole('checkbox', { name: /Select all/ }).first().uncheck()
+  await nodeRow.getByRole('checkbox').check()
   await expect(page).toHaveURL(new RegExp(`node=${node}`))
   await expect.poll(() => countShown(page)).toBe(onNode.length)
   await expect(page.getByText(`1 of ${(await page.getByTestId('node-list').locator('.rk-frow').count()).toString()} selected`)).toBeVisible()

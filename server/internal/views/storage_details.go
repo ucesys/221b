@@ -156,7 +156,41 @@ func ClaimDetails(src Source, namespace, name string, can StorageCan, now time.T
 	return d, true
 }
 
-// VolumeDetails builds the drawer of a volume no claim holds.
+// HeldBy names the claim that holds a bound volume, when the claim is
+// there and names the volume back.
+func HeldBy(src Source, name string) (namespace, claim string, ok bool) {
+	v, _ := src.Object("persistentvolumes", "", name).(*corev1.PersistentVolume)
+	if v == nil || v.Spec.ClaimRef == nil || v.Status.Phase != corev1.VolumeBound {
+		return "", "", false
+	}
+	ref := v.Spec.ClaimRef
+	c, _ := src.Object("persistentvolumeclaims", ref.Namespace, ref.Name).(*corev1.PersistentVolumeClaim)
+	if c == nil || c.Spec.VolumeName != name {
+		return "", "", false
+	}
+	return ref.Namespace, ref.Name, true
+}
+
+// HeldVolumeDetails builds the drawer of a volume a claim holds: the
+// claim's chain, seen from the volume, so the claim is the link.
+func HeldVolumeDetails(src Source, name, namespace, claim string, can StorageCan, now time.Time) (StorageDetails, bool) {
+	d, ok := ClaimDetails(src, namespace, claim, can, now)
+	if !ok || d.Pair.Volume != name {
+		return StorageDetails{}, false
+	}
+	for i := range d.Hops {
+		switch d.Hops[i].Key {
+		case "volume":
+			d.Hops[i].Value = []Seg{segT(name)}
+		case "claim":
+			d.Hops[i].Value = []Seg{segL(namespace+"/"+claim, Link{Kind: "claim", Namespace: namespace, Name: claim})}
+		}
+	}
+	return d, true
+}
+
+// VolumeDetails builds the drawer of a volume no claim holds, or of one
+// whose claim the person may not read.
 func VolumeDetails(src Source, name string, can StorageCan, now time.Time) (StorageDetails, bool) {
 	v, _ := src.Object("persistentvolumes", "", name).(*corev1.PersistentVolume)
 	if v == nil {
@@ -761,6 +795,11 @@ func (d *StorageDetails) volumeChain(v *corev1.PersistentVolume, cls *storagev1.
 		h3.Value, h3.Desc = []Seg{segT(orNone(p.WasClaim))}, []Seg{segT("the claim it was for")}
 		d.Intro = []Seg{segT("The chain breaks at the volume: "), segB(v.Name), segT(" failed. " + strings.TrimSpace(v.Status.Message))}
 		d.Broken = true
+	case StateBound:
+		// The claim is one the person may not read, or was deleted a moment ago.
+		h2.Tone, h2.Desc = "ok", base
+		h3.Value, h3.Desc = []Seg{segT(orNone(p.WasClaim))}, []Seg{segT("the claim that holds it; your role does not read the claims of its namespace")}
+		d.Intro = []Seg{segT("This volume is "), segB("Bound"), segT(" to " + orNone(p.WasClaim) + ".")}
 	default:
 		h2.Tone = "info"
 		h2.Desc = append(base, segT(" · waiting for a claim that asks for this size and access mode, or names it"))

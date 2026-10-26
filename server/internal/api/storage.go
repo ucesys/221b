@@ -93,8 +93,9 @@ func (s *Server) storageClaim(w http.ResponseWriter, r *http.Request) {
 	s.writeStorage(w, r, d)
 }
 
-// storageVolume is the drawer of a volume no claim holds; only someone
-// who may list volumes gets it (ST-20).
+// storageVolume is the drawer of a volume; only someone who may list
+// volumes gets it (ST-20). A volume a claim holds shows the claim's chain
+// when the person may read the claims of its namespace.
 func (s *Server) storageVolume(w http.ResponseWriter, r *http.Request) {
 	_, cl, ok := s.lookup(w, r)
 	if !ok {
@@ -109,12 +110,41 @@ func (s *Server) storageVolume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
+	if ns, claim, ok := views.HeldBy(cl, name); ok && s.mayReadClaims(r, cl, ns) {
+		can, err := s.storageCan(r.Context(), r, cl, ns)
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, "asking Kubernetes what you may see failed: "+err.Error())
+			return
+		}
+		if d, ok := views.HeldVolumeDetails(cl, name, ns, claim, can, s.opts.Now().UTC()); ok {
+			s.writeStorage(w, r, d)
+			return
+		}
+	}
 	d, ok := views.VolumeDetails(cl, name, can, s.opts.Now().UTC())
 	if !ok {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("no volume %s: it may have been deleted", name))
 		return
 	}
 	s.writeStorage(w, r, d)
+}
+
+// mayReadClaims says, without answering the request, whether the person
+// may list the claims of a namespace.
+func (s *Server) mayReadClaims(r *http.Request, cl Cluster, namespace string) bool {
+	a := s.access(r, cl)
+	if a == nil {
+		return true
+	}
+	pairs := []access.Pair{{Resource: "persistentvolumeclaims", Namespace: namespace}}
+	if a.Stale(pairs) {
+		ctx, cancel := context.WithTimeout(r.Context(), prepareTimeout)
+		defer cancel()
+		if _, err := a.Prepare(ctx, pairs, 0); err != nil {
+			return false
+		}
+	}
+	return a.Namespaced("persistentvolumeclaims", namespace)
 }
 
 func (s *Server) writeStorage(w http.ResponseWriter, r *http.Request, d views.StorageDetails) {

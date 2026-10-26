@@ -103,6 +103,11 @@ func TestStorageDrawersForSomeoneWhoMayReadEverything(t *testing.T) {
 		if r.StatusCode != 200 || json.Unmarshal([]byte(body), &d) != nil || d.Pair.Reclaim != "Delete" || d.Class == nil || !d.Class.Default || len(d.Hops) != 6 {
 			t.Fatalf("%s: %d %s", base, r.StatusCode, body)
 		}
+		// The volume a claim holds shows the claim, not "none".
+		r, body = send(t, ops, http.MethodGet, srv.URL+base+"storage/volumes/pvc-web-data", "")
+		if r.StatusCode != 200 || json.Unmarshal([]byte(body), &d) != nil || d.Pair.Claim != "data" || d.Hops[2].Value[0].L == nil || d.Hops[2].Value[0].L.Kind != "claim" {
+			t.Fatalf("%s held volume: %d %s", base, r.StatusCode, body)
+		}
 		r, body = send(t, ops, http.MethodGet, srv.URL+base+"storage/volumes/pvc-released", "")
 		if r.StatusCode != 200 || json.Unmarshal([]byte(body), &d) != nil || d.Pair.State != views.StateReleased || d.Pair.WasClaim != "kube-system/old" {
 			t.Fatalf("%s volume: %d %s", base, r.StatusCode, body)

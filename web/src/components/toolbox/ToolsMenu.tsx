@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import { createPortal } from 'react-dom'
 import { fetchToolbox, type ToolAction, type ToolboxInfo, type ToolName } from '../../api/toolbox'
 import type { PodDetails } from '../../api/types'
+import { layer } from '../../lib/layer'
 import { apiPath } from '../../lib/router'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
@@ -256,8 +257,8 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
         {target.role ? ` · ${target.role}` : ''}
       </>
     )
-  // At the end of the document: a table cell's styles (its text does not
-  // wrap) and keyboard handling stay out of it.
+  // At the end of the app's root, for the theme's colours: a table cell's
+  // styles (its text does not wrap) and keyboard handling stay out of it.
   return createPortal(
     <div ref={menu} className="tb-menu" role="menu" aria-label={`Tools for ${target.kind} ${target.name}`} style={style} onKeyDown={keys} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} data-testid="tools-menu">
       <div className="tb-mhead">{head}</div>
@@ -295,6 +296,6 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
         </>
       )}
     </div>,
-    document.body,
+    layer(),
   )
 }

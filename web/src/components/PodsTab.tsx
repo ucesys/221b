@@ -226,9 +226,6 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
                     </span>
                   )}
                 </label>
-                <button className="rk-only" onClick={() => set({ node: [k] })} title={`Show only ${k === UNSCHEDULED ? 'pods without a node' : label}`}>
-                  only
-                </button>
                 <span className="rk-num" style={{ flex: 'none', minWidth: 30, paddingRight: 16, textAlign: 'right', fontSize: 12, color: 'var(--fg3)' }}>
                   {byNode.get(k) ?? 0}
                 </span>
@@ -271,9 +268,6 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
                     </span>
                   )}
                 </label>
-                <button className="rk-only" onClick={() => set({ ns: [ns] })} title={`Show only ${ns}`}>
-                  only
-                </button>
                 <span className="rk-num" style={{ flex: 'none', minWidth: 30, paddingRight: 16, textAlign: 'right', fontSize: 12, color: 'var(--fg3)' }}>
                   {byNs.get(ns) ?? 0}
                 </span>

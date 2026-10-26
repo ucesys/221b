@@ -76,8 +76,9 @@ test.describe('the simulated scenario', () => {
     await expect(page.getByTestId('storage-ns-list').locator('[data-key=analytics]')).toContainText('quota 4.0Ti of 8.0Ti · 50%')
     await expect(page.getByTestId('storage-class-list').locator('[data-key=fast-ssd]')).toContainText('not found')
 
-    // only: one namespace.
-    await page.getByTestId('storage-ns-list').locator('[data-key=analytics]').getByRole('button', { name: 'only' }).click()
+    // One namespace: clear them, then tick it.
+    await page.getByTestId('storage-ns-list-all').uncheck()
+    await page.getByTestId('storage-ns-list').locator('[data-key=analytics]').getByRole('checkbox').check()
     await expect(page).toHaveURL(/ns=analytics/)
     await expect.poll(async () => (await rowKeys(page)).every((k) => k.startsWith('pvc:analytics/'))).toBe(true)
     await expect(page.getByTestId('storage-scope')).toContainText('· analytics · all nodes · all classes')

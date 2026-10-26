@@ -29,6 +29,9 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Fixed
 
+- **The Tools menu and its confirmations had no background.** They are drawn outside the table, and took the theme's colours with them only on the page itself.
+- **A bound volume's drawer said its claim was none.** It now shows the claim's chain, with the claim as a link back to its drawer; the Volume link in the Storage table opens the volume's drawer and the Claim link the claim's, where both used to open the claim's.
+- The filter sidebars of the Pods and Storage tabs no longer show an "only" button on hover; the checkboxes and Select all do the same.
 - **The home page counted a cordoned node as not ready.**
 - **An acknowledgement took a second or two to show.** It is saved with the settings, and the replica serving the page, when it is not the one that saved it, reads them every 3 seconds. The Alerts tab, its badge and its colour now show it at once, and the server's rows take over when they come.
 - **The home page's pod counts did not add up**, and differed from the Pods tab's: "109 pods · 106 running · 10 not ready" counted the not-ready pods among the running ones. The tile now reads "96 running · 10 not ready · 3 completed", and the Pods and Helm tabs have a Not ready status beside Running: pods running but failing a readiness check, or on a node that stopped reporting. The Nodes, Pods and Alerts boxes stay plain when nothing is wrong.
