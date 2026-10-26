@@ -157,7 +157,14 @@ rows = json.load(sys.stdin)["views"]["alerts"]["rows"]
 sys.exit(0 if any(r["key"] == sys.argv[1] and r["severity"] != "recovered" for r in rows) else 1)' "$key" && break
   sleep 2
 done
-change -X POST -d "{\"key\":\"$key\",\"acknowledge\":true}" "$URL/api/v1/alerts/ack" > /dev/null
+# A crash-looping pod's alert flickers between failing and recovered, and
+# the release refuses (409) to acknowledge one that has just cleared: try
+# again for a minute.
+for i in $(seq 30); do
+  change -X POST -d "{\"key\":\"$key\",\"acknowledge\":true}" "$URL/api/v1/alerts/ack" > /dev/null && break
+  [ "$i" -lt 30 ] || { echo "$FROM_TAG would not acknowledge $key"; exit 1; }
+  sleep 2
+done
 # A connection to the cluster itself, kept in a Secret the chart does not own.
 TOKEN=$(kubectl -n "$NS" create token "$FULLNAME" --duration=2h)
 python3 - "$TOKEN" "$(kubectl -n "$NS" get configmap kube-root-ca.crt -o jsonpath='{.data.ca\.crt}')" > "$WORK/upgrade-draft.json" <<'PY'
