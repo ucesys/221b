@@ -20,6 +20,8 @@ export interface WatsonPlan {
   dryRunExit: number
   dryRunNote?: string
   dryRunning?: boolean
+  /** The YAML of what a session creates or patches (TB-36). */
+  object?: string
 }
 
 export type WatsonStatusName = 'pending' | 'queued' | 'running' | 'done' | 'failed' | 'stopped' | 'lapsed' | 'discarded' | 'refused'
@@ -47,6 +49,8 @@ export interface WatsonItem {
   lines?: WatsonLine[]
   lineStart: number
   rev: number
+  /** A Toolbox card's request and, once open, its session (TB-36). */
+  session?: { tool: string; summary: string; request: unknown; needsTwo?: boolean; minutes?: number; reason?: string; sessionId?: string }
 }
 
 export interface WatsonStatus {

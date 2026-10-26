@@ -4,6 +4,7 @@ import { toneRank } from '../lib/nodes'
 import { href } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
 import { CellLink, Mono, NameCell, peekCell, Tone, UsageBar } from './cells'
+import { NameWithTools } from '../components/toolbox/ToolsMenu'
 
 const GIB = 1024 * 1024 * 1024
 
@@ -22,7 +23,12 @@ export const POD_COLUMNS: ColumnDef<PodView>[] = [
     min: 170,
     compactMin: 160,
     sortValue: (r) => r.name,
-    cell: (r) => <NameCell name={r.name} what="pod name" />,
+    // The Tools button beside the name (TB-01).
+    cell: (r) => (
+      <NameWithTools target={{ kind: 'pod', name: r.name, namespace: r.namespace }}>
+        <NameCell name={r.name} what="pod name" />
+      </NameWithTools>
+    ),
     export: (r) => [{ head: 'Pod', cell: r.name }],
   },
   {

@@ -312,6 +312,25 @@ The pages at 1440 px in the light theme. The HTML of each page is in `docs/desig
 | ![Administration, Sessions](images/toolbox/admin-sessions-light-1440.png) | ![Administration, Toolbox](images/toolbox/admin-toolbox-light-1440.png) |
 | Administration › Sessions (TB-44): live and history, every ending, one row expanded to its audit trail | Administration › Toolbox (TB-46): what the chart allows, the allowed images, the values it came from. The `roles:` lists and `approval:` key on this page are superseded by TB-50 and the values block above |
 
+## As built
+
+Built on `phase-9-tools` after the review above, server first, then the chart, the `221b` command and the browser. Tested with unit tests, the simulator (which now runs exec over WebSocket with a pretend shell, ephemeral containers, Jobs and bare pods, but not port forwards) and `web/e2e/toolbox.spec.ts`; not yet on kind or a real cluster.
+
+| Area | As built | Differs from the requirements |
+|---|---|---|
+| Menus and dialogs (TB-01 to TB-07) | The Tools button sits in the name cell of the Pods and Nodes tables, so every table built from their columns has it. Pod menu: Shell, Run a command, Port forward (ports from the pod's spec), Debug container. Node menu: Node shell, Run a command (the chart's quick commands), Debug pod, Cordon or Uncordon and Drain as Watson cards. A dialog per tool; the reason and the approval note show only where a second person is needed. | No Debug pod on Namespaces rows yet. The dialog is always shown (the open question on one-container pods stays as answered). |
+| Cards (TB-36 to TB-38) | `POST …/watson/sessions` makes a Watson card that names the targets, what it does, the server's dry run (or the access review where Kubernetes has none) and the YAML it creates. Approve and open; Discard. Waiting for a second person lapses after 30 minutes. | No "Approve for 15 minutes" or Refuse with a reason: the card is approved or discarded as Watson's other cards. |
+| Sessions (TB-08 to TB-17) | Run as the person who asked, with their Kubernetes rights. A strip in the dock once there is a session: Assistants, Sessions, a tab per session. Terminals are xterm.js; idle warning with Keep; End; Extend in the last 15 minutes; an administrator's End asks for a reason the owner sees; SuperAdmins Watch, read-only, and the owner sees it. | xterm.js writes its theme into `<style>` elements, which the console's CSP refuses; the terminal mirrors them into constructed stylesheets. No paste guard yet (TB-18). |
+| Port forward and the CLI (TB-19 to TB-23) | `221b forward <console> --cluster … --session … --token … [--local N]`, one static binary built by `make cli` and attached to releases for macOS, Linux and Windows. The token is the forward's own, shown only in its owner's pane, and ends with it. Development builds skip the minimum version. | No `221b login` or `221b sessions`, and no token in a keychain: the per-session token replaces them for now. |
+| Debug tools (TB-24 to TB-30) | Ephemeral containers from allowlisted images, capabilities bounded by the namespace's Pod Security level, volumes mounted read-only by default. Debug pods as Jobs with a readiness gate that never passes, labels copied without controller labels, deleted with the session. | — |
+| Node tools (TB-31 to TB-35) | Node shells with the general, netadmin and sysadmin profiles; one command on a node through `chroot /host`; a second SuperAdmin on every cluster by default. | The chart turns node shells off instead of refusing to render when SuperAdmin is read-only, so upgrades of such installs keep working. |
+| Sherlock (TB-41 to TB-43) | `open_tool_dialog` joins the UI actions: it opens a tool's dialog filled in, marked as Sherlock's; the person sends it. | No *Ask about this output* beside a terminal yet; the evaluation cases are not written. |
+| Administration (TB-44 to TB-46) | Sessions: open ones (with End) and the history, filterable. Toolbox: each tool here and why it is off, the limits, the approval rules, the images, the values. | No per-session audit trail expanded in the history; no check of the live namespace against the chart. |
+| Chart and roles (TB-47 to TB-54) | The `toolbox` block, `rbac.roles.admin.exec`, the toolbox namespace at Pod Security privileged with a closed network policy, a volume for transcripts with `pvc`. Full Admin gains port forwards and Jobs; `pods/exec` behind the switch. | History is kept in the settings ConfigMap, 300 records by default, not a ConfigMap of its own. Transcripts are `none` or `pvc`; no `s3`. No per-connection override. No janitor: what a session creates has a deadline and is deleted when the session ends; a console that crashes leaves it until the deadline. |
+| File transfer (TB-16) | — | Not built: `fileTransfer` is read but nothing offers it yet. |
+
+The Toolbox needs Watson, which shows only where Sherlock is on (Phase 6.2). Where it is off, the Tools menu says why.
+
 ## Your review
 
 | Date | Note |

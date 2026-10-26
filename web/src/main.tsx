@@ -16,6 +16,8 @@ import '@fontsource/ibm-plex-mono/latin-600.css'
 import '@fontsource/ibm-plex-mono/latin-ext-600.css'
 import './styles/design.css'
 import './styles/app.css'
+import './styles/toolbox.css'
+import '@xterm/xterm/css/xterm.css'
 import { App } from './App'
 
 const root = document.getElementById('root')

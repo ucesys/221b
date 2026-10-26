@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMe } from './api/auth'
 import { useClusters, type ClusterSummary } from './api/clusters'
 import { LiveContext, useLiveMeta, useLiveStore, useView } from './api/live'
@@ -35,9 +35,15 @@ import { openTarget, SherlockContext, SherlockPane } from './components/Sherlock
 import { Dock, PoppedOutFab, type DockMode } from './components/Dock'
 import { autoRunReads, WatsonContext, watsonOff, WatsonPane } from './components/Watson'
 import { askContext, useUIControl } from './lib/uiWindow'
+import { setToolOpener } from './lib/uiControl'
+import type { ToolName } from './api/toolbox'
 import { ViewAnnouncer } from './components/ViewAnnouncer'
 import { AssistantWindow } from './components/AssistantWindow'
 import { readJSON, writeJSON } from './lib/storage'
+import { useSessions } from './api/toolbox'
+import { ToolboxContext, type OpenTool, type ToolboxApi } from './components/toolbox/context'
+import { ToolDialog } from './components/toolbox/ToolDialog'
+import { SessionPane, SessionsPane } from './components/toolbox/SessionPanes'
 import { setTimeFormat } from './lib/format'
 
 const THEME_KEY = '221b.theme'
@@ -199,9 +205,31 @@ function Shell() {
   // Both leave the main window together, for one window of their own.
   const sherlockDocked = sherlockOn && !popped
   const watsonDocked = watsonOn && !popped
+  // The Toolbox's sessions (Phase 9) are tabs in the dock: those of the
+  // person, and others' they open from the list (TB-08, TB-09).
+  const [dockTab, setDockTab] = useState('assistants')
+  // A session of the person's that opens comes forward in the dock.
+  const dockRef = useRef(dock)
+  useEffect(() => {
+    dockRef.current = dock
+  }, [dock])
+  const onNewSession = useCallback(
+    (x: { id: string; mine: boolean }) => {
+      if (!x.mine) return
+      setDockTab(x.id)
+      if (dockRef.current.mode === 'min') setDock({ ...dockRef.current, mode: 'open' })
+    },
+    [setDock],
+  )
+  const sessions = useSessions(route.cluster, watsonOn, onNewSession)
+  const [tabs, setTabs] = useState<{ cluster: string; closed: string[]; opened: string[] }>({ cluster: route.cluster, closed: [], opened: [] })
+  const tabsHere = tabs.cluster === route.cluster ? tabs : { cluster: route.cluster, closed: [], opened: [] }
+  const tabSessions = sessions.sessions.filter((x) => (x.mine && !tabsHere.closed.includes(x.id)) || tabsHere.opened.includes(x.id))
+  const openSessions = sessions.sessions.filter((x) => x.state !== 'ended').length
+  const [toolDialog, setToolDialog] = useState<OpenTool | null>(null)
   // The same on the home page and a cluster's page as on the tabs; the
   // Administration area has its own Back and Escape, so it leaves them.
-  const dockShown = view !== 'admin' && (sherlockDocked || watsonDocked)
+  const dockShown = view !== 'admin' && (sherlockDocked || watsonDocked || (watsonOn && sessions.sessions.length > 0))
   useEffect(() => {
     if (popped) post({ type: 'cluster', cluster: route.cluster })
   }, [popped, route.cluster])
@@ -267,11 +295,35 @@ function Shell() {
     if (popOut(route.cluster)) setDock({ ...dock, mode: dock.mode === 'max' ? 'open' : dock.mode })
     else setToast('The browser did not open a new window. Allow pop-ups for the console to move Sherlock and Watson to a window of their own.')
   }
+  const showSession = (id: string) => {
+    setTabs({ ...tabsHere, closed: tabsHere.closed.filter((x) => x !== id), opened: tabsHere.opened.includes(id) ? tabsHere.opened : [...tabsHere.opened, id] })
+    setDockTab(id)
+    if (dock.mode === 'min') setDock({ ...dock, mode: 'open' })
+  }
+  const toolboxApi: ToolboxApi = {
+    available: watsonOn && !watson.status?.readOnly,
+    off: !watsonOn ? (watsonApi.off?.text.replace('To run it from here', 'To use the tools') ?? 'The tools need Watson, which is off here.') : watson.status?.readOnly ? watson.status.how || 'This cluster is connected read-only.' : undefined,
+    cluster: route.cluster,
+    openTool: (o) => setToolDialog(o),
+    watson: (command, from) => watsonApi.send(command, { from }),
+    showSession,
+  }
+  // Sherlock may open a tool's dialog, filled in, for the person to send (TB-42).
+  const toolsOff = toolboxApi.available ? null : (toolboxApi.off ?? 'The tools are off here.')
+  useEffect(() => {
+    setToolOpener((a) => {
+      if (toolsOff) return toolsOff
+      setToolDialog({ tool: a.tool as ToolName, pod: a.pod, node: a.node, prefill: a.prefill, from: 'Sherlock' })
+      return null
+    })
+    return () => setToolOpener(null)
+  }, [toolsOff])
   const waiting = watson.items.filter((x) => x.status === 'pending' && x.kind === 'change' && x.canApprove).length
   const busy = !!sherlock.conv?.busy || watson.items.some((x) => x.status === 'running' || x.status === 'queued')
   return (
     <SherlockContext.Provider value={sherlockApi}>
     <WatsonContext.Provider value={watsonApi}>
+    <ToolboxContext.Provider value={toolboxApi}>
     <div
       className="rk"
       data-theme={theme}
@@ -318,6 +370,29 @@ function Shell() {
           onPopOut={canPopOut() ? popOutNow : undefined}
           waiting={waiting}
           busy={busy}
+          sessions={
+            watsonOn
+              ? {
+                  tabs: tabSessions,
+                  open: openSessions,
+                  active: dockTab === 'assistants' || dockTab === 'sessions' || sessions.sessions.some((x) => x.id === dockTab) ? dockTab : 'assistants',
+                  onActive: (a) => {
+                    if (a !== 'assistants' && a !== 'sessions' && !tabsHere.opened.includes(a) && !sessions.sessions.find((x) => x.id === a)?.mine) setTabs({ ...tabsHere, opened: [...tabsHere.opened, a] })
+                    setDockTab(a)
+                  },
+                  onCloseTab: (id) => {
+                    setTabs({ ...tabsHere, closed: [...tabsHere.closed, id], opened: tabsHere.opened.filter((x) => x !== id) })
+                    if (dockTab === id) setDockTab(sherlockDocked || watsonDocked ? 'assistants' : 'sessions')
+                  },
+                  now,
+                  render: (a, controls) => {
+                    const one = sessions.sessions.find((x) => x.id === a)
+                    if (one) return <SessionPane key={one.id} cluster={route.cluster} session={one} admin={!!watson.status?.admin} dark={theme === 'dark'} controls={controls} onToast={setToast} />
+                    return <SessionsPane cluster={route.cluster} sessions={sessions.sessions} admin={!!watson.status?.admin} controls={controls} onOpen={showSession} onToast={setToast} />
+                  },
+                }
+              : undefined
+          }
         />
       )}
       {view !== 'admin' && popped && <PoppedOutFab onFocus={() => focusPopup()} onDock={() => post({ type: 'close' })} />}
@@ -325,9 +400,26 @@ function Shell() {
       {popped && <ViewAnnouncer />}
       {editing === null && <ClusterEditor key="+" orig={null} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
       {editing && editOrig && <ClusterEditor key={editing} orig={editOrig} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
+      {toolDialog && (
+        <ToolDialog
+          cluster={route.cluster}
+          clusterName={clusterName}
+          open={toolDialog}
+          onClose={() => setToolDialog(null)}
+          onSent={(what) => {
+            setToast(`Sent to Watson: ${what}. It opens once approved.`)
+            if (popped) focusPopup()
+            else {
+              setDockTab('assistants')
+              setDock({ ...dock, mode: dock.mode === 'min' ? 'open' : dock.mode, pane: 'watson' })
+            }
+          }}
+        />
+      )}
       {toast && <Toast message={toast} onDone={clearToast} />}
       <TipLayer />
     </div>
+    </ToolboxContext.Provider>
     </WatsonContext.Provider>
     </SherlockContext.Provider>
   )

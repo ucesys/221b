@@ -1,5 +1,5 @@
 {
-  "about": "Sherlock's UI actions (P6U-04, P6U-05): the one list that both the server's tool definitions and the browser's registry use. They run in the asking person's console window and change only that person's view. Edit here; the browser imports this file.",
+  "about": "Sherlock's UI actions (P6U-04, P6U-05): the one list that both the server's tool definitions and the browser's registry use. They run in the asking person's console window and change only that person's view; open_tool_dialog opens a dialog the person reads and sends, never a session (TB-42). Edit here; the browser imports this file.",
   "actions": [
     {
       "name": "view_state",
@@ -109,6 +109,29 @@
           "row": { "type": "string", "description": "The row's name, as the view state lists it." }
         },
         "required": ["row"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "open_tool_dialog",
+      "changes": true,
+      "description": "Opens the dialog of a Toolbox tool, filled in, for the person to read, change and send: Shell, Run a command, Port forward or Debug container for a pod; Node shell, Run a command on the node, or Debug pod for a node. Nothing opens until the person presses the dialog's button, which makes a Watson card that must be approved; it never starts a session or types into one. Choose the tool the problem needs: a debug container for an image without a shell (distroless), a node command or node shell for a node's problem, a debug pod with a pod's labels for a network question. Draft the reason from the alert or finding it came from.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tool": { "type": "string", "enum": ["shell", "command", "forward", "debug-container", "debug-pod", "node-shell", "node-command"], "description": "The tool." },
+          "namespace": { "type": "string", "description": "The pod's namespace, or the debug pod's." },
+          "pod": { "type": "string", "description": "The pod, for a pod's tool." },
+          "node": { "type": "string", "description": "The node, for a node's tool or a debug pod." },
+          "container": { "type": "string", "description": "The container to open the shell or run the command in, or the debug container's target." },
+          "command": { "type": "string", "maxLength": 2000, "description": "The command, for Run a command." },
+          "port": { "type": "number", "description": "The pod's port, for a port forward." },
+          "image": { "type": "string", "description": "The image's name in the toolbox values (such as general or network), for a debug container or pod." },
+          "profile": { "type": "string", "description": "A node shell's profile (general, netadmin, sysadmin), or a debug container's capabilities (general, baseline, restricted)." },
+          "labelsFrom": { "type": "string", "description": "For a debug pod: the pod whose labels it copies, so network policies treat it the same." },
+          "reason": { "type": "string", "maxLength": 500, "description": "A drafted reason, citing what it came from, for production and node tools." }
+        },
+        "required": ["tool"],
         "additionalProperties": false
       }
     }

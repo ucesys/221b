@@ -316,7 +316,8 @@ func TestSherlockUIActionsList(t *testing.T) {
 			}
 		}
 	}
-	want := "view_state,view_open,view_filter,view_search,view_sort,view_columns,view_details,view_highlight"
+	// open_tool_dialog opens a dialog the person reads and sends (TB-42).
+	want := "view_state,view_open,view_filter,view_search,view_sort,view_columns,view_details,view_highlight,open_tool_dialog"
 	if strings.Join(names, ",") != want {
 		t.Fatalf("the UI actions changed; review that each changes only the asking person's view (P6U-12), then update this list:\n got %v\nwant %v", names, want)
 	}

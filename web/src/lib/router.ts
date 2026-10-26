@@ -109,9 +109,9 @@ export function clusterHref(cluster: string, tab: Tab, path: string[] = [], para
 }
 
 /** The pages of the Administration area, in order (RB-41). */
-export type AdminPage = 'roles' | 'permissions' | 'users' | 'settings'
+export type AdminPage = 'roles' | 'permissions' | 'users' | 'sessions' | 'toolbox' | 'settings'
 
-export const ADMIN_PAGES: AdminPage[] = ['roles', 'permissions', 'users', 'settings']
+export const ADMIN_PAGES: AdminPage[] = ['roles', 'permissions', 'users', 'sessions', 'toolbox', 'settings']
 
 /** A page of the Administration area: "#/admin/roles/admin", or "#/c/dev/admin/permissions" for another cluster. */
 export function adminHref(page: AdminPage, path: string[] = [], cluster: string = LOCAL, params: Record<string, string | undefined> = {}): string {

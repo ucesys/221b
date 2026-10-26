@@ -237,6 +237,7 @@ func (s *Sim) routes() {
 	s.phase3Routes(m)
 	s.phase4Routes(m)
 	s.watsonRoutes(m)
+	s.toolboxRoutes(m)
 	if s.oidc != nil {
 		m.Handle("/oidc/", s.oidc)
 	}

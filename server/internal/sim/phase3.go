@@ -213,7 +213,7 @@ func (s *Sim) decide(user string, impersonated bool, attrs *authzv1.ResourceAttr
 
 func (s *Sim) selfAccessReview(w http.ResponseWriter, r *http.Request) {
 	var rev authzv1.SelfSubjectAccessReview
-	if err := json.NewDecoder(r.Body).Decode(&rev); err != nil {
+	if err := decodeBody(r, &rev); err != nil {
 		status(w, http.StatusBadRequest, "BadRequest", "invalid review: "+err.Error())
 		return
 	}
@@ -227,7 +227,7 @@ func (s *Sim) selfAccessReview(w http.ResponseWriter, r *http.Request) {
 
 func (s *Sim) accessReview(w http.ResponseWriter, r *http.Request) {
 	var rev authzv1.SubjectAccessReview
-	if err := json.NewDecoder(r.Body).Decode(&rev); err != nil {
+	if err := decodeBody(r, &rev); err != nil {
 		status(w, http.StatusBadRequest, "BadRequest", "invalid review: "+err.Error())
 		return
 	}

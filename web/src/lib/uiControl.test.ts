@@ -2,11 +2,30 @@ import { act, renderHook } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ACTIONS, checkInput, REGISTRY, setAnswering, TAB_SPECS, viewState, type ActionDef } from './uiControl'
+import { ACTIONS, checkInput, REGISTRY, setAnswering, setToolOpener, TAB_SPECS, viewState, type ActionDef } from './uiControl'
 import { currentRoute, setRouteForTests, TABS } from './router'
 import { tableHandle, tableHandles } from './tables'
 import { useTable } from './useTable'
 import type { ColumnDef } from './table'
+
+describe('Sherlock opens a tool’s dialog, never a session (TB-42)', () => {
+  it('asks the console to open the dialog, filled in, and says when it cannot', () => {
+    const asked: unknown[] = []
+    expect(() => REGISTRY.open_tool_dialog!(currentRoute(), { tool: 'shell', namespace: 'web', pod: 'api-1' })).toThrow('not available')
+    setToolOpener((a) => {
+      asked.push(a)
+      return null
+    })
+    const done = REGISTRY.open_tool_dialog!(currentRoute(), { tool: 'debug-container', namespace: 'web', pod: 'api-1', container: 'api', image: 'network', reason: 'distroless' })
+    expect(done.dialog).toBe(true)
+    expect(asked[0]).toEqual({ tool: 'debug-container', pod: { name: 'api-1', namespace: 'web' }, prefill: { target: 'api', image: 'network', reason: 'distroless', namespace: 'web' } })
+    expect(() => REGISTRY.open_tool_dialog!(currentRoute(), { tool: 'shell', pod: 'api-1' })).toThrow('needs the pod and its namespace')
+    expect(() => REGISTRY.open_tool_dialog!(currentRoute(), { tool: 'node-shell', node: '../etc' })).toThrow('is not a name')
+    setToolOpener(() => 'your role does not allow it here')
+    expect(() => REGISTRY.open_tool_dialog!(currentRoute(), { tool: 'node-shell', node: 'worker-1' })).toThrow('your role')
+    setToolOpener(null)
+  })
+})
 
 describe('Sherlock’s UI actions are one list (P6U-04, P6U-12)', () => {
   it('the browser registry and the server’s list name the same actions', () => {
@@ -14,11 +33,13 @@ describe('Sherlock’s UI actions are one list (P6U-04, P6U-12)', () => {
     const names = server.actions.map((a) => a.name)
     expect(ACTIONS.map((a) => a.name)).toEqual(names)
     expect(Object.keys(REGISTRY).sort()).toEqual([...names].sort())
-    expect(names).toEqual(['view_state', 'view_open', 'view_filter', 'view_search', 'view_sort', 'view_columns', 'view_details', 'view_highlight'])
+    expect(names).toEqual(['view_state', 'view_open', 'view_filter', 'view_search', 'view_sort', 'view_columns', 'view_details', 'view_highlight', 'open_tool_dialog'])
   })
 
   it('has nothing that clicks, types, runs script, reads the page, or reaches Watson or shared settings', () => {
     for (const a of ACTIONS) {
+      // The one exception (TB-42, amending P6U-12): a tool's dialog, which the person sends.
+      if (a.name === 'open_tool_dialog') continue
       expect(a.name).toMatch(/^view_/)
       expect(a.name).not.toMatch(/click|type|script|eval|screenshot|dom|approve|watson|setting|fleet|ack|export|submit|cluster/)
       expect(a.input_schema.additionalProperties).toBe(false)

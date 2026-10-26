@@ -245,6 +245,66 @@ export interface Applied {
   label: string
   /** For view_details: wait for the pane to settle. */
   details?: boolean
+  /** A dialog opened: focus goes to it, not back where it was. */
+  dialog?: boolean
+}
+
+/** What open_tool_dialog asks the console to open (TB-42). */
+export interface ToolDialogAsk {
+  tool: string
+  pod?: { name: string; namespace: string }
+  node?: string
+  prefill: Record<string, unknown>
+}
+
+let toolOpener: ((a: ToolDialogAsk) => string | null) | null = null
+
+/**
+ * The console registers how it opens a tool's dialog; the function answers
+ * why not, or null when it opened. Unregistered, the Toolbox is not here.
+ */
+export function setToolOpener(f: ((a: ToolDialogAsk) => string | null) | null): void {
+  toolOpener = f
+}
+
+const POD_TOOLS = ['shell', 'command', 'forward', 'debug-container']
+
+function openToolDialog(_route: Route, input: Record<string, unknown>): Applied {
+  const tool = text(input.tool, 'tool')
+  if (!toolOpener) throw new ActionError('The Toolbox is not available in this console window: its tools need Watson, which is off here.')
+  const name = (k: string) => {
+    const v = input[k]
+    if (v === undefined || v === '') return ''
+    const s = text(v, k).trim()
+    if (!NAME.test(s) || s.includes('/')) throw new ActionError(`${k} is not a name.`)
+    return s
+  }
+  const ns = name('namespace')
+  const pod = name('pod')
+  const node = name('node')
+  const prefill: Record<string, unknown> = {}
+  for (const k of ['container', 'image', 'profile', 'labelsFrom']) if (name(k)) prefill[k === 'container' && tool === 'debug-container' ? 'target' : k] = name(k)
+  if (typeof input.command === 'string') prefill.command = input.command
+  if (typeof input.reason === 'string') prefill.reason = input.reason
+  if (typeof input.port === 'number') {
+    if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw new ActionError('port is 1 to 65535.')
+    prefill.port = input.port
+    prefill.localPort = input.port
+  }
+  if (ns) prefill.namespace = ns
+  let ask: ToolDialogAsk
+  if (POD_TOOLS.includes(tool)) {
+    if (!pod || !ns) throw new ActionError(`${tool} needs the pod and its namespace.`)
+    ask = { tool, pod: { name: pod, namespace: ns }, prefill }
+  } else {
+    if (!node) throw new ActionError(`${tool} needs the node.`)
+    if (tool === 'debug-pod' && !ns) throw new ActionError('debug-pod needs the namespace it runs in.')
+    ask = { tool, node, prefill }
+  }
+  const refused = toolOpener(ask)
+  if (refused) throw new ActionError(refused)
+  const what = ask.pod ? `pod ${ask.pod.namespace}/${ask.pod.name}` : `node ${ask.node}`
+  return { label: `Opened the ${tool} dialog for ${what}, filled in; nothing is sent until the person presses its button`, dialog: true }
 }
 
 function needTabs(route: Route): Tab {
@@ -463,6 +523,8 @@ export const REGISTRY: Record<string, ((route: Route, input: Record<string, unkn
   view_columns: viewColumns,
   view_details: viewDetails,
   view_highlight: viewHighlight,
+  // The one dialog an action may open (TB-42, amending P6U-12).
+  open_tool_dialog: openToolDialog,
 }
 
 // ---- the person's own changes, Undo (P6U-09, P6U-10) ----
@@ -640,8 +702,8 @@ export async function runRequest(req: UIRequest): Promise<UIResult> {
   await frame()
   await frame()
   if (done.details) await settleDetails()
-  // Focus stays where it was (P6U-09).
-  if (focused && focused.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true })
+  // Focus stays where it was (P6U-09), but for a dialog the person reads next.
+  if (!done.dialog && focused && focused.isConnected && document.activeElement !== focused) focused.focus({ preventScroll: true })
   announce(`Sherlock: ${done.label}`)
   return { applied: true, label: done.label, view: viewState() }
 }

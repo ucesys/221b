@@ -1,6 +1,8 @@
 import { useEffect, useRef, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import type { Pane } from '../lib/sherlock'
-import { AssistantsIcon, MaximizeIcon, MinimizeIcon, PopInIcon, PopOutIcon, RestoreIcon } from './Icons'
+import { AssistantsIcon, CloseIcon, ListIcon, MaximizeIcon, MinimizeIcon, PopInIcon, PopOutIcon, RestoreIcon, SearchIcon } from './Icons'
+import { tabLabel, type SessionView } from '../api/toolbox'
+import { tabState } from './toolbox/SessionPanes'
 
 export type DockMode = 'open' | 'max' | 'min'
 
@@ -26,6 +28,20 @@ interface Props {
   /** Commands waiting for approval, and whether anything is running. */
   waiting: number
   busy: boolean
+  /** The Toolbox's sessions (Phase 9, TB-08): tabs beside the assistants. */
+  sessions?: DockSessions
+}
+
+export interface DockSessions {
+  /** The sessions with a tab, and how many are open in all. */
+  tabs: SessionView[]
+  open: number
+  /** assistants, sessions, or a session's id. */
+  active: string
+  onActive: (a: string) => void
+  onCloseTab: (id: string) => void
+  render: (active: string, controls: ReactNode) => ReactNode
+  now: number
 }
 
 const MIN_H = 150
@@ -48,12 +64,17 @@ export function Dock(p: Props) {
   }, [mode])
 
   const both = !!p.sherlock && !!p.watson
-  const names = [p.sherlock && 'Sherlock', p.watson && 'Watson'].filter(Boolean).join(' and ')
+  const assistants = !!p.sherlock || !!p.watson
+  const ss = p.sessions
+  // The tab strip shows once there is a session, or no assistant to show.
+  const strip = !!ss && (ss.tabs.length > 0 || ss.active !== 'assistants' || !assistants)
+  const active = !ss || !strip ? 'assistants' : ss.active === 'assistants' && !assistants ? 'sessions' : ss.active
+  const names = [p.sherlock && 'Sherlock', p.watson && 'Watson', strip && 'sessions'].filter(Boolean).join(' and ')
   const shown: Pane = both ? p.pane : p.sherlock ? 'sherlock' : 'watson'
 
   if (mode === 'min') {
-    const what = [p.sherlock && 'Sherlock', p.watson && 'Watson'].filter(Boolean).join(' and ')
-    const label = `Open ${what}` + (p.waiting ? ` — ${p.waiting === 1 ? '1 command waits' : `${p.waiting} commands wait`} for approval` : p.busy ? ' — something is running' : '')
+    const what = [p.sherlock && 'Sherlock', p.watson && 'Watson'].filter(Boolean).join(' and ') || 'the sessions'
+    const label = `Open ${what}` + (p.waiting ? ` — ${p.waiting === 1 ? '1 command waits' : `${p.waiting} commands wait`} for approval` : p.busy ? ' — something is running' : '') + (ss?.open ? ` — ${ss.open === 1 ? '1 session is' : `${ss.open} sessions are`} open` : '')
     return (
       <button className="rk-fab" aria-label={label} title={label} onClick={() => onMode('open')} data-testid="sherlock-fab">
         <AssistantsIcon />
@@ -140,6 +161,13 @@ export function Dock(p: Props) {
       {minMax()}
     </>
   )
+  // With the strip, the window controls sit at its right end.
+  const stripControls = (
+    <>
+      {active === 'assistants' && popOut}
+      {minMax()}
+    </>
+  )
   return (
     <>
       {mode === 'max' && <button className="rk-dock-bd" aria-label={`Restore the ${names} panel`} tabIndex={-1} onClick={() => onMode('open')} />}
@@ -168,11 +196,52 @@ export function Dock(p: Props) {
             </button>
           </>
         )}
-        <div className="rk-dock-body">
-          {p.sherlock?.(sherlockControls, switcher)}
-          {both && <button className="rk-vgrip" aria-label="Resize Sherlock and Watson" title="Drag to share the width — the arrow keys work too" onPointerDown={(e) => down('s', e)} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onKeyDown={sKey} data-testid="dock-vgrip" />}
-          {p.watson?.(watsonControls, switcher)}
-        </div>
+        {strip && ss && (
+          <div className="tb-strip" role="tablist" aria-label="Dock" data-testid="dock-strip">
+            {assistants && (
+              <button role="tab" className="tb-stab" aria-selected={active === 'assistants'} onClick={() => ss.onActive('assistants')} data-testid="dock-tab-assistants">
+                <SearchIcon />
+                Assistants
+                {p.waiting > 0 && (
+                  <span className="rk-cnt" data-tone="warn">
+                    {p.waiting}
+                  </span>
+                )}
+              </button>
+            )}
+            <button role="tab" className="tb-stab" aria-selected={active === 'sessions'} onClick={() => ss.onActive('sessions')} data-testid="dock-tab-sessions">
+              <ListIcon />
+              Sessions
+              <span className="rk-cnt">{ss.open}</span>
+            </button>
+            {ss.tabs.length > 0 && <span className="tb-ssep" aria-hidden="true" />}
+            {ss.tabs.map((t) => {
+              const st = tabState(t, ss.now)
+              return (
+                <span key={t.id} style={{ display: 'inline-flex', alignItems: 'stretch' }}>
+                  <button role="tab" className="tb-stab" data-state={st} aria-selected={active === t.id} onClick={() => ss.onActive(t.id)} title={t.summary + (t.mine ? '' : ` — ${t.owner}’s`)} data-testid={`dock-tab-${t.id}`}>
+                    <span className="rk-dot" />
+                    <span className="rk-mono">{tabLabel(t)}</span>
+                    {st === 'ended' ? <span className="tb-ttl">ended</span> : st === 'starting' ? <span className="tb-ttl">opening</span> : t.ends ? <span className="tb-ttl">ends {new Date(t.ends).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> : null}
+                  </button>
+                  <button className="tb-x" aria-label={`Close the tab of ${tabLabel(t)}${t.state === 'ended' ? '' : ' (the session goes on)'}`} title={t.state === 'ended' ? 'Close the tab' : 'Close the tab; the session goes on, in Sessions'} onClick={() => ss.onCloseTab(t.id)} style={{ alignSelf: 'center' }}>
+                    <CloseIcon />
+                  </button>
+                </span>
+              )
+            })}
+            <span className="tb-strip-right">{stripControls}</span>
+          </div>
+        )}
+        {active === 'assistants' ? (
+          <div className="rk-dock-body">
+            {p.sherlock?.(strip ? null : sherlockControls, switcher)}
+            {both && <button className="rk-vgrip" aria-label="Resize Sherlock and Watson" title="Drag to share the width — the arrow keys work too" onPointerDown={(e) => down('s', e)} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onKeyDown={sKey} data-testid="dock-vgrip" />}
+            {p.watson?.(strip ? null : watsonControls, switcher)}
+          </div>
+        ) : (
+          ss?.render(active, null)
+        )}
       </section>
     </>
   )

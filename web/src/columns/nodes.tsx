@@ -4,6 +4,7 @@ import { cpuMeter, free, memoryMeter, ownLabels, problemsCell, roleTag, taintId,
 import { href } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
 import { NameCell, Tone } from './cells'
+import { NameWithTools } from '../components/toolbox/ToolsMenu'
 
 const GIB = 1024 * 1024 * 1024
 
@@ -48,7 +49,12 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     min: 180,
     compactMin: 160,
     sortValue: (r) => r.name,
-    cell: (r) => <NameCell name={r.name} what="node name" />,
+    // The Tools button beside the name (TB-01).
+    cell: (r) => (
+      <NameWithTools target={{ kind: 'node', name: r.name, cordoned: r.cordoned, role: r.role === 'control-plane' ? 'control plane' : 'worker' }}>
+        <NameCell name={r.name} what="node name" />
+      </NameWithTools>
+    ),
     export: (r) => [{ head: 'Node', cell: r.name }],
   },
   {

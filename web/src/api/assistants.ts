@@ -5,9 +5,9 @@ import { whenLoaded } from '../lib/loaded'
 // Sherlock and Watson share one event stream per cluster (assistants/
 // events): a browser opens at most six connections to a host over
 // HTTP/1.1, for all its tabs, and each stream holds one. Their events
-// arrive named sherlock-… and watson-….
+// arrive named sherlock-…, watson-… and sessions-….
 
-export type Assistant = 'sherlock' | 'watson'
+export type Assistant = 'sherlock' | 'watson' | 'sessions'
 
 export interface AssistantHandlers {
   open: () => void
@@ -19,6 +19,8 @@ export interface AssistantHandlers {
 const EVENTS: Record<Assistant, string[]> = {
   sherlock: ['status', 'conversation', 'answer', 'ui'],
   watson: ['status', 'items', 'item', 'gone'],
+  // The Toolbox's sessions (Phase 9), for the dock's tabs.
+  sessions: ['all', 'session', 'gone'],
 }
 
 interface Sub {
@@ -73,7 +75,7 @@ function connect(cluster: string, s: Shared) {
           retry = setTimeout(() => connect(cluster, s), wait)
         }
       })
-      for (const who of ['sherlock', 'watson'] as const) {
+      for (const who of ['sherlock', 'watson', 'sessions'] as const) {
         for (const name of EVENTS[who]) {
           es.addEventListener(`${who}-${name}`, (e) => {
             const data = (e as MessageEvent<string>).data

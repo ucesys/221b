@@ -172,12 +172,14 @@ type watsonItem struct {
 	Lines     []watson.Line `json:"lines,omitempty"`
 	LineStart int           `json:"lineStart"`
 	Rev       int           `json:"rev"`
+	// Session is a toolbox card's request and, once open, its session.
+	Session *watson.SessionCard `json:"session,omitempty"`
 }
 
 func (s *Server) watsonView(it watson.Item, who watson.Who, c watson.Cluster, lines []watson.Line, start int) watsonItem {
 	v := watsonItem{ID: it.ID, Command: it.Line, Kind: map[bool]string{true: "change", false: "read"}[it.Change], From: it.From, Why: it.Why, Status: it.Status,
 		By: it.Requester.Name, Mine: it.Requester.Session == who.Session || (who.User != "" && it.Requester.User == who.User),
-		Created: it.Created, Plan: it.Plan, Exit: it.Exit, Reason: it.Reason, Rule: it.Rule, Lines: lines, LineStart: start, Rev: it.Rev}
+		Created: it.Created, Plan: it.Plan, Exit: it.Exit, Reason: it.Reason, Rule: it.Rule, Lines: lines, LineStart: start, Rev: it.Rev, Session: it.Session}
 	if !it.Expires.IsZero() {
 		e := it.Expires
 		v.Expires = &e
