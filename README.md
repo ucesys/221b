@@ -17,7 +17,7 @@ From the simulated cluster (`make screenshots`; the Screenshots workflow retakes
 | [![Alerts](docs/screenshots/alerts.png)](docs/screenshots/alerts.png)<br>**Alerts**: active, acknowledged, resolved | [![Fleets](docs/screenshots/fleets.png)](docs/screenshots/fleets.png)<br>**Fleets** by labels and taints | [![Networks](docs/screenshots/networks.png)](docs/screenshots/networks.png)<br>**Networks**: a route traced to the pod |
 | [![Access](docs/screenshots/access.png)](docs/screenshots/access.png)<br>**Access**: who can do what | [![Policies](docs/screenshots/policies.png)](docs/screenshots/policies.png)<br>**Policies** and drainability | [![Helm](docs/screenshots/helm.png)](docs/screenshots/helm.png)<br>**Helm** releases |
 | [![Sherlock](docs/screenshots/sherlock.png)](docs/screenshots/sherlock.png)<br>**Sherlock** answers from live state | [![Watson](docs/screenshots/watson-approval.png)](docs/screenshots/watson-approval.png)<br>**Watson**: a change waits on its approval card | [![Add a cluster](docs/screenshots/add-cluster.png)](docs/screenshots/add-cluster.png)<br>**Add a cluster**, with the RBAC it needs |
-| [![Roles](docs/screenshots/admin-roles.png)](docs/screenshots/admin-roles.png)<br>**Administration → Roles** | [![Settings](docs/screenshots/admin-settings.png)](docs/screenshots/admin-settings.png)<br>**Administration → Settings**: refresh, Sherlock, Watson | |
+| [![Roles](docs/screenshots/admin-roles.png)](docs/screenshots/admin-roles.png)<br>**Administration → Roles** | [![Settings](docs/screenshots/admin-settings.png)](docs/screenshots/admin-settings.png)<br>**Administration → Settings**: refresh, Sherlock, Watson | [![Storage](docs/screenshots/storage.png)](docs/screenshots/storage.png)<br>**Storage**: volumes and claims by namespace, node and class |
 
 ## Overview
 
@@ -158,7 +158,7 @@ An AI model can be wrong with confidence: it can invent a pod name, pick the wro
 
 3. **Watson runs a short, fixed list of commands, and never through a shell.** `kubectl` and `helm` are compiled into the server and called directly; no shell is started, so pipes, redirections, `;`, `$(…)`, variables and arguments after `--` are refused rather than interpreted. Each command and each flag is checked against an allow-list:
    - reads: `kubectl get`, `describe`, `logs`, `top`, `events`, `auth can-i`; `helm list`, `status`, `history`, `get values`;
-   - changes: `kubectl cordon`, `uncordon`, `drain`, `scale`, `rollout restart`, `rollout undo`, `delete pod`, `label`, `annotate`; `helm rollback`.
+   - changes: `kubectl cordon`, `uncordon`, `drain`, `scale`, `rollout restart`, `rollout undo`, `delete pod`, `patch pvc` (expand a claim), `delete pvc`, `label`, `annotate` (also a storage class's default); `helm rollback`.
 
    Everything else (`apply`, `create`, `edit`, `patch`, `exec`, `port-forward`, `delete` of anything but pods, `helm install` or `upgrade`, any RBAC change) is refused with the rule that refused it. A hallucinated command or flag fails here, before it reaches the cluster.
 

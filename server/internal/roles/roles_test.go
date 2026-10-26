@@ -128,14 +128,52 @@ func TestAdminFullCoversWatsonsChanges(t *testing.T) {
 	for _, g := range []string{
 		"update deployments/scale.apps", "patch deployments.apps", "patch statefulsets.apps", "patch daemonsets.apps",
 		"delete pods", "patch pods", "create secrets", "update secrets",
+		// ST-18: expand a claim and delete one.
+		"patch persistentvolumeclaims", "delete persistentvolumeclaims",
 	} {
 		if !has(g) {
 			t.Errorf("Admin full lacks %q", g)
 		}
 	}
 	for _, g := range Grants(Definition(Admin, ReadOnly, Options{Secrets: true}).Rules) {
-		if g.String() == "delete pods" {
-			t.Error("Admin read-only deletes pods")
+		if g.String() == "delete pods" || g.String() == "delete persistentvolumeclaims" {
+			t.Errorf("Admin read-only can %s", g)
+		}
+	}
+}
+
+// The Storage tab's kinds (ST-20, RB-56): claims are namespaced and read by
+// every role; volumes, classes and attachments are cluster-scoped and read
+// only by the Super roles; a class's default changes only as a full
+// SuperAdmin, and no role but that one writes volumes or classes.
+func TestStorageKinds(t *testing.T) {
+	type check struct {
+		id   ID
+		tpl  Template
+		verb string
+		grp  string
+		res  string
+		want bool
+	}
+	var cases []check
+	for _, id := range []ID{Viewer, SuperViewer, Admin, SuperAdmin} {
+		super := id == SuperViewer || id == SuperAdmin
+		for _, tpl := range []Template{Full, ReadOnly} {
+			cases = append(cases,
+				check{id, tpl, "list", "", "persistentvolumeclaims", true},
+				check{id, tpl, "list", "", "persistentvolumes", super},
+				check{id, tpl, "list", "storage.k8s.io", "storageclasses", super},
+				check{id, tpl, "list", "storage.k8s.io", "volumeattachments", super},
+				check{id, tpl, "patch", "storage.k8s.io", "storageclasses", id == SuperAdmin && tpl == Full},
+				check{id, tpl, "delete", "", "persistentvolumes", id == SuperAdmin && tpl == Full},
+				check{id, tpl, "delete", "", "persistentvolumeclaims", (id == Admin || id == SuperAdmin) && tpl == Full},
+			)
+		}
+	}
+	for _, c := range cases {
+		g := Grants(Definition(c.id, c.tpl, Options{}).Rules)
+		if got := covered(g, Grant{Verb: c.verb, Group: c.grp, Resource: c.res}); got != c.want {
+			t.Errorf("%s %s: %s %s %s = %v, want %v", c.id, c.tpl, c.verb, c.grp, c.res, got, c.want)
 		}
 	}
 }

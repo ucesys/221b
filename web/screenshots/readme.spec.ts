@@ -4,7 +4,7 @@
 // one that fails leaves the others to be taken.
 import { expect, test, type Browser, type Page } from '@playwright/test'
 import { mkdir } from 'node:fs/promises'
-import { E2E_PASSWORD, E2E_USER } from '../e2e/accounts'
+import { E2E_DEV, E2E_DEV_KUBE, E2E_PASSWORD, E2E_USER } from '../e2e/accounts'
 import { healthyWorkers, podRows, snapshot } from '../e2e/cluster'
 
 const OUT = process.env.SHOTS_DIR ?? '../docs/screenshots'
@@ -15,7 +15,7 @@ const FAKE_KEY = 'sk-ant-screenshots-fake-key-0123456789'
 
 let page: Page
 
-async function signIn(browser: Browser): Promise<Page> {
+async function signIn(browser: Browser, email = E2E_USER): Promise<Page> {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: 'light' })
   const p = await context.newPage()
   await p.goto('/', { waitUntil: 'domcontentloaded' })
@@ -25,11 +25,11 @@ async function signIn(browser: Browser): Promise<Page> {
   if (await oidc.count()) {
     await oidc.click()
     await p.waitForURL(/\/oidc\/auth/)
-    await p.fill('input[name="email"]', E2E_USER)
+    await p.fill('input[name="email"]', email)
     await p.fill('input[name="password"]', E2E_PASSWORD)
     await p.click('button[type="submit"]')
   } else if (await local.count()) {
-    await local.locator('input[name="email"]').fill(E2E_USER)
+    await local.locator('input[name="email"]').fill(email)
     await local.locator('input[name="password"]').fill(E2E_PASSWORD)
     await local.getByTestId('signin-submit').click()
   }
@@ -154,4 +154,55 @@ test('watson approval card', async () => {
   await page.getByTestId('watson').getByTestId('sherlock-maximize').first().click()
   await card.evaluate((el) => el.scrollIntoView({ block: 'start' }))
   await save('watson-approval')
+})
+
+// The Storage tab (docs/storage.png), and the other four pages of
+// docs/storage.md's design: a person bound to analytics and batch, the
+// drawers of a bound claim and of one that cannot bind, and a class's
+// drawer, with Sherlock on for its questions and Watson's actions.
+test('storage', async ({ browser }) => {
+  const ready = async (p: Page) => {
+    await connected(p)
+    // Used arrives with the first read of the kubelets.
+    await expect(p.locator('.rk-st-used').first()).toBeVisible({ timeout: 60_000 })
+  }
+  // Like the other tabs' shots, the pages themselves without the dock: a
+  // hash change does not reload the app, so it reloads to drop the dock,
+  // and minimizes it should it still show.
+  const noDock = async (p: Page) => {
+    await p.reload()
+    await ready(p)
+    const min = p.getByTestId('sherlock-minimize').first()
+    if (await min.isVisible().catch(() => false)) await min.click()
+    await expect(p.getByTestId('sherlock-dock')).toHaveCount(0)
+  }
+  expect((await page.request.put('/api/v1/sherlock/config', { data: { ...SHERLOCK_ON, clusters: {} }, headers: SAME })).status()).toBe(200)
+  await page.goto('/#/storage')
+  await noDock(page)
+  await save('storage')
+  const sim = process.env.E2E_SIM_URL ?? 'http://127.0.0.1:7443'
+  expect((await fetch(`${sim}/sim/deny`, { method: 'POST', body: JSON.stringify({ only: { [E2E_DEV_KUBE]: ['analytics', 'batch'] } }) })).ok).toBe(true)
+  const viewer = await signIn(browser, E2E_DEV)
+  try {
+    await viewer.goto('/#/storage')
+    await noDock(viewer)
+    await viewer.mouse.move(1, 1)
+    await viewer.waitForTimeout(2_000)
+    await viewer.screenshot({ path: `${OUT}/storage-namespace.png` })
+  } finally {
+    await viewer.context().close()
+  }
+  expect((await page.request.put('/api/v1/sherlock/key', { data: { key: FAKE_KEY }, headers: SAME })).status()).toBe(200)
+  expect((await page.request.put('/api/v1/sherlock/config', { data: SHERLOCK_ON, headers: SAME })).status()).toBe(200)
+  await page.reload()
+  for (const [name, peek, testid] of [
+    ['storage-claim', 'claim:storage/data-postgres-0', 'storage-chain'],
+    ['storage-pending', 'claim:analytics/data-cache-2', 'storage-chain'],
+    ['storage-class', 'class:longhorn', 'storage-class-panel'],
+  ] as const) {
+    await shot(name, `#/storage?peek=${encodeURIComponent(peek)}`, async (p) => {
+      await ready(p)
+      await expect(p.getByTestId(testid)).toBeVisible()
+    })
+  }
 })

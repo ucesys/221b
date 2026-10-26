@@ -141,7 +141,7 @@ func TestSherlockToolsOnlyRead(t *testing.T) {
 		}
 	}
 	sort.Strings(names)
-	want := []string{"check_connection", "cluster_overview", "get_helm_release", "get_node", "get_object", "get_pod", "get_service", "get_yaml", "list_access", "list_alerts", "list_events", "list_fleets", "list_helm_releases", "list_nodes", "list_objects", "list_pods", "list_policies", "list_services", "pod_logs", "review_cluster", "top", "trace_ingress", "who_can"}
+	want := []string{"check_connection", "cluster_overview", "get_helm_release", "get_node", "get_object", "get_pod", "get_service", "get_yaml", "list_access", "list_alerts", "list_events", "list_fleets", "list_helm_releases", "list_nodes", "list_objects", "list_pods", "list_policies", "list_services", "list_storage_classes", "list_volumes", "pod_logs", "review_cluster", "top", "trace_ingress", "who_can"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("the toolset changed; review that each new tool only reads, then update this list:\n got %v\nwant %v", names, want)
 	}
@@ -240,6 +240,30 @@ func TestSherlockReadsAsThePerson(t *testing.T) {
 	m = askAndRead(t, srv, viewer, svc, "show me the logs of kube-system/dns")
 	if !strings.Contains(m.Text, "secret things") {
 		t.Fatalf("the answer once allowed: %s", m.Text)
+	}
+}
+
+// ST-22: "Which claims are pending and why?" answers with the ST-14
+// reasons, and only from the claims the person may list (ST-20).
+func TestSherlockStorageToolsReadAsThePerson(t *testing.T) {
+	deny := map[string]bool{"persistentvolumes/": true, "storageclasses/": true, "volumeattachments/": true, "persistentvolumeclaims/kube-system": true}
+	srv, viewer, fake, _, local, svc := sherlockSetup(t, "viewer@corp.example", deny)
+	class := "longhorn"
+	local.Put(&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "data-cache-2", Namespace: "web", UID: "uid-cache-2"}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &class}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending}})
+	local.Put(&corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "data-cache-2.1", Namespace: "web"}, InvolvedObject: corev1.ObjectReference{Kind: "PersistentVolumeClaim", Name: "data-cache-2", Namespace: "web", UID: "uid-cache-2"}, Type: "Warning", Reason: "ProvisioningFailed", Message: "rpc error: code = ResourceExhausted desc = not enough disk space on any node for a 20Gi volume"})
+	local.Put(&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: "etcd-snapshots", Namespace: "kube-system"}, Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: &class}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending}})
+	admin := signIn(t, srv, "ops@corp.example")
+	enableSherlock(t, srv, admin, `{"clusters":{"local":true},"model":"claude-opus-5-5","dailyUSD":20,"monthlyUSD":200}`)
+
+	m := askAndRead(t, srv, viewer, svc, "Which claims are pending and why?")
+	if m.Status != "done" || !strings.Contains(m.Text, "web/data-cache-2") || !strings.Contains(m.Text, "provisioning failed · not enough disk space") {
+		t.Fatalf("answer: %+v", m)
+	}
+	askAndRead(t, srv, viewer, svc, "Which storage classes are there?")
+	for _, req := range fake.Requests() {
+		if bytes.Contains(req, []byte("etcd-snapshots")) {
+			t.Fatal("a claim of a namespace the person may not list reached the Claude API")
+		}
 	}
 }
 

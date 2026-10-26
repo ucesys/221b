@@ -14,7 +14,7 @@
       "input_schema": {
         "type": "object",
         "properties": {
-          "tab": { "type": "string", "enum": ["alerts", "nodes", "fleets", "namespaces", "pods", "helm", "services", "networks", "access", "policies"], "description": "The tab." },
+          "tab": { "type": "string", "enum": ["alerts", "nodes", "fleets", "namespaces", "pods", "helm", "services", "networks", "storage", "access", "policies"], "description": "The tab." },
           "path": { "type": "array", "items": { "type": "string" }, "description": "The tab's path, such as [\"web\"] for the namespace web or [\"web\", \"shop\"] for a Helm release." },
           "filters": { "type": "object", "additionalProperties": { "type": ["string", "array"], "items": { "type": "string" } }, "description": "Filters by name, such as {\"status\": \"failing\", \"ns\": [\"web\"]}." },
           "cluster": { "type": "string", "description": "Only the cluster the person is on; any other is refused with a link to offer instead." }
@@ -26,7 +26,7 @@
     {
       "name": "view_filter",
       "changes": true,
-      "description": "Changes the filters of the tab the person is on. Nodes: role (all, control-plane, worker), err (all; problems: the nodes with an error or a warning; errors: only the nodes with an error, such as NotReady, not reporting, network unavailable, or pods failing on them), label and taint (lists). Pods: role, status (all, running, pending, failing, completed), ns and node (lists of names), label, taint. Services: ns, type (all, ClusterIP, Headless, NodePort, LoadBalancer, notReady). Namespaces: kinds (list of object kinds). Alerts: kind (all, pods, nodes, volumes), show (active, all), acked (show, hide: hide the acknowledged ones). Fleets: fleet, pl, pt (lists), group (fleet, none), err (all, problems, errors, as on Nodes). Helm: tab (pods, workloads, storage, network, other, values, notes, history). Access: kind (all, users, groups, sas), verb, res, wns, tbl (bindings, roles), sys and defaults (\"1\" or \"\"). Search text has its own action, view_search.",
+      "description": "Changes the filters of the tab the person is on. Nodes: role (all, control-plane, worker), err (all; problems: the nodes with an error or a warning; errors: only the nodes with an error, such as NotReady, not reporting, network unavailable, or pods failing on them), label and taint (lists). Pods: role, status (all, running, pending, failing, completed), ns and node (lists of names), label, taint. Services: ns, type (all, ClusterIP, Headless, NodePort, LoadBalancer, notReady). Namespaces: kinds (list of object kinds). Alerts: kind (all, pods, nodes, volumes), show (active, all), acked (show, hide: hide the acknowledged ones). Fleets: fleet, pl, pt (lists), group (fleet, none), err (all, problems, errors, as on Nodes). Helm: tab (pods, workloads, storage, network, other, values, notes, history). Storage: ns, node and class (lists of names; (no-claim), (no-node) and (no-class) for the rows with none), attention (\"1\" for the rows that need attention), label (list of key=value). Access: kind (all, users, groups, sas), verb, res, wns, tbl (bindings, roles), sys and defaults (\"1\" or \"\"). Search text has its own action, view_search.",
       "input_schema": {
         "type": "object",
         "properties": {

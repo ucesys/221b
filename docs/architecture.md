@@ -591,12 +591,12 @@ Records 1 to 9 cover the Architecture table in the requirements; 10 to 17 were m
 - **Decision:** One dock holds both panes side by side, with a grip between them; on a narrow screen a switch shows one at a time. One button moves both to a single window of their own (`#/assistants`; `#/sherlock` and `#/watson` open the same window), with Sherlock only where it is on, and one button docks both back. While the window is open the main window shows an icon to bring it forward or dock them here. Ask Sherlock and the buttons that send Watson a command bring the window forward, where the answer or the card waits.
 - **Consequences:** Watson is in the dock wherever it runs, even with Sherlock off. Its stream is open while a tab shows the dock (ADR-56).
 
-### ADR-55: The image may be up to 80 MB
+### ADR-55: The image may be up to 200 MB
 
-- **Status:** Accepted (Phase 6, changes P1-05).
-- **Context:** P1-05 set 60 MB. kubectl's command packages and the Helm SDK (ADR-49) bring the image to about 70 MB.
-- **Decision:** The limit is 80 MB, checked in CI as before.
-- **Consequences:** A larger download on first install; nothing else changes.
+- **Status:** Accepted (Phase 6, changes P1-05). Raised in Phase 8.
+- **Context:** P1-05 set 60 MB. kubectl's command packages and the Helm SDK (ADR-49) bring the image to about 70 MB. By the end of Phase 7 it was 79.96 MB, and the Storage tab (Phase 8) brings it to 80.3 MB.
+- **Decision:** The limit was 80 MB in Phase 6; from Phase 8 it is 200 MB, as you decided, checked in CI as before.
+- **Consequences:** A larger download on first install; nothing else changes. The image is far from the limit again, so a feature no longer fails CI by a few hundred kilobytes; the Image job still reports the size of every build.
 
 ### ADR-56: A page holds two event streams
 
@@ -646,3 +646,17 @@ Records 1 to 9 cover the Architecture table in the requirements; 10 to 17 were m
 - **Context:** One console manages clusters of different kinds: RKE2 on Debian and RHEL next to EKS on Bottlerocket, say. A prompt that names only the cluster and its version leaves Sherlock to give generic advice, or another distribution's commands and file paths, and to stop at Kubernetes when the cause lies in the node's operating system or hardware.
 - **Decision:** Each question is answered with a prompt in three blocks. The first, how Sherlock works, is the same for every cluster. The second describes the cluster the conversation belongs to, detected from that cluster's cache when the question is asked: the distribution (from the version, the nodes' provider IDs and labels, and kubeadm's static pods), the nodes grouped by OS image and kernel, the runtime, and the add-ons (from DaemonSet and Deployment names, IngressClasses and the storage classes claims use); then the guidance for that distribution, each add-on and each OS family found, and none other. The third is the time. The node facts are included only when the person may list nodes, the add-ons only when they may list DaemonSets in kube-system; the distribution, which the version shows everyone, always.
 - **Consequences:** The first two blocks are cached by the model's API, the first across clusters and the second per cluster, so a question costs less than when the time led the prompt and changed it every minute. Facts hold nothing that changes minute to minute, such as which nodes are ready, so the cluster's block stays cached until a node joins, leaves or is upgraded. A distribution or OS not recognised gets the facts and the general instructions only. Adding one is a file in `server/internal/platform/sections` and a line in its detection.
+
+### ADR-63: Volume usage comes from the kubelets' Summary API, read by the console's own account
+
+- **Status:** Accepted (Phase 8, ST-08). Extends ADR-17.
+- **Context:** Neither a claim nor a volume says how full it is. Only the kubelet of the node that mounts it knows, in its Summary API (`pods[].volume[]`, matched by `pvcRef`). The other sources are worse: metrics-server carries no volume figures, Prometheus may not be installed, and running `df` in a pod is an exec that a Viewer may not do and the console never does. Reading the Summary API as each person would need `get` on `nodes/proxy` in every role, which also opens a shell into the kubelet; roles.go keeps it out of every template.
+- **Decision:** The server reads `/api/v1/nodes/<node>/proxy/stats/summary` with its own ServiceAccount, under the `get` on `nodes/proxy` that `kubeletStats` already grants for uptime: at most every 30 seconds, once per node that runs a pod with a claim, whatever the number of claims, keeping a node's last figures when it does not answer. A person sees the figures only on the claims they may list; the claims themselves are filtered by the access reviews of the other views, and the drawer's endpoints check `list` on claims in the namespace as the person.
+- **Consequences:** No role gains a right. A namespace-bound person sees the usage of their own claims, which is the default of the open question in storage.md (one line to change if not). `kubeletStats=false` turns usage off with uptime, and the heading says so. A claim no running pod mounts, and a Block volume, show —. The kubelets measure volumes about once a minute, so the 30 seconds show nothing stale by more than that.
+
+### ADR-64: The Storage tab's Needs attention is a superset of the Alerts tab's volume alerts
+
+- **Status:** Accepted (Phase 8, ST-09, ST-21).
+- **Context:** The Alerts tab is driven by events and object states: a claim Pending with a Warning event, a claim whose class does not exist, a Lost claim. The Storage tab can say more: a volume Released and keeping its data, a volume Failed, a volume 85% full. Alerts that are not events would need their own acknowledgement and resolution rules, and a Released volume can stay so for months by design.
+- **Decision:** The Alerts tab keeps its volume alerts as they are. The Storage tab's Needs attention filter covers them and adds Released and Failed volumes and usage at 85% or more; a claim the ST-14 rules do not flag and that is not plainly well (Bound, no reason line, its pods well) is also put to the Alerts tab's own rule (`claimAlert`), so a claim alerted on is always a row that needs attention, such as a Bound claim whose pod cannot mount it. A unit test holds the two together. The alert banner's volume items and the Alerts tab's Open volume action open the Storage drawer, where the rest is.
+- **Consequences:** A nearly full volume does not raise an alert or reach a webhook; it shows on the Storage tab and in Sherlock's `list_volumes`. Making one an alert later is a rule in alerts.go, not a change to the tab.

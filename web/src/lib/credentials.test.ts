@@ -92,6 +92,10 @@ describe('the RBAC to grant', () => {
     expect(write).toContain('name: cluster-console-operate')
     expect(write).toContain('pods/eviction')
     expect(write).not.toContain('impersonate')
+    // Watson's storage changes (ST-18), for a console with sign-in off.
+    expect(write).toContain('resources: ["persistentvolumeclaims"]')
+    expect(write).toContain('resources: ["storageclasses"]')
+    expect(read).not.toContain('persistentvolumeclaims')
     for (const line of read.split('\n')) expect(line.length).toBeLessThanOrEqual(72)
   })
 })

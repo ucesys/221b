@@ -292,6 +292,10 @@ func New(o Options) *Server {
 		s.data("yaml/{kind}/{name}", "yaml", s.yaml)
 		s.data("yaml/{kind}/{namespace}/{name}", "yaml", s.yaml)
 		s.data("netcheck", "netcheck", s.netCheck)
+		// The Storage tab's scope and drawers (ST-13, ST-20).
+		s.data("storage", "storage", s.storageScope)
+		s.data("storage/claims/{namespace}/{name}", "storage-claim", s.storageClaim)
+		s.data("storage/volumes/{name}", "storage-volume", s.storageVolume)
 	}
 	if o.Clusters != nil {
 		s.handle("GET /api/v1/clusters", "clusters", s.listClusters)

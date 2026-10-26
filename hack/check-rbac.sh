@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checks that a ServiceAccount can read what the tabs show (nodes, pods and
 # their logs, namespaces, workloads, Services, metrics, the kubelets'
-# stats, and from Phase 4 roles, bindings and the policy kinds), patch and
+# stats, from Phase 4 roles, bindings and the policy kinds, and from Phase
+# 8 volumes, storage classes and volume attachments), patch and
 # update its own settings ConfigMap, hold its replicas' Lease (P7-02),
 # manage the Secrets of its own namespace (the connections to other
 # clusters, P3-04), and nothing else
@@ -62,7 +63,8 @@ read_kinds=(nodes namespaces pods services endpoints persistentvolumeclaims conf
   poddisruptionbudgets.policy horizontalpodautoscalers.autoscaling leases.coordination.k8s.io
   clusterroles.rbac.authorization.k8s.io clusterrolebindings.rbac.authorization.k8s.io
   priorityclasses.scheduling.k8s.io ingressclasses.networking.k8s.io
-  validatingwebhookconfigurations.admissionregistration.k8s.io mutatingwebhookconfigurations.admissionregistration.k8s.io)
+  validatingwebhookconfigurations.admissionregistration.k8s.io mutatingwebhookconfigurations.admissionregistration.k8s.io
+  persistentvolumes storageclasses.storage.k8s.io volumeattachments.storage.k8s.io)
 for kind in "${read_kinds[@]}"; do
   for verb in get list watch; do
     expect yes "$verb" "$kind" --all-namespaces
@@ -136,7 +138,8 @@ for args in "create pods" "delete pods" "patch nodes" "update nodes" "delete nod
   "create roles.rbac.authorization.k8s.io" "create rolebindings.rbac.authorization.k8s.io" \
   "create clusterrolebindings.rbac.authorization.k8s.io" "delete rolebindings.rbac.authorization.k8s.io" \
   "patch rolebindings.rbac.authorization.k8s.io" "patch clusterroles.rbac.authorization.k8s.io" \
-  "delete clusterrolebindings.rbac.authorization.k8s.io" "get persistentvolumes" "get storageclasses.storage.k8s.io" \
+  "delete clusterrolebindings.rbac.authorization.k8s.io" "patch persistentvolumeclaims" "delete persistentvolumeclaims" \
+  "delete persistentvolumes" "patch storageclasses.storage.k8s.io" "delete storageclasses.storage.k8s.io" "create volumeattachments.storage.k8s.io" \
   "get customresourcedefinitions.apiextensions.k8s.io" "patch validatingwebhookconfigurations.admissionregistration.k8s.io" \
   "escalate clusterroles.rbac.authorization.k8s.io" "bind clusterroles.rbac.authorization.k8s.io"; do
   # shellcheck disable=SC2086

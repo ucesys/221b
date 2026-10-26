@@ -82,7 +82,7 @@ Sherlock answers as the person (P5-02), so it sees exactly what the table says a
 
 | Role | Full | Read-only |
 | --- | --- | --- |
-| **Admin** | Viewer's reads, plus scale, rollout restart and undo, delete pod, label and annotate, and Helm rollback (the namespaced changes of P6-02) | Exactly Viewer's rights. The role still exists, so assignments do not change when you switch. |
+| **Admin** | Viewer's reads, plus scale, rollout restart and undo, delete pod, expand and delete a volume claim (ST-18), label and annotate, and Helm rollback (the namespaced changes of P6-02) | Exactly Viewer's rights. The role still exists, so assignments do not change when you switch. |
 | **SuperAdmin** | All verbs on all resources, in every namespace and cluster-scoped (`*`) | `get`, `list` and `watch` on all resources, and `get` on the non-resource URLs. No other verb. |
 
 Choosing the read-only definition for both roles gives the **fully protected read-only deployment**: no identity 221B can send to Kubernetes holds a write right, so no change can be made through the console, and Watson's cards fail with Kubernetes' own refusal even if the console's own lock were bypassed.

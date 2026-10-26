@@ -226,7 +226,8 @@
                 ""
               ],
               "resources": [
-                "pods"
+                "pods",
+                "persistentvolumeclaims"
               ],
               "verbs": [
                 "delete"
@@ -792,7 +793,8 @@
                 "storage.k8s.io"
               ],
               "resources": [
-                "storageclasses"
+                "storageclasses",
+                "volumeattachments"
               ],
               "verbs": [
                 "get",

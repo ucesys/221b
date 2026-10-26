@@ -65,6 +65,38 @@ func TestLabelRefusesAccessRules(t *testing.T) {
 	}
 }
 
+// The Storage tab's changes (ST-18): a claim's size, one claim deleted,
+// the default class's annotation; nothing else of the kind.
+func TestStorageChangesAndWhatTheyRefuse(t *testing.T) {
+	for _, line := range []string{
+		`kubectl patch pvc data-postgres-0 -n storage --type merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'`,
+		`kubectl patch persistentvolumeclaim/data-postgres-0 -n storage -p '{"spec":{"resources":{"requests":{"storage":"1Ti"}}}}'`,
+		"kubectl delete pvc data-postgres-0 -n storage",
+		"kubectl annotate storageclass longhorn storageclass.kubernetes.io/is-default-class=false --overwrite",
+	} {
+		if _, err := Parse(line); err != nil {
+			t.Errorf("%s: %v", line, err)
+		}
+	}
+	for line, rule := range map[string]string{
+		`kubectl patch deployment api -n web -p '{"spec":{"replicas":3}}'`:                                                        "not supported",
+		`kubectl patch pvc data -n web -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}},"volumeName":"pv-other"}}'`:      "not supported",
+		`kubectl patch pvc data -n web -p '{"metadata":{"labels":{"a":"b"}}}'`:                                                    "not supported",
+		`kubectl patch pvc data -n web --type json -p '[{"op":"replace","path":"/spec/resources/requests/storage","value":"1"}]'`: "flag",
+		`kubectl patch pvc data -n web -p '{"spec":{"resources":{"requests":{"storage":"lots"}}}}'`:                               "not supported",
+		"kubectl delete pvc -l app=cache -n web":                                                                                  "usage",
+		"kubectl delete pvc a b -n web":                                                                                           "usage",
+		"kubectl delete pv pvc-1234":                                                                                              "not supported",
+		"kubectl delete storageclass longhorn":                                                                                    "not supported",
+	} {
+		_, err := Parse(line)
+		var r *Refusal
+		if !errors.As(err, &r) || r.Rule != rule {
+			t.Errorf("%s: %v, want %s", line, err, rule)
+		}
+	}
+}
+
 // Secret values stay hidden whatever spelling of the type kubectl takes.
 func TestGetRefusesSecretValuesInAnySpelling(t *testing.T) {
 	for _, line := range []string{

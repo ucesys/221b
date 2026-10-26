@@ -104,6 +104,19 @@ func Scope(view, key string) (resource, namespace string, cluster bool) {
 			return "priorityclasses", "", true
 		}
 		return "", "", false
+	case ViewStorage:
+		kind, ns, _, ok := views.SplitStorageKey(key)
+		switch {
+		case !ok:
+			return "", "", false
+		case kind == views.StClass:
+			return "storageclasses", "", true
+		case kind == views.StVolume:
+			return "persistentvolumes", "", true
+		case kind == views.StQuota:
+			return "resourcequotas", ns, false
+		}
+		return "persistentvolumeclaims", ns, false
 	case ViewAlerts:
 		kind, ns, _, ok := views.SplitAlertKey(key)
 		switch {
@@ -146,6 +159,8 @@ func Resources(view string) (namespaced, cluster []string) {
 		return []string{"roles", "rolebindings", "serviceaccounts"}, []string{"clusterroles", "clusterrolebindings"}
 	case ViewNetworks:
 		return []string{"ingresses"}, []string{"nodes"}
+	case ViewStorage:
+		return []string{"persistentvolumeclaims", "resourcequotas"}, []string{"storageclasses", "persistentvolumes"}
 	case ViewPolicies:
 		return []string{"pods", "networkpolicies", "poddisruptionbudgets", "resourcequotas", "deployments", "limitranges"}, []string{"pods", "validatingwebhookconfigurations", "mutatingwebhookconfigurations", "priorityclasses"}
 	}
@@ -170,6 +185,9 @@ func NamespaceOf(view string) (string, bool) {
 // list that namespace must not see. The counts stay, as totals do. Other
 // rows name nothing outside their own namespace and pass unchanged.
 func Redact(view string, row []byte, f Filter) []byte {
+	if f != nil && view == ViewStorage {
+		return redactStorage(row, f)
+	}
 	if f == nil || view != ViewNodes {
 		return row
 	}
@@ -195,6 +213,27 @@ func Redact(view string, row []byte, f Filter) []byte {
 	if !changed {
 		return row
 	}
+	out, err := json.Marshal(r)
+	if err != nil {
+		return row
+	}
+	return out
+}
+
+// redactStorage keeps a claim's row to what the claim itself says for
+// someone who may not read volumes (ST-11, ST-20): the volume's name and
+// the class's name come from the claim's spec; its reclaim policy, source,
+// labels and attachments come from the volume and go.
+func redactStorage(row []byte, f Filter) []byte {
+	if f.AllowCluster("persistentvolumes") {
+		return row
+	}
+	var r views.StorageRow
+	if err := json.Unmarshal(row, &r); err != nil || r.Pair == nil {
+		return row
+	}
+	p := r.Pair
+	p.Reclaim, p.Source, p.VolumeLabels, p.Attached, p.WasClaim = "", nil, nil, nil, ""
 	out, err := json.Marshal(r)
 	if err != nil {
 		return row

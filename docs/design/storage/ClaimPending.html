@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Drawer · a claim that cannot bind</title>
+<link rel="stylesheet" href="storage.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+</head>
+<body>
+<div class="rk mk-app" data-h="1000" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" aria-label="Cluster: lakehouse-dev"><span class="rk-dot"></span>lakehouse-dev <span class="rk-dim">v1.37.1</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="warn">4</span></a>
+    <a class="rk-tab" href="#top">Nodes</a>
+    <a class="rk-tab" href="#top">Fleets</a>
+    <a class="rk-tab" href="#top">Namespaces</a>
+    <a class="rk-tab" href="#top">Pods</a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services</a>
+    <a class="rk-tab" href="#top">Networks</a>
+    <a class="rk-tab" href="ByClass.html" aria-current="page">Storage</a>
+    <a class="rk-tab" href="#top">Access</a>
+    <a class="rk-tab" href="#top">Policies</a>
+  </nav>
+  <div class="mk-top-right">
+    <a class="rk-tab" href="#top"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Administration</a>
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">SuperAdmin</span>
+  </div>
+</header>
+
+<div class="st-banner" role="status">
+  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.2 14.3 13H1.7L8 2.2ZM8 6.5v3M8 11.6h.01"/></svg>
+  <b>3 pods pending · 1 volume warning</b>
+  <span class="rk-mono">batch/report-29pzq — Unschedulable for 19d · batch/scratch-report-5mv8t — Pending for 19d · analytics/cache-2 — Pending for 2h · analytics/data-cache-2 — Pending, longhorn could not provision: not enough disk space</span>
+  <a href="#top">View alerts →</a>
+</div>
+
+<div class="mk-body">
+<main class="st-page">
+
+  <div class="st-head"><h1>Storage</h1><span>22 volumes · 8.6 TiB provisioned · 3 classes, default <span class="rk-mono">longhorn</span> · 22 claims in 6 namespaces</span></div>
+
+  <div class="st-tb">
+    <div class="rk-seg" role="group" aria-label="Group by"><button aria-pressed="true">By class</button><button aria-pressed="false">By namespace</button><button aria-pressed="false">All volumes</button></div>
+    <label class="rk-tcheck"><input type="checkbox" checked>Needs attention <span class="rk-cnt" data-tone="warn">3</span></label>
+    <label class="rk-field" style="width:300px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m13 13-2.8-2.8"/></svg><input type="text" placeholder="Search volumes, claims and pods" aria-label="Search volumes, claims and pods"></label>
+    <button class="rk-btn"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5h12l-4.5 5.5v4l-3 1.5v-5.5L2 3.5Z"/></svg>Select by label<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+    <span class="mk-grow"></span>
+    <button class="rk-btn">Columns</button><button class="rk-btn">Export</button>
+  </div>
+
+  <table class="mk-table st-tree" aria-label="Volumes and claims that need attention">
+    <thead><tr><th style="width:216px">Volume</th><th style="width:258px">Claim</th><th style="width:190px">Status</th><th class="rk-r" style="width:72px">Capacity</th><th style="width:160px">Used</th><th style="width:56px">Access</th><th style="width:64px">Reclaim</th><th style="width:200px">Mounted by</th><th style="width:110px">Node</th><th class="rk-r" style="width:56px">Age</th></tr></thead>
+    <tbody>
+      <tr class="st-grp"><td colspan="10"><div class="st-gh"><button class="st-chev" aria-expanded="true" aria-label="Collapse longhorn"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg></button><span class="st-cls"><a href="StorageClass.html">longhorn</a></span><span class="rk-tag" data-tone="accent">default</span><span class="st-facts">driver.longhorn.io<i>·</i>Delete on release<i>·</i>binds immediately<i>·</i>expansion allowed</span><span class="st-tot"><b>2</b> of 8 volumes shown · <b>1</b> claim pending</span></div></td></tr>
+      <tr class="st-vol"><td><div class="st-name"><a class="rk-mono" href="#top" title="pvc-c41a7f58-0d2e-4b96-a7c3-5f1e8d2b6a09">pvc-c41a7f58-0d2e-4b96-a7c3-5f1e8d2b6a09</a></div></td><td class="rk-mono"><span class="rk-dim">monitoring/</span>prometheus-db-prometheus-0</td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Bound</span></td><td class="rk-r rk-num">200Gi</td><td><span class="st-used" data-tone="warn"><span class="rk-bar"><span data-tone="warn" style="width:86%"></span></span>86% <span class="rk-dim">171.6Gi</span></span></td><td><span class="st-mode" title="ReadWriteOnce">RWO</span></td><td>Delete</td><td class="rk-mono">prometheus-0</td><td class="rk-mono">worker-002</td><td class="rk-r rk-num">67d</td></tr>
+      <tr class="st-vol st-two" data-sel="true"><td><div class="st-name"><span class="rk-dim">none yet</span></div></td><td class="rk-mono"><span class="rk-dim">analytics/</span>data-cache-2</td><td><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>Pending</span><span class="st-reason" data-tone="err">provisioning failed · not enough disk space</span></td><td class="rk-r rk-num">20Gi<span class="st-sub2" style="font-family:var(--font)">requested</span></td><td class="rk-dim">—</td><td><span class="st-mode" title="ReadWriteOnce">RWO</span></td><td class="rk-dim">—</td><td class="rk-mono">cache-2<span class="st-reason" data-tone="warn">Pending, waits for the volume</span></td><td class="rk-dim">—</td><td class="rk-r rk-num">2h</td></tr>
+      <tr class="st-grp"><td colspan="10"><div class="st-gh"><button class="st-chev" aria-expanded="true" aria-label="Collapse fast-ssd"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg></button><span class="st-cls" data-tone="err">fast-ssd</span><span class="rk-tag" data-tone="err">class not found</span><span class="st-facts">no StorageClass with this name exists<i>·</i>the claim stays Pending; its only sign is a ProvisioningFailed event</span><span class="st-tot"><b>1</b> claim · <b>100Gi</b> requested</span></div></td></tr>
+      <tr class="st-vol st-two"><td><div class="st-name"><span class="rk-dim">none</span></div></td><td class="rk-mono"><span class="rk-dim">batch/</span>scratch-report</td><td><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>Pending</span><span class="st-reason" data-tone="err">no class named fast-ssd · nothing will provision it</span></td><td class="rk-r rk-num">100Gi<span class="st-sub2" style="font-family:var(--font)">requested</span></td><td class="rk-dim">—</td><td><span class="st-mode" title="ReadWriteOnce">RWO</span></td><td class="rk-dim">—</td><td class="rk-mono">scratch-report-5mv8t<span class="st-reason" data-tone="warn">Pending, waits for the volume</span></td><td class="rk-dim">—</td><td class="rk-r rk-num">19d</td></tr>
+    </tbody>
+  </table>
+
+</main>
+
+<div class="mk-backdrop" aria-hidden="true"></div>
+
+<aside class="mk-drawer" aria-label="Claim details">
+  <div class="mk-dhead">
+    <div class="mk-kicker"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><ellipse cx="8" cy="4" rx="5.5" ry="2.2"/><path d="M2.5 4v8c0 1.2 2.5 2.2 5.5 2.2s5.5-1 5.5-2.2V4M2.5 8c0 1.2 2.5 2.2 5.5 2.2S13.5 9.2 13.5 8"/></svg>Volume claim in <a href="#top" class="rk-mono">analytics</a> · no volume yet</div>
+    <div class="mk-dtitle">data-cache-2<button class="rk-icon-btn" aria-label="Copy the name" style="width:26px;height:26px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5" y="5" width="8.5" height="8.5" rx="1.5"/><path d="M3 10.5V3.5A1.5 1.5 0 0 1 4.5 2h7"/></svg></button><span class="mk-grow"></span><a class="rk-icon-btn" href="ByClass.html" aria-label="Close claim details"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></a></div>
+    <div class="mk-facts"><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>Pending for 2h 14m</span><span>Requested <b>20Gi</b></span><span>Access <b>ReadWriteOnce</b></span><span>Class <a href="StorageClass.html" class="rk-mono">longhorn</a></span><span>StatefulSet <a href="#top" class="rk-mono">cache</a></span><span>Release <a href="#top" class="rk-mono">analytics-cache</a></span><span>Alert <a href="#top">open on the Alerts tab</a></span></div>
+    <nav class="mk-dtabs" aria-label="Claim details sections">
+      <a class="rk-tab" href="#top" aria-current="page">Overview</a>
+      <a class="rk-tab" href="#top">Pods <span class="rk-cnt">1</span></a>
+      <a class="rk-tab" href="#top">Events <span class="rk-cnt" data-tone="warn">3</span></a>
+      <a class="rk-tab" href="#top">Claim YAML</a>
+    </nav>
+  </div>
+
+  <div class="mk-dbody">
+    <p class="mk-intro">The chain breaks at the volume: <b>longhorn</b> has tried 14 times to create one and keeps retrying. Nothing below it can move until it does.</p>
+
+    <div class="rk-card" style="padding:6px">
+      <div class="st-chain">
+        <div class="st-hop"><span class="st-n">1</span><span class="st-k">Storage class</span><span class="st-v"><a href="StorageClass.html">longhorn</a><span class="rk-tag" data-tone="accent">default</span></span><span class="st-d">driver.longhorn.io · Delete on release · binds immediately · expansion allowed</span><span class="st-s"><span class="rk-dot"></span>in place</span></div>
+        <div class="st-hop" data-tone="err"><span class="st-n">2</span><span class="st-k">Volume</span><span class="st-v">none provisioned</span><span class="st-d"><b>longhorn could not create a 20Gi volume: not enough disk space on any node.</b> 14 attempts in 2h 14m, the last 2 minutes ago; it retries with backoff. With 3 replicas it needs 60Gi free across three nodes.</span><span class="st-s" data-tone="err"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5 14.5 8 8 14.5 1.5 8Z"/></svg>failed</span></div>
+        <div class="st-hop" data-tone="warn"><span class="st-n">3</span><span class="st-k">Claim</span><span class="st-v">analytics/data-cache-2</span><span class="st-d">requested 20Gi · ReadWriteOnce · from the <span class="rk-mono">data</span> volumeClaimTemplate of StatefulSet <a href="#top" class="rk-mono">cache</a> · Helm release <a href="#top" class="rk-mono">analytics-cache</a></span><span class="st-s" data-tone="warn"><span class="rk-dot"></span>Pending</span></div>
+        <div class="st-hop" data-tone="warn"><span class="st-n">4</span><span class="st-k">Mounted by</span><span class="st-v"><a href="#top">cache-2</a></span><span class="st-d">waits for the claim: <span class="rk-mono">pod has unbound immediate PersistentVolumeClaims</span> · the StatefulSet will not start cache-3 before cache-2 is ready</span><span class="st-s" data-tone="warn"><span class="rk-dot"></span>Pending</span></div>
+        <div class="st-hop" data-tone="muted"><span class="st-n">5</span><span class="st-k">Node</span><span class="st-v">not scheduled</span><span class="st-d">the scheduler holds the pod until the claim is bound; no node is involved yet</span><span class="st-s" data-tone="muted">—</span></div>
+      </div>
+    </div>
+
+    <section class="st-sec" aria-labelledby="p-ev">
+      <h3 id="p-ev">Events <span class="rk-cnt" data-tone="warn">3</span></h3>
+      <table class="st-ev" aria-label="Events about this claim and its pod">
+        <thead><tr><th>Reason</th><th>Message</th><th class="rk-r">Count</th><th class="rk-r">First seen</th><th class="rk-r">Last seen</th><th>Reported by</th></tr></thead>
+        <tbody>
+          <tr><td><span class="st-rsn" data-tone="err">ProvisioningFailed</span></td><td>failed to provision volume with StorageClass "longhorn": rpc error: code = ResourceExhausted desc = not enough disk space on any node for a 20Gi volume with 3 replicas</td><td class="rk-r rk-num">×14</td><td class="rk-r rk-num">2h ago</td><td class="rk-r rk-num">2m ago</td><td class="rk-mono">driver.longhorn.io csi-provisioner</td></tr>
+          <tr><td><span class="st-rsn" data-tone="muted">ExternalProvisioning</span></td><td>Waiting for a volume to be created either by the external provisioner "driver.longhorn.io" or manually by the system administrator</td><td class="rk-r rk-num">×27</td><td class="rk-r rk-num">2h ago</td><td class="rk-r rk-num">1m ago</td><td class="rk-mono">persistentvolume-controller</td></tr>
+          <tr><td><span class="st-rsn">FailedScheduling</span> <span class="rk-dim">pod cache-2</span></td><td>0/10 nodes are available: pod has unbound immediate PersistentVolumeClaims.</td><td class="rk-r rk-num">×9</td><td class="rk-r rk-num">2h ago</td><td class="rk-r rk-num">4m ago</td><td class="rk-mono">default-scheduler</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <div class="mk-chips"><span class="rk-small rk-dim" style="align-self:center">Ask Sherlock:</span><button class="rk-btn">Which Longhorn disks are nearly full?</button><button class="rk-btn">Which Released or Available volumes could be reclaimed?</button><button class="rk-btn">What does cache-2 need the volume for?</button></div>
+  </div>
+
+  <div class="mk-dfoot">
+    <span class="mk-hint">A StatefulSet recreates a deleted claim from the same template, so free Longhorn space first (reclaim a volume, add a disk) and the provisioner's next retry binds it. Anything that changes goes through Watson: a server dry run, then your approval.</span>
+    <button class="rk-btn" data-danger="true">Delete claim</button>
+  </div>
+</aside>
+</div>
+
+</div>
+</body>
+</html>

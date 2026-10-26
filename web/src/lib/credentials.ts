@@ -235,6 +235,12 @@ rules:
   - apiGroups: ["apps"]
     resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
     verbs: ["patch", "update"] # scale
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["patch", "delete"] # expand and delete a claim (ST-18)
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["patch"] # set or remove the default class
 `
   }
   y += `---

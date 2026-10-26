@@ -346,6 +346,18 @@ export const cluster = {
   },
 
   /** A LoadBalancer Service no controller will ever give an address (P2-05). */
+  /**
+   * A claim for the Storage tab to show (ST-24): the simulator has the
+   * mockups' claims; in kind a namespace of its own gets one that names a
+   * class that does not exist, so it stays Pending and needs no disk.
+   */
+  async storageClaim(namespace: string): Promise<() => Promise<void>> {
+    if (!inKind) return async () => {}
+    await kubectlApply({ apiVersion: 'v1', kind: 'Namespace', metadata: { name: namespace, labels: { e2e: 'storage' } } })
+    await kubectlApply({ apiVersion: 'v1', kind: 'PersistentVolumeClaim', metadata: { name: 'data', namespace }, spec: { storageClassName: 'e2e-no-such-class', accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '64Mi' } } } })
+    return async () => void (await kubectlRetry('delete', 'namespace', namespace, '--ignore-not-found', '--wait=false'))
+  },
+
   async pendingLoadBalancer(): Promise<{ namespace: string; name: string; cleanup: () => Promise<void> }> {
     if (!inKind) return { namespace: 'web', name: 'gateway-lb', cleanup: async () => {} }
     const name = `e2e-lb-${Date.now().toString(36)}`

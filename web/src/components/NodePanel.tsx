@@ -177,6 +177,10 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
             <a className="rk-link" href={href('pods', [], { node: r.name })} data-testid="node-pods-link">
               {nWord(r.pods.running, 'pod', 'pods')} on this node →
             </a>
+            {/* ST-21: the volumes and claims on this node, on the Storage tab. */}
+            <a className="rk-link" href={href('storage', [], { node: r.name })} data-testid="node-storage-link">
+              Storage →
+            </a>
             <nav aria-label="Node sections" style={{ display: 'flex', gap: '0 16px', marginLeft: 'auto' }}>
               <button className="rk-tab" aria-current={tab === 'details' ? 'page' : undefined} onClick={() => setTab('details')} style={{ height: 30 }} data-dtab="details">
                 Details

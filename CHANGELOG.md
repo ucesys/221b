@@ -4,6 +4,10 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## Unreleased
 
+### Added
+
+- **Storage tab.** Storage classes, persistent volumes and claims, and the pods that mount them, in one table beside a filter sidebar by namespace, node and storage class, as on the Pods tab, with how full each volume is (from the kubelets), a Needs attention filter, and a drawer that traces a claim from its class to its node and says where it breaks. A class has a drawer of its own. Expand a claim, delete a claim, and set or remove the default class through Watson, each after an approval. People bound to namespaces see their claims only. Alerts, the pod drawer and the banner link to it. Full Admin gains `delete` on claims, and the chart's ClusterRole reads VolumeAttachments.
+
 ### Changed
 
 - **Sherlock knows the cluster it is asked about.** Its prompt now names the cluster's Kubernetes distribution (RKE2, K3s, kubeadm, kind, EKS, GKE, AKS, OpenShift, Talos), the operating system and kernel of each node, and its network plugin, load balancer, storage and GPU plugin, and gives the guidance for those alone: the distribution's own services, log files and commands, and each operating system's. It troubleshoots down to the node's operating system and hardware, and gives the checks to run on a node in a block of their own. A console with several clusters gives each its own prompt. Node details are included only for people who may list nodes.

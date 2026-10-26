@@ -55,6 +55,16 @@ export function refTarget(r: SherlockRef, cluster: string): RefTarget | null {
     case 'Service':
       if (ns) p = { kind: 'service', namespace: ns, name: r.name }
       break
+    // The Storage drawers (ST-22): a claim, a volume or a class Sherlock cites.
+    case 'PersistentVolumeClaim':
+      if (ns) p = { kind: 'claim', namespace: ns, name: r.name }
+      break
+    case 'PersistentVolume':
+      p = { kind: 'volume', name: r.name }
+      break
+    case 'StorageClass':
+      p = { kind: 'class', name: r.name }
+      break
     case 'HelmRelease':
       return ns ? { href: clusterHref(cluster, 'helm', [ns, r.name]) } : null
     case 'Namespace':

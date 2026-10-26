@@ -15,6 +15,7 @@ import (
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/klog/v2"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
 	"github.com/ucesys/221b/server/internal/kube"
@@ -645,6 +647,49 @@ func (s *Sim) reactLocked(k kube.Kind, old, next runtime.Object) {
 			s.replaceLocked(old.(*corev1.Pod))
 			s.syncStatusLocked(old.(*corev1.Pod).Namespace)
 		}
+	case "persistentvolumeclaims":
+		s.reactClaimLocked(old, next)
+	}
+}
+
+// reactClaimLocked does what the volume controllers do (ST-18): a bound
+// claim asked for more grows when its class allows expansion, its volume
+// with it; a deleted claim's volume is Released, or deleted with the claim
+// under the Delete reclaim policy.
+func (s *Sim) reactClaimLocked(old, next runtime.Object) {
+	pvKind := mustKind("persistentvolumes")
+	if c, ok := next.(*corev1.PersistentVolumeClaim); ok && old != nil && c.Status.Phase == corev1.ClaimBound {
+		want, have := c.Spec.Resources.Requests[corev1.ResourceStorage], c.Status.Capacity[corev1.ResourceStorage]
+		cls, _ := s.objectLocked("storageclasses", ptr.Deref(c.Spec.StorageClassName, "")).(*storagev1.StorageClass)
+		if want.Cmp(have) > 0 && cls != nil && cls.AllowVolumeExpansion != nil && *cls.AllowVolumeExpansion {
+			cp := c.DeepCopy()
+			cp.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: want}
+			s.putLocked(mustKind("persistentvolumeclaims"), cp, watch.Modified)
+			if pv, ok := s.objectLocked("persistentvolumes", c.Spec.VolumeName).(*corev1.PersistentVolume); ok {
+				pcp := pv.DeepCopy()
+				pcp.Spec.Capacity = corev1.ResourceList{corev1.ResourceStorage: want}
+				s.putLocked(pvKind, pcp, watch.Modified)
+			}
+			if u, ok := s.volumeUsage[c.Namespace+"/"+c.Name]; ok {
+				u[1] = want.Value() * 98 / 100
+				s.volumeUsage[c.Namespace+"/"+c.Name] = u
+			}
+		}
+	}
+	if c, ok := old.(*corev1.PersistentVolumeClaim); ok && next == nil && c.Spec.VolumeName != "" {
+		pv, ok := s.objectLocked("persistentvolumes", c.Spec.VolumeName).(*corev1.PersistentVolume)
+		if !ok {
+			return
+		}
+		if pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimDelete {
+			s.putLocked(pvKind, pv, watch.Deleted)
+			return
+		}
+		cp := pv.DeepCopy()
+		now := metav1.NewTime(s.opts.Now())
+		cp.Status = corev1.PersistentVolumeStatus{Phase: corev1.VolumeReleased, LastPhaseTransitionTime: &now}
+		s.putLocked(pvKind, cp, watch.Modified)
+		delete(s.volumeUsage, c.Namespace+"/"+c.Name)
 	}
 }
 

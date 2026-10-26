@@ -8,7 +8,7 @@
 
 import { useSyncExternalStore } from 'react'
 
-export type Tab = 'nodes' | 'fleets' | 'namespaces' | 'pods' | 'helm' | 'alerts' | 'services' | 'networks' | 'access' | 'policies'
+export type Tab = 'nodes' | 'fleets' | 'namespaces' | 'pods' | 'helm' | 'alerts' | 'services' | 'networks' | 'storage' | 'access' | 'policies'
 
 export const TABS: { id: Tab; label: string; tip: string }[] = [
   { id: 'alerts', label: 'Alerts', tip: 'Pods failing to start or pending, node problems and warning events' },
@@ -16,6 +16,8 @@ export const TABS: { id: Tab; label: string; tip: string }[] = [
   { id: 'fleets', label: 'Fleets', tip: 'Groups of nodes by the labels and taints they share' },
   { id: 'namespaces', label: 'Namespaces', tip: 'Every namespace and what it holds, by kind' },
   { id: 'pods', label: 'Pods', tip: 'Every pod, filtered by node, namespace and status' },
+  // ST-01: after Pods (moved from after Networks on October 26, 2026).
+  { id: 'storage', label: 'Storage', tip: 'Storage classes, volumes, claims and the pods that mount them' },
   { id: 'helm', label: 'Helm', tip: 'Helm releases and their history' },
   { id: 'services', label: 'Services', tip: 'Every Service, its endpoints and the hostnames that publish it' },
   { id: 'networks', label: 'Networks', tip: 'Ingress, DNS, pod and service networks — trace a request hop by hop' },

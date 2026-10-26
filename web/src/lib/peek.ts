@@ -5,7 +5,8 @@
 // tab that lists them, filtered.
 //
 // Targets: node:‹name›, pod:‹ns›/‹name›, service:‹ns›/‹name›,
-// object:‹Kind›/‹ns›/‹name›, policy:‹policy view key›.
+// object:‹Kind›/‹ns›/‹name›, policy:‹policy view key›, and the Storage
+// drawers (ST-13, ST-17): claim:‹ns›/‹name›, volume:‹name›, class:‹name›.
 
 import { currentRoute, href, withParams, type Tab } from './router'
 
@@ -15,14 +16,20 @@ export type Peek =
   | { kind: 'service'; namespace: string; name: string }
   | { kind: 'object'; type: string; namespace: string; name: string }
   | { kind: 'policy'; key: string }
+  | { kind: 'claim'; namespace: string; name: string }
+  | { kind: 'volume'; name: string }
+  | { kind: 'class'; name: string }
 
 /** The peek parameter of a target. */
 export function peekParam(p: Peek): string {
   switch (p.kind) {
     case 'node':
-      return `node:${p.name}`
+    case 'volume':
+    case 'class':
+      return `${p.kind}:${p.name}`
     case 'pod':
     case 'service':
+    case 'claim':
       return `${p.kind}:${p.namespace}/${p.name}`
     case 'object':
       return `object:${p.type}/${p.namespace}/${p.name}`
@@ -42,9 +49,12 @@ export function parsePeek(s: string | null | undefined): Peek | null {
   const slash = rest.indexOf('/')
   switch (kind) {
     case 'node':
+    case 'volume':
+    case 'class':
       return { kind, name: rest }
     case 'pod':
     case 'service':
+    case 'claim':
       return slash > 0 && slash < rest.length - 1 ? { kind, namespace: rest.slice(0, slash), name: rest.slice(slash + 1) } : null
     case 'object': {
       const parts = rest.split('/')

@@ -3,6 +3,7 @@
 import AxeBuilder from '@axe-core/playwright'
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
+import { cluster, inKind } from './cluster'
 
 const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
 
@@ -74,6 +75,34 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(panel.locator('.rk-gr').first().or(panel.getByText(/^No pod/))).toBeVisible()
     expect(await violations(page), 'object pods').toEqual([])
     await page.keyboard.press('Escape')
+  })
+
+  test(`the Storage tab and its drawers meet WCAG 2.2 AA in the ${theme} theme (ST-01)`, async ({ page }) => {
+    test.slow()
+    const cleanup = await cluster.storageClaim(`e2e-storage-a11y-${theme}`)
+    try {
+      await page.addInitScript((t) => window.localStorage.setItem('221b.theme', JSON.stringify(t)), theme)
+      // The table with its sidebar, then narrowed to one namespace (ST-02).
+      for (const hash of ['#/storage', '#/storage?ns=-&attention=1', '#/storage?node=(no-node)']) {
+        await page.goto('/' + hash)
+        await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+        await expect(page.getByTestId('storage-sidebar')).toBeVisible()
+        await page.waitForTimeout(300)
+        expect(await violations(page), hash).toEqual([])
+      }
+      await page.goto('/#/storage')
+      await expect(page.getByTestId('storage-row').first()).toBeVisible({ timeout: 20_000 })
+      // A claim that needs attention: its drawer has the most to show, its alert link included.
+      await page.locator('[data-attention] [data-testid=storage-claim]').first().click()
+      await expect(page.getByTestId('storage-chain')).toBeVisible()
+      expect(await violations(page), 'claim drawer').toEqual([])
+      await page.keyboard.press('Escape')
+      await page.goto(`/#/storage?peek=class:${inKind ? 'standard' : 'longhorn'}`)
+      await expect(page.getByTestId('storage-class-panel')).toBeVisible()
+      expect(await violations(page), 'class drawer').toEqual([])
+    } finally {
+      await cleanup()
+    }
   })
 
   test(`the Phase 4 tabs meet WCAG 2.2 AA in the ${theme} theme`, async ({ page }) => {

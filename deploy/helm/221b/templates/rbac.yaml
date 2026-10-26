@@ -49,6 +49,14 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses", "ingressclasses", "networkpolicies"]
     verbs: ["get", "list", "watch"]
+  # The Storage tab (ST-19): volumes, classes and the attachments of
+  # volumes to nodes, all cluster-scoped. Claims are above.
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "volumeattachments"]
+    verbs: ["get", "list", "watch"]
   # Who may do what (the Access tab): roles and the bindings that grant
   # them, read to work out each identity's permissions.
   - apiGroups: ["rbac.authorization.k8s.io"]

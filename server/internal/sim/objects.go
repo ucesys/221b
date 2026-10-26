@@ -161,6 +161,10 @@ func (s *Sim) generateObjects(now time.Time) {
 
 	// Events for what is wrong.
 	s.problemEvents(now)
+
+	// The Storage tab's classes, volumes and claims (ST-23), after the
+	// events: its pods have events of their own.
+	s.storageSeed(now)
 }
 
 // workload creates the controller that owns a group's pods, with the

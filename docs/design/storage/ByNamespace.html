@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Storage · by namespace, as a Viewer</title>
+<link rel="stylesheet" href="storage.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+</head>
+<body>
+<div class="rk mk-app" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" aria-label="Cluster: lakehouse-dev"><span class="rk-dot"></span>lakehouse-dev <span class="rk-dim">v1.37.1</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="warn">4</span></a>
+    <a class="rk-tab" href="#top">Nodes</a>
+    <a class="rk-tab" href="#top">Fleets</a>
+    <a class="rk-tab" href="#top">Namespaces</a>
+    <a class="rk-tab" href="#top">Pods</a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services</a>
+    <a class="rk-tab" href="#top">Networks</a>
+    <a class="rk-tab" href="#top" aria-current="page">Storage</a>
+    <a class="rk-tab" href="#top">Access</a>
+    <a class="rk-tab" href="#top">Policies</a>
+  </nav>
+  <div class="mk-top-right">
+    <span class="rk-avatar" aria-hidden="true">DK</span><span>dana.k</span><span class="rk-tag">Viewer</span><span class="rk-tag rk-mono">analytics, batch</span>
+  </div>
+</header>
+
+<div class="st-banner" role="status">
+  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.2 14.3 13H1.7L8 2.2ZM8 6.5v3M8 11.6h.01"/></svg>
+  <b>3 pods pending · 1 volume warning</b>
+  <span class="rk-mono">batch/report-29pzq — Unschedulable for 19d · batch/scratch-report-5mv8t — Pending for 19d · analytics/cache-2 — Pending for 2h · analytics/data-cache-2 — Pending, longhorn could not provision: not enough disk space</span>
+  <a href="#top">View alerts →</a>
+</div>
+
+<div class="mk-body">
+<main class="st-page">
+
+  <div class="st-head"><h1>Storage</h1><span>10 claims in <span class="rk-mono">analytics</span> and <span class="rk-mono">batch</span> · 4.3 TiB requested · the namespaces your role can see</span></div>
+
+  <div class="st-tb">
+    <div class="rk-seg" role="group" aria-label="Group by"><button aria-pressed="false" disabled title="Needs a SuperViewer or SuperAdmin role">By class</button><button aria-pressed="true">By namespace</button><button aria-pressed="false">All claims</button></div>
+    <label class="rk-tcheck"><input type="checkbox">Needs attention <span class="rk-cnt" data-tone="warn">2</span></label>
+    <label class="rk-field" style="width:300px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m13 13-2.8-2.8"/></svg><input type="text" placeholder="Search claims and pods" aria-label="Search claims and pods"></label>
+    <button class="rk-btn"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3.5h12l-4.5 5.5v4l-3 1.5v-5.5L2 3.5Z"/></svg>Select by label<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+    <span class="mk-grow"></span>
+    <button class="rk-btn">Columns</button><button class="rk-btn">Export</button>
+  </div>
+
+  <table class="mk-table st-tree" aria-label="Claims by namespace">
+    <thead><tr><th style="width:236px">Claim</th><th style="width:190px">Status</th><th class="rk-r" style="width:72px">Capacity</th><th style="width:160px">Used</th><th style="width:56px">Access</th><th style="width:110px">Class</th><th style="width:196px">Volume</th><th style="width:190px">Mounted by</th><th style="width:110px">Node</th><th class="rk-r" style="width:56px">Age</th></tr></thead>
+    <tbody>
+
+      <tr class="st-grp"><td colspan="10"><div class="st-gh"><button class="st-chev" aria-expanded="true" aria-label="Collapse analytics"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg></button><span class="st-cls"><a href="#top">analytics</a></span><span class="st-facts">8 claims<i>·</i>4.0Ti requested<i>·</i>Helm releases analytics-cache, dremio, datasets</span><span class="st-tot">quota <span class="rk-mono">requests.storage</span> <b>4.0Ti</b> of <b>8Ti</b> <span class="st-meter"><span style="width:50%"></span></span> 50%</span></div></td></tr>
+      <tr class="st-vol"><td class="rk-mono"><a href="#top" style="color:var(--fg)">shared-datasets</a></td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Bound</span></td><td class="rk-r rk-num">2Ti</td><td><span class="st-used"><span class="rk-bar"><span style="width:64%"></span></span>64% <span class="rk-dim">1.28Ti</span></span></td><td><span class="st-mode" title="ReadWriteMany">RWX</span></td><td class="rk-mono st-plain">nfs-shared</td><td><div class="st-name"><span class="rk-mono st-plain" title="pvc-3c9e2a84-f6b1-4d07-8a52-c1e9d7b3f0a6">pvc-3c9e2a84-f6b1-4d07-8a52-c1e9d7b3f0a6</span></div></td><td><span class="st-mount"><button class="st-chev" aria-expanded="false" aria-label="Show the 6 pods"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg></button>6 pods</span></td><td>3 nodes</td><td class="rk-r rk-num">120d</td></tr>
+      <tr class="st-vol"><td class="rk-mono"><a href="#top" style="color:var(--fg)">spill-dremio-executor-0</a></td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Bound</span></td><td class="rk-r rk-num">500Gi</td><td><span class="st-used"><span class="rk-bar"><span style="width:41%"></span></span>41% <span class="rk-dim">205Gi</span></span></td><td><span class="st-mode" title="ReadWriteOnce">RWO</span></td><td class="rk-mono st-plain">local-nvme</td><td><div class="st-name"><span class="rk-mono st-plain">local-pv-w005-nvme0</span></div></td><td class="rk-mono">dremio-executor-0</td><td class="rk-mono">worker-005</td><td class="rk-r rk-num">19d</td></tr>
+      <tr class="st-vol"><td class="rk-mono"><a href="#top" style="color:var(--fg)">spill-dremio-executor-1</a></td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Bound</span></td><td class="rk-r rk-num">500Gi</td><td><span class="st-used"><span class="rk-bar"><span style="width:38%"></span></span>38% <span class="rk-dim">190Gi</span></span></td><td><span class="st-mode" title="ReadWriteOnce">RWO</span></td><td class="rk-mono st-plain">local-nvme</td><td><div class="st-name"><span class="rk-mono st-plain">local-pv-w006-nvme0</span></div></td><td class="rk-mono">dremio-executor-1</td><td class="rk-mono">worker-006</td><td class="rk-r rk-num">19d</td></tr>
+      <tr class="st-vol"><td class="rk-mono"><a href="#top" style="color:var(--fg)">spill-dremio-executor-2</a></td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Bound</span></td><td class="rk-r rk-num">500Gi</td><td><span class="st-used"><span class="rk-bar"><span style="width:44%"></span></span>44% <span class="rk-dim">220Gi</span></span></td><td><span class="st-mode" title="ReadWriteOnce">RWO</span></td><td class="rk-mono st-plain">local-nvme</td><td><div class="st-name"><span class="rk-mono st-plain">local-pv-w007-nvme0</span></div></td><td class="rk-mono">dremio-executor-2</td><td class="rk-mono">worker-007</td><td class="rk-r rk-num">19d</td></tr>
+      <tr class="st-vol st-two"><td class="rk-mono"><a href="#top" style="color:var(--fg)">spill-dremio-executor-3</a></td><td><span class="rk-pill" data-tone="info"><span class="rk-dot"></span>Pending</span><span class="st-reason">waits for a pod · the class binds on first use</span></td><td class="rk-r rk-num">500Gi<span class="st-sub2" style="font-family:var(--font)">requested</span></td><td class="rk-dim">—</td><td><span class="st-mode" title="ReadWriteOnce">RWO</span></td><td class="rk-mono st-plain">local-nvme</td><td class="rk-dim">none yet</td><td class="rk-mono">dremio-executor-3<span class="st-reason" data-tone="warn">Pending, not yet scheduled</span></td><td class="rk-dim">—</td><td class="rk-r rk-num">3h</td></tr>
+      <tr class="st-vol"><td class="rk-mono"><a href="#top" style="color:var(--fg)">data-cache-0</a></td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Bound</span></td><td class="rk-r rk-num">20Gi</td><td><span class="st-used"><span class="rk-bar"><span style="width:71%"></span></span>71% <span class="rk-dim">14.2Gi</span></span></td><td><span class="st-mode" title="ReadWriteOnce">RWO</span></td><td class="rk-mono st-plain">longhorn</td><td><div class="st-name"><span class="rk-mono st-plain" title="pvc-71e3a6c0-4d9b-4e82-a5f1-6b8c2d0e9a54">pvc-71e3a6c0-4d9b-4e82-a5f1-6b8c2d0e9a54</span></div></td><td class="rk-mono">cache-0</td><td class="rk-mono">worker-002</td><td class="rk-r rk-num">8d</td></tr>
+      <tr class="st-vol"><td class="rk-mono"><a href="#top" style="color:var(--fg)">data-cache-1</a></td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Bound</span></td><td class="rk-r rk-num">20Gi</td><td><span class="st-used"><span class="rk-bar"><span style="width:70%"></span></span>70% <span class="rk-dim">13.9Gi</span></span></td><td><span class="st-mode" title="ReadWriteOnce">RWO</span></td><td class="rk-mono st-plain">longhorn</td><td><div class="st-name"><span class="rk-mono st-plain" title="pvc-b8d05f42-e2a7-4c19-9d3b-1f6e8a4c7d26">pvc-b8d05f42-e2a7-4c19-9d3b-1f6e8a4c7d26</span></div></td><td class="rk-mono">cache-1</td><td class="rk-mono">worker-006</td><td class="rk-r rk-num">8d</td></tr>
+      <tr class="st-vol st-two"><td class="rk-mono"><a href="#top" style="color:var(--fg)">data-cache-2</a></td><td><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>Pending</span><span class="st-reason" data-tone="err">provisioning failed · not enough disk space</span></td><td class="rk-r rk-num">20Gi<span class="st-sub2" style="font-family:var(--font)">requested</span></td><td class="rk-dim">—</td><td><span class="st-mode" title="ReadWriteOnce">RWO</span></td><td class="rk-mono st-plain">longhorn</td><td class="rk-dim">none yet</td><td class="rk-mono">cache-2<span class="st-reason" data-tone="warn">Pending, waits for the volume</span></td><td class="rk-dim">—</td><td class="rk-r rk-num">2h</td></tr>
+
+      <tr class="st-grp"><td colspan="10"><div class="st-gh"><button class="st-chev" aria-expanded="true" aria-label="Collapse batch"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg></button><span class="st-cls"><a href="#top">batch</a></span><span class="st-facts">2 claims<i>·</i>300Gi requested<i>·</i>Helm release reports</span><span class="st-tot">no storage quota</span></div></td></tr>
+      <tr class="st-vol"><td class="rk-mono"><a href="#top" style="color:var(--fg)">reports-out</a></td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Bound</span></td><td class="rk-r rk-num">200Gi</td><td><span class="st-used"><span class="rk-bar"><span style="width:31%"></span></span>31% <span class="rk-dim">61.5Gi</span></span></td><td><span class="st-mode" title="ReadWriteMany">RWX</span></td><td class="rk-mono st-plain">nfs-shared</td><td><div class="st-name"><span class="rk-mono st-plain" title="pvc-e07b4d61-29a3-4c58-b6e0-7d2f1a8c5b94">pvc-e07b4d61-29a3-4c58-b6e0-7d2f1a8c5b94</span></div></td><td><span class="st-mount"><button class="st-chev" aria-expanded="false" aria-label="Show the 3 pods"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg></button>3 pods</span></td><td>2 nodes</td><td class="rk-r rk-num">60d</td></tr>
+      <tr class="st-vol st-two"><td class="rk-mono"><a href="#top" style="color:var(--fg)">scratch-report</a></td><td><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>Pending</span><span class="st-reason" data-tone="err">no class named fast-ssd · nothing will provision it</span></td><td class="rk-r rk-num">100Gi<span class="st-sub2" style="font-family:var(--font)">requested</span></td><td class="rk-dim">—</td><td><span class="st-mode" title="ReadWriteOnce">RWO</span></td><td><span class="rk-mono" style="color:var(--err)">fast-ssd</span><span class="st-reason" data-tone="err">not found</span></td><td class="rk-dim">none</td><td class="rk-mono">scratch-report-5mv8t<span class="st-reason" data-tone="warn">Pending, waits for the volume</span></td><td class="rk-dim">—</td><td class="rk-r rk-num">19d</td></tr>
+
+    </tbody>
+  </table>
+
+  <div class="rk-callout" data-tone="info"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.3"/><path d="M8 7.2v4M8 5h.01"/></svg><span>Volumes and storage classes are cluster-scoped. Your Viewer role in <span class="rk-mono">analytics</span> and <span class="rk-mono">batch</span> reads them by name only: the By class view, the volume and class details, and the Available and Released volumes need a SuperViewer or SuperAdmin role. <b>Used</b> comes from each kubelet's Summary API, which the console reads with its own ServiceAccount (<span class="rk-mono">kubeletStats</span> in the chart, as for node uptime), for the claims you may see; a claim no running pod mounts shows —.</span></div>
+
+</main>
+</div>
+
+</div>
+</body>
+</html>

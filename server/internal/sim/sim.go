@@ -88,8 +88,11 @@ type Sim struct {
 	metrics  bool
 	usage    map[string][2]int64 // node -> cpu milli, memory bytes
 	podUsage map[string][2]int64 // namespace/name -> cpu milli, memory bytes
-	boots    map[string]time.Time
-	blips    map[string]time.Time // pods churn made not ready, and when
+	// volumeUsage is what the kubelets report about mounted claims (ST-08):
+	// namespace/claim -> used and capacity bytes, inodes used and inodes.
+	volumeUsage map[string][4]int64
+	boots       map[string]time.Time
+	blips       map[string]time.Time // pods churn made not ready, and when
 	// lastWriter is who the last write impersonated, for tests.
 	lastWriter string
 	rnd        *rand.Rand
@@ -175,7 +178,9 @@ func New(o Options) *Sim {
 		usage:    map[string][2]int64{},
 		podUsage: map[string][2]int64{},
 		boots:    map[string]time.Time{},
-		rnd:      rand.New(rand.NewSource(o.Seed + 221)),
+		// Filled in by the storage scenario.
+		volumeUsage: map[string][4]int64{},
+		rnd:         rand.New(rand.NewSource(o.Seed + 221)),
 	}
 	s.generate()
 	if o.OIDCIssuer != "" {
@@ -814,6 +819,7 @@ func (s *Sim) kubeletSummary(w http.ResponseWriter, r *http.Request) {
 	n, ok := s.nodes[name]
 	boot := s.boots[name]
 	usage := s.usage[name]
+	pods := s.volumeStatsLocked(name, r.URL.Query().Get("only_cpu_and_memory") == "true")
 	s.mu.Unlock()
 	if !ok {
 		status(w, http.StatusNotFound, "NotFound", fmt.Sprintf("nodes %q not found", name))
@@ -831,8 +837,49 @@ func (s *Sim) kubeletSummary(w http.ResponseWriter, r *http.Request) {
 			"cpu":       map[string]any{"time": now, "usageNanoCores": usage[0] * 1e6},
 			"memory":    map[string]any{"time": now, "workingSetBytes": usage[1]},
 		},
-		"pods": []any{},
+		"pods": pods,
 	})
+}
+
+// volumeStatsLocked lists the running pods on a node with the claims they
+// mount and what the kubelet would say of each (ST-08); none when only CPU
+// and memory are asked for, as the kubelet answers.
+func (s *Sim) volumeStatsLocked(node string, cpuMemOnly bool) []any {
+	out := []any{}
+	if cpuMemOnly {
+		return out
+	}
+	keys := make([]string, 0, len(s.pods))
+	for k, p := range s.pods {
+		if p.Spec.NodeName == node && p.Status.Phase == corev1.PodRunning {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	now := s.opts.Now().UTC().Format(time.RFC3339)
+	for _, k := range keys {
+		p := s.pods[k]
+		var vols []any
+		for _, v := range p.Spec.Volumes {
+			if v.PersistentVolumeClaim == nil {
+				continue
+			}
+			u, ok := s.volumeUsage[p.Namespace+"/"+v.PersistentVolumeClaim.ClaimName]
+			if !ok {
+				continue
+			}
+			vols = append(vols, map[string]any{
+				"time": now, "name": v.Name, "usedBytes": u[0], "capacityBytes": u[1], "availableBytes": u[1] - u[0],
+				"inodesUsed": u[2], "inodes": u[3], "inodesFree": u[3] - u[2],
+				"pvcRef": map[string]any{"name": v.PersistentVolumeClaim.ClaimName, "namespace": p.Namespace},
+			})
+		}
+		if len(vols) == 0 {
+			continue
+		}
+		out = append(out, map[string]any{"podRef": map[string]any{"name": p.Name, "namespace": p.Namespace, "uid": string(p.UID)}, "volume": vols})
+	}
+	return out
 }
 
 // reboot gives a node a new boot ID and boot time, as a restart does.

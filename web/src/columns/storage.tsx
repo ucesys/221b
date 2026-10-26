@@ -1,0 +1,74 @@
+import type { StoragePair } from '../api/storage'
+import { fmtTs, minutesSince } from '../lib/format'
+import { accessShort, bindingText, bytes, nodeText, pairLabels } from '../lib/volumes'
+import type { ColumnDef } from '../lib/table'
+
+// The Storage tab's columns (ST-06, ST-11). The tab draws its own rows, a
+// tree of groups and pods; these say what each column is called, how wide
+// it is, how it sorts in All volumes, and what it exports.
+
+/** What a pair's class binds as, when the person may read classes. */
+export type BindingOf = (p: StoragePair) => string | undefined
+
+function claimText(p: StoragePair): string {
+  if (p.claim) return `${p.namespace}/${p.claim}`
+  if (p.wasClaim) return `was ${p.wasClaim}`
+  return ''
+}
+
+function volumeText(p: StoragePair): string {
+  return p.volume && p.state !== 'pending' ? p.volume : ''
+}
+
+function col(c: Omit<ColumnDef<StoragePair>, 'cell' | 'min'> & { min?: number }): ColumnDef<StoragePair> {
+  return { min: parseInt(c.width, 10) || 80, cell: () => null, ...c }
+}
+
+/** Every column, in the table's order (ST-06): Class after Claim. */
+export function storageColumns(binding: BindingOf): ColumnDef<StoragePair>[] {
+  return [
+    col({ id: 'volume', label: 'Volume', sortName: 'volume name', width: '120px', sortValue: (p) => volumeText(p) || null, export: (p) => [{ head: 'Volume', cell: volumeText(p) || null }] }),
+    col({ id: 'claim', label: 'Claim', sortName: 'claim (namespace, then name)', width: '172px', sortValue: (p) => (p.claim ? claimText(p) : null), export: (p) => [{ head: 'Claim', cell: claimText(p) || null }] }),
+    col({ id: 'class', label: 'Class', width: '96px', sortValue: (p) => p.class || null, export: (p) => [{ head: 'Class', cell: p.class || null, json: p.classMissing ? { name: p.class, missing: true } : p.class || null }] }),
+    col({
+      id: 'status',
+      label: 'Status',
+      sortName: 'status (trouble first)',
+      width: '140px',
+      sortValue: (p) => (p.attention ? '0' : p.reason ? '1' : '2') + p.phase,
+      export: (p) => [
+        { head: 'Status', cell: p.phase },
+        { head: 'Why', cell: p.reason?.text ?? null },
+      ],
+    }),
+    col({ id: 'capacity', label: 'Capacity', width: '64px', right: true, defaultDir: 'desc', sortValue: (p) => (p.state === 'pending' ? (p.requested ?? null) : (p.capacity ?? null)), export: (p) => [{ head: 'Capacity', cell: p.state === 'pending' ? `${bytes(p.requested)} requested` : p.capacity ? bytes(p.capacity) : null, json: p.state === 'pending' ? { requested: p.requested } : p.capacity }] }),
+    col({
+      id: 'used',
+      label: 'Used',
+      sortName: 'used (fullest first)',
+      width: '108px',
+      defaultDir: 'desc',
+      sortValue: (p) => p.usage?.pct ?? null,
+      export: (p) => [
+        { head: 'Used', cell: p.usage ? bytes(p.usage.used) : null, json: p.usage ? p.usage.used : null },
+        { head: 'Used %', cell: p.usage ? Math.round(p.usage.pct) : null },
+      ],
+    }),
+    col({ id: 'access', label: 'Access', width: '50px', sortValue: (p) => (p.accessModes ?? []).map(accessShort).join(',') || null, export: (p) => [{ head: 'Access', cell: (p.accessModes ?? []).map(accessShort).join(', ') || null, json: p.accessModes ?? [] }] }),
+    col({ id: 'reclaim', label: 'Reclaim', width: '62px', sortValue: (p) => (p.state === 'pending' ? null : p.reclaim || null), export: (p) => [{ head: 'Reclaim', cell: p.state === 'pending' ? null : p.reclaim || null }] }),
+    col({
+      id: 'mounted',
+      label: 'Mounted by',
+      width: '124px',
+      sortValue: (p) => ((p.pods ?? []).length === 1 ? p.pods![0]!.name : (p.pods ?? []).length ? `${(p.pods ?? []).length} pods` : null),
+      export: (p) => [{ head: 'Mounted by', cell: (p.pods ?? []).map((x) => x.name).join('\n') || null, json: (p.pods ?? []).map((x) => ({ pod: x.name, node: x.node ?? null, mountPath: x.mountPath ?? null, readOnly: !!x.readOnly, status: x.status })) }],
+    }),
+    col({ id: 'node', label: 'Node', width: '104px', sortValue: (p) => nodeText(p) || null, export: (p) => [{ head: 'Node', cell: (p.nodes?.length ? p.nodes : p.source?.node ? [p.source.node] : []).join('\n') || null }] }),
+    col({ id: 'age', label: 'Age', width: '46px', right: true, defaultDir: 'asc', sortValue: (p, now) => minutesSince(p.created, now), export: (p) => [{ head: 'Created', cell: fmtTs(p.created) }] }),
+    col({ id: 'mode', label: 'Mode', width: '96px', hiddenByDefault: true, sortValue: (p) => p.volumeMode || null, export: (p) => [{ head: 'Mode', cell: p.volumeMode || null }] }),
+    col({ id: 'source', label: 'Source', width: '220px', hiddenByDefault: true, sortValue: (p) => p.source?.text ?? null, export: (p) => [{ head: 'Source', cell: p.source?.text ?? null }] }),
+    col({ id: 'labels', label: 'Labels', width: '220px', hiddenByDefault: true, sortValue: (p) => pairLabels(p).join(' ') || null, export: (p) => [{ head: 'Labels', cell: pairLabels(p).join('\n') || null, json: pairLabels(p) }] }),
+    col({ id: 'release', label: 'Release', width: '120px', hiddenByDefault: true, sortValue: (p) => p.release || null, export: (p) => [{ head: 'Release', cell: p.release || null }] }),
+    col({ id: 'binding', label: 'Binding mode', width: '150px', hiddenByDefault: true, sortValue: (p) => binding(p) ?? null, export: (p) => [{ head: 'Binding mode', cell: binding(p) ? bindingText(binding(p)!) : null }] }),
+  ]
+}

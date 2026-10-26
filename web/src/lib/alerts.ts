@@ -174,6 +174,20 @@ export interface AlertBanner {
   tone: 'err' | 'warn'
   title: string
   detail: string
+  /** The detail's items; a volume's opens its Storage drawer (ST-21). */
+  items?: BannerItem[]
+}
+
+export interface BannerItem {
+  text: string
+  /** The peek target the item opens: "claim:ns/name". */
+  peek?: string
+}
+
+/** A volume alert's banner item (ST-21): what is wrong with the claim. */
+function volumeItem(r: AlertRow): BannerItem {
+  const failed = r.events.some((e) => e.reason === 'ProvisioningFailed')
+  return { text: `${r.namespace}/${r.name} — ${r.status}${failed ? ', the volume could not be provisioned' : ''}`, peek: `claim:${r.namespace}/${r.name}` }
 }
 
 function lowerFirst(s: string): string {
@@ -187,21 +201,28 @@ export function bannersOf(all: AlertRow[], now: number): AlertBanner[] {
   const pending = rows.filter((r) => r.kind === 'pod' && r.severity === 'pending')
   const nodeErr = rows.filter((r) => r.kind === 'node' && r.severity === 'error')
   const nodeWarn = rows.filter((r) => r.kind === 'node' && r.severity === 'warning')
+  const volErr = rows.filter((r) => r.kind === 'pvc' && r.severity === 'error')
+  const volWarn = rows.filter((r) => r.kind === 'pvc' && r.severity === 'warning')
   const nodeItem = (r: AlertRow, sev: string) =>
     `${r.name} — ${(r.problems ?? [])
       .filter((p) => sev === 'any' || p.severity === sev)
       .map((p) => lowerFirst(p.title))
       .join(', ')}`
   const out: AlertBanner[] = []
-  if (failed.length || nodeErr.length) {
-    const title = [failed.length ? nWord(failed.length, 'pod failed to start', 'pods failed to start') : '', nodeErr.length ? nWord(nodeErr.length, 'node error', 'node errors') : ''].filter(Boolean).join(' · ')
-    const items = [...failed.map((r) => `${r.namespace}/${r.name} — ${r.status}${r.restarts ? `, ${nWord(r.restarts, 'restart', 'restarts')}` : ''}`), ...nodeErr.map((r) => nodeItem(r, 'error'))]
-    out.push({ tone: 'err', title, detail: items.join('  ·  ') })
+  const banner = (tone: 'err' | 'warn', title: string, items: BannerItem[]): AlertBanner => {
+    const b: AlertBanner = { tone, title, detail: items.map((i) => i.text).join('  ·  ') }
+    if (items.some((i) => i.peek)) b.items = items
+    return b
   }
-  if (pending.length || nodeWarn.length) {
-    const title = [pending.length ? nWord(pending.length, 'pod pending', 'pods pending') : '', nodeWarn.length ? nWord(nodeWarn.length, 'node warning', 'node warnings') : ''].filter(Boolean).join(' · ')
-    const items = [...pending.map((r) => `${r.namespace}/${r.name} — ${r.node ? r.status : 'Unschedulable'} for ${fmtAge(r.started, now)}`), ...nodeWarn.map((r) => nodeItem(r, 'any'))]
-    out.push({ tone: 'warn', title, detail: items.join('  ·  ') })
+  if (failed.length || nodeErr.length || volErr.length) {
+    const title = [failed.length ? nWord(failed.length, 'pod failed to start', 'pods failed to start') : '', nodeErr.length ? nWord(nodeErr.length, 'node error', 'node errors') : '', volErr.length ? nWord(volErr.length, 'volume error', 'volume errors') : ''].filter(Boolean).join(' · ')
+    const items: BannerItem[] = [...failed.map((r) => ({ text: `${r.namespace}/${r.name} — ${r.status}${r.restarts ? `, ${nWord(r.restarts, 'restart', 'restarts')}` : ''}` })), ...nodeErr.map((r) => ({ text: nodeItem(r, 'error') })), ...volErr.map(volumeItem)]
+    out.push(banner('err', title, items))
+  }
+  if (pending.length || nodeWarn.length || volWarn.length) {
+    const title = [pending.length ? nWord(pending.length, 'pod pending', 'pods pending') : '', nodeWarn.length ? nWord(nodeWarn.length, 'node warning', 'node warnings') : '', volWarn.length ? nWord(volWarn.length, 'volume warning', 'volume warnings') : ''].filter(Boolean).join(' · ')
+    const items: BannerItem[] = [...pending.map((r) => ({ text: `${r.namespace}/${r.name} — ${r.node ? r.status : 'Unschedulable'} for ${fmtAge(r.started, now)}` })), ...nodeWarn.map((r) => ({ text: nodeItem(r, 'any') })), ...volWarn.map(volumeItem)]
+    out.push(banner('warn', title, items))
   }
   return out
 }
