@@ -149,6 +149,23 @@ func TestPodRowsShowStatusAsKubectlDoes(t *testing.T) {
 	}
 }
 
+func TestPodsOnANodeThatStoppedReportingAreUnknown(t *testing.T) {
+	src := source()
+	lost := pod("shop", "agent-1", "worker-2")
+	lost.Status.Conditions[0].Status = corev1.ConditionFalse
+	src.Put(lost)
+	src.Put(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-2"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionUnknown, Reason: "NodeStatusUnknown", LastTransitionTime: ts(time.Hour)}}}})
+	r := views.BuildPodRow(src, lost, now)
+	if r.Status != "Unknown" || r.Tone != "err" || !r.ReadyUnknown || !strings.Contains(r.StatusTip, "worker-2 stopped reporting") {
+		t.Errorf("pod on a lost node: %+v", r)
+	}
+	// A node that reports itself not ready is still reporting.
+	src.Put(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-2"}, Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionFalse}}}})
+	if r := views.BuildPodRow(src, lost, now); r.Status != "Running" || r.ReadyUnknown {
+		t.Errorf("pod on a not-ready node: %+v", r)
+	}
+}
+
 func TestPodDetailsNameSecretsWithoutTheirValues(t *testing.T) {
 	src := source()
 	p := objectOf[*corev1.Pod](t, src, "pods", "shop", "web-abc-1")

@@ -42,10 +42,12 @@ type PodRow struct {
 	Tone      string `json:"tone"`
 	StatusTip string `json:"statusTip,omitempty"`
 	Phase     string `json:"phase"`
-	// Ready and Total count app containers.
-	Ready    int   `json:"ready"`
-	Total    int   `json:"total"`
-	Restarts int32 `json:"restarts"`
+	// Ready and Total count app containers. ReadyUnknown says Ready is
+	// the last the node reported before it stopped reporting.
+	Ready        int   `json:"ready"`
+	Total        int   `json:"total"`
+	ReadyUnknown bool  `json:"readyUnknown,omitempty"`
+	Restarts     int32 `json:"restarts"`
 	// LastRestart is when a container last restarted, and LastTermination
 	// why it stopped: "Error, exit 1", "OOMKilled".
 	LastRestart     *time.Time `json:"lastRestart,omitempty"`
@@ -108,6 +110,16 @@ func BuildPodRow(src Source, p *corev1.Pod, now time.Time) PodRow {
 		}
 	}
 	r.Status, r.Tone, r.StatusTip = podStatus(p, now)
+	// On a node that stopped reporting, the pod's status is the last its
+	// kubelet sent: kubectl still says Running 1/1, but nobody knows.
+	if !r.Done && p.DeletionTimestamp == nil && p.Spec.NodeName != "" {
+		if n, _ := src.Object("nodes", "", p.Spec.NodeName).(*corev1.Node); n != nil {
+			if c := nodeReady(n); c != nil && c.Status == corev1.ConditionUnknown {
+				r.Status, r.Tone, r.ReadyUnknown = "Unknown", "err", true
+				r.StatusTip = "Node " + n.Name + " stopped reporting; the pod's state is unknown."
+			}
+		}
+	}
 	chain := ownerChain(src, p.Namespace, p.OwnerReferences, 4)
 	if len(chain) > 0 {
 		owner := chain[len(chain)-1]
@@ -287,6 +299,15 @@ func hasPodReadyCondition(conds []corev1.PodCondition) bool {
 		}
 	}
 	return false
+}
+
+func nodeReady(n *corev1.Node) *corev1.NodeCondition {
+	for i := range n.Status.Conditions {
+		if n.Status.Conditions[i].Type == corev1.NodeReady {
+			return &n.Status.Conditions[i]
+		}
+	}
+	return nil
 }
 
 func podCondition(p *corev1.Pod, t corev1.PodConditionType) *corev1.PodCondition {

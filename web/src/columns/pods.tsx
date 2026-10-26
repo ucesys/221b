@@ -58,15 +58,15 @@ export const POD_COLUMNS: ColumnDef<PodView>[] = [
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.status}</span>
         </span>
         {!r.done && (
-          <span className="rk-num" style={{ color: r.ready < r.total ? 'var(--warn)' : 'var(--fg3)', fontSize: 12 }} title={`${r.ready} of ${r.total} containers ready`}>
-            {r.ready}/{r.total}
+          <span className="rk-num" style={{ color: r.readyUnknown || r.ready < r.total ? 'var(--warn)' : 'var(--fg3)', fontSize: 12 }} title={r.readyUnknown ? `Unknown: the node stopped reporting; it last said ${r.ready} of ${r.total} ready` : `${r.ready} of ${r.total} containers ready`}>
+            {r.readyUnknown ? '?' : r.ready}/{r.total}
           </span>
         )}
       </span>
     ),
     export: (r) => [
       { head: 'Status', cell: r.status },
-      { head: 'Ready', cell: `${r.ready}/${r.total}` },
+      { head: 'Ready', cell: `${r.readyUnknown ? '?' : r.ready}/${r.total}` },
     ],
   },
   {

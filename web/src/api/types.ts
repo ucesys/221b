@@ -104,6 +104,8 @@ export interface PodRow {
   phase: string
   ready: number
   total: number
+  /** The node stopped reporting: ready is its last word, shown as ?. */
+  readyUnknown?: boolean
   restarts: number
   lastRestart?: string
   lastTermination?: string
