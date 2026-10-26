@@ -92,4 +92,7 @@ test('a node’s menu runs one command on it through Watson', async ({ page }) =
   await expect(card).toBeVisible({ timeout: 20_000 })
   await expect(card).toContainText('df -h')
   if (shots) await page.screenshot({ path: `${shots}/node-card.png` })
+  // Leave Watson as it was for the specs after this one.
+  await card.getByTestId('watson-discard').click()
+  await expect(card).toHaveCount(0)
 })

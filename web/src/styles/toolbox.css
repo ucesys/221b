@@ -61,7 +61,7 @@
 .tb-strip{flex:none;display:flex;align-items:stretch;gap:2px;height:40px;padding:0 8px 0 10px;border-bottom:1px solid var(--line);background:var(--surface2);overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}
 .tb-stab{display:inline-flex;align-items:center;gap:7px;padding:0 11px;border:0;background:transparent;color:var(--fg3);font-size:12.5px;font-weight:500;white-space:nowrap;box-shadow:inset 0 -2px 0 transparent;flex:none}
 .tb-stab:hover{color:var(--fg)}
-.tb-stab[aria-selected=true]{color:var(--fg);box-shadow:inset 0 -2px 0 var(--accent);background:var(--surface)}
+.tb-stab[aria-current=true]{color:var(--fg);box-shadow:inset 0 -2px 0 var(--accent);background:var(--surface)}
 .tb-stab .rk-dot{color:var(--ok)}
 .tb-stab[data-state=idle] .rk-dot{color:var(--warn)}
 .tb-stab[data-state=starting] .rk-dot{color:var(--warn);background:transparent;box-shadow:inset 0 0 0 2px currentColor}
@@ -69,7 +69,7 @@
 .tb-stab[data-state=ended] .rk-dot{color:var(--line2)}
 .tb-stab .rk-mono{font-size:12px;max-width:220px;overflow:hidden;text-overflow:ellipsis}
 .tb-ttl{font-family:var(--mono);font-size:11px;color:var(--fg3);background:var(--sunken);border-radius:4px;padding:0 5px;line-height:16px}
-.tb-x{display:inline-flex;width:18px;height:18px;align-items:center;justify-content:center;border-radius:4px;color:var(--fg3);border:0;background:transparent;padding:0}
+.tb-x{display:inline-flex;width:24px;height:24px;align-items:center;justify-content:center;border-radius:4px;color:var(--fg3);border:0;background:transparent;padding:0}
 .tb-x:hover{background:var(--sunken);color:var(--fg)}
 .tb-ssep{width:1px;background:var(--line);margin:9px 6px;flex:none}
 .tb-strip-right{margin-left:auto;display:flex;align-items:center;gap:2px;flex:none;padding-left:8px}

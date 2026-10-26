@@ -69,7 +69,7 @@ export function Dock(p: Props) {
   // The tab strip shows once there is a session, or no assistant to show.
   const strip = !!ss && (ss.tabs.length > 0 || ss.active !== 'assistants' || !assistants)
   const active = !ss || !strip ? 'assistants' : ss.active === 'assistants' && !assistants ? 'sessions' : ss.active
-  const names = [p.sherlock && 'Sherlock', p.watson && 'Watson', strip && 'sessions'].filter(Boolean).join(' and ')
+  const names = [p.sherlock && 'Sherlock', p.watson && 'Watson'].filter(Boolean).join(' and ') || 'the sessions'
   const shown: Pane = both ? p.pane : p.sherlock ? 'sherlock' : 'watson'
 
   if (mode === 'min') {
@@ -197,9 +197,9 @@ export function Dock(p: Props) {
           </>
         )}
         {strip && ss && (
-          <div className="tb-strip" role="tablist" aria-label="Dock" data-testid="dock-strip">
+          <div className="tb-strip" role="toolbar" aria-label="Assistants and sessions" data-testid="dock-strip">
             {assistants && (
-              <button role="tab" className="tb-stab" aria-selected={active === 'assistants'} onClick={() => ss.onActive('assistants')} data-testid="dock-tab-assistants">
+              <button className="tb-stab" aria-current={active === 'assistants'} onClick={() => ss.onActive('assistants')} data-testid="dock-tab-assistants">
                 <SearchIcon />
                 Assistants
                 {p.waiting > 0 && (
@@ -209,7 +209,7 @@ export function Dock(p: Props) {
                 )}
               </button>
             )}
-            <button role="tab" className="tb-stab" aria-selected={active === 'sessions'} onClick={() => ss.onActive('sessions')} data-testid="dock-tab-sessions">
+            <button className="tb-stab" aria-current={active === 'sessions'} onClick={() => ss.onActive('sessions')} data-testid="dock-tab-sessions">
               <ListIcon />
               Sessions
               <span className="rk-cnt">{ss.open}</span>
@@ -219,7 +219,7 @@ export function Dock(p: Props) {
               const st = tabState(t, ss.now)
               return (
                 <span key={t.id} style={{ display: 'inline-flex', alignItems: 'stretch' }}>
-                  <button role="tab" className="tb-stab" data-state={st} aria-selected={active === t.id} onClick={() => ss.onActive(t.id)} title={t.summary + (t.mine ? '' : ` — ${t.owner}’s`)} data-testid={`dock-tab-${t.id}`}>
+                  <button className="tb-stab" data-state={st} aria-current={active === t.id} onClick={() => ss.onActive(t.id)} title={t.summary + (t.mine ? '' : ` — ${t.owner}’s`)} data-testid={`dock-tab-${t.id}`}>
                     <span className="rk-dot" />
                     <span className="rk-mono">{tabLabel(t)}</span>
                     {st === 'ended' ? <span className="tb-ttl">ended</span> : st === 'starting' ? <span className="tb-ttl">opening</span> : t.ends ? <span className="tb-ttl">ends {new Date(t.ends).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> : null}
