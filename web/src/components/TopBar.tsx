@@ -6,7 +6,7 @@ import { refreshLabel } from '../api/settings'
 import { connection } from '../lib/connection'
 import { fmtTs } from '../lib/format'
 import { ROLE_NAME, topRole } from '../lib/admin'
-import { adminHref, HOME, href, TABS, type Route, type Tab } from '../lib/router'
+import { adminHref, HOME, tabHref, TABS, type Route, type Tab } from '../lib/router'
 import { openAdmin, pagesFor } from './AdminPage'
 import { ClusterMenu } from './ClusterMenu'
 import { Chevron, GearIcon, Logo, MoonIcon, SunIcon } from './Icons'
@@ -232,7 +232,14 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
     return () => clearInterval(t)
   }, [live])
   const every = settings?.refreshSeconds ?? 0
-  const left = live ? secondsToRefresh(refreshedAt, every, now) : null
+  // A new rate starts a new interval on the server from the moment it is
+  // set (live.Store.SetSettings), and the browser hears of it at that
+  // moment: the countdown and the ring start again then, at the new speed,
+  // rather than finishing the old interval first.
+  const [rate, setRate] = useState({ every, at: 0 })
+  if (rate.every !== every) setRate({ every, at: rate.every ? now : 0 })
+  const since = refreshedAt && rate.at > refreshedAt.getTime() ? new Date(rate.at) : refreshedAt
+  const left = live ? secondsToRefresh(since, every, now) : null
   const liveTip = [
     settings ? `Refreshes every ${refreshLabel(settings.refreshSeconds)}, for every open console at once.` : '',
     left !== null ? `Next refresh in ${left} s.` : '',
@@ -305,7 +312,7 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
           {tabs
             .filter((t) => plan.vis.includes(t.id))
             .map((t) => (
-              <a key={t.id} className="rk-tab" href={href(t.id)} aria-current={tab === t.id ? 'page' : undefined} title={t.tip} data-tab={t.id} data-tone={labelTones?.[t.id]}>
+              <a key={t.id} className="rk-tab" href={tabHref(t.id)} aria-current={tab === t.id ? 'page' : undefined} title={t.tip} data-tab={t.id} data-tone={labelTones?.[t.id]}>
                 {t.label}
                 {countOf(t.id) !== undefined && (
                   <span className="rk-count" data-tone={tones?.[t.id] ?? 'muted'}>
@@ -350,7 +357,7 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
                 <button className="rk-ddcatch" tabIndex={-1} aria-hidden="true" onClick={() => setMoreOpen(false)} />
                 <div className="rk-ddmenu" role="menu" aria-label="More views">
                   {inMenu.map((t) => (
-                    <a key={t.id} className="rk-ddopt" role="menuitem" href={href(t.id)} aria-current={tab === t.id ? 'page' : undefined} title={t.tip} onClick={() => setMoreOpen(false)} data-tab={t.id} data-tone={labelTones?.[t.id]}>
+                    <a key={t.id} className="rk-ddopt" role="menuitem" href={tabHref(t.id)} aria-current={tab === t.id ? 'page' : undefined} title={t.tip} onClick={() => setMoreOpen(false)} data-tab={t.id} data-tone={labelTones?.[t.id]}>
                       <span style={{ flex: '1 1 auto' }}>{t.label}</span>
                       {countOf(t.id) !== undefined && <span className="rk-cnt">{countOf(t.id)}</span>}
                     </a>
@@ -363,7 +370,7 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
       </nav>
       <div className="rk-meta" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, minHeight: 52 }}>
         <span style={{ fontSize: 12, color: 'var(--fg3)', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'default', userSelect: 'none' }} title={liveTip || undefined} data-testid="live">
-          {left !== null && refreshedAt && <RefreshRing left={left} every={every} refreshedAt={refreshedAt} now={now} />}
+          {left !== null && since && <RefreshRing left={left} every={every} refreshedAt={since} now={now} />}
           {live ? 'Live' : conn.label}
         </span>
         {me && pagesFor(me).length > 0 && (

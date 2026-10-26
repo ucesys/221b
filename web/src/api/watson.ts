@@ -219,7 +219,7 @@ export function watsonSupports(command: string): boolean {
   }
   const c = out.concat(words.slice(i)).join(' ')
   return (
-    /^kubectl\s+(get|describe|logs|top|events|cordon|uncordon|drain|scale|label|annotate)\b/.test(c) ||
+    /^kubectl\s+(get|describe|logs|top|events|cordon|uncordon|drain|scale|label|annotate|taint)\b/.test(c) ||
     /^kubectl\s+auth\s+can-i\b/.test(c) ||
     /^kubectl\s+rollout\s+(restart|undo)\b/.test(c) ||
     /^kubectl\s+delete\s+(pods?|po|pvc|persistentvolumeclaims?)([\s/]|$)/.test(c) ||

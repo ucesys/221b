@@ -218,6 +218,9 @@ button.rk-chip[aria-pressed=true]{border-color:var(--accent);background:var(--ac
 .rk-contents{display:contents}
 .rk-mxn{position:sticky;left:0;z-index:1;display:flex;align-items:center;gap:7px;padding:var(--rowpad) 12px;background:var(--surface);box-shadow:inset -1px 0 0 var(--line)}
 .rk-mxr:hover>.rk-mxn{background:var(--surface2)}
+/* The box that picks a node in the matrix: a 24px target (WCAG 2.2 target size) around the checkbox. */
+.rk-pickbox{display:inline-flex;align-items:center;justify-content:center;flex:none;width:24px;height:24px;margin:0 0 0 -6px;cursor:pointer}
+.rk-pickbox input{margin:0}
 .rk-mxg,.rk-mxhr{background:var(--surface2)}
 .rk-mxg>.rk-mxn,.rk-mxhr>.rk-mxn{background:var(--surface2)}
 .rk-mxg{border-bottom:0}

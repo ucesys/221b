@@ -33,7 +33,8 @@ export interface HomeCluster {
   nodes: { total: number; ready: number; controlPlane: number; cordoned: number; errors: number; warnings: number }
   cpu: HomeUse
   memory: HomeUse
-  pods: { total: number; running: number; capacity: number; notReady: number; failing: number }
+  /** ready, unready, pending, failing and completed add up to total; running is every pod on a node that has not finished. */
+  pods: { total: number; running: number; capacity: number; notReady: number; failing: number; ready: number; unready: number; pending: number; completed: number }
   namespaces: number
   services: number
   alerts: { failed: number; pending: number; nodeErrors: number; nodeWarnings: number; volumes: number; acknowledged: number; recovered: number }

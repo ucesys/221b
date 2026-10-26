@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { badgeOf, bannersOf, contextOf, sectionsOf, sevLabel, tabTone, tilesOf } from './alerts'
+import { badgeOf, bannersOf, byNode, contextOf, sectionsOf, sevLabel, tabTone, tilesOf } from './alerts'
 import type { AlertRow } from '../api/types'
 
 const now = Date.parse('2026-10-14T12:00:00Z')
@@ -33,6 +33,23 @@ describe('alerts', () => {
     expect(badgeOf(rows)).toEqual({ count: 4, tone: 'err' })
     expect(badgeOf([oom])).toEqual({ count: 0, tone: 'muted' })
     expect(badgeOf([pending])).toEqual({ count: 1, tone: 'warn' })
+  })
+
+  it('puts each pod under the node it runs on, the most pressing group first', () => {
+    const onW2 = { ...pull, key: 'pod:web/d', name: 'd', node: 'w2' }
+    const onCp = { ...oom, node: 'cp' }
+    const quiet = { ...pull, key: 'pod:web/e', name: 'e', node: 'w3', ack: { by: 'ops@corp.example', at: ago(1) } }
+    const g = byNode([quiet, cordoned, down, pull, pending, onW2, onCp])
+    // cp's own error and w1's and w2's failed pods first, by name; w3's acknowledged pod last.
+    expect(g.groups.map((x) => [x.node, x.row?.name ?? '', x.pods.map((p) => p.name).join(',')])).toEqual([
+      ['cp', 'cp', 'c'],
+      ['w1', '', 'a'],
+      ['w2', 'w2', 'd'],
+      ['w3', '', 'e'],
+    ])
+    // The pod no node took has no node to go under.
+    expect(g.unscheduled.map((r) => r.name)).toEqual(['b'])
+    expect(byNode([cordoned]).groups).toEqual([{ node: 'w2', row: cordoned, pods: [] }])
   })
 
   it('puts control-plane nodes apart and errors first', () => {

@@ -49,7 +49,7 @@ test('lists every pod with its status, node and namespace, and filters by each',
 
   // Statuses: the segments' counts add up to the pods in scope.
   const segs = page.getByRole('group', { name: 'Pods by status' })
-  const counts = await Promise.all(['running', 'pending', 'failing', 'completed'].map(async (s) => Number((await segs.locator(`[data-status="${s}"]`).textContent())?.replace(/\D/g, ''))))
+  const counts = await Promise.all(['running', 'notready', 'pending', 'failing', 'completed'].map(async (s) => Number((await segs.locator(`[data-status="${s}"]`).textContent())?.replace(/\D/g, ''))))
   expect(counts.reduce((a, b) => a + b, 0)).toBe(onNode.length)
   await segs.locator('[data-status="running"]').click()
   await expect(page).toHaveURL(/status=running/)

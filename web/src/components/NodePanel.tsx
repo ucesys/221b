@@ -8,6 +8,7 @@ import { CopyName } from './CopyName'
 import { AskSherlock } from './Sherlock'
 import { FixCommand } from './Watson'
 import { YamlView } from './YamlView'
+import { copyText } from '../lib/clipboard'
 
 interface Props {
   r: NodeRow
@@ -61,10 +62,7 @@ function nodeActions(r: NodeRow): { what: string; command: string }[] {
 }
 
 function copyCommand(text: string, onToast?: (m: string) => void) {
-  void navigator.clipboard?.writeText(text).then(
-    () => onToast?.('Copied the command'),
-    () => onToast?.('Could not copy: the clipboard is not available.'),
-  )
+  void copyText(text).then((ok) => onToast?.(ok ? 'Copied the command' : 'Could not copy: the browser refused the clipboard.'))
 }
 
 function Section({ title, count, aside, children, label }: { title: string; count?: number | string; aside?: ReactNode; children: ReactNode; label?: string }) {

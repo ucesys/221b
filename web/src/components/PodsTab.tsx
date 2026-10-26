@@ -34,6 +34,7 @@ const ROLES: RoleFilter[] = ['all', 'control-plane', 'worker']
 const STATUSES: [PodStatusFilter, string][] = [
   ['all', 'All'],
   ['running', 'Running'],
+  ['notready', 'Not ready'],
   ['pending', 'Pending'],
   ['failing', 'Failing'],
   ['completed', 'Completed'],
@@ -118,7 +119,7 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
 
   const scoped = useMemo(() => rows.filter((r) => inScope.has(nodeKey(r)) && nsIn(r.namespace)), [rows, inScope, nsSel]) // eslint-disable-line react-hooks/exhaustive-deps
   const statusCounts = useMemo(() => {
-    const c: Record<PodStatusFilter, number> = { all: scoped.length, running: 0, pending: 0, failing: 0, completed: 0 }
+    const c: Record<PodStatusFilter, number> = { all: scoped.length, running: 0, notready: 0, pending: 0, failing: 0, completed: 0 }
     for (const r of scoped) c[podStatusGroup(r)]++
     return c
   }, [scoped])

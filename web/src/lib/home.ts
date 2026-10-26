@@ -37,6 +37,29 @@ export function alertTone(c: HomeCluster): Tone | undefined {
   return undefined
 }
 
+/** The Nodes box: red for a node not ready or with errors, amber for warnings or a cordoned node, plain when all is well. */
+export function nodeTone(c: HomeCluster): Tone | undefined {
+  if (c.nodes.total - c.nodes.ready > 0 || c.nodes.errors > 0) return 'err'
+  if (c.nodes.warnings > 0 || c.nodes.cordoned > 0) return 'warn'
+  return undefined
+}
+
+/** The Pods box: red for failing pods, amber for pods not ready or pending, plain when all is well. */
+export function podTone(c: HomeCluster): Tone | undefined {
+  if (c.pods.failing > 0) return 'err'
+  if (c.pods.unready + c.pods.pending > 0) return 'warn'
+  return undefined
+}
+
+/**
+ * The Pods box's line, as the Pods tab counts them, adding up to the total
+ * (asked after 0.7.1): "96 running · 10 not ready · 3 completed".
+ */
+export function podsText(c: HomeCluster): string {
+  const p = c.pods
+  return [`${p.ready} running`, p.unready ? `${p.unready} not ready` : '', p.pending ? `${p.pending} pending` : '', p.failing ? `${p.failing} failing` : '', p.completed ? `${p.completed} completed` : ''].filter(Boolean).join(' · ')
+}
+
 /** A cluster's health in a word, worst first. */
 export function healthOf(c: HomeCluster): Health {
   const s = stateOf(c)

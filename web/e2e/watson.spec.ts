@@ -263,6 +263,17 @@ test('every supported change runs once approved, as the approver, and does what 
   } finally {
     await cluster.cordon(node, false)
   }
+  // Taints, which fleets give and take (asked after 0.7.1).
+  type Tainted = { spec: { taints?: { key: string; value?: string; effect: string }[] } }
+  const taints = async () => ((await cluster.getObject<Tainted>(`/api/v1/nodes/${node}`))!.spec.taints ?? []).filter((t) => t.key === 'e2e-watson')
+  try {
+    await ok(request, `kubectl taint nodes ${node} e2e-watson=tainted:PreferNoSchedule`)
+    expect(await taints()).toEqual([{ key: 'e2e-watson', value: 'tainted', effect: 'PreferNoSchedule' }])
+    await ok(request, `kubectl taint nodes ${node} e2e-watson:PreferNoSchedule-`)
+    expect(await taints()).toEqual([])
+  } finally {
+    await cluster.taint(node, { key: 'e2e-watson', value: 'tainted', effect: 'PreferNoSchedule' }, false)
+  }
 
   await ok(request, `kubectl scale deployment/${d} -n ${ns} --replicas=3`)
   expect((await deployment()).spec.replicas).toBe(3)

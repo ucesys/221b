@@ -63,11 +63,21 @@ type homeUse struct {
 
 type homePods struct {
 	// Total is every pod the person may list.
-	Total    int `json:"total"`
+	Total int `json:"total"`
+	// Running is every pod on a node that has not finished: Ready,
+	// Unready, Failing and the pending ones that have a node.
 	Running  int `json:"running"`
 	Capacity int `json:"capacity"`
 	NotReady int `json:"notReady"`
 	Failing  int `json:"failing"`
+	// The pods by state, as the Pods tab groups them, adding up to Total:
+	// running and ready, running but not ready (a readiness check fails,
+	// or the node stopped reporting), pending (starting, or on no node
+	// yet), failing and completed.
+	Ready     int `json:"ready"`
+	Unready   int `json:"unready"`
+	Pending   int `json:"pending"`
+	Completed int `json:"completed"`
 }
 
 type homeAlerts struct {
@@ -191,6 +201,14 @@ func (s *Server) fillHome(r *http.Request, h *homeCluster, st *live.Store, cl Cl
 		h.Pods.Capacity += n.Pods.Capacity
 		h.Pods.NotReady += n.Pods.NotReady
 		h.Pods.Failing += n.Pods.Failing
+		h.Pods.Ready += n.Pods.Running - n.Pods.NotReady
+		h.Pods.Unready += n.Pods.Unready
+		h.Pods.Pending += n.Pods.Starting
+		h.Pods.Completed += n.Pods.Completed
+	}
+	// Pods on no node yet are pending too.
+	if unbound := h.Pods.Total - h.Pods.Running - h.Pods.Completed; unbound > 0 {
+		h.Pods.Pending += unbound
 	}
 	for _, raw := range snap.Views[live.ViewAlerts].Rows {
 		var al struct {

@@ -134,11 +134,52 @@ export function listParam(params: URLSearchParams, key: string): string[] {
   return v ? v.split(',').filter(Boolean) : []
 }
 
+// Each tab as it was last left, per cluster: the tab bar opens a tab with
+// its filters, its selection and the object open in it, rather than
+// empty. Kept for this browser tab's session. A details pane over the
+// tab (peek) and a question for Sherlock (ask) are for once.
+const ONCE = ['peek', 'ask']
+const LAST_KEY = '221b.tabs.last'
+const lastTab = new Map<string, string>(readLast())
+
+function readLast(): [string, string][] {
+  try {
+    const raw = typeof window === 'undefined' ? null : window.sessionStorage.getItem(LAST_KEY)
+    return raw ? (JSON.parse(raw) as [string, string][]) : []
+  } catch {
+    return []
+  }
+}
+
+function remember(r: Route) {
+  if (r.view !== 'tabs') return
+  const params: Record<string, string> = {}
+  for (const [k, v] of r.params.entries()) if (!ONCE.includes(k)) params[k] = v
+  lastTab.set(r.cluster + '/' + r.tab, clusterHref(r.cluster, r.tab, r.path, params))
+  try {
+    window.sessionStorage.setItem(LAST_KEY, JSON.stringify([...lastTab]))
+  } catch {
+    // A convenience; without storage it lasts until reload.
+  }
+}
+
+/** A tab of the cluster open now, as it was last left: for the tab bar. */
+export function tabHref(tab: Tab): string {
+  return lastTab.get(current.cluster + '/' + tab) ?? href(tab)
+}
+
+/** For tests: forgets every tab's last state. */
+export function forgetTabsForTests(): void {
+  lastTab.clear()
+}
+
 const listeners = new Set<() => void>()
 let current = parseHash(typeof window === 'undefined' ? '' : window.location.hash)
+if (typeof window !== 'undefined') remember(current)
 
 function onChange() {
   current = parseHash(window.location.hash)
+  remember(current)
   for (const fn of listeners) fn()
 }
 

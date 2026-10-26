@@ -1,7 +1,7 @@
 import { envOf } from '../api/clusters'
 import { useHome, type HomeCluster } from '../api/home'
 import type { Me } from '../api/types'
-import { activeAlerts, alertTone, healthOf, podLine, resourceLine, type UseLine } from '../lib/home'
+import { activeAlerts, alertTone, healthOf, nodeTone, podLine, podsText, podTone, resourceLine, type UseLine } from '../lib/home'
 import { clusterHref, clusterPageHref } from '../lib/router'
 import { SherlockIcon } from './Icons'
 
@@ -52,8 +52,6 @@ function ClusterCard({ c, onEdit }: { c: HomeCluster; onEdit?: () => void }) {
   const active = activeAlerts(c)
   const trouble = health.tone !== 'ok'
   const at = (tab: Parameters<typeof clusterHref>[1], params: Record<string, string> = {}) => clusterHref(c.id, tab, [], params)
-  const nodeTone = c.nodes.total - c.nodes.ready > 0 || c.nodes.errors > 0 ? 'err' : c.nodes.warnings > 0 || c.nodes.cordoned > 0 ? 'warn' : undefined
-  const podTone = c.pods.failing > 0 ? 'err' : c.pods.notReady > 0 ? 'warn' : undefined
   const noUsage = metrics ? undefined : `No usage figures: metrics-server ${c.metrics === 'unavailable' ? 'does not answer' : 'has not answered yet'}, so the bars show only what is requested.`
   return (
     <section className="rk-card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }} aria-labelledby={`home-${c.id}`} data-testid="home-card" data-cluster={c.id} data-health={health.tone}>
@@ -94,8 +92,8 @@ function ClusterCard({ c, onEdit }: { c: HomeCluster; onEdit?: () => void }) {
       {up ? (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(96px, 100%), 1fr))', gap: 8 }}>
-            <Stat label="Nodes ready" value={`${c.nodes.ready}/${c.nodes.total}`} sub={[c.nodes.controlPlane ? `${c.nodes.controlPlane} control plane` : '', c.nodes.cordoned ? `${c.nodes.cordoned} cordoned` : ''].filter(Boolean).join(' · ') || undefined} tone={nodeTone} href={at('nodes')} testid="home-nodes" />
-            <Stat label="Pods" value={c.pods.total} sub={[`${c.pods.running} running`, c.pods.failing ? `${c.pods.failing} failing` : '', c.pods.notReady ? `${c.pods.notReady} not ready` : ''].filter(Boolean).join(' · ')} tone={podTone} href={at('pods')} testid="home-pods" />
+            <Stat label="Nodes ready" value={`${c.nodes.ready}/${c.nodes.total}`} sub={[c.nodes.controlPlane ? `${c.nodes.controlPlane} control plane` : '', c.nodes.cordoned ? `${c.nodes.cordoned} cordoned` : ''].filter(Boolean).join(' · ') || undefined} tone={nodeTone(c)} href={at('nodes')} testid="home-nodes" />
+            <Stat label="Pods" value={c.pods.total} sub={podsText(c)} tone={podTone(c)} href={at('pods')} testid="home-pods" />
             <Stat label={active === 1 ? 'Alert' : 'Alerts'} value={active} sub={c.alerts.acknowledged ? `${c.alerts.acknowledged} acknowledged` : c.alerts.recovered ? `${c.alerts.recovered} recovered` : undefined} tone={alertTone(c)} href={at('alerts')} testid="home-alerts" />
             <Stat label="Namespaces" value={c.namespaces} sub={`${c.services} Service${c.services === 1 ? '' : 's'}`} href={at('namespaces')} testid="home-namespaces" />
           </div>

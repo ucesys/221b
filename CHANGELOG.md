@@ -7,8 +7,14 @@ What changed in each release of 221B, for people who use it and people who insta
 ### Added
 
 - **Storage tab.** Storage classes, persistent volumes and claims, and the pods that mount them, in one table beside a filter sidebar by namespace, node and storage class, as on the Pods tab, with how full each volume is (from the kubelets), a Needs attention filter, and a drawer that traces a claim from its class to its node and says where it breaks. A class has a drawer of its own. Expand a claim, delete a claim, and set or remove the default class through Watson, each after an approval. People bound to namespaces see their claims only. Alerts, the pod drawer and the banner link to it. Full Admin gains `delete` on claims, and the chart's ClusterRole reads VolumeAttachments.
+- **Fleets by name.** A fleet can now be a list of nodes kept in 221B, as well as a set of labels and taints. A list changes nothing in the cluster, a node may be on any number of lists, and a new node joins one only when someone adds it; the editor offers both kinds.
+- **Fleets: pick nodes and put them in a fleet.** Administrators tick nodes in the matrix, then make a new fleet of them (a list, by default), add them to a fleet or remove them from one, choosing the fleet in the dialog; Cancel drops the picks. For a fleet of labels and taints the dialog lists the `kubectl label` and `kubectl taint` commands, and what else they change (fleets the nodes leave, pods a taint keeps off or evicts), and sends them to Watson, where each waits for approval.
+- Watson runs `kubectl taint` on nodes. Its card says what changes and, for NoExecute, which pods are evicted.
+- **Alerts by node.** Each pod's alert sits under the node it runs on, below the node's own alert when it has one, and a node whose pods fail comes near the top even when the node itself is fine. Pods that no node took and volumes keep their own sections; By kind shows the alerts as before.
 
 ### Changed
+
+- **Tabs open as they were left.** A tab in the bar opens with the filters, selection and sort it had, per cluster, for the rest of the session; a details pane over it is not kept.
 
 - **Sherlock knows the cluster it is asked about.** Its prompt now names the cluster's Kubernetes distribution (RKE2, K3s, kubeadm, kind, EKS, GKE, AKS, OpenShift, Talos), the operating system and kernel of each node, and its network plugin, load balancer, storage and GPU plugin, and gives the guidance for those alone: the distribution's own services, log files and commands, and each operating system's. It troubleshoots down to the node's operating system and hardware, and gives the checks to run on a node in a block of their own. A console with several clusters gives each its own prompt. Node details are included only for people who may list nodes.
 - **Home: Troubleshoot or Audit.** A cluster card's Sherlock button reads Troubleshoot while the cluster has errors or warnings, and asks Sherlock why and how to fix each, most severe first; while it is healthy it reads Audit and asks for the review of its setup, as before.
@@ -19,6 +25,10 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Fixed
 
+- **An acknowledgement took a second or two to show.** It is saved with the settings, and the replica serving the page, when it is not the one that saved it, reads them every 3 seconds. The Alerts tab, its badge and its colour now show it at once, and the server's rows take over when they come.
+- **The home page's pod counts did not add up**, and differed from the Pods tab's: "109 pods · 106 running · 10 not ready" counted the not-ready pods among the running ones. The tile now reads "96 running · 10 not ready · 3 completed", and the Pods and Helm tabs have a Not ready status beside Running: pods running but failing a readiness check, or on a node that stopped reporting. The Nodes, Pods and Alerts boxes stay plain when nothing is wrong.
+- **Copy buttons copied nothing** when the console is reached over plain HTTP, as at http://<address>: browsers offer their clipboard API only to HTTPS and localhost. Copying now falls back to the older way, which works there too.
+- The refresh ring kept the old pace after the refresh rate changed, until the next refresh. It now starts again at the new rate at once, as the server does.
 - **"Show me the nodes with problems" showed every node.** Sherlock could not set the Nodes and Fleets tabs' filter or the Alerts tab's Hide acknowledged, so it guessed at taints and search words and then cleared the filters; and with only an errors filter, a node with warnings alone left it no filter that fit. It now shows the nodes with problems, or with errors, as asked, leaves a filtered view empty when nothing matches, and cannot take off a filter it set while the filter shows something.
 
 ## 0.7.1 (2026-10-20)

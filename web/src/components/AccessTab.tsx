@@ -43,6 +43,7 @@ import { RbacPanel } from './RbacPanel'
 import { Select } from './Select'
 import type { TabProps } from './tabs'
 import { objectLink } from '../lib/peek'
+import { copyText } from '../lib/clipboard'
 
 type KindFilter = 'all' | 'users' | 'groups' | 'sas'
 const KIND_OF: Record<KindFilter, string | null> = { all: null, users: 'User', groups: 'Group', sas: 'ServiceAccount' }
@@ -63,10 +64,7 @@ function isSA(r: AccessRow): r is SARow {
 }
 
 function copy(text: string, onToast: (m: string) => void, what = 'Copied the command') {
-  void navigator.clipboard?.writeText(text).then(
-    () => onToast(what),
-    () => onToast('Could not copy: the clipboard is not available.'),
-  )
+  void copyText(text).then((ok) => onToast(ok ? what : 'Could not copy: the browser refused the clipboard.'))
 }
 
 /** The Access tab (P4-03): who can do what, worked out from roles and bindings. */

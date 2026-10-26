@@ -262,12 +262,14 @@ export function podLabel(r: PodView, open: boolean): string {
   return `${r.name} in ${r.namespace}, ${r.status}${r.restarts ? `, ${r.restarts} restarts` : ''}${r.node ? `, on ${r.node}` : ', not scheduled'}${open ? ' — details open, press to close' : ' — show details'}`
 }
 
-/** The status segments of the Pods tab: All, Running, Pending, Failing, Completed. */
-export type PodStatusFilter = 'all' | 'running' | 'pending' | 'failing' | 'completed'
+/** The status segments of the Pods tab: All, Running, Not ready, Pending, Failing, Completed. */
+export type PodStatusFilter = 'all' | 'running' | 'notready' | 'pending' | 'failing' | 'completed'
 
 export function podStatusGroup(r: PodView): Exclude<PodStatusFilter, 'all'> {
   if (r.done) return 'completed'
   if (r.tone === 'err') return 'failing'
   if (r.phase === 'Pending' || r.status === 'ContainerCreating' || r.status === 'PodInitializing' || r.status.startsWith('Init:')) return 'pending'
+  // Running but not ready: a readiness check fails, or its node stopped reporting.
+  if (r.tone === 'warn') return 'notready'
   return 'running'
 }

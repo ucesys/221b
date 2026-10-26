@@ -54,7 +54,7 @@ var evalTables = map[string]struct {
 
 // The filters each tab accepts, as lib/uiControl.ts declares them.
 var evalFilters = map[string][]string{
-	"alerts": {"kind", "show", "acked", "q"}, "nodes": {"role", "err", "label", "taint", "q"}, "pods": {"role", "status", "ns", "node", "label", "taint", "q"},
+	"alerts": {"kind", "show", "acked", "by", "q"}, "nodes": {"role", "err", "label", "taint", "q"}, "pods": {"role", "status", "ns", "node", "label", "taint", "q"},
 	"services": {"ns", "type", "q"}, "namespaces": {"kinds", "q"}, "helm": {"tab"}, "fleets": {"fleet", "pl", "pt", "group", "err", "q"},
 	"networks": {"route"}, "storage": {"ns", "node", "class", "attention", "label", "q"}, "access": {"kind", "verb", "res", "wns", "tbl", "sys", "defaults", "id", "scope", "q"}, "policies": {"from", "to", "port"},
 }
