@@ -16,12 +16,12 @@ LDFLAGS := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT)
 UI_DIST := server/internal/ui/dist
 
 .DEFAULT_GOAL := build
-.PHONY: help build web ui server sim test test-go test-web lint lint-go lint-web licenses image chart-lint dev-sim e2e-sim screenshots sherlock-eval clean
+.PHONY: help build web ui server sim cli cli-release test test-go test-web lint lint-go lint-web licenses image chart-lint dev-sim e2e-sim screenshots sherlock-eval clean
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ui server sim ## Build the browser app and both binaries into bin/
+build: ui server sim cli ## Build the browser app and the binaries into bin/
 
 web/node_modules: web/package-lock.json
 	cd web && $(NPM) ci
@@ -36,6 +36,16 @@ ui: web ## Copy the browser app into the server, which embeds it
 
 server: ## Build bin/221b with whatever is in server/internal/ui/dist
 	cd server && CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o ../bin/221b ./cmd/221b
+
+cli: ## Build bin/221b-cli, the 221b command people run on their computers (port forward)
+	cd server && CGO_ENABLED=0 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o ../bin/221b-cli ./cmd/221b-cli
+
+cli-release: ## Build the 221b command for macOS, Linux and Windows into bin/cli/
+	@for p in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do \
+		os=$${p%/*}; arch=$${p#*/}; ext=; [ $$os = windows ] && ext=.exe; \
+		echo "221b-$$os-$$arch$$ext"; \
+		(cd server && CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o ../bin/cli/221b-$$os-$$arch$$ext ./cmd/221b-cli) || exit 1; \
+	done
 
 sim: ## Build bin/221b-sim, the simulated API server for development and tests
 	cd server && CGO_ENABLED=0 $(GO) build -trimpath -o ../bin/221b-sim ./cmd/221b-sim

@@ -84,7 +84,7 @@ func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.C
 // watsonWho is the person acting.
 func (s *Server) watsonWho(r *http.Request) watson.Who {
 	sess, _ := auth.SessionFrom(r.Context())
-	w := watson.Who{Session: sess.ID, Person: s.person(r), Name: firstOf(sess.User.Name, sess.User.Email, sess.User.Username, "Anonymous"),
+	w := watson.Who{Session: sess.ID, Person: s.person(r), Name: firstOf(sess.User.Name, sess.User.Email, sess.User.Username, "Anonymous"), Admin: sess.Admin || s.opts.Auth == nil,
 		Audit: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, From: fromAddr(r)}
 	if !w.Person.Nobody() {
 		w.User = sess.User.Username

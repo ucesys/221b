@@ -77,6 +77,9 @@ type Config struct {
 	// definition of Admin and SuperAdmin is installed, rbac.enforce
 	// (Phase 6.1). Empty for the defaults.
 	AuthConfigFile string
+	// ToolboxConfigFile is the JSON file the chart renders from its
+	// toolbox values (TB-48); empty uses the defaults.
+	ToolboxConfigFile string
 	// UsersSecret is namespace/name of the Secret that keeps the users
 	// created in the console; empty keeps them in memory (RB-46).
 	UsersSecret string
@@ -151,6 +154,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.LogFormat, "log-format", env("LOG_FORMAT", "json"), "json or text")
 	hosts := fs.String("allowed-hosts", env("ALLOWED_HOSTS", ""), "comma-separated host names to answer to, besides localhost and IP addresses")
 	fs.StringVar(&c.AuthMode, "auth-mode", env("AUTH_MODE", "none"), "how people sign in: oidc, ldap, local (accounts kept by the console) or none (no sign-in; everyone is an admin)")
+	fs.StringVar(&c.ToolboxConfigFile, "toolbox-config", env("TOOLBOX_CONFIG_FILE", ""), "a JSON file with the toolbox values: tools, images and limits (the chart renders it)")
 	fs.StringVar(&c.AuthConfigFile, "auth-config", env("AUTH_CONFIG_FILE", ""), "a JSON file with the roles' groups, the local groups and the LDAP server (the chart renders it)")
 	fs.StringVar(&c.UsersSecret, "users-secret", env("USERS_SECRET", ""), "namespace/name of the Secret to keep users created in the console in (empty: with -connections-secrets, <prefix>-users there; else in memory, lost on restart)")
 	c.SetupToken = os.Getenv("SETUP_TOKEN")
