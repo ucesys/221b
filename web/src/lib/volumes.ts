@@ -1,19 +1,11 @@
-// The Storage tab's model (ST-01 to ST-12): the view's rows grouped by
-// class or namespace, in the order of ST-04, with each group's totals, the
-// heading line, search terms, label selection and Needs attention. The
-// server builds the rows and their diagnosis (views/storage.go); this file
-// arranges them.
+// The Storage tab's model (ST-01 to ST-12): the filter sidebar's
+// namespaces, nodes and classes (ST-02), totals, the heading line, search
+// terms, label selection and Needs attention. The server builds the rows
+// and their diagnosis (views/storage.go); this file arranges them.
 
 import type { PairState, StorageClassInfo, StoragePair, StorageQuota, StorageRow } from '../api/storage'
 import { compareNatural, minutesSince, nWord } from './format'
 import type { Term } from './table'
-
-export type StorageView = 'class' | 'namespace' | 'all'
-
-export const STORAGE_VIEWS: StorageView[] = ['class', 'namespace', 'all']
-
-/** Groups beyond this many start collapsed, except those with rows that need attention. */
-export const OPEN_GROUPS = 12
 
 /** Usage thresholds (ST-08), as the server has them. */
 export const NEARLY_FULL = 85
@@ -85,11 +77,6 @@ export function expansionText(on: boolean): string {
   return on ? 'expansion allowed' : 'no expansion'
 }
 
-/** The class's facts line, as its group header shows it (ST-03). */
-export function classFacts(c: StorageClassInfo): string[] {
-  return [c.provisioner, reclaimText(c.reclaim), bindingText(c.binding), expansionText(c.expansion)]
-}
-
 // ---- rows ----
 
 export interface StorageData {
@@ -119,7 +106,7 @@ export function pairPeek(p: StoragePair): string {
   return p.claim && p.namespace ? `claim:${p.namespace}/${p.claim}` : `volume:${p.volume ?? ''}`
 }
 
-/** Where a pair stands in its group (ST-04): a Lost claim or a Failed volume first, then bound pairs, Pending claims, Released and Available volumes. */
+/** Where a pair stands (ST-04): a Lost claim or a Failed volume first, then bound pairs, Pending claims, Released and Available volumes. */
 const STATE_RANK: Record<PairState, number> = { lost: 0, failed: 0, bound: 1, pending: 2, released: 3, available: 4 }
 
 export function comparePairs(a: StoragePair, b: StoragePair): number {
@@ -131,9 +118,7 @@ export function comparePairs(a: StoragePair, b: StoragePair): number {
   )
 }
 
-// ---- groups ----
-
-export type GroupKind = 'class' | 'none' | 'missing' | 'namespace' | 'unclaimed'
+// ---- totals ----
 
 export interface Totals {
   volumes: number
@@ -147,20 +132,6 @@ export interface Totals {
   waiting: number
   available: number
   released: number
-}
-
-export interface StorageGroup {
-  key: string
-  kind: GroupKind
-  name: string
-  cls?: StorageClassInfo
-  quota?: StorageQuota
-  /** The Helm releases that own claims in a namespace group. */
-  releases?: string[]
-  pairs: StoragePair[]
-  totals: Totals
-  /** Rows that need attention (ST-09). */
-  attention: number
 }
 
 export function totals(pairs: StoragePair[]): Totals {
@@ -190,58 +161,151 @@ export function totals(pairs: StoragePair[]): Totals {
   return t
 }
 
-function group(key: string, kind: GroupKind, name: string, pairs: StoragePair[], extra: Partial<StorageGroup> = {}): StorageGroup {
-  const sorted = [...pairs].sort(comparePairs)
-  return { key, kind, name, pairs: sorted, totals: totals(sorted), attention: sorted.filter((p) => p.attention).length, ...extra }
+// ---- the filter sidebar (ST-02) ----
+
+/** The sidebar's entry for the volumes no claim holds: Available, Released and Failed. */
+export const NO_CLAIM = '(no-claim)'
+/** The entry for the rows with no node: pending claims, unmounted and unbound volumes. */
+export const NO_NODE = '(no-node)'
+/** The entry for hand-made volumes and claims with storageClassName "". */
+export const NO_CLASS = '(no-class)'
+
+/** The namespace a row is filtered under: its claim's, or (no-claim). */
+export function nsKeyOf(p: StoragePair): string {
+  return p.claim && p.namespace ? p.namespace : NO_CLAIM
 }
 
 /**
- * By class (ST-02, ST-04): the default class first, the other classes by
- * name, then the volumes with no class, then one group per class name
- * that claims use and no class has.
+ * The nodes a row is filtered under: those its pods run on and those its
+ * volume is attached to, so an RWX claim mounted on several nodes matches
+ * each; (no-node) when there are none.
  */
-export function byClass(classes: StorageClassInfo[], pairs: StoragePair[]): StorageGroup[] {
-  const known = new Map(classes.map((c) => [c.name, c]))
-  const of = new Map<string, StoragePair[]>()
-  const none: StoragePair[] = []
-  const missing = new Map<string, StoragePair[]>()
-  for (const p of pairs) {
-    if (!p.class) none.push(p)
-    else if (known.has(p.class)) of.set(p.class, [...(of.get(p.class) ?? []), p])
-    else missing.set(p.class, [...(missing.get(p.class) ?? []), p])
+export function nodeKeysOf(p: StoragePair): string[] {
+  const out = new Set([...(p.nodes ?? []), ...(p.attached ?? [])])
+  return out.size ? [...out] : [NO_NODE]
+}
+
+/** The class a row is filtered under: the name it carries, or (no-class). */
+export function classKeyOf(p: StoragePair): string {
+  return p.class || NO_CLASS
+}
+
+/** A selection as the URL carries it, as on the Pods tab: null is everything. */
+export type Selection = Set<string> | null
+
+export interface Selections {
+  ns: Selection
+  node: Selection
+  cls: Selection
+}
+
+export type Section = keyof Selections
+
+function inSel(sel: Selection, keys: string[]): boolean {
+  return !sel || keys.some((k) => sel.has(k))
+}
+
+/** Whether a row passes the sidebar, leaving out one section: a section's counts follow the other two. */
+export function sidebarMatch(p: StoragePair, s: Selections, but?: Section): boolean {
+  return (but === 'ns' || inSel(s.ns, [nsKeyOf(p)])) && (but === 'node' || inSel(s.node, nodeKeysOf(p))) && (but === 'cls' || inSel(s.cls, [classKeyOf(p)]))
+}
+
+export interface SideEntry {
+  key: string
+  /** What the entry shows: a name, or a phrase for the special entries. */
+  label: string
+  /** The line under it: a quota, a provisioner, what a special entry holds. */
+  sub?: string
+  /** The entry is a name in the mono font; the special entries are not. */
+  mono: boolean
+  /** default, not found, a node's role. */
+  tag?: { text: string; tone?: string; role?: string }
+  /** cordoned, for a node. */
+  flag?: string
+  /** A class name that no class has. */
+  err?: boolean
+}
+
+/**
+ * The namespaces (ST-02): one per namespace with a claim the person may
+ * see, with its storage quota as the sub-line; first, for those who see
+ * them, the volumes that no claim holds.
+ */
+export function namespaceEntries(pairs: StoragePair[], quotas: StorageQuota[]): SideEntry[] {
+  const names = [...new Set(pairs.filter((p) => p.claim && p.namespace).map((p) => p.namespace!))].sort(compareNatural)
+  const quota = new Map(quotas.filter((q) => q.hard).map((q) => [q.namespace, q]))
+  const out: SideEntry[] = []
+  if (pairs.some((p) => nsKeyOf(p) === NO_CLAIM)) out.push({ key: NO_CLAIM, label: 'No claim', sub: 'Available, Released, Failed volumes', mono: false })
+  for (const ns of names) {
+    const q = quota.get(ns)
+    out.push({ key: ns, label: ns, mono: true, sub: q ? quotaText(q) : undefined })
   }
-  const ordered = [...classes].sort((a, b) => Number(b.default) - Number(a.default) || compareNatural(a.name, b.name))
-  const out = ordered.map((c) => group(`class:${c.name}`, 'class', c.name, of.get(c.name) ?? [], { cls: c }))
-  if (none.length) out.push(group('none', 'none', 'No storage class', none))
-  for (const name of [...missing.keys()].sort(compareNatural)) out.push(group(`missing:${name}`, 'missing', name, missing.get(name)!))
   return out
 }
 
+/** A namespace's storage quota as the sidebar says it: "quota 4.0Ti of 8.0Ti · 50%". */
+export function quotaText(q: StorageQuota): string {
+  const pc = q.hard ? Math.round((100 * (q.used ?? 0)) / q.hard) : 0
+  return `quota ${bytesTotal(q.used ?? 0)} of ${bytesTotal(q.hard ?? 0)} · ${pc}%`
+}
+
+/** What the sidebar knows of a node, when the person may list nodes. */
+export interface NodeInfo {
+  name: string
+  role: string
+  cordoned: boolean
+}
+
 /**
- * By namespace (ST-11): one group per namespace with claims, by name, with
- * its quota and the Helm releases that own claims there; the volumes no
- * claim holds last, for those who may see them.
+ * The nodes (ST-02): first the rows on no node, then every node a row is
+ * on. With the node list (a role that may list nodes), control-plane nodes
+ * first with their role and cordoned flag; by name only otherwise.
  */
-export function byNamespace(pairs: StoragePair[], quotas: StorageQuota[]): StorageGroup[] {
-  const of = new Map<string, StoragePair[]>()
-  const unclaimed: StoragePair[] = []
-  for (const p of pairs) {
-    if (p.claim && p.namespace) of.set(p.namespace, [...(of.get(p.namespace) ?? []), p])
-    else unclaimed.push(p)
-  }
-  const quota = new Map(quotas.map((q) => [q.namespace, q]))
-  const out = [...of.keys()].sort(compareNatural).map((ns) => {
-    const ps = of.get(ns)!
-    const releases = [...new Set(ps.map((p) => p.release).filter((r): r is string => !!r))].sort(compareNatural)
-    return group(`ns:${ns}`, 'namespace', ns, ps, { quota: quota.get(ns), releases })
+export function nodeEntries(pairs: StoragePair[], nodes: NodeInfo[]): SideEntry[] {
+  const used = new Set(pairs.flatMap(nodeKeysOf))
+  const out: SideEntry[] = []
+  if (used.delete(NO_NODE)) out.push({ key: NO_NODE, label: 'Not on a node', sub: 'pending claims, unmounted and unbound volumes', mono: false })
+  const known = new Map(nodes.map((n) => [n.name, n]))
+  const names = [...used].sort((a, b) => {
+    const ra = known.get(a)?.role === 'control-plane' ? 0 : 1
+    const rb = known.get(b)?.role === 'control-plane' ? 0 : 1
+    return ra - rb || compareNatural(a, b)
   })
-  if (unclaimed.length) out.push(group('unclaimed', 'unclaimed', 'Volumes no claim holds', unclaimed))
+  for (const name of names) {
+    const n = known.get(name)
+    out.push({ key: name, label: name, mono: true, tag: n ? { text: n.role, role: n.role } : undefined, flag: n?.cordoned ? 'cordoned' : undefined })
+  }
   return out
 }
 
-/** Whether a group starts open: every group while there are few, else only those with rows that need attention. */
-export function openByDefault(g: StorageGroup, count: number): boolean {
-  return count <= OPEN_GROUPS || g.attention > 0
+/**
+ * The classes (ST-02): every StorageClass, the default first, with its
+ * provisioner, for a role that may list classes; the names the rows carry
+ * otherwise. Then the rows with no class and, in red, each class name that
+ * claims use and no class has.
+ */
+export function classEntries(pairs: StoragePair[], classes: StorageClassInfo[], canClasses: boolean): SideEntry[] {
+  const out: SideEntry[] = []
+  if (canClasses) {
+    const ordered = [...classes].sort((a, b) => Number(b.default) - Number(a.default) || compareNatural(a.name, b.name))
+    for (const c of ordered) out.push({ key: c.name, label: c.name, mono: true, sub: c.provisioner, tag: c.default ? { text: 'default', tone: 'accent' } : undefined })
+  } else {
+    const names = [...new Set(pairs.filter((p) => p.class && !p.classMissing).map((p) => p.class))].sort(compareNatural)
+    for (const n of names) out.push({ key: n, label: n, mono: true })
+  }
+  if (pairs.some((p) => !p.class)) out.push({ key: NO_CLASS, label: 'No class', sub: 'hand-made volumes, claims with storageClassName ""', mono: false })
+  const missing = [...new Set(pairs.filter((p) => p.class && p.classMissing).map((p) => p.class))].sort(compareNatural)
+  for (const n of missing) out.push({ key: n, label: n, mono: true, err: true, tag: { text: 'not found', tone: 'err' } })
+  return out
+}
+
+/** A section's selection in the scope line: "all namespaces", "analytics", "3 nodes". */
+export function scopeText(sel: Selection, entries: SideEntry[], one: string, many: string): string {
+  if (!sel || entries.every((e) => sel.has(e.key))) return `all ${many}`
+  const on = entries.filter((e) => sel.has(e.key))
+  if (on.length === 0) return `no ${many}`
+  if (on.length === 1) return on[0]!.mono ? on[0]!.label : on[0]!.label.toLowerCase()
+  return `${on.length} ${on.length === 1 ? one : many}`
 }
 
 /** Whether a pair's pod sub-rows start open (ST-07): when any of its pods is not Running. */
@@ -397,16 +461,6 @@ export function provisionerNote(provisioner: string): string {
 export function replicas(c: StorageClassInfo): number {
   const n = Number(c.parameters?.numberOfReplicas ?? c.parameters?.replicas ?? '')
   return Number.isFinite(n) && n > 1 ? n : 1
-}
-
-/** "8 volumes", "1 claim pending" and the like, for a class header (ST-03). */
-export function classTail(t: Totals): string[] {
-  const out: string[] = []
-  if (t.pending) out.push(nWord(t.pending, 'claim pending', 'claims pending'))
-  if (t.available) out.push(`${t.available} Available`)
-  if (t.released) out.push(`${t.released} Released`)
-  if (t.waiting) out.push(nWord(t.waiting, 'claim waiting for a pod', 'claims waiting for a pod'))
-  return out
 }
 
 /** "a, b and c". */

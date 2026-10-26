@@ -3,7 +3,8 @@ import { useView } from '../api/live'
 import type { StorageRow } from '../api/storage'
 import { compareNatural, fmtAge } from '../lib/format'
 import { peekLink } from '../lib/peek'
-import { byClass, bytes, bytesTotal, pairPeek, provisionerName, provisionerNote, replicas, storageData, usageTone } from '../lib/volumes'
+import { href } from '../lib/router'
+import { bytes, bytesTotal, comparePairs, pairPeek, provisionerName, provisionerNote, replicas, storageData, totals, usageTone } from '../lib/volumes'
 import { Drawer } from './Drawer'
 import { useWatsonApi } from './Watson'
 import { YamlView } from './YamlView'
@@ -41,7 +42,10 @@ export function StorageClassPanel({ name, now, onClose, onToast }: Props) {
   const watson = useWatsonApi()
   const [tab, setTab] = useState('overview')
   const c = data.classes.find((x) => x.name === name)
-  const group = useMemo(() => (c ? byClass([c], data.pairs.filter((p) => p.class === name))[0] : undefined), [c, data.pairs, name])
+  const group = useMemo(() => {
+    const pairs = data.pairs.filter((p) => p.class === name).sort(comparePairs)
+    return c ? { pairs, totals: totals(pairs) } : undefined
+  }, [c, data.pairs, name])
   if (!c || !group) {
     return (
       <Drawer label="Storage class details" kicker="StorageClass · cluster-scoped" title={name} onClose={onClose} width={640} testId="storage-class-panel">
@@ -228,6 +232,13 @@ export function StorageClassPanel({ name, now, onClose, onToast }: Props) {
         </div>
       )}
       {tab === 'volumes' && (
+        <>
+        <p style={{ margin: '0 0 10px', fontSize: 12.5 }}>
+          <a className="rk-st-a" href={href('storage', [], { class: c.name })} data-testid="storage-class-filter">
+            Show these on the Storage tab
+          </a>{' '}
+          <span style={{ color: 'var(--fg3)' }}>— the table filtered to this class, to sort, search and export.</span>
+        </p>
         <table className="rk-st-ev" aria-label={`Volumes and claims of ${c.name}`} data-testid="storage-class-volumes">
           <thead>
             <tr>
@@ -257,6 +268,7 @@ export function StorageClassPanel({ name, now, onClose, onToast }: Props) {
             ))}
           </tbody>
         </table>
+        </>
       )}
       {tab === 'parameters' && (
         <dl className="rk-kv">

@@ -240,7 +240,7 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
     <>
       <SideList label="Namespaces" title="Namespaces" query={listQuery} onQuery={setListQuery} placeholder="Filter namespaces" groups={groups} empty={loaded ? 'No namespaces match.' : 'Waiting for the first list…'} testId="namespace-list" foot={
         <>
-          Cluster-scoped objects such as nodes, persistent volumes, storage classes and cluster roles belong to no namespace; find nodes in the <a href={href('nodes')} style={{ color: 'var(--accent)' }}>Nodes</a> tab, and volumes, claims and classes in the <a href={href('storage')} style={{ color: 'var(--accent)' }}>Storage</a> tab.
+          Cluster-scoped objects such as nodes, persistent volumes, storage classes and cluster roles belong to no namespace; find nodes in the <a href={href('nodes')} style={{ color: 'var(--accent)' }}>Nodes</a> tab, and volumes, claims and classes in the <a href={href('storage', [], ns ? { ns } : {})} style={{ color: 'var(--accent)' }} data-testid="namespace-storage-footer">Storage</a> tab.
         </>
       }
     />
@@ -262,6 +262,10 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
                 {nWord(current.objects, 'object', 'objects')} of {nWord(current.kinds, 'kind', 'kinds')} · {nWord(current.pods, 'pod', 'pods')}
                 {current.podsNotRunning ? `, ${current.podsNotRunning} not running` : ''}
               </span>
+              {/* ST-21: this namespace's claims on the Storage tab. */}
+              <a className="rk-link" href={href('storage', [], { ns })} style={{ fontSize: 12.5 }} data-testid="namespace-storage-link">
+                Storage →
+              </a>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px' }}>
               <div
