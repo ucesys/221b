@@ -227,12 +227,12 @@ export interface SideEntry {
 }
 
 /**
- * The namespaces (ST-02): one per namespace with a claim the person may
- * see, with its storage quota as the sub-line; first, for those who see
- * them, the volumes that no claim holds.
+ * The namespaces (ST-02): every namespace the person may see, as on the
+ * Pods tab, and any a claim names, with its storage quota as the sub-line;
+ * first, for those who see them, the volumes that no claim holds.
  */
-export function namespaceEntries(pairs: StoragePair[], quotas: StorageQuota[]): SideEntry[] {
-  const names = [...new Set(pairs.filter((p) => p.claim && p.namespace).map((p) => p.namespace!))].sort(compareNatural)
+export function namespaceEntries(pairs: StoragePair[], quotas: StorageQuota[], namespaces: string[] = []): SideEntry[] {
+  const names = [...new Set([...namespaces, ...pairs.filter((p) => p.claim && p.namespace).map((p) => p.namespace!)])].sort(compareNatural)
   const quota = new Map(quotas.filter((q) => q.hard).map((q) => [q.namespace, q]))
   const out: SideEntry[] = []
   if (pairs.some((p) => nsKeyOf(p) === NO_CLAIM)) out.push({ key: NO_CLAIM, label: 'No claim', sub: 'Available, Released, Failed volumes', mono: false })

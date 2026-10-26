@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { useView } from '../api/live'
-import type { NodeRow } from '../api/types'
+import type { NamespaceRow, NodeRow } from '../api/types'
 import type { StoragePair, StorageRow } from '../api/storage'
 import { useStorageScope } from '../api/storage'
 import { storageColumns } from '../columns/storage'
@@ -222,6 +222,7 @@ function LabelPicker({ pairs, value, onChange }: { pairs: StoragePair[]; value: 
 export function StorageTab({ cluster, now, onToast, route }: TabProps) {
   const { rows, loaded } = useView<StorageRow>('storage')
   const nodesView = useView<NodeRow>('nodes')
+  const namespacesView = useView<NamespaceRow>('namespaces')
   const scope = useStorageScope(route.cluster)
   const data = useMemo(() => storageData(rows), [rows])
   // A cluster-wide role reads classes and volumes; a namespace-bound one
@@ -247,7 +248,8 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
   // attention leave.
   const sels: Selections = useMemo(() => ({ ns: readSelection(p, 'ns'), node: readSelection(p, 'node'), cls: readSelection(p, 'class') }), [p])
   const nodeInfo = useMemo(() => nodesView.rows.map((n) => ({ name: n.name, role: n.role, cordoned: n.cordoned })), [nodesView.rows])
-  const nsList = useMemo(() => namespaceEntries(data.pairs, data.quotas), [data.pairs, data.quotas])
+  const nsNames = useMemo(() => namespacesView.rows.map((n) => n.name), [namespacesView.rows])
+  const nsList = useMemo(() => namespaceEntries(data.pairs, data.quotas, nsNames), [data.pairs, data.quotas, nsNames])
   const nodeList = useMemo(() => nodeEntries(data.pairs, nodeInfo), [data.pairs, nodeInfo])
   const classList = useMemo(() => classEntries(data.pairs, data.classes, canClasses), [data.pairs, data.classes, canClasses])
   const base = useMemo(() => (attention ? table.shown.filter((x) => x.attention) : table.shown), [attention, table.shown])
@@ -494,9 +496,6 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
           <FilterSection title="Filter by node" entries={nodeList} sel={sels.node} counts={counts.node} onSet={(v) => set({ node: v })} note={namesOnlyNodes ? 'Kubernetes lets you list claims but not nodes, so the nodes are listed by the names your pods carry.' : undefined} testId="storage-node-list" />
           <FilterSection title="Filter by storage class" entries={classList} sel={sels.cls} counts={counts.cls} onSet={(v) => set({ class: v })} note={canClasses ? undefined : 'Your role does not list storage classes, so the classes are the names your claims carry.'} testId="storage-class-list" />
         </div>
-        <p style={{ margin: 'auto 0 0', padding: '10px 16px 14px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg3)', borderTop: '1px solid var(--line)' }}>
-          Rows are listed for the ticked namespaces, nodes and classes. A claim mounted on several nodes is under each. Counts already apply the other filters, the search and Needs attention.
-        </p>
       </aside>
       <main className="rk-pane rk-st-page" aria-label="Storage" style={{ flex: '999 1 560px' }}>
         <div className="rk-st-head">

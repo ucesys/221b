@@ -33,7 +33,7 @@ describe('storage', () => {
     expect(Math.round(t.usedPct)).toBe(60)
   })
 
-  it('lists the namespaces with claims and their quota, No claim first (ST-02)', () => {
+  it('lists the namespaces, with their quota, No claim first (ST-02)', () => {
     const e = namespaceEntries(
       [pair({ claim: 'b', namespace: 'batch' }), pair({ claim: 'a', namespace: 'analytics' }), pair({ claim: 'c', namespace: 'analytics' }), pair({ state: 'released', phase: 'Released', volume: 'old' })],
       [{ namespace: 'analytics', name: 'storage', hard: 8 * 2 ** 40, used: 4 * 2 ** 40 }],
@@ -44,6 +44,8 @@ describe('storage', () => {
       ['batch', ''],
     ])
     expect(namespaceEntries([pair({ claim: 'a', namespace: 'web' })], []).map((x) => x.key)).toEqual(['web'])
+    // Every namespace the person may see, with or without claims, as on the Pods tab.
+    expect(namespaceEntries([pair({ claim: 'a', namespace: 'web' })], [], ['221b', 'web', 'default']).map((x) => x.key)).toEqual(['221b', 'default', 'web'])
     expect(quotaText({ namespace: 'x', name: 'q', hard: 100 * GI, used: 0 })).toBe('quota 0 of 100Gi · 0%')
   })
 

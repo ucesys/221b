@@ -65,7 +65,10 @@ test.describe('the simulated scenario', () => {
   test('the sidebar filters by namespace, node and class, keeps the selection in the URL, and its counts follow the other filters (ST-02)', async ({ page }) => {
     await open(page, '#/storage')
     const ns = await entries(page, 'ns')
-    expect(ns.map((e) => e.key)).toEqual(['(no-claim)', 'analytics', 'batch', 'ingest', 'monitoring', 'storage', 'web'])
+    expect(ns[0]!.key).toBe('(no-claim)')
+    expect(ns.map((e) => e.key)).toEqual(expect.arrayContaining(['analytics', 'batch', 'ingest', 'monitoring', 'storage', 'web']))
+    // Every namespace, as on the Pods tab: one without claims is there with none.
+    expect(ns.find((e) => e.key === 'default')).toMatchObject({ n: 0 })
     const nodes = await entries(page, 'node')
     expect(nodes[0]!.key).toBe('(no-node)')
     expect(nodes.map((e) => e.key)).toContain('worker-002')
