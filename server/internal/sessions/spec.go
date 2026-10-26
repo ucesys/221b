@@ -144,7 +144,7 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 			errs = append(errs, fmt.Errorf("choose one of the allowed images: %s", strings.Join(c.DebugContainer.Images, ", ")))
 		}
 		if r.Profile == "" {
-			r.Profile = toolbox.ProfileGeneral
+			r.Profile = toolbox.ProfileRestricted
 		}
 		if !contains([]string{toolbox.ProfileGeneral, toolbox.ProfileRestricted, toolbox.ProfileNetAdmin, toolbox.ProfileSysAdmin}, r.Profile) {
 			errs = append(errs, fmt.Errorf("%q is not a capability profile", r.Profile))

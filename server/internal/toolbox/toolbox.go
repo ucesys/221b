@@ -154,7 +154,7 @@ func Default() Config {
 	c.NodeShell.Namespace = "221b-toolbox"
 	c.NodeShell.Image = "node"
 	c.NodeShell.Profiles = []string{ProfileGeneral, ProfileNetAdmin, ProfileSysAdmin}
-	c.NodeShell.Approval = ApprovalAlways
+	c.NodeShell.Approval = ApprovalCluster
 	c.NodeShell.QuickCommands = []string{"journalctl -u kubelet -n 200 --no-pager", "df -h /var/lib/containerd /var/log /", "crictl ps -a --state exited", "dmesg -T | tail -n 100"}
 	c.Images = map[string]Image{
 		"general": {Image: "busybox:1.37", Tools: "sh, ls, cat, tar, wget, nc"},
@@ -178,7 +178,7 @@ const (
 	// ApprovalAlways needs a second SuperAdmin on every cluster (TB-32).
 	ApprovalAlways = "always"
 	// ApprovalCluster follows the cluster's two-person rule, like the
-	// other tools.
+	// other tools: the default since the Toolbox review.
 	ApprovalCluster = "cluster"
 )
 

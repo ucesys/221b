@@ -357,9 +357,10 @@ toolbox:
     namespace: 221b-toolbox
     image: node
     profiles: [general, netadmin, sysadmin]
-    # always: a second SuperAdmin approves every node shell, on every
-    # cluster. cluster: the cluster's two-person rule, as for other tools.
-    approval: always
+    # cluster: the cluster's two-person rule, as for other tools; a node
+    # shell opens at once elsewhere. always: a second SuperAdmin approves
+    # every node shell, on every cluster.
+    approval: cluster
     quickCommands:
       - journalctl -u kubelet -n 200 --no-pager
       - df -h /var/lib/containerd /var/log /

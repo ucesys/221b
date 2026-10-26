@@ -24,7 +24,7 @@ const PROFILE_WORDS: Record<string, string> = {
 }
 
 const NODE_PROFILES: Record<string, { title: string; words: string }> = {
-  general: { title: 'General', words: 'The host’s PID, network and IPC namespaces and its root at /host; not privileged. Enough for journalctl, crictl, df, ss.' },
+  general: { title: 'Restricted', words: 'The host’s PID, network and IPC namespaces and its root at /host; not privileged. Enough for journalctl, crictl, df, ss.' },
   netadmin: { title: 'Network admin', words: 'The host’s network with NET_ADMIN and NET_RAW, for tcpdump, ip and iptables.' },
   sysadmin: { title: 'System admin', words: 'Privileged, with the host’s namespaces and /host: nsenter, mount, sysctl. Root over every pod on the node.' },
 }
@@ -59,6 +59,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   const [minutes, setMinutes] = useState(pre.minutes ?? 30)
   const [reason, setReason] = useState(pre.reason ?? '')
   const first = useRef<HTMLElement | null>(null)
+  const dlg = useRef<HTMLDivElement | null>(null)
 
   const ns = podRef?.namespace ?? (tool === 'debug-pod' ? namespace : '')
   useEffect(() => {
@@ -84,9 +85,21 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
       live = false
     }
   }, [cluster, podRef])
+  // The fields arrive with the values and the pod, after the dialog opens:
+  // the focus goes to the first of them then, or to the dialog until then.
   useEffect(() => {
-    first.current?.focus()
-  }, [])
+    if (!dlg.current?.contains(document.activeElement)) (first.current ?? dlg.current)?.focus()
+  }, [info, pod])
+  // Esc cancels wherever the focus is.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      onClose()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [onClose])
 
   const containers = useMemo(() => (pod?.containers ?? []).filter((c) => !c.init || c.sidecar), [pod])
   // What the person has not chosen yet comes from the pod and the values.
@@ -95,13 +108,17 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   const containerV = container || containers[0]?.name || ''
   const targetV = target || containers[0]?.name || ''
   const imageV = image || (tool === 'debug-container' ? pick(info?.debugContainerImages) : tool === 'debug-pod' ? pick(info?.debugPodProfiles) : '')
-  const profileV = profile || (tool === 'node-shell' ? (info?.nodeProfiles[0] ?? 'general') : tool === 'debug-container' ? (level === 'restricted' ? 'restricted' : 'general') : '')
+  const profileV = profile || (tool === 'node-shell' ? (info?.nodeProfiles[0] ?? 'general') : tool === 'debug-container' ? 'restricted' : '')
   const minutesV = info ? Math.min(minutes, info.maxMinutes) : minutes
 
-  const needsTwo = (tool === 'node-shell' || tool === 'node-command') && info?.nodeApproval === 'always'
-  const askReason = !!info && (info.twoPerson || needsTwo)
+  const onNode = tool === 'node-shell' || tool === 'node-command'
+  const needsTwo = onNode && info?.nodeApproval === 'always'
   const interactive = tool !== 'command' && tool !== 'node-command'
   const approvers = !!info?.twoPerson || needsTwo
+  // A reason is asked for whoever approves, and for a node on production;
+  // a node shell elsewhere takes one if the person gives it.
+  const needReason = !!info && (approvers || (onNode && info.production))
+  const askReason = needReason || onNode
 
   const request = (): ToolRequest => {
     const r: ToolRequest = { tool, reason: reason.trim() || undefined, minutes: interactive ? minutesV : undefined }
@@ -130,7 +147,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
     if ((tool === 'command' || tool === 'node-command') && !command.trim()) return 'Type the command to run.'
     if (tool === 'forward' && !(Number(port) >= 1 && Number(port) <= 65535)) return 'Choose the pod’s port.'
     if (tool === 'forward' && localPort !== '' && localPort !== 'auto' && !(Number(localPort) >= 1 && Number(localPort) <= 65535)) return 'The local port is a number from 1 to 65535, or auto.'
-    if (askReason && reason.trim().length < 10) return 'Say why, in 10 characters or more.'
+    if (needReason && reason.trim().length < 10) return 'Say why, in 10 characters or more.'
     return ''
   }
   const send = () => {
@@ -297,7 +314,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
       break
     }
     case 'debug-container': {
-      const allowed = level === 'restricted' ? ['restricted'] : ['general', 'restricted']
+      const allowed = level === 'restricted' ? ['restricted'] : ['restricted', 'general']
       body = (
         <>
           <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
@@ -403,7 +420,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
             </span>
           </label>
           <p className="tb-hint" style={{ margin: 0 }}>
-            A Job with one pod on <span className="rk-mono">{node}</span>, never Ready so no Service sends it traffic, deleted when the session ends. Kubernetes checks it against the namespace’s Pod Security level ({level}).
+            Use for troubleshooting containers, services, and other objects in a Kubernetes namespace. Automatically deleted when the session ends.
           </p>
         </>
       )
@@ -446,12 +463,8 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
         role="dialog"
         aria-modal="true"
         aria-labelledby="tb-dlg-title"
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') {
-            e.stopPropagation()
-            onClose()
-          }
-        }}
+        ref={dlg}
+        tabIndex={-1}
         data-testid="tool-dialog"
       >
         <div className="tb-dlg-head">
@@ -494,7 +507,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
           {body}
           {askReason && (
             <label className="tb-lbl">
-              <span>Reason · shown to the approver, kept in the audit log</span>
+              <span>{needReason ? (approvers ? 'Reason · shown to the approver, kept in the audit log' : 'Reason · kept in the audit log') : 'Reason (optional) · kept in the audit log'}</span>
               <textarea className="rk-area" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="What you are looking for, and why here" aria-label="Reason" />
             </label>
           )}
@@ -505,7 +518,6 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
                 Ends after <b>{idleMin} min</b> without activity
               </span>
             )}
-            <span>Kubernetes decides what {interactive ? 'the session' : 'the command'} may do, as you</span>
           </div>
           {approvers && (
             <div className="rk-callout" data-tone="info">

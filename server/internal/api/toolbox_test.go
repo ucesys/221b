@@ -209,6 +209,22 @@ func TestASecondPersonsApprovalStillGoesToWatson(t *testing.T) {
 	}
 }
 
+func TestNodeShellsFollowTheClustersRule(t *testing.T) {
+	// Off production a node shell opens at once, a reason optional.
+	srv, c, _, _ := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
+	if code, _, b := requestSession(t, srv, c, `{"tool":"node-shell","node":"worker-001","profile":"general"}`); code != http.StatusCreated {
+		t.Fatalf("staging: %d %s", code, b)
+	}
+	// On production it asks why, and with the two-person rule off opens.
+	srv, c, _, _ = toolboxSetup(t, "ops@corp.example", clusters.EnvProduction)
+	if code, _, b := requestSession(t, srv, c, `{"tool":"node-shell","node":"worker-001","profile":"general"}`); code != http.StatusBadRequest || !strings.Contains(b, "say why") {
+		t.Fatalf("production without a reason: %d %s", code, b)
+	}
+	if code, _, b := requestSession(t, srv, c, `{"tool":"node-shell","node":"worker-001","profile":"general","reason":"kubelet restarts in a loop"}`); code != http.StatusCreated {
+		t.Fatalf("production with a reason: %d %s", code, b)
+	}
+}
+
 func TestToolActionsRunAsThePerson(t *testing.T) {
 	srv, c, _, _ := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
 	for body, want := range map[string]int{

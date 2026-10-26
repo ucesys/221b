@@ -324,7 +324,9 @@ func (s *Server) postSessionCard(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusForbidden, "Only a SuperAdmin may open a node shell or run a command on a node.")
 		return
 	}
-	if err := req.Validate(cfg, s.watsonTwoPerson(c) || needsTwo); err != nil {
+	// A reason is asked for whoever approves, and for a node on production.
+	onNode := req.Tool == tb.ToolNodeShell || req.Tool == tb.ToolNodeCommand
+	if err := req.Validate(cfg, s.watsonTwoPerson(c) || needsTwo || (onNode && c.Env == clusters.EnvProduction)); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}

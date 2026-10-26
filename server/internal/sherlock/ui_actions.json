@@ -126,7 +126,7 @@
           "container": { "type": "string", "description": "The container to open the shell in, or the debug container's target." },
           "port": { "type": "number", "description": "The pod's port, for a port forward." },
           "image": { "type": "string", "description": "The image's name in the toolbox values (such as general or network), for a debug container or pod." },
-          "profile": { "type": "string", "description": "A node shell's profile (general, netadmin, sysadmin), or a debug container's capabilities (general, restricted)." },
+          "profile": { "type": "string", "description": "A node shell's profile (general, netadmin, sysadmin), or a debug container's capabilities (restricted, the default, or general)." },
           "labelsFrom": { "type": "string", "description": "For a debug pod: the pod whose labels it copies, so network policies treat it the same." },
           "reason": { "type": "string", "maxLength": 500, "description": "A drafted reason, citing what it came from, for production and node tools." }
         },
