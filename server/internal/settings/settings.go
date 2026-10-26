@@ -48,6 +48,10 @@ type Settings struct {
 	// but not ready, before it raises an alert; nil is
 	// DefaultPendingGrace.
 	PendingGraceSeconds *int `json:"pendingGraceSeconds,omitempty"`
+	// AlertBanners says whether every tab but Alerts shows what the Alerts
+	// tab has in banners at the top; nil is true. Off, the Alerts tab's
+	// name still turns red or amber (asked at the second Toolbox review).
+	AlertBanners *bool `json:"alertBanners,omitempty"`
 }
 
 // DefaultPendingGrace gives a pod time to pull its image and start before
@@ -364,6 +368,9 @@ func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
 		}
 		if next.PendingGraceSeconds == nil {
 			next.PendingGraceSeconds = cur.PendingGraceSeconds
+		}
+		if next.AlertBanners == nil {
+			next.AlertBanners = cur.AlertBanners
 		}
 		*cur = next
 		return nil

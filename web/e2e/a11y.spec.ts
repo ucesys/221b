@@ -64,7 +64,7 @@ for (const theme of ['light', 'dark'] as const) {
       expect(await violations(page), hash).toEqual([])
     }
     // An object's details with the pods it controls (asked at the Phase 2 review).
-    await page.goto('/#/namespaces')
+    await page.goto('/#/namespaces?kinds=Deployment')
     const deployment = page.locator('[data-kind="Deployment"] [data-object]').first()
     await expect(deployment).toBeVisible()
     await deployment.click()

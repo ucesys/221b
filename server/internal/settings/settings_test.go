@@ -391,3 +391,17 @@ func TestPendingGrace(t *testing.T) {
 		t.Errorf("after a refresh change the grace is %s (%v), want 0", st.PendingGrace(), err)
 	}
 }
+
+// Alert banners can be turned off, and a save that does not send the
+// choice keeps it.
+func TestAlertBannersAreKept(t *testing.T) {
+	svc := settings.NewService(context.Background(), &settings.Memory{}, settings.Default, quiet, nil)
+	off := false
+	if _, err := svc.Update(context.Background(), settings.Settings{RefreshSeconds: 3, AlertBanners: &off}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := svc.Update(context.Background(), settings.Settings{RefreshSeconds: 5})
+	if err != nil || st.AlertBanners == nil || *st.AlertBanners {
+		t.Errorf("after a refresh change the banners are %v (%v), want off", st.AlertBanners, err)
+	}
+}

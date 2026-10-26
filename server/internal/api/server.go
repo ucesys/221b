@@ -760,6 +760,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if f := st.TimeFormat; f != nil {
 		detail += fmt.Sprintf(", time format %s %s", f.Date, f.Clock)
 	}
+	if b := st.AlertBanners; b != nil && !*b {
+		detail += ", alert banners hidden"
+	}
 	s.record(r, audit.ActionSettings, "settings", detail)
 	b, _ := json.Marshal(st)
 	writeJSON(w, r, b)

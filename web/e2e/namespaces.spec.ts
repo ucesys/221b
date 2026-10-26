@@ -2,7 +2,6 @@
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
 import type { NamespaceRow, ObjectRow, ReleaseRow } from '../src/api/types'
-import { pluralKind } from '../src/lib/kinds'
 import { cluster, countKind, inKind, PLANTED, snapshot } from './cluster'
 
 async function open(page: Page, hash = '#/namespaces') {
@@ -25,49 +24,42 @@ test('lists every namespace and what it holds, by kind, with counts that match t
   await expect(page.getByTestId('namespace-name')).toHaveText(ns.name)
   await expect(page.getByTestId('namespace-summary')).toContainText(`${ns.objects} objects of ${ns.kinds} kinds`)
 
-  // Each kind's table says how many there are, and that matches the cluster.
+  // Each kind's tab says how many there are, and that matches the cluster.
   const objects = (await snapshot(request, [`ns:${ns.name}`])).views[`ns:${ns.name}`]!.rows as ObjectRow[]
+  const tabs = page.getByTestId('namespace-kinds')
   for (const kind of ['pods', 'services', 'configmaps', 'deployments']) {
     const want = await countKind(ns.name, kind)
     const rows = objects.filter((o) => o.kindName === kind)
     expect(rows.length, `${kind} in ${ns.name}`).toBe(want)
     expect(ns.counts[kind] ?? 0, `${kind} count of ${ns.name}`).toBe(want)
     if (want > 0) {
-      const card = page.locator(`[data-kind="${rows[0]!.kind}"]`)
-      await expect(card.locator('.rk-count')).toHaveText(String(want))
-      await expect(card.locator('[data-object]')).toHaveCount(Math.min(want, 8))
-      if (want > 8) {
-        await card.getByRole('button', { name: `Show all ${want}` }).click()
-        // The grid then holds them all; long tables render only the rows in view.
-        await expect(card.locator('.rk-grid[data-total]')).toHaveAttribute('data-total', String(want))
-        expect(await card.locator('[data-object]').count()).toBeGreaterThanOrEqual(Math.min(want, 40))
-      }
+      const tab = tabs.locator(`[data-subtab="${rows[0]!.kind}"]`)
+      await expect(tab.locator('.rk-count')).toHaveText(String(want))
+      await tab.click()
+      await expect(tab).toHaveAttribute('aria-current', 'page')
+      // The table holds them all; long tables render only the rows in view.
+      await expect(page.locator(`section[data-kind="${rows[0]!.kind}"] .rk-grid[data-total]`)).toHaveAttribute('data-total', String(want))
     }
   }
 })
 
-test('the kinds funnel narrows what is shown, and the search filters by name or detail', async ({ page, request }) => {
+test('a tab per kind, as on the Helm tab, Pods first; the search filters by name or detail', async ({ page, request }) => {
   await open(page)
   const ns = await page.getByTestId('namespace-name').textContent()
   const objects = (await snapshot(request, [`ns:${ns}`])).views[`ns:${ns}`]!.rows as ObjectRow[]
   const kinds = [...new Set(objects.map((o) => o.kind))]
   expect(kinds.length).toBeGreaterThan(1)
-  await expect(page.locator('section[data-kind]')).toHaveCount(kinds.length)
-
-  const funnel = page.getByTestId('kinds-funnel')
-  await expect(funnel).toContainText('All kinds')
-  await funnel.click()
-  const menu = page.getByRole('group', { name: 'Kinds to show' })
-  for (const k of kinds.slice(1)) await menu.getByRole('checkbox', { name: new RegExp(`^${pluralKind(k)}\\b`) }).uncheck()
-  await page.keyboard.press('Escape')
+  const tabs = page.getByTestId('namespace-kinds').locator('[data-subtab]')
+  expect(await tabs.count()).toBeGreaterThanOrEqual(kinds.length)
+  // One table at a time: the first tab's.
   await expect(page.locator('section[data-kind]')).toHaveCount(1)
-  await expect(page.locator('section[data-kind]').first()).toHaveAttribute('data-kind', kinds[0]!)
-  await expect(funnel).toContainText(`1 of ${kinds.length} kinds`)
+  if (kinds.includes('Pod')) await expect(tabs.first()).toHaveAttribute('data-subtab', 'Pod')
+  const other = kinds.find((k) => k !== 'Pod')!
+  await page.getByTestId('namespace-kinds').locator(`[data-subtab="${other}"]`).click()
+  await expect(page.locator('section[data-kind]')).toHaveAttribute('data-kind', other)
   await expect(page).toHaveURL(/kinds=/)
-  await funnel.click()
-  await menu.getByRole('button', { name: 'All' }).click()
-  await page.keyboard.press('Escape')
-  await expect(page.locator('section[data-kind]')).toHaveCount(kinds.length)
+  await tabs.first().click()
+  await expect(page).not.toHaveURL(/kinds=/)
 
   const target = objects.find((o) => o.kind === 'Pod') ?? objects[0]!
   await page.getByTestId('object-search').fill(target.name)
@@ -92,11 +84,8 @@ test('kinds are labelled with their real plurals: Endpoints, NetworkPolicies, In
     seen++
     await open(page, `#/namespaces/${ns.name}?kinds=${kind}`)
     const card = page.locator(`section[data-kind="${kind}"]`)
-    await expect(card.getByRole('heading', { level: 3 })).toHaveText(plural)
     await expect(card).toHaveAttribute('aria-label', plural)
-    await page.getByTestId('kinds-funnel').click()
-    await expect(page.getByRole('group', { name: 'Kinds to show' }).getByRole('checkbox', { name: new RegExp(`^${plural}\\b`) })).toBeVisible()
-    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('namespace-kinds').locator(`[data-subtab="${kind}"]`)).toContainText(plural)
   }
   // Every cluster has Endpoints beside its Services; the simulator has all three.
   expect(seen, 'kinds with awkward plurals present').toBeGreaterThan(0)
@@ -114,7 +103,7 @@ test('a workload opens its details and pods, a pod opens in place, and its owner
   expect(details.pods.length).toBeGreaterThan(0)
 
   // The row opens the Deployment's drawer, not just its YAML.
-  await open(page, `#/namespaces/${ns}`)
+  await open(page, `#/namespaces/${ns}?kinds=Deployment`)
   await page.locator(`[data-object="${deployment.key}"]`).click()
   const panel = page.getByTestId('object-panel')
   await expect(panel.getByRole('heading', { level: 2 })).toHaveText(deployment.name)
@@ -186,11 +175,11 @@ test('an object opens its details, with Secret data replaced by key names and si
   if (!inKind) await expect(page.getByRole('link', { name: /^Helm/ })).toBeVisible()
 })
 
-test('a namespace’s Helm releases are a table like its other lists (asked at the Phase 4 review)', async ({ page, request }) => {
+test('a namespace’s Helm releases are a tab like its other kinds (asked at the Phase 4 review)', async ({ page, request }) => {
   const releases = (await snapshot(request, ['helm'])).views.helm?.rows as ReleaseRow[] | undefined
   test.skip(!releases?.length, 'no Helm releases (Secrets not read)')
   const r = releases![0]!
-  await open(page, `#/namespaces/${encodeURIComponent(r.namespace)}`)
+  await open(page, `#/namespaces/${encodeURIComponent(r.namespace)}?kinds=${encodeURIComponent('Helm release')}`)
   const card = page.getByTestId('namespace-releases')
   await expect(card.locator('.rk-gh [data-col="chart"]')).toBeVisible()
   await expect(card.getByRole('button', { name: /^Columns/ })).toBeVisible()

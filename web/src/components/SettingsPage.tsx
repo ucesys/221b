@@ -10,7 +10,7 @@ import { WatsonSettings } from './WatsonSettings'
 type Section = 'general' | 'sherlock' | 'watson'
 
 const SECTIONS: { id: Section; label: string; hint: string }[] = [
-  { id: 'general', label: 'General', hint: 'Refresh rate' },
+  { id: 'general', label: 'General', hint: 'Refresh rate, times, alerts' },
   { id: 'sherlock', label: 'Sherlock', hint: 'On per cluster, API key, model, caps' },
   { id: 'watson', label: 'Watson', hint: 'Where it runs, approvals' },
 ]
@@ -91,7 +91,10 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
   const [graceDraft, setGraceDraft] = useState<number | undefined>(undefined)
   const currentGrace = settings?.pendingGraceSeconds ?? DEFAULT_GRACE
   const pickedGrace = graceDraft ?? currentGrace
-  const changed = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined
+  const [bannersDraft, setBannersDraft] = useState<boolean | undefined>(undefined)
+  const currentBanners = settings?.alertBanners ?? true
+  const pickedBanners = bannersDraft ?? currentBanners
+  const changed = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined || bannersDraft !== undefined
 
   const save = async () => {
     if (picked === undefined) return
@@ -99,8 +102,9 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
     setError('')
     setSaved('')
     try {
-      await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace })
+      await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace, alertBanners: pickedBanners })
       setDraft(undefined)
+      setBannersDraft(undefined)
       setFormatDraft(undefined)
       setGraceDraft(undefined)
       setSaved('Saved.')
@@ -148,8 +152,29 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
       </section>
       <TimeFormatSection picked={pickedFormat} current={currentFormat} disabled={!settings || busy} onPick={(f) => setFormatDraft(f.date === currentFormat.date && f.clock === currentFormat.clock ? undefined : f)} />
       <GraceSection picked={pickedGrace} current={currentGrace} disabled={!settings || busy} onPick={(g) => setGraceDraft(g === currentGrace ? undefined : g)} />
-      <SaveBar changed={changed} busy={busy} onSave={() => void save()} onUndo={() => { setDraft(undefined); setFormatDraft(undefined); setGraceDraft(undefined) }} error={error} saved={saved} testId="settings-save" />
+      <BannersSection picked={pickedBanners} disabled={!settings || busy} onPick={(b) => setBannersDraft(b === currentBanners ? undefined : b)} />
+      <SaveBar changed={changed} busy={busy} onSave={() => void save()} onUndo={() => { setDraft(undefined); setFormatDraft(undefined); setGraceDraft(undefined); setBannersDraft(undefined) }} error={error} saved={saved} testId="settings-save" />
     </>
+  )
+}
+
+/** Whether the alerts show as banners at the top of every tab but Alerts. */
+function BannersSection({ picked, disabled, onPick }: { picked: boolean; disabled: boolean; onPick: (b: boolean) => void }) {
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Alert banners">
+      <h3 className="rk-h">Alert banners</h3>
+      <div className="rk-seg" role="group" aria-label="Alert banners at the top of every tab" style={{ alignSelf: 'flex-start' }} data-testid="settings-banners">
+        <button aria-pressed={picked} disabled={disabled} onClick={() => onPick(true)}>
+          Show
+        </button>
+        <button aria-pressed={!picked} disabled={disabled} onClick={() => onPick(false)}>
+          Hide
+        </button>
+      </div>
+      <p className="rk-fhint" style={{ margin: 0 }}>
+        For everyone: the banners at the top of every tab that list what the Alerts tab has. Hidden, the Alerts tab’s name still turns red or amber. Banners about the connection itself always show.
+      </p>
+    </section>
   )
 }
 

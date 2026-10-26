@@ -352,7 +352,7 @@ function Shell() {
       style={{ ['--dock-h' as string]: `${dock.h}px`, minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13, lineHeight: 1.45, WebkitFontSmoothing: 'antialiased' }}
     >
       <TopBar cluster={live.cluster} counts={counts} labelTones={{ alerts: alertTab }} tones={{ alerts: alertBadge.tone, access: accessCount.tone, policies: policyCount.tone === 'info' ? 'muted' : policyCount.tone }} tab={view === 'tabs' ? tab : null} stream={live.stream} updatedAt={live.updatedAt} refreshedAt={live.refreshedAt} settings={live.settings} theme={theme} onTheme={changeTheme} me={me} route={route} onEditCluster={(id) => setEditing(id)} />
-      {view !== 'home' && view !== 'admin' && <Banners cluster={live.cluster} stream={live.stream} now={now} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} accessError={live.accessError} alerts={view === 'tabs' && tab !== 'alerts' ? bannersOf(alerts.rows, now) : []} alertsHref={href('alerts')} />}
+      {view !== 'home' && view !== 'admin' && <Banners cluster={live.cluster} stream={live.stream} now={now} summary={summary ?? null} pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined} accessError={live.accessError} alerts={view === 'tabs' && tab !== 'alerts' && live.settings?.alertBanners !== false ? bannersOf(alerts.rows, now) : []} alertsHref={href('alerts')} />}
       {view === 'home' ? (
         <HomePage me={me} onAdd={() => setEditing(null)} onEdit={(id) => setEditing(id)} />
       ) : view === 'admin' ? (
