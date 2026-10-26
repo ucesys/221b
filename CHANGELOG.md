@@ -18,6 +18,7 @@ What changed in each release of 221B, for people who use it and people who insta
 - **Tabs open as they were left.** A tab in the bar opens with the filters, selection and sort it had, per cluster, for the rest of the session; a details pane over it is not kept.
 
 - **Sherlock knows the cluster it is asked about.** Its prompt now names the cluster's Kubernetes distribution (RKE2, K3s, kubeadm, kind, EKS, GKE, AKS, OpenShift, Talos), the operating system and kernel of each node, and its network plugin, load balancer, storage and GPU plugin, and gives the guidance for those alone: the distribution's own services, log files and commands, and each operating system's. It troubleshoots down to the node's operating system and hardware, and gives the checks to run on a node in a block of their own. A console with several clusters gives each its own prompt. Node details are included only for people who may list nodes.
+- **Home: figures only, and Storage.** A cluster card's tiles show only their figure: nodes ready, pods ready of those not finished (94/104; completed pods are left out), alerts, and a new Storage tile, claims bound, in place of Namespaces. The health lines no longer say that a node not ready also has errors, and call the pods on a node that stopped reporting Unknown rather than failing to start.
 - **Home: Troubleshoot or Audit.** A cluster card's Sherlock button reads Troubleshoot while the cluster has errors or warnings, and asks Sherlock why and how to fix each, most severe first; while it is healthy it reads Audit and asks for the review of its setup, as before.
 - Sherlock's prompt is cached for longer: the time comes last, so asking again a minute later costs less.
 - Chart: `antiAffinity` (`soft` or `hard`, off by default) keeps several replicas on different nodes: soft prefers it more strongly than the spread the chart already asks for, hard requires it.
@@ -26,6 +27,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Fixed
 
+- **The home page counted a cordoned node as not ready.**
 - **An acknowledgement took a second or two to show.** It is saved with the settings, and the replica serving the page, when it is not the one that saved it, reads them every 3 seconds. The Alerts tab, its badge and its colour now show it at once, and the server's rows take over when they come.
 - **The home page's pod counts did not add up**, and differed from the Pods tab's: "109 pods · 106 running · 10 not ready" counted the not-ready pods among the running ones. The tile now reads "96 running · 10 not ready · 3 completed", and the Pods and Helm tabs have a Not ready status beside Running: pods running but failing a readiness check, or on a node that stopped reporting. The Nodes, Pods and Alerts boxes stay plain when nothing is wrong.
 - **Copy buttons copied nothing** when the console is reached over plain HTTP, as at http://<address>: browsers offer their clipboard API only to HTTPS and localhost. Copying now falls back to the older way, which works there too.

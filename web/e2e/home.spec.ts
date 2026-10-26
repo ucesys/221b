@@ -13,8 +13,14 @@ test('the console opens on the home page, with each cluster’s health and use',
 
   // The figures are the cluster's, as the Nodes tab has them.
   const nodes = nodeRows(await snapshot(request))
-  const ready = nodes.filter((n) => n.status.startsWith('Ready')).length
+  // A cordoned node is ready too.
+  const ready = nodes.filter((n) => n.status === 'Ready' || n.status === 'Cordoned').length
   await expect(card.getByTestId('home-nodes')).toContainText(`${ready}/${nodes.length}`)
+  // Only the figures: pods ready of those not finished, and claims bound (asked at the second Toolbox review).
+  await expect(card.getByTestId('home-pods')).toHaveText(/^\d+\/\d+Pods ready$/)
+  await expect(card.getByTestId('home-alerts')).toHaveText(/^\d+Alerts?$/)
+  await expect(card.getByTestId('home-storage')).toHaveText(/^\d+\/\d+Claims bound$/)
+  await expect(card.getByTestId('home-storage')).toHaveAttribute('href', /#\/c\/local\/storage$|#\/storage$/)
   await expect(card.getByTestId('home-cpu-text')).toContainText(/ of [\d.]+ cores requested \(/)
   await expect(card.getByTestId('home-memory-text')).toContainText(/requested \(/)
   await expect(card.getByTestId('home-podroom-text')).toContainText(/^\d+ of \d+/)

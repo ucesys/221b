@@ -33,11 +33,18 @@ export interface HomeCluster {
   nodes: { total: number; ready: number; controlPlane: number; cordoned: number; errors: number; warnings: number }
   cpu: HomeUse
   memory: HomeUse
-  /** ready, unready, pending, failing and completed add up to total; running is every pod on a node that has not finished. */
-  pods: { total: number; running: number; capacity: number; notReady: number; failing: number; ready: number; unready: number; pending: number; completed: number }
+  /**
+   * ready, unready, pending, failing and completed add up to total; running
+   * is every pod on a node that has not finished; unknown pods, on a node
+   * that stopped reporting, are among the unready.
+   */
+  pods: { total: number; running: number; capacity: number; notReady: number; failing: number; ready: number; unready: number; pending: number; completed: number; unknown: number }
   namespaces: number
   services: number
-  alerts: { failed: number; pending: number; nodeErrors: number; nodeWarnings: number; volumes: number; acknowledged: number; recovered: number }
+  /** The Storage tab's claims, how many are bound, and its rows under Needs attention, errors the red ones. */
+  storage: { claims: number; bound: number; attention: number; errors: number }
+  /** nodesDown are nodes not ready; nodeErrors the ready ones with an error, so that no node counts twice. */
+  alerts: { failed: number; unknown: number; pending: number; nodesDown: number; nodeErrors: number; nodeWarnings: number; volumes: number; acknowledged: number; recovered: number }
 }
 
 export async function fetchHome(): Promise<HomeCluster[]> {

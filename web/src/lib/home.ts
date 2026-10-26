@@ -26,13 +26,13 @@ const n = (k: number, one: string, many: string) => `${k} ${k === 1 ? one : many
 /** Alerts that are on now and not acknowledged. */
 export function activeAlerts(c: HomeCluster): number {
   const a = c.alerts
-  return a.failed + a.pending + a.nodeErrors + a.nodeWarnings + a.volumes
+  return a.failed + a.unknown + a.pending + a.nodesDown + a.nodeErrors + a.nodeWarnings + a.volumes
 }
 
 /** The tone of a cluster's alerts, as its Alerts tab shows it: red for failures, amber for the rest and for acknowledged ones. */
 export function alertTone(c: HomeCluster): Tone | undefined {
   const a = c.alerts
-  if (a.failed + a.nodeErrors > 0) return 'err'
+  if (a.failed + a.unknown + a.nodesDown + a.nodeErrors > 0) return 'err'
   if (activeAlerts(c) + a.acknowledged > 0) return 'warn'
   return undefined
 }
@@ -44,20 +44,33 @@ export function nodeTone(c: HomeCluster): Tone | undefined {
   return undefined
 }
 
-/** The Pods box: red for failing pods, amber for pods not ready or pending, plain when all is well. */
+/** The Pods box: red for failing or Unknown pods, amber for pods not ready or pending, plain when all is well. */
 export function podTone(c: HomeCluster): Tone | undefined {
-  if (c.pods.failing > 0) return 'err'
+  if (c.pods.failing + c.pods.unknown > 0) return 'err'
   if (c.pods.unready + c.pods.pending > 0) return 'warn'
   return undefined
 }
 
 /**
- * The Pods box's line, as the Pods tab counts them, adding up to the total
- * (asked after 0.7.1): "96 running · 10 not ready · 3 completed".
+ * The Pods box, like the Nodes box: the pods ready of those that have not
+ * finished (asked at the second Toolbox review). Completed pods are never
+ * ready, so they are left out of both.
  */
-export function podsText(c: HomeCluster): string {
+export function podsReady(c: HomeCluster): { value: string; tip: string } {
   const p = c.pods
-  return [`${p.ready} running`, p.unready ? `${p.unready} not ready` : '', p.pending ? `${p.pending} pending` : '', p.failing ? `${p.failing} failing` : '', p.completed ? `${p.completed} completed` : ''].filter(Boolean).join(' · ')
+  const live = p.total - p.completed
+  return {
+    value: `${p.ready}/${live}`,
+    tip: `${p.ready} of ${n(live, 'pod', 'pods')} ready` + (p.completed ? `; ${n(p.completed, 'completed pod is', 'completed pods are')} not counted` : ''),
+  }
+}
+
+/** The Storage box: red for a lost claim or a failed volume, amber for anything else under Needs attention or a claim not bound. */
+export function storageTone(c: HomeCluster): Tone | undefined {
+  const s = c.storage
+  if (s.errors > 0) return 'err'
+  if (s.attention > 0 || s.bound < s.claims) return 'warn'
+  return undefined
 }
 
 /** A cluster's health in a word, worst first. */
@@ -72,6 +85,9 @@ export function healthOf(c: HomeCluster): Health {
   const notReady = c.nodes.total - c.nodes.ready
   if (c.expired) err('Its credentials have expired.', false)
   if (notReady > 0) err(`${n(notReady, 'node is', 'nodes are')} not ready.`)
+  // A node not ready is not also said to have errors, and the pods on a
+  // node that stopped reporting are Unknown, not failing to start.
+  if (a.unknown) err(`${n(a.unknown, 'pod is', 'pods are')} Unknown.`)
   if (a.failed) err(`${n(a.failed, 'pod fails', 'pods fail')} to start.`)
   if (a.nodeErrors) err(`${n(a.nodeErrors, 'node has', 'nodes have')} errors.`)
   if (reasons.length) return { tone: 'err', text: 'Needs attention', reasons }
