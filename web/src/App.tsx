@@ -430,7 +430,7 @@ function Shell() {
               showSession(r.opened)
               return
             }
-            setToast(`Sent to Watson: ${r.summary}. It opens once a second person approves it.`)
+            setToast(`Sent to Watson: ${r.summary}. It opens once another SuperAdmin approves it.`)
             showWatson()
           }}
         />

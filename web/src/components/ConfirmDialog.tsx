@@ -1,4 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { trapTab } from '../lib/focus'
+import { layer } from '../lib/layer'
 
 interface Props {
   title: string
@@ -13,16 +16,22 @@ interface Props {
 }
 
 /**
- * A confirmation for a change to who may do what (RB-43, RB-51): modal, with
- * focus on Cancel so Enter never confirms by accident, and Escape cancelling.
+ * A confirmation for a change to who may do what (RB-43, RB-51) or for a
+ * Tools menu's change (TB-02, TB-03): modal, with focus on Cancel so Enter
+ * never confirms by accident, Tab kept inside, and Escape cancelling. It
+ * renders at the end of the document, so that opening it from a table cell
+ * or a menu gives it neither their styles (a cell's text does not wrap) nor
+ * their keyboard handling; its own events stop at it. The end of the app's
+ * root, to keep the theme's colours.
  */
 export function ConfirmDialog({ title, children, confirm, danger, busy, error, onConfirm, onCancel }: Props) {
   const cancel = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     cancel.current?.focus()
   }, [])
-  return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+  const stop = (e: { stopPropagation: () => void }) => e.stopPropagation()
+  return createPortal(
+    <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, whiteSpace: 'normal' }} onClick={stop} onMouseDown={stop} onKeyDown={stop}>
       <button aria-label="Cancel" tabIndex={-1} onClick={onCancel} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
       <div
         role="alertdialog"
@@ -32,11 +41,12 @@ export function ConfirmDialog({ title, children, confirm, danger, busy, error, o
         data-testid="confirm"
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
-            e.stopPropagation()
             onCancel()
+            return
           }
+          trapTab(e)
         }}
-        style={{ position: 'relative', width: 'min(460px, 100%)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 12, boxShadow: 'var(--shadow)' }}
+        style={{ position: 'relative', width: 'min(460px, 100%)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 12, boxShadow: 'var(--shadow)', overflowWrap: 'anywhere' }}
       >
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{title}</h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>{children}</div>
@@ -54,6 +64,7 @@ export function ConfirmDialog({ title, children, confirm, danger, busy, error, o
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    layer(),
   )
 }

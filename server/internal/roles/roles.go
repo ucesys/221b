@@ -401,17 +401,24 @@ func (r Rule) Writes() bool {
 
 // sensitive are subresources and kinds the Permissions page flags (RB-44).
 var sensitive = map[string]string{
-	"secrets":               "Secrets",
-	"pods/exec":             "pods/exec",
-	"pods/attach":           "pods/attach",
-	"pods/portforward":      "pods/portforward",
-	"nodes/proxy":           "nodes/proxy",
-	"serviceaccounts/token": "serviceaccounts/token",
+	"secrets":                  "Secrets",
+	"pods/exec":                "pods/exec",
+	"pods/attach":              "pods/attach",
+	"pods/portforward":         "pods/portforward",
+	"pods/ephemeralcontainers": "pods/ephemeralcontainers",
+	"nodes/proxy":              "nodes/proxy",
+	"serviceaccounts/token":    "serviceaccounts/token",
 }
 
+// runsPods are the kinds whose creation runs a pod, and with it any
+// ServiceAccount of the namespace: the right to create one is the right
+// to act as every account there (TB-47, TB-50).
+var runsPods = []string{"pods", "jobs", "cronjobs", "deployments", "replicasets", "statefulsets", "daemonsets", "replicationcontrollers"}
+
 // Flags are what to point out about a rule, in a fixed order: a wildcard,
-// Secrets, escalate, bind, impersonate, and the subresources that open a
-// shell or a proxy (RB-44).
+// Secrets, escalate, bind, impersonate, the subresources that open a
+// shell or a proxy (RB-44), and "runs pods" for a create on anything that
+// starts one (TB-47).
 func (r Rule) Flags() []string {
 	var out []string
 	if r.Wildcard() || slices.Contains(r.NonResourceURLs, "*") {
@@ -425,6 +432,14 @@ func (r Rule) Flags() []string {
 	for _, v := range []string{"escalate", "bind", "impersonate"} {
 		if slices.Contains(r.Verbs, v) {
 			out = append(out, v)
+		}
+	}
+	if slices.Contains(r.Verbs, "create") || slices.Contains(r.Verbs, "*") {
+		for _, res := range r.Resources {
+			if slices.Contains(runsPods, res) {
+				out = append(out, "runs pods")
+				break
+			}
 		}
 	}
 	return out

@@ -15,11 +15,11 @@ test('lists every namespace and what it holds, by kind, with counts that match t
   const namespaces = (await snapshot(request, ['namespaces'])).views.namespaces!.rows as NamespaceRow[]
   expect(namespaces.length).toBeGreaterThan(0)
   const list = page.getByTestId('namespace-list')
-  for (const ns of namespaces) await expect(list.getByRole('link', { name: new RegExp(`^${ns.name}\\b`) })).toBeVisible()
+  for (const ns of namespaces) await expect(list.getByRole('link', { name: ns.name, exact: true })).toBeVisible()
 
   // The namespace with the most pods, opened from the list.
   const ns = [...namespaces].sort((a, b) => b.pods - a.pods)[0]!
-  await list.getByRole('link', { name: new RegExp(`^${ns.name}\\b`) }).click()
+  await list.getByRole('link', { name: ns.name, exact: true }).click()
   await expect(page).toHaveURL(new RegExp(`#/namespaces/${ns.name}`))
   await expect(page.getByTestId('namespace-name')).toHaveText(ns.name)
   await expect(page.getByTestId('namespace-summary')).toContainText(`${ns.objects} objects of ${ns.kinds} kinds`)

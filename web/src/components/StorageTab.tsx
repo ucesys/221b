@@ -125,9 +125,6 @@ function FilterSection({ title, entries, sel, counts, onSet, note, testId }: { t
                 )}
               </span>
             </label>
-            <button className="rk-only" onClick={() => onSet([e.key])} title={`Show only ${e.mono ? e.label : e.label.toLowerCase()}`}>
-              only
-            </button>
             <span className="rk-num" style={{ flex: 'none', minWidth: 30, paddingRight: 16, textAlign: 'right', fontSize: 12, color: 'var(--fg3)' }}>
               {counts.get(e.key) ?? 0}
             </span>
@@ -145,11 +142,6 @@ function ChevronRight() {
       <path d="m6 4 4 4-4 4" />
     </svg>
   )
-}
-
-/** The link that opens a pair's drawer over the tab (ST-13). */
-function drawerLink(p: StoragePair) {
-  return p.claim && p.namespace ? peekLink({ kind: 'claim', namespace: p.namespace, name: p.claim }) : peekLink({ kind: 'volume', name: p.volume ?? '' })
 }
 
 /** Select by label (ST-10): the claims' and volumes' labels, as the Nodes tab selects nodes (P2-09). */
@@ -292,7 +284,7 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
         if (x.state === 'pending' || !x.volume) return <div className="rk-st-name"><span className="rk-dim">{x.classMissing ? 'none' : 'none yet'}</span></div>
         // A role that may not read volumes sees the name from the claim, which opens nothing (ST-20).
         const name = clusterWide ? (
-          <a className="rk-mono rk-st-row" {...drawerLink(x)} title={x.volume} data-testid="storage-volume">
+          <a className="rk-mono rk-st-row" {...peekLink({ kind: 'volume', name: x.volume })} title={x.volume} data-testid="storage-volume">
             {x.volume}
           </a>
         ) : (
@@ -310,7 +302,7 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
       case 'claim':
         if (x.claim)
           return (
-            <a className="rk-mono rk-st-row" {...drawerLink(x)} data-testid="storage-claim" title={`${x.namespace}/${x.claim}`}>
+            <a className="rk-mono rk-st-row" {...peekLink({ kind: 'claim', namespace: x.namespace ?? '', name: x.claim })} data-testid="storage-claim" title={`${x.namespace}/${x.claim}`}>
               <span className="rk-dim">{x.namespace}/</span>
               {x.claim}
             </a>

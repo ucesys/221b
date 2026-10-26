@@ -370,7 +370,7 @@ func (s *Service) submitOne(cl Cluster, who Who, line, from, why string, run boo
 	it.Change = c.Change && !c.DryRun()
 	s.record(ActionCommand, it, who, audit.OutcomeOK, map[bool]string{true: "kind=change", false: "kind=read"}[it.Change]+" from="+quote(from))
 	if it.Change {
-		if r := s.refusalFor(cl, who, nil, false); r != nil {
+		if r := s.refusalFor(cl, who, nil, false, false); r != nil {
 			it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
 			s.add(it)
 			s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
@@ -413,7 +413,7 @@ func (s *Service) SubmitAction(cl Cluster, who Who, line, from string) *Item {
 	}
 	it.cmd, it.Line, it.Change = c, c.Line, true
 	s.record(ActionCommand, it, who, audit.OutcomeOK, "kind=change from="+quote(from))
-	if r := s.refusalFor(cl, who, nil, false); r != nil {
+	if r := s.refusalFor(cl, who, nil, false, false); r != nil {
 		it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
 		s.add(it)
 		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
@@ -438,8 +438,12 @@ func (s *Service) SubmitAction(cl Cluster, who Who, line, from string) *Item {
 }
 
 // refusalFor checks the rules a change must pass (P6-05, P6-07); with an
-// approver, whether that person may approve it.
-func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who, needsTwo bool) *Refusal {
+// approver, whether that person may approve it. A session card (session)
+// opens as the requester, with the requester's rights, so the second person
+// who approves one is a SuperAdmin, never just anyone signed in (TB-07,
+// TB-37): a Watson command runs as its approver, which bounds it; a
+// session does not.
+func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who, session, needsTwo bool) *Refusal {
 	if cl.Locked != "" {
 		return refuse("roles", "Refused: %s", cl.Locked)
 	}
@@ -456,6 +460,9 @@ func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who, needsTwo 
 		}
 		if approver != nil && approver.User == requester.User {
 			return refuse("two people", "Someone other than %s must approve this change: %s is a production cluster, where an administrator requires a second person.", requester.Name, cl.Name)
+		}
+		if session && approver != nil && !approver.Admin {
+			return refuse("two people", "Only a SuperAdmin approves a session: it opens as %s, with their rights, not as the person who approves it.", requester.Name)
 		}
 	}
 	if needsTwo {
@@ -475,7 +482,7 @@ func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who, needsTwo 
 // Refusal says why a change from this person could not run here at all
 // (a locked or read-only cluster), or nil.
 func (s *Service) Refusal(cl Cluster, who Who) *Refusal {
-	return s.refusalFor(cl, who, nil, false)
+	return s.refusalFor(cl, who, nil, false, false)
 }
 
 // SetSessionHooks sets the toolbox's hooks for session cards: the API
@@ -502,7 +509,7 @@ func (s *Service) SubmitSession(cl Cluster, who Who, card SessionCard, from stri
 	c := card
 	it := &Item{ID: newID(), Cluster: cl.ID, Line: "session: " + card.Summary, Change: true, From: from, Why: card.Reason, Requester: who, Created: now, Exit: -1, Session: &c}
 	s.record(ActionCommand, it, who, audit.OutcomeOK, "kind=session tool="+quote(card.Tool)+" from="+quote(from))
-	if r := s.refusalFor(cl, who, nil, card.NeedsTwo); r != nil {
+	if r := s.refusalFor(cl, who, nil, true, card.NeedsTwo); r != nil {
 		it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
 		s.add(it)
 		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
@@ -685,9 +692,10 @@ func (s *Service) itemLocked(id string) (*Item, error) {
 
 // Visible says whether a person sees a command on a cluster: their own,
 // and, where two people are needed, everyone's changes waiting for
-// approval. A command is only ever seen, approved, stopped or discarded on
-// the cluster it was planned for, so a card checked on one cluster never
-// runs on another.
+// approval; a session card waiting for its second person is shown to
+// SuperAdmins, the only people who may approve it (TB-07). A command is
+// only ever seen, approved, stopped or discarded on the cluster it was
+// planned for, so a card checked on one cluster never runs on another.
 func (s *Service) Visible(it *Item, who Who, cl Cluster) bool {
 	if it.Cluster != cl.ID {
 		return false
@@ -701,7 +709,7 @@ func (s *Service) Visible(it *Item, who Who, cl Cluster) bool {
 	if it.Approver != nil && it.Approver.Session == who.Session {
 		return true
 	}
-	return it.Change && it.Status == StatusPending && who.User != "" && s.needsTwo(cl, it)
+	return it.Change && it.Status == StatusPending && who.User != "" && s.needsTwo(cl, it) && (it.Session == nil || who.Admin)
 }
 
 // Approve approves a change (or runs a read): it checks the card still
@@ -734,7 +742,7 @@ func (s *Service) Approve(ctx context.Context, cl Cluster, who Who, id string) (
 		s.mu.Unlock()
 		return it, fmt.Errorf("%w: Watson is still working out what it changes", ErrState)
 	}
-	if r := s.refusalFor(cl, it.Requester, &who, it.Session != nil && it.Session.NeedsTwo); r != nil {
+	if r := s.refusalFor(cl, it.Requester, &who, it.Session != nil, it.Session != nil && it.Session.NeedsTwo); r != nil {
 		s.mu.Unlock()
 		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
 		return it, r

@@ -247,7 +247,21 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
   ) : (
     <>
       <DiskIcon />
-      Volume {p.wasClaim ? <>· released from <span className="rk-mono">{p.wasClaim}</span></> : `· ${p.phase}`}
+      Volume{' '}
+      {p.claim ? (
+        <>
+          · bound to{' '}
+          <a className="rk-mono rk-st-a" {...peekLink({ kind: 'claim', namespace: ns, name: p.claim })} data-testid="storage-volume-claim">
+            {ns}/{p.claim}
+          </a>
+        </>
+      ) : p.wasClaim ? (
+        <>
+          · {p.state === 'bound' ? 'bound to' : 'released from'} <span className="rk-mono">{p.wasClaim}</span>
+        </>
+      ) : (
+        `· ${p.phase}`
+      )}
     </>
   )
 

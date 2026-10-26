@@ -127,8 +127,8 @@ export function SessionPane({ cluster, session: s, admin, dark, controls, onToas
           Transcript
         </a>
       )}
-      {live && s.mine && s.ends && limit < 15 * 60 && (
-        <button className="rk-btn" disabled={busy} onClick={() => act(extendSession(cluster, s.id), 'Extended.')} title="Ask for more time, up to the console's limit">
+      {live && s.mine && s.canExtend && limit < 15 * 60 && (
+        <button className="rk-btn" disabled={busy} onClick={() => act(extendSession(cluster, s.id), 'Extended by 10 minutes.')} title="Add 10 minutes to the limit, up to the console's maximum">
           Extend
         </button>
       )}
@@ -161,7 +161,7 @@ export function SessionPane({ cluster, session: s, admin, dark, controls, onToas
         Opening… {s.tool === 'debug-pod' || s.tool === 'node-shell' ? 'waiting for the pod to run.' : s.tool === 'debug-container' ? 'waiting for the debug container to start.' : ''}
       </div>
     )
-  else if (s.mine || watching) body = <Terminal key={s.id + (watching ? 'w' : '')} cluster={cluster} id={s.id} watch={!s.mine} dark={dark} onInput={() => undefined} />
+  else if (s.mine || watching) body = <Terminal key={s.id + (watching ? 'w' : '')} cluster={cluster} id={s.id} watch={!s.mine} dark={dark} live={s.state === 'live'} onInput={() => undefined} />
   else
     body = (
       <div className="tb-output" style={{ color: 'var(--term-dim)' }}>
@@ -198,9 +198,36 @@ export function SessionPane({ cluster, session: s, admin, dark, controls, onToas
   )
 }
 
+/** A line to copy: the command, or the token, which is shown only when asked. */
+function CopyLine({ text, label, secret = false }: { text: string; label: string; secret?: boolean }) {
+  const [copied, setCopied] = useState(false)
+  const [shown, setShown] = useState(false)
+  return (
+    <div className="tb-cmd">
+      <code aria-label={label}>{secret && !shown ? '•'.repeat(24) : text}</code>
+      {secret && (
+        <button className="rk-btn" onClick={() => setShown((v) => !v)} aria-pressed={shown}>
+          {shown ? 'Hide' : 'Show'}
+        </button>
+      )}
+      <button
+        className="rk-btn"
+        onClick={() => {
+          void copyText(text).then((ok) => {
+            setCopied(ok)
+            setTimeout(() => setCopied(false), 1500)
+          })
+        }}
+      >
+        <CopyIcon />
+        {copied ? 'Copied' : secret ? 'Copy token' : 'Copy'}
+      </button>
+    </div>
+  )
+}
+
 function ForwardBody({ s, now }: { s: SessionView; now: number }) {
   const f = s.forward
-  const [copied, setCopied] = useState(false)
   const connected = !!f?.cli
   const { idle } = remaining(s, now)
   const pctIdle = Math.max(0, Math.min(100, (idle / s.idleSeconds) * 100))
@@ -211,26 +238,11 @@ function ForwardBody({ s, now }: { s: SessionView; now: number }) {
         <span data-status={connected ? 'done' : s.state === 'ended' ? undefined : 'now'}>{connected ? `✓ 221b connected from ${f!.cli}` : '● Run the command on your computer'}</span>
         {connected && f?.listen && <span data-status="done">✓ Listening on {f.listen}: point any program there</span>}
       </div>
-      {s.cli && s.state !== 'ended' && (
-        <div className="tb-cmd">
-          <code>{s.cli}</code>
-          <button
-            className="rk-btn"
-            onClick={() => {
-              void copyText(s.cli!).then((ok) => {
-                setCopied(ok)
-                setTimeout(() => setCopied(false), 1500)
-              })
-            }}
-          >
-            <CopyIcon />
-            {copied ? 'Copied' : 'Copy'}
-          </button>
-        </div>
-      )}
+      {s.cli && s.state !== 'ended' && <CopyLine text={s.cli} label="The command to run" />}
+      {s.token && s.state !== 'ended' && <CopyLine text={s.token} label="The forward’s token" secret />}
       {s.cli && !connected && s.state !== 'ended' && (
         <p className="tb-hint" style={{ margin: 0 }}>
-          The <span className="rk-mono">221b</span> command comes with each release; the token in it is this forward’s alone and ends with it. The session waits 5 minutes for it.
+          The <span className="rk-mono">221b</span> command comes with each release. It asks for the token, which is this forward’s alone and ends with it; a script sets <span className="rk-mono">TWOTWENTYONEB_TOKEN</span> instead. The session waits 5 minutes for it.
         </p>
       )}
       <div className="tb-stats">

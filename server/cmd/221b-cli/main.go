@@ -2,15 +2,19 @@
 // to the console only, never to Kubernetes: a port forward the console
 // created and approved reaches this computer through it.
 //
-//	221b forward https://console.example --cluster prod-eu --session 3f9a… --token … [--local 15432]
+//	221b forward https://console.example --cluster prod-eu --session 3f9a… [--local 15432]
 //
 // The forward listens on a local port and carries each TCP connection to
 // the console over one WebSocket (TB-19), where the console opens the
 // kubelet's port forward as the person who asked for it. The console owns
-// the session: it limits, ends and audits it, and says so here.
+// the session: it limits, ends and audits it, and says so here. The
+// forward's token, its one credential, is asked for when the command runs,
+// hidden, so it stays out of shell histories and process lists; a script
+// gives it in $TWOTWENTYONEB_TOKEN or on standard input.
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -30,6 +34,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"golang.org/x/term"
 
 	"github.com/ucesys/221b/server/internal/tunnel"
 	"github.com/ucesys/221b/server/internal/version"
@@ -38,11 +43,14 @@ import (
 const usage = `221b is the 221B console's command-line companion.
 
 Usage:
-  221b forward <console-url> --session ID --token TOKEN [--cluster ID] [--local PORT|auto] [--address 127.0.0.1]
+  221b forward <console-url> --session ID [--cluster ID] [--local PORT|auto] [--address 127.0.0.1]
   221b version
 
 The console's port-forward pane shows the forward command with its values
-filled in: copy it from there.
+filled in: copy it from there. It then asks for the forward's token, shown
+beside the command in the pane, and does not echo it. A script sets
+TWOTWENTYONEB_TOKEN instead, or pipes the token into the command's input;
+--token TOKEN works too, but lands in the shell's history.
 `
 
 func main() {
@@ -83,7 +91,7 @@ func parse(args []string) (options, error) {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&o.cluster, "cluster", "", "the cluster's ID in the console (empty: the console's own)")
 	fs.StringVar(&o.session, "session", "", "the session's ID")
-	fs.StringVar(&o.token, "token", os.Getenv("TWOTWENTYONEB_TOKEN"), "the forward's token (or $TWOTWENTYONEB_TOKEN)")
+	fs.StringVar(&o.token, "token", os.Getenv("TWOTWENTYONEB_TOKEN"), "the forward's token; left out, it is asked for (or read from $TWOTWENTYONEB_TOKEN)")
 	fs.StringVar(&o.local, "local", "", "the local port: a number, or auto (the default) for any free port")
 	fs.StringVar(&o.address, "address", "127.0.0.1", "the local address to listen on")
 	fs.BoolVar(&o.insecure, "insecure-skip-tls-verify", false, "do not check the console's certificate (a development console only)")
@@ -103,10 +111,29 @@ func parse(args []string) (options, error) {
 		return o, errors.New("give the console's URL once, as the console's pane shows it")
 	}
 	o.console = strings.TrimRight(pos[0], "/")
-	if o.session == "" || o.token == "" {
-		return o, errors.New("--session and --token are needed: copy the command from the console's port-forward pane")
+	if o.session == "" {
+		return o, errors.New("--session is needed: copy the command from the console's port-forward pane")
 	}
 	return o, nil
+}
+
+// askToken reads the forward's token when neither the flag nor the
+// environment gave it: hidden, from the terminal, or one line from a pipe.
+func askToken(in *os.File, out io.Writer) (string, error) {
+	if term.IsTerminal(int(in.Fd())) {
+		fmt.Fprint(out, "The forward's token, from the console's pane (not shown): ")
+		b, err := term.ReadPassword(int(in.Fd()))
+		fmt.Fprintln(out)
+		if err != nil {
+			return "", fmt.Errorf("reading the token: %w", err)
+		}
+		return strings.TrimSpace(string(b)), nil
+	}
+	b, err := bufio.NewReader(io.LimitReader(in, 4096)).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("reading the token from standard input: %w", err)
+	}
+	return strings.TrimSpace(b), nil
 }
 
 // tunnelURL is the session's tunnel on the console.
@@ -139,6 +166,14 @@ func forward(args []string) error {
 	target, err := tunnelURL(o)
 	if err != nil {
 		return err
+	}
+	if o.token == "" {
+		if o.token, err = askToken(os.Stdin, os.Stderr); err != nil {
+			return err
+		}
+		if o.token == "" {
+			return errors.New("the forward's token is needed: it is shown beside the command in the console's pane")
+		}
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

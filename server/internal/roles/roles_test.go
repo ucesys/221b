@@ -272,6 +272,10 @@ func TestFlags(t *testing.T) {
 		{Rule{APIGroups: []string{""}, Resources: []string{"pods/exec"}, Verbs: []string{"create"}}, []string{"pods/exec"}},
 		{Rule{APIGroups: []string{"rbac.authorization.k8s.io"}, Resources: []string{"roles"}, Verbs: []string{"bind", "escalate"}}, []string{"escalate", "bind"}},
 		{Rule{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get"}}, nil},
+		// Creating a Job runs a pod, as any ServiceAccount of the namespace (TB-47).
+		{Rule{APIGroups: []string{"batch"}, Resources: []string{"jobs"}, Verbs: []string{"create", "delete"}}, []string{"runs pods"}},
+		{Rule{APIGroups: []string{"batch"}, Resources: []string{"jobs"}, Verbs: []string{"get", "list"}}, nil},
+		{Rule{APIGroups: []string{""}, Resources: []string{"pods/ephemeralcontainers"}, Verbs: []string{"patch"}}, []string{"pods/ephemeralcontainers"}},
 	}
 	for _, c := range cases {
 		if got := c.r.Flags(); !slices.Equal(got, c.want) {

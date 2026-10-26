@@ -230,9 +230,11 @@ test('column choices stay in this browser, signed in or not (Phase 6 review)', a
 })
 
 test('picked nodes make a list of nodes, kept in 221B, or a fleet of labels changed through Watson (asked after 0.7.1)', async ({ page, request }) => {
+  // Two workers, the console's own among them if need be: kind has two,
+  // and a label changes nothing the console runs on.
   const skip = await consoleNode()
   const [w1, w2] = healthyWorkers(await snapshot(request))
-    .filter((r) => r.name !== skip)
+    .sort((x, y) => Number(x.name === skip) - Number(y.name === skip))
     .map((r) => r.name)
   const a = await cluster.nodeWith(w1!, { 'e2e.221b/picked': 'yes' })
   await page.waitForTimeout(5)

@@ -373,6 +373,32 @@ func TestStorageChainOfABoundClaim(t *testing.T) {
 	}
 }
 
+// A bound volume's drawer is its claim's chain, with the claim as the link;
+// without the claim, it names the claim from the volume, not "none".
+func TestStorageDrawerOfABoundVolume(t *testing.T) {
+	src := storageSource()
+	src.Put(pvc("storage", "data-postgres-0", ptr("longhorn"), "100Gi", corev1.ClaimBound, "pvc-pg0"))
+	src.Put(pv("pvc-pg0", "longhorn", "100Gi", corev1.VolumeBound, "storage", "data-postgres-0", corev1.PersistentVolumeReclaimDelete))
+	ns, claim, ok := views.HeldBy(src, "pvc-pg0")
+	if !ok || ns != "storage" || claim != "data-postgres-0" {
+		t.Fatalf("held by %s/%s %v", ns, claim, ok)
+	}
+	d, ok := views.HeldVolumeDetails(src, "pvc-pg0", ns, claim, all, now)
+	if !ok || d.Pair.Claim != "data-postgres-0" || d.Pair.Volume != "pvc-pg0" {
+		t.Fatalf("held volume %v %+v", ok, d.Pair)
+	}
+	if v, c := d.Hops[1].Value[0], d.Hops[2].Value[0]; v.L != nil || v.T != "pvc-pg0" || c.L == nil || *c.L != (views.Link{Kind: "claim", Namespace: "storage", Name: "data-postgres-0"}) {
+		t.Errorf("volume hop %+v, claim hop %+v", v, c)
+	}
+	d, _ = views.VolumeDetails(src, "pvc-pg0", all, now)
+	if got := segText(d.Hops[2].Value); got != "storage/data-postgres-0" || segText(d.Intro) != "This volume is Bound to storage/data-postgres-0." {
+		t.Errorf("claim hop %q, intro %q", got, segText(d.Intro))
+	}
+	if _, _, ok := views.HeldBy(src, "nope"); ok {
+		t.Error("a missing volume is held")
+	}
+}
+
 // ST-25: 2,000 claims in 50 classes, each mounted by a pod, build in well
 // under the 2 seconds the first screen has. The budget is loose for CI's
 // race detector; a plain run takes a few tens of milliseconds.

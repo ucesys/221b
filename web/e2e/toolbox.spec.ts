@@ -5,7 +5,7 @@
 // Drain, Delete) run at once. Against the simulator, exec is a pretend
 // shell; port forwards are not simulated.
 import { expect, test } from './test'
-import { inKind } from './cluster'
+import { consoleNode, healthyWorkers, inKind, snapshot } from './cluster'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -92,11 +92,14 @@ test('the pod menu: tools, a port forward with the pod’s ports, and Delete', a
   await expect(confirm).toHaveCount(0)
 })
 
-test('a node’s menu cordons it at once, without a card to approve', async ({ page }) => {
+test('a node’s menu cordons it at once, without a card to approve', async ({ page, request }) => {
+  // A worker, not the console's own when there is another: kind has two.
+  const skip = await consoleNode()
+  const workers = healthyWorkers(await snapshot(request)).map((r) => r.name)
+  const node = workers.find((n) => n !== skip) ?? workers[0]!
   await page.goto('/#/nodes', { waitUntil: 'domcontentloaded' })
-  const btn = page.locator('[data-testid^="tools-node-"]').nth(3)
+  const btn = page.getByTestId(`tools-node-${node}`)
   await expect(btn).toBeAttached({ timeout: 20_000 })
-  const node = ((await btn.getAttribute('data-testid')) ?? '').replace('tools-node-', '')
   await btn.hover()
   await btn.click()
   const menu = page.getByTestId('tools-menu')

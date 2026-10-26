@@ -87,6 +87,9 @@ func TestSessionRequestsAreCheckedBeforeTheCard(t *testing.T) {
 		`{"tool":"shell","namespace":"web","pod":"cache-0","extra":1}`:      400,
 		`{"tool":"forward","namespace":"web","pod":"cache-0","port":99999}`: 400,
 		`{"tool":"node-shell","node":"worker-001","profile":"general"}`:     403,
+		// A debug pod as a named ServiceAccount carries the account's
+		// token: a SuperAdmin's choice (TB-28).
+		`{"tool":"debug-pod","namespace":"web","image":"general","serviceAccount":"default"}`: 403,
 	} {
 		if code, _, b := requestSession(t, srv, c, body); code != want {
 			t.Errorf("%s: %d %s, want %d", body, code, b, want)
@@ -113,6 +116,7 @@ func TestForwardOpensASessionTheCLIReaches(t *testing.T) {
 		ID    string `json:"id"`
 		State string `json:"state"`
 		CLI   string `json:"cli"`
+		Token string `json:"token"`
 		Mine  bool   `json:"mine"`
 	}
 	deadline := time.Now().Add(10 * time.Second)
@@ -131,8 +135,16 @@ func TestForwardOpensASessionTheCLIReaches(t *testing.T) {
 	if !ss.Mine || !strings.Contains(ss.CLI, "221b forward") || !strings.Contains(ss.CLI, "--session "+ss.ID) {
 		t.Fatalf("session %+v", ss)
 	}
-	token := ss.CLI[strings.Index(ss.CLI, "--token ")+len("--token "):]
-	token, _, _ = strings.Cut(token, " ")
+	// The token is beside the command, never in it (TB-20): the command
+	// asks for it, so it stays out of shell histories.
+	token := ss.Token
+	if token == "" || strings.Contains(ss.CLI, token) || strings.Contains(ss.CLI, "--token") {
+		t.Fatalf("the token is on the command line: %+v", ss)
+	}
+	// Only the owner is given it.
+	if _, b := send(t, signIn(t, srv, "ops2@corp.example"), http.MethodGet, srv.URL+"/api/v1/sessions/"+ss.ID, ""); strings.Contains(b, token) {
+		t.Fatalf("another administrator was given the token: %s", b)
+	}
 
 	u, _ := url.Parse(srv.URL)
 	u.Scheme = "ws"
@@ -206,6 +218,37 @@ func TestASecondPersonsApprovalStillGoesToWatson(t *testing.T) {
 	}
 	if list := mgr.List("local", sessions.Who{Admin: true}); len(list) != 0 {
 		t.Fatalf("a session opened before its approval: %+v", list)
+	}
+	// The requester waits, and is told whom for.
+	mine := watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[it.ID].Plan != nil && m[it.ID].Plan.Ready })
+	if mine[it.ID].CanAct || !strings.Contains(mine[it.ID].Waiting, "SuperAdmin") {
+		t.Fatalf("the requester may approve, or is not told whom to wait for: %+v", mine[it.ID])
+	}
+	// The session opens as the requester, with the requester's rights, so
+	// only another SuperAdmin approves it (TB-07, TB-37): a viewer neither
+	// sees the card nor approves it.
+	viewer := signIn(t, srv, "viewer@corp.example")
+	if r, _ := send(t, viewer, http.MethodGet, srv.URL+"/api/v1/watson/commands/"+it.ID, ""); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("a viewer sees the session card: %d", r.StatusCode)
+	}
+	if r, b := send(t, viewer, http.MethodPost, srv.URL+"/api/v1/watson/commands/"+it.ID+"/approve", ""); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("a viewer approved a production session: %d %s", r.StatusCode, b)
+	}
+	if list := mgr.List("local", sessions.Who{Admin: true}); len(list) != 0 {
+		t.Fatalf("a session opened on a viewer's approval: %+v", list)
+	}
+	admin2 := signIn(t, srv, "ops2@corp.example")
+	seen := watsonStream(t, srv, admin2, func(m map[string]watsonItem) bool { _, ok := m[it.ID]; return ok })
+	if !seen[it.ID].CanAct {
+		t.Fatalf("the second SuperAdmin may not approve: %+v", seen[it.ID])
+	}
+	if r, b := send(t, admin2, http.MethodPost, srv.URL+"/api/v1/watson/commands/"+it.ID+"/approve", ""); r.StatusCode != 200 {
+		t.Fatalf("approve %d %s", r.StatusCode, b)
+	}
+	watsonStream(t, srv, admin2, func(m map[string]watsonItem) bool { return m[it.ID].Status == watson.StatusDone })
+	list := mgr.List("local", sessions.Who{Admin: true})
+	if len(list) != 1 || list[0].Owner.User != "ops@corp.example" || list[0].Approver != "Ops Two" {
+		t.Fatalf("the session is not the requester's, approved by the second SuperAdmin: %+v", list)
 	}
 }
 

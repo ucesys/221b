@@ -372,7 +372,6 @@ toolbox_namespace() {
 # Admin forwards ports and starts debug pods; it opens shells only with
 # rbac.roles.admin.exec (TB-50).
 admin_exec() {
-  local admin
   admin() { sed -n '/^  name: 221b-admin$/,/^---/p' "$1"; }
   admin "$out" | grep -q 'pods/portforward' && ! admin "$out" | grep -q 'pods/exec' &&
     admin "$WORK/chart-toolbox-exec.yaml" | grep -q 'pods/exec' && grep -q '"adminExec": true' "$WORK/chart-toolbox-exec.yaml" &&
