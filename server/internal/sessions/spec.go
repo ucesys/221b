@@ -144,9 +144,9 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 			errs = append(errs, fmt.Errorf("choose one of the allowed images: %s", strings.Join(c.DebugContainer.Images, ", ")))
 		}
 		if r.Profile == "" {
-			r.Profile = toolbox.ProfileBaseline
+			r.Profile = toolbox.ProfileGeneral
 		}
-		if !contains([]string{toolbox.ProfileGeneral, toolbox.ProfileBaseline, toolbox.ProfileRestricted, toolbox.ProfileNetAdmin, toolbox.ProfileSysAdmin}, r.Profile) {
+		if !contains([]string{toolbox.ProfileGeneral, toolbox.ProfileRestricted, toolbox.ProfileNetAdmin, toolbox.ProfileSysAdmin}, r.Profile) {
 			errs = append(errs, fmt.Errorf("%q is not a capability profile", r.Profile))
 		}
 		if r.MountVolumes && !c.DebugContainer.MountVolumes {
@@ -341,18 +341,29 @@ func ProfilesAllowed(level string) []string {
 	case LevelRestricted:
 		return []string{toolbox.ProfileRestricted}
 	case LevelBaseline:
-		return []string{toolbox.ProfileBaseline, toolbox.ProfileRestricted}
+		return []string{toolbox.ProfileGeneral, toolbox.ProfileRestricted}
 	}
-	return []string{toolbox.ProfileGeneral, toolbox.ProfileBaseline, toolbox.ProfileRestricted, toolbox.ProfileNetAdmin, toolbox.ProfileSysAdmin}
+	return []string{toolbox.ProfileGeneral, toolbox.ProfileRestricted, toolbox.ProfileNetAdmin, toolbox.ProfileSysAdmin}
 }
 
 func ptr[T any](v T) *T { return &v }
 
-// securityFor is the security context of a capability profile.
-func securityFor(profile string) *corev1.SecurityContext {
+// securityFor is the security context of a capability profile. General
+// runs as the image's own user with the capabilities its image asks for,
+// as many as the namespace's Pod Security level allows.
+func securityFor(profile string, img toolbox.Image, level string) *corev1.SecurityContext {
 	switch profile {
 	case toolbox.ProfileGeneral:
-		return &corev1.SecurityContext{Capabilities: &corev1.Capabilities{Add: []corev1.Capability{"SYS_PTRACE"}}}
+		sc := &corev1.SecurityContext{}
+		for _, cap := range img.Caps {
+			if level == LevelPrivileged || (level == LevelBaseline && baselineCaps[cap]) {
+				if sc.Capabilities == nil {
+					sc.Capabilities = &corev1.Capabilities{}
+				}
+				sc.Capabilities.Add = append(sc.Capabilities.Add, corev1.Capability(cap))
+			}
+		}
+		return sc
 	case toolbox.ProfileNetAdmin:
 		return &corev1.SecurityContext{Capabilities: &corev1.Capabilities{Add: []corev1.Capability{"NET_ADMIN", "NET_RAW"}}}
 	case toolbox.ProfileSysAdmin:
@@ -377,7 +388,7 @@ func restrictedContext() *corev1.SecurityContext {
 // image that sleeps until a shell is opened into it, sees the target's
 // processes, and mounts the pod's volumes at the target's paths (without
 // subPath, which ephemeral containers may not use).
-func EphemeralContainer(c toolbox.Config, id string, r Request, pod *corev1.Pod) (corev1.EphemeralContainer, error) {
+func EphemeralContainer(c toolbox.Config, id string, r Request, pod *corev1.Pod, level string) (corev1.EphemeralContainer, error) {
 	img, ok := c.Images[r.Image]
 	if !ok {
 		return corev1.EphemeralContainer{}, fmt.Errorf("no image named %q", r.Image)
@@ -387,7 +398,7 @@ func EphemeralContainer(c toolbox.Config, id string, r Request, pod *corev1.Pod)
 		Image:           img.Image,
 		Command:         []string{"sleep", "infinity"},
 		ImagePullPolicy: corev1.PullIfNotPresent,
-		SecurityContext: securityFor(r.Profile),
+		SecurityContext: securityFor(r.Profile, img, level),
 		Stdin:           true,
 		TTY:             true,
 	}}

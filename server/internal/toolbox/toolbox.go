@@ -170,7 +170,6 @@ const (
 	ProfileGeneral    = "general"
 	ProfileNetAdmin   = "netadmin"
 	ProfileSysAdmin   = "sysadmin"
-	ProfileBaseline   = "baseline"
 	ProfileRestricted = "restricted"
 )
 

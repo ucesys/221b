@@ -488,7 +488,7 @@ func TestCommandKeepsItsOutput(t *testing.T) {
 
 func TestDebugContainerMountsVolumesAtTheTargetsPaths(t *testing.T) {
 	m, f, _, _ := setup(t)
-	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolDebugContainer, Namespace: "web", Pod: "api-1", Image: "network", Profile: toolbox.ProfileBaseline, MountVolumes: true, ReadOnly: true}, alice(), "", "")
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolDebugContainer, Namespace: "web", Pod: "api-1", Image: "network", Profile: toolbox.ProfileGeneral, MountVolumes: true, ReadOnly: true}, alice(), "", "")
 	got := waitState(t, m, s.ID, StateLive)
 	f.mu.Lock()
 	pod := f.pods["web/api-1"]
@@ -681,6 +681,24 @@ func TestValidate(t *testing.T) {
 	off.PortForward.Enabled = false
 	if err := (&Request{Tool: toolbox.ToolForward, Namespace: "web", Pod: "x", Port: 80}).Validate(off, false); err == nil || !strings.Contains(err.Error(), "turned off") {
 		t.Fatalf("a tool turned off: %v", err)
+	}
+}
+
+func TestGeneralDebugContainerIsAsCapableAsTheNamespaceAllows(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "api-1"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "api"}}}}
+	r := Request{Tool: toolbox.ToolDebugContainer, Image: "network", Profile: toolbox.ProfileGeneral}
+	c := toolbox.Default()
+	ec, err := EphemeralContainer(c, "abcd1234", r, pod, LevelPrivileged)
+	if err != nil || ec.SecurityContext.Capabilities == nil || len(ec.SecurityContext.Capabilities.Add) != len(c.Images["network"].Caps) || ec.SecurityContext.RunAsUser != nil {
+		t.Fatalf("privileged: %+v %v", ec.SecurityContext, err)
+	}
+	// NET_RAW and NET_ADMIN are not baseline capabilities.
+	if ec, _ := EphemeralContainer(c, "abcd1234", r, pod, LevelBaseline); ec.SecurityContext.Capabilities != nil {
+		t.Fatalf("baseline: %+v", ec.SecurityContext.Capabilities)
+	}
+	r.Profile = toolbox.ProfileRestricted
+	if ec, _ := EphemeralContainer(c, "abcd1234", r, pod, LevelRestricted); *ec.SecurityContext.RunAsUser != 65532 || *ec.SecurityContext.AllowPrivilegeEscalation {
+		t.Fatalf("restricted: %+v", ec.SecurityContext)
 	}
 }
 

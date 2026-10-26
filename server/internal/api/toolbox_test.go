@@ -94,17 +94,20 @@ func TestSessionRequestsAreCheckedBeforeTheCard(t *testing.T) {
 	}
 }
 
-func TestForwardCardOpensASessionTheCLIReaches(t *testing.T) {
+func TestForwardOpensASessionTheCLIReaches(t *testing.T) {
 	srv, c, _, mgr := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
-	code, it, b := requestSession(t, srv, c, `{"tool":"forward","namespace":"web","pod":"cache-0","port":6379,"from":"Tools menu"}`)
-	if code != http.StatusAccepted || it.Kind != "change" || !strings.HasPrefix(it.Command, "session: ") {
-		t.Fatalf("%d %s", code, b)
+	// The person's own dialog is the approval: the session opens at once.
+	r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/sessions", `{"tool":"forward","namespace":"web","pod":"cache-0","port":6379,"from":"Tools menu"}`)
+	var opened struct {
+		Opened struct {
+			ID   string `json:"id"`
+			Mine bool   `json:"mine"`
+		} `json:"opened"`
 	}
-	watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[it.ID].Plan != nil && m[it.ID].Plan.Ready })
-	if r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/commands/"+it.ID+"/approve", ""); r.StatusCode != 200 {
-		t.Fatalf("approve %d %s", r.StatusCode, b)
+	_ = json.Unmarshal([]byte(b), &opened)
+	if r.StatusCode != http.StatusCreated || opened.Opened.ID == "" || !opened.Opened.Mine {
+		t.Fatalf("%d %s", r.StatusCode, b)
 	}
-	watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[it.ID].Status == watson.StatusDone })
 
 	var list []struct {
 		ID    string `json:"id"`
@@ -189,6 +192,58 @@ func TestForwardCardOpensASessionTheCLIReaches(t *testing.T) {
 	_, b = send(t, c, http.MethodGet, srv.URL+"/api/v1/sessions?history=1", "")
 	if !strings.Contains(b, ss.ID) {
 		t.Fatalf("history %s", b)
+	}
+}
+
+func TestASecondPersonsApprovalStillGoesToWatson(t *testing.T) {
+	srv, c, _, mgr := toolboxSetup(t, "ops@corp.example", clusters.EnvProduction)
+	if r, b := send(t, c, http.MethodPut, srv.URL+"/api/v1/watson/config", `{"twoPerson":true}`); r.StatusCode != 200 {
+		t.Fatalf("two-person rule %d %s", r.StatusCode, b)
+	}
+	code, it, b := requestSession(t, srv, c, `{"tool":"forward","namespace":"web","pod":"cache-0","port":6379,"reason":"checking the cache keys"}`)
+	if code != http.StatusAccepted || it.Kind != "change" || !strings.HasPrefix(it.Command, "session: ") || it.Status != watson.StatusPending {
+		t.Fatalf("%d %s", code, b)
+	}
+	if list := mgr.List("local", sessions.Who{Admin: true}); len(list) != 0 {
+		t.Fatalf("a session opened before its approval: %+v", list)
+	}
+}
+
+func TestToolActionsRunAsThePerson(t *testing.T) {
+	srv, c, _, _ := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
+	for body, want := range map[string]int{
+		`{"action":"reboot","node":"worker-001"}`:                      400,
+		`{"action":"cordon","node":"worker-001; rm -rf /"}`:            400,
+		`{"action":"cordon","node":"worker-001","pod":"x"}`:            400,
+		`{"action":"delete-pod","namespace":"web","pod":"cache-0 -A"}`: 400,
+		`{"action":"delete-pod","pod":"cache-0"}`:                      400,
+		`{"action":"cordon","node":"worker-001","extra":1}`:            400,
+	} {
+		if r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/actions", body); r.StatusCode != want {
+			t.Errorf("%s: %d %s, want %d", body, r.StatusCode, b, want)
+		}
+	}
+	r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/actions", `{"action":"cordon","node":"worker-001"}`)
+	var it watsonItem
+	_ = json.Unmarshal([]byte(b), &it)
+	if r.StatusCode != http.StatusAccepted || it.Command != "kubectl cordon worker-001" || it.Status == watson.StatusPending {
+		t.Fatalf("%d %s", r.StatusCode, b)
+	}
+	watsonStream(t, srv, c, func(m map[string]watsonItem) bool {
+		return m[it.ID].Status == watson.StatusDone || m[it.ID].Status == watson.StatusFailed
+	})
+}
+
+func TestToolActionsWaitForASecondPersonOnProduction(t *testing.T) {
+	srv, c, _, _ := toolboxSetup(t, "ops@corp.example", clusters.EnvProduction)
+	if r, b := send(t, c, http.MethodPut, srv.URL+"/api/v1/watson/config", `{"twoPerson":true}`); r.StatusCode != 200 {
+		t.Fatalf("two-person rule %d %s", r.StatusCode, b)
+	}
+	r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/actions", `{"action":"delete-pod","namespace":"web","pod":"cache-0"}`)
+	var it watsonItem
+	_ = json.Unmarshal([]byte(b), &it)
+	if r.StatusCode != http.StatusAccepted || it.Command != "kubectl delete pod cache-0 -n web" || it.Status != watson.StatusPending {
+		t.Fatalf("%d %s", r.StatusCode, b)
 	}
 }
 

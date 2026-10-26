@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
@@ -31,6 +32,7 @@ func (s *Server) toolboxRoutes() {
 	for _, base := range []string{"/api/v1/", "/api/v1/clusters/{cluster}/"} {
 		s.handle("GET "+base+"toolbox", "toolbox", s.getToolbox)
 		s.handle("POST "+base+"watson/sessions", "toolbox-request", s.postSessionCard)
+		s.handle("POST "+base+"watson/actions", "toolbox-action", s.postToolAction)
 		s.handle("GET "+base+"sessions", "sessions", s.getSessions)
 		s.handle("GET "+base+"sessions/{id}", "session", s.getSession)
 		s.handle("POST "+base+"sessions/{id}/end", "session-end", s.postSessionEnd)
@@ -334,7 +336,89 @@ func (s *Server) postSessionCard(w http.ResponseWriter, r *http.Request) {
 		from = from[:200]
 	}
 	s.rememberOwner(who.Session, sw)
+	// A dialog the person filled in and sent is their approval: nothing in
+	// it was written by a model unseen. Only a second person's approval,
+	// where the two-person rule or the tool asks for one, goes to Watson.
+	if !s.watsonTwoPerson(c) && !needsTwo {
+		if ref := s.opts.Watson.Refusal(c, who); ref != nil {
+			jsonError(w, http.StatusForbidden, ref.Message)
+			return
+		}
+		sw.From = from
+		sess, err := s.opts.Sessions.Start(sessions.Cluster{ID: c.ID, Name: c.Name, Config: c.Config}, req, sw, "", "")
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		ss, _ := s.opts.Sessions.Get(sess.ID)
+		b, _ := json.Marshal(struct {
+			Opened sessionView `json:"opened"`
+		}{s.sessionViewOf(r, ss, sw)})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write(b)
+		return
+	}
 	it := s.opts.Watson.SubmitSession(c, who, watson.SessionCard{Tool: req.Tool, Summary: req.Summary(), Request: req, NeedsTwo: needsTwo, Minutes: req.Minutes, Reason: req.Reason}, from)
+	snap, lines, _ := s.opts.Watson.Snapshot(it.ID, 0)
+	b, _ := json.Marshal(s.watsonView(snap, who, c, lines, 0))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	w.Write(b)
+}
+
+// toolActions are the Tools menu's fixed changes (TB-03): the line comes
+// from the action and the object's name, never from text the person or a
+// model typed.
+var toolActions = map[string]func(node, namespace, pod string) string{
+	"cordon":   func(node, _, _ string) string { return "kubectl cordon " + node },
+	"uncordon": func(node, _, _ string) string { return "kubectl uncordon " + node },
+	"drain": func(node, _, _ string) string {
+		return "kubectl drain " + node + " --ignore-daemonsets --delete-emptydir-data"
+	},
+	"delete-pod": func(_, namespace, pod string) string {
+		return "kubectl delete pod " + pod + " -n " + namespace
+	},
+}
+
+// postToolAction runs one of the Tools menu's fixed changes at once, as the
+// person who chose it; Watson shows it running and keeps its record.
+func (s *Server) postToolAction(w http.ResponseWriter, r *http.Request) {
+	c, who, ok := s.watsonReady(w, r)
+	if !ok {
+		return
+	}
+	if ct, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";"); strings.TrimSpace(strings.ToLower(ct)) != "application/json" {
+		jsonError(w, http.StatusUnsupportedMediaType, "send the action as application/json")
+		return
+	}
+	var in struct {
+		Action    string `json:"action"`
+		Node      string `json:"node"`
+		Namespace string `json:"namespace"`
+		Pod       string `json:"pod"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxCommandBody))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		jsonError(w, http.StatusBadRequest, "the action is not valid: "+err.Error())
+		return
+	}
+	line, known := toolActions[in.Action]
+	if !known {
+		jsonError(w, http.StatusBadRequest, "no such action: "+in.Action)
+		return
+	}
+	if in.Action == "delete-pod" {
+		if len(validation.IsDNS1123Label(in.Namespace)) > 0 || len(validation.IsDNS1123Subdomain(in.Pod)) > 0 || in.Node != "" {
+			jsonError(w, http.StatusBadRequest, "name a pod and its namespace")
+			return
+		}
+	} else if len(validation.IsDNS1123Subdomain(in.Node)) > 0 || in.Namespace != "" || in.Pod != "" {
+		jsonError(w, http.StatusBadRequest, "name a node")
+		return
+	}
+	it := s.opts.Watson.SubmitAction(c, who, line(in.Node, in.Namespace, in.Pod), "Tools menu")
 	snap, lines, _ := s.opts.Watson.Snapshot(it.ID, 0)
 	b, _ := json.Marshal(s.watsonView(snap, who, c, lines, 0))
 	w.Header().Set("Content-Type", "application/json")

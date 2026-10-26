@@ -88,7 +88,7 @@ func TestExecAgainstTheSimulator(t *testing.T) {
 func TestDebugToolsAgainstTheSimulator(t *testing.T) {
 	m, cl, cs := simSetup(t)
 	ns, pod := aPod(t, cs)
-	dc, _ := m.Start(cl, Request{Tool: toolbox.ToolDebugContainer, Namespace: ns, Pod: pod, Image: "general", Profile: toolbox.ProfileBaseline}, alice(), "", "")
+	dc, _ := m.Start(cl, Request{Tool: toolbox.ToolDebugContainer, Namespace: ns, Pod: pod, Image: "general", Profile: toolbox.ProfileGeneral}, alice(), "", "")
 	got := waitState(t, m, dc.ID, StateLive)
 	p, _ := cs.CoreV1().Pods(ns).Get(context.Background(), pod, metav1.GetOptions{})
 	if len(p.Spec.EphemeralContainers) != 1 || got.Container != p.Spec.EphemeralContainers[0].Name {

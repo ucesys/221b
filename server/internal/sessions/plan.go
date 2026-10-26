@@ -141,7 +141,11 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 		if pod == nil {
 			return p
 		}
-		ec, err := EphemeralContainer(m.opts.Config, "plan0000", r, pod)
+		level := LevelPrivileged
+		if ns, err := b.Namespace(ctx, r.Namespace); err == nil {
+			level = PodSecurity(ns)
+		}
+		ec, err := EphemeralContainer(m.opts.Config, "plan0000", r, pod, level)
 		if err != nil {
 			p.DryRun, p.DryRunExit = []string{err.Error()}, 1
 			return p
@@ -156,7 +160,7 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 			p.Impact = append(p.Impact, "Mounts "+strings.Join(names, ", ")+".")
 		}
 		p.Object = toYAML(ec)
-		probe, _ := EphemeralContainer(m.opts.Config, "plan0000", r, pod)
+		probe, _ := EphemeralContainer(m.opts.Config, "plan0000", r, pod, level)
 		err = b.AddEphemeral(ctx, pod, probe, true)
 		p.dry(err, "pod/"+r.Pod+" ephemeral container added (server dry run)")
 	case toolbox.ToolDebugPod:

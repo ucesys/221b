@@ -44,8 +44,11 @@ const (
 	EndNoCLI    = "no-cli"
 )
 
-// Audit actions (TB-53). The request and the approval are Watson's.
+// Audit actions (TB-53). The request and the approval are Watson's when a
+// second person approves; a session the person opened straight from its
+// dialog records its own request.
 const (
+	ActionRequest  = "session.request"
 	ActionOpen     = "session.open"
 	ActionEnd      = "session.end"
 	ActionWatch    = "session.watch"
@@ -304,6 +307,9 @@ func (m *Manager) Start(cl Cluster, req Request, owner Who, approver, card strin
 	m.all[s.ID] = s
 	m.changedLocked(s)
 	m.mu.Unlock()
+	if card == "" {
+		m.record(ActionRequest, s, owner, audit.OutcomeOK, fmt.Sprintf("from=%q approval=none", owner.From))
+	}
 	go m.run(ctx, s)
 	return s, nil
 }
@@ -350,7 +356,11 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 			fail(err)
 			return
 		}
-		ec, err := EphemeralContainer(m.opts.Config, s.ID, r, pod)
+		level := LevelPrivileged
+		if ns, err := b.Namespace(ctx, r.Namespace); err == nil {
+			level = PodSecurity(ns)
+		}
+		ec, err := EphemeralContainer(m.opts.Config, s.ID, r, pod, level)
 		if err != nil {
 			fail(err)
 			return

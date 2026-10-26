@@ -393,6 +393,50 @@ func (s *Service) submitOne(cl Cluster, who Who, line, from, why string, run boo
 	return it
 }
 
+// SubmitAction runs a fixed change a person chose from a Tools menu:
+// cordon, uncordon, drain, delete a pod (TB-03). The menu wrote the line,
+// not a model, so the person's click is the approval and the card runs at
+// once, as them; where the two-person rule applies it waits for a second
+// person like any other change.
+func (s *Service) SubmitAction(cl Cluster, who Who, line, from string) *Item {
+	now := s.opts.Now()
+	it := &Item{ID: newID(), Cluster: cl.ID, Line: strings.TrimSpace(line), From: from, Requester: who, Created: now, Exit: -1}
+	c, err := Parse(line)
+	if err != nil || !c.Change {
+		it.Status, it.Reason, it.Rule = StatusRefused, "not a change the Tools menu makes", "invalid"
+		if err != nil {
+			it.Reason = err.Error()
+		}
+		s.add(it)
+		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(it.Rule)+" reason="+quote(it.Reason))
+		return it
+	}
+	it.cmd, it.Line, it.Change = c, c.Line, true
+	s.record(ActionCommand, it, who, audit.OutcomeOK, "kind=change from="+quote(from))
+	if r := s.refusalFor(cl, who, nil, false); r != nil {
+		it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
+		s.add(it)
+		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
+		return it
+	}
+	it.Status = StatusPending
+	it.Expires = now.Add(s.opts.Lapse)
+	if s.opts.TwoPerson(cl) {
+		it.Plan = &Plan{}
+		s.add(it)
+		go s.plan(cl, it.ID)
+		return it
+	}
+	s.add(it)
+	s.mu.Lock()
+	w := who
+	it.Approver = &w
+	s.record(ActionApprove, it, who, audit.OutcomeOK, "requested_by="+quote(who.Name)+" approval=\"the person's own, from the Tools menu\"")
+	s.enqueueLocked(cl, it, who)
+	s.mu.Unlock()
+	return it
+}
+
 // refusalFor checks the rules a change must pass (P6-05, P6-07); with an
 // approver, whether that person may approve it.
 func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who, needsTwo bool) *Refusal {
@@ -426,6 +470,12 @@ func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who, needsTwo 
 		}
 	}
 	return nil
+}
+
+// Refusal says why a change from this person could not run here at all
+// (a locked or read-only cluster), or nil.
+func (s *Service) Refusal(cl Cluster, who Who) *Refusal {
+	return s.refusalFor(cl, who, nil, false)
 }
 
 // SetSessionHooks sets the toolbox's hooks for session cards: the API
