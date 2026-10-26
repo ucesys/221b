@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Administration · Sessions</title>
+<link rel="stylesheet" href="toolbox.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+</head>
+<body>
+<div class="rk mk-app" data-tall="true" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" data-prod="true" aria-label="Cluster: lakehouse-prod, production"><span class="rk-dot"></span>lakehouse-prod<span class="rk-tag" data-tone="warn">production</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="err">8</span></a>
+    <a class="rk-tab" href="#top">Nodes <span class="rk-cnt">40</span></a>
+    <a class="rk-tab" href="#top">Fleets <span class="rk-cnt">3</span></a>
+    <a class="rk-tab" href="#top">Namespaces <span class="rk-cnt">10</span></a>
+    <a class="rk-tab" href="#top">Pods <span class="rk-cnt">907</span></a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services <span class="rk-cnt">68</span></a>
+    <a class="rk-tab" href="#top">Networks</a>
+    <a class="rk-tab" href="#top">Access</a>
+    <a class="rk-tab" href="#top">Policies</a>
+  </nav>
+  <div class="mk-top-right">
+    <a class="rk-tab" href="AdminSessions.html" aria-current="page"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Administration</a>
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">SuperAdmin</span>
+  </div>
+</header>
+
+<div class="mk-admin">
+  <div class="mk-admin-head">
+    <h1>Administration</h1>
+    <nav class="mk-nav" aria-label="Administration pages">
+      <a class="rk-tab" href="#top">Roles</a>
+      <a class="rk-tab" href="#top">Permissions</a>
+      <a class="rk-tab" href="#top">Users</a>
+      <a class="rk-tab" href="AdminSessions.html" aria-current="page">Sessions <span class="rk-cnt" data-tone="warn">1 waiting</span></a>
+      <a class="rk-tab" href="AdminToolbox.html">Toolbox</a>
+      <a class="rk-tab" href="#top">Settings</a>
+    </nav>
+  </div>
+
+  <div class="mk-title-row"><h2>Sessions</h2><span class="rk-chip">lakehouse-prod</span><span>Every shell, command, port forward, debug container, debug pod and node shell, live and past. Read-only: the audit log writes it, nobody edits it here.</span></div>
+
+  <div class="rk-card mk-status">
+    <span class="rk-tag" data-tone="ok">5 live</span><span class="rk-tag" data-tone="warn">1 waiting for approval</span>
+    <span class="mk-vsep"></span><span><b>38</b> sessions in the last 7 days · 9 people · 2 refused · 1 ended by an admin</span>
+    <span class="mk-vsep"></span><span>Transcripts kept <b>400 days</b> (chart: <span class="rk-mono">toolbox.retention</span>)</span>
+    <span class="mk-grow"></span><span class="rk-dim">Updated 10:21, live</span>
+  </div>
+
+  <div class="rk-card" style="display:flex;flex-direction:column;overflow:hidden">
+    <div class="mk-toolbar" style="padding:10px 12px;border-bottom:1px solid var(--line)">
+      <div class="rk-seg" role="group" aria-label="Which sessions"><button aria-pressed="false">Live <span class="rk-cnt">6</span></button><button aria-pressed="true">History</button></div>
+      <label class="rk-field" style="width:300px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m13 13-2.8-2.8"/></svg><input type="text" placeholder="Person, pod, node, namespace or reason" aria-label="Search sessions"></label>
+      <label class="rk-field" style="width:130px"><select aria-label="Type"><option>All types</option></select><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></label>
+      <label class="rk-field" style="width:140px"><select aria-label="Person"><option>Everyone</option></select><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></label>
+      <label class="rk-field" style="width:150px"><select aria-label="Ended by"><option>Any ending</option></select><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></label>
+      <label class="rk-field" style="width:150px"><select aria-label="Range"><option>Last 7 days</option></select><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></label>
+      <label class="rk-tcheck"><input type="checkbox">Node shells only</label>
+      <span class="mk-grow"></span>
+      <button class="rk-btn"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M8 2.5v8M4.8 7.3 8 10.5l3.2-3.2M3 13h10"/></svg>Export</button>
+    </div>
+    <table class="mk-table" aria-label="Session history" style="border:0;border-radius:0">
+      <thead><tr><th style="width:28px"></th><th>Started</th><th>Type</th><th>Target</th><th>Namespace</th><th>Person</th><th>Approved by</th><th class="rk-r">Duration</th><th>Ended by</th><th>Record</th></tr></thead>
+      <tbody>
+        <tr class="mk-grp"><td colspan="10">Today · Oct 24</td></tr>
+        <tr data-wait="true"><td></td><td class="rk-num">10:14</td><td><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>Shell</span></td><td class="rk-mono">indexer-gbs869rj4-tknzt › indexer</td><td class="rk-mono">storage</td><td>s.ramos</td><td class="rk-dim">waiting · asked 3</td><td class="rk-r rk-dim">—</td><td class="rk-dim">—</td><td><a class="rk-btn" href="ApprovalApprover.html">Review</a></td></tr>
+        <tr><td></td><td class="rk-num">10:12</td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Shell</span></td><td class="rk-mono">gateway-thnch9qcg-zpkh4 › main</td><td class="rk-mono">analytics</td><td>mikhail</td><td>Anna K.</td><td class="rk-r rk-num">live · 9 min</td><td class="rk-dim">—</td><td><a class="rk-btn" href="DockShell.html">Open</a></td></tr>
+        <tr><td></td><td class="rk-num">10:03</td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Port forward</span></td><td class="rk-mono">5432 → postgres-0</td><td class="rk-mono">storage</td><td>mikhail</td><td>Deepak R.</td><td class="rk-r rk-num">live · 18 min</td><td class="rk-dim">—</td><td><a class="rk-btn" href="DockPortForward.html">Open</a></td></tr>
+        <tr><td></td><td class="rk-num">09:58</td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Node shell</span></td><td class="rk-mono">worker-003 <span class="mk-sub" style="font-family:var(--font)">sysadmin profile</span></td><td class="rk-dim">—</td><td>Anna K.</td><td>mikhail</td><td class="rk-r rk-num">live · 23 min</td><td class="rk-dim">—</td><td><button class="rk-btn">Watch</button></td></tr>
+        <tr data-sel="true"><td><button class="rk-icon-btn" aria-label="Collapse" style="width:24px;height:24px"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button></td><td class="rk-num">09:31</td><td><span class="rk-pill"><span class="rk-dot"></span>Shell</span></td><td class="rk-mono">api-5d48wxfrd-8sd44 › api</td><td class="rk-mono">analytics</td><td>mikhail</td><td>Anna K.</td><td class="rk-r rk-num">10 min</td><td>10 min idle</td><td><button class="rk-btn">Transcript · 38 KB</button></td></tr>
+        <tr><td colspan="10" style="padding:0;height:auto"><div class="mk-audit">
+          <span><span class="rk-mono">09:29:40</span><span>Requested by mikhail@stolpner.com from 10.0.4.21 · reason: <q>api crash-looping after 2.14.1 rollout (6 restarts); read the last core file in /tmp and the live config</q> · 30 min</span></span>
+          <span><span class="rk-mono">09:30:55</span><span>Approved by Anna K. (anna.k@example.com) for 30 min</span></span>
+          <span><span class="rk-mono">09:31:02</span><span>Opened · <span class="rk-mono">exec</span> as mikhail@stolpner.com · container api · <span class="rk-mono">bash</span> · impersonation groups: 221b-superadmins</span></span>
+          <span><span class="rk-mono">09:31:40</span><span>Downloaded <span class="rk-mono">/tmp/core.api.17</span> (212 MB) through the session</span></span>
+          <span><span class="rk-mono">09:33:11</span><span>Watched by Anna K. from 09:33 to 09:36</span></span>
+          <span><span class="rk-mono">09:41:02</span><span>Ended · no activity for 10 minutes · exit status 0 · transcript 38 KB, 212 lines, kept until 2027-11-28</span></span>
+        </div></td></tr>
+        <tr><td></td><td class="rk-num">09:22</td><td><span class="rk-pill"><span class="rk-dot"></span>One command</span></td><td class="rk-mono">cat /etc/nginx/nginx.conf <span class="mk-sub" style="font-family:var(--font)">in ingress-nginx-controller-7c9d › controller</span></td><td class="rk-mono">ingress</td><td>Deepak R.</td><td>Anna K.</td><td class="rk-r rk-num">2 s</td><td>finished · exit 0</td><td><button class="rk-btn">Output · 2 KB</button></td></tr>
+        <tr><td></td><td class="rk-num">09:41</td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Debug container</span></td><td class="rk-mono">api-5d48wxfrd-8sd44 › debug-7f3a <span class="mk-sub" style="font-family:var(--font)">network · netshoot · processes of api</span></td><td class="rk-mono">analytics</td><td>s.ramos</td><td>Anna K.</td><td class="rk-r rk-num">attached · 40 min</td><td class="rk-dim">until the pod restarts</td><td><button class="rk-btn">Shells · 2</button></td></tr>
+        <tr><td></td><td class="rk-num">08:47</td><td><span class="rk-pill"><span class="rk-dot"></span>Shell</span></td><td class="rk-mono">postgres-0 › postgres</td><td class="rk-mono">storage</td><td>t.wojcik</td><td>Deepak R.</td><td class="rk-r rk-num">31 min</td><td><span class="rk-t" data-tone="warn">Anna K. (admin)</span> <span class="mk-sub">“migration window over”</span></td><td><button class="rk-btn">Transcript · 91 KB</button></td></tr>
+        <tr><td></td><td class="rk-num">08:12</td><td><span class="rk-pill"><span class="rk-dot"></span>Shell</span></td><td class="rk-mono">etcd-cp-1 › etcd</td><td class="rk-mono">kube-system</td><td>s.ramos</td><td class="rk-dim">—</td><td class="rk-r rk-dim">—</td><td><span class="rk-t" data-tone="err">refused by Deepak R.</span> <span class="mk-sub">“use the etcd runbook, not a shell”</span></td><td class="rk-dim">—</td></tr>
+        <tr class="mk-grp"><td colspan="10">Yesterday · Oct 23</td></tr>
+        <tr><td></td><td class="rk-num">17:40</td><td><span class="rk-pill"><span class="rk-dot"></span>Node shell</span></td><td class="rk-mono">worker-005 <span class="mk-sub" style="font-family:var(--font)">general profile</span></td><td class="rk-dim">—</td><td>mikhail</td><td>Tomasz W.</td><td class="rk-r rk-num">14 min</td><td>the person</td><td><button class="rk-btn">Transcript · 22 KB</button></td></tr>
+        <tr><td></td><td class="rk-num">16:05</td><td><span class="rk-pill"><span class="rk-dot"></span>Debug pod</span></td><td class="rk-mono">dbg-net-k2m9 <span class="mk-sub" style="font-family:var(--font)">network · labels of report-b48vx</span></td><td class="rk-mono">batch</td><td>s.ramos</td><td>Anna K.</td><td class="rk-r rk-num">30 min</td><td>time limit · Job deleted</td><td><button class="rk-btn">Transcript · 9 KB</button></td></tr>
+        <tr><td></td><td class="rk-num">15:12</td><td><span class="rk-pill"><span class="rk-dot"></span>Port forward</span></td><td class="rk-mono">9090 → prometheus-0</td><td class="rk-mono">monitoring</td><td>d.rao</td><td>Anna K.</td><td class="rk-r rk-num">58 min</td><td>CLI disconnected</td><td><button class="rk-btn">Connections · 6</button></td></tr>
+        <tr><td></td><td class="rk-num">11:30</td><td><span class="rk-pill"><span class="rk-dot"></span>Shell</span></td><td class="rk-mono">report-b48vx › report</td><td class="rk-mono">batch</td><td>s.ramos</td><td class="rk-dim">—</td><td class="rk-r rk-dim">—</td><td class="rk-dim">lapsed · nobody answered in 30 min</td><td class="rk-dim">—</td></tr>
+        <tr><td></td><td class="rk-num">09:02</td><td><span class="rk-pill"><span class="rk-dot"></span>Shell</span></td><td class="rk-mono">cache-0 › redis</td><td class="rk-mono">analytics</td><td>mikhail</td><td>Deepak R.</td><td class="rk-r rk-num">4 min</td><td>pod deleted</td><td><button class="rk-btn">Transcript · 6 KB</button></td></tr>
+        <tr class="mk-grp"><td colspan="10">Oct 22</td></tr>
+        <tr><td></td><td class="rk-num">14:21</td><td><span class="rk-pill"><span class="rk-dot"></span>One command</span></td><td class="rk-mono">journalctl -u kubelet -n 200 <span class="mk-sub" style="font-family:var(--font)">on worker-002</span></td><td class="rk-dim">—</td><td>t.wojcik</td><td>mikhail</td><td class="rk-r rk-num">3 s</td><td>finished · exit 0</td><td><button class="rk-btn">Output · 41 KB</button></td></tr>
+        <tr><td></td><td class="rk-num">10:48</td><td><span class="rk-pill"><span class="rk-dot"></span>Shell</span></td><td class="rk-mono">gateway-thnch9qcg-zpkh4 › main</td><td class="rk-mono">analytics</td><td>d.rao</td><td>Anna K.</td><td class="rk-r rk-num">60 min</td><td>time limit</td><td><button class="rk-btn">Transcript · 140 KB</button></td></tr>
+      </tbody>
+    </table>
+    <div class="mk-legend" style="padding:10px 14px;border-top:1px solid var(--line)">
+      <span>A transcript holds everything typed and shown, Secrets included if someone typed them: treat it as sensitive. Port forwards record connections and byte counts, never the payload. One command keeps its exact output.</span>
+    </div>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

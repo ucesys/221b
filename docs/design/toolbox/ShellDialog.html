@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shell dialog on a production cluster</title>
+<link rel="stylesheet" href="toolbox.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+</head>
+<body>
+<div class="rk mk-app" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" data-prod="true" aria-label="Cluster: lakehouse-prod, production"><span class="rk-dot"></span>lakehouse-prod<span class="rk-tag" data-tone="warn">production</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="err">8</span></a>
+    <a class="rk-tab" href="#top">Nodes <span class="rk-cnt">40</span></a>
+    <a class="rk-tab" href="#top">Fleets <span class="rk-cnt">3</span></a>
+    <a class="rk-tab" href="#top">Namespaces <span class="rk-cnt">10</span></a>
+    <a class="rk-tab" href="#top" aria-current="page">Pods <span class="rk-cnt">907</span></a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services <span class="rk-cnt">68</span></a>
+    <a class="rk-tab" href="#top">Networks</a>
+    <a class="rk-tab" href="#top">Access</a>
+    <a class="rk-tab" href="#top">Policies</a>
+  </nav>
+  <div class="mk-top-right">
+    <a class="rk-tab" href="AdminSessions.html"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Administration</a>
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">SuperAdmin</span>
+  </div>
+</header>
+
+<div class="mk-body">
+  <aside class="mk-side" aria-label="Filters">
+    <h2 class="rk-h">Filter by node</h2>
+    <div class="rk-seg" role="group" aria-label="Node kind"><button aria-pressed="true">All <span class="rk-cnt">40</span></button><button aria-pressed="false">Control plane <span class="rk-cnt">3</span></button><button aria-pressed="false">Workers <span class="rk-cnt">37</span></button></div>
+    <label class="rk-field"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m13 13-2.8-2.8"/></svg><input type="text" placeholder="Find a node, label or taint" aria-label="Find a node"></label>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="Select all nodes"><span style="font-family:var(--font)">Select all (41)</span><span class="rk-num">41 of 41 selected</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="cp-1">cp-1 <span class="rk-role" data-role="control-plane">control-plane</span><span class="rk-num">2</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="cp-2">cp-2 <span class="rk-role" data-role="control-plane">control-plane</span><span class="rk-num">2</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="cp-3">cp-3 <span class="rk-role" data-role="control-plane">control-plane</span><span class="rk-num">1</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="worker-001">worker-001 <span class="rk-role">worker</span><span class="rk-num">30</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="worker-002">worker-002 <span class="rk-role">worker</span><span class="rk-num">21</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="worker-003">worker-003 <span class="rk-role">worker</span><span class="rk-num">26</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="worker-004">worker-004 <span class="rk-role">worker</span><span class="rk-num">17</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="worker-005">worker-005 <span class="rk-role">worker</span><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>cordoned</span><span class="rk-num">22</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="worker-006">worker-006 <span class="rk-role">worker</span><span class="rk-num">25</span></div>
+    <h2 class="rk-h">Filter by namespace</h2>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="Select all namespaces"><span style="font-family:var(--font)">Select all (10)</span><span class="rk-num">10 of 10 selected</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="analytics">analytics <span class="rk-pill" data-tone="err"><span class="rk-dot"></span>2 alerts</span><span class="rk-num">141</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="batch">batch <span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>2 alerts</span><span class="rk-num">96</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="default">default<span class="rk-num">12</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="ingest">ingest<span class="rk-num">210</span></div>
+    <div class="mk-side-row"><input type="checkbox" checked aria-label="kube-system">kube-system<span class="rk-num">88</span></div>
+  </aside>
+
+  <main class="mk-main" style="position:relative">
+    <div class="mk-toolbar"><h2 class="rk-h" style="font-size:12px">Pods</h2><span class="rk-small rk-dim">907 pods · 4 failing</span><span class="mk-grow"></span><label class="rk-field" style="width:260px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m13 13-2.8-2.8"/></svg><input type="text" placeholder="Search pods" aria-label="Search pods"></label><button class="rk-btn">Columns</button><button class="rk-btn">Export</button></div>
+    <table class="mk-table" aria-label="Pods">
+      <thead><tr><th>Pod</th><th class="mk-tcol"></th><th>Namespace</th><th>Status</th><th class="rk-r">Restarts</th><th>Node</th><th>CPU</th><th>Memory</th><th class="rk-r">Age</th></tr></thead>
+      <tbody>
+        <tr><td class="rk-mono mk-name">api-2dwb5mk9h-7fkq2</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for api-2dwb5mk9h-7fkq2"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td class="rk-mono">analytics</td><td><span class="rk-t" data-tone="ok">● Running</span></td><td class="rk-r rk-num">0</td><td class="rk-mono">worker-002</td><td><span class="rk-bar"><span style="width:30%"></span></span> <span class="rk-num">0.3 of 1</span></td><td><span class="rk-bar"><span style="width:55%"></span></span> <span class="rk-num">560Mi of 1Gi</span></td><td class="rk-r rk-num">17d</td></tr>
+        <tr><td class="rk-mono mk-name">api-5d48wxfrd-8sd44</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for api-5d48wxfrd-8sd44"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td class="rk-mono">analytics</td><td><span class="rk-t" data-tone="err">● CrashLoopBackOff</span></td><td class="rk-r rk-num">6</td><td class="rk-mono">worker-003</td><td class="rk-dim">—</td><td class="rk-dim">—</td><td class="rk-r rk-num">2h</td></tr>
+        <tr data-sel="true"><td class="rk-mono mk-name">gateway-thnch9qcg-zpkh4</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for gateway-thnch9qcg-zpkh4" aria-expanded="true"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td class="rk-mono">analytics</td><td><span class="rk-t" data-tone="ok">● Running</span></td><td class="rk-r rk-num">0</td><td class="rk-mono">worker-007</td><td><span class="rk-bar"><span style="width:12%"></span></span> <span class="rk-num">0.1 of 1</span></td><td><span class="rk-bar"><span style="width:40%"></span></span> <span class="rk-num">205Mi of 512Mi</span></td><td class="rk-r rk-num">17d</td></tr>
+        <tr><td class="rk-mono mk-name">indexer-gbs869rj4-tknzt</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for indexer-gbs869rj4-tknzt"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td class="rk-mono">storage</td><td><span class="rk-t" data-tone="err">● ImagePullBackOff</span></td><td class="rk-r rk-num">0</td><td class="rk-mono">worker-005</td><td class="rk-dim">—</td><td class="rk-dim">—</td><td class="rk-r rk-num">41m</td></tr>
+        <tr><td class="rk-mono mk-name">postgres-0</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for postgres-0"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td class="rk-mono">storage</td><td><span class="rk-t" data-tone="ok">● Running</span></td><td class="rk-r rk-num">1</td><td class="rk-mono">worker-001</td><td><span class="rk-bar"><span style="width:45%"></span></span> <span class="rk-num">0.9 of 2</span></td><td><span class="rk-bar"><span style="width:70%"></span></span> <span class="rk-num">2.8Gi of 4Gi</span></td><td class="rk-r rk-num">40d</td></tr>
+        <tr><td class="rk-mono mk-name">report-29pzq</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for report-29pzq"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td class="rk-mono">batch</td><td><span class="rk-t" data-tone="warn">● Pending</span></td><td class="rk-r rk-num">0</td><td class="rk-dim">—</td><td class="rk-dim">—</td><td class="rk-dim">—</td><td class="rk-r rk-num">19d</td></tr>
+        <tr><td class="rk-mono mk-name">cache-0</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for cache-0"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td class="rk-mono">analytics</td><td><span class="rk-t" data-tone="warn">● Pending</span></td><td class="rk-r rk-num">0</td><td class="rk-dim">—</td><td class="rk-dim">—</td><td class="rk-dim">—</td><td class="rk-r rk-num">33m</td></tr>
+      </tbody>
+    </table>
+  </main>
+
+  <section class="mk-dock" aria-label="Dock" style="height:300px">
+    <div class="mk-grip" aria-hidden="true"><i></i></div>
+    <div class="mk-strip" role="tablist" aria-label="Dock panels">
+      <a class="mk-stab" href="ApprovalRequester.html" aria-current="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="m13 13-3-3"/></svg>Assistants</a>
+      <a class="mk-stab" href="DockSessions.html"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h7"/></svg>Sessions <span class="rk-cnt">3</span></a>
+      <span class="mk-sep"></span>
+      <a class="mk-stab" href="DockPortForward.html" data-state="idle"><span class="rk-dot"></span><span class="rk-mono">pf</span>5432 → postgres-0<span class="mk-ttl">idle 7:40</span></a>
+      <a class="mk-stab" href="NodeMenu.html" data-state="wait"><span class="rk-dot"></span><span class="rk-mono">node</span>worker-003<span class="mk-ttl">waiting</span></a>
+      <div class="mk-strip-right">
+        <button class="rk-icon-btn" aria-label="Minimize the dock"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M3 11h10"/></svg></button>
+        <button class="rk-icon-btn" aria-label="Maximize the dock"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg></button>
+      </div>
+    </div>
+    <div class="mk-panes" data-split="half">
+      <div class="mk-pane">
+        <div class="rk-dph"><span class="rk-avatar" aria-hidden="true"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="m13 13-3-3"/></svg></span><h2>Sherlock</h2><small>Answers questions about lakehouse-prod</small></div>
+        <div class="mk-chat"><p class="rk-ans" style="margin:0">Ask about the nodes, fleets, pods, releases, access and alerts in lakehouse-prod.</p><div class="mk-chips"><button class="rk-btn">What needs attention right now?</button><button class="rk-btn">Which pods use the most memory?</button></div></div>
+      </div>
+      <div class="mk-pane">
+        <div class="rk-dph"><span class="rk-avatar" aria-hidden="true" style="background:#1B232C;color:var(--term-ok)"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5 6.5 8 3 11.5M8 11.5h5"/></svg></span><h2>Watson</h2><small>Runs commands once you approve them</small></div>
+        <div class="rk-term"><div class="rk-tl" data-k="dim">Nothing waiting. Cards for your requests appear here.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="mk-backdrop" aria-hidden="true"></div>
+
+  <div class="mk-dialog" role="dialog" aria-labelledby="dlg-title">
+    <div class="mk-dlg-head">
+      <span class="mk-dlg-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5 6.5 8 3 11.5M8 11.5h5"/></svg></span>
+      <div>
+        <h2 id="dlg-title">Shell in pod <span class="rk-mono">gateway-thnch9qcg-zpkh4</span></h2>
+        <div class="mk-kicker"><span class="rk-mono">analytics</span> · <span class="rk-mono">lakehouse-prod</span> · <span class="rk-tag" data-tone="warn">production</span> · runs as <span class="rk-mono">mikhail@stolpner.com</span></div>
+      </div>
+      <button class="rk-icon-btn" aria-label="Close"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+    </div>
+    <div class="mk-dlg-body">
+      <div class="mk-row">
+        <label class="mk-lbl"><span>Container</span><span class="rk-field" data-mono="true" style="width:170px"><select aria-label="Container"><option>main</option></select><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></span></label>
+        <label class="mk-lbl"><span>Shell</span><span class="rk-field" style="width:200px"><select aria-label="Shell"><option>Auto: bash, then sh</option></select><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></span></label>
+        <div class="mk-lbl"><span>For how long</span><div class="rk-seg" role="group" aria-label="Duration"><button aria-pressed="false">15 min</button><button aria-pressed="true">30 min</button><button aria-pressed="false">60 min</button></div></div>
+      </div>
+      <label class="mk-lbl"><span>Reason <span class="rk-dim">· shown to the approver, kept in the audit log</span></span><textarea class="rk-area" aria-label="Reason" rows="3">Upstream timeouts to cache since 09:40 (alert A-2231). Need to read the live gateway.yaml and test the cache Service from inside the pod.</textarea></label>
+      <div class="mk-facts-line"><span>Recorded</span><span>Ends after <b>10 min</b> without activity</span><span>Kubernetes decides what the shell may do, as you</span></div>
+      <div class="rk-callout" data-tone="info"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg><span><b>Needs a second SuperAdmin.</b> The card appears in Watson for Anna K., Deepak R. and Tomasz W.; nothing opens until one of them approves. The request lapses after 30 minutes unanswered.</span></div>
+    </div>
+    <div class="mk-dlg-foot">
+      <span class="mk-hint">The session opens as a tab in the dock, where it stays while you move around the console.</span>
+      <button class="rk-btn">Cancel</button>
+      <a class="rk-btn" data-primary="true" href="ApprovalRequester.html">Request shell</a>
+    </div>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

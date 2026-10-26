@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Nodes tab · Tools column and row menu</title>
+<link rel="stylesheet" href="toolbox.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+</head>
+<body>
+<div class="rk mk-app" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" data-prod="true" aria-label="Cluster: lakehouse-prod, production"><span class="rk-dot"></span>lakehouse-prod<span class="rk-tag" data-tone="warn">production</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="err">8</span></a>
+    <a class="rk-tab" href="#top" aria-current="page">Nodes <span class="rk-cnt">40</span></a>
+    <a class="rk-tab" href="#top">Fleets <span class="rk-cnt">3</span></a>
+    <a class="rk-tab" href="#top">Namespaces <span class="rk-cnt">10</span></a>
+    <a class="rk-tab" href="#top">Pods <span class="rk-cnt">907</span></a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services <span class="rk-cnt">68</span></a>
+    <a class="rk-tab" href="#top">Networks</a>
+    <a class="rk-tab" href="#top">Access</a>
+    <a class="rk-tab" href="#top">Policies</a>
+  </nav>
+  <div class="mk-top-right">
+    <a class="rk-tab" href="AdminSessions.html"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Administration</a>
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">SuperAdmin</span>
+  </div>
+</header>
+
+<div class="mk-body">
+  <main class="mk-main" style="padding-right:20px;position:relative">
+    <div class="mk-toolbar">
+      <div class="rk-seg" role="group" aria-label="Node kind"><button aria-pressed="true">All <span class="rk-cnt">40</span></button><button aria-pressed="false">Control plane <span class="rk-cnt">3</span></button><button aria-pressed="false">Workers <span class="rk-cnt">37</span></button></div>
+      <label class="rk-field" style="width:260px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m13 13-2.8-2.8"/></svg><input type="text" placeholder="Search by name, label or taint" aria-label="Search nodes"></label>
+      <button class="rk-btn">Select nodes by label and taint</button>
+      <span class="mk-grow"></span><button class="rk-btn">Columns</button><button class="rk-btn">Export</button>
+    </div>
+    <table class="mk-table" aria-label="Nodes">
+      <thead><tr><th>Node</th><th class="mk-tcol"></th><th>Role</th><th>Status</th><th>Problems</th><th>CPU requested</th><th class="rk-r">CPU free</th><th>Memory requested</th><th class="rk-r">Pods</th><th class="rk-r">Age</th></tr></thead>
+      <tbody>
+        <tr><td class="rk-mono" style="width:150px">cp-1</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for cp-1"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role" data-role="control-plane">cp</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:4%"></span></span> <span class="rk-num">2% · 0.15</span></td><td class="rk-r rk-num">7.65</td><td><span class="rk-bar"><span style="width:2%"></span></span> <span class="rk-num">&lt;1% · 134Mi</span></td><td class="rk-r rk-num">2 / 110</td><td class="rk-r rk-num">40d</td></tr>
+        <tr><td class="rk-mono">cp-2</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for cp-2"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role" data-role="control-plane">cp</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:4%"></span></span> <span class="rk-num">2% · 0.15</span></td><td class="rk-r rk-num">7.65</td><td><span class="rk-bar"><span style="width:2%"></span></span> <span class="rk-num">&lt;1% · 134Mi</span></td><td class="rk-r rk-num">2 / 110</td><td class="rk-r rk-num">41d</td></tr>
+        <tr><td class="rk-mono">cp-3</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for cp-3"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role" data-role="control-plane">cp</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:2%"></span></span> <span class="rk-num">&lt;1% · 0.05</span></td><td class="rk-r rk-num">7.75</td><td><span class="rk-bar"><span style="width:1%"></span></span> <span class="rk-num">&lt;1% · 64Mi</span></td><td class="rk-r rk-num">1 / 110</td><td class="rk-r rk-num">42d</td></tr>
+        <tr><td class="rk-mono">worker-001</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-001"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:67%"></span></span> <span class="rk-num">67% · 10.6</span></td><td class="rk-r rk-num">5.25</td><td><span class="rk-bar"><span style="width:33%"></span></span> <span class="rk-num">33% · 20.3Gi</span></td><td class="rk-r rk-num">30 / 110</td><td class="rk-r rk-num">43d</td></tr>
+        <tr><td class="rk-mono">worker-002</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-002"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:24%"></span></span> <span class="rk-num">24% · 7.5</span></td><td class="rk-r rk-num">24.3</td><td><span class="rk-bar"><span style="width:6%"></span></span> <span class="rk-num">6% · 14.9Gi</span></td><td class="rk-r rk-num">21 / 110</td><td class="rk-r rk-num">44d</td></tr>
+        <tr data-sel="true"><td class="rk-mono">worker-003</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-003" aria-expanded="true"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td><span class="rk-t" data-tone="warn">○ disk 84%</span></td><td><span class="rk-bar"><span style="width:60%"></span></span> <span class="rk-num">60% · 9.5</span></td><td class="rk-r rk-num">6.3</td><td><span class="rk-bar"><span style="width:34%"></span></span> <span class="rk-num">34% · 21Gi</span></td><td class="rk-r rk-num">26 / 110</td><td class="rk-r rk-num">45d</td></tr>
+        <tr><td class="rk-mono">worker-004</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-004"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:34%"></span></span> <span class="rk-num">34% · 5.4</span></td><td class="rk-r rk-num">10.4</td><td><span class="rk-bar"><span style="width:24%"></span></span> <span class="rk-num">24% · 14.8Gi</span></td><td class="rk-r rk-num">17 / 110</td><td class="rk-r rk-num">46d</td></tr>
+        <tr><td class="rk-mono">worker-005</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-005"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="warn">○ Cordoned</span></td><td><span class="rk-t" data-tone="warn">○ 1 warning</span></td><td><span class="rk-bar"><span style="width:37%"></span></span> <span class="rk-num">37% · 5.9</span></td><td class="rk-r rk-num">9.9</td><td><span class="rk-bar"><span style="width:26%"></span></span> <span class="rk-num">26% · 15.7Gi</span></td><td class="rk-r rk-num">22 / 110</td><td class="rk-r rk-num">47d</td></tr>
+        <tr><td class="rk-mono">worker-006</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-006"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:47%"></span></span> <span class="rk-num">47% · 7.4</span></td><td class="rk-r rk-num">8.4</td><td><span class="rk-bar"><span style="width:31%"></span></span> <span class="rk-num">31% · 18.8Gi</span></td><td class="rk-r rk-num">25 / 110</td><td class="rk-r rk-num">48d</td></tr>
+        <tr><td class="rk-mono">worker-007</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-007"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:24%"></span></span> <span class="rk-num">24% · 7.6</span></td><td class="rk-r rk-num">24.1</td><td><span class="rk-bar"><span style="width:6%"></span></span> <span class="rk-num">6% · 14.6Gi</span></td><td class="rk-r rk-num">23 / 110</td><td class="rk-r rk-num">49d</td></tr>
+        <tr><td class="rk-mono">worker-008</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-008"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:51%"></span></span> <span class="rk-num">51% · 8.1</span></td><td class="rk-r rk-num">7.7</td><td><span class="rk-bar"><span style="width:29%"></span></span> <span class="rk-num">29% · 17.6Gi</span></td><td class="rk-r rk-num">27 / 110</td><td class="rk-r rk-num">49d</td></tr>
+        <tr><td class="rk-mono">worker-009</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-009"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:44%"></span></span> <span class="rk-num">44% · 7.0</span></td><td class="rk-r rk-num">8.8</td><td><span class="rk-bar"><span style="width:35%"></span></span> <span class="rk-num">35% · 21.4Gi</span></td><td class="rk-r rk-num">24 / 110</td><td class="rk-r rk-num">50d</td></tr>
+      </tbody>
+    </table>
+
+    <div class="mk-menu" role="menu" aria-label="Tools for worker-003" style="left:160px;top:304px;min-width:300px">
+      <div class="mk-mhead">Tools for node <span class="rk-mono">worker-003</span> · worker · 26 pods · disk 84%</div>
+      <a class="mk-mi" role="menuitem" href="NodeShellDialog.html"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4.5 6.5 8 3 11.5M8 11.5h5"/></svg>Node shell…<span class="mk-mh">Watson card <span class="rk-tag" data-tone="err">root</span></span></a>
+      <a class="mk-mi" role="menuitem" data-active="true" href="NodeShellDialog.html" aria-haspopup="menu" aria-expanded="true"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 1.5 3 9h4.5L7 14.5 13 7H8.5L9 1.5Z"/></svg>Run a command<span class="mk-mh">Watson card<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg></span></a>
+      <a class="mk-mi" role="menuitem" href="DebugPodDialog.html"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 14 5v6L8 14.2 2 11V5l6-3.2ZM2 5l6 3.2L14 5M8 8.2v6"/></svg>Debug pod on this node…<span class="mk-mh">Watson card</span></a>
+      <div class="mk-msep"></div>
+      <a class="mk-mi" role="menuitem" href="#top"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M4 12 12 4"/></svg>Cordon…<span class="mk-mh">Watson card</span></a>
+      <a class="mk-mi" role="menuitem" href="#top"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.5v8M4.8 7.3 8 10.5l3.2-3.2M3 13h10"/></svg>Drain…<span class="mk-mh">Watson card</span></a>
+    </div>
+
+    <div class="mk-menu" role="menu" aria-label="Run a command on worker-003" style="left:518px;top:344px;min-width:330px">
+      <div class="mk-mhead">One command on <span class="rk-mono">worker-003</span> · each is its own Watson card</div>
+      <a class="mk-mi rk-mono" role="menuitem" href="NodeShellDialog.html" style="font-weight:400;font-size:12px">journalctl -u kubelet -n 200</a>
+      <a class="mk-mi rk-mono" role="menuitem" href="NodeShellDialog.html" style="font-weight:400;font-size:12px">df -h /var/lib/containerd /var/log /</a>
+      <a class="mk-mi rk-mono" role="menuitem" href="NodeShellDialog.html" style="font-weight:400;font-size:12px">crictl ps -a --state exited</a>
+      <a class="mk-mi rk-mono" role="menuitem" href="NodeShellDialog.html" style="font-weight:400;font-size:12px">dmesg -T | tail -n 100</a>
+      <div class="mk-msep"></div>
+      <a class="mk-mi" role="menuitem" href="NodeShellDialog.html">Another command…</a>
+    </div>
+  </main>
+</div>
+
+</div>
+</body>
+</html>
