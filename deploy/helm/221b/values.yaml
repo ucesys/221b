@@ -300,6 +300,87 @@ secrets:
   # withhold Secrets).
   read: true
 
+toolbox:
+  # The Toolbox (Phase 9, docs/toolbox.md): the Tools menu beside each pod
+  # and node opens a shell, runs one command, forwards a port, adds a
+  # debug container, starts a debug pod, or opens a shell on a node. Each
+  # is a Watson card first (approved by a second person on production, and
+  # by a second SuperAdmin for anything on a node), then a session in the
+  # Dock that runs as the person who asked, with their roles: the roles
+  # decide who may use what (rbac.roles.admin.exec below); these values
+  # are the ceiling the console never exceeds.
+  enabled: true
+  # No keystrokes, output or forwarded bytes for this long ends a session.
+  idleTimeout: 10m
+  # The hard limit, unless the card approved a shorter one.
+  maxDuration: 60m
+  # none, or pvc: keep each terminal session's transcript (asciicast v2,
+  # what was typed and shown, Secrets included) on a volume, downloadable
+  # by its owner and SuperAdmins for retention. Port forwards keep
+  # connections and bytes only.
+  transcripts: none
+  transcriptsVolume:
+    size: 5Gi
+    storageClass: ""
+    # ReadWriteMany with more than one replica.
+    accessMode: ReadWriteOnce
+  retention: 400d
+  history:
+    # Ended sessions kept for Administration › Sessions.
+    keep: 300
+  shell:
+    enabled: true
+    oneCommand: true
+    fileTransfer: true
+    quickCommands:
+      - env
+      - cat /proc/1/limits
+      - ss -tlnp
+  portForward:
+    enabled: true
+    # Older 221b commands are refused with an upgrade message.
+    cliMinVersion: 0.8.0
+  debugContainer:
+    enabled: true
+    # Mount the target container's volumes in the debug container.
+    mountVolumes: true
+    images: [general, network]
+  debugPod:
+    enabled: true
+    ttlAfterFinished: 10m
+    profiles: [general, network]
+  nodeShell:
+    # Needs rbac.roles.superAdmin.template full; with readOnly the namespace
+    # is not created and the tool is off.
+    enabled: true
+    # Created by the chart at Pod Security privileged.
+    namespace: 221b-toolbox
+    image: node
+    profiles: [general, netadmin, sysadmin]
+    # cluster: the cluster's two-person rule, as for other tools; a node
+    # shell opens at once elsewhere. always: a second SuperAdmin approves
+    # every node shell, on every cluster.
+    approval: cluster
+    quickCommands:
+      - journalctl -u kubelet -n 200 --no-pager
+      - df -h /var/lib/containerd /var/log /
+      - crictl ps -a --state exited
+      - dmesg -T | tail -n 100
+  # The images the tools may run, and nothing else. Pin them by digest
+  # (busybox:1.37@sha256:…) for production; a new image is a chart upgrade.
+  # caps are added only where the namespace's Pod Security level allows.
+  images:
+    general:
+      image: busybox:1.37
+      tools: sh, ls, cat, tar, wget, nc
+    network:
+      image: nicolaka/netshoot:v0.14
+      caps: [NET_RAW, NET_ADMIN]
+      tools: dig, curl, tcpdump, iperf, nmap, ss
+    node:
+      image: ubuntu:24.04
+      tools: the node's own tools through /host
+
 serviceAccount:
   create: true
   # Defaults to the full name.
@@ -332,8 +413,9 @@ rbac:
   # localCluster.mode write (see localCluster.writeClusterRole).
   create: true
   # Which definition of the two roles that can change things is installed.
-  # full: Admin may do the namespaced changes Watson supports; SuperAdmin
-  # may do everything. readOnly: the role exists, with no write verb, so
+  # full: Admin may do the namespaced changes Watson supports, forward
+  # ports and start debug pods (the Toolbox), and with admin.exec open
+  # shells; SuperAdmin may do everything. readOnly: the role exists, with no write verb, so
   # nobody can change anything through the console; the read-only
   # SuperAdmin lists and watches everything and gets everything except
   # the subresources that run a command or proxy to one (pods/exec,
@@ -344,6 +426,10 @@ rbac:
   roles:
     admin:
       template: full
+      # The full Admin may also open shells and run commands in its
+      # namespaces (create pods/exec). It already forwards ports and starts
+      # debug pods; debug containers and node shells stay SuperAdmin's.
+      exec: false
     superAdmin:
       template: full
   # strict: when a cluster's 221b roles allow more than the ones this chart

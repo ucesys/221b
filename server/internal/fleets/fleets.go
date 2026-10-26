@@ -1,8 +1,10 @@
-// Package fleets groups nodes into fleets (P4-01). A fleet is a set of
-// labels and taints; every node that has all of them belongs to it.
-// Membership is never stored: it is worked out from the nodes as they are
-// now, so a node joins or leaves a fleet only by changing its own labels
-// and taints. Fleets are kept with the console's settings, per cluster.
+// Package fleets groups nodes into fleets (P4-01). A fleet is either a set
+// of labels and taints, every node that has all of them belonging to it,
+// or a list of nodes by name (asked after 0.7.1). A labelled fleet's
+// membership is never stored: it is worked out from the nodes as they are
+// now, so a node joins or leaves it only by changing its own labels and
+// taints. A list changes in the console alone, and a node may be on any
+// number of them. Fleets are kept with the console's settings, per cluster.
 package fleets
 
 import (
@@ -28,7 +30,15 @@ type Fleet struct {
 	Labels []string `json:"labels"`
 	// Taints are "key[=value]:Effect".
 	Taints []string `json:"taints"`
+	// Kind is "" for a fleet of labels and taints, or KindNodes for a
+	// list of nodes, which has no labels or taints.
+	Kind string `json:"kind,omitempty"`
+	// Nodes are a list's node names.
+	Nodes []string `json:"nodes,omitempty"`
 }
+
+// KindNodes is a fleet that lists its nodes by name.
+const KindNodes = "nodes"
 
 // Limits keep the settings small.
 const (
@@ -36,6 +46,7 @@ const (
 	MaxRequirements = 50
 	MaxName         = 80
 	MaxDesc         = 400
+	MaxNodes        = 5000
 	Colors          = 6
 )
 
@@ -43,6 +54,8 @@ var (
 	labelKeyRE = regexp.MustCompile(`^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$`)
 	labelValRE = regexp.MustCompile(`^([A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$`)
 	idRE       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	// A node's name is a DNS subdomain.
+	nodeNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
 	effects    = map[string]bool{"NoSchedule": true, "PreferNoSchedule": true, "NoExecute": true}
 )
 
@@ -71,7 +84,22 @@ func ParseTaint(s string) (key, value, effect string, ok bool) {
 	return key, value, effect, key != "" && effects[effect]
 }
 
-// Has says whether a node with these labels and taints is in the fleet.
+// Takes says whether a node is in the fleet: on its list, or with all of
+// its labels and taints.
+func (f Fleet) Takes(n Node) bool {
+	if f.Kind == KindNodes {
+		for _, name := range f.Nodes {
+			if name == n.Name {
+				return true
+			}
+		}
+		return false
+	}
+	return f.Has(n.Labels, n.Taints)
+}
+
+// Has says whether a node with these labels and taints has every one of
+// the fleet's.
 func (f Fleet) Has(labels map[string]string, taints []corev1.Taint) bool {
 	for _, l := range f.Labels {
 		k, v := SplitLabel(l)
@@ -120,10 +148,23 @@ func Validate(list []Fleet) error {
 			return fmt.Errorf("A fleet's description has at most %d characters.", MaxDesc)
 		case f.Color < 0 || f.Color >= Colors:
 			return fmt.Errorf("fleet color %d is not one of the %d", f.Color, Colors)
-		case len(f.Labels)+len(f.Taints) == 0:
+		case f.Kind != "" && f.Kind != KindNodes:
+			return fmt.Errorf("fleet kind %q is not one of \"\" and %q", f.Kind, KindNodes)
+		case f.Kind == KindNodes && len(f.Labels)+len(f.Taints) > 0:
+			return fmt.Errorf("A list of nodes has no labels or taints.")
+		case f.Kind == KindNodes && len(f.Nodes) > MaxNodes:
+			return fmt.Errorf("A list has at most %d nodes.", MaxNodes)
+		case f.Kind != KindNodes && len(f.Nodes) > 0:
+			return fmt.Errorf("A fleet of labels and taints lists no nodes.")
+		case f.Kind != KindNodes && len(f.Labels)+len(f.Taints) == 0:
 			return fmt.Errorf("Pick at least one label or taint.")
 		case len(f.Labels)+len(f.Taints) > MaxRequirements:
 			return fmt.Errorf("A fleet has at most %d labels and taints.", MaxRequirements)
+		}
+		for _, n := range f.Nodes {
+			if len(n) > 253 || !nodeNameRE.MatchString(n) {
+				return fmt.Errorf("“%s” isn’t a node name.", n)
+			}
 		}
 		ids[f.ID] = true
 		names[strings.ToLower(name)] = true
@@ -165,6 +206,11 @@ func Clean(list []Fleet) []Fleet {
 		f.Desc = strings.TrimSpace(f.Desc)
 		f.Labels = dedupe(f.Labels)
 		f.Taints = dedupe(f.Taints)
+		if f.Kind == KindNodes {
+			f.Nodes = dedupe(f.Nodes)
+		} else {
+			f.Nodes = nil
+		}
 		out = append(out, f)
 	}
 	return out
@@ -251,6 +297,10 @@ type Row struct {
 	Desc   string   `json:"desc,omitempty"`
 	Labels []string `json:"labels"`
 	Taints []string `json:"taints"`
+	// By is KindNodes for a fleet that lists its nodes; Listed is that
+	// list, nodes gone from the cluster included.
+	By     string   `json:"by,omitempty"`
+	Listed []string `json:"listed,omitempty"`
 	// Order is a fleet's place in the list.
 	Order   int      `json:"order"`
 	Members []string `json:"members"`
@@ -266,8 +316,11 @@ func Build(defs []Fleet, nodes []Node) []Row {
 	memberSets := map[string]bool{}
 	for i, f := range defs {
 		r := Row{Key: KindFleet + ":" + f.ID, Kind: KindFleet, ID: f.ID, Name: f.Name, Color: f.Color, Desc: f.Desc, Labels: nonNil(f.Labels), Taints: nonNil(f.Taints), Order: i, Members: []string{}}
+		if f.Kind == KindNodes {
+			r.By, r.Listed = KindNodes, nonNil(f.Nodes)
+		}
 		for _, n := range nodes {
-			if f.Has(n.Labels, n.Taints) {
+			if f.Takes(n) {
 				r.Members = append(r.Members, n.Name)
 				r.Stats.add(n)
 				inAny[n.Name] = true

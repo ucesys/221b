@@ -23,6 +23,8 @@ type FileConfig struct {
 	Templates struct {
 		Admin      roles.Template `json:"admin"`
 		SuperAdmin roles.Template `json:"superAdmin"`
+		// AdminExec is rbac.roles.admin.exec: pods/exec for the full Admin.
+		AdminExec bool `json:"adminExec"`
 	} `json:"templates"`
 	// RBACEnforce is off or strict (RB-36).
 	RBACEnforce string `json:"rbacEnforce"`

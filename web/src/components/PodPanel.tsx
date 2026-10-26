@@ -175,7 +175,7 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
             <span>
               Ready{' '}
               <span className="rk-num" style={{ color: 'var(--fg)' }}>
-                {head.ready}/{head.total}
+                {head.readyUnknown ? '?' : head.ready}/{head.total}
               </span>
             </span>
             <span>

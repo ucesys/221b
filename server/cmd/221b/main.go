@@ -38,8 +38,10 @@ import (
 	"github.com/ucesys/221b/server/internal/leader"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/roles"
+	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/toolbox"
 	"github.com/ucesys/221b/server/internal/ui"
 	"github.com/ucesys/221b/server/internal/version"
 	"github.com/ucesys/221b/server/internal/watson"
@@ -437,6 +439,33 @@ func run(args []string) error {
 		}
 		return watson.Cluster{ID: id, Name: sum.Name, Env: sum.Env, ReadOnly: sum.Mode != clusters.ModeWrite, Config: client.RestConfig()}, true
 	})
+	// The toolbox (Phase 9): sessions open from approved Watson cards and
+	// live on the leader, like the assistants (TB-14).
+	toolboxCfg, err := toolbox.Read(cfg.ToolboxConfigFile)
+	if err != nil {
+		return err
+	}
+	sessionsMgr := sessions.New(sessions.Options{
+		Config:  toolboxCfg,
+		Audit:   auditLog,
+		Logger:  log.With("component", "sessions"),
+		History: &sessions.KVHistory{Backend: spendBackend, Key: "toolbox-sessions.json", Keep: toolboxCfg.History.Keep, Logger: log.With("component", "sessions")},
+	})
+	go sessionsMgr.Run(ctx)
+	if toolboxCfg.Transcripts == toolbox.TranscriptsPVC {
+		go func() {
+			t := time.NewTicker(time.Hour)
+			defer t.Stop()
+			for {
+				sessions.PruneTranscripts(toolboxCfg.TranscriptDir, toolboxCfg.Retention.D(), time.Now())
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
+			}
+		}()
+	}
 	rolePrefixes := authCfg.Prefixes
 	if def := roles.DefaultPrefixes(); rolePrefixes.Local == "" || rolePrefixes.LDAP == "" {
 		if rolePrefixes.Local == "" {
@@ -448,6 +477,7 @@ func run(args []string) error {
 	}
 	handler := api.New(api.Options{
 		Watson:                  watsonSvc,
+		Sessions:                sessionsMgr,
 		Sherlock:                sherlockSvc,
 		SherlockKeys:            keys,
 		SherlockDefaultURL:      cfg.SherlockAPIURL,
@@ -461,7 +491,7 @@ func run(args []string) error {
 		Audit:                   auditLog,
 		Access:                  people,
 		Impersonation:           api.Impersonation{UserPrefix: cfg.ImpersonateUserPrefix, GroupPrefix: cfg.ImpersonateGroupPrefix},
-		Roles:                   api.RolesOptions{Templates: authFile.RoleTemplates(), Secrets: cfg.SecretsRead, Enforce: authFile.RBACEnforce, Prefixes: rolePrefixes, Bindings: authFile.Bindings},
+		Roles:                   api.RolesOptions{Templates: authFile.RoleTemplates(), Secrets: cfg.SecretsRead, Exec: authFile.Templates.AdminExec, Enforce: authFile.RBACEnforce, Prefixes: rolePrefixes, Bindings: authFile.Bindings},
 		HTTPSRedirect:           cfg.HTTPSRedirect,
 		Leader:                  elector,
 		ProxyToken:              cfg.ProxyToken,

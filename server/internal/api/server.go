@@ -34,6 +34,7 @@ import (
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
 	"github.com/ucesys/221b/server/internal/roles"
+	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/views"
@@ -170,6 +171,9 @@ type Options struct {
 	// Roles configure the Roles and Permissions pages and the check of the
 	// deployed roles (RB-36, RB-41 to RB-44).
 	Roles RolesOptions
+	// Sessions runs the toolbox's sessions (Phase 9); nil, or no Watson,
+	// leaves the toolbox out.
+	Sessions *sessions.Manager
 }
 
 // Impersonation says how a person's name and groups are given to the API
@@ -236,6 +240,11 @@ type Server struct {
 
 	// leaderChecks is how often a forwarded stream checks the leader.
 	leaderChecks time.Duration
+
+	// toolCache keeps what people may use where (TB-05); owners the
+	// sign-in checks of people who asked for sessions.
+	toolCache toolCache
+	owners    sync.Map
 }
 
 type reqKey struct {
@@ -337,6 +346,10 @@ func New(o Options) *Server {
 		for _, base := range []string{"/api/v1/", "/api/v1/clusters/{cluster}/"} {
 			s.handle("GET "+base+"assistants/events", "assistants-events", s.assistantsEvents)
 		}
+	}
+	if o.Watson != nil && o.Sessions != nil {
+		s.toolboxRoutes()
+		o.Watson.SetSessionHooks(s.planSession, s.startSession)
 	}
 	s.rolesRoutes()
 	if o.Auth != nil {
@@ -528,7 +541,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, u.String(), http.StatusPermanentRedirect)
 		return
 	}
-	if s.opts.Auth != nil {
+	// A port forward's CLI carries the forward's token, not a cookie
+	// (TB-20); its handler checks it.
+	if s.opts.Auth != nil && !IsTunnelPath(r.URL.Path) {
 		if r = s.opts.Auth.Gate(w, r); r == nil {
 			s.observeOnly("gate", http.StatusUnauthorized)
 			return
@@ -744,6 +759,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	detail := fmt.Sprintf("refresh %s", st.Refresh())
 	if f := st.TimeFormat; f != nil {
 		detail += fmt.Sprintf(", time format %s %s", f.Date, f.Clock)
+	}
+	if b := st.AlertBanners; b != nil && !*b {
+		detail += ", alert banners hidden"
 	}
 	s.record(r, audit.ActionSettings, "settings", detail)
 	b, _ := json.Marshal(st)

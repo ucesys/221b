@@ -158,7 +158,7 @@ An AI model can be wrong with confidence: it can invent a pod name, pick the wro
 
 3. **Watson runs a short, fixed list of commands, and never through a shell.** `kubectl` and `helm` are compiled into the server and called directly; no shell is started, so pipes, redirections, `;`, `$(…)`, variables and arguments after `--` are refused rather than interpreted. Each command and each flag is checked against an allow-list:
    - reads: `kubectl get`, `describe`, `logs`, `top`, `events`, `auth can-i`; `helm list`, `status`, `history`, `get values`;
-   - changes: `kubectl cordon`, `uncordon`, `drain`, `scale`, `rollout restart`, `rollout undo`, `delete pod`, `patch pvc` (expand a claim), `delete pvc`, `label`, `annotate` (also a storage class's default); `helm rollback`.
+   - changes: `kubectl cordon`, `uncordon`, `drain`, `scale`, `rollout restart`, `rollout undo`, `delete pod`, `patch pvc` (expand a claim), `delete pvc`, `label`, `annotate` (also a storage class's default), `taint` (nodes); `helm rollback`.
 
    Everything else (`apply`, `create`, `edit`, `patch`, `exec`, `port-forward`, `delete` of anything but pods, `helm install` or `upgrade`, any RBAC change) is refused with the rule that refused it. A hallucinated command or flag fails here, before it reaches the cluster.
 

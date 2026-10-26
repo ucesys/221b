@@ -20,6 +20,8 @@ export interface WatsonPlan {
   dryRunExit: number
   dryRunNote?: string
   dryRunning?: boolean
+  /** The YAML of what a session creates or patches (TB-36). */
+  object?: string
 }
 
 export type WatsonStatusName = 'pending' | 'queued' | 'running' | 'done' | 'failed' | 'stopped' | 'lapsed' | 'discarded' | 'refused'
@@ -47,6 +49,8 @@ export interface WatsonItem {
   lines?: WatsonLine[]
   lineStart: number
   rev: number
+  /** A Toolbox card's request and, once open, its session (TB-36). */
+  session?: { tool: string; summary: string; request: unknown; needsTwo?: boolean; minutes?: number; reason?: string; sessionId?: string }
 }
 
 export interface WatsonStatus {
@@ -219,7 +223,7 @@ export function watsonSupports(command: string): boolean {
   }
   const c = out.concat(words.slice(i)).join(' ')
   return (
-    /^kubectl\s+(get|describe|logs|top|events|cordon|uncordon|drain|scale|label|annotate)\b/.test(c) ||
+    /^kubectl\s+(get|describe|logs|top|events|cordon|uncordon|drain|scale|label|annotate|taint)\b/.test(c) ||
     /^kubectl\s+auth\s+can-i\b/.test(c) ||
     /^kubectl\s+rollout\s+(restart|undo)\b/.test(c) ||
     /^kubectl\s+delete\s+(pods?|po|pvc|persistentvolumeclaims?)([\s/]|$)/.test(c) ||

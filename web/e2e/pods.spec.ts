@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
 import type { PodRow } from '../src/api/types'
-import { cluster, consoleNode, healthyWorkers, inKind, kubectlYAML, podCrashing, podRows, snapshot, stableYAML } from './cluster'
+import { allNodesReady, cluster, consoleNode, healthyWorkers, inKind, kubectlYAML, podCrashing, podRows, snapshot, stableYAML } from './cluster'
 
 async function open(page: Page, hash = '#/pods') {
   await page.goto('/' + hash)
@@ -47,13 +47,40 @@ test('lists every pod with its status, node and namespace, and filters by each',
   await expect.poll(() => countShown(page)).toBe(onNode.length)
   await expect(page.getByText(`1 of ${(await page.getByTestId('node-list').locator('.rk-frow').count()).toString()} selected`)).toBeVisible()
 
-  // Statuses: the segments' counts add up to the pods in scope.
+  // Statuses: only those with pods show, and their counts add up to the pods in scope.
   const segs = page.getByRole('group', { name: 'Pods by status' })
-  const counts = await Promise.all(['running', 'pending', 'failing', 'completed'].map(async (s) => Number((await segs.locator(`[data-status="${s}"]`).textContent())?.replace(/\D/g, ''))))
+  const shown = segs.locator('[data-status]:not([data-status="all"])')
+  const counts = (await shown.allTextContents()).map((t) => Number(t.replace(/\D/g, '')))
+  expect(counts.every((n) => n > 0)).toBe(true)
   expect(counts.reduce((a, b) => a + b, 0)).toBe(onNode.length)
   await segs.locator('[data-status="running"]').click()
   await expect(page).toHaveURL(/status=running/)
-  await expect.poll(async () => (await shownKeys(page)).length).toBe(counts[0])
+  await expect.poll(async () => (await shownKeys(page)).length).toBe(Number((await segs.locator('[data-status="running"]').textContent())?.replace(/\D/g, '')))
+})
+
+test('pods on a node that stopped reporting are Unknown, in a segment of their own that stays while chosen', async ({ page, request }) => {
+  test.skip(inKind, 'kind takes minutes to mark a node Unknown; the simulator shows it at once')
+  await allNodesReady()
+  const skip = await consoleNode()
+  const node = healthyWorkers(await snapshot(request)).find((n) => n.name !== skip)!.name
+  const onNode = podRows(await snapshot(request, ['pods'])).filter((p) => p.node === node && !p.done)
+  expect(onNode.length).toBeGreaterThan(0)
+  await open(page, `#/pods?node=${node}`)
+  const segs = page.getByRole('group', { name: 'Pods by status' })
+  await expect(segs.locator('[data-status="unknown"]')).toHaveCount(0)
+  await cluster.stopKubelet(node)
+  try {
+    await expect(segs.locator('[data-status="unknown"]')).toHaveText(`Unknown ${onNode.length}`, { timeout: 10_000 })
+    await expect(segs.locator('[data-status="failing"]')).toHaveCount(0)
+    await segs.locator('[data-status="unknown"]').click()
+    await expect.poll(() => countShown(page)).toBe(onNode.length)
+  } finally {
+    await cluster.startKubelet(node)
+  }
+  // Its pods are known again; the chosen segment stays, empty, until another is chosen.
+  await expect(segs.locator('[data-status="unknown"]')).toHaveText('Unknown 0', { timeout: 10_000 })
+  await segs.locator('[data-status="all"]').click()
+  await expect(segs.locator('[data-status="unknown"]')).toHaveCount(0)
 })
 
 test('a node links to its pods, and a pod links to its node, namespace, Service and Helm release (P2-09)', async ({ page, request }) => {

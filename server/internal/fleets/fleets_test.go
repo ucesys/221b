@@ -147,3 +147,49 @@ func TestValidate(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// A list of nodes takes the nodes it names, whatever their labels, and a
+// node may be on several lists and in a fleet of labels as well.
+func TestAListTakesItsNodesByName(t *testing.T) {
+	list := []fleets.Fleet{
+		defs[1],
+		{ID: "batch", Name: "Batch", Kind: fleets.KindNodes, Nodes: []string{"worker-01", "worker-05", "gone-node"}, Labels: []string{}, Taints: []string{}},
+		{ID: "night", Name: "Night", Kind: fleets.KindNodes, Nodes: []string{"worker-01"}},
+		{ID: "empty", Name: "Empty", Kind: fleets.KindNodes},
+	}
+	if err := fleets.Validate(list); err != nil {
+		t.Fatal(err)
+	}
+	m := rowsByKey(fleets.Build(list, seed()))
+	b := m["fleet:batch"]
+	if strings.Join(b.Members, ",") != "worker-01,worker-05" || b.By != fleets.KindNodes || strings.Join(b.Listed, ",") != "worker-01,worker-05,gone-node" || b.Stats.Nodes != 2 {
+		t.Fatalf("batch %+v", b)
+	}
+	if strings.Join(m["fleet:night"].Members, ",") != "worker-01" || strings.Join(m["fleet:general"].Members, ",") != "worker-01,worker-02,worker-03,worker-04" {
+		t.Fatalf("night %v general %v", m["fleet:night"].Members, m["fleet:general"].Members)
+	}
+	if len(m["fleet:empty"].Members) != 0 || m["fleet:empty"].Listed == nil {
+		t.Fatalf("empty %+v", m["fleet:empty"])
+	}
+	// worker-05 is on a list now, so it is not in "none".
+	for _, n := range m["none"].Members {
+		if n == "worker-05" {
+			t.Fatal("worker-05 is on the Batch list")
+		}
+	}
+	for _, bad := range []fleets.Fleet{
+		{ID: "x", Name: "X", Kind: fleets.KindNodes, Labels: []string{"a=b"}},
+		{ID: "x", Name: "X", Kind: fleets.KindNodes, Nodes: []string{"Not A Node"}},
+		{ID: "x", Name: "X", Labels: []string{"a=b"}, Nodes: []string{"w1"}},
+		{ID: "x", Name: "X", Kind: "other", Labels: []string{"a=b"}},
+	} {
+		if err := fleets.Validate([]fleets.Fleet{bad}); err == nil {
+			t.Errorf("%+v passed", bad)
+		}
+	}
+	// Clean drops a list's duplicates, and a list from a fleet of labels.
+	c := fleets.Clean([]fleets.Fleet{{ID: "a", Kind: fleets.KindNodes, Nodes: []string{"w1", "w1", " w2 "}}, {ID: "b", Labels: []string{"a=b"}, Nodes: []string{"w1"}}})
+	if strings.Join(c[0].Nodes, ",") != "w1,w2" || c[1].Nodes != nil {
+		t.Fatalf("clean %+v", c)
+	}
+}

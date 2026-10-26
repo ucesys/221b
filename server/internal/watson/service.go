@@ -78,7 +78,9 @@ type Who struct {
 	// User tells people apart for the two-person rule; empty with sign-in off.
 	User string
 	// Name is how the console shows them.
-	Name  string
+	Name string
+	// Admin is a SuperAdmin, who alone approves a node shell (TB-32).
+	Admin bool
 	Audit audit.Who
 	From  string
 }
@@ -106,7 +108,26 @@ type Plan struct {
 	DryRunNote string `json:"dryRunNote,omitempty"`
 	// DryRunning is true while the dry run runs.
 	DryRunning bool `json:"dryRunning,omitempty"`
-	guards     []guard
+	// Object is the YAML of what a session creates or patches (TB-36).
+	Object string `json:"object,omitempty"`
+	guards []guard
+}
+
+// SessionCard is what a toolbox session's card carries (TB-36): the tool,
+// its request as the API received it, and once approved the session it
+// opened. Watson does not run it: it plans it, waits for the approval and
+// hands it to the toolbox.
+type SessionCard struct {
+	Tool    string `json:"tool"`
+	Summary string `json:"summary"`
+	// Request is the toolbox request, kept as the dialog sent it.
+	Request any `json:"request"`
+	// NeedsTwo needs a second person whatever the cluster (TB-32).
+	NeedsTwo bool   `json:"needsTwo,omitempty"`
+	Minutes  int    `json:"minutes,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+	// SessionID is the session the approval opened.
+	SessionID string `json:"sessionId,omitempty"`
 }
 
 // Item is one command.
@@ -137,8 +158,10 @@ type Item struct {
 	// Rule names the rule that refused it.
 	Rule string
 	// Rev counts its changes, for the streams.
-	Rev    int
-	cancel context.CancelFunc
+	Rev int
+	// Session is set on a toolbox session's card (Phase 9).
+	Session *SessionCard
+	cancel  context.CancelFunc
 }
 
 // Options configure the service.
@@ -161,6 +184,15 @@ type Options struct {
 	TwoPerson func(c Cluster) bool
 	// Run runs a command; tests replace it. Nil runs it for real.
 	Run func(ctx context.Context, c *Command, t Target, out, errOut io.Writer, extra ...string) int
+	// PlanSession works out a session card (TB-36): Kubernetes' dry run
+	// or access review, as the person who asked. StartSession opens the
+	// session once approved, as the person who asked (TB-37), and
+	// returns its ID.
+	PlanSession  func(ctx context.Context, cl Cluster, it Item) *Plan
+	StartSession func(cl Cluster, it Item, approver Who) (string, error)
+	// LapseWaiting is how long a card waiting for a second person stays
+	// valid (TB-38): 30 minutes.
+	LapseWaiting time.Duration
 }
 
 // Service keeps the commands.
@@ -195,6 +227,9 @@ func New(o Options) *Service {
 	}
 	if o.Lapse <= 0 {
 		o.Lapse = 10 * time.Minute
+	}
+	if o.LapseWaiting <= 0 {
+		o.LapseWaiting = 30 * time.Minute
 	}
 	if o.CheckEvery <= 0 {
 		o.CheckEvery = 3 * time.Second
@@ -335,7 +370,7 @@ func (s *Service) submitOne(cl Cluster, who Who, line, from, why string, run boo
 	it.Change = c.Change && !c.DryRun()
 	s.record(ActionCommand, it, who, audit.OutcomeOK, map[bool]string{true: "kind=change", false: "kind=read"}[it.Change]+" from="+quote(from))
 	if it.Change {
-		if r := s.refusalFor(cl, who, nil); r != nil {
+		if r := s.refusalFor(cl, who, nil, false); r != nil {
 			it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
 			s.add(it)
 			s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
@@ -358,9 +393,53 @@ func (s *Service) submitOne(cl Cluster, who Who, line, from, why string, run boo
 	return it
 }
 
+// SubmitAction runs a fixed change a person chose from a Tools menu:
+// cordon, uncordon, drain, delete a pod (TB-03). The menu wrote the line,
+// not a model, so the person's click is the approval and the card runs at
+// once, as them; where the two-person rule applies it waits for a second
+// person like any other change.
+func (s *Service) SubmitAction(cl Cluster, who Who, line, from string) *Item {
+	now := s.opts.Now()
+	it := &Item{ID: newID(), Cluster: cl.ID, Line: strings.TrimSpace(line), From: from, Requester: who, Created: now, Exit: -1}
+	c, err := Parse(line)
+	if err != nil || !c.Change {
+		it.Status, it.Reason, it.Rule = StatusRefused, "not a change the Tools menu makes", "invalid"
+		if err != nil {
+			it.Reason = err.Error()
+		}
+		s.add(it)
+		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(it.Rule)+" reason="+quote(it.Reason))
+		return it
+	}
+	it.cmd, it.Line, it.Change = c, c.Line, true
+	s.record(ActionCommand, it, who, audit.OutcomeOK, "kind=change from="+quote(from))
+	if r := s.refusalFor(cl, who, nil, false); r != nil {
+		it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
+		s.add(it)
+		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
+		return it
+	}
+	it.Status = StatusPending
+	it.Expires = now.Add(s.opts.Lapse)
+	if s.opts.TwoPerson(cl) {
+		it.Plan = &Plan{}
+		s.add(it)
+		go s.plan(cl, it.ID)
+		return it
+	}
+	s.add(it)
+	s.mu.Lock()
+	w := who
+	it.Approver = &w
+	s.record(ActionApprove, it, who, audit.OutcomeOK, "requested_by="+quote(who.Name)+" approval=\"the person's own, from the Tools menu\"")
+	s.enqueueLocked(cl, it, who)
+	s.mu.Unlock()
+	return it
+}
+
 // refusalFor checks the rules a change must pass (P6-05, P6-07); with an
 // approver, whether that person may approve it.
-func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who) *Refusal {
+func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who, needsTwo bool) *Refusal {
 	if cl.Locked != "" {
 		return refuse("roles", "Refused: %s", cl.Locked)
 	}
@@ -379,7 +458,125 @@ func (s *Service) refusalFor(cl Cluster, requester Who, approver *Who) *Refusal 
 			return refuse("two people", "Someone other than %s must approve this change: %s is a production cluster, where an administrator requires a second person.", requester.Name, cl.Name)
 		}
 	}
+	if needsTwo {
+		if requester.User == "" {
+			return refuse("two people", "Refused: a node shell needs a second person's approval on every cluster, and with sign-in off the console cannot tell people apart.")
+		}
+		if approver != nil && approver.User == requester.User {
+			return refuse("two people", "Someone other than %s must approve this: a node shell needs a second person on every cluster (toolbox.nodeShell.approval).", requester.Name)
+		}
+		if approver != nil && !approver.Admin {
+			return refuse("two people", "Only a SuperAdmin approves a node shell.")
+		}
+	}
 	return nil
+}
+
+// Refusal says why a change from this person could not run here at all
+// (a locked or read-only cluster), or nil.
+func (s *Service) Refusal(cl Cluster, who Who) *Refusal {
+	return s.refusalFor(cl, who, nil, false)
+}
+
+// SetSessionHooks sets the toolbox's hooks for session cards: the API
+// sets them once it is built, before any request.
+func (s *Service) SetSessionHooks(plan func(ctx context.Context, cl Cluster, it Item) *Plan, start func(cl Cluster, it Item, approver Who) (string, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.opts.PlanSession, s.opts.StartSession = plan, start
+}
+
+// needsTwo says whether an item waits for a second person.
+func (s *Service) needsTwo(cl Cluster, it *Item) bool {
+	return it.Change && (s.opts.TwoPerson(cl) || (it.Session != nil && it.Session.NeedsTwo))
+}
+
+// NeedsTwo says whether an item waits for a second person, for the API.
+func (s *Service) NeedsTwo(cl Cluster, it *Item) bool { return s.needsTwo(cl, it) }
+
+// SubmitSession adds a toolbox session's card (TB-36): it always waits for
+// an approval, the requester's own on an ordinary cluster and a second
+// person's where the two-person rule or the tool says so.
+func (s *Service) SubmitSession(cl Cluster, who Who, card SessionCard, from string) *Item {
+	now := s.opts.Now()
+	c := card
+	it := &Item{ID: newID(), Cluster: cl.ID, Line: "session: " + card.Summary, Change: true, From: from, Why: card.Reason, Requester: who, Created: now, Exit: -1, Session: &c}
+	s.record(ActionCommand, it, who, audit.OutcomeOK, "kind=session tool="+quote(card.Tool)+" from="+quote(from))
+	if r := s.refusalFor(cl, who, nil, card.NeedsTwo); r != nil {
+		it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
+		s.add(it)
+		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
+		return it
+	}
+	it.Status = StatusPending
+	it.Expires = now.Add(s.opts.Lapse)
+	if s.needsTwo(cl, it) {
+		it.Expires = now.Add(s.opts.LapseWaiting)
+	}
+	it.Plan = &Plan{DryRunning: true}
+	s.add(it)
+	go s.planSession(cl, it.ID)
+	return it
+}
+
+func (s *Service) planSession(cl Cluster, id string) {
+	s.mu.Lock()
+	it := s.items[id]
+	var cp Item
+	if it != nil {
+		cp = *it
+	}
+	s.mu.Unlock()
+	if it == nil {
+		return
+	}
+	p := &Plan{Ready: true}
+	s.mu.Lock()
+	plan := s.opts.PlanSession
+	s.mu.Unlock()
+	if plan != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if got := plan(ctx, cl, cp); got != nil {
+			p = got
+		}
+		cancel()
+	}
+	p.Ready = true
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if it.Status == StatusPending {
+		it.Plan = p
+		s.changedLocked(it)
+	}
+}
+
+// startSession opens an approved session and closes the card with its ID.
+func (s *Service) startSession(cl Cluster, it *Item, approver Who) {
+	var id string
+	var err error
+	s.mu.Lock()
+	start := s.opts.StartSession
+	cp := *it
+	s.mu.Unlock()
+	if start == nil {
+		err = errors.New("the toolbox is not part of this console")
+	} else {
+		id, err = start(cl, cp, approver)
+	}
+	s.mu.Lock()
+	it.Finished = s.opts.Now()
+	outcome := audit.OutcomeOK
+	if err != nil {
+		it.Status, it.Exit, outcome = StatusFailed, 1, audit.OutcomeFailed
+		it.Lines = append(it.Lines, Line{K: "err", T: err.Error()})
+	} else {
+		it.Status, it.Exit = StatusDone, 0
+		it.Session.SessionID = id
+		it.Lines = append(it.Lines, Line{K: "info", T: "Session " + id + " opened: it is a tab in the dock."})
+	}
+	s.changedLocked(it)
+	s.mu.Unlock()
+	s.record(ActionResult, it, approver, outcome, "session="+quote(id))
 }
 
 func (s *Service) add(it *Item) {
@@ -504,7 +701,7 @@ func (s *Service) Visible(it *Item, who Who, cl Cluster) bool {
 	if it.Approver != nil && it.Approver.Session == who.Session {
 		return true
 	}
-	return it.Change && it.Status == StatusPending && who.User != "" && s.opts.TwoPerson(cl)
+	return it.Change && it.Status == StatusPending && who.User != "" && s.needsTwo(cl, it)
 }
 
 // Approve approves a change (or runs a read): it checks the card still
@@ -537,7 +734,7 @@ func (s *Service) Approve(ctx context.Context, cl Cluster, who Who, id string) (
 		s.mu.Unlock()
 		return it, fmt.Errorf("%w: Watson is still working out what it changes", ErrState)
 	}
-	if r := s.refusalFor(cl, it.Requester, &who); r != nil {
+	if r := s.refusalFor(cl, it.Requester, &who, it.Session != nil && it.Session.NeedsTwo); r != nil {
 		s.mu.Unlock()
 		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
 		return it, r
@@ -564,6 +761,12 @@ func (s *Service) Approve(ctx context.Context, cl Cluster, who Who, id string) (
 	w := who
 	it.Approver = &w
 	s.record(ActionApprove, it, who, audit.OutcomeOK, "requested_by="+quote(it.Requester.Name))
+	if it.Session != nil {
+		it.Status, it.Started = StatusRunning, s.opts.Now()
+		s.changedLocked(it)
+		go s.startSession(cl, it, w)
+		return it, nil
+	}
 	s.enqueueLocked(cl, it, who)
 	return it, nil
 }
@@ -621,6 +824,9 @@ func (s *Service) Discard(cl Cluster, who Who, id string) (*Item, error) {
 // Edit replaces a pending command's text: the old card goes, a new one
 // takes its place.
 func (s *Service) Edit(ctx context.Context, cl Cluster, who Who, id, line string) ([]*Item, error) {
+	if cur := s.Get(id); cur != nil && cur.Session != nil {
+		return nil, fmt.Errorf("%w: a session's card is changed in its dialog, not as text", ErrState)
+	}
 	it, err := s.Discard(cl, who, id)
 	if err != nil {
 		return nil, err
@@ -704,6 +910,10 @@ func (s *Service) Snapshot(id string, from int) (Item, []Line, bool) {
 	if it.Plan != nil {
 		p := *it.Plan
 		cp.Plan = &p
+	}
+	if it.Session != nil {
+		sc := *it.Session
+		cp.Session = &sc
 	}
 	if from < 0 || from > len(it.Lines) {
 		from = len(it.Lines)

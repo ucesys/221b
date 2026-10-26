@@ -165,6 +165,8 @@ var specs = []*spec{
 		flags: flags(map[string]flag{"type": {value: true, values: []string{"merge", "strategic"}}, "patch": {short: "p", value: true}, "dry-run": fDryRun}), check: checkPatch},
 	{tool: "kubectl", verb: []string{"label"}, change: true, min: 2, max: -1, usage: "kubectl label TYPE NAME KEY=VALUE|KEY- [--overwrite]",
 		flags: flags(map[string]flag{"overwrite": {}, "selector": fSelector, "resource-version": {value: true}, "dry-run": fDryRun, "list": {}}), check: checkLabel},
+	{tool: "kubectl", verb: []string{"taint"}, change: true, min: 2, max: -1, usage: "kubectl taint nodes NODE [NODE...] KEY[=VALUE]:EFFECT|KEY[=VALUE][:EFFECT]- [--overwrite]",
+		flags: flags(map[string]flag{"overwrite": {}, "selector": fSelector, "dry-run": fDryRun}), check: checkTaint},
 	{tool: "kubectl", verb: []string{"annotate"}, change: true, min: 2, max: -1, usage: "kubectl annotate TYPE NAME KEY=VALUE|KEY- [--overwrite]",
 		flags: flags(map[string]flag{"overwrite": {}, "selector": fSelector, "resource-version": {value: true}, "dry-run": fDryRun, "list": {}}), check: checkLabel},
 
@@ -820,6 +822,41 @@ func checkLabel(c *Command) *Refusal {
 		return refuse("usage", "Say what to change: KEY=VALUE to set, KEY- to remove. Usage: %s", c.spec.usage)
 	}
 	return nil
+}
+
+// checkTaint holds kubectl taint to nodes, the only kind with taints, and
+// to at least one taint to add or remove.
+func checkTaint(c *Command) *Refusal {
+	nodes, changes := splitTaints(c.Positionals)
+	types, _ := targets(nodes)
+	for _, t := range types {
+		if t != "nodes" {
+			return refuse("usage", "Only nodes have taints. Usage: %s", c.spec.usage)
+		}
+	}
+	if len(changes) == 0 {
+		return refuse("usage", "Say which taint: KEY=VALUE:EFFECT to add, KEY:EFFECT- or KEY- to remove. Usage: %s", c.spec.usage)
+	}
+	return nil
+}
+
+// splitTaints parts kubectl taint's arguments into the nodes and the
+// taints: after the first, an argument that reads as a taint is one.
+func splitTaints(pos []string) (nodes, taints []string) {
+	for i, p := range pos {
+		if i > 0 && isTaint(p) {
+			taints = append(taints, p)
+		} else {
+			nodes = append(nodes, p)
+		}
+	}
+	return nodes, taints
+}
+
+// isTaint says whether an argument of kubectl taint is a taint rather
+// than a node: KEY[=VALUE]:EFFECT, or a removal ending in "-".
+func isTaint(p string) bool {
+	return strings.Contains(p, ":") || strings.Contains(p, "=") || (strings.HasSuffix(p, "-") && p != "-")
 }
 
 // isAccessRule says whether a TYPE names Kubernetes' own access rules.

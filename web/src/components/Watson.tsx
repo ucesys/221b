@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useToolbox } from './toolbox/context'
 import { approveWatson, clearWatson, discardWatson, editWatson, sendToWatson, stopWatson, WatsonError, watsonSupports, type Send, type WatsonItem, type WatsonLine, type WatsonState } from '../api/watson'
 import { readJSON, writeJSON } from '../lib/storage'
 import { CopyIcon, WatsonIcon } from './Icons'
@@ -186,6 +187,8 @@ function Card({ it, cluster, now, onToast }: CardProps) {
   }, [editing])
   const change = it.kind === 'change'
   const plan = it.plan
+  // A Toolbox card (TB-36): it opens a session rather than running a line.
+  const session = it.session
   const ready = !change || (!!plan?.ready && !plan.dryRunning)
   const left = it.expires ? Date.parse(it.expires) - now : 0
   const act = async (f: () => Promise<unknown>) => {
@@ -207,8 +210,8 @@ function Card({ it, cluster, now, onToast }: CardProps) {
     <div className="rk-appr" data-kind={change ? 'change' : 'read'} data-testid="watson-card" data-id={it.id} data-command={it.command}>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 8px' }}>
         <strong style={{ fontSize: 12, fontWeight: 600, color: change ? 'var(--term-warn)' : 'var(--term-fg)' }}>{change ? (it.mine ? 'Waiting for your approval' : `${it.by} asks for approval`) : 'Ready to run'}</strong>
-        <span className="rk-ttag" data-k={change ? 'change' : 'read'}>
-          {change ? 'Changes the cluster' : 'Read-only'}
+        <span className="rk-ttag" data-k={session ? 'session' : change ? 'change' : 'read'}>
+          {session ? 'Opens a session' : change ? 'Changes the cluster' : 'Read-only'}
         </span>
         <span style={{ fontSize: 11.5, color: 'var(--term-dim)' }}>From {it.from}</span>
         {change && it.expires && (
@@ -260,10 +263,17 @@ function Card({ it, cluster, now, onToast }: CardProps) {
               Working out what it changes…
             </p>
           )}
+          {plan.object && (
+            <details className="rk-tdry" data-testid="watson-object">
+              <summary>What it creates</summary>
+              <pre style={{ maxHeight: 260, overflow: 'auto', whiteSpace: 'pre' }}>{plan.object}</pre>
+            </details>
+          )}
           {(plan.ready || plan.dryRunning) && (
             <details className="rk-tdry" open={plan.dryRunExit !== 0 || (plan.dryRun?.length ?? 0) <= 6} data-testid="watson-dryrun">
               <summary>
-                Server dry run{plan.dryRunning ? ': running' : plan.dryRunExit === 0 ? ': nothing changed, no error' : `: exit code ${plan.dryRunExit}`}
+                {session && !plan.object ? 'Access review' : 'Server dry run'}
+                {plan.dryRunning ? ': running' : plan.dryRunExit === 0 ? (session && !plan.object ? ': allowed' : ': nothing changed, no error') : session && !plan.object ? ': not allowed' : `: exit code ${plan.dryRunExit}`}
                 {plan.dryRunning && <span className="rk-spin" aria-hidden="true" style={{ marginLeft: 8, verticalAlign: '-1px' }} />}
               </summary>
               <div className="rk-tdry-out">
@@ -293,14 +303,16 @@ function Card({ it, cluster, now, onToast }: CardProps) {
           <>
             {(it.canApprove || !it.waiting) && (
               <button className="rk-tbtn" data-primary="true" onClick={() => void act(() => approveWatson(cluster, it.id))} disabled={busy || !ready || !it.canApprove} data-testid="watson-approve" title={ready ? undefined : 'Watson is still working out what it changes'}>
-                {change ? 'Approve and run' : 'Run'}
+                {session ? 'Approve and open' : change ? 'Approve and run' : 'Run'}
               </button>
             )}
             {it.mine && (
               <>
-                <button className="rk-tbtn" onClick={() => setEditing(true)} disabled={busy} data-testid="watson-edit">
-                  Edit
-                </button>
+                {!session && (
+                  <button className="rk-tbtn" onClick={() => setEditing(true)} disabled={busy} data-testid="watson-edit">
+                    Edit
+                  </button>
+                )}
                 <button className="rk-tbtn" onClick={() => void act(() => discardWatson(cluster, it.id))} disabled={busy} data-testid="watson-discard">
                   Discard
                 </button>
@@ -316,6 +328,7 @@ function Card({ it, cluster, now, onToast }: CardProps) {
 /** A command that ran, runs, or will not run. */
 function Ran({ it, prompt, cluster, now, onToast, onAgain }: { it: WatsonItem; prompt: string; cluster: string; now: number; onToast: (m: string) => void; onAgain: (cmd: string) => void }) {
   const running = it.status === 'running' || it.status === 'queued'
+  const toolbox = useToolbox()
   if (it.status === 'discarded') {
     return (
       <div className="rk-tl" data-k="dim" style={{ paddingBottom: 8 }} data-testid="watson-discarded">
@@ -336,7 +349,7 @@ function Ran({ it, prompt, cluster, now, onToast, onAgain }: { it: WatsonItem; p
         <div className="rk-tstat" data-k="stop">
           <b>{it.status === 'refused' ? '✗' : '⏱'}</b>
           <span>{it.status === 'refused' ? `refused${it.rule ? ` · ${it.rule}` : ''} · nothing ran` : 'lapsed · nothing ran'}</span>
-          {it.status === 'lapsed' && it.mine && (
+          {it.status === 'lapsed' && it.mine && !it.session && (
             <button className="rk-tbtn" onClick={() => onAgain(it.command)} style={{ height: 22, padding: '0 8px', fontSize: 11.5 }} data-testid="watson-again">
               New card
             </button>
@@ -375,6 +388,11 @@ function Ran({ it, prompt, cluster, now, onToast, onAgain }: { it: WatsonItem; p
         <div className="rk-tstat" data-k={it.status === 'stopped' ? 'stop' : it.exit ? 'err' : 'ok'} data-testid="watson-status">
           <b>{it.status === 'stopped' ? '^C' : it.exit ? '✗' : '✓'}</b>
           <span>{status}</span>
+          {it.session?.sessionId && toolbox && (
+            <button className="rk-tbtn" onClick={() => toolbox.showSession(it.session!.sessionId!)} style={{ height: 22, padding: '0 8px', fontSize: 11.5 }} data-testid="watson-open-session">
+              Open session
+            </button>
+          )}
         </div>
       )}
     </div>

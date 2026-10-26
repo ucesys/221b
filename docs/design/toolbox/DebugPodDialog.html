@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Debug pod dialog</title>
+<link rel="stylesheet" href="toolbox.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+</head>
+<body>
+<div class="rk mk-app" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" data-prod="true" aria-label="Cluster: lakehouse-prod, production"><span class="rk-dot"></span>lakehouse-prod<span class="rk-tag" data-tone="warn">production</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="err">8</span></a>
+    <a class="rk-tab" href="#top" aria-current="page">Nodes <span class="rk-cnt">40</span></a>
+    <a class="rk-tab" href="#top">Fleets <span class="rk-cnt">3</span></a>
+    <a class="rk-tab" href="#top">Namespaces <span class="rk-cnt">10</span></a>
+    <a class="rk-tab" href="#top">Pods <span class="rk-cnt">907</span></a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services <span class="rk-cnt">68</span></a>
+    <a class="rk-tab" href="#top">Networks</a>
+    <a class="rk-tab" href="#top">Access</a>
+    <a class="rk-tab" href="#top">Policies</a>
+  </nav>
+  <div class="mk-top-right">
+    <a class="rk-tab" href="AdminSessions.html"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Administration</a>
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">SuperAdmin</span>
+  </div>
+</header>
+
+<div class="mk-body">
+  <main class="mk-main" style="padding-right:20px;position:relative">
+    <div class="mk-toolbar">
+      <div class="rk-seg" role="group" aria-label="Node kind"><button aria-pressed="true">All <span class="rk-cnt">40</span></button><button aria-pressed="false">Control plane <span class="rk-cnt">3</span></button><button aria-pressed="false">Workers <span class="rk-cnt">37</span></button></div>
+      <label class="rk-field" style="width:260px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m13 13-2.8-2.8"/></svg><input type="text" placeholder="Search by name, label or taint" aria-label="Search nodes"></label>
+      <button class="rk-btn">Select nodes by label and taint</button>
+      <span class="mk-grow"></span><button class="rk-btn">Columns</button><button class="rk-btn">Export</button>
+    </div>
+    <table class="mk-table" aria-label="Nodes">
+      <thead><tr><th>Node</th><th class="mk-tcol"></th><th>Role</th><th>Status</th><th>Problems</th><th>CPU requested</th><th class="rk-r">CPU free</th><th>Memory requested</th><th class="rk-r">Pods</th><th class="rk-r">Age</th></tr></thead>
+      <tbody>
+        <tr><td class="rk-mono" style="width:150px">cp-1</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for cp-1"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role" data-role="control-plane">cp</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:4%"></span></span> <span class="rk-num">2% · 0.15</span></td><td class="rk-r rk-num">7.65</td><td><span class="rk-bar"><span style="width:2%"></span></span> <span class="rk-num">&lt;1% · 134Mi</span></td><td class="rk-r rk-num">2 / 110</td><td class="rk-r rk-num">40d</td></tr>
+        <tr><td class="rk-mono">cp-2</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for cp-2"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role" data-role="control-plane">cp</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:4%"></span></span> <span class="rk-num">2% · 0.15</span></td><td class="rk-r rk-num">7.65</td><td><span class="rk-bar"><span style="width:2%"></span></span> <span class="rk-num">&lt;1% · 134Mi</span></td><td class="rk-r rk-num">2 / 110</td><td class="rk-r rk-num">41d</td></tr>
+        <tr><td class="rk-mono">cp-3</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for cp-3"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role" data-role="control-plane">cp</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:2%"></span></span> <span class="rk-num">&lt;1% · 0.05</span></td><td class="rk-r rk-num">7.75</td><td><span class="rk-bar"><span style="width:1%"></span></span> <span class="rk-num">&lt;1% · 64Mi</span></td><td class="rk-r rk-num">1 / 110</td><td class="rk-r rk-num">42d</td></tr>
+        <tr><td class="rk-mono">worker-001</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-001"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:67%"></span></span> <span class="rk-num">67% · 10.6</span></td><td class="rk-r rk-num">5.25</td><td><span class="rk-bar"><span style="width:33%"></span></span> <span class="rk-num">33% · 20.3Gi</span></td><td class="rk-r rk-num">30 / 110</td><td class="rk-r rk-num">43d</td></tr>
+        <tr><td class="rk-mono">worker-002</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-002"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:24%"></span></span> <span class="rk-num">24% · 7.5</span></td><td class="rk-r rk-num">24.3</td><td><span class="rk-bar"><span style="width:6%"></span></span> <span class="rk-num">6% · 14.9Gi</span></td><td class="rk-r rk-num">21 / 110</td><td class="rk-r rk-num">44d</td></tr>
+        <tr data-sel="true"><td class="rk-mono">worker-003</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-003" aria-expanded="true"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td><span class="rk-t" data-tone="warn">○ disk 84%</span></td><td><span class="rk-bar"><span style="width:60%"></span></span> <span class="rk-num">60% · 9.5</span></td><td class="rk-r rk-num">6.3</td><td><span class="rk-bar"><span style="width:34%"></span></span> <span class="rk-num">34% · 21Gi</span></td><td class="rk-r rk-num">26 / 110</td><td class="rk-r rk-num">45d</td></tr>
+        <tr><td class="rk-mono">worker-004</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-004"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:34%"></span></span> <span class="rk-num">34% · 5.4</span></td><td class="rk-r rk-num">10.4</td><td><span class="rk-bar"><span style="width:24%"></span></span> <span class="rk-num">24% · 14.8Gi</span></td><td class="rk-r rk-num">17 / 110</td><td class="rk-r rk-num">46d</td></tr>
+        <tr><td class="rk-mono">worker-005</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-005"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="warn">○ Cordoned</span></td><td><span class="rk-t" data-tone="warn">○ 1 warning</span></td><td><span class="rk-bar"><span style="width:37%"></span></span> <span class="rk-num">37% · 5.9</span></td><td class="rk-r rk-num">9.9</td><td><span class="rk-bar"><span style="width:26%"></span></span> <span class="rk-num">26% · 15.7Gi</span></td><td class="rk-r rk-num">22 / 110</td><td class="rk-r rk-num">47d</td></tr>
+        <tr><td class="rk-mono">worker-006</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-006"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:47%"></span></span> <span class="rk-num">47% · 7.4</span></td><td class="rk-r rk-num">8.4</td><td><span class="rk-bar"><span style="width:31%"></span></span> <span class="rk-num">31% · 18.8Gi</span></td><td class="rk-r rk-num">25 / 110</td><td class="rk-r rk-num">48d</td></tr>
+        <tr><td class="rk-mono">worker-007</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-007"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:24%"></span></span> <span class="rk-num">24% · 7.6</span></td><td class="rk-r rk-num">24.1</td><td><span class="rk-bar"><span style="width:6%"></span></span> <span class="rk-num">6% · 14.6Gi</span></td><td class="rk-r rk-num">23 / 110</td><td class="rk-r rk-num">49d</td></tr>
+        <tr><td class="rk-mono">worker-008</td><td class="mk-tcol"><button class="mk-tools" aria-label="Tools for worker-008"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z"/></svg></button></td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:51%"></span></span> <span class="rk-num">51% · 8.1</span></td><td class="rk-r rk-num">7.7</td><td><span class="rk-bar"><span style="width:29%"></span></span> <span class="rk-num">29% · 17.6Gi</span></td><td class="rk-r rk-num">27 / 110</td><td class="rk-r rk-num">49d</td></tr>
+      </tbody>
+    </table>
+  </main>
+
+  <div class="mk-backdrop" aria-hidden="true"></div>
+
+  <div class="mk-dialog" role="dialog" aria-labelledby="dlg-title" style="width:800px">
+    <div class="mk-dlg-head">
+      <span class="mk-dlg-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M8 1.8 14 5v6L8 14.2 2 11V5l6-3.2ZM2 5l6 3.2L14 5M8 8.2v6"/></svg></span>
+      <div>
+        <h2 id="dlg-title">Debug pod on node <span class="rk-mono">worker-003</span></h2>
+        <div class="mk-kicker"><span class="rk-mono">lakehouse-prod</span> · <span class="rk-tag" data-tone="warn">production</span> · a throwaway pod that sees the cluster as a <b>peer</b> of your workloads: DNS, Services, NetworkPolicies and identity as another pod would</div>
+      </div>
+      <button class="rk-icon-btn" aria-label="Close"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+    </div>
+    <div class="mk-dlg-body" style="display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px 20px">
+      <div style="display:flex;flex-direction:column;gap:12px;min-width:0">
+        <div class="mk-row">
+          <label class="mk-lbl"><span>Namespace</span><span class="rk-field" data-mono="true" style="width:160px"><select aria-label="Namespace"><option>batch</option></select><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></span></label>
+          <label class="mk-lbl"><span>ServiceAccount</span><span class="rk-field" data-mono="true" style="width:150px"><select aria-label="ServiceAccount"><option>default</option></select><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></span></label>
+          <div class="mk-lbl"><span>For how long</span><div class="rk-seg" role="group" aria-label="Duration"><button aria-pressed="false">15 min</button><button aria-pressed="true">30 min</button><button aria-pressed="false">60 min</button></div></div>
+        </div>
+        <div class="mk-lbl"><span>Profile</span>
+          <div class="rk-seg" role="group" aria-label="Profile"><button aria-pressed="true">Network</button><button aria-pressed="false">General</button><button aria-pressed="false">Database</button></div>
+          <span class="mk-hint"><span class="rk-mono">nicolaka/netshoot:v0.14</span> · dig, curl, nc, tcpdump, iperf · adds <span class="rk-mono">NET_RAW</span> · from the chart's allowlist</span>
+        </div>
+        <div class="mk-lbl"><span>Labels</span>
+          <label class="mk-radio"><input type="radio" name="labels"><span>None · the namespace's default policies apply</span></label>
+          <label class="mk-radio"><input type="radio" name="labels" checked><span>Same as pod</span><span class="rk-field" data-mono="true" style="width:190px;height:26px"><select aria-label="Pod"><option>report-29pzq</option></select></span><span class="rk-dim">so its policies apply</span></label>
+          <label class="mk-radio"><input type="radio" name="labels"><span>Custom</span><span class="rk-field" data-mono="true" style="width:230px;height:26px"><input type="text" placeholder="app=report,tier=batch" aria-label="Custom labels"></span></label>
+        </div>
+        <label class="mk-lbl"><span>Reason <span class="rk-dim">· shown to the approver, kept in the audit log</span></span><textarea class="rk-area" aria-label="Reason" rows="2">report jobs Pending 19d; check whether batch can reach the artifact store on 9000 from this node.</textarea></label>
+      </div>
+      <section class="rk-card mk-rc" aria-labelledby="dp-what" style="background:var(--surface2);align-self:start">
+        <h3 id="dp-what" class="rk-h" style="font-size:11px">What will be created</h3>
+        <dl class="rk-kv" style="font-size:12px;grid-template-columns:minmax(64px,max-content) minmax(0,1fr);gap:6px 12px">
+          <dt>Object</dt><dd>Job <span class="rk-mono">221b-dbg-net-x8k2</span> in <span class="rk-mono">batch</span>, one pod, pinned to <span class="rk-mono">worker-003</span></dd>
+          <dt>Lifetime</dt><dd>deadline 30 min · deleted 10 min after it ends, or when you end the session</dd>
+          <dt>Resources</dt><dd>50m CPU, 64Mi requested · 500m, 256Mi limits · counts against the quota of <span class="rk-mono">batch</span> (12% used)</dd>
+          <dt>Security</dt><dd>non-root, all capabilities dropped, <span class="rk-mono">NET_RAW</span> added, seccomp RuntimeDefault · <span class="rk-mono">batch</span> enforces <b>baseline</b>: allowed</dd>
+          <dt>Labels</dt><dd><span class="rk-mono">app=report, tier=batch</span> + <span class="rk-mono">221b.io/session</span> · never Ready, so no Service routes to it</dd>
+          <dt>Then</dt><dd>a shell opens in the dock</dd>
+        </dl>
+      </section>
+    </div>
+    <div class="mk-dlg-foot">
+      <span class="mk-hint">An ordinary pod create: Watson shows the server dry run on the card, and a second SuperAdmin approves.</span>
+      <button class="rk-btn">Cancel</button>
+      <a class="rk-btn" data-primary="true" href="ApprovalRequester.html">Request debug pod</a>
+    </div>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

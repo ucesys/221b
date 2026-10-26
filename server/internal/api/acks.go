@@ -59,7 +59,8 @@ func (s *Server) postAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.opts.Now().UTC()
-	row, exists := views.BuildAlert(cl, in.Key, now)
+	grace := s.opts.Settings.Current().PendingGrace()
+	row, exists := views.BuildAlert(cl, in.Key, now, grace)
 	if in.Acknowledge && (!exists || row.Severity == views.SevRecovered) {
 		jsonError(w, http.StatusConflict, "this alert has cleared: there is nothing to acknowledge")
 		return
@@ -77,7 +78,7 @@ func (s *Server) postAck(w http.ResponseWriter, r *http.Request) {
 	// Acknowledgements of alerts that changed or cleared go as this one is
 	// saved, so the list keeps only what still holds.
 	current := func(key string) (string, bool) {
-		a, ok := views.BuildAlert(cl, key, now)
+		a, ok := views.BuildAlert(cl, key, now, grace)
 		if !ok || a.Severity == views.SevRecovered {
 			return "", false
 		}

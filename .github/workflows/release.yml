@@ -1,7 +1,8 @@
 # A version tag (v0.7.0) makes a release (P7-08): the tag must match the
 # chart's version and have a section in CHANGELOG.md; the chart is
 # packaged and pushed to oci://ghcr.io/ucesys/charts, and a GitHub release
-# is made with that section as its notes and the chart attached. The image
+# is made with that section as its notes, the chart and the 221b command
+# (TB-20, for macOS, Linux and Windows) attached. The image
 # for the tag (ghcr.io/ucesys/221b:0.7.0) is built, tested and published by
 # CI's publish job for the same tag. See docs/releasing.md.
 name: Release
@@ -23,6 +24,7 @@ defaults:
 
 env:
   HELM_VERSION: 'v4.3.0'
+  GO_VERSION: '1.26.9'
   CHARTS: oci://ghcr.io/ucesys/charts
 
 jobs:
@@ -40,6 +42,10 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
         with:
           version: ${{ env.HELM_VERSION }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: server/go.sum
       - name: The tag, the chart and the changelog agree
         id: version
         env:
@@ -75,6 +81,12 @@ jobs:
           helm push "bin/221b-$VERSION.tgz" "$CHARTS"
           helm registry logout ghcr.io
           echo "::notice title=Chart::Pushed $CHARTS/221b:$VERSION"
+      - name: Build the 221b command
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          make cli-release VERSION="$TAG"
+          (cd bin/cli && sha256sum 221b-* > SHA256SUMS)
       - name: GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -90,6 +102,8 @@ jobs:
             echo "helm upgrade --install k8s-console $CHARTS/221b --version $VERSION -n 221b --create-namespace"
             echo '```'
             echo
+            echo "The \`221b\` command for port forwards (macOS, Linux, Windows) is attached: rename it to \`221b\` and put it on your PATH."
+            echo
             echo "The image is \`ghcr.io/ucesys/221b:$VERSION\`. Upgrading from an earlier release: [docs/upgrading.md](https://github.com/${{ github.repository }}/blob/$TAG/docs/upgrading.md)."
           } > "$RUNNER_TEMP/release.md"
-          gh release create "$TAG" "bin/221b-$VERSION.tgz" --repo "${{ github.repository }}" --title "221B $VERSION" --notes-file "$RUNNER_TEMP/release.md" --verify-tag
+          gh release create "$TAG" "bin/221b-$VERSION.tgz" bin/cli/* --repo "${{ github.repository }}" --title "221B $VERSION" --notes-file "$RUNNER_TEMP/release.md" --verify-tag

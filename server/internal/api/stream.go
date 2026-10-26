@@ -134,5 +134,8 @@ func (s *Server) assistantsEvents(w http.ResponseWriter, r *http.Request) {
 			parts["watson-"] = s.watsonPart(r, c)
 		}
 	}
+	if s.opts.Sessions != nil && s.opts.Watson != nil {
+		parts["sessions-"] = s.sessionsPart(r)
+	}
 	s.serveStream(w, r, parts)
 }

@@ -104,6 +104,8 @@ export interface PodRow {
   phase: string
   ready: number
   total: number
+  /** The node stopped reporting: ready is its last word, shown as ?. */
+  readyUnknown?: boolean
   restarts: number
   lastRestart?: string
   lastTermination?: string
@@ -465,6 +467,10 @@ export interface Settings {
   refreshSeconds: number
   /** How every console shows dates and times; absent is the default. */
   timeFormat?: TimeFormat
+  /** How long a pod may wait before it is an alert; absent is 120. */
+  pendingGraceSeconds?: number
+  /** Whether every tab but Alerts shows the alerts in banners at the top; absent is true. */
+  alertBanners?: boolean
   /** Each cluster's fleets (P4-01), by connection id. */
   fleets?: Record<string, Fleet[]>
   /** Where the server keeps them: "configmap" survives restarts, "memory" does not. */
@@ -607,6 +613,9 @@ export interface Fleet {
   labels: string[]
   /** "key[=value]:Effect". */
   taints: string[]
+  /** "nodes" for a list of nodes by name, kept in the console, which has no labels or taints. */
+  kind?: 'nodes'
+  nodes?: string[]
 }
 
 export interface FleetStats {
@@ -631,6 +640,9 @@ export interface FleetRow {
   desc?: string
   labels: string[]
   taints: string[]
+  /** "nodes" for a list of nodes; listed is the list, nodes gone from the cluster included. */
+  by?: 'nodes'
+  listed?: string[]
   order: number
   members: string[]
   stats: FleetStats

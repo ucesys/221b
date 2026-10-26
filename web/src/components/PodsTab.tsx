@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useView } from '../api/live'
 import type { NodeRow, PodRow, PodView } from '../api/types'
-import { POD_COLUMNS, podLabel, podStatusGroup, podTerms, type PodStatusFilter } from '../columns/pods'
+import { POD_COLUMNS, POD_STATUSES, podLabel, podStatusesShown, podStatusGroup, podStatusZero, podTerms, type PodStatusFilter } from '../columns/pods'
 import { nWord } from '../lib/format'
 import { facetMatch, facetsActive, type FacetSelection, type RoleFilter } from '../lib/nodes'
 import { listParam, navigate, withParams } from '../lib/router'
@@ -31,13 +31,6 @@ function writeSelection(next: Set<string>, all: string[]): string[] | undefined 
 }
 
 const ROLES: RoleFilter[] = ['all', 'control-plane', 'worker']
-const STATUSES: [PodStatusFilter, string][] = [
-  ['all', 'All'],
-  ['running', 'Running'],
-  ['pending', 'Pending'],
-  ['failing', 'Failing'],
-  ['completed', 'Completed'],
-]
 
 function nodeKey(p: PodRow): string {
   return p.node || UNSCHEDULED
@@ -63,7 +56,7 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
   const nodes = nodesView.rows
   const p = route.params
   const role: RoleFilter = ROLES.includes(p.get('role') as RoleFilter) ? (p.get('role') as RoleFilter) : 'all'
-  const status: PodStatusFilter = STATUSES.some(([id]) => id === p.get('status')) ? (p.get('status') as PodStatusFilter) : 'all'
+  const status: PodStatusFilter = POD_STATUSES.some(([id]) => id === p.get('status')) ? (p.get('status') as PodStatusFilter) : 'all'
   const query = p.get('q') ?? ''
   const facets = useMemo<FacetSelection>(() => ({ labels: listParam(p, 'label'), taints: listParam(p, 'taint') }), [p])
   const selected = p.get('open')
@@ -118,7 +111,7 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
 
   const scoped = useMemo(() => rows.filter((r) => inScope.has(nodeKey(r)) && nsIn(r.namespace)), [rows, inScope, nsSel]) // eslint-disable-line react-hooks/exhaustive-deps
   const statusCounts = useMemo(() => {
-    const c: Record<PodStatusFilter, number> = { all: scoped.length, running: 0, pending: 0, failing: 0, completed: 0 }
+    const c = podStatusZero(scoped.length)
     for (const r of scoped) c[podStatusGroup(r)]++
     return c
   }, [scoped])
@@ -288,9 +281,6 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
             )
           })}
         </div>
-        <p style={{ margin: 'auto 0 0', padding: '10px 16px 14px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg3)', borderTop: '1px solid var(--line)' }}>
-          Pods are listed for the nodes shown above that are ticked, in the ticked namespaces. Counts already apply the other filter.
-        </p>
       </aside>
       <main className="rk-pane" aria-label="Pods" style={{ flex: '999 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <section aria-label="Pod list" style={{ padding: '18px 24px 28px', display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -303,7 +293,7 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
             </span>
             {!waiting && <span style={{ fontSize: 12, color: 'var(--fg3)' }}>· {scopeText}</span>}
             <div className="rk-seg" role="group" aria-label="Pods by status" style={{ marginLeft: 'auto' }}>
-              {STATUSES.map(([id, label]) => (
+              {podStatusesShown(statusCounts, status).map(([id, label]) => (
                 <button key={id} aria-pressed={status === id} onClick={() => set({ status: id === 'all' ? undefined : id })} data-status={id}>
                   {label} <span style={{ color: 'var(--fg3)', fontWeight: 400 }}>{statusCounts[id]}</span>
                 </button>

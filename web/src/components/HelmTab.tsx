@@ -3,7 +3,7 @@ import { useDetails } from '../api/details'
 import { useView } from '../api/live'
 import type { PodView, ReleaseDetails, ReleaseResource, ReleaseRow, Revision } from '../api/types'
 import { RESOURCE_COLUMNS, REVISION_COLUMNS, resourceLabel, resourceTerms, revisionTerms } from '../columns/objects'
-import { POD_COLUMNS, podLabel, podStatusGroup, podTerms, type PodStatusFilter } from '../columns/pods'
+import { POD_COLUMNS, podLabel, podStatusesShown, podStatusGroup, podStatusZero, podTerms, type PodStatusFilter } from '../columns/pods'
 import { fCores, fMem, fmtAge, fmtTs, nWord, pct, pctTxt } from '../lib/format'
 import { apiPath, href, navigate, withParams } from '../lib/router'
 import { isWatchedKind, pluralKind } from '../lib/kinds'
@@ -122,7 +122,7 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
   const claims = d ? d.resources.filter((r) => r.kind === 'PersistentVolumeClaim') : []
   const [podStatus, setPodStatus] = useState<PodStatusFilter>('all')
   const podCounts = useMemo(() => {
-    const c: Record<PodStatusFilter, number> = { all: pods.length, running: 0, pending: 0, failing: 0, completed: 0 }
+    const c = podStatusZero(pods.length)
     for (const r of pods) c[podStatusGroup(r)]++
     return c
   }, [pods])
@@ -278,21 +278,11 @@ export function HelmTab({ cluster, now, onToast, route }: TabProps) {
                     {nWord(pods.length, 'pod', 'pods')}
                   </span>
                   <div className="rk-seg" role="group" aria-label="Pods by status" style={{ marginLeft: 'auto' }}>
-                    {(
-                      [
-                        ['all', 'All'],
-                        ['running', 'Running'],
-                        ['pending', 'Pending'],
-                        ['failing', 'Failing'],
-                        ['completed', 'Completed'],
-                      ] as [PodStatusFilter, string][]
-                    )
-                      .filter(([id]) => id === 'all' || podCounts[id] > 0)
-                      .map(([id, label]) => (
-                        <button key={id} aria-pressed={podStatus === id} onClick={() => setPodStatus(id)}>
-                          {label} <span style={{ color: 'var(--fg3)', fontWeight: 400 }}>{podCounts[id]}</span>
-                        </button>
-                      ))}
+                    {podStatusesShown(podCounts, podStatus).map(([id, label]) => (
+                      <button key={id} aria-pressed={podStatus === id} onClick={() => setPodStatus(id)}>
+                        {label} <span style={{ color: 'var(--fg3)', fontWeight: 400 }}>{podCounts[id]}</span>
+                      </button>
+                    ))}
                   </div>
                   <SearchBox rows={podsShown} terms={podTerms} value={podTable.query} onChange={podTable.setQuery} placeholder="Search pods" label="Search the release's pods" width={220} />
                   <div className="rk-tools" style={{ gap: 8 }}>

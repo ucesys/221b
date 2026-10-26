@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Administration · Toolbox</title>
+<link rel="stylesheet" href="toolbox.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+</head>
+<body>
+<div class="rk mk-app" data-tall="true" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" data-prod="true" aria-label="Cluster: lakehouse-prod, production"><span class="rk-dot"></span>lakehouse-prod<span class="rk-tag" data-tone="warn">production</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="err">8</span></a>
+    <a class="rk-tab" href="#top">Nodes <span class="rk-cnt">40</span></a>
+    <a class="rk-tab" href="#top">Fleets <span class="rk-cnt">3</span></a>
+    <a class="rk-tab" href="#top">Namespaces <span class="rk-cnt">10</span></a>
+    <a class="rk-tab" href="#top">Pods <span class="rk-cnt">907</span></a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services <span class="rk-cnt">68</span></a>
+    <a class="rk-tab" href="#top">Networks</a>
+    <a class="rk-tab" href="#top">Access</a>
+    <a class="rk-tab" href="#top">Policies</a>
+  </nav>
+  <div class="mk-top-right">
+    <a class="rk-tab" href="AdminSessions.html" aria-current="page"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Administration</a>
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">SuperAdmin</span>
+  </div>
+</header>
+
+<div class="mk-admin">
+  <div class="mk-admin-head">
+    <h1>Administration</h1>
+    <nav class="mk-nav" aria-label="Administration pages">
+      <a class="rk-tab" href="#top">Roles</a>
+      <a class="rk-tab" href="#top">Permissions</a>
+      <a class="rk-tab" href="#top">Users</a>
+      <a class="rk-tab" href="AdminSessions.html">Sessions <span class="rk-cnt" data-tone="warn">1 waiting</span></a>
+      <a class="rk-tab" href="AdminToolbox.html" aria-current="page">Toolbox</a>
+      <a class="rk-tab" href="#top">Settings</a>
+    </nav>
+  </div>
+
+  <div class="mk-title-row"><h2>Toolbox</h2><span class="rk-chip">lakehouse-prod</span><span>What the chart allows on this cluster: tools, images, limits and approvals. Generated from <span class="rk-mono">values.yaml</span> and the connection's settings. Read-only; nobody widens it from the console.</span></div>
+
+  <div class="rk-card mk-status">
+    <span class="rk-tag" data-tone="ok">✓ Matches values.yaml of release 221b 0.8.0</span><span>Checked 10:21, every 5 minutes</span>
+    <span class="mk-vsep"></span><span class="rk-tag">Approval: second SuperAdmin</span><span class="rk-tag">Idle limit 10 min</span><span class="rk-tag">Hard limit 60 min</span><span class="rk-tag">Transcripts: recorded, 400 days</span><span class="rk-tag" data-tone="warn">Connection marked production</span>
+  </div>
+
+  <div class="mk-grid3" style="grid-template-columns:repeat(5,minmax(0,1fr))">
+    <section class="rk-card mk-rc">
+      <h3>Shell <span class="rk-tag" data-tone="ok" style="margin-left:auto">On</span></h3>
+      <p><b>Who</b> SuperAdmin (full definition). Admin: off (<span class="rk-mono">roles.admin.exec: false</span>).</p>
+      <p><b>Also</b> one command without a terminal; download and upload through the session: on.</p>
+      <p><b>Needs</b> <span class="rk-mono">create pods/exec</span> from Kubernetes, as the person.</p>
+    </section>
+    <section class="rk-card mk-rc" style="background:var(--surface2)">
+      <h3 style="color:var(--fg3)">Port forward <span class="rk-tag" style="margin-left:auto">Off</span></h3>
+      <p><span class="rk-mono">toolbox.portForward.enabled: false</span> for this connection. On <span class="rk-mono">lakehouse-dev</span> it is on, for SuperAdmin and Admin, with the <span class="rk-mono">221b</span> CLI 0.8 or newer.</p>
+      <p><b>Records</b> connections and bytes, never the payload.</p>
+    </section>
+    <section class="rk-card mk-rc">
+      <h3>Debug container <span class="rk-tag" data-tone="ok" style="margin-left:auto">On</span></h3>
+      <p><b>Who</b> SuperAdmin. <b>Images</b> 3 allowed, digests pinned. <b>Volumes</b> may be mounted.</p>
+      <p><b>Capabilities</b> bounded by each namespace's Pod Security level; the console never asks for more.</p>
+      <p><b>Needs</b> <span class="rk-mono">patch pods/ephemeralcontainers</span>.</p>
+    </section>
+    <section class="rk-card mk-rc">
+      <h3>Debug pod <span class="rk-tag" data-tone="ok" style="margin-left:auto">On</span></h3>
+      <p><b>Who</b> SuperAdmin; Admin in bound namespaces. <b>Profiles</b> 3. Runs as a Job, <span class="rk-mono">ttlSecondsAfterFinished: 600</span>.</p>
+      <p>Quota, admission and Pod Security of the namespace apply unchanged; the dry run runs first.</p>
+      <p><b>Needs</b> <span class="rk-mono">create jobs</span>.</p>
+    </section>
+    <section class="rk-card mk-rc">
+      <h3>Node shell <span class="rk-tag" data-tone="ok" style="margin-left:auto">On</span></h3>
+      <p><b>Who</b> SuperAdmin only, always approved by a second one, always recorded.</p>
+      <p><b>Where</b> namespace <span class="rk-mono">221b-toolbox</span>, Pod Security <b>privileged</b>, created by the chart. <b>Profiles</b> general, netadmin, sysadmin. <b>Image</b> <span class="rk-mono">ubuntu:24.04</span>.</p>
+    </section>
+  </div>
+
+  <div class="mk-grid2" style="grid-template-columns:minmax(0,13fr) minmax(0,9fr);align-items:start">
+    <div class="rk-card" style="overflow:hidden">
+      <div class="mk-title-row" style="padding:10px 14px;border-bottom:1px solid var(--line)"><h2 style="font-size:13px">Allowed images</h2><span>Only these can be attached or started. A digest is pinned at install; a new tag is a chart upgrade.</span></div>
+      <table class="mk-table" data-wrap="true" aria-label="Allowed images" style="border:0;border-radius:0;table-layout:fixed">
+        <colgroup><col style="width:82px"><col style="width:250px"><col><col style="width:170px"><col style="width:150px"></colgroup>
+        <thead><tr><th>Profile</th><th>Image</th><th>Tools</th><th>Adds</th><th>Used by</th></tr></thead>
+        <tbody>
+          <tr><td>general</td><td class="rk-mono">busybox:1.37 <span class="mk-sub">@sha256:3fbc63…b7e1</span></td><td>sh, ls, cat, tar, wget, nc</td><td class="rk-dim">nothing</td><td>debug container · debug pod</td></tr>
+          <tr><td>network</td><td class="rk-mono">nicolaka/netshoot:v0.14 <span class="mk-sub">@sha256:91a0c4…5d2f</span></td><td>dig, curl, tcpdump, iperf, nmap, ss</td><td class="rk-mono">NET_RAW, NET_ADMIN <span class="mk-sub" style="font-family:var(--font)">where the namespace allows it</span></td><td>debug container · debug pod</td></tr>
+          <tr><td>toolbox</td><td class="rk-mono">ghcr.io/ucesys/221b-toolbox:0.1 <span class="mk-sub">@sha256:0c77ae…e93b</span></td><td>221B's file agent, busybox, jq, strace</td><td class="rk-mono">SYS_PTRACE <span class="mk-sub" style="font-family:var(--font)">where the namespace allows it</span></td><td>debug container · file browser</td></tr>
+          <tr><td>database</td><td class="rk-mono">ghcr.io/ucesys/221b-dbclients:0.1 <span class="mk-sub">@sha256:5be12d…a04c</span></td><td>psql, mysql, redis-cli, mongosh</td><td class="rk-dim">nothing</td><td>debug pod</td></tr>
+          <tr><td>node</td><td class="rk-mono">ubuntu:24.04 <span class="mk-sub">@sha256:e3f92a…77c0</span></td><td>the node's own tools through /host</td><td class="rk-mono">host namespaces<span class="mk-sub" style="font-family:var(--font)">privileged with sysadmin</span></td><td>node shell</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="rk-card" style="overflow:hidden">
+      <div class="mk-title-row" style="padding:10px 14px;border-bottom:1px solid var(--line)"><h2 style="font-size:13px">As written in values.yaml</h2><span>the source of this page</span></div>
+<pre class="rk-code" style="border-radius:0;font-size:11.5px;line-height:1.55;padding:12px 14px">toolbox:
+  enabled: true
+  idleTimeout: 10m
+  maxDuration: 60m
+  approval: second-admin      # on connections marked production
+  transcripts: record         # off | record
+  retention: 400d
+  shell:
+    enabled: true
+    roles: [SuperAdmin]       # Admin needs roles.admin.exec
+    oneCommand: true
+    fileTransfer: true
+  portForward:
+    enabled: false            # lakehouse-dev: true
+    roles: [SuperAdmin, Admin]
+    cliMinVersion: 0.8.0
+  debugContainer:
+    enabled: true
+    mountVolumes: true
+    images: [general, network, toolbox]
+  debugPod:
+    enabled: true
+    ttlAfterFinished: 10m
+    profiles: [general, network, database]
+  nodeShell:
+    enabled: true
+    namespace: 221b-toolbox   # created by the chart, PSS privileged
+    image: node
+    profiles: [general, netadmin, sysadmin]
+  images:
+    general:  busybox:1.37@sha256:3fbc…
+    network:  nicolaka/netshoot:v0.14@sha256:91a0…
+              # caps: [NET_RAW, NET_ADMIN]
+    toolbox:  ghcr.io/ucesys/221b-toolbox:0.1@sha256:0c77…
+              # caps: [SYS_PTRACE]
+    database: ghcr.io/ucesys/221b-dbclients:0.1@sha256:5be1…
+    node:     ubuntu:24.04@sha256:e3f9…</pre>
+    </div>
+  </div>
+
+  <div class="mk-legend"><span>Everything on this page is a <b>ceiling</b>. A person also needs the Kubernetes right (<span class="rk-mono">pods/exec</span>, <span class="rk-mono">pods/ephemeralcontainers</span>, <span class="rk-mono">jobs</span>), decided by impersonation, and on a production connection a second SuperAdmin. The console sends only the fixed commands shown in Sessions, with their arguments escaped; it never widens its own limits, whatever an assistant suggests.</span></div>
+</div>
+
+</div>
+</body>
+</html>

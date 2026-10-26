@@ -341,3 +341,24 @@ export function AssistantsIcon() {
     </svg>
   )
 }
+
+// The Toolbox's icons (Phase 9), after docs/design/toolbox.
+function Ico16({ d, size = 15, sw = 1.6, round = true }: { d: string; size?: number; sw?: number; round?: boolean }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={sw} strokeLinecap={round ? 'round' : undefined} strokeLinejoin="round" aria-hidden="true" style={{ flex: 'none' }}>
+      <path d={d} />
+    </svg>
+  )
+}
+
+export const WrenchIcon = () => <Ico16 sw={1.5} round={false} d="M13.6 4.1a3.3 3.3 0 0 1-4.3 4L4 13.4a1.3 1.3 0 0 1-1.8-1.8l5.3-5.3a3.3 3.3 0 0 1 4-4.3L9.4 4.1l.4 1.7 1.7.4 2.1-2.1Z" />
+export const TerminalIcon = ({ size = 15 }: { size?: number }) => <Ico16 size={size} d="M3 4.5 6.5 8 3 11.5M8 11.5h5" />
+export const BoltIcon = () => <Ico16 d="M9 1.5 3 9h4.5L7 14.5 13 7H8.5L9 1.5Z" />
+export const ForwardIcon = () => <Ico16 d="M2 5h9M8.5 2.5 11 5 8.5 7.5M14 11H5M7.5 8.5 5 11l2.5 2.5" />
+export const BoxIcon = () => <Ico16 sw={1.5} round={false} d="M8 1.8 14 5v6L8 14.2 2 11V5l6-3.2ZM2 5l6 3.2L14 5M8 8.2v6" />
+export const CordonIcon = () => <Ico16 d="M4 12 12 4M14 8A6 6 0 1 1 2 8a6 6 0 0 1 12 0Z" />
+export const DrainIcon = () => <Ico16 d="M8 2.5v8M4.8 7.3 8 10.5l3.2-3.2M3 13h10" />
+export const TrashIcon = () => <Ico16 d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5" />
+export const ShieldSmallIcon = () => <Ico16 round={false} d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z" />
+export const ChevronRightIcon = () => <Ico16 size={12} sw={1.8} d="m6 4 4 4-4 4" />
+export const ListIcon = () => <Ico16 size={14} d="M5 4h9M5 8h9M5 12h9M2 4h.01M2 8h.01M2 12h.01" />

@@ -109,13 +109,13 @@ afterEach(() => {
 
 describe('who is offered which page (RB-41, RB-31)', () => {
   it('offers Roles and Permissions to everyone, Users and Settings to a SuperAdmin', () => {
-    expect(pagesFor(me())).toEqual(['roles', 'permissions', 'users', 'settings'])
+    expect(pagesFor(me())).toEqual(['roles', 'permissions', 'users', 'sessions', 'toolbox', 'settings'])
     expect(pagesFor(viewer)).toEqual(['roles', 'permissions'])
     expect(pagesFor(null)).toEqual([])
   })
 
   it('offers Permissions and Settings with sign-in off, where there are no users or roles to manage', () => {
-    expect(pagesFor(me({ mode: 'none' }))).toEqual(['permissions', 'settings'])
+    expect(pagesFor(me({ mode: 'none' }))).toEqual(['permissions', 'sessions', 'toolbox', 'settings'])
   })
 
   it('refuses a Viewer who opens Users, and says why', () => {

@@ -38,12 +38,34 @@ interface Options<R> {
 
 const ALL_DRIVES: ('sort' | 'search' | 'columns')[] = ['sort', 'search', 'columns']
 
+// Each table's sort and its own query, as they were last left, so a table
+// comes back the same after its tab was closed (tabs keep their state
+// while the page is open); a reload starts them afresh.
+const lastSort = new Map<string, SortState>()
+const lastQuery = new Map<string, string>()
+
 /** The state every table keeps: sort, query, hidden columns, and the rows that result. */
 export function useTable<R>({ id, columns, rows, terms, now, compact = false, defaultSort, query: outerQuery, onQuery, drives = ALL_DRIVES }: Options<R>): TableState<R> {
   const key = `221b.${id}.hidden`
   const defaults = useMemo(() => defaultHidden(columns), [columns])
-  const [sort, setSort] = useState<SortState>(defaultSort)
-  const [innerQuery, setInnerQuery] = useState('')
+  const [sort, setSortNow] = useState<SortState>(() => lastSort.get(id) ?? defaultSort)
+  const [innerQuery, setInnerQueryNow] = useState(() => lastQuery.get(id) ?? '')
+  const setSort = useCallback(
+    (next: SortState | ((s: SortState) => SortState)) =>
+      setSortNow((s) => {
+        const v = typeof next === 'function' ? next(s) : next
+        lastSort.set(id, v)
+        return v
+      }),
+    [id],
+  )
+  const setInnerQuery = useCallback(
+    (q: string) => {
+      lastQuery.set(id, q)
+      setInnerQueryNow(q)
+    },
+    [id],
+  )
   const query = outerQuery ?? innerQuery
   const rawSetQuery = onQuery ?? setInnerQuery
   const setQuery = useCallback(
@@ -76,7 +98,7 @@ export function useTable<R>({ id, columns, rows, terms, now, compact = false, de
       noteUserChange()
       setSort((s) => nextSort(columns, s, col))
     },
-    [columns],
+    [columns, setSort],
   )
   const cols = useMemo(() => visibleColumns(columns, hidden, compact), [columns, hidden, compact])
   const words = useMemo(() => queryWords(query), [query])
@@ -123,7 +145,7 @@ export function useTable<R>({ id, columns, rows, terms, now, compact = false, de
       },
     }
     return registerTable(h)
-  }, [id, drivesKey])
+  }, [id, drivesKey, setSort])
 
   const exportRows = useCallback(
     (format: ExportFormat, cluster: string | undefined, what: string, onToast: (msg: string) => void) => {

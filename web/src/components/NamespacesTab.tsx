@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import { useView } from '../api/live'
 import type { NamespaceRow, ObjectRow, ReleaseRow } from '../api/types'
 import { OBJECT_COLUMNS, objectLabel, objectTerms } from '../columns/objects'
@@ -11,7 +11,6 @@ import { download, xlsxBytes } from '../lib/xlsx'
 import { ColumnsMenu } from './ColumnsMenu'
 import { DataTable } from './DataTable'
 import { ExportMenu } from './ExportMenu'
-import { Chevron, FilterIcon } from './Icons'
 import { SearchBox } from './SearchBox'
 import { SideList, type SideGroup } from './SideList'
 import { ObjectPanel } from './ObjectPanel'
@@ -21,21 +20,31 @@ import type { TabProps } from './tabs'
 import { useTable } from '../lib/useTable'
 import { usePref } from '../lib/prefs'
 
-/** Rows a kind's table shows before "Show all". */
-const FOLD = 8
-
-/** The kind the funnel lists Helm releases under. */
+/** The tab Helm releases are listed under. */
 const RELEASES = 'Helm release'
 
+/** A tab's bar: the kind's API version, the search, and the table's tools. */
+function TabBar({ apiVersion, search, children }: { apiVersion: string; search: ReactNode; children: ReactNode }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px' }}>
+      {search}
+      <span className="rk-mono" style={{ fontSize: 11, color: 'var(--fg3)' }}>
+        {apiVersion}
+      </span>
+      <div className="rk-tools" style={{ marginLeft: 'auto', gap: 8 }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
 /** The namespace's Helm releases, listed as its other kinds are; a row opens the release on the Helm tab. */
-function ReleasesCard({ rows, now, cluster, onToast }: { rows: ReleaseRow[]; now: number; cluster: string | undefined; onToast: (msg: string) => void }) {
+function ReleasesTable({ rows, now, cluster, onToast, search }: { rows: ReleaseRow[]; now: number; cluster: string | undefined; onToast: (msg: string) => void; search: ReactNode }) {
   const [sort, setSort] = useState<SortState>({ col: 'name', dir: 'asc' })
-  const [all, setAll] = useState(false)
   const [hiddenList, setHiddenList] = usePref<string[]>('221b.ns-releases.hidden', [])
   const hidden = useMemo(() => new Set(hiddenList), [hiddenList])
   const setHidden = (h: Set<string>) => setHiddenList([...h])
   const sorted = useMemo(() => sortRows(rows, RELEASE_COLUMNS, sort, now), [rows, sort, now])
-  const shown = all || sorted.length <= FOLD ? sorted : sorted.slice(0, FOLD)
   const cols = useMemo(() => RELEASE_COLUMNS.filter((c, i) => i === 0 || !hidden.has(c.id)), [hidden])
   const exportRows = (format: ExportFormat) => {
     const file = exportFileName(cluster, 'helm-releases', format)
@@ -50,20 +59,14 @@ function ReleasesCard({ rows, now, cluster, onToast }: { rows: ReleaseRow[]; now
     }
   }
   return (
-    <section className="rk-card rk-boxed" aria-label="Helm releases" style={{ overflow: 'hidden' }} data-testid="namespace-releases">
-      <div className="rk-tbar">
-        <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>Helm releases</h3>
-        <span className="rk-count">{rows.length}</span>
-        <span className="rk-mono" style={{ fontSize: 11, color: 'var(--fg3)' }}>
-          helm.sh/release.v1
-        </span>
-        <span style={{ flex: '1 1 auto' }} />
+    <section aria-label="Helm releases" style={{ display: 'flex', flexDirection: 'column', gap: 12 }} data-testid="namespace-releases" data-kind={RELEASES}>
+      <TabBar apiVersion="helm.sh/release.v1" search={search}>
         <ColumnsMenu cols={RELEASE_COLUMNS} hidden={hidden} defaults={new Set()} onChange={setHidden} compact={false} />
         <ExportMenu onExport={exportRows} disabled={!rows.length} what="these Helm releases" />
-      </div>
+      </TabBar>
       <DataTable<ReleaseRow>
         label="Helm releases"
-        rows={shown}
+        rows={sorted}
         cols={cols}
         rowKey={(r) => r.key}
         rowLabel={(r) => `Helm release ${r.name}, ${r.status} — open it on the Helm tab`}
@@ -76,25 +79,16 @@ function ReleasesCard({ rows, now, cluster, onToast }: { rows: ReleaseRow[]; now
         now={now}
         empty="Nothing matches."
         rowAttr="release"
-        footer={
-          sorted.length > FOLD && (
-            <button className="rk-link" onClick={() => setAll(!all)} style={{ padding: '10px 16px', fontSize: 12.5 }}>
-              {all ? `Show the first ${FOLD}` : `Show all ${sorted.length}`}
-            </button>
-          )
-        }
       />
     </section>
   )
 }
 
-/** A kind's table in the namespace: the shared table, folded past FOLD rows. */
-function KindCard({ kind, apiVersion, rows, now, cluster, selected, onOpen, onToast, hidden, setHidden, defaults }: { kind: string; apiVersion: string; rows: ObjectRow[]; now: number; cluster: string | undefined; selected: string | null; onOpen: (key: string) => void; onToast: (msg: string) => void; hidden: Set<string>; setHidden: (h: Set<string>) => void; defaults: Set<string> }) {
+/** A kind's table in the namespace, the tab's whole content. */
+function KindTable({ kind, apiVersion, rows, now, cluster, selected, onOpen, onToast, hidden, setHidden, defaults, search }: { kind: string; apiVersion: string; rows: ObjectRow[]; now: number; cluster: string | undefined; selected: string | null; onOpen: (key: string) => void; onToast: (msg: string) => void; hidden: Set<string>; setHidden: (h: Set<string>) => void; defaults: Set<string>; search: ReactNode }) {
   const [sort, setSort] = useState<SortState>({ col: 'name', dir: 'asc' })
-  const [all, setAll] = useState(false)
   const plural = pluralKind(kind)
   const sorted = useMemo(() => sortRows(rows, OBJECT_COLUMNS, sort, now), [rows, sort, now])
-  const shown = all || sorted.length <= FOLD ? sorted : sorted.slice(0, FOLD)
   const cols = useMemo(() => OBJECT_COLUMNS.filter((c, i) => i === 0 || !hidden.has(c.id)), [hidden])
   const exportRows = (format: ExportFormat) => {
     const file = exportFileName(cluster, pluralKind(kind).toLowerCase(), format)
@@ -109,20 +103,14 @@ function KindCard({ kind, apiVersion, rows, now, cluster, selected, onOpen, onTo
     }
   }
   return (
-    <section className="rk-card rk-boxed" aria-label={plural} style={{ overflow: 'hidden' }} data-kind={kind}>
-      <div className="rk-tbar">
-        <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>{plural}</h3>
-        <span className="rk-count">{rows.length}</span>
-        <span className="rk-mono" style={{ fontSize: 11, color: 'var(--fg3)' }}>
-          {apiVersion}
-        </span>
-        <span style={{ flex: '1 1 auto' }} />
+    <section aria-label={plural} style={{ display: 'flex', flexDirection: 'column', gap: 12 }} data-kind={kind}>
+      <TabBar apiVersion={apiVersion} search={search}>
         <ColumnsMenu cols={OBJECT_COLUMNS} hidden={hidden} defaults={defaults} onChange={setHidden} compact={false} />
         <ExportMenu onExport={exportRows} disabled={!rows.length} what={`these ${plural}`} />
-      </div>
+      </TabBar>
       <DataTable<ObjectRow>
         label={plural}
-        rows={shown}
+        rows={sorted}
         cols={cols}
         rowKey={(r) => r.key}
         rowLabel={objectLabel}
@@ -133,13 +121,6 @@ function KindCard({ kind, apiVersion, rows, now, cluster, selected, onOpen, onTo
         now={now}
         empty="Nothing matches."
         rowAttr="object"
-        footer={
-          sorted.length > FOLD && (
-            <button className="rk-link" onClick={() => setAll(!all)} style={{ padding: '10px 16px', fontSize: 12.5 }}>
-              {all ? `Show the first ${FOLD}` : `Show all ${sorted.length}`}
-            </button>
-          )
-        }
       />
     </section>
   )
@@ -147,7 +128,9 @@ function KindCard({ kind, apiVersion, rows, now, cluster, selected, onOpen, onTo
 
 /**
  * The Namespaces tab (P2-02): every namespace on the left, what the chosen
- * one holds on the right, kind by kind, with the kinds funnel.
+ * one holds on the right, a tab per kind as the Helm tab has them (asked at
+ * the second Toolbox review, in place of a table per kind one under another).
+ * The tab is the first of the kinds parameter, which Sherlock also sets.
  */
 export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   const { rows: namespaces, loaded } = useView<NamespaceRow>('namespaces')
@@ -162,8 +145,6 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   const kindsParam = useMemo(() => listParam(p, 'kinds'), [p])
   const selected = p.get('open')
   const set = useCallback((changes: Record<string, string | string[] | undefined>) => navigate(withParams(route, changes), true), [route])
-  const [funnelOpen, setFunnelOpen] = useState(false)
-  const funnelButton = useRef<HTMLButtonElement>(null)
 
   // The kinds present, in the registry's order, with their counts.
   // Helm releases, read where Helm keeps them (P2-07), listed like the namespace's other kinds.
@@ -178,9 +159,9 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
     }
     return [...m.values()].sort((a, b) => a.order - b.order || a.kind.localeCompare(b.kind))
   }, [objects.rows])
-  const kindSel = useMemo(() => (kindsParam.length ? new Set(kindsParam) : null), [kindsParam])
   const words = useMemo(() => queryWords(query), [query])
-  const filtered = useMemo(() => objects.rows.filter((r) => (!kindSel || kindSel.has(r.kind)) && matchesQuery(objectTerms(r), words)), [objects.rows, kindSel, words])
+  const filtered = useMemo(() => objects.rows.filter((r) => matchesQuery(objectTerms(r), words)), [objects.rows, words])
+  const releasesShown = useMemo(() => nsReleases.filter((r) => !query.trim() || `${r.name} ${r.chart} ${r.status}`.toLowerCase().includes(query.trim().toLowerCase())), [nsReleases, query])
   const byKind = useMemo(() => {
     const m = new Map<string, ObjectRow[]>()
     for (const r of filtered) m.set(r.kind, [...(m.get(r.kind) ?? []), r])
@@ -188,6 +169,15 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   }, [filtered])
   // One Columns choice for every kind table, kept with the shared table state.
   const table = useTable<ObjectRow>({ id: 'namespace-objects', columns: OBJECT_COLUMNS, rows: filtered, terms: objectTerms, now, defaultSort: { col: 'name', dir: 'asc' }, drives: ['columns'] })
+  // A tab per kind, Pods first as on the Helm tab, Helm releases last; each
+  // counts what the search leaves.
+  const tabs = useMemo(() => {
+    const list = kinds.map((k) => ({ id: k.kind, label: pluralKind(k.kind), apiVersion: k.apiVersion, n: byKind.get(k.kind)?.length ?? 0 }))
+    list.sort((a, b) => Number(b.id === 'Pod') - Number(a.id === 'Pod'))
+    if (nsReleases.length) list.push({ id: RELEASES, label: 'Helm releases', apiVersion: 'helm.sh/release.v1', n: releasesShown.length })
+    return list
+  }, [kinds, byKind, nsReleases.length, releasesShown.length])
+  const tab = tabs.find((t) => t.id === kindsParam[0]) ?? tabs[0] ?? null
 
   const lq = listQuery.trim().toLowerCase()
   const listed = sorted.filter((n) => !lq || n.name.includes(lq) || n.releases.some((r) => r.includes(lq)))
@@ -212,29 +202,11 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
     { title: 'Kubernetes', items: listed.filter((n) => n.group === 'system').map(item) },
   ]
 
-  const exportAll = (format: ExportFormat) => {
-    const file = exportFileName(cluster?.name, `${ns}-objects`, format)
-    try {
-      const t = exportTable(filtered, OBJECT_COLUMNS, now)
-      if (format === 'xlsx') download(xlsxBytes(ns.slice(0, 31) || 'Objects', t.head, t.rows), file)
-      else if (format === 'csv') download(csvText(t.head, t.rows), file, 'text/csv;charset=utf-8')
-      else download(JSON.stringify(t.json, null, 2) + '\n', file, 'application/json')
-      onToast(`Downloaded ${file}`)
-    } catch {
-      onToast('Couldn’t build the file.')
-    }
-  }
-
   const selectedRow = selected ? (objects.rows.find((r) => r.key === selected) ?? null) : null
   // The drawer: open=Kind/name opens the object's own details, by kind.
   const [selKind = '', selName = ''] = (selected ?? '').split('/', 2) as [string?, string?]
   const closeDrawer = () => set({ open: undefined })
-  const toggleKind = (kind: string) => {
-    const next = new Set(kindSel ?? kinds.map((k) => k.kind))
-    if (next.has(kind)) next.delete(kind)
-    else next.add(kind)
-    set({ kinds: next.size === kinds.length ? undefined : next.size ? [...next] : ['-'] })
-  }
+  const search = <SearchBox rows={objects.rows} terms={objectTerms} value={query} onChange={(q) => set({ q })} placeholder="Filter by name, status or detail" label="Filter objects" testId="object-search" width={240} />
 
   return (
     <>
@@ -267,58 +239,22 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
                 Storage →
               </a>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px' }}>
-              <div
-                className="rk-dd"
-                style={{ position: 'relative' }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape' && funnelOpen) {
-                    e.stopPropagation()
-                    setFunnelOpen(false)
-                    funnelButton.current?.focus()
-                  }
-                }}
-              >
-                <button ref={funnelButton} className="rk-btn" aria-expanded={funnelOpen} aria-haspopup="true" data-on={!!kindSel} onClick={() => setFunnelOpen(!funnelOpen)} style={{ height: 32 }} data-testid="kinds-funnel">
-                  <FilterIcon />
-                  {kindSel ? `${kindSel.size} of ${kinds.length} kinds` : 'All kinds'}
-                  <span className="rk-cnt">{filtered.length}</span>
-                  <Chevron />
-                </button>
-                {funnelOpen && (
-                  <>
-                    <button className="rk-ddcatch" tabIndex={-1} aria-hidden="true" onClick={() => setFunnelOpen(false)} />
-                    <div className="rk-ddmenu" role="group" aria-label="Kinds to show">
-                      <div className="rk-ddhead">
-                        <span style={{ flex: '1 1 auto' }}>Kinds in {ns}</span>
-                        <button className="rk-link" onClick={() => set({ kinds: undefined })} style={{ fontSize: 12 }}>
-                          All
-                        </button>
-                      </div>
-                      {kinds.map((k) => (
-                        <label key={k.kind} className="rk-ddopt">
-                          <input type="checkbox" checked={!kindSel || kindSel.has(k.kind)} onChange={() => toggleKind(k.kind)} />
-                          <span style={{ flex: '1 1 auto' }}>{pluralKind(k.kind)}</span>
-                          <span className="rk-cnt">{k.n}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </>
-                )}
-              </div>
-              <SearchBox rows={objects.rows} terms={objectTerms} value={query} onChange={(q) => set({ q })} placeholder="Filter by name, status or detail" label="Filter objects" testId="object-search" />
-              <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{objects.loaded ? (filtered.length < objects.rows.length ? `Showing ${filtered.length} of ${objects.rows.length} objects` : '') : 'Loading the namespace…'}</span>
-              <div className="rk-tools" style={{ marginLeft: 'auto', gap: 8 }}>
-                <ExportMenu onExport={exportAll} disabled={!filtered.length} what="every object shown, with its kind" />
-              </div>
-            </div>
-            {nsReleases.length > 0 && (!kindSel || kindSel.has(RELEASES)) && <ReleasesCard rows={nsReleases.filter((r) => !query.trim() || `${r.name} ${r.chart} ${r.status}`.toLowerCase().includes(query.trim().toLowerCase()))} now={now} cluster={cluster?.name} onToast={onToast} />}
-            {kinds
-              .filter((k) => byKind.has(k.kind))
-              .map((k) => (
-                <KindCard key={k.kind} kind={k.kind} apiVersion={k.apiVersion} rows={byKind.get(k.kind) ?? []} now={now} cluster={cluster?.name} selected={selected} onOpen={(key) => set({ open: selected === key ? undefined : key })} onToast={onToast} hidden={table.hidden} setHidden={table.setHidden} defaults={table.defaults} />
-              ))}
-            {objects.loaded && filtered.length === 0 && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>{objects.rows.length ? 'Nothing matches these filters.' : 'This namespace is empty, or holds only kinds 221B does not watch.'}</p>}
+            {tabs.length > 0 && (
+              <nav aria-label="Kinds in this namespace" style={{ display: 'flex', flexWrap: 'wrap', gap: '0 20px', borderBottom: '1px solid var(--line)' }} data-testid="namespace-kinds">
+                {tabs.map((t) => (
+                  <button key={t.id} className="rk-tab" aria-current={tab?.id === t.id ? 'page' : undefined} onClick={() => set({ kinds: t.id === tabs[0]?.id ? undefined : [t.id], open: undefined })} style={{ height: 38 }} data-subtab={t.id}>
+                    {t.label}
+                    {t.n > 0 && <span className="rk-count">{t.n}</span>}
+                  </button>
+                ))}
+              </nav>
+            )}
+            {!objects.loaded && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Loading the namespace…</p>}
+            {tab?.id === RELEASES && <ReleasesTable rows={releasesShown} now={now} cluster={cluster?.name} onToast={onToast} search={search} />}
+            {tab && tab.id !== RELEASES && (
+              <KindTable key={tab.id} kind={tab.id} apiVersion={tab.apiVersion} rows={byKind.get(tab.id) ?? []} now={now} cluster={cluster?.name} selected={selected} onOpen={(key) => set({ open: selected === key ? undefined : key })} onToast={onToast} hidden={table.hidden} setHidden={table.setHidden} defaults={table.defaults} search={search} />
+            )}
+            {objects.loaded && !tabs.length && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>This namespace is empty, or holds only kinds 221B does not watch.</p>}
           </section>
         )}
         {!current && <p style={{ margin: 0, padding: '28px 24px', fontSize: 12.5, color: 'var(--fg3)' }}>{loaded ? 'No namespaces.' : 'Waiting for the first list of namespaces…'}</p>}

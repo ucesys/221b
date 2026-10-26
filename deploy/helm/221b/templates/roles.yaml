@@ -34,6 +34,9 @@ rules:
   {{- if and $.Values.secrets.read $def.secretRules }}
   {{- toYaml $def.secretRules | nindent 2 }}
   {{- end }}
+  {{- if and (eq $key "admin") $.Values.rbac.roles.admin.exec $def.execRules }}
+  {{- toYaml $def.execRules | nindent 2 }}
+  {{- end }}
 {{- end }}
 {{- end }}
 {{- if include "b221.ownsShared" (dict "top" . "kind" "ClusterRole" "name" $shipped.nodes.clusterRole) }}

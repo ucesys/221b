@@ -39,7 +39,7 @@ test('the planted Secret value reaches no response, export or log', async ({ pag
     if (stream) check('event stream', await stream.text().catch(() => ''))
 
     // Exports from the browser: the namespace's objects and the pods, as JSON and CSV.
-    await page.goto(`/#/namespaces/${secret.namespace}`)
+    await page.goto(`/#/namespaces/${secret.namespace}?kinds=Secret`)
     await expect(page.getByTestId('namespace-name')).toHaveText(secret.namespace)
     await expect(page.locator(`[data-object="Secret/${secret.name}"]`)).toBeVisible({ timeout: 15_000 })
     // Excel is XML inside an uncompressed ZIP, so the bytes are searchable as text.

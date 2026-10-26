@@ -536,3 +536,42 @@ func TestAQueuedChangeLapsesWhenItsObjectsChange(t *testing.T) {
 		}
 	}
 }
+
+func TestTaintsWaitForApprovalAndRun(t *testing.T) {
+	svc, cl, s, _, _ := setup(t, Options{})
+	has := func() bool {
+		for _, x := range s.Node("worker-002").Spec.Taints {
+			if x.Key == "team" && x.Value == "db" && x.Effect == "NoSchedule" {
+				return true
+			}
+		}
+		return false
+	}
+	it := svc.Submit(context.Background(), cl, alice(), "kubectl taint nodes worker-002 team=db:NoSchedule --overwrite", "Fleets", "", true)[0]
+	card := wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	im := strings.Join(card.Plan.Impact, " ")
+	if len(card.Plan.Targets) != 1 || card.Plan.Targets[0] != "node worker-002" || !strings.Contains(im, "adds team=db:NoSchedule") || !strings.Contains(im, "do not tolerate team will not be scheduled on worker-002") {
+		t.Fatalf("card %v %s", card.Plan.Targets, im)
+	}
+	if has() {
+		t.Fatal("tainted before the approval")
+	}
+	if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err != nil {
+		t.Fatal(err)
+	}
+	if done := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) }); done.Status != StatusDone || !has() {
+		t.Fatalf("status %s, output %q", done.Status, outputOf(svc, it.ID))
+	}
+
+	it = svc.Submit(context.Background(), cl, alice(), "kubectl taint nodes worker-002 team:NoSchedule-", "Fleets", "", true)[0]
+	card = wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	if im := strings.Join(card.Plan.Impact, " "); !strings.Contains(im, "removes team=db:NoSchedule") {
+		t.Fatalf("impact %s", im)
+	}
+	if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err != nil {
+		t.Fatal(err)
+	}
+	if done := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) }); done.Status != StatusDone || has() {
+		t.Fatalf("status %s, output %q", done.Status, outputOf(svc, it.ID))
+	}
+}

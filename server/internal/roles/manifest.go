@@ -29,7 +29,9 @@ type BindingSpec struct {
 type ManifestInput struct {
 	Templates Templates
 	// Secrets adds the rules on Secrets (auth.secretsRead).
-	Secrets  bool
+	Secrets bool
+	// Exec adds pods/exec to the full Admin (rbac.roles.admin.exec).
+	Exec     bool
 	Bindings []BindingSpec
 }
 
@@ -96,7 +98,7 @@ func Manifest(in ManifestInput) string {
 	var b strings.Builder
 	b.WriteString("# The roles 221B uses on this cluster. Apply with kubectl apply -f, as someone who may create roles.\n")
 	b.WriteString("# 221B never writes a role or a binding itself.\n")
-	opts := Options{Secrets: in.Secrets}
+	opts := Options{Secrets: in.Secrets, Exec: in.Exec}
 	for _, id := range []ID{Admin, SuperAdmin, SuperViewer, Viewer} {
 		def := in.Templates.For(id, opts)
 		header(&b, "ClusterRole", def.ClusterRole, "", map[string]string{"221b/role": string(id), "221b/definition": string(def.Template)})

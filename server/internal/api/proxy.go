@@ -56,7 +56,7 @@ func leaderOnly(path string) bool {
 		parts = parts[2:]
 	}
 	switch parts[0] {
-	case "sherlock", "watson", "assistants":
+	case "sherlock", "watson", "assistants", "sessions", "toolbox":
 		return true
 	}
 	return false

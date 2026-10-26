@@ -1,7 +1,7 @@
 import { envOf } from '../api/clusters'
 import { useHome, type HomeCluster } from '../api/home'
 import type { Me } from '../api/types'
-import { activeAlerts, alertTone, healthOf, podLine, resourceLine, type UseLine } from '../lib/home'
+import { activeAlerts, alertTone, healthOf, nodeTone, podLine, podsReady, podTone, resourceLine, storageTone, type UseLine } from '../lib/home'
 import { clusterHref, clusterPageHref } from '../lib/router'
 import { SherlockIcon } from './Icons'
 
@@ -32,14 +32,13 @@ function Bar({ line, testid, note }: { line: UseLine; testid: string; note?: str
   )
 }
 
-function Stat({ label, value, sub, tone, href, testid }: { label: string; value: string | number; sub?: string; tone?: string; href: string; testid: string }) {
+function Stat({ label, value, tip, tone, href, testid }: { label: string; value: string | number; tip?: string; tone?: string; href: string; testid: string }) {
   return (
-    <a className="rk-card rk-tile rk-homestat" data-tone={tone} href={href} style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 2, textDecoration: 'none', color: 'inherit' }} data-testid={testid}>
+    <a className="rk-card rk-tile rk-homestat" data-tone={tone} href={href} title={tip} style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 2, textDecoration: 'none', color: 'inherit' }} data-testid={testid}>
       <span className="rk-num" style={{ fontSize: 20, fontWeight: 600, lineHeight: 1.1 }}>
         {value}
       </span>
       <span style={{ fontSize: 12, color: 'var(--fg2)' }}>{label}</span>
-      {sub && <span style={{ fontSize: 11, color: 'var(--fg3)' }}>{sub}</span>}
     </a>
   )
 }
@@ -50,10 +49,9 @@ function ClusterCard({ c, onEdit }: { c: HomeCluster; onEdit?: () => void }) {
   const up = c.state === 'connected' && c.synced
   const metrics = c.metrics === 'available'
   const active = activeAlerts(c)
+  const pods = podsReady(c)
   const trouble = health.tone !== 'ok'
   const at = (tab: Parameters<typeof clusterHref>[1], params: Record<string, string> = {}) => clusterHref(c.id, tab, [], params)
-  const nodeTone = c.nodes.total - c.nodes.ready > 0 || c.nodes.errors > 0 ? 'err' : c.nodes.warnings > 0 || c.nodes.cordoned > 0 ? 'warn' : undefined
-  const podTone = c.pods.failing > 0 ? 'err' : c.pods.notReady > 0 ? 'warn' : undefined
   const noUsage = metrics ? undefined : `No usage figures: metrics-server ${c.metrics === 'unavailable' ? 'does not answer' : 'has not answered yet'}, so the bars show only what is requested.`
   return (
     <section className="rk-card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }} aria-labelledby={`home-${c.id}`} data-testid="home-card" data-cluster={c.id} data-health={health.tone}>
@@ -94,10 +92,11 @@ function ClusterCard({ c, onEdit }: { c: HomeCluster; onEdit?: () => void }) {
       {up ? (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(96px, 100%), 1fr))', gap: 8 }}>
-            <Stat label="Nodes ready" value={`${c.nodes.ready}/${c.nodes.total}`} sub={[c.nodes.controlPlane ? `${c.nodes.controlPlane} control plane` : '', c.nodes.cordoned ? `${c.nodes.cordoned} cordoned` : ''].filter(Boolean).join(' · ') || undefined} tone={nodeTone} href={at('nodes')} testid="home-nodes" />
-            <Stat label="Pods" value={c.pods.total} sub={[`${c.pods.running} running`, c.pods.failing ? `${c.pods.failing} failing` : '', c.pods.notReady ? `${c.pods.notReady} not ready` : ''].filter(Boolean).join(' · ')} tone={podTone} href={at('pods')} testid="home-pods" />
-            <Stat label={active === 1 ? 'Alert' : 'Alerts'} value={active} sub={c.alerts.acknowledged ? `${c.alerts.acknowledged} acknowledged` : c.alerts.recovered ? `${c.alerts.recovered} recovered` : undefined} tone={alertTone(c)} href={at('alerts')} testid="home-alerts" />
-            <Stat label="Namespaces" value={c.namespaces} sub={`${c.services} Service${c.services === 1 ? '' : 's'}`} href={at('namespaces')} testid="home-namespaces" />
+            {/* The figures only (asked at the second Toolbox review); the tabs have the details. */}
+            <Stat label="Nodes ready" value={`${c.nodes.ready}/${c.nodes.total}`} tone={nodeTone(c)} href={at('nodes')} testid="home-nodes" />
+            <Stat label="Pods ready" value={pods.value} tip={pods.tip} tone={podTone(c)} href={at('pods')} testid="home-pods" />
+            <Stat label={active === 1 ? 'Alert' : 'Alerts'} value={active} tone={alertTone(c)} href={at('alerts')} testid="home-alerts" />
+            <Stat label="Claims bound" value={`${c.storage.bound}/${c.storage.claims}`} tip="Persistent volume claims bound to a volume, of all of them" tone={storageTone(c)} href={at('storage')} testid="home-storage" />
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }} aria-label="Resources">
             <Bar line={resourceLine('CPU', c.cpu, metrics)} testid="home-cpu" note={noUsage} />

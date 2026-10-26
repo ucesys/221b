@@ -118,6 +118,51 @@ export function sectionsOf(rows: AlertRow[]): AlertSections {
   return { pods, controlPlane: nodes.filter((r) => r.role === 'control-plane'), workers: nodes.filter((r) => r.role !== 'control-plane'), volumes }
 }
 
+/** A node and the pods with alerts on it; row is the node's own alert, when it has one. */
+export interface NodeGroup {
+  node: string
+  row?: AlertRow
+  pods: AlertRow[]
+}
+
+export interface ByNode {
+  groups: NodeGroup[]
+  /** Pods no node has taken: pending, unscheduled. */
+  unscheduled: AlertRow[]
+  volumes: AlertRow[]
+}
+
+/** How pressing an alert is: unacknowledged before acknowledged before resolved; failing before waiting. */
+function urgency(r: AlertRow): number {
+  const sev = r.severity === 'failed' || r.severity === 'error' ? 0 : r.severity === 'recovered' ? 2 : 1
+  return stage(r) * 3 + sev
+}
+
+/**
+ * The alerts as a hierarchy (asked after 0.7.1): each pod under the node
+ * it runs on, the node's own alert heading the group when it has one. The
+ * groups come in the order of their most pressing alert, so a node whose
+ * pods are failing is near the top even when the node itself is fine.
+ */
+export function byNode(rows: AlertRow[]): ByNode {
+  const sec = sectionsOf(rows)
+  const groups = new Map<string, NodeGroup>()
+  const group = (node: string) => {
+    let g = groups.get(node)
+    if (!g) groups.set(node, (g = { node, pods: [] }))
+    return g
+  }
+  for (const r of [...sec.controlPlane, ...sec.workers]) group(r.name).row = r
+  const unscheduled: AlertRow[] = []
+  for (const r of sec.pods) {
+    if (r.node) group(r.node).pods.push(r)
+    else unscheduled.push(r)
+  }
+  const top = (g: NodeGroup) => Math.min(...[...(g.row ? [g.row] : []), ...g.pods].map(urgency))
+  const list = [...groups.values()].sort((a, b) => top(a) - top(b) || a.node.localeCompare(b.node, undefined, { numeric: true }))
+  return { groups: list, unscheduled, volumes: sec.volumes }
+}
+
 export interface Tile {
   count: number
   label: string

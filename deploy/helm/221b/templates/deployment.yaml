@@ -38,6 +38,7 @@ spec:
         # The roles' groups and the directory are read at start-up, so a
         # change of them restarts the console.
         checksum/auth-config: {{ include "b221.authConfig" . | sha256sum }}
+        checksum/toolbox: {{ include "b221.toolboxConfig" . | sha256sum }}
         # The local accounts, the OIDC client secret, the setup code and the
         # webhook token are read at start-up too. A Secret named by an
         # existingSecret value is not the chart's: after changing one, run
@@ -186,6 +187,9 @@ spec:
             # The roles' groups, the local groups and the directory.
             - name: AUTH_CONFIG_FILE
               value: /etc/221b/auth-config/auth.json
+            # The Toolbox's values (Phase 9).
+            - name: TOOLBOX_CONFIG_FILE
+              value: /etc/221b/toolbox/toolbox.json
             {{- if include "b221.localUsers" . }}
             - name: LOCAL_USERS_FILE
               value: /etc/221b/auth/users.yaml
@@ -235,6 +239,13 @@ spec:
             - name: auth-config
               mountPath: /etc/221b/auth-config
               readOnly: true
+            - name: toolbox
+              mountPath: /etc/221b/toolbox
+              readOnly: true
+            {{- if and .Values.toolbox.enabled (eq .Values.toolbox.transcripts "pvc") }}
+            - name: transcripts
+              mountPath: /var/lib/221b/transcripts
+            {{- end }}
             {{- if include "b221.localUsers" . }}
             - name: auth
               mountPath: /etc/221b/auth
@@ -269,6 +280,14 @@ spec:
         - name: auth-config
           configMap:
             name: {{ include "b221.fullname" . }}-auth-config
+        - name: toolbox
+          configMap:
+            name: {{ include "b221.fullname" . }}-toolbox
+        {{- if and .Values.toolbox.enabled (eq .Values.toolbox.transcripts "pvc") }}
+        - name: transcripts
+          persistentVolumeClaim:
+            claimName: {{ include "b221.fullname" . }}-transcripts
+        {{- end }}
         {{- if include "b221.localUsers" . }}
         - name: auth
           secret:

@@ -1,6 +1,6 @@
 // The Fleets tab's model (P4-01), ported from the prototype: a fleet is a
 // set of labels and taints, and every node that has all of them belongs to
-// it. The server works out the saved fleets' members and totals; this file
+// it, or a list of nodes by name (asked after 0.7.1). The server works out the saved fleets' members and totals; this file
 // draws the matrix of nodes against labels and taints, and previews a draft
 // in the editor before it is saved.
 
@@ -37,8 +37,14 @@ export function taintKeyText(id: string): string {
   return t.key + (t.value ? '=' + t.value : '')
 }
 
-/** Whether a node has every label and taint of a fleet. */
-export function has(f: Pick<Fleet, 'labels' | 'taints'>, n: Pick<NodeRow, 'labels' | 'taints'>): boolean {
+/** Whether a fleet lists its nodes by name. */
+export function isList(f: Pick<Fleet, 'kind'>): boolean {
+  return f.kind === 'nodes'
+}
+
+/** Whether a node is in a fleet: on its list, or with every one of its labels and taints. */
+export function has(f: Pick<Fleet, 'labels' | 'taints' | 'kind' | 'nodes'>, n: Pick<NodeRow, 'labels' | 'taints'> & { name?: string }): boolean {
+  if (isList(f)) return !!n.name && (f.nodes ?? []).includes(n.name)
   return f.labels.every((l) => {
     const [k, v] = splitLabel(l)
     return k in n.labels && n.labels[k] === v
@@ -75,8 +81,9 @@ export function fixCommand(node: string, m: Missing): string {
   return `kubectl taint nodes ${node} ${m.id} --overwrite`
 }
 
-/** "workload=general, taint dedicated=dremio:NoSchedule". */
-export function reqText(f: Pick<Fleet, 'labels' | 'taints'>): string {
+/** "workload=general, taint dedicated=dremio:NoSchedule", or "a list of 3 nodes". */
+export function reqText(f: Pick<Fleet, 'labels' | 'taints' | 'kind' | 'nodes'>): string {
+  if (isList(f)) return `a list of ${nWord(f.nodes?.length ?? 0, 'node', 'nodes')}`
   const parts = [...f.labels.map((l) => labelText(...splitLabel(l))), ...f.taints.map((t) => 'taint ' + t)]
   return parts.length ? parts.join(', ') : 'no requirements'
 }
@@ -300,5 +307,116 @@ export function fleetsOfNode(name: string, rows: FleetRow[]): FleetRow[] {
 }
 
 export function fleetOf(r: FleetRow): Fleet {
-  return { id: r.id ?? '', name: r.name ?? '', color: r.color, desc: r.desc ?? '', labels: r.labels, taints: r.taints }
+  const f: Fleet = { id: r.id ?? '', name: r.name ?? '', color: r.color, desc: r.desc ?? '', labels: r.labels, taints: r.taints }
+  return r.by === 'nodes' ? { ...f, kind: 'nodes', nodes: r.listed ?? [] } : f
+}
+
+// ---------- nodes picked in the matrix ----------
+
+/** The nodes picked in the matrix, per cluster, kept while the page is open (a tab switch keeps them). */
+const picked = new Map<string, string[]>()
+
+export function pickedNodes(cluster: string): string[] {
+  return picked.get(cluster) ?? []
+}
+
+export function setPickedNodes(cluster: string, names: string[]): void {
+  picked.set(cluster, names)
+}
+
+const names = (ns: Pick<NodeRow, 'name'>[]) => ns.map((n) => n.name).join(' ')
+
+/**
+ * The commands that bring nodes into a fleet (asked after 0.7.1): one per
+ * label and taint, naming every node that lacks it. --overwrite where a
+ * node has the key with another value, which takes it out of the fleets
+ * that need the old one.
+ */
+export function joinCommands(f: Pick<Fleet, 'labels' | 'taints'>, nodes: Pick<NodeRow, 'name' | 'labels' | 'taints'>[]): string[] {
+  const out: string[] = []
+  for (const l of f.labels) {
+    const [k, v] = splitLabel(l)
+    const lack = nodes.filter((n) => !(k in n.labels) || n.labels[k] !== v)
+    if (lack.length) out.push(`kubectl label nodes ${names(lack)} ${k}=${v}${lack.some((n) => k in n.labels) ? ' --overwrite' : ''}`)
+  }
+  for (const t of f.taints) {
+    const s = splitTaint(t)
+    const lack = nodes.filter((n) => !n.taints.some((x) => taintId(x) === t))
+    if (lack.length) out.push(`kubectl taint nodes ${names(lack)} ${t}${lack.some((n) => n.taints.some((x) => x.key === s.key && x.effect === s.effect)) ? ' --overwrite' : ''}`)
+  }
+  return out
+}
+
+/** The commands that take a fleet's labels and taints off nodes: each from the nodes that have it. */
+export function leaveCommands(f: Pick<Fleet, 'labels' | 'taints'>, nodes: Pick<NodeRow, 'name' | 'labels' | 'taints'>[]): string[] {
+  const out: string[] = []
+  for (const l of f.labels) {
+    const [k, v] = splitLabel(l)
+    const with_ = nodes.filter((n) => k in n.labels && n.labels[k] === v)
+    if (with_.length) out.push(`kubectl label nodes ${names(with_)} ${k}-`)
+  }
+  for (const t of f.taints) {
+    const s = splitTaint(t)
+    const with_ = nodes.filter((n) => n.taints.some((x) => taintId(x) === t))
+    if (with_.length) out.push(`kubectl taint nodes ${names(with_)} ${s.key}:${s.effect}-`)
+  }
+  return out
+}
+
+/** What a change to nodes' labels and taints means beyond the fleet: other fleets they leave, taints that keep pods off or evict them. */
+export function joinNotes(f: Pick<Fleet, 'id' | 'labels' | 'taints'>, nodes: Pick<NodeRow, 'name' | 'labels' | 'taints'>[], rows: FleetRow[]): string[] {
+  const out: string[] = []
+  for (const l of f.labels) {
+    const [k, v] = splitLabel(l)
+    for (const n of nodes) {
+      if (!(k in n.labels) || n.labels[k] === v) continue
+      const old = `${k}=${n.labels[k]}`
+      const leaving = rows.filter((r) => r.kind === 'fleet' && r.id !== f.id && r.labels.includes(old) && r.members.includes(n.name)).map((r) => r.name!)
+      out.push(`${n.name}: ${k} changes from ${n.labels[k] || '""'} to ${v || '""'}${leaving.length ? `, so it leaves ${listText(leaving)}` : ''}.`)
+    }
+  }
+  for (const t of f.taints) {
+    const s = splitTaint(t)
+    if (!nodes.some((n) => !n.taints.some((x) => taintId(x) === t))) continue
+    if (s.effect === 'NoExecute') out.push(`The taint ${t} evicts the pods on these nodes that do not tolerate it. Watson's card lists them before anyone approves.`)
+    else if (s.effect === 'NoSchedule') out.push(`With the taint ${t}, new pods that do not tolerate it are not scheduled on these nodes; running pods stay.`)
+    else out.push(`With the taint ${t}, the scheduler avoids these nodes for pods that do not tolerate it.`)
+  }
+  return out
+}
+
+/** What taking a fleet's labels and taints off nodes means: other fleets that need them lose the nodes too, and a label Kubernetes sets may come back. */
+export function leaveNotes(f: Pick<Fleet, 'id' | 'labels' | 'taints'>, nodes: Pick<NodeRow, 'name'>[], rows: FleetRow[]): string[] {
+  const out: string[] = []
+  const gone = new Set([...f.labels, ...f.taints])
+  const inSel = new Set(nodes.map((n) => n.name))
+  const others = rows.filter((r) => r.kind === 'fleet' && r.id !== f.id && [...r.labels, ...r.taints].some((x) => gone.has(x)) && r.members.some((m) => inSel.has(m)))
+  if (others.length) out.push(`${listText(others.map((r) => r.name!))} ${others.length === 1 ? 'needs' : 'need'} some of the same labels or taints, so ${nodes.length === 1 ? 'the node leaves' : 'these nodes leave'} ${others.length === 1 ? 'it' : 'them'} too.`)
+  const sys = f.labels.map((l) => splitLabel(l)[0]).filter((k) => /(^|\.)(kubernetes\.io|k8s\.io)\//.test(k))
+  if (sys.length) out.push(`${listText(sys)} ${sys.length === 1 ? 'is a label' : 'are labels'} Kubernetes or the kubelet may set; the kubelet can put ${sys.length === 1 ? 'it' : 'them'} back, and workloads may select on ${sys.length === 1 ? 'it' : 'them'}.`)
+  if (f.labels.length) out.push('Pods already running stay; new pods that select these labels no longer land on these nodes.')
+  return out
+}
+
+/** Labels that these nodes, and no other node, have: a new fleet can be defined by one without changing a node. */
+export function ownLabels(sel: Pick<NodeRow, 'name' | 'labels'>[], all: Pick<NodeRow, 'name' | 'labels'>[]): string[] {
+  if (!sel.length) return []
+  const inSel = new Set(sel.map((n) => n.name))
+  const first = sel[0]!
+  return Object.entries(first.labels)
+    .filter(([k, v]) => sel.every((n) => k in n.labels && n.labels[k] === v) && all.every((n) => inSel.has(n.name) || !(k in n.labels) || n.labels[k] !== v))
+    .map(([k, v]) => `${k}=${v}`)
+    .sort((a, b) => Number(a.startsWith('kubernetes.io/hostname=')) - Number(b.startsWith('kubernetes.io/hostname=')) || a.localeCompare(b))
+}
+
+/** A label value from a fleet's name: lowercase, dashes, at most 63 characters. */
+export function labelValueOf(name: string): string {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '')
+      .slice(0, 63)
+      .replace(/[^a-z0-9]+$/, '') || 'fleet'
+  )
 }

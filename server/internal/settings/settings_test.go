@@ -369,3 +369,39 @@ func TestReloadSkipsAnUnchangedVersion(t *testing.T) {
 		t.Fatalf("a reload at the same version decoded the settings again: %+v", svc.Current().Settings)
 	}
 }
+
+func TestPendingGrace(t *testing.T) {
+	if g := settings.Default.PendingGrace(); g != 2*time.Minute {
+		t.Errorf("default grace %s, want 2m", g)
+	}
+	for _, n := range []int{-1, 3601} {
+		s := settings.Settings{RefreshSeconds: 3, PendingGraceSeconds: &n}
+		if s.Validate() == nil {
+			t.Errorf("a grace of %d seconds was accepted", n)
+		}
+	}
+	svc := settings.NewService(context.Background(), &settings.Memory{}, settings.Default, quiet, nil)
+	zero := 0
+	if _, err := svc.Update(context.Background(), settings.Settings{RefreshSeconds: 3, PendingGraceSeconds: &zero}); err != nil {
+		t.Fatal(err)
+	}
+	// A save that does not send it keeps it.
+	st, err := svc.Update(context.Background(), settings.Settings{RefreshSeconds: 5})
+	if err != nil || st.PendingGrace() != 0 {
+		t.Errorf("after a refresh change the grace is %s (%v), want 0", st.PendingGrace(), err)
+	}
+}
+
+// Alert banners can be turned off, and a save that does not send the
+// choice keeps it.
+func TestAlertBannersAreKept(t *testing.T) {
+	svc := settings.NewService(context.Background(), &settings.Memory{}, settings.Default, quiet, nil)
+	off := false
+	if _, err := svc.Update(context.Background(), settings.Settings{RefreshSeconds: 3, AlertBanners: &off}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := svc.Update(context.Background(), settings.Settings{RefreshSeconds: 5})
+	if err != nil || st.AlertBanners == nil || *st.AlertBanners {
+		t.Errorf("after a refresh change the banners are %v (%v), want off", st.AlertBanners, err)
+	}
+}

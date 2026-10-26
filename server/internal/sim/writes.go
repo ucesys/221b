@@ -1,6 +1,7 @@
 package sim
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -340,6 +341,13 @@ func decodeBody(r *http.Request, into runtime.Object) error {
 			return err
 		}
 	}
+	if bytes.HasPrefix(body, []byte("k8s\x00")) {
+		// Protobuf, as a clientset sends built-in kinds.
+		if _, _, err := scheme.Codecs.UniversalDeserializer().Decode(body, nil, into); err != nil {
+			return fmt.Errorf("the object could not be read: %v", err)
+		}
+		return nil
+	}
 	if err := json.Unmarshal(body, into); err != nil {
 		return fmt.Errorf("the object could not be read: %v", err)
 	}
@@ -588,6 +596,7 @@ func (s *Sim) suffixLocked() string {
 // reactLocked plays the controllers after a change: old is nil for a
 // create, next nil for a delete.
 func (s *Sim) reactLocked(k kube.Kind, old, next runtime.Object) {
+	s.toolboxReactLocked(k.Name, old, next)
 	switch k.Name {
 	case "deployments":
 		// A new Deployment gets its first ReplicaSet; a deleted one takes

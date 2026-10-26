@@ -69,7 +69,7 @@ Everyone who signs in also gets the nodes (RB-07). A person with no assignment s
 | See Secret keys and sizes (when `secrets.read` is on) | Yes | No | Yes, in bound namespaces | Yes, in bound namespaces |
 | Prepare a Watson card | Yes | Yes | Yes | Yes |
 | Approve a change (ADR-52: the approver's own rights decide) | Any, full definition only | No | Namespaced changes in bound namespaces, full definition only | No |
-| Node operations: cordon, uncordon, drain, label and annotate nodes | Full definition only | No | No | No |
+| Node operations: cordon, uncordon, drain, label, annotate and taint nodes | Full definition only | No | No | No |
 | Create, change or remove roles and bindings | Not in the console: they come from the chart (RB-06, RB-52) | No | No | No |
 | Connections, settings and fleets (ADR-26, ADR-32) | Yes | No | No | No |
 | Users page, LDAP refresh, local users, group memberships and super roles | Yes | No | No | No |

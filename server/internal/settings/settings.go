@@ -44,6 +44,29 @@ type Settings struct {
 	// Watson is how Watson approves changes (Phase 6); nil is the
 	// defaults.
 	Watson *Watson `json:"watson,omitempty"`
+	// PendingGraceSeconds is how long a pod may wait, pending or running
+	// but not ready, before it raises an alert; nil is
+	// DefaultPendingGrace.
+	PendingGraceSeconds *int `json:"pendingGraceSeconds,omitempty"`
+	// AlertBanners says whether every tab but Alerts shows what the Alerts
+	// tab has in banners at the top; nil is true. Off, the Alerts tab's
+	// name still turns red or amber (asked at the second Toolbox review).
+	AlertBanners *bool `json:"alertBanners,omitempty"`
+}
+
+// DefaultPendingGrace gives a pod time to pull its image and start before
+// it is an alert (asked at the Toolbox review).
+const DefaultPendingGrace = 2 * time.Minute
+
+// MaxPendingGrace keeps a stuck pod from going unnoticed for long.
+const MaxPendingGrace = time.Hour
+
+// PendingGrace returns the grace period in force.
+func (s Settings) PendingGrace() time.Duration {
+	if s.PendingGraceSeconds == nil {
+		return DefaultPendingGrace
+	}
+	return time.Duration(*s.PendingGraceSeconds) * time.Second
 }
 
 // TimeFormat is how dates and times read in every console.
@@ -194,6 +217,9 @@ func (s Settings) Validate() error {
 			return fmt.Errorf("Sherlock: %w", err)
 		}
 	}
+	if g := s.PendingGrace(); g < 0 || g > MaxPendingGrace {
+		return fmt.Errorf("pendingGraceSeconds must be between 0 and %d", int(MaxPendingGrace/time.Second))
+	}
 	if s.TimeFormat != nil {
 		if err := s.TimeFormat.Validate(); err != nil {
 			return err
@@ -339,6 +365,12 @@ func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
 		}
 		if next.TimeFormat == nil {
 			next.TimeFormat = cur.TimeFormat
+		}
+		if next.PendingGraceSeconds == nil {
+			next.PendingGraceSeconds = cur.PendingGraceSeconds
+		}
+		if next.AlertBanners == nil {
+			next.AlertBanners = cur.AlertBanners
 		}
 		*cur = next
 		return nil

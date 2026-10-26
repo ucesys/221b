@@ -692,6 +692,15 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 			}
 		}
 		ch.Mark("fleets", AllRows)
+		// A node that stops or starts reporting changes how its pods read
+		// (Unknown, ?/1): their rows are rebuilt with it, not a recompute
+		// later.
+		if newMeta != nil && nodeReady(old) != nodeReady(obj) {
+			for _, p := range c.PodsOn(newMeta.GetName()) {
+				ch.Mark("pods", p.Namespace+"/"+p.Name)
+				ch.Mark("alerts", "pod:"+p.Namespace+"/"+p.Name)
+			}
+		}
 	case "persistentvolumeclaims":
 		for _, m := range []metav1.Object{oldMeta, newMeta} {
 			if m != nil {
@@ -1151,6 +1160,23 @@ func asMeta(obj any) metav1.Object {
 	}
 	m, _ := unwrap(obj).(metav1.Object)
 	return m
+}
+
+// nodeReady is the status of a node's Ready condition, "" for none.
+func nodeReady(obj any) corev1.ConditionStatus {
+	if obj == nil {
+		return ""
+	}
+	n, _ := unwrap(obj).(*corev1.Node)
+	if n == nil {
+		return ""
+	}
+	for _, c := range n.Status.Conditions {
+		if c.Type == corev1.NodeReady {
+			return c.Status
+		}
+	}
+	return ""
 }
 
 func asPod(obj any) *corev1.Pod {

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dock · port-forward session</title>
+<link rel="stylesheet" href="toolbox.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+</head>
+<body>
+<div class="rk mk-app" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" data-prod="true" aria-label="Cluster: lakehouse-prod, production"><span class="rk-dot"></span>lakehouse-prod<span class="rk-tag" data-tone="warn">production</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="err">8</span></a>
+    <a class="rk-tab" href="#top" aria-current="page">Nodes <span class="rk-cnt">40</span></a>
+    <a class="rk-tab" href="#top">Fleets <span class="rk-cnt">3</span></a>
+    <a class="rk-tab" href="#top">Namespaces <span class="rk-cnt">10</span></a>
+    <a class="rk-tab" href="#top">Pods <span class="rk-cnt">907</span></a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services <span class="rk-cnt">68</span></a>
+    <a class="rk-tab" href="#top">Networks</a>
+    <a class="rk-tab" href="#top">Access</a>
+    <a class="rk-tab" href="#top">Policies</a>
+  </nav>
+  <div class="mk-top-right">
+    <a class="rk-tab" href="AdminSessions.html"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Administration</a>
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">SuperAdmin</span>
+  </div>
+</header>
+
+<div class="mk-body">
+  <main class="mk-main" style="padding-right:20px">
+    <div class="mk-toolbar">
+      <div class="rk-seg" role="group" aria-label="Node kind"><button aria-pressed="true">All <span class="rk-cnt">40</span></button><button aria-pressed="false">Control plane <span class="rk-cnt">3</span></button><button aria-pressed="false">Workers <span class="rk-cnt">37</span></button></div>
+      <label class="rk-field" style="width:260px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m13 13-2.8-2.8"/></svg><input type="text" placeholder="Search by name, label or taint" aria-label="Search nodes"></label>
+      <button class="rk-btn">Select nodes by label and taint</button>
+      <span class="mk-grow"></span><button class="rk-btn">Columns</button><button class="rk-btn">Export</button>
+    </div>
+    <table class="mk-table" aria-label="Nodes">
+      <thead><tr><th>Node</th><th>Role</th><th>Status</th><th>Problems</th><th>CPU requested</th><th class="rk-r">CPU free</th><th>Memory requested</th><th class="rk-r">Pods</th><th class="rk-r">Age</th></tr></thead>
+      <tbody>
+        <tr><td class="rk-mono">cp-1</td><td><span class="rk-role" data-role="control-plane">cp</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:4%"></span></span> <span class="rk-num">2% · 0.15</span></td><td class="rk-r rk-num">7.65</td><td><span class="rk-bar"><span style="width:2%"></span></span> <span class="rk-num">&lt;1% · 134Mi</span></td><td class="rk-r rk-num">2 / 110</td><td class="rk-r rk-num">40d</td></tr>
+        <tr><td class="rk-mono">cp-2</td><td><span class="rk-role" data-role="control-plane">cp</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:4%"></span></span> <span class="rk-num">2% · 0.15</span></td><td class="rk-r rk-num">7.65</td><td><span class="rk-bar"><span style="width:2%"></span></span> <span class="rk-num">&lt;1% · 134Mi</span></td><td class="rk-r rk-num">2 / 110</td><td class="rk-r rk-num">41d</td></tr>
+        <tr><td class="rk-mono">worker-001</td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:67%"></span></span> <span class="rk-num">67% · 10.6</span></td><td class="rk-r rk-num">5.25</td><td><span class="rk-bar"><span style="width:33%"></span></span> <span class="rk-num">33% · 20.3Gi</span></td><td class="rk-r rk-num">30 / 110</td><td class="rk-r rk-num">43d</td></tr>
+        <tr><td class="rk-mono">worker-002</td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:24%"></span></span> <span class="rk-num">24% · 7.5</span></td><td class="rk-r rk-num">24.3</td><td><span class="rk-bar"><span style="width:6%"></span></span> <span class="rk-num">6% · 14.9Gi</span></td><td class="rk-r rk-num">21 / 110</td><td class="rk-r rk-num">44d</td></tr>
+        <tr><td class="rk-mono">worker-003</td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td><span class="rk-t" data-tone="warn">○ 1 warning</span></td><td><span class="rk-bar"><span style="width:60%"></span></span> <span class="rk-num">60% · 9.5</span></td><td class="rk-r rk-num">6.3</td><td><span class="rk-bar"><span style="width:34%"></span></span> <span class="rk-num">34% · 21Gi</span></td><td class="rk-r rk-num">26 / 110</td><td class="rk-r rk-num">45d</td></tr>
+        <tr><td class="rk-mono">worker-005</td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="warn">○ Cordoned</span></td><td><span class="rk-t" data-tone="warn">○ 1 warning</span></td><td><span class="rk-bar"><span style="width:37%"></span></span> <span class="rk-num">37% · 5.9</span></td><td class="rk-r rk-num">9.9</td><td><span class="rk-bar"><span style="width:26%"></span></span> <span class="rk-num">26% · 15.7Gi</span></td><td class="rk-r rk-num">22 / 110</td><td class="rk-r rk-num">47d</td></tr>
+        <tr><td class="rk-mono">worker-006</td><td><span class="rk-role">worker</span></td><td><span class="rk-t" data-tone="ok">● Ready</span></td><td class="rk-dim">—</td><td><span class="rk-bar"><span style="width:47%"></span></span> <span class="rk-num">47% · 7.4</span></td><td class="rk-r rk-num">8.4</td><td><span class="rk-bar"><span style="width:31%"></span></span> <span class="rk-num">31% · 18.8Gi</span></td><td class="rk-r rk-num">25 / 110</td><td class="rk-r rk-num">48d</td></tr>
+      </tbody>
+    </table>
+  </main>
+
+  <section class="mk-dock" aria-label="Dock">
+    <div class="mk-grip" aria-hidden="true"><i></i></div>
+    <div class="mk-strip" role="tablist" aria-label="Dock panels">
+      <a class="mk-stab" href="ApprovalRequester.html"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="m13 13-3-3"/></svg>Assistants</a>
+      <a class="mk-stab" href="DockSessions.html"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h7"/></svg>Sessions <span class="rk-cnt">4</span></a>
+      <span class="mk-sep"></span>
+      <a class="mk-stab" href="DockShell.html"><span class="rk-dot"></span><span class="rk-mono">sh</span>gateway-thnch9… · main<span class="mk-ttl">ends 10:42</span></a>
+      <a class="mk-stab" href="DockPortForward.html" data-state="idle" aria-current="true"><span class="rk-dot"></span><span class="rk-mono">pf</span>5432 → postgres-0<span class="mk-ttl">idle 7:40</span><span class="mk-x" aria-hidden="true">×</span></a>
+      <a class="mk-stab" href="NodeMenu.html" data-state="wait"><span class="rk-dot"></span><span class="rk-mono">node</span>worker-003<span class="mk-ttl">waiting</span></a>
+      <a class="mk-stab" href="DockSessions.html" data-state="ended"><span class="rk-dot"></span><span class="rk-mono">sh</span>api-5d48w… · api<span class="mk-ttl">ended</span><span class="mk-x" aria-hidden="true">×</span></a>
+      <div class="mk-strip-right">
+        <button class="rk-icon-btn" aria-label="Open the dock in a window of its own"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 3H3v10h10V9.5M9 3h4v4M13 3 7.5 8.5"/></svg></button>
+        <button class="rk-icon-btn" aria-label="Minimize the dock"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M3 11h10"/></svg></button>
+        <button class="rk-icon-btn" aria-label="Maximize the dock"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="1.5"/></svg></button>
+      </div>
+    </div>
+
+    <div class="mk-panes" data-split="one">
+      <div class="mk-pane">
+        <div class="rk-dph">
+          <h2>Port forward</h2><small><span class="rk-mono">5432/TCP</span> of <span class="rk-mono">storage/postgres-0</span> · container postgres · runs as you</small>
+          <span class="mk-grow"></span>
+          <span class="rk-pill" data-tone="info">Approved by Deepak R.</span>
+          <span class="rk-pill"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>Ends 10:33 · 23 min</span>
+          <button class="rk-btn">Change local port</button>
+          <button class="rk-btn" data-danger="true">End</button>
+        </div>
+        <div class="mk-body-pad">
+          <div class="mk-grid2" style="align-items:start">
+            <section class="rk-card mk-rc" aria-labelledby="pf-you">
+              <h3 id="pf-you"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1.5" y="3" width="13" height="8.5" rx="1.5"/><path d="M5 14h6"/></svg>On your computer</h3>
+              <div class="rk-steps">
+                <span data-status="done"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg>Approved at 10:03 by Deepak R., for 30 minutes</span>
+                <span data-status="done"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg>The <span class="rk-mono">221b</span> CLI connected from MIKHAIL-MBP at 10:04 (0.8.2)</span>
+                <span data-status="now"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/></svg>Listening on <span class="rk-mono">127.0.0.1:15432</span></span>
+              </div>
+              <p>To connect again, or from another computer, run:</p>
+              <div class="mk-row"><pre class="rk-code mk-grow" style="flex:1 1 0;min-width:0">221b forward lakehouse-prod/s-7f3a2c --local 15432</pre><button class="rk-btn"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5" y="5" width="8.5" height="8.5" rx="1.5"/><path d="M3 10.5V3.5A1.5 1.5 0 0 1 4.5 2h7"/></svg>Copy</button></div>
+              <p>The CLI signs in with your browser session, opens the local port and tunnels through this console, which runs the forward as you. Anything on your computer can use it: <span class="rk-mono">psql -h localhost -p 15432</span>, a database GUI, another browser.</p>
+              <p class="mk-hint">No CLI yet? <a href="#top">Install 221b</a> (macOS, Windows, Linux). A new session waits 5 minutes for a connection, then ends.</p>
+            </section>
+
+            <section class="rk-card mk-rc" aria-labelledby="pf-live">
+              <h3 id="pf-live"><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>Open · no traffic for 7 min</span></h3>
+              <dl class="rk-kv">
+                <dt>Connections</dt><dd><b>2</b> open · 14 so far</dd>
+                <dt>Transferred</dt><dd><span class="rk-num">↓ 1.8 MB · ↑ 212 KB</span></dd>
+                <dt>Last traffic</dt><dd>10:03:12 · 7 min ago</dd>
+                <dt>Idle limit</dt><dd>ends in <b>2:20</b> unless data flows</dd>
+                <dt>Hard limit</dt><dd>10:33 · 30 minutes approved</dd>
+                <dt>Recorded</dt><dd>connections and byte counts, never the payload</dd>
+              </dl>
+              <h4 class="rk-h" style="margin-top:6px">Connections</h4>
+              <div class="mk-list">
+                <div class="mk-item"><span class="rk-dot" style="color:var(--ok)"></span><span class="rk-mono">127.0.0.1:52114</span><span class="rk-dim">psql · open since 10:09</span><span class="mk-grow"></span><span class="rk-num rk-dim">1.6 MB</span></div>
+                <div class="mk-item"><span class="rk-dot" style="color:var(--ok)"></span><span class="rk-mono">127.0.0.1:52090</span><span class="rk-dim">DBeaver · open since 10:05</span><span class="mk-grow"></span><span class="rk-num rk-dim">188 KB</span></div>
+                <div class="mk-item"><span class="rk-dot" style="color:var(--line2)"></span><span class="rk-mono">127.0.0.1:51877</span><span class="rk-dim">closed 10:04 after 41 s</span><span class="mk-grow"></span><span class="rk-num rk-dim">12 KB</span></div>
+              </div>
+            </section>
+          </div>
+        </div>
+        <div class="rk-tin" data-k="warn" style="background:var(--warn-weak);color:var(--warn);border-top-color:var(--line);font-family:var(--font)"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg><span>No traffic for 7 min · the forward closes in 2:20 unless data flows · open connections are cut when it closes</span><button class="rk-btn">Extend 10 min</button></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+</div>
+</body>
+</html>

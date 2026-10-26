@@ -3,6 +3,7 @@ import type { Fleet, NodeRow } from '../api/types'
 import { COLOR_NAMES, fixCommand, has, missing, newId, nextColor, parseReq, reqsOf, withLabel } from '../lib/fleets'
 import { effectTone, labelText, taintId } from '../lib/nodes'
 import { CloseIcon, CopyIcon, SearchIcon } from './Icons'
+import { copyText } from '../lib/clipboard'
 
 /** What the editor opens with: a saved fleet, or a new one, perhaps prefilled. */
 export interface EditorSeed {
@@ -10,6 +11,9 @@ export interface EditorSeed {
   name?: string
   labels?: string[]
   taints?: string[]
+  /** A new list of nodes, rather than labels and taints. */
+  kind?: 'nodes'
+  nodes?: string[]
 }
 
 interface Props {
@@ -30,7 +34,54 @@ function XIcon() {
   )
 }
 
-/** The fleet editor (P4-01): name, description and colour, the labels and taints, and a live preview of the nodes it takes. */
+/** A list's nodes (asked after 0.7.1): every node of the cluster to tick, and those on the list no longer in it. */
+function NodeList({ nodes, listed, onChange }: { nodes: NodeRow[]; listed: string[]; onChange: (next: string[]) => void }) {
+  const [q, setQ] = useState('')
+  const on = new Set(listed)
+  const known = new Set(nodes.map((n) => n.name))
+  const gone = listed.filter((n) => !known.has(n))
+  const lq = q.trim().toLowerCase()
+  const shown = nodes.filter((n) => !lq || n.name.toLowerCase().includes(lq)).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+  return (
+    <section className="rk-card" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }} data-testid="fleet-nodelist">
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px' }}>
+        <h3 className="rk-h" style={{ marginRight: 'auto' }}>
+          Nodes on the list <span style={{ fontWeight: 500, letterSpacing: 0, textTransform: 'none' }}>{listed.length}</span>
+        </h3>
+        <label className="rk-field" style={{ width: 230, maxWidth: '100%' }}>
+          <SearchIcon />
+          <span className="rk-sr">Find a node</span>
+          <input type="search" placeholder="Find a node" value={q} onChange={(e) => setQ(e.target.value)} />
+        </label>
+      </div>
+      <p className="rk-fhint" style={{ margin: 0 }}>
+        Nodes join and leave this fleet only here. Their labels and taints do not change, and a node may be on any number of lists.
+      </p>
+      <div className="rk-ccols">
+        {shown.map((n) => (
+          <label key={n.name} className="rk-ccol">
+            <input type="checkbox" checked={on.has(n.name)} onChange={() => onChange(on.has(n.name) ? listed.filter((x) => x !== n.name) : [...listed, n.name])} data-testid="fleet-nodelist-node" data-node={n.name} />
+            <span className="rk-mono">{n.name}</span>
+          </label>
+        ))}
+      </div>
+      {lq && shown.length === 0 && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>No node matches “{q.trim()}”.</p>}
+      {gone.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 12, color: 'var(--fg3)' }}>No longer in the cluster</span>
+          {gone.map((g) => (
+            <button key={g} className="rk-fchip" data-on="true" onClick={() => onChange(listed.filter((x) => x !== g))} aria-label={`Take ${g} off the list`} title={`Take ${g} off the list`}>
+              {g}
+              <XIcon />
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
+  )
+}
+
+/** The fleet editor (P4-01): name, description and colour, the labels and taints, and a live preview of the nodes it takes; or, for a list, its nodes. */
 export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: Props) {
   const orig = seed.fleet
   const [name, setName] = useState(orig?.name ?? seed.name ?? '')
@@ -38,6 +89,8 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: 
   const [color, setColor] = useState(orig?.color ?? nextColor(fleets))
   const [labels, setLabels] = useState<string[]>(orig?.labels ?? seed.labels ?? [])
   const [taints, setTaints] = useState<string[]>(orig?.taints ?? seed.taints ?? [])
+  const [kind, setKind] = useState<'' | 'nodes'>(orig ? (orig.kind ?? '') : (seed.kind ?? ''))
+  const [listed, setListed] = useState<string[]>(orig?.nodes ?? seed.nodes ?? [])
   const [q, setQ] = useState('')
   const [text, setText] = useState('')
   const [textErr, setTextErr] = useState('')
@@ -122,8 +175,9 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: 
     const n = name.trim()
     if (!n) return setSaveErr('Give the fleet a name.')
     if (fleets.some((f) => f.id !== orig?.id && f.name.trim().toLowerCase() === n.toLowerCase())) return setSaveErr(`Another fleet is already called “${n}”.`)
-    if (!reqCount) return setSaveErr('Pick at least one label or taint.')
-    const f: Fleet = { id: orig?.id ?? newId(n, fleets), name: n, color, desc: desc.trim(), labels, taints }
+    if (kind !== 'nodes' && !reqCount) return setSaveErr('Pick at least one label or taint.')
+    const base: Fleet = { id: orig?.id ?? newId(n, fleets), name: n, color, desc: desc.trim(), labels, taints }
+    const f: Fleet = kind === 'nodes' ? { ...base, labels: [], taints: [], kind: 'nodes', nodes: listed } : base
     setBusy(true)
     try {
       await onSave(f, !orig)
@@ -148,10 +202,7 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: 
     }
   }
   const copy = (cmd: string) => {
-    void navigator.clipboard?.writeText(cmd).then(
-      () => setCopied(cmd),
-      () => undefined,
-    )
+    void copyText(cmd).then((ok) => ok && setCopied(cmd))
   }
 
   const matchText = !reqCount ? 'Pick a label or taint to see which nodes match.' : members.length ? `${members.length} ${members.length === 1 ? 'node matches' : 'nodes match'} today` : 'No node has all of these yet'
@@ -214,8 +265,25 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: 
                 ))}
               </div>
             </div>
+            {!orig && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 12, color: 'var(--fg3)', marginRight: 4 }}>Nodes join</span>
+                <div className="rk-seg" role="group" aria-label="How nodes join the fleet">
+                  <button aria-pressed={kind === ''} onClick={() => setKind('')} title="Every node with all of the fleet's labels and taints, now and later" data-testid="fleet-kind-labels">
+                    By their labels and taints
+                  </button>
+                  <button aria-pressed={kind === 'nodes'} onClick={() => setKind('nodes')} title="The nodes you pick, kept in 221B; nothing changes in the cluster" data-testid="fleet-kind-nodes">
+                    By name, from a list
+                  </button>
+                </div>
+              </div>
+            )}
           </section>
 
+          {kind === 'nodes' ? (
+            <NodeList nodes={nodes} listed={listed} onChange={setListed} />
+          ) : (
+          <>
           <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '4px 10px' }}>
               <h3 className="rk-h">Nodes in this fleet have all of these</h3>
@@ -378,7 +446,11 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: 
               </div>
             )}
           </section>
-          <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>Fleets are saved in this console, not in the cluster. A node joins or leaves a fleet only through its own labels and taints.</p>
+          </>
+          )}
+          <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>
+            {kind === 'nodes' ? 'Fleets are saved in this console, not in the cluster.' : 'Fleets are saved in this console, not in the cluster. A node joins or leaves this fleet only through its own labels and taints.'}
+          </p>
         </div>
         <div style={{ flex: 'none', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '12px 20px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
           <button className="rk-btn" data-on="true" onClick={() => void save()} disabled={busy} style={{ height: 34, padding: '0 16px' }} data-testid="fleet-save">

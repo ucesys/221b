@@ -4,6 +4,7 @@ import { toneRank } from '../lib/nodes'
 import { href } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
 import { CellLink, Mono, NameCell, peekCell, Tone, UsageBar } from './cells'
+import { NameWithTools } from '../components/toolbox/ToolsMenu'
 
 const GIB = 1024 * 1024 * 1024
 
@@ -22,7 +23,12 @@ export const POD_COLUMNS: ColumnDef<PodView>[] = [
     min: 170,
     compactMin: 160,
     sortValue: (r) => r.name,
-    cell: (r) => <NameCell name={r.name} what="pod name" />,
+    // The Tools button beside the name (TB-01).
+    cell: (r) => (
+      <NameWithTools target={{ kind: 'pod', name: r.name, namespace: r.namespace }}>
+        <NameCell name={r.name} what="pod name" />
+      </NameWithTools>
+    ),
     export: (r) => [{ head: 'Pod', cell: r.name }],
   },
   {
@@ -52,15 +58,15 @@ export const POD_COLUMNS: ColumnDef<PodView>[] = [
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.status}</span>
         </span>
         {!r.done && (
-          <span className="rk-num" style={{ color: r.ready < r.total ? 'var(--warn)' : 'var(--fg3)', fontSize: 12 }} title={`${r.ready} of ${r.total} containers ready`}>
-            {r.ready}/{r.total}
+          <span className="rk-num" style={{ color: r.readyUnknown || r.ready < r.total ? 'var(--warn)' : 'var(--fg3)', fontSize: 12 }} title={r.readyUnknown ? `Unknown: the node stopped reporting; it last said ${r.ready} of ${r.total} ready` : `${r.ready} of ${r.total} containers ready`}>
+            {r.readyUnknown ? '?' : r.ready}/{r.total}
           </span>
         )}
       </span>
     ),
     export: (r) => [
       { head: 'Status', cell: r.status },
-      { head: 'Ready', cell: `${r.ready}/${r.total}` },
+      { head: 'Ready', cell: `${r.readyUnknown ? '?' : r.ready}/${r.total}` },
     ],
   },
   {
@@ -262,12 +268,40 @@ export function podLabel(r: PodView, open: boolean): string {
   return `${r.name} in ${r.namespace}, ${r.status}${r.restarts ? `, ${r.restarts} restarts` : ''}${r.node ? `, on ${r.node}` : ', not scheduled'}${open ? ' — details open, press to close' : ' — show details'}`
 }
 
-/** The status segments of the Pods tab: All, Running, Pending, Failing, Completed. */
-export type PodStatusFilter = 'all' | 'running' | 'pending' | 'failing' | 'completed'
+/** The status segments of the Pods tab: All, Running, Not ready, Pending, Unknown, Failing, Completed. */
+export type PodStatusFilter = 'all' | 'running' | 'notready' | 'pending' | 'unknown' | 'failing' | 'completed'
+
+/** The segments in order, with their names. */
+export const POD_STATUSES: [PodStatusFilter, string][] = [
+  ['all', 'All'],
+  ['running', 'Running'],
+  ['notready', 'Not ready'],
+  ['pending', 'Pending'],
+  ['unknown', 'Unknown'],
+  ['failing', 'Failing'],
+  ['completed', 'Completed'],
+]
+
+/** A count of zero for each segment. */
+export function podStatusZero(all: number): Record<PodStatusFilter, number> {
+  return { all, running: 0, notready: 0, pending: 0, unknown: 0, failing: 0, completed: 0 }
+}
+
+/**
+ * The segments to show: All, those with pods, and the one selected even
+ * when its pods are gone, until another is chosen.
+ */
+export function podStatusesShown(counts: Record<PodStatusFilter, number>, selected: PodStatusFilter): [PodStatusFilter, string][] {
+  return POD_STATUSES.filter(([id]) => id === 'all' || id === selected || counts[id] > 0)
+}
 
 export function podStatusGroup(r: PodView): Exclude<PodStatusFilter, 'all'> {
   if (r.done) return 'completed'
+  // Its node stopped reporting: nobody knows how it is.
+  if (r.readyUnknown || r.status === 'Unknown') return 'unknown'
   if (r.tone === 'err') return 'failing'
   if (r.phase === 'Pending' || r.status === 'ContainerCreating' || r.status === 'PodInitializing' || r.status.startsWith('Init:')) return 'pending'
+  // Running but not ready: a readiness check fails.
+  if (r.tone === 'warn') return 'notready'
   return 'running'
 }

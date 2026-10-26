@@ -5,6 +5,7 @@ import { PermissionsPage } from './PermissionsPage'
 import { RolesPage } from './RolesPage'
 import { SettingsPanel } from './SettingsPage'
 import { UsersPage } from './UsersPage'
+import { AdminSessions, AdminToolbox } from './toolbox/AdminToolbox'
 
 export interface AdminProps {
   route: Route
@@ -18,6 +19,8 @@ const PAGES: { id: Page; label: string; tip: string; superOnly: boolean }[] = [
   { id: 'roles', label: 'Roles', tip: 'The four roles and who holds them', superOnly: false },
   { id: 'permissions', label: 'Permissions', tip: 'What each role may read and change', superOnly: false },
   { id: 'users', label: 'Users', tip: 'SuperAdmin only: the people 221B knows', superOnly: true },
+  { id: 'sessions', label: 'Sessions', tip: 'SuperAdmin only: the Toolbox’s sessions, open and ended', superOnly: true },
+  { id: 'toolbox', label: 'Toolbox', tip: 'SuperAdmin only: what the chart allows the Toolbox', superOnly: true },
   { id: 'settings', label: 'Settings', tip: 'SuperAdmin only: refresh rate, Sherlock and Watson', superOnly: true },
 ]
 
@@ -33,7 +36,7 @@ export function isSuperAdmin(me: Me | null): boolean {
  */
 export function pagesFor(me: Me | null): Page[] {
   if (!me) return []
-  if (me.mode === 'none') return ['permissions', 'settings']
+  if (me.mode === 'none') return ['permissions', 'sessions', 'toolbox', 'settings']
   return ADMIN_PAGES.filter((p) => isSuperAdmin(me) || !PAGES.find((x) => x.id === p)!.superOnly)
 }
 
@@ -110,7 +113,7 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>Administration</h1>
           <nav aria-label="Administration pages" style={{ display: 'flex', flexWrap: 'wrap', gap: '0 18px', marginLeft: 8 }}>
             {PAGES.filter((p) => offered.includes(p.id)).map((p) => (
-              <a key={p.id} className="rk-tab" href={adminHref(p.id, [], p.id === 'roles' || p.id === 'permissions' ? route.cluster : 'local')} aria-current={p.id === page ? 'page' : undefined} title={p.tip} data-admin-page={p.id} style={{ height: 36 }}>
+              <a key={p.id} className="rk-tab" href={adminHref(p.id, [], p.id === 'roles' || p.id === 'permissions' || p.id === 'sessions' || p.id === 'toolbox' ? route.cluster : 'local')} aria-current={p.id === page ? 'page' : undefined} title={p.tip} data-admin-page={p.id} style={{ height: 36 }}>
                 {p.label}
               </a>
             ))}
@@ -124,6 +127,8 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
         {me && !refused && page === 'roles' && <RolesPage {...props} />}
         {me && !refused && page === 'permissions' && <PermissionsPage {...props} />}
         {me && !refused && page === 'users' && <UsersPage {...props} />}
+        {me && !refused && page === 'sessions' && <AdminSessions {...props} />}
+        {me && !refused && page === 'toolbox' && <AdminToolbox {...props} />}
         {me && !refused && page === 'settings' && <SettingsPanel route={route} settings={settings} refreshedAt={refreshedAt} />}
       </div>
     </main>

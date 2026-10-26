@@ -4,6 +4,7 @@ import { useRefreshTick } from '../api/live'
 import { download } from '../lib/xlsx'
 import { CopyIcon, DownloadIcon } from './Icons'
 import { apiPath } from '../lib/router'
+import { copyText } from '../lib/clipboard'
 
 interface Props {
   /** The kind's registry name: "pods", "services", "nodes". */
@@ -97,12 +98,8 @@ export function YamlView({ kind, namespace, name, live = true, onToast }: Props)
   const lines = useMemo(() => (text ?? '').replace(/\n$/, '').split('\n'), [text])
   const file = `${kind.replace(/s$/, '')}-${namespace ? namespace + '-' : ''}${name}.yaml`
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text ?? '')
-      onToast?.('Copied the YAML.')
-    } catch {
-      onToast?.('Could not copy: the clipboard is not available.')
-    }
+    if (await copyText(text ?? '')) onToast?.('Copied the YAML.')
+    else onToast?.('Could not copy: the browser refused the clipboard.')
   }
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }} data-testid="yaml">

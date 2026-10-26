@@ -139,7 +139,7 @@ func ClaimDetails(src Source, namespace, name string, can StorageCan, now time.T
 		d.Class = &info
 		d.Expansion = info.Expansion
 	}
-	if a, ok := BuildAlert(src, AlertKey(AlertPVC, namespace, name), now); ok && a.Severity != SevRecovered {
+	if a, ok := BuildAlert(src, AlertKey(AlertPVC, namespace, name), now, 0); ok && a.Severity != SevRecovered {
 		d.Alert = true
 	}
 	var pods []*corev1.Pod

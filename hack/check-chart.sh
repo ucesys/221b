@@ -77,6 +77,10 @@ render k8s-console --set clusterName=ci --set replicaCount=2 --set antiAffinity=
 render k8s-console --set clusterName=ci --set replicaCount=3 --set 'topologySpreadConstraints[0].maxSkew=1' \
   --set 'topologySpreadConstraints[0].topologyKey=topology.kubernetes.io/zone' --set 'topologySpreadConstraints[0].whenUnsatisfiable=DoNotSchedule' \
   --set 'topologySpreadConstraints[0].labelSelector.matchLabels.app=x' | tee "$WORK/chart-ha-zones.yaml" | validate
+echo "--- the Toolbox (Phase 9): off, transcripts on a volume, Admin's shells, no node shells"
+render k8s-console --set clusterName=ci --set toolbox.enabled=false | tee "$WORK/chart-notoolbox.yaml" | validate
+render k8s-console --set clusterName=ci --set toolbox.transcripts=pvc --set toolbox.transcriptsVolume.storageClass=fast | tee "$WORK/chart-transcripts.yaml" | validate
+render k8s-console --set clusterName=ci --set rbac.roles.admin.exec=true --set toolbox.nodeShell.enabled=false | tee "$WORK/chart-toolbox-exec.yaml" | validate
 echo "--- image tags that move, tags that do not, a digest and an explicit pull policy"
 render k8s-console --set clusterName=ci --set image.tag=pr-7 | tee "$WORK/chart-moving.yaml" | validate
 render k8s-console --set clusterName=ci --set image.tag=sha-d548f3953839 | tee "$WORK/chart-sha.yaml" | validate
@@ -99,7 +103,7 @@ out=$WORK/chart-default.yaml
 # replicas' proxy token is a Secret of its own, always there.
 auth_secret() { sed -n '/^kind: Secret$/,/^---/p' "$1" | grep -q '^  name: k8s-console-221b-auth$'; }
 kinds() {
-  [ "$(grep -E '^kind: ' "$out" | sort | uniq -c | awk '{ printf "%s=%s ", $3, $1 }')" = "ClusterRole=6 ClusterRoleBinding=4 ConfigMap=2 Deployment=1 Lease=1 NetworkPolicy=1 Role=1 RoleBinding=1 Secret=2 Service=1 ServiceAccount=1 " ]
+  [ "$(grep -E '^kind: ' "$out" | sort | uniq -c | awk '{ printf "%s=%s ", $3, $1 }')" = "ClusterRole=6 ClusterRoleBinding=4 ConfigMap=3 Deployment=1 Lease=1 Namespace=1 NetworkPolicy=2 Role=1 RoleBinding=1 Secret=2 Service=1 ServiceAccount=1 " ]
 }
 # Sign-in: local accounts by default, with the (empty) account list in a
 # Secret mounted as a file; OIDC with its client secret from a Secret;
@@ -348,6 +352,32 @@ setup_token() {
   grep -A5 'name: SETUP_TOKEN' "$o" | grep -q 'key: setup-token' && grep -q 'setup-token: "first-run-code"' "$o" &&
     ! grep -q 'value: "first-run-code"' "$o" && ! grep -q 'SETUP_TOKEN' "$out"
 }
+# The Toolbox's values reach the console as a file; node shells get a
+# namespace at Pod Security privileged that its pods cannot leave, unless
+# they are off or no full SuperAdmin could create their pods (TB-48, TB-49).
+toolbox_values() {
+  grep -A1 'name: TOOLBOX_CONFIG_FILE' "$out" | grep -q '/etc/221b/toolbox/toolbox.json' && grep -q '"idleTimeout": "10m"' "$out" &&
+    grep -q '"enabled": false' "$WORK/chart-notoolbox.yaml" && grep -q '"transcriptDir": "/var/lib/221b/transcripts"' "$WORK/chart-transcripts.yaml" &&
+    grep -q 'claimName: k8s-console-221b-transcripts' "$WORK/chart-transcripts.yaml" && grep -q 'storageClassName: "fast"' "$WORK/chart-transcripts.yaml" &&
+    ! render k8s-console --set clusterName=ci --set toolbox.transcripts=pvc --set replicaCount=2 > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set toolbox.transcripts=s3 > /dev/null 2>&1
+}
+toolbox_namespace() {
+  sed -n '/^kind: Namespace$/,/^---/p' "$out" | grep -q 'pod-security.kubernetes.io/enforce: privileged' &&
+    sed -n '/^kind: NetworkPolicy$/,/^---/p' "$out" | grep -q 'namespace: 221b-toolbox' &&
+    ! grep -q '^kind: Namespace$' "$WORK/chart-notoolbox.yaml" && ! grep -q '^kind: Namespace$' "$WORK/chart-toolbox-exec.yaml" &&
+    ! grep -q '^kind: Namespace$' "$WORK/chart-protected.yaml" && grep -q '"enabled": false' "$WORK/chart-protected.yaml" &&
+    ! render k8s-console --set clusterName=ci --set toolbox.nodeShell.namespace=consoles > /dev/null 2>&1
+}
+# Admin forwards ports and starts debug pods; it opens shells only with
+# rbac.roles.admin.exec (TB-50).
+admin_exec() {
+  local admin
+  admin() { sed -n '/^  name: 221b-admin$/,/^---/p' "$1"; }
+  admin "$out" | grep -q 'pods/portforward' && ! admin "$out" | grep -q 'pods/exec' &&
+    admin "$WORK/chart-toolbox-exec.yaml" | grep -q 'pods/exec' && grep -q '"adminExec": true' "$WORK/chart-toolbox-exec.yaml" &&
+    ! admin "$WORK/chart-protected.yaml" | grep -q 'pods/portforward'
+}
 digit_override() { render 221b --set clusterName=ci --set fullnameOverride=2b | grep -A3 '^kind: Service$' | grep -q 'name: k8s-console-2b'; }
 
 check "renders a Deployment, Service, ServiceAccount, ConfigMap, ClusterRole, Role, their bindings, a Lease and a NetworkPolicy" kinds
@@ -391,4 +421,7 @@ check "a LoadBalancer Service carries its class, address list, node port and ann
 check "only the console's own replicas may reach a ClusterIP Service through the network policy" closed_by_default
 check "an exposed Service is reachable through the network policy" open_when_exposed
 check "the replicas elect a leader and reach each other; more than one adds a budget and a spread, and needs Secrets" replicas
+check "the Toolbox's values reach the console, and transcripts get a volume" toolbox_values
+check "node shells run in a namespace of their own at Pod Security privileged, closed to the network" toolbox_namespace
+check "Admin forwards ports and starts debug pods, and opens shells only when asked" admin_exec
 exit "$fail"

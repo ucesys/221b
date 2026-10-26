@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { CopyIcon } from './Icons'
+import { copyText } from '../lib/clipboard'
 
 /**
  * A light copy-to-clipboard icon beside an object's name in a details
@@ -13,17 +14,9 @@ export function CopyName({ text, what = 'name' }: { text: string; what?: string 
     return () => window.clearTimeout(t)
   }, [done])
   const copy = () => {
-    const w = navigator.clipboard?.writeText(text)
-    if (!w) {
-      setDone('fail')
-      return
-    }
-    w.then(
-      () => setDone('ok'),
-      () => setDone('fail'),
-    )
+    void copyText(text).then((ok) => setDone(ok ? 'ok' : 'fail'))
   }
-  const label = done === 'ok' ? `Copied ${text}` : done === 'fail' ? 'The clipboard is not available' : `Copy the ${what}`
+  const label = done === 'ok' ? `Copied ${text}` : done === 'fail' ? 'The browser refused the clipboard' : `Copy the ${what}`
   return (
     <button type="button" className="rk-copy" onClick={copy} aria-label={label} title={label} data-copied={done ?? undefined} data-testid="copy-name">
       {done === 'ok' ? (
