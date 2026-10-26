@@ -28,10 +28,11 @@ type ShippedRole struct {
 }
 
 // ShippedRules are a definition's rules; SecretRules are added when
-// secrets.read is on.
+// secrets.read is on, ExecRules when rbac.roles.admin.exec is.
 type ShippedRules struct {
 	Rules       []Rule `json:"rules"`
 	SecretRules []Rule `json:"secretRules,omitempty"`
+	ExecRules   []Rule `json:"execRules,omitempty"`
 }
 
 // Ship builds the file's content.
@@ -45,15 +46,20 @@ func Ship() Shipped {
 			}
 			plain := Definition(id, t, Options{}).Rules
 			with := Definition(id, t, Options{Secrets: true}).Rules
-			var extra []Rule
-			for _, r := range with {
-				if !contains(plain, r) {
-					extra = append(extra, r)
-				}
-			}
-			sr.Templates[t] = ShippedRules{Rules: plain, SecretRules: extra}
+			sr.Templates[t] = ShippedRules{Rules: plain, SecretRules: extra(plain, with), ExecRules: extra(plain, Definition(id, t, Options{Exec: true}).Rules)}
 		}
 		out.Roles[id] = sr
+	}
+	return out
+}
+
+// extra are the rules of with that plain lacks.
+func extra(plain, with []Rule) []Rule {
+	var out []Rule
+	for _, r := range with {
+		if !contains(plain, r) {
+			out = append(out, r)
+		}
 	}
 	return out
 }

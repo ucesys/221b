@@ -283,6 +283,29 @@
               "verbs": [
                 "patch"
               ]
+            },
+            {
+              "apiGroups": [
+                ""
+              ],
+              "resources": [
+                "pods/portforward"
+              ],
+              "verbs": [
+                "create"
+              ]
+            },
+            {
+              "apiGroups": [
+                "batch"
+              ],
+              "resources": [
+                "jobs"
+              ],
+              "verbs": [
+                "create",
+                "delete"
+              ]
             }
           ],
           "secretRules": [
@@ -309,6 +332,19 @@
               "verbs": [
                 "create",
                 "update"
+              ]
+            }
+          ],
+          "execRules": [
+            {
+              "apiGroups": [
+                ""
+              ],
+              "resources": [
+                "pods/exec"
+              ],
+              "verbs": [
+                "create"
               ]
             }
           ]

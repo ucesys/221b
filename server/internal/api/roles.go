@@ -23,6 +23,8 @@ type RolesOptions struct {
 	// says whether the rules on Secrets are in the roles (auth.secretsRead).
 	Templates roles.Templates
 	Secrets   bool
+	// Exec says the full Admin may open shells (rbac.roles.admin.exec).
+	Exec bool
 	// Enforce is "strict" to refuse every change on a cluster whose roles
 	// allow more than the shipped ones; anything else only reports.
 	Enforce string
@@ -129,7 +131,9 @@ func managedBy221b(labels map[string]string) bool {
 	return labels[managedLabel] == "true" || labels[managedByLabel] == managedByValue
 }
 
-func (s *Server) rolesOptions() roles.Options { return roles.Options{Secrets: s.opts.Roles.Secrets} }
+func (s *Server) rolesOptions() roles.Options {
+	return roles.Options{Secrets: s.opts.Roles.Secrets, Exec: s.opts.Roles.Exec}
+}
 
 func (s *Server) monitor() *roles.Monitor { return s.opts.Roles.Monitor }
 
@@ -264,7 +268,7 @@ func (s *Server) getRolesManifest(w http.ResponseWriter, r *http.Request) {
 	if !s.superAdmin(w, r) {
 		return
 	}
-	body := roles.Manifest(roles.ManifestInput{Templates: s.opts.Roles.Templates, Secrets: s.opts.Roles.Secrets, Bindings: s.opts.Roles.Bindings})
+	body := roles.Manifest(roles.ManifestInput{Templates: s.opts.Roles.Templates, Secrets: s.opts.Roles.Secrets, Exec: s.opts.Roles.Exec, Bindings: s.opts.Roles.Bindings})
 	h := w.Header()
 	h.Set("Content-Type", "application/yaml; charset=utf-8")
 	h.Set("Content-Disposition", `attachment; filename="221b-roles.yaml"`)

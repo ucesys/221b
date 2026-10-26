@@ -89,6 +89,20 @@ name of what is wrong. Renders nothing.
 {{- if and (eq $v.auth.mode "none") (eq $v.localCluster.mode "write") (or (eq $v.rbac.roles.admin.template "readOnly") (eq $v.rbac.roles.superAdmin.template "readOnly")) -}}
 {{- fail "With sign-in off (auth.mode none) and localCluster.mode write, Watson's changes run as the console itself, which no readOnly definition of a role limits. Turn sign-in on, or use the full definitions, or set localCluster.mode to read." -}}
 {{- end -}}
+{{- /* The Toolbox. */ -}}
+{{- $t := $v.toolbox -}}
+{{- if not (has $t.transcripts (list "none" "pvc")) -}}
+{{- fail (printf "toolbox.transcripts must be none or pvc, not %q" (toString $t.transcripts)) -}}
+{{- end -}}
+{{- if and $t.enabled (eq $t.transcripts "pvc") (gt (int $v.replicaCount) 1) (ne $t.transcriptsVolume.accessMode "ReadWriteMany") -}}
+{{- fail "toolbox.transcripts pvc with more than one replica needs toolbox.transcriptsVolume.accessMode ReadWriteMany: every replica may write a transcript" -}}
+{{- end -}}
+{{- if not (has $t.nodeShell.approval (list "always" "cluster")) -}}
+{{- fail (printf "toolbox.nodeShell.approval must be always or cluster, not %q" (toString $t.nodeShell.approval)) -}}
+{{- end -}}
+{{- if eq $t.nodeShell.namespace $.Release.Namespace -}}
+{{- fail "toolbox.nodeShell.namespace must not be the console's own namespace: it runs at Pod Security privileged" -}}
+{{- end -}}
 {{- /* Prefixes. */ -}}
 {{- range $p := list $v.auth.prefixes.local $v.auth.prefixes.ldap -}}
 {{- if not (regexMatch "^[a-z0-9][a-z0-9._-]*:$" $p) -}}
@@ -267,7 +281,7 @@ before, and so cannot be. Renders "true" or nothing.
 {{- end -}}
 {{- end -}}
 {{- $cfg := dict "lists" $lists "localGroups" $groups "rbacEnforce" $v.rbac.enforce -}}
-{{- $_ := set $cfg "templates" (dict "admin" $v.rbac.roles.admin.template "superAdmin" $v.rbac.roles.superAdmin.template) -}}
+{{- $_ := set $cfg "templates" (dict "admin" $v.rbac.roles.admin.template "superAdmin" $v.rbac.roles.superAdmin.template "adminExec" (and (eq $v.rbac.roles.admin.template "full") ($v.rbac.roles.admin.exec | default false))) -}}
 {{- $_ := set $cfg "prefixes" (dict "local" $v.auth.prefixes.local "ldap" $v.auth.prefixes.ldap) -}}
 {{- /* The RoleBindings this chart renders, so the console can write the same YAML for a cluster the chart is not installed in. */ -}}
 {{- $_ := set $cfg "bindings" (include "b221.bindingSpecs" . | fromJsonArray) -}}

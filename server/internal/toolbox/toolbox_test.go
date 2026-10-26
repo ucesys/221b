@@ -7,11 +7,11 @@ import (
 )
 
 func TestParseKeepsDefaultsAndReplacesLists(t *testing.T) {
-	c, err := Parse([]byte(`{"idleTimeout":"5m","debugContainer":{"images":["general"]},"nodeShell":{"approval":"cluster"}}`))
+	c, err := Parse([]byte(`{"idleTimeout":"5m","retention":"30d","debugContainer":{"images":["general"]},"nodeShell":{"approval":"cluster"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.IdleTimeout.D() != 5*time.Minute || c.MaxDuration.D() != time.Hour {
+	if c.IdleTimeout.D() != 5*time.Minute || c.MaxDuration.D() != time.Hour || c.Retention.D() != 30*24*time.Hour {
 		t.Fatalf("durations %v %v", c.IdleTimeout.D(), c.MaxDuration.D())
 	}
 	if len(c.DebugContainer.Images) != 1 || !c.DebugContainer.Enabled || c.NodeShell.Approval != ApprovalCluster {

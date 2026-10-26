@@ -1,0 +1,73 @@
+{{- /*
+The Toolbox (Phase 9): its values as a file the console reads (TB-48), the
+namespace node shells run in (TB-49), a network policy that lets its pods
+reach nothing but the API servers, and the transcripts' volume (TB-54).
+*/ -}}
+{{- include "b221.validate" . -}}
+{{- $t := .Values.toolbox }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "b221.fullname" . }}-toolbox
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+data:
+  toolbox.json: |
+    {{- include "b221.toolboxConfig" . | nindent 4 }}
+{{- if include "b221.nodeShellOn" . }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $t.nodeShell.namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+    # Node shells run here with the host's namespaces: an admission policy
+    # can except this namespace by this label.
+    221b.io/toolbox: {{ .Release.Namespace | quote }}
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged
+    pod-security.kubernetes.io/audit: privileged
+  annotations:
+    # Kept on uninstall would leave node pods nobody owns: removed with the
+    # release, after the console ended its sessions.
+    221b.io/owner: {{ include "b221.fullname" . }}
+{{- if .Values.networkPolicy.enabled }}
+---
+# The node shells' pods reach nothing and are reached by nothing; those on
+# the host's network are outside any network policy, as Kubernetes has it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "b221.fullname" . }}-toolbox
+  namespace: {{ $t.nodeShell.namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress: []
+{{- end }}
+{{- end }}
+{{- if and $t.enabled (eq $t.transcripts "pvc") }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "b221.fullname" . }}-transcripts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [{{ $t.transcriptsVolume.accessMode | quote }}]
+  {{- with $t.transcriptsVolume.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $t.transcriptsVolume.size | quote }}
+{{- end }}

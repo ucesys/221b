@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -47,10 +48,17 @@ type Image struct {
 // Duration is a time.Duration that reads "10m" in JSON.
 type Duration time.Duration
 
-// UnmarshalJSON reads "10m", or a number of seconds.
+// UnmarshalJSON reads "10m", "400d", or a number of seconds.
 func (d *Duration) UnmarshalJSON(b []byte) error {
 	var s string
 	if err := json.Unmarshal(b, &s); err == nil {
+		if n, ok := strings.CutSuffix(s, "d"); ok {
+			// Days, which Go's durations lack: retention: 400d.
+			if days, err := strconv.Atoi(n); err == nil && days >= 0 {
+				*d = Duration(time.Duration(days) * 24 * time.Hour)
+				return nil
+			}
+		}
 		v, err := time.ParseDuration(s)
 		if err != nil {
 			return fmt.Errorf("%q is not a duration such as 10m: %w", s, err)

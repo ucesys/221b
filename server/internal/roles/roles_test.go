@@ -92,6 +92,10 @@ func TestSecretsFollowTheOption(t *testing.T) {
 }
 
 func TestAdminHasNoRBACNoExecNothingClusterWide(t *testing.T) {
+	// The toolbox's creates (TB-50): a port forward and a debug pod's Job.
+	toolbox := func(r Rule) bool {
+		return slices.Equal(r.Resources, []string{"pods/portforward"}) || slices.Equal(r.APIGroups, []string{"batch"}) && slices.Equal(r.Resources, []string{"jobs"})
+	}
 	for _, tpl := range []Template{Full, ReadOnly} {
 		for _, r := range writes(Definition(Admin, tpl, Options{Secrets: true}).Rules) {
 			for _, res := range r.Resources {
@@ -100,7 +104,7 @@ func TestAdminHasNoRBACNoExecNothingClusterWide(t *testing.T) {
 				}
 			}
 			for _, v := range r.Verbs {
-				if v == "*" || v == "escalate" || v == "bind" || v == "impersonate" || v == "create" && !slices.Contains(r.Resources, "secrets") {
+				if v == "*" || v == "escalate" || v == "bind" || v == "impersonate" || v == "create" && !slices.Contains(r.Resources, "secrets") && !(tpl == Full && toolbox(r)) {
 					t.Errorf("Admin %s has verb %s on %v", tpl, v, r.Resources)
 				}
 			}
@@ -110,6 +114,27 @@ func TestAdminHasNoRBACNoExecNothingClusterWide(t *testing.T) {
 		for _, res := range Watched {
 			if !res.Namespaced && slices.Contains(r.Resources, res.Resource) && slices.Contains(r.APIGroups, res.Group) {
 				t.Errorf("Admin reads the cluster-scoped %s", res.Resource)
+			}
+		}
+	}
+}
+
+func TestAdminExecIsASwitch(t *testing.T) {
+	has := func(o Options, tpl Template) bool {
+		for _, g := range Grants(Definition(Admin, tpl, o).Rules) {
+			if g.String() == "create pods/exec" {
+				return true
+			}
+		}
+		return false
+	}
+	if has(Options{}, Full) || !has(Options{Exec: true}, Full) || has(Options{Exec: true}, ReadOnly) {
+		t.Fatal("pods/exec is the full Admin's only with rbac.roles.admin.exec")
+	}
+	for _, id := range []ID{Viewer, SuperViewer} {
+		for _, g := range Grants(Definition(id, ReadOnly, Options{Exec: true, Secrets: true}).Rules) {
+			if strings.Contains(g.String(), "pods/exec") || strings.Contains(g.String(), "portforward") {
+				t.Errorf("%s has %s", id, g)
 			}
 		}
 	}

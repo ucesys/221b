@@ -111,7 +111,7 @@ check("the read-only SuperAdmin cannot get what runs a command",
            ({"", "*"} & set(r.get("apiGroups", []))) and ("*" in r.get("resources", []) or RUNS & set(r.get("resources", [])))])
 cm = [x for x in of(d, "ConfigMap") if x["metadata"]["name"].endswith("-auth-config")][0]
 check("it tells the console which definitions are in use",
-      json.loads(cm["data"]["auth.json"])["templates"] == {"admin": "readOnly", "superAdmin": "readOnly"})
+      json.loads(cm["data"]["auth.json"])["templates"] == {"admin": "readOnly", "superAdmin": "readOnly", "adminExec": False})
 
 # ---- local groups and users (RB-06, RB-50)
 d = docs("chart-groups.yaml")

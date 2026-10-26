@@ -123,6 +123,9 @@ type Options struct {
 	// and the read-only SuperAdmin, and Helm's release records for Admin.
 	// SuperViewer never has them (RB-11).
 	Secrets bool
+	// Exec adds create on pods/exec to the full Admin: shells and one
+	// commands in its namespaces (rbac.roles.admin.exec, TB-50).
+	Exec bool
 }
 
 // Rule is one rule of a role, as a ClusterRole has it.
@@ -263,8 +266,8 @@ var labelled = []Rule{
 // adminChanges are the namespaced changes of Watson (P6-02): scale, restart
 // and undo, delete a pod, label and annotate, and the Storage tab's expand
 // and delete a claim (ST-18; patch on claims is among labelled). Nothing on
-// RBAC, no pods/exec, no pods/eviction (draining needs nodes), nothing
-// cluster-wide.
+// RBAC, no pods/exec (adminExec, a chart switch), no pods/eviction
+// (draining needs nodes), nothing cluster-wide.
 func adminChanges() []Rule {
 	return []Rule{
 		{APIGroups: []string{"apps"}, Resources: []string{"deployments/scale", "statefulsets/scale", "replicasets/scale"}, Verbs: []string{"get", "update", "patch"}},
@@ -273,6 +276,19 @@ func adminChanges() []Rule {
 		labelled[0], labelled[1], labelled[2], labelled[3],
 	}
 }
+
+// adminTools are the toolbox's rights of the full Admin (TB-50): port
+// forwards, and debug pods as Jobs it creates and deletes. Ephemeral
+// containers and the toolbox namespace stay SuperAdmin's.
+func adminTools() []Rule {
+	return []Rule{
+		{APIGroups: []string{""}, Resources: []string{"pods/portforward"}, Verbs: []string{"create"}},
+		{APIGroups: []string{"batch"}, Resources: []string{"jobs"}, Verbs: []string{"create", "delete"}},
+	}
+}
+
+// adminExec is the full Admin's shell, behind rbac.roles.admin.exec.
+var adminExec = Rule{APIGroups: []string{""}, Resources: []string{"pods/exec"}, Verbs: []string{"create"}}
 
 // Definition is the rules of a role in a definition.
 func Definition(id ID, t Template, o Options) Role {
@@ -294,8 +310,12 @@ func Definition(id ID, t Template, o Options) Role {
 		}
 		if t == Full {
 			r.Rules = append(r.Rules, adminChanges()...)
+			r.Rules = append(r.Rules, adminTools()...)
 			if o.Secrets {
 				r.Rules = append(r.Rules, helmRecords)
+			}
+			if o.Exec {
+				r.Rules = append(r.Rules, adminExec)
 			}
 		} else {
 			r.Template = ReadOnly

@@ -94,3 +94,22 @@ true
 {{- define "b221.authSecret" -}}
 {{- printf "%s-auth" (include "b221.fullname" .) -}}
 {{- end -}}
+
+{{/* Whether node shells are on: the values say so and a full SuperAdmin
+can create their pods (TB-49). */}}
+{{- define "b221.nodeShellOn" -}}
+{{- $t := .Values.toolbox -}}
+{{- if and $t.enabled $t.nodeShell.enabled (eq .Values.rbac.roles.superAdmin.template "full") -}}true{{- end -}}
+{{- end -}}
+
+{{/* The toolbox values as the console reads them (TOOLBOX_CONFIG_FILE). */}}
+{{- define "b221.toolboxConfig" -}}
+{{- $t := .Values.toolbox -}}
+{{- $c := omit $t "transcriptsVolume" -}}
+{{- $node := deepCopy $t.nodeShell -}}
+{{- $_ := set $node "enabled" (include "b221.nodeShellOn" . | eq "true") -}}
+{{- $_ := set $c "nodeShell" $node -}}
+{{- if eq $t.transcripts "pvc" -}}{{- $_ := set $c "transcriptDir" "/var/lib/221b/transcripts" -}}{{- end -}}
+{{- $_ := set $c "adminExec" (and (eq .Values.rbac.roles.admin.template "full") (.Values.rbac.roles.admin.exec | default false)) -}}
+{{- toPrettyJson $c -}}
+{{- end -}}
