@@ -193,7 +193,7 @@ type appInput struct {
 	ClearToken      bool     `json:"clearToken,omitempty"`
 	Values          *string  `json:"values,omitempty"`
 	Params          []string `json:"params,omitempty"`
-	CreateNamespace bool     `json:"createNamespace,omitempty"`
+	CreateNamespace *bool    `json:"createNamespace,omitempty"`
 	// Upgrade asks for the change to be deployed as well as saved.
 	Upgrade bool `json:"upgrade,omitempty"`
 	// Install adds --install to an upgrade.
@@ -257,10 +257,16 @@ func appLine(verb, ns, name string, src apps.Source, extra ...string) string {
 	return strings.Join(append(parts, extra...), " ")
 }
 
-// submitApp hands the line to Watson as the person's own change, and
-// answers with the card as the Watson pane shows it.
+// submitApp hands the line to Watson as a card the person approves there
+// (asked at the October 27, 2026 review: a deploy is read before it
+// runs), and answers with the card as the Watson pane shows it.
 func (s *Server) submitApp(w http.ResponseWriter, r *http.Request, c watson.Cluster, who watson.Who, line string) {
-	it := s.opts.Watson.SubmitAction(c, who, line, "Helm1")
+	items := s.opts.Watson.Submit(r.Context(), c, who, line, "Helm1", "", false)
+	if len(items) == 0 {
+		jsonError(w, http.StatusInternalServerError, "Watson took no command")
+		return
+	}
+	it := items[0]
 	snap, lines, _ := s.opts.Watson.Snapshot(it.ID, 0)
 	b, _ := json.Marshal(s.watsonView(snap, who, c, lines, 0))
 	w.Header().Set("Content-Type", "application/json")
@@ -302,6 +308,9 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 	if in.Values != nil {
 		rec.Values = *in.Values
 	}
+	if in.CreateNamespace != nil {
+		rec.CreateNamespace = *in.CreateNamespace
+	}
 	var token *string
 	if in.Token != "" {
 		token = &in.Token
@@ -312,7 +321,7 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 	}
 	s.record(r, ActionAppSave, in.Namespace+"/"+in.Name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil)+" params="+strconv.Itoa(len(rec.Params)))
 	var extra []string
-	if in.CreateNamespace {
+	if rec.CreateNamespace {
 		extra = append(extra, "--create-namespace")
 	}
 	s.submitApp(w, r, c, who, appLine("install", in.Namespace, in.Name, *in.Source, extra...))
@@ -356,6 +365,9 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 	if in.Params != nil {
 		rec.Params = in.Params
 	}
+	if in.CreateNamespace != nil {
+		rec.CreateNamespace = *in.CreateNamespace
+	}
 	if in.Ref != "" {
 		src := rec.Source
 		src.Ref, src.RefKind = in.Ref, in.RefKind
@@ -383,11 +395,19 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, r, b)
 		return
 	}
-	var extra []string
-	if in.Install {
-		extra = append(extra, "--install")
+	s.submitApp(w, r, c, who, appLine("upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...))
+}
+
+// installFlags are --install and, when the record asks for it,
+// --create-namespace.
+func installFlags(rec apps.Record, install bool) []string {
+	if !install {
+		return nil
 	}
-	s.submitApp(w, r, c, who, appLine("upgrade", ns, name, rec.Source, extra...))
+	if rec.CreateNamespace {
+		return []string{"--install", "--create-namespace"}
+	}
+	return []string{"--install"}
 }
 
 // postAppUpgrade deploys the application again from its source, moved
@@ -428,11 +448,7 @@ func (s *Server) postAppUpgrade(w http.ResponseWriter, r *http.Request) {
 		}
 		s.record(r, ActionAppSave, ns+"/"+name, "source="+quoteDetail(rec.Source.String()))
 	}
-	var extra []string
-	if in.Install {
-		extra = append(extra, "--install")
-	}
-	s.submitApp(w, r, c, who, appLine("upgrade", ns, name, rec.Source, extra...))
+	s.submitApp(w, r, c, who, appLine("upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...))
 }
 
 // deleteApp uninstalls the release (Watson removes the record when it is

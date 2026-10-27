@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import { fetchAppRefs, fetchDiff, fetchDrift, fetchImages, fetchRevisions, isCard, sourceText, updateApp, type AppDiff, type AppDrift, type AppImage, type AppRefs, type AppView, type RefKind, type RevisionView } from '../../api/apps'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { fetchAppRefs, fetchDiff, fetchDrift, fetchImages, fetchRevisions, sourceText, updateApp, type AppDiff, type AppDrift, type AppImage, type AppRefs, type AppSource, type AppView, type RefKind, type RevisionView } from '../../api/apps'
 import { useDetails } from '../../api/details'
 import type { ClusterInfo, ReleaseDetails } from '../../api/types'
 import type { WatsonItem } from '../../api/watson'
@@ -138,24 +138,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
           />
         </Card>
       )}
-      <Card title="Source" aside={canChange ? <button className="rk-btn" onClick={() => onAction('source')}>{app ? 'Change…' : 'Set…'}</button> : undefined}>
-        {app ? (
-          <Facts
-            items={[
-              ['Repository', app.source.repo],
-              ['Path', app.source.path || '(root)'],
-              [app.source.refKind === 'tag' ? 'Tag' : 'Branch', app.source.ref],
-              ['Commit', commit ? `${commit}${app.commitSubject ? ` — ${app.commitSubject}` : ''}` : 'not deployed from here yet'],
-              ['Chart at commit', app.chartVersion || '—'],
-              ['Token', app.hasToken ? 'saved' : 'none'],
-              ['Kept by', `${app.createdBy || 'the console'}, ${fmtTs(app.created)}`],
-              ['Last change', `${app.updatedBy || '—'}, ${fmtTs(app.updated)}`],
-            ]}
-          />
-        ) : (
-          <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>None kept.</p>
-        )}
-      </Card>
+      <SourceCard clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} />
       {!row.orphan && (
         <Card
           title="Drift"
@@ -365,6 +348,11 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
               {row.orphan ? 'Install' : 'Upgrade'}
             </button>
           )}
+          {canChange && (
+            <button className="rk-btn" onClick={() => onAction(row.orphan ? 'forget' : 'uninstall')} style={{ borderColor: 'var(--err)', color: 'var(--err)' }} title={row.orphan ? 'Drops the record' : 'helm uninstall, as you, after your approval in Watson'} data-testid="app-uninstall">
+              {row.orphan ? 'Forget' : 'Uninstall…'}
+            </button>
+          )}
           <AppToolsButton row={row} canChange={canChange} onPick={onAction} label="Tools" />
           <a className="rk-icon-btn" href={href('helm1')} aria-label="Close the release" title="Close" data-testid="app-close">
             <CloseIcon />
@@ -407,7 +395,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
               <>
                 The console keeps no source for this release.{' '}
                 {canChange && (
-                  <button className="rk-link" onClick={() => onAction('source')} data-testid="app-set-source">
+                  <button className="rk-link" onClick={() => onTab('overview')} data-testid="app-set-source">
                     Set its source
                   </button>
                 )}
@@ -453,43 +441,84 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
   )
 }
 
-/** The application's values file and parameters, edited in place (HA-12, HA-13): saved for the next upgrade, or deployed at once. */
+/**
+ * The application's values file and parameters, edited in place (HA-12,
+ * HA-13) and saved by themselves a moment after the typing stops, for the
+ * next deploy; Upgrade, at the top, deploys them.
+ */
 function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId: string; row: AppRow; app: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void }) {
   const [values, setValues] = useState(app.values ?? '')
   const [params, setParams] = useState((app.params ?? []).join('\n'))
-  const [busy, setBusy] = useState(false)
+  const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>('saved')
   const [error, setError] = useState('')
-  const changed = values !== (app.values ?? '') || params !== (app.params ?? []).join('\n')
-  const paramList = () =>
-    params
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const latest = useRef({ values, params })
+  useEffect(() => {
+    latest.current = { values, params }
+  }, [values, params])
+  // A record changed elsewhere (an upgrade, another browser) shows once
+  // nothing is being edited here.
+  const stateRef = useRef(state)
+  stateRef.current = state
+  useEffect(() => {
+    if (stateRef.current !== 'saved') return
+    const v = app.values ?? ''
+    const p = (app.params ?? []).join('\n')
+    if (v !== latest.current.values) setValues(v)
+    if (p !== latest.current.params) setParams(p)
+  }, [app.values, app.params])
+  const save = useCallback(() => {
+    const { values: v, params: p } = latest.current
+    const list = p
       .split('\n')
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith('#'))
-  const save = (upgrade: boolean) => {
-    for (const p of paramList()) {
-      if (!p.includes('=')) {
-        setError(`"${p}" is not key=value`)
+    for (const x of list) {
+      if (!x.includes('=')) {
+        setState('error')
+        setError(`"${x}" is not key=value`)
         return
       }
     }
-    setBusy(true)
+    setState('saving')
     setError('')
-    updateApp(clusterId, row.namespace, row.name, { values, params: paramList(), upgrade, install: upgrade && row.orphan })
+    const mine = ++seq.current
+    queue.current = queue.current
+      .then(() => updateApp(clusterId, row.namespace, row.name, { values: v, params: list }))
       .then((r) => {
-        setBusy(false)
-        onResult(r, isCard(r) ? `${row.orphan ? 'Installing' : 'Upgrading'} ${row.name} with the values` : 'Values saved')
+        // Typing since this save went out keeps the editor dirty.
+        if (seq.current === mine) setState('saved')
+        onResult(r, 'Values saved')
       })
       .catch((e: unknown) => {
-        setBusy(false)
-        setError(e instanceof Error ? e.message : String(e))
+        if (seq.current === mine) {
+          setState('error')
+          setError(e instanceof Error ? e.message : String(e))
+        }
       })
+  }, [clusterId, row.namespace, row.name, onResult])
+  const queue = useRef<Promise<void>>(Promise.resolve())
+  const seq = useRef(0)
+  const touch = () => {
+    setState('dirty')
+    seq.current++
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(save, 1200)
   }
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current)
+  }, [])
+  const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? 'Unsaved; saves in a moment' : state === 'error' ? error : 'Saved'
   return (
-    <Card title="Values file and parameters" aside={<span style={{ fontSize: 12, color: 'var(--fg3)' }}>what the console deploys this application with; the chart's defaults apply underneath</span>}>
+    <Card title="Values file and parameters" aside={<span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-values-state">{status}</span>}>
       <textarea
         className="rk-area rk-mono"
         value={values}
-        onChange={(e) => setValues(e.target.value)}
+        onChange={(e) => {
+          setValues(e.target.value)
+          touch()
+        }}
+        onBlur={() => state === 'dirty' && save()}
         readOnly={!canChange}
         spellCheck={false}
         aria-label="Values file"
@@ -501,6 +530,7 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
             const s = el.selectionStart
             const next = values.slice(0, s) + '  ' + values.slice(el.selectionEnd)
             setValues(next)
+            touch()
             requestAnimationFrame(() => el.setSelectionRange(s + 2, s + 2))
           }
         }}
@@ -512,24 +542,154 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
         <h4 className="rk-h" style={{ margin: '0 0 6px', fontSize: 12 }}>
           Parameters
         </h4>
-        <textarea className="rk-area rk-mono" value={params} onChange={(e) => setParams(e.target.value)} readOnly={!canChange} spellCheck={false} aria-label="Parameters" style={{ minHeight: 64, fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }} placeholder="image.tag=v1.2.0 — one key=value per line, as helm --set takes them, applied over the values file" data-testid="app-params" />
+        <textarea
+          className="rk-area rk-mono"
+          value={params}
+          onChange={(e) => {
+            setParams(e.target.value)
+            touch()
+          }}
+          onBlur={() => state === 'dirty' && save()}
+          readOnly={!canChange}
+          spellCheck={false}
+          aria-label="Parameters"
+          style={{ minHeight: 64, fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }}
+          placeholder="image.tag=v1.2.0 — one key=value per line, as helm --set takes them, applied over the values file"
+          data-testid="app-params"
+        />
       </div>
-      {error && (
-        <p className="rk-t" data-tone="err" role="alert" style={{ margin: 0, fontSize: 12.5 }}>
-          {error}
-        </p>
+      <p className="rk-hint" style={{ margin: 0 }}>
+        {canChange ? 'What you type here is kept with the application; Upgrade at the top deploys it, as you, after your approval in Watson. The chart\'s defaults apply underneath.' : 'What the console deploys this application with; the chart\'s defaults apply underneath.'}
+      </p>
+    </Card>
+  )
+}
+
+/**
+ * The application's source, edited in place and saved when a field is
+ * left (HA-05, HA-11): the repository, the chart's path, the branch or
+ * tag, a token for a private repository, and whether to make the
+ * namespace at install. A release the console did not install gets its
+ * record here.
+ */
+function SourceCard({ clusterId, row, app, canChange, onResult }: { clusterId: string; row: AppRow; app?: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void }) {
+  const [repo, setRepo] = useState(app?.source.repo ?? '')
+  const [path, setPath] = useState(app?.source.path ?? '')
+  const [ref, setRef] = useState(app?.source.ref ?? '')
+  const [refKind, setRefKind] = useState<RefKind>(app?.source.refKind ?? 'branch')
+  const [token, setToken] = useState('')
+  const [createNs, setCreateNs] = useState(app?.createNamespace ?? false)
+  const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>('saved')
+  const [error, setError] = useState('')
+  const commit = app?.commit ? app.commit.slice(0, 12) : ''
+  const saved: AppSource | null = app ? app.source : null
+  // The record's source shows once nothing is being edited here.
+  const stateRef = useRef(state)
+  stateRef.current = state
+  useEffect(() => {
+    if (stateRef.current !== 'saved' || !app) return
+    setRepo(app.source.repo)
+    setPath(app.source.path ?? '')
+    setRef(app.source.ref)
+    setRefKind(app.source.refKind)
+    setCreateNs(app.createNamespace ?? false)
+  }, [app])
+  const dirty = (createNsNow = createNs, tok = token) => !saved || repo.trim() !== saved.repo || path.trim() !== (saved.path ?? '') || ref.trim() !== saved.ref || refKind !== saved.refKind || createNsNow !== (app?.createNamespace ?? false) || tok !== ''
+  const save = (createNsNow = createNs, tok = token) => {
+    if (!canChange || !dirty(createNsNow, tok)) return
+    if (!repo.trim() || !ref.trim()) {
+      setState('dirty')
+      return
+    }
+    setState('saving')
+    setError('')
+    const input = { source: { repo: repo.trim(), path: path.trim(), ref: ref.trim(), refKind }, token: tok || undefined, createNamespace: createNsNow }
+    // One save after another: two fields left in quick succession must not
+    // race; and an answer marks the card clean only when nothing was typed
+    // since it went out.
+    const mine = ++seq.current
+    queue.current = queue.current
+      .then(() => updateApp(clusterId, row.namespace, row.name, input))
+      .then((r) => {
+        if (seq.current === mine) {
+          setState('saved')
+          setToken('')
+        }
+        onResult(r, saved ? 'Source saved' : 'Source set')
+      })
+      .catch((e: unknown) => {
+        if (seq.current === mine) {
+          setState('error')
+          setError(e instanceof Error ? e.message : String(e))
+        }
+      })
+  }
+  const queue = useRef<Promise<void>>(Promise.resolve())
+  const seq = useRef(0)
+  const edited = () => {
+    seq.current++
+    setState('dirty')
+  }
+  const field = (label: string, value: string, set: (v: string) => void, placeholder: string, testId: string, type = 'text', hint?: string) => (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, fontWeight: 600, color: 'var(--fg2)', minWidth: 0 }}>
+      {label}
+      <span className="rk-field">
+        <input className="rk-mono" type={type} autoComplete="off" value={value} readOnly={!canChange} onChange={(e) => (set(e.target.value), edited())} onBlur={() => save()} placeholder={placeholder} data-testid={testId} />
+      </span>
+      {hint && <span className="rk-fhint" style={{ fontWeight: 400 }}>{hint}</span>}
+    </label>
+  )
+  const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? (repo.trim() && ref.trim() ? 'Saves when you leave the field' : 'Needs a repository and a branch or tag') : state === 'error' ? error : saved ? 'Saved' : 'Not set'
+  return (
+    <Card title="Source" aside={<span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-source-state">{status}</span>}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px 14px' }}>
+        {field('Repository', repo, setRepo, 'https://github.com/org/app', 'app-src-repo', 'text', 'An https:// git URL')}
+        {field('Chart path', path, setPath, 'charts/app', 'app-src-path', 'text', 'The chart\'s directory; empty for the root')}
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, fontWeight: 600, color: 'var(--fg2)', minWidth: 0 }}>
+          {refKind === 'tag' ? 'Tag' : 'Branch'}
+          <span style={{ display: 'flex', gap: 6 }}>
+            <span className="rk-field" style={{ flex: '1 1 auto' }}>
+              <input className="rk-mono" value={ref} readOnly={!canChange} onChange={(e) => (setRef(e.target.value), edited())} onBlur={() => save()} placeholder="main, or v1.2.0" data-testid="app-src-ref" />
+            </span>
+            <span className="rk-seg" role="group" aria-label="Kind of ref">
+              <button type="button" aria-pressed={refKind === 'branch'} disabled={!canChange} onClick={() => (setRefKind('branch'), edited())}>
+                Branch
+              </button>
+              <button type="button" aria-pressed={refKind === 'tag'} disabled={!canChange} onClick={() => (setRefKind('tag'), edited())}>
+                Tag
+              </button>
+            </span>
+          </span>
+        </label>
+        {field('Token', token, setToken, app?.hasToken ? '•••••••• saved; paste a new one to replace it' : 'only for a private repository', 'app-src-token', 'password', 'Kept in the console, never shown again')}
+      </div>
+      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+        <input
+          type="checkbox"
+          checked={createNs}
+          disabled={!canChange}
+          onChange={(e) => {
+            setCreateNs(e.target.checked)
+            save(e.target.checked)
+          }}
+          data-testid="app-src-create-ns"
+        />{' '}
+        Create the namespace {row.namespace} if it does not exist, at install
+      </label>
+      {app && (
+        <Facts
+          items={[
+            ['Commit', commit ? `${commit}${app.commitSubject ? ` — ${app.commitSubject}` : ''}` : 'not deployed from here yet'],
+            ['Chart at commit', app.chartVersion || '—'],
+            ['Kept by', `${app.createdBy || 'the console'}, ${fmtTs(app.created)}`],
+            ['Last change', `${app.updatedBy || '—'}, ${fmtTs(app.updated)}`],
+          ]}
+        />
       )}
-      {canChange && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-          <button className="rk-btn" data-on={changed ? 'true' : undefined} onClick={() => save(false)} disabled={busy || !changed} data-testid="app-values-save">
-            Save
-          </button>
-          <button className="rk-btn" onClick={() => save(true)} disabled={busy} aria-busy={busy} data-testid="app-values-deploy">
-            {busy ? 'Sending…' : row.orphan ? 'Save and install' : 'Save and upgrade'}
-          </button>
-          <span className="rk-hint">{changed ? 'Unsaved changes: Save keeps them for the next deploy.' : 'Saved. Upgrade, at the top, deploys the saved source, values and parameters as you, through Watson.'}</span>
-        </div>
-      )}
+      <p className="rk-hint" style={{ margin: 0 }}>
+        {state === 'dirty' && repo.trim() && ref.trim() ? 'Leave the field to save. ' : ''}
+        {saved ? 'Upgrade at the top deploys from here, as you, after your approval in Watson.' : 'Once set, the release can be upgraded from here, switched to another branch or tag, and checked for drift.'}
+      </p>
     </Card>
   )
 }

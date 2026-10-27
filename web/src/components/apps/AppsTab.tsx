@@ -101,22 +101,31 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
     if (isCard(r)) {
       if (r.status === 'refused') onToast(r.reason || 'Watson refused it.')
       else if (r.status === 'pending') {
-        onToast(`${r.command} waits in Watson for a second person to approve it.`)
+        onToast(`${doing}: the card is in Watson. Read it and approve it there.`)
         tb?.showWatson()
       } else {
         onToast(`${doing}. Watson shows how it goes.`)
         tb?.showWatson()
       }
-    } else onToast(`${doing}.`)
-    setVersion((v) => v + 1)
+      setVersion((v) => v + 1)
+      return
+    }
+    // A saved record: the page shows it at once, before the next list.
+    setApps((list) => {
+      const rest = list.filter((a) => !(a.namespace === r.namespace && a.name === r.name))
+      return [...rest, r]
+    })
+    onToast(`${doing}.`)
   }
 
   const act = (a: AppAction, row: AppRow) => {
     switch (a) {
       case 'upgrade':
       case 'switch':
-      case 'source':
         setDialog({ mode: a, row })
+        break
+      case 'source':
+        navigate(href('helm1', [row.namespace, row.name]))
         break
       case 'values':
         navigate(href('helm1', [row.namespace, row.name], { tab: 'values' }))

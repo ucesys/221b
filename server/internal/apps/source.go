@@ -133,6 +133,8 @@ type Record struct {
 	// Params are the extra parameters, each key=value as helm --set takes
 	// them, applied over the values file (HA-13).
 	Params []string `json:"params,omitempty"`
+	// CreateNamespace makes the namespace at install when it is missing.
+	CreateNamespace bool `json:"createNamespace,omitempty"`
 	// HasToken says a credential for the repository is saved with the
 	// record; the token itself never leaves the server.
 	HasToken  bool      `json:"hasToken,omitempty"`

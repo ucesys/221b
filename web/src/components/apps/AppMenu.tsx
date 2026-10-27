@@ -38,7 +38,7 @@ export function appItems(r: AppRow, canChange: boolean): Item[] {
     return [
       { key: 'install', label: 'Install', hint: 'from its source, with its values', off },
       { key: 'values', label: 'Values and parameters…', off },
-      { key: 'source', label: 'Change source…', off },
+      { key: 'source', label: 'Source…', hint: 'edited on the Overview', off },
       { key: 'forget', label: 'Forget', hint: 'drops the record', sepBefore: true, danger: true, off },
     ]
   }
@@ -47,7 +47,7 @@ export function appItems(r: AppRow, canChange: boolean): Item[] {
     { key: 'upgrade', label: 'Upgrade from another branch or tag…', off: off ?? noSource },
     { key: 'switch', label: 'Switch branch or tag…', off: off ?? noSource },
     { key: 'values', label: 'Values and parameters…', off: off ?? noSource },
-    { key: 'source', label: r.app ? 'Change source…' : 'Set source…', hint: r.app ? undefined : 'a repository, path and branch or tag', off },
+    { key: 'source', label: r.app ? 'Source…' : 'Set source…', hint: 'edited on the Overview', off },
     { key: 'forget', label: 'Forget source', hint: 'keeps the release', sepBefore: true, off: off ?? noSource },
     { key: 'uninstall', label: 'Uninstall…', danger: true, off },
   ]

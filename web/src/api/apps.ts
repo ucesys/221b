@@ -27,6 +27,7 @@ export interface AppRecord {
   chartVersion?: string
   values?: string
   params?: string[]
+  createNamespace?: boolean
   hasToken?: boolean
   createdBy?: string
   created: string

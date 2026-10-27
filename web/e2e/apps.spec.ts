@@ -85,28 +85,36 @@ test('a release opens beside the table: overview, history with a diff of two rev
   await expect(page.getByTestId('apps-table').getByRole('columnheader', { name: /^Source/ })).toBeVisible()
 })
 
-test('a source is set, refused when it is not https, and forgotten; a Viewer may do none of it (HA-02, HA-11)', async ({ page, request, browser }) => {
+test('a source is set in place, refused when it is not https, and forgotten; a Viewer may do none of it (HA-02, HA-11)', async ({ page, request, browser }) => {
   const releases = releaseRows(await snapshot(request, ['helm']))
   const r = releases[0]!
+  // A record a failed run left behind would get in the way.
+  await request.delete(`/api/v1/apps/${r.namespace}/${r.name}?record=1`, { headers: SAME })
   await page.goto(`/#/helm1/${r.namespace}/${r.name}`)
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   const panel = page.getByTestId('app-panel')
-  await panel.getByTestId('app-set-source').click()
-  const dlg = page.getByTestId('app-dialog')
-  await expect(dlg).toHaveAttribute('data-mode', 'source')
-  await dlg.getByTestId('app-repo').fill('http://github.com/ucesys/221b')
-  await dlg.getByTestId('app-ref-text').fill('main')
-  await dlg.getByTestId('app-submit').click()
-  await expect(dlg.getByRole('alert')).toContainText('https://')
-  await dlg.getByTestId('app-repo').fill('github.com/ucesys/221b')
-  await dlg.getByTestId('app-path').fill('deploy/helm/221b')
-  await dlg.getByTestId('app-submit').click()
-  await expect(dlg).toHaveCount(0)
+  await expect(panel.getByTestId('app-source-state')).toHaveText('Not set')
+  await panel.getByTestId('app-src-repo').fill('http://github.com/ucesys/221b')
+  await panel.getByTestId('app-src-ref').fill('main')
+  await panel.getByTestId('app-src-ref').blur()
+  await expect(panel.getByTestId('app-source-state')).toContainText('https://')
+  await panel.getByTestId('app-src-repo').fill('github.com/ucesys/221b')
+  await panel.getByTestId('app-src-path').fill('deploy/helm/221b')
+  await panel.getByTestId('app-src-path').blur()
+  await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 10_000 })
   await expect(panel.getByTestId('app-source-line')).toContainText('github.com/ucesys/221b/deploy/helm/221b @ main')
   try {
     const list = await request.get('/api/v1/apps')
     const apps = (await list.json()) as { namespace: string; name: string; source: { repo: string; ref: string; refKind: string } }[]
     expect(apps.find((a) => a.name === r.name)?.source).toEqual({ repo: 'https://github.com/ucesys/221b', path: 'deploy/helm/221b', ref: 'main', refKind: 'branch' })
+    // The values save by themselves, and show at once.
+    await panel.locator('[data-subtab="values"]').click()
+    await panel.getByTestId('app-values').fill('replicaCount: 2\n')
+    await expect(panel.getByTestId('app-values-state')).toHaveText('Saved', { timeout: 10_000 })
+    await page.reload()
+    await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+    await page.getByTestId('app-panel').locator('[data-subtab="values"]').click()
+    await expect(page.getByTestId('app-panel').getByTestId('app-values')).toHaveValue('replicaCount: 2\n')
 
     const me = (await (await request.get('/api/v1/me')).json()) as { mode: string }
     if (me.mode !== 'none') {
@@ -149,6 +157,10 @@ test('installs a chart from a public git repository through Watson, checks its d
   await dlg.getByTestId('app-params').fill('replicaCount=1')
   await dlg.getByTestId('app-submit').click()
   await expect(dlg).toHaveCount(0)
+  // The install is a card: read, then approved.
+  const card = page.getByTestId('watson').locator('[data-testid=watson-card]').filter({ hasText: `helm install ${name}` })
+  await expect(card.getByTestId('watson-approve')).toBeEnabled({ timeout: 90_000 })
+  await card.getByTestId('watson-approve').click()
   try {
     const row = page.getByTestId('apps-table').locator(`[data-release="${ns}/${name}"]`)
     await expect(row).toBeVisible({ timeout: 120_000 })
@@ -164,6 +176,9 @@ test('installs a chart from a public git repository through Watson, checks its d
   } finally {
     const res = await request.delete(`/api/v1/apps/${ns}/${name}`, { headers: SAME })
     expect([202, 404]).toContain(res.status())
+    const gone = page.getByTestId('watson').locator('[data-testid=watson-card]').filter({ hasText: `helm uninstall ${name}` })
+    await expect(gone.getByTestId('watson-approve')).toBeEnabled({ timeout: 60_000 })
+    await gone.getByTestId('watson-approve').click()
     await expect(page.getByTestId('apps-table').locator(`[data-release="${ns}/${name}"]`)).toHaveCount(0, { timeout: 120_000 })
   }
 })
