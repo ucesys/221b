@@ -19,7 +19,7 @@ export function NameWithAppTools({ row, children }: { row: AppRow; children: Rea
 }
 
 /** What the menu offers on a release (HA-10): each opens a dialog, or asks. */
-export type AppAction = 'install' | 'upgrade' | 'switch' | 'values' | 'source' | 'forget' | 'uninstall'
+export type AppAction = 'install' | 'deploy' | 'upgrade' | 'switch' | 'values' | 'source' | 'forget' | 'uninstall'
 
 interface Item {
   key: AppAction
@@ -43,7 +43,8 @@ export function appItems(r: AppRow, canChange: boolean): Item[] {
     ]
   }
   return [
-    { key: 'upgrade', label: 'Upgrade…', hint: r.app ? `from ${r.app.source.ref}` : undefined, off: off ?? noSource },
+    { key: 'deploy', label: 'Upgrade', hint: r.app ? `from ${r.app.source.ref}, with the saved values` : undefined, off: off ?? noSource },
+    { key: 'upgrade', label: 'Upgrade from another branch or tag…', off: off ?? noSource },
     { key: 'switch', label: 'Switch branch or tag…', off: off ?? noSource },
     { key: 'values', label: 'Values and parameters…', off: off ?? noSource },
     { key: 'source', label: r.app ? 'Change source…' : 'Set source…', hint: r.app ? undefined : 'a repository, path and branch or tag', off },

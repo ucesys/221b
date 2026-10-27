@@ -100,7 +100,7 @@ name of what is wrong. Renders nothing.
 {{- if not (has $t.nodeShell.approval (list "always" "cluster")) -}}
 {{- fail (printf "toolbox.nodeShell.approval must be always or cluster, not %q" (toString $t.nodeShell.approval)) -}}
 {{- end -}}
-{{- if eq $t.nodeShell.namespace $.Release.Namespace -}}
+{{- if eq (include "b221.toolboxNamespace" $) $.Release.Namespace -}}
 {{- fail "toolbox.nodeShell.namespace must not be the console's own namespace: it runs at Pod Security privileged" -}}
 {{- end -}}
 {{- if and $v.secrets.reveal (not $v.secrets.read) -}}

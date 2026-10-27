@@ -96,7 +96,6 @@ test('a source is set, refused when it is not https, and forgotten; a Viewer may
   await expect(dlg).toHaveAttribute('data-mode', 'source')
   await dlg.getByTestId('app-repo').fill('http://github.com/ucesys/221b')
   await dlg.getByTestId('app-ref-text').fill('main')
-  await dlg.getByTestId('app-deploy').uncheck()
   await dlg.getByTestId('app-submit').click()
   await expect(dlg.getByRole('alert')).toContainText('https://')
   await dlg.getByTestId('app-repo').fill('github.com/ucesys/221b')

@@ -122,8 +122,9 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
         navigate(href('helm1', [row.namespace, row.name], { tab: 'values' }))
         break
       case 'install':
-        upgradeApp(route.cluster, row.namespace, row.name, { install: true }).then(
-          (it) => handleResult(it, `Installing ${row.name}`),
+      case 'deploy':
+        upgradeApp(route.cluster, row.namespace, row.name, { install: a === 'install' }).then(
+          (it) => handleResult(it, `${a === 'install' ? 'Installing' : 'Upgrading'} ${row.name}`),
           (e: unknown) => onToast(e instanceof Error ? e.message : String(e)),
         )
         break

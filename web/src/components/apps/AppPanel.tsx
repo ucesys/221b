@@ -360,6 +360,11 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
             </span>
           )}
           <span style={{ flex: '1 1 auto' }} />
+          {canChange && app && (
+            <button className="rk-btn" data-on="true" onClick={() => onAction(row.orphan ? 'install' : 'deploy')} title={row.orphan ? 'helm install from the saved source, values and parameters' : 'helm upgrade from the saved source, values and parameters'} data-testid="app-deploy">
+              {row.orphan ? 'Install' : 'Upgrade'}
+            </button>
+          )}
           <AppToolsButton row={row} canChange={canChange} onPick={onAction} label="Tools" />
           <a className="rk-icon-btn" href={href('helm1')} aria-label="Close the release" title="Close" data-testid="app-close">
             <CloseIcon />
@@ -516,13 +521,13 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
       )}
       {canChange && (
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-          <button className="rk-btn" onClick={() => save(false)} disabled={busy || !changed} data-testid="app-values-save">
-            Save for the next upgrade
+          <button className="rk-btn" data-on={changed ? 'true' : undefined} onClick={() => save(false)} disabled={busy || !changed} data-testid="app-values-save">
+            Save
           </button>
-          <button className="rk-btn" data-on="true" onClick={() => save(true)} disabled={busy} aria-busy={busy} data-testid="app-values-deploy">
+          <button className="rk-btn" onClick={() => save(true)} disabled={busy} aria-busy={busy} data-testid="app-values-deploy">
             {busy ? 'Sending…' : row.orphan ? 'Save and install' : 'Save and upgrade'}
           </button>
-          <span className="rk-hint">{changed ? 'Unsaved changes.' : 'The upgrade runs as you, through Watson.'}</span>
+          <span className="rk-hint">{changed ? 'Unsaved changes: Save keeps them for the next deploy.' : 'Saved. Upgrade, at the top, deploys the saved source, values and parameters as you, through Watson.'}</span>
         </div>
       )}
     </Card>

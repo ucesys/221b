@@ -20,7 +20,7 @@ data:
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: {{ $t.nodeShell.namespace }}
+  name: {{ include "b221.toolboxNamespace" . }}
   labels:
     {{- include "b221.labels" . | nindent 4 }}
     # Node shells run here with the host's namespaces: an admission policy
@@ -41,7 +41,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: {{ include "b221.fullname" . }}-toolbox
-  namespace: {{ $t.nodeShell.namespace }}
+  namespace: {{ include "b221.toolboxNamespace" . }}
   labels:
     {{- include "b221.labels" . | nindent 4 }}
 spec:

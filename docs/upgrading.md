@@ -48,6 +48,11 @@ The earlier release reads what the newer one saved: it ignores fields it does no
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
+## 0.10.0 (unreleased)
+
+- **`toolbox.nodeShell.namespace`** is empty by default and renders as `<release namespace>-toolbox`: a console in `221b` keeps `221b-toolbox`, so nothing changes for it; a console that set the value keeps it. A second console installed in another namespace now gets a namespace of its own instead of refusing to install.
+- **Phase 10:** the Helm1 tab (applications from git, `apps/…` endpoints, records in Secrets `<fullname>-app-<id>` of the console's namespace) and Secret editing with the new `secrets.reveal` value (off by default).
+
 ## 0.9.1
 
 The first release after 0.7.1: Phase 8 (Storage), Phase 9 (Toolbox) and the Phase 9.1 review. There is no 0.8.x or 0.9.0; upgrade from 0.7.1 directly.

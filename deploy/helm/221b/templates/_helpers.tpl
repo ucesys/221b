@@ -97,6 +97,13 @@ true
 
 {{/* Whether node shells are on: the values say so and a full SuperAdmin
 can create their pods (TB-49). */}}
+{{- /* The namespace node shells run in: toolbox.nodeShell.namespace, or
+<release namespace>-toolbox, so two consoles in one cluster do not fight
+over it (Phase 10 review). */ -}}
+{{- define "b221.toolboxNamespace" -}}
+{{- .Values.toolbox.nodeShell.namespace | default (printf "%s-toolbox" .Release.Namespace) -}}
+{{- end -}}
+
 {{- define "b221.nodeShellOn" -}}
 {{- $t := .Values.toolbox -}}
 {{- if and $t.enabled $t.nodeShell.enabled (eq .Values.rbac.roles.superAdmin.template "full") -}}true{{- end -}}
@@ -108,6 +115,7 @@ can create their pods (TB-49). */}}
 {{- $c := omit $t "transcriptsVolume" -}}
 {{- $node := deepCopy $t.nodeShell -}}
 {{- $_ := set $node "enabled" (include "b221.nodeShellOn" . | eq "true") -}}
+{{- $_ := set $node "namespace" (include "b221.toolboxNamespace" .) -}}
 {{- $_ := set $c "nodeShell" $node -}}
 {{- if eq $t.transcripts "pvc" -}}{{- $_ := set $c "transcriptDir" "/var/lib/221b/transcripts" -}}{{- end -}}
 {{- $_ := set $c "adminExec" (and (eq .Values.rbac.roles.admin.template "full") (.Values.rbac.roles.admin.exec | default false)) -}}

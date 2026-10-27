@@ -107,7 +107,6 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const [values, setValues] = useState(app?.values ?? '')
   const [params, setParams] = useState((app?.params ?? []).join('\n'))
   const [createNs, setCreateNs] = useState(false)
-  const [deploy, setDeploy] = useState(mode === 'values' ? false : true)
   const [refs, setRefs] = useState<RepoRefs | null>(null)
   const [loadingRefs, setLoadingRefs] = useState(() => (mode === 'switch' || mode === 'upgrade') && !!app)
   const [busy, setBusy] = useState(false)
@@ -152,7 +151,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
 
   const source = (): AppSource => ({ repo: repo.trim(), path: path.trim(), ref: ref.trim(), refKind })
 
-  const submit = () => {
+  const submit = (deployNow: boolean) => {
     setError('')
     for (const p of paramList()) {
       if (!p.includes('=')) {
@@ -171,7 +170,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
         input.source = source()
         if (token) input.token = token
         if (clearToken) input.clearToken = true
-        if (deploy) {
+        if (deployNow) {
           input.upgrade = true
           input.install = true
         }
@@ -184,7 +183,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
         req = upgradeApp(cluster, row!.namespace, row!.name, ref.trim() && (ref.trim() !== app?.source.ref || refKind !== app?.source.refKind) ? { ref: ref.trim(), refKind } : {})
         break
       case 'values':
-        req = updateApp(cluster, row!.namespace, row!.name, { values, params: paramList(), upgrade: deploy })
+        req = updateApp(cluster, row!.namespace, row!.name, { values, params: paramList(), upgrade: deployNow })
         break
     }
     req.then(
@@ -199,7 +198,9 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
     )
   }
 
-  const primary = { create: 'Install', source: deploy ? (app ? 'Save and upgrade' : 'Save and deploy') : 'Save', switch: 'Switch and upgrade', upgrade: 'Upgrade', values: deploy ? 'Save and upgrade' : 'Save' }[mode]
+  const primary = { create: 'Install', source: 'Save', switch: 'Switch and upgrade', upgrade: 'Upgrade', values: 'Save' }[mode]
+  // Save keeps the change for the next deploy; the second button deploys it at once.
+  const alsoDeploy = mode === 'source' || mode === 'values' ? (row?.orphan || !app ? 'Save and install' : 'Save and upgrade') : ''
   const canSubmit = !busy && (mode === 'create' ? namespace.trim() !== '' && name.trim() !== '' && repo.trim() !== '' && ref.trim() !== '' : mode === 'source' ? repo.trim() !== '' && ref.trim() !== '' : mode === 'switch' ? ref.trim() !== '' : true)
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation()
 
@@ -298,11 +299,6 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
               <input type="checkbox" checked={createNs} onChange={(e) => setCreateNs(e.target.checked)} data-testid="app-create-ns" /> Create the namespace if it does not exist
             </label>
           )}
-          {(mode === 'source' || mode === 'values') && (
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, gridColumn: '1 / -1' }}>
-              <input type="checkbox" checked={deploy} onChange={(e) => setDeploy(e.target.checked)} data-testid="app-deploy" /> {mode === 'values' ? 'Upgrade the release with these values now' : app ? 'Upgrade the release from this source now' : 'Deploy from this source now (helm upgrade --install)'}
-            </label>
-          )}
         </div>
         {error && (
           <p className="rk-t" data-tone="err" role="alert" style={{ margin: 0, fontSize: 12.5 }}>
@@ -310,15 +306,20 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
           </p>
         )}
         <p className="rk-hint" style={{ margin: 0 }}>
-          {mode === 'values' && !deploy ? 'The values are kept for the next upgrade.' : 'The change runs as you, through Watson, which shows how it goes; on a production cluster with the two-person rule a second person approves it first.'}
+          {alsoDeploy ? 'Save keeps the change for the next deploy; ' : ''}A deploy runs as you, through Watson, which shows how it goes; on a production cluster with the two-person rule a second person approves it first.
         </p>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button type="button" className="rk-btn" onClick={onClose} disabled={busy}>
             Cancel
           </button>
-          <button type="button" className="rk-btn" data-on="true" onClick={submit} disabled={!canSubmit} aria-busy={busy} data-testid="app-submit">
+          <button type="button" className="rk-btn" data-on={alsoDeploy ? undefined : 'true'} onClick={() => submit(false)} disabled={!canSubmit} aria-busy={busy} data-testid="app-submit">
             {busy ? 'Sending…' : primary}
           </button>
+          {alsoDeploy && (
+            <button type="button" className="rk-btn" data-on="true" onClick={() => submit(true)} disabled={!canSubmit} aria-busy={busy} data-testid="app-submit-deploy">
+              {alsoDeploy}
+            </button>
+          )}
         </div>
       </div>
     </div>,
