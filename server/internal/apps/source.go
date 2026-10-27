@@ -52,6 +52,11 @@ func (s Source) String() string {
 
 var refName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+-]*$`)
 
+// AllowLocalRepos lets a repository be a directory on the server's own
+// disk: for tests, which clone a repository they made. Never set by the
+// server.
+var AllowLocalRepos bool
+
 // Normalize cleans a source as typed and says what is wrong with it: the
 // repository must be an HTTPS URL (github.com/org/app is completed), the
 // path must stay inside the repository, and the ref must be a plain name.
@@ -59,6 +64,10 @@ func Normalize(s Source) (Source, error) {
 	repo := strings.TrimSpace(s.Repo)
 	if repo == "" {
 		return s, errors.New("name the repository, as https://github.com/org/app")
+	}
+	if AllowLocalRepos && strings.HasPrefix(repo, "/") {
+		s.Repo = path.Clean(repo)
+		return normalizeRest(s)
 	}
 	if !strings.Contains(repo, "://") {
 		repo = "https://" + repo
@@ -72,6 +81,11 @@ func Normalize(s Source) (Source, error) {
 		return s, errors.New("the repository URL needs a path: https://github.com/org/app")
 	}
 	s.Repo = u.String()
+	return normalizeRest(s)
+}
+
+// normalizeRest checks the path, the ref and its kind.
+func normalizeRest(s Source) (Source, error) {
 	p := strings.Trim(strings.TrimSpace(s.Path), "/")
 	if p != "" {
 		p = path.Clean(p)

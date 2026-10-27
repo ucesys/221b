@@ -487,6 +487,7 @@ func run(args []string) error {
 	handler := api.New(api.Options{
 		Watson:                  watsonSvc,
 		Apps:                    appStore,
+		SecretsReveal:           cfg.SecretsRead && cfg.SecretsReveal,
 		Sessions:                sessionsMgr,
 		Sherlock:                sherlockSvc,
 		SherlockKeys:            keys,
@@ -578,7 +579,7 @@ func run(args []string) error {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(mode), "version", version.String(), "secrets_read", cfg.SecretsRead, "auth", cfg.AuthMode)
+		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(mode), "version", version.String(), "secrets_read", cfg.SecretsRead, "secrets_reveal", cfg.SecretsRead && cfg.SecretsReveal, "auth", cfg.AuthMode)
 		errCh <- srv.ListenAndServe()
 	}()
 	select {

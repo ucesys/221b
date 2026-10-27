@@ -56,7 +56,7 @@ These apply to every phase: a phase is done only when everything it builds meets
 
 | ID | Area | Requirement |
 | --- | --- | --- |
-| X-01 | Secrets | Secret values are never shown, logged, exported, kept in the browser or sent to Sherlock. Screens show Secret keys and sizes only; an environment variable taken from a Secret shows the reference, not the value. |
+| X-01 | Secrets | Secret values are never shown, logged, exported, kept in the browser or sent to Sherlock. Screens show Secret keys and sizes only; an environment variable taken from a Secret shows the reference, not the value. (Amended in Phase 10, SE-03: where the chart turns `secrets.reveal` on, an Admin or SuperAdmin may ask for one value at a time, read live as them and written to the audit log; it still enters no cache, log, export or Sherlock prompt.) |
 | X-02 | Permissions | Each phase asks Kubernetes only for the resources and verbs its screens use, and the Helm chart grants exactly that. |
 | X-03 | Changes | Nothing changes your workloads before Phase 6; until then 221B writes only its own settings, in its own namespace. From Phase 6, every change needs an explicit approval and is written to the audit log. |
 | X-04 | Credentials | Stored credentials (tokens, client keys, kubeconfigs, the Claude API key) live in Kubernetes Secrets and are never sent back to the browser after saving. |
@@ -510,6 +510,49 @@ Phase 9 adds the **Toolbox**: a Tools column on the pod and node tables whose me
 - [ ] Go-ahead to release
 
 **Review:** you check the Toolbox on the test cluster against the mockups, kubectl and the audit log, and approve the release.
+
+## Phase 10: Helm applications and Secret editing
+
+A Helm page (shown as **Helm1** beside the Helm tab until it replaces it) that lists every release in one table and installs, upgrades and removes releases from a chart in a git repository, at a branch or a tag; and Secret editing on the Namespaces tab for Admins and SuperAdmins, with values shown only where the chart allows it. [helm-apps.md](helm-apps.md) has the approach, the chart values and what was built; the rows below are its requirements. Asked for on October 27, 2026.
+
+| ID | Requirement | Done when |
+| --- | --- | --- |
+| HA-01 | A **Helm1** tab lists every release the person may see in one table, with no summary above it: Name, Namespace, Chart, App version, Revision, Status, Drift, Source and Updated. Search, the Columns menu and Export work as on the other tables. The tab needs Secrets, like the Helm tab. | The table lists what `helm list -A` lists; a release with no source shows `—` under Drift and Source. |
+| HA-02 | Only an Admin or a SuperAdmin may create, upgrade, switch, change or remove an application; everyone sees the table and a release's details. Kubernetes decides each change, since it runs as the person (HA-06). | A Viewer sees no New application button and no tools; the API answers 403. |
+| HA-03 | What the console keeps about an application is a record in a Secret of its own namespace, beside the cluster connections: the source (repository, chart path, branch or tag), the commit last deployed with its date and first line, the chart version there, the values file, the parameters, and a token for a private repository, which never leaves the server. | The record survives a restart; `helm get values` of the console shows no token; the audit log names keys, never a token or a value. |
+| HA-04 | The console fetches the chart itself: a shallow clone of the repository at the ref, in memory (go-git; the image has no git), honouring `.helmignore`. A chart whose dependencies are not vendored under `charts/` is refused with a message: the console fetches no chart repositories. | A chart in a subdirectory of a public GitHub repository renders; a missing directory, a missing Chart.yaml and a missing ref each give a plain message. |
+| HA-05 | **New application…** asks for the namespace (an existing one, or a new one with *Create the namespace*), the release name, the repository URL, the chart path, the branch or tag (listed from the repository on request, or typed), an optional token, a values file and parameters, then installs. | The dialog lists the repository's branches and tags; the install appears in Watson and the release in the table with its source. |
+| HA-06 | Every change is a Watson command that runs as the person: `helm install`, `helm upgrade` and `helm uninstall` gain `--git`, `--path`, `--ref`, `--tag` and `--app` (the saved values and parameters). The person's click is the approval; on a production cluster with the two-person rule a second person approves, as for any change. | The audit log records the command with its source; a dry run with `--dry-run=server` is what the card shows. |
+| HA-07 | The card of an install or upgrade says the chart, its version and app version, the source and commit, the objects it creates, changes or deletes against what is deployed, and the images it runs; an uninstall's card lists what it deletes. | The card's impact names the objects and images for the seeded chart. |
+| HA-08 | After a successful install or upgrade the record carries the commit deployed, its date and subject, and the chart version at it; after an uninstall the record is removed. | The Source column and the overview show the commit; an uninstalled release leaves no record. |
+| HA-09 | **Drift**: each object of the release's manifest is read from the cluster, as the person, and what the manifest sets is compared with what is there; a field set differently or an object missing is drift, what the cluster added (defaults, status, Helm's labels) is not, hooks are skipped, and values are never shown. The check runs when a release is opened and on *Check now*, and its answer is kept two minutes. The column reads in sync, drifted, unknown or not checked. | A deployment scaled by hand shows `spec.replicas` as drift; the same objects show in sync. |
+| HA-10 | A release's **Tools** (in the table and in its panel): Upgrade…, Switch branch or tag…, Values and parameters…, Set source… (or Change source…), Forget source, Uninstall…. A release without a source offers Set source and Uninstall. | Each item opens its dialog or confirmation; a Viewer sees none. |
+| HA-11 | A release the console did not install can be adopted: Set source… keeps its repository, path and ref (and deploys from them at once when asked, with `helm upgrade --install`). Forget source drops the record and keeps the release. | A seeded release gains a source and then upgrades from it. |
+| HA-12 | A **values file** (YAML, as `helm -f`) is kept per application and edited in a large editor; it applies over the chart's defaults. | The values file shows on the Values tab beside the values as deployed; an upgrade applies it. |
+| HA-13 | **Parameters**, one `key=value` per line as `helm --set` takes them, apply over the values file. | A parameter overrides the same key of the values file in the rendered manifest. |
+| HA-14 | Clicking a release keeps the table on the left, narrowed to Name and Status, and opens the release's panel on the right with tabs Overview, Values, History and Images, a Tools button and a link to the Helm tab for its pods and resources. | The URL is `#/helm1/<namespace>/<release>?tab=`; Close returns to the full table. |
+| HA-15 | **Images**: every image a revision's manifest names, with its tag or digest, registry and the object and container that use it; any revision can be picked. | The seeded chart's images list with their tags; a revision without containers says so. |
+| HA-16 | **History** lists the revisions (updated, status, description, chart, objects) and says when a newer version exists: a newer tag of the same major version when a tag is deployed, or new commits on the deployed branch, with a way to switch or upgrade. | A repository with a newer tag shows it; a branch that moved shows the head commit. |
+| HA-17 | **Compare**: a unified diff of any two revisions' manifests, or of the deployed revision against what the source renders now, at the deployed ref or another. | Two seeded revisions diff object by object; the same manifests say so. |
+| HA-18 | Sherlock's `view_open` knows the tab. The Helm tab stays until the Helm1 page has everything it offers. | `view_open` with tab `helm1` opens it. |
+| HA-19 | Every read the page makes (revisions, manifests, images, drift) is made as the person; the console's own account reads nothing of a release for the page. | A person without access to a namespace gets 403 from each endpoint. |
+| HA-20 | Tests: Go tests for the fetch, the render, the images, the diff and the drift against a local repository, and for the API with a fake cluster; browser tests against the simulator for the table, the panel and the Secret editing, and on the kind cluster an install from a public repository. | CI passes. |
+| SE-01 | A chart value `secrets.reveal` (off by default, needs `secrets.read`) says whether an Admin or SuperAdmin may see a Secret's values. | `helm template` refuses `secrets.reveal=true` with `secrets.read=false`. |
+| SE-02 | An Admin or a SuperAdmin may edit a Secret on the Namespaces tab: replace a key's value, add a key, remove one, each written as them, so Kubernetes decides; a Viewer or SuperViewer may not. With revealing off the new values are typed blind (a *Show what I type* box shows the typing). | The seeded Secret's value changes in the cluster; a Viewer sees no Edit button and gets 403. |
+| SE-03 | With `secrets.reveal` on, a key gains Reveal: one value at a time, read live as the person, never cached, and recorded in the audit log with the key's name; binary values show as base64. With it off the server answers 403 and says why. | The audit log has `secret.reveal` with the key; the planted value still reaches no snapshot, export or log. |
+| SE-04 | An edit names only the keys in the audit log, is refused when the Secret changed since it was read (when the page gives the version it read), and refuses an immutable Secret. | `secret.update` carries `set=` and `removed=`; a stale edit answers 409. |
+| SE-05 | **New Secret…** on a namespace's Secrets tab makes a Secret with a name, a type (Opaque by default) and keys, written as the person. | The Secret appears in the namespace's list with its keys and sizes. |
+| SE-06 | X-01 still holds everywhere else: the cache, exports, logs, the YAML view and Sherlock carry no value; CI's planted value test covers the new endpoints. | The planted-value test passes with the endpoints present. |
+
+### Your review
+
+- [ ] The Helm1 table (HA-01) against `helm list -A` on 221b, and the drift column after a change by hand (HA-09).
+- [ ] An install from GitHub (HA-04 to HA-08), an upgrade to another tag, a switch back, a values change and an uninstall, each in Watson and the audit log.
+- [ ] The History tab's newer-version notice and the diffs (HA-16, HA-17), and the Images tab (HA-15).
+- [ ] Secret editing with `secrets.reveal` off and on (SE-02, SE-03), and the audit log of a reveal.
+- [ ] The open questions of [helm-apps.md](helm-apps.md) settled: the Admin role's rights for installs, and when the Helm tab goes.
+
+**Review:** you try the page on 221b and say what to change before it replaces the Helm tab.
 
 ## Open questions
 

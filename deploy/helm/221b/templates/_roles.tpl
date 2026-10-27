@@ -103,6 +103,9 @@ name of what is wrong. Renders nothing.
 {{- if eq $t.nodeShell.namespace $.Release.Namespace -}}
 {{- fail "toolbox.nodeShell.namespace must not be the console's own namespace: it runs at Pod Security privileged" -}}
 {{- end -}}
+{{- if and $v.secrets.reveal (not $v.secrets.read) -}}
+{{- fail "secrets.reveal needs secrets.read: values cannot be shown while Secrets are not read" -}}
+{{- end -}}
 {{- /* Prefixes. */ -}}
 {{- range $p := list $v.auth.prefixes.local $v.auth.prefixes.ldap -}}
 {{- if not (regexMatch "^[a-z0-9][a-z0-9._-]*:$" $p) -}}

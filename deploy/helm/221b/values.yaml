@@ -299,6 +299,13 @@ secrets:
   # whose definitions both read every Secret (make people SuperViewers to
   # withhold Secrets).
   read: true
+  # Let Admins and SuperAdmins see a Secret's values (Phase 10): on the
+  # Namespaces tab a Secret's keys gain a Reveal button, which shows one
+  # value at a time, read live as the person and written to the audit
+  # log; the cache, exports, logs and Sherlock still never hold a value.
+  # Off, Admins and SuperAdmins can still edit a Secret, but blind: they
+  # type new values without seeing the old ones.
+  reveal: false
 
 toolbox:
   # The Toolbox (Phase 9, docs/toolbox.md): the Tools menu beside each pod

@@ -67,6 +67,8 @@ Everyone who signs in also gets the nodes (RB-07). A person with no assignment s
 | See namespaces, volumes, storage classes and other cluster-scoped kinds | All | All | Own namespaces only | Own namespaces only |
 | Read workloads, services, events, logs and the other namespaced kinds | All namespaces | All namespaces | Bound namespaces | Bound namespaces |
 | See Secret keys and sizes (when `secrets.read` is on) | Yes | No | Yes, in bound namespaces | Yes, in bound namespaces |
+| Edit a Secret's keys, make a Secret, and with `secrets.reveal` see a value, one key at a time, audited (Phase 10, SE-02, SE-03) | Full definition only | No | Full definition only, in bound namespaces | No |
+| Install, upgrade, switch and remove Helm applications from a git repository (Phase 10, HA-02; runs as the person) | Full definition only | No | May ask; the shipped Admin role creates no workloads, so Kubernetes refuses most installs | No |
 | Prepare a Watson card | Yes | Yes | Yes | Yes |
 | Approve a change (ADR-52: the approver's own rights decide) | Any, full definition only | No | Namespaced changes in bound namespaces, full definition only | No |
 | Node operations: cordon, uncordon, drain, label, annotate and taint nodes | Full definition only | No | No | No |

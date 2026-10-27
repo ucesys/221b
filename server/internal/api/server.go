@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	corev1 "k8s.io/api/core/v1"
 	"log/slog"
 	"net"
 	"net/http"
@@ -60,6 +61,10 @@ type Cluster interface {
 	ObjectYAML(ctx context.Context, p kube.Person, k kube.Kind, namespace, name string) (string, error)
 	Logs(ctx context.Context, p kube.Person, namespace, name string, o kube.LogOptions) (io.ReadCloser, error)
 	CanI(ctx context.Context, p kube.Person, verb, group, resource, namespace string) (bool, error)
+	// Secret editing (Phase 10): live, as the person, never cached.
+	GetSecret(ctx context.Context, p kube.Person, namespace, name string) (*corev1.Secret, error)
+	UpdateSecret(ctx context.Context, p kube.Person, sec *corev1.Secret) (*corev1.Secret, error)
+	CreateSecret(ctx context.Context, p kube.Person, sec *corev1.Secret) (*corev1.Secret, error)
 }
 
 // Settings reads and changes the shared settings; *settings.Service
@@ -172,6 +177,10 @@ type Options struct {
 	// Roles configure the Roles and Permissions pages and the check of the
 	// deployed roles (RB-36, RB-41 to RB-44).
 	Roles RolesOptions
+	// SecretsReveal lets an Admin or SuperAdmin see a Secret's values, one
+	// key at a time and audited (Phase 10, secrets.reveal); off, values
+	// are only ever written.
+	SecretsReveal bool
 	// Apps keeps the Helm applications (Phase 10); nil, or no Watson,
 	// leaves the Helm1 page's routes out.
 	Apps apps.Store
@@ -357,6 +366,7 @@ func New(o Options) *Server {
 	if o.Watson != nil && o.Apps != nil {
 		s.appsRoutes()
 	}
+	s.secretsRoutes()
 	if o.Watson != nil && o.Sessions != nil {
 		s.toolboxRoutes()
 		o.Watson.SetSessionHooks(s.planSession, s.startSession)

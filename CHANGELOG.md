@@ -4,6 +4,13 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## Unreleased
 
+### Added
+
+- **Helm1: applications from a git repository.** A new tab lists every release in one table, with its chart, app version, revision, status, drift, source and update time. *New application…* fetches a chart from a git repository (GitHub, GitLab, Gitea) at a branch or a tag and installs it; a release's tools upgrade it, switch its branch or tag, change its values file and parameters, set or forget its source, and uninstall it. Each change runs through Watson as you, with a card where the two-person rule applies. A release's panel shows its source and commit, its drift (each object compared with what Helm applied), its values file beside the values as deployed, its history with a diff of any two revisions or of the deployed one against the source and a notice when a newer tag or commit exists, and the images every revision runs. The Helm tab stays until this page has everything it offers.
+- **Secret editing.** On the Namespaces tab an Admin or SuperAdmin can edit a Secret (replace a value, add or remove a key) and make a new one, written as them, so Kubernetes decides. By default they do it blind. Chart: `secrets.reveal` (off by default) lets them see a value, one key at a time, read live as them and recorded in the audit log; the cache, exports, logs, the YAML view and Sherlock still never hold a value.
+- Watson runs `helm install`, `helm upgrade` and `helm uninstall` with a git source (`--git`, `--path`, `--ref`, `--tag`) and an application's saved values (`--app`).
+
+
 ## 0.9.1 (2026-10-27)
 
 The first release since 0.7.1, with Phase 8 (Storage), Phase 9 (Toolbox) and the Phase 9.1 review; there is no 0.8.x or 0.9.0. [docs/upgrading.md](https://github.com/ucesys/221b/blob/v0.9.1/docs/upgrading.md#091) says what an upgrade from 0.7.1 changes.

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { fetchApps, forgetApp, isCard, uninstallApp, type AppDrift, type AppView } from '../../api/apps'
+import { useMe } from '../../api/auth'
 import { useRefreshTick, useView } from '../../api/live'
 import type { ReleaseRow } from '../../api/types'
 import type { WatsonItem } from '../../api/watson'
@@ -26,6 +27,7 @@ import { AppPanel, APP_TABS, type AppTab } from './AppPanel'
 export function AppsTab({ cluster, now, onToast, route }: TabProps) {
   const { rows: releases, loaded } = useView<ReleaseRow>('helm')
   const tb = useToolbox()
+  const me = useMe()
   const tick = useRefreshTick()
   const [apps, setApps] = useState<AppView[]>([])
   const [appsErr, setAppsErr] = useState('')
@@ -55,7 +57,9 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
   const set = useCallback((changes: Record<string, string | string[] | undefined>) => navigate(withParams(route, changes), true), [route])
   const table = useTable<AppRow>({ id: 'apps', columns: APP_COLUMNS, rows, terms: appTerms, now, compact: !!current, defaultSort: { col: 'name', dir: 'asc' } })
   const namespaces = useMemo(() => [...new Set(releases.map((r) => r.namespace))].sort(), [releases])
-  const canChange = !!tb?.available
+  // Only an Admin or a SuperAdmin changes applications (HA-02); the server refuses the rest.
+  const mayManage = !!me && (me.mode === 'none' || me.admin || !!me.roles?.some((r) => r === 'admin' || r === 'superAdmin'))
+  const canChange = !!tb?.available && mayManage
 
   // A change answered with a card: say how it went, as the Tools menu does.
   const handleCard = (it: WatsonItem, doing: string) => {

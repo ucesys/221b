@@ -175,6 +175,15 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 		i.DryRunStrategy, i.HideSecret = strategy, dry
 		i.Timeout, i.WaitStrategy, i.DisableHooks = timeout, wait, c.Has("no-hooks")
 		i.WaitOptions = append(i.WaitOptions, kube.WithStatusComputeWorkers(4))
+		// The API server validates what it is sent, and says what is wrong;
+		// the SDK's own check needs the OpenAPI document, which the
+		// simulator does not serve.
+		i.DisableOpenAPIValidation = true
+		// Objects are created and updated as the helm CLI did before
+		// server-side apply, with "helm" as the field manager (helm.go), so
+		// the CLI and the console can take over from each other; an
+		// upgrade follows what the release used ("auto").
+		i.ServerSideApply = false
 		i.Description = desc
 		r, err := i.RunWithContext(ctx, ch, a.vals)
 		if err != nil {
@@ -189,6 +198,7 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 		u.DryRunStrategy, u.HideSecret = strategy, dry
 		u.Timeout, u.WaitStrategy, u.DisableHooks = timeout, wait, c.Has("no-hooks")
 		u.WaitOptions = append(u.WaitOptions, kube.WithStatusComputeWorkers(4))
+		u.DisableOpenAPIValidation = true
 		u.MaxHistory, u.Description = 10, desc
 		r, err := u.RunWithContext(ctx, name, ch, a.vals)
 		if err != nil {
