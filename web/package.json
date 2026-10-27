@@ -1,7 +1,7 @@
 {
   "name": "221b-web",
   "private": true,
-  "version": "0.9.1",
+  "version": "0.10.0",
   "type": "module",
   "license": "Apache-2.0",
   "scripts": {

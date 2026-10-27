@@ -16,7 +16,7 @@ Releases so far: **0.6.5** (Phase 6.5, `f789452`), **0.6.6** (Phase 6.6, `ad0b56
 
 ## Cut a release
 
-1. **On a branch, bump the version** in `deploy/helm/221b/Chart.yaml` (both `version` and `appVersion`) and in `web/package.json`.
+1. **On a branch, bump the version** in `deploy/helm/221b/Chart.yaml` (both `version` and `appVersion`) and in `web/package.json`. A phase branch bumps it when it starts (the minor for a phase, the patch for fixes), so every build from the branch, and the console's About and the Helm1 table, show the version to come; the changelog section is `## 0.10.0 (unreleased)` until the release puts the date in.
 2. **Write the notes.** In [CHANGELOG.md](../CHANGELOG.md), rename *Unreleased* to `## 0.8.0 (YYYY-MM-DD)` and start a new empty *Unreleased* above it. Add the release's section to [docs/upgrading.md](upgrading.md) if an upgrade changes anything an operator must know.
 3. **Merge** it through a pull request; CI must pass, including the upgrade tests.
 4. **Tag the merge commit** on main and push the tag:
