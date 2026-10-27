@@ -172,7 +172,7 @@ test('an object opens its details, with Secret data replaced by key names and si
     await secret.cleanup()
   }
   // Secrets are read by a server flag; the UI says so when they are off.
-  if (!inKind) await expect(page.getByRole('link', { name: /^Helm/ })).toBeVisible()
+  if (!inKind) await expect(page.getByRole('link', { name: /^Helm(\s|$)/ })).toBeVisible()
 })
 
 test('a namespace’s Helm releases are a tab like its other kinds (asked at the Phase 4 review)', async ({ page, request }) => {

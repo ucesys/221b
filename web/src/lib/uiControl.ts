@@ -67,6 +67,14 @@ export const TAB_SPECS: Record<Tab, TabSpec> = {
       { name: 'release', type: 'text' },
     ],
   },
+  helm1: {
+    search: 'q',
+    filters: { tab: { type: 'enum', values: ['overview', 'values', 'history', 'images'], none: 'overview' } },
+    path: [
+      { name: 'namespace', type: 'text' },
+      { name: 'release', type: 'text' },
+    ],
+  },
   storage: { search: 'q', filters: { ns: { type: 'list' }, node: { type: 'list' }, class: { type: 'list' }, attention: { type: 'flag' }, label: { type: 'list' } } },
   fleets: { search: 'q', filters: { fleet: { type: 'list' }, pl: { type: 'list' }, pt: { type: 'list' }, group: { type: 'enum', values: ['fleet', 'none'], none: 'fleet' }, err: PROBLEMS } },
   networks: { filters: { route: { type: 'text' } } },

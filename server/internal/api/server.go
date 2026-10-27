@@ -26,6 +26,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/access"
 	"github.com/ucesys/221b/server/internal/acks"
+	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
@@ -171,6 +172,9 @@ type Options struct {
 	// Roles configure the Roles and Permissions pages and the check of the
 	// deployed roles (RB-36, RB-41 to RB-44).
 	Roles RolesOptions
+	// Apps keeps the Helm applications (Phase 10); nil, or no Watson,
+	// leaves the Helm1 page's routes out.
+	Apps apps.Store
 	// Sessions runs the toolbox's sessions (Phase 9); nil, or no Watson,
 	// leaves the toolbox out.
 	Sessions *sessions.Manager
@@ -241,6 +245,9 @@ type Server struct {
 	// leaderChecks is how often a forwarded stream checks the leader.
 	leaderChecks time.Duration
 
+	// drifts keeps the applications' drift checks (HA-09), by cluster,
+	// release and person, for two minutes.
+	drifts sync.Map
 	// toolCache keeps what people may use where (TB-05); owners the
 	// sign-in checks of people who asked for sessions.
 	toolCache toolCache
@@ -346,6 +353,9 @@ func New(o Options) *Server {
 		for _, base := range []string{"/api/v1/", "/api/v1/clusters/{cluster}/"} {
 			s.handle("GET "+base+"assistants/events", "assistants-events", s.assistantsEvents)
 		}
+	}
+	if o.Watson != nil && o.Apps != nil {
+		s.appsRoutes()
 	}
 	if o.Watson != nil && o.Sessions != nil {
 		s.toolboxRoutes()

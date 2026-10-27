@@ -14,7 +14,7 @@ test('the bar shows every tab while they fit, and More takes them as the window 
   await page.goto('/')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   const nav = page.getByRole('navigation', { name: 'Views' })
-  for (const t of TABS) await expect(nav.getByRole('link', { name: new RegExp(`^${t}`) })).toBeVisible()
+  for (const t of TABS) await expect(nav.getByRole('link', { name: new RegExp(`^${t}(\\s|$)`) })).toBeVisible()
   // Nothing is rolled up while there is room (asked at the Phase 2 review).
   await expect(page.getByTestId('more')).toHaveCount(0)
 
@@ -24,7 +24,7 @@ test('the bar shows every tab while they fit, and More takes them as the window 
   await expect(nav.getByRole('link', { name: /^Services/ })).toHaveCount(0)
   await page.getByTestId('more').click()
   const menu = page.getByRole('menu', { name: 'More views' })
-  await expect(menu.getByRole('menuitem').last()).toHaveText(new RegExp(`^${LAST}`))
+  await expect(menu.getByRole('menuitem').last()).toHaveText(new RegExp(`^${LAST}(\\s|$)`))
   await menu.getByRole('menuitem', { name: /^Services/ }).click()
   await expect(page).toHaveURL(/#\/services/)
   // The open tab rides on the More button when it does not fit.
@@ -54,7 +54,7 @@ for (const width of [390, 700, 1024]) {
       }
       // The open tab is in the bar, or the More button reads as it.
       const label = hash.slice(2, 3).toUpperCase() + hash.slice(3)
-      const inBar = nav.getByRole('link', { name: new RegExp(`^${label}`) })
+      const inBar = nav.getByRole('link', { name: new RegExp(`^${label}(\\s|$)`) })
       const more = page.getByTestId('more')
       if ((await inBar.count()) > 0) await expect(inBar).toHaveAttribute('aria-current', 'page')
       else {

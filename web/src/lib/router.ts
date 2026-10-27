@@ -8,7 +8,7 @@
 
 import { useSyncExternalStore } from 'react'
 
-export type Tab = 'nodes' | 'fleets' | 'namespaces' | 'pods' | 'helm' | 'alerts' | 'services' | 'networks' | 'storage' | 'access' | 'policies'
+export type Tab = 'nodes' | 'fleets' | 'namespaces' | 'pods' | 'helm' | 'helm1' | 'alerts' | 'services' | 'networks' | 'storage' | 'access' | 'policies'
 
 export const TABS: { id: Tab; label: string; tip: string }[] = [
   { id: 'alerts', label: 'Alerts', tip: 'Pods failing to start or pending, node problems and warning events' },
@@ -19,6 +19,8 @@ export const TABS: { id: Tab; label: string; tip: string }[] = [
   // ST-01: after Pods (moved from after Networks on October 26, 2026).
   { id: 'storage', label: 'Storage', tip: 'Storage classes, volumes, claims and the pods that mount them' },
   { id: 'helm', label: 'Helm', tip: 'Helm releases and their history' },
+  // Phase 10: the Helm page to come; the Helm tab goes once it has everything.
+  { id: 'helm1', label: 'Helm1', tip: 'Helm applications: releases, their git source and drift; install and upgrade from GitHub' },
   { id: 'services', label: 'Services', tip: 'Every Service, its endpoints and the hostnames that publish it' },
   { id: 'networks', label: 'Networks', tip: 'Ingress, DNS, pod and service networks — trace a request hop by hop' },
   { id: 'access', label: 'Access', tip: 'Access Control: who can do what in the cluster' },

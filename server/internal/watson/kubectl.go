@@ -38,6 +38,7 @@ import (
 	"k8s.io/kubectl/pkg/cmd/top"
 	cmdutil "k8s.io/kubectl/pkg/cmd/util"
 
+	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/kube"
 )
 
@@ -74,6 +75,11 @@ type Target struct {
 	Person kube.Person
 	// Discovery is the cluster's cached discovery, shared across runs.
 	Discovery discovery.CachedDiscoveryInterface
+	// Cluster is the connection's id, and Apps the applications the
+	// console keeps, for helm install and upgrade from a git source
+	// (Phase 10); nil keeps none.
+	Cluster string
+	Apps    apps.Store
 }
 
 // Discovery caches each cluster's API discovery, which kubectl and Helm

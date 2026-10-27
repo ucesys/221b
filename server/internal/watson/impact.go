@@ -296,7 +296,7 @@ func plural(n int, one, many string) string {
 }
 
 // cardFor works out a change's card.
-func cardFor(ctx context.Context, cs *clients, c *Command) (targets []string, guards []guard, impact []string) {
+func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []string, guards []guard, impact []string) {
 	add := func(format string, a ...any) { impact = append(impact, fmt.Sprintf(format, a...)) }
 	switch c.Name() {
 	case "kubectl cordon", "kubectl uncordon", "kubectl drain":
@@ -530,6 +530,9 @@ func cardFor(ctx context.Context, cs *clients, c *Command) (targets []string, gu
 		}
 	case "helm rollback":
 		ts, gs, im := rollbackImpact(ctx, cs, c)
+		targets, guards, impact = ts, gs, im
+	case "helm install", "helm upgrade", "helm uninstall":
+		ts, gs, im := appImpact(ctx, cs, c, t)
 		targets, guards, impact = ts, gs, im
 	}
 	return targets, guards, impact

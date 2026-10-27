@@ -15,6 +15,7 @@ import { ClusterEditor } from './components/ClusterEditor'
 import { ClusterPage } from './components/ClusterPage'
 import { FleetsTab } from './components/FleetsTab'
 import { HelmTab } from './components/HelmTab'
+import { AppsTab } from './components/apps/AppsTab'
 import { HomePage } from './components/HomePage'
 import { NamespacesTab } from './components/NamespacesTab'
 import { NodesTab } from './components/NodesTab'
@@ -144,7 +145,7 @@ function Shell() {
   // says why. One that is not there at all gets the same page's notice.
   const view = route.view === 'home' ? 'home' : route.view === 'admin' ? 'admin' : route.view === 'cluster' || (clustersLoaded && (!summary || summary.state === 'failed')) ? 'cluster' : 'tabs'
   // The Helm tab needs Secrets; with them off it is not offered.
-  const tab = route.tab === 'helm' && live.cluster?.secrets === 'off' ? FIRST_TAB : route.tab
+  const tab = (route.tab === 'helm' || route.tab === 'helm1') && live.cluster?.secrets === 'off' ? FIRST_TAB : route.tab
   const tabLabel = TABS.find((t) => t.id === tab)?.label ?? 'Alerts'
   const clusterName = summary?.name ?? live.cluster?.name ?? ''
 
@@ -309,6 +310,7 @@ function Shell() {
   }
   const toolboxApi: ToolboxApi = {
     available: watsonOn && !watson.status?.readOnly,
+    showWatson,
     off: !watsonOn ? (watsonApi.off?.text.replace('To run it from here', 'To use the tools') ?? 'The tools need Watson, which is off here.') : watson.status?.readOnly ? watson.status.how || 'This cluster is connected read-only.' : undefined,
     cluster: route.cluster,
     openTool: (o) => setToolDialog(o),
@@ -368,6 +370,7 @@ function Shell() {
           {tab === 'namespaces' && <NamespacesTab {...common} />}
           {tab === 'services' && <ServicesTab {...common} />}
           {tab === 'helm' && <HelmTab {...common} />}
+          {tab === 'helm1' && <AppsTab {...common} />}
           {tab === 'access' && <AccessTab {...common} />}
           {tab === 'networks' && <NetworksTab {...common} />}
           {tab === 'storage' && <StorageTab {...common} />}

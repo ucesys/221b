@@ -184,6 +184,16 @@ var specs = []*spec{
 	{tool: "helm", verb: []string{"rollback"}, change: true, min: 1, max: 2, usage: "helm rollback RELEASE [REVISION] [-n NAMESPACE]",
 		flags: flags(map[string]flag{"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true},
 			"no-hooks": {}, "cleanup-on-fail": {}, "history-max": {value: true}, "wait-for-jobs": {}})},
+	// Helm applications (Phase 10): a chart from a git repository, at a
+	// branch or a tag; --app takes the console's saved values for it.
+	{tool: "helm", verb: []string{"install"}, change: true, min: 1, max: 1, usage: "helm install RELEASE --git URL [--path DIR] --ref BRANCH|TAG [--tag] -n NAMESPACE [--app] [--create-namespace]",
+		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "app": {}, "create-namespace": {}, "set": {value: true},
+			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}})},
+	{tool: "helm", verb: []string{"upgrade"}, change: true, min: 1, max: 1, usage: "helm upgrade RELEASE [--git URL] [--path DIR] [--ref BRANCH|TAG] [--tag] -n NAMESPACE [--app] [--install]",
+		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "app": {}, "install": {short: "i"}, "set": {value: true},
+			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}})},
+	{tool: "helm", verb: []string{"uninstall"}, change: true, min: 1, max: 1, usage: "helm uninstall RELEASE -n NAMESPACE [--keep-history]",
+		flags: flags(map[string]flag{"keep-history": {}, "dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}})},
 }
 
 // aliases maps what people type to the commands above.

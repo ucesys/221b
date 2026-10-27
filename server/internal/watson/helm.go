@@ -253,6 +253,8 @@ func helm(ctx context.Context, c *Command, t Target, out, errOut io.Writer) erro
 		}
 		fmt.Fprint(out, "Rollback was a success! Happy Helming!\n")
 		return nil
+	case "helm install", "helm upgrade", "helm uninstall":
+		return helmApp(ctx, c, t, out, ns)
 	}
 	return fmt.Errorf("%s is not supported", c.Name())
 }
