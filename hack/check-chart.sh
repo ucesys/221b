@@ -364,8 +364,8 @@ toolbox_values() {
 }
 toolbox_namespace() {
   sed -n '/^kind: Namespace$/,/^---/p' "$out" | grep -q 'pod-security.kubernetes.io/enforce: privileged' &&
-    sed -n '/^kind: NetworkPolicy$/,/^---/p' "$out" | grep -q 'namespace: consoles-toolbox' &&
-    grep -q '"namespace": "consoles-toolbox"' "$out" &&
+    sed -n '/^kind: NetworkPolicy$/,/^---/p' "$out" | grep -q 'namespace: consoles-privileged' &&
+    grep -q '"namespace": "consoles-privileged"' "$out" &&
     ! grep -q '^kind: Namespace$' "$WORK/chart-notoolbox.yaml" && ! grep -q '^kind: Namespace$' "$WORK/chart-toolbox-exec.yaml" &&
     ! grep -q '^kind: Namespace$' "$WORK/chart-protected.yaml" && grep -q '"enabled": false' "$WORK/chart-protected.yaml" &&
     ! render k8s-console --set clusterName=ci --set toolbox.nodeShell.namespace=consoles > /dev/null 2>&1

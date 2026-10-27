@@ -361,8 +361,8 @@ toolbox:
     # is not created and the tool is off.
     enabled: true
     # Created by the chart at Pod Security privileged. Empty: the release's
-    # namespace with -toolbox (221b-toolbox for a console in 221b), so a
-    # second console in the cluster gets a namespace of its own.
+    # namespace with -privileged (221b-privileged for a console in 221b),
+    # so a second console in the cluster gets a namespace of its own.
     namespace: ""
     image: node
     profiles: [general, netadmin, sysadmin]

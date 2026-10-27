@@ -207,7 +207,7 @@ func (s *Sim) exec(w http.ResponseWriter, r *http.Request) {
 	if container != "" && strings.HasPrefix(container, "221b-") {
 		host = name
 	}
-	if pod.Namespace == "221b-toolbox" || nodeShell {
+	if isPrivilegedNS(pod.Namespace) || nodeShell {
 		host = pod.Spec.NodeName
 	}
 	prompt := fmt.Sprintf("%s@%s:/# ", user, host)
@@ -235,7 +235,7 @@ func (s *Sim) exec(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 					if cmdline != "" {
-						out, _ := cannedOutput(cmdline, pod, host, container, pod.Namespace == "221b-toolbox")
+						out, _ := cannedOutput(cmdline, pod, host, container, isPrivilegedNS(pod.Namespace))
 						write(1, []byte(strings.ReplaceAll(out, "\n", "\r\n")))
 					}
 					write(1, []byte(prompt))
@@ -316,4 +316,10 @@ func cannedOutput(line string, pod *corev1.Pod, host, container string, node boo
 		return "", 0
 	}
 	return fmt.Sprintf("sh: %s: not found in the simulator\n", word[0]), 127
+}
+
+// isPrivilegedNS says whether a pod is a node shell by its namespace: the
+// chart's default (<release>-privileged) or the name it had before.
+func isPrivilegedNS(ns string) bool {
+	return ns == "221b-privileged" || ns == "221b-toolbox" || strings.HasSuffix(ns, "-privileged")
 }

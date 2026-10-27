@@ -98,10 +98,11 @@ true
 {{/* Whether node shells are on: the values say so and a full SuperAdmin
 can create their pods (TB-49). */}}
 {{- /* The namespace node shells run in: toolbox.nodeShell.namespace, or
-<release namespace>-toolbox, so two consoles in one cluster do not fight
-over it (Phase 10 review). */ -}}
+<release namespace>-privileged (what it is: the one namespace of the
+console's that runs at Pod Security privileged), so two consoles in one
+cluster do not fight over it (Phase 10 review). */ -}}
 {{- define "b221.toolboxNamespace" -}}
-{{- .Values.toolbox.nodeShell.namespace | default (printf "%s-toolbox" .Release.Namespace) -}}
+{{- .Values.toolbox.nodeShell.namespace | default (printf "%s-privileged" .Release.Namespace) -}}
 {{- end -}}
 
 {{- define "b221.nodeShellOn" -}}
