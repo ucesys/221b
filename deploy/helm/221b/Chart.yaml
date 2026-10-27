@@ -2,8 +2,8 @@ apiVersion: v2
 name: 221b
 description: A Kubernetes cluster console with built-in assistants. Nodes, Namespaces, Pods, Services and Helm, read-only.
 type: application
-version: 0.7.1
-appVersion: "0.7.1"
+version: 0.9.1
+appVersion: "0.9.1"
 home: https://github.com/ucesys/221b
 sources:
   - https://github.com/ucesys/221b

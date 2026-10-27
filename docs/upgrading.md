@@ -7,13 +7,13 @@ An upgrade is a `helm upgrade`. Everything the console keeps in the cluster (its
 From the published chart:
 
 ```sh
-helm upgrade k8s-console oci://ghcr.io/ucesys/charts/221b --version 0.7.1 -n 221b --reset-then-reuse-values
+helm upgrade k8s-console oci://ghcr.io/ucesys/charts/221b --version 0.9.1 -n 221b --reset-then-reuse-values
 ```
 
 From a checkout of the repository, at the release's tag:
 
 ```sh
-git checkout v0.7.1
+git checkout v0.9.1
 helm upgrade k8s-console deploy/helm/221b -n 221b --reset-then-reuse-values
 ```
 
@@ -23,7 +23,7 @@ The image follows the chart: a release's chart runs `ghcr.io/ucesys/221b:<its ve
 
 ## Which upgrades are tested
 
-CI upgrades from each of the **two releases before** the one being built (P7-03), in kind: it installs the earlier release's chart and image, makes a local user on the Users page, saves settings, a fleet and an acknowledged alert, adds a cluster connection and Sherlock's key, then upgrades, checks that everything is there and that the user still signs in, rolls back, checks again, and upgrades once more (`hack/upgrade-kind.sh`). Upgrading from an older release works through the releases in between: from 0.6.5 to 0.8.0, go to 0.7.x first.
+CI upgrades from each of the **two releases before** the one being built (P7-03), in kind: it installs the earlier release's chart and image, makes a local user on the Users page, saves settings, a fleet and an acknowledged alert, adds a cluster connection and Sherlock's key, then upgrades, checks that everything is there and that the user still signs in, rolls back, checks again, and upgrades once more (`hack/upgrade-kind.sh`). Upgrading from an older release works through the releases in between: from 0.6.5 to 0.9.1, go to 0.7.1 first.
 
 ## What is migrated
 
@@ -34,6 +34,7 @@ CI upgrades from each of the **two releases before** the one being built (P7-03)
 | A Secret per connection (`<release>-cluster-<id>`, key `spec.json`) | The connection and its credential | Carries `"version"` since 0.6 |
 | `<release>-sherlock` | Sherlock's API key | Unchanged |
 | Session Secrets (from 0.7.0) | Who is signed in | New in 0.7.0 |
+| The settings ConfigMap, key `toolbox-sessions.json` (from 0.9.1) | The Toolbox's open and ended sessions, for Administration › Sessions | New in 0.9.1 |
 
 A console reads every earlier format and migrates it in memory; nothing is rewritten until something is saved, so an upgrade alone changes nothing in the cluster. Fields a console does not know are kept when it saves, so a field a newer release added survives a rollback and a later upgrade.
 
@@ -46,6 +47,18 @@ helm rollback k8s-console -n 221b    # to the previous revision
 The earlier release reads what the newer one saved: it ignores fields it does not know. A console that finds a document saved in a **newer format than it knows** keeps reading it but refuses to save it, so it cannot destroy what the newer release wrote: the Settings page and the Users page say so until you upgrade again. CI checks a rollback from this release to each of the two before it.
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
+
+## 0.9.1
+
+The first release after 0.7.1: Phase 8 (Storage), Phase 9 (Toolbox) and the Phase 9.1 review. There is no 0.8.x or 0.9.0; upgrade from 0.7.1 directly.
+
+- **The console reads volumes.** Its ClusterRole gains get, list and watch on PersistentVolumes, StorageClasses and VolumeAttachments, for the Storage tab. `hack/check-rbac.sh` checks them.
+- **The roles for people grow.** With the full Admin template, Admin may delete PersistentVolumeClaims, forward ports and create Jobs; the Permissions page flags a create on pods or Jobs as `runs pods`, since a Job may run as any ServiceAccount of its namespace. `rbac.roles.admin.exec: true` (off by default) also lets Admin open shells in pods.
+- **The Toolbox is on** (`toolbox.enabled: true`). Each tool runs as the person who asks, so their own RBAC decides who may use it; the `toolbox` block is the ceiling. Set `toolbox.enabled=false` to leave it out.
+- **A namespace for node shells.** With the full SuperAdmin template, the chart makes the namespace `221b-toolbox` (`toolbox.nodeShell.namespace`), labelled Pod Security `privileged`, with a network policy that lets its pods reach only the API servers. A second console in the same cluster needs a namespace of its own there; `toolbox.nodeShell.enabled=false` leaves it out. The shared roles (`221b-viewer` and the others) are still left to the console that installed them.
+- **Port forwards** reach your computer through the `221b` command, attached to the release; the console refuses one older than `toolbox.portForward.cliMinVersion` (0.8.0).
+- **`antiAffinity`** (`soft` or `hard`, off by default) keeps several replicas on different nodes.
+- **Formats:** the settings gain optional fields (fleets that are lists of nodes, the Pending alert grace, the alert banners switch) and the settings ConfigMap a `toolbox-sessions.json` key; the format version is unchanged. 0.7.1 ignores what it does not know, but it has no lists of nodes: after a rollback, such a fleet is not what it was until you upgrade again.
 
 ## 0.7.1
 

@@ -4,6 +4,10 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## Unreleased
 
+## 0.9.1 (2026-10-27)
+
+The first release since 0.7.1, with Phase 8 (Storage), Phase 9 (Toolbox) and the Phase 9.1 review; there is no 0.8.x or 0.9.0. [docs/upgrading.md](https://github.com/ucesys/221b/blob/v0.9.1/docs/upgrading.md#091) says what an upgrade from 0.7.1 changes.
+
 ### Added
 
 - **Toolbox.** A Tools button beside each pod and node opens a shell, forwards a port to your computer, adds a debug container, starts a debug pod, or opens a shell on a node, and cordons, drains or deletes. Each tool asks through a dialog, and its button opens the session as a tab in the dock, at once: it runs as the person who asked, and ends after 10 minutes without activity, at its limit (Extend adds 10 minutes, up to the console's maximum), or when its pod is gone. Cordon runs at once; Drain and Delete ask first; Watson shows them running. On production where the two-person rule is on, another SuperAdmin approves through Watson, since the session opens as the person who asked, with their rights; node shells follow the same rule (`toolbox.nodeShell.approval: always` brings back a second SuperAdmin everywhere). Pods on a node that stopped reporting show Unknown, in a status segment of their own; the Pods segments show only when they have pods. A pod raises a Pending alert only after a grace period, 2 minutes by default, set on the Settings page. Port forwards reach your computer through the new `221b` command, attached to each release; it asks for the forward's token, so the token stays out of your shell's history. Administration gains Sessions (open and ended) and Toolbox (what the chart allows). Sherlock can open a tool's dialog filled in. A debug pod carries no ServiceAccount token unless a SuperAdmin names the account. Chart: a `toolbox` block, `rbac.roles.admin.exec`, and the `221b-toolbox` namespace for node shells; the full Admin role gains port forwards and Jobs, which the Permissions page flags `runs pods`, since a Job may run as any ServiceAccount of its namespace.
