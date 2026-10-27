@@ -65,6 +65,8 @@ type Cluster interface {
 	GetSecret(ctx context.Context, p kube.Person, namespace, name string) (*corev1.Secret, error)
 	UpdateSecret(ctx context.Context, p kube.Person, sec *corev1.Secret) (*corev1.Secret, error)
 	CreateSecret(ctx context.Context, p kube.Person, sec *corev1.Secret) (*corev1.Secret, error)
+	// CreateNamespace makes a namespace, as the person (Phase 10).
+	CreateNamespace(ctx context.Context, p kube.Person, name string, labels map[string]string) error
 }
 
 // Settings reads and changes the shared settings; *settings.Service

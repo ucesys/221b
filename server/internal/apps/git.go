@@ -201,7 +201,10 @@ func LoadChart(c *Checkout, dir string) (*chart.Chart, error) {
 		return nil, fmt.Errorf("the repository has no directory %q at this ref", dir)
 	}
 	if _, err := c.FS.Stat(path.Join(root, "Chart.yaml")); err != nil {
-		return nil, fmt.Errorf("%q has no Chart.yaml: name the chart's directory", dir)
+		if dir == "" {
+			return nil, errors.New("the repository's root has no Chart.yaml: give the chart's directory as the path, such as charts/app or deploy/helm/app")
+		}
+		return nil, fmt.Errorf("%q has no Chart.yaml: give the chart's directory as the path", dir)
 	}
 	rules := ignore.Empty()
 	if f, err := c.FS.Open(path.Join(root, ignore.HelmIgnore)); err == nil {

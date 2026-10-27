@@ -27,6 +27,7 @@ import (
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/roles"
+	"github.com/ucesys/221b/server/internal/views"
 	"github.com/ucesys/221b/server/internal/watson"
 )
 
@@ -284,9 +285,17 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "name the chart's repository, path and branch or tag")
 		return
 	}
-	if _, _, err := s.opts.Apps.Get(r.Context(), c.ID, in.Namespace, in.Name); err == nil {
-		jsonError(w, http.StatusConflict, "the console already keeps an application "+in.Namespace+"/"+in.Name+": upgrade it, or remove it first")
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
 		return
+	}
+	if _, _, err := s.opts.Apps.Get(r.Context(), c.ID, in.Namespace, in.Name); err == nil {
+		// A record whose install failed is replaced; one with a release
+		// is upgraded instead.
+		if _, deployed := views.BuildReleaseDetails(cl, in.Namespace, in.Name, s.opts.Now().UTC()); deployed {
+			jsonError(w, http.StatusConflict, "release "+in.Namespace+"/"+in.Name+" exists: upgrade it from its panel, or uninstall it first")
+			return
+		}
 	}
 	now := s.opts.Now().UTC()
 	rec := apps.Record{Cluster: c.ID, Namespace: in.Namespace, Name: in.Name, Source: *in.Source, Params: in.Params, Created: now, CreatedBy: who.User, Updated: now, UpdatedBy: who.User}

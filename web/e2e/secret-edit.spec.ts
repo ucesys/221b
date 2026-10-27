@@ -66,3 +66,26 @@ test('New Secret… makes a Secret with its keys (SE-05)', async ({ page, reques
     await request.delete(`${SIM}/api/v1/namespaces/default/secrets/e2e-made`)
   }
 })
+
+test('New namespace… makes a namespace and opens it (NS-01)', async ({ page, request }) => {
+  test.skip(inKind, 'the simulator serves namespace writes')
+  await page.goto('/#/namespaces')
+  await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  await page.getByTestId('namespace-new').click()
+  const dlg = page.getByTestId('namespace-dialog')
+  await dlg.getByTestId('namespace-new-name').fill('e2e-made-ns')
+  await dlg.getByTestId('namespace-new-labels').fill('team=e2e')
+  await dlg.getByTestId('namespace-create').click()
+  await expect(dlg).toHaveCount(0)
+  try {
+    await expect(page).toHaveURL(/#\/namespaces\/e2e-made-ns/)
+    // The simulator pushes no watch event for this write; the object is there.
+    const made = await request.get(`${SIM}/api/v1/namespaces/e2e-made-ns`)
+    expect(made.status()).toBe(200)
+    expect(((await made.json()) as { metadata: { labels?: Record<string, string> } }).metadata.labels?.team).toBe('e2e')
+    const audit = JSON.stringify(await cluster.auditLog())
+    expect(audit).toContain('namespace.create')
+  } finally {
+    await request.delete(`${SIM}/api/v1/namespaces/e2e-made-ns`)
+  }
+})

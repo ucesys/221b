@@ -60,3 +60,5 @@ export const fetchSecretsConfig = () => call<SecretsConfig>('GET', apiPath('secr
 export const revealSecretValue = (ns: string, name: string, key: string) => call<SecretValue>('GET', apiPath(`secrets/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/value`) + '?key=' + encodeURIComponent(key))
 export const updateSecret = (ns: string, name: string, edit: SecretEdit) => call<void>('PUT', apiPath(`secrets/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`), edit)
 export const createSecret = (ns: string, edit: SecretEdit) => call<void>('POST', apiPath(`secrets/${encodeURIComponent(ns)}`), edit)
+/** Makes a namespace, as the person (Phase 10, NS-01). */
+export const createNamespace = (name: string, labels?: Record<string, string>) => call<void>('POST', apiPath('namespaces'), labels && Object.keys(labels).length ? { name, labels } : { name })

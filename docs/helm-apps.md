@@ -88,7 +88,7 @@ Every `apps/…` route is served by the leader replica, where Watson runs.
 
 | Area | As built | Differs from the requirements |
 | --- | --- | --- |
-| Table and panel | `AppsTab` joins the live `helm` view with the records; the panel is inline, the table narrows to Name and Status | — |
+| Table and panel | `AppsTab` joins the live `helm` view with the records; with a release open the table folds into the Helm tab's side list, and the panel is `ReleaseBody` (shared with the Helm tab) with Overview and Images added | A record whose install failed is a *not installed* row with Install, values, Change source and Forget |
 | Changes | Watson commands with `--git/--path/--ref/--tag/--app`; the person's click is the approval unless the two-person rule applies | — |
 | Drift | Subset comparison, per object, cached two minutes per person | Lists are compared element by element as far as the manifest's goes; an element the cluster added is not drift |
 | Secret editing | `SecretData` in the object drawer, `SecretDialog` on the Secrets tab; reveal and edit gated by `secrets/config` | Immutable Secrets are refused before Kubernetes would refuse them |

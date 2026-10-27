@@ -144,6 +144,17 @@ func (s *source) CreateSecret(_ context.Context, p kube.Person, sec *corev1.Secr
 	return next.DeepCopy(), nil
 }
 
+func (s *source) CreateNamespace(_ context.Context, p kube.Person, name string, labels map[string]string) error {
+	if s.denied("namespaces", "") && !p.Nobody() {
+		return apierrors.NewForbidden(schema.GroupResource{Resource: "namespaces"}, name, errors.New("RBAC: no"))
+	}
+	if s.Object("namespaces", "", name) != nil {
+		return apierrors.NewAlreadyExists(schema.GroupResource{Resource: "namespaces"}, name)
+	}
+	s.Put(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}})
+	return nil
+}
+
 func (s *source) ObjectYAML(ctx context.Context, p kube.Person, k kube.Kind, namespace, name string) (string, error) {
 	s.readBy(p)
 	if s.denied(k.Resource, namespace) && !p.Nobody() {

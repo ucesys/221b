@@ -14,6 +14,7 @@ import { ExportMenu } from './ExportMenu'
 import { SearchBox } from './SearchBox'
 import { fetchSecretsConfig, type SecretsConfig } from '../api/secrets'
 import { SecretDialog } from './SecretDialog'
+import { NamespaceDialog } from './NamespaceDialog'
 import { SideList, type SideGroup } from './SideList'
 import { ObjectPanel } from './ObjectPanel'
 import { PodPanel } from './PodPanel'
@@ -208,6 +209,7 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   // Secret editing (SE-05): an Admin or SuperAdmin may make a Secret here.
   const [secretsCfg, setSecretsCfg] = useState<SecretsConfig | null>(null)
   const [newSecret, setNewSecret] = useState(false)
+  const [newNamespace, setNewNamespace] = useState(false)
   useEffect(() => {
     let live = true
     fetchSecretsConfig().then(
@@ -226,7 +228,13 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
 
   return (
     <>
-      <SideList label="Namespaces" title="Namespaces" query={listQuery} onQuery={setListQuery} placeholder="Filter namespaces" groups={groups} empty={loaded ? 'No namespaces match.' : 'Waiting for the first list…'} testId="namespace-list" foot={
+      <SideList label="Namespaces" title="Namespaces" query={listQuery} onQuery={setListQuery} placeholder="Filter namespaces" groups={groups} empty={loaded ? 'No namespaces match.' : 'Waiting for the first list…'} testId="namespace-list" extra={
+        secretsCfg?.edit ? (
+          <button className="rk-btn" onClick={() => setNewNamespace(true)} style={{ alignSelf: 'flex-start' }} data-testid="namespace-new">
+            New namespace…
+          </button>
+        ) : undefined
+      } foot={
         <>
           Cluster-scoped objects such as nodes, persistent volumes, storage classes and cluster roles belong to no namespace; find nodes in the <a href={href('nodes')} style={{ color: 'var(--accent)' }}>Nodes</a> tab, and volumes, claims and classes in the <a href={href('storage', [], ns ? { ns } : {})} style={{ color: 'var(--accent)' }} data-testid="namespace-storage-footer">Storage</a> tab.
         </>
@@ -296,6 +304,16 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
         )}
         {!current && <p style={{ margin: 0, padding: '28px 24px', fontSize: 12.5, color: 'var(--fg3)' }}>{loaded ? 'No namespaces.' : 'Waiting for the first list of namespaces…'}</p>}
       </main>
+      {newNamespace && (
+        <NamespaceDialog
+          onClose={() => setNewNamespace(false)}
+          onDone={(name) => {
+            setNewNamespace(false)
+            onToast(`Namespace ${name} created.`)
+            navigate(href('namespaces', [name]))
+          }}
+        />
+      )}
       {newSecret && ns && (
         <SecretDialog
           namespace={ns}

@@ -42,7 +42,47 @@ func (s *Server) secretsRoutes() {
 		s.handle("GET "+base+"secrets/{namespace}/{name}/value", "secret-value", s.getSecretValue)
 		s.handle("PUT "+base+"secrets/{namespace}/{name}", "secret-update", s.putSecret)
 		s.handle("POST "+base+"secrets/{namespace}", "secret-create", s.postSecret)
+		s.handle("POST "+base+"namespaces", "namespace-create", s.postNamespace)
 	}
+}
+
+// ActionNamespaceCreate records a namespace made from the console.
+const ActionNamespaceCreate = "namespace.create"
+
+// postNamespace makes a namespace, as the person (Phase 10, NS-01):
+// Kubernetes decides who may.
+func (s *Server) postNamespace(w http.ResponseWriter, r *http.Request) {
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Name   string            `json:"name"`
+		Labels map[string]string `json:"labels,omitempty"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		jsonError(w, http.StatusBadRequest, "the namespace is not valid: "+err.Error())
+		return
+	}
+	if errs := validation.IsDNS1123Label(in.Name); len(errs) > 0 {
+		jsonError(w, http.StatusBadRequest, "a namespace's name is lower-case letters, digits and dashes, up to 63 characters")
+		return
+	}
+	for k, v := range in.Labels {
+		if len(validation.IsQualifiedName(k)) > 0 || len(validation.IsValidLabelValue(v)) > 0 {
+			jsonError(w, http.StatusBadRequest, "label "+strconv.Quote(k)+" is not valid")
+			return
+		}
+	}
+	if err := cl.CreateNamespace(r.Context(), s.person(r), in.Name, in.Labels); err != nil {
+		s.record(r, ActionNamespaceCreate, in.Name, "outcome=failed")
+		jsonError(w, kubeStatus(err), err.Error())
+		return
+	}
+	s.record(r, ActionNamespaceCreate, in.Name, "labels="+strconv.Itoa(len(in.Labels)))
+	w.WriteHeader(http.StatusCreated)
 }
 
 // secretsConfig says what the person may do with Secrets here.

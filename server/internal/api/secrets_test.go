@@ -15,6 +15,23 @@ func seedSecret(src *source) {
 	src.putSecret(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "web", ResourceVersion: "7"}, Type: corev1.SecretTypeOpaque, Data: map[string][]byte{"password": []byte(plantedValue), "blob": {0, 1, 2, 255}}})
 }
 
+// NS-01: a namespace made from the console, as the person.
+func TestNamespaceIsCreatedAsThePerson(t *testing.T) {
+	srv, ops, _, aud, src, _ := multiSetupWith(t, "ops@corp.example", nil)
+	if r, body := send(t, ops, http.MethodPost, srv.URL+"/api/v1/namespaces", `{"name":"made-here","labels":{"team":"a"}}`); r.StatusCode != http.StatusCreated || src.Object("namespaces", "", "made-here") == nil {
+		t.Fatalf("create: %d %s", r.StatusCode, body)
+	}
+	if r, _ := send(t, ops, http.MethodPost, srv.URL+"/api/v1/namespaces", `{"name":"made-here"}`); r.StatusCode != http.StatusConflict {
+		t.Errorf("twice: %d", r.StatusCode)
+	}
+	if r, _ := send(t, ops, http.MethodPost, srv.URL+"/api/v1/namespaces", `{"name":"Bad_Name"}`); r.StatusCode != http.StatusBadRequest {
+		t.Errorf("bad name: %d", r.StatusCode)
+	}
+	if !strings.Contains(aud.String(), "namespace.create") {
+		t.Errorf("audit: %s", aud.String())
+	}
+}
+
 // SE-02 to SE-04: an Admin edits a Secret blind by default; only with
 // secrets.reveal on does one key's value reach the browser, audited; a
 // Viewer may do neither; keys-only views still carry no value.

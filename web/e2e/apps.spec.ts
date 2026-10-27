@@ -55,12 +55,17 @@ test('a release opens beside the table: overview, history with a diff of two rev
   const panel = page.getByTestId('app-panel')
   await expect(panel.getByTestId('app-title')).toContainText(multi.name)
   await expect(panel.getByTestId('app-source-line')).toContainText('keeps no source')
-  // The table narrows to its first columns.
+  // The table folds into the side list, with the Helm tab's details.
   await expect(page.getByTestId('apps-table').getByRole('columnheader', { name: /^Source/ })).toHaveCount(0)
+  await expect(page.getByTestId('apps-table').locator('.rk-rrow', { hasText: multi.name })).toContainText(`${multi.chart}-${multi.chartVersion}`)
+  await expect(page.getByTestId('apps-addons')).toBeVisible()
+  // The panel shows what the Helm tab shows: the cards and the pods section.
+  await expect(panel.getByTestId('release-cards')).toBeVisible()
+  await panel.locator('[data-subtab="pods"]').click()
+  await expect(panel.getByRole('heading', { name: 'Pods in this release' })).toBeVisible()
 
   await panel.locator('[data-subtab="history"]').click()
-  const revisions = panel.getByTestId('app-revisions')
-  await expect(revisions.locator('[data-revision]')).toHaveCount(multi.revisions)
+  await expect(panel.locator('[data-revision]')).toHaveCount(multi.revisions)
   if (multi.revisions > 1) {
     await panel.getByTestId('app-diff-from').selectOption('1')
     await panel.getByTestId('app-diff-to').selectOption(String(multi.revisions))

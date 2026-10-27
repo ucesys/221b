@@ -10,6 +10,8 @@ import { Mono, NameCell, Tone } from './cells'
 /** A release on the Helm1 page: the release, and what the console keeps about it (HA-01). */
 export interface AppRow extends ReleaseRow {
   app?: AppView
+  /** A record without a release: its install failed (HA-08). */
+  orphan?: boolean
 }
 
 export function driftText(r: AppRow): string {
