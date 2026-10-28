@@ -293,6 +293,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
                 canChange && watson.available && !watson.readOnly
                   ? (rev) => watson.send(`helm rollback ${row.name} ${rev} -n ${row.namespace}`, { from: 'Helm tab', why: `Roll ${row.namespace}/${row.name} back to revision ${rev}.` })
                   : undefined,
+              rollbackOff: !canChange ? 'for Admins and SuperAdmins' : !watson.available ? 'Watson is off here' : watson.readOnly ? 'this cluster is connected read-only' : undefined,
             }}
           >
           <ReleaseBody

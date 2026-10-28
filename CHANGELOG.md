@@ -11,7 +11,7 @@ What changed in each release of 221B, for people who use it and people who insta
 ### Changed
 
 - The Nodes table lost its Problems column: Status sorts problems first and the node's drawer lists them (M-02).
-- The release wrench's **Upgrade/Rollback…** is **Upgrade…**; each older revision in History has a rollback icon that hands `helm rollback` to Watson as a card to approve (M-03).
+- The release wrench's **Upgrade/Rollback…** is **Upgrade…**; each revision in History has a wrench with **Diff…** and **Roll back to this revision…**, the latter a `helm rollback` card for Watson to approve (M-03).
 - A pod, a node, a volume claim or a volume with an error or a warning offers **Troubleshoot…** first in its wrench menu: Sherlock is asked for a troubleshooting report (M-04).
 
 ## 0.10.0 (2026-10-28)

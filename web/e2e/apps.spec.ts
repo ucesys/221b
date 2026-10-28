@@ -67,8 +67,9 @@ test('a release opens beside the table: overview, history with a diff of two rev
   await panel.locator('[data-subtab="history"]').click()
   await expect(panel.locator('[data-revision]')).toHaveCount(multi.revisions)
   if (multi.revisions > 1) {
-    // A revision's diff icon opens the diff against the revision before it, in a dialog large enough to read.
-    await panel.getByTestId(`revision-diff-${multi.revisions}`).click()
+    // A revision's wrench: Diff… opens the diff against the revision before it, in a dialog large enough to read.
+    await panel.getByTestId(`revision-tools-${multi.revisions}`).click()
+    await page.getByTestId('revision-tool-diff').click()
     const dlg = page.getByTestId('diff-dialog')
     await expect(dlg.getByTestId('diff-from')).toHaveValue(String(multi.revisions - 1))
     await expect(dlg.getByTestId('diff-to')).toHaveValue(String(multi.revisions))
@@ -77,9 +78,14 @@ test('a release opens beside the table: overview, history with a diff of two rev
     expect(box.height).toBeGreaterThan(500)
     await page.keyboard.press('Escape')
     await expect(dlg).toHaveCount(0)
-    // Each older revision has a rollback icon, the current one none; it hands helm rollback to Watson as a card (M-03).
-    await expect(panel.getByTestId(`revision-rollback-${multi.revisions}`)).toHaveCount(0)
-    await panel.getByTestId(`revision-rollback-${multi.revisions - 1}`).click()
+    // The current revision's menu cannot roll back; an older one's hands helm rollback to Watson as a card (M-03).
+    await panel.getByTestId(`revision-tools-${multi.revisions}`).click()
+    await expect(page.getByTestId('revision-tool-rollback')).toHaveAttribute('aria-disabled', 'true')
+    await expect(page.getByTestId('revision-tool-rollback')).toContainText('runs now')
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('revision-menu')).toHaveCount(0)
+    await panel.getByTestId(`revision-tools-${multi.revisions - 1}`).click()
+    await page.getByTestId('revision-tool-rollback').click()
     const card = page.getByTestId('watson').getByTestId('watson-card').last()
     await expect(card).toHaveAttribute('data-command', `helm rollback ${multi.name} ${multi.revisions - 1} -n ${multi.namespace}`, { timeout: 15_000 })
     await card.getByTestId('watson-discard').click()
