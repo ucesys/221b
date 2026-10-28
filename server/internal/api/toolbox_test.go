@@ -111,7 +111,9 @@ func TestForwardOpensASessionTheCLIReaches(t *testing.T) {
 	if r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/commands/"+card.ID+"/approve", ""); r.StatusCode != 200 {
 		t.Fatalf("approve: %d %s", r.StatusCode, b)
 	}
-	watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[card.ID].Session != nil && m[card.ID].Session.SessionID != "" })
+	watsonStream(t, srv, c, func(m map[string]watsonItem) bool {
+		return m[card.ID].Session != nil && m[card.ID].Session.SessionID != ""
+	})
 	_, b = send(t, c, http.MethodGet, srv.URL+"/api/v1/sessions", "")
 	var mine []struct {
 		ID   string `json:"id"`

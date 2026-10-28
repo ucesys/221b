@@ -157,6 +157,8 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   // Helm releases, read where Helm keeps them (P2-07), listed like the namespace's other kinds.
   const releases = useView<ReleaseRow>(current?.releases.length ? 'helm' : null)
   const nsReleases = useMemo(() => releases.rows.filter((r) => r.namespace === ns), [releases.rows, ns])
+  // Secret editing (SE-05): an Admin or SuperAdmin may make a Secret here.
+  const [secretsCfg, setSecretsCfg] = useState<SecretsConfig | null>(null)
   const kinds = useMemo(() => {
     const m = new Map<string, { kind: string; apiVersion: string; order: number; n: number }>()
     for (const r of objects.rows) {
@@ -181,9 +183,11 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   const tabs = useMemo(() => {
     const list = kinds.map((k) => ({ id: k.kind, label: pluralKind(k.kind), apiVersion: k.apiVersion, n: byKind.get(k.kind)?.length ?? 0 }))
     list.sort((a, b) => Number(b.id === 'Pod') - Number(a.id === 'Pod'))
+    // An Admin sees a Secrets tab even where there is no Secret yet: New Secret… lives there (SE-05).
+    if (secretsCfg?.read && secretsCfg.edit && !list.some((t) => t.id === 'Secret')) list.push({ id: 'Secret', label: pluralKind('Secret'), apiVersion: 'v1', n: 0 })
     if (nsReleases.length) list.push({ id: RELEASES, label: 'Helm releases', apiVersion: 'helm.sh/release.v1', n: releasesShown.length })
     return list
-  }, [kinds, byKind, nsReleases.length, releasesShown.length])
+  }, [kinds, byKind, nsReleases.length, releasesShown.length, secretsCfg])
   const tab = tabs.find((t) => t.id === kindsParam[0]) ?? tabs[0] ?? null
 
   const lq = listQuery.trim().toLowerCase()
@@ -210,7 +214,6 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   ]
 
   // Secret editing (SE-05): an Admin or SuperAdmin may make a Secret here.
-  const [secretsCfg, setSecretsCfg] = useState<SecretsConfig | null>(null)
   const [newSecret, setNewSecret] = useState(false)
   const [newNamespace, setNewNamespace] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
