@@ -34,6 +34,8 @@ interface Props {
   ask?: string
   /** What the copy icon beside the title copies: the title, unless given, or nothing for a form. */
   copy?: string | false
+  /** The object's Tools button (Phase 10 review), beside the close button. */
+  tools?: ReactNode
 }
 
 
@@ -41,7 +43,7 @@ interface Props {
  * The prototype's details drawer: over the page from the right, with a
  * backdrop that closes it, a header with tabs, and a scrolling body.
  */
-export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId, ask, copy }: Props) {
+export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId, ask, copy, tools }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null)
   // Opened by Sherlock (P6U-05), it stops above the dock and is not modal,
   // so its answer, Undo and the question box stay in reach (P6U-09).
@@ -120,6 +122,7 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
               </h2>
             </div>
             {ask && <AskSherlock question={ask} compact over />}
+            {tools}
             <button ref={closeRef} className="rk-icon-btn" aria-label={`Close ${label.toLowerCase()}`} title="Close (Esc)" onClick={onClose}>
               <CloseIcon />
             </button>

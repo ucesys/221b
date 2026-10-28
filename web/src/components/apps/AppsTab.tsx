@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { fetchApps, forgetApp, isCard, uninstallApp, upgradeApp, type AppDrift, type AppView } from '../../api/apps'
+import { fetchApps, forgetApp, isCard, uninstallApp, type AppDrift, type AppView } from '../../api/apps'
 import { useMe } from '../../api/auth'
 import { useRefreshTick, useView } from '../../api/live'
 import type { ReleaseRow } from '../../api/types'
@@ -132,10 +132,7 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
         break
       case 'install':
       case 'deploy':
-        upgradeApp(route.cluster, row.namespace, row.name, { install: a === 'install' }).then(
-          (it) => handleResult(it, `${a === 'install' ? 'Installing' : 'Upgrading'} ${row.name}`),
-          (e: unknown) => onToast(e instanceof Error ? e.message : String(e)),
-        )
+        setDialog({ mode: 'upgrade', row })
         break
       case 'uninstall':
       case 'forget':
@@ -269,7 +266,7 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
           onClose={() => setDialog(null)}
           onDone={(r, mode) => {
             setDialog(null)
-            handleResult(r, { create: 'Installing', source: 'Deploying', switch: 'Switching and upgrading', upgrade: 'Upgrading', values: 'Upgrading with the new values' }[mode] + (dialog.row ? ` ${dialog.row.name}` : ''))
+            handleResult(r, { create: 'Installing', source: 'Deploying', switch: 'Switching and upgrading', upgrade: dialog.row?.orphan ? 'Installing' : 'Upgrading', install: 'Installing', values: 'Upgrading with the new values' }[mode] + (dialog.row ? ` ${dialog.row.name}` : ''))
           }}
         />
       )}

@@ -7,7 +7,7 @@ import { trapTab } from '../../lib/focus'
 import { layer } from '../../lib/layer'
 
 /** What the dialog does (HA-05, HA-10 to HA-13). */
-export type DialogMode = 'create' | 'source' | 'switch' | 'upgrade' | 'values'
+export type DialogMode = 'create' | 'source' | 'switch' | 'upgrade' | 'install' | 'values'
 
 interface Props {
   cluster: string
@@ -26,6 +26,7 @@ const TITLES: Record<DialogMode, string> = {
   source: 'The source of the release',
   switch: 'Switch to another branch or tag',
   upgrade: 'Upgrade from the source',
+  install: 'Install from the source',
   values: 'Values and parameters',
 }
 
@@ -180,7 +181,8 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
         req = upgradeApp(cluster, row!.namespace, row!.name, { ref: ref.trim(), refKind })
         break
       case 'upgrade':
-        req = upgradeApp(cluster, row!.namespace, row!.name, ref.trim() && (ref.trim() !== app?.source.ref || refKind !== app?.source.refKind) ? { ref: ref.trim(), refKind } : {})
+      case 'install':
+        req = upgradeApp(cluster, row!.namespace, row!.name, { ...(ref.trim() && (ref.trim() !== app?.source.ref || refKind !== app?.source.refKind) ? { ref: ref.trim(), refKind } : {}), ...(row?.orphan ? { install: true } : {}) })
         break
       case 'values':
         req = updateApp(cluster, row!.namespace, row!.name, { values, params: paramList(), upgrade: deployNow })
@@ -198,7 +200,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
     )
   }
 
-  const primary = { create: 'Install', source: 'Save', switch: 'Switch and upgrade', upgrade: 'Upgrade', values: 'Save' }[mode]
+  const primary = { create: 'Install', source: 'Save', switch: 'Switch and upgrade', upgrade: row?.orphan ? 'Install' : 'Upgrade', install: 'Install', values: 'Save' }[mode]
   // Save keeps the change for the next deploy; the second button deploys it at once.
   const alsoDeploy = mode === 'source' || mode === 'values' ? (row?.orphan || !app ? 'Save and install' : 'Save and upgrade') : ''
   const canSubmit = !busy && (mode === 'create' ? namespace.trim() !== '' && name.trim() !== '' && repo.trim() !== '' && ref.trim() !== '' : mode === 'source' ? repo.trim() !== '' && ref.trim() !== '' : mode === 'switch' ? ref.trim() !== '' : true)
@@ -210,7 +212,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
       <div
         role="dialog"
         aria-modal="true"
-        aria-label={TITLES[mode]}
+        aria-label={mode === 'upgrade' && row?.orphan ? TITLES.install : TITLES[mode]}
         className="rk-card"
         data-testid="app-dialog"
         data-mode={mode}
@@ -223,7 +225,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
         }}
         style={{ position: 'relative', width: 'min(760px, 100%)', maxHeight: 'calc(100vh - 32px)', overflow: 'auto', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14, boxShadow: 'var(--shadow)' }}
       >
-        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{TITLES[mode]}</h2>
+        <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{mode === 'upgrade' && row?.orphan ? TITLES.install : TITLES[mode]}</h2>
         {row && (
           <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>
             Release <span className="rk-mono">{row.name}</span> in <span className="rk-mono">{row.namespace}</span>

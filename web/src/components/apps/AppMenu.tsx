@@ -33,23 +33,15 @@ interface Item {
 /** The items for a release: without a source only Set source and Uninstall do anything. */
 export function appItems(r: AppRow, canChange: boolean): Item[] {
   const off = canChange ? undefined : 'Watson is off here'
-  const noSource = r.app ? undefined : 'set the source first'
   if (r.orphan) {
     return [
-      { key: 'install', label: 'Install', hint: 'from its source, with its values', off },
-      { key: 'values', label: 'Values and parameters…', off },
-      { key: 'source', label: 'Source…', hint: 'edited on the Overview', off },
+      { key: 'upgrade', label: 'Install…', hint: 'from its source, with its values', off },
       { key: 'forget', label: 'Forget', hint: 'drops the record', sepBefore: true, danger: true, off },
     ]
   }
   return [
-    { key: 'deploy', label: 'Upgrade', hint: r.app ? `from ${r.app.source.ref}, with the saved values` : undefined, off: off ?? noSource },
-    { key: 'upgrade', label: 'Upgrade from another branch or tag…', off: off ?? noSource },
-    { key: 'switch', label: 'Switch branch or tag…', off: off ?? noSource },
-    { key: 'values', label: 'Values and parameters…', off: off ?? noSource },
-    { key: 'source', label: r.app ? 'Source…' : 'Set source…', hint: 'edited on the Overview', off },
-    { key: 'forget', label: 'Forget source', hint: 'keeps the release', sepBefore: true, off: off ?? noSource },
-    { key: 'uninstall', label: 'Uninstall…', danger: true, off },
+    { key: 'upgrade', label: 'Upgrade…', hint: r.app ? `from ${r.app.source.ref}` : undefined, off: off ?? (r.app ? undefined : 'set the source first') },
+    { key: 'uninstall', label: 'Uninstall…', danger: true, sepBefore: true, off },
   ]
 }
 

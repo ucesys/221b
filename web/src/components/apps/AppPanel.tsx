@@ -3,11 +3,11 @@ import { fetchAppRefs, fetchDiff, fetchDrift, fetchImages, fetchRevisions, sourc
 import { useDetails } from '../../api/details'
 import type { ClusterInfo, ReleaseDetails } from '../../api/types'
 import type { WatsonItem } from '../../api/watson'
-import { driftText, driftTone, type AppRow } from '../../columns/apps'
+import { driftTone, type AppRow } from '../../columns/apps'
 import { fmtAge, fmtTs, nWord } from '../../lib/format'
 import { apiPath, href, type Route } from '../../lib/router'
 import { CopyName } from '../CopyName'
-import { Card, Facts } from '../Drawer'
+import { Card } from '../Drawer'
 import { CloseIcon } from '../Icons'
 import { ReleaseBody, SUBTABS, type ExtraTab } from '../ReleaseBody'
 import { AppToolsButton, type AppAction } from './AppMenu'
@@ -121,75 +121,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
 
   const commit = app?.commit ? app.commit.slice(0, 12) : ''
 
-  const overview = (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12, alignItems: 'start' }}>
-      {!row.orphan && (
-        <Card title="Release">
-          <Facts
-            items={[
-              ['Chart', `${row.chart} ${row.chartVersion}`],
-              ['App version', row.appVersion || '—'],
-              ['Revision', `${row.revision} of ${row.revisions}`],
-              ['Status', row.status, row.description],
-              ['Updated', row.updated ? `${fmtAge(row.updated, now)} ago` : '—', row.updated ? fmtTs(row.updated) : undefined],
-              ['First deployed', row.firstDeployed ? fmtTs(row.firstDeployed) : '—'],
-              ['Pods', row.pods ? `${row.podsReady}/${row.pods} ready` : 'none'],
-            ]}
-          />
-        </Card>
-      )}
-      <SourceCard clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} />
-      {!row.orphan && (
-        <Card
-          title="Drift"
-          aside={
-            app ? (
-              <button className="rk-btn" onClick={() => check(true)} disabled={checking} data-testid="app-check-drift">
-                {checking ? 'Checking…' : 'Check now'}
-              </button>
-            ) : undefined
-          }
-        >
-          {!app ? (
-            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Checked for releases with a source.</p>
-          ) : !drift ? (
-            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>{checking ? 'Reading each object of the release as you…' : 'Not checked yet.'}</p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="app-drift">
-              <p style={{ margin: 0, fontSize: 12.5 }}>
-                <span className="rk-pill" data-tone={driftTone(row)}>
-                  <span className="rk-dot" />
-                  {driftText(row) === 'not checked' ? driftState(drift) : driftText(row)}
-                </span>{' '}
-                <span style={{ color: 'var(--fg3)' }}>
-                  {drift.same} as applied · {drift.changed} changed · {drift.missing} missing{drift.unknown ? ` · ${drift.unknown} unknown` : ''} · checked {fmtAge(drift.checked, now)} ago
-                </span>
-              </p>
-              {drift.objects.filter((o) => o.state !== 'same').length > 0 && (
-                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                  {drift.objects
-                    .filter((o) => o.state !== 'same')
-                    .map((o) => (
-                      <li key={`${o.kind}/${o.namespace ?? ''}/${o.name}`}>
-                        <span className="rk-mono">
-                          {o.kind} {o.name}
-                        </span>{' '}
-                        <span className="rk-t" data-tone={o.state === 'missing' ? 'err' : o.state === 'changed' ? 'warn' : 'muted'}>
-                          {o.state}
-                        </span>
-                        {o.fields && o.fields.length > 0 && <span style={{ color: 'var(--fg3)' }}>: {o.fields.join(', ')}</span>}
-                        {o.error && <span style={{ color: 'var(--fg3)' }}>: {o.error}</span>}
-                      </li>
-                    ))}
-                </ul>
-              )}
-              <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>A field the manifest sets and the cluster has differently is drift; what the cluster added (defaults, status) is not. Values are never shown.</p>
-            </div>
-          )}
-        </Card>
-      )}
-    </div>
-  )
+  const overview = <SourceCard clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} now={now} />
 
   const imagesTab = (
     <Card
@@ -322,7 +254,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
     </>
   )
 
-  const before: ExtraTab[] = [{ id: 'overview', label: 'Overview', render: () => overview }]
+  const before: ExtraTab[] = [{ id: 'overview', label: 'Source', render: () => overview }]
   const after: ExtraTab[] = [{ id: 'images', label: 'Images', count: images?.images.length, render: () => imagesTab }]
 
   return (
@@ -343,17 +275,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
             </span>
           )}
           <span style={{ flex: '1 1 auto' }} />
-          {canChange && app && (
-            <button className="rk-btn" data-on="true" onClick={() => onAction(row.orphan ? 'install' : 'deploy')} title={row.orphan ? 'helm install from the saved source, values and parameters' : 'helm upgrade from the saved source, values and parameters'} data-testid="app-deploy">
-              {row.orphan ? 'Install' : 'Upgrade'}
-            </button>
-          )}
-          {canChange && (
-            <button className="rk-btn" onClick={() => onAction(row.orphan ? 'forget' : 'uninstall')} style={{ borderColor: 'var(--err)', color: 'var(--err)' }} title={row.orphan ? 'Drops the record' : 'helm uninstall, as you, after your approval in Watson'} data-testid="app-uninstall">
-              {row.orphan ? 'Forget' : 'Uninstall…'}
-            </button>
-          )}
-          <AppToolsButton row={row} canChange={canChange} onPick={onAction} label="Tools" />
+          <AppToolsButton row={row} canChange={canChange} onPick={onAction} />
           <a className="rk-icon-btn" href={href('helm1')} aria-label="Close the release" title="Close" data-testid="app-close">
             <CloseIcon />
           </a>
@@ -377,6 +299,18 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
                 Updated <span className="rk-num" style={{ color: 'var(--fg)' }}>{row.updated ? `${fmtAge(row.updated, now)} ago · ${fmtTs(row.updated)}` : '—'}</span>
               </span>
             </>
+          )}
+          {drift && driftState(drift) !== 'in sync' && (
+            <span data-testid="app-drift" title={drift.objects.filter((o) => o.state !== 'same').map((o) => `${o.kind} ${o.name}: ${o.state}${o.fields?.length ? ' (' + o.fields.join(', ') + ')' : ''}`).join('\n')}>
+              <span className="rk-pill" data-tone={driftTone(row) === 'muted' ? 'warn' : driftTone(row)}>
+                <span className="rk-dot" />
+                {driftState(drift)}
+              </span>{' '}
+              {drift.changed} changed · {drift.missing} missing{drift.unknown ? ` · ${drift.unknown} unknown` : ''} · checked {fmtAge(drift.checked, now)} ago ·{' '}
+              <button className="rk-link" onClick={() => check(true)} disabled={checking} data-testid="app-check-drift">
+                {checking ? 'checking…' : 'check again'}
+              </button>
+            </span>
           )}
           <span data-testid="app-source-line">
             {app ? (
@@ -452,6 +386,8 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
   const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>('saved')
   const [error, setError] = useState('')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const queue = useRef<Promise<void>>(Promise.resolve())
+  const seq = useRef(0)
   const latest = useRef({ values, params })
   useEffect(() => {
     latest.current = { values, params }
@@ -459,7 +395,9 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
   // A record changed elsewhere (an upgrade, another browser) shows once
   // nothing is being edited here.
   const stateRef = useRef(state)
-  stateRef.current = state
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
   useEffect(() => {
     if (stateRef.current !== 'saved') return
     const v = app.values ?? ''
@@ -497,8 +435,6 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
         }
       })
   }, [clusterId, row.namespace, row.name, onResult])
-  const queue = useRef<Promise<void>>(Promise.resolve())
-  const seq = useRef(0)
   const touch = () => {
     setState('dirty')
     seq.current++
@@ -572,7 +508,7 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
  * namespace at install. A release the console did not install gets its
  * record here.
  */
-function SourceCard({ clusterId, row, app, canChange, onResult }: { clusterId: string; row: AppRow; app?: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void }) {
+function SourceCard({ clusterId, row, app, canChange, onResult, now }: { clusterId: string; row: AppRow; app?: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void; now: number }) {
   const [repo, setRepo] = useState(app?.source.repo ?? '')
   const [path, setPath] = useState(app?.source.path ?? '')
   const [ref, setRef] = useState(app?.source.ref ?? '')
@@ -583,9 +519,13 @@ function SourceCard({ clusterId, row, app, canChange, onResult }: { clusterId: s
   const [error, setError] = useState('')
   const commit = app?.commit ? app.commit.slice(0, 12) : ''
   const saved: AppSource | null = app ? app.source : null
+  const queue = useRef<Promise<void>>(Promise.resolve())
+  const seq = useRef(0)
   // The record's source shows once nothing is being edited here.
   const stateRef = useRef(state)
-  stateRef.current = state
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
   useEffect(() => {
     if (stateRef.current !== 'saved' || !app) return
     setRepo(app.source.repo)
@@ -624,28 +564,25 @@ function SourceCard({ clusterId, row, app, canChange, onResult }: { clusterId: s
         }
       })
   }
-  const queue = useRef<Promise<void>>(Promise.resolve())
-  const seq = useRef(0)
   const edited = () => {
     seq.current++
     setState('dirty')
   }
-  const field = (label: string, value: string, set: (v: string) => void, placeholder: string, testId: string, type = 'text', hint?: string) => (
-    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, fontWeight: 600, color: 'var(--fg2)', minWidth: 0 }}>
+  const field = (label: string, value: string, set: (v: string) => void, placeholder: string, testId: string, type = 'text', span = 1) => (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 0, gridColumn: span > 1 ? `span ${span}` : undefined }}>
       {label}
       <span className="rk-field">
         <input className="rk-mono" type={type} autoComplete="off" value={value} readOnly={!canChange} onChange={(e) => (set(e.target.value), edited())} onBlur={() => save()} placeholder={placeholder} data-testid={testId} />
       </span>
-      {hint && <span className="rk-fhint" style={{ fontWeight: 400 }}>{hint}</span>}
     </label>
   )
   const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? (repo.trim() && ref.trim() ? 'Saves when you leave the field' : 'Needs a repository and a branch or tag') : state === 'error' ? error : saved ? 'Saved' : 'Not set'
   return (
     <Card title="Source" aside={<span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-source-state">{status}</span>}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px 14px' }}>
-        {field('Repository', repo, setRepo, 'https://github.com/org/app', 'app-src-repo', 'text', 'An https:// git URL')}
-        {field('Chart path', path, setPath, 'charts/app', 'app-src-path', 'text', 'The chart\'s directory; empty for the root')}
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, fontWeight: 600, color: 'var(--fg2)', minWidth: 0 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: '8px 12px' }}>
+        {field('Repository (https:// git URL)', repo, setRepo, 'https://github.com/org/app', 'app-src-repo', 'text', 4)}
+        {field('Chart path (empty for the root)', path, setPath, 'charts/app', 'app-src-path', 'text', 2)}
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 0, gridColumn: 'span 3' }}>
           {refKind === 'tag' ? 'Tag' : 'Branch'}
           <span style={{ display: 'flex', gap: 6 }}>
             <span className="rk-field" style={{ flex: '1 1 auto' }}>
@@ -661,35 +598,40 @@ function SourceCard({ clusterId, row, app, canChange, onResult }: { clusterId: s
             </span>
           </span>
         </label>
-        {field('Token', token, setToken, app?.hasToken ? '•••••••• saved; paste a new one to replace it' : 'only for a private repository', 'app-src-token', 'password', 'Kept in the console, never shown again')}
+        {field(app?.hasToken ? 'Token (saved; paste a new one to replace it)' : 'Token (private repository only)', token, setToken, app?.hasToken ? '••••••••' : 'optional', 'app-src-token', 'password', 3)}
       </div>
-      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
-        <input
-          type="checkbox"
-          checked={createNs}
-          disabled={!canChange}
-          onChange={(e) => {
-            setCreateNs(e.target.checked)
-            save(e.target.checked)
-          }}
-          data-testid="app-src-create-ns"
-        />{' '}
-        Create the namespace {row.namespace} if it does not exist, at install
-      </label>
-      {app && (
-        <Facts
-          items={[
-            ['Commit', commit ? `${commit}${app.commitSubject ? ` — ${app.commitSubject}` : ''}` : 'not deployed from here yet'],
-            ['Chart at commit', app.chartVersion || '—'],
-            ['Kept by', `${app.createdBy || 'the console'}, ${fmtTs(app.created)}`],
-            ['Last change', `${app.updatedBy || '—'}, ${fmtTs(app.updated)}`],
-          ]}
-        />
-      )}
-      <p className="rk-hint" style={{ margin: 0 }}>
-        {state === 'dirty' && repo.trim() && ref.trim() ? 'Leave the field to save. ' : ''}
-        {saved ? 'Upgrade at the top deploys from here, as you, after your approval in Watson.' : 'Once set, the release can be upgraded from here, switched to another branch or tag, and checked for drift.'}
-      </p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 18px', fontSize: 12, color: 'var(--fg3)' }}>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--fg)' }}>
+          <input
+            type="checkbox"
+            checked={createNs}
+            disabled={!canChange}
+            onChange={(e) => {
+              setCreateNs(e.target.checked)
+              save(e.target.checked)
+            }}
+            data-testid="app-src-create-ns"
+          />{' '}
+          Create the namespace {row.namespace} at install if it does not exist
+        </label>
+        {app && (
+          <>
+            <span>
+              Commit <span className="rk-mono" style={{ color: 'var(--fg)' }}>{commit ? `${commit}${app.commitSubject ? ` — ${app.commitSubject}` : ''}` : 'not deployed from here yet'}</span>
+            </span>
+            {app.chartVersion && (
+              <span>
+                Chart at commit <span className="rk-mono" style={{ color: 'var(--fg)' }}>{app.chartVersion}</span>
+              </span>
+            )}
+            <span title={`kept by ${app.createdBy || 'the console'}, ${fmtTs(app.created)}`}>
+              Last change <span style={{ color: 'var(--fg)' }}>{app.updatedBy || '—'}, {fmtAge(app.updated, now)} ago</span>
+            </span>
+          </>
+        )}
+        {state === 'dirty' && repo.trim() && ref.trim() ? <span>Leave the field to save.</span> : null}
+        {!saved && <span>Once set, the release can be upgraded from here and checked for drift.</span>}
+      </div>
     </Card>
   )
 }
