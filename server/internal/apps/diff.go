@@ -1,6 +1,7 @@
 package apps
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 
@@ -84,6 +85,9 @@ func objects(manifest string) map[string]string {
 		if o.Metadata.Namespace != "" {
 			k = o.Kind + " " + o.Metadata.Namespace + "/" + o.Metadata.Name
 		}
+		if o.Kind == "Secret" {
+			doc = hideSecretValues(doc)
+		}
 		// Helm writes "# Source: chart/templates/x.yaml" above each object;
 		// a renamed template is not a change.
 		lines := strings.Split(doc, "\n")
@@ -97,4 +101,28 @@ func objects(manifest string) map[string]string {
 		out[k] = strings.TrimSpace(strings.Join(kept, "\n"))
 	}
 	return out
+}
+
+// hideSecretValues replaces a Secret's values in a manifest document with
+// their sizes, so a diff says a value changed, never what it is (X-01).
+func hideSecretValues(doc string) string {
+	var o map[string]any
+	if yaml.Unmarshal([]byte(doc), &o) != nil {
+		return "# Secret: values hidden by 221B\n"
+	}
+	for _, key := range []string{"data", "stringData"} {
+		m, ok := o[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		for k, v := range m {
+			s, _ := v.(string)
+			m[k] = fmt.Sprintf("<%d bytes, hidden by 221B>", len(s))
+		}
+	}
+	b, err := yaml.Marshal(o)
+	if err != nil {
+		return "# Secret: values hidden by 221B\n"
+	}
+	return string(b)
 }

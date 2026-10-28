@@ -196,6 +196,15 @@ func TestFetchRenderImagesAndCompare(t *testing.T) {
 	if d := apps.Compare(one.Manifest, one.Manifest, "a", "b"); !d.Same || d.Text != "" {
 		t.Errorf("same manifests differ: %+v", d)
 	}
+	// A Secret's values never reach a diff: a change shows as its size.
+	a := "apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\nstringData:\n  pw: PLANTED-ONE\n"
+	b := "apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\nstringData:\n  pw: PLANTED-TWO-LONGER\n"
+	if d := apps.Compare(a, b, "a", "b"); d.Same || strings.Contains(d.Text, "PLANTED") || !strings.Contains(d.Text, "bytes, hidden by 221B") {
+		t.Errorf("secret diff: %+v", d)
+	}
+	if d := apps.Compare(a, a, "a", "b"); !d.Same {
+		t.Errorf("same secret differs: %+v", d)
+	}
 }
 
 func TestParsedImagesAndParams(t *testing.T) {

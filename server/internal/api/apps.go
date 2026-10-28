@@ -748,7 +748,7 @@ func (s *Server) revision(pc *personClients, ns, name, rev string) (*releaseV1, 
 // with what the source renders now (?to=source, at the saved ref or at
 // ?ref=&refKind=) (HA-17).
 func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
-	c, _, pc, ok := s.appClients(w, r)
+	c, who, pc, ok := s.appClients(w, r)
 	if !ok {
 		return
 	}
@@ -794,16 +794,24 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		version := ""
-		if _, client, ok := s.opts.Clusters.Lookup(c.ID); ok && client != nil {
-			version = client.Info().Version
+		toLabel = fmt.Sprintf("%s (%s)", src, short12(co.Commit))
+		if m, err := s.opts.Watson.RenderUpgrade(r.Context(), c, who, ns, name, ch, vals); err == nil {
+			toManifest = m
+		} else {
+			// Without a server dry run (no right to upgrade, or no release
+			// yet), the chart renders on the console: lookups and the
+			// cluster's capabilities are not the real ones.
+			version := ""
+			if _, client, ok := s.opts.Clusters.Lookup(c.ID); ok && client != nil {
+				version = client.Info().Version
+			}
+			rendered, err2 := apps.Render(r.Context(), ch, vals, name, ns, version)
+			if err2 != nil {
+				jsonError(w, http.StatusBadGateway, err2.Error())
+				return
+			}
+			toManifest, toLabel = rendered.Manifest, toLabel+", rendered on the console: "+strings.TrimPrefix(err.Error(), "Error: ")
 		}
-		rendered, err := apps.Render(r.Context(), ch, vals, name, ns, version)
-		if err != nil {
-			jsonError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-		toManifest, toLabel = rendered.Manifest, fmt.Sprintf("%s (%s)", src, short12(co.Commit))
 	} else {
 		to, err := s.revision(pc, ns, name, q.Get("to"))
 		if err != nil {

@@ -359,3 +359,34 @@ func objectNames(manifest string) []string {
 	changed, added, _ := manifestDiff("", manifest)
 	return append(changed, added...)
 }
+
+// RenderUpgrade renders what an upgrade of the release from the chart
+// would apply, as the person, with a server dry run (HA-17): the chart's
+// lookups, the cluster's capabilities and the next revision are the real
+// ones, which a render on the console alone cannot give.
+func (s *Service) RenderUpgrade(ctx context.Context, cl Cluster, who Who, ns, name string, ch *chart.Chart, vals map[string]any) (string, error) {
+	t := Target{Config: cl.Config, Person: who.Person, Cluster: cl.ID, Apps: s.opts.Apps}
+	d, err := s.disc.For(cl.ID, cl.Config)
+	if err != nil {
+		return "", err
+	}
+	t.Discovery = d
+	cfg, err := helmConfig(ctx, &Command{Namespace: ns}, t, io.Discard, ns)
+	if err != nil {
+		return "", err
+	}
+	u := action.NewUpgrade(cfg)
+	u.Namespace = ns
+	u.DryRunStrategy = action.DryRunServer
+	u.DisableOpenAPIValidation = true
+	u.Timeout = 60 * time.Second
+	r, err := u.RunWithContext(ctx, name, ch, vals)
+	if err != nil {
+		return "", err
+	}
+	rel, err := v1(r)
+	if err != nil {
+		return "", err
+	}
+	return rel.Manifest, nil
+}
