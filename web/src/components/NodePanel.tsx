@@ -4,6 +4,7 @@ import { clampPct, fmtAge, fmtTs, localTimes, nWord } from '../lib/format'
 import { effectTone, isSystemLabel, resourceSections, roleTag, taintNote, type ResourceSection } from '../lib/nodes'
 import { href } from '../lib/router'
 import { CloseIcon } from './Icons'
+import { ToolsButton } from './toolbox/ToolsMenu'
 import { CopyName } from './CopyName'
 import { AskSherlock } from './Sherlock'
 import { FixCommand } from './Watson'
@@ -167,6 +168,7 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
               </h2>
             </div>
             <AskSherlock question={r.problems.length ? `What is wrong with node ${r.name}?` : `Tell me about node ${r.name}`} compact over />
+            <ToolsButton target={{ kind: 'node', name: r.name, cordoned: r.cordoned, role: r.role === 'control-plane' ? 'control plane' : 'worker' }} />
             <button ref={closeRef} className="rk-icon-btn" aria-label="Close node details" title="Close (Esc)" onClick={onClose}>
               <CloseIcon />
             </button>

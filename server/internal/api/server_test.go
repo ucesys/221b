@@ -43,6 +43,9 @@ type source struct {
 	logErr error
 	// hold keeps a followed stream open after its lines, until ctx ends.
 	hold bool
+	// full keeps Secrets with their values, by "namespace/name", for the
+	// live reads of Secret editing (Phase 10); the cache holds summaries.
+	full map[string]*corev1.Secret
 	// deny, when set, is what the fake authorizer refuses a person:
 	// "resource/namespace" pairs; nil allows everything. accessMu guards
 	// it and readAs, which the handlers' goroutines touch.
@@ -88,6 +91,68 @@ func (s *source) CanI(_ context.Context, p kube.Person, verb, _, resource, names
 		return true, nil
 	}
 	return !s.denied(resource, namespace), nil
+}
+
+// putSecret keeps a Secret with its values and in the cache, as a summary.
+func (s *source) putSecret(sec *corev1.Secret) {
+	if s.full == nil {
+		s.full = map[string]*corev1.Secret{}
+	}
+	s.full[sec.Namespace+"/"+sec.Name] = sec.DeepCopy()
+	s.Put(sec.DeepCopy())
+}
+
+func (s *source) GetSecret(_ context.Context, p kube.Person, namespace, name string) (*corev1.Secret, error) {
+	s.readBy(p)
+	if s.denied("secrets", namespace) && !p.Nobody() {
+		return nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, name, errors.New("RBAC: no"))
+	}
+	sec := s.full[namespace+"/"+name]
+	if sec == nil {
+		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, name)
+	}
+	return sec.DeepCopy(), nil
+}
+
+func (s *source) UpdateSecret(_ context.Context, p kube.Person, sec *corev1.Secret) (*corev1.Secret, error) {
+	if s.denied("secrets", sec.Namespace) && !p.Nobody() {
+		return nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, sec.Name, errors.New("RBAC: no"))
+	}
+	cur := s.full[sec.Namespace+"/"+sec.Name]
+	if cur == nil {
+		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, sec.Name)
+	}
+	if cur.ResourceVersion != sec.ResourceVersion {
+		return nil, apierrors.NewConflict(schema.GroupResource{Resource: "secrets"}, sec.Name, errors.New("the object has been modified"))
+	}
+	next := sec.DeepCopy()
+	next.ResourceVersion = cur.ResourceVersion + "1"
+	s.putSecret(next)
+	return next.DeepCopy(), nil
+}
+
+func (s *source) CreateSecret(_ context.Context, p kube.Person, sec *corev1.Secret) (*corev1.Secret, error) {
+	if s.denied("secrets", sec.Namespace) && !p.Nobody() {
+		return nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, sec.Name, errors.New("RBAC: no"))
+	}
+	if s.full[sec.Namespace+"/"+sec.Name] != nil {
+		return nil, apierrors.NewAlreadyExists(schema.GroupResource{Resource: "secrets"}, sec.Name)
+	}
+	next := sec.DeepCopy()
+	next.ResourceVersion = "1"
+	s.putSecret(next)
+	return next.DeepCopy(), nil
+}
+
+func (s *source) CreateNamespace(_ context.Context, p kube.Person, name string, labels map[string]string) error {
+	if s.denied("namespaces", "") && !p.Nobody() {
+		return apierrors.NewForbidden(schema.GroupResource{Resource: "namespaces"}, name, errors.New("RBAC: no"))
+	}
+	if s.Object("namespaces", "", name) != nil {
+		return apierrors.NewAlreadyExists(schema.GroupResource{Resource: "namespaces"}, name)
+	}
+	s.Put(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}})
+	return nil
 }
 
 func (s *source) ObjectYAML(ctx context.Context, p kube.Person, k kube.Kind, namespace, name string) (string, error) {

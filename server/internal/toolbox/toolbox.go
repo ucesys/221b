@@ -151,7 +151,7 @@ func Default() Config {
 	c.DebugPod.TTLAfterFinished = Duration(10 * time.Minute)
 	c.DebugPod.Profiles = []string{"general", "network"}
 	c.NodeShell.Enabled = true
-	c.NodeShell.Namespace = "221b-toolbox"
+	c.NodeShell.Namespace = "221b-privileged"
 	c.NodeShell.Image = "node"
 	c.NodeShell.Profiles = []string{ProfileGeneral, ProfileNetAdmin, ProfileSysAdmin}
 	c.NodeShell.Approval = ApprovalCluster

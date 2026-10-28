@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useView } from '../api/live'
 import type { NamespaceRow, ObjectRow, ReleaseRow } from '../api/types'
 import { OBJECT_COLUMNS, objectLabel, objectTerms } from '../columns/objects'
@@ -12,6 +12,12 @@ import { ColumnsMenu } from './ColumnsMenu'
 import { DataTable } from './DataTable'
 import { ExportMenu } from './ExportMenu'
 import { SearchBox } from './SearchBox'
+import { fetchSecretsConfig, type SecretsConfig } from '../api/secrets'
+import { SecretDialog } from './SecretDialog'
+import { NamespaceDialog } from './NamespaceDialog'
+import { NamespaceTools } from './NamespaceTools'
+import { ConfirmDialog } from './ConfirmDialog'
+import { useWatsonApi } from './Watson'
 import { SideList, type SideGroup } from './SideList'
 import { ObjectPanel } from './ObjectPanel'
 import { PodPanel } from './PodPanel'
@@ -85,7 +91,7 @@ function ReleasesTable({ rows, now, cluster, onToast, search }: { rows: ReleaseR
 }
 
 /** A kind's table in the namespace, the tab's whole content. */
-function KindTable({ kind, apiVersion, rows, now, cluster, selected, onOpen, onToast, hidden, setHidden, defaults, search }: { kind: string; apiVersion: string; rows: ObjectRow[]; now: number; cluster: string | undefined; selected: string | null; onOpen: (key: string) => void; onToast: (msg: string) => void; hidden: Set<string>; setHidden: (h: Set<string>) => void; defaults: Set<string>; search: ReactNode }) {
+function KindTable({ kind, apiVersion, rows, now, cluster, selected, onOpen, onToast, hidden, setHidden, defaults, search, extra }: { kind: string; apiVersion: string; rows: ObjectRow[]; now: number; cluster: string | undefined; selected: string | null; onOpen: (key: string) => void; onToast: (msg: string) => void; hidden: Set<string>; setHidden: (h: Set<string>) => void; defaults: Set<string>; search: ReactNode; extra?: ReactNode }) {
   const [sort, setSort] = useState<SortState>({ col: 'name', dir: 'asc' })
   const plural = pluralKind(kind)
   const sorted = useMemo(() => sortRows(rows, OBJECT_COLUMNS, sort, now), [rows, sort, now])
@@ -105,6 +111,7 @@ function KindTable({ kind, apiVersion, rows, now, cluster, selected, onOpen, onT
   return (
     <section aria-label={plural} style={{ display: 'flex', flexDirection: 'column', gap: 12 }} data-kind={kind}>
       <TabBar apiVersion={apiVersion} search={search}>
+        {extra}
         <ColumnsMenu cols={OBJECT_COLUMNS} hidden={hidden} defaults={defaults} onChange={setHidden} compact={false} />
         <ExportMenu onExport={exportRows} disabled={!rows.length} what={`these ${plural}`} />
       </TabBar>
@@ -150,6 +157,8 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   // Helm releases, read where Helm keeps them (P2-07), listed like the namespace's other kinds.
   const releases = useView<ReleaseRow>(current?.releases.length ? 'helm' : null)
   const nsReleases = useMemo(() => releases.rows.filter((r) => r.namespace === ns), [releases.rows, ns])
+  // Secret editing (SE-05): an Admin or SuperAdmin may make a Secret here.
+  const [secretsCfg, setSecretsCfg] = useState<SecretsConfig | null>(null)
   const kinds = useMemo(() => {
     const m = new Map<string, { kind: string; apiVersion: string; order: number; n: number }>()
     for (const r of objects.rows) {
@@ -174,9 +183,11 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   const tabs = useMemo(() => {
     const list = kinds.map((k) => ({ id: k.kind, label: pluralKind(k.kind), apiVersion: k.apiVersion, n: byKind.get(k.kind)?.length ?? 0 }))
     list.sort((a, b) => Number(b.id === 'Pod') - Number(a.id === 'Pod'))
+    // An Admin sees a Secrets tab even where there is no Secret yet: New Secret… lives there (SE-05).
+    if (secretsCfg?.read && secretsCfg.edit && !list.some((t) => t.id === 'Secret')) list.push({ id: 'Secret', label: pluralKind('Secret'), apiVersion: 'v1', n: 0 })
     if (nsReleases.length) list.push({ id: RELEASES, label: 'Helm releases', apiVersion: 'helm.sh/release.v1', n: releasesShown.length })
     return list
-  }, [kinds, byKind, nsReleases.length, releasesShown.length])
+  }, [kinds, byKind, nsReleases.length, releasesShown.length, secretsCfg])
   const tab = tabs.find((t) => t.id === kindsParam[0]) ?? tabs[0] ?? null
 
   const lq = listQuery.trim().toLowerCase()
@@ -202,6 +213,21 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
     { title: 'Kubernetes', items: listed.filter((n) => n.group === 'system').map(item) },
   ]
 
+  // Secret editing (SE-05): an Admin or SuperAdmin may make a Secret here.
+  const [newSecret, setNewSecret] = useState(false)
+  const [newNamespace, setNewNamespace] = useState(false)
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const watson = useWatsonApi()
+  useEffect(() => {
+    let live = true
+    fetchSecretsConfig().then(
+      (c) => live && setSecretsCfg(c),
+      () => undefined,
+    )
+    return () => {
+      live = false
+    }
+  }, [])
   const selectedRow = selected ? (objects.rows.find((r) => r.key === selected) ?? null) : null
   // The drawer: open=Kind/name opens the object's own details, by kind.
   const [selKind = '', selName = ''] = (selected ?? '').split('/', 2) as [string?, string?]
@@ -210,7 +236,13 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
 
   return (
     <>
-      <SideList label="Namespaces" title="Namespaces" query={listQuery} onQuery={setListQuery} placeholder="Filter namespaces" groups={groups} empty={loaded ? 'No namespaces match.' : 'Waiting for the first list…'} testId="namespace-list" foot={
+      <SideList label="Namespaces" title="Namespaces" query={listQuery} onQuery={setListQuery} placeholder="Filter namespaces" groups={groups} empty={loaded ? 'No namespaces match.' : 'Waiting for the first list…'} testId="namespace-list" extra={
+        secretsCfg?.edit ? (
+          <button className="rk-btn" onClick={() => setNewNamespace(true)} style={{ alignSelf: 'flex-start' }} data-testid="namespace-new">
+            New namespace…
+          </button>
+        ) : undefined
+      } foot={
         <>
           Cluster-scoped objects such as nodes, persistent volumes, storage classes and cluster roles belong to no namespace; find nodes in the <a href={href('nodes')} style={{ color: 'var(--accent)' }}>Nodes</a> tab, and volumes, claims and classes in the <a href={href('storage', [], ns ? { ns } : {})} style={{ color: 'var(--accent)' }} data-testid="namespace-storage-footer">Storage</a> tab.
         </>
@@ -238,6 +270,15 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
               <a className="rk-link" href={href('storage', [], { ns })} style={{ fontSize: 12.5 }} data-testid="namespace-storage-link">
                 Storage →
               </a>
+              <span style={{ flex: '1 1 auto' }} />
+              <NamespaceTools
+                namespace={ns}
+                canCreate={!!secretsCfg?.edit}
+                onPick={(a) => {
+                  if (a === 'new') setNewNamespace(true)
+                  else setDeleting(ns)
+                }}
+              />
             </div>
             {tabs.length > 0 && (
               <nav aria-label="Kinds in this namespace" style={{ display: 'flex', flexWrap: 'wrap', gap: '0 20px', borderBottom: '1px solid var(--line)' }} data-testid="namespace-kinds">
@@ -252,13 +293,72 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
             {!objects.loaded && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Loading the namespace…</p>}
             {tab?.id === RELEASES && <ReleasesTable rows={releasesShown} now={now} cluster={cluster?.name} onToast={onToast} search={search} />}
             {tab && tab.id !== RELEASES && (
-              <KindTable key={tab.id} kind={tab.id} apiVersion={tab.apiVersion} rows={byKind.get(tab.id) ?? []} now={now} cluster={cluster?.name} selected={selected} onOpen={(key) => set({ open: selected === key ? undefined : key })} onToast={onToast} hidden={table.hidden} setHidden={table.setHidden} defaults={table.defaults} search={search} />
+              <KindTable
+                key={tab.id}
+                kind={tab.id}
+                apiVersion={tab.apiVersion}
+                rows={byKind.get(tab.id) ?? []}
+                now={now}
+                cluster={cluster?.name}
+                selected={selected}
+                onOpen={(key) => set({ open: selected === key ? undefined : key })}
+                onToast={onToast}
+                hidden={table.hidden}
+                setHidden={table.setHidden}
+                defaults={table.defaults}
+                search={search}
+                extra={
+                  tab.id === 'Secret' && secretsCfg?.edit ? (
+                    <button className="rk-btn" onClick={() => setNewSecret(true)} data-testid="secret-new">
+                      New Secret…
+                    </button>
+                  ) : undefined
+                }
+              />
             )}
             {objects.loaded && !tabs.length && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>This namespace is empty, or holds only kinds 221B does not watch.</p>}
           </section>
         )}
         {!current && <p style={{ margin: 0, padding: '28px 24px', fontSize: 12.5, color: 'var(--fg3)' }}>{loaded ? 'No namespaces.' : 'Waiting for the first list of namespaces…'}</p>}
       </main>
+      {deleting && (
+        <ConfirmDialog
+          title={`Delete namespace ${deleting}?`}
+          confirm="Delete namespace"
+          danger
+          onCancel={() => setDeleting(null)}
+          onConfirm={() => {
+            const name = deleting
+            setDeleting(null)
+            watson.send(`kubectl delete namespace ${name}`, { from: 'Namespaces tab', why: `Delete namespace ${name} and everything in it.`, over: true })
+          }}
+        >
+          <p style={{ margin: 0 }}>
+            Everything in <span className="rk-mono">{deleting}</span> goes with it: its pods, claims, Secrets, ConfigMaps and Helm releases, and nothing comes back. Watson shows what is there and runs it as you once you approve the card.
+          </p>
+        </ConfirmDialog>
+      )}
+      {newNamespace && (
+        <NamespaceDialog
+          onClose={() => setNewNamespace(false)}
+          onDone={(name) => {
+            setNewNamespace(false)
+            onToast(`Namespace ${name} created.`)
+            navigate(href('namespaces', [name]))
+          }}
+        />
+      )}
+      {newSecret && ns && (
+        <SecretDialog
+          namespace={ns}
+          reveal={!!secretsCfg?.reveal}
+          onClose={() => setNewSecret(false)}
+          onDone={(name) => {
+            setNewSecret(false)
+            onToast(`Secret ${name} created in ${ns}.`)
+          }}
+        />
+      )}
       {selected && selKind === 'Pod' && <PodPanel podKey={`${ns}/${selName}`} row={null} gone={objects.loaded && !selectedRow} cluster={cluster} now={now} onClose={closeDrawer} onToast={onToast} />}
       {selected && selKind === 'Service' && <ServicePanel serviceKey={`${ns}/${selName}`} row={null} gone={objects.loaded && !selectedRow} now={now} onClose={closeDrawer} onToast={onToast} />}
       {selected && selKind !== 'Pod' && selKind !== 'Service' && <ObjectPanel kind={selKind} namespace={ns} name={selName} row={selectedRow} gone={objects.loaded && !selectedRow} cluster={cluster} now={now} linkTo={(k, n) => withParams(route, { open: `${k}/${n}` })} onClose={closeDrawer} onToast={onToast} />}

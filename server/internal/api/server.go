@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	corev1 "k8s.io/api/core/v1"
 	"log/slog"
 	"net"
 	"net/http"
@@ -26,6 +27,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/access"
 	"github.com/ucesys/221b/server/internal/acks"
+	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
@@ -59,6 +61,12 @@ type Cluster interface {
 	ObjectYAML(ctx context.Context, p kube.Person, k kube.Kind, namespace, name string) (string, error)
 	Logs(ctx context.Context, p kube.Person, namespace, name string, o kube.LogOptions) (io.ReadCloser, error)
 	CanI(ctx context.Context, p kube.Person, verb, group, resource, namespace string) (bool, error)
+	// Secret editing (Phase 10): live, as the person, never cached.
+	GetSecret(ctx context.Context, p kube.Person, namespace, name string) (*corev1.Secret, error)
+	UpdateSecret(ctx context.Context, p kube.Person, sec *corev1.Secret) (*corev1.Secret, error)
+	CreateSecret(ctx context.Context, p kube.Person, sec *corev1.Secret) (*corev1.Secret, error)
+	// CreateNamespace makes a namespace, as the person (Phase 10).
+	CreateNamespace(ctx context.Context, p kube.Person, name string, labels map[string]string) error
 }
 
 // Settings reads and changes the shared settings; *settings.Service
@@ -171,6 +179,13 @@ type Options struct {
 	// Roles configure the Roles and Permissions pages and the check of the
 	// deployed roles (RB-36, RB-41 to RB-44).
 	Roles RolesOptions
+	// SecretsReveal lets an Admin or SuperAdmin see a Secret's values, one
+	// key at a time and audited (Phase 10, secrets.reveal); off, values
+	// are only ever written.
+	SecretsReveal bool
+	// Apps keeps the Helm applications (Phase 10); nil, or no Watson,
+	// leaves the Helm1 page's routes out.
+	Apps apps.Store
 	// Sessions runs the toolbox's sessions (Phase 9); nil, or no Watson,
 	// leaves the toolbox out.
 	Sessions *sessions.Manager
@@ -241,6 +256,9 @@ type Server struct {
 	// leaderChecks is how often a forwarded stream checks the leader.
 	leaderChecks time.Duration
 
+	// drifts keeps the applications' drift checks (HA-09), by cluster,
+	// release and person, for two minutes.
+	drifts sync.Map
 	// toolCache keeps what people may use where (TB-05); owners the
 	// sign-in checks of people who asked for sessions.
 	toolCache toolCache
@@ -347,6 +365,10 @@ func New(o Options) *Server {
 			s.handle("GET "+base+"assistants/events", "assistants-events", s.assistantsEvents)
 		}
 	}
+	if o.Watson != nil && o.Apps != nil {
+		s.appsRoutes()
+	}
+	s.secretsRoutes()
 	if o.Watson != nil && o.Sessions != nil {
 		s.toolboxRoutes()
 		o.Watson.SetSessionHooks(s.planSession, s.startSession)

@@ -162,6 +162,15 @@ export function WarnIcon() {
   )
 }
 
+/** Two columns with a plus and a minus: a diff (Phase 10). */
+export function DiffIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+      <path d="M8 2v12M3 5h4M5 3v4M9 11h4" />
+    </svg>
+  )
+}
+
 export function CopyIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

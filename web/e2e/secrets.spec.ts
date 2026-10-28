@@ -29,6 +29,9 @@ test('the planted Secret value reaches no response, export or log', async ({ pag
     }
     check('secret yaml', await (await request.get(`/api/v1/yaml/secrets/${secret.namespace}/${secret.name}`)).text())
     check('secret yaml download', await (await request.get(`/api/v1/yaml/secrets/${secret.namespace}/${secret.name}?download=1`)).text())
+    // Phase 10: the editing endpoints give nothing back while secrets.reveal is off (SE-06).
+    check('secret value', await (await request.get(`/api/v1/secrets/${secret.namespace}/${secret.name}/value?key=token`)).text())
+    check('secrets config', await (await request.get('/api/v1/secrets/config')).text())
     // Every Service's details in the namespace, and every Helm release with its values.
     const services = (await snapshot(request, ['services'])).views.services!.rows as { namespace: string; name: string }[]
     for (const svc of services.filter((x) => x.namespace === secret.namespace)) check(`service ${svc.name}`, await (await request.get(`/api/v1/services/${svc.namespace}/${svc.name}`)).text())

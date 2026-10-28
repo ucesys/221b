@@ -16,6 +16,7 @@ import (
 
 	"k8s.io/client-go/rest"
 
+	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/kube"
 )
@@ -190,6 +191,8 @@ type Options struct {
 	// returns its ID.
 	PlanSession  func(ctx context.Context, cl Cluster, it Item) *Plan
 	StartSession func(cl Cluster, it Item, approver Who) (string, error)
+	// Apps keeps the Helm applications (Phase 10); nil keeps none.
+	Apps apps.Store
 	// LapseWaiting is how long a card waiting for a second person stays
 	// valid (TB-38): 30 minutes.
 	LapseWaiting time.Duration
@@ -637,14 +640,14 @@ func (s *Service) plan(cl Cluster, id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	p := &Plan{}
-	console := Target{Config: cl.Config}
+	console := Target{Config: cl.Config, Cluster: cl.ID, Apps: s.opts.Apps}
 	if d, err := s.disc.For(cl.ID, cl.Config); err == nil {
 		console.Discovery = d
 	}
 	if console.Discovery != nil {
 		cs, err := clientsFor(ctx, console)
 		if err == nil {
-			p.Targets, p.guards, p.Impact = cardFor(ctx, cs, it.cmd)
+			p.Targets, p.guards, p.Impact = cardFor(ctx, cs, it.cmd, console)
 		} else {
 			p.Impact = []string{"Watson could not read the cluster to work out the impact: " + err.Error()}
 		}
@@ -1018,7 +1021,7 @@ func (s *Service) work(cl Cluster, key string, q *runQueue) {
 
 // execute runs one command as the person who approved it.
 func (s *Service) execute(ctx context.Context, cl Cluster, it *Item, runner Who) {
-	t := Target{Config: cl.Config, Person: runner.Person}
+	t := Target{Config: cl.Config, Person: runner.Person, Cluster: cl.ID, Apps: s.opts.Apps}
 	d, err := s.disc.For(cl.ID, cl.Config)
 	code := 1
 	out := &itemWriter{s: s, it: it, k: "out"}

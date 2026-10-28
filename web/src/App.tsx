@@ -14,7 +14,7 @@ import { Banners } from './components/Banners'
 import { ClusterEditor } from './components/ClusterEditor'
 import { ClusterPage } from './components/ClusterPage'
 import { FleetsTab } from './components/FleetsTab'
-import { HelmTab } from './components/HelmTab'
+import { AppsTab } from './components/apps/AppsTab'
 import { HomePage } from './components/HomePage'
 import { NamespacesTab } from './components/NamespacesTab'
 import { NodesTab } from './components/NodesTab'
@@ -309,6 +309,7 @@ function Shell() {
   }
   const toolboxApi: ToolboxApi = {
     available: watsonOn && !watson.status?.readOnly,
+    showWatson,
     off: !watsonOn ? (watsonApi.off?.text.replace('To run it from here', 'To use the tools') ?? 'The tools need Watson, which is off here.') : watson.status?.readOnly ? watson.status.how || 'This cluster is connected read-only.' : undefined,
     cluster: route.cluster,
     openTool: (o) => setToolDialog(o),
@@ -318,7 +319,7 @@ function Shell() {
         (it) => {
           if (it.status === 'refused') setToast(it.reason || 'Watson refused it.')
           else if (it.status === 'pending') {
-            setToast(`${it.command} waits in Watson for a second person to approve it.`)
+            setToast(`${it.command}: the card is in Watson. Read it and approve it there.`)
             showWatson()
           } else setToast(`${doing} ${what}. Watson shows how it goes.`)
         },
@@ -367,7 +368,7 @@ function Shell() {
           {tab === 'pods' && <PodsTab {...common} />}
           {tab === 'namespaces' && <NamespacesTab {...common} />}
           {tab === 'services' && <ServicesTab {...common} />}
-          {tab === 'helm' && <HelmTab {...common} />}
+          {tab === 'helm' && <AppsTab {...common} />}
           {tab === 'access' && <AccessTab {...common} />}
           {tab === 'networks' && <NetworksTab {...common} />}
           {tab === 'storage' && <StorageTab {...common} />}

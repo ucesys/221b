@@ -61,6 +61,9 @@ type Config struct {
 	// SecretsRead watches Secrets, for their keys and sizes and for Helm
 	// releases. Off, no Secret is ever read and the Helm tab is hidden.
 	SecretsRead bool
+	// SecretsReveal lets Admins and SuperAdmins see a Secret's values on
+	// request (Phase 10). Off, they can only write them.
+	SecretsReveal bool
 	// HealthInterval is how often the API server is checked.
 	HealthInterval time.Duration
 	// LogLevel is debug, info, warn or error. LogFormat is json or text.
@@ -149,6 +152,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.ConnectionsSecrets, "connections-secrets", env("CONNECTIONS_SECRETS", ""), "namespace/prefix of the Secrets to keep cluster connections in, one <prefix>-cluster-<id> each (empty: in memory, lost on restart)")
 	fs.BoolVar(&c.KubeletStats, "kubelet-stats", envBool("KUBELET_STATS", true), "read node boot times from the kubelets, for uptime (needs get on nodes/proxy)")
 	fs.BoolVar(&c.SecretsRead, "secrets-read", envBool("SECRETS_READ", true), "read Secrets for their keys and sizes and for Helm releases; values are never shown (off hides the Helm tab)")
+	fs.BoolVar(&c.SecretsReveal, "secrets-reveal", envBool("SECRETS_REVEAL", false), "let Admins and SuperAdmins see a Secret's values, one key at a time, audited (needs -secrets-read); off, values can only be written")
 	fs.DurationVar(&c.HealthInterval, "health-interval", envDuration("HEALTH_INTERVAL", 10*time.Second), "how often to check the API server")
 	fs.StringVar(&c.LogLevel, "log-level", env("LOG_LEVEL", "info"), "debug, info, warn or error")
 	fs.StringVar(&c.LogFormat, "log-format", env("LOG_FORMAT", "json"), "json or text")

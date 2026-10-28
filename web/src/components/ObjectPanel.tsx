@@ -14,6 +14,7 @@ import { EventsTable } from './EventsTable'
 import { ExportMenu } from './ExportMenu'
 import { WarnIcon } from './Icons'
 import { SearchBox } from './SearchBox'
+import { SecretData } from './SecretData'
 import { ScrollBox, Table, TR } from './Table'
 import { YamlView } from './YamlView'
 
@@ -188,7 +189,9 @@ export function ObjectPanel({ kind, namespace: ns, name, row, gone, cluster, now
           </div>
           {d.keys && (
             <Card title={`Keys · ${nWord(d.keys.length, 'key', 'keys')}`} pad={false} label="Keys">
-              {d.keys.length === 0 ? (
+              {kind === 'Secret' ? (
+                <SecretData namespace={ns} name={name} keys={d.keys} onToast={onToast} />
+              ) : d.keys.length === 0 ? (
                 <p style={{ margin: 0, padding: '0 16px 12px', fontSize: 12.5, color: 'var(--fg3)' }}>No data.</p>
               ) : (
                 <ScrollBox label="Keys">
@@ -204,9 +207,11 @@ export function ObjectPanel({ kind, namespace: ns, name, row, gone, cluster, now
                   </Table>
                 </ScrollBox>
               )}
-              <p style={{ margin: 0, padding: '0 16px 12px', fontSize: 11.5, color: 'var(--fg3)' }} data-testid="keys-note">
-                {kind === 'Secret' ? '221B shows a Secret’s keys and their sizes, never their values (X-01); the YAML tab hides them too.' : 'Keys and their sizes; the YAML tab has the contents.'}
-              </p>
+              {kind !== 'Secret' && (
+                <p style={{ margin: 0, padding: '0 16px 12px', fontSize: 11.5, color: 'var(--fg3)' }} data-testid="keys-note">
+                  Keys and their sizes; the YAML tab has the contents.
+                </p>
+              )}
             </Card>
           )}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(390px, 100%), 1fr))', gap: 16, alignItems: 'start' }}>

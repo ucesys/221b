@@ -119,6 +119,9 @@ spec:
             # never values). Off hides the Helm tab.
             - name: SECRETS_READ
               value: {{ .Values.secrets.read | quote }}
+            # Whether an Admin or SuperAdmin may see a value (Phase 10).
+            - name: SECRETS_REVEAL
+              value: {{ .Values.secrets.reveal | quote }}
             # Sherlock (Phase 5): the Claude API, and where its key is kept.
             - name: SHERLOCK_API_URL
               value: {{ .Values.sherlock.apiURL | quote }}

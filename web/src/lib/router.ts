@@ -18,7 +18,7 @@ export const TABS: { id: Tab; label: string; tip: string }[] = [
   { id: 'pods', label: 'Pods', tip: 'Every pod, filtered by node, namespace and status' },
   // ST-01: after Pods (moved from after Networks on October 26, 2026).
   { id: 'storage', label: 'Storage', tip: 'Storage classes, volumes, claims and the pods that mount them' },
-  { id: 'helm', label: 'Helm', tip: 'Helm releases and their history' },
+  { id: 'helm', label: 'Helm', tip: 'Helm releases: their source, drift and history; install and upgrade from a git repository' },
   { id: 'services', label: 'Services', tip: 'Every Service, its endpoints and the hostnames that publish it' },
   { id: 'networks', label: 'Networks', tip: 'Ingress, DNS, pod and service networks — trace a request hop by hop' },
   { id: 'access', label: 'Access', tip: 'Access Control: who can do what in the cluster' },

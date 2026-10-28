@@ -10,6 +10,7 @@ import { PodIcon, WarnIcon } from './Icons'
 import { PodLogs } from './PodLogs'
 import { ScrollBox, Table, TR } from './Table'
 import { YamlView } from './YamlView'
+import { ToolsButton } from './toolbox/ToolsMenu'
 import { objectLink, peekLink } from '../lib/peek'
 import { podQuestion } from '../lib/sherlock'
 
@@ -153,6 +154,7 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
       ask={podQuestion(head ? { ...head, namespace: ns, name } : null, ns, name)}
       label="Pod details"
       testId="pod-panel"
+      tools={<ToolsButton target={{ kind: 'pod', name, namespace: ns }} />}
       kicker={
         <>
           <PodIcon />

@@ -28,6 +28,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/access"
 	"github.com/ucesys/221b/server/internal/api"
+	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
@@ -265,6 +266,8 @@ func run(args []string) error {
 	// otherwise in memory. The cluster the console was started against is
 	// the connection "local".
 	var connStore clusters.Store = clusters.NewMemoryStore()
+	// The Helm applications (Phase 10) are kept beside the connections.
+	var appStore apps.Store = apps.NewMemoryStore()
 	if cfg.ConnectionsSecrets != "" {
 		ns, prefix, ok := strings.Cut(cfg.ConnectionsSecrets, "/")
 		if !ok || ns == "" || prefix == "" {
@@ -275,6 +278,11 @@ func run(args []string) error {
 			return err
 		}
 		connStore = ss
+		as, err := apps.NewSecretStore(restCfg, ns, prefix)
+		if err != nil {
+			return err
+		}
+		appStore = as
 	} else {
 		log.Warn("cluster connections added in the console are kept in memory and lost on restart; set -connections-secrets namespace/prefix to keep them in Secrets")
 	}
@@ -424,6 +432,7 @@ func run(args []string) error {
 	watsonSvc := watson.New(watson.Options{
 		Audit:  auditLog,
 		Logger: log.With("component", "watson"),
+		Apps:   appStore,
 		TwoPerson: func(c watson.Cluster) bool {
 			return c.Env == clusters.EnvProduction && shared.Current().WatsonOrDefault().TwoPerson
 		},
@@ -477,6 +486,8 @@ func run(args []string) error {
 	}
 	handler := api.New(api.Options{
 		Watson:                  watsonSvc,
+		Apps:                    appStore,
+		SecretsReveal:           cfg.SecretsRead && cfg.SecretsReveal,
 		Sessions:                sessionsMgr,
 		Sherlock:                sherlockSvc,
 		SherlockKeys:            keys,
@@ -568,7 +579,7 @@ func run(args []string) error {
 	}
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(mode), "version", version.String(), "secrets_read", cfg.SecretsRead, "auth", cfg.AuthMode)
+		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(mode), "version", version.String(), "secrets_read", cfg.SecretsRead, "secrets_reveal", cfg.SecretsRead && cfg.SecretsReveal, "auth", cfg.AuthMode)
 		errCh <- srv.ListenAndServe()
 	}()
 	select {

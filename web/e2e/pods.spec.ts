@@ -113,7 +113,7 @@ test('a node links to its pods, and a pod links to its node, namespace, Service 
   if (withLinks.release) {
     await expect(panel.getByTestId('pod-release-link')).toHaveAttribute('href', `#/helm/${withLinks.namespace}/${withLinks.release}`)
     await panel.getByTestId('pod-release-link').click()
-    await expect(page.getByTestId('release-name')).toHaveText(withLinks.release)
+    await expect(page.getByTestId('app-panel').getByTestId('app-title')).toContainText(withLinks.release)
   }
 })
 

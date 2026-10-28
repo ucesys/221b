@@ -2,7 +2,21 @@
 
 What changed in each release of 221B, for people who use it and people who install it. Versions follow [semantic versioning](https://semver.org/): while the major version is 0, a minor version (0.7.0) may change behaviour and chart values, and a patch version (0.7.1) only fixes. [docs/upgrading.md](docs/upgrading.md) says how to upgrade and what each upgrade changes.
 
-## Unreleased
+## 0.10.0 (2026-10-28)
+
+### Changed
+
+- **Every change goes through Watson and an approval again.** The Tools menus' cordon, uncordon, drain and delete, every tool session (shell, port forward, debug container, debug pod, node shell) and every Helm change from the Helm tab are cards the person reads and approves in Watson, as a typed command is; a second person where the two-person rule applies. This reverses the October 26 choice to run them at once.
+- A namespace's wrench on the Namespaces tab offers **Delete namespace…**, through Watson, with a card that says what goes with it.
+
+### Added
+
+- **Helm: applications from a git repository.** The Helm tab is new: it lists every release in one table, with its chart, app version, revision, status, drift, source and update time. *New application…* fetches a chart from a git repository (GitHub, GitLab, Gitea) at a branch or a tag and installs it; a release's tools upgrade it, switch its branch or tag, change its values file and parameters, set or forget its source, and uninstall it. Each change runs through Watson as you, with a card where the two-person rule applies. A release's panel shows its source and commit, its drift (each object compared with what Helm applied), its values file beside the values as deployed, its history with a diff of any two revisions or of the deployed one against the source and a notice when a newer tag or commit exists, and the images every revision runs. It shows everything the former Helm tab did (pods, the objects by kind, values, notes, history) and replaces it; the addresses are unchanged. Each revision in the history has a diff icon that opens the diff in a large dialog.
+- **Secret editing.** On the Namespaces tab an Admin or SuperAdmin can edit a Secret (replace a value, add or remove a key) and make a new one, written as them, so Kubernetes decides. By default they do it blind. Chart: `secrets.reveal` (off by default) lets them see a value, one key at a time, read live as them and recorded in the audit log; the cache, exports, logs, the YAML view and Sherlock still never hold a value.
+- **New namespace…** on the Namespaces tab makes a namespace, written as you.
+- Chart: `toolbox.nodeShell.namespace` is empty by default and becomes the release's namespace with `-privileged` (`221b-privileged` for a console in `221b`), named for what it is, so a second console installed in another namespace no longer tries to take over the first one's. An upgrade moves node shells from `221b-toolbox` to the new namespace; set the value to keep the old name.
+- Watson runs `helm install`, `helm upgrade` and `helm uninstall` with a git source (`--git`, `--path`, `--ref`, `--tag`) and an application's saved values (`--app`).
+
 
 ## 0.9.1 (2026-10-27)
 

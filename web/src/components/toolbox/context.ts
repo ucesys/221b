@@ -23,6 +23,8 @@ export interface ToolboxApi {
   action: (a: ToolAction, what: string) => void
   /** Brings a session's tab forward in the dock. */
   showSession: (id: string) => void
+  /** Brings Watson forward, with the card a page just sent (Phase 10). */
+  showWatson: () => void
 }
 
 export const ToolboxContext = createContext<ToolboxApi | null>(null)

@@ -1,4 +1,4 @@
-// The Helm tab, as P2-06 and P2-07 describe it.
+// The Helm tab, as P2-06 and P2-07 describe it, on the Phase 10 page.
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
 import type { ReleaseDetails } from '../src/api/types'
@@ -7,7 +7,6 @@ import { cluster, inKind, PLANTED_HELM, releaseRows, snapshot } from './cluster'
 async function open(page: Page, hash = '#/helm') {
   await page.goto('/' + hash)
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
-  await expect(page.getByTestId('release-name')).toBeVisible()
 }
 
 test('matches helm list -A: every release with its chart, app version, revision, status and update time', async ({ page, request }) => {
@@ -23,13 +22,16 @@ test('matches helm list -A: every release with its chart, app version, revision,
     expect(r.status, `status of ${w.name}`).toBe(w.status)
     expect(r.updated, `update time of ${w.name}`).toBeTruthy()
   }
-  const list = page.getByTestId('release-list')
+  // The table lists them; with one open, the side list says the rest.
+  const table = page.getByTestId('apps-table')
+  await expect(table.locator('[data-release]')).toHaveCount(rows.length)
+  await table.locator(`[data-release="${rows[0]!.key}"]`).click()
+  await expect(page.getByTestId('app-panel')).toBeVisible()
+  const list = page.getByTestId('apps-table')
   for (const r of rows) {
-    // The link is the release's name; the row under it says the rest.
     const name = new RegExp(`^${r.name}\\b`)
     const item = list.getByRole('link', { name })
     await expect(item).toBeVisible()
-    // An inner locator is matched inside the outer one, so it starts from the page.
     const row = list.locator('.rk-rrow', { has: page.getByRole('link', { name }) })
     await expect(row).toContainText(r.status)
     await expect(row).toContainText(`${r.chart}-${r.chartVersion}`)
@@ -52,9 +54,10 @@ test('details show the revision history as helm history lists it, the notes and 
   const rows = releaseRows(await snapshot(request, ['helm']))
   const target = rows.find((r) => r.name === 'shop') ?? rows.find((r) => r.revisions > 1) ?? rows[0]!
   await open(page, `#/helm/${target.namespace}/${target.name}`)
-  await expect(page.getByTestId('release-name')).toHaveText(target.name)
-  await expect(page.getByTestId('release-facts')).toContainText(`${target.chart}-${target.chartVersion}`)
-  await expect(page.getByTestId('release-facts')).toContainText(target.appVersion || '—')
+  const panel = page.getByTestId('app-panel')
+  await expect(panel.getByTestId('app-title')).toContainText(target.name)
+  await expect(panel.getByTestId('app-facts')).toContainText(`${target.chart}-${target.chartVersion}`)
+  await expect(panel.getByTestId('app-facts')).toContainText(target.appVersion || '—')
 
   const res = await request.get(`/api/v1/helm/${target.namespace}/${target.name}`)
   expect(res.ok()).toBe(true)
@@ -62,13 +65,13 @@ test('details show the revision history as helm history lists it, the notes and 
   const want = await cluster.helmHistory(target.namespace, target.name)
   expect(d.history.map((h) => [h.revision, h.status, `${h.chart}-${h.chartVersion}`])).toEqual([...want].sort((a, b) => b.revision - a.revision).map((h) => [h.revision, h.status, h.chart]))
 
-  await page.locator('[data-subtab="history"]').click()
-  await expect(page.locator('[data-revision]')).toHaveCount(want.length)
-  await expect(page.locator('[data-revision]').first()).toContainText(String(target.revision))
-  if (want.some((h) => h.status === 'failed')) await expect(page.locator('[data-revision]', { hasText: 'failed' })).toBeVisible()
+  await panel.locator('[data-subtab="history"]').click()
+  await expect(panel.locator('[data-revision]')).toHaveCount(want.length)
+  await expect(panel.locator('[data-revision]').first()).toContainText(String(target.revision))
+  if (want.some((h) => h.status === 'failed')) await expect(panel.locator('[data-revision]', { hasText: 'failed' })).toBeVisible()
 
-  await page.locator('[data-subtab="values"]').click()
-  const values = page.getByTestId('release-values')
+  await panel.locator('[data-subtab="values"]').click()
+  const values = panel.getByTestId('release-values')
   if (inKind) {
     await expect(values).toContainText('clusterName: kind-e2e')
   } else {
@@ -80,15 +83,15 @@ test('details show the revision history as helm history lists it, the notes and 
     expect(d.maskedValues).toContain('db.password')
   }
 
-  await page.locator('[data-subtab="notes"]').click()
-  if (inKind || d.notes) await expect(page.getByTestId('release-notes')).toContainText(d.notes.split('\n')[0]!)
+  await panel.locator('[data-subtab="notes"]').click()
+  if (inKind || d.notes) await expect(panel.getByTestId('release-notes')).toContainText(d.notes.split('\n')[0]!)
 
   // The release's pods, and its resources with their state.
-  await page.locator('[data-subtab="pods"]').click()
-  await expect(page.locator('[data-pod]')).toHaveCount(d.podRows.length)
+  await panel.locator('[data-subtab="pods"]').click()
+  await expect(panel.locator('[data-pod]')).toHaveCount(d.podRows.length)
   if (d.podRows.length) {
     // A pod opens its own drawer here, with logs and all (asked at the Phase 2 review).
-    await page.locator('[data-pod]').first().click()
+    await panel.locator('[data-pod]').first().click()
     const pod = page.getByTestId('pod-panel')
     await expect(pod.getByRole('heading', { level: 2 })).toHaveText(d.podRows[0]!.name)
     await expect(pod.locator('[data-dtab="logs"]')).toBeVisible()
@@ -99,15 +102,15 @@ test('details show the revision history as helm history lists it, the notes and 
   const workload = d.resources.find((r) => r.watched && ['Deployment', 'StatefulSet', 'DaemonSet'].includes(r.kind))
   if (workload) {
     // A resource opens its details, with its pods, not just its YAML.
-    await page.locator('[data-subtab="workloads"]').click()
-    await page.locator(`[data-resource="${workload.kind}/${workload.namespace}/${workload.name}"]`).click()
-    const panel = page.getByTestId('object-panel')
-    await expect(panel.getByRole('heading', { level: 2 })).toHaveText(workload.name)
-    await expect(panel).toContainText(`${workload.kind} in`)
-    await expect(panel.getByTestId('object-release-link')).toHaveText(d.name)
-    await panel.locator('[data-dtab="pods"]').click()
-    await expect(panel.locator('[data-pod]').first()).toBeVisible()
-    await panel.locator('[data-dtab="yaml"]').click()
-    await expect(panel.getByTestId('yaml')).toContainText(`kind: ${workload.kind}`)
+    await panel.locator('[data-subtab="workloads"]').click()
+    await panel.locator(`[data-resource="${workload.kind}/${workload.namespace}/${workload.name}"]`).click()
+    const obj = page.getByTestId('object-panel')
+    await expect(obj.getByRole('heading', { level: 2 })).toHaveText(workload.name)
+    await expect(obj).toContainText(`${workload.kind} in`)
+    await expect(obj.getByTestId('object-release-link')).toHaveText(d.name)
+    await obj.locator('[data-dtab="pods"]').click()
+    await expect(obj.locator('[data-pod]').first()).toBeVisible()
+    await obj.locator('[data-dtab="yaml"]').click()
+    await expect(obj.getByTestId('yaml')).toContainText(`kind: ${workload.kind}`)
   }
 })

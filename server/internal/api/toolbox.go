@@ -347,29 +347,9 @@ func (s *Server) postSessionCard(w http.ResponseWriter, r *http.Request) {
 		from = from[:200]
 	}
 	s.rememberOwner(who.Session, sw)
-	// A dialog the person filled in and sent is their approval: nothing in
-	// it was written by a model unseen. Only a second person's approval,
-	// where the two-person rule or the tool asks for one, goes to Watson.
-	if !s.watsonTwoPerson(c) && !needsTwo {
-		if ref := s.opts.Watson.Refusal(c, who); ref != nil {
-			jsonError(w, http.StatusForbidden, ref.Message)
-			return
-		}
-		sw.From = from
-		sess, err := s.opts.Sessions.Start(sessions.Cluster{ID: c.ID, Name: c.Name, Config: c.Config}, req, sw, "", "")
-		if err != nil {
-			jsonError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-		ss, _ := s.opts.Sessions.Get(sess.ID)
-		b, _ := json.Marshal(struct {
-			Opened sessionView `json:"opened"`
-		}{s.sessionViewOf(r, ss, sw)})
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		w.Write(b)
-		return
-	}
+	// Every session is a card the person reads and approves in Watson
+	// (reversed at the October 28, 2026 review: the dialog alone was the
+	// approval before); a second person where the rules say so.
 	it := s.opts.Watson.SubmitSession(c, who, watson.SessionCard{Tool: req.Tool, Summary: req.Summary(), Request: req, NeedsTwo: needsTwo, Minutes: req.Minutes, Reason: req.Reason}, from)
 	snap, lines, _ := s.opts.Watson.Snapshot(it.ID, 0)
 	b, _ := json.Marshal(s.watsonView(snap, who, c, lines, 0))
@@ -392,8 +372,9 @@ var toolActions = map[string]func(node, namespace, pod string) string{
 	},
 }
 
-// postToolAction runs one of the Tools menu's fixed changes at once, as the
-// person who chose it; Watson shows it running and keeps its record.
+// postToolAction hands one of the Tools menu's fixed changes to Watson as
+// a card the person approves there (reversed at the October 28, 2026
+// review: it ran at once before); it runs as the approver.
 func (s *Server) postToolAction(w http.ResponseWriter, r *http.Request) {
 	c, who, ok := s.watsonReady(w, r)
 	if !ok {
@@ -429,7 +410,12 @@ func (s *Server) postToolAction(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "name a node")
 		return
 	}
-	it := s.opts.Watson.SubmitAction(c, who, line(in.Node, in.Namespace, in.Pod), "Tools menu")
+	items := s.opts.Watson.Submit(r.Context(), c, who, line(in.Node, in.Namespace, in.Pod), "Tools menu", "", false)
+	if len(items) == 0 {
+		jsonError(w, http.StatusInternalServerError, "Watson took no command")
+		return
+	}
+	it := items[0]
 	snap, lines, _ := s.opts.Watson.Snapshot(it.ID, 0)
 	b, _ := json.Marshal(s.watsonView(snap, who, c, lines, 0))
 	w.Header().Set("Content-Type", "application/json")

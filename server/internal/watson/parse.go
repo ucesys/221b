@@ -158,7 +158,7 @@ var specs = []*spec{
 		flags: flags(map[string]flag{"selector": fSelector, "dry-run": fDryRun}), check: checkRollout},
 	{tool: "kubectl", verb: []string{"rollout", "undo"}, change: true, min: 1, max: 2, usage: "kubectl rollout undo deployment/NAME [--to-revision=N]",
 		flags: flags(map[string]flag{"to-revision": {value: true}, "dry-run": fDryRun}), check: checkRollout},
-	{tool: "kubectl", verb: []string{"delete"}, change: true, min: 1, max: -1, usage: "kubectl delete pod NAME [NAME...] | kubectl delete pvc NAME",
+	{tool: "kubectl", verb: []string{"delete"}, change: true, min: 1, max: -1, usage: "kubectl delete pod NAME [NAME...] | kubectl delete pvc NAME | kubectl delete namespace NAME",
 		flags: flags(map[string]flag{"selector": fSelector, "grace-period": {value: true}, "now": {}, "force": {}, "wait": {optional: true, value: true, values: []string{"true", "false"}}, "timeout": {value: true}, "dry-run": fDryRun, "ignore-not-found": {}}),
 		check: checkDelete},
 	{tool: "kubectl", verb: []string{"patch"}, change: true, min: 1, max: 2, usage: `kubectl patch pvc NAME -n NAMESPACE --type merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'`,
@@ -184,6 +184,16 @@ var specs = []*spec{
 	{tool: "helm", verb: []string{"rollback"}, change: true, min: 1, max: 2, usage: "helm rollback RELEASE [REVISION] [-n NAMESPACE]",
 		flags: flags(map[string]flag{"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true},
 			"no-hooks": {}, "cleanup-on-fail": {}, "history-max": {value: true}, "wait-for-jobs": {}})},
+	// Helm applications (Phase 10): a chart from a git repository, at a
+	// branch or a tag; --app takes the console's saved values for it.
+	{tool: "helm", verb: []string{"install"}, change: true, min: 1, max: 1, usage: "helm install RELEASE --git URL [--path DIR] --ref BRANCH|TAG [--tag] -n NAMESPACE [--app] [--create-namespace]",
+		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "app": {}, "create-namespace": {}, "set": {value: true},
+			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}})},
+	{tool: "helm", verb: []string{"upgrade"}, change: true, min: 1, max: 1, usage: "helm upgrade RELEASE [--git URL] [--path DIR] [--ref BRANCH|TAG] [--tag] -n NAMESPACE [--app] [--install] [--create-namespace]",
+		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "app": {}, "install": {short: "i"}, "create-namespace": {}, "set": {value: true},
+			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}})},
+	{tool: "helm", verb: []string{"uninstall"}, change: true, min: 1, max: 1, usage: "helm uninstall RELEASE -n NAMESPACE [--keep-history]",
+		flags: flags(map[string]flag{"keep-history": {}, "dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}})},
 }
 
 // aliases maps what people type to the commands above.
@@ -733,19 +743,25 @@ func checkRollout(c *Command) *Refusal {
 
 func checkDelete(c *Command) *Refusal {
 	types, names := targets(c.Positionals)
-	claims := false
+	claims, namespaces := false, false
 	for _, t := range types {
 		switch t {
 		case "pods":
 		case "persistentvolumeclaims":
 			// The Storage tab's Delete claim (ST-18), one claim by name.
 			claims = true
+		case "namespaces":
+			// The Namespaces tab's Delete namespace (NS-02), one by name.
+			namespaces = true
 		default:
-			return refuse("not supported", "Watson deletes only pods and volume claims; deleting %s is not supported.", t)
+			return refuse("not supported", "Watson deletes only pods, volume claims and namespaces; deleting %s is not supported.", t)
 		}
 	}
 	if claims && (len(types) > 1 || c.Has("selector") || len(names) != 1) {
 		return refuse("usage", "Name the one claim to delete: kubectl delete pvc NAME -n NAMESPACE.")
+	}
+	if namespaces && (len(types) > 1 || c.Has("selector") || len(names) != 1) {
+		return refuse("usage", "Name the one namespace to delete: kubectl delete namespace NAME.")
 	}
 	if len(names) == 0 && !c.Has("selector") {
 		return refuse("usage", "Name the pods to delete, or select them with -l. Watson does not delete every pod at once.")

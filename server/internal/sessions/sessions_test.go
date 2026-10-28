@@ -732,14 +732,14 @@ func TestNodeShellAndNodeCommand(t *testing.T) {
 	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolNodeShell, Node: "worker-3", Profile: toolbox.ProfileSysAdmin}, alice(), "Bob", "")
 	got := waitState(t, m, s.ID, StateLive)
 	f.mu.Lock()
-	pod := f.pods["221b-toolbox/"+got.Pod]
+	pod := f.pods["221b-privileged/"+got.Pod]
 	f.mu.Unlock()
 	if pod == nil || pod.Spec.NodeName != "worker-3" || !pod.Spec.HostPID || !*pod.Spec.Containers[0].SecurityContext.Privileged || pod.Spec.Tolerations[0].Operator != corev1.TolerationOpExists {
 		t.Fatalf("node pod = %+v", pod)
 	}
 	m.End(s.ID, alice(), "")
 	waitState(t, m, s.ID, StateEnded)
-	if len(f.deleted) != 1 || !strings.HasPrefix(f.deleted[0], "pod/221b-toolbox/") {
+	if len(f.deleted) != 1 || !strings.HasPrefix(f.deleted[0], "pod/221b-privileged/") {
 		t.Fatalf("deleted %v", f.deleted)
 	}
 
