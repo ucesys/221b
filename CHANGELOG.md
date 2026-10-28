@@ -4,6 +4,11 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## 0.10.0 (unreleased)
 
+### Changed
+
+- **Every change goes through Watson and an approval again.** The Tools menus' cordon, uncordon, drain and delete, every tool session (shell, port forward, debug container, debug pod, node shell) and every Helm change from the Helm tab are cards the person reads and approves in Watson, as a typed command is; a second person where the two-person rule applies. This reverses the October 26 choice to run them at once.
+- A namespace's wrench on the Namespaces tab offers **Delete namespace…**, through Watson, with a card that says what goes with it.
+
 ### Added
 
 - **Helm: applications from a git repository.** The Helm tab is new: it lists every release in one table, with its chart, app version, revision, status, drift, source and update time. *New application…* fetches a chart from a git repository (GitHub, GitLab, Gitea) at a branch or a tag and installs it; a release's tools upgrade it, switch its branch or tag, change its values file and parameters, set or forget its source, and uninstall it. Each change runs through Watson as you, with a card where the two-person rule applies. A release's panel shows its source and commit, its drift (each object compared with what Helm applied), its values file beside the values as deployed, its history with a diff of any two revisions or of the deployed one against the source and a notice when a newer tag or commit exists, and the images every revision runs. It shows everything the former Helm tab did (pods, the objects by kind, values, notes, history) and replaces it; the addresses are unchanged. Each revision in the history has a diff icon that opens the diff in a large dialog.

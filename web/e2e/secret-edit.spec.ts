@@ -89,3 +89,27 @@ test('New namespace… makes a namespace and opens it (NS-01)', async ({ page, r
     await request.delete(`${SIM}/api/v1/namespaces/e2e-made-ns`)
   }
 })
+
+test('Delete namespace… hands the deletion to Watson, approved there (NS-02)', async ({ page, request }) => {
+  test.skip(inKind, 'the simulator serves namespace writes')
+  await page.request.put('/api/v1/sherlock/config', { data: { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }, headers: SAME })
+  const made = await request.post('/api/v1/namespaces', { data: { name: 'e2e-doomed' }, headers: SAME })
+  expect([201, 409]).toContain(made.status())
+  try {
+    await page.goto('/#/namespaces/e2e-doomed')
+    await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+    await page.getByTestId('tools-namespace-e2e-doomed').click()
+    await page.getByTestId('namespace-tool-delete').click()
+    const confirm = page.getByTestId('confirm')
+    await expect(confirm).toContainText('Delete namespace e2e-doomed')
+    await confirm.getByTestId('confirm-ok').click()
+    const card = page.getByTestId('watson').locator('[data-testid=watson-card]').filter({ hasText: 'kubectl delete namespace e2e-doomed' }).first()
+    await expect(card).toContainText('Deletes namespace e2e-doomed and everything in it', { timeout: 30_000 })
+    await expect(card.getByTestId('watson-approve')).toBeEnabled({ timeout: 30_000 })
+    await card.getByTestId('watson-approve').click()
+    await expect.poll(async () => (await request.get(`${SIM}/api/v1/namespaces/e2e-doomed`)).status(), { timeout: 30_000 }).toBe(404)
+  } finally {
+    await request.delete(`${SIM}/api/v1/namespaces/e2e-doomed`)
+    await page.request.put('/api/v1/sherlock/config', { data: { clusters: {}, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }, headers: SAME })
+  }
+})

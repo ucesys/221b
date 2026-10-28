@@ -676,6 +676,8 @@ Records 1 to 9 cover the Architecture table in the requirements; 10 to 17 were m
 - **Consequences:** An approver approves a purpose and a duration, not each keystroke; production and node tools need a second person for that reason. A session is lost when the leader restarts: it ends, saying so, and anything it created is deleted or reaches its deadline.
 - **Amended (October 26, 2026 review):** A Tools menu cannot hallucinate: what its dialog sends is what the person chose, nothing written unseen by a model. So the dialog's button is the approval and the session opens at once, as the person; a Watson card remains only where a second person must approve (the two-person rule on production, or `toolbox.nodeShell.approval: always`; node shells default to `cluster` since the second pass of that review). The menu's fixed changes (cordon, uncordon, drain, delete a pod) go to `watson/actions` as an action and a name, never as text; the server writes the kubectl line and Watson runs it as the person without a card to approve, so it still shows in Watson's list and the audit log. Sherlock may still only open a dialog, and its action no longer offers the free-text command tools.
 
+- **Amended (October 28, 2026 review):** the person's own dialog is no longer the approval: every session and every Tools action is a card the person approves in Watson, as a typed change is; a second person where the rules say so. The October 26 amendment that let them run at once is reversed.
+
 ### ADR-67: Port forwards reach the person's computer through a `221b` command and one WebSocket
 
 - **Status:** Accepted (Phase 9).

@@ -493,8 +493,8 @@ test('a helm rollback asks on a card with what changes; the Helm tab has no butt
   test.skip(!play.release, 'no release with more than one revision')
   const [ns, name] = inKind ? [play.namespace, play.release] : play.release.split('/')
   await open(page, `#/helm/${ns}/${name}`)
-  await expect(page.getByTestId('release-name')).toHaveText(name!)
-  // Removed at the Phase 6 review: no Roll back and no Ask Sherlock on a release.
+  await expect(page.getByTestId('app-panel').getByTestId('app-title')).toContainText(name!)
+  // Removed at the Phase 6 review: no Roll back and no Ask Sherlock on a release; the Phase 10 drawer's wrench offers Upgrade/Rollback… only as a Watson card.
   await expect(page.getByTestId('release-rollback')).toHaveCount(0)
   await expect(page.getByTestId('ask-sherlock')).toHaveCount(0)
   await pane(page).getByTestId('watson-input').fill(`helm rollback ${name} 1 -n ${ns}`)

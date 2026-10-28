@@ -4,6 +4,7 @@
 // second person's goes through Watson. The menu's fixed changes (Cordon,
 // Drain, Delete) run at once. Against the simulator, exec is a pretend
 // shell; port forwards are not simulated.
+import type { Page } from '@playwright/test'
 import { expect, test } from './test'
 import { consoleNode, healthyWorkers, inKind, snapshot } from './cluster'
 
@@ -39,12 +40,13 @@ test('a shell opens from its dialog and runs in the dock', async ({ page }) => {
   const dlg = page.getByTestId('tool-dialog')
   await expect(dlg).toBeVisible()
   await expect(dlg.getByRole('heading')).toContainText('Shell in pod')
-  // Not production: no reason, no approval note, no card.
+  // Not production: no reason, no second person; the card is the person's own to approve.
   await expect(dlg.getByLabel('Reason')).toHaveCount(0)
   await expect(dlg.getByTestId('tool-send')).toHaveText('Open shell')
   if (shots) await page.screenshot({ path: `${shots}/shell-dialog.png` })
   await dlg.getByTestId('tool-send').click()
   await expect(dlg).toHaveCount(0)
+  await approveCard(page, 'session: ')
 
   const term = page.getByTestId('session-terminal')
   await expect(term).toBeVisible({ timeout: 20_000 })
@@ -92,7 +94,14 @@ test('the pod menu: tools, a port forward with the pod’s ports, and Delete', a
   await expect(confirm).toHaveCount(0)
 })
 
-test('a node’s menu cordons it at once, without a card to approve', async ({ page, request }) => {
+/** Approves the newest card whose text contains the words, once Watson has worked it out. */
+async function approveCard(page: Page, text: string) {
+  const card = page.getByTestId('watson').locator('[data-testid=watson-card]').filter({ hasText: text }).first()
+  await expect(card.getByTestId('watson-approve')).toBeEnabled({ timeout: 30_000 })
+  await card.getByTestId('watson-approve').click()
+}
+
+test('a node’s menu cordons it through a card the person approves (reversed on October 28, 2026)', async ({ page, request }) => {
   // A worker, not the console's own when there is another: kind has two.
   const skip = await consoleNode()
   const workers = healthyWorkers(await snapshot(request)).map((r) => r.name)
@@ -108,15 +117,20 @@ test('a node’s menu cordons it at once, without a card to approve', async ({ p
   if (shots) await page.screenshot({ path: `${shots}/node-menu.png` })
   const cordon = menu.getByTestId('tool-cordon')
   const undo = (await cordon.textContent())?.startsWith('Uncordon') ? 'cordon' : 'uncordon'
+  const verb = undo === 'cordon' ? 'uncordon' : 'cordon'
   await cordon.click()
-  await expect(page.getByText(new RegExp(`(Cordoning|Uncordoning) node ${node}`))).toBeVisible({ timeout: 10_000 })
-  // Put the node back as it was, the same way.
+  await expect(page.getByText(/the card is in Watson/)).toBeVisible({ timeout: 10_000 })
+  await approveCard(page, `kubectl ${verb} ${node}`)
+  // Approved, the card becomes a run with its result.
+  await expect(page.getByTestId('watson').locator('[data-testid=watson-ran]').filter({ hasText: `kubectl ${verb} ${node}` }).last().getByTestId('watson-status')).toContainText(/done/, { timeout: 30_000 })
+  // Put the node back as it was, the same way: a card, approved.
   const back = await page.request.post('/api/v1/watson/actions', { data: { action: undo, node }, headers: SAME })
   expect(back.status(), await back.text()).toBe(202)
-  expect((await back.json()).status).not.toBe('pending')
+  expect(((await back.json()) as { status: string }).status).toBe('pending')
+  await approveCard(page, `kubectl ${undo} ${node}`)
 })
 
-test('a node shell opens without a second approval off production, and Esc cancels its dialog', async ({ page }) => {
+test('a node shell asks no second person off production, and Esc cancels its dialog', async ({ page }) => {
   await page.goto('/#/nodes', { waitUntil: 'domcontentloaded' })
   const btn = page.locator('[data-testid^="tools-node-"]').first()
   await expect(btn).toBeAttached({ timeout: 20_000 })

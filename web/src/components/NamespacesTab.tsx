@@ -15,6 +15,9 @@ import { SearchBox } from './SearchBox'
 import { fetchSecretsConfig, type SecretsConfig } from '../api/secrets'
 import { SecretDialog } from './SecretDialog'
 import { NamespaceDialog } from './NamespaceDialog'
+import { NamespaceTools } from './NamespaceTools'
+import { ConfirmDialog } from './ConfirmDialog'
+import { useWatsonApi } from './Watson'
 import { SideList, type SideGroup } from './SideList'
 import { ObjectPanel } from './ObjectPanel'
 import { PodPanel } from './PodPanel'
@@ -210,6 +213,8 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   const [secretsCfg, setSecretsCfg] = useState<SecretsConfig | null>(null)
   const [newSecret, setNewSecret] = useState(false)
   const [newNamespace, setNewNamespace] = useState(false)
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const watson = useWatsonApi()
   useEffect(() => {
     let live = true
     fetchSecretsConfig().then(
@@ -262,6 +267,15 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
               <a className="rk-link" href={href('storage', [], { ns })} style={{ fontSize: 12.5 }} data-testid="namespace-storage-link">
                 Storage →
               </a>
+              <span style={{ flex: '1 1 auto' }} />
+              <NamespaceTools
+                namespace={ns}
+                canCreate={!!secretsCfg?.edit}
+                onPick={(a) => {
+                  if (a === 'new') setNewNamespace(true)
+                  else setDeleting(ns)
+                }}
+              />
             </div>
             {tabs.length > 0 && (
               <nav aria-label="Kinds in this namespace" style={{ display: 'flex', flexWrap: 'wrap', gap: '0 20px', borderBottom: '1px solid var(--line)' }} data-testid="namespace-kinds">
@@ -304,6 +318,23 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
         )}
         {!current && <p style={{ margin: 0, padding: '28px 24px', fontSize: 12.5, color: 'var(--fg3)' }}>{loaded ? 'No namespaces.' : 'Waiting for the first list of namespaces…'}</p>}
       </main>
+      {deleting && (
+        <ConfirmDialog
+          title={`Delete namespace ${deleting}?`}
+          confirm="Hand to Watson"
+          danger
+          onCancel={() => setDeleting(null)}
+          onConfirm={() => {
+            const name = deleting
+            setDeleting(null)
+            watson.send(`kubectl delete namespace ${name}`, { from: 'Namespaces tab', why: `Delete namespace ${name} and everything in it.`, over: true })
+          }}
+        >
+          <p style={{ margin: 0 }}>
+            Everything in <span className="rk-mono">{deleting}</span> goes with it: its pods, claims, Secrets, ConfigMaps and Helm releases, and nothing comes back. Watson shows what is there and runs it as you once you approve the card.
+          </p>
+        </ConfirmDialog>
+      )}
       {newNamespace && (
         <NamespaceDialog
           onClose={() => setNewNamespace(false)}

@@ -99,18 +99,35 @@ func TestSessionRequestsAreCheckedBeforeTheCard(t *testing.T) {
 
 func TestForwardOpensASessionTheCLIReaches(t *testing.T) {
 	srv, c, _, mgr := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
-	// The person's own dialog is the approval: the session opens at once.
+	// The dialog makes a card; the person approves it in Watson, and the
+	// session opens as them (reversed at the October 28, 2026 review).
 	r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/sessions", `{"tool":"forward","namespace":"web","pod":"cache-0","port":6379,"from":"Tools menu"}`)
+	var card watsonItem
+	_ = json.Unmarshal([]byte(b), &card)
+	if r.StatusCode != http.StatusAccepted || card.Status != watson.StatusPending || card.ID == "" {
+		t.Fatalf("%d %s", r.StatusCode, b)
+	}
+	watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[card.ID].Plan != nil && m[card.ID].Plan.Ready })
+	if r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/commands/"+card.ID+"/approve", ""); r.StatusCode != 200 {
+		t.Fatalf("approve: %d %s", r.StatusCode, b)
+	}
+	watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[card.ID].Session != nil && m[card.ID].Session.SessionID != "" })
+	_, b = send(t, c, http.MethodGet, srv.URL+"/api/v1/sessions", "")
+	var mine []struct {
+		ID   string `json:"id"`
+		Mine bool   `json:"mine"`
+	}
+	_ = json.Unmarshal([]byte(b), &mine)
+	if len(mine) != 1 || !mine[0].Mine {
+		t.Fatalf("after the approval: %s", b)
+	}
 	var opened struct {
 		Opened struct {
 			ID   string `json:"id"`
 			Mine bool   `json:"mine"`
 		} `json:"opened"`
 	}
-	_ = json.Unmarshal([]byte(b), &opened)
-	if r.StatusCode != http.StatusCreated || opened.Opened.ID == "" || !opened.Opened.Mine {
-		t.Fatalf("%d %s", r.StatusCode, b)
-	}
+	opened.Opened.ID, opened.Opened.Mine = mine[0].ID, mine[0].Mine
 
 	var list []struct {
 		ID    string `json:"id"`
@@ -253,17 +270,17 @@ func TestASecondPersonsApprovalStillGoesToWatson(t *testing.T) {
 }
 
 func TestNodeShellsFollowTheClustersRule(t *testing.T) {
-	// Off production a node shell opens at once, a reason optional.
+	// Off production a node shell is a card for its own person to approve, a reason optional.
 	srv, c, _, _ := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
-	if code, _, b := requestSession(t, srv, c, `{"tool":"node-shell","node":"worker-001","profile":"general"}`); code != http.StatusCreated {
+	if code, it, b := requestSession(t, srv, c, `{"tool":"node-shell","node":"worker-001","profile":"general"}`); code != http.StatusAccepted || it.Status != watson.StatusPending {
 		t.Fatalf("staging: %d %s", code, b)
 	}
-	// On production it asks why, and with the two-person rule off opens.
+	// On production it asks why, and with the two-person rule off makes a card.
 	srv, c, _, _ = toolboxSetup(t, "ops@corp.example", clusters.EnvProduction)
 	if code, _, b := requestSession(t, srv, c, `{"tool":"node-shell","node":"worker-001","profile":"general"}`); code != http.StatusBadRequest || !strings.Contains(b, "say why") {
 		t.Fatalf("production without a reason: %d %s", code, b)
 	}
-	if code, _, b := requestSession(t, srv, c, `{"tool":"node-shell","node":"worker-001","profile":"general","reason":"kubelet restarts in a loop"}`); code != http.StatusCreated {
+	if code, it, b := requestSession(t, srv, c, `{"tool":"node-shell","node":"worker-001","profile":"general","reason":"kubelet restarts in a loop"}`); code != http.StatusAccepted || it.Status != watson.StatusPending {
 		t.Fatalf("production with a reason: %d %s", code, b)
 	}
 }
@@ -285,8 +302,13 @@ func TestToolActionsRunAsThePerson(t *testing.T) {
 	r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/actions", `{"action":"cordon","node":"worker-001"}`)
 	var it watsonItem
 	_ = json.Unmarshal([]byte(b), &it)
-	if r.StatusCode != http.StatusAccepted || it.Command != "kubectl cordon worker-001" || it.Status == watson.StatusPending {
+	// A card, approved by the person who asked (reversed at the October 28, 2026 review).
+	if r.StatusCode != http.StatusAccepted || it.Command != "kubectl cordon worker-001" || it.Status != watson.StatusPending {
 		t.Fatalf("%d %s", r.StatusCode, b)
+	}
+	watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[it.ID].Plan != nil && m[it.ID].Plan.Ready })
+	if r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/commands/"+it.ID+"/approve", ""); r.StatusCode != 200 {
+		t.Fatalf("approve: %d %s", r.StatusCode, b)
 	}
 	watsonStream(t, srv, c, func(m map[string]watsonItem) bool {
 		return m[it.ID].Status == watson.StatusDone || m[it.ID].Status == watson.StatusFailed

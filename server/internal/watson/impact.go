@@ -452,6 +452,13 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 				impact = append(impact, claimDeleteImpact(ctx, cs, toTyped[corev1.PersistentVolumeClaim](t.obj))...)
 				continue
 			}
+			if t.kind == "Namespace" {
+				guards = append(guards, objectGuard(t, func(o *unstructured.Unstructured) any {
+					return []any{field(o, "status", "phase"), o.GetDeletionTimestamp() != nil}
+				}))
+				impact = append(impact, namespaceDeleteImpact(ctx, cs, t.name)...)
+				continue
+			}
 			guards = append(guards, objectGuard(t, func(o *unstructured.Unstructured) any {
 				return []any{field(o, "spec", "nodeName"), o.GetDeletionTimestamp() != nil}
 			}))
@@ -1202,4 +1209,56 @@ func manifestDiff(from, to string) (changed, added, removed []string) {
 	sort.Strings(added)
 	sort.Strings(removed)
 	return changed, added, removed
+}
+
+// namespaceDeleteImpact says what deleting a namespace takes with it
+// (NS-02): its pods, its claims and their volumes' fate, and the
+// Secrets and ConfigMaps in it.
+func namespaceDeleteImpact(ctx context.Context, cs *clients, name string) []string {
+	var out []string
+	pods, _ := cs.cs.CoreV1().Pods(name).List(ctx, metav1.ListOptions{})
+	claims, _ := cs.cs.CoreV1().PersistentVolumeClaims(name).List(ctx, metav1.ListOptions{})
+	secrets, _ := cs.cs.CoreV1().Secrets(name).List(ctx, metav1.ListOptions{})
+	cms, _ := cs.cs.CoreV1().ConfigMaps(name).List(ctx, metav1.ListOptions{})
+	n := func(l any) int {
+		switch x := l.(type) {
+		case *corev1.PodList:
+			if x != nil {
+				return len(x.Items)
+			}
+		case *corev1.PersistentVolumeClaimList:
+			if x != nil {
+				return len(x.Items)
+			}
+		case *corev1.SecretList:
+			if x != nil {
+				return len(x.Items)
+			}
+		case *corev1.ConfigMapList:
+			if x != nil {
+				return len(x.Items)
+			}
+		}
+		return 0
+	}
+	out = append(out, fmt.Sprintf("Deletes namespace %s and everything in it: %s, %s, %s and %s, with every other object there. Nothing of it comes back.",
+		name, plural(n(pods), "pod", "pods"), plural(n(claims), "volume claim", "volume claims"), plural(n(secrets), "Secret", "Secrets"), plural(n(cms), "ConfigMap", "ConfigMaps")))
+	if claims != nil && len(claims.Items) > 0 {
+		out = append(out, "A claim's volume follows its reclaim policy: Delete removes the data with it, Retain keeps the volume Released.")
+	}
+	if pods != nil && len(pods.Items) > 0 {
+		var rel []string
+		seen := map[string]bool{}
+		for _, p := range pods.Items {
+			if r := p.Labels["app.kubernetes.io/instance"]; r != "" && !seen[r] {
+				seen[r] = true
+				rel = append(rel, r)
+			}
+		}
+		if len(rel) > 0 {
+			sort.Strings(rel)
+			out = append(out, fmt.Sprintf("Helm releases in it: %s; their records go with the namespace, so helm will not list them afterwards.", listText(rel, 6)))
+		}
+	}
+	return out
 }

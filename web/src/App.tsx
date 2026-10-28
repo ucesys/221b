@@ -319,7 +319,7 @@ function Shell() {
         (it) => {
           if (it.status === 'refused') setToast(it.reason || 'Watson refused it.')
           else if (it.status === 'pending') {
-            setToast(`${it.command} waits in Watson for a second person to approve it.`)
+            setToast(`${it.command}: the card is in Watson. Read it and approve it there.`)
             showWatson()
           } else setToast(`${doing} ${what}. Watson shows how it goes.`)
         },

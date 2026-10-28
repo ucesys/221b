@@ -158,7 +158,7 @@ var specs = []*spec{
 		flags: flags(map[string]flag{"selector": fSelector, "dry-run": fDryRun}), check: checkRollout},
 	{tool: "kubectl", verb: []string{"rollout", "undo"}, change: true, min: 1, max: 2, usage: "kubectl rollout undo deployment/NAME [--to-revision=N]",
 		flags: flags(map[string]flag{"to-revision": {value: true}, "dry-run": fDryRun}), check: checkRollout},
-	{tool: "kubectl", verb: []string{"delete"}, change: true, min: 1, max: -1, usage: "kubectl delete pod NAME [NAME...] | kubectl delete pvc NAME",
+	{tool: "kubectl", verb: []string{"delete"}, change: true, min: 1, max: -1, usage: "kubectl delete pod NAME [NAME...] | kubectl delete pvc NAME | kubectl delete namespace NAME",
 		flags: flags(map[string]flag{"selector": fSelector, "grace-period": {value: true}, "now": {}, "force": {}, "wait": {optional: true, value: true, values: []string{"true", "false"}}, "timeout": {value: true}, "dry-run": fDryRun, "ignore-not-found": {}}),
 		check: checkDelete},
 	{tool: "kubectl", verb: []string{"patch"}, change: true, min: 1, max: 2, usage: `kubectl patch pvc NAME -n NAMESPACE --type merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'`,
@@ -743,19 +743,25 @@ func checkRollout(c *Command) *Refusal {
 
 func checkDelete(c *Command) *Refusal {
 	types, names := targets(c.Positionals)
-	claims := false
+	claims, namespaces := false, false
 	for _, t := range types {
 		switch t {
 		case "pods":
 		case "persistentvolumeclaims":
 			// The Storage tab's Delete claim (ST-18), one claim by name.
 			claims = true
+		case "namespaces":
+			// The Namespaces tab's Delete namespace (NS-02), one by name.
+			namespaces = true
 		default:
-			return refuse("not supported", "Watson deletes only pods and volume claims; deleting %s is not supported.", t)
+			return refuse("not supported", "Watson deletes only pods, volume claims and namespaces; deleting %s is not supported.", t)
 		}
 	}
 	if claims && (len(types) > 1 || c.Has("selector") || len(names) != 1) {
 		return refuse("usage", "Name the one claim to delete: kubectl delete pvc NAME -n NAMESPACE.")
+	}
+	if namespaces && (len(types) > 1 || c.Has("selector") || len(names) != 1) {
+		return refuse("usage", "Name the one namespace to delete: kubectl delete namespace NAME.")
 	}
 	if len(names) == 0 && !c.Has("selector") {
 		return refuse("usage", "Name the pods to delete, or select them with -l. Watson does not delete every pod at once.")
