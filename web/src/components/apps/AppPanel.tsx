@@ -4,6 +4,7 @@ import { useDetails } from '../../api/details'
 import type { ClusterInfo, ReleaseDetails } from '../../api/types'
 import type { WatsonItem } from '../../api/watson'
 import { driftTone, type AppRow } from '../../columns/apps'
+import { useWatsonApi } from '../Watson'
 import { fmtAge, fmtTs, nWord } from '../../lib/format'
 import { apiPath, href, type Route } from '../../lib/router'
 import { CopyName } from '../CopyName'
@@ -43,6 +44,7 @@ interface Props {
  */
 export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canChange, onAction, onToast, onResult, version, onDrift }: Props) {
   const app = row.app
+  const watson = useWatsonApi()
   const [drift, setDrift] = useState<AppDrift | null>(app?.drift ?? null)
   const [checking, setChecking] = useState(false)
   const [refs, setRefs] = useState<AppRefs | null>(null)
@@ -282,7 +284,17 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
             {app && <ValuesEditor clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} />}
           </>
         ) : (
-          <RevisionActions.Provider value={{ diff: (rev) => setDiffFor(rev) }}>
+          <RevisionActions.Provider
+            value={{
+              diff: (rev) => setDiffFor(rev),
+              current: row.revision,
+              // An older revision rolls back through Watson, a card to approve (M-03).
+              rollback:
+                canChange && watson.available && !watson.readOnly
+                  ? (rev) => watson.send(`helm rollback ${row.name} ${rev} -n ${row.namespace}`, { from: 'Helm tab', why: `Roll ${row.namespace}/${row.name} back to revision ${rev}.` })
+                  : undefined,
+            }}
+          >
           <ReleaseBody
             cluster={cluster}
             now={now}

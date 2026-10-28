@@ -80,10 +80,13 @@ func (s *Server) driftKey(cluster, ns, name string, p kube.Person) string {
 	return cluster + "\x00" + ns + "/" + name + "\x00" + p.Key()
 }
 
-func (s *Server) cachedDrift(key string) *apps.Drift {
+// cachedDrift is the check kept under the key, unless it is older than
+// driftFor or made before since: a check from before the record's last
+// deploy says nothing about what runs now (Phase 10.1, M-01).
+func (s *Server) cachedDrift(key string, since time.Time) *apps.Drift {
 	if v, ok := s.drifts.Load(key); ok {
 		e := v.(driftEntry)
-		if s.opts.Now().Sub(e.when) < driftFor {
+		if s.opts.Now().Sub(e.when) < driftFor && (since.IsZero() || e.when.After(since)) {
 			d := e.d
 			return &d
 		}
@@ -146,7 +149,7 @@ func (s *Server) getApps(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		v := appView{Record: rec}
-		if d := s.cachedDrift(s.driftKey(c.ID, rec.Namespace, rec.Name, who.Person)); d != nil {
+		if d := s.cachedDrift(s.driftKey(c.ID, rec.Namespace, rec.Name, who.Person), rec.Updated); d != nil {
 			v.Drift, v.DriftState = d, d.State()
 		}
 		out = append(out, v)
@@ -175,7 +178,7 @@ func (s *Server) getApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := appView{Record: rec}
-	if d := s.cachedDrift(s.driftKey(c.ID, ns, name, who.Person)); d != nil {
+	if d := s.cachedDrift(s.driftKey(c.ID, ns, name, who.Person), rec.Updated); d != nil {
 		v.Drift, v.DriftState = d, d.State()
 	}
 	b, _ := json.Marshal(v)
@@ -639,7 +642,11 @@ func (s *Server) getAppDrift(w http.ResponseWriter, r *http.Request) {
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
 	key := s.driftKey(c.ID, ns, name, who.Person)
 	if r.URL.Query().Get("refresh") != "1" {
-		if d := s.cachedDrift(key); d != nil {
+		var since time.Time
+		if rec, _, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name); err == nil {
+			since = rec.Updated
+		}
+		if d := s.cachedDrift(key, since); d != nil {
 			b, _ := json.Marshal(d)
 			writeJSON(w, r, b)
 			return

@@ -16,7 +16,7 @@ Out, for now:
 - Charts from chart repositories or OCI registries (the repository must vendor its dependencies under `charts/`).
 - Automatic upgrades when a branch moves (the page says so; a person upgrades).
 - Cluster-wide drift beyond a release's own objects, and a diff of live objects against the manifest (drift names the fields that differ; values are never shown).
-- Rollback to a chosen revision from the Helm tab (Upgrade/Rollback… redeploys from the source; a typed `helm rollback` in Watson works as before).
+- Rollback to a chosen revision: since 0.10.1 each older revision in History has a rollback icon that hands `helm rollback` to Watson (M-03); Upgrade… redeploys from the source.
 
 ## Approach
 

@@ -154,7 +154,7 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
       ask={podQuestion(head ? { ...head, namespace: ns, name } : null, ns, name)}
       label="Pod details"
       testId="pod-panel"
-      tools={<ToolsButton target={{ kind: 'pod', name, namespace: ns }} />}
+      tools={<ToolsButton target={{ kind: 'pod', name, namespace: ns, problem: status && (status.tone === 'err' || status.tone === 'warn') ? status.text : undefined }} />}
       kicker={
         <>
           <PodIcon />

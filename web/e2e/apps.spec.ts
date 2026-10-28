@@ -77,6 +77,12 @@ test('a release opens beside the table: overview, history with a diff of two rev
     expect(box.height).toBeGreaterThan(500)
     await page.keyboard.press('Escape')
     await expect(dlg).toHaveCount(0)
+    // Each older revision has a rollback icon, the current one none; it hands helm rollback to Watson as a card (M-03).
+    await expect(panel.getByTestId(`revision-rollback-${multi.revisions}`)).toHaveCount(0)
+    await panel.getByTestId(`revision-rollback-${multi.revisions - 1}`).click()
+    const card = page.getByTestId('watson').getByTestId('watson-card').last()
+    await expect(card).toHaveAttribute('data-command', `helm rollback ${multi.name} ${multi.revisions - 1} -n ${multi.namespace}`, { timeout: 15_000 })
+    await card.getByTestId('watson-discard').click()
   }
   const images = await request.get(`/api/v1/apps/${multi.namespace}/${multi.name}/images`)
   expect(images.status()).toBe(200)
@@ -158,7 +164,7 @@ test('every dialog and drawer closes with Cancel, its cross and Escape', async (
   await expect(dlg).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(dlg).toHaveCount(0)
-  // A release's panel: the Upgrade/Rollback dialog and the Uninstall confirmation, from the wrench.
+  // A release's panel: the Upgrade dialog and the Uninstall confirmation, from the wrench.
   await page.getByTestId('apps-table').locator(`[data-release="${r.key}"]`).click()
   const panel = page.getByTestId('app-panel')
   await panel.getByTestId('app-src-repo').fill('github.com/ucesys/221b')
@@ -169,7 +175,7 @@ test('every dialog and drawer closes with Cancel, its cross and Escape', async (
     await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()
     await page.getByTestId('app-tool-upgrade').click()
     await expect(dlg).toHaveAttribute('data-mode', 'upgrade')
-    await expect(dlg).toContainText('Upgrade/Rollback from the source')
+    await expect(dlg).toContainText('Upgrade from the source')
     await dlg.getByRole('button', { name: 'Cancel' }).click()
     await expect(dlg).toHaveCount(0)
     await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()

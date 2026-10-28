@@ -4,7 +4,7 @@ import type { Page } from '@playwright/test'
 import { expect, test } from './test'
 import { NODE_COLUMNS, nodeTerms } from '../src/columns/nodes'
 import { compareNatural, fCores, fMem, pct } from '../src/lib/format'
-import { free } from '../src/lib/nodes'
+import { free, toneRank } from '../src/lib/nodes'
 import { defaultHidden, exportTable, matchesQuery, queryWords, visibleColumns } from '../src/lib/table'
 import { inKind, kubectl, kubectlYAML, nodeRows, snapshot, stableYAML } from './cluster'
 import { readSheet } from './xlsx'
@@ -47,17 +47,18 @@ test('shows the role, allocatable and free resources of every node', async ({ pa
   for (const r of nodeRows(snap).slice(0, 3)) {
     const cells = page.locator(`[data-node="${r.name}"] > span`)
     await expect(cells.nth(1)).toHaveText(r.role === 'control-plane' ? 'master' : 'worker')
-    await expect(cells.nth(4)).toContainText(fCores(r.cpu.requested))
-    await expect(cells.nth(5)).toHaveText(fCores(r.cpu.allocatable))
-    await expect(cells.nth(6)).toHaveText(fCores(free(r.cpu)))
-    await expect(cells.nth(7)).toContainText(fMem(r.memory.requested))
-    await expect(cells.nth(8)).toHaveText(fMem(r.memory.allocatable))
-    await expect(cells.nth(9)).toHaveText(fMem(free(r.memory)))
+    // Name, role, status, then the resources (Problems left the table at the Phase 10.1 review).
+    await expect(cells.nth(3)).toContainText(fCores(r.cpu.requested))
+    await expect(cells.nth(4)).toHaveText(fCores(r.cpu.allocatable))
+    await expect(cells.nth(5)).toHaveText(fCores(free(r.cpu)))
+    await expect(cells.nth(6)).toContainText(fMem(r.memory.requested))
+    await expect(cells.nth(7)).toHaveText(fMem(r.memory.allocatable))
+    await expect(cells.nth(8)).toHaveText(fMem(free(r.memory)))
     // Pods come and go on a real cluster: the figure is the one the server has now.
     await expect
       .poll(async () => {
         const now = nodeRows(await snapshot(request)).find((n) => n.name === r.name)!
-        return (await cells.nth(10).textContent()) === `${now.pods.running} / ${now.pods.capacity}`
+        return (await cells.nth(9).textContent()) === `${now.pods.running} / ${now.pods.capacity}`
       })
       .toBe(true)
   }
@@ -72,13 +73,14 @@ test('sorts by any column', async ({ page, request }) => {
 
   // Nodes with problems come first until someone sorts: errors, then
   // warnings, then by name (asked at the Phase 6 review).
-  const problems = page.locator('.rk-gh [data-col="problems"]')
+  const problems = page.locator('.rk-gh [data-col="status"]')
   await expect(problems).toHaveAttribute('aria-label', /sorted descending/)
   await expect
     .poll(async () => {
       const latest = new Map(nodeRows(await snapshot(request)).map((r) => [r.name, r]))
       const shown = await shownNames(page)
-      const want = [...shown].sort((a, b) => latest.get(b)!.errors * 10 + latest.get(b)!.warnings - (latest.get(a)!.errors * 10 + latest.get(a)!.warnings) || compareNatural(a, b))
+      // Status sorts by tone since the Problems column went (Phase 10.1, M-02): errors, then warnings, then by name.
+      const want = [...shown].sort((a, b) => (toneRank[latest.get(b)!.tone] ?? 0) - (toneRank[latest.get(a)!.tone] ?? 0) || compareNatural(a, b))
       return shown.join(' ') === want.join(' ')
     })
     .toBe(true)
@@ -102,7 +104,7 @@ test('sorts by any column', async ({ page, request }) => {
   await page.locator('.rk-gh [data-col="role"]').click()
   expect(byName.get((await shownNames(page))[0]!)!.role).toBe('control-plane')
 
-  for (const col of ['status', 'problems', 'cpuAlloc', 'memory', 'memAlloc', 'memFree', 'pods', 'age']) {
+  for (const col of ['status', 'cpuAlloc', 'memory', 'memAlloc', 'memFree', 'pods', 'age']) {
     const header = page.locator(`.rk-gh [data-col="${col}"]`)
     await header.click()
     await expect(header).toHaveAttribute('aria-label', /sorted/)
@@ -182,7 +184,7 @@ test('hides taints, zone, labels and kubelet until picked, and remembers the cho
   await page.keyboard.press('Escape')
   await expect(page.getByRole('group', { name: 'Columns to show' })).toHaveCount(0)
   await expect(menuButton).toBeFocused()
-  await expect(menuButton).toContainText('13/16')
+  await expect(menuButton).toContainText('12/15')
 
   await page.reload()
   await expect(page.locator('.rk-gh [data-col="name"]')).toBeVisible()
@@ -268,7 +270,7 @@ test('exports what is on screen as CSV, with the columns shown', async ({ page }
   const text = readFileSync(await download.path(), 'utf8')
   expect(text.startsWith('\uFEFF')).toBe(true)
   const lines = text.slice(1).split('\r\n').filter(Boolean)
-  expect(lines[0]).toBe('Node,Role,Status,Problems,CPU requested (cores),CPU requested %,CPU in use (cores),CPU allocatable (cores),CPU free (cores),Memory requested (GiB),Memory requested %,Memory in use (GiB),Memory allocatable (GiB),Memory free (GiB),Pods,Pod capacity,Zone,Joined')
+  expect(lines[0]).toBe('Node,Role,Status,CPU requested (cores),CPU requested %,CPU in use (cores),CPU allocatable (cores),CPU free (cores),Memory requested (GiB),Memory requested %,Memory in use (GiB),Memory allocatable (GiB),Memory free (GiB),Pods,Pod capacity,Zone,Joined')
   expect(lines.length - 1).toBe(names.length)
   expect(lines.slice(1).map((l) => l.split(',')[0])).toEqual(names)
 })

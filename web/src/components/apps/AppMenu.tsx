@@ -40,7 +40,7 @@ export function appItems(r: AppRow, canChange: boolean): Item[] {
     ]
   }
   return [
-    { key: 'upgrade', label: 'Upgrade/Rollback…', hint: r.app ? `from ${r.app.source.ref}` : undefined, off: off ?? (r.app ? undefined : 'set the source first') },
+    { key: 'upgrade', label: 'Upgrade…', hint: r.app ? `from ${r.app.source.ref}` : undefined, off: off ?? (r.app ? undefined : 'set the source first') },
     { key: 'uninstall', label: 'Uninstall…', danger: true, sepBefore: true, off },
   ]
 }

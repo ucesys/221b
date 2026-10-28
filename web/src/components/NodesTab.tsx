@@ -37,7 +37,7 @@ export function NodesTab({ cluster, now, onToast, route }: TabProps) {
   const compact = false
   // Nodes with problems first, errors before warnings, until someone sorts
   // (asked at the Phase 6 review).
-  const table = useTable<NodeRow>({ id: 'nodes', columns: NODE_COLUMNS, rows: inScope, terms: nodeTerms, now, compact, defaultSort: { col: 'problems', dir: 'desc' }, query, onQuery: (q) => set({ q }) })
+  const table = useTable<NodeRow>({ id: 'nodes', columns: NODE_COLUMNS, rows: inScope, terms: nodeTerms, now, compact, defaultSort: { col: 'status', dir: 'desc' }, query, onQuery: (q) => set({ q }) })
   const metrics = cluster?.metrics === 'available'
   const cp = rows.filter((r) => r.role === 'control-plane').length
   const withErrors = rows.filter((r) => r.errors > 0).length

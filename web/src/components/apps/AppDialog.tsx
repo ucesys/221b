@@ -25,7 +25,7 @@ const TITLES: Record<DialogMode, string> = {
   create: 'New application from a git repository',
   source: 'The source of the release',
   switch: 'Switch to another branch or tag',
-  upgrade: 'Upgrade/Rollback from the source',
+  upgrade: 'Upgrade from the source',
   install: 'Install from the source',
   values: 'Values and parameters',
 }

@@ -6,7 +6,7 @@
 // shell; port forwards are not simulated.
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
-import { consoleNode, healthyWorkers, inKind, snapshot } from './cluster'
+import { consoleNode, healthyWorkers, inKind, snapshot, podRows } from './cluster'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -76,7 +76,8 @@ test('the pod menu: tools, a port forward with the pod’s ports, and Delete', a
   await btn.click()
   const menu = page.getByTestId('tools-menu')
   await expect(menu.getByTestId('tool-shell')).not.toHaveAttribute('aria-disabled', 'true', { timeout: 10_000 })
-  await expect(menu.getByRole('menuitem')).toHaveText([/^Shell/, /^Port forward/, /^Debug container/, /^Delete/])
+  // Troubleshoot… leads where the pod has a problem (M-04); the tools follow.
+  await expect(menu.getByRole('menuitem').filter({ hasNotText: /^Troubleshoot/ })).toHaveText([/^Shell/, /^Port forward/, /^Debug container/, /^Delete/])
   await expect(menu).not.toContainText('Watson')
   await menu.getByTestId('tool-forward').click()
   const dlg = page.getByTestId('tool-dialog')
@@ -145,4 +146,40 @@ test('a node shell asks no second person off production, and Esc cancels its dia
   if (shots) await page.screenshot({ path: `${shots}/node-shell.png` })
   await page.keyboard.press('Escape')
   await expect(dlg).toHaveCount(0)
+})
+
+test('a pod with a problem offers Troubleshoot… first in its wrench, which asks Sherlock for a report (M-04)', async ({ page, request }) => {
+  const bad = podRows(await snapshot(request, ['pods'])).find((p) => p.tone === 'err' || p.tone === 'warn')
+  test.skip(!bad, 'no pod with a problem')
+  await page.goto(`/#/pods?peek=${encodeURIComponent(`pod:${bad!.namespace}/${bad!.name}`)}`)
+  const panel = page.getByTestId('pod-panel')
+  await panel.getByTestId(`tools-pod-${bad!.name}`).click()
+  const menu = page.getByTestId('tools-menu')
+  // Without a key Sherlock is off: the item is there, disabled, and says so.
+  await expect(menu.getByRole('menuitem').first()).toHaveText(/^Troubleshoot/)
+  await expect(menu.getByTestId('tool-troubleshoot')).toHaveAttribute('aria-disabled', 'true')
+  await expect(menu.getByTestId('tool-troubleshoot')).toContainText('Sherlock is off here')
+  await page.keyboard.press('Escape')
+  // With the fake key (the console talks to the simulator's Claude API) it asks for the report.
+  const key = await page.request.put('/api/v1/sherlock/key', { data: { key: 'sk-ant-e2e-fake-key-0123456789' }, headers: SAME })
+  expect(key.status(), await key.text()).toBe(200)
+  try {
+    await page.reload()
+    await panel.getByTestId(`tools-pod-${bad!.name}`).click()
+    await expect(menu.getByTestId('tool-troubleshoot')).toContainText(bad!.status)
+    await expect(menu.getByTestId('tool-troubleshoot')).not.toHaveAttribute('aria-disabled', 'true')
+    await menu.getByTestId('tool-troubleshoot').click()
+    await expect(page.getByTestId('sherlock-question').last()).toContainText(`Troubleshooting report for pod ${bad!.namespace}/${bad!.name}`, { timeout: 15_000 })
+    await expect(page.getByTestId('sherlock-answer').last()).toHaveAttribute('data-status', /done|stopped|failed/, { timeout: 20_000 })
+    await page.keyboard.press('Escape')
+  } finally {
+    await page.request.delete('/api/v1/sherlock/key', { headers: SAME })
+  }
+  // A healthy pod's wrench has no Troubleshoot….
+  const good = podRows(await snapshot(request, ['pods'])).find((p) => p.status === 'Running' && p.tone !== 'err' && p.tone !== 'warn')
+  test.skip(!good, 'no healthy pod')
+  await page.goto(`/#/pods?peek=${encodeURIComponent(`pod:${good!.namespace}/${good!.name}`)}`)
+  await panel.getByTestId(`tools-pod-${good!.name}`).click()
+  await expect(page.getByTestId('tools-menu').getByTestId('tool-shell')).toBeVisible()
+  await expect(page.getByTestId('tools-menu').getByTestId('tool-troubleshoot')).toHaveCount(0)
 })
