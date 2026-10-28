@@ -16,7 +16,7 @@ Out, for now:
 - Charts from chart repositories or OCI registries (the repository must vendor its dependencies under `charts/`).
 - Automatic upgrades when a branch moves (the page says so; a person upgrades).
 - Cluster-wide drift beyond a release's own objects, and a diff of live objects against the manifest (drift names the fields that differ; values are never shown).
-- Rollback from the Helm1 page (the Helm tab's Watson `helm rollback` works as before).
+- Rollback to a chosen revision from the Helm tab (Upgrade/Rollback… redeploys from the source; a typed `helm rollback` in Watson works as before).
 
 ## Approach
 
@@ -81,7 +81,7 @@ Every `apps/…` route is served by the leader replica, where Watson runs.
 | Question | Proposal | Status |
 | --- | --- | --- |
 | The shipped Admin role cannot create workloads, so only a SuperAdmin can install an application; should the full Admin template grow? | Leave the roles as they are until the page replaces the Helm tab; an Admin's install fails at the dry run with Kubernetes' own refusal | Open |
-| When does the Helm tab go? | Once the Helm1 panel has the pods, resources and notes the Helm tab shows | Open |
+| When does the Helm tab go? | Once the Helm1 panel has the pods, resources and notes the Helm tab shows | Done on October 28, 2026: the Helm1 page became the Helm tab |
 | Charts with dependencies in chart repositories | Vendor them in the repository (`helm dependency build` committed), or add a `helm dependency build` step later | Open |
 
 ## As built

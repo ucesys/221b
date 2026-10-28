@@ -548,7 +548,7 @@ A Helm page (shown as **Helm1** beside the Helm tab until it replaces it) that l
 
 ### Your review
 
-- [ ] The Helm1 table (HA-01) against `helm list -A` on 221b, and the drift column after a change by hand (HA-09).
+- [ ] The Helm table (HA-01) against `helm list -A` on 221b, and the drift column after a change by hand (HA-09).
 - [ ] An install from GitHub (HA-04 to HA-08), an upgrade to another tag, a switch back, a values change and an uninstall, each in Watson and the audit log.
 - [ ] The History tab's newer-version notice and the diffs (HA-16, HA-17), and the Images tab (HA-15).
 - [ ] Secret editing with `secrets.reveal` off and on (SE-02, SE-03), and the audit log of a reveal.

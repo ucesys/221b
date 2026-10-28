@@ -321,7 +321,7 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
       {deleting && (
         <ConfirmDialog
           title={`Delete namespace ${deleting}?`}
-          confirm="Hand to Watson"
+          confirm="Delete namespace"
           danger
           onCancel={() => setDeleting(null)}
           onConfirm={() => {
