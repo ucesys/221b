@@ -82,6 +82,8 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, version])
 
+  // The row is an orphan until the release list is in, when the panel
+  // mounts before it: the revisions load once it is not (M-03 fix).
   useEffect(() => {
     if ((tab !== 'history' && tab !== 'images') || row.orphan) return
     fetchRevisions(clusterId, row.namespace, row.name)
@@ -93,7 +95,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
         .catch(() => undefined)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, key, version])
+  }, [tab, key, version, row.orphan])
 
   useEffect(() => {
     if (tab !== 'images' || row.orphan) return
@@ -286,7 +288,14 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
         ) : (
           <RevisionActions.Provider
             value={{
-              diff: (rev) => setDiffFor(rev),
+              diff: (rev) => {
+                setDiffFor(rev)
+                // Asked before the revisions are in: fetch them now, the dialog opens when they are.
+                if (!revisions && !row.orphan)
+                  fetchRevisions(clusterId, row.namespace, row.name)
+                    .then(setRevisions)
+                    .catch((e: unknown) => onToast(e instanceof Error ? e.message : String(e)))
+              },
               current: row.revision,
               // An older revision rolls back through Watson, a card to approve (M-03).
               rollback:
