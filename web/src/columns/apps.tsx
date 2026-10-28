@@ -7,7 +7,7 @@ import type { ColumnDef, Term } from '../lib/table'
 import { NameWithAppTools } from '../components/apps/AppMenu'
 import { Mono, NameCell, Tone } from './cells'
 
-/** A release on the Helm1 page: the release, and what the console keeps about it (HA-01). */
+/** A release on the Helm tab: the release, and what the console keeps about it (HA-01). */
 export interface AppRow extends ReleaseRow {
   app?: AppView
   /** A record without a release: its install failed (HA-08). */

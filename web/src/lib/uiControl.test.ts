@@ -79,7 +79,7 @@ describe('Sherlock’s UI actions are one list (P6U-04, P6U-12)', () => {
   // from its URL is declared, but open (the row whose pane is open, which
   // view_details opens) and the search boxes, which view_search sets.
   it('declares every filter a tab reads from its URL', () => {
-    const files: Record<string, string> = { alerts: 'AlertsTab', nodes: 'NodesTab', fleets: 'FleetsTab', namespaces: 'NamespacesTab', pods: 'PodsTab', helm: 'HelmTab', services: 'ServicesTab', networks: 'NetworksTab', access: 'AccessTab', policies: 'PoliciesTab' }
+    const files: Record<string, string> = { alerts: 'AlertsTab', nodes: 'NodesTab', fleets: 'FleetsTab', namespaces: 'NamespacesTab', pods: 'PodsTab', helm: 'apps/AppsTab', services: 'ServicesTab', networks: 'NetworksTab', access: 'AccessTab', policies: 'PoliciesTab' }
     for (const [tab, file] of Object.entries(files)) {
       const src = readFileSync(resolve(__dirname, `../components/${file}.tsx`), 'utf8')
       const read = new Set([...src.matchAll(/(?:\.get\(|listParam\(\w+, )'([a-z]+)'/g)].map((m) => m[1]!))

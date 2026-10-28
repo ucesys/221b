@@ -127,8 +127,14 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
     const away = (e: MouseEvent) => {
       if (menu.current && !menu.current.contains(e.target as Node) && !anchor?.contains(e.target as Node)) onClose()
     }
+    // A scroll that moves the button leaves the menu hanging in the air,
+    // so it closes; one that does not (the pane settling as the button
+    // takes focus) is nothing to it.
+    const at = anchor?.getBoundingClientRect()
     const scroll = (e: Event) => {
-      if (menu.current && !menu.current.contains(e.target as Node)) onClose()
+      if (!menu.current || menu.current.contains(e.target as Node)) return
+      const now = anchor?.getBoundingClientRect()
+      if (!at || !now || Math.abs(now.top - at.top) > 2 || Math.abs(now.left - at.left) > 2) onClose()
     }
     document.addEventListener('mousedown', away)
     window.addEventListener('scroll', scroll, true)

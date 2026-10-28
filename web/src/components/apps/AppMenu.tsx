@@ -40,7 +40,7 @@ export function appItems(r: AppRow, canChange: boolean): Item[] {
     ]
   }
   return [
-    { key: 'upgrade', label: 'Upgrade…', hint: r.app ? `from ${r.app.source.ref}` : undefined, off: off ?? (r.app ? undefined : 'set the source first') },
+    { key: 'upgrade', label: 'Upgrade/Rollback…', hint: r.app ? `from ${r.app.source.ref}` : undefined, off: off ?? (r.app ? undefined : 'set the source first') },
     { key: 'uninstall', label: 'Uninstall…', danger: true, sepBefore: true, off },
   ]
 }
@@ -53,7 +53,7 @@ function place(anchor: HTMLElement | null, width = 300): CSSProperties {
   return below >= 240 ? { top: r.bottom + 4, left, maxHeight: below } : { bottom: window.innerHeight - r.top + 4, left, maxHeight: r.top - 8 }
 }
 
-/** The Tools button of a release on the Helm1 page, with its menu. */
+/** The Tools button of a release on the Helm tab, with its menu. */
 export function AppToolsButton({ row, canChange, onPick, label = 'Tools' }: { row: AppRow; canChange: boolean; onPick: (a: AppAction) => void; label?: ReactNode }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const open = anchor !== null
@@ -90,8 +90,14 @@ function AppMenu({ row, canChange, anchor, onClose, onPick }: { row: AppRow; can
     const away = (e: MouseEvent) => {
       if (menu.current && !menu.current.contains(e.target as Node) && !anchor?.contains(e.target as Node)) onClose()
     }
+    // A scroll that moves the button leaves the menu hanging in the air,
+    // so it closes; one that does not (the pane settling as the button
+    // takes focus) is nothing to it.
+    const at = anchor?.getBoundingClientRect()
     const scroll = (e: Event) => {
-      if (menu.current && !menu.current.contains(e.target as Node)) onClose()
+      if (!menu.current || menu.current.contains(e.target as Node)) return
+      const now = anchor?.getBoundingClientRect()
+      if (!at || !now || Math.abs(now.top - at.top) > 2 || Math.abs(now.left - at.left) > 2) onClose()
     }
     document.addEventListener('mousedown', away)
     window.addEventListener('scroll', scroll, true)

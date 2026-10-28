@@ -14,7 +14,6 @@ import { Banners } from './components/Banners'
 import { ClusterEditor } from './components/ClusterEditor'
 import { ClusterPage } from './components/ClusterPage'
 import { FleetsTab } from './components/FleetsTab'
-import { HelmTab } from './components/HelmTab'
 import { AppsTab } from './components/apps/AppsTab'
 import { HomePage } from './components/HomePage'
 import { NamespacesTab } from './components/NamespacesTab'
@@ -145,7 +144,7 @@ function Shell() {
   // says why. One that is not there at all gets the same page's notice.
   const view = route.view === 'home' ? 'home' : route.view === 'admin' ? 'admin' : route.view === 'cluster' || (clustersLoaded && (!summary || summary.state === 'failed')) ? 'cluster' : 'tabs'
   // The Helm tab needs Secrets; with them off it is not offered.
-  const tab = (route.tab === 'helm' || route.tab === 'helm1') && live.cluster?.secrets === 'off' ? FIRST_TAB : route.tab
+  const tab = route.tab === 'helm' && live.cluster?.secrets === 'off' ? FIRST_TAB : route.tab
   const tabLabel = TABS.find((t) => t.id === tab)?.label ?? 'Alerts'
   const clusterName = summary?.name ?? live.cluster?.name ?? ''
 
@@ -369,8 +368,7 @@ function Shell() {
           {tab === 'pods' && <PodsTab {...common} />}
           {tab === 'namespaces' && <NamespacesTab {...common} />}
           {tab === 'services' && <ServicesTab {...common} />}
-          {tab === 'helm' && <HelmTab {...common} />}
-          {tab === 'helm1' && <AppsTab {...common} />}
+          {tab === 'helm' && <AppsTab {...common} />}
           {tab === 'access' && <AccessTab {...common} />}
           {tab === 'networks' && <NetworksTab {...common} />}
           {tab === 'storage' && <StorageTab {...common} />}

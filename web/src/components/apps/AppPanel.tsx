@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchAppRefs, fetchDiff, fetchDrift, fetchImages, fetchRevisions, sourceText, updateApp, type AppDiff, type AppDrift, type AppImage, type AppRefs, type AppSource, type AppView, type RefKind, type RevisionView } from '../../api/apps'
+import { fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, sourceText, updateApp, type AppDrift, type AppImage, type AppRefs, type AppSource, type AppView, type RefKind, type RevisionView } from '../../api/apps'
 import { useDetails } from '../../api/details'
 import type { ClusterInfo, ReleaseDetails } from '../../api/types'
 import type { WatsonItem } from '../../api/watson'
@@ -11,7 +11,8 @@ import { Card } from '../Drawer'
 import { CloseIcon } from '../Icons'
 import { ReleaseBody, SUBTABS, type ExtraTab } from '../ReleaseBody'
 import { AppToolsButton, type AppAction } from './AppMenu'
-import { DiffView } from './DiffView'
+import { DiffDialog } from './DiffDialog'
+import { RevisionActions } from './revisionActions'
 
 export const APP_TABS = ['overview', ...SUBTABS, 'images'] as const
 export type AppTab = (typeof APP_TABS)[number]
@@ -48,11 +49,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
   const [revisions, setRevisions] = useState<RevisionView[] | null>(null)
   const [images, setImages] = useState<{ revision: number; images: AppImage[] } | null>(null)
   const [imageRev, setImageRev] = useState<number | undefined>(undefined)
-  const [from, setFrom] = useState<number | undefined>(undefined)
-  const [to, setTo] = useState<number | 'source' | undefined>(undefined)
-  const [diffRef, setDiffRef] = useState<{ ref: string; kind: RefKind } | null>(null)
-  const [diff, setDiff] = useState<AppDiff | null>(null)
-  const [diffing, setDiffing] = useState(false)
+  const [diffFor, setDiffFor] = useState<number | null>(null)
   const [err, setErr] = useState('')
   const details = useDetails<ReleaseDetails>(row.orphan ? null : apiPath(`helm/${encodeURIComponent(row.namespace)}/${encodeURIComponent(row.name)}`))
   const d = details.data
@@ -86,13 +83,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
   useEffect(() => {
     if ((tab !== 'history' && tab !== 'images') || row.orphan) return
     fetchRevisions(clusterId, row.namespace, row.name)
-      .then((rs) => {
-        setRevisions(rs)
-        if (rs.length > 0) {
-          setTo((t) => t ?? rs[0]!.revision)
-          setFrom((f) => f ?? (rs.length > 1 ? rs[1]!.revision : rs[0]!.revision))
-        }
-      })
+      .then(setRevisions)
       .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
     if (tab === 'history' && app && !refs) {
       fetchAppRefs(clusterId, row.namespace, row.name)
@@ -108,16 +99,6 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
       .then(setImages)
       .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
   }, [tab, key, version, imageRev, clusterId, row.namespace, row.name, row.orphan])
-
-  const compare = () => {
-    if (!to) return
-    setDiffing(true)
-    setErr('')
-    fetchDiff(clusterId, row.namespace, row.name, { from, to, ref: to === 'source' ? diffRef?.ref : undefined, refKind: to === 'source' ? diffRef?.kind : undefined })
-      .then(setDiff)
-      .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
-      .finally(() => setDiffing(false))
-  }
 
   const commit = app?.commit ? app.commit.slice(0, 12) : ''
 
@@ -200,57 +181,6 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
           </div>
         </div>
       )}
-      <Card title="Compare revisions, or the deployed one with the source">
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
-          <span>From revision</span>
-          <label className="rk-field" style={{ width: 90 }}>
-            <select value={from ?? ''} onChange={(e) => setFrom(Number(e.target.value))} aria-label="From revision" data-testid="app-diff-from">
-              {(revisions ?? []).map((r) => (
-                <option key={r.revision} value={r.revision}>
-                  {r.revision}
-                </option>
-              ))}
-            </select>
-          </label>
-          <span>to</span>
-          <label className="rk-field" style={{ width: 170 }}>
-            <select value={to === undefined ? '' : String(to)} onChange={(e) => setTo(e.target.value === 'source' ? 'source' : Number(e.target.value))} aria-label="To revision" data-testid="app-diff-to">
-              {(revisions ?? []).map((r) => (
-                <option key={r.revision} value={r.revision}>
-                  revision {r.revision}
-                </option>
-              ))}
-              {app && <option value="source">the source (git)</option>}
-            </select>
-          </label>
-          {to === 'source' && app && (
-            <label className="rk-field" style={{ minWidth: 200 }}>
-              <select value={diffRef ? `${diffRef.kind}:${diffRef.ref}` : ''} onChange={(e) => (e.target.value ? setDiffRef({ kind: e.target.value.split(':')[0] as RefKind, ref: e.target.value.split(':').slice(1).join(':') }) : setDiffRef(null))} aria-label="At branch or tag" data-testid="app-diff-ref">
-                <option value="">at {app.source.ref} (deployed ref)</option>
-                {refs?.branches.map((b) => (
-                  <option key={'b' + b} value={'branch:' + b}>
-                    branch {b}
-                  </option>
-                ))}
-                {refs?.tags.map((t) => (
-                  <option key={'t' + t} value={'tag:' + t}>
-                    tag {t}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          <button className="rk-btn" data-on="true" onClick={compare} disabled={diffing || !to} data-testid="app-compare">
-            {diffing ? 'Comparing…' : 'Compare'}
-          </button>
-        </div>
-        {err && (
-          <p className="rk-t" data-tone="err" role="alert" style={{ margin: 0, fontSize: 12.5 }}>
-            {err}
-          </p>
-        )}
-        {diff && <DiffView diff={diff} />}
-      </Card>
     </>
   )
 
@@ -276,7 +206,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
           )}
           <span style={{ flex: '1 1 auto' }} />
           <AppToolsButton row={row} canChange={canChange} onPick={onAction} />
-          <a className="rk-icon-btn" href={href('helm1')} aria-label="Close the release" title="Close" data-testid="app-close">
+          <a className="rk-icon-btn" href={href('helm')} aria-label="Close the release" title="Close" data-testid="app-close">
             <CloseIcon />
           </a>
         </div>
@@ -352,6 +282,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
             {app && <ValuesEditor clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} />}
           </>
         ) : (
+          <RevisionActions.Provider value={{ diff: (rev) => setDiffFor(rev) }}>
           <ReleaseBody
             cluster={cluster}
             now={now}
@@ -369,7 +300,9 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
               history: historyAbove,
             }}
           />
+          </RevisionActions.Provider>
         )}
+        {diffFor !== null && revisions && <DiffDialog clusterId={clusterId} namespace={row.namespace} name={row.name} revisions={revisions} revision={diffFor} app={app} refs={refs} onClose={() => setDiffFor(null)} />}
       </section>
     </main>
   )

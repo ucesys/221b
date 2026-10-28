@@ -61,13 +61,6 @@ export const TAB_SPECS: Record<Tab, TabSpec> = {
   services: { search: 'q', filters: { ns: { type: 'text' }, type: { type: 'enum', values: ['all', 'ClusterIP', 'Headless', 'NodePort', 'LoadBalancer', 'notReady'], none: 'all' } } },
   namespaces: { search: 'q', filters: { kinds: { type: 'list' } }, path: [{ name: 'namespace', type: 'text' }] },
   helm: {
-    filters: { tab: { type: 'enum', values: ['pods', 'workloads', 'storage', 'network', 'other', 'values', 'notes', 'history'], none: 'pods' } },
-    path: [
-      { name: 'namespace', type: 'text' },
-      { name: 'release', type: 'text' },
-    ],
-  },
-  helm1: {
     search: 'q',
     filters: { tab: { type: 'enum', values: ['overview', 'pods', 'workloads', 'storage', 'network', 'roles', 'other', 'values', 'notes', 'history', 'images'], none: 'overview' } },
     path: [

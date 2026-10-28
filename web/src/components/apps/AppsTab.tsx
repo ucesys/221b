@@ -48,7 +48,7 @@ function orphanRow(a: AppView): AppRow {
 }
 
 /**
- * The Helm1 page (Phase 10, HA-01): every release in one table with its
+ * The Helm tab (Phase 10, HA-01): every release in one table with its
  * source and drift, a release's panel beside it, and the tools that
  * install, upgrade, switch, change values and uninstall through Watson.
  */
@@ -125,10 +125,10 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
         setDialog({ mode: a, row })
         break
       case 'source':
-        navigate(href('helm1', [row.namespace, row.name]))
+        navigate(href('helm', [row.namespace, row.name]))
         break
       case 'values':
-        navigate(href('helm1', [row.namespace, row.name], { tab: 'values' }))
+        navigate(href('helm', [row.namespace, row.name], { tab: 'values' }))
         break
       case 'install':
       case 'deploy':
@@ -168,7 +168,7 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
   // With a release open, the table folds into the Helm tab's side list.
   const lq = listQuery.trim().toLowerCase()
   const listed = shown.filter((r) => !lq || r.name.includes(lq) || r.chart.includes(lq) || r.namespace.includes(lq) || (r.app ? r.app.source.repo.includes(lq) : false))
-  const item = (r: AppRow) => releaseItem(r, current?.key === r.key, (x) => href('helm1', [x.namespace, x.name], { tab: tab === 'overview' ? undefined : tab }), now, fmtAge)
+  const item = (r: AppRow) => releaseItem(r, current?.key === r.key, (x) => href('helm', [x.namespace, x.name], { tab: tab === 'overview' ? undefined : tab }), now, fmtAge)
   const groups: SideGroup[] = [
     { title: 'Applications', items: listed.filter((r) => r.group === 'apps').map(item) },
     { title: 'Cluster add-ons', items: listed.filter((r) => r.group === 'addons').map(item) },
@@ -246,7 +246,7 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
             selected={null}
             onOpen={(k) => {
               const r = rows.find((x) => x.key === k)
-              if (r) navigate(href('helm1', [r.namespace, r.name]))
+              if (r) navigate(href('helm', [r.namespace, r.name]))
             }}
             now={now}
             empty={loaded ? 'No Helm release here yet. New application installs one from a git repository.' : 'Loading…'}
@@ -301,7 +301,7 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
             forgetApp(route.cluster, row.namespace, row.name).then(
               () => {
                 onToast(`The console no longer keeps a source for ${row.name}.`)
-                if (row.orphan) navigate(href('helm1'))
+                if (row.orphan) navigate(href('helm'))
                 setVersion((v) => v + 1)
               },
               (e: unknown) => onToast(e instanceof Error ? e.message : String(e)),

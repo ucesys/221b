@@ -1,4 +1,4 @@
-// The Helm1 page (Phase 10, HA-01 to HA-19): every release in one table
+// The Helm tab (Phase 10, HA-01 to HA-19): every release in one table
 // with its source and drift, a release's panel with its history, diffs and
 // images, the tools an Admin gets and a Viewer does not, and on the kind
 // cluster an install from a public git repository through Watson.
@@ -12,7 +12,7 @@ const SHERLOCK_ON = { clusters: { local: true }, model: 'claude-opus-5-5', daily
 // The tools need Watson, which runs where Sherlock is on.
 test.beforeAll(async ({ browser }) => {
   const page = await browser.newPage()
-  await page.goto('/#/helm1', { waitUntil: 'domcontentloaded' })
+  await page.goto('/#/helm', { waitUntil: 'domcontentloaded' })
   const on = await page.request.put('/api/v1/sherlock/config', { data: SHERLOCK_ON, headers: SAME })
   expect(on.status(), await on.text()).toBe(200)
   await page.close()
@@ -20,7 +20,7 @@ test.beforeAll(async ({ browser }) => {
 
 test.afterAll(async ({ browser }) => {
   const page = await browser.newPage()
-  await page.goto('/#/helm1', { waitUntil: 'domcontentloaded' })
+  await page.goto('/#/helm', { waitUntil: 'domcontentloaded' })
   await page.request.put('/api/v1/sherlock/config', { data: { ...SHERLOCK_ON, clusters: {} }, headers: SAME })
   await page.close()
 })
@@ -28,7 +28,7 @@ test.afterAll(async ({ browser }) => {
 test('lists every release with its chart, revision, status, drift and source (HA-01)', async ({ page, request }) => {
   const releases = releaseRows(await snapshot(request, ['helm']))
   expect(releases.length).toBeGreaterThan(0)
-  await page.goto('/#/helm1')
+  await page.goto('/#/helm')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   const table = page.getByTestId('apps-table')
   await expect(table.locator('[data-release]')).toHaveCount(releases.length)
@@ -48,10 +48,10 @@ test('lists every release with its chart, revision, status, drift and source (HA
 test('a release opens beside the table: overview, history with a diff of two revisions, and images (HA-14 to HA-17)', async ({ page, request }) => {
   const releases = releaseRows(await snapshot(request, ['helm']))
   const multi = releases.find((r) => r.revisions > 1) ?? releases[0]!
-  await page.goto('/#/helm1')
+  await page.goto('/#/helm')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   await page.getByTestId('apps-table').locator(`[data-release="${multi.key}"]`).click()
-  await expect(page).toHaveURL(new RegExp(`#/helm1/${multi.namespace}/${multi.name}`))
+  await expect(page).toHaveURL(new RegExp(`#/helm/${multi.namespace}/${multi.name}`))
   const panel = page.getByTestId('app-panel')
   await expect(panel.getByTestId('app-title')).toContainText(multi.name)
   await expect(panel.getByTestId('app-source-line')).toContainText('keeps no source')
@@ -67,10 +67,16 @@ test('a release opens beside the table: overview, history with a diff of two rev
   await panel.locator('[data-subtab="history"]').click()
   await expect(panel.locator('[data-revision]')).toHaveCount(multi.revisions)
   if (multi.revisions > 1) {
-    await panel.getByTestId('app-diff-from').selectOption('1')
-    await panel.getByTestId('app-diff-to').selectOption(String(multi.revisions))
-    await panel.getByTestId('app-compare').click()
-    await expect(panel.getByTestId('app-diff').or(panel.getByTestId('app-diff-same'))).toBeVisible({ timeout: 15_000 })
+    // A revision's diff icon opens the diff against the revision before it, in a dialog large enough to read.
+    await panel.getByTestId(`revision-diff-${multi.revisions}`).click()
+    const dlg = page.getByTestId('diff-dialog')
+    await expect(dlg.getByTestId('diff-from')).toHaveValue(String(multi.revisions - 1))
+    await expect(dlg.getByTestId('diff-to')).toHaveValue(String(multi.revisions))
+    await expect(dlg.getByTestId('app-diff').or(dlg.getByTestId('app-diff-same'))).toBeVisible({ timeout: 15_000 })
+    const box = (await dlg.boundingBox())!
+    expect(box.height).toBeGreaterThan(500)
+    await page.keyboard.press('Escape')
+    await expect(dlg).toHaveCount(0)
   }
   const images = await request.get(`/api/v1/apps/${multi.namespace}/${multi.name}/images`)
   expect(images.status()).toBe(200)
@@ -81,7 +87,7 @@ test('a release opens beside the table: overview, history with a diff of two rev
 
   // Close returns to the full table.
   await panel.getByTestId('app-close').click()
-  await expect(page).toHaveURL(/#\/helm1$/)
+  await expect(page).toHaveURL(/#\/helm$/)
   await expect(page.getByTestId('apps-table').getByRole('columnheader', { name: /^Source/ })).toBeVisible()
 })
 
@@ -90,7 +96,7 @@ test('a source is set in place, refused when it is not https, and forgotten; a V
   const r = releases[0]!
   // A record a failed run left behind would get in the way.
   await request.delete(`/api/v1/apps/${r.namespace}/${r.name}?record=1`, { headers: SAME })
-  await page.goto(`/#/helm1/${r.namespace}/${r.name}`)
+  await page.goto(`/#/helm/${r.namespace}/${r.name}`)
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   const panel = page.getByTestId('app-panel')
   await expect(panel.getByTestId('app-source-state')).toHaveText('Not set')
@@ -120,7 +126,7 @@ test('a source is set in place, refused when it is not https, and forgotten; a V
     if (me.mode !== 'none') {
       const viewer = await signInAs(browser, E2E_VIEWER)
       try {
-        await viewer.goto('/#/helm1')
+        await viewer.goto('/#/helm')
         await expect(viewer.getByTestId('cluster-state')).toHaveText('Connected')
         await expect(viewer.getByTestId('apps-new')).toHaveCount(0)
         await expect(viewer.locator('[data-testid^="app-tools-"]')).toHaveCount(0)
@@ -136,10 +142,79 @@ test('a source is set in place, refused when it is not https, and forgotten; a V
   }
 })
 
+test('every dialog and drawer closes with Cancel, its cross and Escape', async ({ page, request }) => {
+  const releases = releaseRows(await snapshot(request, ['helm']))
+  const r = releases[0]!
+  await request.delete(`/api/v1/apps/${r.namespace}/${r.name}?record=1`, { headers: SAME })
+  await page.goto('/#/helm')
+  await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  // New application: Cancel, then Escape.
+  await page.getByTestId('apps-new').click()
+  const dlg = page.getByTestId('app-dialog')
+  await expect(dlg).toBeVisible()
+  await dlg.getByRole('button', { name: 'Cancel' }).click()
+  await expect(dlg).toHaveCount(0)
+  await page.getByTestId('apps-new').click()
+  await expect(dlg).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(dlg).toHaveCount(0)
+  // A release's panel: the Upgrade/Rollback dialog and the Uninstall confirmation, from the wrench.
+  await page.getByTestId('apps-table').locator(`[data-release="${r.key}"]`).click()
+  const panel = page.getByTestId('app-panel')
+  await panel.getByTestId('app-src-repo').fill('github.com/ucesys/221b')
+  await panel.getByTestId('app-src-ref').fill('main')
+  await panel.getByTestId('app-src-ref').blur()
+  await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 10_000 })
+  try {
+    await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()
+    await page.getByTestId('app-tool-upgrade').click()
+    await expect(dlg).toHaveAttribute('data-mode', 'upgrade')
+    await expect(dlg).toContainText('Upgrade/Rollback from the source')
+    await dlg.getByRole('button', { name: 'Cancel' }).click()
+    await expect(dlg).toHaveCount(0)
+    await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()
+    await page.getByTestId('app-tool-upgrade').click()
+    await expect(dlg).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(dlg).toHaveCount(0)
+    await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()
+    await page.getByTestId('app-tool-uninstall').click()
+    const confirm = page.getByTestId('confirm')
+    await expect(confirm).toContainText('Uninstall release')
+    await confirm.getByRole('button', { name: 'Cancel' }).click()
+    await expect(confirm).toHaveCount(0)
+  } finally {
+    await request.delete(`/api/v1/apps/${r.namespace}/${r.name}?record=1`, { headers: SAME })
+  }
+  // The panel's cross.
+  await panel.getByTestId('app-close').click()
+  await expect(panel).toHaveCount(0)
+  await expect(page).toHaveURL(/#\/helm$/)
+  // New Secret and New namespace, on the Namespaces tab.
+  await page.goto('/#/namespaces/default?kinds=Secret')
+  await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  await page.getByTestId('secret-new').click()
+  const secret = page.getByTestId('secret-dialog')
+  await expect(secret).toBeVisible()
+  await secret.getByRole('button', { name: 'Cancel' }).click()
+  await expect(secret).toHaveCount(0)
+  await page.getByTestId('secret-new').click()
+  await page.keyboard.press('Escape')
+  await expect(secret).toHaveCount(0)
+  await page.getByTestId('namespace-new').click()
+  const ns = page.getByTestId('namespace-dialog')
+  await expect(ns).toBeVisible()
+  await ns.getByRole('button', { name: 'Cancel' }).click()
+  await expect(ns).toHaveCount(0)
+  await page.getByTestId('namespace-new').click()
+  await page.keyboard.press('Escape')
+  await expect(ns).toHaveCount(0)
+})
+
 test('installs a chart from a public git repository through Watson, checks its drift and images, and uninstalls it (HA-04 to HA-09, HA-15)', async ({ page, request }) => {
   test.skip(!inKind, 'needs a real cluster and the internet')
   test.setTimeout(240_000)
-  await page.goto('/#/helm1')
+  await page.goto('/#/helm')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   await page.request.put('/api/v1/watson/config', { data: { twoPerson: false }, headers: SAME })
   const ns = 'e2e-apps'

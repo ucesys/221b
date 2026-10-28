@@ -1,6 +1,6 @@
 # Helm applications and Secret editing: requirements
 
-Phase 10, asked for on October 27, 2026: a Helm page that lists every release in one table and deploys charts from a git repository, and Secret editing for Admins and SuperAdmins. The page is shown as **Helm1** beside the Helm tab until it has everything the Helm tab offers; then the Helm tab goes. The requirement rows are in [requirements.md](requirements.md#phase-10-helm-applications-and-secret-editing) (HA-01 to HA-20, SE-01 to SE-06); the decisions are ADR-68 and ADR-69 in [architecture.md](architecture.md).
+Phase 10, asked for on October 27, 2026: a Helm page that lists every release in one table and deploys charts from a git repository, and Secret editing for Admins and SuperAdmins. The page was built as **Helm1** beside the old Helm tab and replaced it on October 28, 2026, keeping the tab id and the addresses. The requirement rows are in [requirements.md](requirements.md#phase-10-helm-applications-and-secret-editing) (HA-01 to HA-20, SE-01 to SE-06); the decisions are ADR-68 and ADR-69 in [architecture.md](architecture.md).
 
 ## Scope
 

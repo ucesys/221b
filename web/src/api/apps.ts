@@ -1,5 +1,5 @@
 // Helm applications (Phase 10, HA-01 to HA-20): what the console keeps
-// about a release installed from git, and what the Helm1 page reads about
+// about a release installed from git, and what the Helm tab reads about
 // any release. Changes come back as the Watson card that runs them.
 
 import { apiPath } from '../lib/router'

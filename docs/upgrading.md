@@ -51,7 +51,7 @@ The objects that are not the chart's (connections, accounts, Sherlock's key, ses
 ## 0.10.0 (unreleased)
 
 - **`toolbox.nodeShell.namespace`** is empty by default and renders as `<release namespace>-privileged` (`221b-privileged` for a console in `221b`): the upgrade makes the new namespace and removes `221b-toolbox` once no shell runs there; set the value to `221b-toolbox` to keep the old name. A second console installed in another namespace now gets a namespace of its own instead of refusing to install.
-- **Phase 10:** the Helm1 tab (applications from git, `apps/…` endpoints, records in Secrets `<fullname>-app-<id>` of the console's namespace) and Secret editing with the new `secrets.reveal` value (off by default).
+- **Phase 10:** the Helm tab rebuilt around applications from git ( `apps/…` endpoints, records in Secrets `<fullname>-app-<id>` of the console's namespace) and Secret editing with the new `secrets.reveal` value (off by default).
 
 ## 0.9.1
 

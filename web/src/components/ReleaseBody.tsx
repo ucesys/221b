@@ -55,15 +55,15 @@ interface Props {
   /** The open section; the page keeps it in ?tab=. */
   sub: string
   onSub: (id: string) => void
-  /** Tabs the page adds before and after the release's own (Helm1: Overview, Images). */
+  /** Tabs the page adds before and after the release's own (Overview, Images). */
   before?: ExtraTab[]
   after?: ExtraTab[]
-  /** What the page shows above a section's own content (Helm1: the values file above the deployed values). */
+  /** What the page shows above a section's own content (the values file above the deployed values). */
   above?: Partial<Record<SubTab, ReactNode>>
 }
 
 /**
- * What a release shows, on the Helm tab and on Helm1 (P2-06, HA-14): its
+ * What a release shows, on the Helm tab (P2-06, HA-14): its
  * failed and not-ready callouts, the CPU, memory, pod and storage cards,
  * and its sections: pods, the objects by kind, values, notes and history,
  * each object opening its drawer in place (?open=Kind/namespace/name).
@@ -317,7 +317,7 @@ export function StatCard({ title, head, big, unit, pctUse, tone = 'ok', lines }:
   )
 }
 
-/** The side list's items for releases, shared by the Helm and Helm1 tabs. */
+/** The side list's items for releases, for the Helm tab's side list. */
 export function releaseItem(r: ReleaseRow, current: boolean, hrefOf: (r: ReleaseRow) => string, now: number, fmtAge: (iso: string | undefined, now: number) => string) {
   return {
     key: r.key,

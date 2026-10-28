@@ -25,7 +25,7 @@ const TITLES: Record<DialogMode, string> = {
   create: 'New application from a git repository',
   source: 'The source of the release',
   switch: 'Switch to another branch or tag',
-  upgrade: 'Upgrade from the source',
+  upgrade: 'Upgrade/Rollback from the source',
   install: 'Install from the source',
   values: 'Values and parameters',
 }
@@ -113,9 +113,13 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const first = useRef<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null>(null)
+  const box = useRef<HTMLDivElement>(null)
 
+  // Focus starts in the dialog, so Escape and Tab are its own: the first
+  // field where there is one, else the dialog itself (an upgrade's refs
+  // are still loading).
   useEffect(() => {
-    first.current?.focus()
+    ;(first.current ?? box.current)?.focus()
   }, [])
 
   // Switch and upgrade list the repository's refs at once; the others on request.
@@ -200,7 +204,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
     )
   }
 
-  const primary = { create: 'Install', source: 'Save', switch: 'Switch and upgrade', upgrade: row?.orphan ? 'Install' : 'Upgrade', install: 'Install', values: 'Save' }[mode]
+  const primary = { create: 'Install', source: 'Save', switch: 'Switch and upgrade', upgrade: row?.orphan ? 'Install' : 'Deploy this branch or tag', install: 'Install', values: 'Save' }[mode]
   // Save keeps the change for the next deploy; the second button deploys it at once.
   const alsoDeploy = mode === 'source' || mode === 'values' ? (row?.orphan || !app ? 'Save and install' : 'Save and upgrade') : ''
   const canSubmit = !busy && (mode === 'create' ? namespace.trim() !== '' && name.trim() !== '' && repo.trim() !== '' && ref.trim() !== '' : mode === 'source' ? repo.trim() !== '' && ref.trim() !== '' : mode === 'switch' ? ref.trim() !== '' : true)
@@ -210,6 +214,8 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
     <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, whiteSpace: 'normal' }} onClick={stop} onMouseDown={stop} onKeyDown={stop}>
       <button aria-label="Cancel" tabIndex={-1} onClick={onClose} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
       <div
+        ref={box}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={mode === 'upgrade' && row?.orphan ? TITLES.install : TITLES[mode]}
@@ -282,7 +288,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
             </>
           )}
           {mode !== 'values' && (
-            <Field label={mode === 'upgrade' ? 'Branch or tag (the deployed one unless changed)' : 'Branch or tag'} wide hint={loadingRefs ? 'Reading the repository…' : refs ? `${refs.branches.length} branches, ${refs.tags.length} tags` : mode === 'create' || mode === 'source' ? 'List branches and tags above to choose from them' : undefined}>
+            <Field label={mode === 'upgrade' ? 'Branch or tag to deploy: the current one again, a newer one (upgrade) or an older one (rollback)' : 'Branch or tag'} wide hint={loadingRefs ? 'Reading the repository…' : refs ? `${refs.branches.length} branches, ${refs.tags.length} tags` : mode === 'create' || mode === 'source' ? 'List branches and tags above to choose from them' : undefined}>
               <RefPicker refs={refs} value={ref} kind={refKind} onChange={(r, k) => (setRef(r), setRefKind(k))} id="app" />
             </Field>
           )}
