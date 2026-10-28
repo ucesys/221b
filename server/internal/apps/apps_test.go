@@ -252,10 +252,27 @@ metadata:
   name: unknown-kind
 stringData:
   pw: x
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: texty
+  annotations:
+    note: |
+      two lines,
+      ending with a newline
 `
+	// A text value that ends the manifest keeps its closing newline.
+	dyn = dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{{Group: "apps", Version: "v1", Resource: "deployments"}: "DeploymentList"}, live, &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": "texty", "namespace": "web", "annotations": map[string]any{"note": "two lines,\nending with a newline\n"}},
+	}})
 	d := apps.CheckDrift(context.Background(), dyn, mapper, manifest, "web", time.Now())
-	if d.Changed != 1 || d.Missing != 1 || d.Unknown != 1 || d.Same != 0 || d.State() != "drifted" {
+	if d.Changed != 1 || d.Missing != 1 || d.Unknown != 1 || d.Same != 1 || d.State() != "drifted" {
 		t.Fatalf("%+v", d)
+	}
+	if d.Objects[3].State != apps.DriftSame {
+		t.Errorf("the closing newline of a block scalar: %+v", d.Objects[3])
 	}
 	if o := d.Objects[0]; o.State != apps.DriftChanged || strings.Join(o.Fields, ",") != "spec.replicas" {
 		t.Errorf("changed object %+v", o)

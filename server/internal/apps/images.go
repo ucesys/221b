@@ -103,12 +103,15 @@ func parseImage(ref string) Image {
 	return im
 }
 
-// splitDocs splits a manifest into its YAML documents.
+// splitDocs splits a manifest into its YAML documents. Only the start of
+// a document is trimmed: its end keeps the newline that closes a block
+// scalar, or a ConfigMap's last text value would lose it and compare as
+// changed.
 func splitDocs(manifest string) []string {
 	var out []string
 	for _, doc := range strings.Split("\n"+manifest, "\n---") {
-		doc = strings.TrimSpace(doc)
-		if doc == "" || strings.HasPrefix(doc, "#") && !strings.Contains(doc, "\n") {
+		doc = strings.TrimLeft(doc, " \t\r\n")
+		if t := strings.TrimSpace(doc); t == "" || strings.HasPrefix(t, "#") && !strings.Contains(t, "\n") {
 			continue
 		}
 		out = append(out, doc)
