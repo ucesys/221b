@@ -56,6 +56,8 @@ export function yamlErrors(text: string): { from: number; to: number; message: s
  * spaces, and the parser's errors underlined and named. The text node
  * carries the test id and the label, as a textarea would.
  */
+const nonce = typeof document === 'undefined' ? '' : (document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')?.content ?? '')
+
 export function YamlEditor({ value, onChange, onBlur, readOnly = false, label, testId, minHeight = 200, placeholder }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
@@ -85,6 +87,8 @@ export function YamlEditor({ value, onChange, onBlur, readOnly = false, label, t
           keymap.of([indentWithTab]),
           linter((e) => yamlErrors(e.state.doc.toString()).map((d): Diagnostic => ({ ...d, severity: 'error' })), { delay: 300 }),
           EditorView.contentAttributes.of({ 'data-testid': testId, 'aria-label': label, 'aria-multiline': 'true' }),
+          // The page's CSP allows the editor's style sheets by this nonce (the server puts it in the page).
+          nonce ? EditorView.cspNonce.of(nonce) : [],
           placeholder ? cmPlaceholder(placeholder) : [],
           ro.current.of([EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)]),
           EditorView.updateListener.of((u) => {

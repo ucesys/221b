@@ -14,7 +14,7 @@ What changed in each release of 221B, for people who use it and people who insta
 - The release wrench's **Upgrade/Rollback…** is **Upgrade…**; each revision in History has a wrench with **Diff…** and **Roll back to this revision…**, the latter a `helm rollback` card for Watson to approve (M-03).
 - A pod, a node, a volume claim or a volume with an error or a warning offers **Troubleshoot…** first in its wrench menu: Sherlock is asked for a troubleshooting report (M-04).
 - A release whose deployed revision is not the source's last deploy (a rollback, a `helm upgrade` by hand) is marked **behind the source** in the header, the table and a callout (M-05).
-- The values file is a YAML editor: line numbers, highlighting, Tab indents, and errors underlined and named; values that do not parse are not saved (M-06).
+- The values file is a YAML editor: line numbers, highlighting, Tab indents, and errors underlined and named; values that do not parse are not saved (M-06). The page carries a per-load nonce that the Content-Security-Policy's `style-src` allows, for the editor's style sheets; the policy stays without `unsafe-inline`.
 - The new-application form looks the repository over as soon as its URL is typed: the chart path, the branch and the README's `helm install` example (name, namespace, parameters, values file) fill what is empty (M-07).
 
 ## 0.10.0 (2026-10-28)
