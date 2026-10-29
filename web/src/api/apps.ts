@@ -60,6 +60,32 @@ export interface AppView extends AppRecord {
   driftState?: 'in sync' | 'drifted' | 'unknown'
 }
 
+/** A chart found in a repository, and what its README's install example says (M-07). */
+export interface ChartCandidate {
+  path: string
+  name: string
+  version: string
+  appVersion?: string
+  description?: string
+}
+export interface ReadmeHints {
+  file: string
+  chart?: string
+  name?: string
+  namespace?: string
+  createNamespace?: boolean
+  params?: string[]
+  valuesFile?: string
+  values?: string
+}
+export interface RepoInspection {
+  charts: ChartCandidate[]
+  readme?: ReadmeHints
+  ref: string
+  refKind: RefKind
+  commit: string
+}
+
 export interface RepoRefs {
   default?: string
   branches: string[]
@@ -152,6 +178,9 @@ export const fetchApps = (cluster: string) => call<AppView[]>('GET', apiPath('ap
 export const fetchApp = (cluster: string, ns: string, name: string) => call<AppView>('GET', app(cluster, ns, name))
 export const fetchDrift = (cluster: string, ns: string, name: string, refresh = false) => call<AppDrift>('GET', app(cluster, ns, name, '/drift') + (refresh ? '?refresh=1' : ''))
 export const fetchAppRefs = (cluster: string, ns: string, name: string) => call<AppRefs>('GET', app(cluster, ns, name, '/refs'))
+/** Looks over a repository for the new-application form: its charts and the README's install example (M-07). */
+export const inspectRepo = (cluster: string, repo: string, ref: string, refKind: RefKind, token?: string) => call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { repo, ...(ref ? { ref, refKind } : {}), ...(token ? { token } : {}) })
+
 export const fetchRepoRefs = (cluster: string, repo: string, token = '') => call<RepoRefs>('POST', apiPath('apps/refs', cluster), token ? { repo, token } : { repo })
 export const fetchRevisions = (cluster: string, ns: string, name: string) => call<RevisionView[]>('GET', app(cluster, ns, name, '/revisions'))
 export const fetchImages = (cluster: string, ns: string, name: string, revision?: number) =>

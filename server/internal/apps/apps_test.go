@@ -104,6 +104,8 @@ spec:
 	}
 	write("charts/web/Chart.yaml", "apiVersion: v2\nname: web\nversion: 1.1.0\nappVersion: \"1.26\"\n")
 	write("charts/web/values.yaml", "replicas: 2\nimage: nginx:1.26\n")
+	write("README.md", "# web\n\nInstall it:\n\n```sh\nhelm install shop ./charts/web \\\n  --namespace web --create-namespace \\\n  --set image=nginx:1.26,replicas=2 -f values-prod.yaml\n```\n")
+	write("values-prod.yaml", "replicas: 3\n")
 	commit("nginx 1.26, two replicas")
 	head, _ = r.Head()
 	if _, err := r.CreateTag("v1.1.0", head.Hash(), nil); err != nil {
@@ -293,5 +295,32 @@ metadata:
 	same := apps.CheckDrift(context.Background(), dyn, mapper, strings.Replace(manifest, "replicas: 1", "replicas: 5", 1), "web", time.Now())
 	if same.Objects[0].State != apps.DriftSame {
 		t.Errorf("%+v", same.Objects[0])
+	}
+}
+
+func TestInspectFindsTheChartAndTheReadmeHints(t *testing.T) {
+	repo := chartRepo(t)
+	co, err := apps.Fetch(context.Background(), apps.Source{Repo: repo, Ref: "v1.1.0", RefKind: apps.RefTag}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := apps.Inspect(co)
+	if len(got.Charts) != 1 || got.Charts[0].Path != "charts/web" || got.Charts[0].Name != "web" || got.Charts[0].Version != "1.1.0" {
+		t.Fatalf("charts %+v", got.Charts)
+	}
+	h := got.Readme
+	if h == nil || h.File != "README.md" || h.Chart != "charts/web" || h.Name != "shop" || h.Namespace != "web" || !h.CreateNamespace {
+		t.Fatalf("hints %+v", h)
+	}
+	if strings.Join(h.Params, " ") != "image=nginx:1.26 replicas=2" || h.ValuesFile != "values-prod.yaml" || h.Values != "replicas: 3\n" {
+		t.Errorf("params %v values file %q values %q", h.Params, h.ValuesFile, h.Values)
+	}
+	// The first commit's README has no install line: no hints, the chart still found.
+	one, err := apps.Fetch(context.Background(), apps.Source{Repo: repo, Ref: "v1.0.0", RefKind: apps.RefTag}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := apps.Inspect(one); got.Readme != nil || len(got.Charts) != 1 {
+		t.Errorf("v1.0.0: %+v", got)
 	}
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { createApp, fetchAppRefs, fetchRepoRefs, isCard, sourceText, updateApp, upgradeApp, type AppInput, type AppSource, type AppView, type RefKind, type RepoRefs } from '../../api/apps'
+import { createApp, fetchAppRefs, fetchRepoRefs, inspectRepo, isCard, sourceText, updateApp, upgradeApp, type AppInput, type AppSource, type AppView, type RefKind, type RepoInspection, type RepoRefs } from '../../api/apps'
+import { YamlEditor } from '../YamlEditor'
 import type { WatsonItem } from '../../api/watson'
 import type { AppRow } from '../../columns/apps'
 import { trapTab } from '../../lib/focus'
@@ -112,6 +113,9 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const [loadingRefs, setLoadingRefs] = useState(() => (mode === 'switch' || mode === 'upgrade') && !!app)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [yamlError, setYamlError] = useState('')
+  // What the repository offered the form (M-07): looked up once the URL is typed.
+  const [inspected, setInspected] = useState<{ repo: string; state: 'busy' | 'done' | 'error'; data?: RepoInspection; message?: string } | null>(null)
   const first = useRef<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null>(null)
   const box = useRef<HTMLDivElement>(null)
 
@@ -132,6 +136,32 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Looks over the repository and fills what is still empty: the chart's
+  // path, the branch, and what the README's install example says (M-07).
+  const inspect = () => {
+    const url = repo.trim()
+    if (mode !== 'create' || !url || (inspected?.repo === url && inspected.state !== 'error')) return
+    setInspected({ repo: url, state: 'busy' })
+    inspectRepo(cluster, url, ref.trim(), refKind, token || undefined)
+      .then((d) => {
+        setInspected({ repo: url, state: 'done', data: d })
+        const chart = d.charts[0]
+        if (!path.trim() && chart) setPath(chart.path)
+        if (!ref.trim()) {
+          setRef(d.ref)
+          setRefKind(d.refKind)
+        }
+        const h = d.readme
+        if (!h) return
+        if (!name.trim() && h.name) setName(h.name)
+        if (!namespace.trim() && h.namespace) setNamespace(h.namespace)
+        if (!values.trim() && h.values) setValues(h.values)
+        if (!params.trim() && h.params?.length) setParams(h.params.join('\n'))
+        if (h.createNamespace) setCreateNs(true)
+      })
+      .catch((e: unknown) => setInspected({ repo: url, state: 'error', message: e instanceof Error ? e.message : String(e) }))
+  }
 
   const loadRefs = () => {
     setError('')
@@ -207,7 +237,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const primary = { create: 'Install', source: 'Save', switch: 'Switch and upgrade', upgrade: row?.orphan ? 'Install' : 'Deploy this branch or tag', install: 'Install', values: 'Save' }[mode]
   // Save keeps the change for the next deploy; the second button deploys it at once.
   const alsoDeploy = mode === 'source' || mode === 'values' ? (row?.orphan || !app ? 'Save and install' : 'Save and upgrade') : ''
-  const canSubmit = !busy && (mode === 'create' ? namespace.trim() !== '' && name.trim() !== '' && repo.trim() !== '' && ref.trim() !== '' : mode === 'source' ? repo.trim() !== '' && ref.trim() !== '' : mode === 'switch' ? ref.trim() !== '' : true)
+  const canSubmit = !busy && !yamlError && (mode === 'create' ? namespace.trim() !== '' && name.trim() !== '' && repo.trim() !== '' && ref.trim() !== '' : mode === 'source' ? repo.trim() !== '' && ref.trim() !== '' : mode === 'switch' ? ref.trim() !== '' : true)
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation()
 
   return createPortal(
@@ -263,12 +293,42 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
               <Field label="Repository" hint="An https:// git URL; GitHub, GitLab and Gitea work" wide>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <label className="rk-field" style={{ flex: '1 1 320px' }}>
-                    <input ref={mode === 'source' ? (first as never) : undefined} className="rk-mono" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="https://github.com/org/app" data-testid="app-repo" />
+                    <input ref={mode === 'source' ? (first as never) : undefined} className="rk-mono" value={repo} onChange={(e) => setRepo(e.target.value)} onBlur={inspect} onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), inspect())} placeholder="https://github.com/org/app" data-testid="app-repo" />
                   </label>
                   <button type="button" className="rk-btn" onClick={loadRefs} disabled={!repo.trim() || loadingRefs} title="Lists the repository's branches and tags" data-testid="app-load-refs">
                     {loadingRefs ? 'Reading…' : 'List branches and tags'}
                   </button>
                 </div>
+                {inspected && (
+                  <div style={{ fontSize: 12, color: inspected.state === 'error' ? 'var(--err)' : 'var(--fg2)', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }} data-testid="app-inspect" data-state={inspected.state}>
+                    {inspected.state === 'busy' ? (
+                      'Looking over the repository…'
+                    ) : inspected.state === 'error' ? (
+                      inspected.message
+                    ) : inspected.data && inspected.data.charts.length === 0 ? (
+                      `No Chart.yaml within four directories of the root at ${inspected.data.ref}.`
+                    ) : (
+                      <>
+                        <span>
+                          {inspected.data!.charts.length === 1 ? 'Chart' : `${inspected.data!.charts.length} charts, chart`}{' '}
+                          <span className="rk-mono">{inspected.data!.charts[0]!.path || '/'}</span> ({inspected.data!.charts[0]!.name} {inspected.data!.charts[0]!.version}) at {inspected.data!.ref}
+                          {inspected.data!.readme ? `; ${inspected.data!.readme.file}'s helm install example filled what was empty` : ''}
+                        </span>
+                        {inspected.data!.charts.length > 1 && (
+                          <label className="rk-field" style={{ width: 'auto' }}>
+                            <select value={path} onChange={(e) => setPath(e.target.value)} aria-label="Chart in the repository" data-testid="app-chart-pick">
+                              {inspected.data!.charts.map((c) => (
+                                <option key={c.path} value={c.path}>
+                                  {c.path || '/'} · {c.name} {c.version}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
               </Field>
               <Field label="Chart path" hint="The chart's directory in the repository; empty for the root">
                 <label className="rk-field">
@@ -295,7 +355,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
           {(mode === 'create' || mode === 'values') && (
             <>
               <Field label="Values file" hint="YAML, as helm -f takes it; the chart's defaults apply underneath" wide>
-                <textarea ref={mode === 'values' ? (first as never) : undefined} className="rk-area rk-mono" value={values} onChange={(e) => setValues(e.target.value)} spellCheck={false} style={{ minHeight: mode === 'values' ? 360 : 200, fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }} placeholder={'replicaCount: 2\nimage:\n  tag: v1.2.0'} data-testid="app-values" />
+                <YamlEditor value={values} onChange={({ text, errors }) => (setValues(text), setYamlError(errors[0] ?? ''))} label="Values file" testId="app-values" minHeight={mode === 'values' ? 360 : 200} placeholder={'replicaCount: 2\nimage:\n  tag: v1.2.0'} />
               </Field>
               <Field label="Parameters" hint="One key=value per line, as helm --set takes them; applied over the values file" wide>
                 <textarea className="rk-area rk-mono" value={params} onChange={(e) => setParams(e.target.value)} spellCheck={false} style={{ minHeight: 72, fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }} placeholder="image.tag=v1.2.0" data-testid="app-params" />

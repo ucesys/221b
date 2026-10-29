@@ -50,6 +50,7 @@ func (s *Server) appsRoutes() {
 		s.handle("GET "+base+"apps", "apps", s.getApps)
 		s.handle("POST "+base+"apps", "app-create", s.postApp)
 		s.handle("POST "+base+"apps/refs", "app-repo-refs", s.postAppRefs)
+		s.handle("POST "+base+"apps/inspect", "app-repo-inspect", s.postAppInspect)
 		s.handle("GET "+base+"apps/{namespace}/{name}", "app", s.getApp)
 		s.handle("PUT "+base+"apps/{namespace}/{name}", "app-update", s.putApp)
 		s.handle("DELETE "+base+"apps/{namespace}/{name}", "app-delete", s.deleteApp)
@@ -509,6 +510,62 @@ func (s *Server) postAppRefs(w http.ResponseWriter, r *http.Request) {
 	}
 	refs.Heads = nil
 	b, _ := json.Marshal(refs)
+	writeJSON(w, r, b)
+}
+
+// postAppInspect fetches a repository at a ref (its default branch when
+// none is given) and says what charts it holds and what its README's
+// install example sets, for the new-application form to start from
+// (M-07). The token, when given, is used for the fetch and kept nowhere.
+func (s *Server) postAppInspect(w http.ResponseWriter, r *http.Request) {
+	if _, _, ok := s.appReady(w, r); !ok || !s.mayManageApps(w, r) {
+		return
+	}
+	var in struct {
+		Repo    string `json:"repo"`
+		Ref     string `json:"ref,omitempty"`
+		RefKind string `json:"refKind,omitempty"`
+		Token   string `json:"token,omitempty"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		jsonError(w, http.StatusBadRequest, "the request is not valid: "+err.Error())
+		return
+	}
+	src, err := apps.Normalize(apps.Source{Repo: in.Repo, Ref: "x"})
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	src.Ref, src.RefKind = strings.TrimSpace(in.Ref), in.RefKind
+	if src.Ref == "" {
+		refs, err := apps.ListRefs(r.Context(), src.Repo, in.Token)
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		if refs.Default == "" {
+			jsonError(w, http.StatusBadGateway, "the repository has no default branch; name a branch or a tag")
+			return
+		}
+		src.Ref, src.RefKind = refs.Default, apps.RefBranch
+	}
+	if src.RefKind == "" {
+		src.RefKind = apps.RefBranch
+	}
+	co, err := apps.Fetch(r.Context(), src, in.Token)
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	out := struct {
+		apps.Inspection
+		Ref     string `json:"ref"`
+		RefKind string `json:"refKind"`
+		Commit  string `json:"commit"`
+	}{apps.Inspect(co), src.Ref, src.RefKind, co.Commit}
+	b, _ := json.Marshal(out)
 	writeJSON(w, r, b)
 }
 

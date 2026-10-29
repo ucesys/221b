@@ -132,7 +132,7 @@ test('a source is set in place, refused when it is not https, and forgotten; a V
     await page.reload()
     await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
     await page.getByTestId('app-panel').locator('[data-subtab="values"]').click()
-    await expect(page.getByTestId('app-panel').getByTestId('app-values')).toHaveValue('replicaCount: 2\n')
+    await expect(page.getByTestId('app-panel').getByTestId('app-values')).toContainText('replicaCount: 2')
 
     const me = (await (await request.get('/api/v1/me')).json()) as { mode: string }
     if (me.mode !== 'none') {
@@ -178,6 +178,9 @@ test('every dialog and drawer closes with Cancel, its cross and Escape', async (
   await panel.getByTestId('app-src-ref').blur()
   await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 10_000 })
   try {
+    // The release was not deployed from that source: behind it (M-05).
+    await expect(panel.getByTestId('app-behind')).toBeVisible({ timeout: 10_000 })
+    await expect(panel.getByTestId('app-behind-note')).toContainText('not the source')
     await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()
     await page.getByTestId('app-tool-upgrade').click()
     await expect(dlg).toHaveAttribute('data-mode', 'upgrade')
@@ -236,6 +239,10 @@ test('installs a chart from a public git repository through Watson, checks its d
   await dlg.getByTestId('app-namespace').fill(ns)
   await dlg.getByTestId('app-name').fill(name)
   await dlg.getByTestId('app-repo').fill('https://github.com/helm/examples')
+  // Leaving the field looks the repository over: the chart's path and the branch fill themselves (M-07).
+  await dlg.getByTestId('app-repo').blur()
+  await expect(dlg.getByTestId('app-inspect')).toHaveAttribute('data-state', 'done', { timeout: 60_000 })
+  await expect(dlg.getByTestId('app-path')).toHaveValue('charts/hello-world')
   await dlg.getByTestId('app-path').fill('charts/hello-world')
   await dlg.getByTestId('app-load-refs').click()
   await expect(dlg.getByTestId('app-ref')).toBeVisible({ timeout: 60_000 })

@@ -3,8 +3,9 @@ import { fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, sourceText, upda
 import { useDetails } from '../../api/details'
 import type { ClusterInfo, ReleaseDetails } from '../../api/types'
 import type { WatsonItem } from '../../api/watson'
-import { driftTone, type AppRow } from '../../columns/apps'
+import { behindSource, driftTone, type AppRow } from '../../columns/apps'
 import { useWatsonApi } from '../Watson'
+import { YamlEditor } from '../YamlEditor'
 import { fmtAge, fmtTs, nWord } from '../../lib/format'
 import { apiPath, href, type Route } from '../../lib/router'
 import { CopyName } from '../CopyName'
@@ -234,6 +235,14 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
               </span>
             </>
           )}
+          {behindSource(row) && (
+            <span data-testid="app-behind" title={behindSource(row)}>
+              <span className="rk-pill" data-tone="warn">
+                <span className="rk-dot" />
+                behind the source
+              </span>
+            </span>
+          )}
           {drift && driftState(drift) !== 'in sync' && (
             <span data-testid="app-drift" title={drift.objects.filter((o) => o.state !== 'same').map((o) => `${o.kind} ${o.name}: ${o.state}${o.fields?.length ? ' (' + o.fields.join(', ') + ')' : ''}`).join('\n')}>
               <span className="rk-pill" data-tone={driftTone(row) === 'muted' ? 'warn' : driftTone(row)}>
@@ -271,6 +280,16 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
             )}
           </span>
         </div>
+        {behindSource(row) && (
+          <div className="rk-callout" data-tone="warn" data-testid="app-behind-note">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+              <strong style={{ fontSize: 12.5, fontWeight: 600 }}>Behind the source</strong>
+              <span style={{ fontSize: 12.5, color: 'var(--fg2)' }}>
+                What runs is not the source's last deploy: {behindSource(row)}.{canChange ? ' Upgrade… from the wrench redeploys the source; History diffs the deployed revision against it.' : ''}
+              </span>
+            </div>
+          </div>
+        )}
         {row.orphan ? (
           <>
             <div className="rk-callout" data-tone="warn" data-testid="app-orphan">
@@ -402,32 +421,24 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
   const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? 'Unsaved; saves in a moment' : state === 'error' ? error : 'Saved'
   return (
     <Card title="Values file and parameters" aside={<span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-values-state">{status}</span>}>
-      <textarea
-        className="rk-area rk-mono"
+      <YamlEditor
         value={values}
-        onChange={(e) => {
-          setValues(e.target.value)
-          touch()
+        onChange={({ text, errors }) => {
+          setValues(text)
+          if (errors.length) {
+            // Not saved until it parses; the editor underlines the place.
+            if (timer.current) clearTimeout(timer.current)
+            seq.current++
+            setState('error')
+            setError(`Not saved: ${errors[0]}`)
+          } else touch()
         }}
         onBlur={() => state === 'dirty' && save()}
         readOnly={!canChange}
-        spellCheck={false}
-        aria-label="Values file"
-        onKeyDown={(e) => {
-          // Tab indents, as in an editor.
-          if (e.key === 'Tab' && !e.shiftKey) {
-            e.preventDefault()
-            const el = e.currentTarget
-            const s = el.selectionStart
-            const next = values.slice(0, s) + '  ' + values.slice(el.selectionEnd)
-            setValues(next)
-            touch()
-            requestAnimationFrame(() => el.setSelectionRange(s + 2, s + 2))
-          }
-        }}
-        style={{ minHeight: 'min(60vh, 640px)', fontSize: 13, lineHeight: 1.55, resize: 'vertical', tabSize: 2 }}
+        label="Values file"
+        minHeight="min(60vh, 640px)"
         placeholder={'replicaCount: 2\nimage:\n  tag: v1.2.0'}
-        data-testid="app-values"
+        testId="app-values"
       />
       <div>
         <h4 className="rk-h" style={{ margin: '0 0 6px', fontSize: 12 }}>
