@@ -1,10 +1,10 @@
 package ui
 
 import (
-	"strings"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
