@@ -153,7 +153,7 @@ function AppMenu({ row, canChange, anchor, onClose, onPick }: { row: AppRow; can
             className="tb-mi"
             aria-disabled={it.off ? true : undefined}
             data-danger={it.danger || undefined}
-            title={it.off ? `${it.label.replace('…', '')}: ${it.off}` : undefined}
+            title={it.off ? `${it.label.replace('…', '')}: ${it.off}` : it.hint ? `${it.label}: ${it.hint}` : undefined}
             onClick={() => {
               if (it.off) return
               onClose()

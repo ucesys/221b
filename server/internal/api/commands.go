@@ -117,8 +117,8 @@ func (s *Server) putAppCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.opts.Now().UTC()
 	note := strings.TrimSpace(in.Note)
-	if len(note) > 200 {
-		jsonError(w, http.StatusBadRequest, "a note is at most 200 characters")
+	if len([]rune(note)) > apps.MaxCommandNote {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("a note is at most %d characters, so it fits the menu", apps.MaxCommandNote))
 		return
 	}
 	if i < 0 {

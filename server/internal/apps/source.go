@@ -133,6 +133,10 @@ type Command struct {
 // MaxCommands is how many commands an application may have.
 const MaxCommands = 20
 
+// MaxCommandNote is how long a command's note may be: it is the menu
+// item's hint, beside the name, and the menu is 440 pixels wide at most.
+const MaxCommandNote = 48
+
 // CommandIndex finds a command by name, case-insensitively; -1 is none.
 func (r Record) CommandIndex(name string) int {
 	for i, c := range r.Commands {

@@ -18,6 +18,9 @@ interface Props {
   onRun: (it: WatsonItem, doing: string) => void
 }
 
+/** The note is the menu item's hint, beside the name: this many characters fit the menu (asked October 30, 2026). */
+const NOTE_MAX = 48
+
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
@@ -126,9 +129,9 @@ export function CommandDialog({ cluster, row, command, onClose, onSaved, onRun }
                 <input ref={first} value={name} onChange={(e) => setName(e.target.value)} maxLength={40} placeholder="Scale up" aria-label="Command name" data-testid="command-name" />
               </span>
             </Field>
-            <Field label="Note" hint="What it is for, shown in the menu (optional)">
+            <Field label="Note" hint={`What it is for, shown beside the name in the menu (optional, ${NOTE_MAX} characters at most; ${Math.max(0, NOTE_MAX - note.length)} left)`}>
               <span className="rk-field">
-                <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={200} placeholder="Twice the pods, for the sale" aria-label="Note" data-testid="command-note" />
+                <input value={note} onChange={(e) => setNote(e.target.value.slice(0, NOTE_MAX))} maxLength={NOTE_MAX} placeholder="Twice the pods, for the sale" aria-label="Note" data-testid="command-note" />
               </span>
             </Field>
             <Field label="Parameters" hint="One key=value per line, as helm --set takes them; applied over the saved values and parameters">

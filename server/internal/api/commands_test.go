@@ -43,7 +43,7 @@ func TestAnApplicationsCommandsAreSavedAndRun(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"commands":[{"name":"scale up"`) || !strings.Contains(body, `"note":"more pods"`) {
 		t.Fatalf("saving a command: %s %s", resp.Status, body)
 	}
-	for _, bad := range []string{`{"params":["nokv"]}`, `{"params":["a='x'"]}`, `{"params":["a=$HOME"]}`, `{"params":[]}`, `{"params":["a=b"],"name":"-dash"}`} {
+	for _, bad := range []string{`{"params":["nokv"]}`, `{"params":["a='x'"]}`, `{"params":["a=$HOME"]}`, `{"params":[]}`, `{"params":["a=b"],"name":"-dash"}`, `{"params":["a=b"],"note":"` + strings.Repeat("n", 49) + `"}`} {
 		if resp, body := send(t, c, http.MethodPut, base+"bad", bad); resp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("%s was accepted: %s %s", bad, resp.Status, body)
 		}
