@@ -126,6 +126,37 @@ export function FixCommand({ command, from, why, onCopy }: { command: string; fr
 const AUTO_KEY = '221b.watson.auto'
 const HISTORY_KEY = '221b.watson.history'
 
+/** A typed command and when it was sent; older entries were bare strings. */
+interface Typed {
+  cmd: string
+  at: string
+}
+
+function readTyped(): Typed[] {
+  const raw = readJSON<unknown[]>(HISTORY_KEY, [])
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((x): Typed[] => (typeof x === 'string' ? [{ cmd: x, at: '' }] : x && typeof x === 'object' && typeof (x as Typed).cmd === 'string' ? [{ cmd: (x as Typed).cmd, at: String((x as Typed).at ?? '') }] : []))
+}
+
+/**
+ * The history the arrow keys walk: what was typed here, and every card
+ * of the person's in the pane (a Redeploy, an application's command, a
+ * Sherlock suggestion approved; asked October 30, 2026), in the order
+ * they were sent, each once, newest last, fifty at most. Toolbox cards
+ * are sessions, not lines to type again.
+ */
+export function mergeHistory(typed: Typed[], cards: { command: string; created: string; mine: boolean; session?: unknown }[]): string[] {
+  const all: Typed[] = [...typed, ...cards.filter((x) => x.mine && !x.session && x.command.trim()).map((x) => ({ cmd: x.command, at: x.created }))]
+  all.sort((a, b) => a.at.localeCompare(b.at))
+  const out: string[] = []
+  for (const t of all) {
+    const i = out.indexOf(t.cmd)
+    if (i >= 0) out.splice(i, 1)
+    out.push(t.cmd)
+  }
+  return out.slice(-50)
+}
+
 /** Whether reads that arrive from Sherlock or a button run at once. */
 export function autoRunReads(): boolean {
   return readJSON<boolean>(AUTO_KEY, true) !== false
@@ -451,7 +482,7 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
   const items = state.items
   const [draft, setDraft] = useState('')
   const [auto, setAuto] = useState(autoRunReads)
-  const [hist, setHist] = useState<string[]>(() => readJSON<string[]>(HISTORY_KEY, []))
+  const [hist, setHist] = useState<Typed[]>(readTyped)
   const [pos, setPos] = useState(-1)
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
@@ -487,26 +518,13 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
     if (el && pinned.current) el.scrollTop = el.scrollHeight
   })
 
-  // Every command the person ran here is in the history the arrow keys
-  // walk, not only the typed ones: a Redeploy, an application's command,
-  // a Sherlock suggestion approved (asked October 30, 2026). Toolbox
-  // cards are sessions, not lines to type again. The cards come back
-  // from the server after a reload, so only the typed ones are kept here.
-  const history = useMemo(() => {
-    const cards = items
-      .filter((x) => x.mine && !x.session && x.command.trim())
-      .sort((a, b) => a.created.localeCompare(b.created))
-      .map((x) => x.command)
-    let all = hist
-    for (const c of cards) if (!all.includes(c)) all = [...all, c]
-    return all.slice(-50)
-  }, [hist, items])
+  const history = useMemo(() => mergeHistory(hist, items), [hist, items])
 
   const submit = async (text: string) => {
     const cmd = text.trim()
     if (!cmd) return
     pinned.current = true
-    const next = [...hist.filter((h) => h !== cmd), cmd].slice(-50)
+    const next = [...hist.filter((h) => h.cmd !== cmd), { cmd, at: new Date().toISOString() }].slice(-50)
     setHist(next)
     writeJSON(HISTORY_KEY, next)
     setPos(-1)
