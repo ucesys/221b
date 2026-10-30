@@ -192,7 +192,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
     </>
   )
 
-  const before: ExtraTab[] = [{ id: 'overview', label: 'Source', render: () => overview }]
+  const before: ExtraTab[] = [{ id: 'overview', label: 'Setup', render: () => overview }]
   const after: ExtraTab[] = [{ id: 'images', label: 'Images', count: images?.images.length, render: () => imagesTab }]
 
   return (
@@ -676,7 +676,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
   const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? (repo.trim() && ref.trim() ? 'Not saved yet: press Save, or leave the field' : 'Not saved yet: needs a repository and a branch or tag') : state === 'error' ? error : saved ? 'Saved' : 'Not set'
   return (
     <Card
-      title="Source"
+      title="Setup"
       aside={
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-source-state">
@@ -768,27 +768,35 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--fg)', paddingBottom: 6 }}>
             <input type="checkbox" checked={opts.ignoreDefaults} disabled={!canChange} onChange={(e) => saveOption({ ignoreDefaults: e.target.checked })} data-testid="app-src-ignore-defaults" /> Ignore the chart’s values.yaml
           </label>
-          {fleets.length > 0 && (
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 200 }}>
-              Deploy to the fleet
-              <span className="rk-field">
-                <select value={opts.fleet} disabled={!canChange} onChange={(e) => saveOption({ fleet: e.target.value })} data-testid="app-src-fleet">
-                  <option value="">any node</option>
-                  {fleets.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name} · {f.deploy}
-                    </option>
-                  ))}
-                </select>
-              </span>
-            </label>
-          )}
           <span style={{ fontSize: 12, color: optState === 'error' ? 'var(--err)' : 'var(--fg3)', paddingBottom: 6, flex: '1 1 260px' }} role={optState === 'error' ? 'alert' : undefined} data-testid="app-deploy-options-state">
             {optState === 'saving' ? 'Saving…' : optState === 'error' ? optError : optState === 'saved' ? 'Saved. ' : ''}
             Applied lowest first: {opts.ignoreDefaults ? <s>the chart’s values.yaml</s> : 'the chart’s values.yaml'}
             {opts.valuesFile ? `, ${opts.valuesFile}` : ''}, the Values tab, then its parameters
             {app.fleetLabel ? `; the fleet adds nodeSelector ${app.fleetLabel}` : ''}.
             {inspect?.key === inspectKey && inspect.error ? ` The repository could not be read for its files: ${inspect.error}` : ''}
+          </span>
+        </div>
+      )}
+      {app && (
+        // Deploy to the fleet (R2-11) on a row of its own, always shown: with
+        // no fleet labelled for deploys it says so instead of vanishing
+        // (asked October 30, 2026).
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '8px 16px', paddingTop: 8, borderTop: '1px solid var(--line)' }} data-testid="app-fleet-row">
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 220 }}>
+            Deploy to the fleet
+            <span className="rk-field">
+              <select value={opts.fleet} disabled={!canChange || fleets.length === 0} onChange={(e) => saveOption({ fleet: e.target.value })} data-testid="app-src-fleet">
+                <option value="">any node</option>
+                {fleets.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name} · {f.deploy}
+                  </option>
+                ))}
+              </select>
+            </span>
+          </label>
+          <span style={{ fontSize: 12, color: 'var(--fg3)', paddingBottom: 6, flex: '1 1 260px' }} data-testid="app-fleet-hint">
+            {fleets.length === 0 ? 'No fleet has a label configured: give a fleet a deploy label in its editor, and it is offered here.' : app.fleetLabel ? `The deploy adds nodeSelector ${app.fleetLabel}, so the pods run on the fleet’s nodes.` : 'The fleet’s deploy label becomes the pods’ nodeSelector on the next deploy.'}
           </span>
         </div>
       )}

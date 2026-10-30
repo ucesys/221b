@@ -18,6 +18,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Changed
 
+- The release panel's *Source* tab and card are *Setup*: they hold the whole deployment setup, not only where the chart comes from. *Deploy to the fleet* has a row of its own there and is always shown; with no fleet labelled for deploys it says so instead of vanishing (M2-08).
 - *Upgrade…* in a release's Tools menu is *Redeploy…*, and its dialog *Redeploy from the source* (M2-03). Every drop-down in a field shows a chevron (M2-02).
 - Only the leader reads the clusters: it lists and watches them, polls metrics-server and the kubelets, checks connection health and role drift, and serves every data request; the other replicas sign people in and forward the rest, so Kubernetes sees one reader however many replicas there are. The chart's `replicas.warmStandby` (default `true`) keeps the others' watches open for an instant takeover; `false` has them hold nothing until they lead, for very large clusters. The cap on open event streams (200) is the console's rather than each replica's, and a replica's `/metrics` says `b221_leader 1` or `0` (P7-09, ADR-70).
 
