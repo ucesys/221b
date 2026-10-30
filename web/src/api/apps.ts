@@ -28,6 +28,13 @@ export interface AppRecord {
   values?: string
   params?: string[]
   createNamespace?: boolean
+  /** A second values file in the chart's directory, applied over values.yaml and under the values here (R2-08). */
+  valuesFile?: string
+  /** Whether the chart's own values.yaml is left out (R2-09). */
+  ignoreDefaults?: boolean
+  /** The fleet the application is deployed to, by id, and its deploy label when saved: the pods' nodeSelector (R2-11). */
+  fleet?: string
+  fleetLabel?: string
   hasToken?: boolean
   createdBy?: string
   created: string
@@ -44,6 +51,8 @@ export interface DriftObject {
   state: DriftState
   fields?: string[]
   error?: string
+  /** What changed, as a unified diff of the fields the manifest sets (R2-10). */
+  diff?: string
 }
 
 export interface AppDrift {
@@ -67,6 +76,8 @@ export interface ChartCandidate {
   version: string
   appVersion?: string
   description?: string
+  /** The other YAML files in the chart's directory and one down (values-prod.yaml), for a second values file (R2-08). */
+  valuesFiles?: string[]
 }
 export interface ReadmeHints {
   file: string
@@ -140,6 +151,9 @@ export interface AppInput {
   values?: string
   params?: string[]
   createNamespace?: boolean
+  valuesFile?: string
+  ignoreDefaults?: boolean
+  fleet?: string
   upgrade?: boolean
   install?: boolean
   ref?: string
@@ -178,6 +192,8 @@ export const fetchApps = (cluster: string) => call<AppView[]>('GET', apiPath('ap
 export const fetchApp = (cluster: string, ns: string, name: string) => call<AppView>('GET', app(cluster, ns, name))
 export const fetchDrift = (cluster: string, ns: string, name: string, refresh = false) => call<AppDrift>('GET', app(cluster, ns, name, '/drift') + (refresh ? '?refresh=1' : ''))
 export const fetchAppRefs = (cluster: string, ns: string, name: string) => call<AppRefs>('GET', app(cluster, ns, name, '/refs'))
+/** A kept application's repository looked over at its ref, with the saved token (R2-08). */
+export const fetchAppInspect = (cluster: string, ns: string, name: string) => call<RepoInspection>('GET', app(cluster, ns, name, '/inspect'))
 /** Looks over a repository for the new-application form: its charts and the README's install example (M-07). */
 export const inspectRepo = (cluster: string, repo: string, ref: string, refKind: RefKind, token?: string) => call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { repo, ...(ref ? { ref, refKind } : {}), ...(token ? { token } : {}) })
 

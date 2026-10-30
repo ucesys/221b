@@ -47,6 +47,10 @@
     top: 0;
     z-index: 36;
   }
+  /* The fleets beside the Nodes table (R2-02) need the width of a laptop; the URL's fleet= filter still applies. */
+  .rk-nodefleets {
+    display: none !important;
+  }
 }
 /* The Settings dialog: a native <dialog>, styled like the prototype's menus. */
 .rk-dialog {

@@ -370,3 +370,40 @@ test.describe('on a phone', () => {
     expect(await overflow()).toBeLessThanOrEqual(0)
   })
 })
+
+test('the fleets beside the table filter it, and an administrator keeps them there (R2-02, R2-11)', async ({ page, request }) => {
+  const names = nodeRows(await snapshot(request)).map((r) => r.name).sort(compareNatural)
+  const one = names[0]!
+  const put = (fleets: unknown[]) => page.evaluate(async (body) => (await fetch('/api/v1/fleets', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fleets: body }) })).status, fleets)
+  expect(await put([{ id: 'one', name: 'One node', color: 1, labels: [], taints: [], kind: 'nodes', nodes: [one] }])).toBe(200)
+  try {
+    const aside = page.getByTestId('node-fleets')
+    await expect(aside.getByTestId('node-fleet-count')).toHaveText('1')
+    // Picking the fleet narrows the table to its node, in the URL too.
+    await aside.getByTestId('node-fleet-check').check()
+    await expect.poll(() => shownNames(page)).toEqual([one])
+    await expect(page).toHaveURL(/fleet=one/)
+    await aside.getByTestId('node-fleet-all').click()
+    await expect.poll(async () => (await shownNames(page)).length).toBe(names.length)
+    // The editor from the Nodes tab: a deploy label is kept with the fleet (R2-11).
+    await aside.getByTestId('node-fleet-edit').click()
+    const editor = page.getByTestId('fleet-editor')
+    await editor.getByTestId('fleet-deploy').fill('fleet')
+    await editor.getByTestId('fleet-save').click()
+    await expect(editor).toContainText('key=value')
+    await editor.getByTestId('fleet-deploy').fill('fleet=edge')
+    await editor.getByTestId('fleet-save').click()
+    await expect(editor).toHaveCount(0)
+    await expect(aside).toContainText('deploys to fleet=edge')
+    const saved = (await (await request.get('/api/v1/settings')).json()) as { fleets?: Record<string, { id: string; deploy?: string }[]> }
+    expect(saved.fleets?.local?.find((f) => f.id === 'one')?.deploy).toBe('fleet=edge')
+    // A new fleet from here.
+    await aside.getByTestId('node-fleet-new').click()
+    await page.getByTestId('fleet-editor').getByTestId('fleet-name').fill('Everything')
+    await page.getByTestId('fleet-editor').locator('[data-label^="kubernetes.io/os="]').first().click()
+    await page.getByTestId('fleet-editor').getByTestId('fleet-save').click()
+    await expect(aside.getByTestId('node-fleet-count')).toHaveCount(2)
+  } finally {
+    await put([])
+  }
+})

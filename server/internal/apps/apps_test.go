@@ -2,6 +2,7 @@ package apps_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,6 +107,7 @@ spec:
 	write("charts/web/values.yaml", "replicas: 2\nimage: nginx:1.26\n")
 	write("README.md", "# web\n\nInstall it:\n\n```sh\nhelm install shop ./charts/web \\\n  --namespace web --create-namespace \\\n  --set image=nginx:1.26,replicas=2 -f values-prod.yaml\n```\n")
 	write("values-prod.yaml", "replicas: 3\n")
+	write("charts/web/values-staging.yaml", "replicas: 4\nimage: nginx:1.27\n")
 	commit("nginx 1.26, two replicas")
 	head, _ = r.Head()
 	if _, err := r.CreateTag("v1.1.0", head.Hash(), nil); err != nil {
@@ -288,6 +290,11 @@ metadata:
 	if o := d.Objects[0]; o.State != apps.DriftChanged || strings.Join(o.Fields, ",") != "spec.replicas" {
 		t.Errorf("changed object %+v", o)
 	}
+	// What changed, as a diff of the fields the manifest sets: the
+	// cluster's defaults and status stay out of it (R2-10).
+	if o := d.Objects[0]; !strings.Contains(o.Diff, "-  replicas: 1") || !strings.Contains(o.Diff, "+  replicas: 5") || strings.Contains(o.Diff, "imagePullPolicy") || strings.Contains(o.Diff, "status") {
+		t.Errorf("diff:\n%s", o.Diff)
+	}
 	if d.Objects[1].State != apps.DriftMissing || d.Objects[2].State != apps.DriftUnknown {
 		t.Errorf("%+v", d.Objects[1:])
 	}
@@ -315,6 +322,10 @@ func TestInspectFindsTheChartAndTheReadmeHints(t *testing.T) {
 	if strings.Join(h.Params, " ") != "image=nginx:1.26 replicas=2" || h.ValuesFile != "values-prod.yaml" || h.Values != "replicas: 3\n" {
 		t.Errorf("params %v values file %q values %q", h.Params, h.ValuesFile, h.Values)
 	}
+	// The chart's other YAML files are offered as a second values file (R2-08).
+	if strings.Join(got.Charts[0].ValuesFiles, ",") != "values-staging.yaml" {
+		t.Errorf("values files %v", got.Charts[0].ValuesFiles)
+	}
 	// The first commit's README has no install line: no hints, the chart still found.
 	one, err := apps.Fetch(context.Background(), apps.Source{Repo: repo, Ref: "v1.0.0", RefKind: apps.RefTag}, "")
 	if err != nil {
@@ -322,5 +333,45 @@ func TestInspectFindsTheChartAndTheReadmeHints(t *testing.T) {
 	}
 	if got := apps.Inspect(one); got.Readme != nil || len(got.Charts) != 1 {
 		t.Errorf("v1.0.0: %+v", got)
+	}
+}
+
+// The values an application deploys with, lowest first: the chart's
+// values.yaml (unless ignored), the second values file, the Values typed
+// in the console, then the parameters and the fleet's label (R2-08,
+// R2-09, R2-11).
+func TestComposeLaysTheValuesInOrder(t *testing.T) {
+	repo := chartRepo(t)
+	src := apps.Source{Repo: repo, Path: "charts/web", Ref: "v1.1.0", RefKind: apps.RefTag}
+	co, err := apps.Fetch(context.Background(), src, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := &apps.Record{Source: src, ValuesFile: "values-staging.yaml", Values: "image: nginx:1.28\n", Params: []string{"extra=1"}, FleetLabel: "fleet.example.com/name=edge"}
+	ch, vals, err := apps.Compose(co, src, rec, []string{"extra=2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(ch.Values["replicas"]) != "2" {
+		t.Errorf("the chart's values.yaml counts: %v", ch.Values)
+	}
+	// The file sets replicas 4 and nginx 1.27; the console's values put nginx 1.28 over it; the card's --set wins last.
+	if fmt.Sprint(vals["replicas"]) != "4" || vals["image"] != "nginx:1.28" || fmt.Sprint(vals["extra"]) != "2" {
+		t.Errorf("values %v", vals)
+	}
+	if ns, _ := vals["nodeSelector"].(map[string]any); ns["fleet.example.com/name"] != "edge" {
+		t.Errorf("the fleet's label is not the nodeSelector: %v", vals["nodeSelector"])
+	}
+	rec.IgnoreDefaults = true
+	if ch, _, err = apps.Compose(co, src, rec, nil); err != nil || len(ch.Values) != 0 {
+		t.Errorf("ignoring the chart's values.yaml: %v %v", ch.Values, err)
+	}
+	rec.ValuesFile = "missing.yaml"
+	if _, _, err = apps.Compose(co, src, rec, nil); err == nil || !strings.Contains(err.Error(), "missing.yaml") {
+		t.Errorf("a missing file: %v", err)
+	}
+	rec.ValuesFile = "../values-prod.yaml"
+	if _, _, err = apps.Compose(co, src, rec, nil); err == nil {
+		t.Error("a file outside the chart's directory was read")
 	}
 }

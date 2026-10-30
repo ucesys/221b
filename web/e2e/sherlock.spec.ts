@@ -440,3 +440,31 @@ test('the panel meets WCAG 2.2 AA, docked, maximized and in the settings (X-12)'
     await page.keyboard.press('Escape')
   }
 })
+
+test('the administrators’ notes join Sherlock’s instructions, can be read there, and are tried with Test (R2-05)', async ({ page }) => {
+  await open(page, '#/nodes')
+  expect(await put(page, '/api/v1/sherlock/key', { key: KEY })).toBe(200)
+  expect(await put(page, '/api/v1/sherlock/config', ON)).toBe(200)
+  try {
+    await page.getByTestId('admin-link').click()
+    await page.locator('[data-admin-page=settings]').click()
+    await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
+    const settings = page.getByTestId('sherlock-settings')
+    const note = 'The rack is in the basement; call Pat before touching the NFS node.'
+    await settings.getByTestId('sherlock-notes').fill(note)
+    // The instructions as the cluster gets them, with the notes as typed.
+    await settings.getByTestId('sherlock-prompt-show').click()
+    await expect(settings.getByTestId('sherlock-prompt')).toContainText('You are Sherlock')
+    await expect(settings.getByTestId('sherlock-prompt-cluster')).toContainText(note)
+    // Test asks with them, saved or not.
+    await settings.getByTestId('sherlock-notes-test').click()
+    await expect(settings.getByTestId('sherlock-notes-answer')).toBeVisible({ timeout: 60_000 })
+    await expect(settings.getByTestId('sherlock-notes-answer')).not.toContainText('did not answer')
+    await settings.getByTestId('sherlock-save').click()
+    await expect(settings.getByText('Saved.')).toBeVisible()
+    const cfg = (await page.evaluate(async () => (await fetch('/api/v1/sherlock/config')).json())) as { settings: { notes?: string } }
+    expect(cfg.settings.notes).toBe(note)
+  } finally {
+    expect(await put(page, '/api/v1/sherlock/config', { ...ON, notes: '' })).toBe(200)
+  }
+})

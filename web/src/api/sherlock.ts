@@ -83,6 +83,8 @@ export interface SherlockSettings {
   /** Prices in US dollars per million tokens for a model that is not listed. */
   priceIn?: number
   priceOut?: number
+  /** What the administrators tell Sherlock about their infrastructure, added to its instructions (R2-05). */
+  notes?: string
 }
 
 export type ProviderKind = 'anthropic' | 'openai' | 'bedrock' | 'vertex'
@@ -173,6 +175,10 @@ export const fetchSherlockConfig = () => call<SherlockConfig>('GET', '/api/v1/sh
 export const saveSherlockConfig = (s: SherlockSettings) => call<SherlockConfig>('PUT', '/api/v1/sherlock/config', s)
 export const saveSherlockKey = (key: string) => call<SherlockConfig>('PUT', '/api/v1/sherlock/key', { key })
 export const deleteSherlockKey = () => call<SherlockConfig>('DELETE', '/api/v1/sherlock/key')
+/** The instructions Sherlock gets for a cluster, with the notes given (R2-05). */
+export const fetchSherlockPrompt = (cluster: string, notes: string) => call<{ core: string; cluster: string }>('GET', `/api/v1/sherlock/prompt?cluster=${encodeURIComponent(cluster)}&notes=${encodeURIComponent(notes)}`)
+/** One question to Sherlock with the notes given, answered in full; the conversation is not kept. */
+export const testSherlock = (cluster: string, notes: string, question = '') => call<{ answer: string; model?: string; status?: string; error?: string }>('POST', '/api/v1/sherlock/test', { cluster, notes, question })
 
 export interface SherlockState {
   status: SherlockStatus | null

@@ -170,6 +170,7 @@ func (s *Server) postSherlockAsk(w http.ResponseWriter, r *http.Request) {
 		Cluster:  name,
 		Version:  version,
 		Platform: s.platformPrompt(r, cl, name, version),
+		Notes:    s.sherlockSettings().Notes,
 		Tools:    s.toolboxFor(r, id, cl),
 		Who:      audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name},
 		From:     fromAddr(r),
@@ -373,6 +374,120 @@ func (s *Server) getSherlockConfig(w http.ResponseWriter, r *http.Request) {
 	})
 	b, _ := json.Marshal(cfg)
 	writeJSON(w, r, b)
+}
+
+// getSherlockPrompt shows an administrator the instructions Sherlock gets
+// for a cluster (?cluster=, the local one without): the built-in block
+// and the cluster's, with the notes as saved, or as ?notes= would have
+// them (R2-05).
+func (s *Server) getSherlockPrompt(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.sherlockAdmin(w, r); !ok {
+		return
+	}
+	id := r.URL.Query().Get("cluster")
+	if id == "" {
+		id = clusters.LocalID
+	}
+	r.SetPathValue("cluster", id)
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	name, version := id, ""
+	if s.opts.Clusters != nil {
+		if sum, ok := s.opts.Clusters.Summary(id); ok {
+			name, version = sum.Name, sum.Version
+		}
+	}
+	notes := s.sherlockSettings().Notes
+	if v, ok := r.URL.Query()["notes"]; ok && len(v) > 0 {
+		notes = v[0]
+	}
+	core, cluster := sherlock.PromptText(sherlock.Question{Cluster: name, Version: version, Platform: s.platformPrompt(r, cl, name, version), Notes: notes, ViewChanges: s.sherlockSettings().ChangesView()}, s.opts.Now())
+	b, _ := json.Marshal(map[string]string{"core": core, "cluster": cluster})
+	writeJSON(w, r, b)
+}
+
+// postSherlockTest asks Sherlock, as the administrator, one question
+// about a cluster with the notes given (saved or not) and answers with
+// what it said, so the notes can be tried before they are kept (R2-05).
+func (s *Server) postSherlockTest(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.sherlockAdmin(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Cluster  string `json:"cluster"`
+		Notes    string `json:"notes"`
+		Question string `json:"question"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		jsonError(w, http.StatusBadRequest, "the test is not valid: "+err.Error())
+		return
+	}
+	id := in.Cluster
+	if id == "" {
+		id = clusters.LocalID
+	}
+	r.SetPathValue("cluster", id)
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	if status := s.sherlockStatusFor(r, id); status.Reason != "" {
+		jsonError(w, http.StatusConflict, status.Reason)
+		return
+	}
+	name, version := id, ""
+	if s.opts.Clusters != nil {
+		if sum, ok := s.opts.Clusters.Summary(id); ok {
+			name, version = sum.Name, sum.Version
+		}
+	}
+	question := strings.TrimSpace(in.Question)
+	if question == "" {
+		question = "In three sentences, and without reading the cluster: what do your instructions and the administrators' notes tell you about this infrastructure, and what would you check first if a node went NotReady?"
+	}
+	key := sherlock.Key{Session: sess.ID + "/settings-test", Cluster: id}
+	s.opts.Sherlock.Reset(key)
+	conv, err := s.opts.Sherlock.Ask(sherlock.Question{
+		Key: key, Text: question, Cluster: name, Version: version,
+		Platform: s.platformPrompt(r, cl, name, version), Notes: in.Notes,
+		Tools: s.toolboxFor(r, id, cl),
+		Who:   audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name},
+		From:  fromAddr(r),
+	})
+	if err != nil {
+		jsonError(w, http.StatusConflict, err.Error())
+		return
+	}
+	deadline := time.After(90 * time.Second)
+	for {
+		v := conv.View()
+		if !v.Busy && len(v.Messages) > 0 {
+			last := v.Messages[len(v.Messages)-1]
+			out := map[string]any{"answer": last.Text, "model": last.Model, "status": last.Status}
+			if last.Error != "" {
+				out["error"] = last.Error
+			}
+			s.opts.Sherlock.Reset(key)
+			b, _ := json.Marshal(out)
+			writeJSON(w, r, b)
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			s.opts.Sherlock.Stop(key)
+			return
+		case <-deadline:
+			s.opts.Sherlock.Stop(key)
+			jsonError(w, http.StatusGatewayTimeout, "Sherlock did not answer within 90 seconds")
+			return
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
 }
 
 func (s *Server) putSherlockConfig(w http.ResponseWriter, r *http.Request) {

@@ -25,6 +25,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/views"
@@ -57,6 +58,7 @@ func (s *Server) appsRoutes() {
 		s.handle("POST "+base+"apps/{namespace}/{name}/upgrade", "app-upgrade", s.postAppUpgrade)
 		s.handle("GET "+base+"apps/{namespace}/{name}/drift", "app-drift", s.getAppDrift)
 		s.handle("GET "+base+"apps/{namespace}/{name}/refs", "app-refs", s.getAppRefs)
+		s.handle("GET "+base+"apps/{namespace}/{name}/inspect", "app-inspect", s.getAppInspect)
 		s.handle("GET "+base+"apps/{namespace}/{name}/revisions", "app-revisions", s.getAppRevisions)
 		s.handle("GET "+base+"apps/{namespace}/{name}/diff", "app-diff", s.getAppDiff)
 		s.handle("GET "+base+"apps/{namespace}/{name}/images", "app-images", s.getAppImages)
@@ -198,6 +200,12 @@ type appInput struct {
 	Values          *string  `json:"values,omitempty"`
 	Params          []string `json:"params,omitempty"`
 	CreateNamespace *bool    `json:"createNamespace,omitempty"`
+	// ValuesFile is a second values file in the chart's directory, "" for
+	// none (R2-08); IgnoreDefaults leaves the chart's values.yaml out
+	// (R2-09); Fleet is the fleet to deploy to, by id, "" for none (R2-11).
+	ValuesFile     *string `json:"valuesFile,omitempty"`
+	IgnoreDefaults *bool   `json:"ignoreDefaults,omitempty"`
+	Fleet          *string `json:"fleet,omitempty"`
 	// Upgrade asks for the change to be deployed as well as saved.
 	Upgrade bool `json:"upgrade,omitempty"`
 	// Install adds --install to an upgrade.
@@ -242,7 +250,60 @@ func (s *Server) readApp(w http.ResponseWriter, r *http.Request) (appInput, bool
 			return in, false
 		}
 	}
+	if in.ValuesFile != nil {
+		f := strings.TrimSpace(*in.ValuesFile)
+		if f != "" && (strings.HasPrefix(f, "/") || strings.Contains(f, "..") || !(strings.HasSuffix(f, ".yaml") || strings.HasSuffix(f, ".yml"))) {
+			jsonError(w, http.StatusBadRequest, "the values file is a YAML file in the chart's directory, such as values-prod.yaml")
+			return in, false
+		}
+		in.ValuesFile = &f
+	}
 	return in, true
+}
+
+// applyAppInput copies what a request sets onto the record; the fleet
+// is looked up in the cluster's fleets for its deploy label (R2-11).
+func (s *Server) applyAppInput(rec *apps.Record, in appInput, cluster string) error {
+	if in.Values != nil {
+		rec.Values = *in.Values
+	}
+	if in.Params != nil {
+		rec.Params = in.Params
+	}
+	if in.CreateNamespace != nil {
+		rec.CreateNamespace = *in.CreateNamespace
+	}
+	if in.ValuesFile != nil {
+		rec.ValuesFile = *in.ValuesFile
+	}
+	if in.IgnoreDefaults != nil {
+		rec.IgnoreDefaults = *in.IgnoreDefaults
+	}
+	if in.Fleet != nil {
+		rec.Fleet, rec.FleetLabel = "", ""
+		if id := strings.TrimSpace(*in.Fleet); id != "" {
+			var list []fleets.Fleet
+			if s.opts.Settings != nil {
+				list = s.opts.Settings.Current().Fleets[cluster]
+			}
+			i := slices.IndexFunc(list, func(f fleets.Fleet) bool { return f.ID == id })
+			if i < 0 {
+				return fmt.Errorf("the cluster has no fleet %q", id)
+			}
+			if list[i].Deploy == "" {
+				return fmt.Errorf("the fleet %s has no deploy label: give it one in its editor", list[i].Name)
+			}
+			rec.Fleet, rec.FleetLabel = id, list[i].Deploy
+		}
+	} else if rec.Fleet != "" && s.opts.Settings != nil {
+		// The label follows the fleet's editor.
+		for _, f := range s.opts.Settings.Current().Fleets[cluster] {
+			if f.ID == rec.Fleet && f.Deploy != "" {
+				rec.FleetLabel = f.Deploy
+			}
+		}
+	}
+	return nil
 }
 
 // appLine is the Watson command for an application's change: the source
@@ -308,12 +369,10 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	now := s.opts.Now().UTC()
-	rec := apps.Record{Cluster: c.ID, Namespace: in.Namespace, Name: in.Name, Source: *in.Source, Params: in.Params, Created: now, CreatedBy: who.User, Updated: now, UpdatedBy: who.User}
-	if in.Values != nil {
-		rec.Values = *in.Values
-	}
-	if in.CreateNamespace != nil {
-		rec.CreateNamespace = *in.CreateNamespace
+	rec := apps.Record{Cluster: c.ID, Namespace: in.Namespace, Name: in.Name, Source: *in.Source, Created: now, CreatedBy: who.User, Updated: now, UpdatedBy: who.User}
+	if err := s.applyAppInput(&rec, in, c.ID); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	var token *string
 	if in.Token != "" {
@@ -363,14 +422,9 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 	if in.Source != nil {
 		rec.Source = *in.Source
 	}
-	if in.Values != nil {
-		rec.Values = *in.Values
-	}
-	if in.Params != nil {
-		rec.Params = in.Params
-	}
-	if in.CreateNamespace != nil {
-		rec.CreateNamespace = *in.CreateNamespace
+	if err := s.applyAppInput(&rec, in, c.ID); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	if in.Ref != "" {
 		src := rec.Source
@@ -517,6 +571,42 @@ func (s *Server) postAppRefs(w http.ResponseWriter, r *http.Request) {
 // none is given) and says what charts it holds and what its README's
 // install example sets, for the new-application form to start from
 // (M-07). The token, when given, is used for the fetch and kept nowhere.
+// getAppInspect looks a kept application's repository over at its ref
+// (M-07), with the saved token: the charts and their values files, for
+// the Source card's choice of a second values file (R2-08).
+func (s *Server) getAppInspect(w http.ResponseWriter, r *http.Request) {
+	c, _, ok := s.appReady(w, r)
+	if !ok {
+		return
+	}
+	ns, name := r.PathValue("namespace"), r.PathValue("name")
+	if !appNames(w, ns, name) {
+		return
+	}
+	rec, token, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
+	if errors.Is(err, apps.ErrNotFound) {
+		jsonError(w, http.StatusNotFound, "the console keeps no source for this release")
+		return
+	}
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	co, err := apps.Fetch(r.Context(), rec.Source, token)
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	insp := apps.Inspect(co)
+	b, _ := json.Marshal(struct {
+		apps.Inspection
+		Ref     string `json:"ref"`
+		RefKind string `json:"refKind"`
+		Commit  string `json:"commit"`
+	}{insp, rec.Source.Ref, rec.Source.RefKind, co.Commit})
+	writeJSON(w, r, b)
+}
+
 func (s *Server) postAppInspect(w http.ResponseWriter, r *http.Request) {
 	if _, _, ok := s.appReady(w, r); !ok || !s.mayManageApps(w, r) {
 		return
@@ -848,14 +938,9 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		ch, err := apps.LoadChart(co, src.Path)
+		ch, vals, err := apps.Compose(co, src, &rec, nil)
 		if err != nil {
 			jsonError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-		vals, err := apps.Values(rec.Values, rec.Params)
-		if err != nil {
-			jsonError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		toLabel = fmt.Sprintf("%s (%s)", src, short12(co.Commit))

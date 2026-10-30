@@ -35,6 +35,10 @@ type Fleet struct {
 	Kind string `json:"kind,omitempty"`
 	// Nodes are a list's node names.
 	Nodes []string `json:"nodes,omitempty"`
+	// Deploy is a node label, "key=value", that an application deployed
+	// to the fleet is pinned to (its pods' nodeSelector, R2-11). The
+	// fleet's nodes must carry it; the console says which do not.
+	Deploy string `json:"deploy,omitempty"`
 }
 
 // KindNodes is a fleet that lists its nodes by name.
@@ -164,6 +168,12 @@ func Validate(list []Fleet) error {
 		for _, n := range f.Nodes {
 			if len(n) > 253 || !nodeNameRE.MatchString(n) {
 				return fmt.Errorf("“%s” isn’t a node name.", n)
+			}
+		}
+		if f.Deploy != "" {
+			k, v, ok := strings.Cut(f.Deploy, "=")
+			if !ok || !labelKeyRE.MatchString(k) || !labelValRE.MatchString(v) || v == "" {
+				return fmt.Errorf("The deploy label of “%s” must be key=value, a node label with a value.", name)
 			}
 		}
 		ids[f.ID] = true
@@ -301,6 +311,8 @@ type Row struct {
 	// list, nodes gone from the cluster included.
 	By     string   `json:"by,omitempty"`
 	Listed []string `json:"listed,omitempty"`
+	// Deploy is the fleet's deploy label (R2-11).
+	Deploy string `json:"deploy,omitempty"`
 	// Order is a fleet's place in the list.
 	Order   int      `json:"order"`
 	Members []string `json:"members"`
@@ -315,7 +327,7 @@ func Build(defs []Fleet, nodes []Node) []Row {
 	inAny := map[string]bool{}
 	memberSets := map[string]bool{}
 	for i, f := range defs {
-		r := Row{Key: KindFleet + ":" + f.ID, Kind: KindFleet, ID: f.ID, Name: f.Name, Color: f.Color, Desc: f.Desc, Labels: nonNil(f.Labels), Taints: nonNil(f.Taints), Order: i, Members: []string{}}
+		r := Row{Key: KindFleet + ":" + f.ID, Kind: KindFleet, ID: f.ID, Name: f.Name, Color: f.Color, Desc: f.Desc, Labels: nonNil(f.Labels), Taints: nonNil(f.Taints), Deploy: f.Deploy, Order: i, Members: []string{}}
 		if f.Kind == KindNodes {
 			r.By, r.Listed = KindNodes, nonNil(f.Nodes)
 		}

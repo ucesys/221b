@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { deleteSherlockKey, fetchSherlockConfig, priceText, saveSherlockConfig, saveSherlockKey, usd, type ProviderAuth, type ProviderKind, type SherlockConfig, type SherlockProvider, type SherlockSettings as Settings } from '../api/sherlock'
+import { deleteSherlockKey, fetchSherlockConfig, fetchSherlockPrompt, priceText, saveSherlockConfig, saveSherlockKey, testSherlock, usd, type ProviderAuth, type ProviderKind, type SherlockConfig, type SherlockProvider, type SherlockSettings as Settings } from '../api/sherlock'
 import { fmtTs } from '../lib/format'
 import { SaveBar } from './SaveBar'
 import { Select } from './Select'
@@ -401,6 +401,95 @@ function Credential({ cfg, draft, busy, typed, setTyped, remove }: { cfg: Sherlo
  * caps, with what has been spent. One Save saves it all; the credential is
  * kept in a Secret and never shown again.
  */
+/**
+ * What Sherlock knows about the infrastructure (R2-05): the notes the
+ * administrators add to its instructions, the instructions as a cluster
+ * gets them, and a test question answered with the notes as typed.
+ */
+function NotesSection({ draft, setDraft, cfg }: { draft: Settings; setDraft: (s: Settings) => void; cfg: SherlockConfig }) {
+  const on = cfg.clusters.filter((c) => draft.clusters?.[c.id])
+  const [cluster, setCluster] = useState('')
+  const picked = on.find((c) => c.id === cluster)?.id ?? on[0]?.id ?? cfg.clusters[0]?.id ?? 'local'
+  const [prompt, setPrompt] = useState<{ key: string; core?: string; cluster?: string; error?: string } | null>(null)
+  const [test, setTest] = useState<{ busy: boolean; answer?: string; model?: string; error?: string } | null>(null)
+  const notes = draft.notes ?? ''
+  const promptKey = `${picked}\n${notes}`
+  const showPrompt = () => {
+    if (prompt?.key === promptKey && !prompt.error) {
+      setPrompt(null)
+      return
+    }
+    setPrompt({ key: promptKey })
+    fetchSherlockPrompt(picked, notes)
+      .then((p) => setPrompt({ key: promptKey, core: p.core, cluster: p.cluster }))
+      .catch((e: unknown) => setPrompt({ key: promptKey, error: e instanceof Error ? e.message : String(e) }))
+  }
+  const runTest = () => {
+    setTest({ busy: true })
+    testSherlock(picked, notes)
+      .then((r) => setTest({ busy: false, answer: r.answer, model: r.model, error: r.error }))
+      .catch((e: unknown) => setTest({ busy: false, error: e instanceof Error ? e.message : String(e) }))
+  }
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Infrastructure notes" data-testid="sherlock-notes-section">
+      <h3 className="rk-h">What Sherlock knows about your infrastructure</h3>
+      <p className="rk-fhint" style={{ margin: 0 }} id="sherlock-notes-hint">
+        Sherlock works each cluster out for itself: its distribution, its nodes’ operating systems, its add-ons. What it cannot see goes here, for every cluster: where the machines run, the network and storage, who to call, what not to touch, house rules. It is added to Sherlock’s instructions, after the cluster’s description, and trusted over what it works out. Not a place for secrets.
+      </p>
+      <textarea className="rk-area rk-mono" value={notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} spellCheck={false} rows={8} placeholder={'Three RKE2 clusters on Proxmox in the basement rack; rke2cp1 also runs the NFS server for the shared StorageClass.\nThe ingress is behind a Caddy proxy on gw1 (192.168.1.1).\nNever drain rke2cp1 without asking: the NFS pods live there.'} aria-describedby="sherlock-notes-hint" maxLength={16384} data-testid="sherlock-notes" style={{ width: '100%', boxSizing: 'border-box', minHeight: 140, fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }} />
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
+        {cfg.clusters.length > 1 && (
+          <label className="rk-field" style={{ width: 'auto' }}>
+            <span className="rk-sr">Cluster to show or test with</span>
+            <select value={picked} onChange={(e) => setCluster(e.target.value)} data-testid="sherlock-notes-cluster">
+              {cfg.clusters.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                  {draft.clusters?.[c.id] ? '' : ' (Sherlock off)'}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <button type="button" className="rk-btn" onClick={showPrompt} aria-expanded={!!prompt && !prompt.error && prompt.key === promptKey} data-testid="sherlock-prompt-show">
+          {prompt && prompt.key === promptKey && !prompt.error ? 'Hide the instructions' : 'Show the instructions'}
+        </button>
+        <button type="button" className="rk-btn" onClick={runTest} disabled={test?.busy} aria-busy={test?.busy} title="Asks Sherlock one question with the notes as typed here, saved or not; the answer is not kept" data-testid="sherlock-notes-test">
+          {test?.busy ? 'Asking…' : 'Test'}
+        </button>
+        <span className="rk-fhint">{notes.length > 0 ? `${notes.length} of 16,384 characters.` : ''} The test asks with the notes as typed, saved or not.</span>
+      </div>
+      {prompt && prompt.key === promptKey && (prompt.error ? (
+        <p className="rk-t" data-tone="err" role="alert" style={{ margin: 0, fontSize: 12.5 }}>
+          {prompt.error}
+        </p>
+      ) : prompt.core ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="sherlock-prompt">
+          <p className="rk-fhint" style={{ margin: 0 }}>
+            Built in, the same for every cluster: it cannot be changed here. The cluster’s block follows, with your notes at its end.
+          </p>
+          <pre className="rk-code rk-mono" style={{ margin: 0, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, overflow: 'auto', maxHeight: 360, whiteSpace: 'pre-wrap', background: 'var(--sunken)', borderRadius: 8, border: '1px solid var(--line)' }}>
+            {prompt.core}
+          </pre>
+          <pre className="rk-code rk-mono" style={{ margin: 0, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, overflow: 'auto', maxHeight: 360, whiteSpace: 'pre-wrap', background: 'var(--sunken)', borderRadius: 8, border: '1px solid var(--line)' }} data-testid="sherlock-prompt-cluster">
+            {prompt.cluster}
+          </pre>
+        </div>
+      ) : (
+        <p className="rk-fhint" style={{ margin: 0 }}>
+          Reading…
+        </p>
+      ))}
+      {test && !test.busy && (
+        <div className="rk-callout" data-tone={test.error ? 'warn' : 'info'} role={test.error ? 'alert' : undefined} style={{ margin: 0, fontSize: 12.5, whiteSpace: 'pre-wrap' }} data-testid="sherlock-notes-answer">
+          {test.error ? test.error : test.answer || 'Sherlock answered nothing.'}
+          {test.model && !test.error ? <span style={{ display: 'block', marginTop: 6, color: 'var(--fg3)' }}>— {test.model}</span> : null}
+        </div>
+      )}
+    </section>
+  )
+}
+
 export function SherlockSettings({ open }: { open: boolean }) {
   const [cfg, setCfg] = useState<SherlockConfig | null>(null)
   const [draft, setDraft] = useState<Settings | null>(null)
@@ -529,6 +618,8 @@ export function SherlockSettings({ open }: { open: boolean }) {
           Sherlock may open tabs and details, set filters, search, sort, show columns and highlight rows in the asking person’s own window while it answers. It never changes a cluster or what others see. Off, it still reads what the person sees.
         </p>
       </section>
+
+      <NotesSection draft={draft} setDraft={setDraft} cfg={cfg} />
 
       <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Spending caps">
         <h3 className="rk-h">Spending caps</h3>

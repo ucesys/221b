@@ -19,7 +19,7 @@ export function refreshLabel(seconds: number): string {
  * Saves the shared settings on the server, which applies them to every
  * open console at once. Rejects with the server's message.
  */
-export async function saveSettings(patch: { refreshSeconds: number; timeFormat?: TimeFormat; pendingGraceSeconds?: number; alertBanners?: boolean }, url = '/api/v1/settings'): Promise<Settings> {
+export async function saveSettings(patch: { refreshSeconds: number; timeFormat?: TimeFormat; pendingGraceSeconds?: number; alertBanners?: boolean; fleetsPage?: boolean }, url = '/api/v1/settings'): Promise<Settings> {
   let res: Response
   try {
     res = await fetch(url, {

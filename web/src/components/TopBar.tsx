@@ -250,7 +250,7 @@ export function TopBar({ cluster, counts, tones, labelTones, tab, stream, update
     .join(' ')
 
   // The Helm tab needs Secrets; without them there is nothing to show.
-  const tabs = TABS.filter((t) => t.id !== 'helm' || cluster?.secrets !== 'off')
+  const tabs = TABS.filter((t) => (t.id !== 'helm' || cluster?.secrets !== 'off') && (t.id !== 'fleets' || settings?.fleetsPage !== false))
   const ids = tabs.map((t) => t.id)
   const nav = useRef<HTMLElement>(null)
   const measureEl = useRef<HTMLDivElement>(null)

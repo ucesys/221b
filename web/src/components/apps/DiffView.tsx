@@ -23,15 +23,24 @@ export function DiffView({ diff, fill = false }: { diff: AppDiff; fill?: boolean
         {diff.changed.length > 0 && <span style={{ color: 'var(--fg3)' }}> — {diff.changed.slice(0, 6).join(', ')}{diff.changed.length > 6 ? ', …' : ''}</span>}
       </p>
       <pre className="rk-code rk-mono" style={{ margin: 0, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, overflow: 'auto', maxHeight: fill ? undefined : 520, flex: fill ? '1 1 auto' : undefined, minHeight: 0, whiteSpace: 'pre', background: 'var(--sunken)', borderRadius: 8, border: '1px solid var(--line)' }}>
-        {diff.text.split('\n').map((l, i) => {
-          const color = l.startsWith('+') && !l.startsWith('+++') ? 'var(--ok)' : l.startsWith('-') && !l.startsWith('---') ? 'var(--err)' : l.startsWith('@@') ? 'var(--info)' : l.startsWith('+++') || l.startsWith('---') ? 'var(--fg3)' : undefined
-          return (
-            <span key={i} style={{ display: 'block', color }}>
-              {l || ' '}
-            </span>
-          )
-        })}
+        <DiffLines text={diff.text} />
       </pre>
     </div>
+  )
+}
+
+/** The lines of a unified diff, coloured. */
+export function DiffLines({ text }: { text: string }) {
+  return (
+    <>
+      {text.split('\n').map((l, i) => {
+        const color = l.startsWith('+') && !l.startsWith('+++') ? 'var(--ok)' : l.startsWith('-') && !l.startsWith('---') ? 'var(--err)' : l.startsWith('@@') ? 'var(--info)' : l.startsWith('+++') || l.startsWith('---') ? 'var(--fg3)' : undefined
+        return (
+          <span key={i} style={{ display: 'block', color }}>
+            {l || ' '}
+          </span>
+        )
+      })}
+    </>
   )
 }

@@ -8,7 +8,7 @@ import { DiffIcon, RollbackIcon, WrenchIcon } from '../Icons'
  * of that revision, and a rollback to it; rollbackOff says why there is
  * no rollback here, current which revision runs now.
  */
-export const RevisionActions = createContext<{ diff: (revision: number) => void; rollback?: (revision: number) => void; rollbackOff?: string; current?: number } | null>(null)
+export const RevisionActions = createContext<{ diff: (revision: number) => void; rollback?: (revision: number) => void; rollbackOff?: string; current?: number; drift?: () => void; driftOff?: string } | null>(null)
 
 function place(anchor: HTMLElement | null, width = 320): CSSProperties {
   const r = anchor?.getBoundingClientRect()
@@ -78,6 +78,10 @@ export function RevisionTools({ revision }: { revision: number }) {
       off: current ? 'this revision runs now' : ctx.rollback ? undefined : (ctx.rollbackOff ?? 'not here'),
       run: () => ctx.rollback?.(revision),
     },
+    // The deployed revision is the one the cluster can drift from (R2-10).
+    ...(current
+      ? [{ key: 'drift', icon: <DiffIcon />, label: 'What drifted…', hint: 'the cluster against this revision', off: ctx.drift ? undefined : (ctx.driftOff ?? 'not checked yet'), run: () => ctx.drift?.() }]
+      : []),
   ]
   return (
     <>

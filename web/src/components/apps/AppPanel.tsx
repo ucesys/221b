@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, sourceText, updateApp, type AppDrift, type AppImage, type AppRefs, type AppSource, type AppView, type RefKind, type RevisionView } from '../../api/apps'
+import { fetchAppInspect, fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, sourceText, updateApp, type AppDrift, type AppImage, type AppInput, type AppRefs, type AppSource, type AppView, type RefKind, type RepoInspection, type RevisionView } from '../../api/apps'
+import { useLiveMeta } from '../../api/live'
 import { useDetails } from '../../api/details'
 import type { ClusterInfo, ReleaseDetails } from '../../api/types'
 import type { WatsonItem } from '../../api/watson'
@@ -14,6 +15,7 @@ import { CloseIcon } from '../Icons'
 import { ReleaseBody, SUBTABS, type ExtraTab } from '../ReleaseBody'
 import { AppToolsButton, type AppAction } from './AppMenu'
 import { DiffDialog } from './DiffDialog'
+import { DriftDialog } from './DriftDialog'
 import { RevisionActions } from './revisionActions'
 
 export const APP_TABS = ['overview', ...SUBTABS, 'images'] as const
@@ -53,6 +55,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
   const [images, setImages] = useState<{ revision: number; images: AppImage[] } | null>(null)
   const [imageRev, setImageRev] = useState<number | undefined>(undefined)
   const [diffFor, setDiffFor] = useState<number | null>(null)
+  const [driftOpen, setDriftOpen] = useState(false)
   const [err, setErr] = useState('')
   const details = useDetails<ReleaseDetails>(row.orphan ? null : apiPath(`helm/${encodeURIComponent(row.namespace)}/${encodeURIComponent(row.name)}`))
   const d = details.data
@@ -253,6 +256,14 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
               <button className="rk-link" onClick={() => check(true)} disabled={checking} data-testid="app-check-drift">
                 {checking ? 'checking…' : 'check again'}
               </button>
+              {drift.changed + drift.missing > 0 && (
+                <>
+                  {' · '}
+                  <button className="rk-link" onClick={() => setDriftOpen(true)} data-testid="app-drift-what">
+                    what changed
+                  </button>
+                </>
+              )}
             </span>
           )}
           <span data-testid="app-source-line">
@@ -322,6 +333,8 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
                   ? (rev) => watson.send(`helm rollback ${row.name} ${rev} -n ${row.namespace}`, { from: 'Helm tab', why: `Roll ${row.namespace}/${row.name} back to revision ${rev}.` })
                   : undefined,
               rollbackOff: !canChange ? 'for Admins and SuperAdmins' : !watson.available ? 'Watson is off here' : watson.readOnly ? 'this cluster is connected read-only' : undefined,
+              drift: drift && drift.changed + drift.missing > 0 ? () => setDriftOpen(true) : undefined,
+              driftOff: !app ? 'no source to check against' : !drift ? 'not checked yet' : drift.unknown > 0 && drift.same + drift.changed + drift.missing === 0 ? 'the check could not read the cluster' : 'the cluster is as deployed',
             }}
           >
           <ReleaseBody
@@ -344,6 +357,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
           </RevisionActions.Provider>
         )}
         {diffFor !== null && revisions && <DiffDialog clusterId={clusterId} namespace={row.namespace} name={row.name} revisions={revisions} revision={diffFor} app={app} refs={refs} onClose={() => setDiffFor(null)} />}
+        {driftOpen && drift && <DriftDialog name={row.name} drift={drift} onClose={() => setDriftOpen(false)} />}
       </section>
     </main>
   )
@@ -538,13 +552,66 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
     <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 0, gridColumn: span > 1 ? `span ${span}` : undefined }}>
       {label}
       <span className="rk-field">
-        <input className="rk-mono" type={type} autoComplete="off" value={value} readOnly={!canChange} onChange={(e) => (set(e.target.value), edited())} onBlur={() => save()} placeholder={placeholder} data-testid={testId} />
+        <input className="rk-mono" type={type} autoComplete="off" value={value} readOnly={!canChange} onChange={(e) => (set(e.target.value), edited())} onBlur={() => save()} onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), save())} placeholder={placeholder} data-testid={testId} />
       </span>
     </label>
   )
-  const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? (repo.trim() && ref.trim() ? 'Saves when you leave the field' : 'Needs a repository and a branch or tag') : state === 'error' ? error : saved ? 'Saved' : 'Not set'
+  // The deploy options (R2-08, R2-09, R2-11) save on their own, at once.
+  const meta = useLiveMeta()
+  const fleets = (meta.settings?.fleets?.[clusterId] ?? []).filter((f) => f.deploy)
+  const [inspect, setInspect] = useState<{ key: string; data?: RepoInspection; error?: string } | null>(null)
+  const inspectKey = app ? `${app.source.repo}|${app.source.path ?? ''}|${app.source.ref}` : ''
+  useEffect(() => {
+    if (!inspectKey) return
+    let live = true
+    fetchAppInspect(clusterId, row.namespace, row.name)
+      .then((d) => live && setInspect({ key: inspectKey, data: d }))
+      .catch((e: unknown) => live && setInspect({ key: inspectKey, error: e instanceof Error ? e.message : String(e) }))
+    return () => {
+      live = false
+    }
+  }, [inspectKey, clusterId, row.namespace, row.name])
+  const chartFiles = inspect?.key === inspectKey && inspect.data ? (inspect.data.charts.find((c) => c.path === (app?.source.path ?? ''))?.valuesFiles ?? inspect.data.charts[0]?.valuesFiles ?? []) : []
+  const valuesFiles = app?.valuesFile && !chartFiles.includes(app.valuesFile) ? [app.valuesFile, ...chartFiles] : chartFiles
+  const [optState, setOptState] = useState<'' | 'saving' | 'saved' | 'error'>('')
+  const [optError, setOptError] = useState('')
+  // The choice shows at once; the record's own values take over when it
+  // comes back saved (or changed elsewhere).
+  const optKey = app ? `${app.valuesFile ?? ''}|${app.ignoreDefaults ? 1 : 0}|${app.fleet ?? ''}` : ''
+  const [local, setLocal] = useState<{ key: string; valuesFile: string; ignoreDefaults: boolean; fleet: string } | null>(null)
+  const opts = local && local.key === optKey ? local : { key: optKey, valuesFile: app?.valuesFile ?? '', ignoreDefaults: !!app?.ignoreDefaults, fleet: app?.fleet ?? '' }
+  const saveOption = (input: AppInput) => {
+    setLocal({ ...opts, ...(input.valuesFile !== undefined ? { valuesFile: input.valuesFile } : {}), ...(input.ignoreDefaults !== undefined ? { ignoreDefaults: input.ignoreDefaults } : {}), ...(input.fleet !== undefined ? { fleet: input.fleet } : {}) })
+    setOptState('saving')
+    queue.current = queue.current
+      .then(() => updateApp(clusterId, row.namespace, row.name, input))
+      .then((r) => {
+        setOptState('saved')
+        onResult(r, 'Deploy options saved')
+      })
+      .catch((e: unknown) => {
+        setLocal(null)
+        setOptState('error')
+        setOptError(e instanceof Error ? e.message : String(e))
+      })
+  }
+  const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? (repo.trim() && ref.trim() ? 'Not saved yet: press Save, or leave the field' : 'Needs a repository and a branch or tag') : state === 'error' ? error : saved ? 'Saved' : 'Not set'
   return (
-    <Card title="Source" aside={<span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-source-state">{status}</span>}>
+    <Card
+      title="Source"
+      aside={
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-source-state">
+            {status}
+          </span>
+          {canChange && (
+            <button className="rk-btn" data-on={state === 'dirty' && repo.trim() && ref.trim() ? 'true' : undefined} onClick={() => save()} disabled={state === 'saving' || !repo.trim() || !ref.trim() || (state !== 'dirty' && state !== 'error')} style={{ height: 26 }} data-testid="app-src-save">
+              {saved ? 'Save' : 'Set source'}
+            </button>
+          )}
+        </span>
+      }
+    >
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: '8px 12px' }}>
         {field('Repository (https:// git URL)', repo, setRepo, 'https://github.com/org/app', 'app-src-repo', 'text', 4)}
         {field('Chart path (empty for the root)', path, setPath, 'charts/app', 'app-src-path', 'text', 2)}
@@ -595,9 +662,50 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             </span>
           </>
         )}
-        {state === 'dirty' && repo.trim() && ref.trim() ? <span>Leave the field to save.</span> : null}
         {!saved && <span>Once set, the release can be upgraded from here and checked for drift.</span>}
       </div>
+      {app && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '8px 16px', paddingTop: 8, borderTop: '1px dashed var(--line)' }} data-testid="app-deploy-options">
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 220 }}>
+            Second values file (from the chart’s directory at {app.source.ref})
+            <span className="rk-field">
+              <select className="rk-mono" value={opts.valuesFile} disabled={!canChange} onChange={(e) => saveOption({ valuesFile: e.target.value })} data-testid="app-src-values-file">
+                <option value="">none: values.yaml only</option>
+                {valuesFiles.map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
+            </span>
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--fg)', paddingBottom: 6 }}>
+            <input type="checkbox" checked={opts.ignoreDefaults} disabled={!canChange} onChange={(e) => saveOption({ ignoreDefaults: e.target.checked })} data-testid="app-src-ignore-defaults" /> Ignore the chart’s values.yaml
+          </label>
+          {fleets.length > 0 && (
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 200 }}>
+              Deploy to the fleet
+              <span className="rk-field">
+                <select value={opts.fleet} disabled={!canChange} onChange={(e) => saveOption({ fleet: e.target.value })} data-testid="app-src-fleet">
+                  <option value="">any node</option>
+                  {fleets.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name} · {f.deploy}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </label>
+          )}
+          <span style={{ fontSize: 12, color: optState === 'error' ? 'var(--err)' : 'var(--fg3)', paddingBottom: 6, flex: '1 1 260px' }} role={optState === 'error' ? 'alert' : undefined} data-testid="app-deploy-options-state">
+            {optState === 'saving' ? 'Saving…' : optState === 'error' ? optError : optState === 'saved' ? 'Saved. ' : ''}
+            Applied lowest first: {opts.ignoreDefaults ? <s>the chart’s values.yaml</s> : 'the chart’s values.yaml'}
+            {opts.valuesFile ? `, ${opts.valuesFile}` : ''}, the Values tab, then its parameters
+            {app.fleetLabel ? `; the fleet adds nodeSelector ${app.fleetLabel}` : ''}.
+            {inspect?.key === inspectKey && inspect.error ? ` The repository could not be read for its files: ${inspect.error}` : ''}
+          </span>
+        </div>
+      )}
     </Card>
   )
 }

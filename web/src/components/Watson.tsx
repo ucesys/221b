@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useToolbox } from './toolbox/context'
-import { approveWatson, clearWatson, discardWatson, editWatson, sendToWatson, stopWatson, WatsonError, watsonSupports, type Send, type WatsonItem, type WatsonLine, type WatsonState } from '../api/watson'
+import { APPROVE_ALL_CHOICES, approveAllWatson, approveWatson, clearWatson, discardWatson, editWatson, endApproveAllWatson, sendToWatson, stopWatson, WatsonError, watsonSupports, type Send, type WatsonItem, type WatsonLine, type WatsonState } from '../api/watson'
+import { fmtClock } from '../lib/format'
 import { readJSON, writeJSON } from '../lib/storage'
 import { CopyIcon, WatsonIcon } from './Icons'
 
@@ -425,6 +426,31 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
   const now = useTick(items.some((x) => x.status === 'running' || (x.status === 'pending' && x.kind === 'change')))
   const prompt = status?.prompt ?? `watson@${clusterName}:~$`
   const waiting = pending.filter((x) => x.kind === 'change' && x.canApprove).length
+  // A standing approval (R2-04): given here, or found in the status on
+  // opening; it ends on its own or with Stop.
+  const [standing, setStanding] = useState<{ cluster: string; until: string | null } | null>(null)
+  const until = standing?.cluster === cluster ? standing.until : (status?.approvedUntil ?? null)
+  const standingLeft = until ? Date.parse(until) - now : 0
+  const standingOn = standingLeft > 0
+  const standingNow = useTick(standingOn, 15_000)
+  void standingNow
+  const approveAllMax = status?.approveAllMax ?? 0
+  const approveAll = async (minutes: number) => {
+    try {
+      const r = await approveAllWatson(cluster, minutes)
+      setStanding({ cluster, until: r.until })
+    } catch (e) {
+      onToast(e instanceof WatsonError ? e.message : String(e))
+    }
+  }
+  const endApproveAll = async () => {
+    try {
+      await endApproveAllWatson(cluster)
+      setStanding({ cluster, until: null })
+    } catch (e) {
+      onToast(e instanceof WatsonError ? e.message : String(e))
+    }
+  }
 
   useLayoutEffect(() => {
     const el = scroller.current
@@ -483,6 +509,31 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
           />
           <span>Auto-run reads</span>
         </label>
+        {approveAllMax > 0 && !status?.readOnly && (
+          standingOn ? (
+            <span className="rk-wide" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, whiteSpace: 'nowrap' }} data-testid="watson-standing">
+              <span className="rk-pill" data-tone="warn" title="Every card you could approve is approved as it is ready, until then">
+                <span className="rk-dot" />
+                approving all until {fmtClock(until!)}
+              </span>
+              <button className="rk-btn" onClick={() => void endApproveAll()} style={{ height: 28 }} data-testid="watson-standing-end">
+                Stop
+              </button>
+            </span>
+          ) : (
+            <label className="rk-field rk-sel rk-wide" style={{ width: 'auto', height: 28 }} title="Approves every card you could approve, as it is ready, for the next minutes: your own, and others' where a second person is needed. An administrator sets the longest in Settings.">
+              <span className="rk-sr">Approve all for</span>
+              <select value="" onChange={(e) => e.target.value && void approveAll(Number(e.target.value))} style={{ fontSize: 12 }} data-testid="watson-approve-all">
+                <option value="">Approve all for…</option>
+                {APPROVE_ALL_CHOICES.filter((m) => m <= approveAllMax).map((m) => (
+                  <option key={m} value={m}>
+                    {m < 60 ? `${m} minutes` : m === 60 ? '1 hour' : `${m / 60} hours`}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )
+        )}
         {finishedCount > 0 && (
           <button className="rk-btn" onClick={() => void clear()} title="Remove finished commands from the console" style={{ height: 28 }} data-testid="watson-clear">
             Clear

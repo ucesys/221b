@@ -118,13 +118,23 @@ test('a source is set in place, refused when it is not https, and forgotten; a V
   await expect(panel.getByTestId('app-source-state')).toContainText('https://')
   await panel.getByTestId('app-src-repo').fill('github.com/ucesys/221b')
   await panel.getByTestId('app-src-path').fill('deploy/helm/221b')
-  await panel.getByTestId('app-src-path').blur()
+  // The Save button saves what is typed (R2-06); the wrench's Upgrade… follows.
+  await expect(panel.getByTestId('app-source-state')).toContainText('Not saved yet')
+  await panel.getByTestId('app-src-save').click()
   await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 10_000 })
   await expect(panel.getByTestId('app-source-line')).toContainText('github.com/ucesys/221b/deploy/helm/221b @ main')
   try {
     const list = await request.get('/api/v1/apps')
-    const apps = (await list.json()) as { namespace: string; name: string; source: { repo: string; ref: string; refKind: string } }[]
+    const apps = (await list.json()) as { namespace: string; name: string; source: { repo: string; ref: string; refKind: string }; ignoreDefaults?: boolean }[]
     expect(apps.find((a) => a.name === r.name)?.source).toEqual({ repo: 'https://github.com/ucesys/221b', path: 'deploy/helm/221b', ref: 'main', refKind: 'branch' })
+    await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()
+    await expect(page.getByTestId('app-tool-upgrade')).not.toHaveAttribute('aria-disabled', 'true')
+    await page.keyboard.press('Escape')
+    // The deploy options save at once (R2-08, R2-09).
+    await expect(panel.getByTestId('app-deploy-options')).toContainText('Applied lowest first')
+    await panel.getByTestId('app-src-ignore-defaults').check()
+    await expect(panel.getByTestId('app-deploy-options-state')).toContainText('Saved', { timeout: 10_000 })
+    expect(((await (await request.get('/api/v1/apps')).json()) as typeof apps).find((a) => a.name === r.name)?.ignoreDefaults).toBe(true)
     // The values save by themselves, and show at once.
     await panel.locator('[data-subtab="values"]').click()
     await panel.getByTestId('app-values').fill('replicaCount: 2\n')

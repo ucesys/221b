@@ -20,11 +20,21 @@ func systemPrompt(q Question, now time.Time) []Block {
 		}
 		cluster += "."
 	}
+	if n := strings.TrimSpace(q.Notes); n != "" {
+		cluster += "\n\nWhat the administrators of this console say about their infrastructure, to trust over what you work out:\n" + n
+	}
 	return []Block{
 		{Type: "text", Text: corePrompt(q.ViewChanges), CacheControl: &CacheControl{Type: "ephemeral"}},
 		{Type: "text", Text: cluster, CacheControl: &CacheControl{Type: "ephemeral"}},
 		{Type: "text", Text: "It is " + now.UTC().Format("Monday 2 January 2006, 15:04 UTC") + "."},
 	}
+}
+
+// PromptText is the instructions as a cluster gets them (R2-05): the core
+// block, the cluster's block with the notes, for reading in Settings.
+func PromptText(q Question, now time.Time) (core, cluster string) {
+	b := systemPrompt(q, now)
+	return b[0].Text, b[1].Text
 }
 
 func corePrompt(viewChanges bool) string {

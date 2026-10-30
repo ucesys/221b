@@ -17,6 +17,49 @@ type ChartCandidate struct {
 	Version     string `json:"version"`
 	AppVersion  string `json:"appVersion,omitempty"`
 	Description string `json:"description,omitempty"`
+	// ValuesFiles are the other YAML files in the chart's directory and
+	// its first subdirectories (values-prod.yaml, values/eu.yaml), the
+	// ones a deployment may lay over values.yaml (R2-08).
+	ValuesFiles []string `json:"valuesFiles,omitempty"`
+}
+
+// valuesFiles lists the YAML files beside a chart's values.yaml, and
+// those one directory down, templates, charts, crds and ci left out.
+func valuesFiles(c *Checkout, root string) []string {
+	var out []string
+	add := func(dir, name string) {
+		if n := strings.ToLower(name); (strings.HasSuffix(n, ".yaml") || strings.HasSuffix(n, ".yml")) && n != "chart.yaml" && n != "chart.lock" && n != "values.yaml" {
+			out = append(out, path.Join(dir, name))
+		}
+	}
+	entries, err := c.FS.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	for _, e := range entries {
+		n := e.Name()
+		switch {
+		case strings.HasPrefix(n, "."):
+		case !e.IsDir():
+			add("", n)
+		case n == "templates" || n == "charts" || n == "crds" || n == "ci":
+		default:
+			sub, err := c.FS.ReadDir(path.Join(root, n))
+			if err != nil {
+				continue
+			}
+			for _, f := range sub {
+				if !f.IsDir() {
+					add(n, f.Name())
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	if len(out) > 40 {
+		out = out[:40]
+	}
+	return out
 }
 
 // ReadmeHints is what a README's helm install example says (M-07): the
@@ -91,7 +134,7 @@ func findCharts(c *Checkout, dir string, depth int, out *[]ChartCandidate) {
 			Description string `json:"description"`
 		}
 		if yaml.Unmarshal(b, &m) == nil && m.Name != "" {
-			*out = append(*out, ChartCandidate{Path: dir, Name: m.Name, Version: m.Version, AppVersion: m.AppVersion, Description: m.Description})
+			*out = append(*out, ChartCandidate{Path: dir, Name: m.Name, Version: m.Version, AppVersion: m.AppVersion, Description: m.Description, ValuesFiles: valuesFiles(c, root)})
 		}
 		// A chart's charts/ holds its dependencies, not applications.
 		entries, err := c.FS.ReadDir(root)

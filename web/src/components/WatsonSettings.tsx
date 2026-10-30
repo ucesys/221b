@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { fetchWatsonConfig, saveWatsonConfig, type WatsonSettings as Settings } from '../api/watson'
+import { APPROVE_ALL_CHOICES, fetchWatsonConfig, saveWatsonConfig, type WatsonSettings as Settings } from '../api/watson'
 import { adminHref } from '../lib/router'
 import { SaveBar } from './SaveBar'
 
@@ -11,6 +11,7 @@ import { SaveBar } from './SaveBar'
 export function WatsonSettings({ open }: { open: boolean }) {
   const [cfg, setCfg] = useState<Settings | null>(null)
   const [draft, setDraft] = useState(false)
+  const [approveAll, setApproveAll] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState('')
@@ -22,6 +23,7 @@ export function WatsonSettings({ open }: { open: boolean }) {
         if (stop) return
         setCfg(c)
         setDraft(c.twoPerson)
+        setApproveAll(c.approveAllMinutes ?? 0)
         setError('')
       })
       .catch((e: unknown) => {
@@ -36,9 +38,10 @@ export function WatsonSettings({ open }: { open: boolean }) {
     setError('')
     setSaved('')
     try {
-      const c = await saveWatsonConfig({ twoPerson: draft })
+      const c = await saveWatsonConfig({ twoPerson: draft, approveAllMinutes: approveAll })
       setCfg(c)
       setDraft(c.twoPerson)
+      setApproveAll(c.approveAllMinutes ?? 0)
       setSaved('Saved.')
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -78,7 +81,26 @@ export function WatsonSettings({ open }: { open: boolean }) {
               <span>A second person approves every change on clusters tagged production; nobody approves their own.</span>
             </label>
           </section>
-          <SaveBar changed={draft !== cfg.twoPerson} busy={busy} onSave={() => void save()} onUndo={() => setDraft(cfg.twoPerson)} error={error} saved={saved} testId="watson-settings-save" />
+          <section style={{ display: 'flex', flexDirection: 'column', gap: 6 }} aria-label="Standing approvals">
+            <h3 className="rk-h">Standing approvals</h3>
+            <label style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 12.5, color: 'var(--fg)' }}>
+              <span>A person may approve everything for up to</span>
+              <span className="rk-field" style={{ width: 150 }}>
+                <select value={approveAll} onChange={(e) => setApproveAll(Number(e.target.value))} data-testid="watson-approve-all-max">
+                  <option value={0}>nothing (off)</option>
+                  {APPROVE_ALL_CHOICES.map((m) => (
+                    <option key={m} value={m}>
+                      {m < 60 ? `${m} minutes` : m === 60 ? '1 hour' : `${m / 60} hours`}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </label>
+            <p className="rk-fhint" style={{ margin: 0 }}>
+              With it on, Watson offers <i>Approve all for…</i>: for that long, every card the person could approve is approved as soon as it is ready, their own and, with the two-person rule, other people’s. Every other rule still applies, and the audit log names them as the approver.
+            </p>
+          </section>
+          <SaveBar changed={draft !== cfg.twoPerson || approveAll !== (cfg.approveAllMinutes ?? 0)} busy={busy} onSave={() => void save()} onUndo={() => (setDraft(cfg.twoPerson), setApproveAll(cfg.approveAllMinutes ?? 0))} error={error} saved={saved} testId="watson-settings-save" />
         </>
       )}
     </section>

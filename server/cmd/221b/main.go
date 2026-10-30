@@ -436,6 +436,9 @@ func run(args []string) error {
 		TwoPerson: func(c watson.Cluster) bool {
 			return c.Env == clusters.EnvProduction && shared.Current().WatsonOrDefault().TwoPerson
 		},
+		ApproveAllMax: func(c watson.Cluster) time.Duration {
+			return time.Duration(shared.Current().WatsonOrDefault().ApproveAllMinutes) * time.Minute
+		},
 	})
 	go watsonSvc.Watch(ctx, func(id string) (watson.Cluster, bool) {
 		sum, ok := manager.Summary(id)

@@ -297,9 +297,12 @@ type Question struct {
 	// guidance for each (platform.Profile.Prompt). Empty, the prompt
 	// names only the cluster and its version.
 	Platform string
-	Tools    Toolbox
-	Who      audit.Who
-	From     string
+	// Notes are what the administrators wrote about their infrastructure
+	// (R2-05), after the cluster's description.
+	Notes string
+	Tools Toolbox
+	Who   audit.Who
+	From  string
 	// Window is the console window whose view the UI actions change: the
 	// one that asked, or the main window Sherlock's own window follows
 	// (P6U-08). Empty when there is none.
@@ -421,7 +424,11 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		detail  string
 		ui      uiLog
 	)
-	defs := append(append([]ToolDef(nil), q.Tools.Defs()...), uiDefs(q.ViewChanges)...)
+	var defs []ToolDef
+	if q.Tools != nil {
+		defs = append(defs, q.Tools.Defs()...)
+	}
+	defs = append(defs, uiDefs(q.ViewChanges)...)
 	if n := len(defs); n > 0 {
 		defs = append([]ToolDef(nil), defs...)
 		defs[n-1].CacheControl = &CacheControl{Type: "ephemeral"}

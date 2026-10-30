@@ -149,3 +149,27 @@ test('refuses a rate out of range and a request from another site', async ({ req
   const settings = (await (await request.get('/api/v1/settings')).json()) as Settings
   expect(settings.refreshSeconds).toBe(3)
 })
+
+test('the Fleets tab can be hidden for everyone; fleets stay on the Nodes tab (R2-03)', async ({ page, request }) => {
+  await open(page)
+  await expect(page.locator('[data-tab=fleets]')).toBeVisible()
+  const dialog = await openSettings(page)
+  const seg = dialog.getByTestId('settings-fleets-page')
+  await seg.getByRole('button', { name: 'Hide' }).click()
+  await dialog.getByTestId('settings-save').click()
+  await expect(dialog.getByText('Saved.')).toBeVisible()
+  try {
+    expect(((await (await request.get('/api/v1/settings')).json()) as Settings).fleetsPage).toBe(false)
+    await page.goto('/#/nodes')
+    await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+    await expect(page.locator('[data-tab=fleets]')).toHaveCount(0)
+    await expect(page.getByTestId('node-fleets')).toBeVisible()
+  } finally {
+    const d = await openSettings(page)
+    await d.getByTestId('settings-fleets-page').getByRole('button', { name: 'Show' }).click()
+    await d.getByTestId('settings-save').click()
+    await expect(d.getByText('Saved.')).toBeVisible()
+  }
+  await page.goto('/#/nodes')
+  await expect(page.locator('[data-tab=fleets]')).toBeVisible()
+})

@@ -471,6 +471,8 @@ export interface Settings {
   pendingGraceSeconds?: number
   /** Whether every tab but Alerts shows the alerts in banners at the top; absent is true. */
   alertBanners?: boolean
+  /** Whether the Fleets tab shows; absent is true. Off, fleets are kept from the Nodes tab (R2-03). */
+  fleetsPage?: boolean
   /** Each cluster's fleets (P4-01), by connection id. */
   fleets?: Record<string, Fleet[]>
   /** Where the server keeps them: "configmap" survives restarts, "memory" does not. */
@@ -616,6 +618,8 @@ export interface Fleet {
   /** "nodes" for a list of nodes by name, kept in the console, which has no labels or taints. */
   kind?: 'nodes'
   nodes?: string[]
+  /** A node label, "key=value", that applications deployed to the fleet are pinned to (R2-11). */
+  deploy?: string
 }
 
 export interface FleetStats {
@@ -644,6 +648,8 @@ export interface FleetRow {
   by?: 'nodes'
   listed?: string[]
   order: number
+  /** The fleet's deploy label (R2-11). */
+  deploy?: string
   members: string[]
   stats: FleetStats
 }

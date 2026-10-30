@@ -575,3 +575,57 @@ func TestTaintsWaitForApprovalAndRun(t *testing.T) {
 		t.Fatalf("status %s, output %q", done.Status, outputOf(svc, it.ID))
 	}
 }
+
+// A standing approval (R2-04) approves a person's cards as they are
+// ready, within what the settings allow, until it ends.
+func TestAStandingApprovalApprovesCardsAsTheyAreReady(t *testing.T) {
+	max := 30 * time.Minute
+	svc, cl, s, _, buf := setup(t, Options{ApproveAllMax: func(Cluster) time.Duration { return max }})
+	if _, err := svc.ApproveAll(cl, alice(), time.Hour); !errors.Is(err, ErrGrant) {
+		t.Fatalf("an hour is more than the settings allow: %v", err)
+	}
+	g, err := svc.ApproveAll(cl, alice(), 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := svc.Standing(cl, alice()); !ok || !got.Until.Equal(g.Until) {
+		t.Fatalf("standing %+v %v", got, ok)
+	}
+	it := svc.Submit(context.Background(), cl, alice(), "kubectl cordon worker-003", "Cordon button on node worker-003", "", true)[0]
+	done := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) })
+	if done.Status != StatusDone || done.Approver == nil || done.Approver.User != alice().User || !s.Node("worker-003").Spec.Unschedulable {
+		t.Fatalf("status %s approver %+v", done.Status, done.Approver)
+	}
+	// Bob's card is not Alice's to approve on an ordinary cluster.
+	other := svc.Submit(context.Background(), cl, bob(), "kubectl cordon worker-004", "Cordon button on node worker-004", "", true)[0]
+	card := wait(t, svc, other.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	time.Sleep(200 * time.Millisecond)
+	if got := svc.Get(other.ID); got.Status != StatusPending {
+		t.Fatalf("bob's card: %s (%+v)", got.Status, card.Plan)
+	}
+	// Ended, the next card waits.
+	svc.Revoke(cl, alice())
+	if _, ok := svc.Standing(cl, alice()); ok {
+		t.Fatal("still standing")
+	}
+	later := svc.Submit(context.Background(), cl, alice(), "kubectl cordon worker-005", "Cordon button on node worker-005", "", true)[0]
+	wait(t, svc, later.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	time.Sleep(200 * time.Millisecond)
+	if got := svc.Get(later.ID); got.Status != StatusPending {
+		t.Fatalf("after the end: %s", got.Status)
+	}
+	var grants []string
+	for _, e := range buf.events() {
+		if e.Action == ActionApproveAll {
+			grants = append(grants, e.Detail)
+		}
+	}
+	if len(grants) != 2 || !strings.HasPrefix(grants[0], "until=") || grants[1] != "ended" {
+		t.Fatalf("audit %v", grants)
+	}
+	// Without the setting, none.
+	max = 0
+	if _, err := svc.ApproveAll(cl, alice(), 5*time.Minute); !errors.Is(err, ErrGrant) {
+		t.Fatalf("off: %v", err)
+	}
+}

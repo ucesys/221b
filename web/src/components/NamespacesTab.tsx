@@ -242,10 +242,6 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
             New namespace…
           </button>
         ) : undefined
-      } foot={
-        <>
-          Cluster-scoped objects such as nodes, persistent volumes, storage classes and cluster roles belong to no namespace; find nodes in the <a href={href('nodes')} style={{ color: 'var(--accent)' }}>Nodes</a> tab, and volumes, claims and classes in the <a href={href('storage', [], ns ? { ns } : {})} style={{ color: 'var(--accent)' }} data-testid="namespace-storage-footer">Storage</a> tab.
-        </>
       }
     />
       <main className="rk-pane" aria-label="Namespace" style={{ flex: '999 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column' }}>

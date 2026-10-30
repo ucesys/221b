@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +34,8 @@ func (s *Server) watsonRoutes() {
 		s.handle("POST "+base+"watson/commands/{id}/stop", "watson-stop", s.postWatsonStop)
 		s.handle("PUT "+base+"watson/commands/{id}", "watson-edit", s.putWatsonCommand)
 		s.handle("POST "+base+"watson/clear", "watson-clear", s.postWatsonClear)
+		s.handle("POST "+base+"watson/approvals", "watson-approve-all", s.postWatsonApproveAll)
+		s.handle("DELETE "+base+"watson/approvals", "watson-approve-all-end", s.deleteWatsonApproveAll)
 	}
 	s.handle("GET /api/v1/watson/config", "watson-config", s.getWatsonConfig)
 	s.handle("PUT /api/v1/watson/config", "watson-config-update", s.putWatsonConfig)
@@ -114,6 +117,50 @@ type watsonStatus struct {
 	Reads   []string `json:"reads"`
 	Changes []string `json:"changes"`
 	Admin   bool     `json:"admin"`
+	// ApproveAllMax is the longest standing approval the settings allow,
+	// in minutes (0: none), and ApprovedUntil when this person's ends.
+	ApproveAllMax int        `json:"approveAllMax"`
+	ApprovedUntil *time.Time `json:"approvedUntil,omitempty"`
+}
+
+// watsonApproveAllMax is the longest standing approval on a cluster.
+func (s *Server) watsonApproveAllMax(c watson.Cluster) time.Duration {
+	if s.opts.Settings == nil || c.ReadOnly {
+		return 0
+	}
+	return time.Duration(s.opts.Settings.Current().WatsonOrDefault().ApproveAllMinutes) * time.Minute
+}
+
+func (s *Server) postWatsonApproveAll(w http.ResponseWriter, r *http.Request) {
+	c, who, ok := s.watsonReady(w, r)
+	if !ok {
+		return
+	}
+	var in struct {
+		Minutes int `json:"minutes"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		jsonError(w, http.StatusBadRequest, "say for how many minutes")
+		return
+	}
+	g, err := s.opts.Watson.ApproveAll(c, who, time.Duration(in.Minutes)*time.Minute)
+	if err != nil {
+		jsonError(w, http.StatusConflict, err.Error())
+		return
+	}
+	b, _ := json.Marshal(map[string]any{"until": g.Until})
+	writeJSON(w, r, b)
+}
+
+func (s *Server) deleteWatsonApproveAll(w http.ResponseWriter, r *http.Request) {
+	c, who, ok := s.watsonReady(w, r)
+	if !ok {
+		return
+	}
+	s.opts.Watson.Revoke(c, who)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) watsonTwoPerson(c watson.Cluster) bool {
@@ -145,6 +192,13 @@ func (s *Server) watsonStatusFor(r *http.Request, c watson.Cluster) watsonStatus
 		user, _, _ = strings.Cut(who.User, "@")
 	}
 	st.Prompt = user + "@" + c.Name + ":~$"
+	st.ApproveAllMax = int(s.watsonApproveAllMax(c) / time.Minute)
+	if s.opts.Watson != nil {
+		if g, ok := s.opts.Watson.Standing(c, who); ok {
+			until := g.Until
+			st.ApprovedUntil = &until
+		}
+	}
 	return st
 }
 
@@ -575,6 +629,14 @@ func (s *Server) putWatsonConfig(w http.ResponseWriter, r *http.Request) {
 	detail := "no change"
 	if before.TwoPerson != in.TwoPerson {
 		detail = map[bool]string{true: "two-person rule on for production clusters", false: "two-person rule off"}[in.TwoPerson]
+	}
+	if before.ApproveAllMinutes != in.ApproveAllMinutes {
+		if detail == "no change" {
+			detail = ""
+		} else {
+			detail += ", "
+		}
+		detail += "standing approvals up to " + strconv.Itoa(in.ApproveAllMinutes) + " minutes"
 	}
 	s.record(r, ActionWatsonSettings, "watson", detail)
 	s.getWatsonConfig(w, r)

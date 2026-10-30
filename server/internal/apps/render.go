@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"path"
 	"strings"
 
+	"github.com/go-git/go-billy/v5/util"
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart/common"
 	chart "helm.sh/helm/v4/pkg/chart/v2"
@@ -38,6 +40,87 @@ func Values(valuesYAML string, params []string) (map[string]any, error) {
 		}
 	}
 	return vals, nil
+}
+
+// Compose loads the chart at the source's path and builds the values an
+// application deploys with, lowest first: the chart's values.yaml (left
+// out with IgnoreDefaults), the record's second values file read from the
+// checkout, the record's Values, then its Params and extra, and the
+// fleet's deploy label as the pods' nodeSelector (R2-09, R2-11). A nil
+// record composes the source alone.
+func Compose(c *Checkout, src Source, rec *Record, extra []string) (*chart.Chart, map[string]any, error) {
+	ch, err := LoadChart(c, src.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	var file, values string
+	var params []string
+	if rec != nil {
+		values, params = rec.Values, append([]string(nil), rec.Params...)
+		if rec.IgnoreDefaults {
+			ch.Values = map[string]any{}
+		}
+		if rec.ValuesFile != "" {
+			name := path.Clean("/" + rec.ValuesFile)
+			b, err := util.ReadFile(c.FS, path.Join("/", src.Path, name))
+			if err != nil {
+				return nil, nil, fmt.Errorf("the values file %s is not in the chart's directory at this ref", rec.ValuesFile)
+			}
+			file = string(b)
+		}
+		if k, v, ok := strings.Cut(rec.FleetLabel, "="); ok && k != "" {
+			params = append(params, "nodeSelector."+strings.ReplaceAll(k, ".", `\.`)+"="+v)
+		}
+	}
+	params = append(params, extra...)
+	vals, err := ValuesFrom(file, values, params)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ch, vals, nil
+}
+
+// ValuesFrom builds the values from a values file, the values typed in
+// the console over it, and the parameters last, as helm -f file -f values
+// --set k=v does.
+func ValuesFrom(fileYAML, valuesYAML string, params []string) (map[string]any, error) {
+	base := map[string]any{}
+	if strings.TrimSpace(fileYAML) != "" {
+		v, err := loader.LoadValues(strings.NewReader(fileYAML))
+		if err != nil {
+			return nil, fmt.Errorf("the second values file is not valid YAML: %w", err)
+		}
+		base = v
+	}
+	over, err := Values(valuesYAML, nil)
+	if err != nil {
+		return nil, err
+	}
+	vals := mergeMaps(base, over)
+	for _, p := range params {
+		if err := strvals.ParseInto(p, vals); err != nil {
+			return nil, fmt.Errorf("parameter %q: %w", p, err)
+		}
+	}
+	return vals, nil
+}
+
+// mergeMaps lays b over a, table by table, as helm merges its -f files.
+func mergeMaps(a, b map[string]any) map[string]any {
+	out := make(map[string]any, len(a))
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		if bt, ok := v.(map[string]any); ok {
+			if at, ok := out[k].(map[string]any); ok {
+				out[k] = mergeMaps(at, bt)
+				continue
+			}
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // ValuesYAML is the values as YAML, for showing.

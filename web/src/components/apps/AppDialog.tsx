@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { createApp, fetchAppRefs, fetchRepoRefs, inspectRepo, isCard, sourceText, updateApp, upgradeApp, type AppInput, type AppSource, type AppView, type RefKind, type RepoInspection, type RepoRefs } from '../../api/apps'
 import { YamlEditor } from '../YamlEditor'
+import { useLiveMeta } from '../../api/live'
 import type { WatsonItem } from '../../api/watson'
 import type { AppRow } from '../../columns/apps'
 import { trapTab } from '../../lib/focus'
@@ -109,6 +110,11 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const [values, setValues] = useState(app?.values ?? '')
   const [params, setParams] = useState((app?.params ?? []).join('\n'))
   const [createNs, setCreateNs] = useState(false)
+  const [valuesFile, setValuesFile] = useState('')
+  const [ignoreDefaults, setIgnoreDefaults] = useState(false)
+  const [fleet, setFleet] = useState('')
+  const meta = useLiveMeta()
+  const fleets = (meta.settings?.fleets?.[cluster] ?? []).filter((f) => f.deploy)
   const [refs, setRefs] = useState<RepoRefs | null>(null)
   const [loadingRefs, setLoadingRefs] = useState(() => (mode === 'switch' || mode === 'upgrade') && !!app)
   const [busy, setBusy] = useState(false)
@@ -199,7 +205,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
     const input: AppInput = {}
     switch (mode) {
       case 'create':
-        req = createApp(cluster, { namespace: namespace.trim(), name: name.trim(), source: source(), token: token || undefined, values, params: paramList(), createNamespace: createNs })
+        req = createApp(cluster, { namespace: namespace.trim(), name: name.trim(), source: source(), token: token || undefined, values, params: paramList(), createNamespace: createNs, ...(valuesFile ? { valuesFile } : {}), ...(ignoreDefaults ? { ignoreDefaults } : {}), ...(fleet ? { fleet } : {}) })
         break
       case 'source':
         input.source = source()
@@ -363,9 +369,47 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
             </>
           )}
           {mode === 'create' && (
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
-              <input type="checkbox" checked={createNs} onChange={(e) => setCreateNs(e.target.checked)} data-testid="app-create-ns" /> Create the namespace if it does not exist
-            </label>
+            <>
+              {(() => {
+                const files = inspected?.state === 'done' && inspected.data ? (inspected.data.charts.find((c) => c.path === path.trim())?.valuesFiles ?? []) : []
+                return files.length > 0 || valuesFile ? (
+                  <Field label="Second values file" hint="From the chart's directory, applied over the chart's values.yaml and under the values above (R2-08)">
+                    <label className="rk-field">
+                      <select className="rk-mono" value={valuesFile} onChange={(e) => setValuesFile(e.target.value)} data-testid="app-values-file">
+                        <option value="">none: values.yaml only</option>
+                        {[...new Set([...(valuesFile ? [valuesFile] : []), ...files])].map((f) => (
+                          <option key={f} value={f}>
+                            {f}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </Field>
+                ) : null
+              })()}
+              {fleets.length > 0 && (
+                <Field label="Deploy to the fleet" hint="The fleet's deploy label becomes the pods' nodeSelector">
+                  <label className="rk-field">
+                    <select value={fleet} onChange={(e) => setFleet(e.target.value)} data-testid="app-fleet">
+                      <option value="">any node</option>
+                      {fleets.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.name} · {f.deploy}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </Field>
+              )}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 18px', gridColumn: '1 / -1' }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }}>
+                  <input type="checkbox" checked={createNs} onChange={(e) => setCreateNs(e.target.checked)} data-testid="app-create-ns" /> Create the namespace if it does not exist
+                </label>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5 }} title="The chart's own values.yaml is left out: only the files and values given here apply">
+                  <input type="checkbox" checked={ignoreDefaults} onChange={(e) => setIgnoreDefaults(e.target.checked)} data-testid="app-ignore-defaults" /> Ignore the chart’s values.yaml
+                </label>
+              </div>
+            </>
           )}
         </div>
         {error && (

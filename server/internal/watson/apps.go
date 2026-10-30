@@ -44,6 +44,7 @@ type appChart struct {
 	src    apps.Source
 	rec    *apps.Record
 	co     *apps.Checkout
+	ch     *chart.Chart
 	vals   map[string]any
 	values string
 	params []string
@@ -88,10 +89,20 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 	if a.co, err = apps.Fetch(ctx, a.src, token); err != nil {
 		return nil, err
 	}
+	// The record's second values file, its fleet and whether the chart's
+	// own values.yaml counts need the checkout (R2-08, R2-09, R2-11).
+	if a.rec != nil && (a.rec.ValuesFile != "" || a.rec.IgnoreDefaults || a.rec.FleetLabel != "") {
+		if a.ch, a.vals, err = apps.Compose(a.co, a.src, a.rec, c.Flags["set"]); err != nil {
+			return nil, err
+		}
+	}
 	return a, nil
 }
 
 func (a *appChart) load() (*chart.Chart, error) {
+	if a.ch != nil {
+		return a.ch, nil
+	}
 	return apps.LoadChart(a.co, a.src.Path)
 }
 

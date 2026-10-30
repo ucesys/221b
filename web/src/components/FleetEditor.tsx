@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Fleet, NodeRow } from '../api/types'
-import { COLOR_NAMES, fixCommand, has, missing, newId, nextColor, parseReq, reqsOf, withLabel } from '../lib/fleets'
+import { COLOR_NAMES, fixCommand, has, missing, newId, nextColor, parseReq, reqsOf, withLabel, LABEL_KEY_RE, LABEL_VAL_RE, splitLabel } from '../lib/fleets'
 import { effectTone, labelText, taintId } from '../lib/nodes'
 import { CloseIcon, CopyIcon, SearchIcon } from './Icons'
 import { copyText } from '../lib/clipboard'
@@ -86,6 +86,7 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: 
   const orig = seed.fleet
   const [name, setName] = useState(orig?.name ?? seed.name ?? '')
   const [desc, setDesc] = useState(orig?.desc ?? '')
+  const [deploy, setDeploy] = useState(orig?.deploy ?? '')
   const [color, setColor] = useState(orig?.color ?? nextColor(fleets))
   const [labels, setLabels] = useState<string[]>(orig?.labels ?? seed.labels ?? [])
   const [taints, setTaints] = useState<string[]>(orig?.taints ?? seed.taints ?? [])
@@ -176,7 +177,12 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: 
     if (!n) return setSaveErr('Give the fleet a name.')
     if (fleets.some((f) => f.id !== orig?.id && f.name.trim().toLowerCase() === n.toLowerCase())) return setSaveErr(`Another fleet is already called “${n}”.`)
     if (kind !== 'nodes' && !reqCount) return setSaveErr('Pick at least one label or taint.')
-    const base: Fleet = { id: orig?.id ?? newId(n, fleets), name: n, color, desc: desc.trim(), labels, taints }
+    const dep = deploy.trim()
+    if (dep) {
+      const [dk, dv] = splitLabel(dep)
+      if (!dep.includes('=') || !LABEL_KEY_RE.test(dk) || !dv || !LABEL_VAL_RE.test(dv)) return setSaveErr('The deploy label is key=value: a node label with a value, such as fleet=edge.')
+    }
+    const base: Fleet = { id: orig?.id ?? newId(n, fleets), name: n, color, desc: desc.trim(), labels, taints, ...(dep ? { deploy: dep } : {}) }
     const f: Fleet = kind === 'nodes' ? { ...base, labels: [], taints: [], kind: 'nodes', nodes: listed } : base
     setBusy(true)
     try {
@@ -255,6 +261,25 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: 
               Description
               <span className="rk-field">
                 <input type="text" value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="What runs on these nodes (optional)" data-testid="fleet-desc" />
+              </span>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--fg3)' }}>
+              <span>
+                Deploy label{' '}
+                <span style={{ fontWeight: 400 }}>
+                  — a node label, key=value, that a Helm application deployed to this fleet is pinned to (its pods’ nodeSelector). The fleet’s nodes must carry it.
+                  {kind !== 'nodes' && labels.some((l) => splitLabel(l)[1]) && !deploy.trim() ? (
+                    <>
+                      {' '}
+                      <button type="button" className="rk-link" onClick={() => setDeploy(labels.find((l) => splitLabel(l)[1])!)} data-testid="fleet-deploy-use">
+                        Use {labels.find((l) => splitLabel(l)[1])}
+                      </button>
+                    </>
+                  ) : null}
+                </span>
+              </span>
+              <span className="rk-field">
+                <input type="text" className="rk-mono" value={deploy} onChange={(e) => setDeploy(e.target.value)} placeholder="fleet=edge (optional)" spellCheck={false} data-testid="fleet-deploy" />
               </span>
             </label>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
