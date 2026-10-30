@@ -12,7 +12,7 @@ How versions are numbered, how a release is cut, and what CI does with it (P7-08
 
 Every release upgrades from each of the two releases before it; CI tests this ([upgrading.md](upgrading.md#which-upgrades-are-tested)).
 
-Releases so far: **0.6.5** (Phase 6.5, `f789452`), **0.6.6** (Phase 6.6, `ad0b568`), **0.7.0** (Phase 7, released without an image), **0.7.1** (0.7.0 with its image) **0.9.1** (Phases 8 and 9 and the Phase 9.1 review; there is no 0.8.x or 0.9.0) and **0.10.0** (Phase 10: Helm applications from git, Secret editing, every change through Watson). Earlier phases were not released as versions.
+Releases so far: **0.6.5** (Phase 6.5, `f789452`), **0.6.6** (Phase 6.6, `ad0b568`), **0.7.0** (Phase 7, released without an image), **0.7.1** (0.7.0 with its image) **0.9.1** (Phases 8 and 9 and the Phase 9.1 review; there is no 0.8.x or 0.9.0) , **0.10.0** (Phase 10: Helm applications from git, Secret editing, every change through Watson) and **0.10.1** (Phase 10.1: the review rounds after 0.10.0, fleets on the Nodes tab, standing approvals, Sherlock notes, values files, drift explained). Earlier phases were not released as versions.
 
 ## Cut a release
 
