@@ -10,7 +10,7 @@ What changed in each release of 221B, for people who use it and people who insta
 - **Administration › Backup**: one JSON file with everything the console keeps of its own (settings, local users, connections, Helm applications, Toolbox session records, Sherlock's spend, the audit log) and never a credential; and a restore of the parts picked from such a file, with a report of what is left to do by hand (M2-06, ADR-71).
 - **Commands of a Helm application**: *New command…* in a release's Tools menu saves a named redeploy with its own `--set` parameters; the command is then an item of the menu, with Run, Edit and Delete (M2-07).
 - The diff dialog compares any two of: a revision, the source at its deployed branch or tag, the source at any branch or tag (M2-05).
-- Sherlock's question box recalls earlier questions with ↑ and ↓, as a shell does (M2-04).
+- Sherlock's question box recalls earlier questions with ↑ and ↓, as a shell does (M2-04). Watson's history, which ↑ walks, now holds every command the person ran there, a Redeploy or an application's command included, not only the typed ones.
 
 ### Fixed
 

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useToolbox } from './toolbox/context'
 import { APPROVE_ALL_CHOICES, approveAllWatson, approveWatson, clearWatson, discardWatson, editWatson, endApproveAllWatson, sendToWatson, stopWatson, WatsonError, watsonSupports, type Send, type WatsonItem, type WatsonLine, type WatsonState } from '../api/watson'
 import { fmtClock } from '../lib/format'
@@ -487,6 +487,21 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
     if (el && pinned.current) el.scrollTop = el.scrollHeight
   })
 
+  // Every command the person ran here is in the history the arrow keys
+  // walk, not only the typed ones: a Redeploy, an application's command,
+  // a Sherlock suggestion approved (asked October 30, 2026). Toolbox
+  // cards are sessions, not lines to type again. The cards come back
+  // from the server after a reload, so only the typed ones are kept here.
+  const history = useMemo(() => {
+    const cards = items
+      .filter((x) => x.mine && !x.session && x.command.trim())
+      .sort((a, b) => a.created.localeCompare(b.created))
+      .map((x) => x.command)
+    let all = hist
+    for (const c of cards) if (!all.includes(c)) all = [...all, c]
+    return all.slice(-50)
+  }, [hist, items])
+
   const submit = async (text: string) => {
     const cmd = text.trim()
     if (!cmd) return
@@ -625,20 +640,20 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
             if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
               e.preventDefault()
               void submit(draft)
-            } else if (e.key === 'ArrowUp' && hist.length) {
+            } else if (e.key === 'ArrowUp' && history.length) {
               e.preventDefault()
-              const p = pos < 0 ? hist.length - 1 : Math.max(0, pos - 1)
+              const p = pos < 0 ? history.length - 1 : Math.max(0, pos - 1)
               setPos(p)
-              setDraft(hist[p] ?? '')
+              setDraft(history[p] ?? '')
             } else if (e.key === 'ArrowDown' && pos >= 0) {
               e.preventDefault()
               const p = pos + 1
-              if (p >= hist.length) {
+              if (p >= history.length) {
                 setPos(-1)
                 setDraft('')
               } else {
                 setPos(p)
-                setDraft(hist[p] ?? '')
+                setDraft(history[p] ?? '')
               }
             }
           }}

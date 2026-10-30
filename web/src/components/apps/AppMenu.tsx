@@ -87,7 +87,16 @@ export function AppToolsButton({ row, canChange, onPick, label = 'Tools' }: { ro
 
 function AppMenu({ row, canChange, anchor, onClose, onPick }: { row: AppRow; canChange: boolean; anchor: HTMLElement | null; onClose: () => void; onPick: (a: AppAction) => void }) {
   const menu = useRef<HTMLDivElement>(null)
-  const [style] = useState(() => place(anchor))
+  const [style, setStyle] = useState(() => place(anchor))
+  // Placed for a typical width; once rendered, its real width is known,
+  // and a menu that runs off the right edge (the Tools button of the
+  // release panel sits there) moves left to fit.
+  useLayoutEffect(() => {
+    const r = menu.current?.getBoundingClientRect()
+    if (!r) return
+    const over = r.right - (window.innerWidth - 8)
+    if (over > 0) setStyle((st) => ({ ...st, left: Math.max(8, (typeof st.left === 'number' ? st.left : r.left) - over) }))
+  }, [])
   const items = appItems(row, canChange)
   useEffect(() => {
     const away = (e: MouseEvent) => {
