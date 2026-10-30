@@ -151,6 +151,8 @@ test('a node shell asks no second person off production, and Esc cancels its dia
 test('a pod with a problem offers Troubleshoot… first in its wrench, which asks Sherlock for a report (M-04)', async ({ page, request }) => {
   const bad = podRows(await snapshot(request, ['pods'])).find((p) => p.tone === 'err' || p.tone === 'warn')
   test.skip(!bad, 'no pod with a problem')
+  // An earlier spec may have left a key behind: start with Sherlock off.
+  await page.request.delete('/api/v1/sherlock/key', { headers: SAME })
   await page.goto(`/#/pods?peek=${encodeURIComponent(`pod:${bad!.namespace}/${bad!.name}`)}`)
   const panel = page.getByTestId('pod-panel')
   await panel.getByTestId(`tools-pod-${bad!.name}`).click()
