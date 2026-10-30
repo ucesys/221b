@@ -155,7 +155,13 @@ type Sherlock struct {
 	// Notes are what the administrators tell Sherlock about their
 	// infrastructure, added to its instructions for every cluster (R2-05).
 	Notes string `json:"notes,omitempty"`
+	// Instructions replace Sherlock's built-in instructions (the block
+	// before the cluster's) when set; "" is the built-in text.
+	Instructions string `json:"instructions,omitempty"`
 }
+
+// MaxInstructions bounds the instructions.
+const MaxInstructions = 64 << 10
 
 // MaxNotes bounds the notes; the prompt is cached, so they are not free.
 const MaxNotes = 16 << 10
@@ -210,6 +216,9 @@ func (s Sherlock) Validate() error {
 	}
 	if len(s.Notes) > MaxNotes {
 		return fmt.Errorf("the notes have at most %d characters", MaxNotes)
+	}
+	if len(s.Instructions) > MaxInstructions {
+		return fmt.Errorf("the instructions have at most %d characters", MaxInstructions)
 	}
 	return nil
 }

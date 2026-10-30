@@ -274,6 +274,16 @@ metadata:
     note: |
       two lines,
       ending with a newline
+---
+# Another document follows: the separator must not take the newline above.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trailing
+stringData:
+  users.yaml: |
+    a: 1
 `
 	// A text value that ends the manifest keeps its closing newline.
 	dyn = dynfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{{Group: "apps", Version: "v1", Resource: "deployments"}: "DeploymentList"}, live, &unstructured.Unstructured{Object: map[string]any{
@@ -281,11 +291,14 @@ metadata:
 		"metadata": map[string]any{"name": "texty", "namespace": "web", "annotations": map[string]any{"note": "two lines,\nending with a newline\n"}},
 	}})
 	d := apps.CheckDrift(context.Background(), dyn, mapper, manifest, "web", time.Now())
-	if d.Changed != 1 || d.Missing != 1 || d.Unknown != 1 || d.Same != 1 || d.State() != "drifted" {
+	if d.Changed != 1 || d.Missing != 1 || d.Unknown != 2 || d.Same != 1 || d.State() != "drifted" {
 		t.Fatalf("%+v", d)
 	}
 	if d.Objects[3].State != apps.DriftSame {
 		t.Errorf("the closing newline of a block scalar: %+v", d.Objects[3])
+	}
+	if d.Objects[4].State != apps.DriftUnknown || d.Objects[4].Name != "trailing" {
+		t.Errorf("the last document: %+v", d.Objects[4])
 	}
 	if o := d.Objects[0]; o.State != apps.DriftChanged || strings.Join(o.Fields, ",") != "spec.replicas" {
 		t.Errorf("changed object %+v", o)

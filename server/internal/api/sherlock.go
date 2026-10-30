@@ -165,17 +165,18 @@ func (s *Server) postSherlockAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, _ := auth.SessionFrom(r.Context())
 	conv, err := s.opts.Sherlock.Ask(sherlock.Question{
-		Key:      convKey(r),
-		Text:     in.Question,
-		Cluster:  name,
-		Version:  version,
-		Platform: s.platformPrompt(r, cl, name, version),
-		Notes:    s.sherlockSettings().Notes,
-		Tools:    s.toolboxFor(r, id, cl),
-		Who:      audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name},
-		From:     fromAddr(r),
-		Window:   windowID(in.Window),
-		View:     in.View,
+		Key:          convKey(r),
+		Text:         in.Question,
+		Cluster:      name,
+		Version:      version,
+		Platform:     s.platformPrompt(r, cl, name, version),
+		Notes:        s.sherlockSettings().Notes,
+		Instructions: s.sherlockSettings().Instructions,
+		Tools:        s.toolboxFor(r, id, cl),
+		Who:          audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name},
+		From:         fromAddr(r),
+		Window:       windowID(in.Window),
+		View:         in.View,
 		// Read once per question, so a change applies to the next one.
 		ViewChanges: s.sherlockSettings().ChangesView(),
 	})
@@ -403,8 +404,13 @@ func (s *Server) getSherlockPrompt(w http.ResponseWriter, r *http.Request) {
 	if v, ok := r.URL.Query()["notes"]; ok && len(v) > 0 {
 		notes = v[0]
 	}
-	core, cluster := sherlock.PromptText(sherlock.Question{Cluster: name, Version: version, Platform: s.platformPrompt(r, cl, name, version), Notes: notes, ViewChanges: s.sherlockSettings().ChangesView()}, s.opts.Now())
-	b, _ := json.Marshal(map[string]string{"core": core, "cluster": cluster})
+	instructions := s.sherlockSettings().Instructions
+	if v, ok := r.URL.Query()["instructions"]; ok && len(v) > 0 {
+		instructions = v[0]
+	}
+	view := s.sherlockSettings().ChangesView()
+	core, cluster := sherlock.PromptText(sherlock.Question{Cluster: name, Version: version, Platform: s.platformPrompt(r, cl, name, version), Notes: notes, Instructions: instructions, ViewChanges: view}, s.opts.Now())
+	b, _ := json.Marshal(map[string]string{"core": core, "cluster": cluster, "builtIn": sherlock.BuiltIn(view)})
 	writeJSON(w, r, b)
 }
 
@@ -417,11 +423,12 @@ func (s *Server) postSherlockTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Cluster  string `json:"cluster"`
-		Notes    string `json:"notes"`
-		Question string `json:"question"`
+		Cluster      string `json:"cluster"`
+		Notes        string `json:"notes"`
+		Instructions string `json:"instructions"`
+		Question     string `json:"question"`
 	}
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 128<<10))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
 		jsonError(w, http.StatusBadRequest, "the test is not valid: "+err.Error())
@@ -454,7 +461,7 @@ func (s *Server) postSherlockTest(w http.ResponseWriter, r *http.Request) {
 	s.opts.Sherlock.Reset(key)
 	conv, err := s.opts.Sherlock.Ask(sherlock.Question{
 		Key: key, Text: question, Cluster: name, Version: version,
-		Platform: s.platformPrompt(r, cl, name, version), Notes: in.Notes,
+		Platform: s.platformPrompt(r, cl, name, version), Notes: in.Notes, Instructions: in.Instructions,
 		Tools: s.toolboxFor(r, id, cl),
 		Who:   audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name},
 		From:  fromAddr(r),

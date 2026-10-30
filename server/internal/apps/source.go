@@ -146,6 +146,10 @@ type Record struct {
 	// nodeSelector (R2-11).
 	Fleet      string `json:"fleet,omitempty"`
 	FleetLabel string `json:"fleetLabel,omitempty"`
+	// MatchedRevision is the deployed revision the source was found to
+	// render exactly when it was set (round 2 review): the release is not
+	// behind the source while that revision runs.
+	MatchedRevision int `json:"matchedRevision,omitempty"`
 	// HasToken says a credential for the repository is saved with the
 	// record; the token itself never leaves the server.
 	HasToken  bool      `json:"hasToken,omitempty"`

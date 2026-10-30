@@ -300,9 +300,11 @@ type Question struct {
 	// Notes are what the administrators wrote about their infrastructure
 	// (R2-05), after the cluster's description.
 	Notes string
-	Tools Toolbox
-	Who   audit.Who
-	From  string
+	// Instructions replace the built-in block when set (R2-05 review).
+	Instructions string
+	Tools        Toolbox
+	Who          audit.Who
+	From         string
 	// Window is the console window whose view the UI actions change: the
 	// one that asked, or the main window Sherlock's own window follows
 	// (P6U-08). Empty when there is none.

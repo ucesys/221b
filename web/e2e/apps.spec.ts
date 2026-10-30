@@ -112,14 +112,22 @@ test('a source is set in place, refused when it is not https, and forgotten; a V
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   const panel = page.getByTestId('app-panel')
   await expect(panel.getByTestId('app-source-state')).toHaveText('Not set')
+  // Save with a field missing reports it and keeps what was typed, across a reload (round 2 review).
   await panel.getByTestId('app-src-repo').fill('http://github.com/ucesys/221b')
+  await panel.getByTestId('app-src-save').click()
+  await expect(panel.getByTestId('app-source-state')).toContainText('needs a repository and a branch or tag')
+  await page.reload()
+  await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  await expect(panel.getByTestId('app-src-repo')).toHaveValue('http://github.com/ucesys/221b')
+  await expect(panel.getByTestId('app-source-state')).toContainText('needs a repository and a branch or tag')
   await panel.getByTestId('app-src-ref').fill('main')
   await panel.getByTestId('app-src-ref').blur()
   await expect(panel.getByTestId('app-source-state')).toContainText('https://')
   await panel.getByTestId('app-src-repo').fill('github.com/ucesys/221b')
   await panel.getByTestId('app-src-path').fill('deploy/helm/221b')
-  // The Save button saves what is typed (R2-06); the wrench's Upgrade… follows.
+  // The Save button saves what is typed (R2-06); the wrench's Upgrade… follows. A deployed release has no create-namespace box.
   await expect(panel.getByTestId('app-source-state')).toContainText('Not saved yet')
+  await expect(panel.getByTestId('app-src-create-ns')).toHaveCount(0)
   await panel.getByTestId('app-src-save').click()
   await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 10_000 })
   await expect(panel.getByTestId('app-source-line')).toContainText('github.com/ucesys/221b/deploy/helm/221b @ main')
@@ -190,7 +198,7 @@ test('every dialog and drawer closes with Cancel, its cross and Escape', async (
   try {
     // The release was not deployed from that source: behind it (M-05).
     await expect(panel.getByTestId('app-behind')).toBeVisible({ timeout: 10_000 })
-    await expect(panel.getByTestId('app-behind-note')).toContainText('not the source')
+    await expect(panel.getByTestId('app-behind-note')).toHaveCount(0)
     await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()
     await page.getByTestId('app-tool-upgrade').click()
     await expect(dlg).toHaveAttribute('data-mode', 'upgrade')

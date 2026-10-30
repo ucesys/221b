@@ -35,6 +35,8 @@ export interface AppRecord {
   /** The fleet the application is deployed to, by id, and its deploy label when saved: the pods' nodeSelector (R2-11). */
   fleet?: string
   fleetLabel?: string
+  /** The deployed revision the source was found to render exactly when it was set: not behind while it runs. */
+  matchedRevision?: number
   hasToken?: boolean
   createdBy?: string
   created: string

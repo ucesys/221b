@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchAppInspect, fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, sourceText, updateApp, type AppDrift, type AppImage, type AppInput, type AppRefs, type AppSource, type AppView, type RefKind, type RepoInspection, type RevisionView } from '../../api/apps'
+import { fetchAppInspect, fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, inspectRepo, sourceText, updateApp, type AppDrift, type AppImage, type AppInput, type AppRefs, type AppSource, type AppView, type RefKind, type RepoInspection, type RevisionView } from '../../api/apps'
 import { useLiveMeta } from '../../api/live'
 import { useDetails } from '../../api/details'
 import type { ClusterInfo, ReleaseDetails } from '../../api/types'
@@ -291,16 +291,6 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
             )}
           </span>
         </div>
-        {behindSource(row) && (
-          <div className="rk-callout" data-tone="warn" data-testid="app-behind-note">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
-              <strong style={{ fontSize: 12.5, fontWeight: 600 }}>Behind the source</strong>
-              <span style={{ fontSize: 12.5, color: 'var(--fg2)' }}>
-                What runs is not the source's last deploy: {behindSource(row)}.{canChange ? ' Upgrade… from the wrench redeploys the source; History diffs the deployed revision against it.' : ''}
-              </span>
-            </div>
-          </div>
-        )}
         {row.orphan ? (
           <>
             <div className="rk-callout" data-tone="warn" data-testid="app-orphan">
@@ -488,15 +478,44 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
  * namespace at install. A release the console did not install gets its
  * record here.
  */
+/** What was typed into a Source card and not saved, kept per release while the page is open (round 2 review). */
+interface SourceDraft {
+  repo: string
+  path: string
+  ref: string
+  refKind: RefKind
+}
+const draftKey = (clusterId: string, row: AppRow) => `221b.source-draft:${clusterId}/${row.namespace}/${row.name}`
+function readDraft(key: string): SourceDraft | null {
+  try {
+    const raw = sessionStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as SourceDraft) : null
+  } catch {
+    return null
+  }
+}
+function writeDraft(key: string, d: SourceDraft | null) {
+  try {
+    if (d) sessionStorage.setItem(key, JSON.stringify(d))
+    else sessionStorage.removeItem(key)
+  } catch {
+    // Storage off: the draft lives only in the card.
+  }
+}
+
 function SourceCard({ clusterId, row, app, canChange, onResult, now }: { clusterId: string; row: AppRow; app?: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void; now: number }) {
-  const [repo, setRepo] = useState(app?.source.repo ?? '')
-  const [path, setPath] = useState(app?.source.path ?? '')
-  const [ref, setRef] = useState(app?.source.ref ?? '')
-  const [refKind, setRefKind] = useState<RefKind>(app?.source.refKind ?? 'branch')
+  const key = draftKey(clusterId, row)
+  const [draft] = useState(() => readDraft(key))
+  const [repo, setRepo] = useState(draft?.repo ?? app?.source.repo ?? '')
+  const [path, setPath] = useState(draft?.path ?? app?.source.path ?? '')
+  const [ref, setRef] = useState(draft?.ref ?? app?.source.ref ?? '')
+  const [refKind, setRefKind] = useState<RefKind>(draft?.refKind ?? app?.source.refKind ?? 'branch')
   const [token, setToken] = useState('')
   const [createNs, setCreateNs] = useState(app?.createNamespace ?? false)
-  const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>('saved')
-  const [error, setError] = useState('')
+  const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>(() => (draft ? 'error' : 'saved'))
+  const [error, setError] = useState(() => (draft ? (draft.repo.trim() && draft.ref.trim() ? 'Not saved yet: press Save.' : 'Not saved: needs a repository and a branch or tag.') : ''))
+  // The repository is looked over when its URL is typed (M-07): the chart's path and the default branch fill what is empty.
+  const [look, setLook] = useState<{ repo: string; state: 'busy' | 'done' | 'error'; text: string } | null>(null)
   const commit = app?.commit ? app.commit.slice(0, 12) : ''
   const saved: AppSource | null = app ? app.source : null
   const queue = useRef<Promise<void>>(Promise.resolve())
@@ -514,16 +533,31 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
     setRefKind(app.source.refKind)
     setCreateNs(app.createNamespace ?? false)
   }, [app])
-  const dirty = (createNsNow = createNs, tok = token) => !saved || repo.trim() !== saved.repo || path.trim() !== (saved.path ?? '') || ref.trim() !== saved.ref || refKind !== saved.refKind || createNsNow !== (app?.createNamespace ?? false) || tok !== ''
-  const save = (createNsNow = createNs, tok = token) => {
+  // What is typed now, for a save that starts after a repository look-over
+  // finished (the blur's closure would be stale).
+  const latest = useRef({ repo, path, ref, refKind, token, createNs })
+  useEffect(() => {
+    latest.current = { repo, path, ref, refKind, token, createNs }
+  }, [repo, path, ref, refKind, token, createNs])
+  const dirty = (createNsNow: boolean, tok: string) => {
+    const l = latest.current
+    return !saved || l.repo.trim() !== saved.repo || l.path.trim() !== (saved.path ?? '') || l.ref.trim() !== saved.ref || l.refKind !== saved.refKind || createNsNow !== (app?.createNamespace ?? false) || tok !== ''
+  }
+  // pressed: Save or Enter, which reports a missing field; quiet: after a
+  // look-over, which saves only what is complete.
+  const save = (createNsNow = latest.current.createNs, tok = latest.current.token, pressed = false, quiet = false) => {
     if (!canChange || !dirty(createNsNow, tok)) return
-    if (!repo.trim() || !ref.trim()) {
-      setState('dirty')
+    const l = latest.current
+    if (!l.repo.trim() || !l.ref.trim()) {
+      if (quiet) return
+      // Reported, and what was typed is kept (round 2 review).
+      setState('error')
+      setError(pressed ? 'Not saved: needs a repository and a branch or tag.' : 'Not saved yet: needs a repository and a branch or tag.')
       return
     }
     setState('saving')
     setError('')
-    const input = { source: { repo: repo.trim(), path: path.trim(), ref: ref.trim(), refKind }, token: tok || undefined, createNamespace: createNsNow }
+    const input = { source: { repo: l.repo.trim(), path: l.path.trim(), ref: l.ref.trim(), refKind: l.refKind }, token: tok || undefined, createNamespace: createNsNow }
     // One save after another: two fields left in quick succession must not
     // race; and an answer marks the card clean only when nothing was typed
     // since it went out.
@@ -534,6 +568,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
         if (seq.current === mine) {
           setState('saved')
           setToken('')
+          writeDraft(key, null)
         }
         onResult(r, saved ? 'Source saved' : 'Source set')
       })
@@ -548,11 +583,49 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
     seq.current++
     setState('dirty')
   }
+  // Every keystroke goes to the draft, so leaving the page loses nothing.
+  useEffect(() => {
+    if (state === 'saved' || state === 'saving') return
+    writeDraft(key, { repo, path, ref, refKind })
+  }, [key, state, repo, path, ref, refKind])
+  const lookOver = (): Promise<void> => {
+    const url = latest.current.repo.trim()
+    if (!canChange || !url || (look?.repo === url && look.state !== 'error') || (saved && url === saved.repo && latest.current.path.trim())) return Promise.resolve()
+    setLook({ repo: url, state: 'busy', text: 'Looking over the repository…' })
+    return inspectRepo(clusterId, url, latest.current.ref.trim(), latest.current.refKind, latest.current.token || undefined)
+      .then((d) => {
+        const chart = d.charts[0]
+        const filled: string[] = []
+        if (!latest.current.path.trim() && chart) {
+          setPath(chart.path)
+          filled.push(`chart path ${chart.path || '/'}`)
+        }
+        if (!latest.current.ref.trim()) {
+          setRef(d.ref)
+          setRefKind(d.refKind)
+          filled.push(`${d.refKind} ${d.ref}`)
+        }
+        if (filled.length) edited()
+        setLook({ repo: url, state: 'done', text: d.charts.length === 0 ? `No Chart.yaml within four directories of the root at ${d.ref}.` : filled.length ? `Filled from the repository: ${filled.join(', ')}.` : `${d.charts.length === 1 ? 'Chart' : `${d.charts.length} charts; chart`} ${chart!.path || '/'} (${chart!.name} ${chart!.version}) at ${d.ref}.` })
+      })
+      .catch((e: unknown) => setLook({ repo: url, state: 'error', text: e instanceof Error ? e.message : String(e) }))
+  }
   const field = (label: string, value: string, set: (v: string) => void, placeholder: string, testId: string, type = 'text', span = 1) => (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 0, gridColumn: span > 1 ? `span ${span}` : undefined }}>
       {label}
       <span className="rk-field">
-        <input className="rk-mono" type={type} autoComplete="off" value={value} readOnly={!canChange} onChange={(e) => (set(e.target.value), edited())} onBlur={() => save()} onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), save())} placeholder={placeholder} data-testid={testId} />
+        <input
+          className="rk-mono"
+          type={type}
+          autoComplete="off"
+          value={value}
+          readOnly={!canChange}
+          onChange={(e) => (set(e.target.value), edited())}
+          onBlur={() => (testId === 'app-src-repo' ? void lookOver().then(() => save(undefined, undefined, false, true)) : save())}
+          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), testId === 'app-src-repo' ? void lookOver().then(() => save(undefined, undefined, true)) : save(undefined, undefined, true))}
+          placeholder={placeholder}
+          data-testid={testId}
+        />
       </span>
     </label>
   )
@@ -595,7 +668,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
         setOptError(e instanceof Error ? e.message : String(e))
       })
   }
-  const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? (repo.trim() && ref.trim() ? 'Not saved yet: press Save, or leave the field' : 'Needs a repository and a branch or tag') : state === 'error' ? error : saved ? 'Saved' : 'Not set'
+  const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? (repo.trim() && ref.trim() ? 'Not saved yet: press Save, or leave the field' : 'Not saved yet: needs a repository and a branch or tag') : state === 'error' ? error : saved ? 'Saved' : 'Not set'
   return (
     <Card
       title="Source"
@@ -605,7 +678,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             {status}
           </span>
           {canChange && (
-            <button className="rk-btn" data-on={state === 'dirty' && repo.trim() && ref.trim() ? 'true' : undefined} onClick={() => save()} disabled={state === 'saving' || !repo.trim() || !ref.trim() || (state !== 'dirty' && state !== 'error')} style={{ height: 26 }} data-testid="app-src-save">
+            <button className="rk-btn" data-on={state === 'dirty' && repo.trim() && ref.trim() ? 'true' : undefined} onClick={() => save(undefined, undefined, true)} disabled={state === 'saving' || (state !== 'dirty' && state !== 'error')} style={{ height: 26 }} data-testid="app-src-save">
               {saved ? 'Save' : 'Set source'}
             </button>
           )}
@@ -631,22 +704,29 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             </span>
           </span>
         </label>
-        {field(app?.hasToken ? 'Token (saved; paste a new one to replace it)' : 'Token (private repository only)', token, setToken, app?.hasToken ? '••••••••' : 'optional', 'app-src-token', 'password', 3)}
+        {field(app?.hasToken ? 'GitHub token (one is saved; paste a new one to replace it)' : 'GitHub token (for a private repository; kept in the console, never shown again)', token, setToken, app?.hasToken ? '••••••••' : 'ghp_… or github_pat_…, optional', 'app-src-token', 'password', 3)}
       </div>
+      {look && (
+        <p style={{ margin: 0, fontSize: 12, color: look.state === 'error' ? 'var(--err)' : 'var(--fg2)' }} data-testid="app-src-inspect" data-state={look.state}>
+          {look.text}
+        </p>
+      )}
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 18px', fontSize: 12, color: 'var(--fg3)' }}>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--fg)' }}>
-          <input
-            type="checkbox"
-            checked={createNs}
-            disabled={!canChange}
-            onChange={(e) => {
-              setCreateNs(e.target.checked)
-              save(e.target.checked)
-            }}
-            data-testid="app-src-create-ns"
-          />{' '}
-          Create the namespace {row.namespace} at install if it does not exist
-        </label>
+        {row.orphan && (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--fg)' }}>
+            <input
+              type="checkbox"
+              checked={createNs}
+              disabled={!canChange}
+              onChange={(e) => {
+                setCreateNs(e.target.checked)
+                save(e.target.checked)
+              }}
+              data-testid="app-src-create-ns"
+            />{' '}
+            Create the namespace {row.namespace} at install if it does not exist
+          </label>
+        )}
         {app && (
           <>
             <span>

@@ -419,12 +419,23 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	sourceChanged := in.Source != nil && *in.Source != rec.Source
 	if in.Source != nil {
 		rec.Source = *in.Source
 	}
 	if err := s.applyAppInput(&rec, in, c.ID); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if sourceChanged {
+		// What runs may already be what the source renders: then the
+		// release is not behind it (round 2 review).
+		rec.Commit, rec.CommitDate, rec.CommitSubject, rec.ChartVersion, rec.MatchedRevision = "", time.Time{}, "", "", 0
+		tok := in.Token
+		if tok == "" && !in.ClearToken {
+			_, tok, _ = s.opts.Apps.Get(r.Context(), c.ID, ns, name)
+		}
+		s.matchSource(r.Context(), c, who, &rec, tok)
 	}
 	if in.Ref != "" {
 		src := rec.Source
@@ -454,6 +465,55 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.submitApp(w, r, c, who, appLine("upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...))
+}
+
+// matchSource renders the source at its ref as the person and compares
+// it with the deployed revision; the same, the record takes the commit
+// and the revision, so the release is not behind the source. Any
+// trouble leaves the record as it is: behind, until a deploy.
+func (s *Server) matchSource(ctx context.Context, c watson.Cluster, who watson.Who, rec *apps.Record, token string) {
+	if c.Config == nil || s.opts.Watson == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	pc, err := clientsAs(c.Config, who.Person)
+	if err != nil {
+		return
+	}
+	rel, err := s.revision(pc, rec.Namespace, rec.Name, "")
+	if err != nil {
+		return
+	}
+	co, err := apps.Fetch(ctx, rec.Source, token)
+	if err != nil {
+		return
+	}
+	ch, vals, err := apps.Compose(co, rec.Source, rec, nil)
+	if err != nil {
+		return
+	}
+	manifest, err := s.opts.Watson.RenderUpgrade(ctx, c, who, rec.Namespace, rec.Name, ch, vals)
+	if err != nil {
+		version := ""
+		if s.opts.Clusters != nil {
+			if _, client, ok := s.opts.Clusters.Lookup(c.ID); ok && client != nil {
+				version = client.Info().Version
+			}
+		}
+		rendered, err := apps.Render(ctx, ch, vals, rec.Name, rec.Namespace, version)
+		if err != nil {
+			return
+		}
+		manifest = rendered.Manifest
+	}
+	if !apps.Compare(rel.Manifest, manifest, "deployed", "source").Same {
+		return
+	}
+	rec.Commit, rec.CommitDate, rec.CommitSubject, rec.MatchedRevision = co.Commit, co.CommitDate, co.CommitSubject, rel.Version
+	if ch.Metadata != nil {
+		rec.ChartVersion = ch.Metadata.Version
+	}
 }
 
 // installFlags are --install and, when the record asks for it,

@@ -23,8 +23,12 @@ func systemPrompt(q Question, now time.Time) []Block {
 	if n := strings.TrimSpace(q.Notes); n != "" {
 		cluster += "\n\nWhat the administrators of this console say about their infrastructure, to trust over what you work out:\n" + n
 	}
+	core := corePrompt(q.ViewChanges)
+	if t := strings.TrimSpace(q.Instructions); t != "" {
+		core = t
+	}
 	return []Block{
-		{Type: "text", Text: corePrompt(q.ViewChanges), CacheControl: &CacheControl{Type: "ephemeral"}},
+		{Type: "text", Text: core, CacheControl: &CacheControl{Type: "ephemeral"}},
 		{Type: "text", Text: cluster, CacheControl: &CacheControl{Type: "ephemeral"}},
 		{Type: "text", Text: "It is " + now.UTC().Format("Monday 2 January 2006, 15:04 UTC") + "."},
 	}
@@ -36,6 +40,9 @@ func PromptText(q Question, now time.Time) (core, cluster string) {
 	b := systemPrompt(q, now)
 	return b[0].Text, b[1].Text
 }
+
+// BuiltIn is the built-in instructions, for the editor's reset.
+func BuiltIn(viewChanges bool) string { return corePrompt(viewChanges) }
 
 func corePrompt(viewChanges bool) string {
 	var b strings.Builder
