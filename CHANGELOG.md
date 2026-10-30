@@ -2,6 +2,10 @@
 
 What changed in each release of 221B, for people who use it and people who install it. Versions follow [semantic versioning](https://semver.org/): while the major version is 0, a minor version (0.7.0) may change behaviour and chart values, and a patch version (0.7.1) only fixes. [docs/upgrading.md](docs/upgrading.md) says how to upgrade and what each upgrade changes.
 
+## 0.11.0 (unreleased)
+
+Phase 11: automation. Nothing yet.
+
 ## 0.10.2 (unreleased)
 
 ### Added
