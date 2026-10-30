@@ -558,20 +558,20 @@ test('a standing approval approves cards as they are ready, within the limit the
   const config = async (approveAllMinutes: number) => expect((await request.put('/api/v1/watson/config', { data: { twoPerson: false, approveAllMinutes }, headers: SAME })).status()).toBe(200)
   // Off by default: no control, and the API refuses.
   await open(page, '#/nodes')
-  await expect(pane(page).getByTestId('watson-approve-all')).toHaveCount(0)
   expect((await request.post('/api/v1/watson/approvals', { data: { minutes: 5 }, headers: SAME })).status()).toBe(409)
   await config(30)
   try {
     await page.reload()
     await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
-    const pick = pane(page).getByTestId('watson-approve-all')
+    // The control sits on the card, next to Approve and run; picking a length approves this card and the next ones.
+    await pane(page).getByTestId('watson-input').fill(`kubectl cordon ${node}`)
+    await pane(page).getByTestId('watson-input').press('Enter')
+    const first = pane(page).getByTestId('watson-card').last()
+    const pick = first.getByTestId('watson-approve-all')
     await expect(pick).toBeVisible()
     await expect(pick.locator('option')).toHaveCount(4) // the empty one, 5, 15 and 30 minutes
     await pick.selectOption('5')
-    await expect(pane(page).getByTestId('watson-standing')).toContainText('approving all until')
-    // The card runs without a click, approved by the person.
-    await pane(page).getByTestId('watson-input').fill(`kubectl cordon ${node}`)
-    await pane(page).getByTestId('watson-input').press('Enter')
+    await expect(pane(page).getByTestId('watson-standing-header')).toContainText('approving all until')
     const ran = lastRan(page)
     await expect(ran).toHaveAttribute('data-status', 'done', { timeout: 30_000 })
     await expect(ran.getByTestId('watson-output')).toHaveText(`node/${node} cordoned`)
@@ -579,13 +579,14 @@ test('a standing approval approves cards as they are ready, within the limit the
     await expect
       .poll(async () => (await cluster.auditLog()).filter((r) => r.action === 'watson.approveAll' || (r.action === 'watson.approve' && JSON.stringify(r).includes(`kubectl cordon ${node}`))).length, { timeout: 15_000 })
       .toBeGreaterThanOrEqual(2)
-    // Stop ends it: the next card waits.
-    await pane(page).getByTestId('watson-standing-end').click()
-    await expect(pane(page).getByTestId('watson-approve-all')).toBeVisible()
+    // Stop ends it: the next card waits, with the control back on it.
+    await pane(page).getByTestId('watson-standing-end-header').click()
+    await expect(pane(page).getByTestId('watson-standing-header')).toHaveCount(0)
     await pane(page).getByTestId('watson-input').fill(`kubectl uncordon ${node}`)
     await pane(page).getByTestId('watson-input').press('Enter')
     const card = pane(page).getByTestId('watson-card').last()
     await expect(card.getByTestId('watson-approve')).toBeEnabled({ timeout: 30_000 })
+    await expect(card.getByTestId('watson-approve-all')).toBeVisible()
     await card.getByTestId('watson-approve').click()
     await expect(lastRan(page)).toContainText(`node/${node} uncordoned`, { timeout: 30_000 })
   } finally {
