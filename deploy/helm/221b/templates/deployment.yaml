@@ -100,6 +100,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "b221.fullname" . }}-proxy
                   key: token
+            # Whether a replica that does not lead keeps watching the
+            # clusters (ADR-70). A values file from before the setting has
+            # no replicas block, which means the default.
+            {{- $replicas := .Values.replicas | default dict }}
+            - name: WARM_STANDBY
+              value: {{ ternary (toString $replicas.warmStandby) "true" (hasKey $replicas "warmStandby") | quote }}
             # The refresh rate until someone changes it in Settings, which
             # keeps the choice in the ConfigMap named here.
             - name: REFRESH

@@ -69,6 +69,7 @@ render k8s-console --set clusterName=ci --set localCluster.mode=write | tee "$WO
 echo "--- several replicas (P7-02)"
 render k8s-console --set clusterName=ci --set replicaCount=2 | tee "$WORK/chart-ha.yaml" | validate
 render k8s-console --set clusterName=ci --set replicaCount=2 --set antiAffinity=soft | tee "$WORK/chart-ha-soft.yaml" | validate
+render k8s-console --set clusterName=ci --set replicaCount=2 --set replicas.warmStandby=false | tee "$WORK/chart-ha-cold.yaml" | validate
 render k8s-console --set clusterName=ci --set replicaCount=2 --set antiAffinity=hard \
   --set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].key=kubernetes.io/os' \
   --set 'affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].operator=In' \
@@ -295,6 +296,8 @@ replicas() {
   grep -A1 'name: LEADER_LEASE' "$out" | grep -q '"consoles/k8s-console-221b-leader"' &&
     grep -A3 'name: POD_IP' "$out" | grep -q 'fieldPath: status.podIP' &&
     grep -A4 'name: PROXY_TOKEN' "$out" | grep -q 'name: k8s-console-221b-proxy' &&
+    grep -A1 'name: WARM_STANDBY' "$out" | grep -q 'value: "true"' &&
+    grep -A1 'name: WARM_STANDBY' "$WORK/chart-ha-cold.yaml" | grep -q 'value: "false"' &&
     sed -n '/^kind: Secret$/,/^---/p' "$out" | grep -q '^  name: k8s-console-221b-proxy$' &&
     settings_role | grep -A1 'resourceNames: \["k8s-console-221b-leader"\]' | grep -q 'verbs: \["get", "update"\]' &&
     sed -n '/^kind: NetworkPolicy$/,/^---/p' "$out" | sed -n '/^  egress:/,$p' | grep -q 'podSelector:' &&
@@ -420,7 +423,7 @@ check "moving tags are pulled on every start and rolled on every upgrade; releas
 check "a LoadBalancer Service carries its class, address list, node port and annotations" lb_service
 check "only the console's own replicas may reach a ClusterIP Service through the network policy" closed_by_default
 check "an exposed Service is reachable through the network policy" open_when_exposed
-check "the replicas elect a leader and reach each other; more than one adds a budget and a spread, and needs Secrets" replicas
+check "the replicas elect a leader and reach each other, the standbys warm unless told otherwise; more than one adds a budget and a spread, and needs Secrets" replicas
 check "the Toolbox's values reach the console, and transcripts get a volume" toolbox_values
 check "node shells run in a namespace of their own at Pod Security privileged, closed to the network" toolbox_namespace
 check "Admin forwards ports and starts debug pods, and opens shells only when asked" admin_exec

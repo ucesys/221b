@@ -136,6 +136,10 @@ type Config struct {
 	// ProxyToken is shared by the replicas, so the leader believes the
 	// client address a follower forwards; from the environment only.
 	ProxyToken string
+	// WarmStandby keeps a replica that does not lead watching the clusters,
+	// so it takes over at once (ADR-70); off, it holds nothing and lists
+	// them when it wins the Lease.
+	WarmStandby bool
 }
 
 // Parse reads the configuration from args (without the program name).
@@ -192,6 +196,7 @@ func Parse(args []string) (Config, error) {
 	c.PodName = os.Getenv("POD_NAME")
 	c.PodIP = os.Getenv("POD_IP")
 	c.ProxyToken = os.Getenv("PROXY_TOKEN")
+	fs.BoolVar(&c.WarmStandby, "warm-standby", envBool("WARM_STANDBY", true), "keep a replica that does not lead watching the clusters, so it takes over at once (false: it lists them when it wins the Lease)")
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}

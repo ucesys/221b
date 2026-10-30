@@ -53,6 +53,19 @@ allowedHosts: []
 # than one, the chart adds a PodDisruptionBudget and spreads the pods over
 # nodes.
 replicaCount: 1
+# What the replicas do with the clusters (ADR-70). Only the leader reads
+# them: it lists and watches every cluster, reads CPU and memory in use
+# from metrics-server and the kubelets, checks each connection and the
+# deployed roles, and answers every data request. The other replicas sign
+# people in and pass everything else to it, so Kubernetes sees one reader
+# however many replicas there are. With warmStandby on, the others keep
+# their watches open and poll nothing, so a new leader serves at once: a
+# rolling upgrade moves the leader every time. Off, they hold nothing
+# until they win the Lease, and the first list after a failover takes a
+# moment; that saves a standby's memory on a very large cluster. Every
+# open event stream ends on the leader, so its cap (200) is the console's.
+replicas:
+  warmStandby: true
 
 # How often every open console is updated: the server reads CPU and memory
 # in use from metrics-server, rebuilds the rows that changed and sends every

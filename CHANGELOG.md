@@ -4,7 +4,13 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## 0.10.2 (unreleased)
 
-Maintenance after 0.10.1: fixes only.
+### Fixed
+
+- With two replicas, CPU and memory in use flickered to — on the Helm release page and in the pod and object drawers: a fetch answered by the replica without the page's stream had no usage. Every data request now goes to the leader (P7-09).
+
+### Changed
+
+- Only the leader reads the clusters: it lists and watches them, polls metrics-server and the kubelets, checks connection health and role drift, and serves every data request; the other replicas sign people in and forward the rest, so Kubernetes sees one reader however many replicas there are. The chart's `replicas.warmStandby` (default `true`) keeps the others' watches open for an instant takeover; `false` has them hold nothing until they lead, for very large clusters. The cap on open event streams (200) is the console's rather than each replica's, and a replica's `/metrics` says `b221_leader 1` or `0` (P7-09, ADR-70).
 
 ## 0.10.1 (2026-10-30)
 

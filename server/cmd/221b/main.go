@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -219,7 +220,10 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	store := live.New(cluster, live.Options{Refresh: cfg.Refresh, Logger: log.With("component", "store"), Cluster: clusters.LocalID})
+	// What this replica does with the clusters (ADR-70): the leader reads
+	// them; the others keep their watches warm, or none, and poll nothing.
+	activity := leader.NewActivity(cfg.WarmStandby)
+	store := live.New(cluster, live.Options{Refresh: cfg.Refresh, Logger: log.With("component", "store"), Cluster: clusters.LocalID, Active: activity.Active})
 	cluster.OnChange(store.Notify)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -243,14 +247,23 @@ func run(args []string) error {
 	// Becoming the leader is signalled here; the shared state Sherlock and
 	// Watson rely on is read again before they serve (see below).
 	leading := make(chan struct{}, 1)
+	// A cold standby that loses the Lease cannot stand by again with its
+	// watches stopped: it exits, and the pod starts afresh.
+	lost := make(chan struct{})
+	var lostOnce sync.Once
+	onLead, onStop := roleSwitch(activity, func() { lostOnce.Do(func() { close(lost) }) })
 	elector, err := newElector(cfg, restCfg, log, func() {
+		onLead()
 		select {
 		case leading <- struct{}{}:
 		default:
 		}
-	})
+	}, onStop)
 	if err != nil {
 		return err
+	}
+	if elector.Single() {
+		activity.Set(true)
 	}
 	leaderDone := make(chan struct{})
 	go func() {
@@ -286,7 +299,9 @@ func run(args []string) error {
 	} else {
 		log.Warn("cluster connections added in the console are kept in memory and lost on restart; set -connections-secrets namespace/prefix to keep them in Secrets")
 	}
-	manager := clusters.New(connStore, clusters.Options{Refresh: cfg.Refresh, HealthInterval: cfg.HealthInterval, KubeletStats: cfg.KubeletStats, SecretsRead: cfg.SecretsRead, Logger: log.With("component", "clusters")})
+	manager := clusters.New(connStore, clusters.Options{Refresh: cfg.Refresh, HealthInterval: cfg.HealthInterval, KubeletStats: cfg.KubeletStats, SecretsRead: cfg.SecretsRead, Logger: log.With("component", "clusters"), Activity: activity})
+	// SetLocal runs the local cluster's watches, pollers and store as the
+	// role says, like every other connection's.
 	if err := manager.SetLocal(ctx, localSpec(cfg, restCfg, mode), cluster, store); err != nil {
 		return fmt.Errorf("local connection: %w", err)
 	}
@@ -310,8 +325,6 @@ func run(args []string) error {
 	// or by hand, reaches this one's browsers within seconds (P7-02).
 	go shared.Run(ctx, 3*time.Second)
 
-	go cluster.Run(ctx)
-	go store.Run(ctx)
 	if err := manager.Start(ctx); err != nil {
 		return fmt.Errorf("cluster connections: %w", err)
 	}
@@ -508,6 +521,8 @@ func run(args []string) error {
 		Roles:                   api.RolesOptions{Templates: authFile.RoleTemplates(), Secrets: cfg.SecretsRead, Exec: authFile.Templates.AdminExec, Enforce: authFile.RBACEnforce, Prefixes: rolePrefixes, Bindings: authFile.Bindings},
 		HTTPSRedirect:           cfg.HTTPSRedirect,
 		Leader:                  elector,
+		Active:                  activity.Active,
+		Standby:                 activity.Standby,
 		ProxyToken:              cfg.ProxyToken,
 		Ready:                   cluster.Ready,
 		UI:                      ui.Handler(),
@@ -568,8 +583,14 @@ func run(args []string) error {
 		},
 	})
 	// The deployed roles are compared with the shipped ones every five
-	// minutes, for the Permissions page, the audit log and rbac.enforce.
+	// minutes, for the Permissions page, the audit log and rbac.enforce;
+	// on the leader only, and at once when a replica becomes it.
 	go handler.RunRoleChecks(ctx)
+	activity.OnChange(func(active bool) {
+		if active {
+			handler.CheckRolesSoon()
+		}
+	})
 	srv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           handler,
@@ -585,6 +606,7 @@ func run(args []string) error {
 		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(mode), "version", version.String(), "secrets_read", cfg.SecretsRead, "secrets_reveal", cfg.SecretsRead && cfg.SecretsReveal, "auth", cfg.AuthMode)
 		errCh <- srv.ListenAndServe()
 	}()
+	lostLease := false
 	select {
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -592,6 +614,10 @@ func run(args []string) error {
 		}
 		return err
 	case <-ctx.Done():
+	case <-lost:
+		lostLease = true
+		log.Error("the Lease was lost; a cold standby cannot watch again, so this replica exits and starts afresh (replicas.warmStandby=false)")
+		stop()
 	}
 	log.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -604,14 +630,30 @@ func run(args []string) error {
 	case <-leaderDone:
 	case <-shutdownCtx.Done():
 	}
+	if lostLease {
+		return errors.New("the Lease was lost; a cold standby exits to start afresh")
+	}
 	return err
+}
+
+// roleSwitch is what the election drives (ADR-70): winning the Lease makes
+// the replica active, and losing it makes it a standby. A cold standby
+// cannot stand by again, since its informers cannot restart, so losing
+// the Lease makes it exit instead; a warm one only stops its pollers.
+func roleSwitch(act *leader.Activity, exit func()) (onLead, onStop func()) {
+	return func() { act.Set(true) }, func() {
+		act.Set(false)
+		if !act.Warm() {
+			exit()
+		}
+	}
 }
 
 // newElector joins the election of -leader-lease, or stands alone. The
 // leader's address is the pod's IP and the port it listens on.
-func newElector(cfg config.Config, restCfg *rest.Config, log *slog.Logger, onLead func()) (*leader.Elector, error) {
+func newElector(cfg config.Config, restCfg *rest.Config, log *slog.Logger, onLead, onStop func()) (*leader.Elector, error) {
 	if cfg.LeaderLease == "" {
-		return leader.New(leader.Options{Logger: log.With("component", "leader"), OnStartedLeading: onLead}), nil
+		return leader.New(leader.Options{Logger: log.With("component", "leader"), OnStartedLeading: onLead, OnStoppedLeading: onStop}), nil
 	}
 	ns, name, _ := strings.Cut(cfg.LeaderLease, "/")
 	_, port, err := net.SplitHostPort(cfg.Listen)
@@ -622,7 +664,7 @@ func newElector(cfg config.Config, restCfg *rest.Config, log *slog.Logger, onLea
 	if err != nil {
 		return nil, err
 	}
-	return leader.New(leader.Options{Client: client, Namespace: ns, Name: name, Pod: cfg.PodName, Addr: net.JoinHostPort(cfg.PodIP, port), Logger: log.With("component", "leader"), OnStartedLeading: onLead}), nil
+	return leader.New(leader.Options{Client: client, Namespace: ns, Name: name, Pod: cfg.PodName, Addr: net.JoinHostPort(cfg.PodIP, port), Logger: log.With("component", "leader"), OnStartedLeading: onLead, OnStoppedLeading: onStop}), nil
 }
 
 // localSpec describes the cluster the console was started against as a

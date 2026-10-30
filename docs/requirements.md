@@ -359,13 +359,14 @@ Phase 7 makes 221B ready for other people's production clusters and for the publ
 | ID | Requirement | Done when |
 | --- | --- | --- |
 | P7-01 | Meets the Phase 7 scale in X-08: 5,000 nodes and 150,000 pods, simulated with kwok. | A load-test report in the repo shows every target met. |
-| P7-02 | Runs with two or more replicas; anything that must run once uses leader election. | Deleting a replica costs viewers no more than a reconnect. |
+| P7-02 | Runs with two or more replicas; anything that must run once uses leader election. | Deleting a replica costs viewers no more than a reconnect; with `replicas.warmStandby: false`, a reconnect and the new leader's first list. |
 | P7-03 | `helm upgrade` works from each of the two previous releases, migrating stored settings. | The upgrade tests pass in CI. |
 | P7-04 | An outside security review and penetration test of sign-in, impersonation, Secret handling, Sherlock and Watson. | No high or critical finding is open. |
 | P7-05 | Signed images with an SBOM and build provenance for every release. | Signature verification passes on the published image. |
 | P7-06 | An accessibility audit against WCAG 2.2 AA (X-12). | No AA failure is open. |
 | P7-07 | Docs: install, upgrade, connecting clusters, sign-in providers, RBAC templates, what Sherlock sends to the Claude API, Watson's commands, and troubleshooting. | Someone new to the project installs 221B and connects a cluster using the docs alone. |
 | P7-08 | Public-repo readiness: contributing guide, code of conduct, security policy for reporting vulnerabilities, issue templates, semantic versions and release notes. | You switch the repository to public. |
+| P7-09 | With several replicas, only the leader reads the clusters: it lists and watches them, polls metrics-server and the kubelets, checks connection health and role drift, and serves every data request; the other replicas sign people in and forward the rest. Warm standbys (`replicas.warmStandby`, the default) keep their watches open and poll nothing; cold ones hold nothing until they lead (ADR-70). | With two replicas, the Helm release page's CPU and memory never show — while metrics-server answers; the API server sees lists, watches and metrics reads from one replica only (cold), or watches alone from the standby (warm); `hack/ha-kind.sh` loses a follower and the leader in both modes. |
 
 **Built in Phase 7, first part:**
 
@@ -602,3 +603,9 @@ Round 2, asked for on October 29, 2026:
 | R2-09 | **Order and the chart's defaults.** Values apply lowest first: the chart's `values.yaml`, the second values file, the Values tab, then the parameters (`--set`). *Ignore the chart's values.yaml* leaves the first out. | Compose lays replicas from the file, the image from the Values tab and the parameter last; ignored, the chart's values are empty. |
 | R2-10 | **Drift explained.** Each drifted object carries a unified diff of the fields the manifest sets against the cluster's (defaults and status left out; a Secret's values as sizes). The header's drift line has *what changed*, and the deployed revision's wrench in History has *What drifted…*; both open a dialog listing each changed or missing object with its fields and diff and what drift is. | A scaled Deployment shows `-  replicas: 1` / `+  replicas: 5`; a deleted object is *missing*. |
 | R2-11 | **Fleets for deploys.** A fleet's editor takes a *deploy label* (`key=value`, offered from its own labels); the new-application form and the Source card offer *Deploy to the fleet* among the fleets that have one, and the deploy adds `nodeSelector.<key>=<value>` as the last parameter. The record keeps the fleet and the label at save time; the fleet's label follows on the next save. | A fleet with `fleet=edge` deploys with that nodeSelector; a fleet without a label is not offered. |
+
+## Phase 10.2: maintenance after 0.10.1
+
+Asked for on October 30, 2026, after the 0.10.1 release; the patch release 0.10.2.
+
+- **P7-09, leader reads** (ADR-70): the flicker of CPU and memory in use on the Helm release page with two replicas, and every replica reading every cluster. Built: `replicas.warmStandby` in the chart (`WARM_STANDBY`, `-warm-standby`), `leader.Activity` driving each connection's watches and pollers (`kube.Cluster.RunWatches` and `RunPollers`, the store polling only while active), every `/api/v1/` route but the session and account ones forwarded to the leader, a cold standby ready once it knows the leader, `b221_leader` in the metrics, the role checks on the leader only, and a cold-standby pass in `hack/ha-kind.sh`.

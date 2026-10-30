@@ -162,7 +162,9 @@ func (s *Server) RoleRefusal(cluster string) string {
 }
 
 // RunRoleChecks compares the roles of every cluster with the shipped ones,
-// now and every five minutes, until the context ends.
+// soon and every five minutes, until the context ends; only while this
+// replica reads the clusters (ADR-70), so the audit log has one record per
+// drift rather than one per replica.
 func (s *Server) RunRoleChecks(ctx context.Context) {
 	tick := time.NewTimer(15 * time.Second)
 	defer tick.Stop()
@@ -171,9 +173,27 @@ func (s *Server) RunRoleChecks(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			s.checkAllRoles()
-			tick.Reset(driftEvery)
+		case <-s.roleCheck:
+			if !tick.Stop() {
+				select {
+				case <-tick.C:
+				default:
+				}
+			}
 		}
+		if s.opts.Active == nil || s.opts.Active() {
+			s.checkAllRoles()
+		}
+		tick.Reset(driftEvery)
+	}
+}
+
+// CheckRolesSoon asks RunRoleChecks for a check now: a replica that
+// becomes the leader compares the roles without waiting for the timer.
+func (s *Server) CheckRolesSoon() {
+	select {
+	case s.roleCheck <- struct{}{}:
+	default:
 	}
 }
 

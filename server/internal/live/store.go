@@ -125,6 +125,10 @@ type Options struct {
 	// Cluster is the connection's id, under which the settings keep its
 	// fleets.
 	Cluster string
+	// Active says whether this replica reads the cluster (ADR-70): the
+	// source is polled only while it does, and what it last read is kept.
+	// nil polls on every tick.
+	Active func() bool
 }
 
 // viewDef says how a view's rows are built.
@@ -199,6 +203,7 @@ type Store struct {
 	since       time.Time // when the oldest unpublished change arrived
 	kick        chan struct{}
 	reset       chan struct{}
+	refreshNow  chan struct{}
 }
 
 // DelayBuckets are the upper bounds, in seconds, of the change delay
@@ -247,14 +252,15 @@ func New(src Source, o Options) *Store {
 		o.Now = time.Now
 	}
 	s := &Store{
-		src:     src,
-		opts:    o,
-		views:   map[string]*view{},
-		subs:    map[*Sub]struct{}{},
-		refresh: o.Refresh,
-		dirty:   map[string]map[string]struct{}{},
-		kick:    make(chan struct{}, 1),
-		reset:   make(chan struct{}, 1),
+		src:        src,
+		opts:       o,
+		views:      map[string]*view{},
+		subs:       map[*Sub]struct{}{},
+		refresh:    o.Refresh,
+		dirty:      map[string]map[string]struct{}{},
+		kick:       make(chan struct{}, 1),
+		reset:      make(chan struct{}, 1),
+		refreshNow: make(chan struct{}, 1),
 	}
 	s.grace.Store(int64(settings.DefaultPendingGrace))
 	for _, d := range staticViews {
@@ -527,6 +533,15 @@ func (s *Store) Run(ctx context.Context) {
 		case <-timer.C:
 			s.Refresh(ctx)
 			timer.Reset(s.RefreshInterval())
+		case <-s.refreshNow:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			s.Refresh(ctx)
+			timer.Reset(s.RefreshInterval())
 		case <-s.kick:
 			select {
 			case <-ctx.Done():
@@ -542,14 +557,25 @@ func (s *Store) Run(ctx context.Context) {
 	}
 }
 
+// RefreshNow asks Run for a tick at once rather than at the timer: a
+// replica that becomes the leader reads usage without waiting (ADR-70).
+func (s *Store) RefreshNow() {
+	select {
+	case s.refreshNow <- struct{}{}:
+	default:
+	}
+}
+
 // Refresh is one tick: poll the source, rebuild the rows that changed,
 // publish the changes to every browser and tell them the refresh happened.
 // Run calls it; tests call it directly.
 func (s *Store) Refresh(ctx context.Context) {
-	budget := min(10*time.Second, max(2*time.Second, s.RefreshInterval()))
-	pollCtx, cancel := context.WithTimeout(ctx, budget)
-	s.src.Poll(pollCtx)
-	cancel()
+	if s.opts.Active == nil || s.opts.Active() {
+		budget := min(10*time.Second, max(2*time.Second, s.RefreshInterval()))
+		pollCtx, cancel := context.WithTimeout(ctx, budget)
+		s.src.Poll(pollCtx)
+		cancel()
+	}
 	if ctx.Err() != nil {
 		return
 	}

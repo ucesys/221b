@@ -47,6 +47,9 @@ type Instance struct {
 	// conn fingerprints what the instance connects with, so a sync
 	// restarts it only when that changed.
 	conn string
+	// reading runs the watches and pollers as the replica's role says
+	// (ADR-70); nil for a fake that is no Reader.
+	reading *reading
 }
 
 // Options configure the manager.
@@ -57,6 +60,9 @@ type Options struct {
 	SecretsRead    bool
 	Logger         *slog.Logger
 	Now            func() time.Time
+	// Activity says whether this replica reads the clusters (ADR-70); nil
+	// reads always.
+	Activity Activity
 }
 
 // Manager keeps every connection running: the local one the server was
@@ -92,8 +98,30 @@ func New(store Store, o Options) *Manager {
 	if o.Refresh <= 0 {
 		o.Refresh = 3 * time.Second
 	}
-	return &Manager{store: store, opts: o, log: o.Logger, instances: map[string]*Instance{}, seen: map[string]string{}, ctx: context.Background()}
+	m := &Manager{store: store, opts: o, log: o.Logger, instances: map[string]*Instance{}, seen: map[string]string{}, ctx: context.Background()}
+	if o.Activity != nil {
+		o.Activity.OnChange(m.setActive)
+	}
+	return m
 }
+
+// setActive passes a change of role to every connection's reading.
+func (m *Manager) setActive(active bool) {
+	m.mu.RLock()
+	rs := make([]*reading, 0, len(m.instances))
+	for _, inst := range m.instances {
+		if inst.reading != nil {
+			rs = append(rs, inst.reading)
+		}
+	}
+	m.mu.RUnlock()
+	for _, r := range rs {
+		r.set(active)
+	}
+}
+
+// activeNow is the store's view of the role: nil Activity reads always.
+func (m *Manager) activeNow() bool { return m.opts.Activity == nil || m.opts.Activity.Active() }
 
 // Store is the connection store, for the API's tests.
 func (m *Manager) Store() Store { return m.store }
@@ -120,8 +148,14 @@ func (m *Manager) SetLocal(ctx context.Context, spec Spec, cluster Client, store
 	if spec.Added.IsZero() {
 		spec.Added = m.opts.Now().UTC()
 	}
+	inst := &Instance{Spec: spec, Cluster: cluster, Store: store}
 	m.mu.Lock()
-	m.instances[LocalID] = &Instance{Spec: spec, Cluster: cluster, Store: store}
+	// The local cluster's watches and pollers follow the role too; ctx
+	// bounds them, as it does the server.
+	if r, ok := cluster.(Reader); ok && store != nil {
+		inst.reading = newReading(ctx, r, store, m.opts.Activity)
+	}
+	m.instances[LocalID] = inst
 	raw, refresh := m.settingsRaw, m.settingsRefresh
 	m.mu.Unlock()
 	if raw != nil && store != nil {
@@ -324,15 +358,15 @@ func (m *Manager) start(spec Spec, cred Credential) *Instance {
 		m.log.Warn("connection cannot start", "cluster", spec.ID, "err", err)
 		return inst
 	}
-	store := live.New(cluster, live.Options{Refresh: m.opts.Refresh, Logger: m.log.With("cluster", spec.ID, "component", "store"), Now: m.opts.Now, Cluster: spec.ID})
+	store := live.New(cluster, live.Options{Refresh: m.opts.Refresh, Logger: m.log.With("cluster", spec.ID, "component", "store"), Now: m.opts.Now, Cluster: spec.ID, Active: m.activeNow})
 	if m.settingsRaw != nil {
 		store.SetSettings(m.settingsRefresh, m.settingsRaw)
 	}
 	cluster.OnChange(store.Notify)
 	ctx, cancel := context.WithCancel(m.ctx)
 	inst.Cluster, inst.Store, inst.cancel = cluster, store, cancel
-	go cluster.Run(ctx)
-	go store.Run(ctx)
+	// Watched and polled as the replica's role says (ADR-70).
+	inst.reading = newReading(ctx, cluster, store, m.opts.Activity)
 	m.instances[spec.ID] = inst
 	m.log.Info("connection started", "cluster", spec.ID, "server", spec.Server, "auth", spec.Auth)
 	return inst

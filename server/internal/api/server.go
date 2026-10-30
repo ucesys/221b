@@ -138,10 +138,17 @@ type Options struct {
 	Logger *slog.Logger
 	// MaxStreams caps concurrent event streams.
 	MaxStreams int
-	// Leader, with several replicas, says whether this one runs Sherlock
-	// and Watson; the others forward those requests to it (P7-02). nil is
-	// a single replica.
+	// Leader, with several replicas, says whether this one reads the
+	// clusters and runs Sherlock and Watson; the others forward every
+	// data request to it (P7-02, ADR-70). nil is a single replica.
 	Leader Leader
+	// Active says whether this replica reads the clusters now (ADR-70):
+	// the role checks run only while it does. nil: always.
+	Active func() bool
+	// Standby says whether this replica is a cold standby, holding no
+	// watches (ADR-70): it is ready as soon as it knows the leader, since
+	// it forwards everything to it. nil: never.
+	Standby func() bool
 	// ProxyToken is shared by the replicas: a forwarded request carries it,
 	// and only then is its client address believed.
 	ProxyToken string
@@ -255,6 +262,11 @@ type Server struct {
 
 	// leaderChecks is how often a forwarded stream checks the leader.
 	leaderChecks time.Duration
+	// patterns are the mux's, for the test that every route is either
+	// forwarded or listed as local (ADR-70).
+	patterns []string
+	// roleCheck asks RunRoleChecks for a check now.
+	roleCheck chan struct{}
 
 	// drifts keeps the applications' drift checks (HA-09), by cluster,
 	// release and person, for two minutes.
@@ -299,7 +311,7 @@ func New(o Options) *Server {
 	if o.Roles.Monitor == nil {
 		o.Roles.Monitor = &roles.Monitor{}
 	}
-	s := &Server{opts: o, mux: http.NewServeMux(), reqs: map[reqKey]uint64{}, allowedHosts: map[string]bool{}, leaderChecks: leaderChecks}
+	s := &Server{opts: o, mux: http.NewServeMux(), reqs: map[reqKey]uint64{}, allowedHosts: map[string]bool{}, leaderChecks: leaderChecks, roleCheck: make(chan struct{}, 1)}
 	for _, h := range o.AllowedHosts {
 		if h = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), "."); h != "" {
 			s.allowedHosts[h] = true
@@ -390,6 +402,7 @@ func New(o Options) *Server {
 }
 
 func (s *Server) handle(pattern, route string, h http.HandlerFunc) {
+	s.patterns = append(s.patterns, pattern)
 	s.mux.Handle(pattern, s.observe(route, h))
 }
 
@@ -825,6 +838,17 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	// A cold standby serves nothing of its own: it is ready once it knows
+	// where to forward (ADR-70).
+	if s.opts.Standby != nil && s.opts.Standby() {
+		if s.opts.Leader == nil || s.opts.Leader.LeaderAddr() == "" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			io.WriteString(w, "waiting for a leader to forward to\n")
+			return
+		}
+		io.WriteString(w, "ok\n")
+		return
+	}
 	if !s.opts.Ready() {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		io.WriteString(w, "waiting for the first list of nodes and pods\n")
@@ -1001,7 +1025,14 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	var b strings.Builder
 	viewStats, subs, recomputes := s.opts.Store.Stats()
+	leads := 1.0
+	if s.opts.Leader != nil && !s.opts.Leader.IsLeader() {
+		leads = 0
+	}
 	gauges := []Gauge{
+		// The leader reads the clusters (ADR-70): its figures are the
+		// console's; a follower's view gauges are its own, mostly empty.
+		{Name: "b221_leader", Help: "1 on the replica that reads the clusters and serves the data; 0 on one that forwards to it.", Value: leads},
 		{Name: "b221_event_streams", Help: "Open browser event streams.", Value: float64(subs)},
 		{Name: "b221_log_streams", Help: "Open pod log streams.", Value: float64(s.logs.Load())},
 		{Name: "b221_recomputes_total", Help: "Times the rows were recomputed.", Value: float64(recomputes), Counter: true},

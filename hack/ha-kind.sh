@@ -5,7 +5,9 @@
 # time the session still works without signing in again, a new event
 # stream connects, Sherlock's and Watson's requests reach the new leader
 # through either replica, and a setting saved through one replica is read
-# back through the other.
+# back through the other. Then again with cold standbys
+# (replicas.warmStandby=false): the follower caches nothing, and losing
+# the leader costs the new one a list (ADR-70).
 #
 #   IMAGE=ghcr.io/ucesys/221b:dev hack/ha-kind.sh 1.37
 #
@@ -27,6 +29,8 @@ E2E_PASSWORD=e2e-password-12
 COOKIES=$WORK/ha-cookies
 # A port-forward per pod, to ask one replica in particular.
 declare -A FORWARD=()
+# Whether the standbys keep their watches (the default) in the pass under way.
+WARM=1
 
 signin() {
   rm -f "$COOKIES"
@@ -94,6 +98,17 @@ check_both() {
     # The assistants' stream, forwarded too, sends Watson's status.
     curl -sN -b "$COOKIES" --max-time 4 "http://127.0.0.1:$port/api/v1/assistants/events" > "$WORK/assistants-$pod.txt" || true
     grep -q '^event: watson-status' "$WORK/assistants-$pod.txt" || { echo "no assistants' stream through $pod"; return 1; }
+    # Only the leader reads the cluster (ADR-70): its metrics say which it
+    # is, the data answers through either, and a standby's cache is full
+    # (warm) or empty (cold).
+    local leads want cached
+    leads=$(curl -fsS "http://127.0.0.1:$port/metrics" | awk '/^b221_leader /{print $2}')
+    if [ "$pod" = "$(holder)" ]; then want=1; else want=0; fi
+    [ "$leads" = "$want" ] || { echo "$pod says b221_leader $leads, want $want"; return 1; }
+    api "http://127.0.0.1:$port/api/v1/snapshot?views=nodes" | grep -q control-plane || { echo "the nodes do not answer through $pod"; return 1; }
+    cached=$(curl -fsS "http://127.0.0.1:$port/metrics" | awk '/^b221_cached_nodes /{print $2}')
+    if [ "$want" = 0 ] && [ "$WARM" = 0 ] && [ "$cached" != 0 ]; then echo "the cold standby $pod caches $cached nodes"; return 1; fi
+    if [ "$want" = 0 ] && [ "$WARM" = 1 ] && [ "$cached" = 0 ]; then echo "the warm standby $pod caches no nodes"; return 1; fi
   done
   # A new event stream connects through the Service.
   curl -sN -b "$COOKIES" --max-time 4 "$BASE_URL/api/v1/events?views=nodes" > "$WORK/events.txt" || true
@@ -201,6 +216,15 @@ check_both
 endstep
 
 step "Lose the leader"
+lose "$(holder)" leader
+check_both
+endstep
+
+step "Cold standbys (replicas.warmStandby=false): the follower caches nothing, and losing the leader costs one list"
+helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reuse-values --set replicas.warmStandby=false --wait --timeout 120s
+settled
+WARM=0
+check_both
 lose "$(holder)" leader
 check_both
 endstep
