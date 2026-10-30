@@ -185,6 +185,9 @@ type Options struct {
 	Now    func() time.Time
 	// Backend returns a cluster's backend as a person; nil uses client-go.
 	Backend func(cl Cluster, p kube.Person) (Backend, error)
+	// SSH pairs nodes and opens SSH sessions (Phase 11, ADR-72); nil
+	// leaves the SSH tools failing with a message.
+	SSH SSH
 	// History keeps the records of ended sessions; nil keeps them in
 	// memory.
 	History History
@@ -431,6 +434,56 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 		}
 		m.located(s, pod, "debug")
 		m.terminal(ctx, s, ShellCommand("auto"))
+	case toolbox.ToolSSH:
+		if m.opts.SSH == nil {
+			fail(errors.New("SSH is not part of this console"))
+			return
+		}
+		term, note, err := m.opts.SSH.Dial(ctx, s.Cluster, r.Node, s.Owner, s.ID)
+		if err != nil {
+			fail(err)
+			return
+		}
+		m.sshTerminal(ctx, s, term, note)
+	case toolbox.ToolSSHPair, toolbox.ToolSSHUnpair:
+		if m.opts.SSH == nil {
+			fail(errors.New("SSH is not part of this console"))
+			return
+		}
+		script, err := m.opts.SSH.Script(r)
+		if err != nil {
+			fail(err)
+			return
+		}
+		pod, err := NodePod(m.opts.Config, s.ID, s.Owner.Name, r, s.limit)
+		if err != nil {
+			fail(err)
+			return
+		}
+		if err := b.CreatePod(ctx, pod, false); err != nil {
+			fail(err)
+			return
+		}
+		m.created(s, Created{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name})
+		running, err := waitRunning(ctx, func(c context.Context) (*corev1.Pod, error) { return b.Pod(c, pod.Namespace, pod.Name) }, "node", m.opts.StartWithin)
+		if err != nil {
+			fail(err)
+			return
+		}
+		m.located(s, running, "node")
+		m.command(ctx, s, NodeCommand(script))
+		m.mu.Lock()
+		exit, out := s.Exit, s.ring.String()
+		m.mu.Unlock()
+		if exit != nil && *exit == 0 {
+			// The session's context ended with the command; the record is
+			// made on its own time.
+			dctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := m.opts.SSH.Done(dctx, s.Cluster, r, out, s.Owner.Name); err != nil {
+				m.opts.Logger.Warn("the SSH pairing ran but could not be recorded", "session", s.ID, "node", r.Node, "err", err)
+			}
+		}
 	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand:
 		pod, err := NodePod(m.opts.Config, s.ID, s.Owner.Name, r, s.limit)
 		if err != nil {
@@ -561,6 +614,32 @@ func (m *Manager) terminal(ctx context.Context, s *Session, cmd []string) {
 	default:
 		m.end(s, EndFinished, "The shell exited.", Who{})
 	}
+}
+
+// sshTerminal runs an SSH shell to a node until it exits or the session
+// ends (Phase 11): as terminal does, with no pod to watch.
+func (m *Manager) sshTerminal(ctx context.Context, s *Session, term Term, note string) {
+	pr, pw := io.Pipe()
+	sizes := make(chan Size, 4)
+	m.mu.Lock()
+	s.stdin, s.sizes = pw, sizes
+	m.mu.Unlock()
+	if !m.live(s) {
+		return
+	}
+	if note != "" {
+		m.note(s, note)
+	}
+	out := &termWriter{m: m, s: s}
+	err := term.Run(ctx, pr, out, sizes)
+	if ctx.Err() != nil {
+		return
+	}
+	if err != nil {
+		m.end(s, EndFailed, statusMessage(err), Who{})
+		return
+	}
+	m.end(s, EndFinished, "The shell exited.", Who{})
 }
 
 // command runs one command and keeps its output (TB-16, TB-33).
@@ -722,7 +801,7 @@ func (m *Manager) end(s *Session, by, note string, who Who) {
 	if s.Exit != nil {
 		detail += fmt.Sprintf(" exit=%d", *s.Exit)
 	}
-	if s.Req.Tool == toolbox.ToolCommand || s.Req.Tool == toolbox.ToolNodeCommand {
+	if s.Req.Tool == toolbox.ToolCommand || s.Req.Tool == toolbox.ToolNodeCommand || s.Req.Tool == toolbox.ToolSSHPair || s.Req.Tool == toolbox.ToolSSHUnpair {
 		out := s.ring.String()
 		if len(out) > 16<<10 {
 			out = out[:16<<10] + "…"

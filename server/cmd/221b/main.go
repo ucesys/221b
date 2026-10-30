@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	corev1 "k8s.io/api/core/v1"
 	"log/slog"
 	"net"
 	"net/http"
@@ -39,6 +40,7 @@ import (
 	"github.com/ucesys/221b/server/internal/ldap"
 	"github.com/ucesys/221b/server/internal/leader"
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/settings"
@@ -481,8 +483,53 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	// SSH to nodes (Phase 11, ADR-72): the console's certificate
+	// authority lives in a Secret beside the connections, and the pairings
+	// beside the settings.
+	var caStore nodessh.KeyStore = &nodessh.MemoryKeys{}
+	if cfg.ConnectionsSecrets != "" {
+		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
+		sk, err := kube.NewSecretKey(restCfg, ns, prefix+"-ssh-ca", map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "ssh-ca", "app.kubernetes.io/managed-by": "221b"})
+		if err != nil {
+			return fmt.Errorf("the SSH authority's Secret: %w", err)
+		}
+		caStore = sk
+	} else {
+		log.Warn("the SSH authority's key is kept in memory and made again on restart; paired nodes then need pairing again (set -connections-secrets to keep it in a Secret)")
+	}
+	sshSvc := nodessh.New(nodessh.Options{
+		CA:       nodessh.NewCA(caStore),
+		Pairings: nodessh.NewPairings(spendBackend),
+		Logger:   log.With("component", "ssh"),
+		NodeAddr: func(cluster, node string) (string, error) {
+			_, client, ok := manager.Lookup(cluster)
+			if !ok || client == nil {
+				return "", fmt.Errorf("no connection %q", cluster)
+			}
+			nodes, ok := client.(interface{ Node(string) *corev1.Node })
+			if !ok {
+				return "", errors.New("this connection does not list nodes")
+			}
+			n := nodes.Node(node)
+			if n == nil {
+				return "", fmt.Errorf("node %s is not known here", node)
+			}
+			for _, a := range n.Status.Addresses {
+				if a.Type == corev1.NodeInternalIP {
+					return a.Address, nil
+				}
+			}
+			for _, a := range n.Status.Addresses {
+				if a.Type == corev1.NodeExternalIP || a.Type == corev1.NodeInternalDNS || a.Type == corev1.NodeHostName {
+					return a.Address, nil
+				}
+			}
+			return "", fmt.Errorf("node %s has no address", node)
+		},
+	})
 	sessionsMgr := sessions.New(sessions.Options{
 		Config:  toolboxCfg,
+		SSH:     sshSvc,
 		Audit:   auditLog,
 		Logger:  log.With("component", "sessions"),
 		History: &sessions.KVHistory{Backend: spendBackend, Key: sessions.HistoryKey, Keep: toolboxCfg.History.Keep, Logger: log.With("component", "sessions")},
@@ -512,6 +559,7 @@ func run(args []string) error {
 		}
 	}
 	handler := api.New(api.Options{
+		SSH:                     sshSvc,
 		KV:                      spendBackend,
 		Version:                 version.String(),
 		Watson:                  watsonSvc,

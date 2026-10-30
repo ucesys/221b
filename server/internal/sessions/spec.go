@@ -67,7 +67,10 @@ type Request struct {
 	LabelsFrom     string            `json:"labelsFrom,omitempty"`
 	Labels         map[string]string `json:"labels,omitempty"`
 	// Minutes is the duration asked for; 0 takes the chart's limit.
-	Minutes int `json:"minutes,omitempty"`
+	// LoginUser is the OS account an SSH pairing admits sessions as
+	// (Phase 11); it must exist on the node.
+	LoginUser string `json:"loginUser,omitempty"`
+	Minutes   int    `json:"minutes,omitempty"`
 	// Reason is shown to the approver and kept in the audit log.
 	Reason string `json:"reason,omitempty"`
 }
@@ -121,7 +124,7 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 		errs = append(errs, label("namespace", r.Namespace, false), name("pod", r.Pod, false))
 	case toolbox.ToolDebugPod:
 		errs = append(errs, label("namespace", r.Namespace, false), name("node", r.Node, true), name("service account", r.ServiceAccount, true), name("pod to copy the labels of", r.LabelsFrom, true))
-	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand:
+	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand, toolbox.ToolSSH, toolbox.ToolSSHPair, toolbox.ToolSSHUnpair:
 		errs = append(errs, name("node", r.Node, false))
 		r.Namespace = ""
 	}
@@ -174,6 +177,27 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 		if !contains(c.NodeShell.Profiles, r.Profile) {
 			errs = append(errs, fmt.Errorf("the node shell profiles here are %s", strings.Join(c.NodeShell.Profiles, ", ")))
 		}
+	}
+	switch r.Tool {
+	case toolbox.ToolSSHPair:
+		// The pairing command is the console's, run on the node as a
+		// node command is; the login user goes into the script.
+		r.Profile = toolbox.ProfileGeneral
+		r.LoginUser = strings.TrimSpace(r.LoginUser)
+		if r.LoginUser == "" {
+			r.LoginUser = c.SSH.LoginUser
+		}
+		if !toolbox.LoginUserRE.MatchString(r.LoginUser) {
+			errs = append(errs, errors.New("the login user is a Unix user name: lowercase letters, digits, dash and underscore"))
+		}
+		if r.Port == 0 {
+			r.Port = c.SSH.Port
+		}
+		if r.Port < 1 || r.Port > 65535 {
+			errs = append(errs, errors.New("the SSH port is 1 to 65535"))
+		}
+	case toolbox.ToolSSHUnpair:
+		r.Profile = toolbox.ProfileGeneral
 	}
 	if r.Tool == toolbox.ToolCommand || r.Tool == toolbox.ToolNodeCommand {
 		r.Command = strings.TrimSpace(r.Command)
@@ -228,6 +252,12 @@ func ToolName(tool string) string {
 		return "Node shell"
 	case toolbox.ToolNodeCommand:
 		return "Run a command on the node"
+	case toolbox.ToolSSH:
+		return "SSH"
+	case toolbox.ToolSSHPair:
+		return "Pair for SSH"
+	case toolbox.ToolSSHUnpair:
+		return "Unpair from SSH"
 	}
 	return tool
 }
@@ -235,16 +265,22 @@ func ToolName(tool string) string {
 // Interactive says whether a tool's session is a terminal.
 func Interactive(tool string) bool {
 	switch tool {
-	case toolbox.ToolShell, toolbox.ToolDebugContainer, toolbox.ToolDebugPod, toolbox.ToolNodeShell:
+	case toolbox.ToolShell, toolbox.ToolDebugContainer, toolbox.ToolDebugPod, toolbox.ToolNodeShell, toolbox.ToolSSH:
 		return true
 	}
 	return false
 }
 
+// OnNode says whether a tool acts on a node as root: a node shell, a
+// node command, and SSH pairing, which is a node command (Phase 11).
+func OnNode(tool string) bool {
+	return tool == toolbox.ToolNodeShell || tool == toolbox.ToolNodeCommand || tool == toolbox.ToolSSHPair || tool == toolbox.ToolSSHUnpair
+}
+
 // NeedsTwo says whether a request needs a second person whatever the
 // cluster (TB-32).
 func NeedsTwo(c toolbox.Config, tool string) bool {
-	return (tool == toolbox.ToolNodeShell || tool == toolbox.ToolNodeCommand) && c.NodeShell.Approval == toolbox.ApprovalAlways
+	return OnNode(tool) && c.NodeShell.Approval == toolbox.ApprovalAlways
 }
 
 // Summary is the one line a card and the audit log show for a request.
@@ -268,6 +304,12 @@ func (r Request) Summary() string {
 		return fmt.Sprintf("node shell on node %s (%s)", r.Node, r.Profile)
 	case toolbox.ToolNodeCommand:
 		return fmt.Sprintf("run on node %s: %s", r.Node, r.Command)
+	case toolbox.ToolSSH:
+		return fmt.Sprintf("SSH to node %s", r.Node)
+	case toolbox.ToolSSHPair:
+		return fmt.Sprintf("pair node %s for SSH as %s", r.Node, r.LoginUser)
+	case toolbox.ToolSSHUnpair:
+		return fmt.Sprintf("unpair node %s from SSH", r.Node)
 	}
 	return r.Tool
 }

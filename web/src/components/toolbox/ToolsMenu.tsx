@@ -5,7 +5,7 @@ import type { PodDetails } from '../../api/types'
 import { layer } from '../../lib/layer'
 import { apiPath } from '../../lib/router'
 import { ConfirmDialog } from '../ConfirmDialog'
-import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, SherlockIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
+import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, KeyIcon, SherlockIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
 import { useSherlockApi } from '../sherlockContext'
 import { troubleshootQuestion } from '../../lib/sherlock'
 import { useToolbox, type ToolboxApi } from './context'
@@ -171,6 +171,7 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
     if (t === 'node-shell' || t === 'node-command') return info.nodes[t] || undefined
     return undefined
   }
+  const pairing = target.kind === 'node' ? info?.ssh?.pairings[target.name] : undefined
   const open = (tool: ToolName, prefill = {}) => {
     onClose()
     tb.openTool({ tool, pod: target.kind === 'pod' ? { name: target.name, namespace: target.namespace } : undefined, node: target.kind === 'node' ? target.name : undefined, prefill, from: 'Tools menu' })
@@ -225,6 +226,14 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
     items = [
       { key: 'node-shell', icon: <TerminalIcon />, label: 'Node shell…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('node-shell'), run: () => open('node-shell') },
       { key: 'debug-pod', icon: <BoxIcon />, label: 'Debug pod on this node…', off: why('debug-pod'), run: () => open('debug-pod') },
+      // SSH (Phase 11, ADR-72): a session once the node is paired; pairing and unpairing are node commands.
+      ...(info?.ssh
+        ? [
+            { key: 'ssh', icon: <TerminalIcon />, label: 'SSH…', hint: pairing ? `as ${pairing.loginUser}${pairing.stale ? ' · pair again' : ''}` : 'pair the node first', off: why('ssh') ?? (pairing ? (pairing.stale ? 'paired with another authority; pair it again' : undefined) : 'not paired yet: Pair for SSH… first'), run: () => open('ssh') },
+            { key: 'ssh-pair', icon: <KeyIcon />, label: pairing ? 'Pair for SSH again…' : 'Pair for SSH…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('ssh-pair'), run: () => open('ssh-pair', pairing ? { loginUser: pairing.loginUser, port: pairing.port } : {}) },
+            ...(pairing ? [{ key: 'ssh-unpair', icon: <KeyIcon />, label: 'Unpair from SSH…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('ssh-unpair'), run: () => open('ssh-unpair') }] : []),
+          ]
+        : []),
       {
         key: 'cordon',
         icon: <CordonIcon />,

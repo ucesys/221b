@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"golang.org/x/crypto/ssh"
 	"net/http"
 	"os"
 	"sort"
@@ -18,6 +19,7 @@ import (
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/sessions"
 	tb "github.com/ucesys/221b/server/internal/toolbox"
 	"github.com/ucesys/221b/server/internal/tunnel"
@@ -123,6 +125,30 @@ type toolboxView struct {
 	ApproverNames  []string                  `json:"approvers,omitempty"`
 	Values         tb.Config                 `json:"values"`
 	NodeShellPodNS string                    `json:"-"`
+	// SSH is the SSH tools' state (Phase 11): the authority and the
+	// cluster's pairings, by node.
+	SSH *sshView `json:"ssh,omitempty"`
+}
+
+type sshView struct {
+	Enabled     bool                   `json:"enabled"`
+	Port        int                    `json:"port"`
+	LoginUser   string                 `json:"loginUser"`
+	Principal   string                 `json:"principal"`
+	Fingerprint string                 `json:"caFingerprint,omitempty"`
+	Pairings    map[string]pairingView `json:"pairings"`
+}
+
+type pairingView struct {
+	LoginUser string    `json:"loginUser"`
+	Port      int       `json:"port"`
+	PairedAt  time.Time `json:"pairedAt"`
+	PairedBy  string    `json:"pairedBy,omitempty"`
+	// HostKey is the pinned host key's fingerprint.
+	HostKey string `json:"hostKey"`
+	// Stale says the node was paired with an authority that is not this
+	// console's any more.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // namespaceTools is what a person may use in a namespace: "" for a tool
@@ -186,6 +212,22 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 		PodCommands: cfg.Shell.QuickCommands, NodeCommands: cfg.NodeShell.QuickCommands, Namespaces: map[string]namespaceTools{}, Nodes: map[string]string{}, Values: cfg}
 	if v.Transcripts == "" {
 		v.Transcripts = tb.TranscriptsNone
+	}
+	if cfg.SSH.Enabled {
+		sv := &sshView{Enabled: s.opts.SSH != nil, Port: cfg.SSH.Port, LoginUser: cfg.SSH.LoginUser, Principal: nodessh.Principal, Pairings: map[string]pairingView{}}
+		if s.opts.SSH != nil {
+			sv.Fingerprint = s.opts.SSH.Fingerprint()
+			if list, err := s.opts.SSH.List(r.Context(), c.ID); err == nil {
+				for _, p := range list {
+					fp := p.HostKey
+					if k, _, _, _, err := ssh.ParseAuthorizedKey([]byte(p.HostKey)); err == nil {
+						fp = ssh.FingerprintSHA256(k)
+					}
+					sv.Pairings[p.Node] = pairingView{LoginUser: p.LoginUser, Port: p.Port, PairedAt: p.PairedAt, PairedBy: p.PairedBy, HostKey: fp, Stale: p.CAFinger != "" && p.CAFinger != sv.Fingerprint}
+				}
+			}
+		}
+		v.SSH = sv
 	}
 	names := make([]string, 0, len(cfg.Images))
 	for n := range cfg.Images {
@@ -320,8 +362,8 @@ func (s *Server) postSessionCard(w http.ResponseWriter, r *http.Request) {
 	req := in.Request
 	needsTwo := sessions.NeedsTwo(cfg, req.Tool)
 	sw := s.sessionWho(r)
-	if (req.Tool == tb.ToolNodeShell || req.Tool == tb.ToolNodeCommand) && !sw.Admin {
-		jsonError(w, http.StatusForbidden, "Only a SuperAdmin may open a node shell or run a command on a node.")
+	if (sessions.OnNode(req.Tool) || req.Tool == tb.ToolSSH) && !sw.Admin {
+		jsonError(w, http.StatusForbidden, "Only a SuperAdmin may open a node shell, run a command on a node, or use SSH.")
 		return
 	}
 	// A debug pod that names a ServiceAccount carries that account's token,
@@ -334,7 +376,7 @@ func (s *Server) postSessionCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A reason is asked for whoever approves, and for a node on production.
-	onNode := req.Tool == tb.ToolNodeShell || req.Tool == tb.ToolNodeCommand
+	onNode := sessions.OnNode(req.Tool) || req.Tool == tb.ToolSSH
 	if err := req.Validate(cfg, s.watsonTwoPerson(c) || needsTwo || (onNode && c.Env == clusters.EnvProduction)); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return

@@ -57,6 +57,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   const [namespace, setNamespace] = useState(pre.namespace ?? podRef?.namespace ?? 'default')
   const [serviceAccount, setServiceAccount] = useState(pre.serviceAccount ?? '')
   const [labelsFrom, setLabelsFrom] = useState(pre.labelsFrom ?? '')
+  const [loginUser, setLoginUser] = useState(pre.loginUser ?? '')
   const [minutes, setMinutes] = useState(pre.minutes ?? 30)
   const [reason, setReason] = useState(pre.reason ?? '')
   const first = useRef<HTMLElement | null>(null)
@@ -112,9 +113,12 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   const profileV = profile || (tool === 'node-shell' ? (info?.nodeProfiles[0] ?? 'general') : tool === 'debug-container' ? 'restricted' : '')
   const minutesV = info ? Math.min(minutes, info.maxMinutes) : minutes
 
-  const onNode = tool === 'node-shell' || tool === 'node-command'
-  const needsTwo = onNode && info?.nodeApproval === 'always'
-  const interactive = tool !== 'command' && tool !== 'node-command'
+  const onNode = tool === 'node-shell' || tool === 'node-command' || tool === 'ssh' || tool === 'ssh-pair' || tool === 'ssh-unpair'
+  const needsTwo = (tool === 'node-shell' || tool === 'node-command' || tool === 'ssh-pair' || tool === 'ssh-unpair') && info?.nodeApproval === 'always'
+  const interactive = tool !== 'command' && tool !== 'node-command' && tool !== 'ssh-pair' && tool !== 'ssh-unpair'
+  const pairing = node ? info?.ssh?.pairings[node] : undefined
+  const loginUserV = loginUser || pairing?.loginUser || info?.ssh?.loginUser || 'root'
+  const sshPortV = port || String(pairing?.port || info?.ssh?.port || 22)
   const approvers = !!info?.twoPerson || needsTwo
   // A reason is asked for whoever approves, and for a node on production;
   // a node shell elsewhere takes one if the person gives it.
@@ -139,6 +143,12 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
         return { ...r, node, profile: profileV }
       case 'node-command':
         return { ...r, node, command }
+      case 'ssh':
+        return { ...r, node }
+      case 'ssh-pair':
+        return { ...r, node, loginUser: loginUserV.trim(), port: Number(sshPortV) }
+      case 'ssh-unpair':
+        return { ...r, node }
     }
     return r
   }
@@ -148,6 +158,8 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
     if ((tool === 'command' || tool === 'node-command') && !command.trim()) return 'Type the command to run.'
     if (tool === 'forward' && !(Number(port) >= 1 && Number(port) <= 65535)) return 'Choose the pod’s port.'
     if (tool === 'forward' && localPort !== '' && localPort !== 'auto' && !(Number(localPort) >= 1 && Number(localPort) <= 65535)) return 'The local port is a number from 1 to 65535, or auto.'
+    if (tool === 'ssh-pair' && !/^[a-z_][a-z0-9_-]{0,31}$/.test(loginUserV.trim())) return 'The login user is a Unix user name: lowercase letters, digits, dash and underscore.'
+    if (tool === 'ssh-pair' && !(Number(sshPortV) >= 1 && Number(sshPortV) <= 65535)) return 'The SSH port is a number from 1 to 65535.'
     if (needReason && reason.trim().length < 10) return 'Say why, in 10 characters or more.'
     return ''
   }
@@ -181,7 +193,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
     )
   }
 
-  const icon = { shell: <TerminalIcon size={18} />, 'node-shell': <TerminalIcon size={18} />, command: <BoltIcon />, 'node-command': <BoltIcon />, forward: <ForwardIcon />, 'debug-container': <BoxIcon />, 'debug-pod': <BoxIcon /> }[tool]
+  const icon = { shell: <TerminalIcon size={18} />, 'node-shell': <TerminalIcon size={18} />, command: <BoltIcon />, 'node-command': <BoltIcon />, forward: <ForwardIcon />, 'debug-container': <BoxIcon />, 'debug-pod': <BoxIcon />, ssh: <TerminalIcon size={18} />, 'ssh-pair': <TerminalIcon size={18} />, 'ssh-unpair': <TerminalIcon size={18} /> }[tool]
   const title: ReactNode = {
     shell: <>Shell in pod <span className="rk-mono">{podRef?.name}</span></>,
     command: <>Run a command in pod <span className="rk-mono">{podRef?.name}</span></>,
@@ -190,10 +202,13 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
     'debug-pod': <>Debug pod on node <span className="rk-mono">{node}</span></>,
     'node-shell': <>Node shell on <span className="rk-mono">{node}</span></>,
     'node-command': <>Run a command on node <span className="rk-mono">{node}</span></>,
+    ssh: <>SSH to node <span className="rk-mono">{node}</span></>,
+    'ssh-pair': <>{pairing ? 'Pair again' : 'Pair'} node <span className="rk-mono">{node}</span> for SSH</>,
+    'ssh-unpair': <>Unpair node <span className="rk-mono">{node}</span> from SSH</>,
   }[tool]
   const verb = approvers
-    ? { shell: 'Request shell', command: 'Request command', forward: 'Request forward', 'debug-container': 'Request debug container', 'debug-pod': 'Request debug pod', 'node-shell': 'Request node shell', 'node-command': 'Request command' }[tool]
-    : { shell: 'Open shell', command: 'Run', forward: 'Start forward', 'debug-container': 'Attach and open shell', 'debug-pod': 'Start debug pod', 'node-shell': 'Open node shell', 'node-command': 'Run' }[tool]
+    ? { shell: 'Request shell', command: 'Request command', forward: 'Request forward', 'debug-container': 'Request debug container', 'debug-pod': 'Request debug pod', 'node-shell': 'Request node shell', 'node-command': 'Request command', ssh: 'Request SSH', 'ssh-pair': 'Request pairing', 'ssh-unpair': 'Request unpairing' }[tool]
+    : { shell: 'Open shell', command: 'Run', forward: 'Start forward', 'debug-container': 'Attach and open shell', 'debug-pod': 'Start debug pod', 'node-shell': 'Open node shell', 'node-command': 'Run', ssh: 'Open SSH', 'ssh-pair': 'Pair the node', 'ssh-unpair': 'Unpair the node' }[tool]
   const durationField = interactive && info && (
     <label className="tb-lbl" style={{ flex: '0 0 auto' }}>
       <span>For how long</span>
@@ -424,6 +439,59 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
           </label>
           <p className="tb-hint" style={{ margin: 0 }}>
             A pod of its own in the namespace, for looking at its Services and the network from inside. {info?.admin && serviceAccount.trim() ? 'It carries that account’s token, and a shell in it the account’s rights.' : 'It carries no ServiceAccount token.'} It is deleted when the session ends.
+          </p>
+        </>
+      )
+      break
+    case 'ssh':
+      body = (
+        <>
+          <p className="tb-hint" style={{ margin: 0 }}>
+            A terminal over SSH, as <span className="rk-mono">{pairing?.loginUser ?? '?'}</span> on port {pairing?.port ?? '?'}: the console signs you a certificate for this session alone (principal <span className="rk-mono">{info?.ssh?.principal}</span>) and checks the node's host key against the one pinned when it was paired{pairing ? ` (${pairing.hostKey})` : ''}. It works when the kubelet does not, as a node shell cannot.
+          </p>
+          <div className="tb-row">{durationField}</div>
+          <div className="rk-callout" data-tone="err">
+            <ShieldSmallIcon />
+            <span>
+              A shell on the node itself, as <span className="rk-mono">{pairing?.loginUser ?? 'the login user'}</span>: whatever that account may do there, you may. The session is recorded like a node shell.
+            </span>
+          </div>
+        </>
+      )
+      break
+    case 'ssh-pair':
+      body = (
+        <>
+          <div className="tb-row">
+            <label className="tb-field" style={{ flex: '1 1 200px' }}>
+              <span className="tb-lbl">Login user</span>
+              <span className="rk-field">
+                <input className="rk-mono" value={loginUserV} onChange={(e) => setLoginUser(e.target.value)} placeholder={info?.ssh?.loginUser ?? 'root'} ref={(el) => void (first.current ??= el)} data-testid="tool-ssh-user" />
+              </span>
+              <small className="tb-hint">The OS account sessions log in as; it must exist on the node already. The pairing refuses a missing one.</small>
+            </label>
+            <label className="tb-field" style={{ flex: '0 1 120px' }}>
+              <span className="tb-lbl">SSH port</span>
+              <span className="rk-field">
+                <input className="rk-mono" value={sshPortV} onChange={(e) => setPort(e.target.value)} inputMode="numeric" data-testid="tool-ssh-port" />
+              </span>
+            </label>
+          </div>
+          <p className="tb-hint" style={{ margin: 0 }}>
+            Runs a command on the node, as root through a short-lived pod (as <i>Run a command on the node</i> does): it writes the console's certificate authority (<span className="rk-mono">{info?.ssh?.caFingerprint ?? '…'}</span>) to <span className="rk-mono">/etc/ssh/221b/ca.pub</span>, a principals file admitting <span className="rk-mono">{info?.ssh?.principal}</span> as the login user, and a drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span>; checks sshd's configuration; reloads sshd; and reads the node's host key, which every later session checks. Nothing personal goes on the node, and nothing long-lived: unpairing removes it all.
+          </p>
+          <div className="rk-callout" data-tone="err">
+            <ShieldSmallIcon />
+            <span>Afterwards every SuperAdmin of this console may open a shell on the node as that user. Root on the node is root over every pod that runs there, their Secrets included.</span>
+          </div>
+        </>
+      )
+      break
+    case 'ssh-unpair':
+      body = (
+        <>
+          <p className="tb-hint" style={{ margin: 0 }}>
+            Runs a command on the node, as root through a short-lived pod: it removes the drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span> and <span className="rk-mono">/etc/ssh/221b</span>, reloads sshd, and the console forgets the pairing{pairing ? ` (as ${pairing.loginUser}, since ${new Date(pairing.pairedAt).toLocaleDateString()})` : ''}. No session from here can open afterwards.
           </p>
         </>
       )

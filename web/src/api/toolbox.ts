@@ -8,10 +8,30 @@ import { subscribeAssistant } from './assistants'
 import type { WatsonItem } from './watson'
 import { apiPath } from '../lib/router'
 
-export type ToolName = 'shell' | 'command' | 'forward' | 'debug-container' | 'debug-pod' | 'node-shell' | 'node-command'
+export type ToolName = 'shell' | 'command' | 'forward' | 'debug-container' | 'debug-pod' | 'node-shell' | 'node-command' | 'ssh' | 'ssh-pair' | 'ssh-unpair'
 
 export const POD_TOOLS: ToolName[] = ['shell', 'command', 'forward', 'debug-container']
-export const NODE_TOOLS: ToolName[] = ['node-shell', 'node-command', 'debug-pod']
+export const NODE_TOOLS: ToolName[] = ['node-shell', 'node-command', 'debug-pod', 'ssh', 'ssh-pair', 'ssh-unpair']
+
+/** A node paired for SSH (Phase 11, ADR-72): whom sessions log in as, and the host key pinned when it was paired. */
+export interface SSHPairing {
+  loginUser: string
+  port: number
+  pairedAt: string
+  pairedBy?: string
+  hostKey: string
+  /** Paired with an authority that is not this console's any more: pair again. */
+  stale?: boolean
+}
+
+export interface SSHInfo {
+  enabled: boolean
+  port: number
+  loginUser: string
+  principal: string
+  caFingerprint?: string
+  pairings: Record<string, SSHPairing>
+}
 
 export interface ToolboxImage {
   name: string
@@ -37,6 +57,8 @@ export interface ToolboxInfo {
   me: string
   /** Why a tool is off everywhere on this cluster, by tool. */
   off: Partial<Record<ToolName, string>>
+  /** The SSH tools' state (Phase 11), when the chart turns them on. */
+  ssh?: SSHInfo
   idleSeconds: number
   maxMinutes: number
   transcripts: string
@@ -75,6 +97,8 @@ export interface ToolRequest {
   serviceAccount?: string
   labelsFrom?: string
   labels?: Record<string, string>
+  /** The OS account an SSH pairing admits sessions as; it must exist on the node. */
+  loginUser?: string
   minutes?: number
   reason?: string
 }
@@ -302,6 +326,9 @@ export function toolLabel(t: ToolName): string {
     'debug-pod': 'Debug pod',
     'node-shell': 'Node shell',
     'node-command': 'Run a command on the node',
+    ssh: 'SSH',
+    'ssh-pair': 'Pair for SSH',
+    'ssh-unpair': 'Unpair from SSH',
   }[t]
 }
 

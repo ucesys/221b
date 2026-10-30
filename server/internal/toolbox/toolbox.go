@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,10 +25,16 @@ const (
 	ToolDebugPod       = "debug-pod"
 	ToolNodeShell      = "node-shell"
 	ToolNodeCommand    = "node-command"
+	// SSH to a node (Phase 11, ADR-72): a terminal over SSH with a
+	// certificate the console signs; pairing installs the console's CA on
+	// the node through a node command, and unpairing removes it.
+	ToolSSH       = "ssh"
+	ToolSSHPair   = "ssh-pair"
+	ToolSSHUnpair = "ssh-unpair"
 )
 
 // Tools lists every tool, in menu order.
-var Tools = []string{ToolShell, ToolCommand, ToolForward, ToolDebugContainer, ToolDebugPod, ToolNodeShell, ToolNodeCommand}
+var Tools = []string{ToolShell, ToolCommand, ToolForward, ToolDebugContainer, ToolDebugPod, ToolNodeShell, ToolNodeCommand, ToolSSH, ToolSSHPair, ToolSSHUnpair}
 
 // Transcript stores.
 const (
@@ -124,6 +131,15 @@ type Config struct {
 		Approval      string   `json:"approval"`
 		QuickCommands []string `json:"quickCommands,omitempty"`
 	} `json:"nodeShell"`
+	// SSH is toolbox.ssh (Phase 11, ADR-72): SSH sessions to paired nodes.
+	SSH struct {
+		Enabled bool `json:"enabled"`
+		// Port is sshd's port on the nodes.
+		Port int `json:"port"`
+		// LoginUser is the OS account offered by default when pairing a
+		// node; it must exist on the node.
+		LoginUser string `json:"loginUser"`
+	} `json:"ssh"`
 	Images map[string]Image `json:"images,omitempty"`
 	// AdminExec is rbac.roles.admin.exec: the full Admin role may open
 	// shells in its namespaces (TB-50). The roles decide; the console only
@@ -155,6 +171,7 @@ func Default() Config {
 	c.NodeShell.Image = "node"
 	c.NodeShell.Profiles = []string{ProfileGeneral, ProfileNetAdmin, ProfileSysAdmin}
 	c.NodeShell.Approval = ApprovalCluster
+	c.SSH.Enabled, c.SSH.Port, c.SSH.LoginUser = true, 22, "root"
 	c.NodeShell.QuickCommands = []string{"journalctl -u kubelet -n 200 --no-pager", "df -h /var/lib/containerd /var/log /", "crictl ps -a --state exited", "dmesg -T | tail -n 100"}
 	c.Images = map[string]Image{
 		"general": {Image: "busybox:1.37", Tools: "sh, ls, cat, tar, wget, nc"},
@@ -253,11 +270,22 @@ func (c Config) Check() error {
 			errs = append(errs, "toolbox.nodeShell.approval is always or cluster")
 		}
 	}
+	if c.SSH.Enabled {
+		if c.SSH.Port < 1 || c.SSH.Port > 65535 {
+			errs = append(errs, "toolbox.ssh.port is 1 to 65535")
+		}
+		if !LoginUserRE.MatchString(c.SSH.LoginUser) {
+			errs = append(errs, "toolbox.ssh.loginUser is a Unix user name")
+		}
+	}
 	if len(errs) > 0 {
 		return errors.New(strings.Join(errs, "; "))
 	}
 	return nil
 }
+
+// LoginUserRE is what a Unix user name looks like, as useradd takes it.
+var LoginUserRE = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
 
 // On says whether the chart allows a tool at all.
 func (c Config) On(tool string) bool {
@@ -277,6 +305,11 @@ func (c Config) On(tool string) bool {
 		return c.DebugPod.Enabled && len(c.DebugPod.Profiles) > 0
 	case ToolNodeShell, ToolNodeCommand:
 		return c.NodeShell.Enabled
+	case ToolSSH:
+		return c.SSH.Enabled
+	case ToolSSHPair, ToolSSHUnpair:
+		// Pairing runs a command on the node through a node pod.
+		return c.SSH.Enabled && c.NodeShell.Enabled
 	}
 	return false
 }

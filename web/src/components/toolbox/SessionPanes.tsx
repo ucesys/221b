@@ -109,7 +109,7 @@ export function SessionPane({ cluster, session: s, admin, dark, controls, onToas
     <div className="rk-dph" style={{ flexWrap: 'wrap' }}>
       <h2>{s.tool === 'forward' ? 'Port forward' : toolLabel(s.tool)}</h2>
       <small className="rk-mono" title={s.summary}>
-        {s.tool === 'node-shell' || s.tool === 'node-command' ? `node ${s.request.node}${s.pod ? ' · pod ' + s.pod : ''}` : `${s.namespace ?? s.request.namespace}/${s.pod ?? s.request.pod ?? ''}${s.container ? ' · ' + s.container : ''}`}
+        {s.tool === 'node-shell' || s.tool === 'node-command' || s.tool === 'ssh' || s.tool === 'ssh-pair' || s.tool === 'ssh-unpair' ? `node ${s.request.node}${s.pod ? ' · pod ' + s.pod : ''}${s.tool === 'ssh-pair' && s.request.loginUser ? ' · as ' + s.request.loginUser : ''}` : `${s.namespace ?? s.request.namespace}/${s.pod ?? s.request.pod ?? ''}${s.container ? ' · ' + s.container : ''}`}
       </small>
       <span style={{ flex: '1 1 auto' }} />
       {!s.mine && <span className="rk-pill">{s.owner}’s</span>}
@@ -154,11 +154,11 @@ export function SessionPane({ cluster, session: s, admin, dark, controls, onToas
   )
   let body: ReactNode
   if (s.tool === 'forward') body = <ForwardBody s={s} now={now} />
-  else if (s.tool === 'command' || s.tool === 'node-command') body = <CommandBody cluster={cluster} s={s} />
+  else if (s.tool === 'command' || s.tool === 'node-command' || s.tool === 'ssh-pair' || s.tool === 'ssh-unpair') body = <CommandBody cluster={cluster} s={s} />
   else if (s.state === 'starting')
     body = (
       <div className="tb-output" style={{ color: 'var(--term-dim)' }}>
-        Opening… {s.tool === 'debug-pod' || s.tool === 'node-shell' ? 'waiting for the pod to run.' : s.tool === 'debug-container' ? 'waiting for the debug container to start.' : ''}
+        Opening… {s.tool === 'debug-pod' || s.tool === 'node-shell' ? 'waiting for the pod to run.' : s.tool === 'debug-container' ? 'waiting for the debug container to start.' : s.tool === 'ssh' ? 'connecting to the node over SSH.' : ''}
       </div>
     )
   else if (s.mine || watching) body = <Terminal key={s.id + (watching ? 'w' : '')} cluster={cluster} id={s.id} watch={!s.mine} dark={dark} live={s.state === 'live'} onInput={() => undefined} />

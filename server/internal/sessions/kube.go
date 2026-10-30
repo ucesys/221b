@@ -61,6 +61,28 @@ type Backend interface {
 	DeletePod(ctx context.Context, ns, name string) error
 }
 
+// SSH is what the SSH tools need (Phase 11, ADR-72): the pairing and
+// unpairing commands to run on a node, the record of a pairing once the
+// command ran, and the connection a session runs over.
+type SSH interface {
+	// Script is the shell script a pairing or unpairing request runs on
+	// the node, as root, with the node's root at /.
+	Script(r Request) (string, error)
+	// Done records what a pairing or unpairing command did, from its
+	// output; by names the person.
+	Done(ctx context.Context, cluster string, r Request, output, by string) error
+	// Dial opens the SSH connection of a session to a paired node, as the
+	// owner; the note says where it went, for the pane's first line.
+	Dial(ctx context.Context, cluster, node string, owner Who, session string) (Term, string, error)
+}
+
+// Term is an interactive shell over SSH: Run copies stdin to it and its
+// output to out, follows the sizes, and returns when the shell exits or
+// the context ends.
+type Term interface {
+	Run(ctx context.Context, stdin io.Reader, out io.Writer, sizes <-chan Size) error
+}
+
 // Forwarder carries a session's port-forward connections: one stream pair
 // per TCP connection, over one connection to the kubelet.
 type Forwarder interface {

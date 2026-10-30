@@ -388,6 +388,17 @@ toolbox:
       - df -h /var/lib/containerd /var/log /
       - crictl ps -a --state exited
       - dmesg -T | tail -n 100
+  # SSH to nodes (Phase 11, ADR-72): a SuperAdmin pairs a node from its
+  # Tools menu (a node command installs the console's certificate
+  # authority and a principals file for the login user, which must exist
+  # on the node), then opens SSH sessions to it, each with a short-lived
+  # certificate the console signs and the node's pinned host key checked.
+  # The authority's key is kept in the Secret <release>-ssh-ca.
+  ssh:
+    enabled: true
+    port: 22
+    # The OS account offered when pairing; it must exist on the node.
+    loginUser: root
   # The images the tools may run, and nothing else. Pin them by digest
   # (busybox:1.37@sha256:…) for production; a new image is a chart upgrade.
   # caps are added only where the namespace's Pod Security level allows.

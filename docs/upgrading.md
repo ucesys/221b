@@ -48,6 +48,14 @@ The earlier release reads what the newer one saved: it ignores fields it does no
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
+## 0.11.0 (unreleased)
+
+New chart values, all with defaults: `toolbox.ssh.enabled` (true), `toolbox.ssh.port` (22), `toolbox.ssh.loginUser` (root). What an operator may notice:
+
+- **A new Secret**, `<release>-ssh-ca`, made on the first pairing: the SSH certificate authority's key. The console's ServiceAccount already manages Secrets in its namespace when `connections.store` is `secrets`. Back it up with the namespace; a console that loses it must pair every node again.
+- **A new key in the settings ConfigMap**, `ssh-pairings.json`.
+- **On a paired node**: `/etc/ssh/221b/`, `/etc/ssh/sshd_config.d/221b.conf`, and an `Include /etc/ssh/sshd_config.d/*.conf` line appended to `sshd_config` when it had none. *Unpair from SSH…* removes the first two.
+
 ## 0.10.2 (unreleased)
 
 Nothing to do. The new value `replicas.warmStandby` defaults to `true`, which keeps every replica watching as before; only the leader now polls and serves the data (ADR-70), so a rolling upgrade behaves as it did. On a very large cluster, where a standby's memory matters, set it to `false`: the other replicas then hold nothing, and a failover costs one list.

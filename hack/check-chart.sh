@@ -82,6 +82,8 @@ echo "--- the Toolbox (Phase 9): off, transcripts on a volume, Admin's shells, n
 render k8s-console --set clusterName=ci --set toolbox.enabled=false | tee "$WORK/chart-notoolbox.yaml" | validate
 render k8s-console --set clusterName=ci --set toolbox.transcripts=pvc --set toolbox.transcriptsVolume.storageClass=fast | tee "$WORK/chart-transcripts.yaml" | validate
 render k8s-console --set clusterName=ci --set rbac.roles.admin.exec=true --set toolbox.nodeShell.enabled=false | tee "$WORK/chart-toolbox-exec.yaml" | validate
+echo "--- SSH to nodes (Phase 11): off, with another login user"
+render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=false --set toolbox.ssh.loginUser=ops | tee "$WORK/chart-ssh-off.yaml" | validate
 echo "--- image tags that move, tags that do not, a digest and an explicit pull policy"
 render k8s-console --set clusterName=ci --set image.tag=pr-7 | tee "$WORK/chart-moving.yaml" | validate
 render k8s-console --set clusterName=ci --set image.tag=sha-d548f3953839 | tee "$WORK/chart-sha.yaml" | validate
@@ -100,6 +102,10 @@ check() {
   fi
 }
 out=$WORK/chart-default.yaml
+# SSH to nodes (Phase 11): the toolbox config carries toolbox.ssh.
+ssh_on() { grep -q '"ssh": {' "$WORK/chart-toolbox-exec.yaml" && grep -q '"loginUser": "root"' "$WORK/chart-toolbox-exec.yaml" && grep -q '"port": 22' "$WORK/chart-toolbox-exec.yaml"; }
+ssh_off() { sed -n '/"ssh": {/,/}/p' "$WORK/chart-ssh-off.yaml" | grep -q '"enabled": false' && grep -q '"loginUser": "ops"' "$WORK/chart-ssh-off.yaml"; }
+ssh_values() { ssh_on && ssh_off; }
 # The Secret with the local accounts, the OIDC client secret and such; the
 # replicas' proxy token is a Secret of its own, always there.
 auth_secret() { sed -n '/^kind: Secret$/,/^---/p' "$1" | grep -q '^  name: k8s-console-221b-auth$'; }
@@ -426,5 +432,6 @@ check "an exposed Service is reachable through the network policy" open_when_exp
 check "the replicas elect a leader and reach each other, the standbys warm unless told otherwise; more than one adds a budget and a spread, and needs Secrets" replicas
 check "the Toolbox's values reach the console, and transcripts get a volume" toolbox_values
 check "node shells run in a namespace of their own at Pod Security privileged, closed to the network" toolbox_namespace
+check "SSH to nodes is in the toolbox config, on by default with port 22 and root, and off with another user when asked" ssh_values
 check "Admin forwards ports and starts debug pods, and opens shells only when asked" admin_exec
 exit "$fail"

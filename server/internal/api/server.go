@@ -36,6 +36,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
+	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/settings"
@@ -95,6 +96,13 @@ type Auth interface {
 	Routes() []auth.Route
 }
 
+// SSHInfo is what the page is told about SSH (Phase 11, ADR-72);
+// *nodessh.Service implements it.
+type SSHInfo interface {
+	Fingerprint() string
+	List(ctx context.Context, cluster string) ([]nodessh.Pairing, error)
+}
+
 // Clusters resolves connections (P3-09) and manages them (P3-05 to
 // P3-08); *clusters.Manager implements it.
 type Clusters interface {
@@ -117,6 +125,9 @@ type Options struct {
 	Auth     Auth
 	// Audit records the settings changes; nil records nothing.
 	Audit *audit.Log
+	// SSH is the SSH tools' authority and pairings (Phase 11); nil leaves
+	// the tools off.
+	SSH SSHInfo
 	// KV is the console's small key-value storage next to the settings
 	// (Sherlock's spend, the Toolbox's session records, the audit log),
 	// for the backup; nil backs none of it up.
