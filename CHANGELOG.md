@@ -2,6 +2,29 @@
 
 What changed in each release of 221B, for people who use it and people who install it. Versions follow [semantic versioning](https://semver.org/): while the major version is 0, a minor version (0.7.0) may change behaviour and chart values, and a patch version (0.7.1) only fixes. [docs/upgrading.md](docs/upgrading.md) says how to upgrade and what each upgrade changes.
 
+## 0.10.1 (2026-10-30)
+
+### Fixed
+
+- A Helm release no longer shows *drifted* from a check made before its last deploy; the check is forgotten when the release changes (M-01).
+
+### Changed
+
+- The Nodes table lost its Problems column: Status sorts problems first and the node's drawer lists them (M-02).
+- The release wrench's **Upgrade/Rollback…** is **Upgrade…**; each revision in History has a wrench with **Diff…** and **Roll back to this revision…**, the latter a `helm rollback` card for Watson to approve (M-03).
+- A pod, a node, a volume claim or a volume with an error or a warning offers **Troubleshoot…** first in its wrench menu: Sherlock is asked for a troubleshooting report (M-04).
+- A release whose deployed revision is not the source's last deploy (a rollback, a `helm upgrade` by hand) is marked **behind the source** in the header, the table and a callout (M-05).
+- The values file is a YAML editor: line numbers, highlighting, Tab indents, and errors underlined and named; values that do not parse are not saved (M-06). The page carries a per-load nonce that the Content-Security-Policy's `style-src` allows, for the editor's style sheets; the policy stays without `unsafe-inline`.
+- The new-application form looks the repository over as soon as its URL is typed: the chart path, the branch and the README's `helm install` example (name, namespace, parameters, values file) fill what is empty (M-07).
+- The Namespaces tab lost its footer about cluster-scoped objects (R2-01).
+- The Nodes tab has the fleets on its left: each filters the table, and administrators make, change and delete fleets there; the Fleets tab is optional (*Settings › General › Fleets page*) (R2-02, R2-03).
+- **Standing approvals**: with a limit set in *Settings › Watson*, Watson's dock offers *Approve all for…*, which approves every card the person could approve as it is ready, for that long; the audit log has the grant and each approval (R2-04).
+- **What Sherlock knows**: *Settings › Sherlock* takes notes about the infrastructure, added to Sherlock's instructions for every cluster; the instructions can be read there and the notes tried with *Test* (R2-05).
+- The Source card has a Save button; Enter saves too (R2-06).
+- A release may take a **second values file** from the chart's directory, and leave the chart's own `values.yaml` out; values apply lowest first: `values.yaml`, the file, the Values tab, the parameters (R2-08, R2-09).
+- **Drift explained**: *what changed* in the header and *What drifted…* on the deployed revision open a dialog with each object's diff (R2-10).
+- A fleet takes a **deploy label**; an application deployed to the fleet gets it as its pods' nodeSelector (R2-11).
+
 ## 0.10.0 (2026-10-28)
 
 ### Changed

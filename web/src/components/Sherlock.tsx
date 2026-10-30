@@ -1,4 +1,4 @@
-import { createContext, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { askSherlock, newSherlockChat, stopSherlock, SherlockError, usd, type SherlockMsg, type SherlockRef, type SherlockState } from '../api/sherlock'
 import { Markdown } from '../lib/markdown'
 import { peekClickHash } from '../lib/peek'
@@ -13,18 +13,10 @@ import { copyText } from '../lib/clipboard'
 
 // ---------- asking from anywhere ----------
 
-export interface SherlockApi {
-  /** Whether questions can be asked in this cluster now. */
-  available: boolean
-  /** Asks; over says the asker is over the page (a drawer), so the answer shows maximized, above it. */
-  ask: (question: string, over?: boolean) => void
-}
-
-export const SherlockContext = createContext<SherlockApi>({ available: false, ask: () => undefined })
-
-export function useSherlockApi(): SherlockApi {
-  return useContext(SherlockContext)
-}
+// The context lives in its own small module so a wrench menu (and the
+// browser tests that import the table columns) need not load this pane.
+import { SherlockContext, useSherlockApi, type SherlockApi } from './sherlockContext'
+export { SherlockContext, useSherlockApi, type SherlockApi }
 
 /**
  * Starts a question to Sherlock from a drawer or a callout (P5-01): the

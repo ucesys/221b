@@ -71,9 +71,10 @@ test('the table matches kubectl describe node', async ({ page, request }) => {
 
     // And the screen shows those numbers.
     const cells = page.locator(`[data-node="${name}"] > span`)
-    await expect(cells.nth(4)).toContainText(fCores(row.cpu.requested))
-    await expect(cells.nth(5)).toHaveText(fCores(row.cpu.allocatable))
-    await expect(cells.nth(6)).toHaveText(fCores(Math.max(0, row.cpu.allocatable - row.cpu.requested)))
-    await expect(cells.nth(10)).toHaveText(`${row.pods.running} / ${row.pods.capacity}`)
+    // Node, role, status, then the CPU cells; the pods cell comes after memory.
+    await expect(cells.nth(3)).toContainText(fCores(row.cpu.requested))
+    await expect(cells.nth(4)).toHaveText(fCores(row.cpu.allocatable))
+    await expect(cells.nth(5)).toHaveText(fCores(Math.max(0, row.cpu.allocatable - row.cpu.requested)))
+    await expect(cells.nth(9)).toHaveText(`${row.pods.running} / ${row.pods.capacity}`)
   }
 })

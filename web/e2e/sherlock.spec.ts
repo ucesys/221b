@@ -440,3 +440,43 @@ test('the panel meets WCAG 2.2 AA, docked, maximized and in the settings (X-12)'
     await page.keyboard.press('Escape')
   }
 })
+
+test('the administrators’ notes join Sherlock’s instructions, can be read there, and are tried with Test (R2-05)', async ({ page }) => {
+  await open(page, '#/nodes')
+  expect(await put(page, '/api/v1/sherlock/key', { key: KEY })).toBe(200)
+  expect(await put(page, '/api/v1/sherlock/config', ON)).toBe(200)
+  try {
+    await page.getByTestId('admin-link').click()
+    await page.locator('[data-admin-page=settings]').click()
+    await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
+    const settings = page.getByTestId('sherlock-settings')
+    const note = 'The rack is in the basement; call Pat before touching the NFS node.'
+    await settings.getByTestId('sherlock-notes').fill(note)
+    // The instructions are edited in place, built-in text to start from; the cluster block shows the notes as typed.
+    await settings.getByTestId('sherlock-prompt-show').click()
+    await expect(settings.getByTestId('sherlock-prompt')).toHaveValue(/You are Sherlock/)
+    await expect(settings.getByTestId('sherlock-prompt-reset')).toBeDisabled()
+    await expect(settings.getByTestId('sherlock-prompt-cluster')).toContainText(note)
+    await settings.getByTestId('sherlock-prompt').fill('You are Sherlock, the test build. Answer in one line.')
+    await expect(settings.getByTestId('sherlock-prompt-reset')).toBeEnabled()
+    // Test is a dialog: the question, then the answer, with everything as typed, saved or not.
+    await settings.getByTestId('sherlock-notes-test').click()
+    const dlg = page.getByTestId('sherlock-test-dialog')
+    await expect(dlg.getByTestId('sherlock-test-question')).toHaveValue(/three sentences/)
+    await dlg.getByTestId('sherlock-test-ask').click()
+    await expect(dlg.getByTestId('sherlock-notes-answer')).toBeVisible({ timeout: 60_000 })
+    await expect(dlg.getByTestId('sherlock-notes-answer')).not.toContainText('did not answer')
+    await dlg.getByTestId('sherlock-test-close').click()
+    await expect(dlg).toHaveCount(0)
+    await settings.getByTestId('sherlock-save').click()
+    await expect(settings.getByText('Saved.')).toBeVisible()
+    const cfg = (await page.evaluate(async () => (await fetch('/api/v1/sherlock/config')).json())) as { settings: { notes?: string; instructions?: string } }
+    expect(cfg.settings.notes).toBe(note)
+    expect(cfg.settings.instructions).toContain('the test build')
+    // Reset puts the built-in text back.
+    await settings.getByTestId('sherlock-prompt-reset').click()
+    await expect(settings.getByTestId('sherlock-prompt')).toHaveValue(/You are Sherlock, the site reliability engineer/)
+  } finally {
+    expect(await put(page, '/api/v1/sherlock/config', { ...ON, notes: '', instructions: '' })).toBe(200)
+  }
+})

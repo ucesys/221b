@@ -16,7 +16,7 @@ Out, for now:
 - Charts from chart repositories or OCI registries (the repository must vendor its dependencies under `charts/`).
 - Automatic upgrades when a branch moves (the page says so; a person upgrades).
 - Cluster-wide drift beyond a release's own objects, and a diff of live objects against the manifest (drift names the fields that differ; values are never shown).
-- Rollback to a chosen revision from the Helm tab (Upgrade/Rollback… redeploys from the source; a typed `helm rollback` in Watson works as before).
+- Rollback to a chosen revision: since 0.10.1 each revision in History has a wrench with Diff… and Roll back to this revision…, the latter a `helm rollback` card for Watson (M-03); Upgrade… redeploys from the source.
 
 ## Approach
 
@@ -90,7 +90,8 @@ Every `apps/…` route is served by the leader replica, where Watson runs.
 | --- | --- | --- |
 | Table and panel | `AppsTab` joins the live `helm` view with the records; with a release open the table folds into the Helm tab's side list, and the panel is `ReleaseBody` (shared with the Helm tab) with Overview and Images added | A record whose install failed is a *not installed* row with Install, values, Change source and Forget |
 | Changes | Watson commands with `--git/--path/--ref/--tag/--app`; the person's click is the approval unless the two-person rule applies | — |
-| Drift | Subset comparison, per object, cached two minutes per person | Lists are compared element by element as far as the manifest's goes; an element the cluster added is not drift |
+| Drift | Subset comparison, per object, cached two minutes per person; each changed object carries a unified diff of the manifest's fields against the cluster's, shown in the *What drifted* dialog (R2-10) | Lists are compared element by element as far as the manifest's goes; an element the cluster added is not drift |
+| Values | `apps.Compose`: the chart's `values.yaml` (unless the record ignores it), the record's second values file read from the checkout, the Values tab, then the parameters and the fleet's deploy label as `nodeSelector` (R2-08, R2-09, R2-11) | The second file must be in the chart's directory (one subdirectory down at most); `..` and absolute paths are refused |
 | Secret editing | `SecretData` in the object drawer, `SecretDialog` on the Secrets tab; reveal and edit gated by `secrets/config` | Immutable Secrets are refused before Kubernetes would refuse them |
 
 ## Your review

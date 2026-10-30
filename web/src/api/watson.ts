@@ -66,11 +66,20 @@ export interface WatsonStatus {
   reads: string[]
   changes: string[]
   admin: boolean
+  /** The longest standing approval the settings allow, in minutes; 0 offers none (R2-04). */
+  approveAllMax?: number
+  /** When this person's standing approval on the cluster ends, if one holds. */
+  approvedUntil?: string
 }
 
 export interface WatsonSettings {
   twoPerson: boolean
+  /** The longest standing approval a person may give, in minutes; 0 or absent offers none. */
+  approveAllMinutes?: number
 }
+
+/** The lengths a standing approval may have, in minutes (R2-04). */
+export const APPROVE_ALL_CHOICES = [5, 15, 30, 60, 120, 240] as const
 
 export class WatsonError extends Error {
   constructor(
@@ -116,6 +125,9 @@ export const discardWatson = (cluster: string, id: string) => call<WatsonItem>('
 export const stopWatson = (cluster: string, id: string) => call<WatsonItem>('POST', apiPath(`watson/commands/${encodeURIComponent(id)}/stop`, cluster), {})
 export const editWatson = (cluster: string, id: string, command: string) => call<WatsonItem[]>('PUT', apiPath(`watson/commands/${encodeURIComponent(id)}`, cluster), { command })
 export const clearWatson = (cluster: string) => call<void>('POST', apiPath('watson/clear', cluster), {})
+/** Approves, for the next minutes, every card this person could approve as it is ready (R2-04). */
+export const approveAllWatson = (cluster: string, minutes: number) => call<{ until: string }>('POST', apiPath('watson/approvals', cluster), { minutes })
+export const endApproveAllWatson = (cluster: string) => call<void>('DELETE', apiPath('watson/approvals', cluster))
 export const fetchWatsonConfig = () => call<WatsonSettings>('GET', '/api/v1/watson/config')
 export const saveWatsonConfig = (s: WatsonSettings) => call<WatsonSettings>('PUT', '/api/v1/watson/config', s)
 

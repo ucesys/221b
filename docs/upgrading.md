@@ -48,6 +48,15 @@ The earlier release reads what the newer one saved: it ignores fields it does no
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
+## 0.10.1 (2026-10-30)
+
+No chart value changes. What an operator may notice:
+
+- **New settings fields** in the settings ConfigMap: `fleetsPage`, `watson.approveAllMinutes`, `sherlock.notes`, `sherlock.instructions`, and `deploy` on a fleet. 0.10.0 reads the ConfigMap with them present and ignores them; a settings save from 0.10.0 drops them, so finish a rollback before saving settings there.
+- **Application records** (the `<fullname>-app-<id>` Secrets) gain `valuesFile`, `ignoreDefaults`, `fleet`, `fleetLabel`, `matchedRevision` and `sourceDiff`. 0.10.0 ignores them and deploys without the second values file or the fleet's nodeSelector.
+- **Standing approvals** are off until an administrator sets a limit in *Settings › Watson*; the audit log gains the `watson.approveAll` action.
+- The page carries a per-load nonce in its Content-Security-Policy `style-src`; nothing to configure.
+
 ## 0.10.0 (2026-10-28)
 
 - **`toolbox.nodeShell.namespace`** is empty by default and renders as `<release namespace>-privileged` (`221b-privileged` for a console in `221b`): the upgrade makes the new namespace and removes `221b-toolbox` once no shell runs there; set the value to `221b-toolbox` to keep the old name. A second console installed in another namespace now gets a namespace of its own instead of refusing to install.

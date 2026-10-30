@@ -3,7 +3,7 @@ import { fmtAge, fmtTs, minutesSince } from '../lib/format'
 import { toneRank } from '../lib/nodes'
 import type { ColumnDef, Term } from '../lib/table'
 import { Mono, NameCell, Tone } from './cells'
-import { RevisionDiffButton } from '../components/apps/revisionActions'
+import { RevisionTools } from '../components/apps/revisionActions'
 
 /** The columns of a kind's table in the Namespaces tab: Name, Status, Details, Age. */
 export const OBJECT_COLUMNS: ColumnDef<ObjectRow>[] = [
@@ -140,13 +140,13 @@ export const REVISION_COLUMNS: ColumnDef<Revision>[] = [
     export: (r) => [{ head: 'Revision', cell: r.revision }],
   },
   {
-    id: 'diff',
+    id: 'tools',
     label: '',
     sortName: 'revision',
     width: '40px',
     min: 40,
     sortValue: (r) => r.revision,
-    cell: (r) => <RevisionDiffButton revision={r.revision} />,
+    cell: (r) => <RevisionTools revision={r.revision} />,
     export: () => [],
   },
   {

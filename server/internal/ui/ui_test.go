@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -52,5 +53,39 @@ func TestWithoutABuild(t *testing.T) {
 	resp, body := serve(t, h, "/")
 	if resp.StatusCode != http.StatusServiceUnavailable || body == "" {
 		t.Fatalf("got %d %q", resp.StatusCode, body)
+	}
+}
+
+func TestThePageCarriesAStyleNonceTheCSPAllows(t *testing.T) {
+	files := fstest.MapFS{"index.html": {Data: []byte("<html><head><title>x</title></head><body></body></html>")}}
+	h := handler(files)
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self'; img-src 'self'")
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	body := rec.Body.String()
+	i := strings.Index(body, `<meta name="csp-nonce" content="`)
+	if i < 0 {
+		t.Fatalf("no nonce meta in %q", body)
+	}
+	nonce := body[i+len(`<meta name="csp-nonce" content="`):]
+	nonce = nonce[:strings.Index(nonce, `"`)]
+	if len(nonce) < 20 {
+		t.Errorf("short nonce %q", nonce)
+	}
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "style-src 'self' 'nonce-"+nonce+"'") || !strings.Contains(csp, "img-src 'self'") {
+		t.Errorf("CSP %q lacks the nonce", csp)
+	}
+	// Two loads, two nonces.
+	rec2 := httptest.NewRecorder()
+	rec2.Header().Set("Content-Security-Policy", "style-src 'self'")
+	h.ServeHTTP(rec2, httptest.NewRequest("GET", "/", nil))
+	if rec2.Body.String() == body {
+		t.Error("the same nonce twice")
+	}
+	// Without a CSP to extend, the page is served as built.
+	rec3 := httptest.NewRecorder()
+	h.ServeHTTP(rec3, httptest.NewRequest("GET", "/", nil))
+	if strings.Contains(rec3.Body.String(), "csp-nonce") {
+		t.Error("a nonce without a CSP")
 	}
 }

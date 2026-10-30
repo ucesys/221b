@@ -58,9 +58,9 @@ describe('sorting', () => {
     expect(names('cpu', 'desc')).toEqual(['worker-10', 'cp-1', 'worker-2', 'worker-3'])
   })
 
-  it('puts problems first', () => {
+  it('puts problems first, by status', () => {
     expect(names('status', 'desc')[0]).toBe('worker-3')
-    expect(names('problems', 'desc').slice(0, 2)).toEqual(['worker-3', 'worker-2'])
+    expect(names('status', 'desc').slice(0, 2)).toEqual(['worker-3', 'worker-2'])
   })
 
   it('puts tainted nodes first', () => {
@@ -89,24 +89,24 @@ describe('columns and export', () => {
 
   it('hides taints, zone, labels and kubelet until picked', () => {
     expect([...hidden].sort()).toEqual(['kubelet', 'labels', 'taints', 'zone'])
-    expect(visibleColumns(NODE_COLUMNS, hidden, false).map((c) => c.id)).toEqual(['name', 'role', 'status', 'problems', 'cpu', 'cpuAlloc', 'cpuFree', 'memory', 'memAlloc', 'memFree', 'pods', 'age'])
+    expect(visibleColumns(NODE_COLUMNS, hidden, false).map((c) => c.id)).toEqual(['name', 'role', 'status', 'cpu', 'cpuAlloc', 'cpuFree', 'memory', 'memAlloc', 'memFree', 'pods', 'age'])
   })
 
   it('always shows the first column and drops wide-only ones beside the panel', () => {
     const all = new Set(NODE_COLUMNS.map((c) => c.id))
     expect(visibleColumns(NODE_COLUMNS, all, false).map((c) => c.id)).toEqual(['name'])
-    expect(visibleColumns(NODE_COLUMNS, new Set(), true).map((c) => c.id)).toEqual(['name', 'role', 'status', 'problems', 'cpu', 'memory', 'pods'])
+    expect(visibleColumns(NODE_COLUMNS, new Set(), true).map((c) => c.id)).toEqual(['name', 'role', 'status', 'cpu', 'memory', 'pods'])
     expect(visibleColumns(NODE_COLUMNS, new Set(['zone']), false).map((c) => c.id)).not.toContain('zone')
   })
 
   it('sizes the grid from the columns', () => {
     const { template, minWidth } = gridTemplate(visibleColumns(NODE_COLUMNS, new Set(['role', 'taints', 'zone', 'labels', 'kubelet', 'age', 'memory', 'memAlloc', 'memFree', 'cpu', 'cpuAlloc', 'cpuFree']), false), false)
-    expect(template).toBe('minmax(180px, 1.4fr) 100px 106px 84px')
-    expect(minWidth).toBe(180 + 100 + 106 + 84)
+    expect(template).toBe('minmax(180px, 1.4fr) 100px 84px')
+    expect(minWidth).toBe(180 + 100 + 84)
   })
 
   it('exports the rows and columns on screen, in screen order', () => {
-    const cols = visibleColumns(NODE_COLUMNS, new Set(['problems', 'taints', 'kubelet']), false)
+    const cols = visibleColumns(NODE_COLUMNS, new Set(['taints', 'kubelet']), false)
     const shown = sortRows(rows, NODE_COLUMNS, { col: 'cpu', dir: 'desc' }, now)
     const sheet = exportTable(shown, cols, now)
     expect(sheet.head).toEqual([
@@ -139,8 +139,8 @@ describe('columns and export', () => {
     const cols = visibleColumns(NODE_COLUMNS, new Set(['cpu', 'cpuAlloc', 'cpuFree', 'memory', 'memAlloc', 'memFree', 'pods', 'zone', 'kubelet', 'age']), false)
     const out = exportTable(rows, cols, now).json
     expect(out.length).toBe(4)
-    expect(out[0]).toEqual({ Node: 'cp-1', Role: 'Control plane', Status: 'Ready', Problems: [], Taints: ['node-role.kubernetes.io/control-plane:NoSchedule'], Labels: [] })
-    expect(out[3]).toMatchObject({ Node: 'worker-3', Problems: ['Not ready', 'Disk pressure'], Labels: ['workload=analytics'] })
+    expect(out[0]).toEqual({ Node: 'cp-1', Role: 'Control plane', Status: 'Ready', Taints: ['node-role.kubernetes.io/control-plane:NoSchedule'], Labels: [] })
+    expect(out[3]).toMatchObject({ Node: 'worker-3', Labels: ['workload=analytics'] })
     expect(JSON.parse(JSON.stringify(out))).toEqual(out)
   })
 })

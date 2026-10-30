@@ -51,7 +51,7 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     sortValue: (r) => r.name,
     // The Tools button beside the name (TB-01).
     cell: (r) => (
-      <NameWithTools target={{ kind: 'node', name: r.name, cordoned: r.cordoned, role: r.role === 'control-plane' ? 'control plane' : 'worker' }}>
+      <NameWithTools target={{ kind: 'node', name: r.name, cordoned: r.cordoned, role: r.role === 'control-plane' ? 'control plane' : 'worker', problem: r.problems.length ? r.problems.map((p) => p.title).join('; ') : undefined }}>
         <NameCell name={r.name} what="node name" />
       </NameWithTools>
     ),
@@ -88,22 +88,6 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     sortValue: (r) => toneRank[r.tone] ?? 0,
     cell: (r) => <Tone tone={r.tone} text={r.status} tip={localTimes(r.statusTip)} />,
     export: (r) => [{ head: 'Status', cell: r.status }],
-  },
-  {
-    id: 'problems',
-    label: 'Problems',
-    sortName: 'problems (errors first)',
-    width: '106px',
-    compactWidth: '100px',
-    min: 106,
-    compactMin: 100,
-    defaultDir: 'desc',
-    sortValue: (r) => r.errors * 10 + r.warnings,
-    cell: (r) => {
-      const p = problemsCell(r)
-      return <Tone tone={p.tone} text={p.text} tip={p.tip} />
-    },
-    export: (r) => [{ head: 'Problems', cell: r.problems.map((p) => p.title).join('\n'), json: r.problems.map((p) => p.title) }],
   },
   {
     id: 'cpu',

@@ -5,10 +5,22 @@ import type { PodDetails } from '../../api/types'
 import { layer } from '../../lib/layer'
 import { apiPath } from '../../lib/router'
 import { ConfirmDialog } from '../ConfirmDialog'
-import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
+import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, SherlockIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
+import { useSherlockApi } from '../sherlockContext'
+import { troubleshootQuestion } from '../../lib/sherlock'
 import { useToolbox, type ToolboxApi } from './context'
 
-export type ToolsTarget = { kind: 'pod'; name: string; namespace: string } | { kind: 'node'; name: string; cordoned?: boolean; role?: string }
+/** What a wrench stands beside; problem is what is wrong with it, when something is, for Troubleshoot… (M-04). */
+export type ToolsTarget =
+  | { kind: 'pod'; name: string; namespace: string; problem?: string }
+  | { kind: 'node'; name: string; cordoned?: boolean; role?: string; problem?: string }
+  | { kind: 'claim'; name: string; namespace: string; problem?: string }
+  | { kind: 'volume'; name: string; problem?: string }
+
+/** The target's kind as a person reads it. */
+function kindWord(t: ToolsTarget): string {
+  return t.kind === 'claim' ? 'volume claim' : t.kind
+}
 
 /** A change the menu asks about before making it: Drain, Delete. */
 interface Confirm {
@@ -30,7 +42,7 @@ export function ToolsButton({ target }: { target: ToolsTarget }) {
   const [confirm, setConfirm] = useState<Confirm | null>(null)
   const open = anchor !== null
   if (!tb) return null
-  const what = target.kind === 'pod' ? `pod ${target.name}` : `node ${target.name}`
+  const what = `${kindWord(target)} ${target.name}`
   return (
     <>
       <button
@@ -105,8 +117,9 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
   const menu = useRef<HTMLDivElement>(null)
   const [style] = useState(() => place(anchor))
 
+  const sherlock = useSherlockApi()
   useEffect(() => {
-    if (!tb.available) return
+    if (!tb.available || (target.kind !== 'pod' && target.kind !== 'node')) return
     let live = true
     fetchToolbox(tb.cluster, target.kind === 'pod' ? [target.namespace] : [], target.kind === 'node').then(
       (i) => live && setInfo(i),
@@ -163,6 +176,20 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
     tb.openTool({ tool, pod: target.kind === 'pod' ? { name: target.name, namespace: target.namespace } : undefined, node: target.kind === 'node' ? target.name : undefined, prefill, from: 'Tools menu' })
   }
 
+  // Something wrong with the target: Sherlock is asked for a report, shown above the drawer (M-04).
+  const trouble: Item | null = target.problem
+    ? {
+        key: 'troubleshoot',
+        icon: <SherlockIcon />,
+        label: 'Troubleshoot…',
+        hint: target.problem,
+        off: sherlock.available ? undefined : 'Sherlock is off here',
+        run: () => {
+          onClose()
+          sherlock.ask(troubleshootQuestion({ kind: target.kind === 'claim' ? 'pvc' : target.kind === 'volume' ? 'pv' : target.kind, name: target.name, namespace: 'namespace' in target ? target.namespace : undefined, status: target.problem }), true)
+        },
+      }
+    : null
   let items: Item[]
   if (target.kind === 'pod') {
     const ports = (pod?.containers ?? []).filter((c) => !c.init).flatMap((c) => c.ports.filter((p) => p.protocol === 'TCP').map((p) => p.port))
@@ -194,7 +221,7 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
         },
       },
     ]
-  } else {
+  } else if (target.kind === 'node') {
     items = [
       { key: 'node-shell', icon: <TerminalIcon />, label: 'Node shell…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('node-shell'), run: () => open('node-shell') },
       { key: 'debug-pod', icon: <BoxIcon />, label: 'Debug pod on this node…', off: why('debug-pod'), run: () => open('debug-pod') },
@@ -230,6 +257,9 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
         },
       },
     ]
+  } else {
+    // A claim or a volume: nothing but Troubleshoot…; Expand and Delete stay in the drawer.
+    items = []
   }
 
   const keys = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -257,18 +287,50 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
       <>
         Tools for pod <span className="rk-mono">{target.name}</span> in <span className="rk-mono">{target.namespace}</span>
       </>
-    ) : (
+    ) : target.kind === 'node' ? (
       <>
         Tools for node <span className="rk-mono">{target.name}</span>
         {target.role ? ` · ${target.role}` : ''}
       </>
+    ) : target.kind === 'claim' ? (
+      <>
+        Tools for volume claim <span className="rk-mono">{target.name}</span> in <span className="rk-mono">{target.namespace}</span>
+      </>
+    ) : (
+      <>
+        Tools for volume <span className="rk-mono">{target.name}</span>
+      </>
     )
+  // One item; ready says the server's answer about the tools is in, which Troubleshoot… does not wait for.
+  const item = (it: Item, ready: boolean) => (
+    <div key={it.key} style={{ display: 'contents' }}>
+      {it.sepBefore && <div className="tb-msep" role="separator" />}
+      <button
+        role="menuitem"
+        className="tb-mi"
+        aria-disabled={!ready || it.off ? true : undefined}
+        data-danger={it.danger || undefined}
+        title={it.off ? `${it.label.replace('…', '')}: ${it.off}` : undefined}
+        onClick={() => {
+          if (!ready || it.off) return
+          it.run()
+        }}
+        data-testid={`tool-${it.key}`}
+      >
+        {it.icon}
+        {it.label}
+        <span className="tb-mh">{it.off ? it.off : it.hint}</span>
+      </button>
+    </div>
+  )
   // At the end of the app's root, for the theme's colours: a table cell's
   // styles (its text does not wrap) and keyboard handling stay out of it.
   return createPortal(
-    <div ref={menu} className="tb-menu" role="menu" aria-label={`Tools for ${target.kind} ${target.name}`} style={style} onKeyDown={keys} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} data-testid="tools-menu">
+    <div ref={menu} className="tb-menu" role="menu" aria-label={`Tools for ${kindWord(target)} ${target.name}`} style={style} onKeyDown={keys} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} data-testid="tools-menu">
       <div className="tb-mhead">{head}</div>
-      {!tb.available ? (
+      {trouble && item(trouble, true)}
+      {trouble && items.length > 0 && <div className="tb-msep" role="separator" />}
+      {items.length === 0 ? null : !tb.available ? (
         <p className="tb-mnote" style={{ maxWidth: 300 }}>
           {tb.off || 'The tools open through Watson, which is off here.'}
         </p>
@@ -277,29 +339,7 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
           {err}
         </p>
       ) : (
-        <>
-          {items.map((it) => (
-            <div key={it.key} style={{ display: 'contents' }}>
-              {it.sepBefore && <div className="tb-msep" role="separator" />}
-              <button
-                role="menuitem"
-                className="tb-mi"
-                aria-disabled={!info || it.off ? true : undefined}
-                data-danger={it.danger || undefined}
-                title={it.off ? `${it.label.replace('…', '')}: ${it.off}` : undefined}
-                onClick={() => {
-                  if (!info || it.off) return
-                  it.run()
-                }}
-                data-testid={`tool-${it.key}`}
-              >
-                {it.icon}
-                {it.label}
-                <span className="tb-mh">{it.off ? it.off : it.hint}</span>
-              </button>
-            </div>
-          ))}
-        </>
+        items.map((it) => item(it, !!info))
       )}
     </div>,
     layer(),

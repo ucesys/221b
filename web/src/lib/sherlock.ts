@@ -228,7 +228,7 @@ export function podQuestion(p: { namespace: string; name: string; status?: strin
  * troubleshooting report, in the format the system prompt gives for one.
  */
 export function troubleshootQuestion(r: { kind: string; name: string; namespace?: string; status?: string; oom?: boolean; restarts?: number }): string {
-  const what = r.kind === 'node' ? `node ${r.name}` : r.kind === 'pvc' ? `volume claim ${r.namespace}/${r.name}` : `pod ${r.namespace}/${r.name}`
+  const what = r.kind === 'node' ? `node ${r.name}` : r.kind === 'pvc' ? `volume claim ${r.namespace}/${r.name}` : r.kind === 'pv' ? `volume ${r.name}` : `pod ${r.namespace}/${r.name}`
   const why = [r.oom ? 'OOM-killed' : r.status, r.restarts ? `${r.restarts} restarts` : ''].filter(Boolean).join(', ')
   return `Troubleshooting report for ${what}${why ? ` (${why})` : ''}`
 }

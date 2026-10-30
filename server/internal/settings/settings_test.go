@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -405,3 +406,34 @@ func TestAlertBannersAreKept(t *testing.T) {
 		t.Errorf("after a refresh change the banners are %v (%v), want off", st.AlertBanners, err)
 	}
 }
+
+func TestTheRound2SettingsValidate(t *testing.T) {
+	if err := (settings.Watson{ApproveAllMinutes: settings.MaxApproveAll + 1}).Validate(); err == nil {
+		t.Error("a standing approval above the bound passed")
+	}
+	if err := (settings.Watson{ApproveAllMinutes: 30}).Validate(); err != nil {
+		t.Error(err)
+	}
+	long := settings.Sherlock{Model: "claude-opus-5-5", Notes: strings.Repeat("x", settings.MaxNotes+1)}
+	if err := long.Validate(); err == nil {
+		t.Error("notes above the bound passed")
+	}
+	off := false
+	s := settings.Default
+	s.FleetsPage = &off
+	if s.ShowsFleets() || settings.Default.ShowsFleets() != true {
+		t.Error("the Fleets page switch")
+	}
+	for _, f := range []string{"fleet=edge", "example.com/tier=gold"} {
+		if err := Validate([]fleets.Fleet{{ID: "a", Name: "A", Labels: []string{"x=y"}, Taints: []string{}, Deploy: f}}); err != nil {
+			t.Errorf("%s: %v", f, err)
+		}
+	}
+	for _, f := range []string{"fleet", "fleet=", "=x", "bad key=1"} {
+		if err := Validate([]fleets.Fleet{{ID: "a", Name: "A", Labels: []string{"x=y"}, Taints: []string{}, Deploy: f}}); err == nil {
+			t.Errorf("%q passed as a deploy label", f)
+		}
+	}
+}
+
+func Validate(list []fleets.Fleet) error { return fleets.Validate(list) }

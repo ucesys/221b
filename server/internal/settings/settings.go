@@ -52,7 +52,14 @@ type Settings struct {
 	// tab has in banners at the top; nil is true. Off, the Alerts tab's
 	// name still turns red or amber (asked at the second Toolbox review).
 	AlertBanners *bool `json:"alertBanners,omitempty"`
+	// FleetsPage says whether the Fleets tab shows; nil is true. Off, the
+	// Nodes tab's fleet list is where fleets are made and kept (Phase 10.1
+	// review, R2-03).
+	FleetsPage *bool `json:"fleetsPage,omitempty"`
 }
+
+// ShowsFleets says whether the Fleets tab shows.
+func (s Settings) ShowsFleets() bool { return s.FleetsPage == nil || *s.FleetsPage }
 
 // DefaultPendingGrace gives a pod time to pull its image and start before
 // it is an alert (asked at the Toolbox review).
@@ -98,6 +105,21 @@ type Watson struct {
 	// TwoPerson requires a second person to approve every change on a
 	// cluster tagged production (P6-07).
 	TwoPerson bool `json:"twoPerson"`
+	// ApproveAllMinutes is the longest standing approval a person may
+	// give Watson: for that long, every card they could approve is
+	// approved as it is ready (R2-04). 0 offers none.
+	ApproveAllMinutes int `json:"approveAllMinutes,omitempty"`
+}
+
+// MaxApproveAll bounds a standing approval.
+const MaxApproveAll = 240
+
+// Validate reports what is wrong with Watson's settings.
+func (w Watson) Validate() error {
+	if w.ApproveAllMinutes < 0 || w.ApproveAllMinutes > MaxApproveAll {
+		return fmt.Errorf("approveAllMinutes must be between 0 and %d", MaxApproveAll)
+	}
+	return nil
 }
 
 // WatsonOrDefault returns the Watson settings in force.
@@ -130,7 +152,19 @@ type Sherlock struct {
 	// 0 counts it at the highest listed price.
 	PriceIn  float64 `json:"priceIn,omitempty"`
 	PriceOut float64 `json:"priceOut,omitempty"`
+	// Notes are what the administrators tell Sherlock about their
+	// infrastructure, added to its instructions for every cluster (R2-05).
+	Notes string `json:"notes,omitempty"`
+	// Instructions replace Sherlock's built-in instructions (the block
+	// before the cluster's) when set; "" is the built-in text.
+	Instructions string `json:"instructions,omitempty"`
 }
+
+// MaxInstructions bounds the instructions.
+const MaxInstructions = 64 << 10
+
+// MaxNotes bounds the notes; the prompt is cached, so they are not free.
+const MaxNotes = 16 << 10
 
 // ChangesView says whether Sherlock may change the asking person's view.
 func (s Sherlock) ChangesView() bool { return s.ViewControl == nil || *s.ViewControl }
@@ -179,6 +213,12 @@ func (s Sherlock) Validate() error {
 	}
 	if len(s.Clusters) > 1000 {
 		return fmt.Errorf("too many clusters")
+	}
+	if len(s.Notes) > MaxNotes {
+		return fmt.Errorf("the notes have at most %d characters", MaxNotes)
+	}
+	if len(s.Instructions) > MaxInstructions {
+		return fmt.Errorf("the instructions have at most %d characters", MaxInstructions)
 	}
 	return nil
 }
@@ -372,6 +412,9 @@ func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
 		if next.AlertBanners == nil {
 			next.AlertBanners = cur.AlertBanners
 		}
+		if next.FleetsPage == nil {
+			next.FleetsPage = cur.FleetsPage
+		}
 		*cur = next
 		return nil
 	})
@@ -379,6 +422,9 @@ func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
 
 // UpdateWatson replaces the Watson settings.
 func (s *Service) UpdateWatson(ctx context.Context, w Watson) (State, error) {
+	if err := w.Validate(); err != nil {
+		return State{}, err
+	}
 	return s.change(ctx, func(cur *Settings) error {
 		cur.Watson = &w
 		return nil

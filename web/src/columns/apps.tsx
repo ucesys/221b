@@ -14,12 +14,33 @@ export interface AppRow extends ReleaseRow {
   orphan?: boolean
 }
 
+/**
+ * Why the deployed revision is behind the source (M-05), or undefined
+ * when it is the source's last deploy: the console writes the commit into
+ * the revision's description, and the chart versions must agree. A
+ * rollback, a helm upgrade by hand or a source set on an existing release
+ * all leave the release behind.
+ */
+export function behindSource(r: AppRow): string | undefined {
+  if (!r.app || r.orphan) return undefined
+  // A source set on a release that already runs exactly what it renders (round 2 review).
+  if (r.app.matchedRevision && r.app.matchedRevision === r.revision && r.chartVersion === r.app.chartVersion) return undefined
+  // A commit is written by a deploy: none means the source never was.
+  if (!r.app.commit) return r.app.sourceDiff ? `the source has not been deployed yet, and ${r.app.sourceDiff}; revision ${r.revision} (${r.chart}-${r.chartVersion}) runs` : `the source has not been deployed yet; revision ${r.revision} (${r.chart}-${r.chartVersion}) is "${r.description || 'not from the console'}"`
+  const sha = r.app.commit.slice(0, 12)
+  if ((r.description ?? '').includes(sha) && r.chartVersion === r.app.chartVersion) return undefined
+  return `revision ${r.revision} (${r.chart}-${r.chartVersion}) is "${r.description || 'not from the console'}"; the source last deployed ${r.app.chartVersion} @ ${sha}`
+}
+
 export function driftText(r: AppRow): string {
   if (!r.app) return '—'
+  const behind = behindSource(r)
+  if (behind) return r.app.driftState === 'drifted' ? 'drifted · behind the source' : 'behind the source'
   return r.app.driftState ?? 'not checked'
 }
 
 export function driftTone(r: AppRow): 'ok' | 'warn' | 'err' | 'muted' {
+  if (behindSource(r) && r.app?.driftState !== 'drifted') return 'warn'
   switch (r.app?.driftState) {
     case 'in sync':
       return 'ok'
@@ -103,7 +124,7 @@ export const APP_COLUMNS: ColumnDef<AppRow>[] = [
     width: 'minmax(96px, .6fr)',
     min: 96,
     sortValue: (r) => ({ err: 0, warn: 1, muted: 2, ok: 3 })[driftTone(r)],
-    cell: (r) => (r.app ? <Tone tone={driftTone(r)} text={driftText(r)} tip={r.app.drift ? `${r.app.drift.changed} changed · ${r.app.drift.missing} missing · ${r.app.drift.same} as applied` : 'Open the release to check'} /> : <span className="rk-dim">—</span>),
+    cell: (r) => (r.app ? <Tone tone={driftTone(r)} text={driftText(r)} tip={[behindSource(r), r.app.drift ? `${r.app.drift.changed} changed · ${r.app.drift.missing} missing · ${r.app.drift.same} as applied` : 'Open the release to check'].filter(Boolean).join('\n')} /> : <span className="rk-dim">—</span>),
     export: (r) => [{ head: 'Drift', cell: driftText(r) }],
   },
   {

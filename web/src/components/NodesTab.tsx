@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo } from 'react'
-import { useView } from '../api/live'
-import type { NodeRow } from '../api/types'
+import { useLiveMeta, useView } from '../api/live'
+import type { Fleet, FleetRow, Me, NodeRow } from '../api/types'
 import { NODE_COLUMNS, nodeLabel, nodeTerms } from '../columns/nodes'
+import { scopeNames } from '../lib/fleets'
 import { facetMatch, facetsActive, type FacetSelection, type RoleFilter } from '../lib/nodes'
 import { listParam, navigate, withParams } from '../lib/router'
 import { useTable } from '../lib/useTable'
@@ -9,6 +10,7 @@ import { ColumnsMenu } from './ColumnsMenu'
 import { DataTable } from './DataTable'
 import { ExportMenu } from './ExportMenu'
 import { FacetPicker } from './FacetPicker'
+import { NodeFleets } from './NodeFleets'
 import { NodePanel } from './NodePanel'
 import { ProblemFilter, problemLevel, showsNode } from './ProblemFilter'
 import { SearchBox } from './SearchBox'
@@ -21,8 +23,11 @@ const ROLES: RoleFilter[] = ['all', 'control-plane', 'worker']
  * &taint=&open=), so links from other tabs and the browser's history open the
  * right view.
  */
-export function NodesTab({ cluster, now, onToast, route }: TabProps) {
+export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps & { me?: Me | null }) {
   const { rows, loaded } = useView<NodeRow>('nodes')
+  const { rows: fleetRows, loaded: fleetsLoaded } = useView<FleetRow>('fleets')
+  const meta = useLiveMeta()
+  const defs: Fleet[] = useMemo(() => meta.settings?.fleets?.[route.cluster] ?? [], [meta.settings, route.cluster])
   const p = route.params
   const role: RoleFilter = ROLES.includes(p.get('role') as RoleFilter) ? (p.get('role') as RoleFilter) : 'all'
   const level = problemLevel(p.get('err'))
@@ -31,13 +36,16 @@ export function NodesTab({ cluster, now, onToast, route }: TabProps) {
   const selected = p.get('open')
   const set = useCallback((changes: Record<string, string | string[] | undefined>) => navigate(withParams(route, changes), true), [route])
 
-  const inScope = useMemo(() => rows.filter((r) => (role === 'all' || r.role === role) && showsNode(level, r) && (!facetsActive(facets) || facetMatch(r, facets))), [rows, role, level, facets])
+  // The fleets picked on the left narrow the table (R2-02): #/nodes?fleet=.
+  const fleetSel = useMemo(() => listParam(p, 'fleet').filter((id) => id === 'none' || fleetRows.some((f) => f.kind === 'fleet' && f.id === id)), [p, fleetRows])
+  const inFleets = useMemo(() => (fleetSel.length ? new Set(scopeNames(fleetSel, fleetRows, rows.map((r) => r.name))) : null), [fleetSel, fleetRows, rows])
+  const inScope = useMemo(() => rows.filter((r) => (role === 'all' || r.role === role) && showsNode(level, r) && (!facetsActive(facets) || facetMatch(r, facets)) && (!inFleets || inFleets.has(r.name))), [rows, role, level, facets, inFleets])
   const selectedRow = selected ? (rows.find((r) => r.name === selected) ?? null) : null
   // The details pane lies over the table, so every column keeps its place.
   const compact = false
   // Nodes with problems first, errors before warnings, until someone sorts
   // (asked at the Phase 6 review).
-  const table = useTable<NodeRow>({ id: 'nodes', columns: NODE_COLUMNS, rows: inScope, terms: nodeTerms, now, compact, defaultSort: { col: 'problems', dir: 'desc' }, query, onQuery: (q) => set({ q }) })
+  const table = useTable<NodeRow>({ id: 'nodes', columns: NODE_COLUMNS, rows: inScope, terms: nodeTerms, now, compact, defaultSort: { col: 'status', dir: 'desc' }, query, onQuery: (q) => set({ q }) })
   const metrics = cluster?.metrics === 'available'
   const cp = rows.filter((r) => r.role === 'control-plane').length
   const withErrors = rows.filter((r) => r.errors > 0).length
@@ -82,6 +90,7 @@ export function NodesTab({ cluster, now, onToast, route }: TabProps) {
   return (
     <main className="rk-pane" aria-label="Nodes" style={{ flex: '999 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
       <div className="rk-split" style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', alignItems: 'stretch' }}>
+        <NodeFleets cluster={route.cluster} fleets={fleetRows} defs={defs} nodes={rows} sel={fleetSel} onSel={(ids) => set({ fleet: ids })} loaded={fleetsLoaded} me={me} now={now} fleetsPage={meta.settings?.fleetsPage !== false} onToast={onToast} />
         <div className="rk-col" style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <section aria-label="Node list" style={{ padding: '18px 24px 28px', display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px' }}>

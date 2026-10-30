@@ -2,7 +2,9 @@
 package ui
 
 import (
+	"crypto/rand"
 	"embed"
+	"encoding/base64"
 	"io/fs"
 	"net/http"
 	"path"
@@ -52,6 +54,26 @@ func handler(files fs.FS) http.Handler {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Write(index)
+		w.Write(withNonce(w.Header(), index))
 	})
+}
+
+// withNonce gives the page a nonce for the style sheets the YAML editor
+// makes at runtime (M-06): the CSP's style-src allows that nonce, and the
+// page carries it in a meta tag the editor reads. The page is never
+// cached, so each load has a nonce of its own. A CSP set by the server
+// without style-src 'self' is left as it is.
+func withNonce(h http.Header, index []byte) []byte {
+	csp := h.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "style-src 'self'") {
+		return index
+	}
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return index
+	}
+	nonce := base64.StdEncoding.EncodeToString(b[:])
+	h.Set("Content-Security-Policy", strings.Replace(csp, "style-src 'self'", "style-src 'self' 'nonce-"+nonce+"'", 1))
+	meta := `<meta name="csp-nonce" content="` + nonce + `" />`
+	return []byte(strings.Replace(string(index), "</head>", meta+"</head>", 1))
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"github.com/pmezard/go-difflib/difflib"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,10 @@ type DriftObject struct {
 	// never shown, since the object may be a Secret.
 	Fields []string `json:"fields,omitempty"`
 	Error  string   `json:"error,omitempty"`
+	// Diff is what changed, as a unified diff of the fields the manifest
+	// sets: the manifest's side against the cluster's (R2-10). A Secret's
+	// values show as their sizes.
+	Diff string `json:"diff,omitempty"`
 }
 
 // Drift is a release's objects compared with what Helm last applied.
@@ -102,11 +107,13 @@ func CheckDrift(ctx context.Context, dyn dynamic.Interface, mapper meta.RESTMapp
 			o.State, o.Error = DriftUnknown, err.Error()
 			d.Unknown++
 		default:
-			fields := compare(normalize(u.Object), live.Object, "")
+			want := normalize(u.Object)
+			fields := compare(want, live.Object, "")
 			if len(fields) == 0 {
 				o.State = DriftSame
 				d.Same++
 			} else {
+				o.Diff = objectDiff(want, live.Object, o.Kind)
 				sort.Strings(fields)
 				if len(fields) > 20 {
 					fields = append(fields[:20], fmt.Sprintf("and %d more", len(fields)-20))
@@ -118,6 +125,58 @@ func CheckDrift(ctx context.Context, dyn dynamic.Interface, mapper meta.RESTMapp
 		d.Objects = append(d.Objects, o)
 	}
 	return d
+}
+
+// objectDiff is the manifest's side of an object against the cluster's,
+// the cluster's cut down to the fields the manifest sets so defaults and
+// status do not show, as a unified diff; a Secret's values are sizes.
+func objectDiff(want, live map[string]any, kind string) string {
+	left, err := yaml.Marshal(want)
+	if err != nil {
+		return ""
+	}
+	right, err := yaml.Marshal(prune(want, live))
+	if err != nil {
+		return ""
+	}
+	a, b := string(left), string(right)
+	if kind == "Secret" {
+		a, b = hideSecretValues(a), hideSecretValues(b)
+	}
+	text, _ := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{A: difflib.SplitLines(a), B: difflib.SplitLines(b), FromFile: "deployed manifest", ToFile: "in the cluster", Context: 3})
+	return text
+}
+
+// prune keeps of live the keys want has, table by table; lists of the
+// same length are pruned item by item, others kept whole.
+func prune(want, live map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, w := range want {
+		l, ok := live[k]
+		if !ok {
+			continue
+		}
+		out[k] = pruneAny(w, l)
+	}
+	return out
+}
+
+func pruneAny(want, live any) any {
+	switch w := want.(type) {
+	case map[string]any:
+		if l, ok := live.(map[string]any); ok {
+			return prune(w, l)
+		}
+	case []any:
+		if l, ok := live.([]any); ok && len(l) == len(w) {
+			out := make([]any, len(l))
+			for i := range l {
+				out[i] = pruneAny(w[i], l[i])
+			}
+			return out
+		}
+	}
+	return live
 }
 
 func isHook(u *unstructured.Unstructured) bool {

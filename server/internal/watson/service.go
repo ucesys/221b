@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -193,6 +194,9 @@ type Options struct {
 	StartSession func(cl Cluster, it Item, approver Who) (string, error)
 	// Apps keeps the Helm applications (Phase 10); nil keeps none.
 	Apps apps.Store
+	// ApproveAllMax is the longest standing approval a person may give on
+	// a cluster (R2-04); nil or 0 offers none.
+	ApproveAllMax func(c Cluster) time.Duration
 	// LapseWaiting is how long a card waiting for a second person stays
 	// valid (TB-38): 30 minutes.
 	LapseWaiting time.Duration
@@ -200,8 +204,9 @@ type Options struct {
 
 // Service keeps the commands.
 type Service struct {
-	opts Options
-	disc Discovery
+	grants map[string]Grant
+	opts   Options
+	disc   Discovery
 
 	mu     sync.Mutex
 	items  map[string]*Item
@@ -496,6 +501,126 @@ func (s *Service) SetSessionHooks(plan func(ctx context.Context, cl Cluster, it 
 	s.opts.PlanSession, s.opts.StartSession = plan, start
 }
 
+// A Grant is a person's standing approval on a cluster (R2-04): until
+// it ends, every card they could approve is approved as it is ready,
+// their own (the first approval) and, where a second person is needed,
+// other people's.
+type Grant struct {
+	Who   Who
+	Until time.Time
+}
+
+func grantKey(cluster, session string) string { return cluster + "\x00" + session }
+
+// ErrGrant is a standing approval the settings do not allow.
+var ErrGrant = errors.New("standing approval")
+
+// ApproveAll gives a person's standing approval on a cluster for d, which
+// the settings bound; it replaces the one they had.
+func (s *Service) ApproveAll(cl Cluster, who Who, d time.Duration) (Grant, error) {
+	max := time.Duration(0)
+	if s.opts.ApproveAllMax != nil {
+		max = s.opts.ApproveAllMax(cl)
+	}
+	switch {
+	case max <= 0:
+		return Grant{}, fmt.Errorf("%w: an administrator has not allowed standing approvals in Settings", ErrGrant)
+	case cl.ReadOnly:
+		return Grant{}, fmt.Errorf("%w: %s is connected read-only", ErrGrant, cl.Name)
+	case who.Session == "":
+		return Grant{}, fmt.Errorf("%w: no session", ErrGrant)
+	case d < time.Minute || d > max:
+		return Grant{}, fmt.Errorf("%w: between 1 and %s", ErrGrant, minutes(max))
+	}
+	g := Grant{Who: who, Until: s.opts.Now().Add(d)}
+	s.mu.Lock()
+	if s.grants == nil {
+		s.grants = map[string]Grant{}
+	}
+	s.grants[grantKey(cl.ID, who.Session)] = g
+	ready := s.readyLocked(cl)
+	s.mu.Unlock()
+	if s.opts.Audit != nil {
+		s.opts.Audit.Record(audit.Event{Time: s.opts.Now(), Action: ActionApproveAll, Who: who.Audit, From: who.From, Cluster: cl.ID, Outcome: audit.OutcomeOK, Detail: "until=" + g.Until.UTC().Format(time.RFC3339) + " minutes=" + strconv.Itoa(int(d/time.Minute))})
+	}
+	for _, id := range ready {
+		go s.autoApprove(cl, id)
+	}
+	return g, nil
+}
+
+// Revoke ends a person's standing approval on a cluster.
+func (s *Service) Revoke(cl Cluster, who Who) {
+	s.mu.Lock()
+	_, had := s.grants[grantKey(cl.ID, who.Session)]
+	delete(s.grants, grantKey(cl.ID, who.Session))
+	s.mu.Unlock()
+	if had && s.opts.Audit != nil {
+		s.opts.Audit.Record(audit.Event{Time: s.opts.Now(), Action: ActionApproveAll, Who: who.Audit, From: who.From, Cluster: cl.ID, Outcome: audit.OutcomeOK, Detail: "ended"})
+	}
+}
+
+// Standing returns a person's standing approval on a cluster, if it holds.
+func (s *Service) Standing(cl Cluster, who Who) (Grant, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g, ok := s.grants[grantKey(cl.ID, who.Session)]
+	if !ok || !g.Until.After(s.opts.Now()) {
+		return Grant{}, false
+	}
+	return g, true
+}
+
+// readyLocked lists the cluster's pending cards whose plan is ready.
+func (s *Service) readyLocked(cl Cluster) []string {
+	var out []string
+	for id, it := range s.items {
+		if it.Cluster == cl.ID && it.Status == StatusPending && it.Plan != nil && it.Plan.Ready {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// autoApprove approves a ready card under a standing approval: the
+// requester's own, or, where a second person is needed, another holder's.
+// Approve applies every rule a click would (P6-04, P6-07, TB-32).
+func (s *Service) autoApprove(cl Cluster, id string) {
+	s.mu.Lock()
+	it := s.items[id]
+	if it == nil || it.Status != StatusPending || it.Plan == nil || !it.Plan.Ready || !it.Change {
+		s.mu.Unlock()
+		return
+	}
+	now := s.opts.Now()
+	var holders []Who
+	if g, ok := s.grants[grantKey(cl.ID, it.Requester.Session)]; ok && g.Until.After(now) {
+		holders = append(holders, g.Who)
+	}
+	if s.needsTwo(cl, it) {
+		holders = holders[:0]
+		for k, g := range s.grants {
+			if strings.HasPrefix(k, cl.ID+"\x00") && g.Until.After(now) && g.Who.User != "" && g.Who.User != it.Requester.User {
+				holders = append(holders, g.Who)
+			}
+		}
+	}
+	s.mu.Unlock()
+	if len(holders) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	for _, w := range holders {
+		if _, err := s.Approve(ctx, cl, w, id); err == nil {
+			return
+		}
+	}
+}
+
+// ActionApproveAll is the audit action of a standing approval given or ended.
+const ActionApproveAll = "watson.approveAll"
+
 // needsTwo says whether an item waits for a second person.
 func (s *Service) needsTwo(cl Cluster, it *Item) bool {
 	return it.Change && (s.opts.TwoPerson(cl) || (it.Session != nil && it.Session.NeedsTwo))
@@ -530,6 +655,7 @@ func (s *Service) SubmitSession(cl Cluster, who Who, card SessionCard, from stri
 }
 
 func (s *Service) planSession(cl Cluster, id string) {
+	defer s.autoApprove(cl, id)
 	s.mu.Lock()
 	it := s.items[id]
 	var cp Item
@@ -677,10 +803,14 @@ func (s *Service) plan(cl Cluster, id string) {
 	p.DryRun = buf.lines()
 	p.Ready = true
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if it.Status == StatusPending {
+	ready := it.Status == StatusPending
+	if ready {
 		it.Plan = p
 		s.changedLocked(it)
+	}
+	s.mu.Unlock()
+	if ready {
+		s.autoApprove(cl, id)
 	}
 }
 

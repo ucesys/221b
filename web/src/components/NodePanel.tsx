@@ -168,7 +168,7 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
               </h2>
             </div>
             <AskSherlock question={r.problems.length ? `What is wrong with node ${r.name}?` : `Tell me about node ${r.name}`} compact over />
-            <ToolsButton target={{ kind: 'node', name: r.name, cordoned: r.cordoned, role: r.role === 'control-plane' ? 'control plane' : 'worker' }} />
+            <ToolsButton target={{ kind: 'node', name: r.name, cordoned: r.cordoned, role: r.role === 'control-plane' ? 'control plane' : 'worker', problem: r.problems.length ? r.problems.map((p) => p.title).join('; ') : undefined }} />
             <button ref={closeRef} className="rk-icon-btn" aria-label="Close node details" title="Close (Esc)" onClick={onClose}>
               <CloseIcon />
             </button>

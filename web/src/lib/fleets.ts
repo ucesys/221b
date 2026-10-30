@@ -307,7 +307,7 @@ export function fleetsOfNode(name: string, rows: FleetRow[]): FleetRow[] {
 }
 
 export function fleetOf(r: FleetRow): Fleet {
-  const f: Fleet = { id: r.id ?? '', name: r.name ?? '', color: r.color, desc: r.desc ?? '', labels: r.labels, taints: r.taints }
+  const f: Fleet = { id: r.id ?? '', name: r.name ?? '', color: r.color, desc: r.desc ?? '', labels: r.labels, taints: r.taints, ...(r.deploy ? { deploy: r.deploy } : {}) }
   return r.by === 'nodes' ? { ...f, kind: 'nodes', nodes: r.listed ?? [] } : f
 }
 

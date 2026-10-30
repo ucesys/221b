@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, sourceText, updateApp, type AppDrift, type AppImage, type AppRefs, type AppSource, type AppView, type RefKind, type RevisionView } from '../../api/apps'
+import { fetchAppInspect, fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, inspectRepo, sourceText, updateApp, type AppDrift, type AppImage, type AppInput, type AppRefs, type AppSource, type AppView, type RefKind, type RepoInspection, type RevisionView } from '../../api/apps'
+import { useLiveMeta } from '../../api/live'
 import { useDetails } from '../../api/details'
 import type { ClusterInfo, ReleaseDetails } from '../../api/types'
 import type { WatsonItem } from '../../api/watson'
-import { driftTone, type AppRow } from '../../columns/apps'
+import { behindSource, driftTone, type AppRow } from '../../columns/apps'
+import { useWatsonApi } from '../Watson'
+import { YamlEditor } from '../YamlEditor'
 import { fmtAge, fmtTs, nWord } from '../../lib/format'
 import { apiPath, href, type Route } from '../../lib/router'
 import { CopyName } from '../CopyName'
@@ -12,6 +15,7 @@ import { CloseIcon } from '../Icons'
 import { ReleaseBody, SUBTABS, type ExtraTab } from '../ReleaseBody'
 import { AppToolsButton, type AppAction } from './AppMenu'
 import { DiffDialog } from './DiffDialog'
+import { DriftDialog } from './DriftDialog'
 import { RevisionActions } from './revisionActions'
 
 export const APP_TABS = ['overview', ...SUBTABS, 'images'] as const
@@ -43,6 +47,7 @@ interface Props {
  */
 export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canChange, onAction, onToast, onResult, version, onDrift }: Props) {
   const app = row.app
+  const watson = useWatsonApi()
   const [drift, setDrift] = useState<AppDrift | null>(app?.drift ?? null)
   const [checking, setChecking] = useState(false)
   const [refs, setRefs] = useState<AppRefs | null>(null)
@@ -50,6 +55,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
   const [images, setImages] = useState<{ revision: number; images: AppImage[] } | null>(null)
   const [imageRev, setImageRev] = useState<number | undefined>(undefined)
   const [diffFor, setDiffFor] = useState<number | null>(null)
+  const [driftOpen, setDriftOpen] = useState(false)
   const [err, setErr] = useState('')
   const details = useDetails<ReleaseDetails>(row.orphan ? null : apiPath(`helm/${encodeURIComponent(row.namespace)}/${encodeURIComponent(row.name)}`))
   const d = details.data
@@ -80,6 +86,8 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, version])
 
+  // The row is an orphan until the release list is in, when the panel
+  // mounts before it: the revisions load once it is not (M-03 fix).
   useEffect(() => {
     if ((tab !== 'history' && tab !== 'images') || row.orphan) return
     fetchRevisions(clusterId, row.namespace, row.name)
@@ -91,7 +99,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
         .catch(() => undefined)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, key, version])
+  }, [tab, key, version, row.orphan])
 
   useEffect(() => {
     if (tab !== 'images' || row.orphan) return
@@ -230,6 +238,14 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
               </span>
             </>
           )}
+          {behindSource(row) && (
+            <span data-testid="app-behind" title={behindSource(row)}>
+              <span className="rk-pill" data-tone="warn">
+                <span className="rk-dot" />
+                behind the source
+              </span>
+            </span>
+          )}
           {drift && driftState(drift) !== 'in sync' && (
             <span data-testid="app-drift" title={drift.objects.filter((o) => o.state !== 'same').map((o) => `${o.kind} ${o.name}: ${o.state}${o.fields?.length ? ' (' + o.fields.join(', ') + ')' : ''}`).join('\n')}>
               <span className="rk-pill" data-tone={driftTone(row) === 'muted' ? 'warn' : driftTone(row)}>
@@ -240,6 +256,14 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
               <button className="rk-link" onClick={() => check(true)} disabled={checking} data-testid="app-check-drift">
                 {checking ? 'checking…' : 'check again'}
               </button>
+              {drift.changed + drift.missing > 0 && (
+                <>
+                  {' · '}
+                  <button className="rk-link" onClick={() => setDriftOpen(true)} data-testid="app-drift-what">
+                    what changed
+                  </button>
+                </>
+              )}
             </span>
           )}
           <span data-testid="app-source-line">
@@ -282,7 +306,27 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
             {app && <ValuesEditor clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} />}
           </>
         ) : (
-          <RevisionActions.Provider value={{ diff: (rev) => setDiffFor(rev) }}>
+          <RevisionActions.Provider
+            value={{
+              diff: (rev) => {
+                setDiffFor(rev)
+                // Asked before the revisions are in: fetch them now, the dialog opens when they are.
+                if (!revisions && !row.orphan)
+                  fetchRevisions(clusterId, row.namespace, row.name)
+                    .then(setRevisions)
+                    .catch((e: unknown) => onToast(e instanceof Error ? e.message : String(e)))
+              },
+              current: row.revision,
+              // An older revision rolls back through Watson, a card to approve (M-03).
+              rollback:
+                canChange && watson.available && !watson.readOnly
+                  ? (rev) => watson.send(`helm rollback ${row.name} ${rev} -n ${row.namespace}`, { from: 'Helm tab', why: `Roll ${row.namespace}/${row.name} back to revision ${rev}.` })
+                  : undefined,
+              rollbackOff: !canChange ? 'for Admins and SuperAdmins' : !watson.available ? 'Watson is off here' : watson.readOnly ? 'this cluster is connected read-only' : undefined,
+              drift: drift && drift.changed + drift.missing > 0 ? () => setDriftOpen(true) : undefined,
+              driftOff: !app ? 'no source to check against' : !drift ? 'not checked yet' : drift.unknown > 0 && drift.same + drift.changed + drift.missing === 0 ? 'the check could not read the cluster' : 'the cluster is as deployed',
+            }}
+          >
           <ReleaseBody
             cluster={cluster}
             now={now}
@@ -303,6 +347,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
           </RevisionActions.Provider>
         )}
         {diffFor !== null && revisions && <DiffDialog clusterId={clusterId} namespace={row.namespace} name={row.name} revisions={revisions} revision={diffFor} app={app} refs={refs} onClose={() => setDiffFor(null)} />}
+        {driftOpen && drift && <DriftDialog name={row.name} drift={drift} onClose={() => setDriftOpen(false)} />}
       </section>
     </main>
   )
@@ -380,32 +425,24 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
   const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? 'Unsaved; saves in a moment' : state === 'error' ? error : 'Saved'
   return (
     <Card title="Values file and parameters" aside={<span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-values-state">{status}</span>}>
-      <textarea
-        className="rk-area rk-mono"
+      <YamlEditor
         value={values}
-        onChange={(e) => {
-          setValues(e.target.value)
-          touch()
+        onChange={({ text, errors }) => {
+          setValues(text)
+          if (errors.length) {
+            // Not saved until it parses; the editor underlines the place.
+            if (timer.current) clearTimeout(timer.current)
+            seq.current++
+            setState('error')
+            setError(`Not saved: ${errors[0]}`)
+          } else touch()
         }}
         onBlur={() => state === 'dirty' && save()}
         readOnly={!canChange}
-        spellCheck={false}
-        aria-label="Values file"
-        onKeyDown={(e) => {
-          // Tab indents, as in an editor.
-          if (e.key === 'Tab' && !e.shiftKey) {
-            e.preventDefault()
-            const el = e.currentTarget
-            const s = el.selectionStart
-            const next = values.slice(0, s) + '  ' + values.slice(el.selectionEnd)
-            setValues(next)
-            touch()
-            requestAnimationFrame(() => el.setSelectionRange(s + 2, s + 2))
-          }
-        }}
-        style={{ minHeight: 'min(60vh, 640px)', fontSize: 13, lineHeight: 1.55, resize: 'vertical', tabSize: 2 }}
+        label="Values file"
+        minHeight="min(60vh, 640px)"
         placeholder={'replicaCount: 2\nimage:\n  tag: v1.2.0'}
-        data-testid="app-values"
+        testId="app-values"
       />
       <div>
         <h4 className="rk-h" style={{ margin: '0 0 6px', fontSize: 12 }}>
@@ -441,15 +478,44 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
  * namespace at install. A release the console did not install gets its
  * record here.
  */
+/** What was typed into a Source card and not saved, kept per release while the page is open (round 2 review). */
+interface SourceDraft {
+  repo: string
+  path: string
+  ref: string
+  refKind: RefKind
+}
+const draftKey = (clusterId: string, row: AppRow) => `221b.source-draft:${clusterId}/${row.namespace}/${row.name}`
+function readDraft(key: string): SourceDraft | null {
+  try {
+    const raw = sessionStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as SourceDraft) : null
+  } catch {
+    return null
+  }
+}
+function writeDraft(key: string, d: SourceDraft | null) {
+  try {
+    if (d) sessionStorage.setItem(key, JSON.stringify(d))
+    else sessionStorage.removeItem(key)
+  } catch {
+    // Storage off: the draft lives only in the card.
+  }
+}
+
 function SourceCard({ clusterId, row, app, canChange, onResult, now }: { clusterId: string; row: AppRow; app?: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void; now: number }) {
-  const [repo, setRepo] = useState(app?.source.repo ?? '')
-  const [path, setPath] = useState(app?.source.path ?? '')
-  const [ref, setRef] = useState(app?.source.ref ?? '')
-  const [refKind, setRefKind] = useState<RefKind>(app?.source.refKind ?? 'branch')
+  const key = draftKey(clusterId, row)
+  const [draft] = useState(() => readDraft(key))
+  const [repo, setRepo] = useState(draft?.repo ?? app?.source.repo ?? '')
+  const [path, setPath] = useState(draft?.path ?? app?.source.path ?? '')
+  const [ref, setRef] = useState(draft?.ref ?? app?.source.ref ?? '')
+  const [refKind, setRefKind] = useState<RefKind>(draft?.refKind ?? app?.source.refKind ?? 'branch')
   const [token, setToken] = useState('')
   const [createNs, setCreateNs] = useState(app?.createNamespace ?? false)
-  const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>('saved')
-  const [error, setError] = useState('')
+  const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>(() => (draft ? 'error' : 'saved'))
+  const [error, setError] = useState(() => (draft ? (draft.repo.trim() && draft.ref.trim() ? 'Not saved yet: press Save.' : 'Not saved: needs a repository and a branch or tag.') : ''))
+  // The repository is looked over when its URL is typed (M-07): the chart's path and the default branch fill what is empty.
+  const [look, setLook] = useState<{ repo: string; state: 'busy' | 'done' | 'error'; text: string } | null>(null)
   const commit = app?.commit ? app.commit.slice(0, 12) : ''
   const saved: AppSource | null = app ? app.source : null
   const queue = useRef<Promise<void>>(Promise.resolve())
@@ -467,16 +533,31 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
     setRefKind(app.source.refKind)
     setCreateNs(app.createNamespace ?? false)
   }, [app])
-  const dirty = (createNsNow = createNs, tok = token) => !saved || repo.trim() !== saved.repo || path.trim() !== (saved.path ?? '') || ref.trim() !== saved.ref || refKind !== saved.refKind || createNsNow !== (app?.createNamespace ?? false) || tok !== ''
-  const save = (createNsNow = createNs, tok = token) => {
+  // What is typed now, for a save that starts after a repository look-over
+  // finished (the blur's closure would be stale).
+  const latest = useRef({ repo, path, ref, refKind, token, createNs })
+  useEffect(() => {
+    latest.current = { repo, path, ref, refKind, token, createNs }
+  }, [repo, path, ref, refKind, token, createNs])
+  const dirty = (createNsNow: boolean, tok: string) => {
+    const l = latest.current
+    return !saved || l.repo.trim() !== saved.repo || l.path.trim() !== (saved.path ?? '') || l.ref.trim() !== saved.ref || l.refKind !== saved.refKind || createNsNow !== (app?.createNamespace ?? false) || tok !== ''
+  }
+  // pressed: Save or Enter, which reports a missing field; quiet: after a
+  // look-over, which saves only what is complete.
+  const save = (createNsNow = latest.current.createNs, tok = latest.current.token, pressed = false, quiet = false) => {
     if (!canChange || !dirty(createNsNow, tok)) return
-    if (!repo.trim() || !ref.trim()) {
-      setState('dirty')
+    const l = latest.current
+    if (!l.repo.trim() || !l.ref.trim()) {
+      if (quiet) return
+      // Reported, and what was typed is kept (round 2 review).
+      setState('error')
+      setError(pressed ? 'Not saved: needs a repository and a branch or tag.' : 'Not saved yet: needs a repository and a branch or tag.')
       return
     }
     setState('saving')
     setError('')
-    const input = { source: { repo: repo.trim(), path: path.trim(), ref: ref.trim(), refKind }, token: tok || undefined, createNamespace: createNsNow }
+    const input = { source: { repo: l.repo.trim(), path: l.path.trim(), ref: l.ref.trim(), refKind: l.refKind }, token: tok || undefined, createNamespace: createNsNow }
     // One save after another: two fields left in quick succession must not
     // race; and an answer marks the card clean only when nothing was typed
     // since it went out.
@@ -487,6 +568,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
         if (seq.current === mine) {
           setState('saved')
           setToken('')
+          writeDraft(key, null)
         }
         onResult(r, saved ? 'Source saved' : 'Source set')
       })
@@ -501,17 +583,113 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
     seq.current++
     setState('dirty')
   }
+  // Every keystroke goes to the draft, so leaving the page loses nothing.
+  useEffect(() => {
+    if (state === 'saved' || state === 'saving') return
+    writeDraft(key, { repo, path, ref, refKind })
+  }, [key, state, repo, path, ref, refKind])
+  const lookOver = (): Promise<void> => {
+    const url = latest.current.repo.trim()
+    if (!canChange || !url || (look?.repo === url && look.state !== 'error') || (saved && url === saved.repo && latest.current.path.trim())) return Promise.resolve()
+    setLook({ repo: url, state: 'busy', text: 'Looking over the repository…' })
+    return inspectRepo(clusterId, url, latest.current.ref.trim(), latest.current.refKind, latest.current.token || undefined)
+      .then((d) => {
+        const chart = d.charts[0]
+        const filled: string[] = []
+        // Straight into latest too: the save chained after this look-over
+        // runs before React renders the new state (round 2 review: the
+        // path showed and went away).
+        if (!latest.current.path.trim() && chart) {
+          setPath(chart.path)
+          latest.current = { ...latest.current, path: chart.path }
+          filled.push(`chart path ${chart.path || '/'}`)
+        }
+        if (!latest.current.ref.trim()) {
+          setRef(d.ref)
+          setRefKind(d.refKind)
+          latest.current = { ...latest.current, ref: d.ref, refKind: d.refKind }
+          filled.push(`${d.refKind} ${d.ref}`)
+        }
+        if (filled.length) edited()
+        setLook({ repo: url, state: 'done', text: d.charts.length === 0 ? `No Chart.yaml within four directories of the root at ${d.ref}.` : filled.length ? `Filled from the repository: ${filled.join(', ')}.` : `${d.charts.length === 1 ? 'Chart' : `${d.charts.length} charts; chart`} ${chart!.path || '/'} (${chart!.name} ${chart!.version}) at ${d.ref}.` })
+      })
+      .catch((e: unknown) => setLook({ repo: url, state: 'error', text: e instanceof Error ? e.message : String(e) }))
+  }
   const field = (label: string, value: string, set: (v: string) => void, placeholder: string, testId: string, type = 'text', span = 1) => (
     <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 0, gridColumn: span > 1 ? `span ${span}` : undefined }}>
       {label}
       <span className="rk-field">
-        <input className="rk-mono" type={type} autoComplete="off" value={value} readOnly={!canChange} onChange={(e) => (set(e.target.value), edited())} onBlur={() => save()} placeholder={placeholder} data-testid={testId} />
+        <input
+          className="rk-mono"
+          type={type}
+          autoComplete="off"
+          value={value}
+          readOnly={!canChange}
+          onChange={(e) => (set(e.target.value), edited())}
+          onBlur={() => (testId === 'app-src-repo' ? void lookOver().then(() => save(undefined, undefined, false, true)) : save())}
+          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), testId === 'app-src-repo' ? void lookOver().then(() => save(undefined, undefined, true)) : save(undefined, undefined, true))}
+          placeholder={placeholder}
+          data-testid={testId}
+        />
       </span>
     </label>
   )
-  const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? (repo.trim() && ref.trim() ? 'Saves when you leave the field' : 'Needs a repository and a branch or tag') : state === 'error' ? error : saved ? 'Saved' : 'Not set'
+  // The deploy options (R2-08, R2-09, R2-11) save on their own, at once.
+  const meta = useLiveMeta()
+  const fleets = (meta.settings?.fleets?.[clusterId] ?? []).filter((f) => f.deploy)
+  const [inspect, setInspect] = useState<{ key: string; data?: RepoInspection; error?: string } | null>(null)
+  const inspectKey = app ? `${app.source.repo}|${app.source.path ?? ''}|${app.source.ref}` : ''
+  useEffect(() => {
+    if (!inspectKey) return
+    let live = true
+    fetchAppInspect(clusterId, row.namespace, row.name)
+      .then((d) => live && setInspect({ key: inspectKey, data: d }))
+      .catch((e: unknown) => live && setInspect({ key: inspectKey, error: e instanceof Error ? e.message : String(e) }))
+    return () => {
+      live = false
+    }
+  }, [inspectKey, clusterId, row.namespace, row.name])
+  const chartFiles = inspect?.key === inspectKey && inspect.data ? (inspect.data.charts.find((c) => c.path === (app?.source.path ?? ''))?.valuesFiles ?? inspect.data.charts[0]?.valuesFiles ?? []) : []
+  const valuesFiles = app?.valuesFile && !chartFiles.includes(app.valuesFile) ? [app.valuesFile, ...chartFiles] : chartFiles
+  const [optState, setOptState] = useState<'' | 'saving' | 'saved' | 'error'>('')
+  const [optError, setOptError] = useState('')
+  // The choice shows at once; the record's own values take over when it
+  // comes back saved (or changed elsewhere).
+  const optKey = app ? `${app.valuesFile ?? ''}|${app.ignoreDefaults ? 1 : 0}|${app.fleet ?? ''}` : ''
+  const [local, setLocal] = useState<{ key: string; valuesFile: string; ignoreDefaults: boolean; fleet: string } | null>(null)
+  const opts = local && local.key === optKey ? local : { key: optKey, valuesFile: app?.valuesFile ?? '', ignoreDefaults: !!app?.ignoreDefaults, fleet: app?.fleet ?? '' }
+  const saveOption = (input: AppInput) => {
+    setLocal({ ...opts, ...(input.valuesFile !== undefined ? { valuesFile: input.valuesFile } : {}), ...(input.ignoreDefaults !== undefined ? { ignoreDefaults: input.ignoreDefaults } : {}), ...(input.fleet !== undefined ? { fleet: input.fleet } : {}) })
+    setOptState('saving')
+    queue.current = queue.current
+      .then(() => updateApp(clusterId, row.namespace, row.name, input))
+      .then((r) => {
+        setOptState('saved')
+        onResult(r, 'Deploy options saved')
+      })
+      .catch((e: unknown) => {
+        setLocal(null)
+        setOptState('error')
+        setOptError(e instanceof Error ? e.message : String(e))
+      })
+  }
+  const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? (repo.trim() && ref.trim() ? 'Not saved yet: press Save, or leave the field' : 'Not saved yet: needs a repository and a branch or tag') : state === 'error' ? error : saved ? 'Saved' : 'Not set'
   return (
-    <Card title="Source" aside={<span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-source-state">{status}</span>}>
+    <Card
+      title="Source"
+      aside={
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-source-state">
+            {status}
+          </span>
+          {canChange && (
+            <button className="rk-btn" data-on={state === 'dirty' && repo.trim() && ref.trim() ? 'true' : undefined} onClick={() => save(undefined, undefined, true)} disabled={state === 'saving' || (state !== 'dirty' && state !== 'error')} style={{ height: 26 }} data-testid="app-src-save">
+              {saved ? 'Save' : 'Set source'}
+            </button>
+          )}
+        </span>
+      }
+    >
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', gap: '8px 12px' }}>
         {field('Repository (https:// git URL)', repo, setRepo, 'https://github.com/org/app', 'app-src-repo', 'text', 4)}
         {field('Chart path (empty for the root)', path, setPath, 'charts/app', 'app-src-path', 'text', 2)}
@@ -531,26 +709,34 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             </span>
           </span>
         </label>
-        {field(app?.hasToken ? 'Token (saved; paste a new one to replace it)' : 'Token (private repository only)', token, setToken, app?.hasToken ? '••••••••' : 'optional', 'app-src-token', 'password', 3)}
+        {field(app?.hasToken ? 'GitHub token (one is saved; paste a new one to replace it)' : 'GitHub token (for a private repository; kept in the console, never shown again)', token, setToken, app?.hasToken ? '••••••••' : 'ghp_… or github_pat_…, optional', 'app-src-token', 'password', 3)}
       </div>
+      {look && (
+        <p style={{ margin: 0, fontSize: 12, color: look.state === 'error' ? 'var(--err)' : 'var(--fg2)' }} data-testid="app-src-inspect" data-state={look.state}>
+          {look.text}
+        </p>
+      )}
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 18px', fontSize: 12, color: 'var(--fg3)' }}>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--fg)' }}>
-          <input
-            type="checkbox"
-            checked={createNs}
-            disabled={!canChange}
-            onChange={(e) => {
-              setCreateNs(e.target.checked)
-              save(e.target.checked)
-            }}
-            data-testid="app-src-create-ns"
-          />{' '}
-          Create the namespace {row.namespace} at install if it does not exist
-        </label>
+        {row.orphan && (
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--fg)' }}>
+            <input
+              type="checkbox"
+              checked={createNs}
+              disabled={!canChange}
+              onChange={(e) => {
+                setCreateNs(e.target.checked)
+                save(e.target.checked)
+              }}
+              data-testid="app-src-create-ns"
+            />{' '}
+            Create the namespace {row.namespace} at install if it does not exist
+          </label>
+        )}
         {app && (
           <>
             <span>
               Commit <span className="rk-mono" style={{ color: 'var(--fg)' }}>{commit ? `${commit}${app.commitSubject ? ` — ${app.commitSubject}` : ''}` : 'not deployed from here yet'}</span>
+              {app.matchedRevision ? ` · renders what revision ${app.matchedRevision} runs` : app.sourceDiff ? ` · ${app.sourceDiff}` : ''}
             </span>
             {app.chartVersion && (
               <span>
@@ -562,9 +748,50 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             </span>
           </>
         )}
-        {state === 'dirty' && repo.trim() && ref.trim() ? <span>Leave the field to save.</span> : null}
         {!saved && <span>Once set, the release can be upgraded from here and checked for drift.</span>}
       </div>
+      {app && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '8px 16px', paddingTop: 8, borderTop: '1px dashed var(--line)' }} data-testid="app-deploy-options">
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 220 }}>
+            Second values file (from the chart’s directory at {app.source.ref})
+            <span className="rk-field">
+              <select className="rk-mono" value={opts.valuesFile} disabled={!canChange} onChange={(e) => saveOption({ valuesFile: e.target.value })} data-testid="app-src-values-file">
+                <option value="">none: values.yaml only</option>
+                {valuesFiles.map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
+            </span>
+          </label>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--fg)', paddingBottom: 6 }}>
+            <input type="checkbox" checked={opts.ignoreDefaults} disabled={!canChange} onChange={(e) => saveOption({ ignoreDefaults: e.target.checked })} data-testid="app-src-ignore-defaults" /> Ignore the chart’s values.yaml
+          </label>
+          {fleets.length > 0 && (
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 200 }}>
+              Deploy to the fleet
+              <span className="rk-field">
+                <select value={opts.fleet} disabled={!canChange} onChange={(e) => saveOption({ fleet: e.target.value })} data-testid="app-src-fleet">
+                  <option value="">any node</option>
+                  {fleets.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name} · {f.deploy}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </label>
+          )}
+          <span style={{ fontSize: 12, color: optState === 'error' ? 'var(--err)' : 'var(--fg3)', paddingBottom: 6, flex: '1 1 260px' }} role={optState === 'error' ? 'alert' : undefined} data-testid="app-deploy-options-state">
+            {optState === 'saving' ? 'Saving…' : optState === 'error' ? optError : optState === 'saved' ? 'Saved. ' : ''}
+            Applied lowest first: {opts.ignoreDefaults ? <s>the chart’s values.yaml</s> : 'the chart’s values.yaml'}
+            {opts.valuesFile ? `, ${opts.valuesFile}` : ''}, the Values tab, then its parameters
+            {app.fleetLabel ? `; the fleet adds nodeSelector ${app.fleetLabel}` : ''}.
+            {inspect?.key === inspectKey && inspect.error ? ` The repository could not be read for its files: ${inspect.error}` : ''}
+          </span>
+        </div>
+      )}
     </Card>
   )
 }

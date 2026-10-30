@@ -67,8 +67,9 @@ test('a release opens beside the table: overview, history with a diff of two rev
   await panel.locator('[data-subtab="history"]').click()
   await expect(panel.locator('[data-revision]')).toHaveCount(multi.revisions)
   if (multi.revisions > 1) {
-    // A revision's diff icon opens the diff against the revision before it, in a dialog large enough to read.
-    await panel.getByTestId(`revision-diff-${multi.revisions}`).click()
+    // A revision's wrench: Diff… opens the diff against the revision before it, in a dialog large enough to read.
+    await panel.getByTestId(`revision-tools-${multi.revisions}`).click()
+    await page.getByTestId('revision-tool-diff').click()
     const dlg = page.getByTestId('diff-dialog')
     await expect(dlg.getByTestId('diff-from')).toHaveValue(String(multi.revisions - 1))
     await expect(dlg.getByTestId('diff-to')).toHaveValue(String(multi.revisions))
@@ -77,6 +78,17 @@ test('a release opens beside the table: overview, history with a diff of two rev
     expect(box.height).toBeGreaterThan(500)
     await page.keyboard.press('Escape')
     await expect(dlg).toHaveCount(0)
+    // The current revision's menu cannot roll back; an older one's hands helm rollback to Watson as a card (M-03).
+    await panel.getByTestId(`revision-tools-${multi.revisions}`).click()
+    await expect(page.getByTestId('revision-tool-rollback')).toHaveAttribute('aria-disabled', 'true')
+    await expect(page.getByTestId('revision-tool-rollback')).toContainText('runs now')
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('revision-menu')).toHaveCount(0)
+    await panel.getByTestId(`revision-tools-${multi.revisions - 1}`).click()
+    await page.getByTestId('revision-tool-rollback').click()
+    const card = page.getByTestId('watson').getByTestId('watson-card').last()
+    await expect(card).toHaveAttribute('data-command', `helm rollback ${multi.name} ${multi.revisions - 1} -n ${multi.namespace}`, { timeout: 15_000 })
+    await card.getByTestId('watson-discard').click()
   }
   const images = await request.get(`/api/v1/apps/${multi.namespace}/${multi.name}/images`)
   expect(images.status()).toBe(200)
@@ -100,19 +112,37 @@ test('a source is set in place, refused when it is not https, and forgotten; a V
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   const panel = page.getByTestId('app-panel')
   await expect(panel.getByTestId('app-source-state')).toHaveText('Not set')
+  // Save with a field missing reports it and keeps what was typed, across a reload (round 2 review).
   await panel.getByTestId('app-src-repo').fill('http://github.com/ucesys/221b')
+  await panel.getByTestId('app-src-save').click()
+  await expect(panel.getByTestId('app-source-state')).toContainText('needs a repository and a branch or tag')
+  await page.reload()
+  await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  await expect(panel.getByTestId('app-src-repo')).toHaveValue('http://github.com/ucesys/221b')
+  await expect(panel.getByTestId('app-source-state')).toContainText('needs a repository and a branch or tag')
   await panel.getByTestId('app-src-ref').fill('main')
   await panel.getByTestId('app-src-ref').blur()
   await expect(panel.getByTestId('app-source-state')).toContainText('https://')
   await panel.getByTestId('app-src-repo').fill('github.com/ucesys/221b')
   await panel.getByTestId('app-src-path').fill('deploy/helm/221b')
-  await panel.getByTestId('app-src-path').blur()
+  // The Save button saves what is typed (R2-06); the wrench's Upgrade… follows. A deployed release has no create-namespace box.
+  await expect(panel.getByTestId('app-source-state')).toContainText('Not saved yet')
+  await expect(panel.getByTestId('app-src-create-ns')).toHaveCount(0)
+  await panel.getByTestId('app-src-save').click()
   await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 10_000 })
   await expect(panel.getByTestId('app-source-line')).toContainText('github.com/ucesys/221b/deploy/helm/221b @ main')
   try {
     const list = await request.get('/api/v1/apps')
-    const apps = (await list.json()) as { namespace: string; name: string; source: { repo: string; ref: string; refKind: string } }[]
+    const apps = (await list.json()) as { namespace: string; name: string; source: { repo: string; ref: string; refKind: string }; ignoreDefaults?: boolean }[]
     expect(apps.find((a) => a.name === r.name)?.source).toEqual({ repo: 'https://github.com/ucesys/221b', path: 'deploy/helm/221b', ref: 'main', refKind: 'branch' })
+    await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()
+    await expect(page.getByTestId('app-tool-upgrade')).not.toHaveAttribute('aria-disabled', 'true')
+    await page.keyboard.press('Escape')
+    // The deploy options save at once (R2-08, R2-09).
+    await expect(panel.getByTestId('app-deploy-options')).toContainText('Applied lowest first')
+    await panel.getByTestId('app-src-ignore-defaults').check()
+    await expect(panel.getByTestId('app-deploy-options-state')).toContainText('Saved', { timeout: 10_000 })
+    expect(((await (await request.get('/api/v1/apps')).json()) as typeof apps).find((a) => a.name === r.name)?.ignoreDefaults).toBe(true)
     // The values save by themselves, and show at once.
     await panel.locator('[data-subtab="values"]').click()
     await panel.getByTestId('app-values').fill('replicaCount: 2\n')
@@ -120,7 +150,7 @@ test('a source is set in place, refused when it is not https, and forgotten; a V
     await page.reload()
     await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
     await page.getByTestId('app-panel').locator('[data-subtab="values"]').click()
-    await expect(page.getByTestId('app-panel').getByTestId('app-values')).toHaveValue('replicaCount: 2\n')
+    await expect(page.getByTestId('app-panel').getByTestId('app-values')).toContainText('replicaCount: 2')
 
     const me = (await (await request.get('/api/v1/me')).json()) as { mode: string }
     if (me.mode !== 'none') {
@@ -158,7 +188,7 @@ test('every dialog and drawer closes with Cancel, its cross and Escape', async (
   await expect(dlg).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(dlg).toHaveCount(0)
-  // A release's panel: the Upgrade/Rollback dialog and the Uninstall confirmation, from the wrench.
+  // A release's panel: the Upgrade dialog and the Uninstall confirmation, from the wrench.
   await page.getByTestId('apps-table').locator(`[data-release="${r.key}"]`).click()
   const panel = page.getByTestId('app-panel')
   await panel.getByTestId('app-src-repo').fill('github.com/ucesys/221b')
@@ -166,10 +196,13 @@ test('every dialog and drawer closes with Cancel, its cross and Escape', async (
   await panel.getByTestId('app-src-ref').blur()
   await expect(panel.getByTestId('app-source-state')).toHaveText('Saved', { timeout: 10_000 })
   try {
+    // The release was not deployed from that source: behind it (M-05).
+    await expect(panel.getByTestId('app-behind')).toBeVisible({ timeout: 10_000 })
+    await expect(panel.getByTestId('app-behind-note')).toHaveCount(0)
     await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()
     await page.getByTestId('app-tool-upgrade').click()
     await expect(dlg).toHaveAttribute('data-mode', 'upgrade')
-    await expect(dlg).toContainText('Upgrade/Rollback from the source')
+    await expect(dlg).toContainText('Upgrade from the source')
     await dlg.getByRole('button', { name: 'Cancel' }).click()
     await expect(dlg).toHaveCount(0)
     await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()
@@ -224,6 +257,10 @@ test('installs a chart from a public git repository through Watson, checks its d
   await dlg.getByTestId('app-namespace').fill(ns)
   await dlg.getByTestId('app-name').fill(name)
   await dlg.getByTestId('app-repo').fill('https://github.com/helm/examples')
+  // Leaving the field looks the repository over: the chart's path and the branch fill themselves (M-07).
+  await dlg.getByTestId('app-repo').blur()
+  await expect(dlg.getByTestId('app-inspect')).toHaveAttribute('data-state', 'done', { timeout: 60_000 })
+  await expect(dlg.getByTestId('app-path')).toHaveValue('charts/hello-world')
   await dlg.getByTestId('app-path').fill('charts/hello-world')
   await dlg.getByTestId('app-load-refs').click()
   await expect(dlg.getByTestId('app-ref')).toBeVisible({ timeout: 60_000 })

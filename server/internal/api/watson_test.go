@@ -32,6 +32,9 @@ func watsonSetup(t *testing.T, who string, env, mode string) (*httptest.Server, 
 		svc = watson.New(watson.Options{Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), CheckEvery: 50 * time.Millisecond,
 			TwoPerson: func(c watson.Cluster) bool {
 				return c.Env == clusters.EnvProduction && o.Settings.Current().WatsonOrDefault().TwoPerson
+			},
+			ApproveAllMax: func(c watson.Cluster) time.Duration {
+				return time.Duration(o.Settings.Current().WatsonOrDefault().ApproveAllMinutes) * time.Minute
 			}})
 		o.Watson = svc
 	})

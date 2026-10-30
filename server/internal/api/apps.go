@@ -25,6 +25,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/views"
@@ -50,12 +51,14 @@ func (s *Server) appsRoutes() {
 		s.handle("GET "+base+"apps", "apps", s.getApps)
 		s.handle("POST "+base+"apps", "app-create", s.postApp)
 		s.handle("POST "+base+"apps/refs", "app-repo-refs", s.postAppRefs)
+		s.handle("POST "+base+"apps/inspect", "app-repo-inspect", s.postAppInspect)
 		s.handle("GET "+base+"apps/{namespace}/{name}", "app", s.getApp)
 		s.handle("PUT "+base+"apps/{namespace}/{name}", "app-update", s.putApp)
 		s.handle("DELETE "+base+"apps/{namespace}/{name}", "app-delete", s.deleteApp)
 		s.handle("POST "+base+"apps/{namespace}/{name}/upgrade", "app-upgrade", s.postAppUpgrade)
 		s.handle("GET "+base+"apps/{namespace}/{name}/drift", "app-drift", s.getAppDrift)
 		s.handle("GET "+base+"apps/{namespace}/{name}/refs", "app-refs", s.getAppRefs)
+		s.handle("GET "+base+"apps/{namespace}/{name}/inspect", "app-inspect", s.getAppInspect)
 		s.handle("GET "+base+"apps/{namespace}/{name}/revisions", "app-revisions", s.getAppRevisions)
 		s.handle("GET "+base+"apps/{namespace}/{name}/diff", "app-diff", s.getAppDiff)
 		s.handle("GET "+base+"apps/{namespace}/{name}/images", "app-images", s.getAppImages)
@@ -80,10 +83,13 @@ func (s *Server) driftKey(cluster, ns, name string, p kube.Person) string {
 	return cluster + "\x00" + ns + "/" + name + "\x00" + p.Key()
 }
 
-func (s *Server) cachedDrift(key string) *apps.Drift {
+// cachedDrift is the check kept under the key, unless it is older than
+// driftFor or made before since: a check from before the record's last
+// deploy says nothing about what runs now (Phase 10.1, M-01).
+func (s *Server) cachedDrift(key string, since time.Time) *apps.Drift {
 	if v, ok := s.drifts.Load(key); ok {
 		e := v.(driftEntry)
-		if s.opts.Now().Sub(e.when) < driftFor {
+		if s.opts.Now().Sub(e.when) < driftFor && (since.IsZero() || e.when.After(since)) {
 			d := e.d
 			return &d
 		}
@@ -146,7 +152,7 @@ func (s *Server) getApps(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		v := appView{Record: rec}
-		if d := s.cachedDrift(s.driftKey(c.ID, rec.Namespace, rec.Name, who.Person)); d != nil {
+		if d := s.cachedDrift(s.driftKey(c.ID, rec.Namespace, rec.Name, who.Person), rec.Updated); d != nil {
 			v.Drift, v.DriftState = d, d.State()
 		}
 		out = append(out, v)
@@ -175,7 +181,7 @@ func (s *Server) getApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := appView{Record: rec}
-	if d := s.cachedDrift(s.driftKey(c.ID, ns, name, who.Person)); d != nil {
+	if d := s.cachedDrift(s.driftKey(c.ID, ns, name, who.Person), rec.Updated); d != nil {
 		v.Drift, v.DriftState = d, d.State()
 	}
 	b, _ := json.Marshal(v)
@@ -194,6 +200,12 @@ type appInput struct {
 	Values          *string  `json:"values,omitempty"`
 	Params          []string `json:"params,omitempty"`
 	CreateNamespace *bool    `json:"createNamespace,omitempty"`
+	// ValuesFile is a second values file in the chart's directory, "" for
+	// none (R2-08); IgnoreDefaults leaves the chart's values.yaml out
+	// (R2-09); Fleet is the fleet to deploy to, by id, "" for none (R2-11).
+	ValuesFile     *string `json:"valuesFile,omitempty"`
+	IgnoreDefaults *bool   `json:"ignoreDefaults,omitempty"`
+	Fleet          *string `json:"fleet,omitempty"`
 	// Upgrade asks for the change to be deployed as well as saved.
 	Upgrade bool `json:"upgrade,omitempty"`
 	// Install adds --install to an upgrade.
@@ -238,7 +250,60 @@ func (s *Server) readApp(w http.ResponseWriter, r *http.Request) (appInput, bool
 			return in, false
 		}
 	}
+	if in.ValuesFile != nil {
+		f := strings.TrimSpace(*in.ValuesFile)
+		if f != "" && (strings.HasPrefix(f, "/") || strings.Contains(f, "..") || !(strings.HasSuffix(f, ".yaml") || strings.HasSuffix(f, ".yml"))) {
+			jsonError(w, http.StatusBadRequest, "the values file is a YAML file in the chart's directory, such as values-prod.yaml")
+			return in, false
+		}
+		in.ValuesFile = &f
+	}
 	return in, true
+}
+
+// applyAppInput copies what a request sets onto the record; the fleet
+// is looked up in the cluster's fleets for its deploy label (R2-11).
+func (s *Server) applyAppInput(rec *apps.Record, in appInput, cluster string) error {
+	if in.Values != nil {
+		rec.Values = *in.Values
+	}
+	if in.Params != nil {
+		rec.Params = in.Params
+	}
+	if in.CreateNamespace != nil {
+		rec.CreateNamespace = *in.CreateNamespace
+	}
+	if in.ValuesFile != nil {
+		rec.ValuesFile = *in.ValuesFile
+	}
+	if in.IgnoreDefaults != nil {
+		rec.IgnoreDefaults = *in.IgnoreDefaults
+	}
+	if in.Fleet != nil {
+		rec.Fleet, rec.FleetLabel = "", ""
+		if id := strings.TrimSpace(*in.Fleet); id != "" {
+			var list []fleets.Fleet
+			if s.opts.Settings != nil {
+				list = s.opts.Settings.Current().Fleets[cluster]
+			}
+			i := slices.IndexFunc(list, func(f fleets.Fleet) bool { return f.ID == id })
+			if i < 0 {
+				return fmt.Errorf("the cluster has no fleet %q", id)
+			}
+			if list[i].Deploy == "" {
+				return fmt.Errorf("the fleet %s has no deploy label: give it one in its editor", list[i].Name)
+			}
+			rec.Fleet, rec.FleetLabel = id, list[i].Deploy
+		}
+	} else if rec.Fleet != "" && s.opts.Settings != nil {
+		// The label follows the fleet's editor.
+		for _, f := range s.opts.Settings.Current().Fleets[cluster] {
+			if f.ID == rec.Fleet && f.Deploy != "" {
+				rec.FleetLabel = f.Deploy
+			}
+		}
+	}
+	return nil
 }
 
 // appLine is the Watson command for an application's change: the source
@@ -304,12 +369,10 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	now := s.opts.Now().UTC()
-	rec := apps.Record{Cluster: c.ID, Namespace: in.Namespace, Name: in.Name, Source: *in.Source, Params: in.Params, Created: now, CreatedBy: who.User, Updated: now, UpdatedBy: who.User}
-	if in.Values != nil {
-		rec.Values = *in.Values
-	}
-	if in.CreateNamespace != nil {
-		rec.CreateNamespace = *in.CreateNamespace
+	rec := apps.Record{Cluster: c.ID, Namespace: in.Namespace, Name: in.Name, Source: *in.Source, Created: now, CreatedBy: who.User, Updated: now, UpdatedBy: who.User}
+	if err := s.applyAppInput(&rec, in, c.ID); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	var token *string
 	if in.Token != "" {
@@ -356,17 +419,24 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	sourceChanged := in.Source != nil && *in.Source != rec.Source
 	if in.Source != nil {
 		rec.Source = *in.Source
 	}
-	if in.Values != nil {
-		rec.Values = *in.Values
+	if err := s.applyAppInput(&rec, in, c.ID); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
 	}
-	if in.Params != nil {
-		rec.Params = in.Params
-	}
-	if in.CreateNamespace != nil {
-		rec.CreateNamespace = *in.CreateNamespace
+	if sourceChanged || (in.Source != nil && rec.Commit == "") {
+		// What runs may already be what the source renders: then the
+		// release is not behind it (round 2 review). A source saved again
+		// before any deploy is compared again.
+		rec.Commit, rec.CommitDate, rec.CommitSubject, rec.ChartVersion, rec.MatchedRevision, rec.SourceDiff = "", time.Time{}, "", "", 0, ""
+		tok := in.Token
+		if tok == "" && !in.ClearToken {
+			_, tok, _ = s.opts.Apps.Get(r.Context(), c.ID, ns, name)
+		}
+		s.matchSource(r.Context(), c, who, &rec, tok)
 	}
 	if in.Ref != "" {
 		src := rec.Source
@@ -396,6 +466,64 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.submitApp(w, r, c, who, appLine("upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...))
+}
+
+// matchSource renders the source at its ref as the person and compares
+// it with the deployed revision; the same, the record takes the commit
+// and the revision, so the release is not behind the source. Any
+// trouble leaves the record as it is: behind, until a deploy.
+func (s *Server) matchSource(ctx context.Context, c watson.Cluster, who watson.Who, rec *apps.Record, token string) {
+	if c.Config == nil || s.opts.Watson == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	pc, err := clientsAs(c.Config, who.Person)
+	if err != nil {
+		return
+	}
+	rel, err := s.revision(pc, rec.Namespace, rec.Name, "")
+	if err != nil {
+		// No release yet: nothing to compare with.
+		return
+	}
+	co, err := apps.Fetch(ctx, rec.Source, token)
+	if err != nil {
+		rec.SourceDiff = "the repository could not be read: " + err.Error()
+		return
+	}
+	ch, vals, err := apps.Compose(co, rec.Source, rec, nil)
+	if err != nil {
+		rec.SourceDiff = "the chart could not be read: " + err.Error()
+		return
+	}
+	manifest, err := s.opts.Watson.RenderUpgrade(ctx, c, who, rec.Namespace, rec.Name, ch, vals)
+	if err != nil {
+		version := ""
+		if s.opts.Clusters != nil {
+			if _, client, ok := s.opts.Clusters.Lookup(c.ID); ok && client != nil {
+				version = client.Info().Version
+			}
+		}
+		rendered, err := apps.Render(ctx, ch, vals, rec.Name, rec.Namespace, version)
+		if err != nil {
+			rec.SourceDiff = "the chart could not be rendered: " + err.Error()
+			return
+		}
+		manifest = rendered.Manifest
+	}
+	if d := apps.Compare(rel.Manifest, manifest, "deployed", "source"); !d.Same {
+		n := len(d.Changed) + len(d.Added) + len(d.Removed)
+		rec.SourceDiff = fmt.Sprintf("%d of its objects render differently at %s", n, short12(co.Commit))
+		if ch.Metadata != nil && ch.Metadata.Version != rel.Chart.Metadata.Version {
+			rec.SourceDiff += fmt.Sprintf(" (chart %s there, %s deployed)", ch.Metadata.Version, rel.Chart.Metadata.Version)
+		}
+		return
+	}
+	rec.Commit, rec.CommitDate, rec.CommitSubject, rec.MatchedRevision = co.Commit, co.CommitDate, co.CommitSubject, rel.Version
+	if ch.Metadata != nil {
+		rec.ChartVersion = ch.Metadata.Version
+	}
 }
 
 // installFlags are --install and, when the record asks for it,
@@ -506,6 +634,98 @@ func (s *Server) postAppRefs(w http.ResponseWriter, r *http.Request) {
 	}
 	refs.Heads = nil
 	b, _ := json.Marshal(refs)
+	writeJSON(w, r, b)
+}
+
+// postAppInspect fetches a repository at a ref (its default branch when
+// none is given) and says what charts it holds and what its README's
+// install example sets, for the new-application form to start from
+// (M-07). The token, when given, is used for the fetch and kept nowhere.
+// getAppInspect looks a kept application's repository over at its ref
+// (M-07), with the saved token: the charts and their values files, for
+// the Source card's choice of a second values file (R2-08).
+func (s *Server) getAppInspect(w http.ResponseWriter, r *http.Request) {
+	c, _, ok := s.appReady(w, r)
+	if !ok {
+		return
+	}
+	ns, name := r.PathValue("namespace"), r.PathValue("name")
+	if !appNames(w, ns, name) {
+		return
+	}
+	rec, token, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
+	if errors.Is(err, apps.ErrNotFound) {
+		jsonError(w, http.StatusNotFound, "the console keeps no source for this release")
+		return
+	}
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	co, err := apps.Fetch(r.Context(), rec.Source, token)
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	insp := apps.Inspect(co)
+	b, _ := json.Marshal(struct {
+		apps.Inspection
+		Ref     string `json:"ref"`
+		RefKind string `json:"refKind"`
+		Commit  string `json:"commit"`
+	}{insp, rec.Source.Ref, rec.Source.RefKind, co.Commit})
+	writeJSON(w, r, b)
+}
+
+func (s *Server) postAppInspect(w http.ResponseWriter, r *http.Request) {
+	if _, _, ok := s.appReady(w, r); !ok || !s.mayManageApps(w, r) {
+		return
+	}
+	var in struct {
+		Repo    string `json:"repo"`
+		Ref     string `json:"ref,omitempty"`
+		RefKind string `json:"refKind,omitempty"`
+		Token   string `json:"token,omitempty"`
+	}
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil {
+		jsonError(w, http.StatusBadRequest, "the request is not valid: "+err.Error())
+		return
+	}
+	src, err := apps.Normalize(apps.Source{Repo: in.Repo, Ref: "x"})
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	src.Ref, src.RefKind = strings.TrimSpace(in.Ref), in.RefKind
+	if src.Ref == "" {
+		refs, err := apps.ListRefs(r.Context(), src.Repo, in.Token)
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		if refs.Default == "" {
+			jsonError(w, http.StatusBadGateway, "the repository has no default branch; name a branch or a tag")
+			return
+		}
+		src.Ref, src.RefKind = refs.Default, apps.RefBranch
+	}
+	if src.RefKind == "" {
+		src.RefKind = apps.RefBranch
+	}
+	co, err := apps.Fetch(r.Context(), src, in.Token)
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	out := struct {
+		apps.Inspection
+		Ref     string `json:"ref"`
+		RefKind string `json:"refKind"`
+		Commit  string `json:"commit"`
+	}{apps.Inspect(co), src.Ref, src.RefKind, co.Commit}
+	b, _ := json.Marshal(out)
 	writeJSON(w, r, b)
 }
 
@@ -639,7 +859,11 @@ func (s *Server) getAppDrift(w http.ResponseWriter, r *http.Request) {
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
 	key := s.driftKey(c.ID, ns, name, who.Person)
 	if r.URL.Query().Get("refresh") != "1" {
-		if d := s.cachedDrift(key); d != nil {
+		var since time.Time
+		if rec, _, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name); err == nil {
+			since = rec.Updated
+		}
+		if d := s.cachedDrift(key, since); d != nil {
 			b, _ := json.Marshal(d)
 			writeJSON(w, r, b)
 			return
@@ -784,14 +1008,9 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		ch, err := apps.LoadChart(co, src.Path)
+		ch, vals, err := apps.Compose(co, src, &rec, nil)
 		if err != nil {
 			jsonError(w, http.StatusBadGateway, err.Error())
-			return
-		}
-		vals, err := apps.Values(rec.Values, rec.Params)
-		if err != nil {
-			jsonError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		toLabel = fmt.Sprintf("%s (%s)", src, short12(co.Commit))

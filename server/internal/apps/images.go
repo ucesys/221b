@@ -114,6 +114,12 @@ func splitDocs(manifest string) []string {
 		if t := strings.TrimSpace(doc); t == "" || strings.HasPrefix(t, "#") && !strings.Contains(t, "\n") {
 			continue
 		}
+		// The separator took the document's last line break; a block
+		// scalar that ends the document keeps its closing newline only
+		// with it (the round 2 review: three objects showed as drifted).
+		if !strings.HasSuffix(doc, "\n") {
+			doc += "\n"
+		}
 		out = append(out, doc)
 	}
 	return out

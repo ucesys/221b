@@ -362,7 +362,7 @@ function Shell() {
         <ClusterPage route={route} me={me} now={now} onEdit={(id) => setEditing(id)} />
       ) : (
         <div className="rk-main" style={{ display: 'flex', flexWrap: 'wrap', flex: '1 1 auto', alignItems: 'stretch' }}>
-          {tab === 'nodes' && <NodesTab {...common} />}
+          {tab === 'nodes' && <NodesTab {...common} me={me} />}
           {tab === 'fleets' && <FleetsTab {...common} me={me} />}
           {tab === 'alerts' && <AlertsTab {...common} />}
           {tab === 'pods' && <PodsTab {...common} />}

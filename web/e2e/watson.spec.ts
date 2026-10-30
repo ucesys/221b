@@ -494,7 +494,7 @@ test('a helm rollback asks on a card with what changes; the Helm tab has no butt
   const [ns, name] = inKind ? [play.namespace, play.release] : play.release.split('/')
   await open(page, `#/helm/${ns}/${name}`)
   await expect(page.getByTestId('app-panel').getByTestId('app-title')).toContainText(name!)
-  // Removed at the Phase 6 review: no Roll back and no Ask Sherlock on a release; the Phase 10 drawer's wrench offers Upgrade/Rollback… only as a Watson card.
+  // Removed at the Phase 6 review: no Roll back and no Ask Sherlock on a release; the Phase 10 drawer's wrench offers Upgrade… and History a rollback icon per revision, each a Watson card.
   await expect(page.getByTestId('release-rollback')).toHaveCount(0)
   await expect(page.getByTestId('ask-sherlock')).toHaveCount(0)
   await pane(page).getByTestId('watson-input').fill(`helm rollback ${name} 1 -n ${ns}`)
@@ -550,5 +550,47 @@ test('the panel meets WCAG 2.2 AA, with a card and output, in both themes (X-12)
     const r = await new AxeBuilder({ page }).include('[data-testid=watson]').withTags(TAGS).analyze()
     expect(r.violations.map((v) => `${v.id}: ${v.help} — ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(', ')}`), theme).toEqual([])
     await pane(page).getByTestId('watson-card').last().getByTestId('watson-discard').click()
+  }
+})
+
+test('a standing approval approves cards as they are ready, within the limit the settings set (R2-04)', async ({ page, request }) => {
+  const node = await spareWorker(page.request)
+  const config = async (approveAllMinutes: number) => expect((await request.put('/api/v1/watson/config', { data: { twoPerson: false, approveAllMinutes }, headers: SAME })).status()).toBe(200)
+  // Off by default: no control, and the API refuses.
+  await open(page, '#/nodes')
+  expect((await request.post('/api/v1/watson/approvals', { data: { minutes: 5 }, headers: SAME })).status()).toBe(409)
+  await config(30)
+  try {
+    await page.reload()
+    await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+    // The control sits on the card, next to Approve and run; picking a length approves this card and the next ones.
+    await pane(page).getByTestId('watson-input').fill(`kubectl cordon ${node}`)
+    await pane(page).getByTestId('watson-input').press('Enter')
+    const first = pane(page).getByTestId('watson-card').last()
+    const pick = first.getByTestId('watson-approve-all')
+    await expect(pick).toBeVisible()
+    await expect(pick.locator('option')).toHaveCount(4) // the empty one, 5, 15 and 30 minutes
+    await pick.selectOption('5')
+    await expect(pane(page).getByTestId('watson-standing-header')).toContainText('approving all until')
+    const ran = lastRan(page)
+    await expect(ran).toHaveAttribute('data-status', 'done', { timeout: 30_000 })
+    await expect(ran.getByTestId('watson-output')).toHaveText(`node/${node} cordoned`)
+    await expect(ran.getByTestId('watson-status')).toContainText('approved by')
+    await expect
+      .poll(async () => (await cluster.auditLog()).filter((r) => r.action === 'watson.approveAll' || (r.action === 'watson.approve' && JSON.stringify(r).includes(`kubectl cordon ${node}`))).length, { timeout: 15_000 })
+      .toBeGreaterThanOrEqual(2)
+    // Stop ends it: the next card waits, with the control back on it.
+    await pane(page).getByTestId('watson-standing-end-header').click()
+    await expect(pane(page).getByTestId('watson-standing-header')).toHaveCount(0)
+    await pane(page).getByTestId('watson-input').fill(`kubectl uncordon ${node}`)
+    await pane(page).getByTestId('watson-input').press('Enter')
+    const card = pane(page).getByTestId('watson-card').last()
+    await expect(card.getByTestId('watson-approve')).toBeEnabled({ timeout: 30_000 })
+    await expect(card.getByTestId('watson-approve-all')).toBeVisible()
+    await card.getByTestId('watson-approve').click()
+    await expect(lastRan(page)).toContainText(`node/${node} uncordoned`, { timeout: 30_000 })
+  } finally {
+    await config(0)
+    await cluster.cordon(node, false)
   }
 })

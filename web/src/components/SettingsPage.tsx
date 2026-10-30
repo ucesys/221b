@@ -94,7 +94,10 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
   const [bannersDraft, setBannersDraft] = useState<boolean | undefined>(undefined)
   const currentBanners = settings?.alertBanners ?? true
   const pickedBanners = bannersDraft ?? currentBanners
-  const changed = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined || bannersDraft !== undefined
+  const [fleetsDraft, setFleetsDraft] = useState<boolean | undefined>(undefined)
+  const currentFleets = settings?.fleetsPage ?? true
+  const pickedFleets = fleetsDraft ?? currentFleets
+  const changed = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined || bannersDraft !== undefined || fleetsDraft !== undefined
 
   const save = async () => {
     if (picked === undefined) return
@@ -102,9 +105,10 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
     setError('')
     setSaved('')
     try {
-      await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace, alertBanners: pickedBanners })
+      await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace, alertBanners: pickedBanners, fleetsPage: pickedFleets })
       setDraft(undefined)
       setBannersDraft(undefined)
+      setFleetsDraft(undefined)
       setFormatDraft(undefined)
       setGraceDraft(undefined)
       setSaved('Saved.')
@@ -153,7 +157,8 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
       <TimeFormatSection picked={pickedFormat} current={currentFormat} disabled={!settings || busy} onPick={(f) => setFormatDraft(f.date === currentFormat.date && f.clock === currentFormat.clock ? undefined : f)} />
       <GraceSection picked={pickedGrace} current={currentGrace} disabled={!settings || busy} onPick={(g) => setGraceDraft(g === currentGrace ? undefined : g)} />
       <BannersSection picked={pickedBanners} disabled={!settings || busy} onPick={(b) => setBannersDraft(b === currentBanners ? undefined : b)} />
-      <SaveBar changed={changed} busy={busy} onSave={() => void save()} onUndo={() => { setDraft(undefined); setFormatDraft(undefined); setGraceDraft(undefined); setBannersDraft(undefined) }} error={error} saved={saved} testId="settings-save" />
+      <FleetsPageSection picked={pickedFleets} disabled={!settings || busy} onPick={(b) => setFleetsDraft(b === currentFleets ? undefined : b)} />
+      <SaveBar changed={changed} busy={busy} onSave={() => void save()} onUndo={() => { setDraft(undefined); setFormatDraft(undefined); setGraceDraft(undefined); setBannersDraft(undefined); setFleetsDraft(undefined) }} error={error} saved={saved} testId="settings-save" />
     </>
   )
 }
@@ -173,6 +178,26 @@ function BannersSection({ picked, disabled, onPick }: { picked: boolean; disable
       </div>
       <p className="rk-fhint" style={{ margin: 0 }}>
         For everyone: the banners at the top of every tab that list what the Alerts tab has. Hidden, the Alerts tab’s name still turns red or amber. Banners about the connection itself always show.
+      </p>
+    </section>
+  )
+}
+
+/** Whether the Fleets tab shows; fleets are made and kept from the Nodes tab either way (R2-03). */
+function FleetsPageSection({ picked, disabled, onPick }: { picked: boolean; disabled: boolean; onPick: (b: boolean) => void }) {
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Fleets page">
+      <h3 className="rk-h">Fleets page</h3>
+      <div className="rk-seg" role="group" aria-label="The Fleets tab" style={{ alignSelf: 'flex-start' }} data-testid="settings-fleets-page">
+        <button aria-pressed={picked} disabled={disabled} onClick={() => onPick(true)}>
+          Show
+        </button>
+        <button aria-pressed={!picked} disabled={disabled} onClick={() => onPick(false)}>
+          Hide
+        </button>
+      </div>
+      <p className="rk-fhint" style={{ margin: 0 }}>
+        For everyone: the Fleets tab, with every node against every label and taint. Fleets are made, changed and deleted from the Nodes tab’s fleet list either way, and filter the nodes there.
       </p>
     </section>
   )

@@ -171,6 +171,16 @@ export function DiffIcon() {
   )
 }
 
+/** A counter-clockwise arrow: roll back to a revision (Phase 10.1). */
+export function RollbackIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3.2 8a4.8 4.8 0 1 0 1.4-3.4" />
+      <path d="M3 2.6v3.2h3.2" />
+    </svg>
+  )
+}
+
 export function CopyIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

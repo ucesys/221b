@@ -27,7 +27,8 @@ test('a node cordoned with kubectl shows as cordoned within 5 seconds', async ({
   try {
     await expect(status(page, node)).toHaveText('Cordoned', { timeout: 5_000 })
     test.info().annotations.push({ type: 'cordon shown after', description: `${Date.now() - started} ms` })
-    await expect(row(page, node)).toContainText('1 warning')
+    // The problems are in the row's label (the Problems column is gone, M-02).
+    await expect(row(page, node)).toHaveAttribute('aria-label', /1 warning/)
   } finally {
     await cluster.cordon(node, false)
   }
@@ -56,7 +57,7 @@ test('a node that stops reporting and a crash-looping pod each show as a problem
       // for the console to show it.
       await expect.poll(() => podCrashing(crash.pod), { timeout: 120_000, intervals: [1000] }).toBe(true)
     }
-    await expect(row(page, crashing)).toContainText(/1 error/, { timeout: 10_000 })
+    await expect(row(page, crashing)).toHaveAttribute('aria-label', /1 error/, { timeout: 10_000 })
 
     await row(page, quiet).click()
     const panel = page.getByTestId('node-panel')

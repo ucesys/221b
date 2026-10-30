@@ -135,6 +135,25 @@ type Record struct {
 	Params []string `json:"params,omitempty"`
 	// CreateNamespace makes the namespace at install when it is missing.
 	CreateNamespace bool `json:"createNamespace,omitempty"`
+	// ValuesFile is a second values file in the chart's directory
+	// (values-prod.yaml), read at the ref and applied over the chart's
+	// values.yaml, under Values and Params (R2-08). "" is none.
+	ValuesFile string `json:"valuesFile,omitempty"`
+	// IgnoreDefaults leaves the chart's own values.yaml out (R2-09).
+	IgnoreDefaults bool `json:"ignoreDefaults,omitempty"`
+	// Fleet is the fleet the application is deployed to, by id, and
+	// FleetLabel the fleet's deploy label when it was saved: the pods'
+	// nodeSelector (R2-11).
+	Fleet      string `json:"fleet,omitempty"`
+	FleetLabel string `json:"fleetLabel,omitempty"`
+	// MatchedRevision is the deployed revision the source was found to
+	// render exactly when it was set (round 2 review): the release is not
+	// behind the source while that revision runs.
+	MatchedRevision int `json:"matchedRevision,omitempty"`
+	// SourceDiff says how the source rendered differently from what runs
+	// when it was set ("23 objects at 767275b73ce4"), or why it could
+	// not be compared; "" when it matched or was not compared.
+	SourceDiff string `json:"sourceDiff,omitempty"`
 	// HasToken says a credential for the repository is saved with the
 	// record; the token itself never leaves the server.
 	HasToken  bool      `json:"hasToken,omitempty"`

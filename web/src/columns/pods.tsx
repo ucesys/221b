@@ -25,7 +25,7 @@ export const POD_COLUMNS: ColumnDef<PodView>[] = [
     sortValue: (r) => r.name,
     // The Tools button beside the name (TB-01).
     cell: (r) => (
-      <NameWithTools target={{ kind: 'pod', name: r.name, namespace: r.namespace }}>
+      <NameWithTools target={{ kind: 'pod', name: r.name, namespace: r.namespace, problem: r.tone === 'err' || r.tone === 'warn' ? r.status : undefined }}>
         <NameCell name={r.name} what="pod name" />
       </NameWithTools>
     ),

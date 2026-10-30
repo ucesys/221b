@@ -10,6 +10,7 @@ import { bytes, provisionerName } from '../lib/volumes'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Drawer } from './Drawer'
 import { useSherlockApi } from './Sherlock'
+import { ToolsButton } from './toolbox/ToolsMenu'
 import { useWatsonApi } from './Watson'
 import { YamlView } from './YamlView'
 
@@ -402,8 +403,11 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
       </div>
     ) : undefined
 
+  // The wrench: Troubleshoot… where the claim or the volume has a problem (M-04).
+  const problem = p.tone === 'err' || p.tone === 'warn' ? (p.reason?.text ?? p.phase) : undefined
+  const tools = <ToolsButton target={isClaim ? { kind: 'claim', name: target.name, namespace: target.namespace ?? '', problem } : { kind: 'volume', name: target.name, problem }} />
   return (
-    <Drawer label={label} kicker={kicker} title={isClaim ? p.claim! : p.volume!} facts={facts} tabs={tabs} tab={tab} onTab={setTab} onClose={onClose} footer={footer} testId="storage-panel">
+    <Drawer label={label} kicker={kicker} title={isClaim ? p.claim! : p.volume!} facts={facts} tabs={tabs} tab={tab} onTab={setTab} onClose={onClose} footer={footer} tools={tools} testId="storage-panel">
       {tab === 'overview' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <p className="rk-st-intro" data-testid="storage-intro">
