@@ -72,7 +72,8 @@ func New(o Options) *Elector {
 // Single says whether there is no election: one replica that always leads.
 func (e *Elector) Single() bool { return e.single }
 
-// IsLeader says whether this replica runs Sherlock and Watson now.
+// IsLeader says whether this replica reads the clusters and runs Sherlock
+// and Watson now (ADR-60, ADR-70).
 func (e *Elector) IsLeader() bool { return e.leads.Load() }
 
 // LeaderAddr is the host:port of the leader's HTTP server, or "" when no
@@ -125,7 +126,7 @@ func (e *Elector) Run(ctx context.Context) error {
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: func(context.Context) {
 				e.leads.Store(true)
-				e.o.Logger.Info("leading: Sherlock and Watson run here", "lease", e.o.Name)
+				e.o.Logger.Info("leading: this replica reads the clusters and runs Sherlock and Watson", "lease", e.o.Name)
 				if e.o.OnStartedLeading != nil {
 					e.o.OnStartedLeading()
 				}
