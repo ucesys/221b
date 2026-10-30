@@ -42,6 +42,9 @@ import (
 const (
 	ActionAppSave   = "app.save"
 	ActionAppForget = "app.forget"
+	// ActionAppCommand is a command of an application saved or deleted
+	// (asked October 30, 2026); a run is the Watson card's record.
+	ActionAppCommand = "app.command"
 	// driftFor is how long a drift check is kept before the page asks again.
 	driftFor = 2 * time.Minute
 )
@@ -62,6 +65,9 @@ func (s *Server) appsRoutes() {
 		s.handle("GET "+base+"apps/{namespace}/{name}/revisions", "app-revisions", s.getAppRevisions)
 		s.handle("GET "+base+"apps/{namespace}/{name}/diff", "app-diff", s.getAppDiff)
 		s.handle("GET "+base+"apps/{namespace}/{name}/images", "app-images", s.getAppImages)
+		s.handle("PUT "+base+"apps/{namespace}/{name}/commands/{command}", "app-command-save", s.putAppCommand)
+		s.handle("DELETE "+base+"apps/{namespace}/{name}/commands/{command}", "app-command-delete", s.deleteAppCommand)
+		s.handle("POST "+base+"apps/{namespace}/{name}/commands/{command}/run", "app-command-run", s.postAppCommandRun)
 	}
 }
 
@@ -978,44 +984,56 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
 	q := r.URL.Query()
-	from, err := s.revision(pc, ns, name, q.Get("from"))
-	if err != nil {
-		jsonError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	fromLabel := fmt.Sprintf("revision %d", from.Version)
-	var toManifest, toLabel string
-	if q.Get("to") == "source" {
-		rec, token, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
-		if errors.Is(err, apps.ErrNotFound) {
-			jsonError(w, http.StatusNotFound, "the console keeps no source for this release")
-			return
+	// The record and its token are read once, when a side is the source.
+	var rec *apps.Record
+	var token string
+	// side renders one side of the diff: a revision (the deployed one when
+	// unnamed), or the source at its saved branch or tag, or at the branch
+	// or tag named for that side (asked October 30, 2026: either side may
+	// be a branch or tag, so two of the source's refs compare too).
+	side := func(which, refQ, kindQ string) (manifest, label string, ok bool) {
+		if q.Get(which) != "source" {
+			rev, err := s.revision(pc, ns, name, q.Get(which))
+			if err != nil {
+				jsonError(w, http.StatusNotFound, err.Error())
+				return "", "", false
+			}
+			return rev.Manifest, fmt.Sprintf("revision %d", rev.Version), true
 		}
-		if err != nil {
-			jsonError(w, http.StatusBadGateway, err.Error())
-			return
+		if rec == nil {
+			got, tok, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
+			if errors.Is(err, apps.ErrNotFound) {
+				jsonError(w, http.StatusNotFound, "the console keeps no source for this release")
+				return "", "", false
+			}
+			if err != nil {
+				jsonError(w, http.StatusBadGateway, err.Error())
+				return "", "", false
+			}
+			rec, token = &got, tok
 		}
 		src := rec.Source
-		if ref := q.Get("ref"); ref != "" {
-			src.Ref, src.RefKind = ref, q.Get("refKind")
+		if ref := q.Get(refQ); ref != "" {
+			var err error
+			src.Ref, src.RefKind = ref, q.Get(kindQ)
 			if src, err = apps.Normalize(src); err != nil {
 				jsonError(w, http.StatusBadRequest, err.Error())
-				return
+				return "", "", false
 			}
 		}
 		co, err := apps.Fetch(r.Context(), src, token)
 		if err != nil {
 			jsonError(w, http.StatusBadGateway, err.Error())
-			return
+			return "", "", false
 		}
-		ch, vals, err := apps.Compose(co, src, &rec, nil)
+		ch, vals, err := apps.Compose(co, src, rec, nil)
 		if err != nil {
 			jsonError(w, http.StatusBadGateway, err.Error())
-			return
+			return "", "", false
 		}
-		toLabel = fmt.Sprintf("%s (%s)", src, short12(co.Commit))
+		label = fmt.Sprintf("%s (%s)", src, short12(co.Commit))
 		if m, err := s.opts.Watson.RenderUpgrade(r.Context(), c, who, ns, name, ch, vals); err == nil {
-			toManifest = m
+			return m, label, true
 		} else {
 			// Without a server dry run (no right to upgrade, or no release
 			// yet), the chart renders on the console: lookups and the
@@ -1027,19 +1045,20 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 			rendered, err2 := apps.Render(r.Context(), ch, vals, name, ns, version)
 			if err2 != nil {
 				jsonError(w, http.StatusBadGateway, err2.Error())
-				return
+				return "", "", false
 			}
-			toManifest, toLabel = rendered.Manifest, toLabel+", rendered on the console: "+strings.TrimPrefix(err.Error(), "Error: ")
+			return rendered.Manifest, label + ", rendered on the console: " + strings.TrimPrefix(err.Error(), "Error: "), true
 		}
-	} else {
-		to, err := s.revision(pc, ns, name, q.Get("to"))
-		if err != nil {
-			jsonError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		toManifest, toLabel = to.Manifest, fmt.Sprintf("revision %d", to.Version)
 	}
-	d := apps.Compare(from.Manifest, toManifest, fromLabel, toLabel)
+	fromManifest, fromLabel, ok := side("from", "fromRef", "fromRefKind")
+	if !ok {
+		return
+	}
+	toManifest, toLabel, ok := side("to", "ref", "refKind")
+	if !ok {
+		return
+	}
+	d := apps.Compare(fromManifest, toManifest, fromLabel, toLabel)
 	b, _ := json.Marshal(struct {
 		apps.Diff
 		From string `json:"from"`

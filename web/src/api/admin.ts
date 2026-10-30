@@ -273,3 +273,86 @@ export function useAdmin<T>(key: string, load: () => Promise<T>, every = 0): Loa
   const current = state.key === key
   return { data: current ? state.data : null, error: current ? state.error : '', status: current ? state.status : 0, loading: !current || (state.data === null && state.error === ''), reload }
 }
+
+/** One record of the audit log (Administration › Audit log, asked October 30, 2026). */
+export interface AuditEvent {
+  time: string
+  action: string
+  who: { subject?: string; email?: string; name?: string }
+  cluster?: string
+  target?: string
+  detail?: string
+  outcome: string
+  from?: string
+}
+
+export interface AuditPage {
+  events: AuditEvent[]
+  /** How many events are kept, before the filter and the limit. */
+  total: number
+  /** Whether events are kept at all (they are, with the settings ConfigMap). */
+  stored: boolean
+  /** How many events never reached the webhook. */
+  dropped: number
+  /** Every action among the kept events, for the filter. */
+  actions: string[]
+}
+
+export function fetchAudit(q: { q?: string; action?: string; outcome?: string; limit?: number }): Promise<AuditPage> {
+  const p = new URLSearchParams()
+  if (q.q?.trim()) p.set('q', q.q.trim())
+  if (q.action) p.set('action', q.action)
+  if (q.outcome) p.set('outcome', q.outcome)
+  if (q.limit) p.set('limit', String(q.limit))
+  const qs = p.toString()
+  return request<AuditPage>('GET', '/api/v1/admin/audit' + (qs ? '?' + qs : ''))
+}
+
+/** A backup file (Administration › Backup, asked October 30, 2026): what the console keeps of its own, never a credential. */
+export interface BackupFile {
+  format: string
+  version: string
+  taken: string
+  by?: string
+  leftOut: string[]
+  settings?: unknown
+  users?: { username: string }[]
+  connections?: { id: string; name: string; server: string; auth: string; local?: boolean }[]
+  apps?: { cluster: string; namespace: string; name: string }[]
+  toolboxSessions?: unknown[]
+  sherlockSpend?: unknown
+  audit?: unknown[]
+}
+
+export const BACKUP_FORMAT = '221b-backup/1'
+
+export type RestorePart = 'settings' | 'users' | 'apps' | 'toolboxSessions' | 'sherlockSpend' | 'audit'
+
+export const RESTORE_PARTS: { id: RestorePart; label: string; how: string }[] = [
+  { id: 'settings', label: 'Settings', how: 'replace the current ones: refresh, time format, fleets, acknowledged alerts, Sherlock and Watson' },
+  { id: 'users', label: 'Local users', how: 'are added, without a password, or updated: name, email, groups, super roles' },
+  { id: 'apps', label: 'Helm applications', how: 'are added or replaced: source, values, parameters, commands; a repository token is pasted again' },
+  { id: 'toolboxSessions', label: 'Toolbox session records', how: 'are merged with those here' },
+  { id: 'sherlockSpend', label: "Sherlock's spend", how: 'replaces the ledger here' },
+  { id: 'audit', label: 'Audit log', how: 'is merged with the events here' },
+]
+
+export interface RestoreReport {
+  restored: Partial<Record<RestorePart, number>>
+  notes: string[]
+}
+
+export const fetchBackup = () => request<BackupFile>('GET', '/api/v1/admin/backup')
+export const restoreBackup = (backup: BackupFile, parts: RestorePart[]) => request<RestoreReport>('POST', '/api/v1/admin/restore', { backup, parts: Object.fromEntries(parts.map((p) => [p, true])) })
+
+/** How many of a part a backup holds, for the checkboxes. */
+export function partCount(b: BackupFile, part: RestorePart): number {
+  switch (part) {
+    case 'settings':
+      return b.settings ? 1 : 0
+    case 'sherlockSpend':
+      return b.sherlockSpend ? 1 : 0
+    default:
+      return b[part]?.length ?? 0
+  }
+}

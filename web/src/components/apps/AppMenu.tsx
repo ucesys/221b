@@ -18,8 +18,8 @@ export function NameWithAppTools({ row, children }: { row: AppRow; children: Rea
   )
 }
 
-/** What the menu offers on a release (HA-10): each opens a dialog, or asks. */
-export type AppAction = 'install' | 'deploy' | 'upgrade' | 'switch' | 'values' | 'source' | 'forget' | 'uninstall'
+/** What the menu offers on a release (HA-10): each opens a dialog, or asks. `command:<name>` is one of the application's own commands (asked October 30, 2026). */
+export type AppAction = 'install' | 'deploy' | 'upgrade' | 'switch' | 'values' | 'source' | 'forget' | 'uninstall' | 'newCommand' | `command:${string}`
 
 interface Item {
   key: AppAction
@@ -39,8 +39,11 @@ export function appItems(r: AppRow, canChange: boolean): Item[] {
       { key: 'forget', label: 'Forget', hint: 'drops the record', sepBefore: true, danger: true, off },
     ]
   }
+  const needsSource = off ?? (r.app ? undefined : 'set the source first')
   return [
-    { key: 'upgrade', label: 'Upgrade…', hint: r.app ? `from ${r.app.source.ref}` : undefined, off: off ?? (r.app ? undefined : 'set the source first') },
+    { key: 'upgrade', label: 'Redeploy…', hint: r.app ? `from ${r.app.source.ref}` : undefined, off: needsSource },
+    ...(r.app?.commands ?? []).map<Item>((c) => ({ key: `command:${c.name}`, label: c.name, hint: c.note || `redeploy with ${c.params.join(', ')}`, off: needsSource })),
+    { key: 'newCommand', label: 'New command…', hint: 'a redeploy with its own parameters', off: needsSource },
     { key: 'uninstall', label: 'Uninstall…', danger: true, sepBefore: true, off },
   ]
 }

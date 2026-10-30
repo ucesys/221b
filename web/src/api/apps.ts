@@ -40,10 +40,22 @@ export interface AppRecord {
   /** How the source rendered differently from what runs when it was set, or why it could not be compared. */
   sourceDiff?: string
   hasToken?: boolean
+  /** The application's own deploy commands: each a redeploy with its own parameters (asked October 30, 2026). */
+  commands?: AppCommand[]
   createdBy?: string
   created: string
   updatedBy?: string
   updated: string
+}
+
+export interface AppCommand {
+  name: string
+  note?: string
+  params: string[]
+  created?: string
+  createdBy?: string
+  updated?: string
+  updatedBy?: string
 }
 
 export type DriftState = 'same' | 'changed' | 'missing' | 'unknown'
@@ -206,16 +218,39 @@ export const fetchRevisions = (cluster: string, ns: string, name: string) => cal
 export const fetchImages = (cluster: string, ns: string, name: string, revision?: number) =>
   call<{ revision: number; images: AppImage[] }>('GET', app(cluster, ns, name, '/images') + (revision ? `?revision=${revision}` : ''))
 
-/** Two revisions, or the deployed one against the source (to: 'source', at ref when given). */
-export function fetchDiff(cluster: string, ns: string, name: string, q: { from?: number; to: number | 'source'; ref?: string; refKind?: RefKind }): Promise<AppDiff> {
+/** One side of a diff: a revision, or the source at its saved ref, or at a branch or tag named here. */
+export type DiffSide = { kind: 'revision'; revision: number } | { kind: 'source'; ref?: string; refKind?: RefKind }
+
+/** Two revisions, a revision against the source, or two refs of the source (HA-17; either side a branch or tag since October 30, 2026). */
+export function fetchDiff(cluster: string, ns: string, name: string, q: { from: DiffSide; to: DiffSide }): Promise<AppDiff> {
   const params = new URLSearchParams()
-  if (q.from) params.set('from', String(q.from))
-  params.set('to', String(q.to))
-  if (q.ref) {
-    params.set('ref', q.ref)
-    params.set('refKind', q.refKind ?? 'branch')
+  const put = (which: 'from' | 'to', side: DiffSide) => {
+    if (side.kind === 'revision') {
+      params.set(which, String(side.revision))
+      return
+    }
+    params.set(which, 'source')
+    if (side.ref) {
+      params.set(which === 'from' ? 'fromRef' : 'ref', side.ref)
+      params.set(which === 'from' ? 'fromRefKind' : 'refKind', side.refKind ?? 'branch')
+    }
   }
+  put('from', q.from)
+  put('to', q.to)
   return call<AppDiff>('GET', app(cluster, ns, name, '/diff') + '?' + params.toString())
+}
+
+/** A side as a select's value: "3", "source", "source:branch:main" or "source:tag:v1.2.0"; and back. */
+export function sideValue(s: DiffSide): string {
+  return s.kind === 'revision' ? String(s.revision) : s.ref ? `source:${s.refKind ?? 'branch'}:${s.ref}` : 'source'
+}
+export function parseSide(v: string): DiffSide {
+  if (v === 'source') return { kind: 'source' }
+  if (v.startsWith('source:')) {
+    const [, kind, ...rest] = v.split(':')
+    return { kind: 'source', refKind: kind === 'tag' ? 'tag' : 'branch', ref: rest.join(':') }
+  }
+  return { kind: 'revision', revision: Number(v) }
 }
 
 export const createApp = (cluster: string, input: AppInput) => call<WatsonItem>('POST', apiPath('apps', cluster), input)
@@ -223,6 +258,11 @@ export const createApp = (cluster: string, input: AppInput) => call<WatsonItem>(
 export const updateApp = (cluster: string, ns: string, name: string, input: AppInput) => call<AppView | WatsonItem>('PUT', app(cluster, ns, name), input)
 export const upgradeApp = (cluster: string, ns: string, name: string, input: AppInput = {}) => call<WatsonItem>('POST', app(cluster, ns, name, '/upgrade'), input)
 export const uninstallApp = (cluster: string, ns: string, name: string, keepHistory = false) => call<WatsonItem>('DELETE', app(cluster, ns, name) + (keepHistory ? '?keepHistory=1' : ''))
+/** Adds a command, or changes the one named (a new name renames it); the answer is the record. */
+export const saveCommand = (cluster: string, ns: string, name: string, command: string, input: { name?: string; note?: string; params: string[] }) => call<AppView>('PUT', app(cluster, ns, name, '/commands/' + encodeURIComponent(command)), input)
+export const deleteCommand = (cluster: string, ns: string, name: string, command: string) => call<AppView>('DELETE', app(cluster, ns, name, '/commands/' + encodeURIComponent(command)))
+/** Redeploys with the command's parameters: the answer is the Watson card. */
+export const runCommand = (cluster: string, ns: string, name: string, command: string, install = false) => call<WatsonItem>('POST', app(cluster, ns, name, '/commands/' + encodeURIComponent(command) + '/run') + (install ? '?install=1' : ''))
 export const forgetApp = (cluster: string, ns: string, name: string) => call<void>('DELETE', app(cluster, ns, name) + '?record=1')
 
 /** The source as the table shows it: github.com/org/app/charts/app @ v1.2.0. */

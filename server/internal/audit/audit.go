@@ -96,6 +96,10 @@ type Options struct {
 	Client       *http.Client
 	Logger       *slog.Logger
 	Now          func() time.Time
+	// Store keeps the newest events for Administration › Audit log; nil
+	// keeps none, and SetStore may give one later (the settings ConfigMap
+	// is opened after the log starts).
+	Store Store
 }
 
 // Log writes events.
@@ -107,6 +111,56 @@ type Log struct {
 	dropped int
 	wg      sync.WaitGroup
 	stop    chan struct{}
+	// early holds what was recorded before SetStore, for the store to get.
+	early []Event
+}
+
+// earlyKeep is how many events recorded before the store is set are kept
+// for it: the start-up's, a handful.
+const earlyKeep = 200
+
+// SetStore gives the log its store, with what was recorded before.
+func (l *Log) SetStore(st Store) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.opts.Store = st
+	for _, e := range l.early {
+		st.Add(e)
+	}
+	l.early = nil
+}
+
+// Stored says whether events are kept for the Audit log page.
+func (l *Log) Stored() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.opts.Store != nil
+}
+
+// Events returns the kept events, newest first; none without a store.
+func (l *Log) Events(ctx context.Context) ([]Event, error) {
+	l.mu.Lock()
+	st := l.opts.Store
+	l.mu.Unlock()
+	if st == nil {
+		return nil, nil
+	}
+	return st.List(ctx)
+}
+
+// Import keeps events from a backup, in the store alone: they were
+// written to the stream and the webhook when they happened.
+func (l *Log) Import(events []Event) int {
+	l.mu.Lock()
+	st := l.opts.Store
+	l.mu.Unlock()
+	if st == nil {
+		return 0
+	}
+	for _, e := range events {
+		st.Add(e)
+	}
+	return len(events)
 }
 
 // New starts the log. Close stops the webhook sender.
@@ -146,6 +200,16 @@ func (l *Log) Record(e Event) {
 			l.mu.Unlock()
 		}
 	}
+	l.mu.Lock()
+	if st := l.opts.Store; st != nil {
+		l.mu.Unlock()
+		st.Add(e)
+	} else {
+		if len(l.early) < earlyKeep {
+			l.early = append(l.early, e)
+		}
+		l.mu.Unlock()
+	}
 	if l.queue != nil {
 		select {
 		case l.queue <- e:
@@ -166,8 +230,17 @@ func (l *Log) Dropped() int {
 	return l.dropped
 }
 
-// Close waits for queued webhook deliveries, up to the context's deadline.
+// Close writes what the store holds and waits for queued webhook
+// deliveries, up to the context's deadline.
 func (l *Log) Close(ctx context.Context) {
+	l.mu.Lock()
+	st := l.opts.Store
+	l.mu.Unlock()
+	if st != nil {
+		if err := st.Flush(ctx); err != nil {
+			l.opts.Logger.Warn("saving the audit log at shutdown failed", "err", err)
+		}
+	}
 	if l.queue == nil {
 		return
 	}

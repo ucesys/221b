@@ -363,6 +363,10 @@ type Route struct {
 	Handler http.HandlerFunc
 }
 
+// Accounts returns the local accounts, nil when there are none (sign-in
+// off, or no local users).
+func (s *Service) Accounts() *Accounts { return s.accounts }
+
 // Routes lists the sign-in endpoints for the API mux.
 func (s *Service) Routes() []Route {
 	routes := []Route{

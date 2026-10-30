@@ -114,6 +114,57 @@ func normalizeRest(s Source) (Source, error) {
 }
 
 // Record is what the console keeps about an application (HA-03).
+// Command is a named redeploy of an application with its own parameters
+// (asked October 30, 2026): `helm upgrade` from the source with these
+// --set parameters applied over the saved values and parameters.
+type Command struct {
+	Name string `json:"name"`
+	// Note says what the command is for, in the menu.
+	Note string `json:"note,omitempty"`
+	// Params are the extra parameters, each key=value as helm --set takes
+	// them.
+	Params    []string  `json:"params"`
+	Created   time.Time `json:"created"`
+	CreatedBy string    `json:"createdBy,omitempty"`
+	Updated   time.Time `json:"updated"`
+	UpdatedBy string    `json:"updatedBy,omitempty"`
+}
+
+// MaxCommands is how many commands an application may have.
+const MaxCommands = 20
+
+// CommandIndex finds a command by name, case-insensitively; -1 is none.
+func (r Record) CommandIndex(name string) int {
+	for i, c := range r.Commands {
+		if strings.EqualFold(c.Name, name) {
+			return i
+		}
+	}
+	return -1
+}
+
+// CheckCommandName says why a command name is not allowed: one to forty
+// characters of letters, digits, spaces, dots, dashes and underscores,
+// starting with a letter or digit.
+func CheckCommandName(name string) error {
+	if name == "" || len(name) > 40 {
+		return errors.New("a command name is one to forty characters")
+	}
+	for i, ch := range name {
+		letter := ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9'
+		if i == 0 && !letter {
+			return errors.New("a command name starts with a letter or a digit")
+		}
+		if !letter && ch != ' ' && ch != '.' && ch != '-' && ch != '_' {
+			return errors.New("a command name has letters, digits, spaces, dots, dashes and underscores")
+		}
+	}
+	if strings.HasSuffix(name, " ") {
+		return errors.New("a command name does not end with a space")
+	}
+	return nil
+}
+
 type Record struct {
 	// Version marks the format, for migrations (P7-03).
 	Version   int    `json:"version"`
@@ -146,6 +197,11 @@ type Record struct {
 	// nodeSelector (R2-11).
 	Fleet      string `json:"fleet,omitempty"`
 	FleetLabel string `json:"fleetLabel,omitempty"`
+	// Commands are the application's own deploy commands (asked October
+	// 30, 2026): each redeploys the release from its source with extra
+	// --set parameters over the saved values and parameters. Names are
+	// unique within the application.
+	Commands []Command `json:"commands,omitempty"`
 	// MatchedRevision is the deployed revision the source was found to
 	// render exactly when it was set (round 2 review): the release is not
 	// behind the source while that revision runs.

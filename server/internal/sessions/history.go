@@ -54,6 +54,10 @@ func recordOf(s *Session) Record {
 	return r
 }
 
+// HistoryKey is the key of the settings ConfigMap the records are kept
+// under.
+const HistoryKey = "toolbox-sessions.json"
+
 // History keeps the records of ended sessions.
 type History interface {
 	Add(Record)

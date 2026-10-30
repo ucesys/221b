@@ -180,7 +180,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
               {canChange && (
                 <>
                   <button className="rk-link" onClick={() => onAction(refs.newerTags.length > 0 ? 'switch' : 'upgrade')}>
-                    {refs.newerTags.length > 0 ? 'Switch to it' : 'Upgrade'}
+                    {refs.newerTags.length > 0 ? 'Switch to it' : 'Redeploy'}
                   </button>
                   , or compare it below first.
                 </>
@@ -356,7 +356,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
 /**
  * The application's values file and parameters, edited in place (HA-12,
  * HA-13) and saved by themselves a moment after the typing stops, for the
- * next deploy; Upgrade, at the top, deploys them.
+ * next deploy; Redeploy, at the top, deploys them.
  */
 function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId: string; row: AppRow; app: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void }) {
   const [values, setValues] = useState(app.values ?? '')
@@ -465,7 +465,7 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
         />
       </div>
       <p className="rk-hint" style={{ margin: 0 }}>
-        {canChange ? 'What you type here is kept with the application; Upgrade at the top deploys it, as you, after your approval in Watson. The chart\'s defaults apply underneath.' : 'What the console deploys this application with; the chart\'s defaults apply underneath.'}
+        {canChange ? 'What you type here is kept with the application; Redeploy at the top deploys it, as you, after your approval in Watson. The chart\'s defaults apply underneath.' : 'What the console deploys this application with; the chart\'s defaults apply underneath.'}
       </p>
     </Card>
   )

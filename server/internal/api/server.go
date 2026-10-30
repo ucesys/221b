@@ -33,6 +33,7 @@ import (
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
 	"github.com/ucesys/221b/server/internal/roles"
@@ -116,6 +117,12 @@ type Options struct {
 	Auth     Auth
 	// Audit records the settings changes; nil records nothing.
 	Audit *audit.Log
+	// KV is the console's small key-value storage next to the settings
+	// (Sherlock's spend, the Toolbox's session records, the audit log),
+	// for the backup; nil backs none of it up.
+	KV kv.Backend
+	// Version is the console's version, written into a backup.
+	Version string
 	// Cluster serves the details of pods, services, releases, logs and YAML.
 	Cluster Cluster
 	// Settings serves /api/v1/settings; nil leaves the path unserved.
@@ -388,6 +395,8 @@ func New(o Options) *Server {
 		o.Watson.SetSessionHooks(s.planSession, s.startSession)
 	}
 	s.rolesRoutes()
+	s.auditRoutes()
+	s.backupRoutes()
 	if o.Auth != nil {
 		for _, r := range o.Auth.Routes() {
 			s.handle(r.Pattern, r.Name, r.Handler)

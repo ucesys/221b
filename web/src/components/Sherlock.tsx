@@ -234,9 +234,58 @@ function questionBefore(msgs: SherlockMsg[], id: number): string | undefined {
   return undefined
 }
 
+// The questions asked from this browser, newest last, for the arrow keys
+// to recall (asked October 30, 2026): kept in the browser, at most fifty.
+const HISTORY_KEY = 'sherlock.history'
+const HISTORY_MAX = 50
+
+export function loadHistory(): string[] {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]')
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(-HISTORY_MAX) : []
+  } catch {
+    return []
+  }
+}
+
+/** Adds a question to the history; the same question again moves to the end. */
+export function remember(list: string[], q: string): string[] {
+  const next = [...list.filter((x) => x !== q), q].slice(-HISTORY_MAX)
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
+  } catch {
+    // A browser without storage recalls nothing after a reload.
+  }
+  return next
+}
+
+/**
+ * What the arrow keys do in the question box: ArrowUp on the first line
+ * recalls the question before the one shown (the draft is kept to come
+ * back to), ArrowDown on the last line the one after, and past the newest
+ * the draft again; elsewhere in a multi-line draft they move the caret.
+ * Returns the text to show, or null to let the key be.
+ */
+export function recall(key: 'ArrowUp' | 'ArrowDown', value: string, caret: number, history: string[], at: { index: number; draft: string }): string | null {
+  if (history.length === 0) return null
+  if (key === 'ArrowUp') {
+    if (value.lastIndexOf('\n', caret - 1) !== -1) return null
+    if (at.index === -1) at.draft = value
+    if (at.index + 1 >= history.length) return history[0]!
+    at.index += 1
+    return history[history.length - 1 - at.index]!
+  }
+  if (value.indexOf('\n', caret) !== -1 || at.index === -1) return null
+  at.index -= 1
+  return at.index === -1 ? at.draft : history[history.length - 1 - at.index]!
+}
+
 /** Sherlock's pane: the conversation and the question box. */
 export function SherlockPane({ cluster, clusterName, state, inWindow, controls, switcher, onToast }: PaneProps) {
   const [draft, setDraft] = useState('')
+  const history = useRef<string[]>(loadHistory())
+  const at = useRef({ index: -1, draft: '' })
+  const box = useRef<HTMLTextAreaElement>(null)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const scroller = useRef<HTMLDivElement>(null)
@@ -262,6 +311,8 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
     pinned.current = true
     try {
       await askSherlock(cluster, q, await askContext())
+      history.current = remember(history.current, q)
+      at.current = { index: -1, draft: '' }
       setDraft('')
     } catch (e) {
       setError(e instanceof SherlockError ? e.message : String(e))
@@ -430,15 +481,28 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
           <label className="rk-field rk-ta" style={{ flex: '1 1 auto' }}>
             <span className="rk-sr">Ask Sherlock about this cluster</span>
             <textarea
+              ref={box}
               rows={2}
-              placeholder="Ask Sherlock — Enter sends, Shift+Enter starts a new line"
+              placeholder="Ask Sherlock — Enter sends, Shift+Enter starts a new line, ↑ recalls an earlier question"
               value={draft}
               maxLength={4000}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                at.current.index = -1
+                setDraft(e.target.value)
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault()
                   void send(draft)
+                  return
+                }
+                if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+                  const el = e.currentTarget
+                  const text = recall(e.key, el.value, e.key === 'ArrowUp' ? el.selectionStart : el.selectionEnd, history.current, at.current)
+                  if (text === null) return
+                  e.preventDefault()
+                  setDraft(text)
+                  requestAnimationFrame(() => box.current?.setSelectionRange(text.length, text.length))
                 }
               }}
               data-testid="sherlock-input"

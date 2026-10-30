@@ -5,6 +5,8 @@ import { PermissionsPage } from './PermissionsPage'
 import { RolesPage } from './RolesPage'
 import { SettingsPanel } from './SettingsPage'
 import { UsersPage } from './UsersPage'
+import { AdminAudit } from './AdminAudit'
+import { AdminBackup } from './AdminBackup'
 import { AdminSessions, AdminToolbox } from './toolbox/AdminToolbox'
 
 export interface AdminProps {
@@ -21,7 +23,9 @@ const PAGES: { id: Page; label: string; tip: string; superOnly: boolean }[] = [
   { id: 'users', label: 'Users', tip: 'SuperAdmin only: the people 221B knows', superOnly: true },
   { id: 'sessions', label: 'Sessions', tip: 'SuperAdmin only: the Toolbox’s sessions, open and ended', superOnly: true },
   { id: 'toolbox', label: 'Toolbox', tip: 'SuperAdmin only: what the chart allows the Toolbox', superOnly: true },
+  { id: 'audit', label: 'Audit log', tip: 'SuperAdmin only: who did what, and when', superOnly: true },
   { id: 'settings', label: 'Settings', tip: 'SuperAdmin only: refresh rate, Sherlock and Watson', superOnly: true },
+  { id: 'backup', label: 'Backup', tip: 'SuperAdmin only: a backup of the console’s own data, and a restore', superOnly: true },
 ]
 
 /** Whether this person is a SuperAdmin; with sign-in off everyone is (RB-31). */
@@ -36,7 +40,7 @@ export function isSuperAdmin(me: Me | null): boolean {
  */
 export function pagesFor(me: Me | null): Page[] {
   if (!me) return []
-  if (me.mode === 'none') return ['permissions', 'sessions', 'toolbox', 'settings']
+  if (me.mode === 'none') return ['permissions', 'sessions', 'toolbox', 'audit', 'settings', 'backup']
   return ADMIN_PAGES.filter((p) => isSuperAdmin(me) || !PAGES.find((x) => x.id === p)!.superOnly)
 }
 
@@ -129,7 +133,9 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
         {me && !refused && page === 'users' && <UsersPage {...props} />}
         {me && !refused && page === 'sessions' && <AdminSessions {...props} />}
         {me && !refused && page === 'toolbox' && <AdminToolbox {...props} />}
+        {me && !refused && page === 'audit' && <AdminAudit {...props} />}
         {me && !refused && page === 'settings' && <SettingsPanel route={route} settings={settings} refreshedAt={refreshedAt} />}
+        {me && !refused && page === 'backup' && <AdminBackup {...props} />}
       </div>
     </main>
   )

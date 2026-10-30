@@ -4,12 +4,21 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ## 0.10.2 (unreleased)
 
+### Added
+
+- **Administration › Audit log**: the newest 2,000 events the console recorded, who did what and when, searched by words and narrowed by action and outcome, with a JSON download. They are kept beside the settings (`audit-log.json` in the settings ConfigMap), so every replica and a restarted console show them; standard output and the audit webhook stay the full record (M2-01, ADR-71).
+- **Administration › Backup**: one JSON file with everything the console keeps of its own (settings, local users, connections, Helm applications, Toolbox session records, Sherlock's spend, the audit log) and never a credential; and a restore of the parts picked from such a file, with a report of what is left to do by hand (M2-06, ADR-71).
+- **Commands of a Helm application**: *New command…* in a release's Tools menu saves a named redeploy with its own `--set` parameters; the command is then an item of the menu, with Run, Edit and Delete (M2-07).
+- The diff dialog compares any two of: a revision, the source at its deployed branch or tag, the source at any branch or tag (M2-05).
+- Sherlock's question box recalls earlier questions with ↑ and ↓, as a shell does (M2-04).
+
 ### Fixed
 
 - With two replicas, CPU and memory in use flickered to — on the Helm release page and in the pod and object drawers: a fetch answered by the replica without the page's stream had no usage. Every data request now goes to the leader (P7-09).
 
 ### Changed
 
+- *Upgrade…* in a release's Tools menu is *Redeploy…*, and its dialog *Redeploy from the source* (M2-03). Every drop-down in a field shows a chevron (M2-02).
 - Only the leader reads the clusters: it lists and watches them, polls metrics-server and the kubelets, checks connection health and role drift, and serves every data request; the other replicas sign people in and forward the rest, so Kubernetes sees one reader however many replicas there are. The chart's `replicas.warmStandby` (default `true`) keeps the others' watches open for an instant takeover; `false` has them hold nothing until they lead, for very large clusters. The cap on open event streams (200) is the console's rather than each replica's, and a replica's `/metrics` says `b221_leader 1` or `0` (P7-09, ADR-70).
 
 ## 0.10.1 (2026-10-30)

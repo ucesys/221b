@@ -380,6 +380,17 @@ func run(args []string) error {
 	if cm, ok := storage.(*kube.ConfigMapStorage); ok {
 		spendBackend = cm
 	}
+	// The audit log's newest events are kept beside the settings for
+	// Administration › Audit log; a laptop keeps them in memory.
+	auditStore := audit.NewKVStore(spendBackend, log.With("component", "audit"))
+	auditLog.SetStore(auditStore)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := auditStore.Close(ctx); err != nil {
+			log.Warn("saving the audit log at shutdown failed", "err", err)
+		}
+	}()
 	// The chart may name Sherlock's provider (sherlock.provider), and lock it.
 	var chartProvider sherlock.Provider
 	if cfg.SherlockProvider != "" {
@@ -474,7 +485,7 @@ func run(args []string) error {
 		Config:  toolboxCfg,
 		Audit:   auditLog,
 		Logger:  log.With("component", "sessions"),
-		History: &sessions.KVHistory{Backend: spendBackend, Key: "toolbox-sessions.json", Keep: toolboxCfg.History.Keep, Logger: log.With("component", "sessions")},
+		History: &sessions.KVHistory{Backend: spendBackend, Key: sessions.HistoryKey, Keep: toolboxCfg.History.Keep, Logger: log.With("component", "sessions")},
 	})
 	go sessionsMgr.Run(ctx)
 	if toolboxCfg.Transcripts == toolbox.TranscriptsPVC {
@@ -501,6 +512,8 @@ func run(args []string) error {
 		}
 	}
 	handler := api.New(api.Options{
+		KV:                      spendBackend,
+		Version:                 version.String(),
 		Watson:                  watsonSvc,
 		Apps:                    appStore,
 		SecretsReveal:           cfg.SecretsRead && cfg.SecretsReveal,

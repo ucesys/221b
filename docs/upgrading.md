@@ -52,6 +52,12 @@ The objects that are not the chart's (connections, accounts, Sherlock's key, ses
 
 Nothing to do. The new value `replicas.warmStandby` defaults to `true`, which keeps every replica watching as before; only the leader now polls and serves the data (ADR-70), so a rolling upgrade behaves as it did. On a very large cluster, where a standby's memory matters, set it to `false`: the other replicas then hold nothing, and a failover costs one list.
 
+What an operator may notice:
+
+- **A new key in the settings ConfigMap**, `audit-log.json`: the newest 2,000 audit events, at most about 600 KiB, for Administration › Audit log. A rollback to 0.10.1 leaves it there, unread.
+- **Application records gain `commands`**. A 0.10.1 console that saves an application's record drops them; finish a rollback before changing applications there.
+- **A backup is a file you keep safe.** It holds no credential, but it names people, clusters, releases and what was asked of Sherlock; treat it like the audit log.
+
 ## 0.10.1 (2026-10-30)
 
 No chart value changes. What an operator may notice:

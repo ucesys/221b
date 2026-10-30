@@ -172,6 +172,67 @@ test('a source is set in place, refused when it is not https, and forgotten; a V
   }
 })
 
+test('an application gets its own commands: added from the Tools menu, shown, run, renamed and deleted (asked October 30, 2026)', async ({ page, request }) => {
+  const releases = releaseRows(await snapshot(request, ['helm']))
+  const r = releases[0]!
+  await request.delete(`/api/v1/apps/${r.namespace}/${r.name}?record=1`, { headers: SAME })
+  const saved = await request.put(`/api/v1/apps/${r.namespace}/${r.name}`, { data: { source: { repo: 'https://github.com/ucesys/221b', path: 'deploy/helm/221b', ref: 'main', refKind: 'branch' } }, headers: SAME })
+  expect(saved.status(), await saved.text()).toBe(200)
+  try {
+    await page.goto(`/#/helm/${r.namespace}/${r.name}`)
+    await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+    const panel = page.getByTestId('app-panel')
+    await expect(panel.getByTestId('app-source-line')).not.toContainText('keeps no source')
+    const tools = panel.getByTestId(`app-tools-${r.namespace}-${r.name}`)
+    await tools.click()
+    await expect(page.getByTestId('app-tool-upgrade')).toContainText('Redeploy…')
+    await page.getByTestId('app-tool-newCommand').click()
+    const dlg = page.getByTestId('command-dialog')
+    await expect(dlg).toHaveAttribute('data-mode', 'new')
+    await dlg.getByTestId('command-name').fill('Scale up')
+    await dlg.getByTestId('command-note').fill('three pods')
+    await dlg.getByTestId('command-params').fill('replicaCount=3\nimage.tag=v2')
+    await dlg.getByTestId('command-save').click()
+    await expect(dlg).toHaveCount(0)
+    // In the menu now, with its note; picked, it shows what it does.
+    await tools.click()
+    const item = page.getByTestId('app-tool-command:Scale up')
+    await expect(item).toContainText('three pods')
+    await item.click()
+    await expect(dlg).toHaveAttribute('data-mode', 'run')
+    await expect(dlg.getByTestId('command-shown-params')).toContainText('replicaCount=3')
+    // Renamed and changed.
+    await dlg.getByTestId('command-edit').click()
+    await dlg.getByTestId('command-name').fill('Scale up more')
+    await dlg.getByTestId('command-params').fill('replicaCount=5')
+    await dlg.getByTestId('command-save').click()
+    await expect(dlg).toHaveCount(0)
+    const rec = (await (await request.get(`/api/v1/apps/${r.namespace}/${r.name}`)).json()) as { commands: { name: string; params: string[] }[] }
+    expect(rec.commands).toEqual([expect.objectContaining({ name: 'Scale up more', params: ['replicaCount=5'] })])
+    // The same name again, in another case, is refused.
+    const dup = await request.put(`/api/v1/apps/${r.namespace}/${r.name}/commands/other`, { data: { name: 'scale UP more', params: ['a=b'] }, headers: SAME })
+    expect(dup.status()).toBe(409)
+    // Run: the card goes to Watson, and the dialog closes.
+    await tools.click()
+    await page.getByTestId('app-tool-command:Scale up more').click()
+    await dlg.getByTestId('command-run').click()
+    await expect(dlg).toHaveCount(0)
+    // Deleted, in two presses.
+    await tools.click()
+    await page.getByTestId('app-tool-command:Scale up more').click()
+    await dlg.getByTestId('command-delete').click()
+    await expect(dlg.getByTestId('command-delete')).toContainText('really')
+    await dlg.getByTestId('command-delete').click()
+    await expect(dlg).toHaveCount(0)
+    await tools.click()
+    await expect(page.getByTestId('app-tool-newCommand')).toBeVisible()
+    await expect(page.getByTestId('app-tool-command:Scale up more')).toHaveCount(0)
+    await page.keyboard.press('Escape')
+  } finally {
+    await request.delete(`/api/v1/apps/${r.namespace}/${r.name}?record=1`, { headers: SAME })
+  }
+})
+
 test('every dialog and drawer closes with Cancel, its cross and Escape', async ({ page, request }) => {
   const releases = releaseRows(await snapshot(request, ['helm']))
   const r = releases[0]!
@@ -202,7 +263,7 @@ test('every dialog and drawer closes with Cancel, its cross and Escape', async (
     await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()
     await page.getByTestId('app-tool-upgrade').click()
     await expect(dlg).toHaveAttribute('data-mode', 'upgrade')
-    await expect(dlg).toContainText('Upgrade from the source')
+    await expect(dlg).toContainText('Redeploy from the source')
     await dlg.getByRole('button', { name: 'Cancel' }).click()
     await expect(dlg).toHaveCount(0)
     await panel.getByTestId(`app-tools-${r.namespace}-${r.name}`).click()
