@@ -98,8 +98,11 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
         .then(setRefs)
         .catch(() => undefined)
     }
+    // The live row's revision moves when a deploy lands: the list follows
+    // it, so the History tab and the diff dialog never show a stale one
+    // (asked October 30, 2026).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, key, version, row.orphan])
+  }, [tab, key, version, row.orphan, row.revision])
 
   useEffect(() => {
     if (tab !== 'images' || row.orphan) return

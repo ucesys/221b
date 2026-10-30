@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { fetchAppRefs, fetchDiff, parseSide, sideValue, type AppDiff, type AppRefs, type AppView, type DiffSide, type RevisionView } from '../../api/apps'
+import { fetchAppRefs, fetchDiff, fetchRevisions, parseSide, sideValue, type AppDiff, type AppRefs, type AppView, type DiffSide, type RevisionView } from '../../api/apps'
 import { trapTab } from '../../lib/focus'
 import { layer } from '../../lib/layer'
 import { CloseIcon } from '../Icons'
@@ -62,7 +62,23 @@ function SideSelect({ label, value, onChange, revisions, latest, app, refs, test
  * tag of the repository; either side may be any of these, so two refs of
  * the source compare too (asked October 30, 2026).
  */
-export function DiffDialog({ clusterId, namespace, name, revisions, revision, app, refs: given, onClose }: Props) {
+export function DiffDialog({ clusterId, namespace, name, revisions: given0, revision, app, refs: given, onClose }: Props) {
+  // The panel's list can be older than the revision clicked (a deploy
+  // landed since it was read): then the list is read again here, and
+  // until it is, the clicked revision is listed from what is known.
+  const [fetched, setFetched] = useState<RevisionView[] | null>(null)
+  const stale = !given0.some((r) => r.revision === revision)
+  useEffect(() => {
+    if (!stale || fetched) return
+    let live = true
+    fetchRevisions(clusterId, namespace, name)
+      .then((list) => live && setFetched(list))
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [stale, fetched, clusterId, namespace, name])
+  const revisions = fetched ?? (stale ? [{ revision, updated: '', status: '', chart: '', chartVersion: '', appVersion: '' } as RevisionView, ...given0].sort((a, b) => b.revision - a.revision) : given0)
   const latest = revisions[0]?.revision ?? revision
   const before = revisions.find((r) => r.revision < revision)?.revision
   const [from, setFrom] = useState<DiffSide>({ kind: 'revision', revision: before ?? revision })
