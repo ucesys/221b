@@ -37,6 +37,8 @@ export interface AppRecord {
   fleetLabel?: string
   /** The deployed revision the source was found to render exactly when it was set: not behind while it runs. */
   matchedRevision?: number
+  /** How the source rendered differently from what runs when it was set, or why it could not be compared. */
+  sourceDiff?: string
   hasToken?: boolean
   createdBy?: string
   created: string

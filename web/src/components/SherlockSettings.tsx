@@ -406,7 +406,7 @@ function Credential({ cfg, draft, busy, typed, setTyped, remove }: { cfg: Sherlo
  * kept in a Secret and never shown again.
  */
 /** The question Test asks unless another is typed. */
-const TEST_QUESTION = 'In three sentences, and without reading the cluster: what do your instructions and the administrators\u2019 notes tell you about this infrastructure, and what would you check first if a node went NotReady?'
+const TEST_QUESTION = 'In three sentences, and without reading the cluster: what do your instructions and the administrators’ notes tell you about this infrastructure, and what would you check first if a node went NotReady?'
 
 /**
  * What Sherlock knows (R2-05, amended at the round 2 review): the
@@ -439,7 +439,7 @@ function NotesSection({ draft, setDraft, cfg }: { draft: Settings; setDraft: (s:
     <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Infrastructure notes" data-testid="sherlock-notes-section">
       <h3 className="rk-h">What Sherlock knows about your infrastructure</h3>
       <p className="rk-fhint" style={{ margin: 0 }} id="sherlock-notes-hint">
-        Sherlock works each cluster out for itself: its distribution, its nodes\u2019 operating systems, its add-ons. What it cannot see goes here, for every cluster: where the machines run, the network and storage, who to call, what not to touch, house rules. It is added to Sherlock\u2019s instructions, after the cluster\u2019s description, and trusted over what it works out. Not a place for secrets.
+        Sherlock works each cluster out for itself: its distribution, its nodes’ operating systems, its add-ons. What it cannot see goes here, for every cluster: where the machines run, the network and storage, who to call, what not to touch, house rules. It is added to Sherlock’s instructions, after the cluster’s description, and trusted over what it works out. Not a place for secrets.
       </p>
       <textarea className="rk-area rk-mono" value={notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} spellCheck={false} rows={8} placeholder={'Three RKE2 clusters on Proxmox in the basement rack; rke2cp1 also runs the NFS server for the shared StorageClass.\nThe ingress is behind a Caddy proxy on gw1 (192.168.1.1).\nNever drain rke2cp1 without asking: the NFS pods live there.'} aria-describedby="sherlock-notes-hint" maxLength={16384} data-testid="sherlock-notes" style={{ width: '100%', boxSizing: 'border-box', minHeight: 140, fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }} />
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
@@ -460,7 +460,7 @@ function NotesSection({ draft, setDraft, cfg }: { draft: Settings; setDraft: (s:
           {shown ? 'Hide the instructions' : instructions ? 'Edit the instructions (changed)' : 'Edit the instructions'}
         </button>
         <button type="button" className="rk-btn" onClick={() => setTestOpen(true)} title="Asks Sherlock one question with the instructions and notes as typed here, saved or not; the answer is not kept" data-testid="sherlock-notes-test">
-          Test\u2026
+          Test
         </button>
         <span className="rk-fhint">{notes.length > 0 ? `${notes.length} of 16,384 characters.` : ''} The test asks with everything as typed, saved or not.</span>
       </div>
@@ -473,20 +473,20 @@ function NotesSection({ draft, setDraft, cfg }: { draft: Settings; setDraft: (s:
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="sherlock-prompt-editor">
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
               <p className="rk-fhint" style={{ margin: 0, flex: '1 1 320px' }}>
-                Sherlock\u2019s instructions, the same for every cluster. Change them here and Save; the cluster\u2019s block (below, read-only) and your notes follow them. Empty, or reset, they are the built-in text.
+                Sherlock’s instructions, the same for every cluster. Change them here and Save; the cluster’s block (below, read-only) and your notes follow them. Empty, or reset, they are the built-in text.
               </p>
               <button type="button" className="rk-btn" onClick={() => setDraft({ ...draft, instructions: '' })} disabled={!instructions} data-testid="sherlock-prompt-reset">
                 Reset to the built-in
               </button>
             </div>
-            <textarea className="rk-area rk-mono" value={instructions || builtIn} onChange={(e) => setDraft({ ...draft, instructions: e.target.value === builtIn ? '' : e.target.value })} spellCheck={false} rows={18} maxLength={65536} aria-label="Sherlock\u2019s instructions" data-testid="sherlock-prompt" style={{ width: '100%', boxSizing: 'border-box', minHeight: 240, fontSize: 12, lineHeight: 1.5, resize: 'vertical' }} />
+            <textarea className="rk-area rk-mono" value={instructions || builtIn} onChange={(e) => setDraft({ ...draft, instructions: e.target.value === builtIn ? '' : e.target.value })} spellCheck={false} rows={18} maxLength={65536} aria-label="Sherlock’s instructions" data-testid="sherlock-prompt" style={{ width: '100%', boxSizing: 'border-box', minHeight: 240, fontSize: 12, lineHeight: 1.5, resize: 'vertical' }} />
             <pre className="rk-code rk-mono" style={{ margin: 0, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, overflow: 'auto', maxHeight: 360, whiteSpace: 'pre-wrap', background: 'var(--sunken)', borderRadius: 8, border: '1px solid var(--line)' }} data-testid="sherlock-prompt-cluster">
               {prompt.cluster}
             </pre>
           </div>
         ) : (
           <p className="rk-fhint" style={{ margin: 0 }}>
-            Reading\u2026
+            Reading…
           </p>
         ))}
       {testOpen && <TestDialog cluster={picked} clusterName={cfg.clusters.find((c) => c.id === picked)?.name ?? picked} notes={notes} instructions={instructions} onClose={() => setTestOpen(false)} />}
@@ -534,7 +534,7 @@ function TestDialog({ cluster, clusterName, notes, instructions, onClose }: { cl
           </button>
         </div>
         <p className="rk-fhint" style={{ margin: 0 }}>
-          Asked with the instructions and notes as typed on the page, saved or not, and Sherlock\u2019s usual tools; the conversation is not kept and does not count against anyone\u2019s window.
+          Asked with the instructions and notes as typed on the page, saved or not, and Sherlock’s usual tools; the conversation is not kept and does not count against anyone’s window.
         </p>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600 }}>
           Question
@@ -542,7 +542,7 @@ function TestDialog({ cluster, clusterName, notes, instructions, onClose }: { cl
         </label>
         <div style={{ display: 'flex', gap: 8 }}>
           <button type="button" className="rk-btn" data-on="true" onClick={ask} disabled={test?.busy || !question.trim()} aria-busy={test?.busy} data-testid="sherlock-test-ask">
-            {test?.busy ? 'Asking\u2026' : 'Ask'}
+            {test?.busy ? 'Asking…' : 'Ask'}
           </button>
           <button type="button" className="rk-btn" onClick={onClose}>
             Close
@@ -552,7 +552,7 @@ function TestDialog({ cluster, clusterName, notes, instructions, onClose }: { cl
           {test && !test.busy && (
             <div className="rk-callout" data-tone={test.error ? 'warn' : 'info'} role={test.error ? 'alert' : undefined} style={{ margin: 0, fontSize: 13, whiteSpace: 'pre-wrap' }} data-testid="sherlock-notes-answer">
               {test.error ? test.error : test.answer || 'Sherlock answered nothing.'}
-              {test.model && !test.error ? <span style={{ display: 'block', marginTop: 6, color: 'var(--fg3)' }}>\u2014 {test.model}</span> : null}
+              {test.model && !test.error ? <span style={{ display: 'block', marginTop: 6, color: 'var(--fg3)' }}>— {test.model}</span> : null}
             </div>
           )}
         </div>

@@ -150,6 +150,10 @@ type Record struct {
 	// render exactly when it was set (round 2 review): the release is not
 	// behind the source while that revision runs.
 	MatchedRevision int `json:"matchedRevision,omitempty"`
+	// SourceDiff says how the source rendered differently from what runs
+	// when it was set ("23 objects at 767275b73ce4"), or why it could
+	// not be compared; "" when it matched or was not compared.
+	SourceDiff string `json:"sourceDiff,omitempty"`
 	// HasToken says a credential for the repository is saved with the
 	// record; the token itself never leaves the server.
 	HasToken  bool      `json:"hasToken,omitempty"`

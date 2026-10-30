@@ -427,10 +427,11 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if sourceChanged {
+	if sourceChanged || (in.Source != nil && rec.Commit == "") {
 		// What runs may already be what the source renders: then the
-		// release is not behind it (round 2 review).
-		rec.Commit, rec.CommitDate, rec.CommitSubject, rec.ChartVersion, rec.MatchedRevision = "", time.Time{}, "", "", 0
+		// release is not behind it (round 2 review). A source saved again
+		// before any deploy is compared again.
+		rec.Commit, rec.CommitDate, rec.CommitSubject, rec.ChartVersion, rec.MatchedRevision, rec.SourceDiff = "", time.Time{}, "", "", 0, ""
 		tok := in.Token
 		if tok == "" && !in.ClearToken {
 			_, tok, _ = s.opts.Apps.Get(r.Context(), c.ID, ns, name)
@@ -483,14 +484,17 @@ func (s *Server) matchSource(ctx context.Context, c watson.Cluster, who watson.W
 	}
 	rel, err := s.revision(pc, rec.Namespace, rec.Name, "")
 	if err != nil {
+		// No release yet: nothing to compare with.
 		return
 	}
 	co, err := apps.Fetch(ctx, rec.Source, token)
 	if err != nil {
+		rec.SourceDiff = "the repository could not be read: " + err.Error()
 		return
 	}
 	ch, vals, err := apps.Compose(co, rec.Source, rec, nil)
 	if err != nil {
+		rec.SourceDiff = "the chart could not be read: " + err.Error()
 		return
 	}
 	manifest, err := s.opts.Watson.RenderUpgrade(ctx, c, who, rec.Namespace, rec.Name, ch, vals)
@@ -503,11 +507,17 @@ func (s *Server) matchSource(ctx context.Context, c watson.Cluster, who watson.W
 		}
 		rendered, err := apps.Render(ctx, ch, vals, rec.Name, rec.Namespace, version)
 		if err != nil {
+			rec.SourceDiff = "the chart could not be rendered: " + err.Error()
 			return
 		}
 		manifest = rendered.Manifest
 	}
-	if !apps.Compare(rel.Manifest, manifest, "deployed", "source").Same {
+	if d := apps.Compare(rel.Manifest, manifest, "deployed", "source"); !d.Same {
+		n := len(d.Changed) + len(d.Added) + len(d.Removed)
+		rec.SourceDiff = fmt.Sprintf("%d of its objects render differently at %s", n, short12(co.Commit))
+		if ch.Metadata != nil && ch.Metadata.Version != rel.Chart.Metadata.Version {
+			rec.SourceDiff += fmt.Sprintf(" (chart %s there, %s deployed)", ch.Metadata.Version, rel.Chart.Metadata.Version)
+		}
 		return
 	}
 	rec.Commit, rec.CommitDate, rec.CommitSubject, rec.MatchedRevision = co.Commit, co.CommitDate, co.CommitSubject, rel.Version

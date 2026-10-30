@@ -596,13 +596,18 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
       .then((d) => {
         const chart = d.charts[0]
         const filled: string[] = []
+        // Straight into latest too: the save chained after this look-over
+        // runs before React renders the new state (round 2 review: the
+        // path showed and went away).
         if (!latest.current.path.trim() && chart) {
           setPath(chart.path)
+          latest.current = { ...latest.current, path: chart.path }
           filled.push(`chart path ${chart.path || '/'}`)
         }
         if (!latest.current.ref.trim()) {
           setRef(d.ref)
           setRefKind(d.refKind)
+          latest.current = { ...latest.current, ref: d.ref, refKind: d.refKind }
           filled.push(`${d.refKind} ${d.ref}`)
         }
         if (filled.length) edited()
@@ -731,6 +736,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
           <>
             <span>
               Commit <span className="rk-mono" style={{ color: 'var(--fg)' }}>{commit ? `${commit}${app.commitSubject ? ` — ${app.commitSubject}` : ''}` : 'not deployed from here yet'}</span>
+              {app.matchedRevision ? ` · renders what revision ${app.matchedRevision} runs` : app.sourceDiff ? ` · ${app.sourceDiff}` : ''}
             </span>
             {app.chartVersion && (
               <span>

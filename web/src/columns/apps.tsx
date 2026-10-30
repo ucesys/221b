@@ -26,7 +26,7 @@ export function behindSource(r: AppRow): string | undefined {
   // A source set on a release that already runs exactly what it renders (round 2 review).
   if (r.app.matchedRevision && r.app.matchedRevision === r.revision && r.chartVersion === r.app.chartVersion) return undefined
   // A commit is written by a deploy: none means the source never was.
-  if (!r.app.commit) return `the source has not been deployed yet; revision ${r.revision} (${r.chart}-${r.chartVersion}) is "${r.description || 'not from the console'}"`
+  if (!r.app.commit) return r.app.sourceDiff ? `the source has not been deployed yet, and ${r.app.sourceDiff}; revision ${r.revision} (${r.chart}-${r.chartVersion}) runs` : `the source has not been deployed yet; revision ${r.revision} (${r.chart}-${r.chartVersion}) is "${r.description || 'not from the console'}"`
   const sha = r.app.commit.slice(0, 12)
   if ((r.description ?? '').includes(sha) && r.chartVersion === r.app.chartVersion) return undefined
   return `revision ${r.revision} (${r.chart}-${r.chartVersion}) is "${r.description || 'not from the console'}"; the source last deployed ${r.app.chartVersion} @ ${sha}`
