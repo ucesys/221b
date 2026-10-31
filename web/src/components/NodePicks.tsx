@@ -34,7 +34,7 @@ export function PickedBar({ picked, shown, onPickAll, onClear, fleets, onMakeFle
   const n = picked.length
   const lists = (fleets ?? []).filter((f) => f.kind === 'nodes')
   return (
-    <div className="rk-callout" data-tone="info" role="region" aria-label="Picked nodes" style={{ position: 'fixed', top: 'calc(var(--hdr-h, 52px) + 12px)', left: '50%', transform: 'translateX(-50%)', zIndex: 45, width: 'min(960px, calc(100vw - 32px))', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 10px', fontSize: 12.5, boxShadow: 'var(--shadow)', background: 'var(--surface)' }} data-testid="node-picked-bar">
+    <div className="rk-callout" data-tone="info" role="region" aria-label="Picked nodes" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 10px', fontSize: 12.5 }} data-testid="node-picked-bar">
       <strong data-testid="node-picked-count">
         {n} {n === 1 ? 'node' : 'nodes'} picked
       </strong>
@@ -47,7 +47,7 @@ export function PickedBar({ picked, shown, onPickAll, onClear, fleets, onMakeFle
       {fleets && (
         <>
           <button className="rk-btn" onClick={onMakeFleet} title="A fleet of these nodes, by name" data-testid="node-picked-fleet">
-            Make a fleet…
+            New fleet…
           </button>
           <label className="rk-field" style={{ width: 190 }} title={lists.length ? 'Add the picked nodes to a fleet of names' : 'No fleet of names yet; make one'}>
             <select value="" onChange={(e) => e.target.value && onAddToFleet(e.target.value)} disabled={lists.length === 0} aria-label="Add to a fleet" data-testid="node-picked-add">
