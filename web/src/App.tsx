@@ -408,7 +408,8 @@ function Shell() {
                   render: (a, controls) => {
                     const one = sessions.sessions.find((x) => x.id === a)
                     if (one) return <SessionPane key={one.id} cluster={route.cluster} session={one} admin={!!watson.status?.admin} dark={theme === 'dark'} controls={controls} onToast={setToast} />
-                    return <SessionsPane cluster={route.cluster} sessions={sessions.sessions} admin={!!watson.status?.admin} controls={controls} onOpen={showSession} onToast={setToast} />
+                    // An ended session whose tab was closed is done with: it leaves the list too (asked October 30, 2026); a live one stays, as the tab's tooltip says.
+                    return <SessionsPane cluster={route.cluster} sessions={sessions.sessions.filter((x) => x.state !== 'ended' || !tabsHere.closed.includes(x.id))} admin={!!watson.status?.admin} controls={controls} onOpen={showSession} onToast={setToast} />
                   },
                 }
               : undefined

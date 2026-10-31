@@ -349,7 +349,7 @@ export function SessionsPane({ sessions, admin, controls, onOpen, onToast, clust
       <div className="rk-dph">
         <h2>Sessions</h2>
         <small>
-          {live.length} open{admin ? ' · everyone’s, as a SuperAdmin sees them' : ''} · ended ones stay an hour; Administration › Sessions keeps the history
+          {live.length} open{admin ? ' · everyone’s, as a SuperAdmin sees them' : ''} · an ended one stays an hour, or until its tab is closed; Administration › Sessions keeps the history
         </small>
         <span style={{ flex: '1 1 auto' }} />
         {controls}

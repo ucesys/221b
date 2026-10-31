@@ -349,6 +349,12 @@ export function tabLabel(s: SessionView): string {
       return `dbg ${s.pod || r.namespace || ''}`
     case 'command':
       return `run ${pod}`
+    case 'ssh':
+      return `ssh ${r.node ?? ''}`
+    case 'ssh-pair':
+      return `pair ${r.node ?? ''}`
+    case 'ssh-unpair':
+      return `unpair ${r.node ?? ''}`
     default:
       return `sh ${pod}${s.container ? ' · ' + s.container : ''}`
   }
