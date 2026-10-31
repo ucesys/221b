@@ -405,6 +405,9 @@ func New(o Options) *Server {
 		s.toolboxRoutes()
 		o.Watson.SetSessionHooks(s.planSession, s.startSession)
 	}
+	if o.Watson != nil {
+		o.Watson.SetReread(s.rereadWho)
+	}
 	s.rolesRoutes()
 	s.auditRoutes()
 	s.backupRoutes()

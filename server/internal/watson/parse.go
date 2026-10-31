@@ -137,7 +137,8 @@ var specs = []*spec{
 		flags: flags(map[string]flag{"all-namespaces": fAll, "selector": fSelector, "containers": {}, "sort-by": {value: true, values: []string{"cpu", "memory"}}, "no-headers": {}, "sum": {}, "show-capacity": {}}),
 		check: checkTop},
 	{tool: "kubectl", verb: []string{"events"}, min: 0, max: 0, usage: "kubectl events [-n NAMESPACE | -A] [--for TYPE/NAME] [--types Warning]",
-		flags: flags(map[string]flag{"all-namespaces": fAll, "for": {value: true}, "types": {value: true}, "no-headers": {}, "output": fOutput, "chunk-size": {value: true}})},
+		flags: flags(map[string]flag{"all-namespaces": fAll, "for": {value: true}, "types": {value: true}, "no-headers": {}, "output": fOutput, "chunk-size": {value: true}}),
+		check: checkOutput},
 	{tool: "kubectl", verb: []string{"auth", "can-i"}, min: 0, max: 3, usage: "kubectl auth can-i VERB TYPE [NAME] [-n NAMESPACE | -A] | --list",
 		flags: flags(map[string]flag{"all-namespaces": fAll, "list": {}, "subresource": {value: true}, "no-headers": {}, "quiet": {short: "q"}}),
 		check: checkCanI},
@@ -660,15 +661,26 @@ func targets(pos []string) (types []string, names []string) {
 	return types, pos[1:]
 }
 
+// checkOutput keeps -o to what prints from memory: the other formats
+// (jsonpath-file=, go-template-file=, templatefile=) read a path on the
+// server's own disk, where the console's token is.
+func checkOutput(c *Command) *Refusal {
+	out := c.Flag("output")
+	if out == "" {
+		return nil
+	}
+	if out == "wide" || out == "yaml" || out == "json" || out == "name" || strings.HasPrefix(out, "jsonpath=") || strings.HasPrefix(out, "jsonpath-as-json=") || strings.HasPrefix(out, "custom-columns=") {
+		return nil
+	}
+	return refuse("flag", "Watson prints -o wide, yaml, json, name, jsonpath=… and custom-columns=…, not %q.", out)
+}
+
 func checkGet(c *Command) *Refusal {
+	if r := checkOutput(c); r != nil {
+		return r
+	}
 	types, _ := targets(c.Positionals)
 	out := c.Flag("output")
-	if out != "" {
-		ok := out == "wide" || out == "yaml" || out == "json" || out == "name" || strings.HasPrefix(out, "jsonpath=") || strings.HasPrefix(out, "jsonpath-as-json=") || strings.HasPrefix(out, "custom-columns=")
-		if !ok {
-			return refuse("flag", "Watson prints -o wide, yaml, json, name, jsonpath=… and custom-columns=…, not %q.", out)
-		}
-	}
 	for _, t := range types {
 		if t == "secrets" && out != "" && out != "wide" && out != "name" {
 			return refuse("secret values", "Watson never prints Secret values. kubectl describe secret shows their keys and sizes.")

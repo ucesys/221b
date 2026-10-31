@@ -83,8 +83,11 @@ type Who struct {
 	Name string
 	// Admin is a SuperAdmin, who alone approves a node shell (TB-32).
 	Admin bool
-	Audit audit.Who
-	From  string
+	// ManageApps holds a role that manages Helm applications: --app reads
+	// a record with the console's account, so the role is checked here.
+	ManageApps bool
+	Audit      audit.Who
+	From       string
 }
 
 // Line is one line of output.
@@ -194,6 +197,10 @@ type Options struct {
 	StartSession func(cl Cluster, it Item, approver Who) (string, error)
 	// Apps keeps the Helm applications (Phase 10); nil keeps none.
 	Apps apps.Store
+	// Reread reads a standing approval's holder again as the sign-in sees
+	// them now; false means their session has ended or they may no longer
+	// use the console. Nil keeps the holder as they were.
+	Reread func(Who) (Who, bool)
 	// ApproveAllMax is the longest standing approval a person may give on
 	// a cluster (R2-04); nil or 0 offers none.
 	ApproveAllMax func(c Cluster) time.Duration
@@ -372,6 +379,12 @@ func (s *Service) submitOne(cl Cluster, who Who, line, from, why string, run boo
 		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(it.Rule)+" reason="+quote(it.Reason))
 		return it
 	}
+	if c.Has("app") && !who.ManageApps {
+		it.Status, it.Reason, it.Rule = StatusRefused, "Only Admins and SuperAdmins use an application's saved values and token.", "apps"
+		s.add(it)
+		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(it.Rule)+" reason="+quote(it.Reason))
+		return it
+	}
 	it.cmd = c
 	it.Line = c.Line
 	// A change asked as a dry run changes nothing: it runs like a read.
@@ -501,6 +514,14 @@ func (s *Service) SetSessionHooks(plan func(ctx context.Context, cl Cluster, it 
 	s.opts.PlanSession, s.opts.StartSession = plan, start
 }
 
+// SetReread sets how a standing approval's holder is read again: the API
+// sets it once it is built, before any request.
+func (s *Service) SetReread(f func(Who) (Who, bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.opts.Reread = f
+}
+
 // A Grant is a person's standing approval on a cluster (R2-04): until
 // it ends, every card they could approve is approved as it is ready,
 // their own (the first approval) and, where a second person is needed,
@@ -605,6 +626,7 @@ func (s *Service) autoApprove(cl Cluster, id string) {
 			}
 		}
 	}
+	reread := s.opts.Reread
 	s.mu.Unlock()
 	if len(holders) == 0 {
 		return
@@ -612,6 +634,14 @@ func (s *Service) autoApprove(cl Cluster, id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	for _, w := range holders {
+		if reread != nil {
+			fresh, ok := reread(w)
+			if !ok {
+				s.Revoke(cl, w)
+				continue
+			}
+			w = fresh
+		}
 		if _, err := s.Approve(ctx, cl, w, id); err == nil {
 			return
 		}

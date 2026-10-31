@@ -30,6 +30,9 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Fixed
 
+- **Security.** `kubectl events -o` took any format, so `-o go-template-file=PATH` printed a file from the server's own disk, the console's token included, to anyone signed in; it now takes the same list as `kubectl get`, which never reads a file.
+- **Security.** `--app` with `--git` sent an application's saved token and values to the repository on the line. `--app` now refuses another repository, and only an Admin or SuperAdmin may use it, in a dry run too.
+- **Security.** A standing approval outlived its holder: signed out, disabled or out of the directory group, their grant went on approving other people's changes in their name. It is now read again before each approval, runs as the person is then, and ends with their session.
 - With two replicas, CPU and memory in use flickered to — on the Helm release page and in the pod and object drawers: a fetch answered by the replica without the page's stream had no usage. Every data request now goes to the leader (P7-09).
 
 ### Changed

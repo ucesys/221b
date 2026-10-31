@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,8 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/watson"
 )
@@ -87,8 +90,13 @@ func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.C
 // watsonWho is the person acting.
 func (s *Server) watsonWho(r *http.Request) watson.Who {
 	sess, _ := auth.SessionFrom(r.Context())
-	w := watson.Who{Session: sess.ID, Person: s.person(r), Name: firstOf(sess.User.Name, sess.User.Email, sess.User.Username, "Anonymous"), Admin: sess.Admin || s.opts.Auth == nil,
-		Audit: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, From: fromAddr(r)}
+	return s.whoOf(sess, s.person(r), fromAddr(r))
+}
+
+func (s *Server) whoOf(sess auth.Session, person kube.Person, from string) watson.Who {
+	w := watson.Who{Session: sess.ID, Person: person, Name: firstOf(sess.User.Name, sess.User.Email, sess.User.Username, "Anonymous"), Admin: sess.Admin || s.opts.Auth == nil,
+		ManageApps: s.opts.Auth == nil || sess.Admin || slices.Contains(sess.Roles, roles.Admin) || slices.Contains(sess.Roles, roles.SuperAdmin),
+		Audit:      audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, From: from}
 	if !w.Person.Nobody() {
 		w.User = sess.User.Username
 		if w.User == "" {
@@ -96,6 +104,31 @@ func (s *Server) watsonWho(r *http.Request) watson.Who {
 		}
 	}
 	return w
+}
+
+// rereadWho reads a standing approval's holder as the sign-in sees them
+// now, directory groups included (RB-23): the approval that runs on their
+// behalf stands only while they do.
+func (s *Server) rereadWho(w watson.Who) (watson.Who, bool) {
+	a, ok := s.opts.Auth.(interface {
+		Current(auth.Session) (auth.Session, bool)
+		Reread(auth.Session) (auth.Session, bool)
+	})
+	if !ok {
+		return w, true
+	}
+	sess, ok := a.Current(auth.Session{ID: w.Session})
+	if !ok {
+		return watson.Who{}, false
+	}
+	if sess, ok = a.Reread(sess); !ok {
+		return watson.Who{}, false
+	}
+	var person kube.Person
+	if s.opts.Access != nil {
+		person = s.opts.Impersonation.personOf(sess.User)
+	}
+	return s.whoOf(sess, person, w.From), true
 }
 
 type watsonStatus struct {

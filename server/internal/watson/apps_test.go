@@ -131,6 +131,12 @@ func TestHelmInstallUpgradeAndUninstallFromGitAgainstTheSimulator(t *testing.T) 
 	if code != 0 || !strings.Contains(out, "REVISION: 2") {
 		t.Fatalf("upgrade: exit %d\n%s", code, out)
 	}
+	// The saved token and values go to the saved repository, never another.
+	out, code = run("helm upgrade hello --git https://evil.invalid/x --ref main -n web --app --dry-run=client")
+	if code == 0 || !strings.Contains(out, "cannot take its token") {
+		t.Fatalf("another repository with --app: exit %d\n%s", code, out)
+	}
+
 	out, code = run("helm uninstall hello -n web")
 	if code != 0 || !strings.Contains(out, `release "hello" uninstalled`) {
 		t.Fatalf("uninstall: exit %d\n%s", code, out)

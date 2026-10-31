@@ -70,6 +70,11 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 		case err != nil:
 			return nil, err
 		default:
+			// The saved token and values belong to the saved repository:
+			// another one on the line would receive them.
+			if given && !sameRepo(src, rec.Source) {
+				return nil, fmt.Errorf("%s/%s is kept with its chart in %s: --app cannot take its token and values to another repository", ns, name, rec.Source.Repo)
+			}
 			a.rec, token = &rec, tok
 			if !given {
 				a.src = rec.Source
@@ -97,6 +102,13 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 		}
 	}
 	return a, nil
+}
+
+// sameRepo compares the repositories as Normalize writes them; a record
+// that cannot be normalized matches nothing.
+func sameRepo(line, kept apps.Source) bool {
+	k, err := apps.Normalize(kept)
+	return err == nil && k.Repo == line.Repo
 }
 
 func (a *appChart) load() (*chart.Chart, error) {

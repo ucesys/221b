@@ -576,6 +576,72 @@ func TestTaintsWaitForApprovalAndRun(t *testing.T) {
 	}
 }
 
+// A standing approval lasts only while its holder does: signed out or
+// disabled, their grant ends and approves nothing, under the two-person
+// rule included; while they stand it runs as they are now, not as they
+// were when they gave it.
+func TestAStandingApprovalEndsWithItsHoldersSession(t *testing.T) {
+	stands := true
+	newer := alice()
+	newer.Person.Groups = []string{"sre"}
+	svc, cl, s, _, buf := setup(t, Options{
+		ApproveAllMax: func(Cluster) time.Duration { return 30 * time.Minute },
+		TwoPerson:     func(Cluster) bool { return true },
+		Reread: func(w Who) (Who, bool) {
+			if w.User == alice().User {
+				return newer, stands
+			}
+			return w, true
+		},
+	})
+	if _, err := svc.ApproveAll(cl, alice(), 10*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	it := svc.Submit(context.Background(), cl, bob(), "kubectl cordon worker-003", "t", "", true)[0]
+	done := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) })
+	if done.Status != StatusDone || done.Approver == nil || len(done.Approver.Person.Groups) != 1 {
+		t.Fatalf("status %s approver %+v", done.Status, done.Approver)
+	}
+	stands = false
+	later := svc.Submit(context.Background(), cl, bob(), "kubectl cordon worker-002", "t", "", true)[0]
+	wait(t, svc, later.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	waitFor := time.Now().Add(5 * time.Second)
+	for time.Now().Before(waitFor) {
+		if _, ok := svc.Standing(cl, alice()); !ok {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, ok := svc.Standing(cl, alice()); ok {
+		t.Fatal("the grant outlived its holder's session")
+	}
+	if got := svc.Get(later.ID); got.Status != StatusPending || s.Node("worker-002").Spec.Unschedulable {
+		t.Fatalf("a signed-out holder approved a card: %s", got.Status)
+	}
+	var ended bool
+	for _, e := range buf.events() {
+		ended = ended || (e.Action == ActionApproveAll && e.Detail == "ended")
+	}
+	if !ended {
+		t.Fatal("the audit log does not say the grant ended")
+	}
+}
+
+// --app reads a record with the console's account, so only a role that
+// manages applications may name it, in a dry run too.
+func TestOnlyAnAppManagerMayUseAnApplicationsRecord(t *testing.T) {
+	svc, cl, _, _, _ := setup(t, Options{})
+	it := svc.Submit(context.Background(), cl, alice(), "helm upgrade web -n payments --app --dry-run=client", "t", "", true)[0]
+	if it.Status != StatusRefused || it.Rule != "apps" {
+		t.Fatalf("a Viewer's --app: %s %s", it.Status, it.Reason)
+	}
+	who := alice()
+	who.ManageApps = true
+	if it := svc.Submit(context.Background(), cl, who, "helm upgrade web -n payments --app --dry-run=client", "t", "", false)[0]; it.Status == StatusRefused {
+		t.Fatalf("an Admin's --app: %s", it.Reason)
+	}
+}
+
 // A standing approval (R2-04) approves a person's cards as they are
 // ready, within what the settings allow, until it ends.
 func TestAStandingApprovalApprovesCardsAsTheyAreReady(t *testing.T) {
