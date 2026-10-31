@@ -94,7 +94,7 @@ SIM_STORE = -settings-configmap 221b/k8s-console-221b -connections-secrets 221b/
 # administrator turns it on in Settings with any key of the right shape.
 SIM_SHERLOCK = -sherlock-api-url http://127.0.0.1:7443/claude
 # Watson (Phase 6) may change the simulated cluster once someone approves.
-SIM_WATSON = -local-mode write
+SIM_WATSON = -local-mode write -toolbox-config hack/e2e-toolbox.json
 
 dev-sim: build ## Run the console on http://127.0.0.1:8080 against a simulated cluster, signing in through the simulated provider
 	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) -churn 5s $(SIM_OIDC) & sim=$$!; \

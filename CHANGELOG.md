@@ -34,7 +34,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Added
 
-- **SSH to nodes** (Phase 11, ADR-72). A node's Tools menu gains *Pair for SSH…*, *SSH…* and *Unpair from SSH…* for SuperAdmins. Pairing is a node command that installs the console's certificate authority and a principals file for an existing login user on the node and pins the node's host key; a session is a terminal over SSH with a certificate the console signs for that session alone, checked against the pinned host key, and works when the kubelet does not. Chart values `toolbox.ssh.enabled`, `toolbox.ssh.port` and `toolbox.ssh.loginUser`; the authority lives in the Secret `<release>-ssh-ca` (SSH-01 to SSH-07).
+- **SSH to nodes** (Phase 11, ADR-72). A node's Tools menu gains *Pair for SSH…*, *SSH…* and *Unpair from SSH…* for SuperAdmins. Pairing is a node command that installs the console's certificate authority and a principals file for an existing login user on the node and pins the node's host key; a session is a terminal over SSH with a certificate the console signs for that session alone, checked against the pinned host key, and works when the kubelet does not. SSH is off until `toolbox.ssh.enabled` is set, and only then does the chart add an egress rule from the console to the nodes. Chart values `toolbox.ssh.enabled`, `toolbox.ssh.port` and `toolbox.ssh.loginUser`; the authority lives in the Secret `<release>-ssh-ca` (SSH-01 to SSH-07).
 
 ## 0.10.2 (unreleased)
 

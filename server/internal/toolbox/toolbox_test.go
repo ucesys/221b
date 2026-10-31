@@ -46,10 +46,16 @@ func TestParseRefusesValuesThatCannotWork(t *testing.T) {
 func TestOn(t *testing.T) {
 	c := Default()
 	for _, tool := range Tools {
-		if !c.On(tool) {
-			t.Errorf("%s is off by default", tool)
+		ssh := tool == ToolSSH || tool == ToolSSHPair || tool == ToolSSHUnpair
+		if c.On(tool) == ssh {
+			t.Errorf("%s: on by default is %v", tool, c.On(tool))
 		}
 	}
+	c.SSH.Enabled = true
+	if !c.On(ToolSSH) || !c.On(ToolSSHPair) || !c.On(ToolSSHUnpair) {
+		t.Fatal("SSH asked for")
+	}
+	c.SSH.Enabled = false
 	c.Shell.OneCommand = false
 	if c.On(ToolCommand) || !c.On(ToolShell) {
 		t.Fatal("one command")

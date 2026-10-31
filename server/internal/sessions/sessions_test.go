@@ -964,6 +964,7 @@ func TestTunnelVersions(t *testing.T) {
 // (asked October 30, 2026); other node tools take one node.
 func TestARequestOnSeveralNodes(t *testing.T) {
 	c := toolbox.Default()
+	c.SSH.Enabled = true
 	r := Request{Tool: toolbox.ToolSSHPair, Node: "a", Nodes: []string{"b", " a ", "c", "b", ""}, LoginUser: "ops"}
 	if err := r.Validate(c, false); err != nil {
 		t.Fatal(err)
@@ -992,6 +993,7 @@ func TestARequestOnSeveralNodes(t *testing.T) {
 // open a session for each under a card that names one.
 func TestOnlyPairingTakesSeveralNodes(t *testing.T) {
 	c := toolbox.Default()
+	c.SSH.Enabled = true
 	for _, r := range []Request{
 		{Tool: toolbox.ToolDebugPod, Namespace: "x", Image: "general", Nodes: []string{"a", "b"}},
 		{Tool: toolbox.ToolShell, Namespace: "x", Pod: "p", Shell: "auto", Nodes: []string{"a"}},
@@ -1008,6 +1010,7 @@ func TestOnlyPairingTakesSeveralNodes(t *testing.T) {
 // out refuses it as it refuses a node command.
 func TestPairingRespectsTheNodeProfiles(t *testing.T) {
 	c := toolbox.Default()
+	c.SSH.Enabled = true
 	c.NodeShell.Profiles = []string{toolbox.ProfileNetAdmin}
 	for _, r := range []Request{{Tool: toolbox.ToolSSHPair, Node: "a", LoginUser: "ops"}, {Tool: toolbox.ToolSSHUnpair, Node: "a"}} {
 		if err := r.Validate(c, false); err == nil || !strings.Contains(err.Error(), "node shell profiles here") {

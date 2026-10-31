@@ -87,9 +87,10 @@ render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=false --set to
 render k8s-console --set clusterName=ci --set sherlock.egress=false --set 'networkPolicy.outboundCIDRs[0]=140.82.112.0/20' | tee "$WORK/chart-outbound.yaml" | validate
 render k8s-console --set clusterName=ci --set 'service.externalIPs[0]=10.0.0.21' | tee "$WORK/chart-external.yaml" | validate
 render k8s-console --set clusterName=ci --set toolbox.transcripts=pvc | tee "$WORK/chart-pvc.yaml" | validate
-render k8s-console --set clusterName=ci --set rbac.roles.superAdmin.template=readOnly --set rbac.roles.admin.template=full | tee "$WORK/chart-ssh-readonly.yaml" | validate
+render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true --set rbac.roles.superAdmin.template=readOnly --set rbac.roles.admin.template=full | tee "$WORK/chart-ssh-readonly.yaml" | validate
 render k8s-console --set clusterName=ci --set toolbox.ssh=null | tee "$WORK/chart-ssh-reuse.yaml" | validate
-render k8s-console --set clusterName=ci --set toolbox.ssh.port=2222 --set 'networkPolicy.nodeCIDRs[0]=192.168.1.0/24' | tee "$WORK/chart-ssh-cidr.yaml" | validate
+render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true | tee "$WORK/chart-ssh-on.yaml" | validate
+render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true --set toolbox.ssh.port=2222 --set 'networkPolicy.nodeCIDRs[0]=192.168.1.0/24' | tee "$WORK/chart-ssh-cidr.yaml" | validate
 echo "--- image tags that move, tags that do not, a digest and an explicit pull policy"
 render k8s-console --set clusterName=ci --set image.tag=pr-7 | tee "$WORK/chart-moving.yaml" | validate
 render k8s-console --set clusterName=ci --set image.tag=sha-d548f3953839 | tee "$WORK/chart-sha.yaml" | validate
@@ -121,7 +122,8 @@ ssh_gated() {
 }
 # The network policy lets the console reach sshd on the nodes, only with SSH on, narrowed to the nodes' CIDRs when given.
 ssh_egress() {
-  sed -n '/^kind: NetworkPolicy$/,/^---/p' "$out" | grep -q 'port: 22$' &&
+  sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-ssh-on.yaml" | grep -q 'port: 22$' &&
+    ! sed -n '/^kind: NetworkPolicy$/,/^---/p' "$out" | grep -q 'port: 22$' &&
     ! sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-ssh-off.yaml" | grep -q 'port: 22$' &&
     sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-ssh-cidr.yaml" | grep -A4 'port: 2222$' | grep -q 'cidr: "192.168.1.0/24"'
 }
@@ -461,7 +463,7 @@ check "an exposed Service is reachable through the network policy" open_when_exp
 check "the replicas elect a leader and reach each other, the standbys warm unless told otherwise; more than one adds a budget and a spread, and needs Secrets" replicas
 check "the Toolbox's values reach the console, and transcripts get a volume" toolbox_values
 check "node shells run in a namespace of their own at Pod Security privileged, closed to the network" toolbox_namespace
-check "SSH to nodes is in the toolbox config, on by default with port 22 and root, and off with another user when asked" ssh_values
+check "SSH to nodes is in the toolbox config, off by default with port 22 and root, and a value of its own when asked" ssh_values
 check "a read-only SuperAdmin definition, or values kept from an older release, leave SSH off and its egress out" ssh_gated
 check "the network policy lets the console reach sshd on the nodes only with SSH on, narrowed to networkPolicy.nodeCIDRs" ssh_egress
 check "Admin forwards ports and starts debug pods, and opens shells only when asked" admin_exec

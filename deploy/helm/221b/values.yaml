@@ -394,8 +394,10 @@ toolbox:
   # on the node), then opens SSH sessions to it, each with a short-lived
   # certificate the console signs and the node's pinned host key checked.
   # The authority's key is kept in the Secret <release>-ssh-ca.
+  # SSH to paired nodes (ADR-72): off unless asked for, as it adds an egress
+  # rule from the console to the nodes. Set networkPolicy.nodeCIDRs with it.
   ssh:
-    enabled: true
+    enabled: false
     port: 22
     # The OS account offered when pairing; it must exist on the node.
     loginUser: root

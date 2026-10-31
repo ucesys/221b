@@ -50,11 +50,11 @@ The objects that are not the chart's (connections, accounts, Sherlock's key, ses
 
 ## 0.11.0 (unreleased)
 
-New chart values, all with defaults: `toolbox.ssh.enabled` (true), `toolbox.ssh.port` (22), `toolbox.ssh.loginUser` (root). What an operator may notice:
+New chart values, all with defaults: `toolbox.ssh.enabled` (false), `toolbox.ssh.port` (22), `toolbox.ssh.loginUser` (root). SSH is off until you turn it on. What an operator may notice with it on:
 
 - **A new Secret**, `<release>-ssh-ca`, made on the first pairing: the SSH certificate authority's key. The console's ServiceAccount already manages Secrets in its namespace when `connections.store` is `secrets`. Back it up with the namespace; a console that loses it must pair every node again.
 - **A new key in the settings ConfigMap**, `ssh-pairings.json`.
-- **A new egress rule in the NetworkPolicy**: TCP to `toolbox.ssh.port` (22) anywhere, so the console reaches sshd on the nodes. Set `networkPolicy.nodeCIDRs` to the nodes' addresses to allow nothing else; `toolbox.ssh.enabled=false` removes the rule.
+- **A new egress rule in the NetworkPolicy**, only with SSH on: TCP to `toolbox.ssh.port` (22) anywhere, so the console reaches sshd on the nodes. Set `networkPolicy.nodeCIDRs` to the nodes' addresses to allow nothing else; `toolbox.ssh.enabled=false` removes the rule.
 - **On a paired node**: `/etc/ssh/221b/`, `/etc/ssh/sshd_config.d/221b.conf`, and an `Include /etc/ssh/sshd_config.d/*.conf` line at the top of `sshd_config` when it had none (a failed pairing takes it out again). *Unpair from SSH…* removes the first two.
 
 ## 0.10.2 (unreleased)

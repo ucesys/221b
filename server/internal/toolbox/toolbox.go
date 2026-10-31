@@ -171,7 +171,7 @@ func Default() Config {
 	c.NodeShell.Image = "node"
 	c.NodeShell.Profiles = []string{ProfileGeneral, ProfileNetAdmin, ProfileSysAdmin}
 	c.NodeShell.Approval = ApprovalCluster
-	c.SSH.Enabled, c.SSH.Port, c.SSH.LoginUser = true, 22, "root"
+	c.SSH.Enabled, c.SSH.Port, c.SSH.LoginUser = false, 22, "root"
 	c.NodeShell.QuickCommands = []string{"journalctl -u kubelet -n 200 --no-pager", "df -h /var/lib/containerd /var/log /", "crictl ps -a --state exited", "dmesg -T | tail -n 100"}
 	c.Images = map[string]Image{
 		"general": {Image: "busybox:1.37", Tools: "sh, ls, cat, tar, wget, nc"},
