@@ -43,7 +43,7 @@ func PairScript(caPublicKey, loginUser string) string {
 		`sshd_bin=$(command -v sshd 2>/dev/null || echo /usr/sbin/sshd)`,
 		`"$sshd_bin" -t`,
 		reloadLine,
-		`for t in ed25519 ecdsa rsa; do f="/etc/ssh/ssh_host_${t}_key.pub"; if [ -r "$f" ]; then echo "` + markHostKey + `$(cut -d' ' -f1,2 "$f")"; break; fi; done`,
+		`for f in /etc/ssh/ssh_host_*_key.pub; do [ -r "$f" ] && echo "` + markHostKey + `$(cut -d' ' -f1,2 "$f")"; done`,
 		`echo "` + markPaired + `$u"`,
 	}, "\n")
 }
@@ -70,27 +70,28 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// ParsePairOutput reads what PairScript printed: the host key and the
-// login user it paired.
-func ParsePairOutput(out string) (hostKey, loginUser string, err error) {
+// ParsePairOutput reads what PairScript printed: the node's host keys
+// (every type sshd may present) and the login user it paired.
+func ParsePairOutput(out string) (hostKeys []string, loginUser string, err error) {
 	sc := bufio.NewScanner(strings.NewReader(out))
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		switch {
 		case strings.HasPrefix(line, markHostKey):
-			hostKey = strings.TrimSpace(strings.TrimPrefix(line, markHostKey))
+			k := strings.TrimSpace(strings.TrimPrefix(line, markHostKey))
+			if _, _, _, _, err := ssh.ParseAuthorizedKey([]byte(k)); err != nil {
+				return nil, "", fmt.Errorf("a host key of the node is not readable (%q): %w", k, err)
+			}
+			hostKeys = append(hostKeys, k)
 		case strings.HasPrefix(line, markPaired):
 			loginUser = strings.TrimSpace(strings.TrimPrefix(line, markPaired))
 		}
 	}
 	if loginUser == "" {
-		return "", "", errors.New("the pairing did not finish on the node (no 221B-PAIRED line in its output)")
+		return nil, "", errors.New("the pairing did not finish on the node (no 221B-PAIRED line in its output)")
 	}
-	if hostKey == "" {
-		return "", "", errors.New("the node printed no host key (no /etc/ssh/ssh_host_*_key.pub)")
+	if len(hostKeys) == 0 {
+		return nil, "", errors.New("the node printed no host key (no /etc/ssh/ssh_host_*_key.pub)")
 	}
-	if _, _, _, _, err := ssh.ParseAuthorizedKey([]byte(hostKey)); err != nil {
-		return "", "", fmt.Errorf("the node's host key is not readable: %w", err)
-	}
-	return hostKey, loginUser, nil
+	return hostKeys, loginUser, nil
 }

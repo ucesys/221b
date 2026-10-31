@@ -1,12 +1,14 @@
 package nodessh
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -86,7 +88,7 @@ func (s *Service) Script(r sessions.Request) (string, error) {
 func (s *Service) Done(ctx context.Context, cluster string, r sessions.Request, output, by string) error {
 	switch r.Tool {
 	case toolbox.ToolSSHPair:
-		hostKey, user, err := ParsePairOutput(output)
+		hostKeys, user, err := ParsePairOutput(output)
 		if err != nil {
 			return err
 		}
@@ -94,7 +96,7 @@ func (s *Service) Done(ctx context.Context, cluster string, r sessions.Request, 
 		if port == 0 {
 			port = 22
 		}
-		return s.opts.Pairings.Set(ctx, Pairing{Cluster: cluster, Node: r.Node, LoginUser: user, Port: port, HostKey: hostKey, PairedAt: s.opts.Now().UTC(), PairedBy: by, CAFinger: s.opts.CA.Fingerprint(), Principal: Principal})
+		return s.opts.Pairings.Set(ctx, Pairing{Cluster: cluster, Node: r.Node, LoginUser: user, Port: port, HostKey: hostKeys[0], HostKeys: hostKeys, PairedAt: s.opts.Now().UTC(), PairedBy: by, CAFinger: s.opts.CA.Fingerprint(), Principal: Principal})
 	case toolbox.ToolSSHUnpair:
 		if !strings.Contains(output, markUnpaired) {
 			return errors.New("the unpairing did not finish on the node")
@@ -120,9 +122,9 @@ func (s *Service) Dial(ctx context.Context, cluster, node string, owner sessions
 	if fp := s.opts.CA.Fingerprint(); p.CAFinger != "" && p.CAFinger != fp {
 		return nil, "", fmt.Errorf("node %s was paired with another authority (%s, now %s): pair it again", node, p.CAFinger, fp)
 	}
-	hostKey, _, _, _, err := ssh.ParseAuthorizedKey([]byte(p.HostKey))
+	pinned, algos, err := pinnedKeys(p)
 	if err != nil {
-		return nil, "", fmt.Errorf("the pinned host key of node %s is not readable: pair it again", node)
+		return nil, "", fmt.Errorf("the pinned host keys of node %s are not readable: pair it again", node)
 	}
 	addr, err := s.opts.NodeAddr(cluster, node)
 	if err != nil {
@@ -144,22 +146,87 @@ func (s *Service) Dial(ctx context.Context, cluster, node string, owner sessions
 	if err != nil {
 		return nil, "", fmt.Errorf("connecting to %s: %w", hostPort, err)
 	}
+	var mismatch error
+	var verified ssh.PublicKey
 	cfg := &ssh.ClientConfig{
-		User:            p.LoginUser,
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: ssh.FixedHostKey(hostKey),
-		Timeout:         15 * time.Second,
+		User: p.LoginUser,
+		Auth: []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		// The node presents one of the key types it was paired with.
+		HostKeyAlgorithms: algos,
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			for _, k := range pinned {
+				if key.Type() == k.Type() && bytes.Equal(key.Marshal(), k.Marshal()) {
+					verified = key
+					return nil
+				}
+			}
+			mismatch = fmt.Errorf("node %s presented a host key that is not among those it was paired with (%s %s; paired: %s): the node was reinstalled, or something sits between; pair it again once you know which", node, key.Type(), ssh.FingerprintSHA256(key), fingerprints(pinned))
+			return mismatch
+		},
+		Timeout: 15 * time.Second,
 	}
 	c, chans, reqs, err := ssh.NewClientConn(conn, hostPort, cfg)
 	if err != nil {
 		conn.Close()
-		if strings.Contains(err.Error(), "host key mismatch") {
-			return nil, "", fmt.Errorf("node %s presented a host key that is not the one it was paired with: the node was reinstalled, or something sits between; pair it again once you know which", node)
+		if mismatch != nil {
+			return nil, "", mismatch
 		}
 		return nil, "", fmt.Errorf("SSH to %s as %s: %w", hostPort, p.LoginUser, err)
 	}
-	note := fmt.Sprintf("SSH to node %s (%s) as %s: host key %s verified; certificate for %s, valid %s.", node, hostPort, p.LoginUser, ssh.FingerprintSHA256(hostKey), who, s.opts.CertTTL)
+	note := fmt.Sprintf("SSH to node %s (%s) as %s: host key %s %s verified; certificate for %s, valid %s.", node, hostPort, p.LoginUser, verified.Type(), ssh.FingerprintSHA256(verified), who, s.opts.CertTTL)
 	return &term{client: ssh.NewClient(c, chans, reqs)}, note, nil
+}
+
+// pinnedKeys parses a pairing's host keys and lists the algorithms the
+// client may accept for them, preferred types first.
+func pinnedKeys(p Pairing) ([]ssh.PublicKey, []string, error) {
+	var keys []ssh.PublicKey
+	seen := map[string]bool{}
+	var algos []string
+	for _, line := range p.Keys() {
+		k, _, _, _, err := ssh.ParseAuthorizedKey([]byte(line))
+		if err != nil {
+			return nil, nil, err
+		}
+		keys = append(keys, k)
+		for _, a := range algorithmsOf(k.Type()) {
+			if !seen[a] {
+				seen[a] = true
+				algos = append(algos, a)
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return nil, nil, errors.New("no host key")
+	}
+	sort.SliceStable(algos, func(i, j int) bool { return rank(algos[i]) < rank(algos[j]) })
+	return keys, algos, nil
+}
+
+// algorithmsOf names the signature algorithms a host key type is used
+// with: an RSA key signs with SHA-2 today.
+func algorithmsOf(keyType string) []string {
+	if keyType == ssh.KeyAlgoRSA {
+		return []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+	}
+	return []string{keyType}
+}
+
+func rank(algo string) int {
+	for i, a := range []string{ssh.KeyAlgoED25519, ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521, ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA} {
+		if a == algo {
+			return i
+		}
+	}
+	return 100
+}
+
+func fingerprints(keys []ssh.PublicKey) string {
+	var out []string
+	for _, k := range keys {
+		out = append(out, k.Type()+" "+ssh.FingerprintSHA256(k))
+	}
+	return strings.Join(out, ", ")
 }
 
 // term is one SSH shell.

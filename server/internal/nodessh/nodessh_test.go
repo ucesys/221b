@@ -3,6 +3,9 @@ package nodessh
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"errors"
 	"io"
 	"net"
@@ -79,9 +82,14 @@ func TestThePairingScriptAndItsOutput(t *testing.T) {
 	if !strings.Contains(UnpairScript(), "rm -f /etc/ssh/sshd_config.d/221b.conf") || !strings.Contains(UnpairScript(), markUnpaired) {
 		t.Fatal("the unpair script")
 	}
-	hk, user, err := ParsePairOutput("some noise\n221B-HOSTKEY ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEx1aAoMmc6V6I0/3qbG4sYjDBDMpkK1mwEu+Ztu5tUe\n221B-PAIRED ops\n")
-	if err != nil || user != "ops" || !strings.HasPrefix(hk, "ssh-ed25519 AAAA") {
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ecPub, _ := ssh.NewPublicKey(&ecKey.PublicKey)
+	hk, user, err := ParsePairOutput("some noise\n221B-HOSTKEY ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEx1aAoMmc6V6I0/3qbG4sYjDBDMpkK1mwEu+Ztu5tUe\n221B-HOSTKEY " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(ecPub))) + "\n221B-PAIRED ops\n")
+	if err != nil || user != "ops" || len(hk) != 2 || !strings.HasPrefix(hk[0], "ssh-ed25519 AAAA") || !strings.HasPrefix(hk[1], "ecdsa-sha2-nistp256 ") {
 		t.Fatalf("parsed %q %q %v", hk, user, err)
+	}
+	if _, _, err := ParsePairOutput("221B-HOSTKEY ssh-ed25519 not-a-key\n221B-PAIRED ops\n"); err == nil {
+		t.Fatal("an unreadable host key passed")
 	}
 	if _, _, err := ParsePairOutput("221B-PAIRED ops\n"); err == nil {
 		t.Fatal("no host key passed")
@@ -228,7 +236,7 @@ func TestASessionRunsOverACertificateAndAPinnedHostKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(note, "as ops") || !strings.Contains(note, "host key SHA256:") {
+	if !strings.Contains(note, "as ops") || !strings.Contains(note, "host key ssh-ed25519 SHA256:") {
 		t.Fatalf("the note: %s", note)
 	}
 	pr, pw := io.Pipe()
@@ -265,8 +273,15 @@ func TestASessionRunsOverACertificateAndAPinnedHostKey(t *testing.T) {
 	if err := svc.Done(ctx, "local", req, "221B-HOSTKEY "+node.hostKeyLine()+"\n221B-PAIRED ops\n", "Pat"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := svc.Dial(ctx, "local", "worker-1", owner, "s2"); err == nil || !strings.Contains(err.Error(), "host key") {
+	if _, _, err := svc.Dial(ctx, "local", "worker-1", owner, "s2"); err == nil || !strings.Contains(err.Error(), "not among those it was paired with") || !strings.Contains(err.Error(), "ssh-ed25519 SHA256:") {
 		t.Fatalf("a changed host key: %v", err)
+	}
+	// Paired with several keys, one of them the node's: accepted.
+	if err := svc.Done(ctx, "local", req, "221B-HOSTKEY "+node.hostKeyLine()+"\n221B-HOSTKEY "+other.hostKeyLine()+"\n221B-PAIRED ops\n", "Pat"); err != nil {
+		t.Fatal(err)
+	}
+	if _, note, err := svc.Dial(ctx, "local", "worker-1", owner, "s3"); err != nil || !strings.Contains(note, "ssh-ed25519 SHA256:") {
+		t.Fatalf("several pinned keys: %v %s", err, note)
 	}
 	// Unpaired: gone.
 	if err := svc.Done(ctx, "local", sessions.Request{Tool: toolbox.ToolSSHUnpair, Node: "worker-1"}, "221B-UNPAIRED\n", "Pat"); err != nil {

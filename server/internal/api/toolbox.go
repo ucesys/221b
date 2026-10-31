@@ -219,10 +219,13 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 			sv.Fingerprint = s.opts.SSH.Fingerprint()
 			if list, err := s.opts.SSH.List(r.Context(), c.ID); err == nil {
 				for _, p := range list {
-					fp := p.HostKey
-					if k, _, _, _, err := ssh.ParseAuthorizedKey([]byte(p.HostKey)); err == nil {
-						fp = ssh.FingerprintSHA256(k)
+					var fps []string
+					for _, line := range p.Keys() {
+						if k, _, _, _, err := ssh.ParseAuthorizedKey([]byte(line)); err == nil {
+							fps = append(fps, k.Type()+" "+ssh.FingerprintSHA256(k))
+						}
 					}
+					fp := strings.Join(fps, ", ")
 					sv.Pairings[p.Node] = pairingView{LoginUser: p.LoginUser, Port: p.Port, PairedAt: p.PairedAt, PairedBy: p.PairedBy, HostKey: fp, Stale: p.CAFinger != "" && p.CAFinger != sv.Fingerprint}
 				}
 			}

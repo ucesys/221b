@@ -471,19 +471,20 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 			return
 		}
 		m.located(s, running, "node")
-		m.command(ctx, s, NodeCommand(script))
-		m.mu.Lock()
-		exit, out := s.Exit, s.ring.String()
-		m.mu.Unlock()
-		if exit != nil && *exit == 0 {
-			// The session's context ended with the command; the record is
-			// made on its own time.
+		// The pairing is recorded before the session ends, so the menu
+		// that opens on "ended" sees it (end deletes the pod first, which
+		// takes seconds).
+		m.commandThen(ctx, s, NodeCommand(script), func(code int, out string) {
+			if code != 0 {
+				return
+			}
 			dctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			if err := m.opts.SSH.Done(dctx, s.Cluster, r, out, s.Owner.Name); err != nil {
 				m.opts.Logger.Warn("the SSH pairing ran but could not be recorded", "session", s.ID, "node", r.Node, "err", err)
+				m.note(s, "The command ran, but the pairing could not be recorded: "+err.Error())
 			}
-		}
+		})
 	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand:
 		pod, err := NodePod(m.opts.Config, s.ID, s.Owner.Name, r, s.limit)
 		if err != nil {
@@ -644,6 +645,12 @@ func (m *Manager) sshTerminal(ctx context.Context, s *Session, term Term, note s
 
 // command runs one command and keeps its output (TB-16, TB-33).
 func (m *Manager) command(ctx context.Context, s *Session, cmd []string) {
+	m.commandThen(ctx, s, cmd, nil)
+}
+
+// commandThen is command with a step between the command's end and the
+// session's: then sees the exit code and the output.
+func (m *Manager) commandThen(ctx context.Context, s *Session, cmd []string, then func(code int, out string)) {
 	if !m.live(s) {
 		return
 	}
@@ -667,7 +674,11 @@ func (m *Manager) command(ctx context.Context, s *Session, cmd []string) {
 	}
 	m.mu.Lock()
 	s.Exit = &code
+	out := s.ring.String()
 	m.mu.Unlock()
+	if then != nil {
+		then(code, out)
+	}
 	if code == 0 {
 		m.end(s, EndFinished, "exit 0", Who{})
 	} else if code == -1 {
