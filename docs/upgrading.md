@@ -50,6 +50,10 @@ The objects that are not the chart's (connections, accounts, Sherlock's key, ses
 
 ## 0.11.0 (unreleased)
 
+`localCluster.writeClusterRole` now defaults to `minimal`, a role the chart makes, in place of the built-in `edit`: with sign-in off and `localCluster.mode: write`, the console no longer reads every Secret or impersonates ServiceAccounts unless `secrets.read` or your own role says so. Helm's records need Secrets read, so Helm applications there need `secrets.read`. To keep the old behaviour, set `localCluster.writeClusterRole: edit`.
+
+Two consoles in one cluster: `rbac.shared` says who installs the roles they share. `auto`, the default, is as before, and the install notes now say when another release holds them. To keep them from going with either console, install them on their own (`helm install 221b-roles <chart> --set rbac.shared=only`) and set `rbac.shared=none` on each console.
+
 New chart values, all with defaults: `toolbox.ssh.enabled` (false), `toolbox.ssh.port` (22), `toolbox.ssh.loginUser` (root). SSH is off until you turn it on. What an operator may notice with it on:
 
 - **A new Secret**, `<release>-ssh-ca`, made on the first pairing: the SSH certificate authority's key. The console's ServiceAccount already manages Secrets in its namespace when `connections.store` is `secrets`. Back it up with the namespace; a console that loses it must pair every node again.

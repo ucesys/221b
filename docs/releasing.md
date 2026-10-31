@@ -27,8 +27,8 @@ Releases so far: **0.6.5** (Phase 6.5, `f789452`), **0.6.6** (Phase 6.6, `ad0b56
    git push origin v0.8.0
    ```
 
-5. **CI** (`.github/workflows/ci.yml`) runs every check on the tag, including the upgrade from the two releases before it, and publishes the image as `ghcr.io/ucesys/221b:0.8.0`.
-6. **The release workflow** (`.github/workflows/release.yml`) checks that the tag matches the chart's version and that CHANGELOG.md has its section, pushes the chart to `oci://ghcr.io/ucesys/charts/221b:0.8.0`, and makes a GitHub release with the section as its notes and the chart attached.
+5. **CI** (`.github/workflows/ci.yml`) builds the tag, runs every check on that build, including the upgrade from the two releases before it, and publishes the image as `ghcr.io/ucesys/221b:0.8.0`: linux/amd64 is the very image the checks ran on, and linux/arm64, which they cannot run, is built in the publish job from the same pinned base images and scanned. A release is never a prebuilt image. Base images are pinned in `hack/base-images.env`; `hack/pin-base-images.sh` moves them. A build on a laptop follows the tags in the Dockerfile.
+6. **The release workflow** (`.github/workflows/release.yml`) checks that the tag matches the chart's version and that CHANGELOG.md has its section, waits up to two hours for CI to publish that image (so a failed run stops the release; rerun CI's failed jobs within the wait, or this workflow after it), then pushes the chart to `oci://ghcr.io/ucesys/charts/221b:0.8.0`, and makes a GitHub release with the section as its notes and the chart attached.
 7. **Check** the release page, then pull the image and install the chart from the registry once (`helm upgrade --install … --version 0.8.0`).
 
 A tag is never moved or deleted once pushed: a mistake is fixed by the next patch release.

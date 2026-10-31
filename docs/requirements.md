@@ -277,7 +277,7 @@ Phase 6.1 replaces P3-03's two console roles with four fixed roles (SuperAdmin, 
 | RB-15 | Each source has its own prefix on the names Kubernetes sees: local users and groups get `221b-local:`, LDAP ones get `221b-ldap:`, and OIDC ones keep using `auth.kubernetes.userPrefix` and `groupPrefix` as today. The Roles and Users pages hide the prefix when they show a name. Prefixes are chart values. | A local `alice` and an LDAP `alice` hold different rights; the Roles page shows both as `alice` with their source. A local group `ops` and an LDAP group `ops` are different subjects. |
 | RB-16 | Names are matched exactly, case included. Local user names use lowercase letters, digits, `.`, `-` and `_`. | `Alice` and `alice` are two different subjects, and a local user cannot be created as `Alice`. |
 | RB-17 | A name from any source that starts with `system:` or `221b:`, or that already carries a reserved prefix, is refused as a user name and dropped from a token's or directory's groups, with an audit record. | A directory group called `221b:superadmins` gives its members nothing and writes a record; a local user called `system:masters` cannot be created. |
-| RB-18 | Impersonating a ServiceAccount or a UID stays impossible (ADR-31). | Unchanged tests still pass. |
+| RB-18 | Impersonating a ServiceAccount or a UID stays impossible (ADR-31), with sign-in off too: the chart's `minimal` write role holds no impersonation. | Unchanged tests still pass; `hack/check-chart.sh`. |
 
 #### LDAP
 

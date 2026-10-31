@@ -9,11 +9,15 @@ localCluster:
   # With sign-in on, a change runs as the person who approved it, so their
   # own RBAC decides, and the console needs nothing more than impersonation.
   # With sign-in off (auth.mode none) and mode write, changes run as the
-  # console's ServiceAccount: it is bound to this ClusterRole (the built-in
-  # edit role: workloads, pods and their evictions, Secrets for Helm's
-  # records, no RBAC) and to a small role to cordon, drain and label nodes.
-  # Empty grants nothing, and the API server refuses the changes.
-  writeClusterRole: edit
+  # console's ServiceAccount: it is bound to this ClusterRole and to a small
+  # role to cordon, drain and label nodes. minimal is a role the chart
+  # makes: workloads, pods and their evictions, what Helm applications
+  # deploy, and writing Secrets; reading them only with secrets.read, which
+  # Helm's records need. It holds no RBAC and no impersonation. Name another
+  # ClusterRole to use that instead (the built-in edit reads every Secret
+  # and may impersonate ServiceAccounts). Empty grants nothing, and the API
+  # server refuses the changes.
+  writeClusterRole: minimal
 
 image:
   repository: ghcr.io/ucesys/221b
@@ -423,6 +427,14 @@ serviceAccount:
   annotations: {}
 
 rbac:
+  # Who installs the roles every console in a cluster shares (the four
+  # ClusterRoles for people, 221b-nodes and their cluster-wide bindings).
+  # auto: this release, unless another already has them. none: not this
+  # release. only: this release installs them and nothing else, so with
+  # two consoles they outlive either one:
+  #   helm install 221b-roles <chart> --set rbac.shared=only
+  #   helm install console-a <chart> --set rbac.shared=none ...
+  shared: auto
   # Creates the console's own ClusterRole and Role, and the four roles for
   # people (Viewer, SuperViewer, Admin, SuperAdmin; ClusterRoles named
   # 221b-viewer, 221b-super-viewer, 221b-admin and 221b-super-admin) with

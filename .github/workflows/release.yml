@@ -4,7 +4,8 @@
 # is made with that section as its notes, the chart and the 221b command
 # (TB-20, for macOS, Linux and Windows) attached. The image
 # for the tag (ghcr.io/ucesys/221b:0.7.0) is built, tested and published by
-# CI's publish job for the same tag. See docs/releasing.md.
+# CI's publish job for the same tag, and this waits for it. See
+# docs/releasing.md.
 name: Release
 
 on:
@@ -31,7 +32,7 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 140
     permissions:
       contents: write
       packages: write
@@ -69,6 +70,22 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Wait for CI to publish the image
+        # The image exists only when every gate of CI's run for this tag
+        # passed, so nothing names an image that never comes. A failed run
+        # can be rerun within the wait; past it, rerun this job.
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin >/dev/null
+          for _ in $(seq 240); do
+            docker manifest inspect "ghcr.io/ucesys/221b:$VERSION" > /dev/null 2>&1 && exit 0
+            sleep 30
+          done
+          echo "::error::ghcr.io/ucesys/221b:$VERSION was not published within two hours: CI's run for this tag has not passed."
+          exit 1
       - name: Package and push the chart
         env:
           VERSION: ${{ steps.version.outputs.version }}

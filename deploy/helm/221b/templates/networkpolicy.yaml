@@ -1,3 +1,4 @@
+{{- if ne (include "b221.shared" .) "only" }}
 {{- if .Values.networkPolicy.enabled }}
 {{- if not .Values.networkPolicy.apiServerPorts }}
 {{- fail "networkPolicy.apiServerPorts is empty, which would allow every connection out; list the API server's ports, or set networkPolicy.enabled=false" }}
@@ -120,4 +121,5 @@ spec:
         {{- end }}
       {{- end }}
     {{- end }}
+{{- end }}
 {{- end }}

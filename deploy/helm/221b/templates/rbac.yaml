@@ -1,3 +1,4 @@
+{{- if ne (include "b221.shared" .) "only" }}
 {{- if .Values.rbac.create }}
 # Read-only across the cluster: exactly the kinds the tabs show, which the
 # server watches, and the YAML view reads live. No writes. Secrets only
@@ -166,6 +167,38 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "b221.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- if eq .Values.localCluster.writeClusterRole "minimal" }}
+---
+# What Watson's changes need with sign-in off, and no more.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "b221.clusterScopedName" . }}-watson-write
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "persistentvolumeclaims", "serviceaccounts", "replicationcontrollers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale", "deployments/rollback", "daemonsets", "statefulsets", "statefulsets/scale", "replicasets", "replicasets/scale"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "deletecollection"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "update", "patch", "delete"{{ if .Values.secrets.read }}, "get", "list", "watch"{{ end }}]
+{{- end }}
 {{- if .Values.localCluster.writeClusterRole }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -177,7 +210,7 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ .Values.localCluster.writeClusterRole }}
+  name: {{ if eq .Values.localCluster.writeClusterRole "minimal" }}{{ include "b221.clusterScopedName" . }}-watson-write{{ else }}{{ .Values.localCluster.writeClusterRole }}{{ end }}
 subjects:
   - kind: ServiceAccount
     name: {{ include "b221.serviceAccountName" . }}
@@ -236,4 +269,5 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "b221.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

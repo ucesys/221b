@@ -1,3 +1,4 @@
+{{- if ne (include "b221.shared" .) "only" }}
 {{- if not .Values.clusterName }}
 {{- fail "Set clusterName: the name shown in the console's top bar, such as --set clusterName=staging" }}
 {{- end }}
@@ -358,3 +359,4 @@ spec:
             matchLabels:
               {{- include "b221.selectorLabels" . | nindent 14 }}
       {{- end }}
+{{- end }}

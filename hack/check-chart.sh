@@ -109,23 +109,25 @@ check() {
   fi
 }
 out=$WORK/chart-default.yaml
+netpol() { sed -n '/^kind: NetworkPolicy$/,/^---/p' "${1:-$out}"; }
 # SSH to nodes (Phase 11): the toolbox config carries toolbox.ssh.
-ssh_on() { grep -q '"ssh": {' "$WORK/chart-toolbox-exec.yaml" && grep -q '"loginUser": "root"' "$WORK/chart-toolbox-exec.yaml" && grep -q '"port": 22' "$WORK/chart-toolbox-exec.yaml"; }
-ssh_off() { sed -n '/"ssh": {/,/}/p' "$WORK/chart-ssh-off.yaml" | grep -q '"enabled": false' && grep -q '"loginUser": "ops"' "$WORK/chart-ssh-off.yaml"; }
-ssh_values() { ssh_on && ssh_off; }
+ssh_values() {
+  grep -q '"ssh": {' "$WORK/chart-toolbox-exec.yaml" && grep -q '"loginUser": "root"' "$WORK/chart-toolbox-exec.yaml" && grep -q '"port": 22' "$WORK/chart-toolbox-exec.yaml" &&
+    sed -n '/"ssh": {/,/}/p' "$WORK/chart-ssh-off.yaml" | grep -q '"enabled": false' && grep -q '"loginUser": "ops"' "$WORK/chart-ssh-off.yaml"
+}
 # A read-only SuperAdmin definition turns SSH off with the node shell; values from an older release have no toolbox.ssh and SSH stays off.
 ssh_gated() {
     sed -n '/"ssh": {/,/}/p' "$WORK/chart-ssh-readonly.yaml" | grep -q '"enabled": false' &&
-    ! sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-ssh-readonly.yaml" | grep -q 'port: 22$' &&
+    ! netpol "$WORK/chart-ssh-readonly.yaml" | grep -q 'port: 22$' &&
     sed -n '/"ssh": {/,/}/p' "$WORK/chart-ssh-reuse.yaml" | grep -q '"enabled": false' &&
-    ! sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-ssh-reuse.yaml" | grep -q 'port: 22$'
+    ! netpol "$WORK/chart-ssh-reuse.yaml" | grep -q 'port: 22$'
 }
 # The network policy lets the console reach sshd on the nodes, only with SSH on, narrowed to the nodes' CIDRs when given.
 ssh_egress() {
-  sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-ssh-on.yaml" | grep -q 'port: 22$' &&
-    ! sed -n '/^kind: NetworkPolicy$/,/^---/p' "$out" | grep -q 'port: 22$' &&
-    ! sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-ssh-off.yaml" | grep -q 'port: 22$' &&
-    sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-ssh-cidr.yaml" | grep -A4 'port: 2222$' | grep -q 'cidr: "192.168.1.0/24"'
+  netpol "$WORK/chart-ssh-on.yaml" | grep -q 'port: 22$' &&
+    ! netpol "$out" | grep -q 'port: 22$' &&
+    ! netpol "$WORK/chart-ssh-off.yaml" | grep -q 'port: 22$' &&
+    netpol "$WORK/chart-ssh-cidr.yaml" | grep -A4 'port: 2222$' | grep -q 'cidr: "192.168.1.0/24"'
 }
 # The Secret with the local accounts, the OIDC client secret and such; the
 # replicas' proxy token is a Secret of its own, always there.
@@ -277,10 +279,18 @@ settings_configmap() {
 service_name() { render 221b --set clusterName=ci | grep -A3 '^kind: Service$' | grep -q 'name: k8s-console-221b'; }
 name_required() { ! render k8s-console > /dev/null 2>&1; }
 no_open_egress() { ! render k8s-console --set clusterName=ci --set networkPolicy.apiServerPorts=null > /dev/null 2>&1; }
+shared_roles() {
+  local only none
+  only=$(render roles --set rbac.shared=only --set clusterName=ci)
+  none=$(render k8s-console --set clusterName=ci --set rbac.shared=none)
+  [[ $only == *'name: 221b-super-admin'* && $only != *'kind: Deployment'* && $only != *'kind: NetworkPolicy'* ]] &&
+    [[ $none != *'name: 221b-super-admin'* && $none == *'kind: Deployment'* ]] &&
+    ! render k8s-console --set clusterName=ci --set rbac.shared=some > /dev/null 2>&1
+}
 no_open_outbound() { ! render k8s-console --set clusterName=ci --set networkPolicy.outboundPorts=null > /dev/null 2>&1; }
 numeric_tag() { render k8s-console --set clusterName=ci --set image.tag=20261031 > /dev/null 2>&1; }
-outbound_cidrs() { sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-outbound.yaml" | grep -q 'cidr: "140.82.112.0/20"'; }
-external_ingress() { sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-external.yaml" | sed -n '/ingress:/,/egress:/p' | grep -q '^    - ports:'; }
+outbound_cidrs() { netpol "$WORK/chart-outbound.yaml" | grep -q 'cidr: "140.82.112.0/20"'; }
+external_ingress() { netpol "$WORK/chart-external.yaml" | sed -n '/ingress:/,/egress:/p' | grep -q '^    - ports:'; }
 pvc_recreate() { grep -q 'type: Recreate' "$WORK/chart-pvc.yaml"; }
 dns_egress() { grep -B1 'protocol: UDP' "$out" | grep -q 'port: 53' && ! grep -q 'port: 53' "$WORK/chart-nopolicy.yaml"; }
 api_server_addresses() { grep -q 'cidr: "10.0.0.10/32"' "$WORK/chart-options.yaml"; }
@@ -332,7 +342,7 @@ replicas() {
     grep -A1 'name: WARM_STANDBY' "$WORK/chart-ha-cold.yaml" | grep -q 'value: "false"' &&
     sed -n '/^kind: Secret$/,/^---/p' "$out" | grep -q '^  name: k8s-console-221b-proxy$' &&
     settings_role | grep -A1 'resourceNames: \["k8s-console-221b-leader"\]' | grep -q 'verbs: \["get", "update"\]' &&
-    sed -n '/^kind: NetworkPolicy$/,/^---/p' "$out" | sed -n '/^  egress:/,$p' | grep -q 'podSelector:' &&
+    netpol "$out" | sed -n '/^  egress:/,$p' | grep -q 'podSelector:' &&
     grep -q 'terminationGracePeriodSeconds: 20' "$out" &&
     ! grep -q '^kind: PodDisruptionBudget' "$out" && ! grep -q 'topologySpreadConstraints' "$out" &&
     grep -q 'replicas: 2' "$ha" && grep -A1 '^kind: PodDisruptionBudget' -A12 "$ha" | grep -q 'maxUnavailable: 1' &&
@@ -357,7 +367,10 @@ watson_write() {
     sed -n '/name: consoles-k8s-console-221b-watson-nodes$/,/^---/p' "$w" | grep -A1 '"nodes"' | grep -q 'verbs: \["patch", "update"\]' &&
     sed -n '/name: consoles-k8s-console-221b-watson-nodes$/,/^---/p' "$w" | grep -A1 '"pods/eviction"' | grep -q 'verbs: \["create"\]' &&
     sed -n '/^kind: ClusterRoleBinding$/,/^---/p' "$w" | grep -q "name: consoles-k8s-console-221b-watson$" &&
-    grep -A12 "name: consoles-k8s-console-221b-watson$" "$w" | grep -q 'name: edit' &&
+    grep -A12 "name: consoles-k8s-console-221b-watson$" "$w" | grep -q 'name: consoles-k8s-console-221b-watson-write' &&
+    ! sed -n '/name: consoles-k8s-console-221b-watson-write$/,/^---/p' "$w" | grep -q 'impersonate' &&
+    render k8s-console --set clusterName=ci --set auth.mode=none --set localCluster.mode=write --set secrets.read=false | sed -n '/name: consoles-k8s-console-221b-watson-write$/,/^---/p' | grep -A1 '"secrets"' | grep -q '"create", "update", "patch", "delete"\]' &&
+    render k8s-console --set clusterName=ci --set auth.mode=none --set localCluster.mode=write --set localCluster.writeClusterRole=edit | grep -q 'name: edit' &&
     grep -A1 'name: LOCAL_MODE' "$WORK/chart-write-signin.yaml" | grep -q '"write"' && ! grep -q 'watson' "$WORK/chart-write-signin.yaml" &&
     ! render k8s-console --set clusterName=ci --set auth.mode=none --set localCluster.mode=write --set localCluster.writeClusterRole= | grep -q 'name: edit' &&
     ! render k8s-console --set clusterName=ci --set localCluster.mode=admin > /dev/null 2>&1
@@ -399,7 +412,7 @@ toolbox_values() {
 }
 toolbox_namespace() {
   sed -n '/^kind: Namespace$/,/^---/p' "$out" | grep -q 'pod-security.kubernetes.io/enforce: privileged' &&
-    sed -n '/^kind: NetworkPolicy$/,/^---/p' "$out" | grep -q 'namespace: consoles-privileged' &&
+    netpol "$out" | grep -q 'namespace: consoles-privileged' &&
     grep -q '"namespace": "consoles-privileged"' "$out" &&
     ! grep -q '^kind: Namespace$' "$WORK/chart-notoolbox.yaml" && ! grep -q '^kind: Namespace$' "$WORK/chart-toolbox-exec.yaml" &&
     ! grep -q '^kind: Namespace$' "$WORK/chart-protected.yaml" && grep -q '"enabled": false' "$WORK/chart-protected.yaml" &&
@@ -434,6 +447,7 @@ check "Sherlock's API key is kept in the release's Secret or taken from sherlock
 check "Sherlock's provider from the chart, locked when asked (Phase 6 review)" sherlock_provider
 check "a release named after the chart still gets a valid Service name" service_name
 check "clusterName is required" name_required
+check "the shared roles install on their own, and a console can leave them out" shared_roles
 check "an empty list of API server ports is refused" no_open_egress
 check "an empty list of outbound ports is refused" no_open_outbound
 check "an all-digit image tag renders" numeric_tag

@@ -3,8 +3,14 @@
 # The browser app and the server build on the build machine's platform and
 # cross-compile, so a multi-platform image needs no emulation.
 
+# Tags here, for builds on a laptop; CI passes these pinned to digests, from
+# hack/base-images.env, so a release is built from images it can name.
+ARG NODE_IMAGE=node:24-alpine
+ARG GO_IMAGE=golang:1.26.9
+ARG RUN_IMAGE=gcr.io/distroless/static-debian13:nonroot
+
 # The browser app.
-FROM --platform=$BUILDPLATFORM node:24-alpine AS web
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS web
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -14,7 +20,7 @@ COPY server/internal/sherlock/ui_actions.json /src/server/internal/sherlock/ui_a
 RUN npm run build
 
 # The server, with the browser app embedded.
-FROM --platform=$BUILDPLATFORM golang:1.26.9 AS server
+FROM --platform=$BUILDPLATFORM ${GO_IMAGE} AS server
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG TARGETOS=linux
@@ -29,7 +35,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
       -o /out/221b ./cmd/221b
 
 # Distroless: no shell, no package manager, runs as user 65532.
-FROM gcr.io/distroless/static-debian13:nonroot
+FROM ${RUN_IMAGE}
 LABEL org.opencontainers.image.source="https://github.com/ucesys/221b" \
       org.opencontainers.image.description="221B, a Kubernetes cluster console" \
       org.opencontainers.image.licenses="Apache-2.0"

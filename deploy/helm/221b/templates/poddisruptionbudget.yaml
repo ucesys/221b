@@ -1,3 +1,4 @@
+{{- if ne (include "b221.shared" .) "only" }}
 {{- if gt (int .Values.replicaCount) 1 }}
 # Several replicas (P7-02): a node drain or a cluster upgrade takes one at a
 # time, so the others keep serving.
@@ -15,4 +16,5 @@ spec:
   selector:
     matchLabels:
       {{- include "b221.selectorLabels" . | nindent 6 }}
+{{- end }}
 {{- end }}
