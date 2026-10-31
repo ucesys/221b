@@ -493,7 +493,7 @@ func run(args []string) error {
 		if err != nil {
 			return fmt.Errorf("the SSH authority's Secret: %w", err)
 		}
-		caStore = sk
+		caStore = caKeys{sk}
 	} else {
 		log.Warn("the SSH authority's key is kept in memory and made again on restart; paired nodes then need pairing again (set -connections-secrets to keep it in a Secret)")
 	}
@@ -815,4 +815,20 @@ func residentMemory() float64 {
 		return 0
 	}
 	return float64(pages * int64(os.Getpagesize()))
+}
+
+// caKeys keeps the SSH authority's key in a Secret through the Sherlock
+// key store, whose "no key saved" means the Secret is not there yet:
+// for the authority that is an empty store, and a key is made.
+type caKeys struct{ *kube.SecretKey }
+
+func (c caKeys) Load(ctx context.Context) (map[string][]byte, error) {
+	return noKeyAsEmpty(c.SecretKey.Load(ctx))
+}
+
+func noKeyAsEmpty(data map[string][]byte, err error) (map[string][]byte, error) {
+	if errors.Is(err, sherlock.ErrNoKey) {
+		return map[string][]byte{}, nil
+	}
+	return data, err
 }
