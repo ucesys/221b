@@ -8,7 +8,7 @@ import { CheckIcon, CopyIcon, CrossIcon, SendIcon, SherlockIcon, WatsonIcon } fr
 import { isCommands } from '../api/watson'
 import { useWatsonApi } from './Watson'
 import { isUndone, onUndone } from '../lib/uiControl'
-import { askContext, askUndo } from '../lib/uiWindow'
+import { askContext, askUndo, followedWindow } from '../lib/uiWindow'
 import { copyText } from '../lib/clipboard'
 
 // ---------- asking from anywhere ----------
@@ -126,8 +126,8 @@ function refLabel(r: SherlockRef): string {
  * out as each change lands, and Undo, which puts the view back as it was
  * before the answer's first change. Neither takes focus.
  */
-function ViewNotice({ m, onToast }: { m: SherlockMsg; onToast: (msg: string) => void }) {
-  const done = useSyncExternalStore(onUndone, () => isUndone(m.id))
+function ViewNotice({ m, cluster, onToast }: { m: SherlockMsg; cluster: string; onToast: (msg: string) => void }) {
+  const done = useSyncExternalStore(onUndone, () => isUndone(cluster, m.id))
   const [busy, setBusy] = useState(false)
   const changes = m.view ?? []
   return (
@@ -147,7 +147,7 @@ function ViewNotice({ m, onToast }: { m: SherlockMsg; onToast: (msg: string) => 
           disabled={busy}
           onClick={async () => {
             setBusy(true)
-            const ok = await askUndo(m.id)
+            const ok = await askUndo(cluster, m.id)
             setBusy(false)
             if (!ok) onToast('That view is not open in any window now, so there is nothing to undo.')
           }}
@@ -159,7 +159,7 @@ function ViewNotice({ m, onToast }: { m: SherlockMsg; onToast: (msg: string) => 
   )
 }
 
-function Answer({ m, link, admin, question, onToast }: { m: SherlockMsg; link: (url: string, label: string) => ReactNode | null; admin: boolean; question?: string; onToast: (msg: string) => void }) {
+function Answer({ m, cluster, link, admin, question, onToast }: { m: SherlockMsg; cluster: string; link: (url: string, label: string) => ReactNode | null; admin: boolean; question?: string; onToast: (msg: string) => void }) {
   const thinking = (m.status === 'thinking' || m.status === 'answering') && !m.text
   const meta = [m.model, m.doneAt ? seconds(m.at, m.doneAt) : '', admin && m.costUSD ? usd(m.costUSD) : ''].filter(Boolean).join(' · ')
   return (
@@ -191,7 +191,7 @@ function Answer({ m, link, admin, question, onToast }: { m: SherlockMsg; link: (
           <Markdown text={m.text} link={link} code={(text, lang, open, key) => <CodeBlock key={key} text={text} lang={lang} open={open && m.status !== 'done'} why={question ? `Sherlock proposed this answering “${question}”.` : undefined} />} />
         </div>
       )}
-      {(m.view?.length ?? 0) > 0 && <ViewNotice m={m} onToast={onToast} />}
+      {(m.view?.length ?? 0) > 0 && <ViewNotice m={m} cluster={cluster} onToast={onToast} />}
       {m.status === 'stopped' && (
         <p className="rk-t" data-tone="muted" style={{ fontSize: 12.5 }} data-testid="sherlock-stopped">
           {m.error || 'Stopped.'}
@@ -346,7 +346,7 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
           onClick={(e) => {
             if (!inWindow) return
             e.preventDefault()
-            post({ type: 'open', cluster, target: t })
+            post({ type: 'open', cluster, target: t, window: followedWindow() })
           }}
         >
           {label}
@@ -366,7 +366,7 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
           data-cite={url}
           onClick={(e) => {
             e.preventDefault()
-            post({ type: 'open', cluster, target: t })
+            post({ type: 'open', cluster, target: t, window: followedWindow() })
           }}
         >
           {label}
@@ -469,7 +469,7 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
                   {m.text}
                 </div>
               ) : (
-                <Answer key={m.id} m={m} link={link} admin={!!status?.admin} question={questionBefore(msgs, m.id)} onToast={onToast} />
+                <Answer key={m.id} m={m} cluster={cluster} link={link} admin={!!status?.admin} question={questionBefore(msgs, m.id)} onToast={onToast} />
               ),
             )}
           </div>

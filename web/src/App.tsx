@@ -30,12 +30,12 @@ import { findings as policyFindings, flagOf as policyFlag, modelOf as policyMode
 import { adminHref, apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, useRoute, withParams } from './lib/router'
 import { askSherlock, useSherlock } from './api/sherlock'
 import { sendToWatson, useWatson, WatsonError, type Send } from './api/watson'
-import { canPopOut, clusterTroubleshootQuestion, focusPopup, onPop, popOut, post, reviewQuestion, usePopped, WINDOW_VIEWS, type Pane } from './lib/sherlock'
+import { canPopOut, clusterTroubleshootQuestion, focusPopup, onPop, opensHere, popOut, post, reviewQuestion, usePopped, WINDOW_VIEWS, type Pane } from './lib/sherlock'
 import { openTarget, SherlockContext, SherlockPane } from './components/Sherlock'
 import { Dock, PoppedOutFab, type DockMode } from './components/Dock'
 import { autoRunReads, WatsonContext, watsonOff, WatsonPane } from './components/Watson'
 import { askContext, useUIControl } from './lib/uiWindow'
-import { setToolOpener } from './lib/uiControl'
+import { setToolOpener, WINDOW_ID } from './lib/uiControl'
 import type { ToolName } from './api/toolbox'
 import { ViewAnnouncer } from './components/ViewAnnouncer'
 import { AssistantWindow } from './components/AssistantWindow'
@@ -228,7 +228,8 @@ function Shell() {
   // An ended session whose tab was closed is done with: it leaves the list too (asked October 30, 2026); a live one stays, as the tab's tooltip says.
   const listedSessions = sessions.sessions.filter((x) => x.state !== 'ended' || !tabsHere.closed.includes(x.id))
   const openSessions = sessions.sessions.filter((x) => x.state !== 'ended').length
-  const [toolDialog, setToolDialog] = useState<OpenTool | null>(null)
+  // A tool's dialog stays on the cluster it was opened on, wherever the route goes while it is open.
+  const [toolDialog, setToolDialog] = useState<(OpenTool & { cluster: string }) | null>(null)
   // The same on the home page and a cluster's page as on the tabs; the
   // Administration area has its own Back and Escape, so it leaves them.
   const dockShown = view !== 'admin' && (sherlockDocked || watsonDocked || (watsonOn && listedSessions.length > 0))
@@ -240,6 +241,7 @@ function Shell() {
       onPop((m) => {
         if (m.type !== 'open') return
         const here = currentRoute()
+        if (!opensHere(m, WINDOW_ID, here.cluster)) return
         const hash = m.cluster === here.cluster && here.view === 'tabs' ? openTarget(m.target) : 'peek' in m.target ? clusterHref(m.cluster, FIRST_TAB, [], { peek: m.target.peek }) : m.target.href
         if (hash) navigate(hash)
         window.focus()
@@ -314,7 +316,7 @@ function Shell() {
     showWatson,
     off: !watsonOn ? (watsonApi.off?.text.replace('To run it from here', 'To use the tools') ?? 'The tools need Watson, which is off here.') : watson.status?.readOnly ? watson.status.how || 'This cluster is connected read-only.' : undefined,
     cluster: route.cluster,
-    openTool: (o) => setToolDialog(o),
+    openTool: (o) => setToolDialog({ ...o, cluster: route.cluster }),
     action: (a, what) => {
       const doing = { cordon: 'Cordoning', uncordon: 'Uncordoning', drain: 'Draining', 'delete-pod': 'Deleting' }[a.action]
       runToolAction(route.cluster, a).then(
@@ -335,7 +337,7 @@ function Shell() {
   useEffect(() => {
     setToolOpener((a) => {
       if (toolsOff) return toolsOff
-      setToolDialog({ tool: a.tool as ToolName, pod: a.pod, node: a.node, prefill: a.prefill, from: 'Sherlock' })
+      setToolDialog({ tool: a.tool as ToolName, pod: a.pod, node: a.node, prefill: a.prefill, from: 'Sherlock', cluster: currentRoute().cluster })
       return null
     })
     return () => setToolOpener(null)
@@ -424,8 +426,8 @@ function Shell() {
       {editing && editOrig && <ClusterEditor key={editing} orig={editOrig} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
       {toolDialog && (
         <ToolDialog
-          cluster={route.cluster}
-          clusterName={clusterName}
+          cluster={toolDialog.cluster}
+          clusterName={toolDialog.cluster === route.cluster ? clusterName : (clusters.find((c) => c.id === toolDialog.cluster)?.name ?? toolDialog.cluster)}
           open={toolDialog}
           onClose={() => setToolDialog(null)}
           onSent={(r) => {

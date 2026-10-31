@@ -53,8 +53,10 @@ const (
 	managedByLabel = "app.kubernetes.io/managed-by"
 	managedByValue = "221b"
 	// driftEvery is how often the roles of every cluster are compared with
-	// the shipped ones (RB-36).
+	// the shipped ones (RB-36); driftSoon how soon after a start, and after
+	// a check that found nothing read yet.
 	driftEvery = 5 * time.Minute
+	driftSoon  = 15 * time.Second
 )
 
 func ruleOf(p rbacv1.PolicyRule) roles.Rule {
@@ -166,7 +168,7 @@ func (s *Server) RoleRefusal(cluster string) string {
 // replica reads the clusters (ADR-70), so the audit log has one record per
 // drift rather than one per replica.
 func (s *Server) RunRoleChecks(ctx context.Context) {
-	tick := time.NewTimer(15 * time.Second)
+	tick := time.NewTimer(driftSoon)
 	defer tick.Stop()
 	for {
 		select {
@@ -181,11 +183,18 @@ func (s *Server) RunRoleChecks(ctx context.Context) {
 				}
 			}
 		}
-		if s.opts.Active == nil || s.opts.Active() {
-			s.checkAllRoles()
-		}
-		tick.Reset(driftEvery)
+		tick.Reset(s.roleCheckNow())
 	}
+}
+
+// roleCheckNow runs one check, and says when the next is due. A replica
+// that has just become active has often not listed anything yet: its check
+// reads nothing, and the first comparison must not wait five minutes.
+func (s *Server) roleCheckNow() time.Duration {
+	if (s.opts.Active == nil || s.opts.Active()) && !s.checkAllRoles() {
+		return driftSoon
+	}
+	return driftEvery
 }
 
 // CheckRolesSoon asks RunRoleChecks for a check now: a replica that
@@ -197,20 +206,25 @@ func (s *Server) CheckRolesSoon() {
 	}
 }
 
-func (s *Server) checkAllRoles() {
+// checkAllRoles compares every cluster's roles and says whether it read any.
+func (s *Server) checkAllRoles() bool {
+	read := false
 	if s.opts.Clusters == nil {
 		if s.opts.Cluster != nil {
-			s.checkRoles(clusters.LocalID, s.opts.Cluster)
+			_, _, _, read = s.checkRoles(clusters.LocalID, s.opts.Cluster)
 		}
-		return
+		return read
 	}
 	for _, sum := range s.opts.Clusters.List() {
 		if _, client, ok := s.opts.Clusters.Lookup(sum.ID); ok {
 			if cl, _ := client.(Cluster); cl != nil {
-				s.checkRoles(sum.ID, cl)
+				if _, _, _, ok := s.checkRoles(sum.ID, cl); ok {
+					read = true
+				}
 			}
 		}
 	}
+	return read
 }
 
 // superAdmin lets only a SuperAdmin through; with sign-in off everyone is

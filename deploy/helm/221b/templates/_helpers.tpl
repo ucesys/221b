@@ -53,7 +53,7 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
      name with every build; a release (0.1.0, v0.1.0), a sha- tag or a
      digest names one build for good. Renders "true" or nothing. */}}
 {{- define "b221.movingTag" -}}
-{{- $tag := default .Chart.AppVersion .Values.image.tag -}}
+{{- $tag := toString (default .Chart.AppVersion .Values.image.tag) -}}
 {{- if and (not .Values.image.digest) (not (regexMatch "^(v?[0-9]+\\.[0-9]+\\.[0-9]+([-+].*)?|sha-[0-9a-f]{7,})$" $tag)) -}}
 true
 {{- end -}}
@@ -83,9 +83,11 @@ IfNotPresent
 {{- end -}}
 
 {{/* Whether the console must reach something besides the API server: an
-     OIDC provider or an audit webhook. Renders "true" or nothing. */}}
+     OIDC provider, an audit webhook, the Claude API, or what
+     networkPolicy.outboundCIDRs names, such as a Helm application's git
+     host. Renders "true" or nothing. */}}
 {{- define "b221.outbound" -}}
-{{- if or (eq .Values.auth.mode "oidc") .Values.audit.webhook.url .Values.sherlock.egress -}}
+{{- if or (eq .Values.auth.mode "oidc") .Values.audit.webhook.url .Values.sherlock.egress .Values.networkPolicy.outboundCIDRs -}}
 true
 {{- end -}}
 {{- end -}}

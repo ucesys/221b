@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"testing"
+	"time"
 
+	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/leader"
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
@@ -63,5 +68,45 @@ func TestTheAuthoritysStoreStartsEmpty(t *testing.T) {
 	}
 	if data, err := noKeyAsEmpty(map[string][]byte{"ca.key": []byte("x")}, nil); err != nil || string(data["ca.key"]) != "x" {
 		t.Fatalf("a saved key: %v %v", data, err)
+	}
+}
+
+// A stopping console is out before the kubelet kills it: the wait for
+// answers and commands, their stop and closing the audit log all fit in
+// the pod's termination grace period, and a short one drops the wait.
+func TestStoppingFitsTheTerminationGracePeriod(t *testing.T) {
+	for _, grace := range []time.Duration{20 * time.Second, 30 * time.Second, time.Hour} {
+		if got := workWithin(grace) + settleWithin + closeWithin; got >= grace {
+			t.Errorf("%s of grace: stopping takes %s", grace, got)
+		}
+	}
+	if got := workWithin(20 * time.Second); got != 14*time.Second {
+		t.Errorf("the chart's 20 seconds wait %s", got)
+	}
+	if got := workWithin(3 * time.Second); got != 0 {
+		t.Errorf("3 seconds wait %s", got)
+	}
+}
+
+// persistent is a storage that outlasts a restart, as the ConfigMap does.
+type persistent struct{ kv.Memory }
+
+// The Audit log page says events are in memory exactly when they are.
+func TestTheAuditStoreIsOnlyUsedOverStorageThatPersists(t *testing.T) {
+	mem := audit.New(audit.Options{})
+	if st := keepAudit(mem, &kv.Memory{}, slog.Default()); st != nil || mem.Stored() {
+		t.Fatalf("over memory: store %v, stored %v", st, mem.Stored())
+	}
+	mem.Record(audit.Event{Action: "signin"})
+	if got, _ := mem.Events(context.Background()); len(got) != 1 {
+		t.Fatalf("the page lists %+v", got)
+	}
+	kept := audit.New(audit.Options{})
+	st := keepAudit(kept, &persistent{}, slog.Default())
+	if st == nil || !kept.Stored() {
+		t.Fatalf("over a ConfigMap: store %v, stored %v", st, kept.Stored())
+	}
+	if err := st.Close(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

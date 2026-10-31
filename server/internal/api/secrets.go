@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/roles"
 )
@@ -77,11 +78,11 @@ func (s *Server) postNamespace(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := cl.CreateNamespace(r.Context(), s.person(r), in.Name, in.Labels); err != nil {
-		s.record(r, ActionNamespaceCreate, in.Name, "outcome=failed")
+		s.recordOn(r, refusedOr(err), ActionNamespaceCreate, in.Name, "")
 		jsonError(w, kubeStatus(err), err.Error())
 		return
 	}
-	s.record(r, ActionNamespaceCreate, in.Name, "labels="+strconv.Itoa(len(in.Labels)))
+	s.recordOn(r, audit.OutcomeOK, ActionNamespaceCreate, in.Name, "labels="+strconv.Itoa(len(in.Labels)))
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -150,13 +151,13 @@ func (s *Server) getSecretValue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.opts.SecretsReveal {
-		s.record(r, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key)+" outcome=denied reason=\"secrets.reveal is off\"")
+		s.recordOn(r, audit.OutcomeDenied, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key)+" reason=\"secrets.reveal is off\"")
 		jsonError(w, http.StatusForbidden, "this console does not show Secret values: whoever installed it can turn on secrets.reveal in the chart's values")
 		return
 	}
 	sec, err := cl.GetSecret(r.Context(), s.person(r), ns, name)
 	if err != nil {
-		s.record(r, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key)+" outcome=failed")
+		s.recordOn(r, refusedOr(err), ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key))
 		jsonError(w, kubeStatus(err), err.Error())
 		return
 	}
@@ -165,7 +166,7 @@ func (s *Server) getSecretValue(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "the Secret has no key "+strconv.Quote(key))
 		return
 	}
-	s.record(r, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key)+" bytes="+strconv.Itoa(len(v)))
+	s.recordOn(r, audit.OutcomeOK, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key)+" bytes="+strconv.Itoa(len(v)))
 	out := struct {
 		Key    string `json:"key"`
 		Value  string `json:"value"`
@@ -285,11 +286,11 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 	sec.StringData = nil
 	detail := editDetail(set, in.Remove)
 	if _, err := cl.UpdateSecret(r.Context(), p, sec); err != nil {
-		s.record(r, ActionSecretUpdate, ns+"/"+name, detail+" outcome=failed")
+		s.recordOn(r, refusedOr(err), ActionSecretUpdate, ns+"/"+name, detail)
 		jsonError(w, kubeStatus(err), err.Error())
 		return
 	}
-	s.record(r, ActionSecretUpdate, ns+"/"+name, detail)
+	s.recordOn(r, audit.OutcomeOK, ActionSecretUpdate, ns+"/"+name, detail)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -320,11 +321,11 @@ func (s *Server) postSecret(w http.ResponseWriter, r *http.Request) {
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: in.Name, Namespace: ns}, Type: typ, Data: set}
 	detail := "type=" + strconv.Quote(string(typ)) + " " + editDetail(set, nil)
 	if _, err := cl.CreateSecret(r.Context(), s.person(r), sec); err != nil {
-		s.record(r, ActionSecretCreate, ns+"/"+in.Name, detail+" outcome=failed")
+		s.recordOn(r, refusedOr(err), ActionSecretCreate, ns+"/"+in.Name, detail)
 		jsonError(w, kubeStatus(err), err.Error())
 		return
 	}
-	s.record(r, ActionSecretCreate, ns+"/"+in.Name, detail)
+	s.recordOn(r, audit.OutcomeOK, ActionSecretCreate, ns+"/"+in.Name, detail)
 	w.WriteHeader(http.StatusCreated)
 }
 

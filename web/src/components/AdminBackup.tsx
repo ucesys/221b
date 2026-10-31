@@ -113,7 +113,12 @@ export function AdminBackup({ onToast }: AdminProps) {
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
           <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Restore from a backup</h2>
           <span style={{ fontSize: 12.5, color: 'var(--fg3)' }}>Pick a backup file, choose what to bring back, and read what is left to do by hand. Connections are never restored: their credentials are not in a backup.</span>
-          <input ref={file} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={(e) => void onFile(e.target.files?.[0])} data-testid="restore-file" />
+          <input ref={file} type="file" accept="application/json,.json" style={{ display: 'none' }} onChange={(e) => {
+              const f = e.target.files?.[0]
+              // Emptied, so the same file chosen again is a change too.
+              e.target.value = ''
+              void onFile(f)
+            }} data-testid="restore-file" />
           <button className="rk-btn" style={{ marginLeft: 'auto' }} onClick={() => file.current?.click()} data-testid="restore-pick">
             Choose a backup file…
           </button>

@@ -149,9 +149,11 @@ type Cluster struct {
 	boots              map[string]bootEntry
 	bootForbiddenUntil time.Time
 	// volumes is what the kubelets report about mounted claims (ST-08),
-	// by "namespace/claim"; volumesAt when they were last read.
+	// by "namespace/claim"; volumesAt when they were last read, and
+	// volumesFrom the node to start from when the last read ran out of time.
 	volumes     map[string]VolumeStats
 	volumesAt   time.Time
+	volumesFrom string
 	watchErrs   map[string]watchErr
 	notify      func(Change)
 	events      map[string]uint64
@@ -886,7 +888,7 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 		ch.Mark("networks", AllRows)
 	case "secrets":
 		for _, o := range []any{old, obj} {
-			if s, ok := unwrap(o).(*SecretSummary); ok && s.Type == corev1.SecretTypeTLS {
+			if s, ok := unwrap(o).(*SecretSummary); ok && (s.Type == corev1.SecretTypeTLS || s.Cert != nil) {
 				ch.Mark("networks", AllRows)
 			}
 		}
@@ -1120,7 +1122,8 @@ func (c *Cluster) readPodMetrics(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	raw, err := c.rest.Get().AbsPath("/apis/metrics.k8s.io/v1beta1/pods").SetHeader("Accept", "application/json").Do(ctx).Raw()
-	if errors.Is(ctx.Err(), context.Canceled) {
+	// Out of time, or stopped: that says nothing about the pods.
+	if ctx.Err() != nil {
 		return
 	}
 	usage := map[string]nodes.Usage{}

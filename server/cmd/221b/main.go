@@ -382,17 +382,15 @@ func run(args []string) error {
 	if cm, ok := storage.(*kube.ConfigMapStorage); ok {
 		spendBackend = cm
 	}
-	// The audit log's newest events are kept beside the settings for
-	// Administration › Audit log; a laptop keeps them in memory.
-	auditStore := audit.NewKVStore(spendBackend, log.With("component", "audit"))
-	auditLog.SetStore(auditStore)
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := auditStore.Close(ctx); err != nil {
-			log.Warn("saving the audit log at shutdown failed", "err", err)
-		}
-	}()
+	if auditStore := keepAudit(auditLog, spendBackend, log.With("component", "audit")); auditStore != nil {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := auditStore.Close(ctx); err != nil {
+				log.Warn("saving the audit log at shutdown failed", "err", err)
+			}
+		}()
+	}
 	// The chart may name Sherlock's provider (sherlock.provider), and lock it.
 	var chartProvider sherlock.Provider
 	if cfg.SherlockProvider != "" {
@@ -682,20 +680,60 @@ func run(args []string) error {
 		stop()
 	}
 	log.Info("shutting down")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	workCtx, cancelWork := context.WithTimeout(context.Background(), workWithin(cfg.TerminationGrace))
+	defer cancelWork()
+	shutdownCtx, cancel := context.WithTimeout(workCtx, 10*time.Second)
 	defer cancel()
 	err = srv.Shutdown(shutdownCtx)
-	auditLog.Close(shutdownCtx)
+	// Answers and commands outlive their requests, and each writes its
+	// audit record as it ends, so the log closes after them.
+	var work sync.WaitGroup
+	work.Go(func() { sherlockSvc.Drain(workCtx, settleWithin) })
+	work.Go(func() { watsonSvc.Drain(workCtx, settleWithin) })
+	work.Wait()
+	closeCtx, cancelClose := context.WithTimeout(context.Background(), closeWithin)
+	defer cancelClose()
+	auditLog.Close(closeCtx)
 	// The leader gives its Lease up on the way out, so another replica
 	// takes over at once.
 	select {
 	case <-leaderDone:
-	case <-shutdownCtx.Done():
+	case <-closeCtx.Done():
 	}
 	if lostLease {
 		return errors.New("the Lease was lost; a cold standby exits to start afresh")
 	}
 	return err
+}
+
+// What a stopping console does inside the pod's termination grace period:
+// answers and commands get what is left of it after these. settleWithin is
+// for those still running to end once stopped (a helm upgrade marks its
+// release failed, rather than leave it pending), closeWithin for the audit
+// log to reach its store and webhook.
+const (
+	settleWithin = 2 * time.Second
+	closeWithin  = 3 * time.Second
+	stopMargin   = time.Second
+)
+
+// workWithin is how long a stopping console waits for answers and commands
+// to finish by themselves, counted from the signal.
+func workWithin(grace time.Duration) time.Duration {
+	return max(grace-settleWithin-closeWithin-stopMargin, 0)
+}
+
+// keepAudit gives the log its store for Administration › Audit log, and
+// returns it to close: beside the settings, or in memory on a laptop, where
+// the page says so.
+func keepAudit(l *audit.Log, b kv.Backend, logger *slog.Logger) *audit.KVStore {
+	if _, inMemory := b.(*kv.Memory); inMemory {
+		l.KeepInMemory(audit.DefaultKeep)
+		return nil
+	}
+	st := audit.NewKVStore(b, logger)
+	l.SetStore(st)
+	return st
 }
 
 // roleSwitch is what the election drives (ADR-70): winning the Lease makes

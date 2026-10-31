@@ -60,7 +60,7 @@ function useWindow(count: number, rowHeight: number, container: React.RefObject<
   useEffect(() => {
     const el = container.current
     if (!el || count === 0) return
-    const sp = scrollParent(el)
+    let sp = scrollParent(el)
     const update = () => {
       const viewTop = sp === window ? 0 : (sp as HTMLElement).getBoundingClientRect().top
       const viewHeight = sp === window ? window.innerHeight : (sp as HTMLElement).clientHeight
@@ -74,13 +74,24 @@ function useWindow(count: number, rowHeight: number, container: React.RefObject<
     update()
     const frame = requestAnimationFrame(update)
     sp.addEventListener('scroll', update, { passive: true })
-    window.addEventListener('resize', update)
-    const ro = new ResizeObserver(update)
+    // Across the narrow-screen breakpoint the pane stops scrolling and the
+    // window does, or the other way round: the listener follows.
+    const resized = () => {
+      const next = scrollParent(el)
+      if (next !== sp) {
+        sp.removeEventListener('scroll', update)
+        sp = next
+        sp.addEventListener('scroll', update, { passive: true })
+      }
+      update()
+    }
+    window.addEventListener('resize', resized)
+    const ro = new ResizeObserver(resized)
     ro.observe(el)
     return () => {
       cancelAnimationFrame(frame)
       sp.removeEventListener('scroll', update)
-      window.removeEventListener('resize', update)
+      window.removeEventListener('resize', resized)
       ro.disconnect()
     }
   }, [container, count, rowHeight])

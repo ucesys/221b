@@ -414,7 +414,7 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 			}
 			copied = p.Labels
 		}
-		job, notes, err := DebugJob(m.opts.Config, s.ID, s.Owner.Name, r, level, copied, s.limit)
+		job, notes, err := DebugJob(m.opts.Config, s.ID, s.Owner.Name, r, level, copied, m.deadline(s.limit, s.Approver))
 		if err != nil {
 			fail(err)
 			return
@@ -422,11 +422,9 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 		for _, n := range notes {
 			m.note(s, n)
 		}
-		if err := b.CreateJob(ctx, job, false); err != nil {
-			fail(err)
+		if !m.made(ctx, s, Created{Kind: "Job", Namespace: job.Namespace, Name: job.Name}, b.CreateJob(ctx, job, false)) {
 			return
 		}
-		m.created(s, Created{Kind: "Job", Namespace: job.Namespace, Name: job.Name})
 		pod, err := waitRunning(ctx, func(c context.Context) (*corev1.Pod, error) { return b.JobPod(c, r.Namespace, s.ID) }, "debug", m.opts.StartWithin)
 		if err != nil {
 			fail(err)
@@ -455,16 +453,14 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 			fail(err)
 			return
 		}
-		pod, err := NodePod(m.opts.Config, s.ID, s.Owner.Name, r, s.limit)
+		pod, err := NodePod(m.opts.Config, s.ID, s.Owner.Name, r, m.deadline(s.limit, s.Approver))
 		if err != nil {
 			fail(err)
 			return
 		}
-		if err := b.CreatePod(ctx, pod, false); err != nil {
-			fail(err)
+		if !m.made(ctx, s, Created{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, b.CreatePod(ctx, pod, false)) {
 			return
 		}
-		m.created(s, Created{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name})
 		running, err := waitRunning(ctx, func(c context.Context) (*corev1.Pod, error) { return b.Pod(c, pod.Namespace, pod.Name) }, "node", m.opts.StartWithin)
 		if err != nil {
 			fail(err)
@@ -486,16 +482,14 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 			}
 		})
 	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand:
-		pod, err := NodePod(m.opts.Config, s.ID, s.Owner.Name, r, s.limit)
+		pod, err := NodePod(m.opts.Config, s.ID, s.Owner.Name, r, m.deadline(s.limit, s.Approver))
 		if err != nil {
 			fail(err)
 			return
 		}
-		if err := b.CreatePod(ctx, pod, false); err != nil {
-			fail(err)
+		if !m.made(ctx, s, Created{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, b.CreatePod(ctx, pod, false)) {
 			return
 		}
-		m.created(s, Created{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name})
 		running, err := waitRunning(ctx, func(c context.Context) (*corev1.Pod, error) { return b.Pod(c, pod.Namespace, pod.Name) }, "node", m.opts.StartWithin)
 		if err != nil {
 			fail(err)
@@ -544,11 +538,52 @@ func (m *Manager) podGone(ctx context.Context, s *Session) string {
 	return ""
 }
 
-func (m *Manager) created(s *Session, c Created) {
+// made keeps what a create call made, to remove at the session's end, and
+// says whether the session goes on. A session that ended during the call
+// has taken its list already, so the object goes now; and a call cut short
+// by the end may have reached the API server all the same, so the known
+// name goes too.
+func (m *Manager) made(ctx context.Context, s *Session, c Created, err error) bool {
+	if err != nil {
+		if ctx.Err() != nil {
+			m.removeLate(s, c)
+		}
+		m.end(s, EndFailed, statusMessage(err), Who{})
+		return false
+	}
 	m.mu.Lock()
-	s.Objects = append(s.Objects, c)
-	m.changedLocked(s)
+	ended := s.State == StateEnded
+	if !ended {
+		s.Objects = append(s.Objects, c)
+		m.changedLocked(s)
+	}
 	m.mu.Unlock()
+	if ended {
+		m.removeLate(s, c)
+	}
+	return !ended
+}
+
+// remove deletes what a session made, as the person who made it (TB-29,
+// TB-31).
+func (m *Manager) remove(ctx context.Context, s *Session, o Created) {
+	var err error
+	switch o.Kind {
+	case "Job":
+		err = s.backend.DeleteJob(ctx, o.Namespace, o.Name)
+	case "Pod":
+		err = s.backend.DeletePod(ctx, o.Namespace, o.Name)
+	}
+	if err != nil {
+		m.opts.Logger.Warn("could not remove what a session made; its deadline will", "session", s.ID, "kind", o.Kind, "name", o.Namespace+"/"+o.Name, "err", err)
+	}
+}
+
+// removeLate removes what appeared after the session's end took its list.
+func (m *Manager) removeLate(s *Session, o Created) {
+	ctx, cancel := context.WithTimeout(context.Background(), removeWithin)
+	defer cancel()
+	m.remove(ctx, s, o)
 }
 
 func (m *Manager) note(s *Session, n string) {
@@ -556,6 +591,18 @@ func (m *Manager) note(s *Session, n string) {
 	s.Notes = append(s.Notes, n)
 	m.changedLocked(s)
 	m.mu.Unlock()
+}
+
+// deadline is the activeDeadlineSeconds of a session's pod, which cannot
+// be raised once the pod exists: the most Extend may reach (MaxEnds in
+// live), and the time the session may take to start, since its limit
+// counts from then. The console ends the session at its limit; the
+// deadline is what stops the pod should the console not.
+func (m *Manager) deadline(limit time.Duration, approver string) time.Duration {
+	if approver == "" {
+		limit = m.opts.Config.MaxDuration.D()
+	}
+	return limit + m.opts.StartWithin
 }
 
 // live marks a session started: its hard limit counts from now.
@@ -751,6 +798,9 @@ func (m *Manager) End(id string, who Who, reason string) (*Session, error) {
 	return s, nil
 }
 
+// removeWithin bounds removing what a session made.
+const removeWithin = 20 * time.Second
+
 // end ends a session once: it stops its streams, removes what it made,
 // and keeps the record.
 func (m *Manager) end(s *Session, by, note string, who Who) {
@@ -783,20 +833,10 @@ func (m *Manager) end(s *Session, by, note string, who Who) {
 	if cast != nil {
 		cast.close()
 	}
-	// What the session made goes as the person who made it (TB-29, TB-31).
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), removeWithin)
 	defer cancel()
 	for _, o := range objects {
-		var err error
-		switch o.Kind {
-		case "Job":
-			err = s.backend.DeleteJob(ctx, o.Namespace, o.Name)
-		case "Pod":
-			err = s.backend.DeletePod(ctx, o.Namespace, o.Name)
-		}
-		if err != nil {
-			m.opts.Logger.Warn("could not remove what a session made; its deadline will", "session", s.ID, "kind", o.Kind, "name", o.Namespace+"/"+o.Name, "err", err)
-		}
+		m.remove(ctx, s, o)
 	}
 	actor := s.Owner
 	if who.Name != "" {
@@ -810,21 +850,25 @@ func (m *Manager) end(s *Session, by, note string, who Who) {
 	if note != "" {
 		detail += fmt.Sprintf(" note=%q", note)
 	}
-	if s.Exit != nil {
-		detail += fmt.Sprintf(" exit=%d", *s.Exit)
+	// The stream may not have stopped yet: what it writes is read under
+	// the lock.
+	m.mu.Lock()
+	exit, out, forward, rec := s.Exit, s.ring.String(), s.Forward, recordOf(s)
+	m.mu.Unlock()
+	if exit != nil {
+		detail += fmt.Sprintf(" exit=%d", *exit)
 	}
 	if s.Req.Tool == toolbox.ToolCommand || s.Req.Tool == toolbox.ToolNodeCommand || s.Req.Tool == toolbox.ToolSSHPair || s.Req.Tool == toolbox.ToolSSHUnpair {
-		out := s.ring.String()
 		if len(out) > 16<<10 {
 			out = out[:16<<10] + "…"
 		}
 		detail += fmt.Sprintf(" command=%q output=%q", s.Req.Command, out)
 	}
 	if s.Req.Tool == toolbox.ToolForward {
-		detail += fmt.Sprintf(" connections=%d bytes_in=%d bytes_out=%d", s.Forward.Total, s.Forward.BytesIn, s.Forward.BytesOut)
+		detail += fmt.Sprintf(" connections=%d bytes_in=%d bytes_out=%d", forward.Total, forward.BytesIn, forward.BytesOut)
 	}
 	m.record(ActionEnd, s, actor, outcome, detail)
-	m.opts.History.Add(recordOf(s))
+	m.opts.History.Add(rec)
 }
 
 // ---------- terminal plumbing ----------
@@ -1128,7 +1172,12 @@ func (m *Manager) sweep() {
 		s       *Session
 		by, why string
 	}
+	type signIn struct {
+		s      *Session
+		stands func() bool
+	}
 	var ends []ending
+	var signIns []signIn
 	m.mu.Lock()
 	for id, s := range m.all {
 		if s.State == StateEnded {
@@ -1145,13 +1194,20 @@ func (m *Manager) sweep() {
 			ends = append(ends, ending{s, EndLimit, "Time limit reached."})
 		case now.Sub(s.LastActive) > idle:
 			ends = append(ends, ending{s, EndIdle, fmt.Sprintf("No activity for %s.", short(idle))})
-		case s.Owner.Stands != nil && !s.Owner.Stands():
-			ends = append(ends, ending{s, EndSignOut, "The person's sign-in session ended."})
+		case s.Owner.Stands != nil:
+			signIns = append(signIns, signIn{s, s.Owner.Stands})
 		}
 	}
 	m.mu.Unlock()
 	for _, e := range ends {
 		m.end(e.s, e.by, e.why, Who{})
+	}
+	// Last and outside the lock: asking can take a directory's seconds,
+	// and neither the terminals nor the limits above wait for it.
+	for _, c := range signIns {
+		if !c.stands() {
+			m.end(c.s, EndSignOut, "The person's sign-in session ended.", Who{})
+		}
 	}
 }
 
@@ -1222,6 +1278,25 @@ func (m *Manager) History(cluster string, who Who) []Record {
 		}
 	}
 	return out
+}
+
+// Recorded finds a session of a cluster for its transcript, which outlives
+// it: recorded says one was kept, visible that the person may have it. A
+// session that left memory answers from its record, by the rule of Visible;
+// the records have no sign-in to compare, so one without a user is a
+// SuperAdmin's. The records are capped and the transcripts are not: for a
+// session past the cap, only a SuperAdmin, who sees every session, can
+// still reach the file.
+func (m *Manager) Recorded(cluster, id string, who Who) (recorded, visible bool) {
+	if s, ok := m.Get(id); ok {
+		return s.Recorded, s.Cluster == cluster && Visible(s, who)
+	}
+	for _, r := range m.opts.History.List() {
+		if r.ID == id && r.Cluster == cluster {
+			return r.Recorded, who.Admin || (r.OwnerUser != "" && r.OwnerUser == who.User)
+		}
+	}
+	return true, who.Admin
 }
 
 // Token checks a port forward's token, in constant time.

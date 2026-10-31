@@ -23,6 +23,7 @@ import (
 	"helm.sh/helm/v4/pkg/chart/loader/archive"
 	chart "helm.sh/helm/v4/pkg/chart/v2"
 	"helm.sh/helm/v4/pkg/chart/v2/loader"
+	chartutil "helm.sh/helm/v4/pkg/chart/v2/util"
 	"helm.sh/helm/v4/pkg/ignore"
 )
 
@@ -258,7 +259,18 @@ func LoadChart(c *Checkout, dir string) (*chart.Chart, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading the chart: %w", err)
 	}
-	var missing []string
+	return ch, nil
+}
+
+// CheckDependencies refuses a chart that needs a dependency it does not
+// carry under charts/ (HA-04). Whether it needs one depends on the values
+// it deploys with, so Helm's own processing says: it decides the tags and
+// conditions, and leaves the dependencies that stay enabled. It works on a
+// chart of the missing ones alone, as it changes what it is given and
+// Helm processes the chart itself when it renders.
+func CheckDependencies(ch *chart.Chart, vals map[string]any) error {
+	md := *ch.Metadata
+	md.Dependencies = nil
 	for _, d := range ch.Metadata.Dependencies {
 		found := false
 		for _, sub := range ch.Dependencies() {
@@ -266,14 +278,27 @@ func LoadChart(c *Checkout, dir string) (*chart.Chart, error) {
 				found = true
 			}
 		}
-		if !found && (d.Condition == "" || d.Enabled) {
-			missing = append(missing, d.Name)
+		if !found {
+			c := *d
+			c.ImportValues = nil
+			md.Dependencies = append(md.Dependencies, &c)
 		}
 	}
-	if len(missing) > 0 {
-		return nil, fmt.Errorf("the chart depends on %s, which the repository does not vendor under charts/: the console fetches no chart repositories", strings.Join(missing, ", "))
+	if len(md.Dependencies) == 0 {
+		return nil
 	}
-	return ch, nil
+	probe := &chart.Chart{Metadata: &md, Values: ch.Values}
+	if err := chartutil.ProcessDependencies(probe, vals); err != nil {
+		return fmt.Errorf("reading the chart's dependencies: %w", err)
+	}
+	var missing []string
+	for _, d := range probe.Metadata.Dependencies {
+		missing = append(missing, d.Name)
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("the chart depends on %s, which the repository does not vendor under charts/: the console fetches no chart repositories", strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // maxChartFile bounds one file of a chart.

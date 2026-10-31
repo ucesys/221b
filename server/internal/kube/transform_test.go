@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -91,5 +92,18 @@ func TestStrippedPodsGiveTheSameRow(t *testing.T) {
 		if p.Annotations["a"] != "b" || p.Spec.Containers[0].Image == "" {
 			t.Fatalf("pod %s lost fields the pod details show", p.Name)
 		}
+	}
+}
+
+// A quota scoped to a PriorityClass reads the class from the workload's
+// template, so the cache keeps it (P4-06).
+func TestAWorkloadKeepsItsPriorityClass(t *testing.T) {
+	d := &appsv1.Deployment{Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{PriorityClassName: "high", Containers: []corev1.Container{{Name: "c", Image: "c:1"}}}}}}
+	out, err := stripDeployment(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := out.(*appsv1.Deployment).Spec.Template.Spec.PriorityClassName; got != "high" {
+		t.Fatalf("the template's priority class is %q", got)
 	}
 }

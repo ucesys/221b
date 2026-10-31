@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -342,5 +344,62 @@ func TestTunnelPath(t *testing.T) {
 		if IsTunnelPath(p) != want {
 			t.Errorf("%s: %v", p, !want)
 		}
+	}
+}
+
+// A transcript outlives its session: kept for the retention, while the
+// session leaves memory an hour after its end or at a restart. The route
+// answers from the session's record, with the rule of the live route.
+func TestATranscriptCanBeDownloadedAfterTheSessionLeftMemory(t *testing.T) {
+	cfg := tb.Default()
+	cfg.Transcripts, cfg.TranscriptDir = tb.TranscriptsPVC, t.TempDir()
+	history := &sessions.MemoryHistory{}
+	srv, ops, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		o.Sessions = sessions.New(sessions.Options{Config: cfg, History: history, Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	})
+	viewer := signIn(t, srv, "viewer@corp.example")
+	cast := func(cluster, id string) {
+		t.Helper()
+		p := sessions.TranscriptPath(cfg.TranscriptDir, cluster, id)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("{\"version\":2}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cast(clusters.LocalID, "s1")
+	cast(clusters.LocalID, "past-the-cap")
+	cast("staging", "elsewhere")
+	history.Add(sessions.Record{ID: "s1", Cluster: clusters.LocalID, OwnerUser: "someone", Recorded: true})
+	history.Add(sessions.Record{ID: "plain", Cluster: clusters.LocalID, OwnerUser: "someone"})
+	history.Add(sessions.Record{ID: "elsewhere", Cluster: "staging", OwnerUser: "someone", Recorded: true})
+	history.Add(sessions.Record{ID: "lost", Cluster: clusters.LocalID, OwnerUser: "someone", Recorded: true})
+
+	path := func(id string) string { return srv.URL + "/api/v1/sessions/" + id + "/transcript" }
+	r, body := send(t, ops, http.MethodGet, path("s1"), "")
+	if r.StatusCode != http.StatusOK || !strings.Contains(body, `"version":2`) || r.Header.Get("Content-Type") != "application/x-asciicast" || !strings.Contains(r.Header.Get("Content-Disposition"), "session-s1.cast") {
+		t.Fatalf("a SuperAdmin's download: %d %v %s", r.StatusCode, r.Header, body)
+	}
+	if r, body := send(t, viewer, http.MethodGet, path("s1"), ""); r.StatusCode != http.StatusNotFound || strings.Contains(body, "version") {
+		t.Fatalf("someone else's transcript: %d %s", r.StatusCode, body)
+	}
+	if r, body := send(t, ops, http.MethodGet, path("plain"), ""); r.StatusCode != http.StatusNotFound || !strings.Contains(body, "No transcript") {
+		t.Fatalf("a session never recorded: %d %s", r.StatusCode, body)
+	}
+	if r, body := send(t, ops, http.MethodGet, path("lost"), ""); r.StatusCode != http.StatusNotFound || !strings.Contains(body, "gone") {
+		t.Fatalf("a transcript past its retention: %d %s", r.StatusCode, body)
+	}
+	if r, body := send(t, ops, http.MethodGet, path("elsewhere"), ""); r.StatusCode != http.StatusNotFound || strings.Contains(body, "version") {
+		t.Fatalf("another cluster's session: %d %s", r.StatusCode, body)
+	}
+	// The records are capped and the files are not: a SuperAdmin still has
+	// a transcript whose record is gone, and nobody else does.
+	if r, _ := send(t, ops, http.MethodGet, path("past-the-cap"), ""); r.StatusCode != http.StatusOK {
+		t.Fatalf("past the cap: %d", r.StatusCode)
+	}
+	if r, _ := send(t, viewer, http.MethodGet, path("past-the-cap"), ""); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("past the cap, not a SuperAdmin: %d", r.StatusCode)
 	}
 }

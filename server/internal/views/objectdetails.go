@@ -38,6 +38,9 @@ type ObjectDetails struct {
 	// Keys lists a ConfigMap's or Secret's keys with their sizes; values
 	// never travel (X-01).
 	Keys []kube.KeySize `json:"keys,omitempty"`
+	// ResourceVersion is a Secret's, for the edit to send back: one that
+	// changed since is refused, not overwritten (SE-04).
+	ResourceVersion string `json:"resourceVersion,omitempty"`
 	// Release is the Helm release the object belongs to, by Helm's labels
 	// and annotation or by the release manifest, through its owners.
 	Release string `json:"release,omitempty"`
@@ -308,6 +311,7 @@ func BuildObjectDetails(src Source, k kube.Kind, namespace, name string, now tim
 		fact("Immutable", boolText(x.Immutable, "yes", ""))
 	case *kube.SecretSummary:
 		d.Keys = x.Keys
+		d.ResourceVersion = x.ResourceVersion
 		fact("Type", string(x.Type))
 		fact("Keys", fmt.Sprintf("%d, shown by name and size only", len(x.Keys)))
 		fact("Immutable", boolText(x.Immutable, "yes", ""))

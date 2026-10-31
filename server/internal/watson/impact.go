@@ -137,7 +137,8 @@ func (cs *clients) resolveType(typ string) (schema.GroupVersionResource, string,
 }
 
 // targetsOf reads the objects a command names: TYPE NAME..., TYPE/NAME...
-// or TYPE -l SELECTOR. fixedType is the type of commands that take only
+// or TYPE -l SELECTOR, where TYPE may be a comma list, as kubectl takes
+// it. fixedType is the type of commands that take only
 // names (nodes for cordon). The guards hold each selector to the objects
 // it matched for the card.
 func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, pos []string) ([]target, []guard, error) {
@@ -162,11 +163,16 @@ func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, 
 			}
 		}
 	case len(pos) > 0:
-		if len(pos) == 1 {
-			pairs = append(pairs, pair{pos[0], ""})
-		}
-		for _, n := range pos[1:] {
-			pairs = append(pairs, pair{pos[0], n})
+		for _, typ := range strings.Split(pos[0], ",") {
+			if typ == "" {
+				continue
+			}
+			if len(pos) == 1 {
+				pairs = append(pairs, pair{typ, ""})
+			}
+			for _, n := range pos[1:] {
+				pairs = append(pairs, pair{typ, n})
+			}
 		}
 	}
 	var out []target

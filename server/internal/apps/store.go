@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -20,6 +21,9 @@ import (
 // ErrNotFound says there is no record for the application.
 var ErrNotFound = errors.New("no such application")
 
+// ErrConflict says a record changed after it was read.
+var ErrConflict = errors.New("the application changed since it was read")
+
 // Store keeps the records: written and read by the console alone, like
 // the cluster connections (X-04).
 type Store interface {
@@ -28,7 +32,8 @@ type Store interface {
 	// Get returns one record and its repository token ("" for none).
 	Get(ctx context.Context, cluster, namespace, name string) (Record, string, error)
 	// Save writes a record; a nil token keeps the saved one, an empty one
-	// removes it.
+	// removes it. A record that came from Get is saved only over what Get
+	// read: anything else is ErrConflict.
 	Save(ctx context.Context, r Record, token *string) error
 	// Delete removes a record and its token.
 	Delete(ctx context.Context, cluster, namespace, name string) error
@@ -101,7 +106,7 @@ func (s *SecretStore) Get(ctx context.Context, cluster, namespace, name string) 
 	if err != nil {
 		return Record{}, "", err
 	}
-	r.HasToken = len(sec.Data[keyToken]) > 0
+	r.HasToken, r.Rev = len(sec.Data[keyToken]) > 0, sec.ResourceVersion
 	return r, string(sec.Data[keyToken]), nil
 }
 
@@ -114,6 +119,9 @@ func (s *SecretStore) Save(ctx context.Context, r Record, token *string) error {
 	}
 	cur, err := s.secrets.Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
+		if r.Rev != "" {
+			return ErrConflict
+		}
 		sec := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.namespace, Labels: map[string]string{LabelComponent: ComponentValue, LabelCluster: r.Cluster}},
 			Data:       map[string][]byte{keySpec: data},
@@ -129,6 +137,9 @@ func (s *SecretStore) Save(ctx context.Context, r Record, token *string) error {
 	if err != nil {
 		return fmt.Errorf("reading the application Secret: %w", err)
 	}
+	if r.Rev != "" && r.Rev != cur.ResourceVersion {
+		return ErrConflict
+	}
 	if cur.Data == nil {
 		cur.Data = map[string][]byte{}
 	}
@@ -141,6 +152,9 @@ func (s *SecretStore) Save(ctx context.Context, r Record, token *string) error {
 		}
 	}
 	if _, err := s.secrets.Update(ctx, cur, metav1.UpdateOptions{}); err != nil {
+		if apierrors.IsConflict(err) {
+			return ErrConflict
+		}
 		return fmt.Errorf("saving the application: %w", err)
 	}
 	return nil
@@ -180,11 +194,12 @@ type MemoryStore struct {
 	mu     sync.Mutex
 	recs   map[string]Record
 	tokens map[string]string
+	revs   map[string]int
 }
 
 // NewMemoryStore makes an empty store.
 func NewMemoryStore() *MemoryStore {
-	return &MemoryStore{recs: map[string]Record{}, tokens: map[string]string{}}
+	return &MemoryStore{recs: map[string]Record{}, tokens: map[string]string{}, revs: map[string]int{}}
 }
 
 func (m *MemoryStore) Kind() string { return "memory" }
@@ -209,7 +224,7 @@ func (m *MemoryStore) Get(_ context.Context, cluster, namespace, name string) (R
 	if !ok {
 		return Record{}, "", ErrNotFound
 	}
-	r.HasToken = m.tokens[id] != ""
+	r.HasToken, r.Rev = m.tokens[id] != "", strconv.Itoa(m.revs[id])
 	return r, m.tokens[id], nil
 }
 
@@ -218,6 +233,12 @@ func (m *MemoryStore) Save(_ context.Context, r Record, token *string) error {
 	defer m.mu.Unlock()
 	r.Version = RecordVersion
 	id := ID(r.Cluster, r.Namespace, r.Name)
+	_, kept := m.recs[id]
+	if r.Rev != "" && (!kept || r.Rev != strconv.Itoa(m.revs[id])) {
+		return ErrConflict
+	}
+	r.Rev = ""
+	m.revs[id]++
 	m.recs[id] = r
 	if token != nil {
 		if *token == "" {

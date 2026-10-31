@@ -2,6 +2,7 @@ package views
 
 import (
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -270,7 +271,7 @@ func sortEntries(es []AlertEntry) {
 
 func podAlert(src Source, p *corev1.Pod, now time.Time, grace time.Duration) (AlertRow, bool) {
 	row := BuildPodRow(src, p, now)
-	if row.Done || p.DeletionTimestamp != nil {
+	if (row.Done && !failedWhole(p)) || p.DeletionTimestamp != nil {
 		return AlertRow{}, false
 	}
 	events := warnings(src, string(p.UID))
@@ -316,6 +317,9 @@ func podAlert(src Source, p *corev1.Pod, now time.Time, grace time.Duration) (Al
 	if sev == SevPending {
 		a.Why = pendingWhy(p, events)
 	}
+	if failedWhole(p) && a.LastMessage == "" {
+		a.LastMessage = row.StatusTip
+	}
 	return a, true
 }
 
@@ -332,12 +336,13 @@ func waitingSince(p *corev1.Pod) time.Time {
 	return p.CreationTimestamp.Time
 }
 
-// lastTermination finds how a container of the pod last stopped.
+// lastTermination finds how a container of the pod last stopped. An init
+// container that finished its work did not fail, so it does not count.
 func lastTermination(p *corev1.Pod, a *AlertRow) {
 	var best *corev1.ContainerStateTerminated
-	for _, cs := range p.Status.ContainerStatuses {
+	for _, cs := range restartStatuses(p) {
 		for _, t := range []*corev1.ContainerStateTerminated{cs.State.Terminated, cs.LastTerminationState.Terminated} {
-			if t == nil {
+			if t == nil || (t == cs.State.Terminated && t.ExitCode == 0 && initContainer(p, cs.Name) != nil) {
 				continue
 			}
 			if best == nil || t.FinishedAt.After(best.FinishedAt.Time) {
@@ -525,6 +530,25 @@ func ClaimsOf(p *corev1.Pod) []string {
 	return out
 }
 
+// volumeList is a list of volumes in a message, as in
+// `unmounted volumes=[data logs]`.
+var volumeList = regexp.MustCompile(`\[([^\]]*)\]`)
+
+// namesVolume says whether an attach or mount message names a volume whole:
+// quoted, or in a list. A name inside another, or a word of the text, is not
+// the volume.
+func namesVolume(message, name string) bool {
+	if strings.Contains(message, `"`+name+`"`) {
+		return true
+	}
+	for _, m := range volumeList.FindAllStringSubmatch(message, -1) {
+		if slices.Contains(strings.FieldsFunc(m[1], func(r rune) bool { return r == ' ' || r == ',' }), name) {
+			return true
+		}
+	}
+	return false
+}
+
 func claimAlert(src Source, c *corev1.PersistentVolumeClaim, now time.Time) (AlertRow, bool) {
 	events := warnings(src, string(c.UID))
 	pv := c.Spec.VolumeName
@@ -566,13 +590,14 @@ func claimAlert(src Source, c *corev1.PersistentVolumeClaim, now time.Time) (Ale
 		if !ok {
 			continue
 		}
-		uses := false
-		for _, name := range ClaimsOf(p) {
-			if name == c.Name {
-				uses = true
+		// Kubernetes names a volume as the pod does, or by the claim.
+		names := []string{c.Name}
+		for _, v := range p.Spec.Volumes {
+			if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName == c.Name {
+				names = append(names, v.Name)
 			}
 		}
-		if !uses {
+		if len(names) == 1 {
 			continue
 		}
 		status, tone, _ := podStatus(p, now)
@@ -584,7 +609,7 @@ func claimAlert(src Source, c *corev1.PersistentVolumeClaim, now time.Time) (Ale
 			if !attachMount.MatchString(e.Reason) {
 				continue
 			}
-			if (pv != "" && strings.Contains(e.Message, pv)) || strings.Contains(e.Message, "["+c.Name+"]") || strings.Contains(e.Message, `"`+c.Name+`"`) || strings.Contains(e.Message, c.Name) {
+			if (pv != "" && strings.Contains(e.Message, pv)) || slices.ContainsFunc(names, func(n string) bool { return namesVolume(e.Message, n) }) {
 				e.Pod = p.Namespace + "/" + p.Name
 				events = append(events, e)
 			}

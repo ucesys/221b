@@ -190,7 +190,7 @@ export function ObjectPanel({ kind, namespace: ns, name, row, gone, cluster, now
           {d.keys && (
             <Card title={`Keys · ${nWord(d.keys.length, 'key', 'keys')}`} pad={false} label="Keys">
               {kind === 'Secret' ? (
-                <SecretData namespace={ns} name={name} keys={d.keys} onToast={onToast} />
+                <SecretData namespace={ns} name={name} keys={d.keys} resourceVersion={d.resourceVersion} onToast={onToast} />
               ) : d.keys.length === 0 ? (
                 <p style={{ margin: 0, padding: '0 16px 12px', fontSize: 12.5, color: 'var(--fg3)' }}>No data.</p>
               ) : (

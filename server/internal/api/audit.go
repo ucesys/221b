@@ -23,8 +23,8 @@ type auditPage struct {
 	Events []audit.Event `json:"events"`
 	// Total counts the events kept, before the filter and the limit.
 	Total int `json:"total"`
-	// Stored says whether events are kept at all: without the settings
-	// ConfigMap (a laptop) they are not.
+	// Stored says whether events outlast a restart: without the settings
+	// ConfigMap (a laptop) they are kept in memory.
 	Stored bool `json:"stored"`
 	// Dropped counts events the webhook never received.
 	Dropped int `json:"dropped"`

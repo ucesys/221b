@@ -1,8 +1,8 @@
 import { act, renderHook } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ACTIONS, checkInput, REGISTRY, setAnswering, setToolOpener, TAB_SPECS, viewState, type ActionDef } from './uiControl'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ACTIONS, canUndo, checkInput, isUndone, markUndone, REGISTRY, runRequest, setAnswering, setToolOpener, TAB_SPECS, undo, viewState, type ActionDef } from './uiControl'
 import { currentRoute, setRouteForTests, TABS } from './router'
 import { tableHandle, tableHandles } from './tables'
 import { useTable } from './useTable'
@@ -128,7 +128,7 @@ describe('the actions', () => {
   // node, then took the filter off to highlight it among every node.
   it('keeps a filter it set in this answer while the table shows rows', () => {
     const nodes = (q: string) => ({ cluster: 'local', view: 'tabs' as const, tab: 'nodes' as const, path: [], params: new URLSearchParams(q) })
-    setAnswering(41)
+    setAnswering('local', 41)
     const one = renderHook(() => useTable({ id: 'nodes', columns: COLS, rows: rowsOf(1), terms, now: 0, defaultSort: { col: 'name', dir: 'asc' } }))
     REGISTRY.view_open!(nodes(''), { tab: 'nodes', filters: { err: 'problems' } })
     expect(window.location.hash).toBe('#/nodes?err=problems')
@@ -141,18 +141,58 @@ describe('the actions', () => {
     REGISTRY.view_open!(nodes('err=problems'), { tab: 'pods' })
     one.unmount()
     // A filter that left nothing to show may go, to correct it.
-    setAnswering(42)
+    setAnswering('local', 42)
     const none = renderHook(() => useTable({ id: 'nodes', columns: COLS, rows: [], terms, now: 0, defaultSort: { col: 'name', dir: 'asc' } }))
     REGISTRY.view_open!(nodes(''), { tab: 'nodes', filters: { err: 'problems' } })
     REGISTRY.view_filter!(nodes('err=problems'), { clear: ['err'] })
     expect(window.location.hash).toBe('#/nodes')
     none.unmount()
     // The next answer may change what the last one set.
-    setAnswering(43)
+    setAnswering('local', 43)
     const again = renderHook(() => useTable({ id: 'nodes', columns: COLS, rows: rowsOf(3), terms, now: 0, defaultSort: { col: 'name', dir: 'asc' } }))
     REGISTRY.view_filter!(nodes('err=problems'), { clear: ['err'] })
     again.unmount()
-    setAnswering(null)
+    setAnswering('local', null)
+  })
+})
+
+describe('an answer’s Undo (P6U-10)', () => {
+  const ask = (answer: number, tab: string) => ({ id: `r${answer}`, window: 'w', answer, action: 'view_open', input: { tab } })
+  afterEach(() => {
+    setAnswering('local', null)
+    vi.unstubAllGlobals()
+    window.location.hash = ''
+  })
+
+  // Message ids count from the start of a conversation, so two clusters have an answer 2.
+  it('keeps the same message id on two clusters apart', async () => {
+    window.location.hash = '#/nodes'
+    setAnswering('a', 2)
+    expect((await runRequest(ask(2, 'pods'), 'a')).applied).toBe(true)
+    expect(canUndo('a', 2)).toBe(true)
+    expect(canUndo('b', 2)).toBe(false)
+    // The other cluster's answer 2 starts clean: no view of A's, no "the person touched it".
+    setAnswering('b', 2)
+    expect((await runRequest(ask(2, 'nodes'), 'b')).applied).toBe(true)
+    expect(canUndo('b', 2)).toBe(true)
+    expect(await undo('a', 2)).toBe(true)
+    expect(isUndone('a', 2)).toBe(true)
+    expect(isUndone('b', 2)).toBe(false)
+    expect(canUndo('b', 2)).toBe(true)
+    markUndone('b', 3)
+    expect(isUndone('a', 3)).toBe(false)
+  })
+
+  it('refuses a request from a conversation that is not answering here', async () => {
+    setAnswering('a', 7)
+    expect((await runRequest(ask(7, 'pods'), 'b')).error).toBe('Sherlock is not answering a question in this window.')
+  })
+
+  // A hidden window draws no frames: the result must still go back.
+  it('answers from a window whose frames never come', async () => {
+    vi.stubGlobal('requestAnimationFrame', () => 0)
+    setAnswering('a', 9)
+    expect(await runRequest(ask(9, 'pods'), 'a')).toMatchObject({ applied: true })
   })
 })
 

@@ -113,6 +113,8 @@ type Log struct {
 	stop    chan struct{}
 	// early holds what was recorded before SetStore, for the store to get.
 	early []Event
+	// inMemory says the store is one that goes with a restart.
+	inMemory bool
 }
 
 // earlyKeep is how many events recorded before the store is set are kept
@@ -130,11 +132,22 @@ func (l *Log) SetStore(st Store) {
 	l.early = nil
 }
 
-// Stored says whether events are kept for the Audit log page.
+// KeepInMemory gives a console without storage the newest events for the
+// Audit log page, until it restarts. Stored stays false, and the page says
+// so.
+func (l *Log) KeepInMemory(keep int) {
+	l.SetStore(&MemoryStore{Keep: keep})
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.inMemory = true
+}
+
+// Stored says whether events are kept for the Audit log page beyond a
+// restart.
 func (l *Log) Stored() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.opts.Store != nil
+	return l.opts.Store != nil && !l.inMemory
 }
 
 // Events returns the kept events, newest first; none without a store.

@@ -84,6 +84,9 @@ render k8s-console --set clusterName=ci --set toolbox.transcripts=pvc --set tool
 render k8s-console --set clusterName=ci --set rbac.roles.admin.exec=true --set toolbox.nodeShell.enabled=false | tee "$WORK/chart-toolbox-exec.yaml" | validate
 echo "--- SSH to nodes (Phase 11): off, with another login user"
 render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=false --set toolbox.ssh.loginUser=ops | tee "$WORK/chart-ssh-off.yaml" | validate
+render k8s-console --set clusterName=ci --set sherlock.egress=false --set 'networkPolicy.outboundCIDRs[0]=140.82.112.0/20' | tee "$WORK/chart-outbound.yaml" | validate
+render k8s-console --set clusterName=ci --set 'service.externalIPs[0]=10.0.0.21' | tee "$WORK/chart-external.yaml" | validate
+render k8s-console --set clusterName=ci --set toolbox.transcripts=pvc | tee "$WORK/chart-pvc.yaml" | validate
 render k8s-console --set clusterName=ci --set rbac.roles.superAdmin.template=readOnly --set rbac.roles.admin.template=full | tee "$WORK/chart-ssh-readonly.yaml" | validate
 render k8s-console --set clusterName=ci --set toolbox.ssh=null | tee "$WORK/chart-ssh-reuse.yaml" | validate
 render k8s-console --set clusterName=ci --set toolbox.ssh.port=2222 --set 'networkPolicy.nodeCIDRs[0]=192.168.1.0/24' | tee "$WORK/chart-ssh-cidr.yaml" | validate
@@ -272,6 +275,11 @@ settings_configmap() {
 service_name() { render 221b --set clusterName=ci | grep -A3 '^kind: Service$' | grep -q 'name: k8s-console-221b'; }
 name_required() { ! render k8s-console > /dev/null 2>&1; }
 no_open_egress() { ! render k8s-console --set clusterName=ci --set networkPolicy.apiServerPorts=null > /dev/null 2>&1; }
+no_open_outbound() { ! render k8s-console --set clusterName=ci --set networkPolicy.outboundPorts=null > /dev/null 2>&1; }
+numeric_tag() { render k8s-console --set clusterName=ci --set image.tag=20261031 > /dev/null 2>&1; }
+outbound_cidrs() { sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-outbound.yaml" | grep -q 'cidr: "140.82.112.0/20"'; }
+external_ingress() { sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-external.yaml" | sed -n '/ingress:/,/egress:/p' | grep -q '^    - ports:'; }
+pvc_recreate() { grep -q 'type: Recreate' "$WORK/chart-pvc.yaml"; }
 dns_egress() { grep -B1 'protocol: UDP' "$out" | grep -q 'port: 53' && ! grep -q 'port: 53' "$WORK/chart-nopolicy.yaml"; }
 api_server_addresses() { grep -q 'cidr: "10.0.0.10/32"' "$WORK/chart-options.yaml"; }
 host_names() {
@@ -425,6 +433,11 @@ check "Sherlock's provider from the chart, locked when asked (Phase 6 review)" s
 check "a release named after the chart still gets a valid Service name" service_name
 check "clusterName is required" name_required
 check "an empty list of API server ports is refused" no_open_egress
+check "an empty list of outbound ports is refused" no_open_outbound
+check "an all-digit image tag renders" numeric_tag
+check "networkPolicy.outboundCIDRs opens the way to a git host with Sherlock's egress off" outbound_cidrs
+check "external IPs are let in by the network policy" external_ingress
+check "transcripts on a volume of one node replace the pod rather than roll it" pvc_recreate
 check "DNS is allowed out, for the clusters given by name" dns_egress
 check "outbound traffic: API servers and DNS only, or also HTTPS for OIDC, a webhook or Sherlock" outbound
 check "local accounts are mounted from a Secret, or an existing one; none with sign-in off" local_accounts

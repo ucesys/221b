@@ -531,7 +531,7 @@ func EphemeralContainer(c toolbox.Config, id string, r Request, pod *corev1.Pod,
 // a time to live, labels copied from a pod or typed, a readiness gate that
 // never holds so no Service sends it traffic, and only the capabilities
 // its image may add and the namespace allows.
-func DebugJob(c toolbox.Config, id, owner string, r Request, level string, copied map[string]string, limit time.Duration) (*batchv1.Job, []string, error) {
+func DebugJob(c toolbox.Config, id, owner string, r Request, level string, copied map[string]string, deadline time.Duration) (*batchv1.Job, []string, error) {
 	img, ok := c.Images[r.Image]
 	if !ok {
 		return nil, nil, fmt.Errorf("no image named %q", r.Image)
@@ -560,7 +560,7 @@ func DebugJob(c toolbox.Config, id, owner string, r Request, level string, copie
 		sc.RunAsNonRoot, sc.RunAsUser = ptr(true), ptr(int64(65532))
 		notes = append(notes, fmt.Sprintf("It runs as a user other than root: namespace %s enforces the restricted Pod Security level.", r.Namespace))
 	}
-	secs := int64(limit / time.Second)
+	secs := int64(deadline / time.Second)
 	ttl := int32(c.DebugPod.TTLAfterFinished.D() / time.Second)
 	pod := corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: m.Labels, Annotations: m.Annotations},
@@ -622,13 +622,13 @@ func controllerLabel(k string) bool {
 // the node, tolerating every taint, with the host's namespaces and its
 // filesystem at /host as the profile says, ended by its deadline at the
 // latest.
-func NodePod(c toolbox.Config, id, owner string, r Request, limit time.Duration) (*corev1.Pod, error) {
+func NodePod(c toolbox.Config, id, owner string, r Request, deadline time.Duration) (*corev1.Pod, error) {
 	img, ok := c.Images[c.NodeShell.Image]
 	if !ok {
 		return nil, fmt.Errorf("no image named %q", c.NodeShell.Image)
 	}
 	m := meta(id, r.Tool, c.NodeShell.Namespace, owner, nil)
-	secs := int64(limit / time.Second)
+	secs := int64(deadline / time.Second)
 	spec := corev1.PodSpec{
 		NodeName:                      r.Node,
 		RestartPolicy:                 corev1.RestartPolicyNever,

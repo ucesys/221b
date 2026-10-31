@@ -178,7 +178,7 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 			}
 			copied = src.Labels
 		}
-		job, notes, err := DebugJob(m.opts.Config, "plan0000plan0000", ownerName, r, level, copied, limit)
+		job, notes, err := DebugJob(m.opts.Config, "plan0000plan0000", ownerName, r, level, copied, m.deadline(limit, ""))
 		if err != nil {
 			p.DryRun, p.DryRunExit = []string{err.Error()}, 1
 			return p
@@ -201,7 +201,7 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 		p.DryRun = []string{"No access review: SSH goes to the node's sshd, not through Kubernetes."}
 	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand, toolbox.ToolSSHPair, toolbox.ToolSSHUnpair:
 		p.Targets = []string{"node/" + r.Node}
-		pod, err := NodePod(m.opts.Config, "plan0000plan0000", ownerName, r, limit)
+		pod, err := NodePod(m.opts.Config, "plan0000plan0000", ownerName, r, m.deadline(limit, ""))
 		if err != nil {
 			p.DryRun, p.DryRunExit = []string{err.Error()}, 1
 			return p

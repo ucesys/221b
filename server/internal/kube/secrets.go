@@ -39,8 +39,9 @@ type SecretSummary struct {
 	Immutable bool
 	Keys      []KeySize
 	Release   *HelmRelease
-	// Cert is what a TLS Secret's certificate says of itself: the public
-	// half only, read from tls.crt (P4-02). Nothing of tls.key is read.
+	// Cert is what the certificate of a Secret that serves TLS says of
+	// itself: the public half only, read from tls.crt (P4-02). Nothing of
+	// tls.key is read.
 	Cert *CertInfo
 }
 
@@ -163,8 +164,15 @@ func SummarizeSecret(obj any) (any, error) {
 		Keys:       keySizes(s.Data, s.StringData),
 	}
 	out.ManagedFields = nil
-	out.Annotations = HideSecretValues(out.Annotations, secretValues(s.Data, s.StringData))
-	if s.Type == corev1.SecretTypeTLS {
+	out.Annotations = HideSecretValues(out.Annotations, secretValues(valuesOf(s.Type, s.Namespace, s.Data), s.StringData))
+	holds := func(key string) bool {
+		_, data := s.Data[key]
+		_, text := s.StringData[key]
+		return data || text
+	}
+	// Ingress controllers take any Secret with the two keys, whatever its
+	// type.
+	if s.Type == corev1.SecretTypeTLS || (holds(corev1.TLSCertKey) && holds(corev1.TLSPrivateKeyKey)) {
 		if crt, ok := s.Data[corev1.TLSCertKey]; ok {
 			out.Cert = certInfo(crt)
 		} else if crt, ok := s.StringData[corev1.TLSCertKey]; ok {
@@ -207,6 +215,23 @@ func SummarizeConfigMap(obj any) (any, error) {
 // LastApplied is the annotation kubectl apply keeps the whole object in,
 // values included.
 const LastApplied = "kubectl.kubernetes.io/last-applied-configuration"
+
+// valuesOf is a Secret's data without what is public anyway: a ServiceAccount
+// token's namespace key, when it says only the Secret's own namespace. Looked
+// for in the annotations it would hide the ServiceAccount's name wherever
+// that contains the namespace. Every other value stays.
+func valuesOf(t corev1.SecretType, namespace string, data map[string][]byte) map[string][]byte {
+	if t != corev1.SecretTypeServiceAccountToken || namespace == "" || string(data[corev1.ServiceAccountNamespaceKey]) != namespace {
+		return data
+	}
+	out := make(map[string][]byte, len(data))
+	for k, v := range data {
+		if k != corev1.ServiceAccountNamespaceKey {
+			out[k] = v
+		}
+	}
+	return out
+}
 
 // secretValues lists every value a Secret holds, in the forms an annotation
 // might carry it: raw and base64.

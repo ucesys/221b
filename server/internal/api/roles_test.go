@@ -11,6 +11,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/fake"
 	"github.com/ucesys/221b/server/internal/roles"
 )
 
@@ -133,5 +135,31 @@ func TestPersonOfUsesWhatSignInWorkedOut(t *testing.T) {
 	}
 	if p := i.personOf(auth.User{Username: "bob", Groups: []string{"web"}}); p.User != "oidc:bob" {
 		t.Errorf("without a worked-out name the prefixes stand: %+v", p)
+	}
+}
+
+// A replica that has just become active has often listed nothing yet: its
+// check reads nothing and comes back in seconds, not in five minutes.
+func TestARoleCheckThatReadNothingComesBackSoon(t *testing.T) {
+	active := true
+	local := &source{Source: fake.New("n1"), logs: map[string][]string{}}
+	s := New(Options{Cluster: local, Active: func() bool { return active }, Logger: quietLog()})
+	if next := s.roleCheckNow(); next != driftSoon {
+		t.Fatalf("nothing read: next in %s", next)
+	}
+	// A standby is told when it becomes active; it has no need to look.
+	active = false
+	if next := s.roleCheckNow(); next != driftEvery {
+		t.Fatalf("not active: next in %s", next)
+	}
+	active = true
+	for _, id := range roles.All {
+		local.Put(clusterRoleOf(id.ClusterRole(), (roles.Templates{}).For(id, roles.Options{}).Rules))
+	}
+	if next := s.roleCheckNow(); next != driftEvery {
+		t.Fatalf("read: next in %s", next)
+	}
+	if _, ok := s.monitor().Get(clusters.LocalID); !ok {
+		t.Fatal("the check kept nothing")
 	}
 }

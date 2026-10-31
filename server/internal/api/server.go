@@ -837,13 +837,33 @@ func settingsStatus(err error, otherwise int) int {
 	return otherwise
 }
 
-// record writes an audit event for the request's session.
+// record writes an audit event for the request's session, about the console
+// itself.
 func (s *Server) record(r *http.Request, action, target, detail string) {
+	s.writeAudit(r, "", audit.OutcomeOK, action, target, detail)
+}
+
+// recordOn writes an audit event about the request's cluster, with how the
+// attempt ended.
+func (s *Server) recordOn(r *http.Request, outcome, action, target, detail string) {
+	s.writeAudit(r, clusterID(r), outcome, action, target, detail)
+}
+
+func (s *Server) writeAudit(r *http.Request, cluster, outcome, action, target, detail string) {
 	if s.opts.Audit == nil {
 		return
 	}
 	sess, _ := auth.SessionFrom(r.Context())
-	s.opts.Audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, Target: target, Detail: detail, From: fromAddr(r)})
+	s.opts.Audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, Cluster: cluster, Target: target, Detail: detail, Outcome: outcome, From: fromAddr(r)})
+}
+
+// refusedOr is how an attempt Kubernetes answered with err ended: denied
+// when it refused the person, failed otherwise.
+func refusedOr(err error) string {
+	if apierrors.IsForbidden(err) {
+		return audit.OutcomeDenied
+	}
+	return audit.OutcomeFailed
 }
 
 // fromAddr is the address a request came from, without the port.
@@ -985,10 +1005,23 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		defer recheckTicker.Stop()
 		recheck = recheckTicker.C
 	}
+	// A replica that stops leading stops reading the clusters, and its
+	// figures freeze: ending the stream makes the browser reopen it, which
+	// reaches the new leader (ADR-70).
+	var leading <-chan time.Time
+	if s.opts.Leader != nil {
+		t := time.NewTicker(s.leaderChecks)
+		defer t.Stop()
+		leading = t.C
+	}
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-leading:
+			if !s.opts.Leader.IsLeader() {
+				return
+			}
 		case <-beat.C:
 			if !s.sessionStands(r) {
 				return

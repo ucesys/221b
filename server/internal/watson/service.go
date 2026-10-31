@@ -167,6 +167,8 @@ type Item struct {
 	// Session is set on a toolbox session's card (Phase 9).
 	Session *SessionCard
 	cancel  context.CancelFunc
+	// stoppedBy is who pressed Stop on it; nil when the console stopped it.
+	stoppedBy *Who
 }
 
 // Options configure the service.
@@ -219,6 +221,10 @@ type Service struct {
 	items  map[string]*Item
 	queues map[string]*runQueue
 	subs   map[*Sub]struct{}
+	// draining says the console is stopping: nothing more starts. workers
+	// counts the goroutines that run the queues.
+	draining bool
+	workers  sync.WaitGroup
 }
 
 type runQueue struct {
@@ -1016,11 +1022,13 @@ func (s *Service) Stop(cl Cluster, who Who, id string) (*Item, error) {
 	switch it.Status {
 	case StatusRunning:
 		if it.cancel != nil {
+			it.stoppedBy = &who
 			it.cancel()
 		}
 	case StatusQueued:
 		it.Status, it.Finished, it.Reason = StatusStopped, s.opts.Now(), "Stopped before it started."
 		s.changedLocked(it)
+		go s.record(ActionResult, it, who, audit.OutcomeStopped, "stopped before it started")
 	default:
 		return it, fmt.Errorf("%w: it is %s", ErrState, it.Status)
 	}
@@ -1111,25 +1119,82 @@ func (s *Service) enqueueLocked(cl Cluster, it *Item, runner Who) {
 	if it.Approver != nil {
 		key = it.Approver.Session + "\x00" + it.Cluster
 	}
-	q := s.queues[key]
-	if q == nil {
-		q = &runQueue{}
-		s.queues[key] = q
-	}
 	it.Status = StatusQueued
 	if it.Approver == nil {
 		w := runner
 		it.Approver = &w
 	}
+	if s.draining {
+		s.stopQueuedLocked(it)
+		go s.record(ActionResult, it, *it.Approver, audit.OutcomeStopped, "the console stopped before it started")
+		return
+	}
+	q := s.queues[key]
+	if q == nil {
+		q = &runQueue{}
+		s.queues[key] = q
+	}
 	s.changedLocked(it)
 	q.ids = append(q.ids, it.ID)
 	if !q.running {
 		q.running = true
+		s.workers.Add(1)
 		go s.work(cl, key, q)
 	}
 }
 
+// stopQueuedLocked ends a queued command the console will not run.
+func (s *Service) stopQueuedLocked(it *Item) {
+	it.Status, it.Finished, it.Reason = StatusStopped, s.opts.Now(), "The console stopped before it started."
+	s.changedLocked(it)
+}
+
+// Drain stops the queues and waits for the running commands until ctx
+// ends, for shutdown: a helm upgrade killed with the process can leave
+// its release pending. What still runs then is stopped, and has settle
+// more to end and record its result.
+func (s *Service) Drain(ctx context.Context, settle time.Duration) {
+	s.mu.Lock()
+	s.draining = true
+	var queued []*Item
+	for _, it := range s.items {
+		if it.Status == StatusQueued {
+			s.stopQueuedLocked(it)
+			queued = append(queued, it)
+		}
+	}
+	s.mu.Unlock()
+	for _, it := range queued {
+		s.record(ActionResult, it, *it.Approver, audit.OutcomeStopped, "the console stopped before it started")
+	}
+	done := make(chan struct{})
+	go func() {
+		s.workers.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+	s.mu.Lock()
+	for _, it := range s.items {
+		if it.Status == StatusRunning && it.cancel != nil {
+			it.cancel()
+		}
+	}
+	s.mu.Unlock()
+	t := time.NewTimer(settle)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		s.opts.Logger.Warn("commands were still ending when the console stopped")
+	}
+}
+
 func (s *Service) work(cl Cluster, key string, q *runQueue) {
+	defer s.workers.Done()
 	for {
 		s.mu.Lock()
 		if len(q.ids) == 0 {
@@ -1197,9 +1262,14 @@ func (s *Service) execute(ctx context.Context, cl Cluster, it *Item, runner Who)
 	s.mu.Lock()
 	it.Exit, it.Finished, it.cancel = code, s.opts.Now(), nil
 	outcome := audit.OutcomeOK
+	who := runner
 	switch {
 	case ctx.Err() != nil:
-		it.Status, it.Reason, outcome = StatusStopped, "Stopped by "+runner.Name+".", audit.OutcomeStopped
+		it.Status, it.Reason, outcome = StatusStopped, "The console stopped.", audit.OutcomeStopped
+		if it.stoppedBy != nil {
+			who = *it.stoppedBy
+			it.Reason = "Stopped by " + who.Name + "."
+		}
 	case code == 0:
 		it.Status = StatusDone
 	default:
@@ -1210,7 +1280,7 @@ func (s *Service) execute(ctx context.Context, cl Cluster, it *Item, runner Who)
 	}
 	s.changedLocked(it)
 	s.mu.Unlock()
-	s.record(ActionResult, it, runner, outcome, fmt.Sprintf("exit=%d duration=%s", code, it.Finished.Sub(it.Started).Round(time.Millisecond)))
+	s.record(ActionResult, it, who, outcome, fmt.Sprintf("exit=%d duration=%s", code, it.Finished.Sub(it.Started).Round(time.Millisecond)))
 }
 
 // itemWriter appends a command's output to it line by line.

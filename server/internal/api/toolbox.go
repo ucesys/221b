@@ -744,23 +744,28 @@ func (s *Server) getSessionOutput(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getSessionTranscript(w http.ResponseWriter, r *http.Request) {
-	ss, _, ok := s.session(w, r)
+	if !s.toolboxReady(w) {
+		return
+	}
+	id := r.PathValue("id")
+	recorded, ok := s.opts.Sessions.Recorded(clusterID(r), id, s.sessionWho(r))
 	if !ok {
+		jsonError(w, http.StatusNotFound, "There is no such session, or it is not yours to see.")
 		return
 	}
 	cfg := s.opts.Sessions.Config()
-	if !ss.Recorded || cfg.TranscriptDir == "" {
+	if !recorded || cfg.TranscriptDir == "" {
 		jsonError(w, http.StatusNotFound, "No transcript was kept of this session.")
 		return
 	}
-	f, err := os.Open(sessions.TranscriptPath(cfg.TranscriptDir, ss.Cluster, ss.ID))
+	f, err := os.Open(sessions.TranscriptPath(cfg.TranscriptDir, clusterID(r), id))
 	if err != nil {
 		jsonError(w, http.StatusNotFound, "The transcript is gone.")
 		return
 	}
 	defer f.Close()
 	w.Header().Set("Content-Type", "application/x-asciicast")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "session-"+ss.ID+".cast"))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "session-"+id+".cast"))
 	http.ServeContent(w, r, "", time.Time{}, f)
 }
 

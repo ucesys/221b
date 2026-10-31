@@ -35,6 +35,43 @@ func clip(s string, n int) string {
 	return s[:n] + "…"
 }
 
+// forwarder returns the session's connection to the kubelet, dialling one
+// when it has none.
+func (m *Manager) forwarder(ctx context.Context, s *Session) (Forwarder, error) {
+	m.mu.Lock()
+	fwd := s.fwd
+	m.mu.Unlock()
+	if fwd != nil {
+		return fwd, nil
+	}
+	fwd, err := s.backend.Forwarder(ctx, s.Ns, s.Pod)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	if s.State != StateLive {
+		m.mu.Unlock()
+		fwd.Close()
+		return nil, ErrEnded
+	}
+	s.fwd = fwd
+	m.mu.Unlock()
+	return fwd, nil
+}
+
+// dropForwarder lets go of a connection to the kubelet that has failed.
+func (m *Manager) dropForwarder(s *Session, fwd Forwarder) {
+	m.mu.Lock()
+	ours := s.fwd == fwd
+	if ours {
+		s.fwd = nil
+	}
+	m.mu.Unlock()
+	if ours {
+		fwd.Close()
+	}
+}
+
 // Tunnel serves the CLI of a port forward until it disconnects or the
 // session ends (TB-19). The token is the forward's own, shown only in
 // its owner's pane.
@@ -83,29 +120,20 @@ func (m *Manager) Tunnel(ctx context.Context, id, token string, fc FrameConn) er
 		m.mu.Unlock()
 		return ErrEnded
 	}
-	fwd := s.fwd
 	s.Forward.CLI, s.Forward.Listen = clip(hello.Host, 120), clip(hello.Listen, 120)
 	s.LastActive = m.opts.Now()
 	m.changedLocked(s)
 	m.mu.Unlock()
-	if fwd == nil {
-		fwd, err = s.backend.Forwarder(ctx, s.Ns, s.Pod)
-		if err != nil {
+	fwd, err := m.forwarder(ctx, s)
+	if err != nil {
+		if !errors.Is(err, ErrEnded) {
 			_ = write(tunnel.Frame{Type: tunnel.End, Payload: []byte(statusMessage(err))})
-			return err
 		}
-		m.mu.Lock()
-		if s.State != StateLive {
-			m.mu.Unlock()
-			fwd.Close()
-			return ErrEnded
-		}
-		s.fwd = fwd
-		m.mu.Unlock()
+		return err
 	}
 	// Inline, as every record is: the log keeps the order things happened in.
 	m.record(ActionOpen, s, s.Owner, audit.OutcomeOK, fmt.Sprintf("cli=%q listen=%q version=%q", clip(hello.Host, 120), clip(hello.Listen, 120), clip(hello.Version, 40)))
-	info, _ := json.Marshal(tunnel.InfoBody{Session: s.ID, Target: fmt.Sprintf("%s/%s:%d", s.Ns, s.Pod, s.Req.Port), Port: s.Req.Port, Ends: s.Ends.UTC().Format("2006-01-02T15:04:05Z"), Idle: m.opts.Config.IdleTimeout.D().String()})
+	info, _ := json.Marshal(tunnel.InfoBody{Session: s.ID, Target: fmt.Sprintf("%s/%s:%d", s.Ns, s.Pod, s.Req.Port), Port: s.Req.Port, Ends: s.Ends.UTC().Format("2006-01-02T15:04:05Z"), Idle: m.opts.Config.IdleTimeout.D().String(), CloseWrite: true})
 	if err := write(tunnel.Frame{Type: tunnel.Info, Payload: info}); err != nil {
 		return err
 	}
@@ -188,8 +216,19 @@ func (m *Manager) Tunnel(ctx context.Context, id, token string, fc FrameConn) er
 		}
 		switch f.Type {
 		case tunnel.Open:
+			if fwd == nil {
+				if fwd, err = m.forwarder(ctx, s); err != nil {
+					_ = write(tunnel.Frame{Type: tunnel.Close, Conn: f.Conn, Payload: []byte(statusMessage(err))})
+					continue
+				}
+			}
 			c, err := fwd.Dial(s.Req.Port)
 			if err != nil {
+				// The connection to the kubelet has died, an API server's
+				// restart, say, though the pod runs on: the next one dials
+				// again, in this tunnel or the CLI's next.
+				m.dropForwarder(s, fwd)
+				fwd = nil
 				_ = write(tunnel.Frame{Type: tunnel.Close, Conn: f.Conn, Payload: []byte(statusMessage(err))})
 				continue
 			}
@@ -244,6 +283,13 @@ func (m *Manager) Tunnel(ctx context.Context, id, token string, fc FrameConn) er
 			count(f.Conn, len(f.Payload), true, false)
 			if _, err := c.Write(f.Payload); err != nil {
 				c.Close()
+			}
+		case tunnel.CloseWrite:
+			cmu.Lock()
+			c := conns[f.Conn]
+			cmu.Unlock()
+			if w, ok := c.(interface{ CloseWrite() error }); ok {
+				_ = w.CloseWrite()
 			}
 		case tunnel.Close:
 			cmu.Lock()

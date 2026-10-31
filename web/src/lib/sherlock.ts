@@ -80,7 +80,8 @@ export function refTarget(r: SherlockRef, cluster: string): RefTarget | null {
 // Sherlock (P5-08) and Watson (P6-09) leave the main window together, for
 // another monitor: one window holds both (decided at the Phase 6 review).
 // The window and the main one talk over a BroadcastChannel: the window says
-// hello every two seconds, and the main one docks nothing while it does.
+// hello every two seconds and goodbye when it closes, and the main one docks
+// nothing in between.
 
 /** A panel of the dock. */
 export type Pane = 'sherlock' | 'watson'
@@ -88,19 +89,21 @@ export type Pane = 'sherlock' | 'watson'
 const CHANNEL = '221b-sherlock'
 
 export type PopMessage =
-  | { type: 'hello'; cluster: string; win?: string }
+  /** hidden: the browser may hold the next hello back for a minute. */
+  | { type: 'hello'; cluster: string; win?: string; hidden?: boolean }
   | { type: 'bye'; win?: string }
   | { type: 'cluster'; cluster: string }
   | { type: 'focus' }
   /** The window closes, and the main window docks the panels again. */
   | { type: 'close' }
-  | { type: 'open'; cluster: string; target: RefTarget }
+  /** window: the main window it is for, the one the assistants' window follows; '' when that one has closed. */
+  | { type: 'open'; cluster: string; target: RefTarget; window: string }
   /** Sherlock's window asks the main window it follows for its view (P6U-03), and it answers. */
   | { type: 'view?'; req: string; window: string }
   | { type: 'view'; req: string; window: string; view: string }
   /** Undo of an answer's view changes, asked from any window (P6U-10), and its result. */
-  | { type: 'undo'; answer: number }
-  | { type: 'undone'; answer: number }
+  | { type: 'undo'; cluster: string; answer: number }
+  | { type: 'undone'; cluster: string; answer: number }
 
 let channel: BroadcastChannel | null = null
 const listeners = new Set<(m: PopMessage) => void>()
@@ -163,19 +166,40 @@ export function focusPopup(): void {
   post({ type: 'focus' })
 }
 
-/** How long the window may stay silent before it counts as gone. */
+/**
+ * Whether a main window acts on a link from the assistants' window: the one
+ * the link names, and only that one. With that window closed, any on the
+ * link's cluster may, and none is pulled away from another cluster.
+ */
+export function opensHere(m: { cluster: string; window: string }, me: string, cluster: string): boolean {
+  return m.window ? m.window === me : m.cluster === cluster
+}
+
+/** How long a window on show may stay silent before it counts as gone: its hellos come on time, so it went without a goodbye. */
 const STALE_MS = 5000
+
+/** The same for a hidden window: the browser runs its timers about once a minute, so this is two of those and a margin. */
+const HIDDEN_STALE_MS = 150_000
+
+/** When a window last said hello, and whether it was hidden then. */
+export type Seen = Record<string, { at: number; hidden: boolean }>
+
+/** Whether any window is still there: none has said goodbye, and none has been silent too long. */
+export function anyOpen(wins: Seen, now: number): boolean {
+  return Object.values(wins).some((w) => now - w.at < (w.hidden ? HIDDEN_STALE_MS : STALE_MS))
+}
 
 /**
  * In the main window: whether the assistants are in their own window now.
- * The window says hello every 2 seconds and goodbye when it closes.
+ * The window says hello every 2 seconds, and at once when it is hidden or
+ * shown, and goodbye when it closes.
  */
 export function usePopped(): boolean {
-  const [wins, setWins] = useState<Record<string, number>>({})
+  const [wins, setWins] = useState<Seen>({})
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const off = onPop((m) => {
-      if (m.type === 'hello') setWins((w) => ({ ...w, [m.win ?? 'assistants']: Date.now() }))
+      if (m.type === 'hello') setWins((w) => ({ ...w, [m.win ?? 'assistants']: { at: Date.now(), hidden: !!m.hidden } }))
       if (m.type === 'bye')
         setWins((w) => {
           const next = { ...w }
@@ -189,21 +213,37 @@ export function usePopped(): boolean {
       clearInterval(t)
     }
   }, [])
-  return Object.values(wins).some((at) => now - at < STALE_MS)
+  return anyOpen(wins, now)
 }
 
 /** In the assistants' window: says it is open until it closes. */
 export function useAnnounce(cluster: string): string {
   const [win] = useState(() => Math.random().toString(36).slice(2, 10))
   useEffect(() => {
-    const hello = () => post({ type: 'hello', cluster, win })
+    // A closing page turns hidden after its pagehide, and a hello then
+    // would call back a window that has said goodbye.
+    let gone = false
+    const hello = () => {
+      if (!gone) post({ type: 'hello', cluster, win, hidden: document.hidden })
+    }
     hello()
     const t = setInterval(hello, 2000)
-    const bye = () => post({ type: 'bye', win })
+    const bye = () => {
+      gone = true
+      post({ type: 'bye', win })
+    }
+    const back = () => {
+      gone = false
+      hello()
+    }
     window.addEventListener('pagehide', bye)
+    window.addEventListener('pageshow', back)
+    document.addEventListener('visibilitychange', hello)
     return () => {
       clearInterval(t)
       window.removeEventListener('pagehide', bye)
+      window.removeEventListener('pageshow', back)
+      document.removeEventListener('visibilitychange', hello)
     }
   }, [cluster, win])
   return win

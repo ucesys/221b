@@ -138,6 +138,16 @@ func BuildObjectRows(src Source, namespace string, now time.Time) []ObjectRow {
 	return out
 }
 
+// jobCondition says whether a condition of a Job is true.
+func jobCondition(j *batchv1.Job, t batchv1.JobConditionType) bool {
+	for _, c := range j.Status.Conditions {
+		if c.Type == t && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
 // ObjectKey is the key of an object's row: "Kind/name".
 func ObjectKey(kind, name string) string { return kind + "/" + name }
 
@@ -168,7 +178,7 @@ func objectRow(src Source, k kube.Kind, o runtime.Object, now time.Time) (Object
 			parts = append(parts, "no node")
 		}
 		var restarts int32
-		for _, cs := range x.Status.ContainerStatuses {
+		for _, cs := range restartStatuses(x) {
 			restarts += cs.RestartCount
 		}
 		if restarts > 0 {
@@ -207,8 +217,15 @@ func objectRow(src Source, k kube.Kind, o runtime.Object, now time.Time) (Object
 			r.Details = "of " + owner.Kind + " " + owner.Name + " · " + r.Details
 		}
 	case *batchv1.Job:
+		// The controller's conditions say how a Job ended; the counters only
+		// say how it is going, and pods may have succeeded in one that failed.
+		finished := x.Spec.Completions == nil || x.Status.Succeeded >= *x.Spec.Completions
 		switch {
-		case x.Status.Succeeded > 0 && x.Status.Active == 0:
+		case jobCondition(x, batchv1.JobFailed):
+			r.Status, r.Tone = fmt.Sprintf("failed (%d)", x.Status.Failed), "err"
+		case jobCondition(x, batchv1.JobComplete):
+			r.Status, r.Tone = "succeeded", "ok"
+		case x.Status.Succeeded > 0 && x.Status.Active == 0 && finished:
 			r.Status, r.Tone = "succeeded", "ok"
 		case x.Status.Failed > 0 && x.Status.Active == 0:
 			r.Status, r.Tone = fmt.Sprintf("failed (%d)", x.Status.Failed), "err"

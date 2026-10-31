@@ -521,9 +521,14 @@ networkPolicy:
   # With OIDC sign-in, an audit webhook or Sherlock (sherlock.egress) the
   # console also needs the provider's, webhook's or Claude API's HTTPS
   # port; it is allowed then. List CIDRs to narrow where it may connect
-  # for them.
+  # for them. Helm applications fetch their charts over the same rule: with
+  # sherlock.egress off, listing the git host here is what opens it.
   outboundPorts: [443]
   outboundCIDRs: []
+  # With LDAP sign-in the console reaches the directory on the port of
+  # auth.ldap.url. List its CIDRs to allow nothing else; empty allows any
+  # address on that port.
+  ldapCIDRs: []
   # With SSH to nodes on (toolbox.ssh.enabled) the console reaches the
   # nodes on toolbox.ssh.port. List the nodes' CIDRs to allow nothing
   # else; empty allows any address on that port.
@@ -566,7 +571,9 @@ topologySpreadConstraints: []
 # affinity below replaces it.
 antiAffinity: ""
 # How long a pod has to finish when it stops: it ends its event streams and,
-# as the leader, hands Sherlock and Watson to another replica first.
+# as the leader, hands Sherlock and Watson to another replica first. Sherlock's
+# answers and Watson's commands in progress get all but the last six seconds
+# of this, then are stopped; raise it for helm upgrades that take longer.
 terminationGracePeriodSeconds: 20
 podAnnotations: {}
 podLabels: {}

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -8,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -230,6 +232,8 @@ func (s *Server) postRestore(w http.ResponseWriter, r *http.Request) {
 	if in.Parts["settings"] && b.Settings != nil {
 		if s.opts.Settings == nil {
 			note("settings: this console keeps no settings")
+		} else if err := s.restorable(*b.Settings); err != nil {
+			note("settings: %v", err)
 		} else if _, err := s.opts.Settings.Update(ctx, *b.Settings); err != nil {
 			note("settings: %v", err)
 		} else {
@@ -363,6 +367,18 @@ func (s *Server) postRestore(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, r, out)
 }
 
+// restorable holds a backup's settings to what the settings pages accept: a
+// file is no way around them.
+func (s *Server) restorable(in settings.Settings) error {
+	if err := in.Validate(); err != nil {
+		return err
+	}
+	if in.Sherlock != nil && s.opts.SherlockProviderLocked && !reflect.DeepEqual(s.sherlockSettings().Provider, in.Sherlock.Provider) {
+		return errors.New("the chart fixes Sherlock's provider (sherlock.lockProvider), and the backup's differs; change it there")
+	}
+	return nil
+}
+
 // accounts returns the local accounts when sign-in keeps any.
 func (s *Server) accounts() *auth.Accounts {
 	if a, ok := s.opts.Auth.(interface{ Accounts() *auth.Accounts }); ok && s.opts.Auth != nil {
@@ -399,7 +415,8 @@ func (s *Server) restoreUsers(ctx context.Context, users []backupUser, rep *rest
 			created++
 			cur, _ = acc.Find(u.Username)
 		} else {
-			name, email, disabled := u.Name, u.Email, u.Disabled
+			// A file with no name or email has nothing to say about them.
+			name, email, disabled := cmp.Or(u.Name, cur.Name), cmp.Or(u.Email, cur.Email), u.Disabled
 			if _, _, err := acc.Update(ctx, u.Username, auth.Change{Name: &name, Email: &email, Disabled: &disabled}); err != nil {
 				note("user %s: %v", u.Username, err)
 				continue

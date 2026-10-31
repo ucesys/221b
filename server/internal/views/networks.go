@@ -206,30 +206,50 @@ func watchesUnclassed(p *corev1.Pod) bool {
 // started with --controller-class set to it, or, for a controller that is
 // started without the flag, the pods with its labels.
 func controllerPods(src Source, cls *networkingv1.IngressClass) []*corev1.Pod {
-	sets, ok := controllers[cls.Spec.Controller]
-	if !ok {
+	if _, ok := controllers[cls.Spec.Controller]; !ok {
 		return nil
 	}
-	var out []*corev1.Pod
+	return controllerIndex(src)[cls.Spec.Controller]
+}
+
+// controllerIndex lists every controller's pods, by the controller, each
+// pod read once whatever the number of routes that ask.
+func controllerIndex(src Source) map[string][]*corev1.Pod {
+	pass, _ := src.(*Pass)
+	if pass != nil && pass.controllers != nil {
+		return pass.controllers
+	}
+	selectors := make(map[string][]labels.Selector, len(controllers))
+	for c, sets := range controllers {
+		for _, s := range sets {
+			selectors[c] = append(selectors[c], labels.SelectorFromSet(s))
+		}
+	}
+	out := map[string][]*corev1.Pod{}
 	for _, o := range src.Objects("pods", "") {
 		p, ok := o.(*corev1.Pod)
 		if !ok || !live(p) {
 			continue
 		}
 		if class, set := controllerClass(p); set {
-			if class == cls.Spec.Controller {
-				out = append(out, p)
-			}
+			out[class] = append(out[class], p)
 			continue
 		}
-		for _, s := range sets {
-			if labels.SelectorFromSet(s).Matches(labels.Set(p.Labels)) {
-				out = append(out, p)
-				break
+		for c, sels := range selectors {
+			for _, sel := range sels {
+				if sel.Matches(labels.Set(p.Labels)) {
+					out[c] = append(out[c], p)
+					break
+				}
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Namespace+"/"+out[i].Name < out[j].Namespace+"/"+out[j].Name })
+	for _, pods := range out {
+		sort.Slice(pods, func(i, j int) bool { return pods[i].Namespace+"/"+pods[i].Name < pods[j].Namespace+"/"+pods[j].Name })
+	}
+	if pass != nil {
+		pass.controllers = out
+	}
 	return out
 }
 

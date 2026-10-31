@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/fake"
+	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/settings"
 )
 
@@ -33,6 +35,11 @@ func (l *testLeader) LeaderAddr() string {
 	return l.addr
 }
 func (l *testLeader) set(addr string) { l.mu.Lock(); l.addr = addr; l.mu.Unlock() }
+func (l *testLeader) setLead(lead bool) {
+	l.mu.Lock()
+	l.lead = lead
+	l.mu.Unlock()
+}
 
 type lockedBuffer struct {
 	mu sync.Mutex
@@ -239,6 +246,47 @@ func TestForwardedStreamEndsWhenTheLeaderMoves(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the stream outlived the move")
+	}
+}
+
+// A leader that steps down stops reading the clusters: its own streams end
+// too, without waiting for a heartbeat, and the browser reconnects to the
+// new one rather than watching figures that no longer move.
+func TestALocalStreamEndsWhenTheReplicaStopsLeading(t *testing.T) {
+	src := &source{Source: fake.New("n1"), logs: map[string][]string{}}
+	store := live.New(src, live.Options{})
+	store.Notify(everything())
+	store.Process()
+	lead := &testLeader{lead: true}
+	api := New(Options{Store: store, Cluster: src, Leader: lead, ProxyToken: "t", Heartbeat: time.Hour, Logger: quietLog()})
+	api.leaderChecks = 20 * time.Millisecond
+	srv := httptest.NewServer(api)
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/events?views=nodes", nil)
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	br := bufio.NewReader(r.Body)
+	if ev, _ := readEvent(t, br); ev != "snapshot" {
+		t.Fatalf("stream began with %s", ev)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := io.Copy(io.Discard, br); done <- err }()
+	select {
+	case <-done:
+		t.Fatal("the stream ended while the replica led")
+	case <-time.After(100 * time.Millisecond):
+	}
+	lead.setLead(false)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream outlived the leadership")
 	}
 }
 

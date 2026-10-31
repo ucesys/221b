@@ -153,7 +153,8 @@ type Settings struct {
 	Model string
 	Caps  Caps
 	// PriceIn and PriceOut, when set, price the model in US dollars per
-	// million tokens; otherwise the listed price, or the highest.
+	// million tokens; otherwise the listed price, or the highest. With
+	// only one set, the other counts at the highest listed price.
 	PriceIn, PriceOut float64
 }
 
@@ -161,7 +162,14 @@ type Settings struct {
 func (s Settings) Price() Model {
 	m, _ := ModelOf(s.Model)
 	if s.PriceIn > 0 || s.PriceOut > 0 {
+		dear := dearest()
 		m.In, m.Out, m.LongAbove = s.PriceIn, s.PriceOut, 0
+		if m.In <= 0 {
+			m.In = dear.In
+		}
+		if m.Out <= 0 {
+			m.Out = dear.Out
+		}
 	}
 	return m
 }
@@ -418,8 +426,45 @@ func (s *Service) Reset(k Key) {
 	c.mu.Unlock()
 }
 
-// Wait waits for the answers in progress, for tests and shutdown.
+// Wait waits for the answers in progress, for tests.
 func (s *Service) Wait() { s.wg.Wait() }
+
+// Drain waits for the answers in progress until ctx ends, for shutdown.
+// What is still running then is stopped, and has settle more to save its
+// spend and write its audit record (P5-05), which every answer does as it
+// ends.
+func (s *Service) Drain(ctx context.Context, settle time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+	s.mu.Lock()
+	convs := make([]*Conversation, 0, len(s.convs))
+	for _, c := range s.convs {
+		convs = append(convs, c)
+	}
+	s.mu.Unlock()
+	for _, c := range convs {
+		c.mu.Lock()
+		if c.cancel != nil {
+			c.cancel()
+		}
+		c.mu.Unlock()
+	}
+	t := time.NewTimer(settle)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		s.opts.Logger.Warn("answers were still ending when the console stopped")
+	}
+}
 
 // answer runs the rounds of one answer: the model replies, the tools it
 // asks for run, their results go back, until it is done.

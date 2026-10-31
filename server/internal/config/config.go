@@ -129,6 +129,9 @@ type Config struct {
 	// the one that runs Sherlock and Watson with (P7-02). Empty: a single
 	// replica, always the leader.
 	LeaderLease string
+	// TerminationGrace is how long the pod has between the signal to stop
+	// and being killed: the chart's terminationGracePeriodSeconds.
+	TerminationGrace time.Duration
 	// PodName and PodIP name this replica, from the downward API; the
 	// leader's address is PodIP and the listen port.
 	PodName string
@@ -192,6 +195,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.SherlockSecret, "sherlock-secret", env("SHERLOCK_SECRET", ""), "namespace/name of the Secret to keep the Claude API key in (empty: in memory, lost on restart)")
 	c.SherlockAPIKey = os.Getenv("SHERLOCK_API_KEY")
 	fs.BoolVar(&c.HTTPSRedirect, "https-redirect", envBool("HTTPS_REDIRECT", false), "send plain-HTTP requests (by X-Forwarded-Proto) to HTTPS, behind an Ingress with TLS")
+	fs.DurationVar(&c.TerminationGrace, "termination-grace", envDuration("TERMINATION_GRACE", 20*time.Second), "how long this process has to stop once signalled: answers and commands in progress get most of it")
 	fs.StringVar(&c.LeaderLease, "leader-lease", env("LEADER_LEASE", ""), "namespace/name of the Lease the replicas elect the one that runs Sherlock and Watson with (empty: a single replica)")
 	c.PodName = os.Getenv("POD_NAME")
 	c.PodIP = os.Getenv("POD_IP")

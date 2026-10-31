@@ -48,6 +48,8 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
   // Opened by Sherlock (P6U-05), it stops above the dock and is not modal,
   // so its answer, Undo and the question box stay in reach (P6U-09).
   const [bySherlock] = useState(() => drivenRecently())
+  // What had focus as the drawer opened, read before anything in it takes focus.
+  const [opener] = useState(() => document.activeElement)
   const body = useRef<HTMLDivElement>(null)
   useEffect(() => {
     // Opened by Sherlock, it leaves focus where the person has it (P6U-09).
@@ -55,15 +57,15 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
   }, [title])
   // Closed, focus goes back to what opened it, unless the page has already
   // put it somewhere (the Nodes tab returns it to the node's row).
-  useEffect(() => {
-    const opener = document.activeElement
-    return () => {
+  useEffect(
+    () => () => {
       requestAnimationFrame(() => {
         const lost = !document.activeElement || document.activeElement === document.body
         if (lost && opener instanceof HTMLElement && opener.isConnected) opener.focus()
       })
-    }
-  }, [])
+    },
+    [opener],
+  )
   useEffect(() => {
     body.current?.scrollTo(0, 0)
   }, [tab])

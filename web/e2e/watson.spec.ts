@@ -563,14 +563,17 @@ test('a standing approval approves cards as they are ready, within the limit the
   try {
     await page.reload()
     await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
-    // The control sits on the card, next to Approve and run; picking a length approves this card and the next ones.
+    // The control sits on the card, next to Approve and run; a length and then Approve all approves this card and the next ones.
     await pane(page).getByTestId('watson-input').fill(`kubectl cordon ${node}`)
     await pane(page).getByTestId('watson-input').press('Enter')
     const first = pane(page).getByTestId('watson-card').last()
     const pick = first.getByTestId('watson-approve-all')
     await expect(pick).toBeVisible()
     await expect(pick.locator('option')).toHaveCount(4) // the empty one, 5, 15 and 30 minutes
+    await expect(first.getByTestId('watson-approve-all-go')).toBeDisabled()
     await pick.selectOption('5')
+    await expect(pane(page).getByTestId('watson-standing-header')).toHaveCount(0) // choosing grants nothing
+    await first.getByTestId('watson-approve-all-go').click()
     await expect(pane(page).getByTestId('watson-standing-header')).toContainText('approving all until')
     const ran = lastRan(page)
     await expect(ran).toHaveAttribute('data-status', 'done', { timeout: 30_000 })

@@ -8,9 +8,11 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/ucesys/221b/server/internal/fake"
 	"github.com/ucesys/221b/server/internal/kube"
@@ -746,5 +748,34 @@ func TestSavedFleetsGoOutAtOnce(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("rows %+v", rows[0])
+	}
+}
+
+// countingSource counts the times a kind is listed.
+type countingSource struct {
+	*fake.Source
+	reads map[string]int
+}
+
+func (s *countingSource) Objects(kind, namespace string) []runtime.Object {
+	s.reads[kind+"/"+namespace]++
+	return s.Source.Objects(kind, namespace)
+}
+
+// The rows of one pass over the policies share one reading of a namespace's
+// budgets, so a pod's change does not cost the pods times the budgets.
+func TestTheRowsOfAPassShareTheirReading(t *testing.T) {
+	src := &countingSource{Source: fake.New("n1"), reads: map[string]int{}}
+	one := intstr.FromInt32(1)
+	for _, name := range []string{"a", "b", "c", "d"} {
+		src.Put(&policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: name}, Spec: policyv1.PodDisruptionBudgetSpec{MinAvailable: &one, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}}}})
+		src.Put(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "pod-" + name, Labels: map[string]string{"app": name}}, Status: corev1.PodStatus{Phase: corev1.PodRunning}})
+	}
+	src.Put(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}})
+	s := New(src, Options{})
+	s.Process()
+	s.Snapshot([]string{ViewPolicies}, nil)
+	if n := src.reads["poddisruptionbudgets/shop"]; n != 1 {
+		t.Fatalf("a pass listed the budgets %d times", n)
 	}
 }

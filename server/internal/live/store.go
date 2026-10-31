@@ -148,10 +148,16 @@ type viewDef struct {
 	// usage reads CPU and memory in use by row key, sent apart from the
 	// rows because it changes on every read.
 	usage func(src Source) map[string]nodes.Usage
+	// pass starts one pass over the rows, in place of build, for rows that
+	// share what they read from the whole cluster (views.Pass).
+	pass func(src Source) rowFunc
 	// decorate adds to a built row what is not in the cluster: an alert's
 	// acknowledgement.
 	decorate func(s *Store, key string, row any) any
 }
+
+// rowFunc renders one row of a pass, or ok=false when it is gone.
+type rowFunc func(key string, now time.Time) (any, bool)
 
 // view is one view's current rows.
 type view struct {
@@ -359,16 +365,22 @@ var staticViews = []viewDef{
 		whole: buildFleets,
 	},
 	{
-		name:  ViewPolicies,
-		lazy:  true,
-		keys:  func(src Source) []string { return views.PolicyKeys(src) },
-		build: func(src Source, key string, now time.Time) (any, bool) { return views.BuildPolicy(src, key, now) },
+		name: ViewPolicies,
+		lazy: true,
+		keys: func(src Source) []string { return views.PolicyKeys(src) },
+		pass: func(src Source) rowFunc {
+			pass := views.NewPass(src)
+			return func(key string, now time.Time) (any, bool) { return views.BuildPolicy(pass, key, now) }
+		},
 	},
 	{
-		name:  ViewNetworks,
-		lazy:  true,
-		keys:  func(src Source) []string { return views.NetworkKeys(src) },
-		build: func(src Source, key string, now time.Time) (any, bool) { return views.BuildNetwork(src, key, now) },
+		name: ViewNetworks,
+		lazy: true,
+		keys: func(src Source) []string { return views.NetworkKeys(src) },
+		pass: func(src Source) rowFunc {
+			pass := views.NewPass(src)
+			return func(key string, now time.Time) (any, bool) { return views.BuildNetwork(pass, key, now) }
+		},
 	},
 	{
 		name:  ViewStorage,
@@ -775,12 +787,19 @@ func (s *Store) build(d viewDef, all bool, keys []string, usage bool, now time.T
 		}
 		sort.Strings(keys)
 		r.present = make(map[string]struct{}, len(keys))
+		var pass rowFunc
+		if d.pass != nil {
+			pass = d.pass(s.src)
+		}
 		for _, k := range keys {
 			var row any
 			var ok bool
-			if d.buildFrom != nil {
+			switch {
+			case pass != nil:
+				row, ok = pass(k, now)
+			case d.buildFrom != nil:
 				row, ok = d.buildFrom(s, k, now)
-			} else {
+			default:
 				row, ok = d.build(s.src, k, now)
 			}
 			if !ok {

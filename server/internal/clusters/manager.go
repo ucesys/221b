@@ -579,6 +579,10 @@ func (m *Manager) prepare(d Draft, orig *Spec, origCred Credential) (Spec, *Cred
 		cred = &c
 	default:
 		c := origCred
+		// A CA pasted alone replaces the saved one.
+		if pem := strings.TrimSpace(d.Credential.CAPEM); pem != "" {
+			c.CAPEM = pem
+		}
 		cred = &c
 		spec.Cred = orig.Cred
 	}

@@ -42,6 +42,20 @@ type fakeBackend struct {
 	forwarded []byte
 	dryRuns   int
 	refuse    error
+	// onCreate runs inside a create, as the API server takes its time.
+	onCreate func(ctx context.Context) error
+	// noisy makes a command print until it is stopped, and a while after.
+	noisy bool
+}
+
+func (f *fakeBackend) creating(ctx context.Context, dry bool) error {
+	f.mu.Lock()
+	hook := f.onCreate
+	f.mu.Unlock()
+	if dry || hook == nil {
+		return nil
+	}
+	return hook(ctx)
 }
 
 func newFake() *fakeBackend {
@@ -84,10 +98,19 @@ func (f *fakeBackend) Namespace(_ context.Context, name string) (*corev1.Namespa
 func (f *fakeBackend) Exec(ctx context.Context, ns, pod, container string, cmd []string, tty bool, stdin io.Reader, stdout, stderr io.Writer, sizes <-chan Size) error {
 	f.mu.Lock()
 	f.execs = append(f.execs, append([]string{ns + "/" + pod + "/" + container}, cmd...))
-	noShell, code, out := f.noShell, f.exitCode, f.output
+	noShell, code, out, noisy := f.noShell, f.exitCode, f.output, f.noisy
 	f.mu.Unlock()
 	if noShell {
 		return errors.New(`exec: "sh": executable file not found in $PATH`)
+	}
+	if noisy {
+		for ctx.Err() == nil {
+			io.WriteString(stdout, "line of output\n")
+		}
+		for range 2000 {
+			io.WriteString(stdout, "line of output\n")
+		}
+		return ctx.Err()
 	}
 	if !tty {
 		io.WriteString(stdout, out)
@@ -168,7 +191,10 @@ func (f *fakeBackend) AddEphemeral(_ context.Context, pod *corev1.Pod, ec corev1
 	return nil
 }
 
-func (f *fakeBackend) CreateJob(_ context.Context, job *batchv1.Job, dry bool) error {
+func (f *fakeBackend) CreateJob(ctx context.Context, job *batchv1.Job, dry bool) error {
+	if err := f.creating(ctx, dry); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if dry {
@@ -182,7 +208,10 @@ func (f *fakeBackend) CreateJob(_ context.Context, job *batchv1.Job, dry bool) e
 	return nil
 }
 
-func (f *fakeBackend) CreatePod(_ context.Context, pod *corev1.Pod, dry bool) error {
+func (f *fakeBackend) CreatePod(ctx context.Context, pod *corev1.Pod, dry bool) error {
+	if err := f.creating(ctx, dry); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if dry {
@@ -702,7 +731,7 @@ func TestDebugPodCopiesLabelsAndIsRemoved(t *testing.T) {
 	if labels["app"] != "api" || labels["pod-template-hash"] != "" || labels[LabelSession] != s.ID {
 		t.Fatalf("labels = %v", labels)
 	}
-	if *job.Spec.ActiveDeadlineSeconds != 1800 || job.Spec.Template.Spec.ReadinessGates[0].ConditionType != NeverReady {
+	if *job.Spec.ActiveDeadlineSeconds != int64((m.opts.Config.MaxDuration.D()+m.opts.StartWithin)/time.Second) || job.Spec.Template.Spec.ReadinessGates[0].ConditionType != NeverReady {
 		t.Fatalf("job spec = %+v", job.Spec)
 	}
 	// No ServiceAccount named: no token, so a shell in the pod holds no
@@ -1033,5 +1062,296 @@ func TestASessionEndedDuringTheDialDropsTheConnection(t *testing.T) {
 	m.sshTerminal(context.Background(), s, term, "")
 	if !term.closed.Load() {
 		t.Fatal("the connection was left open")
+	}
+}
+
+// Who may have a transcript does not change when the session leaves memory.
+func TestATranscriptFollowsTheSessionsRecord(t *testing.T) {
+	m, _, _, _ := setup(t)
+	s, err := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, alice(), "", "card1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, s.ID, StateLive)
+	admin := bob()
+	admin.Admin = true
+	for _, c := range []struct {
+		name    string
+		cluster string
+		who     Who
+		visible bool
+	}{{"its owner", "c1", alice(), true}, {"another person", "c1", bob(), false}, {"a SuperAdmin", "c1", admin, true}, {"another cluster", "c2", admin, false}} {
+		if _, got := m.Recorded(c.cluster, s.ID, c.who); got != c.visible {
+			t.Errorf("live, %s: %v", c.name, got)
+		}
+	}
+	m.opts.History.Add(Record{ID: "gone", Cluster: "c1", OwnerUser: "alice", Recorded: true})
+	m.opts.History.Add(Record{ID: "nobody", Cluster: "c1", Recorded: true})
+	for _, c := range []struct {
+		name string
+		id   string
+		who  Who
+		seen bool
+	}{{"its owner", "gone", alice(), true}, {"another person", "gone", bob(), false}, {"a SuperAdmin", "gone", admin, true},
+		{"anyone, with no owner on the record", "nobody", Who{SignIn: "s-x"}, false}, {"anyone, with no record", "unknown", alice(), false}} {
+		if recorded, got := m.Recorded("c1", c.id, c.who); got != c.seen || (got && !recorded) {
+			t.Errorf("gone, %s: recorded %v, visible %v", c.name, recorded, got)
+		}
+	}
+}
+
+// A pod's deadline cannot be raised, so a session that Extend can move
+// gets one that reaches as far as Extend does; a duration a second person
+// approved stays the limit. Either way the console ends it at its limit.
+func TestAPodsDeadlineReachesWhatExtendCan(t *testing.T) {
+	m, f, c, _ := setup(t)
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolNodeShell, Node: "worker-3", Minutes: 30}, alice(), "", "")
+	got := waitState(t, m, s.ID, StateLive)
+	f.mu.Lock()
+	deadline := time.Duration(*f.pods["221b-privileged/"+got.Pod].Spec.ActiveDeadlineSeconds) * time.Second
+	f.mu.Unlock()
+	if deadline < got.MaxEnds.Sub(got.Started) {
+		t.Fatalf("the pod stops at %s, and Extend reaches %s", deadline, got.MaxEnds.Sub(got.Started))
+	}
+	if _, err := m.Extend(s.ID, alice()); err != nil {
+		t.Fatal(err)
+	}
+	c.add(41 * time.Minute)
+	m.sweep()
+	if got := waitState(t, m, s.ID, StateEnded); got.EndedBy != EndLimit {
+		t.Fatalf("ended by %s, want its limit of 40 minutes", got.EndedBy)
+	}
+
+	a, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolNodeShell, Node: "worker-3", Minutes: 30}, alice(), "Bob", "")
+	got = waitState(t, m, a.ID, StateLive)
+	f.mu.Lock()
+	deadline = time.Duration(*f.pods["221b-privileged/"+got.Pod].Spec.ActiveDeadlineSeconds) * time.Second
+	f.mu.Unlock()
+	if deadline != 30*time.Minute+m.opts.StartWithin {
+		t.Fatalf("an approved 30 minutes gives a deadline of %s", deadline)
+	}
+}
+
+// What a session's end could not know of is still removed: the object
+// that appears after the end took its list, whether the create answered
+// or was cut short by the end though the API server had taken it.
+func TestAnObjectCreatedWhileTheSessionEndsIsRemoved(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		req        Request
+		answer     error
+	}{
+		{"pod, created", "pod/221b-privileged/", Request{Tool: toolbox.ToolNodeShell, Node: "worker-3"}, nil},
+		{"pod, cut short", "pod/221b-privileged/", Request{Tool: toolbox.ToolNodeShell, Node: "worker-3"}, context.Canceled},
+		{"job, created", "job/web/", Request{Tool: toolbox.ToolDebugPod, Namespace: "web", Image: "network"}, nil},
+		{"job, cut short", "job/web/", Request{Tool: toolbox.ToolDebugPod, Namespace: "web", Image: "network"}, context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, f, _, _ := setup(t)
+			creating := make(chan struct{})
+			f.onCreate = func(ctx context.Context) error {
+				close(creating)
+				<-ctx.Done()
+				return tc.answer
+			}
+			s, err := m.Start(Cluster{ID: "c1"}, tc.req, alice(), "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-creating
+			if _, err := m.End(s.ID, alice(), ""); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				f.mu.Lock()
+				deleted := append([]string(nil), f.deleted...)
+				f.mu.Unlock()
+				if len(deleted) == 1 && strings.HasPrefix(deleted[0], tc.want) {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("deleted %v, want one %s", deleted, tc.want)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if got := waitState(t, m, s.ID, StateEnded); got.EndedBy != EndOwner || len(got.Objects) != 0 {
+				t.Fatalf("ended by %s, objects %v", got.EndedBy, got.Objects)
+			}
+		})
+	}
+}
+
+// Ending a command that is still printing reads its output under the
+// lock the stream writes under: go test -race says so.
+func TestEndingACommandThatPrintsIsNoRace(t *testing.T) {
+	m, f, _, buf := setup(t)
+	f.noisy = true
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolCommand, Namespace: "web", Pod: "api-1", Command: "yes"}, alice(), "", "")
+	waitState(t, m, s.ID, StateLive)
+	for len(m.Output(s.ID)) == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := m.End(s.ID, alice(), ""); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, s.ID, StateEnded)
+	if !strings.Contains(buf.text(), "line of output") {
+		t.Fatalf("the audit record has no output: %s", buf.text())
+	}
+}
+
+// Asking whether a sign-in stands can take a directory's seconds: the
+// manager's lock, which every terminal needs, is free meanwhile.
+func TestTheSweepAsksAboutSignInsOutsideTheLock(t *testing.T) {
+	m, _, _, _ := setup(t)
+	var blocked atomic.Bool
+	who := alice()
+	who.Stands = func() bool {
+		free := make(chan struct{})
+		go func() {
+			m.mu.Lock()
+			m.mu.Unlock()
+			close(free)
+		}()
+		select {
+		case <-free:
+		case <-time.After(2 * time.Second):
+			blocked.Store(true)
+		}
+		return true
+	}
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, who, "", "")
+	waitState(t, m, s.ID, StateLive)
+	m.sweep()
+	if blocked.Load() {
+		t.Fatal("the sweep held the lock while it asked")
+	}
+}
+
+// A backend whose first connection to the kubelet is dead: the pod is
+// fine, every stream on that connection fails.
+type dyingBackend struct {
+	*fakeBackend
+	dials  atomic.Int32
+	closed atomic.Bool
+}
+
+type deadForwarder struct{ closed *atomic.Bool }
+
+func (d deadForwarder) Dial(int) (io.ReadWriteCloser, error) {
+	return nil, errors.New("creating the error stream: connection lost")
+}
+func (d deadForwarder) Close() error { d.closed.Store(true); return nil }
+
+func (b *dyingBackend) Forwarder(ctx context.Context, ns, pod string) (Forwarder, error) {
+	if b.dials.Add(1) == 1 {
+		return deadForwarder{&b.closed}, nil
+	}
+	return b.fakeBackend.Forwarder(ctx, ns, pod)
+}
+
+// startTunnel opens a forward's tunnel and returns its frames.
+func startTunnel(t *testing.T, m *Manager) (*pipeFrames, tunnel.InfoBody) {
+	t.Helper()
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolForward, Namespace: "web", Pod: "api-1", Port: 5432}, alice(), "", "")
+	waitState(t, m, s.ID, StateLive)
+	token, err := m.Token(s.ID, alice())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &pipeFrames{in: make(chan tunnel.Frame, 16), out: make(chan tunnel.Frame, 16)}
+	p.in <- tunnel.Frame{Type: tunnel.Hello, Payload: []byte(`{"version":"0.8.2","host":"laptop"}`)}
+	go m.Tunnel(context.Background(), s.ID, token, p)
+	t.Cleanup(func() { close(p.in) })
+	first := nextFrame(t, p)
+	var info tunnel.InfoBody
+	if first.Type != tunnel.Info || json.Unmarshal(first.Payload, &info) != nil {
+		t.Fatalf("first frame %d %q", first.Type, first.Payload)
+	}
+	return p, info
+}
+
+func nextFrame(t *testing.T, p *pipeFrames) tunnel.Frame {
+	t.Helper()
+	select {
+	case f := <-p.out:
+		return f
+	case <-time.After(3 * time.Second):
+		t.Fatal("no frame through the tunnel")
+		return tunnel.Frame{}
+	}
+}
+
+// The API server restarts during a forward: the pod runs on, the
+// connection to it does not. The connection that fails says so, and the
+// next one dials again.
+func TestAForwardDialsAgainAfterItsConnectionDies(t *testing.T) {
+	m, f, _, _ := setup(t)
+	b := &dyingBackend{fakeBackend: f}
+	m.opts.Backend = func(Cluster, kube.Person) (Backend, error) { return b, nil }
+	p, _ := startTunnel(t, m)
+
+	p.in <- tunnel.Frame{Type: tunnel.Open, Conn: 1, Payload: []byte("127.0.0.1:50000")}
+	if fr := nextFrame(t, p); fr.Type != tunnel.Close || fr.Conn != 1 || !strings.Contains(string(fr.Payload), "connection lost") {
+		t.Fatalf("the dead connection: %d %d %q", fr.Type, fr.Conn, fr.Payload)
+	}
+	if !b.closed.Load() {
+		t.Fatal("the dead connection was not closed")
+	}
+	p.in <- tunnel.Frame{Type: tunnel.Open, Conn: 2, Payload: []byte("127.0.0.1:50001")}
+	p.in <- tunnel.Frame{Type: tunnel.Data, Conn: 2, Payload: []byte("select 1")}
+	if fr := nextFrame(t, p); fr.Type != tunnel.Data || fr.Conn != 2 || string(fr.Payload) != "SELECT 1" {
+		t.Fatalf("after dialling again: %d %d %q", fr.Type, fr.Conn, fr.Payload)
+	}
+	if b.dials.Load() != 2 {
+		t.Fatalf("dialled %d times", b.dials.Load())
+	}
+}
+
+// A port whose program answers once the client has finished sending.
+type halfConn struct {
+	net.Conn
+	finished chan struct{}
+}
+
+func (c *halfConn) CloseWrite() error { close(c.finished); return nil }
+
+type halfForwarder struct{}
+
+func (halfForwarder) Dial(int) (io.ReadWriteCloser, error) {
+	a, b := net.Pipe()
+	c := &halfConn{Conn: a, finished: make(chan struct{})}
+	go func() {
+		<-c.finished
+		b.Write([]byte("the answer"))
+		b.Close()
+	}()
+	return c, nil
+}
+func (halfForwarder) Close() error { return nil }
+
+type halfBackend struct{ *fakeBackend }
+
+func (halfBackend) Forwarder(context.Context, string, string) (Forwarder, error) {
+	return halfForwarder{}, nil
+}
+
+// A program that has finished sending tells the pod so and keeps the
+// connection, for the answer.
+func TestACloseWriteTellsThePodAndKeepsTheAnswer(t *testing.T) {
+	m, f, _, _ := setup(t)
+	m.opts.Backend = func(Cluster, kube.Person) (Backend, error) { return halfBackend{f}, nil }
+	p, info := startTunnel(t, m)
+	if !info.CloseWrite {
+		t.Fatal("the console does not say it takes CloseWrite")
+	}
+	p.in <- tunnel.Frame{Type: tunnel.Open, Conn: 3}
+	p.in <- tunnel.Frame{Type: tunnel.CloseWrite, Conn: 3}
+	if fr := nextFrame(t, p); fr.Type != tunnel.Data || string(fr.Payload) != "the answer" {
+		t.Fatalf("after CloseWrite: %d %q", fr.Type, fr.Payload)
+	}
+	if fr := nextFrame(t, p); fr.Type != tunnel.Close || fr.Conn != 3 {
+		t.Fatalf("then: %d %d", fr.Type, fr.Conn)
 	}
 }

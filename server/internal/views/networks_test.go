@@ -8,6 +8,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +18,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/ucesys/221b/server/internal/fake"
@@ -275,5 +278,67 @@ func TestNetworkFactsAndNodes(t *testing.T) {
 	}
 	if _, ok := views.BuildNetwork(src, "route:shop/shop/3/0", now); ok {
 		t.Fatal("a rule that doesn't exist has a row")
+	}
+}
+
+// A Secret made with kubectl create secret generic works as a certificate
+// for an Ingress as long as it holds both keys.
+func TestAnOpaqueSecretWithTheTwoKeysServesTLS(t *testing.T) {
+	src := netSource(t)
+	sec, _ := kube.SummarizeSecret(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "shop-tls"}, Type: corev1.SecretTypeOpaque, Data: map[string][]byte{"tls.crt": cert(t, []string{"shop.example.test"}, now.Add(-24*time.Hour), now.Add(90*24*time.Hour)), "tls.key": []byte("unused")}})
+	src.Put(sec.(*kube.SecretSummary))
+	if h := hopOf(t, trace(t, src), "TLS certificate"); h.Tone != "ok" {
+		t.Fatalf("hop %+v", h)
+	}
+	sec, _ = kube.SummarizeSecret(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "shop-tls"}, Type: corev1.SecretTypeOpaque, Data: map[string][]byte{"password": []byte("unused")}})
+	src.Put(sec.(*kube.SecretSummary))
+	if h := hopOf(t, trace(t, src), "TLS certificate"); h.S != "not a TLS secret" || h.Tone != "err" {
+		t.Fatalf("hop %+v", h)
+	}
+}
+
+// countingSource counts the times a kind is listed.
+type countingSource struct {
+	views.Source
+	reads map[string]int
+}
+
+func (s *countingSource) Objects(kind, namespace string) []runtime.Object {
+	s.reads[kind+"/"+namespace]++
+	return s.Source.Objects(kind, namespace)
+}
+
+// The routes of a pass share one reading of the controllers' pods, and give
+// the rows they give alone.
+func TestARouteDoesNotScanThePodsOfTheCluster(t *testing.T) {
+	src := netSource(t)
+	ing := src.Object("ingresses", "shop", "shop").(*networkingv1.Ingress).DeepCopy()
+	rule := &ing.Spec.Rules[0].HTTP.Paths
+	for i := 1; i < 30; i++ {
+		p := (*rule)[0]
+		p.Path = "/" + strconv.Itoa(i)
+		*rule = append(*rule, p)
+	}
+	src.Put(ing)
+	var keys []string
+	for _, k := range views.NetworkKeys(src) {
+		if strings.HasPrefix(k, views.NetRoute+":") {
+			keys = append(keys, k)
+		}
+	}
+	if len(keys) != 30 {
+		t.Fatalf("routes %v", keys)
+	}
+	counted := &countingSource{Source: src, reads: map[string]int{}}
+	pass := views.NewPass(counted)
+	for _, k := range keys {
+		got, ok := views.BuildNetwork(pass, k, now)
+		want, _ := views.BuildNetwork(src, k, now)
+		if !ok || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s through a pass: %+v, alone: %+v", k, got, want)
+		}
+	}
+	if n := counted.reads["pods/"]; n > 1 {
+		t.Fatalf("%d routes listed every pod %d times", len(keys), n)
 	}
 }

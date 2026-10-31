@@ -84,6 +84,9 @@ Roles: the ClusterRoles 221b-viewer, 221b-super-viewer, 221b-admin and 221b-supe
 a time, from auth.local.groups{{ if or (eq .Values.auth.mode "ldap") (eq .Values.auth.mode "oidc") }} and auth.{{ .Values.auth.mode }}.roles{{ end }}; nothing in the console writes a binding.
 {{- if and (eq .Values.rbac.roles.admin.template "readOnly") (eq .Values.rbac.roles.superAdmin.template "readOnly") }}
 Both changing roles are readOnly: no identity the console uses holds a write right, so nothing can be changed through it.
+{{- if .Values.kubeletStats }}
+kubeletStats is on, though, and its nodes/proxy right can run a command in any pod through a kubelet: set kubeletStats=false to close that too.
+{{- end }}
 {{- end }}
 {{- if eq .Values.rbac.enforce "strict" }}
 rbac.enforce is strict: a cluster whose roles allow more than these refuses every change.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/nodessh"
@@ -139,5 +140,87 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	v := signIn(t, srv, "viewer@corp.example")
 	if resp, _ := send(t, v, http.MethodGet, srv.URL+"/api/v1/admin/backup", ""); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("a viewer took a backup: %s", resp.Status)
+	}
+}
+
+// accountsOnly is sign-in as far as restoring users needs it.
+type accountsOnly struct {
+	Auth
+	accounts *auth.Accounts
+}
+
+func (a accountsOnly) Accounts() *auth.Accounts { return a.accounts }
+
+// keptBackend keeps accounts as a console that remembers them does.
+type keptBackend struct{ auth.Backend }
+
+// A backup that has no name or email for a user says nothing about them:
+// a restore keeps what the console has, and takes what the file does have.
+func TestARestoreKeepsANameAndEmailTheFileDoesNotHave(t *testing.T) {
+	ctx := context.Background()
+	acc := auth.NewAccounts(keptBackend{&auth.MemoryBackend{}}, nil, nil, false, nil)
+	for _, u := range []string{"anna", "ben"} {
+		if _, err := acc.Create(ctx, auth.NewAccount{Username: u, Name: "Name of " + u, Email: u + "@corp.example", Password: "correct horse battery staple"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := &Server{opts: Options{Auth: accountsOnly{accounts: acc}}}
+	rep := restoreReport{Restored: map[string]int{}}
+	s.restoreUsers(ctx, []backupUser{{Username: "anna"}, {Username: "ben", Name: "Ben B", Email: "ben.b@corp.example"}}, &rep)
+	if rep.Restored["users"] != 2 {
+		t.Fatalf("restored %+v", rep)
+	}
+	if u, _ := acc.Find("anna"); u.Name != "Name of anna" || u.Email != "anna@corp.example" {
+		t.Errorf("blanked: %+v", u)
+	}
+	if u, _ := acc.Find("ben"); u.Name != "Ben B" || u.Email != "ben.b@corp.example" {
+		t.Errorf("not restored: %+v", u)
+	}
+}
+
+// A file is no way around the settings pages: what they refuse, a restore
+// refuses, and says so.
+func TestARestoreHoldsItsSettingsToWhatTheSettingsPagesAccept(t *testing.T) {
+	var shared Settings
+	srv, c, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.SherlockProviderLocked = true
+		shared = o.Settings
+	})
+	restore := func(in settings.Settings) restoreReport {
+		t.Helper()
+		b, _ := json.Marshal(restoreInput{Backup: backupFile{Format: backupFormat, Settings: &in}, Parts: map[string]bool{"settings": true}})
+		resp, body := send(t, c, http.MethodPost, srv.URL+"/api/v1/admin/restore", string(b))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("the restore: %s %s", resp.Status, body)
+		}
+		var rep restoreReport
+		if err := json.Unmarshal([]byte(body), &rep); err != nil {
+			t.Fatal(err)
+		}
+		return rep
+	}
+	sherlockWith := func(p *sherlock.Provider) *settings.Sherlock {
+		sh := settings.DefaultSherlock
+		sh.Provider = p
+		return &sh
+	}
+	for name, c := range map[string]struct {
+		in   settings.Settings
+		note string
+	}{
+		"a refresh out of range":     {settings.Settings{RefreshSeconds: 100000}, "refreshSeconds"},
+		"Watson's limit exceeded":    {settings.Settings{RefreshSeconds: 9, Watson: &settings.Watson{ApproveAllMinutes: settings.MaxApproveAll + 1}}, "approveAllMinutes"},
+		"a provider the chart fixes": {settings.Settings{RefreshSeconds: 9, Sherlock: sherlockWith(&sherlock.Provider{Kind: sherlock.KindOpenAI, Endpoint: "https://models.example/v1"})}, "sherlock.lockProvider"},
+	} {
+		rep := restore(c.in)
+		if _, done := rep.Restored["settings"]; done || !strings.Contains(strings.Join(rep.Notes, "\n"), c.note) {
+			t.Errorf("%s: %+v", name, rep)
+		}
+		if shared.Current().RefreshSeconds == c.in.RefreshSeconds {
+			t.Errorf("%s: the settings were applied", name)
+		}
+	}
+	if rep := restore(settings.Settings{RefreshSeconds: 9, Watson: &settings.Watson{ApproveAllMinutes: 30}, Sherlock: sherlockWith(nil)}); rep.Restored["settings"] != 1 || shared.Current().WatsonOrDefault().ApproveAllMinutes != 30 {
+		t.Fatalf("good settings: %+v", rep)
 	}
 }

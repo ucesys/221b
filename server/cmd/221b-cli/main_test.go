@@ -157,3 +157,115 @@ func TestForwardSaysWhyTheConsoleRefused(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// tunnelConsole is a console end that says what the CLI may send in Info
+// and hands every other frame to on.
+func tunnelConsole(t *testing.T, closeWrite bool, on func(c *websocket.Conn, f tunnel.Frame)) (int, <-chan error) {
+	t.Helper()
+	up := websocket.Upgrader{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		c.ReadMessage()
+		info, _ := json.Marshal(tunnel.InfoBody{Session: "s1", Target: "web/files-0:80", Port: 80, CloseWrite: closeWrite})
+		c.WriteMessage(websocket.BinaryMessage, tunnel.Encode(tunnel.Frame{Type: tunnel.Info, Payload: info}))
+		for {
+			_, b, err := c.ReadMessage()
+			if err != nil {
+				return
+			}
+			f, _ := tunnel.Decode(b)
+			on(c, f)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	l, _ := net.Listen("tcp", "127.0.0.1:0")
+	port := l.Addr().(*net.TCPAddr).Port
+	l.Close()
+	errc := make(chan error, 1)
+	go func() {
+		errc <- forward([]string{srv.URL, "--session", "s1", "--token", "tk", "--local", strconv.Itoa(port)})
+	}()
+	return port, errc
+}
+
+func dialLocal(t *testing.T, port int) *net.TCPConn {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		c, err := net.Dial("tcp", "127.0.0.1:"+strconv.Itoa(port))
+		if err == nil {
+			t.Cleanup(func() { c.Close() })
+			return c.(*net.TCPConn)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("the CLI never listened")
+	return nil
+}
+
+// The pod finishes sending well before the program has read it: the Close
+// frame comes after the last Data frame, and the program gets everything.
+func TestACloseFrameLeavesWhatIsQueuedToBeRead(t *testing.T) {
+	const frames, size = 400, 32 << 10
+	port, _ := tunnelConsole(t, true, func(c *websocket.Conn, f tunnel.Frame) {
+		if f.Type != tunnel.Open {
+			return
+		}
+		data := make([]byte, size)
+		for i := 0; i < frames; i++ {
+			c.WriteMessage(websocket.BinaryMessage, tunnel.Encode(tunnel.Frame{Type: tunnel.Data, Conn: f.Conn, Payload: data}))
+		}
+		c.WriteMessage(websocket.BinaryMessage, tunnel.Encode(tunnel.Frame{Type: tunnel.Close, Conn: f.Conn}))
+	})
+	conn := dialLocal(t, port)
+	// A program that starts reading after the whole file has arrived.
+	time.Sleep(300 * time.Millisecond)
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	n, err := io.Copy(io.Discard, conn)
+	if err != nil || n != frames*size {
+		t.Fatalf("read %d of %d: %v", n, frames*size, err)
+	}
+}
+
+// A program that shuts its sending side down after its request still
+// gets the answer, and the console hears it has finished.
+func TestAProgramThatHalfClosesGetsTheAnswer(t *testing.T) {
+	port, _ := tunnelConsole(t, true, func(c *websocket.Conn, f tunnel.Frame) {
+		if f.Type == tunnel.CloseWrite {
+			c.WriteMessage(websocket.BinaryMessage, tunnel.Encode(tunnel.Frame{Type: tunnel.Data, Conn: f.Conn, Payload: []byte("PONG")}))
+			c.WriteMessage(websocket.BinaryMessage, tunnel.Encode(tunnel.Frame{Type: tunnel.Close, Conn: f.Conn}))
+		}
+	})
+	conn := dialLocal(t, port)
+	conn.Write([]byte("ping"))
+	conn.CloseWrite()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	got, err := io.ReadAll(conn)
+	if err != nil || string(got) != "PONG" {
+		t.Fatalf("%q %v", got, err)
+	}
+}
+
+// A console from before CloseWrite would leave the connection open for
+// ever: to it, the end of the program's data closes the connection.
+func TestAnOlderConsoleHearsClose(t *testing.T) {
+	closed := make(chan struct{}, 1)
+	port, _ := tunnelConsole(t, false, func(c *websocket.Conn, f tunnel.Frame) {
+		if f.Type == tunnel.Close {
+			closed <- struct{}{}
+		}
+		if f.Type == tunnel.CloseWrite {
+			t.Error("an older console was sent CloseWrite")
+		}
+	})
+	conn := dialLocal(t, port)
+	conn.CloseWrite()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the console never heard")
+	}
+}

@@ -24,6 +24,7 @@ import (
 	"k8s.io/client-go/restmapper"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
@@ -388,7 +389,7 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	s.record(r, ActionAppSave, in.Namespace+"/"+in.Name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil)+" params="+strconv.Itoa(len(rec.Params)))
+	s.recordOn(r, audit.OutcomeOK, ActionAppSave, in.Namespace+"/"+in.Name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil)+" params="+strconv.Itoa(len(rec.Params)))
 	var extra []string
 	if rec.CreateNamespace {
 		extra = append(extra, "--create-namespace")
@@ -462,16 +463,26 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		token = &in.Token
 	}
 	if err := s.opts.Apps.Save(r.Context(), rec, token); err != nil {
-		jsonError(w, http.StatusBadGateway, err.Error())
+		appSaveFailed(w, err)
 		return
 	}
-	s.record(r, ActionAppSave, ns+"/"+name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil && *token != "")+" params="+strconv.Itoa(len(rec.Params))+" upgrade="+strconv.FormatBool(in.Upgrade))
+	s.recordOn(r, audit.OutcomeOK, ActionAppSave, ns+"/"+name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil && *token != "")+" params="+strconv.Itoa(len(rec.Params))+" upgrade="+strconv.FormatBool(in.Upgrade))
 	if !in.Upgrade {
 		b, _ := json.Marshal(appView{Record: rec})
 		writeJSON(w, r, b)
 		return
 	}
 	s.submitApp(w, r, c, who, appLine("upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...))
+}
+
+// appSaveFailed answers a save that did not go through: a record someone
+// changed since this request read it is a conflict, and is left as it is.
+func appSaveFailed(w http.ResponseWriter, err error) {
+	if errors.Is(err, apps.ErrConflict) {
+		jsonError(w, http.StatusConflict, "the application changed while this was being saved: open it again and repeat the change")
+		return
+	}
+	jsonError(w, http.StatusBadGateway, err.Error())
 }
 
 // matchSource renders the source at its ref as the person and compares
@@ -577,10 +588,10 @@ func (s *Server) postAppUpgrade(w http.ResponseWriter, r *http.Request) {
 		}
 		rec.Source, rec.Updated, rec.UpdatedBy = src, s.opts.Now().UTC(), who.User
 		if err := s.opts.Apps.Save(r.Context(), rec, nil); err != nil {
-			jsonError(w, http.StatusBadGateway, err.Error())
+			appSaveFailed(w, err)
 			return
 		}
-		s.record(r, ActionAppSave, ns+"/"+name, "source="+quoteDetail(rec.Source.String()))
+		s.recordOn(r, audit.OutcomeOK, ActionAppSave, ns+"/"+name, "source="+quoteDetail(rec.Source.String()))
 	}
 	s.submitApp(w, r, c, who, appLine("upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...))
 }
@@ -601,7 +612,7 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		s.record(r, ActionAppForget, ns+"/"+name, "the release is kept")
+		s.recordOn(r, audit.OutcomeOK, ActionAppForget, ns+"/"+name, "the release is kept")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}

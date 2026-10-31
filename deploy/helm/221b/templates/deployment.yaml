@@ -24,6 +24,12 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   revisionHistoryLimit: 3
+  {{- if and (eq .Values.toolbox.transcripts "pvc") (ne .Values.toolbox.transcriptsVolume.accessMode "ReadWriteMany") }}
+  # The volume attaches to one node at a time: a new pod on another node
+  # could never start while the old one holds it.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "b221.selectorLabels" . | nindent 6 }}
@@ -93,6 +99,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
+            # Answers and commands in progress finish inside this when the
+            # pod stops.
+            - name: TERMINATION_GRACE
+              value: {{ printf "%ds" (int .Values.terminationGracePeriodSeconds) | quote }}
             # Shared by the replicas, so the leader believes the person's
             # address a replica forwards with a request.
             - name: PROXY_TOKEN

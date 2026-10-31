@@ -22,7 +22,9 @@ import (
 // uninstall of a chart fetched from a git repository, as the person. The
 // line names the source (--git, --path, --ref, --tag); --app takes the
 // values file and parameters the console keeps for the application, and
-// the record is brought up to date when the change succeeds.
+// the record is brought up to date when the change succeeds: its commit
+// and chart version, and the source the line named. Nothing else on the
+// record changes, --set on the line included, which applies to that deploy.
 
 // appSource reads the source from the line's flags.
 func appSource(c *Command) (apps.Source, bool, error) {
@@ -115,7 +117,62 @@ func (a *appChart) load() (*chart.Chart, error) {
 	if a.ch != nil {
 		return a.ch, nil
 	}
-	return apps.LoadChart(a.co, a.src.Path)
+	ch, err := apps.LoadChart(a.co, a.src.Path)
+	if err != nil {
+		return nil, err
+	}
+	if err := apps.CheckDependencies(ch, a.vals); err != nil {
+		return nil, err
+	}
+	return ch, nil
+}
+
+// saveDeploy brings the application's record up to date after a deploy.
+// The record is read again, since an upgrade can take minutes and a save
+// made meanwhile stands: only the source the line named and what was
+// deployed change; the first deploy of an application makes its record.
+func (a *appChart) saveDeploy(ctx context.Context, c *Command, t Target, out io.Writer, ns, name, chartVersion string) error {
+	var err error
+	for range 3 {
+		if err = a.saveDeployOnce(ctx, c, t, out, ns, name, chartVersion); !errors.Is(err, apps.ErrConflict) {
+			return err
+		}
+	}
+	return err
+}
+
+func (a *appChart) saveDeployOnce(ctx context.Context, c *Command, t Target, out io.Writer, ns, name, chartVersion string) error {
+	now := time.Now().UTC()
+	var token *string
+	rec, _, err := t.Apps.Get(ctx, t.Cluster, ns, name)
+	switch {
+	case errors.Is(err, apps.ErrNotFound):
+		rec = apps.Record{Cluster: t.Cluster, Namespace: ns, Name: name, Created: now, CreatedBy: t.Person.User}
+		if a.rec != nil {
+			rec = *a.rec
+			rec.Rev = ""
+		}
+		rec.Source, rec.Values, rec.Params = a.src, a.values, a.params
+	case err != nil:
+		return err
+	case c.Has("git"):
+		// A token belongs to its repository: a new one on the line would
+		// receive it at the next deploy.
+		if !sameRepo(a.src, rec.Source) {
+			empty := ""
+			token = &empty
+		}
+		rec.Source = a.src
+	}
+	rec.Commit, rec.CommitDate, rec.CommitSubject = a.co.Commit, a.co.CommitDate, a.co.CommitSubject
+	rec.ChartVersion, rec.Updated, rec.UpdatedBy = chartVersion, now, t.Person.User
+	if err := t.Apps.Save(ctx, rec, token); err != nil {
+		return err
+	}
+	if token != nil {
+		fmt.Fprintln(out, "# watson: the application moved to another repository; the token saved for the old one was removed")
+	}
+	return nil
 }
 
 // helmApp runs helm install, upgrade or uninstall.
@@ -242,15 +299,7 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 		return nil
 	}
 	if t.Apps != nil {
-		now := time.Now().UTC()
-		rec := apps.Record{Cluster: t.Cluster, Namespace: ns, Name: name, Created: now, CreatedBy: t.Person.User}
-		if a.rec != nil {
-			rec = *a.rec
-		}
-		rec.Source, rec.Values, rec.Params = a.src, a.values, a.params
-		rec.Commit, rec.CommitDate, rec.CommitSubject = a.co.Commit, a.co.CommitDate, a.co.CommitSubject
-		rec.ChartVersion, rec.Updated, rec.UpdatedBy = ch.Metadata.Version, now, t.Person.User
-		if err := t.Apps.Save(ctx, rec, nil); err != nil {
+		if err := a.saveDeploy(ctx, c, t, out, ns, name, ch.Metadata.Version); err != nil {
 			fmt.Fprintf(out, "# watson: the application's record was not saved: %v\n", err)
 		}
 	}

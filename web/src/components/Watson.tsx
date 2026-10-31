@@ -215,6 +215,38 @@ function standingOn(until: string | null | undefined, now: number): boolean {
   return !!until && Date.parse(until) > now
 }
 
+/**
+ * A standing approval's control on a card (R2-04): the length, then the
+ * button. Choosing a length grants nothing, so an arrow key on the closed
+ * select cannot.
+ */
+export function ApproveAll({ max, busy, give }: { max: number; busy: boolean; give: (minutes: number) => void }) {
+  const [minutes, setMinutes] = useState('')
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+      <select
+        className="rk-tbtn"
+        value={minutes}
+        onChange={(e) => setMinutes(e.target.value)}
+        disabled={busy}
+        aria-label="Approve all for"
+        title="Approves this card and every card you could approve, as each is ready, for the next minutes. An administrator sets the longest in Settings."
+        data-testid="watson-approve-all"
+      >
+        <option value="">Approve all for…</option>
+        {APPROVE_ALL_CHOICES.filter((m) => m <= max).map((m) => (
+          <option key={m} value={m}>
+            {m < 60 ? `${m} minutes` : m === 60 ? '1 hour' : `${m / 60} hours`}
+          </option>
+        ))}
+      </select>
+      <button className="rk-tbtn" onClick={() => give(Number(minutes))} disabled={busy || !minutes} title={minutes ? 'Approves this card and every card you could approve, for the time chosen' : 'Choose how long first'} data-testid="watson-approve-all-go">
+        Approve all
+      </button>
+    </span>
+  )
+}
+
 /** An approval card (P6-04), or the Run card of a read that waits. */
 function Card({ it, cluster, now, onToast, standing }: CardProps) {
   const [editing, setEditing] = useState(false)
@@ -355,22 +387,7 @@ function Card({ it, cluster, now, onToast, standing }: CardProps) {
                 </button>
               </span>
             ) : (
-              <select
-                className="rk-tbtn"
-                value=""
-                onChange={(e) => e.target.value && standing.give(Number(e.target.value))}
-                disabled={busy}
-                aria-label="Approve all for"
-                title="Approves this card and every card you could approve, as each is ready, for the next minutes. An administrator sets the longest in Settings."
-                data-testid="watson-approve-all"
-              >
-                <option value="">Approve all for…</option>
-                {APPROVE_ALL_CHOICES.filter((m) => m <= standing.max).map((m) => (
-                  <option key={m} value={m}>
-                    {m < 60 ? `${m} minutes` : m === 60 ? '1 hour' : `${m / 60} hours`}
-                  </option>
-                ))}
-              </select>
+              <ApproveAll max={standing.max} busy={busy} give={standing.give} />
             ))}
             {it.mine && (
               <>
@@ -484,6 +501,9 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
   const [auto, setAuto] = useState(autoRunReads)
   const [hist, setHist] = useState<Typed[]>(readTyped)
   const [pos, setPos] = useState(-1)
+  // The list the arrows walk, kept from the first ArrowUp to the end of the
+  // walk: what the stream brings meanwhile must not move it under the person.
+  const [walk, setWalk] = useState<string[] | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
   const pending = items.filter((x) => x.status === 'pending')
@@ -518,7 +538,8 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
     if (el && pinned.current) el.scrollTop = el.scrollHeight
   })
 
-  const history = useMemo(() => mergeHistory(hist, items), [hist, items])
+  const merged = useMemo(() => (walk ? [] : mergeHistory(hist, items)), [walk, hist, items])
+  const history = walk ?? merged
 
   const submit = async (text: string) => {
     const cmd = text.trim()
@@ -528,6 +549,7 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
     setHist(next)
     writeJSON(HISTORY_KEY, next)
     setPos(-1)
+    setWalk(null)
     setDraft('')
     try {
       // Typed reads run at once (P6-01); changes wait for their card.
@@ -661,6 +683,7 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
             } else if (e.key === 'ArrowUp' && history.length) {
               e.preventDefault()
               const p = pos < 0 ? history.length - 1 : Math.max(0, pos - 1)
+              setWalk(history)
               setPos(p)
               setDraft(history[p] ?? '')
             } else if (e.key === 'ArrowDown' && pos >= 0) {
@@ -668,6 +691,7 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
               const p = pos + 1
               if (p >= history.length) {
                 setPos(-1)
+                setWalk(null)
                 setDraft('')
               } else {
                 setPos(p)

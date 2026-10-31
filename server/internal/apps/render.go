@@ -77,6 +77,9 @@ func Compose(c *Checkout, src Source, rec *Record, extra []string) (*chart.Chart
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := CheckDependencies(ch, vals); err != nil {
+		return nil, nil, err
+	}
 	return ch, vals, nil
 }
 

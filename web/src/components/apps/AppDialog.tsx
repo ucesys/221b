@@ -87,6 +87,34 @@ function RefPicker({ refs, value, kind, onChange, id }: { refs: RepoRefs | null;
   )
 }
 
+/** The fields a repository's look-over may fill. */
+interface Fillable {
+  path: string
+  ref: string
+  name: string
+  namespace: string
+  values: string
+  params: string
+}
+
+/** What a repository's look-over fills: the fields empty now, whatever they were when it was asked (M-07). */
+export function inspectFill(now: Fillable, d: RepoInspection): Partial<Fillable> & { refKind?: RefKind } {
+  const out: Partial<Fillable> & { refKind?: RefKind } = {}
+  const chart = d.charts[0]
+  if (!now.path.trim() && chart) out.path = chart.path
+  if (!now.ref.trim()) {
+    out.ref = d.ref
+    out.refKind = d.refKind
+  }
+  const h = d.readme
+  if (!h) return out
+  if (!now.name.trim() && h.name) out.name = h.name
+  if (!now.namespace.trim() && h.namespace) out.namespace = h.namespace
+  if (!now.values.trim() && h.values) out.values = h.values
+  if (!now.params.trim() && h.params?.length) out.params = h.params.join('\n')
+  return out
+}
+
 function Field({ label, hint, children, wide }: { label: string; hint?: string; children: ReactNode; wide?: boolean }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, gridColumn: wide ? '1 / -1' : undefined, minWidth: 0 }}>
@@ -122,6 +150,12 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const [yamlError, setYamlError] = useState('')
   // What the repository offered the form (M-07): looked up once the URL is typed.
   const [inspected, setInspected] = useState<{ repo: string; state: 'busy' | 'done' | 'error'; data?: RepoInspection; message?: string } | null>(null)
+  const inspecting = useRef(0)
+  // The fields as they are now, for an answer that comes back seconds later.
+  const fields = useRef<Fillable>({ path, ref, name, namespace, values, params })
+  useEffect(() => {
+    fields.current = { path, ref, name, namespace, values, params }
+  })
   const first = useRef<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null>(null)
   const box = useRef<HTMLDivElement>(null)
 
@@ -149,24 +183,26 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
     const url = repo.trim()
     if (mode !== 'create' || !url || (inspected?.repo === url && inspected.state !== 'error')) return
     setInspected({ repo: url, state: 'busy' })
+    // Only the answer to the last look counts: the URL may have changed since.
+    const asked = ++inspecting.current
     inspectRepo(cluster, url, ref.trim(), refKind, token || undefined)
       .then((d) => {
+        if (asked !== inspecting.current) return
         setInspected({ repo: url, state: 'done', data: d })
-        const chart = d.charts[0]
-        if (!path.trim() && chart) setPath(chart.path)
-        if (!ref.trim()) {
-          setRef(d.ref)
-          setRefKind(d.refKind)
-        }
-        const h = d.readme
-        if (!h) return
-        if (!name.trim() && h.name) setName(h.name)
-        if (!namespace.trim() && h.namespace) setNamespace(h.namespace)
-        if (!values.trim() && h.values) setValues(h.values)
-        if (!params.trim() && h.params?.length) setParams(h.params.join('\n'))
-        if (h.createNamespace) setCreateNs(true)
+        const f = inspectFill(fields.current, d)
+        if (f.path !== undefined) setPath(f.path)
+        if (f.ref !== undefined) setRef(f.ref)
+        if (f.refKind) setRefKind(f.refKind)
+        if (f.name !== undefined) setName(f.name)
+        if (f.namespace !== undefined) setNamespace(f.namespace)
+        // The YAML editor takes no new text while it has focus, so what it did not show must not be kept.
+        if (f.values !== undefined && !document.activeElement?.closest('.rk-yaml')) setValues(f.values)
+        if (f.params !== undefined) setParams(f.params)
+        if (d.readme?.createNamespace) setCreateNs(true)
       })
-      .catch((e: unknown) => setInspected({ repo: url, state: 'error', message: e instanceof Error ? e.message : String(e) }))
+      .catch((e: unknown) => {
+        if (asked === inspecting.current) setInspected({ repo: url, state: 'error', message: e instanceof Error ? e.message : String(e) })
+      })
   }
 
   const loadRefs = () => {

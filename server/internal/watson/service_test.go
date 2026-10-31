@@ -695,3 +695,159 @@ func TestAStandingApprovalApprovesCardsAsTheyAreReady(t *testing.T) {
 		t.Fatalf("off: %v", err)
 	}
 }
+
+// A comma list of types is a list to the card as it is to kubectl: each
+// type's objects show, and each selector guards its set.
+func TestACardReadsACommaListOfTypes(t *testing.T) {
+	svc, cl, _, srv, _ := setup(t, Options{})
+	k := kubernetes.NewForConfigOrDie(&rest.Config{Host: srv.URL})
+	label := func(node string) {
+		t.Helper()
+		patch := []byte(`{"metadata":{"labels":{"test-pool":"gpu"}}}`)
+		if _, err := k.CoreV1().Nodes().Patch(context.Background(), node, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	label("worker-002")
+	it := svc.Submit(context.Background(), cl, alice(), "kubectl label pods,nodes -l test-pool=gpu x=y", "typed", "", true)[0]
+	card := wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	if len(card.Plan.Targets) != 1 || card.Plan.Targets[0] != "node worker-002" || strings.Contains(strings.Join(card.Plan.Impact, " "), "resource type") {
+		t.Fatalf("targets %v impact %v", card.Plan.Targets, card.Plan.Impact)
+	}
+	label("worker-003")
+	if lapsed := wait(t, svc, it.ID, func(i Item) bool { return i.Status == StatusLapsed }); !strings.Contains(lapsed.Reason, "matching test-pool=gpu changed") {
+		t.Fatalf("reason %q", lapsed.Reason)
+	}
+}
+
+// resultOf waits for a command's audited result.
+func resultOf(t *testing.T, buf *auditBuf, id string, line string) audit.Event {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, e := range buf.events() {
+			if e.Action == ActionResult && strings.Contains(e.Detail, line) {
+				return e
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no result audited for %s (%s): %+v", line, id, buf.events())
+	return audit.Event{}
+}
+
+// blockedRun runs commands until they are stopped or released; dry runs
+// pass.
+func blockedRun(release <-chan struct{}) func(ctx context.Context, c *Command, tg Target, out, errOut ioWriter, extra ...string) int {
+	return func(ctx context.Context, c *Command, tg Target, out, errOut ioWriter, extra ...string) int {
+		if len(extra) > 0 {
+			return 0
+		}
+		select {
+		case <-ctx.Done():
+			return 130
+		case <-release:
+			return 0
+		}
+	}
+}
+
+// approved takes a change through a second person's approval.
+func approved(t *testing.T, svc *Service, cl Cluster, line string) *Item {
+	t.Helper()
+	it := svc.Submit(context.Background(), cl, alice(), line, "typed", "", true)[0]
+	wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	if _, err := svc.Approve(context.Background(), cl, bob(), it.ID); err != nil {
+		t.Fatal(err)
+	}
+	return it
+}
+
+func twoPeople(Cluster) bool { return true }
+
+// A stop is the act of the person who pressed it, on a queued command as
+// on a running one, and the approved change gets a result in the log.
+func TestAStopIsAuditedUnderWhoeverPressedIt(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	svc, cl, _, _, buf := setup(t, Options{Run: blockedRun(release), TwoPerson: twoPeople})
+	running := approved(t, svc, cl, "kubectl cordon worker-002")
+	wait(t, svc, running.ID, func(i Item) bool { return i.Status == StatusRunning })
+	queued := approved(t, svc, cl, "kubectl cordon worker-003")
+	wait(t, svc, queued.ID, func(i Item) bool { return i.Status == StatusQueued })
+
+	if _, err := svc.Stop(cl, alice(), queued.ID); err != nil {
+		t.Fatal(err)
+	}
+	if e := resultOf(t, buf, queued.ID, "worker-003"); e.Who.Name != "Alice" || e.Outcome != audit.OutcomeStopped {
+		t.Fatalf("the queued command's result: %+v", e)
+	}
+	if _, err := svc.Stop(cl, alice(), running.ID); err != nil {
+		t.Fatal(err)
+	}
+	it := wait(t, svc, running.ID, func(i Item) bool { return finished(i.Status) })
+	if it.Status != StatusStopped || it.Reason != "Stopped by Alice." {
+		t.Fatalf("%s: %q", it.Status, it.Reason)
+	}
+	if e := resultOf(t, buf, running.ID, "worker-002"); e.Who.Name != "Alice" || e.Outcome != audit.OutcomeStopped {
+		t.Fatalf("the running command's result: %+v", e)
+	}
+}
+
+// A console that stops starts nothing more, and waits for what runs: a
+// helm upgrade killed with it could leave its release pending.
+func TestStoppingTheConsoleWaitsForARunningCommand(t *testing.T) {
+	release := make(chan struct{})
+	svc, cl, _, _, buf := setup(t, Options{Run: blockedRun(release), TwoPerson: twoPeople})
+	running := approved(t, svc, cl, "kubectl cordon worker-002")
+	wait(t, svc, running.ID, func(i Item) bool { return i.Status == StatusRunning })
+	queued := approved(t, svc, cl, "kubectl cordon worker-003")
+	wait(t, svc, queued.ID, func(i Item) bool { return i.Status == StatusQueued })
+
+	drained := make(chan struct{})
+	go func() {
+		svc.Drain(context.Background(), time.Second)
+		close(drained)
+	}()
+	it := wait(t, svc, queued.ID, func(i Item) bool { return finished(i.Status) })
+	if it.Status != StatusStopped || !strings.Contains(it.Reason, "console stopped") {
+		t.Fatalf("the queued command: %s %q", it.Status, it.Reason)
+	}
+	if e := resultOf(t, buf, queued.ID, "worker-003"); e.Outcome != audit.OutcomeStopped {
+		t.Fatalf("its result: %+v", e)
+	}
+	select {
+	case <-drained:
+		t.Fatal("the console did not wait for the running command")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	<-drained
+	if st := wait(t, svc, running.ID, func(i Item) bool { return finished(i.Status) }).Status; st != StatusDone {
+		t.Fatalf("the running command: %s", st)
+	}
+	if e := resultOf(t, buf, running.ID, "worker-002"); e.Outcome != audit.OutcomeOK {
+		t.Fatalf("its result: %+v", e)
+	}
+}
+
+// The wait has a bound, inside the pod's grace period: what still runs is
+// stopped, says who stopped it, and has its result in the log when Drain
+// returns.
+func TestStoppingTheConsoleStopsACommandAtTheBound(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	svc, cl, _, _, buf := setup(t, Options{Run: blockedRun(release), TwoPerson: twoPeople})
+	running := approved(t, svc, cl, "kubectl cordon worker-002")
+	wait(t, svc, running.ID, func(i Item) bool { return i.Status == StatusRunning })
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	svc.Drain(ctx, 5*time.Second)
+	it, _, _ := svc.Snapshot(running.ID, 0)
+	if it.Status != StatusStopped || it.Reason != "The console stopped." {
+		t.Fatalf("%s: %q", it.Status, it.Reason)
+	}
+	if e := resultOf(t, buf, running.ID, "worker-002"); e.Outcome != audit.OutcomeStopped || e.Who.Name != "Bob" {
+		t.Fatalf("its result: %+v", e)
+	}
+}

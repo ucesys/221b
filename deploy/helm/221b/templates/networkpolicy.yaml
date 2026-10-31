@@ -2,6 +2,9 @@
 {{- if not .Values.networkPolicy.apiServerPorts }}
 {{- fail "networkPolicy.apiServerPorts is empty, which would allow every connection out; list the API server's ports, or set networkPolicy.enabled=false" }}
 {{- end }}
+{{- if and (include "b221.outbound" .) (not .Values.networkPolicy.outboundPorts) }}
+{{- fail "networkPolicy.outboundPorts is empty, which would allow every connection out; list the ports, or turn off what needs them (sherlock.egress, OIDC, the audit webhook, networkPolicy.outboundCIDRs)" }}
+{{- end }}
 # Nothing may reach the console except its own replicas, the peers listed
 # in values, or anyone when it is exposed with a LoadBalancer or NodePort
 # Service (kubectl port-forward and kubelet probes are not affected), and
@@ -40,9 +43,9 @@ spec:
       ports:
         - port: http
           protocol: TCP
-    {{- else if ne .Values.service.type "ClusterIP" }}
-    # Exposed with a LoadBalancer or NodePort Service and no peers listed:
-    # any address may reach it, as exposing it means.
+    {{- else if or (ne .Values.service.type "ClusterIP") .Values.service.externalIPs }}
+    # Exposed with a LoadBalancer or NodePort Service, or on external IPs,
+    # and no peers listed: any address may reach it, as exposing it means.
     - ports:
         - port: http
           protocol: TCP
@@ -109,7 +112,7 @@ spec:
     - ports:
         - port: {{ include "b221.ldapPort" . }}
           protocol: TCP
-      {{- with .Values.networkPolicy.outboundCIDRs }}
+      {{- with .Values.networkPolicy.ldapCIDRs }}
       to:
         {{- range . }}
         - ipBlock:

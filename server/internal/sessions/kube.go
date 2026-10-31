@@ -260,6 +260,10 @@ func (s *forwardStream) Close() error {
 	return err
 }
 
+// CloseWrite tells the pod nothing more is coming. Closing a stream closes
+// this side of it only, so what the pod still sends can be read.
+func (s *forwardStream) CloseWrite() error { return s.Close() }
+
 func dryRun(on bool) []string {
 	if on {
 		return []string{metav1.DryRunAll}

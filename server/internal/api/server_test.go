@@ -796,6 +796,41 @@ func TestPodLogs(t *testing.T) {
 	}
 }
 
+// A line longer than the limit is split and the stream goes on: the lines
+// after it arrive, and it ends only when the container stops writing.
+func TestALongLogLineIsSplitAndTheStreamGoesOn(t *testing.T) {
+	srv, _, src := setup(t, true)
+	long := strings.Repeat("x", 2*maxLogLine+10)
+	src.logs["shop/web"] = []string{"before", long, "after"}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/pods/shop/web/log?follow=1", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	br := bufio.NewReader(resp.Body)
+	var lines []string
+	for {
+		ev, data := readEvent(t, br)
+		if ev == "end" {
+			if !strings.Contains(data, "stopped writing") {
+				t.Fatalf("end %s", data)
+			}
+			break
+		}
+		var batch []string
+		if err := json.Unmarshal([]byte(data), &batch); err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, batch...)
+	}
+	if len(lines) != 5 || lines[0] != "before" || len(lines[1]) != maxLogLine || len(lines[2]) != maxLogLine || len(lines[3]) != 10 || lines[4] != "after" {
+		t.Fatalf("%d lines", len(lines))
+	}
+}
+
 func TestLogStreamsAreCapped(t *testing.T) {
 	src := &source{Source: fake.New(), logs: map[string][]string{"a/b": {"x"}}, hold: true}
 	store := live.New(src, live.Options{})
@@ -832,7 +867,7 @@ func TestObjectDetails(t *testing.T) {
 	src.Put(web)
 	src.Put(&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-abc", Namespace: "shop", OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "web", Controller: ptrBool(true)}}}})
 	src.Put(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "uid-deploy"}, Spec: appsv1.DeploymentSpec{Replicas: ptrInt32(1)}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1}})
-	src.Put(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "shop"}, Data: map[string][]byte{"password": []byte("hunter2-planted")}})
+	src.Put(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "shop", ResourceVersion: "7"}, Data: map[string][]byte{"password": []byte("hunter2-planted")}})
 	src.SetPodUsage(map[string]nodes.Usage{"shop/web": {CPUMilli: 12, MemoryBytes: 1 << 20}})
 	store.Notify(everything())
 	store.Process()
@@ -865,7 +900,7 @@ func TestObjectDetails(t *testing.T) {
 	}
 	r := get(t, srv.URL+"/api/v1/objects/secrets/shop/creds")
 	text := body(t, r)
-	if r.StatusCode != 200 || !strings.Contains(text, `"keys":[{"key":"password","bytes":15}]`) || strings.Contains(text, "hunter2") {
+	if r.StatusCode != 200 || !strings.Contains(text, `"keys":[{"key":"password","bytes":15}]`) || !strings.Contains(text, `"resourceVersion":"7"`) || strings.Contains(text, "hunter2") {
 		t.Fatalf("secret details %d %s", r.StatusCode, text)
 	}
 	for path, code := range map[string]int{"/api/v1/objects/deployments/shop/gone": 404, "/api/v1/objects/gizmos/shop/web": 404} {

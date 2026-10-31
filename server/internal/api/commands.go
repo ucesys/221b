@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/watson"
 )
 
@@ -133,10 +134,10 @@ func (s *Server) putAppCommand(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.Updated, rec.UpdatedBy = now, who.User
 	if err := s.opts.Apps.Save(r.Context(), rec, nil); err != nil {
-		jsonError(w, http.StatusBadGateway, err.Error())
+		appSaveFailed(w, err)
 		return
 	}
-	s.record(r, ActionAppCommand, rec.Namespace+"/"+rec.Name, "command="+quoteDetail(name)+" params="+strconv.Itoa(len(params)))
+	s.recordOn(r, audit.OutcomeOK, ActionAppCommand, rec.Namespace+"/"+rec.Name, "command="+quoteDetail(name)+" params="+strconv.Itoa(len(params)))
 	b, _ := json.Marshal(appView{Record: rec})
 	writeJSON(w, r, b)
 }
@@ -156,10 +157,10 @@ func (s *Server) deleteAppCommand(w http.ResponseWriter, r *http.Request) {
 	rec.Commands = append(rec.Commands[:i], rec.Commands[i+1:]...)
 	rec.Updated, rec.UpdatedBy = s.opts.Now().UTC(), who.User
 	if err := s.opts.Apps.Save(r.Context(), rec, nil); err != nil {
-		jsonError(w, http.StatusBadGateway, err.Error())
+		appSaveFailed(w, err)
 		return
 	}
-	s.record(r, ActionAppCommand, rec.Namespace+"/"+rec.Name, "command="+quoteDetail(name)+" deleted")
+	s.recordOn(r, audit.OutcomeOK, ActionAppCommand, rec.Namespace+"/"+rec.Name, "command="+quoteDetail(name)+" deleted")
 	b, _ := json.Marshal(appView{Record: rec})
 	writeJSON(w, r, b)
 }

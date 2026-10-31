@@ -349,7 +349,7 @@ const CLUSTER_ID = /^[a-z0-9][a-z0-9-]{0,62}$/
  * node it should show, then took the filter off to highlight that node
  * among all of them: a filter it set stays while the table shows rows.
  */
-const narrowed = new Map<number, Map<Tab, Set<string>>>()
+const narrowed = new Map<string, Map<Tab, Set<string>>>()
 
 function noteNarrowed(tab: Tab, f: Record<string, string | undefined>) {
   if (answering === null) return
@@ -541,8 +541,11 @@ interface AnswerRecord {
   before: Saved | null
 }
 
-const answers = new Map<number, AnswerRecord>()
-let answering: number | null = null
+/** Message ids count from the start of a conversation, so an answer is known by its cluster too. */
+const answerKey = (cluster: string, answer: number) => `${cluster}/${answer}`
+
+const answers = new Map<string, AnswerRecord>()
+let answering: string | null = null
 /** The hash Sherlock last set, so its own navigation is not taken for the person's. */
 let expected: string | null = null
 
@@ -554,10 +557,10 @@ function capture(): Saved {
 }
 
 /** The answer Sherlock is giving now, from the conversation; null when it is not answering. */
-export function setAnswering(id: number | null): void {
-  answering = id
-  for (const k of narrowed.keys()) if (k !== id) narrowed.delete(k)
-  if (id !== null && !answers.has(id)) answers.set(id, { touched: false, before: null })
+export function setAnswering(cluster: string, id: number | null): void {
+  answering = id === null ? null : answerKey(cluster, id)
+  for (const k of narrowed.keys()) if (k !== answering) narrowed.delete(k)
+  if (answering !== null && !answers.has(answering)) answers.set(answering, { touched: false, before: null })
 }
 
 function touched() {
@@ -578,19 +581,19 @@ function watch() {
 }
 
 /** Whether this answer's changes can be undone in this window. */
-export function canUndo(answer: number): boolean {
-  return !!answers.get(answer)?.before
+export function canUndo(cluster: string, answer: number): boolean {
+  return !!answers.get(answerKey(cluster, answer))?.before
 }
 
-const undone = new Set<number>()
+const undone = new Set<string>()
 const undoListeners = new Set<() => void>()
 
-export function isUndone(answer: number): boolean {
-  return undone.has(answer)
+export function isUndone(cluster: string, answer: number): boolean {
+  return undone.has(answerKey(cluster, answer))
 }
 
-export function markUndone(answer: number): void {
-  undone.add(answer)
+export function markUndone(cluster: string, answer: number): void {
+  undone.add(answerKey(cluster, answer))
   for (const fn of undoListeners) fn()
 }
 
@@ -599,15 +602,27 @@ export function onUndone(fn: () => void): () => void {
   return () => undoListeners.delete(fn)
 }
 
-const frame = () => new Promise<void>((r) => (typeof requestAnimationFrame === 'undefined' ? setTimeout(r, 16) : requestAnimationFrame(() => r())))
+/** How long to wait for a frame: a hidden window draws none, and what it was doing must still finish. */
+const FRAME_WAIT_MS = 100
+
+const frame = () =>
+  new Promise<void>((r) => {
+    const t = setTimeout(r, FRAME_WAIT_MS)
+    if (typeof requestAnimationFrame === 'undefined') return
+    requestAnimationFrame(() => {
+      clearTimeout(t)
+      r()
+    })
+  })
 
 /** Puts the view back as it was before the answer's first change (P6U-10). */
-export async function undo(answer: number): Promise<boolean> {
-  const rec = answers.get(answer)
+export async function undo(cluster: string, answer: number): Promise<boolean> {
+  const key = answerKey(cluster, answer)
+  const rec = answers.get(key)
   if (!rec?.before) return false
   const b = rec.before
   rec.before = null
-  if (answering === answer) rec.touched = true
+  if (answering === key) rec.touched = true
   navigate(b.hash, true)
   await frame()
   await frame()
@@ -618,7 +633,7 @@ export async function undo(answer: number): Promise<boolean> {
     t.setOverride(s.override)
     if (t.query() !== s.query) t.setQuery(s.query)
   }
-  markUndone(answer)
+  markUndone(cluster, answer)
   announce('Undid Sherlock’s changes to the view')
   return true
 }
@@ -670,14 +685,15 @@ async function settleDetails() {
   }
 }
 
-/** Runs one action in this window and says what came of it. */
-export async function runRequest(req: UIRequest): Promise<UIResult> {
+/** Runs one action, from the given cluster's conversation, in this window and says what came of it. */
+export async function runRequest(req: UIRequest, cluster: string): Promise<UIResult> {
   watch()
   const a = ACTIONS.find((x) => x.name === req.action)
   const run = a ? REGISTRY[a.name] : undefined
   if (!a || run === undefined) return { applied: false, error: `There is no view action ${JSON.stringify(req.action)}.`, view: viewState() }
-  if (answering === null) setAnswering(req.answer)
-  if (answering !== req.answer) return { applied: false, error: 'Sherlock is not answering a question in this window.', view: viewState() }
+  const key = answerKey(cluster, req.answer)
+  if (answering === null) setAnswering(cluster, req.answer)
+  if (answering !== key) return { applied: false, error: 'Sherlock is not answering a question in this window.', view: viewState() }
   let input: Record<string, unknown>
   try {
     input = checkInput(a, req.input ?? {})
@@ -685,7 +701,7 @@ export async function runRequest(req: UIRequest): Promise<UIResult> {
     return { applied: false, error: (e as Error).message, view: viewState() }
   }
   if (run === null) return { applied: false, view: viewState() }
-  const rec = answers.get(req.answer)!
+  const rec = answers.get(key)!
   if (rec.touched) return { applied: false, dropped: true, view: viewState() }
   const focused = typeof document !== 'undefined' ? (document.activeElement as HTMLElement | null) : null
   const before = capture()

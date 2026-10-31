@@ -183,6 +183,8 @@ export interface ObjectDetails extends ObjectRow {
   pods: PodRow[]
   workload: boolean
   keys?: KeySize[]
+  /** A Secret's version, for an edit to send back (SE-04). */
+  resourceVersion?: string
   /** The Helm release the object belongs to, by Helm's labels or the release manifest. */
   release?: string
   usage?: Record<string, Usage>

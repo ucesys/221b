@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import { useView } from '../api/live'
 import type { NamespaceRow, ObjectRow, ReleaseRow } from '../api/types'
 import { OBJECT_COLUMNS, objectLabel, objectTerms } from '../columns/objects'
@@ -12,7 +12,7 @@ import { ColumnsMenu } from './ColumnsMenu'
 import { DataTable } from './DataTable'
 import { ExportMenu } from './ExportMenu'
 import { SearchBox } from './SearchBox'
-import { fetchSecretsConfig, type SecretsConfig } from '../api/secrets'
+import { useSecretsConfig } from '../api/secrets'
 import { SecretDialog } from './SecretDialog'
 import { NamespaceDialog } from './NamespaceDialog'
 import { NamespaceTools } from './NamespaceTools'
@@ -158,7 +158,7 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   const releases = useView<ReleaseRow>(current?.releases.length ? 'helm' : null)
   const nsReleases = useMemo(() => releases.rows.filter((r) => r.namespace === ns), [releases.rows, ns])
   // Secret editing (SE-05): an Admin or SuperAdmin may make a Secret here.
-  const [secretsCfg, setSecretsCfg] = useState<SecretsConfig | null>(null)
+  const secretsCfg = useSecretsConfig(route.cluster)
   const kinds = useMemo(() => {
     const m = new Map<string, { kind: string; apiVersion: string; order: number; n: number }>()
     for (const r of objects.rows) {
@@ -218,16 +218,6 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
   const [newNamespace, setNewNamespace] = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
   const watson = useWatsonApi()
-  useEffect(() => {
-    let live = true
-    fetchSecretsConfig().then(
-      (c) => live && setSecretsCfg(c),
-      () => undefined,
-    )
-    return () => {
-      live = false
-    }
-  }, [])
   const selectedRow = selected ? (objects.rows.find((r) => r.key === selected) ?? null) : null
   // The drawer: open=Kind/name opens the object's own details, by kind.
   const [selKind = '', selName = ''] = (selected ?? '').split('/', 2) as [string?, string?]

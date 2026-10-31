@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -35,6 +36,11 @@ type VolumeStats struct {
 // reading more often than this shows nothing new.
 const volumePoll = 30 * time.Second
 
+// volumeBudget is how long one read of the volumes may take. It has nothing
+// to do with the refresh, whose budget a large cluster's read would outlast,
+// and is shorter than volumePoll, so two reads never overlap.
+const volumeBudget = 25 * time.Second
+
 // volumeSummary is the part of the Summary API that carries volume stats.
 type volumeSummary struct {
 	Pods []struct {
@@ -61,9 +67,9 @@ func (c *Cluster) VolumeStats(namespace, claim string) (VolumeStats, bool) {
 	return v, ok
 }
 
-// pollVolumes reads the volume stats of every node that runs a pod with a
-// claim, at most every volumePoll, and marks the storage view when they
-// change.
+// pollVolumes starts a read of the volume stats of every node that runs a
+// pod with a claim, at most every volumePoll; the read runs beside the
+// refresh, in its own time, and marks the storage view when they change.
 func (c *Cluster) pollVolumes(ctx context.Context) {
 	now := time.Now()
 	c.mu.RLock()
@@ -76,11 +82,16 @@ func (c *Cluster) pollVolumes(ctx context.Context) {
 	c.mu.Lock()
 	c.volumesAt = now
 	c.mu.Unlock()
-	c.ReadVolumesNow(ctx)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), volumeBudget)
+		defer cancel()
+		c.ReadVolumesNow(ctx)
+	}()
 }
 
-// ReadVolumesNow reads the volume stats without waiting for the next poll.
-// Tests use it.
+// ReadVolumesNow reads the volume stats, within ctx, and waits for them.
+// What it read stands when ctx runs out: the nodes it did not reach keep
+// what they said last, and the next read starts with them.
 func (c *Cluster) ReadVolumesNow(ctx context.Context) {
 	var todo []string
 	for _, name := range c.NodeNames() {
@@ -96,11 +107,26 @@ func (c *Cluster) ReadVolumesNow(ctx context.Context) {
 		}
 	}
 	sort.Strings(todo)
+	c.mu.RLock()
+	from := c.volumesFrom
+	c.mu.RUnlock()
+	if i, _ := slices.BinarySearch(todo, from); i < len(todo) {
+		todo = slices.Concat(todo[i:], todo[:i])
+	}
 	var (
 		mu        sync.Mutex
 		got       = map[string]VolumeStats{}
 		forbidden error
 	)
+	keep := func(stats map[string]VolumeStats) {
+		for k, v := range stats {
+			// A claim mounted on several nodes is reported by each; the
+			// latest report stands.
+			if old, ok := got[k]; !ok || v.At.After(old.At) {
+				got[k] = v
+			}
+		}
+	}
 	work := make(chan string)
 	var wg sync.WaitGroup
 	for i := 0; i < bootWorkers; i++ {
@@ -117,29 +143,35 @@ func (c *Cluster) ReadVolumesNow(ctx context.Context) {
 					// A node that did not answer keeps what it said last.
 					stats = c.volumesOf(node)
 				}
-				for k, v := range stats {
-					// A claim mounted on several nodes is reported by each;
-					// the latest report stands.
-					if old, ok := got[k]; !ok || v.At.After(old.At) {
-						got[k] = v
-					}
-				}
+				keep(stats)
 				mu.Unlock()
 			}
 		}()
 	}
+	sent := 0
+send:
 	for _, n := range todo {
-		if ctx.Err() != nil {
-			break
+		select {
+		case work <- n:
+			sent++
+		case <-ctx.Done():
+			break send
 		}
-		work <- n
 	}
 	close(work)
 	wg.Wait()
-	if ctx.Err() != nil {
+	if errors.Is(ctx.Err(), context.Canceled) {
 		return
 	}
+	from = ""
+	if sent < len(todo) {
+		from = todo[sent]
+	}
+	for _, n := range todo[sent:] {
+		keep(c.volumesOf(n))
+	}
 	c.mu.Lock()
+	c.volumesFrom = from
 	if forbidden != nil {
 		c.bootForbiddenUntil = time.Now().Add(bootForbidden)
 	}

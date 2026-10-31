@@ -79,3 +79,33 @@ func TestAnApplicationsCommandsAreSavedAndRun(t *testing.T) {
 		t.Fatalf("a viewer saved a command: %s", resp.Status)
 	}
 }
+
+// staleStore is a store where someone else saved first.
+type staleStore struct{ apps.Store }
+
+func (staleStore) Save(context.Context, apps.Record, *string) error { return apps.ErrConflict }
+
+// A save that lost to another says so, and asks to look again, rather
+// than overwrite it.
+func TestASaveThatLostToAnotherIsAConflict(t *testing.T) {
+	store := apps.NewMemoryStore()
+	ctx := context.Background()
+	rec := apps.Record{Cluster: clusters.LocalID, Namespace: "web", Name: "shop", Source: apps.Source{Repo: "https://git.invalid/example/shop", Ref: "main", RefKind: apps.RefBranch}}
+	if err := store.Save(ctx, rec, nil); err != nil {
+		t.Fatal(err)
+	}
+	simSrv := httptest.NewServer(sim.New(sim.Options{Nodes: 3, Pods: 12, Seed: 7}))
+	t.Cleanup(simSrv.Close)
+	srv, c, m, _, local, liveStore := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Apps = staleStore{store}
+		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: quietLog()})
+	})
+	local.restCfg = &rest.Config{Host: simSrv.URL}
+	if err := m.SetLocal(ctx, clusters.Spec{Name: "Here", Env: clusters.EnvOther, Mode: clusters.ModeWrite, Server: simSrv.URL, Auth: clusters.AuthInCluster, CA: clusters.CAPEM}, local, liveStore); err != nil {
+		t.Fatal(err)
+	}
+	resp, body := send(t, c, http.MethodPut, srv.URL+"/api/v1/apps/web/shop/commands/scale", `{"params":["replicas=5"]}`)
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(body, "changed while") {
+		t.Fatalf("saving a command: %s %s", resp.Status, body)
+	}
+}

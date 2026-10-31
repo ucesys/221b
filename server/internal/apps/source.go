@@ -216,7 +216,10 @@ type Record struct {
 	SourceDiff string `json:"sourceDiff,omitempty"`
 	// HasToken says a credential for the repository is saved with the
 	// record; the token itself never leaves the server.
-	HasToken  bool      `json:"hasToken,omitempty"`
+	HasToken bool `json:"hasToken,omitempty"`
+	// Rev is the stored version Get read, which Save holds it to; it is
+	// not part of the record.
+	Rev       string    `json:"-"`
 	CreatedBy string    `json:"createdBy,omitempty"`
 	Created   time.Time `json:"created"`
 	UpdatedBy string    `json:"updatedBy,omitempty"`

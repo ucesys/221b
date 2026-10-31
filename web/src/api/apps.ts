@@ -2,6 +2,7 @@
 // about a release installed from git, and what the Helm tab reads about
 // any release. Changes come back as the Watson card that runs them.
 
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiPath } from '../lib/router'
 import { unauthorized } from './auth'
 import type { WatsonItem } from './watson'
@@ -205,6 +206,28 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 const app = (cluster: string, ns: string, name: string, rest = '') => apiPath(`apps/${encodeURIComponent(ns)}/${encodeURIComponent(name)}${rest}`, cluster)
 
 export const fetchApps = (cluster: string) => call<AppView[]>('GET', apiPath('apps', cluster))
+
+const NO_APPS: AppView[] = []
+
+/**
+ * A cluster's applications, read again as tick or version changes. Another
+ * cluster's never show: what was held goes as the cluster changes, and an
+ * answer older than the one that landed last is dropped, so a slow read of
+ * the cluster just left cannot replace this one's.
+ */
+export function useApps(cluster: string, tick: number, version: number) {
+  const [held, setHeld] = useState<{ cluster: string; asked: number; apps: AppView[]; error: string }>({ cluster, asked: 0, apps: NO_APPS, error: '' })
+  const asked = useRef(0)
+  useEffect(() => {
+    const n = ++asked.current
+    fetchApps(cluster).then(
+      (apps) => setHeld((h) => (h.asked > n ? h : { cluster, asked: n, apps, error: '' })),
+      (e: unknown) => setHeld((h) => (h.asked > n ? h : { cluster, asked: n, apps: h.cluster === cluster ? h.apps : NO_APPS, error: e instanceof Error ? e.message : String(e) })),
+    )
+  }, [cluster, tick, version])
+  const setApps = useCallback((change: (apps: AppView[]) => AppView[]) => setHeld((h) => (h.cluster === cluster ? { ...h, apps: change(h.apps) } : h)), [cluster])
+  return held.cluster === cluster ? { apps: held.apps, error: held.error, setApps } : { apps: NO_APPS, error: '', setApps }
+}
 export const fetchApp = (cluster: string, ns: string, name: string) => call<AppView>('GET', app(cluster, ns, name))
 export const fetchDrift = (cluster: string, ns: string, name: string, refresh = false) => call<AppDrift>('GET', app(cluster, ns, name, '/drift') + (refresh ? '?refresh=1' : ''))
 export const fetchAppRefs = (cluster: string, ns: string, name: string) => call<AppRefs>('GET', app(cluster, ns, name, '/refs'))

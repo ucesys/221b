@@ -75,3 +75,18 @@ func TestTheLogFeedsItsStore(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// On a console without storage the page lists what is kept in memory,
+// and Stored says it goes with a restart, for the page to say so.
+func TestALogKeptInMemoryIsNotStored(t *testing.T) {
+	l := New(Options{})
+	l.Record(Event{Action: "signin"})
+	l.KeepInMemory(10)
+	l.Record(Event{Action: "settings.update"})
+	if l.Stored() {
+		t.Fatal("events in memory count as stored")
+	}
+	if got, _ := l.Events(context.Background()); len(got) != 2 {
+		t.Fatalf("got %+v", got)
+	}
+}

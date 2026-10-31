@@ -218,6 +218,7 @@ func forward(args []string) error {
 	if first.Type != tunnel.Info || json.Unmarshal(first.Payload, &info) != nil {
 		return errors.New("the console did not answer as a 221B console does")
 	}
+	t.halfClose = info.CloseWrite
 	fmt.Printf("Forwarding %s -> %s\n", ln.Addr(), info.Target)
 	if info.Ends != "" {
 		if ends, err := time.Parse(time.RFC3339, info.Ends); err == nil {
@@ -281,6 +282,8 @@ type cliTunnel struct {
 	mu    sync.Mutex
 	conns map[uint32]*localConn
 	next  uint32
+	// halfClose says the console takes CloseWrite.
+	halfClose bool
 }
 
 // localConn is one TCP connection on the local port. Data from the
@@ -291,6 +294,7 @@ type localConn struct {
 	mu     sync.Mutex
 	q      [][]byte
 	queued int
+	ending bool
 	sig    chan struct{}
 	done   chan struct{}
 	once   sync.Once
@@ -320,6 +324,17 @@ func (l *localConn) push(b []byte) bool {
 	return true
 }
 
+// finish closes the connection once the program has had what is queued.
+func (l *localConn) finish() {
+	l.mu.Lock()
+	l.ending = true
+	l.mu.Unlock()
+	select {
+	case l.sig <- struct{}{}:
+	default:
+	}
+}
+
 // writeLoop writes the queue to the program until the connection closes.
 func (l *localConn) writeLoop(failed func()) {
 	for {
@@ -331,7 +346,12 @@ func (l *localConn) writeLoop(failed func()) {
 		for {
 			l.mu.Lock()
 			if len(l.q) == 0 {
+				ending := l.ending
 				l.mu.Unlock()
+				if ending {
+					l.close()
+					return
+				}
 				break
 			}
 			b := l.q[0]
@@ -340,6 +360,7 @@ func (l *localConn) writeLoop(failed func()) {
 			l.mu.Unlock()
 			if _, err := l.c.Write(b); err != nil {
 				failed()
+				l.close()
 				return
 			}
 		}
@@ -401,6 +422,16 @@ func (t *cliTunnel) accept(ln net.Listener) {
 					}
 				}
 				if err != nil {
+					// EOF may be a program that has only finished sending
+					// and waits for the answer: the pod is told, and the
+					// connection ends when the pod's side does, or when
+					// writing to the program fails.
+					if errors.Is(err, io.EOF) && t.halfClose {
+						if t.write(tunnel.Frame{Type: tunnel.CloseWrite, Conn: id}) != nil {
+							t.drop(id, false)
+						}
+						return
+					}
 					t.drop(id, true)
 					return
 				}
@@ -450,7 +481,14 @@ func (t *cliTunnel) readLoop() error {
 			if len(f.Payload) > 0 {
 				fmt.Fprintf(os.Stderr, "connection %d: %s\n", f.Conn, f.Payload)
 			}
-			t.drop(f.Conn, false)
+			// The program may not have read what came before this frame.
+			t.mu.Lock()
+			lc := t.conns[f.Conn]
+			delete(t.conns, f.Conn)
+			t.mu.Unlock()
+			if lc != nil {
+				lc.finish()
+			}
 		case tunnel.End:
 			msg := strings.TrimSpace(string(f.Payload))
 			if msg == "" {

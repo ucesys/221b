@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/ucesys/221b/server/internal/fake"
 	"github.com/ucesys/221b/server/internal/views"
 )
 
@@ -193,5 +194,106 @@ func TestPendingPodsAlertOnlyAfterTheGracePeriod(t *testing.T) {
 	}
 	if len(got) != 2 || !got["old"] || !got["stuck"] {
 		t.Errorf("pending alerts after a 2-minute grace: %v, want old and stuck", got)
+	}
+}
+
+// The name of a claim counts in a mount warning only as the name of a
+// volume: quoted or in a list, as the claim or as the pod calls it. A
+// failure of another volume whose name contains it is no alert.
+func TestAClaimAlertsOnlyOnWarningsThatNameItsVolume(t *testing.T) {
+	alertFor := func(volume, msg string) (views.AlertRow, bool) {
+		src := fake.New("worker-1")
+		src.Put(&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "data", UID: "claim"}, Spec: corev1.PersistentVolumeClaimSpec{VolumeName: "pvc-1234"}, Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound}})
+		p := pod("shop", "db-0", "worker-1")
+		p.Spec.Volumes = []corev1.Volume{
+			{Name: volume, VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: "data"}}},
+			{Name: "metadata-config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{}}},
+		}
+		src.Put(p)
+		src.Put(warning("uid-db-0", "Pod", "shop", "db-0", "FailedMount", msg, 1, time.Minute, time.Minute))
+		return views.BuildAlert(src, views.AlertKey(views.AlertPVC, "shop", "data"), now, 0)
+	}
+	for msg, want := range map[string]bool{
+		`MountVolume.SetUp failed for volume "metadata-config" : configmap "metadata-config" not found`:                                false,
+		`Unable to attach or mount volumes: unmounted volumes=[metadata-config], unattached volumes=[metadata-config kube-api-access]`: false,
+		`failed to read the data from the disk`:                                                                             false,
+		`MountVolume.SetUp failed for volume "data" : mount failed`:                                                         true,
+		`MountVolume.MountDevice failed for volume "pvc-1234" : rpc error`:                                                  true,
+		`Unable to attach or mount volumes: unmounted volumes=[data], unattached volumes=[kube-api-access data]: timed out`: true,
+		`Unable to attach or mount volumes: unmounted volumes=[cache data], unattached volumes=[]: timed out`:               true,
+	} {
+		if _, got := alertFor("data", msg); got != want {
+			t.Errorf("%q: alert %v, want %v", msg, got, want)
+		}
+	}
+	// The pod's own name for the volume counts as much as the claim's.
+	if _, ok := alertFor("storage", `MountVolume.SetUp failed for volume "storage" : mount failed`); !ok {
+		t.Error("no alert for the name the pod gives the volume")
+	}
+}
+
+// A pod the kubelet failed as a whole has no container to tell why: its
+// status does, in red, with an alert, as for any other failure.
+func TestAPodFailedAsAWholeIsAFailureAndAlerts(t *testing.T) {
+	src := fake.New("worker-1")
+	rejected := pod("shop", "rejected", "worker-1")
+	rejected.Status = corev1.PodStatus{Phase: corev1.PodFailed, Reason: "OutOfcpu", Message: "Pod was rejected: Node didn't have enough resource: cpu"}
+	src.Put(rejected)
+	row := views.BuildPodRow(src, rejected, now)
+	if row.Status != "OutOfcpu" || row.Tone != "err" || row.StatusTip != rejected.Status.Message || !row.Done {
+		t.Fatalf("row %+v", row)
+	}
+	a, ok := views.BuildAlert(src, views.AlertKey(views.AlertPod, "shop", "rejected"), now, 0)
+	if !ok || a.Severity != views.SevFailed || a.Status != "OutOfcpu" || a.LastMessage != rejected.Status.Message {
+		t.Fatalf("alert %v %+v", ok, a)
+	}
+
+	// Evicted, with its container's own end: the pod's words win.
+	evicted := pod("shop", "evicted", "worker-1")
+	evicted.Status = corev1.PodStatus{Phase: corev1.PodFailed, Reason: "Evicted", Message: "The node was low on resource: memory.", ContainerStatuses: []corev1.ContainerStatus{{Name: "main", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}}}}
+	src.Put(evicted)
+	if row := views.BuildPodRow(src, evicted, now); row.Tone != "err" || row.StatusTip != evicted.Status.Message {
+		t.Fatalf("evicted %+v", row)
+	}
+
+	// With no message, it still says it failed.
+	bare := pod("shop", "bare", "worker-1")
+	bare.Status = corev1.PodStatus{Phase: corev1.PodFailed, Reason: "NodeAffinity"}
+	src.Put(bare)
+	if row := views.BuildPodRow(src, bare, now); row.Tone != "err" || row.StatusTip == "" {
+		t.Fatalf("no message %+v", row)
+	}
+
+	// A finished pod without a reason is no alert, nor is one being deleted.
+	done := pod("shop", "done", "worker-1")
+	done.Status = corev1.PodStatus{Phase: corev1.PodFailed}
+	src.Put(done)
+	if _, ok := views.BuildAlert(src, views.AlertKey(views.AlertPod, "shop", "done"), now, 0); ok {
+		t.Error("a finished pod raised an alert")
+	}
+	going := rejected.DeepCopy()
+	going.Name, going.DeletionTimestamp = "going", ptr(ts(time.Minute))
+	src.Put(going)
+	if _, ok := views.BuildAlert(src, views.AlertKey(views.AlertPod, "shop", "going"), now, 0); ok {
+		t.Error("a pod being deleted raised an alert")
+	}
+}
+
+// The alert row counts restarts as the pod's row does, and tells how an
+// init container or a sidecar stopped; one that did its work is no stop.
+func TestAlertsCountInitContainersAndSidecars(t *testing.T) {
+	src := fake.New("worker-1")
+	p := pod("shop", "init", "worker-1")
+	p.Status.Phase = corev1.PodPending
+	p.Status.ContainerStatuses = nil
+	p.Spec.InitContainers = []corev1.Container{{Name: "first"}, {Name: "migrate"}}
+	p.Status.InitContainerStatuses = []corev1.ContainerStatus{
+		{Name: "first", State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed", FinishedAt: ts(time.Hour)}}},
+		{Name: "migrate", RestartCount: 40, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}, LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 3, Reason: "Error", FinishedAt: ts(2 * time.Hour)}}},
+	}
+	src.Put(p)
+	a, ok := views.BuildAlert(src, views.AlertKey(views.AlertPod, "shop", "init"), now, 0)
+	if !ok || a.Restarts != 40 || a.LastReason != "Error" || a.LastExit == nil || *a.LastExit != 3 {
+		t.Fatalf("alert %v %+v", ok, a)
 	}
 }

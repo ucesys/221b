@@ -257,6 +257,11 @@ func (s Settings) Validate() error {
 			return fmt.Errorf("Sherlock: %w", err)
 		}
 	}
+	if s.Watson != nil {
+		if err := s.Watson.Validate(); err != nil {
+			return fmt.Errorf("Watson: %w", err)
+		}
+	}
 	if g := s.PendingGrace(); g < 0 || g > MaxPendingGrace {
 		return fmt.Errorf("pendingGraceSeconds must be between 0 and %d", int(MaxPendingGrace/time.Second))
 	}
