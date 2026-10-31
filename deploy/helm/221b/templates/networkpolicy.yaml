@@ -90,6 +90,20 @@ spec:
         {{- end }}
       {{- end }}
     {{- end }}
+    {{- if and .Values.toolbox.enabled .Values.toolbox.ssh.enabled }}
+    # SSH to the nodes (Phase 11, ADR-72): sshd's port, on the nodes'
+    # addresses when networkPolicy.nodeCIDRs lists them.
+    - ports:
+        - port: {{ .Values.toolbox.ssh.port }}
+          protocol: TCP
+      {{- with .Values.networkPolicy.nodeCIDRs }}
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
     {{- if eq .Values.auth.mode "ldap" }}
     # The directory (LDAP sign-in): its port, from auth.ldap.url.
     - ports:

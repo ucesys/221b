@@ -524,6 +524,10 @@ networkPolicy:
   # for them.
   outboundPorts: [443]
   outboundCIDRs: []
+  # With SSH to nodes on (toolbox.ssh.enabled) the console reaches the
+  # nodes on toolbox.ssh.port. List the nodes' CIDRs to allow nothing
+  # else; empty allows any address on that port.
+  nodeCIDRs: []
 
 # The server keeps a watched copy of every node, pod, workload and Service,
 # trimmed to what the tabs show; 1Gi holds 500 nodes and 15,000 pods with
