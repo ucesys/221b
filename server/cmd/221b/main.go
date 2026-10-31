@@ -404,6 +404,7 @@ func run(args []string) error {
 		}
 	}
 	sherlockSvc := sherlock.New(sherlock.Options{
+		CommandOK: func(line string) error { _, err := watson.Parse(line); return err },
 		Client: &sherlock.Client{BaseURL: cfg.SherlockAPIURL, Key: keys.Key, HTTP: &http.Client{Timeout: 5 * time.Minute}, Retries: 2, Backoff: 2 * time.Second,
 			Provider: func() sherlock.Provider {
 				if p := shared.Current().SherlockOrDefault().Provider; p != nil && !cfg.SherlockLockProvider {

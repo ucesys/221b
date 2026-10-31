@@ -42,9 +42,13 @@ type Step struct {
 
 // Msg is one message of a conversation as the browser shows it.
 type Msg struct {
-	ID     int    `json:"id"`
-	Role   string `json:"role"` // user or sherlock
-	Text   string `json:"text"`
+	ID   int    `json:"id"`
+	Role string `json:"role"` // user or sherlock
+	Text string `json:"text"`
+	// Note is what the model wrote before reading the cluster once more:
+	// shown while the next round runs, never part of the answer, gone
+	// when the answer is done (asked October 30, 2026).
+	Note   string `json:"note,omitempty"`
 	Steps  []Step `json:"steps,omitempty"`
 	Refs   []Ref  `json:"refs,omitempty"`
 	Status string `json:"status,omitempty"` // thinking, answering, done, stopped, failed
@@ -169,9 +173,12 @@ type Options struct {
 	Settings func() Settings
 	// Secrets are values never to send, such as the API key itself.
 	Secrets func() []string
-	Audit   *audit.Log
-	Now     func() time.Time
-	Logger  *slog.Logger
+	// CommandOK says whether Watson would run a command line; nil checks
+	// none. An answer's shell blocks are kept to what it runs (FixBlocks).
+	CommandOK func(line string) error
+	Audit     *audit.Log
+	Now       func() time.Time
+	Logger    *slog.Logger
 	// MaxRounds bounds the tool rounds of one answer.
 	MaxRounds int
 	// MaxTokens bounds one reply, its thinking included.
@@ -446,8 +453,8 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		now := s.opts.Now()
-		text, cited := Cite(ans.Text, c.known)
-		ans.Text, ans.Refs = text, cited
+		text, cited := Cite(FixBlocks(ans.Text, s.opts.CommandOK), c.known)
+		ans.Text, ans.Refs, ans.Note = text, cited, ""
 		for i := range ans.Steps {
 			if ans.Steps[i].Status == "running" {
 				ans.Steps[i].Status = "failed"
@@ -471,13 +478,6 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		s.record(q, set.Model, tools, total, cost, outcome, detail)
 	}()
 
-	// kept is the answer's text without the current round's: what the
-	// model wrote before a tool call shows while it streams and until the
-	// next round speaks (seen October 30, 2026: a report that vanished),
-	// and never ends up in the answer.
-	c.mu.Lock()
-	kept := ans.Text
-	c.mu.Unlock()
 	for round := 0; ; round++ {
 		if err := set.Caps.Check(s.opts.Ledger.Now(ctx)); err != nil && round > 0 {
 			outcome, detail = audit.OutcomeDenied, err.Error()
@@ -495,9 +495,8 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		c.mu.Lock()
 		s.trimLocked(c)
 		req := Request{Model: set.Model, MaxTokens: s.opts.MaxTokens, System: system, Messages: append([]Message(nil), c.history...), Tools: defs}
-		base := kept
 		c.mu.Unlock()
-
+		// Each round's text starts afresh: the answer is the last round's.
 		var roundText strings.Builder
 		resp, err := s.opts.Client.Stream(ctx, req, func(d Delta) {
 			c.mu.Lock()
@@ -505,7 +504,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 			first()
 			if d.Text != "" {
 				roundText.WriteString(d.Text)
-				ans.Text = base + roundText.String()
+				ans.Text, ans.Note = roundText.String(), ""
 				ans.Status = "answering"
 			}
 			c.changedLocked()
@@ -544,8 +543,11 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 			return
 		}
 		// Text before a tool call is the model thinking aloud: it stays in
-		// the history and on screen until the next round speaks, and not
-		// in the answer (base stays kept).
+		// the history, and on screen as the note until the next round
+		// speaks; never in the answer.
+		if ans.Text != "" {
+			ans.Note, ans.Text = ans.Text, ""
+		}
 		ans.Status = "thinking"
 		start := len(ans.Steps)
 		for _, b := range calls {

@@ -29,6 +29,8 @@ export interface SherlockMsg {
   id: number
   role: 'user' | 'sherlock'
   text: string
+  /** What the model wrote before reading the cluster once more: shown while the next round runs, never the answer. */
+  note?: string
   steps?: SherlockStep[]
   refs?: SherlockRef[]
   status?: 'thinking' | 'answering' | 'done' | 'stopped' | 'failed'

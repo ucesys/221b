@@ -12,7 +12,7 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Fixed
 
-- A Sherlock report that the model wrote before reading the cluster once more vanished from the pane while the next round ran; it now stays until the next text replaces it. Sherlock is told how to narrow logs and objects with kubectl's own flags, since Watson refuses a line with a pipe or grep.
+- A Sherlock report that the model wrote before reading the cluster once more vanished from the pane while the next round ran; it now stays, dimmed, until the next text replaces it, and is never part of the answer. A line Watson would refuse (a pipe, grep, an unsupported verb) is moved out of an answer's shell block into a text block with the reason, so Send to Watson only ever offers what Watson runs. Sherlock is told how to narrow logs and objects with kubectl's own flags.
 
 ### Added
 

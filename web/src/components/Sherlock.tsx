@@ -181,6 +181,11 @@ function Answer({ m, link, admin, question, onToast }: { m: SherlockMsg; link: (
           </span>
         </div>
       )}
+      {!m.text && m.note && (
+        <div className="rk-ans-body" style={{ color: 'var(--fg3)' }} aria-label="What Sherlock said before reading more" data-testid="sherlock-note">
+          <Markdown text={m.note} link={link} code={(text, lang, _open, key) => <CodeBlock key={key} text={text} lang={lang} open={false} why="" />} />
+        </div>
+      )}
       {m.text && (
         <div className="rk-ans-body" data-testid="sherlock-text">
           <Markdown text={m.text} link={link} code={(text, lang, open, key) => <CodeBlock key={key} text={text} lang={lang} open={open && m.status !== 'done'} why={question ? `Sherlock proposed this answering “${question}”.` : undefined} />} />
