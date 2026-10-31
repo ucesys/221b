@@ -98,6 +98,8 @@ export interface ToolRequest {
   labels?: Record<string, string>
   /** The OS account an SSH pairing admits sessions as; it must exist on the node. */
   loginUser?: string
+  /** More nodes a pairing runs on, one session each, under one card; node is the first. */
+  nodes?: string[]
   minutes?: number
   reason?: string
 }

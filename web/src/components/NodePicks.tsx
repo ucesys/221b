@@ -34,7 +34,7 @@ export function PickedBar({ picked, shown, onPickAll, onClear, fleets, onMakeFle
   const n = picked.length
   const lists = (fleets ?? []).filter((f) => f.kind === 'nodes')
   return (
-    <div className="rk-callout" data-tone="info" role="region" aria-label="Picked nodes" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 10px', fontSize: 12.5 }} data-testid="node-picked-bar">
+    <div className="rk-callout" data-tone="info" role="region" aria-label="Picked nodes" style={{ position: 'sticky', top: 8, zIndex: 6, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 10px', fontSize: 12.5, boxShadow: 'var(--shadow)' }} data-testid="node-picked-bar">
       <strong data-testid="node-picked-count">
         {n} {n === 1 ? 'node' : 'nodes'} picked
       </strong>

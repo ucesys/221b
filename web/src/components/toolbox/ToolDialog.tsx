@@ -150,7 +150,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
       case 'ssh':
         return { ...r, node: forNode }
       case 'ssh-pair':
-        return { ...r, node: forNode, loginUser: loginUserV.trim(), port: Number(sshPortV) }
+        return { ...r, node: forNode, ...(nodes ? { nodes: nodes.slice(1) } : {}), loginUser: loginUserV.trim(), port: Number(sshPortV) }
       case 'ssh-unpair':
         return { ...r, node: forNode }
     }
@@ -175,29 +175,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
     }
     setBusy(true)
     setErr('')
-    if (nodes) {
-      // One session per node, in turn; the first that opens is shown.
-      void (async () => {
-        let first: { opened: string; summary: string } | null = null
-        let sent = 0
-        for (const n of nodes) {
-          try {
-            const it = await requestSession(cluster, request(n), open.from ?? 'Nodes page')
-            if (it.status === 'refused') throw new Error(it.reason || 'Watson refused it.')
-            sent++
-            if (it.opened && !first) first = { opened: it.opened.id, summary: it.opened.summary }
-          } catch (e) {
-            setBusy(false)
-            setErr(`Node ${n}: ${e instanceof Error ? e.message : String(e)}${sent ? ` (${sent} of ${nodes.length} sent before it)` : ''}`)
-            return
-          }
-        }
-        setBusy(false)
-        onSent(first ?? { summary: `pairing ${nodes.length} nodes for SSH` })
-        onClose()
-      })()
-      return
-    }
+    // Several nodes go on one card: one approval, one session each.
     requestSession(cluster, request(), open.from ?? 'Tools menu').then(
       (it) => {
         setBusy(false)
@@ -506,7 +484,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
           </div>
           {nodes && (
             <p className="tb-hint" style={{ margin: 0 }} data-testid="tool-ssh-nodes">
-              One pairing session per node, in turn: <span className="rk-mono">{nodes.join(', ')}</span>. Every node gets the same login user and port.
+              One card to approve, then one pairing session per node: <span className="rk-mono">{nodes.join(', ')}</span>. Every node gets the same login user and port.
             </p>
           )}
           <p className="tb-hint" style={{ margin: 0 }}>

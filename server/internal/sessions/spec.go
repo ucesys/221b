@@ -70,7 +70,11 @@ type Request struct {
 	// LoginUser is the OS account an SSH pairing admits sessions as
 	// (Phase 11); it must exist on the node.
 	LoginUser string `json:"loginUser,omitempty"`
-	Minutes   int    `json:"minutes,omitempty"`
+	// Nodes are more nodes the same request runs on, one session each,
+	// under one card (asked October 30, 2026: the Nodes page's picked
+	// nodes pair with a single approval). Node is the first.
+	Nodes   []string `json:"nodes,omitempty"`
+	Minutes int      `json:"minutes,omitempty"`
 	// Reason is shown to the approver and kept in the audit log.
 	Reason string `json:"reason,omitempty"`
 }
@@ -127,6 +131,26 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand, toolbox.ToolSSH, toolbox.ToolSSHPair, toolbox.ToolSSHUnpair:
 		errs = append(errs, name("node", r.Node, false))
 		r.Namespace = ""
+		if len(r.Nodes) > 0 {
+			if r.Tool != toolbox.ToolSSHPair && r.Tool != toolbox.ToolSSHUnpair {
+				errs = append(errs, fmt.Errorf("%s runs on one node at a time", ToolName(r.Tool)))
+			}
+			seen := map[string]bool{r.Node: true}
+			var more []string
+			for _, n := range r.Nodes {
+				n = strings.TrimSpace(n)
+				if n == "" || seen[n] {
+					continue
+				}
+				seen[n] = true
+				errs = append(errs, name("node", n, false))
+				more = append(more, n)
+			}
+			r.Nodes = more
+			if len(r.Nodes) > 50 {
+				errs = append(errs, errors.New("at most 50 nodes at a time"))
+			}
+		}
 	}
 	switch r.Tool {
 	case toolbox.ToolShell, toolbox.ToolCommand:
@@ -271,6 +295,22 @@ func Interactive(tool string) bool {
 	return false
 }
 
+// AllNodes lists the node and the other nodes a request runs on.
+func (r Request) AllNodes() []string {
+	return append([]string{r.Node}, r.Nodes...)
+}
+
+// Each returns one request per node: the same request, one node each.
+func (r Request) Each() []Request {
+	out := make([]Request, 0, 1+len(r.Nodes))
+	for _, n := range r.AllNodes() {
+		one := r
+		one.Node, one.Nodes = n, nil
+		out = append(out, one)
+	}
+	return out
+}
+
 // OnNode says whether a tool acts on a node as root: a node shell, a
 // node command, and SSH pairing, which is a node command (Phase 11).
 func OnNode(tool string) bool {
@@ -307,8 +347,14 @@ func (r Request) Summary() string {
 	case toolbox.ToolSSH:
 		return fmt.Sprintf("SSH to node %s", r.Node)
 	case toolbox.ToolSSHPair:
+		if len(r.Nodes) > 0 {
+			return fmt.Sprintf("pair %d nodes for SSH as %s: %s", 1+len(r.Nodes), r.LoginUser, strings.Join(r.AllNodes(), ", "))
+		}
 		return fmt.Sprintf("pair node %s for SSH as %s", r.Node, r.LoginUser)
 	case toolbox.ToolSSHUnpair:
+		if len(r.Nodes) > 0 {
+			return fmt.Sprintf("unpair %d nodes from SSH: %s", 1+len(r.Nodes), strings.Join(r.AllNodes(), ", "))
+		}
 		return fmt.Sprintf("unpair node %s from SSH", r.Node)
 	}
 	return r.Tool

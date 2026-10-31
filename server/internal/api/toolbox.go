@@ -217,7 +217,7 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 			if list, err := s.opts.SSH.List(r.Context(), c.ID); err == nil {
 				for _, p := range list {
 					// The host keys stay on the server (asked October 30, 2026).
-					sv.Pairings[p.Node] = pairingView{LoginUser: p.LoginUser, Port: p.Port, PairedAt: p.PairedAt, PairedBy: p.PairedBy, Stale: p.CAFinger != "" && p.CAFinger != sv.Fingerprint}
+					sv.Pairings[p.Node] = pairingView{LoginUser: p.LoginUser, Port: p.Port, PairedAt: p.PairedAt, PairedBy: p.PairedBy, Stale: p.CAFinger != "" && sv.Fingerprint != "" && p.CAFinger != sv.Fingerprint}
 				}
 			}
 		}
@@ -474,8 +474,17 @@ func (s *Server) planSession(ctx context.Context, cl watson.Cluster, it watson.I
 	if !ok {
 		return &watson.Plan{Ready: true, DryRun: []watson.Line{{K: "err", T: "the request is not a toolbox request"}}, DryRunExit: 1}
 	}
-	p := s.opts.Sessions.PlanFor(ctx, sessions.Cluster{ID: cl.ID, Name: cl.Name, Config: cl.Config}, req, it.Requester.Person, it.Requester.Name)
+	// With several nodes the first is planned (one dry run); the others
+	// are named as targets, and run the same (one session each).
+	first := req.Each()[0]
+	p := s.opts.Sessions.PlanFor(ctx, sessions.Cluster{ID: cl.ID, Name: cl.Name, Config: cl.Config}, first, it.Requester.Person, it.Requester.Name)
 	out := &watson.Plan{Ready: true, Targets: p.Targets, Impact: p.Impact, DryRunExit: p.DryRunExit, DryRunNote: p.DryRunNote, Object: p.Object}
+	if len(req.Nodes) > 0 {
+		for _, n := range req.Nodes {
+			out.Targets = append(out.Targets, "node/"+n)
+		}
+		out.Impact = append(out.Impact, fmt.Sprintf("The same on %d more nodes, one session each: %s.", len(req.Nodes), strings.Join(req.Nodes, ", ")))
+	}
 	for _, l := range p.DryRun {
 		k := "out"
 		if p.DryRunExit != 0 {
@@ -500,11 +509,24 @@ func (s *Server) startSession(cl watson.Cluster, it watson.Item, approver watson
 	if approver.Session == rq.Session {
 		name = ""
 	}
-	sess, err := s.opts.Sessions.Start(sessions.Cluster{ID: cl.ID, Name: cl.Name, Config: cl.Config}, req, owner, name, it.ID)
-	if err != nil {
-		return "", err
+	// One session per node, all under this card; the first is the one
+	// the card names, and a failure of another is logged, not the card's.
+	scl := sessions.Cluster{ID: cl.ID, Name: cl.Name, Config: cl.Config}
+	var firstID string
+	for i, one := range req.Each() {
+		sess, err := s.opts.Sessions.Start(scl, one, owner, name, it.ID)
+		if err != nil {
+			if i == 0 {
+				return "", err
+			}
+			s.opts.Logger.Warn("a session of the card could not start", "card", it.ID, "node", one.Node, "err", err)
+			continue
+		}
+		if i == 0 {
+			firstID = sess.ID
+		}
 	}
-	return sess.ID, nil
+	return firstID, nil
 }
 
 // ---------- the sessions ----------

@@ -928,3 +928,32 @@ func TestTunnelVersions(t *testing.T) {
 		t.Fatal(got, err)
 	}
 }
+
+// A pairing request may name more nodes: validated and deduplicated,
+// summed up in one line, split into one request per node under one card
+// (asked October 30, 2026); other node tools take one node.
+func TestARequestOnSeveralNodes(t *testing.T) {
+	c := toolbox.Default()
+	r := Request{Tool: toolbox.ToolSSHPair, Node: "a", Nodes: []string{"b", " a ", "c", "b", ""}, LoginUser: "ops"}
+	if err := r.Validate(c, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.AllNodes(); len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "c" {
+		t.Fatalf("nodes %v", got)
+	}
+	if s := r.Summary(); s != "pair 3 nodes for SSH as ops: a, b, c" {
+		t.Fatalf("summary %q", s)
+	}
+	each := r.Each()
+	if len(each) != 3 || each[1].Node != "b" || each[1].Nodes != nil || each[1].LoginUser != "ops" || each[2].Port != r.Port {
+		t.Fatalf("each: %+v", each)
+	}
+	bad := Request{Tool: toolbox.ToolSSHPair, Node: "a", Nodes: []string{"Not A Node"}, LoginUser: "ops"}
+	if err := bad.Validate(c, false); err == nil {
+		t.Fatal("a bad node name passed")
+	}
+	shell := Request{Tool: toolbox.ToolNodeShell, Node: "a", Nodes: []string{"b"}}
+	if err := shell.Validate(c, false); err == nil || !strings.Contains(err.Error(), "one node at a time") {
+		t.Fatalf("a node shell on two nodes: %v", err)
+	}
+}

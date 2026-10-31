@@ -59,8 +59,18 @@ func New(o Options) *Service {
 // Load makes the authority's key when there is none yet.
 func (s *Service) Load(ctx context.Context) error { return s.opts.CA.Load(ctx) }
 
-// Fingerprint is the authority's.
-func (s *Service) Fingerprint() string { return s.opts.CA.Fingerprint() }
+// Fingerprint is the authority's, reading (or making) its key first:
+// after a restart nothing has loaded it yet, and a pairing compared with
+// an empty fingerprint looked stale (seen on 221b, October 30, 2026).
+func (s *Service) Fingerprint() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.opts.CA.Load(ctx); err != nil {
+		s.opts.Logger.Warn("the SSH authority's key could not be read", "err", err)
+		return ""
+	}
+	return s.opts.CA.Fingerprint()
+}
 
 // List is a cluster's pairings.
 func (s *Service) List(ctx context.Context, cluster string) ([]Pairing, error) {
