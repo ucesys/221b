@@ -325,7 +325,7 @@ export function toolLabel(t: ToolName): string {
     forward: 'Port forward',
     'debug-container': 'Debug container',
     'debug-pod': 'Debug pod',
-    'node-shell': 'Node shell',
+    'node-shell': 'K8S node shell',
     'node-command': 'Run a command on the node',
     ssh: 'SSH',
     'ssh-pair': 'Pair for SSH',

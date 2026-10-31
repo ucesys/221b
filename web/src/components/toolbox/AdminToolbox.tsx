@@ -310,7 +310,7 @@ export function AdminToolbox({ route, cluster }: AdminProps) {
         </tbody>
       </table>
       <p className="tb-hint" style={{ margin: 0 }}>
-        Node shells run in the namespace <span className="rk-mono">{info.nodeNamespace}</span>, at Pod Security privileged, with the profiles {info.nodeProfiles.join(', ')}.
+        K8S node shells run in the namespace <span className="rk-mono">{info.nodeNamespace}</span>, at Pod Security privileged, with the profiles {info.nodeProfiles.join(', ')}.
       </p>
       <details>
         <summary style={{ cursor: 'pointer', fontSize: 12.5 }}>The values</summary>

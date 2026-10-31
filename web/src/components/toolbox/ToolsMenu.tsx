@@ -224,7 +224,7 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
     ]
   } else if (target.kind === 'node') {
     items = [
-      { key: 'node-shell', icon: <TerminalIcon />, label: 'Node shell…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('node-shell'), run: () => open('node-shell') },
+      { key: 'node-shell', icon: <TerminalIcon />, label: 'K8S node shell…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('node-shell'), run: () => open('node-shell') },
       { key: 'debug-pod', icon: <BoxIcon />, label: 'Debug pod on this node…', off: why('debug-pod'), run: () => open('debug-pod') },
       // SSH (Phase 11, ADR-72): a session once the node is paired; pairing and unpairing are node commands.
       ...(info?.ssh

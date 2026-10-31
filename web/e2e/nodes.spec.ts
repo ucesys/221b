@@ -407,3 +407,40 @@ test('the fleets beside the table filter it, and an administrator keeps them the
     await put([])
   }
 })
+
+test('picked nodes make a fleet of names, join one, or go to an SSH pairing (asked October 30, 2026)', async ({ page, request }) => {
+  const rows = nodeRows(await snapshot(request))
+  const [a, b] = [rows[0]!, rows[1]!]
+  await page.goto('/#/nodes')
+  await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  await expect(page.getByTestId('node-picked-bar')).toHaveCount(0)
+  await page.getByTestId(`node-pick-${a.name}`).check()
+  await expect(page.getByTestId('node-picked-count')).toHaveText('1 node picked')
+  // Picking does not open the row's panel.
+  await expect(page.getByTestId('node-panel')).toHaveCount(0)
+  await page.getByTestId(`node-pick-${b.name}`).check()
+  await expect(page.getByTestId('node-picked-count')).toHaveText('2 nodes picked')
+  // A fleet of the two, by name: the editor opens with them listed.
+  await page.getByTestId('node-picked-fleet').click()
+  const editor = page.getByTestId('fleet-editor')
+  await expect(editor).toBeVisible()
+  await expect(editor.getByTestId('fleet-nodelist-node').and(page.locator(':checked'))).toHaveCount(2)
+  await page.keyboard.press('Escape')
+  await expect(editor).toHaveCount(0)
+  await expect(page.getByTestId('node-picked-count')).toHaveText('2 nodes picked')
+  // Pair for SSH needs Watson; without it the button says why.
+  const pair = page.getByTestId('node-picked-ssh')
+  if (await pair.isEnabled()) {
+    await pair.click()
+    const dlg = page.getByTestId('tool-dialog')
+    await expect(dlg).toContainText('Pair 2 nodes for SSH')
+    await expect(dlg.getByTestId('tool-ssh-nodes')).toContainText(a.name)
+    await page.keyboard.press('Escape')
+    await expect(dlg).toHaveCount(0)
+  } else {
+    await expect(pair).toHaveAttribute('title', /Watson/)
+  }
+  await page.getByTestId('node-picked-clear').click()
+  await expect(page.getByTestId('node-picked-bar')).toHaveCount(0)
+  await expect(page.getByTestId(`node-pick-${a.name}`)).not.toBeChecked()
+})

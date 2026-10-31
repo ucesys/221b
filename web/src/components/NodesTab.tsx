@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { saveFleets } from '../api/fleets'
 import { useLiveMeta, useView } from '../api/live'
 import type { Fleet, FleetRow, Me, NodeRow } from '../api/types'
 import { NODE_COLUMNS, nodeLabel, nodeTerms } from '../columns/nodes'
@@ -10,7 +11,10 @@ import { ColumnsMenu } from './ColumnsMenu'
 import { DataTable } from './DataTable'
 import { ExportMenu } from './ExportMenu'
 import { FacetPicker } from './FacetPicker'
+import { FleetEditor, type EditorSeed } from './FleetEditor'
 import { NodeFleets } from './NodeFleets'
+import { NodePicking, PickedBar } from './NodePicks'
+import { useToolbox } from './toolbox/context'
 import { NodePanel } from './NodePanel'
 import { ProblemFilter, problemLevel, showsNode } from './ProblemFilter'
 import { SearchBox } from './SearchBox'
@@ -47,6 +51,42 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
   // (asked at the Phase 6 review).
   const table = useTable<NodeRow>({ id: 'nodes', columns: NODE_COLUMNS, rows: inScope, terms: nodeTerms, now, compact, defaultSort: { col: 'status', dir: 'desc' }, query, onQuery: (q) => set({ q }) })
   const metrics = cluster?.metrics === 'available'
+
+  // Picked nodes (asked October 30, 2026): a fleet of names, members of
+  // one, or paired for SSH, one session each.
+  const tb = useToolbox()
+  const admin = me?.admin ?? true
+  // Kept with the cluster it was picked on: another cluster starts empty.
+  const [pickedState, setPickedState] = useState<{ cluster: string; picked: Set<string> }>(() => ({ cluster: route.cluster, picked: new Set() }))
+  const picked = useMemo(() => (pickedState.cluster === route.cluster ? pickedState.picked : new Set<string>()), [pickedState, route.cluster])
+  const setPicked = useCallback((next: Set<string>) => setPickedState({ cluster: route.cluster, picked: next }), [route.cluster])
+  const [fleetSeed, setFleetSeed] = useState<EditorSeed | null>(null)
+  const picking = useMemo(
+    () => ({
+      picked,
+      toggle: (name: string) => {
+        const next = new Set(picked)
+        if (next.has(name)) next.delete(name)
+        else next.add(name)
+        setPicked(next)
+      },
+    }),
+    [picked, setPicked],
+  )
+  const pickedNames = useMemo(() => rows.map((r) => r.name).filter((n) => picked.has(n)), [rows, picked])
+  const addToFleet = async (id: string) => {
+    const target = defs.find((f) => f.id === id)
+    if (!target || target.kind !== 'nodes') return
+    const nodes = [...new Set([...(target.nodes ?? []), ...pickedNames])]
+    try {
+      await saveFleets(route.cluster, defs.map((f) => (f.id === id ? { ...f, nodes } : f)))
+      onToast(`Added ${pickedNames.length === 1 ? 'the node' : `${pickedNames.length} nodes`} to ${target.name}.`)
+      setPicked(new Set())
+    } catch (e) {
+      onToast(e instanceof Error ? e.message : String(e))
+    }
+  }
+  const sshOff = !tb?.available ? 'Watson is off here' : !admin ? 'SuperAdmins pair nodes' : undefined
   const cp = rows.filter((r) => r.role === 'control-plane').length
   const withErrors = rows.filter((r) => r.errors > 0).length
   const withProblems = rows.filter((r) => r.errors + r.warnings > 0).length
@@ -92,6 +132,7 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
       <div className="rk-split" style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', alignItems: 'stretch' }}>
         <NodeFleets cluster={route.cluster} fleets={fleetRows} defs={defs} nodes={rows} sel={fleetSel} onSel={(ids) => set({ fleet: ids })} loaded={fleetsLoaded} me={me} now={now} fleetsPage={meta.settings?.fleetsPage !== false} onToast={onToast} />
         <div className="rk-col" style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <NodePicking.Provider value={picking}>
           <section aria-label="Node list" style={{ padding: '18px 24px 28px', display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px' }}>
               <div className="rk-seg" role="group" aria-label="Show nodes by role">
@@ -112,9 +153,42 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
                 <ExportMenu onExport={(f) => table.exportRows(f, cluster?.name, 'nodes', onToast)} disabled={!table.shown.length} what="the nodes in view" />
               </div>
             </div>
+            {picked.size > 0 && (
+              <PickedBar
+                picked={pickedNames}
+                shown={table.shown.map((r) => r.name)}
+                onPickAll={() => setPicked(new Set([...picked, ...table.shown.map((r) => r.name)]))}
+                onClear={() => setPicked(new Set())}
+                fleets={admin ? defs : null}
+                onMakeFleet={() => setFleetSeed({ fleet: null, kind: 'nodes', nodes: pickedNames })}
+                onAddToFleet={(id) => void addToFleet(id)}
+                sshOff={sshOff}
+                onPairSSH={() => tb?.openTool({ tool: 'ssh-pair', nodes: pickedNames, from: 'Nodes page' })}
+              />
+            )}
             <DataTable<NodeRow> label="Nodes" rows={table.shown} cols={table.cols} rowKey={(r) => r.name} rowLabel={nodeLabel} sort={table.sort} onSort={table.onSort} selected={selected} onOpen={onOpen} compact={compact} now={now} empty={rows.length ? 'No nodes match this filter.' : 'No nodes to show: Kubernetes does not let you list nodes in this cluster, or it has none.'} rowAttr="node" />
           </section>
+          </NodePicking.Provider>
         </div>
+        {fleetSeed && admin && (
+          <FleetEditor
+            seed={fleetSeed}
+            fleets={defs}
+            nodes={rows}
+            now={now}
+            onClose={() => setFleetSeed(null)}
+            onSave={async (f, isNew) => {
+              await saveFleets(route.cluster, isNew ? [...defs, f] : defs.map((x) => (x.id === f.id ? f : x)))
+              onToast(`${isNew ? 'Created' : 'Saved'} the fleet ${f.name}.`)
+              setFleetSeed(null)
+              setPicked(new Set())
+            }}
+            onDelete={async (f) => {
+              await saveFleets(route.cluster, defs.filter((x) => x.id !== f.id))
+              setFleetSeed(null)
+            }}
+          />
+        )}
         {selectedRow && <NodePanel r={selectedRow} metrics={metrics} metricsNote={cluster?.metricsMessage ?? ''} uptimeNote={cluster?.uptimeMessage ?? ''} now={now} onClose={close} onToast={onToast} />}
       </div>
     </main>

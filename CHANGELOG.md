@@ -6,6 +6,8 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Changed
 
+- **Picked nodes** on the Nodes page: a box beside each name, and a bar with *Make a fleet…* (a fleet of those names), *Add to fleet…* (a fleet of names they join) and *Pair for SSH…* (one pairing session per node, from one dialog).
+- *Node shell* is *K8S node shell* wherever the page names it, beside *SSH*.
 - The node drawer's *Actions* section (cordon, uncordon and drain as commands to copy or send to Watson) is gone: the node's Tools menu runs them.
 
 ### Added

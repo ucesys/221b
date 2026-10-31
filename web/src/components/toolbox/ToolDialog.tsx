@@ -37,7 +37,11 @@ const NODE_PROFILES: Record<string, { title: string; words: string }> = {
  * required, when it becomes a Watson card (TB-36).
  */
 export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Props) {
-  const { tool, pod: podRef, node } = open
+  const { tool, pod: podRef } = open
+  // Several nodes (the Nodes page's picked ones) pair one after another;
+  // the dialog reads as for the first.
+  const nodes = tool === 'ssh-pair' && open.nodes && open.nodes.length > 1 ? open.nodes : undefined
+  const node = open.node ?? open.nodes?.[0]
   const [info, setInfo] = useState<ToolboxInfo | null>(null)
   const [pod, setPod] = useState<PodDetails | null>(null)
   const [loadErr, setLoadErr] = useState('')
@@ -125,7 +129,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   const needReason = !!info && (approvers || (onNode && info.production))
   const askReason = needReason || onNode
 
-  const request = (): ToolRequest => {
+  const request = (forNode = node): ToolRequest => {
     const r: ToolRequest = { tool, reason: reason.trim() || undefined, minutes: interactive ? minutesV : undefined }
     if (podRef) Object.assign(r, { namespace: podRef.namespace, pod: podRef.name })
     switch (tool) {
@@ -138,17 +142,17 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
       case 'debug-container':
         return { ...r, image: imageV, target: targetV, profile: profileV, mountVolumes: !!info?.mountVolumes && mount, readOnlyVolumes: mount && readOnly }
       case 'debug-pod':
-        return { ...r, namespace, node, image: imageV, serviceAccount: serviceAccount.trim() || undefined, labelsFrom: labelsFrom.trim() || undefined }
+        return { ...r, namespace, node: forNode, image: imageV, serviceAccount: serviceAccount.trim() || undefined, labelsFrom: labelsFrom.trim() || undefined }
       case 'node-shell':
-        return { ...r, node, profile: profileV }
+        return { ...r, node: forNode, profile: profileV }
       case 'node-command':
-        return { ...r, node, command }
+        return { ...r, node: forNode, command }
       case 'ssh':
-        return { ...r, node }
+        return { ...r, node: forNode }
       case 'ssh-pair':
-        return { ...r, node, loginUser: loginUserV.trim(), port: Number(sshPortV) }
+        return { ...r, node: forNode, loginUser: loginUserV.trim(), port: Number(sshPortV) }
       case 'ssh-unpair':
-        return { ...r, node }
+        return { ...r, node: forNode }
     }
     return r
   }
@@ -171,6 +175,29 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
     }
     setBusy(true)
     setErr('')
+    if (nodes) {
+      // One session per node, in turn; the first that opens is shown.
+      void (async () => {
+        let first: { opened: string; summary: string } | null = null
+        let sent = 0
+        for (const n of nodes) {
+          try {
+            const it = await requestSession(cluster, request(n), open.from ?? 'Nodes page')
+            if (it.status === 'refused') throw new Error(it.reason || 'Watson refused it.')
+            sent++
+            if (it.opened && !first) first = { opened: it.opened.id, summary: it.opened.summary }
+          } catch (e) {
+            setBusy(false)
+            setErr(`Node ${n}: ${e instanceof Error ? e.message : String(e)}${sent ? ` (${sent} of ${nodes.length} sent before it)` : ''}`)
+            return
+          }
+        }
+        setBusy(false)
+        onSent(first ?? { summary: `pairing ${nodes.length} nodes for SSH` })
+        onClose()
+      })()
+      return
+    }
     requestSession(cluster, request(), open.from ?? 'Tools menu').then(
       (it) => {
         setBusy(false)
@@ -200,15 +227,15 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
     forward: <>Port forward from pod <span className="rk-mono">{podRef?.name}</span></>,
     'debug-container': <>Debug container for pod <span className="rk-mono">{podRef?.name}</span></>,
     'debug-pod': <>Debug pod on node <span className="rk-mono">{node}</span></>,
-    'node-shell': <>Node shell on <span className="rk-mono">{node}</span></>,
+    'node-shell': <>K8S node shell on <span className="rk-mono">{node}</span></>,
     'node-command': <>Run a command on node <span className="rk-mono">{node}</span></>,
     ssh: <>SSH to node <span className="rk-mono">{node}</span></>,
-    'ssh-pair': <>{pairing ? 'Pair again' : 'Pair'} node <span className="rk-mono">{node}</span> for SSH</>,
+    'ssh-pair': nodes ? <>Pair {nodes.length} nodes for SSH</> : <>{pairing ? 'Pair again' : 'Pair'} node <span className="rk-mono">{node}</span> for SSH</>,
     'ssh-unpair': <>Unpair node <span className="rk-mono">{node}</span> from SSH</>,
   }[tool]
   const verb = approvers
-    ? { shell: 'Request shell', command: 'Request command', forward: 'Request forward', 'debug-container': 'Request debug container', 'debug-pod': 'Request debug pod', 'node-shell': 'Request node shell', 'node-command': 'Request command', ssh: 'Request SSH', 'ssh-pair': 'Request pairing', 'ssh-unpair': 'Request unpairing' }[tool]
-    : { shell: 'Open shell', command: 'Run', forward: 'Start forward', 'debug-container': 'Attach and open shell', 'debug-pod': 'Start debug pod', 'node-shell': 'Open node shell', 'node-command': 'Run', ssh: 'Open SSH', 'ssh-pair': 'Pair the node', 'ssh-unpair': 'Unpair the node' }[tool]
+    ? { shell: 'Request shell', command: 'Request command', forward: 'Request forward', 'debug-container': 'Request debug container', 'debug-pod': 'Request debug pod', 'node-shell': 'Request K8S node shell', 'node-command': 'Request command', ssh: 'Request SSH', 'ssh-pair': 'Request pairing', 'ssh-unpair': 'Request unpairing' }[tool]
+    : { shell: 'Open shell', command: 'Run', forward: 'Start forward', 'debug-container': 'Attach and open shell', 'debug-pod': 'Start debug pod', 'node-shell': 'Open K8S node shell', 'node-command': 'Run', ssh: 'Open SSH', 'ssh-pair': 'Pair the node', 'ssh-unpair': 'Unpair the node' }[tool]
   const durationField = interactive && info && (
     <label className="tb-lbl" style={{ flex: '0 0 auto' }}>
       <span>For how long</span>
@@ -477,6 +504,11 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
               </span>
             </label>
           </div>
+          {nodes && (
+            <p className="tb-hint" style={{ margin: 0 }} data-testid="tool-ssh-nodes">
+              One pairing session per node, in turn: <span className="rk-mono">{nodes.join(', ')}</span>. Every node gets the same login user and port.
+            </p>
+          )}
           <p className="tb-hint" style={{ margin: 0 }}>
             Runs a command on the node, as root through a short-lived pod (as <i>Run a command on the node</i> does): it writes the console's certificate authority (<span className="rk-mono">{info?.ssh?.caFingerprint ?? '…'}</span>) to <span className="rk-mono">/etc/ssh/221b/ca.pub</span>, a principals file admitting <span className="rk-mono">{info?.ssh?.principal}</span> as the login user, and a drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span>; checks sshd's configuration; reloads sshd; and reads the node's host key, which every later session checks. Nothing personal goes on the node, and nothing long-lived: unpairing removes it all.
           </p>

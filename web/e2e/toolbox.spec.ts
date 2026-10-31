@@ -141,7 +141,7 @@ test('a node shell asks no second person off production, and Esc cancels its dia
   const dlg = page.getByTestId('tool-dialog')
   await expect(dlg.getByRole('radio', { name: /^Restricted/ })).toBeChecked()
   await expect(dlg.getByText('Reason (optional)')).toBeVisible()
-  await expect(dlg.getByTestId('tool-send')).toHaveText('Open node shell')
+  await expect(dlg.getByTestId('tool-send')).toHaveText('Open K8S node shell')
   await expect(dlg).not.toContainText('second')
   if (shots) await page.screenshot({ path: `${shots}/node-shell.png` })
   await page.keyboard.press('Escape')

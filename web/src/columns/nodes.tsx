@@ -5,6 +5,7 @@ import { href } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
 import { NameCell, Tone } from './cells'
 import { NameWithTools } from '../components/toolbox/ToolsMenu'
+import { PickBox } from '../components/NodePicks'
 
 const GIB = 1024 * 1024 * 1024
 
@@ -52,6 +53,7 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     // The Tools button beside the name (TB-01).
     cell: (r) => (
       <NameWithTools target={{ kind: 'node', name: r.name, cordoned: r.cordoned, role: r.role === 'control-plane' ? 'control plane' : 'worker', problem: r.problems.length ? r.problems.map((p) => p.title).join('; ') : undefined }}>
+        <PickBox name={r.name} />
         <NameCell name={r.name} what="node name" />
       </NameWithTools>
     ),
