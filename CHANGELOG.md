@@ -10,6 +10,10 @@ What changed in each release of 221B, for people who use it and people who insta
 - *Node shell* is *K8S node shell* wherever the page names it, beside *SSH*.
 - The node drawer's *Actions* section (cordon, uncordon and drain as commands to copy or send to Watson) is gone: the node's Tools menu runs them.
 
+### Fixed
+
+- A Sherlock report that the model wrote before reading the cluster once more vanished from the pane while the next round ran; it now stays until the next text replaces it. Sherlock is told how to narrow logs and objects with kubectl's own flags, since Watson refuses a line with a pipe or grep.
+
 ### Added
 
 - **SSH to nodes** (Phase 11, ADR-72). A node's Tools menu gains *Pair for SSH…*, *SSH…* and *Unpair from SSH…* for SuperAdmins. Pairing is a node command that installs the console's certificate authority and a principals file for an existing login user on the node and pins the node's host key; a session is a terminal over SSH with a certificate the console signs for that session alone, checked against the pinned host key, and works when the kubelet does not. Chart values `toolbox.ssh.enabled`, `toolbox.ssh.port` and `toolbox.ssh.loginUser`; the authority lives in the Secret `<release>-ssh-ca` (SSH-01 to SSH-07).

@@ -471,6 +471,13 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		s.record(q, set.Model, tools, total, cost, outcome, detail)
 	}()
 
+	// kept is the answer's text without the current round's: what the
+	// model wrote before a tool call shows while it streams and until the
+	// next round speaks (seen October 30, 2026: a report that vanished),
+	// and never ends up in the answer.
+	c.mu.Lock()
+	kept := ans.Text
+	c.mu.Unlock()
 	for round := 0; ; round++ {
 		if err := set.Caps.Check(s.opts.Ledger.Now(ctx)); err != nil && round > 0 {
 			outcome, detail = audit.OutcomeDenied, err.Error()
@@ -488,7 +495,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		c.mu.Lock()
 		s.trimLocked(c)
 		req := Request{Model: set.Model, MaxTokens: s.opts.MaxTokens, System: system, Messages: append([]Message(nil), c.history...), Tools: defs}
-		base := ans.Text
+		base := kept
 		c.mu.Unlock()
 
 		var roundText strings.Builder
@@ -537,8 +544,8 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 			return
 		}
 		// Text before a tool call is the model thinking aloud: it stays in
-		// the history but not in the answer.
-		ans.Text = base
+		// the history and on screen until the next round speaks, and not
+		// in the answer (base stays kept).
 		ans.Status = "thinking"
 		start := len(ans.Steps)
 		for _, b := range calls {
