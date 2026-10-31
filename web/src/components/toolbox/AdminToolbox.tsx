@@ -226,6 +226,9 @@ export function AdminToolbox({ route, cluster }: AdminProps) {
     'debug-pod': 'SuperAdmin; Admin in its namespaces',
     'node-shell': 'SuperAdmin',
     'node-command': 'SuperAdmin',
+    ssh: 'SuperAdmin',
+    'ssh-pair': 'SuperAdmin',
+    'ssh-unpair': 'SuperAdmin',
   }
   return (
     <section className="rk-card" style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }} data-testid="admin-toolbox">

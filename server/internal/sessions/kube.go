@@ -81,6 +81,8 @@ type SSH interface {
 // the context ends.
 type Term interface {
 	Run(ctx context.Context, stdin io.Reader, out io.Writer, sizes <-chan Size) error
+	// Close drops a connection that will not be run.
+	Close() error
 }
 
 // Forwarder carries a session's port-forward connections: one stream pair

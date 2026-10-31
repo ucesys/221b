@@ -64,18 +64,46 @@ func (m *MemoryKeys) Save(_ context.Context, data map[string][]byte) error {
 // CA is the console's SSH certificate authority: one ed25519 key, made on
 // first use and kept in the store.
 type CA struct {
-	store  KeyStore
+	store KeyStore
+	// busy holds one reader of the store; waiting for it follows the
+	// caller's context, so a stalled read holds up nobody for longer.
+	busy   chan struct{}
 	mu     sync.Mutex
 	signer ssh.Signer
 }
 
-func NewCA(store KeyStore) *CA { return &CA{store: store} }
+func NewCA(store KeyStore) *CA { return &CA{store: store, busy: make(chan struct{}, 1)} }
 
 // Load reads the key pair, making one when there is none.
-func (c *CA) Load(ctx context.Context) error {
+func (c *CA) Load(ctx context.Context) error { return c.load(ctx, true) }
+
+// Peek reads the key pair if there is one, and makes none: looking at a
+// menu must not create the authority (it is made on the first pairing).
+func (c *CA) Peek(ctx context.Context) error { return c.load(ctx, false) }
+
+func (c *CA) loaded() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.signer != nil {
+	return c.signer != nil
+}
+
+func (c *CA) use(s ssh.Signer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.signer = s
+}
+
+func (c *CA) load(ctx context.Context, makeOne bool) error {
+	if c.loaded() {
+		return nil
+	}
+	select {
+	case c.busy <- struct{}{}:
+		defer func() { <-c.busy }()
+	case <-ctx.Done():
+		return fmt.Errorf("reading the SSH authority's key: %w", ctx.Err())
+	}
+	if c.loaded() {
 		return nil
 	}
 	data, err := c.store.Load(ctx)
@@ -87,7 +115,10 @@ func (c *CA) Load(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("the saved SSH authority key is not readable: %w", err)
 		}
-		c.signer = signer
+		c.use(signer)
+		return nil
+	}
+	if !makeOne {
 		return nil
 	}
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -110,7 +141,7 @@ func (c *CA) Load(ctx context.Context) error {
 	if err := c.store.Save(ctx, data); err != nil {
 		return fmt.Errorf("saving the SSH authority's key: %w", err)
 	}
-	c.signer = signer
+	c.use(signer)
 	return nil
 }
 

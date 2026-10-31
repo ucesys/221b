@@ -225,11 +225,13 @@ function Shell() {
   const [tabs, setTabs] = useState<{ cluster: string; closed: string[]; opened: string[] }>({ cluster: route.cluster, closed: [], opened: [] })
   const tabsHere = tabs.cluster === route.cluster ? tabs : { cluster: route.cluster, closed: [], opened: [] }
   const tabSessions = sessions.sessions.filter((x) => (x.mine && !tabsHere.closed.includes(x.id)) || tabsHere.opened.includes(x.id))
+  // An ended session whose tab was closed is done with: it leaves the list too (asked October 30, 2026); a live one stays, as the tab's tooltip says.
+  const listedSessions = sessions.sessions.filter((x) => x.state !== 'ended' || !tabsHere.closed.includes(x.id))
   const openSessions = sessions.sessions.filter((x) => x.state !== 'ended').length
   const [toolDialog, setToolDialog] = useState<OpenTool | null>(null)
   // The same on the home page and a cluster's page as on the tabs; the
   // Administration area has its own Back and Escape, so it leaves them.
-  const dockShown = view !== 'admin' && (sherlockDocked || watsonDocked || (watsonOn && sessions.sessions.length > 0))
+  const dockShown = view !== 'admin' && (sherlockDocked || watsonDocked || (watsonOn && listedSessions.length > 0))
   useEffect(() => {
     if (popped) post({ type: 'cluster', cluster: route.cluster })
   }, [popped, route.cluster])
@@ -408,8 +410,7 @@ function Shell() {
                   render: (a, controls) => {
                     const one = sessions.sessions.find((x) => x.id === a)
                     if (one) return <SessionPane key={one.id} cluster={route.cluster} session={one} admin={!!watson.status?.admin} dark={theme === 'dark'} controls={controls} onToast={setToast} />
-                    // An ended session whose tab was closed is done with: it leaves the list too (asked October 30, 2026); a live one stays, as the tab's tooltip says.
-                    return <SessionsPane cluster={route.cluster} sessions={sessions.sessions.filter((x) => x.state !== 'ended' || !tabsHere.closed.includes(x.id))} admin={!!watson.status?.admin} controls={controls} onOpen={showSession} onToast={setToast} />
+                    return <SessionsPane cluster={route.cluster} sessions={listedSessions} admin={!!watson.status?.admin} controls={controls} onOpen={showSession} onToast={setToast} />
                   },
                 }
               : undefined

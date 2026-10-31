@@ -120,15 +120,21 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
 
   const sherlock = useSherlockApi()
   useSoleMenu(true, onClose)
+  // By value: every table refresh hands the menu a new target object, and
+  // a node's answer is not cached, so each would fetch again and take the
+  // keyboard back to the first item.
+  const kind = target.kind
+  const targetName = target.name
+  const targetNs = target.kind === 'pod' ? target.namespace : ''
   useEffect(() => {
-    if (!tb.available || (target.kind !== 'pod' && target.kind !== 'node')) return
+    if (!tb.available || (kind !== 'pod' && kind !== 'node')) return
     let live = true
-    fetchToolbox(tb.cluster, target.kind === 'pod' ? [target.namespace] : [], target.kind === 'node').then(
+    fetchToolbox(tb.cluster, kind === 'pod' ? [targetNs] : [], kind === 'node').then(
       (i) => live && setInfo(i),
       (e: unknown) => live && setErr(e instanceof Error ? e.message : String(e)),
     )
-    if (target.kind === 'pod') {
-      fetch(apiPath(`pods/${encodeURIComponent(target.namespace)}/${encodeURIComponent(target.name)}`, tb.cluster), { headers: { Accept: 'application/json' } })
+    if (kind === 'pod') {
+      fetch(apiPath(`pods/${encodeURIComponent(targetNs)}/${encodeURIComponent(targetName)}`, tb.cluster), { headers: { Accept: 'application/json' } })
         .then((r) => (r.ok ? (r.json() as Promise<PodDetails>) : null))
         .then((d) => live && setPod(d))
         .catch(() => undefined)
@@ -136,7 +142,7 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
     return () => {
       live = false
     }
-  }, [tb.available, tb.cluster, target])
+  }, [tb.available, tb.cluster, kind, targetName, targetNs])
 
   useEffect(() => {
     const away = (e: MouseEvent) => {
@@ -170,7 +176,7 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
     const o = info.off[t]
     if (o) return o
     if (target.kind === 'pod') return info.namespaces[target.namespace]?.tools[t] || undefined
-    if (t === 'node-shell' || t === 'node-command') return info.nodes[t] || undefined
+    if (t === 'node-shell' || t === 'node-command' || t === 'ssh' || t === 'ssh-pair' || t === 'ssh-unpair') return info.nodes[t] || undefined
     return undefined
   }
   const pairing = target.kind === 'node' ? info?.ssh?.pairings[target.name] : undefined

@@ -4,12 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math/rand/v2"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/kv"
 )
+
+// changeTries is how often a save is tried against other writers.
+const changeTries = 12
 
 // PairingsKey is the key of the settings ConfigMap the pairings are kept
 // under, so every replica sees them.
@@ -53,7 +58,8 @@ func (p *Pairings) load(ctx context.Context) (map[string]Pairing, string, error)
 	}
 	m := map[string]Pairing{}
 	if err := json.Unmarshal(b, &m); err != nil {
-		return map[string]Pairing{}, version, nil
+		// Read as empty, the next save would wipe every pairing.
+		return nil, "", fmt.Errorf("%s in the settings ConfigMap is not readable: %w", PairingsKey, err)
 	}
 	return m, version, nil
 }
@@ -85,11 +91,21 @@ func (p *Pairings) List(ctx context.Context, cluster string) ([]Pairing, error) 
 }
 
 // change edits the map over the version it read, again on a conflict.
+// The ConfigMap has one version for all its keys, and a card of many nodes
+// ends its sessions together, each writing its history, so the tries wait
+// a little longer each time, at random, to get out of each other's way.
 func (p *Pairings) change(ctx context.Context, edit func(map[string]Pairing)) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var err error
-	for try := 0; try < 5; try++ {
+	for try := 0; try < changeTries; try++ {
+		if try > 0 {
+			select {
+			case <-time.After(rand.N(min(50*time.Millisecond<<try, time.Second))):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
 		var m map[string]Pairing
 		var version string
 		m, version, err = p.load(ctx)

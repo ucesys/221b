@@ -84,6 +84,8 @@ render k8s-console --set clusterName=ci --set toolbox.transcripts=pvc --set tool
 render k8s-console --set clusterName=ci --set rbac.roles.admin.exec=true --set toolbox.nodeShell.enabled=false | tee "$WORK/chart-toolbox-exec.yaml" | validate
 echo "--- SSH to nodes (Phase 11): off, with another login user"
 render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=false --set toolbox.ssh.loginUser=ops | tee "$WORK/chart-ssh-off.yaml" | validate
+render k8s-console --set clusterName=ci --set rbac.roles.superAdmin.template=readOnly --set rbac.roles.admin.template=full | tee "$WORK/chart-ssh-readonly.yaml" | validate
+render k8s-console --set clusterName=ci --set toolbox.ssh=null | tee "$WORK/chart-ssh-reuse.yaml" | validate
 render k8s-console --set clusterName=ci --set toolbox.ssh.port=2222 --set 'networkPolicy.nodeCIDRs[0]=192.168.1.0/24' | tee "$WORK/chart-ssh-cidr.yaml" | validate
 echo "--- image tags that move, tags that do not, a digest and an explicit pull policy"
 render k8s-console --set clusterName=ci --set image.tag=pr-7 | tee "$WORK/chart-moving.yaml" | validate
@@ -107,6 +109,13 @@ out=$WORK/chart-default.yaml
 ssh_on() { grep -q '"ssh": {' "$WORK/chart-toolbox-exec.yaml" && grep -q '"loginUser": "root"' "$WORK/chart-toolbox-exec.yaml" && grep -q '"port": 22' "$WORK/chart-toolbox-exec.yaml"; }
 ssh_off() { sed -n '/"ssh": {/,/}/p' "$WORK/chart-ssh-off.yaml" | grep -q '"enabled": false' && grep -q '"loginUser": "ops"' "$WORK/chart-ssh-off.yaml"; }
 ssh_values() { ssh_on && ssh_off; }
+# A read-only SuperAdmin definition turns SSH off with the node shell; values from an older release have no toolbox.ssh and SSH stays off.
+ssh_gated() {
+    sed -n '/"ssh": {/,/}/p' "$WORK/chart-ssh-readonly.yaml" | grep -q '"enabled": false' &&
+    ! sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-ssh-readonly.yaml" | grep -q 'port: 22$' &&
+    sed -n '/"ssh": {/,/}/p' "$WORK/chart-ssh-reuse.yaml" | grep -q '"enabled": false' &&
+    ! sed -n '/^kind: NetworkPolicy$/,/^---/p' "$WORK/chart-ssh-reuse.yaml" | grep -q 'port: 22$'
+}
 # The network policy lets the console reach sshd on the nodes, only with SSH on, narrowed to the nodes' CIDRs when given.
 ssh_egress() {
   sed -n '/^kind: NetworkPolicy$/,/^---/p' "$out" | grep -q 'port: 22$' &&
@@ -440,6 +449,7 @@ check "the replicas elect a leader and reach each other, the standbys warm unles
 check "the Toolbox's values reach the console, and transcripts get a volume" toolbox_values
 check "node shells run in a namespace of their own at Pod Security privileged, closed to the network" toolbox_namespace
 check "SSH to nodes is in the toolbox config, on by default with port 22 and root, and off with another user when asked" ssh_values
+check "a read-only SuperAdmin definition, or values kept from an older release, leave SSH off and its egress out" ssh_gated
 check "the network policy lets the console reach sshd on the nodes only with SSH on, narrowed to networkPolicy.nodeCIDRs" ssh_egress
 check "Admin forwards ports and starts debug pods, and opens shells only when asked" admin_exec
 exit "$fail"

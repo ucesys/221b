@@ -73,7 +73,7 @@ func TestTheAuthorityIsMadeOnceAndSigns(t *testing.T) {
 func TestThePairingScriptAndItsOutput(t *testing.T) {
 	ca := NewCA(&MemoryKeys{})
 	_ = ca.Load(context.Background())
-	sc := PairScript(ca.PublicKey(), "ops")
+	sc := PairScript(ca.PublicKey(), "ops", 22)
 	for _, want := range []string{"u='ops'", "id -u \"$u\"", "'" + ca.PublicKey() + "'", "'" + Principal + "'", "TrustedUserCAKeys /etc/ssh/221b/ca.pub", "AuthorizedPrincipalsFile /etc/ssh/221b/principals-%u", "-t", "221B-HOSTKEY", "221B-PAIRED"} {
 		if !strings.Contains(sc, want) {
 			t.Fatalf("the script lacks %q:\n%s", want, sc)

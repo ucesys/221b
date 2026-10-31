@@ -626,6 +626,7 @@ func (m *Manager) sshTerminal(ctx context.Context, s *Session, term Term, note s
 	s.stdin, s.sizes = pw, sizes
 	m.mu.Unlock()
 	if !m.live(s) {
+		term.Close()
 		return
 	}
 	if note != "" {

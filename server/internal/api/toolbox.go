@@ -212,7 +212,8 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 	}
 	if cfg.SSH.Enabled {
 		sv := &sshView{Enabled: s.opts.SSH != nil, Port: cfg.SSH.Port, LoginUser: cfg.SSH.LoginUser, Principal: nodessh.Principal, Pairings: map[string]pairingView{}}
-		if s.opts.SSH != nil {
+		// Only a node's menu reads the pairings.
+		if s.opts.SSH != nil && r.URL.Query().Get("nodes") != "" {
 			sv.Fingerprint = s.opts.SSH.Fingerprint()
 			if list, err := s.opts.SSH.List(r.Context(), c.ID); err == nil {
 				for _, p := range list {
@@ -318,8 +319,14 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 			} else if ok, _, err := asPerson.Can(ctx, "create", "", "pods", "", cfg.NodeShell.Namespace, ""); err != nil || !ok {
 				why = whyRole
 			}
+			// SSH asks Kubernetes for nothing; its pairings are node commands.
+			whySSH := ""
+			if !who.Admin {
+				whySSH = whySuper
+			}
 			mu.Lock()
 			v.Nodes[tb.ToolNodeShell], v.Nodes[tb.ToolNodeCommand] = why, why
+			v.Nodes[tb.ToolSSHPair], v.Nodes[tb.ToolSSHUnpair], v.Nodes[tb.ToolSSH] = why, why, whySSH
 			mu.Unlock()
 		}()
 	}

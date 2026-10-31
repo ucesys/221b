@@ -47,7 +47,7 @@ const SUGGESTIONS: [string, string][] = [
   ['Which Helm releases failed, and why?', 'Reads each release’s history'],
 ]
 
-function CodeBlock({ text, lang, open, why }: { text: string; lang: string; open: boolean; why?: string }) {
+function CodeBlock({ text, lang, open, why, draft }: { text: string; lang: string; open: boolean; why?: string; draft?: boolean }) {
   const [copied, setCopied] = useState(false)
   const [sent, setSent] = useState(false)
   const watson = useWatsonApi()
@@ -66,7 +66,7 @@ function CodeBlock({ text, lang, open, why }: { text: string; lang: string; open
       <pre aria-label={shell ? 'Commands' : 'Code'}>{text}</pre>
       {!open && (
         <div>
-          {commands && watson.available && (
+          {commands && watson.available && !draft && (
             <button
               className="rk-btn"
               data-on={sent ? 'false' : 'true'}
@@ -183,7 +183,7 @@ function Answer({ m, link, admin, question, onToast }: { m: SherlockMsg; link: (
       )}
       {!m.text && m.note && (
         <div className="rk-ans-body" style={{ color: 'var(--fg3)' }} aria-label="What Sherlock said before reading more" data-testid="sherlock-note">
-          <Markdown text={m.note} link={link} code={(text, lang, _open, key) => <CodeBlock key={key} text={text} lang={lang} open={false} why="" />} />
+          <Markdown text={m.note} link={link} code={(text, lang, _open, key) => <CodeBlock key={key} text={text} lang={lang} open={false} draft />} />
         </div>
       )}
       {m.text && (

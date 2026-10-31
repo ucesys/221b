@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { fmtTs } from '../../lib/format'
 import { fetchToolbox, requestSession, ToolboxError, type ToolboxInfo, type ToolName, type ToolRequest } from '../../api/toolbox'
 import type { PodDetails } from '../../api/types'
 import { apiPath } from '../../lib/router'
@@ -61,7 +62,9 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   const [namespace, setNamespace] = useState(pre.namespace ?? podRef?.namespace ?? 'default')
   const [serviceAccount, setServiceAccount] = useState(pre.serviceAccount ?? '')
   const [labelsFrom, setLabelsFrom] = useState(pre.labelsFrom ?? '')
-  const [loginUser, setLoginUser] = useState(pre.loginUser ?? '')
+  // Undefined until typed in, so an emptied field stays empty.
+  const [loginUser, setLoginUser] = useState(pre.loginUser)
+  const [sshPort, setSshPort] = useState(pre.port ? String(pre.port) : undefined)
   const [minutes, setMinutes] = useState(pre.minutes ?? 30)
   const [reason, setReason] = useState(pre.reason ?? '')
   const first = useRef<HTMLElement | null>(null)
@@ -118,11 +121,11 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   const minutesV = info ? Math.min(minutes, info.maxMinutes) : minutes
 
   const onNode = tool === 'node-shell' || tool === 'node-command' || tool === 'ssh' || tool === 'ssh-pair' || tool === 'ssh-unpair'
-  const needsTwo = (tool === 'node-shell' || tool === 'node-command' || tool === 'ssh-pair' || tool === 'ssh-unpair') && info?.nodeApproval === 'always'
+  const needsTwo = onNode && info?.nodeApproval === 'always'
   const interactive = tool !== 'command' && tool !== 'node-command' && tool !== 'ssh-pair' && tool !== 'ssh-unpair'
   const pairing = node ? info?.ssh?.pairings[node] : undefined
-  const loginUserV = loginUser || pairing?.loginUser || info?.ssh?.loginUser || 'root'
-  const sshPortV = port || String(pairing?.port || info?.ssh?.port || 22)
+  const loginUserV = loginUser ?? pairing?.loginUser ?? info?.ssh?.loginUser ?? 'root'
+  const sshPortV = sshPort ?? String(pairing?.port || info?.ssh?.port || 22)
   const approvers = !!info?.twoPerson || needsTwo
   // A reason is asked for whoever approves, and for a node on production;
   // a node shell elsewhere takes one if the person gives it.
@@ -478,8 +481,9 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
             <label className="tb-field" style={{ flex: '0 1 120px' }}>
               <span className="tb-lbl">SSH port</span>
               <span className="rk-field">
-                <input className="rk-mono" value={sshPortV} onChange={(e) => setPort(e.target.value)} inputMode="numeric" data-testid="tool-ssh-port" />
+                <input className="rk-mono" value={sshPortV} onChange={(e) => setSshPort(e.target.value.replace(/\D/g, ''))} inputMode="numeric" data-testid="tool-ssh-port" />
               </span>
+              <small className="tb-hint">The console reaches port {info?.ssh?.port ?? 22} (toolbox.ssh.port); another needs that value changed too.</small>
             </label>
           </div>
           {nodes && (
@@ -488,7 +492,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
             </p>
           )}
           <p className="tb-hint" style={{ margin: 0 }}>
-            Runs a command on the node, as root through a short-lived pod (as <i>Run a command on the node</i> does): it writes the console's certificate authority (<span className="rk-mono">{info?.ssh?.caFingerprint ?? '…'}</span>) to <span className="rk-mono">/etc/ssh/221b/ca.pub</span>, a principals file admitting <span className="rk-mono">{info?.ssh?.principal}</span> as the login user, and a drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span>; checks sshd's configuration; reloads sshd; and reads the node's host key, which every later session checks. Nothing personal goes on the node, and nothing long-lived: unpairing removes it all.
+            Runs a command on the node, as root through a short-lived pod (as <i>Run a command on the node</i> does): it writes the console's certificate authority{info?.ssh?.caFingerprint ? <> (<span className="rk-mono">{info.ssh.caFingerprint}</span>)</> : null} to <span className="rk-mono">/etc/ssh/221b/ca.pub</span>, a principals file admitting <span className="rk-mono">{info?.ssh?.principal}</span> as the login user, and a drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span>; checks that sshd takes all that, or puts everything back and changes nothing; reloads sshd; and reads the node's host key, which every later session checks. Nothing personal goes on the node, and nothing long-lived: unpairing removes it all.
           </p>
           <div className="rk-callout" data-tone="err">
             <ShieldSmallIcon />
@@ -501,7 +505,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
       body = (
         <>
           <p className="tb-hint" style={{ margin: 0 }}>
-            Runs a command on the node, as root through a short-lived pod: it removes the drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span> and <span className="rk-mono">/etc/ssh/221b</span>, reloads sshd, and the console forgets the pairing{pairing ? ` (as ${pairing.loginUser}, since ${new Date(pairing.pairedAt).toLocaleDateString()})` : ''}. No session from here can open afterwards.
+            Runs a command on the node, as root through a short-lived pod: it removes the drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span> and <span className="rk-mono">/etc/ssh/221b</span>, reloads sshd, and the console forgets the pairing{pairing ? ` (as ${pairing.loginUser}, since ${fmtTs(pairing.pairedAt)})` : ''}. No session from here can open afterwards.
           </p>
         </>
       )

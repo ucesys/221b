@@ -19,6 +19,7 @@ import (
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/kv"
+	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/settings"
@@ -74,6 +75,8 @@ type backupFile struct {
 	ToolboxSessions []sessions.Record `json:"toolboxSessions,omitempty"`
 	// SherlockSpend is the spend ledger, as kept.
 	SherlockSpend json.RawMessage `json:"sherlockSpend,omitempty"`
+	// SSHPairings are the nodes paired for SSH, as kept: public keys only.
+	SSHPairings json.RawMessage `json:"sshPairings,omitempty"`
 	// Audit is the audit log the console kept, newest first.
 	Audit []audit.Event `json:"audit,omitempty"`
 }
@@ -83,6 +86,7 @@ var backupLeftOut = []string{
 	"the credentials of cluster connections (tokens, kubeconfigs, certificates, OIDC secrets): a restore lists the connections to add again",
 	"the repository tokens of applications",
 	"Sherlock's API key",
+	"the SSH authority's private key (the Secret <release>-ssh-ca): pairings work again only with that Secret; without it, pair the nodes again",
 	"sign-in sessions",
 	"Watson's cards and Sherlock's conversations, which live in memory until the console restarts",
 	"the Toolbox's session recordings, which are in the transcript store",
@@ -143,6 +147,10 @@ func (s *Server) buildBackup(ctx context.Context, by string) (backupFile, error)
 		if _, ok := s.loadKV(ctx, sherlock.SpendKey, &spend); ok {
 			f.SherlockSpend = spend
 		}
+		var pairings json.RawMessage
+		if _, ok := s.loadKV(ctx, nodessh.PairingsKey, &pairings); ok {
+			f.SSHPairings = pairings
+		}
 	}
 	if s.opts.Audit != nil {
 		events, err := s.opts.Audit.Events(ctx)
@@ -180,7 +188,7 @@ func (s *Server) getBackup(w http.ResponseWriter, r *http.Request) {
 // restoreInput is a backup file and the parts of it to apply.
 type restoreInput struct {
 	Backup backupFile `json:"backup"`
-	// Parts: settings, users, apps, toolboxSessions, sherlockSpend, audit.
+	// Parts: settings, users, apps, toolboxSessions, sherlockSpend, sshPairings, audit.
 	Parts map[string]bool `json:"parts"`
 }
 
@@ -281,6 +289,19 @@ func (s *Server) postRestore(w http.ResponseWriter, r *http.Request) {
 				s.opts.Sherlock.Ledger().Reload()
 			}
 			rep.Restored["sherlockSpend"] = 1
+		}
+	}
+
+	if in.Parts["sshPairings"] && len(b.SSHPairings) > 0 {
+		var list map[string]nodessh.Pairing
+		if s.opts.KV == nil {
+			note("SSH pairings: this console has no storage for them")
+		} else if err := json.Unmarshal(b.SSHPairings, &list); err != nil {
+			note("SSH pairings: %v", err)
+		} else if _, err := s.opts.KV.SaveKey(ctx, nodessh.PairingsKey, b.SSHPairings, ""); err != nil {
+			note("SSH pairings: %v", err)
+		} else {
+			rep.Restored["sshPairings"] = len(list)
 		}
 	}
 

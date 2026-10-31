@@ -90,7 +90,7 @@ spec:
         {{- end }}
       {{- end }}
     {{- end }}
-    {{- if and .Values.toolbox.enabled .Values.toolbox.ssh.enabled }}
+    {{- if include "b221.sshOn" . }}
     # SSH to the nodes (Phase 11, ADR-72): sshd's port, on the nodes'
     # addresses when networkPolicy.nodeCIDRs lists them.
     - ports:

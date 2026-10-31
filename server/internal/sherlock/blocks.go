@@ -1,6 +1,7 @@
 package sherlock
 
 import (
+	"regexp"
 	"strings"
 )
 
@@ -20,67 +21,83 @@ func shellFence(lang string) bool {
 	return false
 }
 
-// FixBlocks rewrites the answer's shell blocks: lines that start with
-// kubectl or helm and that check refuses leave the block for a text
-// block under it, each with why. Other blocks are untouched; nil check
-// changes nothing.
+// fence is a code fence as the page reads it (web/src/lib/markdown.tsx):
+// backticks or tildes, any fence closes a block, and a block with none
+// runs to the end of the answer.
+var fence = regexp.MustCompile("^\\s*(```|~~~)\\s*([\\w+-]*)\\s*$")
+
+// FixBlocks rewrites the answer's shell blocks: commands that start with
+// kubectl or helm and that check refuses leave the block for a text block
+// under it, each with why. A command is what Watson reads: lines joined
+// by a trailing backslash go and stay together. Other blocks are
+// untouched; nil check changes nothing.
 func FixBlocks(text string, check func(line string) error) string {
-	if check == nil || !strings.Contains(text, "```") {
+	if check == nil {
 		return text
 	}
 	lines := strings.Split(text, "\n")
 	var out []string
 	for i := 0; i < len(lines); i++ {
-		line := lines[i]
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "```") {
-			out = append(out, line)
+		m := fence.FindStringSubmatch(lines[i])
+		if m == nil {
+			out = append(out, lines[i])
 			continue
 		}
-		lang := strings.TrimSpace(strings.TrimPrefix(trimmed, "```"))
-		// Find the closing fence.
-		end := -1
-		for j := i + 1; j < len(lines); j++ {
-			if strings.TrimSpace(lines[j]) == "```" {
-				end = j
-				break
-			}
+		end := i + 1
+		for end < len(lines) && !fence.MatchString(lines[end]) {
+			end++
 		}
-		if end < 0 || !shellFence(lang) {
-			out = append(out, line)
-			continue
+		closed := end < len(lines)
+		last := end
+		if !closed {
+			last = len(lines) - 1
 		}
-		body := lines[i+1 : end]
 		var ok, refused []string
-		for _, l := range body {
-			t := strings.TrimSpace(l)
-			if t == "" || strings.HasPrefix(t, "#") || !(strings.HasPrefix(t, "kubectl ") || strings.HasPrefix(t, "helm ")) {
-				ok = append(ok, l)
-				continue
-			}
-			if err := check(t); err != nil {
-				refused = append(refused, "# "+strings.TrimSpace(err.Error()), t)
-				continue
-			}
-			ok = append(ok, l)
+		if shellFence(m[2]) {
+			ok, refused = sortCommands(lines[i+1:end], check)
 		}
 		if len(refused) == 0 {
-			out = append(out, lines[i:end+1]...)
-			i = end
+			out = append(out, lines[i:last+1]...)
+			i = last
 			continue
 		}
 		if hasCommand(ok) {
-			out = append(out, line)
+			out = append(out, lines[i])
 			out = append(out, ok...)
-			out = append(out, "```")
-			out = append(out, "")
+			out = append(out, "```", "")
 		}
 		out = append(out, "Watson cannot run these; run them yourself:", "", "```text")
 		out = append(out, refused...)
 		out = append(out, "```")
-		i = end
+		i = last
 	}
 	return strings.Join(out, "\n")
+}
+
+// sortCommands splits a shell block's lines into those that stay and the
+// refused commands, each after a comment with the reason.
+func sortCommands(body []string, check func(line string) error) (ok, refused []string) {
+	for i := 0; i < len(body); i++ {
+		end := i
+		joined := strings.TrimSpace(body[i])
+		for strings.HasSuffix(joined, `\`) && end+1 < len(body) {
+			end++
+			joined = strings.TrimSpace(strings.TrimSuffix(joined, `\`)) + " " + strings.TrimSpace(body[end])
+		}
+		command := body[i : end+1]
+		i = end
+		if !strings.HasPrefix(joined, "kubectl ") && !strings.HasPrefix(joined, "helm ") {
+			ok = append(ok, command...)
+			continue
+		}
+		if err := check(joined); err != nil {
+			refused = append(refused, "# "+strings.TrimSpace(err.Error()))
+			refused = append(refused, command...)
+			continue
+		}
+		ok = append(ok, command...)
+	}
+	return ok, refused
 }
 
 func hasCommand(lines []string) bool {

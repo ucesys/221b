@@ -123,6 +123,9 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 		return nil
 	}
 	var errs []error
+	if len(r.Nodes) > 0 && r.Tool != toolbox.ToolSSHPair && r.Tool != toolbox.ToolSSHUnpair {
+		errs = append(errs, fmt.Errorf("%s runs on one node at a time", ToolName(r.Tool)))
+	}
 	switch r.Tool {
 	case toolbox.ToolShell, toolbox.ToolCommand, toolbox.ToolForward, toolbox.ToolDebugContainer:
 		errs = append(errs, label("namespace", r.Namespace, false), name("pod", r.Pod, false))
@@ -132,9 +135,6 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 		errs = append(errs, name("node", r.Node, false))
 		r.Namespace = ""
 		if len(r.Nodes) > 0 {
-			if r.Tool != toolbox.ToolSSHPair && r.Tool != toolbox.ToolSSHUnpair {
-				errs = append(errs, fmt.Errorf("%s runs on one node at a time", ToolName(r.Tool)))
-			}
 			seen := map[string]bool{r.Node: true}
 			var more []string
 			for _, n := range r.Nodes {
@@ -202,11 +202,16 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 			errs = append(errs, fmt.Errorf("the node shell profiles here are %s", strings.Join(c.NodeShell.Profiles, ", ")))
 		}
 	}
+	if r.Tool == toolbox.ToolSSHPair || r.Tool == toolbox.ToolSSHUnpair {
+		r.Profile = toolbox.ProfileGeneral
+		if !contains(c.NodeShell.Profiles, r.Profile) {
+			errs = append(errs, fmt.Errorf("pairing runs with the %s node profile, and the node shell profiles here are %s", r.Profile, strings.Join(c.NodeShell.Profiles, ", ")))
+		}
+	}
 	switch r.Tool {
 	case toolbox.ToolSSHPair:
 		// The pairing command is the console's, run on the node as a
 		// node command is; the login user goes into the script.
-		r.Profile = toolbox.ProfileGeneral
 		r.LoginUser = strings.TrimSpace(r.LoginUser)
 		if r.LoginUser == "" {
 			r.LoginUser = c.SSH.LoginUser
@@ -220,8 +225,6 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 		if r.Port < 1 || r.Port > 65535 {
 			errs = append(errs, errors.New("the SSH port is 1 to 65535"))
 		}
-	case toolbox.ToolSSHUnpair:
-		r.Profile = toolbox.ProfileGeneral
 	}
 	if r.Tool == toolbox.ToolCommand || r.Tool == toolbox.ToolNodeCommand {
 		r.Command = strings.TrimSpace(r.Command)
@@ -318,9 +321,9 @@ func OnNode(tool string) bool {
 }
 
 // NeedsTwo says whether a request needs a second person whatever the
-// cluster (TB-32).
+// cluster (TB-32). An SSH session is root on a node like a node shell.
 func NeedsTwo(c toolbox.Config, tool string) bool {
-	return OnNode(tool) && c.NodeShell.Approval == toolbox.ApprovalAlways
+	return (OnNode(tool) || tool == toolbox.ToolSSH) && c.NodeShell.Approval == toolbox.ApprovalAlways
 }
 
 // Summary is the one line a card and the audit log show for a request.

@@ -11,6 +11,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/kv"
+	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
@@ -39,6 +40,9 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	if _, err := kvb.SaveKey(ctx, sherlock.SpendKey, []byte(`{"day":"2026-10-30","dayUSD":1.5,"dayAsked":3,"month":"2026-10","monthUSD":9,"monthAsked":20}`), ""); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := kvb.SaveKey(ctx, nodessh.PairingsKey, []byte(`{"local/a":{"cluster":"local","node":"a","loginUser":"ops","port":22,"hostKey":"ssh-ed25519 AAAA"}}`), ""); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := shared.Update(ctx, settings.Settings{RefreshSeconds: 7}); err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +61,9 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	var f backupFile
 	if err := json.Unmarshal([]byte(body), &f); err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(string(f.SSHPairings), `"local/a"`) || !strings.Contains(strings.Join(f.LeftOut, "\n"), "SSH authority") {
+		t.Fatalf("the pairings in the backup: %s %v", f.SSHPairings, f.LeftOut)
 	}
 	if f.Format != backupFormat || f.Version != "0.10.2 (test)" || f.By != "ops@corp.example" || len(f.LeftOut) == 0 {
 		t.Fatalf("the header: %+v", f)
@@ -88,7 +95,7 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 		shared2 = o.Settings
 	})
 	f.Connections = append(f.Connections, clusters.Spec{ID: "staging", Name: "Staging", Server: "https://10.0.0.9:6443", Auth: clusters.AuthToken})
-	in, _ := json.Marshal(restoreInput{Backup: f, Parts: map[string]bool{"settings": true, "users": true, "apps": true, "toolboxSessions": true, "sherlockSpend": true, "audit": true}})
+	in, _ := json.Marshal(restoreInput{Backup: f, Parts: map[string]bool{"settings": true, "users": true, "apps": true, "toolboxSessions": true, "sherlockSpend": true, "sshPairings": true, "audit": true}})
 	resp, body = send(t, c2, http.MethodPost, srv2.URL+"/api/v1/admin/restore", string(in))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("the restore: %s %s", resp.Status, body)
@@ -97,7 +104,7 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &rep); err != nil {
 		t.Fatal(err)
 	}
-	if rep.Restored["settings"] != 1 || rep.Restored["apps"] != 1 || rep.Restored["toolboxSessions"] != 1 || rep.Restored["sherlockSpend"] != 1 || rep.Restored["audit"] == 0 {
+	if rep.Restored["settings"] != 1 || rep.Restored["apps"] != 1 || rep.Restored["toolboxSessions"] != 1 || rep.Restored["sherlockSpend"] != 1 || rep.Restored["sshPairings"] != 1 || rep.Restored["audit"] == 0 {
 		t.Fatalf("restored: %+v", rep.Restored)
 	}
 	notes := strings.Join(rep.Notes, "\n")

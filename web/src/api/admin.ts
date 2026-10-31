@@ -321,12 +321,13 @@ export interface BackupFile {
   apps?: { cluster: string; namespace: string; name: string }[]
   toolboxSessions?: unknown[]
   sherlockSpend?: unknown
+  sshPairings?: Record<string, unknown>
   audit?: unknown[]
 }
 
 export const BACKUP_FORMAT = '221b-backup/1'
 
-export type RestorePart = 'settings' | 'users' | 'apps' | 'toolboxSessions' | 'sherlockSpend' | 'audit'
+export type RestorePart = 'settings' | 'users' | 'apps' | 'toolboxSessions' | 'sherlockSpend' | 'sshPairings' | 'audit'
 
 export const RESTORE_PARTS: { id: RestorePart; label: string; how: string }[] = [
   { id: 'settings', label: 'Settings', how: 'replace the current ones: refresh, time format, fleets, acknowledged alerts, Sherlock and Watson' },
@@ -334,6 +335,7 @@ export const RESTORE_PARTS: { id: RestorePart; label: string; how: string }[] = 
   { id: 'apps', label: 'Helm applications', how: 'are added or replaced: source, values, parameters, commands; a repository token is pasted again' },
   { id: 'toolboxSessions', label: 'Toolbox session records', how: 'are merged with those here' },
   { id: 'sherlockSpend', label: "Sherlock's spend", how: 'replaces the ledger here' },
+  { id: 'sshPairings', label: 'SSH pairings', how: 'replace those here; they work with the same SSH authority Secret' },
   { id: 'audit', label: 'Audit log', how: 'is merged with the events here' },
 ]
 
@@ -352,6 +354,8 @@ export function partCount(b: BackupFile, part: RestorePart): number {
       return b.settings ? 1 : 0
     case 'sherlockSpend':
       return b.sherlockSpend ? 1 : 0
+    case 'sshPairings':
+      return Object.keys(b.sshPairings ?? {}).length
     default:
       return b[part]?.length ?? 0
   }

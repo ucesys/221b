@@ -321,7 +321,7 @@ function CommandBody({ cluster, s }: { cluster: string; s: SessionView }) {
   }, [cluster, s.id, s.state])
   return (
     <pre className="tb-output" data-testid="session-output">
-      <span style={{ color: 'var(--term-dim)' }}>$ {s.request.command}</span>
+      <span style={{ color: 'var(--term-dim)' }}>{s.request.command ? `$ ${s.request.command}` : s.summary}</span>
       {'\n'}
       {s.state === 'ended' ? out || (s.endedBy === 'failed' ? '' : '(no output)') : 'Running…'}
       {s.state === 'ended' && s.exit !== undefined && s.exit !== 0 && <span style={{ color: 'var(--term-err)' }}>{`\nexit ${s.exit}`}</span>}

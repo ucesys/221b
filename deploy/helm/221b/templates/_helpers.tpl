@@ -110,6 +110,15 @@ cluster do not fight over it (Phase 10 review). */ -}}
 {{- if and $t.enabled $t.nodeShell.enabled (eq .Values.rbac.roles.superAdmin.template "full") -}}true{{- end -}}
 {{- end -}}
 
+{{/* SSH is root on a node like a node shell, and Kubernetes never sees it,
+so a read-only SuperAdmin definition turns it off too. Values kept by
+--reuse-values from an earlier release have no toolbox.ssh. */}}
+{{- define "b221.sshOn" -}}
+{{- $t := .Values.toolbox -}}
+{{- $ssh := $t.ssh | default dict -}}
+{{- if and $t.enabled $ssh.enabled (eq .Values.rbac.roles.superAdmin.template "full") -}}true{{- end -}}
+{{- end -}}
+
 {{/* The toolbox values as the console reads them (TOOLBOX_CONFIG_FILE). */}}
 {{- define "b221.toolboxConfig" -}}
 {{- $t := .Values.toolbox -}}
@@ -118,6 +127,9 @@ cluster do not fight over it (Phase 10 review). */ -}}
 {{- $_ := set $node "enabled" (include "b221.nodeShellOn" . | eq "true") -}}
 {{- $_ := set $node "namespace" (include "b221.toolboxNamespace" .) -}}
 {{- $_ := set $c "nodeShell" $node -}}
+{{- $ssh := deepCopy ($t.ssh | default dict) -}}
+{{- $_ := set $ssh "enabled" (include "b221.sshOn" . | eq "true") -}}
+{{- $_ := set $c "ssh" $ssh -}}
 {{- if eq $t.transcripts "pvc" -}}{{- $_ := set $c "transcriptDir" "/var/lib/221b/transcripts" -}}{{- end -}}
 {{- $_ := set $c "adminExec" (and (eq .Values.rbac.roles.admin.template "full") (.Values.rbac.roles.admin.exec | default false)) -}}
 {{- toPrettyJson $c -}}

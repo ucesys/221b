@@ -14,6 +14,7 @@ import { FacetPicker } from './FacetPicker'
 import { FleetEditor, type EditorSeed } from './FleetEditor'
 import { NodeFleets } from './NodeFleets'
 import { NodePicking, PickedBar } from './NodePicks'
+import { fetchToolbox } from '../api/toolbox'
 import { useToolbox } from './toolbox/context'
 import { NodePanel } from './NodePanel'
 import { ProblemFilter, problemLevel, showsNode } from './ProblemFilter'
@@ -86,7 +87,22 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
       onToast(e instanceof Error ? e.message : String(e))
     }
   }
-  const sshOff = !tb?.available ? 'Watson is off here' : !admin ? 'SuperAdmins pair nodes' : undefined
+  // What the server would answer, asked once something is picked.
+  const askSSH = pickedNames.length > 0 && !!tb?.available
+  const [sshRefusal, setSshRefusal] = useState<string | undefined>()
+  const tbCluster = tb?.cluster
+  useEffect(() => {
+    if (!askSSH || !tbCluster) return
+    let live = true
+    fetchToolbox(tbCluster, [], true).then(
+      (i) => live && setSshRefusal(i.off['ssh-pair'] || (i.ssh ? undefined : 'SSH is turned off on this console')),
+      () => undefined,
+    )
+    return () => {
+      live = false
+    }
+  }, [askSSH, tbCluster])
+  const sshOff = !tb?.available ? 'Watson is off here' : !admin ? 'SuperAdmins pair nodes' : sshRefusal
   const cp = rows.filter((r) => r.role === 'control-plane').length
   const withErrors = rows.filter((r) => r.errors > 0).length
   const withProblems = rows.filter((r) => r.errors + r.warnings > 0).length
@@ -153,7 +169,7 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
                 <ExportMenu onExport={(f) => table.exportRows(f, cluster?.name, 'nodes', onToast)} disabled={!table.shown.length} what="the nodes in view" />
               </div>
             </div>
-            {picked.size > 0 && (
+            {pickedNames.length > 0 && (
               <PickedBar
                 picked={pickedNames}
                 shown={table.shown.map((r) => r.name)}

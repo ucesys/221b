@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -955,5 +956,82 @@ func TestARequestOnSeveralNodes(t *testing.T) {
 	shell := Request{Tool: toolbox.ToolNodeShell, Node: "a", Nodes: []string{"b"}}
 	if err := shell.Validate(c, false); err == nil || !strings.Contains(err.Error(), "one node at a time") {
 		t.Fatalf("a node shell on two nodes: %v", err)
+	}
+}
+
+// Only pairing takes several nodes: any other tool's body with nodes would
+// open a session for each under a card that names one.
+func TestOnlyPairingTakesSeveralNodes(t *testing.T) {
+	c := toolbox.Default()
+	for _, r := range []Request{
+		{Tool: toolbox.ToolDebugPod, Namespace: "x", Image: "general", Nodes: []string{"a", "b"}},
+		{Tool: toolbox.ToolShell, Namespace: "x", Pod: "p", Shell: "auto", Nodes: []string{"a"}},
+		{Tool: toolbox.ToolCommand, Namespace: "x", Pod: "p", Shell: "auto", Command: "ls", Nodes: []string{"a"}},
+		{Tool: toolbox.ToolSSH, Node: "a", Nodes: []string{"b"}},
+	} {
+		if err := r.Validate(c, false); err == nil || !strings.Contains(err.Error(), "one node at a time") {
+			t.Errorf("%s with nodes: %v", r.Tool, err)
+		}
+	}
+}
+
+// Pairing runs a general node pod, so a chart that leaves that profile
+// out refuses it as it refuses a node command.
+func TestPairingRespectsTheNodeProfiles(t *testing.T) {
+	c := toolbox.Default()
+	c.NodeShell.Profiles = []string{toolbox.ProfileNetAdmin}
+	for _, r := range []Request{{Tool: toolbox.ToolSSHPair, Node: "a", LoginUser: "ops"}, {Tool: toolbox.ToolSSHUnpair, Node: "a"}} {
+		if err := r.Validate(c, false); err == nil || !strings.Contains(err.Error(), "node shell profiles here") {
+			t.Errorf("%s: %v", r.Tool, err)
+		}
+	}
+}
+
+// An SSH session is root on the node: with approval always it waits for a
+// second person, as a node shell does.
+func TestAnSSHSessionNeedsTheSecondPersonANodeShellDoes(t *testing.T) {
+	c := toolbox.Default()
+	c.NodeShell.Approval = toolbox.ApprovalAlways
+	if !NeedsTwo(c, toolbox.ToolSSH) || !NeedsTwo(c, toolbox.ToolNodeShell) || NeedsTwo(c, toolbox.ToolShell) {
+		t.Fatal("the second person")
+	}
+}
+
+// The SSH tools' cards say what they do; pairing goes through the node's
+// kubelet, so a node that is not Ready refuses it, and SSH does not.
+func TestTheCardsOfTheSSHTools(t *testing.T) {
+	m, _, _, _ := setup(t)
+	ctx := context.Background()
+	who := kube.Person{User: "alice"}
+	pair := Request{Tool: toolbox.ToolSSHPair, Node: "worker-3", LoginUser: "ops", Port: 22, Profile: toolbox.ProfileGeneral}
+	p := m.PlanFor(ctx, Cluster{ID: "c1"}, pair, who, "Alice")
+	if len(p.Targets) != 1 || p.Targets[0] != "node/worker-3" || p.Object == "" || !strings.Contains(strings.Join(p.Impact, " "), "admits ops on port 22") {
+		t.Fatalf("the pairing card: %+v", p)
+	}
+	un := m.PlanFor(ctx, Cluster{ID: "c1"}, Request{Tool: toolbox.ToolSSHUnpair, Node: "worker-3", Profile: toolbox.ProfileGeneral}, who, "Alice")
+	if len(un.Targets) != 1 || !strings.Contains(strings.Join(un.Impact, " "), "removes the console's SSH authority") {
+		t.Fatalf("the unpairing card: %+v", un)
+	}
+	s := m.PlanFor(ctx, Cluster{ID: "c1"}, Request{Tool: toolbox.ToolSSH, Node: "worker-3"}, who, "Alice")
+	if len(s.Targets) != 1 || s.Object != "" || len(s.DryRun) != 1 || !strings.Contains(s.DryRun[0], "No access review") {
+		t.Fatalf("the SSH card: %+v", s)
+	}
+}
+
+type fakeTerm struct{ closed atomic.Bool }
+
+func (t *fakeTerm) Run(context.Context, io.Reader, io.Writer, <-chan Size) error { return nil }
+func (t *fakeTerm) Close() error                                                 { t.closed.Store(true); return nil }
+
+// A connection that comes up after its session ended is dropped: it is
+// authenticated as root, and nothing else would ever close it.
+func TestASessionEndedDuringTheDialDropsTheConnection(t *testing.T) {
+	m, _, _, _ := setup(t)
+	s := &Session{}
+	s.State = StateEnded
+	term := &fakeTerm{}
+	m.sshTerminal(context.Background(), s, term, "")
+	if !term.closed.Load() {
+		t.Fatal("the connection was left open")
 	}
 }

@@ -32,6 +32,8 @@ type Options struct {
 	// CertTTL is how long a session's certificate is valid: it is used
 	// once, to connect.
 	CertTTL time.Duration
+	// Handshake bounds the SSH handshake after the TCP connect.
+	Handshake time.Duration
 }
 
 // Service implements sessions.SSH.
@@ -53,19 +55,23 @@ func New(o Options) *Service {
 	if o.CertTTL <= 0 {
 		o.CertTTL = 5 * time.Minute
 	}
+	if o.Handshake <= 0 {
+		o.Handshake = 15 * time.Second
+	}
 	return &Service{opts: o}
 }
 
 // Load makes the authority's key when there is none yet.
 func (s *Service) Load(ctx context.Context) error { return s.opts.CA.Load(ctx) }
 
-// Fingerprint is the authority's, reading (or making) its key first:
-// after a restart nothing has loaded it yet, and a pairing compared with
-// an empty fingerprint looked stale (seen on 221b, October 30, 2026).
+// Fingerprint is the authority's, reading its key first: after a restart
+// nothing has loaded it yet, and a pairing compared with an empty
+// fingerprint looked stale (seen on 221b, October 30, 2026). With no key
+// yet it is empty: one is made by the first pairing, not by looking.
 func (s *Service) Fingerprint() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := s.opts.CA.Load(ctx); err != nil {
+	if err := s.opts.CA.Peek(ctx); err != nil {
 		s.opts.Logger.Warn("the SSH authority's key could not be read", "err", err)
 		return ""
 	}
@@ -81,13 +87,19 @@ func (s *Service) List(ctx context.Context, cluster string) ([]Pairing, error) {
 func (s *Service) Script(r sessions.Request) (string, error) {
 	switch r.Tool {
 	case toolbox.ToolSSHPair:
-		if err := s.opts.CA.Load(context.Background()); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := s.opts.CA.Load(ctx); err != nil {
 			return "", err
 		}
 		if !toolbox.LoginUserRE.MatchString(r.LoginUser) {
 			return "", errors.New("the login user is not a Unix user name")
 		}
-		return PairScript(s.opts.CA.PublicKey(), r.LoginUser), nil
+		port := r.Port
+		if port == 0 {
+			port = 22
+		}
+		return PairScript(s.opts.CA.PublicKey(), r.LoginUser, port), nil
 	case toolbox.ToolSSHUnpair:
 		return UnpairScript(), nil
 	}
@@ -176,16 +188,29 @@ func (s *Service) Dial(ctx context.Context, cluster, node string, owner sessions
 			mismatch = fmt.Errorf("node %s presented a host key that is not among those it was paired with: the node was reinstalled, or something sits between; pair it again once you know which", node)
 			return mismatch
 		},
-		Timeout: 15 * time.Second,
 	}
+	// NewClientConn has no deadline of its own and does not see ctx: the
+	// socket carries both, or a node that takes the connection and says
+	// nothing would hold the session for good.
+	_ = conn.SetDeadline(time.Now().Add(s.opts.Handshake))
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	c, chans, reqs, err := ssh.NewClientConn(conn, hostPort, cfg)
 	if err != nil {
+		stop()
 		conn.Close()
 		if mismatch != nil {
 			return nil, "", mismatch
 		}
+		if ctx.Err() != nil {
+			return nil, "", ctx.Err()
+		}
 		return nil, "", fmt.Errorf("SSH to %s as %s: %w", hostPort, p.LoginUser, err)
 	}
+	if !stop() {
+		c.Close()
+		return nil, "", ctx.Err()
+	}
+	_ = conn.SetDeadline(time.Time{})
 	s.opts.Logger.Info("SSH session", "node", node, "addr", hostPort, "user", p.LoginUser, "hostKey", verified.Type()+" "+ssh.FingerprintSHA256(verified), "who", who, "session", session)
 	note := fmt.Sprintf("SSH to node %s (%s) as %s: host key verified; certificate for %s, valid %s.", node, hostPort, p.LoginUser, who, s.opts.CertTTL)
 	return &term{client: ssh.NewClient(c, chans, reqs)}, note, nil
@@ -248,6 +273,9 @@ type term struct {
 	client *ssh.Client
 }
 
+// Close drops the connection of a shell that will not be run.
+func (t *term) Close() error { return t.client.Close() }
+
 func (t *term) Run(ctx context.Context, stdin io.Reader, out io.Writer, sizes <-chan sessions.Size) error {
 	defer t.client.Close()
 	sess, err := t.client.NewSession()
@@ -286,8 +314,13 @@ func (t *term) Run(ctx context.Context, stdin io.Reader, out io.Writer, sizes <-
 		case err := <-done:
 			var exit *ssh.ExitError
 			var missing *ssh.ExitMissingError
-			if err == nil || errors.As(err, &exit) || errors.As(err, &missing) {
+			switch {
+			case err == nil, errors.As(err, &exit):
 				return nil
+			case errors.As(err, &missing):
+				// sshd always says how a shell ended: no word means the
+				// connection went, with the node or the network.
+				return errors.New("the connection to the node was lost")
 			}
 			return err
 		}

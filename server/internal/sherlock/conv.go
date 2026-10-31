@@ -453,7 +453,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		now := s.opts.Now()
-		text, cited := Cite(FixBlocks(ans.Text, s.opts.CommandOK), c.known)
+		text, cited := Cite(FixBlocks(answerOr(ans.Text, ans.Note), s.opts.CommandOK), c.known)
 		ans.Text, ans.Refs, ans.Note = text, cited, ""
 		for i := range ans.Steps {
 			if ans.Steps[i].Status == "running" {
@@ -486,7 +486,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		}
 		if round >= s.opts.MaxRounds {
 			c.mu.Lock()
-			ans.Text = strings.TrimSpace(ans.Text + "\n\nI stopped after reading the cluster " + fmt.Sprint(s.opts.MaxRounds) + " times without reaching an answer. Ask a narrower question, naming the object.")
+			ans.Text = strings.TrimSpace(answerOr(ans.Text, ans.Note) + "\n\nI stopped after reading the cluster " + fmt.Sprint(s.opts.MaxRounds) + " times without reaching an answer. Ask a narrower question, naming the object.")
 			c.mu.Unlock()
 			outcome, detail = audit.OutcomeFailed, "too many tool rounds"
 			finish("done", "")
@@ -726,4 +726,13 @@ func newID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// answerOr is the text of an answer: with no later text, the note that
+// stands on the page is the answer.
+func answerOr(text, note string) string {
+	if strings.TrimSpace(text) == "" {
+		return note
+	}
+	return text
 }
