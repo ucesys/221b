@@ -447,7 +447,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
       body = (
         <>
           <p className="tb-hint" style={{ margin: 0 }}>
-            A terminal over SSH, as <span className="rk-mono">{pairing?.loginUser ?? '?'}</span> on port {pairing?.port ?? '?'}: the console signs you a certificate for this session alone (principal <span className="rk-mono">{info?.ssh?.principal}</span>) and checks the node's host key against the one pinned when it was paired{pairing ? ` (${pairing.hostKey})` : ''}. It works when the kubelet does not, as a node shell cannot.
+            A terminal over SSH, as <span className="rk-mono">{pairing?.loginUser ?? '?'}</span> on port {pairing?.port ?? '?'}: the console signs you a certificate for this session alone (principal <span className="rk-mono">{info?.ssh?.principal}</span>) and checks the node's host key against what was pinned when it was paired. It works when the kubelet does not, as a node shell cannot.
           </p>
           <div className="tb-row">{durationField}</div>
           <div className="rk-callout" data-tone="err">

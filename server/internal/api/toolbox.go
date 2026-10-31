@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"golang.org/x/crypto/ssh"
 	"net/http"
 	"os"
 	"sort"
@@ -144,8 +143,6 @@ type pairingView struct {
 	Port      int       `json:"port"`
 	PairedAt  time.Time `json:"pairedAt"`
 	PairedBy  string    `json:"pairedBy,omitempty"`
-	// HostKey is the pinned host key's fingerprint.
-	HostKey string `json:"hostKey"`
 	// Stale says the node was paired with an authority that is not this
 	// console's any more.
 	Stale bool `json:"stale,omitempty"`
@@ -219,14 +216,8 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 			sv.Fingerprint = s.opts.SSH.Fingerprint()
 			if list, err := s.opts.SSH.List(r.Context(), c.ID); err == nil {
 				for _, p := range list {
-					var fps []string
-					for _, line := range p.Keys() {
-						if k, _, _, _, err := ssh.ParseAuthorizedKey([]byte(line)); err == nil {
-							fps = append(fps, k.Type()+" "+ssh.FingerprintSHA256(k))
-						}
-					}
-					fp := strings.Join(fps, ", ")
-					sv.Pairings[p.Node] = pairingView{LoginUser: p.LoginUser, Port: p.Port, PairedAt: p.PairedAt, PairedBy: p.PairedBy, HostKey: fp, Stale: p.CAFinger != "" && p.CAFinger != sv.Fingerprint}
+					// The host keys stay on the server (asked October 30, 2026).
+					sv.Pairings[p.Node] = pairingView{LoginUser: p.LoginUser, Port: p.Port, PairedAt: p.PairedAt, PairedBy: p.PairedBy, Stale: p.CAFinger != "" && p.CAFinger != sv.Fingerprint}
 				}
 			}
 		}

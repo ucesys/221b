@@ -236,7 +236,7 @@ func TestASessionRunsOverACertificateAndAPinnedHostKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(note, "as ops") || !strings.Contains(note, "host key ssh-ed25519 SHA256:") {
+	if !strings.Contains(note, "as ops") || !strings.Contains(note, "host key verified") || strings.Contains(note, "SHA256:") {
 		t.Fatalf("the note: %s", note)
 	}
 	pr, pw := io.Pipe()
@@ -273,14 +273,14 @@ func TestASessionRunsOverACertificateAndAPinnedHostKey(t *testing.T) {
 	if err := svc.Done(ctx, "local", req, "221B-HOSTKEY "+node.hostKeyLine()+"\n221B-PAIRED ops\n", "Pat"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := svc.Dial(ctx, "local", "worker-1", owner, "s2"); err == nil || !strings.Contains(err.Error(), "not among those it was paired with") || !strings.Contains(err.Error(), "ssh-ed25519 SHA256:") {
+	if _, _, err := svc.Dial(ctx, "local", "worker-1", owner, "s2"); err == nil || !strings.Contains(err.Error(), "not among those it was paired with") || strings.Contains(err.Error(), "SHA256:") {
 		t.Fatalf("a changed host key: %v", err)
 	}
 	// Paired with several keys, one of them the node's: accepted.
 	if err := svc.Done(ctx, "local", req, "221B-HOSTKEY "+node.hostKeyLine()+"\n221B-HOSTKEY "+other.hostKeyLine()+"\n221B-PAIRED ops\n", "Pat"); err != nil {
 		t.Fatal(err)
 	}
-	if _, note, err := svc.Dial(ctx, "local", "worker-1", owner, "s3"); err != nil || !strings.Contains(note, "ssh-ed25519 SHA256:") {
+	if _, note, err := svc.Dial(ctx, "local", "worker-1", owner, "s3"); err != nil || !strings.Contains(note, "host key verified") {
 		t.Fatalf("several pinned keys: %v %s", err, note)
 	}
 	// Unpaired: gone.

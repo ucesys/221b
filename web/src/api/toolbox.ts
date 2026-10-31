@@ -19,7 +19,6 @@ export interface SSHPairing {
   port: number
   pairedAt: string
   pairedBy?: string
-  hostKey: string
   /** Paired with an authority that is not this console's any more: pair again. */
   stale?: boolean
 }
@@ -222,14 +221,16 @@ const cache = new Map<string, { at: number; info: Promise<ToolboxInfo> }>()
 export function fetchToolbox(cluster: string, namespaces: string[] = [], nodes = false): Promise<ToolboxInfo> {
   const ns = [...new Set(namespaces)].sort().join(',')
   const key = `${cluster}\x00${ns}\x00${nodes}`
-  const hit = cache.get(key)
+  // A node's menu is not cached: its pairings change with a pairing
+  // session, and the menu opens on its end (Phase 11).
+  const hit = nodes ? undefined : cache.get(key)
   if (hit && Date.now() - hit.at < 60_000) return hit.info
   const q = new URLSearchParams()
   if (ns) q.set('namespaces', ns)
   if (nodes) q.set('nodes', '1')
   const info = call<ToolboxInfo>('GET', apiPath('toolbox', cluster) + (q.size ? '?' + q.toString() : ''))
   info.catch(() => cache.delete(key))
-  cache.set(key, { at: Date.now(), info })
+  if (!nodes) cache.set(key, { at: Date.now(), info })
   return info
 }
 

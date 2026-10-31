@@ -160,7 +160,10 @@ func (s *Service) Dial(ctx context.Context, cluster, node string, owner sessions
 					return nil
 				}
 			}
-			mismatch = fmt.Errorf("node %s presented a host key that is not among those it was paired with (%s %s; paired: %s): the node was reinstalled, or something sits between; pair it again once you know which", node, key.Type(), ssh.FingerprintSHA256(key), fingerprints(pinned))
+			// The fingerprints go to the log, not to the page (asked
+			// October 30, 2026).
+			s.opts.Logger.Warn("SSH host key mismatch", "node", node, "presented", key.Type()+" "+ssh.FingerprintSHA256(key), "paired", fingerprints(pinned))
+			mismatch = fmt.Errorf("node %s presented a host key that is not among those it was paired with: the node was reinstalled, or something sits between; pair it again once you know which", node)
 			return mismatch
 		},
 		Timeout: 15 * time.Second,
@@ -173,7 +176,8 @@ func (s *Service) Dial(ctx context.Context, cluster, node string, owner sessions
 		}
 		return nil, "", fmt.Errorf("SSH to %s as %s: %w", hostPort, p.LoginUser, err)
 	}
-	note := fmt.Sprintf("SSH to node %s (%s) as %s: host key %s %s verified; certificate for %s, valid %s.", node, hostPort, p.LoginUser, verified.Type(), ssh.FingerprintSHA256(verified), who, s.opts.CertTTL)
+	s.opts.Logger.Info("SSH session", "node", node, "addr", hostPort, "user", p.LoginUser, "hostKey", verified.Type()+" "+ssh.FingerprintSHA256(verified), "who", who, "session", session)
+	note := fmt.Sprintf("SSH to node %s (%s) as %s: host key verified; certificate for %s, valid %s.", node, hostPort, p.LoginUser, who, s.opts.CertTTL)
 	return &term{client: ssh.NewClient(c, chans, reqs)}, note, nil
 }
 
