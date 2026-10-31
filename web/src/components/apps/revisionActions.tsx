@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { layer } from '../../lib/layer'
+import { useSoleMenu } from '../../lib/menus'
 import { DiffIcon, RollbackIcon, WrenchIcon } from '../Icons'
 
 /**
@@ -26,6 +27,7 @@ export function RevisionTools({ revision }: { revision: number }) {
   const [style, setStyle] = useState<CSSProperties>({})
   const open = anchor !== null
   const onClose = () => setAnchor(null)
+  useSoleMenu(anchor !== null, onClose)
   useEffect(() => {
     if (!open) return
     const at = anchor?.getBoundingClientRect()

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { layer } from '../lib/layer'
+import { useSoleMenu } from '../lib/menus'
 import { WrenchIcon } from './Icons'
 import { useWatsonApi } from './Watson'
 
@@ -23,6 +24,7 @@ export function NamespaceTools({ namespace, canCreate, onPick }: { namespace: st
   const [style, setStyle] = useState<CSSProperties>({})
   const open = anchor !== null
   const onClose = () => setAnchor(null)
+  useSoleMenu(anchor !== null, onClose)
   useEffect(() => {
     if (!open) return
     const at = anchor?.getBoundingClientRect()

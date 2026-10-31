@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { layer } from '../../lib/layer'
+import { useSoleMenu } from '../../lib/menus'
 import { WrenchIcon } from '../Icons'
 import type { AppRow } from '../../columns/apps'
 
@@ -98,6 +99,7 @@ function AppMenu({ row, canChange, anchor, onClose, onPick }: { row: AppRow; can
     if (over > 0) setStyle((st) => ({ ...st, left: Math.max(8, (typeof st.left === 'number' ? st.left : r.left) - over) }))
   }, [])
   const items = appItems(row, canChange)
+  useSoleMenu(true, onClose)
   useEffect(() => {
     const away = (e: MouseEvent) => {
       if (menu.current && !menu.current.contains(e.target as Node) && !anchor?.contains(e.target as Node)) onClose()

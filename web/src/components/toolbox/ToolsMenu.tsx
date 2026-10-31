@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { fetchToolbox, type ToolAction, type ToolboxInfo, type ToolName } from '../../api/toolbox'
 import type { PodDetails } from '../../api/types'
 import { layer } from '../../lib/layer'
+import { useSoleMenu } from '../../lib/menus'
 import { apiPath } from '../../lib/router'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, KeyIcon, SherlockIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
@@ -118,6 +119,7 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
   const [style] = useState(() => place(anchor))
 
   const sherlock = useSherlockApi()
+  useSoleMenu(true, onClose)
   useEffect(() => {
     if (!tb.available || (target.kind !== 'pod' && target.kind !== 'node')) return
     let live = true
