@@ -196,6 +196,7 @@ type fakeNode struct {
 	principal string
 	mu        sync.Mutex
 	received  []byte
+	commands  []string
 }
 
 func startNode(t *testing.T, caPub ssh.PublicKey, user string) *fakeNode {
@@ -253,6 +254,11 @@ func (n *fakeNode) serve(c net.Conn, cfg *ssh.ServerConfig) {
 		if err != nil {
 			continue
 		}
+		// An exec request (Automation, AU-08) names its command; its
+		// stdin is read to the end, then the node answers and exits,
+		// with 7 for a command that says fail.
+		var cmdMu sync.Mutex
+		command := ""
 		go func() {
 			for r := range creqs {
 				switch r.Type {
@@ -261,14 +267,42 @@ func (n *fakeNode) serve(c net.Conn, cfg *ssh.ServerConfig) {
 					if r.Type == "shell" {
 						io.WriteString(ch, "node$ ")
 					}
+				case "exec":
+					var p struct{ Command string }
+					_ = ssh.Unmarshal(r.Payload, &p)
+					cmdMu.Lock()
+					command = p.Command
+					cmdMu.Unlock()
+					n.mu.Lock()
+					n.commands = append(n.commands, p.Command)
+					n.mu.Unlock()
+					r.Reply(true, nil)
 				default:
 					r.Reply(false, nil)
 				}
 			}
 		}()
 		buf := make([]byte, 64)
+		var stdin []byte
 		for {
 			k, err := ch.Read(buf)
+			cmdMu.Lock()
+			cmd := command
+			cmdMu.Unlock()
+			if cmd != "" {
+				stdin = append(stdin, buf[:k]...)
+				if err != nil {
+					io.WriteString(ch, "ran: "+cmd+"\nstdin: "+string(stdin)+"\n")
+					status := uint32(0)
+					if strings.Contains(cmd, "fail") {
+						status = 7
+					}
+					ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
+					ch.Close()
+					return
+				}
+				continue
+			}
 			if k > 0 {
 				n.mu.Lock()
 				n.received = append(n.received, buf[:k]...)

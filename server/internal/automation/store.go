@@ -1,0 +1,427 @@
+package automation
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math/rand/v2"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/ucesys/221b/server/internal/kv"
+)
+
+// The keys of Automation's ConfigMap (AU-12).
+const (
+	ScriptsKey = "scripts.json"
+	ParamsKey  = "params.json"
+	RunsKey    = "runs.json"
+)
+
+// Limits (AU-02, AU-12).
+const (
+	MaxText         = 32 << 10
+	MaxScripts      = 200
+	MaxGroup        = 40
+	maxScriptsBytes = 384 << 10
+	changeTries     = 12
+)
+
+// Version states (AU-05).
+const (
+	StateDraft      = "draft"
+	StateReview     = "review"
+	StateApproved   = "approved"
+	StateSuperseded = "superseded"
+)
+
+// Errors the API turns into answers.
+var (
+	ErrNotFound = errors.New("no such script")
+	ErrExists   = errors.New("a script of that name exists")
+	ErrFull     = errors.New("automation's records are full")
+	ErrInvalid  = errors.New("not valid")
+)
+
+// NameRE is a script's name.
+var NameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
+// Who is a person as Automation records them: Name is shown, User tells
+// people apart.
+type Who struct {
+	Name string `json:"name"`
+	User string `json:"user,omitempty"`
+}
+
+// Same says whether two records name one person.
+func (w Who) Same(o Who) bool {
+	if w.User != "" || o.User != "" {
+		return w.User == o.User
+	}
+	return w.Name == o.Name
+}
+
+// Approval is one person's approval of a version.
+type Approval struct {
+	By Who       `json:"by"`
+	At time.Time `json:"at"`
+}
+
+// Version is one immutable, hashed text of a script.
+type Version struct {
+	N         int        `json:"n"`
+	Text      string     `json:"text"`
+	Hash      string     `json:"hash"`
+	Header    Header     `json:"header"`
+	Findings  []Finding  `json:"findings"`
+	State     string     `json:"state"`
+	Author    Who        `json:"author"`
+	Created   time.Time  `json:"created"`
+	Approvals []Approval `json:"approvals,omitempty"`
+}
+
+// Script is a script and its versions, oldest first.
+type Script struct {
+	Name     string    `json:"name"`
+	Group    string    `json:"group,omitempty"`
+	Created  time.Time `json:"created"`
+	Updated  time.Time `json:"updated"`
+	Versions []Version `json:"versions"`
+}
+
+// Latest is the newest version.
+func (s Script) Latest() Version {
+	if len(s.Versions) == 0 {
+		return Version{}
+	}
+	return s.Versions[len(s.Versions)-1]
+}
+
+// Approved is the newest approved version.
+func (s Script) Approved() (Version, bool) {
+	for i := len(s.Versions) - 1; i >= 0; i-- {
+		if s.Versions[i].State == StateApproved {
+			return s.Versions[i], true
+		}
+	}
+	return Version{}, false
+}
+
+// Version returns version n.
+func (s Script) Version(n int) (Version, bool) {
+	for _, v := range s.Versions {
+		if v.N == n {
+			return v, true
+		}
+	}
+	return Version{}, false
+}
+
+// Runnable is the version a run uses (AU-05): the newest approved, with a
+// second approval by someone other than the author where the cluster has
+// the two-person rule.
+func Runnable(s Script, twoPerson bool) (Version, error) {
+	v, ok := s.Approved()
+	if !ok {
+		return Version{}, fmt.Errorf("%s has no approved version: submit one and have it approved, or run a dry run", s.Name)
+	}
+	if twoPerson && !TwoApprovals(v) {
+		return Version{}, fmt.Errorf("%s v%d needs a second approval, by someone other than its author, for a cluster with the two-person rule", s.Name, v.N)
+	}
+	return v, nil
+}
+
+// TwoApprovals says whether a version has two approvals, one of them not
+// its author's.
+func TwoApprovals(v Version) bool {
+	if len(v.Approvals) < 2 {
+		return false
+	}
+	for _, a := range v.Approvals {
+		if !a.By.Same(v.Author) {
+			return true
+		}
+	}
+	return false
+}
+
+// Hash is a script text's SHA-256.
+func Hash(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
+// Normalize gives a text one line ending.
+func Normalize(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	return text
+}
+
+// Store keeps scripts, parameters and runs in Automation's key-value
+// storage, each change applied over the version it read (AU-12).
+type Store struct {
+	backend kv.Backend
+	now     func() time.Time
+	mu      sync.Mutex
+}
+
+// NewStore keeps the records in b; now is the clock (nil: time.Now).
+func NewStore(b kv.Backend, now func() time.Time) *Store {
+	if now == nil {
+		now = time.Now
+	}
+	return &Store{backend: b, now: now}
+}
+
+// load reads a key into v; a key never saved leaves v as it is.
+func (st *Store) load(ctx context.Context, key string, v any) (string, error) {
+	b, version, err := st.backend.LoadKey(ctx, key)
+	if errors.Is(err, kv.ErrNotFound) {
+		return version, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := json.Unmarshal(b, v); err != nil {
+		// Read as empty, the next save would wipe it.
+		return "", fmt.Errorf("%s in automation's ConfigMap is not readable: %w", key, err)
+	}
+	return version, nil
+}
+
+// change reads a key, edits it and saves it over the version read, again
+// on a conflict with another replica's save.
+func change[T any](ctx context.Context, st *Store, key string, limit int, edit func(*T) error) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	var err error
+	for try := 0; try < changeTries; try++ {
+		if try > 0 {
+			select {
+			case <-time.After(rand.N(min(50*time.Millisecond<<try, time.Second))):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		var v T
+		var version string
+		if version, err = st.load(ctx, key, &v); err != nil {
+			return err
+		}
+		if err = edit(&v); err != nil {
+			return err
+		}
+		b, _ := json.Marshal(v)
+		if limit > 0 && len(b) > limit {
+			return fmt.Errorf("%w: %s would be %d KiB, over its %d KiB", ErrFull, key, len(b)>>10, limit>>10)
+		}
+		if _, err = st.backend.SaveKey(ctx, key, b, version); errors.Is(err, kv.ErrConflict) {
+			continue
+		}
+		return err
+	}
+	return err
+}
+
+type scriptsRecord struct {
+	Scripts map[string]Script `json:"scripts"`
+}
+
+// Scripts lists the scripts by name.
+func (st *Store) Scripts(ctx context.Context) ([]Script, error) {
+	var rec scriptsRecord
+	if _, err := st.load(ctx, ScriptsKey, &rec); err != nil {
+		return nil, err
+	}
+	out := make([]Script, 0, len(rec.Scripts))
+	for _, s := range rec.Scripts {
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// Script returns one script.
+func (st *Store) Script(ctx context.Context, name string) (Script, bool, error) {
+	var rec scriptsRecord
+	if _, err := st.load(ctx, ScriptsKey, &rec); err != nil {
+		return Script{}, false, err
+	}
+	s, ok := rec.Scripts[name]
+	return s, ok, nil
+}
+
+// Save creates a script, or saves its text and group (AU-02): a changed
+// text is a new draft version, checked; the same text changes only the
+// group.
+func (st *Store) Save(ctx context.Context, name, group, text string, who Who, create bool) (Script, error) {
+	if !NameRE.MatchString(name) {
+		return Script{}, fmt.Errorf("%w: a script's name is lower-case letters, digits and dashes, at most 63", ErrInvalid)
+	}
+	group = strings.TrimSpace(group)
+	if len(group) > MaxGroup {
+		return Script{}, fmt.Errorf("%w: a group's name is at most %d characters", ErrInvalid, MaxGroup)
+	}
+	text = Normalize(text)
+	if len(text) > MaxText {
+		return Script{}, fmt.Errorf("%w: a script is at most %d KiB; this one is %d KiB", ErrInvalid, MaxText>>10, (len(text)+1023)>>10)
+	}
+	if strings.TrimSpace(text) == "" {
+		return Script{}, fmt.Errorf("%w: the script is empty", ErrInvalid)
+	}
+	var saved Script
+	err := change(ctx, st, ScriptsKey, maxScriptsBytes, func(rec *scriptsRecord) error {
+		if rec.Scripts == nil {
+			rec.Scripts = map[string]Script{}
+		}
+		now := st.now().UTC()
+		s, exists := rec.Scripts[name]
+		switch {
+		case create && exists:
+			return ErrExists
+		case !create && !exists:
+			return ErrNotFound
+		case create && len(rec.Scripts) >= MaxScripts:
+			return fmt.Errorf("%w: at most %d scripts", ErrFull, MaxScripts)
+		}
+		if !exists {
+			s = Script{Name: name, Created: now}
+		}
+		s.Group = group
+		hash := Hash(text)
+		if s.Latest().Hash != hash {
+			h, fs := Check(text)
+			s.Versions = append(s.Versions, Version{N: s.Latest().N + 1, Text: text, Hash: hash, Header: h, Findings: fs, State: StateDraft, Author: who, Created: now})
+			s.Updated = now
+		}
+		rec.Scripts[name] = s
+		prune(rec, maxScriptsBytes)
+		saved = rec.Scripts[name]
+		return nil
+	})
+	return saved, err
+}
+
+// prune drops superseded versions, oldest first, then drafts and reviews
+// older than a script's newest version, until the record fits; the newest
+// version and approved ones stay.
+func prune(rec *scriptsRecord, limit int) {
+	size := func() int {
+		b, _ := json.Marshal(rec)
+		return len(b)
+	}
+	for _, drop := range []func(Script, int) bool{
+		func(s Script, i int) bool { return s.Versions[i].State == StateSuperseded },
+		func(s Script, i int) bool {
+			st := s.Versions[i].State
+			return (st == StateDraft || st == StateReview) && i < len(s.Versions)-1
+		},
+	} {
+		for size() > limit {
+			name, at, oldest := "", -1, time.Time{}
+			for n, s := range rec.Scripts {
+				for i := range s.Versions {
+					if drop(s, i) && (at < 0 || s.Versions[i].Created.Before(oldest)) {
+						name, at, oldest = n, i, s.Versions[i].Created
+					}
+				}
+			}
+			if at < 0 {
+				break
+			}
+			s := rec.Scripts[name]
+			s.Versions = append(s.Versions[:at:at], s.Versions[at+1:]...)
+			rec.Scripts[name] = s
+		}
+	}
+}
+
+// Submit puts a draft version in review (AU-05); a version with errors
+// cannot be.
+func (st *Store) Submit(ctx context.Context, name string, n int, who Who) (Script, error) {
+	return st.edit(ctx, name, n, func(s *Script, v *Version) error {
+		if v.State != StateDraft {
+			return fmt.Errorf("%w: v%d is %s, not a draft", ErrInvalid, v.N, v.State)
+		}
+		if HasErrors(v.Findings) {
+			return fmt.Errorf("%w: v%d has errors to fix first", ErrInvalid, v.N)
+		}
+		v.State = StateReview
+		return nil
+	})
+}
+
+// Approve records a person's approval of a version in review, or a second
+// approval of an approved one (AU-05). The first approval makes it the
+// approved version and supersedes the one before.
+func (st *Store) Approve(ctx context.Context, name string, n int, who Who) (Script, error) {
+	return st.edit(ctx, name, n, func(s *Script, v *Version) error {
+		if v.State != StateReview && v.State != StateApproved {
+			return fmt.Errorf("%w: v%d is %s: submit it for review first", ErrInvalid, v.N, v.State)
+		}
+		for _, a := range v.Approvals {
+			if a.By.Same(who) {
+				return fmt.Errorf("%w: you approved v%d already", ErrInvalid, v.N)
+			}
+		}
+		v.Approvals = append(v.Approvals, Approval{By: who, At: st.now().UTC()})
+		if v.State == StateReview {
+			v.State = StateApproved
+			for i := range s.Versions {
+				if s.Versions[i].N != v.N && s.Versions[i].State == StateApproved {
+					s.Versions[i].State = StateSuperseded
+				}
+			}
+		}
+		return nil
+	})
+}
+
+func (st *Store) edit(ctx context.Context, name string, n int, f func(*Script, *Version) error) (Script, error) {
+	var saved Script
+	err := change(ctx, st, ScriptsKey, maxScriptsBytes, func(rec *scriptsRecord) error {
+		s, ok := rec.Scripts[name]
+		if !ok {
+			return ErrNotFound
+		}
+		at := -1
+		for i := range s.Versions {
+			if s.Versions[i].N == n {
+				at = i
+			}
+		}
+		if at < 0 {
+			return fmt.Errorf("%w: %s has no v%d", ErrNotFound, name, n)
+		}
+		v := s.Versions[at]
+		if err := f(&s, &v); err != nil {
+			return err
+		}
+		s.Versions[at] = v
+		s.Updated = st.now().UTC()
+		rec.Scripts[name] = s
+		saved = s
+		return nil
+	})
+	return saved, err
+}
+
+// Delete removes a script and its versions.
+func (st *Store) Delete(ctx context.Context, name string) error {
+	return change(ctx, st, ScriptsKey, 0, func(rec *scriptsRecord) error {
+		if _, ok := rec.Scripts[name]; !ok {
+			return ErrNotFound
+		}
+		delete(rec.Scripts, name)
+		return nil
+	})
+}

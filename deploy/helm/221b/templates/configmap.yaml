@@ -11,3 +11,17 @@ metadata:
   labels:
     {{- include "b221.labels" . | nindent 4 }}
 {{- end }}
+{{- if and (ne (include "b221.shared" .) "only") (ne (toString (dig "enabled" true (.Values.automation | default dict))) "false") }}
+---
+# Automation's scripts, fleet parameters and runs (Phase 11 part 2,
+# ADR-73), in a ConfigMap of their own so they never press on the
+# settings' 1 MiB. Created empty; the console writes its keys, and helm
+# upgrade keeps them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "b221.fullname" . }}-automation
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+{{- end }}

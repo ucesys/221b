@@ -68,6 +68,14 @@ A script receives its parameters as environment variables, `DRY_RUN=1` on a dry 
 
 The screens are in `docs/design/automation/`: the Scripts page with a Tools menu open (`Scripts.html`), the script drawer (`ScriptDrawer.html`), the Run dialog (`RunDialog.html`), Executions (`Executions.html`), a run's live output (`LiveRun.html`), fleet parameters (`FleetParameters.html`), configurations (`Configurations.html`), and the later screens for scheduling (`Schedule.html`), a version's approval (`VersionApproval.html`) and a parameter change (`ParameterChange.html`). The first step builds the first five in the console's own components; the run's output is in the Executions drawer rather than a page of its own.
 
+## As built (Auto-1)
+
+- **Server.** `server/internal/automation`: the header parser and checks (`header.go`, `checks.go`), scripts and versions (`store.go`), fleet parameters (`params.go`), runs and the engine (`runs.go`, `engine.go`). `nodessh.Service.Exec` runs one command with no terminal on a paired node, behind a certificate signed for that run (key ID `<user> via 221B automation run <id>`); `NobodyCommand` wraps privilege `none` and every dry run. The API is `server/internal/api/automation.go`; every route is a SuperAdmin's and is recorded in the audit log (`automation.script`, `automation.approve`, `automation.params`, `automation.run`).
+- **Web.** The Automation tab, after Fleets and shown only to a SuperAdmin, has three sections: *Scripts* (by group, with Dry run… and Run…), *Executions* (every run, with a drawer of per-node results and output, polling while the run goes on, and Cancel), and *Fleet parameters* (values, a node's own values, and the privilege ceiling). The script drawer edits, checks as you type, saves new draft versions, submits, approves and deletes; its Versions tab lists each version's approvals and SHA-256.
+- **Settings.** `-automation` / `AUTOMATION` (default true) and `-automation-configmap` / `AUTOMATION_CONFIGMAP`; the chart's `automation.enabled` adds the ConfigMap `<release>-automation` and lets the settings Role reach it. Without the ConfigMap, scripts and runs live in memory.
+- **Fleets.** A run picks one of the cluster's fleets, or *All nodes* (id `_all`) for every node; only nodes paired for SSH can run, and the dialog shows why the others cannot.
+- **Not yet.** Mixed runs, Sherlock's authoring and impact analysis, run identities, secrets, Fleet roles, hooks and schedules stay with Auto-2 to Auto-4.
+
 ## Open questions
 
 The design doc lists eleven; these touch this step:

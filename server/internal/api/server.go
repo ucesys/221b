@@ -30,6 +30,7 @@ import (
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
@@ -217,6 +218,10 @@ type Options struct {
 	// Sessions runs the toolbox's sessions (Phase 9); nil, or no Watson,
 	// leaves the toolbox out.
 	Sessions *sessions.Manager
+	// Automation runs scripts on nodes, and AutomationStore keeps them
+	// (Phase 11 part 2, ADR-73); nil leaves Automation out.
+	Automation      *automation.Engine
+	AutomationStore *automation.Store
 }
 
 // Impersonation says how a person's name and groups are given to the API
@@ -411,6 +416,9 @@ func New(o Options) *Server {
 	if o.Watson != nil {
 		o.Watson.SetReread(s.rereadWho)
 		o.Watson.SetAppAccess(s.watsonAppAccess)
+	}
+	if o.Automation != nil && o.AutomationStore != nil {
+		s.automationRoutes()
 	}
 	s.rolesRoutes()
 	s.auditRoutes()

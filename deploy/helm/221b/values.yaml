@@ -334,6 +334,15 @@ secrets:
   # type new values without seeing the old ones.
   reveal: false
 
+automation:
+  # Automation (Phase 11 part 2, docs/automation.md): the Automation tab,
+  # where SuperAdmins keep scripts, approve their versions once and run
+  # them on a fleet's nodes over SSH. It runs nothing unless
+  # toolbox.ssh.enabled is on too, since it reaches nodes only through
+  # their SSH pairings. Its records live in the ConfigMap
+  # <release>-automation.
+  enabled: true
+
 toolbox:
   # The Toolbox (Phase 9, docs/toolbox.md): the Tools menu beside each pod
   # and node opens a shell, runs one command, forwards a port, adds a

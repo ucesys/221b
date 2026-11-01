@@ -123,6 +123,19 @@ spec:
               value: {{ .Values.refresh | quote }}
             - name: SETTINGS_CONFIGMAP
               value: {{ printf "%s/%s" .Release.Namespace (include "b221.fullname" .) | quote }}
+            # Automation (Phase 11 part 2): on with automation.enabled, and
+            # runs only where toolbox.ssh.enabled is on too. A values file
+            # from before the setting has no automation block: on.
+            {{- $automation := .Values.automation | default dict }}
+            {{- if ne (toString (dig "enabled" true $automation)) "false" }}
+            - name: AUTOMATION
+              value: "true"
+            - name: AUTOMATION_CONFIGMAP
+              value: {{ printf "%s/%s-automation" .Release.Namespace (include "b221.fullname" .) | quote }}
+            {{- else }}
+            - name: AUTOMATION
+              value: "false"
+            {{- end }}
             {{- if eq .Values.connections.store "secrets" }}
             # The connections to other clusters, one Secret each, named
             # after the release: <release>-cluster-<id>.

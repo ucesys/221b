@@ -51,6 +51,13 @@ const (
 	ActionNameRefused    = "name.refused"
 	ActionLDAPSync       = "ldap.sync"
 	ActionRolesDrift     = "roles.drift"
+	// Automation (Phase 11 part 2, AU-13): a script saved or deleted, a
+	// version submitted or approved, a fleet's parameters, a run started,
+	// ended or cancelled.
+	ActionAutomationScript  = "automation.script"
+	ActionAutomationApprove = "automation.approve"
+	ActionAutomationParams  = "automation.params"
+	ActionAutomationRun     = "automation.run"
 )
 
 // Outcomes of an action.

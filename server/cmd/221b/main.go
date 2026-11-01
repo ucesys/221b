@@ -33,6 +33,7 @@ import (
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/kube"
@@ -528,6 +529,48 @@ func run(args []string) error {
 			return "", fmt.Errorf("node %s has no address", node)
 		},
 	})
+	// Automation (Phase 11 part 2, ADR-73): scripts run over the SSH
+	// above, with their records in a ConfigMap of their own, beside the
+	// settings'. Runs live on the leader, like Watson's commands.
+	var autoEngine *automation.Engine
+	var autoStore *automation.Store
+	if cfg.Automation {
+		var autoBackend kv.Backend = &kv.Memory{}
+		if cfg.AutomationConfigMap != "" {
+			cm, err := kube.NewConfigMapStorage(restCfg, cfg.AutomationConfigMap)
+			if err != nil {
+				return fmt.Errorf("automation's ConfigMap: %w", err)
+			}
+			autoBackend = cm
+		} else {
+			log.Warn("Automation's scripts and runs are kept in memory and lost on restart (set -automation-configmap to keep them)")
+		}
+		outDir := ""
+		if toolboxCfg.Transcripts == toolbox.TranscriptsPVC {
+			outDir = toolboxCfg.TranscriptDir
+		}
+		autoStore = automation.NewStore(autoBackend, nil)
+		autoEngine = automation.NewEngine(automation.Options{
+			Store:       autoStore,
+			Exec:        sshSvc,
+			Unreachable: func(err error) bool { return errors.Is(err, nodessh.ErrUnreachable) },
+			Logger:      log.With("component", "automation"),
+			OutputDir:   outDir,
+			OnEnd: func(r automation.Run) {
+				c := r.Counts()
+				outcome := audit.OutcomeFailed
+				switch r.State {
+				case automation.RunSucceeded:
+					outcome = audit.OutcomeOK
+				case automation.RunCancelled:
+					outcome = audit.OutcomeStopped
+				}
+				auditLog.Record(audit.Event{Action: audit.ActionAutomationRun, Who: audit.Who{Subject: r.By.User, Name: r.By.Name}, Cluster: r.Cluster, Target: r.Script, Outcome: outcome,
+					Detail: fmt.Sprintf("run %d %s: v%d on fleet %s, %d nodes: %d changed, %d no change, %d failed, %d unreachable, %d skipped, %d cancelled. %s", r.ID, r.State, r.Version, r.FleetName, len(r.Nodes),
+						c[automation.NodeChanged], c[automation.NodeNoChange], c[automation.NodeFailed], c[automation.NodeUnreachable], c[automation.NodeSkipped], c[automation.NodeCancelled], r.Note)})
+			},
+		})
+	}
 	sessionsMgr := sessions.New(sessions.Options{
 		Config:  toolboxCfg,
 		SSH:     sshSvc,
@@ -571,6 +614,8 @@ func run(args []string) error {
 		Apps:                    appStore,
 		SecretsReveal:           cfg.SecretsRead && cfg.SecretsReveal,
 		Sessions:                sessionsMgr,
+		Automation:              autoEngine,
+		AutomationStore:         autoStore,
 		Sherlock:                sherlockSvc,
 		SherlockKeys:            keys,
 		SherlockDefaultURL:      cfg.SherlockAPIURL,

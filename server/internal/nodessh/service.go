@@ -129,30 +129,6 @@ func (s *Service) Done(ctx context.Context, cluster string, r sessions.Request, 
 // Dial connects to a paired node as the owner: a certificate signed for
 // the session, the node's pinned host key, the pairing's login user.
 func (s *Service) Dial(ctx context.Context, cluster, node string, owner sessions.Who, session string) (sessions.Term, string, error) {
-	p, ok, err := s.opts.Pairings.Get(ctx, cluster, node)
-	if err != nil {
-		return nil, "", fmt.Errorf("reading the pairings: %w", err)
-	}
-	if !ok {
-		return nil, "", fmt.Errorf("node %s is not paired for SSH: pair it first, from its Tools menu", node)
-	}
-	if err := s.opts.CA.Load(ctx); err != nil {
-		return nil, "", err
-	}
-	if fp := s.opts.CA.Fingerprint(); p.CAFinger != "" && p.CAFinger != fp {
-		return nil, "", fmt.Errorf("node %s was paired with another authority (%s, now %s): pair it again", node, p.CAFinger, fp)
-	}
-	if p.Principal == "" {
-		return nil, "", fmt.Errorf("the pairing of node %s names no principal: pair it again", node)
-	}
-	pinned, algos, err := pinnedKeys(p)
-	if err != nil {
-		return nil, "", fmt.Errorf("the pinned host keys of node %s are not readable: pair it again", node)
-	}
-	addr, err := s.opts.NodeAddr(cluster, node)
-	if err != nil {
-		return nil, "", err
-	}
 	who := owner.User
 	if who == "" {
 		who = owner.Name
@@ -160,15 +136,52 @@ func (s *Service) Dial(ctx context.Context, cluster, node string, owner sessions
 	if who == "" {
 		who = "console"
 	}
-	signer, err := s.opts.CA.Sign(who+" via 221B session "+session, []string{p.Principal}, s.opts.CertTTL, time.Now())
+	c, p, hostPort, err := s.connect(ctx, cluster, node, who+" via 221B session "+session)
 	if err != nil {
 		return nil, "", err
+	}
+	s.opts.Logger.Info("SSH session", "node", node, "addr", hostPort, "user", p.LoginUser, "who", who, "session", session)
+	note := fmt.Sprintf("SSH to node %s (%s) as %s: host key verified; certificate for %s, valid %s.", node, hostPort, p.LoginUser, who, s.opts.CertTTL)
+	return &term{client: c}, note, nil
+}
+
+// connect opens an SSH connection to a paired node with a certificate
+// whose key ID is keyID: the pairing's login user and port, the pinned
+// host keys.
+func (s *Service) connect(ctx context.Context, cluster, node, keyID string) (*ssh.Client, Pairing, string, error) {
+	p, ok, err := s.opts.Pairings.Get(ctx, cluster, node)
+	if err != nil {
+		return nil, p, "", fmt.Errorf("reading the pairings: %w", err)
+	}
+	if !ok {
+		return nil, p, "", fmt.Errorf("node %s is not paired for SSH: pair it first, from its Tools menu", node)
+	}
+	if err := s.opts.CA.Load(ctx); err != nil {
+		return nil, p, "", err
+	}
+	if fp := s.opts.CA.Fingerprint(); p.CAFinger != "" && p.CAFinger != fp {
+		return nil, p, "", fmt.Errorf("node %s was paired with another authority (%s, now %s): pair it again", node, p.CAFinger, fp)
+	}
+	if p.Principal == "" {
+		return nil, p, "", fmt.Errorf("the pairing of node %s names no principal: pair it again", node)
+	}
+	pinned, algos, err := pinnedKeys(p)
+	if err != nil {
+		return nil, p, "", fmt.Errorf("the pinned host keys of node %s are not readable: pair it again", node)
+	}
+	addr, err := s.opts.NodeAddr(cluster, node)
+	if err != nil {
+		return nil, p, "", err
+	}
+	signer, err := s.opts.CA.Sign(keyID, []string{p.Principal}, s.opts.CertTTL, time.Now())
+	if err != nil {
+		return nil, p, "", err
 	}
 	hostPort := net.JoinHostPort(addr, strconv.Itoa(p.Port))
 	dialer := net.Dialer{Timeout: dialTimeout}
 	conn, err := dialer.DialContext(ctx, "tcp", hostPort)
 	if err != nil {
-		return nil, "", fmt.Errorf("connecting to %s: %w", hostPort, err)
+		return nil, p, hostPort, fmt.Errorf("connecting to %s: %w", hostPort, err)
 	}
 	var mismatch error
 	var verified ssh.PublicKey
@@ -201,21 +214,82 @@ func (s *Service) Dial(ctx context.Context, cluster, node string, owner sessions
 		stop()
 		conn.Close()
 		if mismatch != nil {
-			return nil, "", mismatch
+			return nil, p, hostPort, mismatch
 		}
 		if ctx.Err() != nil {
-			return nil, "", ctx.Err()
+			return nil, p, hostPort, ctx.Err()
 		}
-		return nil, "", fmt.Errorf("SSH to %s as %s: %w", hostPort, p.LoginUser, err)
+		return nil, p, hostPort, fmt.Errorf("SSH to %s as %s: %w", hostPort, p.LoginUser, err)
 	}
 	if !stop() {
 		c.Close()
-		return nil, "", ctx.Err()
+		return nil, p, hostPort, ctx.Err()
 	}
 	_ = conn.SetDeadline(time.Time{})
-	s.opts.Logger.Info("SSH session", "node", node, "addr", hostPort, "user", p.LoginUser, "hostKey", verified.Type()+" "+ssh.FingerprintSHA256(verified), "who", who, "session", session)
-	note := fmt.Sprintf("SSH to node %s (%s) as %s: host key verified; certificate for %s, valid %s.", node, hostPort, p.LoginUser, who, s.opts.CertTTL)
-	return &term{client: ssh.NewClient(c, chans, reqs)}, note, nil
+	s.opts.Logger.Info("SSH connected", "node", node, "addr", hostPort, "user", p.LoginUser, "hostKey", verified.Type()+" "+ssh.FingerprintSHA256(verified), "keyID", keyID)
+	return ssh.NewClient(c, chans, reqs), p, hostPort, nil
+}
+
+// ErrUnreachable wraps a failure to connect to a node, as opposed to a
+// command that ran and failed (Automation counts the two apart, AU-08).
+var ErrUnreachable = errors.New("unreachable")
+
+// Exec runs one command on a paired node with no terminal (Automation,
+// AU-08): stdin goes to the command, its standard output and error go to
+// out, and the exit status comes back. asNobody drops to the nobody user
+// first, with runuser when the login user is root and sudo otherwise, so
+// the command cannot change the node whatever it does. A failure to
+// connect wraps ErrUnreachable; a connection lost while the command runs
+// is an error with exit -1.
+func (s *Service) Exec(ctx context.Context, cluster, node, keyID, command string, asNobody bool, stdin io.Reader, out io.Writer) (int, error) {
+	c, p, _, err := s.connect(ctx, cluster, node, keyID)
+	if err != nil {
+		return -1, fmt.Errorf("%w: %w", ErrUnreachable, err)
+	}
+	defer c.Close()
+	sess, err := c.NewSession()
+	if err != nil {
+		return -1, fmt.Errorf("%w: %w", ErrUnreachable, err)
+	}
+	defer sess.Close()
+	if asNobody {
+		command = NobodyCommand(p.LoginUser, command)
+	}
+	sess.Stdin, sess.Stdout, sess.Stderr = stdin, out, out
+	if err := sess.Start(command); err != nil {
+		return -1, err
+	}
+	done := make(chan error, 1)
+	go func() { done <- sess.Wait() }()
+	select {
+	case <-ctx.Done():
+		_ = sess.Signal(ssh.SIGTERM)
+		c.Close()
+		<-done
+		return -1, ctx.Err()
+	case err := <-done:
+		var exit *ssh.ExitError
+		var missing *ssh.ExitMissingError
+		switch {
+		case err == nil:
+			return 0, nil
+		case errors.As(err, &exit):
+			return exit.ExitStatus(), nil
+		case errors.As(err, &missing):
+			return -1, errors.New("the connection to the node was lost")
+		}
+		return -1, err
+	}
+}
+
+// NobodyCommand wraps a command so it runs as the nobody user, from /:
+// runuser when the login user is root, else sudo, which must allow it.
+func NobodyCommand(loginUser, command string) string {
+	drop := "sudo -n -u nobody --"
+	if loginUser == "root" {
+		drop = "runuser -u nobody --"
+	}
+	return "cd / && exec " + drop + " sh -c " + shellQuote(command)
 }
 
 // pinnedKeys parses a pairing's host keys and lists the algorithms the

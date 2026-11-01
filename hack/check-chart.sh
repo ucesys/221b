@@ -131,9 +131,19 @@ ssh_egress() {
 }
 # The Secret with the local accounts, the OIDC client secret and such; the
 # replicas' proxy token is a Secret of its own, always there.
+automation_configmap() {
+  # On by default: a ConfigMap of its own, named in the env and in the
+  # settings Role; off, neither.
+  local off
+  sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | grep -q '^  name: k8s-console-221b-automation$' &&
+    grep -A1 'name: AUTOMATION_CONFIGMAP' "$out" | grep -q '"consoles/k8s-console-221b-automation"' &&
+    grep -q '"k8s-console-221b-automation"' "$out" || return 1
+  off=$(render k8s-console --set clusterName=ci --set automation.enabled=false)
+  ! grep -q 'k8s-console-221b-automation' <<<"$off" && grep -A1 'name: AUTOMATION$' <<<"$off" | grep -q '"false"'
+}
 auth_secret() { sed -n '/^kind: Secret$/,/^---/p' "$1" | grep -q '^  name: k8s-console-221b-auth$'; }
 kinds() {
-  [ "$(grep -E '^kind: ' "$out" | sort | uniq -c | awk '{ printf "%s=%s ", $3, $1 }')" = "ClusterRole=6 ClusterRoleBinding=4 ConfigMap=3 Deployment=1 Lease=1 Namespace=1 NetworkPolicy=2 Role=1 RoleBinding=1 Secret=2 Service=1 ServiceAccount=1 " ]
+  [ "$(grep -E '^kind: ' "$out" | sort | uniq -c | awk '{ printf "%s=%s ", $3, $1 }')" = "ClusterRole=6 ClusterRoleBinding=4 ConfigMap=4 Deployment=1 Lease=1 Namespace=1 NetworkPolicy=2 Role=1 RoleBinding=1 Secret=2 Service=1 ServiceAccount=1 " ]
 }
 # Sign-in: local accounts by default, with the (empty) account list in a
 # Secret mounted as a file; OIDC with its client secret from a Secret;
@@ -249,7 +259,7 @@ sherlock_key() {
     ! grep -q 'name: SHERLOCK_SECRET' "$WORK/chart-sherlock.yaml"
 }
 settings_only() {
-  settings_role | grep -q 'resources: \["configmaps"\]' && settings_role | grep -q 'resourceNames: \["k8s-console-221b"\]' &&
+  settings_role | grep -q 'resources: \["configmaps"\]' && settings_role | grep -q 'resourceNames: \["k8s-console-221b", "k8s-console-221b-automation"\]' &&
     [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","list","watch","patch","update"] verbs:["create"] verbs:["get","update"] verbs:["get","list","watch","create","update","delete"] ' ] &&
     [ "$(grep -E 'verbs:' "$out" | grep -c -E 'update|delete|\*')" = 3 ]
 }
@@ -494,4 +504,5 @@ check "SSH to nodes is in the toolbox config, off by default with port 22 and ro
 check "a read-only SuperAdmin definition, or values kept from an older release, leave SSH off and its egress out" ssh_gated
 check "the network policy lets the console reach sshd on the nodes only with SSH on, narrowed to networkPolicy.nodeCIDRs" ssh_egress
 check "Admin forwards ports and starts debug pods, and opens shells only when asked" admin_exec
+check "Automation keeps its records in a ConfigMap of its own, named in the env and the Role; off, neither" automation_configmap
 exit "$fail"
