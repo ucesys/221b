@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scripts · drawer</title>
+<link rel="stylesheet" href="./rk.css">
+<link rel="stylesheet" href="./au.css">
+</head>
+<body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+@import url("./rk.css");
+@import url("./au.css");
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+<div class="rk mk-app" data-h="1000" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" aria-label="Cluster: lakehouse-dev"><span class="rk-dot"></span>lakehouse-dev <span class="rk-dim">v1.37.1</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="warn">4</span></a>
+    <a class="rk-tab" href="#top">Nodes</a>
+    <a class="rk-tab" href="FleetParameters.html">Fleets</a>
+    <a class="rk-tab" href="Scripts.html" aria-current="page">Automation</a>
+    <a class="rk-tab" href="#top">Namespaces</a>
+    <a class="rk-tab" href="#top">Pods</a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services</a>
+    <a class="rk-tab" href="#top">Networks</a>
+    <a class="rk-tab" href="#top">Storage</a>
+    <a class="rk-tab" href="#top">Access</a>
+  </nav>
+  <div class="mk-top-right">
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">K8S-SuperAdmin</span><span class="rk-tag" data-tone="accent">Fleet-Admin</span>
+  </div>
+</header>
+
+<div class="au-body">
+  <aside class="au-groups" aria-label="Script groups">
+    <span class="rk-h">Groups</span>
+    <button class="au-grp" aria-current="true">All scripts<span class="rk-num">14</span></button>
+    <button class="au-grp">GPU<span class="rk-num">3</span></button>
+    <button class="au-grp">Web<span class="rk-num">2</span></button>
+    <button class="au-grp">OS and patching<span class="rk-num">4</span></button>
+    <button class="au-grp">Diagnostics<span class="rk-num">3</span></button>
+    <button class="au-grp">Hadoop<span class="rk-num">2</span></button>
+  </aside>
+  <main class="au-page">
+    <div class="au-head"><h1>Automation</h1><nav class="mk-nav" aria-label="Automation sections"><a class="rk-tab" href="Scripts.html" aria-current="page">Scripts</a><a class="rk-tab" href="Executions.html">Executions</a><a class="rk-tab" href="Configurations.html">Configurations</a></nav></div>
+    <table class="mk-table au-t" aria-label="Scripts (behind the drawer)">
+      <thead><tr><th style="width:34px"></th><th style="width:300px">Script</th><th>Group</th><th>Version</th><th>Approval</th></tr></thead>
+      <tbody>
+        <tr data-sel="true"><td></td><td class="au-name">install-nvidia-driver</td><td>GPU</td><td class="au-ver">v4</td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Approved</span></td></tr>
+        <tr><td></td><td class="au-name">rotate-nginx-certs</td><td>Web</td><td class="au-ver">v2</td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Approved</span></td></tr>
+        <tr><td></td><td class="au-name">kernel-patch</td><td>OS and patching</td><td class="au-ver">v5</td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Approved</span></td></tr>
+      </tbody>
+    </table>
+  </main>
+</div>
+
+<div class="mk-backdrop"></div>
+<section class="mk-drawer" aria-label="Script install-nvidia-driver">
+  <div class="mk-dhead">
+    <div class="mk-kicker"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.5 1.5 8 5 12.5M11 3.5 14.5 8 11 12.5"/></svg>Script · GPU<span class="mk-grow"></span></div>
+    <div class="mk-dtitle">install-nvidia-driver
+      <span class="rk-pill" data-tone="ok" style="font-family:var(--font)"><span class="rk-dot"></span>Approved v4</span>
+      <span class="au-priv" data-p="full" style="font-family:var(--font);font-weight:500"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Full sudo</span>
+      <span class="mk-grow"></span>
+      <button class="rk-icon-btn" aria-label="Close"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button>
+    </div>
+    <div class="mk-facts">
+      <span>Approved by <b>mikhail@stolpner.com</b> and <b>ops-admin-2</b> · Oct 28</span>
+      <span>sha256 <span class="rk-mono">3f9a07…c21e</span></span>
+      <span>Supports dry run</span>
+      <span>Last run <a href="LiveRun.html">#1043 running on gpu-workers · 12/20</a></span>
+    </div>
+    <nav class="mk-dtabs" aria-label="Script sections">
+      <a class="rk-tab" href="#top" aria-current="page">Script</a>
+      <a class="rk-tab" href="#top">Parameters <span class="rk-cnt">4</span></a>
+      <a class="rk-tab" href="#top">Versions <span class="rk-cnt">4</span></a>
+      <a class="rk-tab" href="Executions.html">Executions <span class="rk-cnt">12</span></a>
+    </nav>
+  </div>
+
+  <div class="mk-dbody">
+    <div class="au-dgrid">
+      <div class="au-col">
+        <pre class="au-code" aria-label="Script source, version 4"><div class="au-ln"><i>1</i><span>#!/usr/bin/env bash</span></div><div class="au-ln" data-k="h"><i>2</i><span># 221b:describe   Install the NVIDIA driver version set for the node;</span></div><div class="au-ln" data-k="h"><i>3</i><span>#                 ask 221B to reboot it if the kernel module changed.</span></div><div class="au-ln" data-k="h"><i>4</i><span># 221b:param      NVIDIA_DRIVER   required   driver branch, e.g. 550</span></div><div class="au-ln" data-k="h"><i>5</i><span># 221b:param      DRIVER_SHA256   required   checksum of the package</span></div><div class="au-ln" data-k="h"><i>6</i><span># 221b:param      REPO_URL        required   artifact repository base URL</span></div><div class="au-ln" data-k="h"><i>7</i><span># 221b:param      REPO_TOKEN      secret     repository read token</span></div><div class="au-ln" data-k="h"><i>8</i><span># 221b:privilege  full            dnf, reboot</span></div><div class="au-ln" data-k="h"><i>9</i><span># 221b:dry-run    yes</span></div><div class="au-ln" data-k="h"><i>10</i><span># 221b:facts      gpu.count gpu.model os.family</span></div><div class="au-ln"><i>11</i><span><span class="au-k">set</span> -euo pipefail</span></div><div class="au-ln"><i>12</i><span> </span></div><div class="au-ln"><i>13</i><span>[ <span class="au-s">"${FACT_GPU_COUNT:-0}"</span> -gt 0 ] || { echo <span class="au-s">'{"changed":false,"msg":"no GPU"}'</span>; exit 0; }</span></div><div class="au-ln"><i>14</i><span>current=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -1 || true)</span></div><div class="au-ln" data-k="flag"><i>15</i><span><span class="au-k">if</span> [[ <span class="au-s">"$current"</span> == <span class="au-s">"$NVIDIA_DRIVER"</span>.* ]]; <span class="au-k">then</span></span></div><div class="au-ln"><i>16</i><span>  echo <span class="au-s">'{"changed":false,"msg":"driver already installed"}'</span>; exit 0</span></div><div class="au-ln"><i>17</i><span><span class="au-k">fi</span></span></div><div class="au-ln"><i>18</i><span> </span></div><div class="au-ln"><i>19</i><span>pkg=<span class="au-s">"nvidia-driver-${NVIDIA_DRIVER}.el9.rpm"</span></span></div><div class="au-ln"><i>20</i><span><span class="au-k">if</span> [ <span class="au-s">"${DRY_RUN:-0}"</span> = 1 ]; <span class="au-k">then</span></span></div><div class="au-ln"><i>21</i><span>  echo <span class="au-s">"{\"changed\":true,\"msg\":\"would install $pkg (now ${current:-none})\"}"</span>; exit 0</span></div><div class="au-ln"><i>22</i><span><span class="au-k">fi</span></span></div><div class="au-ln"><i>23</i><span> </span></div><div class="au-ln"><i>24</i><span>curl -fsSL -H <span class="au-s">"Authorization: Bearer $REPO_TOKEN"</span> <span class="au-s">"$REPO_URL/gpu/$pkg"</span> -o <span class="au-s">"/tmp/$pkg"</span></span></div><div class="au-ln"><i>25</i><span>echo <span class="au-s">"$DRIVER_SHA256  /tmp/$pkg"</span> | sha256sum -c -</span></div><div class="au-ln"><i>26</i><span>sudo dnf install -y <span class="au-s">"/tmp/$pkg"</span></span></div><div class="au-ln"><i>27</i><span>rm -f <span class="au-s">"/tmp/$pkg"</span></span></div><div class="au-ln"><i>28</i><span> </span></div><div class="au-ln" data-k="c"><i>29</i><span># "reboot": true asks 221B to reboot the node and wait for it to return</span></div><div class="au-ln"><i>30</i><span>echo <span class="au-s">"{\"changed\":true,\"reboot\":true,\"msg\":\"installed $NVIDIA_DRIVER\"}"</span></span></div></pre>
+      </div>
+
+      <div class="au-col">
+        <div class="au-sec">
+          <h3>Sherlock review <span class="rk-tag" data-tone="ok">v4 · Oct 28</span></h3>
+          <div class="au-check">
+            <div class="au-ci" data-k="ok"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg><span><b>Honors dry run.</b> Exits at line 21 before any change.</span></div>
+            <div class="au-ci" data-k="ok"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg><span><b>Safe to run twice.</b> Skips nodes that already have the driver.</span></div>
+            <div class="au-ci" data-k="ok"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg><span><b>Download verified.</b> SHA-256 checked before install.</span></div>
+            <div class="au-ci" data-k="ok"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg><span><b>Privilege matches.</b> Every <span class="rk-mono">sudo</span> call is covered by the declared level.</span></div>
+            <div class="au-ci" data-k="ok"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg><span><b>Secret handled.</b> <span class="rk-mono">REPO_TOKEN</span> is never printed.</span></div>
+            <div class="au-ci" data-k="warn"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.2 14.3 13H1.7L8 2.2ZM8 6.5v3M8 11.6h.01"/></svg><span><b>Line 15 reads the first GPU only.</b> Fine for gpu-workers, where facts show one GPU model per node. Would misjudge a node with mixed GPUs.</span></div>
+          </div>
+          <span class="mk-hint">Static checks: shellcheck 0 issues · denylist 0 hits · header complete.</span>
+        </div>
+
+        <div class="au-sec">
+          <h3>Declared parameters</h3>
+          <table class="au-ptab" aria-label="Declared parameters and their values on gpu-workers">
+            <thead><tr><th>Name</th><th>gpu-workers</th><th>Node overrides</th></tr></thead>
+            <tbody>
+              <tr><td class="rk-mono">NVIDIA_DRIVER</td><td class="rk-mono">550</td><td><span class="au-src" data-s="node">gpu-07: 535</span></td></tr>
+              <tr><td class="rk-mono">DRIVER_SHA256</td><td class="rk-mono">9c1e…77a4</td><td><span class="au-src" data-s="node">gpu-07: 0b3d…19fe</span></td></tr>
+              <tr><td class="rk-mono">REPO_URL</td><td class="rk-mono" style="overflow-wrap:anywhere">artifactory.uce.internal/rpm</td><td class="rk-dim">none</td></tr>
+              <tr><td class="rk-mono">REPO_TOKEN</td><td><span class="au-src" data-s="secret">Secret artifactory-reader</span></td><td class="rk-dim">none</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="au-sec">
+          <h3>Change with Sherlock</h3>
+          <div class="au-ask">
+            <label class="rk-field"><input type="text" placeholder="e.g. handle nodes with more than one GPU model" aria-label="Ask Sherlock to change this script"></label>
+            <button class="rk-send">Draft v5</button>
+          </div>
+          <span class="mk-hint">Sherlock writes v5 as a draft. v4 stays approved and is what runs until v5 is approved.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mk-dfoot">
+    <span class="mk-hint">Runs go through Watson as you. gpu-workers is not production, so no second admin is needed.</span>
+    <button class="rk-btn">Edit by hand</button>
+    <a class="rk-btn" href="RunDialog.html">Test (dry run)…</a>
+    <a class="rk-btn" data-primary="true" href="RunDialog.html">Run…</a>
+  </div>
+</section>
+
+</div>
+</body>
+</html>

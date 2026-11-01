@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Automation · Scripts</title>
+<link rel="stylesheet" href="./rk.css">
+<link rel="stylesheet" href="./au.css">
+</head>
+<body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+@import url("./rk.css");
+@import url("./au.css");
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+<div class="rk mk-app" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" aria-label="Cluster: lakehouse-dev"><span class="rk-dot"></span>lakehouse-dev <span class="rk-dim">v1.37.1</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="warn">4</span></a>
+    <a class="rk-tab" href="#top">Nodes</a>
+    <a class="rk-tab" href="FleetParameters.html">Fleets</a>
+    <a class="rk-tab" href="Scripts.html" aria-current="page">Automation</a>
+    <a class="rk-tab" href="#top">Namespaces</a>
+    <a class="rk-tab" href="#top">Pods</a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services</a>
+    <a class="rk-tab" href="#top">Networks</a>
+    <a class="rk-tab" href="#top">Storage</a>
+    <a class="rk-tab" href="#top">Access</a>
+  </nav>
+  <div class="mk-top-right">
+    <a class="rk-tab" href="#top"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Administration</a>
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">K8S-SuperAdmin</span><span class="rk-tag" data-tone="accent">Fleet-Admin</span>
+  </div>
+</header>
+
+<div class="au-body">
+  <aside class="au-groups" aria-label="Script groups">
+    <span class="rk-h">Groups</span>
+    <button class="au-grp" aria-current="true"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11Z"/></svg>All scripts<span class="rk-num">14</span></button>
+    <button class="au-grp"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11Z"/></svg>GPU<span class="rk-num">3</span></button>
+    <button class="au-grp"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11Z"/></svg>Web<span class="rk-num">2</span></button>
+    <button class="au-grp"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11Z"/></svg>OS and patching<span class="rk-num">4</span></button>
+    <button class="au-grp"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11Z"/></svg>Diagnostics<span class="rk-num">3</span></button>
+    <button class="au-grp"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11Z"/></svg>Hadoop<span class="rk-num">2</span></button>
+    <button class="au-grp" style="color:var(--accent)"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9"/></svg>New group</button>
+    <div class="au-gsep"></div>
+    <span class="rk-h">Status</span>
+    <button class="au-grp">In review<span class="rk-num"><span class="rk-cnt" data-tone="warn">1</span></span></button>
+    <button class="au-grp">Suspended<span class="rk-num"><span class="rk-cnt" data-tone="warn">1</span></span></button>
+    <button class="au-grp">Changed since approval<span class="rk-num"><span class="rk-cnt" data-tone="warn">1</span></span></button>
+    <button class="au-grp">Last run failed<span class="rk-num"><span class="rk-cnt" data-tone="err">1</span></span></button>
+    <button class="au-grp">Drafts<span class="rk-num">1</span></button>
+  </aside>
+
+  <main class="au-page" style="position:relative">
+    <div class="au-head">
+      <h1>Automation</h1>
+      <nav class="mk-nav" aria-label="Automation sections">
+        <a class="rk-tab" href="Scripts.html" aria-current="page">Scripts</a>
+        <a class="rk-tab" href="Executions.html">Executions <span class="rk-cnt">1 running</span></a>
+        <a class="rk-tab" href="Configurations.html">Configurations</a>
+      </nav>
+    </div>
+
+    <div class="au-tb">
+      <label class="rk-field"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m13 13-2.8-2.8"/></svg><input type="text" placeholder="Search scripts and comments" aria-label="Search scripts and comments"></label>
+      <div class="rk-seg" role="group" aria-label="Privilege"><button aria-pressed="true">Any privilege</button><button aria-pressed="false">No sudo</button><button aria-pressed="false">Limited sudo</button><button aria-pressed="false">Full sudo</button></div>
+      <span class="mk-grow"></span>
+      <button class="rk-btn">Columns</button>
+      <button class="rk-btn" data-primary="true"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v2.5M8 11.5V14M2 8h2.5M11.5 8H14M4 4l1.6 1.6M10.4 10.4 12 12M4 12l1.6-1.6M10.4 5.6 12 4"/></svg>New script with Sherlock</button>
+    </div>
+
+    <table class="mk-table au-t" aria-label="Scripts">
+      <thead><tr>
+        <th style="width:34px"><span class="rk-dim" style="position:absolute;left:-9999px">Tools</span></th>
+        <th style="width:300px">Script</th>
+        <th style="width:112px">Group</th>
+        <th style="width:66px">Version</th>
+        <th style="width:168px">Approval</th>
+        <th style="width:118px">Privilege</th>
+        <th style="width:176px">Last run</th>
+        <th class="rk-r" style="width:78px">Created</th>
+        <th class="rk-r" style="width:78px">Updated</th>
+      </tr></thead>
+      <tbody>
+        <tr data-sel="true">
+          <td><button class="au-tools" aria-label="Tools for install-nvidia-driver" aria-expanded="true"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.2 2.4a3.3 3.3 0 0 0-3.6 4.4L2.5 10.9a1.4 1.4 0 0 0 2 2l4.1-4.1a3.3 3.3 0 0 0 4.4-3.6l-2 2-1.9-.4-.4-1.9 2-2Z"/></svg></button></td>
+          <td class="au-two"><a class="au-name" href="ScriptDrawer.html">install-nvidia-driver</a><span class="au-cmt">Install the NVIDIA driver version set for the node, reboot if the module changed</span></td>
+          <td>GPU</td>
+          <td><span class="au-ver">v4</span></td>
+          <td><a class="rk-pill" data-tone="warn" href="ParameterChange.html" style="text-decoration:none"><span class="rk-dot"></span>Suspended</a> <span class="rk-dim rk-small">value change</span></td>
+          <td><span class="au-priv" data-p="full"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Full sudo</span></td>
+          <td><span class="rk-pill" data-tone="info"><span class="rk-dot"></span>Running</span> <span class="rk-dim rk-small">12/20 hosts</span></td>
+          <td class="rk-r rk-num">Oct 2</td>
+          <td class="rk-r rk-num">Oct 28</td>
+        </tr>
+        <tr>
+          <td><button class="au-tools" aria-label="Tools for rotate-nginx-certs"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.2 2.4a3.3 3.3 0 0 0-3.6 4.4L2.5 10.9a1.4 1.4 0 0 0 2 2l4.1-4.1a3.3 3.3 0 0 0 4.4-3.6l-2 2-1.9-.4-.4-1.9 2-2Z"/></svg></button></td>
+          <td class="au-two"><a class="au-name" href="ScriptDrawer.html">rotate-nginx-certs</a><span class="au-cmt">Install the node's certificate and key from stdin, test config, reload nginx</span></td>
+          <td>Web</td>
+          <td><span class="au-ver">v2</span></td>
+          <td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Approved</span></td>
+          <td><span class="au-priv" data-p="limited"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Limited · 3</span></td>
+          <td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Succeeded</span> <span class="rk-dim rk-small">30 hosts · 3d</span></td>
+          <td class="rk-r rk-num">Sep 19</td>
+          <td class="rk-r rk-num">Oct 14</td>
+        </tr>
+        <tr>
+          <td><button class="au-tools" aria-label="Tools for kernel-patch"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.2 2.4a3.3 3.3 0 0 0-3.6 4.4L2.5 10.9a1.4 1.4 0 0 0 2 2l4.1-4.1a3.3 3.3 0 0 0 4.4-3.6l-2 2-1.9-.4-.4-1.9 2-2Z"/></svg></button></td>
+          <td class="au-two"><a class="au-name" href="ScriptDrawer.html">kernel-patch</a><span class="au-cmt">Apply security updates, reboot and wait for the node to come back</span></td>
+          <td>OS and patching</td>
+          <td><span class="au-ver">v5</span></td>
+          <td><a class="rk-pill" data-tone="warn" href="VersionApproval.html" style="text-decoration:none"><span class="rk-dot"></span>In review · 1 of 2</a> <span class="rk-dim rk-small">v4 approved</span></td>
+          <td><span class="au-priv" data-p="full"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Full sudo</span></td>
+          <td><span class="rk-pill" data-tone="accent"><span class="rk-dot"></span>Scheduled</span> <span class="rk-dim rk-small">monthly · Tue</span></td>
+          <td class="rk-r rk-num">Aug 30</td>
+          <td class="rk-r rk-num">Oct 21</td>
+        </tr>
+        <tr>
+          <td><button class="au-tools" aria-label="Tools for install-monitoring-agent"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.2 2.4a3.3 3.3 0 0 0-3.6 4.4L2.5 10.9a1.4 1.4 0 0 0 2 2l4.1-4.1a3.3 3.3 0 0 0 4.4-3.6l-2 2-1.9-.4-.4-1.9 2-2Z"/></svg></button></td>
+          <td class="au-two"><a class="au-name" href="ScriptDrawer.html">install-monitoring-agent</a><span class="au-cmt">Download the agent RPM from Artifactory, verify SHA-256, install and enable</span></td>
+          <td>OS and patching</td>
+          <td><span class="au-ver">v2</span></td>
+          <td><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>Changed since v1</span></td>
+          <td><span class="au-priv" data-p="limited"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Limited · 2</span></td>
+          <td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Succeeded</span> <span class="rk-dim rk-small">v1 · 64 hosts · 9d</span></td>
+          <td class="rk-r rk-num">Oct 1</td>
+          <td class="rk-r rk-num">Oct 30</td>
+        </tr>
+        <tr>
+          <td><button class="au-tools" aria-label="Tools for chrony-config"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.2 2.4a3.3 3.3 0 0 0-3.6 4.4L2.5 10.9a1.4 1.4 0 0 0 2 2l4.1-4.1a3.3 3.3 0 0 0 4.4-3.6l-2 2-1.9-.4-.4-1.9 2-2Z"/></svg></button></td>
+          <td class="au-two"><a class="au-name" href="ScriptDrawer.html">chrony-config</a><span class="au-cmt">Write chrony.conf from the NTP_SERVERS parameter, restart chronyd if changed</span></td>
+          <td>OS and patching</td>
+          <td><span class="au-ver">v2</span></td>
+          <td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Approved</span></td>
+          <td><span class="au-priv" data-p="limited"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Limited · 2</span></td>
+          <td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>No change</span> <span class="rk-dim rk-small">68 hosts · 1d</span></td>
+          <td class="rk-r rk-num">Sep 2</td>
+          <td class="rk-r rk-num">Sep 12</td>
+        </tr>
+        <tr>
+          <td><button class="au-tools" aria-label="Tools for collect-diagnostics"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.2 2.4a3.3 3.3 0 0 0-3.6 4.4L2.5 10.9a1.4 1.4 0 0 0 2 2l4.1-4.1a3.3 3.3 0 0 0 4.4-3.6l-2 2-1.9-.4-.4-1.9 2-2Z"/></svg></button></td>
+          <td class="au-two"><a class="au-name" href="ScriptDrawer.html">collect-diagnostics</a><span class="au-cmt">Bundle journal, dmesg and sosreport, upload to the run's presigned URL</span></td>
+          <td>Diagnostics</td>
+          <td><span class="au-ver">v7</span></td>
+          <td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Approved</span></td>
+          <td><span class="au-priv" data-p="limited"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Limited · 2</span></td>
+          <td><span class="rk-pill" data-tone="err"><span class="rk-dot"></span>Failed</span> <span class="rk-dim rk-small">2 of 10 hosts · 5h</span></td>
+          <td class="rk-r rk-num">Jul 11</td>
+          <td class="rk-r rk-num">Oct 3</td>
+        </tr>
+        <tr>
+          <td><button class="au-tools" aria-label="Tools for disk-usage-report"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.2 2.4a3.3 3.3 0 0 0-3.6 4.4L2.5 10.9a1.4 1.4 0 0 0 2 2l4.1-4.1a3.3 3.3 0 0 0 4.4-3.6l-2 2-1.9-.4-.4-1.9 2-2Z"/></svg></button></td>
+          <td class="au-two"><a class="au-name" href="ScriptDrawer.html">disk-usage-report</a><span class="au-cmt">Report mounts above a threshold and the ten largest directories on each</span></td>
+          <td>Diagnostics</td>
+          <td><span class="au-ver">v3</span></td>
+          <td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Approved</span></td>
+          <td><span class="au-priv" data-p="none"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>No sudo</span></td>
+          <td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Succeeded</span> <span class="rk-dim rk-small">68 hosts · 2h</span></td>
+          <td class="rk-r rk-num">Jun 24</td>
+          <td class="rk-r rk-num">Aug 8</td>
+        </tr>
+        <tr>
+          <td><button class="au-tools" aria-label="Tools for hdfs-decommission-check"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.2 2.4a3.3 3.3 0 0 0-3.6 4.4L2.5 10.9a1.4 1.4 0 0 0 2 2l4.1-4.1a3.3 3.3 0 0 0 4.4-3.6l-2 2-1.9-.4-.4-1.9 2-2Z"/></svg></button></td>
+          <td class="au-two"><a class="au-name" href="ScriptDrawer.html">hdfs-decommission-check</a><span class="au-cmt">Check under-replicated blocks before a DataNode is taken out of service</span></td>
+          <td>Hadoop</td>
+          <td><span class="au-ver">v1</span></td>
+          <td><span class="rk-pill"><span class="rk-dot"></span>Draft</span></td>
+          <td><span class="au-priv" data-p="none"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>No sudo</span></td>
+          <td><span class="rk-pill"><span class="rk-dot"></span>Dry run only</span> <span class="rk-dim rk-small">1 host · 20m</span></td>
+          <td class="rk-r rk-num">Oct 31</td>
+          <td class="rk-r rk-num">Oct 31</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="au-menu" role="menu" aria-label="Tools for install-nvidia-driver" style="left:56px;top:206px">
+      <a role="menuitem" href="RunDialog.html"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M5 3.2v9.6L12.5 8 5 3.2Z"/></svg>Run…</a>
+      <a role="menuitem" href="RunDialog.html"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2.5h4M7 2.5v4L3.5 12.6a.9.9 0 0 0 .8 1.4h7.4a.9.9 0 0 0 .8-1.4L9 6.5v-4"/></svg>Test (dry run)…<small>no sudo</small></a>
+      <a role="menuitem" href="ScriptDrawer.html"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v2.5M8 11.5V14M2 8h2.5M11.5 8H14M4 4l1.6 1.6M10.4 10.4 12 12M4 12l1.6-1.6M10.4 5.6 12 4"/></svg>Edit with Sherlock</a>
+      <a role="menuitem" href="ScriptDrawer.html"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg>Review with Sherlock</a>
+      <a role="menuitem" href="Executions.html"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M3 4h10M3 8h10M3 12h6"/></svg>Executions of this script</a>
+      <div class="au-msep" role="separator"></div>
+      <button role="menuitem"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="5" width="8.5" height="8.5" rx="1.5"/><path d="M11 5V3.5A1 1 0 0 0 10 2.5H3.5a1 1 0 0 0-1 1V10a1 1 0 0 0 1 1H5"/></svg>Duplicate</button>
+      <button role="menuitem" style="color:var(--err)"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--err)"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/></svg>Delete…</button>
+    </div>
+  </main>
+</div>
+
+</div>
+</body>
+</html>

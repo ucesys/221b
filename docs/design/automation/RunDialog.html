@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run dialog</title>
+<link rel="stylesheet" href="./rk.css">
+<link rel="stylesheet" href="./au.css">
+</head>
+<body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+@import url("./rk.css");
+@import url("./au.css");
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+<div class="rk mk-app" data-h="1000" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" aria-label="Cluster: lakehouse-dev"><span class="rk-dot"></span>lakehouse-dev <span class="rk-dim">v1.37.1</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="warn">4</span></a>
+    <a class="rk-tab" href="#top">Nodes</a>
+    <a class="rk-tab" href="FleetParameters.html">Fleets</a>
+    <a class="rk-tab" href="Scripts.html" aria-current="page">Automation</a>
+    <a class="rk-tab" href="#top">Namespaces</a>
+    <a class="rk-tab" href="#top">Pods</a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services</a>
+    <a class="rk-tab" href="#top">Storage</a>
+  </nav>
+  <div class="mk-top-right">
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">K8S-SuperAdmin</span><span class="rk-tag" data-tone="accent">Fleet-Admin</span>
+  </div>
+</header>
+
+<div class="au-body">
+  <aside class="au-groups" aria-label="Script groups">
+    <span class="rk-h">Groups</span>
+    <button class="au-grp" aria-current="true">All scripts<span class="rk-num">14</span></button>
+    <button class="au-grp">GPU<span class="rk-num">3</span></button>
+    <button class="au-grp">Web<span class="rk-num">2</span></button>
+  </aside>
+  <main class="au-page">
+    <div class="au-head"><h1>Automation</h1><nav class="mk-nav" aria-label="Automation sections"><a class="rk-tab" href="Scripts.html" aria-current="page">Scripts</a><a class="rk-tab" href="Executions.html">Executions</a><a class="rk-tab" href="Configurations.html">Configurations</a></nav></div>
+  </main>
+</div>
+
+<div class="mk-backdrop"></div>
+<section class="au-modal" role="dialog" aria-label="Run install-nvidia-driver">
+  <div class="au-mhead">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true" style="color:var(--accent)"><path d="M5 3.2v9.6L12.5 8 5 3.2Z"/></svg>
+    <h2>Run <span class="rk-mono">install-nvidia-driver</span> <span class="au-ver">v4</span></h2>
+    <span class="mk-grow"></span>
+    <div class="rk-seg" role="group" aria-label="Mode"><button aria-pressed="false">Dry run</button><button aria-pressed="true">Run</button></div>
+    <button class="rk-icon-btn" aria-label="Close"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button>
+  </div>
+
+  <div class="au-mbody">
+    <div class="au-row2">
+      <div class="au-sec">
+        <h3>Targets</h3>
+        <label class="mk-lbl"><span>Fleet</span>
+          <span class="rk-field"><select aria-label="Fleet"><option>gpu-workers · 20 nodes</option></select></span>
+        </label>
+        <label class="mk-lbl"><span>Only nodes where (facts)</span>
+          <span class="rk-field" data-mono="true"><input type="text" value="gpu.count &gt; 0" aria-label="Fact filter"></span>
+        </label>
+        <div class="au-chips"><span class="au-ok"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg>20 of 20 nodes match</span><button class="rk-link" style="font-size:12px">Pick nodes by hand…</button></div>
+      </div>
+
+      <div class="au-sec">
+        <h3>Execution configuration</h3>
+        <label class="mk-lbl"><span>Configuration</span>
+          <span class="rk-field"><select aria-label="Execution configuration"><option>gpu-root · SSH profile ops-root · full sudo</option></select></span>
+        </label>
+        <div class="au-check">
+          <div class="au-ci" data-k="ok"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg><span>Gives the privilege the script declares: <b>full sudo</b>.</span></div>
+          <div class="au-ci" data-k="ok"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg><span>Within the gpu-workers ceiling: <b>full sudo</b> allowed.</span></div>
+          <div class="au-ci" data-k="ok"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg><span>You may use it: <b>Fleet-Admin</b> on gpu-workers.</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="au-sec">
+      <h3>Parameters <span class="rk-tag">resolved per node: run, then node, then fleet</span></h3>
+      <table class="au-ptab" aria-label="Parameters for this run">
+        <thead><tr><th style="width:170px">Name</th><th style="width:250px">Value</th><th style="width:120px">Source</th><th>Override for this run</th></tr></thead>
+        <tbody>
+          <tr><td class="rk-mono">NVIDIA_DRIVER</td><td class="rk-mono">550 <span class="rk-dim" style="font-family:var(--font)">on 19 nodes</span><br>535 <span class="rk-dim" style="font-family:var(--font)">on gpu-07</span></td><td><span class="au-src">fleet</span><br><span class="au-src" data-s="node">node</span></td><td><span class="rk-field" data-mono="true" style="height:28px"><input type="text" placeholder="keep" aria-label="Override NVIDIA_DRIVER"></span></td></tr>
+          <tr><td class="rk-mono">DRIVER_SHA256</td><td class="rk-mono">9c1e…77a4 <span class="rk-dim" style="font-family:var(--font)">on 19 nodes</span><br>0b3d…19fe <span class="rk-dim" style="font-family:var(--font)">on gpu-07</span></td><td><span class="au-src">fleet</span><br><span class="au-src" data-s="node">node</span></td><td><span class="rk-field" data-mono="true" style="height:28px"><input type="text" placeholder="keep" aria-label="Override DRIVER_SHA256"></span></td></tr>
+          <tr><td class="rk-mono">REPO_URL</td><td class="rk-mono">https://artifactory.uce.internal/rpm</td><td><span class="au-src">fleet</span></td><td><span class="rk-field" data-mono="true" style="height:28px"><input type="text" placeholder="keep" aria-label="Override REPO_URL"></span></td></tr>
+          <tr><td class="rk-mono">REPO_TOKEN</td><td>•••••••• <span class="rk-dim">masked</span></td><td><span class="au-src" data-s="secret">Secret</span></td><td class="rk-dim">Secret <span class="rk-mono">artifactory-reader</span>, passed as an environment variable</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="au-sec">
+      <h3>Rollout</h3>
+      <div class="au-row3">
+        <div class="mk-lbl"><span>Batch size</span>
+          <div class="rk-seg" role="group" aria-label="Batch size"><button aria-pressed="false">All</button><button aria-pressed="false">1</button><button aria-pressed="false">25%</button><button aria-pressed="true">1, 5, then 25%</button></div>
+          <span class="mk-hint">Batches: 1 → 5 → 5 → 5 → 4 nodes</span>
+        </div>
+        <label class="mk-lbl"><span>Stop the run after</span>
+          <span class="rk-field" style="height:30px"><input type="text" value="2" aria-label="Failed nodes before stopping" style="max-width:40px"><span class="rk-dim" style="font-size:12px">failed or unreachable nodes</span></span>
+          <span class="mk-hint">The first batch stops the run on any failure.</span>
+        </label>
+        <div class="mk-lbl"><span>Between batches</span>
+          <div class="rk-seg" role="group" aria-label="Between batches"><button aria-pressed="true">Continue</button><button aria-pressed="false">Pause for me</button></div>
+          <span class="mk-hint">Timeout 20 min per node · reboot wait 10 min</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="au-sec">
+      <h3>When</h3>
+      <div class="au-row3" style="grid-template-columns:auto minmax(0,1fr) minmax(0,1fr);align-items:end">
+        <div class="mk-lbl"><span>Start</span><div class="rk-seg" role="group" aria-label="Start"><button aria-pressed="true">Now</button><a class="rk-btn" href="Schedule.html" style="border:0;background:transparent;padding:3px 9px;color:var(--fg3)">At a set time</a></div></div>
+        <span class="mk-hint">v4 is approved code: running it needs permission, not approval. Nobody is asked per run, node or batch.</span>
+      </div>
+    </div>
+
+    <div class="rk-callout" data-tone="info">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7.2V11M8 5h.01"/></svg>
+      <span>A dry run on gpu-workers 12 minutes ago reported <b>would install</b> on 8 nodes and <b>no change</b> on 12. <a href="Executions.html">See it</a></span>
+    </div>
+  </div>
+
+  <div class="au-mfoot">
+    <span class="mk-hint">Watson runs it for mikhail@stolpner.com; every command is audited as "Watson via install-nvidia-driver v4".</span>
+    <button class="rk-btn">Cancel</button>
+    <button class="rk-btn">Dry run instead</button>
+    <a class="rk-btn" data-primary="true" href="LiveRun.html">Run on 20 nodes</a>
+  </div>
+</section>
+
+</div>
+</body>
+</html>

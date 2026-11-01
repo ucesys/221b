@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Automation · Executions</title>
+<link rel="stylesheet" href="./rk.css">
+<link rel="stylesheet" href="./au.css">
+</head>
+<body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+@import url("./rk.css");
+@import url("./au.css");
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+<div class="rk mk-app" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" aria-label="Cluster: lakehouse-dev"><span class="rk-dot"></span>lakehouse-dev <span class="rk-dim">v1.37.1</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="warn">4</span></a>
+    <a class="rk-tab" href="#top">Nodes</a>
+    <a class="rk-tab" href="FleetParameters.html">Fleets</a>
+    <a class="rk-tab" href="Scripts.html" aria-current="page">Automation</a>
+    <a class="rk-tab" href="#top">Namespaces</a>
+    <a class="rk-tab" href="#top">Pods</a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services</a>
+    <a class="rk-tab" href="#top">Networks</a>
+    <a class="rk-tab" href="#top">Storage</a>
+    <a class="rk-tab" href="#top">Access</a>
+  </nav>
+  <div class="mk-top-right">
+    <a class="rk-tab" href="#top"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Administration</a>
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">K8S-SuperAdmin</span><span class="rk-tag" data-tone="accent">Fleet-Admin</span>
+  </div>
+</header>
+
+<div class="au-body">
+  <aside class="au-groups" aria-label="Execution filters">
+    <span class="rk-h">Show</span>
+    <button class="au-grp" aria-current="true">All executions<span class="rk-num">43</span></button>
+    <button class="au-grp">Running<span class="rk-num"><span class="rk-cnt">1</span></span></button>
+    <button class="au-grp">Scheduled<span class="rk-num"><span class="rk-cnt">2</span></span></button>
+    <button class="au-grp">Held<span class="rk-num"><span class="rk-cnt" data-tone="warn">1</span></span></button>
+    <button class="au-grp">Failed<span class="rk-num"><span class="rk-cnt" data-tone="err">1</span></span></button>
+    <button class="au-grp">Dry runs<span class="rk-num">9</span></button>
+    <button class="au-grp">Started by me<span class="rk-num">27</span></button>
+    <div class="au-gsep"></div>
+    <span class="rk-h">Fleets</span>
+    <button class="au-grp">gpu-workers<span class="rk-num">20 nodes</span></button>
+    <button class="au-grp">web-edge<span class="rk-num">30 nodes</span></button>
+    <button class="au-grp">db-prod <span class="rk-tag" data-tone="warn">prod</span><span class="rk-num">6 nodes</span></button>
+    <button class="au-grp">hadoop-legacy<span class="rk-num">12 nodes</span></button>
+  </aside>
+
+  <main class="au-page">
+    <div class="au-head">
+      <h1>Automation</h1>
+      <nav class="mk-nav" aria-label="Automation sections">
+        <a class="rk-tab" href="Scripts.html">Scripts</a>
+        <a class="rk-tab" href="Executions.html" aria-current="page">Executions <span class="rk-cnt">1 running</span></a>
+        <a class="rk-tab" href="Configurations.html">Configurations</a>
+      </nav>
+    </div>
+
+    <div class="au-tb">
+      <label class="rk-field"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m13 13-2.8-2.8"/></svg><input type="text" placeholder="Search by script, node or person" aria-label="Search executions"></label>
+      <div class="rk-seg" role="group" aria-label="Period"><button aria-pressed="false">24 h</button><button aria-pressed="true">7 days</button><button aria-pressed="false">30 days</button></div>
+      <span class="mk-grow"></span>
+      <span class="mk-legend"><span class="au-hosts"><span class="au-stack" style="width:10px"><span data-k="chg" style="width:100%"></span></span>changed</span><span class="au-hosts"><span class="au-stack" style="width:10px"><span data-k="ok" style="width:100%"></span></span>no change</span><span class="au-hosts"><span class="au-stack" style="width:10px"><span data-k="fail" style="width:100%"></span></span>failed</span><span class="au-hosts"><span class="au-stack" style="width:10px"><span data-k="unr" style="width:100%"></span></span>unreachable</span><span class="au-hosts"><span class="au-stack" style="width:10px"><span data-k="run" style="width:100%"></span></span>running</span></span>
+      <button class="rk-btn">Export</button>
+    </div>
+
+    <table class="mk-table au-t" aria-label="Executions">
+      <thead><tr>
+        <th style="width:58px">#</th>
+        <th style="width:200px">Script</th>
+        <th style="width:72px">Mode</th>
+        <th style="width:150px">Target</th>
+        <th style="width:118px">Configuration</th>
+        <th style="width:224px">Status · nodes</th>
+        <th style="width:170px">Started by · run as</th>
+        <th class="rk-r" style="width:74px">Start</th>
+        <th class="rk-r" style="width:62px">Took</th>
+        <th style="width:150px"></th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td class="rk-mono rk-num">1047</td>
+          <td><a class="au-name" href="Schedule.html">kernel-patch</a> <span class="au-ver">v4</span></td>
+          <td>Run</td>
+          <td class="rk-mono">db-prod <span class="rk-tag" data-tone="warn" style="font-family:var(--font)">prod</span> <span class="rk-dim" style="font-family:var(--font)">· 6</span></td>
+          <td class="rk-mono" style="font-size:12px">db-root</td>
+          <td class="au-two"><span class="rk-pill" data-tone="accent"><span class="rk-dot"></span>Scheduled · monthly</span><span class="au-cmt" style="margin-top:3px">First Tue 02:00 · 1 node at a time · drain hooks</span></td>
+          <td class="au-who">mikhail@stolpner.com<span class="au-cmt">as ops-root · 221b-node-maint</span></td>
+          <td class="rk-r rk-num">Tue 02:00</td>
+          <td class="rk-r rk-dim">—</td>
+          <td><span class="au-acts"><a class="rk-btn" href="Schedule.html">Schedule</a><button class="rk-btn">Skip next</button></span></td>
+        </tr>
+        <tr data-wait="true">
+          <td class="rk-mono rk-num">1046</td>
+          <td><a class="au-name" href="ScriptDrawer.html">install-nvidia-driver</a> <span class="au-ver">v4</span></td>
+          <td>Run</td>
+          <td class="rk-mono">gpu-workers <span class="rk-dim" style="font-family:var(--font)">· 20</span></td>
+          <td class="rk-mono" style="font-size:12px">gpu-root</td>
+          <td class="au-two"><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>Held · script suspended</span><span class="au-cmt" style="margin-top:3px">NVIDIA_DRIVER change waiting for approval</span></td>
+          <td class="au-who">ops-admin-2<span class="au-cmt">as ops-root</span></td>
+          <td class="rk-r rk-num">Sun 03:00</td>
+          <td class="rk-r rk-dim">—</td>
+          <td><span class="au-acts"><a class="rk-btn" href="ParameterChange.html">Why held</a><button class="rk-btn" data-danger="true">Cancel</button></span></td>
+        </tr>
+        <tr>
+          <td class="rk-mono rk-num">1044</td>
+          <td><a class="au-name" href="ScriptDrawer.html">kernel-patch</a> <span class="au-ver">v5</span></td>
+          <td><span class="rk-tag">Dry run</span></td>
+          <td class="rk-mono">db-prod <span class="rk-tag" data-tone="warn" style="font-family:var(--font)">prod</span> <span class="rk-dim" style="font-family:var(--font)">· 6</span></td>
+          <td class="rk-mono" style="font-size:12px">read-only</td>
+          <td class="au-two"><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Done</span><span class="au-hosts" style="margin-top:4px;display:flex"><span class="au-stack" style="width:130px"><span data-k="chg" style="width:100%"></span></span>6 would change · reboot</span></td>
+          <td class="au-who">mikhail@stolpner.com</td>
+          <td class="rk-r rk-num">16:14</td>
+          <td class="rk-r rk-num">38s</td>
+          <td><span class="au-acts"><button class="rk-btn">View output</button></span></td>
+        </tr>
+        <tr>
+          <td class="rk-mono rk-num">1043</td>
+          <td><a class="au-name" href="LiveRun.html">install-nvidia-driver</a> <span class="au-ver">v4</span></td>
+          <td>Run</td>
+          <td class="rk-mono">gpu-workers <span class="rk-dim" style="font-family:var(--font)">· 20</span></td>
+          <td class="rk-mono" style="font-size:12px">gpu-root</td>
+          <td class="au-two"><span class="rk-pill" data-tone="info"><span class="rk-dot"></span>Running · batch 4 of 5</span><span class="au-hosts" style="margin-top:4px;display:flex"><span class="au-stack" style="width:130px"><span data-k="chg" style="width:25%"></span><span data-k="ok" style="width:35%"></span><span data-k="run" style="width:20%"></span></span>12 of 20 done</span></td>
+          <td class="au-who">mikhail@stolpner.com</td>
+          <td class="rk-r rk-num">14:52</td>
+          <td class="rk-r rk-num">18m</td>
+          <td><span class="au-acts"><a class="rk-btn" href="LiveRun.html">View output</a><button class="rk-btn" data-danger="true">Cancel</button></span></td>
+        </tr>
+        <tr>
+          <td class="rk-mono rk-num">1041</td>
+          <td><a class="au-name" href="ScriptDrawer.html">install-nvidia-driver</a> <span class="au-ver">v4</span></td>
+          <td><span class="rk-tag">Dry run</span></td>
+          <td class="rk-mono">gpu-workers <span class="rk-dim" style="font-family:var(--font)">· 20</span></td>
+          <td class="rk-mono" style="font-size:12px">gpu-dryrun</td>
+          <td class="au-two"><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Done</span><span class="au-hosts" style="margin-top:4px;display:flex"><span class="au-stack" style="width:130px"><span data-k="chg" style="width:40%"></span><span data-k="ok" style="width:60%"></span></span>8 would change · 12 no change</span></td>
+          <td class="au-who">mikhail@stolpner.com</td>
+          <td class="rk-r rk-num">14:40</td>
+          <td class="rk-r rk-num">41s</td>
+          <td><span class="au-acts"><button class="rk-btn">View output</button><a class="rk-btn" href="RunDialog.html">Run for real</a></span></td>
+        </tr>
+        <tr>
+          <td class="rk-mono rk-num">1040</td>
+          <td><a class="au-name" href="ScriptDrawer.html">disk-usage-report</a> <span class="au-ver">v3</span></td>
+          <td>Run</td>
+          <td class="rk-mono">all fleets <span class="rk-dim" style="font-family:var(--font)">· 68</span></td>
+          <td class="rk-mono" style="font-size:12px">read-only</td>
+          <td class="au-two"><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Succeeded</span><span class="au-hosts" style="margin-top:4px;display:flex"><span class="au-stack" style="width:130px"><span data-k="ok" style="width:100%"></span></span>68 no change · 4 above 85%</span></td>
+          <td class="au-who">Sherlock for mikhail@stolpner.com</td>
+          <td class="rk-r rk-num">12:58</td>
+          <td class="rk-r rk-num">22s</td>
+          <td><span class="au-acts"><button class="rk-btn">View output</button><a class="rk-btn" href="RunDialog.html">Run again</a></span></td>
+        </tr>
+        <tr data-sel="true">
+          <td class="rk-mono rk-num">1039</td>
+          <td><a class="au-name" href="ScriptDrawer.html">collect-diagnostics</a> <span class="au-ver">v7</span></td>
+          <td>Run</td>
+          <td class="rk-mono">hadoop-legacy <span class="rk-dim" style="font-family:var(--font)">· 10</span></td>
+          <td class="rk-mono" style="font-size:12px">diag-limited</td>
+          <td class="au-two"><span class="rk-pill" data-tone="err"><span class="rk-dot"></span>Failed on 2</span><span class="au-hosts" style="margin-top:4px;display:flex"><span class="au-stack" style="width:130px"><span data-k="chg" style="width:80%"></span><span data-k="fail" style="width:10%"></span><span data-k="unr" style="width:10%"></span></span>8 changed · 1 failed · 1 unreachable</span></td>
+          <td class="au-who">mikhail@stolpner.com</td>
+          <td class="rk-r rk-num">09:47</td>
+          <td class="rk-r rk-num">3m</td>
+          <td><span class="au-acts"><button class="rk-btn">View output</button><a class="rk-btn" href="RunDialog.html">Retry the 2</a></span></td>
+        </tr>
+        <tr class="mk-grp"><td colspan="10" style="text-transform:none;letter-spacing:0;font-weight:400;font-size:12px;height:auto;padding:8px 10px 8px 68px;color:var(--fg2)">
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <span><span class="rk-mono" style="color:var(--fg)">hdp-dn-04</span> <span class="rk-tag" data-tone="err">failed · exit 22</span> upload of sosreport to the run's URL failed: HTTP 413, archive 2.3 GB is over the 2 GB limit</span>
+            <span><span class="rk-mono" style="color:var(--fg)">hdp-dn-09</span> <span class="rk-tag" data-tone="warn">unreachable</span> ssh: connect to 10.0.7.19 port 22 timed out after 30s · not retried</span>
+            <span class="rk-dim">8 bundles uploaded · 4.1 GB · <a href="#top">Ask Sherlock to analyze them</a></span>
+          </div>
+        </td></tr>
+        <tr>
+          <td class="rk-mono rk-num">1038</td>
+          <td><a class="au-name" href="ScriptDrawer.html">hdfs-decommission-check</a> <span class="au-ver">v1</span></td>
+          <td><span class="rk-tag">Dry run</span></td>
+          <td class="rk-mono">hdp-dn-11</td>
+          <td class="rk-mono" style="font-size:12px">read-only</td>
+          <td class="au-two"><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Done</span><span class="au-hosts" style="margin-top:4px;display:flex"><span class="au-stack" style="width:130px"><span data-k="ok" style="width:100%"></span></span>1 no change</span></td>
+          <td class="au-who">mikhail@stolpner.com</td>
+          <td class="rk-r rk-num">09:12</td>
+          <td class="rk-r rk-num">9s</td>
+          <td><span class="au-acts"><button class="rk-btn">View output</button></span></td>
+        </tr>
+        <tr>
+          <td class="rk-mono rk-num">1037</td>
+          <td><a class="au-name" href="ScriptDrawer.html">chrony-config</a> <span class="au-ver">v2</span></td>
+          <td>Run</td>
+          <td class="rk-mono">all fleets <span class="rk-dim" style="font-family:var(--font)">· 68</span></td>
+          <td class="rk-mono" style="font-size:12px">ops-limited</td>
+          <td class="au-two"><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Succeeded</span><span class="au-hosts" style="margin-top:4px;display:flex"><span class="au-stack" style="width:130px"><span data-k="ok" style="width:100%"></span></span>68 no change</span></td>
+          <td class="au-who">mikhail@stolpner.com<span class="au-cmt">+ ops-admin-2 (db-prod)</span></td>
+          <td class="rk-r rk-num">Oct 30</td>
+          <td class="rk-r rk-num">1m</td>
+          <td><span class="au-acts"><button class="rk-btn">View output</button><a class="rk-btn" href="RunDialog.html">Run again</a></span></td>
+        </tr>
+        <tr>
+          <td class="rk-mono rk-num">1036</td>
+          <td><a class="au-name" href="ScriptDrawer.html">rotate-nginx-certs</a> <span class="au-ver">v2</span></td>
+          <td>Run</td>
+          <td class="rk-mono">web-edge <span class="rk-dim" style="font-family:var(--font)">· 30</span></td>
+          <td class="rk-mono" style="font-size:12px">web-limited</td>
+          <td class="au-two"><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Succeeded</span><span class="au-hosts" style="margin-top:4px;display:flex"><span class="au-stack" style="width:130px"><span data-k="chg" style="width:100%"></span></span>30 changed</span></td>
+          <td class="au-who">mikhail@stolpner.com</td>
+          <td class="rk-r rk-num">Oct 28</td>
+          <td class="rk-r rk-num">6m</td>
+          <td><span class="au-acts"><button class="rk-btn">View output</button><a class="rk-btn" href="RunDialog.html">Run again</a></span></td>
+        </tr>
+      </tbody>
+    </table>
+  </main>
+</div>
+
+</div>
+</body>
+</html>

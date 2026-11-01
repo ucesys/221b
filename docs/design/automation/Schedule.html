@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schedule a recurring job</title>
+<link rel="stylesheet" href="./rk.css">
+<link rel="stylesheet" href="./au.css">
+</head>
+<body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+@import url("./rk.css");
+@import url("./au.css");
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+<div class="rk mk-app" data-h="1000" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" aria-label="Cluster: lakehouse-dev"><span class="rk-dot"></span>lakehouse-dev <span class="rk-dim">v1.37.1</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="warn">4</span></a>
+    <a class="rk-tab" href="#top">Nodes</a>
+    <a class="rk-tab" href="FleetParameters.html">Fleets</a>
+    <a class="rk-tab" href="Scripts.html" aria-current="page">Automation</a>
+    <a class="rk-tab" href="#top">Namespaces</a>
+    <a class="rk-tab" href="#top">Pods</a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services</a>
+    <a class="rk-tab" href="#top">Storage</a>
+  </nav>
+  <div class="mk-top-right">
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">K8S-SuperAdmin</span><span class="rk-tag" data-tone="accent">Fleet-Admin</span>
+  </div>
+</header>
+
+<div class="au-body">
+  <aside class="au-groups" aria-label="Script groups">
+    <span class="rk-h">Groups</span>
+    <button class="au-grp" aria-current="true">All scripts<span class="rk-num">14</span></button>
+    <button class="au-grp">OS and patching<span class="rk-num">4</span></button>
+  </aside>
+  <main class="au-page">
+    <div class="au-head"><h1>Automation</h1><nav class="mk-nav" aria-label="Automation sections"><a class="rk-tab" href="Scripts.html" aria-current="page">Scripts</a><a class="rk-tab" href="Executions.html">Executions</a><a class="rk-tab" href="Configurations.html">Configurations</a></nav></div>
+  </main>
+</div>
+
+<div class="mk-backdrop"></div>
+<section class="au-modal" role="dialog" aria-label="Schedule kernel-patch on db-prod" style="max-height:930px">
+  <div class="au-mhead">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="color:var(--accent)"><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5.5 1.8v2.4M10.5 1.8v2.4"/></svg>
+    <h2>Schedule <span class="rk-mono">kernel-patch</span> on <span class="rk-mono">db-prod</span></h2>
+    <span class="rk-tag" data-tone="warn">production</span>
+    <span class="mk-grow"></span>
+    <button class="rk-icon-btn" aria-label="Close"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button>
+  </div>
+
+  <div class="au-mbody">
+    <div class="au-row2">
+      <div class="au-sec">
+        <h3>What and where</h3>
+        <label class="mk-lbl"><span>Script version</span><span class="rk-field"><select aria-label="Script version"><option>Latest approved (now v4; v5 is in review)</option></select></span></label>
+        <label class="mk-lbl"><span>Targets</span><span class="rk-field"><select aria-label="Fleet"><option>db-prod · all nodes (6 today)</option></select></span></label>
+        <span class="mk-hint">Nodes added to db-prod later are included automatically. Replicas run first, the primary last.</span>
+      </div>
+      <div class="au-sec">
+        <h3>Run as</h3>
+        <label class="mk-lbl"><span>On the nodes (SSH)</span><span class="rk-field"><select aria-label="Execution configuration"><option>db-root · SSH profile ops-root · full sudo</option></select></span></label>
+        <label class="mk-lbl"><span>In Kubernetes (node hooks)</span><span class="rk-field" data-mono="true"><select aria-label="Service account"><option>221b-node-maint (script default)</option></select></span></label>
+        <span class="mk-hint">You own this job. Your access and the service account's are checked again before every run; if either is gone, the run is held.</span>
+      </div>
+    </div>
+
+    <div class="au-sec">
+      <h3>When</h3>
+      <div class="au-row3" style="grid-template-columns:auto minmax(0,1.3fr) minmax(0,1fr) minmax(0,.8fr);align-items:end">
+        <div class="mk-lbl"><span>Repeat</span><div class="rk-seg" role="group" aria-label="Repeat"><button aria-pressed="false">Once</button><button aria-pressed="true">Recurring</button></div></div>
+        <label class="mk-lbl"><span>Every</span><span class="rk-field" style="height:30px"><select aria-label="Recurrence"><option>Month, first Tuesday, 02:00</option></select></span></label>
+        <label class="mk-lbl"><span>Time zone</span><span class="rk-field" style="height:30px"><select aria-label="Time zone"><option>America/Los_Angeles</option></select></span></label>
+        <label class="mk-lbl"><span>No new node after</span><span class="rk-field" style="height:30px"><input type="text" value="05:00" aria-label="No new node after"></span></label>
+      </div>
+      <span class="mk-hint">Next runs: Tue Nov 3 · Tue Dec 1 · Tue Jan 5.</span>
+      <div class="au-chips"><span class="mk-lbl" style="flex-direction:row;align-items:center;gap:8px"><span>Dry run before each run</span><span class="rk-seg" role="group" aria-label="Dry run before each run"><button aria-pressed="false">Off</button><button aria-pressed="false">Hours before</button><button aria-pressed="true">At a set time</button></span></span><span class="rk-field" style="height:28px;width:220px"><select aria-label="Dry run time"><option>Day before the run, 14:00</option><option>Same day, at a time</option><option>Any day and time before the run</option></select></span><span class="mk-hint">Optional, off by default. Next dry run: Mon Nov 2, 14:00. The result goes to the db-prod admins, who can skip that run.</span></div>
+    </div>
+
+    <div class="au-sec">
+      <h3>Rollout and node hooks</h3>
+      <div class="au-row3">
+        <div class="mk-lbl"><span>Batch size</span><div class="rk-seg" role="group" aria-label="Batch size"><button aria-pressed="false">All</button><button aria-pressed="true">1 at a time</button><button aria-pressed="false">2</button></div><span class="mk-hint">Stop after 1 failed or unreachable node</span></div>
+        <div class="mk-lbl"><span>Before each node (Kubernetes)</span>
+          <div class="mk-list">
+            <div class="mk-item"><span class="rk-tag" data-tone="accent">built in</span><span class="mk-grow">Cordon and drain</span></div>
+            <div class="mk-item"><span class="rk-tag">script</span><span class="mk-grow rk-mono">pg-switchover-if-primary v2</span></div>
+          </div>
+        </div>
+        <div class="mk-lbl"><span>After each node (Kubernetes)</span>
+          <div class="mk-list">
+            <div class="mk-item"><span class="rk-tag" data-tone="accent">built in</span><span class="mk-grow">Uncordon after <span class="rk-mono">pg_isready</span> passes</span></div>
+            <button class="rk-link" style="font-size:12px;align-self:flex-start">+ Add a hook script</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="au-sec">
+      <h3>Approval</h3>
+      <div class="au-check">
+        <div class="au-ci" data-k="ok"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg><span><b>The scripts are approved code:</b> kernel-patch v4, pg-switchover-if-primary v2. Runs of this job need no approval, per run, node or batch.</span></div>
+        <div class="au-ci" data-k="info"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7.2V11M8 5h.01"/></svg><span><b>The schedule itself is a change on production:</b> one more db-prod admin approves it once. Later edits to it, or a run-time value change, go through the same approval.</span></div>
+        <div class="au-ci" data-k="info"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7.2V11M8 5h.01"/></svg><span>When v5 is approved, the job uses it from the next run. If a script is suspended by a parameter change, its runs are held until that change is approved.</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="au-mfoot">
+    <span class="mk-hint">Runs are executed by Watson. Each command is audited as "Watson via kernel-patch v4, run #…".</span>
+    <button class="rk-btn">Cancel</button>
+    <button class="rk-btn">Dry run now</button>
+    <a class="rk-btn" data-primary="true" href="Executions.html">Create schedule · send for approval</a>
+  </div>
+</section>
+
+</div>
+</body>
+</html>

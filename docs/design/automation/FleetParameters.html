@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleets · parameters</title>
+<link rel="stylesheet" href="./rk.css">
+<link rel="stylesheet" href="./au.css">
+</head>
+<body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+@import url("./rk.css");
+@import url("./au.css");
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+<div class="rk mk-app" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" aria-label="Cluster: lakehouse-dev"><span class="rk-dot"></span>lakehouse-dev <span class="rk-dim">v1.37.1</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="warn">4</span></a>
+    <a class="rk-tab" href="#top">Nodes</a>
+    <a class="rk-tab" href="FleetParameters.html" aria-current="page">Fleets</a>
+    <a class="rk-tab" href="Scripts.html">Automation</a>
+    <a class="rk-tab" href="#top">Namespaces</a>
+    <a class="rk-tab" href="#top">Pods</a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services</a>
+    <a class="rk-tab" href="#top">Storage</a>
+  </nav>
+  <div class="mk-top-right">
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">K8S-SuperAdmin</span><span class="rk-tag" data-tone="accent">Fleet-Admin</span>
+  </div>
+</header>
+
+<main class="au-page">
+  <div class="au-head"><h1>Fleets</h1><span class="au-sub">4 fleets · 68 nodes</span></div>
+  <table class="mk-table au-t" aria-label="Fleets (behind the drawer)">
+    <thead><tr><th style="width:200px">Fleet</th><th style="width:80px">Nodes</th><th style="width:110px">Production</th><th>Most privilege allowed</th><th>Default configuration</th></tr></thead>
+    <tbody>
+      <tr data-sel="true"><td class="au-name">gpu-workers</td><td class="rk-num">20</td><td class="rk-dim">no</td><td>Full sudo</td><td class="rk-mono">gpu-root</td></tr>
+      <tr><td class="au-name">web-edge</td><td class="rk-num">30</td><td class="rk-dim">no</td><td>Limited sudo</td><td class="rk-mono">web-limited</td></tr>
+      <tr><td class="au-name">db-prod</td><td class="rk-num">6</td><td><span class="rk-tag" data-tone="warn">production</span></td><td>Full sudo</td><td class="rk-mono">db-limited</td></tr>
+      <tr><td class="au-name">hadoop-legacy</td><td class="rk-num">12</td><td class="rk-dim">no</td><td>Limited sudo</td><td class="rk-mono">diag-limited</td></tr>
+    </tbody>
+  </table>
+</main>
+
+<div class="mk-backdrop"></div>
+<section class="mk-drawer" aria-label="Fleet gpu-workers">
+  <div class="mk-dhead">
+    <div class="mk-kicker"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2.5" width="12" height="4" rx="1"/><rect x="2" y="9.5" width="12" height="4" rx="1"/></svg>Fleet</div>
+    <div class="mk-dtitle">gpu-workers<span class="mk-grow"></span><button class="rk-icon-btn" aria-label="Close"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button></div>
+    <div class="mk-facts"><span><b>20</b> nodes</span><span>Not production</span><span>Most privilege allowed <b>full sudo</b></span><span>Default configuration <span class="rk-mono">gpu-root</span></span></div>
+    <nav class="mk-dtabs" aria-label="Fleet sections">
+      <a class="rk-tab" href="#top">Nodes <span class="rk-cnt">20</span></a>
+      <a class="rk-tab" href="#top" aria-current="page">Parameters <span class="rk-cnt">6</span></a>
+      <a class="rk-tab" href="#top">Facts</a>
+      <a class="rk-tab" href="Configurations.html">Execution</a>
+      <a class="rk-tab" href="Executions.html">Executions</a>
+    </nav>
+  </div>
+
+  <div class="mk-dbody">
+    <p class="mk-intro">Scripts receive these as environment variables. A node value overrides the fleet value; a value typed in the Run dialog overrides both. <b>Facts</b> (hardware, OS) are discovered and read-only; parameters are decisions you make.</p>
+
+    <div class="au-tb">
+      <label class="rk-field" style="width:240px"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m13 13-2.8-2.8"/></svg><input type="text" placeholder="Filter parameters" aria-label="Filter parameters"></label>
+      <span class="mk-grow"></span>
+      <button class="rk-btn">Add from a script's header</button>
+      <button class="rk-btn" data-primary="true">Add parameter</button>
+    </div>
+
+    <table class="au-ptab" aria-label="Fleet parameters">
+      <thead><tr><th style="width:170px">Parameter</th><th style="width:270px">Fleet value</th><th style="width:220px">Node overrides</th><th>Used by</th></tr></thead>
+      <tbody>
+        <tr><td class="rk-mono">NVIDIA_DRIVER <span class="rk-tag" data-tone="warn" style="font-family:var(--font)">sensitive</span></td><td class="rk-mono">550 <a href="ParameterChange.html" style="font-family:var(--font);font-size:11.5px">560 waiting for approval</a></td><td><span class="au-src" data-s="node">gpu-07: 535</span></td><td class="rk-mono">install-nvidia-driver</td></tr>
+        <tr><td class="rk-mono">DRIVER_SHA256</td><td class="rk-mono">9c1e4b…d277a4</td><td><span class="au-src" data-s="node">gpu-07: 0b3d…19fe</span></td><td class="rk-mono">install-nvidia-driver</td></tr>
+        <tr><td class="rk-mono">DATA_DISK</td><td class="rk-mono">/dev/nvme0n1</td><td><span class="au-src" data-s="node">gpu-07: /dev/sdb</span></td><td class="rk-mono">prepare-data-disk</td></tr>
+        <tr><td class="rk-mono">NTP_SERVERS</td><td class="rk-mono">ntp1.uce.internal ntp2.uce.internal</td><td class="rk-dim">none</td><td class="rk-mono">chrony-config</td></tr>
+        <tr><td class="rk-mono">REPO_URL</td><td class="rk-mono">https://artifactory.uce.internal/rpm</td><td class="rk-dim">none</td><td class="rk-mono">install-nvidia-driver, install-monitoring-agent</td></tr>
+        <tr><td class="rk-mono">REPO_TOKEN</td><td><span class="au-src" data-s="secret">Secret</span> <span class="rk-mono">artifactory-reader</span> <span class="rk-dim">· value never shown</span></td><td class="rk-dim">none</td><td class="rk-mono">install-nvidia-driver, install-monitoring-agent</td></tr>
+      </tbody>
+    </table>
+
+    <div class="rk-card" style="padding:12px 14px;display:flex;flex-direction:column;gap:10px">
+      <div class="mk-title-row"><h2 class="rk-mono">gpu-07</h2><span>node with its own values</span><span class="mk-grow" style="flex:1 1 auto"></span><button class="rk-btn">Edit node values</button></div>
+      <div class="au-row2">
+        <div class="au-sec">
+          <h3>Node parameters <span class="rk-tag" data-tone="info">override fleet</span></h3>
+          <table class="au-ptab" aria-label="gpu-07 parameters">
+            <thead><tr><th>Parameter</th><th>Node value</th><th>Fleet value</th></tr></thead>
+            <tbody>
+              <tr><td class="rk-mono">NVIDIA_DRIVER</td><td class="rk-mono au-ov">535</td><td class="rk-mono rk-dim">550</td></tr>
+              <tr><td class="rk-mono">DRIVER_SHA256</td><td class="rk-mono au-ov">0b3d…19fe</td><td class="rk-mono rk-dim">9c1e…77a4</td></tr>
+              <tr><td class="rk-mono">DATA_DISK</td><td class="rk-mono au-ov">/dev/sdb</td><td class="rk-mono rk-dim">/dev/nvme0n1</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="au-sec">
+          <h3>Facts <span class="rk-tag">discovered 14:40</span></h3>
+          <dl class="rk-kv">
+            <dt>OS</dt><dd>Rocky Linux 9.4 · kernel 5.14.0-427</dd>
+            <dt>GPU</dt><dd>4 × NVIDIA Tesla T4 · driver 535.183.01</dd>
+            <dt>Disks</dt><dd class="rk-mono">sda 480 GB (boot) · sdb 1.8 TB (empty)</dd>
+            <dt>sudo -l</dt><dd>ops-root: full · ops-ro: none <span class="au-ok"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg>matches profiles</span></dd>
+          </dl>
+          <span class="au-ok"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg>DATA_DISK /dev/sdb exists on this node and is not the boot disk</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mk-dfoot">
+    <span class="mk-hint">Changing a value does not change any approved script. Values are read when a run starts and recorded with it.</span>
+  </div>
+</section>
+
+</div>
+</body>
+</html>

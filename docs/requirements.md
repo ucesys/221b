@@ -638,3 +638,24 @@ Asked for on October 30, 2026: a way onto a node that does not go through the ku
 | SSH-10 | **Picked nodes.** The Nodes page has the Fleets tab's picking: a box beside each node's name (`fleet-pick-node`, a 24px target) for a SuperAdmin, the one person with something to do with them; the picks are one list per cluster, shared by both pages and kept across a tab switch. With any picked, the same bar (`fleet-nodebar`) says how many and which, and offers *New fleet…*, *Add to a fleet…* and *Remove from a fleet…* (the Fleets tab's dialog: a list changes in the console, a fleet of labels and taints through Watson) and *Cancel*. The Nodes page adds *pick all in view*, and *Pair for SSH…* with Watson on: one dialog, one login user and port, one Watson card naming every node (one approval), then one pairing session per node, the first shown (`Request.nodes`; the plan dry-runs the first and lists the rest). On the Nodes page the bar sits above the table, in the flow (it floated briefly; reversed the same day). *Node shell* reads *K8S node shell* beside *SSH*. | e2e: picking two nodes, the picks kept across a tab switch and on the Fleets tab, the fleet dialog naming both, the pairing dialog naming both, Cancel. |
 | SSH-08 | **Out of scope now:** hosts outside the cluster, pairing through a password and sudo (the node pod needs neither), creating the login user, per-role login users, an SSH column on the Nodes table, host certificates. | — |
 
+
+## Phase 11, part 2: Automation
+
+Asked for on October 31, 2026: run AI-written, human-approved scripts on fleets of nodes over the SSH of part 1, approving code once rather than every run. [automation.md](automation.md) has the approach, the script header, the mockups and the open questions; ADR-73 has the decisions. This first step is the Auto-1 core; the design doc "221B Automation Design" phases the rest (facts, Sherlock, Kubernetes targets, node hooks, schedules).
+
+| ID | Requirement |
+| --- | --- |
+| AU-01 | An **Automation** tab after Fleets, with Scripts and Executions, for SuperAdmins when `automation.enabled` and `toolbox.ssh.enabled` are on. |
+| AU-02 | Scripts with names, groups and versions; a changed save is a new draft; 32 KiB at most. |
+| AU-03 | The `# 221b:` header: describe, param, privilege, dry-run, facts. |
+| AU-04 | Static checks at every save; a version with errors cannot be submitted. |
+| AU-05 | Versions are Draft, In review, Approved or Superseded; a two-person cluster runs only versions with two approvals, one not the author's. |
+| AU-06 | Fleet and node parameters, resolved per node: run, node, fleet. |
+| AU-07 | The Run dialog: fleet, nodes and their pairing, parameters and their source, batches, failure limit, timeout, dry run. |
+| AU-08 | A node's part: through its pairing, the script on standard input, `runuser -u nobody` for privilege none and dry runs, exit code, result line, output. |
+| AU-09 | Reboot and wait when a result asks for it. |
+| AU-10 | Batches, the failure limit and cancel. |
+| AU-11 | Executions: runs newest first, a drawer with each node's state and output. |
+| AU-12 | A ConfigMap of its own: scripts, parameters and the newest 200 runs; output in memory or beside the transcripts; interrupted runs marked. |
+| AU-13 | SuperAdmin-only, on the leader, audited as `automation.script`, `automation.approve`, `automation.params` and `automation.run`. |
+| AU-14 | Chart: `automation.enabled`, the ConfigMap and its rule, `AUTOMATION_CONFIGMAP`. |

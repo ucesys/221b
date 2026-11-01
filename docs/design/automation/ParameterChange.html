@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approval · parameter change</title>
+<link rel="stylesheet" href="./rk.css">
+<link rel="stylesheet" href="./au.css">
+</head>
+<body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+@import url("./rk.css");
+@import url("./au.css");
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+<div class="rk mk-app" data-h="1000" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" aria-label="Cluster: lakehouse-dev"><span class="rk-dot"></span>lakehouse-dev <span class="rk-dim">v1.37.1</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="warn">4</span></a>
+    <a class="rk-tab" href="#top">Nodes</a>
+    <a class="rk-tab" href="FleetParameters.html" aria-current="page">Fleets <span class="rk-cnt" data-tone="warn">1 to approve</span></a>
+    <a class="rk-tab" href="Scripts.html">Automation</a>
+    <a class="rk-tab" href="#top">Namespaces</a>
+    <a class="rk-tab" href="#top">Pods</a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services</a>
+    <a class="rk-tab" href="#top">Storage</a>
+  </nav>
+  <div class="mk-top-right">
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">K8S-SuperAdmin</span><span class="rk-tag" data-tone="accent">Fleet-Admin</span>
+  </div>
+</header>
+
+<main class="au-page">
+  <div class="au-head"><h1>Fleets</h1><span class="au-sub">4 fleets · 68 nodes</span></div>
+  <table class="mk-table au-t" aria-label="Fleets (behind the drawer)">
+    <thead><tr><th style="width:200px">Fleet</th><th style="width:80px">Nodes</th><th>Changes waiting</th></tr></thead>
+    <tbody>
+      <tr data-sel="true"><td class="au-name">gpu-workers</td><td class="rk-num">20</td><td><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>1 parameter change</span></td></tr>
+      <tr><td class="au-name">web-edge</td><td class="rk-num">30</td><td class="rk-dim">none</td></tr>
+    </tbody>
+  </table>
+</main>
+
+<div class="mk-backdrop"></div>
+<section class="mk-drawer" aria-label="Parameter change on gpu-workers">
+  <div class="mk-dhead">
+    <div class="mk-kicker"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Change request · fleet parameters</div>
+    <div class="mk-dtitle">gpu-workers · NVIDIA_DRIVER 550 → 560
+      <span class="rk-pill" data-tone="warn" style="font-family:var(--font)"><span class="rk-dot"></span>Waiting for approval</span>
+      <span class="mk-grow"></span>
+      <button class="rk-icon-btn" aria-label="Close"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button>
+    </div>
+    <div class="mk-facts"><span>Requested by <b>ops-admin-2</b> · Oct 31, 16:05</span><span>Not production: 1 Fleet-Admin other than the requester</span><span>Reason: CUDA 12.6 needed by the training images</span></div>
+    <nav class="mk-dtabs" aria-label="Change sections">
+      <a class="rk-tab" href="#top" aria-current="page">Impact</a>
+      <a class="rk-tab" href="#top">Values</a>
+      <a class="rk-tab" href="#top">Dry run</a>
+      <a class="rk-tab" href="#top">History</a>
+    </nav>
+  </div>
+
+  <div class="mk-dbody">
+    <div class="au-sec">
+      <h3>Values</h3>
+      <table class="au-ptab" aria-label="Values being changed">
+        <thead><tr><th style="width:170px">Parameter</th><th style="width:110px">Level</th><th style="width:200px">Now</th><th style="width:200px">New</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td class="rk-mono">NVIDIA_DRIVER <span class="rk-tag" data-tone="warn" style="font-family:var(--font)">sensitive</span></td><td>fleet</td><td class="rk-mono">550</td><td class="rk-mono au-ov">560</td><td class="rk-dim">gpu-07 keeps its node value, 535</td></tr>
+          <tr><td class="rk-mono">DRIVER_SHA256</td><td>fleet</td><td class="rk-mono">9c1e…77a4</td><td class="rk-mono au-ov">4f2a…b810</td><td class="rk-dim">checksum of nvidia-driver-560.el9.rpm</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="au-sec">
+      <h3>Sherlock impact analysis <span class="rk-tag">3 scripts and 1 schedule use these values</span></h3>
+      <table class="au-ptab" aria-label="Scripts affected by the change">
+        <thead><tr><th style="width:210px">Script</th><th style="width:170px">Decision</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td><span class="rk-mono">install-nvidia-driver</span> <span class="au-ver">v4</span></td><td><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>Needs approval</span><br><span class="rk-dim rk-small">sensitive parameter: always</span></td><td>Installs a different driver branch on 19 nodes and reboots them. Dry run #1048: 19 would change, gpu-07 no change.</td></tr>
+          <tr><td><span class="rk-mono">cuda-toolkit-install</span> <span class="au-ver">v1</span></td><td><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>Needs approval</span><br><span class="rk-dim rk-small">Sherlock</span></td><td>Line 22 picks the CUDA version from NVIDIA_DRIVER: 560 installs CUDA 12.6 instead of 12.4, a different package set.</td></tr>
+          <tr><td><span class="rk-mono">gpu-health-check</span> <span class="au-ver">v2</span></td><td><span class="rk-pill" data-tone="ok"><span class="rk-dot"></span>Safe</span><br><span class="rk-dim rk-small">Sherlock</span></td><td>Only compares the installed driver with NVIDIA_DRIVER and reports. Makes no change on any value.</td></tr>
+        </tbody>
+      </table>
+      <span class="mk-hint">NVIDIA_DRIVER is marked sensitive by an admin, so scripts that use it always need approval. Sherlock can add scripts to the "needs approval" list but cannot remove any. You can move a script from Safe to Needs approval.</span>
+    </div>
+
+    <div class="au-row2">
+      <div class="au-sec">
+        <h3>While this waits</h3>
+        <div class="au-check">
+          <div class="au-ci" data-k="warn"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.2 14.3 13H1.7L8 2.2ZM8 6.5v3M8 11.6h.01"/></svg><span><b>Scheduled run #1046</b> of install-nvidia-driver, Sun 03:00, is held. It starts at the next window after approval.</span></div>
+          <div class="au-ci" data-k="info"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7.2V11M8 5h.01"/></svg><span>The current values (550) stay in effect. Run #1043, already running, keeps the values it started with.</span></div>
+        </div>
+      </div>
+      <div class="au-sec">
+        <h3>Your approval covers</h3>
+        <div class="au-check">
+          <div class="au-ci" data-k="ok"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg><span>The new values, and the 2 scripts marked Needs approval at those values. Nothing is re-approved one by one.</span></div>
+          <div class="au-ci" data-k="ok"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg><span>Every future run and schedule of those scripts on gpu-workers, without further approval.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mk-dfoot">
+    <label class="rk-field" style="flex:1 1 auto"><input type="text" placeholder="Comment for the record (optional)" aria-label="Comment"></label>
+    <button class="rk-btn" data-danger="true">Reject…</button>
+    <button class="rk-btn" data-primary="true">Approve change and 2 scripts</button>
+  </div>
+</section>
+
+</div>
+</body>
+</html>

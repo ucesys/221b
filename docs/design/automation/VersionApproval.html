@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approval · script version</title>
+<link rel="stylesheet" href="./rk.css">
+<link rel="stylesheet" href="./au.css">
+</head>
+<body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+@import url("./rk.css");
+@import url("./au.css");
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+<div class="rk mk-app" data-h="1000" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" aria-label="Cluster: lakehouse-dev"><span class="rk-dot"></span>lakehouse-dev <span class="rk-dim">v1.37.1</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="warn">4</span></a>
+    <a class="rk-tab" href="#top">Nodes</a>
+    <a class="rk-tab" href="FleetParameters.html">Fleets</a>
+    <a class="rk-tab" href="Scripts.html" aria-current="page">Automation <span class="rk-cnt" data-tone="warn">1 to approve</span></a>
+    <a class="rk-tab" href="#top">Namespaces</a>
+    <a class="rk-tab" href="#top">Pods</a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services</a>
+    <a class="rk-tab" href="#top">Storage</a>
+  </nav>
+  <div class="mk-top-right">
+    <span class="rk-avatar" aria-hidden="true">OA</span><span>ops-admin-2</span><span class="rk-tag">K8S-Admin</span><span class="rk-tag" data-tone="accent">Fleet-Admin · db-prod</span>
+  </div>
+</header>
+
+<div class="au-body">
+  <aside class="au-groups" aria-label="Script groups">
+    <span class="rk-h">Status</span>
+    <button class="au-grp" aria-current="true">In review<span class="rk-num"><span class="rk-cnt" data-tone="warn">1</span></span></button>
+    <button class="au-grp">Suspended<span class="rk-num"><span class="rk-cnt" data-tone="warn">1</span></span></button>
+  </aside>
+  <main class="au-page">
+    <div class="au-head"><h1>Automation</h1><nav class="mk-nav" aria-label="Automation sections"><a class="rk-tab" href="Scripts.html" aria-current="page">Scripts</a><a class="rk-tab" href="Executions.html">Executions</a><a class="rk-tab" href="Configurations.html">Configurations</a></nav></div>
+    <table class="mk-table au-t" aria-label="Scripts in review (behind the drawer)">
+      <thead><tr><th style="width:300px">Script</th><th>Version</th><th>Approval</th></tr></thead>
+      <tbody><tr data-sel="true"><td class="au-name">kernel-patch</td><td class="au-ver">v5</td><td><span class="rk-pill" data-tone="warn"><span class="rk-dot"></span>In review · 1 of 2</span></td></tr></tbody>
+    </table>
+  </main>
+</div>
+
+<div class="mk-backdrop"></div>
+<section class="mk-drawer" aria-label="Approve kernel-patch version 5">
+  <div class="mk-dhead">
+    <div class="mk-kicker"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Approval request · script version</div>
+    <div class="mk-dtitle">kernel-patch <span class="au-ver" style="font-size:13px">v4 → v5</span>
+      <span class="rk-pill" data-tone="warn" style="font-family:var(--font)"><span class="rk-dot"></span>In review · 1 of 2</span>
+      <span class="mk-grow"></span>
+      <button class="rk-icon-btn" aria-label="Close"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button>
+    </div>
+    <div class="mk-facts">
+      <span>Drafted by Sherlock for <b>mikhail@stolpner.com</b> · Oct 31, 15:20</span>
+      <span>sha256 <span class="rk-mono">a71c…4e02</span></span>
+      <span>Used on <b>db-prod</b> (production): 2 Fleet-Admins</span>
+    </div>
+    <nav class="mk-dtabs" aria-label="Approval sections">
+      <a class="rk-tab" href="#top" aria-current="page">Summary</a>
+      <a class="rk-tab" href="#top">Full script</a>
+      <a class="rk-tab" href="#top">Dry run</a>
+      <a class="rk-tab" href="#top">History</a>
+    </nav>
+  </div>
+
+  <div class="mk-dbody">
+    <div class="rk-callout" data-tone="info">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7.2V11M8 5h.01"/></svg>
+      <span><b>This is a code review.</b> Approving v5 lets anyone with permission run or schedule it on the fleets they may use. No approval is asked per run, node or batch. v4 is superseded.</span>
+    </div>
+
+    <div class="au-dgrid" style="grid-template-columns:minmax(0,1fr) 380px;flex:none">
+      <div class="au-col">
+        <div class="au-sec">
+          <h3>Changes since v4 <span class="rk-tag">+9 −2</span></h3>
+          <pre class="au-code" style="flex:none" aria-label="Changes between version 4 and version 5"><div class="au-ln" data-k="h"><i>6</i><span># 221b:param      EXCLUDE_PKGS    sensitive  packages never updated</span></div><div class="au-ln" data-k="add"><i>7</i><span># 221b:param      HEALTH_CHECK    required   command that must pass after reboot</span></div><div class="au-ln"><i>…</i><span> </span></div><div class="au-ln" data-k="flag"><i>18</i><span>- dnf upgrade --security -y</span></div><div class="au-ln" data-k="add"><i>18</i><span>+ dnf upgrade --security -y --exclude=<span class="au-s">"$EXCLUDE_PKGS"</span></span></div><div class="au-ln" data-k="add"><i>19</i><span>+ dnf needs-restarting -r &gt;/dev/null || reboot_needed=1</span></div><div class="au-ln"><i>…</i><span> </span></div><div class="au-ln" data-k="add"><i>31</i><span>+ # after the node returns, 221B runs HEALTH_CHECK before uncordon</span></div><div class="au-ln" data-k="add"><i>32</i><span>+ echo <span class="au-s">"{\"changed\":true,\"reboot\":$reboot_needed,\"health\":\"$HEALTH_CHECK\"}"</span></span></div></pre>
+        </div>
+        <div class="au-sec">
+          <h3>Sherlock review</h3>
+          <div class="au-check">
+            <div class="au-ci" data-k="ok"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg><span><b>Honors dry run, safe to run twice,</b> sudo calls covered by the declared privilege.</span></div>
+            <div class="au-ci" data-k="ok"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg><span><b>Reboots only when needed,</b> instead of always (v4).</span></div>
+            <div class="au-ci" data-k="info"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 7.2V11M8 5h.01"/></svg><span>Dry run #1044 on db-prod: 6 of 6 would update 14 to 16 packages; Postgres packages excluded.</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="au-col">
+        <div class="au-sec">
+          <h3>What Watson will run</h3>
+          <div class="au-check">
+            <div class="au-ci" data-k="info"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="m4.5 6.5 2 1.5-2 1.5M8 10h3"/></svg><span><b>On the nodes, with sudo:</b> <span class="rk-mono">dnf upgrade</span>, <span class="rk-mono">dnf needs-restarting</span>. Reboot is done by 221B.</span></div>
+            <div class="au-ci" data-k="info"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.5 14 5v6l-6 3.5L2 11V5l6-3.5Z"/></svg><span><b>In Kubernetes:</b> none. The script declares no Kubernetes actions, so the Watson proxy will refuse any.</span></div>
+          </div>
+          <span class="mk-hint">Each command is audited as "Watson via kernel-patch v5, run #…".</span>
+        </div>
+        <div class="au-sec">
+          <h3>Where it is used</h3>
+          <dl class="rk-kv">
+            <dt>Schedule</dt><dd><span class="rk-mono">db-prod</span>, monthly, first Tue 02:00 · switches to v5 at the next run</dd>
+            <dt>Hooks there</dt><dd><span class="rk-mono">pg-switchover-if-primary v2</span>, already approved. Its Kubernetes actions: get pods; get, patch <span class="rk-mono">clusters.postgresql.cnpg.io</span></dd>
+            <dt>Last 90 days</dt><dd>12 runs of v4 · 0 failed</dd>
+          </dl>
+        </div>
+        <div class="au-sec">
+          <h3>Approvals</h3>
+          <div class="mk-list">
+            <div class="mk-item"><span class="au-ok"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg></span><b>mikhail@stolpner.com</b><span class="mk-grow rk-dim">15:31</span></div>
+            <div class="mk-item" style="background:var(--surface)"><span class="rk-dot" style="color:var(--warn)"></span><b>You</b><span class="mk-grow rk-dim">needed</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mk-dfoot">
+    <label class="rk-field" style="flex:1 1 auto"><input type="text" placeholder="Comment for the record (optional)" aria-label="Comment"></label>
+    <button class="rk-btn">Request changes…</button>
+    <a class="rk-btn" data-primary="true" href="Scripts.html">Approve v5</a>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
