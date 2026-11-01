@@ -112,11 +112,13 @@ type Service struct {
 	// stands for no one person.
 	perAccount *limiter
 	perAddress *limiter
-	audit      *audit.Log
-	log        *slog.Logger
-	now        func() time.Time
-	page       *template.Template
-	setupPage  *template.Template
+	// perShared is perAddress for an address many people may share.
+	perShared *limiter
+	audit     *audit.Log
+	log       *slog.Logger
+	now       func() time.Time
+	page      *template.Template
+	setupPage *template.Template
 	// passwordPage changes one's own password (6.4).
 	passwordPage *template.Template
 }
@@ -154,7 +156,7 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 	if cfg.SyncInterval <= 0 {
 		cfg.SyncInterval = time.Hour
 	}
-	s := &Service{cfg: cfg, setup: newLimiter(5, time.Minute, now), sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now)}
+	s := &Service{cfg: cfg, setup: newLimiter(5, time.Minute, now), sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now), perShared: newLimiter(300, time.Minute, now)}
 	if cfg.SessionStore != nil {
 		s.sessions.Share(cfg.SessionStore, log.With("store", "sessions"))
 	}
@@ -517,11 +519,20 @@ func formLogin(s string) (string, bool) {
 }
 
 // attempt counts a password attempt and says whether it may proceed. An
-// address that stands for no one person is not counted: behind a proxy the
-// console does not believe, one client's attempts would keep out everyone
-// behind it, so the limit per account stands alone there.
+// address that may stand for many people gets a wider limit of its own:
+// behind a proxy the console does not believe, one client's attempts would
+// otherwise keep out everyone behind it, and a client that only claims to
+// be behind one must still meet a limit. Attempts wait for a hashing slot,
+// so past a queue they are refused here, before they cost anything.
 func (s *Service) attempt(r *http.Request, login string) bool {
-	if !SharedAddress(r) && !s.perAddress.allow(from(r)) {
+	if hashingFull() {
+		return false
+	}
+	address := s.perAddress
+	if SharedAddress(r) {
+		address = s.perShared
+	}
+	if !address.allow(from(r)) {
 		return false
 	}
 	return s.perAccount.allow(login)

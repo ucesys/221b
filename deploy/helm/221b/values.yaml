@@ -120,8 +120,8 @@ auth:
   # controller's pods: their X-Forwarded-For says who a request is from, for
   # the audit log's From and the limits on sign-in attempts. Empty believes
   # no one's header: From is the socket's peer, and requests that came
-  # through a proxy count only against the limit per account. List every
-  # proxy on the way, not the clients.
+  # through a proxy share a wider limit for that address, as well as the
+  # limit per account. List every proxy on the way, not the clients.
   trustedProxies: []
   # An optional code that must be typed on the first-run page, which asks
   # for the first administrator while no user exists. Empty asks for none.

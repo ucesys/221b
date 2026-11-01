@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"reflect"
 	"runtime/debug"
 	"slices"
 	"sort"
@@ -904,6 +905,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	before := s.opts.Settings.Current().Settings
 	st, err := s.opts.Settings.Update(r.Context(), in)
 	if err != nil {
 		s.opts.Logger.Warn("settings not saved", "err", err)
@@ -918,9 +920,32 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if b := st.AlertBanners; b != nil && !*b {
 		detail += ", alert banners hidden"
 	}
+	detail += changedByCluster("fleets", before.Fleets, st.Fleets) + changedByCluster("acknowledged alerts", before.Acks, st.Acks)
 	s.record(r, audit.ActionSettings, "settings", detail)
 	b, _ := json.Marshal(st)
 	writeJSON(w, r, b)
+}
+
+// changedByCluster names, for the audit record, the clusters whose list
+// changed and how long it was and is.
+func changedByCluster[T any](what string, before, after map[string][]T) string {
+	var ids []string
+	for id, list := range after {
+		if !reflect.DeepEqual(before[id], list) {
+			ids = append(ids, id)
+		}
+	}
+	for id := range before {
+		if _, kept := after[id]; !kept {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	out := ""
+	for _, id := range ids {
+		out += fmt.Sprintf(", %s on %s: %d to %d", what, id, len(before[id]), len(after[id]))
+	}
+	return out
 }
 
 // settingsStatus is the status for a settings save that failed: 409 when

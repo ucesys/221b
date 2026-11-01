@@ -1074,3 +1074,15 @@ func runTool(t *testing.T, src *source, name string, in map[string]any) sherlock
 	t.Fatalf("no tool %s", name)
 	return sherlock.ToolResult{}
 }
+
+// The audit record of a settings save says which clusters' lists changed.
+func TestASettingsRecordNamesTheClustersThatChanged(t *testing.T) {
+	before := map[string][]int{"staging": {1, 2}, "gone": {1}, "same": {3}}
+	after := map[string][]int{"staging": {1}, "new": {1, 2, 3}, "same": {3}}
+	if got := changedByCluster("fleets", before, after); got != ", fleets on gone: 1 to 0, fleets on new: 0 to 3, fleets on staging: 2 to 1" {
+		t.Fatalf("got %q", got)
+	}
+	if got := changedByCluster("fleets", after, after); got != "" {
+		t.Fatalf("no change: %q", got)
+	}
+}

@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/roles"
+	"runtime"
 	"sigs.k8s.io/yaml"
+	"sync/atomic"
 )
 
 // LocalUser is an account defined in values or in a file: kept by the
@@ -53,6 +55,17 @@ func (u LocalUser) Account() Account {
 	return a
 }
 
+// A password check costs a good part of a CPU on purpose, so only so many
+// run at once, and a queue of attempts stays short whatever arrives.
+const hashQueue = 64
+
+var (
+	hashSlots   = make(chan struct{}, max(2, runtime.GOMAXPROCS(0)/2))
+	hashWaiting atomic.Int32
+)
+
+func hashingFull() bool { return hashWaiting.Load() >= hashQueue }
+
 // The hash format: pbkdf2-sha256$<iterations>$<salt>$<hash>, base64 raw URL.
 const (
 	hashPrefix     = "pbkdf2-sha256"
@@ -79,6 +92,10 @@ func HashPassword(password string) (string, error) {
 // CheckPassword reports whether the password matches the hash, in constant
 // time with respect to the hash.
 func CheckPassword(hash, password string) bool {
+	hashWaiting.Add(1)
+	defer hashWaiting.Add(-1)
+	hashSlots <- struct{}{}
+	defer func() { <-hashSlots }()
 	parts := strings.Split(hash, "$")
 	if len(parts) != 4 || parts[0] != hashPrefix {
 		return false

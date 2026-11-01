@@ -62,7 +62,7 @@ func TestOnlyATrustedProxyNamesTheClient(t *testing.T) {
 // Behind a proxy the console does not trust, one client's attempts cannot
 // use up an address everyone shares; the limit per account still holds.
 func TestOneClientBehindAProxyDoesNotLockEveryoneOut(t *testing.T) {
-	s := &Service{perAddress: newLimiter(3, time.Minute, time.Now), perAccount: newLimiter(5, time.Minute, time.Now)}
+	s := &Service{perAddress: newLimiter(3, time.Minute, time.Now), perShared: newLimiter(100, time.Minute, time.Now), perAccount: newLimiter(5, time.Minute, time.Now)}
 	behind := func() *http.Request { return Proxies(nil).Resolve(request("10.42.1.2:4000", "203.0.113.9")) }
 	for i := range 50 {
 		if !s.attempt(behind(), fmt.Sprintf("guess-%d", i)) {
@@ -117,5 +117,62 @@ func TestTheLimiterForgetsRatherThanGrows(t *testing.T) {
 	}
 	if len(l.hits) > l.keys {
 		t.Fatalf("%d keys", len(l.hits))
+	}
+}
+
+// A client that only claims to be behind a proxy, and everyone behind a
+// real one, meet a wider limit of their own and never go without one.
+func TestASharedAddressHasALimitOfItsOwn(t *testing.T) {
+	s := &Service{perAddress: newLimiter(2, time.Minute, time.Now), perShared: newLimiter(4, time.Minute, time.Now), perAccount: newLimiter(100, time.Minute, time.Now)}
+	r := httptest.NewRequest(http.MethodPost, "/signin", nil)
+	r.RemoteAddr = "203.0.113.9:1000"
+	r.Header.Set("X-Forwarded-For", "198.51.100.1")
+	r = Proxies(nil).Resolve(r)
+	if !SharedAddress(r) {
+		t.Fatal("not marked shared")
+	}
+	got := 0
+	for i := range 10 {
+		if s.attempt(r, fmt.Sprintf("user%d", i)) {
+			got++
+		}
+	}
+	if got != 4 {
+		t.Fatalf("%d attempts passed", got)
+	}
+}
+
+// Attempts past the queue are refused before they cost a password check.
+func TestAttemptsPastTheHashingQueueAreRefused(t *testing.T) {
+	s := &Service{perAddress: newLimiter(100, time.Minute, time.Now), perShared: newLimiter(100, time.Minute, time.Now), perAccount: newLimiter(100, time.Minute, time.Now)}
+	r := httptest.NewRequest(http.MethodPost, "/signin", nil)
+	hashWaiting.Add(hashQueue)
+	defer hashWaiting.Add(-hashQueue)
+	if s.attempt(r, "ann") {
+		t.Fatal("an attempt passed a full queue")
+	}
+}
+
+// Only so many password checks run at once.
+func TestPasswordChecksRunInSlots(t *testing.T) {
+	hash, err := HashPassword("a long enough password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range cap(hashSlots) {
+		hashSlots <- struct{}{}
+	}
+	done := make(chan bool, 1)
+	go func() { done <- CheckPassword(hash, "a long enough password") }()
+	select {
+	case <-done:
+		t.Fatal("a check ran with no slot free")
+	case <-time.After(100 * time.Millisecond):
+	}
+	for range cap(hashSlots) {
+		<-hashSlots
+	}
+	if !<-done {
+		t.Fatal("the check failed once a slot came free")
 	}
 }
