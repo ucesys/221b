@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { saveFleets } from '../api/fleets'
 import { useLiveMeta, useView } from '../api/live'
 import type { Fleet, FleetRow, Me, NodeRow } from '../api/types'
-import { capText, fleetOf, fleetsOfNode, has, inDefinition, listText, metaText, mxColumns, mxHas, pickedNodes, presets, problemsText, reqsOf, reqText, scopeNames, selectorText, setPickedNodes, splitLabel, type MxColumn } from '../lib/fleets'
+import { capText, fleetOf, fleetsOfNode, inDefinition, listText, metaText, mxColumns, mxHas, presets, problemsText, reqsOf, reqText, scopeNames, selectorText, splitLabel, type MxColumn } from '../lib/fleets'
 import { compareNatural, fileStamp, nWord } from '../lib/format'
 import { effectTone, facetMatch, labelText } from '../lib/nodes'
 import { href, listParam, navigate, withParams } from '../lib/router'
@@ -11,7 +11,8 @@ import { usePref } from '../lib/prefs'
 import { csvText, type ExportFormat } from '../lib/table'
 import { download, xlsxBytes, type Cell } from '../lib/xlsx'
 import { FleetEditor, type EditorSeed } from './FleetEditor'
-import { FleetNodes, type FleetNodesMode } from './FleetNodes'
+import { PickBox, usePickedNodes } from './NodePicks'
+import { PickedBar } from './PickedBar'
 import { ProblemFilter, problemLevel, showsNode } from './ProblemFilter'
 import { ExportMenu } from './ExportMenu'
 import { Chevron, ColumnsIcon, PlusIcon, SearchIcon } from './Icons'
@@ -82,20 +83,11 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
     setSortNow(s)
   }
   const [editor, setEditor] = useState<EditorSeed | null>(null)
-  // Nodes picked for a fleet change (asked after 0.7.1), kept per cluster across tab switches.
-  const [pickList, setPickList] = useState<string[]>(() => pickedNodes(route.cluster))
-  const setPicks = (names: string[]) => {
-    setPickedNodes(route.cluster, names)
-    setPickList(names)
-  }
-  const [dialog, setDialog] = useState<FleetNodesMode | null>(null)
+  // Nodes picked for a fleet change (asked after 0.7.1).
+  const { picks, pickedRows, pickSet, setPicks, togglePick: togglePickNode } = usePickedNodes(route.cluster, nodes)
 
   const one = sel.length === 1 && sel[0] !== 'none' ? fleets.find((f) => f.id === sel[0]) : undefined
   const byName = useMemo(() => new Map(nodes.map((n) => [n.name, n])), [nodes])
-  // Gone nodes drop out of the picks.
-  const picks = pickList.filter((n) => byName.has(n))
-  const pickSet = new Set(picks)
-  const pickedRows = picks.map((n) => byName.get(n)!)
   const oneDef = one ? defs.find((f) => f.id === one.id) : undefined
   const allNames = useMemo(() => nodes.map((n) => n.name), [nodes])
   const cols = useMemo(() => mxColumns(nodes), [nodes])
@@ -151,7 +143,6 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
   const rowCount = groups.reduce((n, g) => n + g.rows.length, 0)
   const shownNames = [...new Set(groups.flatMap((g) => g.rows.map((r) => r.name)))]
   const shownPicked = shownNames.filter((n) => pickSet.has(n)).length
-  const togglePickNode = (name: string) => setPicks(pickSet.has(name) ? picks.filter((n) => n !== name) : [...picks, name])
   const picked = (n: NodeRow) => facetMatch(n, fx)
   const pickedCount = fxOn ? new Set(scope.filter((name) => picked(byName.get(name)!))).size : 0
 
@@ -668,9 +659,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                       <div key={g.key + n.name} className="rk-mxr" role="row" data-dim={fxOn && !picked(n)} data-node={n.name} data-picked={pickSet.has(n.name) || undefined}>
                         <span className="rk-mxn" role="rowheader">
                           {admin && (
-                            <label className="rk-pickbox">
-                              <input type="checkbox" checked={pickSet.has(n.name)} onChange={() => togglePickNode(n.name)} aria-label={`Pick ${n.name}`} title={pickSet.has(n.name) ? `Unpick ${n.name}` : `Pick ${n.name}, to put it in a fleet or take it out`} data-testid="fleet-pick-node" />
-                            </label>
+                            <PickBox name={n.name} picked={pickSet.has(n.name)} onToggle={togglePickNode} />
                           )}
                           <span className="rk-namecopy">
                             <a className="rk-link rk-mono" {...peekLink({ kind: 'node', name: n.name })} title={`Open the details of ${n.name}`} style={{ minWidth: 0, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'none' }}>
@@ -715,25 +704,18 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
         </div>
 
         {admin && picks.length > 0 && (
-          <div className="rk-card rk-pickbar" role="group" aria-label="Picked nodes" data-testid="fleet-nodebar" style={fxOn ? { position: 'static' } : undefined}>
-            <strong style={{ fontSize: 12.5, fontWeight: 600 }}>Picked {nWord(picks.length, 'node', 'nodes')}</strong>
-            <span style={{ fontSize: 12, color: 'var(--fg2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '40ch' }} title={picks.join(', ')}>
-              {listText(picks.length > 4 ? [...picks.slice(0, 3), `${picks.length - 3} more`] : picks)}
-            </span>
-            <span style={{ flex: '1 1 auto' }} />
-            <button className="rk-btn" onClick={() => setDialog('new')} title="A new fleet of these nodes, by a label they share or a new one" data-testid="fleet-nodebar-new">
-              New fleet…
-            </button>
-            <button className="rk-btn" onClick={() => setDialog('add')} disabled={!defs.some((f) => pickedRows.some((n) => !has(f, n)))} title={defs.length ? 'Put these nodes in a fleet you choose' : 'No fleets yet: make one first'} data-testid="fleet-nodebar-add">
-              Add to a fleet…
-            </button>
-            <button className="rk-btn" onClick={() => setDialog('remove')} disabled={!defs.some((f) => pickedRows.some((n) => has(f, n)))} title={defs.some((f) => pickedRows.some((n) => has(f, n))) ? 'Take these nodes out of a fleet you choose' : 'None of these nodes is in a fleet'} data-testid="fleet-nodebar-remove">
-              Remove from a fleet…
-            </button>
-            <button className="rk-btn" onClick={() => setPicks([])} title="Unpick every node" data-testid="fleet-nodebar-cancel">
-              Cancel
-            </button>
-          </div>
+          <PickedBar
+            cluster={route.cluster}
+            nodes={pickedRows}
+            all={nodes}
+            fleets={defs}
+            rows={fleetRows}
+            current={oneDef}
+            inFlow={fxOn}
+            onCancel={() => setPicks([])}
+            onCreated={(f) => set({ fleet: f.id, pl: undefined, pt: undefined })}
+            onToast={onToast}
+          />
         )}
         {fxOn && (
           <div className="rk-card rk-pickbar" role="status" data-testid="fleet-pickbar">
@@ -767,29 +749,6 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
         )}
       </section>
 
-      {dialog && admin && (
-        <FleetNodes
-          mode={dialog}
-          nodes={pickedRows}
-          all={nodes}
-          fleets={defs}
-          rows={fleetRows}
-          current={oneDef}
-          onClose={() => setDialog(null)}
-          onCreate={async (f) => {
-            await saveFleets(route.cluster, [...defs, f])
-            set({ fleet: f.id, pl: undefined, pt: undefined })
-          }}
-          onSave={async (next) => {
-            await saveFleets(route.cluster, next)
-          }}
-          onDone={(m) => {
-            setDialog(null)
-            setPicks([])
-            onToast(m)
-          }}
-        />
-      )}
       {editor && admin && (
         <FleetEditor
           seed={editor}

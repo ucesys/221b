@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -185,8 +186,8 @@ type Options struct {
 	Now    func() time.Time
 	// Backend returns a cluster's backend as a person; nil uses client-go.
 	Backend func(cl Cluster, p kube.Person) (Backend, error)
-	// SSH pairs nodes and opens SSH sessions (Phase 11, ADR-72); nil
-	// leaves the SSH tools failing with a message.
+	// SSH pairs nodes and opens SSH sessions (Phase 11, ADR-72); without
+	// it the SSH tools fail with a message.
 	SSH SSH
 	// History keeps the records of ended sessions; nil keeps them in
 	// memory.
@@ -223,6 +224,9 @@ func New(o Options) *Manager {
 	}
 	if o.History == nil {
 		o.History = &MemoryHistory{Keep: o.Config.History.Keep}
+	}
+	if o.SSH == nil {
+		o.SSH = noSSH{}
 	}
 	if o.StartWithin <= 0 {
 		o.StartWithin = 90 * time.Second
@@ -292,6 +296,9 @@ func (m *Manager) record(action string, s *Session, who Who, outcome, detail str
 		return
 	}
 	d := fmt.Sprintf("session=%s tool=%s", s.ID, s.Req.Tool)
+	if s.Card != "" {
+		d += " card=" + s.Card
+	}
 	if detail != "" {
 		d += " " + detail
 	}
@@ -433,10 +440,6 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 		m.located(s, pod, "debug")
 		m.terminal(ctx, s, ShellCommand("auto"))
 	case toolbox.ToolSSH:
-		if m.opts.SSH == nil {
-			fail(errors.New("SSH is not part of this console"))
-			return
-		}
 		term, note, err := m.opts.SSH.Dial(ctx, s.Cluster, r.Node, s.Owner, s.ID)
 		if err != nil {
 			fail(err)
@@ -444,10 +447,6 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 		}
 		m.sshTerminal(ctx, s, term, note)
 	case toolbox.ToolSSHPair, toolbox.ToolSSHUnpair:
-		if m.opts.SSH == nil {
-			fail(errors.New("SSH is not part of this console"))
-			return
-		}
 		script, err := m.opts.SSH.Script(r)
 		if err != nil {
 			fail(err)
@@ -703,7 +702,9 @@ func (m *Manager) commandThen(ctx context.Context, s *Session, cmd []string, the
 		return
 	}
 	w := &limitWriter{m: m, s: s, max: m.opts.MaxOutput}
-	err := s.backend.Exec(ctx, s.Ns, s.Pod, s.Container, cmd, false, nil, w, w, nil)
+	out := &hidingWriter{w: w, mark: []byte(HostKeyMark)}
+	err := s.backend.Exec(ctx, s.Ns, s.Pod, s.Container, cmd, false, nil, out, out, nil)
+	out.flush()
 	code := 0
 	note := "finished"
 	if err != nil {
@@ -722,10 +723,10 @@ func (m *Manager) commandThen(ctx context.Context, s *Session, cmd []string, the
 	}
 	m.mu.Lock()
 	s.Exit = &code
-	out := s.ring.String()
+	shown := s.ring.String()
 	m.mu.Unlock()
 	if then != nil {
-		then(code, out)
+		then(code, shown+out.hidden.String())
 	}
 	if code == 0 {
 		m.end(s, EndFinished, "exit 0", Who{})
@@ -970,6 +971,48 @@ func without(names []string, name string) []string {
 }
 
 // limitWriter keeps a command's output up to a limit.
+// HostKeyMark starts the lines of a pairing's output that carry a node's
+// host keys: the server keeps them, and they stay off the page, the
+// transcript and the audit log (asked October 30, 2026).
+const HostKeyMark = "221B-HOSTKEY "
+
+// hidingWriter passes output on a line at a time and keeps the lines that
+// start with mark, which arrive in any size of chunk, for itself.
+type hidingWriter struct {
+	w      io.Writer
+	mark   []byte
+	line   []byte
+	hidden strings.Builder
+}
+
+func (h *hidingWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
+		if i < 0 {
+			h.line = append(h.line, p...)
+			break
+		}
+		h.line = append(h.line, p[:i+1]...)
+		p = p[i+1:]
+		h.flush()
+	}
+	return n, nil
+}
+
+// flush ends the line in hand, also at the end of the output.
+func (h *hidingWriter) flush() {
+	if len(h.line) == 0 {
+		return
+	}
+	if bytes.HasPrefix(h.line, h.mark) {
+		h.hidden.Write(h.line)
+	} else {
+		h.w.Write(h.line)
+	}
+	h.line = h.line[:0]
+}
+
 type limitWriter struct {
 	m   *Manager
 	s   *Session

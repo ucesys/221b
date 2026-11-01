@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { clock, endedWords, endSession, extendSession, fBytes, keepSession, sessionOutputHref, tabLabel, toolLabel, transcriptHref, ToolboxError, type SessionView } from '../../api/toolbox'
+import { clock, endedWords, endSession, extendSession, fBytes, HOST_TOOLS, keepSession, sessionOutputHref, tabLabel, toolLabel, transcriptHref, ToolboxError, type SessionView } from '../../api/toolbox'
 import { copyText } from '../../lib/clipboard'
 import { fmtClock, fmtTs } from '../../lib/format'
 import { CopyIcon, DownloadIcon } from '../Icons'
@@ -109,7 +109,7 @@ export function SessionPane({ cluster, session: s, admin, dark, controls, onToas
     <div className="rk-dph" style={{ flexWrap: 'wrap' }}>
       <h2>{s.tool === 'forward' ? 'Port forward' : toolLabel(s.tool)}</h2>
       <small className="rk-mono" title={s.summary}>
-        {s.tool === 'node-shell' || s.tool === 'node-command' || s.tool === 'ssh' || s.tool === 'ssh-pair' || s.tool === 'ssh-unpair' ? `node ${s.request.node}${s.pod ? ' · pod ' + s.pod : ''}${s.tool === 'ssh-pair' && s.request.loginUser ? ' · as ' + s.request.loginUser : ''}` : `${s.namespace ?? s.request.namespace}/${s.pod ?? s.request.pod ?? ''}${s.container ? ' · ' + s.container : ''}`}
+        {HOST_TOOLS.includes(s.tool) ? `node ${s.request.node}${s.pod ? ' · pod ' + s.pod : ''}${s.tool === 'ssh-pair' && s.request.loginUser ? ' · as ' + s.request.loginUser : ''}` : `${s.namespace ?? s.request.namespace}/${s.pod ?? s.request.pod ?? ''}${s.container ? ' · ' + s.container : ''}`}
       </small>
       <span style={{ flex: '1 1 auto' }} />
       {!s.mine && <span className="rk-pill">{s.owner}’s</span>}
@@ -154,7 +154,7 @@ export function SessionPane({ cluster, session: s, admin, dark, controls, onToas
   )
   let body: ReactNode
   if (s.tool === 'forward') body = <ForwardBody s={s} now={now} />
-  else if (s.tool === 'command' || s.tool === 'node-command' || s.tool === 'ssh-pair' || s.tool === 'ssh-unpair') body = <CommandBody cluster={cluster} s={s} />
+  else if (!s.interactive) body = <CommandBody cluster={cluster} s={s} />
   else if (s.state === 'starting')
     body = (
       <div className="tb-output" style={{ color: 'var(--term-dim)' }}>

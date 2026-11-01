@@ -50,7 +50,8 @@ type Config struct {
 	// AdminGroups are groups that do.
 	Admins      []string
 	AdminGroups []string
-	// SessionIdle ends a session after that long without a request;
+	// SessionIdle ends a session after that long without activity: a
+	// request the page did not make by itself, or typing into a terminal.
 	// SessionMax ends it that long after sign-in whatever happens.
 	SessionIdle time.Duration
 	SessionMax  time.Duration
@@ -315,12 +316,30 @@ func (s *Service) Gate(w http.ResponseWriter, r *http.Request) *http.Request {
 	return nil
 }
 
+// backgroundHeader marks a request the page makes by itself, on a timer or
+// a refresh tick. Claiming it only gives up activity, so nothing checks who
+// sent it.
+const backgroundHeader = "X-221B-Background"
+
+// background says whether a request is the page's own rather than the
+// person's: it finds the session, and its expiry, without counting as
+// activity, so the idle limit ends a session left open in a tab (P3-01).
+// EventSource and WebSocket cannot set a header and open again by
+// themselves; what they do send says what they are, on every path.
+func background(r *http.Request) bool {
+	return r.Header.Get(backgroundHeader) != "" || strings.Contains(r.Header.Get("Accept"), "text/event-stream") || strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+}
+
 func (s *Service) sessionOf(r *http.Request) (Session, bool) {
 	c, err := r.Cookie(cookieSession)
 	if err != nil || c.Value == "" {
 		return Session{}, false
 	}
-	sess, ok := s.sessions.Get(c.Value)
+	find := s.sessions.Get
+	if background(r) {
+		find = s.sessions.peek
+	}
+	sess, ok := find(c.Value)
 	if !ok {
 		return Session{}, false
 	}
@@ -721,7 +740,7 @@ type Me struct {
 	Roles    []roles.ID `json:"roles,omitempty"`
 	Method   string     `json:"method"`
 	Provider string     `json:"provider,omitempty"`
-	// SessionIdle is how long the session lives without a request, in
+	// SessionIdle is how long the session lives without activity, in
 	// seconds.
 	SessionIdle int `json:"sessionIdleSeconds"`
 }

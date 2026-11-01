@@ -29,13 +29,15 @@ type Pairing struct {
 	Port      int    `json:"port"`
 	// HostKeys are the node's host keys, one per type sshd may present,
 	// as known_hosts takes them (type and base64), read from the node
-	// when it was paired. HostKey is the first, for older records.
-	HostKey   string    `json:"hostKey"`
-	HostKeys  []string  `json:"hostKeys,omitempty"`
-	PairedAt  time.Time `json:"pairedAt"`
-	PairedBy  string    `json:"pairedBy,omitempty"`
-	CAFinger  string    `json:"caFingerprint"`
-	Principal string    `json:"principal"`
+	// when it was paired.
+	HostKeys []string  `json:"hostKeys,omitempty"`
+	PairedAt time.Time `json:"pairedAt"`
+	PairedBy string    `json:"pairedBy,omitempty"`
+	CAFinger string    `json:"caFingerprint"`
+	// Principal is the one this pairing put on the node, which its
+	// sessions' certificates carry: a pairing made before consoles had
+	// their own keeps the old one until the node is paired again.
+	Principal string `json:"principal"`
 }
 
 // Pairings keeps the pairings in the key-value storage.
@@ -120,18 +122,6 @@ func (p *Pairings) change(ctx context.Context, edit func(map[string]Pairing)) er
 		return err
 	}
 	return err
-}
-
-// Keys are the pinned host keys: HostKeys, or the single HostKey of an
-// older record.
-func (p Pairing) Keys() []string {
-	if len(p.HostKeys) > 0 {
-		return p.HostKeys
-	}
-	if p.HostKey != "" {
-		return []string{p.HostKey}
-	}
-	return nil
 }
 
 // Set records a pairing, replacing the node's earlier one.

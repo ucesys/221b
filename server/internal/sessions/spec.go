@@ -320,10 +320,17 @@ func OnNode(tool string) bool {
 	return tool == toolbox.ToolNodeShell || tool == toolbox.ToolNodeCommand || tool == toolbox.ToolSSHPair || tool == toolbox.ToolSSHUnpair
 }
 
+// OnNodeOrSSH says whether a tool makes a person root on a node: what OnNode
+// names and an SSH session, like a node shell. These are a SuperAdmin's,
+// and need a reason on production.
+func OnNodeOrSSH(tool string) bool {
+	return OnNode(tool) || tool == toolbox.ToolSSH
+}
+
 // NeedsTwo says whether a request needs a second person whatever the
-// cluster (TB-32). An SSH session is root on a node like a node shell.
+// cluster (TB-32).
 func NeedsTwo(c toolbox.Config, tool string) bool {
-	return (OnNode(tool) || tool == toolbox.ToolSSH) && c.NodeShell.Approval == toolbox.ApprovalAlways
+	return OnNodeOrSSH(tool) && c.NodeShell.Approval == toolbox.ApprovalAlways
 }
 
 // Summary is the one line a card and the audit log show for a request.

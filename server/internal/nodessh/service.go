@@ -19,16 +19,19 @@ import (
 	"github.com/ucesys/221b/server/internal/toolbox"
 )
 
+// dialTimeout bounds the TCP connect.
+const dialTimeout = 10 * time.Second
+
 // Options configure the service.
 type Options struct {
 	CA       *CA
 	Pairings *Pairings
+	// Console names this console among those that may pair one node
+	// (ConsoleName); empty is a laptop.
+	Console string
 	// NodeAddr finds a node's address to dial: its InternalIP.
 	NodeAddr func(cluster, node string) (string, error)
 	Logger   *slog.Logger
-	Now      func() time.Time
-	// Dialer opens the TCP connection; nil is net.Dialer with a timeout.
-	Dialer func(ctx context.Context, network, addr string) (net.Conn, error)
 	// CertTTL is how long a session's certificate is valid: it is used
 	// once, to connect.
 	CertTTL time.Duration
@@ -45,12 +48,8 @@ func New(o Options) *Service {
 	if o.Logger == nil {
 		o.Logger = slog.Default()
 	}
-	if o.Now == nil {
-		o.Now = time.Now
-	}
-	if o.Dialer == nil {
-		d := &net.Dialer{Timeout: 10 * time.Second}
-		o.Dialer = d.DialContext
+	if o.Console == "" {
+		o.Console = laptopConsole
 	}
 	if o.CertTTL <= 0 {
 		o.CertTTL = 5 * time.Minute
@@ -61,17 +60,15 @@ func New(o Options) *Service {
 	return &Service{opts: o}
 }
 
-// Load makes the authority's key when there is none yet.
-func (s *Service) Load(ctx context.Context) error { return s.opts.CA.Load(ctx) }
+// Principal is what this console's new pairings admit.
+func (s *Service) Principal() string { return PrincipalOf(s.opts.Console) }
 
 // Fingerprint is the authority's, reading its key first: after a restart
 // nothing has loaded it yet, and a pairing compared with an empty
 // fingerprint looked stale (seen on 221b, October 30, 2026). With no key
 // yet it is empty: one is made by the first pairing, not by looking.
 func (s *Service) Fingerprint() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := s.opts.CA.Peek(ctx); err != nil {
+	if err := s.opts.CA.Peek(context.Background()); err != nil {
 		s.opts.Logger.Warn("the SSH authority's key could not be read", "err", err)
 		return ""
 	}
@@ -87,9 +84,7 @@ func (s *Service) List(ctx context.Context, cluster string) ([]Pairing, error) {
 func (s *Service) Script(r sessions.Request) (string, error) {
 	switch r.Tool {
 	case toolbox.ToolSSHPair:
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if err := s.opts.CA.Load(ctx); err != nil {
+		if err := s.opts.CA.Load(context.Background()); err != nil {
 			return "", err
 		}
 		if !toolbox.LoginUserRE.MatchString(r.LoginUser) {
@@ -99,9 +94,12 @@ func (s *Service) Script(r sessions.Request) (string, error) {
 		if port == 0 {
 			port = 22
 		}
-		return PairScript(s.opts.CA.PublicKey(), r.LoginUser, port), nil
+		return PairScript(s.opts.CA.PublicKey(), s.opts.Console, r.LoginUser, port), nil
 	case toolbox.ToolSSHUnpair:
-		return UnpairScript(), nil
+		if err := s.opts.CA.Peek(context.Background()); err != nil {
+			return "", err
+		}
+		return UnpairScript(s.opts.CA.PublicKey(), s.opts.Console), nil
 	}
 	return "", fmt.Errorf("%s is not an SSH pairing tool", r.Tool)
 }
@@ -118,7 +116,7 @@ func (s *Service) Done(ctx context.Context, cluster string, r sessions.Request, 
 		if port == 0 {
 			port = 22
 		}
-		return s.opts.Pairings.Set(ctx, Pairing{Cluster: cluster, Node: r.Node, LoginUser: user, Port: port, HostKey: hostKeys[0], HostKeys: hostKeys, PairedAt: s.opts.Now().UTC(), PairedBy: by, CAFinger: s.opts.CA.Fingerprint(), Principal: Principal})
+		return s.opts.Pairings.Set(ctx, Pairing{Cluster: cluster, Node: r.Node, LoginUser: user, Port: port, HostKeys: hostKeys, PairedAt: time.Now().UTC(), PairedBy: by, CAFinger: s.opts.CA.Fingerprint(), Principal: s.Principal()})
 	case toolbox.ToolSSHUnpair:
 		if !strings.Contains(output, markUnpaired) {
 			return errors.New("the unpairing did not finish on the node")
@@ -144,6 +142,9 @@ func (s *Service) Dial(ctx context.Context, cluster, node string, owner sessions
 	if fp := s.opts.CA.Fingerprint(); p.CAFinger != "" && p.CAFinger != fp {
 		return nil, "", fmt.Errorf("node %s was paired with another authority (%s, now %s): pair it again", node, p.CAFinger, fp)
 	}
+	if p.Principal == "" {
+		return nil, "", fmt.Errorf("the pairing of node %s names no principal: pair it again", node)
+	}
 	pinned, algos, err := pinnedKeys(p)
 	if err != nil {
 		return nil, "", fmt.Errorf("the pinned host keys of node %s are not readable: pair it again", node)
@@ -159,12 +160,13 @@ func (s *Service) Dial(ctx context.Context, cluster, node string, owner sessions
 	if who == "" {
 		who = "console"
 	}
-	signer, err := s.opts.CA.Sign(who+" via 221B session "+session, []string{Principal}, s.opts.CertTTL, s.opts.Now())
+	signer, err := s.opts.CA.Sign(who+" via 221B session "+session, []string{p.Principal}, s.opts.CertTTL, time.Now())
 	if err != nil {
 		return nil, "", err
 	}
 	hostPort := net.JoinHostPort(addr, strconv.Itoa(p.Port))
-	conn, err := s.opts.Dialer(ctx, "tcp", hostPort)
+	dialer := net.Dialer{Timeout: dialTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", hostPort)
 	if err != nil {
 		return nil, "", fmt.Errorf("connecting to %s: %w", hostPort, err)
 	}
@@ -222,7 +224,7 @@ func pinnedKeys(p Pairing) ([]ssh.PublicKey, []string, error) {
 	var keys []ssh.PublicKey
 	seen := map[string]bool{}
 	var algos []string
-	for _, line := range p.Keys() {
+	for _, line := range p.HostKeys {
 		k, _, _, _, err := ssh.ParseAuthorizedKey([]byte(line))
 		if err != nil {
 			return nil, nil, err

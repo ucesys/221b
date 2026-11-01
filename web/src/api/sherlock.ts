@@ -118,6 +118,8 @@ export interface SherlockConfig {
   needsKey: boolean
   key: { set: boolean; source?: 'console' | 'chart'; setAt?: string; setBy?: string; store: 'secret' | 'memory' }
   spend: { day: string; dayUSD: number; dayAsked: number; month: string; monthUSD: number; monthAsked: number }
+  /** The providers seen to report no token use, whose spend is an estimate. */
+  noUsage?: string[]
   models: SherlockModel[]
   clusters: { id: string; name: string; env: string }[]
   running: number

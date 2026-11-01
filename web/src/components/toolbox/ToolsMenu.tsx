@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { fetchToolbox, type ToolAction, type ToolboxInfo, type ToolName } from '../../api/toolbox'
+import { fetchToolbox, HOST_TOOLS, type ToolAction, type ToolboxInfo, type ToolName } from '../../api/toolbox'
 import type { PodDetails } from '../../api/types'
 import { layer } from '../../lib/layer'
 import { useSoleMenu } from '../../lib/menus'
@@ -121,8 +121,7 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
   const sherlock = useSherlockApi()
   useSoleMenu(true, onClose)
   // By value: every table refresh hands the menu a new target object, and
-  // a node's answer is not cached, so each would fetch again and take the
-  // keyboard back to the first item.
+  // each would fetch again and take the keyboard back to the first item.
   const kind = target.kind
   const targetName = target.name
   const targetNs = target.kind === 'pod' ? target.namespace : ''
@@ -176,7 +175,7 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
     const o = info.off[t]
     if (o) return o
     if (target.kind === 'pod') return info.namespaces[target.namespace]?.tools[t] || undefined
-    if (t === 'node-shell' || t === 'node-command' || t === 'ssh' || t === 'ssh-pair' || t === 'ssh-unpair') return info.nodes[t] || undefined
+    if (HOST_TOOLS.includes(t)) return info.nodes[t] || undefined
     return undefined
   }
   const pairing = target.kind === 'node' ? info?.ssh?.pairings[target.name] : undefined

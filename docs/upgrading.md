@@ -59,7 +59,7 @@ New chart values, all with defaults: `toolbox.ssh.enabled` (false), `toolbox.ssh
 - **A new Secret**, `<release>-ssh-ca`, made on the first pairing: the SSH certificate authority's key. The console's ServiceAccount already manages Secrets in its namespace when `connections.store` is `secrets`. Back it up with the namespace; a console that loses it must pair every node again.
 - **A new key in the settings ConfigMap**, `ssh-pairings.json`.
 - **A new egress rule in the NetworkPolicy**, only with SSH on: TCP to `toolbox.ssh.port` (22) anywhere, so the console reaches sshd on the nodes. Set `networkPolicy.nodeCIDRs` to the nodes' addresses to allow nothing else; `toolbox.ssh.enabled=false` removes the rule.
-- **On a paired node**: `/etc/ssh/221b/`, `/etc/ssh/sshd_config.d/221b.conf`, and an `Include /etc/ssh/sshd_config.d/*.conf` line at the top of `sshd_config` when it had none (a failed pairing takes it out again). *Unpair from SSH…* removes the first two.
+- **On a paired node**: `/etc/ssh/221b/`, `/etc/ssh/sshd_config.d/221b.conf`, and an `Include /etc/ssh/sshd_config.d/*.conf` line at the top of `sshd_config` when it had none (a failed pairing takes it out again). Several consoles may pair one node: each keeps its own line in `ca.pub` and the principals files, and *Unpair from SSH…* removes that console's lines, and the first two only with the last console's key.
 
 ## 0.10.2 (unreleased)
 

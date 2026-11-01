@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { saveFleets } from '../api/fleets'
 import { useLiveMeta, useView } from '../api/live'
 import type { Fleet, FleetRow, Me, NodeRow } from '../api/types'
 import { NODE_COLUMNS, nodeLabel, nodeTerms } from '../columns/nodes'
@@ -11,9 +10,9 @@ import { ColumnsMenu } from './ColumnsMenu'
 import { DataTable } from './DataTable'
 import { ExportMenu } from './ExportMenu'
 import { FacetPicker } from './FacetPicker'
-import { FleetEditor, type EditorSeed } from './FleetEditor'
 import { NodeFleets } from './NodeFleets'
-import { NodePicking, PickedBar } from './NodePicks'
+import { NodePicking, usePickedNodes } from './NodePicks'
+import { PickedBar } from './PickedBar'
 import { fetchToolbox } from '../api/toolbox'
 import { useToolbox } from './toolbox/context'
 import { NodePanel } from './NodePanel'
@@ -53,42 +52,15 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
   const table = useTable<NodeRow>({ id: 'nodes', columns: NODE_COLUMNS, rows: inScope, terms: nodeTerms, now, compact, defaultSort: { col: 'status', dir: 'desc' }, query, onQuery: (q) => set({ q }) })
   const metrics = cluster?.metrics === 'available'
 
-  // Picked nodes (asked October 30, 2026): a fleet of names, members of
-  // one, or paired for SSH, one session each.
+  // Picked nodes (asked October 30, 2026): the Fleets tab's bar and dialog,
+  // and paired for SSH, one session each. me.admin is the SuperAdmin, who
+  // alone changes fleets and pairs nodes, so no one else gets the boxes.
   const tb = useToolbox()
   const admin = me?.admin ?? true
-  // Kept with the cluster it was picked on: another cluster starts empty.
-  const [pickedState, setPickedState] = useState<{ cluster: string; picked: Set<string> }>(() => ({ cluster: route.cluster, picked: new Set() }))
-  const picked = useMemo(() => (pickedState.cluster === route.cluster ? pickedState.picked : new Set<string>()), [pickedState, route.cluster])
-  const setPicked = useCallback((next: Set<string>) => setPickedState({ cluster: route.cluster, picked: next }), [route.cluster])
-  const [fleetSeed, setFleetSeed] = useState<EditorSeed | null>(null)
-  const picking = useMemo(
-    () => ({
-      picked,
-      toggle: (name: string) => {
-        const next = new Set(picked)
-        if (next.has(name)) next.delete(name)
-        else next.add(name)
-        setPicked(next)
-      },
-    }),
-    [picked, setPicked],
-  )
-  const pickedNames = useMemo(() => rows.map((r) => r.name).filter((n) => picked.has(n)), [rows, picked])
-  const addToFleet = async (id: string) => {
-    const target = defs.find((f) => f.id === id)
-    if (!target || target.kind !== 'nodes') return
-    const nodes = [...new Set([...(target.nodes ?? []), ...pickedNames])]
-    try {
-      await saveFleets(route.cluster, defs.map((f) => (f.id === id ? { ...f, nodes } : f)))
-      onToast(`Added ${pickedNames.length === 1 ? 'the node' : `${pickedNames.length} nodes`} to ${target.name}.`)
-      setPicked(new Set())
-    } catch (e) {
-      onToast(e instanceof Error ? e.message : String(e))
-    }
-  }
+  const { picks, pickedRows, pickSet, setPicks, togglePick } = usePickedNodes(route.cluster, rows)
+  const picking = useMemo(() => (admin ? { picked: pickSet, toggle: togglePick } : null), [admin, pickSet, togglePick])
   // What the server would answer, asked once something is picked.
-  const askSSH = pickedNames.length > 0 && !!tb?.available
+  const askSSH = admin && picks.length > 0 && !!tb?.available
   const [sshRefusal, setSshRefusal] = useState<string | undefined>()
   const tbCluster = tb?.cluster
   useEffect(() => {
@@ -102,7 +74,7 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
       live = false
     }
   }, [askSSH, tbCluster])
-  const sshOff = !tb?.available ? 'Watson is off here' : !admin ? 'SuperAdmins pair nodes' : sshRefusal
+  const sshOff = !tb?.available ? 'Watson is off here' : sshRefusal
   const cp = rows.filter((r) => r.role === 'control-plane').length
   const withErrors = rows.filter((r) => r.errors > 0).length
   const withProblems = rows.filter((r) => r.errors + r.warnings > 0).length
@@ -169,42 +141,35 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
                 <ExportMenu onExport={(f) => table.exportRows(f, cluster?.name, 'nodes', onToast)} disabled={!table.shown.length} what="the nodes in view" />
               </div>
             </div>
-            {pickedNames.length > 0 && (
+            {admin && picks.length > 0 && (
               <PickedBar
-                picked={pickedNames}
-                shown={table.shown.map((r) => r.name)}
-                onPickAll={() => setPicked(new Set([...picked, ...table.shown.map((r) => r.name)]))}
-                onClear={() => setPicked(new Set())}
-                fleets={admin ? defs : null}
-                onMakeFleet={() => setFleetSeed({ fleet: null, kind: 'nodes', nodes: pickedNames })}
-                onAddToFleet={(id) => void addToFleet(id)}
-                sshOff={sshOff}
-                onPairSSH={() => tb?.openTool({ tool: 'ssh-pair', nodes: pickedNames, from: 'Nodes page' })}
-              />
+                cluster={route.cluster}
+                nodes={pickedRows}
+                all={rows}
+                fleets={defs}
+                rows={fleetRows}
+                current={fleetSel.length === 1 ? defs.find((f) => f.id === fleetSel[0]) : undefined}
+                inFlow
+                onCancel={() => setPicks([])}
+                onCreated={(f) => set({ fleet: f.id })}
+                onToast={onToast}
+                note={
+                  table.shown.some((r) => !pickSet.has(r.name)) && (
+                    <button className="rk-link" onClick={() => setPicks([...new Set([...picks, ...table.shown.map((r) => r.name)])])} style={{ fontSize: 12 }} data-testid="fleet-nodebar-all">
+                      pick all {table.shown.length} in view
+                    </button>
+                  )
+                }
+              >
+                <button className="rk-btn" onClick={() => tb?.openTool({ tool: 'ssh-pair', nodes: picks, from: 'Nodes page' })} disabled={!!sshOff} title={sshOff ?? 'Pair every picked node for SSH: one session each'} data-testid="fleet-nodebar-ssh">
+                  Pair for SSH…
+                </button>
+              </PickedBar>
             )}
             <DataTable<NodeRow> label="Nodes" rows={table.shown} cols={table.cols} rowKey={(r) => r.name} rowLabel={nodeLabel} sort={table.sort} onSort={table.onSort} selected={selected} onOpen={onOpen} compact={compact} now={now} empty={rows.length ? 'No nodes match this filter.' : 'No nodes to show: Kubernetes does not let you list nodes in this cluster, or it has none.'} rowAttr="node" />
           </section>
           </NodePicking.Provider>
         </div>
-        {fleetSeed && admin && (
-          <FleetEditor
-            seed={fleetSeed}
-            fleets={defs}
-            nodes={rows}
-            now={now}
-            onClose={() => setFleetSeed(null)}
-            onSave={async (f, isNew) => {
-              await saveFleets(route.cluster, isNew ? [...defs, f] : defs.map((x) => (x.id === f.id ? f : x)))
-              onToast(`${isNew ? 'Created' : 'Saved'} the fleet ${f.name}.`)
-              setFleetSeed(null)
-              setPicked(new Set())
-            }}
-            onDelete={async (f) => {
-              await saveFleets(route.cluster, defs.filter((x) => x.id !== f.id))
-              setFleetSeed(null)
-            }}
-          />
-        )}
         {selectedRow && <NodePanel r={selectedRow} metrics={metrics} metricsNote={cluster?.metricsMessage ?? ''} uptimeNote={cluster?.uptimeMessage ?? ''} now={now} onClose={close} onToast={onToast} />}
       </div>
     </main>

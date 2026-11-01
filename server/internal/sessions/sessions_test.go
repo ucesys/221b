@@ -22,6 +22,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/toolbox"
 	"github.com/ucesys/221b/server/internal/tunnel"
 )
@@ -1356,5 +1357,109 @@ func TestACloseWriteTellsThePodAndKeepsTheAnswer(t *testing.T) {
 	}
 	if fr := nextFrame(t, p); fr.Type != tunnel.Close || fr.Conn != 3 {
 		t.Fatalf("then: %d %d", fr.Type, fr.Conn)
+	}
+}
+
+// A console without SSH: the tools fail with a message, in the session
+// (Phase 11), with no check of their own at each use.
+func TestAConsoleWithoutSSHFailsTheSSHToolsWithAMessage(t *testing.T) {
+	m, _, _, _ := setup(t)
+	for _, req := range []Request{{Tool: toolbox.ToolSSH, Node: "worker-1"}, {Tool: toolbox.ToolSSHPair, Node: "worker-1", LoginUser: "ops"}} {
+		s, err := m.Start(Cluster{ID: "c1"}, req, alice(), "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := waitState(t, m, s.ID, StateEnded); !strings.Contains(got.EndNote, "SSH is not part of this console") {
+			t.Fatalf("%s: %q", req.Tool, got.EndNote)
+		}
+	}
+}
+
+// Each session of a card says so in the audit log, the second node's as
+// much as the first's: the card's own record names only the first.
+func TestASessionsAuditRecordsNameItsCard(t *testing.T) {
+	m, f, _, buf := setup(t)
+	f.addPod("web", "api-1", "app")
+	s, err := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, alice(), "", "card-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, s.ID, StateLive)
+	if !strings.Contains(buf.text(), "session="+s.ID+" tool=shell card=card-7") {
+		t.Fatalf("audit %s", buf.text())
+	}
+}
+
+func TestThePredicateForBeingRootOnANode(t *testing.T) {
+	for tool, want := range map[string]bool{toolbox.ToolNodeShell: true, toolbox.ToolNodeCommand: true, toolbox.ToolSSHPair: true, toolbox.ToolSSHUnpair: true, toolbox.ToolSSH: true, toolbox.ToolShell: false, toolbox.ToolForward: false} {
+		if OnNodeOrSSH(tool) != want {
+			t.Errorf("%s: %v", tool, !want)
+		}
+	}
+}
+
+// A restore merges by id, keeps what the toolbox keeps, newest first, and
+// a second one adds nothing.
+func TestARestoreMergesRecordsUpToWhatIsKept(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC)
+	h := &KVHistory{Backend: &kv.Memory{}, Key: HistoryKey, Keep: 3}
+	h.Add(Record{ID: "kept", Ended: at})
+	h.Add(Record{ID: "old", Ended: at.Add(-time.Hour)})
+	add := []Record{{ID: "kept", Ended: at, Summary: "from the file"}, {ID: "newer", Ended: at.Add(time.Hour)}, {ID: "newest", Ended: at.Add(2 * time.Hour)}}
+	n, err := h.Merge(ctx, add)
+	if err != nil || n != 2 {
+		t.Fatalf("merged %d: %v", n, err)
+	}
+	got := h.List()
+	if len(got) != 3 || got[0].ID != "newest" || got[1].ID != "newer" || got[2].ID != "kept" || got[2].Summary != "" {
+		t.Fatalf("%+v", got)
+	}
+	if n, err := h.Merge(ctx, add[:2]); err != nil || n != 0 {
+		t.Fatalf("again: %d %v", n, err)
+	}
+}
+
+// conflictOnce is a store where another replica saves between a read and
+// a write.
+type conflictOnce struct {
+	kv.Memory
+	hit bool
+}
+
+func (c *conflictOnce) SaveKey(ctx context.Context, key string, b []byte, version string) (string, error) {
+	if !c.hit {
+		c.hit = true
+		return "", kv.ErrConflict
+	}
+	return c.Memory.SaveKey(ctx, key, b, version)
+}
+
+func TestARestoreTriesAgainAfterAConflict(t *testing.T) {
+	h := &KVHistory{Backend: &conflictOnce{}, Key: HistoryKey}
+	if n, err := h.Merge(context.Background(), []Record{{ID: "a"}}); err != nil || n != 1 {
+		t.Fatalf("%d %v", n, err)
+	}
+}
+
+// A node's host keys reach the pairing record and never the output anyone
+// sees, whatever chunks they arrive in.
+func TestHostKeysStayOffTheOutput(t *testing.T) {
+	text := "pairing\n" + HostKeyMark + "ssh-ed25519 AAAA\ndone\n" + HostKeyMark + "ssh-rsa BBBB\n221B-PAIRED ops"
+	for _, size := range []int{1, 3, 7, len(text)} {
+		var shown bytes.Buffer
+		h := &hidingWriter{w: &shown, mark: []byte(HostKeyMark)}
+		for rest := text; len(rest) > 0; {
+			n := min(size, len(rest))
+			h.Write([]byte(rest[:n]))
+			rest = rest[n:]
+		}
+		h.flush()
+		if got := shown.String(); got != "pairing\ndone\n221B-PAIRED ops" {
+			t.Fatalf("chunks of %d: shown %q", size, got)
+		}
+		if got := h.hidden.String(); got != HostKeyMark+"ssh-ed25519 AAAA\n"+HostKeyMark+"ssh-rsa BBBB\n" {
+			t.Fatalf("chunks of %d: hidden %q", size, got)
+		}
 	}
 }

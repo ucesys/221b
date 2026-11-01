@@ -76,6 +76,20 @@ type SSH interface {
 	Dial(ctx context.Context, cluster, node string, owner Who, session string) (Term, string, error)
 }
 
+// errNoSSH is what the SSH tools fail with on a console without SSH.
+var errNoSSH = errors.New("SSH is not part of this console")
+
+// noSSH is the SSH of a console that has none.
+type noSSH struct{}
+
+func (noSSH) Script(Request) (string, error) { return "", errNoSSH }
+func (noSSH) Done(context.Context, string, Request, string, string) error {
+	return errNoSSH
+}
+func (noSSH) Dial(context.Context, string, string, Who, string) (Term, string, error) {
+	return nil, "", errNoSSH
+}
+
 // Term is an interactive shell over SSH: Run copies stdin to it and its
 // output to out, follows the sizes, and returns when the shell exits or
 // the context ends.

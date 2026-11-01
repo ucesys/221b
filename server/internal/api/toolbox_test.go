@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -15,9 +16,13 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/rest"
 
+	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/sim"
 	tb "github.com/ucesys/221b/server/internal/toolbox"
@@ -80,6 +85,52 @@ func TestToolboxSaysWhatAPersonMayUse(t *testing.T) {
 	}
 	if _, ok := v.Namespaces["web"]; !ok {
 		t.Fatalf("no tools for web: %s", b)
+	}
+}
+
+// sshStub says what a console with one older pairing would.
+type sshStub struct{}
+
+func (sshStub) Principal() string   { return "221b-superadmins-ns.console" }
+func (sshStub) Fingerprint() string { return "SHA256:x" }
+func (sshStub) List(context.Context, string) ([]nodessh.Pairing, error) {
+	return []nodessh.Pairing{{Node: "worker-001", LoginUser: "ops", Port: 22, Principal: "221b-superadmins", CAFinger: "SHA256:x", HostKeys: []string{"ssh-ed25519 AAAAsecret"}}}, nil
+}
+
+// The page is told this console's principal, for new pairings, and what
+// each pairing recorded, which its sessions use; never a host key.
+func TestToolboxSaysThePrincipals(t *testing.T) {
+	cfg := tb.Default()
+	cfg.SSH.Enabled = true
+	srv, c, m, _, local, store := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		o.Sessions = sessions.New(sessions.Options{Config: cfg, Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		o.SSH = sshStub{}
+	})
+	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
+	simSrv := httptest.NewServer(s)
+	t.Cleanup(simSrv.Close)
+	local.restCfg = &rest.Config{Host: simSrv.URL}
+	if err := m.SetLocal(context.Background(), clusters.Spec{Name: "Here", Env: clusters.EnvStaging, Mode: clusters.ModeWrite, Server: simSrv.URL, Auth: clusters.AuthInCluster, CA: clusters.CAPEM}, local, store); err != nil {
+		t.Fatal(err)
+	}
+	r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/toolbox?nodes=worker-001", "")
+	if r.StatusCode != 200 {
+		t.Fatalf("%d %s", r.StatusCode, b)
+	}
+	var v struct {
+		SSH struct {
+			Principal string `json:"principal"`
+			Pairings  map[string]struct {
+				Principal string `json:"principal"`
+			} `json:"pairings"`
+		} `json:"ssh"`
+	}
+	if err := json.Unmarshal([]byte(b), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.SSH.Principal != "221b-superadmins-ns.console" || v.SSH.Pairings["worker-001"].Principal != "221b-superadmins" || strings.Contains(b, "AAAAsecret") {
+		t.Fatalf("%s", b)
 	}
 }
 
@@ -401,5 +452,69 @@ func TestATranscriptCanBeDownloadedAfterTheSessionLeftMemory(t *testing.T) {
 	}
 	if r, _ := send(t, viewer, http.MethodGet, path("past-the-cap"), ""); r.StatusCode != http.StatusNotFound {
 		t.Fatalf("past the cap, not a SuperAdmin: %d", r.StatusCode)
+	}
+}
+
+// failingBackend refuses what a session asks of it, so the session ends by
+// itself without a cluster.
+type failingBackend struct{ sessions.Backend }
+
+func (failingBackend) CreatePod(context.Context, *corev1.Pod, bool) error {
+	return errors.New("no cluster here")
+}
+
+// Node 2 of a card cannot start: the card still names the first, and says
+// which did not open, not only the server's log.
+func TestACardReportsTheSessionOfANodeThatCouldNotStart(t *testing.T) {
+	calls := 0
+	mgr := sessions.New(sessions.Options{Config: tb.Default(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Backend: func(sessions.Cluster, kube.Person) (sessions.Backend, error) {
+		calls++
+		if calls == 2 {
+			return nil, errors.New("the credential could not be read")
+		}
+		return failingBackend{}, nil
+	}})
+	s := &Server{opts: Options{Sessions: mgr, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}}
+	it := watson.Item{ID: "card-1", Session: &watson.SessionCard{Request: sessions.Request{Tool: tb.ToolNodeShell, Node: "n1", Nodes: []string{"n2", "n3"}, Profile: tb.ProfileGeneral}}}
+	id, err := s.startSession(watson.Cluster{ID: "c1"}, it, watson.Who{})
+	if id == "" || err == nil || !strings.Contains(err.Error(), "n2") || !strings.Contains(err.Error(), "credential") || strings.Contains(err.Error(), "n3") {
+		t.Fatalf("%q %v", id, err)
+	}
+	if calls != 3 {
+		t.Fatalf("%d of 3 started", calls)
+	}
+	// Without the first the card has nothing to name.
+	calls = 1
+	if id, err := s.startSession(watson.Cluster{ID: "c1"}, it, watson.Who{}); id != "" || err == nil {
+		t.Fatalf("%q %v", id, err)
+	}
+}
+
+// countingAuth counts what a terminal reports.
+type countingAuth struct {
+	Auth
+	active int
+}
+
+func (a *countingAuth) Active(auth.Session) { a.active++ }
+
+// Keystrokes count as sign-in activity, without reading the session for
+// every one of them.
+func TestTypingCountsAsActivityAboutOnceAMinute(t *testing.T) {
+	at := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	a := &countingAuth{}
+	s := &Server{opts: Options{Auth: a, Now: func() time.Time { return at }}}
+	typed := s.typing(auth.Session{ID: "s"})
+	for range 3 {
+		typed()
+		at = at.Add(time.Second)
+	}
+	if a.active != 1 {
+		t.Fatalf("%d in 3 seconds", a.active)
+	}
+	at = at.Add(typingCounts)
+	typed()
+	if a.active != 2 {
+		t.Fatalf("%d a minute later", a.active)
 	}
 }

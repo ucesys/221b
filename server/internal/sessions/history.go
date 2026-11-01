@@ -115,33 +115,72 @@ func (h *KVHistory) load(ctx context.Context) ([]Record, string, error) {
 	return list, version, nil
 }
 
+// change applies fn to the records as stored and keeps the newest Keep,
+// over again when another replica saved first.
+func (h *KVHistory) change(ctx context.Context, fn func([]Record) []Record) error {
+	var err error
+	for try := 0; try < 5; try++ {
+		var list []Record
+		var version string
+		if list, version, err = h.load(ctx); err != nil {
+			return err
+		}
+		list = fn(list)
+		if h.Keep > 0 && len(list) > h.Keep {
+			list = list[:h.Keep]
+		}
+		b, _ := json.Marshal(list)
+		if _, err = h.Backend.SaveKey(ctx, h.Key, b, version); errors.Is(err, kv.ErrConflict) {
+			continue
+		}
+		if err == nil {
+			h.cache, h.loaded = list, true
+		}
+		return err
+	}
+	return err
+}
+
 func (h *KVHistory) Add(r Record) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	for try := 0; try < 5; try++ {
-		list, version, err := h.load(ctx)
-		if err != nil {
-			break
-		}
-		list = append([]Record{r}, list...)
-		if h.Keep > 0 && len(list) > h.Keep {
-			list = list[:h.Keep]
-		}
-		b, _ := json.Marshal(list)
-		if _, err := h.Backend.SaveKey(ctx, h.Key, b, version); errors.Is(err, kv.ErrConflict) {
-			continue
-		} else if err != nil {
-			break
-		}
-		h.cache, h.loaded = list, true
+	if err := h.change(ctx, func(list []Record) []Record { return append([]Record{r}, list...) }); err == nil {
 		return
 	}
 	if h.Logger != nil {
 		h.Logger.Warn("the session record was not saved; the audit log has it", "session", r.ID)
 	}
 	h.cache = append([]Record{r}, h.cache...)
+}
+
+// Merge adds the records it does not have, by id, for a restore, and says
+// how many.
+func (h *KVHistory) Merge(ctx context.Context, add []Record) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	err := h.change(ctx, func(list []Record) []Record {
+		n = 0
+		have := map[string]bool{}
+		for _, r := range list {
+			have[r.ID] = true
+		}
+		for _, r := range add {
+			if !have[r.ID] {
+				have[r.ID] = true
+				list = append(list, r)
+				n++
+			}
+		}
+		sort.SliceStable(list, func(i, j int) bool { return list[i].Ended.After(list[j].Ended) })
+		return list
+	})
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 func (h *KVHistory) List() []Record {

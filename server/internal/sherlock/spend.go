@@ -16,7 +16,8 @@ import (
 const SpendKey = "sherlock-spend.json"
 
 // Spend is what Sherlock has cost today and this month (UTC), in US
-// dollars, as counted from the token use the API reports.
+// dollars, as counted from the token use the API reports, or estimated
+// where it reports none.
 type Spend struct {
 	Day        string  `json:"day"`
 	DayUSD     float64 `json:"dayUSD"`

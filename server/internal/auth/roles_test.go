@@ -777,6 +777,10 @@ func (d *fakeDir) Members(ctx context.Context, groups []string) ([]auth.Person, 
 }
 
 func ldapEnv(t *testing.T) (*env, *fakeDir) {
+	return ldapEnvWith(t, func(*auth.Config) {})
+}
+
+func ldapEnvWith(t *testing.T, change func(*auth.Config)) (*env, *fakeDir) {
 	d := &fakeDir{
 		people: map[string]*auth.Person{
 			"priya": {Ref: "uid=priya", Username: "priya", Name: "Priya", Email: "priya@corp.example", Groups: []string{"platform-admins"}},
@@ -792,6 +796,7 @@ func ldapEnv(t *testing.T) (*env, *fakeDir) {
 		Local:     []auth.LocalUser{{Username: "break-glass", PasswordHash: hashOf(t, goodPassword), Roles: []string{"superAdmin"}}},
 		AccessTTL: 2 * time.Minute,
 	}
+	change(&cfg)
 	return newEnv(t, cfg), d
 }
 

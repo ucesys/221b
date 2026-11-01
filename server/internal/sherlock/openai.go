@@ -198,6 +198,7 @@ func readOpenAI(r io.Reader, onDelta func(Delta)) (Response, bool, error) {
 				cached = ch.Usage.PromptTokensDetails.CachedTokens
 			}
 			out.Usage = Usage{InputTokens: ch.Usage.PromptTokens - cached, CacheReadInputTokens: cached, OutputTokens: ch.Usage.CompletionTokens}
+			out.finalOutput = ch.Usage.CompletionTokens > 0
 		}
 		for _, c := range ch.Choices {
 			if c.Index != 0 {
@@ -205,6 +206,7 @@ func readOpenAI(r io.Reader, onDelta func(Delta)) (Response, bool, error) {
 			}
 			if c.Delta.Content != nil && *c.Delta.Content != "" {
 				text.WriteString(*c.Delta.Content)
+				out.received += len(*c.Delta.Content)
 				started = true
 				if onDelta != nil {
 					onDelta(Delta{Text: *c.Delta.Content})
@@ -234,6 +236,7 @@ func readOpenAI(r io.Reader, onDelta func(Delta)) (Response, bool, error) {
 					}
 				}
 				cur.Function.Arguments += tc.Function.Arguments
+				out.received += len(tc.Function.Arguments)
 			}
 			if c.FinishReason != nil && *c.FinishReason != "" {
 				finish = *c.FinishReason

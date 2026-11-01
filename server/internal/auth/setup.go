@@ -182,8 +182,9 @@ func (s *Service) live(sess Session) (Session, bool) {
 // person no longer in any listed group loses the session (RB-23).
 func (s *Service) rereadGroups(sess Session, force bool) (Session, bool) {
 	defer s.lockReread(sess.ID)()
-	// Another request may have done it while this one waited.
-	if cur, ok := s.sessions.Get(sess.ID); ok {
+	// Another request may have done it while this one waited. An open
+	// stream comes here too, so looking does not count as activity.
+	if cur, ok := s.sessions.peek(sess.ID); ok {
 		sess = cur
 		if !force && s.now().Sub(sess.GroupsAt) < s.cfg.AccessTTL {
 			return s.withGrant(sess), true

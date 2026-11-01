@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -10,7 +9,6 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/leader"
-	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
 // A single replica, with no Lease, always leads: nothing changes for it.
@@ -52,22 +50,6 @@ func TestLosingTheLeaseStopsAWarmStandbyAndEndsAColdOne(t *testing.T) {
 		if !warm && exits != 1 {
 			t.Fatalf("a cold standby exited %d times on losing the Lease, want once", exits)
 		}
-	}
-}
-
-// A missing Secret is an empty store to the SSH authority, not an error
-// about Claude's key (the first pairing on 221b said exactly that); any
-// other error comes through.
-func TestTheAuthoritysStoreStartsEmpty(t *testing.T) {
-	if data, err := noKeyAsEmpty(nil, sherlock.ErrNoKey); err != nil || data == nil || len(data) != 0 {
-		t.Fatalf("a missing Secret: %v %v", data, err)
-	}
-	other := errors.New("the API server is away")
-	if _, err := noKeyAsEmpty(nil, other); !errors.Is(err, other) {
-		t.Fatalf("another error: %v", err)
-	}
-	if data, err := noKeyAsEmpty(map[string][]byte{"ca.key": []byte("x")}, nil); err != nil || string(data["ca.key"]) != "x" {
-		t.Fatalf("a saved key: %v %v", data, err)
 	}
 }
 

@@ -408,28 +408,35 @@ test('the fleets beside the table filter it, and an administrator keeps them the
   }
 })
 
-test('picked nodes make a fleet of names, join one, or go to an SSH pairing (asked October 30, 2026)', async ({ page, request }) => {
+test('picked nodes use the Fleets tab\'s bar and dialog, and go to an SSH pairing (asked October 30, 2026)', async ({ page, request }) => {
   const rows = nodeRows(await snapshot(request))
   const [a, b] = [rows[0]!, rows[1]!]
+  const pick = (name: string) => page.locator(`[data-node="${name}"]`).getByTestId('fleet-pick-node')
+  const bar = page.getByTestId('fleet-nodebar')
   await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
-  await expect(page.getByTestId('node-picked-bar')).toHaveCount(0)
-  await page.getByTestId(`node-pick-${a.name}`).check()
-  await expect(page.getByTestId('node-picked-count')).toHaveText('1 node picked')
+  await expect(bar).toHaveCount(0)
+  await pick(a.name).check()
+  await expect(bar).toContainText('Picked 1 node')
   // Picking does not open the row's panel.
   await expect(page.getByTestId('node-panel')).toHaveCount(0)
-  await page.getByTestId(`node-pick-${b.name}`).check()
-  await expect(page.getByTestId('node-picked-count')).toHaveText('2 nodes picked')
-  // A fleet of the two, by name: the editor opens with them listed.
-  await page.getByTestId('node-picked-fleet').click()
-  const editor = page.getByTestId('fleet-editor')
-  await expect(editor).toBeVisible()
-  await expect(editor.getByTestId('fleet-nodelist-node').and(page.locator(':checked'))).toHaveCount(2)
+  await pick(b.name).check()
+  await expect(bar).toContainText('Picked 2 nodes')
+  // The picks stay while another tab is open.
+  await page.locator('[data-tab="pods"]').first().click()
+  await page.locator('[data-tab="nodes"]').first().click()
+  await expect(bar).toContainText('Picked 2 nodes')
+  await expect(pick(a.name)).toBeChecked()
+  // A fleet of the two: the Fleets tab's dialog, a list by default.
+  await bar.getByTestId('fleet-nodebar-new').click()
+  const fleet = page.getByTestId('fleet-nodes')
+  await expect(fleet).toContainText('New fleet from 2 nodes')
+  await expect(fleet.getByTestId('fleet-nodes-list')).toBeChecked()
   await page.keyboard.press('Escape')
-  await expect(editor).toHaveCount(0)
-  await expect(page.getByTestId('node-picked-count')).toHaveText('2 nodes picked')
+  await expect(fleet).toHaveCount(0)
+  await expect(bar).toContainText('Picked 2 nodes')
   // Pair for SSH needs Watson; without it the button says why.
-  const pair = page.getByTestId('node-picked-ssh')
+  const pair = bar.getByTestId('fleet-nodebar-ssh')
   if (await pair.isEnabled()) {
     await pair.click()
     const dlg = page.getByTestId('tool-dialog')
@@ -440,7 +447,7 @@ test('picked nodes make a fleet of names, join one, or go to an SSH pairing (ask
   } else {
     await expect(pair).toHaveAttribute('title', /Watson/)
   }
-  await page.getByTestId('node-picked-clear').click()
-  await expect(page.getByTestId('node-picked-bar')).toHaveCount(0)
-  await expect(page.getByTestId(`node-pick-${a.name}`)).not.toBeChecked()
+  await bar.getByTestId('fleet-nodebar-cancel').click()
+  await expect(bar).toHaveCount(0)
+  await expect(pick(a.name)).not.toBeChecked()
 })

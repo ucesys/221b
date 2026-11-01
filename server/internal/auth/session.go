@@ -276,11 +276,11 @@ func (s *Sessions) lookup(id string) (string, *Session, bool) {
 	}
 	sess.ID = id
 	s.newer[key] = version > sessionVersion
+	if s.written[key].Before(sess.LastSeen) {
+		s.written[key] = sess.LastSeen
+	}
 	if local != nil && local.LastSeen.After(sess.LastSeen) {
 		sess.LastSeen = local.LastSeen
-	}
-	if _, seen := s.written[key]; !seen {
-		s.written[key] = sess.LastSeen
 	}
 	s.byID[key] = &sess
 	s.extra[key] = extra
@@ -391,18 +391,28 @@ func (s *Sessions) Alive(id string) bool {
 	return ok
 }
 
-// peek is Get without counting as activity.
+// peek is Get without counting as activity, and without dropping an expired
+// session, which Sweep does. Activity noted here and not stored yet is
+// written back once it is due: no later request may ever count, and the
+// other replicas must not take this session for idle before it is.
 func (s *Sessions) peek(id string) (Session, bool) {
-	_, sess, ok := s.lookup(id)
+	key, sess, ok := s.lookup(id)
 	if !ok {
 		return Session{}, false
 	}
+	now := s.now()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.expired(sess, s.now()) {
+	if s.expired(sess, now) {
+		s.mu.Unlock()
 		return Session{}, false
 	}
-	return *sess, true
+	cp := *sess
+	due := s.shared != nil && cp.LastSeen.After(s.written[key]) && now.Sub(s.written[key]) >= seenEvery
+	s.mu.Unlock()
+	if due {
+		s.store(key, cp)
+	}
+	return cp, true
 }
 
 // Delete ends a session, on every replica.

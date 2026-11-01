@@ -113,8 +113,8 @@ function RoleDrawer({ perm, row, differences, onClose, onToast }: { perm: PermRo
  */
 export function PermissionsPage({ route, now, cluster, onToast }: AdminProps) {
   const name = route.cluster
-  const loaded = useAdmin(`permissions:${name}`, () => fetchPermissions(name), 60_000)
-  const described = useAdmin(`roles:${name}`, () => fetchRoles(name), 60_000)
+  const loaded = useAdmin(`permissions:${name}`, (bg) => fetchPermissions(name, bg), 60_000)
+  const described = useAdmin(`roles:${name}`, (bg) => fetchRoles(name, bg), 60_000)
   const data = loaded.data
   const [show, setShow] = useState<Show>('all')
   const [role, setRole] = useState<RoleId | null>(null)

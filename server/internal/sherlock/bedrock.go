@@ -271,12 +271,14 @@ func readConverse(r io.Reader, onDelta func(Delta)) (Response, bool, error) {
 			b := block(ev.ContentBlockIndex)
 			if ev.Delta.Text != nil {
 				b.Text += *ev.Delta.Text
+				out.received += len(*ev.Delta.Text)
 				started = true
 				if onDelta != nil && *ev.Delta.Text != "" {
 					onDelta(Delta{Text: *ev.Delta.Text})
 				}
 			}
 			if ev.Delta.ToolUse != nil {
+				out.received += len(ev.Delta.ToolUse.Input)
 				if in := inputs[ev.ContentBlockIndex]; in != nil {
 					in.WriteString(ev.Delta.ToolUse.Input)
 				}
@@ -287,6 +289,7 @@ func readConverse(r io.Reader, onDelta func(Delta)) (Response, bool, error) {
 		case "metadata":
 			if u := ev.Usage; u != nil {
 				out.Usage = Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadInputTokens: u.CacheReadInputTokens, CacheCreationInputTokens: u.CacheWriteInputTokens}
+				out.finalOutput = u.OutputTokens > 0
 			}
 		}
 	}

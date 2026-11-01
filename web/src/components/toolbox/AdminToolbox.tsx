@@ -25,7 +25,7 @@ export function AdminSessions({ route, cluster, onToast }: AdminProps) {
   const [tick, setTick] = useState(0)
   useEffect(() => {
     let on = true
-    Promise.all([fetchSessions(c), fetchSessionHistory(c)]).then(
+    Promise.all([fetchSessions(c, true), fetchSessionHistory(c, true)]).then(
       ([l, h]) => {
         if (!on) return
         setLive(l.filter((x) => x.state !== 'ended'))

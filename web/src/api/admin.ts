@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiPath } from '../lib/router'
-import { unauthorized } from './auth'
+import { BACKGROUND, unauthorized } from './auth'
 
 export type RoleId = 'superAdmin' | 'superViewer' | 'admin' | 'viewer'
 
@@ -187,12 +187,12 @@ export class AdminError extends Error {
   }
 }
 
-async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, url: string, body?: unknown, background = false): Promise<T> {
   let res: Response
   try {
     res = await fetch(url, {
       method,
-      headers: body === undefined ? { Accept: 'application/json' } : { Accept: 'application/json', 'Content-Type': 'application/json' },
+      headers: { ...(body === undefined ? { Accept: 'application/json' } : { Accept: 'application/json', 'Content-Type': 'application/json' }), ...(background ? BACKGROUND : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch {
@@ -215,9 +215,9 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 
 const enc = encodeURIComponent
 
-export const fetchRoles = (cluster: string) => request<RolesResponse>('GET', apiPath('admin/roles', cluster))
-export const fetchPermissions = (cluster: string) => request<PermissionsResponse>('GET', apiPath('admin/permissions', cluster))
-export const fetchUsers = () => request<UsersResponse>('GET', '/api/v1/admin/users')
+export const fetchRoles = (cluster: string, background = false) => request<RolesResponse>('GET', apiPath('admin/roles', cluster), undefined, background)
+export const fetchPermissions = (cluster: string, background = false) => request<PermissionsResponse>('GET', apiPath('admin/permissions', cluster), undefined, background)
+export const fetchUsers = (background = false) => request<UsersResponse>('GET', '/api/v1/admin/users', undefined, background)
 
 export const createUser = (u: NewUser) => request<UserRow>('POST', '/api/v1/admin/users', u)
 export const changeUser = (username: string, c: UserChange) => request<UserRow>('PATCH', `/api/v1/admin/users/${enc(username)}`, c)
@@ -240,8 +240,8 @@ export interface Loaded<T> {
   reload: () => void
 }
 
-/** Loads one admin resource, again when its key changes or reload is called, and again every `every` ms while the page is open. */
-export function useAdmin<T>(key: string, load: () => Promise<T>, every = 0): Loaded<T> {
+/** Loads one admin resource, again when its key changes or reload is called, and again every `every` ms while the page is open; load is told when it is the timer asking. */
+export function useAdmin<T>(key: string, load: (background: boolean) => Promise<T>, every = 0): Loaded<T> {
   const [state, setState] = useState<{ key: string; data: T | null; error: string; status: number }>({ key, data: null, error: '', status: 0 })
   const [tick, setTick] = useState(0)
   const loader = useRef(load)
@@ -250,8 +250,8 @@ export function useAdmin<T>(key: string, load: () => Promise<T>, every = 0): Loa
   })
   useEffect(() => {
     let gone = false
-    const run = () => {
-      loader.current().then(
+    const run = (background = false) => {
+      loader.current(background).then(
         (data) => {
           if (!gone) setState({ key, data, error: '', status: 0 })
         },
@@ -263,7 +263,7 @@ export function useAdmin<T>(key: string, load: () => Promise<T>, every = 0): Loa
       )
     }
     run()
-    const t = every > 0 ? setInterval(run, every) : undefined
+    const t = every > 0 ? setInterval(() => run(true), every) : undefined
     return () => {
       gone = true
       if (t) clearInterval(t)
@@ -298,14 +298,18 @@ export interface AuditPage {
   actions: string[]
 }
 
-export function fetchAudit(q: { q?: string; action?: string; outcome?: string; limit?: number }): Promise<AuditPage> {
-  const p = new URLSearchParams()
-  if (q.q?.trim()) p.set('q', q.q.trim())
-  if (q.action) p.set('action', q.action)
-  if (q.outcome) p.set('outcome', q.outcome)
-  if (q.limit) p.set('limit', String(q.limit))
-  const qs = p.toString()
-  return request<AuditPage>('GET', '/api/v1/admin/audit' + (qs ? '?' + qs : ''))
+/** Every event the console keeps: the server's most, above what it keeps (the newest 2,000). */
+export const fetchAudit = () => request<AuditPage>('GET', '/api/v1/admin/audit?limit=5000')
+
+/** The events with the words, each somewhere in them, of an action or its family and an outcome: as the server's filter. */
+export function filterAudit(events: AuditEvent[], f: { q: string; action: string; outcome: string }): AuditEvent[] {
+  const words = f.q.toLowerCase().split(/\s+/).filter(Boolean)
+  return events.filter((e) => {
+    if (f.action && e.action !== f.action && !e.action.startsWith(f.action + '.')) return false
+    if (f.outcome && e.outcome !== f.outcome) return false
+    const text = [e.action, e.who.name, e.who.email, e.who.subject, e.cluster, e.target, e.detail, e.outcome, e.from].join(' ').toLowerCase()
+    return words.every((w) => text.includes(w))
+  })
 }
 
 /** A backup file (Administration › Backup, asked October 30, 2026): what the console keeps of its own, never a credential. */

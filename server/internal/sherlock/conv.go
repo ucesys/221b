@@ -212,6 +212,8 @@ type Service struct {
 	// running counts answers in progress, for /metrics.
 	running int
 	wg      sync.WaitGroup
+	// noUsage names the providers and models seen to report no usage.
+	noUsage map[string]bool
 }
 
 // New returns the service.
@@ -249,7 +251,33 @@ func New(o Options) *Service {
 	if o.Ledger == nil {
 		o.Ledger = NewLedger(nil, o.Now, o.Logger)
 	}
-	return &Service{opts: o, convs: map[Key]*Conversation{}}
+	return &Service{opts: o, convs: map[Key]*Conversation{}, noUsage: map[string]bool{}}
+}
+
+// noteNoUsage warns, once for each provider and model, of answers whose
+// spend can only be estimated.
+func (s *Service) noteNoUsage(model string) {
+	who := s.opts.Client.provider().Name() + " with " + model
+	s.mu.Lock()
+	seen := s.noUsage[who]
+	s.noUsage[who] = true
+	s.mu.Unlock()
+	if !seen {
+		s.opts.Logger.Warn("the model's API reports no token use; Sherlock's spend is estimated, at about 4 characters a token", "provider", who)
+	}
+}
+
+// NoUsage names the providers and models that have reported no usage since
+// the console started, whose spend is an estimate.
+func (s *Service) NoUsage() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.noUsage))
+	for who := range s.noUsage {
+		out = append(out, who)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Ledger is the spend.
@@ -471,12 +499,13 @@ func (s *Service) Drain(ctx context.Context, settle time.Duration) {
 func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Question, set Settings) {
 	model := set.Price()
 	var (
-		total   Usage
-		cost    float64
-		tools   []string
-		outcome = audit.OutcomeOK
-		detail  string
-		ui      uiLog
+		total     Usage
+		cost      float64
+		estimated bool
+		tools     []string
+		outcome   = audit.OutcomeOK
+		detail    string
+		ui        uiLog
 	)
 	var defs []ToolDef
 	if q.Tools != nil {
@@ -520,6 +549,9 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		if u := ui.String(); u != "" {
 			detail = strings.TrimPrefix(detail+"; "+u, "; ")
 		}
+		if estimated {
+			detail = strings.TrimPrefix(detail+"; tokens and cost estimated, not all reported by the model's API", "; ")
+		}
 		s.record(q, set.Model, tools, total, cost, outcome, detail)
 	}()
 
@@ -557,6 +589,10 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		used := model.Cost(resp.Usage)
 		total = total.Add(resp.Usage)
 		cost += used
+		estimated = estimated || resp.Estimated
+		if resp.NoUsage {
+			s.noteNoUsage(set.Model)
+		}
 		if used > 0 || round == 0 {
 			s.opts.Ledger.Add(context.Background(), used, round == 0)
 		}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { unauthorized } from '../api/auth'
+import { BACKGROUND, unauthorized } from '../api/auth'
 import { useRefreshTick } from '../api/live'
 import { download } from '../lib/xlsx'
 import { CopyIcon, DownloadIcon } from './Icons'
@@ -68,7 +68,7 @@ export function YamlView({ kind, namespace, name, live = true, onToast }: Props)
   }
   useEffect(() => {
     let gone = false
-    fetch(url, { headers: { Accept: 'application/yaml' } })
+    fetch(url, { headers: { Accept: 'application/yaml', ...BACKGROUND } })
       .then(async (r) => {
         const body = await r.text()
         if (gone) return

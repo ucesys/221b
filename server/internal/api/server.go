@@ -99,6 +99,7 @@ type Auth interface {
 // SSHInfo is what the page is told about SSH (Phase 11, ADR-72);
 // *nodessh.Service implements it.
 type SSHInfo interface {
+	Principal() string
 	Fingerprint() string
 	List(ctx context.Context, cluster string) ([]nodessh.Pairing, error)
 }

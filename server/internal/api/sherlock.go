@@ -330,9 +330,12 @@ type sherlockConfig struct {
 	// (sherlock.lockProvider): the settings cannot change it.
 	ProviderLocked bool `json:"providerLocked"`
 	// NeedsKey says whether the provider needs a stored credential.
-	NeedsKey bool              `json:"needsKey"`
-	Key      sherlock.KeyInfo  `json:"key"`
-	Spend    sherlock.Spend    `json:"spend"`
+	NeedsKey bool             `json:"needsKey"`
+	Key      sherlock.KeyInfo `json:"key"`
+	Spend    sherlock.Spend   `json:"spend"`
+	// NoUsage names the providers seen to report no token use, whose
+	// spend is an estimate.
+	NoUsage  []string          `json:"noUsage,omitempty"`
 	Models   []sherlock.Model  `json:"models"`
 	Clusters []sherlockCluster `json:"clusters"`
 	Running  int               `json:"running"`
@@ -359,7 +362,7 @@ func (s *Server) getSherlockConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	sh := s.sherlockSettings()
 	p := s.sherlockProvider(sh)
-	cfg := sherlockConfig{Settings: sh, Provider: p, ProviderLocked: s.opts.SherlockProviderLocked, NeedsKey: p.NeedsKey(), Spend: s.opts.Sherlock.Ledger().Now(r.Context()), Models: sherlock.Models, Running: s.opts.Sherlock.Running()}
+	cfg := sherlockConfig{Settings: sh, Provider: p, ProviderLocked: s.opts.SherlockProviderLocked, NeedsKey: p.NeedsKey(), Spend: s.opts.Sherlock.Ledger().Now(r.Context()), NoUsage: s.opts.Sherlock.NoUsage(), Models: sherlock.Models, Running: s.opts.Sherlock.Running()}
 	if s.opts.SherlockKeys != nil {
 		cfg.Key = s.opts.SherlockKeys.Info()
 	}

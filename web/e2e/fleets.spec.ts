@@ -254,8 +254,9 @@ test('picked nodes make a list of nodes, kept in 221B, or a fleet of labels chan
     await pick(a.node).check()
     await pick(b.node).check()
     await expect(bar).toContainText('Picked 2 nodes')
-    // The picks stay while another tab is open; Cancel drops them.
+    // The picks stay while another tab is open, and the Nodes page has them too; Cancel drops them.
     await page.locator('[data-tab="nodes"]').first().click()
+    await expect(bar).toContainText('Picked 2 nodes')
     await page.locator('[data-tab="fleets"]').first().click()
     await expect(bar).toContainText('Picked 2 nodes')
     await bar.getByTestId('fleet-nodebar-cancel').click()

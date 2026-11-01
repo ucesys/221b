@@ -124,7 +124,7 @@ function SubjectsTable({ role, cluster, canAdd, onAdd }: { role: RoleRow; cluste
 export function RolesPage({ route, me, now, cluster, onToast }: AdminProps) {
   const sup = isSuperAdmin(me)
   const name = route.cluster
-  const loaded = useAdmin(`roles:${name}`, () => fetchRoles(name), 30_000)
+  const loaded = useAdmin(`roles:${name}`, (bg) => fetchRoles(name, bg), 30_000)
   const roles = useMemo(() => loaded.data?.roles ?? [], [loaded.data])
   const table = useTable<RoleRow>({ id: 'admin-roles', columns: ROLE_COLUMNS, rows: roles, terms: roleTerms, now, defaultSort: { col: 'role', dir: 'asc' } })
   const selected = roles.find((r) => r.id === route.path[1]) ?? null

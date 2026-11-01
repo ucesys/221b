@@ -485,20 +485,22 @@ func run(args []string) error {
 	// SSH to nodes (Phase 11, ADR-72): the console's certificate
 	// authority lives in a Secret beside the connections, and the pairings
 	// beside the settings.
-	var caStore nodessh.KeyStore = &nodessh.MemoryKeys{}
+	var caStore *kube.SecretKey
+	var console string
 	if cfg.ConnectionsSecrets != "" {
 		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
 		sk, err := kube.NewSecretKey(restCfg, ns, prefix+"-ssh-ca", map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "ssh-ca", "app.kubernetes.io/managed-by": "221b"})
 		if err != nil {
 			return fmt.Errorf("the SSH authority's Secret: %w", err)
 		}
-		caStore = caKeys{sk}
+		caStore, console = sk, nodessh.ConsoleName(ns, prefix)
 	} else {
 		log.Warn("the SSH authority's key is kept in memory and made again on restart; paired nodes then need pairing again (set -connections-secrets to keep it in a Secret)")
 	}
 	sshSvc := nodessh.New(nodessh.Options{
 		CA:       nodessh.NewCA(caStore),
 		Pairings: nodessh.NewPairings(spendBackend),
+		Console:  console,
 		Logger:   log.With("component", "ssh"),
 		NodeAddr: func(cluster, node string) (string, error) {
 			_, client, ok := manager.Lookup(cluster)
@@ -854,20 +856,4 @@ func residentMemory() float64 {
 		return 0
 	}
 	return float64(pages * int64(os.Getpagesize()))
-}
-
-// caKeys keeps the SSH authority's key in a Secret through the Sherlock
-// key store, whose "no key saved" means the Secret is not there yet:
-// for the authority that is an empty store, and a key is made.
-type caKeys struct{ *kube.SecretKey }
-
-func (c caKeys) Load(ctx context.Context) (map[string][]byte, error) {
-	return noKeyAsEmpty(c.SecretKey.Load(ctx))
-}
-
-func noKeyAsEmpty(data map[string][]byte, err error) (map[string][]byte, error) {
-	if errors.Is(err, sherlock.ErrNoKey) {
-		return map[string][]byte{}, nil
-	}
-	return data, err
 }

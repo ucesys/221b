@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { fmtTs } from '../../lib/format'
-import { fetchToolbox, requestSession, ToolboxError, type ToolboxInfo, type ToolName, type ToolRequest } from '../../api/toolbox'
+import { COMMAND_TOOLS, fetchToolbox, HOST_TOOLS, requestSession, ToolboxError, type ToolboxInfo, type ToolName, type ToolRequest } from '../../api/toolbox'
 import type { PodDetails } from '../../api/types'
 import { apiPath } from '../../lib/router'
 import { BoltIcon, BoxIcon, CloseIcon, ForwardIcon, ShieldSmallIcon, TerminalIcon } from '../Icons'
@@ -39,8 +39,8 @@ const NODE_PROFILES: Record<string, { title: string; words: string }> = {
  */
 export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Props) {
   const { tool, pod: podRef } = open
-  // Several nodes (the Nodes page's picked ones) pair one after another;
-  // the dialog reads as for the first.
+  // Several nodes (the Nodes page's picked ones) pair on one card, one
+  // session each; what the dialog starts with comes from the first.
   const nodes = tool === 'ssh-pair' && open.nodes && open.nodes.length > 1 ? open.nodes : undefined
   const node = open.node ?? open.nodes?.[0]
   const [info, setInfo] = useState<ToolboxInfo | null>(null)
@@ -120,9 +120,9 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   const profileV = profile || (tool === 'node-shell' ? (info?.nodeProfiles[0] ?? 'general') : tool === 'debug-container' ? 'restricted' : '')
   const minutesV = info ? Math.min(minutes, info.maxMinutes) : minutes
 
-  const onNode = tool === 'node-shell' || tool === 'node-command' || tool === 'ssh' || tool === 'ssh-pair' || tool === 'ssh-unpair'
+  const onNode = HOST_TOOLS.includes(tool)
   const needsTwo = onNode && info?.nodeApproval === 'always'
-  const interactive = tool !== 'command' && tool !== 'node-command' && tool !== 'ssh-pair' && tool !== 'ssh-unpair'
+  const interactive = !COMMAND_TOOLS.includes(tool)
   const pairing = node ? info?.ssh?.pairings[node] : undefined
   const loginUserV = loginUser ?? pairing?.loginUser ?? info?.ssh?.loginUser ?? 'root'
   const sshPortV = sshPort ?? String(pairing?.port || info?.ssh?.port || 22)
@@ -132,7 +132,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   const needReason = !!info && (approvers || (onNode && info.production))
   const askReason = needReason || onNode
 
-  const request = (forNode = node): ToolRequest => {
+  const request = (): ToolRequest => {
     const r: ToolRequest = { tool, reason: reason.trim() || undefined, minutes: interactive ? minutesV : undefined }
     if (podRef) Object.assign(r, { namespace: podRef.namespace, pod: podRef.name })
     switch (tool) {
@@ -145,17 +145,17 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
       case 'debug-container':
         return { ...r, image: imageV, target: targetV, profile: profileV, mountVolumes: !!info?.mountVolumes && mount, readOnlyVolumes: mount && readOnly }
       case 'debug-pod':
-        return { ...r, namespace, node: forNode, image: imageV, serviceAccount: serviceAccount.trim() || undefined, labelsFrom: labelsFrom.trim() || undefined }
+        return { ...r, namespace, node, image: imageV, serviceAccount: serviceAccount.trim() || undefined, labelsFrom: labelsFrom.trim() || undefined }
       case 'node-shell':
-        return { ...r, node: forNode, profile: profileV }
+        return { ...r, node, profile: profileV }
       case 'node-command':
-        return { ...r, node: forNode, command }
+        return { ...r, node, command }
       case 'ssh':
-        return { ...r, node: forNode }
+        return { ...r, node }
       case 'ssh-pair':
-        return { ...r, node: forNode, ...(nodes ? { nodes: nodes.slice(1) } : {}), loginUser: loginUserV.trim(), port: Number(sshPortV) }
+        return { ...r, node, ...(nodes ? { nodes: nodes.slice(1) } : {}), loginUser: loginUserV.trim(), port: Number(sshPortV) }
       case 'ssh-unpair':
-        return { ...r, node: forNode }
+        return { ...r, node }
     }
     return r
   }
@@ -455,7 +455,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
       body = (
         <>
           <p className="tb-hint" style={{ margin: 0 }}>
-            A terminal over SSH, as <span className="rk-mono">{pairing?.loginUser ?? '?'}</span> on port {pairing?.port ?? '?'}: the console signs you a certificate for this session alone (principal <span className="rk-mono">{info?.ssh?.principal}</span>) and checks the node's host key against what was pinned when it was paired. It works when the kubelet does not, as a node shell cannot.
+            A terminal over SSH, as <span className="rk-mono">{pairing?.loginUser ?? '?'}</span> on port {pairing?.port ?? '?'}: the console signs you a certificate for this session alone (principal <span className="rk-mono">{pairing?.principal ?? info?.ssh?.principal}</span>) and checks the node's host key against what was pinned when it was paired. It works when the kubelet does not, as a node shell cannot.
           </p>
           <div className="tb-row">{durationField}</div>
           <div className="rk-callout" data-tone="err">
@@ -492,7 +492,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
             </p>
           )}
           <p className="tb-hint" style={{ margin: 0 }}>
-            Runs a command on the node, as root through a short-lived pod (as <i>Run a command on the node</i> does): it writes the console's certificate authority{info?.ssh?.caFingerprint ? <> (<span className="rk-mono">{info.ssh.caFingerprint}</span>)</> : null} to <span className="rk-mono">/etc/ssh/221b/ca.pub</span>, a principals file admitting <span className="rk-mono">{info?.ssh?.principal}</span> as the login user, and a drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span>; checks that sshd takes all that, or puts everything back and changes nothing; reloads sshd; and reads the node's host key, which every later session checks. Nothing personal goes on the node, and nothing long-lived: unpairing removes it all.
+            Runs a command on the node, as root through a short-lived pod (as <i>Run a command on the node</i> does): it writes the console's certificate authority{info?.ssh?.caFingerprint ? <> (<span className="rk-mono">{info.ssh.caFingerprint}</span>)</> : null} to <span className="rk-mono">/etc/ssh/221b/ca.pub</span>, a principals file admitting <span className="rk-mono">{info?.ssh?.principal}</span> as the login user, and a drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span>; checks that sshd takes all that, or puts everything back and changes nothing; reloads sshd; and reads the node's host key, which every later session checks. Nothing personal goes on the node, and nothing long-lived: unpairing removes what this console put there, and another console's pairing of the node stays.
           </p>
           <div className="rk-callout" data-tone="err">
             <ShieldSmallIcon />
@@ -505,7 +505,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
       body = (
         <>
           <p className="tb-hint" style={{ margin: 0 }}>
-            Runs a command on the node, as root through a short-lived pod: it removes the drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span> and <span className="rk-mono">/etc/ssh/221b</span>, reloads sshd, and the console forgets the pairing{pairing ? ` (as ${pairing.loginUser}, since ${fmtTs(pairing.pairedAt)})` : ''}. No session from here can open afterwards.
+            Runs a command on the node, as root through a short-lived pod: it removes this console's key and login user, and the drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span> and <span className="rk-mono">/etc/ssh/221b</span> when no other console is paired there, reloads sshd, and the console forgets the pairing{pairing ? ` (as ${pairing.loginUser}, since ${fmtTs(pairing.pairedAt)})` : ''}. No session from here can open afterwards.
           </p>
         </>
       )

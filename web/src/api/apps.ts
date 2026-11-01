@@ -4,7 +4,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiPath } from '../lib/router'
-import { unauthorized } from './auth'
+import { BACKGROUND, unauthorized } from './auth'
 import type { WatsonItem } from './watson'
 
 export type RefKind = 'branch' | 'tag'
@@ -185,12 +185,12 @@ export class AppsError extends Error {
   }
 }
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, background = false): Promise<T> {
   let res: Response
   try {
     res = await fetch(path, {
       method,
-      headers: body === undefined ? { Accept: 'application/json' } : { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: { ...(body === undefined ? { Accept: 'application/json' } : { 'Content-Type': 'application/json', Accept: 'application/json' }), ...(background ? BACKGROUND : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch {
@@ -205,7 +205,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 const app = (cluster: string, ns: string, name: string, rest = '') => apiPath(`apps/${encodeURIComponent(ns)}/${encodeURIComponent(name)}${rest}`, cluster)
 
-export const fetchApps = (cluster: string) => call<AppView[]>('GET', apiPath('apps', cluster))
+export const fetchApps = (cluster: string) => call<AppView[]>('GET', apiPath('apps', cluster), undefined, true)
 
 const NO_APPS: AppView[] = []
 
@@ -229,7 +229,7 @@ export function useApps(cluster: string, tick: number, version: number) {
   return held.cluster === cluster ? { apps: held.apps, error: held.error, setApps } : { apps: NO_APPS, error: '', setApps }
 }
 export const fetchApp = (cluster: string, ns: string, name: string) => call<AppView>('GET', app(cluster, ns, name))
-export const fetchDrift = (cluster: string, ns: string, name: string, refresh = false) => call<AppDrift>('GET', app(cluster, ns, name, '/drift') + (refresh ? '?refresh=1' : ''))
+export const fetchDrift = (cluster: string, ns: string, name: string, refresh = false) => call<AppDrift>('GET', app(cluster, ns, name, '/drift') + (refresh ? '?refresh=1' : ''), undefined, !refresh)
 export const fetchAppRefs = (cluster: string, ns: string, name: string) => call<AppRefs>('GET', app(cluster, ns, name, '/refs'))
 /** A kept application's repository looked over at its ref, with the saved token (R2-08). */
 export const fetchAppInspect = (cluster: string, ns: string, name: string) => call<RepoInspection>('GET', app(cluster, ns, name, '/inspect'))
@@ -237,9 +237,9 @@ export const fetchAppInspect = (cluster: string, ns: string, name: string) => ca
 export const inspectRepo = (cluster: string, repo: string, ref: string, refKind: RefKind, token?: string) => call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { repo, ...(ref ? { ref, refKind } : {}), ...(token ? { token } : {}) })
 
 export const fetchRepoRefs = (cluster: string, repo: string, token = '') => call<RepoRefs>('POST', apiPath('apps/refs', cluster), token ? { repo, token } : { repo })
-export const fetchRevisions = (cluster: string, ns: string, name: string) => call<RevisionView[]>('GET', app(cluster, ns, name, '/revisions'))
+export const fetchRevisions = (cluster: string, ns: string, name: string, background = false) => call<RevisionView[]>('GET', app(cluster, ns, name, '/revisions'), undefined, background)
 export const fetchImages = (cluster: string, ns: string, name: string, revision?: number) =>
-  call<{ revision: number; images: AppImage[] }>('GET', app(cluster, ns, name, '/images') + (revision ? `?revision=${revision}` : ''))
+  call<{ revision: number; images: AppImage[] }>('GET', app(cluster, ns, name, '/images') + (revision ? `?revision=${revision}` : ''), undefined, true)
 
 /** One side of a diff: a revision, or the source at its saved ref, or at a branch or tag named here. */
 export type DiffSide = { kind: 'revision'; revision: number } | { kind: 'source'; ref?: string; refKind?: RefKind }

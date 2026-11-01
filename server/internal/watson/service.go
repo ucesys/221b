@@ -194,7 +194,8 @@ type Options struct {
 	// PlanSession works out a session card (TB-36): Kubernetes' dry run
 	// or access review, as the person who asked. StartSession opens the
 	// session once approved, as the person who asked (TB-37), and
-	// returns its ID.
+	// returns its ID; an ID with an error is a card that opened it and
+	// not all of the others it asked for.
 	PlanSession  func(ctx context.Context, cl Cluster, it Item) *Plan
 	StartSession func(cl Cluster, it Item, approver Who) (string, error)
 	// Apps keeps the Helm applications (Phase 10); nil keeps none.
@@ -738,17 +739,22 @@ func (s *Service) startSession(cl Cluster, it *Item, approver Who) {
 	s.mu.Lock()
 	it.Finished = s.opts.Now()
 	outcome := audit.OutcomeOK
-	if err != nil {
+	detail := "session=" + quote(id)
+	if id == "" && err != nil {
 		it.Status, it.Exit, outcome = StatusFailed, 1, audit.OutcomeFailed
 		it.Lines = append(it.Lines, Line{K: "err", T: err.Error()})
 	} else {
 		it.Status, it.Exit = StatusDone, 0
 		it.Session.SessionID = id
 		it.Lines = append(it.Lines, Line{K: "info", T: "Session " + id + " opened: it is a tab in the dock."})
+		if err != nil {
+			it.Lines = append(it.Lines, Line{K: "err", T: err.Error()})
+			detail += " failed=" + quote(err.Error())
+		}
 	}
 	s.changedLocked(it)
 	s.mu.Unlock()
-	s.record(ActionResult, it, approver, outcome, "session="+quote(id))
+	s.record(ActionResult, it, approver, outcome, detail)
 }
 
 func (s *Service) add(it *Item) {

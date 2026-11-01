@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useMe } from './api/auth'
+import { useActivity, useMe } from './api/auth'
 import { useClusters, type ClusterSummary } from './api/clusters'
 import { LiveContext, useLiveMeta, useLiveStore, useView } from './api/live'
 import type { AccessRow, PolicyRow } from './api/types'
@@ -40,7 +40,7 @@ import type { ToolName } from './api/toolbox'
 import { ViewAnnouncer } from './components/ViewAnnouncer'
 import { AssistantWindow } from './components/AssistantWindow'
 import { readJSON, writeJSON } from './lib/storage'
-import { runToolAction, useSessions } from './api/toolbox'
+import { runToolAction, shownSessions, useSessions } from './api/toolbox'
 import { ToolboxContext, type OpenTool, type ToolboxApi } from './components/toolbox/context'
 import { ToolDialog } from './components/toolbox/ToolDialog'
 import { SessionPane, SessionsPane } from './components/toolbox/SessionPanes'
@@ -70,6 +70,7 @@ function useNow(every = 60_000): number {
 
 export function App() {
   const route = useRoute()
+  useActivity()
   // Sherlock and Watson in their window have no tabs (P5-08, P6-09).
   if ((WINDOW_VIEWS as readonly string[]).includes(route.view)) return <AssistantShell />
   return <Console />
@@ -224,15 +225,15 @@ function Shell() {
   const sessions = useSessions(route.cluster, watsonOn, onNewSession)
   const [tabs, setTabs] = useState<{ cluster: string; closed: string[]; opened: string[] }>({ cluster: route.cluster, closed: [], opened: [] })
   const tabsHere = tabs.cluster === route.cluster ? tabs : { cluster: route.cluster, closed: [], opened: [] }
-  const tabSessions = sessions.sessions.filter((x) => (x.mine && !tabsHere.closed.includes(x.id)) || tabsHere.opened.includes(x.id))
   // An ended session whose tab was closed is done with: it leaves the list too (asked October 30, 2026); a live one stays, as the tab's tooltip says.
-  const listedSessions = sessions.sessions.filter((x) => x.state !== 'ended' || !tabsHere.closed.includes(x.id))
-  const openSessions = sessions.sessions.filter((x) => x.state !== 'ended').length
+  const shown = shownSessions(sessions.sessions, tabsHere.closed, tabsHere.opened)
+  const tabSessions = shown.filter((x) => (x.mine && !tabsHere.closed.includes(x.id)) || tabsHere.opened.includes(x.id))
+  const openSessions = shown.filter((x) => x.state !== 'ended').length
   // A tool's dialog stays on the cluster it was opened on, wherever the route goes while it is open.
   const [toolDialog, setToolDialog] = useState<(OpenTool & { cluster: string }) | null>(null)
   // The same on the home page and a cluster's page as on the tabs; the
   // Administration area has its own Back and Escape, so it leaves them.
-  const dockShown = view !== 'admin' && (sherlockDocked || watsonDocked || (watsonOn && listedSessions.length > 0))
+  const dockShown = view !== 'admin' && (sherlockDocked || watsonDocked || (watsonOn && shown.length > 0))
   useEffect(() => {
     if (popped) post({ type: 'cluster', cluster: route.cluster })
   }, [popped, route.cluster])
@@ -399,9 +400,9 @@ function Shell() {
               ? {
                   tabs: tabSessions,
                   open: openSessions,
-                  active: dockTab === 'assistants' || dockTab === 'sessions' || sessions.sessions.some((x) => x.id === dockTab) ? dockTab : 'assistants',
+                  active: dockTab === 'assistants' || dockTab === 'sessions' || shown.some((x) => x.id === dockTab) ? dockTab : 'assistants',
                   onActive: (a) => {
-                    if (a !== 'assistants' && a !== 'sessions' && !tabsHere.opened.includes(a) && !sessions.sessions.find((x) => x.id === a)?.mine) setTabs({ ...tabsHere, opened: [...tabsHere.opened, a] })
+                    if (a !== 'assistants' && a !== 'sessions' && !tabsHere.opened.includes(a) && !shown.find((x) => x.id === a)?.mine) setTabs({ ...tabsHere, opened: [...tabsHere.opened, a] })
                     setDockTab(a)
                   },
                   onCloseTab: (id) => {
@@ -410,9 +411,9 @@ function Shell() {
                   },
                   now,
                   render: (a, controls) => {
-                    const one = sessions.sessions.find((x) => x.id === a)
+                    const one = shown.find((x) => x.id === a)
                     if (one) return <SessionPane key={one.id} cluster={route.cluster} session={one} admin={!!watson.status?.admin} dark={theme === 'dark'} controls={controls} onToast={setToast} />
-                    return <SessionsPane cluster={route.cluster} sessions={listedSessions} admin={!!watson.status?.admin} controls={controls} onOpen={showSession} onToast={setToast} />
+                    return <SessionsPane cluster={route.cluster} sessions={shown} admin={!!watson.status?.admin} controls={controls} onOpen={showSession} onToast={setToast} />
                   },
                 }
               : undefined

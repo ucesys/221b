@@ -13,7 +13,11 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/sessions"
 )
@@ -69,15 +73,16 @@ func TestAPairingOutlastsOtherWritersOfTheConfigMap(t *testing.T) {
 // Looking makes no authority: only a pairing does.
 func TestLookingMakesNoAuthority(t *testing.T) {
 	ctx := context.Background()
-	store := &MemoryKeys{}
-	svc := New(Options{CA: NewCA(store), Pairings: NewPairings(&kv.Memory{})})
+	store := kube.NewSecretKeyFor(fake.NewClientset(), "221b", "x-ssh-ca", nil)
+	ca := NewCA(store)
+	svc := New(Options{CA: ca, Pairings: NewPairings(&kv.Memory{})})
 	if fp := svc.Fingerprint(); fp != "" {
 		t.Fatalf("a fingerprint with no key: %q", fp)
 	}
-	if data, _ := store.Load(ctx); len(data) != 0 {
+	if _, version, found, _ := store.LoadKey(ctx, keyPrivate); found || version != kube.NoSecret {
 		t.Fatal("looking made a key")
 	}
-	if err := svc.Load(ctx); err != nil {
+	if err := ca.Load(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if svc.Fingerprint() == "" {
@@ -85,22 +90,18 @@ func TestLookingMakesNoAuthority(t *testing.T) {
 	}
 }
 
-// stalled is a key store that does not answer until its context ends.
-type stalled struct{ MemoryKeys }
-
-func (s *stalled) Load(ctx context.Context) (map[string][]byte, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
 // One stalled read of the key holds up nobody beyond their own deadline.
 func TestAStalledKeyReadHoldsUpNobody(t *testing.T) {
-	ca := NewCA(&stalled{})
-	long, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	cs := fake.NewClientset()
+	release := make(chan struct{})
+	cs.PrependReactor("get", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		<-release
+		return true, nil, errors.New("the API server is away")
+	})
+	ca := NewCA(kube.NewSecretKeyFor(cs, "221b", "x-ssh-ca", nil))
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() { defer wg.Done(); _ = ca.Load(long) }()
+	go func() { defer wg.Done(); _ = ca.Load(context.Background()) }()
 	time.Sleep(50 * time.Millisecond)
 	ctx, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer stop()
@@ -114,7 +115,7 @@ func TestAStalledKeyReadHoldsUpNobody(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("a stalled read held another caller past its deadline")
 	}
-	cancel()
+	close(release)
 	wg.Wait()
 }
 
@@ -143,7 +144,7 @@ func silentNode(t *testing.T) *net.TCPAddr {
 // a silent node nor pressing End leaves the session waiting for good.
 func TestTheHandshakeHasADeadlineAndFollowsTheContext(t *testing.T) {
 	ctx := context.Background()
-	ca := NewCA(&MemoryKeys{})
+	ca := NewCA(nil)
 	if err := ca.Load(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +156,7 @@ func TestTheHandshakeHasADeadlineAndFollowsTheContext(t *testing.T) {
 	key, _ := ssh.NewSignerFromKey(priv)
 	line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key.PublicKey())))
 	pairings := NewPairings(&kv.Memory{})
-	if err := pairings.Set(ctx, Pairing{Cluster: "local", Node: "n", LoginUser: "ops", Port: addr.Port, HostKeys: []string{line}, CAFinger: ca.Fingerprint()}); err != nil {
+	if err := pairings.Set(ctx, Pairing{Cluster: "local", Node: "n", LoginUser: "ops", Port: addr.Port, HostKeys: []string{line}, CAFinger: ca.Fingerprint(), Principal: oldPrincipal}); err != nil {
 		t.Fatal(err)
 	}
 	dial := func(ctx context.Context, handshake time.Duration) error {

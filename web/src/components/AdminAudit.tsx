@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { fetchAudit, type AuditEvent, type AuditPage } from '../api/admin'
+import { useEffect, useMemo, useState } from 'react'
+import { fetchAudit, filterAudit, type AuditEvent, type AuditPage } from '../api/admin'
 import { fmtTs } from '../lib/format'
 import type { AdminProps } from './AdminPage'
 import { DownloadIcon } from './Icons'
@@ -36,27 +36,22 @@ export function AdminAudit(_: AdminProps) {
   const [page, setPage] = useState<AuditPage | null>(null)
   const [err, setErr] = useState('')
   const [tick, setTick] = useState(0)
+  // Read once and on Refresh; the search and the filters work on what came.
   useEffect(() => {
     let on = true
-    const t = setTimeout(
-      () => {
-        fetchAudit({ q, action, outcome, limit: 500 }).then(
-          (p) => {
-            if (!on) return
-            setPage(p)
-            setErr('')
-          },
-          (e: unknown) => on && setErr(e instanceof Error ? e.message : String(e)),
-        )
+    fetchAudit().then(
+      (p) => {
+        if (!on) return
+        setPage(p)
+        setErr('')
       },
-      q ? 250 : 0,
+      (e: unknown) => on && setErr(e instanceof Error ? e.message : String(e)),
     )
     return () => {
       on = false
-      clearTimeout(t)
     }
-  }, [q, action, outcome, tick])
-  const events = page?.events ?? []
+  }, [tick])
+  const events = useMemo(() => filterAudit(page?.events ?? [], { q, action, outcome }).slice(0, 500), [page, q, action, outcome])
   return (
     <section className="rk-card" style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }} data-testid="admin-audit">
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>

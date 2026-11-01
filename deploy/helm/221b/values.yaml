@@ -217,7 +217,7 @@ auth:
   # directory's SuperAdmin groups under auth.ldap.roles.superAdmin instead.
   admins: []
   adminGroups: []
-  # A session ends after this long without a request, and this long after
+  # A session ends after this long without activity, and this long after
   # sign-in whatever happens.
   sessionIdle: 8h
   sessionMax: 168h

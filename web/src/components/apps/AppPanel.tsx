@@ -90,7 +90,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
   // mounts before it: the revisions load once it is not (M-03 fix).
   useEffect(() => {
     if ((tab !== 'history' && tab !== 'images') || row.orphan) return
-    fetchRevisions(clusterId, row.namespace, row.name)
+    fetchRevisions(clusterId, row.namespace, row.name, true)
       .then(setRevisions)
       .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
     if (tab === 'history' && app && !refs) {

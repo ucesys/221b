@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { BACKGROUND } from '../api/auth'
 import type { ContainerDetail } from '../api/types'
 import { errorText } from '../api/details'
 import { DownloadIcon } from './Icons'
@@ -123,7 +124,7 @@ export function PodLogs({ namespace, name, containers, gone, onToast }: Props) {
     es.addEventListener('error', () => {
       if (es.readyState === EventSource.CLOSED) {
         // An HTTP error: read why with a plain request.
-        fetch(logURL(namespace, name, q))
+        fetch(logURL(namespace, name, q), { headers: BACKGROUND })
           .then(async (r) => setNote(r.ok ? 'The stream closed.' : await errorText(r)))
           .catch(() => setNote('Could not reach the server.'))
         setState('error')

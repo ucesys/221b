@@ -20,12 +20,12 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
-	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
+	tb "github.com/ucesys/221b/server/internal/toolbox"
 )
 
 // Backup and restore (Administration › Backup, asked October 30, 2026):
@@ -119,13 +119,11 @@ func (s *Server) buildBackup(ctx context.Context, by string) (backupFile, error)
 		f.Settings = &st
 	}
 	if acc := s.accounts(); acc != nil {
-		{
-			for _, u := range acc.List() {
-				if u.Managed {
-					continue
-				}
-				f.Users = append(f.Users, backupUser{Username: u.Username, Name: u.Name, Email: u.Email, Groups: u.Groups, Super: u.Super, Disabled: u.Disabled, Created: u.Created, LastSignIn: u.LastSignIn})
+		for _, u := range acc.List() {
+			if u.Managed {
+				continue
 			}
+			f.Users = append(f.Users, backupUser{Username: u.Username, Name: u.Name, Email: u.Email, Groups: u.Groups, Super: u.Super, Disabled: u.Disabled, Created: u.Created, LastSignIn: u.LastSignIn})
 		}
 	}
 	if s.opts.Clusters != nil {
@@ -455,39 +453,13 @@ func (s *Server) restoreUsers(ctx context.Context, users []backupUser, rep *rest
 	}
 }
 
-// mergeSessions adds the backup's session records to those kept, by id.
+// mergeSessions adds the backup's session records to those kept, by id,
+// and keeps as many as the toolbox does.
 func (s *Server) mergeSessions(ctx context.Context, add []sessions.Record) (int, error) {
-	var err error
-	for try := 0; try < 5; try++ {
-		var list []sessions.Record
-		raw, version, lerr := s.opts.KV.LoadKey(ctx, sessions.HistoryKey)
-		if lerr != nil && !errors.Is(lerr, kv.ErrNotFound) {
-			return 0, lerr
-		}
-		if lerr == nil {
-			_ = json.Unmarshal(raw, &list)
-		}
-		have := map[string]bool{}
-		for _, r := range list {
-			have[r.ID] = true
-		}
-		n := 0
-		for _, r := range add {
-			if !have[r.ID] {
-				have[r.ID] = true
-				list = append(list, r)
-				n++
-			}
-		}
-		sort.SliceStable(list, func(i, j int) bool { return list[i].Ended.After(list[j].Ended) })
-		if len(list) > 1000 {
-			list = list[:1000]
-		}
-		b, _ := json.Marshal(list)
-		if _, err = s.opts.KV.SaveKey(ctx, sessions.HistoryKey, b, version); errors.Is(err, kv.ErrConflict) {
-			continue
-		}
-		return n, err
+	keep := tb.Default().History.Keep
+	if s.opts.Sessions != nil {
+		keep = s.opts.Sessions.Config().History.Keep
 	}
-	return 0, err
+	h := &sessions.KVHistory{Backend: s.opts.KV, Key: sessions.HistoryKey, Keep: keep}
+	return h.Merge(ctx, add)
 }
