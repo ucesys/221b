@@ -390,13 +390,19 @@ test('Sherlock answers through an OpenAI-compatible gateway set on the Settings 
     expect(sent.join('\n')).toContain('"tool_call_id"')
     expect(sent.join('\n')).not.toContain(KEY)
 
-    // A home card's button opens the cluster and asks: Troubleshoot while
-    // it has errors or warnings, Audit, the review, while it is healthy.
+    // A home card's button opens the cluster with the question in the box:
+    // Troubleshoot while it has errors or warnings, Audit, the review, while
+    // it is healthy.
     await page.goto('/#/')
     const card = page.locator('[data-testid=home-card][data-cluster=local]')
     const healthy = (await card.getAttribute('data-health')) === 'ok'
     await expect(card.getByTestId('home-review')).toHaveText(healthy ? 'Audit' : 'Troubleshoot')
     await card.getByTestId('home-review').click()
+    // The button fills the box; asking takes the person pressing Ask.
+    const question = healthy ? 'Deficiency review of cluster' : 'Troubleshooting report for cluster'
+    await expect(page.getByTestId('sherlock-input')).toHaveValue(new RegExp('^' + question))
+    await expect(page.getByTestId('sherlock-question').filter({ hasText: question })).toHaveCount(0)
+    await page.getByTestId('sherlock-send').click()
     if (healthy) {
       await expect(page.getByTestId('sherlock-question').last()).toContainText('Deficiency review of cluster')
       await done(page)

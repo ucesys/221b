@@ -249,6 +249,7 @@ function Shell() {
       }),
     [],
   )
+  const [sherlockFill, setSherlockFill] = useState('')
   const sherlockApi = {
     available: !!sherlock.status?.available && view === 'tabs',
     ask: (q: string, over?: boolean) => {
@@ -261,6 +262,17 @@ function Shell() {
           if (away) focusPopup()
         })
         .catch((e: unknown) => setToast(e instanceof Error ? e.message : String(e)))
+    },
+    /** Puts a question in the box, for the person to send. */
+    fill: (text: string) => {
+      if (popped) {
+        post({ type: 'fill', cluster: route.cluster, text })
+        focusPopup()
+        return
+      }
+      setDockTab('assistants')
+      setDock({ ...dock, mode: dock.mode === 'min' ? 'open' : dock.mode, pane: 'sherlock' })
+      setSherlockFill(text)
     },
   }
   // Buttons and Sherlock hand commands to Watson (P6-06): the panel opens,
@@ -282,8 +294,9 @@ function Shell() {
     },
   }
   // A home card's Audit button (Phase 6 review) opens the cluster with
-  // ?ask=review, its Troubleshoot button with ?ask=troubleshoot: Sherlock
-  // asks for the review or the troubleshooting once it can.
+  // ?ask=review, its Troubleshoot button with ?ask=troubleshoot: the
+  // question waits in Sherlock's box once it can be asked. A link cannot
+  // start a question: that takes the person pressing Ask.
   const askFor = view === 'tabs' ? route.params.get('ask') : null
   const reviewAsked = askFor === 'review' || askFor === 'troubleshoot'
   const reviewReady = reviewAsked && sherlockApi.available && clusterName !== ''
@@ -293,7 +306,7 @@ function Shell() {
     navigate(withParams(currentRoute(), { ask: undefined }), true)
     // Refused (Sherlock went off since the home page showed the button), the
     // dock says why.
-    if (reviewReady) sherlockApi.ask(askFor === 'troubleshoot' ? clusterTroubleshootQuestion(clusterName) : reviewQuestion(clusterName), true)
+    if (reviewReady) sherlockApi.fill(askFor === 'troubleshoot' ? clusterTroubleshootQuestion(clusterName) : reviewQuestion(clusterName))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewReady, reviewRefused])
   const popOutNow = () => {
@@ -390,7 +403,7 @@ function Shell() {
           onSplit={(split) => setDock({ ...dock, split })}
           pane={dock.pane ?? 'sherlock'}
           onPane={(pane) => setDock({ ...dock, pane })}
-          sherlock={sherlockDocked ? (controls, switcher) => <SherlockPane cluster={route.cluster} clusterName={clusterName} state={sherlock} onToast={setToast} controls={controls} switcher={switcher} /> : null}
+          sherlock={sherlockDocked ? (controls, switcher) => <SherlockPane cluster={route.cluster} clusterName={clusterName} state={sherlock} onToast={setToast} controls={controls} switcher={switcher} fill={sherlockFill} onFilled={() => setSherlockFill('')} /> : null}
           watson={watsonDocked ? (controls, switcher) => <WatsonPane cluster={route.cluster} clusterName={clusterName} state={watson} onToast={setToast} controls={controls} switcher={switcher} /> : null}
           onPopOut={canPopOut() ? popOutNow : undefined}
           waiting={waiting}

@@ -163,8 +163,8 @@ func (a *Access) allowed(p Pair) bool {
 
 // Prepare asks about the pairs it has no fresh verdict for, a few at a
 // time, and reports whether any verdict changed. A review that fails
-// leaves the pair unknown, which denies it, and returns the error after
-// the others ran.
+// leaves the pair unknown, which denies it: a verdict past its age stops
+// allowing, and the error comes back after the others ran.
 func (a *Access) Prepare(ctx context.Context, pairs []Pair, parallel int) (changed bool, err error) {
 	now := a.now()
 	a.mu.RLock()
@@ -220,6 +220,10 @@ func (a *Access) Prepare(ctx context.Context, pairs []Pair, parallel int) (chang
 		if ans.err != nil {
 			if err == nil {
 				err = ans.err
+			}
+			if old, had := a.verdicts[ans.pair]; had {
+				delete(a.verdicts, ans.pair)
+				changed = changed || old.allowed
 			}
 			continue
 		}
@@ -300,6 +304,8 @@ func Pairs(views []string, namespaces []string) []Pair {
 			}
 		}
 	}
+	// The settings a browser gets depend on whether nodes may be listed.
+	add(Pair{Resource: "nodes"})
 	// The namespace rows and the tab counts need pods and Services in
 	// every namespace, whatever tab is open.
 	for _, ns := range namespaces {

@@ -172,9 +172,9 @@ Out, for now:
 
 | ID | Requirement | Acceptance |
 |---|---|---|
-| TB-53 | Audit records (P3-10) `session.request`, `session.approve`, `session.refuse`, `session.lapse`, `session.open`, `session.watch`, `session.transfer`, `session.extend`, `session.end`, each with the session id, tool, cluster, target, identity, approver, reason, duration, ended-by and byte counts, and for one command the command and the first `MaxOutput` bytes of output. One record per event, to standard output and the webhook like every other. | A shell session writes request, approve, open and end records; a one-command session's end record holds its output. |
+| TB-53 | Audit records (P3-10) `session.request`, `session.approve`, `session.refuse`, `session.lapse`, `session.open`, `session.watch`, `session.transfer`, `session.extend`, `session.end`, `session.transcript` (a transcript downloaded), each with the session id, tool, cluster, target, identity, approver, reason, duration, ended-by and byte counts, and for one command the command and the first `MaxOutput` bytes of output. One record per event, to standard output and the webhook like every other. | A shell session writes request, approve, open and end records; a one-command session's end record holds its output. |
 | TB-54 | **Transcripts.** `toolbox.transcripts`: `none`, `pvc` or `s3`. With `pvc` the chart creates a volume (`size`, `storageClass`; RWX, or `replicaCount: 1`); with `s3` an endpoint, a bucket and a Secret; with `none` (the default) no transcript is kept, the Transcript buttons are absent, and the Toolbox page says so. A transcript is asciicast v2 (keystrokes, output, timings), kept for `toolbox.retention` (default 400 days), downloadable by SuperAdmins and the session's owner, and treated as sensitive: it may hold anything typed, Secrets included. Port forwards keep connections and bytes only. | With `pvc` on kind a shell's transcript replays in `asciinema`; with `none` nothing is written and the UI says so. |
-| TB-55 | **Watch**: a SuperAdmin can attach read-only to a live terminal session from the Sessions pane; the owner's pane shows `<name> is watching`, and the watcher is in the audit trail. | Two browsers on the simulator: the watcher sees output and cannot type; the owner sees the pill. |
+| TB-55 | **Watch**: a SuperAdmin can attach read-only to a live terminal session from the Sessions pane; the owner's pane shows `<name> is watching`, and the watcher is in the audit trail. Reading the output of someone else's live session through `GET sessions/{id}/output` counts as watching: it is audited, and the owner sees the name for 30 seconds after the read. Reading an ended session's output is audited too. | Two browsers on the simulator: the watcher sees output and cannot type; the owner sees the pill. |
 
 ### Simulation, tests, performance
 
@@ -266,8 +266,9 @@ All under `/api/v1/` and `/api/v1/clusters/{cluster}/`, leader-only:
 | --- | --- |
 | `GET sessions` | the live sessions the person may see; `?history=1` the records (TB-44) |
 | `GET sessions/{id}` | one session's state |
-| `GET sessions/{id}/attach` | WebSocket: terminal bytes in both directions, JSON resize messages (TB-15) |
-| `GET sessions/{id}/watch` | WebSocket, output only, SuperAdmins (TB-55) |
+| `GET sessions/{id}/attach` | WebSocket: terminal bytes in both directions, JSON resize messages (TB-15); it closes when the sign-in that opened it ends |
+| `GET sessions/{id}/watch` | WebSocket, output only, SuperAdmins (TB-55); it closes as attach does |
+| `GET sessions/{id}/output` | the end of the output, as a download; someone else's live session counts as watching (TB-55) |
 | `GET sessions/{id}/tunnel` | WebSocket for the CLI: multiplexed TCP connections (TB-19) |
 | `POST sessions/{id}/end`, `…/extend`, `…/keep` | end, extend by 10 minutes, reset the idle timer |
 | `GET sessions/{id}/transfer?path=`, `PUT sessions/{id}/transfer?dir=` | download and upload (TB-17) |

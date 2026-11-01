@@ -305,6 +305,40 @@ func TestOIDCRefusesBadTokens(t *testing.T) {
 	}
 }
 
+// The configured claim names a person, or nobody does: no other claim
+// stands in for it.
+func TestAMissingUsernameClaimIsRefused(t *testing.T) {
+	var idp *oidcsim.Provider
+	idpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { idp.ServeHTTP(w, r) }))
+	defer idpSrv.Close()
+	idp, _ = oidcsim.New(oidcsim.Options{Issuer: idpSrv.URL})
+	now := time.Now()
+	claims := func(extra map[string]any) string {
+		c := map[string]any{"iss": idpSrv.URL, "sub": "u1", "aud": "221b", "exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "nonce": "n1"}
+		for k, v := range extra {
+			c[k] = v
+		}
+		s, _ := idp.Token(c)
+		return s
+	}
+	byEmail := auth.NewProvider(auth.OIDCConfig{Issuer: idpSrv.URL, ClientID: "221b"}, nil, func() time.Time { return now })
+	if id, err := byEmail.Verify(context.Background(), claims(map[string]any{"preferred_username": "admin@corp.example"}), "n1"); err == nil {
+		t.Fatalf("named by another claim: %+v", id)
+	}
+	if id, err := byEmail.Verify(context.Background(), claims(nil), "n1"); err == nil {
+		t.Fatalf("named by the subject: %+v", id)
+	}
+	// Nested claims use dots, as the groups claim does, and a name with a
+	// dot in it still counts as a name.
+	nested := auth.NewProvider(auth.OIDCConfig{Issuer: idpSrv.URL, ClientID: "221b", UsernameClaim: "corp.login"}, nil, func() time.Time { return now })
+	if id, err := nested.Verify(context.Background(), claims(map[string]any{"corp": map[string]any{"login": "u1"}}), "n1"); err != nil || id.Username != "u1" {
+		t.Fatalf("nested: %v %+v", err, id)
+	}
+	if id, err := nested.Verify(context.Background(), claims(map[string]any{"corp.login": "u2"}), "n1"); err != nil || id.Username != "u2" {
+		t.Fatalf("dotted: %v %+v", err, id)
+	}
+}
+
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 func TestLocalAccounts(t *testing.T) {

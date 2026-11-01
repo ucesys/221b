@@ -1,10 +1,13 @@
 package audit
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ucesys/221b/server/internal/kv"
 )
@@ -88,5 +91,53 @@ func TestALogKeptInMemoryIsNotStored(t *testing.T) {
 	}
 	if got, _ := l.Events(context.Background()); len(got) != 2 {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// One record too large to keep goes by itself: the older ones stay.
+func TestARecordTooLargeToKeepCostsNoOtherRecordItsPlace(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	s := &KVStore{Backend: &kv.Memory{}, Key: StoreKey, Keep: 100, MaxBytes: 64 << 10, Every: time.Hour}
+	defer s.Close(ctx)
+	for i := range 20 {
+		s.Add(Event{Time: at.Add(time.Duration(i) * time.Second), Action: "settings.update", Target: string(rune('a' + i))})
+	}
+	if err := s.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s.Add(Event{Time: at.Add(time.Hour), Action: "signin.failed", Who: Who{Email: strings.Repeat("x", 100<<10)}})
+	s.Add(Event{Time: at.Add(2 * time.Hour), Action: "signin", Target: "after"})
+	if err := s.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	list, err := s.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 21 || list[0].Target != "after" || list[20].Target != "a" {
+		t.Fatalf("kept %d events, newest %q, oldest %q", len(list), list[0].Target, list[len(list)-1].Target)
+	}
+	for _, e := range list {
+		if e.Action == "signin.failed" {
+			t.Fatal("the oversized record was kept")
+		}
+	}
+}
+
+// The names in a record are bounded in the stream too, whatever was sent.
+func TestARecordsNamesAreBounded(t *testing.T) {
+	var out bytes.Buffer
+	l := New(Options{Out: &out})
+	long := strings.Repeat("é", MaxName)
+	l.Record(Event{Action: ActionSignInFailed, Who: Who{Subject: long, Email: long, Name: long}})
+	var e Event
+	if err := json.Unmarshal(out.Bytes(), &e); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{e.Who.Subject, e.Who.Email, e.Who.Name} {
+		if len(s) > MaxName || !utf8.ValidString(s) || s == "" {
+			t.Fatalf("%d bytes: %q", len(s), s)
+		}
 	}
 }

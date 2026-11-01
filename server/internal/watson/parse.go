@@ -689,8 +689,12 @@ func checkGet(c *Command) *Refusal {
 	return nil
 }
 
+// selects says whether the command has a selector that selects: kubectl
+// takes an empty one, however it is spaced, for none at all.
+func selects(c *Command) bool { return strings.TrimSpace(c.Flag("selector")) != "" }
+
 func checkLogs(c *Command) *Refusal {
-	if len(c.Positionals) == 0 && !c.Has("selector") {
+	if len(c.Positionals) == 0 && !selects(c) {
 		return refuse("usage", "Name a pod, or a selector with -l. Usage: %s", c.spec.usage)
 	}
 	return nil
@@ -718,7 +722,7 @@ func checkCanI(c *Command) *Refusal {
 }
 
 func needTarget(c *Command) *Refusal {
-	if len(c.Positionals) == 0 && !c.Has("selector") {
+	if len(c.Positionals) == 0 && !selects(c) {
 		return refuse("usage", "Name a node, or select nodes with -l. Usage: %s", c.spec.usage)
 	}
 	return nil
@@ -742,7 +746,7 @@ func checkScale(c *Command) *Refusal {
 
 func checkRollout(c *Command) *Refusal {
 	types, names := targets(c.Positionals)
-	if len(names) == 0 && !c.Has("selector") {
+	if len(names) == 0 && !selects(c) {
 		return refuse("usage", "Usage: %s", c.spec.usage)
 	}
 	for _, t := range types {
@@ -775,7 +779,7 @@ func checkDelete(c *Command) *Refusal {
 	if namespaces && (len(types) > 1 || c.Has("selector") || len(names) != 1) {
 		return refuse("usage", "Name the one namespace to delete: kubectl delete namespace NAME.")
 	}
-	if len(names) == 0 && !c.Has("selector") {
+	if len(names) == 0 && !selects(c) {
 		return refuse("usage", "Name the pods to delete, or select them with -l. Watson does not delete every pod at once.")
 	}
 	return nil

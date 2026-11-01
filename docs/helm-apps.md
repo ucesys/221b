@@ -22,8 +22,8 @@ Out, for now:
 
 | Decision | Choice | Why |
 | --- | --- | --- |
-| Where the chart comes from | The console clones the repository at the ref, shallow and in memory, with go-git | The image has no git; nothing touches disk; a token for a private repository stays on the server |
-| Who deploys | Watson, as the person: `helm install\|upgrade\|uninstall … --git --path --ref [--tag] --app` | The dry run, the card, the two-person rule, the audit log and the output are the ones every change has (ADR-66, ADR-68) |
+| Where the chart comes from | The console clones the repository at the ref, shallow and in memory, with go-git, within limits on what is sent, unpacked and written out (HA-04) | The image has no git; nothing touches disk; a token for a private repository stays on the server, and on its repository: a change of repository removes it |
+| Who deploys | Watson, as the person: `helm install\|upgrade\|uninstall … --git --path --ref [--tag] --app`; the card pins the commit and the values, and the run deploys those or refuses | The dry run, the card, the two-person rule, the audit log and the output are the ones every change has (ADR-66, ADR-68) |
 | What the console keeps | A record per application in a Secret of its namespace, beside the connections | Survives restarts and replicas; the release itself stays Helm's |
 | Drift | Each object of the manifest read as the person and compared with what the manifest sets; kept two minutes | Catches changes by hand without caching anything, and without showing values |
 | Comparing | Manifests rendered on the console (`helm template`-style) and diffed object by object | No cluster call for a comparison; the same render serves the card's impact |
@@ -65,22 +65,23 @@ No value is needed for the applications: they need Watson (`localCluster.mode: w
 | `POST apps` | Creates a record and submits `helm install` |
 | `POST apps/refs` | Lists a repository's branches and tags for the dialog |
 | `GET apps/{ns}/{name}` | One record |
-| `PUT apps/{ns}/{name}` | Changes the source, values, parameters or token; with `upgrade`, submits `helm upgrade [--install]` |
+| `PUT apps/{ns}/{name}` | Changes the source, values, parameters or token; with `upgrade`, submits `helm upgrade [--install]`. Another repository without a token removes the saved one, and `tokenRemoved` says so |
 | `POST apps/{ns}/{name}/upgrade` | Submits `helm upgrade`, moving the ref first when given |
 | `DELETE apps/{ns}/{name}` | Submits `helm uninstall`; `?record=1` forgets the source only |
 | `GET apps/{ns}/{name}/drift` | Compares the cluster with the manifest, as the person (`?refresh=1` asks again) |
 | `GET apps/{ns}/{name}/refs` | The repository's refs, the newer tags, whether the branch moved |
+| `GET apps/{ns}/{name}/inspect` | The charts and values files in the repository at its ref, with the saved token |
 | `GET apps/{ns}/{name}/revisions` | The release's revisions |
 | `GET apps/{ns}/{name}/diff?from=N&to=M` or `?to=source[&ref=&refKind=]` | A unified diff |
 | `GET apps/{ns}/{name}/images?revision=N` | The images a revision runs |
 
-Every `apps/…` route is served by the leader replica, where Watson runs.
+Every `apps/…` route is served by the leader replica, where Watson runs. What changes a record, and `inspect`, needs the role and Kubernetes' leave in the namespace, asked before the record is read (HA-02).
 
 ## Open questions
 
 | Question | Proposal | Status |
 | --- | --- | --- |
-| The shipped Admin role cannot create workloads, so only a SuperAdmin can install an application; should the full Admin template grow? | Leave the roles as they are until the page replaces the Helm tab; an Admin's install fails at the dry run with Kubernetes' own refusal | Open |
+| The shipped Admin role cannot create workloads, so only a SuperAdmin can install an application; should the full Admin template grow? | Leave the roles as they are until the page replaces the Helm tab; an Admin's install fails when it runs, with Kubernetes' own refusal | Open |
 | When does the Helm tab go? | Once the Helm1 panel has the pods, resources and notes the Helm tab shows | Done on October 28, 2026: the Helm1 page became the Helm tab |
 | Charts with dependencies in chart repositories | Vendor them in the repository (`helm dependency build` committed), or add a `helm dependency build` step later | Open |
 

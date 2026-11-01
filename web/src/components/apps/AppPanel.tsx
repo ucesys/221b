@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchAppInspect, fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, inspectRepo, sourceText, updateApp, type AppDrift, type AppImage, type AppInput, type AppRefs, type AppSource, type AppView, type RefKind, type RepoInspection, type RevisionView } from '../../api/apps'
+import { fetchAppInspect, fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, inspectRepo, isCard, sourceText, updateApp, type AppDrift, type AppImage, type AppInput, type AppRefs, type AppSource, type AppView, type RefKind, type RepoInspection, type RevisionView } from '../../api/apps'
 import { useLiveMeta } from '../../api/live'
 import { useDetails } from '../../api/details'
 import type { ClusterInfo, ReleaseDetails } from '../../api/types'
@@ -573,7 +573,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
           setToken('')
           writeDraft(key, null)
         }
-        onResult(r, saved ? 'Source saved' : 'Source set')
+        onResult(r, !isCard(r) && r.tokenRemoved ? 'Source saved; the token saved for the old repository was removed' : saved ? 'Source saved' : 'Source set')
       })
       .catch((e: unknown) => {
         if (seq.current === mine) {
@@ -643,7 +643,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
   const [inspect, setInspect] = useState<{ key: string; data?: RepoInspection; error?: string } | null>(null)
   const inspectKey = app ? `${app.source.repo}|${app.source.path ?? ''}|${app.source.ref}` : ''
   useEffect(() => {
-    if (!inspectKey) return
+    if (!inspectKey || !canChange) return
     let live = true
     fetchAppInspect(clusterId, row.namespace, row.name)
       .then((d) => live && setInspect({ key: inspectKey, data: d }))
@@ -651,7 +651,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
     return () => {
       live = false
     }
-  }, [inspectKey, clusterId, row.namespace, row.name])
+  }, [inspectKey, canChange, clusterId, row.namespace, row.name])
   const chartFiles = inspect?.key === inspectKey && inspect.data ? (inspect.data.charts.find((c) => c.path === (app?.source.path ?? ''))?.valuesFiles ?? inspect.data.charts[0]?.valuesFiles ?? []) : []
   const valuesFiles = app?.valuesFile && !chartFiles.includes(app.valuesFile) ? [app.valuesFile, ...chartFiles] : chartFiles
   const [optState, setOptState] = useState<'' | 'saving' | 'saved' | 'error'>('')
@@ -712,7 +712,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             </span>
           </span>
         </label>
-        {field(app?.hasToken ? 'GitHub token (one is saved; paste a new one to replace it)' : 'GitHub token (for a private repository; kept in the console, never shown again)', token, setToken, app?.hasToken ? '••••••••' : 'ghp_… or github_pat_…, optional', 'app-src-token', 'password', 3)}
+        {field(app?.hasToken && repo.trim() !== app.source.repo ? 'GitHub token (the saved one is removed with the repository change; paste one for the new repository)' : app?.hasToken ? 'GitHub token (one is saved; paste a new one to replace it)' : 'GitHub token (for a private repository; kept in the console, never shown again)', token, setToken, app?.hasToken ? '••••••••' : 'ghp_… or github_pat_…, optional', 'app-src-token', 'password', 3)}
       </div>
       {look && (
         <p style={{ margin: 0, fontSize: 12, color: look.state === 'error' ? 'var(--err)' : 'var(--fg2)' }} data-testid="app-src-inspect" data-state={look.state}>

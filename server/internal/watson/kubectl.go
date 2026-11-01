@@ -80,6 +80,9 @@ type Target struct {
 	// (Phase 10); nil keeps none.
 	Cluster string
 	Apps    apps.Store
+	// pin is what a card of a deploy showed: its planning fills it, and
+	// its dry run and its run hold to it. A nil pin is no card.
+	pin *appPin
 }
 
 // Discovery caches each cluster's API discovery, which kubectl and Helm

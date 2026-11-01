@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -48,7 +49,11 @@ func New(o Options) (*Directory, error) {
 	if o.UserBase == "" || o.GroupBase == "" {
 		return nil, errors.New("auth.ldap.userSearch.base and groupSearch.base are needed")
 	}
-	if strings.HasPrefix(o.URL, "ldap://") && !o.StartTLS {
+	u, err := url.Parse(o.URL)
+	if err != nil {
+		return nil, fmt.Errorf("auth.ldap.url %q is not a URL: use ldaps://host or ldap://host", o.URL)
+	}
+	if strings.EqualFold(u.Scheme, "ldap") && !o.StartTLS {
 		return nil, errors.New("auth.ldap.url is ldap:// without startTLS: passwords would travel in the clear; use ldaps:// or turn startTLS on")
 	}
 	def := func(p *string, v string) {

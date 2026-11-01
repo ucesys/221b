@@ -230,6 +230,8 @@ spec:
                   name: {{ .Values.auth.ldap.existingSecret | quote }}
                   key: bind-password
             {{- end }}
+            - name: TRUSTED_PROXIES
+              value: {{ join "," .Values.auth.trustedProxies | quote }}
             - name: ADMINS
               value: {{ join "," .Values.auth.admins | quote }}
             - name: ADMIN_GROUPS

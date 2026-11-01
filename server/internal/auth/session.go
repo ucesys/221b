@@ -60,8 +60,9 @@ type Session struct {
 type SharedStore interface {
 	// Get returns a record; ok is false when there is none.
 	Get(ctx context.Context, key string) (b []byte, ok bool, err error)
-	// Put creates a record, or replaces the stored one when replace, given
-	// it as it is now, says so; it reports whether it wrote.
+	// Put replaces the stored record when replace, given it as it is now,
+	// says so, and creates one when there is none and replace, given nil,
+	// says so; it reports whether it wrote.
 	Put(ctx context.Context, key string, b []byte, replace func(current []byte) bool) (bool, error)
 	// Delete removes a record; one already gone is not an error.
 	Delete(ctx context.Context, key string) error
@@ -164,12 +165,12 @@ func (s *Sessions) Start(sess Session) *Session {
 	s.mu.Lock()
 	s.byID[key] = &sess
 	s.mu.Unlock()
-	s.store(key, sess)
+	s.store(key, sess, true)
 	return &sess
 }
 
 // store writes a session to the shared store, if there is one.
-func (s *Sessions) store(key string, sess Session) {
+func (s *Sessions) store(key string, sess Session, create bool) {
 	s.mu.Lock()
 	shared := s.shared
 	extra := s.extra[key]
@@ -188,6 +189,11 @@ func (s *Sessions) store(key string, sess Session) {
 	// This replica's copy can lag the store: the record as stored now
 	// decides whether a newer console wrote it since (P7-03).
 	written, err := shared.Put(ctx, key, b, func(current []byte) bool {
+		// Only signing in makes a record. A later write that finds none
+		// comes after the session ended, and must not bring it back.
+		if current == nil {
+			return create
+		}
 		_, _, version, err := decodeSession(current)
 		if err != nil || version <= sessionVersion {
 			return true
@@ -298,7 +304,7 @@ func (s *Sessions) Update(id string, fn func(*Session)) bool {
 	fn(sess)
 	cp := *sess
 	s.mu.Unlock()
-	s.store(key, cp)
+	s.store(key, cp, false)
 	return true
 }
 
@@ -379,7 +385,7 @@ func (s *Sessions) Get(id string) (Session, bool) {
 	due := s.shared != nil && now.Sub(s.written[key]) >= seenEvery
 	s.mu.Unlock()
 	if due {
-		s.store(key, cp)
+		s.store(key, cp, false)
 	}
 	return cp, true
 }
@@ -410,7 +416,7 @@ func (s *Sessions) peek(id string) (Session, bool) {
 	due := s.shared != nil && cp.LastSeen.After(s.written[key]) && now.Sub(s.written[key]) >= seenEvery
 	s.mu.Unlock()
 	if due {
-		s.store(key, cp)
+		s.store(key, cp, false)
 	}
 	return cp, true
 }

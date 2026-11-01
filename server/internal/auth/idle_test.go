@@ -3,6 +3,7 @@ package auth_test
 import (
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,5 +112,28 @@ func TestAnOpenStreamReadingLDAPGroupsDoesNotKeepASession(t *testing.T) {
 	*e.now = e.now.Add(6 * time.Minute)
 	if _, ok := e.svc.Current(sess); ok {
 		t.Fatal("an open stream kept the session past its idle limit")
+	}
+}
+
+// What a sign-in nobody has made yet writes is bounded: the form, the name
+// it takes, and the record.
+func TestAnOverlongLoginIsRefusedAndBoundedInItsRecord(t *testing.T) {
+	e := newEnv(t, auth.Config{Mode: auth.ModeLocal, Local: []auth.LocalUser{{Email: "ops@corp.example", PasswordHash: hashOf(t, goodPassword)}}})
+	_, resp := e.signIn(strings.Repeat("x", 8<<10), goodPassword)
+	readAll(t, resp)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("an overlong login: %s", resp.Status)
+	}
+	log := e.audit.String()
+	if !strings.Contains(log, "the user name is too long") || len(log) > 2<<10 {
+		t.Fatalf("%d bytes of audit: %.200s", len(log), log)
+	}
+	_, resp = e.signIn(strings.Repeat("x", 1<<20), goodPassword)
+	readAll(t, resp)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("a form past the limit: %s", resp.Status)
+	}
+	if got := e.audit.String(); len(got) > 2<<10 {
+		t.Fatalf("a form past the limit wrote %d bytes of audit", len(got))
 	}
 }

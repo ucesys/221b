@@ -92,8 +92,41 @@ func TestSessionsAreSharedBetweenReplicas(t *testing.T) {
 		_, ok := b.peek(started.ID)
 		return !ok
 	})
-	if _, ok := b.Get(started.ID); ok {
-		t.Fatal("an ended session still signs in")
+	// Its watch may still bring the create and then the delete: the record
+	// is gone for good once the Secret is, and nothing makes it again.
+	eventually(t, "an ended session still signs in", func() bool {
+		_, ok := b.Get(started.ID)
+		return !ok
+	})
+	if list, err := cs.CoreV1().Secrets("221b").List(context.Background(), metav1.ListOptions{}); err != nil || len(list.Items) != 0 {
+		t.Fatalf("the ended session's Secret: %v %v", list, err)
+	}
+}
+
+// A replica may hold a session's last activity while another ends it: the
+// write that follows must not make the record again, or the sign-out is
+// undone on every replica.
+func TestLateActivityNeverBringsBackAnEndedSession(t *testing.T) {
+	a, b, cs := sharedPair(t, nil)
+	started := a.Start(Session{User: User{Username: "ann", KubeName: "local:ann"}, Method: "local"})
+	held, ok := b.Get(started.ID)
+	if !ok {
+		t.Fatal("the session is unknown on the other replica")
+	}
+	count := func() int {
+		list, err := cs.CoreV1().Secrets("221b").List(context.Background(), metav1.ListOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(list.Items)
+	}
+	if count() != 1 {
+		t.Fatalf("%d Secrets after sign-in", count())
+	}
+	a.Delete(started.ID)
+	b.store(keyOf(started.ID), held, false)
+	if count() != 0 {
+		t.Fatal("a late write made the ended session again")
 	}
 }
 

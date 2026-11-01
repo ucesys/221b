@@ -437,3 +437,28 @@ func TestTheRound2SettingsValidate(t *testing.T) {
 }
 
 func Validate(list []fleets.Fleet) error { return fleets.Validate(list) }
+
+// Browsers on a cluster get what is shared and that cluster's fleets, and
+// no one else's; nothing here reaches the stored settings.
+func TestWhatABrowserGetsOfTheSettings(t *testing.T) {
+	st := settings.State{Settings: settings.Settings{
+		RefreshSeconds: 3,
+		Fleets:         map[string][]fleets.Fleet{"a": {{ID: "gpu", Name: "GPU", Kind: fleets.KindNodes, Nodes: []string{"n1"}}}, "b": {{ID: "other", Name: "Other"}}},
+		Acks:           map[string][]acks.Ack{"a": {{Key: "pod:web/x"}}},
+		Sherlock:       &settings.Sherlock{Notes: "private"},
+		Watson:         &settings.Watson{TwoPerson: true},
+	}, Storage: "memory"}
+	got := st.ForCluster("a")
+	if got.Sherlock != nil || got.Watson != nil || got.Acks != nil || len(got.Fleets) != 1 || len(got.Fleets["a"]) != 1 || got.RefreshSeconds != 3 || got.Storage != "memory" {
+		t.Fatalf("for a cluster: %+v", got)
+	}
+	if bare := got.WithoutFleetNodes(); bare.Fleets["a"][0].Nodes != nil || bare.Fleets["a"][0].ID != "gpu" {
+		t.Fatalf("without nodes: %+v", bare.Fleets)
+	}
+	if st.Fleets["a"][0].Nodes == nil || st.Sherlock == nil {
+		t.Fatal("the settings themselves changed")
+	}
+	if got := st.ForAnyone(); got.Fleets != nil || got.Sherlock != nil || got.RefreshSeconds != 3 {
+		t.Fatalf("for anyone: %+v", got)
+	}
+}

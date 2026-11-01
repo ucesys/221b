@@ -278,12 +278,9 @@ func (p *Provider) Verify(ctx context.Context, raw, nonce string) (Identity, err
 		id.Email = stringClaim(c.All, "email")
 	}
 	id.Name = stringClaim(c.All, "name")
-	id.Username = stringClaim(c.All, p.cfg.UsernameClaim)
-	if id.Username == "" {
-		id.Username = stringClaim(c.All, "preferred_username")
-	}
-	if id.Username == "" {
-		id.Username = c.Subject
+	// The configured claim names the person; no other claim stands in for it.
+	if id.Username = nestedClaim(c.All, p.cfg.UsernameClaim); id.Username == "" {
+		return Identity{}, fmt.Errorf("the ID token has no %s claim to name you by", p.cfg.UsernameClaim)
 	}
 	id.Groups = stringsClaim(c.All, p.cfg.GroupsClaim)
 	return id, nil

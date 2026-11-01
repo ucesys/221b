@@ -1,6 +1,9 @@
 package config
 
 import (
+	"io"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,5 +93,50 @@ func TestSecretsComeFromTheEnvironmentOnly(t *testing.T) {
 	}
 	if _, err := Parse([]string{"-setup-token", "x"}); err == nil {
 		t.Error("a setup token was accepted as an argument, where ps shows it")
+	}
+}
+
+// A usage message prints every flag's default, so no secret may be one.
+func TestAUsageMessagePrintsNoSecret(t *testing.T) {
+	t.Setenv("OIDC_CLIENT_SECRET", "oidc-secret-value")
+	t.Setenv("AUDIT_WEBHOOK_TOKEN", "webhook-secret-value")
+	t.Setenv("AUDIT_WEBHOOK_URL", "https://hooks.example/webhook-secret-url")
+	c, err := Parse(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.OIDCClientSecret != "oidc-secret-value" || c.AuditWebhookToken != "webhook-secret-value" || c.AuditWebhookURL != "https://hooks.example/webhook-secret-url" {
+		t.Fatalf("not read from the environment: %+v", c)
+	}
+	if c, err := Parse([]string{"-oidc-client-secret", "from-the-flag"}); err != nil || c.OIDCClientSecret != "from-the-flag" {
+		t.Fatalf("the flag does not win: %v %q", err, c.OIDCClientSecret)
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr := os.Stderr
+	os.Stderr = w
+	_, parseErr := Parse([]string{"-no-such-flag"})
+	os.Stderr = stderr
+	w.Close()
+	usage, _ := io.ReadAll(r)
+	if parseErr == nil || !strings.Contains(string(usage), "-oidc-client-secret") {
+		t.Fatalf("no usage message: %v %q", parseErr, usage)
+	}
+	if strings.Contains(string(usage), "secret-value") || strings.Contains(string(usage), "webhook-secret-url") {
+		t.Fatalf("a secret in the usage message: %s", usage)
+	}
+}
+
+func TestTrustedProxiesAreCIDRs(t *testing.T) {
+	t.Setenv("TRUSTED_PROXIES", "10.42.0.0/16, 192.0.2.7")
+	c, err := Parse(nil)
+	if err != nil || len(c.TrustedProxies) != 2 {
+		t.Fatalf("%v %v", err, c.TrustedProxies)
+	}
+	t.Setenv("TRUSTED_PROXIES", "ingress")
+	if _, err := Parse(nil); err == nil {
+		t.Fatal("a name was taken for a CIDR")
 	}
 }

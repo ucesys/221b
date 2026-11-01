@@ -84,7 +84,8 @@ type Who struct {
 	// Admin is a SuperAdmin, who alone approves a node shell (TB-32).
 	Admin bool
 	// ManageApps holds a role that manages Helm applications: --app reads
-	// a record with the console's account, so the role is checked here.
+	// a record with the console's account, so the role is checked here,
+	// and Options.AppAccess asks about the namespace.
 	ManageApps bool
 	Audit      audit.Who
 	From       string
@@ -116,6 +117,8 @@ type Plan struct {
 	// Object is the YAML of what a session creates or patches (TB-36).
 	Object string `json:"object,omitempty"`
 	guards []guard
+	// pin is what an install or upgrade card showed, which its run holds to.
+	pin *appPin
 }
 
 // SessionCard is what a toolbox session's card carries (TB-36): the tool,
@@ -204,6 +207,9 @@ type Options struct {
 	// them now; false means their session has ended or they may no longer
 	// use the console. Nil keeps the holder as they were.
 	Reread func(Who) (Who, bool)
+	// AppAccess asks Kubernetes whether a person may manage applications
+	// in a namespace, as them. Nil leaves --app to the role alone.
+	AppAccess func(ctx context.Context, cl Cluster, who Who, ns string) (bool, error)
 	// ApproveAllMax is the longest standing approval a person may give on
 	// a cluster (R2-04); nil or 0 offers none.
 	ApproveAllMax func(c Cluster) time.Duration
@@ -367,12 +373,12 @@ func (s *Service) Submit(ctx context.Context, cl Cluster, who Who, text, from, w
 	}
 	var out []*Item
 	for _, line := range lines {
-		out = append(out, s.submitOne(cl, who, line, from, why, run))
+		out = append(out, s.submitOne(ctx, cl, who, line, from, why, run))
 	}
 	return out
 }
 
-func (s *Service) submitOne(cl Cluster, who Who, line, from, why string, run bool) *Item {
+func (s *Service) submitOne(ctx context.Context, cl Cluster, who Who, line, from, why string, run bool) *Item {
 	now := s.opts.Now()
 	it := &Item{ID: newID(), Cluster: cl.ID, Line: strings.TrimSpace(line), From: from, Why: why, Requester: who, Created: now, Exit: -1}
 	c, err := Parse(line)
@@ -386,8 +392,8 @@ func (s *Service) submitOne(cl Cluster, who Who, line, from, why string, run boo
 		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(it.Rule)+" reason="+quote(it.Reason))
 		return it
 	}
-	if c.Has("app") && !who.ManageApps {
-		it.Status, it.Reason, it.Rule = StatusRefused, "Only Admins and SuperAdmins use an application's saved values and token.", "apps"
+	if why := s.appRefusal(ctx, cl, who, c); why != "" {
+		it.Status, it.Reason, it.Rule = StatusRefused, why, "apps"
 		s.add(it)
 		s.record(ActionRefuse, it, who, audit.OutcomeDenied, "rule="+quote(it.Rule)+" reason="+quote(it.Reason))
 		return it
@@ -519,6 +525,14 @@ func (s *Service) SetSessionHooks(plan func(ctx context.Context, cl Cluster, it 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.opts.PlanSession, s.opts.StartSession = plan, start
+}
+
+// SetAppAccess sets how a person's rights in a namespace are asked for
+// --app: the API sets it once it is built, before any request.
+func (s *Service) SetAppAccess(f func(ctx context.Context, cl Cluster, who Who, ns string) (bool, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.opts.AppAccess = f
 }
 
 // SetReread sets how a standing approval's holder is read again: the API
@@ -807,18 +821,21 @@ func (s *Service) plan(cl Cluster, id string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	p := &Plan{}
-	console := Target{Config: cl.Config, Cluster: cl.ID, Apps: s.opts.Apps}
-	if d, err := s.disc.For(cl.ID, cl.Config); err == nil {
-		console.Discovery = d
+	p := &Plan{pin: &appPin{}}
+	// The card reads as the person who asked (ADR-51): it shows them
+	// nothing their own access does not.
+	asker := Target{Config: cl.Config, Person: it.Requester.Person, Cluster: cl.ID, Apps: s.opts.Apps, pin: p.pin}
+	d, err := s.disc.For(cl.ID, cl.Config)
+	var cs *clients
+	if err == nil {
+		asker.Discovery = d
+		cs, err = clientsFor(ctx, asker)
 	}
-	if console.Discovery != nil {
-		cs, err := clientsFor(ctx, console)
-		if err == nil {
-			p.Targets, p.guards, p.Impact = cardFor(ctx, cs, it.cmd, console)
-		} else {
-			p.Impact = []string{"Watson could not read the cluster to work out the impact: " + err.Error()}
-		}
+	if err == nil {
+		p.Targets, p.guards, p.Impact = cardFor(ctx, cs, it.cmd, asker)
+	} else {
+		p.Impact = []string{"Watson could not read the cluster to work out the impact: " + err.Error()}
+		p.guards = []guard{unreadable("the objects this command acts on", err)}
 	}
 	// The impact shows while the dry run runs; approval waits for both.
 	s.mu.Lock()
@@ -830,8 +847,6 @@ func (s *Service) plan(cl Cluster, id string) {
 	}
 	s.mu.Unlock()
 	// The same command with --dry-run=server, as the person who asked.
-	asker := console
-	asker.Person = it.Requester.Person
 	var buf lineBuffer
 	buf.max = 64 << 10
 	extra := []string{"--dry-run=server"}
@@ -929,11 +944,14 @@ func (s *Service) Approve(ctx context.Context, cl Cluster, who Who, id string) (
 	}
 	guards := it.Plan.guards
 	s.mu.Unlock()
-	// The objects must be as the card showed them (P6-04).
-	if why := checkGuards(ctx, s.consoleClients(ctx, cl), guards); why != "" {
-		s.mu.Lock()
-		s.lapseLocked(it, why)
-		s.mu.Unlock()
+	// The objects must be as the card showed them (P6-04). Objects that
+	// cannot be read leave the card waiting, not approved.
+	if why, changed := checkGuards(ctx, s.consoleClients(ctx, cl), guards); why != "" {
+		if changed {
+			s.mu.Lock()
+			s.lapseLocked(it, why)
+			s.mu.Unlock()
+		}
 		return it, fmt.Errorf("%w: %s", ErrState, why)
 	}
 	s.mu.Lock()
@@ -1225,7 +1243,9 @@ func (s *Service) work(cl Cluster, key string, q *runQueue) {
 			// budget, say, must still find its objects as the card showed
 			// them when it starts (P6-04).
 			s.mu.Unlock()
-			why := checkGuards(context.Background(), s.consoleClients(context.Background(), cl), guards)
+			// Already approved, it has no one left to ask: objects that
+			// cannot be read end it like objects that changed.
+			why, _ := checkGuards(context.Background(), s.consoleClients(context.Background(), cl), guards)
 			s.mu.Lock()
 			if it.Status != StatusQueued {
 				s.mu.Unlock()
@@ -1253,12 +1273,18 @@ func (s *Service) work(cl Cluster, key string, q *runQueue) {
 // execute runs one command as the person who approved it.
 func (s *Service) execute(ctx context.Context, cl Cluster, it *Item, runner Who) {
 	t := Target{Config: cl.Config, Person: runner.Person, Cluster: cl.ID, Apps: s.opts.Apps}
+	if it.Plan != nil {
+		t.pin = it.Plan.pin
+	}
 	d, err := s.disc.For(cl.ID, cl.Config)
 	code := 1
 	out := &itemWriter{s: s, it: it, k: "out"}
 	errOut := &itemWriter{s: s, it: it, k: "err"}
 	if err != nil {
 		fmt.Fprintf(errOut, "watson: cannot reach the cluster: %v\n", err)
+	} else if why := s.appRefusal(ctx, cl, runner, it.cmd); why != "" {
+		// Whoever runs it reads the record as much as whoever asked.
+		fmt.Fprintf(errOut, "Error: %s\n", why)
 	} else {
 		t.Discovery = d
 		code = s.opts.Run(ctx, it.cmd, t, out, errOut)
@@ -1396,9 +1422,9 @@ func (s *Service) Watch(ctx context.Context, clusterOf func(id string) (Cluster,
 				continue
 			}
 			cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			why := checkGuards(cctx, s.consoleClients(cctx, cl), c.guards)
+			why, changed := checkGuards(cctx, s.consoleClients(cctx, cl), c.guards)
 			cancel()
-			if why != "" {
+			if changed {
 				s.mu.Lock()
 				s.lapseLocked(c.it, why)
 				s.mu.Unlock()

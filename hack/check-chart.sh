@@ -387,11 +387,23 @@ roles_refused() {
     ! render k8s-console --set clusterName=ci --set rbac.enforce=maybe > /dev/null 2>&1 &&
     ! render k8s-console --set clusterName=ci --set 'auth.local.groups[0].name=g' --set 'auth.local.groups[0].role=superAdmin' --set 'auth.local.groups[0].namespaces[0]=a' > /dev/null 2>&1 &&
     ! render k8s-console --set clusterName=ci --set 'auth.local.users[0].username=a' --set 'auth.local.users[0].passwordHash=h' --set 'auth.local.users[0].groups[0]=undefined' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.local.groups[0].name=g' --set 'auth.local.groups[0].role=admin' --set 'auth.local.groups[0].namespaces[0]=consoles' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.local.groups[0].name=g' --set 'auth.local.groups[0].role=viewer' --set 'auth.local.groups[0].namespaces[0]=web' --set 'auth.local.groups[0].namespaces[1]=consoles-privileged' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set toolbox.nodeShell.namespace=tools --set 'auth.local.groups[0].name=g' --set 'auth.local.groups[0].role=admin' --set 'auth.local.groups[0].namespaces[0]=tools' > /dev/null 2>&1 &&
+    ! render k8s-console $ldap --set 'auth.ldap.roles.admin[0].group=g' --set 'auth.ldap.roles.admin[0].namespaces[0]=consoles' > /dev/null 2>&1 &&
+    ! render k8s-console $ldap --set 'auth.ldap.roles.viewer[0].group=g' --set 'auth.ldap.roles.viewer[0].namespaces[0]=consoles-privileged' > /dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set auth.mode=oidc --set auth.oidc.issuer=https://idp.example --set auth.oidc.clientID=c --set auth.oidc.clientSecret=s --set 'auth.oidc.roles.admin[0].group=g' --set 'auth.oidc.roles.admin[0].namespaces[0]=consoles' > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set 'auth.ldap.roles.superAdmin[0].namespaces[0]=a' > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set 'auth.ldap.roles.viewer[0].group=system:masters' > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set auth.ldap.url=ldap://ldap.corp.example > /dev/null 2>&1 &&
     ! render k8s-console $ldap --set auth.ldap.existingSecret= > /dev/null 2>&1 &&
     render k8s-console $ldap --set auth.ldap.url=ldap://ldap.corp.example --set auth.ldap.startTLS=true > /dev/null 2>&1
+}
+# Whose X-Forwarded-For the console believes comes from values; nobody's
+# by default.
+trusted_proxies() {
+  render k8s-console --set clusterName=ci | grep -A1 'name: TRUSTED_PROXIES' | grep -q 'value: ""' &&
+    render k8s-console --set clusterName=ci --set 'auth.trustedProxies[0]=10.42.0.0/16' --set 'auth.trustedProxies[1]=10.43.0.1/32' | grep -A1 'name: TRUSTED_PROXIES' | grep -q 'value: "10.42.0.0/16,10.43.0.1/32"'
 }
 # The setup token reaches the console as a Secret's value, never as a plain
 # environment value.
@@ -467,6 +479,7 @@ check "it answers to its Service's names and the names in values" host_names
 check "Watson reads only by default; with mode write and sign-in off it is bound to the write role and may cordon and drain" watson_write
 check "the four roles are installed from the shipped definitions and bound to groups; the console gains no right on RBAC" roles_and_bindings
 check "contradictory or unsafe role settings are refused" roles_refused
+check "the proxies to believe come from values, and none by default" trusted_proxies
 check "the setup token is a Secret's value, not an environment value" setup_token
 check "an override that starts with a digit still gets a valid name" digit_override
 check "the Service listens on 8081" exposed_port

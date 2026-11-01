@@ -227,6 +227,16 @@ name of what is wrong. Renders nothing.
 {{- if not (contains "{dn}" $l.groupSearch.filter) -}}{{- fail "auth.ldap.groupSearch.filter must contain {dn}" -}}{{- end -}}
 {{- if not $lists -}}{{- fail "LDAP sign-in needs auth.ldap.roles: only members of a listed group may sign in" -}}{{- end -}}
 {{- end -}}
+{{- /* The console's namespaces are nobody's to be bound in: its own holds its
+Secrets, and the toolbox's runs at Pod Security privileged. */ -}}
+{{- range $s := (include "b221.bindingSpecs" . | fromJsonArray) -}}
+{{- if eq $s.namespace $.Release.Namespace -}}
+{{- fail (printf "the group %s is bound as %s in %q, the console's own namespace, which holds its Secrets. Name other namespaces for it; a person who must manage the console holds superAdmin." $s.group $s.role $s.namespace) -}}
+{{- end -}}
+{{- if eq $s.namespace (include "b221.toolboxNamespace" $) -}}
+{{- fail (printf "the group %s is bound as %s in %q, the toolbox's namespace, which runs at Pod Security privileged. Name other namespaces for it; a person who must manage the console holds superAdmin." $s.group $s.role $s.namespace) -}}
+{{- end -}}
+{{- end -}}
 {{- /* A namespace named in values must exist; checked on a live cluster only. */ -}}
 {{- if lookup "v1" "Namespace" "" "kube-system" -}}
 {{- range $s := (include "b221.bindingSpecs" . | fromJsonArray) -}}

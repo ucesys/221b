@@ -14,6 +14,7 @@ import (
 	"helm.sh/helm/v4/pkg/kube"
 	release "helm.sh/helm/v4/pkg/release/v1"
 	"helm.sh/helm/v4/pkg/storage/driver"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/ucesys/221b/server/internal/apps"
 )
@@ -39,6 +40,52 @@ func appSource(c *Command) (apps.Source, bool, error) {
 	return s, true, err
 }
 
+// appPin is what an install or upgrade card showed: the source, the
+// commit the plan resolved, and a digest of the values it used. The run
+// deploys that commit, so what is approved is what is deployed, or it
+// refuses (P6-04).
+type appPin struct {
+	src    apps.Source
+	commit string
+	values string
+}
+
+// valuesDigest sums up the values a deploy uses, and whether the chart's
+// own values.yaml counts: nothing else the record holds changes a render.
+func (a *appChart) valuesDigest() string {
+	return digest(a.vals, a.rec != nil && a.rec.IgnoreDefaults)
+}
+
+// appRefusal says why a person may not use --app in the command's
+// namespace, or "": it reads a record with the console's account, so the
+// person's rights are asked here, for the role and for that namespace. The
+// answer is the same whether a record is kept there or not.
+func (s *Service) appRefusal(ctx context.Context, cl Cluster, who Who, c *Command) string {
+	if c == nil || !c.Has("app") {
+		return ""
+	}
+	if !who.ManageApps {
+		return "Only Admins and SuperAdmins use an application's saved values and token."
+	}
+	s.mu.Lock()
+	ask := s.opts.AppAccess
+	s.mu.Unlock()
+	if ask == nil {
+		return ""
+	}
+	ns := helmNamespace(c)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	may, err := ask(ctx, cl, who, ns)
+	if err != nil {
+		return "Asking Kubernetes what you may do in " + ns + " failed: " + err.Error()
+	}
+	if !may {
+		return "Kubernetes does not let you manage applications in " + ns + "."
+	}
+	return ""
+}
+
 // appChart fetches and loads the chart a command names, with the values
 // it asks for. The record, when the command uses one, supplies the
 // source, the token, the values file and the parameters.
@@ -46,10 +93,13 @@ type appChart struct {
 	src    apps.Source
 	rec    *apps.Record
 	co     *apps.Checkout
-	ch     *chart.Chart
 	vals   map[string]any
 	values string
 	params []string
+	// set are the line's --set parameters.
+	set []string
+	// composed says the values need the checkout: see loadAppChart.
+	composed bool
 }
 
 func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*appChart, error) {
@@ -74,7 +124,7 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 		default:
 			// The saved token and values belong to the saved repository:
 			// another one on the line would receive them.
-			if given && !sameRepo(src, rec.Source) {
+			if given && !apps.SameRepo(src, rec.Source) {
 				return nil, fmt.Errorf("%s/%s is kept with its chart in %s: --app cannot take its token and values to another repository", ns, name, rec.Source.Repo)
 			}
 			a.rec, token = &rec, tok
@@ -93,29 +143,46 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 	if a.vals, err = apps.Values(a.values, a.params); err != nil {
 		return nil, err
 	}
-	if a.co, err = apps.Fetch(ctx, a.src, token); err != nil {
+	pinned := t.pin != nil && t.pin.commit != ""
+	if pinned {
+		if t.pin.src != a.src {
+			return nil, errors.New("the application's source changed after this card was made: send the command again for a fresh card")
+		}
+		a.co, err = apps.FetchCommit(ctx, a.src, token, t.pin.commit)
+		if err != nil {
+			return nil, fmt.Errorf("commit %s, which this card shows, cannot be fetched: %w. Send the command again for a fresh card", short(t.pin.commit), err)
+		}
+	} else if a.co, err = apps.Fetch(ctx, a.src, token); err != nil {
 		return nil, err
 	}
 	// The record's second values file, its fleet and whether the chart's
 	// own values.yaml counts need the checkout (R2-08, R2-09, R2-11).
-	if a.rec != nil && (a.rec.ValuesFile != "" || a.rec.IgnoreDefaults || a.rec.FleetLabel != "") {
-		if a.ch, a.vals, err = apps.Compose(a.co, a.src, a.rec, c.Flags["set"]); err != nil {
+	a.set = c.Flags["set"]
+	a.composed = a.rec != nil && (a.rec.ValuesFile != "" || a.rec.IgnoreDefaults || a.rec.FleetLabel != "")
+	if a.composed {
+		if _, a.vals, err = apps.Compose(a.co, a.src, a.rec, a.set); err != nil {
 			return nil, err
 		}
+	}
+	if pinned && t.pin.values != a.valuesDigest() {
+		return nil, errors.New("the application's values changed after this card was made: send the command again for a fresh card")
 	}
 	return a, nil
 }
 
-// sameRepo compares the repositories as Normalize writes them; a record
-// that cannot be normalized matches nothing.
-func sameRepo(line, kept apps.Source) bool {
-	k, err := apps.Normalize(kept)
-	return err == nil && k.Repo == line.Repo
+// pinTo keeps what the card shows, for its dry run and its run.
+func (a *appChart) pinTo(pin *appPin) {
+	if pin != nil {
+		*pin = appPin{src: a.src, commit: a.co.Commit, values: a.valuesDigest()}
+	}
 }
 
+// load builds the chart from the checkout, a new one each time: Helm
+// changes the chart it renders.
 func (a *appChart) load() (*chart.Chart, error) {
-	if a.ch != nil {
-		return a.ch, nil
+	if a.composed {
+		ch, _, err := apps.Compose(a.co, a.src, a.rec, a.set)
+		return ch, err
 	}
 	ch, err := apps.LoadChart(a.co, a.src.Path)
 	if err != nil {
@@ -158,7 +225,7 @@ func (a *appChart) saveDeployOnce(ctx context.Context, c *Command, t Target, out
 	case c.Has("git"):
 		// A token belongs to its repository: a new one on the line would
 		// receive it at the next deploy.
-		if !sameRepo(a.src, rec.Source) {
+		if !apps.SameRepo(a.src, rec.Source) {
 			empty := ""
 			token = &empty
 		}
@@ -179,12 +246,13 @@ func (a *appChart) saveDeployOnce(ctx context.Context, c *Command, t Target, out
 func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string) error {
 	name := c.Positionals[0]
 	dry := c.Has("dry-run") && c.Flag("dry-run") != "false" && c.Flag("dry-run") != "none"
+	// A dry run prints what it renders, and Watson never prints Secret
+	// values. So it renders on the console, where lookup finds nothing,
+	// whatever --dry-run says; Secret objects are left out, and values that
+	// look like credentials are masked in every kind.
 	strategy := action.DryRunNone
 	if dry {
-		strategy = action.DryRunServer
-		if v := c.Flag("dry-run"); v == "client" {
-			strategy = action.DryRunClient
-		}
+		strategy = action.DryRunClient
 	}
 	timeout := 300 * time.Second
 	if v := c.Flag("timeout"); v != "" {
@@ -230,6 +298,9 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 		return nil
 	}
 
+	if !dry && t.pin != nil && t.pin.commit == "" {
+		return errors.New("this card could not settle on a commit, so nothing was deployed: send the command again for a fresh card")
+	}
 	a, err := loadAppChart(ctx, c, t, ns, name)
 	if err != nil {
 		return err
@@ -237,6 +308,20 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 	ch, err := a.load()
 	if err != nil {
 		return err
+	}
+	// A template cannot be stopped once a deploy runs it, so a copy goes
+	// through the limits first. Anything else it finds is left to the real
+	// render, which has the cluster to ask.
+	if check, err := a.load(); err == nil {
+		if _, err := apps.Render(ctx, check, a.vals, name, ns, ""); errors.Is(err, apps.ErrRenderLimit) {
+			return err
+		}
+	}
+	funcs, _ := apps.RenderFuncs(ch)
+	cfg.CustomTemplateFuncs = funcs
+	vals := a.vals
+	if dry {
+		vals = MaskValues(vals)
 	}
 	desc := "221B: " + a.src.String() + " (" + short(a.co.Commit) + ")"
 	install := c.Name() == "helm install"
@@ -265,7 +350,7 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 		// upgrade follows what the release used ("auto").
 		i.ServerSideApply = false
 		i.Description = desc
-		r, err := i.RunWithContext(ctx, ch, a.vals)
+		r, err := i.RunWithContext(ctx, ch, vals)
 		if err != nil {
 			return err
 		}
@@ -280,7 +365,7 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 		u.WaitOptions = append(u.WaitOptions, kube.WithStatusComputeWorkers(4))
 		u.DisableOpenAPIValidation = true
 		u.MaxHistory, u.Description = 10, desc
-		r, err := u.RunWithContext(ctx, name, ch, a.vals)
+		r, err := u.RunWithContext(ctx, name, ch, vals)
 		if err != nil {
 			return err
 		}
@@ -290,6 +375,7 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 	}
 	if dry {
 		fmt.Fprintf(out, "DRY RUN: %s %s from %s at commit %s\n", map[bool]string{true: "install", false: "upgrade"}[install], name, a.src, short(a.co.Commit))
+		fmt.Fprintln(out, "# watson: rendered without reading the cluster: lookup finds nothing here; Secrets are left out and credentials masked")
 	}
 	if err := (statusPrinter{rel: rel, showMetadata: true}).WriteTable(out); err != nil {
 		return err
@@ -333,9 +419,12 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		sort.Slice(rels, func(i, j int) bool { return rels[i].Version > rels[j].Version })
 		return rels, nil
 	}
-	rels, err := read(ctx, cs)
-	if err != nil {
-		return targets, nil, []string{"Watson could not read the release: " + err.Error()}
+	rels, relErr := read(ctx, cs)
+	if relErr != nil && !apierrors.IsForbidden(relErr) {
+		return targets, []guard{unreadable("release "+ns+"/"+name, relErr)}, []string{"Watson could not read the release: " + relErr.Error()}
+	}
+	if relErr != nil {
+		impact = append(impact, couldNotRead("the release", relErr))
 	}
 	var cur *release.Release
 	if len(rels) > 0 {
@@ -347,15 +436,20 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		}
 		return digest(rels[0].Version, rels[0].Info.Status.String())
 	}
-	guards = append(guards, guard{what: "release " + ns + "/" + name, want: state(rels), read: func(ctx context.Context, cs *clients) (string, error) {
-		rels, err := read(ctx, cs)
-		if err != nil {
-			return "", err
-		}
-		return state(rels), nil
-	}})
+	if relErr == nil {
+		guards = append(guards, guard{what: "release " + ns + "/" + name, want: state(rels), read: func(ctx context.Context, cs *clients) (string, error) {
+			rels, err := read(ctx, cs)
+			if err != nil {
+				return "", err
+			}
+			return state(rels), nil
+		}})
+	}
 
 	if c.Name() == "helm uninstall" {
+		if relErr != nil {
+			return targets, guards, impact
+		}
 		if cur == nil {
 			return targets, guards, []string{fmt.Sprintf("There is no release %s in %s: helm will refuse.", name, ns)}
 		}
@@ -371,15 +465,16 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 
 	a, err := loadAppChart(ctx, c, t, ns, name)
 	if err != nil {
-		return targets, guards, []string{"Watson could not fetch the chart: " + err.Error()}
+		return targets, guards, append(impact, "Watson could not fetch the chart: "+err.Error())
 	}
 	ch, err := a.load()
 	if err != nil {
-		return targets, guards, []string{"Watson could not load the chart: " + err.Error()}
+		return targets, guards, append(impact, "Watson could not load the chart: "+err.Error())
 	}
+	a.pinTo(t.pin)
 	r, err := apps.Render(ctx, ch, a.vals, name, ns, "")
 	if err != nil {
-		return targets, guards, []string{"Watson could not render the chart: " + err.Error()}
+		return targets, guards, append(impact, "Watson could not render the chart: "+err.Error())
 	}
 	when := ""
 	if !a.co.CommitDate.IsZero() {
@@ -388,6 +483,9 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 	from := fmt.Sprintf("%s at commit %s (%q%s)", a.src, short(a.co.Commit), a.co.CommitSubject, when)
 	install := c.Name() == "helm install" || (c.Has("install") && cur == nil)
 	switch {
+	case relErr != nil:
+		// What runs now is not known, so nothing is said about what changes.
+		impact = append(impact, fmt.Sprintf("Deploys chart %s %s (app %s) from %s.", ch.Metadata.Name, ch.Metadata.Version, ch.Metadata.AppVersion, from))
 	case install && cur != nil:
 		impact = append(impact, fmt.Sprintf("Release %s/%s exists already (revision %d): helm will refuse. Upgrade it instead.", ns, name, cur.Version))
 	case install:
@@ -447,18 +545,26 @@ func (s *Service) RenderUpgrade(ctx context.Context, cl Cluster, who Who, ns, na
 	if err != nil {
 		return "", err
 	}
-	u := action.NewUpgrade(cfg)
-	u.Namespace = ns
-	u.DryRunStrategy = action.DryRunServer
-	u.DisableOpenAPIValidation = true
-	u.Timeout = 60 * time.Second
-	r, err := u.RunWithContext(ctx, name, ch, vals)
-	if err != nil {
-		return "", err
+	funcs, tripped := apps.RenderFuncs(ch)
+	cfg.CustomTemplateFuncs = funcs
+	manifest, err := apps.Bounded(ctx, func(ctx context.Context) (string, error) {
+		u := action.NewUpgrade(cfg)
+		u.Namespace = ns
+		u.DryRunStrategy = action.DryRunServer
+		u.DisableOpenAPIValidation = true
+		u.Timeout = 60 * time.Second
+		r, err := u.RunWithContext(ctx, name, ch, vals)
+		if err != nil {
+			return "", err
+		}
+		rel, err := v1(r)
+		if err != nil {
+			return "", err
+		}
+		return rel.Manifest, apps.CheckOutput(rel.Manifest)
+	})
+	if tripped() {
+		return "", fmt.Errorf("%w: it loops or repeats too much", apps.ErrRenderLimit)
 	}
-	rel, err := v1(r)
-	if err != nil {
-		return "", err
-	}
-	return rel.Manifest, nil
+	return manifest, err
 }

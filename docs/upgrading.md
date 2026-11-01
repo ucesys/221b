@@ -50,6 +50,15 @@ The objects that are not the chart's (connections, accounts, Sherlock's key, ses
 
 ## 0.11.0 (unreleased)
 
+Things to check before this upgrade:
+
+- **`auth.trustedProxies`** is new, and empty by default. Behind an Ingress, list your proxies' addresses as CIDRs, every proxy on the way: their `X-Forwarded-For` then gives the audit log's From and the limits on sign-in attempts the client's address. Without it the console believes nobody's header: From is the proxy's address, as before, and requests that came through a proxy count only against the limit per account.
+- **Admin and Viewer groups in the console's namespaces are refused.** A group bound in the console's own namespace or the toolbox's (`<release>-privileged` unless `toolbox.nodeShell.namespace` says otherwise) makes the upgrade fail, with the group's name. Take the namespace off the group; people who manage the console hold superAdmin.
+- **A token without the username claim is refused.** The console used to fall back to another claim; now the person sees an error. If your provider leaves `auth.oidc.usernameClaim` (`email` by default) out of some tokens, ask for it with `auth.oidc.scopes`, or set `usernameClaim` to one every token has. A nested claim (`corp.login`) now works as the values say.
+- **A Helm dry run renders on the console**, also with `--dry-run=server`, so a card's dry run no longer checks for objects that already exist or reads the cluster through `lookup`. The objects and the release the card lists come from the cluster as before.
+- **A card whose objects cannot be read cannot be approved.** A read that times out or is refused says so on Approve, and the card stays until they can be read or it lapses; a queued change in that state does not start.
+- **A link with `?ask=` fills Sherlock's box.** A home card's Audit and Troubleshoot buttons open the cluster with the question ready, and the person presses Ask.
+
 `localCluster.writeClusterRole` now defaults to `minimal`, a role the chart makes, in place of the built-in `edit`: with sign-in off and `localCluster.mode: write`, the console no longer reads every Secret or impersonates ServiceAccounts unless `secrets.read` or your own role says so. Helm's records need Secrets read, so Helm applications there need `secrets.read`. To keep the old behaviour, set `localCluster.writeClusterRole: edit`.
 
 Two consoles in one cluster: `rbac.shared` says who installs the roles they share. `auto`, the default, is as before, and the install notes now say when another release holds them. To keep them from going with either console, install them on their own (`helm install 221b-roles <chart> --set rbac.shared=only`) and set `rbac.shared=none` on each console.
@@ -60,6 +69,15 @@ New chart values, all with defaults: `toolbox.ssh.enabled` (false), `toolbox.ssh
 - **A new key in the settings ConfigMap**, `ssh-pairings.json`.
 - **A new egress rule in the NetworkPolicy**, only with SSH on: TCP to `toolbox.ssh.port` (22) anywhere, so the console reaches sshd on the nodes. Set `networkPolicy.nodeCIDRs` to the nodes' addresses to allow nothing else; `toolbox.ssh.enabled=false` removes the rule.
 - **On a paired node**: `/etc/ssh/221b/`, `/etc/ssh/sshd_config.d/221b.conf`, and an `Include /etc/ssh/sshd_config.d/*.conf` line at the top of `sshd_config` when it had none (a failed pairing takes it out again). Several consoles may pair one node: each keeps its own line in `ca.pub` and the principals files, and *Unpair from SSH…* removes that console's lines, and the first two only with the last console's key.
+
+Helm applications are held closer:
+
+- **Rights per namespace.** Changing an application, its commands or `--app` now takes Admin or SuperAdmin and, in that namespace, Kubernetes' leave to list and create Secrets. An Admin whose bindings do not reach the application's namespace gets 403 where the console used to let them through.
+- **A deploy runs what its card showed.** The run fetches the card's commit by its id if the branch has moved. A git server that does not serve commits by id (GitHub does; plain git needs `uploadpack.allowReachableSHA1InWant`) makes such a run refuse: send the command again.
+- **Limits on a fetch and a render.** A repository past 64 MB sent, 128 MB unpacked or checked out, or 20,000 files is refused, as is a chart that renders to more than 32 MB or for more than a minute. Move a chart out of a very large repository if you meet one.
+- **Chart paths** with spaces or other characters outside letters, digits and `. _ + @ -` are refused; such a path never deployed. Rename the directory.
+- **Repository hosts** on loopback, link-local or cloud metadata addresses are refused. Private addresses work as before. With `HTTPS_PROXY` set, the address check at connection time sees the proxy's address, not the repository's.
+- **Changing an application's repository removes its saved token** unless you give a new one.
 
 ## 0.10.2 (unreleased)
 

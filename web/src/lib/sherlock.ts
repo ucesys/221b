@@ -104,6 +104,8 @@ export type PopMessage =
   /** Undo of an answer's view changes, asked from any window (P6U-10), and its result. */
   | { type: 'undo'; cluster: string; answer: number }
   | { type: 'undone'; cluster: string; answer: number }
+  /** A question for the box in Sherlock's window, for the person to send. */
+  | { type: 'fill'; cluster: string; text: string }
 
 let channel: BroadcastChannel | null = null
 const listeners = new Set<(m: PopMessage) => void>()

@@ -572,6 +572,12 @@ func sherlockChange(a, b settings.Sherlock) string {
 			parts = append(parts, "view changes off")
 		}
 	}
+	if a.Notes != b.Notes {
+		parts = append(parts, "notes changed")
+	}
+	if a.Instructions != b.Instructions {
+		parts = append(parts, "instructions changed")
+	}
 	ids := map[string]bool{}
 	for id := range a.Clusters {
 		ids[id] = true

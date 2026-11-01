@@ -659,20 +659,23 @@ func (s *Server) putWatsonConfig(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, settingsStatus(err, http.StatusBadGateway), "The settings were not saved: "+err.Error())
 		return
 	}
-	detail := "no change"
-	if before.TwoPerson != in.TwoPerson {
-		detail = map[bool]string{true: "two-person rule on for production clusters", false: "two-person rule off"}[in.TwoPerson]
-	}
-	if before.ApproveAllMinutes != in.ApproveAllMinutes {
-		if detail == "no change" {
-			detail = ""
-		} else {
-			detail += ", "
-		}
-		detail += "standing approvals up to " + strconv.Itoa(in.ApproveAllMinutes) + " minutes"
-	}
-	s.record(r, ActionWatsonSettings, "watson", detail)
+	s.record(r, ActionWatsonSettings, "watson", watsonChange(before, in))
 	s.getWatsonConfig(w, r)
+}
+
+// watsonChange says what changed, for the audit record.
+func watsonChange(a, b settings.Watson) string {
+	var parts []string
+	if a.TwoPerson != b.TwoPerson {
+		parts = append(parts, map[bool]string{true: "two-person rule on for production clusters", false: "two-person rule off"}[b.TwoPerson])
+	}
+	if a.ApproveAllMinutes != b.ApproveAllMinutes {
+		parts = append(parts, "standing approvals up to "+strconv.Itoa(b.ApproveAllMinutes)+" minutes")
+	}
+	if len(parts) == 0 {
+		return "no change"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // ActionWatsonSettings is the audit action of a change to Watson's settings.

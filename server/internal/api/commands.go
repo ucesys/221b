@@ -62,11 +62,11 @@ func setFlags(params []string) []string {
 // appCommand reads the application for a command request.
 func (s *Server) appCommand(w http.ResponseWriter, r *http.Request) (c watson.Cluster, who watson.Who, rec apps.Record, ok bool) {
 	c, who, ok = s.appReady(w, r)
-	if !ok || !s.mayManageApps(w, r) {
+	if !ok {
 		return c, who, rec, false
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	if !appNames(w, ns, name) {
+	if !appNames(w, ns, name) || !s.mayManageApp(w, r, ns) {
 		return c, who, rec, false
 	}
 	rec, _, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
@@ -179,5 +179,5 @@ func (s *Server) postAppCommandRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	extra := append(installFlags(rec, r.URL.Query().Get("install") == "1"), setFlags(rec.Commands[i].Params)...)
-	s.submitApp(w, r, c, who, appLine("upgrade", rec.Namespace, rec.Name, rec.Source, extra...))
+	s.submitAppLine(w, r, c, who, "upgrade", rec.Namespace, rec.Name, rec.Source, extra...)
 }

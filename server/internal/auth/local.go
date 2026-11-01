@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -151,43 +152,71 @@ func ReadLocalUsers(path string) ([]LocalUser, error) {
 	return list, nil
 }
 
+// limiterKeys is how many keys a limiter remembers.
+const limiterKeys = 10000
+
 // limiter slows password guessing: a few attempts a minute per address and
-// per account, whatever the answer.
+// per account, whatever the answer. Its memory is bounded whatever is sent:
+// keys are kept as hashes, and past limiterKeys of them the ones attempted
+// longest ago are forgotten.
 type limiter struct {
 	mu    sync.Mutex
-	hits  map[string][]time.Time
+	hits  map[[sha256.Size]byte][]time.Time
 	limit int
 	per   time.Duration
+	keys  int
 	now   func() time.Time
 }
 
 func newLimiter(limit int, per time.Duration, now func() time.Time) *limiter {
-	return &limiter{hits: map[string][]time.Time{}, limit: limit, per: per, now: now}
+	return &limiter{hits: map[[sha256.Size]byte][]time.Time{}, limit: limit, per: per, keys: limiterKeys, now: now}
 }
 
 // allow records an attempt for the key and says whether it may proceed.
 func (l *limiter) allow(key string) bool {
+	k := sha256.Sum256([]byte(key))
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
 	var kept []time.Time
-	for _, t := range l.hits[key] {
+	for _, t := range l.hits[k] {
 		if now.Sub(t) < l.per {
 			kept = append(kept, t)
 		}
 	}
 	if len(kept) >= l.limit {
-		l.hits[key] = kept
+		l.hits[k] = kept
 		return false
 	}
-	l.hits[key] = append(kept, now)
-	if len(l.hits) > 10000 {
-		// Forget the oldest keys rather than grow without bound.
-		for k, ts := range l.hits {
-			if len(ts) == 0 || now.Sub(ts[len(ts)-1]) >= l.per {
-				delete(l.hits, k)
-			}
-		}
+	l.hits[k] = append(kept, now)
+	if len(l.hits) > l.keys {
+		l.evict(now)
 	}
 	return true
+}
+
+// evict forgets the keys whose attempts have aged out and, when they are
+// not enough, the oldest of the rest, down to nine tenths of the bound so
+// that the next few attempts need no sweep. The caller holds the lock.
+func (l *limiter) evict(now time.Time) {
+	type last struct {
+		key [sha256.Size]byte
+		at  time.Time
+	}
+	var live []last
+	for k, ts := range l.hits {
+		if len(ts) == 0 || now.Sub(ts[len(ts)-1]) >= l.per {
+			delete(l.hits, k)
+			continue
+		}
+		live = append(live, last{k, ts[len(ts)-1]})
+	}
+	over := len(live) - (l.keys - l.keys/10)
+	if over <= 0 {
+		return
+	}
+	sort.Slice(live, func(i, j int) bool { return live[i].at.Before(live[j].at) })
+	for _, e := range live[:over] {
+		delete(l.hits, e.key)
+	}
 }

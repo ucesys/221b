@@ -377,7 +377,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
                   <input className="rk-mono" value={path} onChange={(e) => setPath(e.target.value)} placeholder="charts/app" data-testid="app-path" />
                 </label>
               </Field>
-              <Field label="Token" hint={app?.hasToken ? 'A token is saved; paste a new one to replace it' : 'Only for a private repository; it is kept in the console and never shown again'}>
+              <Field label="Token" hint={app?.hasToken && repo.trim() !== app.source.repo ? 'The saved token is removed with the repository change; paste one for the new repository' : app?.hasToken ? 'A token is saved; paste a new one to replace it' : 'Only for a private repository; it is kept in the console and never shown again'}>
                 <label className="rk-field">
                   <input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder={app?.hasToken ? '•••••••• saved' : 'optional'} data-testid="app-token" />
                 </label>

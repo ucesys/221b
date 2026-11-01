@@ -346,7 +346,7 @@ test('installs a chart from a public git repository through Watson, checks its d
     await expect(panel.getByTestId('app-images')).toContainText('nginx', { timeout: 30_000 })
     const log = JSON.stringify(await cluster.auditLog())
     expect(log).toContain('app.save')
-    expect(log).toContain('helm install hello --git https://github.com/helm/examples --path charts/hello-world --ref main -n e2e-apps --app --create-namespace')
+    expect(log).toContain(`helm install hello --git https://github.com/helm/examples --path 'charts/hello-world' --ref main -n e2e-apps --app --create-namespace`)
   } finally {
     const res = await request.delete(`/api/v1/apps/${ns}/${name}`, { headers: SAME })
     expect([202, 404]).toContain(res.status())

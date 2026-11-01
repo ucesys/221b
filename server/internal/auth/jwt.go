@@ -267,6 +267,24 @@ func stringClaim(all map[string]any, name string) string {
 	return s
 }
 
+// nestedClaim reads a claim as a string by its name, or by a dotted path
+// into nested claims ("realm_access.username").
+func nestedClaim(all map[string]any, name string) string {
+	if s := stringClaim(all, name); s != "" {
+		return s
+	}
+	var v any = all
+	for _, part := range strings.Split(name, ".") {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return ""
+		}
+		v = m[part]
+	}
+	s, _ := v.(string)
+	return s
+}
+
 // stringsClaim reads a claim as a list of strings; a single string counts
 // as a list of one, and nested claims use dots ("realm_access.roles").
 func stringsClaim(all map[string]any, name string) []string {

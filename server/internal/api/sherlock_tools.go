@@ -200,7 +200,7 @@ var sherlockTools = []tool{
 		run:   (*toolbox).releases,
 	},
 	{
-		def:   sherlock.ToolDef{Name: "get_helm_release", Description: "One Helm release: its history with each revision's status and description (a failed upgrade says why), notes, and its resources with their state. Values are not shown.", InputSchema: toolSchema([]string{"namespace", "name"}, map[string]string{"namespace": "string|Its namespace.", "name": "string|The release's name."})},
+		def:   sherlock.ToolDef{Name: "get_helm_release", Description: "One Helm release: its history with each revision's status and description (a failed upgrade says why), and its resources with their state. Values and notes are not shown.", InputSchema: toolSchema([]string{"namespace", "name"}, map[string]string{"namespace": "string|Its namespace.", "name": "string|The release's name."})},
 		label: func(in map[string]any) string { return "Read Helm release " + nsName(in) },
 		run:   (*toolbox).release,
 	},
@@ -826,7 +826,7 @@ func (tb *toolbox) yaml(ctx context.Context, in map[string]any) sherlock.ToolRes
 	} else if k.Kind == "Node" {
 		refs = append(refs, ref("Node", "", name))
 	}
-	return sherlock.ToolResult{Text: sherlock.Scrub(string(b)), Refs: refs}
+	return sherlock.ToolResult{Text: string(sherlock.ScrubYAML(b)), Refs: refs}
 }
 
 func (tb *toolbox) services(ctx context.Context, in map[string]any) sherlock.ToolResult {
@@ -883,13 +883,14 @@ func (tb *toolbox) release(ctx context.Context, in map[string]any) sherlock.Tool
 	if code != http.StatusOK {
 		return failure(code, b)
 	}
-	// Values are configuration someone typed, credentials among it: they
-	// are left out altogether.
+	// Values are configuration someone typed, credentials among it, and a
+	// chart's notes are rendered from them: both are left out altogether.
 	var d map[string]any
-	if err := json.Unmarshal(b, &d); err == nil {
-		drop(d, "values", "maskedValues")
-		b, _ = json.Marshal(d)
+	if err := json.Unmarshal(b, &d); err != nil {
+		return sherlock.ToolResult{Text: "The release could not be read.", Error: true}
 	}
+	drop(d, "values", "maskedValues", "notes")
+	b, _ = json.Marshal(d)
 	return sherlock.ToolResult{Text: string(sherlock.ScrubJSON(b)), Refs: []sherlock.Ref{ref("HelmRelease", ns, name)}}
 }
 

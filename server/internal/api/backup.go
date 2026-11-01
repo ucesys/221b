@@ -232,10 +232,14 @@ func (s *Server) postRestore(w http.ResponseWriter, r *http.Request) {
 			note("settings: this console keeps no settings")
 		} else if err := s.restorable(*b.Settings); err != nil {
 			note("settings: %v", err)
-		} else if _, err := s.opts.Settings.Update(ctx, *b.Settings); err != nil {
-			note("settings: %v", err)
 		} else {
-			rep.Restored["settings"] = 1
+			before := s.opts.Settings.Current()
+			if after, err := s.opts.Settings.Update(ctx, *b.Settings); err != nil {
+				note("settings: %v", err)
+			} else {
+				rep.Restored["settings"] = 1
+				s.recordRestoredSettings(r, before.Settings, after.Settings)
+			}
 		}
 	}
 
@@ -363,6 +367,17 @@ func (s *Server) postRestore(w http.ResponseWriter, r *http.Request) {
 	s.record(r, ActionRestore, "backup", detail)
 	out, _ := json.Marshal(rep)
 	writeJSON(w, r, out)
+}
+
+// recordRestoredSettings names what a restore changed of Sherlock and
+// Watson, as their own routes do.
+func (s *Server) recordRestoredSettings(r *http.Request, before, after settings.Settings) {
+	if d := sherlockChange(before.SherlockOrDefault(), after.SherlockOrDefault()); d != "no change" {
+		s.record(r, audit.ActionSherlockSettings, "sherlock", "restored: "+d)
+	}
+	if d := watsonChange(before.WatsonOrDefault(), after.WatsonOrDefault()); d != "no change" {
+		s.record(r, ActionWatsonSettings, "watson", "restored: "+d)
+	}
 }
 
 // restorable holds a backup's settings to what the settings pages accept: a

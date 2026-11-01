@@ -1463,3 +1463,47 @@ func TestHostKeysStayOffTheOutput(t *testing.T) {
 		}
 	}
 }
+
+// Reading another person's live output is watching it: the owner sees who,
+// and the audit trail has it (TB-55). The owner's own read is neither, and
+// an ended session's output stays for those who may see it.
+func TestReadingSomeoneElsesLiveOutputIsWatchingIt(t *testing.T) {
+	m, _, _, buf := setup(t)
+	m.opts.ReadShown = 30 * time.Millisecond
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, alice(), "", "")
+	waitState(t, m, s.ID, StateLive)
+	m.ReadOutput(s.ID, alice())
+	if got, _ := m.Get(s.ID); len(got.Watchers) != 0 || strings.Contains(buf.text(), ActionWatch) {
+		t.Fatalf("the owner's read counted as watching: %v %s", got.Watchers, buf.text())
+	}
+	admin := bob()
+	admin.Admin = true
+	m.ReadOutput(s.ID, admin)
+	m.ReadOutput(s.ID, admin)
+	if got, _ := m.Get(s.ID); len(got.Watchers) != 1 || got.Watchers[0] != "Bob" {
+		t.Fatalf("watchers = %v", got.Watchers)
+	}
+	if n := strings.Count(buf.text(), ActionWatch); n != 2 {
+		t.Fatalf("%d records of two reads: %s", n, buf.text())
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, _ := m.Get(s.ID)
+		if len(got.Watchers) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("still shown: %v", got.Watchers)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := m.End(s.ID, alice(), ""); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, s.ID, StateEnded)
+	before := strings.Count(buf.text(), ActionWatch)
+	m.ReadOutput(s.ID, admin)
+	if strings.Count(buf.text(), ActionWatch) != before+1 {
+		t.Fatalf("reading an ended session was not audited: %s", buf.text())
+	}
+}

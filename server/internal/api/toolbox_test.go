@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -516,5 +517,138 @@ func TestTypingCountsAsActivityAboutOnceAMinute(t *testing.T) {
 	typed()
 	if a.active != 2 {
 		t.Fatalf("%d a minute later", a.active)
+	}
+}
+
+// liveForward opens a port forward and returns its id once it is live.
+func liveForward(t *testing.T, srv *httptest.Server, c *http.Client) string {
+	t.Helper()
+	r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/sessions", `{"tool":"forward","namespace":"web","pod":"cache-0","port":6379,"from":"Tools menu"}`)
+	var card watsonItem
+	_ = json.Unmarshal([]byte(b), &card)
+	if r.StatusCode != http.StatusAccepted {
+		t.Fatalf("%d %s", r.StatusCode, b)
+	}
+	watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[card.ID].Plan != nil && m[card.ID].Plan.Ready })
+	if r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/commands/"+card.ID+"/approve", ""); r.StatusCode != 200 {
+		t.Fatalf("approve: %d %s", r.StatusCode, b)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var list []struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		}
+		_, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/sessions", "")
+		_ = json.Unmarshal([]byte(b), &list)
+		if len(list) == 1 && list[0].State == sessions.StateLive {
+			return list[0].ID
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sessions %s", b)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A terminal's WebSocket lasts as long as the sign-in that opened it: the
+// same person on another sign-in keeps theirs.
+func TestATerminalClosesWhenItsSignInEnds(t *testing.T) {
+	srv, c, _, _ := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
+	id := liveForward(t, srv, c)
+	second := signIn(t, srv, "ops@corp.example")
+	u, _ := url.Parse(srv.URL)
+	cookies := func(cl *http.Client) string {
+		var parts []string
+		for _, ck := range cl.Jar.Cookies(u) {
+			parts = append(parts, ck.Name+"="+ck.Value)
+		}
+		return strings.Join(parts, "; ")
+	}
+	dial := func(cl *http.Client) *websocket.Conn {
+		ws := "ws://" + u.Host + "/api/v1/sessions/" + id + "/attach"
+		conn, resp, err := websocket.DefaultDialer.Dial(ws, http.Header{"Cookie": {cookies(cl)}, "Origin": {srv.URL}})
+		if err != nil {
+			code := 0
+			if resp != nil {
+				code = resp.StatusCode
+			}
+			t.Fatalf("dial: %v (%d)", err, code)
+		}
+		t.Cleanup(func() { conn.Close() })
+		return conn
+	}
+	stays, ends := dial(c), dial(second)
+	closed := make(chan error, 1)
+	go func() {
+		for {
+			if _, _, err := ends.ReadMessage(); err != nil {
+				closed <- err
+				return
+			}
+		}
+	}()
+	if r, _ := send(t, second, http.MethodPost, srv.URL+"/signout", ""); r.StatusCode >= 400 {
+		t.Fatalf("sign out: %d", r.StatusCode)
+	}
+	select {
+	case err := <-closed:
+		if !strings.Contains(err.Error(), "The sign-in ended") {
+			t.Fatalf("closed by %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the terminal stayed open after its sign-in ended")
+	}
+	_ = stays.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, _, err := stays.ReadMessage(); err == nil || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the other sign-in's terminal: %v", err)
+	}
+}
+
+// Another SuperAdmin reading the output of a live session shows on it.
+func TestReadingLiveOutputShowsTheReaderAsWatching(t *testing.T) {
+	srv, c, _, _ := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
+	id := liveForward(t, srv, c)
+	other := signIn(t, srv, "ops2@corp.example")
+	if r, _ := send(t, other, http.MethodGet, srv.URL+"/api/v1/sessions/"+id+"/output", ""); r.StatusCode != 200 {
+		t.Fatalf("output: %d", r.StatusCode)
+	}
+	var v struct {
+		Watchers []string `json:"watchers"`
+	}
+	_, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/sessions/"+id, "")
+	_ = json.Unmarshal([]byte(b), &v)
+	if len(v.Watchers) != 1 || v.Watchers[0] != "Ops Two" {
+		t.Fatalf("the owner sees %s", b)
+	}
+}
+
+// Cached and asked namespaces end up in one answer, whichever goes first.
+func TestToolboxMixesCachedAndAskedNamespaces(t *testing.T) {
+	srv, c, _, _ := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
+	var names []string
+	for i := range 40 {
+		names = append(names, "ns-"+strconv.Itoa(i))
+	}
+	all := func(list []string) map[string]any {
+		var v struct {
+			Namespaces map[string]any `json:"namespaces"`
+		}
+		r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/toolbox?namespaces="+strings.Join(list, ","), "")
+		if r.StatusCode != 200 {
+			t.Fatalf("%d %s", r.StatusCode, b)
+		}
+		_ = json.Unmarshal([]byte(b), &v)
+		return v.Namespaces
+	}
+	var every []string
+	for i, n := range names {
+		if i%2 == 0 {
+			every = append(every, n)
+		}
+	}
+	all(every)
+	if got := all(names); len(got) != len(names) {
+		t.Fatalf("%d of %d namespaces", len(got), len(names))
 	}
 }

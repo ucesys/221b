@@ -31,7 +31,9 @@ const StoreKey = "audit-log.json"
 const (
 	DefaultKeep     = 2000
 	DefaultMaxBytes = 600 << 10
-	defaultEvery    = 2 * time.Second
+	// MaxEventBytes is the most one record may take in the key.
+	MaxEventBytes = 32 << 10
+	defaultEvery  = 2 * time.Second
 )
 
 // MemoryStore keeps events until the server restarts.
@@ -62,7 +64,9 @@ func (m *MemoryStore) Flush(context.Context) error { return nil }
 // every replica and a restarted console see them: each replica adds what
 // it recorded to what the key holds, every couple of seconds, over the
 // version it read (P7-02). The key holds at most Keep events and MaxBytes
-// of JSON; the oldest go first.
+// of JSON; the oldest go first. A record too large to keep is left out on
+// its own, so it costs no other record its place; the stream and the
+// webhook still carry it.
 type KVStore struct {
 	Backend  kv.Backend
 	Key      string
@@ -184,6 +188,10 @@ func (s *KVStore) merge(kept, pending []Event) ([]byte, []Event) {
 		list = list[:keep]
 	}
 	b, _ := json.Marshal(list)
+	if len(b) > s.maxBytes() {
+		list = s.withoutOversized(list)
+		b, _ = json.Marshal(list)
+	}
 	for len(b) > s.maxBytes() && len(list) > 1 {
 		// Drop the oldest tenth at a time: a marshal per event would be slow.
 		cut := len(list) / 10
@@ -194,6 +202,20 @@ func (s *KVStore) merge(kept, pending []Event) ([]byte, []Event) {
 		b, _ = json.Marshal(list)
 	}
 	return b, list
+}
+
+// withoutOversized leaves out the records too large to keep.
+func (s *KVStore) withoutOversized(list []Event) []Event {
+	limit := min(MaxEventBytes, s.maxBytes())
+	out := make([]Event, 0, len(list))
+	for _, e := range list {
+		if b, _ := json.Marshal(e); len(b) > limit {
+			s.Logger.Warn("an audit record is too large to keep for the Audit log page; the stream and the webhook have it", "action", e.Action, "bytes", len(b))
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func (s *KVStore) Flush(ctx context.Context) error {

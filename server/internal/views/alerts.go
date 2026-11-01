@@ -494,6 +494,15 @@ func cordonedAt(n *corev1.Node) *time.Time {
 
 var podRef = regexp.MustCompile(`(?:pod|Pod) "?([a-z0-9][a-z0-9.-]*)/([a-z0-9][a-z0-9.-]*)"?`)
 
+// PodNamespaceIn reads the namespace of a "pod ns/name" in a message.
+func PodNamespaceIn(msg string) (string, bool) {
+	m := podRef.FindStringSubmatch(msg)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
 // podNamed finds "pod ns/name" in a message and returns it when the pod
 // exists.
 func podNamed(src Source, msg string) string {

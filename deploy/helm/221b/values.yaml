@@ -116,6 +116,13 @@ auth:
   prefixes:
     local: "221b-local:"
     ldap: "221b-ldap:"
+  # CIDRs of the proxies in front of the console, such as your Ingress
+  # controller's pods: their X-Forwarded-For says who a request is from, for
+  # the audit log's From and the limits on sign-in attempts. Empty believes
+  # no one's header: From is the socket's peer, and requests that came
+  # through a proxy count only against the limit per account. List every
+  # proxy on the way, not the clients.
+  trustedProxies: []
   # An optional code that must be typed on the first-run page, which asks
   # for the first administrator while no user exists. Empty asks for none.
   # Or name an existing Secret holding it under the key setup-token.
@@ -134,7 +141,8 @@ auth:
     scopes: "openid,profile,email"
     # The claim that names a person to Kubernetes RBAC and the audit log, and
     # the claim that lists their groups (nested claims use dots:
-    # realm_access.roles).
+    # realm_access.roles). A token without the first is refused: no other
+    # claim stands in for it.
     usernameClaim: email
     groupsClaim: groups
     # What the sign-in button says: "Sign in with Okta".
@@ -184,7 +192,8 @@ auth:
     # The groups of each role, written as the directory has them. Any listed
     # group lets its members sign in. viewer and admin entries may carry
     # namespaces, which become RoleBindings; superViewer and superAdmin
-    # apply everywhere and take none.
+    # apply everywhere and take none. The chart refuses the console's own
+    # namespace and the toolbox's.
     roles: {}
     #  viewer:      [ { group: team-a-readers, namespaces: [web, api] } ]
     #  admin:       [ { group: team-a-ops,     namespaces: [web, api] } ]
@@ -192,7 +201,8 @@ auth:
     #  superAdmin:  [ { group: platform-admins } ]
   local:
     # Groups for local users: a name, a role (viewer or admin) and the
-    # namespaces it is bound to. Who is in a group is kept in the console
+    # namespaces it is bound to, which the chart refuses to be the console's
+    # own namespace or the toolbox's. Who is in a group is kept in the console
     # (the Users page, or groups below) and changes without an upgrade.
     groups: []
     #  - { name: web-readers,  role: viewer, namespaces: [web] }

@@ -42,14 +42,14 @@ export function SecretData({ namespace: ns, name, keys, resourceVersion, onToast
 
   useEffect(() => {
     let live = true
-    fetchSecretsConfig().then(
+    fetchSecretsConfig(undefined, ns).then(
       (c) => live && setCfg(c),
       () => live && setCfg({ read: true, reveal: false, edit: false }),
     )
     return () => {
       live = false
     }
-  }, [])
+  }, [ns])
 
   const reveal = (key: string) => {
     if (shown[key]) {

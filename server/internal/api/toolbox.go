@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/kube"
@@ -279,7 +280,9 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 	sem := make(chan struct{}, 8)
 	for _, ns := range nsList {
 		if nt, ok := s.toolCache.get(key+"\x00"+ns, now); ok {
+			mu.Lock()
 			v.Namespaces[ns] = nt
+			mu.Unlock()
 			continue
 		}
 		wg.Add(1)
@@ -739,14 +742,14 @@ func (s *Server) postSessionExtend(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getSessionOutput(w http.ResponseWriter, r *http.Request) {
-	ss, _, ok := s.session(w, r)
+	ss, who, ok := s.session(w, r)
 	if !ok {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "session-"+ss.ID+".txt"))
-	w.Write(s.opts.Sessions.Output(ss.ID))
+	w.Write(s.opts.Sessions.ReadOutput(ss.ID, who))
 }
 
 func (s *Server) getSessionTranscript(w http.ResponseWriter, r *http.Request) {
@@ -770,6 +773,7 @@ func (s *Server) getSessionTranscript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
+	s.recordOn(r, audit.OutcomeOK, sessions.ActionTranscript, "session "+id, "")
 	w.Header().Set("Content-Type", "application/x-asciicast")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "session-"+id+".cast"))
 	http.ServeContent(w, r, "", time.Time{}, f)
@@ -867,12 +871,26 @@ func (s *Server) sessionAttach(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, _ := auth.SessionFrom(r.Context())
 	typed := s.typing(sess)
+	// Attach matched the person, not this sign-in, so the sign-in is held
+	// to account here: what is typed is checked as it comes, and the output
+	// stops at the next look.
+	stands := time.NewTicker(s.opts.Heartbeat)
+	defer stands.Stop()
+	signedOut := func() {
+		wmu.Lock()
+		defer wmu.Unlock()
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "The sign-in ended"), time.Now().Add(time.Second))
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		for {
 			kind, b, err := conn.ReadMessage()
 			if err != nil {
+				return
+			}
+			if !s.sessionStands(r) {
+				signedOut()
 				return
 			}
 			switch kind {
@@ -928,6 +946,11 @@ func (s *Server) sessionAttach(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-done:
 			return
+		case <-stands.C:
+			if !s.sessionStands(r) {
+				signedOut()
+				return
+			}
 		case <-ping.C:
 			wmu.Lock()
 			err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))

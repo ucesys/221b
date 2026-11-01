@@ -58,6 +58,8 @@ const (
 	ActionWatch    = "session.watch"
 	ActionTransfer = "session.transfer"
 	ActionExtend   = "session.extend"
+	// ActionTranscript is a transcript downloaded.
+	ActionTranscript = "session.transcript"
 )
 
 // Who is a person, as sessions need them.
@@ -164,6 +166,9 @@ type Session struct {
 	sizes   chan Size
 	ring    ring
 	viewers map[*Viewer]struct{}
+	// reads are the people shown as watching because they read the output,
+	// until the time runs out.
+	reads   map[string]*time.Timer
 	fwd     Forwarder
 	cast    *transcript
 	lastRev time.Time
@@ -203,6 +208,9 @@ type Options struct {
 	ViewerWait time.Duration
 	// PodCheck is how often a port forward looks at its pod (TB-13).
 	PodCheck time.Duration
+	// ReadShown is how long the owner's pane says someone read the output
+	// of their live session (TB-55).
+	ReadShown time.Duration
 }
 
 // Sub follows the changes of a cluster's sessions.
@@ -239,6 +247,9 @@ func New(o Options) *Manager {
 	}
 	if o.ViewerWait <= 0 {
 		o.ViewerWait = 250 * time.Millisecond
+	}
+	if o.ReadShown <= 0 {
+		o.ReadShown = 30 * time.Second
 	}
 	if o.PodCheck <= 0 {
 		o.PodCheck = 5 * time.Second
@@ -1050,6 +1061,9 @@ func (m *Manager) Attach(id string, who Who, watch bool) (*Viewer, []byte, error
 	replay := s.ring.Bytes()
 	if s.State == StateEnded {
 		v.close()
+		if !owner {
+			m.record(ActionWatch, s, who, audit.OutcomeOK, "ended=true")
+		}
 		return v, replay, nil
 	}
 	s.viewers[v] = struct{}{}
@@ -1273,7 +1287,7 @@ func (s *Session) copy() Session {
 	c.Notes = append([]string(nil), s.Notes...)
 	c.Watchers = append([]string(nil), s.Watchers...)
 	c.Forward.Conns = append([]Conn(nil), s.Forward.Conns...)
-	c.viewers, c.backend, c.cancel, c.stdin, c.sizes, c.fwd, c.cast = nil, nil, nil, nil, nil, nil, nil
+	c.viewers, c.reads, c.backend, c.cancel, c.stdin, c.sizes, c.fwd, c.cast = nil, nil, nil, nil, nil, nil, nil, nil
 	c.ring = ring{}
 	return c
 }
@@ -1286,6 +1300,44 @@ func (m *Manager) Output(id string) []byte {
 		return s.ring.Bytes()
 	}
 	return nil
+}
+
+// ReadOutput is Output for the person who asked. Someone else reading a
+// session's output is watching it, as Attach counts it: it is audited, and
+// while the session is live the owner sees their name for ReadShown after
+// the read (TB-55).
+func (m *Manager) ReadOutput(id string, who Who) []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.all[id]
+	if s == nil {
+		return nil
+	}
+	if s.Owner.same(who) {
+		return s.ring.Bytes()
+	}
+	if s.State == StateEnded {
+		m.record(ActionWatch, s, who, audit.OutcomeOK, "output=true ended=true")
+		return s.ring.Bytes()
+	}
+	m.record(ActionWatch, s, who, audit.OutcomeOK, "output=true")
+	if t := s.reads[who.Name]; t != nil {
+		t.Reset(m.opts.ReadShown)
+		return s.ring.Bytes()
+	}
+	if s.reads == nil {
+		s.reads = map[string]*time.Timer{}
+	}
+	s.Watchers = append(s.Watchers, who.Name)
+	m.changedLocked(s)
+	s.reads[who.Name] = time.AfterFunc(m.opts.ReadShown, func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		delete(s.reads, who.Name)
+		s.Watchers = without(s.Watchers, who.Name)
+		m.changedLocked(s)
+	})
+	return s.ring.Bytes()
 }
 
 // Visible says whether a person sees a session: their own; every one for

@@ -57,7 +57,8 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return data as T
 }
 
-export const fetchSecretsConfig = (cluster?: string) => call<SecretsConfig>('GET', apiPath('secrets/config', cluster))
+/** What the person may do with Secrets; given a namespace, reveal says what holds there (SE-03). */
+export const fetchSecretsConfig = (cluster?: string, namespace?: string) => call<SecretsConfig>('GET', apiPath('secrets/config', cluster) + (namespace ? '?namespace=' + encodeURIComponent(namespace) : ''))
 
 /** A cluster's Secrets config: null until it answers, so another cluster's never stands in for it. */
 export function useSecretsConfig(cluster: string): SecretsConfig | null {

@@ -108,7 +108,8 @@ type Service struct {
 	setup *limiter
 	// perAccount slows guessing at one account; perAddress slows spraying
 	// many accounts from one address, which is also many people behind one
-	// NAT, so it is the looser of the two.
+	// NAT, so it is the looser of the two. See attempt for when an address
+	// stands for no one person.
 	perAccount *limiter
 	perAddress *limiter
 	audit      *audit.Log
@@ -440,7 +441,7 @@ func (s *Service) renderSignIn(w http.ResponseWriter, r *http.Request, msg strin
 		d.Provider = s.provider.Name()
 	}
 	if r.Method == http.MethodPost {
-		d.Email = r.PostFormValue("email")
+		d.Email = audit.Clip(r.PostFormValue("email"), maxLogin)
 		d.Next = safeNext(r.PostFormValue("next"))
 	} else if r.URL.Query().Get("changed") == "1" && msg == "" {
 		d.Notice = "Your password is changed. Sign in with the new one."
@@ -485,11 +486,45 @@ func from(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// maxDetail bounds the detail of a record the sign-in pages write: some of
+// it comes from a request nobody has signed in to make.
+const maxDetail = 1024
+
 func (s *Service) record(r *http.Request, action string, who User, outcome, detail string) {
 	if s.audit == nil {
 		return
 	}
-	s.audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: who.Subject, Email: who.Email, Name: who.Name}, Outcome: outcome, Detail: detail, From: from(r)})
+	s.audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: who.Subject, Email: who.Email, Name: who.Name}, Outcome: outcome, Detail: audit.Clip(detail, maxDetail), From: from(r)})
+}
+
+const (
+	// maxLogin bounds a user name at the sign-in pages: longer than any
+	// account or directory name, and what the audit record keeps.
+	maxLogin = audit.MaxName
+	// maxFormBody bounds what the sign-in, password and first-run forms
+	// read, before anyone has signed in.
+	maxFormBody = 64 << 10
+)
+
+// formLogin reads the user name of a form, and says whether it is short
+// enough to be one. One that is not comes back cut to maxLogin.
+func formLogin(s string) (string, bool) {
+	login := Login(s)
+	if len(login) > maxLogin {
+		return audit.Clip(login, maxLogin), false
+	}
+	return login, true
+}
+
+// attempt counts a password attempt and says whether it may proceed. An
+// address that stands for no one person is not counted: behind a proxy the
+// console does not believe, one client's attempts would keep out everyone
+// behind it, so the limit per account stands alone there.
+func (s *Service) attempt(r *http.Request, login string) bool {
+	if !SharedAddress(r) && !s.perAddress.allow(from(r)) {
+		return false
+	}
+	return s.perAccount.allow(login)
 }
 
 // refusedText is what a person is told when they cannot sign in, whatever
@@ -503,6 +538,7 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "local sign-in is off", http.StatusNotFound)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
 	if err := r.ParseForm(); err != nil {
 		s.renderSignIn(w, r, "The form could not be read.", http.StatusBadRequest)
 		return
@@ -515,9 +551,9 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 		s.renderSignIn(w, r, "That sign-in did not come from this console. Try again from this page.", http.StatusForbidden)
 		return
 	}
-	login := Login(r.PostFormValue("email"))
+	login, fits := formLogin(r.PostFormValue("email"))
 	password := r.PostFormValue("password")
-	if !s.perAddress.allow(from(r)) || !s.perAccount.allow(login) {
+	if !s.attempt(r, login) {
 		s.record(r, audit.ActionSignInFailed, User{Username: login, Email: login}, audit.OutcomeDenied, "too many attempts")
 		s.renderSignIn(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)
 		return
@@ -525,6 +561,10 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 	refuse := func(reason string) {
 		s.record(r, audit.ActionSignInFailed, User{Username: login, Email: login}, audit.OutcomeFailed, reason)
 		s.renderSignIn(w, r, refusedText, http.StatusUnauthorized)
+	}
+	if !fits {
+		refuse("the user name is too long")
+		return
 	}
 	acct, local := s.accounts.Find(login)
 	if !local && s.dir != nil {
@@ -679,6 +719,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		if d := q.Get("error_description"); d != "" {
 			msg += ": " + d
 		}
+		msg = audit.Clip(msg, maxDetail)
 		s.record(r, audit.ActionSignInFailed, User{}, audit.OutcomeFailed, "the provider refused: "+msg)
 		s.renderSignIn(w, r, "The provider did not sign you in ("+msg+").", http.StatusUnauthorized)
 		return

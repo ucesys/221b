@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/fake"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/settings"
@@ -378,5 +379,43 @@ func TestClientAddressNeedsTheToken(t *testing.T) {
 	}
 	if from := put(""); from != "127.0.0.1" {
 		t.Fatalf("without a token: from %q", from)
+	}
+}
+
+// The audit log's From is the client a trusted proxy names, and the socket's
+// peer for anyone else: a header proves nothing by itself.
+func TestTheAuditLogBelievesOnlyATrustedProxy(t *testing.T) {
+	act := func(t *testing.T, proxies auth.Proxies, forwarded string) string {
+		t.Helper()
+		srv, c, _, out, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) { o.Proxies = proxies })
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/signout", nil)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("X-Forwarded-For", forwarded)
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		for _, line := range strings.Split(out.String(), "\n") {
+			if strings.Contains(line, `"action":"signout"`) {
+				var e audit.Event
+				if err := json.Unmarshal([]byte(line), &e); err != nil {
+					t.Fatal(err)
+				}
+				return e.From
+			}
+		}
+		t.Fatalf("no sign-out in the log: %s", out.String())
+		return ""
+	}
+	local, err := auth.ParseProxies([]string{"127.0.0.0/8", "::1/128"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if from := act(t, local, "198.51.100.1, 203.0.113.9"); from != "203.0.113.9" {
+		t.Errorf("through a trusted proxy: %s", from)
+	}
+	if from := act(t, nil, "203.0.113.9"); from == "203.0.113.9" {
+		t.Errorf("a header was believed with no proxy trusted: %s", from)
 	}
 }

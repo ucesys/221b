@@ -224,3 +224,25 @@ func TestARestoreHoldsItsSettingsToWhatTheSettingsPagesAccept(t *testing.T) {
 		t.Fatalf("good settings: %+v", rep)
 	}
 }
+
+// A restore that changes the caps or the two-person rule says so in the
+// audit log, in records of their own.
+func TestARestoreNamesWhatItChangesOfSherlockAndWatson(t *testing.T) {
+	srv, c, _, aud, _, _ := multiSetupWith(t, "ops@corp.example", nil)
+	sh := settings.DefaultSherlock
+	sh.DailyUSD, sh.MonthlyUSD = 1, 2
+	b, _ := json.Marshal(restoreInput{Backup: backupFile{Format: backupFormat, Settings: &settings.Settings{RefreshSeconds: 9, Sherlock: &sh, Watson: &settings.Watson{TwoPerson: true}}}, Parts: map[string]bool{"settings": true}})
+	if r, body := send(t, c, http.MethodPost, srv.URL+"/api/v1/admin/restore", string(b)); r.StatusCode != http.StatusOK {
+		t.Fatalf("restore: %d %s", r.StatusCode, body)
+	}
+	details := map[string]string{}
+	for _, e := range auditEvents(t, aud.String()) {
+		details[e.Action] = e.Detail
+	}
+	if d := details[audit.ActionSherlockSettings]; !strings.Contains(d, "daily cap") || !strings.Contains(d, "monthly cap") {
+		t.Errorf("Sherlock's record: %q", d)
+	}
+	if d := details[ActionWatsonSettings]; !strings.Contains(d, "two-person rule on") {
+		t.Errorf("Watson's record: %q", d)
+	}
+}

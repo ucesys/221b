@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/auth"
 )
 
 // Config is everything the server needs to start.
@@ -136,6 +138,8 @@ type Config struct {
 	// leader's address is PodIP and the listen port.
 	PodName string
 	PodIP   string
+	// TrustedProxies are the CIDRs whose X-Forwarded-For is believed.
+	TrustedProxies []string
 	// ProxyToken is shared by the replicas, so the leader believes the
 	// client address a follower forwards; from the environment only.
 	ProxyToken string
@@ -172,7 +176,9 @@ func Parse(args []string) (Config, error) {
 	c.LDAPBindPassword = os.Getenv("LDAP_BIND_PASSWORD")
 	fs.StringVar(&c.OIDCIssuer, "oidc-issuer", env("OIDC_ISSUER", ""), "the OIDC provider's issuer URL")
 	fs.StringVar(&c.OIDCClientID, "oidc-client-id", env("OIDC_CLIENT_ID", ""), "the OIDC client ID")
-	fs.StringVar(&c.OIDCClientSecret, "oidc-client-secret", env("OIDC_CLIENT_SECRET", ""), "the OIDC client secret (better set through the environment)")
+	// A flag's default is printed in the usage message, so secrets from the
+	// environment are read after the flags, not given as defaults.
+	fs.StringVar(&c.OIDCClientSecret, "oidc-client-secret", "", "the OIDC client secret (better set through the environment, OIDC_CLIENT_SECRET)")
 	scopes := fs.String("oidc-scopes", env("OIDC_SCOPES", "openid,profile,email"), "comma-separated scopes to ask for; add groups when the provider needs it")
 	fs.StringVar(&c.OIDCRedirectURL, "oidc-redirect-url", env("OIDC_REDIRECT_URL", ""), "the callback URL registered with the provider (empty: https://<host>/signin/callback from each request)")
 	fs.StringVar(&c.OIDCUsernameClaim, "oidc-username-claim", env("OIDC_USERNAME_CLAIM", "email"), "the claim that names a person to Kubernetes and the audit log")
@@ -181,10 +187,11 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.LocalUsersFile, "local-users", env("LOCAL_USERS_FILE", ""), "a JSON or YAML file of local accounts defined in values (username or email, name, groups, roles, passwordHash)")
 	admins := fs.String("admins", env("ADMINS", ""), "comma-separated usernames that manage clusters and settings")
 	adminGroups := fs.String("admin-groups", env("ADMIN_GROUPS", ""), "comma-separated groups that manage clusters and settings")
+	proxies := fs.String("trusted-proxies", env("TRUSTED_PROXIES", ""), "comma-separated CIDRs of the proxies whose X-Forwarded-For is believed; empty believes none")
 	fs.DurationVar(&c.SessionIdle, "session-idle", envDuration("SESSION_IDLE", 8*time.Hour), "sign a session out after this long without a request")
 	fs.DurationVar(&c.SessionMax, "session-max", envDuration("SESSION_MAX", 7*24*time.Hour), "sign a session out this long after sign-in whatever happens")
-	fs.StringVar(&c.AuditWebhookURL, "audit-webhook", env("AUDIT_WEBHOOK_URL", ""), "POST every audit record to this URL as JSON")
-	fs.StringVar(&c.AuditWebhookToken, "audit-webhook-token", env("AUDIT_WEBHOOK_TOKEN", ""), "bearer token sent with audit webhook requests")
+	fs.StringVar(&c.AuditWebhookURL, "audit-webhook", "", "POST every audit record to this URL as JSON (or AUDIT_WEBHOOK_URL; a webhook's URL can be its secret)")
+	fs.StringVar(&c.AuditWebhookToken, "audit-webhook-token", "", "bearer token sent with audit webhook requests (better set through the environment, AUDIT_WEBHOOK_TOKEN)")
 	fs.StringVar(&c.ImpersonateUserPrefix, "impersonate-user-prefix", env("IMPERSONATE_USER_PREFIX", ""), "put before user names when reading as a person: the API servers' --oidc-username-prefix")
 	fs.StringVar(&c.ImpersonateGroupPrefix, "impersonate-group-prefix", env("IMPERSONATE_GROUP_PREFIX", ""), "put before group names when reading as a person: the API servers' --oidc-groups-prefix")
 	fs.DurationVar(&c.AccessTTL, "access-ttl", envDuration("ACCESS_TTL", 2*time.Minute), "how long an answer about what a person may see stands before Kubernetes is asked again")
@@ -204,6 +211,14 @@ func Parse(args []string) (Config, error) {
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}
+	for _, f := range []struct {
+		value *string
+		key   string
+	}{{&c.OIDCClientSecret, "OIDC_CLIENT_SECRET"}, {&c.AuditWebhookURL, "AUDIT_WEBHOOK_URL"}, {&c.AuditWebhookToken, "AUDIT_WEBHOOK_TOKEN"}} {
+		if *f.value == "" {
+			*f.value = os.Getenv(f.key)
+		}
+	}
 	for _, h := range strings.Split(*hosts, ",") {
 		if h = strings.TrimSpace(h); h != "" {
 			c.AllowedHosts = append(c.AllowedHosts, h)
@@ -212,6 +227,7 @@ func Parse(args []string) (Config, error) {
 	c.OIDCScopes = splitList(*scopes)
 	c.Admins = splitList(*admins)
 	c.AdminGroups = splitList(*adminGroups)
+	c.TrustedProxies = splitList(*proxies)
 	if fs.NArg() > 0 {
 		return c, fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}
@@ -249,6 +265,9 @@ func (c Config) validate() error {
 		}
 	default:
 		errs = append(errs, fmt.Errorf("unknown auth mode %q: use oidc, ldap, local or none", c.AuthMode))
+	}
+	if _, err := auth.ParseProxies(c.TrustedProxies); err != nil {
+		errs = append(errs, fmt.Errorf("-trusted-proxies: %w", err))
 	}
 	if c.SessionIdle < time.Minute || c.SessionMax < time.Minute {
 		errs = append(errs, errors.New("session lifetimes must be at least 1m"))

@@ -3,6 +3,7 @@ package watson
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,10 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/apps"
 )
@@ -302,5 +307,48 @@ func TestADeployOfAChartMissingAnEnabledDependencyIsRefused(t *testing.T) {
 	}
 	if out, code := run(line + " --set postgresql.enabled=false"); code != 0 {
 		t.Fatalf("disabled: exit %d\n%s", code, out)
+	}
+}
+
+// A dry run prints what it renders, and prints no Secret value: lookup
+// finds nothing, wherever a template puts it, Secret objects are left out,
+// and values that look like credentials are masked in any kind.
+func TestAHelmDryRunCannotCarrySecretValues(t *testing.T) {
+	apps.AllowLocalRepos = true
+	t.Cleanup(func() { apps.AllowLocalRepos = false })
+	tg, _ := simTarget(t)
+	tg.Cluster = "local"
+	tg.Apps = apps.NewMemoryStore()
+	asJSON := rest.CopyConfig(tg.Config)
+	asJSON.ContentType = "application/json"
+	k := kubernetes.NewForConfigOrDie(asJSON)
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "web"}, Data: map[string][]byte{"password": []byte("planted-in-the-cluster")}}
+	if _, err := k.CoreV1().Secrets("web").Create(context.Background(), secret, metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	const read = `{{ (lookup "v1" "Secret" "web" "db").data | toJson }}`
+	repo := gitChart(t, map[string]string{
+		"charts/web/templates/copy.yaml":   "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}-copy\ndata:\n  found: {{ printf \"%s\" (" + `(lookup "v1" "Secret" "web" "db").data | toJson` + ") | quote }}\n  given: {{ .Values.dbPassword | quote }}\n",
+		"charts/web/templates/secret.yaml": "apiVersion: v1\nkind: Secret\nmetadata:\n  name: {{ .Release.Name }}-secret\nstringData:\n  given: from-the-template\n",
+		"charts/web/templates/NOTES.txt":   read + "\n",
+	})
+	for _, flag := range []string{"--dry-run=server", "--dry-run=client", "--dry-run"} {
+		line := "helm install hello --git " + repo + " --path charts/web --ref v1.0.0 --tag -n web --set dbPassword=given-on-the-line " + flag
+		c, err := Parse(line)
+		if err != nil {
+			t.Fatalf("%s: %v", line, err)
+		}
+		var out bytes.Buffer
+		code := runHelm(context.Background(), c, tg, &out, &out)
+		text := out.String()
+		if code != 0 || !strings.Contains(text, "MANIFEST:") || !strings.Contains(text, "hello-copy") {
+			t.Fatalf("%s: exit %d\n%s", flag, code, text)
+		}
+		encoded := base64.StdEncoding.EncodeToString(secret.Data["password"])
+		for _, leak := range []string{"planted-in-the-cluster", encoded, "given-on-the-line", "from-the-template", "kind: Secret"} {
+			if strings.Contains(text, leak) {
+				t.Fatalf("%s printed %q:\n%s", flag, leak, text)
+			}
+		}
 	}
 }

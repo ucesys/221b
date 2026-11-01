@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -66,6 +67,18 @@ type Who struct {
 	Subject string `json:"subject,omitempty"`
 	Email   string `json:"email,omitempty"`
 	Name    string `json:"name,omitempty"`
+}
+
+// MaxName bounds each name in a record's Who: whatever a sign-in form or a
+// provider sent, a record stays small.
+const MaxName = 256
+
+// Clip cuts text to at most max bytes, on a character boundary.
+func Clip(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return strings.ToValidUTF8(s[:max], "")
 }
 
 // Event is one record of the audit log.
@@ -205,6 +218,7 @@ func (l *Log) Record(e Event) {
 	if e.Outcome == "" {
 		e.Outcome = OutcomeOK
 	}
+	e.Who.Subject, e.Who.Email, e.Who.Name = Clip(e.Who.Subject, MaxName), Clip(e.Who.Email, MaxName), Clip(e.Who.Name, MaxName)
 	if l.opts.Out != nil {
 		b, err := json.Marshal(e)
 		if err == nil {

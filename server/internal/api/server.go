@@ -168,6 +168,8 @@ type Options struct {
 	// watches (ADR-70): it is ready as soon as it knows the leader, since
 	// it forwards everything to it. nil: never.
 	Standby func() bool
+	// Proxies are the proxies whose X-Forwarded-For is believed.
+	Proxies auth.Proxies
 	// ProxyToken is shared by the replicas: a forwarded request carries it,
 	// and only then is its client address believed.
 	ProxyToken string
@@ -408,6 +410,7 @@ func New(o Options) *Server {
 	}
 	if o.Watson != nil {
 		o.Watson.SetReread(s.rereadWho)
+		o.Watson.SetAppAccess(s.watsonAppAccess)
 	}
 	s.rolesRoutes()
 	s.auditRoutes()
@@ -582,6 +585,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// A request another replica forwarded says whose it is (P7-02).
 	forwarded := s.trustForwarded(r)
+	if !forwarded {
+		r = s.opts.Proxies.Resolve(r)
+	}
 	h := w.Header()
 	for _, kv := range securityHeaders {
 		h.Set(kv[0], kv[1])
@@ -779,8 +785,82 @@ func (s *Server) apiNotFound(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
-	b, _ := json.Marshal(s.opts.Settings.Current())
+	st := s.opts.Settings.Current()
+	if !s.isSuperAdmin(r) {
+		st = s.settingsFor(r, st)
+	}
+	b, _ := json.Marshal(st)
 	writeJSON(w, r, b)
+}
+
+// settingsFor keeps the settings to what the request's person may have:
+// never Sherlock's or Watson's, and of each cluster the fleets when they
+// may list its nodes and the acknowledgements of the alerts they may see.
+// A cluster that cannot be asked gives nothing.
+func (s *Server) settingsFor(r *http.Request, st settings.State) settings.State {
+	out := st.ForAnyone()
+	ctx, cancel := context.WithTimeout(r.Context(), prepareTimeout)
+	defer cancel()
+	ids := map[string]bool{}
+	for id := range st.Fleets {
+		ids[id] = true
+	}
+	for id := range st.Acks {
+		ids[id] = true
+	}
+	for id := range ids {
+		pairs := []access.Pair{{Resource: "nodes"}}
+		for _, a := range st.Acks[id] {
+			if resource, ns, _ := live.Scope(live.ViewAlerts, a.Key); resource != "" {
+				pairs = append(pairs, access.Pair{Group: groupOf(resource), Resource: resource, Namespace: ns})
+			}
+		}
+		a := s.accessOn(ctx, r, id, pairs)
+		if a == nil {
+			continue
+		}
+		if list, ok := st.Fleets[id]; ok && a.Cluster("nodes") {
+			if out.Fleets == nil {
+				out.Fleets = map[string][]fleets.Fleet{}
+			}
+			out.Fleets[id] = list
+		}
+		for _, ack := range st.Acks[id] {
+			if a.Allow(live.ViewAlerts, ack.Key) {
+				if out.Acks == nil {
+					out.Acks = map[string][]acks.Ack{}
+				}
+				out.Acks[id] = append(out.Acks[id], ack)
+			}
+		}
+	}
+	return out
+}
+
+// accessOn is what the request's person may see on the connection, with
+// Kubernetes asked about the pairs; nil when it cannot be told.
+func (s *Server) accessOn(ctx context.Context, r *http.Request, id string, pairs []access.Pair) *access.Access {
+	var cl Cluster
+	if s.opts.Clusters != nil {
+		_, client, ok := s.opts.Clusters.Lookup(id)
+		if !ok {
+			return nil
+		}
+		cl, _ = client.(Cluster)
+	} else if id == clusters.LocalID {
+		cl = s.opts.Cluster
+	}
+	p := s.person(r)
+	if cl == nil || p.Nobody() {
+		return nil
+	}
+	a := s.opts.Access.For(id, cl, p)
+	if a.Stale(pairs) {
+		if _, err := a.Prepare(ctx, pairs, 0); err != nil {
+			return nil
+		}
+	}
+	return a
 }
 
 // maxSettingsBody bounds a settings update; the settings are a few fields.
@@ -804,6 +884,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
 		jsonError(w, http.StatusBadRequest, "the settings are not valid: "+err.Error())
+		return
+	}
+	// Sherlock's and Watson's settings change on their own routes, which
+	// validate and audit them.
+	if in.Sherlock != nil || in.Watson != nil {
+		jsonError(w, http.StatusBadRequest, "Sherlock's and Watson's settings are not changed here: use their own pages")
 		return
 	}
 	if err := in.Validate(); err != nil {

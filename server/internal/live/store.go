@@ -184,7 +184,8 @@ type Store struct {
 	views       map[string]*view
 	info        kube.Info
 	infoJSON    []byte
-	settings    []byte
+	settingsRaw []byte
+	settings    browserSettings
 	unscheduled int
 	counts      map[string]int
 	countsJSON  []byte
@@ -460,6 +461,42 @@ func (s *Store) Notify(ch kube.Change) {
 	}
 }
 
+// browserSettings are the shared settings encoded for this cluster's
+// browsers, which get what they need of them and no more (settings.State's
+// ForCluster): whole for someone who may list nodes, without the fleets'
+// node names for someone who may see part of the cluster, and without its
+// fleets for someone who may see none of it.
+type browserSettings struct {
+	whole, noNodes, noFleets []byte
+}
+
+func encodeSettings(raw []byte, cluster string) browserSettings {
+	var st settings.State
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return browserSettings{}
+	}
+	st = st.ForCluster(cluster)
+	var out browserSettings
+	out.whole, _ = json.Marshal(st)
+	out.noNodes, _ = json.Marshal(st.WithoutFleetNodes())
+	out.noFleets, _ = json.Marshal(st.ForAnyone())
+	return out
+}
+
+// settingsForLocked are the settings as the filter's person gets them;
+// nil before any were set. s.mu must be held.
+func (s *Store) settingsForLocked(f Filter) []byte {
+	if f == nil || f.AllowCluster("nodes") {
+		return s.settings.whole
+	}
+	for _, ns := range s.src.Keys("namespaces") {
+		if f.AllowNamespace(ns) {
+			return s.settings.noNodes
+		}
+	}
+	return s.settings.noFleets
+}
+
 // SetSettings publishes new shared settings to every browser and applies
 // the refresh interval: the next refresh is one interval from now.
 func (s *Store) SetSettings(refresh time.Duration, raw []byte) {
@@ -467,10 +504,11 @@ func (s *Store) SetSettings(refresh time.Duration, raw []byte) {
 	if refresh > 0 {
 		s.refresh = refresh
 	}
-	changed := !bytes.Equal(raw, s.settings)
-	s.settings = append([]byte(nil), raw...)
-	if changed {
-		s.publishMetaLocked(Meta{Settings: json.RawMessage(raw)})
+	changed := !bytes.Equal(raw, s.settingsRaw)
+	s.settingsRaw = append([]byte(nil), raw...)
+	if enc := encodeSettings(raw, s.opts.Cluster); !bytes.Equal(enc.whole, s.settings.whole) {
+		s.settings = enc
+		s.publishMetaLocked(Meta{Settings: json.RawMessage(enc.whole)})
 	}
 	s.mu.Unlock()
 	if changed {
@@ -966,17 +1004,23 @@ func (s *Store) publishMetaLocked(m Meta) {
 		s.opts.Logger.Error("encoding the cluster details", "err", err)
 		return
 	}
-	// Totals are what each browser may see: a filtered browser gets its own.
+	// Totals and settings are what each browser may see: a filtered browser
+	// gets its own.
 	filtered := map[Filter][]byte{}
 	for sub := range s.subs {
-		if sub.filter == nil || m.Counts == nil {
+		if sub.filter == nil || (m.Counts == nil && m.Settings == nil) {
 			sub.push("meta", msg)
 			continue
 		}
 		fm, ok := filtered[sub.filter]
 		if !ok {
 			own := m
-			own.Counts = s.countsForLocked(sub.filter)
+			if m.Counts != nil {
+				own.Counts = s.countsForLocked(sub.filter)
+			}
+			if m.Settings != nil {
+				own.Settings = s.settingsForLocked(sub.filter)
+			}
 			fm, _ = json.Marshal(own)
 			filtered[sub.filter] = fm
 		}
@@ -1045,10 +1089,10 @@ func (s *Store) snapshotLocked(names []string, f Filter) []byte {
 		b.Write(s.infoJSON)
 	}
 	b.WriteString(`,"settings":`)
-	if s.settings == nil {
+	if own := s.settingsForLocked(f); own == nil {
 		b.WriteString("null")
 	} else {
-		b.Write(s.settings)
+		b.Write(own)
 	}
 	fmt.Fprintf(&b, `,"unscheduled":%d,"counts":`, s.unscheduled)
 	switch {

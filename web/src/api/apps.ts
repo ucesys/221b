@@ -82,6 +82,8 @@ export interface AppDrift {
 }
 
 export interface AppView extends AppRecord {
+  /** This change moved the application to another repository, and the token saved for the old one went with it. */
+  tokenRemoved?: boolean
   drift?: AppDrift
   driftState?: 'in sync' | 'drifted' | 'unknown'
 }

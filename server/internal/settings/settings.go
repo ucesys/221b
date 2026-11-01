@@ -344,6 +344,46 @@ type State struct {
 	ChangedAt *time.Time `json:"changedAt,omitempty"`
 }
 
+// ForAnyone is the settings without what belongs to a cluster or to the
+// administrators: the part that every signed-in person may have.
+// Acknowledgements reach a browser on the alert rows it may see, and
+// Sherlock's and Watson's settings have their own pages, for a SuperAdmin.
+func (s State) ForAnyone() State {
+	s.Fleets, s.Acks, s.Sherlock, s.Watson = nil, nil, nil, nil
+	return s
+}
+
+// ForCluster is the settings as browsers on one cluster get them: the part
+// for anyone, and that cluster's fleets.
+func (s State) ForCluster(cluster string) State {
+	list, ok := s.Fleets[cluster]
+	s = s.ForAnyone()
+	if ok {
+		s.Fleets = map[string][]fleets.Fleet{cluster: list}
+	}
+	return s
+}
+
+// WithoutFleetNodes leaves out the node names that lists of nodes hold, for
+// someone who may not list nodes; what a fleet requires stays, for the
+// pages that deploy to it.
+func (s State) WithoutFleetNodes() State {
+	if s.Fleets == nil {
+		return s
+	}
+	all := make(map[string][]fleets.Fleet, len(s.Fleets))
+	for cluster, list := range s.Fleets {
+		bare := make([]fleets.Fleet, len(list))
+		for i, f := range list {
+			f.Nodes = nil
+			bare[i] = f
+		}
+		all[cluster] = bare
+	}
+	s.Fleets = all
+	return s
+}
+
 // Service holds the current settings, loads them from storage and saves
 // changes to it. With several replicas over one ConfigMap, each change is
 // made to what the storage holds at that moment, never to this replica's

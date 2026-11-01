@@ -559,6 +559,10 @@ func run(args []string) error {
 			rolePrefixes.LDAP = def.LDAP
 		}
 	}
+	proxies, err := auth.ParseProxies(cfg.TrustedProxies)
+	if err != nil {
+		return err
+	}
 	handler := api.New(api.Options{
 		SSH:                     sshSvc,
 		KV:                      spendBackend,
@@ -585,6 +589,7 @@ func run(args []string) error {
 		Leader:                  elector,
 		Active:                  activity.Active,
 		Standby:                 activity.Standby,
+		Proxies:                 proxies,
 		ProxyToken:              cfg.ProxyToken,
 		Ready:                   cluster.Ready,
 		UI:                      ui.Handler(),

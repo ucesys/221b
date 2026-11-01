@@ -1,6 +1,7 @@
 package live
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 
@@ -180,17 +181,46 @@ func NamespaceOf(view string) (string, bool) {
 	return strings.CutPrefix(view, NamespacePrefix)
 }
 
-// Redact removes from a row what names objects the filter hides: a node
-// row's problems name the pods behind them, which someone who may not
-// list that namespace must not see. The counts stay, as totals do. Other
-// rows name nothing outside their own namespace and pass unchanged.
+// Redact removes from a row what names objects the filter hides: a row
+// that stands for a cluster-scoped object can name the pods, workloads and
+// Services behind it, which someone who may not list their namespace must
+// not see. The counts stay, as totals do. Other rows name nothing outside
+// their own namespace and pass unchanged.
 func Redact(view string, row []byte, f Filter) []byte {
-	if f != nil && view == ViewStorage {
-		return redactStorage(row, f)
-	}
-	if f == nil || view != ViewNodes {
+	if f == nil {
 		return row
 	}
+	switch view {
+	case ViewNodes:
+		return redactNode(row, f)
+	case ViewStorage:
+		return redactStorage(row, f)
+	case ViewAlerts:
+		if rowOf(row, views.AlertNode) {
+			return redactNodeAlert(row, f)
+		}
+	case ViewPolicies:
+		if rowOf(row, views.PolHook) {
+			return redactHook(row, f)
+		}
+		if rowOf(row, views.PolPriority) {
+			return redactPriority(row, f)
+		}
+	case ViewNetworks:
+		if rowOf(row, views.NetFacts) {
+			return redactNetFacts(row, f)
+		}
+	}
+	return row
+}
+
+// rowOf says whether a row's key has the prefix, without decoding it:
+// every row of these views writes its key first.
+func rowOf(row []byte, prefix string) bool {
+	return bytes.HasPrefix(row, []byte(`{"key":"`+prefix+`:`))
+}
+
+func redactNode(row []byte, f Filter) []byte {
 	var r nodes.Row
 	if err := json.Unmarshal(row, &r); err != nil {
 		return row
@@ -216,6 +246,96 @@ func Redact(view string, row []byte, f Filter) []byte {
 	out, err := json.Marshal(r)
 	if err != nil {
 		return row
+	}
+	return out
+}
+
+// redactNodeAlert drops a node's events that name a pod the filter hides.
+func redactNodeAlert(row []byte, f Filter) []byte {
+	var r views.AlertRow
+	if err := json.Unmarshal(row, &r); err != nil {
+		return row
+	}
+	kept := make([]views.AlertEntry, 0, len(r.Events))
+	for _, e := range r.Events {
+		ns, _, named := strings.Cut(e.Pod, "/")
+		if !named {
+			ns, named = views.PodNamespaceIn(e.Message)
+		}
+		if !named || f.AllowNamespace(ns) {
+			kept = append(kept, e)
+		}
+	}
+	if len(kept) == len(r.Events) {
+		return row
+	}
+	r.Events = kept
+	return encoded(r, row)
+}
+
+// redactHook drops a webhook's backend pods when the filter hides their
+// namespace. The webhook's own object names its Service, so that stays.
+func redactHook(row []byte, f Filter) []byte {
+	var r views.HookRow
+	if err := json.Unmarshal(row, &r); err != nil || len(r.Reach.Pods) == 0 || f.AllowNamespace(r.ServiceNamespace) {
+		return row
+	}
+	r.Reach.Pods = []views.HookPod{}
+	return encoded(r, row)
+}
+
+// redactPriority keeps a class's workloads to the namespaces the filter
+// allows.
+func redactPriority(row []byte, f Filter) []byte {
+	var r views.PriorityRow
+	if err := json.Unmarshal(row, &r); err != nil {
+		return row
+	}
+	kept := make([]string, 0, len(r.Workloads))
+	for _, w := range r.Workloads {
+		if ns, _, _ := strings.Cut(w, "/"); f.AllowNamespace(ns) {
+			kept = append(kept, w)
+		}
+	}
+	if len(kept) == len(r.Workloads) {
+		return row
+	}
+	r.Workloads = kept
+	return encoded(r, row)
+}
+
+// redactNetFacts keeps the Services and namespaces the row lists to those
+// the filter allows.
+func redactNetFacts(row []byte, f Filter) []byte {
+	var r views.NetFactsRow
+	if err := json.Unmarshal(row, &r); err != nil {
+		return row
+	}
+	services := make([]string, 0, len(r.PendingLBs))
+	for _, s := range r.PendingLBs {
+		if f.Allow(ViewServices, s) {
+			services = append(services, s)
+		}
+	}
+	namespaces := make([]string, 0, len(r.PolicyNS))
+	for _, ns := range r.PolicyNS {
+		if f.AllowNamespace(ns) {
+			namespaces = append(namespaces, ns)
+		}
+	}
+	if len(services) == len(r.PendingLBs) && len(namespaces) == len(r.PolicyNS) {
+		return row
+	}
+	r.PendingLBs, r.PolicyNS = services, namespaces
+	return encoded(r, row)
+}
+
+// encoded is a redacted row as JSON. Nothing the views build fails to
+// encode; if a row did, nothing is better than the row unredacted.
+func encoded(r any, row []byte) []byte {
+	out, err := json.Marshal(r)
+	if err != nil {
+		return []byte(`{}`)
 	}
 	return out
 }

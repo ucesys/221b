@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -61,24 +62,69 @@ type guard struct {
 	read func(ctx context.Context, cs *clients) (string, error)
 }
 
-// checkGuards says what changed since the card appeared, or "".
-func checkGuards(ctx context.Context, cs *clients, guards []guard) string {
+// checkGuards says why a card does not hold, or "". changed tells what
+// happened: an object went or differs, and the card lapses; or, false with
+// a reason, an object could not be read. That proves nothing either way, so
+// the card stands but is not approved.
+func checkGuards(ctx context.Context, cs *clients, guards []guard) (why string, changed bool) {
+	if len(guards) == 0 {
+		return "", false
+	}
 	if cs == nil {
-		return ""
+		return uncheckedText(guards[0].what, errors.New("the cluster cannot be reached")), false
 	}
 	for _, g := range guards {
 		got, err := g.read(ctx, cs)
 		if apierrors.IsNotFound(err) {
-			return fmt.Sprintf("The approval lapsed: %s no longer exists. Send the command again for a fresh card.", g.what)
+			return fmt.Sprintf("The approval lapsed: %s no longer exists. Send the command again for a fresh card.", g.what), true
 		}
 		if err != nil {
-			continue
+			return uncheckedText(g.what, err), false
 		}
 		if got != g.want {
-			return fmt.Sprintf("The approval lapsed: %s changed after this card appeared. Review the fresh state, and send the command again for a new card.", g.what)
+			return fmt.Sprintf("The approval lapsed: %s changed after this card appeared. Review the fresh state, and send the command again for a new card.", g.what), true
 		}
 	}
-	return ""
+	return "", false
+}
+
+func uncheckedText(what string, err error) string {
+	return fmt.Sprintf("This card cannot be approved: Watson could not check %s (%v). Try again in a moment, or send the command again for a fresh card.", what, err)
+}
+
+// unreadable is the guard of objects a plan could not read: there is
+// nothing to hold them to, so it never passes and the card is not approved.
+func unreadable(what string, err error) guard {
+	return guard{what: what, read: func(context.Context, *clients) (string, error) { return "", err }}
+}
+
+// notRead is a read that failed, in the card's words, with its cause.
+type notRead struct {
+	text string
+	err  error
+}
+
+func (e notRead) Error() string { return e.text }
+func (e notRead) Unwrap() error { return e.err }
+
+// unreadableUnlessHidden is the guard for what a card could not read. What
+// the person may not see is left out and the card says so: the change runs
+// with the approver's rights, which decide. Any other failure stops the
+// approval, since nothing then says the object is as the card showed it.
+func unreadableUnlessHidden(what string, err error) []guard {
+	if apierrors.IsForbidden(err) {
+		return nil
+	}
+	return []guard{unreadable(what, err)}
+}
+
+// couldNotRead says on a card that the person's own access did not reach
+// something, which it then leaves out (ADR-51).
+func couldNotRead(what string, err error) string {
+	if apierrors.IsForbidden(err) {
+		return fmt.Sprintf("Watson could not read %s: you may not see it, so this card leaves it out.", what)
+	}
+	return fmt.Sprintf("Watson could not read %s: %v", what, err)
 }
 
 func digest(v ...any) string {
@@ -189,13 +235,13 @@ func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, 
 			ri, tns = res.Namespace(ns), ns
 		}
 		if p.name == "" {
-			sel := c.Flag("selector")
+			sel := strings.TrimSpace(c.Flag("selector"))
 			if sel == "" {
 				continue
 			}
 			list, err := ri.List(ctx, metav1.ListOptions{LabelSelector: sel})
 			if err != nil {
-				return out, sets, err
+				return out, sets, notRead{couldNotRead("the "+gvr.Resource+" matching "+sel, err), err}
 			}
 			var names []string
 			for i := range list.Items {
@@ -212,7 +258,7 @@ func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, 
 				out = append(out, target{gvr: gvr, kind: kind, ns: tns, name: p.name})
 				continue
 			}
-			return out, sets, err
+			return out, sets, notRead{couldNotRead(target{kind: kind, ns: tns, name: p.name}.String(), err), err}
 		}
 		out = append(out, target{gvr: gvr, kind: kind, ns: tns, name: p.name, obj: o})
 	}
@@ -309,9 +355,9 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 		nodes, sets, err := cs.targetsOf(ctx, c, "nodes", c.Positionals)
 		guards = append(guards, sets...)
 		if err != nil {
-			add("Watson could not read the nodes: %v", err)
-		}
-		if len(nodes) == 0 {
+			add("%v", err)
+			guards = append(guards, unreadableUnlessHidden("the nodes", err)...)
+		} else if len(nodes) == 0 {
 			add("No node matches.")
 		}
 		for _, t := range nodes {
@@ -324,9 +370,9 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 			guards = append(guards, objectGuard(t, func(o *unstructured.Unstructured) any {
 				return []any{field(o, "spec", "unschedulable"), field(o, "spec", "taints"), o.GetLabels()}
 			}))
-			pods, _ := cs.cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{FieldSelector: "spec.nodeName=" + n.Name})
+			pods, podsErr := cs.cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{FieldSelector: "spec.nodeName=" + n.Name})
 			var live []corev1.Pod
-			if pods != nil {
+			if podsErr == nil {
 				for _, p := range pods.Items {
 					if p.Status.Phase != corev1.PodSucceeded && p.Status.Phase != corev1.PodFailed {
 						live = append(live, p)
@@ -335,9 +381,13 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 			}
 			switch c.Verb[0] {
 			case "cordon":
-				if n.Spec.Unschedulable {
+				switch {
+				case n.Spec.Unschedulable:
 					add("%s is already cordoned; nothing changes.", n.Name)
-				} else {
+				case podsErr != nil:
+					add("No new pods will be scheduled on %s. Those it runs keep running.", n.Name)
+					add("%s", couldNotRead("the pods on "+n.Name, podsErr))
+				default:
 					add("No new pods will be scheduled on %s. Its %s keep running.", n.Name, plural(len(live), "pod", "pods"))
 				}
 			case "uncordon":
@@ -346,11 +396,18 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 					continue
 				}
 				add("%s accepts new pods again.", n.Name)
-				if pending, err := cs.cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{FieldSelector: "status.phase=Pending"}); err == nil && len(pending.Items) > 0 {
+				pending, err := cs.cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{FieldSelector: "status.phase=Pending"})
+				if err != nil {
+					add("%s", couldNotRead("the pending pods", err))
+				} else if len(pending.Items) > 0 {
 					add("%s Pending in the cluster; the scheduler may place them on %s.", plural(len(pending.Items), "pod is", "pods are"), n.Name)
 				}
 			case "drain":
 				impact = append(impact, drainImpact(ctx, cs, c, n)...)
+				if podsErr != nil {
+					add("%s", couldNotRead("the pods on "+n.Name, podsErr))
+					continue
+				}
 				nodeName := n.Name
 				var names []string
 				for _, p := range live {
@@ -378,6 +435,7 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 		guards = append(guards, sets...)
 		if err != nil {
 			add("%v", err)
+			guards = append(guards, unreadableUnlessHidden("the objects it names", err)...)
 		}
 		want, _ := strconv.Atoi(c.Flag("replicas"))
 		for _, t := range ts {
@@ -422,6 +480,7 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 		guards = append(guards, sets...)
 		if err != nil {
 			add("%v", err)
+			guards = append(guards, unreadableUnlessHidden("the objects it names", err)...)
 		}
 		for _, t := range ts {
 			targets = append(targets, t.String())
@@ -441,8 +500,8 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 		guards = append(guards, sets...)
 		if err != nil {
 			add("%v", err)
-		}
-		if len(ts) == 0 {
+			guards = append(guards, unreadableUnlessHidden("the objects it names", err)...)
+		} else if len(ts) == 0 {
 			add("No pod matches.")
 		}
 		for _, t := range ts {
@@ -476,6 +535,7 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 		guards = append(guards, sets...)
 		if err != nil {
 			add("%v", err)
+			guards = append(guards, unreadableUnlessHidden("the objects it names", err)...)
 		}
 		for _, t := range ts {
 			targets = append(targets, t.String())
@@ -501,8 +561,8 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 		guards = append(guards, sets...)
 		if err != nil {
 			add("%v", err)
-		}
-		if len(ts) == 0 {
+			guards = append(guards, unreadableUnlessHidden("the objects it names", err)...)
+		} else if len(ts) == 0 {
 			add("Nothing matches.")
 		}
 		annot := c.Verb[0] == "annotate"
@@ -526,8 +586,8 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 		guards = append(guards, sets...)
 		if err != nil {
 			add("%v", err)
-		}
-		if len(ts) == 0 {
+			guards = append(guards, unreadableUnlessHidden("the objects it names", err)...)
+		} else if len(ts) == 0 {
 			add("No node matches.")
 		}
 		for _, t := range ts {
@@ -563,6 +623,9 @@ func drainImpact(ctx context.Context, cs *clients, c *Command, n *corev1.Node) [
 	var pods []corev1.Pod
 	if list != nil {
 		pods = list.Pods()
+	}
+	if len(errs) == 1 && apierrors.IsForbidden(errs[0]) {
+		return []string{cordon + "; which pods it evicts is not known here."}
 	}
 	if len(pods) == 0 {
 		out = append(out, cordon+"; no pod needs to be evicted.")
@@ -613,6 +676,7 @@ func drainImpact(ctx context.Context, cs *clients, c *Command, n *corev1.Node) [
 	for _, ns := range nss {
 		pdbs, err := cs.cs.PolicyV1().PodDisruptionBudgets(ns).List(ctx, metav1.ListOptions{})
 		if err != nil {
+			out = append(out, couldNotRead("the disruption budgets in "+ns, err))
 			continue
 		}
 		for _, b := range pdbs.Items {
@@ -654,9 +718,11 @@ func restartImpact(ctx context.Context, cs *clients, t target) []string {
 		ls := &metav1.LabelSelector{}
 		_ = runtime.DefaultUnstructuredConverter.FromUnstructured(sel, ls)
 		if s, err := metav1.LabelSelectorAsSelector(ls); err == nil {
-			if pods, err := cs.cs.CoreV1().Pods(t.ns).List(ctx, metav1.ListOptions{LabelSelector: s.String()}); err == nil {
-				n = len(pods.Items)
+			pods, err := cs.cs.CoreV1().Pods(t.ns).List(ctx, metav1.ListOptions{LabelSelector: s.String()})
+			if err != nil {
+				return []string{"Replaces the pods of " + t.title() + ".", couldNotRead("its pods", err)}
 			}
+			n = len(pods.Items)
 		}
 	}
 	switch t.kind {
@@ -706,7 +772,7 @@ func undoImpact(ctx context.Context, cs *clients, c *Command, t target) []string
 	}
 	list, err := cs.cs.AppsV1().ReplicaSets(t.ns).List(ctx, metav1.ListOptions{LabelSelector: sel.String()})
 	if err != nil {
-		return nil
+		return []string{couldNotRead("the rollout history of "+t.title(), err)}
 	}
 	type rev struct {
 		n  int
@@ -796,7 +862,9 @@ func claimDeleteImpact(ctx context.Context, cs *clients, c *corev1.PersistentVol
 			out = append(out, fmt.Sprintf("Deletes claim %s. Its volume %s and the data stay, Released (reclaim policy %s), until someone reuses or deletes it.", id, pv.Name, pv.Spec.PersistentVolumeReclaimPolicy))
 		}
 	}
-	if pods, err := cs.cs.CoreV1().Pods(c.Namespace).List(ctx, metav1.ListOptions{}); err == nil {
+	if pods, err := cs.cs.CoreV1().Pods(c.Namespace).List(ctx, metav1.ListOptions{}); err != nil {
+		out = append(out, couldNotRead("the pods in "+c.Namespace, err))
+	} else {
 		var users []string
 		for _, p := range pods.Items {
 			if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
@@ -813,7 +881,9 @@ func claimDeleteImpact(ctx context.Context, cs *clients, c *corev1.PersistentVol
 			out = append(out, fmt.Sprintf("%s mount it: the claim stays Terminating until %s, and only then goes.", listText(users, 5), plural(len(users), "that pod is gone", "those pods are gone")))
 		}
 	}
-	if sets, err := cs.cs.AppsV1().StatefulSets(c.Namespace).List(ctx, metav1.ListOptions{}); err == nil {
+	if sets, err := cs.cs.AppsV1().StatefulSets(c.Namespace).List(ctx, metav1.ListOptions{}); err != nil {
+		out = append(out, couldNotRead("the StatefulSets in "+c.Namespace, err))
+	} else {
 		for _, set := range sets.Items {
 			for _, t := range set.Spec.VolumeClaimTemplates {
 				if strings.HasPrefix(c.Name, t.Name+"-"+set.Name+"-") {
@@ -880,7 +950,9 @@ func defaultClassImpact(ctx context.Context, cs *clients, name string, changes [
 		return []string{fmt.Sprintf("%s is no longer the default class: new claims that name no class get none until another class is set as the default. Bound claims keep their class.", name)}
 	}
 	out := []string{fmt.Sprintf("%s becomes the default class: new claims that name no class get it. Bound claims keep their class.", name)}
-	if list, err := cs.cs.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{}); err == nil {
+	if list, err := cs.cs.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{}); err != nil {
+		out = append(out, couldNotRead("the other storage classes", err))
+	} else {
 		var others []string
 		for _, sc := range list.Items {
 			if sc.Name != name && (sc.Annotations[key] == "true" || sc.Annotations["storageclass.beta.kubernetes.io/is-default-class"] == "true") {
@@ -961,23 +1033,25 @@ func taintImpact(ctx context.Context, cs *clients, c *Command, n *corev1.Node, c
 		case corev1.TaintEffectPreferNoSchedule:
 			out = append(out, fmt.Sprintf("The scheduler avoids %s for new pods that do not tolerate %s.", n.Name, want.Key))
 		case corev1.TaintEffectNoExecute:
-			pods, _ := cs.cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{FieldSelector: "spec.nodeName=" + n.Name})
+			pods, err := cs.cs.CoreV1().Pods("").List(ctx, metav1.ListOptions{FieldSelector: "spec.nodeName=" + n.Name})
+			if err != nil {
+				out = append(out, couldNotRead("the pods on "+n.Name, err))
+				continue
+			}
 			var evicted []string
-			if pods != nil {
-				for _, p := range pods.Items {
-					if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
-						continue
+			for _, p := range pods.Items {
+				if p.Status.Phase == corev1.PodSucceeded || p.Status.Phase == corev1.PodFailed {
+					continue
+				}
+				tolerated := false
+				for _, tol := range p.Spec.Tolerations {
+					if tolerates(tol, want) {
+						tolerated = true
+						break
 					}
-					tolerated := false
-					for _, tol := range p.Spec.Tolerations {
-						if tolerates(tol, want) {
-							tolerated = true
-							break
-						}
-					}
-					if !tolerated {
-						evicted = append(evicted, p.Namespace+"/"+p.Name)
-					}
+				}
+				if !tolerated {
+					evicted = append(evicted, p.Namespace+"/"+p.Name)
 				}
 			}
 			sort.Strings(evicted)
@@ -1100,17 +1174,23 @@ func nodeSelectorImpact(ctx context.Context, cs *clients, node string, before, a
 			out = append(out, id+": its pods can now be scheduled on "+node+".")
 		}
 	}
-	if l, err := cs.cs.AppsV1().DaemonSets("").List(ctx, metav1.ListOptions{}); err == nil {
+	if l, err := cs.cs.AppsV1().DaemonSets("").List(ctx, metav1.ListOptions{}); err != nil {
+		out = append(out, couldNotRead("the DaemonSets across the cluster", err))
+	} else {
 		for _, d := range l.Items {
 			check("DaemonSet", d.Namespace, d.Name, d.Spec.Template.Spec.NodeSelector)
 		}
 	}
-	if l, err := cs.cs.AppsV1().Deployments("").List(ctx, metav1.ListOptions{}); err == nil {
+	if l, err := cs.cs.AppsV1().Deployments("").List(ctx, metav1.ListOptions{}); err != nil {
+		out = append(out, couldNotRead("the Deployments across the cluster", err))
+	} else {
 		for _, d := range l.Items {
 			check("Deployment", d.Namespace, d.Name, d.Spec.Template.Spec.NodeSelector)
 		}
 	}
-	if l, err := cs.cs.AppsV1().StatefulSets("").List(ctx, metav1.ListOptions{}); err == nil {
+	if l, err := cs.cs.AppsV1().StatefulSets("").List(ctx, metav1.ListOptions{}); err != nil {
+		out = append(out, couldNotRead("the StatefulSets across the cluster", err))
+	} else {
 		for _, d := range l.Items {
 			check("StatefulSet", d.Namespace, d.Name, d.Spec.Template.Spec.NodeSelector)
 		}
@@ -1136,7 +1216,13 @@ func rollbackImpact(ctx context.Context, cs *clients, c *Command) (targets []str
 		return rels, nil
 	}
 	rels, err := read(ctx, cs)
-	if err != nil || len(rels) == 0 {
+	if apierrors.IsForbidden(err) {
+		return targets, nil, []string{couldNotRead("the release", err)}
+	}
+	if err != nil && !errors.Is(err, driver.ErrReleaseNotFound) {
+		return targets, []guard{unreadable("release "+ns+"/"+name, err)}, []string{"Watson could not read the release: " + err.Error()}
+	}
+	if len(rels) == 0 {
 		return targets, nil, []string{fmt.Sprintf("There is no release %s in %s: helm will refuse.", name, ns)}
 	}
 	cur := rels[0]
@@ -1154,6 +1240,9 @@ func rollbackImpact(ctx context.Context, cs *clients, c *Command) (targets []str
 	}
 	guards = append(guards, guard{what: "release " + ns + "/" + name, want: digest(cur.Version, cur.Info.Status.String()), read: func(ctx context.Context, cs *clients) (string, error) {
 		rels, err := read(ctx, cs)
+		if errors.Is(err, driver.ErrReleaseNotFound) {
+			return "absent", nil
+		}
 		if err != nil || len(rels) == 0 {
 			return "", err
 		}
@@ -1222,10 +1311,14 @@ func manifestDiff(from, to string) (changed, added, removed []string) {
 // Secrets and ConfigMaps in it.
 func namespaceDeleteImpact(ctx context.Context, cs *clients, name string) []string {
 	var out []string
-	pods, _ := cs.cs.CoreV1().Pods(name).List(ctx, metav1.ListOptions{})
-	claims, _ := cs.cs.CoreV1().PersistentVolumeClaims(name).List(ctx, metav1.ListOptions{})
-	secrets, _ := cs.cs.CoreV1().Secrets(name).List(ctx, metav1.ListOptions{})
-	cms, _ := cs.cs.CoreV1().ConfigMaps(name).List(ctx, metav1.ListOptions{})
+	pods, podsErr := cs.cs.CoreV1().Pods(name).List(ctx, metav1.ListOptions{})
+	claims, claimsErr := cs.cs.CoreV1().PersistentVolumeClaims(name).List(ctx, metav1.ListOptions{})
+	secrets, secretsErr := cs.cs.CoreV1().Secrets(name).List(ctx, metav1.ListOptions{})
+	cms, cmsErr := cs.cs.CoreV1().ConfigMaps(name).List(ctx, metav1.ListOptions{})
+	if err := errors.Join(podsErr, claimsErr, secretsErr, cmsErr); err != nil {
+		out = append(out, "Deletes namespace "+name+" and everything in it. Nothing of it comes back.")
+		return append(out, fmt.Sprintf("Watson could not read everything in %s, so this card leaves out what is there.", name))
+	}
 	n := func(l any) int {
 		switch x := l.(type) {
 		case *corev1.PodList:

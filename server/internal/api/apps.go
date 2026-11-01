@@ -75,7 +75,10 @@ func (s *Server) appsRoutes() {
 // appView is a record as the page sees it, with its last drift check.
 type appView struct {
 	apps.Record
-	Drift *apps.Drift `json:"drift,omitempty"`
+	// TokenRemoved says this change moved the application to another
+	// repository and the token saved for the old one went with it.
+	TokenRemoved bool        `json:"tokenRemoved,omitempty"`
+	Drift        *apps.Drift `json:"drift,omitempty"`
 	// DriftState sums the drift up: in sync, drifted, unknown, or "" when
 	// it was not checked yet.
 	DriftState string `json:"driftState,omitempty"`
@@ -126,6 +129,60 @@ func (s *Server) mayManageApps(w http.ResponseWriter, r *http.Request) bool {
 	}
 	jsonError(w, http.StatusForbidden, "only Admins and SuperAdmins install, upgrade or remove applications")
 	return false
+}
+
+// appAccess asks Kubernetes whether the person may run an application in
+// the namespace, as they: a release's records are Secrets there, which
+// Helm lists and creates. The console keeps an application's record with
+// its own account, which Kubernetes does not check for the person, so the
+// question is asked here.
+func appAccess(ctx context.Context, cl Cluster, p kube.Person, ns string) (bool, error) {
+	for _, verb := range []string{"list", "create"} {
+		if may, err := cl.CanI(ctx, p, verb, "", "secrets", ns); err != nil || !may {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// mayManageApp says whether the person may manage an application in the
+// namespace: the role, and Kubernetes' answer for that namespace. It comes
+// before the record is read, so its answer says nothing about the record.
+func (s *Server) mayManageApp(w http.ResponseWriter, r *http.Request, ns string) bool {
+	if !s.mayManageApps(w, r) {
+		return false
+	}
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), prepareTimeout)
+	defer cancel()
+	may, err := appAccess(ctx, cl, s.person(r), ns)
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, "asking Kubernetes what you may do failed: "+err.Error())
+		return false
+	}
+	if !may {
+		jsonError(w, http.StatusForbidden, "Kubernetes does not let you manage applications in "+ns)
+		return false
+	}
+	return true
+}
+
+// watsonAppAccess is appAccess for Watson's --app, which has a person and
+// a cluster's id rather than a request.
+func (s *Server) watsonAppAccess(ctx context.Context, c watson.Cluster, who watson.Who, ns string) (bool, error) {
+	var cl Cluster
+	if s.opts.Clusters == nil {
+		cl = s.opts.Cluster
+	} else if _, client, ok := s.opts.Clusters.Lookup(c.ID); ok {
+		cl, _ = client.(Cluster)
+	}
+	if cl == nil {
+		return false, errors.New("the connection is not running")
+	}
+	return appAccess(ctx, cl, who.Person, ns)
 }
 
 func appNames(w http.ResponseWriter, ns, name string) bool {
@@ -237,6 +294,9 @@ func (s *Server) readApp(w http.ResponseWriter, r *http.Request) (appInput, bool
 	}
 	if in.Source != nil {
 		src, err := apps.Normalize(*in.Source)
+		if err == nil {
+			err = apps.CheckRepoHost(r.Context(), src.Repo)
+		}
 		if err != nil {
 			jsonError(w, http.StatusBadRequest, err.Error())
 			return in, false
@@ -315,18 +375,33 @@ func (s *Server) applyAppInput(rec *apps.Record, in appInput, cluster string) er
 
 // appLine is the Watson command for an application's change: the source
 // is spelled out so the card and the audit log say where the chart comes
-// from, and --app takes the saved values (HA-06).
-func appLine(verb, ns, name string, src apps.Source, extra ...string) string {
+// from, and --app takes the saved values (HA-06). The source is checked
+// again here, since a record may predate the checks and its fields become
+// words of the line.
+func appLine(verb, ns, name string, src apps.Source, extra ...string) (string, error) {
+	if _, err := apps.Normalize(src); err != nil {
+		return "", fmt.Errorf("the application's source cannot be deployed: %w", err)
+	}
 	parts := []string{"helm", verb, name, "--git", src.Repo}
 	if src.Path != "" {
-		parts = append(parts, "--path", src.Path)
+		parts = append(parts, "--path", "'"+src.Path+"'")
 	}
 	parts = append(parts, "--ref", src.Ref)
 	if src.RefKind == apps.RefTag {
 		parts = append(parts, "--tag")
 	}
 	parts = append(parts, "-n", ns, "--app")
-	return strings.Join(append(parts, extra...), " ")
+	return strings.Join(append(parts, extra...), " "), nil
+}
+
+// submitAppLine builds an application's command and hands it to Watson.
+func (s *Server) submitAppLine(w http.ResponseWriter, r *http.Request, c watson.Cluster, who watson.Who, verb, ns, name string, src apps.Source, extra ...string) {
+	line, err := appLine(verb, ns, name, src, extra...)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.submitApp(w, r, c, who, line)
 }
 
 // submitApp hands the line to Watson as a card the person approves there
@@ -356,7 +431,7 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !appNames(w, in.Namespace, in.Name) {
+	if !appNames(w, in.Namespace, in.Name) || !s.mayManageApp(w, r, in.Namespace) {
 		return
 	}
 	if in.Source == nil {
@@ -367,12 +442,17 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, _, err := s.opts.Apps.Get(r.Context(), c.ID, in.Namespace, in.Name); err == nil {
+	var token *string
+	if old, _, err := s.opts.Apps.Get(r.Context(), c.ID, in.Namespace, in.Name); err == nil {
 		// A record whose install failed is replaced; one with a release
 		// is upgraded instead.
 		if _, deployed := views.BuildReleaseDetails(cl, in.Namespace, in.Name, s.opts.Now().UTC()); deployed {
 			jsonError(w, http.StatusConflict, "release "+in.Namespace+"/"+in.Name+" exists: upgrade it from its panel, or uninstall it first")
 			return
+		}
+		if !apps.SameRepo(old.Source, *in.Source) {
+			empty := ""
+			token = &empty
 		}
 	}
 	now := s.opts.Now().UTC()
@@ -381,7 +461,6 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	var token *string
 	if in.Token != "" {
 		token = &in.Token
 	}
@@ -389,12 +468,12 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	s.recordOn(r, audit.OutcomeOK, ActionAppSave, in.Namespace+"/"+in.Name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil)+" params="+strconv.Itoa(len(rec.Params)))
+	s.recordOn(r, audit.OutcomeOK, ActionAppSave, in.Namespace+"/"+in.Name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil && *token != "")+" params="+strconv.Itoa(len(rec.Params)))
 	var extra []string
 	if rec.CreateNamespace {
 		extra = append(extra, "--create-namespace")
 	}
-	s.submitApp(w, r, c, who, appLine("install", in.Namespace, in.Name, *in.Source, extra...))
+	s.submitAppLine(w, r, c, who, "install", in.Namespace, in.Name, *in.Source, extra...)
 }
 
 // putApp changes what the console keeps: the source (which adopts a
@@ -402,11 +481,11 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 // parameters or the token; with upgrade, it deploys the change too.
 func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 	c, who, ok := s.appReady(w, r)
-	if !ok || !s.mayManageApps(w, r) {
+	if !ok {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	if !appNames(w, ns, name) {
+	if !appNames(w, ns, name) || !s.mayManageApp(w, r, ns) {
 		return
 	}
 	in, ok := s.readApp(w, r)
@@ -414,7 +493,7 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.opts.Now().UTC()
-	rec, _, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
+	rec, saved, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
 	switch {
 	case errors.Is(err, apps.ErrNotFound):
 		if in.Source == nil {
@@ -427,6 +506,9 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sourceChanged := in.Source != nil && *in.Source != rec.Source
+	// A token belongs to its repository: moved to another one, the saved
+	// token is removed, and only one given with the change goes there.
+	tokenRemoved := in.Source != nil && rec.HasToken && !apps.SameRepo(rec.Source, *in.Source)
 	if in.Source != nil {
 		rec.Source = *in.Source
 	}
@@ -440,8 +522,8 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		// before any deploy is compared again.
 		rec.Commit, rec.CommitDate, rec.CommitSubject, rec.ChartVersion, rec.MatchedRevision, rec.SourceDiff = "", time.Time{}, "", "", 0, ""
 		tok := in.Token
-		if tok == "" && !in.ClearToken {
-			_, tok, _ = s.opts.Apps.Get(r.Context(), c.ID, ns, name)
+		if tok == "" && !in.ClearToken && !tokenRemoved {
+			tok = saved
 		}
 		s.matchSource(r.Context(), c, who, &rec, tok)
 	}
@@ -456,7 +538,7 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.Updated, rec.UpdatedBy = now, who.User
 	var token *string
-	if in.ClearToken {
+	if in.ClearToken || (tokenRemoved && in.Token == "") {
 		empty := ""
 		token = &empty
 	} else if in.Token != "" {
@@ -468,11 +550,14 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 	}
 	s.recordOn(r, audit.OutcomeOK, ActionAppSave, ns+"/"+name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil && *token != "")+" params="+strconv.Itoa(len(rec.Params))+" upgrade="+strconv.FormatBool(in.Upgrade))
 	if !in.Upgrade {
-		b, _ := json.Marshal(appView{Record: rec})
+		if token != nil {
+			rec.HasToken = *token != ""
+		}
+		b, _ := json.Marshal(appView{Record: rec, TokenRemoved: tokenRemoved && !rec.HasToken})
 		writeJSON(w, r, b)
 		return
 	}
-	s.submitApp(w, r, c, who, appLine("upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...))
+	s.submitAppLine(w, r, c, who, "upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...)
 }
 
 // appSaveFailed answers a save that did not go through: a record someone
@@ -515,6 +600,10 @@ func (s *Server) matchSource(ctx context.Context, c watson.Cluster, who watson.W
 		return
 	}
 	manifest, err := s.opts.Watson.RenderUpgrade(ctx, c, who, rec.Namespace, rec.Name, ch, vals)
+	if errors.Is(err, apps.ErrRenderLimit) {
+		rec.SourceDiff = "the chart could not be rendered: " + err.Error()
+		return
+	}
 	if err != nil {
 		version := ""
 		if s.opts.Clusters != nil {
@@ -559,11 +648,11 @@ func installFlags(rec apps.Record, install bool) []string {
 // to another branch or tag first when the request names one (HA-10).
 func (s *Server) postAppUpgrade(w http.ResponseWriter, r *http.Request) {
 	c, who, ok := s.appReady(w, r)
-	if !ok || !s.mayManageApps(w, r) {
+	if !ok {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	if !appNames(w, ns, name) {
+	if !appNames(w, ns, name) || !s.mayManageApp(w, r, ns) {
 		return
 	}
 	in, ok := s.readApp(w, r)
@@ -593,18 +682,18 @@ func (s *Server) postAppUpgrade(w http.ResponseWriter, r *http.Request) {
 		}
 		s.recordOn(r, audit.OutcomeOK, ActionAppSave, ns+"/"+name, "source="+quoteDetail(rec.Source.String()))
 	}
-	s.submitApp(w, r, c, who, appLine("upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...))
+	s.submitAppLine(w, r, c, who, "upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...)
 }
 
 // deleteApp uninstalls the release (Watson removes the record when it is
 // gone); ?record=1 only forgets the source and keeps the release.
 func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 	c, who, ok := s.appReady(w, r)
-	if !ok || !s.mayManageApps(w, r) {
+	if !ok {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	if !appNames(w, ns, name) {
+	if !appNames(w, ns, name) || !s.mayManageApp(w, r, ns) {
 		return
 	}
 	if r.URL.Query().Get("record") == "1" {
@@ -660,14 +749,16 @@ func (s *Server) postAppRefs(w http.ResponseWriter, r *http.Request) {
 // (M-07). The token, when given, is used for the fetch and kept nowhere.
 // getAppInspect looks a kept application's repository over at its ref
 // (M-07), with the saved token: the charts and their values files, for
-// the Source card's choice of a second values file (R2-08).
+// the Source card's choice of a second values file (R2-08). It uses the
+// saved token and answers with what the repository holds, so it is for
+// those who manage the application in its namespace.
 func (s *Server) getAppInspect(w http.ResponseWriter, r *http.Request) {
 	c, _, ok := s.appReady(w, r)
 	if !ok {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	if !appNames(w, ns, name) {
+	if !appNames(w, ns, name) || !s.mayManageApp(w, r, ns) {
 		return
 	}
 	rec, token, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
@@ -1045,6 +1136,9 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 		label = fmt.Sprintf("%s (%s)", src, short12(co.Commit))
 		if m, err := s.opts.Watson.RenderUpgrade(r.Context(), c, who, ns, name, ch, vals); err == nil {
 			return m, label, true
+		} else if errors.Is(err, apps.ErrRenderLimit) {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return "", "", false
 		} else {
 			// Without a server dry run (no right to upgrade, or no release
 			// yet), the chart renders on the console: lookups and the

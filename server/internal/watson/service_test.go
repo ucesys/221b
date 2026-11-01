@@ -10,12 +10,15 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -849,5 +852,111 @@ func TestStoppingTheConsoleStopsACommandAtTheBound(t *testing.T) {
 	}
 	if e := resultOf(t, buf, running.ID, "worker-002"); e.Outcome != audit.OutcomeStopped || e.Who.Name != "Bob" {
 		t.Fatalf("its result: %+v", e)
+	}
+}
+
+func TestChecksFailClosed(t *testing.T) {
+	ok := guard{what: "node a", want: "x", read: func(context.Context, *clients) (string, error) { return "x", nil }}
+	gone := guard{what: "node b", want: "x", read: func(context.Context, *clients) (string, error) {
+		return "", apierrors.NewNotFound(schema.GroupResource{Resource: "nodes"}, "b")
+	}}
+	differs := guard{what: "node c", want: "x", read: func(context.Context, *clients) (string, error) { return "y", nil }}
+	refused := guard{what: "node d", want: "x", read: func(context.Context, *clients) (string, error) { return "", errors.New("forbidden") }}
+	cs := &clients{}
+	for name, tc := range map[string]struct {
+		cs      *clients
+		guards  []guard
+		text    string
+		changed bool
+	}{
+		"nothing to check":     {nil, nil, "", false},
+		"all as they were":     {cs, []guard{ok}, "", false},
+		"gone":                 {cs, []guard{ok, gone}, "node b no longer exists", true},
+		"changed":              {cs, []guard{differs}, "node c changed", true},
+		"cannot be read":       {cs, []guard{ok, refused}, "could not check node d", false},
+		"no client to read":    {nil, []guard{ok}, "could not check node a", false},
+		"read first, then bad": {cs, []guard{refused, differs}, "could not check node d", false},
+	} {
+		why, changed := checkGuards(context.Background(), tc.cs, tc.guards)
+		if changed != tc.changed || !strings.Contains(why, tc.text) || (tc.text == "") != (why == "") {
+			t.Errorf("%s: %q %v", name, why, changed)
+		}
+	}
+}
+
+// A card stands while its objects cannot be read, and nobody can approve
+// it: it says why, and works again once they can.
+func TestACardWhoseObjectsCannotBeReadIsNotApproved(t *testing.T) {
+	svc, cl, _, _, _ := setup(t, Options{})
+	it := svc.Submit(context.Background(), cl, alice(), "kubectl cordon worker-002", "typed", "", true)[0]
+	wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	svc.mu.Lock()
+	good := svc.items[it.ID].Plan.guards
+	svc.items[it.ID].Plan.guards = []guard{unreadable("node worker-002", errors.New("the API server timed out"))}
+	svc.mu.Unlock()
+	_, err := svc.Approve(context.Background(), cl, alice(), it.ID)
+	if !errors.Is(err, ErrState) || !strings.Contains(err.Error(), "could not check node worker-002") {
+		t.Fatalf("approved: %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if got, _, _ := svc.Snapshot(it.ID, 0); got.Status != StatusPending {
+		t.Fatalf("status %s, reason %q", got.Status, got.Reason)
+	}
+	svc.mu.Lock()
+	svc.items[it.ID].Plan.guards = good
+	svc.mu.Unlock()
+	if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err != nil {
+		t.Fatal(err)
+	}
+	wait(t, svc, it.ID, func(i Item) bool { return i.Status == StatusDone })
+}
+
+// A plan that could not read the cluster has nothing to guard, so its card
+// is not approved, by a person or a standing approval.
+func TestACardPlannedWithoutTheClusterIsNotApproved(t *testing.T) {
+	svc, cl, _, _, _ := setup(t, Options{Run: func(context.Context, *Command, Target, ioWriter, ioWriter, ...string) int { return 0 }})
+	away := cl
+	away.Config = &rest.Config{Host: "http://127.0.0.1:1"}
+	it := svc.Submit(context.Background(), away, alice(), "kubectl cordon worker-002", "typed", "", true)[0]
+	card := wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	if len(card.Plan.Impact) == 0 {
+		t.Fatal("the card does not say what went wrong")
+	}
+	if _, err := svc.Approve(context.Background(), away, alice(), it.ID); !errors.Is(err, ErrState) || !strings.Contains(err.Error(), "could not check") {
+		t.Fatalf("approved: %v", err)
+	}
+}
+
+// An approved change waiting in the queue does not start on objects that
+// cannot be read.
+func TestAQueuedChangeLapsesWhenItsObjectsCannotBeRead(t *testing.T) {
+	block := make(chan struct{})
+	var ran atomic.Bool
+	run := func(ctx context.Context, c *Command, tg Target, out, errOut ioWriter, extra ...string) int {
+		if len(extra) > 0 {
+			return 0
+		}
+		if strings.Contains(c.Line, "get nodes") {
+			<-block
+			return 0
+		}
+		ran.Store(true)
+		return 0
+	}
+	svc, cl, _, _, _ := setup(t, Options{Run: run})
+	first := svc.Submit(context.Background(), cl, alice(), "kubectl get nodes", "typed", "", true)[0]
+	wait(t, svc, first.ID, func(i Item) bool { return i.Status == StatusRunning })
+	it := svc.Submit(context.Background(), cl, alice(), "kubectl cordon worker-002", "typed", "", true)[0]
+	wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err != nil {
+		t.Fatal(err)
+	}
+	svc.mu.Lock()
+	svc.items[it.ID].Plan.guards = []guard{unreadable("node worker-002", errors.New("the API server timed out"))}
+	svc.mu.Unlock()
+	close(block)
+	lapsed := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) })
+	if lapsed.Status != StatusLapsed || !strings.Contains(lapsed.Reason, "could not check") || ran.Load() {
+		t.Fatalf("status %s reason %q ran %v", lapsed.Status, lapsed.Reason, ran.Load())
 	}
 }

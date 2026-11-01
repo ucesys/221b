@@ -344,10 +344,21 @@ func TestDirectoryRefusesCleartextWithoutStartTLS(t *testing.T) {
 	if _, err := New(o); err == nil || !strings.Contains(err.Error(), "clear") {
 		t.Fatalf("ldap:// without startTLS: %v", err)
 	}
+	for _, url := range []string{"LDAP://ldap.example", "Ldap://ldap.example:389"} {
+		o.URL = url
+		if _, err := New(o); err == nil || !strings.Contains(err.Error(), "clear") {
+			t.Fatalf("%s without startTLS: %v", url, err)
+		}
+	}
 	o.URL = "ldaps://ldap.example"
 	if _, err := New(o); err != nil {
 		t.Fatalf("ldaps://: %v", err)
 	}
+	o.URL = "LDAPS://ldap.example"
+	if _, err := New(o); err != nil {
+		t.Fatalf("LDAPS://: %v", err)
+	}
+	o.URL = "ldaps://ldap.example"
 	o.UserFilter = "(uid=x)"
 	if _, err := New(o); err == nil {
 		t.Fatal("a filter with no placeholder was accepted")

@@ -52,14 +52,20 @@ func (s Source) String() string {
 
 var refName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+-]*$`)
 
+// chartPath is a chart's directory: plain path segments that do not start
+// with a dash. It goes on a Watson line, so nothing in it may read as a
+// space, a line break, a quote or a flag.
+var chartPath = regexp.MustCompile(`^[A-Za-z0-9._+@][A-Za-z0-9._+@-]*(/[A-Za-z0-9._+@][A-Za-z0-9._+@-]*)*$`)
+
 // AllowLocalRepos lets a repository be a directory on the server's own
 // disk: for tests, which clone a repository they made. Never set by the
 // server.
 var AllowLocalRepos bool
 
 // Normalize cleans a source as typed and says what is wrong with it: the
-// repository must be an HTTPS URL (github.com/org/app is completed), the
-// path must stay inside the repository, and the ref must be a plain name.
+// repository must be an HTTPS URL (github.com/org/app is completed) on a
+// host the console connects to, the path must stay inside the repository
+// and hold plain path characters only, and the ref must be a plain name.
 func Normalize(s Source) (Source, error) {
 	repo := strings.TrimSpace(s.Repo)
 	if repo == "" {
@@ -76,6 +82,9 @@ func Normalize(s Source) (Source, error) {
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return s, errors.New("the repository must be an https:// URL without a user, query or fragment")
 	}
+	if refusedName(u.Hostname()) {
+		return s, errHostRefused
+	}
 	u.Path = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), ".git")
 	if u.Path == "" || u.Path == "/" {
 		return s, errors.New("the repository URL needs a path: https://github.com/org/app")
@@ -91,8 +100,10 @@ func normalizeRest(s Source) (Source, error) {
 		p = path.Clean(p)
 		if p == "." {
 			p = ""
-		} else if strings.HasPrefix(p, "../") || p == ".." || strings.Contains(p, "\x00") {
+		} else if strings.HasPrefix(p, "../") || p == ".." {
 			return s, errors.New("the chart path must be inside the repository")
+		} else if !chartPath.MatchString(p) {
+			return s, errors.New("the chart path may hold letters, digits and . _ + @ -, in segments that do not start with a dash")
 		}
 	}
 	s.Path = p
@@ -111,6 +122,18 @@ func normalizeRest(s Source) (Source, error) {
 		return s, fmt.Errorf("refKind must be %s or %s", RefBranch, RefTag)
 	}
 	return s, nil
+}
+
+// SameRepo says whether two sources name one repository, as Normalize
+// writes it. A token belongs to its repository: it never follows a source
+// to another one. A source that cannot be normalized matches nothing.
+func SameRepo(a, b Source) bool {
+	x, err := Normalize(Source{Repo: a.Repo, Ref: "x"})
+	if err != nil {
+		return false
+	}
+	y, err := Normalize(Source{Repo: b.Repo, Ref: "x"})
+	return err == nil && x.Repo == y.Repo
 }
 
 // Record is what the console keeps about an application (HA-03).

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { askSherlock, newSherlockChat, stopSherlock, SherlockError, usd, type SherlockMsg, type SherlockRef, type SherlockState } from '../api/sherlock'
 import { Markdown } from '../lib/markdown'
 import { peekClickHash } from '../lib/peek'
@@ -230,6 +230,9 @@ interface PaneProps {
   /** The Sherlock and Watson switch on narrow screens. */
   switcher?: ReactNode
   onToast: (msg: string) => void
+  /** A question to put in the box. It waits there for the person to send it. */
+  fill?: string
+  onFilled?: () => void
 }
 
 /** The question an answer answers. */
@@ -286,8 +289,8 @@ export function recall(key: 'ArrowUp' | 'ArrowDown', value: string, caret: numbe
 }
 
 /** Sherlock's pane: the conversation and the question box. */
-export function SherlockPane({ cluster, clusterName, state, inWindow, controls, switcher, onToast }: PaneProps) {
-  const [draft, setDraft] = useState('')
+export function SherlockPane({ cluster, clusterName, state, inWindow, controls, switcher, onToast, fill, onFilled }: PaneProps) {
+  const [draft, setDraft] = useState(fill ?? '')
   const history = useRef<string[]>(loadHistory())
   const at = useRef({ index: -1, draft: '' })
   const box = useRef<HTMLTextAreaElement>(null)
@@ -300,6 +303,20 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
   const msgs = conv?.messages ?? []
   const busy = !!conv?.busy
   const canAsk = !!status?.available && !busy && !sending
+
+  // A question handed over waits in the box; it is the person who asks it.
+  const [filled, setFilled] = useState(fill)
+  if (fill !== filled) {
+    setFilled(fill)
+    if (fill) setDraft(fill)
+  }
+  useEffect(() => {
+    if (!fill) return
+    at.current.index = -1
+    box.current?.focus()
+    onFilled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fill])
 
   // Keep the newest part in view while an answer arrives, unless the
   // reader has scrolled up.

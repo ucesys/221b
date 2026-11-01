@@ -107,12 +107,37 @@ func (s *Server) mayEditSecrets(r *http.Request) bool {
 	return ok && (sess.Admin || slices.Contains(sess.Roles, roles.Admin) || slices.Contains(sess.Roles, roles.SuperAdmin))
 }
 
+// mayReveal says whether the person may see Secret values in the namespace
+// (SE-03). Rights add up (RB-06), so Admin held in one namespace says nothing
+// of another, where a Viewer may read Secrets all the same: Kubernetes is
+// asked, as the person, for what Admin has in a namespace and Viewer has not,
+// writing Secrets. A SuperAdmin holds their role everywhere, read-only or not;
+// the read itself is made as them.
+func (s *Server) mayReveal(r *http.Request, cl Cluster, ns string) (bool, error) {
+	if s.opts.Auth == nil {
+		return true, nil
+	}
+	if sess, ok := auth.SessionFrom(r.Context()); ok && sess.Admin {
+		return true, nil
+	}
+	p := s.person(r)
+	if p.Nobody() {
+		return false, nil
+	}
+	return cl.CanI(r.Context(), p, "update", "", "secrets", ns)
+}
+
 func (s *Server) getSecretsConfig(w http.ResponseWriter, r *http.Request) {
 	_, cl, ok := s.lookup(w, r)
 	if !ok {
 		return
 	}
-	b, _ := json.Marshal(secretsConfig{Read: cl.SecretsRead(), Reveal: cl.SecretsRead() && s.opts.SecretsReveal, Edit: s.mayEditSecrets(r)})
+	cfg := secretsConfig{Read: cl.SecretsRead(), Reveal: cl.SecretsRead() && s.opts.SecretsReveal, Edit: s.mayEditSecrets(r)}
+	// Given a namespace, Reveal says what holds there.
+	if ns := r.URL.Query().Get("namespace"); ns != "" && cfg.Reveal {
+		cfg.Reveal, _ = s.mayReveal(r, cl, ns)
+	}
+	b, _ := json.Marshal(cfg)
 	writeJSON(w, r, b)
 }
 
@@ -153,6 +178,17 @@ func (s *Server) getSecretValue(w http.ResponseWriter, r *http.Request) {
 	if !s.opts.SecretsReveal {
 		s.recordOn(r, audit.OutcomeDenied, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key)+" reason=\"secrets.reveal is off\"")
 		jsonError(w, http.StatusForbidden, "this console does not show Secret values: whoever installed it can turn on secrets.reveal in the chart's values")
+		return
+	}
+	allowed, err := s.mayReveal(r, cl, ns)
+	if err != nil {
+		s.recordOn(r, audit.OutcomeFailed, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key))
+		jsonError(w, http.StatusBadGateway, "asking Kubernetes what you may see failed: "+err.Error())
+		return
+	}
+	if !allowed {
+		s.recordOn(r, audit.OutcomeDenied, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key)+" reason=\"not an Admin in this namespace\"")
+		jsonError(w, http.StatusForbidden, "only an Admin of "+ns+" or a SuperAdmin sees a Secret's values there")
 		return
 	}
 	sec, err := cl.GetSecret(r.Context(), s.person(r), ns, name)
