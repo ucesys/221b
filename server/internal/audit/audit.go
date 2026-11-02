@@ -11,9 +11,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/scrub"
 )
 
 // Actions the console records.
@@ -88,6 +91,18 @@ func Clip(s string, max int) string {
 	return strings.ToValidUTF8(s[:max], "")
 }
 
+// hostKey is an SSH public key, with the mark a pairing's output gives it.
+// A node's host keys stay off the page (asked October 30, 2026).
+var hostKey = regexp.MustCompile(`(?:221B-HOSTKEY )?(?:ssh-(?:rsa|dss|ed25519)|ecdsa-sha2-nistp[0-9]+) AAAA[A-Za-z0-9+/]+=*`)
+
+// cleaned is an event as the log keeps it: its free text holds no
+// credential and no host key, whichever part of the console wrote it.
+func cleaned(e Event) Event {
+	e.Target = scrub.Text(hostKey.ReplaceAllString(e.Target, scrub.Redacted))
+	e.Detail = scrub.Text(hostKey.ReplaceAllString(e.Detail, scrub.Redacted))
+	return e
+}
+
 // Event is one record of the audit log.
 type Event struct {
 	Time   time.Time `json:"time"`
@@ -97,7 +112,8 @@ type Event struct {
 	Cluster string `json:"cluster,omitempty"`
 	// Target names what the action touched: a setting, a connection.
 	Target string `json:"target,omitempty"`
-	// Detail says what changed or why it failed; it never holds a credential.
+	// Detail says what changed or why it failed; Record takes credentials
+	// out of it and of Target.
 	Detail  string `json:"detail,omitempty"`
 	Outcome string `json:"outcome"`
 	// From is the address the request came from.
@@ -191,7 +207,7 @@ func (l *Log) Import(events []Event) int {
 		return 0
 	}
 	for _, e := range events {
-		st.Add(e)
+		st.Add(cleaned(e))
 	}
 	return len(events)
 }
@@ -219,6 +235,7 @@ func New(o Options) *Log {
 // Record writes one event. It never blocks on the webhook: the event is
 // queued, and dropped with a warning when the queue is full.
 func (l *Log) Record(e Event) {
+	e = cleaned(e)
 	if e.Time.IsZero() {
 		e.Time = l.opts.Now().UTC()
 	}

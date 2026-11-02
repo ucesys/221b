@@ -3,15 +3,23 @@ import {
   allows,
   approvedOf,
   batches,
-  byGroup,
   canApprove,
   countsText,
+  CUSTOM_NODES,
+  fleetOf,
+  formatGroups,
+  inGroups,
+  inState,
   missingParams,
+  parseGroups,
   resolveParams,
-  runnableOn,
+  rolloutHelp,
+  runnable,
+  scriptGroups,
   type Script,
   type ScriptSummary,
   type Version,
+  UNGROUPED,
 } from "./automation";
 
 const ver = (over: Partial<Version>): Version => ({
@@ -93,48 +101,29 @@ describe("batches", () => {
 describe("approval", () => {
   const pat = { name: "Pat", user: "pat" };
   const sam = { name: "Sam", user: "sam" };
-  it("lets each person approve a version in review once", () => {
-    expect(canApprove(ver({ state: "draft" }), pat)).toBe(false);
-    expect(canApprove(ver({ state: "review" }), pat)).toBe(true);
-    const one = ver({ state: "approved", approvals: [{ by: pat, at: "" }] });
-    expect(canApprove(one, pat)).toBe(false);
-    expect(canApprove(one, sam)).toBe(true);
-    expect(
-      canApprove(
-        ver({
-          state: "approved",
-          approvals: [
-            { by: pat, at: "" },
-            { by: sam, at: "" },
-          ],
-        }),
-        { name: "Lee", user: "lee" },
-      ),
-    ).toBe(false);
+  const lee = { name: "Lee", user: "lee" };
+  it("never lets those who wrote or submitted a version approve it", () => {
+    const v = ver({ state: "review", author: pat, editors: [sam], submitted: { by: lee, at: "" } });
+    expect(canApprove(v, pat)).toBe(false);
+    expect(canApprove(v, sam)).toBe(false);
+    expect(canApprove(v, lee)).toBe(false);
+    expect(canApprove(v, { name: "Dee", user: "dee" })).toBe(true);
+    expect(canApprove(ver({ state: "draft", author: pat }), sam)).toBe(false);
   });
-  it("runs on a two-person cluster only with two approvals, one not the author’s", () => {
-    const byAuthor = ver({
-      state: "approved",
-      approvals: [{ by: pat, at: "" }],
-    });
-    expect(runnableOn(byAuthor, false)).toBe(true);
-    expect(runnableOn(byAuthor, true)).toBe(false);
-    expect(
-      runnableOn(
-        ver({
-          state: "approved",
-          approvals: [
-            { by: pat, at: "" },
-            { by: sam, at: "" },
-          ],
-        }),
-        true,
-      ),
-    ).toBe(true);
-    expect(runnableOn(ver({ state: "review" }), false)).toBe(false);
-    expect(runnableOn(undefined, false)).toBe(false);
+  it("asks for no more once someone else has approved", () => {
+    const done = ver({ state: "approved", author: pat, approvals: [{ by: sam, at: "" }] });
+    expect(canApprove(done, sam)).toBe(false);
+    expect(canApprove(done, lee)).toBe(false);
   });
-  it("runs the newest approved version", () => {
+  it("runs a version only with an approval by someone who did not write it", () => {
+    expect(runnable(ver({ state: "approved", author: pat, approvals: [{ by: pat, at: "" }] }))).toBe(false);
+    expect(runnable(ver({ state: "approved", author: pat, approvals: [{ by: sam, at: "" }] }))).toBe(true);
+    expect(runnable(ver({ state: "review", author: pat, approvals: [{ by: sam, at: "" }] }))).toBe(false);
+  });
+});
+
+describe("the version a run uses", () => {
+  it("is the newest approved", () => {
     const s: Script = {
       name: "s",
       created: "",
@@ -149,6 +138,51 @@ describe("approval", () => {
   });
 });
 
+describe("the Run dialog’s fleet", () => {
+  const fleet = (id: string, ...names: string[]) => ({
+    id,
+    name: id,
+    params: {},
+    nodes: [...names.map((name) => ({ name, paired: true })), { name: "off", paired: false }],
+  });
+  const fleets = [fleet("web", "a", "b"), fleet("db", "c"), fleet("_all", "a", "b", "c")];
+  it("names the fleet whose reachable nodes are the ones picked, in any order", () => {
+    expect(fleetOf(fleets, ["b", "a"])).toBe("web");
+    expect(fleetOf(fleets, ["a", "b", "c"])).toBe("_all");
+  });
+  it("is no fleet’s once the nodes are not exactly a fleet’s", () => {
+    expect(fleetOf(fleets, ["a"])).toBe(CUSTOM_NODES);
+    expect(fleetOf(fleets, ["a", "c"])).toBe(CUSTOM_NODES);
+    expect(fleetOf(fleets, [])).toBe(CUSTOM_NODES);
+  });
+});
+
+describe("the rollout help", () => {
+  it("says what each mode does with the size given", () => {
+    expect(rolloutHelp("canary", 5)).toContain("One node runs alone first");
+    expect(rolloutHelp("canary", 5)).toContain("5 at a time");
+    expect(rolloutHelp("canary", 0)).toContain("together");
+    expect(rolloutHelp("size", 3)).toContain("3 at a time");
+    expect(rolloutHelp("all", 3)).toContain("at most 20");
+  });
+});
+
+describe("the state filter", () => {
+  const s = (over: Partial<ScriptSummary>) => ({ state: "draft", inReview: 0, approved: 0, ...over }) as ScriptSummary;
+  it("finds a version waiting for review behind a newer draft", () => {
+    expect(inState(s({ inReview: 2 }), "review")).toBe(true);
+    expect(inState(s({}), "review")).toBe(false);
+  });
+  it("tells drafts, approved and never approved apart", () => {
+    expect(inState(s({}), "draft")).toBe(true);
+    expect(inState(s({ state: "approved", approved: 1 }), "draft")).toBe(false);
+    expect(inState(s({ approved: 1 }), "approved")).toBe(true);
+    expect(inState(s({ approved: 1 }), "unapproved")).toBe(false);
+    expect(inState(s({}), "unapproved")).toBe(true);
+    expect(inState(s({}), "")).toBe(true);
+  });
+});
+
 describe("the rest", () => {
   it("allows full only under a full ceiling", () => {
     expect(allows(undefined, "none")).toBe(true);
@@ -160,17 +194,20 @@ describe("the rest", () => {
       "3 changed · 1 failed",
     );
   });
-  it("groups scripts, Ungrouped last", () => {
+  it("lists the groups with their counts, Ungrouped last", () => {
     const s = (name: string, group: string) =>
       ({ name, group }) as ScriptSummary;
-    expect(
-      byGroup([s("b", ""), s("z", "os"), s("a", "os"), s("c", "k8s")]).map(
-        ([g, l]) => [g, l.map((x) => x.name)],
-      ),
-    ).toEqual([
-      ["k8s", ["c"]],
-      ["os", ["a", "z"]],
-      ["Ungrouped", ["b"]],
+    const list = [s("b", ""), s("z", "os"), s("a", "os"), s("c", "k8s")];
+    expect(scriptGroups(list)).toEqual([
+      { id: "k8s", name: "k8s", count: 1 },
+      { id: "os", name: "os", count: 2 },
+      { id: UNGROUPED, name: "Ungrouped", count: 1 },
     ]);
+    expect(list.filter((x) => inGroups(x, [])).length).toBe(4);
+    expect(list.filter((x) => inGroups(x, ["os", UNGROUPED])).map((x) => x.name)).toEqual(["b", "z", "a"]);
+  });
+  it("keeps a group’s comma through the URL", () => {
+    expect(parseGroups(formatGroups(["a,b", "c d"]))).toEqual(["a,b", "c d"]);
+    expect(parseGroups(null)).toEqual([]);
   });
 });

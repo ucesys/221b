@@ -785,6 +785,13 @@ func keepAudit(l *audit.Log, b kv.Backend, logger *slog.Logger) *audit.KVStore {
 	}
 	st := audit.NewKVStore(b, logger)
 	l.SetStore(st)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := st.Sweep(ctx); err != nil {
+			logger.Warn("cleaning the kept audit log failed", "err", err)
+		}
+	}()
 	return st
 }
 

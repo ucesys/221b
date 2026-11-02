@@ -1,3 +1,4 @@
+import { usePref } from "../lib/prefs";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { signOut } from "../api/auth";
 import type { ClusterInfo, Counts, Me, Settings } from "../api/types";
@@ -11,6 +12,10 @@ import {
   HOME,
   tabHref,
   TABS,
+  FIRST_TAB,
+  isAutomationTab,
+  navigate,
+  type Area,
   type Route,
   type Tab,
 } from "../lib/router";
@@ -426,13 +431,28 @@ export function TopBar({
     .filter(Boolean)
     .join(" ");
 
+  // Automation is an area of its own, a SuperAdmin's (AU-01, AU-13). Nodes
+  // is in both, and stays in the area it was opened from.
+  const [nodesArea, setNodesArea] = usePref<Area>("221b.nodes-area", "kubernetes");
+  const automationOn = me?.admin === true;
+  const area: Area = !automationOn
+    ? "kubernetes"
+    : isAutomationTab(tab)
+      ? "automation"
+      : tab === "nodes"
+        ? nodesArea
+        : "kubernetes";
+  useEffect(() => {
+    if (tab && tab !== "nodes" && area !== nodesArea) setNodesArea(area);
+  }, [tab, area, nodesArea, setNodesArea]);
   // The Helm tab needs Secrets; without them there is nothing to show.
-  // Automation is a SuperAdmin's (AU-13).
   const tabs = TABS.filter(
     (t) =>
-      (t.id !== "helm" || cluster?.secrets !== "off") &&
-      (t.id !== "fleets" || settings?.fleetsPage !== false) &&
-      (t.id !== "automation" || me?.admin === true),
+      (area === "automation"
+        ? t.id === "nodes" || isAutomationTab(t.id)
+        : !isAutomationTab(t.id) &&
+          (t.id !== "helm" || cluster?.secrets !== "off") &&
+          (t.id !== "fleets" || settings?.fleetsPage !== false)),
   );
   const ids = tabs.map((t) => t.id);
   const nav = useRef<HTMLElement>(null);
@@ -526,6 +546,26 @@ export function TopBar({
           me={me}
           onEdit={onEditCluster}
         />
+        {automationOn && (
+          <div className="rk-seg" role="group" aria-label="Area" data-testid="area">
+            <button
+              type="button"
+              aria-pressed={area === "kubernetes"}
+              onClick={() => navigate(tabHref(FIRST_TAB))}
+              data-testid="area-kubernetes"
+            >
+              Kubernetes
+            </button>
+            <button
+              type="button"
+              aria-pressed={area === "automation"}
+              onClick={() => navigate(tabHref("scripts"))}
+              data-testid="area-automation"
+            >
+              Automation
+            </button>
+          </div>
+        )}
       </div>
       <nav
         ref={nav}

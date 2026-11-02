@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -139,5 +140,63 @@ func TestARecordsNamesAreBounded(t *testing.T) {
 		if len(s) > MaxName || !utf8.ValidString(s) || s == "" {
 			t.Fatalf("%d bytes: %q", len(s), s)
 		}
+	}
+}
+
+// Whichever part of the console writes a record, it reaches no sink with a
+// credential or a host key in it.
+func TestARecordHoldsNoSecret(t *testing.T) {
+	const key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample"
+	var out bytes.Buffer
+	l := New(Options{Out: &out})
+	l.KeepInMemory(10)
+	l.Record(Event{Action: "watson.command", Target: `run in pod a/b: mysql -phunter2`, Detail: `command="kubectl create secret generic db --from-literal=name=s3cret-literal"`})
+	l.Record(Event{Action: "watson.command", Detail: `command="helm upgrade web ./c --set image.tag=1.2,db.password=hunter2"`})
+	l.Record(Event{Action: "watson.command", Detail: `command="curl -u ada:hunter2 https://example.com"`})
+	l.Record(Event{Action: "session.end", Detail: "output=\"221B-HOSTKEY " + key + "\\n221B-PAIRED root\\n\""})
+	kept, err := l.Events(context.Background())
+	if err != nil || len(kept) != 4 {
+		t.Fatalf("%d events, %v", len(kept), err)
+	}
+	b, _ := json.Marshal(kept)
+	for name, text := range map[string]string{"the stream": out.String(), "the store": string(b)} {
+		for _, secret := range []string{"hunter2", "s3cret-literal", "AAAAC3Nza"} {
+			if strings.Contains(text, secret) {
+				t.Errorf("%s holds %s: %s", name, secret, text)
+			}
+		}
+		if !strings.Contains(text, "image.tag=1.2") || !strings.Contains(text, "221B-PAIRED root") {
+			t.Errorf("%s lost what is no secret: %s", name, text)
+		}
+	}
+}
+
+// What an older console kept is cleaned once, and what is clean stays as
+// it was.
+func TestSweepCleansWhatWasKept(t *testing.T) {
+	b := &kv.Memory{}
+	old := []Event{{Action: "session.end", Detail: `output="221B-HOSTKEY ssh-rsa AAAAB3NzaC1yc2EExample"`}, {Action: "signin", Detail: "local"}}
+	raw, _ := json.Marshal(old)
+	if _, err := b.SaveKey(context.Background(), StoreKey, raw, ""); err != nil {
+		t.Fatal(err)
+	}
+	s := NewKVStore(b, slog.Default())
+	defer s.Close(context.Background())
+	if err := s.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := b.LoadKey(context.Background(), StoreKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(got), "AAAAB3") || !strings.Contains(string(got), `"local"`) {
+		t.Fatalf("kept: %s", got)
+	}
+	_, version, _ := b.LoadKey(context.Background(), StoreKey)
+	if err := s.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, again, _ := b.LoadKey(context.Background(), StoreKey); again != version {
+		t.Fatal("a clean log was written again")
 	}
 }

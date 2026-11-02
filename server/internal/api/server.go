@@ -348,6 +348,7 @@ func New(o Options) *Server {
 	// for any connection as /api/v1/clusters/{cluster}/<path> (P3-09).
 	s.data("snapshot", "snapshot", s.snapshot)
 	s.data("nodes/{name}", "node", s.node)
+	s.data("nodes/{name}/kubelet", "node-kubelet", s.nodeKubelet)
 	s.data("events", "events", s.events)
 	if o.Cluster != nil || o.Clusters != nil {
 		s.data("pods/{namespace}/{name}", "pod", s.pod)
@@ -767,26 +768,66 @@ func filterOf(a *access.Access) live.Filter {
 }
 
 func (s *Server) node(w http.ResponseWriter, r *http.Request) {
-	st, cl, ok := s.lookup(w, r)
+	row, cl, ok := s.nodeRow(w, r)
 	if !ok {
 		return
+	}
+	writeJSON(w, r, live.Redact(live.ViewNodes, row, filterOf(s.access(r, cl))))
+}
+
+// nodeRow finds the node a request names, for a person who may list nodes.
+func (s *Server) nodeRow(w http.ResponseWriter, r *http.Request) ([]byte, Cluster, bool) {
+	st, cl, ok := s.lookup(w, r)
+	if !ok {
+		return nil, nil, false
 	}
 	if a := s.access(r, cl); a != nil {
 		if _, err := s.prepare(r.Context(), a, cl, []string{live.ViewNodes}); err != nil {
 			jsonError(w, http.StatusBadGateway, accessState(err)["error"])
-			return
+			return nil, nil, false
 		}
 		if !a.Cluster("nodes") {
 			jsonError(w, http.StatusForbidden, "Kubernetes does not let you list nodes")
-			return
+			return nil, nil, false
 		}
 	}
 	row, ok := st.Row(live.ViewNodes, r.PathValue("name"))
 	if !ok {
 		jsonError(w, http.StatusNotFound, "no node named "+strconv.Quote(r.PathValue("name")))
+		return nil, nil, false
+	}
+	return row, cl, true
+}
+
+// kubeletReader is a cluster that can ask a kubelet how it is configured.
+type kubeletReader interface {
+	KubeletConfig(ctx context.Context, node string) (kube.KubeletConfig, error)
+}
+
+// nodeKubelet is what a node's kubelet is configured to keep from pods,
+// read live for the node's details. The node's capacity and allocatable
+// say how much; this says how, so a kubelet that cannot be read is a note
+// and not an error.
+func (s *Server) nodeKubelet(w http.ResponseWriter, r *http.Request) {
+	_, cl, ok := s.nodeRow(w, r)
+	if !ok {
 		return
 	}
-	writeJSON(w, r, live.Redact(live.ViewNodes, row, filterOf(s.access(r, cl))))
+	type answer struct {
+		Config *kube.KubeletConfig `json:"config,omitempty"`
+		Note   string              `json:"note,omitempty"`
+	}
+	reader, ok := cl.(kubeletReader)
+	if !ok {
+		answerJSON(w, r, answer{Note: "This connection cannot read its kubelets."})
+		return
+	}
+	cfg, err := reader.KubeletConfig(r.Context(), r.PathValue("name"))
+	if err != nil {
+		answerJSON(w, r, answer{Note: err.Error()})
+		return
+	}
+	answerJSON(w, r, answer{Config: &cfg})
 }
 
 func (s *Server) apiNotFound(w http.ResponseWriter, r *http.Request) {

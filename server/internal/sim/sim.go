@@ -219,6 +219,7 @@ func (s *Sim) routes() {
 	m.HandleFunc("GET /apis/metrics.k8s.io/v1beta1/nodes", s.api(s.nodeMetrics))
 	m.HandleFunc("GET /apis/metrics.k8s.io/v1beta1/pods", s.api(s.podMetrics))
 	m.HandleFunc("GET /api/v1/nodes/{name}/proxy/stats/summary", s.api(s.kubeletSummary))
+	m.HandleFunc("GET /api/v1/nodes/{name}/proxy/configz", s.api(s.kubeletConfigz))
 	m.HandleFunc("GET /api/v1/namespaces/{ns}/pods/{name}/log", s.api(s.podLog))
 	m.HandleFunc("GET /sim/state", s.state)
 	m.HandleFunc("POST /sim/nodes/{name}/cordon", s.admin(s.cordon))
@@ -806,6 +807,32 @@ func (s *Sim) nodeMetrics(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---------- kubelet stats, through the API server's node proxy ----------
+
+// kubeletConfigz answers as a kubelet's /configz does: what the node's
+// capacity and allocatable differ by, as system-reserved.
+func (s *Sim) kubeletConfigz(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !s.opts.KubeletStats {
+		status(w, http.StatusForbidden, "Forbidden", fmt.Sprintf(`nodes %q is forbidden: cannot get resource "nodes/proxy"`, name))
+		return
+	}
+	s.mu.Lock()
+	n, ok := s.nodes[name]
+	s.mu.Unlock()
+	if !ok {
+		status(w, http.StatusNotFound, "NotFound", fmt.Sprintf("nodes %q not found", name))
+		return
+	}
+	cpu, mem := n.Status.Capacity.Cpu().DeepCopy(), n.Status.Capacity.Memory().DeepCopy()
+	cpu.Sub(*n.Status.Allocatable.Cpu())
+	mem.Sub(*n.Status.Allocatable.Memory())
+	writeJSON(w, map[string]any{"kubeletconfig": map[string]any{
+		"systemReserved":         map[string]string{"cpu": cpu.String(), "memory": mem.String()},
+		"evictionHard":           map[string]string{"memory.available": "100Mi"},
+		"enforceNodeAllocatable": []string{"pods"},
+		"maxPods":                110,
+	}})
+}
 
 // kubeletSummary answers as the API server does when it proxies a
 // kubelet's Summary API: the boot time in node.startTime, 403 without the

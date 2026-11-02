@@ -30,7 +30,7 @@ export function trapTab(e: KeyboardEvent<HTMLElement>, root: HTMLElement = e.cur
   const last = all[all.length - 1]
   if (!first || !last) return
   const active = document.activeElement
-  if (e.shiftKey && (active === first || !root.contains(active))) {
+  if (e.shiftKey && (active === first || active === root || !root.contains(active))) {
     e.preventDefault()
     last.focus()
   } else if (!e.shiftKey && (active === last || !root.contains(active))) {

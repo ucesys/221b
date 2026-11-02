@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { saveFleets } from '../api/fleets'
 import { useLiveMeta, useView } from '../api/live'
 import type { Fleet, FleetRow, Me, NodeRow } from '../api/types'
-import { capText, fleetOf, fleetsOfNode, inDefinition, listText, metaText, mxColumns, mxHas, presets, problemsText, reqsOf, reqText, scopeNames, selectorText, splitLabel, type MxColumn } from '../lib/fleets'
+import { capText, fleetOf, fleetsOfNode, inDefinition, listText, metaText, mxColumns, mxHas, presets, problemsText, reqsOf, reqText, reservedGroups, reservedLine, scopeNames, selectorText, splitLabel, type MxColumn } from '../lib/fleets'
 import { compareNatural, fileStamp, nWord } from '../lib/format'
 import { effectTone, facetMatch, labelText } from '../lib/nodes'
 import { href, listParam, navigate, withParams } from '../lib/router'
@@ -21,6 +21,8 @@ import { peekLink } from '../lib/peek'
 
 
 const HIDE_KEY = '221b.fleets.hidden'
+
+const RESERVED_TIP = 'Capacity less allocatable on each node: what the kubelet keeps from pods, for software beside Kubernetes and the agent itself.'
 
 function Pencil() {
   return (
@@ -276,6 +278,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
             const only = checked && sel.length === 1
             const cap = capText(f.stats)
             const probs = problemsText(f.stats)
+            const held = reservedLine(reservedGroups(f.members, byName))
             return (
               <div key={f.key} className="rk-fl" data-sel={checked} data-fleet={f.id}>
                 <label className="rk-fl-check" title={checked ? `Remove ${f.name} from the selection` : `Add ${f.name} to the selection`}>
@@ -296,6 +299,11 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                     </span>
                     <span>{cap.text}</span>
                   </span>
+                  {held && (
+                    <span className="rk-fl-def" title={RESERVED_TIP} data-testid="fleet-reserved">
+                      {held}
+                    </span>
+                  )}
                   {probs.text && (
                     <span className="rk-t" data-tone={probs.tone} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 500 }}>
                       <span className="rk-dot" />
@@ -427,6 +435,33 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
               </span>
             </div>
           </div>
+        )}
+
+        {scope.length > 0 && (
+          <section className="rk-card" aria-label="Kubernetes agent resources" style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12 }} data-testid="fleet-agent">
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '2px 10px' }}>
+              <h2 className="rk-h" title={RESERVED_TIP}>
+                Kubernetes agent resources
+              </h2>
+              <span style={{ color: 'var(--fg3)' }}>
+                What each node keeps from pods now, read from the nodes
+                {admin ? (
+                  <>
+                    {' '}
+                    · <a className="rk-link" href={href('scripts')}>a script changes it</a>
+                  </>
+                ) : null}
+              </span>
+            </div>
+            {reservedGroups(scope, byName).map((g) => (
+              <span key={g.text} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 8px' }} data-testid="fleet-agent-group">
+                <span className="rk-chip">{g.text === 'none' ? 'nothing reserved' : g.text}</span>
+                <span style={{ color: 'var(--fg2)' }}>
+                  {nWord(g.nodes.length, 'node', 'nodes')}: {listText(g.nodes.length > 6 ? [...g.nodes.slice(0, 6), `${g.nodes.length - 6} more`] : g.nodes)}
+                </span>
+              </span>
+            ))}
+          </section>
         )}
 
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px' }}>

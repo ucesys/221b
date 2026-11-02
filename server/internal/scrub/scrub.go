@@ -1,4 +1,6 @@
-package sherlock
+// Package scrub removes what looks like a credential from text: tool
+// results before they leave for the Claude API, and every audit record.
+package scrub
 
 import (
 	"encoding/json"
@@ -8,8 +10,8 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// Scrubbed is what a scrubbed value is replaced with.
-const Scrubbed = "[REDACTED]"
+// Redacted is what a scrubbed value is replaced with.
+const Redacted = "[REDACTED]"
 
 // secretWords are what mark a name as holding a secret, in any case, for
 // the patterns below and SecretName alike.
@@ -49,6 +51,10 @@ var scrubbers = []struct {
 	{regexp.MustCompile(`(?m)((?:^|[\s"'\[,])-{1,2}` + secretKey + `["']?(?:\s*,\s*|\s+))` + secretValue), 1},
 	// A MySQL client's password, joined to its -p.
 	{regexp.MustCompile(`(?m)(\b(?:mysql|mysqldump|mysqladmin|mysqlsh|mariadb|mariadb-dump)\b[^\n]*?\s-p)(?:"[^"]*"|'[^']*'|[^\s"'-]\S*)`), 1},
+	// A Secret's literal value, whatever its key is called.
+	{regexp.MustCompile(`(--from-literal[= ]\\*["']?[^=\s"'\\]+=)` + secretValue), 1},
+	// curl's user:password.
+	{regexp.MustCompile(`(\bcurl\b[^\n]*?\s(?:-u\s*|--user[=\s]\s*)\\*["']?[^\s:"'\\]*:)` + secretValue), 1},
 	// key=value and key: value pairs whose key names a secret, also inside
 	// a JSON string.
 	{regexp.MustCompile(`(?m)((?:\\*["'])?` + secretKey + `(?:\\*["'])?\s*[:=]\s*)` + secretValue), 1},
@@ -78,7 +84,7 @@ func scrubBlocks(s string) string {
 		line := s[m[0]:m[1]]
 		indent := len(line) - len(strings.TrimLeft(line, " \t"))
 		b.WriteString(s[last:m[0]])
-		b.WriteString(s[m[2]:m[3]] + " " + Scrubbed)
+		b.WriteString(s[m[2]:m[3]] + " " + Redacted)
 		last = m[1]
 		for last < len(s) {
 			next, _, _ := strings.Cut(s[last+1:], "\n")
@@ -97,7 +103,7 @@ func scrubBlocks(s string) string {
 }
 
 // Scrub removes what looks like a credential from text.
-func Scrub(s string) string {
+func Text(s string) string {
 	if s == "" {
 		return s
 	}
@@ -105,35 +111,35 @@ func Scrub(s string) string {
 	for _, sc := range scrubbers {
 		switch sc.keep {
 		case 0:
-			s = sc.re.ReplaceAllString(s, Scrubbed)
+			s = sc.re.ReplaceAllString(s, Redacted)
 		case -1:
-			s = sc.re.ReplaceAllString(s, "${1}"+Scrubbed+"${2}")
+			s = sc.re.ReplaceAllString(s, "${1}"+Redacted+"${2}")
 		default:
 			s = sc.re.ReplaceAllStringFunc(s, func(m string) string {
 				sub := sc.re.FindStringSubmatch(m)
 				if len(sub) <= sc.keep {
-					return Scrubbed
+					return Redacted
 				}
 				// A value that is itself already redacted stays as it is.
-				if strings.Contains(m[len(sub[sc.keep]):], Scrubbed) {
+				if strings.Contains(m[len(sub[sc.keep]):], Redacted) {
 					return m
 				}
-				return sub[sc.keep] + Scrubbed
+				return sub[sc.keep] + Redacted
 			})
 		}
 	}
 	return s
 }
 
-// ScrubKnown also removes values known to be secret, wherever they appear:
+// Known also removes values known to be secret, wherever they appear:
 // the API key itself, for one.
-func ScrubKnown(s string, known []string) string {
+func Known(s string, known []string) string {
 	for _, k := range known {
 		if len(k) >= 6 {
-			s = strings.ReplaceAll(s, k, Scrubbed)
+			s = strings.ReplaceAll(s, k, Redacted)
 		}
 	}
-	return Scrub(s)
+	return Text(s)
 }
 
 // secretName matches names that look like they hold a secret.
@@ -156,36 +162,36 @@ var joinedPassword = regexp.MustCompile(`^-p[^-=\s]`)
 // secret but whose values are not: counts, flags and references.
 var notSecretFields = map[string]bool{"secretsRead": true, "tokens": true, "secretRefs": true, "secrets": true, "secretName": true, "secretKeyRef": true, "secret": true, "authMethod": true}
 
-// ScrubJSON scrubs a JSON document value by value: every string is
+// JSON scrubs a JSON document value by value: every string is
 // scrubbed as text, a string field whose name looks secret is redacted,
 // and so is the value of a {"name": …, "value": …} pair (an environment
 // variable) whose name does, and the argument after a flag that does. A
 // string that is itself JSON, such as a last-applied annotation, is
 // scrubbed the same way. Invalid JSON is scrubbed as text.
-func ScrubJSON(b []byte) []byte {
+func JSON(b []byte) []byte {
 	var v any
 	if err := jsonUnmarshal(b, &v); err != nil {
-		return []byte(Scrub(string(b)))
+		return []byte(Text(string(b)))
 	}
 	v = scrubValue(v, "")
 	out, err := jsonMarshal(v)
 	if err != nil {
-		return []byte(Scrub(string(b)))
+		return []byte(Text(string(b)))
 	}
 	return out
 }
 
-// ScrubYAML scrubs a YAML document as ScrubJSON does a JSON one, so an
+// YAML scrubs a YAML document as JSON does a JSON one, so an
 // object reads the same to the model in either form. Text that is not YAML
 // is scrubbed as text.
-func ScrubYAML(b []byte) []byte {
+func YAML(b []byte) []byte {
 	j, err := yaml.YAMLToJSON(b)
 	if err != nil {
-		return []byte(Scrub(string(b)))
+		return []byte(Text(string(b)))
 	}
-	out, err := yaml.JSONToYAML(ScrubJSON(j))
+	out, err := yaml.JSONToYAML(JSON(j))
 	if err != nil {
-		return []byte(Scrub(string(b)))
+		return []byte(Text(string(b)))
 	}
 	return out
 }
@@ -194,7 +200,7 @@ func scrubValue(v any, field string) any {
 	switch x := v.(type) {
 	case string:
 		if field != "" && SecretName(field) && !notSecretFields[field] && x != "" {
-			return Scrubbed
+			return Redacted
 		}
 		return scrubString(x)
 	case []any:
@@ -206,7 +212,7 @@ func scrubValue(v any, field string) any {
 	case map[string]any:
 		if name, ok := x["name"].(string); ok && SecretName(name) {
 			if _, ok := x["value"].(string); ok && x["value"] != "" {
-				x["value"] = Scrubbed
+				x["value"] = Redacted
 			}
 		}
 		for k, e := range x {
@@ -227,7 +233,7 @@ func scrubString(s string) string {
 			}
 		}
 	}
-	return Scrub(s)
+	return Text(s)
 }
 
 // scrubArgs redacts what a list of command-line arguments gives away.
@@ -238,11 +244,11 @@ func scrubArgs(list []any) {
 			continue
 		}
 		if joinedPassword.MatchString(s) {
-			list[i] = Scrubbed
+			list[i] = Redacted
 		}
 		if secretFlag.MatchString(s) && i+1 < len(list) {
 			if _, ok := list[i+1].(string); ok {
-				list[i+1] = Scrubbed
+				list[i+1] = Redacted
 			}
 		}
 	}

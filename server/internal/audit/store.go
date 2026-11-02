@@ -254,6 +254,35 @@ func (s *KVStore) Flush(ctx context.Context) error {
 	return err
 }
 
+// Sweep cleans what an older console kept; what is recorded now comes in
+// clean, so one pass at the start is enough.
+func (s *KVStore) Sweep(ctx context.Context) error {
+	s.saving.Lock()
+	defer s.saving.Unlock()
+	var err error
+	for try := 0; try < 5; try++ {
+		var list []Event
+		var version string
+		if list, version, err = s.load(ctx); err != nil {
+			return err
+		}
+		dirty := false
+		for i, e := range list {
+			if c := cleaned(e); c != e {
+				list[i], dirty = c, true
+			}
+		}
+		if !dirty {
+			return nil
+		}
+		b, _ := json.Marshal(list)
+		if _, err = s.Backend.SaveKey(ctx, s.Key, b, version); !errors.Is(err, kv.ErrConflict) {
+			return err
+		}
+	}
+	return err
+}
+
 func (s *KVStore) List(ctx context.Context) ([]Event, error) {
 	if err := s.Flush(ctx); err != nil {
 		s.Logger.Warn("saving the audit log before reading it failed", "err", err)

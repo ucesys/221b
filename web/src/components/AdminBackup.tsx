@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react'
 import { BACKUP_FORMAT, fetchBackup, partCount, RESTORE_PARTS, restoreBackup, type BackupFile, type RestorePart, type RestoreReport } from '../api/admin'
 import { fmtTs } from '../lib/format'
-import { download } from './AdminAudit'
+import { download } from '../lib/xlsx'
 import type { AdminProps } from './AdminPage'
 import { ConfirmDialog } from './ConfirmDialog'
 import { DownloadIcon } from './Icons'
@@ -24,7 +24,7 @@ export function AdminBackup({ onToast }: AdminProps) {
     setTakeErr('')
     try {
       const f = await fetchBackup()
-      download(`221b-backup-${f.taken.slice(0, 19).replace(/[:T]/g, '-')}.json`, JSON.stringify(f, null, 2))
+      download(JSON.stringify(f, null, 2), `221b-backup-${f.taken.slice(0, 19).replace(/[:T]/g, '-')}.json`, 'application/json')
       setLast(f)
       onToast('The backup is downloading.')
     } catch (e) {

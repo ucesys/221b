@@ -9,6 +9,28 @@ export type RoleFilter = 'all' | 'control-plane' | 'worker'
 
 export const toneRank: Record<Tone, number> = { err: 3, warn: 2, info: 1, muted: 0, ok: 0 }
 
+/** What the kubelet keeps from pods: capacity less allocatable. */
+export function reserved(res: { allocatable: number; capacity: number }): number {
+  return Math.max(0, res.capacity - res.allocatable)
+}
+
+/**
+ * In use as a share of the machine. metrics-server reads the whole machine,
+ * software beside Kubernetes included, so on a node with resources reserved
+ * a share of allocatable would pass 100% while pods stay within theirs.
+ */
+export function usedPct(res: { allocatable: number; capacity: number; used?: number | null }): number {
+  return pct(res.used ?? 0, res.capacity || res.allocatable)
+}
+
+/** A node's reservation in words: "4 cores · 16 GiB", or "none". */
+export function reservedText(r: { cpu: { allocatable: number; capacity: number }; memory: { allocatable: number; capacity: number } }): string {
+  const cpu = reserved(r.cpu)
+  const memory = reserved(r.memory)
+  if (!cpu && !memory) return 'none'
+  return [cpu ? `${fCores(cpu)} cores` : '', memory ? fMem(memory) : ''].filter(Boolean).join(' · ')
+}
+
 /** Allocatable less requested: what the scheduler can still place. */
 export function free(res: { allocatable: number; requested: number }): number {
   return Math.max(0, res.allocatable - res.requested)
@@ -141,7 +163,7 @@ export interface Meter {
 
 export function cpuMeter(r: NodeRow): Meter {
   const req = pct(r.cpu.requested, r.cpu.allocatable)
-  const use = r.cpu.used == null ? null : pct(r.cpu.used, r.cpu.allocatable)
+  const use = r.cpu.used == null ? null : usedPct(r.cpu)
   return {
     reqPct: req,
     usePct: use ?? 0,
@@ -155,7 +177,7 @@ export function cpuMeter(r: NodeRow): Meter {
 
 export function memoryMeter(r: NodeRow): Meter {
   const req = pct(r.memory.requested, r.memory.allocatable)
-  const use = r.memory.used == null ? null : pct(r.memory.used, r.memory.allocatable)
+  const use = r.memory.used == null ? null : usedPct(r.memory)
   return {
     reqPct: req,
     usePct: use ?? 0,
@@ -202,10 +224,10 @@ export function resourceSections(r: NodeRow, metrics: boolean, metricsNote: stri
   const usage = metrics && r.cpu.used != null && r.memory.used != null
   const noUsage = metrics && !usage ? 'metrics-server has no reading for this node.' : metricsNote || 'CPU and memory in use are not available.'
   const cR = pct(r.cpu.requested, r.cpu.allocatable)
-  const cU = usage ? pct(r.cpu.used ?? 0, r.cpu.allocatable) : 0
+  const cU = usage ? usedPct(r.cpu) : 0
   const cL = pct(r.cpu.limits, r.cpu.allocatable)
   const mR = pct(r.memory.requested, r.memory.allocatable)
-  const mU = usage ? pct(r.memory.used ?? 0, r.memory.allocatable) : 0
+  const mU = usage ? usedPct(r.memory) : 0
   const mL = pct(r.memory.limits, r.memory.allocatable)
   const p = r.pods
   const notReady: string[] = []
@@ -222,7 +244,7 @@ export function resourceSections(r: NodeRow, metrics: boolean, metricsNote: stri
         { k: 'Allocatable', v: `${fCores(r.cpu.allocatable)} cores`, sub: r.cpu.capacity > r.cpu.allocatable ? `of ${fCores(r.cpu.capacity)} on the machine` : '' },
         { k: 'Requested', v: fCores(r.cpu.requested), sub: pctTxt(cR) },
         { k: 'Free to schedule', v: fCores(free(r.cpu)), sub: pctTxt(100 - Math.min(100, cR)) },
-        { k: 'In use', v: usage ? fCores(r.cpu.used ?? 0) : '—', sub: usage ? pctTxt(cU) : '', tone: cU > 85 ? 'err' : undefined },
+        { k: 'In use', v: usage ? fCores(r.cpu.used ?? 0) : '—', sub: usage ? `${pctTxt(cU)} of the machine` : '', tone: cU > 85 ? 'err' : undefined },
         { k: 'Limits', v: fCores(r.cpu.limits), sub: pctTxt(cL), tone: cL > 100 ? 'warn' : undefined },
       ],
       note: !usage ? noUsage : cL > 100 ? `CPU limits are overcommitted (${pctTxt(cL)} of allocatable) — expect throttling under load.` : '',
@@ -237,7 +259,7 @@ export function resourceSections(r: NodeRow, metrics: boolean, metricsNote: stri
         { k: 'Allocatable', v: fMem(r.memory.allocatable), sub: r.memory.capacity > r.memory.allocatable ? `of ${fMem(r.memory.capacity)} on the machine` : '' },
         { k: 'Requested', v: fMem(r.memory.requested), sub: pctTxt(mR) },
         { k: 'Free to schedule', v: fMem(free(r.memory)), sub: pctTxt(100 - Math.min(100, mR)) },
-        { k: 'In use', v: usage ? fMem(r.memory.used) : '—', sub: usage ? pctTxt(mU) : '', tone: mU > 85 ? 'err' : undefined },
+        { k: 'In use', v: usage ? fMem(r.memory.used) : '—', sub: usage ? `${pctTxt(mU)} of the machine` : '', tone: mU > 85 ? 'err' : undefined },
         { k: 'Limits', v: fMem(r.memory.limits), sub: pctTxt(mL), tone: mL > 100 ? 'warn' : undefined },
       ],
       note: !usage

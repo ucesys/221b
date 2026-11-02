@@ -119,7 +119,8 @@ export function resourceLine(label: 'CPU' | 'Memory', u: HomeUse, metrics: boole
   const f = label === 'CPU' ? (v: number) => fCores(v) : (v: number) => fMem(v)
   const unit = label === 'CPU' ? ' cores' : ''
   const reqPct = pct(u.requested, u.allocatable)
-  const usePct = metrics && u.usedNodes > 0 ? pct(u.used, u.allocatable) : null
+  // metrics-server reads whole machines, so in use is a share of them.
+  const usePct = metrics && u.usedNodes > 0 ? pct(u.used, u.capacity || u.allocatable) : null
   const worst = Math.max(reqPct, usePct ?? 0)
   const text = `${f(u.requested)} of ${f(u.allocatable)}${unit} requested (${pctTxt(reqPct)})` + (usePct !== null ? ` · ${f(u.used)} in use (${pctTxt(usePct)})` : '')
   const tip = `${label}: ${f(u.allocatable)}${unit} allocatable, ${f(u.requested)} requested` + (usePct !== null ? `, ${f(u.used)} in use on ${n(u.usedNodes, 'node', 'nodes')}` : ', no usage figures (metrics-server)')

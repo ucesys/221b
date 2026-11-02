@@ -47,6 +47,8 @@ var (
 	ErrExists   = errors.New("a script of that name exists")
 	ErrFull     = errors.New("automation's records are full")
 	ErrInvalid  = errors.New("not valid")
+	// ErrOwnWork is a person approving a version they wrote or submitted.
+	ErrOwnWork = errors.New("someone else must approve it")
 )
 
 // NameRE is a script's name.
@@ -73,17 +75,37 @@ type Approval struct {
 	At time.Time `json:"at"`
 }
 
-// Version is one immutable, hashed text of a script.
+// Version is one hashed text of a script. A draft changes as it is saved;
+// submitted, it never changes again.
 type Version struct {
-	N         int        `json:"n"`
-	Text      string     `json:"text"`
-	Hash      string     `json:"hash"`
-	Header    Header     `json:"header"`
-	Findings  []Finding  `json:"findings"`
-	State     string     `json:"state"`
-	Author    Who        `json:"author"`
+	N        int       `json:"n"`
+	Text     string    `json:"text"`
+	Hash     string    `json:"hash"`
+	Header   Header    `json:"header"`
+	Findings []Finding `json:"findings"`
+	State    string    `json:"state"`
+	Author   Who       `json:"author"`
+	// Editors are the others who saved this draft.
+	Editors   []Who      `json:"editors,omitempty"`
 	Created   time.Time  `json:"created"`
+	Submitted *Approval  `json:"submitted,omitempty"`
 	Approvals []Approval `json:"approvals,omitempty"`
+	// Revoked are the people who took its approvals back, and when.
+	Revoked []Approval `json:"revoked,omitempty"`
+}
+
+// Involved says whether a person wrote or submitted the version, which
+// keeps them from approving it.
+func (v Version) Involved(w Who) bool {
+	if w.Same(v.Author) || (v.Submitted != nil && w.Same(v.Submitted.By)) {
+		return true
+	}
+	for _, e := range v.Editors {
+		if w.Same(e) {
+			return true
+		}
+	}
+	return false
 }
 
 // Script is a script and its versions, oldest first.
@@ -123,32 +145,67 @@ func (s Script) Version(n int) (Version, bool) {
 	return Version{}, false
 }
 
-// Runnable is the version a run uses (AU-05): the newest approved, with a
-// second approval by someone other than the author where the cluster has
-// the two-person rule.
-func Runnable(s Script, twoPerson bool) (Version, error) {
+// Runnable is the newest version approved by someone who did not write or
+// submit it (AU-05).
+func Runnable(s Script) (Version, error) {
 	v, ok := s.Approved()
 	if !ok {
-		return Version{}, fmt.Errorf("%s has no approved version: submit one and have it approved, or run a dry run", s.Name)
+		return Version{}, fmt.Errorf("%s has no approved version: submit one and have it approved", s.Name)
 	}
-	if twoPerson && !TwoApprovals(v) {
-		return Version{}, fmt.Errorf("%s v%d needs a second approval, by someone other than its author, for a cluster with the two-person rule", s.Name, v.N)
+	return v, approvedBySomeoneElse(s, v)
+}
+
+func approvedBySomeoneElse(s Script, v Version) error {
+	for _, a := range v.Approvals {
+		if !v.Involved(a.By) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s v%d was approved only by the person who wrote it: someone else must approve it", s.Name, v.N)
+}
+
+// RunVersion is the version a run uses: on a production cluster any
+// approved version, the newest when n is 0; elsewhere any version, the
+// latest when n is 0 (asked November 1 and 2, 2026).
+func RunVersion(s Script, production bool, n int) (Version, error) {
+	if production {
+		if n == 0 {
+			return Runnable(s)
+		}
+		v, ok := s.Version(n)
+		if !ok {
+			return Version{}, fmt.Errorf("%w: %s has no v%d", ErrNotFound, s.Name, n)
+		}
+		if v.State != StateApproved {
+			return Version{}, fmt.Errorf("%s v%d is %s: a production cluster runs approved versions only", s.Name, n, v.State)
+		}
+		return v, approvedBySomeoneElse(s, v)
+	}
+	v, ok := s.Latest(), len(s.Versions) > 0
+	if n > 0 {
+		v, ok = s.Version(n)
+	}
+	if !ok {
+		return Version{}, fmt.Errorf("%w: %s has no v%d", ErrNotFound, s.Name, n)
 	}
 	return v, nil
 }
 
-// TwoApprovals says whether a version has two approvals, one of them not
-// its author's.
-func TwoApprovals(v Version) bool {
-	if len(v.Approvals) < 2 {
-		return false
+// DryRunnable is the version a dry run uses: version n, or the latest when
+// n is 0. A script that does not declare dry-run has no dry run: it would
+// not read DRY_RUN, so it would try to do its work.
+func DryRunnable(s Script, n int) (Version, error) {
+	v, ok := s.Latest(), true
+	if n > 0 {
+		v, ok = s.Version(n)
 	}
-	for _, a := range v.Approvals {
-		if !a.By.Same(v.Author) {
-			return true
-		}
+	if !ok {
+		return Version{}, fmt.Errorf("%w: %s has no v%d", ErrNotFound, s.Name, n)
 	}
-	return false
+	if !v.Header.DryRun {
+		return Version{}, fmt.Errorf("%w: %s v%d does not declare dry-run yes, so it has no dry run", ErrInvalid, s.Name, v.N)
+	}
+	return v, nil
 }
 
 // Hash is a script text's SHA-256.
@@ -260,9 +317,9 @@ func (st *Store) Script(ctx context.Context, name string) (Script, bool, error) 
 	return s, ok, nil
 }
 
-// Save creates a script, or saves its text and group (AU-02): a changed
-// text is a new draft version, checked; the same text changes only the
-// group.
+// Save creates a script, or saves its text and group (AU-02). A changed
+// text is checked and goes into the draft; with no draft, it starts the
+// next version. The same text changes only the group.
 func (st *Store) Save(ctx context.Context, name, group, text string, who Who, create bool) (Script, error) {
 	if !NameRE.MatchString(name) {
 		return Script{}, fmt.Errorf("%w: a script's name is lower-case letters, digits and dashes, at most 63", ErrInvalid)
@@ -300,7 +357,15 @@ func (st *Store) Save(ctx context.Context, name, group, text string, who Who, cr
 		hash := Hash(text)
 		if s.Latest().Hash != hash {
 			h, fs := Check(text)
-			s.Versions = append(s.Versions, Version{N: s.Latest().N + 1, Text: text, Hash: hash, Header: h, Findings: fs, State: StateDraft, Author: who, Created: now})
+			if last := len(s.Versions) - 1; last >= 0 && s.Versions[last].State == StateDraft {
+				d := &s.Versions[last]
+				d.Text, d.Hash, d.Header, d.Findings = text, hash, h, fs
+				if !d.Involved(who) {
+					d.Editors = append(d.Editors, who)
+				}
+			} else {
+				s.Versions = append(s.Versions, Version{N: s.Latest().N + 1, Text: text, Hash: hash, Header: h, Findings: fs, State: StateDraft, Author: who, Created: now})
+			}
 			s.Updated = now
 		}
 		rec.Scripts[name] = s
@@ -345,8 +410,9 @@ func prune(rec *scriptsRecord, limit int) {
 	}
 }
 
-// Submit puts a draft version in review (AU-05); a version with errors
-// cannot be.
+// Submit puts a draft version in review (AU-05), which freezes it and
+// supersedes an older version still in review; a version with errors
+// cannot be submitted.
 func (st *Store) Submit(ctx context.Context, name string, n int, who Who) (Script, error) {
 	return st.edit(ctx, name, n, func(s *Script, v *Version) error {
 		if v.State != StateDraft {
@@ -356,17 +422,27 @@ func (st *Store) Submit(ctx context.Context, name string, n int, who Who) (Scrip
 			return fmt.Errorf("%w: v%d has errors to fix first", ErrInvalid, v.N)
 		}
 		v.State = StateReview
+		v.Submitted = &Approval{By: who, At: st.now().UTC()}
+		for i := range s.Versions {
+			if s.Versions[i].N != v.N && s.Versions[i].State == StateReview {
+				s.Versions[i].State = StateSuperseded
+			}
+		}
 		return nil
 	})
 }
 
-// Approve records a person's approval of a version in review, or a second
-// approval of an approved one (AU-05). The first approval makes it the
-// approved version and supersedes the one before.
+// Approve records a person's approval of a version in review, or a further
+// approval of an approved one (AU-05). Whoever wrote or submitted a version
+// cannot approve it. Versions approved before stay approved, so a run can
+// still choose them, until someone revokes them.
 func (st *Store) Approve(ctx context.Context, name string, n int, who Who) (Script, error) {
 	return st.edit(ctx, name, n, func(s *Script, v *Version) error {
 		if v.State != StateReview && v.State != StateApproved {
 			return fmt.Errorf("%w: v%d is %s: submit it for review first", ErrInvalid, v.N, v.State)
+		}
+		if v.Involved(who) {
+			return fmt.Errorf("%w: you wrote or submitted v%d", ErrOwnWork, v.N)
 		}
 		for _, a := range v.Approvals {
 			if a.By.Same(who) {
@@ -376,12 +452,22 @@ func (st *Store) Approve(ctx context.Context, name string, n int, who Who) (Scri
 		v.Approvals = append(v.Approvals, Approval{By: who, At: st.now().UTC()})
 		if v.State == StateReview {
 			v.State = StateApproved
-			for i := range s.Versions {
-				if s.Versions[i].N != v.N && s.Versions[i].State == StateApproved {
-					s.Versions[i].State = StateSuperseded
-				}
-			}
 		}
+		return nil
+	})
+}
+
+// Revoke takes a version's approvals back: any SuperAdmin may, for any
+// approved version, their own approval or not. It goes back to review, so
+// nothing runs it on production until someone approves it again.
+func (st *Store) Revoke(ctx context.Context, name string, n int, who Who) (Script, error) {
+	return st.edit(ctx, name, n, func(s *Script, v *Version) error {
+		if v.State != StateApproved {
+			return fmt.Errorf("%w: v%d is %s, not approved", ErrInvalid, v.N, v.State)
+		}
+		v.Approvals = nil
+		v.Revoked = append(v.Revoked, Approval{By: who, At: st.now().UTC()})
+		v.State = StateReview
 		return nil
 	})
 }

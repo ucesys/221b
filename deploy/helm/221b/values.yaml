@@ -523,8 +523,10 @@ service:
   # clusters without a load balancer controller: list every node's address
   # to reach the console on each node at the port above.
   externalIPs: []
-  # Cluster: every node forwards to the console. Local: only the node
-  # running it answers, but the console sees the client's real address.
+  # Cluster: every node forwards to the console, and the Audit log's From
+  # and the per-address sign-in limit see the node's address, not the
+  # client's. Local: only a node running the console answers, and it sees
+  # the client's real address.
   externalTrafficPolicy: Cluster
   annotations: {}
 

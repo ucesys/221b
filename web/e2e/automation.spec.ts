@@ -1,0 +1,121 @@
+import { expect, test } from './test'
+
+// The Automation area (AU-01) and a script from its first save to review
+// (AU-02, AU-05).
+test('Automation is an area of its own, and Nodes stays in the area it was opened from', async ({ page }) => {
+  await page.goto('/#/alerts')
+  const views = page.getByRole('navigation', { name: 'Views' })
+  await expect(views.getByRole('link', { name: 'Scripts' })).toHaveCount(0)
+  await page.getByTestId('area-automation').click()
+  await expect(page.getByTestId('area-automation')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page).toHaveURL(/#\/scripts/)
+  for (const name of ['Nodes', 'Scripts', 'Executions', 'Parameters']) await expect(views.getByRole('link', { name, exact: true })).toBeVisible()
+  await views.getByRole('link', { name: 'Nodes', exact: true }).click()
+  await expect(page).toHaveURL(/#\/nodes/)
+  await expect(page.getByTestId('area-automation')).toHaveAttribute('aria-pressed', 'true')
+  await expect(views.getByRole('link', { name: 'Scripts' })).toBeVisible()
+  await page.getByTestId('area-kubernetes').click()
+  await expect(page).toHaveURL(/#\/alerts/)
+  await expect(views.getByRole('link', { name: 'Scripts' })).toHaveCount(0)
+  await views.getByRole('link', { name: 'Nodes', exact: true }).click()
+  await expect(page.getByTestId('area-kubernetes')).toHaveAttribute('aria-pressed', 'true')
+  await page.goto('/#/automation/runs')
+  await expect(views.getByRole('link', { name: 'Executions' })).toHaveAttribute('aria-current', 'page')
+})
+
+test('groups filter one Scripts table from the left, as fleets do on Nodes', async ({ page }) => {
+  const stamp = Date.now()
+  const names = [`e2e-a-${stamp}`, `e2e-b-${stamp}`]
+  await page.goto('/#/scripts')
+  for (const [i, name] of names.entries()) {
+    await page.getByTestId('script-new').click()
+    await page.getByTestId('script-name').fill(name)
+    await page.getByTestId('script-group').fill(`group ${i}, ${stamp}`)
+    await page.getByTestId('script-save').click()
+    await expect(page.getByTestId('script-submit')).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('script-drawer')).toHaveCount(0)
+  }
+  const pane = page.getByTestId('script-groups')
+  const row = (name: string) => page.locator(`[data-testid=script-row][data-name=${name}]`)
+  await pane.locator('.rk-fl', { hasText: `group 0, ${stamp}` }).getByTestId('script-group-pick').click()
+  await expect(row(names[0]!)).toBeVisible()
+  await expect(row(names[1]!)).toHaveCount(0)
+  await pane.locator('.rk-fl', { hasText: `group 1, ${stamp}` }).getByTestId('script-group-check').check()
+  await expect(row(names[1]!)).toBeVisible()
+  await expect(page.locator('table')).toHaveCount(1)
+  await pane.getByTestId('script-group-all').click()
+  for (const name of names) {
+    await row(name).getByTestId('script-open').click()
+    await page.getByTestId('script-delete').click()
+    await page.getByTestId('confirm-ok').click()
+    await expect(page.getByTestId('script-drawer')).toHaveCount(0)
+  }
+})
+
+test('the Run dialog keeps a large fleet in a list of its own size', async ({ page }) => {
+  const name = `e2e-${Date.now()}`
+  await page.goto('/#/scripts')
+  await page.getByTestId('script-new').click()
+  await page.getByTestId('script-name').fill(name)
+  await page.getByTestId('script-save').click()
+  await page.getByTestId('script-drawer-run').click()
+  await page.getByTestId('run-fleet').selectOption('_all')
+  const list = page.getByTestId('run-nodes')
+  await expect(list.getByRole('checkbox')).toHaveCount(40)
+  const box = await list.locator('..').boundingBox()
+  expect(box!.height).toBeLessThanOrEqual(190)
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('run-dialog')).toHaveCount(0)
+  await page.getByTestId('script-delete').click()
+  await page.getByTestId('confirm-ok').click()
+  await expect(page.getByTestId('script-drawer')).toHaveCount(0)
+})
+
+test('the script that reserves resources passes the checks and can go to review', async ({ page }) => {
+  await page.goto('/#/scripts')
+  await page.getByTestId('script-new').click()
+  await page.getByTestId('script-template').selectOption('reserve')
+  const name = `e2e-reserve-${Date.now()}`
+  await page.getByTestId('script-name').fill(name)
+  await page.getByTestId('script-save').click()
+  await expect(page.getByTestId('script-submit')).toBeEnabled()
+  await expect(page.getByTestId('script-header')).toContainText('SYSTEM_RESERVED_MEMORY')
+  await page.getByTestId('script-delete').click()
+  await page.getByTestId('confirm-ok').click()
+  await expect(page.getByTestId('script-drawer')).toHaveCount(0)
+})
+
+test('a node\'s details show what its Kubernetes agent keeps from pods, read-only', async ({ page }) => {
+  await page.goto('/#/nodes')
+  await page.locator('[data-node]').first().focus()
+  await page.keyboard.press('Enter')
+  const agent = page.getByTestId('node-agent')
+  await expect(agent).toContainText('Memory reserved')
+  await expect(agent).toContainText('System reserved')
+  await expect(agent).toContainText('memory=')
+  await expect(agent).toContainText('pods')
+  await expect(agent.locator('input, select, textarea, button')).toHaveCount(0)
+})
+
+test('a draft keeps its version through its saves, and its author cannot approve it', async ({ page }) => {
+  const name = `e2e-${Date.now()}`
+  await page.goto('/#/scripts')
+  await page.getByTestId('script-new').click()
+  const box = page.getByTestId('script-name')
+  await box.click()
+  await page.keyboard.type(name)
+  await expect(box).toHaveValue(name)
+  await page.getByTestId('script-save').click()
+  await expect(page.getByTestId('script-save')).toHaveText('Save draft')
+  const text = page.getByTestId('script-text')
+  await text.fill((await text.inputValue()) + 'echo more\n')
+  await page.getByTestId('script-save').click()
+  await expect(page.getByTestId('script-submit')).toHaveText('Submit v1 for review')
+  await page.getByTestId('script-submit').click()
+  await expect(page.getByTestId('script-approve-wait')).toBeVisible()
+  await expect(page.getByTestId('script-approve')).toHaveCount(0)
+  await page.getByTestId('script-delete').click()
+  await page.getByTestId('confirm-ok').click()
+  await expect(page.getByTestId('script-drawer')).toHaveCount(0)
+})

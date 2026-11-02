@@ -20,7 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/yaml"
 
-	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/scrub"
 )
 
 // KeySize is one key of a Secret or ConfigMap and the size of its value.
@@ -390,13 +390,13 @@ func parseHelmTime(s string) *time.Time {
 }
 
 // helmCredential matches the value names that hold credentials or key
-// material in Helm values, beyond what sherlock.SecretName takes for a
+// material in Helm values, beyond what scrub.SecretName takes for a
 // secret anywhere.
 var helmCredential = regexp.MustCompile(`(?i)(private|cert|license)`)
 
 // credentialKey says whether a value's name usually holds a credential.
 func credentialKey(name string) bool {
-	return sherlock.SecretName(name) || helmCredential.MatchString(name)
+	return scrub.SecretName(name) || helmCredential.MatchString(name)
 }
 
 // MaskedValue replaces a credential in masked values.
@@ -459,7 +459,7 @@ func (m *masker) mask(v any, path string) any {
 		}
 		return out
 	case string:
-		if strings.Contains(x, "PRIVATE KEY-----") || sherlock.Scrub(x) != x {
+		if strings.Contains(x, "PRIVATE KEY-----") || scrub.Text(x) != x {
 			return m.hide(path, x)
 		}
 		return x
@@ -521,7 +521,7 @@ func MaskNotes(notes string, config, defaults map[string]any, manifest string) s
 	}
 	known := append(m.values, manifestSecrets(manifest)...)
 	sort.Slice(known, func(i, j int) bool { return len(known[i]) > len(known[j]) })
-	out := sherlock.Scrub(notes)
+	out := scrub.Text(notes)
 	for _, v := range known {
 		if len(v) < shortCredential {
 			if v != "" && wholeWord(out, v) {

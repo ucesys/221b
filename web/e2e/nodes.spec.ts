@@ -184,7 +184,7 @@ test('hides taints, zone, labels and kubelet until picked, and remembers the cho
   await page.keyboard.press('Escape')
   await expect(page.getByRole('group', { name: 'Columns to show' })).toHaveCount(0)
   await expect(menuButton).toBeFocused()
-  await expect(menuButton).toContainText('12/15')
+  await expect(menuButton).toContainText('13/16')
 
   await page.reload()
   await expect(page.locator('.rk-gh [data-col="name"]')).toBeVisible()
@@ -270,7 +270,7 @@ test('exports what is on screen as CSV, with the columns shown', async ({ page }
   const text = readFileSync(await download.path(), 'utf8')
   expect(text.startsWith('\uFEFF')).toBe(true)
   const lines = text.slice(1).split('\r\n').filter(Boolean)
-  expect(lines[0]).toBe('Node,Role,Status,CPU requested (cores),CPU requested %,CPU in use (cores),CPU allocatable (cores),CPU free (cores),Memory requested (GiB),Memory requested %,Memory in use (GiB),Memory allocatable (GiB),Memory free (GiB),Pods,Pod capacity,Zone,Joined')
+  expect(lines[0]).toBe('Node,Role,Status,CPU requested (cores),CPU requested %,CPU in use (cores),CPU allocatable (cores),CPU free (cores),Memory requested (GiB),Memory requested %,Memory in use (GiB),Memory allocatable (GiB),Memory free (GiB),Pods,Pod capacity,CPU reserved (cores),Memory reserved (GiB),Zone,Joined')
   expect(lines.length - 1).toBe(names.length)
   expect(lines.slice(1).map((l) => l.split(',')[0])).toEqual(names)
 })
@@ -290,7 +290,7 @@ test('opens node details with Enter and closes them with Escape', async ({ page,
 
   // Status first, then taints and labels, the resources, then the system (the Actions section went on October 30, 2026: the Tools menu has cordon and drain).
   const headings = await panel.locator('h3').allTextContents()
-  expect(headings.filter((h) => h !== 'Problems')).toEqual(['Status', 'Taints', 'Labels', 'CPU', 'Memory', 'Pods', 'System'])
+  expect(headings.filter((h) => h !== 'Problems')).toEqual(['Status', 'Kubernetes agent resources', 'Taints', 'Labels', 'CPU', 'Memory', 'Pods', 'System'])
   await expect(panel.getByTestId('node-status')).toContainText(target.status)
   await expect(panel.getByTestId('node-status')).toContainText('worker')
   await expect(panel.getByRole('region', { name: 'Taints' })).toBeVisible()

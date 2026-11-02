@@ -27,6 +27,20 @@ async function putFleets(page: Page, fleets: Fleet[]): Promise<number> {
 
 const row = (page: Page, id: string) => page.locator(`[data-fleet="${id}"]`)
 
+test('a fleet shows what its nodes keep from pods, nodes that differ apart (AU-18)', async ({ page }) => {
+  await open(page)
+  expect(await putFleets(page, [
+    { id: 'e2e-workers', name: 'Workers', color: 0, labels: ['node-role.kubernetes.io/worker='], taints: [] },
+    { id: 'e2e-cp', name: 'Control plane', color: 1, labels: ['node-role.kubernetes.io/control-plane='], taints: [] },
+  ])).toBe(200)
+  await expect(row(page, 'e2e-cp').getByTestId('fleet-reserved')).toContainText('per node')
+  await expect(row(page, 'e2e-workers').getByTestId('fleet-reserved')).toContainText('Reserved differs')
+  await row(page, 'e2e-workers').getByTestId('fleet-pick').click()
+  await expect(page.getByTestId('fleet-agent-group')).toHaveCount(2)
+  await expect(page.getByTestId('fleet-agent').locator('input, select, button')).toHaveCount(0)
+  expect(await putFleets(page, [])).toBe(200)
+})
+
 test.beforeEach(async ({ page }) => {
   await open(page)
   expect(await putFleets(page, [])).toBe(200)

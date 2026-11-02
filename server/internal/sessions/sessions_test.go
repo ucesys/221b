@@ -689,8 +689,11 @@ func TestCommandKeepsItsOutput(t *testing.T) {
 	if string(m.Output(s.ID)) != "hello\n" {
 		t.Fatalf("output %q", m.Output(s.ID))
 	}
-	if !strings.Contains(buf.text(), `output=\"hello\\n\"`) {
-		t.Fatalf("the audit record has no output: %s", buf.text())
+	for end := time.Now().Add(2 * time.Second); !strings.Contains(buf.text(), "session.end") && time.Now().Before(end); {
+		time.Sleep(time.Millisecond)
+	}
+	if !strings.Contains(buf.text(), `output_bytes=6`) || strings.Contains(buf.text(), "hello\\n") {
+		t.Fatalf("the audit record should give the size of the output and not the output: %s", buf.text())
 	}
 }
 
@@ -1200,8 +1203,11 @@ func TestEndingACommandThatPrintsIsNoRace(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitState(t, m, s.ID, StateEnded)
-	if !strings.Contains(buf.text(), "line of output") {
-		t.Fatalf("the audit record has no output: %s", buf.text())
+	for end := time.Now().Add(2 * time.Second); !strings.Contains(buf.text(), "session.end") && time.Now().Before(end); {
+		time.Sleep(time.Millisecond)
+	}
+	if !strings.Contains(buf.text(), "output_bytes=") || strings.Contains(buf.text(), "line of output") {
+		t.Fatalf("the audit record should give the size of the output and not the output: %s", buf.text())
 	}
 }
 

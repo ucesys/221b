@@ -26,6 +26,23 @@ df -P "$MOUNT"
 echo '{"changed": false, "msg": "fine"}'
 `
 
+// The new-script template writes its header with spaces and colons.
+func TestHeaderSpacesAndColonsAreOptional(t *testing.T) {
+	for _, text := range []string{
+		"# 221b:describe Say hello\n# 221b:param NAME required who\n# 221b:privilege none\n# 221b:dry-run yes\necho \"$DRY_RUN\"\n",
+		"# 221b: describe: Say hello\n# 221b: param: NAME required who\n# 221b: privilege: none\n# 221b: dry-run: yes\necho \"$DRY_RUN\"\n",
+		"#221b:  describe  Say hello\n#221b:param: NAME required who\n#221b: privilege none\n# 221b:dry-run: yes\necho \"$DRY_RUN\"\n",
+	} {
+		h, fs := ParseHeader(text)
+		if len(fs) != 0 {
+			t.Errorf("%q: %+v", text, fs)
+		}
+		if h.Describe != "Say hello" || h.Privilege != PrivilegeNone || !h.DryRun || len(h.Params) != 1 || h.Params[0].Name != "NAME" {
+			t.Errorf("%q: %+v", text, h)
+		}
+	}
+}
+
 func TestParseHeader(t *testing.T) {
 	h, fs := ParseHeader(goodScript)
 	if HasErrors(fs) {
@@ -119,43 +136,104 @@ func TestVersionsAndApproval(t *testing.T) {
 	if _, err := st.Save(ctx, "Bad Name", "", goodScript, ann, true); !errors.Is(err, ErrInvalid) {
 		t.Errorf("bad name: %v", err)
 	}
-	if _, err := Runnable(s, false); err == nil {
+	if _, err := Runnable(s); err == nil {
 		t.Error("a draft is runnable")
 	}
-	if _, err := st.Approve(ctx, "disk-report", 1, ann); err == nil {
+	// Saves stay in the draft, until it is submitted.
+	s, err = st.Save(ctx, "disk-report", "", goodScript+"echo one\n", ann, false)
+	if err != nil || len(s.Versions) != 1 || s.Latest().N != 1 || !strings.Contains(s.Latest().Text, "echo one") {
+		t.Fatalf("a save of a draft: %+v %v", s, err)
+	}
+	if _, err := st.Approve(ctx, "disk-report", 1, bob); err == nil {
 		t.Error("a draft was approved without review")
 	}
 	if _, err := st.Submit(ctx, "disk-report", 1, ann); err != nil {
 		t.Fatal(err)
 	}
-	if s, err = st.Approve(ctx, "disk-report", 1, ann); err != nil || s.Latest().State != StateApproved {
+	// Whoever wrote it cannot approve it.
+	if _, err := st.Approve(ctx, "disk-report", 1, ann); !errors.Is(err, ErrOwnWork) {
+		t.Fatalf("the author approved: %v", err)
+	}
+	if s, err = st.Approve(ctx, "disk-report", 1, bob); err != nil || s.Latest().State != StateApproved {
 		t.Fatalf("approve: %+v %v", s, err)
 	}
-	if _, err := st.Approve(ctx, "disk-report", 1, ann); err == nil {
+	if _, err := st.Approve(ctx, "disk-report", 1, bob); err == nil {
 		t.Error("the same person approved twice")
 	}
-	if _, err := Runnable(s, false); err != nil {
-		t.Errorf("approved once, off a two-person cluster: %v", err)
+	if v, err := Runnable(s); err != nil || v.N != 1 {
+		t.Errorf("approved by someone else: %v %v", v.N, err)
 	}
-	if _, err := Runnable(s, true); err == nil {
-		t.Error("one approval passed the two-person rule")
-	}
-	s, _ = st.Approve(ctx, "disk-report", 1, bob)
-	if v, err := Runnable(s, true); err != nil || v.N != 1 {
-		t.Errorf("two approvals: %v %v", v.N, err)
-	}
-	// A new version, approved, supersedes the first.
-	s, _ = st.Save(ctx, "disk-report", "", goodScript+"echo more\n", bob, false)
+	// A version once submitted never changes: the next save starts v2.
+	s, _ = st.Save(ctx, "disk-report", "", goodScript+"echo two\n", bob, false)
 	if s.Latest().N != 2 {
 		t.Fatalf("v2: %+v", s.Latest())
 	}
-	st.Submit(ctx, "disk-report", 2, bob)
-	s, _ = st.Approve(ctx, "disk-report", 2, bob)
-	if v1, _ := s.Version(1); v1.State != StateSuperseded {
+	if v1, _ := s.Version(1); strings.Contains(v1.Text, "echo two") {
+		t.Error("an approved version changed")
+	}
+	// Someone who saved a draft cannot approve it either, nor can the one
+	// who submitted it.
+	cid := Who{Name: "Cid", User: "cid"}
+	s, _ = st.Save(ctx, "disk-report", "", goodScript+"echo three\n", ann, false)
+	if s.Latest().N != 2 {
+		t.Fatalf("a second person's save: %+v", s.Latest())
+	}
+	st.Submit(ctx, "disk-report", 2, cid)
+	for _, who := range []Who{ann, bob, cid} {
+		if _, err := st.Approve(ctx, "disk-report", 2, who); !errors.Is(err, ErrOwnWork) {
+			t.Errorf("%s approved: %v", who.Name, err)
+		}
+	}
+	s, err = st.Approve(ctx, "disk-report", 2, Who{Name: "Dee", User: "dee"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v1, _ := s.Version(1); v1.State != StateApproved {
 		t.Errorf("v1 is %s", v1.State)
 	}
-	if _, err := Runnable(s, true); err == nil {
-		t.Error("an author's own single approval passed the two-person rule")
+	// A newer submission replaces one still in review.
+	s, _ = st.Save(ctx, "disk-report", "", goodScript+"echo four\n", ann, false)
+	st.Submit(ctx, "disk-report", 3, ann)
+	s, _ = st.Save(ctx, "disk-report", "", goodScript+"echo five\n", ann, false)
+	s, _ = st.Submit(ctx, "disk-report", 4, ann)
+	if v3, _ := s.Version(3); v3.State != StateSuperseded {
+		t.Errorf("v3 is %s", v3.State)
+	}
+	// An approval by the author alone, from before the rule, runs nothing.
+	self := Script{Name: "old", Versions: []Version{{N: 1, State: StateApproved, Author: ann, Approvals: []Approval{{By: ann}}}}}
+	if _, err := Runnable(self); err == nil {
+		t.Error("a version only its author approved is runnable")
+	}
+	// Off production the latest version runs, approved or not; on
+	// production only an approved one does.
+	draft := Script{Name: "new", Versions: []Version{{N: 1, State: StateDraft, Author: ann}, {N: 2, State: StateDraft, Author: ann}}}
+	if v, err := RunVersion(draft, false, 0); err != nil || v.N != 2 {
+		t.Errorf("off production: %v %v", v.N, err)
+	}
+	if v, err := RunVersion(draft, false, 1); err != nil || v.N != 1 {
+		t.Errorf("off production, the version seen: %v %v", v.N, err)
+	}
+	if _, err := RunVersion(draft, false, 9); !errors.Is(err, ErrNotFound) {
+		t.Errorf("no such version: %v", err)
+	}
+	if _, err := RunVersion(Script{Name: "empty"}, false, 0); !errors.Is(err, ErrNotFound) {
+		t.Errorf("no version at all: %v", err)
+	}
+	if _, err := RunVersion(draft, true, 2); err == nil {
+		t.Error("a draft ran on production")
+	}
+	if _, err := RunVersion(self, true, 0); err == nil {
+		t.Error("a version only its author approved ran on production")
+	}
+	// A script that does not declare a dry run has none.
+	if _, err := DryRunnable(Script{Name: "x", Versions: []Version{{N: 1}}}, 0); !errors.Is(err, ErrInvalid) {
+		t.Errorf("no dry run declared: %v", err)
+	}
+	if v, err := DryRunnable(Script{Versions: []Version{{N: 1, Header: Header{DryRun: true}}}}, 1); err != nil || v.N != 1 {
+		t.Errorf("a dry run: %v %v", v.N, err)
+	}
+	if _, err := DryRunnable(Script{Versions: []Version{{N: 1}}}, 9); !errors.Is(err, ErrNotFound) {
+		t.Errorf("no such version: %v", err)
 	}
 	// A version with errors cannot be submitted.
 	s, _ = st.Save(ctx, "disk-report", "", "echo no header\n", bob, false)
@@ -461,5 +539,94 @@ func TestCommandQuotes(t *testing.T) {
 	c := Command(map[string]string{"A": "it's", "B": "$(rm -rf /)"})
 	if c != `env A='it'\''s' B='$(rm -rf /)' sh -s` {
 		t.Errorf("%s", c)
+	}
+}
+
+// A new version does not take the approved one away: it runs until another
+// is approved, on production and, when asked for, anywhere else.
+func TestAnApprovedVersionRunsUntilAnotherIsApproved(t *testing.T) {
+	approved := Version{N: 2, State: StateApproved, Author: Who{Name: "Ann"}, Approvals: []Approval{{By: Who{Name: "Sam"}}}}
+	for _, state := range []string{StateDraft, StateReview} {
+		s := Script{Name: "s", Versions: []Version{approved, {N: 3, State: state, Author: Who{Name: "Ann"}}}}
+		if v, err := RunVersion(s, true, 0); err != nil || v.N != 2 {
+			t.Fatalf("%s on production: v%d, %v", state, v.N, err)
+		}
+		if v, err := RunVersion(s, false, 2); err != nil || v.N != 2 {
+			t.Fatalf("%s elsewhere, v2 asked for: v%d, %v", state, v.N, err)
+		}
+		if v, err := RunVersion(s, false, 3); err != nil || v.N != 3 {
+			t.Fatalf("%s elsewhere, v3 asked for: v%d, %v", state, v.N, err)
+		}
+	}
+}
+
+func TestApprovedVersionsStayApprovedAndAnyCanBeChosenOnProduction(t *testing.T) {
+	ann, sam := Who{Name: "Ann"}, Who{Name: "Sam"}
+	ok := []Approval{{By: sam}}
+	s := Script{Name: "s", Versions: []Version{
+		{N: 1, State: StateApproved, Author: ann, Approvals: ok},
+		{N: 2, State: StateSuperseded, Author: ann, Approvals: ok},
+		{N: 3, State: StateApproved, Author: ann, Approvals: []Approval{{By: ann}}},
+		{N: 4, State: StateApproved, Author: ann, Approvals: ok},
+		{N: 5, State: StateDraft, Author: ann},
+	}}
+	if v, err := RunVersion(s, true, 1); err != nil || v.N != 1 {
+		t.Fatalf("v1: v%d, %v", v.N, err)
+	}
+	if v, err := RunVersion(s, true, 0); err != nil || v.N != 4 {
+		t.Fatalf("no version asked for: v%d, %v", v.N, err)
+	}
+	for _, n := range []int{2, 3, 5, 9} {
+		if _, err := RunVersion(s, true, n); err == nil {
+			t.Errorf("v%d ran on production", n)
+		}
+	}
+}
+
+func TestAnySuperAdminRevokesAnApprovalAndItStopsRunning(t *testing.T) {
+	ctx := context.Background()
+	st := NewStore(&kv.Memory{}, time.Now)
+	ann, sam, pat := Who{Name: "Ann"}, Who{Name: "Sam"}, Who{Name: "Pat"}
+	text := "#!/bin/sh\n# 221b:describe x\n# 221b:privilege none\necho one\n"
+	if _, err := st.Save(ctx, "s", "", text, ann, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Submit(ctx, "s", 1, ann); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Approve(ctx, "s", 1, sam); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Save(ctx, "s", "", text+"echo two\n", ann, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Submit(ctx, "s", 2, ann); err != nil {
+		t.Fatal(err)
+	}
+	s, err := st.Approve(ctx, "s", 2, sam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := s.Version(1); v.State != StateApproved {
+		t.Fatalf("approving v2 left v1 %s", v.State)
+	}
+	if s, err = st.Revoke(ctx, "s", 2, pat); err != nil {
+		t.Fatal(err)
+	}
+	v, _ := s.Version(2)
+	if v.State != StateReview || len(v.Approvals) != 0 || len(v.Revoked) != 1 || v.Revoked[0].By.Name != "Pat" {
+		t.Fatalf("after the revoke: %+v", v)
+	}
+	if _, err := RunVersion(s, true, 2); err == nil {
+		t.Fatal("a revoked version ran on production")
+	}
+	if got, err := RunVersion(s, true, 0); err != nil || got.N != 1 {
+		t.Fatalf("the newest still approved: v%d, %v", got.N, err)
+	}
+	if _, err := st.Revoke(ctx, "s", 2, pat); err == nil {
+		t.Fatal("revoked a version with nothing to revoke")
+	}
+	if s, err = st.Approve(ctx, "s", 2, sam); err != nil || s.Versions[1].State != StateApproved {
+		t.Fatalf("approving again: %v", err)
 	}
 }

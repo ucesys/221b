@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { fetchKubelet, type KubeletView } from '../api/fleets'
 import type { NodeRow, Tone } from '../api/types'
 import { clampPct, fmtAge, fmtTs, localTimes, nWord } from '../lib/format'
-import { effectTone, isSystemLabel, resourceSections, roleTag, taintNote, type ResourceSection } from '../lib/nodes'
-import { href } from '../lib/router'
+import { fCores, fMem } from '../lib/format'
+import { effectTone, isSystemLabel, reserved, resourceSections, roleTag, taintNote, type ResourceSection } from '../lib/nodes'
+import { href, useRoute } from '../lib/router'
 import { CloseIcon } from './Icons'
 import { ToolsButton } from './toolbox/ToolsMenu'
 import { CopyName } from './CopyName'
@@ -95,6 +97,62 @@ function Resource({ s }: { s: ResourceSection }) {
 }
 
 /** The details panel for one node. Changes to it go through Sherlock and Watson, not buttons here. */
+/** "cpu=4, memory=16Gi", or "none". */
+const settingText = (m?: Record<string, string>) =>
+  Object.entries(m ?? {})
+    .map(([k, v]) => `${k}=${v}`)
+    .join(', ') || 'none'
+
+/**
+ * What the Kubernetes agent keeps from pods, read-only: how much from the
+ * node itself, how from its kubelet. Scripts change it, in Automation.
+ */
+function AgentSection({ r }: { r: NodeRow }) {
+  const { cluster } = useRoute()
+  const [read, setRead] = useState<{ node: string; view: KubeletView } | null>(null)
+  const node = r.name
+  useEffect(() => {
+    let gone = false
+    fetchKubelet(cluster, node)
+      .then((view) => !gone && setRead({ node, view }))
+      .catch(() => !gone && setRead({ node, view: { note: 'The kubelet could not be read.' } }))
+    return () => {
+      gone = true
+    }
+  }, [cluster, node])
+  const view = read?.node === node ? read.view : null
+  const c = view?.config
+  const items: [string, string][] = [
+    ['CPU reserved', reserved(r.cpu) ? `${fCores(reserved(r.cpu))} of ${fCores(r.cpu.capacity)} cores` : 'none'],
+    ['Memory reserved', reserved(r.memory) ? `${fMem(reserved(r.memory))} of ${fMem(r.memory.capacity)}` : 'none'],
+    ...(c
+      ? ([
+          ['System reserved', settingText(c.systemReserved)],
+          ['Kubernetes reserved', settingText(c.kubeReserved)],
+          ...(c.reservedSystemCPUs ? [['Reserved CPUs', c.reservedSystemCPUs] as [string, string]] : []),
+          ['Eviction threshold', settingText(c.evictionHard)],
+          ['Enforced on', c.enforceNodeAllocatable?.join(', ') || 'none'],
+          ['Max pods', c.maxPods ? String(c.maxPods) : '—'],
+        ] as [string, string][])
+      : []),
+  ]
+  return (
+    <Section title="Kubernetes agent resources" label="Kubernetes agent resources">
+      <dl className="rk-kv" data-testid="node-agent">
+        {items.map(([k, v]) => (
+          <div key={k} style={{ display: 'contents' }}>
+            <dt>{k}</dt>
+            <dd className="rk-mono">{v}</dd>
+          </div>
+        ))}
+      </dl>
+      <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>
+        What the kubelet keeps from pods, read from the node{view?.note ? `; its settings are not shown: ${view.note}` : ''}. Read-only: a script in Automation changes it, and the agent restarts to take it.
+      </p>
+    </Section>
+  )
+}
+
 export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, onToast }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const [showSys, setShowSys] = useState(false)
@@ -201,6 +259,7 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
               ))}
             </div>
           </Section>
+          <AgentSection r={r} />
           {r.problems.length > 0 && (
             <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Problems">
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>

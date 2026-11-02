@@ -11,7 +11,9 @@ import { useSyncExternalStore } from "react";
 export type Tab =
   | "nodes"
   | "fleets"
-  | "automation"
+  | "scripts"
+  | "executions"
+  | "parameters"
   | "namespaces"
   | "pods"
   | "helm"
@@ -38,11 +40,21 @@ export const TABS: { id: Tab; label: string; tip: string }[] = [
     label: "Fleets",
     tip: "Groups of nodes by the labels and taints they share",
   },
-  // Phase 11 part 2 (AU-13): a SuperAdmin's, after Fleets.
+  // Phase 11 part 2 (AU-01, AU-13): the Automation area's, a SuperAdmin's.
   {
-    id: "automation",
-    label: "Automation",
-    tip: "Shell scripts, approved once per version, run on a fleet’s nodes over SSH",
+    id: "scripts",
+    label: "Scripts",
+    tip: "Shell scripts with a 221b header, their versions and approvals",
+  },
+  {
+    id: "executions",
+    label: "Executions",
+    tip: "Every run and dry run, newest first, with each node’s result",
+  },
+  {
+    id: "parameters",
+    label: "Parameters",
+    tip: "Values the scripts’ parameters take on this cluster’s fleets, and each fleet’s privilege ceiling",
   },
   {
     id: "namespaces",
@@ -86,6 +98,14 @@ export const TABS: { id: Tab; label: string; tip: string }[] = [
     tip: "Network policies, disruption budgets, quotas, Pod Security and admission webhooks",
   },
 ];
+
+/** The top bar's areas: Kubernetes, and Automation for a SuperAdmin (AU-01). */
+export type Area = "kubernetes" | "automation";
+
+/** Whether a tab is Automation's alone; Nodes is in both areas. */
+export function isAutomationTab(tab: Tab | null): boolean {
+  return tab === "scripts" || tab === "executions" || tab === "parameters";
+}
 
 /** The connection of the cluster the console was started against. */
 export const LOCAL = "local";
@@ -178,6 +198,17 @@ export function parseHash(hash: string): Route {
       path: [],
       params: new URLSearchParams(query),
     };
+  // #/automation is where the area's pages were before they were tabs.
+  if (first === "automation") {
+    const old = segs[1];
+    return {
+      cluster,
+      view: "tabs",
+      tab: old === "runs" ? "executions" : old === "params" ? "parameters" : "scripts",
+      path: [],
+      params: new URLSearchParams(query),
+    };
+  }
   const tab: Tab = TABS.some((t) => t.id === first)
     ? (first as Tab)
     : FIRST_TAB;

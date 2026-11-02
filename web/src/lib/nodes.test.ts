@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { controlPlane, row } from '../test/rows'
-import { facetMatch, facetText, nodeFacets, ownLabels, problemsCell, resourceSections, roleTag, taintShort } from './nodes'
+import { facetMatch, facetText, memoryMeter, nodeFacets, ownLabels, problemsCell, reserved, reservedText, resourceSections, roleTag, taintShort, usedPct } from './nodes'
 
 const GI = 1024 ** 3
 
@@ -73,13 +73,28 @@ describe('cells', () => {
 })
 
 describe('resource sections', () => {
+  it('counts in use against the machine, so software beside Kubernetes does not read as over 100%', () => {
+    const r = { ...rows[1]!, memory: { requested: 0, limits: 0, allocatable: 32 * GI, capacity: 64 * GI, used: 48 * GI } }
+    expect(usedPct(r.memory)).toBe(75)
+    expect(memoryMeter(r).usePct).toBe(75)
+    expect(resourceSections(r, true, '')[1]!.usePct).toBe(75)
+    expect(reserved(r.memory)).toBe(32 * GI)
+  })
+
+  it('says what a node keeps from pods', () => {
+    const one = (cpu: number, memory: number) => ({ cpu: { allocatable: 8000 - cpu, capacity: 8000 }, memory: { allocatable: 64 * GI - memory, capacity: 64 * GI } })
+    expect(reservedText(one(0, 0))).toBe('none')
+    expect(reservedText(one(2000, 16 * GI))).toBe('2 cores · 16Gi')
+    expect(reservedText(one(0, 16 * GI))).toBe('16Gi')
+  })
+
   it('lists allocatable, requested, free, in use and limits', () => {
     const [cpu, memory, pods] = resourceSections(rows[1]!, true, '')
     expect(cpu!.lines.map((l) => [l.k, l.v, l.sub])).toEqual([
       ['Allocatable', '16 cores', ''],
       ['Requested', '12', '75%'],
       ['Free to schedule', '4', '25%'],
-      ['In use', '9', '56%'],
+      ['In use', '9', '56% of the machine'],
       ['Limits', '16', '100%'],
     ])
     expect(memory!.lines[0]).toMatchObject({ k: 'Allocatable', v: '64Gi' })

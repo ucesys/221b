@@ -6,12 +6,21 @@ What changed in each release of 221B, for people who use it and people who insta
 
 ### Changed
 
+- **Automation** is an area of its own beside Kubernetes, with Nodes, Scripts, Executions and Parameters; Scripts are one table, filtered by groups on the left and by state, pending review among them. Saves stay in a draft's version, and a version is fixed when it is submitted. Whoever wrote or submitted a version cannot approve it. On production only an approved version runs; elsewhere a SuperAdmin may run the latest version unapproved. A script without `dry-run: yes` has no dry run. In the Run dialog, a fleet selects its own nodes and a change by hand makes a custom selection, no fleet's; rollouts are radio buttons, each saying what it does.
+- **What the Kubernetes agent keeps from pods** shows read-only per fleet and per node on Fleets, in a node's drawer with the kubelet's settings, on Parameters, and in an optional *Reserved* column on Nodes. A new *Reserve resources from Kubernetes* starting script changes it on RKE2 and k3s, with parameters, a dry run and a rollback.
+- Automation: a script's Versions tab has the versions on the left, the text on the right and a diff against any other version; a run's parameters stand at the top of its drawer; the rollout's numbers sit beside it; and a run can choose the approved version while a newer one waits.
 - **Picked nodes** on the Nodes page: a box beside each name, and a bar with *New fleet…* (a fleet of those names), *Add to fleet…* (a fleet of names they join) and *Pair for SSH…* (one card to approve, then one pairing session per node). - One pop-up menu at a time: opening a Tools menu, a release's or a revision's menu closes the one open before it, on every page.
 - *Node shell* is *K8S node shell* wherever the page names it, beside *SSH*.
 - The node drawer's *Actions* section (cordon, uncordon and drain as commands to copy or send to Watson) is gone: the node's Tools menu runs them.
 
 ### Fixed
 
+- The audit log takes credentials and host keys out of every record on its way in, for the page, the stream and the webhook, and cleans what it already kept. A one-command session's record gives the size of the output, not the output.
+- Administration › Audit log downloads through the Export menu every table has: Excel, CSV or JSON.
+- A node's *In use* is a share of the whole machine: metrics-server reads all of it, so with resources reserved for other software, a share of allocatable could pass 100% and look like an alert. Bars and the home page follow.
+- Typing a new script's name keeps focus in the box; no drawer takes focus from a field inside it.
+- Escape and Tab keep working in a drawer after its Save button disables itself, or after a click on its text.
+- A script's header reads the same with or without spaces after `221b:` and a colon after the key, as the new-script template writes it.
 - **Console.** A log line longer than 1 MiB is split into pieces and no longer ends a followed log. A pod failed as a whole (Evicted, OutOfcpu, NodeAffinity) shows red with its status message and raises an alert. Restarts and last restart count init containers and sidecars as `kubectl get pods` does. A Job that failed after some pods succeeded reads failed, and a Job between pods no longer flashes green. A volume claim no longer raises an alert because another volume's name contains its name. An Ingress using a generic Secret with `tls.crt` and `tls.key` shows its certificate. The rollout check matches ResourceQuotas scoped to a PriorityClass. A ServiceAccount whose name contains its namespace keeps its long-lived tokens on the Access tab. A CA certificate pasted while editing a connection is honoured on save and on Test.
 - **Large clusters.** Volume usage is read in its own time and kept when the read runs long, pods' CPU and memory no longer blank when a read runs out of time, and the Policies and Networks tabs no longer stall the console on namespaces with many pods and budgets or clusters with many Ingress routes.
 - **Audit.** Records for Secrets, namespaces and applications name the cluster, and refused or failed attempts are recorded as denied or failed, not ok. Stopping a queued command is recorded, and a stop is credited to the person who pressed it. The Audit log page's "kept in memory" notice shows again where there is no settings ConfigMap.

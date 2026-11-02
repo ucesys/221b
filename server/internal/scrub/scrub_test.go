@@ -1,9 +1,8 @@
-package sherlock
+package scrub
 
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 // Each credential form leaves the text, and what stands beside it stays.
@@ -32,7 +31,7 @@ func TestScrubRemovesEveryCredentialForm(t *testing.T) {
 		"a URL with no user name":        {"redis://:hunter2secret@redis:6379/0", "hunter2secret", "@redis:6379"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			out := Scrub(c.in)
+			out := Text(c.in)
 			if strings.Contains(out, c.gone) {
 				t.Errorf("%q kept %q: %q", c.in, c.gone, out)
 			}
@@ -51,7 +50,7 @@ func TestScrubLeavesOrdinaryTextAlone(t *testing.T) {
 		"mysql -h db -P3306 shop",
 		"GET https://example.com/a?b=c 200",
 	} {
-		if out := Scrub(s); out != s {
+		if out := Text(s); out != s {
 			t.Errorf("%q became %q", s, out)
 		}
 	}
@@ -72,7 +71,7 @@ func TestSecretNameTakesPassOnlyAsAWord(t *testing.T) {
 
 // A document's values are judged by their names wherever they stand.
 func TestScrubJSONJudgesValuesByTheirNames(t *testing.T) {
-	out := string(ScrubJSON([]byte(`{
+	out := string(JSON([]byte(`{
 		"env":[{"name":"PASS","value":"hunter2one"},{"name":"MODE","value":"prod"}],
 		"args":["--db-password","hunter2two","--port","80"],
 		"command":["mysql","-uroot","-phunter2three"],
@@ -117,7 +116,7 @@ spec:
               key: password
               name: creds
 `
-	out := string(ScrubYAML([]byte(in)))
+	out := string(YAML([]byte(in)))
 	if strings.Contains(out, "hunter2") {
 		t.Fatalf("a value stayed:\n%s", out)
 	}
@@ -126,23 +125,7 @@ spec:
 			t.Errorf("lost %q:\n%s", keep, out)
 		}
 	}
-	if got := string(ScrubYAML([]byte("{ not yaml: [\npassword: hunter2four"))); strings.Contains(got, "hunter2") {
+	if got := string(YAML([]byte("{ not yaml: [\npassword: hunter2four"))); strings.Contains(got, "hunter2") {
 		t.Errorf("text that is not YAML kept a value: %s", got)
-	}
-}
-
-// The rule that text from the cluster is data holds with view changes on or
-// off, and with the administrators' own instructions.
-func TestClusterTextIsDataInEveryPrompt(t *testing.T) {
-	for name, q := range map[string]Question{
-		"view changes on":           {Cluster: "lab", ViewChanges: true},
-		"view changes off":          {Cluster: "lab"},
-		"their own instructions":    {Cluster: "lab", Instructions: "Answer in French."},
-		"instructions that have it": {Cluster: "lab", Instructions: "Answer in French.\n" + clusterTextRule},
-	} {
-		core, _ := PromptText(q, time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC))
-		if n := strings.Count(core, clusterTextRule); n != 1 {
-			t.Errorf("%s: the rule is there %d times:\n%s", name, n, core)
-		}
 	}
 }

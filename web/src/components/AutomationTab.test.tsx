@@ -24,12 +24,12 @@ const admin = {
   method: "local",
   sessionIdleSeconds: 0,
 } as Me;
-const route = (path: string[] = []): Route => ({
+const route = (path: string[] = [], query = ""): Route => ({
   cluster: "local",
   view: "tabs",
-  tab: "automation",
-  path,
-  params: new URLSearchParams(),
+  tab: path[0] === "runs" ? "executions" : "scripts",
+  path: [],
+  params: new URLSearchParams(query),
 });
 
 const header = {
@@ -54,7 +54,7 @@ const script: Script = {
       author: { name: "Pat", user: "pat" },
       created: "2026-10-30T10:00:00Z",
       approvals: [
-        { by: { name: "Pat", user: "pat" }, at: "2026-10-30T11:00:00Z" },
+        { by: { name: "Sam", user: "sam" }, at: "2026-10-30T11:00:00Z" },
       ],
     },
     {
@@ -83,9 +83,11 @@ const index: AutomationIndex = {
       describe: "Keep chrony",
       version: 2,
       state: "draft",
+      inReview: 0,
       approved: 1,
       approvals: 1,
       privilege: "full",
+      dryRun: true,
       errors: 0,
       warnings: 1,
       created: script.created,
@@ -96,7 +98,6 @@ const index: AutomationIndex = {
 const fleets: AutomationFleets = {
   cluster: "local",
   production: false,
-  twoPerson: false,
   fleets: [
     {
       id: "workers",
@@ -104,6 +105,16 @@ const fleets: AutomationFleets = {
       nodes: [
         { name: "w1", paired: true, loginUser: "root" },
         { name: "w2", paired: false, why: "not paired" },
+      ],
+      params: { values: { PACKAGE: "chrony" }, ceiling: "full" },
+    },
+    {
+      id: "_all",
+      name: "All nodes",
+      nodes: [
+        { name: "w1", paired: true, loginUser: "root" },
+        { name: "w2", paired: false, why: "not paired" },
+        { name: "w3", paired: true, loginUser: "root" },
       ],
       params: { values: { PACKAGE: "chrony" }, ceiling: "full" },
     },
@@ -126,7 +137,14 @@ const run: Run = {
   ended: "2026-10-31T10:00:30Z",
   beat: "2026-10-31T10:00:30Z",
   nodes: [
-    { node: "w1", batch: 0, state: "changed", exit: 0, msg: "installed" },
+    {
+      node: "w1",
+      batch: 0,
+      state: "changed",
+      exit: 0,
+      msg: "installed",
+      values: { PACKAGE: "chrony" },
+    },
   ],
 };
 
@@ -174,11 +192,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const props = (path?: string[]) => ({
+const props = (path?: string[], query?: string) => ({
   cluster: null,
   now: Date.parse("2026-10-31T10:01:00Z"),
   onToast: vi.fn(),
-  route: route(path),
+  route: route(path, query),
   me: admin,
 });
 
@@ -190,16 +208,209 @@ describe("AutomationTab", () => {
     );
   });
 
-  it("lists scripts by group with their state and last run", async () => {
+  it("filters one table by the groups on the left", async () => {
+    index.scripts.push({ ...index.scripts[0]!, name: "loose", group: "" });
+    try {
+      render(<AutomationTab {...props([], "group=_ungrouped")} />);
+      const pane = await screen.findByTestId("script-groups");
+      expect(pane.textContent).toContain("All scripts2");
+      expect(pane.textContent).toContain("os1");
+      expect(pane.textContent).toContain("Ungrouped1");
+      const rows = screen.getAllByTestId("script-row");
+      expect(rows.map((r) => r.getAttribute("data-name"))).toEqual(["loose"]);
+      expect(screen.getAllByRole("table")).toHaveLength(1);
+    } finally {
+      index.scripts.pop();
+    }
+  });
+
+  it("lists scripts with their group, state and last run", async () => {
     render(<AutomationTab {...props()} />);
     const row = await screen.findByTestId("script-row");
     expect(row.textContent).toContain("ensure-chrony");
+    expect(row.textContent).toContain("os");
     expect(row.textContent).toContain("v2 draft");
     expect(row.textContent).toContain("v1, 1 approval");
     expect(row.textContent).toContain("1 warnings");
   });
 
+  it("keeps running the approved version while a new one waits, and lets a run off production choose", async () => {
+    render(<AutomationTab {...props()} />);
+    const dialogOpen = (await screen.findByTestId(
+      "script-run",
+    )) as HTMLButtonElement;
+    await waitFor(() => expect(dialogOpen.title).toContain("approved v1"));
+    fireEvent.click(dialogOpen);
+    const version = (await screen.findByTestId(
+      "run-version",
+    )) as HTMLSelectElement;
+    await waitFor(() => expect(version.value).toBe("1"));
+    expect([...version.options].map((o) => o.textContent)).toEqual([
+      "v2 (draft)",
+      "v1 (approved)",
+    ]);
+    expect(screen.queryByTestId("run-unapproved")).toBeNull();
+    fireEvent.change(version, { target: { value: "2" } });
+    const note = await screen.findByTestId("run-unapproved");
+    expect(note.textContent).toContain("v2 is draft");
+    fireEvent.click(screen.getByTestId("run-rollout-size"));
+    fireEvent.click(screen.getByTestId("run-start"));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) => c.method === "POST" && c.url === "/api/v1/automation/runs",
+        ),
+      ).toBe(true),
+    );
+    expect(calls.find((c) => c.method === "POST")!.body).toMatchObject({
+      version: 2,
+      dryRun: false,
+      rollout: { mode: "size" },
+    });
+  });
+
+  it("starts a dry run from the newest text", async () => {
+    render(<AutomationTab {...props()} />);
+    fireEvent.click(await screen.findByTestId("script-dry-run"));
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId("run-version") as HTMLSelectElement).value,
+      ).toBe("2"),
+    );
+  });
+
+  it("offers a production run the approved version alone, a new draft or not", async () => {
+    fleets.production = true;
+    try {
+      render(<AutomationTab {...props()} />);
+      fireEvent.click(await screen.findByTestId("script-run"));
+      const version = (await screen.findByTestId(
+        "run-version",
+      )) as HTMLSelectElement;
+      await waitFor(() => expect(version.value).toBe("1"));
+      expect(version.options).toHaveLength(1);
+    } finally {
+      fleets.production = false;
+    }
+  });
+
+  it("keeps the numbers beside the rollout, and they follow the choice", async () => {
+    render(<AutomationTab {...props()} />);
+    fireEvent.click(await screen.findByTestId("script-run"));
+    const inputs = await screen.findByTestId("run-rollout-inputs");
+    expect(inputs.textContent).toContain("Then batches of");
+    fireEvent.click(screen.getByTestId("run-rollout-size"));
+    expect(inputs.textContent).toContain("Batch size");
+    expect(inputs.textContent).not.toContain("Then batches of");
+    fireEvent.click(screen.getByTestId("run-rollout-all"));
+    expect(within(inputs).queryByTestId("run-size")).toBeNull();
+    expect(within(inputs).getByTestId("run-stop-after")).toBeTruthy();
+    expect(within(inputs).getByTestId("run-timeout")).toBeTruthy();
+  });
+
+  it("compares the version for approval with every other, and goes back with no diff", async () => {
+    render(<AutomationTab {...props()} />);
+    fireEvent.click(await screen.findByTestId("script-open"));
+    const drawer = await screen.findByTestId("script-drawer");
+    fireEvent.click(await within(drawer).findByRole("button", { name: /Versions/ }));
+    expect((await screen.findByTestId("version-text")).textContent).toContain("#v2");
+    const rows = screen.getAllByTestId("version-row");
+    expect(rows.map((r) => r.getAttribute("data-n"))).toEqual(["2", "1"]);
+    expect(within(rows[0]!).queryByTestId("version-diff")).toBeNull();
+    expect((within(rows[0]!).getByTestId("version-no-diff") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(rows[1]!).getByRole("button", { name: "Diff v2 against v1" }));
+    const diff = await screen.findByTestId("version-diff-text");
+    expect(diff.textContent).toContain("-#v1");
+    expect(diff.textContent).toContain("+#v2");
+    expect(screen.getByTestId("version-diff-summary").textContent).toContain("v1 → v2: 1 added, 1 removed");
+    expect((screen.getByTestId("version-against") as HTMLSelectElement).value).toBe("1");
+    fireEvent.click(within(rows[0]!).getByTestId("version-no-diff"));
+    expect(screen.getByTestId("version-text").textContent).toContain("#v2");
+    fireEvent.change(screen.getByTestId("version-against"), { target: { value: "1" } });
+    fireEvent.click(screen.getByTestId("version-no-diff-pane"));
+    expect(screen.getByTestId("version-text").textContent).toContain("#v2");
+    fireEvent.click(within(rows[1]!).getByTestId("version-show"));
+    expect(screen.getByTestId("version-text").textContent).toContain("#v1");
+    expect(within(rows[0]!).getByRole("button", { name: "Diff v1 against v2" })).toBeTruthy();
+  });
+
+  it("lets any SuperAdmin revoke an approved version, after asking", async () => {
+    render(<AutomationTab {...props()} />);
+    fireEvent.click(await screen.findByTestId("script-open"));
+    const drawer = await screen.findByTestId("script-drawer");
+    fireEvent.click(await within(drawer).findByRole("button", { name: /Versions/ }));
+    const rows = await screen.findAllByTestId("version-row");
+    expect(within(rows[0]!).queryByTestId("version-revoke")).toBeNull();
+    fireEvent.click(within(rows[1]!).getByTestId("version-revoke"));
+    fireEvent.click(await screen.findByRole("button", { name: "Revoke approval" }));
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/versions/1/revoke"))).toBe(true),
+    );
+  });
+
+  it("starts a new script from the template that reserves resources", async () => {
+    render(<AutomationTab {...props()} />);
+    fireEvent.click(await screen.findByTestId("script-new"));
+    fireEvent.change(await screen.findByTestId("script-template"), {
+      target: { value: "reserve" },
+    });
+    expect((screen.getByTestId("script-name") as HTMLInputElement).value).toBe(
+      "reserve-node-resources",
+    );
+    expect(
+      (screen.getByTestId("script-text") as HTMLTextAreaElement).value,
+    ).toContain("SYSTEM_RESERVED_MEMORY");
+  });
+
+  it("keeps a run's parameters apart from its results", async () => {
+    render(<AutomationTab {...props(["runs"])} />);
+    fireEvent.click(await screen.findByTestId("run-row"));
+    const params = await screen.findByTestId("run-parameters");
+    expect(params.textContent).toContain("PACKAGE");
+    expect(params.textContent).toContain("chrony");
+    const results = screen.getByTestId("run-results");
+    expect(results.textContent).toBe("Results");
+    expect(params.contains(results)).toBe(false);
+    const nodes = await screen.findByTestId("run-nodes-table");
+    expect(params.contains(nodes)).toBe(false);
+    expect(params.compareDocumentPosition(results) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(results.compareDocumentPosition(nodes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("offers one rollout per line, each saying what it does", async () => {
+    render(<AutomationTab {...props()} />);
+    fireEvent.click(await screen.findByTestId("script-run"));
+    const radios = within(
+      await screen.findByTestId("run-rollout"),
+    ).getAllByRole("radio") as HTMLInputElement[];
+    expect(radios.map((r) => r.checked)).toEqual([true, false, false]);
+    fireEvent.click(radios[2]!);
+    expect(radios.map((r) => r.checked)).toEqual([false, false, true]);
+    expect(screen.getByTestId("run-rollout").textContent).toContain(
+      "One node runs alone first",
+    );
+  });
+
+  it("offers only approved versions on production", async () => {
+    fleets.production = true;
+    index.scripts[0]!.approved = 0;
+    try {
+      render(<AutomationTab {...props()} />);
+      const run = (await screen.findByTestId(
+        "script-run",
+      )) as HTMLButtonElement;
+      await waitFor(() =>
+        expect(run.title).toContain("No version is approved"),
+      );
+      expect(run.disabled).toBe(true);
+    } finally {
+      fleets.production = false;
+      index.scripts[0]!.approved = 1;
+    }
+  });
+
   it("starts a run of the approved version with the fleet’s paired nodes", async () => {
+    fleets.production = true;
     render(<AutomationTab {...props()} />);
     fireEvent.click(await screen.findByTestId("script-run"));
     const dialog = await screen.findByTestId("run-dialog");
@@ -232,8 +443,79 @@ describe("AutomationTab", () => {
       fleet: "workers",
       rollout: { mode: "canary", stopAfter: 1, timeoutMinutes: 10 },
     });
-    expect((post.body as { nodes?: string[] }).nodes).toBeUndefined();
+    expect((post.body as { nodes?: string[]; version?: number }).nodes).toEqual(
+      ["w1"],
+    );
+    expect((post.body as { version?: number }).version).toBe(1);
     expect(await screen.findByTestId("run-drawer")).toBeTruthy();
+    fleets.production = false;
+  });
+
+  it("selects a fleet’s nodes alone, and a change by hand leaves the fleet", async () => {
+    render(<AutomationTab {...props()} />);
+    fireEvent.click(await screen.findByTestId("script-run"));
+    const dialog = await screen.findByTestId("run-dialog");
+    const boxes = () =>
+      within(dialog).getAllByRole("checkbox") as HTMLInputElement[];
+    await waitFor(() => expect(boxes()).toHaveLength(2));
+    const picked = () => boxes().map((b) => b.checked);
+    const fleet = within(dialog).getByTestId("run-fleet") as HTMLSelectElement;
+    expect(within(dialog).getByTestId("run-nodes").textContent).not.toContain(
+      "w3",
+    );
+    expect(picked()).toEqual([true, false]);
+    expect(within(dialog).getByTestId("run-node-count").textContent).toBe(
+      "1 of 2 selected",
+    );
+    expect(fleet.value).toBe("workers");
+    expect(within(dialog).getByTestId("run-left-out").textContent).toContain(
+      "1 of this fleet",
+    );
+    fireEvent.change(fleet, { target: { value: "_all" } });
+    expect(picked()).toEqual([true, false, true]);
+    fireEvent.click(boxes()[2]!);
+    fireEvent.click(boxes()[0]!);
+    fireEvent.click(boxes()[2]!);
+    expect(picked()).toEqual([false, false, true]);
+    expect(fleet.value).toBe("custom");
+    expect(within(dialog).getByTestId("run-custom").textContent).toContain(
+      "not configured for a fleet",
+    );
+    fireEvent.click(within(dialog).getByTestId("run-start"));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) => c.method === "POST" && c.url === "/api/v1/automation/runs",
+        ),
+      ).toBe(true),
+    );
+    expect(calls.find((c) => c.method === "POST")!.body).toMatchObject({
+      fleet: "_all",
+      nodes: ["w3"],
+    });
+  });
+
+  it("has no dry run for a script that does not declare one", async () => {
+    index.scripts[0]!.dryRun = false;
+    try {
+      render(<AutomationTab {...props()} />);
+      const dry = (await screen.findByTestId(
+        "script-dry-run",
+      )) as HTMLButtonElement;
+      expect(dry.disabled).toBe(true);
+      expect(dry.title).toContain("does not declare dry-run");
+    } finally {
+      index.scripts[0]!.dryRun = true;
+    }
+  });
+
+  it("filters the scripts by state, pending review among them", async () => {
+    render(<AutomationTab {...props([], "state=review")} />);
+    expect(await screen.findByTestId("scripts-none")).toBeTruthy();
+    expect(screen.queryByTestId("script-row")).toBeNull();
+    cleanup();
+    render(<AutomationTab {...props([], "state=draft")} />);
+    expect(await screen.findByTestId("script-row")).toBeTruthy();
   });
 
   it("refuses a full script on a fleet whose ceiling is none", async () => {

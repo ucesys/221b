@@ -15,6 +15,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/fakeclaude"
+	"github.com/ucesys/221b/server/internal/scrub"
 )
 
 func TestScrub(t *testing.T) {
@@ -29,7 +30,7 @@ func TestScrub(t *testing.T) {
 		{"github token ghp_abcdefghijklmnopqrstuvwxyz0123456789", "ghp_abcdefghij", "github"},
 		{"GET /api/v1/orders 200 3ms", "", "GET /api/v1/orders 200 3ms"},
 	} {
-		out := Scrub(c.in)
+		out := scrub.Text(c.in)
 		if c.gone != "" && strings.Contains(out, c.gone) {
 			t.Errorf("%q kept %q: %q", c.in, c.gone, out)
 		}
@@ -39,11 +40,11 @@ func TestScrub(t *testing.T) {
 	}
 	// A JSON row: an environment variable named like a secret loses its
 	// value; the rest stays readable.
-	out := string(ScrubJSON([]byte(`{"name":"web","env":[{"name":"DB_PASSWORD","value":"hunter2"},{"name":"MODE","value":"prod"}],"secretsRead":true,"tokens":[{"name":"t"}]}`)))
+	out := string(scrub.JSON([]byte(`{"name":"web","env":[{"name":"DB_PASSWORD","value":"hunter2"},{"name":"MODE","value":"prod"}],"secretsRead":true,"tokens":[{"name":"t"}]}`)))
 	if strings.Contains(out, "hunter2") || !strings.Contains(out, `"value":"prod"`) || !strings.Contains(out, `"secretsRead":true`) || !strings.Contains(out, `"tokens":[{"name":"t"}]`) {
 		t.Fatalf("ScrubJSON: %s", out)
 	}
-	if got := ScrubKnown("the key sk-ant-xyz123456 is here", []string{"sk-ant-xyz123456"}); strings.Contains(got, "sk-ant-xyz123456") {
+	if got := scrub.Known("the key sk-ant-xyz123456 is here", []string{"sk-ant-xyz123456"}); strings.Contains(got, "sk-ant-xyz123456") {
 		t.Fatalf("ScrubKnown: %s", got)
 	}
 }
@@ -398,5 +399,21 @@ func TestStoppingTheConsoleWaitsForAnswers(t *testing.T) {
 				t.Fatalf("no audit record: %s", buf.String())
 			}
 		})
+	}
+}
+
+// The rule that text from the cluster is data holds with view changes on or
+// off, and with the administrators' own instructions.
+func TestClusterTextIsDataInEveryPrompt(t *testing.T) {
+	for name, q := range map[string]Question{
+		"view changes on":           {Cluster: "lab", ViewChanges: true},
+		"view changes off":          {Cluster: "lab"},
+		"their own instructions":    {Cluster: "lab", Instructions: "Answer in French."},
+		"instructions that have it": {Cluster: "lab", Instructions: "Answer in French.\n" + clusterTextRule},
+	} {
+		core, _ := PromptText(q, time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC))
+		if n := strings.Count(core, clusterTextRule); n != 1 {
+			t.Errorf("%s: the rule is there %d times:\n%s", name, n, core)
+		}
 	}
 }

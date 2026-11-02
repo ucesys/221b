@@ -45,6 +45,7 @@ interface Props {
  */
 export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId, ask, copy, tools }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null)
+  const aside = useRef<HTMLElement>(null)
   // Opened by Sherlock (P6U-05), it stops above the dock and is not modal,
   // so its answer, Undo and the question box stay in reach (P6U-09).
   const [bySherlock] = useState(() => drivenRecently())
@@ -52,9 +53,17 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
   const [opener] = useState(() => document.activeElement)
   const body = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    // Opened by Sherlock, it leaves focus where the person has it (P6U-09).
-    if (!drivenRecently()) closeRef.current?.focus()
+    // Opened by Sherlock, it leaves focus where the person has it (P6U-09);
+    // a title that follows a field of the drawer's form leaves it there too.
+    if (!drivenRecently() && !aside.current?.contains(document.activeElement)) closeRef.current?.focus()
   }, [title])
+  // A button that disables itself as it works, or goes away, drops focus out
+  // of a modal drawer, where Escape and Tab no longer reach it: keep it here.
+  useEffect(() => {
+    if (bySherlock) return
+    const active = document.activeElement
+    if (!active || active === document.body || active.matches(':disabled')) aside.current?.focus({ preventScroll: true })
+  })
   // Closed, focus goes back to what opened it, unless the page has already
   // put it somewhere (the Nodes tab returns it to the node's row).
   useEffect(
@@ -97,10 +106,12 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
     <div style={{ position: 'fixed', top: 0, right: 0, bottom: bySherlock ? 'var(--dock-space, 0px)' : 0, left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }} data-by-sherlock={bySherlock ? 'true' : undefined}>
       <button aria-label={`Close ${label.toLowerCase()}`} tabIndex={-1} onClick={onClose} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
       <aside
+        ref={aside}
         className="rk-drawer"
         role="dialog"
         aria-modal={bySherlock ? undefined : 'true'}
         aria-label={label}
+        tabIndex={-1}
         data-testid={testId}
         onKeyDown={(e) => {
           if (e.key === 'Escape') {
@@ -112,7 +123,7 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
             trapTab(e)
           }
         }}
-        style={{ position: 'relative', width: `min(${width}px, 100%)`, height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}
+        style={{ position: 'relative', width: `min(${width}px, 100%)`, height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow)', outline: 'none' }}
       >
         <div style={{ flex: 'none', padding: '16px 20px 0', display: 'flex', flexDirection: 'column', gap: 10, borderBottom: '1px solid var(--line)' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>

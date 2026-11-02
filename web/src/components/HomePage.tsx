@@ -14,7 +14,7 @@ interface Props {
 }
 
 /** How to read the bars, on hover (asked at the Phase 6 review, in place of a note under them). */
-const BAR_LEGEND = 'Light bar: requested. Solid bar: in use. The percentage is what is requested of what is allocatable.'
+const BAR_LEGEND = 'Light bar: requested, of what is allocatable. Solid bar: in use, of the whole machines. The percentage is what is requested.'
 
 function Bar({ line, testid, note }: { line: UseLine; testid: string; note?: string }) {
   return (

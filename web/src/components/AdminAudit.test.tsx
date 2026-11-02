@@ -1,9 +1,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fetchAudit, filterAudit, type AuditEvent, type AuditPage } from '../api/admin'
+import { download } from '../lib/xlsx'
 import { AdminAudit } from './AdminAudit'
 import type { AdminProps } from './AdminPage'
 
+vi.mock('../lib/xlsx', async (original) => ({ ...(await original<typeof import('../lib/xlsx')>()), download: vi.fn() }))
 vi.mock('../api/admin', async (original) => ({ ...(await original<typeof import('../api/admin')>()), fetchAudit: vi.fn() }))
 
 const event = (action: string, over: Partial<AuditEvent> = {}): AuditEvent => ({ time: '2026-10-30T10:00:00Z', action, who: { name: 'Ada', email: 'ada@example.com' }, outcome: 'ok', ...over })
@@ -36,6 +38,27 @@ describe('the Audit log page', () => {
   afterEach(() => {
     cleanup()
     vi.clearAllMocks()
+  })
+
+  it('downloads what it shows from the Export menu every table has', async () => {
+    const onToast = vi.fn()
+    render(<AdminAudit {...({ onToast } as unknown as AdminProps)} />)
+    await waitFor(() => expect(rows()).toBe(4))
+    fireEvent.change(screen.getByTestId('audit-search'), { target: { value: 'bob' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+    fireEvent.click(screen.getByRole('button', { name: /CSV/ }))
+    const [text, file, type] = vi.mocked(download).mock.calls[0]!
+    expect(file).toMatch(/^221b-audit-log-.*\.csv$/)
+    expect(type).toContain('text/csv')
+    expect(text).toContain('When,Action,Who,Cluster,Target,Outcome,Detail,From')
+    expect(text).toContain('backup.export,bob,,Backup-1,ok')
+    expect(text).not.toContain('settings.update')
+    expect(onToast).toHaveBeenCalledWith(expect.stringContaining('221b-audit-log-'))
+    for (const name of [/Excel/, /JSON/]) {
+      fireEvent.click(screen.getByRole('button', { name: 'Export' }))
+      fireEvent.click(screen.getByRole('button', { name }))
+    }
+    expect(vi.mocked(download).mock.calls.map((c) => String(c[1]).split('.').pop())).toEqual(['csv', 'xlsx', 'json'])
   })
 
   it('reads the log once however the search changes, and again on Refresh', async () => {

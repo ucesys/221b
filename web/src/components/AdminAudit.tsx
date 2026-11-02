@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fetchAudit, filterAudit, type AuditEvent, type AuditPage } from '../api/admin'
 import { fmtTs } from '../lib/format'
+import { csvText, exportFileName, type ExportFormat } from '../lib/table'
+import { download, xlsxBytes, type Cell } from '../lib/xlsx'
 import type { AdminProps } from './AdminPage'
-import { DownloadIcon } from './Icons'
+import { ExportMenu } from './ExportMenu'
 
 /** Who an event names, shortest first; the title has the rest. */
 function whoText(e: AuditEvent): { text: string; title: string } {
@@ -10,16 +12,11 @@ function whoText(e: AuditEvent): { text: string; title: string } {
   return { text: parts[0] ?? '—', title: parts.join(' · ') }
 }
 
-/** Saves text as a file the browser downloads. */
-export function download(name: string, text: string, type = 'application/json'): void {
-  const url = URL.createObjectURL(new Blob([text], { type }))
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+const EXPORT_HEAD = ['When', 'Action', 'Who', 'Cluster', 'Target', 'Outcome', 'Detail', 'From']
+
+/** The export's rows: each event as the table shows it, the person in full. */
+function exportRows(events: AuditEvent[]): Cell[][] {
+  return events.map((e) => [e.time, e.action, whoText(e).title, e.cluster ?? '', e.target ?? '', e.outcome, e.detail ?? '', e.from ?? ''])
 }
 
 /**
@@ -29,7 +26,7 @@ export function download(name: string, text: string, type = 'application/json'):
  * the webhook; the console keeps the newest two thousand beside its
  * settings.
  */
-export function AdminAudit(_: AdminProps) {
+export function AdminAudit({ onToast }: AdminProps) {
   const [q, setQ] = useState('')
   const [action, setAction] = useState('')
   const [outcome, setOutcome] = useState('')
@@ -52,6 +49,17 @@ export function AdminAudit(_: AdminProps) {
     }
   }, [tick])
   const events = useMemo(() => filterAudit(page?.events ?? [], { q, action, outcome }).slice(0, 500), [page, q, action, outcome])
+  const exportAs = (format: ExportFormat) => {
+    const file = exportFileName('221b', 'audit-log', format)
+    try {
+      if (format === 'xlsx') download(xlsxBytes('Audit log', EXPORT_HEAD, exportRows(events)), file)
+      else if (format === 'csv') download(csvText(EXPORT_HEAD, exportRows(events)), file, 'text/csv;charset=utf-8')
+      else download(JSON.stringify(events, null, 2) + '\n', file, 'application/json')
+      onToast(`Downloaded ${file}`)
+    } catch {
+      onToast('Couldn’t build the file.')
+    }
+  }
   return (
     <section className="rk-card" style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }} data-testid="admin-audit">
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
@@ -82,10 +90,7 @@ export function AdminAudit(_: AdminProps) {
         <button className="rk-btn" onClick={() => setTick((n) => n + 1)} title="Read the log again" data-testid="audit-refresh">
           Refresh
         </button>
-        <button className="rk-btn" onClick={() => download(`221b-audit-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`, JSON.stringify(events, null, 2))} disabled={events.length === 0} title="The events shown, as JSON" data-testid="audit-download">
-          <DownloadIcon />
-          JSON
-        </button>
+        <ExportMenu onExport={exportAs} disabled={events.length === 0} what="the events shown" />
       </div>
       {err && <p className="tb-err">{err}</p>}
       {page && !page.stored && (

@@ -1,5 +1,6 @@
 import { BACKGROUND, unauthorized } from "./auth";
 import { apiPath, LOCAL } from "../lib/router";
+import reserveNodeResources from "../scripts/reserve-node-resources.sh?raw";
 
 /**
  * Automation (Phase 11 part 2, docs/automation.md, ADR-73): scripts with a
@@ -57,8 +58,13 @@ export interface Version {
   findings: Finding[] | null;
   state: VersionState;
   author: Who;
+  /** The others who saved this draft. */
+  editors?: Who[];
+  submitted?: { by: Who; at: string };
   created: string;
   approvals?: { by: Who; at: string }[];
+  /** Who took its approvals back, and when. */
+  revoked?: { by: Who; at: string }[];
 }
 
 export interface Script {
@@ -85,10 +91,14 @@ export interface ScriptSummary {
   describe: string;
   version: number;
   state: VersionState;
+  /** The version waiting for review, or 0. */
+  inReview: number;
   /** The approved version, or 0. */
   approved: number;
   approvals: number;
   privilege: Privilege | "";
+  /** The latest version declares dry-run yes. */
+  dryRun: boolean;
   errors: number;
   warnings: number;
   created: string;
@@ -131,7 +141,6 @@ export interface AutomationFleets {
   off?: string;
   readOnly?: string;
   production: boolean;
-  twoPerson: boolean;
   fleets: AutomationFleet[];
 }
 
@@ -198,6 +207,55 @@ export interface RunRequest {
 /** The fleet of every node of a cluster. */
 export const ALL_NODES = "_all";
 
+/** The Run dialog's fleet when the nodes were picked by hand. */
+export const CUSTOM_NODES = "custom";
+
+/** The nodes of a fleet a run can reach. */
+export function pairedNames(f: AutomationFleet | undefined): string[] {
+  return (f?.nodes ?? []).filter((n) => n.paired).map((n) => n.name);
+}
+
+/** The fleet whose reachable nodes are exactly these, or CUSTOM_NODES. */
+export function fleetOf(fleets: AutomationFleet[], picked: string[]): string {
+  const want = new Set(picked);
+  const f = fleets.find((x) => {
+    const names = pairedNames(x);
+    return names.length === want.size && names.every((n) => want.has(n));
+  });
+  return f && want.size > 0 ? f.id : CUSTOM_NODES;
+}
+
+/** What each rollout does, for the Run dialog. */
+export function rolloutHelp(mode: RolloutMode, size: number): string {
+  if (mode === "canary")
+    return `One node runs alone first; any failure there stops the run. The rest then run ${size > 0 ? `${size} at a time` : "together"}.`;
+  if (mode === "size")
+    return `${Math.max(size, 1)} at a time; each batch finishes before the next starts. Any failure in the first batch stops the run.`;
+  return "Every node at once, at most 20 at the same time. Quickest, and nothing is held back to limit a bad script.";
+}
+
+/** The Scripts page's state filter. */
+export const SCRIPT_STATES: { id: string; label: string }[] = [
+  { id: "review", label: "Pending review" },
+  { id: "draft", label: "Draft" },
+  { id: "approved", label: "Approved" },
+  { id: "unapproved", label: "Nothing approved" },
+];
+
+export function inState(s: ScriptSummary, state: string): boolean {
+  switch (state) {
+    case "review":
+      return s.inReview > 0;
+    case "draft":
+      return s.state === "draft";
+    case "approved":
+      return s.approved > 0;
+    case "unapproved":
+      return s.approved === 0;
+  }
+  return true;
+}
+
 const BASE = "/api/v1/automation";
 
 async function call<T>(
@@ -259,6 +317,8 @@ export const submitVersion = (name: string, n: number) =>
   call<Script>(`${nameURL(name)}/versions/${n}/submit`, { method: "POST" });
 export const approveVersion = (name: string, n: number) =>
   call<Script>(`${nameURL(name)}/versions/${n}/approve`, { method: "POST" });
+export const revokeVersion = (name: string, n: number) =>
+  call<Script>(`${nameURL(name)}/versions/${n}/revoke`, post({}));
 export const fetchRuns = (background = false) =>
   call<{ runs: Run[] | null }>(`${BASE}/runs`, {}, background).then(
     (r) => r.runs ?? [],
@@ -317,6 +377,18 @@ fi
 apt-get install -y "$PACKAGE"
 echo '{"changed": true, "msg": "installed"}'
 `;
+
+/** What a new script can start from. */
+export const SCRIPT_TEMPLATES: { id: string; label: string; name: string; group: string; text: string }[] = [
+  { id: "blank", label: "An example", name: "", group: "", text: NEW_SCRIPT },
+  {
+    id: "reserve",
+    label: "Reserve resources from Kubernetes (RKE2, k3s)",
+    name: "reserve-node-resources",
+    group: "Kubernetes agent",
+    text: reserveNodeResources,
+  },
+];
 
 export type Source = "run" | "node" | "fleet";
 
@@ -486,26 +558,24 @@ export function countsText(c: Partial<Record<NodeState, number>>): string {
  */
 export function canApprove(v: Version, me: Who): boolean {
   if (v.state !== "review" && v.state !== "approved") return false;
-  if (v.state === "approved" && (v.approvals?.length ?? 0) >= 2) return false;
-  return !(v.approvals ?? []).some((a) => same(a.by, me));
+  if (involved(v, me) || (v.approvals ?? []).some((a) => same(a.by, me)))
+    return false;
+  return v.state === "review" || !runnable(v);
+}
+
+/** Whether a person wrote or submitted a version, so may not approve it. */
+export function involved(v: Version, me: Who): boolean {
+  return [v.author, ...(v.editors ?? []), ...(v.submitted ? [v.submitted.by] : [])].some((w) => same(w, me));
 }
 
 export function same(a: Who, b: Who): boolean {
   return a.user && b.user ? a.user === b.user : a.name === b.name;
 }
 
-/**
- * Whether a version may run on a cluster: approved, and on a two-person
- * cluster approved by two people, one of them not its author.
- */
-export function runnableOn(
-  v: Version | undefined,
-  twoPerson: boolean,
-): boolean {
+/** Whether a version may run: approved by someone who did not write or submit it. */
+export function runnable(v: Version | undefined): boolean {
   if (!v || v.state !== "approved") return false;
-  if (!twoPerson) return true;
-  const ap = v.approvals ?? [];
-  return ap.length >= 2 && ap.some((a) => !same(a.by, v.author));
+  return (v.approvals ?? []).some((a) => !involved(v, a.by));
 }
 
 /** The version a run would use: the newest approved one. */
@@ -517,17 +587,33 @@ export function latestOf(s: Script): Version {
   return s.versions[s.versions.length - 1]!;
 }
 
-/** Scripts by group, the groups sorted, "Ungrouped" last. */
-export function byGroup(list: ScriptSummary[]): [string, ScriptSummary[]][] {
-  const m = new Map<string, ScriptSummary[]>();
-  for (const s of list) {
-    const g = s.group || "";
-    m.set(g, [...(m.get(g) ?? []), s]);
-  }
-  return [...m.entries()]
+/** The Scripts page's filter value for scripts in no group. */
+export const UNGROUPED = "_ungrouped";
+
+export interface ScriptGroup {
+  id: string;
+  name: string;
+  count: number;
+}
+
+/** The groups for the Scripts page's left pane, Ungrouped last. */
+export function scriptGroups(list: ScriptSummary[]): ScriptGroup[] {
+  const counts = new Map<string, number>();
+  for (const s of list) counts.set(s.group, (counts.get(s.group) ?? 0) + 1);
+  return [...counts.entries()]
     .sort(([a], [b]) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)))
-    .map(([g, ss]) => [
-      g || "Ungrouped",
-      ss.sort((x, y) => x.name.localeCompare(y.name)),
-    ]);
+    .map(([g, count]) => ({ id: g || UNGROUPED, name: g || "Ungrouped", count }));
+}
+
+/** The groups picked, read from the URL; a group's name may hold a comma. */
+export function parseGroups(param: string | null): string[] {
+  return (param ?? "").split(",").filter(Boolean).map(decodeURIComponent);
+}
+
+export function formatGroups(ids: string[]): string {
+  return ids.map(encodeURIComponent).join(",");
+}
+
+export function inGroups(s: ScriptSummary, ids: string[]): boolean {
+  return ids.length === 0 || ids.includes(s.group || UNGROUPED);
 }

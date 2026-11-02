@@ -171,6 +171,15 @@ export function DiffIcon() {
   )
 }
 
+/** The diff's two columns struck through: back to the text alone. */
+export function NoDiffIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+      <path d="M8 2v12M3 5h4M5 3v4M9 11h4M2.5 13.5l11-11" />
+    </svg>
+  )
+}
+
 /** A counter-clockwise arrow: roll back to a revision (Phase 10.1). */
 export function RollbackIcon() {
   return (

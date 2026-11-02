@@ -203,11 +203,14 @@ export const TAB_SPECS: Record<Tab, TabSpec> = {
       err: PROBLEMS,
     },
   },
-  // Automation keeps its search in the page; Sherlock opens the tab only.
-  automation: {
-    filters: {},
-    path: [{ name: "section", type: "enum", values: ["runs", "params"] }],
+  // Automation keeps its search in the page.
+  scripts: {
+    filters: {
+      state: { type: "enum", values: ["review", "draft", "approved", "unapproved"] },
+    },
   },
+  executions: { filters: {} },
+  parameters: { filters: {} },
   networks: { filters: { route: { type: "text" } } },
   access: {
     search: "q",

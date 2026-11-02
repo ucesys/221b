@@ -72,7 +72,7 @@ func HasErrors(fs []Finding) bool {
 var (
 	// ParamNameRE is a parameter's name: an environment variable's.
 	ParamNameRE = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,63}$`)
-	headerRE    = regexp.MustCompile(`^#\s*221b:([a-z-]+)\s*(.*)$`)
+	headerRE    = regexp.MustCompile(`^#\s*221b:\s*([a-z-]+):?\s*(.*)$`)
 	contRE      = regexp.MustCompile(`^#\s{2,}(\S.*)$`)
 )
 
@@ -80,8 +80,12 @@ var (
 // not declare them as parameters.
 var Reserved = map[string]bool{"DRY_RUN": true, "NODE": true, "CLUSTER": true, "FLEET": true, "RUN_ID": true, "PATH": true, "HOME": true, "USER": true, "SHELL": true}
 
+// privilegeHelp says what a privilege means, for the findings about it.
+const privilegeHelp = "none (runs as nobody and cannot change the node) or full (runs with the login user's rights)"
+
 // ParseHeader reads the `# 221b:` lines of the comment block at the top of
-// a script, before its first command (AU-03).
+// a script, before its first command (AU-03). `# 221b:privilege none` and
+// `# 221b: privilege: none` are the same line.
 func ParseHeader(text string) (Header, []Finding) {
 	var h Header
 	var fs []Finding
@@ -161,9 +165,9 @@ func ParseHeader(text string) (Header, []Finding) {
 			case PrivilegeNone, PrivilegeFull:
 				h.Privilege = rest
 			case "limited":
-				add(LevelError, n, "privilege-limited", "limited sudo is not built yet: declare none or full")
+				add(LevelError, n, "privilege-limited", "limited sudo is not built yet: declare "+privilegeHelp)
 			default:
-				add(LevelError, n, "privilege", "privilege is none or full")
+				add(LevelError, n, "privilege", "privilege is "+privilegeHelp)
 			}
 		case "dry-run":
 			switch rest {
@@ -185,7 +189,7 @@ func ParseHeader(text string) (Header, []Finding) {
 		add(LevelError, 0, "describe", "the header has no # 221b:describe line saying what the script does")
 	}
 	if !seenPriv {
-		add(LevelError, 0, "privilege-missing", "the header has no # 221b:privilege line: none or full")
+		add(LevelError, 0, "privilege-missing", "the header has no # 221b:privilege line: "+privilegeHelp)
 	}
 	if h.Params == nil {
 		h.Params = []Param{}

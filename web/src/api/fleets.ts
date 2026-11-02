@@ -2,6 +2,28 @@ import { unauthorized } from './auth'
 import type { Fleet } from './types'
 import { apiPath } from '../lib/router'
 
+/** What a kubelet is configured to keep from pods, as it says now. */
+export interface KubeletConfig {
+  systemReserved?: Record<string, string>
+  kubeReserved?: Record<string, string>
+  reservedSystemCPUs?: string
+  evictionHard?: Record<string, string>
+  enforceNodeAllocatable?: string[]
+  maxPods?: number
+}
+
+/** A node's kubelet, or why it could not be read. */
+export interface KubeletView {
+  config?: KubeletConfig
+  note?: string
+}
+
+export async function fetchKubelet(cluster: string, node: string): Promise<KubeletView> {
+  const res = await fetch(apiPath(`nodes/${encodeURIComponent(node)}/kubelet`, cluster))
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  return (await res.json()) as KubeletView
+}
+
 /**
  * Replaces a cluster's fleets on the server (P4-01), which keeps them with
  * the console's settings; every open console sees the change. Rejects with

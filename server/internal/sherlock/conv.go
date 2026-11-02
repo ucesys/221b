@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/scrub"
 )
 
 // Toolbox is the read-only tools for one person in one cluster.
@@ -658,7 +659,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 				finish("stopped", "")
 				return
 			}
-			text := s.clip(ScrubKnown(r.Text, s.secrets()))
+			text := s.clip(scrub.Known(r.Text, s.secrets()))
 			results = append(results, Block{Type: "tool_result", ToolUseID: b.ID, Content: text, IsError: r.Error})
 			c.mu.Lock()
 			c.known.Add(r.Refs...)
@@ -792,7 +793,7 @@ func (s *Service) record(q Question, model string, tools []string, u Usage, cost
 			parts = append(parts, t)
 		}
 	}
-	question := Scrub(q.Text)
+	question := scrub.Text(q.Text)
 	if len(question) > 300 {
 		question = question[:300] + "…"
 	}

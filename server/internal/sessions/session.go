@@ -871,10 +871,9 @@ func (m *Manager) end(s *Session, by, note string, who Who) {
 		detail += fmt.Sprintf(" exit=%d", *exit)
 	}
 	if s.Req.Tool == toolbox.ToolCommand || s.Req.Tool == toolbox.ToolNodeCommand || s.Req.Tool == toolbox.ToolSSHPair || s.Req.Tool == toolbox.ToolSSHUnpair {
-		if len(out) > 16<<10 {
-			out = out[:16<<10] + "…"
-		}
-		detail += fmt.Sprintf(" command=%q output=%q", s.Req.Command, out)
+		// What a command prints can be anything, a Secret's value included,
+		// so the record says only how much there was.
+		detail += fmt.Sprintf(" command=%q output_bytes=%d", s.Req.Command, len(out))
 	}
 	if s.Req.Tool == toolbox.ToolForward {
 		detail += fmt.Sprintf(" connections=%d bytes_in=%d bytes_out=%d", forward.Total, forward.BytesIn, forward.BytesOut)

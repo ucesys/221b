@@ -5,7 +5,7 @@
 // in the editor before it is saved.
 
 import type { Fleet, FleetRow, FleetStats, NodeRow } from '../api/types'
-import { effectTone, labelText, taintId } from './nodes'
+import { effectTone, labelText, reservedText, taintId } from './nodes'
 import { fCores, fMem, nWord, pct, pctTxt } from './format'
 
 export { labelText, taintId }
@@ -136,6 +136,31 @@ export function capText(s: FleetStats): { text: string; tip: string; pct: number
   if (!s.nodes) return { text: 'no nodes yet', tip: 'No nodes', pct: 0 }
   const p = pct(s.cpuReq, s.cpu)
   return { text: `${fCores(s.cpu)} cores · ${pctTxt(p)} CPU requested`, tip: `${fCores(s.cpuReq)} of ${fCores(s.cpu)} cores requested`, pct: Math.min(100, p) }
+}
+
+/** Nodes that keep the same from pods. */
+export interface ReservedGroup {
+  text: string
+  nodes: string[]
+}
+
+/** What a fleet's nodes keep from pods, read from the nodes themselves: each setting and its nodes, the most common first. */
+export function reservedGroups(members: string[], byName: Map<string, NodeRow>): ReservedGroup[] {
+  const groups = new Map<string, string[]>()
+  for (const name of members) {
+    const row = byName.get(name)
+    if (!row) continue
+    const text = reservedText(row)
+    groups.set(text, [...(groups.get(text) ?? []), name])
+  }
+  return [...groups].map(([text, nodes]) => ({ text, nodes })).sort((a, b) => b.nodes.length - a.nodes.length || a.text.localeCompare(b.text))
+}
+
+/** The groups in a line: the same on every node, or that the nodes differ. */
+export function reservedLine(groups: ReservedGroup[]): string {
+  if (groups.length === 0) return ''
+  if (groups.length > 1) return `Reserved differs: ${groups.length} settings`
+  return groups[0]!.text === 'none' ? 'Nothing reserved' : `Reserved ${groups[0]!.text} per node`
 }
 
 /** "a, b and c". */

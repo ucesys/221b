@@ -38,6 +38,7 @@ func (s *Server) automationRoutes() {
 	s.handle("DELETE /api/v1/automation/scripts/{name}", "automation-script-delete", s.deleteAutomationScript)
 	s.handle("POST /api/v1/automation/scripts/{name}/versions/{n}/submit", "automation-submit", s.postAutomationSubmit)
 	s.handle("POST /api/v1/automation/scripts/{name}/versions/{n}/approve", "automation-approve", s.postAutomationApprove)
+	s.handle("POST /api/v1/automation/scripts/{name}/versions/{n}/revoke", "automation-revoke", s.postAutomationRevoke)
 	s.handle("GET /api/v1/automation/runs", "automation-runs", s.getAutomationRuns)
 	s.handle("GET /api/v1/automation/runs/{id}", "automation-run", s.getAutomationRun)
 	s.handle("POST /api/v1/automation/runs/{id}/cancel", "automation-cancel", s.postAutomationCancel)
@@ -92,6 +93,8 @@ func automationStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, automation.ErrFull):
 		return http.StatusInsufficientStorage
+	case errors.Is(err, automation.ErrOwnWork):
+		return http.StatusForbidden
 	}
 	return http.StatusInternalServerError
 }
@@ -129,14 +132,17 @@ type runBrief struct {
 }
 
 type scriptSummary struct {
-	Name      string    `json:"name"`
-	Group     string    `json:"group"`
-	Describe  string    `json:"describe"`
-	Version   int       `json:"version"`
-	State     string    `json:"state"`
+	Name     string `json:"name"`
+	Group    string `json:"group"`
+	Describe string `json:"describe"`
+	Version  int    `json:"version"`
+	State    string `json:"state"`
+	// InReview is the version waiting for review, or 0.
+	InReview  int       `json:"inReview"`
 	Approved  int       `json:"approved"`
 	Approvals int       `json:"approvals"`
 	Privilege string    `json:"privilege"`
+	DryRun    bool      `json:"dryRun"`
 	Errors    int       `json:"errors"`
 	Warnings  int       `json:"warnings"`
 	Created   time.Time `json:"created"`
@@ -150,7 +156,12 @@ func briefOf(r automation.Run) *runBrief {
 
 func summaryOf(sc automation.Script, runs []automation.Run) scriptSummary {
 	v := sc.Latest()
-	out := scriptSummary{Name: sc.Name, Group: sc.Group, Describe: v.Header.Describe, Version: v.N, State: v.State, Privilege: v.Header.Privilege, Created: sc.Created, Updated: sc.Updated}
+	out := scriptSummary{Name: sc.Name, Group: sc.Group, Describe: v.Header.Describe, Version: v.N, State: v.State, Privilege: v.Header.Privilege, DryRun: v.Header.DryRun, Created: sc.Created, Updated: sc.Updated}
+	for _, x := range sc.Versions {
+		if x.State == automation.StateReview {
+			out.InReview = x.N
+		}
+	}
 	if a, ok := sc.Approved(); ok {
 		out.Approved, out.Approvals = a.N, len(a.Approvals)
 		if out.Describe == "" {
@@ -284,7 +295,7 @@ func (s *Server) deleteAutomationScript(w http.ResponseWriter, r *http.Request) 
 	answerJSON(w, r, map[string]bool{"deleted": true})
 }
 
-func (s *Server) versionAction(w http.ResponseWriter, r *http.Request, approve bool) {
+func (s *Server) versionAction(w http.ResponseWriter, r *http.Request, do func(context.Context, string, int, automation.Who) (automation.Script, error), verb string) {
 	if !s.automationReady(w, r) {
 		return
 	}
@@ -293,10 +304,6 @@ func (s *Server) versionAction(w http.ResponseWriter, r *http.Request, approve b
 	if err != nil || n < 1 {
 		jsonError(w, http.StatusBadRequest, "a version is a number")
 		return
-	}
-	do, verb := s.opts.AutomationStore.Submit, "submitted"
-	if approve {
-		do, verb = s.opts.AutomationStore.Approve, "approved"
 	}
 	sc, err := do(r.Context(), name, n, s.automationWho(r))
 	if err != nil {
@@ -310,10 +317,13 @@ func (s *Server) versionAction(w http.ResponseWriter, r *http.Request, approve b
 }
 
 func (s *Server) postAutomationSubmit(w http.ResponseWriter, r *http.Request) {
-	s.versionAction(w, r, false)
+	s.versionAction(w, r, s.opts.AutomationStore.Submit, "submitted")
 }
 func (s *Server) postAutomationApprove(w http.ResponseWriter, r *http.Request) {
-	s.versionAction(w, r, true)
+	s.versionAction(w, r, s.opts.AutomationStore.Approve, "approved")
+}
+func (s *Server) postAutomationRevoke(w http.ResponseWriter, r *http.Request) {
+	s.versionAction(w, r, s.opts.AutomationStore.Revoke, "revoked")
 }
 
 // ---------- fleets and parameters ----------
@@ -338,7 +348,6 @@ type automationFleets struct {
 	Off        string            `json:"off,omitempty"`
 	ReadOnly   string            `json:"readOnly,omitempty"`
 	Production bool              `json:"production"`
-	TwoPerson  bool              `json:"twoPerson"`
 	Fleets     []automationFleet `json:"fleets"`
 }
 
@@ -353,7 +362,7 @@ func (s *Server) automationFleetList(ctx context.Context, w http.ResponseWriter,
 	if !ok {
 		return automationFleets{}, false
 	}
-	out := automationFleets{Cluster: c.ID, Off: s.automationOff(), Production: c.Env == clusters.EnvProduction, TwoPerson: s.watsonTwoPerson(c)}
+	out := automationFleets{Cluster: c.ID, Off: s.automationOff(), Production: c.Env == clusters.EnvProduction}
 	switch {
 	case c.Locked != "":
 		out.ReadOnly = "Changes are refused here: " + c.Locked
@@ -480,6 +489,29 @@ type runRequest struct {
 	Rollout automation.Rollout `json:"rollout"`
 }
 
+// pickNodes is the fleet's nodes a run names, in the fleet's order, and the
+// names the fleet does not have. Naming none takes the whole fleet.
+func pickNodes(fleet []automationNode, names []string) (picked []automationNode, unknown []string) {
+	if len(names) == 0 {
+		return fleet, nil
+	}
+	want := map[string]bool{}
+	for _, n := range names {
+		want[n] = true
+	}
+	for _, n := range fleet {
+		if want[n.Name] {
+			picked = append(picked, n)
+			delete(want, n.Name)
+		}
+	}
+	for n := range want {
+		unknown = append(unknown, n)
+	}
+	sort.Strings(unknown)
+	return picked, unknown
+}
+
 func (s *Server) postAutomationRun(w http.ResponseWriter, r *http.Request) {
 	if !s.automationReady(w, r) {
 		return
@@ -516,16 +548,18 @@ func (s *Server) postAutomationRun(w http.ResponseWriter, r *http.Request) {
 	}
 	var v automation.Version
 	switch {
-	case in.DryRun && in.Version > 0:
-		if v, found = sc.Version(in.Version); !found {
-			refuse(http.StatusNotFound, fmt.Sprintf("%s has no v%d", sc.Name, in.Version))
+	case in.DryRun:
+		if v, err = automation.DryRunnable(sc, in.Version); err != nil {
+			refuse(automationStatus(err), err.Error())
 			return
 		}
-	case in.DryRun:
-		v = sc.Latest()
 	default:
-		if v, err = automation.Runnable(sc, list.TwoPerson); err != nil {
-			refuse(http.StatusConflict, err.Error())
+		if v, err = automation.RunVersion(sc, list.Production, in.Version); err != nil {
+			code := automationStatus(err)
+			if code == http.StatusInternalServerError {
+				code = http.StatusConflict
+			}
+			refuse(code, err.Error())
 			return
 		}
 	}
@@ -551,17 +585,16 @@ func (s *Server) postAutomationRun(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusBadRequest, err.Error())
 		return
 	}
-	want := map[string]bool{}
-	for _, n := range in.Nodes {
-		want[n] = true
-	}
+	picked, unknown := pickNodes(fleet.Nodes, in.Nodes)
 	var targets, unpaired, missing []string
 	values := map[string]map[string]string{}
+	fleetName, paired := fleet.Name, 0
 	for _, n := range fleet.Nodes {
-		if len(want) > 0 && !want[n.Name] {
-			continue
+		if n.Paired {
+			paired++
 		}
-		delete(want, n.Name)
+	}
+	for _, n := range picked {
 		if !n.Paired {
 			unpaired = append(unpaired, n.Name)
 			continue
@@ -574,13 +607,8 @@ func (s *Server) postAutomationRun(w http.ResponseWriter, r *http.Request) {
 		targets = append(targets, n.Name)
 	}
 	switch {
-	case len(want) > 0:
-		var names []string
-		for n := range want {
-			names = append(names, n)
-		}
-		sort.Strings(names)
-		refuse(http.StatusBadRequest, "not in fleet "+fleet.Name+": "+strings.Join(names, ", "))
+	case len(unknown) > 0:
+		refuse(http.StatusBadRequest, "not in fleet "+fleet.Name+": "+strings.Join(unknown, ", "))
 		return
 	case len(unpaired) > 0:
 		refuse(http.StatusConflict, "not paired for SSH, so nothing can run on them: "+strings.Join(unpaired, ", ")+"; pair them, or leave them out")
@@ -592,6 +620,10 @@ func (s *Server) postAutomationRun(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusBadRequest, "fleet "+fleet.Name+" has no node to run on")
 		return
 	}
+	// Picked by hand, they are no fleet's: the dialog says so, and so does the run.
+	if fleet.ID == allNodes && len(targets) < paired {
+		fleetName = "custom selection"
+	}
 	clusterName := list.Cluster
 	if s.opts.Clusters != nil {
 		if sum, ok := s.opts.Clusters.Summary(list.Cluster); ok {
@@ -599,7 +631,7 @@ func (s *Server) postAutomationRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	run, err := s.opts.Automation.Start(ctx, automation.Spec{Script: sc.Name, Version: v, DryRun: in.DryRun, Cluster: list.Cluster, ClusterName: clusterName,
-		Fleet: fleet.ID, FleetName: fleet.Name, Nodes: targets, Values: values, Overrides: in.Params, Rollout: in.Rollout, Who: s.automationWho(r)})
+		Fleet: fleet.ID, FleetName: fleetName, Nodes: targets, Values: values, Overrides: in.Params, Rollout: in.Rollout, Who: s.automationWho(r)})
 	if err != nil {
 		refuse(automationStatus(err), err.Error())
 		return
@@ -608,7 +640,7 @@ func (s *Server) postAutomationRun(w http.ResponseWriter, r *http.Request) {
 	if run.DryRun {
 		kind = "dry run"
 	}
-	s.recordAutomation(r, audit.ActionAutomationRun, list.Cluster, sc.Name, audit.OutcomeOK, fmt.Sprintf("run %d started: %s of v%d (sha256 %.12s) on fleet %s, %d nodes, privilege %s", run.ID, kind, v.N, v.Hash, fleet.Name, len(targets), v.Header.Privilege))
+	s.recordAutomation(r, audit.ActionAutomationRun, list.Cluster, sc.Name, audit.OutcomeOK, fmt.Sprintf("run %d started: %s of v%d, %s (sha256 %.12s) on fleet %s, %d nodes, privilege %s", run.ID, kind, v.N, v.State, v.Hash, fleetName, len(targets), v.Header.Privilege))
 	answerJSON(w, r, run)
 }
 

@@ -7,6 +7,7 @@ import type { ClusterSummary, Env } from './clusters'
 
 export interface HomeUse {
   /** CPU in millicores, memory in bytes. */
+  capacity?: number
   allocatable: number
   requested: number
   /** What metrics-server reports, over usedNodes nodes. */

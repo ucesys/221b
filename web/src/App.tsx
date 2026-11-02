@@ -44,6 +44,7 @@ import {
   LOCAL,
   navigate,
   TABS,
+  isAutomationTab,
   useRoute,
   withParams,
 } from "./lib/router";
@@ -656,7 +657,7 @@ function Shell() {
               >
                 {tab === "nodes" && <NodesTab {...common} me={me} />}
                 {tab === "fleets" && <FleetsTab {...common} me={me} />}
-                {tab === "automation" && <AutomationTab {...common} me={me} />}
+                {isAutomationTab(tab) && <AutomationTab {...common} me={me} />}
                 {tab === "alerts" && <AlertsTab {...common} />}
                 {tab === "pods" && <PodsTab {...common} />}
                 {tab === "namespaces" && <NamespacesTab {...common} />}
