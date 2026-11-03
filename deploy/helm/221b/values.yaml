@@ -342,6 +342,11 @@ automation:
   # their SSH pairings. Its records live in the ConfigMap
   # <release>-automation.
   enabled: true
+  # runIdentities are the service accounts, by name, that Kubernetes scripts
+  # and hooks may run as. Each adds impersonate on that name to the console's
+  # role; Kubernetes still checks that whoever starts the run may impersonate
+  # it. Empty, Kubernetes commands run as the person who starts the run.
+  runIdentities: []
 
 toolbox:
   # The Toolbox (Phase 9, docs/toolbox.md): the Tools menu beside each pod

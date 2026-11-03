@@ -15,7 +15,8 @@ import type {
 } from "../api/automation";
 import type { Me } from "../api/types";
 import type { Route } from "../lib/router";
-import { AutomationTab, rowProblems } from "./AutomationTab";
+import { AutomationTab } from "./AutomationTab";
+import { rowProblems } from "../lib/variables";
 
 const admin = {
   mode: "local",
@@ -27,7 +28,7 @@ const admin = {
 const route = (path: string[] = [], query = ""): Route => ({
   cluster: "local",
   view: "tabs",
-  tab: path[0] === "runs" ? "executions" : "scripts",
+  tab: path[0] === "runs" ? "run-history" : "scripts",
   path: [],
   params: new URLSearchParams(query),
 });
@@ -72,6 +73,7 @@ const script: Script = {
   ],
 };
 const index: AutomationIndex = {
+  groups: [{ name: "empty" }],
   off: "",
   me: { name: "Pat", user: "pat" },
   running: 0,
@@ -148,6 +150,17 @@ const run: Run = {
   ],
 };
 
+let draft = (
+  _: RequestInit,
+  ok: (v: unknown) => Response,
+): Response | Promise<Response> =>
+  ok({
+    text: "#!/bin/sh\n",
+    findings: [],
+    questions: ["Which port?"],
+    notes: ["Wrote a script that installs the package."],
+    rounds: 1,
+  });
 let calls: { url: string; method: string; body?: unknown }[] = [];
 beforeEach(() => {
   calls = [];
@@ -167,6 +180,10 @@ beforeEach(() => {
           headers: { "Content-Type": "application/json" },
         });
       if (url === "/api/v1/automation") return ok(index);
+      if (url === "/api/v1/automation/run-profiles") return ok({ profiles: [] });
+      if (url === "/api/v1/automation/sherlock/draft") return draft(init, ok);
+      if (url.endsWith("/versions/1/revoke")) return ok(script);
+      if (/\/versions\/\d+\/(approve|reject)$/.test(url)) return ok(script);
       if (url === "/api/v1/automation/runs" && method === "GET")
         return ok({ runs: [run] });
       if (url === "/api/v1/automation/runs" && method === "POST")
@@ -201,13 +218,6 @@ const props = (path?: string[], query?: string) => ({
 });
 
 describe("AutomationTab", () => {
-  it("says the tab is a SuperAdmin’s to anyone else", () => {
-    render(<AutomationTab {...props()} me={{ ...admin, admin: false }} />);
-    expect(screen.getByTestId("automation-denied").textContent).toContain(
-      "Only a SuperAdmin",
-    );
-  });
-
   it("filters one table by the groups on the left", async () => {
     index.scripts.push({ ...index.scripts[0]!, name: "loose", group: "" });
     try {
@@ -234,27 +244,33 @@ describe("AutomationTab", () => {
     expect(row.textContent).toContain("1 warnings");
   });
 
-  it("keeps running the approved version while a new one waits, and lets a run off production choose", async () => {
+  it("runs the version chosen off production, starting from the newest, approved or not", async () => {
     render(<AutomationTab {...props()} />);
     const dialogOpen = (await screen.findByTestId(
       "script-run",
     )) as HTMLButtonElement;
-    await waitFor(() => expect(dialogOpen.title).toContain("approved v1"));
+    await waitFor(() => expect(dialogOpen.title).toContain("v2, the latest"));
     fireEvent.click(dialogOpen);
     const version = (await screen.findByTestId(
       "run-version",
     )) as HTMLSelectElement;
-    await waitFor(() => expect(version.value).toBe("1"));
+    await waitFor(() => expect(version.value).toBe("2"));
     expect([...version.options].map((o) => o.textContent)).toEqual([
       "v2 (draft)",
       "v1 (approved)",
     ]);
-    expect(screen.queryByTestId("run-unapproved")).toBeNull();
+    expect((await screen.findByTestId("run-unapproved")).textContent).toContain(
+      "v2 is draft",
+    );
+    fireEvent.change(version, { target: { value: "1" } });
+    await waitFor(() =>
+      expect(screen.queryByTestId("run-unapproved")).toBeNull(),
+    );
     fireEvent.change(version, { target: { value: "2" } });
-    const note = await screen.findByTestId("run-unapproved");
-    expect(note.textContent).toContain("v2 is draft");
+    await screen.findByTestId("run-unapproved");
     fireEvent.click(screen.getByTestId("run-rollout-size"));
     fireEvent.click(screen.getByTestId("run-start"));
+    fireEvent.click(await screen.findByTestId("confirm-ok"));
     await waitFor(() =>
       expect(
         calls.some(
@@ -312,40 +328,122 @@ describe("AutomationTab", () => {
     render(<AutomationTab {...props()} />);
     fireEvent.click(await screen.findByTestId("script-open"));
     const drawer = await screen.findByTestId("script-drawer");
-    fireEvent.click(await within(drawer).findByRole("button", { name: /Versions/ }));
-    expect((await screen.findByTestId("version-text")).textContent).toContain("#v2");
+    fireEvent.click(
+      await within(drawer).findByRole("button", { name: /Versions/ }),
+    );
+    expect((await screen.findByTestId("version-text")).textContent).toContain(
+      "#v2",
+    );
     const rows = screen.getAllByTestId("version-row");
     expect(rows.map((r) => r.getAttribute("data-n"))).toEqual(["2", "1"]);
-    expect(within(rows[0]!).queryByTestId("version-diff")).toBeNull();
-    expect((within(rows[0]!).getByTestId("version-no-diff") as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.click(within(rows[1]!).getByRole("button", { name: "Diff v2 against v1" }));
+    // The latest has no diff of its own, however the page is showing.
+    const icons = () => [
+      within(rows[0]!).queryByTestId("version-diff"),
+      within(rows[1]!).queryByTestId("version-diff"),
+    ];
+    expect(icons()[0]).toBeNull();
+    expect(icons()[1]).not.toBeNull();
+    fireEvent.click(within(rows[1]!).getByTestId("version-no-diff"));
+    expect(screen.getByTestId("version-text").textContent).toContain("#v1");
+    expect(icons()[0]).toBeNull();
+    expect(icons()[1]).not.toBeNull();
+    expect(within(rows[0]!).getByTestId("version-no-diff")).toBeTruthy();
+    // A diff always reads against the latest, whatever was on show.
+    fireEvent.click(
+      within(rows[1]!).getByRole("button", { name: "Diff v2 against v1" }),
+    );
     const diff = await screen.findByTestId("version-diff-text");
     expect(diff.textContent).toContain("-#v1");
     expect(diff.textContent).toContain("+#v2");
-    expect(screen.getByTestId("version-diff-summary").textContent).toContain("v1 → v2: 1 added, 1 removed");
-    expect((screen.getByTestId("version-against") as HTMLSelectElement).value).toBe("1");
+    expect(screen.getByTestId("version-diff-summary").textContent).toContain(
+      "v1 → v2: 1 added, 1 removed",
+    );
+    expect(
+      (screen.getByTestId("version-against") as HTMLSelectElement).value,
+    ).toBe("1");
     fireEvent.click(within(rows[0]!).getByTestId("version-no-diff"));
     expect(screen.getByTestId("version-text").textContent).toContain("#v2");
-    fireEvent.change(screen.getByTestId("version-against"), { target: { value: "1" } });
+    fireEvent.change(screen.getByTestId("version-against"), {
+      target: { value: "1" },
+    });
     fireEvent.click(screen.getByTestId("version-no-diff-pane"));
     expect(screen.getByTestId("version-text").textContent).toContain("#v2");
     fireEvent.click(within(rows[1]!).getByTestId("version-show"));
     expect(screen.getByTestId("version-text").textContent).toContain("#v1");
-    expect(within(rows[0]!).getByRole("button", { name: "Diff v1 against v2" })).toBeTruthy();
+    expect(within(rows[0]!).queryByTestId("version-diff")).toBeNull();
   });
 
   it("lets any SuperAdmin revoke an approved version, after asking", async () => {
     render(<AutomationTab {...props()} />);
     fireEvent.click(await screen.findByTestId("script-open"));
     const drawer = await screen.findByTestId("script-drawer");
-    fireEvent.click(await within(drawer).findByRole("button", { name: /Versions/ }));
+    fireEvent.click(
+      await within(drawer).findByRole("button", { name: /Versions/ }),
+    );
     const rows = await screen.findAllByTestId("version-row");
     expect(within(rows[0]!).queryByTestId("version-revoke")).toBeNull();
     fireEvent.click(within(rows[1]!).getByTestId("version-revoke"));
-    fireEvent.click(await screen.findByRole("button", { name: "Revoke approval" }));
-    await waitFor(() =>
-      expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/versions/1/revoke"))).toBe(true),
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Revoke approval" }),
     );
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) => c.method === "POST" && c.url.endsWith("/versions/1/revoke"),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("asks before approving, and a rejection needs a reason", async () => {
+    const v3 = {
+      ...script.versions[1]!,
+      n: 3,
+      text: "#v3",
+      hash: "h3",
+      findings: [],
+      state: "review" as const,
+      author: { name: "Ann", user: "ann" },
+      submitted: { by: { name: "Ann", user: "ann" }, at: "2026-10-31T11:00:00Z" },
+    };
+    script.versions.push(v3);
+    try {
+      render(<AutomationTab {...props()} />);
+      fireEvent.click(await screen.findByTestId("script-open"));
+      const drawer = await screen.findByTestId("script-drawer");
+      fireEvent.click(
+        await within(drawer).findByRole("button", { name: /Versions/ }),
+      );
+      const rows = await screen.findAllByTestId("version-row");
+      fireEvent.click(within(rows[0]!).getByTestId("version-approve"));
+      const ask = await screen.findByRole("alertdialog", {
+        name: "Approve ensure-chrony v3?",
+      });
+      expect(calls.some((c) => c.url.endsWith("/approve"))).toBe(false);
+      fireEvent.click(within(ask).getByRole("button", { name: "Cancel" }));
+      expect(calls.some((c) => c.url.endsWith("/approve"))).toBe(false);
+
+      fireEvent.click(within(rows[0]!).getByTestId("version-reject"));
+      const rej = await screen.findByRole("alertdialog", {
+        name: "Reject ensure-chrony v3?",
+      });
+      const go = within(rej).getByTestId("confirm-ok");
+      expect(go).toHaveProperty("disabled", true);
+      fireEvent.change(within(rej).getByTestId("decide-comment"), {
+        target: { value: "  pin the version  " },
+      });
+      expect(go).toHaveProperty("disabled", false);
+      fireEvent.click(go);
+      await waitFor(() =>
+        expect(
+          calls.find(
+            (c) => c.method === "POST" && c.url.endsWith("/versions/3/reject"),
+          )?.body,
+        ).toEqual({ comment: "pin the version" }),
+      );
+    } finally {
+      script.versions.pop();
+    }
   });
 
   it("starts a new script from the template that reserves resources", async () => {
@@ -373,8 +471,117 @@ describe("AutomationTab", () => {
     expect(params.contains(results)).toBe(false);
     const nodes = await screen.findByTestId("run-nodes-table");
     expect(params.contains(nodes)).toBe(false);
-    expect(params.compareDocumentPosition(results) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(results.compareDocumentPosition(nodes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      params.compareDocumentPosition(results) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      results.compareDocumentPosition(nodes) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("says the tab is a SuperAdmin’s to anyone else", async () => {
+    render(<AutomationTab {...props()} me={{ ...admin, admin: false }} />);
+    expect(
+      (await screen.findByTestId("automation-denied")).textContent,
+    ).toContain("SuperAdmin");
+  });
+
+  it("explains what Save needs, and offers it for an older version to approve", async () => {
+    render(<AutomationTab {...props()} />);
+    fireEvent.click(await screen.findByTestId("script-new"));
+    const save = (await screen.findByTestId(
+      "script-save",
+    )) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    expect(
+      (await screen.findByTestId("script-save-why")).textContent,
+    ).toContain("name");
+    expect(
+      calls.some(
+        (c) => c.method === "POST" && c.url === "/api/v1/automation/scripts",
+      ),
+    ).toBe(false);
+  });
+
+  it("locks the script while Sherlock writes, and Cancel lets go of it", async () => {
+    const kept = draft;
+    draft = (init) =>
+      new Promise((_, reject) => {
+        init.signal!.addEventListener("abort", () =>
+          reject(new Error("aborted")),
+        );
+      });
+    try {
+      render(<AutomationTab {...props()} />);
+      fireEvent.click(await screen.findByTestId("script-new"));
+      fireEvent.change(await screen.findByTestId("script-sherlock-request"), {
+        target: { value: "do it" },
+      });
+      fireEvent.click(screen.getByTestId("script-sherlock-draft"));
+      expect(await screen.findByTestId("script-sherlock-working")).toBeTruthy();
+      expect(
+        (screen.getByTestId("script-text") as HTMLTextAreaElement).readOnly,
+      ).toBe(true);
+      expect(
+        (screen.getByTestId("script-save") as HTMLButtonElement).disabled,
+      ).toBe(true);
+      expect(
+        (screen.getByTestId("script-name") as HTMLInputElement).disabled,
+      ).toBe(true);
+      fireEvent.click(screen.getByTestId("script-sherlock-cancel"));
+      await waitFor(() =>
+        expect(screen.queryByTestId("script-sherlock-working")).toBeNull(),
+      );
+      expect(
+        (screen.getByTestId("script-text") as HTMLTextAreaElement).readOnly,
+      ).toBe(false);
+      expect(screen.queryByTestId("script-sherlock-error")).toBeNull();
+    } finally {
+      draft = kept;
+    }
+  });
+
+  it("shows what Sherlock asks, and a finding goes to its line", async () => {
+    render(<AutomationTab {...props()} />);
+    fireEvent.click(await screen.findByTestId("script-new"));
+    fireEvent.change(await screen.findByTestId("script-sherlock-request"), {
+      target: { value: "do it" },
+    });
+    fireEvent.click(screen.getByTestId("script-sherlock-draft"));
+    expect(
+      (await screen.findByTestId("script-sherlock-questions")).textContent,
+    ).toContain("Which port?");
+    // What it said stands beside the code it changed.
+    const said = screen.getByTestId("script-sherlock-notes").textContent;
+    expect(said).toContain("Wrote a script that installs the package.");
+    expect(said).toMatch(/\d+ lines added, \d+ removed/);
+  });
+
+  it("says nothing about saving once a save went through", async () => {
+    render(<AutomationTab {...props()} />);
+    fireEvent.click(await screen.findByTestId("script-open"));
+    const text = (await screen.findByTestId(
+      "script-text",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => expect(text.value).toContain("#v2"));
+    fireEvent.click(screen.getByTestId("script-save"));
+    expect(
+      (await screen.findByTestId("script-save-why")).textContent,
+    ).toContain("Nothing to save");
+    fireEvent.change(text, { target: { value: "#v3" } });
+    expect(screen.queryByTestId("script-save-why")).toBeNull();
+  });
+
+  it("numbers the lines of the script", async () => {
+    render(<AutomationTab {...props()} />);
+    fireEvent.click(await screen.findByTestId("script-new"));
+    const text = (await screen.findByTestId(
+      "script-text",
+    )) as HTMLTextAreaElement;
+    fireEvent.change(text, { target: { value: "one\ntwo\nthree" } });
+    expect(screen.getByTestId("script-text-lines").textContent).toBe("1\n2\n3");
   });
 
   it("offers one rollout per line, each saying what it does", async () => {
@@ -427,6 +634,7 @@ describe("AutomationTab", () => {
     const start = within(dialog).getByTestId("run-start") as HTMLButtonElement;
     expect(start.disabled).toBe(false);
     fireEvent.click(start);
+    fireEvent.click(await screen.findByTestId("confirm-ok"));
     await waitFor(() =>
       expect(
         calls.some(
@@ -456,7 +664,9 @@ describe("AutomationTab", () => {
     fireEvent.click(await screen.findByTestId("script-run"));
     const dialog = await screen.findByTestId("run-dialog");
     const boxes = () =>
-      within(dialog).getAllByRole("checkbox") as HTMLInputElement[];
+      within(within(dialog).getByTestId("run-nodes")).getAllByRole(
+        "checkbox",
+      ) as HTMLInputElement[];
     await waitFor(() => expect(boxes()).toHaveLength(2));
     const picked = () => boxes().map((b) => b.checked);
     const fleet = within(dialog).getByTestId("run-fleet") as HTMLSelectElement;
@@ -482,6 +692,11 @@ describe("AutomationTab", () => {
       "not configured for a fleet",
     );
     fireEvent.click(within(dialog).getByTestId("run-start"));
+    // A real run asks first, and starts nothing until it is confirmed.
+    const ask = await screen.findByTestId("confirm");
+    expect(ask.textContent).toContain("not a dry run");
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+    fireEvent.click(screen.getByTestId("confirm-ok"));
     await waitFor(() =>
       expect(
         calls.some(
@@ -524,7 +739,8 @@ describe("AutomationTab", () => {
       render(<AutomationTab {...props()} />);
       fireEvent.click(await screen.findByTestId("script-run"));
       const blocked = await screen.findByTestId("run-blocked");
-      expect(blocked.textContent).toContain("allows only none");
+      expect(blocked.textContent).toContain("ceiling of fleet");
+      expect(blocked.textContent).toContain("nobody: read-only");
       expect(
         (screen.getByTestId("run-start") as HTMLButtonElement).disabled,
       ).toBe(true);

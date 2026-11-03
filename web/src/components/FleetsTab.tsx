@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { fetchFleets, type ParamConflict } from '../api/automation'
 import { saveFleets } from '../api/fleets'
 import { useLiveMeta, useView } from '../api/live'
 import type { Fleet, FleetRow, Me, NodeRow } from '../api/types'
@@ -59,6 +60,18 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
   const { rows: fleetRows, loaded } = useView<FleetRow>('fleets')
   const { rows: nodes } = useView<NodeRow>('nodes')
   const admin = me?.admin ?? true
+  // Automation is a SuperAdmin's, and so is what its parameters say.
+  const [clashes, setClashes] = useState<ParamConflict[]>([])
+  useEffect(() => {
+    if (!me?.admin) return
+    let gone = false
+    fetchFleets(route.cluster)
+      .then((f) => !gone && setClashes(f.conflicts ?? []))
+      .catch(() => {})
+    return () => {
+      gone = true
+    }
+  }, [route.cluster, me?.admin])
   const defs: Fleet[] = useMemo(() => meta.settings?.fleets?.[route.cluster] ?? [], [meta.settings, route.cluster])
   const fleets = useMemo(() => fleetRows.filter((r) => r.kind === 'fleet').sort((a, b) => a.order - b.order), [fleetRows])
   const none = fleetRows.find((r) => r.kind === 'none')
@@ -304,6 +317,11 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                       {held}
                     </span>
                   )}
+                  {clashes.some((c) => c.fleets.includes(f.name!)) && (
+                    <span className="rk-t" data-tone="err" style={{ fontSize: 11.5, fontWeight: 500 }} data-testid="fleet-param-conflict">
+                      Parameter conflict
+                    </span>
+                  )}
                   {probs.text && (
                     <span className="rk-t" data-tone={probs.tone} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, fontWeight: 500 }}>
                       <span className="rk-dot" />
@@ -436,6 +454,23 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
             </div>
           </div>
         )}
+
+        {(() => {
+          const shown = one ? clashes.filter((c) => c.fleets.includes(one.name!)) : clashes
+          return shown.length > 0 ? (
+            <div className="rk-callout" data-tone="err" style={{ margin: 0, fontSize: 12.5 }} data-testid="fleet-param-conflicts">
+              Defined on more than one fleet, so runs on these nodes are refused:
+              <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                {shown.slice(0, 12).map((c) => (
+                  <li key={`${c.node}/${c.param}`}>
+                    <span className="rk-mono">{c.param}</span> on <span className="rk-mono">{c.node}</span>: {listText(c.fleets)}
+                  </li>
+                ))}
+                {shown.length > 12 && <li>and {shown.length - 12} more</li>}
+              </ul>
+            </div>
+          ) : null
+        })()}
 
         {scope.length > 0 && (
           <section className="rk-card" aria-label="Kubernetes agent resources" style={{ padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12 }} data-testid="fleet-agent">

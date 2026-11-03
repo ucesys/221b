@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
 	"net/http"
 	"slices"
 	"sort"
@@ -28,6 +29,7 @@ import (
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/views"
 	"github.com/ucesys/221b/server/internal/watson"
@@ -193,6 +195,44 @@ func appNames(w http.ResponseWriter, ns, name string) bool {
 	return true
 }
 
+// reachableNamespaces are the namespaces the person may see, sorted, or nil
+// with sign-in off, when nothing is limited.
+func (s *Server) reachableNamespaces(r *http.Request, cl Cluster) []string {
+	a := s.access(r, cl)
+	if a == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), prepareTimeout)
+	defer cancel()
+	if _, err := s.prepare(ctx, a, cl, []string{live.ViewNamespaces}); err != nil {
+		return []string{}
+	}
+	out := []string{}
+	for _, o := range cl.Objects("namespaces", "") {
+		if ns, ok := o.(*corev1.Namespace); ok && a.AllowNamespace(ns.Name) {
+			out = append(out, ns.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sameAccess says whether the person reaches the namespaces the record's
+// creator reached. A record from before this was kept says no.
+func sameAccess(rec apps.Record, mine []string) bool {
+	return len(rec.CreatorNamespaces) > 0 && slices.Equal(rec.CreatorNamespaces, mine)
+}
+
+// sharedView is what someone sees of an application they reach only
+// through having the creator's access: what it is, not what it is set to,
+// since a release's values sit in Secrets of a namespace they do not reach.
+func sharedView(rec apps.Record) apps.Record {
+	rec.Values, rec.Params, rec.Commands = "", nil, nil
+	return rec
+}
+
+// getApps lists the applications a person may see: those in a namespace
+// they reach, and those an admin with the same namespace access created.
 func (s *Server) getApps(w http.ResponseWriter, r *http.Request) {
 	c, who, ok := s.appReady(w, r)
 	if !ok {
@@ -208,11 +248,19 @@ func (s *Server) getApps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := []appView{}
+	var mine []string
+	asked := false
 	for _, rec := range recs {
 		if rec.Cluster != c.ID {
 			continue
 		}
 		if may, err := cl.CanI(r.Context(), who.Person, "list", "", "secrets", rec.Namespace); err != nil || !may {
+			if !asked {
+				mine, asked = s.reachableNamespaces(r, cl), true
+			}
+			if sameAccess(rec, mine) {
+				out = append(out, appView{Record: sharedView(rec)})
+			}
 			continue
 		}
 		v := appView{Record: rec}
@@ -232,16 +280,28 @@ func (s *Server) getApp(w http.ResponseWriter, r *http.Request) {
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
 	_, cl, ok := s.lookup(w, r)
-	if !ok || !appNames(w, ns, name) || !s.mayList(w, r, cl, "secrets", ns) {
+	if !ok || !appNames(w, ns, name) {
 		return
 	}
-	rec, _, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
-	if errors.Is(err, apps.ErrNotFound) {
+	// Someone with the creator's access sees what the list showed them; the
+	// answer for anyone else is the same whether a record is kept or not.
+	full, err := cl.CanI(r.Context(), who.Person, "list", "", "secrets", ns)
+	rec, _, getErr := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
+	if err != nil || !full {
+		if getErr != nil || !sameAccess(rec, s.reachableNamespaces(r, cl)) {
+			s.mayList(w, r, cl, "secrets", ns)
+			return
+		}
+		b, _ := json.Marshal(appView{Record: sharedView(rec)})
+		writeJSON(w, r, b)
+		return
+	}
+	if errors.Is(getErr, apps.ErrNotFound) {
 		jsonError(w, http.StatusNotFound, "the console keeps no source for this release")
 		return
 	}
-	if err != nil {
-		jsonError(w, http.StatusBadGateway, err.Error())
+	if getErr != nil {
+		jsonError(w, http.StatusBadGateway, getErr.Error())
 		return
 	}
 	v := appView{Record: rec}
@@ -457,6 +517,11 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.opts.Now().UTC()
 	rec := apps.Record{Cluster: c.ID, Namespace: in.Namespace, Name: in.Name, Source: *in.Source, Created: now, CreatedBy: who.User, Updated: now, UpdatedBy: who.User}
+	if _, cl, ok := s.lookup(w, r); ok {
+		rec.CreatorNamespaces = s.reachableNamespaces(r, cl)
+	} else {
+		return
+	}
 	if err := s.applyAppInput(&rec, in, c.ID); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
@@ -501,6 +566,9 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rec = apps.Record{Cluster: c.ID, Namespace: ns, Name: name, Created: now, CreatedBy: who.User}
+		if _, cl, ok := s.lookup(w, r); ok {
+			rec.CreatorNamespaces = s.reachableNamespaces(r, cl)
+		}
 	case err != nil:
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return

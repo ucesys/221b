@@ -16,6 +16,7 @@ import (
 
 func (s *Server) auditRoutes() {
 	s.handle("GET /api/v1/admin/audit", "admin-audit", s.getAudit)
+	s.handle("GET /api/v1/admin/approvals", "admin-approvals", s.getApprovals)
 }
 
 // auditPage is what the page reads.

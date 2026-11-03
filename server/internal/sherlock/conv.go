@@ -421,6 +421,38 @@ func (s *Service) Ask(q Question) (*Conversation, error) {
 	return c, nil
 }
 
+// Complete asks the model one thing, with no conversation and no tools:
+// writing or weighing a script. The text is scrubbed first, it counts
+// against the spending caps, and it is audited as a question is.
+func (s *Service) Complete(ctx context.Context, who audit.Who, cluster, label, system, text string) (string, error) {
+	set := s.opts.Settings()
+	q := Question{Text: label, Cluster: cluster, Who: who}
+	if err := set.Caps.Check(s.opts.Ledger.Now(ctx)); err != nil {
+		s.record(q, "", nil, Usage{}, 0, audit.OutcomeDenied, err.Error())
+		return "", err
+	}
+	req := Request{Model: set.Model, MaxTokens: s.opts.MaxTokens, System: []Block{{Type: "text", Text: system}},
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: scrub.Text(text)}}}}}
+	resp, err := s.opts.Client.Stream(ctx, req, func(Delta) {})
+	cost := set.Price().Cost(resp.Usage)
+	s.opts.Ledger.Add(context.Background(), cost, true)
+	if serr := s.opts.Ledger.Save(context.Background()); serr != nil {
+		s.opts.Logger.Warn("saving the Sherlock spend failed", "err", serr)
+	}
+	if err != nil {
+		s.record(q, set.Model, nil, resp.Usage, cost, audit.OutcomeFailed, err.Error())
+		return "", errors.New(explain(err))
+	}
+	s.record(q, set.Model, nil, resp.Usage, cost, audit.OutcomeOK, "")
+	var b strings.Builder
+	for _, block := range resp.Content {
+		if block.Type == "text" {
+			b.WriteString(block.Text)
+		}
+	}
+	return b.String(), nil
+}
+
 // Stop stops the answer in progress, if any.
 func (s *Service) Stop(k Key) bool {
 	s.mu.Lock()

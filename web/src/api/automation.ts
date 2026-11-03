@@ -9,7 +9,15 @@ import reserveNodeResources from "../scripts/reserve-node-resources.sh?raw";
  */
 
 export type Privilege = "none" | "full";
-export type VersionState = "draft" | "review" | "approved" | "superseded";
+export type VersionState =
+  | "draft"
+  | "review"
+  | "approved"
+  | "superseded"
+  | "rejected";
+
+/** The longest reason a decision may carry, as the server allows. */
+export const MAX_COMMENT = 500;
 export type RunState =
   "running" | "succeeded" | "failed" | "stopped" | "cancelled" | "interrupted";
 export type NodeState =
@@ -33,6 +41,13 @@ export interface Param {
   name: string;
   required: boolean;
   desc?: string;
+  /** The value is a reference to a Kubernetes Secret. */
+  secret?: boolean;
+}
+
+export interface KubeAction {
+  verb: string;
+  resource: string;
 }
 
 export interface Header {
@@ -41,6 +56,10 @@ export interface Header {
   privilege: Privilege | "";
   dryRun: boolean;
   facts?: string[];
+  /** kubernetes for a script that acts on the cluster. */
+  target?: string;
+  k8s?: KubeAction[];
+  runsAs?: string;
 }
 
 export interface Finding {
@@ -65,6 +84,14 @@ export interface Version {
   approvals?: { by: Who; at: string }[];
   /** Who took its approvals back, and when. */
   revoked?: { by: Who; at: string }[];
+  /** Who turned it down in review, when and why. */
+  rejected?: { by: Who; at: string; comment?: string };
+  /** Sherlock's latest reading: advice, never an approval. */
+  review?: {
+    summary: string;
+    findings?: { level: string; line?: number; msg: string }[];
+    at: string;
+  };
 }
 
 export interface Script {
@@ -87,6 +114,8 @@ export interface RunBrief {
 
 export interface ScriptSummary {
   name: string;
+  /** kubernetes for a script that acts on the cluster. */
+  target?: string;
   group: string;
   describe: string;
   version: number;
@@ -99,6 +128,8 @@ export interface ScriptSummary {
   privilege: Privilege | "";
   /** The latest version declares dry-run yes. */
   dryRun: boolean;
+  /** What the latest and the approved version read. */
+  params?: Param[];
   errors: number;
   warnings: number;
   created: string;
@@ -111,14 +142,17 @@ export interface AutomationIndex {
   off: string;
   me: Who;
   scripts: ScriptSummary[];
+  groups: Group[];
   running: number;
   limits: { text: number; timeout: number; parallel: number; nodes: number };
 }
 
-export interface FleetParams {
+export interface FleetVariables {
   values?: Record<string, string>;
   nodes?: Record<string, Record<string, string>>;
   ceiling?: Privilege | "";
+  /** Parameters whose change always needs approval. */
+  sensitive?: string[];
 }
 
 export interface AutomationNode {
@@ -133,7 +167,7 @@ export interface AutomationFleet {
   id: string;
   name: string;
   nodes: AutomationNode[];
-  params: FleetParams;
+  params: FleetVariables;
 }
 
 export interface AutomationFleets {
@@ -142,6 +176,14 @@ export interface AutomationFleets {
   readOnly?: string;
   production: boolean;
   fleets: AutomationFleet[];
+  /** Parameters a node gets from more than one fleet. */
+  conflicts?: ParamConflict[];
+}
+
+export interface ParamConflict {
+  node: string;
+  param: string;
+  fleets: string[];
 }
 
 export interface Rollout {
@@ -180,6 +222,14 @@ export interface Run {
   by: Who;
   state: RunState;
   note?: string;
+  /** kubernetes for a script on the cluster. */
+  target?: string;
+  config?: string;
+  identity?: string;
+  /** Why this version could run. */
+  basis?: string;
+  hooks?: string[];
+  retryOf?: number;
   started: string;
   ended?: string;
   beat: string;
@@ -202,6 +252,14 @@ export interface RunRequest {
   nodes?: string[];
   params?: Record<string, string>;
   rollout: Rollout;
+  config?: string;
+  hooks?: HookRefs;
+}
+
+/** What runs around each node: drain, uncordon or script:<name>. */
+export interface HookRefs {
+  before?: string[];
+  after?: string[];
 }
 
 /** The fleet of every node of a cluster. */
@@ -236,11 +294,35 @@ export function rolloutHelp(mode: RolloutMode, size: number): string {
 
 /** The Scripts page's state filter. */
 export const SCRIPT_STATES: { id: string; label: string }[] = [
-  { id: "review", label: "Pending review" },
+  { id: "review", label: "Review" },
   { id: "draft", label: "Draft" },
   { id: "approved", label: "Approved" },
-  { id: "unapproved", label: "Nothing approved" },
 ];
+
+/** What a script is written in or acts on: Shell on nodes, K8S on the cluster. */
+export function scriptKind(target: string | undefined): string {
+  if (!target) return "Shell";
+  if (target === "kubernetes") return "K8S";
+  return target.charAt(0).toUpperCase() + target.slice(1);
+}
+
+/** How a fleet's privilege ceiling reads. */
+export const ceilingText = (c: string | undefined) =>
+  c === "full" ? "elevated" : "nobody";
+
+/** How a privilege reads: nobody, read-only, or elevated, the ssh-paired account's rights. */
+export const privilegeText = (p: string | undefined) =>
+  p === "full" ? "elevated" : p === "none" ? "nobody" : "—";
+
+/** The names the built-in run profiles go by; a run records the id. */
+const PROFILE_NAMES: Record<string, string> = {
+  "read-only": "nobody",
+  "login-user": "ssh-paired account",
+  "as-the-person": "login-user",
+};
+
+/** A run profile's name, from the id a run records. */
+export const profileName = (id: string) => PROFILE_NAMES[id] ?? id;
 
 export function inState(s: ScriptSummary, state: string): boolean {
   switch (state) {
@@ -319,6 +401,8 @@ export const approveVersion = (name: string, n: number) =>
   call<Script>(`${nameURL(name)}/versions/${n}/approve`, { method: "POST" });
 export const revokeVersion = (name: string, n: number) =>
   call<Script>(`${nameURL(name)}/versions/${n}/revoke`, post({}));
+export const rejectVersion = (name: string, n: number, comment: string) =>
+  call<Script>(`${nameURL(name)}/versions/${n}/reject`, post({ comment }));
 export const fetchRuns = (background = false) =>
   call<{ runs: Run[] | null }>(`${BASE}/runs`, {}, background).then(
     (r) => r.runs ?? [],
@@ -329,17 +413,185 @@ export const cancelRun = (id: number) =>
   call<{ cancelled: boolean }>(`${BASE}/runs/${id}/cancel`, { method: "POST" });
 export const fetchFleets = (cluster: string = LOCAL) =>
   call<AutomationFleets>(apiPath("automation/fleets", cluster));
-export const saveFleetParams = (
+export const saveFleetVariables = (
   cluster: string,
   fleet: string,
-  p: FleetParams,
+  p: FleetVariables & { reason?: string },
 ) =>
-  call<FleetParams>(
-    apiPath(`automation/fleets/${encodeURIComponent(fleet)}/params`, cluster),
+  call<{ params: FleetVariables; change?: VariableChange }>(
+    apiPath(`automation/fleets/${encodeURIComponent(fleet)}/variables`, cluster),
     { method: "PUT", body: JSON.stringify(p) },
   );
 export const startRun = (cluster: string, req: RunRequest) =>
   call<Run>(apiPath("automation/runs", cluster), post(req));
+export const retryRun = (cluster: string, id: number) =>
+  call<Run>(apiPath(`automation/runs/${id}/retry`, cluster), post({}));
+
+// ---------- configurations ----------
+
+export interface RunProfile {
+  id: string;
+  name: string;
+  kind: "ssh" | "kubernetes";
+  desc?: string;
+  privilege?: "none" | "full";
+  namespace?: string;
+  serviceAccount?: string;
+  fleets?: string[];
+  builtin?: boolean;
+  /** Runs in the last seven days. */
+  runs?: number;
+}
+
+export const fetchProfiles = () =>
+  call<{ profiles: RunProfile[] }>("/api/v1/automation/run-profiles");
+export const saveProfile = (c: RunProfile) =>
+  call<RunProfile>(
+    `/api/v1/automation/run-profiles/${encodeURIComponent(c.id)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(c),
+    },
+  );
+export const deleteProfile = (id: string) =>
+  call<void>(`/api/v1/automation/run-profiles/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+
+// ---------- facts ----------
+
+export interface NodeFacts {
+  cluster: string;
+  node: string;
+  at: string;
+  facts?: Record<string, string>;
+  error?: string;
+}
+
+export const fetchFacts = (cluster: string) =>
+  call<{ nodes: NodeFacts[]; keys: string[] }>(
+    apiPath("automation/facts", cluster),
+  );
+export const refreshFacts = (cluster: string, nodes?: string[]) =>
+  call<{ nodes: NodeFacts[] }>(
+    apiPath("automation/facts", cluster),
+    post({ nodes }),
+  );
+
+// ---------- parameter changes ----------
+
+export interface ImpactItem {
+  script: string;
+  version: number;
+  decision: "safe" | "approval";
+  why: string;
+  by: string;
+}
+
+export interface VariableChange {
+  id: number;
+  cluster: string;
+  fleet: string;
+  fleetName?: string;
+  by: Who;
+  at: string;
+  reason?: string;
+  changed: string[];
+  before: FleetVariables;
+  after: FleetVariables;
+  impact: ImpactItem[];
+  note?: string;
+  state: "waiting" | "approved" | "rejected" | "applied";
+  /** The reason given with a rejection. */
+  comment?: string;
+}
+
+export const fetchVariableChanges = (cluster: string) =>
+  call<{ changes: VariableChange[] }>(apiPath("automation/variable-changes", cluster));
+export const decideVariableChange = (
+  cluster: string,
+  id: number,
+  decision: "approve" | "reject",
+  comment = "",
+) =>
+  call<VariableChange>(
+    apiPath(`automation/variable-changes/${id}/${decision}`, cluster),
+    post(comment ? { comment } : {}),
+  );
+
+// ---------- Sherlock ----------
+
+export const draftScript = (
+  request: string,
+  text: string,
+  signal: AbortSignal,
+) =>
+  call<{
+    text: string;
+    findings: Finding[] | null;
+    questions: string[] | null;
+    /** What Sherlock said beside the code, a paragraph a round. */
+    notes?: string[] | null;
+    rounds: number;
+  }>("/api/v1/automation/sherlock/draft", {
+    ...post({ request, text }),
+    signal,
+  });
+
+// ---------- what waits for approval ----------
+
+/** One thing that waits, or waited, for an approval; Approved by and on name whoever decided it. */
+export interface ApprovalRow {
+  kind: "script" | "change" | "command";
+  state: "pending" | "approved" | "rejected" | "revoked";
+  what: string;
+  cluster?: string;
+  clusterName?: string;
+  requestedBy: string;
+  requestedAt?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  script?: string;
+  version?: number;
+  fleet?: string;
+  id?: string;
+  /** The reason given with a rejection. */
+  comment?: string;
+  /** Someone else decided what this person asked for. */
+  mine?: boolean;
+  /** This person asked for what waits, and may approve it themselves. */
+  own?: boolean;
+}
+
+/** What waits for this person, first, then what was decided, newest first. */
+export interface Approvals {
+  items: ApprovalRow[];
+}
+
+export const fetchApprovals = (background = false) =>
+  call<Approvals>("/api/v1/admin/approvals", {}, background);
+
+// ---------- groups ----------
+
+export interface Group {
+  name: string;
+  desc?: string;
+}
+
+export const saveGroup = (old: string | null, g: Group) =>
+  old === null
+    ? call<Group>("/api/v1/automation/groups", post(g))
+    : call<Group>(`/api/v1/automation/groups/${encodeURIComponent(old)}`, {
+        method: "PUT",
+        body: JSON.stringify(g),
+      });
+export const deleteGroup = (name: string) =>
+  call<{ deleted: boolean }>(
+    `/api/v1/automation/groups/${encodeURIComponent(name)}`,
+    { method: "DELETE" },
+  );
+export const reviewVersion = (name: string, n: number) =>
+  call<Script>(`${nameURL(name)}/versions/${n}/review`, post({}));
 
 // ---------- helpers the pages share ----------
 
@@ -362,7 +614,7 @@ export const SCRIPT_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 export const NEW_SCRIPT = `#!/bin/sh
 # 221b: describe: What this script does, in one line
 # 221b: param: PACKAGE required The package to keep installed
-# 221b: privilege: full
+# 221b: privilege: elevated
 # 221b: dry-run: yes
 set -eu
 
@@ -379,7 +631,13 @@ echo '{"changed": true, "msg": "installed"}'
 `;
 
 /** What a new script can start from. */
-export const SCRIPT_TEMPLATES: { id: string; label: string; name: string; group: string; text: string }[] = [
+export const SCRIPT_TEMPLATES: {
+  id: string;
+  label: string;
+  name: string;
+  group: string;
+  text: string;
+}[] = [
   { id: "blank", label: "An example", name: "", group: "", text: NEW_SCRIPT },
   {
     id: "reserve",
@@ -398,6 +656,10 @@ export interface ResolvedParam {
   desc?: string;
   value?: string;
   source?: Source;
+  /** The fleet a value comes from. */
+  from?: string;
+  /** The fleets that both set it, which is an error. */
+  conflict?: string[];
 }
 
 /**
@@ -406,7 +668,7 @@ export interface ResolvedParam {
  */
 export function resolveParams(
   params: Param[] | null | undefined,
-  fp: FleetParams | undefined,
+  fleets: AutomationFleet[],
   node: string,
   run: Record<string, string>,
 ): ResolvedParam[] {
@@ -416,33 +678,90 @@ export function resolveParams(
       required: p.required,
       desc: p.desc,
     };
-    const layers: [Source, Record<string, string> | undefined][] = [
-      ["run", run],
-      ["node", fp?.nodes?.[node]],
-      ["fleet", fp?.values],
-    ];
-    for (const [source, values] of layers) {
-      if (values && Object.prototype.hasOwnProperty.call(values, p.name)) {
-        out.value = values[p.name];
-        out.source = source;
-        break;
-      }
+    if (Object.prototype.hasOwnProperty.call(run, p.name)) {
+      out.value = run[p.name];
+      out.source = "run";
+      return out;
     }
-    return out;
+    return { ...out, ...inherited(fleets, node, p.name) };
   });
 }
 
-/** The required parameters with no value on any of the nodes, "node: NAME". */
-export function missingParams(
+/** What a node gets for a parameter: its own value, then its fleets', then All nodes'. */
+export function inherited(
+  fleets: AutomationFleet[],
+  node: string,
+  name: string,
+): Pick<ResolvedParam, "value" | "source" | "from" | "conflict"> {
+  const mine = fleets.filter(
+    (f) => f.id === ALL_NODES || f.nodes.some((n) => n.name === node),
+  );
+  const has = (m: Record<string, string> | undefined) =>
+    !!m && Object.prototype.hasOwnProperty.call(m, name);
+  const own = mine.filter((f) => has(f.params?.nodes?.[node]));
+  if (own.length > 0) {
+    const values = new Set(own.map((f) => f.params?.nodes?.[node]?.[name]));
+    if (values.size > 1) return { conflict: own.map((f) => f.name).sort() };
+    return {
+      value: own[0]!.params?.nodes?.[node]?.[name],
+      source: "node",
+      from: own[0]!.name,
+    };
+  }
+  const set = mine.filter((f) => f.id !== ALL_NODES && has(f.params?.values));
+  if (set.length > 1) return { conflict: set.map((f) => f.name).sort() };
+  const from =
+    set[0] ?? mine.find((f) => f.id === ALL_NODES && has(f.params?.values));
+  return from
+    ? { value: from.params?.values?.[name], source: "fleet", from: from.name }
+    : {};
+}
+
+/** The parameters a node gets, whatever script reads them. */
+export function nodeParams(
+  fleets: AutomationFleet[],
+  node: string,
+): ResolvedParam[] {
+  const names = new Set<string>();
+  for (const f of fleets) {
+    if (f.id !== ALL_NODES && !f.nodes.some((n) => n.name === node)) continue;
+    for (const k of Object.keys(f.params?.values ?? {})) names.add(k);
+    for (const k of Object.keys(f.params?.nodes?.[node] ?? {})) names.add(k);
+  }
+  return resolveParams(
+    [...names].sort().map((name) => ({ name, required: false })),
+    fleets,
+    node,
+    {},
+  );
+}
+
+/** What stops a run: a parameter a picked node gets from more than one fleet. */
+export function paramClashes(
   params: Param[] | null | undefined,
-  fp: FleetParams | undefined,
+  fleets: AutomationFleet[],
   nodes: string[],
   run: Record<string, string>,
 ): string[] {
   const out: string[] = [];
   for (const n of nodes)
-    for (const r of resolveParams(params, fp, n, run))
-      if (r.required && r.value === undefined) out.push(`${n}: ${r.name}`);
+    for (const r of resolveParams(params, fleets, n, run))
+      if (r.conflict)
+        out.push(`${r.name} on ${n} comes from ${r.conflict.join(" and ")}`);
+  return out;
+}
+
+export function missingParams(
+  params: Param[] | null | undefined,
+  fleets: AutomationFleet[],
+  nodes: string[],
+  run: Record<string, string>,
+): string[] {
+  const out: string[] = [];
+  for (const n of nodes)
+    for (const r of resolveParams(params, fleets, n, run))
+      if (r.required && r.value === undefined && !r.conflict)
+        out.push(n ? `${n}: ${r.name}` : r.name);
   return out;
 }
 
@@ -466,9 +785,47 @@ export function batches(
   return [nodes];
 }
 
+/**
+ * The run profiles a run may take, and the one that fits the script: what
+ * the server picks when none is named. A dry run on nodes takes nobody
+ * alone; a script on the cluster takes Kubernetes profiles; one on nodes
+ * takes those that reach the fleet, give at least what the script declares
+ * and no more than the fleet's ceiling. The one that fits is offered under
+ * any ceiling, so the dialog says what the ceiling stops.
+ */
+export function runProfilesFor(
+  profiles: RunProfile[],
+  o: {
+    onCluster: boolean;
+    dryRun: boolean;
+    privilege: Privilege | "";
+    fleet?: string;
+    fp?: FleetVariables;
+  },
+): { options: RunProfile[]; fit: RunProfile | undefined } {
+  const fitId = o.onCluster
+    ? "as-the-person"
+    : o.dryRun || o.privilege !== "full"
+      ? "read-only"
+      : "login-user";
+  const options = profiles
+    .filter((c) =>
+      o.onCluster
+        ? c.kind === "kubernetes"
+        : c.kind === "ssh" &&
+          (o.dryRun
+            ? c.id === "read-only"
+            : (!c.fleets?.length || c.fleets.includes(o.fleet ?? "")) &&
+              (o.privilege !== "full" || c.privilege === "full") &&
+              (c.id === fitId || allows(o.fp, c.privilege ?? ""))),
+    )
+    .sort((a, b) => Number(!!b.builtin) - Number(!!a.builtin));
+  return { options, fit: options.find((c) => c.id === fitId) ?? options[0] };
+}
+
 /** Whether a fleet's ceiling allows a privilege; the default ceiling is none. */
 export function allows(
-  fp: FleetParams | undefined,
+  fp: FleetVariables | undefined,
   privilege: Privilege | "",
 ): boolean {
   return privilege !== "full" || fp?.ceiling === "full";
@@ -529,7 +886,9 @@ export function versionTone(s: VersionState): Tone {
       ? "info"
       : s === "draft"
         ? "warn"
-        : undefined;
+        : s === "rejected"
+          ? "err"
+          : undefined;
 }
 
 /** "3 changed · 1 failed", in a fixed order. */
@@ -557,15 +916,24 @@ export function countsText(c: Partial<Record<NodeState, number>>): string {
  * never runs it, which the server enforces at run time).
  */
 export function canApprove(v: Version, me: Who): boolean {
-  if (v.state !== "review" && v.state !== "approved") return false;
+  if (v.state === "draft" || v.state === "rejected") return false;
   if (involved(v, me) || (v.approvals ?? []).some((a) => same(a.by, me)))
     return false;
-  return v.state === "review" || !runnable(v);
+  return v.state !== "approved" || !runnable(v);
+}
+
+/** Whether a person may reject a version: one in review they did not write or submit. */
+export function canReject(v: Version, me: Who): boolean {
+  return v.state === "review" && !involved(v, me);
 }
 
 /** Whether a person wrote or submitted a version, so may not approve it. */
 export function involved(v: Version, me: Who): boolean {
-  return [v.author, ...(v.editors ?? []), ...(v.submitted ? [v.submitted.by] : [])].some((w) => same(w, me));
+  return [
+    v.author,
+    ...(v.editors ?? []),
+    ...(v.submitted ? [v.submitted.by] : []),
+  ].some((w) => same(w, me));
 }
 
 export function same(a: Who, b: Who): boolean {
@@ -597,12 +965,19 @@ export interface ScriptGroup {
 }
 
 /** The groups for the Scripts page's left pane, Ungrouped last. */
-export function scriptGroups(list: ScriptSummary[]): ScriptGroup[] {
-  const counts = new Map<string, number>();
+export function scriptGroups(
+  list: ScriptSummary[],
+  kept: Group[] = [],
+): ScriptGroup[] {
+  const counts = new Map<string, number>(kept.map((g) => [g.name, 0]));
   for (const s of list) counts.set(s.group, (counts.get(s.group) ?? 0) + 1);
   return [...counts.entries()]
     .sort(([a], [b]) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)))
-    .map(([g, count]) => ({ id: g || UNGROUPED, name: g || "Ungrouped", count }));
+    .map(([g, count]) => ({
+      id: g || UNGROUPED,
+      name: g || "Ungrouped",
+      count,
+    }));
 }
 
 /** The groups picked, read from the URL; a group's name may hold a comma. */

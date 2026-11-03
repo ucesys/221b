@@ -4,7 +4,7 @@
 # 221b: param: SYSTEM_RESERVED_MEMORY required Memory kept for everything outside Kubernetes, such as 16Gi or 512Mi; 0 keeps none
 # 221b: param: KUBE_RESERVED_CPU optional CPU kept for the agent itself, such as 500m
 # 221b: param: KUBE_RESERVED_MEMORY optional Memory kept for the agent itself, such as 1Gi
-# 221b: privilege: full
+# 221b: privilege: elevated
 # 221b: dry-run: yes
 set -eu
 

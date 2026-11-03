@@ -36,6 +36,8 @@ interface Props {
   copy?: string | false
   /** The object's Tools button (Phase 10 review), beside the close button. */
   tools?: ReactNode
+  /** Controls on the tabs' line, at its right end, just above the body. */
+  tabsEnd?: ReactNode
 }
 
 
@@ -43,11 +45,13 @@ interface Props {
  * The prototype's details drawer: over the page from the right, with a
  * backdrop that closes it, a header with tabs, and a scrolling body.
  */
-export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId, ask, copy, tools }: Props) {
+export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId, ask, copy, tools, tabsEnd }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const aside = useRef<HTMLElement>(null)
-  // Opened by Sherlock (P6U-05), it stops above the dock and is not modal,
-  // so its answer, Undo and the question box stay in reach (P6U-09).
+  // Every drawer stops above the dock, and its last row keeps clear of the
+  // dock's round button, so neither hides what is there.
+  // Opened by Sherlock (P6U-05), it is not modal either, so its answer, Undo
+  // and the question box stay in reach (P6U-09).
   const [bySherlock] = useState(() => drivenRecently())
   // What had focus as the drawer opened, read before anything in it takes focus.
   const [opener] = useState(() => document.activeElement)
@@ -103,7 +107,7 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
     }
   }, [tab, children])
   return (
-    <div style={{ position: 'fixed', top: 0, right: 0, bottom: bySherlock ? 'var(--dock-space, 0px)' : 0, left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }} data-by-sherlock={bySherlock ? 'true' : undefined}>
+    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 'var(--dock-space, 0px)', left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }} data-by-sherlock={bySherlock ? 'true' : undefined}>
       <button aria-label={`Close ${label.toLowerCase()}`} tabIndex={-1} onClick={onClose} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
       <aside
         ref={aside}
@@ -141,6 +145,8 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
             </button>
           </div>
           {facts && <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 16px', fontSize: 12, color: 'var(--fg3)' }}>{facts}</div>}
+          {(tabs?.length || tabsEnd) && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 16px' }}>
           {tabs && tabs.length > 0 && (
             <nav aria-label={`${label} sections`} style={{ display: 'flex', flexWrap: 'wrap', gap: '0 20px' }}>
               {tabs.map((t) => (
@@ -151,13 +157,16 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
               ))}
             </nav>
           )}
-          {!tabs?.length && <div style={{ height: 6 }} />}
+              {tabsEnd && <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, padding: tabs?.length ? 0 : '0 0 10px' }}>{tabsEnd}</div>}
+            </div>
+          )}
+          {!tabs?.length && !tabsEnd && <div style={{ height: 6 }} />}
         </div>
         {notice}
-        <div ref={body} className="rk-drawer-body" tabIndex={scrolls ? 0 : undefined} role={scrolls ? 'region' : undefined} aria-label={scrolls ? `${label} content` : undefined} style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: '18px 20px 32px', display: 'flex', flexDirection: 'column', gap: 16, background: 'var(--bg)' }}>
+        <div ref={body} className="rk-drawer-body" tabIndex={scrolls ? 0 : undefined} role={scrolls ? 'region' : undefined} aria-label={scrolls ? `${label} content` : undefined} style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: footer ? '18px 20px 32px' : '18px 20px calc(32px + var(--fab-space, 0px))', display: 'flex', flexDirection: 'column', gap: 16, background: 'var(--bg)' }}>
           {children}
         </div>
-        {footer && <div style={{ flex: 'none', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '12px 20px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>{footer}</div>}
+        {footer && <div style={{ flex: 'none', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '12px calc(20px + var(--fab-space, 0px)) 12px 20px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>{footer}</div>}
       </aside>
     </div>
   )

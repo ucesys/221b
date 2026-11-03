@@ -19,6 +19,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/roles"
 )
 
@@ -83,6 +84,7 @@ func (s *Server) postNamespace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordOn(r, audit.OutcomeOK, ActionNamespaceCreate, in.Name, "labels="+strconv.Itoa(len(in.Labels)))
+	s.expectWrite(r)
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -327,6 +329,7 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordOn(r, audit.OutcomeOK, ActionSecretUpdate, ns+"/"+name, detail)
+	s.expectWrite(r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -362,6 +365,7 @@ func (s *Server) postSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordOn(r, audit.OutcomeOK, ActionSecretCreate, ns+"/"+in.Name, detail)
+	s.expectWrite(r)
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -391,4 +395,24 @@ func kubeStatus(err error) int {
 		}
 	}
 	return http.StatusBadGateway
+}
+
+// expectWrite tells the request's cluster store that the console just
+// wrote there, so the change shows as soon as the watch reports it.
+func (s *Server) expectWrite(r *http.Request) {
+	var st Store = s.opts.Store
+	if s.opts.Clusters != nil {
+		id := r.PathValue("cluster")
+		if id == "" {
+			id = clusters.LocalID
+		}
+		ls, _, ok := s.opts.Clusters.Lookup(id)
+		if !ok || ls == nil {
+			return
+		}
+		st = ls
+	}
+	if e, ok := st.(interface{ ExpectWrite() }); ok {
+		e.ExpectWrite()
+	}
 }

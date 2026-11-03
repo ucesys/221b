@@ -37,7 +37,7 @@ func TestHeaderSpacesAndColonsAreOptional(t *testing.T) {
 		if len(fs) != 0 {
 			t.Errorf("%q: %+v", text, fs)
 		}
-		if h.Describe != "Say hello" || h.Privilege != PrivilegeNone || !h.DryRun || len(h.Params) != 1 || h.Params[0].Name != "NAME" {
+		if h.Describe != "Say hello" || h.Privilege != PrivilegeNobody || !h.DryRun || len(h.Params) != 1 || h.Params[0].Name != "NAME" {
 			t.Errorf("%q: %+v", text, h)
 		}
 	}
@@ -51,7 +51,7 @@ func TestParseHeader(t *testing.T) {
 	if h.Describe != "Report mounts above a threshold and the largest directories on each" {
 		t.Errorf("describe = %q", h.Describe)
 	}
-	if h.Privilege != PrivilegeNone || !h.DryRun {
+	if h.Privilege != PrivilegeNobody || !h.DryRun {
 		t.Errorf("privilege %q dry-run %v", h.Privilege, h.DryRun)
 	}
 	if len(h.Params) != 2 || h.Params[0].Name != "THRESHOLD" || h.Params[0].Required || !h.Params[1].Required || h.Params[1].Desc != "the mount to look at" {
@@ -265,20 +265,20 @@ func TestParams(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	st := newStore(&now)
-	fp := FleetParams{Values: map[string]string{"MOUNT": "/var", "THRESHOLD": "85"}, Nodes: map[string]map[string]string{"gpu-07": {"MOUNT": "/data"}}}
-	if err := st.SetParams(ctx, "local", "gpu", fp); err != nil {
+	fp := FleetVariables{Values: map[string]string{"MOUNT": "/var", "THRESHOLD": "85"}, Nodes: map[string]map[string]string{"gpu-07": {"MOUNT": "/data"}}}
+	if err := st.SetVariables(ctx, "local", "gpu", fp); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetParams(ctx, "local", "gpu", FleetParams{Values: map[string]string{"lower": "x"}}); !errors.Is(err, ErrInvalid) {
+	if err := st.SetVariables(ctx, "local", "gpu", FleetVariables{Values: map[string]string{"lower": "x"}}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("a bad name: %v", err)
 	}
-	if err := st.SetParams(ctx, "local", "gpu", FleetParams{Values: map[string]string{"NODE": "x"}}); !errors.Is(err, ErrInvalid) {
+	if err := st.SetVariables(ctx, "local", "gpu", FleetVariables{Values: map[string]string{"NODE": "x"}}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("a reserved name: %v", err)
 	}
-	if err := st.SetParams(ctx, "local", "gpu", FleetParams{Ceiling: "limited"}); !errors.Is(err, ErrInvalid) {
+	if err := st.SetVariables(ctx, "local", "gpu", FleetVariables{Ceiling: "limited"}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("a bad ceiling: %v", err)
 	}
-	got, _ := st.Params(ctx, "local")
+	got, _ := st.Variables(ctx, "local")
 	h, _ := ParseHeader(goodScript)
 	r := Resolve(h, got["gpu"], "gpu-07", map[string]string{"THRESHOLD": "90"})
 	if r.Values["MOUNT"] != "/data" || r.Sources["MOUNT"] != SourceNode || r.Values["THRESHOLD"] != "90" || r.Sources["THRESHOLD"] != SourceRun {
@@ -288,11 +288,11 @@ func TestParams(t *testing.T) {
 	if r.Values["MOUNT"] != "/var" || r.Sources["MOUNT"] != SourceFleet {
 		t.Errorf("gpu-01: %+v", r)
 	}
-	r = Resolve(h, FleetParams{}, "x", nil)
+	r = Resolve(h, FleetVariables{}, "x", nil)
 	if len(r.Missing) != 1 || r.Missing[0] != "MOUNT" {
 		t.Errorf("missing: %+v", r)
 	}
-	if (FleetParams{Ceiling: PrivilegeNone}).Allows(PrivilegeFull) || !(FleetParams{}).Allows(PrivilegeFull) {
+	if (FleetVariables{Ceiling: PrivilegeNobody}).Allows(PrivilegeElevated) || (FleetVariables{}).Allows(PrivilegeElevated) || !(FleetVariables{Ceiling: PrivilegeElevated}).Allows(PrivilegeElevated) {
 		t.Error("the ceiling")
 	}
 }
@@ -408,7 +408,7 @@ func approved(privilege string) Version {
 func TestRun(t *testing.T) {
 	f := &fakeExec{}
 	e, ended := testEngine(t, f)
-	sp := Spec{Script: "disk-report", Version: approved(PrivilegeFull), Cluster: "local", Fleet: "gpu", Nodes: []string{"ok-1", "chg-2", "boot-3"},
+	sp := Spec{Script: "disk-report", Version: approved(PrivilegeElevated), Cluster: "local", Fleet: "gpu", Nodes: []string{"ok-1", "chg-2", "boot-3"},
 		Values: map[string]map[string]string{"ok-1": {"MOUNT": "/var"}}, Rollout: Rollout{Mode: RolloutAll}, Who: Who{Name: "Ann", User: "ann"}}
 	r, err := e.Start(context.Background(), sp)
 	if err != nil || r.ID != 1 {
@@ -458,7 +458,7 @@ func TestRun(t *testing.T) {
 func TestDryRunAndPrivilegeNone(t *testing.T) {
 	f := &fakeExec{}
 	e, ended := testEngine(t, f)
-	_, err := e.Start(context.Background(), Spec{Version: approved(PrivilegeFull), DryRun: true, Nodes: []string{"boot-1"}, Rollout: Rollout{}})
+	_, err := e.Start(context.Background(), Spec{Version: approved(PrivilegeElevated), DryRun: true, Nodes: []string{"boot-1"}, Rollout: Rollout{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +469,7 @@ func TestDryRunAndPrivilegeNone(t *testing.T) {
 	if r.Nodes[0].State != NodeChanged {
 		t.Errorf("a dry run's would-change: %s", r.Nodes[0].State)
 	}
-	if _, err := e.Start(context.Background(), Spec{Version: approved(PrivilegeNone), Nodes: []string{"ok-2"}}); err != nil {
+	if _, err := e.Start(context.Background(), Spec{Version: approved(PrivilegeNobody), Nodes: []string{"ok-2"}}); err != nil {
 		t.Fatal(err)
 	}
 	wait(t, ended)
@@ -482,20 +482,20 @@ func TestStopAndFailures(t *testing.T) {
 	f := &fakeExec{down: map[string]bool{"down-2": true}}
 	e, ended := testEngine(t, f)
 	// The first batch stops the run on any failure.
-	e.Start(context.Background(), Spec{Version: approved(PrivilegeFull), Nodes: []string{"fail-1", "ok-2", "ok-3"}, Rollout: Rollout{Mode: RolloutCanary}})
+	e.Start(context.Background(), Spec{Version: approved(PrivilegeElevated), Nodes: []string{"fail-1", "ok-2", "ok-3"}, Rollout: Rollout{Mode: RolloutCanary}})
 	r := wait(t, ended)
 	if r.State != RunStopped || r.Nodes[0].State != NodeFailed || r.Nodes[1].State != NodeSkipped || *r.Nodes[0].Exit != 3 {
 		t.Errorf("canary: %s %+v", r.State, r.Nodes)
 	}
 	// Unreachable counts apart from failed; with no limit the run goes on
 	// and ends failed.
-	e.Start(context.Background(), Spec{Version: approved(PrivilegeFull), Nodes: []string{"ok-1", "down-2", "ok-3"}, Rollout: Rollout{Mode: RolloutSize, Size: 1}})
+	e.Start(context.Background(), Spec{Version: approved(PrivilegeElevated), Nodes: []string{"ok-1", "down-2", "ok-3"}, Rollout: Rollout{Mode: RolloutSize, Size: 1}})
 	r = wait(t, ended)
 	if r.State != RunFailed || r.Nodes[1].State != NodeUnreachable || r.Nodes[2].State != NodeNoChange {
 		t.Errorf("unreachable: %s %+v", r.State, r.Nodes)
 	}
 	// A limit of 1 stops after the first failure.
-	e.Start(context.Background(), Spec{Version: approved(PrivilegeFull), Nodes: []string{"ok-1", "fail-2", "ok-3", "ok-4"}, Rollout: Rollout{Mode: RolloutSize, Size: 1, StopAfter: 1}})
+	e.Start(context.Background(), Spec{Version: approved(PrivilegeElevated), Nodes: []string{"ok-1", "fail-2", "ok-3", "ok-4"}, Rollout: Rollout{Mode: RolloutSize, Size: 1, StopAfter: 1}})
 	r = wait(t, ended)
 	if r.State != RunStopped || r.Nodes[2].State != NodeSkipped {
 		t.Errorf("limit: %s %+v", r.State, r.Nodes)
@@ -505,7 +505,7 @@ func TestStopAndFailures(t *testing.T) {
 func TestCancel(t *testing.T) {
 	f := &fakeExec{block: make(chan struct{})}
 	e, ended := testEngine(t, f)
-	r, _ := e.Start(context.Background(), Spec{Version: approved(PrivilegeFull), Nodes: []string{"ok-1", "ok-2"}, Rollout: Rollout{Mode: RolloutSize, Size: 1}})
+	r, _ := e.Start(context.Background(), Spec{Version: approved(PrivilegeElevated), Nodes: []string{"ok-1", "ok-2"}, Rollout: Rollout{Mode: RolloutSize, Size: 1}})
 	time.Sleep(50 * time.Millisecond)
 	if !e.Running(r.ID) || !e.Cancel(r.ID) {
 		t.Fatal("not running")
@@ -628,5 +628,121 @@ func TestAnySuperAdminRevokesAnApprovalAndItStopsRunning(t *testing.T) {
 	}
 	if s, err = st.Approve(ctx, "s", 2, sam); err != nil || s.Versions[1].State != StateApproved {
 		t.Fatalf("approving again: %v", err)
+	}
+}
+
+// An older version a newer one replaced can be approved again, by someone
+// who did not write it; a draft cannot.
+func TestAnOlderVersionCanBeApproved(t *testing.T) {
+	ctx := context.Background()
+	st := NewStore(&kv.Memory{}, time.Now)
+	ann, sam := Who{Name: "Ann"}, Who{Name: "Sam"}
+	text := "#!/bin/sh\n# 221b:describe x\n# 221b:privilege none\necho one\n"
+	st.Save(ctx, "s", "", text, ann, true)
+	st.Submit(ctx, "s", 1, ann)
+	st.Save(ctx, "s", "", text+"echo two\n", ann, false)
+	s, _ := st.Submit(ctx, "s", 2, ann)
+	if s.Versions[0].State != StateSuperseded {
+		t.Fatalf("v1 is %s", s.Versions[0].State)
+	}
+	if _, err := st.Approve(ctx, "s", 1, ann); err == nil {
+		t.Fatal("the author approved an older version")
+	}
+	s, err := st.Approve(ctx, "s", 1, sam)
+	if err != nil || s.Versions[0].State != StateApproved {
+		t.Fatalf("%v %+v", err, s.Versions[0])
+	}
+	st.Save(ctx, "s", "", text+"echo three\n", ann, false)
+	if _, err := st.Approve(ctx, "s", 3, sam); err == nil {
+		t.Fatal("a draft was approved")
+	}
+}
+
+// A version in review is rejected with a reason, by someone who did not
+// write it; it never runs or comes back, and the fix is the next version.
+func TestARejectionSaysWhyAndIsFinal(t *testing.T) {
+	ctx := context.Background()
+	st := NewStore(&kv.Memory{}, time.Now)
+	ann, sam := Who{Name: "Ann"}, Who{Name: "Sam"}
+	text := "#!/bin/sh\n# 221b:describe x\n# 221b:privilege none\necho one\n"
+	if _, err := st.Save(ctx, "s", "", text, ann, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Reject(ctx, "s", 1, sam, "too soon"); err == nil {
+		t.Fatal("rejected a draft")
+	}
+	if _, err := st.Submit(ctx, "s", 1, ann); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Reject(ctx, "s", 1, ann, "mine"); !errors.Is(err, ErrOwnWork) {
+		t.Fatalf("the author rejected it: %v", err)
+	}
+	if _, err := st.Reject(ctx, "s", 1, sam, "   "); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("rejected without a reason: %v", err)
+	}
+	if _, err := st.Reject(ctx, "s", 1, sam, strings.Repeat("x", MaxComment+1)); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a reason over the limit: %v", err)
+	}
+	s, err := st.Reject(ctx, "s", 1, sam, " restarts sshd on every node ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := s.Version(1)
+	if v.State != StateRejected || v.Rejected == nil || v.Rejected.By.Name != "Sam" || v.Rejected.Comment != "restarts sshd on every node" {
+		t.Fatalf("after the rejection: %+v", v)
+	}
+	if _, err := st.Approve(ctx, "s", 1, sam); err == nil {
+		t.Fatal("a rejected version was approved")
+	}
+	if _, err := RunVersion(s, true, 1); err == nil {
+		t.Fatal("a rejected version ran on production")
+	}
+	if _, err := RunVersion(s, false, 1); err == nil {
+		t.Fatal("a rejected version ran off production")
+	}
+	if _, err := RunVersion(s, false, 0); err == nil {
+		t.Fatal("a rejected latest version ran off production")
+	}
+	if s, err = st.Save(ctx, "s", "", text+"echo two\n", ann, false); err != nil || s.Latest().N != 2 || s.Latest().State != StateDraft {
+		t.Fatalf("the fix: %+v, %v", s.Latest(), err)
+	}
+	if waiting, _ := st.ToApprove(ctx, sam); len(waiting) != 0 {
+		t.Fatalf("a rejected version waits: %+v", waiting)
+	}
+}
+
+// Rejecting a change says why; approving one needs no reason.
+func TestARejectedChangeKeepsItsReason(t *testing.T) {
+	ctx := context.Background()
+	st := NewStore(&kv.Memory{}, time.Now)
+	c, err := st.NewChange(ctx, VariableChange{Cluster: "prod", Fleet: "web", By: Who{Name: "Ann"}, State: ChangeWaiting})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.DecideChange(ctx, "prod", c.ID, false, "", Who{Name: "Sam"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("rejected without a reason: %v", err)
+	}
+	got, err := st.DecideChange(ctx, "prod", c.ID, false, "wrong mirror", Who{Name: "Sam"})
+	if err != nil || got.State != ChangeRejected || got.Comment != "wrong mirror" || got.DecidedBy == nil || got.DecidedBy.Name != "Sam" {
+		t.Fatalf("%+v, %v", got, err)
+	}
+}
+
+// A lower-case parameter name says what to write instead.
+func TestAParameterNameInLowerCaseSaysWhatToWrite(t *testing.T) {
+	_, fs := Check("#!/bin/sh\n# 221b:describe x\n# 221b:param myname secret who\n# 221b:privilege none\necho \"$MYNAME\"\n")
+	found := false
+	for _, f := range fs {
+		if f.Code == "param-name" {
+			found = strings.Contains(f.Msg, "write MYNAME, not myname")
+		}
+	}
+	if !found {
+		t.Fatalf("%+v", fs)
+	}
+	for in, want := range map[string]string{"my-name": "MY_NAME", "9lives": "_9LIVES", "db.pass": "DB_PASS"} {
+		if got := suggestName(in); got != want {
+			t.Errorf("%s: %s, want %s", in, got, want)
+		}
 	}
 }

@@ -57,6 +57,13 @@ const (
 	defaultKeepOutputs = 50
 )
 
+// HookRefs name what runs around each node: drain, uncordon, or
+// script:<name> for an approved Kubernetes script.
+type HookRefs struct {
+	Before []string `json:"before,omitempty"`
+	After  []string `json:"after,omitempty"`
+}
+
 // Rollout says how a run goes through its nodes.
 type Rollout struct {
 	// Mode is all (one batch), size (batches of Size) or canary (one node,
@@ -168,12 +175,31 @@ type Run struct {
 	Rollout     Rollout           `json:"rollout"`
 	By          Who               `json:"by"`
 	State       string            `json:"state"`
+	// Target is kubernetes for a script on the cluster, Config the
+	// configuration that supplied the privilege, and Identity the service
+	// account Kubernetes commands ran as, "" for the person.
+	Target   string `json:"target,omitempty"`
+	Config   string `json:"config,omitempty"`
+	Identity string `json:"identity,omitempty"`
+	// Basis says why this version could run: approved code, or not
+	// approved, off production.
+	Basis string `json:"basis,omitempty"`
+	// Hooks name what ran around each node; RetryOf is the run this one
+	// tries again.
+	Hooks    []string `json:"hooks,omitempty"`
+	HookRefs HookRefs `json:"hookRefs"`
+	RetryOf  int      `json:"retryOf,omitempty"`
 	// Note says why a run stopped early or failed to start a node.
 	Note    string       `json:"note,omitempty"`
 	Started time.Time    `json:"started"`
 	Ended   *time.Time   `json:"ended,omitempty"`
 	Beat    time.Time    `json:"beat"`
 	Nodes   []NodeResult `json:"nodes"`
+}
+
+// Watson is how every command of this run reads in the audit log.
+func (r Run) Watson() string {
+	return fmt.Sprintf("Watson via %s v%d, run #%d", r.Script, r.Version, r.ID)
 }
 
 // Counts counts the nodes by state.

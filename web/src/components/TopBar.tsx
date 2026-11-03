@@ -20,6 +20,8 @@ import {
   type Tab,
 } from "../lib/router";
 import { openAdmin, pagesFor } from "./AdminPage";
+import { fetchApprovals } from "../api/automation";
+import { SEEN_EVENT, seenAt, startSeen, unseen } from "../lib/approvalsSeen";
 import { ClusterMenu } from "./ClusterMenu";
 import { Chevron, GearIcon, Logo, MoonIcon, SunIcon } from "./Icons";
 
@@ -413,6 +415,49 @@ export function TopBar({
   // set (live.Store.SetSettings), and the browser hears of it at that
   // moment: the countdown and the ring start again then, at the new speed,
   // rather than finishing the old interval first.
+  // What this SuperAdmin has not seen on Approvals yet: reviews that came
+  // in for them to approve, and decisions on what they asked for.
+  const [news, setNews] = useState({ waiting: 0, decided: 0 });
+  const approver = !!me && pagesFor(me).includes("approvals");
+  useEffect(() => {
+    if (!approver) return;
+    let gone = false;
+    const look = () =>
+      fetchApprovals(true).then(
+        (a) => {
+          if (gone) return;
+          const seen = seenAt() ?? startSeen(a.items);
+          setNews(unseen(a.items, seen));
+        },
+        () => {},
+      );
+    void look();
+    // Every 15 seconds, and at once when the person comes back to the tab.
+    const t = setInterval(() => void look(), 15_000);
+    const back = () => {
+      if (document.visibilityState === "visible") void look();
+    };
+    const seenNow = () => setNews({ waiting: 0, decided: 0 });
+    window.addEventListener(SEEN_EVENT, seenNow);
+    window.addEventListener("focus", back);
+    document.addEventListener("visibilitychange", back);
+    return () => {
+      gone = true;
+      clearInterval(t);
+      window.removeEventListener(SEEN_EVENT, seenNow);
+      window.removeEventListener("focus", back);
+      document.removeEventListener("visibilitychange", back);
+    };
+  }, [approver]);
+  const flagged = news.waiting + news.decided > 0;
+  const newsText = [
+    news.waiting > 0 &&
+      `${news.waiting} new ${news.waiting === 1 ? "review" : "reviews"} for you to approve`,
+    news.decided > 0 &&
+      `${news.decided} of your ${news.decided === 1 ? "requests was" : "requests were"} decided`,
+  ]
+    .filter(Boolean)
+    .join(", ");
   const [rate, setRate] = useState({ every, at: 0 });
   if (rate.every !== every) setRate({ every, at: rate.every ? now : 0 });
   const since =
@@ -432,14 +477,15 @@ export function TopBar({
     .join(" ");
 
   // Automation is an area of its own, a SuperAdmin's (AU-01, AU-13). Nodes
-  // is in both, and stays in the area it was opened from.
+  // is in both, and stays in the area it was opened from; so do the pages
+  // with no tab, such as Administration.
   const [nodesArea, setNodesArea] = usePref<Area>("221b.nodes-area", "kubernetes");
   const automationOn = me?.admin === true;
   const area: Area = !automationOn
     ? "kubernetes"
     : isAutomationTab(tab)
       ? "automation"
-      : tab === "nodes"
+      : tab === "nodes" || tab === null
         ? nodesArea
         : "kubernetes";
   useEffect(() => {
@@ -707,20 +753,45 @@ export function TopBar({
         </span>
         {me && pagesFor(me).length > 0 && (
           // Administration: roles, permissions, users and settings, behind
-          // the gear (the Settings page is one of its pages).
+          // the gear (the Settings page is one of its pages). A flag on it
+          // says a review came in for the person to approve, or someone
+          // decided what they asked for; it then opens Approvals.
           <a
             className="rk-icon-btn"
-            href={adminHref(pagesFor(me)[0]!)}
+            href={adminHref(flagged ? "approvals" : pagesFor(me)[0]!)}
             aria-current={route.view === "admin" ? "page" : undefined}
-            aria-label="Administration"
-            title="Administration: roles, permissions, users and settings"
+            aria-label={
+              flagged ? `Administration: ${newsText}. Open Approvals` : "Administration"
+            }
+            title={
+              flagged
+                ? `${newsText}: open Approvals`
+                : "Administration: roles, permissions, users and settings"
+            }
             onClick={(e) => {
               e.preventDefault();
-              openAdmin(pagesFor(me)[0]!);
+              openAdmin(flagged ? "approvals" : pagesFor(me)[0]!);
             }}
             data-testid="admin-link"
+            style={{ position: "relative" }}
           >
             <GearIcon />
+            {flagged && (
+              <span
+                aria-hidden="true"
+                data-testid="admin-flag"
+                style={{
+                  position: "absolute",
+                  top: 3,
+                  right: 3,
+                  width: 8,
+                  height: 8,
+                  borderRadius: "50%",
+                  background: "var(--warn)",
+                  boxShadow: "0 0 0 2px var(--surface)",
+                }}
+              />
+            )}
           </a>
         )}
         {me && <AccountMenu me={me} theme={theme} onTheme={onTheme} />}

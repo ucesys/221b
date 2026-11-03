@@ -5,6 +5,7 @@ import { PermissionsPage } from './PermissionsPage'
 import { RolesPage } from './RolesPage'
 import { SettingsPanel } from './SettingsPage'
 import { UsersPage } from './UsersPage'
+import { AdminApprovals } from './AdminApprovals'
 import { AdminAudit } from './AdminAudit'
 import { AdminBackup } from './AdminBackup'
 import { AdminSessions, AdminToolbox } from './toolbox/AdminToolbox'
@@ -21,9 +22,9 @@ const PAGES: { id: Page; label: string; tip: string; superOnly: boolean }[] = [
   { id: 'roles', label: 'Roles', tip: 'The four roles and who holds them', superOnly: false },
   { id: 'permissions', label: 'Permissions', tip: 'What each role may read and change', superOnly: false },
   { id: 'users', label: 'Users', tip: 'SuperAdmin only: the people 221B knows', superOnly: true },
-  { id: 'sessions', label: 'Sessions', tip: 'SuperAdmin only: the Toolbox’s sessions, open and ended', superOnly: true },
   { id: 'toolbox', label: 'Toolbox', tip: 'SuperAdmin only: what the chart allows the Toolbox', superOnly: true },
-  { id: 'audit', label: 'Audit log', tip: 'SuperAdmin only: who did what, and when', superOnly: true },
+  { id: 'approvals', label: 'Approvals', tip: 'SuperAdmin only: what waits for your approval, and what was decided', superOnly: true },
+  { id: 'logs', label: 'Logs', tip: 'SuperAdmin only: the Toolbox’s sessions, and the audit log of who did what', superOnly: true },
   { id: 'settings', label: 'Settings', tip: 'SuperAdmin only: refresh rate, Sherlock and Watson', superOnly: true },
   { id: 'backup', label: 'Backup', tip: 'SuperAdmin only: a backup of the console’s own data, and a restore', superOnly: true },
 ]
@@ -40,8 +41,33 @@ export function isSuperAdmin(me: Me | null): boolean {
  */
 export function pagesFor(me: Me | null): Page[] {
   if (!me) return []
-  if (me.mode === 'none') return ['permissions', 'sessions', 'toolbox', 'audit', 'settings', 'backup']
+  if (me.mode === 'none') return ['permissions', 'toolbox', 'approvals', 'logs', 'settings', 'backup']
   return ADMIN_PAGES.filter((p) => isSuperAdmin(me) || !PAGES.find((x) => x.id === p)!.superOnly)
+}
+
+type Log = 'sessions' | 'audit'
+
+/** Administration › Logs: the Toolbox's sessions, and the audit log (#/admin/logs/audit). */
+function Logs(props: AdminProps) {
+  const { route } = props
+  const log: Log = route.path[1] === 'audit' ? 'audit' : 'sessions'
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }} data-testid="admin-logs">
+      <div className="rk-seg" role="group" aria-label="Log" style={{ alignSelf: 'flex-start' }}>
+        {(
+          [
+            ['sessions', 'Sessions'],
+            ['audit', 'Audit log'],
+          ] as const
+        ).map(([id, label]) => (
+          <button key={id} type="button" aria-pressed={log === id} onClick={() => navigate(adminHref('logs', [id], route.cluster), true)} data-testid={`logs-${id}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {log === 'sessions' ? <AdminSessions {...props} /> : <AdminAudit {...props} />}
+    </div>
+  )
 }
 
 // Where Administration was opened from, to go back to.
@@ -96,6 +122,8 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
       // Escape in a field is the field's; elsewhere it leaves the page.
       if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || (t.tagName === 'INPUT' && (t as HTMLInputElement).value !== ''))) return
       if (document.querySelector('dialog[open], [role="dialog"], [role="alertdialog"]')) return
+      // Escape in the Sherlock and Watson panel is the panel's.
+      if (t?.closest('[data-testid="sherlock-dock"]')) return
       e.preventDefault()
       closeAdmin()
     }
@@ -105,7 +133,7 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
 
   const props: AdminProps = { route, me, now, cluster, onToast }
   return (
-    <main className="rk-main" style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '24px 20px 48px', background: 'var(--bg)' }} aria-label="Administration" data-testid="admin-page">
+    <main className="rk-main" style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '24px 20px 48px', overflow: 'auto', background: 'var(--bg)' }} aria-label="Administration" data-testid="admin-page">
       <div style={{ width: 'min(1280px, 100%)', display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 16px' }}>
           <button className="rk-btn" onClick={closeAdmin} title="Back (Esc)" data-testid="admin-back">
@@ -117,7 +145,7 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>Administration</h1>
           <nav aria-label="Administration pages" style={{ display: 'flex', flexWrap: 'wrap', gap: '0 18px', marginLeft: 8 }}>
             {PAGES.filter((p) => offered.includes(p.id)).map((p) => (
-              <a key={p.id} className="rk-tab" href={adminHref(p.id, [], p.id === 'roles' || p.id === 'permissions' || p.id === 'sessions' || p.id === 'toolbox' ? route.cluster : 'local')} aria-current={p.id === page ? 'page' : undefined} title={p.tip} data-admin-page={p.id} style={{ height: 36 }}>
+              <a key={p.id} className="rk-tab" href={adminHref(p.id, [], p.id === 'roles' || p.id === 'permissions' || p.id === 'logs' || p.id === 'toolbox' ? route.cluster : 'local')} aria-current={p.id === page ? 'page' : undefined} title={p.tip} data-admin-page={p.id} style={{ height: 36 }}>
                 {p.label}
               </a>
             ))}
@@ -131,9 +159,9 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
         {me && !refused && page === 'roles' && <RolesPage {...props} />}
         {me && !refused && page === 'permissions' && <PermissionsPage {...props} />}
         {me && !refused && page === 'users' && <UsersPage {...props} />}
-        {me && !refused && page === 'sessions' && <AdminSessions {...props} />}
         {me && !refused && page === 'toolbox' && <AdminToolbox {...props} />}
-        {me && !refused && page === 'audit' && <AdminAudit {...props} />}
+        {me && !refused && page === 'approvals' && <AdminApprovals {...props} />}
+        {me && !refused && page === 'logs' && <Logs {...props} />}
         {me && !refused && page === 'settings' && <SettingsPanel route={route} settings={settings} refreshedAt={refreshedAt} />}
         {me && !refused && page === 'backup' && <AdminBackup {...props} />}
       </div>

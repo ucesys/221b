@@ -12,8 +12,9 @@ export type Tab =
   | "nodes"
   | "fleets"
   | "scripts"
-  | "executions"
-  | "parameters"
+  | "run-history"
+  | "variables"
+  | "run-profiles"
   | "namespaces"
   | "pods"
   | "helm"
@@ -47,14 +48,19 @@ export const TABS: { id: Tab; label: string; tip: string }[] = [
     tip: "Shell scripts with a 221b header, their versions and approvals",
   },
   {
-    id: "executions",
-    label: "Executions",
-    tip: "Every run and dry run, newest first, with each node’s result",
+    id: "variables",
+    label: "Variables",
+    tip: "Values the scripts read on this cluster’s fleets and nodes, and each fleet’s privilege ceiling",
   },
   {
-    id: "parameters",
-    label: "Parameters",
-    tip: "Values the scripts’ parameters take on this cluster’s fleets, and each fleet’s privilege ceiling",
+    id: "run-profiles",
+    label: "Run Profiles",
+    tip: "Who a script runs as, with what privilege, and on which fleets",
+  },
+  {
+    id: "run-history",
+    label: "Run History",
+    tip: "Every run and dry run, with each node’s result",
   },
   {
     id: "namespaces",
@@ -104,7 +110,12 @@ export type Area = "kubernetes" | "automation";
 
 /** Whether a tab is Automation's alone; Nodes is in both areas. */
 export function isAutomationTab(tab: Tab | null): boolean {
-  return tab === "scripts" || tab === "executions" || tab === "parameters";
+  return (
+    tab === "scripts" ||
+    tab === "run-history" ||
+    tab === "variables" ||
+    tab === "run-profiles"
+  );
 }
 
 /** The connection of the cluster the console was started against. */
@@ -139,6 +150,13 @@ function decodeSeg(seg: string): string {
   }
 }
 
+/** Pages that changed their names, by the name a saved link still uses. */
+const RENAMED: Record<string, Tab> = {
+  executions: "run-history",
+  parameters: "variables",
+  configurations: "run-profiles",
+};
+
 export function parseHash(hash: string): Route {
   const h = hash.replace(/^#\/?/, "");
   const [pathPart = "", query = ""] = h.split("?", 2) as [string?, string?];
@@ -172,12 +190,16 @@ export function parseHash(hash: string): Route {
     };
   // The Administration area (RB-41): #/admin/roles, #/admin/permissions, #/admin/users and #/admin/settings/<section>.
   // Roles and Permissions describe a cluster, so they take the cluster prefix; Users and Settings belong to the console.
+  // Sessions and Audit log moved under Logs: their old links land there.
   if (first === "admin")
     return {
       cluster,
       view: "admin",
       tab: FIRST_TAB,
-      path: segs.slice(1),
+      path:
+        segs[1] === "sessions" || segs[1] === "audit"
+          ? ["logs", ...segs.slice(1)]
+          : segs.slice(1),
       params: new URLSearchParams(query),
     };
   // Settings moved under Administration (RB-47): an old #/settings link lands on it.
@@ -204,11 +226,21 @@ export function parseHash(hash: string): Route {
     return {
       cluster,
       view: "tabs",
-      tab: old === "runs" ? "executions" : old === "params" ? "parameters" : "scripts",
+      tab: old === "runs" ? "run-history" : old === "params" ? "variables" : "scripts",
       path: [],
       params: new URLSearchParams(query),
     };
   }
+  // The Automation pages' earlier names still open them.
+  const was = RENAMED[first];
+  if (was)
+    return {
+      cluster,
+      view: "tabs",
+      tab: was,
+      path: segs.slice(1),
+      params: new URLSearchParams(query),
+    };
   const tab: Tab = TABS.some((t) => t.id === first)
     ? (first as Tab)
     : FIRST_TAB;
@@ -268,9 +300,9 @@ export type AdminPage =
   | "roles"
   | "permissions"
   | "users"
-  | "sessions"
   | "toolbox"
-  | "audit"
+  | "approvals"
+  | "logs"
   | "settings"
   | "backup";
 
@@ -278,9 +310,9 @@ export const ADMIN_PAGES: AdminPage[] = [
   "roles",
   "permissions",
   "users",
-  "sessions",
   "toolbox",
-  "audit",
+  "approvals",
+  "logs",
   "settings",
   "backup",
 ];

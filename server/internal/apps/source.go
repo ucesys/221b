@@ -242,11 +242,15 @@ type Record struct {
 	HasToken bool `json:"hasToken,omitempty"`
 	// Rev is the stored version Get read, which Save holds it to; it is
 	// not part of the record.
-	Rev       string    `json:"-"`
-	CreatedBy string    `json:"createdBy,omitempty"`
-	Created   time.Time `json:"created"`
-	UpdatedBy string    `json:"updatedBy,omitempty"`
-	Updated   time.Time `json:"updated"`
+	Rev string `json:"-"`
+	// CreatorNamespaces are the namespaces whoever created it could reach
+	// then: someone with the same access sees it, even before the release
+	// has a namespace to be seen in.
+	CreatorNamespaces []string  `json:"creatorNamespaces,omitempty"`
+	CreatedBy         string    `json:"createdBy,omitempty"`
+	Created           time.Time `json:"created"`
+	UpdatedBy         string    `json:"updatedBy,omitempty"`
+	Updated           time.Time `json:"updated"`
 }
 
 // RecordVersion is the current format of a saved record.

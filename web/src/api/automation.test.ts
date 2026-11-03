@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { AutomationFleet, FleetVariables, RunProfile } from "./automation";
 import {
+  runProfilesFor,
   allows,
   approvedOf,
   batches,
@@ -11,6 +13,8 @@ import {
   inGroups,
   inState,
   missingParams,
+  nodeParams,
+  paramClashes,
   parseGroups,
   resolveParams,
   rolloutHelp,
@@ -34,6 +38,50 @@ const ver = (over: Partial<Version>): Version => ({
   ...over,
 });
 
+const one = (params: FleetVariables): AutomationFleet[] => [
+  { id: "_all", name: "All nodes", nodes: [], params },
+];
+
+describe("what a node inherits", () => {
+  const fleet = (
+    name: string,
+    node: string,
+    values: Record<string, string>,
+    nodes = {},
+  ): AutomationFleet => ({
+    id: name,
+    name,
+    nodes: [{ name: node, paired: true }],
+    params: { values, nodes },
+  });
+  it("takes its own value over a fleet's, a fleet's over All nodes', and flags two fleets", () => {
+    const fleets = [
+      fleet("Web", "n1", { A: "web", C: "web" }, { n1: { C: "mine" } }),
+      fleet("GPU", "n1", { A: "gpu", C: "gpu", E: "gpu" }),
+      {
+        id: "_all",
+        name: "All nodes",
+        nodes: [],
+        params: { values: { D: "all", E: "all" } },
+      },
+    ];
+    const got = Object.fromEntries(
+      nodeParams(fleets, "n1").map((p) => [p.name, p]),
+    );
+    expect(got.A).toMatchObject({ conflict: ["GPU", "Web"] });
+    expect(got.A!.value).toBeUndefined();
+    expect(got.C).toMatchObject({ value: "mine", source: "node" });
+    expect(got.D).toMatchObject({ value: "all", from: "All nodes" });
+    expect(got.E).toMatchObject({ value: "gpu", from: "GPU" });
+    const params = [{ name: "A", required: true }];
+    expect(paramClashes(params, fleets, ["n1"], {})).toEqual([
+      "A on n1 comes from GPU and Web",
+    ]);
+    expect(paramClashes(params, fleets, ["n1"], { A: "run" })).toEqual([]);
+    expect(missingParams(params, fleets, ["n1"], {})).toEqual([]);
+  });
+});
+
 describe("resolveParams", () => {
   const params = [
     { name: "A", required: true },
@@ -45,13 +93,13 @@ describe("resolveParams", () => {
     nodes: { n1: { A: "node" } },
   };
   it("takes the run’s value, then the node’s, then the fleet’s", () => {
-    const r = resolveParams(params, fp, "n1", { B: "run" });
+    const r = resolveParams(params, one(fp), "n1", { B: "run" });
     expect(r.map((p) => [p.name, p.value, p.source])).toEqual([
       ["A", "node", "node"],
       ["B", "run", "run"],
       ["C", undefined, undefined],
     ]);
-    expect(resolveParams(params, fp, "n2", {})[0]).toMatchObject({
+    expect(resolveParams(params, one(fp), "n2", {})[0]).toMatchObject({
       value: "fleet",
       source: "fleet",
     });
@@ -60,18 +108,18 @@ describe("resolveParams", () => {
     expect(
       resolveParams(
         [{ name: "A", required: true }],
-        { values: { A: "" } },
+        one({ values: { A: "" } }),
         "n",
         {},
       )[0],
     ).toMatchObject({ value: "", source: "fleet" });
   });
   it("lists required parameters with no value, per node", () => {
-    expect(missingParams(params, fp, ["n1", "n2"], {})).toEqual([
+    expect(missingParams(params, one(fp), ["n1", "n2"], {})).toEqual([
       "n1: C",
       "n2: C",
     ]);
-    expect(missingParams(params, fp, ["n1"], { C: "x" })).toEqual([]);
+    expect(missingParams(params, one(fp), ["n1"], { C: "x" })).toEqual([]);
   });
 });
 
@@ -103,7 +151,12 @@ describe("approval", () => {
   const sam = { name: "Sam", user: "sam" };
   const lee = { name: "Lee", user: "lee" };
   it("never lets those who wrote or submitted a version approve it", () => {
-    const v = ver({ state: "review", author: pat, editors: [sam], submitted: { by: lee, at: "" } });
+    const v = ver({
+      state: "review",
+      author: pat,
+      editors: [sam],
+      submitted: { by: lee, at: "" },
+    });
     expect(canApprove(v, pat)).toBe(false);
     expect(canApprove(v, sam)).toBe(false);
     expect(canApprove(v, lee)).toBe(false);
@@ -111,14 +164,38 @@ describe("approval", () => {
     expect(canApprove(ver({ state: "draft", author: pat }), sam)).toBe(false);
   });
   it("asks for no more once someone else has approved", () => {
-    const done = ver({ state: "approved", author: pat, approvals: [{ by: sam, at: "" }] });
+    const done = ver({
+      state: "approved",
+      author: pat,
+      approvals: [{ by: sam, at: "" }],
+    });
     expect(canApprove(done, sam)).toBe(false);
     expect(canApprove(done, lee)).toBe(false);
   });
   it("runs a version only with an approval by someone who did not write it", () => {
-    expect(runnable(ver({ state: "approved", author: pat, approvals: [{ by: pat, at: "" }] }))).toBe(false);
-    expect(runnable(ver({ state: "approved", author: pat, approvals: [{ by: sam, at: "" }] }))).toBe(true);
-    expect(runnable(ver({ state: "review", author: pat, approvals: [{ by: sam, at: "" }] }))).toBe(false);
+    expect(
+      runnable(
+        ver({
+          state: "approved",
+          author: pat,
+          approvals: [{ by: pat, at: "" }],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      runnable(
+        ver({
+          state: "approved",
+          author: pat,
+          approvals: [{ by: sam, at: "" }],
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      runnable(
+        ver({ state: "review", author: pat, approvals: [{ by: sam, at: "" }] }),
+      ),
+    ).toBe(false);
   });
 });
 
@@ -143,9 +220,16 @@ describe("the Run dialog’s fleet", () => {
     id,
     name: id,
     params: {},
-    nodes: [...names.map((name) => ({ name, paired: true })), { name: "off", paired: false }],
+    nodes: [
+      ...names.map((name) => ({ name, paired: true })),
+      { name: "off", paired: false },
+    ],
   });
-  const fleets = [fleet("web", "a", "b"), fleet("db", "c"), fleet("_all", "a", "b", "c")];
+  const fleets = [
+    fleet("web", "a", "b"),
+    fleet("db", "c"),
+    fleet("_all", "a", "b", "c"),
+  ];
   it("names the fleet whose reachable nodes are the ones picked, in any order", () => {
     expect(fleetOf(fleets, ["b", "a"])).toBe("web");
     expect(fleetOf(fleets, ["a", "b", "c"])).toBe("_all");
@@ -168,7 +252,8 @@ describe("the rollout help", () => {
 });
 
 describe("the state filter", () => {
-  const s = (over: Partial<ScriptSummary>) => ({ state: "draft", inReview: 0, approved: 0, ...over }) as ScriptSummary;
+  const s = (over: Partial<ScriptSummary>) =>
+    ({ state: "draft", inReview: 0, approved: 0, ...over }) as ScriptSummary;
   it("finds a version waiting for review behind a newer draft", () => {
     expect(inState(s({ inReview: 2 }), "review")).toBe(true);
     expect(inState(s({}), "review")).toBe(false);
@@ -204,10 +289,39 @@ describe("the rest", () => {
       { id: UNGROUPED, name: "Ungrouped", count: 1 },
     ]);
     expect(list.filter((x) => inGroups(x, [])).length).toBe(4);
-    expect(list.filter((x) => inGroups(x, ["os", UNGROUPED])).map((x) => x.name)).toEqual(["b", "z", "a"]);
+    expect(
+      list.filter((x) => inGroups(x, ["os", UNGROUPED])).map((x) => x.name),
+    ).toEqual(["b", "z", "a"]);
   });
   it("keeps a group’s comma through the URL", () => {
     expect(parseGroups(formatGroups(["a,b", "c d"]))).toEqual(["a,b", "c d"]);
     expect(parseGroups(null)).toEqual([]);
+  });
+});
+
+describe("Run as", () => {
+  const profiles: RunProfile[] = [
+    { id: "ops", name: "ops", kind: "ssh", privilege: "full", fleets: ["web"] },
+    { id: "read-only", name: "nobody", kind: "ssh", privilege: "none", builtin: true },
+    { id: "login-user", name: "ssh-paired account", kind: "ssh", privilege: "full", builtin: true },
+    { id: "as-the-person", name: "login-user", kind: "kubernetes", builtin: true },
+    { id: "sa", name: "sa", kind: "kubernetes" },
+  ];
+  const elevated: FleetVariables = { values: {}, ceiling: "full" };
+  const ids = (o: Parameters<typeof runProfilesFor>[1]) => {
+    const r = runProfilesFor(profiles, o);
+    return [r.fit?.id, r.options.map((c) => c.id)];
+  };
+
+  it("selects the profile that fits the script, built-ins first", () => {
+    expect(ids({ onCluster: false, dryRun: false, privilege: "full", fleet: "web", fp: elevated })).toEqual(["login-user", ["login-user", "ops"]]);
+    expect(ids({ onCluster: false, dryRun: false, privilege: "none", fleet: "db", fp: elevated })).toEqual(["read-only", ["read-only", "login-user"]]);
+    expect(ids({ onCluster: true, dryRun: false, privilege: "", fp: undefined })).toEqual(["as-the-person", ["as-the-person", "sa"]]);
+  });
+
+  it("offers nobody alone to a dry run, and under a nobody ceiling only what fits", () => {
+    expect(ids({ onCluster: false, dryRun: true, privilege: "full", fleet: "web", fp: elevated })).toEqual(["read-only", ["read-only"]]);
+    expect(ids({ onCluster: false, dryRun: false, privilege: "none", fleet: "web", fp: undefined })).toEqual(["read-only", ["read-only"]]);
+    expect(ids({ onCluster: false, dryRun: false, privilege: "full", fleet: "web", fp: undefined })).toEqual(["login-user", ["login-user"]]);
   });
 });

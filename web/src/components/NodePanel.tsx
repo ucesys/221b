@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { fetchFacts, fetchFleets, nodeParams, refreshFacts, type NodeFacts, type ResolvedParam } from '../api/automation'
 import { fetchKubelet, type KubeletView } from '../api/fleets'
 import type { NodeRow, Tone } from '../api/types'
 import { clampPct, fmtAge, fmtTs, localTimes, nWord } from '../lib/format'
-import { fCores, fMem } from '../lib/format'
-import { effectTone, isSystemLabel, reserved, resourceSections, roleTag, taintNote, type ResourceSection } from '../lib/nodes'
+import { effectTone, isSystemLabel, resourceSections, roleTag, taintNote, type ResourceSection } from '../lib/nodes'
 import { href, useRoute } from '../lib/router'
 import { CloseIcon } from './Icons'
 import { ToolsButton } from './toolbox/ToolsMenu'
@@ -52,9 +52,9 @@ function conditionTags(r: NodeRow): { label: string; tone: Tone; tip: string }[]
   return out
 }
 
-function Section({ title, count, aside, children, label }: { title: string; count?: number | string; aside?: ReactNode; children: ReactNode; label?: string }) {
+function Section({ title, count, aside, children, label, wide, ruled }: { title: string; count?: number | string; aside?: ReactNode; children: ReactNode; label?: string; wide?: boolean; ruled?: boolean }) {
   return (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label={label ?? title}>
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, gridColumn: wide ? '1 / -1' : undefined, paddingBottom: ruled ? 16 : undefined, borderBottom: ruled ? '1px solid var(--line)' : undefined }} aria-label={label ?? title}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <h3 className="rk-h">{title}</h3>
         {count !== undefined && <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{count}</span>}
@@ -97,17 +97,85 @@ function Resource({ s }: { s: ResourceSection }) {
 }
 
 /** The details panel for one node. Changes to it go through Sherlock and Watson, not buttons here. */
-/** "cpu=4, memory=16Gi", or "none". */
-const settingText = (m?: Record<string, string>) =>
-  Object.entries(m ?? {})
-    .map(([k, v]) => `${k}=${v}`)
-    .join(', ') || 'none'
+/** The parameters a node inherits, for a SuperAdmin: null until known, or for anyone else. */
+function useNodeParams(node: string): { list: ResolvedParam[]; fleets: string[] } | null {
+  const { cluster } = useRoute()
+  const [read, setRead] = useState<{ key: string; list: ResolvedParam[]; fleets: string[] } | null>(null)
+  const key = `${cluster}/${node}`
+  useEffect(() => {
+    let gone = false
+    fetchFleets(cluster)
+      .then((f) => !gone && setRead({ key, list: nodeParams(f.fleets, node), fleets: f.fleets.filter((x) => x.id !== '_all' && x.nodes.some((n) => n.name === node)).map((x) => x.name) }))
+      .catch(() => {})
+    return () => {
+      gone = true
+    }
+  }, [cluster, key, node])
+  return read?.key === key ? read : null
+}
 
-/**
- * What the Kubernetes agent keeps from pods, read-only: how much from the
- * node itself, how from its kubelet. Scripts change it, in Automation.
- */
-function AgentSection({ r }: { r: NodeRow }) {
+/** What the node said about itself when Automation last asked, for a SuperAdmin. */
+function FactsSection({ node }: { node: string }) {
+  const { cluster } = useRoute()
+  const [allowed, setAllowed] = useState(false)
+  const [facts, setFacts] = useState<NodeFacts | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  useEffect(() => {
+    let gone = false
+    fetchFacts(cluster)
+      .then((f) => {
+        if (gone) return
+        setAllowed(true)
+        setFacts(f.nodes.find((n) => n.node === node) ?? null)
+      })
+      .catch(() => {})
+    return () => {
+      gone = true
+    }
+  }, [cluster, node])
+  if (!allowed) return null
+  const shown = facts?.node === node ? facts : null
+  const refresh = () => {
+    setBusy(true)
+    setErr('')
+    refreshFacts(cluster, [node])
+      .then((f) => setFacts(f.nodes.find((n) => n.node === node) ?? null))
+      .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false))
+  }
+  return (
+    <Section
+      title="Facts"
+      wide
+      ruled
+      aside={
+        <button className="rk-btn" onClick={refresh} disabled={busy} data-testid="node-facts-refresh">
+          {busy ? 'Asking…' : 'Refresh'}
+        </button>
+      }
+    >
+      <dl className="rk-kv" data-testid="node-facts">
+        {Object.entries(shown?.facts ?? {})
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([k, v]) => (
+            <div key={k} style={{ display: 'contents' }}>
+              <dt>{k}</dt>
+              <dd className="rk-mono">{v}</dd>
+            </div>
+          ))}
+      </dl>
+      <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }} data-testid="node-facts-note">
+        {err || (shown?.error ? `The node did not answer: ${shown.error}` : shown ? `Read from the node ${fmtTs(shown.at)}, over SSH as nobody.` : 'Not collected yet. A node must be paired for SSH.')}
+      </p>
+    </Section>
+  )
+}
+
+export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, onToast }: Props) {
+  const closeRef = useRef<HTMLButtonElement>(null)
+  const [showSys, setShowSys] = useState(false)
+  const [tab, setTab] = useState<'details' | 'yaml'>('details')
   const { cluster } = useRoute()
   const [read, setRead] = useState<{ node: string; view: KubeletView } | null>(null)
   const node = r.name
@@ -120,43 +188,9 @@ function AgentSection({ r }: { r: NodeRow }) {
       gone = true
     }
   }, [cluster, node])
-  const view = read?.node === node ? read.view : null
-  const c = view?.config
-  const items: [string, string][] = [
-    ['CPU reserved', reserved(r.cpu) ? `${fCores(reserved(r.cpu))} of ${fCores(r.cpu.capacity)} cores` : 'none'],
-    ['Memory reserved', reserved(r.memory) ? `${fMem(reserved(r.memory))} of ${fMem(r.memory.capacity)}` : 'none'],
-    ...(c
-      ? ([
-          ['System reserved', settingText(c.systemReserved)],
-          ['Kubernetes reserved', settingText(c.kubeReserved)],
-          ...(c.reservedSystemCPUs ? [['Reserved CPUs', c.reservedSystemCPUs] as [string, string]] : []),
-          ['Eviction threshold', settingText(c.evictionHard)],
-          ['Enforced on', c.enforceNodeAllocatable?.join(', ') || 'none'],
-          ['Max pods', c.maxPods ? String(c.maxPods) : '—'],
-        ] as [string, string][])
-      : []),
-  ]
-  return (
-    <Section title="Kubernetes agent resources" label="Kubernetes agent resources">
-      <dl className="rk-kv" data-testid="node-agent">
-        {items.map(([k, v]) => (
-          <div key={k} style={{ display: 'contents' }}>
-            <dt>{k}</dt>
-            <dd className="rk-mono">{v}</dd>
-          </div>
-        ))}
-      </dl>
-      <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>
-        What the kubelet keeps from pods, read from the node{view?.note ? `; its settings are not shown: ${view.note}` : ''}. Read-only: a script in Automation changes it, and the agent restarts to take it.
-      </p>
-    </Section>
-  )
-}
-
-export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, onToast }: Props) {
-  const closeRef = useRef<HTMLButtonElement>(null)
-  const [showSys, setShowSys] = useState(false)
-  const [tab, setTab] = useState<'details' | 'yaml'>('details')
+  const kubelet = read?.node === node ? read.view : null
+  const params = useNodeParams(node)
+  const clashes = (params?.list ?? []).filter((p) => p.conflict)
 
   useEffect(() => {
     closeRef.current?.focus()
@@ -175,6 +209,8 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
     ['Kernel', r.kernel || '—'],
     ['Kubelet', r.kubelet || '—'],
     ['Runtime', r.runtime || '—'],
+    ...(kubelet?.config?.reservedSystemCPUs ? [['Reserved CPUs', kubelet.config.reservedSystemCPUs] as [string, string]] : []),
+    ...(kubelet?.config ? [['Limits enforced on', kubelet.config.enforceNodeAllocatable?.join(', ') || 'none'] as [string, string]] : []),
     ['Architecture', r.arch || '—'],
     ['Joined', `${fmtTs(r.created)} · ${fmtAge(r.created, now)} ago`],
   ]
@@ -184,7 +220,7 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
 
   // Over the page, as every details pane is (asked at the Phase 4 review).
   return (
-    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }}>
+    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 'var(--dock-space, 0px)', left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }}>
       <button aria-label={`Close the details of ${r.name}`} tabIndex={-1} onClick={onClose} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
       <aside
         className="rk-npanel rk-drawer"
@@ -198,7 +234,7 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
             onClose()
           }
         }}
-        style={{ position: 'relative', width: 'min(560px, 100%)', height: '100%', overflow: 'auto', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}
+        style={{ position: 'relative', width: 'min(1180px, 100%)', height: '100%', overflow: 'auto', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow)' }}
       >
         <div style={{ padding: '18px 20px 14px', display: 'flex', flexDirection: 'column', gap: 10, borderBottom: '1px solid var(--line)' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
@@ -238,8 +274,8 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
             <YamlView kind="nodes" name={r.name} onToast={onToast} />
           </div>
         )}
-        <div style={{ padding: '16px 20px 28px', display: tab === 'yaml' ? 'none' : 'flex', flexDirection: 'column', gap: 18 }}>
-          <Section title="Status">
+        <div style={{ padding: '16px 20px 28px', display: tab === 'yaml' ? 'none' : 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px 28px', alignItems: 'start' }}>
+          <Section title="Status" wide>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }} data-testid="node-status">
               <span className="rk-pill" data-tone={r.tone} title={localTimes(r.statusTip)} style={{ height: 24, fontSize: 12.5 }}>
                 <span className="rk-dot" />
@@ -259,9 +295,8 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
               ))}
             </div>
           </Section>
-          <AgentSection r={r} />
           {r.problems.length > 0 && (
-            <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Problems">
+            <section style={{ display: 'flex', flexDirection: 'column', gap: 8, gridColumn: '1 / -1' }} aria-label="Problems">
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                 <h3 className="rk-h">Problems</h3>
                 <span className="rk-t" data-tone={errors ? 'err' : 'warn'} style={{ fontSize: 11.5, fontWeight: 500 }}>
@@ -287,6 +322,18 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
               ))}
             </section>
           )}
+          {clashes.length > 0 && (
+            <div className="rk-callout" data-tone="err" style={{ gridColumn: '1 / -1', margin: 0, fontSize: 12.5 }} data-testid="node-param-conflicts">
+              {clashes.map((p) => (
+                <div key={p.name}>
+                  <span className="rk-mono">{p.name}</span> is defined on {p.conflict!.join(' and ')}, so a run here is refused. Keep it on one fleet, or give this node its own value.
+                </div>
+              ))}
+            </div>
+          )}
+          {resourceSections(r, metrics, metricsNote, kubelet?.config).map((s) => (
+            <Resource key={s.label} s={s} />
+          ))}
           <Section title="Taints" count={r.taints.length}>
             {r.taints.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -324,9 +371,6 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
               {shownLabels.length === 0 && <span style={{ fontSize: 12, color: 'var(--fg3)' }}>Only kubernetes.io labels.</span>}
             </div>
           </Section>
-          {resourceSections(r, metrics, metricsNote).map((s) => (
-            <Resource key={s.label} s={s} />
-          ))}
           <Section title="System">
             <dl className="rk-kv">
               {system.map(([k, v, tip]) => (
@@ -342,6 +386,39 @@ export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, o
               <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>{uptimeNote}</p>
             )}
           </Section>
+          <FactsSection node={r.name} />
+          {params && (
+            <Section title="Variables" count={params.list.length} wide ruled>
+              <p style={{ margin: 0, fontSize: 12, color: 'var(--fg2)' }} data-testid="node-fleets">
+                {params.fleets.length ? `In ${nWord(params.fleets.length, 'fleet', 'fleets')}: ${params.fleets.join(', ')}` : 'In no fleet: only All nodes reaches it'}
+              </p>
+              {params.list.length === 0 ? (
+                <p style={{ margin: 0, fontSize: 12, color: 'var(--fg3)' }}>No variables reach this node yet.</p>
+              ) : (
+                <table className="tb-table" data-testid="node-params">
+                  <thead>
+                    <tr>
+                      <th>Variable</th>
+                      <th>Value</th>
+                      <th>From</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {params.list.map((p) => (
+                      <tr key={p.name}>
+                        <td className="rk-mono">{p.name}</td>
+                        <td className="rk-mono">{p.conflict ? <span style={{ color: 'var(--err)' }}>conflict</span> : p.value}</td>
+                        <td>{p.conflict ? p.conflict.join(' and ') : p.source === 'node' ? 'this node' : p.from}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </Section>
+          )}
+          <p style={{ gridColumn: '1 / -1', margin: 0, fontSize: 11.5, color: 'var(--fg3)' }} data-testid="node-agent">
+            Reservations are the kubelet&apos;s settings, read from the node{kubelet?.note ? `; its breakdown is not shown: ${kubelet.note}` : ''}. Read-only: a script in Automation changes them, and the Kubernetes agent restarts to take them.
+          </p>
         </div>
       </aside>
     </div>

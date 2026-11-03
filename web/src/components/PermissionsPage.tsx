@@ -15,7 +15,7 @@ import { YamlView } from './YamlView'
 
 type Show = 'all' | 'read' | 'write'
 
-const DEFINITION_TEXT = { full: 'Full definition', readOnly: 'Read-only definition' } as const
+const DEFINITION_TEXT = { full: 'Elevated definition', readOnly: 'Read-only definition' } as const
 
 function Facts({ items }: { items: [string, React.ReactNode][] }) {
   return (
@@ -72,7 +72,7 @@ function RoleDrawer({ perm, row, differences, onClose, onToast }: { perm: PermRo
             <Facts
               items={[
                 ['Kubernetes object', <span className="rk-mono">ClusterRole {perm.clusterRole}</span>],
-                ['Definition', perm.definition === 'full' ? 'Full: the changes Watson supports, within its reach' : 'Read-only: no verb that changes anything'],
+                ['Definition', perm.definition === 'full' ? 'Elevated: the changes Watson supports, within its reach' : 'Read-only: no verb that changes anything'],
                 ['Where it applies', row?.scope ?? reachText(perm.id)],
                 ['How people get it', perm.id === 'admin' || perm.id === 'viewer' ? 'A group listed for it in values (auth.ldap.roles, auth.oidc.roles or auth.local.groups), bound by Helm in each of its namespaces' : 'Held in 221B: a directory group listed for it, or given to a local user on the Users page'],
                 ['On this cluster', perm.present ? 'Installed' : 'Not installed: people with it see nothing here'],
@@ -117,7 +117,11 @@ export function PermissionsPage({ route, now, cluster, onToast }: AdminProps) {
   const described = useAdmin(`roles:${name}`, (bg) => fetchRoles(name, bg), 60_000)
   const data = loaded.data
   const [show, setShow] = useState<Show>('all')
-  const [role, setRole] = useState<RoleId | null>(null)
+  // A role's See every permission opens the page on that role (?role=).
+  const [role, setRole] = useState<RoleId | null>(() => {
+    const r = route.params.get('role')
+    return r && r in ROLE_NAME ? (r as RoleId) : null
+  })
   const [sensitive, setSensitive] = useState(false)
   const all = useMemo(() => (data ? matrixOf(data.roles) : []), [data])
   // A role's tile keeps the rows it has, and only its column of the four.
@@ -195,7 +199,7 @@ export function PermissionsPage({ route, now, cluster, onToast }: AdminProps) {
                   >
                     <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                       <span style={{ fontWeight: 600 }}>{ROLE_NAME[r.id]}</span>
-                      <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{r.definition === 'full' ? 'Full' : 'Read-only'}</span>
+                      <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{r.definition === 'full' ? 'Elevated' : 'Read-only'}</span>
                       {!r.present && (
                         <span className="rk-t" data-tone="warn" style={{ fontSize: 12 }}>
                           Not installed

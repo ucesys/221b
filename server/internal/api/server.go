@@ -421,6 +421,7 @@ func New(o Options) *Server {
 	}
 	if o.Automation != nil && o.AutomationStore != nil {
 		s.automationRoutes()
+		o.Automation.SetKube(automationKube{s})
 	}
 	s.rolesRoutes()
 	s.auditRoutes()

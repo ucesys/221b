@@ -290,7 +290,7 @@ test('opens node details with Enter and closes them with Escape', async ({ page,
 
   // Status first, then taints and labels, the resources, then the system (the Actions section went on October 30, 2026: the Tools menu has cordon and drain).
   const headings = await panel.locator('h3').allTextContents()
-  expect(headings.filter((h) => h !== 'Problems')).toEqual(['Status', 'Kubernetes agent resources', 'Taints', 'Labels', 'CPU', 'Memory', 'Pods', 'System'])
+  expect(headings.filter((h) => h !== 'Problems')).toEqual(['Status', 'CPU', 'Memory', 'Pods', 'Taints', 'Labels', 'System', 'Facts', 'Variables'])
   await expect(panel.getByTestId('node-status')).toContainText(target.status)
   await expect(panel.getByTestId('node-status')).toContainText('worker')
   await expect(panel.getByRole('region', { name: 'Taints' })).toBeVisible()
@@ -301,7 +301,7 @@ test('opens node details with Enter and closes them with Escape', async ({ page,
   await expect(panel).toContainText(target.kubelet)
   // Resources as plain sections, not tiles.
   const cpu = panel.getByTestId('resource-cpu')
-  await expect(cpu.locator('dt')).toHaveText(['Allocatable', 'Requested', 'Free to schedule', 'In use', 'Limits'])
+  await expect(cpu.locator('dt')).toHaveText(['Total on the node', 'Reserved for the system', 'Reserved for Kubernetes', 'Allocatable', 'Requested', 'Free to schedule', 'In use', 'Limits'])
   await expect(cpu.locator('dt', { hasText: 'Free to schedule' }).locator('+ dd')).toContainText(fCores(free(target.cpu)))
   await expect(panel.getByTestId('resource-memory').locator('dt', { hasText: 'Allocatable' }).locator('+ dd')).toContainText(fMem(target.memory.allocatable))
   await expect(panel.getByTestId('resource-pods').locator('dt', { hasText: 'Capacity' }).locator('+ dd')).toContainText(String(target.pods.capacity))

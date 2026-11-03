@@ -96,6 +96,12 @@ rules:
   - apiGroups: [""]
     resources: ["users"]
     verbs: ["impersonate"]
+  {{- with .Values.automation.runIdentities }}
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["impersonate"]
+    resourceNames: {{ toJson . }}
+  {{- end }}
   - apiGroups: [""]
     resources: ["groups"]
     verbs: ["impersonate"]

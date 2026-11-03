@@ -173,6 +173,36 @@ test('the panel resizes, maximizes over the page and minimizes to an icon (P5-01
   await expect(dock(page)).toBeVisible()
 })
 
+test('Sherlock is on the Administration pages too, and Escape in it stays there', async ({ page }) => {
+  await open(page, '#/admin/roles')
+  await expect(page.getByTestId('admin-page')).toBeVisible()
+  const fab = page.getByTestId('sherlock-fab')
+  if (await fab.isVisible()) await fab.click()
+  await expect(dock(page)).toBeVisible()
+  await page.getByTestId('sherlock-input').focus()
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('admin-page')).toBeVisible()
+})
+
+test('the round button stays clear of what a drawer has at the bottom right', async ({ page }) => {
+  await open(page, '#/scripts')
+  await page.locator('[data-testid=sherlock-minimize]:visible').click()
+  const fab = page.getByTestId('sherlock-fab')
+  await expect(fab).toBeVisible()
+  const name = `clear-${Date.now()}`
+  await page.getByTestId('script-group-new').click()
+  await page.getByTestId('group-name').fill(name)
+  await page.getByTestId('group-save').click()
+  await expect(page.getByTestId('group-drawer')).toHaveCount(0)
+  await page.locator('.rk-fl', { hasText: name }).getByTestId('script-group-edit').click()
+  const del = page.getByTestId('group-delete')
+  await expect(del).toBeVisible()
+  const left = (await fab.boundingBox())!.x
+  await expect.poll(async () => { const a = (await del.boundingBox())!; return a.x + a.width }).toBeLessThanOrEqual(left)
+  await del.click()
+  await expect(page.getByTestId('group-drawer')).toHaveCount(0)
+})
+
 test('Troubleshoot on an alert asks for a report, and Ask Sherlock in a drawer asks about what it shows (P5-01, Phase 6 review)', async ({ page }) => {
   await open(page, '#/alerts')
   const button = page.getByTestId('alert').getByTestId('alert-troubleshoot').first()

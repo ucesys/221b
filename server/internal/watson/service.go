@@ -155,12 +155,14 @@ type Item struct {
 	Expires   time.Time
 	Plan      *Plan
 	Approver  *Who
-	Started   time.Time
-	Finished  time.Time
-	Exit      int
-	Lines     []Line
-	bytes     int
-	cut       bool
+	// Approved is when Approver approved it.
+	Approved time.Time
+	Started  time.Time
+	Finished time.Time
+	Exit     int
+	Lines    []Line
+	bytes    int
+	cut      bool
 	// Reason says why it lapsed, was refused or stopped.
 	Reason string
 	// Rule names the rule that refused it.
@@ -464,7 +466,7 @@ func (s *Service) SubmitAction(cl Cluster, who Who, line, from string) *Item {
 	s.add(it)
 	s.mu.Lock()
 	w := who
-	it.Approver = &w
+	it.Approver, it.Approved = &w, now
 	s.record(ActionApprove, it, who, audit.OutcomeOK, "requested_by="+quote(who.Name)+" approval=\"the person's own, from the Tools menu\"")
 	s.enqueueLocked(cl, it, who)
 	s.mu.Unlock()
@@ -960,7 +962,7 @@ func (s *Service) Approve(ctx context.Context, cl Cluster, who Who, id string) (
 		return it, fmt.Errorf("%w: it is %s", ErrState, it.Status)
 	}
 	w := who
-	it.Approver = &w
+	it.Approver, it.Approved = &w, s.opts.Now()
 	s.record(ActionApprove, it, who, audit.OutcomeOK, "requested_by="+quote(it.Requester.Name))
 	if it.Session != nil {
 		it.Status, it.Started = StatusRunning, s.opts.Now()
@@ -1146,7 +1148,7 @@ func (s *Service) enqueueLocked(cl Cluster, it *Item, runner Who) {
 	it.Status = StatusQueued
 	if it.Approver == nil {
 		w := runner
-		it.Approver = &w
+		it.Approver, it.Approved = &w, s.opts.Now()
 	}
 	if s.draining {
 		s.stopQueuedLocked(it)
@@ -1268,6 +1270,37 @@ func (s *Service) work(cl Cluster, key string, q *runQueue) {
 		s.execute(ctx, cl, it, runner)
 		cancel()
 	}
+}
+
+// RunLine runs one kubectl line for Automation (AT32): a Kubernetes script
+// or a hook, as the identity given. Its approval is the script version's,
+// so there is no card; the connection's limits still hold, and a dry run
+// never changes anything.
+func (s *Service) RunLine(ctx context.Context, cl Cluster, p kube.Person, line string, dryRun bool, out io.Writer) (int, error) {
+	c, err := Parse(line)
+	if err != nil {
+		return 1, err
+	}
+	if c.Tool != "kubectl" {
+		return 1, fmt.Errorf("a script runs kubectl lines only")
+	}
+	if c.Change {
+		switch {
+		case dryRun && !c.DryRun():
+			if c, err = Parse(line + " --dry-run=server"); err != nil {
+				return 1, err
+			}
+		case cl.ReadOnly:
+			return 1, fmt.Errorf("this connection is read-only")
+		case cl.Locked != "":
+			return 1, fmt.Errorf("changes are refused here: %s", cl.Locked)
+		}
+	}
+	d, err := s.disc.For(cl.ID, cl.Config)
+	if err != nil {
+		return 1, fmt.Errorf("cannot reach the cluster: %w", err)
+	}
+	return s.opts.Run(ctx, c, Target{Config: cl.Config, Person: p, Cluster: cl.ID, Discovery: d}, out, out), nil
 }
 
 // execute runs one command as the person who approved it.

@@ -886,3 +886,35 @@ func TestRowsNameNothingInHiddenNamespaces(t *testing.T) {
 	check("a priority class", ViewPolicies, views.PriorityRow{Key: views.PolPriority + ":high", Name: "high", Pods: 3, Workloads: []string{"other-ns/job", "web/shop"}}, "web/shop", `"pods":3`)
 	check("the network facts", ViewNetworks, views.NetFactsRow{Key: "facts:cluster", Policies: 2, PendingLBs: []string{"other-ns/lb", "web/lb"}, PolicyNS: []string{"other-ns", "web"}}, "web/lb", `"policies":2`)
 }
+
+// A write made through the console goes out as soon as the watch reports
+// it, not a refresh later; a change after the window waits for the tick.
+func TestAWriteMadeHereGoesOutAtOnce(t *testing.T) {
+	src := fake.New("a")
+	s := New(src, Options{Cluster: "local", Refresh: time.Hour, Prompt: 10 * time.Millisecond})
+	sub, _, _ := s.Subscribe([]string{ViewNodes}, nil)
+	defer s.Unsubscribe(sub)
+	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { s.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	s.Notify(listed())
+	waitWake(t, sub)
+	take(t, sub)
+
+	s.ExpectWrite()
+	made := time.Now()
+	src.Put(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "made-here"}})
+	s.Notify(kube.Change{Views: map[string][]string{ViewNodes: {"made-here"}}})
+	var rows []Rows
+	for len(rows) == 0 {
+		waitWake(t, sub)
+		rows = take(t, sub).rows
+	}
+	if since := time.Since(made); since > time.Second {
+		t.Fatalf("the new row went out %v after the write", since)
+	}
+	if len(rows[0].Upserts) == 0 || !strings.Contains(string(rows[0].Upserts[0]), "made-here") {
+		t.Fatalf("rows %+v", rows[0])
+	}
+}

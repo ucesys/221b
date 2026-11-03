@@ -2,7 +2,10 @@ package api
 
 import (
 	"reflect"
+	"slices"
 	"testing"
+
+	"github.com/ucesys/221b/server/internal/automation"
 )
 
 // A run goes to the nodes it names and no others, wherever they sort in the
@@ -39,5 +42,21 @@ func TestARunTakesOnlyTheNodesItNames(t *testing.T) {
 				t.Errorf("unknown %v, want %v", unknown, tc.unknown)
 			}
 		})
+	}
+}
+
+// The Parameters page lists the scripts that read a parameter: what the
+// latest version declares and what the approved one still does.
+func TestAScriptSummaryListsWhatItsVersionsRead(t *testing.T) {
+	sc := automation.Script{Name: "a", Versions: []automation.Version{
+		{N: 1, State: automation.StateApproved, Header: automation.Header{Params: []automation.Param{{Name: "OLD"}, {Name: "BOTH"}}}},
+		{N: 2, State: automation.StateDraft, Header: automation.Header{Params: []automation.Param{{Name: "BOTH"}, {Name: "NEW", Required: true}}}},
+	}}
+	var got []string
+	for _, p := range summaryOf(sc, nil).Params {
+		got = append(got, p.Name)
+	}
+	if want := []string{"BOTH", "NEW", "OLD"}; !slices.Equal(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
 	}
 }

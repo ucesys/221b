@@ -207,6 +207,7 @@ type Store struct {
 	dirtyTotals bool
 	built       bool      // rows have been built since the cluster was listed
 	rowsNow     bool      // a change someone made here: publish rows without waiting for the tick
+	eagerUntil  time.Time // a write made here: its changes go out as they come, until then
 	since       time.Time // when the oldest unpublished change arrived
 	kick        chan struct{}
 	reset       chan struct{}
@@ -452,6 +453,9 @@ func (s *Store) Notify(ch kube.Change) {
 		s.since = s.opts.Now()
 	}
 	prompt := ch.Info || (len(ch.Views) > 0 && !s.built)
+	if len(ch.Views) > 0 && s.opts.Now().Before(s.eagerUntil) {
+		s.rowsNow, prompt = true, true
+	}
 	s.pendingMu.Unlock()
 	if prompt {
 		select {
@@ -540,6 +544,20 @@ func (s *Store) SetSettings(refresh time.Duration, raw []byte) {
 	case s.reset <- struct{}{}:
 	default:
 	}
+}
+
+// expectWindow is how long after a write made through the console its
+// changes go out as they arrive: the watch reports it after the API
+// server answered.
+const expectWindow = 5 * time.Second
+
+// ExpectWrite says the console just wrote to the cluster: what the watches
+// report in the next seconds is published at once, not at the next
+// refresh, so the person sees what they made, a new Secret say.
+func (s *Store) ExpectWrite() {
+	s.pendingMu.Lock()
+	s.eagerUntil = s.opts.Now().Add(expectWindow)
+	s.pendingMu.Unlock()
 }
 
 // PublishSoon publishes the pending rows within the prompt delay instead

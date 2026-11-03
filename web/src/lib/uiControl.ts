@@ -209,8 +209,9 @@ export const TAB_SPECS: Record<Tab, TabSpec> = {
       state: { type: "enum", values: ["review", "draft", "approved", "unapproved"] },
     },
   },
-  executions: { filters: {} },
-  parameters: { filters: {} },
+  "run-history": { filters: {} },
+  variables: { filters: {} },
+  "run-profiles": { filters: {} },
   networks: { filters: { route: { type: "text" } } },
   access: {
     search: "q",

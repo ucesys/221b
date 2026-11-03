@@ -21,7 +21,7 @@ func TestTheReserveScriptPassesItsChecks(t *testing.T) {
 	if HasErrors(fs) {
 		t.Fatalf("findings: %+v", fs)
 	}
-	if !h.DryRun || h.Privilege != PrivilegeFull || len(h.Params) != 4 {
+	if !h.DryRun || h.Privilege != PrivilegeElevated || len(h.Params) != 4 {
 		t.Fatalf("header: %+v", h)
 	}
 }

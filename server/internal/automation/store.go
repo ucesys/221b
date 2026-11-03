@@ -19,9 +19,9 @@ import (
 
 // The keys of Automation's ConfigMap (AU-12).
 const (
-	ScriptsKey = "scripts.json"
-	ParamsKey  = "params.json"
-	RunsKey    = "runs.json"
+	ScriptsKey   = "scripts.json"
+	VariablesKey = "params.json"
+	RunsKey      = "runs.json"
 )
 
 // Limits (AU-02, AU-12).
@@ -39,6 +39,9 @@ const (
 	StateReview     = "review"
 	StateApproved   = "approved"
 	StateSuperseded = "superseded"
+	StateRejected   = "rejected"
+	// MaxComment is the longest a reason given with a decision may be.
+	MaxComment = 500
 )
 
 // Errors the API turns into answers.
@@ -69,10 +72,12 @@ func (w Who) Same(o Who) bool {
 	return w.Name == o.Name
 }
 
-// Approval is one person's approval of a version.
+// Approval is one person's approval of a version, or their decision
+// against it; Comment is the reason given with a rejection.
 type Approval struct {
-	By Who       `json:"by"`
-	At time.Time `json:"at"`
+	By      Who       `json:"by"`
+	At      time.Time `json:"at"`
+	Comment string    `json:"comment,omitempty"`
 }
 
 // Version is one hashed text of a script. A draft changes as it is saved;
@@ -92,6 +97,24 @@ type Version struct {
 	Approvals []Approval `json:"approvals,omitempty"`
 	// Revoked are the people who took its approvals back, and when.
 	Revoked []Approval `json:"revoked,omitempty"`
+	// Rejected is who turned it down in review, when and why.
+	Rejected *Approval `json:"rejected,omitempty"`
+	// Review is Sherlock's latest reading of it, which never approves.
+	Review *Review `json:"review,omitempty"`
+}
+
+// Review is what Sherlock said of a version, for the person who approves.
+type Review struct {
+	Summary  string          `json:"summary"`
+	Findings []ReviewFinding `json:"findings,omitempty"`
+	At       time.Time       `json:"at"`
+}
+
+// ReviewFinding is one problem it saw.
+type ReviewFinding struct {
+	Level string `json:"level"`
+	Line  int    `json:"line,omitempty"`
+	Msg   string `json:"msg"`
 }
 
 // Involved says whether a person wrote or submitted the version, which
@@ -165,8 +188,8 @@ func approvedBySomeoneElse(s Script, v Version) error {
 }
 
 // RunVersion is the version a run uses: on a production cluster any
-// approved version, the newest when n is 0; elsewhere any version, the
-// latest when n is 0 (asked November 1 and 2, 2026).
+// approved version, the newest when n is 0; elsewhere any version but a
+// rejected one, the latest when n is 0 (asked November 1 to 3, 2026).
 func RunVersion(s Script, production bool, n int) (Version, error) {
 	if production {
 		if n == 0 {
@@ -187,6 +210,9 @@ func RunVersion(s Script, production bool, n int) (Version, error) {
 	}
 	if !ok {
 		return Version{}, fmt.Errorf("%w: %s has no v%d", ErrNotFound, s.Name, n)
+	}
+	if v.State == StateRejected {
+		return Version{}, fmt.Errorf("%w: %s v%d was rejected, so it never runs: save the script again for a new version", ErrInvalid, s.Name, v.N)
 	}
 	return v, nil
 }
@@ -373,10 +399,13 @@ func (st *Store) Save(ctx context.Context, name, group, text string, who Who, cr
 		saved = rec.Scripts[name]
 		return nil
 	})
+	if err == nil {
+		err = st.keepGroup(ctx, group)
+	}
 	return saved, err
 }
 
-// prune drops superseded versions, oldest first, then drafts and reviews
+// prune drops superseded and rejected versions, oldest first, then drafts and reviews
 // older than a script's newest version, until the record fits; the newest
 // version and approved ones stay.
 func prune(rec *scriptsRecord, limit int) {
@@ -385,7 +414,9 @@ func prune(rec *scriptsRecord, limit int) {
 		return len(b)
 	}
 	for _, drop := range []func(Script, int) bool{
-		func(s Script, i int) bool { return s.Versions[i].State == StateSuperseded },
+		func(s Script, i int) bool {
+			return s.Versions[i].State == StateSuperseded || s.Versions[i].State == StateRejected
+		},
 		func(s Script, i int) bool {
 			st := s.Versions[i].State
 			return (st == StateDraft || st == StateReview) && i < len(s.Versions)-1
@@ -432,14 +463,18 @@ func (st *Store) Submit(ctx context.Context, name string, n int, who Who) (Scrip
 	})
 }
 
-// Approve records a person's approval of a version in review, or a further
-// approval of an approved one (AU-05). Whoever wrote or submitted a version
+// Approve records a person's approval of a version in review, a further
+// approval of an approved one, or the approval of an older version a newer
+// one replaced, which brings it back (AU-05). Whoever wrote or submitted a version
 // cannot approve it. Versions approved before stay approved, so a run can
 // still choose them, until someone revokes them.
 func (st *Store) Approve(ctx context.Context, name string, n int, who Who) (Script, error) {
 	return st.edit(ctx, name, n, func(s *Script, v *Version) error {
-		if v.State != StateReview && v.State != StateApproved {
+		if v.State == StateDraft {
 			return fmt.Errorf("%w: v%d is %s: submit it for review first", ErrInvalid, v.N, v.State)
+		}
+		if v.State == StateRejected {
+			return fmt.Errorf("%w: v%d was rejected: save the script again for a new version", ErrInvalid, v.N)
 		}
 		if v.Involved(who) {
 			return fmt.Errorf("%w: you wrote or submitted v%d", ErrOwnWork, v.N)
@@ -450,9 +485,41 @@ func (st *Store) Approve(ctx context.Context, name string, n int, who Who) (Scri
 			}
 		}
 		v.Approvals = append(v.Approvals, Approval{By: who, At: st.now().UTC()})
-		if v.State == StateReview {
-			v.State = StateApproved
+		v.State = StateApproved
+		return nil
+	})
+}
+
+// Reject turns down a version in review, with the reason its author reads;
+// whoever wrote or submitted it cannot. It is final: a fix is saved as the
+// next version.
+func (st *Store) Reject(ctx context.Context, name string, n int, who Who, comment string) (Script, error) {
+	comment = strings.TrimSpace(comment)
+	if comment == "" {
+		return Script{}, fmt.Errorf("%w: say why it is rejected", ErrInvalid)
+	}
+	if len(comment) > MaxComment {
+		return Script{}, fmt.Errorf("%w: a comment is at most %d characters", ErrInvalid, MaxComment)
+	}
+	return st.edit(ctx, name, n, func(_ *Script, v *Version) error {
+		if v.State != StateReview {
+			return fmt.Errorf("%w: v%d is %s, not in review", ErrInvalid, v.N, v.State)
 		}
+		if v.Involved(who) {
+			return fmt.Errorf("%w: you wrote or submitted v%d", ErrOwnWork, v.N)
+		}
+		v.Rejected = &Approval{By: who, At: st.now().UTC(), Comment: comment}
+		v.State = StateRejected
+		return nil
+	})
+}
+
+// SetReview keeps Sherlock's reading of a version. It is advice, so it may
+// be added to a frozen version; it changes no state.
+func (st *Store) SetReview(ctx context.Context, name string, n int, r Review) (Script, error) {
+	r.At = st.now().UTC()
+	return st.edit(ctx, name, n, func(_ *Script, v *Version) error {
+		v.Review = &r
 		return nil
 	})
 }
@@ -503,6 +570,11 @@ func (st *Store) edit(ctx context.Context, name string, n int, f func(*Script, *
 
 // Delete removes a script and its versions.
 func (st *Store) Delete(ctx context.Context, name string) error {
+	if sc, ok, err := st.Script(ctx, name); err == nil && ok {
+		if err := st.keepGroup(ctx, sc.Group); err != nil {
+			return err
+		}
+	}
 	return change(ctx, st, ScriptsKey, 0, func(rec *scriptsRecord) error {
 		if _, ok := rec.Scripts[name]; !ok {
 			return ErrNotFound
@@ -510,4 +582,35 @@ func (st *Store) Delete(ctx context.Context, name string) error {
 		delete(rec.Scripts, name)
 		return nil
 	})
+}
+
+// PendingVersion is a version waiting for someone's approval.
+type PendingVersion struct {
+	Script    string     `json:"script"`
+	Version   int        `json:"version"`
+	Author    string     `json:"author"`
+	Submitted *time.Time `json:"submitted,omitempty"`
+}
+
+// ToApprove lists the versions in review that a person may approve.
+func (st *Store) ToApprove(ctx context.Context, who Who) ([]PendingVersion, error) {
+	list, err := st.Scripts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []PendingVersion{}
+	for _, s := range list {
+		for _, v := range s.Versions {
+			if v.State != StateReview || v.Involved(who) {
+				continue
+			}
+			p := PendingVersion{Script: s.Name, Version: v.N, Author: v.Author.Name}
+			if v.Submitted != nil {
+				at := v.Submitted.At
+				p.Submitted = &at
+			}
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }

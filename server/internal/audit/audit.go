@@ -61,6 +61,8 @@ const (
 	ActionAutomationApprove = "automation.approve"
 	ActionAutomationParams  = "automation.params"
 	ActionAutomationRun     = "automation.run"
+	ActionAutomationCommand = "automation.command"
+	ActionAutomationConfig  = "automation.config"
 )
 
 // Outcomes of an action.

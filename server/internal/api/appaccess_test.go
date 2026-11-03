@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -175,5 +177,56 @@ func TestASavedSourceIsCheckedForItsPathAndHost(t *testing.T) {
 		if resp, body := send(t, c, http.MethodPut, srv.URL+"/api/v1/apps/team-b/pay", in); resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("%s: %s %s", in, resp.Status, body)
 		}
+	}
+}
+
+// A person sees an application in a namespace they reach, or one an admin
+// with the same namespace access created, without what it is set to.
+func TestAnApplicationIsSeenInReachOrThroughTheCreatorsAccess(t *testing.T) {
+	srv, c, store, _ := appsSetup(t, map[string]bool{"secrets/team-b": true, "secrets/team-c": true})
+	ctx := context.Background()
+	mine := []string{"default", "kube-system", "web"}
+	shared := apps.Record{Cluster: clusters.LocalID, Namespace: "team-b", Name: "shared", Source: apps.Source{Repo: "https://git.example/a/b", Ref: "main", Path: "."}, Values: "password: hidden", Params: []string{"a=b"}, CreatorNamespaces: mine}
+	other := shared
+	other.Namespace, other.Name, other.CreatorNamespaces = "team-c", "other", []string{"team-c"}
+	for _, rec := range []apps.Record{shared, other} {
+		if err := store.Save(ctx, rec, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := c.Get(srv.URL + "/api/v1/apps")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	body, _ := io.ReadAll(r.Body)
+	var list []apps.Record
+	if err := json.Unmarshal(body, &list); err != nil {
+		t.Fatalf("%s: %v", body, err)
+	}
+	names := map[string]apps.Record{}
+	for _, x := range list {
+		names[x.Name] = x
+	}
+	if _, ok := names["pay"]; ok {
+		t.Fatal("a record from before creators were kept showed in a namespace out of reach")
+	}
+	if _, ok := names["other"]; ok {
+		t.Fatal("a record by someone with other access showed")
+	}
+	got, ok := names["shared"]
+	if !ok {
+		t.Fatalf("a record by someone with the same access is missing: %s", body)
+	}
+	if got.Values != "" || len(got.Params) != 0 {
+		t.Fatalf("its values showed: %+v", got)
+	}
+	r2, err := c.Get(srv.URL + "/api/v1/apps/team-c/other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.Body.Close()
+	if r2.StatusCode != http.StatusForbidden {
+		t.Fatalf("the other record answered %d", r2.StatusCode)
 	}
 }

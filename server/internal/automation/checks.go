@@ -42,6 +42,14 @@ func Check(text string) (Header, []Finding) {
 	add := func(level string, line int, code, msg string) {
 		fs = append(fs, Finding{Level: level, Line: line, Code: code, Msg: msg})
 	}
+	if h.Target == TargetKubernetes {
+		for _, p := range h.Params {
+			if p.Secret {
+				add(LevelError, 0, "k8s-secret", "a kubectl line cannot carry a secret: "+p.Name+" would be in the audit log")
+			}
+		}
+		return h, append(fs, checkKube(text, h)...)
+	}
 	lines := strings.Split(text, "\n")
 	firstDownload, usesDryRun, checksums := 0, false, false
 	for i, raw := range lines {
@@ -59,8 +67,8 @@ func Check(text string) (Header, []Finding) {
 		if firstDownload == 0 && downloadRE.MatchString(line) {
 			firstDownload = n
 		}
-		if h.Privilege == PrivilegeNone && sudoRE.MatchString(line) {
-			add(LevelError, n, "sudo-undeclared", "uses sudo, but the header declares privilege none: the script runs as nobody")
+		if h.Privilege == PrivilegeNobody && sudoRE.MatchString(line) {
+			add(LevelError, n, "sudo-undeclared", "uses sudo, but the header declares privilege nobody: the script runs as nobody and cannot change the node")
 		}
 		for _, r := range rules {
 			if r.re.MatchString(line) {

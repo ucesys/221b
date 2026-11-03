@@ -1,19 +1,21 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 import {
   allows,
+  runProfilesFor,
   approvedOf,
   approveVersion,
+  rejectVersion,
   revokeVersion,
   batches,
   cancelRun,
   canApprove,
+  canReject,
   checkScript,
   countsText,
   createScript,
@@ -24,7 +26,12 @@ import {
   fetchRuns,
   fetchScript,
   latestOf,
+  profileName,
+  scriptKind,
+  ceilingText,
+  privilegeText,
   missingParams,
+  paramClashes,
   NEW_SCRIPT,
   ALL_NODES,
   CUSTOM_NODES,
@@ -40,25 +47,28 @@ import {
   SCRIPT_STATES,
   scriptGroups,
   nodeTone,
-  PARAM_NAME,
   resolveParams,
-  RESERVED,
   runnable,
   runTone,
-  saveFleetParams,
+  draftScript,
+  fetchProfiles,
+  reviewVersion,
+  retryRun,
+  type RunProfile,
+  type Group,
   saveScript,
   SCRIPT_NAME,
+  UNGROUPED,
   SCRIPT_TEMPLATES,
   startRun,
   submitVersion,
   versionTone,
   type AutomationFleets,
   type AutomationIndex,
-  type FleetParams,
   type Finding,
   type Header,
   type NodeState,
-  type Privilege,
+  type Param,
   type Run,
   type RunDetail,
   type RolloutMode,
@@ -67,16 +77,28 @@ import {
   type Tone,
   type Version,
 } from "../api/automation";
-import { useView } from "../api/live";
-import type { Me, NodeRow } from "../api/types";
+import type { Me } from "../api/types";
 import { fmtTs } from "../lib/format";
 import { href, navigate, type Route, type Tab } from "../lib/router";
 import { lineDiff } from "../lib/linediff";
-import { reservedGroups, reservedLine } from "../lib/fleets";
+import { useSorted, type SortCol } from "../lib/useSorted";
 import { DiffLines } from "./apps/DiffView";
+import { GroupDrawer } from "./automation/GroupDrawer";
+import { CodeArea, CodeView } from "./automation/CodeEditor";
+import { RunProfilesSection } from "./automation/RunProfilesSection";
+import { VariablesSection } from "./automation/VariablesSection";
+import { Seg } from "./automation/Seg";
+import { SortTh } from "./automation/SortTh";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { DecideDialog } from "./automation/DecideDialog";
 import { Drawer } from "./Drawer";
-import { DiffIcon, NoDiffIcon, PlusIcon, SearchIcon } from "./Icons";
+import {
+  DiffIcon,
+  NoDiffIcon,
+  PencilIcon,
+  PlusIcon,
+  SearchIcon,
+} from "./Icons";
 import { ScrollBox } from "./Table";
 import type { TabProps } from "./tabs";
 
@@ -122,34 +144,13 @@ function Field({
   );
 }
 
-function Seg<T extends string>({
-  label,
-  options,
-  value,
-  onChange,
+function Findings({
+  list,
+  onLine,
 }: {
-  label: string;
-  options: { id: T; label: string }[];
-  value: T;
-  onChange: (v: T) => void;
+  list: Finding[] | null | undefined;
+  onLine?: (line: number) => void;
 }) {
-  return (
-    <div className="rk-seg" role="group" aria-label={label}>
-      {options.map((o) => (
-        <button
-          key={o.id}
-          type="button"
-          aria-pressed={value === o.id}
-          onClick={() => onChange(o.id)}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Findings({ list }: { list: Finding[] | null | undefined }) {
   if (!list?.length)
     return (
       <p
@@ -176,12 +177,23 @@ function Findings({ list }: { list: Finding[] | null | undefined }) {
       {list.map((f, i) => (
         <li key={i} style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
           <Pill tone={f.level === "error" ? "err" : "warn"}>{f.level}</Pill>
-          <span
-            className="rk-mono"
-            style={{ color: "var(--fg3)", minWidth: 48 }}
-          >
-            {f.line > 0 ? `line ${f.line}` : "header"}
-          </span>
+          {onLine ? (
+            <button
+              className="rk-link rk-mono"
+              style={{ minWidth: 48, textAlign: "left" }}
+              onClick={() => onLine(f.line || 1)}
+              data-testid="finding-line"
+            >
+              {f.line > 0 ? `line ${f.line}` : "header"}
+            </button>
+          ) : (
+            <span
+              className="rk-mono"
+              style={{ color: "var(--fg3)", minWidth: 48 }}
+            >
+              {f.line > 0 ? `line ${f.line}` : "header"}
+            </span>
+          )}
           <span>{f.msg}</span>
         </li>
       ))}
@@ -191,7 +203,7 @@ function Findings({ list }: { list: Finding[] | null | undefined }) {
 
 /**
  * The Automation tab (Phase 11 part 2, AU-01..AU-14): scripts, their
- * executions and the fleets' parameters, for a SuperAdmin.
+ * runs and the fleets' variables, for a SuperAdmin.
  */
 export function AutomationTab({
   route,
@@ -209,10 +221,24 @@ export function AutomationTab({
     dryRun: boolean;
   } | null>(null);
   const [openRun, setOpenRun] = useState<number | null>(null);
+  const [editingGroup, setEditingGroup] = useState<Group | null | undefined>(
+    undefined,
+  );
+  // A new group asked for from the script drawer goes back into its box.
+  const afterGroup = useRef<((name: string) => void) | null>(null);
   // Until the cluster is known, only approved versions are offered.
   const [production, setProduction] = useState(true);
+  const allowed = me?.admin === true;
+  // A link can open a script, on a version to review: ?script=x&version=2.
+  const linked = section === "scripts" ? route.params.get("script") : null;
+  const linkedVersion = Number(route.params.get("version")) || undefined;
+  const scriptOpen = editing !== undefined ? editing : (linked ?? undefined);
+  const closeScript = () => {
+    setEditing(undefined);
+    if (linked) navigate(href("scripts"), true);
+  };
   useEffect(() => {
-    if (!me?.admin) return;
+    if (!allowed) return;
     let gone = false;
     fetchFleets(route.cluster)
       .then((f) => !gone && setProduction(f.production))
@@ -220,7 +246,7 @@ export function AutomationTab({
     return () => {
       gone = true;
     };
-  }, [route.cluster, me?.admin]);
+  }, [route.cluster, allowed]);
 
   const fetchAll = useCallback(
     (background: boolean) =>
@@ -243,13 +269,13 @@ export function AutomationTab({
     [fetchAll, apply],
   );
   useEffect(() => {
-    if (!me?.admin) return;
+    if (!allowed) return;
     let gone = false;
     void fetchAll(false).then((x) => !gone && apply(x));
     return () => {
       gone = true;
     };
-  }, [fetchAll, apply, me?.admin]);
+  }, [fetchAll, apply, allowed]);
   // While a run goes on, the lists follow it.
   const live = (index?.running ?? 0) > 0;
   useEffect(() => {
@@ -257,6 +283,66 @@ export function AutomationTab({
     const t = setInterval(() => void load(true), 4000);
     return () => clearInterval(t);
   }, [live, load]);
+
+  // The page beside the side pane; Parameters puts its own pane beside it.
+  const frame = (body: ReactNode) => (
+        <section
+          className="rk-pane"
+          style={{
+            flex: "1 1 600px",
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: 14,
+            padding: "16px 20px 32px",
+            background: "var(--bg)",
+          }}
+          aria-label="Automation"
+        >
+          {index?.off && (
+            <p
+              className="rk-callout"
+              data-tone="warn"
+              style={{ margin: 0, fontSize: 12.5 }}
+              data-testid="automation-off"
+            >
+              {index.off} Scripts can be written and approved; nothing runs until
+              SSH is on.
+            </p>
+          )}
+          {section === "run-history" && live && (
+            <span>
+              <Pill tone="info" testId="automation-live">
+                {index?.running} running
+              </Pill>
+            </span>
+          )}
+          {err && (
+            <p className="tb-err" data-testid="automation-error">
+              {err}
+            </p>
+          )}
+          {!index && !err && <p className="tb-hint">Loading…</p>}
+          {index && section === "scripts" && (
+            <ScriptsSection
+              index={index}
+              route={route}
+              production={production}
+              now={now}
+              onEdit={setEditing}
+              onRun={(script, dryRun) => setRunning({ script, dryRun })}
+              onOpenRun={setOpenRun}
+            />
+          )}
+          {index && section === "run-history" && (
+            <RunsSection runs={runs} now={now} onOpen={setOpenRun} />
+          )}
+          {body}
+          {index && section === "run-profiles" && (
+            <RunProfilesSection cluster={route.cluster} onToast={onToast} />
+          )}
+        </section>
+  );
 
   if (me && !me.admin)
     return (
@@ -271,87 +357,71 @@ export function AutomationTab({
   return (
     <>
       {index && section === "scripts" && (
-        <ScriptGroups scripts={index.scripts} route={route} />
+        <ScriptGroups
+          scripts={index.scripts}
+          kept={index.groups ?? []}
+          route={route}
+          onEdit={setEditingGroup}
+        />
       )}
-      <section
-        className="rk-pane"
-        style={{
-          flex: "1 1 600px",
-          minWidth: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: 14,
-          padding: "16px 20px 32px",
-          background: "var(--bg)",
-        }}
-        aria-label="Automation"
-      >
-        {index?.off && (
-          <p
-            className="rk-callout"
-            data-tone="warn"
-            style={{ margin: 0, fontSize: 12.5 }}
-            data-testid="automation-off"
-          >
-            {index.off} Scripts can be written and approved; nothing runs until
-            SSH is on.
-          </p>
-        )}
-        {section === "executions" && live && (
-          <span>
-            <Pill tone="info" testId="automation-live">
-              {index?.running} running
-            </Pill>
-          </span>
-        )}
-        {err && (
-          <p className="tb-err" data-testid="automation-error">
-            {err}
-          </p>
-        )}
-        {!index && !err && <p className="tb-hint">Loading…</p>}
-        {index && section === "scripts" && (
-          <ScriptsSection
-            index={index}
-            route={route}
-            production={production}
-            onEdit={setEditing}
-            onRun={(script, dryRun) => setRunning({ script, dryRun })}
-            onOpenRun={setOpenRun}
-          />
-        )}
-        {index && section === "executions" && (
-          <RunsSection runs={runs} now={now} onOpen={setOpenRun} />
-        )}
-        {index && section === "parameters" && (
-          <ParamsSection
-            cluster={route.cluster}
-            scripts={index.scripts}
-            onToast={onToast}
-          />
-        )}
-      </section>
-      {editing !== undefined && index && (
+      {index && section === "variables" ? (
+        <VariablesSection
+          cluster={route.cluster}
+          scripts={index.scripts}
+          linkedFleet={route.params.get("fleet")}
+          now={now}
+          frame={frame}
+          onToast={onToast}
+        />
+      ) : (
+        frame(null)
+      )}
+      {scriptOpen !== undefined && index && (
         <ScriptDrawer
-          name={editing}
+          name={scriptOpen}
+          linkedVersion={linked ? linkedVersion : undefined}
           me={index.me}
           production={production}
           maxText={index.limits.text}
-          groups={[
-            ...new Set(index.scripts.map((s) => s.group).filter(Boolean)),
-          ]}
-          onClose={() => setEditing(undefined)}
+          groups={(index.groups ?? []).map((g) => g.name)}
+          onClose={closeScript}
           onChanged={(name) => {
             if (name !== undefined) setEditing(name);
             void load(true);
           }}
           onDeleted={() => {
-            setEditing(undefined);
+            closeScript();
             onToast("The script is deleted.");
             void load(true);
           }}
           onRun={(script, dryRun) => setRunning({ script, dryRun })}
+          onNewGroup={(done) => {
+            afterGroup.current = done;
+            setEditingGroup(null);
+          }}
           onToast={onToast}
+        />
+      )}
+      {editingGroup !== undefined && index && (
+        <GroupDrawer
+          group={editingGroup}
+          scripts={index.scripts}
+          onClose={() => {
+            afterGroup.current = null;
+            setEditingGroup(undefined);
+          }}
+          onSaved={(name) => {
+            afterGroup.current?.(name);
+            afterGroup.current = null;
+            setEditingGroup(undefined);
+            onToast(`${name} is saved.`);
+            void load(true);
+          }}
+          onDeleted={(name) => {
+            setEditingGroup(undefined);
+            onToast(`The group ${name} is deleted.`);
+            void load(true);
+          }}
         />
       )}
       {running && index && (
@@ -359,12 +429,13 @@ export function AutomationTab({
           cluster={route.cluster}
           script={running.script}
           dryRun={running.dryRun}
+          scripts={index.scripts}
           off={index.off}
           maxTimeout={index.limits.timeout}
           onClose={() => setRunning(null)}
           onStarted={(r) => {
             setRunning(null);
-            setEditing(undefined);
+            closeScript();
             setOpenRun(r.id);
             onToast(
               `${r.dryRun ? "Dry run" : "Run"} ${r.id} started on ${r.nodes.length} ${r.nodes.length === 1 ? "node" : "nodes"}.`,
@@ -377,6 +448,13 @@ export function AutomationTab({
         <RunDrawer
           id={openRun}
           now={now}
+          onRetried={(r) => {
+            setOpenRun(r.id);
+            onToast(
+              `Run ${r.id} tries ${r.nodes.length} ${r.nodes.length === 1 ? "node" : "nodes"} again.`,
+            );
+            void load(true);
+          }}
           onClose={() => setOpenRun(null)}
           onToast={onToast}
           onEnded={() => void load(true)}
@@ -399,14 +477,18 @@ function goScripts(state: string, groups: string[]) {
  */
 function ScriptGroups({
   scripts,
+  kept,
   route,
+  onEdit,
 }: {
   scripts: ScriptSummary[];
+  kept: Group[];
   route: Route;
+  onEdit: (g: Group | null) => void;
 }) {
   const state = route.params.get("state") ?? "";
   const sel = parseGroups(route.params.get("group"));
-  const groups = scriptGroups(scripts);
+  const groups = scriptGroups(scripts, kept);
   return (
     <aside
       className="rk-pane rk-nodefleets"
@@ -423,8 +505,12 @@ function ScriptGroups({
     >
       <div
         style={{
-          padding: "14px 14px 10px",
+          padding: "10px 14px",
           borderBottom: "1px solid var(--line)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
         }}
       >
         <h2 className="rk-h">
@@ -439,6 +525,14 @@ function ScriptGroups({
             {groups.length}
           </span>
         </h2>
+        <button
+          className="rk-btn"
+          onClick={() => onEdit(null)}
+          data-testid="script-group-new"
+        >
+          <PlusIcon />
+          New group
+        </button>
       </div>
       <div style={{ padding: "0 0 6px" }}>
         <button
@@ -504,6 +598,21 @@ function ScriptGroups({
                   <span className="rk-cnt">{g.count}</span>
                 </span>
               </button>
+              {g.id !== UNGROUPED && (
+                <button
+                  className="rk-icon-btn"
+                  aria-label={`Edit group ${g.name}`}
+                  title="Edit this group"
+                  onClick={() =>
+                    onEdit(
+                      kept.find((x) => x.name === g.name) ?? { name: g.name },
+                    )
+                  }
+                  data-testid="script-group-edit"
+                >
+                  <PencilIcon />
+                </button>
+              )}
             </div>
           );
         })}
@@ -512,10 +621,30 @@ function ScriptGroups({
   );
 }
 
+const SCRIPT_SORT: SortCol<ScriptSummary>[] = [
+  { id: "name", sortValue: (s) => s.name },
+  { id: "kind", sortValue: (s) => scriptKind(s.target) },
+  { id: "group", sortValue: (s) => s.group || null },
+  { id: "latest", sortValue: (s) => s.version, defaultDir: "desc" },
+  { id: "runs", sortValue: (s) => s.approved || null, defaultDir: "desc" },
+  { id: "privilege", sortValue: (s) => s.privilege || null },
+  {
+    id: "checks",
+    sortValue: (s) => s.errors * 10000 + s.warnings,
+    defaultDir: "desc",
+  },
+  {
+    id: "lastRun",
+    sortValue: (s) => s.lastRun?.started ?? null,
+    defaultDir: "desc",
+  },
+];
+
 function ScriptsSection({
   index,
   route,
   production,
+  now,
   onEdit,
   onRun,
   onOpenRun,
@@ -523,6 +652,7 @@ function ScriptsSection({
   index: AutomationIndex;
   route: Route;
   production: boolean;
+  now: number;
   onEdit: (name: string | null) => void;
   onRun: (script: string, dryRun: boolean) => void;
   onOpenRun: (id: number) => void;
@@ -530,7 +660,7 @@ function ScriptsSection({
   const [q, setQ] = useState("");
   const state = route.params.get("state") ?? "";
   const groups = parseGroups(route.params.get("group"));
-  const shown = index.scripts.filter(
+  const picked = index.scripts.filter(
     (s) =>
       inState(s, state) &&
       inGroups(s, groups) &&
@@ -538,6 +668,16 @@ function ScriptsSection({
         s.name.includes(q.toLowerCase()) ||
         s.describe.toLowerCase().includes(q.toLowerCase()) ||
         s.group.toLowerCase().includes(q.toLowerCase())),
+  );
+  const { sort, onSort, shown } = useSorted(
+    "scripts",
+    SCRIPT_SORT,
+    picked,
+    { col: "name", dir: "asc" },
+    now,
+  );
+  const th = (col: string, label: string) => (
+    <SortTh col={col} label={label} sort={sort} onSort={onSort} />
   );
   return (
     <>
@@ -561,22 +701,26 @@ function ScriptsSection({
             data-testid="scripts-search"
           />
         </label>
-        <label className="rk-field" style={{ width: 200 }}>
-          <span className="rk-sr">State</span>
-          <select
-            value={state}
-            onChange={(e) => goScripts(e.target.value, groups)}
-            data-testid="scripts-state"
-          >
-            <option value="">Every state</option>
-            {SCRIPT_STATES.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.label} (
-                {index.scripts.filter((x) => inState(x, o.id)).length})
-              </option>
-            ))}
-          </select>
-        </label>
+        <div
+          className="rk-seg"
+          role="group"
+          aria-label="Show scripts by state"
+          data-testid="scripts-state"
+        >
+          {[{ id: "", label: "All" }, ...SCRIPT_STATES].map((o) => (
+            <button
+              key={o.id}
+              aria-pressed={state === o.id}
+              onClick={() => goScripts(o.id, groups)}
+              data-state={o.id || "all"}
+            >
+              {o.label}{" "}
+              <span style={{ color: "var(--fg3)", fontWeight: 400 }}>
+                {index.scripts.filter((x) => inState(x, o.id)).length}
+              </span>
+            </button>
+          ))}
+        </div>
         <button
           className="rk-btn"
           data-on
@@ -619,13 +763,14 @@ function ScriptsSection({
           <table className="tb-table">
             <thead>
               <tr>
-                <th>Script</th>
-                <th>Group</th>
-                <th>Latest</th>
-                <th>Runs</th>
-                <th>Privilege</th>
-                <th>Checks</th>
-                <th>Last run</th>
+                {th("name", "Script")}
+                {th("kind", "Kind")}
+                {th("group", "Group")}
+                {th("latest", "Latest")}
+                {th("runs", "Runs")}
+                {th("privilege", "Privilege")}
+                {th("checks", "Checks")}
+                {th("lastRun", "Last run")}
                 <th aria-label="Tools" />
               </tr>
             </thead>
@@ -676,6 +821,7 @@ function ScriptRow({
           {s.describe || "no description"}
         </div>
       </td>
+      <td data-testid="script-kind">{scriptKind(s.target)}</td>
       <td>{s.group || <span style={{ color: "var(--fg3)" }}>—</span>}</td>
       <td>
         v{s.version} <Pill tone={versionTone(s.state)}>{s.state}</Pill>
@@ -687,7 +833,7 @@ function ScriptRow({
           <span style={{ color: "var(--fg3)" }}>nothing approved</span>
         )}
       </td>
-      <td className="rk-mono">{s.privilege || "—"}</td>
+      <td className="rk-mono">{privilegeText(s.privilege)}</td>
       <td>
         {s.errors > 0 && <Pill tone="err">{s.errors} errors</Pill>}{" "}
         {s.warnings > 0 && <Pill tone="warn">{s.warnings} warnings</Pill>}
@@ -714,34 +860,36 @@ function ScriptRow({
         )}
       </td>
       <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
-        <button
-          className="rk-btn"
-          onClick={() => onRun(s.name, true)}
-          disabled={s.errors > 0 || !s.dryRun}
-          data-testid="script-dry-run"
-          title={
-            s.dryRun
-              ? "Run the latest version with DRY_RUN=1: nothing changes"
-              : "This script does not declare dry-run: yes, so it has no dry run"
-          }
-        >
-          Dry run…
-        </button>{" "}
-        <button
-          className="rk-btn"
-          onClick={() => onRun(s.name, false)}
-          disabled={!s.approved && (production || s.errors > 0)}
-          data-testid="script-run"
-          title={
-            s.approved
-              ? `Run approved v${s.approved}`
-              : production
-                ? "No version is approved yet"
-                : `Run v${s.version}, the latest version`
-          }
-        >
-          Run…
-        </button>
+        <>
+          <button
+            className="rk-btn"
+            onClick={() => onRun(s.name, true)}
+            disabled={s.errors > 0 || !s.dryRun}
+            data-testid="script-dry-run"
+            title={
+              s.dryRun
+                ? "Run the latest version with DRY_RUN=1: nothing changes"
+                : "This script does not declare dry-run: yes, so it has no dry run"
+            }
+          >
+            Dry run…
+          </button>{" "}
+          <button
+            className="rk-btn"
+            onClick={() => onRun(s.name, false)}
+            disabled={!s.approved && (production || s.errors > 0)}
+            data-testid="script-run"
+            title={
+              production
+                ? s.approved
+                  ? `Run approved v${s.approved}`
+                  : "No version is approved yet"
+                : `Run v${s.version}, the latest version, or pick another`
+            }
+          >
+            Run…
+          </button>
+        </>
       </td>
     </tr>
   );
@@ -749,6 +897,7 @@ function ScriptRow({
 
 function ScriptDrawer({
   name,
+  linkedVersion,
   me,
   production,
   maxText,
@@ -757,9 +906,12 @@ function ScriptDrawer({
   onChanged,
   onDeleted,
   onRun,
+  onNewGroup,
   onToast,
 }: {
   name: string | null;
+  /** Opens on this version, as Pending approvals sends a reviewer here. */
+  linkedVersion?: number;
   me: AutomationIndex["me"];
   production: boolean;
   maxText: number;
@@ -768,11 +920,13 @@ function ScriptDrawer({
   onChanged: (name?: string) => void;
   onDeleted: () => void;
   onRun: (script: string, dryRun: boolean) => void;
+  /** Opens a new group over the drawer; done gets its name once saved. */
+  onNewGroup: (done: (name: string) => void) => void;
   onToast: (msg: string) => void;
 }) {
   const [script, setScript] = useState<Script | null>(null);
   const [loadErr, setLoadErr] = useState("");
-  const [tab, setTab] = useState("script");
+  const [tab, setTab] = useState(linkedVersion ? "versions" : "script");
   const [newName, setNewName] = useState("");
   const [group, setGroup] = useState("");
   const [text, setText] = useState(name === null ? NEW_SCRIPT : "");
@@ -782,10 +936,58 @@ function ScriptDrawer({
   } | null>(null);
   const [busy, setBusy] = useState(false);
   const [actErr, setActErr] = useState("");
-  const [viewing, setViewing] = useState<number | null>(null);
+  const [viewing, setViewing] = useState<number | null>(linkedVersion ?? null);
   const [against, setAgainst] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
+  // What a new script starts from: the empty one, or the template picked.
+  const [base, setBase] = useState({ text: NEW_SCRIPT, name: "", group: "" });
   const [confirmRevoke, setConfirmRevoke] = useState<number | null>(null);
+  // The version an Approve or Reject asks about first.
+  const [deciding, setDeciding] = useState<{
+    n: number;
+    how: "approve" | "reject";
+  } | null>(null);
+  const [saveTried, setSaveTried] = useState(false);
+  const [ask, setAsk] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [askErr, setAskErr] = useState("");
+  const [questions, setQuestions] = useState<string[]>([]);
+  const [said, setSaid] = useState<{
+    notes: string[];
+    rounds: number;
+    added: number;
+    removed: number;
+  } | null>(null);
+  const [jump, setJump] = useState<{ line: number } | null>(null);
+  const asked = useRef<AbortController | null>(null);
+  useEffect(() => () => asked.current?.abort(), []);
+  const write = () => {
+    const ctl = new AbortController();
+    asked.current = ctl;
+    setAsking(true);
+    setAskErr("");
+    setQuestions([]);
+    setSaid(null);
+    const before = text === NEW_SCRIPT ? "" : text;
+    draftScript(ask, text === NEW_SCRIPT ? "" : text, ctl.signal)
+      .then((d) => {
+        setText(d.text);
+        setAsk("");
+        setQuestions(d.questions ?? []);
+        const diff = lineDiff(before, d.text);
+        setSaid({
+          notes: d.notes ?? [],
+          rounds: d.rounds,
+          added: diff.added,
+          removed: diff.removed,
+        });
+      })
+      .catch((e: unknown) => {
+        if (!ctl.signal.aborted) setAskErr(errText(e));
+      })
+      .finally(() => setAsking(false));
+  };
 
   useEffect(() => {
     if (name === null) return;
@@ -820,11 +1022,29 @@ function ScriptDrawer({
     name === null ||
     (latest !== undefined &&
       (text !== latest.text || group !== (script?.group ?? "")));
+  // Closing with changes not saved asks first. Once saved, a new script
+  // compares with what was saved, before the drawer takes its name.
+  const unsaved = script
+    ? text !== latestOf(script).text || group !== (script.group ?? "")
+    : name === null &&
+      (text !== base.text || newName !== base.name || group !== base.group);
+  // A save under way finishes on the server whether the drawer stays or not.
+  const close = () => (unsaved && !busy ? setConfirmClose(true) : onClose());
   const nameBad = name === null && newName !== "" && !SCRIPT_NAME.test(newName);
   const tooLong = new TextEncoder().encode(text).length > maxText;
   const errors = (check?.findings ?? []).filter(
     (f) => f.level === "error",
   ).length;
+  // Save stays there to press: pressing it says what it still needs.
+  const saveWhy = tooLong
+    ? `The script is over ${maxText / 1024} KiB: shorten it.`
+    : name === null && !newName
+      ? "Give the script a name first."
+      : nameBad
+        ? "The name takes lowercase letters, digits and dashes."
+        : !changed
+          ? "Nothing to save yet: change the script first."
+          : "";
 
   const act = async (f: () => Promise<Script>, done: string) => {
     setBusy(true);
@@ -861,9 +1081,56 @@ function ScriptDrawer({
     setText(t.text);
     setNewName(t.name);
     setGroup(t.group);
+    setBase({ text: t.text, name: t.name, group: t.group });
   };
-  const runnableVersion = approved ?? (production ? undefined : latest);
+  // Production runs approved versions only; anywhere else Run takes the
+  // newest version, approved or not, and never a rejected one.
+  const runnableVersion = production
+    ? approved
+    : script
+      ? [...script.versions].reverse().find((v) => v.state !== "rejected")
+      : undefined;
 
+  const groupPick = (
+    <>
+      <label
+        htmlFor="script-group"
+        style={{ fontSize: 12.5, color: "var(--fg3)" }}
+      >
+        Group
+      </label>
+      <span className="rk-field" style={{ width: 220, height: 30 }}>
+        <select
+          id="script-group"
+          value={group}
+          onChange={(e) => setGroup(e.target.value)}
+          disabled={asking}
+          data-testid="script-group"
+        >
+          <option value="">Ungrouped</option>
+          {[...new Set([...groups, ...(group ? [group] : [])])]
+            .sort((a, b) => a.localeCompare(b))
+            .map((g) => (
+              <option key={g} value={g}>
+                {g}
+              </option>
+            ))}
+        </select>
+      </span>
+      <button
+        className="rk-btn"
+        onClick={() => onNewGroup(setGroup)}
+        disabled={asking}
+        style={{ height: 30 }}
+        data-testid="script-new-group"
+      >
+        <PlusIcon />
+        New group
+      </button>
+    </>
+  );
+
+  const locked = busy || asking;
   const footer = (
     <div
       style={{
@@ -882,16 +1149,23 @@ function ScriptDrawer({
           {actErr}
         </p>
       )}
+      {saveTried && saveWhy && (
+        <p
+          className="tb-err"
+          style={{ flex: "1 1 100%", margin: 0 }}
+          data-testid="script-save-why"
+        >
+          {saveWhy}
+        </p>
+      )}
       <button
         className="rk-btn"
         data-on
-        onClick={() => void save()}
-        disabled={
-          busy ||
-          !changed ||
-          tooLong ||
-          (name === null && (!newName || nameBad))
-        }
+        onClick={() => {
+          setSaveTried(!!saveWhy);
+          if (!saveWhy) void save();
+        }}
+        disabled={locked}
         data-testid="script-save"
       >
         {name === null || latest?.state === "draft"
@@ -908,7 +1182,7 @@ function ScriptDrawer({
             )
           }
           disabled={
-            busy ||
+            locked ||
             errors > 0 ||
             (latest.findings ?? []).some((f) => f.level === "error")
           }
@@ -920,16 +1194,22 @@ function ScriptDrawer({
       {latest && !changed && canApprove(latest, me) && (
         <button
           className="rk-btn"
-          onClick={() =>
-            void act(
-              () => approveVersion(script!.name, latest.n),
-              `You approved v${latest.n}.`,
-            )
-          }
-          disabled={busy}
+          onClick={() => setDeciding({ n: latest.n, how: "approve" })}
+          disabled={locked}
           data-testid="script-approve"
         >
-          Approve v{latest.n}
+          Approve v{latest.n}…
+        </button>
+      )}
+      {latest && !changed && canReject(latest, me) && (
+        <button
+          className="rk-btn"
+          data-danger="true"
+          onClick={() => setDeciding({ n: latest.n, how: "reject" })}
+          disabled={locked}
+          data-testid="script-reject"
+        >
+          Reject v{latest.n}…
         </button>
       )}
       {latest &&
@@ -951,7 +1231,7 @@ function ScriptDrawer({
             className="rk-btn"
             style={{ marginLeft: "auto" }}
             onClick={() => onRun(script.name, true)}
-            disabled={busy || changed || errors > 0 || !latest?.header.dryRun}
+            disabled={locked || changed || errors > 0 || !latest?.header.dryRun}
             title={
               latest?.header.dryRun
                 ? undefined
@@ -965,7 +1245,9 @@ function ScriptDrawer({
             className="rk-btn"
             onClick={() => onRun(script.name, false)}
             disabled={
-              busy || !runnableVersion || (!approved && (changed || errors > 0))
+              locked ||
+              !runnableVersion ||
+              (runnableVersion.n === latest?.n && (changed || errors > 0))
             }
             data-testid="script-drawer-run"
           >
@@ -975,7 +1257,7 @@ function ScriptDrawer({
             className="rk-btn"
             data-danger="true"
             onClick={() => setConfirmDelete(true)}
-            disabled={busy}
+            disabled={locked}
             data-testid="script-delete"
           >
             Delete
@@ -1032,21 +1314,31 @@ function ScriptDrawer({
         }
         tab={tab}
         onTab={setTab}
-        onClose={onClose}
+        onClose={close}
         footer={tab === "script" ? footer : undefined}
-        width={tab === "versions" ? 1400 : 960}
+        tabsEnd={tab === "script" ? groupPick : undefined}
+        width={1400}
         testId="script-drawer"
       >
         {loadErr && <p className="tb-err">{loadErr}</p>}
         {tab === "script" && (name === null || script) && (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            {name === null && (
+            <div
+              style={{
+                display: "flex",
+                gap: 12,
+                flexWrap: "wrap",
+                alignItems: "flex-start",
+              }}
+            >
               {name === null && (
                 <Field label="Start from">
                   <span className="rk-field" style={{ width: 320 }}>
                     <select
                       defaultValue="blank"
                       onChange={(e) => pickTemplate(e.target.value)}
+                      disabled={asking}
                       data-testid="script-template"
                     >
                       {SCRIPT_TEMPLATES.map((t) => (
@@ -1073,94 +1365,234 @@ function ScriptDrawer({
                       onChange={(e) => setNewName(e.target.value.trim())}
                       placeholder="ensure-chrony"
                       aria-invalid={nameBad}
+                      disabled={asking}
                       data-testid="script-name"
                     />
                   </span>
                 </Field>
               )}
-              <Field
-                label="Group"
-                hint="Groups sort the list; a script is in one group or none."
-              >
-                <span className="rk-field" style={{ width: 220 }}>
-                  <input
-                    value={group}
-                    onChange={(e) => setGroup(e.target.value)}
-                    list="automation-groups"
-                    placeholder="Ungrouped"
-                    data-testid="script-group"
-                  />
-                </span>
-                <datalist id="automation-groups">
-                  {groups.map((g) => (
-                    <option key={g} value={g} />
-                  ))}
-                </datalist>
-              </Field>
             </div>
-            <Field
-              label="Script"
-              hint={
-                tooLong
-                  ? `Over ${maxText / 1024} KiB: shorten it.`
-                  : "The header lines start with # 221b: — describe, param, privilege, dry-run, facts. Privilege none runs as nobody and cannot change the node; full runs with the login user’s rights. Saving keeps the draft’s version; submitting freezes it for review, and someone else approves it."
-              }
-            >
-              <textarea
-                className="rk-area rk-mono"
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                spellCheck={false}
-                style={{
-                  minHeight: 340,
-                  fontSize: 12.5,
-                  lineHeight: 1.5,
-                  tabSize: 2,
-                }}
-                data-testid="script-text"
-              />
-            </Field>
-            <div>
-              <h3 className="rk-h" style={{ margin: "0 0 6px" }}>
-                Checks
-              </h3>
-              {check ? (
-                <Findings list={check.findings} />
-              ) : (
-                <p className="tb-hint">Checking…</p>
-              )}
-            </div>
-            {check && (
-              <div
-                style={{
-                  fontSize: 12.5,
-                  display: "grid",
-                  gridTemplateColumns: "max-content 1fr",
-                  gap: "4px 12px",
-                }}
-                data-testid="script-header"
-              >
-                <span style={{ color: "var(--fg3)" }}>Privilege</span>
-                <span className="rk-mono">{check.header.privilege || "—"}</span>
-                <span style={{ color: "var(--fg3)" }}>Dry run</span>
-                <span>
-                  {check.header.dryRun
-                    ? "honoured: DRY_RUN=1 changes nothing"
-                    : "not supported"}
-                </span>
-                <span style={{ color: "var(--fg3)" }}>Parameters</span>
-                <span>
-                  {(check.header.params ?? []).length === 0
-                    ? "none"
-                    : (check.header.params ?? []).map((p) => (
-                        <span key={p.name} style={{ marginRight: 10 }}>
-                          <span className="rk-mono">{p.name}</span>
-                          {p.required ? " (required)" : ""}
-                        </span>
-                      ))}
-                </span>
-              </div>
             )}
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 16,
+                alignItems: "stretch",
+              }}
+            >
+              <div style={{ flex: "3 1 560px", minWidth: 0 }}>
+                <Field
+                  label="Script"
+                  hint={
+                    tooLong
+                      ? `Over ${maxText / 1024} KiB: shorten it.`
+                      : "Header lines start with # 221b: describe, param, privilege, dry-run, facts."
+                  }
+                >
+                  <CodeArea
+                    value={text}
+                    onChange={setText}
+                    testId="script-text"
+                    height="calc(100vh - 330px)"
+                    readOnly={asking}
+                    jump={jump}
+                  />
+                </Field>
+              </div>
+              <aside
+                style={{
+                  flex: "1 1 340px",
+                  minWidth: 0,
+                  maxHeight: "calc(100vh - 300px)",
+                  overflow: "auto",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 12,
+                }}
+                aria-label="Sherlock and checks"
+              >
+                {check && (
+                  <div
+                    style={{
+                      fontSize: 12.5,
+                      display: "grid",
+                      gridTemplateColumns: "max-content 1fr",
+                      gap: "4px 12px",
+                    }}
+                    data-testid="script-header"
+                  >
+                    <span style={{ color: "var(--fg3)" }}>Kind</span>
+                    <span data-testid="script-drawer-kind">
+                      {scriptKind(check.header.target)}
+                    </span>
+                    <span style={{ color: "var(--fg3)" }}>Privilege</span>
+                    <span className="rk-mono">
+                      {privilegeText(check.header.privilege)}
+                    </span>
+                    <span style={{ color: "var(--fg3)" }}>Dry run</span>
+                    <span>
+                      {check.header.dryRun
+                        ? "honoured: DRY_RUN=1 changes nothing"
+                        : "not supported"}
+                    </span>
+                    <span style={{ color: "var(--fg3)" }}>Parameters</span>
+                    <span>
+                      {(check.header.params ?? []).length === 0
+                        ? "none"
+                        : (check.header.params ?? []).map((p) => (
+                            <span key={p.name} style={{ display: "block" }}>
+                              <span className="rk-mono">{p.name}</span>
+                              {p.required ? " (required)" : ""}
+                            </span>
+                          ))}
+                    </span>
+                  </div>
+                )}
+                <section
+                  style={{ display: "flex", flexDirection: "column", gap: 6 }}
+                  data-testid="script-sherlock"
+                >
+                  <h3 className="rk-h" style={{ margin: 0 }}>
+                    Sherlock
+                  </h3>
+                  <textarea
+                    className="rk-area"
+                    aria-label="What the script should do"
+                    placeholder="Keep chrony running on every node"
+                    rows={4}
+                    value={ask}
+                    onChange={(e) => setAsk(e.target.value)}
+                    disabled={asking}
+                    style={{ resize: "vertical", minHeight: 88 }}
+                    data-testid="script-sherlock-request"
+                  />
+                  <div
+                    style={{ display: "flex", gap: 8, alignItems: "center" }}
+                  >
+                    <button
+                      className="rk-btn"
+                      onClick={write}
+                      disabled={
+                        asking ||
+                        (!ask.trim() && !(check?.findings ?? []).length)
+                      }
+                      data-testid="script-sherlock-draft"
+                    >
+                      {asking
+                        ? "Working…"
+                        : !ask.trim() && (check?.findings ?? []).length
+                          ? "Fix with Sherlock"
+                          : "Write with Sherlock"}
+                    </button>
+                    {asking && (
+                      <button
+                        className="rk-btn"
+                        onClick={() => asked.current?.abort()}
+                        data-testid="script-sherlock-cancel"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                  {asking && (
+                    <p
+                      className="tb-hint"
+                      style={{ margin: 0 }}
+                      data-testid="script-sherlock-working"
+                    >
+                      Sherlock is writing and fixing what the checks find. The
+                      script is locked until it ends.
+                    </p>
+                  )}
+                  {(askErr || said || questions.length > 0) && (
+                    <div
+                      style={{
+                        maxHeight: "15em",
+                        overflow: "auto",
+                        lineHeight: 1.5,
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 6,
+                      }}
+                      tabIndex={0}
+                      role="region"
+                      aria-label="What Sherlock said"
+                      data-testid="script-sherlock-output"
+                    >
+                      {askErr && (
+                        <p
+                          className="tb-err"
+                          style={{ margin: 0 }}
+                          data-testid="script-sherlock-error"
+                        >
+                          {askErr}
+                        </p>
+                      )}
+                      {said && (
+                        <div
+                          style={{
+                            padding: "8px 10px",
+                            borderRadius: 8,
+                            border: "1px solid var(--line)",
+                            background: "var(--bg)",
+                            fontSize: 12.5,
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 6,
+                          }}
+                          data-testid="script-sherlock-notes"
+                        >
+                          <div style={{ color: "var(--fg3)" }}>
+                            Sherlock changed the script: {said.added} lines added,{" "}
+                            {said.removed} removed
+                            {said.rounds > 1
+                              ? `, in ${said.rounds} rounds with the checks`
+                              : ""}
+                            . Nothing is saved until you save it.
+                          </div>
+                          {said.notes.map((n, i) => (
+                            <p
+                              key={i}
+                              style={{ margin: 0, whiteSpace: "pre-wrap" }}
+                            >
+                              {n}
+                            </p>
+                          ))}
+                        </div>
+                      )}
+                      {questions.length > 0 && (
+                        <div data-testid="script-sherlock-questions">
+                          <p className="tb-hint" style={{ margin: "0 0 4px" }}>
+                            Sherlock needs your answer: say it above and ask again.
+                          </p>
+                          <ul
+                            style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }}
+                          >
+                            {questions.map((q) => (
+                              <li key={q}>{q}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </section>
+                <section>
+                  <h3 className="rk-h" style={{ margin: "0 0 6px" }}>
+                    Checks
+                  </h3>
+                  {check ? (
+                    <Findings
+                      list={check.findings}
+                      onLine={(line) => setJump({ line })}
+                    />
+                  ) : (
+                    <p className="tb-hint">Checking…</p>
+                  )}
+                </section>
+              </aside>
+            </div>
           </div>
         )}
         {tab === "versions" && script && shownVersion && (
@@ -1175,7 +1607,7 @@ function ScriptDrawer({
             <div
               style={{
                 flex: "1 1 340px",
-                maxWidth: 440,
+                maxWidth: 480,
                 minWidth: 0,
                 display: "flex",
                 flexDirection: "column",
@@ -1199,20 +1631,19 @@ function ScriptDrawer({
                       me={me}
                       busy={busy}
                       shown={shownVersion.n}
+                      latest={latest?.n ?? v.n}
                       against={against}
                       onView={() => {
                         setViewing(v.n);
                         setAgainst(null);
                       }}
-                      onDiff={() => setAgainst(v.n)}
-                      onNoDiff={() => setAgainst(null)}
+                      onDiff={() => {
+                        setViewing(latest?.n ?? v.n);
+                        setAgainst(v.n);
+                      }}
                       onRevoke={() => setConfirmRevoke(v.n)}
-                      onApprove={() =>
-                        void act(
-                          () => approveVersion(script.name, v.n),
-                          `You approved v${v.n}.`,
-                        )
-                      }
+                      onApprove={() => setDeciding({ n: v.n, how: "approve" })}
+                      onReject={() => setDeciding({ n: v.n, how: "reject" })}
                     />
                   ))}
                 </tbody>
@@ -1225,6 +1656,7 @@ function ScriptDrawer({
               v={shownVersion}
               against={against}
               onAgainst={setAgainst}
+              onReviewed={(s) => setScript(s)}
             />
           </div>
         )}
@@ -1251,6 +1683,51 @@ function ScriptDrawer({
           </p>
         </ConfirmDialog>
       )}
+      {deciding && script && (
+        <DecideDialog
+          how={deciding.how}
+          what={`${script.name} v${deciding.n}`}
+          busy={busy}
+          error={actErr}
+          onCancel={() => {
+            setDeciding(null);
+            setActErr("");
+          }}
+          onConfirm={(comment) =>
+            void act(
+              () =>
+                deciding.how === "approve"
+                  ? approveVersion(script.name, deciding.n)
+                  : rejectVersion(script.name, deciding.n, comment),
+              deciding.how === "approve"
+                ? `You approved v${deciding.n}.`
+                : `You rejected v${deciding.n}.`,
+            ).then(() => setDeciding(null))
+          }
+        >
+          {deciding.how === "approve"
+            ? "Once approved, it can run on production, and your approval is recorded in the audit log."
+            : "It stays rejected and never runs; the author saves the script again for a new version, and reads your reason."}
+        </DecideDialog>
+      )}
+      {confirmClose && (
+        <ConfirmDialog
+          title="Close without saving?"
+          confirm="Close"
+          danger
+          onCancel={() => setConfirmClose(false)}
+          onConfirm={() => {
+            setConfirmClose(false);
+            onClose();
+          }}
+        >
+          <p style={{ margin: 0 }} data-testid="script-close-unsaved">
+            {name === null
+              ? "This script is not saved. Closing loses it."
+              : "Your changes to the script are not saved. Closing loses them."}
+          </p>
+        </ConfirmDialog>
+      )}
       {confirmDelete && script && (
         <ConfirmDialog
           title={`Delete ${script.name}?`}
@@ -1269,7 +1746,7 @@ function ScriptDrawer({
         >
           <p style={{ margin: 0 }}>
             Every version of it goes, approved ones too. The runs it made stay
-            in Executions and in the audit log.
+            in Run History and in the audit log.
           </p>
         </ConfirmDialog>
       )}
@@ -1282,26 +1759,30 @@ function VersionRow({
   me,
   busy,
   shown,
+  latest,
   against,
   onView,
   onDiff,
-  onNoDiff,
   onRevoke,
   onApprove,
+  onReject,
 }: {
   v: Version;
   me: AutomationIndex["me"];
   busy: boolean;
-  /** The version the page shows, which every diff compares with. */
+  /** The version the page shows. */
   shown: number;
+  /** The latest version, which each row's diff compares with. */
+  latest: number;
   against: number | null;
   onView: () => void;
   onDiff: () => void;
-  onNoDiff: () => void;
   onRevoke: () => void;
   onApprove: () => void;
+  onReject: () => void;
 }) {
   const viewing = shown === v.n;
+  const diffed = shown === latest && against === v.n;
   return (
     <tr
       data-testid="version-row"
@@ -1340,28 +1821,55 @@ function VersionRow({
             </div>
           ))
         )}
-        {canApprove(v, me) && v.state !== "superseded" && (
-          <button
-            className="rk-btn"
-            onClick={onApprove}
-            disabled={busy}
-            data-testid="version-approve"
-            style={{ marginTop: 4 }}
-          >
-            Approve
-          </button>
+        {(canApprove(v, me) ||
+          canReject(v, me) ||
+          v.state === "approved") && (
+          <div style={{ display: "flex", gap: 4, marginTop: 2 }}>
+            {canApprove(v, me) && (
+              <button
+                className="rk-btn"
+                data-size="sm"
+                onClick={onApprove}
+                disabled={busy}
+                data-testid="version-approve"
+              >
+                Approve…
+              </button>
+            )}
+            {canReject(v, me) && (
+              <button
+                className="rk-btn"
+                data-size="sm"
+                data-danger="true"
+                onClick={onReject}
+                disabled={busy}
+                data-testid="version-reject"
+              >
+                Reject…
+              </button>
+            )}
+            {v.state === "approved" && (
+              <button
+                className="rk-btn"
+                data-size="sm"
+                data-danger="true"
+                onClick={onRevoke}
+                disabled={busy}
+                data-testid="version-revoke"
+              >
+                Revoke
+              </button>
+            )}
+          </div>
         )}
-        {v.state === "approved" && (
-          <button
-            className="rk-btn"
-            data-danger="true"
-            onClick={onRevoke}
-            disabled={busy}
-            data-testid="version-revoke"
-            style={{ marginTop: 4 }}
+        {v.rejected && (
+          <div
+            style={{ color: "var(--fg3)", fontSize: 12 }}
+            data-testid="version-rejected"
           >
-            Revoke
-          </button>
+            rejected by {v.rejected.by.name} {fmtTs(v.rejected.at)}
+            {v.rejected.comment ? `: ${v.rejected.comment}` : ""}
+          </div>
         )}
         {(v.revoked ?? []).map((r, i) => (
           <div key={i} style={{ color: "var(--fg3)", fontSize: 12 }}>
@@ -1370,47 +1878,59 @@ function VersionRow({
         ))}
       </td>
       <td>
-        {viewing ? (
+        <span style={{ display: "inline-flex", gap: 4 }}>
           <button
             className="rk-icon-btn"
             aria-label={`No diff: show v${v.n} alone`}
-            title="No diff"
-            onClick={onNoDiff}
-            disabled={against === null}
+            title={`No diff: show v${v.n} alone`}
+            onClick={onView}
             data-testid="version-no-diff"
           >
             <NoDiffIcon />
           </button>
-        ) : (
-          <button
-            className="rk-icon-btn"
-            aria-label={`Diff v${shown} against v${v.n}`}
-            aria-pressed={against === v.n}
-            title={`Diff v${shown} against v${v.n}`}
-            onClick={onDiff}
-            data-on={against === v.n}
-            data-testid="version-diff"
-          >
-            <DiffIcon />
-          </button>
-        )}
+          {v.n !== latest && (
+            <button
+              className="rk-icon-btn"
+              aria-label={`Diff v${latest} against v${v.n}`}
+              aria-pressed={diffed}
+              title={`Diff v${latest} against v${v.n}`}
+              onClick={onDiff}
+              data-on={diffed}
+              data-testid="version-diff"
+            >
+              <DiffIcon />
+            </button>
+          )}
+        </span>
       </td>
     </tr>
   );
 }
 
 /** A version's text, or what changed since another version. */
-function VersionPane({
+export function VersionPane({
   script,
   v,
   against,
   onAgainst,
+  onReviewed,
 }: {
   script: Script;
   v: Version;
   against: number | null;
   onAgainst: (n: number | null) => void;
+  onReviewed: (s: Script) => void;
 }) {
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewErr, setReviewErr] = useState("");
+  const review = () => {
+    setReviewing(true);
+    setReviewErr("");
+    reviewVersion(script.name, v.n)
+      .then(onReviewed)
+      .catch((e: unknown) => setReviewErr(errText(e)))
+      .finally(() => setReviewing(false));
+  };
   const other = script.versions.find((x) => x.n === against);
   const others = script.versions.filter((x) => x.n !== v.n);
   const diff = other ? lineDiff(other.text, v.text) : null;
@@ -1481,6 +2001,63 @@ function VersionPane({
           </>
         )}
       </div>
+      <section
+        style={{
+          padding: "10px 12px",
+          borderRadius: 8,
+          border: "1px solid var(--line)",
+          background: "var(--surface)",
+          fontSize: 12.5,
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}
+        data-testid="version-review"
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <h4 className="rk-h" style={{ margin: 0 }}>
+            Sherlock review
+          </h4>
+          <span style={{ color: "var(--fg3)" }}>advice: it never approves</span>
+          <span style={{ flex: "1 1 auto" }} />
+          <button
+            className="rk-btn"
+            onClick={review}
+            disabled={reviewing}
+            data-testid="version-review-ask"
+          >
+            {reviewing
+              ? "Reading…"
+              : v.review
+                ? "Review again"
+                : "Ask Sherlock"}
+          </button>
+        </div>
+        {reviewErr && (
+          <p className="tb-err" style={{ margin: 0 }}>
+            {reviewErr}
+          </p>
+        )}
+        {v.review && <p style={{ margin: 0 }}>{v.review.summary}</p>}
+        {(v.review?.findings ?? []).map((f, i) => (
+          <p key={i} style={{ margin: 0 }}>
+            <Pill tone={f.level === "error" ? "err" : "warn"}>{f.level}</Pill>{" "}
+            {f.line ? `line ${f.line}: ` : ""}
+            {f.msg}
+          </p>
+        ))}
+        {v.header.target === "kubernetes" && (
+          <p style={{ margin: 0 }} data-testid="version-watson">
+            What Watson will run: in Kubernetes, only{" "}
+            {(v.header.k8s ?? [])
+              .map((a) => `${a.verb} ${a.resource}`)
+              .join(", ") || "nothing"}
+            {v.header.runsAs ? `, as ${v.header.runsAs}` : ", as the person"}.
+            The proxy refuses anything else, and each command is audited as
+            “Watson via {script.name} v{v.n}, run #…”.
+          </p>
+        )}
+      </section>
       {diff ? (
         <>
           <p
@@ -1502,13 +2079,11 @@ function VersionPane({
           )}
         </>
       ) : (
-        <pre
-          className="rk-mono"
-          style={{ ...paneStyle, background: "var(--sunken)" }}
-          data-testid="version-text"
-        >
-          {v.text}
-        </pre>
+        <CodeView
+          text={v.text}
+          testId="version-text"
+          maxHeight={paneStyle.maxHeight}
+        />
       )}
     </div>
   );
@@ -1520,6 +2095,7 @@ function RunDialog({
   cluster,
   script,
   dryRun: dry0,
+  scripts,
   off,
   maxTimeout,
   onClose,
@@ -1528,6 +2104,7 @@ function RunDialog({
   cluster: string;
   script: string;
   dryRun: boolean;
+  scripts: ScriptSummary[];
   off: string;
   maxTimeout: number;
   onClose: () => void;
@@ -1538,6 +2115,11 @@ function RunDialog({
   const [loadErr, setLoadErr] = useState("");
   const [wantDry, setWantDry] = useState(dry0);
   const [versionN, setVersionN] = useState<number | null>(null);
+  const [profiles, setProfiles] = useState<RunProfile[]>([]);
+  const [profileId, setProfileId] = useState("");
+  const [drain, setDrain] = useState(false);
+  const [hookBefore, setHookBefore] = useState("");
+  const [hookAfter, setHookAfter] = useState("");
   const [fleetId, setFleetId] = useState(""); // CUSTOM_NODES: picked by hand
   const [listed, setListed] = useState(""); // the fleet whose nodes the dialog lists
   const [picked, setPicked] = useState<string[]>([]);
@@ -1551,9 +2133,10 @@ function RunDialog({
 
   useEffect(() => {
     let gone = false;
-    Promise.all([fetchScript(script), fetchFleets(cluster)])
-      .then(([s, f]) => {
+    Promise.all([fetchScript(script), fetchFleets(cluster), fetchProfiles()])
+      .then(([s, f, c]) => {
         if (gone) return;
+        setProfiles(c.profiles);
         setSc(s);
         setFleets(f);
         setFleetId(f.fleets[0]?.id ?? "");
@@ -1570,18 +2153,22 @@ function RunDialog({
   const newestFirst = [...(sc?.versions ?? [])].reverse();
   const canDry = newestFirst.some((v) => v.header.dryRun);
   const dryRun = wantDry && canDry;
-  // Off production a run may take any version; on production any approved
-  // one. A real run starts from the newest approved, a dry run from the
-  // newest text.
+  // Off production a run takes the version chosen, approved or not, and
+  // starts from the newest; a rejected version never runs. On production
+  // only approved versions run, starting from the newest approved.
   const anyVersion = fleets?.production === false;
   const offered = dryRun
     ? newestFirst.filter((v) => v.header.dryRun)
     : anyVersion
-      ? newestFirst
+      ? newestFirst.filter((v) => v.state !== "rejected")
       : newestFirst.filter((v) => v.state === "approved");
   const version =
     offered.find((v) => v.n === versionN) ??
-    (dryRun ? offered[0] : (approvedVersion ?? offered[0]));
+    (dryRun || anyVersion ? offered[0] : (approvedVersion ?? offered[0]));
+  const onCluster = version?.header.target === "kubernetes";
+  const hookScripts = scripts.filter(
+    (x) => x.target === "kubernetes" && x.approved,
+  );
   const everyNode = fleets?.fleets.find((f) => f.id === ALL_NODES);
   const custom = fleetId === CUSTOM_NODES;
   // Picked by hand, the run is no fleet's: it takes All nodes' values and ceiling.
@@ -1614,10 +2201,27 @@ function RunDialog({
   const runValues = Object.fromEntries(
     Object.entries(overrides).filter(([, v]) => v !== ""),
   );
-  const missing = missingParams(params, fleet?.params, nodes, runValues);
+  const missing = missingParams(
+    params,
+    fleets?.fleets ?? [],
+    onCluster ? [""] : nodes,
+    runValues,
+  );
+  const clashes = onCluster
+    ? []
+    : paramClashes(params, fleets?.fleets ?? [], nodes, runValues);
   const plan = batches(nodes, { mode, size });
+  const runAs = runProfilesFor(profiles, {
+    onCluster,
+    dryRun,
+    privilege: version?.header.privilege ?? "",
+    fleet: fleet?.id,
+    fp: fleet?.params,
+  });
+  const profile =
+    runAs.options.find((c) => c.id === profileId) ?? runAs.fit;
   const blocked: string[] = [];
-  if (off) blocked.push(off);
+  if (off && !onCluster) blocked.push(off);
   if (fleets?.readOnly) blocked.push(fleets.readOnly);
   if (!version)
     blocked.push(
@@ -1632,12 +2236,23 @@ function RunDialog({
       blocked.push(
         `v${version.n} was approved only by the person who wrote it: someone else must approve it.`,
       );
-    if (!dryRun && !allows(fleet?.params, version.header.privilege))
+    if (
+      !dryRun &&
+      !onCluster &&
+      !allows(fleet?.params, version.header.privilege)
+    )
       blocked.push(
-        `The script needs privilege full; fleet ${fleet?.name} allows only none. Raise its ceiling under Parameters.`,
+        `The script needs privilege elevated; the ceiling of fleet ${fleet?.name} is ${ceilingText("none")}: read-only. Raise it under Variables.`,
       );
   }
-  if (nodes.length === 0) blocked.push("No paired node is picked.");
+  if (version && profiles.length && !profile)
+    blocked.push("No run profile fits this script on this fleet.");
+  if (nodes.length === 0 && !onCluster)
+    blocked.push("No paired node is picked.");
+  if (clashes.length)
+    blocked.push(
+      `Defined on more than one fleet: ${clashes.slice(0, 4).join("; ")}${clashes.length > 4 ? "…" : ""}. Keep it on one fleet, or set it on the node or below.`,
+    );
   if (missing.length)
     blocked.push(
       `Required parameters have no value: ${missing.slice(0, 4).join("; ")}${missing.length > 4 ? "…" : ""}`,
@@ -1645,6 +2260,8 @@ function RunDialog({
   if (mode === "size" && size < 1)
     blocked.push("A batch has at least one node.");
 
+  // A real run asks first; a dry run changes nothing.
+  const [confirming, setConfirming] = useState(false);
   const start = async () => {
     if (!fleet || !version) return;
     setBusy(true);
@@ -1654,8 +2271,21 @@ function RunDialog({
         script,
         version: version.n,
         dryRun,
-        fleet: fleet.id,
-        nodes,
+        fleet: onCluster ? "_cluster" : fleet.id,
+        nodes: onCluster ? undefined : nodes,
+        config: profile?.id,
+        hooks: onCluster
+          ? undefined
+          : {
+              before: [
+                ...(drain ? ["drain"] : []),
+                ...(hookBefore ? [`script:${hookBefore}`] : []),
+              ],
+              after: [
+                ...(hookAfter ? [`script:${hookAfter}`] : []),
+                ...(drain ? ["uncordon"] : []),
+              ],
+            },
         params: Object.keys(runValues).length ? runValues : undefined,
         rollout: {
           mode,
@@ -1673,15 +2303,21 @@ function RunDialog({
   };
 
   const first = nodes[0];
-  const resolved = resolveParams(params, fleet?.params, first ?? "", runValues);
+  const resolved = resolveParams(
+    params,
+    fleets?.fleets ?? [],
+    first ?? "",
+    runValues,
+  );
 
   return (
+    <>
     <Drawer
       label="Run a script"
       kicker={dryRun ? "Dry run" : "Run"}
       title={script}
       copy={false}
-      width={820}
+      width={1400}
       onClose={onClose}
       testId="run-dialog"
       facts={
@@ -1689,7 +2325,7 @@ function RunDialog({
           <span style={{ fontSize: 12.5 }}>
             v{version.n} · privilege{" "}
             <span className="rk-mono">
-              {dryRun ? "none (dry run)" : version.header.privilege}
+              {dryRun ? "nobody (dry run)" : privilegeText(version.header.privilege)}
             </span>{" "}
             · sha256{" "}
             <span className="rk-mono">{version.hash.slice(0, 12)}</span>
@@ -1729,7 +2365,7 @@ function RunDialog({
             <button
               className="rk-btn"
               data-on
-              onClick={() => void start()}
+              onClick={() => (dryRun ? void start() : setConfirming(true))}
               disabled={busy || blocked.length > 0}
               data-testid="run-start"
             >
@@ -1789,27 +2425,65 @@ function RunDialog({
                 </select>
               </span>
             </Field>
-            <Field label="Fleet">
-              <span className="rk-field" style={{ width: 240 }}>
+            <Field label="Run as">
+              <span className="rk-field" style={{ width: 200 }}>
                 <select
-                  value={fleetId}
-                  onChange={(e) => pickFleet(e.target.value)}
-                  data-testid="run-fleet"
+                  value={profile?.id ?? ""}
+                  onChange={(e) => setProfileId(e.target.value)}
+                  disabled={runAs.options.length < 2}
+                  data-testid="run-config"
                 >
-                  {custom && (
-                    <option value={CUSTOM_NODES}>
-                      Custom selection ({nodes.length})
-                    </option>
-                  )}
-                  {fleets.fleets.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name} ({f.nodes.length})
+                  {!profile && <option value="">none fits</option>}
+                  {runAs.options.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
                     </option>
                   ))}
                 </select>
               </span>
             </Field>
+            {!onCluster && (
+              <Field label="Fleet">
+                <span className="rk-field" style={{ width: 240 }}>
+                  <select
+                    value={fleetId}
+                    onChange={(e) => pickFleet(e.target.value)}
+                    data-testid="run-fleet"
+                  >
+                    {custom && (
+                      <option value={CUSTOM_NODES}>
+                        Custom selection ({nodes.length})
+                      </option>
+                    )}
+                    {fleets.fleets.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.name} ({f.nodes.length})
+                      </option>
+                    ))}
+                  </select>
+                </span>
+              </Field>
+            )}
           </div>
+          {onCluster && (
+            <p
+              className="rk-callout"
+              data-tone="info"
+              style={{ margin: 0, fontSize: 12.5 }}
+              data-testid="run-on-cluster"
+            >
+              This script acts on the cluster, not on nodes. Watson runs its
+              kubectl lines
+              {version?.header.runsAs
+                ? ` as ${version.header.runsAs}`
+                : " as you"}
+              , and only the actions it declares:{" "}
+              {(version?.header.k8s ?? [])
+                .map((a) => `${a.verb} ${a.resource}`)
+                .join(", ")}
+              .
+            </p>
+          )}
           {fleets.production && !dryRun && (
             <p
               className="rk-callout"
@@ -1834,76 +2508,139 @@ function RunDialog({
                 not production, so it can run anyway.
               </p>
             )}
-          <div>
-            <h3 className="rk-h" style={{ margin: "0 0 6px" }}>
-              Nodes{" "}
-              <span
-                style={{ fontWeight: 400, color: "var(--fg3)" }}
-                data-testid="run-node-count"
+          {!onCluster && (
+            <div>
+              <h3 className="rk-h" style={{ margin: "0 0 6px" }}>
+                Nodes{" "}
+                <span
+                  style={{ fontWeight: 400, color: "var(--fg3)" }}
+                  data-testid="run-node-count"
+                >
+                  {nodes.length} of {listedFleet?.nodes.length ?? 0} selected
+                </span>
+              </h3>
+              <ScrollBox
+                label="Nodes"
+                style={{ maxHeight: 190, overflowY: "auto" }}
               >
-                {nodes.length} of {listedFleet?.nodes.length ?? 0} selected
-              </span>
-            </h3>
-            <ScrollBox
-              label="Nodes"
-              style={{ maxHeight: 190, overflowY: "auto" }}
-            >
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-                  gap: 4,
-                  fontSize: 12.5,
-                }}
-                data-testid="run-nodes"
-              >
-                {(listedFleet?.nodes ?? []).map((n) => (
-                  <label
-                    key={n.name}
-                    title={n.why}
-                    style={{
-                      display: "flex",
-                      gap: 6,
-                      alignItems: "center",
-                      color: n.paired ? "var(--fg)" : "var(--fg3)",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      disabled={!n.paired}
-                      checked={n.paired && nodes.includes(n.name)}
-                      onChange={(e) => toggleNode(n.name, e.target.checked)}
-                    />
-                    <span className="rk-mono">{n.name}</span>
-                    {!n.paired && (
-                      <span style={{ fontSize: 11.5 }}>not paired</span>
-                    )}
-                  </label>
-                ))}
-              </div>
-            </ScrollBox>
-            {custom && (
-              <p
-                className="tb-hint"
-                style={{ margin: "6px 0 0" }}
-                data-testid="run-custom"
-              >
-                Picked by hand, this run is not configured for a fleet: it takes
-                the values and the privilege ceiling of All nodes. Choose a
-                fleet to go back to its nodes.
-              </p>
-            )}
-            {leftOut > 0 && (
-              <p
-                className="tb-hint"
-                style={{ margin: "6px 0 0" }}
-                data-testid="run-left-out"
-              >
-                {leftOut} of this fleet’s nodes {leftOut === 1 ? "is" : "are"}{" "}
-                not paired for SSH and will be left out.
-              </p>
-            )}
-          </div>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns:
+                      "repeat(auto-fill, minmax(220px, 1fr))",
+                    gap: 4,
+                    fontSize: 12.5,
+                  }}
+                  data-testid="run-nodes"
+                >
+                  {(listedFleet?.nodes ?? []).map((n) => (
+                    <label
+                      key={n.name}
+                      title={n.why}
+                      style={{
+                        display: "flex",
+                        gap: 6,
+                        alignItems: "center",
+                        color: n.paired ? "var(--fg)" : "var(--fg3)",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        disabled={!n.paired}
+                        checked={n.paired && nodes.includes(n.name)}
+                        onChange={(e) => toggleNode(n.name, e.target.checked)}
+                      />
+                      <span className="rk-mono">{n.name}</span>
+                      {!n.paired && (
+                        <span style={{ fontSize: 11.5 }}>not paired</span>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              </ScrollBox>
+              {custom && (
+                <p
+                  className="tb-hint"
+                  style={{ margin: "6px 0 0" }}
+                  data-testid="run-custom"
+                >
+                  Picked by hand, this run is not configured for a fleet: it
+                  takes the values and the privilege ceiling of All nodes.
+                  Choose a fleet to go back to its nodes.
+                </p>
+              )}
+              {leftOut > 0 && (
+                <p
+                  className="tb-hint"
+                  style={{ margin: "6px 0 0" }}
+                  data-testid="run-left-out"
+                >
+                  {leftOut} of this fleet’s nodes {leftOut === 1 ? "is" : "are"}{" "}
+                  not paired for SSH and will be left out.
+                </p>
+              )}
+            </div>
+          )}
+          {!onCluster && (
+            <div data-testid="run-hooks">
+              <h3 className="rk-h" style={{ margin: "0 0 6px" }}>
+                Around each node
+              </h3>
+              <label style={{ display: "flex", gap: 6, fontSize: 12.5 }}>
+                <input
+                  type="checkbox"
+                  checked={drain}
+                  onChange={(e) => setDrain(e.target.checked)}
+                  data-testid="run-hook-drain"
+                />
+                Cordon and drain each node first, and uncordon it after a
+                healthy result. A node that fails stays cordoned.
+              </label>
+              {hookScripts.length > 0 && (
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 12,
+                    marginTop: 6,
+                  }}
+                >
+                  <Field label="Before each node">
+                    <span className="rk-field" style={{ width: 230 }}>
+                      <select
+                        value={hookBefore}
+                        onChange={(e) => setHookBefore(e.target.value)}
+                        data-testid="run-hook-before"
+                      >
+                        <option value="">Nothing</option>
+                        {hookScripts.map((x) => (
+                          <option key={x.name} value={x.name}>
+                            {x.name} v{x.approved}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  </Field>
+                  <Field label="After each node">
+                    <span className="rk-field" style={{ width: 230 }}>
+                      <select
+                        value={hookAfter}
+                        onChange={(e) => setHookAfter(e.target.value)}
+                        data-testid="run-hook-after"
+                      >
+                        <option value="">Nothing</option>
+                        {hookScripts.map((x) => (
+                          <option key={x.name} value={x.name}>
+                            {x.name} v{x.approved}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  </Field>
+                </div>
+              )}
+            </div>
+          )}
           {params.length > 0 && (
             <div>
               <h3 className="rk-h" style={{ margin: "0 0 6px" }}>
@@ -1946,11 +2683,13 @@ function RunDialog({
                               })
                             }
                             placeholder={
-                              p.source && p.source !== "run"
-                                ? p.value
-                                : p.required
-                                  ? "required"
-                                  : "empty"
+                              secretOf(params, p.name) && !p.value
+                                ? "secret:namespace/name/key"
+                                : p.source && p.source !== "run"
+                                  ? p.value
+                                  : p.required
+                                    ? "required"
+                                    : "empty"
                             }
                             aria-label={p.name}
                             data-testid={`run-param-${p.name}`}
@@ -1958,11 +2697,22 @@ function RunDialog({
                         </span>
                       </td>
                       <td style={{ color: "var(--fg3)", whiteSpace: "nowrap" }}>
-                        {p.source
-                          ? `from the ${p.source}`
-                          : p.required
-                            ? "no value"
-                            : ""}
+                        {p.conflict ? (
+                          <span
+                            style={{ color: "var(--err)" }}
+                            data-testid="run-param-conflict"
+                          >
+                            on {p.conflict.join(" and ")}
+                          </span>
+                        ) : p.from ? (
+                          `from ${p.from}`
+                        ) : p.source ? (
+                          `from the ${p.source}`
+                        ) : p.required ? (
+                          "no value"
+                        ) : (
+                          ""
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -2069,8 +2819,36 @@ function RunDialog({
         </div>
       )}
     </Drawer>
+      {confirming && version && (
+        <ConfirmDialog
+          title={`Run ${script} v${version.n}?`}
+          confirm={`Run v${version.n}`}
+          busy={busy}
+          error={err}
+          onConfirm={() => {
+            setConfirming(false);
+            void start();
+          }}
+          onCancel={() => setConfirming(false)}
+        >
+          <p style={{ margin: 0 }}>
+            {onCluster
+              ? "It runs on the cluster"
+              : `It runs on ${nodes.length} ${nodes.length === 1 ? "node" : "nodes"} of ${fleet?.name ?? "the fleet"}, ${plan.length} ${plan.length === 1 ? "batch" : "batches"}`}
+            {profile ? `, as ${profile.name}` : ""}
+            . This is not a dry run: it changes what the script changes.
+            {version.state === "approved"
+              ? ""
+              : " This version is not approved, so it runs only off production."}
+          </p>
+        </ConfirmDialog>
+      )}
+    </>
   );
 }
+
+const secretOf = (params: Param[], name: string) =>
+  params.some((p) => p.name === name && p.secret);
 
 /** One of the numbers beside the rollout, its label left of its box. */
 function RolloutInput({
@@ -2145,12 +2923,14 @@ function duration(from: string, to: string | undefined, now: number): string {
 function RunDrawer({
   id,
   now,
+  onRetried,
   onClose,
   onToast,
   onEnded,
 }: {
   id: number;
   now: number;
+  onRetried: (r: Run) => void;
   onClose: () => void;
   onToast: (msg: string) => void;
   onEnded: () => void;
@@ -2199,6 +2979,9 @@ function RunDrawer({
   const params = Object.entries(
     run?.nodes.find((n) => n.node === sel)?.values ?? {},
   );
+  const failedNodes = (run?.nodes ?? []).filter(
+    (n) => n.state === "failed" || n.state === "unreachable",
+  ).length;
   return (
     <>
       <Drawer
@@ -2210,7 +2993,7 @@ function RunDrawer({
         }
         title={run ? `#${run.id} ${run.script} v${run.version}` : `#${id}`}
         copy={false}
-        width={1000}
+        width={1400}
         onClose={onClose}
         testId="run-drawer"
         tools={
@@ -2222,6 +3005,19 @@ function RunDrawer({
               data-testid="run-cancel"
             >
               Cancel run
+            </button>
+          ) : run && failedNodes > 0 ? (
+            <button
+              className="rk-btn"
+              onClick={() =>
+                void retryRun(run.cluster, run.id).then(
+                  onRetried,
+                  (e: unknown) => setErr(errText(e)),
+                )
+              }
+              data-testid="run-retry"
+            >
+              Retry {failedNodes} failed
             </button>
           ) : undefined
         }
@@ -2288,6 +3084,16 @@ function RunDrawer({
               ))}
             </dl>
           </section>
+        )}
+        {run && (
+          <p className="tb-hint" style={{ margin: 0 }} data-testid="run-watson">
+            Watson via {run.script} v{run.version}, run #{run.id}
+            {run.basis ? `: ${run.basis}` : ""}
+            {run.config ? ` · run as ${profileName(run.config)}` : ""}
+            {run.identity ? ` · as ${run.identity}` : ""}
+            {run.hooks?.length ? ` · ${run.hooks.join(", ")}` : ""}
+            {run.retryOf ? ` · retries run ${run.retryOf}` : ""}
+          </p>
         )}
         {run && (
           <h3
@@ -2415,6 +3221,26 @@ function RunDrawer({
   );
 }
 
+const RUN_SORT: SortCol<Run>[] = [
+  { id: "id", sortValue: (r) => r.id, defaultDir: "desc" },
+  { id: "script", sortValue: (r) => r.script },
+  {
+    id: "where",
+    sortValue: (r) =>
+      `${r.clusterName || r.cluster} ${r.fleetName || r.fleet}`,
+  },
+  { id: "by", sortValue: (r) => r.by.name },
+  { id: "state", sortValue: (r) => r.state },
+  { id: "nodes", sortValue: (r) => r.nodes.length, defaultDir: "desc" },
+  { id: "started", sortValue: (r) => r.started, defaultDir: "desc" },
+  {
+    id: "took",
+    sortValue: (r, now) =>
+      (r.ended ? Date.parse(r.ended) : now) - Date.parse(r.started),
+    defaultDir: "desc",
+  },
+];
+
 function RunsSection({
   runs,
   now,
@@ -2425,13 +3251,23 @@ function RunsSection({
   onOpen: (id: number) => void;
 }) {
   const [q, setQ] = useState("");
-  const shown = runs.filter(
+  const picked = runs.filter(
     (r) =>
       !q ||
       r.script.includes(q.toLowerCase()) ||
       (r.fleetName ?? r.fleet).toLowerCase().includes(q.toLowerCase()) ||
       r.by.name.toLowerCase().includes(q.toLowerCase()) ||
       String(r.id) === q,
+  );
+  const { sort, onSort, shown } = useSorted(
+    "runs",
+    RUN_SORT,
+    picked,
+    { col: "id", dir: "desc" },
+    now,
+  );
+  const th = (col: string, label: string) => (
+    <SortTh col={col} label={label} sort={sort} onSort={onSort} />
   );
   return (
     <>
@@ -2443,7 +3279,7 @@ function RunsSection({
           flexWrap: "wrap",
         }}
       >
-        <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Executions</h2>
+        <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Run History</h2>
         <label className="rk-field" style={{ width: 260 }}>
           <SearchIcon />
           <span className="rk-sr">Find a run</span>
@@ -2466,14 +3302,14 @@ function RunsSection({
           <table className="tb-table" data-testid="runs-table">
             <thead>
               <tr>
-                <th>#</th>
-                <th>Script</th>
-                <th>Where</th>
-                <th>By</th>
-                <th>State</th>
-                <th>Nodes</th>
-                <th>Started</th>
-                <th>Took</th>
+                {th("id", "#")}
+                {th("script", "Script")}
+                {th("where", "Where")}
+                {th("by", "By")}
+                {th("state", "State")}
+                {th("nodes", "Nodes")}
+                {th("started", "Started")}
+                {th("took", "Took")}
               </tr>
             </thead>
             <tbody>
@@ -2515,393 +3351,6 @@ function RunsSection({
             </tbody>
           </table>
         </div>
-      )}
-    </>
-  );
-}
-
-// ---------- fleet parameters ----------
-
-type Row = { k: string; v: string };
-const rowsOf = (m: Record<string, string> | undefined): Row[] =>
-  Object.entries(m ?? {}).map(([k, v]) => ({ k, v }));
-const mapOf = (rows: Row[]): Record<string, string> =>
-  Object.fromEntries(rows.filter((r) => r.k).map((r) => [r.k, r.v]));
-
-/** Problems with a set of name=value rows, as the server checks them. */
-export function rowProblems(rows: Row[]): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const r of rows) {
-    if (!r.k) continue;
-    if (!PARAM_NAME.test(r.k))
-      out.push(`${r.k}: a name is capitals, digits and underscores`);
-    else if (RESERVED.includes(r.k)) out.push(`${r.k} is set by the run`);
-    if (seen.has(r.k)) out.push(`${r.k} is there twice`);
-    seen.add(r.k);
-  }
-  return out;
-}
-
-function ValueRows({
-  rows,
-  onChange,
-  testId,
-}: {
-  rows: Row[];
-  onChange: (rows: Row[]) => void;
-  testId: string;
-}) {
-  return (
-    <div
-      style={{ display: "flex", flexDirection: "column", gap: 6 }}
-      data-testid={testId}
-    >
-      {rows.map((r, i) => (
-        <div key={i} style={{ display: "flex", gap: 6 }}>
-          <span className="rk-field" style={{ width: 220 }}>
-            <input
-              className="rk-mono"
-              value={r.k}
-              onChange={(e) =>
-                onChange(
-                  rows.map((x, j) =>
-                    j === i ? { ...x, k: e.target.value.toUpperCase() } : x,
-                  ),
-                )
-              }
-              placeholder="NAME"
-              aria-label="Name"
-            />
-          </span>
-          <span className="rk-field" style={{ flex: "1 1 auto" }}>
-            <input
-              value={r.v}
-              onChange={(e) =>
-                onChange(
-                  rows.map((x, j) =>
-                    j === i ? { ...x, v: e.target.value } : x,
-                  ),
-                )
-              }
-              placeholder="value"
-              aria-label={`Value of ${r.k || "the parameter"}`}
-            />
-          </span>
-          <button
-            className="rk-btn"
-            onClick={() => onChange(rows.filter((_, j) => j !== i))}
-            aria-label={`Remove ${r.k || "the row"}`}
-          >
-            Remove
-          </button>
-        </div>
-      ))}
-      <div>
-        <button
-          className="rk-btn"
-          onClick={() => onChange([...rows, { k: "", v: "" }])}
-        >
-          <PlusIcon />
-          Add a value
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ParamsSection({
-  cluster,
-  scripts,
-  onToast,
-}: {
-  cluster: string;
-  scripts: ScriptSummary[];
-  onToast: (msg: string) => void;
-}) {
-  const [fleets, setFleets] = useState<AutomationFleets | null>(null);
-  const [err, setErr] = useState("");
-  const [fleetId, setFleetId] = useState("");
-  const [values, setValues] = useState<Row[]>([]);
-  const [nodeRows, setNodeRows] = useState<Record<string, Row[]>>({});
-  const [ceiling, setCeiling] = useState<Privilege>("none");
-  const [nodeSel, setNodeSel] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [saveErr, setSaveErr] = useState("");
-
-  const reset = useCallback((f: AutomationFleets, id: string) => {
-    const p: FleetParams = f.fleets.find((x) => x.id === id)?.params ?? {};
-    setValues(rowsOf(p.values));
-    setNodeRows(
-      Object.fromEntries(
-        Object.entries(p.nodes ?? {}).map(([n, m]) => [n, rowsOf(m)]),
-      ),
-    );
-    setCeiling(p.ceiling === "full" ? "full" : "none");
-    setSaveErr("");
-  }, []);
-
-  useEffect(() => {
-    let gone = false;
-    fetchFleets(cluster)
-      .then((f) => {
-        if (gone) return;
-        setFleets(f);
-        const id = f.fleets[0]?.id ?? "";
-        setFleetId(id);
-        reset(f, id);
-      })
-      .catch((e: unknown) => !gone && setErr(errText(e)));
-    return () => {
-      gone = true;
-    };
-  }, [cluster, reset]);
-
-  const fleet = fleets?.fleets.find((f) => f.id === fleetId);
-  const { rows: liveNodes } = useView<NodeRow>("nodes");
-  const held = reservedLine(
-    reservedGroups(
-      (fleet?.nodes ?? []).map((n) => n.name),
-      new Map(liveNodes.map((n) => [n.name, n])),
-    ),
-  );
-  const problems = useMemo(
-    () => [
-      ...rowProblems(values),
-      ...Object.entries(nodeRows).flatMap(([n, rows]) =>
-        rowProblems(rows).map((p) => `${n}: ${p}`),
-      ),
-    ],
-    [values, nodeRows],
-  );
-  const fullScripts = scripts
-    .filter((s) => s.privilege === "full")
-    .map((s) => s.name);
-
-  const save = async () => {
-    if (!fleet) return;
-    setBusy(true);
-    setSaveErr("");
-    const nodes = Object.fromEntries(
-      Object.entries(nodeRows)
-        .map(([n, rows]) => [n, mapOf(rows)])
-        .filter(([, m]) => Object.keys(m as object).length > 0),
-    );
-    try {
-      const p = await saveFleetParams(cluster, fleet.id, {
-        values: mapOf(values),
-        nodes,
-        ceiling,
-      });
-      setFleets((cur) =>
-        cur
-          ? {
-              ...cur,
-              fleets: cur.fleets.map((f) =>
-                f.id === fleet.id ? { ...f, params: p } : f,
-              ),
-            }
-          : cur,
-      );
-      onToast(`Parameters of ${fleet.name} are saved.`);
-    } catch (e) {
-      setSaveErr(errText(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          flexWrap: "wrap",
-        }}
-      >
-        <h2 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Parameters</h2>
-        {fleets && (
-          <label className="rk-field" style={{ width: 260 }}>
-            <span className="rk-sr">Fleet</span>
-            <select
-              value={fleetId}
-              onChange={(e) => {
-                setFleetId(e.target.value);
-                reset(fleets, e.target.value);
-              }}
-              data-testid="params-fleet"
-            >
-              {fleets.fleets.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.name} ({f.nodes.length})
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-      </div>
-      <p className="tb-hint" style={{ margin: 0 }}>
-        A run gives each parameter its own value first, then the node’s, then
-        the fleet’s. Values are plain text kept in the console’s ConfigMap:
-        never put a password or token here.
-      </p>
-      {err && <p className="tb-err">{err}</p>}
-      {fleet && (
-        <>
-          <section
-            className="rk-card"
-            style={{
-              padding: "14px 16px",
-              display: "flex",
-              flexDirection: "column",
-              gap: 10,
-            }}
-            aria-label="Privilege ceiling"
-          >
-            <h3 className="rk-h" style={{ margin: 0 }}>
-              Privilege ceiling
-            </h3>
-            <Seg
-              label="Privilege ceiling"
-              value={ceiling}
-              onChange={setCeiling}
-              options={[
-                { id: "none", label: "none: scripts run as nobody" },
-                {
-                  id: "full",
-                  label: "full: scripts may run as the login user",
-                },
-              ]}
-            />
-            <p className="tb-hint" style={{ margin: 0 }}>
-              {ceiling === "none"
-                ? fullScripts.length
-                  ? `These scripts declare privilege full and will not run here: ${fullScripts.join(", ")}. Their dry runs still do.`
-                  : "No script declares privilege full yet."
-                : "Scripts that declare privilege full may run with the login user’s rights, root or sudo."}
-            </p>
-          </section>
-          <section
-            className="rk-card"
-            style={{
-              padding: "14px 16px",
-              display: "flex",
-              flexDirection: "column",
-              gap: 10,
-            }}
-            aria-label="Fleet values"
-          >
-            {held && (
-              <p
-                className="tb-hint"
-                style={{ margin: 0 }}
-                data-testid="params-reserved"
-              >
-                Kubernetes agent, now on these nodes: {held.toLowerCase()}.
-              </p>
-            )}
-            <h3 className="rk-h" style={{ margin: 0 }}>
-              Values for every node of {fleet.name}
-            </h3>
-            <ValueRows
-              rows={values}
-              onChange={setValues}
-              testId="params-values"
-            />
-          </section>
-          <section
-            className="rk-card"
-            style={{
-              padding: "14px 16px",
-              display: "flex",
-              flexDirection: "column",
-              gap: 10,
-            }}
-            aria-label="Node values"
-          >
-            <h3 className="rk-h" style={{ margin: 0 }}>
-              A node’s own values
-            </h3>
-            {Object.entries(nodeRows).map(([n, rows]) => (
-              <div
-                key={n}
-                style={{ display: "flex", flexDirection: "column", gap: 6 }}
-              >
-                <span className="rk-mono" style={{ fontWeight: 600 }}>
-                  {n}
-                </span>
-                <ValueRows
-                  rows={rows}
-                  onChange={(r) => setNodeRows({ ...nodeRows, [n]: r })}
-                  testId={`params-node-${n}`}
-                />
-              </div>
-            ))}
-            <div style={{ display: "flex", gap: 6 }}>
-              <label className="rk-field" style={{ width: 260 }}>
-                <span className="rk-sr">Node</span>
-                <select
-                  value={nodeSel}
-                  onChange={(e) => setNodeSel(e.target.value)}
-                  data-testid="params-node-pick"
-                >
-                  <option value="">Pick a node…</option>
-                  {fleet.nodes
-                    .filter((n) => !nodeRows[n.name])
-                    .map((n) => (
-                      <option key={n.name} value={n.name}>
-                        {n.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <button
-                className="rk-btn"
-                disabled={!nodeSel}
-                onClick={() => {
-                  setNodeRows({ ...nodeRows, [nodeSel]: [{ k: "", v: "" }] });
-                  setNodeSel("");
-                }}
-                data-testid="params-node-add"
-              >
-                <PlusIcon />
-                Add node values
-              </button>
-            </div>
-          </section>
-          {problems.length > 0 && (
-            <ul
-              className="tb-err"
-              style={{ margin: 0, paddingLeft: 18 }}
-              data-testid="params-problems"
-            >
-              {problems.map((p) => (
-                <li key={p}>{p}</li>
-              ))}
-            </ul>
-          )}
-          {saveErr && <p className="tb-err">{saveErr}</p>}
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              className="rk-btn"
-              data-on
-              onClick={() => void save()}
-              disabled={busy || problems.length > 0}
-              data-testid="params-save"
-            >
-              {busy ? "Saving…" : "Save parameters"}
-            </button>
-            <button
-              className="rk-btn"
-              onClick={() => fleets && reset(fleets, fleetId)}
-              disabled={busy}
-            >
-              Revert
-            </button>
-          </div>
-        </>
       )}
     </>
   );

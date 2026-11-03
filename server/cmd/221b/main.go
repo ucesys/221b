@@ -556,6 +556,14 @@ func run(args []string) error {
 			Unreachable: func(err error) bool { return errors.Is(err, nodessh.ErrUnreachable) },
 			Logger:      log.With("component", "automation"),
 			OutputDir:   outDir,
+			OnCommand: func(r automation.Run, node, what, outcome string) {
+				o := audit.OutcomeOK
+				if outcome != "ok" {
+					o = audit.OutcomeFailed
+				}
+				auditLog.Record(audit.Event{Action: audit.ActionAutomationCommand, Who: audit.Who{Subject: r.By.User, Name: r.By.Name}, Cluster: r.Cluster, Target: node, Outcome: o,
+					Detail: fmt.Sprintf("%s: %s on %s, for %s: %s", r.Watson(), what, node, r.By.Name, r.Basis)})
+			},
 			OnEnd: func(r automation.Run) {
 				c := r.Counts()
 				outcome := audit.OutcomeFailed

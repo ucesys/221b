@@ -100,3 +100,7 @@ Every `apps/…` route is served by the leader replica, where Watson runs. What 
 | Date | Note |
 | --- | --- |
 | | |
+
+## Who sees what
+
+Admins and Viewers see a release, or an application the console keeps, in a namespace they reach. They also see an application an admin created when that admin had the same namespace access, so an application whose namespace does not exist yet is not lost to the people it belongs to; that view leaves its values, parameters and commands out, and changing it still takes Kubernetes' leave in its namespace. An application saved before November 2, 2026 records no creator's access, so only the first rule applies to it.

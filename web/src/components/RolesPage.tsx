@@ -167,10 +167,10 @@ export function RolesPage({ route, me, now, cluster, onToast }: AdminProps) {
         {defs && (
           <div style={{ padding: '10px 16px 0', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 12.5 }} data-testid="role-definitions">
             <span style={{ color: 'var(--fg3)' }}>
-              Definitions in use: Admin {defs.admin === 'full' ? 'full' : 'read-only'}, SuperAdmin {defs.superAdmin === 'full' ? 'full' : 'read-only'}.
+              Definitions in use: Admin {defs.admin === 'full' ? 'elevated' : 'read-only'}, SuperAdmin {defs.superAdmin === 'full' ? 'elevated' : 'read-only'}.
             </span>
             <span style={{ color: 'var(--fg3)' }}>
-              Chosen in <span className="rk-mono">values.yaml</span> under <span className="rk-mono">rbac.roles</span>.
+              Chosen in <span className="rk-mono">values.yaml</span> under <span className="rk-mono">rbac.roles</span>, where elevated is <span className="rk-mono">full</span>.
             </span>
           </div>
         )}
@@ -185,7 +185,7 @@ export function RolesPage({ route, me, now, cluster, onToast }: AdminProps) {
           rows={table.shown}
           cols={table.cols}
           rowKey={(r) => r.id}
-          rowLabel={(r, o) => `${ROLE_NAME[r.id]}, ${r.definition === 'full' ? 'full' : 'read-only'} definition${o ? ', open' : ''}`}
+          rowLabel={(r, o) => `${ROLE_NAME[r.id]}, ${r.definition === 'full' ? 'elevated' : 'read-only'} definition${o ? ', open' : ''}`}
           sort={table.sort}
           onSort={table.onSort}
           selected={selected?.id ?? null}
@@ -213,7 +213,7 @@ export function RolesPage({ route, me, now, cluster, onToast }: AdminProps) {
           title={ROLE_NAME[selected.id]}
           facts={
             <span className="rk-tag" data-tone={selected.definition === 'full' ? 'info' : 'muted'}>
-              {selected.definition === 'full' ? 'Full definition' : 'Read-only definition'}
+              {selected.definition === 'full' ? 'Elevated definition' : 'Read-only definition'}
             </span>
           }
           onClose={close}
@@ -226,7 +226,7 @@ export function RolesPage({ route, me, now, cluster, onToast }: AdminProps) {
               <List title="Can" items={selected.can} />
               <List title="Cannot" items={selected.cannot} />
             </div>
-            <a className="rk-link" href={adminHref('permissions', [], name)}>
+            <a className="rk-link" href={adminHref('permissions', [], name, { role: selected.id })} data-testid="role-permissions">
               See every permission
             </a>
           </Card>

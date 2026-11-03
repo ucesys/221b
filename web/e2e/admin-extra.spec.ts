@@ -18,10 +18,13 @@ test.afterEach(async ({ request }) => {
   await request.put('/api/v1/settings', { data: { refreshSeconds: 3 }, headers: SAME })
 })
 
-test('the Audit log page lists what was recorded, searched by words and narrowed by action', async ({ page, request }) => {
+test('Logs › Audit log lists what was recorded, searched by words and narrowed by action', async ({ page, request }) => {
   const r = await request.put('/api/v1/settings', { data: { refreshSeconds: 4 }, headers: SAME })
   expect(r.status(), await r.text()).toBe(200)
-  await openAdmin(page, 'audit')
+  await openAdmin(page, 'logs')
+  await expect(page.getByTestId('logs-sessions')).toHaveAttribute('aria-pressed', 'true')
+  await page.getByTestId('logs-audit').click()
+  await expect(page).toHaveURL(/#\/admin\/logs\/audit/)
   const audit = page.getByTestId('admin-audit')
   await expect(audit).toBeVisible()
   const table = audit.getByTestId('audit-table')
@@ -71,3 +74,16 @@ test('a backup downloads with no credential in it, and a restore of it brings th
   await page.getByTestId('restore-file').setInputFiles({ name: 'x.json', mimeType: 'application/json', buffer: Buffer.from('{"format":"nope"}') })
   await expect(page.getByTestId('restore-error')).toContainText('not a 221B backup')
 })
+
+test('a role\'s See every permission opens Permissions on that role alone, and Full reads Elevated', async ({ page }) => {
+  await page.goto('/#/admin/roles/admin', { waitUntil: 'domcontentloaded' })
+  const drawer = page.getByTestId('role-drawer')
+  await expect(drawer).toBeVisible()
+  await expect(drawer).not.toContainText('Full definition')
+  await drawer.getByTestId('role-permissions').click()
+  await expect(page).toHaveURL(/#\/admin\/permissions\?role=admin/)
+  await expect(page.getByTestId('role-filter-admin')).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('role-filter-clear')).toBeVisible()
+  await expect(page.locator('[data-role-summary]').first()).not.toContainText(/\bFull\b/)
+})
+

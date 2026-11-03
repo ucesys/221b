@@ -356,11 +356,10 @@ function Shell() {
   const [toolDialog, setToolDialog] = useState<
     (OpenTool & { cluster: string }) | null
   >(null);
-  // The same on the home page and a cluster's page as on the tabs; the
-  // Administration area has its own Back and Escape, so it leaves them.
+  // The same on the home page, a cluster's page and Administration as on
+  // the tabs.
   const dockShown =
-    view !== "admin" &&
-    (sherlockDocked || watsonDocked || (watsonOn && shown.length > 0));
+    sherlockDocked || watsonDocked || (watsonOn && shown.length > 0);
   useEffect(() => {
     if (popped) post({ type: "cluster", cluster: route.cluster });
   }, [popped, route.cluster]);
@@ -444,6 +443,18 @@ function Shell() {
         );
     },
   };
+  // Pending approvals links to a Watson card with ?watson=open: the panel
+  // comes up on Watson, where the card can be read and approved.
+  const reviewWatson = view === "tabs" && route.params.get("watson") === "open";
+  useEffect(() => {
+    if (!reviewWatson || !dockShown) return;
+    void Promise.resolve().then(() => {
+      const d = dockRef.current;
+      setDockTab("assistants");
+      setDock({ ...d, mode: d.mode === "min" ? "open" : d.mode, pane: "watson" });
+      navigate(clusterHref(route.cluster, route.tab), true);
+    });
+  }, [reviewWatson, dockShown, setDock, route.cluster, route.tab]);
   // A home card's Audit button (Phase 6 review) opens the cluster with
   // ?ask=review, its Troubleshoot button with ?ask=troubleshoot: the
   // question waits in Sherlock's box once it can be asked. A link cannot
@@ -780,7 +791,7 @@ function Shell() {
                 }
               />
             )}
-            {view !== "admin" && popped && (
+            {popped && (
               <PoppedOutFab
                 onFocus={() => focusPopup()}
                 onDock={() => post({ type: "close" })}
