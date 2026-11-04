@@ -52,7 +52,20 @@ var (
 	ErrInvalid  = errors.New("not valid")
 	// ErrOwnWork is a person approving a version they wrote or submitted.
 	ErrOwnWork = errors.New("someone else must approve it")
+	// ErrBusy is a run whose nodes another run has, or a change a newer
+	// one overtook.
+	ErrBusy = errors.New("in use")
+	// ErrSameRequest is a run asked for twice: the first is the answer.
+	ErrSameRequest = errors.New("this run was started already")
+	// errNoChange ends an edit that leaves the record as it is.
+	errNoChange = errors.New("nothing to save")
 )
+
+// busyError is a refusal for ErrBusy whose text says it all.
+type busyError string
+
+func (e busyError) Error() string        { return string(e) }
+func (e busyError) Is(target error) bool { return target == ErrBusy }
 
 // NameRE is a script's name.
 var NameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
@@ -95,8 +108,12 @@ type Version struct {
 	Created   time.Time  `json:"created"`
 	Submitted *Approval  `json:"submitted,omitempty"`
 	Approvals []Approval `json:"approvals,omitempty"`
-	// Revoked are the people who took its approvals back, and when.
-	Revoked []Approval `json:"revoked,omitempty"`
+	// Revoked are the people who took its approvals back, and when;
+	// Withdrawn the approvals they took back, kept for the record.
+	Revoked   []Approval `json:"revoked,omitempty"`
+	Withdrawn []Approval `json:"withdrawn,omitempty"`
+	// SameAs is the rejected version whose text this one has again.
+	SameAs int `json:"sameAs,omitempty"`
 	// Rejected is who turned it down in review, when and why.
 	Rejected *Approval `json:"rejected,omitempty"`
 	// Review is Sherlock's latest reading of it, which never approves.
@@ -217,6 +234,41 @@ func RunVersion(s Script, production bool, n int) (Version, error) {
 	return v, nil
 }
 
+// VersionMay is what a person may do with a version, as the console
+// decides it, for the page to show rather than work out again.
+type VersionMay struct {
+	// Approve and Reject are the person's; Involved says they wrote or
+	// submitted it, so someone else must approve it.
+	Approve  bool `json:"approve"`
+	Reject   bool `json:"reject"`
+	Involved bool `json:"involved"`
+	// RunProduction and RunElsewhere say whether a run may take it on a
+	// production cluster and elsewhere; Dry whether it has a dry run.
+	RunProduction bool `json:"runProduction"`
+	RunElsewhere  bool `json:"runElsewhere"`
+	Dry           bool `json:"dry"`
+}
+
+// May works out what who may do with version v of s. An approved version
+// someone else approved asks for no more approvals, though more are taken.
+func May(s Script, v Version, who Who) VersionMay {
+	m := VersionMay{Involved: v.Involved(who)}
+	already := false
+	for _, a := range v.Approvals {
+		already = already || a.By.Same(who)
+	}
+	m.Approve = v.State != StateDraft && v.State != StateRejected && !m.Involved && !already &&
+		(v.State != StateApproved || approvedBySomeoneElse(s, v) != nil)
+	m.Reject = v.State == StateReview && !m.Involved
+	_, err := RunVersion(s, true, v.N)
+	m.RunProduction = err == nil
+	_, err = RunVersion(s, false, v.N)
+	m.RunElsewhere = err == nil
+	_, err = DryRunnable(s, v.N)
+	m.Dry = err == nil
+	return m
+}
+
 // DryRunnable is the version a dry run uses: version n, or the latest when
 // n is 0. A script that does not declare dry-run has no dry run: it would
 // not read DRY_RUN, so it would try to do its work.
@@ -255,6 +307,20 @@ type Store struct {
 	backend kv.Backend
 	now     func() time.Time
 	mu      sync.Mutex
+}
+
+// RunsKeys are the keys that may live apart from the scripts, so neither
+// presses on the other's 1 MiB: the runs and the nodes' facts.
+var RunsKeys = []string{RunsKey, FactsKey}
+
+// SetRunsBackend keeps the runs and the facts in b from now on; what the
+// first backend still holds of them moves there with the next save.
+func (st *Store) SetRunsBackend(b kv.Backend) {
+	routes := map[string]kv.Backend{}
+	for _, k := range RunsKeys {
+		routes[k] = b
+	}
+	st.backend = &kv.Routed{Default: st.backend, Routes: routes}
 }
 
 // NewStore keeps the records in b; now is the clock (nil: time.Now).
@@ -300,7 +366,9 @@ func change[T any](ctx context.Context, st *Store, key string, limit int, edit f
 		if version, err = st.load(ctx, key, &v); err != nil {
 			return err
 		}
-		if err = edit(&v); err != nil {
+		if err = edit(&v); errors.Is(err, errNoChange) {
+			return nil
+		} else if err != nil {
 			return err
 		}
 		b, _ := json.Marshal(v)
@@ -309,6 +377,9 @@ func change[T any](ctx context.Context, st *Store, key string, limit int, edit f
 		}
 		if _, err = st.backend.SaveKey(ctx, key, b, version); errors.Is(err, kv.ErrConflict) {
 			continue
+		}
+		if errors.Is(err, kv.ErrFull) {
+			return fmt.Errorf("%w: %w", ErrFull, err)
 		}
 		return err
 	}
@@ -361,8 +432,12 @@ func (st *Store) Save(ctx context.Context, name, group, text string, who Who, cr
 	if strings.TrimSpace(text) == "" {
 		return Script{}, fmt.Errorf("%w: the script is empty", ErrInvalid)
 	}
+	used, err := st.usedVersions(ctx)
+	if err != nil {
+		return Script{}, err
+	}
 	var saved Script
-	err := change(ctx, st, ScriptsKey, maxScriptsBytes, func(rec *scriptsRecord) error {
+	err = change(ctx, st, ScriptsKey, maxScriptsBytes, func(rec *scriptsRecord) error {
 		if rec.Scripts == nil {
 			rec.Scripts = map[string]Script{}
 		}
@@ -381,7 +456,13 @@ func (st *Store) Save(ctx context.Context, name, group, text string, who Who, cr
 		}
 		s.Group = group
 		hash := Hash(text)
-		if s.Latest().Hash != hash {
+		if latest := s.Latest(); latest.Hash == hash && latest.State == StateRejected {
+			// A rejection is final for that version: the same text again is
+			// a new one, which says so.
+			h, fs := Check(text)
+			s.Versions = append(s.Versions, Version{N: latest.N + 1, Text: text, Hash: hash, Header: h, Findings: fs, State: StateDraft, Author: who, Created: now, SameAs: latest.N})
+			s.Updated = now
+		} else if latest.Hash != hash {
 			h, fs := Check(text)
 			if last := len(s.Versions) - 1; last >= 0 && s.Versions[last].State == StateDraft {
 				d := &s.Versions[last]
@@ -395,7 +476,7 @@ func (st *Store) Save(ctx context.Context, name, group, text string, who Who, cr
 			s.Updated = now
 		}
 		rec.Scripts[name] = s
-		prune(rec, maxScriptsBytes)
+		prune(rec, maxScriptsBytes, used)
 		saved = rec.Scripts[name]
 		return nil
 	})
@@ -405,21 +486,38 @@ func (st *Store) Save(ctx context.Context, name, group, text string, who Who, cr
 	return saved, err
 }
 
+// usedVersions are the versions the kept runs ran, by script.
+func (st *Store) usedVersions(ctx context.Context) (map[string]map[int]bool, error) {
+	var rec runsRecord
+	if _, err := st.load(ctx, RunsKey, &rec); err != nil {
+		return nil, err
+	}
+	used := map[string]map[int]bool{}
+	for _, r := range rec.Runs {
+		if used[r.Script] == nil {
+			used[r.Script] = map[int]bool{}
+		}
+		used[r.Script][r.Version] = true
+	}
+	return used, nil
+}
+
 // prune drops superseded and rejected versions, oldest first, then drafts and reviews
 // older than a script's newest version, until the record fits; the newest
-// version and approved ones stay.
-func prune(rec *scriptsRecord, limit int) {
+// version, approved ones and those a kept run ran stay, so a run's record
+// can always show the text it ran.
+func prune(rec *scriptsRecord, limit int, used map[string]map[int]bool) {
 	size := func() int {
 		b, _ := json.Marshal(rec)
 		return len(b)
 	}
 	for _, drop := range []func(Script, int) bool{
 		func(s Script, i int) bool {
-			return s.Versions[i].State == StateSuperseded || s.Versions[i].State == StateRejected
+			return (s.Versions[i].State == StateSuperseded || s.Versions[i].State == StateRejected) && !used[s.Name][s.Versions[i].N]
 		},
 		func(s Script, i int) bool {
 			st := s.Versions[i].State
-			return (st == StateDraft || st == StateReview) && i < len(s.Versions)-1
+			return (st == StateDraft || st == StateReview) && i < len(s.Versions)-1 && !used[s.Name][s.Versions[i].N]
 		},
 	} {
 		for size() > limit {
@@ -532,6 +630,7 @@ func (st *Store) Revoke(ctx context.Context, name string, n int, who Who) (Scrip
 		if v.State != StateApproved {
 			return fmt.Errorf("%w: v%d is %s, not approved", ErrInvalid, v.N, v.State)
 		}
+		v.Withdrawn = append(v.Withdrawn, v.Approvals...)
 		v.Approvals = nil
 		v.Revoked = append(v.Revoked, Approval{By: who, At: st.now().UTC()})
 		v.State = StateReview

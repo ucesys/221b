@@ -185,3 +185,20 @@ test('a pod with a problem offers Troubleshoot… first in its wrench, which ask
   await expect(page.getByTestId('tools-menu').getByTestId('tool-shell')).toBeVisible()
   await expect(page.getByTestId('tools-menu').getByTestId('tool-troubleshoot')).toHaveCount(0)
 })
+
+test('one pop-up menu at a time: opening another closes the first', async ({ page }) => {
+  await page.goto('/#/pods', { waitUntil: 'domcontentloaded' })
+  const buttons = page.locator('[data-testid^="tools-pod-"]')
+  await expect(buttons.nth(1)).toBeAttached({ timeout: 20_000 })
+  await buttons.nth(0).hover()
+  await buttons.nth(0).click()
+  await expect(page.getByTestId('tools-menu')).toHaveCount(1)
+  const first = await page.getByTestId('tools-menu').getAttribute('aria-label')
+  await buttons.nth(1).hover()
+  await buttons.nth(1).click()
+  await expect(page.getByTestId('tools-menu')).toHaveCount(1)
+  await expect(page.getByTestId('tools-menu')).not.toHaveAttribute('aria-label', first!)
+  // A click outside closes it.
+  await page.mouse.click(4, 300)
+  await expect(page.getByTestId('tools-menu')).toHaveCount(0)
+})

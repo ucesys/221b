@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -1454,7 +1455,7 @@ func TestHostKeysStayOffTheOutput(t *testing.T) {
 	text := "pairing\n" + HostKeyMark + "ssh-ed25519 AAAA\ndone\n" + HostKeyMark + "ssh-rsa BBBB\n221B-PAIRED ops"
 	for _, size := range []int{1, 3, 7, len(text)} {
 		var shown bytes.Buffer
-		h := &hidingWriter{w: &shown, mark: []byte(HostKeyMark)}
+		h := newHiding(&shown, []byte(HostKeyMark))
 		for rest := text; len(rest) > 0; {
 			n := min(size, len(rest))
 			h.Write([]byte(rest[:n]))
@@ -1464,9 +1465,40 @@ func TestHostKeysStayOffTheOutput(t *testing.T) {
 		if got := shown.String(); got != "pairing\ndone\n221B-PAIRED ops" {
 			t.Fatalf("chunks of %d: shown %q", size, got)
 		}
-		if got := h.hidden.String(); got != HostKeyMark+"ssh-ed25519 AAAA\n"+HostKeyMark+"ssh-rsa BBBB\n" {
+		if got := h.Hidden(); got != HostKeyMark+"ssh-ed25519 AAAA\n"+HostKeyMark+"ssh-rsa BBBB\n" {
 			t.Fatalf("chunks of %d: hidden %q", size, got)
 		}
+	}
+}
+
+// A command's output and its errors arrive at once, a byte at a time:
+// each keeps its own line, so no host key line is torn and shown.
+func TestHostKeysStayOffTheOutputOfBothStreams(t *testing.T) {
+	line := HostKeyMark + "ssh-ed25519 AAAA\n"
+	var shown bytes.Buffer
+	out := newHiding(&shown, []byte(HostKeyMark))
+	errs := out.twin()
+	var wg sync.WaitGroup
+	for _, w := range []*hidingWriter{out, errs} {
+		wg.Add(1)
+		go func(w *hidingWriter) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				for j := 0; j < len(line); j++ {
+					w.Write([]byte{line[j]})
+				}
+				w.Write([]byte("ok\n"))
+			}
+		}(w)
+	}
+	wg.Wait()
+	out.flush()
+	errs.flush()
+	if strings.Contains(shown.String(), "ssh-") || shown.String() != strings.Repeat("ok\n", 100) {
+		t.Fatalf("shown %q", shown.String())
+	}
+	if got := strings.Count(out.Hidden(), line); got != 100 {
+		t.Fatalf("%d host key lines kept, want 100", got)
 	}
 }
 
@@ -1511,5 +1543,20 @@ func TestReadingSomeoneElsesLiveOutputIsWatchingIt(t *testing.T) {
 	m.ReadOutput(s.ID, admin)
 	if strings.Count(buf.text(), ActionWatch) != before+1 {
 		t.Fatalf("reading an ended session was not audited: %s", buf.text())
+	}
+}
+
+// The records stay within their bytes too: the oldest go first.
+func TestTheRecordsStayWithinTheirBytes(t *testing.T) {
+	h := &KVHistory{Backend: &kv.Memory{}, Key: HistoryKey, Keep: 300, MaxBytes: 4 << 10}
+	for i := 0; i < 40; i++ {
+		h.Add(Record{ID: fmt.Sprintf("r%02d", i), Summary: strings.Repeat("x", 200)})
+	}
+	b, _, err := h.Backend.LoadKey(context.Background(), HistoryKey)
+	if err != nil || len(b) > 4<<10 {
+		t.Fatalf("%d bytes, %v", len(b), err)
+	}
+	if got := h.List(); len(got) == 0 || got[0].ID != "r39" {
+		t.Fatalf("the newest was not kept: %+v", got[:1])
 	}
 }

@@ -74,6 +74,9 @@ func TestAuthModes(t *testing.T) {
 		{[]string{"-auth-mode", "ldap"}, false},
 		{[]string{"-auth-mode", "ldap", "-auth-config", "/etc/221b/auth.json"}, true},
 		{[]string{"-auth-mode", "magic"}, false},
+		{[]string{"-anonymous-role", "admin"}, true},
+		{[]string{"-anonymous-role", "superAdmin"}, false},
+		{[]string{"-anonymous-role", "superViewer"}, false},
 	} {
 		if _, err := Parse(tc.args); (err == nil) != tc.ok {
 			t.Errorf("%v: %v", tc.args, err)

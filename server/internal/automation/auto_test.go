@@ -338,6 +338,29 @@ func TestARunIsRefusedAConfigurationThatGivesTooLittleOrTooMuch(t *testing.T) {
 	}
 }
 
+// A run profile limited to some fleets reaches those alone: a run on every
+// node, or a script on the whole cluster, needs one that reaches them all.
+func TestAProfileLimitedToFleetsDoesNotReachTheWholeCluster(t *testing.T) {
+	list := append(builtinProfiles(),
+		RunProfile{ID: "web-root", Name: "web-root", Kind: ProfileSSH, Privilege: PrivilegeElevated, Fleets: []string{"web"}},
+		RunProfile{ID: "web-sa", Name: "web-sa", Kind: ProfileKubernetes, Namespace: "ops", ServiceAccount: "deployer", Fleets: []string{"web"}},
+		RunProfile{ID: "any-sa", Name: "any-sa", Kind: ProfileKubernetes, Namespace: "ops", ServiceAccount: "deployer"})
+	full, kube := Header{Privilege: PrivilegeElevated}, Header{Privilege: PrivilegeNobody, Target: TargetKubernetes}
+	elevated := FleetVariables{Ceiling: PrivilegeElevated}
+	if _, err := ForRun(list, "web-root", full, false, "_all", elevated); err == nil || !strings.Contains(err.Error(), "all nodes") {
+		t.Fatalf("a profile limited to web ran on all nodes: %v", err)
+	}
+	if _, err := ForRun(list, "web-sa", kube, false, "_cluster", FleetVariables{}); err == nil || !strings.Contains(err.Error(), "whole cluster") {
+		t.Fatalf("a Kubernetes profile limited to web ran on the cluster: %v", err)
+	}
+	if c, err := ForRun(list, "any-sa", kube, false, "_cluster", FleetVariables{}); err != nil || c.ID != "any-sa" {
+		t.Fatalf("%+v, %v", c, err)
+	}
+	if c, err := ForRun(list, "", kube, false, "_cluster", FleetVariables{}); err != nil || c.ID != ProfileLoginUser {
+		t.Fatalf("%+v, %v", c, err)
+	}
+}
+
 func TestAChangeThatMattersWaitsAndSherlockOnlyAddsToTheList(t *testing.T) {
 	cond := approvedText("#!/bin/sh\n# 221b:describe x\n# 221b:privilege none\n# 221b:param MODE required m\nif [ \"$MODE\" = a ]; then echo a; fi\n")
 	pass := approvedText("#!/bin/sh\n# 221b:describe x\n# 221b:privilege none\n# 221b:param MODE required m\necho \"$MODE\"\n")

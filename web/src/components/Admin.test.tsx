@@ -115,7 +115,7 @@ describe('who is offered which page (RB-41, RB-31)', () => {
   })
 
   it('offers Permissions and Settings with sign-in off, where there are no users or roles to manage', () => {
-    expect(pagesFor(me({ mode: 'none' }))).toEqual(['permissions', 'toolbox', 'approvals', 'logs', 'settings', 'backup'])
+    expect(pagesFor(me({ mode: 'none', admin: false }))).toEqual(['permissions'])
   })
 
   it('refuses a Viewer who opens Users, and says why', () => {

@@ -59,7 +59,47 @@ func NewConfigMapStorage(cfg *rest.Config, ref string) (*ConfigMapStorage, error
 	if err != nil {
 		return nil, fmt.Errorf("creating the client for the settings ConfigMap: %w", err)
 	}
-	return &ConfigMapStorage{rest: core.RESTClient(), namespace: ns, name: name, key: "settings.json"}, nil
+	return &ConfigMapStorage{rest: core.RESTClient(), namespace: ns, name: name, key: SettingsKey}, nil
+}
+
+// SettingsKey is the settings' key in their ConfigMap.
+const SettingsKey = "settings.json"
+
+// KeyStorage is the settings kept under one key of a key-value backend,
+// so they share its limits with what else it holds.
+type KeyStorage struct {
+	Backend kv.Backend
+	Key     string
+}
+
+func (k KeyStorage) Kind() string { return "configmap" }
+
+func (k KeyStorage) Load(ctx context.Context) ([]byte, string, error) {
+	b, version, err := k.Backend.LoadKey(ctx, k.Key)
+	if errors.Is(err, kv.ErrNotFound) {
+		return nil, version, settings.ErrNotFound
+	}
+	return b, version, err
+}
+
+func (k KeyStorage) Save(ctx context.Context, b []byte, version string) (string, error) {
+	next, err := k.Backend.SaveKey(ctx, k.Key, b, version)
+	if errors.Is(err, kv.ErrConflict) {
+		return "", settings.ErrConflict
+	}
+	return next, err
+}
+
+// Exists says whether the ConfigMap is there to be read; the chart makes it.
+func (c *ConfigMapStorage) Exists(ctx context.Context) error {
+	_, version, err := c.LoadKey(ctx, "-")
+	if version != "" {
+		return nil
+	}
+	if err == nil || errors.Is(err, kv.ErrNotFound) {
+		err = errors.New("it does not exist; the chart makes it")
+	}
+	return fmt.Errorf("the ConfigMap %s: %w", c.Ref(), err)
 }
 
 // Ref returns namespace/name.
@@ -127,11 +167,29 @@ func (c *ConfigMapStorage) SaveKey(ctx context.Context, key string, b []byte, ve
 		if apierrors.IsConflict(err) {
 			return "", kv.ErrConflict
 		}
+		if tooLarge(err) {
+			return "", fmt.Errorf("%w: the ConfigMap %s would pass the 1 MiB Kubernetes keeps in one object, saving %s", kv.ErrFull, c.Ref(), key)
+		}
 		return "", describeConfigMapError("saving to", c.Ref(), err)
 	}
 	var cm configMap
 	_ = json.Unmarshal(raw, &cm)
 	return cm.Metadata.ResourceVersion, nil
+}
+
+// DeleteKey drops one key, leaving the others as they are.
+func (c *ConfigMapStorage) DeleteKey(ctx context.Context, key string) error {
+	patch, _ := json.Marshal(map[string]any{"data": map[string]any{key: nil}})
+	_, err := c.rest.Patch(types.MergePatchType).Namespace(c.namespace).Resource("configmaps").Name(c.name).Body(patch).Do(ctx).Raw()
+	if err != nil {
+		return describeConfigMapError("saving to", c.Ref(), err)
+	}
+	return nil
+}
+
+// tooLarge says the API server refused an object for its size.
+func tooLarge(err error) bool {
+	return apierrors.IsRequestEntityTooLargeError(err) || (apierrors.IsInvalid(err) && strings.Contains(err.Error(), "1048576"))
 }
 
 func describeConfigMapError(doing, ref string, err error) error {

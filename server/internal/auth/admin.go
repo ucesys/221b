@@ -294,14 +294,43 @@ func (s *Service) postUser(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	a, err := s.accounts.Create(ctx, NewAccount{Username: in.Username, Name: in.Name, Email: in.Email, Password: in.Password, Groups: in.Groups})
+	c := s.SuperAdminHold(sess, Account{Username: strings.TrimSpace(in.Username), Email: in.Email}, nil, in.Groups)
+	a, err := s.accounts.Create(ctx, NewAccount{Username: in.Username, Name: in.Name, Email: in.Email, Password: in.Password, Groups: c.Groups})
 	if err != nil {
 		s.recordUser(r, sess, audit.ActionUserCreate, strings.TrimSpace(in.Username), err.Error(), audit.OutcomeFailed)
 		refuseChange(w, err)
 		return
 	}
-	s.recordUser(r, sess, audit.ActionUserCreate, a.Username, "groups: "+strings.Join(a.Groups, ", "), audit.OutcomeOK)
-	writeJSON(w, http.StatusCreated, s.row(a.Username, sess))
+	s.recordUser(r, sess, audit.ActionUserCreate, a.Username, "groups: "+strings.Join(a.Groups, ", ")+aloneText(c), audit.OutcomeOK)
+	s.answerHeld(ctx, w, r, sess, a.Username, c, http.StatusCreated)
+}
+
+// aloneText says, for the audit log, that a change made a SuperAdmin with
+// nobody else to approve it.
+func aloneText(c SuperChange) string {
+	if c.Alone {
+		return "; made a SuperAdmin at once: the only SuperAdmin, so nobody else could approve"
+	}
+	return ""
+}
+
+// answerHeld answers a change to a user, keeping what waits first: the
+// answer says so, with 202.
+func (s *Service) answerHeld(ctx context.Context, w http.ResponseWriter, r *http.Request, sess Session, username string, c SuperChange, code int) {
+	if c.Hold == nil {
+		writeJSON(w, code, s.row(username, sess))
+		return
+	}
+	c.Hold.User = username
+	saved, err := s.RequestSuperAdmin(ctx, r, sess, *c.Hold)
+	held := HoldText(saved)
+	if err != nil {
+		held = "The rest of the change is made, but making " + username + " a SuperAdmin was not: " + err.Error()
+	}
+	writeJSON(w, http.StatusAccepted, struct {
+		UserRow
+		Held string `json:"held"`
+	}{s.row(username, sess), held})
 }
 
 func (s *Service) patchUser(w http.ResponseWriter, r *http.Request) {
@@ -410,13 +439,26 @@ func (s *Service) postGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	if _, err := s.accounts.ChangeGroups(ctx, name, in.Add, in.Remove); err != nil {
+	cur, ok := s.accounts.Find(name)
+	if !ok {
+		refuseChange(w, ErrNotFound)
+		return
+	}
+	next := slices.DeleteFunc(slices.Clone(cur.Groups), func(g string) bool { return slices.Contains(in.Remove, g) })
+	for _, g := range in.Add {
+		if !slices.Contains(next, g) {
+			next = append(next, g)
+		}
+	}
+	c := s.SuperAdminHold(sess, cur, cur.Super, next)
+	add := slices.DeleteFunc(slices.Clone(in.Add), func(g string) bool { return !slices.Contains(c.Groups, g) })
+	if _, err := s.accounts.ChangeGroups(ctx, name, add, in.Remove); err != nil {
 		s.recordUser(r, sess, audit.ActionUserGroups, name, err.Error(), audit.OutcomeFailed)
 		refuseChange(w, err)
 		return
 	}
-	s.recordUser(r, sess, audit.ActionUserGroups, name, "added to: "+strings.Join(in.Add, ", ")+"; removed from: "+strings.Join(in.Remove, ", "), audit.OutcomeOK)
-	writeJSON(w, http.StatusOK, s.row(name, sess))
+	s.recordUser(r, sess, audit.ActionUserGroups, name, "added to: "+strings.Join(add, ", ")+"; removed from: "+strings.Join(in.Remove, ", ")+aloneText(c), audit.OutcomeOK)
+	s.answerHeld(ctx, w, r, sess, name, c, http.StatusOK)
 }
 
 func (s *Service) putSuper(w http.ResponseWriter, r *http.Request) {
@@ -433,17 +475,23 @@ func (s *Service) putSuper(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	if _, err := s.accounts.SetSuper(ctx, name, in.Roles); err != nil {
+	cur, ok := s.accounts.Find(name)
+	if !ok {
+		refuseChange(w, ErrNotFound)
+		return
+	}
+	c := s.SuperAdminHold(sess, cur, in.Roles, cur.Groups)
+	if _, err := s.accounts.SetSuper(ctx, name, c.Super); err != nil {
 		s.recordUser(r, sess, audit.ActionUserSuper, name, err.Error(), audit.OutcomeFailed)
 		refuseChange(w, err)
 		return
 	}
-	names := make([]string, len(in.Roles))
-	for i, id := range in.Roles {
+	names := make([]string, len(c.Super))
+	for i, id := range c.Super {
 		names[i] = id.Name()
 	}
-	s.recordUser(r, sess, audit.ActionUserSuper, name, "super roles now: "+strings.Join(names, ", "), audit.OutcomeOK)
-	writeJSON(w, http.StatusOK, s.row(name, sess))
+	s.recordUser(r, sess, audit.ActionUserSuper, name, "super roles now: "+strings.Join(names, ", ")+aloneText(c), audit.OutcomeOK)
+	s.answerHeld(ctx, w, r, sess, name, c, http.StatusOK)
 }
 
 func (s *Service) deleteSessions(w http.ResponseWriter, r *http.Request) {

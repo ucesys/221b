@@ -89,6 +89,16 @@ The screens are in `docs/design/automation/`: the Scripts page with a Tools menu
 - **Auto-3.** *Hooks*: Around each node in the Run dialog: cordon and drain before, uncordon after a healthy result, and any approved Kubernetes script before or after. A failed drain skips the script; a failed script leaves the node cordoned and says so. *Retry*: Retry failed on a finished run starts a new run of the failed and unreachable nodes, through every check a run goes through.
 - **Not yet.** Conditions and loops across scripts, pause between batches, schedules, notifications and a script library. Fleet roles (AT14) and `K8S-` role names were dropped on November 2, 2026: SuperAdmin covers the whole console, not Kubernetes alone, and Automation is a SuperAdmin's.
 
+## Run safety (November 2026)
+
+What a run checks and keeps, as built after the review of November 3, 2026:
+
+- A node runs under the strictest ceiling of the fleets it is in (All nodes' when it is in none), and on production a variable change waiting on any of its fleets suspends the versions it touches there, whichever fleet the run picked. On production a run takes no values of its own.
+- Only the newest change on a fleet can be approved; approving applies it over the values it was asked against, or refuses and says what differs.
+- A node is in one live run at a time (dry runs and scripts on the cluster aside), and a cluster's control-plane nodes are worked on one at a time. A request id makes a start sent twice one run.
+- A reboot runs with the script's privilege, so a nobody script cannot ask for one. The node is back when its boot ID changed and Kubernetes reports it Ready, within its reboot timeout: the node's own, else the longest of its fleets', else 10 minutes.
+- A console that loses the lead stops its runs; a cancel also goes through the run's record; a production run re-reads its version before each batch and stops when it changed or lost its approval. Runs and facts live in `<release>-automation-runs`.
+
 ## Open questions
 
 The design doc lists eleven; these touch this step:

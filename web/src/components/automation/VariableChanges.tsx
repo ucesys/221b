@@ -163,10 +163,22 @@ export function VariableChangesPanel({
               </p>
               <ValueChanges change={c} />
               <ImpactList items={c.impact} />
+              {c.overtaken && (
+                <p
+                  className="rk-callout"
+                  data-tone="warn"
+                  style={{ margin: 0, fontSize: 12.5 }}
+                  data-testid="change-overtaken"
+                >
+                  {c.overtaken}
+                </p>
+              )}
               <div style={{ display: "flex", gap: 8 }}>
                 <button
                   className="rk-btn"
                   data-on
+                  disabled={!!c.overtaken}
+                  title={c.overtaken || undefined}
                   onClick={() => setDeciding({ c, how: "approve" })}
                   data-testid="change-approve"
                 >

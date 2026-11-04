@@ -41,12 +41,19 @@ type autoEnv struct {
 
 func autoSetup(t *testing.T, who, env string) autoEnv {
 	t.Helper()
+	return autoSetupDeny(t, who, env, nil)
+}
+
+// autoSetupDeny is autoSetup where Kubernetes refuses the person what deny
+// lists, as source.deny reads it.
+func autoSetupDeny(t *testing.T, who, env string, deny map[string]bool) autoEnv {
+	t.Helper()
 	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
 	simSrv := httptest.NewServer(s)
 	t.Cleanup(simSrv.Close)
 	st := automation.NewStore(&kv.Memory{}, nil)
 	eng := automation.NewEngine(automation.Options{Store: st, Exec: noExec{}})
-	srv, c, m, auditOut, local, store := multiSetupWith(t, who, nil, func(o *Options) {
+	srv, c, m, auditOut, local, store := multiSetupWith(t, who, deny, func(o *Options) {
 		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 		o.Automation, o.AutomationStore = eng, st
 	})
@@ -137,6 +144,30 @@ func TestAKubernetesScriptRunsThroughWatson(t *testing.T) {
 	}
 	if out := outs[got.Nodes[0].Node]; !strings.Contains(out, "Watson via reads v1, run #") || !strings.Contains(out, "NAMESPACE") {
 		t.Fatalf("output: %q", out)
+	}
+}
+
+// The right to impersonate a run profile's service account is asked of
+// Kubernetes for that account by name: another account in the same
+// namespace does not count.
+func TestARunProfilesAccountIsCheckedByName(t *testing.T) {
+	e := autoSetupDeny(t, "ops@corp.example", clusters.EnvOther, map[string]bool{"impersonate serviceaccounts/deployer/ops": true})
+	approved(t, e.store, "reads", autoKube)
+	ctx := context.Background()
+	for _, p := range []automation.RunProfile{
+		{ID: "deployer", Name: "deployer", Kind: automation.ProfileKubernetes, Namespace: "ops", ServiceAccount: "deployer"},
+		{ID: "reader", Name: "reader", Kind: automation.ProfileKubernetes, Namespace: "ops", ServiceAccount: "reader"},
+	} {
+		if err := e.store.SetProfile(ctx, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, body := e.do(t, "POST", "/api/v1/automation/runs", `{"script":"reads","fleet":"_cluster","config":"deployer","rollout":{"mode":"all"}}`)
+	if code != http.StatusForbidden || !strings.Contains(body, "ops/deployer") {
+		t.Fatalf("a refused account ran: %d %s", code, body)
+	}
+	if code, body := e.do(t, "POST", "/api/v1/automation/runs", `{"script":"reads","fleet":"_cluster","config":"reader","rollout":{"mode":"all"}}`); code != 200 {
+		t.Fatalf("an allowed account was refused: %d %s", code, body)
 	}
 }
 

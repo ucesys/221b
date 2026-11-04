@@ -23,6 +23,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/roles"
+	"github.com/ucesys/221b/server/internal/twoperson"
 	"golang.org/x/oauth2"
 )
 
@@ -30,8 +31,8 @@ import (
 type Mode string
 
 const (
-	// ModeNone turns sign-in off: everyone is an anonymous admin. For
-	// development and the simulator only.
+	// ModeNone turns sign-in off: everyone is the same anonymous person,
+	// a Viewer unless Config.Anonymous says Admin, never a SuperAdmin.
 	ModeNone Mode = "none"
 	// ModeOIDC sends people to an OpenID Connect provider.
 	ModeOIDC Mode = "oidc"
@@ -43,9 +44,15 @@ const (
 
 // Config is everything sign-in needs.
 type Config struct {
-	Mode  Mode
-	OIDC  OIDCConfig
-	Local []LocalUser
+	Mode Mode
+	// Anonymous is the role everyone holds with sign-in off: Viewer when
+	// empty, or Admin; a super role is refused.
+	Anonymous roles.ID
+	// TwoPerson keeps what waits for a second SuperAdmin: a local user made
+	// a SuperAdmin, when someone else could approve it. Nil applies at once.
+	TwoPerson *twoperson.Store
+	OIDC      OIDCConfig
+	Local     []LocalUser
 	// Admins are usernames (or subjects) that manage clusters and settings;
 	// AdminGroups are groups that do.
 	Admins      []string
@@ -108,12 +115,12 @@ type Service struct {
 	setup *limiter
 	// perAccount slows guessing at one account; perAddress slows spraying
 	// many accounts from one address, which is also many people behind one
-	// NAT, so it is the looser of the two. See attempt for when an address
-	// stands for no one person.
+	// NAT, so it is the looser of the two. An address is the client's as
+	// Proxies.Resolve works it out, and no header widens its limit.
 	perAccount *limiter
 	perAddress *limiter
-	// perShared is perAddress for an address many people may share.
-	perShared *limiter
+	// anonymous is everyone's session with sign-in off.
+	anonymous Session
 	audit     *audit.Log
 	log       *slog.Logger
 	now       func() time.Time
@@ -156,12 +163,17 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 	if cfg.SyncInterval <= 0 {
 		cfg.SyncInterval = time.Hour
 	}
-	s := &Service{cfg: cfg, setup: newLimiter(5, time.Minute, now), sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now), perShared: newLimiter(300, time.Minute, now)}
+	s := &Service{cfg: cfg, setup: newLimiter(5, time.Minute, now), sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now)}
 	if cfg.SessionStore != nil {
 		s.sessions.Share(cfg.SessionStore, log.With("store", "sessions"))
 	}
 	switch cfg.Mode {
 	case ModeNone:
+		role, err := AnonymousRole(string(cfg.Anonymous))
+		if err != nil {
+			return nil, err
+		}
+		s.anonymous = anonymousAs(role)
 	case ModeOIDC:
 		if cfg.OIDC.Issuer == "" || cfg.OIDC.ClientID == "" {
 			return nil, errors.New("OIDC sign-in needs the provider's issuer URL and a client ID")
@@ -273,8 +285,25 @@ func WithSession(ctx context.Context, sess Session) context.Context {
 	return context.WithValue(ctx, ctxKey{}, sess)
 }
 
-// anonymous is the session every request gets when sign-in is off.
-var anonymous = Session{ID: "", User: User{Subject: "anonymous", Username: "anonymous", Name: "Anonymous"}, Admin: true, Roles: []roles.ID{roles.SuperAdmin}, Super: []roles.ID{roles.SuperAdmin}, Method: "none"}
+// AnonymousRole reads the role everyone holds with sign-in off: viewer
+// (the default) or admin. A super role would make whoever reaches the
+// console its administrator, so it is refused.
+func AnonymousRole(s string) (roles.ID, error) {
+	switch roles.ID(s) {
+	case "", roles.Viewer:
+		return roles.Viewer, nil
+	case roles.Admin:
+		return roles.Admin, nil
+	case roles.SuperAdmin, roles.SuperViewer:
+		return "", fmt.Errorf("%s needs sign-in: with sign-in off, everyone is viewer or admin", s)
+	}
+	return "", fmt.Errorf("%q is not a role: use viewer or admin", s)
+}
+
+// anonymousAs is the session every request gets when sign-in is off.
+func anonymousAs(role roles.ID) Session {
+	return Session{ID: "", User: User{Subject: "anonymous", Username: "anonymous", Name: "Anonymous"}, Roles: []roles.ID{role}, Method: "none"}
+}
 
 // Open paths need no session: the health probes and metrics, the sign-in
 // pages with their assets, and the browser app's static files, which are
@@ -296,7 +325,7 @@ func openPath(p string) bool {
 // a page.
 func (s *Service) Gate(w http.ResponseWriter, r *http.Request) *http.Request {
 	if s.cfg.Mode == ModeNone {
-		return r.WithContext(context.WithValue(r.Context(), ctxKey{}, anonymous))
+		return r.WithContext(context.WithValue(r.Context(), ctxKey{}, s.anonymous))
 	}
 	if sess, ok := s.sessionOf(r); ok {
 		return r.WithContext(context.WithValue(r.Context(), ctxKey{}, sess))
@@ -518,21 +547,15 @@ func formLogin(s string) (string, bool) {
 	return login, true
 }
 
-// attempt counts a password attempt and says whether it may proceed. An
-// address that may stand for many people gets a wider limit of its own:
-// behind a proxy the console does not believe, one client's attempts would
-// otherwise keep out everyone behind it, and a client that only claims to
-// be behind one must still meet a limit. Attempts wait for a hashing slot,
-// so past a queue they are refused here, before they cost anything.
+// attempt counts a password attempt and says whether it may proceed:
+// every address meets the same limit, whatever headers the request
+// carries. Attempts wait for a hashing slot, so past a queue they are
+// refused here, before they cost anything.
 func (s *Service) attempt(r *http.Request, login string) bool {
 	if hashingFull() {
 		return false
 	}
-	address := s.perAddress
-	if SharedAddress(r) {
-		address = s.perShared
-	}
-	if !address.allow(from(r)) {
+	if !s.perAddress.allow(from(r)) {
 		return false
 	}
 	return s.perAccount.allow(login)

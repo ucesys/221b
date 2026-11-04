@@ -379,13 +379,19 @@ func (s *Server) readApp(w http.ResponseWriter, r *http.Request) (appInput, bool
 	}
 	if in.ValuesFile != nil {
 		f := strings.TrimSpace(*in.ValuesFile)
-		if f != "" && (strings.HasPrefix(f, "/") || strings.Contains(f, "..") || !(strings.HasSuffix(f, ".yaml") || strings.HasSuffix(f, ".yml"))) {
+		if !validValuesFile(f) {
 			jsonError(w, http.StatusBadRequest, "the values file is a YAML file in the chart's directory, such as values-prod.yaml")
 			return in, false
 		}
 		in.ValuesFile = &f
 	}
 	return in, true
+}
+
+// validValuesFile says whether a values file names a YAML file in the
+// chart's directory; empty names none.
+func validValuesFile(f string) bool {
+	return f == "" || !(strings.HasPrefix(f, "/") || strings.Contains(f, "..") || !(strings.HasSuffix(f, ".yaml") || strings.HasSuffix(f, ".yml")))
 }
 
 // applyAppInput copies what a request sets onto the record; the fleet

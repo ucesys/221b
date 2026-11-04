@@ -17,6 +17,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/oidcsim"
+	"github.com/ucesys/221b/server/internal/roles"
 )
 
 // console wires the service into a mux the way the API server does, with
@@ -464,17 +465,26 @@ func TestLocalAccounts(t *testing.T) {
 	}
 }
 
-func TestModeNoneIsAnAnonymousAdmin(t *testing.T) {
-	svc, err := auth.New(auth.Config{Mode: auth.ModeNone}, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
+// With sign-in off everyone is the same anonymous person: a Viewer, or an
+// Admin when asked, and never a SuperAdmin.
+func TestModeNoneIsAnAnonymousViewerOrAdmin(t *testing.T) {
+	for role, want := range map[roles.ID]roles.ID{"": roles.Viewer, roles.Viewer: roles.Viewer, roles.Admin: roles.Admin} {
+		svc, err := auth.New(auth.Config{Mode: auth.ModeNone, Anonymous: role}, nil, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		app := console(t, svc)
+		var me auth.Me
+		getJSON(t, client(t), app.URL+"/api/v1/me", &me)
+		app.Close()
+		if me.Mode != auth.ModeNone || me.Admin || me.User.Username != "anonymous" || len(me.Roles) != 1 || me.Roles[0] != want {
+			t.Fatalf("%q: me %+v", role, me)
+		}
 	}
-	app := console(t, svc)
-	defer app.Close()
-	var me auth.Me
-	getJSON(t, client(t), app.URL+"/api/v1/me", &me)
-	if me.Mode != auth.ModeNone || !me.Admin || me.User.Username != "anonymous" {
-		t.Fatalf("me: %+v", me)
+	for _, role := range []roles.ID{roles.SuperAdmin, roles.SuperViewer, "owner"} {
+		if _, err := auth.New(auth.Config{Mode: auth.ModeNone, Anonymous: role}, nil, nil, nil); err == nil {
+			t.Fatalf("sign-in off started with everyone %s", role)
+		}
 	}
 }
 

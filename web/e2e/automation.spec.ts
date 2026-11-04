@@ -498,6 +498,34 @@ test('the privilege ceiling sits above the variables table', async ({ page }) =>
   expect(c!.y).toBeLessThan(v!.y)
 })
 
+test('a fleet sets how long its rebooted nodes have, and a node its own', async ({ page }) => {
+  await page.goto('/#/variables')
+  const card = page.getByTestId('params-reboot')
+  await expect(card).toContainText('Left empty: 10 minutes')
+  await card.getByTestId('params-reboot-minutes').fill('0')
+  await expect(card).toContainText('A whole number of minutes, 1 to 240')
+  await expect(card.getByTestId('params-reboot-save')).toBeDisabled()
+  await card.getByTestId('params-reboot-minutes').fill('25')
+  await card.getByTestId('params-reboot-save').click()
+  await expect(card.getByTestId('params-reboot-save')).toHaveCount(0)
+  await page.getByTestId('params-nodes-toggle').click()
+  await page.getByTestId('params-node').first().click()
+  await expect(card).toContainText('Left empty: 25 minutes, the longest of its fleets')
+  await card.getByTestId('params-reboot-minutes').fill('7')
+  await card.getByTestId('params-reboot-save').click()
+  await expect(card.getByTestId('params-reboot-save')).toHaveCount(0)
+  const node = (await page.getByTestId('params-node').first().getAttribute('data-node'))!
+  const fleets = await (await page.request.get('/api/v1/automation/fleets')).json()
+  const all = fleets.fleets.find((f: { id: string }) => f.id === '_all')
+  expect(all.params.rebootMinutes).toBe(25)
+  expect(all.params.nodeReboot[node]).toBe(7)
+  // Put it back as it was.
+  await page.request.put('/api/v1/automation/fleets/_all/variables', {
+    headers: { 'Sec-Fetch-Site': 'same-origin' },
+    data: { ...all.params, rebootMinutes: undefined, nodeReboot: undefined },
+  })
+})
+
 test('the gear flags a new review you can approve, and opening Approvals clears it', async ({ page }) => {
   const at = new Date().toISOString()
   await page.route('**/api/v1/admin/approvals', (route) =>

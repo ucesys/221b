@@ -74,6 +74,12 @@ func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.C
 		jsonError(w, http.StatusServiceUnavailable, "the connection to "+id+" is not running; see its cluster page")
 		return c, false
 	}
+	// With sign-in off, changes would be made with the console's own
+	// account; an anonymous Viewer makes none.
+	if sess, ok := auth.SessionFrom(r.Context()); ok && sess.Method == "none" && !slices.Contains(sess.Roles, roles.Admin) {
+		c.ReadOnly = true
+		c.ReadOnlyHow = "Sign-in is off, and everyone is a Viewer. Turn sign-in on (auth.mode), or set auth.anonymousRole to admin."
+	}
 	c.Config = cfg
 	// With rbac.enforce strict, a cluster whose roles have not been compared
 	// yet refuses changes (RB-36). A connection just made or a console just

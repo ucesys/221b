@@ -39,6 +39,13 @@ type Config struct {
 	// of its own ConfigMap; empty keeps its records in memory.
 	Automation          bool
 	AutomationConfigMap string
+	// AuditConfigMap, SessionsConfigMap and AutomationRunsConfigMap keep
+	// the audit log, the toolbox's session records and Automation's runs in
+	// ConfigMaps of their own, so no one object passes 1 MiB (#46); empty
+	// keeps each with the settings or the scripts. A name given must exist.
+	AuditConfigMap          string
+	SessionsConfigMap       string
+	AutomationRunsConfigMap string
 	// ConnectionsSecrets is the "namespace/prefix" of the Secrets the
 	// cluster connections added in the console are kept in, one Secret
 	// <prefix>-cluster-<id> each. Empty keeps them in memory until a restart.
@@ -82,6 +89,9 @@ type Config struct {
 
 	// AuthMode is how people sign in (P3-01): none, oidc, local or ldap.
 	AuthMode string
+	// AnonymousRole is what everyone is with sign-in off: viewer or admin,
+	// never a super role.
+	AnonymousRole string
 	// AuthConfigFile is the JSON file the chart renders for the roles: which
 	// groups hold which role, the local groups, the LDAP server, which
 	// definition of Admin and SuperAdmin is installed, rbac.enforce
@@ -167,6 +177,9 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.SettingsConfigMap, "settings-configmap", env("SETTINGS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the settings in (empty: in memory)")
 	fs.BoolVar(&c.Automation, "automation", envBool("AUTOMATION", true), "offer Automation: scripts run on paired nodes over SSH (needs the toolbox's SSH on)")
 	fs.StringVar(&c.AutomationConfigMap, "automation-configmap", env("AUTOMATION_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep Automation's scripts, parameters and runs in (empty: in memory)")
+	fs.StringVar(&c.AuditConfigMap, "audit-configmap", env("AUDIT_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the audit log in (empty: with the settings)")
+	fs.StringVar(&c.SessionsConfigMap, "sessions-configmap", env("SESSIONS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the toolbox's session records in (empty: with the settings)")
+	fs.StringVar(&c.AutomationRunsConfigMap, "automation-runs-configmap", env("AUTOMATION_RUNS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep Automation's runs and nodes' facts in (empty: with its scripts)")
 	fs.StringVar(&c.ConnectionsSecrets, "connections-secrets", env("CONNECTIONS_SECRETS", ""), "namespace/prefix of the Secrets to keep cluster connections in, one <prefix>-cluster-<id> each (empty: in memory, lost on restart)")
 	fs.BoolVar(&c.KubeletStats, "kubelet-stats", envBool("KUBELET_STATS", true), "read node boot times from the kubelets, for uptime (needs get on nodes/proxy)")
 	fs.BoolVar(&c.SecretsRead, "secrets-read", envBool("SECRETS_READ", true), "read Secrets for their keys and sizes and for Helm releases; values are never shown (off hides the Helm tab)")
@@ -175,7 +188,8 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.LogLevel, "log-level", env("LOG_LEVEL", "info"), "debug, info, warn or error")
 	fs.StringVar(&c.LogFormat, "log-format", env("LOG_FORMAT", "json"), "json or text")
 	hosts := fs.String("allowed-hosts", env("ALLOWED_HOSTS", ""), "comma-separated host names to answer to, besides localhost and IP addresses")
-	fs.StringVar(&c.AuthMode, "auth-mode", env("AUTH_MODE", "none"), "how people sign in: oidc, ldap, local (accounts kept by the console) or none (no sign-in; everyone is an admin)")
+	fs.StringVar(&c.AuthMode, "auth-mode", env("AUTH_MODE", "none"), "how people sign in: oidc, ldap, local (accounts kept by the console) or none (no sign-in; everyone gets -anonymous-role)")
+	fs.StringVar(&c.AnonymousRole, "anonymous-role", env("ANONYMOUS_ROLE", "viewer"), "with sign-in off, the role everyone gets: viewer or admin; SSH, Automation and Secret values stay off")
 	fs.StringVar(&c.ToolboxConfigFile, "toolbox-config", env("TOOLBOX_CONFIG_FILE", ""), "a JSON file with the toolbox values: tools, images and limits (the chart renders it)")
 	fs.StringVar(&c.AuthConfigFile, "auth-config", env("AUTH_CONFIG_FILE", ""), "a JSON file with the roles' groups, the local groups and the LDAP server (the chart renders it)")
 	fs.StringVar(&c.UsersSecret, "users-secret", env("USERS_SECRET", ""), "namespace/name of the Secret to keep users created in the console in (empty: with -connections-secrets, <prefix>-users there; else in memory, lost on restart)")
@@ -272,6 +286,9 @@ func (c Config) validate() error {
 		}
 	default:
 		errs = append(errs, fmt.Errorf("unknown auth mode %q: use oidc, ldap, local or none", c.AuthMode))
+	}
+	if _, err := auth.AnonymousRole(c.AnonymousRole); err != nil {
+		errs = append(errs, fmt.Errorf("-anonymous-role: %w", err))
 	}
 	if _, err := auth.ParseProxies(c.TrustedProxies); err != nil {
 		errs = append(errs, fmt.Errorf("-trusted-proxies: %w", err))

@@ -47,8 +47,8 @@ func (m *MemoryStore) Add(e Event) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.list = append([]Event{e}, m.list...)
-	if m.Keep > 0 && len(m.list) > m.Keep {
-		m.list = m.list[:m.Keep]
+	if m.Keep > 0 {
+		m.list = trimKeep(m.list, m.Keep)
 	}
 }
 
@@ -184,9 +184,7 @@ func (s *KVStore) merge(kept, pending []Event) ([]byte, []Event) {
 	list = append(list, kept...)
 	list = append(list, pending...)
 	sort.SliceStable(list, func(i, j int) bool { return list[i].Time.After(list[j].Time) })
-	if keep := s.keep(); len(list) > keep {
-		list = list[:keep]
-	}
+	list = trimKeep(list, s.keep())
 	b, _ := json.Marshal(list)
 	if len(b) > s.maxBytes() {
 		list = s.withoutOversized(list)
@@ -202,6 +200,31 @@ func (s *KVStore) merge(kept, pending []Event) ([]byte, []Event) {
 		b, _ = json.Marshal(list)
 	}
 	return b, list
+}
+
+// trimKeep keeps at most keep events of a list, newest first. The commands
+// of Automation's runs go first, oldest first: a run gives one per node,
+// and its own event sums them up, so a big run never pushes approvals,
+// sign-ins and other decisions out.
+func trimKeep(list []Event, keep int) []Event {
+	over := len(list) - keep
+	if keep <= 0 || over <= 0 {
+		return list
+	}
+	drop := map[int]bool{}
+	for i := len(list) - 1; i >= 0 && over > 0; i-- {
+		if list[i].Action == ActionAutomationCommand {
+			drop[i] = true
+			over--
+		}
+	}
+	out := make([]Event, 0, keep)
+	for i, e := range list {
+		if !drop[i] {
+			out = append(out, e)
+		}
+	}
+	return out[:len(out)-over]
 }
 
 // withoutOversized leaves out the records too large to keep.
@@ -238,6 +261,17 @@ func (s *KVStore) Flush(ctx context.Context) error {
 		}
 		b, _ := s.merge(kept, pending)
 		if _, err = s.Backend.SaveKey(ctx, s.Key, b, version); errors.Is(err, kv.ErrConflict) {
+			continue
+		}
+		if errors.Is(err, kv.ErrFull) && s.maxBytes() > 64<<10 {
+			// What holds the log is full: the log is what can give way, so it
+			// keeps less from now on rather than stop.
+			s.mu.Lock()
+			s.MaxBytes = s.maxBytes() * 9 / 10
+			s.mu.Unlock()
+			s.Logger.Warn("the audit log's storage is full; it keeps less", "bytes", s.maxBytes(), "err", err)
+			// Not a try: it keeps shrinking until it fits, down to 64 KiB.
+			try--
 			continue
 		}
 		break

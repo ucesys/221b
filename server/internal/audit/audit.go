@@ -120,6 +120,9 @@ type Event struct {
 	Outcome string `json:"outcome"`
 	// From is the address the request came from.
 	From string `json:"from,omitempty"`
+	// Restored is when the backup this event came back from was taken;
+	// empty for an event this console recorded itself.
+	Restored string `json:"restored,omitempty"`
 }
 
 // Options configure the log.
@@ -200,8 +203,10 @@ func (l *Log) Events(ctx context.Context) ([]Event, error) {
 }
 
 // Import keeps events from a backup, in the store alone: they were
-// written to the stream and the webhook when they happened.
-func (l *Log) Import(events []Event) int {
+// written to the stream and the webhook when they happened. Each is
+// marked with when the backup was taken, whatever the file says, so a
+// restored event never reads as one this console recorded.
+func (l *Log) Import(events []Event, taken time.Time) int {
 	l.mu.Lock()
 	st := l.opts.Store
 	l.mu.Unlock()
@@ -209,6 +214,7 @@ func (l *Log) Import(events []Event) int {
 		return 0
 	}
 	for _, e := range events {
+		e.Restored = taken.UTC().Format(time.RFC3339)
 		st.Add(cleaned(e))
 	}
 	return len(events)

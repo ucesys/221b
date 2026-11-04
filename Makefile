@@ -88,7 +88,9 @@ SIM_AUTH = -auth-mode oidc -oidc-issuer http://127.0.0.1:7443/oidc -oidc-client-
 
 # The settings ConfigMap and the connection Secrets (P3-07) live in the
 # simulated cluster too, in the namespace 221b.
-SIM_STORE = -settings-configmap 221b/k8s-console-221b -connections-secrets 221b/k8s-console-221b
+SIM_STORE = -settings-configmap 221b/k8s-console-221b -connections-secrets 221b/k8s-console-221b \
+	-audit-configmap 221b/k8s-console-221b-audit -sessions-configmap 221b/k8s-console-221b-sessions \
+	-automation-configmap 221b/k8s-console-221b-automation -automation-runs-configmap 221b/k8s-console-221b-automation-runs
 
 # Sherlock (Phase 5) talks to the simulator's fake Claude API; an
 # administrator turns it on in Settings with any key of the right shape.

@@ -10,7 +10,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { expect, test } from './test'
 import { cluster, consoleNode, healthyWorkers, inKind, kubectl, nodeRows, snapshot } from './cluster'
-import { E2E_DEV, E2E_DEV_KUBE, E2E_USER, E2E_VIEWER, E2E_VIEWER_KUBE, signInAs } from './accounts'
+import { approveConsoleChanges, E2E_DEV, E2E_DEV_KUBE, E2E_USER, E2E_VIEWER, E2E_VIEWER_KUBE, signInAs } from './accounts'
 import type { WatsonItem } from '../src/api/watson'
 
 test.describe.configure({ mode: 'serial' })
@@ -483,7 +483,8 @@ test('on a production cluster with the rule on, a second person approves (P6-07)
   } finally {
     await viewer?.context().close()
     await page.request.put('/api/v1/watson/config', { data: { twoPerson: false }, headers: SAME })
-    await setEnv(local.env)
+    // Off production waits for a second SuperAdmin where there is one.
+    if ((await setEnv(local.env)).status() === 202) await approveConsoleChanges(browser)
     await revoke()
     await cluster.cordon(node, false)
   }

@@ -79,6 +79,8 @@ type grant struct {
 // DefaultUsers are the accounts the simulator ships with.
 var DefaultUsers = []User{
 	{Email: "admin@corp.example", Name: "Ada Admin", Password: "password", Groups: []string{"platform-admins", "oidc:platform-admins"}},
+	// A second SuperAdmin, for what one asks for and another approves.
+	{Email: "admin2@corp.example", Name: "Abe Admin", Password: "password", Groups: []string{"platform-admins", "oidc:platform-admins"}},
 	{Email: "dev@corp.example", Name: "Dev Eloper", Password: "password", Groups: []string{"developers"}},
 	{Email: "viewer@corp.example", Name: "Vera Viewer", Password: "password"},
 }

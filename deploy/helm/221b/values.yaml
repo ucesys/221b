@@ -106,9 +106,13 @@ auth:
   # only members of a group listed in auth.ldap.roles may sign in. local:
   # accounts kept by the console itself, for evaluations and clusters
   # without a provider. none: no sign-in, as before Phase 3; everyone who
-  # reaches the console is an administrator, so expose it only on a network
-  # where that is acceptable.
+  # reaches the console holds auth.anonymousRole, and SSH, Automation and
+  # showing Secret values are off, since nobody is known.
   mode: local
+  # With auth.mode none, the role everyone holds: viewer, or admin to let
+  # them change things with the console's own account. A super role needs
+  # sign-in and is refused.
+  anonymousRole: viewer
   # The names Kubernetes sees for people and groups from each source, so a
   # local "ops" and an LDAP "ops" are different subjects. OIDC names carry
   # auth.kubernetes.userPrefix and groupPrefix. Names that start with
@@ -119,9 +123,9 @@ auth:
   # CIDRs of the proxies in front of the console, such as your Ingress
   # controller's pods: their X-Forwarded-For says who a request is from, for
   # the audit log's From and the limits on sign-in attempts. Empty believes
-  # no one's header: From is the socket's peer, and requests that came
-  # through a proxy share a wider limit for that address, as well as the
-  # limit per account. List every proxy on the way, not the clients.
+  # no one's header: From is the socket's peer, and every address meets the
+  # same limit, as well as the limit per account. List every proxy on the
+  # way, not the clients.
   trustedProxies: []
   # An optional code that must be typed on the first-run page, which asks
   # for the first administrator while no user exists. Empty asks for none.

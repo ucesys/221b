@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -255,7 +256,8 @@ func (s *Service) Exec(ctx context.Context, cluster, node, keyID, command string
 	if asNobody {
 		command = NobodyCommand(p.LoginUser, command)
 	}
-	sess.Stdin, sess.Stdout, sess.Stderr = stdin, out, out
+	sess.Stdin = stdin
+	sess.Stdout, sess.Stderr = Streams(out)
 	if err := sess.Start(command); err != nil {
 		return -1, err
 	}
@@ -359,7 +361,8 @@ func (t *term) Run(ctx context.Context, stdin io.Reader, out io.Writer, sizes <-
 		return err
 	}
 	defer sess.Close()
-	sess.Stdin, sess.Stdout, sess.Stderr = stdin, out, out
+	sess.Stdin = stdin
+	sess.Stdout, sess.Stderr = Streams(out)
 	cols, rows := 80, 24
 	select {
 	case sz := <-sizes:
@@ -401,4 +404,27 @@ func (t *term) Run(ctx context.Context, stdin io.Reader, out io.Writer, sizes <-
 			return err
 		}
 	}
+}
+
+// Streams are the writers a command's output and its errors go to. A
+// writer that keeps them apart, as Automation's masking does, gives its
+// own for errors; any other gets both, one write at a time, since the SSH
+// session copies the two at once.
+func Streams(out io.Writer) (stdout, stderr io.Writer) {
+	if s, ok := out.(interface{ Stderr() io.Writer }); ok {
+		return out, s.Stderr()
+	}
+	l := &lockedWriter{w: out}
+	return l, l
+}
+
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }

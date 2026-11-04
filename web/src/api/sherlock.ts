@@ -120,6 +120,8 @@ export interface SherlockConfig {
   spend: { day: string; dayUSD: number; dayAsked: number; month: string; monthUSD: number; monthAsked: number }
   /** The providers seen to report no token use, whose spend is an estimate. */
   noUsage?: string[]
+  /** Why the spend could not be saved: it is counted on this console only, and a restart forgets it. */
+  spendError?: string
   models: SherlockModel[]
   clusters: { id: string; name: string; env: string }[]
   running: number

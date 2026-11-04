@@ -43,6 +43,7 @@ import (
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/twoperson"
 	"github.com/ucesys/221b/server/internal/views"
 	"github.com/ucesys/221b/server/internal/watson"
 )
@@ -65,6 +66,7 @@ type Cluster interface {
 	ObjectYAML(ctx context.Context, p kube.Person, k kube.Kind, namespace, name string) (string, error)
 	Logs(ctx context.Context, p kube.Person, namespace, name string, o kube.LogOptions) (io.ReadCloser, error)
 	CanI(ctx context.Context, p kube.Person, verb, group, resource, namespace string) (bool, error)
+	CanIName(ctx context.Context, p kube.Person, verb, group, resource, namespace, name string) (bool, error)
 	// Secret editing (Phase 10): live, as the person, never cached.
 	GetSecret(ctx context.Context, p kube.Person, namespace, name string) (*corev1.Secret, error)
 	UpdateSecret(ctx context.Context, p kube.Person, sec *corev1.Secret) (*corev1.Secret, error)
@@ -223,6 +225,9 @@ type Options struct {
 	// (Phase 11 part 2, ADR-73); nil leaves Automation out.
 	Automation      *automation.Engine
 	AutomationStore *automation.Store
+	// TwoPerson keeps what waits for a second SuperAdmin: a cluster taken
+	// off production, a local user made a SuperAdmin. Nil applies at once.
+	TwoPerson *twoperson.Store
 }
 
 // Impersonation says how a person's name and groups are given to the API
@@ -426,6 +431,7 @@ func New(o Options) *Server {
 	s.rolesRoutes()
 	s.auditRoutes()
 	s.backupRoutes()
+	s.twoPersonRoutes()
 	if o.Auth != nil {
 		for _, r := range o.Auth.Routes() {
 			s.handle(r.Pattern, r.Name, r.Handler)

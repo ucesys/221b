@@ -713,9 +713,11 @@ func (m *Manager) commandThen(ctx context.Context, s *Session, cmd []string, the
 		return
 	}
 	w := &limitWriter{m: m, s: s, max: m.opts.MaxOutput}
-	out := &hidingWriter{w: w, mark: []byte(HostKeyMark)}
-	err := s.backend.Exec(ctx, s.Ns, s.Pod, s.Container, cmd, false, nil, out, out, nil)
+	out := newHiding(w, []byte(HostKeyMark))
+	errs := out.twin()
+	err := s.backend.Exec(ctx, s.Ns, s.Pod, s.Container, cmd, false, nil, out, errs, nil)
 	out.flush()
+	errs.flush()
 	code := 0
 	note := "finished"
 	if err != nil {
@@ -737,7 +739,7 @@ func (m *Manager) commandThen(ctx context.Context, s *Session, cmd []string, the
 	shown := s.ring.String()
 	m.mu.Unlock()
 	if then != nil {
-		then(code, shown+out.hidden.String())
+		then(code, shown+out.Hidden())
 	}
 	if code == 0 {
 		m.end(s, EndFinished, "exit 0", Who{})
@@ -987,12 +989,33 @@ func without(names []string, name string) []string {
 const HostKeyMark = "221B-HOSTKEY "
 
 // hidingWriter passes output on a line at a time and keeps the lines that
-// start with mark, which arrive in any size of chunk, for itself.
+// start with mark, which arrive in any size of chunk, for itself. The
+// output and the errors of a command each have one, holding their own
+// line; what they pass on and keep is shared.
 type hidingWriter struct {
+	*hidingShared
+	line []byte
+}
+
+type hidingShared struct {
+	mu     sync.Mutex
 	w      io.Writer
 	mark   []byte
-	line   []byte
 	hidden strings.Builder
+}
+
+func newHiding(w io.Writer, mark []byte) *hidingWriter {
+	return &hidingWriter{hidingShared: &hidingShared{w: w, mark: mark}}
+}
+
+// twin is the writer for the other stream.
+func (h *hidingWriter) twin() *hidingWriter { return &hidingWriter{hidingShared: h.hidingShared} }
+
+// Hidden is the lines kept back.
+func (h *hidingWriter) Hidden() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.hidden.String()
 }
 
 func (h *hidingWriter) Write(p []byte) (int, error) {
@@ -1015,6 +1038,8 @@ func (h *hidingWriter) flush() {
 	if len(h.line) == 0 {
 		return
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	if bytes.HasPrefix(h.line, h.mark) {
 		h.hidden.Write(h.line)
 	} else {

@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -53,17 +52,14 @@ func hop(s string) (netip.Addr, bool) {
 	return a.Unmap().WithZone(""), true
 }
 
-type sharedKey struct{}
-
 // Resolve works out the address a request that reached this replica from
 // outside came from, and leaves it in RemoteAddr, where the audit log and
 // the sign-in limits read it. X-Forwarded-For counts only from a trusted
 // proxy, read from the right: the first entry no trusted proxy added is
 // the client. Everything to its left is the client's to write.
 //
-// A request that came through a proxy but names no client it can believe
-// keeps the socket peer's address, and is marked: that address is shared
-// by everyone behind the proxy (SharedAddress).
+// Anyone else's header is ignored: the request keeps the socket peer's
+// address, and meets that address's limits like any other.
 func (p Proxies) Resolve(r *http.Request) *http.Request {
 	peer, err := netip.ParseAddrPort(r.RemoteAddr)
 	if err != nil {
@@ -75,36 +71,19 @@ func (p Proxies) Resolve(r *http.Request) *http.Request {
 	}
 	addr := peer.Addr().Unmap().WithZone("")
 	if !p.has(addr) {
-		if len(hops) > 0 {
-			return shared(r)
-		}
 		return r
 	}
-	client, named := addr, false
+	client := addr
 	for i := len(hops) - 1; i >= 0; i-- {
 		a, ok := hop(hops[i])
 		if !ok {
 			break
 		}
-		client, named = a, true
+		client = a
 		if !p.has(a) {
 			break
 		}
 	}
 	r.RemoteAddr = net.JoinHostPort(client.String(), "0")
-	if !named {
-		return shared(r)
-	}
 	return r
-}
-
-func shared(r *http.Request) *http.Request {
-	return r.WithContext(context.WithValue(r.Context(), sharedKey{}, true))
-}
-
-// SharedAddress says whether the request's address is a proxy's, shared by
-// everyone behind it, and not one client's.
-func SharedAddress(r *http.Request) bool {
-	v, _ := r.Context().Value(sharedKey{}).(bool)
-	return v
 }

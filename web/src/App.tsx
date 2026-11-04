@@ -249,7 +249,7 @@ function Shell() {
       navigate(clusterHref(c.id, FIRST_TAB));
     } else {
       setToast(
-        `Saved ${c.name}.${c.state === "failed" ? " It cannot start: " + (c.message ?? "") : ""}`,
+        `Saved ${c.name}.${c.state === "failed" ? " It cannot start: " + (c.message ?? "") : ""}${c.held ? " " + c.held : ""}`,
       );
     }
   };

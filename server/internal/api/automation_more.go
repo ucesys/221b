@@ -242,12 +242,6 @@ func (s *Server) postVariableChange(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, automationStatus(err), err.Error())
 		return
 	}
-	if c.State == automation.ChangeApproved {
-		if err := s.opts.AutomationStore.SetVariables(r.Context(), cluster, c.Fleet, c.After); err != nil {
-			jsonError(w, automationStatus(err), err.Error())
-			return
-		}
-	}
 	s.recordAutomation(r, audit.ActionAutomationParams, cluster, "fleet "+c.Fleet, audit.OutcomeOK, fmt.Sprintf("change %d %s: %s", id, c.State, strings.Join(c.Changed, ", ")))
 	answerJSON(w, r, c)
 }
@@ -543,7 +537,7 @@ func (s *Server) postAutomationReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAutomation(r, audit.ActionAutomationScript, "", name, audit.OutcomeOK, fmt.Sprintf("Sherlock reviewed v%d: %d findings; a review never approves", n, len(rev.Findings)))
-	answerJSON(w, r, sc)
+	answerJSON(w, r, s.scriptAnswer(r, sc))
 }
 
 // ---------- runs, continued ----------

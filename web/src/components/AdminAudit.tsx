@@ -12,11 +12,16 @@ function whoText(e: AuditEvent): { text: string; title: string } {
   return { text: parts[0] ?? '—', title: parts.join(' · ') }
 }
 
-const EXPORT_HEAD = ['When', 'Action', 'Who', 'Cluster', 'Target', 'Outcome', 'Detail', 'From']
+/** What a restored event says of where it came from. */
+export function restoredText(taken: string): string {
+  return `Restored from the backup of ${fmtTs(taken)}`
+}
+
+const EXPORT_HEAD = ['When', 'Action', 'Who', 'Cluster', 'Target', 'Outcome', 'Detail', 'From', 'Restored']
 
 /** The export's rows: each event as the table shows it, the person in full. */
 function exportRows(events: AuditEvent[]): Cell[][] {
-  return events.map((e) => [e.time, e.action, whoText(e).title, e.cluster ?? '', e.target ?? '', e.outcome, e.detail ?? '', e.from ?? ''])
+  return events.map((e) => [e.time, e.action, whoText(e).title, e.cluster ?? '', e.target ?? '', e.outcome, e.detail ?? '', e.from ?? '', e.restored ?? ''])
 }
 
 /**
@@ -140,7 +145,14 @@ export function AdminAudit({ onToast }: AdminProps) {
                       {e.outcome}
                     </span>
                   </td>
-                  <td style={{ overflowWrap: 'anywhere', maxWidth: 480 }}>{e.detail || '—'}</td>
+                  <td style={{ overflowWrap: 'anywhere', maxWidth: 480 }}>
+                    {e.detail || '—'}
+                    {e.restored && (
+                      <div className="rk-fhint" data-testid="audit-restored">
+                        {restoredText(e.restored)}
+                      </div>
+                    )}
+                  </td>
                   <td className="rk-mono">{e.from || '—'}</td>
                 </tr>
               )

@@ -6,6 +6,8 @@ import {
   approvedOf,
   batches,
   canApprove,
+  canReject,
+  mayRun,
   countsText,
   CUSTOM_NODES,
   fleetOf,
@@ -18,7 +20,6 @@ import {
   parseGroups,
   resolveParams,
   rolloutHelp,
-  runnable,
   scriptGroups,
   type Script,
   type ScriptSummary,
@@ -148,54 +149,17 @@ describe("batches", () => {
 
 describe("approval", () => {
   const pat = { name: "Pat", user: "pat" };
-  const sam = { name: "Sam", user: "sam" };
-  const lee = { name: "Lee", user: "lee" };
-  it("never lets those who wrote or submitted a version approve it", () => {
-    const v = ver({
-      state: "review",
-      author: pat,
-      editors: [sam],
-      submitted: { by: lee, at: "" },
-    });
-    expect(canApprove(v, pat)).toBe(false);
-    expect(canApprove(v, sam)).toBe(false);
-    expect(canApprove(v, lee)).toBe(false);
-    expect(canApprove(v, { name: "Dee", user: "dee" })).toBe(true);
-    expect(canApprove(ver({ state: "draft", author: pat }), sam)).toBe(false);
-  });
-  it("asks for no more once someone else has approved", () => {
-    const done = ver({
-      state: "approved",
-      author: pat,
-      approvals: [{ by: sam, at: "" }],
-    });
-    expect(canApprove(done, sam)).toBe(false);
-    expect(canApprove(done, lee)).toBe(false);
-  });
-  it("runs a version only with an approval by someone who did not write it", () => {
-    expect(
-      runnable(
-        ver({
-          state: "approved",
-          author: pat,
-          approvals: [{ by: pat, at: "" }],
-        }),
-      ),
-    ).toBe(false);
-    expect(
-      runnable(
-        ver({
-          state: "approved",
-          author: pat,
-          approvals: [{ by: sam, at: "" }],
-        }),
-      ),
-    ).toBe(true);
-    expect(
-      runnable(
-        ver({ state: "review", author: pat, approvals: [{ by: sam, at: "" }] }),
-      ),
-    ).toBe(false);
+  it("shows what the server says the person may do, and nothing without it", () => {
+    const may = { approve: true, reject: false, involved: false, runProduction: false, runElsewhere: true, dry: false };
+    const v = ver({ state: "review", author: pat, may });
+    expect(canApprove(v)).toBe(true);
+    expect(canReject(v)).toBe(false);
+    expect(mayRun(v, false)).toBe(true);
+    expect(mayRun(v, true)).toBe(false);
+    const bare = ver({ state: "review", author: pat });
+    expect(canApprove(bare)).toBe(false);
+    expect(canReject(bare)).toBe(false);
+    expect(mayRun(bare, false)).toBe(false);
   });
 });
 

@@ -21,7 +21,7 @@ import {
 } from "../lib/router";
 import { openAdmin, pagesFor } from "./AdminPage";
 import { fetchApprovals } from "../api/automation";
-import { SEEN_EVENT, seenAt, startSeen, unseen } from "../lib/approvalsSeen";
+import { SEEN_EVENT, seenAt, seenFor, startSeen, unseen } from "../lib/approvalsSeen";
 import { ClusterMenu } from "./ClusterMenu";
 import { Chevron, GearIcon, Logo, MoonIcon, SunIcon } from "./Icons";
 
@@ -224,6 +224,16 @@ export function roleLabel(me: Me): string {
   return me.admin ? ROLE_NAME.superAdmin : "No role";
 }
 
+/** The role everyone holds with sign-in off. */
+export function anonymousRoleName(me: Me): string {
+  return me.roles?.includes("admin") ? ROLE_NAME.admin : ROLE_NAME.viewer;
+}
+
+/** What the Sign-in off tag says when pointed at. */
+export function signInOffText(me: Me): string {
+  return `Sign-in is off on this console: everyone who reaches it is a ${anonymousRoleName(me)} (auth.anonymousRole). SSH, Automation and showing Secret values are off, since nobody is known. Turn sign-in on in the chart (auth.mode) to use them.`;
+}
+
 /** The account button and its menu: who is signed in, their role, the theme, and sign-out. */
 function AccountMenu({
   me,
@@ -242,10 +252,10 @@ function AccountMenu({
         <span
           className="rk-tag"
           data-tone="warn"
-          title="Sign-in is off on this console: everyone who reaches it is an administrator. Turn it on in the chart (auth.mode) before sharing it."
+          title={signInOffText(me)}
           data-testid="signin-off"
         >
-          Sign-in off
+          Sign-in off · {anonymousRoleName(me)}
         </span>
         <button
           className="rk-icon-btn"
@@ -419,8 +429,10 @@ export function TopBar({
   // in for them to approve, and decisions on what they asked for.
   const [news, setNews] = useState({ waiting: 0, decided: 0 });
   const approver = !!me && pagesFor(me).includes("approvals");
+  const user = me?.user.username || me?.user.name || "";
   useEffect(() => {
     if (!approver) return;
+    seenFor(user);
     let gone = false;
     const look = () =>
       fetchApprovals(true).then(
@@ -448,7 +460,7 @@ export function TopBar({
       window.removeEventListener("focus", back);
       document.removeEventListener("visibilitychange", back);
     };
-  }, [approver]);
+  }, [approver, user]);
   const flagged = news.waiting + news.decided > 0;
   const newsText = [
     news.waiting > 0 &&

@@ -11,12 +11,14 @@ import (
 	"io"
 	corev1 "k8s.io/api/core/v1"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
 	"runtime/metrics"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,6 +49,7 @@ import (
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/toolbox"
+	"github.com/ucesys/221b/server/internal/twoperson"
 	"github.com/ucesys/221b/server/internal/ui"
 	"github.com/ucesys/221b/server/internal/version"
 	"github.com/ucesys/221b/server/internal/watson"
@@ -164,8 +167,13 @@ func run(args []string) error {
 		}
 		authCfg.Directory, authCfg.SyncInterval = dir, every
 	}
+	authCfg.Anonymous = roles.ID(cfg.AnonymousRole)
 	if authCfg.Mode == auth.ModeNone {
-		log.Warn("sign-in is off: everyone who reaches the console is an administrator; set -auth-mode oidc, ldap or local before sharing it")
+		// Nobody is known, so nothing that needs a known person runs: SSH,
+		// Automation and showing Secret values stay off whatever the chart
+		// says, and everyone holds the anonymous role.
+		cfg.Automation, cfg.SecretsReveal = false, false
+		log.Warn("sign-in is off: everyone who reaches the console holds the anonymous role, and SSH, Automation and Secret values are off; set -auth-mode oidc, ldap or local to use them", "anonymous_role", cfg.AnonymousRole)
 	}
 	// client-go logs through klog; send it to the same structured log.
 	klog.SetSlogLogger(log.With("component", "client-go"))
@@ -207,6 +215,10 @@ func run(args []string) error {
 		}
 		authCfg.SessionStore = sessionStore
 	}
+	// What waits for a second SuperAdmin (review item 14), kept beside the
+	// settings once their storage is open.
+	twoPerson := twoperson.New(nil, nil)
+	authCfg.TwoPerson = twoPerson
 	authSvc, err := auth.New(authCfg, log.With("component", "auth"), auditLog, nil)
 	if err != nil {
 		return err
@@ -313,12 +325,20 @@ func run(args []string) error {
 	// cluster, otherwise in memory. Every change reaches every browser
 	// through the stores.
 	var storage settings.Storage = &settings.Memory{}
+	// What the settings ConfigMap holds beside the settings, with the audit
+	// log and the session records in ConfigMaps of their own when the chart
+	// names them, and every key within its limit (#46).
+	var spendBackend kv.Backend = &kv.Memory{}
+	var stored storedObjects
 	if cfg.SettingsConfigMap != "" {
 		cm, err := kube.NewConfigMapStorage(restCfg, cfg.SettingsConfigMap)
 		if err != nil {
 			return err
 		}
-		storage = cm
+		if spendBackend, stored, err = settingsBackend(ctx, restCfg, cm, cfg.AuditConfigMap, cfg.SessionsConfigMap, log.With("component", "storage")); err != nil {
+			return err
+		}
+		storage = kube.KeyStorage{Backend: spendBackend, Key: kube.SettingsKey}
 	}
 	shared := settings.NewService(ctx, storage, settings.Settings{RefreshSeconds: int(cfg.Refresh / time.Second)}, log.With("component", "settings"), func(st settings.State) {
 		b, _ := json.Marshal(st)
@@ -379,10 +399,7 @@ func run(args []string) error {
 		log.Warn("reading the Claude API key failed; Sherlock has no key until it is saved again", "err", err)
 	}
 	go keys.Run(ctx, 10*time.Second, func(err error) { log.Warn("reading the Claude API key failed", "err", err) })
-	var spendBackend kv.Backend = &kv.Memory{}
-	if cm, ok := storage.(*kube.ConfigMapStorage); ok {
-		spendBackend = cm
-	}
+	twoPerson.SetBackend(spendBackend)
 	if auditStore := keepAudit(auditLog, spendBackend, log.With("component", "audit")); auditStore != nil {
 		defer func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -483,6 +500,9 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if authCfg.Mode == auth.ModeNone {
+		toolboxCfg.SSH.Enabled = false
+	}
 	// SSH to nodes (Phase 11, ADR-72): the console's certificate
 	// authority lives in a Secret beside the connections, and the pairings
 	// beside the settings.
@@ -535,13 +555,26 @@ func run(args []string) error {
 	var autoEngine *automation.Engine
 	var autoStore *automation.Store
 	if cfg.Automation {
-		var autoBackend kv.Backend = &kv.Memory{}
+		var autoBackend, runsBackend kv.Backend = &kv.Memory{}, nil
 		if cfg.AutomationConfigMap != "" {
 			cm, err := kube.NewConfigMapStorage(restCfg, cfg.AutomationConfigMap)
 			if err != nil {
 				return fmt.Errorf("automation's ConfigMap: %w", err)
 			}
-			autoBackend = cm
+			l := limited(cm, objAutomation, log.With("component", "storage"))
+			autoBackend, stored = l, append(stored, l)
+			// The runs and the nodes' facts have a ConfigMap of their own when
+			// the chart names one, so neither they nor the scripts press on the
+			// other's 1 MiB; every replica is told the same, and one that
+			// cannot read it does not start.
+			if cfg.AutomationRunsConfigMap != "" {
+				runs, err := openConfigMap(ctx, restCfg, cfg.AutomationRunsConfigMap)
+				if err != nil {
+					return fmt.Errorf("automation's runs: %w", err)
+				}
+				rl := limited(runs, objAutomationRuns, log.With("component", "storage"))
+				runsBackend, stored = rl, append(stored, rl)
+			}
 		} else {
 			log.Warn("Automation's scripts and runs are kept in memory and lost on restart (set -automation-configmap to keep them)")
 		}
@@ -550,7 +583,35 @@ func run(args []string) error {
 			outDir = toolboxCfg.TranscriptDir
 		}
 		autoStore = automation.NewStore(autoBackend, nil)
+		if runsBackend != nil {
+			autoStore.SetRunsBackend(runsBackend)
+		}
 		autoEngine = automation.NewEngine(automation.Options{
+			Node: func(cluster, node string) (automation.NodeState, bool) {
+				_, client, ok := manager.Lookup(cluster)
+				if !ok || client == nil {
+					return automation.NodeState{}, false
+				}
+				nodes, ok := client.(interface{ Node(string) *corev1.Node })
+				if !ok {
+					return automation.NodeState{}, false
+				}
+				n := nodes.Node(node)
+				if n == nil {
+					return automation.NodeState{}, false
+				}
+				st := automation.NodeState{}
+				_, st.ControlPlane = n.Labels["node-role.kubernetes.io/control-plane"]
+				if _, master := n.Labels["node-role.kubernetes.io/master"]; master {
+					st.ControlPlane = true
+				}
+				for _, c := range n.Status.Conditions {
+					if c.Type == corev1.NodeReady {
+						st.Ready = c.Status == corev1.ConditionTrue
+					}
+				}
+				return st, true
+			},
 			Store:       autoStore,
 			Exec:        sshSvc,
 			Unreachable: func(err error) bool { return errors.Is(err, nodessh.ErrUnreachable) },
@@ -584,7 +645,7 @@ func run(args []string) error {
 		SSH:     sshSvc,
 		Audit:   auditLog,
 		Logger:  log.With("component", "sessions"),
-		History: &sessions.KVHistory{Backend: spendBackend, Key: sessions.HistoryKey, Keep: toolboxCfg.History.Keep, Logger: log.With("component", "sessions")},
+		History: &sessions.KVHistory{Backend: spendBackend, Key: sessions.HistoryKey, Keep: toolboxCfg.History.Keep, MaxBytes: historyMaxBytes, Logger: log.With("component", "sessions")},
 	})
 	go sessionsMgr.Run(ctx)
 	if toolboxCfg.Transcripts == toolbox.TranscriptsPVC {
@@ -624,6 +685,7 @@ func run(args []string) error {
 		Sessions:                sessionsMgr,
 		Automation:              autoEngine,
 		AutomationStore:         autoStore,
+		TwoPerson:               twoPerson,
 		Sherlock:                sherlockSvc,
 		SherlockKeys:            keys,
 		SherlockDefaultURL:      cfg.SherlockAPIURL,
@@ -659,7 +721,19 @@ func run(args []string) error {
 			if info.Metrics == kube.MetricsAvailable {
 				metricsUp = 1
 			}
-			gauges := []api.Gauge{
+			gauges := []api.Gauge{}
+			for _, o := range stored {
+				sizes := o.Sizes()
+				for _, key := range slices.Sorted(maps.Keys(sizes)) {
+					gauges = append(gauges, api.Gauge{Name: "b221_configmap_bytes", Help: "Bytes each key of the console's ConfigMaps holds, as last read or saved; Kubernetes keeps at most 1 MiB in one ConfigMap.", Labels: fmt.Sprintf("configmap=%q,key=%q", o.Name, key), Value: float64(sizes[key])})
+				}
+			}
+			unsaved := 0.0
+			if sherlockSvc.Ledger().SaveError() != "" {
+				unsaved = 1
+			}
+			gauges = append(gauges, api.Gauge{Name: "b221_sherlock_spend_unsaved", Help: "1 when Sherlock's spend could not be saved: it is counted on this replica only, and a restart forgets it.", Value: unsaved})
+			gauges = append(gauges, []api.Gauge{
 				{Name: "b221_api_server_up", Help: "1 when the Kubernetes API server answered the last health check.", Value: up},
 				{Name: "b221_metrics_available", Help: "1 when metrics-server answered the last read.", Value: metricsUp},
 				{Name: "b221_refresh_seconds", Help: "The refresh interval in force: how often browsers are updated.", Value: store.RefreshInterval().Seconds()},
@@ -676,7 +750,7 @@ func run(args []string) error {
 				{Name: "b221_sherlock_answering", Help: "Sherlock answers in progress.", Value: float64(sherlockSvc.Running())},
 				{Name: "b221_sherlock_spend_today_usd", Help: "What Sherlock has cost today (UTC), in US dollars.", Value: sherlockSvc.Ledger().Now(context.Background()).DayUSD},
 				{Name: "b221_sherlock_spend_month_usd", Help: "What Sherlock has cost this month (UTC), in US dollars.", Value: sherlockSvc.Ledger().Now(context.Background()).MonthUSD},
-			}
+			}...)
 			cached := cluster.CachedObjects()
 			kinds := make([]string, 0, len(cached))
 			for k := range cached {
@@ -709,6 +783,10 @@ func run(args []string) error {
 	activity.OnChange(func(active bool) {
 		if active {
 			handler.CheckRolesSoon()
+		} else if autoEngine != nil {
+			// Runs live on the leader: one that loses the lead stops its
+			// runs, so the next leader never meets one still going.
+			autoEngine.StopAll("the console running it lost the lead and stopped it; nodes mid-script were stopped, and nothing was retried")
 		}
 	})
 	srv := &http.Server{

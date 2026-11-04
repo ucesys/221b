@@ -73,10 +73,15 @@ func TestTheLogFeedsItsStore(t *testing.T) {
 	st := &MemoryStore{}
 	l.SetStore(st)
 	l.Record(Event{Action: "settings.update"})
-	l.Import([]Event{{Action: "old", Time: time.Unix(0, 0)}})
+	taken := time.Date(2026, 10, 30, 9, 0, 0, 0, time.UTC)
+	l.Import([]Event{{Action: "old", Time: time.Unix(0, 0)}}, taken)
 	got, _ := l.Events(context.Background())
 	if len(got) != 3 || got[0].Action != "old" || got[1].Action != "settings.update" || got[2].Action != "signin" {
 		t.Fatalf("got %+v", got)
+	}
+	// What came from a backup says so; what was recorded here does not.
+	if got[0].Restored != "2026-10-30T09:00:00Z" || got[1].Restored != "" || got[2].Restored != "" {
+		t.Fatalf("restored marks: %q %q %q", got[0].Restored, got[1].Restored, got[2].Restored)
 	}
 }
 
@@ -198,5 +203,59 @@ func TestSweepCleansWhatWasKept(t *testing.T) {
 	}
 	if _, again, _ := b.LoadKey(context.Background(), StoreKey); again != version {
 		t.Fatal("a clean log was written again")
+	}
+}
+
+// A big run's commands go before anything else when the log is full, so
+// they never push decisions out.
+func TestRunCommandsGoFirstWhenTheLogIsFull(t *testing.T) {
+	now := time.Now()
+	var list []Event
+	for i := 0; i < 10; i++ {
+		action := ActionAutomationCommand
+		if i%5 == 0 {
+			action = "automation.approve"
+		}
+		list = append(list, Event{Action: action, Time: now.Add(-time.Duration(i) * time.Minute)})
+	}
+	got := trimKeep(list, 4)
+	approvals := 0
+	for _, e := range got {
+		if e.Action == "automation.approve" {
+			approvals++
+		}
+	}
+	if len(got) != 4 || approvals != 2 || got[0].Time != now {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// fullBackend refuses saves over a size, as a full ConfigMap does.
+type fullBackend struct {
+	kv.Memory
+	room int
+}
+
+func (f *fullBackend) SaveKey(ctx context.Context, key string, b []byte, version string) (string, error) {
+	if len(b) > f.room {
+		return "", kv.ErrFull
+	}
+	return f.Memory.SaveKey(ctx, key, b, version)
+}
+
+// When what holds the log is full, the log keeps less rather than stop.
+func TestAFullStorageMakesTheLogKeepLess(t *testing.T) {
+	b := &fullBackend{room: 100 << 10}
+	s := NewKVStore(b, slog.Default())
+	defer s.Close(context.Background())
+	for i := 0; i < 1500; i++ {
+		s.Add(Event{Action: "signin", Time: time.Now().Add(time.Duration(i) * time.Millisecond), Detail: strings.Repeat("d", 100)})
+	}
+	if err := s.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := b.LoadKey(context.Background(), StoreKey)
+	if err != nil || len(got) == 0 || len(got) > 100<<10 {
+		t.Fatalf("%d bytes kept, %v", len(got), err)
 	}
 }

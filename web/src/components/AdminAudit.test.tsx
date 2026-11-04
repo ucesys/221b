@@ -74,6 +74,15 @@ describe('the Audit log page', () => {
     await waitFor(() => expect(fetchAudit).toHaveBeenCalledTimes(2))
   })
 
+  it('marks an event that came back from a backup, and only that one', async () => {
+    vi.mocked(fetchAudit).mockResolvedValue({ ...page, events: [event('settings.update', { restored: '2026-10-29T08:00:00Z' }), event('backup.export')] })
+    render(<AdminAudit {...({} as AdminProps)} />)
+    await waitFor(() => expect(rows()).toBe(2))
+    const marks = screen.getAllByTestId('audit-restored')
+    expect(marks).toHaveLength(1)
+    expect(marks[0]!.textContent).toMatch(/^Restored from the backup of /)
+  })
+
   it('says when nothing matches, and shows the newest 500 at most', async () => {
     const many = Array.from({ length: 600 }, (_, i) => event('settings.update', { detail: `change ${i}` }))
     vi.mocked(fetchAudit).mockResolvedValue({ ...page, events: many, total: many.length })

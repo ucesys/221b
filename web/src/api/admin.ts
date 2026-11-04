@@ -116,6 +116,8 @@ export interface Holding {
 }
 
 export interface UserRow {
+  /** Set when making the user a SuperAdmin waits for another SuperAdmin. */
+  held?: string
   /** source:username, unique across sources (RB-15). */
   id: string
   username: string
@@ -284,6 +286,8 @@ export interface AuditEvent {
   detail?: string
   outcome: string
   from?: string
+  /** When the backup this event came back from was taken; absent for one recorded here. */
+  restored?: string
 }
 
 export interface AuditPage {
@@ -327,20 +331,22 @@ export interface BackupFile {
   sherlockSpend?: unknown
   sshPairings?: Record<string, unknown>
   audit?: unknown[]
+  automation?: { scripts?: unknown[]; variables?: Record<string, Record<string, unknown>>; runProfiles?: unknown[]; groups?: unknown[] }
 }
 
 export const BACKUP_FORMAT = '221b-backup/1'
 
-export type RestorePart = 'settings' | 'users' | 'apps' | 'toolboxSessions' | 'sherlockSpend' | 'sshPairings' | 'audit'
+export type RestorePart = 'settings' | 'users' | 'apps' | 'toolboxSessions' | 'sherlockSpend' | 'sshPairings' | 'audit' | 'automation'
 
 export const RESTORE_PARTS: { id: RestorePart; label: string; how: string }[] = [
   { id: 'settings', label: 'Settings', how: 'replace the current ones: refresh, time format, fleets, acknowledged alerts, Sherlock and Watson' },
   { id: 'users', label: 'Local users', how: 'are added, without a password, or updated: name, email, groups, super roles' },
-  { id: 'apps', label: 'Helm applications', how: 'are added or replaced: source, values, parameters, commands; a repository token is pasted again' },
+  { id: 'apps', label: 'Helm applications', how: 'are added or replaced: source, values, parameters, commands; a repository token is pasted again. One this console would refuse is left out and named' },
   { id: 'toolboxSessions', label: 'Toolbox session records', how: 'are merged with those here' },
   { id: 'sherlockSpend', label: "Sherlock's spend", how: 'replaces the ledger here' },
-  { id: 'sshPairings', label: 'SSH pairings', how: 'replace those here; they work with the same SSH authority Secret' },
-  { id: 'audit', label: 'Audit log', how: 'is merged with the events here' },
+  { id: 'sshPairings', label: 'SSH pairings', how: 'are added to those here, each checked first; they work with the same SSH authority Secret' },
+  { id: 'audit', label: 'Audit log', how: 'is merged with the events here, each marked as restored' },
+  { id: 'automation', label: 'Automation', how: 'scripts come back as drafts to submit for review again; run profiles and groups are added; fleet parameters apply, or on production wait for another SuperAdmin' },
 ]
 
 export interface RestoreReport {
@@ -360,6 +366,12 @@ export function partCount(b: BackupFile, part: RestorePart): number {
       return b.sherlockSpend ? 1 : 0
     case 'sshPairings':
       return Object.keys(b.sshPairings ?? {}).length
+    case 'automation': {
+      const a = b.automation
+      if (!a) return 0
+      const fleets = Object.values(a.variables ?? {}).reduce((n, f) => n + Object.keys(f).length, 0)
+      return (a.scripts?.length ?? 0) + (a.runProfiles?.length ?? 0) + (a.groups?.length ?? 0) + fleets
+    }
     default:
       return b[part]?.length ?? 0
   }

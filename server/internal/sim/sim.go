@@ -46,7 +46,9 @@ type Options struct {
 	// for a ServiceAccount without get on nodes/proxy.
 	KubeletStats bool
 	// SettingsConfigMap is a "namespace/name" ConfigMap that exists from
-	// the start, empty, as the chart's does. Empty means none.
+	// the start, empty, as the chart's does, with the others the chart makes
+	// beside it: <name>-audit, -sessions, -automation and -automation-runs.
+	// Empty means none.
 	SettingsConfigMap string
 	// Problems adds a not-ready node, a cordoned node, a node under disk
 	// pressure and some failing pods, so the problem views have something
@@ -191,7 +193,10 @@ func New(o Options) *Sim {
 		s.oidc = p
 	}
 	if ns, name, ok := strings.Cut(o.SettingsConfigMap, "/"); ok && ns != "" && name != "" {
-		s.addLocked(&corev1.ConfigMap{TypeMeta: metav1.TypeMeta{Kind: "ConfigMap", APIVersion: "v1"}, ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, UID: uid(ns + "/" + name)}, Data: map[string]string{}})
+		// The settings' ConfigMap and the others the chart makes beside it.
+		for _, n := range []string{name, name + "-audit", name + "-sessions", name + "-automation", name + "-automation-runs"} {
+			s.addLocked(&corev1.ConfigMap{TypeMeta: metav1.TypeMeta{Kind: "ConfigMap", APIVersion: "v1"}, ObjectMeta: metav1.ObjectMeta{Name: n, Namespace: ns, UID: uid(ns + "/" + n)}, Data: map[string]string{}})
+		}
 	}
 	s.routes()
 	return s

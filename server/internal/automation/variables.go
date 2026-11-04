@@ -2,7 +2,9 @@ package automation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 )
 
@@ -17,6 +19,9 @@ const (
 	SourceMissing     = ""
 	defaultCeiling    = PrivilegeNobody
 	maxNodeOverride   = 500
+	// MaxRebootMinutes is the longest a node may be given to come back
+	// from a reboot.
+	MaxRebootMinutes = 240
 )
 
 // FleetVariables are a fleet's parameter values, its nodes' overrides and the
@@ -29,6 +34,85 @@ type FleetVariables struct {
 	Ceiling string `json:"ceiling,omitempty"`
 	// Sensitive are parameters whose change always needs approval.
 	Sensitive []string `json:"sensitive,omitempty"`
+	// RebootMinutes is how long the fleet's nodes may take to come back
+	// from a reboot, 0 for the console's default; NodeReboot sets it for
+	// single nodes, and wins over any fleet's.
+	RebootMinutes int            `json:"rebootMinutes,omitempty"`
+	NodeReboot    map[string]int `json:"nodeReboot,omitempty"`
+}
+
+// Empty says whether nothing is set.
+func (fp FleetVariables) Empty() bool {
+	return len(fp.Values) == 0 && len(fp.Nodes) == 0 && fp.Ceiling == "" && len(fp.Sensitive) == 0 && fp.RebootMinutes == 0 && len(fp.NodeReboot) == 0
+}
+
+// Same says whether two fleets' parameters say the same.
+func (fp FleetVariables) Same(o FleetVariables) bool {
+	norm := func(x FleetVariables) string {
+		nodes := map[string]map[string]string{}
+		for n, m := range x.Nodes {
+			if len(m) > 0 {
+				nodes[n] = m
+			}
+		}
+		x.Nodes = nodes
+		x.Ceiling = x.CeilingOrDefault()
+		x.Sensitive = slices.Sorted(slices.Values(x.Sensitive))
+		b, _ := json.Marshal(x)
+		return string(b)
+	}
+	return norm(fp) == norm(o)
+}
+
+// RebootChanged says whether the reboot timeouts differ.
+func RebootChanged(a, b FleetVariables) bool {
+	if a.RebootMinutes != b.RebootMinutes || len(a.NodeReboot) != len(b.NodeReboot) {
+		return true
+	}
+	for n, m := range a.NodeReboot {
+		if b.NodeReboot[n] != m {
+			return true
+		}
+	}
+	return false
+}
+
+// NodeCeiling is the ceiling a node runs under, and the fleet it comes
+// from: the strictest of the fleets it is in, or All nodes' when it is in
+// none.
+func NodeCeiling(layers []Layer) (ceiling, from string) {
+	for _, l := range layers {
+		if l.Default {
+			continue
+		}
+		if c := l.Params.CeilingOrDefault(); from == "" || (c == PrivilegeNobody && ceiling != PrivilegeNobody) {
+			ceiling, from = c, l.Name
+		}
+	}
+	if from != "" {
+		return ceiling, from
+	}
+	for _, l := range layers {
+		if l.Default {
+			return l.Params.CeilingOrDefault(), l.Name
+		}
+	}
+	return defaultCeiling, "All nodes"
+}
+
+// RebootMinutes is how long a node may take to come back from a reboot: a
+// time set for the node itself wins over its fleets'; where several set
+// one, the longest. 0 means none is set.
+func RebootMinutes(layers []Layer, node string) int {
+	own, fleet := 0, 0
+	for _, l := range layers {
+		own = max(own, l.Params.NodeReboot[node])
+		fleet = max(fleet, l.Params.RebootMinutes)
+	}
+	if own > 0 {
+		return own
+	}
+	return fleet
 }
 
 // CeilingOrDefault is the fleet's ceiling, none when unset.
@@ -69,6 +153,17 @@ func ValidateVariables(fp FleetVariables) error {
 	}
 	if err := checkValues("the fleet", fp.Values); err != nil {
 		return err
+	}
+	if fp.RebootMinutes < 0 || fp.RebootMinutes > MaxRebootMinutes {
+		return fmt.Errorf("%w: a reboot timeout is 1 to %d minutes, or unset", ErrInvalid, MaxRebootMinutes)
+	}
+	if len(fp.NodeReboot) > maxNodeOverride {
+		return fmt.Errorf("%w: at most %d nodes may set their own reboot timeout", ErrInvalid, maxNodeOverride)
+	}
+	for node, m := range fp.NodeReboot {
+		if m < 1 || m > MaxRebootMinutes {
+			return fmt.Errorf("%w: node %s's reboot timeout is 1 to %d minutes", ErrInvalid, node, MaxRebootMinutes)
+		}
 	}
 	if len(fp.Nodes) > maxNodeOverride {
 		return fmt.Errorf("%w: at most %d nodes may override values", ErrInvalid, maxNodeOverride)
@@ -119,7 +214,7 @@ func (st *Store) SetVariables(ctx context.Context, cluster, fleet string, fp Fle
 		if rec.Clusters[cluster] == nil {
 			rec.Clusters[cluster] = map[string]FleetVariables{}
 		}
-		if len(fp.Values) == 0 && len(fp.Nodes) == 0 && fp.Ceiling == "" {
+		if fp.Empty() {
 			delete(rec.Clusters[cluster], fleet)
 		} else {
 			rec.Clusters[cluster][fleet] = fp
@@ -259,4 +354,17 @@ func VariableConflicts(nodes map[string][]Layer) []Conflict {
 // Resolve works out a node's values from one fleet alone.
 func Resolve(h Header, fp FleetVariables, node string, run map[string]string) Resolved {
 	return ResolveLayers(h, []Layer{{Params: fp}}, node, run)
+}
+
+// AllVariables returns every cluster's fleets' parameters, by cluster and
+// fleet id, for a backup. Secret parameters are references, never values.
+func (st *Store) AllVariables(ctx context.Context) (map[string]map[string]FleetVariables, error) {
+	var rec variablesRecord
+	if _, err := st.load(ctx, VariablesKey, &rec); err != nil {
+		return nil, err
+	}
+	if rec.Clusters == nil {
+		rec.Clusters = map[string]map[string]FleetVariables{}
+	}
+	return rec.Clusters, nil
 }

@@ -40,11 +40,21 @@ type Options struct {
 	OnCommand func(r Run, node, what, outcome string)
 	// Kube runs the kubectl lines of Kubernetes scripts and hooks.
 	Kube KubeRunner
-	// RebootWait bounds the wait for a rebooted node; RebootPoll is how
-	// often it is tried; BeatEvery how often a running run says it lives.
+	// RebootWait bounds the wait for a rebooted node when its fleets set
+	// none; RebootPoll is how often it is tried; BeatEvery how often a
+	// running run says it lives.
 	RebootWait, RebootPoll, BeatEvery time.Duration
+	// Node says what Kubernetes reports of a node: a rebooted node is back
+	// once it is Ready, and control-plane nodes are taken one at a time.
+	Node func(cluster, node string) (NodeState, bool)
 	// MaxParallel bounds the nodes a batch runs at once.
 	MaxParallel int
+}
+
+// NodeState is what the engine needs to know of a node from Kubernetes.
+type NodeState struct {
+	Ready        bool
+	ControlPlane bool
 }
 
 // Engine runs scripts on nodes, on the leader.
@@ -56,6 +66,9 @@ type Engine struct {
 	active  map[int]*activeRun
 	outputs map[int]map[string]string
 	order   []int
+	// controlPlane lets one control-plane node of a cluster at a time be
+	// worked on, across runs, so the cluster keeps its quorum.
+	controlPlane map[string]chan struct{}
 }
 
 type activeRun struct {
@@ -71,6 +84,14 @@ type activeRun struct {
 	before  []Hook
 	after   []Hook
 	person  Person
+	// rebootWait is how long each node may take to come back.
+	rebootWait map[string]time.Duration
+	// stopNote, when set, is why the console stopped the run itself.
+	stopNote string
+	// saved is when the run was last written; recheck says the version
+	// must still be approved, with the same text, at each batch.
+	saved   time.Time
+	recheck bool
 }
 
 // NewEngine makes an engine.
@@ -96,7 +117,7 @@ func NewEngine(o Options) *Engine {
 	if o.MaxParallel <= 0 || o.MaxParallel > MaxParallel {
 		o.MaxParallel = MaxParallel
 	}
-	return &Engine{opts: o, active: map[int]*activeRun{}, outputs: map[int]map[string]string{}}
+	return &Engine{opts: o, active: map[int]*activeRun{}, outputs: map[int]map[string]string{}, controlPlane: map[string]chan struct{}{}}
 }
 
 // Spec is a run to start: the version, the targets with each node's
@@ -129,6 +150,14 @@ type Spec struct {
 	Before, After []Hook
 	HookRefs      HookRefs
 	RetryOf       int
+	// RebootMinutes is how long each node may take to come back from a
+	// reboot, from its fleets; a node without one waits the default.
+	RebootMinutes map[string]int
+	// Request is the client's name for this start: the same one again
+	// answers the run it started. Recheck makes each batch check that the
+	// version is still approved, with the text it started with.
+	Request string
+	Recheck bool
 }
 
 // Start records a run and starts it; it goes on after the request ends.
@@ -145,7 +174,11 @@ func (e *Engine) Start(ctx context.Context, sp Spec) (Run, error) {
 	now := e.opts.Now().UTC()
 	r := Run{Script: sp.Script, Version: sp.Version.N, Hash: sp.Version.Hash, DryRun: sp.DryRun, Privilege: sp.Version.Header.Privilege,
 		Cluster: sp.Cluster, ClusterName: sp.ClusterName, Fleet: sp.Fleet, FleetName: sp.FleetName, Overrides: sp.Overrides, Rollout: sp.Rollout,
-		By: sp.Who, State: RunRunning, Started: now, Beat: now, Target: sp.Version.Header.Target, Config: sp.Config, Identity: sp.Identity, Basis: sp.Basis, HookRefs: sp.HookRefs, RetryOf: sp.RetryOf}
+		By: sp.Who, State: RunRunning, Started: now, Beat: now, Target: sp.Version.Header.Target, Config: sp.Config, Identity: sp.Identity, Basis: sp.Basis, HookRefs: sp.HookRefs, RetryOf: sp.RetryOf,
+		Request: sp.Request}
+	for _, ap := range sp.Version.Approvals {
+		r.Approvers = append(r.Approvers, ap.By)
+	}
 	for _, h := range sp.Before {
 		r.Hooks = append(r.Hooks, "before: "+h.Label)
 	}
@@ -154,17 +187,25 @@ func (e *Engine) Start(ctx context.Context, sp Spec) (Run, error) {
 	}
 	for bi, batch := range Batches(sp.Nodes, sp.Rollout) {
 		for _, n := range batch {
-			r.Nodes = append(r.Nodes, NodeResult{Node: n, Batch: bi + 1, State: NodeWaiting, Values: sp.Values[n]})
+			r.Nodes = append(r.Nodes, NodeResult{Node: n, Batch: bi + 1, State: NodeWaiting, Values: sp.Values[n], RebootMinutes: sp.RebootMinutes[n]})
 		}
 	}
 	r, err := e.opts.Store.NewRun(ctx, r)
+	if errors.Is(err, ErrSameRequest) {
+		return r, err
+	}
 	if err != nil {
 		return Run{}, err
 	}
 	runCtx, cancel := context.WithCancel(context.Background())
 	answer := r.Copy()
 	a := &activeRun{cancel: cancel, run: r.Copy(), text: sp.Version.Text, values: sp.Values, out: map[string]*tail{}, secrets: sp.Secrets, header: sp.Version.Header,
-		before: sp.Before, after: sp.After, person: sp.Person}
+		before: sp.Before, after: sp.After, person: sp.Person, rebootWait: map[string]time.Duration{}, saved: now, recheck: sp.Recheck}
+	for n, m := range sp.RebootMinutes {
+		if m > 0 {
+			a.rebootWait[n] = time.Duration(m) * time.Minute
+		}
+	}
 	e.mu.Lock()
 	e.active[r.ID] = a
 	e.mu.Unlock()
@@ -184,6 +225,24 @@ func (e *Engine) Cancel(id int) bool {
 		a.cancel()
 	}
 	return ok
+}
+
+// StopAll stops every run this console runs, for the reason given: the
+// runs end interrupted, with the reason as their note. A console that
+// loses the lead does this, so two never run the same run.
+func (e *Engine) StopAll(note string) {
+	e.mu.Lock()
+	list := make([]*activeRun, 0, len(e.active))
+	for _, a := range e.active {
+		list = append(list, a)
+	}
+	e.mu.Unlock()
+	for _, a := range list {
+		a.mu.Lock()
+		a.stopNote = note
+		a.mu.Unlock()
+		a.cancel()
+	}
 }
 
 // Running says whether this console runs a run now.
@@ -258,17 +317,27 @@ func (e *Engine) Get(ctx context.Context, id int) (Run, map[string]string, bool,
 	return Run{}, nil, false, nil
 }
 
-// save writes the run's state; a failure is logged, the run goes on.
+// save writes the run's state; a failure is logged, the run goes on. A
+// cancel asked for through the record cancels the run.
 func (e *Engine) save(a *activeRun) {
 	a.mu.Lock()
 	r := a.run.Copy()
+	a.saved = e.opts.Now()
 	a.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := e.opts.Store.PutRun(ctx, r); err != nil {
+	asked, err := e.opts.Store.PutRun(ctx, r)
+	if err != nil {
 		e.opts.Logger.Warn("saving an automation run failed", "run", r.ID, "err", err)
 	}
+	if asked && r.State == RunRunning {
+		a.cancel()
+	}
 }
+
+// saveEvery is the most often a node's progress is written: the page
+// reads a running run from memory, and the beat writes the rest.
+const saveEvery = 2 * time.Second
 
 func (e *Engine) setNode(a *activeRun, node string, f func(*NodeResult)) {
 	a.mu.Lock()
@@ -277,8 +346,55 @@ func (e *Engine) setNode(a *activeRun, node string, f func(*NodeResult)) {
 			f(&a.run.Nodes[i])
 		}
 	}
+	due := e.opts.Now().Sub(a.saved) >= saveEvery
 	a.mu.Unlock()
-	e.save(a)
+	if due {
+		e.save(a)
+	}
+}
+
+// claimControlPlane waits until no other node of the cluster's control
+// plane is being worked on, and gives back what ends its turn. Dry runs,
+// scripts on the cluster and other nodes go at once.
+func (e *Engine) claimControlPlane(ctx context.Context, r Run, node string) (func(), error) {
+	if r.DryRun || r.Target == TargetKubernetes || e.opts.Node == nil {
+		return func() {}, nil
+	}
+	if st, ok := e.opts.Node(r.Cluster, node); !ok || !st.ControlPlane {
+		return func() {}, nil
+	}
+	e.mu.Lock()
+	ch := e.controlPlane[r.Cluster]
+	if ch == nil {
+		ch = make(chan struct{}, 1)
+		e.controlPlane[r.Cluster] = ch
+	}
+	e.mu.Unlock()
+	select {
+	case ch <- struct{}{}:
+		return func() { <-ch }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// stillApproved says why the run's version may not go on: changed, or no
+// longer approved, since the run started.
+func (e *Engine) stillApproved(ctx context.Context, r Run) string {
+	sc, ok, err := e.opts.Store.Script(ctx, r.Script)
+	if err != nil {
+		return ""
+	}
+	v, found := sc.Version(r.Version)
+	switch {
+	case !ok || !found:
+		return fmt.Sprintf("stopped: %s v%d is gone", r.Script, r.Version)
+	case v.Hash != r.Hash || Hash(v.Text) != r.Hash:
+		return fmt.Sprintf("stopped: %s v%d's text is not the one the run started with", r.Script, r.Version)
+	case v.State != StateApproved:
+		return fmt.Sprintf("stopped: %s v%d is %s now, no longer approved", r.Script, r.Version, v.State)
+	}
+	return ""
 }
 
 // execute goes through the batches (AU-10).
@@ -286,7 +402,10 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 	defer a.cancel()
 	beat := time.NewTicker(e.opts.BeatEvery)
 	stopBeat := make(chan struct{})
+	var beating sync.WaitGroup
+	beating.Add(1)
 	go func() {
+		defer beating.Done()
 		for {
 			select {
 			case <-beat.C:
@@ -321,6 +440,14 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 		return c
 	}
 	for b := 1; b <= last && note == "" && ctx.Err() == nil; b++ {
+		if a.recheck {
+			a.mu.Lock()
+			r := a.run.Copy()
+			a.mu.Unlock()
+			if note = e.stillApproved(ctx, r); note != "" {
+				break
+			}
+		}
 		sem := make(chan struct{}, e.opts.MaxParallel)
 		var wg sync.WaitGroup
 		for _, node := range batches[b] {
@@ -345,6 +472,7 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 	}
 	beat.Stop()
 	close(stopBeat)
+	beating.Wait()
 	now := e.opts.Now().UTC()
 	a.mu.Lock()
 	cancelled := ctx.Err() != nil
@@ -359,6 +487,8 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 	}
 	c := a.run.Counts()
 	switch {
+	case cancelled && a.stopNote != "":
+		a.run.State, a.run.Note = RunInterrupted, a.stopNote
 	case cancelled:
 		a.run.State = RunCancelled
 	case note != "":
@@ -367,6 +497,9 @@ func (e *Engine) execute(ctx context.Context, a *activeRun) {
 		a.run.State = RunFailed
 	default:
 		a.run.State = RunSucceeded
+	}
+	if left := a.run.LeftCordoned(); len(left) > 0 && !strings.Contains(a.run.Note, "left cordoned") {
+		a.run.Note = strings.TrimPrefix(a.run.Note+"; left cordoned: "+strings.Join(left, ", "), "; ")
 	}
 	a.run.Ended, a.run.Beat = &now, now
 	r := a.run.Copy()
@@ -514,6 +647,16 @@ func (e *Engine) hooks(ctx context.Context, r Run, a *activeRun, node string, li
 // node runs the script on one node (AU-08, AU-09), or a Kubernetes script
 // on the cluster, with the run's hooks around it (AT33).
 func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout) {
+	a.mu.Lock()
+	r0 := a.run.Copy()
+	a.mu.Unlock()
+	release, err := e.claimControlPlane(ctx, r0, node)
+	if err != nil {
+		ended := e.opts.Now().UTC()
+		e.setNode(a, node, func(n *NodeResult) { n.State, n.Error, n.Ended = NodeCancelled, "cancelled", &ended })
+		return
+	}
+	defer release()
 	started := e.opts.Now().UTC()
 	e.setNode(a, node, func(n *NodeResult) { n.State, n.Started = NodeRunning, &started })
 	a.mu.Lock()
@@ -524,7 +667,11 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 	secrets := a.secrets[node]
 	text := a.text
 	header := a.header
+	wait := a.rebootWait[node]
 	a.mu.Unlock()
+	if wait <= 0 {
+		wait = e.opts.RebootWait
+	}
 	var mask []string
 	env := Env(r, node, values)
 	var stdin strings.Builder
@@ -544,6 +691,11 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 	fmt.Fprintf(out, "[221B] %s, for %s: %s\n", r.Watson(), who, r.Basis)
 	res := NodeResult{}
 	hookErr := e.hooks(ctx, r, a, node, a.before, env, out)
+	// Drained, the node stays cordoned until the hooks after uncordon it.
+	cordoned := hookErr == nil && !r.DryRun && len(a.before) > 0 && len(a.after) > 0
+	if cordoned {
+		e.setNode(a, node, func(n *NodeResult) { n.Cordoned = true })
+	}
 	var result Result
 	hasResult := false
 	if hookErr != nil {
@@ -612,9 +764,16 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 				res.State = NodeChanged
 			}
 		}
-		if res.State == NodeChanged && hasResult && result.Reboot && !r.DryRun {
+		switch {
+		case res.State != NodeChanged || !hasResult || !result.Reboot || r.DryRun:
+		case asNobody:
+			// Rebooting takes more than nobody may do: the script's privilege
+			// is what the reboot runs with, so a nobody script cannot ask for one.
+			res.State, res.Error = NodeFailed, "the script asked for a reboot, but it runs as nobody, which cannot reboot; declare privilege full to reboot"
+			fmt.Fprintf(out, "\n[221B] %s\n", res.Error)
+		default:
 			e.setNode(a, node, func(n *NodeResult) { n.State, n.Msg = NodeRebooting, result.Msg })
-			if rerr := e.reboot(ctx, r, node, out); rerr != nil {
+			if rerr := e.reboot(ctx, r, node, wait, out); rerr != nil {
 				res.State, res.Error = NodeFailed, rerr.Error()
 				if ctx.Err() != nil {
 					res.State, res.Error = NodeCancelled, "cancelled while the node rebooted"
@@ -627,15 +786,17 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 	case healthy:
 		if err := e.hooks(ctx, r, a, node, a.after, env, out); err != nil {
 			res.State, res.Error = NodeFailed, "after the script: "+err.Error()
+		} else {
+			cordoned = false
 		}
-	case hookErr == nil && len(a.before) > 0 && len(a.after) > 0 && res.State != NodeCancelled:
-		res.Error += "; the node stays cordoned: nothing ran after the script"
+	case cordoned:
+		res.Error = strings.TrimPrefix(res.Error+"; the node stays cordoned: nothing ran after the script", "; ")
 	}
 	done()
 	ended := e.opts.Now().UTC()
 	tailText := last(store.String(), tailBytes)
 	e.setNode(a, node, func(n *NodeResult) {
-		n.State, n.Exit, n.Msg, n.Error, n.Ended, n.Tail = res.State, res.Exit, res.Msg, res.Error, &ended, tailText
+		n.State, n.Exit, n.Msg, n.Error, n.Ended, n.Tail, n.Cordoned = res.State, res.Exit, res.Msg, res.Error, &ended, tailText, cordoned
 	})
 }
 
@@ -650,29 +811,53 @@ func sortedKeys(m map[string]string) []string {
 
 // mask writes through, with each secret value blanked, holding back enough
 // that a value split across two writes is still caught. Nothing but the
-// masked text reaches what it wraps.
+// masked text reaches what it wraps. The command's errors get a mask of
+// their own, so the two streams never mix inside a value.
 type mask struct {
-	w      io.Writer
+	sink   *maskSink
 	values []string
+	mu     sync.Mutex
 	buf    []byte
+	errs   *mask
+}
+
+// maskSink is what both streams' masks write to, one write at a time.
+type maskSink struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *maskSink) write(b []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.w.Write(b)
+	return err
 }
 
 func newMask(w io.Writer, values []string) *mask {
-	m := &mask{w: w}
+	var vs []string
 	for _, v := range values {
 		if v != "" {
-			m.values = append(m.values, v)
+			vs = append(vs, v)
 		}
 	}
-	return m
+	// The longest first: a value inside another is blanked with it.
+	sort.SliceStable(vs, func(i, j int) bool { return len(vs[i]) > len(vs[j]) })
+	sink := &maskSink{w: w}
+	return &mask{sink: sink, values: vs, errs: &mask{sink: sink, values: vs}}
 }
+
+// Stderr is where the command's errors go.
+func (m *mask) Stderr() io.Writer { return m.errs }
 
 const maskText = "••••••"
 
 func (m *mask) Write(p []byte) (int, error) {
 	if len(m.values) == 0 {
-		return m.w.Write(p)
+		return len(p), m.sink.write(p)
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.buf = append(m.buf, p...)
 	return len(p), m.drain(false)
 }
@@ -696,7 +881,7 @@ func (m *mask) drain(final bool) error {
 		}
 	}
 	if n > 0 {
-		if _, err := io.WriteString(m.w, s[:n]); err != nil {
+		if err := m.sink.write([]byte(s[:n])); err != nil {
 			return err
 		}
 	}
@@ -704,34 +889,101 @@ func (m *mask) drain(final bool) error {
 	return nil
 }
 
-// Flush writes what is held.
-func (m *mask) Flush() { _ = m.drain(true) }
+// Flush writes what both streams hold.
+func (m *mask) Flush() {
+	for _, x := range []*mask{m, m.errs} {
+		if x == nil {
+			continue
+		}
+		x.mu.Lock()
+		_ = x.drain(true)
+		x.mu.Unlock()
+	}
+}
 
 // Close writes what is held.
 func (m *mask) Close() { m.Flush() }
 
-// reboot reboots a node and waits for SSH to answer again (AU-09).
-func (e *Engine) reboot(ctx context.Context, r Run, node string, out io.Writer) error {
-	fmt.Fprintf(out, "\n[221B] rebooting %s and waiting up to %s for it to come back\n", node, e.opts.RebootWait)
+// BootIDCommand prints the node's boot ID, which changes with every boot.
+const BootIDCommand = "cat /proc/sys/kernel/random/boot_id"
+
+// bootID reads the node's boot ID.
+func (e *Engine) bootID(ctx context.Context, r Run, node string) (string, error) {
+	pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var b strings.Builder
+	code, err := e.opts.Exec.Exec(pctx, r.Cluster, node, KeyID(r), BootIDCommand, false, strings.NewReader(""), &b)
+	if err == nil && code != 0 {
+		err = fmt.Errorf("exited with %d", code)
+	}
+	id := strings.TrimSpace(b.String())
+	if err == nil && id == "" {
+		err = errors.New("it printed nothing")
+	}
+	return id, err
+}
+
+// reboot reboots a node and waits for it to come back (AU-09): it is back
+// once it answers with a boot ID other than the one before, and, when
+// Kubernetes knows it, once it is Ready again.
+func (e *Engine) reboot(ctx context.Context, r Run, node string, wait time.Duration, out io.Writer) error {
+	before, err := e.bootID(ctx, r, node)
+	if err != nil {
+		return fmt.Errorf("the node's boot ID could not be read before the reboot, so its coming back could not be told: %v", err)
+	}
+	fmt.Fprintf(out, "\n[221B] rebooting %s and waiting up to %s for it to come back\n", node, wait)
+	deadline := time.Now().Add(wait)
 	rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	_, _ = e.opts.Exec.Exec(rctx, r.Cluster, node, KeyID(r), "systemctl reboot || reboot", false, strings.NewReader(""), io.Discard)
+	code, err := e.opts.Exec.Exec(rctx, r.Cluster, node, KeyID(r), "systemctl reboot || reboot", false, strings.NewReader(""), io.Discard)
 	cancel()
-	deadline := time.Now().Add(e.opts.RebootWait)
+	switch {
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case err != nil && e.opts.Unreachable(err):
+		return fmt.Errorf("the node could not be reached to reboot it: %v", err)
+	case err == nil && code != 0:
+		return fmt.Errorf("the reboot command exited with %d, so the node did not reboot", code)
+	}
+	// A lost connection is what a reboot looks like from here.
+	back, said := false, false
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(e.opts.RebootPoll):
 		}
-		pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		code, err := e.opts.Exec.Exec(pctx, r.Cluster, node, KeyID(r), "true", false, strings.NewReader(""), io.Discard)
-		cancel()
-		if err == nil && code == 0 {
+		if !back {
+			id, err := e.bootID(ctx, r, node)
+			switch {
+			case err != nil:
+				continue
+			case id == before:
+				if !said {
+					fmt.Fprintf(out, "[221B] %s still answers from the same boot; waiting for it to go down\n", node)
+					said = true
+				}
+				continue
+			}
+			back = true
+			fmt.Fprintf(out, "[221B] %s answers again, from a new boot\n", node)
+		}
+		if e.opts.Node == nil {
+			return nil
+		}
+		st, known := e.opts.Node(r.Cluster, node)
+		if !known || st.Ready {
 			fmt.Fprintf(out, "[221B] %s is back\n", node)
 			return nil
 		}
 	}
-	return fmt.Errorf("the node did not come back within %s of its reboot", e.opts.RebootWait)
+	m := int(wait / time.Minute)
+	switch {
+	case back:
+		return fmt.Errorf("the node came back from its reboot, but Kubernetes did not report it Ready within %d minutes", m)
+	case said:
+		return fmt.Errorf("the node kept answering from the same boot for %d minutes: it did not reboot", m)
+	}
+	return fmt.Errorf("the node did not come back within %d minutes of its reboot", m)
 }
 
 func outputPath(dir string, id int) string {

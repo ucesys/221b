@@ -2,14 +2,20 @@ package api
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/nodessh"
@@ -41,7 +47,7 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	if _, err := kvb.SaveKey(ctx, sherlock.SpendKey, []byte(`{"day":"2026-10-30","dayUSD":1.5,"dayAsked":3,"month":"2026-10","monthUSD":9,"monthAsked":20}`), ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := kvb.SaveKey(ctx, nodessh.PairingsKey, []byte(`{"local/a":{"cluster":"local","node":"a","loginUser":"ops","port":22,"hostKey":"ssh-ed25519 AAAA"}}`), ""); err != nil {
+	if _, err := kvb.SaveKey(ctx, nodessh.PairingsKey, []byte(`{"local/a":{"cluster":"local","node":"a","loginUser":"ops","port":22,"hostKeys":["`+hostKeyLine(t)+`"]}}`), ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := shared.Update(ctx, settings.Settings{RefreshSeconds: 7}); err != nil {
@@ -166,7 +172,7 @@ func TestARestoreKeepsANameAndEmailTheFileDoesNotHave(t *testing.T) {
 	}
 	s := &Server{opts: Options{Auth: accountsOnly{accounts: acc}}}
 	rep := restoreReport{Restored: map[string]int{}}
-	s.restoreUsers(ctx, []backupUser{{Username: "anna"}, {Username: "ben", Name: "Ben B", Email: "ben.b@corp.example"}}, &rep)
+	s.restoreUsers(httptest.NewRequest(http.MethodPost, "/api/v1/admin/restore", nil), []backupUser{{Username: "anna"}, {Username: "ben", Name: "Ben B", Email: "ben.b@corp.example"}}, &rep)
 	if rep.Restored["users"] != 2 {
 		t.Fatalf("restored %+v", rep)
 	}
@@ -244,5 +250,141 @@ func TestARestoreNamesWhatItChangesOfSherlockAndWatson(t *testing.T) {
 	}
 	if d := details[ActionWatsonSettings]; !strings.Contains(d, "two-person rule on") {
 		t.Errorf("Watson's record: %q", d)
+	}
+}
+
+// hostKeyLine is a host key as a pairing keeps it.
+func hostKeyLine(t *testing.T) string {
+	t.Helper()
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(k)))
+}
+
+// A restore holds what it brings back to what making it here accepts: an
+// application or a pairing that would be refused is left out and named.
+// Audit events say they were restored. Automation comes back with every
+// script a draft to review again, and fleet parameters that apply where a
+// change would.
+func TestARestoreChecksWhatItBringsBack(t *testing.T) {
+	ctx := context.Background()
+	key := hostKeyLine(t)
+	srcStore := automation.NewStore(&kv.Memory{}, nil)
+	ann, sam := automation.Who{Name: "Ann", User: "ann"}, automation.Who{Name: "Sam", User: "sam"}
+	text := "#!/bin/sh\n# 221b:describe x\n# 221b:privilege none\necho hi\n"
+	if _, err := srcStore.Save(ctx, "hello", "ops", text, ann, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srcStore.Submit(ctx, "hello", 1, ann); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srcStore.Approve(ctx, "hello", 1, sam); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcStore.SetVariables(ctx, clusters.LocalID, "_all", automation.FleetVariables{Values: map[string]string{"MODE": "safe"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := srcStore.SetProfile(ctx, automation.RunProfile{ID: "deployer", Name: "deployer", Kind: automation.ProfileKubernetes, Namespace: "ops", ServiceAccount: "deployer"}); err != nil {
+		t.Fatal(err)
+	}
+	srv, c, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Automation, o.AutomationStore = automation.NewEngine(automation.Options{Store: srcStore, Exec: noExec{}}), srcStore
+	})
+	_, body := send(t, c, http.MethodGet, srv.URL+"/api/v1/admin/backup", "")
+	var f backupFile
+	if err := json.Unmarshal([]byte(body), &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Automation == nil || len(f.Automation.Scripts) != 1 || len(f.Automation.Profiles) != 1 || f.Automation.Variables[clusters.LocalID]["_all"].Values["MODE"] != "safe" {
+		t.Fatalf("Automation in the backup: %+v", f.Automation)
+	}
+
+	f.Apps = []apps.Record{
+		{Cluster: clusters.LocalID, Namespace: "web", Name: "shop", Source: apps.Source{Repo: "https://github.com/example/shop", Ref: "main", RefKind: apps.RefBranch}},
+		{Cluster: clusters.LocalID, Namespace: "web", Name: "odd", Source: apps.Source{Repo: "https://github.com/example/odd", Ref: "main", RefKind: apps.RefBranch}, ValuesFile: "../../elsewhere.yaml"},
+		{Cluster: clusters.LocalID, Namespace: "web", Name: "cmd", Source: apps.Source{Repo: "https://github.com/example/cmd", Ref: "main", RefKind: apps.RefBranch}, Commands: []apps.Command{{Name: "go", Params: []string{"a=$(x)"}}}},
+	}
+	f.SSHPairings = json.RawMessage(`{"local/a":{"cluster":"local","node":"a","loginUser":"ops","port":22,"hostKeys":["` + key + `"]},` +
+		`"local/b":{"cluster":"local","node":"b","loginUser":"Not A User","port":22,"hostKeys":["` + key + `"]},` +
+		`"local/c":{"cluster":"local","node":"c","loginUser":"ops","port":22,"hostKeys":["not a key"]},` +
+		`"gone/d":{"cluster":"gone","node":"d","loginUser":"ops","port":22,"hostKeys":["` + key + `"]}}`)
+	f.Audit = []audit.Event{{Action: "settings.update", Outcome: "ok", Detail: "from the old console"}}
+
+	appStore, kvb, auditStore := apps.NewMemoryStore(), &kv.Memory{}, &audit.MemoryStore{}
+	dst := automation.NewStore(&kv.Memory{}, nil)
+	srv2, c2, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Apps, o.KV = appStore, kvb
+		o.Audit.SetStore(auditStore)
+		o.Automation, o.AutomationStore = automation.NewEngine(automation.Options{Store: dst, Exec: noExec{}}), dst
+	})
+	in, _ := json.Marshal(restoreInput{Backup: f, Parts: map[string]bool{"apps": true, "sshPairings": true, "audit": true, "automation": true}})
+	resp, body := send(t, c2, http.MethodPost, srv2.URL+"/api/v1/admin/restore", string(in))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the restore: %s %s", resp.Status, body)
+	}
+	var rep restoreReport
+	if err := json.Unmarshal([]byte(body), &rep); err != nil {
+		t.Fatal(err)
+	}
+	notes := strings.Join(rep.Notes, "\n")
+	if rep.Restored["apps"] != 1 || rep.Restored["sshPairings"] != 1 {
+		t.Fatalf("restored %+v\n%s", rep.Restored, notes)
+	}
+	for _, want := range []string{"web/odd is not restored", "web/cmd is not restored", "local/b is not restored", "local/c is not restored", "gone/d is not restored", "drafts"} {
+		if !strings.Contains(notes, want) {
+			t.Fatalf("the notes lack %q:\n%s", want, notes)
+		}
+	}
+	events, _ := auditStore.List(ctx)
+	found := false
+	for _, e := range events {
+		if e.Detail == "from the old console" {
+			found = true
+			if e.Restored == "" {
+				t.Fatalf("a restored event reads as recorded here: %+v", e)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the audit event did not come back")
+	}
+	scripts, _ := dst.Scripts(ctx)
+	if len(scripts) != 1 || len(scripts[0].Versions) != 1 {
+		t.Fatalf("scripts: %+v", scripts)
+	}
+	if v := scripts[0].Versions[0]; v.State != automation.StateDraft || len(v.Approvals) != 0 || v.Submitted != nil || v.Author.User == "ann" || scripts[0].Group != "ops" {
+		t.Fatalf("the restored script carries its old review: %+v", v)
+	}
+	vars, _ := dst.Variables(ctx, clusters.LocalID)
+	if vars["_all"].Values["MODE"] != "safe" {
+		t.Fatalf("the parameters off production: %+v", vars)
+	}
+	if p, ok, _ := dst.Profile(ctx, "deployer"); !ok || p.ServiceAccount != "deployer" {
+		t.Fatalf("the run profile: %+v %v", p, ok)
+	}
+
+	// On production the parameters wait for another SuperAdmin.
+	prod := automation.NewStore(&kv.Memory{}, nil)
+	srv3, c3, m3, _, local3, store3 := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Automation, o.AutomationStore = automation.NewEngine(automation.Options{Store: prod, Exec: noExec{}}), prod
+	})
+	if err := m3.SetLocal(ctx, clusters.Spec{Name: "Here", Env: clusters.EnvProduction, Mode: clusters.ModeWrite}, local3, store3); err != nil {
+		t.Fatal(err)
+	}
+	in, _ = json.Marshal(restoreInput{Backup: f, Parts: map[string]bool{"automation": true}})
+	if resp, body := send(t, c3, http.MethodPost, srv3.URL+"/api/v1/admin/restore", string(in)); resp.StatusCode != http.StatusOK || !strings.Contains(body, "wait for another SuperAdmin") {
+		t.Fatalf("on production: %s %s", resp.Status, body)
+	}
+	if vars, _ := prod.Variables(ctx, clusters.LocalID); len(vars) != 0 {
+		t.Fatalf("parameters applied on production without approval: %+v", vars)
+	}
+	if waiting, _ := prod.WaitingChanges(ctx); len(waiting) != 1 || waiting[0].By.User == "" {
+		t.Fatalf("waiting changes: %+v", waiting)
 	}
 }

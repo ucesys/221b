@@ -57,6 +57,7 @@ const script: Script = {
       approvals: [
         { by: { name: "Sam", user: "sam" }, at: "2026-10-30T11:00:00Z" },
       ],
+      may: { approve: false, reject: false, involved: true, runProduction: true, runElsewhere: true, dry: true },
     },
     {
       n: 2,
@@ -69,6 +70,7 @@ const script: Script = {
       state: "draft",
       author: { name: "Pat", user: "pat" },
       created: "2026-10-31T10:00:00Z",
+      may: { approve: false, reject: false, involved: true, runProduction: false, runElsewhere: true, dry: true },
     },
   ],
 };
@@ -405,6 +407,7 @@ describe("AutomationTab", () => {
       state: "review" as const,
       author: { name: "Ann", user: "ann" },
       submitted: { by: { name: "Ann", user: "ann" }, at: "2026-10-31T11:00:00Z" },
+      may: { approve: true, reject: true, involved: false, runProduction: false, runElsewhere: true, dry: true },
     };
     script.versions.push(v3);
     try {

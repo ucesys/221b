@@ -99,10 +99,20 @@ func (c RunProfile) Identity() string {
 	return c.Namespace + "/" + c.ServiceAccount
 }
 
+// Every node of a cluster, and the cluster itself, as the API names them:
+// no fleet list reaches them, only a profile that reaches every fleet.
+const (
+	fleetAllNodes = "_all"
+	fleetCluster  = "_cluster"
+)
+
 // Reaches says whether it may be used on a fleet.
 func (c RunProfile) Reaches(fleet string) bool {
 	if len(c.Fleets) == 0 {
 		return true
+	}
+	if fleet == fleetAllNodes || fleet == fleetCluster {
+		return false
 	}
 	for _, f := range c.Fleets {
 		if f == fleet {
@@ -194,6 +204,9 @@ func ForRun(list []RunProfile, id string, h Header, dryRun bool, fleet string, f
 		if c.Kind != ProfileKubernetes {
 			return c, fmt.Errorf("%w: %s reaches nodes, and this script targets the cluster", ErrInvalid, c.Name)
 		}
+		if !c.Reaches(fleet) {
+			return c, fmt.Errorf("%w: %s is limited to fleets %s; a script on the whole cluster needs a run profile that reaches every fleet", ErrInvalid, c.Name, strings.Join(c.Fleets, ", "))
+		}
 		return c, nil
 	}
 	if dryRun {
@@ -214,6 +227,9 @@ func ForRun(list []RunProfile, id string, h Header, dryRun bool, fleet string, f
 		return c, fmt.Errorf("%w: %s is for the cluster, and this script targets nodes", ErrInvalid, c.Name)
 	}
 	if !c.Reaches(fleet) {
+		if fleet == fleetAllNodes {
+			return c, fmt.Errorf("%w: %s is limited to fleets %s; a run on all nodes needs a run profile that reaches every fleet", ErrInvalid, c.Name, strings.Join(c.Fleets, ", "))
+		}
 		return c, fmt.Errorf("%w: %s does not reach fleet %s", ErrInvalid, c.Name, fleet)
 	}
 	if h.Privilege == PrivilegeElevated && c.Privilege != PrivilegeElevated {

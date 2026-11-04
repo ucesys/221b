@@ -3,6 +3,7 @@ package automation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -43,7 +44,7 @@ const (
 // Limits of runs (AU-07, AU-12).
 const (
 	MaxRuns            = 200
-	maxRunsBytes       = 384 << 10
+	maxRunsBytes       = 512 << 10
 	MaxNodes           = 500
 	MaxParallel        = 20
 	DefaultTimeout     = 10
@@ -148,6 +149,12 @@ type NodeResult struct {
 	Tail string `json:"tail,omitempty"`
 	// Values are the parameters the node got.
 	Values map[string]string `json:"values,omitempty"`
+	// RebootMinutes is how long the node could take to come back from a
+	// reboot, from its fleets; 0 is the console's default.
+	RebootMinutes int `json:"rebootMinutes,omitempty"`
+	// Cordoned says the run drained the node and nothing has uncordoned
+	// it since.
+	Cordoned bool `json:"cordoned,omitempty"`
 }
 
 // Done says whether the node's part is over.
@@ -190,11 +197,18 @@ type Run struct {
 	HookRefs HookRefs `json:"hookRefs"`
 	RetryOf  int      `json:"retryOf,omitempty"`
 	// Note says why a run stopped early or failed to start a node.
-	Note    string       `json:"note,omitempty"`
-	Started time.Time    `json:"started"`
-	Ended   *time.Time   `json:"ended,omitempty"`
-	Beat    time.Time    `json:"beat"`
-	Nodes   []NodeResult `json:"nodes"`
+	Note string `json:"note,omitempty"`
+	// Request is the client's name for the start, so asking twice starts
+	// one run; CancelAsked is a cancel that reached the record rather than
+	// the console running it.
+	Request     string `json:"request,omitempty"`
+	CancelAsked bool   `json:"cancelAsked,omitempty"`
+	// Approvers are who had approved the version when the run started.
+	Approvers []Who        `json:"approvers,omitempty"`
+	Started   time.Time    `json:"started"`
+	Ended     *time.Time   `json:"ended,omitempty"`
+	Beat      time.Time    `json:"beat"`
+	Nodes     []NodeResult `json:"nodes"`
 }
 
 // Watson is how every command of this run reads in the audit log.
@@ -209,6 +223,23 @@ func (r Run) Counts() map[string]int {
 		c[n.State]++
 	}
 	return c
+}
+
+// LeftCordoned are the nodes the run drained and did not uncordon.
+func (r Run) LeftCordoned() []string {
+	var out []string
+	for _, n := range r.Nodes {
+		if n.Cordoned {
+			out = append(out, n.Node)
+		}
+	}
+	return out
+}
+
+// live says whether a run still holds its nodes: running, and its console
+// still beating.
+func (r Run) live(now time.Time) bool {
+	return r.State == RunRunning && now.Sub(r.Beat) < staleAfter
 }
 
 // Copy is a deep enough copy to hand out while the run goes on.
@@ -246,6 +277,9 @@ func stale(r *Run, now time.Time) {
 	if r.Note == "" {
 		r.Note = "the console that ran it stopped before it ended; nothing was retried"
 	}
+	if c := r.LeftCordoned(); len(c) > 0 {
+		r.Note += "; left cordoned: " + strings.Join(c, ", ")
+	}
 	for i := range r.Nodes {
 		if !r.Nodes[i].Done() {
 			r.Nodes[i].State = NodeCancelled
@@ -254,9 +288,36 @@ func stale(r *Run, now time.Time) {
 	}
 }
 
-// NewRun records a run and gives it its number.
+// NewRun records a run and gives it its number. A node is in one run at a
+// time: a run on nodes another live run has is refused, dry runs and
+// scripts on the cluster aside. A request asked for again answers the run
+// it started, with ErrSameRequest.
 func (st *Store) NewRun(ctx context.Context, r Run) (Run, error) {
+	var same Run
 	err := change(ctx, st, RunsKey, maxRunsBytes, func(rec *runsRecord) error {
+		now := st.now()
+		for _, old := range rec.Runs {
+			if r.Request != "" && old.Request == r.Request && old.By.Same(r.By) {
+				same = old
+				return ErrSameRequest
+			}
+		}
+		if !r.DryRun && r.Target != TargetKubernetes {
+			mine := map[string]bool{}
+			for _, n := range r.Nodes {
+				mine[n.Node] = true
+			}
+			for _, old := range rec.Runs {
+				if old.Cluster != r.Cluster || old.DryRun || old.Target == TargetKubernetes || !old.live(now) {
+					continue
+				}
+				for _, n := range old.Nodes {
+					if mine[n.Node] {
+						return busyError(fmt.Sprintf("%s is in run #%d (%s v%d, by %s), which is still running: wait for it to end, cancel it, or leave the node out.", n.Node, old.ID, old.Script, old.Version, old.By.Name))
+					}
+				}
+			}
+		}
 		if rec.Next < 1 {
 			rec.Next = 1
 			for _, old := range rec.Runs {
@@ -269,23 +330,52 @@ func (st *Store) NewRun(ctx context.Context, r Run) (Run, error) {
 		pruneRuns(rec)
 		return nil
 	})
+	if errors.Is(err, ErrSameRequest) {
+		return same, err
+	}
 	return r, err
 }
 
-// PutRun saves a run's latest state.
-func (st *Store) PutRun(ctx context.Context, r Run) error {
-	return change(ctx, st, RunsKey, maxRunsBytes, func(rec *runsRecord) error {
+// PutRun saves a run's latest state. A run that ended stays as it ended,
+// whatever a late save says; it answers whether someone asked through the
+// record for the run to be cancelled.
+func (st *Store) PutRun(ctx context.Context, r Run) (cancel bool, err error) {
+	err = change(ctx, st, RunsKey, maxRunsBytes, func(rec *runsRecord) error {
 		for i := range rec.Runs {
-			if rec.Runs[i].ID == r.ID {
-				rec.Runs[i] = r
-				pruneRuns(rec)
-				return nil
+			if rec.Runs[i].ID != r.ID {
+				continue
 			}
+			old := rec.Runs[i]
+			if old.State != RunRunning && r.State == RunRunning {
+				return errNoChange
+			}
+			r.CancelAsked = r.CancelAsked || old.CancelAsked
+			cancel = r.CancelAsked
+			rec.Runs[i] = r
+			pruneRuns(rec)
+			return nil
 		}
 		rec.Runs = append(rec.Runs, r)
 		pruneRuns(rec)
 		return nil
 	})
+	return cancel, err
+}
+
+// AskCancel marks a running run for cancelling, for the console running it
+// to see at its next beat; it says whether the run was running.
+func (st *Store) AskCancel(ctx context.Context, id int) (bool, error) {
+	found := false
+	err := change(ctx, st, RunsKey, maxRunsBytes, func(rec *runsRecord) error {
+		for i := range rec.Runs {
+			if rec.Runs[i].ID == id && rec.Runs[i].live(st.now()) {
+				rec.Runs[i].CancelAsked, found = true, true
+				return nil
+			}
+		}
+		return errNoChange
+	})
+	return found, err
 }
 
 // pruneRuns keeps the newest MaxRuns, then drops tails, oldest first,
@@ -306,6 +396,22 @@ func pruneRuns(rec *runsRecord) {
 	}
 	for len(rec.Runs) > 1 && size() > maxRunsBytes-(16<<10) {
 		rec.Runs = rec.Runs[1:]
+	}
+	// The newest alone too big: its tails go, then its nodes' values, which
+	// its output keeps.
+	if n := len(rec.Runs); n == 1 && size() > maxRunsBytes-(16<<10) {
+		r := &rec.Runs[0]
+		for j := range r.Nodes {
+			r.Nodes[j].Tail = ""
+		}
+		if size() > maxRunsBytes-(16<<10) {
+			for j := range r.Nodes {
+				r.Nodes[j].Values = nil
+			}
+			if !strings.Contains(r.Note, "values not kept") {
+				r.Note = strings.TrimPrefix(r.Note+"; each node's values not kept: the run is too big for its record", "; ")
+			}
+		}
 	}
 }
 

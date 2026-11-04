@@ -254,7 +254,7 @@ func TestPrune(t *testing.T) {
 		s.Versions = append(s.Versions, Version{N: i, Text: strings.Repeat("y", 30<<10), State: state, Created: base.Add(time.Duration(i) * time.Hour)})
 	}
 	rec.Scripts["big"] = s
-	prune(rec, 200<<10)
+	prune(rec, 200<<10, nil)
 	got := rec.Scripts["big"].Versions
 	if got[len(got)-1].N != 30 || len(got) > 6 || got[0].N < 25 {
 		t.Errorf("kept %d versions from v%d", len(got), got[0].N)
@@ -331,6 +331,13 @@ type fakeExec struct {
 	reboots  int
 	down     map[string]bool
 	block    chan struct{}
+	// boots counts each node's boots; stuck nodes never reboot, and
+	// rebootExit is what the reboot command exits with.
+	boots      map[string]int
+	stuck      map[string]bool
+	rebootExit int
+	// running and peak count the scripts running at once.
+	running, peak int
 }
 
 var errDown = errors.New("unreachable: connection refused")
@@ -346,7 +353,14 @@ func (f *fakeExec) Exec(ctx context.Context, cluster, node, keyID, command strin
 	block := f.block
 	if strings.Contains(command, "reboot") {
 		f.reboots++
+		if f.boots == nil {
+			f.boots = map[string]int{}
+		}
+		if !f.stuck[node] {
+			f.boots[node]++
+		}
 	}
+	boot := f.boots[node]
 	f.mu.Unlock()
 	if !strings.Contains(keyID, "via 221B automation run") {
 		return -1, fmt.Errorf("key ID %q", keyID)
@@ -354,9 +368,25 @@ func (f *fakeExec) Exec(ctx context.Context, cluster, node, keyID, command strin
 	if down {
 		return -1, errDown
 	}
-	if command == "true" || strings.Contains(command, "reboot") {
+	if command == BootIDCommand {
+		fmt.Fprintf(out, "boot-%d\n", boot)
 		return 0, nil
 	}
+	if strings.Contains(command, "reboot") {
+		return f.rebootExit, nil
+	}
+	if command == "true" {
+		return 0, nil
+	}
+	f.mu.Lock()
+	f.running++
+	f.peak = max(f.peak, f.running)
+	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.running--
+		f.mu.Unlock()
+	}()
 	if block != nil {
 		select {
 		case <-block:
@@ -372,6 +402,9 @@ func (f *fakeExec) Exec(ctx context.Context, cluster, node, keyID, command strin
 		return 3, nil
 	case strings.HasPrefix(node, "boot"):
 		fmt.Fprintln(out, `{"changed": true, "msg": "updated", "reboot": true}`)
+	case strings.HasPrefix(node, "cp"):
+		time.Sleep(20 * time.Millisecond)
+		fmt.Fprintln(out, `{"changed": true, "msg": "updated"}`)
 	case strings.HasPrefix(node, "chg"):
 		fmt.Fprintln(out, `{"changed": true, "msg": "updated"}`)
 	default:

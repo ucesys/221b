@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -55,6 +56,9 @@ type VariableChange struct {
 	DecidedAt *time.Time `json:"decidedAt,omitempty"`
 	// Comment is the reason given with a rejection.
 	Comment string `json:"comment,omitempty"`
+	// Overtaken says why a waiting change can no longer be approved: a
+	// newer one on its fleet. It is worked out when read, never kept.
+	Overtaken string `json:"overtaken,omitempty"`
 }
 
 // NeedsApproval says whether any script needs the change approved.
@@ -125,7 +129,7 @@ func Impact(scripts []Script, fp FleetVariables, changed []string) []ImpactItem 
 					continue
 				}
 				uses = append(uses, name)
-				cond := regexp.MustCompile(`(?m)^\s*(if|elif|while|case|\[|test)\b.*\$\{?` + regexp.QuoteMeta(name) + `\b`)
+				cond := ConditionRE(name)
 				switch {
 				case sensitive[name]:
 					decision, why = ImpactApproval, name+" is marked sensitive"
@@ -139,6 +143,14 @@ func Impact(scripts []Script, fp FleetVariables, changed []string) []ImpactItem 
 		}
 	}
 	return out
+}
+
+// ConditionRE matches a line where a condition reads the parameter: if,
+// elif, while, until, case, test, [ or [[, anywhere on the line, so a
+// test after && or || counts too. When unsure it matches: a value that
+// changes what a script does needs approval.
+func ConditionRE(name string) *regexp.Regexp {
+	return regexp.MustCompile(`(?m)(^|[;&|(!{]|\b(then|do|else))\s*((if|elif|while|until|case|test)\b|\[\[?(\s|$)).*\$\{?` + regexp.QuoteMeta(name) + `\b`)
 }
 
 // RaiseImpact applies Sherlock's opinion: it can only make an item
@@ -168,7 +180,9 @@ func (st *Store) Changes(ctx context.Context, cluster string) ([]VariableChange,
 	out := []VariableChange{}
 	for i := len(rec.Changes) - 1; i >= 0; i-- {
 		if rec.Changes[i].Cluster == cluster {
-			out = append(out, rec.Changes[i])
+			c := rec.Changes[i]
+			c.Overtaken = Overtaken(rec.Changes, c)
+			out = append(out, c)
 		}
 	}
 	return out, nil
@@ -180,7 +194,11 @@ func (st *Store) AllChanges(ctx context.Context) ([]VariableChange, error) {
 	if _, err := st.load(ctx, ChangesKey, &rec); err != nil {
 		return nil, err
 	}
-	return append([]VariableChange{}, rec.Changes...), nil
+	out := append([]VariableChange{}, rec.Changes...)
+	for i := range out {
+		out[i].Overtaken = Overtaken(rec.Changes, out[i])
+	}
+	return out, nil
 }
 
 // WaitingChanges lists what waits for a decision, on every cluster.
@@ -192,6 +210,7 @@ func (st *Store) WaitingChanges(ctx context.Context) ([]VariableChange, error) {
 	out := []VariableChange{}
 	for _, c := range rec.Changes {
 		if c.State == ChangeWaiting {
+			c.Overtaken = Overtaken(rec.Changes, c)
 			out = append(out, c)
 		}
 	}
@@ -222,8 +241,11 @@ func (st *Store) NewChange(ctx context.Context, c VariableChange) (VariableChang
 }
 
 // DecideChange approves or rejects a waiting change; whoever asked for it
-// cannot approve it, and a rejection says why. The caller applies an
-// approved change's values.
+// cannot approve it, and a rejection says why. Approving applies it, and
+// only the newest change on a fleet can be approved: each carries all the
+// fleet's values as they were when it was asked for, so an older one would
+// undo a newer one. Its values go in only over the ones it was asked
+// against.
 func (st *Store) DecideChange(ctx context.Context, cluster string, id int, approve bool, comment string, who Who) (VariableChange, error) {
 	comment = strings.TrimSpace(comment)
 	if !approve && comment == "" {
@@ -231,6 +253,42 @@ func (st *Store) DecideChange(ctx context.Context, cluster string, id int, appro
 	}
 	if len(comment) > MaxComment {
 		return VariableChange{}, fmt.Errorf("%w: a comment is at most %d characters", ErrInvalid, MaxComment)
+	}
+	if approve {
+		var rec changesRecord
+		if _, err := st.load(ctx, ChangesKey, &rec); err != nil {
+			return VariableChange{}, err
+		}
+		c, err := approvable(rec, cluster, id, who)
+		if err != nil {
+			return VariableChange{}, err
+		}
+		// The values first: should marking it approved then fail, approving
+		// it again finds them in and only marks it.
+		err = change(ctx, st, VariablesKey, maxVariablesBytes, func(vr *variablesRecord) error {
+			cur := vr.Clusters[cluster][c.Fleet]
+			switch {
+			case cur.Same(c.After):
+				return errNoChange
+			case !cur.Same(c.Before):
+				return busyError(fmt.Sprintf("Change %d can't be approved: fleet %s's parameters have changed since it was asked for (%s differ). Reject it, and ask again from the current values.", c.ID, c.fleetName(), strings.Join(differences(c.Before, cur), ", ")))
+			}
+			if vr.Clusters == nil {
+				vr.Clusters = map[string]map[string]FleetVariables{}
+			}
+			if vr.Clusters[cluster] == nil {
+				vr.Clusters[cluster] = map[string]FleetVariables{}
+			}
+			if c.After.Empty() {
+				delete(vr.Clusters[cluster], c.Fleet)
+			} else {
+				vr.Clusters[cluster][c.Fleet] = c.After
+			}
+			return nil
+		})
+		if err != nil {
+			return VariableChange{}, err
+		}
 	}
 	var out VariableChange
 	err := change(ctx, st, ChangesKey, 256<<10, func(rec *changesRecord) error {
@@ -256,6 +314,92 @@ func (st *Store) DecideChange(ctx context.Context, cluster string, id int, appro
 		return ErrNotFound
 	})
 	return out, err
+}
+
+// approvable is the waiting change id, when who may approve it and no
+// newer change on its fleet overtook it.
+func approvable(rec changesRecord, cluster string, id int, who Who) (VariableChange, error) {
+	var c *VariableChange
+	for i := range rec.Changes {
+		if rec.Changes[i].ID == id && rec.Changes[i].Cluster == cluster {
+			c = &rec.Changes[i]
+		}
+	}
+	switch {
+	case c == nil:
+		return VariableChange{}, ErrNotFound
+	case c.State != ChangeWaiting:
+		return VariableChange{}, fmt.Errorf("%w: change %d is %s", ErrInvalid, id, c.State)
+	case who.Same(c.By):
+		return VariableChange{}, fmt.Errorf("%w: you asked for this change", ErrOwnWork)
+	}
+	if n := NewerChange(rec.Changes, *c); n != nil {
+		return VariableChange{}, busyError(n.overtakes(*c))
+	}
+	return *c, nil
+}
+
+// NewerChange is the newest change on c's fleet asked for after c, a
+// rejected one aside, which changed nothing; nil when there is none.
+func NewerChange(changes []VariableChange, c VariableChange) *VariableChange {
+	var newer *VariableChange
+	for i := range changes {
+		x := &changes[i]
+		if x.Cluster == c.Cluster && x.Fleet == c.Fleet && x.ID > c.ID && x.State != ChangeRejected && (newer == nil || x.ID > newer.ID) {
+			newer = x
+		}
+	}
+	return newer
+}
+
+// Overtaken says why an older change can no longer be approved, "" when it
+// can; the page shows it on the change.
+func Overtaken(changes []VariableChange, c VariableChange) string {
+	if c.State != ChangeWaiting {
+		return ""
+	}
+	if n := NewerChange(changes, c); n != nil {
+		return n.overtakes(c)
+	}
+	return ""
+}
+
+// overtakes explains that c, older, cannot be approved because of n.
+func (n VariableChange) overtakes(c VariableChange) string {
+	state, undo := "applied", "approving an older one would undo the newer one"
+	switch n.State {
+	case ChangeWaiting:
+		state, undo = "waiting for approval", fmt.Sprintf("approving this one would be undone when change %d is approved", n.ID)
+	case ChangeApproved:
+		state = "approved"
+	}
+	return fmt.Sprintf("Change %d can't be approved: change %d on fleet %s is newer (by %s, %s, %s). Only the newest change on a fleet can be approved. Each change carries all the fleet's values as they were when it was asked for, so %s. Reject change %d, and ask for it again if it is still needed.",
+		c.ID, n.ID, c.fleetName(), n.By.Name, n.At.UTC().Format("2 Jan 15:04 UTC"), state, undo, c.ID)
+}
+
+func (c VariableChange) fleetName() string {
+	if c.FleetName != "" {
+		return c.FleetName
+	}
+	return c.Fleet
+}
+
+// differences names what differs between two fleets' parameters.
+func differences(a, b FleetVariables) []string {
+	out := ChangedVariables(a, b)
+	if a.CeilingOrDefault() != b.CeilingOrDefault() {
+		out = append(out, "the privilege ceiling")
+	}
+	if !slices.Equal(slices.Sorted(slices.Values(a.Sensitive)), slices.Sorted(slices.Values(b.Sensitive))) {
+		out = append(out, "the sensitive marks")
+	}
+	if RebootChanged(a, b) {
+		out = append(out, "the reboot timeout")
+	}
+	if len(out) == 0 {
+		out = append(out, "the values")
+	}
+	return out
 }
 
 // Suspended names the waiting change that holds a version on a fleet, or 0.

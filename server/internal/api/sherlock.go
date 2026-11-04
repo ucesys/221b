@@ -335,10 +335,13 @@ type sherlockConfig struct {
 	Spend    sherlock.Spend   `json:"spend"`
 	// NoUsage names the providers seen to report no token use, whose
 	// spend is an estimate.
-	NoUsage  []string          `json:"noUsage,omitempty"`
-	Models   []sherlock.Model  `json:"models"`
-	Clusters []sherlockCluster `json:"clusters"`
-	Running  int               `json:"running"`
+	NoUsage []string `json:"noUsage,omitempty"`
+	// SpendError says why the spend could not be saved: it counts here
+	// only, and a restart forgets it.
+	SpendError string            `json:"spendError,omitempty"`
+	Models     []sherlock.Model  `json:"models"`
+	Clusters   []sherlockCluster `json:"clusters"`
+	Running    int               `json:"running"`
 }
 
 type sherlockCluster struct {
@@ -362,7 +365,7 @@ func (s *Server) getSherlockConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	sh := s.sherlockSettings()
 	p := s.sherlockProvider(sh)
-	cfg := sherlockConfig{Settings: sh, Provider: p, ProviderLocked: s.opts.SherlockProviderLocked, NeedsKey: p.NeedsKey(), Spend: s.opts.Sherlock.Ledger().Now(r.Context()), NoUsage: s.opts.Sherlock.NoUsage(), Models: sherlock.Models, Running: s.opts.Sherlock.Running()}
+	cfg := sherlockConfig{Settings: sh, Provider: p, ProviderLocked: s.opts.SherlockProviderLocked, NeedsKey: p.NeedsKey(), Spend: s.opts.Sherlock.Ledger().Now(r.Context()), SpendError: s.opts.Sherlock.Ledger().SaveError(), NoUsage: s.opts.Sherlock.NoUsage(), Models: sherlock.Models, Running: s.opts.Sherlock.Running()}
 	if s.opts.SherlockKeys != nil {
 		cfg.Key = s.opts.SherlockKeys.Info()
 	}

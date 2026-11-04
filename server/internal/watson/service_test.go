@@ -303,9 +303,12 @@ func TestAnApprovalLapsesAfterItsTime(t *testing.T) {
 	if !strings.Contains(lapsed.Reason, "10 minutes") {
 		t.Fatalf("reason %q", lapsed.Reason)
 	}
+	// The record is written beside the lapse, not before it is seen.
 	found := false
-	for _, e := range buf.events() {
-		found = found || e.Action == ActionLapse
+	for deadline := time.Now().Add(2 * time.Second); !found && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		for _, e := range buf.events() {
+			found = found || e.Action == ActionLapse
+		}
 	}
 	if !found {
 		t.Fatal("no lapse record")

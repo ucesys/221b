@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom'
 import { fetchToolbox, HOST_TOOLS, type ToolAction, type ToolboxInfo, type ToolName } from '../../api/toolbox'
 import type { PodDetails } from '../../api/types'
 import { layer } from '../../lib/layer'
-import { useSoleMenu } from '../../lib/menus'
 import { apiPath } from '../../lib/router'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, KeyIcon, SherlockIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
@@ -119,7 +118,6 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
   const [style] = useState(() => place(anchor))
 
   const sherlock = useSherlockApi()
-  useSoleMenu(true, onClose)
   // By value: every table refresh hands the menu a new target object, and
   // each would fetch again and take the keyboard back to the first item.
   const kind = target.kind
@@ -156,11 +154,13 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
       const now = anchor?.getBoundingClientRect()
       if (!at || !now || Math.abs(now.top - at.top) > 2 || Math.abs(now.left - at.left) > 2) onClose()
     }
-    document.addEventListener('mousedown', away)
+    // On the way down, before another menu's button stops the event: one
+    // menu at a time.
+    document.addEventListener('mousedown', away, true)
     window.addEventListener('scroll', scroll, true)
     window.addEventListener('resize', onClose)
     return () => {
-      document.removeEventListener('mousedown', away)
+      document.removeEventListener('mousedown', away, true)
       window.removeEventListener('scroll', scroll, true)
       window.removeEventListener('resize', onClose)
     }

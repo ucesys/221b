@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/watson"
@@ -38,6 +39,8 @@ type approvalRow struct {
 	// Own says this person asked for what waits: a Watson card of theirs
 	// they may approve themselves, which is no news to them.
 	Own bool `json:"own,omitempty"`
+	// Overtaken says why a waiting change can only be rejected now.
+	Overtaken string `json:"overtaken,omitempty"`
 }
 
 // The kinds and states of an approval row.
@@ -157,7 +160,7 @@ func (s *Server) getApprovals(w http.ResponseWriter, r *http.Request) {
 			if c.Reason != "" {
 				what += " · " + c.Reason
 			}
-			row := approvalRow{Kind: approvalChange, What: what, Cluster: c.Cluster, ClusterName: names[c.Cluster], RequestedBy: c.By.Name, RequestedAt: timeRef(c.At), Fleet: c.Fleet, ID: strconv.Itoa(c.ID)}
+			row := approvalRow{Kind: approvalChange, What: what, Cluster: c.Cluster, ClusterName: names[c.Cluster], RequestedBy: c.By.Name, RequestedAt: timeRef(c.At), Fleet: c.Fleet, ID: strconv.Itoa(c.ID), Overtaken: c.Overtaken}
 			if row.ClusterName == "" {
 				row.ClusterName = c.Cluster
 			}
@@ -204,6 +207,13 @@ func (s *Server) getApprovals(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	sess, _ := auth.SessionFrom(r.Context())
+	reqPending, reqDecided, err := s.twoPersonRows(r.Context(), sess)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	pending, decided = append(pending, reqPending...), append(decided, reqDecided...)
 	at := func(t *time.Time) time.Time {
 		if t == nil {
 			return time.Time{}

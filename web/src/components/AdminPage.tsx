@@ -29,7 +29,7 @@ const PAGES: { id: Page; label: string; tip: string; superOnly: boolean }[] = [
   { id: 'backup', label: 'Backup', tip: 'SuperAdmin only: a backup of the console’s own data, and a restore', superOnly: true },
 ]
 
-/** Whether this person is a SuperAdmin; with sign-in off everyone is (RB-31). */
+/** Whether this person is a SuperAdmin; with sign-in off nobody is. */
 export function isSuperAdmin(me: Me | null): boolean {
   return !!me && me.admin
 }
@@ -37,11 +37,12 @@ export function isSuperAdmin(me: Me | null): boolean {
 /**
  * The pages this person is offered (RB-41): Roles and Permissions for
  * everyone, Users and Settings for a SuperAdmin. With sign-in off there are
- * no users and no roles to list, so it offers Permissions and Settings.
+ * no users and no roles to list, and nobody is a SuperAdmin, so it offers
+ * Permissions alone.
  */
 export function pagesFor(me: Me | null): Page[] {
   if (!me) return []
-  if (me.mode === 'none') return ['permissions', 'toolbox', 'approvals', 'logs', 'settings', 'backup']
+  if (me.mode === 'none') return ['permissions']
   return ADMIN_PAGES.filter((p) => isSuperAdmin(me) || !PAGES.find((x) => x.id === p)!.superOnly)
 }
 

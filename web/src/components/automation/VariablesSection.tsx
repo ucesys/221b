@@ -25,6 +25,7 @@ import { VariableChangesPanel, ImpactList } from "./VariableChanges";
 import { FleetEdit } from "./FleetEdit";
 import { VariableDrawer } from "./VariableDrawer";
 import { Seg } from "./Seg";
+import { RebootTimeout } from "./RebootTimeout";
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -509,6 +510,20 @@ export function VariablesSection({
             )}
             {ceilingErr && <p className="tb-err">{ceilingErr}</p>}
           </section>
+        )}
+        {fleets && fleet && (
+          <RebootTimeout
+            cluster={cluster}
+            fleets={fleets}
+            fleetId={fleetId}
+            node={node}
+            onSaved={async (change, msg) => {
+              setLastChange(change);
+              setChangesAt((n) => n + 1);
+              await reload();
+              onToast(msg);
+            }}
+          />
         )}
         {clashes.length > 0 && (
           <div

@@ -46,6 +46,8 @@ export interface ClusterSummary {
   id: string
   name: string
   env: Env
+  /** Set when a change waits for another SuperAdmin: taking the cluster off production. */
+  held?: string
   description?: string
   server: string
   ca: CAMode

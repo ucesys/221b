@@ -94,10 +94,12 @@ type KVHistory struct {
 	Backend kv.Backend
 	Key     string
 	Keep    int
-	Logger  *slog.Logger
-	mu      sync.Mutex
-	cache   []Record
-	loaded  bool
+	// MaxBytes bounds the records' JSON as well; the oldest go first.
+	MaxBytes int
+	Logger   *slog.Logger
+	mu       sync.Mutex
+	cache    []Record
+	loaded   bool
 }
 
 func (h *KVHistory) load(ctx context.Context) ([]Record, string, error) {
@@ -130,6 +132,10 @@ func (h *KVHistory) change(ctx context.Context, fn func([]Record) []Record) erro
 			list = list[:h.Keep]
 		}
 		b, _ := json.Marshal(list)
+		for h.MaxBytes > 0 && len(b) > h.MaxBytes && len(list) > 1 {
+			list = list[:len(list)-max(1, len(list)/10)]
+			b, _ = json.Marshal(list)
+		}
 		if _, err = h.Backend.SaveKey(ctx, h.Key, b, version); errors.Is(err, kv.ErrConflict) {
 			continue
 		}

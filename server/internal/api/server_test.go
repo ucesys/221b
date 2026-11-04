@@ -101,6 +101,16 @@ func (s *source) CanI(_ context.Context, p kube.Person, verb, _, resource, names
 	return !s.denied(resource, namespace) && !s.denied(verb+" "+resource, namespace), nil
 }
 
+// CanIName is CanI for one object: a deny entry "verb resource/name"
+// refuses that name alone.
+func (s *source) CanIName(ctx context.Context, p kube.Person, verb, group, resource, namespace, name string) (bool, error) {
+	if !p.Nobody() && name != "" && s.denied(verb+" "+resource+"/"+name, namespace) {
+		s.asked.Add(1)
+		return false, nil
+	}
+	return s.CanI(ctx, p, verb, group, resource, namespace)
+}
+
 // putSecret keeps a Secret with its values and in the cache, as a summary.
 func (s *source) putSecret(sec *corev1.Secret) {
 	if s.full == nil {

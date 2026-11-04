@@ -94,7 +94,7 @@ func automationStatus(err error) int {
 	switch {
 	case errors.Is(err, automation.ErrNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, automation.ErrExists), errors.Is(err, automation.ErrInUse):
+	case errors.Is(err, automation.ErrExists), errors.Is(err, automation.ErrInUse), errors.Is(err, automation.ErrBusy):
 		return http.StatusConflict
 	case errors.Is(err, automation.ErrInvalid):
 		return http.StatusBadRequest
@@ -265,7 +265,7 @@ func (s *Server) saveAutomationScript(w http.ResponseWriter, r *http.Request, na
 	}
 	v := sc.Latest()
 	s.recordAutomation(r, audit.ActionAutomationScript, "", name, audit.OutcomeOK, fmt.Sprintf("v%d %s, sha256 %.12s", v.N, v.State, v.Hash))
-	answerJSON(w, r, sc)
+	answerJSON(w, r, s.scriptAnswer(r, sc))
 }
 
 func (s *Server) postAutomationScript(w http.ResponseWriter, r *http.Request) {
@@ -290,6 +290,27 @@ func (s *Server) putAutomationScript(w http.ResponseWriter, r *http.Request) {
 	s.saveAutomationScript(w, r, r.PathValue("name"), in, false)
 }
 
+// scriptAnswer is a script with what the person asking may do with each
+// version, so the page shows the console's rules rather than its own copy.
+type scriptAnswer struct {
+	automation.Script
+	Versions []versionAnswer `json:"versions"`
+}
+
+type versionAnswer struct {
+	automation.Version
+	May automation.VersionMay `json:"may"`
+}
+
+func (s *Server) scriptAnswer(r *http.Request, sc automation.Script) scriptAnswer {
+	who := s.automationWho(r)
+	out := scriptAnswer{Script: sc, Versions: make([]versionAnswer, 0, len(sc.Versions))}
+	for _, v := range sc.Versions {
+		out.Versions = append(out.Versions, versionAnswer{Version: v, May: automation.May(sc, v, who)})
+	}
+	return out
+}
+
 func (s *Server) getAutomationScript(w http.ResponseWriter, r *http.Request) {
 	if !s.automationReady(w, r) {
 		return
@@ -303,7 +324,7 @@ func (s *Server) getAutomationScript(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "no script "+strconv.Quote(r.PathValue("name")))
 		return
 	}
-	answerJSON(w, r, sc)
+	answerJSON(w, r, s.scriptAnswer(r, sc))
 }
 
 func (s *Server) deleteAutomationScript(w http.ResponseWriter, r *http.Request) {
@@ -337,7 +358,7 @@ func (s *Server) versionAction(w http.ResponseWriter, r *http.Request, do func(c
 	}
 	v, _ := sc.Version(n)
 	s.recordAutomation(r, audit.ActionAutomationApprove, "", name, audit.OutcomeOK, fmt.Sprintf("v%d %s (%d approvals), sha256 %.12s", n, verb, len(v.Approvals), v.Hash))
-	answerJSON(w, r, sc)
+	answerJSON(w, r, s.scriptAnswer(r, sc))
 }
 
 func (s *Server) postAutomationSubmit(w http.ResponseWriter, r *http.Request) {
@@ -549,6 +570,9 @@ func (s *Server) putAutomationVariables(w http.ResponseWriter, r *http.Request) 
 	before := all[id]
 	changed := automation.ChangedVariables(before, next)
 	impact, note := s.weighChange(r, list.Cluster, before, next, changed)
+	if automation.RebootChanged(before, next) {
+		changed = append(changed, "reboot timeout")
+	}
 	if !before.Allows(automation.PrivilegeElevated) && next.Allows(automation.PrivilegeElevated) {
 		changed = append(changed, "privilege ceiling")
 		impact = append(impact, automation.ImpactItem{Script: "every script of this fleet", Decision: automation.ImpactApproval, Why: "the ceiling rises to full", By: "rule"})
@@ -616,6 +640,9 @@ type runRequest struct {
 	// Config names the configuration; Hooks run around each node.
 	Config string              `json:"config,omitempty"`
 	Hooks  automation.HookRefs `json:"hooks"`
+	// Request is the page's name for this start: sent twice, it starts
+	// one run.
+	Request string `json:"request,omitempty"`
 }
 
 // pickNodes is the fleet's nodes a run names, in the fleet's order, and the
@@ -723,6 +750,15 @@ func (s *Server) startAutomationRun(w http.ResponseWriter, r *http.Request, in r
 		refuse(http.StatusNotFound, "no fleet "+strconv.Quote(in.Fleet)+" here")
 		return
 	}
+	if !in.DryRun && list.Production && len(in.Params) > 0 {
+		names := make([]string, 0, len(in.Params))
+		for k := range in.Params {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		refuse(http.StatusConflict, fmt.Sprintf("On production a run takes its values from the fleets: values given for the run (%s) would skip the approval a parameter change needs here. Change them on the fleet instead.", strings.Join(names, ", ")))
+		return
+	}
 	if !in.DryRun && !kube8s && !fleet.Params.Allows(v.Header.Privilege) {
 		refuse(http.StatusForbidden, fmt.Sprintf("%s declares privilege %s; the ceiling of fleet %s is %s", sc.Name, automation.PrivilegeName(v.Header.Privilege), fleet.Name, automation.PrivilegeName(fleet.Params.CeilingOrDefault())))
 		return
@@ -756,8 +792,8 @@ func (s *Server) startAutomationRun(w http.ResponseWriter, r *http.Request, in r
 			identity = v.Header.RunsAs
 		}
 		if identity != "" && !who.Person.Nobody() {
-			ns, _, _ := strings.Cut(identity, "/")
-			if may, err := cl.CanI(ctx, who.Person, "impersonate", "", "serviceaccounts", ns); err != nil || !may {
+			ns, name, _ := strings.Cut(identity, "/")
+			if may, err := cl.CanIName(ctx, who.Person, "impersonate", "", "serviceaccounts", ns, name); err != nil || !may {
 				refuse(http.StatusForbidden, "Kubernetes does not let you impersonate "+identity+".")
 				return
 			}
@@ -772,8 +808,8 @@ func (s *Server) startAutomationRun(w http.ResponseWriter, r *http.Request, in r
 				if h.Identity == "" || who.Person.Nobody() {
 					continue
 				}
-				ns, _, _ := strings.Cut(h.Identity, "/")
-				if may, err := cl.CanI(ctx, who.Person, "impersonate", "", "serviceaccounts", ns); err != nil || !may {
+				ns, name, _ := strings.Cut(h.Identity, "/")
+				if may, err := cl.CanIName(ctx, who.Person, "impersonate", "", "serviceaccounts", ns, name); err != nil || !may {
 					refuse(http.StatusForbidden, "Kubernetes does not let you impersonate "+h.Identity+", which "+h.Label+" runs as.")
 					return
 				}
@@ -807,8 +843,21 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 	in, v, list, fleet, refuse := l.in, l.v, l.list, l.fleet, l.refuse
 	ctx := r.Context()
 	picked, unknown := pickNodes(fleet.Nodes, in.Nodes)
-	var targets, unpaired, missing, clash []string
+	var targets, unpaired, missing, clash, capped, held []string
 	values := map[string]map[string]string{}
+	reboot := map[string]int{}
+	kube8s := v.Header.Target == automation.TargetKubernetes
+	// Each node answers to all its fleets, not only the one picked: the
+	// strictest ceiling holds, and a change waiting on any of them holds
+	// the version (on production).
+	var changes []automation.VariableChange
+	if !in.DryRun && !kube8s && list.Production {
+		var err error
+		if changes, err = s.opts.AutomationStore.Changes(ctx, list.Cluster); err != nil {
+			jsonError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
 	fleetName, paired := fleet.Name, 0
 	for _, n := range fleet.Nodes {
 		if n.Paired {
@@ -820,7 +869,20 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 			unpaired = append(unpaired, n.Name)
 			continue
 		}
-		res := automation.ResolveLayers(v.Header, list.layersOf(n.Name), n.Name, in.Params)
+		layers := list.layersOf(n.Name)
+		if !in.DryRun && !kube8s {
+			if ceiling, from := automation.NodeCeiling(layers); !(automation.FleetVariables{Ceiling: ceiling}).Allows(v.Header.Privilege) {
+				capped = append(capped, fmt.Sprintf("%s (ceiling %s, fleet %s)", n.Name, automation.PrivilegeName(ceiling), from))
+			}
+			for _, ly := range layers {
+				if id := automation.Suspended(changes, ly.ID, l.sc.Name, v.N); id != 0 {
+					held = append(held, fmt.Sprintf("%s (fleet %s: parameter change %d waits for approval)", n.Name, ly.Name, id))
+					break
+				}
+			}
+		}
+		reboot[n.Name] = automation.RebootMinutes(layers, n.Name)
+		res := automation.ResolveLayers(v.Header, layers, n.Name, in.Params)
 		for _, m := range res.Missing {
 			missing = append(missing, n.Name+": "+m)
 		}
@@ -836,6 +898,12 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 		return
 	case len(unpaired) > 0:
 		refuse(http.StatusConflict, "not paired for SSH, so nothing can run on them: "+strings.Join(unpaired, ", ")+"; pair them, or leave them out")
+		return
+	case len(capped) > 0:
+		refuse(http.StatusForbidden, fmt.Sprintf("%s declares privilege %s, over the ceiling of a fleet these nodes are in: %s. Raise those fleets' ceilings, or leave the nodes out", l.sc.Name, automation.PrivilegeName(v.Header.Privilege), strings.Join(capped, "; ")))
+		return
+	case len(held) > 0:
+		refuse(http.StatusConflict, fmt.Sprintf("%s v%d is suspended on these nodes: %s. Decide the change, or leave the nodes out", l.sc.Name, v.N, strings.Join(held, "; ")))
 		return
 	case len(clash) > 0:
 		refuse(http.StatusConflict, "defined on more than one fleet: "+strings.Join(clash, "; ")+". Keep it on one fleet, or set it on the node or the run")
@@ -867,7 +935,13 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 	run, err := s.opts.Automation.Start(ctx, automation.Spec{Script: l.sc.Name, Version: v, DryRun: in.DryRun, Cluster: list.Cluster, ClusterName: clusterName,
 		Fleet: fleet.ID, FleetName: fleetName, Nodes: targets, Values: values, Overrides: in.Params, Rollout: in.Rollout, Who: s.automationWho(r),
 		Secrets: secrets, Config: l.config.ID, Identity: l.identity, Person: automation.Person{User: l.who.Person.User, Groups: l.who.Person.Groups}, Basis: basis,
-		Before: l.before, After: l.after, HookRefs: in.Hooks, RetryOf: l.retryOf})
+		Before: l.before, After: l.after, HookRefs: in.Hooks, RetryOf: l.retryOf, RebootMinutes: reboot, Request: in.Request,
+		Recheck: !in.DryRun && list.Production})
+	if errors.Is(err, automation.ErrSameRequest) {
+		// Asked twice, by a retry or a second click: the first start answers.
+		answerJSON(w, r, run)
+		return
+	}
 	if err != nil {
 		refuse(automationStatus(err), err.Error())
 		return
@@ -943,8 +1017,17 @@ func (s *Server) postAutomationCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.opts.Automation.Cancel(id) {
-		jsonError(w, http.StatusConflict, fmt.Sprintf("run %d is not running", id))
-		return
+		// Run by a console that no longer leads: the record carries the
+		// cancel to it, at its next beat.
+		asked, err := s.opts.AutomationStore.AskCancel(r.Context(), id)
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if !asked {
+			jsonError(w, http.StatusConflict, fmt.Sprintf("run %d is not running", id))
+			return
+		}
 	}
 	s.recordAutomation(r, audit.ActionAutomationRun, "", strconv.Itoa(id), audit.OutcomeStopped, fmt.Sprintf("run %d cancelled", id))
 	answerJSON(w, r, map[string]bool{"cancelled": true})

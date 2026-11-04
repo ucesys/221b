@@ -143,7 +143,7 @@ automation_configmap() {
 }
 auth_secret() { sed -n '/^kind: Secret$/,/^---/p' "$1" | grep -q '^  name: k8s-console-221b-auth$'; }
 kinds() {
-  [ "$(grep -E '^kind: ' "$out" | sort | uniq -c | awk '{ printf "%s=%s ", $3, $1 }')" = "ClusterRole=6 ClusterRoleBinding=4 ConfigMap=4 Deployment=1 Lease=1 Namespace=1 NetworkPolicy=2 Role=1 RoleBinding=1 Secret=2 Service=1 ServiceAccount=1 " ]
+  [ "$(grep -E '^kind: ' "$out" | sort | uniq -c | awk '{ printf "%s=%s ", $3, $1 }')" = "ClusterRole=6 ClusterRoleBinding=4 ConfigMap=7 Deployment=1 Lease=1 Namespace=1 NetworkPolicy=2 Role=1 RoleBinding=1 Secret=2 Service=1 ServiceAccount=1 " ]
 }
 # Sign-in: local accounts by default, with the (empty) account list in a
 # Secret mounted as a file; OIDC with its client secret from a Secret;
@@ -154,7 +154,8 @@ local_accounts() {
     grep -q 'email: ops@corp.example' "$WORK/chart-local.yaml" && grep -q 'passwordHash: pbkdf2-sha256' "$WORK/chart-local.yaml" &&
     grep -A1 'name: ADMINS' "$WORK/chart-local.yaml" | grep -q '"ops@corp.example"' &&
     grep -q 'secretName: "my-accounts"' "$WORK/chart-local-existing.yaml" && ! auth_secret "$WORK/chart-local-existing.yaml" &&
-    ! grep -q 'LOCAL_USERS_FILE' "$WORK/chart-noauth.yaml" && grep -A1 'name: AUTH_MODE' "$WORK/chart-noauth.yaml" | grep -q '"none"' && ! auth_secret "$WORK/chart-noauth.yaml"
+    ! grep -q 'LOCAL_USERS_FILE' "$WORK/chart-noauth.yaml" && grep -A1 'name: AUTH_MODE' "$WORK/chart-noauth.yaml" | grep -q '"none"' && ! auth_secret "$WORK/chart-noauth.yaml" &&
+    grep -A1 'name: ANONYMOUS_ROLE' "$WORK/chart-noauth.yaml" | grep -q '"viewer"' && ! grep -q 'ANONYMOUS_ROLE' "$WORK/chart-local.yaml"
 }
 oidc_signin() {
   local o=$WORK/chart-oidc.yaml
@@ -259,7 +260,7 @@ sherlock_key() {
     ! grep -q 'name: SHERLOCK_SECRET' "$WORK/chart-sherlock.yaml"
 }
 settings_only() {
-  settings_role | grep -q 'resources: \["configmaps"\]' && settings_role | grep -q 'resourceNames: \["k8s-console-221b", "k8s-console-221b-automation"\]' &&
+  settings_role | grep -q 'resources: \["configmaps"\]' && settings_role | grep -q 'resourceNames: \["k8s-console-221b", "k8s-console-221b-audit", "k8s-console-221b-sessions", "k8s-console-221b-automation", "k8s-console-221b-automation-runs"\]' &&
     [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","list","watch","patch","update"] verbs:["create"] verbs:["get","update"] verbs:["get","list","watch","create","update","delete"] ' ] &&
     [ "$(grep -E 'verbs:' "$out" | grep -c -E 'update|delete|\*')" = 3 ]
 }

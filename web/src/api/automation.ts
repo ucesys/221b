@@ -82,8 +82,13 @@ export interface Version {
   submitted?: { by: Who; at: string };
   created: string;
   approvals?: { by: Who; at: string }[];
-  /** Who took its approvals back, and when. */
+  /** Who took its approvals back, and when; the approvals they took back. */
   revoked?: { by: Who; at: string }[];
+  withdrawn?: { by: Who; at: string }[];
+  /** The rejected version whose text this one has again. */
+  sameAs?: number;
+  /** What the person asking may do with it, as the server decides. */
+  may?: VersionMay;
   /** Who turned it down in review, when and why. */
   rejected?: { by: Who; at: string; comment?: string };
   /** Sherlock's latest reading: advice, never an approval. */
@@ -92,6 +97,17 @@ export interface Version {
     findings?: { level: string; line?: number; msg: string }[];
     at: string;
   };
+}
+
+/** What a person may do with a version: the server's answer, shown as it is. */
+export interface VersionMay {
+  approve: boolean;
+  reject: boolean;
+  /** They wrote or submitted it, so someone else must approve it. */
+  involved: boolean;
+  runProduction: boolean;
+  runElsewhere: boolean;
+  dry: boolean;
 }
 
 export interface Script {
@@ -153,7 +169,16 @@ export interface FleetVariables {
   ceiling?: Privilege | "";
   /** Parameters whose change always needs approval. */
   sensitive?: string[];
+  /** Minutes the fleet's nodes have to come back from a reboot; unset is the default. */
+  rebootMinutes?: number;
+  /** Single nodes' own reboot timeouts, which win over any fleet's. */
+  nodeReboot?: Record<string, number>;
 }
+
+/** How long a rebooted node has to come back when nothing sets it. */
+export const DEFAULT_REBOOT_MINUTES = 10;
+/** The longest a reboot timeout may be. */
+export const MAX_REBOOT_MINUTES = 240;
 
 export interface AutomationNode {
   name: string;
@@ -204,6 +229,10 @@ export interface NodeResult {
   ended?: string;
   tail?: string;
   values?: Record<string, string>;
+  /** Minutes the node had to come back from a reboot; unset is the default. */
+  rebootMinutes?: number;
+  /** The run drained it and nothing uncordoned it since. */
+  cordoned?: boolean;
 }
 
 export interface Run {
@@ -230,6 +259,8 @@ export interface Run {
   basis?: string;
   hooks?: string[];
   retryOf?: number;
+  /** Who had approved the version when the run started. */
+  approvers?: Who[];
   started: string;
   ended?: string;
   beat: string;
@@ -254,6 +285,8 @@ export interface RunRequest {
   rollout: Rollout;
   config?: string;
   hooks?: HookRefs;
+  /** The page's name for this start: sent twice, it starts one run. */
+  request?: string;
 }
 
 /** What runs around each node: drain, uncordon or script:<name>. */
@@ -504,6 +537,8 @@ export interface VariableChange {
   state: "waiting" | "approved" | "rejected" | "applied";
   /** The reason given with a rejection. */
   comment?: string;
+  /** Why it can only be rejected now: a newer change on its fleet. */
+  overtaken?: string;
 }
 
 export const fetchVariableChanges = (cluster: string) =>
@@ -542,7 +577,7 @@ export const draftScript = (
 
 /** One thing that waits, or waited, for an approval; Approved by and on name whoever decided it. */
 export interface ApprovalRow {
-  kind: "script" | "change" | "command";
+  kind: "script" | "change" | "command" | "admin";
   state: "pending" | "approved" | "rejected" | "revoked";
   what: string;
   cluster?: string;
@@ -561,6 +596,8 @@ export interface ApprovalRow {
   mine?: boolean;
   /** This person asked for what waits, and may approve it themselves. */
   own?: boolean;
+  /** Why a waiting change can only be rejected now. */
+  overtaken?: string;
 }
 
 /** What waits for this person, first, then what was decided, newest first. */
@@ -570,6 +607,13 @@ export interface Approvals {
 
 export const fetchApprovals = (background = false) =>
   call<Approvals>("/api/v1/admin/approvals", {}, background);
+
+/** Approves or rejects a console change that waits for a second SuperAdmin; whoever asked may only reject (withdraw) it. */
+export const decideRequest = (id: string, approve: boolean, comment = "") =>
+  call<unknown>(
+    `/api/v1/admin/requests/${encodeURIComponent(id)}/${approve ? "approve" : "reject"}`,
+    post({ comment }),
+  );
 
 // ---------- groups ----------
 
@@ -915,35 +959,24 @@ export function countsText(c: Partial<Record<NodeState, number>>): string {
  * review (not twice; on a two-person cluster the author's approval alone
  * never runs it, which the server enforces at run time).
  */
-export function canApprove(v: Version, me: Who): boolean {
-  if (v.state === "draft" || v.state === "rejected") return false;
-  if (involved(v, me) || (v.approvals ?? []).some((a) => same(a.by, me)))
-    return false;
-  return v.state !== "approved" || !runnable(v);
+/** Whether the person may approve a version, as the server said. */
+export function canApprove(v: Version): boolean {
+  return !!v.may?.approve;
 }
 
-/** Whether a person may reject a version: one in review they did not write or submit. */
-export function canReject(v: Version, me: Who): boolean {
-  return v.state === "review" && !involved(v, me);
+/** Whether the person may reject a version, as the server said. */
+export function canReject(v: Version): boolean {
+  return !!v.may?.reject;
 }
 
-/** Whether a person wrote or submitted a version, so may not approve it. */
-export function involved(v: Version, me: Who): boolean {
-  return [
-    v.author,
-    ...(v.editors ?? []),
-    ...(v.submitted ? [v.submitted.by] : []),
-  ].some((w) => same(w, me));
+/** Whether a version may run here: on production, or elsewhere. */
+export function mayRun(v: Version | undefined, production: boolean): boolean {
+  if (!v?.may) return false;
+  return production ? v.may.runProduction : v.may.runElsewhere;
 }
 
 export function same(a: Who, b: Who): boolean {
   return a.user && b.user ? a.user === b.user : a.name === b.name;
-}
-
-/** Whether a version may run: approved by someone who did not write or submit it. */
-export function runnable(v: Version | undefined): boolean {
-  if (!v || v.state !== "approved") return false;
-  return (v.approvals ?? []).some((a) => !involved(v, a.by));
 }
 
 /** The version a run would use: the newest approved one. */

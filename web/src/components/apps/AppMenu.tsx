@@ -1,7 +1,6 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { layer } from '../../lib/layer'
-import { useSoleMenu } from '../../lib/menus'
 import { WrenchIcon } from '../Icons'
 import type { AppRow } from '../../columns/apps'
 
@@ -99,7 +98,6 @@ function AppMenu({ row, canChange, anchor, onClose, onPick }: { row: AppRow; can
     if (over > 0) setStyle((st) => ({ ...st, left: Math.max(8, (typeof st.left === 'number' ? st.left : r.left) - over) }))
   }, [])
   const items = appItems(row, canChange)
-  useSoleMenu(true, onClose)
   useEffect(() => {
     const away = (e: MouseEvent) => {
       if (menu.current && !menu.current.contains(e.target as Node) && !anchor?.contains(e.target as Node)) onClose()
@@ -113,11 +111,13 @@ function AppMenu({ row, canChange, anchor, onClose, onPick }: { row: AppRow; can
       const now = anchor?.getBoundingClientRect()
       if (!at || !now || Math.abs(now.top - at.top) > 2 || Math.abs(now.left - at.left) > 2) onClose()
     }
-    document.addEventListener('mousedown', away)
+    // On the way down, before another menu's button stops the event: one
+    // menu at a time.
+    document.addEventListener('mousedown', away, true)
     window.addEventListener('scroll', scroll, true)
     window.addEventListener('resize', onClose)
     return () => {
-      document.removeEventListener('mousedown', away)
+      document.removeEventListener('mousedown', away, true)
       window.removeEventListener('scroll', scroll, true)
       window.removeEventListener('resize', onClose)
     }
