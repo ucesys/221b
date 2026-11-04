@@ -278,6 +278,11 @@ for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && brea
 curl -fsS http://127.0.0.1:18080/readyz
 # Sessions are kept in the cluster (P7-02), so the restart signed nobody
 # out: the session from before the upgrade still works.
+# Until the new pod knows which replica leads, it answers 503 (ADR-70).
+for _ in $(seq 30); do
+  [ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/v1/settings)" = 200 ] && break
+  sleep 1
+done
 [ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/v1/settings)" = 200 ]
 api http://127.0.0.1:18080/api/v1/settings | has '"refreshSeconds":11'
 # The connection came back from its Secret, and connects again.
