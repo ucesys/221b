@@ -2,9 +2,11 @@
 
 What changed in each release of 221B, for people who use it and people who install it. Versions follow [semantic versioning](https://semver.org/): while the major version is 0, a minor version (0.7.0) may change behaviour and chart values, and a patch version (0.7.1) only fixes. [docs/upgrading.md](docs/upgrading.md) says how to upgrade and what each upgrade changes.
 
-## 0.11.0 (2026-11-04)
+## 0.11.1 (2026-11-04)
 
 Phase 11: Automation, SSH to nodes, the review fixes after it, and the 0.10.2 work (audit log and backup pages, app commands, Sherlock recall, leader reads), which was never released on its own.
+
+0.11.0 was tagged but never published: its release stopped at the scan of the linux/arm64 image, which looked for linux/amd64 in it. 0.11.1 is the same with that fixed, and the first release of this work.
 
 ### Changed
 
