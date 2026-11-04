@@ -173,15 +173,17 @@ for ns in default kube-system "$NS"; do
       failed "the replicas' Lease is not listed as get and update by name in $ns"
     fi
   fi
-  # Every granted verb list is read-only, except the settings ConfigMap's,
+  # Every granted verb list is read-only, except the console's own
+  # ConfigMaps' (the settings, the audit log, the session records and
+  # Automation's two),
   # the self-reviews every identity may create and, in the console's own
   # namespace, the connection Secrets.
   # The reviews of people's access are created, with sign-in on.
-  own_writes="^(configmaps +\[\] +\[$NAME\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\])"
+  own_writes="^(configmaps +\[\] +\[$NAME(-audit|-sessions|-automation|-automation-runs)?\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\])"
   if [ "$ns" = "$NS" ]; then
     # The Lease: created when none exists (the listing may merge the
     # create with the ClusterRole's reads), then only this one renewed.
-    own_writes="^(configmaps +\[\] +\[$NAME\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\]|leases.coordination.k8s.io +\[\] +\[\] +\[(get list watch )?create\]|leases.coordination.k8s.io +\[\] +\[$NAME-leader\] +\[get update\])"
+    own_writes="^(configmaps +\[\] +\[$NAME(-audit|-sessions|-automation|-automation-runs)?\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\]|leases.coordination.k8s.io +\[\] +\[\] +\[(get list watch )?create\]|leases.coordination.k8s.io +\[\] +\[$NAME-leader\] +\[get update\])"
   fi
   if [ "$ns" = "$NS" ] && [ "$connections" = yes ]; then
     # The Role's writes merge with the ClusterRole's reads in the listing:

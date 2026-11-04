@@ -146,7 +146,10 @@ test('Watson is not shown where Sherlock is off (Phase 6.2)', async ({ page }) =
 
 test('a typed read runs at once and prints what kubectl prints; shell syntax is refused (P6-01, P6-03)', async ({ page }) => {
   await open(page)
-  await expect(pane(page).getByTestId('watson-empty')).toContainText('kubectl get nodes')
+  // A person who has asked nothing yet is shown how to start; earlier specs
+  // in this session may have asked already.
+  await expect(pane(page).getByTestId('watson-input')).toBeVisible()
+  if (await pane(page).getByTestId('watson-empty').count()) await expect(pane(page).getByTestId('watson-empty')).toContainText('kubectl get nodes')
   await pane(page).getByTestId('watson-input').fill('kubectl get nodes')
   await pane(page).getByTestId('watson-input').press('Enter')
   await expect(lastRan(page)).toHaveAttribute('data-status', 'done', { timeout: 30_000 })

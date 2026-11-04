@@ -69,10 +69,16 @@ open_console() {
 # What must come through every upgrade and rollback, as JSON with sorted
 # keys: the refresh rate, the fleets and the acknowledged alerts.
 kept_settings() {
-  api "$URL/api/v1/settings" | python3 -c '
+  # Until a replica knows which one leads, it answers 503 (ADR-70): read
+  # again for a while after a rollout.
+  for _ in $(seq 30); do
+    api "$URL/api/v1/settings" > "$WORK/upgrade-settings.json" 2>/dev/null && break
+    sleep 1
+  done
+  python3 -c '
 import json, sys
 s = json.load(sys.stdin)
-print(json.dumps({"refreshSeconds": s.get("refreshSeconds"), "fleets": s.get("fleets"), "acks": s.get("acks")}, sort_keys=True))'
+print(json.dumps({"refreshSeconds": s.get("refreshSeconds"), "fleets": s.get("fleets"), "acks": s.get("acks")}, sort_keys=True))' < "$WORK/upgrade-settings.json"
 }
 
 # The format version of the JSON document on standard input, or 0.

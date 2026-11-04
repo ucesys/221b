@@ -30,6 +30,7 @@ setup('sign in', async ({ page }, testInfo) => {
   }
   await expect(page.getByTestId('cluster')).toBeVisible({ timeout: 20_000 })
   const me = await page.evaluate(() => fetch('/api/v1/me').then((r) => r.json() as Promise<{ mode: string; admin: boolean }>))
-  expect(me.admin, 'the test account is an administrator').toBe(true)
+  // With sign-in off everyone is a Viewer (the scale run reads only).
+  if (me.mode !== 'none') expect(me.admin, 'the test account is an administrator').toBe(true)
   await page.context().storageState({ path: sessionFile(testInfo.project.name) })
 })

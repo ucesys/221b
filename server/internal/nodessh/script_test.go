@@ -518,10 +518,13 @@ func TestNoSshdOnTheNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := func(s string) string { return strings.ReplaceAll(s, "/usr/sbin/sshd", h.bin+"/sshd") }
-	if out, ok := h.run(script(PairScript(testCA, testConsole, user(t), 22))); ok || !strings.Contains(out, "no sshd") {
+	// No sbin on the path either: the machine running the test may have an
+	// sshd of its own, which this node has not.
+	noSbin := "PATH=" + h.bin + ":/usr/bin:/bin"
+	if out, ok := h.run(script(PairScript(testCA, testConsole, user(t), 22)), noSbin); ok || !strings.Contains(out, "no sshd") {
 		t.Fatalf("the pairing went on:\n%s", out)
 	}
-	if out, ok := h.run(script(UnpairScript(testCA, testConsole))); !ok || !strings.Contains(out, markUnpaired) {
+	if out, ok := h.run(script(UnpairScript(testCA, testConsole)), noSbin); !ok || !strings.Contains(out, markUnpaired) {
 		t.Fatalf("the unpairing failed:\n%s", out)
 	}
 }
