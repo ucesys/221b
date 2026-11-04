@@ -1,7 +1,8 @@
 // Replacing a value (SE-02) and the stale-edit refusal (SE-04).
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { saveProblem, SecretData } from './SecretData'
+import { deleteSecretCommand, saveProblem, SecretData, SecretDelete } from './SecretData'
+import { WatsonContext } from './Watson'
 import { SecretsError, updateSecret } from '../api/secrets'
 
 vi.mock('../api/secrets', async (original) => ({
@@ -76,5 +77,52 @@ describe('SecretData', () => {
   it('words only that refusal', () => {
     expect(saveProblem(new SecretsError('the Secret is immutable: Kubernetes refuses to change it', 409))).toBe('the Secret is immutable: Kubernetes refuses to change it')
     expect(saveProblem(new SecretsError('forbidden', 403))).toBe('forbidden')
+  })
+})
+
+describe('Delete', () => {
+  afterEach(cleanup)
+
+  it('asks first, then hands the deletion of the Secret to Watson', async () => {
+    const send = vi.fn()
+    const onToast = vi.fn()
+    render(
+      <WatsonContext.Provider value={{ available: true, readOnly: false, send }}>
+        <SecretDelete namespace="web" name="db" keys={keys.length} onToast={onToast} />
+      </WatsonContext.Provider>,
+    )
+    fireEvent.click(await screen.findByTestId('secret-delete'))
+    expect(send).not.toHaveBeenCalled()
+    expect(screen.getByRole('alertdialog').textContent).toContain('2 keys go for good')
+    fireEvent.click(screen.getByRole('button', { name: 'Send to Watson' }))
+    expect(send).toHaveBeenCalledWith('kubectl delete secret db -n web', expect.objectContaining({ why: 'Delete Secret web/db.', over: true }))
+    expect(onToast).toHaveBeenCalled()
+  })
+
+  it('is off where Watson changes nothing, and absent where Watson is off', async () => {
+    const { unmount } = render(
+      <WatsonContext.Provider value={{ available: true, readOnly: true, how: 'read-only connection', send: vi.fn() }}>
+        <SecretDelete namespace="web" name="db" keys={keys.length} onToast={vi.fn()} />
+      </WatsonContext.Provider>,
+    )
+    expect((await screen.findByTestId('secret-delete')).hasAttribute('disabled')).toBe(true)
+    unmount()
+    render(<SecretDelete namespace="web" name="db" keys={keys.length} onToast={vi.fn()} />)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(screen.queryByTestId('secret-delete')).toBeNull()
+  })
+
+  it('is not in the keys', async () => {
+    render(
+      <WatsonContext.Provider value={{ available: true, readOnly: false, send: vi.fn() }}>
+        <SecretData namespace="web" name="db" keys={keys} onToast={vi.fn()} />
+      </WatsonContext.Provider>,
+    )
+    await screen.findByTestId('secret-edit')
+    expect(screen.queryByTestId('secret-delete')).toBeNull()
+  })
+
+  it('names the Secret and its namespace in the command', () => {
+    expect(deleteSecretCommand('db', 'creds')).toBe('kubectl delete secret creds -n db')
   })
 })

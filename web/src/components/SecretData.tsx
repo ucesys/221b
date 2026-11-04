@@ -2,8 +2,10 @@ import { useEffect, useId, useState } from 'react'
 import { fetchSecretsConfig, revealSecretValue, SecretsError, updateSecret, type SecretsConfig, type SecretValue } from '../api/secrets'
 import type { KeySize } from '../api/types'
 import { fMem, nWord } from '../lib/format'
+import { ConfirmDialog } from './ConfirmDialog'
 import { CopyName } from './CopyName'
 import { ScrollBox, Table, TR } from './Table'
+import { useWatsonApi } from './Watson'
 
 function fBytes(n: number): string {
   return n < 1024 ? `${n} B` : fMem(n)
@@ -13,6 +15,68 @@ function fBytes(n: number): string {
 export function saveProblem(e: unknown): string {
   if (e instanceof SecretsError && e.status === 409 && !/immutable/i.test(e.message)) return 'This Secret changed after you opened it, so nothing was saved. Press Cancel, then Edit, and make your change on what is there now.'
   return e instanceof Error ? e.message : String(e)
+}
+
+/** The Watson command that deletes a Secret. */
+export const deleteSecretCommand = (ns: string, name: string) => `kubectl delete secret ${name} -n ${ns}`
+
+/**
+ * Delete… in the Secret's own card, for those who may edit it: it asks
+ * first, then hands the deletion to Watson, as Delete claim does: a dry
+ * run, then an approval. Nothing shows where Watson does not run; where it
+ * changes nothing, the button says why it is off.
+ */
+export function SecretDelete({ namespace: ns, name, keys, onToast }: { namespace: string; name: string; keys: number; onToast: (msg: string) => void }) {
+  const [canEdit, setCanEdit] = useState(false)
+  const [asking, setAsking] = useState(false)
+  const watson = useWatsonApi()
+  useEffect(() => {
+    let live = true
+    fetchSecretsConfig(undefined, ns).then(
+      (c) => live && setCanEdit(c.edit),
+      () => live && setCanEdit(false),
+    )
+    return () => {
+      live = false
+    }
+  }, [ns])
+  if (!canEdit || !watson.available) return null
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
+        <button
+          className="rk-btn"
+          data-danger="true"
+          disabled={watson.readOnly}
+          title={watson.readOnly ? `Watson changes nothing on this cluster${watson.how ? `: ${watson.how}` : ''}.` : 'Asks Watson to delete this Secret: a dry run first, then your approval'}
+          onClick={() => setAsking(true)}
+          data-testid="secret-delete"
+        >
+          Delete…
+        </button>
+      </div>
+      {asking && (
+        <ConfirmDialog
+          title={`Delete Secret ${ns}/${name}?`}
+          confirm="Send to Watson"
+          danger
+          onCancel={() => setAsking(false)}
+          onConfirm={() => {
+            setAsking(false)
+            watson.send(deleteSecretCommand(ns, name), { from: `Namespaces: ${ns}/${name}`, why: `Delete Secret ${ns}/${name}.`, over: true })
+            onToast('Watson has the change: it runs once someone approves it.')
+          }}
+        >
+          <p style={{ margin: 0 }}>
+            Its {nWord(keys, 'key', 'keys')} go for good. Pods that read it keep what they read, but cannot start again without it; Watson’s card lists them, with any Ingress that serves TLS from it.
+          </p>
+          <p className="rk-fhint" style={{ margin: 0 }}>
+            Watson shows a server dry run first; nothing is deleted until someone approves it, and on a production cluster with the rule on, a second person approves (P6-07).
+          </p>
+        </ConfirmDialog>
+      )}
+    </>
+  )
 }
 
 /**
@@ -226,7 +290,7 @@ export function SecretData({ namespace: ns, name, keys, resourceVersion, onToast
       )}
       {canEdit && (
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '0 16px 10px' }} data-testid="secret-edit-bar">
-          {!editing ? (
+          {!editing && (
             <button
               className="rk-btn"
               onClick={() => {
@@ -237,7 +301,8 @@ export function SecretData({ namespace: ns, name, keys, resourceVersion, onToast
             >
               Edit
             </button>
-          ) : (
+          )}
+          {editing && (
             <>
               <button className="rk-btn" onClick={() => setAdded((l) => [...l, { key: '', value: '' }])} data-testid="secret-add-key">
                 Add key

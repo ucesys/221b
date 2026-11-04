@@ -260,6 +260,9 @@ func (cs *clients) targetsOf(ctx context.Context, c *Command, fixedType string, 
 			}
 			return out, sets, notRead{couldNotRead(target{kind: kind, ns: tns, name: p.name}.String(), err), err}
 		}
+		if gvr.Group == "" && gvr.Resource == "secrets" {
+			withoutValues(o)
+		}
 		out = append(out, target{gvr: gvr, kind: kind, ns: tns, name: p.name, obj: o})
 	}
 	return out, sets, nil
@@ -522,6 +525,15 @@ func cardFor(ctx context.Context, cs *clients, c *Command, t Target) (targets []
 					return []any{field(o, "status", "phase"), o.GetDeletionTimestamp() != nil}
 				}))
 				impact = append(impact, namespaceDeleteImpact(ctx, cs, t.name)...)
+				continue
+			}
+			if t.kind == "Secret" {
+				// The card stands for the Secret as it was read: a new value
+				// since voids it. Only its version is compared, never a value.
+				guards = append(guards, objectGuard(t, func(o *unstructured.Unstructured) any {
+					return []any{o.GetResourceVersion(), o.GetDeletionTimestamp() != nil}
+				}))
+				impact = append(impact, secretDeleteImpact(ctx, cs, t.obj)...)
 				continue
 			}
 			guards = append(guards, objectGuard(t, func(o *unstructured.Unstructured) any {
@@ -1309,6 +1321,112 @@ func manifestDiff(from, to string) (changed, added, removed []string) {
 // namespaceDeleteImpact says what deleting a namespace takes with it
 // (NS-02): its pods, its claims and their volumes' fate, and the
 // Secrets and ConfigMaps in it.
+// withoutValues blanks a Secret's values as soon as it is read, so a card
+// holds its key names and never a value (X-01).
+func withoutValues(o *unstructured.Unstructured) {
+	for _, f := range []string{"data", "stringData"} {
+		m, ok, _ := unstructured.NestedMap(o.Object, f)
+		if !ok {
+			continue
+		}
+		for k := range m {
+			m[k] = ""
+		}
+		_ = unstructured.SetNestedMap(o.Object, m, f)
+	}
+	unstructured.RemoveNestedField(o.Object, "metadata", "managedFields")
+	if a := o.GetAnnotations(); a != nil {
+		delete(a, "kubectl.kubernetes.io/last-applied-configuration")
+		o.SetAnnotations(a)
+	}
+}
+
+// secretDeleteImpact says what deleting a Secret does: its keys go, the
+// pods that read it keep what they read but cannot start again without
+// it, an Ingress serving TLS from it falls back, Helm forgets a release
+// revision kept in it, and an owner may make it again.
+func secretDeleteImpact(ctx context.Context, cs *clients, o *unstructured.Unstructured) []string {
+	s := toTyped[corev1.Secret](o)
+	id := s.Namespace + "/" + s.Name
+	out := []string{fmt.Sprintf("Deletes Secret %s and its %s. Nothing of it comes back.", id, plural(len(s.Data), "key", "keys"))}
+	switch s.Type {
+	case "helm.sh/release.v1":
+		out = append(out, fmt.Sprintf("It is Helm's record of release %s, revision %s: helm forgets that revision, and deleting the newest one leaves helm without the release.", s.Labels["name"], s.Labels["version"]))
+	case corev1.SecretTypeServiceAccountToken:
+		out = append(out, "It holds a service account's token: whatever signs in with it is refused from then on.")
+	}
+	for _, ref := range s.OwnerReferences {
+		out = append(out, fmt.Sprintf("It belongs to %s %s, which may make it again.", ref.Kind, ref.Name))
+	}
+	if pods, err := cs.cs.CoreV1().Pods(s.Namespace).List(ctx, metav1.ListOptions{}); err != nil {
+		out = append(out, couldNotRead("the pods in "+s.Namespace, err))
+	} else {
+		var users []string
+		for _, p := range pods.Items {
+			if p.Status.Phase != corev1.PodSucceeded && p.Status.Phase != corev1.PodFailed && podReadsSecret(&p.Spec, s.Name) {
+				users = append(users, p.Name)
+			}
+		}
+		if len(users) > 0 {
+			sort.Strings(users)
+			who, rest := "Pod "+listText(users, 5)+" reads", "that pod cannot start"
+			if len(users) > 1 {
+				who, rest = "Pods "+listText(users, 5)+" read", "those pods cannot start"
+			}
+			out = append(out, fmt.Sprintf("%s it: running containers keep what they read, but %s again until the Secret is back.", who, rest))
+		}
+	}
+	if ings, err := cs.cs.NetworkingV1().Ingresses(s.Namespace).List(ctx, metav1.ListOptions{}); err != nil {
+		out = append(out, couldNotRead("the Ingresses in "+s.Namespace, err))
+	} else {
+		for _, ing := range ings.Items {
+			for _, tls := range ing.Spec.TLS {
+				if tls.SecretName == s.Name {
+					out = append(out, fmt.Sprintf("Ingress %s serves TLS with it: its controller falls back to its default certificate, or stops serving those hosts.", ing.Name))
+					break
+				}
+			}
+		}
+	}
+	return out
+}
+
+// podReadsSecret says whether a pod mounts, reads in its environment or
+// pulls images with the Secret.
+func podReadsSecret(p *corev1.PodSpec, name string) bool {
+	for _, ps := range p.ImagePullSecrets {
+		if ps.Name == name {
+			return true
+		}
+	}
+	for _, v := range p.Volumes {
+		if v.Secret != nil && v.Secret.SecretName == name {
+			return true
+		}
+		if v.Projected != nil {
+			for _, src := range v.Projected.Sources {
+				if src.Secret != nil && src.Secret.Name == name {
+					return true
+				}
+			}
+		}
+	}
+	containers := append(append([]corev1.Container{}, p.InitContainers...), p.Containers...)
+	for _, c := range containers {
+		for _, e := range c.EnvFrom {
+			if e.SecretRef != nil && e.SecretRef.Name == name {
+				return true
+			}
+		}
+		for _, e := range c.Env {
+			if e.ValueFrom != nil && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func namespaceDeleteImpact(ctx context.Context, cs *clients, name string) []string {
 	var out []string
 	pods, podsErr := cs.cs.CoreV1().Pods(name).List(ctx, metav1.ListOptions{})

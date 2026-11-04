@@ -113,3 +113,31 @@ test('Delete namespace… hands the deletion to Watson, approved there (NS-02)',
     await page.request.put('/api/v1/sherlock/config', { data: { clusters: {}, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }, headers: SAME })
   }
 })
+
+test('a Secret’s Delete… hands its deletion to Watson, approved there', async ({ page, request }) => {
+  test.skip(inKind, 'the simulator serves Secret writes')
+  await page.request.put('/api/v1/sherlock/config', { data: { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }, headers: SAME })
+  const name = `e2e-doomed-${Date.now()}`
+  const made = await request.post(`${SIM}/api/v1/namespaces/default/secrets`, { data: { apiVersion: 'v1', kind: 'Secret', metadata: { name, namespace: 'default' }, type: 'Opaque', data: { a: Buffer.from('gone-soon').toString('base64') } } })
+  expect([200, 201]).toContain(made.status())
+  try {
+    await page.goto('/#/namespaces/default?kinds=Secret')
+    await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+    await page.locator(`[data-object="Secret/${name}"]`).click()
+    const drawer = page.getByTestId('object-panel')
+    await drawer.getByTestId('secret-delete').click()
+    const confirm = page.getByTestId('confirm')
+    await expect(confirm).toContainText(`Delete Secret default/${name}`)
+    await expect(confirm).toContainText('1 key go for good')
+    await confirm.getByTestId('confirm-ok').click()
+    const card = page.getByTestId('watson').locator('[data-testid=watson-card]').filter({ hasText: `kubectl delete secret ${name}` }).first()
+    await expect(card).toContainText(`Deletes Secret default/${name} and its 1 key`, { timeout: 30_000 })
+    await expect(card).not.toContainText('gone-soon')
+    await expect(card.getByTestId('watson-approve')).toBeEnabled({ timeout: 30_000 })
+    await card.getByTestId('watson-approve').click()
+    await expect.poll(async () => (await request.get(`${SIM}/api/v1/namespaces/default/secrets/${name}`)).status(), { timeout: 30_000 }).toBe(404)
+  } finally {
+    await request.delete(`${SIM}/api/v1/namespaces/default/secrets/${name}`)
+    await page.request.put('/api/v1/sherlock/config', { data: { clusters: {}, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }, headers: SAME })
+  }
+})

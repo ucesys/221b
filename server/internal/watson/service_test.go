@@ -963,3 +963,44 @@ func TestAQueuedChangeLapsesWhenItsObjectsCannotBeRead(t *testing.T) {
 		t.Fatalf("status %s reason %q ran %v", lapsed.Status, lapsed.Reason, ran.Load())
 	}
 }
+
+// Deleting a Secret says what reads it, and the card and the audit log
+// never hold one of its values (X-01).
+func TestASecretsDeleteSaysWhatReadsItAndHoldsNoValue(t *testing.T) {
+	svc, cl, _, _, buf := setup(t, Options{})
+	plan := func(line string) Item {
+		t.Helper()
+		it := svc.Submit(context.Background(), cl, alice(), line, "Namespaces", "", true)[0]
+		if it.Status != StatusPending {
+			t.Fatalf("%s: %s %s", line, it.Status, it.Reason)
+		}
+		return wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	}
+	tls := plan("kubectl delete secret shop-tls -n web")
+	im := strings.Join(tls.Plan.Impact, " ")
+	if !strings.Contains(im, "Deletes Secret web/shop-tls and its 2 keys") || !strings.Contains(im, "Ingress shop serves TLS with it") {
+		t.Fatalf("impact %q", im)
+	}
+	creds := plan("kubectl delete secret api-credentials -n default")
+	if im := strings.Join(creds.Plan.Impact, " "); !strings.Contains(im, "read it: running containers keep what they read") && !strings.Contains(im, "reads it: running containers keep what they read") {
+		t.Fatalf("impact %q", im)
+	}
+	planted := plan("kubectl delete secret planted-secret -n default")
+	if _, err := svc.Approve(context.Background(), cl, alice(), planted.ID); err != nil {
+		t.Fatal(err)
+	}
+	if done := wait(t, svc, planted.ID, func(i Item) bool { return finished(i.Status) }); done.Status != StatusDone {
+		t.Fatalf("%s %q", done.Status, outputOf(svc, planted.ID))
+	}
+	for _, it := range []Item{tls, creds, planted} {
+		b, _ := json.Marshal(it)
+		if strings.Contains(string(b), sim.PlantedSecretValue) || strings.Contains(outputOf(svc, it.ID), sim.PlantedSecretValue) {
+			t.Fatalf("a value reached card %s", it.ID)
+		}
+	}
+	for _, e := range buf.events() {
+		if b, _ := json.Marshal(e); strings.Contains(string(b), sim.PlantedSecretValue) {
+			t.Fatalf("a value reached the audit log: %s", e.Action)
+		}
+	}
+}

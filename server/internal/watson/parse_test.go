@@ -72,6 +72,7 @@ func TestStorageChangesAndWhatTheyRefuse(t *testing.T) {
 		`kubectl patch pvc data-postgres-0 -n storage --type merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'`,
 		`kubectl patch persistentvolumeclaim/data-postgres-0 -n storage -p '{"spec":{"resources":{"requests":{"storage":"1Ti"}}}}'`,
 		"kubectl delete pvc data-postgres-0 -n storage",
+		"kubectl delete secret api-credentials -n default",
 		"kubectl annotate storageclass longhorn storageclass.kubernetes.io/is-default-class=false --overwrite",
 	} {
 		if _, err := Parse(line); err != nil {
@@ -86,6 +87,9 @@ func TestStorageChangesAndWhatTheyRefuse(t *testing.T) {
 		`kubectl patch pvc data -n web -p '{"spec":{"resources":{"requests":{"storage":"lots"}}}}'`:                               "not supported",
 		"kubectl delete pvc -l app=cache -n web":                                                                                  "usage",
 		"kubectl delete pvc a b -n web":                                                                                           "usage",
+		"kubectl delete secret a b -n web":                                                                                        "usage",
+		"kubectl delete secret -l app=api -n web":                                                                                 "usage",
+		"kubectl delete secret,pod api -n web":                                                                                    "usage",
 		"kubectl delete pv pvc-1234":                                                                                              "not supported",
 		"kubectl delete storageclass longhorn":                                                                                    "not supported",
 	} {
