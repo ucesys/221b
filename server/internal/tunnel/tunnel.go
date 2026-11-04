@@ -27,6 +27,10 @@ const (
 	Close byte = 5
 	// End says the session is over; the payload says why.
 	End byte = 6
+	// CloseWrite says the program on the CLI's port has finished sending:
+	// the pod is told, and the connection stays open for what it still
+	// sends. A console that says so in Info takes it.
+	CloseWrite byte = 7
 )
 
 // Frame is one message.
@@ -70,6 +74,8 @@ type InfoBody struct {
 	Port    int    `json:"port"`
 	Ends    string `json:"ends"`
 	Idle    string `json:"idle"`
+	// CloseWrite says this console takes the CloseWrite frame.
+	CloseWrite bool `json:"closeWrite,omitempty"`
 }
 
 // MaxData is the most a Data frame carries.

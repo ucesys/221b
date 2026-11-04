@@ -1,3 +1,4 @@
+{{- if ne (include "b221.shared" .) "only" }}
 {{- if not .Values.clusterName }}
 {{- fail "Set clusterName: the name shown in the console's top bar, such as --set clusterName=staging" }}
 {{- end }}
@@ -24,6 +25,12 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   revisionHistoryLimit: 3
+  {{- if and (eq .Values.toolbox.transcripts "pvc") (ne .Values.toolbox.transcriptsVolume.accessMode "ReadWriteMany") }}
+  # The volume attaches to one node at a time: a new pod on another node
+  # could never start while the old one holds it.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "b221.selectorLabels" . | nindent 6 }}
@@ -93,6 +100,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
+            # Answers and commands in progress finish inside this when the
+            # pod stops.
+            - name: TERMINATION_GRACE
+              value: {{ printf "%ds" (int .Values.terminationGracePeriodSeconds) | quote }}
             # Shared by the replicas, so the leader believes the person's
             # address a replica forwards with a request.
             - name: PROXY_TOKEN
@@ -100,12 +111,37 @@ spec:
                 secretKeyRef:
                   name: {{ include "b221.fullname" . }}-proxy
                   key: token
+            # Whether a replica that does not lead keeps watching the
+            # clusters (ADR-70). A values file from before the setting has
+            # no replicas block, which means the default.
+            {{- $replicas := .Values.replicas | default dict }}
+            - name: WARM_STANDBY
+              value: {{ ternary (toString $replicas.warmStandby) "true" (hasKey $replicas "warmStandby") | quote }}
             # The refresh rate until someone changes it in Settings, which
             # keeps the choice in the ConfigMap named here.
             - name: REFRESH
               value: {{ .Values.refresh | quote }}
             - name: SETTINGS_CONFIGMAP
               value: {{ printf "%s/%s" .Release.Namespace (include "b221.fullname" .) | quote }}
+            - name: AUDIT_CONFIGMAP
+              value: {{ printf "%s/%s-audit" .Release.Namespace (include "b221.fullname" .) | quote }}
+            - name: SESSIONS_CONFIGMAP
+              value: {{ printf "%s/%s-sessions" .Release.Namespace (include "b221.fullname" .) | quote }}
+            # Automation (Phase 11 part 2): on with automation.enabled, and
+            # runs only where toolbox.ssh.enabled is on too. A values file
+            # from before the setting has no automation block: on.
+            {{- $automation := .Values.automation | default dict }}
+            {{- if ne (toString (dig "enabled" true $automation)) "false" }}
+            - name: AUTOMATION
+              value: "true"
+            - name: AUTOMATION_CONFIGMAP
+              value: {{ printf "%s/%s-automation" .Release.Namespace (include "b221.fullname" .) | quote }}
+            - name: AUTOMATION_RUNS_CONFIGMAP
+              value: {{ printf "%s/%s-automation-runs" .Release.Namespace (include "b221.fullname" .) | quote }}
+            {{- else }}
+            - name: AUTOMATION
+              value: "false"
+            {{- end }}
             {{- if eq .Values.connections.store "secrets" }}
             # The connections to other clusters, one Secret each, named
             # after the release: <release>-cluster-<id>.
@@ -156,6 +192,13 @@ spec:
             # Sign-in (P3-01) and roles (P3-03).
             - name: AUTH_MODE
               value: {{ .Values.auth.mode | quote }}
+            {{- if eq .Values.auth.mode "none" }}
+            {{- if not (has (.Values.auth.anonymousRole | default "viewer") (list "viewer" "admin")) }}
+            {{- fail "auth.anonymousRole is viewer or admin: a super role needs sign-in" }}
+            {{- end }}
+            - name: ANONYMOUS_ROLE
+              value: {{ .Values.auth.anonymousRole | default "viewer" | quote }}
+            {{- end }}
             {{- if ne .Values.auth.mode "none" }}
             # Reading as each person (P3-02): the prefixes the API servers put
             # before OIDC user and group names.
@@ -213,6 +256,8 @@ spec:
                   name: {{ .Values.auth.ldap.existingSecret | quote }}
                   key: bind-password
             {{- end }}
+            - name: TRUSTED_PROXIES
+              value: {{ join "," .Values.auth.trustedProxies | quote }}
             - name: ADMINS
               value: {{ join "," .Values.auth.admins | quote }}
             - name: ADMIN_GROUPS
@@ -342,3 +387,4 @@ spec:
             matchLabels:
               {{- include "b221.selectorLabels" . | nindent 14 }}
       {{- end }}
+{{- end }}

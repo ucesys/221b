@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ucesys/221b/server/internal/scrub"
 	"strings"
 	"time"
 )
@@ -165,7 +166,7 @@ type uiLog struct {
 }
 
 func (l *uiLog) add(name string, input json.RawMessage, outcome string) {
-	args := Scrub(string(input))
+	args := scrub.Text(string(input))
 	if len(args) > 160 {
 		args = args[:160] + "…"
 	}
@@ -309,5 +310,5 @@ func (s *Service) viewBlock(view string) string {
 		}
 		view = view[:cut] + "…"
 	}
-	return "<console-view>\n" + ScrubKnown(view, s.secrets()) + "\n</console-view>"
+	return "<console-view>\n" + scrub.Known(view, s.secrets()) + "\n</console-view>"
 }

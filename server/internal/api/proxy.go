@@ -12,12 +12,12 @@ import (
 	"time"
 )
 
-// Several replicas (P7-02): one, the leader, runs Sherlock and Watson,
-// whose conversations and cards live in its memory; the others forward
-// those requests to it. Every replica checks the session first, so only
-// signed-in requests travel between them, and tells the leader whose
-// request it is, so the audit log and the sign-in limits see the person's
-// address rather than the replica's.
+// Several replicas (P7-02): one, the leader, reads the clusters and runs
+// Sherlock and Watson (ADR-60, ADR-70); the others sign people in and
+// forward every other API request to it. Every replica checks the session
+// first, so only signed-in requests travel between them, and tells the
+// leader whose request it is, so the audit log and the sign-in limits see
+// the person's address rather than the replica's.
 
 // Leader says whether this replica runs Sherlock and Watson, and where the
 // one that does is; *leader.Elector implements it.
@@ -39,27 +39,27 @@ const (
 // reconnects to the new one.
 const leaderChecks = 2 * time.Second
 
-// leaderOnly says whether a path belongs to Sherlock or Watson: their
-// routes for the local cluster (/api/v1/sherlock/…), for a connection
-// (/api/v1/clusters/{cluster}/watson/…), the assistants' shared stream and
-// their administrator settings.
+// localPaths are the API paths every replica serves itself (ADR-70): the
+// person's own session and the account administration, which read and
+// write Kubernetes rather than a cluster's cache. Sign-in, set-up, the
+// probes, the metrics and the UI are outside /api/v1/ and local too.
+var localPaths = []string{"/api/v1/me", "/api/v1/admin/users", "/api/v1/admin/ldap/refresh"}
+
+// leaderOnly says whether a path is the leader's: every API path but the
+// replica-local ones, so a new data route is forwarded unless it is
+// listed here. The leader reads the clusters, so only it has their rows,
+// usage figures and connection states, and only it runs Sherlock, Watson,
+// the Toolbox and the applications.
 func leaderOnly(path string) bool {
-	rest, ok := strings.CutPrefix(path, "/api/v1/")
-	if !ok {
+	if !strings.HasPrefix(path, "/api/v1/") {
 		return false
 	}
-	parts := strings.Split(rest, "/")
-	if parts[0] == "clusters" {
-		if len(parts) < 3 {
+	for _, p := range localPaths {
+		if path == p || strings.HasPrefix(path, p+"/") {
 			return false
 		}
-		parts = parts[2:]
 	}
-	switch parts[0] {
-	case "sherlock", "watson", "assistants", "sessions", "toolbox", "apps":
-		return true
-	}
-	return false
+	return true
 }
 
 // trustForwarded takes the client's address from a request another
@@ -82,8 +82,8 @@ func (s *Server) trustForwarded(r *http.Request) bool {
 	return true
 }
 
-// forwardToLeader sends a Sherlock or Watson request on to the leader and
-// says whether it did; the leader itself, and a single replica, keep it.
+// forwardToLeader sends a request for the leader on to it and says
+// whether it did; the leader itself, and a single replica, keep it.
 // A request another replica forwarded is not sent on again: while the
 // leader changes, two replicas could each take the other for it and pass
 // a request back and forth.
@@ -172,5 +172,5 @@ func (s *Server) proxyFor(addr string) *httputil.ReverseProxy {
 
 func (s *Server) leaderUnavailable(w http.ResponseWriter) {
 	w.Header().Set("Retry-After", "2")
-	jsonError(w, http.StatusServiceUnavailable, "Sherlock and Watson are moving to another replica; try again in a moment")
+	jsonError(w, http.StatusServiceUnavailable, "The console is moving to another replica; try again in a moment")
 }

@@ -6,6 +6,8 @@ export interface OpenTool {
   tool: ToolName
   pod?: { name: string; namespace: string }
   node?: string
+  /** Several nodes, for an SSH pairing from the Nodes page: one session each (asked October 30, 2026). */
+  nodes?: string[]
   /** Values the dialog starts with: a container, a port, a command (Sherlock's, TB-41). */
   prefill?: Partial<ToolRequest>
   /** Where the request came from, for the card: the Tools menu, Sherlock. */

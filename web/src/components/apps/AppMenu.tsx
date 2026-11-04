@@ -18,8 +18,8 @@ export function NameWithAppTools({ row, children }: { row: AppRow; children: Rea
   )
 }
 
-/** What the menu offers on a release (HA-10): each opens a dialog, or asks. */
-export type AppAction = 'install' | 'deploy' | 'upgrade' | 'switch' | 'values' | 'source' | 'forget' | 'uninstall'
+/** What the menu offers on a release (HA-10): each opens a dialog, or asks. `command:<name>` is one of the application's own commands (asked October 30, 2026). */
+export type AppAction = 'install' | 'deploy' | 'upgrade' | 'switch' | 'values' | 'source' | 'forget' | 'uninstall' | 'newCommand' | `command:${string}`
 
 interface Item {
   key: AppAction
@@ -39,8 +39,11 @@ export function appItems(r: AppRow, canChange: boolean): Item[] {
       { key: 'forget', label: 'Forget', hint: 'drops the record', sepBefore: true, danger: true, off },
     ]
   }
+  const needsSource = off ?? (r.app ? undefined : 'set the source first')
   return [
-    { key: 'upgrade', label: 'Upgrade…', hint: r.app ? `from ${r.app.source.ref}` : undefined, off: off ?? (r.app ? undefined : 'set the source first') },
+    { key: 'upgrade', label: 'Redeploy…', hint: r.app ? `from ${r.app.source.ref}` : undefined, off: needsSource },
+    ...(r.app?.commands ?? []).map<Item>((c) => ({ key: `command:${c.name}`, label: c.name, hint: c.note || `redeploy with ${c.params.join(', ')}`, off: needsSource })),
+    { key: 'newCommand', label: 'New command…', hint: 'a redeploy with its own parameters', off: needsSource },
     { key: 'uninstall', label: 'Uninstall…', danger: true, sepBefore: true, off },
   ]
 }
@@ -84,7 +87,16 @@ export function AppToolsButton({ row, canChange, onPick, label = 'Tools' }: { ro
 
 function AppMenu({ row, canChange, anchor, onClose, onPick }: { row: AppRow; canChange: boolean; anchor: HTMLElement | null; onClose: () => void; onPick: (a: AppAction) => void }) {
   const menu = useRef<HTMLDivElement>(null)
-  const [style] = useState(() => place(anchor))
+  const [style, setStyle] = useState(() => place(anchor))
+  // Placed for a typical width; once rendered, its real width is known,
+  // and a menu that runs off the right edge (the Tools button of the
+  // release panel sits there) moves left to fit.
+  useLayoutEffect(() => {
+    const r = menu.current?.getBoundingClientRect()
+    if (!r) return
+    const over = r.right - (window.innerWidth - 8)
+    if (over > 0) setStyle((st) => ({ ...st, left: Math.max(8, (typeof st.left === 'number' ? st.left : r.left) - over) }))
+  }, [])
   const items = appItems(row, canChange)
   useEffect(() => {
     const away = (e: MouseEvent) => {
@@ -99,11 +111,13 @@ function AppMenu({ row, canChange, anchor, onClose, onPick }: { row: AppRow; can
       const now = anchor?.getBoundingClientRect()
       if (!at || !now || Math.abs(now.top - at.top) > 2 || Math.abs(now.left - at.left) > 2) onClose()
     }
-    document.addEventListener('mousedown', away)
+    // On the way down, before another menu's button stops the event: one
+    // menu at a time.
+    document.addEventListener('mousedown', away, true)
     window.addEventListener('scroll', scroll, true)
     window.addEventListener('resize', onClose)
     return () => {
-      document.removeEventListener('mousedown', away)
+      document.removeEventListener('mousedown', away, true)
       window.removeEventListener('scroll', scroll, true)
       window.removeEventListener('resize', onClose)
     }
@@ -141,7 +155,7 @@ function AppMenu({ row, canChange, anchor, onClose, onPick }: { row: AppRow; can
             className="tb-mi"
             aria-disabled={it.off ? true : undefined}
             data-danger={it.danger || undefined}
-            title={it.off ? `${it.label.replace('…', '')}: ${it.off}` : undefined}
+            title={it.off ? `${it.label.replace('…', '')}: ${it.off}` : it.hint ? `${it.label}: ${it.hint}` : undefined}
             onClick={() => {
               if (it.off) return
               onClose()

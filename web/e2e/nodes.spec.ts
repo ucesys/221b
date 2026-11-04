@@ -184,7 +184,7 @@ test('hides taints, zone, labels and kubelet until picked, and remembers the cho
   await page.keyboard.press('Escape')
   await expect(page.getByRole('group', { name: 'Columns to show' })).toHaveCount(0)
   await expect(menuButton).toBeFocused()
-  await expect(menuButton).toContainText('12/15')
+  await expect(menuButton).toContainText('13/16')
 
   await page.reload()
   await expect(page.locator('.rk-gh [data-col="name"]')).toBeVisible()
@@ -270,7 +270,7 @@ test('exports what is on screen as CSV, with the columns shown', async ({ page }
   const text = readFileSync(await download.path(), 'utf8')
   expect(text.startsWith('\uFEFF')).toBe(true)
   const lines = text.slice(1).split('\r\n').filter(Boolean)
-  expect(lines[0]).toBe('Node,Role,Status,CPU requested (cores),CPU requested %,CPU in use (cores),CPU allocatable (cores),CPU free (cores),Memory requested (GiB),Memory requested %,Memory in use (GiB),Memory allocatable (GiB),Memory free (GiB),Pods,Pod capacity,Zone,Joined')
+  expect(lines[0]).toBe('Node,Role,Status,CPU requested (cores),CPU requested %,CPU in use (cores),CPU allocatable (cores),CPU free (cores),Memory requested (GiB),Memory requested %,Memory in use (GiB),Memory allocatable (GiB),Memory free (GiB),Pods,Pod capacity,CPU reserved (cores),Memory reserved (GiB),Zone,Joined')
   expect(lines.length - 1).toBe(names.length)
   expect(lines.slice(1).map((l) => l.split(',')[0])).toEqual(names)
 })
@@ -288,9 +288,9 @@ test('opens node details with Enter and closes them with Escape', async ({ page,
   await expect(page.getByRole('button', { name: 'Close node details' })).toBeFocused()
   await expect(row).toHaveAttribute('aria-selected', 'true')
 
-  // Status first, then what to do, taints and labels, the resources, then the system.
+  // Status first, then taints and labels, the resources, then the system (the Actions section went on October 30, 2026: the Tools menu has cordon and drain).
   const headings = await panel.locator('h3').allTextContents()
-  expect(headings.filter((h) => h !== 'Problems')).toEqual(['Status', 'Actions', 'Taints', 'Labels', 'CPU', 'Memory', 'Pods', 'System'])
+  expect(headings.filter((h) => h !== 'Problems')).toEqual(['Status', 'CPU', 'Memory', 'Pods', 'Taints', 'Labels', 'System', 'Facts', 'Variables'])
   await expect(panel.getByTestId('node-status')).toContainText(target.status)
   await expect(panel.getByTestId('node-status')).toContainText('worker')
   await expect(panel.getByRole('region', { name: 'Taints' })).toBeVisible()
@@ -301,7 +301,7 @@ test('opens node details with Enter and closes them with Escape', async ({ page,
   await expect(panel).toContainText(target.kubelet)
   // Resources as plain sections, not tiles.
   const cpu = panel.getByTestId('resource-cpu')
-  await expect(cpu.locator('dt')).toHaveText(['Allocatable', 'Requested', 'Free to schedule', 'In use', 'Limits'])
+  await expect(cpu.locator('dt')).toHaveText(['Total on the node', 'Reserved for the system', 'Reserved for Kubernetes', 'Allocatable', 'Requested', 'Free to schedule', 'In use', 'Limits'])
   await expect(cpu.locator('dt', { hasText: 'Free to schedule' }).locator('+ dd')).toContainText(fCores(free(target.cpu)))
   await expect(panel.getByTestId('resource-memory').locator('dt', { hasText: 'Allocatable' }).locator('+ dd')).toContainText(fMem(target.memory.allocatable))
   await expect(panel.getByTestId('resource-pods').locator('dt', { hasText: 'Capacity' }).locator('+ dd')).toContainText(String(target.pods.capacity))
@@ -406,4 +406,48 @@ test('the fleets beside the table filter it, and an administrator keeps them the
   } finally {
     await put([])
   }
+})
+
+test('picked nodes use the Fleets tab\'s bar and dialog, and go to an SSH pairing (asked October 30, 2026)', async ({ page, request }) => {
+  const rows = nodeRows(await snapshot(request))
+  const [a, b] = [rows[0]!, rows[1]!]
+  const pick = (name: string) => page.locator(`[data-node="${name}"]`).getByTestId('fleet-pick-node')
+  const bar = page.getByTestId('fleet-nodebar')
+  await page.goto('/#/nodes')
+  await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  await expect(bar).toHaveCount(0)
+  await pick(a.name).check()
+  await expect(bar).toContainText('Picked 1 node')
+  // Picking does not open the row's panel.
+  await expect(page.getByTestId('node-panel')).toHaveCount(0)
+  await pick(b.name).check()
+  await expect(bar).toContainText('Picked 2 nodes')
+  // The picks stay while another tab is open.
+  await page.locator('[data-tab="pods"]').first().click()
+  await page.locator('[data-tab="nodes"]').first().click()
+  await expect(bar).toContainText('Picked 2 nodes')
+  await expect(pick(a.name)).toBeChecked()
+  // A fleet of the two: the Fleets tab's dialog, a list by default.
+  await bar.getByTestId('fleet-nodebar-new').click()
+  const fleet = page.getByTestId('fleet-nodes')
+  await expect(fleet).toContainText('New fleet from 2 nodes')
+  await expect(fleet.getByTestId('fleet-nodes-list')).toBeChecked()
+  await page.keyboard.press('Escape')
+  await expect(fleet).toHaveCount(0)
+  await expect(bar).toContainText('Picked 2 nodes')
+  // Pair for SSH needs Watson; without it the button says why.
+  const pair = bar.getByTestId('fleet-nodebar-ssh')
+  if (await pair.isEnabled()) {
+    await pair.click()
+    const dlg = page.getByTestId('tool-dialog')
+    await expect(dlg).toContainText('Pair 2 nodes for SSH')
+    await expect(dlg.getByTestId('tool-ssh-nodes')).toContainText(a.name)
+    await page.keyboard.press('Escape')
+    await expect(dlg).toHaveCount(0)
+  } else {
+    await expect(pair).toHaveAttribute('title', /Watson/)
+  }
+  await bar.getByTestId('fleet-nodebar-cancel').click()
+  await expect(bar).toHaveCount(0)
+  await expect(pick(a.name)).not.toBeChecked()
 })

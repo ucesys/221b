@@ -257,7 +257,7 @@ export const PSA_COLUMNS: ColumnDef<PolicyNSRow>[] = [
 // ---------- webhooks ----------
 
 export const HOOK_COLUMNS: ColumnDef<HookRow>[] = [
-  { id: 'name', label: 'Webhook', width: 'minmax(200px, 1.2fr)', min: 200, sortValue: (r) => r.webhook, cell: (r) => <Mono text={r.webhook} dim={false} tip={`${r.config} / ${r.webhook}`} />, export: (r) => [{ head: 'Configuration', cell: r.config }, { head: 'Webhook', cell: r.webhook }] },
+  { id: 'name', label: 'Webhook', width: 'minmax(200px, 1.2fr)', min: 200, sortValue: (r) => r.webhook, cell: (r) => <Mono text={r.webhook} dim={false} tip={`${r.config} / ${r.webhook}`} />, export: (r) => [{ head: 'RunProfile', cell: r.config }, { head: 'Webhook', cell: r.webhook }] },
   {
     id: 'kind',
     label: 'Kind',

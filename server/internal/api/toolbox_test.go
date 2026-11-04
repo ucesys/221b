@@ -3,19 +3,27 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/rest"
 
+	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/sim"
 	tb "github.com/ucesys/221b/server/internal/toolbox"
@@ -78,6 +86,52 @@ func TestToolboxSaysWhatAPersonMayUse(t *testing.T) {
 	}
 	if _, ok := v.Namespaces["web"]; !ok {
 		t.Fatalf("no tools for web: %s", b)
+	}
+}
+
+// sshStub says what a console with one older pairing would.
+type sshStub struct{}
+
+func (sshStub) Principal() string   { return "221b-superadmins-ns.console" }
+func (sshStub) Fingerprint() string { return "SHA256:x" }
+func (sshStub) List(context.Context, string) ([]nodessh.Pairing, error) {
+	return []nodessh.Pairing{{Node: "worker-001", LoginUser: "ops", Port: 22, Principal: "221b-superadmins", CAFinger: "SHA256:x", HostKeys: []string{"ssh-ed25519 AAAAsecret"}}}, nil
+}
+
+// The page is told this console's principal, for new pairings, and what
+// each pairing recorded, which its sessions use; never a host key.
+func TestToolboxSaysThePrincipals(t *testing.T) {
+	cfg := tb.Default()
+	cfg.SSH.Enabled = true
+	srv, c, m, _, local, store := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		o.Sessions = sessions.New(sessions.Options{Config: cfg, Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		o.SSH = sshStub{}
+	})
+	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
+	simSrv := httptest.NewServer(s)
+	t.Cleanup(simSrv.Close)
+	local.restCfg = &rest.Config{Host: simSrv.URL}
+	if err := m.SetLocal(context.Background(), clusters.Spec{Name: "Here", Env: clusters.EnvStaging, Mode: clusters.ModeWrite, Server: simSrv.URL, Auth: clusters.AuthInCluster, CA: clusters.CAPEM}, local, store); err != nil {
+		t.Fatal(err)
+	}
+	r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/toolbox?nodes=worker-001", "")
+	if r.StatusCode != 200 {
+		t.Fatalf("%d %s", r.StatusCode, b)
+	}
+	var v struct {
+		SSH struct {
+			Principal string `json:"principal"`
+			Pairings  map[string]struct {
+				Principal string `json:"principal"`
+			} `json:"pairings"`
+		} `json:"ssh"`
+	}
+	if err := json.Unmarshal([]byte(b), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.SSH.Principal != "221b-superadmins-ns.console" || v.SSH.Pairings["worker-001"].Principal != "221b-superadmins" || strings.Contains(b, "AAAAsecret") {
+		t.Fatalf("%s", b)
 	}
 }
 
@@ -342,5 +396,259 @@ func TestTunnelPath(t *testing.T) {
 		if IsTunnelPath(p) != want {
 			t.Errorf("%s: %v", p, !want)
 		}
+	}
+}
+
+// A transcript outlives its session: kept for the retention, while the
+// session leaves memory an hour after its end or at a restart. The route
+// answers from the session's record, with the rule of the live route.
+func TestATranscriptCanBeDownloadedAfterTheSessionLeftMemory(t *testing.T) {
+	cfg := tb.Default()
+	cfg.Transcripts, cfg.TranscriptDir = tb.TranscriptsPVC, t.TempDir()
+	history := &sessions.MemoryHistory{}
+	srv, ops, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
+		o.Watson = watson.New(watson.Options{Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+		o.Sessions = sessions.New(sessions.Options{Config: cfg, History: history, Audit: o.Audit, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	})
+	viewer := signIn(t, srv, "viewer@corp.example")
+	cast := func(cluster, id string) {
+		t.Helper()
+		p := sessions.TranscriptPath(cfg.TranscriptDir, cluster, id)
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("{\"version\":2}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cast(clusters.LocalID, "s1")
+	cast(clusters.LocalID, "past-the-cap")
+	cast("staging", "elsewhere")
+	history.Add(sessions.Record{ID: "s1", Cluster: clusters.LocalID, OwnerUser: "someone", Recorded: true})
+	history.Add(sessions.Record{ID: "plain", Cluster: clusters.LocalID, OwnerUser: "someone"})
+	history.Add(sessions.Record{ID: "elsewhere", Cluster: "staging", OwnerUser: "someone", Recorded: true})
+	history.Add(sessions.Record{ID: "lost", Cluster: clusters.LocalID, OwnerUser: "someone", Recorded: true})
+
+	path := func(id string) string { return srv.URL + "/api/v1/sessions/" + id + "/transcript" }
+	r, body := send(t, ops, http.MethodGet, path("s1"), "")
+	if r.StatusCode != http.StatusOK || !strings.Contains(body, `"version":2`) || r.Header.Get("Content-Type") != "application/x-asciicast" || !strings.Contains(r.Header.Get("Content-Disposition"), "session-s1.cast") {
+		t.Fatalf("a SuperAdmin's download: %d %v %s", r.StatusCode, r.Header, body)
+	}
+	if r, body := send(t, viewer, http.MethodGet, path("s1"), ""); r.StatusCode != http.StatusNotFound || strings.Contains(body, "version") {
+		t.Fatalf("someone else's transcript: %d %s", r.StatusCode, body)
+	}
+	if r, body := send(t, ops, http.MethodGet, path("plain"), ""); r.StatusCode != http.StatusNotFound || !strings.Contains(body, "No transcript") {
+		t.Fatalf("a session never recorded: %d %s", r.StatusCode, body)
+	}
+	if r, body := send(t, ops, http.MethodGet, path("lost"), ""); r.StatusCode != http.StatusNotFound || !strings.Contains(body, "gone") {
+		t.Fatalf("a transcript past its retention: %d %s", r.StatusCode, body)
+	}
+	if r, body := send(t, ops, http.MethodGet, path("elsewhere"), ""); r.StatusCode != http.StatusNotFound || strings.Contains(body, "version") {
+		t.Fatalf("another cluster's session: %d %s", r.StatusCode, body)
+	}
+	// The records are capped and the files are not: a SuperAdmin still has
+	// a transcript whose record is gone, and nobody else does.
+	if r, _ := send(t, ops, http.MethodGet, path("past-the-cap"), ""); r.StatusCode != http.StatusOK {
+		t.Fatalf("past the cap: %d", r.StatusCode)
+	}
+	if r, _ := send(t, viewer, http.MethodGet, path("past-the-cap"), ""); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("past the cap, not a SuperAdmin: %d", r.StatusCode)
+	}
+}
+
+// failingBackend refuses what a session asks of it, so the session ends by
+// itself without a cluster.
+type failingBackend struct{ sessions.Backend }
+
+func (failingBackend) CreatePod(context.Context, *corev1.Pod, bool) error {
+	return errors.New("no cluster here")
+}
+
+// Node 2 of a card cannot start: the card still names the first, and says
+// which did not open, not only the server's log.
+func TestACardReportsTheSessionOfANodeThatCouldNotStart(t *testing.T) {
+	calls := 0
+	mgr := sessions.New(sessions.Options{Config: tb.Default(), Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Backend: func(sessions.Cluster, kube.Person) (sessions.Backend, error) {
+		calls++
+		if calls == 2 {
+			return nil, errors.New("the credential could not be read")
+		}
+		return failingBackend{}, nil
+	}})
+	s := &Server{opts: Options{Sessions: mgr, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}}
+	it := watson.Item{ID: "card-1", Session: &watson.SessionCard{Request: sessions.Request{Tool: tb.ToolNodeShell, Node: "n1", Nodes: []string{"n2", "n3"}, Profile: tb.ProfileGeneral}}}
+	id, err := s.startSession(watson.Cluster{ID: "c1"}, it, watson.Who{})
+	if id == "" || err == nil || !strings.Contains(err.Error(), "n2") || !strings.Contains(err.Error(), "credential") || strings.Contains(err.Error(), "n3") {
+		t.Fatalf("%q %v", id, err)
+	}
+	if calls != 3 {
+		t.Fatalf("%d of 3 started", calls)
+	}
+	// Without the first the card has nothing to name.
+	calls = 1
+	if id, err := s.startSession(watson.Cluster{ID: "c1"}, it, watson.Who{}); id != "" || err == nil {
+		t.Fatalf("%q %v", id, err)
+	}
+}
+
+// countingAuth counts what a terminal reports.
+type countingAuth struct {
+	Auth
+	active int
+}
+
+func (a *countingAuth) Active(auth.Session) { a.active++ }
+
+// Keystrokes count as sign-in activity, without reading the session for
+// every one of them.
+func TestTypingCountsAsActivityAboutOnceAMinute(t *testing.T) {
+	at := time.Date(2026, 10, 31, 12, 0, 0, 0, time.UTC)
+	a := &countingAuth{}
+	s := &Server{opts: Options{Auth: a, Now: func() time.Time { return at }}}
+	typed := s.typing(auth.Session{ID: "s"})
+	for range 3 {
+		typed()
+		at = at.Add(time.Second)
+	}
+	if a.active != 1 {
+		t.Fatalf("%d in 3 seconds", a.active)
+	}
+	at = at.Add(typingCounts)
+	typed()
+	if a.active != 2 {
+		t.Fatalf("%d a minute later", a.active)
+	}
+}
+
+// liveForward opens a port forward and returns its id once it is live.
+func liveForward(t *testing.T, srv *httptest.Server, c *http.Client) string {
+	t.Helper()
+	r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/sessions", `{"tool":"forward","namespace":"web","pod":"cache-0","port":6379,"from":"Tools menu"}`)
+	var card watsonItem
+	_ = json.Unmarshal([]byte(b), &card)
+	if r.StatusCode != http.StatusAccepted {
+		t.Fatalf("%d %s", r.StatusCode, b)
+	}
+	watsonStream(t, srv, c, func(m map[string]watsonItem) bool { return m[card.ID].Plan != nil && m[card.ID].Plan.Ready })
+	if r, b := send(t, c, http.MethodPost, srv.URL+"/api/v1/watson/commands/"+card.ID+"/approve", ""); r.StatusCode != 200 {
+		t.Fatalf("approve: %d %s", r.StatusCode, b)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var list []struct {
+			ID    string `json:"id"`
+			State string `json:"state"`
+		}
+		_, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/sessions", "")
+		_ = json.Unmarshal([]byte(b), &list)
+		if len(list) == 1 && list[0].State == sessions.StateLive {
+			return list[0].ID
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sessions %s", b)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A terminal's WebSocket lasts as long as the sign-in that opened it: the
+// same person on another sign-in keeps theirs.
+func TestATerminalClosesWhenItsSignInEnds(t *testing.T) {
+	srv, c, _, _ := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
+	id := liveForward(t, srv, c)
+	second := signIn(t, srv, "ops@corp.example")
+	u, _ := url.Parse(srv.URL)
+	cookies := func(cl *http.Client) string {
+		var parts []string
+		for _, ck := range cl.Jar.Cookies(u) {
+			parts = append(parts, ck.Name+"="+ck.Value)
+		}
+		return strings.Join(parts, "; ")
+	}
+	dial := func(cl *http.Client) *websocket.Conn {
+		ws := "ws://" + u.Host + "/api/v1/sessions/" + id + "/attach"
+		conn, resp, err := websocket.DefaultDialer.Dial(ws, http.Header{"Cookie": {cookies(cl)}, "Origin": {srv.URL}})
+		if err != nil {
+			code := 0
+			if resp != nil {
+				code = resp.StatusCode
+			}
+			t.Fatalf("dial: %v (%d)", err, code)
+		}
+		t.Cleanup(func() { conn.Close() })
+		return conn
+	}
+	stays, ends := dial(c), dial(second)
+	closed := make(chan error, 1)
+	go func() {
+		for {
+			if _, _, err := ends.ReadMessage(); err != nil {
+				closed <- err
+				return
+			}
+		}
+	}()
+	if r, _ := send(t, second, http.MethodPost, srv.URL+"/signout", ""); r.StatusCode >= 400 {
+		t.Fatalf("sign out: %d", r.StatusCode)
+	}
+	select {
+	case err := <-closed:
+		if !strings.Contains(err.Error(), "The sign-in ended") {
+			t.Fatalf("closed by %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the terminal stayed open after its sign-in ended")
+	}
+	_ = stays.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if _, _, err := stays.ReadMessage(); err == nil || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the other sign-in's terminal: %v", err)
+	}
+}
+
+// Another SuperAdmin reading the output of a live session shows on it.
+func TestReadingLiveOutputShowsTheReaderAsWatching(t *testing.T) {
+	srv, c, _, _ := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
+	id := liveForward(t, srv, c)
+	other := signIn(t, srv, "ops2@corp.example")
+	if r, _ := send(t, other, http.MethodGet, srv.URL+"/api/v1/sessions/"+id+"/output", ""); r.StatusCode != 200 {
+		t.Fatalf("output: %d", r.StatusCode)
+	}
+	var v struct {
+		Watchers []string `json:"watchers"`
+	}
+	_, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/sessions/"+id, "")
+	_ = json.Unmarshal([]byte(b), &v)
+	if len(v.Watchers) != 1 || v.Watchers[0] != "Ops Two" {
+		t.Fatalf("the owner sees %s", b)
+	}
+}
+
+// Cached and asked namespaces end up in one answer, whichever goes first.
+func TestToolboxMixesCachedAndAskedNamespaces(t *testing.T) {
+	srv, c, _, _ := toolboxSetup(t, "ops@corp.example", clusters.EnvStaging)
+	var names []string
+	for i := range 40 {
+		names = append(names, "ns-"+strconv.Itoa(i))
+	}
+	all := func(list []string) map[string]any {
+		var v struct {
+			Namespaces map[string]any `json:"namespaces"`
+		}
+		r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/toolbox?namespaces="+strings.Join(list, ","), "")
+		if r.StatusCode != 200 {
+			t.Fatalf("%d %s", r.StatusCode, b)
+		}
+		_ = json.Unmarshal([]byte(b), &v)
+		return v.Namespaces
+	}
+	var every []string
+	for i, n := range names {
+		if i%2 == 0 {
+			every = append(every, n)
+		}
+	}
+	all(every)
+	if got := all(names); len(got) != len(names) {
+		t.Fatalf("%d of %d namespaces", len(got), len(names))
 	}
 }

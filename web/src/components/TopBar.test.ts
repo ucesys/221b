@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { navPlan, secondsToRefresh } from './TopBar'
+import { anonymousRoleName, navPlan, secondsToRefresh, signInOffText } from './TopBar'
+import type { Me } from '../api/types'
 import type { Tab } from '../lib/router'
 
 const all: Tab[] = ['nodes', 'namespaces', 'pods', 'helm', 'services']
@@ -32,5 +33,17 @@ describe('the tab bar', () => {
     expect(secondsToRefresh(at, 30, at.getTime() + 40_000)).toBe(0)
     expect(secondsToRefresh(null, 30, at.getTime())).toBeNull()
     expect(secondsToRefresh(at, 0, at.getTime())).toBeNull()
+  })
+})
+
+describe('sign-in off', () => {
+  const anon = (roles: Me['roles']): Me => ({ mode: 'none', admin: false, roles, method: 'none', user: { subject: 'anonymous', username: 'anonymous', name: 'Anonymous' } } as unknown as Me)
+  it('names the anonymous role and says what is off', () => {
+    expect(anonymousRoleName(anon(['viewer']))).toBe('Viewer')
+    expect(anonymousRoleName(anon(['admin']))).toBe('Admin')
+    const text = signInOffText(anon(['viewer']))
+    expect(text).toContain('a Viewer')
+    expect(text).toContain('SSH, Automation and showing Secret values are off')
+    expect(text).not.toContain('administrator')
   })
 })

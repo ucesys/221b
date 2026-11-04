@@ -16,6 +16,9 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/fake"
+	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/settings"
 )
 
@@ -33,6 +36,11 @@ func (l *testLeader) LeaderAddr() string {
 	return l.addr
 }
 func (l *testLeader) set(addr string) { l.mu.Lock(); l.addr = addr; l.mu.Unlock() }
+func (l *testLeader) setLead(lead bool) {
+	l.mu.Lock()
+	l.lead = lead
+	l.mu.Unlock()
+}
 
 type lockedBuffer struct {
 	mu sync.Mutex
@@ -55,26 +63,36 @@ func quietLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, n
 
 func TestLeaderOnlyPaths(t *testing.T) {
 	for path, want := range map[string]bool{
-		"/api/v1/sherlock":                            true,
-		"/api/v1/sherlock/events":                     true,
-		"/api/v1/sherlock/config":                     true,
-		"/api/v1/sherlock/key":                        true,
-		"/api/v1/watson/commands/abc/approve":         true,
-		"/api/v1/watson/config":                       true,
-		"/api/v1/assistants/events":                   true,
-		"/api/v1/clusters/staging/watson/events":      true,
-		"/api/v1/clusters/staging/sherlock/ui/7":      true,
-		"/api/v1/clusters/staging/assistants/events":  true,
-		"/api/v1/clusters":                            false,
-		"/api/v1/clusters/test":                       false,
-		"/api/v1/clusters/staging/test":               false,
-		"/api/v1/clusters/staging/events":             false,
-		"/api/v1/events":                              false,
-		"/api/v1/settings":                            false,
-		"/api/v1/home":                                false,
-		"/signin":                                     false,
-		"/api/v1/clusters/sherlock":                   false,
-		"/api/v1/clusters/watson/nodes/watson-worker": false,
+		"/api/v1/sherlock":                           true,
+		"/api/v1/sherlock/events":                    true,
+		"/api/v1/sherlock/config":                    true,
+		"/api/v1/sherlock/key":                       true,
+		"/api/v1/watson/commands/abc/approve":        true,
+		"/api/v1/watson/config":                      true,
+		"/api/v1/assistants/events":                  true,
+		"/api/v1/clusters/staging/watson/events":     true,
+		"/api/v1/clusters/staging/sherlock/ui/7":     true,
+		"/api/v1/clusters/staging/assistants/events": true,
+		// The data is the leader's too (ADR-70): it alone reads the clusters.
+		"/api/v1/clusters":                            true,
+		"/api/v1/clusters/test":                       true,
+		"/api/v1/clusters/staging/test":               true,
+		"/api/v1/clusters/staging/events":             true,
+		"/api/v1/events":                              true,
+		"/api/v1/settings":                            true,
+		"/api/v1/home":                                true,
+		"/api/v1/helm/shop/web":                       true,
+		"/api/v1/clusters/sherlock":                   true,
+		"/api/v1/clusters/watson/nodes/watson-worker": true,
+		// What a replica does itself: sign people in, and keep the accounts.
+		"/api/v1/me":                       false,
+		"/api/v1/admin/users":              false,
+		"/api/v1/admin/users/pat/sessions": false,
+		"/api/v1/admin/ldap/refresh":       false,
+		"/signin":                          false,
+		"/setup":                           false,
+		"/healthz":                         false,
+		"/metrics":                         false,
 	} {
 		if got := leaderOnly(path); got != want {
 			t.Errorf("%s: %v, want %v", path, got, want)
@@ -82,9 +100,10 @@ func TestLeaderOnlyPaths(t *testing.T) {
 	}
 }
 
-// A follower sends Sherlock's and Watson's requests to the leader: a
-// stream event by event, a POST with its body, the browser's Host and
-// cookie, and who sent it; everything else it answers itself.
+// A follower sends the leader's requests to it: a stream event by event,
+// a POST with its body, the browser's Host and cookie, and who sent it;
+// the data too, since the leader alone reads the clusters (ADR-70). The
+// session and the probes it answers itself.
 func TestFollowerForwardsToTheLeader(t *testing.T) {
 	type seen struct{ path, host, cookie, client, token, body string }
 	got := make(chan seen, 10)
@@ -153,10 +172,25 @@ func TestFollowerForwardsToTheLeader(t *testing.T) {
 		t.Fatalf("the leader got body %q", s.body)
 	}
 
-	// The follower's own data stays with it.
-	r = get(t, follower.URL+"/api/v1/settings")
-	if r.StatusCode != http.StatusOK {
-		t.Fatalf("settings %d", r.StatusCode)
+	// The data goes to the leader too (ADR-70): a release's details, a
+	// connection's pod, the connections themselves.
+	for _, p := range []string{"/api/v1/helm/shop/web", "/api/v1/clusters/staging/pods/shop/web", "/api/v1/clusters"} {
+		r = get(t, follower.URL+p)
+		if r.StatusCode != http.StatusAccepted {
+			t.Fatalf("%s through the follower: %d, not the leader's answer", p, r.StatusCode)
+		}
+		if s := <-got; s.path != p {
+			t.Fatalf("the leader saw %s for %s", s.path, p)
+		}
+	}
+	// What is the replica's own stays with it: the session (no sign-in
+	// here, so its own 404 rather than the leader's 202) and the probes.
+	r = get(t, follower.URL+"/api/v1/me")
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("me %d", r.StatusCode)
+	}
+	if r = get(t, follower.URL+"/healthz"); r.StatusCode != http.StatusOK {
+		t.Fatalf("healthz %d", r.StatusCode)
 	}
 	select {
 	case s := <-got:
@@ -213,6 +247,47 @@ func TestForwardedStreamEndsWhenTheLeaderMoves(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the stream outlived the move")
+	}
+}
+
+// A leader that steps down stops reading the clusters: its own streams end
+// too, without waiting for a heartbeat, and the browser reconnects to the
+// new one rather than watching figures that no longer move.
+func TestALocalStreamEndsWhenTheReplicaStopsLeading(t *testing.T) {
+	src := &source{Source: fake.New("n1"), logs: map[string][]string{}}
+	store := live.New(src, live.Options{})
+	store.Notify(everything())
+	store.Process()
+	lead := &testLeader{lead: true}
+	api := New(Options{Store: store, Cluster: src, Leader: lead, ProxyToken: "t", Heartbeat: time.Hour, Logger: quietLog()})
+	api.leaderChecks = 20 * time.Millisecond
+	srv := httptest.NewServer(api)
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/events?views=nodes", nil)
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Body.Close()
+	br := bufio.NewReader(r.Body)
+	if ev, _ := readEvent(t, br); ev != "snapshot" {
+		t.Fatalf("stream began with %s", ev)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := io.Copy(io.Discard, br); done <- err }()
+	select {
+	case <-done:
+		t.Fatal("the stream ended while the replica led")
+	case <-time.After(100 * time.Millisecond):
+	}
+	lead.setLead(false)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the stream outlived the leadership")
 	}
 }
 
@@ -304,5 +379,43 @@ func TestClientAddressNeedsTheToken(t *testing.T) {
 	}
 	if from := put(""); from != "127.0.0.1" {
 		t.Fatalf("without a token: from %q", from)
+	}
+}
+
+// The audit log's From is the client a trusted proxy names, and the socket's
+// peer for anyone else: a header proves nothing by itself.
+func TestTheAuditLogBelievesOnlyATrustedProxy(t *testing.T) {
+	act := func(t *testing.T, proxies auth.Proxies, forwarded string) string {
+		t.Helper()
+		srv, c, _, out, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) { o.Proxies = proxies })
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/signout", nil)
+		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("X-Forwarded-For", forwarded)
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		for _, line := range strings.Split(out.String(), "\n") {
+			if strings.Contains(line, `"action":"signout"`) {
+				var e audit.Event
+				if err := json.Unmarshal([]byte(line), &e); err != nil {
+					t.Fatal(err)
+				}
+				return e.From
+			}
+		}
+		t.Fatalf("no sign-out in the log: %s", out.String())
+		return ""
+	}
+	local, err := auth.ParseProxies([]string{"127.0.0.0/8", "::1/128"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if from := act(t, local, "198.51.100.1, 203.0.113.9"); from != "203.0.113.9" {
+		t.Errorf("through a trusted proxy: %s", from)
+	}
+	if from := act(t, nil, "203.0.113.9"); from == "203.0.113.9" {
+		t.Errorf("a header was believed with no proxy trusted: %s", from)
 	}
 }

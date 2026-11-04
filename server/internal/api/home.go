@@ -53,6 +53,7 @@ type homeNodes struct {
 }
 
 type homeUse struct {
+	Capacity    int64 `json:"capacity"`
 	Allocatable int64 `json:"allocatable"`
 	Requested   int64 `json:"requested"`
 	// Used is what metrics-server reports, over the nodes it has a reading
@@ -210,8 +211,10 @@ func (s *Server) fillHome(r *http.Request, h *homeCluster, st *live.Store, cl Cl
 		} else if n.Warnings > 0 {
 			h.Nodes.Warnings++
 		}
+		h.CPU.Capacity += n.CPU.Capacity
 		h.CPU.Allocatable += n.CPU.Allocatable
 		h.CPU.Requested += n.CPU.Requested
+		h.Memory.Capacity += n.Memory.Capacity
 		h.Memory.Allocatable += n.Memory.Allocatable
 		h.Memory.Requested += n.Memory.Requested
 		if n.CPU.Used != nil {

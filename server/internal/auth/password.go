@@ -45,7 +45,7 @@ func (s *Service) passwordOn() bool { return s.cfg.Mode == ModeLocal || s.cfg.Mo
 func (s *Service) renderPassword(w http.ResponseWriter, r *http.Request, msg, field string, code int) {
 	d := passwordData{Title: s.cfg.Title, Error: msg, Field: field, Form: randomID(), Next: safeNext(r.URL.Query().Get("next")), Directory: s.dir != nil}
 	if r.Method == http.MethodPost {
-		d.Username, d.Next = r.PostFormValue("username"), safeNext(r.PostFormValue("next"))
+		d.Username, d.Next = audit.Clip(r.PostFormValue("username"), maxLogin), safeNext(r.PostFormValue("next"))
 		switch field {
 		case fieldNew:
 			d.Current = r.PostFormValue("current")
@@ -76,6 +76,7 @@ func (s *Service) postPassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "local sign-in is off", http.StatusNotFound)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
 	if err := r.ParseForm(); err != nil {
 		s.renderPassword(w, r, "The form could not be read.", "", http.StatusBadRequest)
 		return
@@ -84,10 +85,10 @@ func (s *Service) postPassword(w http.ResponseWriter, r *http.Request) {
 		s.renderPassword(w, r, "That request did not come from this console. Try again from this page.", "", http.StatusForbidden)
 		return
 	}
-	login := Login(r.PostFormValue("username"))
+	login, fits := formLogin(r.PostFormValue("username"))
 	current, password := r.PostFormValue("current"), r.PostFormValue("password")
 	who := User{Username: login, Email: login}
-	if !s.perAddress.allow(from(r)) || !s.perAccount.allow(login) {
+	if !s.attempt(r, login) {
 		s.record(r, audit.ActionPasswordChange, who, audit.OutcomeDenied, "too many attempts")
 		s.renderPassword(w, r, "Too many attempts. Wait a minute and try again.", "", http.StatusTooManyRequests)
 		return
@@ -95,6 +96,7 @@ func (s *Service) postPassword(w http.ResponseWriter, r *http.Request) {
 	// As at sign-in, an unknown account is checked against a dummy hash, so
 	// the answer takes as long either way.
 	acct, local := s.accounts.Find(login)
+	local = local && fits
 	hash := acct.PasswordHash
 	if !local {
 		hash = dummyHash

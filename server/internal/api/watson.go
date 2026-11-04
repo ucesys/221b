@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,8 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/watson"
 )
@@ -71,6 +74,12 @@ func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.C
 		jsonError(w, http.StatusServiceUnavailable, "the connection to "+id+" is not running; see its cluster page")
 		return c, false
 	}
+	// With sign-in off, changes would be made with the console's own
+	// account; an anonymous Viewer makes none.
+	if sess, ok := auth.SessionFrom(r.Context()); ok && sess.Method == "none" && !slices.Contains(sess.Roles, roles.Admin) {
+		c.ReadOnly = true
+		c.ReadOnlyHow = "Sign-in is off, and everyone is a Viewer. Turn sign-in on (auth.mode), or set auth.anonymousRole to admin."
+	}
 	c.Config = cfg
 	// With rbac.enforce strict, a cluster whose roles have not been compared
 	// yet refuses changes (RB-36). A connection just made or a console just
@@ -87,8 +96,13 @@ func (s *Server) watsonCluster(w http.ResponseWriter, r *http.Request) (watson.C
 // watsonWho is the person acting.
 func (s *Server) watsonWho(r *http.Request) watson.Who {
 	sess, _ := auth.SessionFrom(r.Context())
-	w := watson.Who{Session: sess.ID, Person: s.person(r), Name: firstOf(sess.User.Name, sess.User.Email, sess.User.Username, "Anonymous"), Admin: sess.Admin || s.opts.Auth == nil,
-		Audit: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, From: fromAddr(r)}
+	return s.whoOf(sess, s.person(r), fromAddr(r))
+}
+
+func (s *Server) whoOf(sess auth.Session, person kube.Person, from string) watson.Who {
+	w := watson.Who{Session: sess.ID, Person: person, Name: firstOf(sess.User.Name, sess.User.Email, sess.User.Username, "Anonymous"), Admin: sess.Admin || s.opts.Auth == nil,
+		ManageApps: s.opts.Auth == nil || sess.Admin || slices.Contains(sess.Roles, roles.Admin) || slices.Contains(sess.Roles, roles.SuperAdmin),
+		Audit:      audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, From: from}
 	if !w.Person.Nobody() {
 		w.User = sess.User.Username
 		if w.User == "" {
@@ -96,6 +110,31 @@ func (s *Server) watsonWho(r *http.Request) watson.Who {
 		}
 	}
 	return w
+}
+
+// rereadWho reads a standing approval's holder as the sign-in sees them
+// now, directory groups included (RB-23): the approval that runs on their
+// behalf stands only while they do.
+func (s *Server) rereadWho(w watson.Who) (watson.Who, bool) {
+	a, ok := s.opts.Auth.(interface {
+		Current(auth.Session) (auth.Session, bool)
+		Reread(auth.Session) (auth.Session, bool)
+	})
+	if !ok {
+		return w, true
+	}
+	sess, ok := a.Current(auth.Session{ID: w.Session})
+	if !ok {
+		return watson.Who{}, false
+	}
+	if sess, ok = a.Reread(sess); !ok {
+		return watson.Who{}, false
+	}
+	var person kube.Person
+	if s.opts.Access != nil {
+		person = s.opts.Impersonation.personOf(sess.User)
+	}
+	return s.whoOf(sess, person, w.From), true
 }
 
 type watsonStatus struct {
@@ -626,20 +665,23 @@ func (s *Server) putWatsonConfig(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, settingsStatus(err, http.StatusBadGateway), "The settings were not saved: "+err.Error())
 		return
 	}
-	detail := "no change"
-	if before.TwoPerson != in.TwoPerson {
-		detail = map[bool]string{true: "two-person rule on for production clusters", false: "two-person rule off"}[in.TwoPerson]
-	}
-	if before.ApproveAllMinutes != in.ApproveAllMinutes {
-		if detail == "no change" {
-			detail = ""
-		} else {
-			detail += ", "
-		}
-		detail += "standing approvals up to " + strconv.Itoa(in.ApproveAllMinutes) + " minutes"
-	}
-	s.record(r, ActionWatsonSettings, "watson", detail)
+	s.record(r, ActionWatsonSettings, "watson", watsonChange(before, in))
 	s.getWatsonConfig(w, r)
+}
+
+// watsonChange says what changed, for the audit record.
+func watsonChange(a, b settings.Watson) string {
+	var parts []string
+	if a.TwoPerson != b.TwoPerson {
+		parts = append(parts, map[bool]string{true: "two-person rule on for production clusters", false: "two-person rule off"}[b.TwoPerson])
+	}
+	if a.ApproveAllMinutes != b.ApproveAllMinutes {
+		parts = append(parts, "standing approvals up to "+strconv.Itoa(b.ApproveAllMinutes)+" minutes")
+	}
+	if len(parts) == 0 {
+		return "no change"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // ActionWatsonSettings is the audit action of a change to Watson's settings.

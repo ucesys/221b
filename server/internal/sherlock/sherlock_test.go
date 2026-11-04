@@ -1,17 +1,21 @@
 package sherlock
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/fakeclaude"
+	"github.com/ucesys/221b/server/internal/scrub"
 )
 
 func TestScrub(t *testing.T) {
@@ -26,7 +30,7 @@ func TestScrub(t *testing.T) {
 		{"github token ghp_abcdefghijklmnopqrstuvwxyz0123456789", "ghp_abcdefghij", "github"},
 		{"GET /api/v1/orders 200 3ms", "", "GET /api/v1/orders 200 3ms"},
 	} {
-		out := Scrub(c.in)
+		out := scrub.Text(c.in)
 		if c.gone != "" && strings.Contains(out, c.gone) {
 			t.Errorf("%q kept %q: %q", c.in, c.gone, out)
 		}
@@ -36,11 +40,11 @@ func TestScrub(t *testing.T) {
 	}
 	// A JSON row: an environment variable named like a secret loses its
 	// value; the rest stays readable.
-	out := string(ScrubJSON([]byte(`{"name":"web","env":[{"name":"DB_PASSWORD","value":"hunter2"},{"name":"MODE","value":"prod"}],"secretsRead":true,"tokens":[{"name":"t"}]}`)))
+	out := string(scrub.JSON([]byte(`{"name":"web","env":[{"name":"DB_PASSWORD","value":"hunter2"},{"name":"MODE","value":"prod"}],"secretsRead":true,"tokens":[{"name":"t"}]}`)))
 	if strings.Contains(out, "hunter2") || !strings.Contains(out, `"value":"prod"`) || !strings.Contains(out, `"secretsRead":true`) || !strings.Contains(out, `"tokens":[{"name":"t"}]`) {
 		t.Fatalf("ScrubJSON: %s", out)
 	}
-	if got := ScrubKnown("the key sk-ant-xyz123456 is here", []string{"sk-ant-xyz123456"}); strings.Contains(got, "sk-ant-xyz123456") {
+	if got := scrub.Known("the key sk-ant-xyz123456 is here", []string{"sk-ant-xyz123456"}); strings.Contains(got, "sk-ant-xyz123456") {
 		t.Fatalf("ScrubKnown: %s", got)
 	}
 }
@@ -317,5 +321,99 @@ func TestThePromptIsCoreClusterAndTime(t *testing.T) {
 	plain := systemPrompt(Question{Cluster: "lab", Version: "v1.34.1"}, now)
 	if plain[1].Text != "This cluster: \"lab\", Kubernetes v1.34.1." || strings.Contains(plain[0].Text, "view_* tools") {
 		t.Errorf("plain: %q", plain[1].Text)
+	}
+}
+
+// One custom price leaves the other at the highest listed one, as the
+// setting says; neither counts for nothing.
+func TestOneCustomPriceLeavesTheOtherAtTheHighest(t *testing.T) {
+	dear := dearest()
+	for _, tc := range []struct {
+		set     Settings
+		in, out float64
+	}{
+		{Settings{Model: "gateway", PriceIn: 3}, 3, dear.Out},
+		{Settings{Model: "gateway", PriceOut: 7}, dear.In, 7},
+		{Settings{Model: "claude-haiku-5-5", PriceIn: 3}, 3, dear.Out},
+		{Settings{Model: "gateway", PriceIn: 3, PriceOut: 7}, 3, 7},
+		{Settings{Model: "gateway"}, dear.In, dear.Out},
+	} {
+		m := tc.set.Price()
+		if m.In != tc.in || m.Out != tc.out {
+			t.Errorf("%+v: in %v out %v, want %v %v", tc.set, m.In, m.Out, tc.in, tc.out)
+		}
+		if tc.set.PriceIn > 0 && m.LongAbove != 0 {
+			t.Errorf("%+v: a custom price keeps the long-prompt price", tc.set)
+		}
+	}
+}
+
+type lockedBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuf) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// A console that stops waits for an answer in progress; one that takes
+// too long is stopped, and still saves its spend and its audit record
+// before Drain returns.
+func TestStoppingTheConsoleWaitsForAnswers(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		within time.Duration
+		status string
+	}{
+		{"it finishes in time", time.Minute, "done"},
+		{"it does not", 100 * time.Millisecond, "stopped"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := fakeclaude.New()
+			fake.Delay = 0
+			srv := httptest.NewServer(fake)
+			defer srv.Close()
+			buf := &lockedBuf{}
+			s := New(Options{Client: &Client{BaseURL: srv.URL, Key: func() string { return "sk-ant-test-0123456789" }}, Audit: audit.New(audit.Options{Out: buf})})
+			k := Key{Session: "s1", Cluster: "local"}
+			if _, err := s.Ask(Question{Key: k, Text: "Answer slowly", Tools: stubTools{}}); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), tc.within)
+			defer cancel()
+			s.Drain(ctx, 10*time.Second)
+			v := s.Conversation(k).View()
+			if got := v.Messages[len(v.Messages)-1]; got.Status != tc.status {
+				t.Fatalf("status %s, want %s", got.Status, tc.status)
+			}
+			if !strings.Contains(buf.String(), "sherlock") {
+				t.Fatalf("no audit record: %s", buf.String())
+			}
+		})
+	}
+}
+
+// The rule that text from the cluster is data holds with view changes on or
+// off, and with the administrators' own instructions.
+func TestClusterTextIsDataInEveryPrompt(t *testing.T) {
+	for name, q := range map[string]Question{
+		"view changes on":           {Cluster: "lab", ViewChanges: true},
+		"view changes off":          {Cluster: "lab"},
+		"their own instructions":    {Cluster: "lab", Instructions: "Answer in French."},
+		"instructions that have it": {Cluster: "lab", Instructions: "Answer in French.\n" + clusterTextRule},
+	} {
+		core, _ := PromptText(q, time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC))
+		if n := strings.Count(core, clusterTextRule); n != 1 {
+			t.Errorf("%s: the rule is there %d times:\n%s", name, n, core)
+		}
 	}
 }

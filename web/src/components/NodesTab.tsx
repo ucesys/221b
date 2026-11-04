@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLiveMeta, useView } from '../api/live'
 import type { Fleet, FleetRow, Me, NodeRow } from '../api/types'
 import { NODE_COLUMNS, nodeLabel, nodeTerms } from '../columns/nodes'
@@ -11,6 +11,10 @@ import { DataTable } from './DataTable'
 import { ExportMenu } from './ExportMenu'
 import { FacetPicker } from './FacetPicker'
 import { NodeFleets } from './NodeFleets'
+import { NodePicking, usePickedNodes } from './NodePicks'
+import { PickedBar } from './PickedBar'
+import { fetchToolbox } from '../api/toolbox'
+import { useToolbox } from './toolbox/context'
 import { NodePanel } from './NodePanel'
 import { ProblemFilter, problemLevel, showsNode } from './ProblemFilter'
 import { SearchBox } from './SearchBox'
@@ -47,6 +51,30 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
   // (asked at the Phase 6 review).
   const table = useTable<NodeRow>({ id: 'nodes', columns: NODE_COLUMNS, rows: inScope, terms: nodeTerms, now, compact, defaultSort: { col: 'status', dir: 'desc' }, query, onQuery: (q) => set({ q }) })
   const metrics = cluster?.metrics === 'available'
+
+  // Picked nodes (asked October 30, 2026): the Fleets tab's bar and dialog,
+  // and paired for SSH, one session each. me.admin is the SuperAdmin, who
+  // alone changes fleets and pairs nodes, so no one else gets the boxes.
+  const tb = useToolbox()
+  const admin = me?.admin ?? true
+  const { picks, pickedRows, pickSet, setPicks, togglePick } = usePickedNodes(route.cluster, rows)
+  const picking = useMemo(() => (admin ? { picked: pickSet, toggle: togglePick } : null), [admin, pickSet, togglePick])
+  // What the server would answer, asked once something is picked.
+  const askSSH = admin && picks.length > 0 && !!tb?.available
+  const [sshRefusal, setSshRefusal] = useState<string | undefined>()
+  const tbCluster = tb?.cluster
+  useEffect(() => {
+    if (!askSSH || !tbCluster) return
+    let live = true
+    fetchToolbox(tbCluster, [], true).then(
+      (i) => live && setSshRefusal(i.off['ssh-pair'] || (i.ssh ? undefined : 'SSH is turned off on this console')),
+      () => undefined,
+    )
+    return () => {
+      live = false
+    }
+  }, [askSSH, tbCluster])
+  const sshOff = !tb?.available ? 'Watson is off here' : sshRefusal
   const cp = rows.filter((r) => r.role === 'control-plane').length
   const withErrors = rows.filter((r) => r.errors > 0).length
   const withProblems = rows.filter((r) => r.errors + r.warnings > 0).length
@@ -92,6 +120,7 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
       <div className="rk-split" style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', alignItems: 'stretch' }}>
         <NodeFleets cluster={route.cluster} fleets={fleetRows} defs={defs} nodes={rows} sel={fleetSel} onSel={(ids) => set({ fleet: ids })} loaded={fleetsLoaded} me={me} now={now} fleetsPage={meta.settings?.fleetsPage !== false} onToast={onToast} />
         <div className="rk-col" style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <NodePicking.Provider value={picking}>
           <section aria-label="Node list" style={{ padding: '18px 24px 28px', display: 'flex', flexDirection: 'column', gap: 10 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '10px 12px' }}>
               <div className="rk-seg" role="group" aria-label="Show nodes by role">
@@ -112,8 +141,34 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
                 <ExportMenu onExport={(f) => table.exportRows(f, cluster?.name, 'nodes', onToast)} disabled={!table.shown.length} what="the nodes in view" />
               </div>
             </div>
+            {admin && picks.length > 0 && (
+              <PickedBar
+                cluster={route.cluster}
+                nodes={pickedRows}
+                all={rows}
+                fleets={defs}
+                rows={fleetRows}
+                current={fleetSel.length === 1 ? defs.find((f) => f.id === fleetSel[0]) : undefined}
+                inFlow
+                onCancel={() => setPicks([])}
+                onCreated={(f) => set({ fleet: f.id })}
+                onToast={onToast}
+                note={
+                  table.shown.some((r) => !pickSet.has(r.name)) && (
+                    <button className="rk-link" onClick={() => setPicks([...new Set([...picks, ...table.shown.map((r) => r.name)])])} style={{ fontSize: 12 }} data-testid="fleet-nodebar-all">
+                      pick all {table.shown.length} in view
+                    </button>
+                  )
+                }
+              >
+                <button className="rk-btn" onClick={() => tb?.openTool({ tool: 'ssh-pair', nodes: picks, from: 'Nodes page' })} disabled={!!sshOff} title={sshOff ?? 'Pair every picked node for SSH: one session each'} data-testid="fleet-nodebar-ssh">
+                  Pair for SSH…
+                </button>
+              </PickedBar>
+            )}
             <DataTable<NodeRow> label="Nodes" rows={table.shown} cols={table.cols} rowKey={(r) => r.name} rowLabel={nodeLabel} sort={table.sort} onSort={table.onSort} selected={selected} onOpen={onOpen} compact={compact} now={now} empty={rows.length ? 'No nodes match this filter.' : 'No nodes to show: Kubernetes does not let you list nodes in this cluster, or it has none.'} rowAttr="node" />
           </section>
+          </NodePicking.Provider>
         </div>
         {selectedRow && <NodePanel r={selectedRow} metrics={metrics} metricsNote={cluster?.metricsMessage ?? ''} uptimeNote={cluster?.uptimeMessage ?? ''} now={now} onClose={close} onToast={onToast} />}
       </div>

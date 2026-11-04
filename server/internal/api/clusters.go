@@ -137,6 +137,22 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("cluster")
+	// Taking a cluster off production waits for another SuperAdmin, when
+	// there is one; the rest of the change is made now.
+	var held string
+	var alone bool
+	if cur, ok := s.opts.Clusters.Summary(id); ok {
+		var hold bool
+		if hold, alone = s.holdEnvironment(r, cur, d.Env); hold {
+			req, err := s.requestEnvironment(r, cur, d.Env)
+			if err != nil {
+				held = "The rest of the change is made, but the environment stays " + cur.Env + ": " + err.Error()
+			} else {
+				held = fmt.Sprintf("The environment stays %s until another SuperAdmin approves the change to %s on Administration › Approvals (request %d); the rest of the change is made.", cur.Env, d.Env, req.ID)
+			}
+			d.Env = cur.Env
+		}
+	}
 	sum, err := s.opts.Clusters.Update(r.Context(), id, d)
 	if err != nil {
 		s.recordCluster(r, audit.ActionClusterUpdate, id, audit.OutcomeFailed, err.Error())
@@ -147,8 +163,20 @@ func (s *Server) updateCluster(w http.ResponseWriter, r *http.Request) {
 	if !d.Credential.Empty() {
 		what = "credentials and settings"
 	}
-	s.recordCluster(r, audit.ActionClusterUpdate, sum.ID, audit.OutcomeOK, fmt.Sprintf("%s changed: %s (%s), %s, sign-in by %s, %s", what, sum.Name, sum.Env, sum.Server, sum.Auth, sum.Mode))
+	detail := fmt.Sprintf("%s changed: %s (%s), %s, sign-in by %s, %s", what, sum.Name, sum.Env, sum.Server, sum.Auth, sum.Mode)
+	if alone {
+		detail += "; taken off production at once: the only SuperAdmin, so nobody else could approve"
+	}
+	s.recordCluster(r, audit.ActionClusterUpdate, sum.ID, audit.OutcomeOK, detail)
 	s.opts.Logger.Info("cluster connection changed", "cluster", sum.ID, "credentials", !d.Credential.Empty())
+	if held != "" {
+		b, _ := json.Marshal(struct {
+			clusters.Summary
+			Held string `json:"held"`
+		}{sum, held})
+		writeJSONStatus(w, r, http.StatusAccepted, b)
+		return
+	}
 	b, _ := json.Marshal(sum)
 	writeJSON(w, r, b)
 }

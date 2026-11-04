@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/toolbox"
 	"github.com/ucesys/221b/server/internal/tunnel"
 )
@@ -41,6 +44,20 @@ type fakeBackend struct {
 	forwarded []byte
 	dryRuns   int
 	refuse    error
+	// onCreate runs inside a create, as the API server takes its time.
+	onCreate func(ctx context.Context) error
+	// noisy makes a command print until it is stopped, and a while after.
+	noisy bool
+}
+
+func (f *fakeBackend) creating(ctx context.Context, dry bool) error {
+	f.mu.Lock()
+	hook := f.onCreate
+	f.mu.Unlock()
+	if dry || hook == nil {
+		return nil
+	}
+	return hook(ctx)
 }
 
 func newFake() *fakeBackend {
@@ -83,10 +100,19 @@ func (f *fakeBackend) Namespace(_ context.Context, name string) (*corev1.Namespa
 func (f *fakeBackend) Exec(ctx context.Context, ns, pod, container string, cmd []string, tty bool, stdin io.Reader, stdout, stderr io.Writer, sizes <-chan Size) error {
 	f.mu.Lock()
 	f.execs = append(f.execs, append([]string{ns + "/" + pod + "/" + container}, cmd...))
-	noShell, code, out := f.noShell, f.exitCode, f.output
+	noShell, code, out, noisy := f.noShell, f.exitCode, f.output, f.noisy
 	f.mu.Unlock()
 	if noShell {
 		return errors.New(`exec: "sh": executable file not found in $PATH`)
+	}
+	if noisy {
+		for ctx.Err() == nil {
+			io.WriteString(stdout, "line of output\n")
+		}
+		for range 2000 {
+			io.WriteString(stdout, "line of output\n")
+		}
+		return ctx.Err()
 	}
 	if !tty {
 		io.WriteString(stdout, out)
@@ -167,7 +193,10 @@ func (f *fakeBackend) AddEphemeral(_ context.Context, pod *corev1.Pod, ec corev1
 	return nil
 }
 
-func (f *fakeBackend) CreateJob(_ context.Context, job *batchv1.Job, dry bool) error {
+func (f *fakeBackend) CreateJob(ctx context.Context, job *batchv1.Job, dry bool) error {
+	if err := f.creating(ctx, dry); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if dry {
@@ -181,7 +210,10 @@ func (f *fakeBackend) CreateJob(_ context.Context, job *batchv1.Job, dry bool) e
 	return nil
 }
 
-func (f *fakeBackend) CreatePod(_ context.Context, pod *corev1.Pod, dry bool) error {
+func (f *fakeBackend) CreatePod(ctx context.Context, pod *corev1.Pod, dry bool) error {
+	if err := f.creating(ctx, dry); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if dry {
@@ -658,8 +690,11 @@ func TestCommandKeepsItsOutput(t *testing.T) {
 	if string(m.Output(s.ID)) != "hello\n" {
 		t.Fatalf("output %q", m.Output(s.ID))
 	}
-	if !strings.Contains(buf.text(), `output=\"hello\\n\"`) {
-		t.Fatalf("the audit record has no output: %s", buf.text())
+	for end := time.Now().Add(2 * time.Second); !strings.Contains(buf.text(), "session.end") && time.Now().Before(end); {
+		time.Sleep(time.Millisecond)
+	}
+	if !strings.Contains(buf.text(), `output_bytes=6`) || strings.Contains(buf.text(), "hello\\n") {
+		t.Fatalf("the audit record should give the size of the output and not the output: %s", buf.text())
 	}
 }
 
@@ -701,7 +736,7 @@ func TestDebugPodCopiesLabelsAndIsRemoved(t *testing.T) {
 	if labels["app"] != "api" || labels["pod-template-hash"] != "" || labels[LabelSession] != s.ID {
 		t.Fatalf("labels = %v", labels)
 	}
-	if *job.Spec.ActiveDeadlineSeconds != 1800 || job.Spec.Template.Spec.ReadinessGates[0].ConditionType != NeverReady {
+	if *job.Spec.ActiveDeadlineSeconds != int64((m.opts.Config.MaxDuration.D()+m.opts.StartWithin)/time.Second) || job.Spec.Template.Spec.ReadinessGates[0].ConditionType != NeverReady {
 		t.Fatalf("job spec = %+v", job.Spec)
 	}
 	// No ServiceAccount named: no token, so a shell in the pod holds no
@@ -926,5 +961,602 @@ func TestTunnelVersions(t *testing.T) {
 	got, err := tunnel.Decode(tunnel.Encode(f))
 	if err != nil || got.Conn != 42 || string(got.Payload) != "x" {
 		t.Fatal(got, err)
+	}
+}
+
+// A pairing request may name more nodes: validated and deduplicated,
+// summed up in one line, split into one request per node under one card
+// (asked October 30, 2026); other node tools take one node.
+func TestARequestOnSeveralNodes(t *testing.T) {
+	c := toolbox.Default()
+	c.SSH.Enabled = true
+	r := Request{Tool: toolbox.ToolSSHPair, Node: "a", Nodes: []string{"b", " a ", "c", "b", ""}, LoginUser: "ops"}
+	if err := r.Validate(c, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.AllNodes(); len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "c" {
+		t.Fatalf("nodes %v", got)
+	}
+	if s := r.Summary(); s != "pair 3 nodes for SSH as ops: a, b, c" {
+		t.Fatalf("summary %q", s)
+	}
+	each := r.Each()
+	if len(each) != 3 || each[1].Node != "b" || each[1].Nodes != nil || each[1].LoginUser != "ops" || each[2].Port != r.Port {
+		t.Fatalf("each: %+v", each)
+	}
+	bad := Request{Tool: toolbox.ToolSSHPair, Node: "a", Nodes: []string{"Not A Node"}, LoginUser: "ops"}
+	if err := bad.Validate(c, false); err == nil {
+		t.Fatal("a bad node name passed")
+	}
+	shell := Request{Tool: toolbox.ToolNodeShell, Node: "a", Nodes: []string{"b"}}
+	if err := shell.Validate(c, false); err == nil || !strings.Contains(err.Error(), "one node at a time") {
+		t.Fatalf("a node shell on two nodes: %v", err)
+	}
+}
+
+// Only pairing takes several nodes: any other tool's body with nodes would
+// open a session for each under a card that names one.
+func TestOnlyPairingTakesSeveralNodes(t *testing.T) {
+	c := toolbox.Default()
+	c.SSH.Enabled = true
+	for _, r := range []Request{
+		{Tool: toolbox.ToolDebugPod, Namespace: "x", Image: "general", Nodes: []string{"a", "b"}},
+		{Tool: toolbox.ToolShell, Namespace: "x", Pod: "p", Shell: "auto", Nodes: []string{"a"}},
+		{Tool: toolbox.ToolCommand, Namespace: "x", Pod: "p", Shell: "auto", Command: "ls", Nodes: []string{"a"}},
+		{Tool: toolbox.ToolSSH, Node: "a", Nodes: []string{"b"}},
+	} {
+		if err := r.Validate(c, false); err == nil || !strings.Contains(err.Error(), "one node at a time") {
+			t.Errorf("%s with nodes: %v", r.Tool, err)
+		}
+	}
+}
+
+// Pairing runs a general node pod, so a chart that leaves that profile
+// out refuses it as it refuses a node command.
+func TestPairingRespectsTheNodeProfiles(t *testing.T) {
+	c := toolbox.Default()
+	c.SSH.Enabled = true
+	c.NodeShell.Profiles = []string{toolbox.ProfileNetAdmin}
+	for _, r := range []Request{{Tool: toolbox.ToolSSHPair, Node: "a", LoginUser: "ops"}, {Tool: toolbox.ToolSSHUnpair, Node: "a"}} {
+		if err := r.Validate(c, false); err == nil || !strings.Contains(err.Error(), "node shell profiles here") {
+			t.Errorf("%s: %v", r.Tool, err)
+		}
+	}
+}
+
+// An SSH session is root on the node: with approval always it waits for a
+// second person, as a node shell does.
+func TestAnSSHSessionNeedsTheSecondPersonANodeShellDoes(t *testing.T) {
+	c := toolbox.Default()
+	c.NodeShell.Approval = toolbox.ApprovalAlways
+	if !NeedsTwo(c, toolbox.ToolSSH) || !NeedsTwo(c, toolbox.ToolNodeShell) || NeedsTwo(c, toolbox.ToolShell) {
+		t.Fatal("the second person")
+	}
+}
+
+// The SSH tools' cards say what they do; pairing goes through the node's
+// kubelet, so a node that is not Ready refuses it, and SSH does not.
+func TestTheCardsOfTheSSHTools(t *testing.T) {
+	m, _, _, _ := setup(t)
+	ctx := context.Background()
+	who := kube.Person{User: "alice"}
+	pair := Request{Tool: toolbox.ToolSSHPair, Node: "worker-3", LoginUser: "ops", Port: 22, Profile: toolbox.ProfileGeneral}
+	p := m.PlanFor(ctx, Cluster{ID: "c1"}, pair, who, "Alice")
+	if len(p.Targets) != 1 || p.Targets[0] != "node/worker-3" || p.Object == "" || !strings.Contains(strings.Join(p.Impact, " "), "admits ops on port 22") {
+		t.Fatalf("the pairing card: %+v", p)
+	}
+	un := m.PlanFor(ctx, Cluster{ID: "c1"}, Request{Tool: toolbox.ToolSSHUnpair, Node: "worker-3", Profile: toolbox.ProfileGeneral}, who, "Alice")
+	if len(un.Targets) != 1 || !strings.Contains(strings.Join(un.Impact, " "), "removes the console's SSH authority") {
+		t.Fatalf("the unpairing card: %+v", un)
+	}
+	s := m.PlanFor(ctx, Cluster{ID: "c1"}, Request{Tool: toolbox.ToolSSH, Node: "worker-3"}, who, "Alice")
+	if len(s.Targets) != 1 || s.Object != "" || len(s.DryRun) != 1 || !strings.Contains(s.DryRun[0], "No access review") {
+		t.Fatalf("the SSH card: %+v", s)
+	}
+}
+
+type fakeTerm struct{ closed atomic.Bool }
+
+func (t *fakeTerm) Run(context.Context, io.Reader, io.Writer, <-chan Size) error { return nil }
+func (t *fakeTerm) Close() error                                                 { t.closed.Store(true); return nil }
+
+// A connection that comes up after its session ended is dropped: it is
+// authenticated as root, and nothing else would ever close it.
+func TestASessionEndedDuringTheDialDropsTheConnection(t *testing.T) {
+	m, _, _, _ := setup(t)
+	s := &Session{}
+	s.State = StateEnded
+	term := &fakeTerm{}
+	m.sshTerminal(context.Background(), s, term, "")
+	if !term.closed.Load() {
+		t.Fatal("the connection was left open")
+	}
+}
+
+// Who may have a transcript does not change when the session leaves memory.
+func TestATranscriptFollowsTheSessionsRecord(t *testing.T) {
+	m, _, _, _ := setup(t)
+	s, err := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, alice(), "", "card1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, s.ID, StateLive)
+	admin := bob()
+	admin.Admin = true
+	for _, c := range []struct {
+		name    string
+		cluster string
+		who     Who
+		visible bool
+	}{{"its owner", "c1", alice(), true}, {"another person", "c1", bob(), false}, {"a SuperAdmin", "c1", admin, true}, {"another cluster", "c2", admin, false}} {
+		if _, got := m.Recorded(c.cluster, s.ID, c.who); got != c.visible {
+			t.Errorf("live, %s: %v", c.name, got)
+		}
+	}
+	m.opts.History.Add(Record{ID: "gone", Cluster: "c1", OwnerUser: "alice", Recorded: true})
+	m.opts.History.Add(Record{ID: "nobody", Cluster: "c1", Recorded: true})
+	for _, c := range []struct {
+		name string
+		id   string
+		who  Who
+		seen bool
+	}{{"its owner", "gone", alice(), true}, {"another person", "gone", bob(), false}, {"a SuperAdmin", "gone", admin, true},
+		{"anyone, with no owner on the record", "nobody", Who{SignIn: "s-x"}, false}, {"anyone, with no record", "unknown", alice(), false}} {
+		if recorded, got := m.Recorded("c1", c.id, c.who); got != c.seen || (got && !recorded) {
+			t.Errorf("gone, %s: recorded %v, visible %v", c.name, recorded, got)
+		}
+	}
+}
+
+// A pod's deadline cannot be raised, so a session that Extend can move
+// gets one that reaches as far as Extend does; a duration a second person
+// approved stays the limit. Either way the console ends it at its limit.
+func TestAPodsDeadlineReachesWhatExtendCan(t *testing.T) {
+	m, f, c, _ := setup(t)
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolNodeShell, Node: "worker-3", Minutes: 30}, alice(), "", "")
+	got := waitState(t, m, s.ID, StateLive)
+	f.mu.Lock()
+	deadline := time.Duration(*f.pods["221b-privileged/"+got.Pod].Spec.ActiveDeadlineSeconds) * time.Second
+	f.mu.Unlock()
+	if deadline < got.MaxEnds.Sub(got.Started) {
+		t.Fatalf("the pod stops at %s, and Extend reaches %s", deadline, got.MaxEnds.Sub(got.Started))
+	}
+	if _, err := m.Extend(s.ID, alice()); err != nil {
+		t.Fatal(err)
+	}
+	c.add(41 * time.Minute)
+	m.sweep()
+	if got := waitState(t, m, s.ID, StateEnded); got.EndedBy != EndLimit {
+		t.Fatalf("ended by %s, want its limit of 40 minutes", got.EndedBy)
+	}
+
+	a, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolNodeShell, Node: "worker-3", Minutes: 30}, alice(), "Bob", "")
+	got = waitState(t, m, a.ID, StateLive)
+	f.mu.Lock()
+	deadline = time.Duration(*f.pods["221b-privileged/"+got.Pod].Spec.ActiveDeadlineSeconds) * time.Second
+	f.mu.Unlock()
+	if deadline != 30*time.Minute+m.opts.StartWithin {
+		t.Fatalf("an approved 30 minutes gives a deadline of %s", deadline)
+	}
+}
+
+// What a session's end could not know of is still removed: the object
+// that appears after the end took its list, whether the create answered
+// or was cut short by the end though the API server had taken it.
+func TestAnObjectCreatedWhileTheSessionEndsIsRemoved(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		req        Request
+		answer     error
+	}{
+		{"pod, created", "pod/221b-privileged/", Request{Tool: toolbox.ToolNodeShell, Node: "worker-3"}, nil},
+		{"pod, cut short", "pod/221b-privileged/", Request{Tool: toolbox.ToolNodeShell, Node: "worker-3"}, context.Canceled},
+		{"job, created", "job/web/", Request{Tool: toolbox.ToolDebugPod, Namespace: "web", Image: "network"}, nil},
+		{"job, cut short", "job/web/", Request{Tool: toolbox.ToolDebugPod, Namespace: "web", Image: "network"}, context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, f, _, _ := setup(t)
+			creating := make(chan struct{})
+			f.onCreate = func(ctx context.Context) error {
+				close(creating)
+				<-ctx.Done()
+				return tc.answer
+			}
+			s, err := m.Start(Cluster{ID: "c1"}, tc.req, alice(), "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-creating
+			if _, err := m.End(s.ID, alice(), ""); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				f.mu.Lock()
+				deleted := append([]string(nil), f.deleted...)
+				f.mu.Unlock()
+				if len(deleted) == 1 && strings.HasPrefix(deleted[0], tc.want) {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("deleted %v, want one %s", deleted, tc.want)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			if got := waitState(t, m, s.ID, StateEnded); got.EndedBy != EndOwner || len(got.Objects) != 0 {
+				t.Fatalf("ended by %s, objects %v", got.EndedBy, got.Objects)
+			}
+		})
+	}
+}
+
+// Ending a command that is still printing reads its output under the
+// lock the stream writes under: go test -race says so.
+func TestEndingACommandThatPrintsIsNoRace(t *testing.T) {
+	m, f, _, buf := setup(t)
+	f.noisy = true
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolCommand, Namespace: "web", Pod: "api-1", Command: "yes"}, alice(), "", "")
+	waitState(t, m, s.ID, StateLive)
+	for len(m.Output(s.ID)) == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := m.End(s.ID, alice(), ""); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, s.ID, StateEnded)
+	for end := time.Now().Add(2 * time.Second); !strings.Contains(buf.text(), "session.end") && time.Now().Before(end); {
+		time.Sleep(time.Millisecond)
+	}
+	if !strings.Contains(buf.text(), "output_bytes=") || strings.Contains(buf.text(), "line of output") {
+		t.Fatalf("the audit record should give the size of the output and not the output: %s", buf.text())
+	}
+}
+
+// Asking whether a sign-in stands can take a directory's seconds: the
+// manager's lock, which every terminal needs, is free meanwhile.
+func TestTheSweepAsksAboutSignInsOutsideTheLock(t *testing.T) {
+	m, _, _, _ := setup(t)
+	var blocked atomic.Bool
+	who := alice()
+	who.Stands = func() bool {
+		free := make(chan struct{})
+		go func() {
+			m.mu.Lock()
+			m.mu.Unlock()
+			close(free)
+		}()
+		select {
+		case <-free:
+		case <-time.After(2 * time.Second):
+			blocked.Store(true)
+		}
+		return true
+	}
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, who, "", "")
+	waitState(t, m, s.ID, StateLive)
+	m.sweep()
+	if blocked.Load() {
+		t.Fatal("the sweep held the lock while it asked")
+	}
+}
+
+// A backend whose first connection to the kubelet is dead: the pod is
+// fine, every stream on that connection fails.
+type dyingBackend struct {
+	*fakeBackend
+	dials  atomic.Int32
+	closed atomic.Bool
+}
+
+type deadForwarder struct{ closed *atomic.Bool }
+
+func (d deadForwarder) Dial(int) (io.ReadWriteCloser, error) {
+	return nil, errors.New("creating the error stream: connection lost")
+}
+func (d deadForwarder) Close() error { d.closed.Store(true); return nil }
+
+func (b *dyingBackend) Forwarder(ctx context.Context, ns, pod string) (Forwarder, error) {
+	if b.dials.Add(1) == 1 {
+		return deadForwarder{&b.closed}, nil
+	}
+	return b.fakeBackend.Forwarder(ctx, ns, pod)
+}
+
+// startTunnel opens a forward's tunnel and returns its frames.
+func startTunnel(t *testing.T, m *Manager) (*pipeFrames, tunnel.InfoBody) {
+	t.Helper()
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolForward, Namespace: "web", Pod: "api-1", Port: 5432}, alice(), "", "")
+	waitState(t, m, s.ID, StateLive)
+	token, err := m.Token(s.ID, alice())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &pipeFrames{in: make(chan tunnel.Frame, 16), out: make(chan tunnel.Frame, 16)}
+	p.in <- tunnel.Frame{Type: tunnel.Hello, Payload: []byte(`{"version":"0.8.2","host":"laptop"}`)}
+	go m.Tunnel(context.Background(), s.ID, token, p)
+	t.Cleanup(func() { close(p.in) })
+	first := nextFrame(t, p)
+	var info tunnel.InfoBody
+	if first.Type != tunnel.Info || json.Unmarshal(first.Payload, &info) != nil {
+		t.Fatalf("first frame %d %q", first.Type, first.Payload)
+	}
+	return p, info
+}
+
+func nextFrame(t *testing.T, p *pipeFrames) tunnel.Frame {
+	t.Helper()
+	select {
+	case f := <-p.out:
+		return f
+	case <-time.After(3 * time.Second):
+		t.Fatal("no frame through the tunnel")
+		return tunnel.Frame{}
+	}
+}
+
+// The API server restarts during a forward: the pod runs on, the
+// connection to it does not. The connection that fails says so, and the
+// next one dials again.
+func TestAForwardDialsAgainAfterItsConnectionDies(t *testing.T) {
+	m, f, _, _ := setup(t)
+	b := &dyingBackend{fakeBackend: f}
+	m.opts.Backend = func(Cluster, kube.Person) (Backend, error) { return b, nil }
+	p, _ := startTunnel(t, m)
+
+	p.in <- tunnel.Frame{Type: tunnel.Open, Conn: 1, Payload: []byte("127.0.0.1:50000")}
+	if fr := nextFrame(t, p); fr.Type != tunnel.Close || fr.Conn != 1 || !strings.Contains(string(fr.Payload), "connection lost") {
+		t.Fatalf("the dead connection: %d %d %q", fr.Type, fr.Conn, fr.Payload)
+	}
+	if !b.closed.Load() {
+		t.Fatal("the dead connection was not closed")
+	}
+	p.in <- tunnel.Frame{Type: tunnel.Open, Conn: 2, Payload: []byte("127.0.0.1:50001")}
+	p.in <- tunnel.Frame{Type: tunnel.Data, Conn: 2, Payload: []byte("select 1")}
+	if fr := nextFrame(t, p); fr.Type != tunnel.Data || fr.Conn != 2 || string(fr.Payload) != "SELECT 1" {
+		t.Fatalf("after dialling again: %d %d %q", fr.Type, fr.Conn, fr.Payload)
+	}
+	if b.dials.Load() != 2 {
+		t.Fatalf("dialled %d times", b.dials.Load())
+	}
+}
+
+// A port whose program answers once the client has finished sending.
+type halfConn struct {
+	net.Conn
+	finished chan struct{}
+}
+
+func (c *halfConn) CloseWrite() error { close(c.finished); return nil }
+
+type halfForwarder struct{}
+
+func (halfForwarder) Dial(int) (io.ReadWriteCloser, error) {
+	a, b := net.Pipe()
+	c := &halfConn{Conn: a, finished: make(chan struct{})}
+	go func() {
+		<-c.finished
+		b.Write([]byte("the answer"))
+		b.Close()
+	}()
+	return c, nil
+}
+func (halfForwarder) Close() error { return nil }
+
+type halfBackend struct{ *fakeBackend }
+
+func (halfBackend) Forwarder(context.Context, string, string) (Forwarder, error) {
+	return halfForwarder{}, nil
+}
+
+// A program that has finished sending tells the pod so and keeps the
+// connection, for the answer.
+func TestACloseWriteTellsThePodAndKeepsTheAnswer(t *testing.T) {
+	m, f, _, _ := setup(t)
+	m.opts.Backend = func(Cluster, kube.Person) (Backend, error) { return halfBackend{f}, nil }
+	p, info := startTunnel(t, m)
+	if !info.CloseWrite {
+		t.Fatal("the console does not say it takes CloseWrite")
+	}
+	p.in <- tunnel.Frame{Type: tunnel.Open, Conn: 3}
+	p.in <- tunnel.Frame{Type: tunnel.CloseWrite, Conn: 3}
+	if fr := nextFrame(t, p); fr.Type != tunnel.Data || string(fr.Payload) != "the answer" {
+		t.Fatalf("after CloseWrite: %d %q", fr.Type, fr.Payload)
+	}
+	if fr := nextFrame(t, p); fr.Type != tunnel.Close || fr.Conn != 3 {
+		t.Fatalf("then: %d %d", fr.Type, fr.Conn)
+	}
+}
+
+// A console without SSH: the tools fail with a message, in the session
+// (Phase 11), with no check of their own at each use.
+func TestAConsoleWithoutSSHFailsTheSSHToolsWithAMessage(t *testing.T) {
+	m, _, _, _ := setup(t)
+	for _, req := range []Request{{Tool: toolbox.ToolSSH, Node: "worker-1"}, {Tool: toolbox.ToolSSHPair, Node: "worker-1", LoginUser: "ops"}} {
+		s, err := m.Start(Cluster{ID: "c1"}, req, alice(), "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := waitState(t, m, s.ID, StateEnded); !strings.Contains(got.EndNote, "SSH is not part of this console") {
+			t.Fatalf("%s: %q", req.Tool, got.EndNote)
+		}
+	}
+}
+
+// Each session of a card says so in the audit log, the second node's as
+// much as the first's: the card's own record names only the first.
+func TestASessionsAuditRecordsNameItsCard(t *testing.T) {
+	m, f, _, buf := setup(t)
+	f.addPod("web", "api-1", "app")
+	s, err := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, alice(), "", "card-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, s.ID, StateLive)
+	if !strings.Contains(buf.text(), "session="+s.ID+" tool=shell card=card-7") {
+		t.Fatalf("audit %s", buf.text())
+	}
+}
+
+func TestThePredicateForBeingRootOnANode(t *testing.T) {
+	for tool, want := range map[string]bool{toolbox.ToolNodeShell: true, toolbox.ToolNodeCommand: true, toolbox.ToolSSHPair: true, toolbox.ToolSSHUnpair: true, toolbox.ToolSSH: true, toolbox.ToolShell: false, toolbox.ToolForward: false} {
+		if OnNodeOrSSH(tool) != want {
+			t.Errorf("%s: %v", tool, !want)
+		}
+	}
+}
+
+// A restore merges by id, keeps what the toolbox keeps, newest first, and
+// a second one adds nothing.
+func TestARestoreMergesRecordsUpToWhatIsKept(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC)
+	h := &KVHistory{Backend: &kv.Memory{}, Key: HistoryKey, Keep: 3}
+	h.Add(Record{ID: "kept", Ended: at})
+	h.Add(Record{ID: "old", Ended: at.Add(-time.Hour)})
+	add := []Record{{ID: "kept", Ended: at, Summary: "from the file"}, {ID: "newer", Ended: at.Add(time.Hour)}, {ID: "newest", Ended: at.Add(2 * time.Hour)}}
+	n, err := h.Merge(ctx, add)
+	if err != nil || n != 2 {
+		t.Fatalf("merged %d: %v", n, err)
+	}
+	got := h.List()
+	if len(got) != 3 || got[0].ID != "newest" || got[1].ID != "newer" || got[2].ID != "kept" || got[2].Summary != "" {
+		t.Fatalf("%+v", got)
+	}
+	if n, err := h.Merge(ctx, add[:2]); err != nil || n != 0 {
+		t.Fatalf("again: %d %v", n, err)
+	}
+}
+
+// conflictOnce is a store where another replica saves between a read and
+// a write.
+type conflictOnce struct {
+	kv.Memory
+	hit bool
+}
+
+func (c *conflictOnce) SaveKey(ctx context.Context, key string, b []byte, version string) (string, error) {
+	if !c.hit {
+		c.hit = true
+		return "", kv.ErrConflict
+	}
+	return c.Memory.SaveKey(ctx, key, b, version)
+}
+
+func TestARestoreTriesAgainAfterAConflict(t *testing.T) {
+	h := &KVHistory{Backend: &conflictOnce{}, Key: HistoryKey}
+	if n, err := h.Merge(context.Background(), []Record{{ID: "a"}}); err != nil || n != 1 {
+		t.Fatalf("%d %v", n, err)
+	}
+}
+
+// A node's host keys reach the pairing record and never the output anyone
+// sees, whatever chunks they arrive in.
+func TestHostKeysStayOffTheOutput(t *testing.T) {
+	text := "pairing\n" + HostKeyMark + "ssh-ed25519 AAAA\ndone\n" + HostKeyMark + "ssh-rsa BBBB\n221B-PAIRED ops"
+	for _, size := range []int{1, 3, 7, len(text)} {
+		var shown bytes.Buffer
+		h := newHiding(&shown, []byte(HostKeyMark))
+		for rest := text; len(rest) > 0; {
+			n := min(size, len(rest))
+			h.Write([]byte(rest[:n]))
+			rest = rest[n:]
+		}
+		h.flush()
+		if got := shown.String(); got != "pairing\ndone\n221B-PAIRED ops" {
+			t.Fatalf("chunks of %d: shown %q", size, got)
+		}
+		if got := h.Hidden(); got != HostKeyMark+"ssh-ed25519 AAAA\n"+HostKeyMark+"ssh-rsa BBBB\n" {
+			t.Fatalf("chunks of %d: hidden %q", size, got)
+		}
+	}
+}
+
+// A command's output and its errors arrive at once, a byte at a time:
+// each keeps its own line, so no host key line is torn and shown.
+func TestHostKeysStayOffTheOutputOfBothStreams(t *testing.T) {
+	line := HostKeyMark + "ssh-ed25519 AAAA\n"
+	var shown bytes.Buffer
+	out := newHiding(&shown, []byte(HostKeyMark))
+	errs := out.twin()
+	var wg sync.WaitGroup
+	for _, w := range []*hidingWriter{out, errs} {
+		wg.Add(1)
+		go func(w *hidingWriter) {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				for j := 0; j < len(line); j++ {
+					w.Write([]byte{line[j]})
+				}
+				w.Write([]byte("ok\n"))
+			}
+		}(w)
+	}
+	wg.Wait()
+	out.flush()
+	errs.flush()
+	if strings.Contains(shown.String(), "ssh-") || shown.String() != strings.Repeat("ok\n", 100) {
+		t.Fatalf("shown %q", shown.String())
+	}
+	if got := strings.Count(out.Hidden(), line); got != 100 {
+		t.Fatalf("%d host key lines kept, want 100", got)
+	}
+}
+
+// Reading another person's live output is watching it: the owner sees who,
+// and the audit trail has it (TB-55). The owner's own read is neither, and
+// an ended session's output stays for those who may see it.
+func TestReadingSomeoneElsesLiveOutputIsWatchingIt(t *testing.T) {
+	m, _, _, buf := setup(t)
+	m.opts.ReadShown = 30 * time.Millisecond
+	s, _ := m.Start(Cluster{ID: "c1"}, Request{Tool: toolbox.ToolShell, Namespace: "web", Pod: "api-1"}, alice(), "", "")
+	waitState(t, m, s.ID, StateLive)
+	m.ReadOutput(s.ID, alice())
+	if got, _ := m.Get(s.ID); len(got.Watchers) != 0 || strings.Contains(buf.text(), ActionWatch) {
+		t.Fatalf("the owner's read counted as watching: %v %s", got.Watchers, buf.text())
+	}
+	admin := bob()
+	admin.Admin = true
+	m.ReadOutput(s.ID, admin)
+	m.ReadOutput(s.ID, admin)
+	if got, _ := m.Get(s.ID); len(got.Watchers) != 1 || got.Watchers[0] != "Bob" {
+		t.Fatalf("watchers = %v", got.Watchers)
+	}
+	if n := strings.Count(buf.text(), ActionWatch); n != 2 {
+		t.Fatalf("%d records of two reads: %s", n, buf.text())
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got, _ := m.Get(s.ID)
+		if len(got.Watchers) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("still shown: %v", got.Watchers)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, err := m.End(s.ID, alice(), ""); err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, m, s.ID, StateEnded)
+	before := strings.Count(buf.text(), ActionWatch)
+	m.ReadOutput(s.ID, admin)
+	if strings.Count(buf.text(), ActionWatch) != before+1 {
+		t.Fatalf("reading an ended session was not audited: %s", buf.text())
+	}
+}
+
+// The records stay within their bytes too: the oldest go first.
+func TestTheRecordsStayWithinTheirBytes(t *testing.T) {
+	h := &KVHistory{Backend: &kv.Memory{}, Key: HistoryKey, Keep: 300, MaxBytes: 4 << 10}
+	for i := 0; i < 40; i++ {
+		h.Add(Record{ID: fmt.Sprintf("r%02d", i), Summary: strings.Repeat("x", 200)})
+	}
+	b, _, err := h.Backend.LoadKey(context.Background(), HistoryKey)
+	if err != nil || len(b) > 4<<10 {
+		t.Fatalf("%d bytes, %v", len(b), err)
+	}
+	if got := h.List(); len(got) == 0 || got[0].ID != "r39" {
+		t.Fatalf("the newest was not kept: %+v", got[:1])
 	}
 }

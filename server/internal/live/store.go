@@ -125,6 +125,10 @@ type Options struct {
 	// Cluster is the connection's id, under which the settings keep its
 	// fleets.
 	Cluster string
+	// Active says whether this replica reads the cluster (ADR-70): the
+	// source is polled only while it does, and what it last read is kept.
+	// nil polls on every tick.
+	Active func() bool
 }
 
 // viewDef says how a view's rows are built.
@@ -144,10 +148,16 @@ type viewDef struct {
 	// usage reads CPU and memory in use by row key, sent apart from the
 	// rows because it changes on every read.
 	usage func(src Source) map[string]nodes.Usage
+	// pass starts one pass over the rows, in place of build, for rows that
+	// share what they read from the whole cluster (views.Pass).
+	pass func(src Source) rowFunc
 	// decorate adds to a built row what is not in the cluster: an alert's
 	// acknowledgement.
 	decorate func(s *Store, key string, row any) any
 }
+
+// rowFunc renders one row of a pass, or ok=false when it is gone.
+type rowFunc func(key string, now time.Time) (any, bool)
 
 // view is one view's current rows.
 type view struct {
@@ -174,7 +184,8 @@ type Store struct {
 	views       map[string]*view
 	info        kube.Info
 	infoJSON    []byte
-	settings    []byte
+	settingsRaw []byte
+	settings    browserSettings
 	unscheduled int
 	counts      map[string]int
 	countsJSON  []byte
@@ -196,9 +207,11 @@ type Store struct {
 	dirtyTotals bool
 	built       bool      // rows have been built since the cluster was listed
 	rowsNow     bool      // a change someone made here: publish rows without waiting for the tick
+	eagerUntil  time.Time // a write made here: its changes go out as they come, until then
 	since       time.Time // when the oldest unpublished change arrived
 	kick        chan struct{}
 	reset       chan struct{}
+	refreshNow  chan struct{}
 }
 
 // DelayBuckets are the upper bounds, in seconds, of the change delay
@@ -247,14 +260,15 @@ func New(src Source, o Options) *Store {
 		o.Now = time.Now
 	}
 	s := &Store{
-		src:     src,
-		opts:    o,
-		views:   map[string]*view{},
-		subs:    map[*Sub]struct{}{},
-		refresh: o.Refresh,
-		dirty:   map[string]map[string]struct{}{},
-		kick:    make(chan struct{}, 1),
-		reset:   make(chan struct{}, 1),
+		src:        src,
+		opts:       o,
+		views:      map[string]*view{},
+		subs:       map[*Sub]struct{}{},
+		refresh:    o.Refresh,
+		dirty:      map[string]map[string]struct{}{},
+		kick:       make(chan struct{}, 1),
+		reset:      make(chan struct{}, 1),
+		refreshNow: make(chan struct{}, 1),
 	}
 	s.grace.Store(int64(settings.DefaultPendingGrace))
 	for _, d := range staticViews {
@@ -353,16 +367,22 @@ var staticViews = []viewDef{
 		whole: buildFleets,
 	},
 	{
-		name:  ViewPolicies,
-		lazy:  true,
-		keys:  func(src Source) []string { return views.PolicyKeys(src) },
-		build: func(src Source, key string, now time.Time) (any, bool) { return views.BuildPolicy(src, key, now) },
+		name: ViewPolicies,
+		lazy: true,
+		keys: func(src Source) []string { return views.PolicyKeys(src) },
+		pass: func(src Source) rowFunc {
+			pass := views.NewPass(src)
+			return func(key string, now time.Time) (any, bool) { return views.BuildPolicy(pass, key, now) }
+		},
 	},
 	{
-		name:  ViewNetworks,
-		lazy:  true,
-		keys:  func(src Source) []string { return views.NetworkKeys(src) },
-		build: func(src Source, key string, now time.Time) (any, bool) { return views.BuildNetwork(src, key, now) },
+		name: ViewNetworks,
+		lazy: true,
+		keys: func(src Source) []string { return views.NetworkKeys(src) },
+		pass: func(src Source) rowFunc {
+			pass := views.NewPass(src)
+			return func(key string, now time.Time) (any, bool) { return views.BuildNetwork(pass, key, now) }
+		},
 	},
 	{
 		name:  ViewStorage,
@@ -433,6 +453,9 @@ func (s *Store) Notify(ch kube.Change) {
 		s.since = s.opts.Now()
 	}
 	prompt := ch.Info || (len(ch.Views) > 0 && !s.built)
+	if len(ch.Views) > 0 && s.opts.Now().Before(s.eagerUntil) {
+		s.rowsNow, prompt = true, true
+	}
 	s.pendingMu.Unlock()
 	if prompt {
 		select {
@@ -442,6 +465,42 @@ func (s *Store) Notify(ch kube.Change) {
 	}
 }
 
+// browserSettings are the shared settings encoded for this cluster's
+// browsers, which get what they need of them and no more (settings.State's
+// ForCluster): whole for someone who may list nodes, without the fleets'
+// node names for someone who may see part of the cluster, and without its
+// fleets for someone who may see none of it.
+type browserSettings struct {
+	whole, noNodes, noFleets []byte
+}
+
+func encodeSettings(raw []byte, cluster string) browserSettings {
+	var st settings.State
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return browserSettings{}
+	}
+	st = st.ForCluster(cluster)
+	var out browserSettings
+	out.whole, _ = json.Marshal(st)
+	out.noNodes, _ = json.Marshal(st.WithoutFleetNodes())
+	out.noFleets, _ = json.Marshal(st.ForAnyone())
+	return out
+}
+
+// settingsForLocked are the settings as the filter's person gets them;
+// nil before any were set. s.mu must be held.
+func (s *Store) settingsForLocked(f Filter) []byte {
+	if f == nil || f.AllowCluster("nodes") {
+		return s.settings.whole
+	}
+	for _, ns := range s.src.Keys("namespaces") {
+		if f.AllowNamespace(ns) {
+			return s.settings.noNodes
+		}
+	}
+	return s.settings.noFleets
+}
+
 // SetSettings publishes new shared settings to every browser and applies
 // the refresh interval: the next refresh is one interval from now.
 func (s *Store) SetSettings(refresh time.Duration, raw []byte) {
@@ -449,10 +508,11 @@ func (s *Store) SetSettings(refresh time.Duration, raw []byte) {
 	if refresh > 0 {
 		s.refresh = refresh
 	}
-	changed := !bytes.Equal(raw, s.settings)
-	s.settings = append([]byte(nil), raw...)
-	if changed {
-		s.publishMetaLocked(Meta{Settings: json.RawMessage(raw)})
+	changed := !bytes.Equal(raw, s.settingsRaw)
+	s.settingsRaw = append([]byte(nil), raw...)
+	if enc := encodeSettings(raw, s.opts.Cluster); !bytes.Equal(enc.whole, s.settings.whole) {
+		s.settings = enc
+		s.publishMetaLocked(Meta{Settings: json.RawMessage(enc.whole)})
 	}
 	s.mu.Unlock()
 	if changed {
@@ -484,6 +544,20 @@ func (s *Store) SetSettings(refresh time.Duration, raw []byte) {
 	case s.reset <- struct{}{}:
 	default:
 	}
+}
+
+// expectWindow is how long after a write made through the console its
+// changes go out as they arrive: the watch reports it after the API
+// server answered.
+const expectWindow = 5 * time.Second
+
+// ExpectWrite says the console just wrote to the cluster: what the watches
+// report in the next seconds is published at once, not at the next
+// refresh, so the person sees what they made, a new Secret say.
+func (s *Store) ExpectWrite() {
+	s.pendingMu.Lock()
+	s.eagerUntil = s.opts.Now().Add(expectWindow)
+	s.pendingMu.Unlock()
 }
 
 // PublishSoon publishes the pending rows within the prompt delay instead
@@ -527,6 +601,15 @@ func (s *Store) Run(ctx context.Context) {
 		case <-timer.C:
 			s.Refresh(ctx)
 			timer.Reset(s.RefreshInterval())
+		case <-s.refreshNow:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			s.Refresh(ctx)
+			timer.Reset(s.RefreshInterval())
 		case <-s.kick:
 			select {
 			case <-ctx.Done():
@@ -542,14 +625,25 @@ func (s *Store) Run(ctx context.Context) {
 	}
 }
 
+// RefreshNow asks Run for a tick at once rather than at the timer: a
+// replica that becomes the leader reads usage without waiting (ADR-70).
+func (s *Store) RefreshNow() {
+	select {
+	case s.refreshNow <- struct{}{}:
+	default:
+	}
+}
+
 // Refresh is one tick: poll the source, rebuild the rows that changed,
 // publish the changes to every browser and tell them the refresh happened.
 // Run calls it; tests call it directly.
 func (s *Store) Refresh(ctx context.Context) {
-	budget := min(10*time.Second, max(2*time.Second, s.RefreshInterval()))
-	pollCtx, cancel := context.WithTimeout(ctx, budget)
-	s.src.Poll(pollCtx)
-	cancel()
+	if s.opts.Active == nil || s.opts.Active() {
+		budget := min(10*time.Second, max(2*time.Second, s.RefreshInterval()))
+		pollCtx, cancel := context.WithTimeout(ctx, budget)
+		s.src.Poll(pollCtx)
+		cancel()
+	}
 	if ctx.Err() != nil {
 		return
 	}
@@ -749,12 +843,19 @@ func (s *Store) build(d viewDef, all bool, keys []string, usage bool, now time.T
 		}
 		sort.Strings(keys)
 		r.present = make(map[string]struct{}, len(keys))
+		var pass rowFunc
+		if d.pass != nil {
+			pass = d.pass(s.src)
+		}
 		for _, k := range keys {
 			var row any
 			var ok bool
-			if d.buildFrom != nil {
+			switch {
+			case pass != nil:
+				row, ok = pass(k, now)
+			case d.buildFrom != nil:
 				row, ok = d.buildFrom(s, k, now)
-			} else {
+			default:
 				row, ok = d.build(s.src, k, now)
 			}
 			if !ok {
@@ -921,17 +1022,23 @@ func (s *Store) publishMetaLocked(m Meta) {
 		s.opts.Logger.Error("encoding the cluster details", "err", err)
 		return
 	}
-	// Totals are what each browser may see: a filtered browser gets its own.
+	// Totals and settings are what each browser may see: a filtered browser
+	// gets its own.
 	filtered := map[Filter][]byte{}
 	for sub := range s.subs {
-		if sub.filter == nil || m.Counts == nil {
+		if sub.filter == nil || (m.Counts == nil && m.Settings == nil) {
 			sub.push("meta", msg)
 			continue
 		}
 		fm, ok := filtered[sub.filter]
 		if !ok {
 			own := m
-			own.Counts = s.countsForLocked(sub.filter)
+			if m.Counts != nil {
+				own.Counts = s.countsForLocked(sub.filter)
+			}
+			if m.Settings != nil {
+				own.Settings = s.settingsForLocked(sub.filter)
+			}
 			fm, _ = json.Marshal(own)
 			filtered[sub.filter] = fm
 		}
@@ -1000,10 +1107,10 @@ func (s *Store) snapshotLocked(names []string, f Filter) []byte {
 		b.Write(s.infoJSON)
 	}
 	b.WriteString(`,"settings":`)
-	if s.settings == nil {
+	if own := s.settingsForLocked(f); own == nil {
 		b.WriteString("null")
 	} else {
-		b.Write(s.settings)
+		b.Write(own)
 	}
 	fmt.Fprintf(&b, `,"unscheduled":%d,"counts":`, s.unscheduled)
 	switch {

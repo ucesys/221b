@@ -29,6 +29,8 @@ export interface SherlockMsg {
   id: number
   role: 'user' | 'sherlock'
   text: string
+  /** What the model wrote before reading the cluster once more: shown while the next round runs, never the answer. */
+  note?: string
   steps?: SherlockStep[]
   refs?: SherlockRef[]
   status?: 'thinking' | 'answering' | 'done' | 'stopped' | 'failed'
@@ -116,6 +118,10 @@ export interface SherlockConfig {
   needsKey: boolean
   key: { set: boolean; source?: 'console' | 'chart'; setAt?: string; setBy?: string; store: 'secret' | 'memory' }
   spend: { day: string; dayUSD: number; dayAsked: number; month: string; monthUSD: number; monthAsked: number }
+  /** The providers seen to report no token use, whose spend is an estimate. */
+  noUsage?: string[]
+  /** Why the spend could not be saved: it is counted on this console only, and a restart forgets it. */
+  spendError?: string
   models: SherlockModel[]
   clusters: { id: string; name: string; env: string }[]
   running: number

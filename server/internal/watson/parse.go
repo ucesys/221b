@@ -137,7 +137,8 @@ var specs = []*spec{
 		flags: flags(map[string]flag{"all-namespaces": fAll, "selector": fSelector, "containers": {}, "sort-by": {value: true, values: []string{"cpu", "memory"}}, "no-headers": {}, "sum": {}, "show-capacity": {}}),
 		check: checkTop},
 	{tool: "kubectl", verb: []string{"events"}, min: 0, max: 0, usage: "kubectl events [-n NAMESPACE | -A] [--for TYPE/NAME] [--types Warning]",
-		flags: flags(map[string]flag{"all-namespaces": fAll, "for": {value: true}, "types": {value: true}, "no-headers": {}, "output": fOutput, "chunk-size": {value: true}})},
+		flags: flags(map[string]flag{"all-namespaces": fAll, "for": {value: true}, "types": {value: true}, "no-headers": {}, "output": fOutput, "chunk-size": {value: true}}),
+		check: checkOutput},
 	{tool: "kubectl", verb: []string{"auth", "can-i"}, min: 0, max: 3, usage: "kubectl auth can-i VERB TYPE [NAME] [-n NAMESPACE | -A] | --list",
 		flags: flags(map[string]flag{"all-namespaces": fAll, "list": {}, "subresource": {value: true}, "no-headers": {}, "quiet": {short: "q"}}),
 		check: checkCanI},
@@ -158,7 +159,7 @@ var specs = []*spec{
 		flags: flags(map[string]flag{"selector": fSelector, "dry-run": fDryRun}), check: checkRollout},
 	{tool: "kubectl", verb: []string{"rollout", "undo"}, change: true, min: 1, max: 2, usage: "kubectl rollout undo deployment/NAME [--to-revision=N]",
 		flags: flags(map[string]flag{"to-revision": {value: true}, "dry-run": fDryRun}), check: checkRollout},
-	{tool: "kubectl", verb: []string{"delete"}, change: true, min: 1, max: -1, usage: "kubectl delete pod NAME [NAME...] | kubectl delete pvc NAME | kubectl delete namespace NAME",
+	{tool: "kubectl", verb: []string{"delete"}, change: true, min: 1, max: -1, usage: "kubectl delete pod NAME [NAME...] | kubectl delete pvc NAME | kubectl delete secret NAME | kubectl delete namespace NAME",
 		flags: flags(map[string]flag{"selector": fSelector, "grace-period": {value: true}, "now": {}, "force": {}, "wait": {optional: true, value: true, values: []string{"true", "false"}}, "timeout": {value: true}, "dry-run": fDryRun, "ignore-not-found": {}}),
 		check: checkDelete},
 	{tool: "kubectl", verb: []string{"patch"}, change: true, min: 1, max: 2, usage: `kubectl patch pvc NAME -n NAMESPACE --type merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'`,
@@ -660,15 +661,26 @@ func targets(pos []string) (types []string, names []string) {
 	return types, pos[1:]
 }
 
+// checkOutput keeps -o to what prints from memory: the other formats
+// (jsonpath-file=, go-template-file=, templatefile=) read a path on the
+// server's own disk, where the console's token is.
+func checkOutput(c *Command) *Refusal {
+	out := c.Flag("output")
+	if out == "" {
+		return nil
+	}
+	if out == "wide" || out == "yaml" || out == "json" || out == "name" || strings.HasPrefix(out, "jsonpath=") || strings.HasPrefix(out, "jsonpath-as-json=") || strings.HasPrefix(out, "custom-columns=") {
+		return nil
+	}
+	return refuse("flag", "Watson prints -o wide, yaml, json, name, jsonpath=… and custom-columns=…, not %q.", out)
+}
+
 func checkGet(c *Command) *Refusal {
+	if r := checkOutput(c); r != nil {
+		return r
+	}
 	types, _ := targets(c.Positionals)
 	out := c.Flag("output")
-	if out != "" {
-		ok := out == "wide" || out == "yaml" || out == "json" || out == "name" || strings.HasPrefix(out, "jsonpath=") || strings.HasPrefix(out, "jsonpath-as-json=") || strings.HasPrefix(out, "custom-columns=")
-		if !ok {
-			return refuse("flag", "Watson prints -o wide, yaml, json, name, jsonpath=… and custom-columns=…, not %q.", out)
-		}
-	}
 	for _, t := range types {
 		if t == "secrets" && out != "" && out != "wide" && out != "name" {
 			return refuse("secret values", "Watson never prints Secret values. kubectl describe secret shows their keys and sizes.")
@@ -677,8 +689,12 @@ func checkGet(c *Command) *Refusal {
 	return nil
 }
 
+// selects says whether the command has a selector that selects: kubectl
+// takes an empty one, however it is spaced, for none at all.
+func selects(c *Command) bool { return strings.TrimSpace(c.Flag("selector")) != "" }
+
 func checkLogs(c *Command) *Refusal {
-	if len(c.Positionals) == 0 && !c.Has("selector") {
+	if len(c.Positionals) == 0 && !selects(c) {
 		return refuse("usage", "Name a pod, or a selector with -l. Usage: %s", c.spec.usage)
 	}
 	return nil
@@ -706,7 +722,7 @@ func checkCanI(c *Command) *Refusal {
 }
 
 func needTarget(c *Command) *Refusal {
-	if len(c.Positionals) == 0 && !c.Has("selector") {
+	if len(c.Positionals) == 0 && !selects(c) {
 		return refuse("usage", "Name a node, or select nodes with -l. Usage: %s", c.spec.usage)
 	}
 	return nil
@@ -730,7 +746,7 @@ func checkScale(c *Command) *Refusal {
 
 func checkRollout(c *Command) *Refusal {
 	types, names := targets(c.Positionals)
-	if len(names) == 0 && !c.Has("selector") {
+	if len(names) == 0 && !selects(c) {
 		return refuse("usage", "Usage: %s", c.spec.usage)
 	}
 	for _, t := range types {
@@ -743,27 +759,33 @@ func checkRollout(c *Command) *Refusal {
 
 func checkDelete(c *Command) *Refusal {
 	types, names := targets(c.Positionals)
-	claims, namespaces := false, false
+	claims, secrets, namespaces := false, false, false
 	for _, t := range types {
 		switch t {
 		case "pods":
 		case "persistentvolumeclaims":
 			// The Storage tab's Delete claim (ST-18), one claim by name.
 			claims = true
+		case "secrets":
+			// A Secret's Delete on the Namespaces tab, one by name.
+			secrets = true
 		case "namespaces":
 			// The Namespaces tab's Delete namespace (NS-02), one by name.
 			namespaces = true
 		default:
-			return refuse("not supported", "Watson deletes only pods, volume claims and namespaces; deleting %s is not supported.", t)
+			return refuse("not supported", "Watson deletes only pods, volume claims, Secrets and namespaces; deleting %s is not supported.", t)
 		}
 	}
 	if claims && (len(types) > 1 || c.Has("selector") || len(names) != 1) {
 		return refuse("usage", "Name the one claim to delete: kubectl delete pvc NAME -n NAMESPACE.")
 	}
+	if secrets && (len(types) > 1 || c.Has("selector") || len(names) != 1) {
+		return refuse("usage", "Name the one Secret to delete: kubectl delete secret NAME -n NAMESPACE.")
+	}
 	if namespaces && (len(types) > 1 || c.Has("selector") || len(names) != 1) {
 		return refuse("usage", "Name the one namespace to delete: kubectl delete namespace NAME.")
 	}
-	if len(names) == 0 && !c.Has("selector") {
+	if len(names) == 0 && !selects(c) {
 		return refuse("usage", "Name the pods to delete, or select them with -l. Watson does not delete every pod at once.")
 	}
 	return nil

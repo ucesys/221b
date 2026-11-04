@@ -1,3 +1,4 @@
+{{- if ne (include "b221.shared" .) "only" }}
 # The Lease the replicas elect the one that runs Sherlock and Watson with
 # (P7-02). The chart only creates it, empty, so helm uninstall removes it;
 # the replicas write who holds it.
@@ -9,3 +10,4 @@ metadata:
   labels:
     {{- include "b221.labels" . | nindent 4 }}
 spec: {}
+{{- end }}

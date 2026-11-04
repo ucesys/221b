@@ -109,14 +109,20 @@ func TestAccessAsksOnceAndAgainAfterTheTTL(t *testing.T) {
 		t.Fatalf("after the TTL: changed=%v asked=%d", changed, c.asked.Load())
 	}
 	v := a.Version()
-	// A failing review leaves the old verdict, and the error comes back.
-	now = now.Add(2 * time.Minute)
+	// A verdict stands for its age and no longer: when a review fails past
+	// it, the verdict stops allowing, the error comes back, and a stream
+	// hears of the change.
 	c.fail.Store(true)
-	if _, err := a.Prepare(context.Background(), pairs, 0); err == nil {
+	if changed, err := a.Prepare(context.Background(), pairs, 0); err != nil || changed || !a.Allow(live.ViewPods, "web/shop") {
+		t.Fatalf("a fresh verdict was asked about again: %v %v", changed, err)
+	}
+	now = now.Add(2 * time.Minute)
+	changed, err = a.Prepare(context.Background(), pairs, 0)
+	if err == nil {
 		t.Fatal("no error from a failing review")
 	}
-	if !a.Allow(live.ViewPods, "web/shop") || a.Version() != v {
-		t.Fatal("a failing review changed the verdicts")
+	if !changed || a.Allow(live.ViewPods, "web/shop") || a.Version() == v {
+		t.Fatalf("an expired verdict kept allowing: changed=%v", changed)
 	}
 	// A replaced connection (a new checker) starts over: its namespaces
 	// may share names with the old one's and mean something else.
@@ -125,6 +131,7 @@ func TestAccessAsksOnceAndAgainAfterTheTTL(t *testing.T) {
 	if _, err := a.Prepare(context.Background(), pairs, 0); err != nil || !a.Allow(live.ViewPods, "web/shop") {
 		t.Fatal("not allowed again after the failure ended")
 	}
+	v = a.Version()
 	if b := cache.For("local", &checker{}, dev); b != a || b.Allow(live.ViewPods, "web/shop") || b.Version() == v {
 		t.Fatal("verdicts outlived the connection they were asked of")
 	}

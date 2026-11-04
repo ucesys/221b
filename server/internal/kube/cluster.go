@@ -140,6 +140,7 @@ type Cluster struct {
 	kubeletStats   bool
 	secretsRead    bool
 	wantPodUsage   atomic.Bool
+	watching       atomic.Bool
 
 	mu                 sync.RWMutex
 	info               Info
@@ -148,9 +149,11 @@ type Cluster struct {
 	boots              map[string]bootEntry
 	bootForbiddenUntil time.Time
 	// volumes is what the kubelets report about mounted claims (ST-08),
-	// by "namespace/claim"; volumesAt when they were last read.
+	// by "namespace/claim"; volumesAt when they were last read, and
+	// volumesFrom the node to start from when the last read ran out of time.
 	volumes     map[string]VolumeStats
 	volumesAt   time.Time
+	volumesFrom string
 	watchErrs   map[string]watchErr
 	notify      func(Change)
 	events      map[string]uint64
@@ -372,8 +375,23 @@ var coreKinds = []string{"nodes", "pods", "namespaces"}
 // RestConfig returns a copy of the configuration the cluster was built with.
 func (c *Cluster) RestConfig() *rest.Config { return rest.CopyConfig(c.cfg) }
 
-// Run watches the cluster until ctx is done.
+// Run watches and polls the cluster until ctx is done: RunWatches and
+// RunPollers together, for a single replica and the tests.
 func (c *Cluster) Run(ctx context.Context) {
+	c.RunWatches(ctx)
+	c.RunPollers(ctx)
+	<-ctx.Done()
+}
+
+// RunWatches starts the informers, which list every kind and keep the
+// cache current until ctx is done, and returns at once; Ready says when
+// the core kinds are listed. A second call does nothing: a stopped
+// informer cannot start again, so a replica that must stop watching
+// restarts instead (ADR-70).
+func (c *Cluster) RunWatches(ctx context.Context) {
+	if !c.watching.CompareAndSwap(false, true) {
+		return
+	}
 	var core, all []cache.InformerSynced
 	for name, inf := range c.informers {
 		go inf.RunWithContext(ctx)
@@ -398,11 +416,20 @@ func (c *Cluster) Run(ctx context.Context) {
 			c.emit(c.everything())
 		}
 	}()
+}
+
+// Watching says whether the informers were started.
+func (c *Cluster) Watching() bool { return c.watching.Load() }
+
+// RunPollers starts what only the leader does besides Poll (ADR-70): the
+// health check of the connection and the kubelet uptime reads, until ctx
+// is done. It returns at once; cancelling ctx stops them, and a call with
+// a new context starts them again.
+func (c *Cluster) RunPollers(ctx context.Context) {
 	go c.loop(ctx, c.healthInterval, c.checkHealth)
 	if c.kubeletStats {
 		go c.bootLoop(ctx)
 	}
-	<-ctx.Done()
 }
 
 // everything marks every static view, the details and the totals.
@@ -861,7 +888,7 @@ func (c *Cluster) changed(k Kind, old, obj any) {
 		ch.Mark("networks", AllRows)
 	case "secrets":
 		for _, o := range []any{old, obj} {
-			if s, ok := unwrap(o).(*SecretSummary); ok && s.Type == corev1.SecretTypeTLS {
+			if s, ok := unwrap(o).(*SecretSummary); ok && (s.Type == corev1.SecretTypeTLS || s.Cert != nil) {
 				ch.Mark("networks", AllRows)
 			}
 		}
@@ -1095,7 +1122,8 @@ func (c *Cluster) readPodMetrics(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	raw, err := c.rest.Get().AbsPath("/apis/metrics.k8s.io/v1beta1/pods").SetHeader("Accept", "application/json").Do(ctx).Raw()
-	if errors.Is(ctx.Err(), context.Canceled) {
+	// Out of time, or stopped: that says nothing about the pods.
+	if ctx.Err() != nil {
 		return
 	}
 	usage := map[string]nodes.Usage{}

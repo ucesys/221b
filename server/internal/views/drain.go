@@ -29,18 +29,77 @@ const DrainFlags = "--ignore-daemonsets --delete-emptydir-data"
 // nothing, as the eviction API reads it.
 func budgetsFor(src Source, p *corev1.Pod) []*policyv1.PodDisruptionBudget {
 	var out []*policyv1.PodDisruptionBudget
-	for _, o := range src.Objects("poddisruptionbudgets", p.Namespace) {
+	for _, b := range budgetsIn(src, p.Namespace) {
+		if b.sel.Matches(labels.Set(p.Labels)) {
+			out = append(out, b.budget)
+		}
+	}
+	return out
+}
+
+// parsedBudget is a budget with its selector read.
+type parsedBudget struct {
+	budget *policyv1.PodDisruptionBudget
+	sel    labels.Selector
+}
+
+// budgetsIn lists a namespace's budgets that can select a pod, by name.
+func budgetsIn(src Source, namespace string) []parsedBudget {
+	pass, _ := src.(*Pass)
+	if pass != nil {
+		if out, ok := pass.budgets[namespace]; ok {
+			return out
+		}
+	}
+	var out []parsedBudget
+	for _, o := range src.Objects("poddisruptionbudgets", namespace) {
 		b, ok := o.(*policyv1.PodDisruptionBudget)
 		if !ok || b.Spec.Selector == nil {
 			continue
 		}
 		sel, err := metav1.LabelSelectorAsSelector(b.Spec.Selector)
-		if err != nil || sel.Empty() || !sel.Matches(labels.Set(p.Labels)) {
+		if err != nil || sel.Empty() {
 			continue
 		}
-		out = append(out, b)
+		out = append(out, parsedBudget{budget: b, sel: sel})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.Slice(out, func(i, j int) bool { return out[i].budget.Name < out[j].budget.Name })
+	if pass != nil {
+		pass.budgets[namespace] = out
+	}
+	return out
+}
+
+// budgetPod is a live pod a budget selects; shared says another budget
+// selects it too.
+type budgetPod struct {
+	pod    *corev1.Pod
+	shared bool
+}
+
+// budgetPodsIn lists the pods each of a namespace's budgets selects, by the
+// budget's name. Each pod is matched once, whatever the number of budgets
+// that ask.
+func budgetPodsIn(src Source, namespace string) map[string][]budgetPod {
+	pass, _ := src.(*Pass)
+	if pass != nil {
+		if out, ok := pass.budgetPods[namespace]; ok {
+			return out
+		}
+	}
+	out := map[string][]budgetPod{}
+	for _, p := range podsIn(src, namespace) {
+		if !live(p) {
+			continue
+		}
+		bs := budgetsFor(src, p)
+		for _, b := range bs {
+			out[b.Name] = append(out[b.Name], budgetPod{pod: p, shared: len(bs) > 1})
+		}
+	}
+	if pass != nil {
+		pass.budgetPods[namespace] = out
+	}
 	return out
 }
 
@@ -313,23 +372,10 @@ func pdbRow(src Source, ns, name string, now time.Time) (any, bool) {
 	if b.Spec.UnhealthyPodEvictionPolicy != nil {
 		r.Unhealthy = string(*b.Spec.UnhealthyPodEvictionPolicy)
 	}
-	for _, p := range podsIn(src, ns) {
-		if !live(p) {
-			continue
-		}
-		bs := budgetsFor(src, p)
-		mine := false
-		for _, x := range bs {
-			if x.Name == name {
-				mine = true
-			}
-		}
-		if !mine {
-			continue
-		}
-		r.Pods = append(r.Pods, PDBPod{Name: p.Name, Node: p.Spec.NodeName, Ready: podReady(p)})
-		if len(bs) > 1 {
-			r.Overlap = append(r.Overlap, p.Name)
+	for _, s := range budgetPodsIn(src, ns)[name] {
+		r.Pods = append(r.Pods, PDBPod{Name: s.pod.Name, Node: s.pod.Spec.NodeName, Ready: podReady(s.pod)})
+		if s.shared {
+			r.Overlap = append(r.Overlap, s.pod.Name)
 		}
 	}
 	_ = now

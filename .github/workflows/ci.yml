@@ -209,11 +209,18 @@ jobs:
           tree=$(git rev-parse 'HEAD^{tree}')
           pre="$IMAGE:prebuilt-${tree::12}"
           echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin >/dev/null 2>&1 || true
-          if docker pull -q "$pre" >/dev/null 2>&1 && [ "$(docker image inspect "$pre" --format '{{index .Config.Labels "dev.221b.tree"}}')" = "$tree" ]; then
+          # A release is never a prebuilt: this build, with its version, is
+          # what the gates test and what publish pushes for linux/amd64.
+          version="ci-${GITHUB_SHA::12}"
+          [[ "$GITHUB_REF" == refs/tags/v* ]] && version="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF" != refs/tags/v* ]] && docker pull -q "$pre" >/dev/null 2>&1 && [ "$(docker image inspect "$pre" --format '{{index .Config.Labels "dev.221b.tree"}}')" = "$tree" ]; then
             echo "::notice title=Prebuilt image::$pre was built from this tree; it is tested instead of a new build."
             docker tag "$pre" "$IMAGE:ci"
           else
-            docker build --build-arg VERSION="ci-${GITHUB_SHA::12}" --build-arg COMMIT="${GITHUB_SHA::12}" -t "$IMAGE:ci" . 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+            pins=()
+            while read -r line; do pins+=(--build-arg "$line"); done < <(grep -v '^#' hack/base-images.env)
+            docker build "${pins[@]}" --build-arg VERSION="$version" --build-arg COMMIT="${GITHUB_SHA::12}" \
+              --label org.opencontainers.image.revision="$GITHUB_SHA" -t "$IMAGE:ci" . 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
           fi
       - name: Size, user and contents
         run: |
@@ -448,7 +455,7 @@ jobs:
 
   publish:
     name: Publish image
-    needs: [go, web, browsers, chart, image, e2e, upgrade]
+    needs: [go, web, browsers, chart, image, e2e, ha, scale, upgrade]
     # Main, and pull requests from this repository (not forks), so a pull
     # request can be tried on a test cluster before it merges; a run started
     # by hand publishes its branch as branch-<name>. A build pushed with
@@ -460,30 +467,46 @@ jobs:
       always() &&
       needs.go.result == 'success' && needs.web.result == 'success' && needs.chart.result == 'success' &&
       needs.image.result == 'success' && needs.e2e.result == 'success' && needs.upgrade.result == 'success' &&
+      needs.ha.result == 'success' && needs.scale.result == 'success' &&
       (needs.browsers.result == 'success' || (github.event_name == 'pull_request' && needs.browsers.result == 'failure')) &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
+    # id-token and attestations sign what is published: a cosign signature
+    # made with the workflow's own identity, and SLSA build provenance and
+    # an SPDX SBOM kept as GitHub attestations beside the image (#79).
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: image
+          path: bin
+      - uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: grype
       - name: Log in to GitHub Container Registry
         env:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ACTOR: ${{ github.actor }}
         run: echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
       - name: Build and push for linux/amd64 and linux/arm64
+        id: push
         env:
           PR: ${{ github.event.pull_request.number }}
-          # For a pull request, its branch's commit rather than the merge commit.
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          GRYPE: ${{ steps.grype.outputs.cmd }}
         run: |
           mkdir -p bin
-          sha=${HEAD_SHA::12}
+          # The commit built and tested: for a pull request its merge
+          # commit, so a sha- tag names one build for good.
+          sha=${GITHUB_SHA::12}
           if [ -n "$PR" ]; then
             version="pr-$PR"
             refs=("$IMAGE:pr-$PR" "$IMAGE:sha-$sha")
@@ -504,6 +527,14 @@ jobs:
           fi
           tags=()
           for r in "${refs[@]}"; do tags+=(-t "$r"); done
+          # What the signing steps below sign, by digest once it is pushed.
+          echo "ref=${refs[0]}" >> "$GITHUB_OUTPUT"
+          # A release's image is never replaced: a rerun after it was
+          # published keeps it as it is, and only signs it again.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] && docker manifest inspect "$IMAGE:$version" >/dev/null 2>&1; then
+            echo "::notice title=Published::$IMAGE:$version exists already and is kept as it is; a release's image is never replaced"
+            exit 0
+          fi
           # The build the image job tested, when it was pushed for this tree
           # (hack/push-prebuilt.sh): published under these tags as it is,
           # for linux/amd64 only. A release is always built here.
@@ -515,12 +546,66 @@ jobs:
             echo "::notice title=Published::${refs[*]} (the prebuilt $pre, linux/amd64)"
             exit 0
           fi
+          pins=()
+          while read -r line; do pins+=(--build-arg "$line"); done < <(grep -v '^#' hack/base-images.env)
           docker buildx create --name multi --driver docker-container --use
-          docker buildx build --platform linux/amd64,linux/arm64 \
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            # A release: linux/amd64 is the image every gate tested, as it
+            # is; linux/arm64, which they cannot run, is built and scanned.
+            docker load < bin/image.tar.gz
+            docker tag "$IMAGE:ci" "$IMAGE:$version-amd64"
+            docker push "$IMAGE:$version-amd64" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+            docker buildx build --platform linux/arm64 "${pins[@]}" \
+              --build-arg VERSION="$version" --build-arg COMMIT="$sha" \
+              --label org.opencontainers.image.revision="$GITHUB_SHA" \
+              -t "$IMAGE:$version-arm64" --push . 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+            "$GRYPE" "registry:$IMAGE:$version-arm64" --fail-on high 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+            docker buildx imagetools create "${tags[@]}" "$IMAGE:$version-amd64" "$IMAGE:$version-arm64" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+            echo "::notice title=Published::${refs[*]} (linux/amd64 as tested, linux/arm64 built here and scanned)"
+            exit 0
+          fi
+          docker buildx build --platform linux/amd64,linux/arm64 "${pins[@]}" \
             --build-arg VERSION="$version" --build-arg COMMIT="$sha" \
-            --label org.opencontainers.image.revision="$HEAD_SHA" \
+            --label org.opencontainers.image.revision="$GITHUB_SHA" \
             "${tags[@]}" --push . 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
           echo "::notice title=Published::${refs[*]}"
+      - name: The digest published
+        id: digest
+        env:
+          REF: ${{ steps.push.outputs.ref }}
+        run: |
+          digest=$(docker buildx imagetools inspect "$REF" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$digest" == sha256:* ]] || { echo "::error::No digest for $REF"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.digest.outputs.digest }}
+          format: spdx-json
+          output-file: bin/sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: SBOM attestation
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          sbom-path: bin/sbom.spdx.json
+          push-to-registry: true
+      - name: Build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign the image
+        # Keyless: the certificate names this workflow, the repository and
+        # the ref, and the signature is logged in Sigstore's transparency log.
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          cosign sign --yes "$IMAGE@$DIGEST" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          echo "::notice title=Signed::$IMAGE@$DIGEST, with build provenance and an SBOM attested"
       - name: Report
         if: failure()
         run: hack/annotate.sh "Publish" "$RUNNER_TEMP/ci.log"

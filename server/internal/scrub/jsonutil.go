@@ -1,4 +1,4 @@
-package sherlock
+package scrub
 
 import (
 	"bytes"

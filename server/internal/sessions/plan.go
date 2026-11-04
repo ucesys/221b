@@ -178,7 +178,7 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 			}
 			copied = src.Labels
 		}
-		job, notes, err := DebugJob(m.opts.Config, "plan0000plan0000", ownerName, r, level, copied, limit)
+		job, notes, err := DebugJob(m.opts.Config, "plan0000plan0000", ownerName, r, level, copied, m.deadline(limit, ""))
 		if err != nil {
 			p.DryRun, p.DryRunExit = []string{err.Error()}, 1
 			return p
@@ -193,9 +193,15 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 		p.Object = toYAML(job)
 		err = b.CreateJob(ctx, job, true)
 		p.dry(err, "job.batch/"+job.Name+" created (server dry run)")
-	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand:
+	case toolbox.ToolSSH:
+		// No pod and no Kubernetes request: SSH works when the kubelet
+		// does not, so a node that is not Ready is no refusal here.
 		p.Targets = []string{"node/" + r.Node}
-		pod, err := NodePod(m.opts.Config, "plan0000plan0000", ownerName, r, limit)
+		p.Impact = []string{fmt.Sprintf("Opens a terminal on node %s over SSH, as the login user it was paired with, with a certificate signed for this session.", r.Node), terms}
+		p.DryRun = []string{"No access review: SSH goes to the node's sshd, not through Kubernetes."}
+	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand, toolbox.ToolSSHPair, toolbox.ToolSSHUnpair:
+		p.Targets = []string{"node/" + r.Node}
+		pod, err := NodePod(m.opts.Config, "plan0000plan0000", ownerName, r, m.deadline(limit, ""))
 		if err != nil {
 			p.DryRun, p.DryRunExit = []string{err.Error()}, 1
 			return p
@@ -206,11 +212,16 @@ func (m *Manager) PlanFor(ctx context.Context, cl Cluster, r Request, owner kube
 				return p
 			}
 		}
-		if r.Tool == toolbox.ToolNodeShell {
+		switch r.Tool {
+		case toolbox.ToolNodeShell:
 			p.Impact = []string{fmt.Sprintf("Creates pod %s in %s on node %s with the %s profile: %s.", strings.Replace(pod.Name, "plan0000", "…", 1), pod.Namespace, r.Node, r.Profile, profileWords(r.Profile)),
 				"Root on the node is root over every pod that runs there, their Secrets included.", "Then opens a terminal in it; the pod is deleted when the session ends. " + terms}
-		} else {
+		case toolbox.ToolNodeCommand:
 			p.Impact = []string{fmt.Sprintf("Runs on node %s, in a short-lived pod in %s:", r.Node, pod.Namespace), "  " + r.Command, "The command and its output go to the audit log; the pod is deleted after."}
+		case toolbox.ToolSSHPair:
+			p.Impact = []string{fmt.Sprintf("Runs on node %s, in a short-lived pod in %s: installs the console's SSH authority and admits %s on port %d, then reloads sshd.", r.Node, pod.Namespace, r.LoginUser, r.Port), "If sshd does not take it, the node's SSH configuration is put back. The pod is deleted after."}
+		case toolbox.ToolSSHUnpair:
+			p.Impact = []string{fmt.Sprintf("Runs on node %s, in a short-lived pod in %s: removes the console's SSH authority and reloads sshd.", r.Node, pod.Namespace), "The pod is deleted after."}
 		}
 		p.Object = toYAML(pod)
 		err = b.CreatePod(ctx, pod, true)

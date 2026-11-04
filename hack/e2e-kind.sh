@@ -114,7 +114,7 @@ helm install "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" \
   --set "auth.local.users[2].email=$E2E_DEV" --set "auth.local.users[2].name=Dev Developer" --set "auth.local.users[2].passwordHash=$hash" \
   --set "auth.admins[0]=$E2E_USER" \
   --set auth.kubernetes.accessTTL=10s \
-  --set localCluster.mode=write \
+  --set localCluster.mode=write --set toolbox.ssh.enabled=true \
   --set sherlock.apiURL="http://$GATEWAY:7445/claude" --set 'networkPolicy.outboundPorts={443,7445}' \
   --wait --timeout 60s
 notice "helm install" "The console was Ready $(( $(date +%s) - start ))s after helm install on Kubernetes $MINOR."
@@ -154,7 +154,7 @@ pf=$!
 for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && break; sleep 1; done
 curl -fsS http://127.0.0.1:18080/readyz
 # Without a session: the sign-in page, and 401 from the API.
-curl -fsS http://127.0.0.1:18080/ | grep -q 'data-testid="signin-form"'
+curl -fsS http://127.0.0.1:18080/ | has 'data-testid="signin-form"'
 [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/v1/snapshot)" = 401 ]
 # A wrong password is refused and recorded; the right one gets the app.
 # A form posted from elsewhere, without the page's token, is refused; the
@@ -163,8 +163,8 @@ curl -fsS http://127.0.0.1:18080/ | grep -q 'data-testid="signin-form"'
 form=$(curl -fsS -c "$WORK/form-cookies" http://127.0.0.1:18080/signin | grep -o 'name="form" value="[^"]*"' | cut -d'"' -f4)
 [ "$(curl -s -b "$WORK/form-cookies" -o /dev/null -w '%{http_code}' -X POST --data-urlencode "email=$E2E_USER" --data-urlencode "password=wrong" --data-urlencode "form=$form" http://127.0.0.1:18080/signin)" = 401 ]
 signin http://127.0.0.1:18080
-api http://127.0.0.1:18080/ | grep -q '<div id="root">'
-api http://127.0.0.1:18080/api/v1/me | tee "$WORK/me.json" | grep -q '"admin":true'
+api http://127.0.0.1:18080/ | has '<div id="root">'
+api http://127.0.0.1:18080/api/v1/me | tee "$WORK/me.json" | has '"admin":true'
 grep -q "\"username\":\"$E2E_USER\"" "$WORK/me.json"
 # The audit log names the person, on standard output (P3-10).
 kubectl -n "$NS" logs -l app.kubernetes.io/name=221b --tail=-1 | grep '"action"' | tee "$WORK/audit.log"
@@ -176,16 +176,16 @@ step "Settings are kept in the ConfigMap and uptime comes from the kubelets"
 api http://127.0.0.1:18080/api/v1/settings | tee "$WORK/settings.json"
 grep -q '"refreshSeconds":3' "$WORK/settings.json"
 grep -q '"storage":"configmap"' "$WORK/settings.json"
-api -X PUT -H 'Content-Type: application/json' -d '{"refreshSeconds":7}' http://127.0.0.1:18080/api/v1/settings | grep -q '"refreshSeconds":7'
+api -X PUT -H 'Content-Type: application/json' -d '{"refreshSeconds":7}' http://127.0.0.1:18080/api/v1/settings | has '"refreshSeconds":7'
 kubectl -n "$NS" get configmap "$FULLNAME" -o jsonpath='{.data.settings\.json}' | tee "$WORK/settings-cm.json"
 grep -q '"refreshSeconds":7' "$WORK/settings-cm.json"
 # A change made with kubectl is picked up too, within the re-read interval.
 kubectl -n "$NS" patch configmap "$FULLNAME" --type merge -p '{"data":{"settings.json":"{\"refreshSeconds\":9}"}}'
 for _ in $(seq 75); do
-  api http://127.0.0.1:18080/api/v1/settings | grep -q '"refreshSeconds":9' && break
+  api http://127.0.0.1:18080/api/v1/settings | has '"refreshSeconds":9' && break
   sleep 1
 done
-api http://127.0.0.1:18080/api/v1/settings | grep -q '"refreshSeconds":9'
+api http://127.0.0.1:18080/api/v1/settings | has '"refreshSeconds":9'
 api -X PUT -H 'Content-Type: application/json' -d '{"refreshSeconds":3}' http://127.0.0.1:18080/api/v1/settings > /dev/null
 # Every kind node has a real kubelet, so every row carries a boot time.
 for _ in $(seq 60); do
@@ -195,13 +195,13 @@ for _ in $(seq 60); do
 done
 echo "nodes with a boot time: $nodes"
 [ "${nodes% *}" = "${nodes#* }" ]
-api http://127.0.0.1:18080/api/v1/snapshot | grep -q '"uptime":"available"'
+api http://127.0.0.1:18080/api/v1/snapshot | has '"uptime":"available"'
 # Secrets are read (the default): the console's own Helm release shows,
 # with its values, and the record's Secret is listed by key name and size.
-api http://127.0.0.1:18080/api/v1/snapshot | grep -q '"secrets":"read"'
-api "http://127.0.0.1:18080/api/v1/helm/$NS/$RELEASE" | tee "$WORK/release.json" | grep -q '"name":"k8s-console"'
+api http://127.0.0.1:18080/api/v1/snapshot | has '"secrets":"read"'
+api "http://127.0.0.1:18080/api/v1/helm/$NS/$RELEASE" | tee "$WORK/release.json" | has '"name":"k8s-console"'
 grep -q 'clusterName: kind-e2e' "$WORK/release.json"
-api "http://127.0.0.1:18080/api/v1/snapshot?views=ns:$NS" | grep -q '"kind":"Secret"'
+api "http://127.0.0.1:18080/api/v1/snapshot?views=ns:$NS" | has '"kind":"Secret"'
 kill "$pf"
 endstep
 
@@ -229,17 +229,17 @@ python3 - "$TOKEN" "$(kubectl -n "$NS" get configmap kube-root-ca.crt -o jsonpat
 import json, sys
 print(json.dumps({"name": "kept", "env": "staging", "description": "kind, through its in-cluster address", "server": "https://kubernetes.default.svc", "ca": "pem", "caPem": sys.argv[2], "auth": "token", "token": sys.argv[1], "mode": "read"}))
 PY
-api -X POST -H 'Content-Type: application/json' -H 'Sec-Fetch-Site: same-origin' --data-binary "@$WORK/draft.json" http://127.0.0.1:18080/api/v1/clusters | tee "$WORK/kept.json" | grep -q '"id":"kept"'
+api -X POST -H 'Content-Type: application/json' -H 'Sec-Fetch-Site: same-origin' --data-binary "@$WORK/draft.json" http://127.0.0.1:18080/api/v1/clusters | tee "$WORK/kept.json" | has '"id":"kept"'
 ! grep -q "$TOKEN" "$WORK/kept.json"
-kubectl -n "$NS" get secret "$FULLNAME-cluster-kept" -o jsonpath='{.data}' | grep -q '"token"'
+kubectl -n "$NS" get secret "$FULLNAME-cluster-kept" -o jsonpath='{.data}' | has '"token"'
 echo "the connection's Secret holds the token; the API answered without it"
 # Connected, then synced a moment later, once the informers have listed.
 for _ in $(seq 60); do
-  api http://127.0.0.1:18080/api/v1/clusters/kept | tee "$WORK/kept-state.json" | grep -q '"synced":true' && break
+  api http://127.0.0.1:18080/api/v1/clusters/kept | tee "$WORK/kept-state.json" | has '"synced":true' && break
   sleep 1
 done
 grep -q '"synced":true' "$WORK/kept-state.json" || { echo "the connection did not come up: $(cat "$WORK/kept-state.json")"; exit 1; }
-api 'http://127.0.0.1:18080/api/v1/clusters/kept/snapshot?views=nodes' | grep -q "\"$CLUSTER-control-plane\""
+api 'http://127.0.0.1:18080/api/v1/clusters/kept/snapshot?views=nodes' | has "\"$CLUSTER-control-plane\""
 echo "the connection serves the cluster's nodes under its own route"
 # Its test passes every step with the CA and token given.
 api -X POST -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:18080/api/v1/clusters/kept/test | tee "$WORK/kept-test.json" | python3 -c '
@@ -265,7 +265,7 @@ kubectl -n "$NS" patch configmap "$FULLNAME" --type merge -p '{"data":{"settings
 helm upgrade "$RELEASE" "$ROOT/deploy/helm/221b" -n "$NS" --reset-then-reuse-values --set logLevel=debug --wait --timeout 60s
 kubectl -n "$NS" rollout status "deployment/$FULLNAME" --timeout=60s
 [ "$(kubectl -n "$NS" get deployment "$FULLNAME" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="LOG_LEVEL")].value}')" = debug ]
-kubectl -n "$NS" get configmap "$FULLNAME" -o jsonpath='{.data.settings\.json}' | grep -q '"refreshSeconds":11'
+kubectl -n "$NS" get configmap "$FULLNAME" -o jsonpath='{.data.settings\.json}' | has '"refreshSeconds":11'
 # Through a port-forward: kube-proxy may still be catching up after the
 # browser tests restarted the API server, which would delay the NodePort.
 for _ in $(seq 60); do
@@ -278,17 +278,22 @@ for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && brea
 curl -fsS http://127.0.0.1:18080/readyz
 # Sessions are kept in the cluster (P7-02), so the restart signed nobody
 # out: the session from before the upgrade still works.
-[ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/v1/settings)" = 200 ]
-api http://127.0.0.1:18080/api/v1/settings | grep -q '"refreshSeconds":11'
-# The connection came back from its Secret, and connects again.
-for _ in $(seq 60); do
-  api http://127.0.0.1:18080/api/v1/clusters/kept | grep -q '"state":"connected"' && break
+# Until the new pod knows which replica leads, it answers 503 (ADR-70).
+for _ in $(seq 30); do
+  [ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/v1/settings)" = 200 ] && break
   sleep 1
 done
-api http://127.0.0.1:18080/api/v1/clusters/kept | grep -q '"description":"kind, through its in-cluster address"'
+[ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/v1/settings)" = 200 ]
+api http://127.0.0.1:18080/api/v1/settings | has '"refreshSeconds":11'
+# The connection came back from its Secret, and connects again.
+for _ in $(seq 60); do
+  api http://127.0.0.1:18080/api/v1/clusters/kept | has '"state":"connected"' && break
+  sleep 1
+done
+api http://127.0.0.1:18080/api/v1/clusters/kept | has '"description":"kind, through its in-cluster address"'
 echo "the connection survived the upgrade"
 # Removing it deletes its Secret (P3-08).
-api -X DELETE -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:18080/api/v1/clusters/kept | grep -q '"removed":true'
+api -X DELETE -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:18080/api/v1/clusters/kept | has '"removed":true'
 ! kubectl -n "$NS" get secret "$FULLNAME-cluster-kept" > /dev/null 2>&1
 [ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/api/v1/clusters/kept)" = 404 ]
 echo "the connection and its Secret are gone"
@@ -316,7 +321,7 @@ done
 grep -q '"set":true' "$WORK/sherlock-config.json" ||
   { echo "Sherlock's config after the upgrade, HTTP $code: $(cat "$WORK/sherlock-config.json")"; exit 1; }
 ! grep -q sk-ant-e2e-fake-key "$WORK/sherlock-config.json"
-api -X DELETE -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:18080/api/v1/sherlock/key | grep -q '"set":false'
+api -X DELETE -H 'Sec-Fetch-Site: same-origin' http://127.0.0.1:18080/api/v1/sherlock/key | has '"set":false'
 ! kubectl -n "$NS" get secret "$FULLNAME-sherlock" > /dev/null 2>&1
 echo "the Sherlock key survived the upgrade, was never served, and its Secret is gone with it"
 kill "$pf"
@@ -337,18 +342,18 @@ kubectl -n "$NS" port-forward "svc/$FULLNAME" 18080:8081 > "$WORK/port-forward.l
 pf=$!
 for _ in $(seq 30); do curl -fs http://127.0.0.1:18080/readyz >/dev/null && break; sleep 1; done
 signin http://127.0.0.1:18080
-api http://127.0.0.1:18080/api/v1/snapshot | tee "$WORK/snapshot-nosecrets.json" | grep -q '"secrets":"off"'
+api http://127.0.0.1:18080/api/v1/snapshot | tee "$WORK/snapshot-nosecrets.json" | has '"secrets":"off"'
 echo "the console reports Secrets as off"
 # No release records are read, so the Helm view is empty and a release is not found.
 [ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080/api/v1/helm/$NS/$RELEASE")" = 404 ]
 api 'http://127.0.0.1:18080/api/v1/snapshot?views=helm' | python3 -c 'import json, sys; d = json.load(sys.stdin); assert d["views"]["helm"]["rows"] == [], d["views"]["helm"]'
 echo "no Helm release is served"
 # The namespace lists no Secrets, and their YAML is refused.
-! api "http://127.0.0.1:18080/api/v1/snapshot?views=ns:$NS" | grep -q '"kind":"Secret"'
+! api "http://127.0.0.1:18080/api/v1/snapshot?views=ns:$NS" | has '"kind":"Secret"'
 [ "$(curl -s -b "$COOKIES" -o /dev/null -w '%{http_code}' "http://127.0.0.1:18080/api/v1/yaml/secrets/$NS/sh.helm.release.v1.$RELEASE.v1")" = 404 ]
 echo "no Secret is listed or served"
 # The console still works without Secrets: nodes and pods are served.
-api 'http://127.0.0.1:18080/api/v1/snapshot?views=nodes,pods' | grep -q "\"$CLUSTER-control-plane\""
+api 'http://127.0.0.1:18080/api/v1/snapshot?views=nodes,pods' | has "\"$CLUSTER-control-plane\""
 echo "nodes and pods are served without Secrets"
 kill "$pf"
 endstep

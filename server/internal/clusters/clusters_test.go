@@ -466,3 +466,76 @@ func TestKubeconfigWithoutCurrentContext(t *testing.T) {
 		t.Fatalf("saved context %q: %v", cred.Context, err)
 	}
 }
+
+// A CA pasted without new credentials is the connection's CA from then on:
+// tested as it stands, saved beside the credential it does not replace.
+func TestACAPastedAloneIsHonoured(t *testing.T) {
+	s := sim.New(sim.Options{Nodes: 3, Pods: 20, Seed: 7})
+	srv := httptest.NewTLSServer(s)
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store := clusters.NewMemoryStore()
+	m := clusters.New(store, clusters.Options{Refresh: time.Second, HealthInterval: time.Second, SecretsRead: true})
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sa := token(map[string]any{"sub": "system:serviceaccount:kube-system:cluster-console", "exp": time.Now().Add(24 * time.Hour).Unix()})
+	good := strings.TrimSpace(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})))
+	stale, _ := selfSigned(t, "old-ca", time.Now().Add(time.Hour))
+	spec := func(name, ca string) clusters.Spec {
+		return clusters.Spec{Name: name, Env: "development", Server: srv.URL, CA: ca, Auth: "token", Mode: "read"}
+	}
+	tlsTone := func(r clusters.TestResult) string {
+		for _, step := range r.Steps {
+			if step.Key == "TLS" {
+				return step.Tone
+			}
+		}
+		t.Fatalf("no TLS step in %+v", r)
+		return ""
+	}
+
+	// Rotation: the saved CA no longer fits the server.
+	if _, err := m.Add(ctx, clusters.Draft{Spec: spec("rotated", "pem"), Credential: clusters.Credential{Token: sa, CAPEM: stale}}); err != nil {
+		t.Fatal(err)
+	}
+	draft := clusters.Draft{Spec: spec("rotated", "pem"), Credential: clusters.Credential{CAPEM: good}}
+	r, err := m.TestDraft(ctx, "rotated", draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tone := tlsTone(r); tone != "ok" {
+		t.Fatalf("Test used the old CA: %s %+v", tone, r)
+	}
+	sum, err := m.Update(ctx, "rotated", draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cred, err := store.Get(ctx, "rotated")
+	if err != nil || cred.CAPEM != good || cred.Token != sa {
+		t.Fatalf("saved: %v, CA changed %v, token kept %v", err, cred.CAPEM == good, cred.Token == sa)
+	}
+	if sum.CAInfo == "" || sum.Cred.Who == "" {
+		t.Fatalf("summary %+v", sum)
+	}
+
+	// Hardening: an unverified connection gets a CA, and keeps its token.
+	if _, err := m.Add(ctx, clusters.Draft{Spec: spec("hardened", "skip"), Credential: clusters.Credential{Token: sa}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Update(ctx, "hardened", clusters.Draft{Spec: spec("hardened", "pem"), Credential: clusters.Credential{CAPEM: good}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, cred, _ := store.Get(ctx, "hardened"); cred.CAPEM != good || cred.Token != sa {
+		t.Fatalf("hardened: CA set %v, token kept %v", cred.CAPEM == good, cred.Token == sa)
+	}
+
+	// With no CA pasted, the saved one stays.
+	if _, err := m.Update(ctx, "rotated", clusters.Draft{Spec: spec("rotated", "pem")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, cred, _ := store.Get(ctx, "rotated"); cred.CAPEM != good {
+		t.Fatal("a save without a CA lost the saved one")
+	}
+}

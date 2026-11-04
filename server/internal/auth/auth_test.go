@@ -17,6 +17,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/oidcsim"
+	"github.com/ucesys/221b/server/internal/roles"
 )
 
 // console wires the service into a mux the way the API server does, with
@@ -305,6 +306,40 @@ func TestOIDCRefusesBadTokens(t *testing.T) {
 	}
 }
 
+// The configured claim names a person, or nobody does: no other claim
+// stands in for it.
+func TestAMissingUsernameClaimIsRefused(t *testing.T) {
+	var idp *oidcsim.Provider
+	idpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { idp.ServeHTTP(w, r) }))
+	defer idpSrv.Close()
+	idp, _ = oidcsim.New(oidcsim.Options{Issuer: idpSrv.URL})
+	now := time.Now()
+	claims := func(extra map[string]any) string {
+		c := map[string]any{"iss": idpSrv.URL, "sub": "u1", "aud": "221b", "exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "nonce": "n1"}
+		for k, v := range extra {
+			c[k] = v
+		}
+		s, _ := idp.Token(c)
+		return s
+	}
+	byEmail := auth.NewProvider(auth.OIDCConfig{Issuer: idpSrv.URL, ClientID: "221b"}, nil, func() time.Time { return now })
+	if id, err := byEmail.Verify(context.Background(), claims(map[string]any{"preferred_username": "admin@corp.example"}), "n1"); err == nil {
+		t.Fatalf("named by another claim: %+v", id)
+	}
+	if id, err := byEmail.Verify(context.Background(), claims(nil), "n1"); err == nil {
+		t.Fatalf("named by the subject: %+v", id)
+	}
+	// Nested claims use dots, as the groups claim does, and a name with a
+	// dot in it still counts as a name.
+	nested := auth.NewProvider(auth.OIDCConfig{Issuer: idpSrv.URL, ClientID: "221b", UsernameClaim: "corp.login"}, nil, func() time.Time { return now })
+	if id, err := nested.Verify(context.Background(), claims(map[string]any{"corp": map[string]any{"login": "u1"}}), "n1"); err != nil || id.Username != "u1" {
+		t.Fatalf("nested: %v %+v", err, id)
+	}
+	if id, err := nested.Verify(context.Background(), claims(map[string]any{"corp.login": "u2"}), "n1"); err != nil || id.Username != "u2" {
+		t.Fatalf("dotted: %v %+v", err, id)
+	}
+}
+
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 func TestLocalAccounts(t *testing.T) {
@@ -430,17 +465,26 @@ func TestLocalAccounts(t *testing.T) {
 	}
 }
 
-func TestModeNoneIsAnAnonymousAdmin(t *testing.T) {
-	svc, err := auth.New(auth.Config{Mode: auth.ModeNone}, nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
+// With sign-in off everyone is the same anonymous person: a Viewer, or an
+// Admin when asked, and never a SuperAdmin.
+func TestModeNoneIsAnAnonymousViewerOrAdmin(t *testing.T) {
+	for role, want := range map[roles.ID]roles.ID{"": roles.Viewer, roles.Viewer: roles.Viewer, roles.Admin: roles.Admin} {
+		svc, err := auth.New(auth.Config{Mode: auth.ModeNone, Anonymous: role}, nil, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		app := console(t, svc)
+		var me auth.Me
+		getJSON(t, client(t), app.URL+"/api/v1/me", &me)
+		app.Close()
+		if me.Mode != auth.ModeNone || me.Admin || me.User.Username != "anonymous" || len(me.Roles) != 1 || me.Roles[0] != want {
+			t.Fatalf("%q: me %+v", role, me)
+		}
 	}
-	app := console(t, svc)
-	defer app.Close()
-	var me auth.Me
-	getJSON(t, client(t), app.URL+"/api/v1/me", &me)
-	if me.Mode != auth.ModeNone || !me.Admin || me.User.Username != "anonymous" {
-		t.Fatalf("me: %+v", me)
+	for _, role := range []roles.ID{roles.SuperAdmin, roles.SuperViewer, "owner"} {
+		if _, err := auth.New(auth.Config{Mode: auth.ModeNone, Anonymous: role}, nil, nil, nil); err == nil {
+			t.Fatalf("sign-in off started with everyone %s", role)
+		}
 	}
 }
 

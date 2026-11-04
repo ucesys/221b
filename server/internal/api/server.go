@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"reflect"
 	"runtime/debug"
 	"slices"
 	"sort"
@@ -30,15 +31,19 @@ import (
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
+	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/twoperson"
 	"github.com/ucesys/221b/server/internal/views"
 	"github.com/ucesys/221b/server/internal/watson"
 )
@@ -61,6 +66,7 @@ type Cluster interface {
 	ObjectYAML(ctx context.Context, p kube.Person, k kube.Kind, namespace, name string) (string, error)
 	Logs(ctx context.Context, p kube.Person, namespace, name string, o kube.LogOptions) (io.ReadCloser, error)
 	CanI(ctx context.Context, p kube.Person, verb, group, resource, namespace string) (bool, error)
+	CanIName(ctx context.Context, p kube.Person, verb, group, resource, namespace, name string) (bool, error)
 	// Secret editing (Phase 10): live, as the person, never cached.
 	GetSecret(ctx context.Context, p kube.Person, namespace, name string) (*corev1.Secret, error)
 	UpdateSecret(ctx context.Context, p kube.Person, sec *corev1.Secret) (*corev1.Secret, error)
@@ -94,6 +100,14 @@ type Auth interface {
 	Routes() []auth.Route
 }
 
+// SSHInfo is what the page is told about SSH (Phase 11, ADR-72);
+// *nodessh.Service implements it.
+type SSHInfo interface {
+	Principal() string
+	Fingerprint() string
+	List(ctx context.Context, cluster string) ([]nodessh.Pairing, error)
+}
+
 // Clusters resolves connections (P3-09) and manages them (P3-05 to
 // P3-08); *clusters.Manager implements it.
 type Clusters interface {
@@ -116,6 +130,15 @@ type Options struct {
 	Auth     Auth
 	// Audit records the settings changes; nil records nothing.
 	Audit *audit.Log
+	// SSH is the SSH tools' authority and pairings (Phase 11); nil leaves
+	// the tools off.
+	SSH SSHInfo
+	// KV is the console's small key-value storage next to the settings
+	// (Sherlock's spend, the Toolbox's session records, the audit log),
+	// for the backup; nil backs none of it up.
+	KV kv.Backend
+	// Version is the console's version, written into a backup.
+	Version string
 	// Cluster serves the details of pods, services, releases, logs and YAML.
 	Cluster Cluster
 	// Settings serves /api/v1/settings; nil leaves the path unserved.
@@ -138,10 +161,19 @@ type Options struct {
 	Logger *slog.Logger
 	// MaxStreams caps concurrent event streams.
 	MaxStreams int
-	// Leader, with several replicas, says whether this one runs Sherlock
-	// and Watson; the others forward those requests to it (P7-02). nil is
-	// a single replica.
+	// Leader, with several replicas, says whether this one reads the
+	// clusters and runs Sherlock and Watson; the others forward every
+	// data request to it (P7-02, ADR-70). nil is a single replica.
 	Leader Leader
+	// Active says whether this replica reads the clusters now (ADR-70):
+	// the role checks run only while it does. nil: always.
+	Active func() bool
+	// Standby says whether this replica is a cold standby, holding no
+	// watches (ADR-70): it is ready as soon as it knows the leader, since
+	// it forwards everything to it. nil: never.
+	Standby func() bool
+	// Proxies are the proxies whose X-Forwarded-For is believed.
+	Proxies auth.Proxies
 	// ProxyToken is shared by the replicas: a forwarded request carries it,
 	// and only then is its client address believed.
 	ProxyToken string
@@ -189,6 +221,13 @@ type Options struct {
 	// Sessions runs the toolbox's sessions (Phase 9); nil, or no Watson,
 	// leaves the toolbox out.
 	Sessions *sessions.Manager
+	// Automation runs scripts on nodes, and AutomationStore keeps them
+	// (Phase 11 part 2, ADR-73); nil leaves Automation out.
+	Automation      *automation.Engine
+	AutomationStore *automation.Store
+	// TwoPerson keeps what waits for a second SuperAdmin: a cluster taken
+	// off production, a local user made a SuperAdmin. Nil applies at once.
+	TwoPerson *twoperson.Store
 }
 
 // Impersonation says how a person's name and groups are given to the API
@@ -255,6 +294,11 @@ type Server struct {
 
 	// leaderChecks is how often a forwarded stream checks the leader.
 	leaderChecks time.Duration
+	// patterns are the mux's, for the test that every route is either
+	// forwarded or listed as local (ADR-70).
+	patterns []string
+	// roleCheck asks RunRoleChecks for a check now.
+	roleCheck chan struct{}
 
 	// drifts keeps the applications' drift checks (HA-09), by cluster,
 	// release and person, for two minutes.
@@ -299,7 +343,7 @@ func New(o Options) *Server {
 	if o.Roles.Monitor == nil {
 		o.Roles.Monitor = &roles.Monitor{}
 	}
-	s := &Server{opts: o, mux: http.NewServeMux(), reqs: map[reqKey]uint64{}, allowedHosts: map[string]bool{}, leaderChecks: leaderChecks}
+	s := &Server{opts: o, mux: http.NewServeMux(), reqs: map[reqKey]uint64{}, allowedHosts: map[string]bool{}, leaderChecks: leaderChecks, roleCheck: make(chan struct{}, 1)}
 	for _, h := range o.AllowedHosts {
 		if h = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), "."); h != "" {
 			s.allowedHosts[h] = true
@@ -309,6 +353,7 @@ func New(o Options) *Server {
 	// for any connection as /api/v1/clusters/{cluster}/<path> (P3-09).
 	s.data("snapshot", "snapshot", s.snapshot)
 	s.data("nodes/{name}", "node", s.node)
+	s.data("nodes/{name}/kubelet", "node-kubelet", s.nodeKubelet)
 	s.data("events", "events", s.events)
 	if o.Cluster != nil || o.Clusters != nil {
 		s.data("pods/{namespace}/{name}", "pod", s.pod)
@@ -375,7 +420,18 @@ func New(o Options) *Server {
 		s.toolboxRoutes()
 		o.Watson.SetSessionHooks(s.planSession, s.startSession)
 	}
+	if o.Watson != nil {
+		o.Watson.SetReread(s.rereadWho)
+		o.Watson.SetAppAccess(s.watsonAppAccess)
+	}
+	if o.Automation != nil && o.AutomationStore != nil {
+		s.automationRoutes()
+		o.Automation.SetKube(automationKube{s})
+	}
 	s.rolesRoutes()
+	s.auditRoutes()
+	s.backupRoutes()
+	s.twoPersonRoutes()
 	if o.Auth != nil {
 		for _, r := range o.Auth.Routes() {
 			s.handle(r.Pattern, r.Name, r.Handler)
@@ -390,6 +446,7 @@ func New(o Options) *Server {
 }
 
 func (s *Server) handle(pattern, route string, h http.HandlerFunc) {
+	s.patterns = append(s.patterns, pattern)
 	s.mux.Handle(pattern, s.observe(route, h))
 }
 
@@ -545,6 +602,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// A request another replica forwarded says whose it is (P7-02).
 	forwarded := s.trustForwarded(r)
+	if !forwarded {
+		r = s.opts.Proxies.Resolve(r)
+	}
 	h := w.Header()
 	for _, kv := range securityHeaders {
 		h.Set(kv[0], kv[1])
@@ -715,26 +775,66 @@ func filterOf(a *access.Access) live.Filter {
 }
 
 func (s *Server) node(w http.ResponseWriter, r *http.Request) {
-	st, cl, ok := s.lookup(w, r)
+	row, cl, ok := s.nodeRow(w, r)
 	if !ok {
 		return
+	}
+	writeJSON(w, r, live.Redact(live.ViewNodes, row, filterOf(s.access(r, cl))))
+}
+
+// nodeRow finds the node a request names, for a person who may list nodes.
+func (s *Server) nodeRow(w http.ResponseWriter, r *http.Request) ([]byte, Cluster, bool) {
+	st, cl, ok := s.lookup(w, r)
+	if !ok {
+		return nil, nil, false
 	}
 	if a := s.access(r, cl); a != nil {
 		if _, err := s.prepare(r.Context(), a, cl, []string{live.ViewNodes}); err != nil {
 			jsonError(w, http.StatusBadGateway, accessState(err)["error"])
-			return
+			return nil, nil, false
 		}
 		if !a.Cluster("nodes") {
 			jsonError(w, http.StatusForbidden, "Kubernetes does not let you list nodes")
-			return
+			return nil, nil, false
 		}
 	}
 	row, ok := st.Row(live.ViewNodes, r.PathValue("name"))
 	if !ok {
 		jsonError(w, http.StatusNotFound, "no node named "+strconv.Quote(r.PathValue("name")))
+		return nil, nil, false
+	}
+	return row, cl, true
+}
+
+// kubeletReader is a cluster that can ask a kubelet how it is configured.
+type kubeletReader interface {
+	KubeletConfig(ctx context.Context, node string) (kube.KubeletConfig, error)
+}
+
+// nodeKubelet is what a node's kubelet is configured to keep from pods,
+// read live for the node's details. The node's capacity and allocatable
+// say how much; this says how, so a kubelet that cannot be read is a note
+// and not an error.
+func (s *Server) nodeKubelet(w http.ResponseWriter, r *http.Request) {
+	_, cl, ok := s.nodeRow(w, r)
+	if !ok {
 		return
 	}
-	writeJSON(w, r, live.Redact(live.ViewNodes, row, filterOf(s.access(r, cl))))
+	type answer struct {
+		Config *kube.KubeletConfig `json:"config,omitempty"`
+		Note   string              `json:"note,omitempty"`
+	}
+	reader, ok := cl.(kubeletReader)
+	if !ok {
+		answerJSON(w, r, answer{Note: "This connection cannot read its kubelets."})
+		return
+	}
+	cfg, err := reader.KubeletConfig(r.Context(), r.PathValue("name"))
+	if err != nil {
+		answerJSON(w, r, answer{Note: err.Error()})
+		return
+	}
+	answerJSON(w, r, answer{Config: &cfg})
 }
 
 func (s *Server) apiNotFound(w http.ResponseWriter, r *http.Request) {
@@ -742,8 +842,82 @@ func (s *Server) apiNotFound(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
-	b, _ := json.Marshal(s.opts.Settings.Current())
+	st := s.opts.Settings.Current()
+	if !s.isSuperAdmin(r) {
+		st = s.settingsFor(r, st)
+	}
+	b, _ := json.Marshal(st)
 	writeJSON(w, r, b)
+}
+
+// settingsFor keeps the settings to what the request's person may have:
+// never Sherlock's or Watson's, and of each cluster the fleets when they
+// may list its nodes and the acknowledgements of the alerts they may see.
+// A cluster that cannot be asked gives nothing.
+func (s *Server) settingsFor(r *http.Request, st settings.State) settings.State {
+	out := st.ForAnyone()
+	ctx, cancel := context.WithTimeout(r.Context(), prepareTimeout)
+	defer cancel()
+	ids := map[string]bool{}
+	for id := range st.Fleets {
+		ids[id] = true
+	}
+	for id := range st.Acks {
+		ids[id] = true
+	}
+	for id := range ids {
+		pairs := []access.Pair{{Resource: "nodes"}}
+		for _, a := range st.Acks[id] {
+			if resource, ns, _ := live.Scope(live.ViewAlerts, a.Key); resource != "" {
+				pairs = append(pairs, access.Pair{Group: groupOf(resource), Resource: resource, Namespace: ns})
+			}
+		}
+		a := s.accessOn(ctx, r, id, pairs)
+		if a == nil {
+			continue
+		}
+		if list, ok := st.Fleets[id]; ok && a.Cluster("nodes") {
+			if out.Fleets == nil {
+				out.Fleets = map[string][]fleets.Fleet{}
+			}
+			out.Fleets[id] = list
+		}
+		for _, ack := range st.Acks[id] {
+			if a.Allow(live.ViewAlerts, ack.Key) {
+				if out.Acks == nil {
+					out.Acks = map[string][]acks.Ack{}
+				}
+				out.Acks[id] = append(out.Acks[id], ack)
+			}
+		}
+	}
+	return out
+}
+
+// accessOn is what the request's person may see on the connection, with
+// Kubernetes asked about the pairs; nil when it cannot be told.
+func (s *Server) accessOn(ctx context.Context, r *http.Request, id string, pairs []access.Pair) *access.Access {
+	var cl Cluster
+	if s.opts.Clusters != nil {
+		_, client, ok := s.opts.Clusters.Lookup(id)
+		if !ok {
+			return nil
+		}
+		cl, _ = client.(Cluster)
+	} else if id == clusters.LocalID {
+		cl = s.opts.Cluster
+	}
+	p := s.person(r)
+	if cl == nil || p.Nobody() {
+		return nil
+	}
+	a := s.opts.Access.For(id, cl, p)
+	if a.Stale(pairs) {
+		if _, err := a.Prepare(ctx, pairs, 0); err != nil {
+			return nil
+		}
+	}
+	return a
 }
 
 // maxSettingsBody bounds a settings update; the settings are a few fields.
@@ -769,10 +943,17 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "the settings are not valid: "+err.Error())
 		return
 	}
+	// Sherlock's and Watson's settings change on their own routes, which
+	// validate and audit them.
+	if in.Sherlock != nil || in.Watson != nil {
+		jsonError(w, http.StatusBadRequest, "Sherlock's and Watson's settings are not changed here: use their own pages")
+		return
+	}
 	if err := in.Validate(); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	before := s.opts.Settings.Current().Settings
 	st, err := s.opts.Settings.Update(r.Context(), in)
 	if err != nil {
 		s.opts.Logger.Warn("settings not saved", "err", err)
@@ -787,9 +968,32 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if b := st.AlertBanners; b != nil && !*b {
 		detail += ", alert banners hidden"
 	}
+	detail += changedByCluster("fleets", before.Fleets, st.Fleets) + changedByCluster("acknowledged alerts", before.Acks, st.Acks)
 	s.record(r, audit.ActionSettings, "settings", detail)
 	b, _ := json.Marshal(st)
 	writeJSON(w, r, b)
+}
+
+// changedByCluster names, for the audit record, the clusters whose list
+// changed and how long it was and is.
+func changedByCluster[T any](what string, before, after map[string][]T) string {
+	var ids []string
+	for id, list := range after {
+		if !reflect.DeepEqual(before[id], list) {
+			ids = append(ids, id)
+		}
+	}
+	for id := range before {
+		if _, kept := after[id]; !kept {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	out := ""
+	for _, id := range ids {
+		out += fmt.Sprintf(", %s on %s: %d to %d", what, id, len(before[id]), len(after[id]))
+	}
+	return out
 }
 
 // settingsStatus is the status for a settings save that failed: 409 when
@@ -801,13 +1005,33 @@ func settingsStatus(err error, otherwise int) int {
 	return otherwise
 }
 
-// record writes an audit event for the request's session.
+// record writes an audit event for the request's session, about the console
+// itself.
 func (s *Server) record(r *http.Request, action, target, detail string) {
+	s.writeAudit(r, "", audit.OutcomeOK, action, target, detail)
+}
+
+// recordOn writes an audit event about the request's cluster, with how the
+// attempt ended.
+func (s *Server) recordOn(r *http.Request, outcome, action, target, detail string) {
+	s.writeAudit(r, clusterID(r), outcome, action, target, detail)
+}
+
+func (s *Server) writeAudit(r *http.Request, cluster, outcome, action, target, detail string) {
 	if s.opts.Audit == nil {
 		return
 	}
 	sess, _ := auth.SessionFrom(r.Context())
-	s.opts.Audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, Target: target, Detail: detail, From: fromAddr(r)})
+	s.opts.Audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, Cluster: cluster, Target: target, Detail: detail, Outcome: outcome, From: fromAddr(r)})
+}
+
+// refusedOr is how an attempt Kubernetes answered with err ended: denied
+// when it refused the person, failed otherwise.
+func refusedOr(err error) string {
+	if apierrors.IsForbidden(err) {
+		return audit.OutcomeDenied
+	}
+	return audit.OutcomeFailed
 }
 
 // fromAddr is the address a request came from, without the port.
@@ -825,6 +1049,17 @@ func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	// A cold standby serves nothing of its own: it is ready once it knows
+	// where to forward (ADR-70).
+	if s.opts.Standby != nil && s.opts.Standby() {
+		if s.opts.Leader == nil || s.opts.Leader.LeaderAddr() == "" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			io.WriteString(w, "waiting for a leader to forward to\n")
+			return
+		}
+		io.WriteString(w, "ok\n")
+		return
+	}
 	if !s.opts.Ready() {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		io.WriteString(w, "waiting for the first list of nodes and pods\n")
@@ -938,10 +1173,23 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		defer recheckTicker.Stop()
 		recheck = recheckTicker.C
 	}
+	// A replica that stops leading stops reading the clusters, and its
+	// figures freeze: ending the stream makes the browser reopen it, which
+	// reaches the new leader (ADR-70).
+	var leading <-chan time.Time
+	if s.opts.Leader != nil {
+		t := time.NewTicker(s.leaderChecks)
+		defer t.Stop()
+		leading = t.C
+	}
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-leading:
+			if !s.opts.Leader.IsLeader() {
+				return
+			}
 		case <-beat.C:
 			if !s.sessionStands(r) {
 				return
@@ -1001,7 +1249,14 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	var b strings.Builder
 	viewStats, subs, recomputes := s.opts.Store.Stats()
+	leads := 1.0
+	if s.opts.Leader != nil && !s.opts.Leader.IsLeader() {
+		leads = 0
+	}
 	gauges := []Gauge{
+		// The leader reads the clusters (ADR-70): its figures are the
+		// console's; a follower's view gauges are its own, mostly empty.
+		{Name: "b221_leader", Help: "1 on the replica that reads the clusters and serves the data; 0 on one that forwards to it.", Value: leads},
 		{Name: "b221_event_streams", Help: "Open browser event streams.", Value: float64(subs)},
 		{Name: "b221_log_streams", Help: "Open pod log streams.", Value: float64(s.logs.Load())},
 		{Name: "b221_recomputes_total", Help: "Times the rows were recomputed.", Value: float64(recomputes), Counter: true},

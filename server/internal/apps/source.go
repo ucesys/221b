@@ -52,14 +52,20 @@ func (s Source) String() string {
 
 var refName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/+-]*$`)
 
+// chartPath is a chart's directory: plain path segments that do not start
+// with a dash. It goes on a Watson line, so nothing in it may read as a
+// space, a line break, a quote or a flag.
+var chartPath = regexp.MustCompile(`^[A-Za-z0-9._+@][A-Za-z0-9._+@-]*(/[A-Za-z0-9._+@][A-Za-z0-9._+@-]*)*$`)
+
 // AllowLocalRepos lets a repository be a directory on the server's own
 // disk: for tests, which clone a repository they made. Never set by the
 // server.
 var AllowLocalRepos bool
 
 // Normalize cleans a source as typed and says what is wrong with it: the
-// repository must be an HTTPS URL (github.com/org/app is completed), the
-// path must stay inside the repository, and the ref must be a plain name.
+// repository must be an HTTPS URL (github.com/org/app is completed) on a
+// host the console connects to, the path must stay inside the repository
+// and hold plain path characters only, and the ref must be a plain name.
 func Normalize(s Source) (Source, error) {
 	repo := strings.TrimSpace(s.Repo)
 	if repo == "" {
@@ -76,6 +82,9 @@ func Normalize(s Source) (Source, error) {
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return s, errors.New("the repository must be an https:// URL without a user, query or fragment")
 	}
+	if refusedName(u.Hostname()) {
+		return s, errHostRefused
+	}
 	u.Path = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), ".git")
 	if u.Path == "" || u.Path == "/" {
 		return s, errors.New("the repository URL needs a path: https://github.com/org/app")
@@ -91,8 +100,10 @@ func normalizeRest(s Source) (Source, error) {
 		p = path.Clean(p)
 		if p == "." {
 			p = ""
-		} else if strings.HasPrefix(p, "../") || p == ".." || strings.Contains(p, "\x00") {
+		} else if strings.HasPrefix(p, "../") || p == ".." {
 			return s, errors.New("the chart path must be inside the repository")
+		} else if !chartPath.MatchString(p) {
+			return s, errors.New("the chart path may hold letters, digits and . _ + @ -, in segments that do not start with a dash")
 		}
 	}
 	s.Path = p
@@ -113,7 +124,74 @@ func normalizeRest(s Source) (Source, error) {
 	return s, nil
 }
 
+// SameRepo says whether two sources name one repository, as Normalize
+// writes it. A token belongs to its repository: it never follows a source
+// to another one. A source that cannot be normalized matches nothing.
+func SameRepo(a, b Source) bool {
+	x, err := Normalize(Source{Repo: a.Repo, Ref: "x"})
+	if err != nil {
+		return false
+	}
+	y, err := Normalize(Source{Repo: b.Repo, Ref: "x"})
+	return err == nil && x.Repo == y.Repo
+}
+
 // Record is what the console keeps about an application (HA-03).
+// Command is a named redeploy of an application with its own parameters
+// (asked October 30, 2026): `helm upgrade` from the source with these
+// --set parameters applied over the saved values and parameters.
+type Command struct {
+	Name string `json:"name"`
+	// Note says what the command is for, in the menu.
+	Note string `json:"note,omitempty"`
+	// Params are the extra parameters, each key=value as helm --set takes
+	// them.
+	Params    []string  `json:"params"`
+	Created   time.Time `json:"created"`
+	CreatedBy string    `json:"createdBy,omitempty"`
+	Updated   time.Time `json:"updated"`
+	UpdatedBy string    `json:"updatedBy,omitempty"`
+}
+
+// MaxCommands is how many commands an application may have.
+const MaxCommands = 20
+
+// MaxCommandNote is how long a command's note may be: it is the menu
+// item's hint, beside the name, and the menu is 440 pixels wide at most.
+const MaxCommandNote = 48
+
+// CommandIndex finds a command by name, case-insensitively; -1 is none.
+func (r Record) CommandIndex(name string) int {
+	for i, c := range r.Commands {
+		if strings.EqualFold(c.Name, name) {
+			return i
+		}
+	}
+	return -1
+}
+
+// CheckCommandName says why a command name is not allowed: one to forty
+// characters of letters, digits, spaces, dots, dashes and underscores,
+// starting with a letter or digit.
+func CheckCommandName(name string) error {
+	if name == "" || len(name) > 40 {
+		return errors.New("a command name is one to forty characters")
+	}
+	for i, ch := range name {
+		letter := ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9'
+		if i == 0 && !letter {
+			return errors.New("a command name starts with a letter or a digit")
+		}
+		if !letter && ch != ' ' && ch != '.' && ch != '-' && ch != '_' {
+			return errors.New("a command name has letters, digits, spaces, dots, dashes and underscores")
+		}
+	}
+	if strings.HasSuffix(name, " ") {
+		return errors.New("a command name does not end with a space")
+	}
+	return nil
+}
+
 type Record struct {
 	// Version marks the format, for migrations (P7-03).
 	Version   int    `json:"version"`
@@ -146,6 +224,11 @@ type Record struct {
 	// nodeSelector (R2-11).
 	Fleet      string `json:"fleet,omitempty"`
 	FleetLabel string `json:"fleetLabel,omitempty"`
+	// Commands are the application's own deploy commands (asked October
+	// 30, 2026): each redeploys the release from its source with extra
+	// --set parameters over the saved values and parameters. Names are
+	// unique within the application.
+	Commands []Command `json:"commands,omitempty"`
 	// MatchedRevision is the deployed revision the source was found to
 	// render exactly when it was set (round 2 review): the release is not
 	// behind the source while that revision runs.
@@ -156,11 +239,18 @@ type Record struct {
 	SourceDiff string `json:"sourceDiff,omitempty"`
 	// HasToken says a credential for the repository is saved with the
 	// record; the token itself never leaves the server.
-	HasToken  bool      `json:"hasToken,omitempty"`
-	CreatedBy string    `json:"createdBy,omitempty"`
-	Created   time.Time `json:"created"`
-	UpdatedBy string    `json:"updatedBy,omitempty"`
-	Updated   time.Time `json:"updated"`
+	HasToken bool `json:"hasToken,omitempty"`
+	// Rev is the stored version Get read, which Save holds it to; it is
+	// not part of the record.
+	Rev string `json:"-"`
+	// CreatorNamespaces are the namespaces whoever created it could reach
+	// then: someone with the same access sees it, even before the release
+	// has a namespace to be seen in.
+	CreatorNamespaces []string  `json:"creatorNamespaces,omitempty"`
+	CreatedBy         string    `json:"createdBy,omitempty"`
+	Created           time.Time `json:"created"`
+	UpdatedBy         string    `json:"updatedBy,omitempty"`
+	Updated           time.Time `json:"updated"`
 }
 
 // RecordVersion is the current format of a saved record.

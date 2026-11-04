@@ -9,16 +9,20 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	corev1 "k8s.io/api/core/v1"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
 	"runtime/metrics"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -31,6 +35,7 @@ import (
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/kube"
@@ -38,11 +43,13 @@ import (
 	"github.com/ucesys/221b/server/internal/ldap"
 	"github.com/ucesys/221b/server/internal/leader"
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/toolbox"
+	"github.com/ucesys/221b/server/internal/twoperson"
 	"github.com/ucesys/221b/server/internal/ui"
 	"github.com/ucesys/221b/server/internal/version"
 	"github.com/ucesys/221b/server/internal/watson"
@@ -160,8 +167,13 @@ func run(args []string) error {
 		}
 		authCfg.Directory, authCfg.SyncInterval = dir, every
 	}
+	authCfg.Anonymous = roles.ID(cfg.AnonymousRole)
 	if authCfg.Mode == auth.ModeNone {
-		log.Warn("sign-in is off: everyone who reaches the console is an administrator; set -auth-mode oidc, ldap or local before sharing it")
+		// Nobody is known, so nothing that needs a known person runs: SSH,
+		// Automation and showing Secret values stay off whatever the chart
+		// says, and everyone holds the anonymous role.
+		cfg.Automation, cfg.SecretsReveal = false, false
+		log.Warn("sign-in is off: everyone who reaches the console holds the anonymous role, and SSH, Automation and Secret values are off; set -auth-mode oidc, ldap or local to use them", "anonymous_role", cfg.AnonymousRole)
 	}
 	// client-go logs through klog; send it to the same structured log.
 	klog.SetSlogLogger(log.With("component", "client-go"))
@@ -203,6 +215,10 @@ func run(args []string) error {
 		}
 		authCfg.SessionStore = sessionStore
 	}
+	// What waits for a second SuperAdmin (review item 14), kept beside the
+	// settings once their storage is open.
+	twoPerson := twoperson.New(nil, nil)
+	authCfg.TwoPerson = twoPerson
 	authSvc, err := auth.New(authCfg, log.With("component", "auth"), auditLog, nil)
 	if err != nil {
 		return err
@@ -219,7 +235,10 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	store := live.New(cluster, live.Options{Refresh: cfg.Refresh, Logger: log.With("component", "store"), Cluster: clusters.LocalID})
+	// What this replica does with the clusters (ADR-70): the leader reads
+	// them; the others keep their watches warm, or none, and poll nothing.
+	activity := leader.NewActivity(cfg.WarmStandby)
+	store := live.New(cluster, live.Options{Refresh: cfg.Refresh, Logger: log.With("component", "store"), Cluster: clusters.LocalID, Active: activity.Active})
 	cluster.OnChange(store.Notify)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -243,14 +262,23 @@ func run(args []string) error {
 	// Becoming the leader is signalled here; the shared state Sherlock and
 	// Watson rely on is read again before they serve (see below).
 	leading := make(chan struct{}, 1)
+	// A cold standby that loses the Lease cannot stand by again with its
+	// watches stopped: it exits, and the pod starts afresh.
+	lost := make(chan struct{})
+	var lostOnce sync.Once
+	onLead, onStop := roleSwitch(activity, func() { lostOnce.Do(func() { close(lost) }) })
 	elector, err := newElector(cfg, restCfg, log, func() {
+		onLead()
 		select {
 		case leading <- struct{}{}:
 		default:
 		}
-	})
+	}, onStop)
 	if err != nil {
 		return err
+	}
+	if elector.Single() {
+		activity.Set(true)
 	}
 	leaderDone := make(chan struct{})
 	go func() {
@@ -286,7 +314,9 @@ func run(args []string) error {
 	} else {
 		log.Warn("cluster connections added in the console are kept in memory and lost on restart; set -connections-secrets namespace/prefix to keep them in Secrets")
 	}
-	manager := clusters.New(connStore, clusters.Options{Refresh: cfg.Refresh, HealthInterval: cfg.HealthInterval, KubeletStats: cfg.KubeletStats, SecretsRead: cfg.SecretsRead, Logger: log.With("component", "clusters")})
+	manager := clusters.New(connStore, clusters.Options{Refresh: cfg.Refresh, HealthInterval: cfg.HealthInterval, KubeletStats: cfg.KubeletStats, SecretsRead: cfg.SecretsRead, Logger: log.With("component", "clusters"), Activity: activity})
+	// SetLocal runs the local cluster's watches, pollers and store as the
+	// role says, like every other connection's.
 	if err := manager.SetLocal(ctx, localSpec(cfg, restCfg, mode), cluster, store); err != nil {
 		return fmt.Errorf("local connection: %w", err)
 	}
@@ -295,12 +325,20 @@ func run(args []string) error {
 	// cluster, otherwise in memory. Every change reaches every browser
 	// through the stores.
 	var storage settings.Storage = &settings.Memory{}
+	// What the settings ConfigMap holds beside the settings, with the audit
+	// log and the session records in ConfigMaps of their own when the chart
+	// names them, and every key within its limit (#46).
+	var spendBackend kv.Backend = &kv.Memory{}
+	var stored storedObjects
 	if cfg.SettingsConfigMap != "" {
 		cm, err := kube.NewConfigMapStorage(restCfg, cfg.SettingsConfigMap)
 		if err != nil {
 			return err
 		}
-		storage = cm
+		if spendBackend, stored, err = settingsBackend(ctx, restCfg, cm, cfg.AuditConfigMap, cfg.SessionsConfigMap, log.With("component", "storage")); err != nil {
+			return err
+		}
+		storage = kube.KeyStorage{Backend: spendBackend, Key: kube.SettingsKey}
 	}
 	shared := settings.NewService(ctx, storage, settings.Settings{RefreshSeconds: int(cfg.Refresh / time.Second)}, log.With("component", "settings"), func(st settings.State) {
 		b, _ := json.Marshal(st)
@@ -310,8 +348,6 @@ func run(args []string) error {
 	// or by hand, reaches this one's browsers within seconds (P7-02).
 	go shared.Run(ctx, 3*time.Second)
 
-	go cluster.Run(ctx)
-	go store.Run(ctx)
 	if err := manager.Start(ctx); err != nil {
 		return fmt.Errorf("cluster connections: %w", err)
 	}
@@ -363,9 +399,15 @@ func run(args []string) error {
 		log.Warn("reading the Claude API key failed; Sherlock has no key until it is saved again", "err", err)
 	}
 	go keys.Run(ctx, 10*time.Second, func(err error) { log.Warn("reading the Claude API key failed", "err", err) })
-	var spendBackend kv.Backend = &kv.Memory{}
-	if cm, ok := storage.(*kube.ConfigMapStorage); ok {
-		spendBackend = cm
+	twoPerson.SetBackend(spendBackend)
+	if auditStore := keepAudit(auditLog, spendBackend, log.With("component", "audit")); auditStore != nil {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := auditStore.Close(ctx); err != nil {
+				log.Warn("saving the audit log at shutdown failed", "err", err)
+			}
+		}()
 	}
 	// The chart may name Sherlock's provider (sherlock.provider), and lock it.
 	var chartProvider sherlock.Provider
@@ -378,6 +420,7 @@ func run(args []string) error {
 		}
 	}
 	sherlockSvc := sherlock.New(sherlock.Options{
+		CommandOK: func(line string) error { _, err := watson.Parse(line); return err },
 		Client: &sherlock.Client{BaseURL: cfg.SherlockAPIURL, Key: keys.Key, HTTP: &http.Client{Timeout: 5 * time.Minute}, Retries: 2, Backoff: 2 * time.Second,
 			Provider: func() sherlock.Provider {
 				if p := shared.Current().SherlockOrDefault().Provider; p != nil && !cfg.SherlockLockProvider {
@@ -457,11 +500,152 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	if authCfg.Mode == auth.ModeNone {
+		toolboxCfg.SSH.Enabled = false
+	}
+	// SSH to nodes (Phase 11, ADR-72): the console's certificate
+	// authority lives in a Secret beside the connections, and the pairings
+	// beside the settings.
+	var caStore *kube.SecretKey
+	var console string
+	if cfg.ConnectionsSecrets != "" {
+		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
+		sk, err := kube.NewSecretKey(restCfg, ns, prefix+"-ssh-ca", map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "ssh-ca", "app.kubernetes.io/managed-by": "221b"})
+		if err != nil {
+			return fmt.Errorf("the SSH authority's Secret: %w", err)
+		}
+		caStore, console = sk, nodessh.ConsoleName(ns, prefix)
+	} else {
+		log.Warn("the SSH authority's key is kept in memory and made again on restart; paired nodes then need pairing again (set -connections-secrets to keep it in a Secret)")
+	}
+	sshSvc := nodessh.New(nodessh.Options{
+		CA:       nodessh.NewCA(caStore),
+		Pairings: nodessh.NewPairings(spendBackend),
+		Console:  console,
+		Logger:   log.With("component", "ssh"),
+		NodeAddr: func(cluster, node string) (string, error) {
+			_, client, ok := manager.Lookup(cluster)
+			if !ok || client == nil {
+				return "", fmt.Errorf("no connection %q", cluster)
+			}
+			nodes, ok := client.(interface{ Node(string) *corev1.Node })
+			if !ok {
+				return "", errors.New("this connection does not list nodes")
+			}
+			n := nodes.Node(node)
+			if n == nil {
+				return "", fmt.Errorf("node %s is not known here", node)
+			}
+			for _, a := range n.Status.Addresses {
+				if a.Type == corev1.NodeInternalIP {
+					return a.Address, nil
+				}
+			}
+			for _, a := range n.Status.Addresses {
+				if a.Type == corev1.NodeExternalIP || a.Type == corev1.NodeInternalDNS || a.Type == corev1.NodeHostName {
+					return a.Address, nil
+				}
+			}
+			return "", fmt.Errorf("node %s has no address", node)
+		},
+	})
+	// Automation (Phase 11 part 2, ADR-73): scripts run over the SSH
+	// above, with their records in a ConfigMap of their own, beside the
+	// settings'. Runs live on the leader, like Watson's commands.
+	var autoEngine *automation.Engine
+	var autoStore *automation.Store
+	if cfg.Automation {
+		var autoBackend, runsBackend kv.Backend = &kv.Memory{}, nil
+		if cfg.AutomationConfigMap != "" {
+			cm, err := kube.NewConfigMapStorage(restCfg, cfg.AutomationConfigMap)
+			if err != nil {
+				return fmt.Errorf("automation's ConfigMap: %w", err)
+			}
+			l := limited(cm, objAutomation, log.With("component", "storage"))
+			autoBackend, stored = l, append(stored, l)
+			// The runs and the nodes' facts have a ConfigMap of their own when
+			// the chart names one, so neither they nor the scripts press on the
+			// other's 1 MiB; every replica is told the same, and one that
+			// cannot read it does not start.
+			if cfg.AutomationRunsConfigMap != "" {
+				runs, err := openConfigMap(ctx, restCfg, cfg.AutomationRunsConfigMap)
+				if err != nil {
+					return fmt.Errorf("automation's runs: %w", err)
+				}
+				rl := limited(runs, objAutomationRuns, log.With("component", "storage"))
+				runsBackend, stored = rl, append(stored, rl)
+			}
+		} else {
+			log.Warn("Automation's scripts and runs are kept in memory and lost on restart (set -automation-configmap to keep them)")
+		}
+		outDir := ""
+		if toolboxCfg.Transcripts == toolbox.TranscriptsPVC {
+			outDir = toolboxCfg.TranscriptDir
+		}
+		autoStore = automation.NewStore(autoBackend, nil)
+		if runsBackend != nil {
+			autoStore.SetRunsBackend(runsBackend)
+		}
+		autoEngine = automation.NewEngine(automation.Options{
+			Node: func(cluster, node string) (automation.NodeState, bool) {
+				_, client, ok := manager.Lookup(cluster)
+				if !ok || client == nil {
+					return automation.NodeState{}, false
+				}
+				nodes, ok := client.(interface{ Node(string) *corev1.Node })
+				if !ok {
+					return automation.NodeState{}, false
+				}
+				n := nodes.Node(node)
+				if n == nil {
+					return automation.NodeState{}, false
+				}
+				st := automation.NodeState{}
+				_, st.ControlPlane = n.Labels["node-role.kubernetes.io/control-plane"]
+				if _, master := n.Labels["node-role.kubernetes.io/master"]; master {
+					st.ControlPlane = true
+				}
+				for _, c := range n.Status.Conditions {
+					if c.Type == corev1.NodeReady {
+						st.Ready = c.Status == corev1.ConditionTrue
+					}
+				}
+				return st, true
+			},
+			Store:       autoStore,
+			Exec:        sshSvc,
+			Unreachable: func(err error) bool { return errors.Is(err, nodessh.ErrUnreachable) },
+			Logger:      log.With("component", "automation"),
+			OutputDir:   outDir,
+			OnCommand: func(r automation.Run, node, what, outcome string) {
+				o := audit.OutcomeOK
+				if outcome != "ok" {
+					o = audit.OutcomeFailed
+				}
+				auditLog.Record(audit.Event{Action: audit.ActionAutomationCommand, Who: audit.Who{Subject: r.By.User, Name: r.By.Name}, Cluster: r.Cluster, Target: node, Outcome: o,
+					Detail: fmt.Sprintf("%s: %s on %s, for %s: %s", r.Watson(), what, node, r.By.Name, r.Basis)})
+			},
+			OnEnd: func(r automation.Run) {
+				c := r.Counts()
+				outcome := audit.OutcomeFailed
+				switch r.State {
+				case automation.RunSucceeded:
+					outcome = audit.OutcomeOK
+				case automation.RunCancelled:
+					outcome = audit.OutcomeStopped
+				}
+				auditLog.Record(audit.Event{Action: audit.ActionAutomationRun, Who: audit.Who{Subject: r.By.User, Name: r.By.Name}, Cluster: r.Cluster, Target: r.Script, Outcome: outcome,
+					Detail: fmt.Sprintf("run %d %s: v%d on fleet %s, %d nodes: %d changed, %d no change, %d failed, %d unreachable, %d skipped, %d cancelled. %s", r.ID, r.State, r.Version, r.FleetName, len(r.Nodes),
+						c[automation.NodeChanged], c[automation.NodeNoChange], c[automation.NodeFailed], c[automation.NodeUnreachable], c[automation.NodeSkipped], c[automation.NodeCancelled], r.Note)})
+			},
+		})
+	}
 	sessionsMgr := sessions.New(sessions.Options{
 		Config:  toolboxCfg,
+		SSH:     sshSvc,
 		Audit:   auditLog,
 		Logger:  log.With("component", "sessions"),
-		History: &sessions.KVHistory{Backend: spendBackend, Key: "toolbox-sessions.json", Keep: toolboxCfg.History.Keep, Logger: log.With("component", "sessions")},
+		History: &sessions.KVHistory{Backend: spendBackend, Key: sessions.HistoryKey, Keep: toolboxCfg.History.Keep, MaxBytes: historyMaxBytes, Logger: log.With("component", "sessions")},
 	})
 	go sessionsMgr.Run(ctx)
 	if toolboxCfg.Transcripts == toolbox.TranscriptsPVC {
@@ -487,11 +671,21 @@ func run(args []string) error {
 			rolePrefixes.LDAP = def.LDAP
 		}
 	}
+	proxies, err := auth.ParseProxies(cfg.TrustedProxies)
+	if err != nil {
+		return err
+	}
 	handler := api.New(api.Options{
+		SSH:                     sshSvc,
+		KV:                      spendBackend,
+		Version:                 version.String(),
 		Watson:                  watsonSvc,
 		Apps:                    appStore,
 		SecretsReveal:           cfg.SecretsRead && cfg.SecretsReveal,
 		Sessions:                sessionsMgr,
+		Automation:              autoEngine,
+		AutomationStore:         autoStore,
+		TwoPerson:               twoPerson,
 		Sherlock:                sherlockSvc,
 		SherlockKeys:            keys,
 		SherlockDefaultURL:      cfg.SherlockAPIURL,
@@ -508,6 +702,9 @@ func run(args []string) error {
 		Roles:                   api.RolesOptions{Templates: authFile.RoleTemplates(), Secrets: cfg.SecretsRead, Exec: authFile.Templates.AdminExec, Enforce: authFile.RBACEnforce, Prefixes: rolePrefixes, Bindings: authFile.Bindings},
 		HTTPSRedirect:           cfg.HTTPSRedirect,
 		Leader:                  elector,
+		Active:                  activity.Active,
+		Standby:                 activity.Standby,
+		Proxies:                 proxies,
 		ProxyToken:              cfg.ProxyToken,
 		Ready:                   cluster.Ready,
 		UI:                      ui.Handler(),
@@ -524,7 +721,19 @@ func run(args []string) error {
 			if info.Metrics == kube.MetricsAvailable {
 				metricsUp = 1
 			}
-			gauges := []api.Gauge{
+			gauges := []api.Gauge{}
+			for _, o := range stored {
+				sizes := o.Sizes()
+				for _, key := range slices.Sorted(maps.Keys(sizes)) {
+					gauges = append(gauges, api.Gauge{Name: "b221_configmap_bytes", Help: "Bytes each key of the console's ConfigMaps holds, as last read or saved; Kubernetes keeps at most 1 MiB in one ConfigMap.", Labels: fmt.Sprintf("configmap=%q,key=%q", o.Name, key), Value: float64(sizes[key])})
+				}
+			}
+			unsaved := 0.0
+			if sherlockSvc.Ledger().SaveError() != "" {
+				unsaved = 1
+			}
+			gauges = append(gauges, api.Gauge{Name: "b221_sherlock_spend_unsaved", Help: "1 when Sherlock's spend could not be saved: it is counted on this replica only, and a restart forgets it.", Value: unsaved})
+			gauges = append(gauges, []api.Gauge{
 				{Name: "b221_api_server_up", Help: "1 when the Kubernetes API server answered the last health check.", Value: up},
 				{Name: "b221_metrics_available", Help: "1 when metrics-server answered the last read.", Value: metricsUp},
 				{Name: "b221_refresh_seconds", Help: "The refresh interval in force: how often browsers are updated.", Value: store.RefreshInterval().Seconds()},
@@ -541,7 +750,7 @@ func run(args []string) error {
 				{Name: "b221_sherlock_answering", Help: "Sherlock answers in progress.", Value: float64(sherlockSvc.Running())},
 				{Name: "b221_sherlock_spend_today_usd", Help: "What Sherlock has cost today (UTC), in US dollars.", Value: sherlockSvc.Ledger().Now(context.Background()).DayUSD},
 				{Name: "b221_sherlock_spend_month_usd", Help: "What Sherlock has cost this month (UTC), in US dollars.", Value: sherlockSvc.Ledger().Now(context.Background()).MonthUSD},
-			}
+			}...)
 			cached := cluster.CachedObjects()
 			kinds := make([]string, 0, len(cached))
 			for k := range cached {
@@ -568,8 +777,18 @@ func run(args []string) error {
 		},
 	})
 	// The deployed roles are compared with the shipped ones every five
-	// minutes, for the Permissions page, the audit log and rbac.enforce.
+	// minutes, for the Permissions page, the audit log and rbac.enforce;
+	// on the leader only, and at once when a replica becomes it.
 	go handler.RunRoleChecks(ctx)
+	activity.OnChange(func(active bool) {
+		if active {
+			handler.CheckRolesSoon()
+		} else if autoEngine != nil {
+			// Runs live on the leader: one that loses the lead stops its
+			// runs, so the next leader never meets one still going.
+			autoEngine.StopAll("the console running it lost the lead and stopped it; nodes mid-script were stopped, and nothing was retried")
+		}
+	})
 	srv := &http.Server{
 		Addr:              cfg.Listen,
 		Handler:           handler,
@@ -585,6 +804,7 @@ func run(args []string) error {
 		log.Info("serving", "addr", cfg.Listen, "cluster", cfg.ClusterName, "mode", string(mode), "version", version.String(), "secrets_read", cfg.SecretsRead, "secrets_reveal", cfg.SecretsRead && cfg.SecretsReveal, "auth", cfg.AuthMode)
 		errCh <- srv.ListenAndServe()
 	}()
+	lostLease := false
 	select {
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -592,26 +812,93 @@ func run(args []string) error {
 		}
 		return err
 	case <-ctx.Done():
+	case <-lost:
+		lostLease = true
+		log.Error("the Lease was lost; a cold standby cannot watch again, so this replica exits and starts afresh (replicas.warmStandby=false)")
+		stop()
 	}
 	log.Info("shutting down")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	workCtx, cancelWork := context.WithTimeout(context.Background(), workWithin(cfg.TerminationGrace))
+	defer cancelWork()
+	shutdownCtx, cancel := context.WithTimeout(workCtx, 10*time.Second)
 	defer cancel()
 	err = srv.Shutdown(shutdownCtx)
-	auditLog.Close(shutdownCtx)
+	// Answers and commands outlive their requests, and each writes its
+	// audit record as it ends, so the log closes after them.
+	var work sync.WaitGroup
+	work.Go(func() { sherlockSvc.Drain(workCtx, settleWithin) })
+	work.Go(func() { watsonSvc.Drain(workCtx, settleWithin) })
+	work.Wait()
+	closeCtx, cancelClose := context.WithTimeout(context.Background(), closeWithin)
+	defer cancelClose()
+	auditLog.Close(closeCtx)
 	// The leader gives its Lease up on the way out, so another replica
 	// takes over at once.
 	select {
 	case <-leaderDone:
-	case <-shutdownCtx.Done():
+	case <-closeCtx.Done():
+	}
+	if lostLease {
+		return errors.New("the Lease was lost; a cold standby exits to start afresh")
 	}
 	return err
 }
 
+// What a stopping console does inside the pod's termination grace period:
+// answers and commands get what is left of it after these. settleWithin is
+// for those still running to end once stopped (a helm upgrade marks its
+// release failed, rather than leave it pending), closeWithin for the audit
+// log to reach its store and webhook.
+const (
+	settleWithin = 2 * time.Second
+	closeWithin  = 3 * time.Second
+	stopMargin   = time.Second
+)
+
+// workWithin is how long a stopping console waits for answers and commands
+// to finish by themselves, counted from the signal.
+func workWithin(grace time.Duration) time.Duration {
+	return max(grace-settleWithin-closeWithin-stopMargin, 0)
+}
+
+// keepAudit gives the log its store for Administration › Audit log, and
+// returns it to close: beside the settings, or in memory on a laptop, where
+// the page says so.
+func keepAudit(l *audit.Log, b kv.Backend, logger *slog.Logger) *audit.KVStore {
+	if _, inMemory := b.(*kv.Memory); inMemory {
+		l.KeepInMemory(audit.DefaultKeep)
+		return nil
+	}
+	st := audit.NewKVStore(b, logger)
+	l.SetStore(st)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := st.Sweep(ctx); err != nil {
+			logger.Warn("cleaning the kept audit log failed", "err", err)
+		}
+	}()
+	return st
+}
+
+// roleSwitch is what the election drives (ADR-70): winning the Lease makes
+// the replica active, and losing it makes it a standby. A cold standby
+// cannot stand by again, since its informers cannot restart, so losing
+// the Lease makes it exit instead; a warm one only stops its pollers.
+func roleSwitch(act *leader.Activity, exit func()) (onLead, onStop func()) {
+	return func() { act.Set(true) }, func() {
+		act.Set(false)
+		if !act.Warm() {
+			exit()
+		}
+	}
+}
+
 // newElector joins the election of -leader-lease, or stands alone. The
 // leader's address is the pod's IP and the port it listens on.
-func newElector(cfg config.Config, restCfg *rest.Config, log *slog.Logger, onLead func()) (*leader.Elector, error) {
+func newElector(cfg config.Config, restCfg *rest.Config, log *slog.Logger, onLead, onStop func()) (*leader.Elector, error) {
 	if cfg.LeaderLease == "" {
-		return leader.New(leader.Options{Logger: log.With("component", "leader"), OnStartedLeading: onLead}), nil
+		return leader.New(leader.Options{Logger: log.With("component", "leader"), OnStartedLeading: onLead, OnStoppedLeading: onStop}), nil
 	}
 	ns, name, _ := strings.Cut(cfg.LeaderLease, "/")
 	_, port, err := net.SplitHostPort(cfg.Listen)
@@ -622,7 +909,7 @@ func newElector(cfg config.Config, restCfg *rest.Config, log *slog.Logger, onLea
 	if err != nil {
 		return nil, err
 	}
-	return leader.New(leader.Options{Client: client, Namespace: ns, Name: name, Pod: cfg.PodName, Addr: net.JoinHostPort(cfg.PodIP, port), Logger: log.With("component", "leader"), OnStartedLeading: onLead}), nil
+	return leader.New(leader.Options{Client: client, Namespace: ns, Name: name, Pod: cfg.PodName, Addr: net.JoinHostPort(cfg.PodIP, port), Logger: log.With("component", "leader"), OnStartedLeading: onLead, OnStoppedLeading: onStop}), nil
 }
 
 // localSpec describes the cluster the console was started against as a

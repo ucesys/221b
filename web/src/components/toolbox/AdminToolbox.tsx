@@ -25,7 +25,7 @@ export function AdminSessions({ route, cluster, onToast }: AdminProps) {
   const [tick, setTick] = useState(0)
   useEffect(() => {
     let on = true
-    Promise.all([fetchSessions(c), fetchSessionHistory(c)]).then(
+    Promise.all([fetchSessions(c, true), fetchSessionHistory(c, true)]).then(
       ([l, h]) => {
         if (!on) return
         setLive(l.filter((x) => x.state !== 'ended'))
@@ -226,6 +226,9 @@ export function AdminToolbox({ route, cluster }: AdminProps) {
     'debug-pod': 'SuperAdmin; Admin in its namespaces',
     'node-shell': 'SuperAdmin',
     'node-command': 'SuperAdmin',
+    ssh: 'SuperAdmin',
+    'ssh-pair': 'SuperAdmin',
+    'ssh-unpair': 'SuperAdmin',
   }
   return (
     <section className="rk-card" style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 14 }} data-testid="admin-toolbox">
@@ -310,7 +313,7 @@ export function AdminToolbox({ route, cluster }: AdminProps) {
         </tbody>
       </table>
       <p className="tb-hint" style={{ margin: 0 }}>
-        Node shells run in the namespace <span className="rk-mono">{info.nodeNamespace}</span>, at Pod Security privileged, with the profiles {info.nodeProfiles.join(', ')}.
+        K8S node shells run in the namespace <span className="rk-mono">{info.nodeNamespace}</span>, at Pod Security privileged, with the profiles {info.nodeProfiles.join(', ')}.
       </p>
       <details>
         <summary style={{ cursor: 'pointer', fontSize: 12.5 }}>The values</summary>

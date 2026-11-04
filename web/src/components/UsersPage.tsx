@@ -205,10 +205,11 @@ function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onA
     setBusy(true)
     setError('')
     try {
-      await fn()
+      const out = await fn()
       setBusy(false)
       cancel()
-      onChanged(message)
+      const held = (out as { held?: string } | undefined)?.held
+      onChanged(held ? `${message} ${held}` : message)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setBusy(false)

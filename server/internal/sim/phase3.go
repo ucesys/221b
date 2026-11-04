@@ -149,7 +149,8 @@ func (s *Sim) deleteSecret(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("ns") + "/" + r.PathValue("name")
 	s.mu.Lock()
 	old, ok := s.objectLocked("secrets", key).(*corev1.Secret)
-	if ok {
+	// A server dry run, as Watson's card makes first, deletes nothing.
+	if ok && !deleteDryRun(r) {
 		s.storeLocked(old, watch.Deleted)
 	}
 	s.mu.Unlock()

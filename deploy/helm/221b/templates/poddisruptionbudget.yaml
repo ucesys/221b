@@ -1,3 +1,4 @@
+{{- if ne (include "b221.shared" .) "only" }}
 {{- if gt (int .Values.replicaCount) 1 }}
 # Several replicas (P7-02): a node drain or a cluster upgrade takes one at a
 # time, so the others keep serving.
@@ -10,7 +11,10 @@ metadata:
     {{- include "b221.labels" . | nindent 4 }}
 spec:
   maxUnavailable: 1
+  # A broken console must not hold up the maintenance that may fix it.
+  unhealthyPodEvictionPolicy: AlwaysAllow
   selector:
     matchLabels:
       {{- include "b221.selectorLabels" . | nindent 6 }}
+{{- end }}
 {{- end }}

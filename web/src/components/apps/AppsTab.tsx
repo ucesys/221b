@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { fetchApps, forgetApp, isCard, uninstallApp, type AppDrift, type AppView } from '../../api/apps'
+import { useCallback, useMemo, useState } from 'react'
+import { forgetApp, isCard, uninstallApp, useApps, type AppDrift, type AppView } from '../../api/apps'
 import { useMe } from '../../api/auth'
 import { useRefreshTick, useView } from '../../api/live'
 import type { ReleaseRow } from '../../api/types'
@@ -19,6 +19,7 @@ import type { TabProps } from '../tabs'
 import { useToolbox } from '../toolbox/context'
 import { AppDialog, type DialogMode } from './AppDialog'
 import { AppsActions, type AppAction } from './AppMenu'
+import { CommandDialog } from './CommandDialog'
 import { AppPanel, APP_TABS, type AppTab } from './AppPanel'
 
 type ReleaseFilter = 'all' | 'deployed' | 'failed'
@@ -57,25 +58,14 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
   const tb = useToolbox()
   const me = useMe()
   const tick = useRefreshTick()
-  const [apps, setApps] = useState<AppView[]>([])
-  const [appsErr, setAppsErr] = useState('')
   const [version, setVersion] = useState(0)
+  const { apps, error: appsErr, setApps } = useApps(route.cluster, tick, version)
   const [dialog, setDialog] = useState<{ mode: DialogMode; row?: AppRow } | null>(null)
+  const [commandDialog, setCommandDialog] = useState<{ row: AppRow; command?: string } | null>(null)
   const [confirm, setConfirm] = useState<{ action: 'uninstall' | 'forget'; row: AppRow } | null>(null)
   const [addons, setAddons] = useState(true)
   const [filter, setFilter] = useState<ReleaseFilter>('all')
   const [listQuery, setListQuery] = useState('')
-
-  const reload = useCallback(() => {
-    fetchApps(route.cluster).then(
-      (list) => {
-        setApps(list)
-        setAppsErr('')
-      },
-      (e: unknown) => setAppsErr(e instanceof Error ? e.message : String(e)),
-    )
-  }, [route.cluster])
-  useEffect(reload, [reload, tick, version])
 
   const rows = useMemo<AppRow[]>(() => {
     const byKey = new Map(apps.map((a) => [`${a.namespace}/${a.name}`, a]))
@@ -119,6 +109,15 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
   }
 
   const act = (a: AppAction, row: AppRow) => {
+    // The application's own commands (asked October 30, 2026).
+    if (a === 'newCommand') {
+      setCommandDialog({ row })
+      return
+    }
+    if (a.startsWith('command:')) {
+      setCommandDialog({ row, command: a.slice('command:'.length) })
+      return
+    }
     switch (a) {
       case 'upgrade':
       case 'switch':
@@ -145,7 +144,7 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
     (d: AppDrift) => {
       setApps((list) => list.map((a) => (current && a.namespace === current.namespace && a.name === current.name ? { ...a, drift: d, driftState: d.changed + d.missing > 0 ? 'drifted' : d.unknown > 0 && d.same === 0 ? 'unknown' : 'in sync' } : a)))
     },
-    [current],
+    [current, setApps],
   )
 
   const segs: [ReleaseFilter, string, number][] = [
@@ -267,6 +266,22 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
           onDone={(r, mode) => {
             setDialog(null)
             handleResult(r, { create: 'Installing', source: 'Deploying', switch: 'Switching and upgrading', upgrade: dialog.row?.orphan ? 'Installing' : 'Upgrading', install: 'Installing', values: 'Upgrading with the new values' }[mode] + (dialog.row ? ` ${dialog.row.name}` : ''))
+          }}
+        />
+      )}
+      {commandDialog && (
+        <CommandDialog
+          cluster={route.cluster}
+          row={commandDialog.row}
+          command={commandDialog.command}
+          onClose={() => setCommandDialog(null)}
+          onSaved={(r, doing) => {
+            setCommandDialog(null)
+            handleResult(r, doing)
+          }}
+          onRun={(it, doing) => {
+            setCommandDialog(null)
+            handleResult(it, doing)
           }}
         />
       )}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { jsonHeaders } from '../api/auth'
 import { useView } from '../api/live'
 import type { NetCheckResult, PodRow, PolicyNSRow, PolicyRow, QuotaRow, ServiceRow } from '../api/types'
 import { COVERAGE_COLUMNS, DRAIN_COLUMNS, drainTerms, HOOK_COLUMNS, hookTerms, ISOLATION_COLUMNS, LIMITS_COLUMNS, limitsTerms, NETPOL_COLUMNS, netpolTerms, nsTerms, PDB_COLUMNS, pdbTerms, PRIORITY_COLUMNS, priorityTerms, PSA_COLUMNS, ROLLOUT_COLUMNS, rolloutTerms } from '../columns/policies'
@@ -269,7 +270,7 @@ function Checker(p: SecProps) {
     if (!fromPod || !to || !port) return
     let gone = false
     const url = apiPath(`netcheck?from=${encodeURIComponent(fromPod.key)}&toService=${encodeURIComponent(to)}&port=${encodeURIComponent(port)}`)
-    fetch(url, { headers: { Accept: 'application/json' } })
+    fetch(url, { headers: jsonHeaders(true) })
       .then(async (r) => {
         const body = (await r.json()) as NetCheckResult & { error?: string }
         if (!gone) setRes(r.ok ? { key, data: body } : { key, error: body.error ?? `The server answered ${r.status}.` })

@@ -52,7 +52,7 @@ func (s *Service) renderSetup(w http.ResponseWriter, r *http.Request, msg string
 func (s *Service) renderSetupField(w http.ResponseWriter, r *http.Request, msg, field string, code int) {
 	d := setupData{Title: s.cfg.Title, Error: msg, Field: field, Form: randomID(), NeedToken: s.cfg.SetupToken != ""}
 	if r.Method == http.MethodPost {
-		d.Username, d.Name = r.PostFormValue("username"), r.PostFormValue("name")
+		d.Username, d.Name = audit.Clip(r.PostFormValue("username"), maxLogin), audit.Clip(r.PostFormValue("name"), maxLogin)
 		switch field {
 		case fieldPassword:
 		case fieldAgain:
@@ -84,6 +84,7 @@ func (s *Service) postSetup(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/signin", http.StatusSeeOther)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
 	if err := r.ParseForm(); err != nil {
 		s.renderSetup(w, r, "The form could not be read.", http.StatusBadRequest)
 		return
@@ -93,7 +94,10 @@ func (s *Service) postSetup(w http.ResponseWriter, r *http.Request) {
 		s.renderSetup(w, r, "That request did not come from this console. Try again from this page.", http.StatusForbidden)
 		return
 	}
-	who := User{Username: strings.TrimSpace(r.PostFormValue("username"))}
+	// The first-run page keeps its limit per address behind a proxy too: it
+	// is all that slows guessing at the setup token, and it stands only
+	// until the first administrator exists.
+	who := User{Username: audit.Clip(strings.TrimSpace(r.PostFormValue("username")), maxLogin)}
 	if !s.setup.allow(from(r)) {
 		s.record(r, audit.ActionSetupFailed, who, audit.OutcomeDenied, "too many attempts")
 		s.renderSetup(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)
@@ -182,8 +186,9 @@ func (s *Service) live(sess Session) (Session, bool) {
 // person no longer in any listed group loses the session (RB-23).
 func (s *Service) rereadGroups(sess Session, force bool) (Session, bool) {
 	defer s.lockReread(sess.ID)()
-	// Another request may have done it while this one waited.
-	if cur, ok := s.sessions.Get(sess.ID); ok {
+	// Another request may have done it while this one waited. An open
+	// stream comes here too, so looking does not count as activity.
+	if cur, ok := s.sessions.peek(sess.ID); ok {
 		sess = cur
 		if !force && s.now().Sub(sess.GroupsAt) < s.cfg.AccessTTL {
 			return s.withGrant(sess), true

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { saveFleets } from '../api/fleets'
 import type { Fleet, FleetRow, Me, NodeRow } from '../api/types'
-import { fleetOf, reqText } from '../lib/fleets'
+import { fleetOf, reqText, reservedGroups, reservedLine } from '../lib/fleets'
 import { href } from '../lib/router'
 import { FleetEditor, type EditorSeed } from './FleetEditor'
 import { PlusIcon } from './Icons'
@@ -36,6 +36,8 @@ interface Props {
  * changes and deletes them here with the same editor as the Fleets tab.
  */
 export function NodeFleets({ cluster, fleets, defs, nodes, sel, onSel, loaded, me, now, fleetsPage, onToast }: Props) {
+  const byName = new Map(nodes.map((n) => [n.name, n]))
+  const heldBy = (members: string[]) => reservedLine(reservedGroups(members, byName))
   const admin = me?.admin ?? true
   const [editor, setEditor] = useState<EditorSeed | null>(null)
   const none = fleets.find((r) => r.kind === 'none')
@@ -60,6 +62,9 @@ export function NodeFleets({ cluster, fleets, defs, nodes, sel, onSel, loaded, m
             <span className="rk-fl-name">All nodes</span>
             <span className="rk-cnt">{nodes.length}</span>
           </span>
+          <span className="rk-fl-def" style={{ fontSize: 11 }} data-testid="node-fleet-reserved">
+            {heldBy(nodes.map((n) => n.name))}
+          </span>
         </button>
         {list.map((f) => {
           const checked = sel.includes(f.id!)
@@ -79,6 +84,9 @@ export function NodeFleets({ cluster, fleets, defs, nodes, sel, onSel, loaded, m
                 <span className="rk-fl-def" style={{ fontSize: 11 }}>
                   {reqText(fleetOf(f))}
                   {f.deploy ? ` · deploys to ${f.deploy}` : ''}
+                </span>
+                <span className="rk-fl-def" style={{ fontSize: 11 }} data-testid="node-fleet-reserved">
+                  {heldBy(f.members)}
                 </span>
               </button>
               {admin && (

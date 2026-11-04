@@ -171,6 +171,25 @@ export function DiffIcon() {
   )
 }
 
+/** A pencil: edit (the Scripts page's groups). */
+export function PencilIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  )
+}
+
+/** The diff's two columns struck through: back to the text alone. */
+export function NoDiffIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+      <path d="M8 2v12M3 5h4M5 3v4M9 11h4M2.5 13.5l11-11" />
+    </svg>
+  )
+}
+
 /** A counter-clockwise arrow: roll back to a revision (Phase 10.1). */
 export function RollbackIcon() {
   return (
@@ -381,3 +400,13 @@ export const TrashIcon = () => <Ico16 d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L
 export const ShieldSmallIcon = () => <Ico16 round={false} d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z" />
 export const ChevronRightIcon = () => <Ico16 size={12} sw={1.8} d="m6 4 4 4-4 4" />
 export const ListIcon = () => <Ico16 size={14} d="M5 4h9M5 8h9M5 12h9M2 4h.01M2 8h.01M2 12h.01" />
+
+/** A key: SSH pairing (Phase 11). */
+export function KeyIcon({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="7.5" cy="15.5" r="4.5" />
+      <path d="m11 12 9-9M15 7l3 3M18 4l2 2" />
+    </svg>
+  )
+}

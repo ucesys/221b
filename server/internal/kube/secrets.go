@@ -19,6 +19,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/yaml"
+
+	"github.com/ucesys/221b/server/internal/scrub"
 )
 
 // KeySize is one key of a Secret or ConfigMap and the size of its value.
@@ -39,8 +41,9 @@ type SecretSummary struct {
 	Immutable bool
 	Keys      []KeySize
 	Release   *HelmRelease
-	// Cert is what a TLS Secret's certificate says of itself: the public
-	// half only, read from tls.crt (P4-02). Nothing of tls.key is read.
+	// Cert is what the certificate of a Secret that serves TLS says of
+	// itself: the public half only, read from tls.crt (P4-02). Nothing of
+	// tls.key is read.
 	Cert *CertInfo
 }
 
@@ -163,8 +166,15 @@ func SummarizeSecret(obj any) (any, error) {
 		Keys:       keySizes(s.Data, s.StringData),
 	}
 	out.ManagedFields = nil
-	out.Annotations = HideSecretValues(out.Annotations, secretValues(s.Data, s.StringData))
-	if s.Type == corev1.SecretTypeTLS {
+	out.Annotations = HideSecretValues(out.Annotations, secretValues(valuesOf(s.Type, s.Namespace, s.Data), s.StringData))
+	holds := func(key string) bool {
+		_, data := s.Data[key]
+		_, text := s.StringData[key]
+		return data || text
+	}
+	// Ingress controllers take any Secret with the two keys, whatever its
+	// type.
+	if s.Type == corev1.SecretTypeTLS || (holds(corev1.TLSCertKey) && holds(corev1.TLSPrivateKeyKey)) {
 		if crt, ok := s.Data[corev1.TLSCertKey]; ok {
 			out.Cert = certInfo(crt)
 		} else if crt, ok := s.StringData[corev1.TLSCertKey]; ok {
@@ -207,6 +217,23 @@ func SummarizeConfigMap(obj any) (any, error) {
 // LastApplied is the annotation kubectl apply keeps the whole object in,
 // values included.
 const LastApplied = "kubectl.kubernetes.io/last-applied-configuration"
+
+// valuesOf is a Secret's data without what is public anyway: a ServiceAccount
+// token's namespace key, when it says only the Secret's own namespace. Looked
+// for in the annotations it would hide the ServiceAccount's name wherever
+// that contains the namespace. Every other value stays.
+func valuesOf(t corev1.SecretType, namespace string, data map[string][]byte) map[string][]byte {
+	if t != corev1.SecretTypeServiceAccountToken || namespace == "" || string(data[corev1.ServiceAccountNamespaceKey]) != namespace {
+		return data
+	}
+	out := make(map[string][]byte, len(data))
+	for k, v := range data {
+		if k != corev1.ServiceAccountNamespaceKey {
+			out[k] = v
+		}
+	}
+	return out
+}
 
 // secretValues lists every value a Secret holds, in the forms an annotation
 // might carry it: raw and base64.
@@ -273,6 +300,9 @@ type HelmRecord struct {
 	Info      HelmRecordInfo `json:"info"`
 	Chart     struct {
 		Metadata HelmChartMetadata `json:"metadata"`
+		// Values are the chart's defaults, which its notes can print as
+		// well as what was installed.
+		Values map[string]any `json:"values,omitempty"`
 	} `json:"chart"`
 	Config   map[string]any `json:"config"`
 	Manifest string         `json:"manifest"`
@@ -331,7 +361,7 @@ func DecodeHelmRelease(data []byte) (*HelmRelease, error) {
 	r := &HelmRelease{
 		Name: rec.Name, Namespace: rec.Namespace, Revision: rec.Version,
 		Status: rec.Info.Status, Chart: rec.Chart.Metadata.Name, Version: rec.Chart.Metadata.Version,
-		App: rec.Chart.Metadata.AppVersion, Desc: rec.Info.Description, Notes: rec.Info.Notes,
+		App: rec.Chart.Metadata.AppVersion, Desc: rec.Info.Description, Notes: MaskNotes(rec.Info.Notes, rec.Config, rec.Chart.Values, rec.Manifest),
 		Deployed: parseHelmTime(rec.Info.LastDeployed), First: parseHelmTime(rec.Info.FirstDeployed),
 	}
 	if len(rec.Config) > 0 {
@@ -359,41 +389,78 @@ func parseHelmTime(s string) *time.Time {
 	return &u
 }
 
-// credentialKey matches value names that usually hold credentials.
-var credentialKey = regexp.MustCompile(`(?i)(password|passwd|secret|token|apikey|api_key|api-key|accesskey|access_key|credential|private|cert|auth|license)`)
+// helmCredential matches the value names that hold credentials or key
+// material in Helm values, beyond what scrub.SecretName takes for a
+// secret anywhere.
+var helmCredential = regexp.MustCompile(`(?i)(private|cert|license)`)
+
+// credentialKey says whether a value's name usually holds a credential.
+func credentialKey(name string) bool {
+	return scrub.SecretName(name) || helmCredential.MatchString(name)
+}
 
 // MaskedValue replaces a credential in masked values.
 const MaskedValue = "•••••• (hidden by 221B)"
 
 // MaskValues returns a copy of Helm values with every string or number
 // under a credential-looking key replaced, in lists and maps under it too,
-// and lists the keys it masked (P2-07). Keys are paths like "auth.password".
+// and with the value of a {name, value} entry whose name looks like one,
+// the form Helm charts take environment variables in. A string that holds
+// a credential under any key, a URL with a password say, goes as well. It
+// lists the keys it masked (P2-07). Keys are paths like "auth.password".
 func MaskValues(v any, path string, masked *[]string) any {
+	m := masker{paths: *masked}
+	out := m.mask(v, path)
+	*masked = m.paths
+	return out
+}
+
+// masker walks Helm values, keeping the paths it masked and what was
+// under them.
+type masker struct {
+	paths  []string
+	values []string
+}
+
+func (m *masker) hide(path string, value any) string {
+	m.paths = append(m.paths, path)
+	if s, ok := value.(string); ok {
+		m.values = append(m.values, s)
+	} else if b, err := json.Marshal(value); err == nil {
+		m.values = append(m.values, string(b))
+	}
+	return MaskedValue
+}
+
+func (m *masker) mask(v any, path string) any {
 	switch x := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(x))
+		name, _ := x["name"].(string)
 		for k, val := range x {
 			p := k
 			if path != "" {
 				p = path + "." + k
 			}
-			if credentialKey.MatchString(k) {
-				out[k] = maskAll(val, p, masked)
-				continue
+			switch {
+			case credentialKey(k):
+				out[k] = m.maskAll(val, p)
+			case k == "value" && credentialKey(name):
+				out[k] = m.maskAll(val, strings.TrimPrefix(path+"."+name, "."))
+			default:
+				out[k] = m.mask(val, p)
 			}
-			out[k] = MaskValues(val, p, masked)
 		}
 		return out
 	case []any:
 		out := make([]any, len(x))
 		for i, val := range x {
-			out[i] = MaskValues(val, path, masked)
+			out[i] = m.mask(val, path)
 		}
 		return out
 	case string:
-		if strings.Contains(x, "PRIVATE KEY-----") {
-			*masked = append(*masked, path)
-			return MaskedValue
+		if strings.Contains(x, "PRIVATE KEY-----") || scrub.Text(x) != x {
+			return m.hide(path, x)
 		}
 		return x
 	default:
@@ -404,18 +471,18 @@ func MaskValues(v any, path string, masked *[]string) any {
 // maskAll replaces every string and number in a value under a
 // credential-looking key: passwords: [...] or password: 12345678 as much as
 // password: "...". Booleans and empty values say nothing and are kept.
-func maskAll(v any, path string, masked *[]string) any {
+func (m *masker) maskAll(v any, path string) any {
 	switch x := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(x))
 		for k, val := range x {
-			out[k] = maskAll(val, path+"."+k, masked)
+			out[k] = m.maskAll(val, path+"."+k)
 		}
 		return out
 	case []any:
 		out := make([]any, len(x))
 		for i, val := range x {
-			out[i] = maskAll(val, fmt.Sprintf("%s[%d]", path, i), masked)
+			out[i] = m.maskAll(val, fmt.Sprintf("%s[%d]", path, i))
 		}
 		return out
 	case string:
@@ -425,8 +492,80 @@ func maskAll(v any, path string, masked *[]string) any {
 	case nil, bool:
 		return v
 	}
-	*masked = append(*masked, path)
-	return MaskedValue
+	return m.hide(path, v)
+}
+
+// shortCredential is the length below which a credential is not replaced
+// wherever it occurs: it would take pieces out of ordinary words.
+const shortCredential = 3
+
+// NotesHidden stands for notes that print a credential too short to mask.
+const NotesHidden = "(hidden by 221B: these notes print a value that cannot be masked)"
+
+// MaskNotes hides what a release's rendered notes say of its credentials,
+// which they can print under no name at all: every value MaskValues hides
+// in the values it was installed with or the chart's defaults, and every
+// value of a Secret in its manifest, also in base64, and what looks like a
+// credential by itself. Notes that print a value too short to find safely
+// are replaced whole (X-01).
+func MaskNotes(notes string, config, defaults map[string]any, manifest string) string {
+	if notes == "" {
+		return ""
+	}
+	m := &masker{}
+	if config != nil {
+		m.mask(config, "")
+	}
+	if defaults != nil {
+		m.mask(defaults, "")
+	}
+	known := append(m.values, manifestSecrets(manifest)...)
+	sort.Slice(known, func(i, j int) bool { return len(known[i]) > len(known[j]) })
+	out := scrub.Text(notes)
+	for _, v := range known {
+		if len(v) < shortCredential {
+			if v != "" && wholeWord(out, v) {
+				return NotesHidden
+			}
+			continue
+		}
+		out = strings.ReplaceAll(out, v, MaskedValue)
+		out = strings.ReplaceAll(out, base64.StdEncoding.EncodeToString([]byte(v)), MaskedValue)
+	}
+	return out
+}
+
+// wholeWord says whether s holds word with no letter or digit against it.
+func wholeWord(s, word string) bool {
+	return regexp.MustCompile(`(?:^|[^\pL\pN])` + regexp.QuoteMeta(word) + `(?:$|[^\pL\pN])`).MatchString(s)
+}
+
+// manifestSecrets lists the values of the Secrets a release's manifest
+// creates, which is where a chart keeps a password it made up itself.
+func manifestSecrets(manifest string) []string {
+	var out []string
+	for _, doc := range strings.Split(manifest, "\n---") {
+		if !strings.Contains(doc, "Secret") {
+			continue
+		}
+		var secret struct {
+			Kind       string            `json:"kind"`
+			Data       map[string]string `json:"data"`
+			StringData map[string]string `json:"stringData"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &secret); err != nil || secret.Kind != "Secret" {
+			continue
+		}
+		for _, v := range secret.StringData {
+			out = append(out, v)
+		}
+		for _, v := range secret.Data {
+			if b, err := base64.StdEncoding.DecodeString(v); err == nil {
+				out = append(out, string(b))
+			}
+		}
+	}
+	return out
 }
 
 // manifestResources lists the objects a release's manifest creates.

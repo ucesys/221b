@@ -1,6 +1,8 @@
 package views_test
 
 import (
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -113,5 +115,53 @@ func TestRolloutWouldStall(t *testing.T) {
 	q, _ := views.BuildPolicy(src, "quota:shop/q", now)
 	if it := q.(views.QuotaRow).Items[0]; it.Pct != 75 || it.Tone != "warn" {
 		t.Fatalf("quota %+v", it)
+	}
+}
+
+// The budgets of a namespace are read once a pass, whatever the number of
+// rows that ask, and give the rows they give alone.
+func TestBudgetRowsShareOneReadingOfTheNamespace(t *testing.T) {
+	src := fake.New("worker-1")
+	one := intstr.FromInt32(1)
+	budget := func(name string, match map[string]string) {
+		src.Put(&policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: name}, Spec: policyv1.PodDisruptionBudgetSpec{MinAvailable: &one, Selector: &metav1.LabelSelector{MatchLabels: match}}})
+	}
+	var keys []string
+	for i := range 10 {
+		name := "b" + strconv.Itoa(i)
+		budget(name, map[string]string{"group": name})
+		keys = append(keys, "pdb:shop/"+name)
+		for j := range 3 {
+			p := pod("shop", name+"-"+strconv.Itoa(j), "worker-1")
+			p.Labels = map[string]string{"group": name, "app": "web"}
+			src.Put(p)
+		}
+	}
+	budget("all", map[string]string{"app": "web"})
+	keys = append(keys, "pdb:shop/all")
+	src.Put(&policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "none"}})
+
+	counted := &countingSource{Source: src, reads: map[string]int{}}
+	pass := views.NewPass(counted)
+	for _, k := range keys {
+		got, ok := views.BuildPolicy(pass, k, now)
+		want, _ := views.BuildPolicy(src, k, now)
+		if !ok || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s through a pass: %+v, alone: %+v", k, got, want)
+		}
+	}
+	if n := counted.reads["poddisruptionbudgets/shop"]; n > 1 {
+		t.Fatalf("the budgets were listed %d times", n)
+	}
+	if n := counted.reads["pods/shop"]; n > 1 {
+		t.Fatalf("the pods were listed %d times", n)
+	}
+	r, _ := views.BuildPolicy(pass, "pdb:shop/b3", now)
+	if row := r.(views.PDBRow); len(row.Pods) != 3 || len(row.Overlap) != 3 {
+		t.Fatalf("a budget that shares its pods: %+v", row)
+	}
+	r, _ = views.BuildPolicy(pass, "pdb:shop/none", now)
+	if row := r.(views.PDBRow); len(row.Pods) != 0 {
+		t.Fatalf("a budget that selects nothing: %+v", row)
 	}
 }

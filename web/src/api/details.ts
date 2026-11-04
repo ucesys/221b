@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { unauthorized } from './auth'
+import { jsonHeaders, unauthorized } from './auth'
 import { useRefreshTick } from './live'
 
 export interface Details<T> {
@@ -43,7 +43,7 @@ export function useDetails<T>(url: string | null): Details<T> {
   useEffect(() => {
     if (!url) return
     let stale = false
-    fetch(url, { headers: { Accept: 'application/json' } })
+    fetch(url, { headers: jsonHeaders(true) })
       .then(async (r) => {
         if (stale) return
         if (!r.ok) {

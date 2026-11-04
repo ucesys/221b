@@ -1,12 +1,82 @@
-import { useEffect, useState } from 'react'
-import { fetchSecretsConfig, revealSecretValue, updateSecret, type SecretsConfig, type SecretValue } from '../api/secrets'
+import { useEffect, useId, useState } from 'react'
+import { fetchSecretsConfig, revealSecretValue, SecretsError, updateSecret, type SecretsConfig, type SecretValue } from '../api/secrets'
 import type { KeySize } from '../api/types'
 import { fMem, nWord } from '../lib/format'
+import { ConfirmDialog } from './ConfirmDialog'
 import { CopyName } from './CopyName'
 import { ScrollBox, Table, TR } from './Table'
+import { useWatsonApi } from './Watson'
 
 function fBytes(n: number): string {
   return n < 1024 ? `${n} B` : fMem(n)
+}
+
+/** What a refused save says: a Secret changed since it was read (SE-04) in plain words, the rest as the server put it. */
+export function saveProblem(e: unknown): string {
+  if (e instanceof SecretsError && e.status === 409 && !/immutable/i.test(e.message)) return 'This Secret changed after you opened it, so nothing was saved. Press Cancel, then Edit, and make your change on what is there now.'
+  return e instanceof Error ? e.message : String(e)
+}
+
+/** The Watson command that deletes a Secret. */
+export const deleteSecretCommand = (ns: string, name: string) => `kubectl delete secret ${name} -n ${ns}`
+
+/**
+ * Delete… in the Secret's own card, for those who may edit it: it asks
+ * first, then hands the deletion to Watson, as Delete claim does: a dry
+ * run, then an approval. Nothing shows where Watson does not run; where it
+ * changes nothing, the button says why it is off.
+ */
+export function SecretDelete({ namespace: ns, name, keys, onToast }: { namespace: string; name: string; keys: number; onToast: (msg: string) => void }) {
+  const [canEdit, setCanEdit] = useState(false)
+  const [asking, setAsking] = useState(false)
+  const watson = useWatsonApi()
+  useEffect(() => {
+    let live = true
+    fetchSecretsConfig(undefined, ns).then(
+      (c) => live && setCanEdit(c.edit),
+      () => live && setCanEdit(false),
+    )
+    return () => {
+      live = false
+    }
+  }, [ns])
+  if (!canEdit || !watson.available) return null
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 10 }}>
+        <button
+          className="rk-btn"
+          data-danger="true"
+          disabled={watson.readOnly}
+          title={watson.readOnly ? `Watson changes nothing on this cluster${watson.how ? `: ${watson.how}` : ''}.` : 'Asks Watson to delete this Secret: a dry run first, then your approval'}
+          onClick={() => setAsking(true)}
+          data-testid="secret-delete"
+        >
+          Delete…
+        </button>
+      </div>
+      {asking && (
+        <ConfirmDialog
+          title={`Delete Secret ${ns}/${name}?`}
+          confirm="Send to Watson"
+          danger
+          onCancel={() => setAsking(false)}
+          onConfirm={() => {
+            setAsking(false)
+            watson.send(deleteSecretCommand(ns, name), { from: `Namespaces: ${ns}/${name}`, why: `Delete Secret ${ns}/${name}.`, over: true })
+            onToast('Watson has the change: it runs once someone approves it.')
+          }}
+        >
+          <p style={{ margin: 0 }}>
+            Its {nWord(keys, 'key', 'keys')} go for good. Pods that read it keep what they read, but cannot start again without it; Watson’s card lists them, with any Ingress that serves TLS from it.
+          </p>
+          <p className="rk-fhint" style={{ margin: 0 }}>
+            Watson shows a server dry run first; nothing is deleted until someone approves it, and on a production cluster with the rule on, a second person approves (P6-07).
+          </p>
+        </ConfirmDialog>
+      )}
+    </>
+  )
 }
 
 /**
@@ -16,7 +86,7 @@ function fBytes(n: number): string {
  * secrets.reveal on, one key at a time, read live and audited (SE-03);
  * otherwise the new values are typed blind.
  */
-export function SecretData({ namespace: ns, name, keys, onToast }: { namespace: string; name: string; keys: KeySize[]; onToast: (msg: string) => void }) {
+export function SecretData({ namespace: ns, name, keys, resourceVersion, onToast }: { namespace: string; name: string; keys: KeySize[]; resourceVersion?: string; onToast: (msg: string) => void }) {
   const [cfg, setCfg] = useState<SecretsConfig | null>(null)
   const [shown, setShown] = useState<Record<string, SecretValue>>({})
   const [busyKey, setBusyKey] = useState('')
@@ -27,17 +97,23 @@ export function SecretData({ namespace: ns, name, keys, onToast }: { namespace: 
   const [showTyping, setShowTyping] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  // The version the edit started from, kept while the drawer reads newer ones.
+  const [editedVersion, setEditedVersion] = useState<string | undefined>()
+  // Save was pressed with a key on Replace and nothing typed: the field says so until it is settled.
+  const [askBlank, setAskBlank] = useState(false)
+  const uid = useId()
+  const fieldId = (key: string) => `${uid}-${key}`
 
   useEffect(() => {
     let live = true
-    fetchSecretsConfig().then(
+    fetchSecretsConfig(undefined, ns).then(
       (c) => live && setCfg(c),
       () => live && setCfg({ read: true, reveal: false, edit: false }),
     )
     return () => {
       live = false
     }
-  }, [])
+  }, [ns])
 
   const reveal = (key: string) => {
     if (shown[key]) {
@@ -61,11 +137,20 @@ export function SecretData({ namespace: ns, name, keys, onToast }: { namespace: 
     setRemoved(new Set())
     setAdded([])
     setError('')
+    setAskBlank(false)
   }
 
   const save = () => {
+    // A value goes for good, so an empty field is never taken for a new value.
+    const blank = keys.find((k) => drafts[k.key] === '' && !removed.has(k.key))
+    if (blank) {
+      setError('')
+      setAskBlank(true)
+      document.getElementById(fieldId(blank.key))?.focus()
+      return
+    }
     const set: Record<string, string> = {}
-    for (const [k, v] of Object.entries(drafts)) if (!removed.has(k)) set[k] = v
+    for (const [k, v] of Object.entries(drafts)) if (!removed.has(k) && v !== '') set[k] = v
     for (const a of added) {
       const k = a.key.trim()
       if (!k) continue
@@ -82,20 +167,20 @@ export function SecretData({ namespace: ns, name, keys, onToast }: { namespace: 
     }
     setSaving(true)
     setError('')
-    updateSecret(ns, name, { set, remove })
+    updateSecret(ns, name, { set, remove, resourceVersion: editedVersion })
       .then(() => {
         onToast(`Secret ${name} changed: ${nWord(Object.keys(set).length + remove.length, 'key', 'keys')}.`)
         setShown({})
         cancel()
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => setError(saveProblem(e)))
       .finally(() => setSaving(false))
   }
 
   const canEdit = !!cfg?.edit
   const canReveal = !!cfg?.reveal && canEdit
-  const valueBox = (value: string, onChange: (v: string) => void, label: string, testId: string) => (
-    <textarea className={`rk-area rk-mono${showTyping || canReveal ? '' : ' rk-secret'}`} value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} spellCheck={false} autoComplete="off" rows={2} style={{ minHeight: 44, fontSize: 12.5, resize: 'vertical' }} data-testid={testId} />
+  const valueBox = (value: string, onChange: (v: string) => void, label: string, testId: string, id?: string, problem?: string) => (
+    <textarea id={id} className={`rk-area rk-mono${showTyping || canReveal ? '' : ' rk-secret'}`} value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} aria-invalid={problem ? true : undefined} aria-describedby={problem} spellCheck={false} autoComplete="off" rows={2} style={{ minHeight: 44, fontSize: 12.5, resize: 'vertical' }} data-testid={testId} />
   )
 
   return (
@@ -109,6 +194,7 @@ export function SecretData({ namespace: ns, name, keys, onToast }: { namespace: 
               const v = shown[k.key]
               const gone = removed.has(k.key)
               const draft = drafts[k.key]
+              const blank = askBlank && draft === '' && !gone
               return (
                 <TR key={k.key}>
                   <span className="rk-mono" style={{ fontSize: 12, textDecoration: gone ? 'line-through' : undefined, color: gone ? 'var(--fg3)' : undefined }}>
@@ -118,7 +204,7 @@ export function SecretData({ namespace: ns, name, keys, onToast }: { namespace: 
                   {canEdit && (
                     <span style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0, fontSize: 12 }} data-testid={`secret-key-${k.key}`}>
                       {editing && draft !== undefined && !gone ? (
-                        valueBox(draft, (val) => setDrafts((d) => ({ ...d, [k.key]: val })), `New value of ${k.key}`, `secret-draft-${k.key}`)
+                        valueBox(draft, (val) => setDrafts((d) => ({ ...d, [k.key]: val })), `New value of ${k.key}`, `secret-draft-${k.key}`, fieldId(k.key), blank ? `${fieldId(k.key)}-blank` : undefined)
                       ) : v ? (
                         <span style={{ display: 'flex', alignItems: 'flex-start', gap: 6, minWidth: 0 }}>
                           <code className="rk-mono" style={{ fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', flex: '1 1 auto', minWidth: 0, maxHeight: 160, overflow: 'auto', background: 'var(--sunken)', padding: '4px 6px', borderRadius: 6 }} data-testid={`secret-value-${k.key}`}>
@@ -128,6 +214,11 @@ export function SecretData({ namespace: ns, name, keys, onToast }: { namespace: 
                         </span>
                       ) : (
                         <span style={{ color: 'var(--fg3)' }}>{gone ? 'removed on save' : '••••••••'}</span>
+                      )}
+                      {blank && (
+                        <span id={`${fieldId(k.key)}-blank`} className="rk-t" data-tone="err" data-testid={`secret-blank-${k.key}`}>
+                          Nothing is typed here, so nothing was saved. Type the new value, or press Keep as is.
+                        </span>
                       )}
                       <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                         {canReveal && !gone && (
@@ -199,11 +290,19 @@ export function SecretData({ namespace: ns, name, keys, onToast }: { namespace: 
       )}
       {canEdit && (
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '0 16px 10px' }} data-testid="secret-edit-bar">
-          {!editing ? (
-            <button className="rk-btn" onClick={() => setEditing(true)} data-testid="secret-edit">
+          {!editing && (
+            <button
+              className="rk-btn"
+              onClick={() => {
+                setEditedVersion(resourceVersion)
+                setEditing(true)
+              }}
+              data-testid="secret-edit"
+            >
               Edit
             </button>
-          ) : (
+          )}
+          {editing && (
             <>
               <button className="rk-btn" onClick={() => setAdded((l) => [...l, { key: '', value: '' }])} data-testid="secret-add-key">
                 Add key

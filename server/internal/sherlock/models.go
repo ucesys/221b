@@ -38,14 +38,20 @@ func ModelOf(id string) (Model, bool) {
 			return m, true
 		}
 	}
+	dear := dearest()
+	dear.ID, dear.Label, dear.Note = id, id, "Not one of the listed models: its spend is counted at the highest listed price."
+	return dear, false
+}
+
+// dearest is the listed model with the highest price.
+func dearest() Model {
 	dear := Models[0]
 	for _, m := range Models {
 		if m.Out > dear.Out {
 			dear = m
 		}
 	}
-	dear.ID, dear.Label, dear.Note = id, id, "Not one of the listed models: its spend is counted at the highest listed price."
-	return dear, false
+	return dear
 }
 
 // Cost is what a request cost in US dollars. Writing to the prompt cache

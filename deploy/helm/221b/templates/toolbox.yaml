@@ -1,3 +1,4 @@
+{{- if ne (include "b221.shared" .) "only" }}
 {{- /*
 The Toolbox (Phase 9): its values as a file the console reads (TB-48), the
 namespace node shells run in (TB-49), a network policy that lets its pods
@@ -70,4 +71,5 @@ spec:
   resources:
     requests:
       storage: {{ $t.transcriptsVolume.size | quote }}
+{{- end }}
 {{- end }}

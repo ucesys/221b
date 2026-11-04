@@ -7,6 +7,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -389,5 +390,96 @@ func TestObjectDetailsForEveryKind(t *testing.T) {
 	}
 	if _, ok := views.ObjectKindOf("Gizmo"); ok {
 		t.Error("an unknown kind is found")
+	}
+}
+
+// RESTARTS as kubectl counts it: while a pod initialises, its init
+// containers; after that, its sidecars and its containers, so an init
+// container's tries stop counting once it has done its work.
+func TestRestartsCountInitContainersAndSidecarsAsKubectlDoes(t *testing.T) {
+	src := fake.New("worker-1")
+	always := corev1.ContainerRestartPolicyAlways
+	crashed := func(at time.Duration) corev1.ContainerState {
+		return corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1, Reason: "Error", FinishedAt: ts(at)}}
+	}
+	details := func(p *corev1.Pod) string {
+		src.Put(p)
+		for _, r := range views.BuildObjectRows(src, p.Namespace, now) {
+			if r.Key == "Pod/"+p.Name {
+				return r.Details
+			}
+		}
+		t.Fatalf("no row for %s", p.Name)
+		return ""
+	}
+
+	// Stuck on a crash-looping init container: the app has not started.
+	initing := pod("shop", "initing", "worker-1")
+	initing.Status.Phase = corev1.PodPending
+	initing.Spec.InitContainers = []corev1.Container{{Name: "migrate"}}
+	initing.Status.ContainerStatuses = nil
+	initing.Status.InitContainerStatuses = []corev1.ContainerStatus{{Name: "migrate", RestartCount: 40, State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}, LastTerminationState: crashed(time.Minute)}}
+	r := views.BuildPodRow(src, initing, now)
+	if r.Status != "Init:CrashLoopBackOff" || r.Restarts != 40 || r.LastRestart == nil || !r.LastRestart.Equal(now.Add(-time.Minute)) || r.LastTermination != "Error, exit 1" {
+		t.Fatalf("initialising: %+v", r)
+	}
+	if d := details(initing); !strings.Contains(d, "40 restarts") {
+		t.Errorf("initialising row: %s", d)
+	}
+
+	// Running with a sidecar that restarts, and an init container that took
+	// a few tries but finished: the sidecar counts, the finished one not.
+	running := pod("shop", "running", "worker-1")
+	running.Spec.InitContainers = []corev1.Container{{Name: "setup"}, {Name: "proxy", RestartPolicy: &always}}
+	running.Status.Conditions = append(running.Status.Conditions, corev1.PodCondition{Type: corev1.PodInitialized, Status: corev1.ConditionTrue})
+	running.Status.ContainerStatuses[0].RestartCount = 1
+	running.Status.ContainerStatuses[0].LastTerminationState = crashed(time.Hour)
+	running.Status.InitContainerStatuses = []corev1.ContainerStatus{
+		{Name: "setup", RestartCount: 5, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, Reason: "Completed"}}, LastTerminationState: crashed(30 * time.Second)},
+		{Name: "proxy", RestartCount: 2, Started: ptr(true), State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}, LastTerminationState: crashed(time.Minute)},
+	}
+	r = views.BuildPodRow(src, running, now)
+	if r.Restarts != 3 || r.LastRestart == nil || !r.LastRestart.Equal(now.Add(-time.Minute)) {
+		t.Fatalf("running: %+v", r)
+	}
+	if d := details(running); !strings.Contains(d, "3 restarts") {
+		t.Errorf("running row: %s", d)
+	}
+}
+
+// A Job's row follows the conditions its controller sets, and the counters
+// only until then.
+func TestAJobsRowFollowsItsConditions(t *testing.T) {
+	src := fake.New("worker-1")
+	status := func(name string, completions *int32, st batchv1.JobStatus) (string, string) {
+		src.Put(&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: name}, Spec: batchv1.JobSpec{Completions: completions}, Status: st})
+		for _, r := range views.BuildObjectRows(src, "shop", now) {
+			if r.Key == "Job/"+name {
+				return r.Status, r.Tone
+			}
+		}
+		t.Fatalf("no row for %s", name)
+		return "", ""
+	}
+	cond := func(c batchv1.JobConditionType) []batchv1.JobCondition {
+		return []batchv1.JobCondition{{Type: c, Status: corev1.ConditionTrue}}
+	}
+	if s, tone := status("failed-late", ptr(int32(5)), batchv1.JobStatus{Succeeded: 1, Failed: 6, Conditions: cond(batchv1.JobFailed)}); s != "failed (6)" || tone != "err" {
+		t.Errorf("a Job that failed after a pod succeeded: %s %s", s, tone)
+	}
+	if s, tone := status("failed-unbounded", nil, batchv1.JobStatus{Succeeded: 1, Failed: 3, Conditions: cond(batchv1.JobFailed)}); s != "failed (3)" || tone != "err" {
+		t.Errorf("a Job of no set number of pods that failed: %s %s", s, tone)
+	}
+	if s, tone := status("done", ptr(int32(2)), batchv1.JobStatus{Succeeded: 2, Failed: 1, Conditions: cond(batchv1.JobComplete)}); s != "succeeded" || tone != "ok" {
+		t.Errorf("a complete Job with a failed try: %s %s", s, tone)
+	}
+	if s, tone := status("between", ptr(int32(5)), batchv1.JobStatus{Succeeded: 1}); s == "succeeded" || tone == "ok" {
+		t.Errorf("a Job between pods reads as finished: %s %s", s, tone)
+	}
+	if s, tone := status("running", ptr(int32(5)), batchv1.JobStatus{Succeeded: 1, Active: 2}); s != "2 running" || tone != "info" {
+		t.Errorf("a running Job: %s %s", s, tone)
+	}
+	if s, tone := status("no-conditions", nil, batchv1.JobStatus{Succeeded: 1}); s != "succeeded" || tone != "ok" {
+		t.Errorf("a one-pod Job without conditions yet: %s %s", s, tone)
 	}
 }

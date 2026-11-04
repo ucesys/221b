@@ -74,6 +74,11 @@ describe('the Administration area', () => {
     expect(parseHash('#/settings/sherlock')).toMatchObject({ view: 'admin', path: ['settings', 'sherlock'] })
   })
 
+  it('sends an old Sessions or Audit log link to Logs', () => {
+    expect(parseHash('#/admin/sessions').path).toEqual(['logs', 'sessions'])
+    expect(parseHash('#/c/dev/admin/audit')).toMatchObject({ cluster: 'dev', path: ['logs', 'audit'] })
+  })
+
   it('builds links and keeps the page when a parameter changes', () => {
     expect(adminHref('roles')).toBe('#/admin/roles')
     expect(adminHref('users', ['bob'])).toBe('#/admin/users/bob')
@@ -83,3 +88,14 @@ describe('the Administration area', () => {
     expect(withParams(parseHash('#/c/dev/admin/roles'), { x: '1' })).toBe('#/c/dev/admin/roles?x=1')
   })
 })
+
+describe("renamed Automation pages", () => {
+  it("open from the names a saved link still uses", () => {
+    expect(parseHash("#/parameters?fleet=web").tab).toBe("variables");
+    expect(parseHash("#/parameters?fleet=web").params.get("fleet")).toBe("web");
+    expect(parseHash("#/configurations").tab).toBe("run-profiles");
+    expect(parseHash("#/c/dev/executions").tab).toBe("run-history");
+    expect(parseHash("#/c/dev/executions").cluster).toBe("dev");
+    expect(parseHash("#/automation/params").tab).toBe("variables");
+  });
+});

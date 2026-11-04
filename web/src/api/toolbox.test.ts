@@ -1,6 +1,17 @@
-import { describe, expect, it } from 'vitest'
-import { clock, endedWords, fBytes, sortSessions, tabLabel, type SessionView } from './toolbox'
+import { act, cleanup, renderHook } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AssistantHandlers } from './assistants'
+import { clock, COMMAND_TOOLS, endedWords, fBytes, fetchToolbox, HOST_TOOLS, NODE_TOOLS, shownSessions, sortSessions, tabLabel, useSessions, type SessionView } from './toolbox'
 import { remaining, tabState } from '../components/toolbox/SessionPanes'
+
+const stream = vi.hoisted(() => ({ h: null as AssistantHandlers | null }))
+vi.mock('./assistants', async (original) => ({
+  ...(await original<typeof import('./assistants')>()),
+  subscribeAssistant: (_cluster: string, _who: string, h: AssistantHandlers) => {
+    stream.h = h
+    return () => undefined
+  },
+}))
 
 const base: SessionView = {
   id: 's1',
@@ -41,6 +52,92 @@ describe('session labels', () => {
     const b = { ...base, id: 'b', created: '2026-10-26T11:00:00Z', state: 'ended' as const }
     const c = { ...base, id: 'c', created: '2026-10-26T10:00:00Z' }
     expect(sortSessions([a, b, c]).map((x) => x.id)).toEqual(['c', 'a', 'b'])
+  })
+})
+
+describe('the tool lists', () => {
+  it('leaves the debug pod out of the tools on the node itself, and the forward out of the commands', () => {
+    expect(HOST_TOOLS).toEqual(NODE_TOOLS.filter((t) => t !== 'debug-pod'))
+    expect(COMMAND_TOOLS).not.toContain('forward')
+  })
+})
+
+describe('the sessions shown', () => {
+  const live = { ...base, id: 'live' }
+  const ended = { ...base, id: 'ended', state: 'ended' as const }
+
+  it('drops an ended session whose tab was closed, and keeps a live one', () => {
+    expect(shownSessions([live, ended], [], []).map((x) => x.id)).toEqual(['live', 'ended'])
+    expect(shownSessions([live, ended], ['live', 'ended'], []).map((x) => x.id)).toEqual(['live'])
+  })
+
+  it('keeps an ended session opened again, whose tab still shows', () => {
+    expect(shownSessions([ended], ['ended'], ['ended']).map((x) => x.id)).toEqual(['ended'])
+  })
+})
+
+describe('what is known of the nodes', () => {
+  const calls = vi.fn(async () => new Response('{}'))
+  const send = (name: string, data: unknown) => act(() => stream.h!.event(name, JSON.stringify(data)))
+  const pairing = (state: SessionView['state'], tool: SessionView['tool'] = 'ssh-pair') => ({ ...base, tool, state })
+  let n = 0
+  let cluster = ''
+
+  beforeEach(() => {
+    calls.mockClear()
+    vi.stubGlobal('fetch', calls)
+    vi.stubGlobal('EventSource', class {})
+    // The cache outlives a test: each has a cluster of its own.
+    cluster = `c${++n}`
+    renderHook(() => useSessions(cluster))
+  })
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('is kept a minute', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    await fetchToolbox(cluster, [], true)
+    await fetchToolbox(cluster, [], true)
+    expect(calls).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(Date.now() + 61_000)
+    await fetchToolbox(cluster, [], true)
+    expect(calls).toHaveBeenCalledTimes(2)
+  })
+
+  it('goes when a pairing or an unpairing ends, for the next menu', async () => {
+    await fetchToolbox(cluster, [], true)
+    send('session', pairing('live'))
+    await fetchToolbox(cluster, [], true)
+    expect(calls).toHaveBeenCalledTimes(1)
+    send('session', pairing('ended'))
+    await fetchToolbox(cluster, [], true)
+    expect(calls).toHaveBeenCalledTimes(2)
+    send('session', pairing('ended', 'ssh-unpair'))
+    await fetchToolbox(cluster, [], true)
+    expect(calls).toHaveBeenCalledTimes(3)
+  })
+
+  it('goes when the list that returns has a pairing that ended meanwhile', async () => {
+    await fetchToolbox(cluster, [], true)
+    send('all', [pairing('ended')])
+    await fetchToolbox(cluster, [], true)
+    expect(calls).toHaveBeenCalledTimes(2)
+  })
+
+  it('stays when another session ends, and goes on no other cluster or for pods', async () => {
+    await fetchToolbox(cluster, [], true)
+    await fetchToolbox(cluster, ['web'])
+    await fetchToolbox(`${cluster}x`, [], true)
+    send('session', pairing('ended', 'node-command'))
+    await fetchToolbox(cluster, [], true)
+    expect(calls).toHaveBeenCalledTimes(3)
+    send('session', pairing('ended'))
+    await fetchToolbox(cluster, ['web'])
+    await fetchToolbox(`${cluster}x`, [], true)
+    expect(calls).toHaveBeenCalledTimes(3)
   })
 })
 

@@ -1,5 +1,5 @@
 import { apiPath } from '../lib/router'
-import { unauthorized } from './auth'
+import { checkSession } from './auth'
 import { whenLoaded } from '../lib/loaded'
 
 // Sherlock and Watson share one event stream per cluster (assistants/
@@ -66,11 +66,10 @@ function connect(cluster: string, s: Shared) {
         // EventSource retries a dropped connection by itself, but gives up
         // for good on an HTTP error, such as a 502 from a proxy while the
         // server restarts: open it again, waiting longer after each
-        // failure, up to 30 seconds. When the session has ended, the server
-        // answers 401 to anything, and sign-in is the way back.
+        // failure, up to 30 seconds.
         if (es.readyState === EventSource.CLOSED) {
           s.failures++
-          void fetch('/api/v1/me', { headers: { Accept: 'application/json' } }).then((r) => unauthorized(r), () => false)
+          checkSession()
           const wait = Math.min(30_000, 1000 * 2 ** Math.min(s.failures, 5)) * (0.75 + Math.random() / 2)
           retry = setTimeout(() => connect(cluster, s), wait)
         }

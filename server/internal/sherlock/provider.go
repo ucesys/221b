@@ -407,6 +407,13 @@ func (c *Client) once(ctx context.Context, p Provider, req Request, onDelta func
 	if errors.As(err, &ae) && ae.Provider == "" {
 		ae.Provider = p.Name()
 	}
+	// An answer refused before it began costs nothing; one stopped or cut
+	// off cost what it got to. Only a stream that finished can say the
+	// provider reports no usage: the figures come last.
+	if ae == nil || started {
+		out.NoUsage = err == nil && out.Usage == Usage{}
+		out = out.estimate(len(body))
+	}
 	return out, started, err
 }
 

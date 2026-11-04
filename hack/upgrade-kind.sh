@@ -69,10 +69,16 @@ open_console() {
 # What must come through every upgrade and rollback, as JSON with sorted
 # keys: the refresh rate, the fleets and the acknowledged alerts.
 kept_settings() {
-  api "$URL/api/v1/settings" | python3 -c '
+  # Until a replica knows which one leads, it answers 503 (ADR-70): read
+  # again for a while after a rollout.
+  for _ in $(seq 30); do
+    api "$URL/api/v1/settings" > "$WORK/upgrade-settings.json" 2>/dev/null && break
+    sleep 1
+  done
+  python3 -c '
 import json, sys
 s = json.load(sys.stdin)
-print(json.dumps({"refreshSeconds": s.get("refreshSeconds"), "fleets": s.get("fleets"), "acks": s.get("acks")}, sort_keys=True))'
+print(json.dumps({"refreshSeconds": s.get("refreshSeconds"), "fleets": s.get("fleets"), "acks": s.get("acks")}, sort_keys=True))' < "$WORK/upgrade-settings.json"
 }
 
 # The format version of the JSON document on standard input, or 0.
@@ -136,15 +142,15 @@ helm install "$RELEASE" "$FROM_CHART" -n "$NS" \
   --wait --timeout 120s
 open_console
 signin "$URL" "$ADMIN"
-api "$URL/api/v1/me" | grep -q '"admin":true'
+api "$URL/api/v1/me" | has '"admin":true'
 endstep
 
 step "Give $FROM_TAG something to keep"
 # A local user made on the Users page.
 change -X POST -d "{\"username\":\"$USER2\",\"name\":\"Una Upgrade\",\"email\":\"$USER2_EMAIL\",\"password\":\"$PASSWORD\",\"groups\":[]}" "$URL/api/v1/admin/users" > /dev/null
-kubectl -n "$NS" get secret "$FULLNAME-users" -o jsonpath='{.data.users\.json}' | base64 -d | grep -q "\"$USER2\""
+kubectl -n "$NS" get secret "$FULLNAME-users" -o jsonpath='{.data.users\.json}' | base64 -d | has "\"$USER2\""
 # Settings and a fleet.
-change -X PUT -d '{"refreshSeconds":13}' "$URL/api/v1/settings" | grep -q '"refreshSeconds":13'
+change -X PUT -d '{"refreshSeconds":13}' "$URL/api/v1/settings" | has '"refreshSeconds":13'
 change -X PUT -d '{"fleets":[{"id":"upgrade","name":"Upgrade pool","color":2,"labels":["upgrade-test=yes"],"taints":[]}]}' "$URL/api/v1/fleets" > /dev/null
 # An acknowledged alert: a pod that fails to start, in a namespace of its own.
 kubectl create namespace upgrade-test
@@ -171,14 +177,14 @@ python3 - "$TOKEN" "$(kubectl -n "$NS" get configmap kube-root-ca.crt -o jsonpat
 import json, sys
 print(json.dumps({"name": "kept", "env": "staging", "description": "kind, through its in-cluster address", "server": "https://kubernetes.default.svc", "ca": "pem", "caPem": sys.argv[2], "auth": "token", "token": sys.argv[1], "mode": "read"}))
 PY
-change -X POST --data-binary "@$WORK/upgrade-draft.json" "$URL/api/v1/clusters" | grep -q '"id":"kept"'
+change -X POST --data-binary "@$WORK/upgrade-draft.json" "$URL/api/v1/clusters" | has '"id":"kept"'
 # Sherlock's key, kept in the release's Secret.
 change -X PUT -d "{\"key\":\"$SHERLOCK_KEY\"}" "$URL/api/v1/sherlock/key" > /dev/null
 before=$(kept_settings)
 echo "kept: $before"
-echo "$before" | grep -q '"refreshSeconds": 13'
-echo "$before" | grep -q '"upgrade"'
-echo "$before" | grep -q "$key"
+echo "$before" | has '"refreshSeconds": 13'
+echo "$before" | has '"upgrade"'
+echo "$before" | has "$key"
 endstep
 
 # check_kept WHAT: everything given above is still there.
@@ -192,12 +198,12 @@ check_kept() {
     echo "after:  $now"
     exit 1
   fi
-  api "$URL/api/v1/admin/users" | grep -q "\"$USER2\""
+  api "$URL/api/v1/admin/users" | has "\"$USER2\""
   for _ in $(seq 60); do
-    api "$URL/api/v1/clusters/kept" | grep -q '"state":"connected"' && break
+    api "$URL/api/v1/clusters/kept" | has '"state":"connected"' && break
     sleep 1
   done
-  api "$URL/api/v1/clusters/kept" | tee "$WORK/upgrade-kept.json" | grep -q '"state":"connected"' ||
+  api "$URL/api/v1/clusters/kept" | tee "$WORK/upgrade-kept.json" | has '"state":"connected"' ||
     { echo "the connection did not come back $1: $(cat "$WORK/upgrade-kept.json")"; exit 1; }
   # Sherlock answers once the new pod holds the Lease (P7-02).
   for _ in $(seq 30); do
@@ -208,7 +214,7 @@ check_kept() {
   [ "$(kubectl -n "$NS" get secret "$FULLNAME-sherlock" -o jsonpath='{.data.apiKey}' | base64 -d)" = "$SHERLOCK_KEY" ]
   # The user made on the Users page signs in with the same password.
   signin "$URL" "$USER2"
-  api "$URL/api/v1/me" | grep -q "\"username\":\"$USER2\""
+  api "$URL/api/v1/me" | has "\"username\":\"$USER2\""
   signin "$URL" "$ADMIN"
   echo "the settings, fleet, acknowledgement, user, connection and Sherlock key came through $1"
 }
@@ -244,7 +250,7 @@ helm rollback "$RELEASE" 1 -n "$NS" --wait --timeout 180s
 open_console
 [ "$(kubectl -n "$NS" get deployment "$FULLNAME" -o jsonpath='{.spec.template.spec.containers[0].image}')" = "$FROM_IMAGE" ]
 check_kept "the rollback"
-api "$URL/api/v1/admin/users" | grep -q 'Una Upgraded'
+api "$URL/api/v1/admin/users" | has 'Una Upgraded'
 endstep
 
 step "helm upgrade again: what the earlier release did not know is still there"
@@ -255,6 +261,6 @@ import json, sys
 s = json.load(sys.stdin)
 assert s.get("timeFormat") == {"date": "eu", "clock": "24h"}, s.get("timeFormat")
 print("the time format, unknown to the earlier release, came through its rollback")'
-api "$URL/api/v1/admin/users" | grep -q 'Una Upgraded'
+api "$URL/api/v1/admin/users" | has 'Una Upgraded'
 notice "Upgrade from $FROM_TAG" "Upgrade, rollback and upgrade again kept every setting, user, connection and key."
 endstep

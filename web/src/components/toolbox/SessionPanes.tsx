@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { clock, endedWords, endSession, extendSession, fBytes, keepSession, sessionOutputHref, tabLabel, toolLabel, transcriptHref, ToolboxError, type SessionView } from '../../api/toolbox'
+import { clock, endedWords, endSession, extendSession, fBytes, HOST_TOOLS, keepSession, sessionOutputHref, tabLabel, toolLabel, transcriptHref, ToolboxError, type SessionView } from '../../api/toolbox'
 import { copyText } from '../../lib/clipboard'
 import { fmtClock, fmtTs } from '../../lib/format'
 import { CopyIcon, DownloadIcon } from '../Icons'
@@ -109,7 +109,7 @@ export function SessionPane({ cluster, session: s, admin, dark, controls, onToas
     <div className="rk-dph" style={{ flexWrap: 'wrap' }}>
       <h2>{s.tool === 'forward' ? 'Port forward' : toolLabel(s.tool)}</h2>
       <small className="rk-mono" title={s.summary}>
-        {s.tool === 'node-shell' || s.tool === 'node-command' ? `node ${s.request.node}${s.pod ? ' · pod ' + s.pod : ''}` : `${s.namespace ?? s.request.namespace}/${s.pod ?? s.request.pod ?? ''}${s.container ? ' · ' + s.container : ''}`}
+        {HOST_TOOLS.includes(s.tool) ? `node ${s.request.node}${s.pod ? ' · pod ' + s.pod : ''}${s.tool === 'ssh-pair' && s.request.loginUser ? ' · as ' + s.request.loginUser : ''}` : `${s.namespace ?? s.request.namespace}/${s.pod ?? s.request.pod ?? ''}${s.container ? ' · ' + s.container : ''}`}
       </small>
       <span style={{ flex: '1 1 auto' }} />
       {!s.mine && <span className="rk-pill">{s.owner}’s</span>}
@@ -154,11 +154,11 @@ export function SessionPane({ cluster, session: s, admin, dark, controls, onToas
   )
   let body: ReactNode
   if (s.tool === 'forward') body = <ForwardBody s={s} now={now} />
-  else if (s.tool === 'command' || s.tool === 'node-command') body = <CommandBody cluster={cluster} s={s} />
+  else if (!s.interactive) body = <CommandBody cluster={cluster} s={s} />
   else if (s.state === 'starting')
     body = (
       <div className="tb-output" style={{ color: 'var(--term-dim)' }}>
-        Opening… {s.tool === 'debug-pod' || s.tool === 'node-shell' ? 'waiting for the pod to run.' : s.tool === 'debug-container' ? 'waiting for the debug container to start.' : ''}
+        Opening… {s.tool === 'debug-pod' || s.tool === 'node-shell' ? 'waiting for the pod to run.' : s.tool === 'debug-container' ? 'waiting for the debug container to start.' : s.tool === 'ssh' ? 'connecting to the node over SSH.' : ''}
       </div>
     )
   else if (s.mine || watching) body = <Terminal key={s.id + (watching ? 'w' : '')} cluster={cluster} id={s.id} watch={!s.mine} dark={dark} live={s.state === 'live'} onInput={() => undefined} />
@@ -321,7 +321,7 @@ function CommandBody({ cluster, s }: { cluster: string; s: SessionView }) {
   }, [cluster, s.id, s.state])
   return (
     <pre className="tb-output" data-testid="session-output">
-      <span style={{ color: 'var(--term-dim)' }}>$ {s.request.command}</span>
+      <span style={{ color: 'var(--term-dim)' }}>{s.request.command ? `$ ${s.request.command}` : s.summary}</span>
       {'\n'}
       {s.state === 'ended' ? out || (s.endedBy === 'failed' ? '' : '(no output)') : 'Running…'}
       {s.state === 'ended' && s.exit !== undefined && s.exit !== 0 && <span style={{ color: 'var(--term-err)' }}>{`\nexit ${s.exit}`}</span>}
@@ -349,7 +349,7 @@ export function SessionsPane({ sessions, admin, controls, onOpen, onToast, clust
       <div className="rk-dph">
         <h2>Sessions</h2>
         <small>
-          {live.length} open{admin ? ' · everyone’s, as a SuperAdmin sees them' : ''} · ended ones stay an hour; Administration › Sessions keeps the history
+          {live.length} open{admin ? ' · everyone’s, as a SuperAdmin sees them' : ''} · an ended one stays an hour, or until its tab is closed; Administration › Sessions keeps the history
         </small>
         <span style={{ flex: '1 1 auto' }} />
         {controls}

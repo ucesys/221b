@@ -31,6 +31,7 @@ export function AssistantWindow({ cluster, clusterName, onToast }: Props) {
   // Watson shows only beside Sherlock, as in the main window.
   const hasW = hasS && !!watson.status?.available
   const [pane, setPane] = useState<Pane>('watson')
+  const [fill, setFill] = useState('')
   useEffect(() => {
     document.title = `${[hasS && 'Sherlock', hasW && 'Watson'].filter(Boolean).join(' and ') || 'Assistants'} · ${clusterName || cluster} · 221B`
   }, [cluster, clusterName, hasS, hasW])
@@ -44,6 +45,10 @@ export function AssistantWindow({ cluster, clusterName, onToast }: Props) {
         if (m.type === 'cluster' && m.cluster !== cluster) navigate(windowHash(m.cluster), true)
         if (m.type === 'focus') window.focus()
         if (m.type === 'close') dockBack()
+        if (m.type === 'fill' && m.cluster === cluster) {
+          setPane('sherlock')
+          setFill(m.text)
+        }
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [cluster, win],
@@ -78,7 +83,7 @@ export function AssistantWindow({ cluster, clusterName, onToast }: Props) {
   return (
     <WatsonContext.Provider value={watsonApi}>
     <div className="rk-swin" data-pane={shown} data-both={both ? 'true' : 'false'} data-testid="assistants-window">
-      {hasS && <SherlockPane cluster={cluster} clusterName={clusterName || cluster} state={sherlock} inWindow onToast={onToast} controls={hasW ? <span className="rk-narrow">{back}</span> : back} switcher={switcher} />}
+      {hasS && <SherlockPane cluster={cluster} clusterName={clusterName || cluster} state={sherlock} inWindow onToast={onToast} controls={hasW ? <span className="rk-narrow">{back}</span> : back} switcher={switcher} fill={fill} onFilled={() => setFill('')} />}
       {hasW && <WatsonPane cluster={cluster} clusterName={clusterName || cluster} state={watson} onToast={onToast} controls={back} switcher={switcher} />}
       {!hasS && !hasW && (
         <p style={{ margin: 0, padding: 24, color: 'var(--fg3)' }}>

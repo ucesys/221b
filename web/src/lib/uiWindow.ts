@@ -19,7 +19,7 @@ declare global {
 let isMain = false
 
 /** The main window Sherlock's own window follows: the one that opened it, while it is open. */
-function followedWindow(): string {
+export function followedWindow(): string {
   try {
     const o = window.opener as Window | null
     return o && !o.closed && typeof o.__221bWindow === 'string' ? o.__221bWindow : ''
@@ -52,21 +52,21 @@ export async function askContext(): Promise<AskContext> {
 }
 
 /** Asks this window, or the one holding the record, to undo an answer's view changes. */
-export async function askUndo(answer: number): Promise<boolean> {
-  if (canUndo(answer)) return undo(answer)
+export async function askUndo(cluster: string, answer: number): Promise<boolean> {
+  if (canUndo(cluster, answer)) return undo(cluster, answer)
   return new Promise<boolean>((resolve) => {
     const t = setTimeout(() => {
       off()
       resolve(false)
     }, 1000)
     const off = onPop((m) => {
-      if (m.type === 'undone' && m.answer === answer) {
+      if (m.type === 'undone' && m.cluster === cluster && m.answer === answer) {
         clearTimeout(t)
         off()
         resolve(true)
       }
     })
-    post({ type: 'undo', answer })
+    post({ type: 'undo', cluster, answer })
   })
 }
 
@@ -78,15 +78,15 @@ export function useUIControl(cluster: string, conv: Conversation | null): void {
     setUIHandler((raw, from) => {
       const req = raw as UIRequest
       if (!req || req.window !== WINDOW_ID) return
-      void runRequest(req).then((res) => postUIResult(from, req.id, res))
+      void runRequest(req, from).then((res) => postUIResult(from, req.id, res))
     })
     const off = onPop((m) => {
       if (m.type === 'view?' && m.window === WINDOW_ID) post({ type: 'view', req: m.req, window: WINDOW_ID, view: JSON.stringify(viewState()) })
-      if (m.type === 'undo' && canUndo(m.answer))
-        void undo(m.answer).then((ok) => {
-          if (ok) post({ type: 'undone', answer: m.answer })
+      if (m.type === 'undo' && canUndo(m.cluster, m.answer))
+        void undo(m.cluster, m.answer).then((ok) => {
+          if (ok) post({ type: 'undone', cluster: m.cluster, answer: m.answer })
         })
-      if (m.type === 'undone') markUndone(m.answer)
+      if (m.type === 'undone') markUndone(m.cluster, m.answer)
     })
     return () => {
       isMain = false
@@ -100,6 +100,6 @@ export function useUIControl(cluster: string, conv: Conversation | null): void {
   const last = conv?.messages[conv.messages.length - 1]
   const answering = conv?.busy && last?.role === 'sherlock' ? last.id : null
   useEffect(() => {
-    setAnswering(answering)
+    setAnswering(cluster, answering)
   }, [answering, cluster])
 }

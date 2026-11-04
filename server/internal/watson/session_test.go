@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // hooks stands in for the toolbox: a plan and a start that record who
@@ -80,6 +81,39 @@ func TestASessionThatCannotStartFailsItsCard(t *testing.T) {
 	got := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) })
 	if got.Status != StatusFailed || !strings.Contains(outputOf(svc, it.ID)+got.Reason, "not found") {
 		t.Fatalf("%s %q %q", got.Status, got.Reason, outputOf(svc, it.ID))
+	}
+}
+
+// A card of several nodes opened its first session and not all the others:
+// it is done, with the failure on it and in its audit record.
+func TestACardSaysWhichOfItsSessionsDidNotStart(t *testing.T) {
+	svc, cl, _, _, buf := setup(t, Options{})
+	svc.SetSessionHooks(func(context.Context, Cluster, Item) *Plan { return &Plan{Ready: true} }, func(Cluster, Item, Who) (string, error) {
+		return "sess01", errors.New("the session on worker-2 could not start: no such node")
+	})
+	it := svc.SubmitSession(cl, alice(), shellCard(), "toolbox")
+	wait(t, svc, it.ID, func(i Item) bool { return i.Plan != nil && i.Plan.Ready })
+	if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err != nil {
+		t.Fatal(err)
+	}
+	got := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) })
+	out := outputOf(svc, it.ID)
+	if got.Status != StatusDone || got.Session.SessionID != "sess01" || !strings.Contains(out, "Session sess01") || !strings.Contains(out, "worker-2 could not start") {
+		t.Fatalf("%s %+v %q", got.Status, got.Session, out)
+	}
+	// The record is written just after the card closes.
+	recorded := func() bool {
+		for _, e := range buf.events() {
+			if strings.Contains(e.Detail, "worker-2 could not start") {
+				return true
+			}
+		}
+		return false
+	}
+	for deadline := time.Now().Add(2 * time.Second); !recorded(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("audit %+v", buf.events())
+		}
 	}
 }
 

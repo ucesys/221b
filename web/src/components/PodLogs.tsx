@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { BACKGROUND } from '../api/auth'
 import type { ContainerDetail } from '../api/types'
 import { errorText } from '../api/details'
 import { DownloadIcon } from './Icons'
@@ -91,10 +92,24 @@ export function PodLogs({ namespace, name, containers, gone, onToast }: Props) {
       }
     }
     const es = new EventSource(logURL(namespace, name, { ...q, follow: '1' }))
-    es.addEventListener('open', () => setState('live'))
+    // A dropped stream reconnects by itself and the server sends the tail
+    // again: what arrives then replaces what is on screen.
+    let opened = false
+    let replace = false
+    es.addEventListener('open', () => {
+      if (opened) {
+        replace = true
+        setNote('The connection dropped and came back; the log was read again from the server.')
+      }
+      opened = true
+      setState('live')
+    })
     es.addEventListener('log', (e) => {
       const batch = JSON.parse((e as MessageEvent<string>).data) as string[]
+      const fresh = replace
+      replace = false
       setLines((ls) => {
+        if (fresh) return batch.slice(-MAX_LINES)
         const next = ls.length + batch.length > MAX_LINES ? [...ls.slice(ls.length + batch.length - MAX_LINES), ...batch] : [...ls, ...batch]
         return next
       })
@@ -109,10 +124,14 @@ export function PodLogs({ namespace, name, containers, gone, onToast }: Props) {
     es.addEventListener('error', () => {
       if (es.readyState === EventSource.CLOSED) {
         // An HTTP error: read why with a plain request.
-        fetch(logURL(namespace, name, q))
+        fetch(logURL(namespace, name, q), { headers: BACKGROUND })
           .then(async (r) => setNote(r.ok ? 'The stream closed.' : await errorText(r)))
           .catch(() => setNote('Could not reach the server.'))
         setState('error')
+      } else {
+        // The browser is trying again by itself.
+        setNote('The connection dropped; reconnecting…')
+        setState('loading')
       }
     })
     return () => es.close()

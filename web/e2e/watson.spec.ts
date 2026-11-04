@@ -10,7 +10,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { expect, test } from './test'
 import { cluster, consoleNode, healthyWorkers, inKind, kubectl, nodeRows, snapshot } from './cluster'
-import { E2E_DEV, E2E_DEV_KUBE, E2E_USER, E2E_VIEWER, E2E_VIEWER_KUBE, signInAs } from './accounts'
+import { approveConsoleChanges, E2E_DEV, E2E_DEV_KUBE, E2E_USER, E2E_VIEWER, E2E_VIEWER_KUBE, signInAs } from './accounts'
 import type { WatsonItem } from '../src/api/watson'
 
 test.describe.configure({ mode: 'serial' })
@@ -146,7 +146,10 @@ test('Watson is not shown where Sherlock is off (Phase 6.2)', async ({ page }) =
 
 test('a typed read runs at once and prints what kubectl prints; shell syntax is refused (P6-01, P6-03)', async ({ page }) => {
   await open(page)
-  await expect(pane(page).getByTestId('watson-empty')).toContainText('kubectl get nodes')
+  // A person who has asked nothing yet is shown how to start; earlier specs
+  // in this session may have asked already.
+  await expect(pane(page).getByTestId('watson-input')).toBeVisible()
+  if (await pane(page).getByTestId('watson-empty').count()) await expect(pane(page).getByTestId('watson-empty')).toContainText('kubectl get nodes')
   await pane(page).getByTestId('watson-input').fill('kubectl get nodes')
   await pane(page).getByTestId('watson-input').press('Enter')
   await expect(lastRan(page)).toHaveAttribute('data-status', 'done', { timeout: 30_000 })
@@ -483,7 +486,8 @@ test('on a production cluster with the rule on, a second person approves (P6-07)
   } finally {
     await viewer?.context().close()
     await page.request.put('/api/v1/watson/config', { data: { twoPerson: false }, headers: SAME })
-    await setEnv(local.env)
+    // Off production waits for a second SuperAdmin where there is one.
+    if ((await setEnv(local.env)).status() === 202) await approveConsoleChanges(browser)
     await revoke()
     await cluster.cordon(node, false)
   }
@@ -563,14 +567,17 @@ test('a standing approval approves cards as they are ready, within the limit the
   try {
     await page.reload()
     await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
-    // The control sits on the card, next to Approve and run; picking a length approves this card and the next ones.
+    // The control sits on the card, next to Approve and run; a length and then Approve all approves this card and the next ones.
     await pane(page).getByTestId('watson-input').fill(`kubectl cordon ${node}`)
     await pane(page).getByTestId('watson-input').press('Enter')
     const first = pane(page).getByTestId('watson-card').last()
     const pick = first.getByTestId('watson-approve-all')
     await expect(pick).toBeVisible()
     await expect(pick.locator('option')).toHaveCount(4) // the empty one, 5, 15 and 30 minutes
+    await expect(first.getByTestId('watson-approve-all-go')).toBeDisabled()
     await pick.selectOption('5')
+    await expect(pane(page).getByTestId('watson-standing-header')).toHaveCount(0) // choosing grants nothing
+    await first.getByTestId('watson-approve-all-go').click()
     await expect(pane(page).getByTestId('watson-standing-header')).toContainText('approving all until')
     const ran = lastRan(page)
     await expect(ran).toHaveAttribute('data-status', 'done', { timeout: 30_000 })

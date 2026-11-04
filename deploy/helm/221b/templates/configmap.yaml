@@ -1,3 +1,4 @@
+{{- if ne (include "b221.shared" .) "only" }}
 # The console's settings, which the Settings dialog changes for everyone:
 # the refresh rate, as settings.json. The chart creates the ConfigMap
 # empty and never writes its data, so helm upgrade keeps what was saved
@@ -9,3 +10,48 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "b221.labels" . | nindent 4 }}
+---
+# The audit log the Audit log page reads, and the toolbox's session
+# records, each in a ConfigMap of its own so that neither presses on the
+# settings' 1 MiB (#46). Created empty, like the one above; the console
+# moves them out of the settings' on its first save.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "b221.fullname" . }}-audit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "b221.fullname" . }}-sessions
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+{{- end }}
+{{- if and (ne (include "b221.shared" .) "only") (ne (toString (dig "enabled" true (.Values.automation | default dict))) "false") }}
+---
+# Automation's scripts, fleet parameters and runs (Phase 11 part 2,
+# ADR-73), in a ConfigMap of their own so they never press on the
+# settings' 1 MiB. Created empty; the console writes its keys, and helm
+# upgrade keeps them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "b221.fullname" . }}-automation
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+---
+# Automation's runs and the nodes' facts, apart from the scripts so neither
+# presses on the other's 1 MiB. Created empty, like the one above.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "b221.fullname" . }}-automation-runs
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+{{- end }}

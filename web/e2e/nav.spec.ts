@@ -3,9 +3,9 @@
 // tab always shows.
 import { expect, test } from './test'
 
-import { TABS as ALL } from '../src/lib/router'
+import { TABS as ALL, isAutomationTab } from '../src/lib/router'
 
-const TABS = ALL.map((t) => t.label)
+const TABS = ALL.filter((t) => !isAutomationTab(t.id)).map((t) => t.label)
 const LAST = TABS[TABS.length - 1]!
 
 test('the bar shows every tab while they fit, and More takes them as the window narrows', async ({ page }) => {

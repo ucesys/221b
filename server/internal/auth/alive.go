@@ -14,3 +14,12 @@ func (s *Service) Current(sess Session) (Session, bool) {
 	}
 	return s.live(cur)
 }
+
+// Active counts as activity what the person did that no request carries,
+// such as typing into an open terminal.
+func (s *Service) Active(sess Session) {
+	if s == nil || s.cfg.Mode == ModeNone || sess.ID == "" {
+		return
+	}
+	s.sessions.Get(sess.ID)
+}

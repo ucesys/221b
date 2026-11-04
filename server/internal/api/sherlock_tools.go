@@ -22,6 +22,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/rbac"
+	"github.com/ucesys/221b/server/internal/scrub"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/views"
 )
@@ -200,7 +201,7 @@ var sherlockTools = []tool{
 		run:   (*toolbox).releases,
 	},
 	{
-		def:   sherlock.ToolDef{Name: "get_helm_release", Description: "One Helm release: its history with each revision's status and description (a failed upgrade says why), notes, and its resources with their state. Values are not shown.", InputSchema: toolSchema([]string{"namespace", "name"}, map[string]string{"namespace": "string|Its namespace.", "name": "string|The release's name."})},
+		def:   sherlock.ToolDef{Name: "get_helm_release", Description: "One Helm release: its history with each revision's status and description (a failed upgrade says why), and its resources with their state. Values and notes are not shown.", InputSchema: toolSchema([]string{"namespace", "name"}, map[string]string{"namespace": "string|Its namespace.", "name": "string|The release's name."})},
 		label: func(in map[string]any) string { return "Read Helm release " + nsName(in) },
 		run:   (*toolbox).release,
 	},
@@ -383,7 +384,7 @@ func (tb *toolbox) detail(ctx context.Context, p string, q url.Values, refs ...s
 	if code != http.StatusOK {
 		return failure(code, b)
 	}
-	return sherlock.ToolResult{Text: string(sherlock.ScrubJSON(b)), Refs: refs}
+	return sherlock.ToolResult{Text: string(scrub.JSON(b)), Refs: refs}
 }
 
 // rows reads a view's rows, as the person may see them.
@@ -442,7 +443,7 @@ func listResult(what string, rows []map[string]any, limit int, refs []sherlock.R
 		out["note"] = "None: nothing matches, or the person may not see any."
 	}
 	b, _ := json.Marshal(out)
-	return sherlock.ToolResult{Text: string(sherlock.ScrubJSON(b)), Refs: refs}
+	return sherlock.ToolResult{Text: string(scrub.JSON(b)), Refs: refs}
 }
 
 func ref(kind, ns, name string) sherlock.Ref {
@@ -564,7 +565,7 @@ func (tb *toolbox) node(ctx context.Context, in map[string]any) sherlock.ToolRes
 		return failure(code, b)
 	}
 	ev := tb.eventList(ctx, map[string]any{"object": name, "kind": "Node", "limit": float64(20)})
-	text := `{"node":` + string(sherlock.ScrubJSON(b)) + `,"events":` + ev + `}`
+	text := `{"node":` + string(scrub.JSON(b)) + `,"events":` + ev + `}`
 	return sherlock.ToolResult{Text: text, Refs: []sherlock.Ref{ref("Node", "", name)}}
 }
 
@@ -634,7 +635,7 @@ func (tb *toolbox) pod(ctx context.Context, in map[string]any) sherlock.ToolResu
 	if d.Release != "" {
 		refs = append(refs, ref("HelmRelease", ns, d.Release))
 	}
-	return sherlock.ToolResult{Text: string(sherlock.ScrubJSON(b)), Refs: refs}
+	return sherlock.ToolResult{Text: string(scrub.JSON(b)), Refs: refs}
 }
 
 // objectKind says whether the console opens objects of a kind by name.
@@ -659,7 +660,7 @@ func (tb *toolbox) logs(ctx context.Context, in map[string]any) sherlock.ToolRes
 	if code != http.StatusOK {
 		return failure(code, b)
 	}
-	text := sherlock.Scrub(string(b))
+	text := scrub.Text(string(b))
 	if strings.TrimSpace(text) == "" {
 		text = "(the log is empty)"
 	}
@@ -716,7 +717,7 @@ func (tb *toolbox) eventList(ctx context.Context, in map[string]any) string {
 		if obj != "" && inv.Name != obj || kind != "" && !strings.EqualFold(inv.Kind, kind) || warn && e.Type != corev1.EventTypeWarning {
 			continue
 		}
-		x := ev{Type: e.Type, Reason: e.Reason, Object: strings.Trim(inv.Kind+" "+strings.Trim(inv.Namespace+"/"+inv.Name, "/"), " "), Message: sherlock.Scrub(e.Message), Count: e.Count}
+		x := ev{Type: e.Type, Reason: e.Reason, Object: strings.Trim(inv.Kind+" "+strings.Trim(inv.Namespace+"/"+inv.Name, "/"), " "), Message: scrub.Text(e.Message), Count: e.Count}
 		first, last := e.FirstTimestamp.Time, e.LastTimestamp.Time
 		if last.IsZero() {
 			last = e.EventTime.Time
@@ -826,7 +827,7 @@ func (tb *toolbox) yaml(ctx context.Context, in map[string]any) sherlock.ToolRes
 	} else if k.Kind == "Node" {
 		refs = append(refs, ref("Node", "", name))
 	}
-	return sherlock.ToolResult{Text: sherlock.Scrub(string(b)), Refs: refs}
+	return sherlock.ToolResult{Text: string(scrub.YAML(b)), Refs: refs}
 }
 
 func (tb *toolbox) services(ctx context.Context, in map[string]any) sherlock.ToolResult {
@@ -883,14 +884,15 @@ func (tb *toolbox) release(ctx context.Context, in map[string]any) sherlock.Tool
 	if code != http.StatusOK {
 		return failure(code, b)
 	}
-	// Values are configuration someone typed, credentials among it: they
-	// are left out altogether.
+	// Values are configuration someone typed, credentials among it, and a
+	// chart's notes are rendered from them: both are left out altogether.
 	var d map[string]any
-	if err := json.Unmarshal(b, &d); err == nil {
-		drop(d, "values", "maskedValues")
-		b, _ = json.Marshal(d)
+	if err := json.Unmarshal(b, &d); err != nil {
+		return sherlock.ToolResult{Text: "The release could not be read.", Error: true}
 	}
-	return sherlock.ToolResult{Text: string(sherlock.ScrubJSON(b)), Refs: []sherlock.Ref{ref("HelmRelease", ns, name)}}
+	drop(d, "values", "maskedValues", "notes")
+	b, _ = json.Marshal(d)
+	return sherlock.ToolResult{Text: string(scrub.JSON(b)), Refs: []sherlock.Ref{ref("HelmRelease", ns, name)}}
 }
 
 func (tb *toolbox) top(ctx context.Context, in map[string]any) sherlock.ToolResult {

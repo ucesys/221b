@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Automation · Configurations</title>
+<link rel="stylesheet" href="./rk.css">
+<link rel="stylesheet" href="./au.css">
+</head>
+<body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+@import url("./rk.css");
+@import url("./au.css");
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+<div class="rk mk-app" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" aria-label="Cluster: lakehouse-dev"><span class="rk-dot"></span>lakehouse-dev <span class="rk-dim">v1.37.1</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="warn">4</span></a>
+    <a class="rk-tab" href="#top">Nodes</a>
+    <a class="rk-tab" href="FleetParameters.html">Fleets</a>
+    <a class="rk-tab" href="Scripts.html" aria-current="page">Automation</a>
+    <a class="rk-tab" href="#top">Namespaces</a>
+    <a class="rk-tab" href="#top">Pods</a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services</a>
+    <a class="rk-tab" href="#top">Networks</a>
+    <a class="rk-tab" href="#top">Storage</a>
+    <a class="rk-tab" href="#top">Access</a>
+  </nav>
+  <div class="mk-top-right">
+    <a class="rk-tab" href="#top"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Administration</a>
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">K8S-SuperAdmin</span><span class="rk-tag" data-tone="accent">Fleet-Admin</span>
+  </div>
+</header>
+
+<main class="au-page">
+  <div class="au-head">
+    <h1>Automation</h1>
+    <nav class="mk-nav" aria-label="Automation sections">
+      <a class="rk-tab" href="Scripts.html">Scripts</a>
+      <a class="rk-tab" href="Executions.html">Executions <span class="rk-cnt">1 running</span></a>
+      <a class="rk-tab" href="Configurations.html" aria-current="page">Configurations</a>
+    </nav>
+    <span class="mk-grow"></span>
+    <button class="rk-btn">New SSH profile</button>
+    <button class="rk-btn" data-primary="true">New configuration</button>
+  </div>
+
+  <p class="mk-intro">A script declares the privilege it needs. A <b>configuration</b> supplies it, through an SSH profile for nodes or a Kubernetes service account for clusters, and RBAC decides who may use each one. A run is refused if the configuration gives less than the script declares, or more than the fleet allows. Dry runs always use <span class="rk-mono">read-only</span>. Watson executes every run; Kubernetes calls pass through its proxy, which allows only the actions the script declares.</p>
+
+  <table class="mk-table au-t" aria-label="Execution configurations">
+    <thead><tr>
+      <th style="width:150px">Configuration</th>
+      <th style="width:150px">Connects as</th>
+      <th style="width:300px">Privilege</th>
+      <th style="width:250px">Who may use it</th>
+      <th style="width:190px">Fleets</th>
+      <th class="rk-r" style="width:90px">Runs, 7 days</th>
+    </tr></thead>
+    <tbody>
+      <tr><td class="au-name">read-only</td><td class="rk-mono">ops-ro</td><td><span class="au-priv" data-p="none"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>No sudo · used for every dry run</span></td><td>Fleet-Viewer, Fleet-Operator, Fleet-Admin</td><td>all</td><td class="rk-r rk-num">19</td></tr>
+      <tr><td class="au-name">ops-limited</td><td class="rk-mono">ops-limited</td><td class="au-two"><span class="au-priv" data-p="limited"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Limited · 6 commands</span><span class="au-cmt rk-mono">systemctl restart chronyd, dnf install, …</span></td><td>Fleet-Operator, Fleet-Admin</td><td>all</td><td class="rk-r rk-num">6</td></tr>
+      <tr><td class="au-name">web-limited</td><td class="rk-mono">ops-limited</td><td class="au-two"><span class="au-priv" data-p="limited"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Limited · 3 commands</span><span class="au-cmt rk-mono">install, nginx -t, systemctl reload nginx</span></td><td>Fleet-Operator, Fleet-Admin</td><td class="rk-mono">web-edge</td><td class="rk-r rk-num">2</td></tr>
+      <tr><td class="au-name">diag-limited</td><td class="rk-mono">ops-limited</td><td class="au-two"><span class="au-priv" data-p="limited"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Limited · 2 commands</span><span class="au-cmt rk-mono">journalctl, sos report</span></td><td>Fleet-Operator, Fleet-Admin</td><td class="rk-mono">hadoop-legacy</td><td class="rk-r rk-num">3</td></tr>
+      <tr><td class="au-name">gpu-root</td><td class="rk-mono">ops-root</td><td><span class="au-priv" data-p="full"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Full sudo</span></td><td>Fleet-Admin</td><td class="rk-mono">gpu-workers</td><td class="rk-r rk-num">4</td></tr>
+      <tr><td class="au-name">db-limited</td><td class="rk-mono">ops-limited</td><td><span class="au-priv" data-p="limited"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Limited · 6 commands</span></td><td>Fleet-Admin · <span class="rk-t" data-tone="warn">2 admins (production)</span></td><td class="rk-mono">db-prod</td><td class="rk-r rk-num">1</td></tr>
+      <tr><td class="au-name">db-root</td><td class="rk-mono">ops-root</td><td><span class="au-priv" data-p="full"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Full sudo</span></td><td>Fleet-Admin · <span class="rk-t" data-tone="warn">2 admins (production)</span></td><td class="rk-mono">db-prod</td><td class="rk-r rk-num">1</td></tr>
+      <tr><td class="au-name">k8s-node-maint</td><td class="au-two"><span class="rk-mono">221b-node-maint</span><span class="au-cmt">Kubernetes service account</span></td><td class="au-two"><span class="au-priv" data-p="limited"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Kubernetes RBAC</span><span class="au-cmt rk-mono">get, patch nodes · create pods/eviction</span></td><td>Fleet-Operator, Fleet-Admin</td><td>node hooks on all fleets</td><td class="rk-r rk-num">3</td></tr>
+      <tr><td class="au-name">k8s-db-ops</td><td class="au-two"><span class="rk-mono">221b-db-ops</span><span class="au-cmt">Kubernetes service account</span></td><td class="au-two"><span class="au-priv" data-p="limited"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z"/></svg>Kubernetes RBAC</span><span class="au-cmt rk-mono">get pods · get, patch clusters.postgresql.cnpg.io</span></td><td>Fleet-Admin · <span class="rk-t" data-tone="warn">needs impersonate on it</span></td><td>namespace <span class="rk-mono">postgres</span></td><td class="rk-r rk-num">1</td></tr>
+    </tbody>
+  </table>
+
+  <div class="mk-grid4">
+    <section class="rk-card au-card" aria-label="SSH profile ops-ro">
+      <h3>ops-ro <span class="rk-tag">no sudo</span></h3>
+      <dl class="rk-kv">
+        <dt>User</dt><dd class="rk-mono">svc-221b-ro</dd>
+        <dt>Key</dt><dd>Secret <span class="rk-mono">ssh-ops-ro</span></dd>
+        <dt>Host keys</dt><dd>pinned on first contact</dd>
+        <dt>sudo -l</dt><dd><span class="au-ok"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 8.5 3 3 7-7"/></svg>68 of 68 nodes match</span></dd>
+      </dl>
+    </section>
+    <section class="rk-card au-card" aria-label="SSH profile ops-limited">
+      <h3>ops-limited <span class="rk-tag" data-tone="info">6 commands</span></h3>
+      <dl class="rk-kv">
+        <dt>User</dt><dd class="rk-mono">svc-221b-ops</dd>
+        <dt>Key</dt><dd>Secret <span class="rk-mono">ssh-ops-limited</span></dd>
+        <dt>Host keys</dt><dd>pinned on first contact</dd>
+        <dt>sudo -l</dt><dd><span class="au-ok" data-k="warn"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="M8 2.2 14.3 13H1.7L8 2.2ZM8 6.5v3M8 11.6h.01"/></svg>hdp-dn-03 grants full sudo</span></dd>
+      </dl>
+    </section>
+    <section class="rk-card au-card" aria-label="SSH profile ops-root">
+      <h3>ops-root <span class="rk-tag" data-tone="warn">full sudo</span></h3>
+      <dl class="rk-kv">
+        <dt>User</dt><dd class="rk-mono">svc-221b-root</dd>
+        <dt>Key</dt><dd>Secret <span class="rk-mono">ssh-ops-root</span></dd>
+        <dt>Host keys</dt><dd>pinned on first contact</dd>
+        <dt>Present on</dt><dd>gpu-workers, db-prod · 26 nodes</dd>
+      </dl>
+    </section>
+    <section class="rk-card au-card" aria-label="Most privilege each fleet allows">
+      <h3 style="font-family:var(--font)">Fleet ceilings</h3>
+      <dl class="rk-kv" style="grid-template-columns:minmax(96px,max-content) minmax(0,1fr)">
+        <dt class="rk-mono">gpu-workers</dt><dd><span class="au-ceil" data-k="warn"><i data-on="true"></i><i data-on="true"></i><i data-on="true"></i></span> full</dd>
+        <dt class="rk-mono">db-prod</dt><dd><span class="au-ceil" data-k="warn"><i data-on="true"></i><i data-on="true"></i><i data-on="true"></i></span> full · production</dd>
+        <dt class="rk-mono">web-edge</dt><dd><span class="au-ceil"><i data-on="true"></i><i data-on="true"></i><i></i></span> limited</dd>
+        <dt class="rk-mono">hadoop-legacy</dt><dd><span class="au-ceil"><i data-on="true"></i><i data-on="true"></i><i></i></span> limited</dd>
+      </dl>
+      <button class="rk-btn" style="align-self:flex-start">Copy node bootstrap script</button>
+    </section>
+  </div>
+</main>
+
+</div>
+</body>
+</html>

@@ -26,11 +26,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 
+	"github.com/ucesys/221b/server/internal/acks"
+	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/fake"
+	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
 	"github.com/ucesys/221b/server/internal/settings"
+	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
 // source is the fake cache with the two reads that reach the API server.
@@ -41,6 +45,9 @@ type source struct {
 	logs map[string][]string
 	// logErr, when set, is what opening any log stream fails with.
 	logErr error
+	// liveYAML, when set, is what any live read of an object answers: the
+	// cache keeps less of an object than the API server has.
+	liveYAML string
 	// hold keeps a followed stream open after its lines, until ctx ends.
 	hold bool
 	// full keeps Secrets with their values, by "namespace/name", for the
@@ -84,13 +91,24 @@ func (s *source) readers() []kube.Person {
 }
 
 // CanI is the fake authorizer: the console itself may do anything; a
-// person everything but what deny lists.
+// person everything but what deny lists, by resource or, as "update
+// secrets", by verb too.
 func (s *source) CanI(_ context.Context, p kube.Person, verb, _, resource, namespace string) (bool, error) {
 	s.asked.Add(1)
 	if p.Nobody() {
 		return true, nil
 	}
-	return !s.denied(resource, namespace), nil
+	return !s.denied(resource, namespace) && !s.denied(verb+" "+resource, namespace), nil
+}
+
+// CanIName is CanI for one object: a deny entry "verb resource/name"
+// refuses that name alone.
+func (s *source) CanIName(ctx context.Context, p kube.Person, verb, group, resource, namespace, name string) (bool, error) {
+	if !p.Nobody() && name != "" && s.denied(verb+" "+resource+"/"+name, namespace) {
+		s.asked.Add(1)
+		return false, nil
+	}
+	return s.CanI(ctx, p, verb, group, resource, namespace)
 }
 
 // putSecret keeps a Secret with its values and in the cache, as a summary.
@@ -159,6 +177,9 @@ func (s *source) ObjectYAML(ctx context.Context, p kube.Person, k kube.Kind, nam
 	s.readBy(p)
 	if s.denied(k.Resource, namespace) && !p.Nobody() {
 		return "", apierrors.NewForbidden(schema.GroupResource{Group: k.Group, Resource: k.Resource}, name, errors.New("RBAC: no"))
+	}
+	if s.liveYAML != "" {
+		return s.liveYAML, nil
 	}
 	obj := s.Object(k.Name, namespace, name)
 	if obj == nil {
@@ -796,6 +817,41 @@ func TestPodLogs(t *testing.T) {
 	}
 }
 
+// A line longer than the limit is split and the stream goes on: the lines
+// after it arrive, and it ends only when the container stops writing.
+func TestALongLogLineIsSplitAndTheStreamGoesOn(t *testing.T) {
+	srv, _, src := setup(t, true)
+	long := strings.Repeat("x", 2*maxLogLine+10)
+	src.logs["shop/web"] = []string{"before", long, "after"}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/v1/pods/shop/web/log?follow=1", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	br := bufio.NewReader(resp.Body)
+	var lines []string
+	for {
+		ev, data := readEvent(t, br)
+		if ev == "end" {
+			if !strings.Contains(data, "stopped writing") {
+				t.Fatalf("end %s", data)
+			}
+			break
+		}
+		var batch []string
+		if err := json.Unmarshal([]byte(data), &batch); err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, batch...)
+	}
+	if len(lines) != 5 || lines[0] != "before" || len(lines[1]) != maxLogLine || len(lines[2]) != maxLogLine || len(lines[3]) != 10 || lines[4] != "after" {
+		t.Fatalf("%d lines", len(lines))
+	}
+}
+
 func TestLogStreamsAreCapped(t *testing.T) {
 	src := &source{Source: fake.New(), logs: map[string][]string{"a/b": {"x"}}, hold: true}
 	store := live.New(src, live.Options{})
@@ -832,7 +888,7 @@ func TestObjectDetails(t *testing.T) {
 	src.Put(web)
 	src.Put(&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Name: "web-abc", Namespace: "shop", OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "web", Controller: ptrBool(true)}}}})
 	src.Put(&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", UID: "uid-deploy"}, Spec: appsv1.DeploymentSpec{Replicas: ptrInt32(1)}, Status: appsv1.DeploymentStatus{ReadyReplicas: 1}})
-	src.Put(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "shop"}, Data: map[string][]byte{"password": []byte("hunter2-planted")}})
+	src.Put(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "shop", ResourceVersion: "7"}, Data: map[string][]byte{"password": []byte("hunter2-planted")}})
 	src.SetPodUsage(map[string]nodes.Usage{"shop/web": {CPUMilli: 12, MemoryBytes: 1 << 20}})
 	store.Notify(everything())
 	store.Process()
@@ -865,7 +921,7 @@ func TestObjectDetails(t *testing.T) {
 	}
 	r := get(t, srv.URL+"/api/v1/objects/secrets/shop/creds")
 	text := body(t, r)
-	if r.StatusCode != 200 || !strings.Contains(text, `"keys":[{"key":"password","bytes":15}]`) || strings.Contains(text, "hunter2") {
+	if r.StatusCode != 200 || !strings.Contains(text, `"keys":[{"key":"password","bytes":15}]`) || !strings.Contains(text, `"resourceVersion":"7"`) || strings.Contains(text, "hunter2") {
 		t.Fatalf("secret details %d %s", r.StatusCode, text)
 	}
 	for path, code := range map[string]int{"/api/v1/objects/deployments/shop/gone": 404, "/api/v1/objects/gizmos/shop/web": 404} {
@@ -892,5 +948,151 @@ func TestWriteJSONStatusKeepsItsHeaders(t *testing.T) {
 	writeJSONStatus(rec, req, http.StatusCreated, []byte(`{"description":"`+strings.Repeat("x", 2000)+`"}`))
 	if rec.Code != http.StatusCreated || rec.Header().Get("Content-Encoding") != "gzip" || rec.Header().Get("Content-Type") != "application/json" {
 		t.Fatalf("status %d, headers %v", rec.Code, rec.Header())
+	}
+}
+
+// PUT settings changes what the Settings page shows. Sherlock's and Watson's
+// settings change on their own routes, which validate and audit them.
+func TestPutSettingsLeavesSherlockAndWatsonToTheirOwnRoutes(t *testing.T) {
+	var shared Settings
+	srv, ops, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) { shared = o.Settings })
+	for name, body := range map[string]string{
+		"Sherlock": `{"refreshSeconds":3,"sherlock":{"model":"claude-opus-5-5","dailyUSD":0,"monthlyUSD":0}}`,
+		"Watson":   `{"refreshSeconds":3,"watson":{"twoPerson":false,"approveAllMinutes":10}}`,
+	} {
+		if r, text := send(t, ops, http.MethodPut, srv.URL+"/api/v1/settings", body); r.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", name, r.StatusCode, text)
+		}
+	}
+	st := shared.Current()
+	if st.Sherlock != nil || st.Watson != nil {
+		t.Errorf("the settings changed: %+v", st)
+	}
+	if r, text := send(t, ops, http.MethodPut, srv.URL+"/api/v1/settings", `{"refreshSeconds":7}`); r.StatusCode != http.StatusOK {
+		t.Errorf("the page's own change: %d %s", r.StatusCode, text)
+	}
+}
+
+// Each person gets what they need of the settings, on every path: of each
+// cluster what they may see there, and of Sherlock and Watson nothing
+// unless they are a SuperAdmin.
+func TestSettingsGoToEachPersonWithOnlyWhatTheyNeed(t *testing.T) {
+	ctx := context.Background()
+	var shared Settings
+	deny := map[string]bool{"nodes/": true, "pods/kube-system": true}
+	srv, viewer, _, _, _, _ := multiSetupWith(t, "viewer@corp.example", deny, func(o *Options) { shared = o.Settings })
+	sh := settings.DefaultSherlock
+	sh.Notes, sh.Instructions = "private notes", "private instructions"
+	if _, err := shared.UpdateSherlock(ctx, sh); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := shared.UpdateWatson(ctx, settings.Watson{TwoPerson: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := shared.UpdateFleets(ctx, clusters.LocalID, []fleets.Fleet{{ID: "mine", Name: "Mine", Kind: fleets.KindNodes, Nodes: []string{"node-name"}, Deploy: "pool=mine"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := shared.UpdateFleets(ctx, "elsewhere", []fleets.Fleet{{ID: "theirs", Name: "Theirs", Labels: []string{"a=b"}}}); err != nil {
+		t.Fatal(err)
+	}
+	ack := func(key, by string) func([]acks.Ack) []acks.Ack {
+		return func(list []acks.Ack) []acks.Ack {
+			return append(list, acks.Ack{Key: key, Fingerprint: "x", By: by, At: time.Now()})
+		}
+	}
+	for _, a := range []struct{ cluster, key, by string }{
+		{clusters.LocalID, "pod:web/shop", "seen@corp.example"},
+		{clusters.LocalID, "pod:kube-system/dns", "hidden@corp.example"},
+		{"elsewhere", "pod:web/other", "away@corp.example"},
+	} {
+		if _, err := shared.UpdateAcks(ctx, a.cluster, ack(a.key, a.by)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	never := []string{"private notes", "private instructions", "twoPerson", "dailyUSD", "theirs", "hidden@corp.example", "away@corp.example", "node-name"}
+
+	r, body := send(t, viewer, http.MethodGet, srv.URL+"/api/v1/settings", "")
+	if r.StatusCode != http.StatusOK || !strings.Contains(body, "seen@corp.example") || !strings.Contains(body, `"refreshSeconds"`) {
+		t.Fatalf("GET settings: %d %s", r.StatusCode, body)
+	}
+	for _, n := range never {
+		if strings.Contains(body, n) {
+			t.Errorf("GET settings holds %s: %s", n, body)
+		}
+	}
+	r, body = send(t, viewer, http.MethodGet, srv.URL+"/api/v1/snapshot?views=pods", "")
+	if r.StatusCode != http.StatusOK || !strings.Contains(body, "pool=mine") {
+		t.Fatalf("the snapshot keeps the page's fleets: %d %s", r.StatusCode, body)
+	}
+	for _, n := range append(never, "seen@corp.example") {
+		if strings.Contains(body, n) {
+			t.Errorf("the snapshot holds %s: %s", n, body)
+		}
+	}
+
+	// A SuperAdmin reads all of it.
+	ops := signIn(t, srv, "ops@corp.example")
+	_, body = send(t, ops, http.MethodGet, srv.URL+"/api/v1/settings", "")
+	for _, w := range []string{"private notes", "twoPerson", "theirs", "hidden@corp.example", "node-name"} {
+		if !strings.Contains(body, w) {
+			t.Errorf("a SuperAdmin's settings lack %s: %s", w, body)
+		}
+	}
+}
+
+// get_yaml treats a pod's environment as get_pod does, for any object that
+// carries one, and a copy of it in an annotation too.
+func TestGetYAMLRedactsTheEnvironment(t *testing.T) {
+	manifest, err := kube.ToYAML(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "shop", Annotations: map[string]string{"kubectl.kubernetes.io/last-applied-configuration": `{"spec":{"template":{"spec":{"containers":[{"env":[{"name":"DB_PASSWORD","value":"planted-applied"}]}]}}}}`}},
+		Spec:       appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Env: []corev1.EnvVar{{Name: "DB_PASSWORD", Value: "planted-env"}, {Name: "MODE", Value: "prod"}}}}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := &source{Source: fake.New("n1"), logs: map[string][]string{}, liveYAML: manifest}
+	res := runTool(t, src, "get_yaml", map[string]any{"kind": "Deployment", "namespace": "shop", "name": "web"})
+	if res.Error || strings.Contains(res.Text, "planted-") || !strings.Contains(res.Text, "value: prod") || !strings.Contains(res.Text, "name: DB_PASSWORD") {
+		t.Fatalf("get_yaml: %s", res.Text)
+	}
+}
+
+// get_helm_release leaves out what a chart renders from its values.
+func TestGetHelmReleaseLeavesOutValuesAndNotes(t *testing.T) {
+	src := &source{Source: fake.New("n1"), logs: map[string][]string{}}
+	rec := helmRecord("web", "shop", 1, "deployed", map[string]any{"replicas": 2})
+	rec.Info.Notes = "printed-by-the-chart"
+	src.Put(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "sh.helm.release.v1.web.v1", Namespace: "shop", Labels: map[string]string{"owner": "helm", "name": "web", "version": "1", "status": "deployed"}}, Type: kube.HelmSecretType, Data: map[string][]byte{"release": kube.EncodeHelmRelease(rec)}})
+	res := runTool(t, src, "get_helm_release", map[string]any{"namespace": "shop", "name": "web"})
+	if res.Error || strings.Contains(res.Text, "printed-by-the-chart") || strings.Contains(res.Text, "replicas") || !strings.Contains(res.Text, "Install complete") {
+		t.Fatalf("get_helm_release: %s", res.Text)
+	}
+}
+
+// runTool runs one of Sherlock's tools against the source.
+func runTool(t *testing.T, src *source, name string, in map[string]any) sherlock.ToolResult {
+	t.Helper()
+	store := live.New(src, live.Options{})
+	store.Notify(everything())
+	store.Process()
+	s := New(Options{Store: store, Cluster: src, Ready: func() bool { return true }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	for _, tl := range sherlockTools {
+		if tl.def.Name == name {
+			return tl.run(s.toolboxFor(httptest.NewRequest(http.MethodGet, "/", nil), clusters.LocalID, src), context.Background(), in)
+		}
+	}
+	t.Fatalf("no tool %s", name)
+	return sherlock.ToolResult{}
+}
+
+// The audit record of a settings save says which clusters' lists changed.
+func TestASettingsRecordNamesTheClustersThatChanged(t *testing.T) {
+	before := map[string][]int{"staging": {1, 2}, "gone": {1}, "same": {3}}
+	after := map[string][]int{"staging": {1}, "new": {1, 2, 3}, "same": {3}}
+	if got := changedByCluster("fleets", before, after); got != ", fleets on gone: 1 to 0, fleets on new: 0 to 3, fleets on staging: 2 to 1" {
+		t.Fatalf("got %q", got)
+	}
+	if got := changedByCluster("fleets", after, after); got != "" {
+		t.Fatalf("no change: %q", got)
 	}
 }

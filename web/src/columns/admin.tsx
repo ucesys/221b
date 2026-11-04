@@ -9,7 +9,7 @@ import { groupText, holdingParts, ROLE_NAME, ROLE_ORDER, roleRank, SCOPE_NAME, S
 import type { ColumnDef, Term } from '../lib/table'
 import { Mono } from './cells'
 
-const DEFINITION = { full: 'Full', readOnly: 'Read-only' } as const
+const DEFINITION = { full: 'Elevated', readOnly: 'Read-only' } as const
 
 /** What a Roles search matches. */
 export function roleTerms(r: RoleRow): Term[] {

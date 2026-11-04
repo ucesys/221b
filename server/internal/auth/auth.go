@@ -23,6 +23,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/roles"
+	"github.com/ucesys/221b/server/internal/twoperson"
 	"golang.org/x/oauth2"
 )
 
@@ -30,8 +31,8 @@ import (
 type Mode string
 
 const (
-	// ModeNone turns sign-in off: everyone is an anonymous admin. For
-	// development and the simulator only.
+	// ModeNone turns sign-in off: everyone is the same anonymous person,
+	// a Viewer unless Config.Anonymous says Admin, never a SuperAdmin.
 	ModeNone Mode = "none"
 	// ModeOIDC sends people to an OpenID Connect provider.
 	ModeOIDC Mode = "oidc"
@@ -43,14 +44,21 @@ const (
 
 // Config is everything sign-in needs.
 type Config struct {
-	Mode  Mode
-	OIDC  OIDCConfig
-	Local []LocalUser
+	Mode Mode
+	// Anonymous is the role everyone holds with sign-in off: Viewer when
+	// empty, or Admin; a super role is refused.
+	Anonymous roles.ID
+	// TwoPerson keeps what waits for a second SuperAdmin: a local user made
+	// a SuperAdmin, when someone else could approve it. Nil applies at once.
+	TwoPerson *twoperson.Store
+	OIDC      OIDCConfig
+	Local     []LocalUser
 	// Admins are usernames (or subjects) that manage clusters and settings;
 	// AdminGroups are groups that do.
 	Admins      []string
 	AdminGroups []string
-	// SessionIdle ends a session after that long without a request;
+	// SessionIdle ends a session after that long without activity: a
+	// request the page did not make by itself, or typing into a terminal.
 	// SessionMax ends it that long after sign-in whatever happens.
 	SessionIdle time.Duration
 	SessionMax  time.Duration
@@ -107,14 +115,17 @@ type Service struct {
 	setup *limiter
 	// perAccount slows guessing at one account; perAddress slows spraying
 	// many accounts from one address, which is also many people behind one
-	// NAT, so it is the looser of the two.
+	// NAT, so it is the looser of the two. An address is the client's as
+	// Proxies.Resolve works it out, and no header widens its limit.
 	perAccount *limiter
 	perAddress *limiter
-	audit      *audit.Log
-	log        *slog.Logger
-	now        func() time.Time
-	page       *template.Template
-	setupPage  *template.Template
+	// anonymous is everyone's session with sign-in off.
+	anonymous Session
+	audit     *audit.Log
+	log       *slog.Logger
+	now       func() time.Time
+	page      *template.Template
+	setupPage *template.Template
 	// passwordPage changes one's own password (6.4).
 	passwordPage *template.Template
 }
@@ -158,6 +169,11 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 	}
 	switch cfg.Mode {
 	case ModeNone:
+		role, err := AnonymousRole(string(cfg.Anonymous))
+		if err != nil {
+			return nil, err
+		}
+		s.anonymous = anonymousAs(role)
 	case ModeOIDC:
 		if cfg.OIDC.Issuer == "" || cfg.OIDC.ClientID == "" {
 			return nil, errors.New("OIDC sign-in needs the provider's issuer URL and a client ID")
@@ -269,8 +285,25 @@ func WithSession(ctx context.Context, sess Session) context.Context {
 	return context.WithValue(ctx, ctxKey{}, sess)
 }
 
-// anonymous is the session every request gets when sign-in is off.
-var anonymous = Session{ID: "", User: User{Subject: "anonymous", Username: "anonymous", Name: "Anonymous"}, Admin: true, Roles: []roles.ID{roles.SuperAdmin}, Super: []roles.ID{roles.SuperAdmin}, Method: "none"}
+// AnonymousRole reads the role everyone holds with sign-in off: viewer
+// (the default) or admin. A super role would make whoever reaches the
+// console its administrator, so it is refused.
+func AnonymousRole(s string) (roles.ID, error) {
+	switch roles.ID(s) {
+	case "", roles.Viewer:
+		return roles.Viewer, nil
+	case roles.Admin:
+		return roles.Admin, nil
+	case roles.SuperAdmin, roles.SuperViewer:
+		return "", fmt.Errorf("%s needs sign-in: with sign-in off, everyone is viewer or admin", s)
+	}
+	return "", fmt.Errorf("%q is not a role: use viewer or admin", s)
+}
+
+// anonymousAs is the session every request gets when sign-in is off.
+func anonymousAs(role roles.ID) Session {
+	return Session{ID: "", User: User{Subject: "anonymous", Username: "anonymous", Name: "Anonymous"}, Roles: []roles.ID{role}, Method: "none"}
+}
 
 // Open paths need no session: the health probes and metrics, the sign-in
 // pages with their assets, and the browser app's static files, which are
@@ -292,7 +325,7 @@ func openPath(p string) bool {
 // a page.
 func (s *Service) Gate(w http.ResponseWriter, r *http.Request) *http.Request {
 	if s.cfg.Mode == ModeNone {
-		return r.WithContext(context.WithValue(r.Context(), ctxKey{}, anonymous))
+		return r.WithContext(context.WithValue(r.Context(), ctxKey{}, s.anonymous))
 	}
 	if sess, ok := s.sessionOf(r); ok {
 		return r.WithContext(context.WithValue(r.Context(), ctxKey{}, sess))
@@ -315,12 +348,30 @@ func (s *Service) Gate(w http.ResponseWriter, r *http.Request) *http.Request {
 	return nil
 }
 
+// backgroundHeader marks a request the page makes by itself, on a timer or
+// a refresh tick. Claiming it only gives up activity, so nothing checks who
+// sent it.
+const backgroundHeader = "X-221B-Background"
+
+// background says whether a request is the page's own rather than the
+// person's: it finds the session, and its expiry, without counting as
+// activity, so the idle limit ends a session left open in a tab (P3-01).
+// EventSource and WebSocket cannot set a header and open again by
+// themselves; what they do send says what they are, on every path.
+func background(r *http.Request) bool {
+	return r.Header.Get(backgroundHeader) != "" || strings.Contains(r.Header.Get("Accept"), "text/event-stream") || strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+}
+
 func (s *Service) sessionOf(r *http.Request) (Session, bool) {
 	c, err := r.Cookie(cookieSession)
 	if err != nil || c.Value == "" {
 		return Session{}, false
 	}
-	sess, ok := s.sessions.Get(c.Value)
+	find := s.sessions.Get
+	if background(r) {
+		find = s.sessions.peek
+	}
+	sess, ok := find(c.Value)
 	if !ok {
 		return Session{}, false
 	}
@@ -362,6 +413,10 @@ type Route struct {
 	Name    string
 	Handler http.HandlerFunc
 }
+
+// Accounts returns the local accounts, nil when there are none (sign-in
+// off, or no local users).
+func (s *Service) Accounts() *Accounts { return s.accounts }
 
 // Routes lists the sign-in endpoints for the API mux.
 func (s *Service) Routes() []Route {
@@ -417,7 +472,7 @@ func (s *Service) renderSignIn(w http.ResponseWriter, r *http.Request, msg strin
 		d.Provider = s.provider.Name()
 	}
 	if r.Method == http.MethodPost {
-		d.Email = r.PostFormValue("email")
+		d.Email = audit.Clip(r.PostFormValue("email"), maxLogin)
 		d.Next = safeNext(r.PostFormValue("next"))
 	} else if r.URL.Query().Get("changed") == "1" && msg == "" {
 		d.Notice = "Your password is changed. Sign in with the new one."
@@ -462,11 +517,48 @@ func from(r *http.Request) string {
 	return r.RemoteAddr
 }
 
+// maxDetail bounds the detail of a record the sign-in pages write: some of
+// it comes from a request nobody has signed in to make.
+const maxDetail = 1024
+
 func (s *Service) record(r *http.Request, action string, who User, outcome, detail string) {
 	if s.audit == nil {
 		return
 	}
-	s.audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: who.Subject, Email: who.Email, Name: who.Name}, Outcome: outcome, Detail: detail, From: from(r)})
+	s.audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: who.Subject, Email: who.Email, Name: who.Name}, Outcome: outcome, Detail: audit.Clip(detail, maxDetail), From: from(r)})
+}
+
+const (
+	// maxLogin bounds a user name at the sign-in pages: longer than any
+	// account or directory name, and what the audit record keeps.
+	maxLogin = audit.MaxName
+	// maxFormBody bounds what the sign-in, password and first-run forms
+	// read, before anyone has signed in.
+	maxFormBody = 64 << 10
+)
+
+// formLogin reads the user name of a form, and says whether it is short
+// enough to be one. One that is not comes back cut to maxLogin.
+func formLogin(s string) (string, bool) {
+	login := Login(s)
+	if len(login) > maxLogin {
+		return audit.Clip(login, maxLogin), false
+	}
+	return login, true
+}
+
+// attempt counts a password attempt and says whether it may proceed:
+// every address meets the same limit, whatever headers the request
+// carries. Attempts wait for a hashing slot, so past a queue they are
+// refused here, before they cost anything.
+func (s *Service) attempt(r *http.Request, login string) bool {
+	if hashingFull() {
+		return false
+	}
+	if !s.perAddress.allow(from(r)) {
+		return false
+	}
+	return s.perAccount.allow(login)
 }
 
 // refusedText is what a person is told when they cannot sign in, whatever
@@ -480,6 +572,7 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "local sign-in is off", http.StatusNotFound)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBody)
 	if err := r.ParseForm(); err != nil {
 		s.renderSignIn(w, r, "The form could not be read.", http.StatusBadRequest)
 		return
@@ -492,9 +585,9 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 		s.renderSignIn(w, r, "That sign-in did not come from this console. Try again from this page.", http.StatusForbidden)
 		return
 	}
-	login := Login(r.PostFormValue("email"))
+	login, fits := formLogin(r.PostFormValue("email"))
 	password := r.PostFormValue("password")
-	if !s.perAddress.allow(from(r)) || !s.perAccount.allow(login) {
+	if !s.attempt(r, login) {
 		s.record(r, audit.ActionSignInFailed, User{Username: login, Email: login}, audit.OutcomeDenied, "too many attempts")
 		s.renderSignIn(w, r, "Too many attempts. Wait a minute and try again.", http.StatusTooManyRequests)
 		return
@@ -502,6 +595,10 @@ func (s *Service) postSignIn(w http.ResponseWriter, r *http.Request) {
 	refuse := func(reason string) {
 		s.record(r, audit.ActionSignInFailed, User{Username: login, Email: login}, audit.OutcomeFailed, reason)
 		s.renderSignIn(w, r, refusedText, http.StatusUnauthorized)
+	}
+	if !fits {
+		refuse("the user name is too long")
+		return
 	}
 	acct, local := s.accounts.Find(login)
 	if !local && s.dir != nil {
@@ -656,6 +753,7 @@ func (s *Service) callback(w http.ResponseWriter, r *http.Request) {
 		if d := q.Get("error_description"); d != "" {
 			msg += ": " + d
 		}
+		msg = audit.Clip(msg, maxDetail)
 		s.record(r, audit.ActionSignInFailed, User{}, audit.OutcomeFailed, "the provider refused: "+msg)
 		s.renderSignIn(w, r, "The provider did not sign you in ("+msg+").", http.StatusUnauthorized)
 		return
@@ -717,7 +815,7 @@ type Me struct {
 	Roles    []roles.ID `json:"roles,omitempty"`
 	Method   string     `json:"method"`
 	Provider string     `json:"provider,omitempty"`
-	// SessionIdle is how long the session lives without a request, in
+	// SessionIdle is how long the session lives without activity, in
 	// seconds.
 	SessionIdle int `json:"sessionIdleSeconds"`
 }

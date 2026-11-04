@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { controlPlane, row } from '../test/rows'
-import { facetMatch, facetText, nodeFacets, ownLabels, problemsCell, resourceSections, roleTag, taintShort } from './nodes'
+import { facetMatch, facetText, memoryMeter, quantity, nodeFacets, ownLabels, problemsCell, reserved, reservedText, resourceSections, roleTag, taintShort, usedPct } from './nodes'
 
 const GI = 1024 ** 3
 
@@ -73,17 +73,45 @@ describe('cells', () => {
 })
 
 describe('resource sections', () => {
+  it('counts in use against the machine, so software beside Kubernetes does not read as over 100%', () => {
+    const r = { ...rows[1]!, memory: { requested: 0, limits: 0, allocatable: 32 * GI, capacity: 64 * GI, used: 48 * GI } }
+    expect(usedPct(r.memory)).toBe(75)
+    expect(memoryMeter(r).usePct).toBe(75)
+    expect(resourceSections(r, true, '')[1]!.usePct).toBe(75)
+    expect(reserved(r.memory)).toBe(32 * GI)
+  })
+
+  it('lists a total, each reservation and what is allocatable, as the kubelet sets them', () => {
+    const r = { ...rows[1]!, cpu: { ...rows[1]!.cpu, capacity: 16000, allocatable: 13500 }, memory: { ...rows[1]!.memory, capacity: 64 * GI, allocatable: 47 * GI } }
+    const cfg = { systemReserved: { cpu: '2', memory: '12Gi' }, kubeReserved: { cpu: '500m', memory: '4Gi' }, evictionHard: { 'memory.available': '1Gi', 'nodefs.available': '5%' } }
+    const [cpu, memory] = resourceSections(r, true, '', cfg)
+    expect(cpu!.lines.slice(0, 4).map((l) => [l.k, l.v])).toEqual([['Total on the node', '16 cores'], ['Reserved for the system', '2'], ['Reserved for Kubernetes', '0.5'], ['Allocatable', '13.5 cores']])
+    expect(memory!.lines.slice(0, 5).map((l) => [l.k, l.v])).toEqual([['Total on the node', '64Gi'], ['Reserved for the system', '12Gi'], ['Reserved for Kubernetes', '4Gi'], ['Eviction threshold', '1Gi'], ['Allocatable', '47Gi']])
+    const unread = resourceSections(r, true, '')[0]!
+    expect(unread.lines.slice(0, 3).map((l) => [l.k, l.v])).toEqual([['Total on the node', '16 cores'], ['Reserved', '2.5'], ['Allocatable', '13.5 cores']])
+    expect(quantity('500m', 'cpu')).toBe(500)
+    expect(quantity('5%', 'memory')).toBe(0)
+  })
+
+  it('says what a node keeps from pods', () => {
+    const one = (cpu: number, memory: number) => ({ cpu: { allocatable: 8000 - cpu, capacity: 8000 }, memory: { allocatable: 64 * GI - memory, capacity: 64 * GI } })
+    expect(reservedText(one(0, 0))).toBe('none')
+    expect(reservedText(one(2000, 16 * GI))).toBe('2 cores · 16Gi')
+    expect(reservedText(one(0, 16 * GI))).toBe('16Gi')
+  })
+
   it('lists allocatable, requested, free, in use and limits', () => {
     const [cpu, memory, pods] = resourceSections(rows[1]!, true, '')
     expect(cpu!.lines.map((l) => [l.k, l.v, l.sub])).toEqual([
-      ['Allocatable', '16 cores', ''],
+      ['Total on the node', '16 cores', undefined],
+      ['Allocatable', '16 cores', 'pods may have this'],
       ['Requested', '12', '75%'],
       ['Free to schedule', '4', '25%'],
-      ['In use', '9', '56%'],
+      ['In use', '9', '56% of the machine'],
       ['Limits', '16', '100%'],
     ])
-    expect(memory!.lines[0]).toMatchObject({ k: 'Allocatable', v: '64Gi' })
-    expect(memory!.lines[2]).toMatchObject({ k: 'Free to schedule', v: '48Gi', sub: '75%' })
+    expect(memory!.lines[1]).toMatchObject({ k: 'Allocatable', v: '64Gi' })
+    expect(memory!.lines[3]).toMatchObject({ k: 'Free to schedule', v: '48Gi', sub: '75%' })
     expect(pods!.lines.map((l) => [l.k, l.v])).toEqual([
       ['Capacity', '110'],
       ['Scheduled', '20'],
@@ -95,7 +123,7 @@ describe('resource sections', () => {
 
   it('says why usage is missing', () => {
     const [cpu] = resourceSections(rows[3]!, true, '')
-    expect(cpu!.lines[3]).toMatchObject({ k: 'In use', v: '—' })
+    expect(cpu!.lines.find((l) => l.k === 'In use')).toMatchObject({ v: '—' })
     expect(cpu!.note).toBe('metrics-server has no reading for this node.')
     const [without] = resourceSections(rows[1]!, false, 'metrics-server is not installed, so CPU and memory in use are not shown.')
     expect(without!.note).toContain('metrics-server is not installed')

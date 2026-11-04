@@ -16,7 +16,8 @@ import (
 const SpendKey = "sherlock-spend.json"
 
 // Spend is what Sherlock has cost today and this month (UTC), in US
-// dollars, as counted from the token use the API reports.
+// dollars, as counted from the token use the API reports, or estimated
+// where it reports none.
 type Spend struct {
 	Day        string  `json:"day"`
 	DayUSD     float64 `json:"dayUSD"`
@@ -43,6 +44,16 @@ type Ledger struct {
 	// pending is counted here and not saved yet; its Day and Month say
 	// which day and month the counts are of.
 	pending Spend
+	// unsaved is why the last save failed, "" once one succeeds: what is
+	// counted here is lost on a restart until then.
+	unsaved string
+}
+
+// SaveError says why the spend could not be saved, "" when it was.
+func (l *Ledger) SaveError() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.unsaved
 }
 
 // ledgerFresh is how long a read of the saved spend stands.
@@ -160,9 +171,16 @@ func (l *Ledger) Add(ctx context.Context, usd float64, asked bool) Spend {
 
 // Save adds what was counted since the last save to what is saved now,
 // over that version, reading again when another replica saved first.
-func (l *Ledger) Save(ctx context.Context) error {
+func (l *Ledger) Save(ctx context.Context) (err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	defer func() {
+		if err != nil {
+			l.unsaved = err.Error()
+		} else {
+			l.unsaved = ""
+		}
+	}()
 	if l.pending == (Spend{Day: l.pending.Day, Month: l.pending.Month}) {
 		return nil
 	}

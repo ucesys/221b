@@ -112,11 +112,42 @@ func (u Usage) Prompt() int {
 	return u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens
 }
 
-// Response is a finished message.
+// Response is a message, or as much of it as arrived.
 type Response struct {
 	Content    []Block
 	StopReason string
 	Usage      Usage
+	// Estimated says some of Usage was not reported and is worked out from
+	// what was sent and received; NoUsage that the stream finished without
+	// reporting any.
+	Estimated bool
+	NoUsage   bool
+
+	// received is the characters of output read, of thinking and tool
+	// input too; finalOutput says the stream gave the output's real count.
+	received    int
+	finalOutput bool
+}
+
+// charsPerToken is the rough size of a token, for what a stream does not
+// report.
+const charsPerToken = 4
+
+// estimate fills in the usage a stream did not report, so an answer cut
+// off or stopped, or a provider that reports none, still counts against
+// the caps: the input from the size of the request, the output from what
+// arrived. A figure the provider gave stands. Cut off, the Messages API
+// has given the input and only a first few tokens of the output.
+func (r Response) estimate(sent int) Response {
+	if r.Usage.Prompt() == 0 {
+		r.Usage.InputTokens = sent / charsPerToken
+		r.Estimated = true
+	}
+	if out := r.received / charsPerToken; !r.finalOutput && out > r.Usage.OutputTokens {
+		r.Usage.OutputTokens = out
+		r.Estimated = true
+	}
+	return r
 }
 
 // APIError is an error the API answered with.
@@ -239,6 +270,7 @@ func readStream(r io.Reader, onDelta func(Delta)) (Response, bool, error) {
 				out.Content = append(out.Content, Block{})
 			}
 			b := ev.Block
+			out.received += len(b.Data)
 			if b.Type == "tool_use" {
 				b.Input = nil
 				partial[ev.Index] = &strings.Builder{}
@@ -255,16 +287,19 @@ func readStream(r io.Reader, onDelta func(Delta)) (Response, bool, error) {
 			switch ev.Delta.Type {
 			case "text_delta":
 				out.Content[ev.Index].Text += ev.Delta.Text
+				out.received += len(ev.Delta.Text)
 				started = true
 				if onDelta != nil && ev.Delta.Text != "" {
 					onDelta(Delta{Text: ev.Delta.Text})
 				}
 			case "input_json_delta":
+				out.received += len(ev.Delta.PartialJSON)
 				if p := partial[ev.Index]; p != nil {
 					p.WriteString(ev.Delta.PartialJSON)
 				}
 			case "thinking_delta":
 				out.Content[ev.Index].Thinking += ev.Delta.Thinking
+				out.received += len(ev.Delta.Thinking)
 			case "signature_delta":
 				out.Content[ev.Index].Signature += ev.Delta.Signature
 			}
@@ -287,6 +322,7 @@ func readStream(r io.Reader, onDelta func(Delta)) (Response, bool, error) {
 				// The final output count; input counts come with message_start
 				// and are repeated here by newer versions when they change.
 				out.Usage.OutputTokens = ev.Usage.OutputTokens
+				out.finalOutput = ev.Usage.OutputTokens > 0
 				if ev.Usage.InputTokens > 0 {
 					out.Usage.InputTokens = ev.Usage.InputTokens
 				}

@@ -67,7 +67,14 @@ type Request struct {
 	LabelsFrom     string            `json:"labelsFrom,omitempty"`
 	Labels         map[string]string `json:"labels,omitempty"`
 	// Minutes is the duration asked for; 0 takes the chart's limit.
-	Minutes int `json:"minutes,omitempty"`
+	// LoginUser is the OS account an SSH pairing admits sessions as
+	// (Phase 11); it must exist on the node.
+	LoginUser string `json:"loginUser,omitempty"`
+	// Nodes are more nodes the same request runs on, one session each,
+	// under one card (asked October 30, 2026: the Nodes page's picked
+	// nodes pair with a single approval). Node is the first.
+	Nodes   []string `json:"nodes,omitempty"`
+	Minutes int      `json:"minutes,omitempty"`
 	// Reason is shown to the approver and kept in the audit log.
 	Reason string `json:"reason,omitempty"`
 }
@@ -116,14 +123,34 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 		return nil
 	}
 	var errs []error
+	if len(r.Nodes) > 0 && r.Tool != toolbox.ToolSSHPair && r.Tool != toolbox.ToolSSHUnpair {
+		errs = append(errs, fmt.Errorf("%s runs on one node at a time", ToolName(r.Tool)))
+	}
 	switch r.Tool {
 	case toolbox.ToolShell, toolbox.ToolCommand, toolbox.ToolForward, toolbox.ToolDebugContainer:
 		errs = append(errs, label("namespace", r.Namespace, false), name("pod", r.Pod, false))
 	case toolbox.ToolDebugPod:
 		errs = append(errs, label("namespace", r.Namespace, false), name("node", r.Node, true), name("service account", r.ServiceAccount, true), name("pod to copy the labels of", r.LabelsFrom, true))
-	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand:
+	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand, toolbox.ToolSSH, toolbox.ToolSSHPair, toolbox.ToolSSHUnpair:
 		errs = append(errs, name("node", r.Node, false))
 		r.Namespace = ""
+		if len(r.Nodes) > 0 {
+			seen := map[string]bool{r.Node: true}
+			var more []string
+			for _, n := range r.Nodes {
+				n = strings.TrimSpace(n)
+				if n == "" || seen[n] {
+					continue
+				}
+				seen[n] = true
+				errs = append(errs, name("node", n, false))
+				more = append(more, n)
+			}
+			r.Nodes = more
+			if len(r.Nodes) > 50 {
+				errs = append(errs, errors.New("at most 50 nodes at a time"))
+			}
+		}
 	}
 	switch r.Tool {
 	case toolbox.ToolShell, toolbox.ToolCommand:
@@ -173,6 +200,30 @@ func (r *Request) Validate(c toolbox.Config, production bool) error {
 		}
 		if !contains(c.NodeShell.Profiles, r.Profile) {
 			errs = append(errs, fmt.Errorf("the node shell profiles here are %s", strings.Join(c.NodeShell.Profiles, ", ")))
+		}
+	}
+	if r.Tool == toolbox.ToolSSHPair || r.Tool == toolbox.ToolSSHUnpair {
+		r.Profile = toolbox.ProfileGeneral
+		if !contains(c.NodeShell.Profiles, r.Profile) {
+			errs = append(errs, fmt.Errorf("pairing runs with the %s node profile, and the node shell profiles here are %s", r.Profile, strings.Join(c.NodeShell.Profiles, ", ")))
+		}
+	}
+	switch r.Tool {
+	case toolbox.ToolSSHPair:
+		// The pairing command is the console's, run on the node as a
+		// node command is; the login user goes into the script.
+		r.LoginUser = strings.TrimSpace(r.LoginUser)
+		if r.LoginUser == "" {
+			r.LoginUser = c.SSH.LoginUser
+		}
+		if !toolbox.LoginUserRE.MatchString(r.LoginUser) {
+			errs = append(errs, errors.New("the login user is a Unix user name: lowercase letters, digits, dash and underscore"))
+		}
+		if r.Port == 0 {
+			r.Port = c.SSH.Port
+		}
+		if r.Port < 1 || r.Port > 65535 {
+			errs = append(errs, errors.New("the SSH port is 1 to 65535"))
 		}
 	}
 	if r.Tool == toolbox.ToolCommand || r.Tool == toolbox.ToolNodeCommand {
@@ -228,6 +279,12 @@ func ToolName(tool string) string {
 		return "Node shell"
 	case toolbox.ToolNodeCommand:
 		return "Run a command on the node"
+	case toolbox.ToolSSH:
+		return "SSH"
+	case toolbox.ToolSSHPair:
+		return "Pair for SSH"
+	case toolbox.ToolSSHUnpair:
+		return "Unpair from SSH"
 	}
 	return tool
 }
@@ -235,16 +292,45 @@ func ToolName(tool string) string {
 // Interactive says whether a tool's session is a terminal.
 func Interactive(tool string) bool {
 	switch tool {
-	case toolbox.ToolShell, toolbox.ToolDebugContainer, toolbox.ToolDebugPod, toolbox.ToolNodeShell:
+	case toolbox.ToolShell, toolbox.ToolDebugContainer, toolbox.ToolDebugPod, toolbox.ToolNodeShell, toolbox.ToolSSH:
 		return true
 	}
 	return false
 }
 
+// AllNodes lists the node and the other nodes a request runs on.
+func (r Request) AllNodes() []string {
+	return append([]string{r.Node}, r.Nodes...)
+}
+
+// Each returns one request per node: the same request, one node each.
+func (r Request) Each() []Request {
+	out := make([]Request, 0, 1+len(r.Nodes))
+	for _, n := range r.AllNodes() {
+		one := r
+		one.Node, one.Nodes = n, nil
+		out = append(out, one)
+	}
+	return out
+}
+
+// OnNode says whether a tool acts on a node as root: a node shell, a
+// node command, and SSH pairing, which is a node command (Phase 11).
+func OnNode(tool string) bool {
+	return tool == toolbox.ToolNodeShell || tool == toolbox.ToolNodeCommand || tool == toolbox.ToolSSHPair || tool == toolbox.ToolSSHUnpair
+}
+
+// OnNodeOrSSH says whether a tool makes a person root on a node: what OnNode
+// names and an SSH session, like a node shell. These are a SuperAdmin's,
+// and need a reason on production.
+func OnNodeOrSSH(tool string) bool {
+	return OnNode(tool) || tool == toolbox.ToolSSH
+}
+
 // NeedsTwo says whether a request needs a second person whatever the
 // cluster (TB-32).
 func NeedsTwo(c toolbox.Config, tool string) bool {
-	return (tool == toolbox.ToolNodeShell || tool == toolbox.ToolNodeCommand) && c.NodeShell.Approval == toolbox.ApprovalAlways
+	return OnNodeOrSSH(tool) && c.NodeShell.Approval == toolbox.ApprovalAlways
 }
 
 // Summary is the one line a card and the audit log show for a request.
@@ -268,6 +354,18 @@ func (r Request) Summary() string {
 		return fmt.Sprintf("node shell on node %s (%s)", r.Node, r.Profile)
 	case toolbox.ToolNodeCommand:
 		return fmt.Sprintf("run on node %s: %s", r.Node, r.Command)
+	case toolbox.ToolSSH:
+		return fmt.Sprintf("SSH to node %s", r.Node)
+	case toolbox.ToolSSHPair:
+		if len(r.Nodes) > 0 {
+			return fmt.Sprintf("pair %d nodes for SSH as %s: %s", 1+len(r.Nodes), r.LoginUser, strings.Join(r.AllNodes(), ", "))
+		}
+		return fmt.Sprintf("pair node %s for SSH as %s", r.Node, r.LoginUser)
+	case toolbox.ToolSSHUnpair:
+		if len(r.Nodes) > 0 {
+			return fmt.Sprintf("unpair %d nodes from SSH: %s", 1+len(r.Nodes), strings.Join(r.AllNodes(), ", "))
+		}
+		return fmt.Sprintf("unpair node %s from SSH", r.Node)
 	}
 	return r.Tool
 }
@@ -440,7 +538,7 @@ func EphemeralContainer(c toolbox.Config, id string, r Request, pod *corev1.Pod,
 // a time to live, labels copied from a pod or typed, a readiness gate that
 // never holds so no Service sends it traffic, and only the capabilities
 // its image may add and the namespace allows.
-func DebugJob(c toolbox.Config, id, owner string, r Request, level string, copied map[string]string, limit time.Duration) (*batchv1.Job, []string, error) {
+func DebugJob(c toolbox.Config, id, owner string, r Request, level string, copied map[string]string, deadline time.Duration) (*batchv1.Job, []string, error) {
 	img, ok := c.Images[r.Image]
 	if !ok {
 		return nil, nil, fmt.Errorf("no image named %q", r.Image)
@@ -469,7 +567,7 @@ func DebugJob(c toolbox.Config, id, owner string, r Request, level string, copie
 		sc.RunAsNonRoot, sc.RunAsUser = ptr(true), ptr(int64(65532))
 		notes = append(notes, fmt.Sprintf("It runs as a user other than root: namespace %s enforces the restricted Pod Security level.", r.Namespace))
 	}
-	secs := int64(limit / time.Second)
+	secs := int64(deadline / time.Second)
 	ttl := int32(c.DebugPod.TTLAfterFinished.D() / time.Second)
 	pod := corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{Labels: m.Labels, Annotations: m.Annotations},
@@ -531,13 +629,13 @@ func controllerLabel(k string) bool {
 // the node, tolerating every taint, with the host's namespaces and its
 // filesystem at /host as the profile says, ended by its deadline at the
 // latest.
-func NodePod(c toolbox.Config, id, owner string, r Request, limit time.Duration) (*corev1.Pod, error) {
+func NodePod(c toolbox.Config, id, owner string, r Request, deadline time.Duration) (*corev1.Pod, error) {
 	img, ok := c.Images[c.NodeShell.Image]
 	if !ok {
 		return nil, fmt.Errorf("no image named %q", c.NodeShell.Image)
 	}
 	m := meta(id, r.Tool, c.NodeShell.Namespace, owner, nil)
-	secs := int64(limit / time.Second)
+	secs := int64(deadline / time.Second)
 	spec := corev1.PodSpec{
 		NodeName:                      r.Node,
 		RestartPolicy:                 corev1.RestartPolicyNever,

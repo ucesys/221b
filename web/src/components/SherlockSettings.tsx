@@ -711,7 +711,13 @@ export function SherlockSettings({ open }: { open: boolean }) {
         </div>
         <p className="rk-fhint" style={{ margin: 0 }} id="sherlock-caps-hint" data-testid="sherlock-spend">
           Spent today {usd(cfg.spend.dayUSD)} of {cap(cfg.settings.dailyUSD)} ({cfg.spend.dayAsked} {cfg.spend.dayAsked === 1 ? 'question' : 'questions'}); this month {usd(cfg.spend.monthUSD)} of {cap(cfg.settings.monthlyUSD)}. Counted from the tokens each answer used, at the model’s price; 0 is no cap. At a cap, new questions are refused until the day or month ends (UTC).
+          {cfg.noUsage?.length ? ` ${cfg.noUsage.join(', ')} reports no token use, so this spend is an estimate.` : ''}
         </p>
+        {cfg.spendError && (
+          <p className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }} data-testid="sherlock-spend-unsaved">
+            The spend could not be saved, so it is counted on this console only and a restart forgets it: {cfg.spendError}
+          </p>
+        )}
       </section>
 
       <SaveBar

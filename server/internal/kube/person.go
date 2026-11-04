@@ -90,13 +90,19 @@ func (c *Cluster) as(p Person) (*kubernetes.Clientset, error) {
 // SubjectAccessReview made by the console. The console needs create on
 // subjectaccessreviews, which the chart grants.
 func (c *Cluster) CanI(ctx context.Context, p Person, verb, group, resource, namespace string) (bool, error) {
+	return c.CanIName(ctx, p, verb, group, resource, namespace, "")
+}
+
+// CanIName is CanI for one object by name: a right granted only for some
+// names counts for those names alone.
+func (c *Cluster) CanIName(ctx context.Context, p Person, verb, group, resource, namespace, name string) (bool, error) {
 	if p.Nobody() {
 		return true, nil
 	}
 	sar := &authzv1.SubjectAccessReview{Spec: authzv1.SubjectAccessReviewSpec{
 		User:               p.User,
 		Groups:             p.groups(),
-		ResourceAttributes: &authzv1.ResourceAttributes{Verb: verb, Group: group, Resource: resource, Namespace: namespace},
+		ResourceAttributes: &authzv1.ResourceAttributes{Verb: verb, Group: group, Resource: resource, Namespace: namespace, Name: name},
 	}}
 	out, err := c.cs.AuthorizationV1().SubjectAccessReviews().Create(ctx, sar, metav1.CreateOptions{})
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/scrub"
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
@@ -401,5 +402,5 @@ func (tb *toolbox) review(ctx context.Context, in map[string]any) sherlock.ToolR
 	if len(refs) > 20 {
 		refs = refs[:20]
 	}
-	return sherlock.ToolResult{Text: string(sherlock.ScrubJSON(b)), Refs: refs}
+	return sherlock.ToolResult{Text: string(scrub.JSON(b)), Refs: refs}
 }

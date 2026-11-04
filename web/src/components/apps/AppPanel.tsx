@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchAppInspect, fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, inspectRepo, sourceText, updateApp, type AppDrift, type AppImage, type AppInput, type AppRefs, type AppSource, type AppView, type RefKind, type RepoInspection, type RevisionView } from '../../api/apps'
+import { fetchAppInspect, fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, inspectRepo, isCard, sourceText, updateApp, type AppDrift, type AppImage, type AppInput, type AppRefs, type AppSource, type AppView, type RefKind, type RepoInspection, type RevisionView } from '../../api/apps'
 import { useLiveMeta } from '../../api/live'
 import { useDetails } from '../../api/details'
 import type { ClusterInfo, ReleaseDetails } from '../../api/types'
@@ -90,7 +90,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
   // mounts before it: the revisions load once it is not (M-03 fix).
   useEffect(() => {
     if ((tab !== 'history' && tab !== 'images') || row.orphan) return
-    fetchRevisions(clusterId, row.namespace, row.name)
+    fetchRevisions(clusterId, row.namespace, row.name, true)
       .then(setRevisions)
       .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
     if (tab === 'history' && app && !refs) {
@@ -98,8 +98,11 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
         .then(setRefs)
         .catch(() => undefined)
     }
+    // The live row's revision moves when a deploy lands: the list follows
+    // it, so the History tab and the diff dialog never show a stale one
+    // (asked October 30, 2026).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, key, version, row.orphan])
+  }, [tab, key, version, row.orphan, row.revision])
 
   useEffect(() => {
     if (tab !== 'images' || row.orphan) return
@@ -180,7 +183,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
               {canChange && (
                 <>
                   <button className="rk-link" onClick={() => onAction(refs.newerTags.length > 0 ? 'switch' : 'upgrade')}>
-                    {refs.newerTags.length > 0 ? 'Switch to it' : 'Upgrade'}
+                    {refs.newerTags.length > 0 ? 'Switch to it' : 'Redeploy'}
                   </button>
                   , or compare it below first.
                 </>
@@ -192,7 +195,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
     </>
   )
 
-  const before: ExtraTab[] = [{ id: 'overview', label: 'Source', render: () => overview }]
+  const before: ExtraTab[] = [{ id: 'overview', label: 'Setup', render: () => overview }]
   const after: ExtraTab[] = [{ id: 'images', label: 'Images', count: images?.images.length, render: () => imagesTab }]
 
   return (
@@ -356,7 +359,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
 /**
  * The application's values file and parameters, edited in place (HA-12,
  * HA-13) and saved by themselves a moment after the typing stops, for the
- * next deploy; Upgrade, at the top, deploys them.
+ * next deploy; Redeploy, at the top, deploys them.
  */
 function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId: string; row: AppRow; app: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void }) {
   const [values, setValues] = useState(app.values ?? '')
@@ -465,7 +468,7 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
         />
       </div>
       <p className="rk-hint" style={{ margin: 0 }}>
-        {canChange ? 'What you type here is kept with the application; Upgrade at the top deploys it, as you, after your approval in Watson. The chart\'s defaults apply underneath.' : 'What the console deploys this application with; the chart\'s defaults apply underneath.'}
+        {canChange ? 'What you type here is kept with the application; Redeploy at the top deploys it, as you, after your approval in Watson. The chart\'s defaults apply underneath.' : 'What the console deploys this application with; the chart\'s defaults apply underneath.'}
       </p>
     </Card>
   )
@@ -570,7 +573,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
           setToken('')
           writeDraft(key, null)
         }
-        onResult(r, saved ? 'Source saved' : 'Source set')
+        onResult(r, !isCard(r) && r.tokenRemoved ? 'Source saved; the token saved for the old repository was removed' : saved ? 'Source saved' : 'Source set')
       })
       .catch((e: unknown) => {
         if (seq.current === mine) {
@@ -640,7 +643,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
   const [inspect, setInspect] = useState<{ key: string; data?: RepoInspection; error?: string } | null>(null)
   const inspectKey = app ? `${app.source.repo}|${app.source.path ?? ''}|${app.source.ref}` : ''
   useEffect(() => {
-    if (!inspectKey) return
+    if (!inspectKey || !canChange) return
     let live = true
     fetchAppInspect(clusterId, row.namespace, row.name)
       .then((d) => live && setInspect({ key: inspectKey, data: d }))
@@ -648,7 +651,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
     return () => {
       live = false
     }
-  }, [inspectKey, clusterId, row.namespace, row.name])
+  }, [inspectKey, canChange, clusterId, row.namespace, row.name])
   const chartFiles = inspect?.key === inspectKey && inspect.data ? (inspect.data.charts.find((c) => c.path === (app?.source.path ?? ''))?.valuesFiles ?? inspect.data.charts[0]?.valuesFiles ?? []) : []
   const valuesFiles = app?.valuesFile && !chartFiles.includes(app.valuesFile) ? [app.valuesFile, ...chartFiles] : chartFiles
   const [optState, setOptState] = useState<'' | 'saving' | 'saved' | 'error'>('')
@@ -676,7 +679,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
   const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? (repo.trim() && ref.trim() ? 'Not saved yet: press Save, or leave the field' : 'Not saved yet: needs a repository and a branch or tag') : state === 'error' ? error : saved ? 'Saved' : 'Not set'
   return (
     <Card
-      title="Source"
+      title="Setup"
       aside={
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-source-state">
@@ -709,7 +712,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             </span>
           </span>
         </label>
-        {field(app?.hasToken ? 'GitHub token (one is saved; paste a new one to replace it)' : 'GitHub token (for a private repository; kept in the console, never shown again)', token, setToken, app?.hasToken ? '••••••••' : 'ghp_… or github_pat_…, optional', 'app-src-token', 'password', 3)}
+        {field(app?.hasToken && repo.trim() !== app.source.repo ? 'GitHub token (the saved one is removed with the repository change; paste one for the new repository)' : app?.hasToken ? 'GitHub token (one is saved; paste a new one to replace it)' : 'GitHub token (for a private repository; kept in the console, never shown again)', token, setToken, app?.hasToken ? '••••••••' : 'ghp_… or github_pat_…, optional', 'app-src-token', 'password', 3)}
       </div>
       {look && (
         <p style={{ margin: 0, fontSize: 12, color: look.state === 'error' ? 'var(--err)' : 'var(--fg2)' }} data-testid="app-src-inspect" data-state={look.state}>
@@ -768,27 +771,35 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--fg)', paddingBottom: 6 }}>
             <input type="checkbox" checked={opts.ignoreDefaults} disabled={!canChange} onChange={(e) => saveOption({ ignoreDefaults: e.target.checked })} data-testid="app-src-ignore-defaults" /> Ignore the chart’s values.yaml
           </label>
-          {fleets.length > 0 && (
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 200 }}>
-              Deploy to the fleet
-              <span className="rk-field">
-                <select value={opts.fleet} disabled={!canChange} onChange={(e) => saveOption({ fleet: e.target.value })} data-testid="app-src-fleet">
-                  <option value="">any node</option>
-                  {fleets.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name} · {f.deploy}
-                    </option>
-                  ))}
-                </select>
-              </span>
-            </label>
-          )}
           <span style={{ fontSize: 12, color: optState === 'error' ? 'var(--err)' : 'var(--fg3)', paddingBottom: 6, flex: '1 1 260px' }} role={optState === 'error' ? 'alert' : undefined} data-testid="app-deploy-options-state">
             {optState === 'saving' ? 'Saving…' : optState === 'error' ? optError : optState === 'saved' ? 'Saved. ' : ''}
             Applied lowest first: {opts.ignoreDefaults ? <s>the chart’s values.yaml</s> : 'the chart’s values.yaml'}
             {opts.valuesFile ? `, ${opts.valuesFile}` : ''}, the Values tab, then its parameters
             {app.fleetLabel ? `; the fleet adds nodeSelector ${app.fleetLabel}` : ''}.
             {inspect?.key === inspectKey && inspect.error ? ` The repository could not be read for its files: ${inspect.error}` : ''}
+          </span>
+        </div>
+      )}
+      {app && (
+        // Deploy to the fleet (R2-11) on a row of its own, always shown: with
+        // no fleet labelled for deploys it says so instead of vanishing
+        // (asked October 30, 2026).
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '8px 16px', paddingTop: 8, borderTop: '1px solid var(--line)' }} data-testid="app-fleet-row">
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)', minWidth: 220 }}>
+            Deploy to the fleet
+            <span className="rk-field">
+              <select value={opts.fleet} disabled={!canChange || fleets.length === 0} onChange={(e) => saveOption({ fleet: e.target.value })} data-testid="app-src-fleet">
+                <option value="">any node</option>
+                {fleets.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name} · {f.deploy}
+                  </option>
+                ))}
+              </select>
+            </span>
+          </label>
+          <span style={{ fontSize: 12, color: 'var(--fg3)', paddingBottom: 6, flex: '1 1 260px' }} data-testid="app-fleet-hint">
+            {fleets.length === 0 ? 'No fleet has a label configured: give a fleet a deploy label in its editor, and it is offered here.' : app.fleetLabel ? `The deploy adds nodeSelector ${app.fleetLabel}, so the pods run on the fleet’s nodes.` : 'The fleet’s deploy label becomes the pods’ nodeSelector on the next deploy.'}
           </span>
         </div>
       )}

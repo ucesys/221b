@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { credText, expiryText, spanText, stateOf, type ClusterSummary } from './clusters'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { clusterList, credText, expiryText, spanText, stateOf, type ClusterSummary } from './clusters'
 
 const base: ClusterSummary = {
   id: 'dev',
@@ -18,6 +18,34 @@ const base: ClusterSummary = {
   synced: true,
 }
 const now = Date.UTC(2026, 9, 13)
+
+describe('the list of clusters', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('polls without counting as activity, and goes to sign-in once the session has ended', async () => {
+    vi.useFakeTimers()
+    const assign = vi.fn()
+    vi.stubGlobal('location', { pathname: '/', search: '', hash: '', assign })
+    const headers: HeadersInit[] = []
+    let status = 200
+    vi.stubGlobal('fetch', (_: string, init: RequestInit) => {
+      headers.push(init.headers!)
+      return Promise.resolve(new Response(JSON.stringify({ clusters: [] }), { status }))
+    })
+    const off = clusterList.subscribe(() => undefined)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(headers.length).toBe(2)
+    for (const h of headers) expect(h).toHaveProperty('X-221B-Background', '1')
+    expect(assign).not.toHaveBeenCalled()
+    status = 401
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(assign).toHaveBeenCalledWith('/signin?next=%2F')
+    off()
+  })
+})
 
 describe('connection summaries', () => {
   it('spells spans and expiry', () => {

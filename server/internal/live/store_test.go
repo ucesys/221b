@@ -3,18 +3,22 @@ package live
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/ucesys/221b/server/internal/fake"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/nodes"
+	"github.com/ucesys/221b/server/internal/views"
 )
 
 type snapshot struct {
@@ -745,6 +749,172 @@ func TestSavedFleetsGoOutAtOnce(t *testing.T) {
 		found = found || strings.Contains(string(u), `"Workers"`)
 	}
 	if !found {
+		t.Fatalf("rows %+v", rows[0])
+	}
+}
+
+// countingSource counts the times a kind is listed.
+type countingSource struct {
+	*fake.Source
+	reads map[string]int
+}
+
+func (s *countingSource) Objects(kind, namespace string) []runtime.Object {
+	s.reads[kind+"/"+namespace]++
+	return s.Source.Objects(kind, namespace)
+}
+
+// The rows of one pass over the policies share one reading of a namespace's
+// budgets, so a pod's change does not cost the pods times the budgets.
+func TestTheRowsOfAPassShareTheirReading(t *testing.T) {
+	src := &countingSource{Source: fake.New("n1"), reads: map[string]int{}}
+	one := intstr.FromInt32(1)
+	for _, name := range []string{"a", "b", "c", "d"} {
+		src.Put(&policyv1.PodDisruptionBudget{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: name}, Spec: policyv1.PodDisruptionBudgetSpec{MinAvailable: &one, Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}}}})
+		src.Put(&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "pod-" + name, Labels: map[string]string{"app": name}}, Status: corev1.PodStatus{Phase: corev1.PodRunning}})
+	}
+	src.Put(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "shop"}})
+	s := New(src, Options{})
+	s.Process()
+	s.Snapshot([]string{ViewPolicies}, nil)
+	if n := src.reads["poddisruptionbudgets/shop"]; n != 1 {
+		t.Fatalf("a pass listed the budgets %d times", n)
+	}
+}
+
+// someNodes is a filter for someone who may also list nodes.
+type someNodes struct{ onlyNamespaces }
+
+func (f *someNodes) AllowCluster(string) bool { return true }
+
+// A browser's settings hold this cluster's fleets at most, in snapshots and
+// in meta events alike, and node names only for someone who may list nodes.
+func TestBrowsersGetTheSettingsTheyMaySee(t *testing.T) {
+	src := fake.New("a")
+	src.Put(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "web"}})
+	s := New(src, Options{Cluster: "here"})
+	s.Notify(listed())
+	s.Process()
+	raw := func(refresh int) []byte {
+		return []byte(fmt.Sprintf(`{"refreshSeconds":%d,"storage":"memory",
+			"fleets":{"here":[{"id":"mine","name":"Mine","color":0,"labels":[],"taints":[],"kind":"nodes","nodes":["node-name"],"deploy":"pool=mine"}],"other":[{"id":"elsewhere","name":"Elsewhere","color":0,"labels":[],"taints":[]}]},
+			"acks":{"here":[{"key":"pod:web/acked","fp":"x","by":"someone@corp.example","at":"2026-10-30T10:00:00Z"}]},
+			"sherlock":{"model":"m","dailyUSD":1,"monthlyUSD":2,"notes":"private notes"},"watson":{"twoPerson":true}}`, refresh))
+	}
+	s.SetSettings(time.Second, raw(1))
+
+	never := []string{"elsewhere", "someone@corp.example", "private notes", "twoPerson", "dailyUSD"}
+	for _, tc := range []struct {
+		name string
+		f    Filter
+		want []string
+		not  []string
+	}{
+		{"the console itself", nil, []string{"mine", "node-name"}, nil},
+		{"someone who may list nodes", &someNodes{onlyNamespaces{in: map[string]bool{}}}, []string{"mine", "node-name"}, nil},
+		{"someone with a namespace", &onlyNamespaces{in: map[string]bool{"web": true}}, []string{"pool=mine"}, []string{"node-name"}},
+		{"someone with nothing here", &onlyNamespaces{in: map[string]bool{}}, []string{`"refreshSeconds"`}, []string{"mine", "node-name"}},
+	} {
+		sub, start, _ := s.Subscribe([]string{ViewPods}, tc.f)
+		s.SetSettings(time.Second, raw(2))
+		meta := take(t, sub).meta
+		s.SetSettings(time.Second, raw(1))
+		take(t, sub)
+		s.Unsubscribe(sub)
+		if len(meta) != 1 {
+			t.Fatalf("%s: %d meta events", tc.name, len(meta))
+		}
+		for what, text := range map[string]string{"snapshot": string(decodeSnapshot(t, start).Settings), "meta event": string(meta[0].Settings)} {
+			for _, w := range tc.want {
+				if !strings.Contains(text, w) {
+					t.Errorf("%s: the %s lacks %s: %s", tc.name, what, w, text)
+				}
+			}
+			for _, n := range append(append([]string{}, never...), tc.not...) {
+				if strings.Contains(text, n) {
+					t.Errorf("%s: the %s holds %s: %s", tc.name, what, n, text)
+				}
+			}
+		}
+	}
+}
+
+// The store acts on an acknowledgement or a fleet of its own cluster even
+// though no browser receives the list.
+func TestSettingsLeftOutOfBrowsersStillTakeEffect(t *testing.T) {
+	s := New(fake.New("a"), Options{Cluster: "here"})
+	s.SetSettings(time.Second, []byte(`{"refreshSeconds":1,"acks":{"here":[{"key":"pod:web/x","fp":"x","by":"b","at":"2026-10-30T10:00:00Z"}]}}`))
+	if got := s.acks.Load(); got == nil || len(*got) != 1 {
+		t.Fatalf("acknowledgements: %v", got)
+	}
+}
+
+// Rows that stand for cluster-scoped objects do not name what lies in a
+// namespace the person may not list; what they may list stays, as do counts.
+func TestRowsNameNothingInHiddenNamespaces(t *testing.T) {
+	f := &onlyNamespaces{in: map[string]bool{"web": true}}
+	hidden := []string{"other-ns"}
+	check := func(name, view string, row any, keep ...string) {
+		t.Helper()
+		b, err := json.Marshal(row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := string(Redact(view, b, f))
+		for _, h := range hidden {
+			if strings.Contains(out, h) {
+				t.Errorf("%s names %s: %s", name, h, out)
+			}
+		}
+		for _, k := range keep {
+			if !strings.Contains(out, k) {
+				t.Errorf("%s lost %s: %s", name, k, out)
+			}
+		}
+		if out2 := Redact(view, b, nil); string(out2) != string(b) {
+			t.Errorf("%s changed with no filter", name)
+		}
+	}
+	check("a node's alert", ViewAlerts, views.AlertRow{Key: "node:n1", Kind: views.AlertNode, Name: "n1", Status: "Ready", Events: []views.AlertEntry{
+		{Source: "event", Reason: "OOM", Message: "Killed pod other-ns/job-1", Pod: "other-ns/job-1"},
+		{Source: "event", Reason: "Gone", Message: `pod "other-ns/job-2" was removed`},
+		{Source: "event", Reason: "OOM", Message: "Killed pod web/shop", Pod: "web/shop"},
+		{Source: "event", Reason: "Rebooted", Message: "The node rebooted"},
+	}}, `"status":"Ready"`, "web/shop", "The node rebooted")
+	check("a webhook", ViewPolicies, views.HookRow{Key: "hook:Validating/c/w", ServiceNamespace: "hooks", Reach: views.Reach{State: "ready", Ready: 1, Total: 1, Pods: []views.HookPod{{Name: "other-ns-pod", Ready: true}}}}, `"ready":1`, `"pods":[]`)
+	check("a webhook of an allowed namespace", ViewPolicies, views.HookRow{Key: "hook:Validating/c/w", ServiceNamespace: "web", Reach: views.Reach{Pods: []views.HookPod{{Name: "web-pod"}}}}, "web-pod")
+	check("a priority class", ViewPolicies, views.PriorityRow{Key: views.PolPriority + ":high", Name: "high", Pods: 3, Workloads: []string{"other-ns/job", "web/shop"}}, "web/shop", `"pods":3`)
+	check("the network facts", ViewNetworks, views.NetFactsRow{Key: "facts:cluster", Policies: 2, PendingLBs: []string{"other-ns/lb", "web/lb"}, PolicyNS: []string{"other-ns", "web"}}, "web/lb", `"policies":2`)
+}
+
+// A write made through the console goes out as soon as the watch reports
+// it, not a refresh later; a change after the window waits for the tick.
+func TestAWriteMadeHereGoesOutAtOnce(t *testing.T) {
+	src := fake.New("a")
+	s := New(src, Options{Cluster: "local", Refresh: time.Hour, Prompt: 10 * time.Millisecond})
+	sub, _, _ := s.Subscribe([]string{ViewNodes}, nil)
+	defer s.Unsubscribe(sub)
+	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { s.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	s.Notify(listed())
+	waitWake(t, sub)
+	take(t, sub)
+
+	s.ExpectWrite()
+	made := time.Now()
+	src.Put(&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "made-here"}})
+	s.Notify(kube.Change{Views: map[string][]string{ViewNodes: {"made-here"}}})
+	var rows []Rows
+	for len(rows) == 0 {
+		waitWake(t, sub)
+		rows = take(t, sub).rows
+	}
+	if since := time.Since(made); since > time.Second {
+		t.Fatalf("the new row went out %v after the write", since)
+	}
+	if len(rows[0].Upserts) == 0 || !strings.Contains(string(rows[0].Upserts[0]), "made-here") {
 		t.Fatalf("rows %+v", rows[0])
 	}
 }

@@ -40,16 +40,17 @@ export function CreateUser({ groups, onClose, onDone }: Props) {
     setBusy(true)
     setError('')
     try {
-      await createUser({ username, name: name.trim(), email: email.trim() || undefined, password, groups: chosen })
+      const made = await createUser({ username, name: name.trim(), email: email.trim() || undefined, password, groups: chosen })
+      let held = made.held
       if (access) {
         try {
-          await setSuperRoles(username, [access])
+          held = (await setSuperRoles(username, [access])).held ?? held
         } catch (err) {
           onDone(`Created ${username}, but could not make them ${access === 'superAdmin' ? 'SuperAdmin' : 'SuperViewer'}: ${err instanceof Error ? err.message : String(err)}`)
           return
         }
       }
-      onDone(`Created ${username}.`)
+      onDone(held ? `Created ${username}. ${held}` : `Created ${username}.`)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setBusy(false)

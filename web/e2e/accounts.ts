@@ -11,7 +11,29 @@ export const E2E_VIEWER_KUBE = process.env.E2E_VIEWER_KUBE ?? E2E_VIEWER
 export const E2E_DEV = process.env.E2E_DEV ?? 'dev@corp.example'
 /** The name Kubernetes knows the dev by: a local user is prefixed in kind. */
 export const E2E_DEV_KUBE = process.env.E2E_DEV_KUBE ?? E2E_DEV
+/** A second SuperAdmin, who approves what the first asks for (the simulated provider has one). */
+export const E2E_ADMIN2 = process.env.E2E_ADMIN2 ?? 'admin2@corp.example'
 
+
+/**
+ * Approves, as the second SuperAdmin, the console changes that wait: a
+ * cluster taken off production waits for a second person where one could
+ * approve it. Where the first is the only SuperAdmin it applied at once.
+ */
+export async function approveConsoleChanges(browser: Browser): Promise<void> {
+  const page = await signInAs(browser, E2E_ADMIN2)
+  try {
+    await page.getByTestId('cluster-state').waitFor({ timeout: 30_000 })
+    const list = (await (await page.request.get('/api/v1/admin/approvals')).json()) as { items: { kind: string; state: string; id?: string; own?: boolean }[] }
+    for (const r of list.items) {
+      if (r.kind === 'admin' && r.state === 'pending' && !r.own && r.id) {
+        await page.request.post(`/api/v1/admin/requests/${r.id}/approve`, { data: {}, headers: { 'Sec-Fetch-Site': 'same-origin' } })
+      }
+    }
+  } finally {
+    await page.context().close()
+  }
+}
 
 /** A new browser context signed in as someone, through the simulated provider or the local form. */
 export async function signInAs(browser: Browser, email: string, password: string = E2E_PASSWORD): Promise<Page> {

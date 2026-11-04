@@ -14,7 +14,7 @@ import { EventsTable } from './EventsTable'
 import { ExportMenu } from './ExportMenu'
 import { WarnIcon } from './Icons'
 import { SearchBox } from './SearchBox'
-import { SecretData } from './SecretData'
+import { SecretData, SecretDelete } from './SecretData'
 import { ScrollBox, Table, TR } from './Table'
 import { YamlView } from './YamlView'
 
@@ -163,6 +163,7 @@ export function ObjectPanel({ kind, namespace: ns, name, row, gone, cluster, now
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(390px, 100%), 1fr))', gap: 16, alignItems: 'start' }}>
             <Card title={kind}>
               <Facts items={facts} />
+              {kind === 'Secret' && <SecretDelete namespace={ns} name={name} keys={d.keys?.length ?? 0} onToast={onToast} />}
             </Card>
             {(d.conditions.length > 0 || workload) && (
               <Card title="Conditions">
@@ -190,7 +191,7 @@ export function ObjectPanel({ kind, namespace: ns, name, row, gone, cluster, now
           {d.keys && (
             <Card title={`Keys · ${nWord(d.keys.length, 'key', 'keys')}`} pad={false} label="Keys">
               {kind === 'Secret' ? (
-                <SecretData namespace={ns} name={name} keys={d.keys} onToast={onToast} />
+                <SecretData namespace={ns} name={name} keys={d.keys} resourceVersion={d.resourceVersion} onToast={onToast} />
               ) : d.keys.length === 0 ? (
                 <p style={{ margin: 0, padding: '0 16px 12px', fontSize: 12.5, color: 'var(--fg3)' }}>No data.</p>
               ) : (

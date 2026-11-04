@@ -92,8 +92,41 @@ func TestSessionsAreSharedBetweenReplicas(t *testing.T) {
 		_, ok := b.peek(started.ID)
 		return !ok
 	})
-	if _, ok := b.Get(started.ID); ok {
-		t.Fatal("an ended session still signs in")
+	// Its watch may still bring the create and then the delete: the record
+	// is gone for good once the Secret is, and nothing makes it again.
+	eventually(t, "an ended session still signs in", func() bool {
+		_, ok := b.Get(started.ID)
+		return !ok
+	})
+	if list, err := cs.CoreV1().Secrets("221b").List(context.Background(), metav1.ListOptions{}); err != nil || len(list.Items) != 0 {
+		t.Fatalf("the ended session's Secret: %v %v", list, err)
+	}
+}
+
+// A replica may hold a session's last activity while another ends it: the
+// write that follows must not make the record again, or the sign-out is
+// undone on every replica.
+func TestLateActivityNeverBringsBackAnEndedSession(t *testing.T) {
+	a, b, cs := sharedPair(t, nil)
+	started := a.Start(Session{User: User{Username: "ann", KubeName: "local:ann"}, Method: "local"})
+	held, ok := b.Get(started.ID)
+	if !ok {
+		t.Fatal("the session is unknown on the other replica")
+	}
+	count := func() int {
+		list, err := cs.CoreV1().Secrets("221b").List(context.Background(), metav1.ListOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(list.Items)
+	}
+	if count() != 1 {
+		t.Fatalf("%d Secrets after sign-in", count())
+	}
+	a.Delete(started.ID)
+	b.store(keyOf(started.ID), held, false)
+	if count() != 0 {
+		t.Fatal("a late write made the ended session again")
 	}
 }
 
@@ -149,6 +182,51 @@ func TestLastActivityIsWrittenBackSeldom(t *testing.T) {
 	clock.Add(int64(2 * time.Hour))
 	if b.Alive(sess.ID) {
 		t.Fatal("an idle session is alive")
+	}
+}
+
+// The polls of an open tab count for nothing, but they are what is left to
+// carry the last real activity to the other replicas; with nothing new
+// they write nothing.
+func TestAPollWritesBackActivityThatIsDueAndNothingElse(t *testing.T) {
+	var clock atomic.Int64
+	clock.Store(time.Date(2026, 10, 19, 9, 0, 0, 0, time.UTC).UnixNano())
+	now := func() time.Time { return time.Unix(0, clock.Load()).UTC() }
+	a, b, cs := sharedPair(t, now)
+	var updates atomic.Int32
+	cs.PrependReactor("update", "secrets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		updates.Add(1)
+		return false, nil, nil
+	})
+	sess := a.Start(Session{User: User{Username: "ann"}, Method: "local"})
+	clock.Add(int64(time.Minute))
+	if _, ok := a.Get(sess.ID); !ok { // too soon to be written
+		t.Fatal("the session ended")
+	}
+	seen := now()
+	clock.Add(int64(time.Minute))
+	if _, ok := a.peek(sess.ID); !ok || updates.Load() != 0 {
+		t.Fatalf("a poll within the interval: alive %v, %d writes", ok, updates.Load())
+	}
+	clock.Add(int64(4 * time.Minute))
+	if _, ok := a.peek(sess.ID); !ok || updates.Load() != 1 {
+		t.Fatalf("a poll once it was due: alive %v, %d writes", ok, updates.Load())
+	}
+	eventually(t, "the other replica did not see the activity", func() bool {
+		cur, ok := b.peek(sess.ID)
+		return ok && cur.LastSeen.Equal(seen)
+	})
+	for range 3 {
+		clock.Add(int64(6 * time.Minute))
+		if _, ok := a.peek(sess.ID); !ok {
+			t.Fatal("the session ended")
+		}
+		if _, ok := b.peek(sess.ID); !ok {
+			t.Fatal("the session ended")
+		}
+	}
+	if n := updates.Load(); n != 1 {
+		t.Fatalf("polls with nothing new wrote %d times", n-1)
 	}
 }
 

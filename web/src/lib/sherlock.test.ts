@@ -1,5 +1,6 @@
+import { renderHook } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { alertQuestion, clusterTroubleshootQuestion, parseRef, podQuestion, refTarget, troubleshootQuestion } from './sherlock'
+import { alertQuestion, anyOpen, clusterTroubleshootQuestion, opensHere, parseRef, podQuestion, refTarget, troubleshootQuestion, useAnnounce, type PopMessage } from './sherlock'
 
 describe('sherlock', () => {
   it('reads 221b:// links and says where each object opens', () => {
@@ -27,5 +28,42 @@ describe('sherlock', () => {
     expect(troubleshootQuestion({ kind: 'node', name: 'w1', status: 'NotReady' })).toBe('Troubleshooting report for node w1 (NotReady)')
     expect(troubleshootQuestion({ kind: 'pvc', name: 'data', namespace: 'db', status: '' })).toBe('Troubleshooting report for volume claim db/data')
     expect(clusterTroubleshootQuestion('prod')).toBe('Troubleshooting report for cluster prod: what is wrong now, why, and how to fix it, most severe first')
+  })
+
+  it('opens a link in the main window it is for, and no other', () => {
+    expect(opensHere({ cluster: 'dev', window: 'tab2' }, 'tab2', 'dev')).toBe(true)
+    expect(opensHere({ cluster: 'dev', window: 'tab2' }, 'tab2', 'prod')).toBe(true)
+    expect(opensHere({ cluster: 'dev', window: 'tab2' }, 'tab1', 'prod')).toBe(false)
+    expect(opensHere({ cluster: 'dev', window: 'tab2' }, 'tab1', 'dev')).toBe(false)
+    // The window it followed has closed: nothing is pulled off another cluster.
+    expect(opensHere({ cluster: 'dev', window: '' }, 'tab1', 'dev')).toBe(true)
+    expect(opensHere({ cluster: 'dev', window: '' }, 'tab1', 'prod')).toBe(false)
+  })
+
+  it('counts a window on show as gone after 5 seconds of silence, a hidden one only after minutes', () => {
+    const at = 1_000_000
+    expect(anyOpen({ w: { at, hidden: false } }, at + 4_999)).toBe(true)
+    expect(anyOpen({ w: { at, hidden: false } }, at + 5_000)).toBe(false)
+    // Throttled to a hello a minute, even with one missed.
+    expect(anyOpen({ w: { at, hidden: true } }, at + 120_000)).toBe(true)
+    expect(anyOpen({ w: { at, hidden: true } }, at + 150_000)).toBe(false)
+    expect(anyOpen({}, at)).toBe(false)
+  })
+})
+
+describe('useAnnounce', () => {
+  it('says no hello after its goodbye: a closing page turns hidden after pagehide', async () => {
+    const heard: PopMessage[] = []
+    const other = new BroadcastChannel('221b-sherlock')
+    other.onmessage = (e) => heard.push(e.data as PopMessage)
+    const { unmount } = renderHook(() => useAnnounce('local'))
+    window.dispatchEvent(new Event('pagehide'))
+    document.dispatchEvent(new Event('visibilitychange'))
+    await new Promise((r) => setTimeout(r, 30))
+    unmount()
+    other.close()
+    const types = heard.map((m) => m.type)
+    expect(types).toContain('bye')
+    expect(types.lastIndexOf('hello')).toBeLessThan(types.lastIndexOf('bye'))
   })
 })

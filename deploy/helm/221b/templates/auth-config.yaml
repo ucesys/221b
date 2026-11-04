@@ -1,3 +1,4 @@
+{{- if ne (include "b221.shared" .) "only" }}
 {{- /* The roles' groups, the local groups and the directory, as a file the
 console reads. Nothing secret is in it: the search account's password and
 the setup token reach the console as environment variables from Secrets. */ -}}
@@ -12,3 +13,4 @@ metadata:
 data:
   auth.json: |
     {{- include "b221.authConfig" . | nindent 4 }}
+{{- end }}

@@ -2,6 +2,7 @@
 // Secrets here, one value shown on request where the chart allows it, and
 // the edits, written as the person.
 
+import { useEffect, useState } from 'react'
 import { apiPath } from '../lib/router'
 import { unauthorized } from './auth'
 
@@ -56,7 +57,25 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return data as T
 }
 
-export const fetchSecretsConfig = () => call<SecretsConfig>('GET', apiPath('secrets/config'))
+/** What the person may do with Secrets; given a namespace, reveal says what holds there (SE-03). */
+export const fetchSecretsConfig = (cluster?: string, namespace?: string) => call<SecretsConfig>('GET', apiPath('secrets/config', cluster) + (namespace ? '?namespace=' + encodeURIComponent(namespace) : ''))
+
+/** A cluster's Secrets config: null until it answers, so another cluster's never stands in for it. */
+export function useSecretsConfig(cluster: string): SecretsConfig | null {
+  const [held, setHeld] = useState<{ cluster: string; config: SecretsConfig } | null>(null)
+  useEffect(() => {
+    let live = true
+    fetchSecretsConfig(cluster).then(
+      (config) => live && setHeld({ cluster, config }),
+      () => undefined,
+    )
+    return () => {
+      live = false
+    }
+  }, [cluster])
+  return held?.cluster === cluster ? held.config : null
+}
+
 export const revealSecretValue = (ns: string, name: string, key: string) => call<SecretValue>('GET', apiPath(`secrets/${encodeURIComponent(ns)}/${encodeURIComponent(name)}/value`) + '?key=' + encodeURIComponent(key))
 export const updateSecret = (ns: string, name: string, edit: SecretEdit) => call<void>('PUT', apiPath(`secrets/${encodeURIComponent(ns)}/${encodeURIComponent(name)}`), edit)
 export const createSecret = (ns: string, edit: SecretEdit) => call<void>('POST', apiPath(`secrets/${encodeURIComponent(ns)}`), edit)

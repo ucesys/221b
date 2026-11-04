@@ -2,11 +2,12 @@
 // glance, from GET /api/v1/home, filtered by what the person may see.
 
 import { useEffect, useState } from 'react'
-import { unauthorized } from './auth'
+import { jsonHeaders, unauthorized } from './auth'
 import type { ClusterSummary, Env } from './clusters'
 
 export interface HomeUse {
   /** CPU in millicores, memory in bytes. */
+  capacity?: number
   allocatable: number
   requested: number
   /** What metrics-server reports, over usedNodes nodes. */
@@ -48,7 +49,7 @@ export interface HomeCluster {
 }
 
 export async function fetchHome(): Promise<HomeCluster[]> {
-  const res = await fetch('/api/v1/home', { headers: { Accept: 'application/json' } })
+  const res = await fetch('/api/v1/home', { headers: jsonHeaders(true) })
   if (unauthorized(res)) throw new Error('Your session has ended; sign in again.')
   if (!res.ok) throw new Error(`The console answered ${res.status}.`)
   const body = (await res.json()) as { clusters?: HomeCluster[] }

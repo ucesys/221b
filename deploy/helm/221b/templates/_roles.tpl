@@ -29,6 +29,10 @@ a RoleBinding (two consoles that bind the same group in the same namespace
 render the same name).
 */}}
 {{- define "b221.ownsShared" -}}
+{{- $shared := include "b221.shared" .top -}}
+{{- if and (eq $shared "none") (ne .kind "RoleBinding") -}}
+{{- else if and (eq $shared "only") (eq .kind "RoleBinding") -}}
+{{- else -}}
 {{- $o := lookup "rbac.authorization.k8s.io/v1" .kind (.namespace | default "") .name -}}
 {{- if not $o -}}
 true
@@ -36,6 +40,29 @@ true
 {{- $a := default dict $o.metadata.annotations -}}
 {{- if and (eq (get $a "meta.helm.sh/release-name") .top.Release.Name) (eq (get $a "meta.helm.sh/release-namespace") .top.Release.Namespace) -}}
 true
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Who installs what every console in a cluster shares (rbac.shared): auto,
+none or only. Values kept from an earlier release have none: auto.
+*/}}
+{{- define "b221.shared" -}}
+{{- .Values.rbac.shared | default "auto" -}}
+{{- end -}}
+
+{{/*
+The release that installed the shared roles, when it is another one: renders
+"name in namespace", or nothing. Without a cluster to ask, nothing.
+*/}}
+{{- define "b221.sharedOwner" -}}
+{{- $o := lookup "rbac.authorization.k8s.io/v1" "ClusterRole" "" "221b-super-admin" -}}
+{{- if $o -}}
+{{- $a := default dict $o.metadata.annotations -}}
+{{- if not (and (eq (get $a "meta.helm.sh/release-name") .Release.Name) (eq (get $a "meta.helm.sh/release-namespace") .Release.Namespace)) -}}
+{{- printf "%s in %s" (get $a "meta.helm.sh/release-name") (get $a "meta.helm.sh/release-namespace") -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -78,6 +105,9 @@ name of what is wrong. Renders nothing.
 {{- if not (has $t (list "full" "readOnly")) -}}
 {{- fail (printf "rbac.roles.%s.template must be full or readOnly, not %q" $r (toString $t)) -}}
 {{- end -}}
+{{- end -}}
+{{- if not (has (include "b221.shared" .) (list "auto" "none" "only")) -}}
+{{- fail (printf "rbac.shared must be auto, none or only, not %q" (toString $v.rbac.shared)) -}}
 {{- end -}}
 {{- if not (has $v.rbac.enforce (list "off" "strict")) -}}
 {{- fail (printf "rbac.enforce must be off or strict, not %q" (toString $v.rbac.enforce)) -}}
@@ -196,6 +226,16 @@ name of what is wrong. Renders nothing.
 {{- if not (contains "{username}" $l.userSearch.filter) -}}{{- fail "auth.ldap.userSearch.filter must contain {username}" -}}{{- end -}}
 {{- if not (contains "{dn}" $l.groupSearch.filter) -}}{{- fail "auth.ldap.groupSearch.filter must contain {dn}" -}}{{- end -}}
 {{- if not $lists -}}{{- fail "LDAP sign-in needs auth.ldap.roles: only members of a listed group may sign in" -}}{{- end -}}
+{{- end -}}
+{{- /* The console's namespaces are nobody's to be bound in: its own holds its
+Secrets, and the toolbox's runs at Pod Security privileged. */ -}}
+{{- range $s := (include "b221.bindingSpecs" . | fromJsonArray) -}}
+{{- if eq $s.namespace $.Release.Namespace -}}
+{{- fail (printf "the group %s is bound as %s in %q, the console's own namespace, which holds its Secrets. Name other namespaces for it; a person who must manage the console holds superAdmin." $s.group $s.role $s.namespace) -}}
+{{- end -}}
+{{- if eq $s.namespace (include "b221.toolboxNamespace" $) -}}
+{{- fail (printf "the group %s is bound as %s in %q, the toolbox's namespace, which runs at Pod Security privileged. Name other namespaces for it; a person who must manage the console holds superAdmin." $s.group $s.role $s.namespace) -}}
+{{- end -}}
 {{- end -}}
 {{- /* A namespace named in values must exist; checked on a live cluster only. */ -}}
 {{- if lookup "v1" "Namespace" "" "kube-system" -}}

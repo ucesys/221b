@@ -17,7 +17,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/roles"
 )
 
@@ -77,11 +79,12 @@ func (s *Server) postNamespace(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := cl.CreateNamespace(r.Context(), s.person(r), in.Name, in.Labels); err != nil {
-		s.record(r, ActionNamespaceCreate, in.Name, "outcome=failed")
+		s.recordOn(r, refusedOr(err), ActionNamespaceCreate, in.Name, "")
 		jsonError(w, kubeStatus(err), err.Error())
 		return
 	}
-	s.record(r, ActionNamespaceCreate, in.Name, "labels="+strconv.Itoa(len(in.Labels)))
+	s.recordOn(r, audit.OutcomeOK, ActionNamespaceCreate, in.Name, "labels="+strconv.Itoa(len(in.Labels)))
+	s.expectWrite(r)
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -106,12 +109,37 @@ func (s *Server) mayEditSecrets(r *http.Request) bool {
 	return ok && (sess.Admin || slices.Contains(sess.Roles, roles.Admin) || slices.Contains(sess.Roles, roles.SuperAdmin))
 }
 
+// mayReveal says whether the person may see Secret values in the namespace
+// (SE-03). Rights add up (RB-06), so Admin held in one namespace says nothing
+// of another, where a Viewer may read Secrets all the same: Kubernetes is
+// asked, as the person, for what Admin has in a namespace and Viewer has not,
+// writing Secrets. A SuperAdmin holds their role everywhere, read-only or not;
+// the read itself is made as them.
+func (s *Server) mayReveal(r *http.Request, cl Cluster, ns string) (bool, error) {
+	if s.opts.Auth == nil {
+		return true, nil
+	}
+	if sess, ok := auth.SessionFrom(r.Context()); ok && sess.Admin {
+		return true, nil
+	}
+	p := s.person(r)
+	if p.Nobody() {
+		return false, nil
+	}
+	return cl.CanI(r.Context(), p, "update", "", "secrets", ns)
+}
+
 func (s *Server) getSecretsConfig(w http.ResponseWriter, r *http.Request) {
 	_, cl, ok := s.lookup(w, r)
 	if !ok {
 		return
 	}
-	b, _ := json.Marshal(secretsConfig{Read: cl.SecretsRead(), Reveal: cl.SecretsRead() && s.opts.SecretsReveal, Edit: s.mayEditSecrets(r)})
+	cfg := secretsConfig{Read: cl.SecretsRead(), Reveal: cl.SecretsRead() && s.opts.SecretsReveal, Edit: s.mayEditSecrets(r)}
+	// Given a namespace, Reveal says what holds there.
+	if ns := r.URL.Query().Get("namespace"); ns != "" && cfg.Reveal {
+		cfg.Reveal, _ = s.mayReveal(r, cl, ns)
+	}
+	b, _ := json.Marshal(cfg)
 	writeJSON(w, r, b)
 }
 
@@ -150,13 +178,24 @@ func (s *Server) getSecretValue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.opts.SecretsReveal {
-		s.record(r, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key)+" outcome=denied reason=\"secrets.reveal is off\"")
+		s.recordOn(r, audit.OutcomeDenied, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key)+" reason=\"secrets.reveal is off\"")
 		jsonError(w, http.StatusForbidden, "this console does not show Secret values: whoever installed it can turn on secrets.reveal in the chart's values")
+		return
+	}
+	allowed, err := s.mayReveal(r, cl, ns)
+	if err != nil {
+		s.recordOn(r, audit.OutcomeFailed, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key))
+		jsonError(w, http.StatusBadGateway, "asking Kubernetes what you may see failed: "+err.Error())
+		return
+	}
+	if !allowed {
+		s.recordOn(r, audit.OutcomeDenied, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key)+" reason=\"not an Admin in this namespace\"")
+		jsonError(w, http.StatusForbidden, "only an Admin of "+ns+" or a SuperAdmin sees a Secret's values there")
 		return
 	}
 	sec, err := cl.GetSecret(r.Context(), s.person(r), ns, name)
 	if err != nil {
-		s.record(r, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key)+" outcome=failed")
+		s.recordOn(r, refusedOr(err), ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key))
 		jsonError(w, kubeStatus(err), err.Error())
 		return
 	}
@@ -165,7 +204,7 @@ func (s *Server) getSecretValue(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, "the Secret has no key "+strconv.Quote(key))
 		return
 	}
-	s.record(r, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key)+" bytes="+strconv.Itoa(len(v)))
+	s.recordOn(r, audit.OutcomeOK, ActionSecretReveal, ns+"/"+name, "key="+strconv.Quote(key)+" bytes="+strconv.Itoa(len(v)))
 	out := struct {
 		Key    string `json:"key"`
 		Value  string `json:"value"`
@@ -285,11 +324,12 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 	sec.StringData = nil
 	detail := editDetail(set, in.Remove)
 	if _, err := cl.UpdateSecret(r.Context(), p, sec); err != nil {
-		s.record(r, ActionSecretUpdate, ns+"/"+name, detail+" outcome=failed")
+		s.recordOn(r, refusedOr(err), ActionSecretUpdate, ns+"/"+name, detail)
 		jsonError(w, kubeStatus(err), err.Error())
 		return
 	}
-	s.record(r, ActionSecretUpdate, ns+"/"+name, detail)
+	s.recordOn(r, audit.OutcomeOK, ActionSecretUpdate, ns+"/"+name, detail)
+	s.expectWrite(r)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -320,11 +360,12 @@ func (s *Server) postSecret(w http.ResponseWriter, r *http.Request) {
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: in.Name, Namespace: ns}, Type: typ, Data: set}
 	detail := "type=" + strconv.Quote(string(typ)) + " " + editDetail(set, nil)
 	if _, err := cl.CreateSecret(r.Context(), s.person(r), sec); err != nil {
-		s.record(r, ActionSecretCreate, ns+"/"+in.Name, detail+" outcome=failed")
+		s.recordOn(r, refusedOr(err), ActionSecretCreate, ns+"/"+in.Name, detail)
 		jsonError(w, kubeStatus(err), err.Error())
 		return
 	}
-	s.record(r, ActionSecretCreate, ns+"/"+in.Name, detail)
+	s.recordOn(r, audit.OutcomeOK, ActionSecretCreate, ns+"/"+in.Name, detail)
+	s.expectWrite(r)
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -354,4 +395,24 @@ func kubeStatus(err error) int {
 		}
 	}
 	return http.StatusBadGateway
+}
+
+// expectWrite tells the request's cluster store that the console just
+// wrote there, so the change shows as soon as the watch reports it.
+func (s *Server) expectWrite(r *http.Request) {
+	var st Store = s.opts.Store
+	if s.opts.Clusters != nil {
+		id := r.PathValue("cluster")
+		if id == "" {
+			id = clusters.LocalID
+		}
+		ls, _, ok := s.opts.Clusters.Lookup(id)
+		if !ok || ls == nil {
+			return
+		}
+		st = ls
+	}
+	if e, ok := st.(interface{ ExpectWrite() }); ok {
+		e.ExpectWrite()
+	}
 }

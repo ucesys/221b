@@ -1,11 +1,29 @@
 import { describe, expect, it } from 'vitest'
-import { fixCommand, fleetOf, has, joinCommands, joinNotes, labelValueOf, leaveCommands, leaveNotes, missing, newId, nextColor, ownLabels, parseReq, reqText, withLabel } from './fleets'
-import type { Fleet, FleetRow } from '../api/types'
+import { fixCommand, fleetOf, has, joinCommands, joinNotes, labelValueOf, leaveCommands, leaveNotes, missing, newId, nextColor, ownLabels, parseReq, reservedGroups, reservedLine, reqText, withLabel } from './fleets'
+import type { Fleet, FleetRow, NodeRow } from '../api/types'
+import { row } from '../test/rows'
 
 const fleet = (id: string, color = 0): Fleet => ({ id, name: id, color, labels: [], taints: [] })
 const gpu = { labels: ['pool=gpu'], taints: ['nvidia.com/gpu=true:NoSchedule'] }
 
 describe('fleets', () => {
+  it('says what a fleet keeps from pods, and which nodes differ', () => {
+    const GI = 1024 ** 3
+    const node = (name: string, held: number): NodeRow => {
+      const r = row(name)
+      return { ...r, memory: { ...r.memory, capacity: 64 * GI, allocatable: 64 * GI - held }, cpu: { ...r.cpu, capacity: 8000, allocatable: 8000 } }
+    }
+    const byName = new Map([node('a', 16 * GI), node('b', 16 * GI), node('c', 0)].map((n) => [n.name, n]))
+    expect(reservedLine(reservedGroups(['a', 'b'], byName))).toBe('Reserved 16Gi per node')
+    expect(reservedLine(reservedGroups(['c'], byName))).toBe('Nothing reserved')
+    expect(reservedGroups(['c', 'a', 'b'], byName)).toEqual([
+      { text: '16Gi', nodes: ['a', 'b'] },
+      { text: 'none', nodes: ['c'] },
+    ])
+    expect(reservedLine(reservedGroups(['a', 'c'], byName))).toBe('Reserved differs: 2 settings')
+    expect(reservedLine(reservedGroups(['gone'], byName))).toBe('')
+  })
+
   it('takes a node with every label and taint, and nothing less', () => {
     const taint = { key: 'nvidia.com/gpu', value: 'true', effect: 'NoSchedule' }
     expect(has(gpu, { labels: { pool: 'gpu', zone: 'a' }, taints: [taint] })).toBe(true)

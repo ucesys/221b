@@ -89,7 +89,7 @@ describe('columns and export', () => {
 
   it('hides taints, zone, labels and kubelet until picked', () => {
     expect([...hidden].sort()).toEqual(['kubelet', 'labels', 'taints', 'zone'])
-    expect(visibleColumns(NODE_COLUMNS, hidden, false).map((c) => c.id)).toEqual(['name', 'role', 'status', 'cpu', 'cpuAlloc', 'cpuFree', 'memory', 'memAlloc', 'memFree', 'pods', 'age'])
+    expect(visibleColumns(NODE_COLUMNS, hidden, false).map((c) => c.id)).toEqual(['name', 'role', 'status', 'cpu', 'cpuAlloc', 'cpuFree', 'memory', 'memAlloc', 'memFree', 'pods', 'reserved', 'age'])
   })
 
   it('always shows the first column and drops wide-only ones beside the panel', () => {
@@ -100,13 +100,13 @@ describe('columns and export', () => {
   })
 
   it('sizes the grid from the columns', () => {
-    const { template, minWidth } = gridTemplate(visibleColumns(NODE_COLUMNS, new Set(['role', 'taints', 'zone', 'labels', 'kubelet', 'age', 'memory', 'memAlloc', 'memFree', 'cpu', 'cpuAlloc', 'cpuFree']), false), false)
+    const { template, minWidth } = gridTemplate(visibleColumns(NODE_COLUMNS, new Set(['role', 'taints', 'zone', 'labels', 'kubelet', 'reserved', 'age', 'memory', 'memAlloc', 'memFree', 'cpu', 'cpuAlloc', 'cpuFree']), false), false)
     expect(template).toBe('minmax(180px, 1.4fr) 100px 84px')
     expect(minWidth).toBe(180 + 100 + 84)
   })
 
   it('exports the rows and columns on screen, in screen order', () => {
-    const cols = visibleColumns(NODE_COLUMNS, new Set(['taints', 'kubelet']), false)
+    const cols = visibleColumns(NODE_COLUMNS, new Set(['taints', 'kubelet', 'reserved']), false)
     const shown = sortRows(rows, NODE_COLUMNS, { col: 'cpu', dir: 'desc' }, now)
     const sheet = exportTable(shown, cols, now)
     expect(sheet.head).toEqual([
@@ -136,7 +136,7 @@ describe('columns and export', () => {
   })
 
   it('exports the same columns as JSON, with lists as arrays', () => {
-    const cols = visibleColumns(NODE_COLUMNS, new Set(['cpu', 'cpuAlloc', 'cpuFree', 'memory', 'memAlloc', 'memFree', 'pods', 'zone', 'kubelet', 'age']), false)
+    const cols = visibleColumns(NODE_COLUMNS, new Set(['cpu', 'cpuAlloc', 'cpuFree', 'memory', 'memAlloc', 'memFree', 'pods', 'zone', 'kubelet', 'reserved', 'age']), false)
     const out = exportTable(rows, cols, now).json
     expect(out.length).toBe(4)
     expect(out[0]).toEqual({ Node: 'cp-1', Role: 'Control plane', Status: 'Ready', Taints: ['node-role.kubernetes.io/control-plane:NoSchedule'], Labels: [] })

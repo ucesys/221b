@@ -2,8 +2,9 @@
 // about a release installed from git, and what the Helm tab reads about
 // any release. Changes come back as the Watson card that runs them.
 
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiPath } from '../lib/router'
-import { unauthorized } from './auth'
+import { BACKGROUND, unauthorized } from './auth'
 import type { WatsonItem } from './watson'
 
 export type RefKind = 'branch' | 'tag'
@@ -40,10 +41,22 @@ export interface AppRecord {
   /** How the source rendered differently from what runs when it was set, or why it could not be compared. */
   sourceDiff?: string
   hasToken?: boolean
+  /** The application's own deploy commands: each a redeploy with its own parameters (asked October 30, 2026). */
+  commands?: AppCommand[]
   createdBy?: string
   created: string
   updatedBy?: string
   updated: string
+}
+
+export interface AppCommand {
+  name: string
+  note?: string
+  params: string[]
+  created?: string
+  createdBy?: string
+  updated?: string
+  updatedBy?: string
 }
 
 export type DriftState = 'same' | 'changed' | 'missing' | 'unknown'
@@ -69,6 +82,8 @@ export interface AppDrift {
 }
 
 export interface AppView extends AppRecord {
+  /** This change moved the application to another repository, and the token saved for the old one went with it. */
+  tokenRemoved?: boolean
   drift?: AppDrift
   driftState?: 'in sync' | 'drifted' | 'unknown'
 }
@@ -172,12 +187,12 @@ export class AppsError extends Error {
   }
 }
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, background = false): Promise<T> {
   let res: Response
   try {
     res = await fetch(path, {
       method,
-      headers: body === undefined ? { Accept: 'application/json' } : { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: { ...(body === undefined ? { Accept: 'application/json' } : { 'Content-Type': 'application/json', Accept: 'application/json' }), ...(background ? BACKGROUND : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch {
@@ -192,9 +207,31 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 const app = (cluster: string, ns: string, name: string, rest = '') => apiPath(`apps/${encodeURIComponent(ns)}/${encodeURIComponent(name)}${rest}`, cluster)
 
-export const fetchApps = (cluster: string) => call<AppView[]>('GET', apiPath('apps', cluster))
+export const fetchApps = (cluster: string) => call<AppView[]>('GET', apiPath('apps', cluster), undefined, true)
+
+const NO_APPS: AppView[] = []
+
+/**
+ * A cluster's applications, read again as tick or version changes. Another
+ * cluster's never show: what was held goes as the cluster changes, and an
+ * answer older than the one that landed last is dropped, so a slow read of
+ * the cluster just left cannot replace this one's.
+ */
+export function useApps(cluster: string, tick: number, version: number) {
+  const [held, setHeld] = useState<{ cluster: string; asked: number; apps: AppView[]; error: string }>({ cluster, asked: 0, apps: NO_APPS, error: '' })
+  const asked = useRef(0)
+  useEffect(() => {
+    const n = ++asked.current
+    fetchApps(cluster).then(
+      (apps) => setHeld((h) => (h.asked > n ? h : { cluster, asked: n, apps, error: '' })),
+      (e: unknown) => setHeld((h) => (h.asked > n ? h : { cluster, asked: n, apps: h.cluster === cluster ? h.apps : NO_APPS, error: e instanceof Error ? e.message : String(e) })),
+    )
+  }, [cluster, tick, version])
+  const setApps = useCallback((change: (apps: AppView[]) => AppView[]) => setHeld((h) => (h.cluster === cluster ? { ...h, apps: change(h.apps) } : h)), [cluster])
+  return held.cluster === cluster ? { apps: held.apps, error: held.error, setApps } : { apps: NO_APPS, error: '', setApps }
+}
 export const fetchApp = (cluster: string, ns: string, name: string) => call<AppView>('GET', app(cluster, ns, name))
-export const fetchDrift = (cluster: string, ns: string, name: string, refresh = false) => call<AppDrift>('GET', app(cluster, ns, name, '/drift') + (refresh ? '?refresh=1' : ''))
+export const fetchDrift = (cluster: string, ns: string, name: string, refresh = false) => call<AppDrift>('GET', app(cluster, ns, name, '/drift') + (refresh ? '?refresh=1' : ''), undefined, !refresh)
 export const fetchAppRefs = (cluster: string, ns: string, name: string) => call<AppRefs>('GET', app(cluster, ns, name, '/refs'))
 /** A kept application's repository looked over at its ref, with the saved token (R2-08). */
 export const fetchAppInspect = (cluster: string, ns: string, name: string) => call<RepoInspection>('GET', app(cluster, ns, name, '/inspect'))
@@ -202,20 +239,43 @@ export const fetchAppInspect = (cluster: string, ns: string, name: string) => ca
 export const inspectRepo = (cluster: string, repo: string, ref: string, refKind: RefKind, token?: string) => call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { repo, ...(ref ? { ref, refKind } : {}), ...(token ? { token } : {}) })
 
 export const fetchRepoRefs = (cluster: string, repo: string, token = '') => call<RepoRefs>('POST', apiPath('apps/refs', cluster), token ? { repo, token } : { repo })
-export const fetchRevisions = (cluster: string, ns: string, name: string) => call<RevisionView[]>('GET', app(cluster, ns, name, '/revisions'))
+export const fetchRevisions = (cluster: string, ns: string, name: string, background = false) => call<RevisionView[]>('GET', app(cluster, ns, name, '/revisions'), undefined, background)
 export const fetchImages = (cluster: string, ns: string, name: string, revision?: number) =>
-  call<{ revision: number; images: AppImage[] }>('GET', app(cluster, ns, name, '/images') + (revision ? `?revision=${revision}` : ''))
+  call<{ revision: number; images: AppImage[] }>('GET', app(cluster, ns, name, '/images') + (revision ? `?revision=${revision}` : ''), undefined, true)
 
-/** Two revisions, or the deployed one against the source (to: 'source', at ref when given). */
-export function fetchDiff(cluster: string, ns: string, name: string, q: { from?: number; to: number | 'source'; ref?: string; refKind?: RefKind }): Promise<AppDiff> {
+/** One side of a diff: a revision, or the source at its saved ref, or at a branch or tag named here. */
+export type DiffSide = { kind: 'revision'; revision: number } | { kind: 'source'; ref?: string; refKind?: RefKind }
+
+/** Two revisions, a revision against the source, or two refs of the source (HA-17; either side a branch or tag since October 30, 2026). */
+export function fetchDiff(cluster: string, ns: string, name: string, q: { from: DiffSide; to: DiffSide }): Promise<AppDiff> {
   const params = new URLSearchParams()
-  if (q.from) params.set('from', String(q.from))
-  params.set('to', String(q.to))
-  if (q.ref) {
-    params.set('ref', q.ref)
-    params.set('refKind', q.refKind ?? 'branch')
+  const put = (which: 'from' | 'to', side: DiffSide) => {
+    if (side.kind === 'revision') {
+      params.set(which, String(side.revision))
+      return
+    }
+    params.set(which, 'source')
+    if (side.ref) {
+      params.set(which === 'from' ? 'fromRef' : 'ref', side.ref)
+      params.set(which === 'from' ? 'fromRefKind' : 'refKind', side.refKind ?? 'branch')
+    }
   }
+  put('from', q.from)
+  put('to', q.to)
   return call<AppDiff>('GET', app(cluster, ns, name, '/diff') + '?' + params.toString())
+}
+
+/** A side as a select's value: "3", "source", "source:branch:main" or "source:tag:v1.2.0"; and back. */
+export function sideValue(s: DiffSide): string {
+  return s.kind === 'revision' ? String(s.revision) : s.ref ? `source:${s.refKind ?? 'branch'}:${s.ref}` : 'source'
+}
+export function parseSide(v: string): DiffSide {
+  if (v === 'source') return { kind: 'source' }
+  if (v.startsWith('source:')) {
+    const [, kind, ...rest] = v.split(':')
+    return { kind: 'source', refKind: kind === 'tag' ? 'tag' : 'branch', ref: rest.join(':') }
+  }
+  return { kind: 'revision', revision: Number(v) }
 }
 
 export const createApp = (cluster: string, input: AppInput) => call<WatsonItem>('POST', apiPath('apps', cluster), input)
@@ -223,6 +283,11 @@ export const createApp = (cluster: string, input: AppInput) => call<WatsonItem>(
 export const updateApp = (cluster: string, ns: string, name: string, input: AppInput) => call<AppView | WatsonItem>('PUT', app(cluster, ns, name), input)
 export const upgradeApp = (cluster: string, ns: string, name: string, input: AppInput = {}) => call<WatsonItem>('POST', app(cluster, ns, name, '/upgrade'), input)
 export const uninstallApp = (cluster: string, ns: string, name: string, keepHistory = false) => call<WatsonItem>('DELETE', app(cluster, ns, name) + (keepHistory ? '?keepHistory=1' : ''))
+/** Adds a command, or changes the one named (a new name renames it); the answer is the record. */
+export const saveCommand = (cluster: string, ns: string, name: string, command: string, input: { name?: string; note?: string; params: string[] }) => call<AppView>('PUT', app(cluster, ns, name, '/commands/' + encodeURIComponent(command)), input)
+export const deleteCommand = (cluster: string, ns: string, name: string, command: string) => call<AppView>('DELETE', app(cluster, ns, name, '/commands/' + encodeURIComponent(command)))
+/** Redeploys with the command's parameters: the answer is the Watson card. */
+export const runCommand = (cluster: string, ns: string, name: string, command: string, install = false) => call<WatsonItem>('POST', app(cluster, ns, name, '/commands/' + encodeURIComponent(command) + '/run') + (install ? '?install=1' : ''))
 export const forgetApp = (cluster: string, ns: string, name: string) => call<void>('DELETE', app(cluster, ns, name) + '?record=1')
 
 /** The source as the table shows it: github.com/org/app/charts/app @ v1.2.0. */

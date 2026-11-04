@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/validation/path"
 	"sigs.k8s.io/yaml"
@@ -123,7 +124,9 @@ func hideSecretData(obj map[string]any) {
 	for k, v := range raw {
 		annotations[k], _ = v.(string)
 	}
-	hidden := HideSecretValues(annotations, secretValues(data, stringData))
+	typ, _ := obj["type"].(string)
+	namespace, _ := meta["namespace"].(string)
+	hidden := HideSecretValues(annotations, secretValues(valuesOf(corev1.SecretType(typ), namespace, data), stringData))
 	for k, v := range hidden {
 		raw[k] = v
 	}

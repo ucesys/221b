@@ -2,6 +2,7 @@ package apps_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/ucesys/221b/server/internal/apps"
+	chart "helm.sh/helm/v4/pkg/chart/v2"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -386,5 +388,90 @@ func TestComposeLaysTheValuesInOrder(t *testing.T) {
 	rec.ValuesFile = "../values-prod.yaml"
 	if _, _, err = apps.Compose(co, src, rec, nil); err == nil {
 		t.Error("a file outside the chart's directory was read")
+	}
+}
+
+// A dependency counts as missing when it is not vendored and the values
+// it deploys with leave it on, as Helm decides that.
+func TestCheckDependenciesAsksHelmWhichAreEnabled(t *testing.T) {
+	db := func(d chart.Dependency) *chart.Dependency {
+		d.Name, d.Version = "postgresql", "15.x.x"
+		return &d
+	}
+	on := map[string]any{"postgresql": map[string]any{"enabled": true}}
+	off := map[string]any{"postgresql": map[string]any{"enabled": false}}
+	cond := chart.Dependency{Condition: "postgresql.enabled"}
+	for _, tc := range []struct {
+		name         string
+		dep          *chart.Dependency
+		values, vals map[string]any
+		refused      string
+	}{
+		{"no condition", db(chart.Dependency{}), nil, nil, "postgresql"},
+		{"on in the chart", db(cond), on, nil, "postgresql"},
+		{"off in the chart", db(cond), off, nil, ""},
+		{"off in the chart, on for this deploy", db(cond), off, on, "postgresql"},
+		{"on in the chart, off for this deploy", db(cond), on, off, ""},
+		{"a condition nothing sets", db(cond), nil, nil, "postgresql"},
+		{"off by a tag", db(chart.Dependency{Tags: []string{"db"}}), map[string]any{"tags": map[string]any{"db": false}}, nil, ""},
+		{"under an alias", db(chart.Dependency{Alias: "main", Condition: "main.enabled"}), map[string]any{"main": map[string]any{"enabled": true}}, nil, "main"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ch := &chart.Chart{Metadata: &chart.Metadata{Name: "web", Version: "1.0.0", APIVersion: "v2", Dependencies: []*chart.Dependency{tc.dep}}, Values: tc.values}
+			name := tc.dep.Name
+			err := apps.CheckDependencies(ch, tc.vals)
+			switch {
+			case tc.refused == "" && err != nil:
+				t.Fatal(err)
+			case tc.refused != "" && (err == nil || !strings.Contains(err.Error(), tc.refused) || !strings.Contains(err.Error(), "does not vendor")):
+				t.Fatalf("got %v", err)
+			}
+			if len(ch.Metadata.Dependencies) != 1 || tc.dep.Name != name {
+				t.Fatalf("the chart changed: %+v", ch.Metadata.Dependencies)
+			}
+		})
+	}
+	sub := &chart.Chart{Metadata: &chart.Metadata{Name: "postgresql", Version: "15.1.0", APIVersion: "v2"}}
+	ch := &chart.Chart{Metadata: &chart.Metadata{Name: "web", Version: "1.0.0", APIVersion: "v2", Dependencies: []*chart.Dependency{db(cond)}}, Values: on}
+	ch.AddDependency(sub)
+	if err := apps.CheckDependencies(ch, nil); err != nil {
+		t.Fatalf("a vendored dependency: %v", err)
+	}
+}
+
+// A record from Get is saved only over what Get read: two saves that
+// started from the same copy do not silently lose one.
+func TestASaveHoldsToTheRecordItRead(t *testing.T) {
+	store := apps.NewMemoryStore()
+	ctx := context.Background()
+	rec := apps.Record{Cluster: "c", Namespace: "web", Name: "shop"}
+	if err := store.Save(ctx, rec, nil); err != nil {
+		t.Fatal(err)
+	}
+	mine, _, _ := store.Get(ctx, "c", "web", "shop")
+	theirs, _, _ := store.Get(ctx, "c", "web", "shop")
+	theirs.Values = "theirs: true\n"
+	if err := store.Save(ctx, theirs, nil); err != nil {
+		t.Fatal(err)
+	}
+	mine.Values = "mine: true\n"
+	if err := store.Save(ctx, mine, nil); !errors.Is(err, apps.ErrConflict) {
+		t.Fatalf("a stale save: %v", err)
+	}
+	if got, _, _ := store.Get(ctx, "c", "web", "shop"); got.Values != "theirs: true\n" {
+		t.Fatalf("got %q", got.Values)
+	}
+	// One with no version, a restored backup, is a plain save.
+	rec.Values = "restored: true\n"
+	if err := store.Save(ctx, rec, nil); err != nil {
+		t.Fatal(err)
+	}
+	// One read before the record went does not bring it back.
+	stale, _, _ := store.Get(ctx, "c", "web", "shop")
+	if err := store.Delete(ctx, "c", "web", "shop"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx, stale, nil); !errors.Is(err, apps.ErrConflict) {
+		t.Fatalf("a save of a deleted record: %v", err)
 	}
 }

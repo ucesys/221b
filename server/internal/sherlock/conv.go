@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/scrub"
 )
 
 // Toolbox is the read-only tools for one person in one cluster.
@@ -42,9 +43,13 @@ type Step struct {
 
 // Msg is one message of a conversation as the browser shows it.
 type Msg struct {
-	ID     int    `json:"id"`
-	Role   string `json:"role"` // user or sherlock
-	Text   string `json:"text"`
+	ID   int    `json:"id"`
+	Role string `json:"role"` // user or sherlock
+	Text string `json:"text"`
+	// Note is what the model wrote before reading the cluster once more:
+	// shown while the next round runs, never part of the answer, gone
+	// when the answer is done (asked October 30, 2026).
+	Note   string `json:"note,omitempty"`
 	Steps  []Step `json:"steps,omitempty"`
 	Refs   []Ref  `json:"refs,omitempty"`
 	Status string `json:"status,omitempty"` // thinking, answering, done, stopped, failed
@@ -149,7 +154,8 @@ type Settings struct {
 	Model string
 	Caps  Caps
 	// PriceIn and PriceOut, when set, price the model in US dollars per
-	// million tokens; otherwise the listed price, or the highest.
+	// million tokens; otherwise the listed price, or the highest. With
+	// only one set, the other counts at the highest listed price.
 	PriceIn, PriceOut float64
 }
 
@@ -157,7 +163,14 @@ type Settings struct {
 func (s Settings) Price() Model {
 	m, _ := ModelOf(s.Model)
 	if s.PriceIn > 0 || s.PriceOut > 0 {
+		dear := dearest()
 		m.In, m.Out, m.LongAbove = s.PriceIn, s.PriceOut, 0
+		if m.In <= 0 {
+			m.In = dear.In
+		}
+		if m.Out <= 0 {
+			m.Out = dear.Out
+		}
 	}
 	return m
 }
@@ -169,9 +182,12 @@ type Options struct {
 	Settings func() Settings
 	// Secrets are values never to send, such as the API key itself.
 	Secrets func() []string
-	Audit   *audit.Log
-	Now     func() time.Time
-	Logger  *slog.Logger
+	// CommandOK says whether Watson would run a command line; nil checks
+	// none. An answer's shell blocks are kept to what it runs (FixBlocks).
+	CommandOK func(line string) error
+	Audit     *audit.Log
+	Now       func() time.Time
+	Logger    *slog.Logger
 	// MaxRounds bounds the tool rounds of one answer.
 	MaxRounds int
 	// MaxTokens bounds one reply, its thinking included.
@@ -197,6 +213,8 @@ type Service struct {
 	// running counts answers in progress, for /metrics.
 	running int
 	wg      sync.WaitGroup
+	// noUsage names the providers and models seen to report no usage.
+	noUsage map[string]bool
 }
 
 // New returns the service.
@@ -234,7 +252,33 @@ func New(o Options) *Service {
 	if o.Ledger == nil {
 		o.Ledger = NewLedger(nil, o.Now, o.Logger)
 	}
-	return &Service{opts: o, convs: map[Key]*Conversation{}}
+	return &Service{opts: o, convs: map[Key]*Conversation{}, noUsage: map[string]bool{}}
+}
+
+// noteNoUsage warns, once for each provider and model, of answers whose
+// spend can only be estimated.
+func (s *Service) noteNoUsage(model string) {
+	who := s.opts.Client.provider().Name() + " with " + model
+	s.mu.Lock()
+	seen := s.noUsage[who]
+	s.noUsage[who] = true
+	s.mu.Unlock()
+	if !seen {
+		s.opts.Logger.Warn("the model's API reports no token use; Sherlock's spend is estimated, at about 4 characters a token", "provider", who)
+	}
+}
+
+// NoUsage names the providers and models that have reported no usage since
+// the console started, whose spend is an estimate.
+func (s *Service) NoUsage() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.noUsage))
+	for who := range s.noUsage {
+		out = append(out, who)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Ledger is the spend.
@@ -377,6 +421,38 @@ func (s *Service) Ask(q Question) (*Conversation, error) {
 	return c, nil
 }
 
+// Complete asks the model one thing, with no conversation and no tools:
+// writing or weighing a script. The text is scrubbed first, it counts
+// against the spending caps, and it is audited as a question is.
+func (s *Service) Complete(ctx context.Context, who audit.Who, cluster, label, system, text string) (string, error) {
+	set := s.opts.Settings()
+	q := Question{Text: label, Cluster: cluster, Who: who}
+	if err := set.Caps.Check(s.opts.Ledger.Now(ctx)); err != nil {
+		s.record(q, "", nil, Usage{}, 0, audit.OutcomeDenied, err.Error())
+		return "", err
+	}
+	req := Request{Model: set.Model, MaxTokens: s.opts.MaxTokens, System: []Block{{Type: "text", Text: system}},
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: scrub.Text(text)}}}}}
+	resp, err := s.opts.Client.Stream(ctx, req, func(Delta) {})
+	cost := set.Price().Cost(resp.Usage)
+	s.opts.Ledger.Add(context.Background(), cost, true)
+	if serr := s.opts.Ledger.Save(context.Background()); serr != nil {
+		s.opts.Logger.Warn("saving the Sherlock spend failed", "err", serr)
+	}
+	if err != nil {
+		s.record(q, set.Model, nil, resp.Usage, cost, audit.OutcomeFailed, err.Error())
+		return "", errors.New(explain(err))
+	}
+	s.record(q, set.Model, nil, resp.Usage, cost, audit.OutcomeOK, "")
+	var b strings.Builder
+	for _, block := range resp.Content {
+		if block.Type == "text" {
+			b.WriteString(block.Text)
+		}
+	}
+	return b.String(), nil
+}
+
 // Stop stops the answer in progress, if any.
 func (s *Service) Stop(k Key) bool {
 	s.mu.Lock()
@@ -411,20 +487,58 @@ func (s *Service) Reset(k Key) {
 	c.mu.Unlock()
 }
 
-// Wait waits for the answers in progress, for tests and shutdown.
+// Wait waits for the answers in progress, for tests.
 func (s *Service) Wait() { s.wg.Wait() }
+
+// Drain waits for the answers in progress until ctx ends, for shutdown.
+// What is still running then is stopped, and has settle more to save its
+// spend and write its audit record (P5-05), which every answer does as it
+// ends.
+func (s *Service) Drain(ctx context.Context, settle time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return
+	case <-ctx.Done():
+	}
+	s.mu.Lock()
+	convs := make([]*Conversation, 0, len(s.convs))
+	for _, c := range s.convs {
+		convs = append(convs, c)
+	}
+	s.mu.Unlock()
+	for _, c := range convs {
+		c.mu.Lock()
+		if c.cancel != nil {
+			c.cancel()
+		}
+		c.mu.Unlock()
+	}
+	t := time.NewTimer(settle)
+	defer t.Stop()
+	select {
+	case <-done:
+	case <-t.C:
+		s.opts.Logger.Warn("answers were still ending when the console stopped")
+	}
+}
 
 // answer runs the rounds of one answer: the model replies, the tools it
 // asks for run, their results go back, until it is done.
 func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Question, set Settings) {
 	model := set.Price()
 	var (
-		total   Usage
-		cost    float64
-		tools   []string
-		outcome = audit.OutcomeOK
-		detail  string
-		ui      uiLog
+		total     Usage
+		cost      float64
+		estimated bool
+		tools     []string
+		outcome   = audit.OutcomeOK
+		detail    string
+		ui        uiLog
 	)
 	var defs []ToolDef
 	if q.Tools != nil {
@@ -446,8 +560,8 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		now := s.opts.Now()
-		text, cited := Cite(ans.Text, c.known)
-		ans.Text, ans.Refs = text, cited
+		text, cited := Cite(FixBlocks(answerOr(ans.Text, ans.Note), s.opts.CommandOK), c.known)
+		ans.Text, ans.Refs, ans.Note = text, cited, ""
 		for i := range ans.Steps {
 			if ans.Steps[i].Status == "running" {
 				ans.Steps[i].Status = "failed"
@@ -468,6 +582,9 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		if u := ui.String(); u != "" {
 			detail = strings.TrimPrefix(detail+"; "+u, "; ")
 		}
+		if estimated {
+			detail = strings.TrimPrefix(detail+"; tokens and cost estimated, not all reported by the model's API", "; ")
+		}
 		s.record(q, set.Model, tools, total, cost, outcome, detail)
 	}()
 
@@ -479,7 +596,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		}
 		if round >= s.opts.MaxRounds {
 			c.mu.Lock()
-			ans.Text = strings.TrimSpace(ans.Text + "\n\nI stopped after reading the cluster " + fmt.Sprint(s.opts.MaxRounds) + " times without reaching an answer. Ask a narrower question, naming the object.")
+			ans.Text = strings.TrimSpace(answerOr(ans.Text, ans.Note) + "\n\nI stopped after reading the cluster " + fmt.Sprint(s.opts.MaxRounds) + " times without reaching an answer. Ask a narrower question, naming the object.")
 			c.mu.Unlock()
 			outcome, detail = audit.OutcomeFailed, "too many tool rounds"
 			finish("done", "")
@@ -488,9 +605,8 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		c.mu.Lock()
 		s.trimLocked(c)
 		req := Request{Model: set.Model, MaxTokens: s.opts.MaxTokens, System: system, Messages: append([]Message(nil), c.history...), Tools: defs}
-		base := ans.Text
 		c.mu.Unlock()
-
+		// Each round's text starts afresh: the answer is the last round's.
 		var roundText strings.Builder
 		resp, err := s.opts.Client.Stream(ctx, req, func(d Delta) {
 			c.mu.Lock()
@@ -498,7 +614,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 			first()
 			if d.Text != "" {
 				roundText.WriteString(d.Text)
-				ans.Text = base + roundText.String()
+				ans.Text, ans.Note = roundText.String(), ""
 				ans.Status = "answering"
 			}
 			c.changedLocked()
@@ -506,6 +622,10 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		used := model.Cost(resp.Usage)
 		total = total.Add(resp.Usage)
 		cost += used
+		estimated = estimated || resp.Estimated
+		if resp.NoUsage {
+			s.noteNoUsage(set.Model)
+		}
 		if used > 0 || round == 0 {
 			s.opts.Ledger.Add(context.Background(), used, round == 0)
 		}
@@ -537,8 +657,11 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 			return
 		}
 		// Text before a tool call is the model thinking aloud: it stays in
-		// the history but not in the answer.
-		ans.Text = base
+		// the history, and on screen as the note until the next round
+		// speaks; never in the answer.
+		if ans.Text != "" {
+			ans.Note, ans.Text = ans.Text, ""
+		}
 		ans.Status = "thinking"
 		start := len(ans.Steps)
 		for _, b := range calls {
@@ -568,7 +691,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 				finish("stopped", "")
 				return
 			}
-			text := s.clip(ScrubKnown(r.Text, s.secrets()))
+			text := s.clip(scrub.Known(r.Text, s.secrets()))
 			results = append(results, Block{Type: "tool_result", ToolUseID: b.ID, Content: text, IsError: r.Error})
 			c.mu.Lock()
 			c.known.Add(r.Refs...)
@@ -702,7 +825,7 @@ func (s *Service) record(q Question, model string, tools []string, u Usage, cost
 			parts = append(parts, t)
 		}
 	}
-	question := Scrub(q.Text)
+	question := scrub.Text(q.Text)
 	if len(question) > 300 {
 		question = question[:300] + "…"
 	}
@@ -717,4 +840,13 @@ func newID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// answerOr is the text of an answer: with no later text, the note that
+// stands on the page is the answer.
+func answerOr(text, note string) string {
+	if strings.TrimSpace(text) == "" {
+		return note
+	}
+	return text
 }

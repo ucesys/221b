@@ -15,6 +15,7 @@ import (
 	"github.com/gorilla/websocket"
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/kube"
@@ -123,6 +124,29 @@ type toolboxView struct {
 	ApproverNames  []string                  `json:"approvers,omitempty"`
 	Values         tb.Config                 `json:"values"`
 	NodeShellPodNS string                    `json:"-"`
+	// SSH is the SSH tools' state (Phase 11): the authority and the
+	// cluster's pairings, by node.
+	SSH *sshView `json:"ssh,omitempty"`
+}
+
+type sshView struct {
+	Enabled     bool                   `json:"enabled"`
+	Port        int                    `json:"port"`
+	LoginUser   string                 `json:"loginUser"`
+	Principal   string                 `json:"principal"`
+	Fingerprint string                 `json:"caFingerprint,omitempty"`
+	Pairings    map[string]pairingView `json:"pairings"`
+}
+
+type pairingView struct {
+	LoginUser string    `json:"loginUser"`
+	Port      int       `json:"port"`
+	Principal string    `json:"principal"`
+	PairedAt  time.Time `json:"pairedAt"`
+	PairedBy  string    `json:"pairedBy,omitempty"`
+	// Stale says the node was paired with an authority that is not this
+	// console's any more.
+	Stale bool `json:"stale,omitempty"`
 }
 
 // namespaceTools is what a person may use in a namespace: "" for a tool
@@ -187,6 +211,23 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 	if v.Transcripts == "" {
 		v.Transcripts = tb.TranscriptsNone
 	}
+	if cfg.SSH.Enabled {
+		sv := &sshView{Enabled: s.opts.SSH != nil, Port: cfg.SSH.Port, LoginUser: cfg.SSH.LoginUser, Pairings: map[string]pairingView{}}
+		if s.opts.SSH != nil {
+			sv.Principal = s.opts.SSH.Principal()
+		}
+		// Only a node's menu reads the pairings.
+		if s.opts.SSH != nil && r.URL.Query().Get("nodes") != "" {
+			sv.Fingerprint = s.opts.SSH.Fingerprint()
+			if list, err := s.opts.SSH.List(r.Context(), c.ID); err == nil {
+				for _, p := range list {
+					// The host keys stay on the server (asked October 30, 2026).
+					sv.Pairings[p.Node] = pairingView{LoginUser: p.LoginUser, Port: p.Port, Principal: p.Principal, PairedAt: p.PairedAt, PairedBy: p.PairedBy, Stale: p.CAFinger != "" && sv.Fingerprint != "" && p.CAFinger != sv.Fingerprint}
+				}
+			}
+		}
+		v.SSH = sv
+	}
 	names := make([]string, 0, len(cfg.Images))
 	for n := range cfg.Images {
 		names = append(names, n)
@@ -239,7 +280,9 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 	sem := make(chan struct{}, 8)
 	for _, ns := range nsList {
 		if nt, ok := s.toolCache.get(key+"\x00"+ns, now); ok {
+			mu.Lock()
 			v.Namespaces[ns] = nt
+			mu.Unlock()
 			continue
 		}
 		wg.Add(1)
@@ -282,8 +325,14 @@ func (s *Server) getToolbox(w http.ResponseWriter, r *http.Request) {
 			} else if ok, _, err := asPerson.Can(ctx, "create", "", "pods", "", cfg.NodeShell.Namespace, ""); err != nil || !ok {
 				why = whyRole
 			}
+			// SSH asks Kubernetes for nothing; its pairings are node commands.
+			whySSH := ""
+			if !who.Admin {
+				whySSH = whySuper
+			}
 			mu.Lock()
 			v.Nodes[tb.ToolNodeShell], v.Nodes[tb.ToolNodeCommand] = why, why
+			v.Nodes[tb.ToolSSHPair], v.Nodes[tb.ToolSSHUnpair], v.Nodes[tb.ToolSSH] = why, why, whySSH
 			mu.Unlock()
 		}()
 	}
@@ -320,8 +369,9 @@ func (s *Server) postSessionCard(w http.ResponseWriter, r *http.Request) {
 	req := in.Request
 	needsTwo := sessions.NeedsTwo(cfg, req.Tool)
 	sw := s.sessionWho(r)
-	if (req.Tool == tb.ToolNodeShell || req.Tool == tb.ToolNodeCommand) && !sw.Admin {
-		jsonError(w, http.StatusForbidden, "Only a SuperAdmin may open a node shell or run a command on a node.")
+	onNode := sessions.OnNodeOrSSH(req.Tool)
+	if onNode && !sw.Admin {
+		jsonError(w, http.StatusForbidden, "Only a SuperAdmin may open a node shell, run a command on a node, or use SSH.")
 		return
 	}
 	// A debug pod that names a ServiceAccount carries that account's token,
@@ -334,7 +384,6 @@ func (s *Server) postSessionCard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A reason is asked for whoever approves, and for a node on production.
-	onNode := req.Tool == tb.ToolNodeShell || req.Tool == tb.ToolNodeCommand
 	if err := req.Validate(cfg, s.watsonTwoPerson(c) || needsTwo || (onNode && c.Env == clusters.EnvProduction)); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
@@ -438,8 +487,18 @@ func (s *Server) planSession(ctx context.Context, cl watson.Cluster, it watson.I
 	if !ok {
 		return &watson.Plan{Ready: true, DryRun: []watson.Line{{K: "err", T: "the request is not a toolbox request"}}, DryRunExit: 1}
 	}
-	p := s.opts.Sessions.PlanFor(ctx, sessions.Cluster{ID: cl.ID, Name: cl.Name, Config: cl.Config}, req, it.Requester.Person, it.Requester.Name)
+	// With several nodes the first is planned (one dry run); the others
+	// are named as targets, and run the same (one session each).
+	first := req
+	first.Nodes = nil
+	p := s.opts.Sessions.PlanFor(ctx, sessions.Cluster{ID: cl.ID, Name: cl.Name, Config: cl.Config}, first, it.Requester.Person, it.Requester.Name)
 	out := &watson.Plan{Ready: true, Targets: p.Targets, Impact: p.Impact, DryRunExit: p.DryRunExit, DryRunNote: p.DryRunNote, Object: p.Object}
+	if len(req.Nodes) > 0 {
+		for _, n := range req.Nodes {
+			out.Targets = append(out.Targets, "node/"+n)
+		}
+		out.Impact = append(out.Impact, fmt.Sprintf("The same on %d more nodes, one session each: %s.", len(req.Nodes), strings.Join(req.Nodes, ", ")))
+	}
 	for _, l := range p.DryRun {
 		k := "out"
 		if p.DryRunExit != 0 {
@@ -464,11 +523,26 @@ func (s *Server) startSession(cl watson.Cluster, it watson.Item, approver watson
 	if approver.Session == rq.Session {
 		name = ""
 	}
-	sess, err := s.opts.Sessions.Start(sessions.Cluster{ID: cl.ID, Name: cl.Name, Config: cl.Config}, req, owner, name, it.ID)
+	// One session per node, all under this card. The first is the one the
+	// card names: without it the card fails; another that cannot start is
+	// reported on the card, beside the ones that did.
+	scl := sessions.Cluster{ID: cl.ID, Name: cl.Name, Config: cl.Config}
+	each := req.Each()
+	first, err := s.opts.Sessions.Start(scl, each[0], owner, name, it.ID)
 	if err != nil {
 		return "", err
 	}
-	return sess.ID, nil
+	var failed []string
+	for _, one := range each[1:] {
+		if _, err := s.opts.Sessions.Start(scl, one, owner, name, it.ID); err != nil {
+			s.opts.Logger.Warn("a session of the card could not start", "card", it.ID, "node", one.Node, "err", err)
+			failed = append(failed, "the session on "+one.Node+" could not start: "+err.Error())
+		}
+	}
+	if len(failed) > 0 {
+		return first.ID, errors.New(strings.Join(failed, "; "))
+	}
+	return first.ID, nil
 }
 
 // ---------- the sessions ----------
@@ -668,34 +742,40 @@ func (s *Server) postSessionExtend(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getSessionOutput(w http.ResponseWriter, r *http.Request) {
-	ss, _, ok := s.session(w, r)
+	ss, who, ok := s.session(w, r)
 	if !ok {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "session-"+ss.ID+".txt"))
-	w.Write(s.opts.Sessions.Output(ss.ID))
+	w.Write(s.opts.Sessions.ReadOutput(ss.ID, who))
 }
 
 func (s *Server) getSessionTranscript(w http.ResponseWriter, r *http.Request) {
-	ss, _, ok := s.session(w, r)
+	if !s.toolboxReady(w) {
+		return
+	}
+	id := r.PathValue("id")
+	recorded, ok := s.opts.Sessions.Recorded(clusterID(r), id, s.sessionWho(r))
 	if !ok {
+		jsonError(w, http.StatusNotFound, "There is no such session, or it is not yours to see.")
 		return
 	}
 	cfg := s.opts.Sessions.Config()
-	if !ss.Recorded || cfg.TranscriptDir == "" {
+	if !recorded || cfg.TranscriptDir == "" {
 		jsonError(w, http.StatusNotFound, "No transcript was kept of this session.")
 		return
 	}
-	f, err := os.Open(sessions.TranscriptPath(cfg.TranscriptDir, ss.Cluster, ss.ID))
+	f, err := os.Open(sessions.TranscriptPath(cfg.TranscriptDir, clusterID(r), id))
 	if err != nil {
 		jsonError(w, http.StatusNotFound, "The transcript is gone.")
 		return
 	}
 	defer f.Close()
+	s.recordOn(r, audit.OutcomeOK, sessions.ActionTranscript, "session "+id, "")
 	w.Header().Set("Content-Type", "application/x-asciicast")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "session-"+ss.ID+".cast"))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "session-"+id+".cast"))
 	http.ServeContent(w, r, "", time.Time{}, f)
 }
 
@@ -724,6 +804,27 @@ type control struct {
 	Rows uint16 `json:"rows,omitempty"`
 	By   string `json:"by,omitempty"`
 	Note string `json:"note,omitempty"`
+}
+
+// typingCounts is how often typing into a terminal counts as sign-in
+// activity: reading the session on every keystroke would gain nothing
+// against an idle limit of hours.
+const typingCounts = time.Minute
+
+// typing returns what a terminal calls as its owner types: the keystrokes
+// travel on an open connection, so no request counts them (P3-01).
+func (s *Server) typing(sess auth.Session) func() {
+	a, ok := s.opts.Auth.(interface{ Active(auth.Session) })
+	if !ok {
+		return func() {}
+	}
+	var last time.Time
+	return func() {
+		if now := s.opts.Now(); now.Sub(last) >= typingCounts {
+			last = now
+			a.Active(sess)
+		}
+	}
 }
 
 // sessionAttach serves a terminal: its output as binary messages, what the
@@ -768,6 +869,18 @@ func (s *Server) sessionAttach(w http.ResponseWriter, r *http.Request) {
 		b, _ := json.Marshal(control{Type: "ended", By: cur.EndedBy, Note: cur.EndNote})
 		_ = send(websocket.TextMessage, b)
 	}
+	sess, _ := auth.SessionFrom(r.Context())
+	typed := s.typing(sess)
+	// Attach matched the person, not this sign-in, so the sign-in is held
+	// to account here: what is typed is checked as it comes, and the output
+	// stops at the next look.
+	stands := time.NewTicker(s.opts.Heartbeat)
+	defer stands.Stop()
+	signedOut := func() {
+		wmu.Lock()
+		defer wmu.Unlock()
+		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "The sign-in ended"), time.Now().Add(time.Second))
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -776,10 +889,18 @@ func (s *Server) sessionAttach(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
+			if !s.sessionStands(r) {
+				signedOut()
+				return
+			}
 			switch kind {
 			case websocket.BinaryMessage:
-				if err := s.opts.Sessions.Input(ss.ID, v, b); err != nil && !errors.Is(err, sessions.ErrNotYours) {
+				err := s.opts.Sessions.Input(ss.ID, v, b)
+				if err != nil && !errors.Is(err, sessions.ErrNotYours) {
 					return
+				}
+				if err == nil {
+					typed()
 				}
 			case websocket.TextMessage:
 				var c control
@@ -825,6 +946,11 @@ func (s *Server) sessionAttach(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-done:
 			return
+		case <-stands.C:
+			if !s.sessionStands(r) {
+				signedOut()
+				return
+			}
 		case <-ping.C:
 			wmu.Lock()
 			err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second))

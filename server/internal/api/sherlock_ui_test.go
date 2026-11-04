@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/scrub"
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
@@ -291,7 +292,7 @@ func TestSherlockViewIsScrubbed(t *testing.T) {
 	token := "ghp_" + strings.Repeat("Ab3", 12)
 	askWith(t, srv, ops, svc, map[string]any{"question": "What needs attention?", "window": testWindow, "view": `{"tab":"pods","filters":{"q":"` + token + `"}}`})
 	body := string(fake.Requests()[0])
-	if strings.Contains(body, token) || !strings.Contains(body, sherlock.Scrubbed) {
+	if strings.Contains(body, token) || !strings.Contains(body, scrub.Redacted) {
 		t.Fatalf("the token reached the Claude API: %s", body)
 	}
 }

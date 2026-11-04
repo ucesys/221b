@@ -68,8 +68,8 @@ export function AddToGroup({ users, groups, user: userProp, group: groupProp, on
     setBusy(true)
     setError('')
     try {
-      await changeGroups(user.username, { add: [g.name] })
-      onDone(`Added ${user.username} to ${g.name}. It applies within 2 minutes.`)
+      const row = await changeGroups(user.username, { add: [g.name] })
+      onDone(row.held ? row.held : `Added ${user.username} to ${g.name}. It applies within 2 minutes.`)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
       setBusy(false)

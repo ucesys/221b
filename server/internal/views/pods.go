@@ -100,6 +100,8 @@ func BuildPodRow(src Source, p *corev1.Pod, now time.Time) PodRow {
 		if cs.Ready {
 			r.Ready++
 		}
+	}
+	for _, cs := range restartStatuses(p) {
 		r.Restarts += cs.RestartCount
 		if t := cs.LastTerminationState.Terminated; t != nil {
 			if r.LastRestart == nil || t.FinishedAt.Time.After(*r.LastRestart) {
@@ -156,6 +158,42 @@ func releaseOwning(src Source, namespace string, owners []Owner) string {
 	return ""
 }
 
+// initContainer finds an init container in the pod's spec.
+func initContainer(p *corev1.Pod, name string) *corev1.Container {
+	for i := range p.Spec.InitContainers {
+		if p.Spec.InitContainers[i].Name == name {
+			return &p.Spec.InitContainers[i]
+		}
+	}
+	return nil
+}
+
+// restartStatuses lists the containers kubectl's RESTARTS counts. While the
+// pod initialises, those are its init containers up to the one it waits
+// for; after that, its sidecars and its containers, so an init container
+// that needed a few tries no longer counts once it has done its work.
+func restartStatuses(p *corev1.Pod) []corev1.ContainerStatus {
+	var inits, sidecars []corev1.ContainerStatus
+	initializing := false
+	for _, cs := range p.Status.InitContainerStatuses {
+		inits = append(inits, cs)
+		c := initContainer(p, cs.Name)
+		sidecar := c != nil && c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways
+		if sidecar {
+			sidecars = append(sidecars, cs)
+		}
+		if (cs.State.Terminated != nil && cs.State.Terminated.ExitCode == 0) || (sidecar && cs.Started != nil && *cs.Started) {
+			continue
+		}
+		initializing = true
+		break
+	}
+	if c := podCondition(p, corev1.PodInitialized); initializing && (c == nil || c.Status != corev1.ConditionTrue) {
+		return inits
+	}
+	return append(sidecars, p.Status.ContainerStatuses...)
+}
+
 func terminationText(t *corev1.ContainerStateTerminated) string {
 	reason := t.Reason
 	if reason == "" {
@@ -165,6 +203,13 @@ func terminationText(t *corev1.ContainerStateTerminated) string {
 		return fmt.Sprintf("%s, exit %d", reason, t.ExitCode)
 	}
 	return reason
+}
+
+// failedWhole says whether the kubelet failed the pod itself rather than
+// one of its containers (Evicted, OutOfcpu, NodeAffinity): its status says
+// so, and it may have no container statuses at all.
+func failedWhole(p *corev1.Pod) bool {
+	return p.Status.Phase == corev1.PodFailed && p.Status.Reason != ""
 }
 
 // podStatus is kubectl's STATUS column, with a tone and a tip.
@@ -273,6 +318,14 @@ func podStatus(p *corev1.Pod, now time.Time) (status, tone, tip string) {
 		}
 	case "Completed":
 		tone = "muted"
+	}
+	if failedWhole(p) && p.DeletionTimestamp == nil {
+		tone = "err"
+		if p.Status.Message != "" {
+			tip = p.Status.Message
+		} else if tip == "" {
+			tip = "Finished with an error."
+		}
 	}
 	return reason, tone, tip
 }

@@ -37,11 +37,13 @@ export function RevisionTools({ revision }: { revision: number }) {
       const now = anchor?.getBoundingClientRect()
       if (!at || !now || Math.abs(now.top - at.top) > 2 || Math.abs(now.left - at.left) > 2) onClose()
     }
-    document.addEventListener('mousedown', away)
+    // On the way down, before another menu's button stops the event: one
+    // menu at a time.
+    document.addEventListener('mousedown', away, true)
     window.addEventListener('scroll', scroll, true)
     window.addEventListener('resize', onClose)
     return () => {
-      document.removeEventListener('mousedown', away)
+      document.removeEventListener('mousedown', away, true)
       window.removeEventListener('scroll', scroll, true)
       window.removeEventListener('resize', onClose)
     }

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { askSherlock, newSherlockChat, stopSherlock, SherlockError, usd, type SherlockMsg, type SherlockRef, type SherlockState } from '../api/sherlock'
 import { Markdown } from '../lib/markdown'
 import { peekClickHash } from '../lib/peek'
@@ -8,7 +8,7 @@ import { CheckIcon, CopyIcon, CrossIcon, SendIcon, SherlockIcon, WatsonIcon } fr
 import { isCommands } from '../api/watson'
 import { useWatsonApi } from './Watson'
 import { isUndone, onUndone } from '../lib/uiControl'
-import { askContext, askUndo } from '../lib/uiWindow'
+import { askContext, askUndo, followedWindow } from '../lib/uiWindow'
 import { copyText } from '../lib/clipboard'
 
 // ---------- asking from anywhere ----------
@@ -47,7 +47,7 @@ const SUGGESTIONS: [string, string][] = [
   ['Which Helm releases failed, and why?', 'Reads each release’s history'],
 ]
 
-function CodeBlock({ text, lang, open, why }: { text: string; lang: string; open: boolean; why?: string }) {
+function CodeBlock({ text, lang, open, why, draft }: { text: string; lang: string; open: boolean; why?: string; draft?: boolean }) {
   const [copied, setCopied] = useState(false)
   const [sent, setSent] = useState(false)
   const watson = useWatsonApi()
@@ -66,7 +66,7 @@ function CodeBlock({ text, lang, open, why }: { text: string; lang: string; open
       <pre aria-label={shell ? 'Commands' : 'Code'}>{text}</pre>
       {!open && (
         <div>
-          {commands && watson.available && (
+          {commands && watson.available && !draft && (
             <button
               className="rk-btn"
               data-on={sent ? 'false' : 'true'}
@@ -126,8 +126,8 @@ function refLabel(r: SherlockRef): string {
  * out as each change lands, and Undo, which puts the view back as it was
  * before the answer's first change. Neither takes focus.
  */
-function ViewNotice({ m, onToast }: { m: SherlockMsg; onToast: (msg: string) => void }) {
-  const done = useSyncExternalStore(onUndone, () => isUndone(m.id))
+function ViewNotice({ m, cluster, onToast }: { m: SherlockMsg; cluster: string; onToast: (msg: string) => void }) {
+  const done = useSyncExternalStore(onUndone, () => isUndone(cluster, m.id))
   const [busy, setBusy] = useState(false)
   const changes = m.view ?? []
   return (
@@ -147,7 +147,7 @@ function ViewNotice({ m, onToast }: { m: SherlockMsg; onToast: (msg: string) => 
           disabled={busy}
           onClick={async () => {
             setBusy(true)
-            const ok = await askUndo(m.id)
+            const ok = await askUndo(cluster, m.id)
             setBusy(false)
             if (!ok) onToast('That view is not open in any window now, so there is nothing to undo.')
           }}
@@ -159,7 +159,7 @@ function ViewNotice({ m, onToast }: { m: SherlockMsg; onToast: (msg: string) => 
   )
 }
 
-function Answer({ m, link, admin, question, onToast }: { m: SherlockMsg; link: (url: string, label: string) => ReactNode | null; admin: boolean; question?: string; onToast: (msg: string) => void }) {
+function Answer({ m, cluster, link, admin, question, onToast }: { m: SherlockMsg; cluster: string; link: (url: string, label: string) => ReactNode | null; admin: boolean; question?: string; onToast: (msg: string) => void }) {
   const thinking = (m.status === 'thinking' || m.status === 'answering') && !m.text
   const meta = [m.model, m.doneAt ? seconds(m.at, m.doneAt) : '', admin && m.costUSD ? usd(m.costUSD) : ''].filter(Boolean).join(' · ')
   return (
@@ -181,12 +181,17 @@ function Answer({ m, link, admin, question, onToast }: { m: SherlockMsg; link: (
           </span>
         </div>
       )}
+      {!m.text && m.note && (
+        <div className="rk-ans-body" style={{ color: 'var(--fg3)' }} aria-label="What Sherlock said before reading more" data-testid="sherlock-note">
+          <Markdown text={m.note} link={link} code={(text, lang, _open, key) => <CodeBlock key={key} text={text} lang={lang} open={false} draft />} />
+        </div>
+      )}
       {m.text && (
         <div className="rk-ans-body" data-testid="sherlock-text">
           <Markdown text={m.text} link={link} code={(text, lang, open, key) => <CodeBlock key={key} text={text} lang={lang} open={open && m.status !== 'done'} why={question ? `Sherlock proposed this answering “${question}”.` : undefined} />} />
         </div>
       )}
-      {(m.view?.length ?? 0) > 0 && <ViewNotice m={m} onToast={onToast} />}
+      {(m.view?.length ?? 0) > 0 && <ViewNotice m={m} cluster={cluster} onToast={onToast} />}
       {m.status === 'stopped' && (
         <p className="rk-t" data-tone="muted" style={{ fontSize: 12.5 }} data-testid="sherlock-stopped">
           {m.error || 'Stopped.'}
@@ -225,6 +230,9 @@ interface PaneProps {
   /** The Sherlock and Watson switch on narrow screens. */
   switcher?: ReactNode
   onToast: (msg: string) => void
+  /** A question to put in the box. It waits there for the person to send it. */
+  fill?: string
+  onFilled?: () => void
 }
 
 /** The question an answer answers. */
@@ -234,9 +242,58 @@ function questionBefore(msgs: SherlockMsg[], id: number): string | undefined {
   return undefined
 }
 
+// The questions asked from this browser, newest last, for the arrow keys
+// to recall (asked October 30, 2026): kept in the browser, at most fifty.
+const HISTORY_KEY = 'sherlock.history'
+const HISTORY_MAX = 50
+
+export function loadHistory(): string[] {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? '[]')
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').slice(-HISTORY_MAX) : []
+  } catch {
+    return []
+  }
+}
+
+/** Adds a question to the history; the same question again moves to the end. */
+export function remember(list: string[], q: string): string[] {
+  const next = [...list.filter((x) => x !== q), q].slice(-HISTORY_MAX)
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(next))
+  } catch {
+    // A browser without storage recalls nothing after a reload.
+  }
+  return next
+}
+
+/**
+ * What the arrow keys do in the question box: ArrowUp on the first line
+ * recalls the question before the one shown (the draft is kept to come
+ * back to), ArrowDown on the last line the one after, and past the newest
+ * the draft again; elsewhere in a multi-line draft they move the caret.
+ * Returns the text to show, or null to let the key be.
+ */
+export function recall(key: 'ArrowUp' | 'ArrowDown', value: string, caret: number, history: string[], at: { index: number; draft: string }): string | null {
+  if (history.length === 0) return null
+  if (key === 'ArrowUp') {
+    if (value.lastIndexOf('\n', caret - 1) !== -1) return null
+    if (at.index === -1) at.draft = value
+    if (at.index + 1 >= history.length) return history[0]!
+    at.index += 1
+    return history[history.length - 1 - at.index]!
+  }
+  if (value.indexOf('\n', caret) !== -1 || at.index === -1) return null
+  at.index -= 1
+  return at.index === -1 ? at.draft : history[history.length - 1 - at.index]!
+}
+
 /** Sherlock's pane: the conversation and the question box. */
-export function SherlockPane({ cluster, clusterName, state, inWindow, controls, switcher, onToast }: PaneProps) {
-  const [draft, setDraft] = useState('')
+export function SherlockPane({ cluster, clusterName, state, inWindow, controls, switcher, onToast, fill, onFilled }: PaneProps) {
+  const [draft, setDraft] = useState(fill ?? '')
+  const history = useRef<string[]>(loadHistory())
+  const at = useRef({ index: -1, draft: '' })
+  const box = useRef<HTMLTextAreaElement>(null)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const scroller = useRef<HTMLDivElement>(null)
@@ -246,6 +303,20 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
   const msgs = conv?.messages ?? []
   const busy = !!conv?.busy
   const canAsk = !!status?.available && !busy && !sending
+
+  // A question handed over waits in the box; it is the person who asks it.
+  const [filled, setFilled] = useState(fill)
+  if (fill !== filled) {
+    setFilled(fill)
+    if (fill) setDraft(fill)
+  }
+  useEffect(() => {
+    if (!fill) return
+    at.current.index = -1
+    box.current?.focus()
+    onFilled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fill])
 
   // Keep the newest part in view while an answer arrives, unless the
   // reader has scrolled up.
@@ -262,6 +333,8 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
     pinned.current = true
     try {
       await askSherlock(cluster, q, await askContext())
+      history.current = remember(history.current, q)
+      at.current = { index: -1, draft: '' }
       setDraft('')
     } catch (e) {
       setError(e instanceof SherlockError ? e.message : String(e))
@@ -290,7 +363,7 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
           onClick={(e) => {
             if (!inWindow) return
             e.preventDefault()
-            post({ type: 'open', cluster, target: t })
+            post({ type: 'open', cluster, target: t, window: followedWindow() })
           }}
         >
           {label}
@@ -310,7 +383,7 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
           data-cite={url}
           onClick={(e) => {
             e.preventDefault()
-            post({ type: 'open', cluster, target: t })
+            post({ type: 'open', cluster, target: t, window: followedWindow() })
           }}
         >
           {label}
@@ -384,6 +457,10 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
       <div
         className="rk-chat"
         ref={scroller}
+        // Scrollable with the keyboard, as Watson's log is (WCAG 2.1.1).
+        tabIndex={0}
+        role="region"
+        aria-label="Conversation with Sherlock"
         onScroll={(e) => {
           const el = e.currentTarget
           pinned.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 48
@@ -413,7 +490,7 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
                   {m.text}
                 </div>
               ) : (
-                <Answer key={m.id} m={m} link={link} admin={!!status?.admin} question={questionBefore(msgs, m.id)} onToast={onToast} />
+                <Answer key={m.id} m={m} cluster={cluster} link={link} admin={!!status?.admin} question={questionBefore(msgs, m.id)} onToast={onToast} />
               ),
             )}
           </div>
@@ -430,15 +507,28 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
           <label className="rk-field rk-ta" style={{ flex: '1 1 auto' }}>
             <span className="rk-sr">Ask Sherlock about this cluster</span>
             <textarea
+              ref={box}
               rows={2}
-              placeholder="Ask Sherlock — Enter sends, Shift+Enter starts a new line"
+              placeholder="Ask Sherlock — Enter sends, Shift+Enter starts a new line, ↑ recalls an earlier question"
               value={draft}
               maxLength={4000}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                at.current.index = -1
+                setDraft(e.target.value)
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault()
                   void send(draft)
+                  return
+                }
+                if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+                  const el = e.currentTarget
+                  const text = recall(e.key, el.value, e.key === 'ArrowUp' ? el.selectionStart : el.selectionEnd, history.current, at.current)
+                  if (text === null) return
+                  e.preventDefault()
+                  setDraft(text)
+                  requestAnimationFrame(() => box.current?.setSelectionRange(text.length, text.length))
                 }
               }}
               data-testid="sherlock-input"

@@ -400,6 +400,11 @@ func (s statusPrinter) WriteYAML(out io.Writer) error { return output.EncodeYAML
 // shows them only masked, through helm get values.
 func (s statusPrinter) redacted() *release.Release {
 	r := *s.rel
+	if r.Info != nil {
+		info := *r.Info
+		info.Notes = s.notes()
+		r.Info = &info
+	}
 	r.Config = MaskValues(r.Config)
 	// The rendered manifest and hooks can hold Secrets.
 	r.Manifest = "(hidden by 221B: the rendered manifest can hold Secrets)"
@@ -410,6 +415,16 @@ func (s statusPrinter) redacted() *release.Release {
 		r.Chart = &ch
 	}
 	return &r
+}
+
+// notes are the release's rendered notes with its credentials masked, as
+// the Helm tab has them.
+func (s statusPrinter) notes() string {
+	var defaults map[string]any
+	if s.rel.Chart != nil {
+		defaults = s.rel.Chart.Values
+	}
+	return k8s.MaskNotes(s.rel.Info.Notes, s.rel.Config, defaults, s.rel.Manifest)
 }
 
 func (s statusPrinter) WriteTable(out io.Writer) error {
@@ -460,8 +475,8 @@ func (s statusPrinter) WriteTable(out io.Writer) error {
 	if !tests {
 		fmt.Fprintln(out, "TEST SUITE: None")
 	}
-	if rel.Info.Notes != "" {
-		fmt.Fprintf(out, "NOTES:\n%s\n", strings.TrimSpace(rel.Info.Notes))
+	if notes := s.notes(); notes != "" {
+		fmt.Fprintf(out, "NOTES:\n%s\n", strings.TrimSpace(notes))
 	}
 	return nil
 }

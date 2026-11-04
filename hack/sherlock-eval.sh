@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Sherlock's evaluation (P5-06, P6U-19): the simulator with its sample
 # problems and a pod with planted instructions, the
-# console with sign-in off and Sherlock on, and bin/221b-eval asking about
+# console with sign-in off and Sherlock on from its settings, and bin/221b-eval asking about
 # each problem. With ANTHROPIC_API_KEY set it asks the Claude API (the
 # nightly run) and fails below MIN cases found; without, it asks the
 # simulator's fake API, which checks the plumbing and grades nothing.
@@ -38,11 +38,21 @@ bin/221b-sim -nodes 10 -pods 200 -problems -planted -listen "127.0.0.1:$SIM_PORT
 sim=$!
 trap 'kill $sim ${console:-} 2>/dev/null || true' EXIT
 for _ in $(seq 50); do curl -fs "http://127.0.0.1:$SIM_PORT/version" > /dev/null && break; sleep 0.2; done
-SHERLOCK_API_KEY=$key bin/221b -api-server "http://127.0.0.1:$SIM_PORT" -cluster-name eval -listen "127.0.0.1:$PORT" -log-format text -sherlock-api-url "$api" > "$WORK/eval-audit.log" 2> "$WORK/eval-console.log" &
+# Sherlock on, saved in the settings ConfigMap the simulator serves before
+# the console reads it: with sign-in off nobody may change the settings
+# (everyone is a Viewer), so they are there from the start.
+python3 - "$MODEL" "${DAILY_USD:-10}" "${MONTHLY_USD:-100}" > "$WORK/eval-settings.json" <<'PY'
+import json, sys
+model, daily, monthly = sys.argv[1], float(sys.argv[2]), float(sys.argv[3])
+s = {"version": 1, "refreshSeconds": 3, "sherlock": {"clusters": {"local": True}, "model": model, "dailyUSD": daily, "monthlyUSD": monthly}}
+print(json.dumps({"data": {"settings.json": json.dumps(s)}}))
+PY
+curl -fsS -X PATCH -H 'Content-Type: application/merge-patch+json' --data @"$WORK/eval-settings.json" \
+  "http://127.0.0.1:$SIM_PORT/api/v1/namespaces/221b/configmaps/k8s-console-221b" > /dev/null
+SHERLOCK_API_KEY=$key bin/221b -api-server "http://127.0.0.1:$SIM_PORT" -cluster-name eval -listen "127.0.0.1:$PORT" -log-format text -sherlock-api-url "$api" \
+  -settings-configmap 221b/k8s-console-221b > "$WORK/eval-audit.log" 2> "$WORK/eval-console.log" &
 console=$!
 for _ in $(seq 100); do curl -fs "http://127.0.0.1:$PORT/readyz" > /dev/null && break; sleep 0.2; done
-curl -fsS -X PUT -H 'Content-Type: application/json' "http://127.0.0.1:$PORT/api/v1/sherlock/config" \
-  -d "{\"clusters\":{\"local\":true},\"model\":\"$MODEL\",\"dailyUSD\":${DAILY_USD:-10},\"monthlyUSD\":${MONTHLY_USD:-100}}" > /dev/null
 endstep
 
 step "Ask Sherlock about each sample problem"

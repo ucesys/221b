@@ -66,3 +66,14 @@ func (m *Memory) SaveKey(_ context.Context, key string, b []byte, version string
 	m.version++
 	return strconv.Itoa(m.version), nil
 }
+
+// DeleteKey drops a key.
+func (m *Memory) DeleteKey(_ context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.m[key]; ok {
+		delete(m.m, key)
+		m.version++
+	}
+	return nil
+}

@@ -1,3 +1,4 @@
+{{- if ne (include "b221.shared" .) "only" }}
 {{- if .Values.ingress.enabled }}
 {{- if not .Values.ingress.host }}
 {{- fail "Set ingress.host: the name people will open the console at" }}
@@ -38,4 +39,5 @@ spec:
                 name: {{ include "b221.fullname" . }}
                 port:
                   name: http
+{{- end }}
 {{- end }}

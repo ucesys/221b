@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
@@ -57,6 +58,8 @@ const (
 	ActionWatch    = "session.watch"
 	ActionTransfer = "session.transfer"
 	ActionExtend   = "session.extend"
+	// ActionTranscript is a transcript downloaded.
+	ActionTranscript = "session.transcript"
 )
 
 // Who is a person, as sessions need them.
@@ -163,6 +166,9 @@ type Session struct {
 	sizes   chan Size
 	ring    ring
 	viewers map[*Viewer]struct{}
+	// reads are the people shown as watching because they read the output,
+	// until the time runs out.
+	reads   map[string]*time.Timer
 	fwd     Forwarder
 	cast    *transcript
 	lastRev time.Time
@@ -185,6 +191,9 @@ type Options struct {
 	Now    func() time.Time
 	// Backend returns a cluster's backend as a person; nil uses client-go.
 	Backend func(cl Cluster, p kube.Person) (Backend, error)
+	// SSH pairs nodes and opens SSH sessions (Phase 11, ADR-72); without
+	// it the SSH tools fail with a message.
+	SSH SSH
 	// History keeps the records of ended sessions; nil keeps them in
 	// memory.
 	History History
@@ -199,6 +208,9 @@ type Options struct {
 	ViewerWait time.Duration
 	// PodCheck is how often a port forward looks at its pod (TB-13).
 	PodCheck time.Duration
+	// ReadShown is how long the owner's pane says someone read the output
+	// of their live session (TB-55).
+	ReadShown time.Duration
 }
 
 // Sub follows the changes of a cluster's sessions.
@@ -221,6 +233,9 @@ func New(o Options) *Manager {
 	if o.History == nil {
 		o.History = &MemoryHistory{Keep: o.Config.History.Keep}
 	}
+	if o.SSH == nil {
+		o.SSH = noSSH{}
+	}
 	if o.StartWithin <= 0 {
 		o.StartWithin = 90 * time.Second
 	}
@@ -232,6 +247,9 @@ func New(o Options) *Manager {
 	}
 	if o.ViewerWait <= 0 {
 		o.ViewerWait = 250 * time.Millisecond
+	}
+	if o.ReadShown <= 0 {
+		o.ReadShown = 30 * time.Second
 	}
 	if o.PodCheck <= 0 {
 		o.PodCheck = 5 * time.Second
@@ -289,6 +307,9 @@ func (m *Manager) record(action string, s *Session, who Who, outcome, detail str
 		return
 	}
 	d := fmt.Sprintf("session=%s tool=%s", s.ID, s.Req.Tool)
+	if s.Card != "" {
+		d += " card=" + s.Card
+	}
 	if detail != "" {
 		d += " " + detail
 	}
@@ -411,7 +432,7 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 			}
 			copied = p.Labels
 		}
-		job, notes, err := DebugJob(m.opts.Config, s.ID, s.Owner.Name, r, level, copied, s.limit)
+		job, notes, err := DebugJob(m.opts.Config, s.ID, s.Owner.Name, r, level, copied, m.deadline(s.limit, s.Approver))
 		if err != nil {
 			fail(err)
 			return
@@ -419,11 +440,9 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 		for _, n := range notes {
 			m.note(s, n)
 		}
-		if err := b.CreateJob(ctx, job, false); err != nil {
-			fail(err)
+		if !m.made(ctx, s, Created{Kind: "Job", Namespace: job.Namespace, Name: job.Name}, b.CreateJob(ctx, job, false)) {
 			return
 		}
-		m.created(s, Created{Kind: "Job", Namespace: job.Namespace, Name: job.Name})
 		pod, err := waitRunning(ctx, func(c context.Context) (*corev1.Pod, error) { return b.JobPod(c, r.Namespace, s.ID) }, "debug", m.opts.StartWithin)
 		if err != nil {
 			fail(err)
@@ -431,17 +450,56 @@ func (m *Manager) run(ctx context.Context, s *Session) {
 		}
 		m.located(s, pod, "debug")
 		m.terminal(ctx, s, ShellCommand("auto"))
-	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand:
-		pod, err := NodePod(m.opts.Config, s.ID, s.Owner.Name, r, s.limit)
+	case toolbox.ToolSSH:
+		term, note, err := m.opts.SSH.Dial(ctx, s.Cluster, r.Node, s.Owner, s.ID)
 		if err != nil {
 			fail(err)
 			return
 		}
-		if err := b.CreatePod(ctx, pod, false); err != nil {
+		m.sshTerminal(ctx, s, term, note)
+	case toolbox.ToolSSHPair, toolbox.ToolSSHUnpair:
+		script, err := m.opts.SSH.Script(r)
+		if err != nil {
 			fail(err)
 			return
 		}
-		m.created(s, Created{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name})
+		pod, err := NodePod(m.opts.Config, s.ID, s.Owner.Name, r, m.deadline(s.limit, s.Approver))
+		if err != nil {
+			fail(err)
+			return
+		}
+		if !m.made(ctx, s, Created{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, b.CreatePod(ctx, pod, false)) {
+			return
+		}
+		running, err := waitRunning(ctx, func(c context.Context) (*corev1.Pod, error) { return b.Pod(c, pod.Namespace, pod.Name) }, "node", m.opts.StartWithin)
+		if err != nil {
+			fail(err)
+			return
+		}
+		m.located(s, running, "node")
+		// The pairing is recorded before the session ends, so the menu
+		// that opens on "ended" sees it (end deletes the pod first, which
+		// takes seconds).
+		m.commandThen(ctx, s, NodeCommand(script), func(code int, out string) {
+			if code != 0 {
+				return
+			}
+			dctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := m.opts.SSH.Done(dctx, s.Cluster, r, out, s.Owner.Name); err != nil {
+				m.opts.Logger.Warn("the SSH pairing ran but could not be recorded", "session", s.ID, "node", r.Node, "err", err)
+				m.note(s, "The command ran, but the pairing could not be recorded: "+err.Error())
+			}
+		})
+	case toolbox.ToolNodeShell, toolbox.ToolNodeCommand:
+		pod, err := NodePod(m.opts.Config, s.ID, s.Owner.Name, r, m.deadline(s.limit, s.Approver))
+		if err != nil {
+			fail(err)
+			return
+		}
+		if !m.made(ctx, s, Created{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}, b.CreatePod(ctx, pod, false)) {
+			return
+		}
 		running, err := waitRunning(ctx, func(c context.Context) (*corev1.Pod, error) { return b.Pod(c, pod.Namespace, pod.Name) }, "node", m.opts.StartWithin)
 		if err != nil {
 			fail(err)
@@ -490,11 +548,52 @@ func (m *Manager) podGone(ctx context.Context, s *Session) string {
 	return ""
 }
 
-func (m *Manager) created(s *Session, c Created) {
+// made keeps what a create call made, to remove at the session's end, and
+// says whether the session goes on. A session that ended during the call
+// has taken its list already, so the object goes now; and a call cut short
+// by the end may have reached the API server all the same, so the known
+// name goes too.
+func (m *Manager) made(ctx context.Context, s *Session, c Created, err error) bool {
+	if err != nil {
+		if ctx.Err() != nil {
+			m.removeLate(s, c)
+		}
+		m.end(s, EndFailed, statusMessage(err), Who{})
+		return false
+	}
 	m.mu.Lock()
-	s.Objects = append(s.Objects, c)
-	m.changedLocked(s)
+	ended := s.State == StateEnded
+	if !ended {
+		s.Objects = append(s.Objects, c)
+		m.changedLocked(s)
+	}
 	m.mu.Unlock()
+	if ended {
+		m.removeLate(s, c)
+	}
+	return !ended
+}
+
+// remove deletes what a session made, as the person who made it (TB-29,
+// TB-31).
+func (m *Manager) remove(ctx context.Context, s *Session, o Created) {
+	var err error
+	switch o.Kind {
+	case "Job":
+		err = s.backend.DeleteJob(ctx, o.Namespace, o.Name)
+	case "Pod":
+		err = s.backend.DeletePod(ctx, o.Namespace, o.Name)
+	}
+	if err != nil {
+		m.opts.Logger.Warn("could not remove what a session made; its deadline will", "session", s.ID, "kind", o.Kind, "name", o.Namespace+"/"+o.Name, "err", err)
+	}
+}
+
+// removeLate removes what appeared after the session's end took its list.
+func (m *Manager) removeLate(s *Session, o Created) {
+	ctx, cancel := context.WithTimeout(context.Background(), removeWithin)
+	defer cancel()
+	m.remove(ctx, s, o)
 }
 
 func (m *Manager) note(s *Session, n string) {
@@ -502,6 +601,18 @@ func (m *Manager) note(s *Session, n string) {
 	s.Notes = append(s.Notes, n)
 	m.changedLocked(s)
 	m.mu.Unlock()
+}
+
+// deadline is the activeDeadlineSeconds of a session's pod, which cannot
+// be raised once the pod exists: the most Extend may reach (MaxEnds in
+// live), and the time the session may take to start, since its limit
+// counts from then. The console ends the session at its limit; the
+// deadline is what stops the pod should the console not.
+func (m *Manager) deadline(limit time.Duration, approver string) time.Duration {
+	if approver == "" {
+		limit = m.opts.Config.MaxDuration.D()
+	}
+	return limit + m.opts.StartWithin
 }
 
 // live marks a session started: its hard limit counts from now.
@@ -563,13 +674,50 @@ func (m *Manager) terminal(ctx context.Context, s *Session, cmd []string) {
 	}
 }
 
+// sshTerminal runs an SSH shell to a node until it exits or the session
+// ends (Phase 11): as terminal does, with no pod to watch.
+func (m *Manager) sshTerminal(ctx context.Context, s *Session, term Term, note string) {
+	pr, pw := io.Pipe()
+	sizes := make(chan Size, 4)
+	m.mu.Lock()
+	s.stdin, s.sizes = pw, sizes
+	m.mu.Unlock()
+	if !m.live(s) {
+		term.Close()
+		return
+	}
+	if note != "" {
+		m.note(s, note)
+	}
+	out := &termWriter{m: m, s: s}
+	err := term.Run(ctx, pr, out, sizes)
+	if ctx.Err() != nil {
+		return
+	}
+	if err != nil {
+		m.end(s, EndFailed, statusMessage(err), Who{})
+		return
+	}
+	m.end(s, EndFinished, "The shell exited.", Who{})
+}
+
 // command runs one command and keeps its output (TB-16, TB-33).
 func (m *Manager) command(ctx context.Context, s *Session, cmd []string) {
+	m.commandThen(ctx, s, cmd, nil)
+}
+
+// commandThen is command with a step between the command's end and the
+// session's: then sees the exit code and the output.
+func (m *Manager) commandThen(ctx context.Context, s *Session, cmd []string, then func(code int, out string)) {
 	if !m.live(s) {
 		return
 	}
 	w := &limitWriter{m: m, s: s, max: m.opts.MaxOutput}
-	err := s.backend.Exec(ctx, s.Ns, s.Pod, s.Container, cmd, false, nil, w, w, nil)
+	out := newHiding(w, []byte(HostKeyMark))
+	errs := out.twin()
+	err := s.backend.Exec(ctx, s.Ns, s.Pod, s.Container, cmd, false, nil, out, errs, nil)
+	out.flush()
+	errs.flush()
 	code := 0
 	note := "finished"
 	if err != nil {
@@ -588,7 +736,11 @@ func (m *Manager) command(ctx context.Context, s *Session, cmd []string) {
 	}
 	m.mu.Lock()
 	s.Exit = &code
+	shown := s.ring.String()
 	m.mu.Unlock()
+	if then != nil {
+		then(code, shown+out.Hidden())
+	}
 	if code == 0 {
 		m.end(s, EndFinished, "exit 0", Who{})
 	} else if code == -1 {
@@ -660,6 +812,9 @@ func (m *Manager) End(id string, who Who, reason string) (*Session, error) {
 	return s, nil
 }
 
+// removeWithin bounds removing what a session made.
+const removeWithin = 20 * time.Second
+
 // end ends a session once: it stops its streams, removes what it made,
 // and keeps the record.
 func (m *Manager) end(s *Session, by, note string, who Who) {
@@ -692,20 +847,10 @@ func (m *Manager) end(s *Session, by, note string, who Who) {
 	if cast != nil {
 		cast.close()
 	}
-	// What the session made goes as the person who made it (TB-29, TB-31).
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), removeWithin)
 	defer cancel()
 	for _, o := range objects {
-		var err error
-		switch o.Kind {
-		case "Job":
-			err = s.backend.DeleteJob(ctx, o.Namespace, o.Name)
-		case "Pod":
-			err = s.backend.DeletePod(ctx, o.Namespace, o.Name)
-		}
-		if err != nil {
-			m.opts.Logger.Warn("could not remove what a session made; its deadline will", "session", s.ID, "kind", o.Kind, "name", o.Namespace+"/"+o.Name, "err", err)
-		}
+		m.remove(ctx, s, o)
 	}
 	actor := s.Owner
 	if who.Name != "" {
@@ -719,21 +864,24 @@ func (m *Manager) end(s *Session, by, note string, who Who) {
 	if note != "" {
 		detail += fmt.Sprintf(" note=%q", note)
 	}
-	if s.Exit != nil {
-		detail += fmt.Sprintf(" exit=%d", *s.Exit)
+	// The stream may not have stopped yet: what it writes is read under
+	// the lock.
+	m.mu.Lock()
+	exit, out, forward, rec := s.Exit, s.ring.String(), s.Forward, recordOf(s)
+	m.mu.Unlock()
+	if exit != nil {
+		detail += fmt.Sprintf(" exit=%d", *exit)
 	}
-	if s.Req.Tool == toolbox.ToolCommand || s.Req.Tool == toolbox.ToolNodeCommand {
-		out := s.ring.String()
-		if len(out) > 16<<10 {
-			out = out[:16<<10] + "…"
-		}
-		detail += fmt.Sprintf(" command=%q output=%q", s.Req.Command, out)
+	if s.Req.Tool == toolbox.ToolCommand || s.Req.Tool == toolbox.ToolNodeCommand || s.Req.Tool == toolbox.ToolSSHPair || s.Req.Tool == toolbox.ToolSSHUnpair {
+		// What a command prints can be anything, a Secret's value included,
+		// so the record says only how much there was.
+		detail += fmt.Sprintf(" command=%q output_bytes=%d", s.Req.Command, len(out))
 	}
 	if s.Req.Tool == toolbox.ToolForward {
-		detail += fmt.Sprintf(" connections=%d bytes_in=%d bytes_out=%d", s.Forward.Total, s.Forward.BytesIn, s.Forward.BytesOut)
+		detail += fmt.Sprintf(" connections=%d bytes_in=%d bytes_out=%d", forward.Total, forward.BytesIn, forward.BytesOut)
 	}
 	m.record(ActionEnd, s, actor, outcome, detail)
-	m.opts.History.Add(recordOf(s))
+	m.opts.History.Add(rec)
 }
 
 // ---------- terminal plumbing ----------
@@ -835,6 +983,71 @@ func without(names []string, name string) []string {
 }
 
 // limitWriter keeps a command's output up to a limit.
+// HostKeyMark starts the lines of a pairing's output that carry a node's
+// host keys: the server keeps them, and they stay off the page, the
+// transcript and the audit log (asked October 30, 2026).
+const HostKeyMark = "221B-HOSTKEY "
+
+// hidingWriter passes output on a line at a time and keeps the lines that
+// start with mark, which arrive in any size of chunk, for itself. The
+// output and the errors of a command each have one, holding their own
+// line; what they pass on and keep is shared.
+type hidingWriter struct {
+	*hidingShared
+	line []byte
+}
+
+type hidingShared struct {
+	mu     sync.Mutex
+	w      io.Writer
+	mark   []byte
+	hidden strings.Builder
+}
+
+func newHiding(w io.Writer, mark []byte) *hidingWriter {
+	return &hidingWriter{hidingShared: &hidingShared{w: w, mark: mark}}
+}
+
+// twin is the writer for the other stream.
+func (h *hidingWriter) twin() *hidingWriter { return &hidingWriter{hidingShared: h.hidingShared} }
+
+// Hidden is the lines kept back.
+func (h *hidingWriter) Hidden() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.hidden.String()
+}
+
+func (h *hidingWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
+		if i < 0 {
+			h.line = append(h.line, p...)
+			break
+		}
+		h.line = append(h.line, p[:i+1]...)
+		p = p[i+1:]
+		h.flush()
+	}
+	return n, nil
+}
+
+// flush ends the line in hand, also at the end of the output.
+func (h *hidingWriter) flush() {
+	if len(h.line) == 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if bytes.HasPrefix(h.line, h.mark) {
+		h.hidden.Write(h.line)
+	} else {
+		h.w.Write(h.line)
+	}
+	h.line = h.line[:0]
+}
+
 type limitWriter struct {
 	m   *Manager
 	s   *Session
@@ -872,6 +1085,9 @@ func (m *Manager) Attach(id string, who Who, watch bool) (*Viewer, []byte, error
 	replay := s.ring.Bytes()
 	if s.State == StateEnded {
 		v.close()
+		if !owner {
+			m.record(ActionWatch, s, who, audit.OutcomeOK, "ended=true")
+		}
 		return v, replay, nil
 	}
 	s.viewers[v] = struct{}{}
@@ -1037,7 +1253,12 @@ func (m *Manager) sweep() {
 		s       *Session
 		by, why string
 	}
+	type signIn struct {
+		s      *Session
+		stands func() bool
+	}
 	var ends []ending
+	var signIns []signIn
 	m.mu.Lock()
 	for id, s := range m.all {
 		if s.State == StateEnded {
@@ -1054,13 +1275,20 @@ func (m *Manager) sweep() {
 			ends = append(ends, ending{s, EndLimit, "Time limit reached."})
 		case now.Sub(s.LastActive) > idle:
 			ends = append(ends, ending{s, EndIdle, fmt.Sprintf("No activity for %s.", short(idle))})
-		case s.Owner.Stands != nil && !s.Owner.Stands():
-			ends = append(ends, ending{s, EndSignOut, "The person's sign-in session ended."})
+		case s.Owner.Stands != nil:
+			signIns = append(signIns, signIn{s, s.Owner.Stands})
 		}
 	}
 	m.mu.Unlock()
 	for _, e := range ends {
 		m.end(e.s, e.by, e.why, Who{})
+	}
+	// Last and outside the lock: asking can take a directory's seconds,
+	// and neither the terminals nor the limits above wait for it.
+	for _, c := range signIns {
+		if !c.stands() {
+			m.end(c.s, EndSignOut, "The person's sign-in session ended.", Who{})
+		}
 	}
 }
 
@@ -1083,7 +1311,7 @@ func (s *Session) copy() Session {
 	c.Notes = append([]string(nil), s.Notes...)
 	c.Watchers = append([]string(nil), s.Watchers...)
 	c.Forward.Conns = append([]Conn(nil), s.Forward.Conns...)
-	c.viewers, c.backend, c.cancel, c.stdin, c.sizes, c.fwd, c.cast = nil, nil, nil, nil, nil, nil, nil
+	c.viewers, c.reads, c.backend, c.cancel, c.stdin, c.sizes, c.fwd, c.cast = nil, nil, nil, nil, nil, nil, nil, nil
 	c.ring = ring{}
 	return c
 }
@@ -1096,6 +1324,44 @@ func (m *Manager) Output(id string) []byte {
 		return s.ring.Bytes()
 	}
 	return nil
+}
+
+// ReadOutput is Output for the person who asked. Someone else reading a
+// session's output is watching it, as Attach counts it: it is audited, and
+// while the session is live the owner sees their name for ReadShown after
+// the read (TB-55).
+func (m *Manager) ReadOutput(id string, who Who) []byte {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.all[id]
+	if s == nil {
+		return nil
+	}
+	if s.Owner.same(who) {
+		return s.ring.Bytes()
+	}
+	if s.State == StateEnded {
+		m.record(ActionWatch, s, who, audit.OutcomeOK, "output=true ended=true")
+		return s.ring.Bytes()
+	}
+	m.record(ActionWatch, s, who, audit.OutcomeOK, "output=true")
+	if t := s.reads[who.Name]; t != nil {
+		t.Reset(m.opts.ReadShown)
+		return s.ring.Bytes()
+	}
+	if s.reads == nil {
+		s.reads = map[string]*time.Timer{}
+	}
+	s.Watchers = append(s.Watchers, who.Name)
+	m.changedLocked(s)
+	s.reads[who.Name] = time.AfterFunc(m.opts.ReadShown, func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		delete(s.reads, who.Name)
+		s.Watchers = without(s.Watchers, who.Name)
+		m.changedLocked(s)
+	})
+	return s.ring.Bytes()
 }
 
 // Visible says whether a person sees a session: their own; every one for
@@ -1131,6 +1397,25 @@ func (m *Manager) History(cluster string, who Who) []Record {
 		}
 	}
 	return out
+}
+
+// Recorded finds a session of a cluster for its transcript, which outlives
+// it: recorded says one was kept, visible that the person may have it. A
+// session that left memory answers from its record, by the rule of Visible;
+// the records have no sign-in to compare, so one without a user is a
+// SuperAdmin's. The records are capped and the transcripts are not: for a
+// session past the cap, only a SuperAdmin, who sees every session, can
+// still reach the file.
+func (m *Manager) Recorded(cluster, id string, who Who) (recorded, visible bool) {
+	if s, ok := m.Get(id); ok {
+		return s.Recorded, s.Cluster == cluster && Visible(s, who)
+	}
+	for _, r := range m.opts.History.List() {
+		if r.ID == id && r.Cluster == cluster {
+			return r.Recorded, who.Admin || (r.OwnerUser != "" && r.OwnerUser == who.User)
+		}
+	}
+	return true, who.Admin
 }
 
 // Token checks a port forward's token, in constant time.

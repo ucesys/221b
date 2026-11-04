@@ -18,6 +18,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/roles"
+	"github.com/ucesys/221b/server/internal/twoperson"
 )
 
 const goodPassword = "correct horse battery staple"
@@ -777,6 +778,10 @@ func (d *fakeDir) Members(ctx context.Context, groups []string) ([]auth.Person, 
 }
 
 func ldapEnv(t *testing.T) (*env, *fakeDir) {
+	return ldapEnvWith(t, func(*auth.Config) {})
+}
+
+func ldapEnvWith(t *testing.T, change func(*auth.Config)) (*env, *fakeDir) {
 	d := &fakeDir{
 		people: map[string]*auth.Person{
 			"priya": {Ref: "uid=priya", Username: "priya", Name: "Priya", Email: "priya@corp.example", Groups: []string{"platform-admins"}},
@@ -792,6 +797,7 @@ func ldapEnv(t *testing.T) (*env, *fakeDir) {
 		Local:     []auth.LocalUser{{Username: "break-glass", PasswordHash: hashOf(t, goodPassword), Roles: []string{"superAdmin"}}},
 		AccessTTL: 2 * time.Minute,
 	}
+	change(&cfg)
 	return newEnv(t, cfg), d
 }
 
@@ -1054,5 +1060,65 @@ func TestRolesViewHelpers(t *testing.T) {
 	}
 	if !e.svc.UserExists("wes") || e.svc.UserExists("nobody") {
 		t.Error("UserExists is wrong")
+	}
+}
+
+// Making a local user a SuperAdmin waits for another SuperAdmin when there
+// is one, whether by the role or by a group that gives it; the rest of the
+// change is made. The only SuperAdmin makes one at once, and the audit log
+// says nobody else could approve.
+func TestASecondSuperAdminApprovesANewOne(t *testing.T) {
+	ctx := context.Background()
+	cfg := localConfig(t)
+	cfg.LocalGroups = append(cfg.LocalGroups, auth.LocalGroup{Name: "platform", Role: roles.Viewer})
+	cfg.AdminGroups = []string{"platform"}
+	cfg.Local = []auth.LocalUser{{Username: "root", PasswordHash: hashOf(t, goodPassword), Roles: []string{"superAdmin"}}}
+	cfg.TwoPerson = twoperson.New(nil, nil)
+	e := newEnv(t, cfg)
+	root := e.mustSignIn("root", goodPassword)
+	for _, u := range []string{"alice", "carol"} {
+		if code, b := e.api(root, http.MethodPost, "/api/v1/admin/users", map[string]any{"username": u, "password": goodPassword}); code != http.StatusCreated {
+			t.Fatalf("%s: %d %s", u, code, b)
+		}
+	}
+	// root is the only SuperAdmin: alice becomes one at once.
+	if code, b := e.api(root, http.MethodPut, "/api/v1/admin/users/alice/super", map[string]any{"roles": []string{"superAdmin"}}); code != http.StatusOK {
+		t.Fatalf("alice: %d %s", code, b)
+	}
+	if !strings.Contains(e.audit.String(), "nobody else could approve") {
+		t.Fatalf("the audit log does not say why: %s", e.audit.String())
+	}
+	// Now alice could approve: carol waits, and keeps her other role.
+	code, b := e.api(root, http.MethodPut, "/api/v1/admin/users/carol/super", map[string]any{"roles": []string{"superAdmin", "superViewer"}})
+	if code != http.StatusAccepted || !strings.Contains(string(b), "waits for another SuperAdmin") {
+		t.Fatalf("carol: %d %s", code, b)
+	}
+	carol := e.mustSignIn("carol", goodPassword)
+	if w, _ := e.whoami(carol); w.Admin || !slices.Equal(w.Roles, []string{"superViewer"}) {
+		t.Fatalf("carol before the approval: %+v", w)
+	}
+	// A group that gives the role waits too, at creation.
+	code, b = e.api(root, http.MethodPost, "/api/v1/admin/users", map[string]any{"username": "bob", "password": goodPassword, "groups": []string{"platform", "web-readers"}})
+	if code != http.StatusAccepted || !strings.Contains(string(b), "waits for another SuperAdmin") {
+		t.Fatalf("bob: %d %s", code, b)
+	}
+	bob := e.mustSignIn("bob", goodPassword)
+	if w, _ := e.whoami(bob); w.Admin || !slices.Equal(w.Roles, []string{"viewer"}) {
+		t.Fatalf("bob before the approval: %+v", w)
+	}
+	list, _ := cfg.TwoPerson.List(ctx)
+	if len(list) != 2 || list[0].User != "bob" || !slices.Equal(list[0].Groups, []string{"platform"}) || list[0].Super || list[1].User != "carol" || !list[1].Super || list[1].By.Key == "" {
+		t.Fatalf("requests: %+v", list)
+	}
+	for _, r := range list {
+		if err := e.svc.ApplySuperAdmin(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if w, _ := e.whoami(carol); !w.Admin {
+		t.Fatalf("carol after the approval: %+v", w)
+	}
+	if w, _ := e.whoami(bob); !w.Admin {
+		t.Fatalf("bob after the approval: %+v", w)
 	}
 }

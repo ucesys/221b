@@ -11,8 +11,12 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/scrub"
 )
 
 // Actions the console records.
@@ -50,6 +54,15 @@ const (
 	ActionNameRefused    = "name.refused"
 	ActionLDAPSync       = "ldap.sync"
 	ActionRolesDrift     = "roles.drift"
+	// Automation (Phase 11 part 2, AU-13): a script saved or deleted, a
+	// version submitted or approved, a fleet's parameters, a run started,
+	// ended or cancelled.
+	ActionAutomationScript  = "automation.script"
+	ActionAutomationApprove = "automation.approve"
+	ActionAutomationParams  = "automation.params"
+	ActionAutomationRun     = "automation.run"
+	ActionAutomationCommand = "automation.command"
+	ActionAutomationConfig  = "automation.config"
 )
 
 // Outcomes of an action.
@@ -68,6 +81,30 @@ type Who struct {
 	Name    string `json:"name,omitempty"`
 }
 
+// MaxName bounds each name in a record's Who: whatever a sign-in form or a
+// provider sent, a record stays small.
+const MaxName = 256
+
+// Clip cuts text to at most max bytes, on a character boundary.
+func Clip(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return strings.ToValidUTF8(s[:max], "")
+}
+
+// hostKey is an SSH public key, with the mark a pairing's output gives it.
+// A node's host keys stay off the page (asked October 30, 2026).
+var hostKey = regexp.MustCompile(`(?:221B-HOSTKEY )?(?:ssh-(?:rsa|dss|ed25519)|ecdsa-sha2-nistp[0-9]+) AAAA[A-Za-z0-9+/]+=*`)
+
+// cleaned is an event as the log keeps it: its free text holds no
+// credential and no host key, whichever part of the console wrote it.
+func cleaned(e Event) Event {
+	e.Target = scrub.Text(hostKey.ReplaceAllString(e.Target, scrub.Redacted))
+	e.Detail = scrub.Text(hostKey.ReplaceAllString(e.Detail, scrub.Redacted))
+	return e
+}
+
 // Event is one record of the audit log.
 type Event struct {
 	Time   time.Time `json:"time"`
@@ -77,11 +114,15 @@ type Event struct {
 	Cluster string `json:"cluster,omitempty"`
 	// Target names what the action touched: a setting, a connection.
 	Target string `json:"target,omitempty"`
-	// Detail says what changed or why it failed; it never holds a credential.
+	// Detail says what changed or why it failed; Record takes credentials
+	// out of it and of Target.
 	Detail  string `json:"detail,omitempty"`
 	Outcome string `json:"outcome"`
 	// From is the address the request came from.
 	From string `json:"from,omitempty"`
+	// Restored is when the backup this event came back from was taken;
+	// empty for an event this console recorded itself.
+	Restored string `json:"restored,omitempty"`
 }
 
 // Options configure the log.
@@ -96,6 +137,10 @@ type Options struct {
 	Client       *http.Client
 	Logger       *slog.Logger
 	Now          func() time.Time
+	// Store keeps the newest events for Administration › Audit log; nil
+	// keeps none, and SetStore may give one later (the settings ConfigMap
+	// is opened after the log starts).
+	Store Store
 }
 
 // Log writes events.
@@ -107,6 +152,72 @@ type Log struct {
 	dropped int
 	wg      sync.WaitGroup
 	stop    chan struct{}
+	// early holds what was recorded before SetStore, for the store to get.
+	early []Event
+	// inMemory says the store is one that goes with a restart.
+	inMemory bool
+}
+
+// earlyKeep is how many events recorded before the store is set are kept
+// for it: the start-up's, a handful.
+const earlyKeep = 200
+
+// SetStore gives the log its store, with what was recorded before.
+func (l *Log) SetStore(st Store) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.opts.Store = st
+	for _, e := range l.early {
+		st.Add(e)
+	}
+	l.early = nil
+}
+
+// KeepInMemory gives a console without storage the newest events for the
+// Audit log page, until it restarts. Stored stays false, and the page says
+// so.
+func (l *Log) KeepInMemory(keep int) {
+	l.SetStore(&MemoryStore{Keep: keep})
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.inMemory = true
+}
+
+// Stored says whether events are kept for the Audit log page beyond a
+// restart.
+func (l *Log) Stored() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.opts.Store != nil && !l.inMemory
+}
+
+// Events returns the kept events, newest first; none without a store.
+func (l *Log) Events(ctx context.Context) ([]Event, error) {
+	l.mu.Lock()
+	st := l.opts.Store
+	l.mu.Unlock()
+	if st == nil {
+		return nil, nil
+	}
+	return st.List(ctx)
+}
+
+// Import keeps events from a backup, in the store alone: they were
+// written to the stream and the webhook when they happened. Each is
+// marked with when the backup was taken, whatever the file says, so a
+// restored event never reads as one this console recorded.
+func (l *Log) Import(events []Event, taken time.Time) int {
+	l.mu.Lock()
+	st := l.opts.Store
+	l.mu.Unlock()
+	if st == nil {
+		return 0
+	}
+	for _, e := range events {
+		e.Restored = taken.UTC().Format(time.RFC3339)
+		st.Add(cleaned(e))
+	}
+	return len(events)
 }
 
 // New starts the log. Close stops the webhook sender.
@@ -132,12 +243,14 @@ func New(o Options) *Log {
 // Record writes one event. It never blocks on the webhook: the event is
 // queued, and dropped with a warning when the queue is full.
 func (l *Log) Record(e Event) {
+	e = cleaned(e)
 	if e.Time.IsZero() {
 		e.Time = l.opts.Now().UTC()
 	}
 	if e.Outcome == "" {
 		e.Outcome = OutcomeOK
 	}
+	e.Who.Subject, e.Who.Email, e.Who.Name = Clip(e.Who.Subject, MaxName), Clip(e.Who.Email, MaxName), Clip(e.Who.Name, MaxName)
 	if l.opts.Out != nil {
 		b, err := json.Marshal(e)
 		if err == nil {
@@ -145,6 +258,16 @@ func (l *Log) Record(e Event) {
 			_, _ = l.opts.Out.Write(append(b, '\n'))
 			l.mu.Unlock()
 		}
+	}
+	l.mu.Lock()
+	if st := l.opts.Store; st != nil {
+		l.mu.Unlock()
+		st.Add(e)
+	} else {
+		if len(l.early) < earlyKeep {
+			l.early = append(l.early, e)
+		}
+		l.mu.Unlock()
 	}
 	if l.queue != nil {
 		select {
@@ -166,8 +289,17 @@ func (l *Log) Dropped() int {
 	return l.dropped
 }
 
-// Close waits for queued webhook deliveries, up to the context's deadline.
+// Close writes what the store holds and waits for queued webhook
+// deliveries, up to the context's deadline.
 func (l *Log) Close(ctx context.Context) {
+	l.mu.Lock()
+	st := l.opts.Store
+	l.mu.Unlock()
+	if st != nil {
+		if err := st.Flush(ctx); err != nil {
+			l.opts.Logger.Warn("saving the audit log at shutdown failed", "err", err)
+		}
+	}
 	if l.queue == nil {
 		return
 	}

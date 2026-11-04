@@ -1,15 +1,16 @@
 import type { NodeRow } from '../api/types'
 import { clampPct, fCores, fMem, fmtAge, fmtTs, localTimes, minutesSince, pct, round } from '../lib/format'
-import { cpuMeter, free, memoryMeter, ownLabels, problemsCell, roleTag, taintId, taintShort, toneRank, type Meter } from '../lib/nodes'
+import { cpuMeter, free, memoryMeter, ownLabels, problemsCell, reserved, reservedText, roleTag, taintId, taintShort, toneRank, type Meter } from '../lib/nodes'
 import { href } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
 import { NameCell, Tone } from './cells'
 import { NameWithTools } from '../components/toolbox/ToolsMenu'
+import { RowPickBox } from '../components/NodePicks'
 
 const GIB = 1024 * 1024 * 1024
 
 /** How to read the bars, on hover (asked at the Phase 6 review, in place of a legend under the table). */
-export const BAR_LEGEND = 'Light bar: requested. Solid bar: in use. The percentage is what is requested of what is allocatable.'
+export const BAR_LEGEND = 'Light bar: requested, of what is allocatable. Solid bar: in use, of the whole machine. The percentage is what is requested.'
 const FREE_LEGEND = 'Free = allocatable − requested.'
 
 function MeterCell({ m }: { m: Meter }) {
@@ -52,6 +53,7 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     // The Tools button beside the name (TB-01).
     cell: (r) => (
       <NameWithTools target={{ kind: 'node', name: r.name, cordoned: r.cordoned, role: r.role === 'control-plane' ? 'control plane' : 'worker', problem: r.problems.length ? r.problems.map((p) => p.title).join('; ') : undefined }}>
+        <RowPickBox name={r.name} />
         <NameCell name={r.name} what="node name" />
       </NameWithTools>
     ),
@@ -232,6 +234,24 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
       </span>
     ),
     export: (r) => [{ head: 'Taints', cell: r.taints.map(taintId).join('\n'), json: r.taints.map(taintId) }],
+  },
+  {
+    id: 'reserved',
+    label: 'Reserved',
+    sortName: 'what the kubelet keeps from pods',
+    width: '130px',
+    min: 130,
+    wideOnly: true,
+    sortValue: (r) => reserved(r.memory),
+    cell: (r) => (
+      <span style={{ fontSize: 12, color: 'var(--fg2)' }} title="Capacity less allocatable: what the kubelet keeps from pods, for software beside Kubernetes and the agent itself">
+        {reservedText(r)}
+      </span>
+    ),
+    export: (r) => [
+      { head: 'CPU reserved (cores)', cell: round(reserved(r.cpu) / 1000, 3) },
+      { head: 'Memory reserved (GiB)', cell: round(reserved(r.memory) / 1024 ** 3, 2) },
+    ],
   },
   {
     id: 'zone',

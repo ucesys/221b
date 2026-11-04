@@ -152,6 +152,9 @@ func (s *SessionStore) Put(ctx context.Context, key string, b []byte, replace fu
 	for range 3 {
 		cur, err := s.secrets.Get(ctx, name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
+			if replace != nil && !replace(nil) {
+				return false, nil
+			}
 			sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: s.labels}, Type: corev1.SecretTypeOpaque, Data: map[string][]byte{sessionKey: b}}
 			_, err = s.secrets.Create(ctx, sec, metav1.CreateOptions{})
 			if apierrors.IsAlreadyExists(err) {

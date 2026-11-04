@@ -65,7 +65,7 @@ export function gridTemplate<R>(cols: ColumnDef<R>[], compact: boolean): { templ
 }
 
 /** Sorts by a column; empty values last, ties in natural order of the first column. */
-export function sortRows<R>(rows: R[], cols: ColumnDef<R>[], sort: SortState, now: number): R[] {
+export function sortRows<R>(rows: R[], cols: Pick<ColumnDef<R>, 'sortValue' | 'id'>[], sort: SortState, now: number): R[] {
   const col = cols.find((c) => c.id === sort.col) ?? cols[0]
   const first = cols[0]
   if (!col || !first) return rows
@@ -82,7 +82,7 @@ export function sortRows<R>(rows: R[], cols: ColumnDef<R>[], sort: SortState, no
 }
 
 /** Toggles a sort: the same column reverses, another starts in its default direction. */
-export function nextSort<R>(cols: ColumnDef<R>[], sort: SortState, col: string): SortState {
+export function nextSort<R>(cols: Pick<ColumnDef<R>, 'id' | 'defaultDir'>[], sort: SortState, col: string): SortState {
   if (sort.col === col) return { col, dir: sort.dir === 'asc' ? 'desc' : 'asc' }
   return { col, dir: cols.find((c) => c.id === col)?.defaultDir ?? 'asc' }
 }

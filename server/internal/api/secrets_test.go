@@ -1,12 +1,21 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/ucesys/221b/server/internal/audit"
+	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/roles"
 )
 
 const plantedValue = "PLANTED-SECRET-VALUE-9f8e7d6c5b4a"
@@ -111,5 +120,113 @@ func TestSecretValuesAreWrittenBlindAndRevealedOnlyWhenTheChartSaysSo(t *testing
 	src3.putSecret(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "sys", Namespace: "kube-system", ResourceVersion: "1"}, Data: map[string][]byte{"k": []byte("v")}})
 	if r, body := send(t, ops3, http.MethodGet, srv3.URL+"/api/v1/secrets/kube-system/sys/value?key=k", ""); r.StatusCode != http.StatusForbidden || strings.Contains(body, `"v"`) {
 		t.Errorf("denied namespace: %d %s", r.StatusCode, body)
+	}
+}
+
+// Holding Admin in one namespace says nothing of another: where Kubernetes
+// does not give the person what Admin has there, a value stays on the
+// server, though they may read the Secret as a Viewer does (SE-03, RB-06).
+func TestRevealNeedsTheRightInTheSecretsNamespace(t *testing.T) {
+	var opts *Options
+	_, _, _, aud, src, _ := multiSetupWith(t, "viewer@corp.example", map[string]bool{"update secrets/web": true}, func(o *Options) {
+		o.SecretsReveal = true
+		opts = o
+	})
+	seedSecret(src)
+	src.putSecret(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "api"}, Data: map[string][]byte{"password": []byte("value-in-api")}})
+	s := New(*opts)
+	sess := auth.Session{ID: "s", User: auth.User{Subject: "bob", Username: "bob", Email: "bob@corp.example"}, Roles: []roles.ID{roles.Admin}}
+	ask := func(path string) (int, string) {
+		req := httptest.NewRequest(http.MethodGet, path, nil).WithContext(auth.WithSession(context.Background(), sess))
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	if code, body := ask("/api/v1/secrets/web/db/value?key=password"); code != http.StatusForbidden || strings.Contains(body, plantedValue) {
+		t.Fatalf("a namespace where they are not Admin: %d %s", code, body)
+	}
+	if code, body := ask("/api/v1/secrets/api/db/value?key=password"); code != http.StatusOK || !strings.Contains(body, "value-in-api") {
+		t.Fatalf("their own namespace: %d %s", code, body)
+	}
+	if code, body := ask("/api/v1/secrets/config?namespace=web"); code != 200 || !strings.Contains(body, `"reveal":false`) {
+		t.Errorf("config for web: %d %s", code, body)
+	}
+	if code, body := ask("/api/v1/secrets/config?namespace=api"); code != 200 || !strings.Contains(body, `"reveal":true`) {
+		t.Errorf("config for api: %d %s", code, body)
+	}
+	found := false
+	for _, e := range auditEvents(t, aud.String()) {
+		if e.Action == ActionSecretReveal && e.Target == "web/db" && e.Outcome == audit.OutcomeDenied {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no denied reveal in the audit log: %s", aud.String())
+	}
+
+	// A SuperAdmin needs no write: the read itself, as them, decides.
+	sess = auth.Session{ID: "s", User: auth.User{Subject: "root", Username: "root", Email: "root@corp.example"}, Admin: true, Roles: []roles.ID{roles.SuperAdmin}}
+	if code, body := ask("/api/v1/secrets/web/db/value?key=password"); code != http.StatusOK || !strings.Contains(body, plantedValue) {
+		t.Fatalf("a SuperAdmin: %d %s", code, body)
+	}
+}
+
+// auditEvents reads the audit log's records back.
+func auditEvents(t *testing.T, out string) []audit.Event {
+	t.Helper()
+	var list []audit.Event
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var e audit.Event
+		if err := json.Unmarshal([]byte(line), &e); err == nil && e.Action != "" {
+			list = append(list, e)
+		}
+	}
+	return list
+}
+
+// An audit record says which cluster it concerns and how the attempt ended,
+// in the fields a filter or a SIEM reads, not only in the words of Detail.
+func TestAuditRecordsNameTheClusterAndHowTheAttemptEnded(t *testing.T) {
+	srv, ops, _, aud, src, _ := multiSetupWith(t, "ops@corp.example", map[string]bool{"secrets/kube-system": true}, func(o *Options) { o.SecretsReveal = true })
+	seedSecret(src)
+	src.putSecret(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "sys", Namespace: "kube-system", ResourceVersion: "1"}, Data: map[string][]byte{"k": []byte("v")}})
+	send(t, ops, http.MethodGet, srv.URL+"/api/v1/secrets/web/db/value?key=password", "")
+	send(t, ops, http.MethodGet, srv.URL+"/api/v1/secrets/kube-system/sys/value?key=k", "")
+	send(t, ops, http.MethodGet, srv.URL+"/api/v1/secrets/web/absent/value?key=k", "")
+	send(t, ops, http.MethodPost, srv.URL+"/api/v1/namespaces", `{"name":"web"}`)
+
+	srv2, ops2, _, aud2, _, _ := multiSetupWith(t, "ops@corp.example", nil)
+	send(t, ops2, http.MethodGet, srv2.URL+"/api/v1/secrets/web/db/value?key=password", "")
+
+	type rec struct{ action, target, outcome string }
+	var got []rec
+	for _, e := range append(auditEvents(t, aud.String()), auditEvents(t, aud2.String())...) {
+		if strings.HasPrefix(e.Action, "secret.") || strings.HasPrefix(e.Action, "namespace.") {
+			if e.Cluster != clusters.LocalID {
+				t.Errorf("%s has cluster %q", e.Action, e.Cluster)
+			}
+			if strings.Contains(e.Detail, "outcome=") {
+				t.Errorf("%s still says its outcome in the detail: %s", e.Action, e.Detail)
+			}
+			got = append(got, rec{e.Action, e.Target, e.Outcome})
+		}
+	}
+	want := []rec{
+		{"secret.reveal", "web/db", audit.OutcomeOK},
+		{"secret.reveal", "kube-system/sys", audit.OutcomeDenied},
+		{"secret.reveal", "web/absent", audit.OutcomeFailed},
+		{"namespace.create", "web", audit.OutcomeFailed},
+		{"secret.reveal", "web/db", audit.OutcomeDenied},
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("records %+v, want %+v", got, want)
+	}
+
+	// What concerns the console itself names no cluster.
+	send(t, ops, http.MethodPut, srv.URL+"/api/v1/settings", `{"refreshSeconds":7}`)
+	for _, e := range auditEvents(t, aud.String()) {
+		if e.Action == audit.ActionSettings && (e.Cluster != "" || e.Outcome != audit.OutcomeOK) {
+			t.Fatalf("settings record %+v", e)
+		}
 	}
 }

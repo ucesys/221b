@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Execution 1043 · live output</title>
+<link rel="stylesheet" href="./rk.css">
+<link rel="stylesheet" href="./au.css">
+</head>
+<body>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=IBM+Plex+Sans:wght@400;500;600;700&amp;display=swap">
+<style>
+@import url("./rk.css");
+@import url("./au.css");
+body{margin:0;background:#F2F3F5}
+a{color:#0A6E69}a:hover{color:#075450}
+</style>
+<div class="rk mk-app" data-theme="light">
+
+<header class="mk-top">
+  <span class="mk-brand">221B</span>
+  <button class="mk-cluster" aria-label="Cluster: lakehouse-dev"><span class="rk-dot"></span>lakehouse-dev <span class="rk-dim">v1.37.1</span><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6.5 4 4 4-4"/></svg></button>
+  <nav class="mk-nav" aria-label="Views">
+    <a class="rk-tab" href="#top">Alerts <span class="rk-cnt" data-tone="warn">4</span></a>
+    <a class="rk-tab" href="#top">Nodes</a>
+    <a class="rk-tab" href="FleetParameters.html">Fleets</a>
+    <a class="rk-tab" href="Scripts.html" aria-current="page">Automation</a>
+    <a class="rk-tab" href="#top">Namespaces</a>
+    <a class="rk-tab" href="#top">Pods</a>
+    <a class="rk-tab" href="#top">Helm</a>
+    <a class="rk-tab" href="#top">Services</a>
+    <a class="rk-tab" href="#top">Networks</a>
+    <a class="rk-tab" href="#top">Storage</a>
+    <a class="rk-tab" href="#top">Access</a>
+  </nav>
+  <div class="mk-top-right">
+    <span class="rk-avatar" aria-hidden="true">MS</span><span>mikhail@stolpner.com</span><span class="rk-tag">K8S-SuperAdmin</span><span class="rk-tag" data-tone="accent">Fleet-Admin</span>
+  </div>
+</header>
+
+<main class="au-page" style="padding:14px 22px 18px">
+  <div class="au-runhead">
+    <a href="Executions.html" style="font-size:12.5px">← Executions</a>
+    <h1>#1043 install-nvidia-driver <span class="au-ver" style="font-size:13px">v4</span></h1>
+    <span class="rk-pill" data-tone="info"><span class="rk-dot"></span>Running</span>
+    <span class="au-sub">on <span class="rk-mono">gpu-workers</span> · 20 nodes · config <span class="rk-mono">gpu-root</span> · started 14:52 by mikhail@stolpner.com · 18m</span>
+    <span class="mk-grow"></span>
+    <button class="rk-btn">Pause after this batch</button>
+    <button class="rk-btn" data-danger="true">Cancel…</button>
+  </div>
+
+  <div class="au-batches" aria-label="Batches">
+    <div class="au-batch" data-k="done"><b>Batch 1 · 1 node</b><span>1 changed</span></div>
+    <span class="au-arrow" aria-hidden="true">→</span>
+    <div class="au-batch" data-k="done"><b>Batch 2 · 5 nodes</b><span>2 changed · 3 no change</span></div>
+    <span class="au-arrow" aria-hidden="true">→</span>
+    <div class="au-batch" data-k="done"><b>Batch 3 · 5 nodes</b><span>1 changed · 4 no change</span></div>
+    <span class="au-arrow" aria-hidden="true">→</span>
+    <div class="au-batch" data-k="now"><b>Batch 4 · 5 nodes</b><span>1 changed · 4 running</span></div>
+    <span class="au-arrow" aria-hidden="true">→</span>
+    <div class="au-batch" data-k="wait"><b>Batch 5 · 4 nodes</b><span>waiting</span></div>
+    <span class="mk-grow"></span>
+    <span class="au-sub">Stops after 2 failed or unreachable · 0 so far</span>
+  </div>
+
+  <div class="au-live">
+    <div class="au-hl">
+      <div class="au-hl-head"><span>Nodes</span><span class="mk-grow"></span><div class="rk-seg" role="group" aria-label="Filter nodes"><button aria-pressed="true">All 20</button><button aria-pressed="false">Changed</button><button aria-pressed="false">Problems</button></div></div>
+      <div class="au-hl-list">
+        <button class="au-h" data-k="run" aria-current="true"><span class="rk-dot"></span>gpu-14<small>installing · 1m 12s</small></button>
+        <button class="au-h" data-k="run"><span class="rk-dot"></span>gpu-15<small>downloading</small></button>
+        <button class="au-h" data-k="run"><span class="rk-dot"></span>gpu-16<small>rebooting · waiting</small></button>
+        <button class="au-h" data-k="run"><span class="rk-dot"></span>gpu-17<small>installing</small></button>
+        <button class="au-h" data-k="chg"><span class="rk-dot"></span>gpu-13<small>changed · reboot ok</small></button>
+        <button class="au-h" data-k="ok"><span class="rk-dot"></span>gpu-12<small>no change</small></button>
+        <button class="au-h" data-k="chg"><span class="rk-dot"></span>gpu-11<small>changed · reboot ok</small></button>
+        <button class="au-h" data-k="ok"><span class="rk-dot"></span>gpu-10<small>no change</small></button>
+        <button class="au-h" data-k="ok"><span class="rk-dot"></span>gpu-09<small>no change</small></button>
+        <button class="au-h" data-k="ok"><span class="rk-dot"></span>gpu-08<small>no change</small></button>
+        <button class="au-h" data-k="ok"><span class="rk-dot"></span>gpu-06<small>no change</small></button>
+        <button class="au-h" data-k="chg"><span class="rk-dot"></span>gpu-05<small>changed · reboot ok</small></button>
+        <button class="au-h" data-k="chg"><span class="rk-dot"></span>gpu-04<small>changed · reboot ok</small></button>
+        <button class="au-h" data-k="ok"><span class="rk-dot"></span>gpu-03<small>no change</small></button>
+        <button class="au-h" data-k="ok"><span class="rk-dot"></span>gpu-02<small>no change</small></button>
+        <button class="au-h" data-k="chg"><span class="rk-dot"></span>gpu-01<small>changed · reboot ok</small></button>
+        <button class="au-h" data-k="wait"><span class="rk-dot"></span>gpu-07<small>batch 5 · driver 535</small></button>
+        <button class="au-h" data-k="wait"><span class="rk-dot"></span>gpu-18<small>batch 5</small></button>
+      </div>
+    </div>
+
+    <div class="au-termwrap">
+      <div class="au-termbar">
+        <b>gpu-14</b><span>10.0.5.14 · batch 4 · NVIDIA_DRIVER=550 (fleet)</span>
+        <span class="mk-grow"></span>
+        <span class="au-ro"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8Z"/><circle cx="8" cy="8" r="2"/></svg>Read-only</span>
+        <a class="rk-tbtn" href="#top">Open shell on gpu-14</a>
+        <button class="rk-tbtn">Download log</button>
+      </div>
+      <div class="rk-term" aria-label="Live output from gpu-14">
+        <div class="rk-tl" data-k="warn">[15:08:51] Watson via install-nvidia-driver v4 · run #1043 · for mikhail@stolpner.com · approved code, no per-run approval</div>
+        <div class="rk-tl" data-k="dim">[15:08:51] connect ops-root@gpu-14 (10.0.5.14) · host key matches · profile ops-root</div>
+        <div class="rk-tl" data-k="dim">[15:08:51] facts: Rocky Linux 9.4 · kernel 5.14.0-427 · 2 × NVIDIA A100 80GB · driver 535.183.01</div>
+        <div class="rk-tl" data-k="dim">[15:08:52] script install-nvidia-driver v4 · sha256 3f9a07…c21e matches approval</div>
+        <div class="rk-tl" data-k="dim">[15:08:52] env NVIDIA_DRIVER=550 DRIVER_SHA256=9c1e…77a4 REPO_URL=https://artifactory.uce.internal/rpm REPO_TOKEN=••••••</div>
+        <div class="rk-tl"> </div>
+        <div class="rk-tl" data-k="hi">+ curl -fsSL -H 'Authorization: Bearer ••••••' https://artifactory.uce.internal/rpm/gpu/nvidia-driver-550.el9.rpm -o /tmp/nvidia-driver-550.el9.rpm</div>
+        <div class="rk-tl" data-k="hi">+ sha256sum -c -</div>
+        <div class="rk-tl">/tmp/nvidia-driver-550.el9.rpm: <b>OK</b></div>
+        <div class="rk-tl" data-k="hi">+ sudo dnf install -y /tmp/nvidia-driver-550.el9.rpm</div>
+        <div class="rk-tl">Dependencies resolved.</div>
+        <div class="rk-tl">================================================================================</div>
+        <div class="rk-tl"> Package            Arch      Version                  Repository        Size</div>
+        <div class="rk-tl">================================================================================</div>
+        <div class="rk-tl">Upgrading:</div>
+        <div class="rk-tl"> nvidia-driver      x86_64    3:550.127.08-1.el9       @commandline     412 M</div>
+        <div class="rk-tl"> </div>
+        <div class="rk-tl">Transaction Summary</div>
+        <div class="rk-tl">================================================================================</div>
+        <div class="rk-tl">Upgrade  1 Package</div>
+        <div class="rk-tl"> </div>
+        <div class="rk-tl">Running transaction check</div>
+        <div class="rk-tl">Transaction check succeeded.</div>
+        <div class="rk-tl">Running transaction</div>
+        <div class="rk-tl">  Preparing        :                                                        1/1</div>
+        <div class="rk-tl">  Upgrading        : nvidia-driver-3:550.127.08-1.el9.x86_64                1/2</div>
+        <div class="rk-tl">  Running scriptlet: nvidia-driver-3:550.127.08-1.el9.x86_64                1/2</div>
+        <div class="rk-tl">  Building kernel module for 5.14.0-427.el9.x86_64 ... <span class="rk-cursor" aria-hidden="true"></span></div>
+      </div>
+      <div class="rk-tin" data-k="end"><span>Read-only output, streamed live. For interactive access use the node shell; it is audited separately.</span></div>
+    </div>
+  </div>
+</main>
+
+</div>
+</body>
+</html>

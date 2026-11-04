@@ -92,3 +92,37 @@ describe('the grid', () => {
     expect(g.container.querySelectorAll('[data-thing]').length).toBeGreaterThanOrEqual(40)
   })
 })
+
+describe('a long table', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  // Past the 900px breakpoint the pane stops scrolling and the window does.
+  it('follows the scroller when it changes at a breakpoint', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    )
+    const many = Array.from({ length: 300 }, (_, i) => ({ name: `n${i}`, ns: 'web' }))
+    const { container } = render(
+      <div className="pane" style={{ overflowY: 'auto' }}>
+        <div className="rk-card">
+          <DataTable<R> label="Things" rows={many} cols={cols} rowKey={(r) => r.name} rowLabel={(r) => r.name} sort={{ col: 'name', dir: 'asc' }} onSort={() => {}} now={0} empty="None" rowAttr="thing" rowHeight={30} />
+        </div>
+      </div>,
+    )
+    const row = (name: string) => container.querySelector(`[data-thing="${name}"]`)
+    expect(row('n0')).not.toBeNull()
+    expect(row('n250')).toBeNull()
+    const pane = container.querySelector<HTMLElement>('.pane')!
+    pane.style.overflowY = 'visible'
+    fireEvent(window, new Event('resize'))
+    // The window scrolled down: the table's top is far above the view.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ top: -7500 } as DOMRect)
+    fireEvent.scroll(window)
+    vi.restoreAllMocks()
+    expect(row('n250')).not.toBeNull()
+  })
+})

@@ -53,7 +53,7 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
      name with every build; a release (0.1.0, v0.1.0), a sha- tag or a
      digest names one build for good. Renders "true" or nothing. */}}
 {{- define "b221.movingTag" -}}
-{{- $tag := default .Chart.AppVersion .Values.image.tag -}}
+{{- $tag := toString (default .Chart.AppVersion .Values.image.tag) -}}
 {{- if and (not .Values.image.digest) (not (regexMatch "^(v?[0-9]+\\.[0-9]+\\.[0-9]+([-+].*)?|sha-[0-9a-f]{7,})$" $tag)) -}}
 true
 {{- end -}}
@@ -83,9 +83,11 @@ IfNotPresent
 {{- end -}}
 
 {{/* Whether the console must reach something besides the API server: an
-     OIDC provider or an audit webhook. Renders "true" or nothing. */}}
+     OIDC provider, an audit webhook, the Claude API, or what
+     networkPolicy.outboundCIDRs names, such as a Helm application's git
+     host. Renders "true" or nothing. */}}
 {{- define "b221.outbound" -}}
-{{- if or (eq .Values.auth.mode "oidc") .Values.audit.webhook.url .Values.sherlock.egress -}}
+{{- if or (eq .Values.auth.mode "oidc") .Values.audit.webhook.url .Values.sherlock.egress .Values.networkPolicy.outboundCIDRs -}}
 true
 {{- end -}}
 {{- end -}}
@@ -110,6 +112,15 @@ cluster do not fight over it (Phase 10 review). */ -}}
 {{- if and $t.enabled $t.nodeShell.enabled (eq .Values.rbac.roles.superAdmin.template "full") -}}true{{- end -}}
 {{- end -}}
 
+{{/* SSH is root on a node like a node shell, and Kubernetes never sees it,
+so a read-only SuperAdmin definition turns it off too. Values kept by
+--reuse-values from an earlier release have no toolbox.ssh. */}}
+{{- define "b221.sshOn" -}}
+{{- $t := .Values.toolbox -}}
+{{- $ssh := $t.ssh | default dict -}}
+{{- if and $t.enabled $ssh.enabled (eq .Values.rbac.roles.superAdmin.template "full") -}}true{{- end -}}
+{{- end -}}
+
 {{/* The toolbox values as the console reads them (TOOLBOX_CONFIG_FILE). */}}
 {{- define "b221.toolboxConfig" -}}
 {{- $t := .Values.toolbox -}}
@@ -118,6 +129,9 @@ cluster do not fight over it (Phase 10 review). */ -}}
 {{- $_ := set $node "enabled" (include "b221.nodeShellOn" . | eq "true") -}}
 {{- $_ := set $node "namespace" (include "b221.toolboxNamespace" .) -}}
 {{- $_ := set $c "nodeShell" $node -}}
+{{- $ssh := deepCopy ($t.ssh | default dict) -}}
+{{- $_ := set $ssh "enabled" (include "b221.sshOn" . | eq "true") -}}
+{{- $_ := set $c "ssh" $ssh -}}
 {{- if eq $t.transcripts "pvc" -}}{{- $_ := set $c "transcriptDir" "/var/lib/221b/transcripts" -}}{{- end -}}
 {{- $_ := set $c "adminExec" (and (eq .Values.rbac.roles.admin.template "full") (.Values.rbac.roles.admin.exec | default false)) -}}
 {{- toPrettyJson $c -}}

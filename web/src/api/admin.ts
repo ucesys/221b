@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { apiPath } from '../lib/router'
-import { unauthorized } from './auth'
+import { BACKGROUND, unauthorized } from './auth'
 
 export type RoleId = 'superAdmin' | 'superViewer' | 'admin' | 'viewer'
 
@@ -116,6 +116,8 @@ export interface Holding {
 }
 
 export interface UserRow {
+  /** Set when making the user a SuperAdmin waits for another SuperAdmin. */
+  held?: string
   /** source:username, unique across sources (RB-15). */
   id: string
   username: string
@@ -187,12 +189,12 @@ export class AdminError extends Error {
   }
 }
 
-async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, url: string, body?: unknown, background = false): Promise<T> {
   let res: Response
   try {
     res = await fetch(url, {
       method,
-      headers: body === undefined ? { Accept: 'application/json' } : { Accept: 'application/json', 'Content-Type': 'application/json' },
+      headers: { ...(body === undefined ? { Accept: 'application/json' } : { Accept: 'application/json', 'Content-Type': 'application/json' }), ...(background ? BACKGROUND : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch {
@@ -215,9 +217,9 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 
 const enc = encodeURIComponent
 
-export const fetchRoles = (cluster: string) => request<RolesResponse>('GET', apiPath('admin/roles', cluster))
-export const fetchPermissions = (cluster: string) => request<PermissionsResponse>('GET', apiPath('admin/permissions', cluster))
-export const fetchUsers = () => request<UsersResponse>('GET', '/api/v1/admin/users')
+export const fetchRoles = (cluster: string, background = false) => request<RolesResponse>('GET', apiPath('admin/roles', cluster), undefined, background)
+export const fetchPermissions = (cluster: string, background = false) => request<PermissionsResponse>('GET', apiPath('admin/permissions', cluster), undefined, background)
+export const fetchUsers = (background = false) => request<UsersResponse>('GET', '/api/v1/admin/users', undefined, background)
 
 export const createUser = (u: NewUser) => request<UserRow>('POST', '/api/v1/admin/users', u)
 export const changeUser = (username: string, c: UserChange) => request<UserRow>('PATCH', `/api/v1/admin/users/${enc(username)}`, c)
@@ -240,8 +242,8 @@ export interface Loaded<T> {
   reload: () => void
 }
 
-/** Loads one admin resource, again when its key changes or reload is called, and again every `every` ms while the page is open. */
-export function useAdmin<T>(key: string, load: () => Promise<T>, every = 0): Loaded<T> {
+/** Loads one admin resource, again when its key changes or reload is called, and again every `every` ms while the page is open; load is told when it is the timer asking. */
+export function useAdmin<T>(key: string, load: (background: boolean) => Promise<T>, every = 0): Loaded<T> {
   const [state, setState] = useState<{ key: string; data: T | null; error: string; status: number }>({ key, data: null, error: '', status: 0 })
   const [tick, setTick] = useState(0)
   const loader = useRef(load)
@@ -250,8 +252,8 @@ export function useAdmin<T>(key: string, load: () => Promise<T>, every = 0): Loa
   })
   useEffect(() => {
     let gone = false
-    const run = () => {
-      loader.current().then(
+    const run = (background = false) => {
+      loader.current(background).then(
         (data) => {
           if (!gone) setState({ key, data, error: '', status: 0 })
         },
@@ -263,7 +265,7 @@ export function useAdmin<T>(key: string, load: () => Promise<T>, every = 0): Loa
       )
     }
     run()
-    const t = every > 0 ? setInterval(run, every) : undefined
+    const t = every > 0 ? setInterval(() => run(true), every) : undefined
     return () => {
       gone = true
       if (t) clearInterval(t)
@@ -272,4 +274,105 @@ export function useAdmin<T>(key: string, load: () => Promise<T>, every = 0): Loa
   const reload = useCallback(() => setTick((t) => t + 1), [])
   const current = state.key === key
   return { data: current ? state.data : null, error: current ? state.error : '', status: current ? state.status : 0, loading: !current || (state.data === null && state.error === ''), reload }
+}
+
+/** One record of the audit log (Administration › Audit log, asked October 30, 2026). */
+export interface AuditEvent {
+  time: string
+  action: string
+  who: { subject?: string; email?: string; name?: string }
+  cluster?: string
+  target?: string
+  detail?: string
+  outcome: string
+  from?: string
+  /** When the backup this event came back from was taken; absent for one recorded here. */
+  restored?: string
+}
+
+export interface AuditPage {
+  events: AuditEvent[]
+  /** How many events are kept, before the filter and the limit. */
+  total: number
+  /** Whether events are kept at all (they are, with the settings ConfigMap). */
+  stored: boolean
+  /** How many events never reached the webhook. */
+  dropped: number
+  /** Every action among the kept events, for the filter. */
+  actions: string[]
+}
+
+/** Every event the console keeps: the server's most, above what it keeps (the newest 2,000). */
+export const fetchAudit = () => request<AuditPage>('GET', '/api/v1/admin/audit?limit=5000')
+
+/** The events with the words, each somewhere in them, of an action or its family and an outcome: as the server's filter. */
+export function filterAudit(events: AuditEvent[], f: { q: string; action: string; outcome: string }): AuditEvent[] {
+  const words = f.q.toLowerCase().split(/\s+/).filter(Boolean)
+  return events.filter((e) => {
+    if (f.action && e.action !== f.action && !e.action.startsWith(f.action + '.')) return false
+    if (f.outcome && e.outcome !== f.outcome) return false
+    const text = [e.action, e.who.name, e.who.email, e.who.subject, e.cluster, e.target, e.detail, e.outcome, e.from].join(' ').toLowerCase()
+    return words.every((w) => text.includes(w))
+  })
+}
+
+/** A backup file (Administration › Backup, asked October 30, 2026): what the console keeps of its own, never a credential. */
+export interface BackupFile {
+  format: string
+  version: string
+  taken: string
+  by?: string
+  leftOut: string[]
+  settings?: unknown
+  users?: { username: string }[]
+  connections?: { id: string; name: string; server: string; auth: string; local?: boolean }[]
+  apps?: { cluster: string; namespace: string; name: string }[]
+  toolboxSessions?: unknown[]
+  sherlockSpend?: unknown
+  sshPairings?: Record<string, unknown>
+  audit?: unknown[]
+  automation?: { scripts?: unknown[]; variables?: Record<string, Record<string, unknown>>; runProfiles?: unknown[]; groups?: unknown[] }
+}
+
+export const BACKUP_FORMAT = '221b-backup/1'
+
+export type RestorePart = 'settings' | 'users' | 'apps' | 'toolboxSessions' | 'sherlockSpend' | 'sshPairings' | 'audit' | 'automation'
+
+export const RESTORE_PARTS: { id: RestorePart; label: string; how: string }[] = [
+  { id: 'settings', label: 'Settings', how: 'replace the current ones: refresh, time format, fleets, acknowledged alerts, Sherlock and Watson' },
+  { id: 'users', label: 'Local users', how: 'are added, without a password, or updated: name, email, groups, super roles' },
+  { id: 'apps', label: 'Helm applications', how: 'are added or replaced: source, values, parameters, commands; a repository token is pasted again. One this console would refuse is left out and named' },
+  { id: 'toolboxSessions', label: 'Toolbox session records', how: 'are merged with those here' },
+  { id: 'sherlockSpend', label: "Sherlock's spend", how: 'replaces the ledger here' },
+  { id: 'sshPairings', label: 'SSH pairings', how: 'are added to those here, each checked first; they work with the same SSH authority Secret' },
+  { id: 'audit', label: 'Audit log', how: 'is merged with the events here, each marked as restored' },
+  { id: 'automation', label: 'Automation', how: 'scripts come back as drafts to submit for review again; run profiles and groups are added; fleet parameters apply, or on production wait for another SuperAdmin' },
+]
+
+export interface RestoreReport {
+  restored: Partial<Record<RestorePart, number>>
+  notes: string[]
+}
+
+export const fetchBackup = () => request<BackupFile>('GET', '/api/v1/admin/backup')
+export const restoreBackup = (backup: BackupFile, parts: RestorePart[]) => request<RestoreReport>('POST', '/api/v1/admin/restore', { backup, parts: Object.fromEntries(parts.map((p) => [p, true])) })
+
+/** How many of a part a backup holds, for the checkboxes. */
+export function partCount(b: BackupFile, part: RestorePart): number {
+  switch (part) {
+    case 'settings':
+      return b.settings ? 1 : 0
+    case 'sherlockSpend':
+      return b.sherlockSpend ? 1 : 0
+    case 'sshPairings':
+      return Object.keys(b.sshPairings ?? {}).length
+    case 'automation': {
+      const a = b.automation
+      if (!a) return 0
+      const fleets = Object.values(a.variables ?? {}).reduce((n, f) => n + Object.keys(f).length, 0)
+      return (a.scripts?.length ?? 0) + (a.runProfiles?.length ?? 0) + (a.groups?.length ?? 0) + fleets
+    }
+    default:
+      return b[part]?.length ?? 0
+  }
 }

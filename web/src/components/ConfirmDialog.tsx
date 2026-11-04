@@ -10,6 +10,8 @@ interface Props {
   /** The confirming button is styled as a warning for a change that ends access. */
   danger?: boolean
   busy?: boolean
+  /** Keeps the confirming button off, as while a required field is empty. */
+  disabled?: boolean
   error?: string
   onConfirm: () => void
   onCancel: () => void
@@ -24,7 +26,7 @@ interface Props {
  * their keyboard handling; its own events stop at it. The end of the app's
  * root, to keep the theme's colours.
  */
-export function ConfirmDialog({ title, children, confirm, danger, busy, error, onConfirm, onCancel }: Props) {
+export function ConfirmDialog({ title, children, confirm, danger, busy, disabled, error, onConfirm, onCancel }: Props) {
   const cancel = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     cancel.current?.focus()
@@ -59,7 +61,7 @@ export function ConfirmDialog({ title, children, confirm, danger, busy, error, o
           <button ref={cancel} className="rk-btn" onClick={onCancel} disabled={busy}>
             Cancel
           </button>
-          <button className="rk-btn" data-on={!danger} data-danger={danger ? 'true' : undefined} aria-busy={busy} disabled={busy} onClick={onConfirm} data-testid="confirm-ok" style={danger ? { borderColor: 'var(--err)', color: 'var(--err)' } : undefined}>
+          <button className="rk-btn" data-on={!danger} data-danger={danger ? 'true' : undefined} aria-busy={busy} disabled={busy || disabled} onClick={onConfirm} data-testid="confirm-ok" style={danger ? { borderColor: 'var(--err)', color: 'var(--err)' } : undefined}>
             {confirm}
           </button>
         </div>

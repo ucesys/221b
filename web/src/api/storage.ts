@@ -3,6 +3,7 @@
 // server/internal/views/storage.go and storage_details.go.
 
 import { useEffect, useState } from 'react'
+import { jsonHeaders } from './auth'
 import { useRefreshTick } from './live'
 import { apiPath } from '../lib/router'
 
@@ -188,7 +189,7 @@ export function useStorageScope(cluster: string): StorageScope | null {
   const [scope, setScope] = useState<{ cluster: string; scope: StorageScope } | null>(null)
   useEffect(() => {
     let stale = false
-    fetch(apiPath('storage', cluster), { headers: { Accept: 'application/json' } })
+    fetch(apiPath('storage', cluster), { headers: jsonHeaders(true) })
       .then(async (r) => {
         if (!stale && r.ok) setScope({ cluster, scope: (await r.json()) as StorageScope })
       })

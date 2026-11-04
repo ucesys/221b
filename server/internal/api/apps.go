@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
 	"net/http"
 	"slices"
 	"sort"
@@ -24,9 +25,11 @@ import (
 	"k8s.io/client-go/restmapper"
 
 	"github.com/ucesys/221b/server/internal/apps"
+	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kube"
+	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/views"
 	"github.com/ucesys/221b/server/internal/watson"
@@ -42,6 +45,9 @@ import (
 const (
 	ActionAppSave   = "app.save"
 	ActionAppForget = "app.forget"
+	// ActionAppCommand is a command of an application saved or deleted
+	// (asked October 30, 2026); a run is the Watson card's record.
+	ActionAppCommand = "app.command"
 	// driftFor is how long a drift check is kept before the page asks again.
 	driftFor = 2 * time.Minute
 )
@@ -62,13 +68,19 @@ func (s *Server) appsRoutes() {
 		s.handle("GET "+base+"apps/{namespace}/{name}/revisions", "app-revisions", s.getAppRevisions)
 		s.handle("GET "+base+"apps/{namespace}/{name}/diff", "app-diff", s.getAppDiff)
 		s.handle("GET "+base+"apps/{namespace}/{name}/images", "app-images", s.getAppImages)
+		s.handle("PUT "+base+"apps/{namespace}/{name}/commands/{command}", "app-command-save", s.putAppCommand)
+		s.handle("DELETE "+base+"apps/{namespace}/{name}/commands/{command}", "app-command-delete", s.deleteAppCommand)
+		s.handle("POST "+base+"apps/{namespace}/{name}/commands/{command}/run", "app-command-run", s.postAppCommandRun)
 	}
 }
 
 // appView is a record as the page sees it, with its last drift check.
 type appView struct {
 	apps.Record
-	Drift *apps.Drift `json:"drift,omitempty"`
+	// TokenRemoved says this change moved the application to another
+	// repository and the token saved for the old one went with it.
+	TokenRemoved bool        `json:"tokenRemoved,omitempty"`
+	Drift        *apps.Drift `json:"drift,omitempty"`
 	// DriftState sums the drift up: in sync, drifted, unknown, or "" when
 	// it was not checked yet.
 	DriftState string `json:"driftState,omitempty"`
@@ -121,6 +133,60 @@ func (s *Server) mayManageApps(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+// appAccess asks Kubernetes whether the person may run an application in
+// the namespace, as they: a release's records are Secrets there, which
+// Helm lists and creates. The console keeps an application's record with
+// its own account, which Kubernetes does not check for the person, so the
+// question is asked here.
+func appAccess(ctx context.Context, cl Cluster, p kube.Person, ns string) (bool, error) {
+	for _, verb := range []string{"list", "create"} {
+		if may, err := cl.CanI(ctx, p, verb, "", "secrets", ns); err != nil || !may {
+			return false, err
+		}
+	}
+	return true, nil
+}
+
+// mayManageApp says whether the person may manage an application in the
+// namespace: the role, and Kubernetes' answer for that namespace. It comes
+// before the record is read, so its answer says nothing about the record.
+func (s *Server) mayManageApp(w http.ResponseWriter, r *http.Request, ns string) bool {
+	if !s.mayManageApps(w, r) {
+		return false
+	}
+	_, cl, ok := s.lookup(w, r)
+	if !ok {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), prepareTimeout)
+	defer cancel()
+	may, err := appAccess(ctx, cl, s.person(r), ns)
+	if err != nil {
+		jsonError(w, http.StatusBadGateway, "asking Kubernetes what you may do failed: "+err.Error())
+		return false
+	}
+	if !may {
+		jsonError(w, http.StatusForbidden, "Kubernetes does not let you manage applications in "+ns)
+		return false
+	}
+	return true
+}
+
+// watsonAppAccess is appAccess for Watson's --app, which has a person and
+// a cluster's id rather than a request.
+func (s *Server) watsonAppAccess(ctx context.Context, c watson.Cluster, who watson.Who, ns string) (bool, error) {
+	var cl Cluster
+	if s.opts.Clusters == nil {
+		cl = s.opts.Cluster
+	} else if _, client, ok := s.opts.Clusters.Lookup(c.ID); ok {
+		cl, _ = client.(Cluster)
+	}
+	if cl == nil {
+		return false, errors.New("the connection is not running")
+	}
+	return appAccess(ctx, cl, who.Person, ns)
+}
+
 func appNames(w http.ResponseWriter, ns, name string) bool {
 	if len(validation.IsDNS1123Label(ns)) > 0 || len(validation.IsDNS1123Subdomain(name)) > 0 || len(name) > 53 {
 		jsonError(w, http.StatusBadRequest, "name a release and its namespace")
@@ -129,6 +195,44 @@ func appNames(w http.ResponseWriter, ns, name string) bool {
 	return true
 }
 
+// reachableNamespaces are the namespaces the person may see, sorted, or nil
+// with sign-in off, when nothing is limited.
+func (s *Server) reachableNamespaces(r *http.Request, cl Cluster) []string {
+	a := s.access(r, cl)
+	if a == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), prepareTimeout)
+	defer cancel()
+	if _, err := s.prepare(ctx, a, cl, []string{live.ViewNamespaces}); err != nil {
+		return []string{}
+	}
+	out := []string{}
+	for _, o := range cl.Objects("namespaces", "") {
+		if ns, ok := o.(*corev1.Namespace); ok && a.AllowNamespace(ns.Name) {
+			out = append(out, ns.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// sameAccess says whether the person reaches the namespaces the record's
+// creator reached. A record from before this was kept says no.
+func sameAccess(rec apps.Record, mine []string) bool {
+	return len(rec.CreatorNamespaces) > 0 && slices.Equal(rec.CreatorNamespaces, mine)
+}
+
+// sharedView is what someone sees of an application they reach only
+// through having the creator's access: what it is, not what it is set to,
+// since a release's values sit in Secrets of a namespace they do not reach.
+func sharedView(rec apps.Record) apps.Record {
+	rec.Values, rec.Params, rec.Commands = "", nil, nil
+	return rec
+}
+
+// getApps lists the applications a person may see: those in a namespace
+// they reach, and those an admin with the same namespace access created.
 func (s *Server) getApps(w http.ResponseWriter, r *http.Request) {
 	c, who, ok := s.appReady(w, r)
 	if !ok {
@@ -144,11 +248,19 @@ func (s *Server) getApps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := []appView{}
+	var mine []string
+	asked := false
 	for _, rec := range recs {
 		if rec.Cluster != c.ID {
 			continue
 		}
 		if may, err := cl.CanI(r.Context(), who.Person, "list", "", "secrets", rec.Namespace); err != nil || !may {
+			if !asked {
+				mine, asked = s.reachableNamespaces(r, cl), true
+			}
+			if sameAccess(rec, mine) {
+				out = append(out, appView{Record: sharedView(rec)})
+			}
 			continue
 		}
 		v := appView{Record: rec}
@@ -168,16 +280,28 @@ func (s *Server) getApp(w http.ResponseWriter, r *http.Request) {
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
 	_, cl, ok := s.lookup(w, r)
-	if !ok || !appNames(w, ns, name) || !s.mayList(w, r, cl, "secrets", ns) {
+	if !ok || !appNames(w, ns, name) {
 		return
 	}
-	rec, _, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
-	if errors.Is(err, apps.ErrNotFound) {
+	// Someone with the creator's access sees what the list showed them; the
+	// answer for anyone else is the same whether a record is kept or not.
+	full, err := cl.CanI(r.Context(), who.Person, "list", "", "secrets", ns)
+	rec, _, getErr := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
+	if err != nil || !full {
+		if getErr != nil || !sameAccess(rec, s.reachableNamespaces(r, cl)) {
+			s.mayList(w, r, cl, "secrets", ns)
+			return
+		}
+		b, _ := json.Marshal(appView{Record: sharedView(rec)})
+		writeJSON(w, r, b)
+		return
+	}
+	if errors.Is(getErr, apps.ErrNotFound) {
 		jsonError(w, http.StatusNotFound, "the console keeps no source for this release")
 		return
 	}
-	if err != nil {
-		jsonError(w, http.StatusBadGateway, err.Error())
+	if getErr != nil {
+		jsonError(w, http.StatusBadGateway, getErr.Error())
 		return
 	}
 	v := appView{Record: rec}
@@ -230,6 +354,9 @@ func (s *Server) readApp(w http.ResponseWriter, r *http.Request) (appInput, bool
 	}
 	if in.Source != nil {
 		src, err := apps.Normalize(*in.Source)
+		if err == nil {
+			err = apps.CheckRepoHost(r.Context(), src.Repo)
+		}
 		if err != nil {
 			jsonError(w, http.StatusBadRequest, err.Error())
 			return in, false
@@ -252,13 +379,19 @@ func (s *Server) readApp(w http.ResponseWriter, r *http.Request) (appInput, bool
 	}
 	if in.ValuesFile != nil {
 		f := strings.TrimSpace(*in.ValuesFile)
-		if f != "" && (strings.HasPrefix(f, "/") || strings.Contains(f, "..") || !(strings.HasSuffix(f, ".yaml") || strings.HasSuffix(f, ".yml"))) {
+		if !validValuesFile(f) {
 			jsonError(w, http.StatusBadRequest, "the values file is a YAML file in the chart's directory, such as values-prod.yaml")
 			return in, false
 		}
 		in.ValuesFile = &f
 	}
 	return in, true
+}
+
+// validValuesFile says whether a values file names a YAML file in the
+// chart's directory; empty names none.
+func validValuesFile(f string) bool {
+	return f == "" || !(strings.HasPrefix(f, "/") || strings.Contains(f, "..") || !(strings.HasSuffix(f, ".yaml") || strings.HasSuffix(f, ".yml")))
 }
 
 // applyAppInput copies what a request sets onto the record; the fleet
@@ -308,18 +441,33 @@ func (s *Server) applyAppInput(rec *apps.Record, in appInput, cluster string) er
 
 // appLine is the Watson command for an application's change: the source
 // is spelled out so the card and the audit log say where the chart comes
-// from, and --app takes the saved values (HA-06).
-func appLine(verb, ns, name string, src apps.Source, extra ...string) string {
+// from, and --app takes the saved values (HA-06). The source is checked
+// again here, since a record may predate the checks and its fields become
+// words of the line.
+func appLine(verb, ns, name string, src apps.Source, extra ...string) (string, error) {
+	if _, err := apps.Normalize(src); err != nil {
+		return "", fmt.Errorf("the application's source cannot be deployed: %w", err)
+	}
 	parts := []string{"helm", verb, name, "--git", src.Repo}
 	if src.Path != "" {
-		parts = append(parts, "--path", src.Path)
+		parts = append(parts, "--path", "'"+src.Path+"'")
 	}
 	parts = append(parts, "--ref", src.Ref)
 	if src.RefKind == apps.RefTag {
 		parts = append(parts, "--tag")
 	}
 	parts = append(parts, "-n", ns, "--app")
-	return strings.Join(append(parts, extra...), " ")
+	return strings.Join(append(parts, extra...), " "), nil
+}
+
+// submitAppLine builds an application's command and hands it to Watson.
+func (s *Server) submitAppLine(w http.ResponseWriter, r *http.Request, c watson.Cluster, who watson.Who, verb, ns, name string, src apps.Source, extra ...string) {
+	line, err := appLine(verb, ns, name, src, extra...)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.submitApp(w, r, c, who, line)
 }
 
 // submitApp hands the line to Watson as a card the person approves there
@@ -349,7 +497,7 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !appNames(w, in.Namespace, in.Name) {
+	if !appNames(w, in.Namespace, in.Name) || !s.mayManageApp(w, r, in.Namespace) {
 		return
 	}
 	if in.Source == nil {
@@ -360,21 +508,30 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, _, err := s.opts.Apps.Get(r.Context(), c.ID, in.Namespace, in.Name); err == nil {
+	var token *string
+	if old, _, err := s.opts.Apps.Get(r.Context(), c.ID, in.Namespace, in.Name); err == nil {
 		// A record whose install failed is replaced; one with a release
 		// is upgraded instead.
 		if _, deployed := views.BuildReleaseDetails(cl, in.Namespace, in.Name, s.opts.Now().UTC()); deployed {
 			jsonError(w, http.StatusConflict, "release "+in.Namespace+"/"+in.Name+" exists: upgrade it from its panel, or uninstall it first")
 			return
 		}
+		if !apps.SameRepo(old.Source, *in.Source) {
+			empty := ""
+			token = &empty
+		}
 	}
 	now := s.opts.Now().UTC()
 	rec := apps.Record{Cluster: c.ID, Namespace: in.Namespace, Name: in.Name, Source: *in.Source, Created: now, CreatedBy: who.User, Updated: now, UpdatedBy: who.User}
+	if _, cl, ok := s.lookup(w, r); ok {
+		rec.CreatorNamespaces = s.reachableNamespaces(r, cl)
+	} else {
+		return
+	}
 	if err := s.applyAppInput(&rec, in, c.ID); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	var token *string
 	if in.Token != "" {
 		token = &in.Token
 	}
@@ -382,12 +539,12 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	s.record(r, ActionAppSave, in.Namespace+"/"+in.Name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil)+" params="+strconv.Itoa(len(rec.Params)))
+	s.recordOn(r, audit.OutcomeOK, ActionAppSave, in.Namespace+"/"+in.Name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil && *token != "")+" params="+strconv.Itoa(len(rec.Params)))
 	var extra []string
 	if rec.CreateNamespace {
 		extra = append(extra, "--create-namespace")
 	}
-	s.submitApp(w, r, c, who, appLine("install", in.Namespace, in.Name, *in.Source, extra...))
+	s.submitAppLine(w, r, c, who, "install", in.Namespace, in.Name, *in.Source, extra...)
 }
 
 // putApp changes what the console keeps: the source (which adopts a
@@ -395,11 +552,11 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 // parameters or the token; with upgrade, it deploys the change too.
 func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 	c, who, ok := s.appReady(w, r)
-	if !ok || !s.mayManageApps(w, r) {
+	if !ok {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	if !appNames(w, ns, name) {
+	if !appNames(w, ns, name) || !s.mayManageApp(w, r, ns) {
 		return
 	}
 	in, ok := s.readApp(w, r)
@@ -407,7 +564,7 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := s.opts.Now().UTC()
-	rec, _, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
+	rec, saved, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
 	switch {
 	case errors.Is(err, apps.ErrNotFound):
 		if in.Source == nil {
@@ -415,11 +572,17 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rec = apps.Record{Cluster: c.ID, Namespace: ns, Name: name, Created: now, CreatedBy: who.User}
+		if _, cl, ok := s.lookup(w, r); ok {
+			rec.CreatorNamespaces = s.reachableNamespaces(r, cl)
+		}
 	case err != nil:
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	sourceChanged := in.Source != nil && *in.Source != rec.Source
+	// A token belongs to its repository: moved to another one, the saved
+	// token is removed, and only one given with the change goes there.
+	tokenRemoved := in.Source != nil && rec.HasToken && !apps.SameRepo(rec.Source, *in.Source)
 	if in.Source != nil {
 		rec.Source = *in.Source
 	}
@@ -433,8 +596,8 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		// before any deploy is compared again.
 		rec.Commit, rec.CommitDate, rec.CommitSubject, rec.ChartVersion, rec.MatchedRevision, rec.SourceDiff = "", time.Time{}, "", "", 0, ""
 		tok := in.Token
-		if tok == "" && !in.ClearToken {
-			_, tok, _ = s.opts.Apps.Get(r.Context(), c.ID, ns, name)
+		if tok == "" && !in.ClearToken && !tokenRemoved {
+			tok = saved
 		}
 		s.matchSource(r.Context(), c, who, &rec, tok)
 	}
@@ -449,23 +612,36 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.Updated, rec.UpdatedBy = now, who.User
 	var token *string
-	if in.ClearToken {
+	if in.ClearToken || (tokenRemoved && in.Token == "") {
 		empty := ""
 		token = &empty
 	} else if in.Token != "" {
 		token = &in.Token
 	}
 	if err := s.opts.Apps.Save(r.Context(), rec, token); err != nil {
-		jsonError(w, http.StatusBadGateway, err.Error())
+		appSaveFailed(w, err)
 		return
 	}
-	s.record(r, ActionAppSave, ns+"/"+name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil && *token != "")+" params="+strconv.Itoa(len(rec.Params))+" upgrade="+strconv.FormatBool(in.Upgrade))
+	s.recordOn(r, audit.OutcomeOK, ActionAppSave, ns+"/"+name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil && *token != "")+" params="+strconv.Itoa(len(rec.Params))+" upgrade="+strconv.FormatBool(in.Upgrade))
 	if !in.Upgrade {
-		b, _ := json.Marshal(appView{Record: rec})
+		if token != nil {
+			rec.HasToken = *token != ""
+		}
+		b, _ := json.Marshal(appView{Record: rec, TokenRemoved: tokenRemoved && !rec.HasToken})
 		writeJSON(w, r, b)
 		return
 	}
-	s.submitApp(w, r, c, who, appLine("upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...))
+	s.submitAppLine(w, r, c, who, "upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...)
+}
+
+// appSaveFailed answers a save that did not go through: a record someone
+// changed since this request read it is a conflict, and is left as it is.
+func appSaveFailed(w http.ResponseWriter, err error) {
+	if errors.Is(err, apps.ErrConflict) {
+		jsonError(w, http.StatusConflict, "the application changed while this was being saved: open it again and repeat the change")
+		return
+	}
+	jsonError(w, http.StatusBadGateway, err.Error())
 }
 
 // matchSource renders the source at its ref as the person and compares
@@ -498,6 +674,10 @@ func (s *Server) matchSource(ctx context.Context, c watson.Cluster, who watson.W
 		return
 	}
 	manifest, err := s.opts.Watson.RenderUpgrade(ctx, c, who, rec.Namespace, rec.Name, ch, vals)
+	if errors.Is(err, apps.ErrRenderLimit) {
+		rec.SourceDiff = "the chart could not be rendered: " + err.Error()
+		return
+	}
 	if err != nil {
 		version := ""
 		if s.opts.Clusters != nil {
@@ -542,11 +722,11 @@ func installFlags(rec apps.Record, install bool) []string {
 // to another branch or tag first when the request names one (HA-10).
 func (s *Server) postAppUpgrade(w http.ResponseWriter, r *http.Request) {
 	c, who, ok := s.appReady(w, r)
-	if !ok || !s.mayManageApps(w, r) {
+	if !ok {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	if !appNames(w, ns, name) {
+	if !appNames(w, ns, name) || !s.mayManageApp(w, r, ns) {
 		return
 	}
 	in, ok := s.readApp(w, r)
@@ -571,23 +751,23 @@ func (s *Server) postAppUpgrade(w http.ResponseWriter, r *http.Request) {
 		}
 		rec.Source, rec.Updated, rec.UpdatedBy = src, s.opts.Now().UTC(), who.User
 		if err := s.opts.Apps.Save(r.Context(), rec, nil); err != nil {
-			jsonError(w, http.StatusBadGateway, err.Error())
+			appSaveFailed(w, err)
 			return
 		}
-		s.record(r, ActionAppSave, ns+"/"+name, "source="+quoteDetail(rec.Source.String()))
+		s.recordOn(r, audit.OutcomeOK, ActionAppSave, ns+"/"+name, "source="+quoteDetail(rec.Source.String()))
 	}
-	s.submitApp(w, r, c, who, appLine("upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...))
+	s.submitAppLine(w, r, c, who, "upgrade", ns, name, rec.Source, installFlags(rec, in.Install)...)
 }
 
 // deleteApp uninstalls the release (Watson removes the record when it is
 // gone); ?record=1 only forgets the source and keeps the release.
 func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 	c, who, ok := s.appReady(w, r)
-	if !ok || !s.mayManageApps(w, r) {
+	if !ok {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	if !appNames(w, ns, name) {
+	if !appNames(w, ns, name) || !s.mayManageApp(w, r, ns) {
 		return
 	}
 	if r.URL.Query().Get("record") == "1" {
@@ -595,7 +775,7 @@ func (s *Server) deleteApp(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		s.record(r, ActionAppForget, ns+"/"+name, "the release is kept")
+		s.recordOn(r, audit.OutcomeOK, ActionAppForget, ns+"/"+name, "the release is kept")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -643,14 +823,16 @@ func (s *Server) postAppRefs(w http.ResponseWriter, r *http.Request) {
 // (M-07). The token, when given, is used for the fetch and kept nowhere.
 // getAppInspect looks a kept application's repository over at its ref
 // (M-07), with the saved token: the charts and their values files, for
-// the Source card's choice of a second values file (R2-08).
+// the Source card's choice of a second values file (R2-08). It uses the
+// saved token and answers with what the repository holds, so it is for
+// those who manage the application in its namespace.
 func (s *Server) getAppInspect(w http.ResponseWriter, r *http.Request) {
 	c, _, ok := s.appReady(w, r)
 	if !ok {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	if !appNames(w, ns, name) {
+	if !appNames(w, ns, name) || !s.mayManageApp(w, r, ns) {
 		return
 	}
 	rec, token, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
@@ -978,44 +1160,59 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
 	q := r.URL.Query()
-	from, err := s.revision(pc, ns, name, q.Get("from"))
-	if err != nil {
-		jsonError(w, http.StatusNotFound, err.Error())
-		return
-	}
-	fromLabel := fmt.Sprintf("revision %d", from.Version)
-	var toManifest, toLabel string
-	if q.Get("to") == "source" {
-		rec, token, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
-		if errors.Is(err, apps.ErrNotFound) {
-			jsonError(w, http.StatusNotFound, "the console keeps no source for this release")
-			return
+	// The record and its token are read once, when a side is the source.
+	var rec *apps.Record
+	var token string
+	// side renders one side of the diff: a revision (the deployed one when
+	// unnamed), or the source at its saved branch or tag, or at the branch
+	// or tag named for that side (asked October 30, 2026: either side may
+	// be a branch or tag, so two of the source's refs compare too).
+	side := func(which, refQ, kindQ string) (manifest, label string, ok bool) {
+		if q.Get(which) != "source" {
+			rev, err := s.revision(pc, ns, name, q.Get(which))
+			if err != nil {
+				jsonError(w, http.StatusNotFound, err.Error())
+				return "", "", false
+			}
+			return rev.Manifest, fmt.Sprintf("revision %d", rev.Version), true
 		}
-		if err != nil {
-			jsonError(w, http.StatusBadGateway, err.Error())
-			return
+		if rec == nil {
+			got, tok, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
+			if errors.Is(err, apps.ErrNotFound) {
+				jsonError(w, http.StatusNotFound, "the console keeps no source for this release")
+				return "", "", false
+			}
+			if err != nil {
+				jsonError(w, http.StatusBadGateway, err.Error())
+				return "", "", false
+			}
+			rec, token = &got, tok
 		}
 		src := rec.Source
-		if ref := q.Get("ref"); ref != "" {
-			src.Ref, src.RefKind = ref, q.Get("refKind")
+		if ref := q.Get(refQ); ref != "" {
+			var err error
+			src.Ref, src.RefKind = ref, q.Get(kindQ)
 			if src, err = apps.Normalize(src); err != nil {
 				jsonError(w, http.StatusBadRequest, err.Error())
-				return
+				return "", "", false
 			}
 		}
 		co, err := apps.Fetch(r.Context(), src, token)
 		if err != nil {
 			jsonError(w, http.StatusBadGateway, err.Error())
-			return
+			return "", "", false
 		}
-		ch, vals, err := apps.Compose(co, src, &rec, nil)
+		ch, vals, err := apps.Compose(co, src, rec, nil)
 		if err != nil {
 			jsonError(w, http.StatusBadGateway, err.Error())
-			return
+			return "", "", false
 		}
-		toLabel = fmt.Sprintf("%s (%s)", src, short12(co.Commit))
+		label = fmt.Sprintf("%s (%s)", src, short12(co.Commit))
 		if m, err := s.opts.Watson.RenderUpgrade(r.Context(), c, who, ns, name, ch, vals); err == nil {
-			toManifest = m
+			return m, label, true
+		} else if errors.Is(err, apps.ErrRenderLimit) {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return "", "", false
 		} else {
 			// Without a server dry run (no right to upgrade, or no release
 			// yet), the chart renders on the console: lookups and the
@@ -1027,19 +1224,20 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 			rendered, err2 := apps.Render(r.Context(), ch, vals, name, ns, version)
 			if err2 != nil {
 				jsonError(w, http.StatusBadGateway, err2.Error())
-				return
+				return "", "", false
 			}
-			toManifest, toLabel = rendered.Manifest, toLabel+", rendered on the console: "+strings.TrimPrefix(err.Error(), "Error: ")
+			return rendered.Manifest, label + ", rendered on the console: " + strings.TrimPrefix(err.Error(), "Error: "), true
 		}
-	} else {
-		to, err := s.revision(pc, ns, name, q.Get("to"))
-		if err != nil {
-			jsonError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		toManifest, toLabel = to.Manifest, fmt.Sprintf("revision %d", to.Version)
 	}
-	d := apps.Compare(from.Manifest, toManifest, fromLabel, toLabel)
+	fromManifest, fromLabel, ok := side("from", "fromRef", "fromRefKind")
+	if !ok {
+		return
+	}
+	toManifest, toLabel, ok := side("to", "ref", "refKind")
+	if !ok {
+		return
+	}
+	d := apps.Compare(fromManifest, toManifest, fromLabel, toLabel)
 	b, _ := json.Marshal(struct {
 		apps.Diff
 		From string `json:"from"`

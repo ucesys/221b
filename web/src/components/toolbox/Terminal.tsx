@@ -57,6 +57,11 @@ export function retryDelay(attempt: number): number {
   return Math.min(10_000, 1000 * 2 ** Math.max(0, attempt))
 }
 
+/** Whether the focus is where the person types or decides: a field, or a dialog. A terminal that opens leaves it there. */
+export function focusHeld(el: Element | null): boolean {
+  return !!el?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="dialog"]')
+}
+
 /**
  * A session's terminal (TB-15): xterm.js over the session's WebSocket. Output
  * and keystrokes are binary messages; a resize or a keep-alive is a small
@@ -134,9 +139,12 @@ export function Terminal({ cluster, id, watch = false, dark, live = true, onEnde
       ws = sock
       sock.onopen = () => {
         attempts = 0
+        // A reconnect happens without the person asking: it keeps the focus
+        // the terminal had and takes none, or their typing lands in a live shell.
+        const had = el.contains(document.activeElement)
         if (again) t.reset()
         resize()
-        if (!watch) t.focus()
+        if (!watch && (again ? had : !focusHeld(document.activeElement))) t.focus()
       }
       sock.onmessage = (e: MessageEvent<ArrayBuffer | string>) => {
         if (typeof e.data === 'string') {

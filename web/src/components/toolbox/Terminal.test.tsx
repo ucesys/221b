@@ -1,6 +1,6 @@
-import { act, render } from '@testing-library/react'
+import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { retryDelay, Terminal } from './Terminal'
+import { focusHeld, retryDelay, Terminal } from './Terminal'
 
 /** A WebSocket the test drives: every one made is kept, in order. */
 class FakeSocket {
@@ -54,6 +54,7 @@ describe('Terminal', () => {
     vi.useFakeTimers()
   })
   afterEach(() => {
+    cleanup()
     vi.useRealTimers()
     vi.unstubAllGlobals()
   })
@@ -102,5 +103,55 @@ describe('Terminal', () => {
 
   it('backs off from a second to ten', () => {
     expect([0, 1, 2, 3, 4, 9].map(retryDelay)).toEqual([1000, 2000, 4000, 8000, 10000, 10000])
+  })
+
+  it('takes the focus on opening only from nothing, never from where the person types', () => {
+    const { container } = render(<Terminal cluster="local" id="s1" dark live />)
+    act(() => FakeSocket.all[0]!.open())
+    expect(container.contains(document.activeElement)).toBe(true)
+    cleanup()
+    for (const html of ['<input />', '<textarea></textarea>', '<select></select>', '<div contenteditable="true" tabindex="0"></div>', '<div role="dialog"><button>OK</button></div>']) {
+      const box = document.body.appendChild(document.createElement('div'))
+      box.innerHTML = html
+      box.querySelector<HTMLElement>('input, textarea, select, button, div[contenteditable]')!.focus()
+      const held = document.activeElement
+      expect(held).not.toBe(document.body)
+      render(<Terminal cluster="local" id="s2" dark live />)
+      act(() => FakeSocket.all[FakeSocket.all.length - 1]!.open())
+      expect(document.activeElement).toBe(held)
+      cleanup()
+      box.remove()
+    }
+  })
+
+  it('on a reconnect keeps the focus it had and takes none', () => {
+    const { container } = render(<Terminal cluster="local" id="s1" dark live />)
+    const first = FakeSocket.all[0]!
+    act(() => first.open())
+    const own = document.activeElement
+    expect(container.contains(own)).toBe(true)
+    act(() => first.drop('network'))
+    act(() => {
+      vi.advanceTimersByTime(retryDelay(0))
+    })
+    act(() => FakeSocket.all[1]!.open())
+    expect(document.activeElement).toBe(own)
+    // Focus elsewhere, even on a plain button: a reconnect leaves it there.
+    const other = document.body.appendChild(document.createElement('button'))
+    other.focus()
+    act(() => FakeSocket.all[1]!.drop('network'))
+    act(() => {
+      vi.advanceTimersByTime(retryDelay(0))
+    })
+    act(() => FakeSocket.all[2]!.open())
+    expect(document.activeElement).toBe(other)
+    other.remove()
+  })
+
+  it('knows what holds the focus', () => {
+    expect(focusHeld(null)).toBe(false)
+    expect(focusHeld(document.body)).toBe(false)
+    expect(focusHeld(document.createElement('button'))).toBe(false)
+    expect(focusHeld(document.createElement('input'))).toBe(true)
   })
 })

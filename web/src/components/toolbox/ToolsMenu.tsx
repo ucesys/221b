@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { fetchToolbox, type ToolAction, type ToolboxInfo, type ToolName } from '../../api/toolbox'
+import { fetchToolbox, HOST_TOOLS, type ToolAction, type ToolboxInfo, type ToolName } from '../../api/toolbox'
 import type { PodDetails } from '../../api/types'
 import { layer } from '../../lib/layer'
 import { apiPath } from '../../lib/router'
 import { ConfirmDialog } from '../ConfirmDialog'
-import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, SherlockIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
+import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, KeyIcon, SherlockIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
 import { useSherlockApi } from '../sherlockContext'
 import { troubleshootQuestion } from '../../lib/sherlock'
 import { useToolbox, type ToolboxApi } from './context'
@@ -118,15 +118,20 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
   const [style] = useState(() => place(anchor))
 
   const sherlock = useSherlockApi()
+  // By value: every table refresh hands the menu a new target object, and
+  // each would fetch again and take the keyboard back to the first item.
+  const kind = target.kind
+  const targetName = target.name
+  const targetNs = target.kind === 'pod' ? target.namespace : ''
   useEffect(() => {
-    if (!tb.available || (target.kind !== 'pod' && target.kind !== 'node')) return
+    if (!tb.available || (kind !== 'pod' && kind !== 'node')) return
     let live = true
-    fetchToolbox(tb.cluster, target.kind === 'pod' ? [target.namespace] : [], target.kind === 'node').then(
+    fetchToolbox(tb.cluster, kind === 'pod' ? [targetNs] : [], kind === 'node').then(
       (i) => live && setInfo(i),
       (e: unknown) => live && setErr(e instanceof Error ? e.message : String(e)),
     )
-    if (target.kind === 'pod') {
-      fetch(apiPath(`pods/${encodeURIComponent(target.namespace)}/${encodeURIComponent(target.name)}`, tb.cluster), { headers: { Accept: 'application/json' } })
+    if (kind === 'pod') {
+      fetch(apiPath(`pods/${encodeURIComponent(targetNs)}/${encodeURIComponent(targetName)}`, tb.cluster), { headers: { Accept: 'application/json' } })
         .then((r) => (r.ok ? (r.json() as Promise<PodDetails>) : null))
         .then((d) => live && setPod(d))
         .catch(() => undefined)
@@ -134,7 +139,7 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
     return () => {
       live = false
     }
-  }, [tb.available, tb.cluster, target])
+  }, [tb.available, tb.cluster, kind, targetName, targetNs])
 
   useEffect(() => {
     const away = (e: MouseEvent) => {
@@ -149,11 +154,13 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
       const now = anchor?.getBoundingClientRect()
       if (!at || !now || Math.abs(now.top - at.top) > 2 || Math.abs(now.left - at.left) > 2) onClose()
     }
-    document.addEventListener('mousedown', away)
+    // On the way down, before another menu's button stops the event: one
+    // menu at a time.
+    document.addEventListener('mousedown', away, true)
     window.addEventListener('scroll', scroll, true)
     window.addEventListener('resize', onClose)
     return () => {
-      document.removeEventListener('mousedown', away)
+      document.removeEventListener('mousedown', away, true)
       window.removeEventListener('scroll', scroll, true)
       window.removeEventListener('resize', onClose)
     }
@@ -168,9 +175,10 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
     const o = info.off[t]
     if (o) return o
     if (target.kind === 'pod') return info.namespaces[target.namespace]?.tools[t] || undefined
-    if (t === 'node-shell' || t === 'node-command') return info.nodes[t] || undefined
+    if (HOST_TOOLS.includes(t)) return info.nodes[t] || undefined
     return undefined
   }
+  const pairing = target.kind === 'node' ? info?.ssh?.pairings[target.name] : undefined
   const open = (tool: ToolName, prefill = {}) => {
     onClose()
     tb.openTool({ tool, pod: target.kind === 'pod' ? { name: target.name, namespace: target.namespace } : undefined, node: target.kind === 'node' ? target.name : undefined, prefill, from: 'Tools menu' })
@@ -223,8 +231,16 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
     ]
   } else if (target.kind === 'node') {
     items = [
-      { key: 'node-shell', icon: <TerminalIcon />, label: 'Node shell…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('node-shell'), run: () => open('node-shell') },
+      { key: 'node-shell', icon: <TerminalIcon />, label: 'K8S node shell…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('node-shell'), run: () => open('node-shell') },
       { key: 'debug-pod', icon: <BoxIcon />, label: 'Debug pod on this node…', off: why('debug-pod'), run: () => open('debug-pod') },
+      // SSH (Phase 11, ADR-72): a session once the node is paired; pairing and unpairing are node commands.
+      ...(info?.ssh
+        ? [
+            { key: 'ssh', icon: <TerminalIcon />, label: 'SSH…', hint: pairing ? `as ${pairing.loginUser}${pairing.stale ? ' · pair again' : ''}` : 'pair the node first', off: why('ssh') ?? (pairing ? (pairing.stale ? 'paired with another authority; pair it again' : undefined) : 'not paired yet: Pair for SSH… first'), run: () => open('ssh') },
+            { key: 'ssh-pair', icon: <KeyIcon />, label: pairing ? 'Pair for SSH again…' : 'Pair for SSH…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('ssh-pair'), run: () => open('ssh-pair', pairing ? { loginUser: pairing.loginUser, port: pairing.port } : {}) },
+            ...(pairing ? [{ key: 'ssh-unpair', icon: <KeyIcon />, label: 'Unpair from SSH…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('ssh-unpair'), run: () => open('ssh-unpair') }] : []),
+          ]
+        : []),
       {
         key: 'cordon',
         icon: <CordonIcon />,

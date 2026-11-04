@@ -1,3 +1,8 @@
+{{- if eq (include "b221.shared" .) "only" }}
+This release holds the roles every console in this cluster shares: the ClusterRoles 221b-viewer, 221b-super-viewer,
+221b-admin and 221b-super-admin, 221b-nodes and their cluster-wide bindings. It runs no console. Install each console with
+--set rbac.shared=none. Uninstalling this release takes the roles away from all of them.
+{{- else }}
 221B is installed as {{ include "b221.fullname" . }} in namespace {{ .Release.Namespace }}, running {{ include "b221.image" . }}.
 {{- if include "b221.movingTag" . }}
 That tag moves with every build: each helm upgrade restarts the console on its latest build, and
@@ -79,11 +84,21 @@ SuperAdmins named in values, who manage connections, settings and users: {{ join
 {{- end }}
 {{- if .Values.rbac.create }}
 
+{{- $owner := include "b221.sharedOwner" . }}
+{{- if or $owner (eq (include "b221.shared" .) "none") }}
+Roles: this console does not install the shared roles, so rbac.roles here does not define them: they come from
+{{ $owner | default "the release that holds them (rbac.shared=only)" }}, and uninstalling that release removes them from this console too. To keep them apart
+from any one console, install them on their own: helm install 221b-roles <chart> --set rbac.shared=only, then --set rbac.shared=none here.
+{{- else }}
 Roles: the ClusterRoles 221b-viewer, 221b-super-viewer, 221b-admin and 221b-super-admin are installed, Admin as the
-{{ .Values.rbac.roles.admin.template }} definition and SuperAdmin as the {{ .Values.rbac.roles.superAdmin.template }} one. Admin and Viewer are bound to groups, one namespace at
+{{ .Values.rbac.roles.admin.template }} definition and SuperAdmin as the {{ .Values.rbac.roles.superAdmin.template }} one.
+{{- end }} Admin and Viewer are bound to groups, one namespace at
 a time, from auth.local.groups{{ if or (eq .Values.auth.mode "ldap") (eq .Values.auth.mode "oidc") }} and auth.{{ .Values.auth.mode }}.roles{{ end }}; nothing in the console writes a binding.
 {{- if and (eq .Values.rbac.roles.admin.template "readOnly") (eq .Values.rbac.roles.superAdmin.template "readOnly") }}
 Both changing roles are readOnly: no identity the console uses holds a write right, so nothing can be changed through it.
+{{- if .Values.kubeletStats }}
+kubeletStats is on, though, and its nodes/proxy right can run a command in any pod through a kubelet: set kubeletStats=false to close that too.
+{{- end }}
 {{- end }}
 {{- if eq .Values.rbac.enforce "strict" }}
 rbac.enforce is strict: a cluster whose roles allow more than these refuses every change.
@@ -128,3 +143,4 @@ Secrets and there is no Helm tab, since Helm keeps its release records in Secret
 Check what it is allowed to read:
 
   kubectl auth can-i --list --as=system:serviceaccount:{{ .Release.Namespace }}:{{ include "b221.serviceAccountName" . }}
+{{- end }}

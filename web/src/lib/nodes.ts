@@ -9,6 +9,28 @@ export type RoleFilter = 'all' | 'control-plane' | 'worker'
 
 export const toneRank: Record<Tone, number> = { err: 3, warn: 2, info: 1, muted: 0, ok: 0 }
 
+/** What the kubelet keeps from pods: capacity less allocatable. */
+export function reserved(res: { allocatable: number; capacity: number }): number {
+  return Math.max(0, res.capacity - res.allocatable)
+}
+
+/**
+ * In use as a share of the machine. metrics-server reads the whole machine,
+ * software beside Kubernetes included, so on a node with resources reserved
+ * a share of allocatable would pass 100% while pods stay within theirs.
+ */
+export function usedPct(res: { allocatable: number; capacity: number; used?: number | null }): number {
+  return pct(res.used ?? 0, res.capacity || res.allocatable)
+}
+
+/** A node's reservation in words: "4 cores · 16 GiB", or "none". */
+export function reservedText(r: { cpu: { allocatable: number; capacity: number }; memory: { allocatable: number; capacity: number } }): string {
+  const cpu = reserved(r.cpu)
+  const memory = reserved(r.memory)
+  if (!cpu && !memory) return 'none'
+  return [cpu ? `${fCores(cpu)} cores` : '', memory ? fMem(memory) : ''].filter(Boolean).join(' · ')
+}
+
 /** Allocatable less requested: what the scheduler can still place. */
 export function free(res: { allocatable: number; requested: number }): number {
   return Math.max(0, res.allocatable - res.requested)
@@ -141,7 +163,7 @@ export interface Meter {
 
 export function cpuMeter(r: NodeRow): Meter {
   const req = pct(r.cpu.requested, r.cpu.allocatable)
-  const use = r.cpu.used == null ? null : pct(r.cpu.used, r.cpu.allocatable)
+  const use = r.cpu.used == null ? null : usedPct(r.cpu)
   return {
     reqPct: req,
     usePct: use ?? 0,
@@ -155,7 +177,7 @@ export function cpuMeter(r: NodeRow): Meter {
 
 export function memoryMeter(r: NodeRow): Meter {
   const req = pct(r.memory.requested, r.memory.allocatable)
-  const use = r.memory.used == null ? null : pct(r.memory.used, r.memory.allocatable)
+  const use = r.memory.used == null ? null : usedPct(r.memory)
   return {
     reqPct: req,
     usePct: use ?? 0,
@@ -197,15 +219,49 @@ export interface ResourceSection {
   noteTone: Tone
 }
 
+/** A Kubernetes quantity in the unit the rows use: millicores or bytes. Percentages and the unreadable are 0. */
+export function quantity(text: string | undefined, kind: 'cpu' | 'memory'): number {
+  const m = /^([0-9.]+)([a-zA-Z]*)$/.exec(text ?? '')
+  if (!m) return 0
+  const n = Number(m[1])
+  if (kind === 'cpu') return m[2] === 'm' ? n : n * 1000
+  const unit: Record<string, number> = { '': 1, Ki: 1024, Mi: 1024 ** 2, Gi: 1024 ** 3, Ti: 1024 ** 4, k: 1e3, K: 1e3, M: 1e6, G: 1e9, T: 1e12 }
+  return n * (unit[m[2]!] ?? 0)
+}
+
+/** What the kubelet keeps from pods, as the node details list it. */
+export interface KubeletReserve {
+  systemReserved?: Record<string, string>
+  kubeReserved?: Record<string, string>
+  evictionHard?: Record<string, string>
+}
+
+/** The lines between a resource's total and what is allocatable: each reservation, when the kubelet says, else their sum. */
+function reservedLines(kind: 'cpu' | 'memory', res: { allocatable: number; capacity: number }, cfg: KubeletReserve | undefined, show: (v: number) => string): ResourceSection['lines'] {
+  const total = reserved(res)
+  if (!cfg) return total ? [{ k: 'Reserved', v: show(total), sub: 'kept from pods' }] : []
+  const system = quantity(cfg.systemReserved?.[kind], kind)
+  const kube = quantity(cfg.kubeReserved?.[kind], kind)
+  const evict = kind === 'memory' ? quantity(cfg.evictionHard?.['memory.available'], 'memory') : 0
+  const lines: ResourceSection['lines'] = [
+    { k: 'Reserved for the system', v: show(system), sub: 'other software and the OS' },
+    { k: 'Reserved for Kubernetes', v: show(kube), sub: 'kubelet and runtime' },
+  ]
+  if (evict) lines.push({ k: 'Eviction threshold', v: show(evict), sub: 'pods are evicted below this' })
+  const other = total - system - kube - evict
+  if (other > 0) lines.push({ k: 'Reserved, other', v: show(other) })
+  return lines
+}
+
 /** The CPU, Memory and Pods sections of the node details. */
-export function resourceSections(r: NodeRow, metrics: boolean, metricsNote: string): ResourceSection[] {
+export function resourceSections(r: NodeRow, metrics: boolean, metricsNote: string, kubelet?: KubeletReserve): ResourceSection[] {
   const usage = metrics && r.cpu.used != null && r.memory.used != null
   const noUsage = metrics && !usage ? 'metrics-server has no reading for this node.' : metricsNote || 'CPU and memory in use are not available.'
   const cR = pct(r.cpu.requested, r.cpu.allocatable)
-  const cU = usage ? pct(r.cpu.used ?? 0, r.cpu.allocatable) : 0
+  const cU = usage ? usedPct(r.cpu) : 0
   const cL = pct(r.cpu.limits, r.cpu.allocatable)
   const mR = pct(r.memory.requested, r.memory.allocatable)
-  const mU = usage ? pct(r.memory.used ?? 0, r.memory.allocatable) : 0
+  const mU = usage ? usedPct(r.memory) : 0
   const mL = pct(r.memory.limits, r.memory.allocatable)
   const p = r.pods
   const notReady: string[] = []
@@ -219,10 +275,12 @@ export function resourceSections(r: NodeRow, metrics: boolean, metricsNote: stri
       usePct: cU,
       useTone: cU > 85 ? 'err' : 'ok',
       lines: [
-        { k: 'Allocatable', v: `${fCores(r.cpu.allocatable)} cores`, sub: r.cpu.capacity > r.cpu.allocatable ? `of ${fCores(r.cpu.capacity)} on the machine` : '' },
+        { k: 'Total on the node', v: `${fCores(r.cpu.capacity)} cores` },
+        ...reservedLines('cpu', r.cpu, kubelet, fCores),
+        { k: 'Allocatable', v: `${fCores(r.cpu.allocatable)} cores`, sub: 'pods may have this' },
         { k: 'Requested', v: fCores(r.cpu.requested), sub: pctTxt(cR) },
         { k: 'Free to schedule', v: fCores(free(r.cpu)), sub: pctTxt(100 - Math.min(100, cR)) },
-        { k: 'In use', v: usage ? fCores(r.cpu.used ?? 0) : '—', sub: usage ? pctTxt(cU) : '', tone: cU > 85 ? 'err' : undefined },
+        { k: 'In use', v: usage ? fCores(r.cpu.used ?? 0) : '—', sub: usage ? `${pctTxt(cU)} of the machine` : '', tone: cU > 85 ? 'err' : undefined },
         { k: 'Limits', v: fCores(r.cpu.limits), sub: pctTxt(cL), tone: cL > 100 ? 'warn' : undefined },
       ],
       note: !usage ? noUsage : cL > 100 ? `CPU limits are overcommitted (${pctTxt(cL)} of allocatable) — expect throttling under load.` : '',
@@ -234,10 +292,12 @@ export function resourceSections(r: NodeRow, metrics: boolean, metricsNote: stri
       usePct: mU,
       useTone: mU > 85 ? 'err' : 'ok',
       lines: [
-        { k: 'Allocatable', v: fMem(r.memory.allocatable), sub: r.memory.capacity > r.memory.allocatable ? `of ${fMem(r.memory.capacity)} on the machine` : '' },
+        { k: 'Total on the node', v: fMem(r.memory.capacity) },
+        ...reservedLines('memory', r.memory, kubelet, fMem),
+        { k: 'Allocatable', v: fMem(r.memory.allocatable), sub: 'pods may have this' },
         { k: 'Requested', v: fMem(r.memory.requested), sub: pctTxt(mR) },
         { k: 'Free to schedule', v: fMem(free(r.memory)), sub: pctTxt(100 - Math.min(100, mR)) },
-        { k: 'In use', v: usage ? fMem(r.memory.used) : '—', sub: usage ? pctTxt(mU) : '', tone: mU > 85 ? 'err' : undefined },
+        { k: 'In use', v: usage ? fMem(r.memory.used) : '—', sub: usage ? `${pctTxt(mU)} of the machine` : '', tone: mU > 85 ? 'err' : undefined },
         { k: 'Limits', v: fMem(r.memory.limits), sub: pctTxt(mL), tone: mL > 100 ? 'warn' : undefined },
       ],
       note: !usage

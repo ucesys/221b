@@ -3,15 +3,39 @@
 // and Watson's events and attached over a WebSocket.
 
 import { useEffect, useRef, useState } from 'react'
-import { unauthorized } from './auth'
+import { BACKGROUND, unauthorized } from './auth'
 import { subscribeAssistant } from './assistants'
 import type { WatsonItem } from './watson'
 import { apiPath } from '../lib/router'
 
-export type ToolName = 'shell' | 'command' | 'forward' | 'debug-container' | 'debug-pod' | 'node-shell' | 'node-command'
+export type ToolName = 'shell' | 'command' | 'forward' | 'debug-container' | 'debug-pod' | 'node-shell' | 'node-command' | 'ssh' | 'ssh-pair' | 'ssh-unpair'
 
 export const POD_TOOLS: ToolName[] = ['shell', 'command', 'forward', 'debug-container']
-export const NODE_TOOLS: ToolName[] = ['node-shell', 'node-command', 'debug-pod']
+export const NODE_TOOLS: ToolName[] = ['node-shell', 'node-command', 'debug-pod', 'ssh', 'ssh-pair', 'ssh-unpair']
+/** The node tools that act on the node itself; a debug pod is a pod in a namespace. */
+export const HOST_TOOLS: ToolName[] = NODE_TOOLS.filter((t) => t !== 'debug-pod')
+/** The tools that run one command and end, with no time to choose. */
+export const COMMAND_TOOLS: ToolName[] = ['command', 'node-command', 'ssh-pair', 'ssh-unpair']
+
+/** A node paired for SSH (Phase 11, ADR-72): whom sessions log in as, and the host key pinned when it was paired. */
+export interface SSHPairing {
+  loginUser: string
+  port: number
+  pairedAt: string
+  pairedBy?: string
+  principal?: string
+  /** Paired with an authority that is not this console's any more: pair again. */
+  stale?: boolean
+}
+
+export interface SSHInfo {
+  enabled: boolean
+  port: number
+  loginUser: string
+  principal: string
+  caFingerprint?: string
+  pairings: Record<string, SSHPairing>
+}
 
 export interface ToolboxImage {
   name: string
@@ -37,6 +61,8 @@ export interface ToolboxInfo {
   me: string
   /** Why a tool is off everywhere on this cluster, by tool. */
   off: Partial<Record<ToolName, string>>
+  /** The SSH tools' state (Phase 11), when the chart turns them on. */
+  ssh?: SSHInfo
   idleSeconds: number
   maxMinutes: number
   transcripts: string
@@ -75,6 +101,10 @@ export interface ToolRequest {
   serviceAccount?: string
   labelsFrom?: string
   labels?: Record<string, string>
+  /** The OS account an SSH pairing admits sessions as; it must exist on the node. */
+  loginUser?: string
+  /** More nodes a pairing runs on, one session each, under one card; node is the first. */
+  nodes?: string[]
   minutes?: number
   reason?: string
 }
@@ -171,12 +201,12 @@ export class ToolboxError extends Error {
   }
 }
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, background = false): Promise<T> {
   let res: Response
   try {
     res = await fetch(path, {
       method,
-      headers: body === undefined ? { Accept: 'application/json' } : { 'Content-Type': 'application/json', Accept: 'application/json' },
+      headers: { ...(body === undefined ? { Accept: 'application/json' } : { 'Content-Type': 'application/json', Accept: 'application/json' }), ...(background ? BACKGROUND : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch {
@@ -210,6 +240,16 @@ export function fetchToolbox(cluster: string, namespaces: string[] = [], nodes =
 }
 
 /**
+ * A pairing session changes the nodes' pairings, and the node's menu opens
+ * on its end (Phase 11): what is known of a cluster's nodes goes with it.
+ */
+function forgetPairings(cluster: string): void {
+  for (const key of cache.keys()) if (key.startsWith(`${cluster}\x00`) && key.endsWith('\x00true')) cache.delete(key)
+}
+
+const pairingEnded = (s: SessionView) => s.state === 'ended' && (s.tool === 'ssh-pair' || s.tool === 'ssh-unpair')
+
+/**
  * Sends a dialog's request: the session opens at once (opened), or where a
  * second person must approve it, it becomes a Watson card (TB-36).
  */
@@ -223,8 +263,8 @@ export const runToolAction = (cluster: string, a: ToolAction) => call<WatsonItem
 export const endSession = (cluster: string, id: string, reason = '') => call<SessionView>('POST', apiPath(`sessions/${encodeURIComponent(id)}/end`, cluster), { reason })
 export const keepSession = (cluster: string, id: string) => call<SessionView>('POST', apiPath(`sessions/${encodeURIComponent(id)}/keep`, cluster), {})
 export const extendSession = (cluster: string, id: string) => call<SessionView>('POST', apiPath(`sessions/${encodeURIComponent(id)}/extend`, cluster), {})
-export const fetchSessions = (cluster: string) => call<SessionView[]>('GET', apiPath('sessions', cluster))
-export const fetchSessionHistory = (cluster: string) => call<SessionRecord[]>('GET', apiPath('sessions', cluster) + '?history=1')
+export const fetchSessions = (cluster: string, background = false) => call<SessionView[]>('GET', apiPath('sessions', cluster), undefined, background)
+export const fetchSessionHistory = (cluster: string, background = false) => call<SessionRecord[]>('GET', apiPath('sessions', cluster) + '?history=1', undefined, background)
 export const sessionOutputHref = (cluster: string, id: string) => apiPath(`sessions/${encodeURIComponent(id)}/output`, cluster)
 export const transcriptHref = (cluster: string, id: string) => apiPath(`sessions/${encodeURIComponent(id)}/transcript`, cluster)
 
@@ -237,6 +277,14 @@ export function attachURL(cluster: string, id: string, watch = false): string {
 export interface SessionsState {
   sessions: SessionView[]
   live: boolean
+}
+
+/**
+ * The sessions the page shows, in the dock and its list: all but those
+ * that ended and had their tab closed, unless opened again.
+ */
+export function shownSessions(all: SessionView[], closed: string[], opened: string[]): SessionView[] {
+  return all.filter((x) => x.state !== 'ended' || !closed.includes(x.id) || opened.includes(x.id))
 }
 
 /** Sorts sessions: live first, then newest. */
@@ -266,10 +314,13 @@ export function useSessions(cluster: string, on = true, onNew?: (s: SessionView)
         if (name === 'all') {
           const sessions = sortSessions(JSON.parse(data) as SessionView[])
           if (known) for (const x of sessions) if (!known.has(x.id)) heard.current?.(x)
+          // The stream was away, or this cluster was not open, when it ended.
+          if (sessions.some(pairingEnded)) forgetPairings(cluster)
           known = new Set(sessions.map((x) => x.id))
           setState((s) => ({ ...mine(s), sessions, live: true }))
         } else if (name === 'session') {
           const next = JSON.parse(data) as SessionView
+          if (pairingEnded(next)) forgetPairings(cluster)
           if (known && !known.has(next.id)) {
             known.add(next.id)
             heard.current?.(next)
@@ -300,8 +351,11 @@ export function toolLabel(t: ToolName): string {
     forward: 'Port forward',
     'debug-container': 'Debug container',
     'debug-pod': 'Debug pod',
-    'node-shell': 'Node shell',
+    'node-shell': 'K8S node shell',
     'node-command': 'Run a command on the node',
+    ssh: 'SSH',
+    'ssh-pair': 'Pair for SSH',
+    'ssh-unpair': 'Unpair from SSH',
   }[t]
 }
 
@@ -321,6 +375,12 @@ export function tabLabel(s: SessionView): string {
       return `dbg ${s.pod || r.namespace || ''}`
     case 'command':
       return `run ${pod}`
+    case 'ssh':
+      return `ssh ${r.node ?? ''}`
+    case 'ssh-pair':
+      return `pair ${r.node ?? ''}`
+    case 'ssh-unpair':
+      return `unpair ${r.node ?? ''}`
     default:
       return `sh ${pod}${s.container ? ' · ' + s.container : ''}`
   }

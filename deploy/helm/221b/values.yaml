@@ -9,11 +9,15 @@ localCluster:
   # With sign-in on, a change runs as the person who approved it, so their
   # own RBAC decides, and the console needs nothing more than impersonation.
   # With sign-in off (auth.mode none) and mode write, changes run as the
-  # console's ServiceAccount: it is bound to this ClusterRole (the built-in
-  # edit role: workloads, pods and their evictions, Secrets for Helm's
-  # records, no RBAC) and to a small role to cordon, drain and label nodes.
-  # Empty grants nothing, and the API server refuses the changes.
-  writeClusterRole: edit
+  # console's ServiceAccount: it is bound to this ClusterRole and to a small
+  # role to cordon, drain and label nodes. minimal is a role the chart
+  # makes: workloads, pods and their evictions, what Helm applications
+  # deploy, and writing Secrets; reading them only with secrets.read, which
+  # Helm's records need. It holds no RBAC and no impersonation. Name another
+  # ClusterRole to use that instead (the built-in edit reads every Secret
+  # and may impersonate ServiceAccounts). Empty grants nothing, and the API
+  # server refuses the changes.
+  writeClusterRole: minimal
 
 image:
   repository: ghcr.io/ucesys/221b
@@ -53,6 +57,19 @@ allowedHosts: []
 # than one, the chart adds a PodDisruptionBudget and spreads the pods over
 # nodes.
 replicaCount: 1
+# What the replicas do with the clusters (ADR-70). Only the leader reads
+# them: it lists and watches every cluster, reads CPU and memory in use
+# from metrics-server and the kubelets, checks each connection and the
+# deployed roles, and answers every data request. The other replicas sign
+# people in and pass everything else to it, so Kubernetes sees one reader
+# however many replicas there are. With warmStandby on, the others keep
+# their watches open and poll nothing, so a new leader serves at once: a
+# rolling upgrade moves the leader every time. Off, they hold nothing
+# until they win the Lease, and the first list after a failover takes a
+# moment; that saves a standby's memory on a very large cluster. Every
+# open event stream ends on the leader, so its cap (200) is the console's.
+replicas:
+  warmStandby: true
 
 # How often every open console is updated: the server reads CPU and memory
 # in use from metrics-server, rebuilds the rows that changed and sends every
@@ -89,9 +106,13 @@ auth:
   # only members of a group listed in auth.ldap.roles may sign in. local:
   # accounts kept by the console itself, for evaluations and clusters
   # without a provider. none: no sign-in, as before Phase 3; everyone who
-  # reaches the console is an administrator, so expose it only on a network
-  # where that is acceptable.
+  # reaches the console holds auth.anonymousRole, and SSH, Automation and
+  # showing Secret values are off, since nobody is known.
   mode: local
+  # With auth.mode none, the role everyone holds: viewer, or admin to let
+  # them change things with the console's own account. A super role needs
+  # sign-in and is refused.
+  anonymousRole: viewer
   # The names Kubernetes sees for people and groups from each source, so a
   # local "ops" and an LDAP "ops" are different subjects. OIDC names carry
   # auth.kubernetes.userPrefix and groupPrefix. Names that start with
@@ -99,6 +120,13 @@ auth:
   prefixes:
     local: "221b-local:"
     ldap: "221b-ldap:"
+  # CIDRs of the proxies in front of the console, such as your Ingress
+  # controller's pods: their X-Forwarded-For says who a request is from, for
+  # the audit log's From and the limits on sign-in attempts. Empty believes
+  # no one's header: From is the socket's peer, and every address meets the
+  # same limit, as well as the limit per account. List every proxy on the
+  # way, not the clients.
+  trustedProxies: []
   # An optional code that must be typed on the first-run page, which asks
   # for the first administrator while no user exists. Empty asks for none.
   # Or name an existing Secret holding it under the key setup-token.
@@ -117,7 +145,8 @@ auth:
     scopes: "openid,profile,email"
     # The claim that names a person to Kubernetes RBAC and the audit log, and
     # the claim that lists their groups (nested claims use dots:
-    # realm_access.roles).
+    # realm_access.roles). A token without the first is refused: no other
+    # claim stands in for it.
     usernameClaim: email
     groupsClaim: groups
     # What the sign-in button says: "Sign in with Okta".
@@ -167,7 +196,8 @@ auth:
     # The groups of each role, written as the directory has them. Any listed
     # group lets its members sign in. viewer and admin entries may carry
     # namespaces, which become RoleBindings; superViewer and superAdmin
-    # apply everywhere and take none.
+    # apply everywhere and take none. The chart refuses the console's own
+    # namespace and the toolbox's.
     roles: {}
     #  viewer:      [ { group: team-a-readers, namespaces: [web, api] } ]
     #  admin:       [ { group: team-a-ops,     namespaces: [web, api] } ]
@@ -175,7 +205,8 @@ auth:
     #  superAdmin:  [ { group: platform-admins } ]
   local:
     # Groups for local users: a name, a role (viewer or admin) and the
-    # namespaces it is bound to. Who is in a group is kept in the console
+    # namespaces it is bound to, which the chart refuses to be the console's
+    # own namespace or the toolbox's. Who is in a group is kept in the console
     # (the Users page, or groups below) and changes without an upgrade.
     groups: []
     #  - { name: web-readers,  role: viewer, namespaces: [web] }
@@ -200,7 +231,7 @@ auth:
   # directory's SuperAdmin groups under auth.ldap.roles.superAdmin instead.
   admins: []
   adminGroups: []
-  # A session ends after this long without a request, and this long after
+  # A session ends after this long without activity, and this long after
   # sign-in whatever happens.
   sessionIdle: 8h
   sessionMax: 168h
@@ -307,6 +338,20 @@ secrets:
   # type new values without seeing the old ones.
   reveal: false
 
+automation:
+  # Automation (Phase 11 part 2, docs/automation.md): the Automation tab,
+  # where SuperAdmins keep scripts, approve their versions once and run
+  # them on a fleet's nodes over SSH. It runs nothing unless
+  # toolbox.ssh.enabled is on too, since it reaches nodes only through
+  # their SSH pairings. Its records live in the ConfigMap
+  # <release>-automation.
+  enabled: true
+  # runIdentities are the service accounts, by name, that Kubernetes scripts
+  # and hooks may run as. Each adds impersonate on that name to the console's
+  # role; Kubernetes still checks that whoever starts the run may impersonate
+  # it. Empty, Kubernetes commands run as the person who starts the run.
+  runIdentities: []
+
 toolbox:
   # The Toolbox (Phase 9, docs/toolbox.md): the Tools menu beside each pod
   # and node opens a shell, runs one command, forwards a port, adds a
@@ -375,6 +420,19 @@ toolbox:
       - df -h /var/lib/containerd /var/log /
       - crictl ps -a --state exited
       - dmesg -T | tail -n 100
+  # SSH to nodes (Phase 11, ADR-72): a SuperAdmin pairs a node from its
+  # Tools menu (a node command installs the console's certificate
+  # authority and a principals file for the login user, which must exist
+  # on the node), then opens SSH sessions to it, each with a short-lived
+  # certificate the console signs and the node's pinned host key checked.
+  # The authority's key is kept in the Secret <release>-ssh-ca.
+  # SSH to paired nodes (ADR-72): off unless asked for, as it adds an egress
+  # rule from the console to the nodes. Set networkPolicy.nodeCIDRs with it.
+  ssh:
+    enabled: false
+    port: 22
+    # The OS account offered when pairing; it must exist on the node.
+    loginUser: root
   # The images the tools may run, and nothing else. Pin them by digest
   # (busybox:1.37@sha256:…) for production; a new image is a chart upgrade.
   # caps are added only where the namespace's Pod Security level allows.
@@ -397,6 +455,14 @@ serviceAccount:
   annotations: {}
 
 rbac:
+  # Who installs the roles every console in a cluster shares (the four
+  # ClusterRoles for people, 221b-nodes and their cluster-wide bindings).
+  # auto: this release, unless another already has them. none: not this
+  # release. only: this release installs them and nothing else, so with
+  # two consoles they outlive either one:
+  #   helm install 221b-roles <chart> --set rbac.shared=only
+  #   helm install console-a <chart> --set rbac.shared=none ...
+  shared: auto
   # Creates the console's own ClusterRole and Role, and the four roles for
   # people (Viewer, SuperViewer, Admin, SuperAdmin; ClusterRoles named
   # 221b-viewer, 221b-super-viewer, 221b-admin and 221b-super-admin) with
@@ -466,8 +532,10 @@ service:
   # clusters without a load balancer controller: list every node's address
   # to reach the console on each node at the port above.
   externalIPs: []
-  # Cluster: every node forwards to the console. Local: only the node
-  # running it answers, but the console sees the client's real address.
+  # Cluster: every node forwards to the console, and the Audit log's From
+  # and the per-address sign-in limit see the node's address, not the
+  # client's. Local: only a node running the console answers, and it sees
+  # the client's real address.
   externalTrafficPolicy: Cluster
   annotations: {}
 
@@ -497,9 +565,18 @@ networkPolicy:
   # With OIDC sign-in, an audit webhook or Sherlock (sherlock.egress) the
   # console also needs the provider's, webhook's or Claude API's HTTPS
   # port; it is allowed then. List CIDRs to narrow where it may connect
-  # for them.
+  # for them. Helm applications fetch their charts over the same rule: with
+  # sherlock.egress off, listing the git host here is what opens it.
   outboundPorts: [443]
   outboundCIDRs: []
+  # With LDAP sign-in the console reaches the directory on the port of
+  # auth.ldap.url. List its CIDRs to allow nothing else; empty allows any
+  # address on that port.
+  ldapCIDRs: []
+  # With SSH to nodes on (toolbox.ssh.enabled) the console reaches the
+  # nodes on toolbox.ssh.port. List the nodes' CIDRs to allow nothing
+  # else; empty allows any address on that port.
+  nodeCIDRs: []
 
 # The server keeps a watched copy of every node, pod, workload and Service,
 # trimmed to what the tabs show; 1Gi holds 500 nodes and 15,000 pods with
@@ -538,7 +615,9 @@ topologySpreadConstraints: []
 # affinity below replaces it.
 antiAffinity: ""
 # How long a pod has to finish when it stops: it ends its event streams and,
-# as the leader, hands Sherlock and Watson to another replica first.
+# as the leader, hands Sherlock and Watson to another replica first. Sherlock's
+# answers and Watson's commands in progress get all but the last six seconds
+# of this, then are stopped; raise it for helm upgrades that take longer.
 terminationGracePeriodSeconds: 20
 podAnnotations: {}
 podLabels: {}

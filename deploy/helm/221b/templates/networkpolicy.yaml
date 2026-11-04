@@ -1,6 +1,10 @@
+{{- if ne (include "b221.shared" .) "only" }}
 {{- if .Values.networkPolicy.enabled }}
 {{- if not .Values.networkPolicy.apiServerPorts }}
 {{- fail "networkPolicy.apiServerPorts is empty, which would allow every connection out; list the API server's ports, or set networkPolicy.enabled=false" }}
+{{- end }}
+{{- if and (include "b221.outbound" .) (not .Values.networkPolicy.outboundPorts) }}
+{{- fail "networkPolicy.outboundPorts is empty, which would allow every connection out; list the ports, or turn off what needs them (sherlock.egress, OIDC, the audit webhook, networkPolicy.outboundCIDRs)" }}
 {{- end }}
 # Nothing may reach the console except its own replicas, the peers listed
 # in values, or anyone when it is exposed with a LoadBalancer or NodePort
@@ -40,9 +44,9 @@ spec:
       ports:
         - port: http
           protocol: TCP
-    {{- else if ne .Values.service.type "ClusterIP" }}
-    # Exposed with a LoadBalancer or NodePort Service and no peers listed:
-    # any address may reach it, as exposing it means.
+    {{- else if or (ne .Values.service.type "ClusterIP") .Values.service.externalIPs }}
+    # Exposed with a LoadBalancer or NodePort Service, or on external IPs,
+    # and no peers listed: any address may reach it, as exposing it means.
     - ports:
         - port: http
           protocol: TCP
@@ -90,12 +94,13 @@ spec:
         {{- end }}
       {{- end }}
     {{- end }}
-    {{- if eq .Values.auth.mode "ldap" }}
-    # The directory (LDAP sign-in): its port, from auth.ldap.url.
+    {{- if include "b221.sshOn" . }}
+    # SSH to the nodes (Phase 11, ADR-72): sshd's port, on the nodes'
+    # addresses when networkPolicy.nodeCIDRs lists them.
     - ports:
-        - port: {{ include "b221.ldapPort" . }}
+        - port: {{ .Values.toolbox.ssh.port }}
           protocol: TCP
-      {{- with .Values.networkPolicy.outboundCIDRs }}
+      {{- with .Values.networkPolicy.nodeCIDRs }}
       to:
         {{- range . }}
         - ipBlock:
@@ -103,4 +108,18 @@ spec:
         {{- end }}
       {{- end }}
     {{- end }}
+    {{- if eq .Values.auth.mode "ldap" }}
+    # The directory (LDAP sign-in): its port, from auth.ldap.url.
+    - ports:
+        - port: {{ include "b221.ldapPort" . }}
+          protocol: TCP
+      {{- with .Values.networkPolicy.ldapCIDRs }}
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+{{- end }}
 {{- end }}

@@ -477,7 +477,7 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: 
             {kind === 'nodes' ? 'Fleets are saved in this console, not in the cluster.' : 'Fleets are saved in this console, not in the cluster. A node joins or leaves this fleet only through its own labels and taints.'}
           </p>
         </div>
-        <div style={{ flex: 'none', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '12px 20px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
+        <div style={{ flex: 'none', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '12px calc(20px + var(--fab-space, 0px)) 12px 20px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>
           <button className="rk-btn" data-on="true" onClick={() => void save()} disabled={busy} style={{ height: 34, padding: '0 16px' }} data-testid="fleet-save">
             {orig ? 'Save changes' : 'Create fleet'}
           </button>

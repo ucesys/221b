@@ -77,6 +77,9 @@ func Compose(c *Checkout, src Source, rec *Record, extra []string) (*chart.Chart
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := CheckDependencies(ch, vals); err != nil {
+		return nil, nil, err
+	}
 	return ch, vals, nil
 }
 
@@ -145,30 +148,41 @@ type Rendered struct {
 // template does (HA-17): no cluster is asked, so it is what the source
 // says, for comparing with what is deployed.
 func Render(ctx context.Context, ch *chart.Chart, vals map[string]any, name, namespace, kubeVersion string) (Rendered, error) {
-	cfg := action.NewConfiguration()
-	cfg.Releases = storage.Init(driver.NewMemory())
-	cfg.KubeClient = &kubefake.PrintingKubeClient{Out: io.Discard}
-	cfg.SetLogger(slog.NewTextHandler(io.Discard, nil))
-	caps := *common.DefaultCapabilities
-	if kubeVersion != "" {
-		if v, err := common.ParseKubeVersion(kubeVersion); err == nil {
-			caps.KubeVersion = *v
+	funcs, tripped := RenderFuncs(ch)
+	out, err := Bounded(ctx, func(ctx context.Context) (Rendered, error) {
+		cfg := action.NewConfiguration()
+		cfg.Releases = storage.Init(driver.NewMemory())
+		cfg.KubeClient = &kubefake.PrintingKubeClient{Out: io.Discard}
+		cfg.SetLogger(slog.NewTextHandler(io.Discard, nil))
+		cfg.CustomTemplateFuncs = funcs
+		caps := *common.DefaultCapabilities
+		if kubeVersion != "" {
+			if v, err := common.ParseKubeVersion(kubeVersion); err == nil {
+				caps.KubeVersion = *v
+			}
 		}
+		cfg.Capabilities = &caps
+		i := action.NewInstall(cfg)
+		i.DryRunStrategy = action.DryRunClient
+		i.ReleaseName, i.Namespace = name, namespace
+		i.Replace, i.IncludeCRDs = true, true
+		rel, err := i.RunWithContext(ctx, ch, vals)
+		if err != nil {
+			return Rendered{}, fmt.Errorf("rendering the chart: %w", err)
+		}
+		r, err := V1(rel)
+		if err != nil {
+			return Rendered{}, err
+		}
+		if err := CheckOutput(r.Manifest + r.Info.Notes); err != nil {
+			return Rendered{}, err
+		}
+		return Rendered{Manifest: r.Manifest, Notes: r.Info.Notes}, nil
+	})
+	if tripped() {
+		return Rendered{}, fmt.Errorf("%w: it loops or repeats too much", ErrRenderLimit)
 	}
-	cfg.Capabilities = &caps
-	i := action.NewInstall(cfg)
-	i.DryRunStrategy = action.DryRunClient
-	i.ReleaseName, i.Namespace = name, namespace
-	i.Replace, i.IncludeCRDs = true, true
-	rel, err := i.RunWithContext(ctx, ch, vals)
-	if err != nil {
-		return Rendered{}, fmt.Errorf("rendering the chart: %w", err)
-	}
-	r, err := V1(rel)
-	if err != nil {
-		return Rendered{}, err
-	}
-	return Rendered{Manifest: r.Manifest, Notes: r.Info.Notes}, nil
+	return out, err
 }
 
 // V1 is a release in the format the SDK's v1 types use.

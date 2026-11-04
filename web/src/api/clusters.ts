@@ -3,7 +3,7 @@
 // credential goes to the server once and never comes back (X-04).
 
 import { useEffect, useSyncExternalStore } from 'react'
-import { unauthorized } from './auth'
+import { BACKGROUND, unauthorized } from './auth'
 import type { Tone } from './types'
 
 export type Env = 'production' | 'staging' | 'development' | 'other'
@@ -46,6 +46,8 @@ export interface ClusterSummary {
   id: string
   name: string
   env: Env
+  /** Set when a change waits for another SuperAdmin: taking the cluster off production. */
+  held?: string
   description?: string
   server: string
   ca: CAMode
@@ -124,12 +126,12 @@ export class ClusterError extends Error {
   }
 }
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, background = false): Promise<T> {
   let res: Response
   try {
     res = await fetch(path, {
       method,
-      headers: body === undefined ? { Accept: 'application/json' } : { Accept: 'application/json', 'Content-Type': 'application/json' },
+      headers: { ...(body === undefined ? { Accept: 'application/json' } : { Accept: 'application/json', 'Content-Type': 'application/json' }), ...(background ? BACKGROUND : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
   } catch {
@@ -151,8 +153,9 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   return (await res.json()) as T
 }
 
+/** The list the page keeps current by itself. */
 export function fetchClusters(): Promise<ClusterSummary[]> {
-  return call<{ clusters: ClusterSummary[] }>('GET', '/api/v1/clusters').then((r) => r.clusters)
+  return call<{ clusters: ClusterSummary[] }>('GET', '/api/v1/clusters', undefined, true).then((r) => r.clusters)
 }
 
 export function fetchCluster(id: string): Promise<ClusterSummary> {

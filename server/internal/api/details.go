@@ -222,6 +222,17 @@ func (s *Server) yaml(w http.ResponseWriter, r *http.Request) {
 // maxLogLine bounds one log line; longer lines are split.
 const maxLogLine = 1 << 20
 
+// splitLogLines reads lines as bufio.ScanLines does, and hands over what it
+// holds once a line reaches maxLogLine, so a long line is split rather than
+// ending the stream.
+func splitLogLines(data []byte, atEOF bool) (int, []byte, error) {
+	advance, token, err := bufio.ScanLines(data, atEOF)
+	if advance == 0 && token == nil && err == nil && len(data) >= maxLogLine {
+		return len(data), data, nil
+	}
+	return advance, token, err
+}
+
 // podLog serves a pod's logs (P2-04). Without follow, the body is the log
 // as text, for reading or downloading (?download=1). With ?follow=1 it is
 // an event stream: a "log" event per chunk of lines, and an "end" event
@@ -331,6 +342,7 @@ func (s *Server) podLog(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		sc := bufio.NewScanner(stream)
 		sc.Buffer(make([]byte, 64*1024), maxLogLine)
+		sc.Split(splitLogLines)
 		for sc.Scan() {
 			select {
 			case lines <- sc.Text():

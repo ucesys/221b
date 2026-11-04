@@ -89,3 +89,8 @@ install_metrics_server() {
   echo "metrics-server has no reading for every node" >&2
   return 1
 }
+
+# has is grep -q that reads all its input: grep -q stops at the first
+# match, and under pipefail the command writing to it then fails, as a
+# large render or a long curl answer does.
+has() { grep "$@" > /dev/null; }
