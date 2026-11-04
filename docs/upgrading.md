@@ -48,7 +48,7 @@ The earlier release reads what the newer one saved: it ignores fields it does no
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
-## 0.11.0 (unreleased)
+## 0.11.0 (2026-11-04)
 
 Things to check before this upgrade:
 
@@ -84,7 +84,7 @@ Helm applications are held closer:
 - **Repository hosts** on loopback, link-local or cloud metadata addresses are refused. Private addresses work as before. With `HTTPS_PROXY` set, the address check at connection time sees the proxy's address, not the repository's.
 - **Changing an application's repository removes its saved token** unless you give a new one.
 
-## 0.10.2 (unreleased)
+### Also in 0.11.0: the 0.10.2 work, never released on its own
 
 Nothing to do. The new value `replicas.warmStandby` defaults to `true`, which keeps every replica watching as before; only the leader now polls and serves the data (ADR-70), so a rolling upgrade behaves as it did. On a very large cluster, where a standby's memory matters, set it to `false`: the other replicas then hold nothing, and a failover costs one list.
 

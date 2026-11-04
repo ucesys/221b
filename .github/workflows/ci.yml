@@ -471,10 +471,15 @@ jobs:
       (needs.browsers.result == 'success' || (github.event_name == 'pull_request' && needs.browsers.result == 'failure')) &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
+    # id-token and attestations sign what is published: a cosign signature
+    # made with the workflow's own identity, and SLSA build provenance and
+    # an SPDX SBOM kept as GitHub attestations beside the image (#79).
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -493,6 +498,7 @@ jobs:
           ACTOR: ${{ github.actor }}
         run: echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
       - name: Build and push for linux/amd64 and linux/arm64
+        id: push
         env:
           PR: ${{ github.event.pull_request.number }}
           GRYPE: ${{ steps.grype.outputs.cmd }}
@@ -521,6 +527,14 @@ jobs:
           fi
           tags=()
           for r in "${refs[@]}"; do tags+=(-t "$r"); done
+          # What the signing steps below sign, by digest once it is pushed.
+          echo "ref=${refs[0]}" >> "$GITHUB_OUTPUT"
+          # A release's image is never replaced: a rerun after it was
+          # published keeps it as it is, and only signs it again.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] && docker manifest inspect "$IMAGE:$version" >/dev/null 2>&1; then
+            echo "::notice title=Published::$IMAGE:$version exists already and is kept as it is; a release's image is never replaced"
+            exit 0
+          fi
           # The build the image job tested, when it was pushed for this tree
           # (hack/push-prebuilt.sh): published under these tags as it is,
           # for linux/amd64 only. A release is always built here.
@@ -555,6 +569,43 @@ jobs:
             --label org.opencontainers.image.revision="$GITHUB_SHA" \
             "${tags[@]}" --push . 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
           echo "::notice title=Published::${refs[*]}"
+      - name: The digest published
+        id: digest
+        env:
+          REF: ${{ steps.push.outputs.ref }}
+        run: |
+          digest=$(docker buildx imagetools inspect "$REF" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$digest" == sha256:* ]] || { echo "::error::No digest for $REF"; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.digest.outputs.digest }}
+          format: spdx-json
+          output-file: bin/sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: SBOM attestation
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          sbom-path: bin/sbom.spdx.json
+          push-to-registry: true
+      - name: Build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign the image
+        # Keyless: the certificate names this workflow, the repository and
+        # the ref, and the signature is logged in Sigstore's transparency log.
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          cosign sign --yes "$IMAGE@$DIGEST" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+          echo "::notice title=Signed::$IMAGE@$DIGEST, with build provenance and an SBOM attested"
       - name: Report
         if: failure()
         run: hack/annotate.sh "Publish" "$RUNNER_TEMP/ci.log"
