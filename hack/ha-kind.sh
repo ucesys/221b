@@ -83,6 +83,17 @@ settled() {
   return 1
 }
 
+# Waits up to 30 seconds for a 200: a follower answers 503 for what the
+# leader holds until it has seen which replica leads (ADR-70).
+answers() {
+  local i
+  for i in $(seq 30); do
+    [ "$(status "$1")" = 200 ] && return 0
+    sleep 1
+  done
+  return 1
+}
+
 # The checks after each loss.
 check_both() {
   local pod port n
@@ -93,8 +104,8 @@ check_both() {
     [ "$(status "http://127.0.0.1:$port/api/v1/me")" = 200 ] || { echo "the session does not work through $pod"; return 1; }
     # Sherlock's and Watson's settings are the leader's: through a follower
     # they are forwarded to it.
-    [ "$(status "http://127.0.0.1:$port/api/v1/watson/config")" = 200 ] || { echo "Watson does not answer through $pod"; return 1; }
-    [ "$(status "http://127.0.0.1:$port/api/v1/sherlock/config")" = 200 ] || { echo "Sherlock does not answer through $pod"; return 1; }
+    answers "http://127.0.0.1:$port/api/v1/watson/config" || { echo "Watson does not answer through $pod"; return 1; }
+    answers "http://127.0.0.1:$port/api/v1/sherlock/config" || { echo "Sherlock does not answer through $pod"; return 1; }
     # The assistants' stream, forwarded too, sends Watson's status.
     curl -sN -b "$COOKIES" --max-time 4 "http://127.0.0.1:$port/api/v1/assistants/events" > "$WORK/assistants-$pod.txt" || true
     grep -q '^event: watson-status' "$WORK/assistants-$pod.txt" || { echo "no assistants' stream through $pod"; return 1; }
