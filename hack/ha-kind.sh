@@ -105,7 +105,7 @@ check_both() {
     leads=$(curl -fsS "http://127.0.0.1:$port/metrics" | awk '/^b221_leader /{print $2}')
     if [ "$pod" = "$(holder)" ]; then want=1; else want=0; fi
     [ "$leads" = "$want" ] || { echo "$pod says b221_leader $leads, want $want"; return 1; }
-    api "http://127.0.0.1:$port/api/v1/snapshot?views=nodes" | grep -q control-plane || { echo "the nodes do not answer through $pod"; return 1; }
+    api "http://127.0.0.1:$port/api/v1/snapshot?views=nodes" | has control-plane || { echo "the nodes do not answer through $pod"; return 1; }
     cached=$(curl -fsS "http://127.0.0.1:$port/metrics" | awk '/^b221_cached_nodes /{print $2}')
     if [ "$want" = 0 ] && [ "$WARM" = 0 ] && [ "$cached" != 0 ]; then echo "the cold standby $pod caches $cached nodes"; return 1; fi
     if [ "$want" = 0 ] && [ "$WARM" = 1 ] && [ "$cached" = 0 ]; then echo "the warm standby $pod caches no nodes"; return 1; fi
@@ -125,10 +125,10 @@ check_both() {
   pb=$PORT
   api -X PUT -H 'Content-Type: application/json' -d "{\"refreshSeconds\":$n}" "http://127.0.0.1:$pa/api/v1/settings" > /dev/null
   for i in $(seq 20); do
-    api "http://127.0.0.1:$pb/api/v1/settings" | grep -q "\"refreshSeconds\":$n" && break
+    api "http://127.0.0.1:$pb/api/v1/settings" | has "\"refreshSeconds\":$n" && break
     sleep 0.5
   done
-  api "http://127.0.0.1:$pb/api/v1/settings" | grep -q "\"refreshSeconds\":$n" ||
+  api "http://127.0.0.1:$pb/api/v1/settings" | has "\"refreshSeconds\":$n" ||
     { echo "a setting saved through $a did not reach $b"; return 1; }
   notice "Replicas" "A setting saved through $a was read through $b after $((i / 2)) s."
 }

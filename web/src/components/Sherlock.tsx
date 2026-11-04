@@ -457,6 +457,10 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
       <div
         className="rk-chat"
         ref={scroller}
+        // Scrollable with the keyboard, as Watson's log is (WCAG 2.1.1).
+        tabIndex={0}
+        role="region"
+        aria-label="Conversation with Sherlock"
         onScroll={(e) => {
           const el = e.currentTarget
           pinned.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 48

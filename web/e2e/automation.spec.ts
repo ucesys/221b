@@ -1,3 +1,4 @@
+import { inKind } from './cluster'
 import { expect, test } from './test'
 
 // The Automation area (AU-01) and a script from its first save to review
@@ -94,6 +95,7 @@ test('a check goes to its line, and the script and its checks stand side by side
 })
 
 test('the Run dialog keeps a large fleet in a list of its own size', async ({ page }) => {
+  test.skip(inKind, 'the simulator has the 40 nodes; kind has three')
   const name = `e2e-${Date.now()}`
   await page.goto('/#/scripts')
   await page.getByTestId('script-new').click()
@@ -129,6 +131,7 @@ test('the script that reserves resources passes the checks and can go to review'
 })
 
 test('a node\'s details show what its Kubernetes agent keeps from pods, read-only', async ({ page }) => {
+  test.skip(inKind, 'the simulator\'s kubelets report reservations and an eviction threshold; kind\'s keep none')
   await page.goto('/#/nodes')
   await page.locator('[data-node]').first().focus()
   await page.keyboard.press('Enter')
@@ -218,6 +221,7 @@ test('Save says what it needs, and the editor numbers its lines', async ({ page 
 })
 
 test('Variables is a table of what each one gets, edited in a drawer', async ({ page }) => {
+  test.skip(inKind, 'the simulator has the 40 nodes; kind has three')
   await page.goto('/#/variables')
   const scopes = page.getByTestId('params-scopes')
   await expect(scopes.getByTestId('params-scope').first()).toHaveAttribute('data-id', '_all')

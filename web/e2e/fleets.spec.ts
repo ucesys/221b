@@ -3,7 +3,7 @@
 import AxeBuilder from '@axe-core/playwright'
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
-import { cluster, consoleNode, healthyWorkers, nodeRows, snapshot } from './cluster'
+import { cluster, consoleNode, healthyWorkers, inKind, nodeRows, snapshot } from './cluster'
 import { E2E_USER, E2E_VIEWER, signInAs } from './accounts'
 
 const SAME = { 'Sec-Fetch-Site': 'same-origin' }
@@ -28,6 +28,7 @@ async function putFleets(page: Page, fleets: Fleet[]): Promise<number> {
 const row = (page: Page, id: string) => page.locator(`[data-fleet="${id}"]`)
 
 test('a fleet shows what its nodes keep from pods, nodes that differ apart (AU-18)', async ({ page }) => {
+  test.skip(inKind, 'the simulator\'s kubelets keep resources from pods; kind\'s keep none')
   await open(page)
   expect(await putFleets(page, [
     { id: 'e2e-workers', name: 'Workers', color: 0, labels: ['node-role.kubernetes.io/worker='], taints: [] },

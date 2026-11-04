@@ -154,8 +154,11 @@ func TestAReadOfTheVolumesThatRunsOutOfTimeKeepsWhatItRead(t *testing.T) {
 	if len(first) >= len(nodes) {
 		t.Fatalf("the read reached every node: %v", first)
 	}
+	// Several workers ask at once, so the order nodes are asked in is not
+	// the order they were handed out: the second read starting past the
+	// first shows as reaching a node the first did not.
 	second := read(fresh, 400*time.Millisecond, stuck)
-	if len(second) == 0 || slices.Contains(first, second[0]) {
+	if !slices.ContainsFunc(second, func(n string) bool { return !slices.Contains(first, n) }) {
 		t.Fatalf("the first read asked %v, the second %v", first, second)
 	}
 }
