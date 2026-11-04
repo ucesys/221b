@@ -559,7 +559,9 @@ jobs:
               --build-arg VERSION="$version" --build-arg COMMIT="$sha" \
               --label org.opencontainers.image.revision="$GITHUB_SHA" \
               -t "$IMAGE:$version-arm64" --push . 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
-            "$GRYPE" "registry:$IMAGE:$version-arm64" --fail-on high 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+            # Named: the push is an index with an attestation beside the
+            # image, and grype otherwise looks in it for the runner's platform.
+            "$GRYPE" "registry:$IMAGE:$version-arm64" --platform linux/arm64 --fail-on high 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
             docker buildx imagetools create "${tags[@]}" "$IMAGE:$version-amd64" "$IMAGE:$version-arm64" 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
             echo "::notice title=Published::${refs[*]} (linux/amd64 as tested, linux/arm64 built here and scanned)"
             exit 0
