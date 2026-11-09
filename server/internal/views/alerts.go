@@ -133,10 +133,18 @@ type AlertRow struct {
 	Ack *AlertAck `json:"ack,omitempty"`
 }
 
-// AlertAck is an acknowledgement of an alert.
+// AlertAck is an acknowledgement of an alert: a person's, or a job's,
+// with its run and the case its findings went to (CF-79); since CF-82,
+// or the exception that covers them, or that it diagnosed the alert as
+// expected, with why.
 type AlertAck struct {
-	By string    `json:"by"`
-	At time.Time `json:"at"`
+	By        string    `json:"by"`
+	At        time.Time `json:"at"`
+	Run       string    `json:"run,omitempty"`
+	Case      string    `json:"case,omitempty"`
+	Exception string    `json:"exception,omitempty"`
+	Expected  bool      `json:"expected,omitempty"`
+	Why       string    `json:"why,omitempty"`
 }
 
 // AlertFingerprint is what an alert is, for acknowledgements: an

@@ -1,10 +1,13 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +19,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/automation"
+	"github.com/ucesys/221b/server/internal/backup"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/nodessh"
@@ -23,6 +27,20 @@ import (
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
+
+// unzip reads a backup as the page saves it: gzipped JSON.
+func unzip(t *testing.T, body string) string {
+	t.Helper()
+	zr, err := gzip.NewReader(bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatalf("the backup is not gzipped: %v", err)
+	}
+	b, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
 
 // A backup (asked October 30, 2026) holds the settings, the applications,
 // the Toolbox's session records, Sherlock's spend and the audit log, and
@@ -57,9 +75,10 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	// The first export is itself audited; the second carries that event.
 	send(t, c, http.MethodGet, srv.URL+"/api/v1/admin/backup", "")
 	resp, body := send(t, c, http.MethodGet, srv.URL+"/api/v1/admin/backup", "")
-	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Disposition"), `attachment; filename="221b-backup-`) {
-		t.Fatalf("the backup: %s %q", resp.Status, resp.Header.Get("Content-Disposition"))
+	if resp.StatusCode != http.StatusOK || !strings.HasPrefix(resp.Header.Get("Content-Disposition"), `attachment; filename="221b-backup-`) || !strings.HasSuffix(resp.Header.Get("Content-Disposition"), `.json.gz"`) || resp.Header.Get("Content-Type") != "application/gzip" {
+		t.Fatalf("the backup: %s %q %q", resp.Status, resp.Header.Get("Content-Disposition"), resp.Header.Get("Content-Type"))
 	}
+	body = unzip(t, body)
 	for _, secret := range []string{token, "passwordHash", "correct horse", "\"token\""} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("the backup holds %q:\n%s", secret, body)
@@ -69,7 +88,7 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &f); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(f.SSHPairings), `"local/a"`) || !strings.Contains(strings.Join(f.LeftOut, "\n"), "SSH authority") {
+	if !strings.Contains(string(f.SSHPairings), `"local/a"`) || f.Secrets != nil || !strings.Contains(strings.Join(f.LeftOut, "\n"), "placeholder") {
 		t.Fatalf("the pairings in the backup: %s %v", f.SSHPairings, f.LeftOut)
 	}
 	if f.Format != backupFormat || f.Version != "0.10.2 (test)" || f.By != "ops@corp.example" || len(f.LeftOut) == 0 {
@@ -78,7 +97,7 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	if f.Settings == nil || f.Settings.RefreshSeconds != 7 {
 		t.Fatalf("the settings: %+v", f.Settings)
 	}
-	if len(f.Apps) != 1 || !f.Apps[0].HasToken || f.Apps[0].Values != "replicas: 2" || len(f.Apps[0].Commands) != 1 {
+	if len(f.Apps) != 1 || !f.Apps[0].HasToken || f.Apps[0].RepoToken != clusters.Placeholder || f.Apps[0].Values != "replicas: 2" || len(f.Apps[0].Commands) != 1 {
 		t.Fatalf("the applications: %+v", f.Apps)
 	}
 	var spend sherlock.Spend
@@ -86,7 +105,7 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	if len(f.ToolboxSessions) != 1 || f.ToolboxSessions[0].ID != "s1" || spend.MonthUSD != 9 {
 		t.Fatalf("the records: %+v %s", f.ToolboxSessions, f.SherlockSpend)
 	}
-	if len(f.Connections) == 0 || !f.Connections[0].Local {
+	if len(f.Connections) == 0 || !f.Connections[0].Local || f.Connections[0].Credential != nil {
 		t.Fatalf("the connections: %+v", f.Connections)
 	}
 	if len(f.Audit) == 0 || f.Audit[0].Action != ActionBackup {
@@ -101,7 +120,7 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 		o.Audit.SetStore(auditStore2)
 		shared2 = o.Settings
 	})
-	f.Connections = append(f.Connections, clusters.Spec{ID: "staging", Name: "Staging", Server: "https://10.0.0.9:6443", Auth: clusters.AuthToken})
+	f.Connections = append(f.Connections, backupConnection{Spec: clusters.Spec{ID: "staging", Name: "Staging", Server: "https://10.0.0.9:6443", Auth: clusters.AuthToken}})
 	in, _ := json.Marshal(restoreInput{Backup: f, Parts: map[string]bool{"settings": true, "users": true, "apps": true, "toolboxSessions": true, "sherlockSpend": true, "sshPairings": true, "audit": true}})
 	resp, body = send(t, c2, http.MethodPost, srv2.URL+"/api/v1/admin/restore", string(in))
 	if resp.StatusCode != http.StatusOK {
@@ -118,10 +137,13 @@ func TestABackupHoldsNoSecretsAndRestores(t *testing.T) {
 	if _, ok := rep.Restored["users"]; ok {
 		t.Fatalf("users were restored where the backup had none (accounts from values are not backed up): %+v", rep.Restored)
 	}
-	for _, want := range []string{"repository token", "Staging (https://10.0.0.9:6443, token)"} {
+	for _, want := range []string{"Staging (https://10.0.0.9:6443, token)"} {
 		if !strings.Contains(notes, want) {
 			t.Fatalf("the notes lack %q:\n%s", want, notes)
 		}
+	}
+	if !hasSecret(rep.Secrets, "the repository token of the application web/shop", "Applications › web/shop › Source") {
+		t.Fatalf("the secrets to set again: %+v", rep.Secrets)
 	}
 	if shared2.Current().RefreshSeconds != 7 {
 		t.Fatalf("the settings did not come back: %+v", shared2.Current().Settings)
@@ -172,7 +194,7 @@ func TestARestoreKeepsANameAndEmailTheFileDoesNotHave(t *testing.T) {
 	}
 	s := &Server{opts: Options{Auth: accountsOnly{accounts: acc}}}
 	rep := restoreReport{Restored: map[string]int{}}
-	s.restoreUsers(httptest.NewRequest(http.MethodPost, "/api/v1/admin/restore", nil), []backupUser{{Username: "anna"}, {Username: "ben", Name: "Ben B", Email: "ben.b@corp.example"}}, &rep)
+	s.restoreUsers(httptest.NewRequest(http.MethodPost, "/api/v1/admin/restore", nil), []backupUser{{Username: "anna"}, {Username: "ben", Name: "Ben B", Email: "ben.b@corp.example"}}, &backup.Env{}, &rep)
 	if rep.Restored["users"] != 2 {
 		t.Fatalf("restored %+v", rep)
 	}
@@ -298,17 +320,17 @@ func TestARestoreChecksWhatItBringsBack(t *testing.T) {
 	})
 	_, body := send(t, c, http.MethodGet, srv.URL+"/api/v1/admin/backup", "")
 	var f backupFile
-	if err := json.Unmarshal([]byte(body), &f); err != nil {
+	if err := json.Unmarshal([]byte(unzip(t, body)), &f); err != nil {
 		t.Fatal(err)
 	}
 	if f.Automation == nil || len(f.Automation.Scripts) != 1 || len(f.Automation.Profiles) != 1 || f.Automation.Variables[clusters.LocalID]["_all"].Values["MODE"] != "safe" {
 		t.Fatalf("Automation in the backup: %+v", f.Automation)
 	}
 
-	f.Apps = []apps.Record{
-		{Cluster: clusters.LocalID, Namespace: "web", Name: "shop", Source: apps.Source{Repo: "https://github.com/example/shop", Ref: "main", RefKind: apps.RefBranch}},
-		{Cluster: clusters.LocalID, Namespace: "web", Name: "odd", Source: apps.Source{Repo: "https://github.com/example/odd", Ref: "main", RefKind: apps.RefBranch}, ValuesFile: "../../elsewhere.yaml"},
-		{Cluster: clusters.LocalID, Namespace: "web", Name: "cmd", Source: apps.Source{Repo: "https://github.com/example/cmd", Ref: "main", RefKind: apps.RefBranch}, Commands: []apps.Command{{Name: "go", Params: []string{"a=$(x)"}}}},
+	f.Apps = []backupApp{
+		{Record: apps.Record{Cluster: clusters.LocalID, Namespace: "web", Name: "shop", Source: apps.Source{Repo: "https://github.com/example/shop", Ref: "main", RefKind: apps.RefBranch}}},
+		{Record: apps.Record{Cluster: clusters.LocalID, Namespace: "web", Name: "odd", Source: apps.Source{Repo: "https://github.com/example/odd", Ref: "main", RefKind: apps.RefBranch}, ValuesFile: "../../elsewhere.yaml"}},
+		{Record: apps.Record{Cluster: clusters.LocalID, Namespace: "web", Name: "cmd", Source: apps.Source{Repo: "https://github.com/example/cmd", Ref: "main", RefKind: apps.RefBranch}, Commands: []apps.Command{{Name: "go", Params: []string{"a=$(x)"}}}}},
 	}
 	f.SSHPairings = json.RawMessage(`{"local/a":{"cluster":"local","node":"a","loginUser":"ops","port":22,"hostKeys":["` + key + `"]},` +
 		`"local/b":{"cluster":"local","node":"b","loginUser":"Not A User","port":22,"hostKeys":["` + key + `"]},` +
@@ -387,4 +409,87 @@ func TestARestoreChecksWhatItBringsBack(t *testing.T) {
 	if waiting, _ := prod.WaitingChanges(ctx); len(waiting) != 1 || waiting[0].By.User == "" {
 		t.Fatalf("waiting changes: %+v", waiting)
 	}
+}
+
+// Every secret in a backup is a placeholder (asked November 4, 2026): a
+// connection's credential keeps its shape, and a restore brings back the
+// connections missing, waiting for their credentials, while those here
+// keep their own; a file with a secret in it brings none.
+func TestABackupHoldsPlaceholdersAndARestoreKeepsTheSecretsHere(t *testing.T) {
+	ctx := context.Background()
+	srv, c, m, _, _, _ := multiSetupWith(t, "ops@corp.example", nil)
+	secret := "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJzeXN0ZW06c2VydmljZWFjY291bnQ6b3BzOmNvbnNvbGUifQ.c2ln"
+	keep := clusters.Spec{ID: "prod", Name: "Prod", Env: clusters.EnvProduction, Server: "https://10.0.0.7:6443", CA: clusters.CASkip, Auth: clusters.AuthToken, Mode: clusters.ModeRead}
+	if err := m.Store().Save(ctx, keep, &clusters.Credential{Token: secret}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, body := send(t, c, http.MethodGet, srv.URL+"/api/v1/admin/backup", "")
+	body = unzip(t, body)
+	if strings.Contains(body, secret) || !strings.Contains(body, `"token": "`+clusters.Placeholder+`"`) {
+		t.Fatalf("the connection's credential in the backup:\n%s", body)
+	}
+	var f backupFile
+	if err := json.Unmarshal([]byte(body), &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Format != backupFormat {
+		t.Fatalf("the format: %q", f.Format)
+	}
+
+	// Into a console that has Prod with its token, and lacks Staging.
+	f.Connections = append(f.Connections, backupConnection{Spec: clusters.Spec{ID: "staging", Name: "Staging", Env: clusters.EnvStaging, Server: "https://10.0.0.9:6443", CA: clusters.CASkip, Auth: clusters.AuthToken, Mode: clusters.ModeRead}, Credential: &backupCredential{Token: clusters.Placeholder}})
+	f.SherlockKey = clusters.Placeholder
+	in, _ := json.Marshal(restoreInput{Backup: f, Parts: map[string]bool{"connections": true}})
+	resp, out := send(t, c, http.MethodPost, srv.URL+"/api/v1/admin/restore", string(in))
+	var rep restoreReport
+	if err := json.Unmarshal([]byte(out), &rep); err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("the restore: %s %s", resp.Status, out)
+	}
+	notes := strings.Join(rep.Notes, "\n")
+	if rep.Restored["connections"] != 1 || !strings.Contains(notes, "Prod is here already and keeps its own credential") || !hasSecret(rep.Secrets, "the token of the connection Staging", "Clusters › Staging › Edit connection") || !hasSecret(rep.Secrets, "Sherlock's API key", "Settings › Sherlock › API key") {
+		t.Fatalf("restored %+v, notes:\n%s\nsecrets: %+v", rep.Restored, notes, rep.Secrets)
+	}
+	if _, cred, err := m.Store().Get(ctx, "prod"); err != nil || cred.Token != secret {
+		t.Fatalf("Prod's token after the restore: %q %v", cred.Token, err)
+	}
+	if _, cred, err := m.Store().Get(ctx, "staging"); err != nil || cred.Token != clusters.Placeholder {
+		t.Fatalf("Staging's credential: %+v %v", cred, err)
+	}
+	if sum, ok := m.Summary("staging"); !ok || sum.State != "failed" || !strings.Contains(sum.Message, "paste it again") {
+		t.Fatalf("Staging after the restore: %+v", sum)
+	}
+
+	// A file of the first format, without credentials, and a file with a
+	// secret where the placeholder belongs.
+	f.Format = backupFormatV1
+	f.Connections = []backupConnection{
+		{Spec: clusters.Spec{ID: "dev", Name: "Dev", Env: clusters.EnvDevelopment, Server: "https://10.0.0.11:6443", CA: clusters.CASkip, Auth: clusters.AuthKubeconfig, Mode: clusters.ModeRead}},
+		{Spec: clusters.Spec{ID: "qa", Name: "QA", Env: clusters.EnvStaging, Server: "https://10.0.0.12:6443", CA: clusters.CASkip, Auth: clusters.AuthToken, Mode: clusters.ModeRead}, Credential: &backupCredential{Token: secret}},
+	}
+	in, _ = json.Marshal(restoreInput{Backup: f, Parts: map[string]bool{"connections": true}})
+	_, out = send(t, c, http.MethodPost, srv.URL+"/api/v1/admin/restore", string(in))
+	rep = restoreReport{}
+	_ = json.Unmarshal([]byte(out), &rep)
+	if rep.Restored["connections"] != 1 || !strings.Contains(strings.Join(rep.Notes, "\n"), "QA is not restored: the file holds a secret") {
+		t.Fatalf("restored %+v, notes: %v", rep.Restored, rep.Notes)
+	}
+	if _, cred, _ := m.Store().Get(ctx, "dev"); cred.Kubeconfig != clusters.Placeholder {
+		t.Fatalf("Dev's credential from the first format: %+v", cred)
+	}
+	if _, ok := m.Summary("qa"); ok {
+		t.Fatal("QA was restored with the secret in the file")
+	}
+}
+
+// hasSecret says whether a restore lists a secret to set again, and where.
+func hasSecret(list []backup.SecretToSet, name, where string) bool {
+	for _, x := range list {
+		if x.Name == name && x.Where == where {
+			return true
+		}
+	}
+	return false
 }

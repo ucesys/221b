@@ -136,3 +136,30 @@ so a read-only SuperAdmin definition turns it off too. Values kept by
 {{- $_ := set $c "adminExec" (and (eq .Values.rbac.roles.admin.template "full") (.Values.rbac.roles.admin.exec | default false)) -}}
 {{- toPrettyJson $c -}}
 {{- end -}}
+
+{{/* Whether the issue service is on (Phase 12): "true" or nothing. A values
+     file from before it has no issues block: on. */}}
+{{- define "b221.issuesOn" -}}
+{{- if ne (toString (dig "enabled" true (.Values.issues | default dict))) "false" -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+The agents' baseline house instructions (Phase 12), as the data of the
+<release>-agents ConfigMap: <agent>.md for each agent given some. A values
+file from before has no agents block; a key that is no agent is refused.
+*/}}
+{{- define "b221.agentBaselines" -}}
+{{- $ids := list "sherlock" "troubleshooter" "changePlanner" "auditor" "hostDoctor" "automationAuthor" "scriptReviewer" "mycroft" "summarizer" }}
+{{- $agents := .Values.agents | default dict }}
+{{- range $k, $_ := $agents }}
+{{- if not (has $k $ids) }}
+{{- fail (printf "agents.%s is not an agent: %s" $k (join ", " $ids)) }}
+{{- end }}
+{{- end }}
+{{- range $id := $ids }}
+{{- $a := get $agents $id | default dict }}
+{{- with $a.instructions }}
+{{ $id }}.md: {{ . | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

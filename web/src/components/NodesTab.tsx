@@ -14,13 +14,15 @@ import { NodeFleets } from './NodeFleets'
 import { NodePicking, usePickedNodes } from './NodePicks'
 import { PickedBar } from './PickedBar'
 import { fetchToolbox } from '../api/toolbox'
+import { collectFacts } from '../api/facts'
 import { useToolbox } from './toolbox/context'
 import { NodePanel } from './NodePanel'
+import { AddHostButton } from './HostDialog'
 import { ProblemFilter, problemLevel, showsNode } from './ProblemFilter'
 import { SearchBox } from './SearchBox'
 import type { TabProps } from './tabs'
 
-const ROLES: RoleFilter[] = ['all', 'control-plane', 'worker']
+const ROLES: RoleFilter[] = ['all', 'control-plane', 'worker', 'host']
 
 /**
  * The Nodes tab. Its filters live in the URL (#/nodes?role=&err=&q=&label=
@@ -58,7 +60,16 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
   const tb = useToolbox()
   const admin = me?.admin ?? true
   const { picks, pickedRows, pickSet, setPicks, togglePick } = usePickedNodes(route.cluster, rows)
-  const picking = useMemo(() => (admin ? { picked: pickSet, toggle: togglePick } : null), [admin, pickSet, togglePick])
+  const shownNames = useMemo(() => table.shown.map((r) => r.name), [table.shown])
+  const setMany = useCallback((names: string[], on: boolean) => setPicks(on ? [...new Set([...picks, ...names])] : picks.filter((n) => !names.includes(n))), [picks, setPicks])
+  const picking = useMemo(() => (admin ? { picked: pickSet, toggle: togglePick, shown: shownNames, setMany } : null), [admin, pickSet, togglePick, shownNames, setMany])
+  const [collecting, setCollecting] = useState(false)
+  const collect = () => {
+    setCollecting(true)
+    void collectFacts(route.cluster, picks)
+      .then(onToast)
+      .finally(() => setCollecting(false))
+  }
   // What the server would answer, asked once something is picked.
   const askSSH = admin && picks.length > 0 && !!tb?.available
   const [sshRefusal, setSshRefusal] = useState<string | undefined>()
@@ -74,7 +85,9 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
       live = false
     }
   }, [askSSH, tbCluster])
-  const sshOff = !tb?.available ? 'Watson is off here' : sshRefusal
+  // A host pairs from its own panel, with a credential: the node pairing is for Kubernetes nodes.
+  const pairable = useMemo(() => pickedRows.filter((r) => !r.host).map((r) => r.name), [pickedRows])
+  const sshOff = !tb?.available ? 'Watson is off here' : (sshRefusal ?? (pairable.length ? undefined : 'Hosts pair from their own panel: pick a Kubernetes node'))
   const cp = rows.filter((r) => r.role === 'control-plane').length
   const withErrors = rows.filter((r) => r.errors > 0).length
   const withProblems = rows.filter((r) => r.errors + r.warnings > 0).length
@@ -103,8 +116,11 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
   const segs: [RoleFilter, string, number][] = [
     ['all', 'All', rows.length],
     ['control-plane', 'Control plane', cp],
-    ['worker', 'Workers', rows.length - cp],
+    ['worker', 'Workers', rows.filter((r) => r.role === 'worker').length],
   ]
+  // Hosts outside Kubernetes (Phase 12), when there are any.
+  const hosts = rows.filter((r) => r.role === 'host').length
+  if (hosts || role === 'host') segs.push(['host', 'Hosts', hosts])
   // Every cluster has a node: an empty list once synced means Kubernetes
   // lets this person list none (P3-02).
   const shownText = !rows.length
@@ -137,6 +153,7 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
                 {shownText}
               </span>
               <div className="rk-tools" style={{ marginLeft: 'auto', gap: 8 }}>
+                {admin && <AddHostButton cluster={route.cluster} onToast={onToast} />}
                 <ColumnsMenu cols={NODE_COLUMNS} hidden={table.hidden} defaults={table.defaults} onChange={table.setHidden} compact={compact} />
                 <ExportMenu onExport={(f) => table.exportRows(f, cluster?.name, 'nodes', onToast)} disabled={!table.shown.length} what="the nodes in view" />
               </div>
@@ -153,15 +170,11 @@ export function NodesTab({ cluster, now, onToast, route, me = null }: TabProps &
                 onCancel={() => setPicks([])}
                 onCreated={(f) => set({ fleet: f.id })}
                 onToast={onToast}
-                note={
-                  table.shown.some((r) => !pickSet.has(r.name)) && (
-                    <button className="rk-link" onClick={() => setPicks([...new Set([...picks, ...table.shown.map((r) => r.name)])])} style={{ fontSize: 12 }} data-testid="fleet-nodebar-all">
-                      pick all {table.shown.length} in view
-                    </button>
-                  )
-                }
               >
-                <button className="rk-btn" onClick={() => tb?.openTool({ tool: 'ssh-pair', nodes: picks, from: 'Nodes page' })} disabled={!!sshOff} title={sshOff ?? 'Pair every picked node for SSH: one session each'} data-testid="fleet-nodebar-ssh">
+                <button className="rk-btn" onClick={collect} disabled={collecting} title="Read each picked node's facts over SSH: the nodes paired for SSH and in a fleet" data-testid="fleet-nodebar-facts">
+                  {collecting ? 'Collecting…' : 'Collect facts'}
+                </button>
+                <button className="rk-btn" onClick={() => tb?.openTool(pairable.length === 1 ? { tool: 'ssh-pair', node: pairable[0], from: 'Nodes page' } : { tool: 'ssh-pair', nodes: pairable, from: 'Nodes page' })} disabled={!!sshOff} title={sshOff ?? (pairable.length < picks.length ? 'Pair every picked Kubernetes node for SSH: one session each; hosts pair from their own panel' : 'Pair every picked node for SSH: one session each')} data-testid="fleet-nodebar-ssh">
                   Pair for SSH…
                 </button>
               </PickedBar>

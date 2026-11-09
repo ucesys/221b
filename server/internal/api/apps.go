@@ -354,8 +354,16 @@ func (s *Server) readApp(w http.ResponseWriter, r *http.Request) (appInput, bool
 	}
 	if in.Source != nil {
 		src, err := apps.Normalize(*in.Source)
+		// --- Helm repositories (Phase 12, wave 5): a repository's chart
+		// takes its address from the repositories the console knows, and
+		// their credentials, never a token of its own (HR-01).
+		if err == nil && src.FromRepository() {
+			if src, err = s.opts.Repos.Resolve(r.Context(), src); err == nil && in.Token != "" {
+				err = errors.New("a repository's chart is fetched with the repository's credentials, kept in Settings › Applications: send no token with it")
+			}
+		}
 		if err == nil {
-			err = apps.CheckRepoHost(r.Context(), src.Repo)
+			err = apps.CheckSourceHost(r.Context(), src.Repo)
 		}
 		if err != nil {
 			jsonError(w, http.StatusBadRequest, err.Error())
@@ -448,6 +456,16 @@ func appLine(verb, ns, name string, src apps.Source, extra ...string) (string, e
 	if _, err := apps.Normalize(src); err != nil {
 		return "", fmt.Errorf("the application's source cannot be deployed: %w", err)
 	}
+	// --- Helm repositories (Phase 12, wave 5): repo/chart or
+	// oci://.../chart, at its version (HR-07).
+	if src.FromRepository() {
+		parts := []string{"helm", verb, name, src.ChartRef()}
+		if src.Ref != "" {
+			parts = append(parts, "--version", src.Ref)
+		}
+		parts = append(parts, "-n", ns, "--app")
+		return strings.Join(append(parts, extra...), " "), nil
+	}
 	parts := []string{"helm", verb, name, "--git", src.Repo}
 	if src.Path != "" {
 		parts = append(parts, "--path", "'"+src.Path+"'")
@@ -501,7 +519,7 @@ func (s *Server) postApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Source == nil {
-		jsonError(w, http.StatusBadRequest, "name the chart's repository, path and branch or tag")
+		jsonError(w, http.StatusBadRequest, "name the chart: a git repository with its path and branch or tag, or a chart repository's chart and version")
 		return
 	}
 	_, cl, ok := s.lookup(w, r)
@@ -663,7 +681,7 @@ func (s *Server) matchSource(ctx context.Context, c watson.Cluster, who watson.W
 		// No release yet: nothing to compare with.
 		return
 	}
-	co, err := apps.Fetch(ctx, rec.Source, token)
+	co, err := s.opts.Repos.Fetch(ctx, rec.Source, token)
 	if err != nil {
 		rec.SourceDiff = "the repository could not be read: " + err.Error()
 		return
@@ -694,7 +712,7 @@ func (s *Server) matchSource(ctx context.Context, c watson.Cluster, who watson.W
 	}
 	if d := apps.Compare(rel.Manifest, manifest, "deployed", "source"); !d.Same {
 		n := len(d.Changed) + len(d.Added) + len(d.Removed)
-		rec.SourceDiff = fmt.Sprintf("%d of its objects render differently at %s", n, short12(co.Commit))
+		rec.SourceDiff = fmt.Sprintf("%d of its objects render differently at %s", n, apps.ShortDigest(co.Commit))
 		if ch.Metadata != nil && ch.Metadata.Version != rel.Chart.Metadata.Version {
 			rec.SourceDiff += fmt.Sprintf(" (chart %s there, %s deployed)", ch.Metadata.Version, rel.Chart.Metadata.Version)
 		}
@@ -795,6 +813,11 @@ func (s *Server) postAppRefs(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Repo  string `json:"repo"`
 		Token string `json:"token,omitempty"`
+		// Kind, Repository and Chart name a repository's chart, whose
+		// versions are its tags (Phase 12, wave 5).
+		Kind       string `json:"kind,omitempty"`
+		Repository string `json:"repository,omitempty"`
+		Chart      string `json:"chart,omitempty"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
 	dec.DisallowUnknownFields()
@@ -802,12 +825,15 @@ func (s *Server) postAppRefs(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "the request is not valid: "+err.Error())
 		return
 	}
-	src, err := apps.Normalize(apps.Source{Repo: in.Repo, Ref: "x"})
+	src, err := apps.Normalize(apps.Source{Kind: in.Kind, Repo: in.Repo, Repository: in.Repository, Chart: in.Chart, Ref: "x"})
 	if err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	refs, err := apps.ListRefs(r.Context(), src.Repo, in.Token)
+	if src.FromRepository() {
+		src.Ref = ""
+	}
+	refs, err := s.opts.Repos.Refs(r.Context(), src, in.Token)
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
@@ -844,7 +870,7 @@ func (s *Server) getAppInspect(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	co, err := apps.Fetch(r.Context(), rec.Source, token)
+	co, err := s.opts.Repos.Fetch(r.Context(), rec.Source, token)
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
@@ -868,11 +894,40 @@ func (s *Server) postAppInspect(w http.ResponseWriter, r *http.Request) {
 		Ref     string `json:"ref,omitempty"`
 		RefKind string `json:"refKind,omitempty"`
 		Token   string `json:"token,omitempty"`
+		// Kind, Repository and Chart name a repository's chart at Ref, its
+		// version, the newest when none (Phase 12, wave 5).
+		Kind       string `json:"kind,omitempty"`
+		Repository string `json:"repository,omitempty"`
+		Chart      string `json:"chart,omitempty"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
 		jsonError(w, http.StatusBadRequest, "the request is not valid: "+err.Error())
+		return
+	}
+	if in.Kind == apps.KindHelm || in.Kind == apps.KindOCI {
+		src, err := apps.Normalize(apps.Source{Kind: in.Kind, Repo: in.Repo, Repository: in.Repository, Chart: in.Chart, Ref: in.Ref})
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		co, err := s.opts.Repos.Fetch(r.Context(), src, "")
+		if errors.Is(err, apps.ErrNoRepository) {
+			jsonError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		b, _ := json.Marshal(struct {
+			apps.Inspection
+			Ref     string `json:"ref"`
+			RefKind string `json:"refKind"`
+			Commit  string `json:"commit"`
+		}{apps.Inspect(co), co.Version, apps.RefVersion, co.Commit})
+		writeJSON(w, r, b)
 		return
 	}
 	src, err := apps.Normalize(apps.Source{Repo: in.Repo, Ref: "x"})
@@ -941,7 +996,7 @@ func (s *Server) getAppRefs(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	refs, err := apps.ListRefs(r.Context(), rec.Source.Repo, token)
+	refs, err := s.opts.Repos.Refs(r.Context(), rec.Source, token)
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
@@ -1197,7 +1252,7 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 				return "", "", false
 			}
 		}
-		co, err := apps.Fetch(r.Context(), src, token)
+		co, err := s.opts.Repos.Fetch(r.Context(), src, token)
 		if err != nil {
 			jsonError(w, http.StatusBadGateway, err.Error())
 			return "", "", false
@@ -1207,7 +1262,10 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadGateway, err.Error())
 			return "", "", false
 		}
-		label = fmt.Sprintf("%s (%s)", src, short12(co.Commit))
+		if src.FromRepository() {
+			src.Ref = co.Version
+		}
+		label = fmt.Sprintf("%s (%s)", src, apps.ShortDigest(co.Commit))
 		if m, err := s.opts.Watson.RenderUpgrade(r.Context(), c, who, ns, name, ch, vals); err == nil {
 			return m, label, true
 		} else if errors.Is(err, apps.ErrRenderLimit) {

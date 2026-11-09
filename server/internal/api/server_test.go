@@ -582,7 +582,7 @@ func TestSettings(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	br := bufio.NewReader(resp.Body)
-	if ev, data := readEvent(t, br); ev != "snapshot" || !strings.Contains(data, `"settings":{"refreshSeconds":3,"storage":"memory"}`) {
+	if ev, data := readEvent(t, br); ev != "snapshot" || !strings.Contains(data, `"settings":{"refreshSeconds":3,"storage":"memory","showCosts":true}`) {
 		t.Fatalf("first event %s %.120s", ev, data)
 	}
 

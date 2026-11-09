@@ -27,8 +27,13 @@ import (
 // and chart version, and the source the line named. Nothing else on the
 // record changes, --set on the line included, which applies to that deploy.
 
-// appSource reads the source from the line's flags.
+// appSource reads the source from the line: its --git flags, or the
+// repository chart after the release (Phase 12, wave 5, HR-07).
 func appSource(c *Command) (apps.Source, bool, error) {
+	if len(c.Positionals) > 1 {
+		s, err := apps.ParseChartRef(c.Positionals[1], c.Flag("version"))
+		return s, true, err
+	}
 	if !c.Has("git") {
 		return apps.Source{}, false, nil
 	}
@@ -107,6 +112,16 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 	if err != nil {
 		return nil, err
 	}
+	// A repository's chart takes its address from the repositories the
+	// console knows (HR-07).
+	if given && src.FromRepository() {
+		if t.Repos == nil {
+			return nil, errors.New("this console keeps no chart repositories: name a chart in git with --git")
+		}
+		if src, err = t.Repos.Resolve(ctx, src); err != nil {
+			return nil, err
+		}
+	}
 	a := &appChart{src: src}
 	token := ""
 	if c.Has("app") {
@@ -125,7 +140,7 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 			// The saved token and values belong to the saved repository:
 			// another one on the line would receive them.
 			if given && !apps.SameRepo(src, rec.Source) {
-				return nil, fmt.Errorf("%s/%s is kept with its chart in %s: --app cannot take its token and values to another repository", ns, name, rec.Source.Repo)
+				return nil, fmt.Errorf("%s/%s is kept with its chart in %s: --app cannot take its token and values to another repository", ns, name, keptIn(rec.Source))
 			}
 			a.rec, token = &rec, tok
 			if !given {
@@ -135,7 +150,7 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 		}
 	}
 	if a.src.Repo == "" {
-		return nil, errors.New("name the chart's repository with --git, and its branch or tag with --ref")
+		return nil, errors.New("name the chart: --git URL with --ref BRANCH|TAG for a chart in git, or REPO/CHART or oci://REGISTRY/PATH/CHART with --version")
 	}
 	for _, set := range c.Flags["set"] {
 		a.params = append(a.params, set)
@@ -144,16 +159,24 @@ func loadAppChart(ctx context.Context, c *Command, t Target, ns, name string) (*
 		return nil, err
 	}
 	pinned := t.pin != nil && t.pin.commit != ""
+	// A repository's chart named without --version deploys the version
+	// its card settled on (HR-08).
+	if pinned && a.src.FromRepository() && a.src.Ref == "" {
+		a.src.Ref = t.pin.src.Ref
+	}
 	if pinned {
 		if t.pin.src != a.src {
 			return nil, errors.New("the application's source changed after this card was made: send the command again for a fresh card")
 		}
-		a.co, err = apps.FetchCommit(ctx, a.src, token, t.pin.commit)
+		a.co, err = t.Repos.FetchDigest(ctx, a.src, token, t.pin.commit)
 		if err != nil {
-			return nil, fmt.Errorf("commit %s, which this card shows, cannot be fetched: %w. Send the command again for a fresh card", short(t.pin.commit), err)
+			return nil, fmt.Errorf("%s %s, which this card shows, cannot be fetched: %w. Send the command again for a fresh card", commitWord(t.pin.commit), short(t.pin.commit), err)
 		}
-	} else if a.co, err = apps.Fetch(ctx, a.src, token); err != nil {
+	} else if a.co, err = t.Repos.Fetch(ctx, a.src, token); err != nil {
 		return nil, err
+	}
+	if a.src.FromRepository() {
+		a.src.Ref = a.co.Version
 	}
 	// The record's second values file, its fleet and whether the chart's
 	// own values.yaml counts need the checkout (R2-08, R2-09, R2-11).
@@ -222,7 +245,7 @@ func (a *appChart) saveDeployOnce(ctx context.Context, c *Command, t Target, out
 		rec.Source, rec.Values, rec.Params = a.src, a.values, a.params
 	case err != nil:
 		return err
-	case c.Has("git"):
+	case c.Has("git") || len(c.Positionals) > 1:
 		// A token belongs to its repository: a new one on the line would
 		// receive it at the next deploy.
 		if !apps.SameRepo(a.src, rec.Source) {
@@ -374,7 +397,7 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 		}
 	}
 	if dry {
-		fmt.Fprintf(out, "DRY RUN: %s %s from %s at commit %s\n", map[bool]string{true: "install", false: "upgrade"}[install], name, a.src, short(a.co.Commit))
+		fmt.Fprintf(out, "DRY RUN: %s %s from %s at %s %s\n", map[bool]string{true: "install", false: "upgrade"}[install], name, a.src, commitWord(a.co.Commit), short(a.co.Commit))
 		fmt.Fprintln(out, "# watson: rendered without reading the cluster: lookup finds nothing here; Secrets are left out and credentials masked")
 	}
 	if err := (statusPrinter{rel: rel, showMetadata: true}).WriteTable(out); err != nil {
@@ -392,11 +415,23 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 	return nil
 }
 
-func short(commit string) string {
-	if len(commit) > 12 {
-		return commit[:12]
+func short(commit string) string { return apps.ShortDigest(commit) }
+
+// commitWord is what a card's pin names: a git commit, or a repository
+// chart's archive by its digest.
+func commitWord(commit string) string {
+	if strings.HasPrefix(commit, "sha256:") {
+		return "the chart archive"
 	}
-	return commit
+	return "commit"
+}
+
+// keptIn is where an application's chart is kept, for a refusal.
+func keptIn(s apps.Source) string {
+	if s.FromRepository() {
+		return s.ChartRef()
+	}
+	return s.Repo
 }
 
 // appImpact is the card of an install, upgrade or uninstall: the chart
@@ -481,6 +516,9 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		when = ", " + a.co.CommitDate.Format("Jan 2 2006")
 	}
 	from := fmt.Sprintf("%s at commit %s (%q%s)", a.src, short(a.co.Commit), a.co.CommitSubject, when)
+	if a.src.FromRepository() {
+		from = fmt.Sprintf("%s, archive %s%s", a.src, short(a.co.Commit), when)
+	}
 	install := c.Name() == "helm install" || (c.Has("install") && cur == nil)
 	switch {
 	case relErr != nil:
@@ -535,7 +573,7 @@ func objectNames(manifest string) []string {
 // lookups, the cluster's capabilities and the next revision are the real
 // ones, which a render on the console alone cannot give.
 func (s *Service) RenderUpgrade(ctx context.Context, cl Cluster, who Who, ns, name string, ch *chart.Chart, vals map[string]any) (string, error) {
-	t := Target{Config: cl.Config, Person: who.Person, Cluster: cl.ID, Apps: s.opts.Apps}
+	t := Target{Config: cl.Config, Person: who.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos}
 	d, err := s.disc.For(cl.ID, cl.Config)
 	if err != nil {
 		return "", err

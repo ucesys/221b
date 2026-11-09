@@ -28,6 +28,13 @@ const (
 // pages show them in.
 var All = []ID{SuperAdmin, SuperViewer, Admin, Viewer}
 
+// Reporter is the fifth, built-in role of the issue service (Phase 12,
+// IS-20): it reports problems and follows its own reports, on the report
+// page alone. It is not a Kubernetes role: it has no ClusterRole and
+// grants nothing in any cluster, so it is not in All. Its holders come
+// from issues.reporterGroups and from local groups of the role reporter.
+const Reporter ID = "reporter"
+
 // Valid reports whether id names a role.
 func Valid(id string) bool { return slices.Contains(All, ID(id)) }
 
@@ -49,6 +56,8 @@ func (id ID) Name() string {
 		return "Admin"
 	case Viewer:
 		return "Viewer"
+	case Reporter:
+		return "Reporter"
 	}
 	return string(id)
 }

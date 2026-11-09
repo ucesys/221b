@@ -9,6 +9,8 @@ import { fmtTs } from "../lib/format";
 import { ROLE_NAME, topRole } from "../lib/admin";
 import {
   adminHref,
+  casesHref,
+  CASES_TABS,
   HOME,
   tabHref,
   TABS,
@@ -20,10 +22,15 @@ import {
   type Tab,
 } from "../lib/router";
 import { openAdmin, pagesFor } from "./AdminPage";
-import { fetchApprovals } from "../api/automation";
-import { SEEN_EVENT, seenAt, seenFor, startSeen, unseen } from "../lib/approvalsSeen";
 import { ClusterMenu } from "./ClusterMenu";
-import { Chevron, GearIcon, Logo, MoonIcon, SunIcon } from "./Icons";
+// --- Cases (Phase 12) ---
+import { casesAccess, useIssueMe } from "../lib/cases";
+import { ReportPageLink } from "./cases/ReportPageLink";
+// --- end Cases ---
+// --- Top bar: the bell (Phase 12, wave 5; CF-80) ---
+import { useInboxCounts, type InboxCounts } from "./cases/useInbox";
+// --- end top bar ---
+import { BellIcon, Chevron, GearIcon, Logo, MoonIcon, SunIcon } from "./Icons";
 
 export type Theme = "light" | "dark";
 
@@ -167,6 +174,27 @@ function RingArc({ every, elapsed }: { every: number; elapsed: number }) {
   );
 }
 
+/**
+ * The bell (CF-80): what waits for this person in Cases › Inbox, the same
+ * rows the Cases switch and the Inbox tab count. Red while a P0 or P1 case
+ * waits, yellow while anything else does, plain when nothing does; never
+ * a number.
+ */
+export function bellOf(c: InboxCounts): {
+  state: "p01" | "waiting" | "none";
+  text: string;
+} {
+  if (c.total === 0)
+    return { state: "none", text: "Nothing waiting for you in Cases › Inbox" };
+  const urgent = [c.p0 > 0 && `${c.p0} P0`, c.p1 > 0 && `${c.p1} P1`]
+    .filter(Boolean)
+    .join(" and ");
+  return {
+    state: urgent ? "p01" : "waiting",
+    text: `${c.total} waiting for you${urgent ? `, ${urgent}` : ""}: open Cases › Inbox`,
+  };
+}
+
 /** The first letters of a person's name, for the account button. */
 export function initials(me: Me): string {
   const name = (me.user.name || me.user.username || "?").trim();
@@ -232,6 +260,36 @@ export function anonymousRoleName(me: Me): string {
 /** What the Sign-in off tag says when pointed at. */
 export function signInOffText(me: Me): string {
   return `Sign-in is off on this console: everyone who reaches it is a ${anonymousRoleName(me)} (auth.anonymousRole). SSH, Automation and showing Secret values are off, since nobody is known. Turn sign-in on in the chart (auth.mode) to use them.`;
+}
+
+/** Report a problem and My reports, in the account menu (CS-16): new tabs on the report page. */
+function ReportItems({ onDone }: { onDone: () => void }) {
+  const im = useIssueMe();
+  if (!im || !(im.report || im.operator)) return null;
+  return (
+    <>
+      <div className="rk-ddsep" />
+      <ReportPageLink
+        className="rk-ddopt"
+        role="menuitem"
+        testId="account-report"
+        onOpened={onDone}
+      >
+        Report a problem ↗
+      </ReportPageLink>
+      <ReportPageLink
+        className="rk-ddopt"
+        role="menuitem"
+        mine
+        testId="account-my-reports"
+        title="Your cases, on the report page, in a new tab"
+        onOpened={onDone}
+      >
+        {/* --- Cases replace reports (Phase 12, wave 5): a report is a case. */}
+        My cases ↗
+      </ReportPageLink>
+    </>
+  );
 }
 
 /** The account button and its menu: who is signed in, their role, the theme, and sign-out. */
@@ -377,6 +435,8 @@ function AccountMenu({
                   : ""}
               </div>
             )}
+            {/* --- Cases (Phase 12, CS-16): the report page, for anyone who may report --- */}
+            <ReportItems onDone={() => setOpen(false)} />
             <div className="rk-ddsep" />
             <ThemeChoice theme={theme} onTheme={onTheme} />
             <div className="rk-ddsep" />
@@ -425,51 +485,6 @@ export function TopBar({
   // set (live.Store.SetSettings), and the browser hears of it at that
   // moment: the countdown and the ring start again then, at the new speed,
   // rather than finishing the old interval first.
-  // What this SuperAdmin has not seen on Approvals yet: reviews that came
-  // in for them to approve, and decisions on what they asked for.
-  const [news, setNews] = useState({ waiting: 0, decided: 0 });
-  const approver = !!me && pagesFor(me).includes("approvals");
-  const user = me?.user.username || me?.user.name || "";
-  useEffect(() => {
-    if (!approver) return;
-    seenFor(user);
-    let gone = false;
-    const look = () =>
-      fetchApprovals(true).then(
-        (a) => {
-          if (gone) return;
-          const seen = seenAt() ?? startSeen(a.items);
-          setNews(unseen(a.items, seen));
-        },
-        () => {},
-      );
-    void look();
-    // Every 15 seconds, and at once when the person comes back to the tab.
-    const t = setInterval(() => void look(), 15_000);
-    const back = () => {
-      if (document.visibilityState === "visible") void look();
-    };
-    const seenNow = () => setNews({ waiting: 0, decided: 0 });
-    window.addEventListener(SEEN_EVENT, seenNow);
-    window.addEventListener("focus", back);
-    document.addEventListener("visibilitychange", back);
-    return () => {
-      gone = true;
-      clearInterval(t);
-      window.removeEventListener(SEEN_EVENT, seenNow);
-      window.removeEventListener("focus", back);
-      document.removeEventListener("visibilitychange", back);
-    };
-  }, [approver, user]);
-  const flagged = news.waiting + news.decided > 0;
-  const newsText = [
-    news.waiting > 0 &&
-      `${news.waiting} new ${news.waiting === 1 ? "review" : "reviews"} for you to approve`,
-    news.decided > 0 &&
-      `${news.decided} of your ${news.decided === 1 ? "requests was" : "requests were"} decided`,
-  ]
-    .filter(Boolean)
-    .join(", ");
   const [rate, setRate] = useState({ every, at: 0 });
   if (rate.every !== every) setRate({ every, at: rate.every ? now : 0 });
   const since =
@@ -493,7 +508,17 @@ export function TopBar({
   // with no tab, such as Administration.
   const [nodesArea, setNodesArea] = usePref<Area>("221b.nodes-area", "kubernetes");
   const automationOn = me?.admin === true;
-  const area: Area = !automationOn
+  // Cases is the third area (CS-01), for whoever has something in it.
+  const issueMe = useIssueMe();
+  const cases = casesAccess(me, issueMe);
+  // --- Top bar (Phase 12, wave 5, IN-07; CF-80): what is pending in the
+  // Inbox, for the Cases count and the bell.
+  const casesCount = useInboxCounts(cases);
+  const bell = bellOf(casesCount);
+  // --- end top bar ---
+  const area: Area = route.view === "cases"
+    ? "cases"
+    : !automationOn
     ? "kubernetes"
     : isAutomationTab(tab)
       ? "automation"
@@ -501,7 +526,7 @@ export function TopBar({
         ? nodesArea
         : "kubernetes";
   useEffect(() => {
-    if (tab && tab !== "nodes" && area !== nodesArea) setNodesArea(area);
+    if (tab && tab !== "nodes" && area !== nodesArea && area !== "cases") setNodesArea(area);
   }, [tab, area, nodesArea, setNodesArea]);
   // The Helm tab needs Secrets; without them there is nothing to show.
   const tabs = TABS.filter(
@@ -545,7 +570,7 @@ export function TopBar({
     return () => ro.disconnect();
     // Counts change the widths, so measure again when they do.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ids.join(","), JSON.stringify(counts)]);
+  }, [ids.join(","), JSON.stringify(counts), area]);
 
   // Opening another tab closes the menu.
   const [lastTab, setLastTab] = useState(tab);
@@ -579,7 +604,11 @@ export function TopBar({
       <div
         className="rk-brand"
         style={{
-          flex: "none",
+          // Shrinks and wraps on a narrow screen, where three areas in the
+          // switch no longer fit beside the cluster (Phase 12, CS-01).
+          flex: "0 1 auto",
+          flexWrap: "wrap",
+          rowGap: 4,
           display: "flex",
           alignItems: "center",
           gap: 10,
@@ -604,7 +633,7 @@ export function TopBar({
           me={me}
           onEdit={onEditCluster}
         />
-        {automationOn && (
+        {(automationOn || cases.show) && (
           <div className="rk-seg" role="group" aria-label="Area" data-testid="area">
             <button
               type="button"
@@ -614,17 +643,72 @@ export function TopBar({
             >
               Kubernetes
             </button>
-            <button
-              type="button"
-              aria-pressed={area === "automation"}
-              onClick={() => navigate(tabHref("scripts"))}
-              data-testid="area-automation"
-            >
-              Automation
-            </button>
+            {automationOn && (
+              <button
+                type="button"
+                aria-pressed={area === "automation"}
+                onClick={() => navigate(tabHref("scripts"))}
+                data-testid="area-automation"
+              >
+                Automation
+              </button>
+            )}
+            {cases.show && (
+              <button
+                type="button"
+                aria-pressed={area === "cases"}
+                onClick={() => navigate(casesHref(cases.tabs[0]))}
+                title={
+                  casesCount.total > 0
+                    ? `Cases: ${casesCount.total} waiting for you`
+                    : "Cases: reports, approvals and what the agents found"
+                }
+                data-testid="area-cases"
+              >
+                Cases
+                {casesCount.total > 0 && (
+                  <span
+                    className="rk-count"
+                    data-tone="info"
+                    style={{ marginLeft: 6 }}
+                    data-testid="cases-count"
+                  >
+                    {casesCount.total}
+                  </span>
+                )}
+              </button>
+            )}
           </div>
         )}
       </div>
+      {area === "cases" ? (
+        <nav
+          className="rk-views"
+          aria-label="Cases"
+          style={{ flex: "1 1 0", minWidth: 0, display: "flex", alignItems: "stretch" }}
+          data-testid="cases-nav"
+        >
+          <div className="rk-tabs" style={{ flexWrap: "wrap" }}>
+            {CASES_TABS.filter((t) => cases.tabs.includes(t.id)).map((t) => (
+              <a
+                key={t.id}
+                className="rk-tab"
+                href={casesHref(t.id)}
+                aria-current={route.path[0] === t.id ? "page" : undefined}
+                title={t.tip}
+                data-cases-tab={t.id}
+              >
+                {t.label}
+                {t.id === "inbox" && casesCount.total > 0 && (
+                  <span className="rk-count" data-tone="info">
+                    {casesCount.total}
+                  </span>
+                )}
+              </a>
+            ))}
+          </div>
+        </nav>
+      ) : (
       <nav
         ref={nav}
         className="rk-views"
@@ -729,6 +813,7 @@ export function TopBar({
           </div>
         )}
       </nav>
+      )}
       <div
         className="rk-meta"
         style={{
@@ -739,6 +824,7 @@ export function TopBar({
           minHeight: 52,
         }}
       >
+        {/* Live is the first of the icons (CF-41). */}
         <span
           style={{
             fontSize: 12,
@@ -763,47 +849,44 @@ export function TopBar({
           )}
           {live ? "Live" : conn.label}
         </span>
-        {me && pagesFor(me).length > 0 && (
-          // Administration: roles, permissions, users and settings, behind
-          // the gear (the Settings page is one of its pages). A flag on it
-          // says a review came in for the person to approve, or someone
-          // decided what they asked for; it then opens Approvals.
+        {/* --- Top bar (Phase 12, wave 5, IN-07; wave 6c, CF-41; CF-80): the bell, right of Live, in every area: what waits for this person in Cases › Inbox. No bell for whoever has no Inbox. --- */}
+        {cases.tabs.includes("inbox") && (
           <a
             className="rk-icon-btn"
-            href={adminHref(flagged ? "approvals" : pagesFor(me)[0]!)}
+            href={casesHref("inbox", [])}
+            aria-label={bell.text}
+            title={bell.text}
+            data-testid="inbox-bell"
+            data-state={bell.state}
+            style={{
+              color:
+                bell.state === "p01"
+                  ? "var(--err)"
+                  : bell.state === "waiting"
+                    ? "var(--warn)"
+                    : undefined,
+            }}
+          >
+            <BellIcon />
+          </a>
+        )}
+        {/* --- end top bar --- */}
+        {me && pagesFor(me).length > 0 && (
+          // Administration: roles, permissions, users and settings, behind
+          // the gear (the Settings page is one of its pages).
+          <a
+            className="rk-icon-btn"
+            href={adminHref(pagesFor(me)[0]!)}
             aria-current={route.view === "admin" ? "page" : undefined}
-            aria-label={
-              flagged ? `Administration: ${newsText}. Open Approvals` : "Administration"
-            }
-            title={
-              flagged
-                ? `${newsText}: open Approvals`
-                : "Administration: roles, permissions, users and settings"
-            }
+            aria-label="Administration"
+            title="Administration: roles, permissions, users and settings"
             onClick={(e) => {
               e.preventDefault();
-              openAdmin(flagged ? "approvals" : pagesFor(me)[0]!);
+              openAdmin(pagesFor(me)[0]!);
             }}
             data-testid="admin-link"
-            style={{ position: "relative" }}
           >
             <GearIcon />
-            {flagged && (
-              <span
-                aria-hidden="true"
-                data-testid="admin-flag"
-                style={{
-                  position: "absolute",
-                  top: 3,
-                  right: 3,
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  background: "var(--warn)",
-                  boxShadow: "0 0 0 2px var(--surface)",
-                }}
-              />
-            )}
           </a>
         )}
         {me && <AccountMenu me={me} theme={theme} onTheme={onTheme} />}

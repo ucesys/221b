@@ -658,6 +658,7 @@ export function VariablesSection({
           cluster={cluster}
           seed={fleetEdit}
           now={now}
+          onToast={onToast}
           onClose={() => setFleetEdit(null)}
           onSaved={async (f, isNew) => {
             const fresh = await reload();

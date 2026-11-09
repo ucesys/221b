@@ -32,6 +32,7 @@ import {
   type TableHandle,
 } from "./tables";
 import type { SortState } from "./table";
+import { currentCasesItem, type CasesItem } from "./casesItem";
 
 // ---- the list ----
 
@@ -373,6 +374,8 @@ export interface ViewState {
   filters?: Record<string, string>;
   tables?: TableState[];
   details?: { open: string; state: "open" | "loading" | "not available" };
+  /** In Cases (IB-11): the item open, with its cluster and a line about it. */
+  item?: CasesItem;
 }
 
 function tableState(t: TableHandle, names: number): TableState {
@@ -429,6 +432,17 @@ export function viewState(
     const peek = route.params.get("peek");
     if (peek && parsePeek(peek)) base.details = detailsState(peek);
   }
+  // --- Sherlock in Cases (Phase 12, IB-11) ---
+  // The page of the Cases area, its filters, and the item open there.
+  if (route.view === "cases") {
+    if (route.path.length) base.path = route.path;
+    const f: Record<string, string> = {};
+    for (const [k, v] of route.params.entries()) if (v) f[k] = v;
+    if (Object.keys(f).length) base.filters = f;
+    const item = currentCasesItem(route);
+    if (item) base.item = { ...item, summary: item.summary?.slice(0, 300) };
+  }
+  // --- end Sherlock in Cases ---
   const handles = route.view === "tabs" ? tableHandles() : [];
   // Fewer row names, then fewer tables, until it fits.
   for (const names of [50, 25, 12, 6, 3, 0]) {

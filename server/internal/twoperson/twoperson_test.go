@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ucesys/221b/server/internal/kv"
 )
@@ -39,7 +42,7 @@ func TestARequestWaitsForSomeoneElse(t *testing.T) {
 	if err != nil || got.State != Approved || got.DecidedBy.Key != "sam" || applied != 1 {
 		t.Fatalf("%+v %v applied %d", got, err, applied)
 	}
-	if _, err := s.Decide(ctx, 1, false, "late", sam, apply); !errors.Is(err, ErrInvalid) {
+	if _, err := s.Decide(ctx, 1, false, "late", ann, apply); !errors.Is(err, ErrDecided) || !strings.HasSuffix(err.Error(), ": already approved by Sam at "+got.DecidedAt.UTC().Format("2006-01-02 15:04:05 UTC")) {
 		t.Fatalf("decided twice: %v", err)
 	}
 	r2, _ := s.Add(ctx, Request{Kind: KindSuperAdmin, User: "bob", Super: true, Groups: []string{"admins"}, By: ann})
@@ -80,5 +83,57 @@ func TestTheRequestsStayWithinTheirBytes(t *testing.T) {
 	b, _ := json.Marshal(rec)
 	if len(b) > maxBytes || rec.Requests[0].ID != 1 || rec.Requests[len(rec.Requests)-1].ID != 189 {
 		t.Fatalf("%d bytes, %d kept", len(b), len(rec.Requests))
+	}
+}
+
+// Two SuperAdmins approve the same request at once: the change is applied
+// once, and the second is told who approved it and when (IB-09).
+func TestTwoApprovalsAtOnceApplyOnce(t *testing.T) {
+	ctx := context.Background()
+	s := New(&kv.Memory{}, nil)
+	r, _ := s.Add(ctx, Request{Kind: KindSuperAdmin, User: "bob", Super: true, By: ann})
+	var applied atomic.Int32
+	apply := func(Request) error {
+		applied.Add(1)
+		// A change that takes a moment, as a real one does.
+		time.Sleep(20 * time.Millisecond)
+		return nil
+	}
+	bo := Who{Key: "bo", Name: "Bo"}
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	start := make(chan struct{})
+	for i, who := range []Who{sam, bo} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[i] = s.Decide(ctx, r.ID, true, "", who, apply)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if applied.Load() != 1 {
+		t.Fatalf("applied %d times", applied.Load())
+	}
+	refused := 0
+	for _, err := range errs {
+		if err != nil {
+			if !errors.Is(err, ErrDecided) || !strings.Contains(err.Error(), "already approved by ") {
+				t.Fatalf("the second: %v", err)
+			}
+			refused++
+		}
+	}
+	if refused != 1 {
+		t.Fatalf("refused %d: %v", refused, errs)
+	}
+	// Withdrawn by the one who asked reads as such.
+	r2, _ := s.Add(ctx, Request{Kind: KindPrompt, Agent: "auditor", AgentName: "Auditor", Rev: 2, By: ann})
+	if _, err := s.Decide(ctx, r2.ID, false, "not yet", ann, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Decide(ctx, r2.ID, true, "", sam, apply); !errors.Is(err, ErrDecided) || !strings.Contains(err.Error(), "already withdrawn by Ann at ") {
+		t.Fatalf("approving a withdrawn one: %v", err)
 	}
 }

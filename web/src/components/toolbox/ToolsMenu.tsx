@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { collectFacts, fetchFacts } from '../../api/facts'
 import { fetchToolbox, HOST_TOOLS, type ToolAction, type ToolboxInfo, type ToolName } from '../../api/toolbox'
 import type { PodDetails } from '../../api/types'
 import { layer } from '../../lib/layer'
 import { apiPath } from '../../lib/router'
 import { ConfirmDialog } from '../ConfirmDialog'
-import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, KeyIcon, SherlockIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
+import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, InfoIcon, KeyIcon, SherlockIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
 import { useSherlockApi } from '../sherlockContext'
 import { troubleshootQuestion } from '../../lib/sherlock'
 import { useToolbox, type ToolboxApi } from './context'
@@ -16,6 +17,9 @@ export type ToolsTarget =
   | { kind: 'node'; name: string; cordoned?: boolean; role?: string; problem?: string }
   | { kind: 'claim'; name: string; namespace: string; problem?: string }
   | { kind: 'volume'; name: string; problem?: string }
+  // A fleet's drawer: its nodes, and where to say how Collect facts went.
+  // kube are its Kubernetes nodes, which the node pairing is for; a host pairs from its own panel.
+  | { kind: 'fleet'; name: string; nodes: string[]; kube: string[]; onDone?: (msg: string) => void; problem?: undefined }
 
 /** The target's kind as a person reads it. */
 function kindWord(t: ToolsTarget): string {
@@ -114,6 +118,8 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
   const [info, setInfo] = useState<ToolboxInfo | null>(null)
   const [err, setErr] = useState('')
   const [pod, setPod] = useState<PodDetails | null>(null)
+  // Why a fleet's facts cannot be collected: Automation is the SuperAdmin's.
+  const [factsOff, setFactsOff] = useState<string | undefined>()
   const menu = useRef<HTMLDivElement>(null)
   const [style] = useState(() => place(anchor))
 
@@ -124,9 +130,15 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
   const targetName = target.name
   const targetNs = target.kind === 'pod' ? target.namespace : ''
   useEffect(() => {
-    if (!tb.available || (kind !== 'pod' && kind !== 'node')) return
+    if (!tb.available || (kind !== 'pod' && kind !== 'node' && kind !== 'fleet')) return
     let live = true
-    fetchToolbox(tb.cluster, kind === 'pod' ? [targetNs] : [], kind === 'node').then(
+    if (kind === 'fleet') {
+      fetchFacts(tb.cluster).then(
+        () => live && setFactsOff(undefined),
+        (e: unknown) => live && setFactsOff(e instanceof Error ? e.message : String(e)),
+      )
+    }
+    fetchToolbox(tb.cluster, kind === 'pod' ? [targetNs] : [], kind !== 'pod').then(
       (i) => live && setInfo(i),
       (e: unknown) => live && setErr(e instanceof Error ? e.message : String(e)),
     )
@@ -229,6 +241,34 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
         },
       },
     ]
+  } else if (target.kind === 'fleet') {
+    const { nodes, kube, onDone } = target
+    const none = nodes.length ? undefined : 'no node is in this fleet'
+    const noKube = kube.length ? undefined : 'its hosts pair from their own panel'
+    items = [
+      {
+        key: 'ssh-pair',
+        icon: <KeyIcon />,
+        label: 'Pair for SSH…',
+        hint: <span className="rk-tag" data-tone="err">root</span>,
+        off: none ?? noKube ?? why('ssh-pair') ?? (info && !info.ssh ? 'SSH is turned off on this console' : undefined),
+        run: () => {
+          onClose()
+          tb.openTool(kube.length === 1 ? { tool: 'ssh-pair', node: kube[0], from: 'Fleet' } : { tool: 'ssh-pair', nodes: kube, from: 'Fleet' })
+        },
+      },
+      {
+        key: 'facts',
+        icon: <InfoIcon />,
+        label: 'Collect facts',
+        hint: `${nodes.length} node${nodes.length === 1 ? '' : 's'}`,
+        off: none ?? factsOff,
+        run: () => {
+          onClose()
+          void collectFacts(tb.cluster, nodes).then(onDone)
+        },
+      },
+    ]
   } else if (target.kind === 'node') {
     items = [
       { key: 'node-shell', icon: <TerminalIcon />, label: 'K8S node shell…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('node-shell'), run: () => open('node-shell') },
@@ -307,6 +347,10 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
       <>
         Tools for node <span className="rk-mono">{target.name}</span>
         {target.role ? ` · ${target.role}` : ''}
+      </>
+    ) : target.kind === 'fleet' ? (
+      <>
+        Tools for fleet <span className="rk-mono">{target.name}</span> · {target.nodes.length} node{target.nodes.length === 1 ? '' : 's'}
       </>
     ) : target.kind === 'claim' ? (
       <>

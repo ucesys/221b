@@ -1,0 +1,63 @@
+/* The Cases area (Phase 12, CS-01): the Inbox's chips, a report's words,
+   and the triage drawer's sections, after the mockups Cases.dc.html and
+   Approvals.dc.html. Everything else uses the console's own classes. */
+.cs-page{flex:1 1 auto;display:flex;justify-content:center;align-items:flex-start;padding:20px 20px 48px;overflow:auto;background:var(--bg)}
+.cs-col{width:min(1280px,100%);display:flex;flex-direction:column;gap:14px;min-width:0}
+/* The Inbox, Mycroft and Jobs are wider (CF-66): their side margins a quarter of the others'
+   once the page is wider than 1280px, never narrower than before, and the
+   page's side padding 5px. Phones keep their own padding. */
+.cs-col.cs-col-inbox{width:min(100%,calc(100% - (100% - 1280px) / 4))}
+@media (min-width:721px){.cs-page.cs-page-inbox{padding-left:5px;padding-right:5px}}
+/* A column inside a column fills it: the Mycroft tab is one column
+   (CF-55) and its sub-tabs' pages are columns too. */
+.cs-col .cs-col{width:100%}
+.cs-lead{margin:0;color:var(--fg2);font-size:12.5px}
+.cs-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.cs-grow{flex:1 1 auto}
+.cs-chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border-radius:14px;border:1px solid var(--line2);background:var(--surface);color:var(--fg2);font:inherit;font-size:12.5px;cursor:pointer;white-space:nowrap}
+.cs-chip:hover{border-color:var(--accent)}
+.cs-chip[aria-pressed=true]{background:var(--accent-weak);border-color:var(--accent);color:var(--accent);font-weight:600}
+.cs-chip .cs-n{font-variant-numeric:tabular-nums;color:inherit;opacity:.85}
+.cs-sec{display:flex;flex-direction:column;gap:8px}
+.cs-section{padding:12px 16px;display:flex;flex-direction:column;gap:10px;overflow-x:auto}
+.cs-section>header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.cs-quote{margin:0;padding:10px 12px;border-left:3px solid var(--line2);background:var(--surface2);border-radius:0 8px 8px 0;color:var(--fg);white-space:pre-wrap;overflow-wrap:anywhere}
+.cs-kv{display:grid;grid-template-columns:130px minmax(0,1fr);gap:8px 14px;margin:0;font-size:12.5px}
+.cs-kv dt{color:var(--fg2)}
+.cs-kv dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.cs-row{cursor:pointer}
+.cs-row:hover td{background:var(--surface2)}
+.cs-row[aria-selected=true] td{background:var(--accent-weak)}
+.cs-msgs{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.cs-msg{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--surface);display:flex;flex-direction:column;gap:4px}
+.cs-msg[data-kind=reporter]{background:var(--surface2)}
+.cs-msg[data-internal=true]{border-style:dashed;background:var(--warn-weak)}
+.cs-msg[data-draft=true]{border-color:var(--info);background:var(--info-weak)}
+.cs-msg .cs-meta{font-size:11.5px;color:var(--fg3)}
+.cs-msg .cs-text{white-space:pre-wrap;overflow-wrap:anywhere}
+.cs-ta{width:100%;box-sizing:border-box;min-height:84px;padding:8px 10px;border:1px solid var(--line2);border-radius:8px;font:inherit;font-size:13px;color:var(--fg);background:var(--surface);resize:vertical}
+.cs-ta:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
+.cs-in{height:32px;box-sizing:border-box;padding:0 10px;border:1px solid var(--line2);border-radius:7px;font:inherit;font-size:12.5px;color:var(--fg);background:var(--surface);min-width:0}
+.cs-in:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
+.cs-lbl{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--fg2)}
+.cs-inline{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--fg2)}
+.cs-checks{display:flex;flex-wrap:wrap;gap:6px 14px}
+/* --- Inbox (Phase 12, IB-01 to IB-07): the groups on the left, each with
+   its count; the group's items on the right; an object's link and age. */
+.cs-inbox{display:grid;grid-template-columns:220px minmax(0,1fr);gap:14px;align-items:start}
+.cs-groups{position:sticky;top:12px;display:flex;flex-direction:column;gap:2px;padding:8px}
+.cs-group{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:32px;padding:0 10px;border:0;border-radius:7px;background:transparent;color:var(--fg2);font:inherit;font-size:13px;text-align:left;cursor:pointer}
+.cs-group:hover{background:var(--surface2);color:var(--fg)}
+.cs-group[aria-pressed=true]{background:var(--accent-weak);color:var(--accent);font-weight:600}
+.cs-group .cs-n{min-width:22px;padding:1px 7px;border-radius:10px;background:var(--surface2);text-align:center;font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--fg3);font-weight:500}
+.cs-group[data-waiting=true] .cs-n{background:var(--accent);color:var(--on-accent,#fff)}
+.cs-group:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.cs-inbox-main{display:flex;flex-direction:column;gap:14px;min-width:0}
+.cs-linkbtn{border:0;background:none;padding:0;font:inherit;cursor:pointer}
+.cs-obj{display:inline-flex;align-items:baseline;gap:6px;flex-wrap:wrap;min-width:0;overflow-wrap:anywhere}
+.cs-obj-age,.cs-open{color:var(--fg3);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap}
+@media (max-width:900px){.cs-inbox{grid-template-columns:minmax(0,1fr)}.cs-groups{position:static;flex-direction:row;flex-wrap:wrap}.cs-group{flex:0 0 auto}}
+/* --- end Inbox --- */
+@media (max-width:720px){.cs-page{padding:14px 12px 40px}.cs-kv{grid-template-columns:minmax(0,1fr)}}
+.cs-tpane{flex:1 1 auto;min-height:0;flex-direction:column}
+.cs-tpane>.rk-dpane{flex:1 1 auto}

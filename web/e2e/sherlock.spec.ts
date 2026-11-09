@@ -70,31 +70,39 @@ test('Sherlock stays away until an administrator turns it on, and the key is nev
   await expect(page.getByTestId('sherlock')).toHaveCount(0)
   await expect(page.getByTestId('alert-troubleshoot')).toHaveCount(0)
 
+  // Phase 12: the key is the default provider's, under Settings › AI ›
+  // Providers; Sherlock is turned on per cluster in its drawer under Agents.
   await page.getByTestId('admin-link').click()
   await page.locator('[data-admin-page=settings]').click()
-  await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
-  const settings = page.getByTestId('sherlock-settings')
-  await expect(settings.getByTestId('sherlock-key-state')).toContainText('No key yet')
-  await expect(settings.getByTestId('sherlock-summary')).toContainText(/No (Claude )?API key/)
-  await settings.getByTestId('sherlock-key').fill(KEY)
-  await settings.getByTestId('sherlock-save').click()
-  await expect(settings.getByTestId('sherlock-key-state')).toContainText(/Saved by .+\. Kept in/)
-  await expect(settings.getByTestId('sherlock-key')).toHaveValue('')
-  await expect(settings.getByTestId('sherlock-summary')).toContainText(/API key saved/)
-  await expect(settings.getByTestId('sherlock-key-pill')).toHaveText('Saved')
+  await page.locator('[data-testid=settings-section][data-section=providers]').click()
+  const provider = page.locator('[data-testid=provider][data-provider=default]')
+  await expect(provider.getByTestId('provider-key-state')).toContainText('No key yet')
+  await expect(provider.getByTestId('provider-key-pill')).toHaveText('No key')
+  await provider.getByTestId('provider-key').fill(KEY)
+  await provider.getByTestId('provider-key-save').click()
+  await expect(provider.getByTestId('provider-key-state')).toContainText(/Saved by .+\. Kept in/)
+  await expect(provider.getByTestId('provider-key')).toHaveValue('')
+  await expect(provider.getByTestId('provider-key-pill')).toHaveText('Key saved')
   // The key never comes back, from any endpoint.
-  const cfg = await page.evaluate(async () => (await fetch('/api/v1/sherlock/config')).text())
-  expect(cfg).not.toContain(KEY)
-  expect(cfg).toContain('"set":true')
+  for (const path of ['/api/v1/sherlock/config', '/api/v1/ai']) {
+    const cfg = await page.evaluate(async (p) => (await fetch(p)).text(), path)
+    expect(cfg).not.toContain(KEY)
+    expect(cfg).toContain('"set":true')
+  }
 
-  await settings.locator('[data-testid=sherlock-cluster][data-cluster=local]').check()
-  await settings.getByTestId('sherlock-save').click()
-  await expect(settings.getByText('Saved.')).toBeVisible()
+  await page.locator('[data-testid=settings-section][data-section=agents]').click()
+  await page.locator('[data-testid=agent-row][data-agent=sherlock] [data-testid=agent-open]').click()
+  const drawer = page.getByTestId('agent-drawer')
+  await drawer.locator('[data-testid=agent-cluster][data-cluster=local]').check()
+  await drawer.getByTestId('agent-save').click()
+  await expect(drawer.getByTestId('agent-save-state')).toHaveText('No changes.')
+  await page.keyboard.press('Escape')
+  await expect(drawer).toHaveCount(0)
   await page.keyboard.press('Escape')
   await expect(dock(page)).toBeVisible()
   await expect(page.getByTestId('alert-troubleshoot').first()).toBeVisible()
   await expect
-    .poll(async () => (await cluster.auditLog()).filter((r) => r.action === 'sherlock.key' || r.action === 'sherlock.settings').length, { timeout: 15_000 })
+    .poll(async () => (await cluster.auditLog()).filter((r) => r.action === 'ai.key' || r.action === 'ai.settings').length, { timeout: 15_000 })
     .toBeGreaterThanOrEqual(2)
   expect(JSON.stringify(await cluster.auditLog())).not.toContain(KEY)
 })
@@ -385,22 +393,24 @@ test('Sherlock answers through an OpenAI-compatible gateway set on the Settings 
   try {
     await page.getByTestId('admin-link').click()
     await page.locator('[data-admin-page=settings]').click()
-    await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
-    await expect(page).toHaveURL(/#\/admin\/settings\/sherlock$/)
-    const s = page.getByTestId('sherlock-settings')
-    await s.getByTestId('sherlock-provider-kind').selectOption('compatible')
-    await s.getByTestId('sherlock-endpoint').fill(base + '/v1')
+    await page.locator('[data-testid=settings-section][data-section=providers]').click()
+    await expect(page).toHaveURL(/#\/admin\/settings\/providers$/)
+    const pcard = page.locator('[data-testid=provider][data-provider=default]')
+    await pcard.getByTestId('provider-edit').click()
+    const s = page.getByTestId('provider-drawer')
+    await s.getByTestId('provider-kind').selectOption('compatible')
+    await s.getByTestId('provider-endpoint').fill(base + '/v1')
     await s.getByText('Gateway options').click()
-    await s.getByTestId('sherlock-headers').fill('X-Team: platform')
-    await s.getByTestId('sherlock-model-name').fill('gpt-5')
-    await s.getByTestId('sherlock-price-in').fill('1.25')
-    await s.getByTestId('sherlock-price-out').fill('10')
-    await s.getByTestId('sherlock-save').click()
-    await expect(s.getByText('Saved.')).toBeVisible()
-    await expect(s.getByTestId('sherlock-provider-kind')).toHaveValue('compatible')
-    await s.getByTestId('sherlock-key').fill(KEY)
-    await s.getByTestId('sherlock-save').click()
-    await expect(s.getByTestId('sherlock-key-state')).toContainText(/Saved by/)
+    await s.getByTestId('provider-headers').fill('X-Team: platform')
+    await s.getByTestId('provider-model').fill('gpt-5')
+    await s.getByTestId('provider-price-in').fill('1.25')
+    await s.getByTestId('provider-price-out').fill('10')
+    await s.getByTestId('provider-save').click()
+    await expect(s).toHaveCount(0)
+    await expect(pcard).toContainText('OpenAI-compatible')
+    await pcard.getByTestId('provider-key').fill(KEY)
+    await pcard.getByTestId('provider-key-save').click()
+    await expect(pcard.getByTestId('provider-key-state')).toContainText(/Saved by/)
     const saved = (await page.evaluate(async () => (await fetch('/api/v1/sherlock/config')).text())) as string
     expect(saved).not.toContain(KEY)
     expect(saved).toContain('"kind":"openai"')
@@ -456,7 +466,7 @@ test('the panel meets WCAG 2.2 AA, docked, maximized and in the settings (X-12)'
   const TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']
   const violations = async () => {
     await page.evaluate(() => Promise.allSettled(document.getAnimations().map((a) => a.finished)))
-    const r = await new AxeBuilder({ page }).include('[data-testid=sherlock-dock], [data-testid=sherlock-settings], [data-testid=sherlock-fab]').withTags(TAGS).analyze()
+    const r = await new AxeBuilder({ page }).include('[data-testid=sherlock-dock], [data-testid=settings-page], [data-testid=sherlock-fab]').withTags(TAGS).analyze()
     return r.violations.map((v) => `${v.id}: ${v.help} — ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(', ')}`)
   }
   for (const theme of ['light', 'dark'] as const) {
@@ -470,48 +480,49 @@ test('the panel meets WCAG 2.2 AA, docked, maximized and in the settings (X-12)'
     await page.keyboard.press('Escape')
     await page.getByTestId('admin-link').click()
     await page.locator('[data-admin-page=settings]').click()
-    await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
-    await expect(page.getByTestId('sherlock-settings').getByTestId('sherlock-save')).toBeVisible()
+    await page.locator('[data-testid=settings-section][data-section=agents]').click()
+    await expect(page.getByTestId('agents-table')).toBeVisible()
     expect(await violations(), theme + ' settings').toEqual([])
     await page.keyboard.press('Escape')
   }
 })
 
-test('the administrators’ notes join Sherlock’s instructions, can be read there, and are tried with Test (R2-05)', async ({ page }) => {
+test('the administrators’ notes join Sherlock’s instructions as a draft, which is tested on recorded cases before it goes live (R2-05, Phase 12)', async ({ page }) => {
   await open(page, '#/nodes')
   expect(await put(page, '/api/v1/sherlock/key', { key: KEY })).toBe(200)
   expect(await put(page, '/api/v1/sherlock/config', ON)).toBe(200)
   try {
     await page.getByTestId('admin-link').click()
     await page.locator('[data-admin-page=settings]').click()
-    await page.locator('[data-testid=settings-section][data-section=sherlock]').click()
-    const settings = page.getByTestId('sherlock-settings')
+    await page.locator('[data-testid=settings-section][data-section=agents]').click()
+    await page.locator('[data-testid=agent-row][data-agent=sherlock] [data-testid=agent-open]').click()
+    const drawer = page.getByTestId('agent-drawer')
+    await expect(drawer.getByTestId('ins-state')).toHaveText('In sync')
+    await expect(drawer.getByTestId('ins-values-key')).toHaveText('agents.sherlock.instructions')
     const note = 'The rack is in the basement; call Pat before touching the NFS node.'
-    await settings.getByTestId('sherlock-notes').fill(note)
-    // The instructions are edited in place, built-in text to start from; the cluster block shows the notes as typed.
-    await settings.getByTestId('sherlock-prompt-show').click()
-    await expect(settings.getByTestId('sherlock-prompt')).toHaveValue(/You are Sherlock/)
-    await expect(settings.getByTestId('sherlock-prompt-reset')).toBeDisabled()
-    await expect(settings.getByTestId('sherlock-prompt-cluster')).toContainText(note)
-    await settings.getByTestId('sherlock-prompt').fill('You are Sherlock, the test build. Answer in one line.')
-    await expect(settings.getByTestId('sherlock-prompt-reset')).toBeEnabled()
-    // Test is a dialog: the question, then the answer, with everything as typed, saved or not.
-    await settings.getByTestId('sherlock-notes-test').click()
-    const dlg = page.getByTestId('sherlock-test-dialog')
-    await expect(dlg.getByTestId('sherlock-test-question')).toHaveValue(/three sentences/)
-    await dlg.getByTestId('sherlock-test-ask').click()
-    await expect(dlg.getByTestId('sherlock-notes-answer')).toBeVisible({ timeout: 60_000 })
-    await expect(dlg.getByTestId('sherlock-notes-answer')).not.toContainText('did not answer')
-    await dlg.getByTestId('sherlock-test-close').click()
-    await expect(dlg).toHaveCount(0)
-    await settings.getByTestId('sherlock-save').click()
-    await expect(settings.getByText('Saved.')).toBeVisible()
-    const cfg = (await page.evaluate(async () => (await fetch('/api/v1/sherlock/config')).json())) as { settings: { notes?: string; instructions?: string } }
-    expect(cfg.settings.notes).toBe(note)
-    expect(cfg.settings.instructions).toContain('the test build')
-    // Reset puts the built-in text back.
-    await settings.getByTestId('sherlock-prompt-reset').click()
-    await expect(settings.getByTestId('sherlock-prompt')).toHaveValue(/You are Sherlock, the site reliability engineer/)
+    await drawer.getByTestId('ins-notes').fill(note)
+    await drawer.getByTestId('ins-house').fill('Answer in one line.')
+    await drawer.getByTestId('ins-save-draft').click()
+    await expect(drawer.locator('[data-testid=ins-stages] [aria-current=step] [data-testid=ins-step-name]')).toHaveText('Draft')
+    // Test: the cost first, then the recorded cases against the fake model.
+    await drawer.getByTestId('ins-test').click()
+    await expect(drawer.getByTestId('ins-test-estimate')).toContainText('about $')
+    await drawer.getByTestId('ins-test-run').click()
+    await expect(drawer.getByTestId('ins-last-test')).toContainText('recorded case', { timeout: 120_000 })
+    await expect(drawer.locator('[data-testid=ins-stages] [aria-current=step] [data-testid=ins-step-name]')).toHaveText('Test')
+    // The whole prompt has the notes after the cluster's description.
+    const prompt = (await page.evaluate(async () => (await fetch('/api/v1/ai/agents/sherlock/prompt?draft=1')).json())) as { instructions: string; cluster: string }
+    expect(prompt.instructions).toContain('Answer in one line.')
+    expect(prompt.cluster).toContain(note)
+    await drawer.getByTestId('ins-live').click()
+    await drawer.getByTestId('ins-live-go').click()
+    // Live at once, or waiting for another SuperAdmin on Approvals.
+    await expect
+      .poll(async () => {
+        const v = (await page.evaluate(async () => (await fetch('/api/v1/ai/agents/sherlock/instructions')).json())) as { live: number; draft?: { request?: number } }
+        return v.live > 0 || !!v.draft?.request
+      })
+      .toBe(true)
   } finally {
     expect(await put(page, '/api/v1/sherlock/config', { ...ON, notes: '', instructions: '' })).toBe(200)
   }

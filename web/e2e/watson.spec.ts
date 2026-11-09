@@ -401,6 +401,39 @@ test('a card lapses when its objects change before anyone approves it (P6-04)', 
   }
 })
 
+test('requests do not pile up: the newest is the card, the earlier one folds into a line and still waits (CF-65)', async ({ page }) => {
+  const node = await spareWorker(page.request)
+  await open(page)
+  const cordon = `kubectl cordon ${node}`
+  const label = `kubectl label nodes ${node} e2e.221b/cf65=yes`
+  await pane(page).getByTestId('watson-input').fill(cordon)
+  await pane(page).getByTestId('watson-input').press('Enter')
+  await expect(pane(page).getByTestId('watson-card').last()).toHaveAttribute('data-command', cordon)
+  await pane(page).getByTestId('watson-input').fill(label)
+  await pane(page).getByTestId('watson-input').press('Enter')
+  // Only the newest is a card; the earlier one is left waiting, not discarded.
+  const cards = pane(page).getByTestId('watson-card')
+  await expect(cards).toHaveCount(1)
+  await expect(cards.last()).toHaveAttribute('data-command', label)
+  const earlier = pane(page).getByTestId('watson-earlier')
+  await expect(earlier).toContainText('1 earlier request left waiting')
+  await expect(pane(page).getByTestId('watson-waiting-count')).toHaveText('2 waiting')
+  // Expanded, both are cards; the earlier one can still be decided.
+  await earlier.click()
+  await expect(cards).toHaveCount(2)
+  await expect(cards.first()).toHaveAttribute('data-command', cordon)
+  await earlier.click()
+  await expect(cards).toHaveCount(1)
+  // The newest decided, the earlier one does not come back as the card.
+  await cards.last().getByTestId('watson-discard').click()
+  await expect(cards).toHaveCount(0)
+  await expect(earlier).toContainText('1 earlier request left waiting')
+  await earlier.click()
+  await pane(page).locator(`[data-testid=watson-card][data-command="${cordon}"]`).getByTestId('watson-discard').click()
+  await expect(earlier).toHaveCount(0)
+  await expect(pane(page).getByTestId('watson-waiting-count')).toHaveCount(0)
+})
+
 test('a read-only connection runs reads and refuses changes, naming the rule (P6-05)', async ({ page, request, browserName }) => {
   const other = await cluster.other()
   const id = `${browserName}-watson-ro`

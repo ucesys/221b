@@ -158,7 +158,14 @@ func (s *Service) holdings(src roles.Source, u User, supers []roles.ID) []holdin
 	if s.isAdmin(u) && !slices.ContainsFunc(out, func(h holding) bool { return h.Role == roles.SuperAdmin }) {
 		out = append(out, holding{Role: roles.SuperAdmin})
 	}
-	slices.SortStableFunc(out, func(a, b holding) int { return slices.Index(roles.All, a.Role) - slices.Index(roles.All, b.Role) })
+	for _, g := range s.cfg.ReporterGroups {
+		if slices.Contains(u.Groups, g) && !slices.ContainsFunc(out, func(h holding) bool { return h.Role == roles.Reporter }) {
+			out = append(out, holding{Role: roles.Reporter, Via: g})
+		}
+	}
+	// Reporter (IS-20) is not one of the four and comes last.
+	order := append(roles.All, roles.Reporter)
+	slices.SortStableFunc(out, func(a, b holding) int { return slices.Index(order, a.Role) - slices.Index(order, b.Role) })
 	return out
 }
 

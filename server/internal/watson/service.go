@@ -174,6 +174,8 @@ type Item struct {
 	cancel  context.CancelFunc
 	// stoppedBy is who pressed Stop on it; nil when the console stopped it.
 	stoppedBy *Who
+	// ended says the end hook heard of it (Phase 12).
+	ended bool
 }
 
 // Options configure the service.
@@ -205,6 +207,9 @@ type Options struct {
 	StartSession func(cl Cluster, it Item, approver Who) (string, error)
 	// Apps keeps the Helm applications (Phase 10); nil keeps none.
 	Apps apps.Store
+	// Repos are the chart repositories and OCI registries charts come
+	// from besides git (Phase 12, wave 5, HR-07); nil is git alone.
+	Repos *apps.Repos
 	// Reread reads a standing approval's holder again as the sign-in sees
 	// them now; false means their session has ended or they may no longer
 	// use the console. Nil keeps the holder as they were.
@@ -234,6 +239,10 @@ type Service struct {
 	// counts the goroutines that run the queues.
 	draining bool
 	workers  sync.WaitGroup
+	// onEnd hears of each change that ends (Phase 12, SetOnEnd); onFinish
+	// of every command that ends (wave 6f, AddOnFinish).
+	onEnd    func(Item)
+	onFinish []func(Item)
 }
 
 type runQueue struct {
@@ -321,6 +330,10 @@ func (s *Service) Unsubscribe(sub *Sub) {
 // changedLocked tells the streams an item changed.
 func (s *Service) changedLocked(it *Item) {
 	it.Rev++
+	if !it.ended && finished(it.Status) {
+		it.ended = true
+		s.endedLocked(it)
+	}
 	for sub := range s.subs {
 		if sub.Cluster != it.Cluster {
 			continue
@@ -826,7 +839,7 @@ func (s *Service) plan(cl Cluster, id string) {
 	p := &Plan{pin: &appPin{}}
 	// The card reads as the person who asked (ADR-51): it shows them
 	// nothing their own access does not.
-	asker := Target{Config: cl.Config, Person: it.Requester.Person, Cluster: cl.ID, Apps: s.opts.Apps, pin: p.pin}
+	asker := Target{Config: cl.Config, Person: it.Requester.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos, pin: p.pin}
 	d, err := s.disc.For(cl.ID, cl.Config)
 	var cs *clients
 	if err == nil {
@@ -919,7 +932,7 @@ func (s *Service) Approve(ctx context.Context, cl Cluster, who Who, id string) (
 	}
 	if it.Status != StatusPending {
 		s.mu.Unlock()
-		return it, fmt.Errorf("%w: it is %s", ErrState, it.Status)
+		return it, fmt.Errorf("%w: %s", ErrState, decidedText(it))
 	}
 	if !it.Change {
 		if it.Requester.Session != who.Session {
@@ -959,7 +972,7 @@ func (s *Service) Approve(ctx context.Context, cl Cluster, who Who, id string) (
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if it.Status != StatusPending {
-		return it, fmt.Errorf("%w: it is %s", ErrState, it.Status)
+		return it, fmt.Errorf("%w: %s", ErrState, decidedText(it))
 	}
 	w := who
 	it.Approver, it.Approved = &w, s.opts.Now()
@@ -972,6 +985,19 @@ func (s *Service) Approve(ctx context.Context, cl Cluster, who Who, id string) (
 	}
 	s.enqueueLocked(cl, it, who)
 	return it, nil
+}
+
+// decidedText says why a card no longer waits: who approved it and when,
+// for the second person who pressed Approve (Phase 12, IB-09).
+func decidedText(it *Item) string {
+	if it.Approver != nil && !it.Approved.IsZero() {
+		name := it.Approver.Name
+		if name == "" {
+			name = "someone"
+		}
+		return fmt.Sprintf("already approved by %s at %s; it is %s", name, it.Approved.UTC().Format("2006-01-02 15:04:05 UTC"), it.Status)
+	}
+	return "it is " + it.Status
 }
 
 func minutes(d time.Duration) string {
@@ -1305,7 +1331,7 @@ func (s *Service) RunLine(ctx context.Context, cl Cluster, p kube.Person, line s
 
 // execute runs one command as the person who approved it.
 func (s *Service) execute(ctx context.Context, cl Cluster, it *Item, runner Who) {
-	t := Target{Config: cl.Config, Person: runner.Person, Cluster: cl.ID, Apps: s.opts.Apps}
+	t := Target{Config: cl.Config, Person: runner.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos}
 	if it.Plan != nil {
 		t.pin = it.Plan.pin
 	}

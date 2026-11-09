@@ -117,6 +117,47 @@ func (c Credential) Empty() bool {
 	return c.Token == "" && c.Kubeconfig == "" && c.CertPEM == "" && c.KeyPEM == "" && c.OIDCRefreshToken == ""
 }
 
+// Placeholder stands where a secret was, in a backup taken without a
+// backup key or before ADR-137. A connection restored with one does not
+// start until its credential is pasted again.
+const Placeholder = "<secret: not in the backup>"
+
+// Secrets are the credential's fields that are secret: a backup holds
+// each sealed, or Placeholder, in their place.
+func (c *Credential) Secrets() []*string { return c.secrets() }
+
+func (c *Credential) secrets() []*string {
+	return []*string{&c.Token, &c.Kubeconfig, &c.CertPEM, &c.KeyPEM, &c.OIDCClientSecret, &c.OIDCRefreshToken}
+}
+
+// Redact replaces each secret the credential holds with Placeholder; the
+// rest (a kubeconfig's context, the CA certificate, an OIDC issuer) stays.
+func (c Credential) Redact() Credential {
+	return c.SealWith(func(string) string { return Placeholder })
+}
+
+// SealWith replaces each secret the credential holds with what seal makes
+// of it, for a backup (ADR-137); the rest stays.
+func (c Credential) SealWith(seal func(string) string) Credential {
+	for _, f := range c.secrets() {
+		if *f != "" {
+			*f = seal(*f)
+		}
+	}
+	return c
+}
+
+// HasPlaceholder says whether a secret of the credential is a backup's
+// placeholder, not yet pasted again.
+func (c Credential) HasPlaceholder() bool {
+	for _, f := range c.secrets() {
+		if *f == Placeholder {
+			return true
+		}
+	}
+	return false
+}
+
 var (
 	nameRE   = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$`)
 	slugRE   = regexp.MustCompile(`[^a-z0-9]+`)

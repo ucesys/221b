@@ -13,6 +13,10 @@ interface Props {
   /** Keeps the confirming button off, as while a required field is empty. */
   disabled?: boolean
   error?: string
+  /** Only the confirming button, focused: a dialog that tells rather than asks (the Inbox's per-case results). */
+  alone?: boolean
+  /** A second choice beside the confirming one, as a case's Discard my changes beside Overwrite (CF-59); Cancel still only closes. */
+  also?: { label: string; onClick: () => void; testId?: string }
   onConfirm: () => void
   onCancel: () => void
 }
@@ -26,10 +30,11 @@ interface Props {
  * their keyboard handling; its own events stop at it. The end of the app's
  * root, to keep the theme's colours.
  */
-export function ConfirmDialog({ title, children, confirm, danger, busy, disabled, error, onConfirm, onCancel }: Props) {
+export function ConfirmDialog({ title, children, confirm, danger, busy, disabled, error, alone, also, onConfirm, onCancel }: Props) {
   const cancel = useRef<HTMLButtonElement>(null)
+  const ok = useRef<HTMLButtonElement>(null)
   useEffect(() => {
-    cancel.current?.focus()
+    ;(cancel.current ?? ok.current)?.focus()
   }, [])
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation()
   return createPortal(
@@ -48,7 +53,7 @@ export function ConfirmDialog({ title, children, confirm, danger, busy, disabled
           }
           trapTab(e)
         }}
-        style={{ position: 'relative', width: 'min(460px, 100%)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 12, boxShadow: 'var(--shadow)', overflowWrap: 'anywhere' }}
+        style={{ position: 'relative', width: 'min(460px, 100%)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 12, boxShadow: 'var(--shadow)', overflowWrap: 'anywhere', maxHeight: 'calc(100vh - 32px)', overflowY: 'auto' }}
       >
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{title}</h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>{children}</div>
@@ -58,10 +63,17 @@ export function ConfirmDialog({ title, children, confirm, danger, busy, disabled
           </p>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button ref={cancel} className="rk-btn" onClick={onCancel} disabled={busy}>
-            Cancel
-          </button>
-          <button className="rk-btn" data-on={!danger} data-danger={danger ? 'true' : undefined} aria-busy={busy} disabled={busy || disabled} onClick={onConfirm} data-testid="confirm-ok" style={danger ? { borderColor: 'var(--err)', color: 'var(--err)' } : undefined}>
+          {!alone && (
+            <button ref={cancel} className="rk-btn" onClick={onCancel} disabled={busy}>
+              Cancel
+            </button>
+          )}
+          {also && (
+            <button className="rk-btn" onClick={also.onClick} disabled={busy} data-testid={also.testId}>
+              {also.label}
+            </button>
+          )}
+          <button ref={ok} className="rk-btn" data-on={!danger} data-danger={danger ? 'true' : undefined} aria-busy={busy} disabled={busy || disabled} onClick={onConfirm} data-testid="confirm-ok" style={danger ? { borderColor: 'var(--err)', color: 'var(--err)' } : undefined}>
             {confirm}
           </button>
         </div>

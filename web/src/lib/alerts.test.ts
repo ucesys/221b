@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { badgeOf, bannersOf, byNode, contextOf, sectionsOf, sevLabel, tabTone, tilesOf } from './alerts'
+import { alertKeyOf, alertReason, badgeOf, bannersOf, byNode, contextOf, sectionsOf, sevLabel, tabTone, tilesOf } from './alerts'
 import type { AlertRow } from '../api/types'
 
 const now = Date.parse('2026-10-14T12:00:00Z')
@@ -88,5 +88,34 @@ describe('alerts', () => {
     expect(sevLabel(oom)).toEqual({ label: 'Resolved', tone: 'ok' })
     expect(sevLabel(pending)).toEqual({ label: 'Pending', tone: 'warn' })
     expect(sevLabel({ ...pending, status: 'Running', node: 'w1' })).toEqual({ label: 'Not ready', tone: 'warn' })
+  })
+})
+
+// An alert's name by its reason (CF-84), as the server's jobs.Alert.Named.
+describe('an alert named by its reason (CF-84)', () => {
+  const a = (over: Partial<AlertRow>) => ({ key: 'k', kind: 'pod', severity: 'failed', name: 'x', status: '', statusTone: 'err', events: [], ...over }) as AlertRow
+  it('says why, short, as the server does', () => {
+    expect(alertReason(a({ status: 'Unknown', node: 'r620-worker' }))).toBe('Pod status Unknown: node r620-worker stopped reporting')
+    expect(alertReason(a({ status: 'Unknown' }))).toBe('Pod status Unknown: its node stopped reporting')
+    expect(alertReason(a({ status: 'CrashLoopBackOff', waiting: 'CrashLoopBackOff', waitingMessage: 'back-off 5m0s restarting failed container=web pod=web-1_shop(0f9c)' }))).toBe('CrashLoopBackOff: back-off restarting failed container')
+    expect(alertReason(a({ status: 'ImagePullBackOff', waiting: 'ImagePullBackOff', waitingMessage: 'Back-off pulling image "registry.example/web:9"' }))).toBe('ImagePullBackOff: back-off pulling image')
+    const node = (status: string, title: string, summary: string) => a({ kind: 'node', severity: 'error', status, problems: [{ title, severity: 'error', summary }] })
+    expect(alertReason(node('Unknown', 'Kubelet stopped reporting', 'The node controller has not heard from the kubelet for 5m. Pods on it are not being managed.'))).toBe('Node not ready: kubelet stopped reporting')
+    expect(alertReason(node('Not ready', 'Not ready', 'The kubelet reports the node is not ready, so no new pods start here.'))).toBe('Node not ready: the kubelet reports the node is not ready, so no new pods start here')
+    expect(alertReason(node('Ready', 'Disk pressure', 'Disk space or inodes are running low. The kubelet evicts pods.'))).toBe('Disk pressure: disk space or inodes are running low')
+    expect(alertReason(a({ severity: 'pending', status: 'Pending', why: '0/3 nodes are available: 3 Insufficient cpu.' }))).toBe('Pending: 0/3 nodes are available: 3 Insufficient cpu')
+    expect(alertReason(a({ status: 'Error', lastReason: 'OOMKilled' }))).toBe('Error: OOMKilled')
+    expect(alertReason(a({ kind: 'pvc', status: 'Pending' }))).toBe('Pending')
+    const long = alertReason(a({ status: 'Error', lastMessage: 'a very long message '.repeat(20) }))
+    expect(long).toHaveLength(120)
+    expect(long.endsWith('…')).toBe(true)
+  })
+
+  it('keys the alert about a case’s object as the Alerts tab does', () => {
+    expect(alertKeyOf({ namespace: 'shop', kind: 'Pod', name: 'web-1' })).toBe('pod:shop/web-1')
+    expect(alertKeyOf({ kind: 'Node', name: 'n1' })).toBe('node:n1')
+    expect(alertKeyOf({ namespace: 'shop', kind: 'PersistentVolumeClaim', name: 'data' })).toBe('pvc:shop/data')
+    expect(alertKeyOf({ namespace: 'shop', kind: 'Deployment', name: 'web' })).toBe('')
+    expect(alertKeyOf(undefined)).toBe('')
   })
 })

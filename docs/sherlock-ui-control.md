@@ -140,6 +140,8 @@ Built as specified, with the open questions settled as proposed. Where the work 
 - **Evaluation.** `221b-eval` gained UI tasks graded by the view they leave and two cases with instructions planted in a pod's annotation and log (`221b-sim -planted`). A stand-in console window answers the `ui` events. The nightly run fails below 90% of the UI tasks or if any planted instruction is followed.
 - **One existing test changed.** The P5-02 browser test checks that no hidden pod's name reaches the Claude API. The view state now names the rows on screen, and a pod the person may see can share its name with a hidden one (`cache-0` in two namespaces). The test now skips names that are also visible.
 
+Since Phase 12 (ADR-74, AI-02), Sherlock is the front desk of several agents and the only one offered the view actions: an agent it hands work to (the Troubleshooter, the Auditor, …) may suggest a view in words, and Sherlock decides whether to apply it. The switch is under Settings › AI › Agents, in Sherlock's drawer.
+
 ## Your review
 
 - [ ] The list of actions and what they may not touch (P6U-04 to P6U-06, P6U-12)

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { createApp, fetchAppRefs, fetchRepoRefs, inspectRepo, isCard, sourceText, updateApp, upgradeApp, type AppInput, type AppSource, type AppView, type RefKind, type RepoInspection, type RepoRefs } from '../../api/apps'
+import { createApp, fetchAppRefs, fetchChartVersions, fetchHelmRepos, fetchRepoCharts, fetchRepoRefs, fromRepository, inspectChart, inspectRepo, isCard, sourceText, updateApp, upgradeApp, type AppInput, type AppSource, type AppView, type ChartInfo, type HelmRepository, type RefKind, type RepoInspection, type RepoRefs, type SourceKind } from '../../api/apps'
 import { YamlEditor } from '../YamlEditor'
 import { useLiveMeta } from '../../api/live'
 import type { WatsonItem } from '../../api/watson'
@@ -24,7 +24,7 @@ interface Props {
 }
 
 const TITLES: Record<DialogMode, string> = {
-  create: 'New application from a git repository',
+  create: 'New application',
   source: 'The source of the release',
   switch: 'Switch to another branch or tag',
   upgrade: 'Redeploy from the source',
@@ -87,6 +87,46 @@ function RefPicker({ refs, value, kind, onChange, id }: { refs: RepoRefs | null;
   )
 }
 
+// --- Helm repositories (Phase 12, wave 5, HR-05, HR-06) ---
+
+const KINDS: [SourceKind, string, string][] = [
+  ['git', 'Git repository', 'A chart in a git repository, at a branch or tag'],
+  ['helm', 'Helm repository', 'A chart of a Helm repository Settings › Applications lists'],
+  ['oci', 'OCI registry', 'A chart in an OCI registry: oci://registry/path/chart'],
+]
+
+/** Splits an OCI chart's address into the registry's path and the chart: oci://r/charts/app is oci://r/charts and app. */
+export function splitOCI(ref: string): { repo: string; chart: string } {
+  const t = ref.trim().replace(/\/+$/, '')
+  const i = t.lastIndexOf('/')
+  if (!t.startsWith('oci://') || i <= 'oci://'.length) return { repo: t, chart: '' }
+  return { repo: t.slice(0, i), chart: t.slice(i + 1) }
+}
+
+/** Picks a repository chart's version from the list, or takes one typed (HR-05). */
+function VersionPicker({ versions, value, onChange, id }: { versions: string[]; value: string; onChange: (v: string) => void; id: string }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+      {versions.length > 0 && (
+        <label className="rk-field" style={{ minWidth: 220 }}>
+          <select value={versions.includes(value) ? value : ''} onChange={(e) => e.target.value && onChange(e.target.value)} aria-label="Version" data-testid={`${id}-version`}>
+            <option value="">{versions.includes(value) ? '' : 'Choose a version…'}</option>
+            {versions.map((v, i) => (
+              <option key={v} value={v}>
+                {v}
+                {i === 0 ? ' (newest)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <label className="rk-field" style={{ minWidth: 160 }}>
+        <input className="rk-mono" value={value} onChange={(e) => onChange(e.target.value)} placeholder={versions.length ? 'or type one' : '1.2.0'} aria-label="Version" data-testid={`${id}-version-text`} />
+      </label>
+    </div>
+  )
+}
+
 /** The fields a repository's look-over may fill. */
 interface Fillable {
   path: string
@@ -133,6 +173,16 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const [path, setPath] = useState(app?.source.path ?? '')
   const [ref, setRef] = useState(app?.source.ref ?? '')
   const [refKind, setRefKind] = useState<RefKind>(app?.source.refKind ?? 'branch')
+  // --- Helm repositories (Phase 12, wave 5): the chart's source kind, its repository and name.
+  const [kind, setKind] = useState<SourceKind>(app?.source.kind ?? 'git')
+  const [repository, setRepository] = useState(app?.source.repository ?? '')
+  const [chart, setChart] = useState(app?.source.kind === 'oci' ? `${app.source.repo}/${app.source.chart ?? ''}` : (app?.source.chart ?? ''))
+  const [helmRepos, setHelmRepos] = useState<HelmRepository[] | null>(null)
+  const [chartsOf, setChartsOf] = useState<{ repository: string; list: ChartInfo[] }>({ repository: '', list: [] })
+  const charts = chartsOf.repository === repository ? chartsOf.list : []
+  const [versions, setVersions] = useState<string[]>([])
+  const [chartNote, setChartNote] = useState<{ state: 'busy' | 'done' | 'error'; text: string } | null>(null)
+  const repoKind = kind === 'helm' || kind === 'oci'
   const [token, setToken] = useState('')
   const [clearToken, setClearToken] = useState(false)
   const [values, setValues] = useState(app?.values ?? '')
@@ -205,6 +255,64 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
       })
   }
 
+  // The repositories, once a repository's chart is asked for; a Helm repository's charts once one is chosen.
+  useEffect(() => {
+    if (!repoKind || helmRepos || (mode !== 'create' && mode !== 'source')) return
+    fetchHelmRepos().then(
+      (v) => setHelmRepos(v.repositories ?? []),
+      (e: unknown) => (setHelmRepos([]), setError(e instanceof Error ? e.message : String(e))),
+    )
+  }, [repoKind, helmRepos, mode])
+  useEffect(() => {
+    if (kind !== 'helm' || !repository) return
+    fetchRepoCharts(repository).then(
+      (r) => setChartsOf({ repository, list: r.charts ?? [] }),
+      (e: unknown) => setChartNote({ state: 'error', text: e instanceof Error ? e.message : String(e) }),
+    )
+  }, [kind, repository])
+
+  /** The repository chart as the form holds it. */
+  const chartSource = (): AppSource => {
+    if (kind === 'oci') {
+      const o = splitOCI(chart)
+      return { kind, repo: o.repo, chart: o.chart, ref: ref.trim(), refKind: 'version' }
+    }
+    return { kind: 'helm', repo: '', repository, chart: chart.trim(), ref: ref.trim(), refKind: 'version' }
+  }
+
+  // Lists the chart's versions, and takes the newest when none is chosen.
+  const loadVersions = () => {
+    const src = chartSource()
+    if (!src.chart || (kind === 'helm' && !repository)) return
+    setChartNote({ state: 'busy', text: 'Reading the versions…' })
+    fetchChartVersions(src).then(
+      (v) => {
+        setVersions(v.versions ?? [])
+        if (!ref.trim() && v.newest) {
+          setRef(v.newest)
+          inspectAt(v.newest)
+        }
+        setRefKind('version')
+        setChartNote({ state: 'done', text: `${(v.versions ?? []).length} versions; the newest stable is ${v.newest || 'none'}` })
+      },
+      (e: unknown) => setChartNote({ state: 'error', text: e instanceof Error ? e.message : String(e) }),
+    )
+  }
+
+  // A chart at a version is looked over for its values files (R2-08), once a version is chosen.
+  const inspectAt = (version: string) => {
+    if (mode !== 'create' || !repoKind) return
+    const src = { ...chartSource(), ref: version.trim() }
+    if (!src.chart || !src.ref || (kind === 'helm' && !repository)) return
+    const key = sourceText(src)
+    const asked = ++inspecting.current
+    setInspected({ repo: key, state: 'busy' })
+    inspectChart(cluster, src).then(
+      (d) => asked === inspecting.current && setInspected({ repo: key, state: 'done', data: d }),
+      (e: unknown) => asked === inspecting.current && setInspected({ repo: key, state: 'error', message: e instanceof Error ? e.message : String(e) }),
+    )
+  }
+
   const loadRefs = () => {
     setError('')
     setLoadingRefs(true)
@@ -226,7 +334,7 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
       .map((l) => l.trim())
       .filter((l) => l && !l.startsWith('#'))
 
-  const source = (): AppSource => ({ repo: repo.trim(), path: path.trim(), ref: ref.trim(), refKind })
+  const source = (): AppSource => (repoKind ? chartSource() : { repo: repo.trim(), path: path.trim(), ref: ref.trim(), refKind: refKind === 'version' ? 'branch' : refKind })
 
   const submit = (deployNow: boolean) => {
     setError('')
@@ -241,11 +349,11 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
     const input: AppInput = {}
     switch (mode) {
       case 'create':
-        req = createApp(cluster, { namespace: namespace.trim(), name: name.trim(), source: source(), token: token || undefined, values, params: paramList(), createNamespace: createNs, ...(valuesFile ? { valuesFile } : {}), ...(ignoreDefaults ? { ignoreDefaults } : {}), ...(fleet ? { fleet } : {}) })
+        req = createApp(cluster, { namespace: namespace.trim(), name: name.trim(), source: source(), token: (!repoKind && token) || undefined, values, params: paramList(), createNamespace: createNs, ...(valuesFile ? { valuesFile } : {}), ...(ignoreDefaults ? { ignoreDefaults } : {}), ...(fleet ? { fleet } : {}) })
         break
       case 'source':
         input.source = source()
-        if (token) input.token = token
+        if (token && !repoKind) input.token = token
         if (clearToken) input.clearToken = true
         if (deployNow) {
           input.upgrade = true
@@ -279,7 +387,10 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
   const primary = { create: 'Install', source: 'Save', switch: 'Switch and upgrade', upgrade: row?.orphan ? 'Install' : 'Deploy this branch or tag', install: 'Install', values: 'Save' }[mode]
   // Save keeps the change for the next deploy; the second button deploys it at once.
   const alsoDeploy = mode === 'source' || mode === 'values' ? (row?.orphan || !app ? 'Save and install' : 'Save and upgrade') : ''
-  const canSubmit = !busy && !yamlError && (mode === 'create' ? namespace.trim() !== '' && name.trim() !== '' && repo.trim() !== '' && ref.trim() !== '' : mode === 'source' ? repo.trim() !== '' && ref.trim() !== '' : mode === 'switch' ? ref.trim() !== '' : true)
+  const sourceReady = repoKind ? chartSource().chart !== '' && (kind !== 'helm' || repository !== '') && ref.trim() !== '' : repo.trim() !== '' && ref.trim() !== ''
+  const canSubmit = !busy && !yamlError && (mode === 'create' ? namespace.trim() !== '' && name.trim() !== '' && sourceReady : mode === 'source' ? sourceReady : mode === 'switch' ? ref.trim() !== '' : true)
+  // A release whose chart comes from a repository moves between versions, not branches.
+  const appRepoKind = fromRepository(app?.source)
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation()
 
   return createPortal(
@@ -331,6 +442,83 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
             </>
           )}
           {(mode === 'create' || mode === 'source') && (
+            <Field label="Where the chart comes from" wide hint={KINDS.find((k) => k[0] === kind)?.[2]}>
+              <div className="rk-seg" role="group" aria-label="Where the chart comes from" style={{ alignSelf: 'flex-start' }}>
+                {KINDS.map(([k, l]) => (
+                  <button
+                    key={k}
+                    type="button"
+                    aria-pressed={kind === k}
+                    onClick={() => {
+                      if (k === kind) return
+                      setKind(k)
+                      setRef('')
+                      setRefKind(k === 'git' ? 'branch' : 'version')
+                      setVersions([])
+                      setChartNote(null)
+                      setInspected(null)
+                    }}
+                    data-testid={`app-kind-${k}`}
+                  >
+                    {l}
+                  </button>
+                ))}
+              </div>
+            </Field>
+          )}
+          {(mode === 'create' || mode === 'source') && kind === 'helm' && (
+            <>
+              <Field label="Helm repository" hint={helmRepos && helmRepos.filter((r) => r.kind === 'helm').length === 0 ? 'None yet: a SuperAdmin adds them in Administration › Settings › Applications' : 'As Settings › Applications lists them'}>
+                <label className="rk-field">
+                  <select value={repository} onChange={(e) => (setRepository(e.target.value), setChart(''), setRef(''), setVersions([]))} data-testid="app-repository">
+                    <option value="">{helmRepos ? 'Choose a repository…' : 'Loading…'}</option>
+                    {(helmRepos ?? [])
+                      .filter((r) => r.kind === 'helm')
+                      .map((r) => (
+                        <option key={r.name} value={r.name}>
+                          {r.name} · {r.url}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              </Field>
+              <Field label="Chart" hint={charts.find((c) => c.name === chart)?.description ?? (charts.length ? `${charts.length} charts in the repository` : undefined)}>
+                <label className="rk-field">
+                  <input className="rk-mono" list="app-charts" value={chart} onChange={(e) => (setChart(e.target.value), setVersions([]))} onBlur={loadVersions} placeholder="nginx" data-testid="app-chart" />
+                  <datalist id="app-charts">
+                    {charts.map((c) => (
+                      <option key={c.name} value={c.name}>
+                        {c.latest}
+                      </option>
+                    ))}
+                  </datalist>
+                </label>
+              </Field>
+            </>
+          )}
+          {(mode === 'create' || mode === 'source') && kind === 'oci' && (
+            <Field label="Chart" hint="oci:// with the registry, the path and the chart; an OCI registry Settings › Applications lists signs in for it" wide>
+              <label className="rk-field">
+                <input className="rk-mono" value={chart} onChange={(e) => (setChart(e.target.value), setVersions([]))} onBlur={loadVersions} placeholder="oci://registry.example.com/charts/app" data-testid="app-oci" />
+              </label>
+            </Field>
+          )}
+          {(mode === 'create' || mode === 'source') && repoKind && (
+            <Field label="Version" wide hint={chartNote?.text ?? 'Leave the chart field to list its versions'}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                <VersionPicker versions={versions} value={ref} onChange={(v) => (setRef(v), setRefKind('version'), versions.includes(v) && inspectAt(v))} id="app" />
+                <button type="button" className="rk-btn" onClick={loadVersions} disabled={!chartSource().chart || (kind === 'helm' && !repository)} data-testid="app-load-versions">
+                  List versions
+                </button>
+              </div>
+              {inspected && inspected.state !== 'busy' && (
+                <span style={{ fontSize: 12, color: inspected.state === 'error' ? 'var(--err)' : 'var(--fg2)' }} data-testid="app-chart-inspect" data-state={inspected.state}>
+                  {inspected.state === 'error' ? inspected.message : inspected.data?.charts[0] ? `Chart ${inspected.data.charts[0].name} ${inspected.data.charts[0].version}${inspected.data.charts[0].appVersion ? ` (app ${inspected.data.charts[0].appVersion})` : ''}` : ''}
+                </span>
+              )}
+            </Field>
+          )}
+          {(mode === 'create' || mode === 'source') && kind === 'git' && (
             <>
               <Field label="Repository" hint="An https:// git URL; GitHub, GitLab and Gitea work" wide>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -389,11 +577,15 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
               </Field>
             </>
           )}
-          {mode !== 'values' && (
-            <Field label={mode === 'upgrade' ? 'Branch or tag to deploy: the current one again, a newer one (upgrade) or an older one (rollback)' : 'Branch or tag'} wide hint={loadingRefs ? 'Reading the repository…' : refs ? `${refs.branches.length} branches, ${refs.tags.length} tags` : mode === 'create' || mode === 'source' ? 'List branches and tags above to choose from them' : undefined}>
-              <RefPicker refs={refs} value={ref} kind={refKind} onChange={(r, k) => (setRef(r), setRefKind(k))} id="app" />
+          {mode !== 'values' && !((mode === 'create' || mode === 'source') && repoKind) && ((mode === 'switch' || mode === 'upgrade' || mode === 'install') && appRepoKind ? (
+            <Field label={mode === 'upgrade' ? 'Version to deploy: the current one again, a newer one (upgrade) or an older one (rollback)' : 'Version'} wide hint={loadingRefs ? 'Reading the repository…' : refs ? `${refs.tags.length} versions` : undefined}>
+              <VersionPicker versions={refs?.tags ?? []} value={ref} onChange={(v) => (setRef(v), setRefKind('version'))} id="app" />
             </Field>
-          )}
+          ) : (
+            <Field label={mode === 'upgrade' ? 'Branch or tag to deploy: the current one again, a newer one (upgrade) or an older one (rollback)' : 'Branch or tag'} wide hint={loadingRefs ? 'Reading the repository…' : refs ? `${refs.branches.length} branches, ${refs.tags.length} tags` : mode === 'create' || mode === 'source' ? 'List branches and tags above to choose from them' : undefined}>
+              <RefPicker refs={refs} value={ref} kind={refKind === 'version' ? 'branch' : refKind} onChange={(r, k) => (setRef(r), setRefKind(k))} id="app" />
+            </Field>
+          ))}
           {(mode === 'create' || mode === 'values') && (
             <>
               <Field label="Values file" hint="YAML, as helm -f takes it; the chart's defaults apply underneath" wide>

@@ -89,6 +89,22 @@ func HashPassword(password string) (string, error) {
 	return strings.Join([]string{hashPrefix, strconv.Itoa(hashIterations), base64.RawURLEncoding.EncodeToString(salt), base64.RawURLEncoding.EncodeToString(key)}, "$"), nil
 }
 
+// validHash says whether a hash has the form HashPassword makes, with
+// settings CheckPassword takes.
+func validHash(hash string) bool {
+	parts := strings.Split(hash, "$")
+	if len(parts) != 4 || parts[0] != hashPrefix {
+		return false
+	}
+	iter, err := strconv.Atoi(parts[1])
+	if err != nil || iter < 1000 || iter > 10_000_000 {
+		return false
+	}
+	salt, err1 := base64.RawURLEncoding.DecodeString(parts[2])
+	key, err2 := base64.RawURLEncoding.DecodeString(parts[3])
+	return err1 == nil && err2 == nil && len(salt) > 0 && len(key) > 0
+}
+
 // CheckPassword reports whether the password matches the hash, in constant
 // time with respect to the hash.
 func CheckPassword(hash, password string) bool {

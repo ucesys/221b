@@ -239,7 +239,8 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
   // see; its counts and the table from the rows search, labels and Needs
   // attention leave.
   const sels: Selections = useMemo(() => ({ ns: readSelection(p, 'ns'), node: readSelection(p, 'node'), cls: readSelection(p, 'class') }), [p])
-  const nodeInfo = useMemo(() => nodesView.rows.map((n) => ({ name: n.name, role: n.role, cordoned: n.cordoned })), [nodesView.rows])
+  // Hosts outside Kubernetes hold no volumes.
+  const nodeInfo = useMemo(() => nodesView.rows.filter((n) => n.role !== 'host').map((n) => ({ name: n.name, role: n.role, cordoned: n.cordoned })), [nodesView.rows])
   const nsNames = useMemo(() => namespacesView.rows.map((n) => n.name), [namespacesView.rows])
   const nsList = useMemo(() => namespaceEntries(data.pairs, data.quotas, nsNames), [data.pairs, data.quotas, nsNames])
   const nodeList = useMemo(() => nodeEntries(data.pairs, nodeInfo), [data.pairs, nodeInfo])

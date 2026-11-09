@@ -53,7 +53,8 @@ function nodeMatches(n: NodeRow, q: string): boolean {
 export function PodsTab({ cluster, now, onToast, route }: TabProps) {
   const pods = useView<PodRow>('pods')
   const nodesView = useView<NodeRow>('nodes')
-  const nodes = nodesView.rows
+  // Hosts outside Kubernetes run no pods.
+  const nodes = useMemo(() => nodesView.rows.filter((n) => n.role !== 'host'), [nodesView.rows])
   const p = route.params
   const role: RoleFilter = ROLES.includes(p.get('role') as RoleFilter) ? (p.get('role') as RoleFilter) : 'all'
   const status: PodStatusFilter = POD_STATUSES.some(([id]) => id === p.get('status')) ? (p.get('status') as PodStatusFilter) : 'all'

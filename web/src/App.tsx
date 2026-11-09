@@ -90,6 +90,13 @@ import {
 import { ToolDialog } from "./components/toolbox/ToolDialog";
 import { SessionPane, SessionsPane } from "./components/toolbox/SessionPanes";
 import { setTimeFormat } from "./lib/format";
+import { setShowCosts } from "./lib/costs";
+// --- Cases (Phase 12) ---
+import { CasesPage } from "./components/cases/CasesPage";
+import { useOpenCasesItem } from "./lib/casesItem";
+import { onWatsonFill, type WatsonFill } from "./lib/watsonFill";
+import { ErrorBoundary } from "./components/ErrorScreen";
+// --- end Cases ---
 
 const THEME_KEY = "221b.theme";
 
@@ -130,7 +137,10 @@ function Console() {
   const store = useLiveStore(apiPath("events", route.cluster));
   return (
     <LiveContext.Provider value={store}>
-      <Shell />
+      {/* A page that fails to draw says so, and can be reported (CS-19). */}
+      <ErrorBoundary screen="the console">
+        <Shell />
+      </ErrorBoundary>
     </LiveContext.Provider>
   );
 }
@@ -193,6 +203,11 @@ function Shell() {
   const live = useLiveMeta();
   // Every date and time follows the format the settings carry.
   setTimeFormat(live.settings?.timeFormat);
+  // Show costs (CF-40): every dollar amount follows the setting the settings carry.
+  const showCostsSetting = live.settings?.showCosts;
+  useEffect(() => {
+    if (typeof showCostsSetting === "boolean") setShowCosts(showCostsSetting);
+  }, [showCostsSetting]);
   const route = useRoute();
   const now = useNow();
   const me = useMe();
@@ -217,6 +232,8 @@ function Shell() {
       ? "home"
       : route.view === "admin"
         ? "admin"
+        : route.view === "cases"
+          ? "cases"
         : route.view === "cluster" ||
             (clustersLoaded && (!summary || summary.state === "failed"))
           ? "cluster"
@@ -235,6 +252,8 @@ function Shell() {
         ? "Clusters · 221B"
         : view === "admin"
           ? "Administration · 221B"
+          : view === "cases"
+            ? "Cases · 221B"
           : clusterName
             ? `${clusterName} · ${view === "cluster" ? "Connection" : tabLabel} · 221B`
             : "221B";
@@ -382,7 +401,9 @@ function Shell() {
   );
   const [sherlockFill, setSherlockFill] = useState("");
   const sherlockApi = {
-    available: !!sherlock.status?.available && view === "tabs",
+    // Sherlock in Cases (IB-10): its pages may ask too.
+    available:
+      !!sherlock.status?.available && (view === "tabs" || view === "cases"),
     ask: (q: string, over?: boolean) => {
       const away = popped;
       if (!away && (over || dock.mode === "min"))
@@ -443,6 +464,66 @@ function Shell() {
         );
     },
   };
+  // --- Sherlock and Watson in Cases (Phase 12, IB-11 to IB-13) ---
+  // The dock follows the cluster of the item open in Cases: the page's
+  // address moves to that cluster, which is then the last one used.
+  const casesItem = useOpenCasesItem();
+  const itemCluster = view === "cases" ? (casesItem?.cluster ?? "") : "";
+  useEffect(() => {
+    if (
+      !itemCluster ||
+      itemCluster === route.cluster ||
+      !clusters.some((c) => c.id === itemCluster)
+    )
+      return;
+    navigate(withParams({ ...currentRoute(), cluster: itemCluster }, {}), true);
+  }, [itemCluster, route.cluster, clusters]);
+  // Open in Watson: Watson's pane on that cluster, the command in its box.
+  const [watsonFill, setWatsonFill] = useState<WatsonFill | null>(null);
+  useEffect(
+    () =>
+      onWatsonFill((f) => {
+        if (clustersLoaded && !clusters.some((c) => c.id === f.cluster)) {
+          setToast(`The cluster ${f.cluster} is not connected to this console.`);
+          return;
+        }
+        const here = currentRoute();
+        if (f.cluster !== here.cluster)
+          navigate(
+            here.view === "home" || here.view === "cluster"
+              ? clusterHref(f.cluster, FIRST_TAB)
+              : withParams({ ...here, cluster: f.cluster }, {}),
+            true,
+          );
+        if (popped) {
+          post({ type: "fill", cluster: f.cluster, text: f.command, pane: "watson" });
+          focusPopup();
+          return;
+        }
+        const d = dockRef.current;
+        setDockTab("assistants");
+        setDock({ ...d, mode: d.mode === "min" ? "open" : d.mode, pane: "watson" });
+        setWatsonFill(f);
+      }),
+    [clusters, clustersLoaded, popped, setDock],
+  );
+  // Watson off on that cluster: say so, rather than leave the command
+  // waiting for a pane that does not come.
+  const fillRefused =
+    !!watsonFill &&
+    watsonFill.cluster === route.cluster &&
+    ((!!sherlock.status && !sherlock.status.enabled) ||
+      (!!watson.status && !watson.status.available));
+  useEffect(() => {
+    if (!fillRefused) return;
+    void Promise.resolve().then(() => {
+      setToast(
+        "Watson is off on this cluster, so the command cannot wait in its box. Copy it from the case instead.",
+      );
+      setWatsonFill(null);
+    });
+  }, [fillRefused]);
+  // --- end Sherlock and Watson in Cases ---
   // Pending approvals links to a Watson card with ?watson=open: the panel
   // comes up on Watson, where the card can be read and approved.
   const reviewWatson = view === "tabs" && route.params.get("watson") === "open";
@@ -613,7 +694,7 @@ function Shell() {
               route={route}
               onEditCluster={(id) => setEditing(id)}
             />
-            {view !== "home" && view !== "admin" && (
+            {view !== "home" && view !== "admin" && view !== "cases" && (
               <Banners
                 cluster={live.cluster}
                 stream={live.stream}
@@ -648,6 +729,14 @@ function Shell() {
                 onToast={setToast}
                 settings={live.settings}
                 refreshedAt={live.refreshedAt}
+              />
+            ) : view === "cases" ? (
+              <CasesPage
+                route={route}
+                me={me}
+                onToast={setToast}
+                alerts={counts.alerts}
+                clusterName={live.cluster?.name}
               />
             ) : view === "cluster" ? (
               <ClusterPage
@@ -716,6 +805,12 @@ function Shell() {
                           onToast={setToast}
                           controls={controls}
                           switcher={switcher}
+                          fill={
+                            watsonFill?.cluster === route.cluster
+                              ? watsonFill.command
+                              : ""
+                          }
+                          onFilled={() => setWatsonFill(null)}
                         />
                       )
                     : null

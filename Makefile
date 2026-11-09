@@ -64,6 +64,7 @@ lint-go:
 	@out="$$(cd server && gofmt -l cmd internal)"; \
 	if [ -n "$$out" ]; then echo "Run gofmt on:"; echo "$$out"; exit 1; fi
 	cd server && $(GO) vet ./...
+	hack/check-prompt-sources.sh
 
 lint-web: web/node_modules
 	cd web && $(NPM) run typecheck && $(NPM) run lint
@@ -90,7 +91,10 @@ SIM_AUTH = -auth-mode oidc -oidc-issuer http://127.0.0.1:7443/oidc -oidc-client-
 # simulated cluster too, in the namespace 221b.
 SIM_STORE = -settings-configmap 221b/k8s-console-221b -connections-secrets 221b/k8s-console-221b \
 	-audit-configmap 221b/k8s-console-221b-audit -sessions-configmap 221b/k8s-console-221b-sessions \
-	-automation-configmap 221b/k8s-console-221b-automation -automation-runs-configmap 221b/k8s-console-221b-automation-runs
+	-automation-configmap 221b/k8s-console-221b-automation -automation-runs-configmap 221b/k8s-console-221b-automation-runs \
+	-ai-configmap 221b/k8s-console-221b-ai -issues-configmap 221b/k8s-console-221b-issues -runs-configmap 221b/k8s-console-221b-runs \
+	-cases-configmap 221b/k8s-console-221b-cases -knowledge-configmap 221b/k8s-console-221b-knowledge \
+	-wiki-configmap 221b/k8s-console-221b-wiki -casework-configmap 221b/k8s-console-221b-casework
 
 # Sherlock (Phase 5) talks to the simulator's fake Claude API; an
 # administrator turns it on in Settings with any key of the right shape.

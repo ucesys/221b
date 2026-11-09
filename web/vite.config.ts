@@ -23,6 +23,11 @@ export default defineConfig({
     assetsDir: 'assets',
     sourcemap: false,
     target: 'es2022',
+    // The console, and the report page of the issue service (Phase 12),
+    // a page of its own that the server serves at /report.
+    rollupOptions: {
+      input: { main: 'index.html', report: 'report.html' },
+    },
   },
   server: {
     port: 5173,

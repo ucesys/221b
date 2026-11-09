@@ -109,7 +109,7 @@ afterEach(() => {
 
 describe('who is offered which page (RB-41, RB-31)', () => {
   it('offers Roles and Permissions to everyone, Users and Settings to a SuperAdmin', () => {
-    expect(pagesFor(me())).toEqual(['roles', 'permissions', 'users', 'toolbox', 'approvals', 'logs', 'settings', 'backup'])
+    expect(pagesFor(me())).toEqual(['roles', 'permissions', 'users', 'toolbox', 'logs', 'settings', 'backup'])
     expect(pagesFor(viewer)).toEqual(['roles', 'permissions'])
     expect(pagesFor(null)).toEqual([])
   })

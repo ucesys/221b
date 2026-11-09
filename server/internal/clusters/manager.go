@@ -335,6 +335,11 @@ func (m *Manager) start(spec Spec, cred Credential) *Instance {
 		old.cancel()
 	}
 	inst := &Instance{Spec: spec, conn: connKey(spec, cred)}
+	if cred.HasPlaceholder() {
+		inst.startErr = "Its credential is not in the backup it was restored from: edit the connection and paste it again."
+		m.instances[spec.ID] = inst
+		return inst
+	}
 	cfg, err := RestConfig(spec, cred)
 	if err != nil {
 		inst.startErr = err.Error()
@@ -639,6 +644,56 @@ func (m *Manager) Add(ctx context.Context, d Draft) (Summary, error) {
 	}
 	inst := m.start(spec, *cred)
 	return m.summaryOf(inst), nil
+}
+
+// Redacted is a connection's saved credential with its secrets replaced
+// by Placeholder, for a backup: what it signs in with, never the secret.
+func (m *Manager) Redacted(ctx context.Context, id string) (Credential, error) {
+	_, cred, err := m.getSpec(ctx, id)
+	if err != nil {
+		return Credential{}, err
+	}
+	return cred.Redact(), nil
+}
+
+// Sealed is a connection's saved credential with each secret replaced by
+// what seal makes of it, for a backup (ADR-137): sealed with the install's
+// backup key, never in clear.
+func (m *Manager) Sealed(ctx context.Context, id string, seal func(string) string) (Credential, error) {
+	_, cred, err := m.getSpec(ctx, id)
+	if err != nil {
+		return Credential{}, err
+	}
+	return cred.SealWith(seal), nil
+}
+
+// Restore saves a connection from a backup as the backup had it: its
+// credential opened, or with Placeholder where a secret was not, when it
+// shows as failed, saying so, until the credential is pasted again. A connection here
+// already keeps its own credential: its identifier or name is refused.
+func (m *Manager) Restore(ctx context.Context, spec Spec, cred Credential) (Summary, error) {
+	m.syncMu.Lock()
+	defer m.syncMu.Unlock()
+	if spec.Local {
+		return Summary{}, invalid("id", "The local cluster is the console's own connection and is never restored.")
+	}
+	if spec.ID == "" || Slug(spec.ID) != spec.ID || reserved[spec.ID] {
+		return Summary{}, invalid("id", fmt.Sprintf("“%s” is not an identifier a connection can have.", spec.ID))
+	}
+	if _, ok := m.Get(spec.ID); ok {
+		return Summary{}, invalid("id", fmt.Sprintf("A connection “%s” is here already, with its own credential.", spec.ID))
+	}
+	if err := ValidateSpec(spec); err != nil {
+		return Summary{}, err
+	}
+	if m.nameTaken(spec.Name, "") {
+		return Summary{}, invalid("name", fmt.Sprintf("Another cluster is already called “%s”.", spec.Name))
+	}
+	spec.Updated = m.opts.Now().UTC()
+	if err := m.store.Save(ctx, spec, &cred); err != nil {
+		return Summary{}, err
+	}
+	return m.summaryOf(m.start(spec, cred)), nil
 }
 
 // Update changes a connection; a credential given replaces the saved one.

@@ -5,7 +5,6 @@ import { PermissionsPage } from './PermissionsPage'
 import { RolesPage } from './RolesPage'
 import { SettingsPanel } from './SettingsPage'
 import { UsersPage } from './UsersPage'
-import { AdminApprovals } from './AdminApprovals'
 import { AdminAudit } from './AdminAudit'
 import { AdminBackup } from './AdminBackup'
 import { AdminSessions, AdminToolbox } from './toolbox/AdminToolbox'
@@ -23,7 +22,7 @@ const PAGES: { id: Page; label: string; tip: string; superOnly: boolean }[] = [
   { id: 'permissions', label: 'Permissions', tip: 'What each role may read and change', superOnly: false },
   { id: 'users', label: 'Users', tip: 'SuperAdmin only: the people 221B knows', superOnly: true },
   { id: 'toolbox', label: 'Toolbox', tip: 'SuperAdmin only: what the chart allows the Toolbox', superOnly: true },
-  { id: 'approvals', label: 'Approvals', tip: 'SuperAdmin only: what waits for your approval, and what was decided', superOnly: true },
+  // Approvals moved to Cases › Inbox (Phase 12, CS-06); #/admin/approvals opens it there.
   { id: 'logs', label: 'Logs', tip: 'SuperAdmin only: the Toolbox’s sessions, and the audit log of who did what', superOnly: true },
   { id: 'settings', label: 'Settings', tip: 'SuperAdmin only: refresh rate, Sherlock and Watson', superOnly: true },
   { id: 'backup', label: 'Backup', tip: 'SuperAdmin only: a backup of the console’s own data, and a restore', superOnly: true },
@@ -161,9 +160,8 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
         {me && !refused && page === 'permissions' && <PermissionsPage {...props} />}
         {me && !refused && page === 'users' && <UsersPage {...props} />}
         {me && !refused && page === 'toolbox' && <AdminToolbox {...props} />}
-        {me && !refused && page === 'approvals' && <AdminApprovals {...props} />}
         {me && !refused && page === 'logs' && <Logs {...props} />}
-        {me && !refused && page === 'settings' && <SettingsPanel route={route} settings={settings} refreshedAt={refreshedAt} />}
+        {me && !refused && page === 'settings' && <SettingsPanel route={route} settings={settings} refreshedAt={refreshedAt} onToast={onToast} />}
         {me && !refused && page === 'backup' && <AdminBackup {...props} />}
       </div>
     </main>

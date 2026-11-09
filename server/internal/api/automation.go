@@ -18,6 +18,7 @@ import (
 	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/fleets"
+	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/watson"
 )
 
@@ -391,6 +392,8 @@ type automationNode struct {
 	Name      string `json:"name"`
 	Paired    bool   `json:"paired"`
 	LoginUser string `json:"loginUser,omitempty"`
+	// Host is a machine outside Kubernetes (Phase 12).
+	Host bool `json:"host,omitempty"`
 	// Why says why the node cannot be run on, when it cannot.
 	Why string `json:"why,omitempty"`
 }
@@ -460,6 +463,26 @@ func (s *Server) automationFleetList(ctx context.Context, w http.ResponseWriter,
 			nodes = append(nodes, fleets.Node{Name: n.Name, Labels: n.Labels, Taints: n.Spec.Taints})
 		}
 	}
+	// Hosts outside Kubernetes are nodes here too (Phase 12); a node of
+	// the same name comes first.
+	hosts := map[string]nodessh.Host{}
+	if s.opts.Hosts != nil && out.Off == "" {
+		list, err := s.opts.Hosts.Hosts(ctx, c.ID)
+		if err != nil {
+			jsonError(w, http.StatusServiceUnavailable, "the hosts could not be read: "+err.Error())
+			return automationFleets{}, false
+		}
+		known := map[string]bool{}
+		for _, n := range nodes {
+			known[n.Name] = true
+		}
+		for _, h := range list {
+			if !known[h.Name] {
+				hosts[h.Name] = h
+				nodes = append(nodes, fleets.Node{Name: h.Name, Labels: h.Labels})
+			}
+		}
+	}
 	sort.Slice(nodes, func(i, j int) bool { return nodes[i].Name < nodes[j].Name })
 	paired := map[string]string{}
 	stale := map[string]bool{}
@@ -483,7 +506,13 @@ func (s *Server) automationFleetList(ctx context.Context, w http.ResponseWriter,
 	member := func(n fleets.Node) automationNode {
 		an := automationNode{Name: n.Name}
 		user, ok := paired[n.Name]
+		h, isHost := hosts[n.Name]
+		an.Host = isHost
 		switch {
+		case isHost && h.Mismatch != "":
+			an.Why = "its host key changed: check it and trust it again from the Nodes tab"
+		case isHost && (!ok || h.State != nodessh.HostPaired):
+			an.Why = "a host not paired yet: pair it from the Nodes tab"
 		case !ok:
 			an.Why = "not paired for SSH: pair it from its Tools menu"
 		case stale[n.Name]:

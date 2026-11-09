@@ -7,14 +7,28 @@ import { apiPath } from '../lib/router'
 import { BACKGROUND, unauthorized } from './auth'
 import type { WatsonItem } from './watson'
 
-export type RefKind = 'branch' | 'tag'
+export type RefKind = 'branch' | 'tag' | 'version'
+
+/** Where a chart comes from: git (or missing), a Helm repository, an OCI registry (Phase 12, wave 5, HR-01). */
+export type SourceKind = 'git' | 'helm' | 'oci'
 
 export interface AppSource {
+  /** git when missing. */
+  kind?: SourceKind
+  /** The git repository's URL; a Helm repository's address; an OCI registry's address with the charts' path, without the chart (oci://registry/charts). */
   repo: string
   path?: string
+  /** A Helm repository's or an OCI registry's chart, by name. */
+  chart?: string
+  /** The repository of Settings › Applications the chart comes from. */
+  repository?: string
+  /** The branch or tag, or the chart's version. */
   ref: string
   refKind: RefKind
 }
+
+/** Whether a source is a repository's chart rather than git. */
+export const fromRepository = (s: Pick<AppSource, 'kind'> | undefined) => s?.kind === 'helm' || s?.kind === 'oci'
 
 export interface AppRecord {
   version: number
@@ -239,6 +253,65 @@ export const fetchAppInspect = (cluster: string, ns: string, name: string) => ca
 export const inspectRepo = (cluster: string, repo: string, ref: string, refKind: RefKind, token?: string) => call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { repo, ...(ref ? { ref, refKind } : {}), ...(token ? { token } : {}) })
 
 export const fetchRepoRefs = (cluster: string, repo: string, token = '') => call<RepoRefs>('POST', apiPath('apps/refs', cluster), token ? { repo, token } : { repo })
+/** A repository chart looked over at a version (the newest when none): its values files, its version and digest (HR-05). */
+export const inspectChart = (cluster: string, src: Pick<AppSource, 'kind' | 'repo' | 'repository' | 'chart' | 'ref'>) =>
+  call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { kind: src.kind, ...(src.repo ? { repo: src.repo } : {}), ...(src.repository ? { repository: src.repository } : {}), chart: src.chart, ...(src.ref ? { ref: src.ref } : {}) })
+
+// --- Helm repositories (Phase 12, wave 5, HR-02 to HR-06) ---
+
+export type RepoAuth = 'none' | 'basic' | 'token'
+
+/** A Helm repository or an OCI registry the console knows, as Settings › Applications lists it. */
+export interface HelmRepository {
+  name: string
+  kind: 'helm' | 'oci'
+  url: string
+  auth: RepoAuth
+  username?: string
+  /** A password or token is kept; it is never shown. */
+  hasSecret: boolean
+  testedAt?: string
+  testOk?: boolean
+  tested?: string
+  setBy?: string
+  setAt?: string
+}
+
+export interface HelmRepositoryInput {
+  kind: 'helm' | 'oci'
+  url: string
+  auth?: RepoAuth
+  username?: string
+  /** A value replaces the kept one, "" removes it, missing keeps it. */
+  secret?: string
+}
+
+export interface RepoTest {
+  ok: boolean
+  text: string
+  charts?: number
+}
+
+export interface ChartInfo {
+  name: string
+  description?: string
+  latest: string
+  appVersion?: string
+  deprecated?: boolean
+  versions: number
+}
+
+const repos = '/api/v1/helm-repositories'
+export const fetchHelmRepos = () => call<{ repositories: HelmRepository[]; mayEdit: boolean }>('GET', repos)
+export const saveHelmRepo = (name: string, input: HelmRepositoryInput) => call<HelmRepository>('PUT', `${repos}/${encodeURIComponent(name)}`, input)
+export const deleteHelmRepo = (name: string) => call<void>('DELETE', `${repos}/${encodeURIComponent(name)}`)
+/** Tests a repository as typed; a saved one's name with no secret given tests with the one kept. */
+export const testHelmRepo = (input: HelmRepositoryInput & { name?: string }) => call<RepoTest>('POST', `${repos}/test`, input)
+/** Tests a saved repository and keeps what it found. */
+export const retestHelmRepo = (name: string) => call<RepoTest>('POST', `${repos}/${encodeURIComponent(name)}/test`)
+export const fetchRepoCharts = (name: string) => call<{ charts: ChartInfo[] }>('GET', `${repos}/${encodeURIComponent(name)}/charts`)
+/** A repository chart's versions, newest first, and the newest stable one. */
+export const fetchChartVersions = (src: Pick<AppSource, 'kind' | 'repo' | 'repository' | 'chart'>) => call<{ versions: string[]; newest: string }>('POST', `${repos}/versions`, { kind: src.kind, repo: src.repo ?? '', repository: src.repository ?? '', chart: src.chart ?? '', ref: '', refKind: 'version' })
 export const fetchRevisions = (cluster: string, ns: string, name: string, background = false) => call<RevisionView[]>('GET', app(cluster, ns, name, '/revisions'), undefined, background)
 export const fetchImages = (cluster: string, ns: string, name: string, revision?: number) =>
   call<{ revision: number; images: AppImage[] }>('GET', app(cluster, ns, name, '/images') + (revision ? `?revision=${revision}` : ''), undefined, true)
@@ -290,8 +363,10 @@ export const deleteCommand = (cluster: string, ns: string, name: string, command
 export const runCommand = (cluster: string, ns: string, name: string, command: string, install = false) => call<WatsonItem>('POST', app(cluster, ns, name, '/commands/' + encodeURIComponent(command) + '/run') + (install ? '?install=1' : ''))
 export const forgetApp = (cluster: string, ns: string, name: string) => call<void>('DELETE', app(cluster, ns, name) + '?record=1')
 
-/** The source as the table shows it: github.com/org/app/charts/app @ v1.2.0. */
+/** The source as the table shows it: github.com/org/app/charts/app @ v1.2.0; bitnami/nginx @ 18.1.0; oci://ghcr.io/org/charts/app @ 1.2.0. */
 export function sourceText(s: AppSource): string {
+  if (s.kind === 'helm') return `${s.repository ?? ''}/${s.chart ?? ''} @ ${s.ref || 'newest'}`
+  if (s.kind === 'oci') return `${s.repo}/${s.chart ?? ''} @ ${s.ref || 'newest'}`
   let repo = s.repo.replace(/^https?:\/\//, '').replace(/\.git$/, '')
   if (s.path) repo += '/' + s.path
   return `${repo} @ ${s.ref}`

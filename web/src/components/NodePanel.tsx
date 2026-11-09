@@ -6,6 +6,7 @@ import { clampPct, fmtAge, fmtTs, localTimes, nWord } from '../lib/format'
 import { effectTone, isSystemLabel, resourceSections, roleTag, taintNote, type ResourceSection } from '../lib/nodes'
 import { href, useRoute } from '../lib/router'
 import { CloseIcon } from './Icons'
+import { HostPanel } from './HostPanel'
 import { ToolsButton } from './toolbox/ToolsMenu'
 import { CopyName } from './CopyName'
 import { AskSherlock } from './Sherlock'
@@ -52,7 +53,7 @@ function conditionTags(r: NodeRow): { label: string; tone: Tone; tip: string }[]
   return out
 }
 
-function Section({ title, count, aside, children, label, wide, ruled }: { title: string; count?: number | string; aside?: ReactNode; children: ReactNode; label?: string; wide?: boolean; ruled?: boolean }) {
+export function Section({ title, count, aside, children, label, wide, ruled }: { title: string; count?: number | string; aside?: ReactNode; children: ReactNode; label?: string; wide?: boolean; ruled?: boolean }) {
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, gridColumn: wide ? '1 / -1' : undefined, paddingBottom: ruled ? 16 : undefined, borderBottom: ruled ? '1px solid var(--line)' : undefined }} aria-label={label ?? title}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
@@ -98,7 +99,7 @@ function Resource({ s }: { s: ResourceSection }) {
 
 /** The details panel for one node. Changes to it go through Sherlock and Watson, not buttons here. */
 /** The parameters a node inherits, for a SuperAdmin: null until known, or for anyone else. */
-function useNodeParams(node: string): { list: ResolvedParam[]; fleets: string[] } | null {
+export function useNodeParams(node: string): { list: ResolvedParam[]; fleets: string[] } | null {
   const { cluster } = useRoute()
   const [read, setRead] = useState<{ key: string; list: ResolvedParam[]; fleets: string[] } | null>(null)
   const key = `${cluster}/${node}`
@@ -115,7 +116,7 @@ function useNodeParams(node: string): { list: ResolvedParam[]; fleets: string[] 
 }
 
 /** What the node said about itself when Automation last asked, for a SuperAdmin. */
-function FactsSection({ node }: { node: string }) {
+export function FactsSection({ node }: { node: string }) {
   const { cluster } = useRoute()
   const [allowed, setAllowed] = useState(false)
   const [facts, setFacts] = useState<NodeFacts | null>(null)
@@ -172,7 +173,12 @@ function FactsSection({ node }: { node: string }) {
   )
 }
 
-export function NodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, onToast }: Props) {
+/** The details panel for a node, or for a host outside Kubernetes (Phase 12). */
+export function NodePanel(props: Props) {
+  return props.r.host ? <HostPanel r={props.r} now={props.now} onClose={props.onClose} onToast={props.onToast} /> : <KubeNodePanel {...props} />
+}
+
+function KubeNodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, onToast }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null)
   const [showSys, setShowSys] = useState(false)
   const [tab, setTab] = useState<'details' | 'yaml'>('details')

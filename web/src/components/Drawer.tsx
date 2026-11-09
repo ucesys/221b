@@ -17,6 +17,8 @@ interface Props {
   /** The small line above the title: "Pod in ‹namespace›". */
   kicker: ReactNode
   title: string
+  /** What the title line shows in place of the title's text: a case's title edited in place (CF-60). */
+  heading?: ReactNode
   /** The facts line under the title. */
   facts?: ReactNode
   tabs?: DrawerTab[]
@@ -38,6 +40,38 @@ interface Props {
   tools?: ReactNode
   /** Controls on the tabs' line, at its right end, just above the body. */
   tabsEnd?: ReactNode
+  /**
+   * full: near full screen, about 96% of the width, from under the top bar
+   * to the dock (a case, CF-46); the width is ignored.
+   */
+  size?: 'full'
+  /** A second part beside the body when the drawer is wide, a tab of its own when narrow (CF-46). */
+  split?: DrawerSplit
+  /** Changed to a new number, a narrow split drawer shows its second part (a case's Run in Watson). */
+  sideOn?: number
+}
+
+/** The part beside a drawer's body: a case's Troubleshoot (CF-46). */
+export interface DrawerSplit {
+  /** Its tab's name when narrow, and its region's: "Troubleshoot". */
+  label: string
+  /** The body's tab name when narrow: "Case". */
+  main: string
+  content: ReactNode
+}
+
+/** From this width a split drawer shows its two parts side by side (CF-46). */
+export const SPLIT_MIN = 1100
+
+/** Whether the window is at least min pixels wide, as it changes. */
+export function useWide(min = SPLIT_MIN): boolean {
+  const [wide, setWide] = useState(() => typeof window !== 'undefined' && window.innerWidth >= min)
+  useEffect(() => {
+    const on = () => setWide(window.innerWidth >= min)
+    window.addEventListener('resize', on)
+    return () => window.removeEventListener('resize', on)
+  }, [min])
+  return wide
 }
 
 
@@ -45,7 +79,23 @@ interface Props {
  * The prototype's details drawer: over the page from the right, with a
  * backdrop that closes it, a header with tabs, and a scrolling body.
  */
-export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId, ask, copy, tools, tabsEnd }: Props) {
+export function Drawer({ label, kicker, title, heading, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId, ask, copy, tools, tabsEnd, size, split, sideOn }: Props) {
+  const wide = useWide()
+  // Narrow, a split drawer shows one part at a time: the body first. Each
+  // part stays mounted once shown, so what is written in it stays.
+  const [part, setPart] = useState<'main' | 'side'>('main')
+  const [sideSeen, setSideSeen] = useState(false)
+  const showMain = !split || wide || part === 'main'
+  const showSide = !!split && (wide || part === 'side')
+  const choose = (p: 'main' | 'side') => {
+    setPart(p)
+    if (p === 'side') setSideSeen(true)
+  }
+  const [sideAsked, setSideAsked] = useState(sideOn)
+  if (sideOn !== sideAsked) {
+    setSideAsked(sideOn)
+    if (sideOn) choose('side')
+  }
   const closeRef = useRef<HTMLButtonElement>(null)
   const aside = useRef<HTMLElement>(null)
   // Every drawer stops above the dock, and its last row keeps clear of the
@@ -107,7 +157,7 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
     }
   }, [tab, children])
   return (
-    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 'var(--dock-space, 0px)', left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }} data-by-sherlock={bySherlock ? 'true' : undefined}>
+    <div style={{ position: 'fixed', top: size === 'full' ? 'var(--hdr-h, 0px)' : 0, right: 0, bottom: 'var(--dock-space, 0px)', left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }} data-by-sherlock={bySherlock ? 'true' : undefined} data-split={split ? 'true' : undefined}>
       <button aria-label={`Close ${label.toLowerCase()}`} tabIndex={-1} onClick={onClose} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
       <aside
         ref={aside}
@@ -127,14 +177,15 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
             trapTab(e)
           }
         }}
-        style={{ position: 'relative', width: `min(${width}px, 100%)`, height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow)', outline: 'none' }}
+        style={{ position: 'relative', width: size === 'full' ? 'min(96vw, 100%)' : `min(${width}px, 100%)`, height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow)', outline: 'none' }}
+        data-size={size}
       >
         <div style={{ flex: 'none', padding: '16px 20px 0', display: 'flex', flexDirection: 'column', gap: 10, borderBottom: '1px solid var(--line)' }}>
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
             <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--fg3)' }}>{kicker}</div>
               <h2 className="rk-mono" style={{ margin: 0, fontSize: 17, fontWeight: 600, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
-                {title}
+                {heading ?? title}
                 {copy !== false && <CopyName text={copy ?? title} />}
               </h2>
             </div>
@@ -160,13 +211,31 @@ export function Drawer({ label, kicker, title, facts, tabs, tab, onTab, onClose,
               {tabsEnd && <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, padding: tabs?.length ? 0 : '0 0 10px' }}>{tabsEnd}</div>}
             </div>
           )}
+          {split && !wide && (
+            <nav aria-label={`${label}: parts`} style={{ display: 'flex', gap: '0 20px' }} data-testid="drawer-split-tabs">
+              {(['main', 'side'] as const).map((p) => (
+                <button key={p} className="rk-tab" aria-current={part === p ? 'page' : undefined} onClick={() => choose(p)} style={{ height: 38 }} data-testid={`drawer-split-tab-${p}`}>
+                  {p === 'main' ? split.main : split.label}
+                </button>
+              ))}
+            </nav>
+          )}
           {!tabs?.length && !tabsEnd && <div style={{ height: 6 }} />}
         </div>
-        {notice}
-        <div ref={body} className="rk-drawer-body" tabIndex={scrolls ? 0 : undefined} role={scrolls ? 'region' : undefined} aria-label={scrolls ? `${label} content` : undefined} style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: footer ? '18px 20px 32px' : '18px 20px calc(32px + var(--fab-space, 0px))', display: 'flex', flexDirection: 'column', gap: 16, background: 'var(--bg)' }}>
-          {children}
+        <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'row' }} data-testid={split ? 'drawer-split' : undefined} data-layout={split ? (wide ? 'split' : 'tabs') : undefined}>
+          <div style={{ flex: split && wide ? '0 0 50%' : '1 1 auto', minWidth: 0, minHeight: 0, display: showMain ? 'flex' : 'none', flexDirection: 'column' }}>
+            {notice}
+            <div ref={body} className="rk-drawer-body" tabIndex={scrolls ? 0 : undefined} role={scrolls ? 'region' : undefined} aria-label={scrolls ? `${label} content` : undefined} style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: footer ? '18px 20px 32px' : '18px 20px calc(32px + var(--fab-space, 0px))', display: 'flex', flexDirection: 'column', gap: 16, background: 'var(--bg)' }}>
+              {children}
+            </div>
+            {footer && <div style={{ flex: 'none', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: split && wide ? '12px 20px' : '12px calc(20px + var(--fab-space, 0px)) 12px 20px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>{footer}</div>}
+          </div>
+          {split && (wide || sideSeen) && (
+            <section aria-label={split.label} hidden={!showSide} style={{ flex: '1 1 auto', minWidth: 0, minHeight: 0, display: showSide ? 'flex' : 'none', flexDirection: 'column', borderLeft: wide ? '1px solid var(--line)' : undefined, background: 'var(--surface)' }} data-testid="drawer-split-side">
+              {split.content}
+            </section>
+          )}
         </div>
-        {footer && <div style={{ flex: 'none', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '12px calc(20px + var(--fab-space, 0px)) 12px 20px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>{footer}</div>}
       </aside>
     </div>
   )

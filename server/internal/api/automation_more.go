@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/ai"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/clusters"
@@ -288,7 +289,7 @@ func (s *Server) weighChange(r *http.Request, cluster string, before, after auto
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
-	text, err := s.opts.Sherlock.Complete(ctx, s.watsonWho(r).Audit, cluster, "weigh a parameter change", impactPrompt, b.String())
+	text, err := s.opts.Sherlock.CompleteAs(ctx, s.agentID(ai.ChangePlanner), s.watsonWho(r).Audit, cluster, "weigh a parameter change", impactPrompt, b.String())
 	if err != nil {
 		return items, "Sherlock could not weigh this change: " + err.Error()
 	}
@@ -467,16 +468,39 @@ func (s *Server) postAutomationDraft(w http.ResponseWriter, r *http.Request) {
 	if facts := s.factsSummary(ctx); facts != "" {
 		b.WriteString("\nThe nodes it may run on:\n" + facts)
 	}
-	answer, err := s.opts.Sherlock.Complete(ctx, who, clusters.LocalID, "write a script", draftPrompt, b.String())
+	answer, err := s.opts.Sherlock.CompleteAs(ctx, s.agentID(ai.AutomationAuthor), who, clusters.LocalID, "write a script", draftPrompt, b.String())
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	d := fixDraft(answer, func(ask string) (string, error) {
-		return s.opts.Sherlock.Complete(ctx, who, clusters.LocalID, "fix a script", draftPrompt, ask)
+		return s.opts.Sherlock.CompleteAs(ctx, s.agentID(ai.AutomationAuthor), who, clusters.LocalID, "fix a script", draftPrompt, ask)
 	})
-	s.recordAutomation(r, audit.ActionAutomationScript, "", "draft", audit.OutcomeOK, fmt.Sprintf("Sherlock drafted a script in %d rounds, %d findings left; nothing is saved until a person saves it", d.Rounds, len(d.Findings)))
-	answerJSON(w, r, map[string]any{"text": d.Text, "header": d.Header, "findings": d.Findings, "questions": d.Questions, "notes": d.Notes, "rounds": d.Rounds})
+	out := map[string]any{"text": d.Text, "header": d.Header, "findings": d.Findings, "questions": d.Questions, "notes": d.Notes, "rounds": d.Rounds}
+	// The Automation author's draft always goes to the Script reviewer,
+	// when it is on, before anyone sees it (Phase 12).
+	reviewed := ""
+	if s.opts.AI != nil && s.opts.AI.Usable(ai.ScriptReviewer, "") == "" && strings.TrimSpace(d.Text) != "" {
+		if text, err := s.opts.Sherlock.CompleteAs(ctx, ai.ScriptReviewer, who, clusters.LocalID, "review a draft", reviewPrompt, d.Text); err == nil {
+			var rev automation.Review
+			if err := json.Unmarshal([]byte(jsonIn(text)), &rev); err != nil || rev.Summary == "" {
+				rev = automation.Review{Summary: strings.TrimSpace(text)}
+			}
+			out["review"] = rev
+			reviewed = fmt.Sprintf("; the Script reviewer found %d", len(rev.Findings))
+		}
+	}
+	s.recordAutomation(r, audit.ActionAutomationScript, "", "draft", audit.OutcomeOK, fmt.Sprintf("Sherlock drafted a script in %d rounds, %d findings left%s; nothing is saved until a person saves it", d.Rounds, len(d.Findings), reviewed))
+	answerJSON(w, r, out)
+}
+
+// agentID is the agent that answers a model call (Phase 12): "" is
+// Sherlock, the only one without the agents.
+func (s *Server) agentID(id string) string {
+	if s.opts.AI == nil {
+		return ""
+	}
+	return id
 }
 
 // factsSummary says what kinds of node there are, for a draft to fit.
@@ -522,7 +546,7 @@ func (s *Server) postAutomationReview(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("no %s v%d", name, n))
 		return
 	}
-	text, err := s.opts.Sherlock.Complete(r.Context(), s.watsonWho(r).Audit, clusters.LocalID, "review a script", reviewPrompt, v.Text)
+	text, err := s.opts.Sherlock.CompleteAs(r.Context(), s.agentID(ai.ScriptReviewer), s.watsonWho(r).Audit, clusters.LocalID, "review a script", reviewPrompt, v.Text)
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return

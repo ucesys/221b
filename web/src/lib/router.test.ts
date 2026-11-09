@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { adminHref, apiPath, clusterHref, clusterPageHref, href, listParam, parseHash, setRouteForTests, TABS, withParams } from './router'
+import { adminHref, apiPath, casesHref, clusterHref, clusterPageHref, href, listParam, parseHash, setRouteForTests, TABS, withParams } from './router'
+import { casesItemOf } from './casesItem'
 
 describe('routes', () => {
   it('parses the tab, path and parameters', () => {
@@ -99,3 +100,51 @@ describe("renamed Automation pages", () => {
     expect(parseHash("#/automation/params").tab).toBe("variables");
   });
 });
+
+describe('the Cases area (CS-01, CS-06)', () => {
+  it('reads its tabs and what follows them', () => {
+    expect(parseHash('#/cases')).toMatchObject({ view: 'cases', cluster: 'local', path: ['inbox'] })
+    expect(parseHash('#/cases/inbox?kind=reports')).toMatchObject({ view: 'cases', path: ['inbox'] })
+    expect(parseHash('#/cases/reports/12')).toMatchObject({ view: 'cases', path: ['inbox', 'report', '12'] })
+    expect(parseHash('#/cases/cases/7')).toMatchObject({ view: 'cases', path: ['inbox', 'case', '7'] })
+    // No carry-over marks since wave 6: the address is the case's own number.
+    expect(parseHash('#/cases/cases/7').params.get('was')).toBeNull()
+    expect(parseHash('#/cases/cases')).toMatchObject({ view: 'cases', path: ['inbox'] })
+    expect(parseHash('#/cases/known/KI-3')).toMatchObject({ view: 'cases', path: ['mycroft', 'known', 'KI-3'] })
+    expect(parseHash('#/cases/knowledge/apps/shop')).toMatchObject({ path: ['mycroft', 'wiki', 'apps', 'shop'] })
+    // Mycroft's own tabs (Phase 12, wave 5, MY-01): exceptions left the wiki.
+    expect(parseHash('#/cases/knowledge/exceptions/EX-3')).toMatchObject({ view: 'cases', path: ['mycroft', 'exceptions', 'EX-3'] })
+    expect(parseHash('#/cases/mycroft/wiki/add')).toMatchObject({ view: 'cases', path: ['mycroft', 'wiki', 'add'] })
+    expect(parseHash('#/c/dev/cases/runs/run-4')).toMatchObject({ view: 'cases', cluster: 'dev', path: ['jobs', 'runs', 'run-4'] })
+    expect(parseHash('#/cases/bogus')).toMatchObject({ view: 'cases', path: ['inbox'] })
+  })
+
+  it('opens the old RCAs addresses on the Inbox showing all, closed cases too: an RCA is part of its case (wave 6e)', () => {
+    for (const hash of ['#/cases/mycroft/rcas', '#/cases/mycroft/rcas/RCA-4', '#/cases/knowledge/rcas', '#/cases/knowledge/rcas/RCA-4', '#/c/dev/cases/mycroft/rcas/RCA-4?q=disk']) {
+      const r = parseHash(hash)
+      expect(r, hash).toMatchObject({ view: 'cases', path: ['inbox'] })
+      expect(r.params.get('show'), hash).toBe('all')
+    }
+    // The cluster stays; an old RCA's id opens nothing, and what else the address asked is kept.
+    expect(parseHash('#/c/dev/cases/mycroft/rcas/RCA-4?q=disk')).toMatchObject({ cluster: 'dev' })
+    expect(parseHash('#/c/dev/cases/mycroft/rcas/RCA-4?q=disk').params.get('q')).toBe('disk')
+    expect(casesItemOf(parseHash('#/cases/mycroft/rcas/RCA-4'))).toBeNull()
+  })
+
+  it('opens the old Administration › Approvals link on the Inbox, filtered to approvals', () => {
+    const r = parseHash('#/admin/approvals')
+    expect(r).toMatchObject({ view: 'cases', path: ['inbox'] })
+    expect(r.params.get('kind')).toBe('approvals')
+    expect(parseHash('#/c/dev/admin/approvals')).toMatchObject({ view: 'cases', cluster: 'dev' })
+  })
+
+  it('builds its links in the cluster open now, and keeps parameters', () => {
+    setRouteForTests('#/')
+    expect(casesHref()).toBe('#/cases/inbox')
+    expect(casesHref('reports', ['12'], { open: 'true' })).toBe('#/cases/reports/12?open=true')
+    setRouteForTests('#/c/dev/pods')
+    expect(casesHref('known')).toBe('#/c/dev/cases/known')
+    expect(withParams(parseHash('#/cases/mycroft/known?open=true'), { q: 'pay' })).toBe('#/cases/mycroft/known?open=true&q=pay')
+    setRouteForTests('#/')
+  })
+})

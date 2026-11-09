@@ -36,8 +36,15 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/automation"
+	"github.com/ucesys/221b/server/internal/backup"
+	"github.com/ucesys/221b/server/internal/cards"
+	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
+	"github.com/ucesys/221b/server/internal/fixes"
+	"github.com/ucesys/221b/server/internal/issues"
+	"github.com/ucesys/221b/server/internal/jobs"
+	"github.com/ucesys/221b/server/internal/knowledge"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/ldap"
@@ -419,7 +426,44 @@ func run(args []string) error {
 			return fmt.Errorf("-sherlock-provider: %w", err)
 		}
 	}
+	// The AI agents (Phase 12, ADR-74 to ADR-79): Sherlock's provider and
+	// key become the default provider, and every agent starts on its model.
+	aiSvc, err := openAI(ctx, restCfg, cfg, secretRef, aiOptions{shared: shared, keys: keys, chartProvider: chartProvider, log: log.With("component", "ai")})
+	if err != nil {
+		return err
+	}
+	if aiSvc.stored != nil {
+		stored = append(stored, aiSvc.stored)
+	}
+	// Mycroft's knowledge answers ask_knowledge (Phase 12), with the open
+	// known issues it matches (CF-43); both are opened below, once what
+	// the console knows can be read.
+	var knowledgeSvc *knowledge.Service
+	var knownSvc *issues.Service
+	var fixesSvc *fixes.Service
 	sherlockSvc := sherlock.New(sherlock.Options{
+		Agent:    aiSvc.Agent,
+		OnAnswer: aiSvc.OnAnswer,
+		Knowledge: func(ctx context.Context, q string, limit int) ([]sherlock.KnowledgeHit, error) {
+			if knowledgeSvc == nil && knownSvc == nil && fixesSvc == nil {
+				return nil, errors.New("the knowledge base is not open yet")
+			}
+			var out []sherlock.KnowledgeHit
+			var err error
+			if knowledgeSvc != nil {
+				out, err = knowledgeHits(knowledgeSvc)(ctx, q, limit)
+			}
+			if knownSvc != nil {
+				out = append(out, knownHits(ctx, knownSvc, q)...)
+			}
+			if fixesSvc != nil {
+				out = append(out, fixHits(ctx, fixesSvc, q)...)
+			}
+			if len(out) > 0 {
+				return out, nil
+			}
+			return out, err
+		},
 		CommandOK: func(line string) error { _, err := watson.Parse(line); return err },
 		Client: &sherlock.Client{BaseURL: cfg.SherlockAPIURL, Key: keys.Key, HTTP: &http.Client{Timeout: 5 * time.Minute}, Retries: 2, Backoff: 2 * time.Second,
 			Provider: func() sherlock.Provider {
@@ -437,6 +481,8 @@ func run(args []string) error {
 		Audit:   auditLog,
 		Logger:  log.With("component", "sherlock"),
 	})
+	aiSvc.SetEngine(sherlockSvc)
+	go aiSvc.Run(ctx, 10*time.Second)
 	go func() {
 		t := time.NewTicker(time.Minute)
 		defer t.Stop()
@@ -463,6 +509,8 @@ func run(args []string) error {
 				if err := keys.Reload(ctx); err != nil {
 					log.Warn("reading the Claude API key failed", "err", err)
 				}
+				aiSvc.Reload(ctx)
+				go aiSvc.CheckBaselines(ctx)
 				shared.Reload(ctx)
 				if err := manager.Sync(ctx); err != nil {
 					log.Warn("reading the cluster connections failed", "err", err)
@@ -471,11 +519,21 @@ func run(args []string) error {
 		}
 	}()
 
+	// --- Helm repositories (Phase 12, wave 5, ADR-123 to ADR-125): the
+	// chart repositories and OCI registries applications install from
+	// besides git; the list beside the settings, each password or token
+	// in the Secret <release>-helm-repositories.
+	helmRepos, err := openHelmRepos(cfg, restCfg, spendBackend)
+	if err != nil {
+		return err
+	}
+	// --- end of the Helm repositories.
 	// Watson (Phase 6): commands run as the person who approved them.
 	watsonSvc := watson.New(watson.Options{
 		Audit:  auditLog,
 		Logger: log.With("component", "watson"),
 		Apps:   appStore,
+		Repos:  helmRepos,
 		TwoPerson: func(c watson.Cluster) bool {
 			return c.Env == clusters.EnvProduction && shared.Current().WatsonOrDefault().TwoPerson
 		},
@@ -518,11 +576,56 @@ func run(args []string) error {
 	} else {
 		log.Warn("the SSH authority's key is kept in memory and made again on restart; paired nodes then need pairing again (set -connections-secrets to keep it in a Secret)")
 	}
+	// Hosts outside Kubernetes (Phase 12) are kept beside the pairings and
+	// shown on their cluster's Nodes tab as they are read or written.
+	hosts := nodessh.NewHosts(spendBackend)
+	hosts.OnRead(func(all map[string]nodessh.Host) {
+		by := nodessh.ByCluster(all)
+		for _, c := range manager.List() {
+			if st, _, ok := manager.Lookup(c.ID); ok && st != nil {
+				st.SetHosts(nodessh.HostRows(by[c.ID]))
+			}
+		}
+	})
+	go func() {
+		// Another replica's writes, and the first read: the leader shows
+		// them within a refresh.
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			lctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			if _, err := hosts.Load(lctx); err != nil {
+				log.Warn("the hosts could not be read", "err", err)
+			}
+			cancel()
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
 	sshSvc := nodessh.New(nodessh.Options{
 		CA:       nodessh.NewCA(caStore),
 		Pairings: nodessh.NewPairings(spendBackend),
-		Console:  console,
-		Logger:   log.With("component", "ssh"),
+		Hosts:    hosts,
+		// A host that takes its hostname keeps its place in lists of nodes.
+		OnRename: func(ctx context.Context, cluster, from, to string) {
+			if _, err := shared.RenameNode(ctx, cluster, from, to); err != nil {
+				log.Warn("a renamed host's lists of nodes could not follow", "cluster", cluster, "from", from, "to", to, "err", err)
+			}
+		},
+		IsNode: func(cluster, name string) bool {
+			_, client, ok := manager.Lookup(cluster)
+			if !ok || client == nil {
+				return false
+			}
+			nodes, ok := client.(interface{ Node(string) *corev1.Node })
+			return ok && nodes.Node(name) != nil
+		},
+		Mask:    func(w io.Writer, secrets []string) io.Writer { return automation.NewMask(w, secrets) },
+		Console: console,
+		Logger:  log.With("component", "ssh"),
 		NodeAddr: func(cluster, node string) (string, error) {
 			_, client, ok := manager.Lookup(cluster)
 			if !ok || client == nil {
@@ -598,6 +701,10 @@ func run(args []string) error {
 				}
 				n := nodes.Node(node)
 				if n == nil {
+					// A host outside Kubernetes (Phase 12).
+					if _, ok, _ := hosts.Known(cluster, node); ok {
+						return automation.NodeState{Host: true}, true
+					}
 					return automation.NodeState{}, false
 				}
 				st := automation.NodeState{}
@@ -640,6 +747,174 @@ func run(args []string) error {
 			},
 		})
 	}
+	// --- Jobs (Phase 12, ADR-90 to ADR-93): the agents on their own, with
+	// their runs in <release>-runs; the report triage job is the issue
+	// service's investigator.
+	jobsW, err := openJobs(ctx, cfg, restCfg, manager, auditLog, elector.IsLeader, log)
+	if err != nil {
+		return err
+	}
+	if jobsW.stored != nil {
+		stored = append(stored, jobsW.stored)
+	}
+	// --- end of the jobs' opening.
+	// The issue service (Phase 12, docs/issues.md): reports, known issues
+	// and services in a ConfigMap of its own; its timers run on the leader.
+	// --- Cases replace reports (Phase 12, wave 5, ADR-113): the cases are
+	// kept there whether or not people report problems (issues.enabled,
+	// which offers the report page and the issue API, issueAPI below).
+	var issueSvc, issueAPI *issues.Service
+	var issueStored *kv.Limited
+	{
+		svc, l, err := openIssues(ctx, cfg, restCfg, manager, auditLog, jobsW.investigator(), log)
+		if err != nil {
+			return err
+		}
+		if l != nil {
+			stored = append(stored, l)
+		}
+		issueStored = l
+		issueSvc = svc
+		knownSvc = svc
+		jobsW.setIssues(issueSvc)
+		go issueSvc.Run(ctx, 5*time.Minute, activity.Active)
+		if cfg.Issues {
+			issueAPI = issueSvc
+		}
+	}
+	// --- end of cases.
+	mycroftProposals := &knowledgeProposer{}
+	var knowledgeStored *kv.Limited
+	// --- Knowledge (Phase 12, ADR-94 to ADR-98): Mycroft's sources, the
+	// wiki's local copy and index on every replica, and the Confluence
+	// publisher, which writes on the leader.
+	{
+		svc, l, wl, err := openKnowledge(ctx, cfg, restCfg, knowledgeOptions{auditLog: auditLog, leads: elector.IsLeader, model: sherlockSvc,
+			console: consoleKnowledge{manager: manager, hosts: hosts, settings: shared, apps: appStore, auto: autoStore}, issues: issueSvc, proposer: mycroftProposals, log: log})
+		if err != nil {
+			return err
+		}
+		if l != nil {
+			stored = append(stored, l)
+		}
+		if wl != nil {
+			stored = append(stored, wl)
+		}
+		knowledgeStored = l
+		knowledgeSvc = svc
+		go func() {
+			knowledgeSvc.Start(ctx)
+			knowledgeSvc.Run(ctx)
+		}()
+	}
+	// --- end of the knowledge.
+	// --- Watson cards (Phase 12, ADR-99 to ADR-102): the agents'
+	// proposals, durable in <release>-cases, with the console actions they
+	// may carry; expired on the leader.
+	cardStore, cardsStored, err := openCards(ctx, cfg, restCfg, cardsOptions{auditLog: auditLog, manager: manager, shared: shared, agents: aiSvc.Service, leads: elector.IsLeader, log: log.With("component", "cards")})
+	if err != nil {
+		return err
+	}
+	if cardsStored != nil {
+		stored = append(stored, cardsStored)
+	}
+	cardConsole := cards.Console{Fleets: fleetBook{shared}, Audit: auditLog, LoginUser: func() string { return toolboxCfg.SSH.LoginUser }}
+	if autoStore != nil {
+		cardConsole.Params = autoStore
+	}
+	if autoEngine != nil && toolboxCfg.SSH.Enabled {
+		cardConsole.Hosts = sshSvc
+	}
+	cardStore.RegisterConsole(cardConsole)
+	go cardStore.Run(ctx, 30*time.Second)
+	// What the jobs propose waits as cards (JB-15, WC-01).
+	jobsW.svc.SetProposer(jobsProposer{cardsProposer{cardStore}})
+	mycroftProposals.cards.Store(&cardsProposer{cardStore})
+	registerKnowledgeJobs(knowledgeSvc)
+	// --- end of Watson cards.
+	// --- Case work (Phase 12, ADR-105 to ADR-107; wave 6): the cases'
+	// settings in <release>-casework, each case in its own ConfigMap; their
+	// analysis is a job, and the changes it proposes are cards. The runs'
+	// findings are routed into cases (jobs.Router), and the exceptions and
+	// RCAs are the lessons'.
+	caseSvc, caseStored, err := openCasework(ctx, cfg, restCfg, manager, jobsW.svc, issueSvc, auditLog, elector.IsLeader, log)
+	if err != nil {
+		return err
+	}
+	if caseStored != nil {
+		stored = append(stored, caseStored)
+	}
+	caseSvc.SetCards(cardStore)
+	// --- A proposed change names the cases it resolves (Phase 12, wave
+	// 6b, CF-29): a card applied, failed, rejected or expired acts on the
+	// cases it resolves; the cases' leader tick catches up with what this
+	// hook misses. The cases check what a run's proposals name
+	// (jobs.Resolver, the router set below).
+	cardStore.OnChange(caseSvc.CardChanged)
+	// --- Findings, exceptions and RCAs (Phase 12, ADR-108 to ADR-110):
+	// the accepted exceptions the runs leave out, and the cases' RCAs, in
+	// the casework ConfigMap beside the cases; written to the wiki too when
+	// one is kept.
+	var lessonsBackend kv.Backend
+	if caseStored != nil {
+		lessonsBackend = caseStored
+	}
+	lessonsSvc := openLessons(lessonsBackend, auditLog, knowledgeSvc, log)
+	// --- Fixes (wave 6g, CF-50 to CF-55): beside the exceptions; the
+	// cases save them, the agents read the active ones, the daily
+	// housekeeping keeps them from repeating.
+	fixesSvc = openFixes(lessonsBackend, auditLog, log)
+	caseSvc.SetFixes(fixesSvc)
+	jobs.Register(caseSvc.HousekeepingKind())
+	// --- One flow for findings and cases (Phase 12, wave 6): each finding
+	// of a run becomes a case or joins one; its object is checked on its
+	// cluster; the exceptions go stale after Settings › Cases' days.
+	caseSvc.SetLessons(lessonsSvc)
+	lessonsSvc.SetStaleDays(caseSvc.StaleDays)
+	// Mycroft › Exceptions names each exception's cluster, and New
+	// exception offers the connected clusters with the validation rules
+	// seen on each (build 14).
+	lessonsSvc.SetClusters(caseSvc.ClusterList, caseSvc.ChecksSeen)
+	jobsW.svc.SetRouter(caseSvc)
+	// The validation rules as they stand (ADR-138): what the agents are
+	// offered and their findings are checked against.
+	jobsW.svc.SetRules(caseSvc.Rules().Book)
+	jobs.SetRuleMeaning(caseSvc.Rules().Meaning)
+	jobsW.svc.SetObjects(objectsOf(manager))
+	// --- Alerts and cases (CF-77 to CF-79): an alert run that sent its
+	// findings to a case acknowledges its alert in the job's name, and the
+	// cases' safety net watches the alerts the jobs' leader reads.
+	jobsW.svc.SetAcker(alertAcker{manager: manager, settings: shared})
+	jobsW.svc.SetAlertWatcher(caseSvc.WatchAlerts)
+	// The clean start (CF-23) runs once on the leader, before the cases'
+	// loops start.
+	{
+		st := casework.CleanStores{Cases: issueSvc.Cases()}
+		if issueStored != nil {
+			st.Issues = issueStored
+		}
+		if caseStored != nil {
+			st.Casework = caseStored
+		}
+		if jobsW.stored != nil {
+			st.Runs = jobsW.stored
+		}
+		if cardsStored != nil {
+			st.Cards = cardsStored
+		}
+		if knowledgeStored != nil {
+			st.Knowledge = knowledgeStored
+		}
+		go func() {
+			runCleanStart(ctx, cfg, st, knowledgeSvc, elector.IsLeader, auditLog, log)
+			// The fixes of the cases closed as Fixed before (CF-54), once,
+			// after any clean start.
+			runFixesImport(ctx, caseSvc, elector.IsLeader, log)
+		}()
+	}
+	// --- end of the exceptions and RCAs.
+	go caseSvc.Run(ctx)
+	// --- end of case work.
 	sessionsMgr := sessions.New(sessions.Options{
 		Config:  toolboxCfg,
 		SSH:     sshSvc,
@@ -662,6 +937,53 @@ func run(args []string) error {
 			}
 		}()
 	}
+	// --- Backups (Phase 12, ADR-80 to ADR-82): every package registers
+	// its part of a backup in backup.Default (the API registers the
+	// console's own). The scheduled backups to S3 keep their settings
+	// beside the console's, their keys in the Secret <release>-backup, and
+	// run on the leader only.
+	var backupKeys backup.SecretStore = &backup.MemorySecret{}
+	if cfg.ConnectionsSecrets != "" {
+		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
+		sk, err := kube.NewSecretKey(restCfg, ns, prefix+"-backup", map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "backup", "app.kubernetes.io/managed-by": "221b"})
+		if err != nil {
+			return fmt.Errorf("the backups' Secret: %w", err)
+		}
+		backupKeys = sk
+	}
+	// The backups' key (ADR-137): the Secret <release>-backup-key, made
+	// here at start when there is none, and read again for every backup
+	// and restore, so a key put back by hand is the one used. Never logged.
+	if cfg.ConnectionsSecrets != "" {
+		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
+		name := prefix + backup.KeySecretSuffix
+		ks, err := kube.NewSecretKey(restCfg, ns, name, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "backup-key", "app.kubernetes.io/managed-by": "221b"})
+		if err != nil {
+			return fmt.Errorf("the backup key's Secret: %w", err)
+		}
+		ks.WithAnnotations(map[string]string{"helm.sh/resource-policy": "keep"})
+		if k, err := backup.EnsureSecretsKey(ctx, ks); err != nil {
+			log.Warn("the backup key is not ready: backups fail until it is", "secret", ns+"/"+name, "err", err)
+		} else {
+			log.Info("backup key ready", "secret", ns+"/"+name, "fingerprint", k.Fingerprint())
+		}
+		backup.Default.SetKey(name, func(ctx context.Context) (*backup.SecretsKey, error) { return backup.EnsureSecretsKey(ctx, ks) })
+	}
+	backups := backup.NewScheduler(backup.Options{Registry: backup.Default, Store: spendBackend, Secrets: backupKeys, Leads: elector.IsLeader, Audit: auditLog, Version: version.String(), Logger: log.With("component", "backup")})
+	go backups.Run(ctx)
+	registerBackupParts(backup.Default, aiSvc.Service, issueSvc)
+	// --- Jobs (Phase 12): the backups to S3 show as a job, and the jobs'
+	// settings are in every backup.
+	jobs.Register(jobs.BackupKind(backups))
+	registerJobsBackup(backup.Default, jobsW.svc)
+	registerKnowledgeBackup(backup.Default, knowledgeSvc)
+	registerCardsBackup(backup.Default, cardStore) // Watson cards (Phase 12)
+	registerFixesBackup(backup.Default, fixesSvc)
+	registerLessonsBackup(backup.Default, lessonsSvc)  // Findings, exceptions and RCAs (Phase 12)
+	registerHelmReposBackup(backup.Default, helmRepos) // Helm repositories (Phase 12, wave 5)
+	// --- Case work (Phase 12): the cases in every backup.
+	registerCaseworkBackup(backup.Default, caseSvc)
+	// --- end of the backups.
 	rolePrefixes := authCfg.Prefixes
 	if def := roles.DefaultPrefixes(); rolePrefixes.Local == "" || rolePrefixes.LDAP == "" {
 		if rolePrefixes.Local == "" {
@@ -681,13 +1003,27 @@ func run(args []string) error {
 		Version:                 version.String(),
 		Watson:                  watsonSvc,
 		Apps:                    appStore,
+		Repos:                   helmRepos, // Helm repositories (Phase 12, wave 5)
 		SecretsReveal:           cfg.SecretsRead && cfg.SecretsReveal,
 		Sessions:                sessionsMgr,
 		Automation:              autoEngine,
 		AutomationStore:         autoStore,
 		TwoPerson:               twoPerson,
+		Hosts:                   sshSvc,
+		Backup:                  backup.Default,
+		BackupS3:                backups,
+		Issues:                  issueAPI,
+		IssueRoles:              issueRoles(cfg),
+		Jobs:                    jobsW.svc,
+		Knowledge:               knowledgeSvc,
+		Fixes:                   fixesSvc,
+		Lessons:                 lessonsSvc,     // Findings, exceptions and RCAs (Phase 12)
+		Cards:                   cardStore,      // Watson cards (Phase 12)
+		CardRoles:               cardRoles(cfg), // Watson cards (Phase 12)
+		Casework:                caseSvc,        // Case work (Phase 12)
 		Sherlock:                sherlockSvc,
 		SherlockKeys:            keys,
+		AI:                      aiSvc.Service,
 		SherlockDefaultURL:      cfg.SherlockAPIURL,
 		SherlockProviderLocked:  cfg.SherlockLockProvider,
 		SherlockDefaultProvider: chartProvider,
@@ -776,6 +1112,12 @@ func run(args []string) error {
 			return gauges
 		},
 	})
+	// --- Jobs (Phase 12): the agents read through the handler's tools as
+	// the reader identity; the schedules and alerts are looked at on the
+	// leader.
+	jobsW.svc.SetAgents(agentRunner{ai: aiSvc.Service, engine: sherlockSvc, handler: handler, auth: authSvc})
+	go jobsW.svc.Run(ctx)
+	// --- end of the jobs.
 	// The deployed roles are compared with the shipped ones every five
 	// minutes, for the Permissions page, the audit log and rbac.enforce;
 	// on the leader only, and at once when a replica becomes it.

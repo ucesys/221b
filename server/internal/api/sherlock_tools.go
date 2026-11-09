@@ -270,6 +270,64 @@ var sherlockTools = []tool{
 		},
 		run: (*toolbox).review,
 	},
+	{
+		// Phase 12, for the Host doctor and the Automation author: what the
+		// console collected from each paired node, as Automation shows it.
+		def: sherlock.ToolDef{Name: "node_facts", Description: "Facts the console collected from paired nodes over SSH: operating system, family and version, kernel, package manager, init system, CPU, memory, disks, when collected. Only for a SuperAdmin, as Automation is.", InputSchema: toolSchema(nil, map[string]string{"node": "string|Only this node."})},
+		label: func(in map[string]any) string {
+			return "Read the facts of " + firstOf(str(in, "node"), "the nodes")
+		},
+		run: (*toolbox).nodeFacts,
+	},
+	{
+		// Phase 12: Automation's recent runs, read only.
+		def: sherlock.ToolDef{Name: "automation_runs", Description: "Automation's recent runs: script, version, fleet, who started them, when, state and each node's outcome (no output). Only for a SuperAdmin, as Automation is.", InputSchema: toolSchema(nil, map[string]string{"query": "string|Only runs whose text contains this (a script, a node).", "limit": "integer|At most this many (default 20)."})},
+		label: func(in map[string]any) string {
+			return "Read Automation's runs" + suffixIf(" matching ", str(in, "query"))
+		},
+		run: (*toolbox).automationRuns,
+	},
+}
+
+func (tb *toolbox) nodeFacts(ctx context.Context, in map[string]any) sherlock.ToolResult {
+	code, b := tb.get(ctx, "automation/facts", nil)
+	if code != http.StatusOK {
+		return failure(code, b)
+	}
+	var out struct {
+		Nodes []map[string]any `json:"nodes"`
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		return sherlock.ToolResult{Text: "The facts could not be read.", Error: true}
+	}
+	node := str(in, "node")
+	var rows []map[string]any
+	for _, n := range out.Nodes {
+		if node == "" || sget(n, "node") == node {
+			rows = append(rows, n)
+		}
+	}
+	return listResult("nodes", rows, 100, nil)
+}
+
+func (tb *toolbox) automationRuns(ctx context.Context, in map[string]any) sherlock.ToolResult {
+	code, b := tb.get(ctx, "/automation/runs", nil)
+	if code != http.StatusOK {
+		return failure(code, b)
+	}
+	var out struct {
+		Runs []map[string]any `json:"runs"`
+	}
+	if err := json.Unmarshal(b, &out); err != nil {
+		return sherlock.ToolResult{Text: "The runs could not be read.", Error: true}
+	}
+	var rows []map[string]any
+	for _, r := range out.Runs {
+		if matches(r, str(in, "query")) {
+			rows = append(rows, r)
+		}
+	}
+	return listResult("runs", rows, num(in, "limit", 20, 1, 100), nil)
 }
 
 func suffixIf(prefix, v string) string {
@@ -325,6 +383,10 @@ func (tb *toolbox) Run(ctx context.Context, name string, raw json.RawMessage) sh
 // ---------- calling the console's own API as the person ----------
 
 func (tb *toolbox) path(p string) string {
+	if strings.HasPrefix(p, "/") {
+		// A path of the console's own, not a cluster's.
+		return "/api/v1" + p
+	}
 	if tb.cluster == "" || tb.cluster == clusters.LocalID {
 		return "/api/v1/" + p
 	}
@@ -1448,4 +1510,10 @@ func (tb *toolbox) access(ctx context.Context, in map[string]any) sherlock.ToolR
 		}
 	}
 	return listResult(what, out, num(in, "limit", 50, 1, 200), refs)
+}
+
+// ToolDefs are the toolbox's tools, for the agents' tests (Phase 12),
+// which answer them from recorded results.
+func ToolDefs() []sherlock.ToolDef {
+	return (&toolbox{}).Defs()
 }

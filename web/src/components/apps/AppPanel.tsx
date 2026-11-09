@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchAppInspect, fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, inspectRepo, isCard, sourceText, updateApp, type AppDrift, type AppImage, type AppInput, type AppRefs, type AppSource, type AppView, type RefKind, type RepoInspection, type RevisionView } from '../../api/apps'
+import { fetchAppInspect, fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, fromRepository, inspectRepo, isCard, sourceText, updateApp, type AppDrift, type AppImage, type AppInput, type AppRefs, type AppSource, type AppView, type RefKind, type RepoInspection, type RevisionView } from '../../api/apps'
 import { useLiveMeta } from '../../api/live'
 import { useDetails } from '../../api/details'
 import type { ClusterInfo, ReleaseDetails } from '../../api/types'
@@ -111,9 +111,10 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
       .catch((e: unknown) => setErr(e instanceof Error ? e.message : String(e)))
   }, [tab, key, version, imageRev, clusterId, row.namespace, row.name, row.orphan])
 
-  const commit = app?.commit ? app.commit.slice(0, 12) : ''
+  const commit = app?.commit ? shortDigest(app.commit) : ''
 
-  const overview = <SourceCard clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} now={now} />
+  // --- Helm repositories (Phase 12, wave 5): a repository's chart is kept by its version, not a branch.
+  const overview = fromRepository(app?.source) && app ? <RepoSourceCard clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} now={now} /> : <SourceCard clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} now={now} />
 
   const imagesTab = (
     <Card
@@ -276,7 +277,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
                 {commit ? (
                   <>
                     {' '}
-                    · commit <span className="rk-mono" style={{ color: 'var(--fg)' }}>{commit}</span>
+                    · {commit.startsWith('sha256:') ? 'archive' : 'commit'} <span className="rk-mono" style={{ color: 'var(--fg)' }}>{commit}</span>
                   </>
                 ) : (
                   ' · not deployed from it yet'
@@ -481,6 +482,74 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
  * namespace at install. A release the console did not install gets its
  * record here.
  */
+/** A commit, or a repository chart's archive digest, short. */
+function shortDigest(c: string): string {
+  return c.startsWith('sha256:') ? c.slice(0, 19) : c.slice(0, 12)
+}
+
+/**
+ * The Setup card of a release whose chart comes from a Helm repository or
+ * an OCI registry (Phase 12, wave 5, HR-06): the chart, its version (which
+ * Save keeps for the next deploy), the archive last deployed by its
+ * digest, and who changed it last. Another repository or chart is set in
+ * the Source dialog.
+ */
+function RepoSourceCard({ clusterId, row, app, canChange, onResult, now }: { clusterId: string; row: AppRow; app: AppView; canChange: boolean; onResult: (r: WatsonItem | AppView, doing: string) => void; now: number }) {
+  const [version, setVersion] = useState(app.source.ref)
+  const [state, setState] = useState<'saved' | 'saving' | 'error'>('saved')
+  const [error, setError] = useState('')
+  const save = () => {
+    if (version.trim() === app.source.ref) return
+    setState('saving')
+    updateApp(clusterId, row.namespace, row.name, { source: { ...app.source, ref: version.trim(), refKind: 'version' } }).then(
+      (r) => {
+        setState('saved')
+        onResult(r, 'Version saved')
+      },
+      (e: unknown) => {
+        setState('error')
+        setError(e instanceof Error ? e.message : String(e))
+      },
+    )
+  }
+  const digest = app.commit ? shortDigest(app.commit) : ''
+  return (
+    <Card title="Setup" aside={<span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-source-state">{state === 'saving' ? 'Saving…' : state === 'error' ? error : version.trim() !== app.source.ref ? 'Not saved yet: press Save' : 'Saved'}</span>}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '8px 16px' }} data-testid="app-repo-source">
+        <span style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)' }}>
+          {app.source.kind === 'oci' ? 'Chart in an OCI registry' : `Chart of the Helm repository ${app.source.repository ?? ''}`}
+          <span className="rk-mono" style={{ fontSize: 13, fontWeight: 400, color: 'var(--fg)' }}>
+            {app.source.kind === 'oci' ? `${app.source.repo}/${app.source.chart ?? ''}` : `${app.source.repository ?? ''}/${app.source.chart ?? ''}`}
+          </span>
+        </span>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)' }}>
+          Version
+          <span style={{ display: 'flex', gap: 6 }}>
+            <span className="rk-field" style={{ width: 160 }}>
+              <input className="rk-mono" value={version} readOnly={!canChange} onChange={(e) => setVersion(e.target.value)} data-testid="app-src-version" />
+            </span>
+            {canChange && (
+              <button className="rk-btn" disabled={state === 'saving' || version.trim() === app.source.ref || !version.trim()} onClick={save} style={{ height: 30 }} data-testid="app-src-save">
+                Save
+              </button>
+            )}
+          </span>
+        </label>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 18px', fontSize: 12, color: 'var(--fg3)' }}>
+        <span>
+          Archive <span className="rk-mono" style={{ color: 'var(--fg)' }}>{digest ? `${digest}${app.commitSubject ? ` — ${app.commitSubject}` : ''}` : 'not deployed from here yet'}</span>
+          {app.matchedRevision ? ` · renders what revision ${app.matchedRevision} runs` : app.sourceDiff ? ` · ${app.sourceDiff}` : ''}
+        </span>
+        <span title={`kept by ${app.createdBy || 'the console'}, ${fmtTs(app.created)}`}>
+          Last change <span style={{ color: 'var(--fg)' }}>{app.updatedBy || '—'}, {fmtAge(app.updated, now)} ago</span>
+        </span>
+        <span>A new version deploys with Redeploy; another repository or chart is set with Source in the tools menu.</span>
+      </div>
+    </Card>
+  )
+}
+
 /** What was typed into a Source card and not saved, kept per release while the page is open (round 2 review). */
 interface SourceDraft {
   repo: string

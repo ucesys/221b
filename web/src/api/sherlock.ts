@@ -25,6 +25,24 @@ export interface SherlockUsage {
   cache_read_input_tokens: number
 }
 
+/** A part of a question one agent handed to another (Phase 12), with what came back. */
+export interface SherlockHand {
+  id: number
+  from: string
+  fromName: string
+  to: string
+  toName: string
+  task: string
+  status: 'running' | 'done' | 'failed' | 'refused' | 'stopped'
+  text?: string
+  error?: string
+  steps?: SherlockStep[]
+  model?: string
+  usage?: SherlockUsage
+  costUSD?: number
+  hands?: SherlockHand[]
+}
+
 export interface SherlockMsg {
   id: number
   role: 'user' | 'sherlock'
@@ -43,6 +61,12 @@ export interface SherlockMsg {
   costUSD?: number
   /** What the answer changed in the asking window's view (P6U-10). */
   view?: { label: string }[]
+  /** Who answered, when not Sherlock (Phase 12). */
+  agent?: string
+  /** The parts handed to other agents, in order (Phase 12). */
+  hands?: SherlockHand[]
+  /** Who asked, in a case's conversation, which the people who work the case share (CF-47). */
+  asker?: string
 }
 
 export interface Conversation {
@@ -60,6 +84,8 @@ export interface SherlockStatus {
   capped?: string
   model: string
   admin: boolean
+  /** Sherlock's setup skill is on: a SuperAdmin's, while Getting started has a step open (Phase 12). */
+  setup?: boolean
 }
 
 export interface SherlockModel {
@@ -134,6 +160,10 @@ export class SherlockError extends Error {
   ) {
     super(message)
   }
+}
+
+export async function sherlockCall<T>(method: string, path: string, body?: unknown): Promise<T> {
+  return call<T>(method, path, body)
 }
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {

@@ -3,6 +3,7 @@ import type { Fleet, NodeRow } from '../api/types'
 import { COLOR_NAMES, fixCommand, has, missing, newId, nextColor, parseReq, reqsOf, withLabel, LABEL_KEY_RE, LABEL_VAL_RE, splitLabel } from '../lib/fleets'
 import { effectTone, labelText, taintId } from '../lib/nodes'
 import { CloseIcon, CopyIcon, SearchIcon } from './Icons'
+import { ToolsButton } from './toolbox/ToolsMenu'
 import { copyText } from '../lib/clipboard'
 
 /** What the editor opens with: a saved fleet, or a new one, perhaps prefilled. */
@@ -24,6 +25,8 @@ interface Props {
   onClose: () => void
   onSave: (f: Fleet, isNew: boolean) => Promise<void>
   onDelete: (f: Fleet) => Promise<void>
+  /** How the Tools' Collect facts went. */
+  onToast?: (msg: string) => void
 }
 
 function XIcon() {
@@ -82,7 +85,7 @@ function NodeList({ nodes, listed, onChange }: { nodes: NodeRow[]; listed: strin
 }
 
 /** The fleet editor (P4-01): name, description and colour, the labels and taints, and a live preview of the nodes it takes; or, for a list, its nodes. */
-export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: Props) {
+export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete, onToast }: Props) {
   const orig = seed.fleet
   const [name, setName] = useState(orig?.name ?? seed.name ?? '')
   const [desc, setDesc] = useState(orig?.desc ?? '')
@@ -108,6 +111,8 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: 
   }, [orig])
 
   const title = orig ? orig.name : name.trim() || 'New fleet'
+  // The saved fleet's nodes, for its Tools: what is being edited is not saved yet.
+  const saved = useMemo(() => (orig ? nodes.filter((n) => has(orig, n)) : []), [orig, nodes])
   const draft = { labels, taints }
   const reqCount = labels.length + taints.length
   const members = useMemo(() => (reqCount ? nodes.filter((n) => has(draft, n)) : []), [nodes, labels, taints]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -235,6 +240,7 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete }: 
             <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{orig ? 'Edit fleet' : 'New fleet'}</span>
             <h2 style={{ margin: 0, fontSize: 17, fontWeight: 600, lineHeight: 1.3, overflowWrap: 'anywhere' }}>{title}</h2>
           </div>
+          {orig && <ToolsButton target={{ kind: 'fleet', name: orig.name, nodes: saved.map((n) => n.name), kube: saved.filter((n) => !n.host).map((n) => n.name), onDone: onToast }} />}
           <button ref={closeRef} className="rk-icon-btn" aria-label="Close the fleet editor" title="Close (Esc)" onClick={onClose}>
             <CloseIcon />
           </button>

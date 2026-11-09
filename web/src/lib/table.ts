@@ -39,6 +39,8 @@ export interface ColumnDef<R> {
   /** The first column: always shown, and the row's accessible name. */
   sortValue: (r: R, now: number) => number | string | null
   cell: (r: R, now: number) => ReactNode
+  /** Before the heading's sort button: the Nodes table's box that picks every node in view. */
+  head?: () => ReactNode
   /** The export columns this column becomes; one or more. */
   export: (r: R, now: number) => ExportValue[]
 }

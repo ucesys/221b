@@ -825,6 +825,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
           fleets={defs}
           nodes={nodes}
           now={now}
+          onToast={onToast}
           onClose={() => setEditor(null)}
           onSave={async (f, isNew) => {
             const next = isNew ? [...defs, f] : defs.map((x) => (x.id === f.id ? f : x))

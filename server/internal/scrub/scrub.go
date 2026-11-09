@@ -120,8 +120,10 @@ func Text(s string) string {
 				if len(sub) <= sc.keep {
 					return Redacted
 				}
-				// A value that is itself already redacted stays as it is.
-				if strings.Contains(m[len(sub[sc.keep]):], Redacted) {
+				// A value that is itself already redacted stays as it is:
+				// cut at its "]" by a value that ends there, it starts with
+				// the redaction's rest, so scrubbing again changes nothing.
+				if v := m[len(sub[sc.keep]):]; strings.Contains(v, Redacted) || strings.HasPrefix(v, Redacted[:len(Redacted)-1]) {
 					return m
 				}
 				return sub[sc.keep] + Redacted

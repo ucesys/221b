@@ -451,3 +451,42 @@ test('picked nodes use the Fleets tab\'s bar and dialog, and go to an SSH pairin
   await expect(bar).toHaveCount(0)
   await expect(pick(a.name)).not.toBeChecked()
 })
+
+test('the Node heading picks every node in view, the bar collects their facts, and a fleet\'s drawer has Tools for its nodes (asked November 4, 2026)', async ({ page, request }) => {
+  const names = nodeRows(await snapshot(request)).map((r) => r.name).sort(compareNatural)
+  const bar = page.getByTestId('fleet-nodebar')
+  const all = page.getByTestId('fleet-pick-all')
+  await page.goto('/#/nodes')
+  await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  await expect(all).not.toBeChecked()
+  await all.check()
+  await expect(bar).toContainText(`Picked ${names.length} nodes`)
+  // Collect facts says how it went, whatever this console's Automation allows.
+  await bar.getByTestId('fleet-nodebar-facts').click()
+  await expect(page.locator('.rk-toast')).toContainText(/Collected facts from \d+ of \d+ nodes|Could not collect facts/, { timeout: 30_000 })
+  await all.uncheck()
+  await expect(bar).toHaveCount(0)
+
+  // A fleet's drawer: the wrench lists Pair for SSH and Collect facts for its nodes.
+  const one = names[0]!
+  const put = (fleets: unknown[]) => page.evaluate(async (body) => (await fetch('/api/v1/fleets', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fleets: body }) })).status, fleets)
+  expect(await put([{ id: 'tools', name: 'Tools fleet', color: 2, labels: [], taints: [], kind: 'nodes', nodes: [one] }])).toBe(200)
+  // Watson runs where Sherlock is on: the tools open through it.
+  const sherlock = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
+  const same = { 'Sec-Fetch-Site': 'same-origin' }
+  expect((await page.request.put('/api/v1/sherlock/config', { data: sherlock, headers: same })).status()).toBe(200)
+  try {
+    await page.reload()
+    await page.getByTestId('node-fleets').getByTestId('node-fleet-edit').click()
+    const editor = page.getByTestId('fleet-editor')
+    await editor.getByTestId('tools-fleet-Tools fleet').click()
+    const menu = page.getByTestId('tools-menu')
+    await expect(menu).toContainText('Tools for fleet Tools fleet · 1 node')
+    await expect(menu.getByTestId('tool-ssh-pair')).toBeVisible()
+    await expect(menu.getByTestId('tool-facts')).toBeVisible()
+    await page.keyboard.press('Escape')
+  } finally {
+    await put([])
+    await page.request.put('/api/v1/sherlock/config', { data: { ...sherlock, clusters: {} }, headers: same })
+  }
+})

@@ -1,0 +1,645 @@
+openapi: 3.0.3
+info:
+  title: 221B issue service
+  version: "1"
+  description: |
+    The issue service's API (Phase 12, docs/issues.md, IS-23). People report
+    problems in plain text; the service matches them against known issues and
+    keeps reporters told until they are resolved.
+
+    Since Phase 12's wave 5 a report is a case (docs/issues.md, CU-01 to
+    CU-14), and since wave 6 every problem is one case (CF-01 to CF-24):
+    every case of the console is one of these records, whatever opened it
+    (a person's report, New Case, an alert, or a finding of a job's run).
+    A case is `new`, `inProgress` or `closed` with exactly one outcome
+    (`fix`, `duplicate`, `notAProblem`, `noFixNeeded`, `knownIssue`,
+    `exception`) and its `explanation`; priorities are 0 (P0, an outage) to
+    4 (P4, a question). The paths stay; an operator's list holds the cases
+    opened in the console and found by agents too, which have no reporter,
+    and its rows carry no conversation (read one case for it).
+
+    Every path but the intake takes the console's session cookie: sign in at
+    `/signin`. Requests that change something must come from the console's own
+    pages (`Sec-Fetch-Site: same-origin` or a matching `Origin`), as the rest of
+    221B's API (X-06). The intake takes an API token and nothing else.
+
+    What a caller sees depends on what they may do: operators (the chart's
+    `issues.operatorRoles`) see every report as it is kept; anyone else sees
+    their own reports, the ones they filed or follow, and every report on a
+    service they are a contact of, as its reporter sees it (IS-21, IS-22).
+
+    Errors are `{"error": "<what to do>"}` with 400 (invalid), 401 (not signed
+    in), 403 (not allowed), 404 (not found, also for a report you may not see),
+    409 (changed meanwhile, try again), 429 (too many reports this hour) or 507
+    (the store is full, and what to remove).
+servers:
+  - url: /api/issues/v1
+security:
+  - session: []
+tags:
+  - name: reporters
+  - name: operators
+  - name: settings
+  - name: intake
+paths:
+  /me:
+    get:
+      tags: [reporters]
+      summary: Who is calling, what they may do, and the page's settings
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Me" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+  /reports:
+    get:
+      tags: [reporters, operators]
+      summary: List reports
+      description: Without scope=all, the caller's own, filed and followed reports; with it, every report the caller may see.
+      parameters:
+        - { name: scope, in: query, schema: { type: string, enum: [mine, all] } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/Status" } }
+        - { name: open, in: query, schema: { type: boolean } }
+        - { name: service, in: query, schema: { type: string } }
+        - { name: owner, in: query, schema: { type: string } }
+        - { name: priority, in: query, schema: { type: string, example: P2 } }
+        - { name: known, in: query, schema: { type: string, example: KI-3 } }
+        - { name: type, in: query, schema: { $ref: "#/components/schemas/CaseType" } }
+        - { name: q, in: query, description: "Words the report's number, text, reporter or incident number must all hold", schema: { type: string } }
+      responses:
+        "200":
+          description: Newest first
+          content: { application/json: { schema: { type: object, properties: { reports: { type: array, items: { $ref: "#/components/schemas/Report" } } } } } }
+    post:
+      tags: [reporters]
+      summary: Report a problem
+      description: |
+        Scrubbed of anything that looks like a credential (removed says so),
+        numbered, matched; linked to a known issue at or above the match
+        threshold. Rate-limited per reporter per hour, operators excepted. `for`
+        files for someone else, for operators only. `priority` (1 to 4) and
+        `cluster` (an id from `GET /me`'s clusters) are the reporter's choice
+        (CF-64): an unknown cluster or a priority outside 1 to 4 is a 400.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Submission" } } } }
+      responses:
+        "201": { description: Received, content: { application/json: { schema: { $ref: "#/components/schemas/Receipt" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /reports/{n}:
+    parameters: [{ $ref: "#/components/parameters/Number" }]
+    get:
+      tags: [reporters, operators]
+      summary: One report
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [operators]
+      summary: Triage
+      description: Fields left out stay as they are. Marking a duplicate closes the report as Duplicate unless a status is given.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Triage" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /reports/{n}/messages:
+    parameters: [{ $ref: "#/components/parameters/Number" }]
+    post:
+      tags: [reporters, operators]
+      summary: Add a message
+      description: The reporter's answers a question and stops the Need info clock; an operator's is sent at once, or kept as an internal note.
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Text" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+  /reports/{n}/drafts:
+    parameters: [{ $ref: "#/components/parameters/Number" }]
+    post:
+      tags: [operators]
+      summary: Keep a reply as a draft
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Text" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+  /reports/{n}/drafts/{id}/send:
+    parameters: [{ $ref: "#/components/parameters/Number" }, { name: id, in: path, required: true, schema: { type: integer } }]
+    post:
+      tags: [operators]
+      summary: Send a draft, as it is or with edited text
+      description: The only way a draft reaches the reporter (IS-14).
+      requestBody: { required: false, content: { application/json: { schema: { $ref: "#/components/schemas/Text" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+  /reports/{n}/drafts/{id}:
+    parameters: [{ $ref: "#/components/parameters/Number" }, { name: id, in: path, required: true, schema: { type: integer } }]
+    delete:
+      tags: [operators]
+      summary: Discard a draft
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+  /reports/{n}/confirm:
+    parameters: [{ $ref: "#/components/parameters/Number" }]
+    post:
+      tags: [reporters]
+      summary: Answer a fix
+      description: works true closes a Fixed report as Fixed ("It works"); false takes it back to Investigating ("Still broken").
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [works], properties: { works: { type: boolean } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+  /reports/{n}/reopen:
+    parameters: [{ $ref: "#/components/parameters/Number" }]
+    post:
+      tags: [reporters]
+      summary: Reopen a closed report within the reopen window (any time for an operator), with an optional reason
+      requestBody: { required: false, content: { application/json: { schema: { type: object, properties: { reason: { type: string, maxLength: 300 } } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+        "400": { $ref: "#/components/responses/Error" }
+  /reports/{n}/unlink:
+    parameters: [{ $ref: "#/components/parameters/Number" }]
+    post:
+      tags: [reporters]
+      summary: '"No, mine is something else": leave the known issue and go to investigation'
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+  /reports/{n}/watch:
+    parameters: [{ $ref: "#/components/parameters/Number" }]
+    put:
+      tags: [reporters]
+      summary: Follow a report you may see
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+    delete:
+      tags: [reporters]
+      summary: Stop following it
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+  /known:
+    get:
+      tags: [reporters, operators]
+      summary: Known issues
+      description: For anyone, the open ones and planned maintenance not yet over, never one made inactive as a duplicate (CF-63); with all=true, for operators, every one, proposals and inactive ones included.
+      parameters: [{ name: all, in: query, schema: { type: boolean } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { known: { type: array, items: { $ref: "#/components/schemas/Known" } } } } } } }
+    post:
+      tags: [operators]
+      summary: Create a known issue
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/KnownInput" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Known" } } } }
+  /known/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, example: KI-3 } }]
+    get:
+      tags: [reporters, operators]
+      summary: One known issue
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Known" } } } }
+    patch:
+      tags: [operators]
+      summary: Change a known issue; resolving it marks its open reports Fixed
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/KnownInput" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Known" } } } }
+    delete:
+      tags: [operators]
+      summary: Delete a known issue and unlink its reports
+      responses:
+        "200": { description: OK }
+  /known/{id}/updates:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      tags: [operators]
+      summary: Add a dated update, and change the status when given
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [text], properties: { text: { type: string }, status: { $ref: "#/components/schemas/KnownStatus" } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Known" } } } }
+  /known/{id}/accept:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      tags: [operators]
+      summary: Accept an agent's proposal, so reports may match it
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Known" } } } }
+  /known/{id}/follow:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    put:
+      tags: [reporters]
+      summary: Follow a known issue, to be told of its updates
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Known" } } } }
+    delete:
+      tags: [reporters]
+      summary: Stop following it
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Known" } } } }
+  /services:
+    get:
+      tags: [reporters, operators]
+      summary: Services; where they run and their contacts for operators only
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { services: { type: array, items: { $ref: "#/components/schemas/Service" } } } } } } }
+    post:
+      tags: [operators]
+      summary: Create a service; its id is made from its name
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Service" } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Service" } } } }
+  /services/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    put:
+      tags: [operators]
+      summary: Replace a service
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Service" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Service" } } } }
+    delete:
+      tags: [operators]
+      summary: Delete a service; its reports' service becomes unknown
+      responses:
+        "200": { description: OK }
+  /match:
+    post:
+      tags: [operators]
+      summary: What a text would match, and the threshold that links it
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Text" } } } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  known: { type: array, items: { $ref: "#/components/schemas/Candidate" } }
+                  services: { type: array, items: { $ref: "#/components/schemas/Candidate" } }
+                  threshold: { type: integer }
+  /updates:
+    get:
+      tags: [reporters]
+      summary: What changed since a time, for the report page
+      parameters: [{ name: since, in: query, schema: { type: string, format: date-time } }]
+      responses:
+        "200":
+          description: Newest first, and the time to ask from next
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  updates: { type: array, items: { type: object, properties: { at: { type: string, format: date-time }, report: { type: integer }, known: { type: string }, text: { type: string } } } }
+                  now: { type: string, format: date-time }
+  /settings:
+    get:
+      tags: [settings]
+      summary: The issue settings (SuperAdmin)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
+        "403": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [settings]
+      summary: Replace the issue settings (SuperAdmin)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Settings" } } } }
+  /tokens:
+    get:
+      tags: [settings]
+      summary: API tokens, without their secrets or hashes (SuperAdmin)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { tokens: { type: array, items: { $ref: "#/components/schemas/Token" } } } } } } }
+    post:
+      tags: [settings]
+      summary: Make a token; its secret is in this answer and nowhere else, ever
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, account, scopes]
+              properties:
+                name: { type: string }
+                account: { type: string, pattern: "^[a-z0-9][a-z0-9._-]{0,62}$" }
+                scopes: { type: array, items: { $ref: "#/components/schemas/Scope" } }
+      responses:
+        "201":
+          description: Made
+          content: { application/json: { schema: { type: object, properties: { token: { $ref: "#/components/schemas/Token" }, secret: { type: string }, note: { type: string } } } } }
+  /tokens/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    delete:
+      tags: [settings]
+      summary: Revoke a token, at once
+      responses:
+        "200": { description: OK }
+  /intake/reports:
+    post:
+      tags: [intake]
+      summary: A system files a report (scope reports:create; for needs reports:onBehalf)
+      security: [{ token: [] }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/Submission" } } } }
+      responses:
+        "201": { description: Received, content: { application/json: { schema: { $ref: "#/components/schemas/Receipt" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+  /intake/reports/{n}:
+    parameters: [{ $ref: "#/components/parameters/Number" }]
+    get:
+      tags: [intake]
+      summary: A report the token's account filed (scope reports:read)
+      security: [{ token: [] }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Report" } } } }
+        "404": { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    session: { type: apiKey, in: cookie, name: 221b_session }
+    token: { type: http, scheme: bearer, description: "A token made under /tokens: 221bis_<id>_<secret>" }
+  parameters:
+    Number: { name: n, in: path, required: true, schema: { type: integer, minimum: 1 } }
+  responses:
+    Error:
+      description: What went wrong and what to do
+      content: { application/json: { schema: { type: object, properties: { error: { type: string } } } } }
+  schemas:
+    Status: { type: string, enum: [new, inProgress, closed] }
+    Outcome: { type: string, enum: [fix, duplicate, notAProblem, noFixNeeded, knownIssue, exception] }
+    KnownStatus: { type: string, enum: [investigating, identified, fixInProgress, resolved] }
+    Scope: { type: string, enum: ["reports:create", "reports:read", "reports:onBehalf"] }
+    Person:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string, description: "A user name, or system:<account>" }
+        name: { type: string }
+        email: { type: string, description: Operators only }
+        system: { type: boolean }
+    Text:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string, maxLength: 4000 }
+        internal: { type: boolean, description: An operator's note the reporter never sees }
+    Submission:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string, maxLength: 4000 }
+        for: { $ref: "#/components/schemas/Person" }
+        incident: { type: string, maxLength: 64, description: "Another system's number for it (INC0012345), 1 to 64 printable characters: operators and tokens only (403 otherwise)" }
+        type: { $ref: "#/components/schemas/CaseType" }
+        priority: { type: integer, minimum: 1, maximum: 4, description: "The reporter's choice (CF-64): P1 blocking, P2 service degradation, P3 preemptive, P4 question; the SLA follows it and operators may change it. Left out, P2. P0 is the operators' call (400)" }
+        cluster: { type: string, description: "The id of a connected cluster it is about, from GET /me's clusters (CF-64); left out when not sure. An unknown one is a 400" }
+    CaseType:
+      type: string
+      enum: [security, outage, performance, availability, configuration, capacity, compliance, question, other]
+      description: "What kind of problem a case is (CF-37); other when none was given. On a submission, operators and tokens only"
+    Actor:
+      type: object
+      description: "Who made a change (CF-35)"
+      properties:
+        name: { type: string }
+        kind: { type: string, enum: [person, agent, system] }
+    Receipt:
+      type: object
+      properties:
+        report: { $ref: "#/components/schemas/Report" }
+        known: { $ref: "#/components/schemas/Known" }
+        removed: { type: boolean, description: Something that looked like a credential was taken out }
+    Message:
+      type: object
+      properties:
+        id: { type: integer }
+        at: { type: string, format: date-time }
+        kind: { type: string, enum: [reporter, operator, system] }
+        from: { $ref: "#/components/schemas/Person" }
+        text: { type: string }
+        draft: { type: boolean, description: Operators only; waits for Send }
+        draftBy: { type: string }
+        internal: { type: boolean, description: Operators only }
+        sentBy: { $ref: "#/components/schemas/Person" }
+    Report:
+      type: object
+      description: Fields marked operators only are left out of what anyone else sees.
+      properties:
+        number: { type: integer, description: The case's number; the console shows it as C-<number> }
+        title: { type: string, description: "The case in a line: given by who opened it or an operator, else the text's first line" }
+        source: { type: string, enum: [report, finding, manual, alert], description: "What opened the case: finding is agent-found" }
+        cluster: { type: string, description: "Operators only: the cluster it is about" }
+        object: { type: string, description: "Operators only: what it is about, in any words (a Kubernetes object as namespace/kind/name or kind/name)" }
+        openedBy: { $ref: "#/components/schemas/Person" }
+        key: { type: object, description: "Operators only: an agent-found case's key", properties: { cluster: { type: string }, object: { type: string, description: 'namespace/Kind/name, Kind/name, or "" for the cluster' }, check: { type: string } } }
+        job: { type: string, description: "Operators only: the job whose run found it" }
+        run: { type: string, description: Operators only }
+        finding: { type: string, description: Operators only }
+        severity: { type: string, enum: [critical, warning, info], description: Operators only }
+        seen: { type: object, description: "Operators only: the runs that found it while open", properties: { count: { type: integer }, first: { type: string, format: date-time }, last: { type: string, format: date-time } } }
+        regressionOf: { type: integer }
+        sameAs: { type: integer }
+        possibleDuplicateOf: { type: integer }
+        previous: { type: object, description: "Operators only: how the case it repeats was closed", properties: { case: { type: integer }, outcome: { $ref: "#/components/schemas/Outcome" }, explanation: { type: string }, by: { type: string }, at: { type: string, format: date-time } } }
+        exception: { type: string, description: "The exception a case closed as exception made (EX-3)" }
+        rca: { type: string, description: "The RCA of a case closed as fix (RCA-4)" }
+        verifyPending: { type: boolean, description: "Operators only: the next run of its job checks the fix" }
+        verified: { type: string, format: date-time, description: "When a run no longer found it" }
+        slaFrom: { type: string, format: date-time, description: "Operators only: when its SLA clock started; absent is no SLA" }
+        closedBy: { $ref: "#/components/schemas/Person" }
+        fixProposed: { type: boolean, description: "Operators only: the console's analysis suggested a fix" }
+        appliedBy:
+          type: object
+          description: "Operators only: the console's proposed change (a Watson card) whose applying fixed it, last (CF-29)"
+          properties:
+            card: { type: string, description: "The card's id, PC-12 (CF-56)" }
+            title: { type: string }
+            by: { type: string, description: "Who approved it" }
+            at: { type: string, format: date-time, description: "When it was applied" }
+        verification: { type: string, enum: [waiting, verified, notHeld], description: "Operators only: how the next run of the job that found it saw it since a change was applied (CF-30); absent otherwise" }
+        type: { $ref: "#/components/schemas/CaseType" }
+        incident: { type: string, description: "Operators only: another system's number for it (CF-36)" }
+        createdBy: { $ref: "#/components/schemas/Actor" }
+        lastBy: { $ref: "#/components/schemas/Actor" }
+        lastAt: { type: string, format: date-time, description: "When it was last changed, by lastBy" }
+        analysisQueued: { type: string, format: date-time, description: "Operators only: when an agent-found case was queued for the console's analysis (CF-32)" }
+        text: { type: string }
+        scrubbed: { type: boolean }
+        pruned: { type: boolean, description: The text went with the retention }
+        reporter: { $ref: "#/components/schemas/Person" }
+        filedBy: { $ref: "#/components/schemas/Person" }
+        created: { type: string, format: date-time }
+        updated: { type: string, format: date-time }
+        status: { $ref: "#/components/schemas/Status" }
+        statusAt: { type: string, format: date-time }
+        outcome: { $ref: "#/components/schemas/Outcome" }
+        explanation: { type: string, description: The close's explanation }
+        priority: { type: integer, minimum: 0, maximum: 4, description: "P0 outage, P1 blocking, P2 service degradation, P3 preemptive, P4 question" }
+        priorityBy: { type: string, description: Operators only }
+        owner: { $ref: "#/components/schemas/Person" }
+        service: { type: string }
+        serviceName: { type: string }
+        serviceConfidence: { type: integer, description: Operators only }
+        serviceBy: { type: string, description: Operators only }
+        knownIssue: { type: string, description: The known issue a case closed as knownIssue links }
+        known: { $ref: "#/components/schemas/Known" }
+        matchConfidence: { type: integer, description: Operators only }
+        rejected: { type: array, items: { type: string }, description: Operators only }
+        duplicateOf: { type: integer, description: "The original a case closed as duplicate repeats: the end of its chain" }
+        similar: { type: array, items: { type: integer }, description: Operators only }
+        waiting: { type: string, format: date-time, description: When an operator asked the reporter for more }
+        watchers: { type: array, items: { $ref: "#/components/schemas/Person" }, description: Operators only }
+        messages: { type: array, items: { $ref: "#/components/schemas/Message" } }
+        technical: { type: string, description: Operators only }
+        plain: { type: string }
+        cause: { type: string, description: Operators only }
+        evidence: { type: array, items: { type: string }, description: Operators only }
+        acknowledged: { type: string, format: date-time, description: Operators only }
+        firstResponse: { type: string, format: date-time, description: Operators only }
+        resolved: { type: string, format: date-time }
+        closed: { type: string, format: date-time }
+        reopened: { type: integer }
+        mine: { type: boolean }
+        watching: { type: boolean }
+        canReopen: { type: boolean }
+        sla:
+          type: object
+          description: "Operators only; absent for a case without an SLA clock (an agent-found case below P1)"
+          properties:
+            target: { type: object, properties: { responseMinutes: { type: integer }, resolveMinutes: { type: integer } }, description: The priority's targets (Settings › SLA) }
+            responseDue: { type: string, format: date-time }
+            resolveDue: { type: string, format: date-time }
+            responseLate: { type: boolean }
+            resolveLate: { type: boolean }
+    Triage:
+      type: object
+      properties:
+        priority: { type: integer, minimum: 0, maximum: 4 }
+        title: { type: string, maxLength: 200 }
+        text: { type: string, maxLength: 4000, description: "The words of a case opened in the console; a report's stay its reporter's" }
+        cluster: { type: string, maxLength: 100 }
+        object: { type: string, maxLength: 300 }
+        type: { $ref: "#/components/schemas/CaseType" }
+        incident: { type: string, maxLength: 64, description: '"" clears it' }
+        owner: { $ref: "#/components/schemas/Person" }
+        service: { type: string, description: '"" makes it unknown' }
+        knownIssue: { type: string, description: 'Closes the case as this known issue; "" unlinks it and opens it again' }
+        duplicateOf: { type: integer, description: "Closes the case as a duplicate of this original (the end of its chain); 409 when that is closed" }
+        status: { $ref: "#/components/schemas/Status" }
+        outcome: { $ref: "#/components/schemas/Outcome", description: "With status closed: fix (below P1), notAProblem or noFixNeeded" }
+        explanation: { type: string, maxLength: 4000, description: "Required to close; with status new, the reason for reopening" }
+        askInfo: { type: boolean, description: Starts (true) or stops the clock that closes a silent case as noFixNeeded }
+    Known:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        symptoms: { type: array, items: { type: string }, description: Operators only }
+        services: { type: array, items: { type: string } }
+        status: { $ref: "#/components/schemas/KnownStatus" }
+        workaround: { type: string }
+        expected: { type: string }
+        owner: { $ref: "#/components/schemas/Person" }
+        updates: { type: array, items: { $ref: "#/components/schemas/Update" }, description: Operators only }
+        lastUpdate: { $ref: "#/components/schemas/Update" }
+        kind: { type: string, enum: [normal, planned] }
+        window: { type: object, properties: { start: { type: string, format: date-time }, end: { type: string, format: date-time } } }
+        source: { type: string, enum: [operator, alert, plannedChange, agent, confluence] }
+        draft: { type: boolean }
+        inactive: { type: boolean, description: "Made inactive by the housekeeping as a duplicate (CF-53); only operators asking for all=true are shown one (CF-63)" }
+        duplicateOf: { type: string, description: The known issue an inactive one repeats }
+        link: { type: string }
+        following: { type: boolean }
+        linked: { type: array, items: { type: integer }, description: Operators only }
+        created: { type: string, format: date-time }
+        updated: { type: string, format: date-time }
+        resolved: { type: string, format: date-time }
+    KnownInput:
+      type: object
+      properties:
+        title: { type: string, maxLength: 300 }
+        symptoms: { type: array, maxItems: 30, items: { type: string, maxLength: 300 } }
+        services: { type: array, items: { type: string } }
+        status: { $ref: "#/components/schemas/KnownStatus" }
+        workaround: { type: string }
+        expected: { type: string, maxLength: 120 }
+        owner: { $ref: "#/components/schemas/Person" }
+        kind: { type: string, enum: [normal, planned] }
+        window: { type: object, properties: { start: { type: string, format: date-time }, end: { type: string, format: date-time } } }
+        source: { type: string, enum: [operator, alert, plannedChange, agent, confluence] }
+        link: { type: string }
+    Update:
+      type: object
+      properties:
+        at: { type: string, format: date-time }
+        by: { $ref: "#/components/schemas/Person" }
+        text: { type: string }
+        status: { $ref: "#/components/schemas/KnownStatus" }
+    Service:
+      type: object
+      required: [name]
+      properties:
+        id: { type: string, readOnly: true }
+        name: { type: string }
+        description: { type: string }
+        runsOn:
+          type: array
+          items:
+            type: object
+            properties:
+              kind: { type: string, enum: [cluster, namespace, workload, host, fleet, url, hostname] }
+              value: { type: string }
+              cluster: { type: string }
+        contacts: { type: array, items: { type: string }, description: User names; they see every report on the service }
+        aliases: { type: array, items: { type: string } }
+        created: { type: string, format: date-time, readOnly: true }
+        updated: { type: string, format: date-time, readOnly: true }
+    Candidate:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        confidence: { type: integer, minimum: 0, maximum: 100 }
+        score: { type: number, description: BM25 }
+        why: { type: array, items: { type: string } }
+    Settings:
+      type: object
+      properties:
+        company: { type: string }
+        statusPage: { type: string }
+        reportURL: { type: string, description: Empty is /report on the console }
+        matchThreshold: { type: integer, minimum: 1, maximum: 100, default: 80 }
+        targets:
+          type: object
+          description: 'By priority, "0" to "4" (Settings › SLA in the console)'
+          additionalProperties: { type: object, properties: { responseMinutes: { type: integer }, resolveMinutes: { type: integer } } }
+        retentionDays: { type: integer, default: 365 }
+        ratePerHour: { type: integer, default: 10 }
+        reopenDays: { type: integer, default: 7 }
+        fixedDays: { type: integer, default: 3, description: Unused since wave 6 (a fix closes the case) }
+        needInfoDays: { type: integer, default: 5 }
+        duplicateHours: { type: integer, default: 6 }
+        bumpP2At: { type: integer, default: 3, description: Unused since wave 6 (a report matched to a known issue is closed as it) }
+        bumpP1At: { type: integer, default: 10, description: Unused since wave 6 }
+        webhook: { type: object, properties: { url: { type: string }, events: { type: array, items: { type: string } } } }
+    Me:
+      type: object
+      properties:
+        person: { $ref: "#/components/schemas/Person" }
+        report: { type: boolean }
+        operator: { type: boolean }
+        admin: { type: boolean }
+        company: { type: string }
+        statusPage: { type: string }
+        reportURL: { type: string }
+        clusters:
+          type: array
+          description: "The connected clusters a report may be about, for the report page's Cluster choice (CF-64): id and display name only"
+          items: { type: object, required: [id, name], properties: { id: { type: string }, name: { type: string } } }
+    Token:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        account: { type: string }
+        scopes: { type: array, items: { $ref: "#/components/schemas/Scope" } }
+        created: { type: string, format: date-time }
+        createdBy: { $ref: "#/components/schemas/Person" }
+        lastUsed: { type: string, format: date-time }

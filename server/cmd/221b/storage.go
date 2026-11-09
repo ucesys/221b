@@ -8,10 +8,21 @@ import (
 
 	"k8s.io/client-go/rest"
 
+	"github.com/ucesys/221b/server/internal/ai"
+	"github.com/ucesys/221b/server/internal/api"
+	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/automation"
+	"github.com/ucesys/221b/server/internal/backup"
+	"github.com/ucesys/221b/server/internal/cards"
+	"github.com/ucesys/221b/server/internal/casework"
+	"github.com/ucesys/221b/server/internal/fixes"
+	"github.com/ucesys/221b/server/internal/issues"
+	"github.com/ucesys/221b/server/internal/jobs"
+	"github.com/ucesys/221b/server/internal/knowledge"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
+	"github.com/ucesys/221b/server/internal/lessons"
 	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/sherlock"
@@ -28,6 +39,26 @@ const (
 	objSessions       = "sessions"
 	objAutomation     = "automation"
 	objAutomationRuns = "automation-runs"
+	objAI             = "ai"
+	// objIssues is the issue service's (Phase 12, docs/issues.md).
+	objIssues = "issues"
+	// objCases is the agents' proposals' (Phase 12, ADR-99): the cards,
+	// the standing approvals and the notification settings.
+	objCases = "cases"
+	// --- Jobs (Phase 12) ---
+	// objRuns holds the jobs, their runs and findings (JB-14, ADR-91).
+	objRuns = "runs"
+	// objKnowledge is Mycroft's knowledge and the Confluence publisher's
+	// (Phase 12, ADR-94 to ADR-98).
+	objKnowledge = "knowledge"
+	// --- Case work (Phase 12, CW-13) ---
+	// objCasework holds Settings › Cases, the checks seen, the clean
+	// start's marker, and the accepted exceptions (package lessons); the
+	// cases, with their RCAs, are ConfigMaps of their own (wave 6).
+	objCasework = "casework"
+	// objWiki is the temporary wiki store's (CF-57): the wiki itself, in
+	// one key, while Settings › Knowledge names no store.
+	objWiki = "wiki"
 	// objectBudget is what the keys of one ConfigMap may add up to, below
 	// its 1 MiB with room for the object's own fields.
 	objectBudget = 960 << 10
@@ -40,10 +71,20 @@ var layout = map[string]map[string]kv.Limit{
 	objSettings: {
 		kube.SettingsKey:    {Bytes: 384 << 10, Hint: "remove fleets or acknowledged alerts you no longer need"},
 		nodessh.PairingsKey: {Bytes: 256 << 10, Hint: "unpair nodes no longer in use"},
+		nodessh.HostsKey:    {Bytes: 128 << 10, Hint: "remove hosts no longer in use"},
 		sherlock.SpendKey:   {Bytes: 16 << 10},
 		twoperson.Key:       {Bytes: 64 << 10},
-		sessions.HistoryKey: {Bytes: 0},
-		audit.StoreKey:      {Bytes: 0},
+		// The scheduled backups to S3 (Phase 12): their settings, with a
+		// private CA of at most 12 KiB, and their recent runs.
+		backup.SettingsKey: {Bytes: 16 << 10, Hint: "shorten the private CA bundle"},
+		backup.StatusKey:   {Bytes: 8 << 10},
+		// Getting started (Phase 12, GS-04): the dismissed steps.
+		api.SetupKey: {Bytes: 4 << 10},
+		// --- Helm repositories (Phase 12, wave 5): the chart repositories
+		// and OCI registries (their passwords and tokens are in a Secret).
+		apps.RepositoriesKey: {Bytes: apps.DefaultRepositoriesBytes, Hint: "remove chart repositories no longer used"},
+		sessions.HistoryKey:  {Bytes: 0},
+		audit.StoreKey:       {Bytes: 0},
 	},
 	objAudit:    {audit.StoreKey: {Bytes: 640 << 10}},
 	objSessions: {sessions.HistoryKey: {Bytes: 512 << 10}},
@@ -59,6 +100,67 @@ var layout = map[string]map[string]kv.Limit{
 	objAutomationRuns: {
 		automation.RunsKey:  {Bytes: 512 << 10},
 		automation.FactsKey: {Bytes: 384 << 10},
+	},
+	// Phase 12, ADR-75: the AI agents.
+	objAI: {
+		ai.ProvidersKey: {Bytes: 32 << 10, Hint: "remove providers no longer in use"},
+		ai.AgentsKey:    {Bytes: 32 << 10},
+		ai.PromptsKey:   {Bytes: 480 << 10, Hint: "shorten the agents' instructions and notes"},
+		ai.TestsKey:     {Bytes: 288 << 10, Hint: "delete test cases no longer needed"},
+		ai.PilotKey:     {Bytes: 96 << 10},
+	},
+	objIssues: {
+		// The index of the cases, one line each; each case is a ConfigMap of
+		// its own (Phase 12, wave 6, CF-20).
+		issues.IndexKey:  {Bytes: issues.DefaultIndexBytes, Hint: "shorten the issue service's retention and Settings › Cases' keepAgentClosedDays, or close the cases that are done"},
+		issues.KnownKey:  {Bytes: issues.DefaultKnownBytes, Hint: "resolve or delete known issues no longer needed"},
+		issues.ConfigKey: {Bytes: issues.DefaultConfigBytes, Hint: "delete services no longer used"},
+		// Where builds before wave 6 kept every case: only the clean start
+		// reads it, to delete it.
+		casework.OldReportsKey: {},
+	},
+	// --- Watson cards (Phase 12, ADR-99) ---
+	objCases: {
+		cards.CardsKey:    {Bytes: cards.DefaultCardsBytes, Hint: "decide or reject the proposals that wait"},
+		cards.StandingKey: {Bytes: cards.DefaultStandingBytes, Hint: "remove standing approvals no longer used"},
+		cards.NotifyKey:   {Bytes: cards.DefaultNotifyBytes},
+		// The waiting proposals' conversations with Sherlock (CF-61).
+		cards.ChatsKey: {Bytes: cards.DefaultChatsBytes, Hint: "decide the proposals that wait"},
+	},
+	// --- end of Watson cards.
+	// --- Jobs (Phase 12) ---
+	objRuns: {
+		jobs.JobsKey: {Bytes: jobs.DefaultJobsBytes, Hint: "remove jobs added and no longer needed"},
+		jobs.RunsKey: {Bytes: jobs.DefaultRunsBytes},
+	},
+	// --- Knowledge (Phase 12) ---
+	objKnowledge: {
+		knowledge.SettingsKey:  {Bytes: knowledge.DefaultSettingsBytes, Hint: "remove sources no longer read"},
+		knowledge.DraftsKey:    {Bytes: knowledge.DefaultDraftsBytes, Hint: "approve or reject the wiki's waiting changes"},
+		knowledge.StatusKey:    {Bytes: knowledge.DefaultStatusBytes},
+		knowledge.PublisherKey: {Bytes: knowledge.DefaultPublisherBytes, Hint: "decide the Confluence pages' waiting edits"},
+	},
+	// --- The temporary wiki store (CF-57) ---
+	objWiki: {
+		knowledge.WikiKey: {Bytes: knowledge.DefaultWikiBytes, Hint: "move the wiki to Git or S3 in Settings › Knowledge"},
+	},
+	// --- Case work (Phase 12) ---
+	objCasework: {
+		casework.SettingsKey: {Bytes: casework.DefaultSettingsBytes},
+		casework.ChecksKey:   {Bytes: casework.DefaultChecksBytes},
+		casework.CleanKey:    {Bytes: casework.DefaultCleanBytes},
+		// The validation rules people added or changed, and what the runs
+		// found under each id (ADR-138).
+		casework.RulesKey:     {Bytes: casework.DefaultRulesBytes, Hint: "dismiss the suggested validation rules no longer wanted"},
+		casework.FoundKey:     {Bytes: casework.DefaultFoundBytes},
+		lessons.ExceptionsKey: {Bytes: lessons.DefaultExceptionsBytes, Hint: "remove the accepted exceptions no longer needed"},
+		// The fixes (wave 6g, CF-50) and the mark of their one import.
+		fixes.Key:               {Bytes: fixes.DefaultBytes, Hint: "delete the inactive fixes in Cases › Mycroft › Fixes"},
+		casework.FixesImportKey: {Bytes: 4 << 10},
+		// The work on the cases of builds before wave 6, and the RCAs of
+		// builds before wave 6e (CF-44): the clean start's.
+		casework.OldWorkKey: {},
+		lessons.RCAsKey:     {},
 	},
 }
 
@@ -104,7 +206,7 @@ func openConfigMap(ctx context.Context, cfg *rest.Config, ref string) (*kube.Con
 		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%w (check -audit-configmap, -sessions-configmap and -automation-runs-configmap against the chart)", err)
+		return nil, fmt.Errorf("%w (check -audit-configmap, -sessions-configmap, -automation-runs-configmap, -issues-configmap, -cases-configmap, -runs-configmap, -knowledge-configmap, -wiki-configmap and -casework-configmap against the chart)", err)
 	}
 	return cm, nil
 }

@@ -1,4 +1,5 @@
 import { unauthorized } from './auth'
+import { call } from './call'
 import type { TimeFormat } from '../lib/format'
 import type { Settings } from './types'
 
@@ -43,3 +44,15 @@ export async function saveSettings(patch: { refreshSeconds: number; timeFormat?:
   }
   return (await res.json()) as Settings
 }
+
+// --- Show costs (Phase 12, wave 6c, CF-40) ---
+
+/** The settings every signed-in person reads: whether dollar amounts show. */
+export interface UISettings {
+  showCosts: boolean
+}
+
+/** Sets Show costs (a SuperAdmin): its own route, not the admins' shared settings. */
+export const saveShowCosts = (showCosts: boolean) => call<UISettings>('/api/v1/settings/ui', { method: 'PUT', body: JSON.stringify({ showCosts }) })
+
+export const fetchUISettings = () => call<UISettings>('/api/v1/settings/ui')

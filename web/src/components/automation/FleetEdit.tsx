@@ -11,6 +11,7 @@ export function FleetEdit({
   onClose,
   onSaved,
   onDeleted,
+  onToast,
 }: {
   cluster: string;
   seed: EditorSeed;
@@ -18,6 +19,7 @@ export function FleetEdit({
   onClose: () => void;
   onSaved: (f: Fleet, isNew: boolean) => Promise<void>;
   onDeleted: (f: Fleet) => Promise<void>;
+  onToast?: (msg: string) => void;
 }) {
   const { rows } = useView<NodeRow>("nodes");
   const defs = useLiveMeta().settings?.fleets?.[cluster] ?? [];
@@ -27,6 +29,7 @@ export function FleetEdit({
       fleets={defs}
       nodes={rows}
       now={now}
+      onToast={onToast}
       onClose={onClose}
       onSave={async (f, isNew) => {
         await saveFleets(

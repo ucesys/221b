@@ -58,7 +58,8 @@ export interface Taint {
 
 export interface NodeRow {
   name: string
-  role: 'control-plane' | 'worker'
+  /** host: a machine outside Kubernetes, reached by SSH (Phase 12). */
+  role: 'control-plane' | 'worker' | 'host'
   roles: string[]
   status: string
   tone: Tone
@@ -83,6 +84,23 @@ export interface NodeRow {
   conditions: Condition[]
   /** When the node last booted, from its kubelet; absent until read, or when it cannot be. */
   bootedAt?: string
+  /** Set on a host outside Kubernetes: what the console knows of it, never its key. */
+  host?: HostInfo
+}
+
+/** A host outside Kubernetes, as a row of the Nodes tab carries it. */
+export interface HostInfo {
+  address: string
+  port: number
+  loginUser: string
+  state: 'pending' | 'paired'
+  fingerprint?: string
+  keyChanged?: boolean
+  addedBy?: string
+  trustedBy?: string
+  trustedAt?: string
+  pairedBy?: string
+  pairedAt?: string
 }
 
 /** CPU and memory in use, as metrics-server reports them. */
@@ -475,6 +493,8 @@ export interface Settings {
   alertBanners?: boolean
   /** Whether the Fleets tab shows; absent is true. Off, fleets are kept from the Nodes tab (R2-03). */
   fleetsPage?: boolean
+  /** Whether dollar amounts show anywhere (CF-40); absent is true. Set by a SuperAdmin at /api/v1/settings/ui. */
+  showCosts?: boolean
   /** Each cluster's fleets (P4-01), by connection id. */
   fleets?: Record<string, Fleet[]>
   /** Where the server keeps them: "configmap" survives restarts, "memory" does not. */
@@ -602,8 +622,14 @@ export interface AlertRow {
   accessModes?: string[]
   users?: { pod: string; status: string; node?: string }[]
   events: AlertEntry[]
-  /** Who acknowledged the alert as it is now, if anyone did. */
-  ack?: { by: string; at: string }
+  /**
+   * Who acknowledged the alert as it is now, if anyone did: a person, or a
+   * job, with its run and the case its findings went to (CF-79); since
+   * CF-82 a job's may instead name the exception that covers what it
+   * found, or say it diagnosed the alert as expected, with the agent's
+   * reason (none for what was below the job's lowest priority).
+   */
+  ack?: { by: string; at: string; run?: string; case?: string; exception?: string; expected?: boolean; why?: string }
 }
 
 /** A fleet's definition (P4-01). */

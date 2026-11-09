@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Me, NodeRow } from '../api/types'
 import { setPickedNodes } from '../lib/fleets'
 import { parseHash } from '../lib/router'
-import { RowPickBox } from './NodePicks'
+import { HeadPickBox, RowPickBox } from './NodePicks'
 import { NodesTab } from './NodesTab'
 import { ToolboxContext, type ToolboxApi } from './toolbox/context'
 
@@ -18,6 +18,7 @@ vi.mock('../api/live', () => ({
 vi.mock('./DataTable', () => ({
   DataTable: ({ rows: shown }: { rows: NodeRow[] }) => (
     <div data-testid="table">
+      <HeadPickBox />
       {shown.map((r) => (
         <RowPickBox key={r.name} name={r.name} />
       ))}
@@ -28,11 +29,11 @@ vi.mock('./DataTable', () => ({
 const route = parseHash('#/nodes')
 const me = (admin: boolean) => ({ admin }) as Me
 
-function nodes(admin: boolean, tb: Partial<ToolboxApi> = {}) {
+function nodes(admin: boolean, tb: Partial<ToolboxApi> = {}, onToast: (m: string) => void = () => undefined) {
   const api = { available: true, cluster: route.cluster, openTool: vi.fn(), action: vi.fn(), showSession: vi.fn(), showWatson: vi.fn(), ...tb }
   render(
     <ToolboxContext.Provider value={api}>
-      <NodesTab cluster={null} now={0} onToast={() => undefined} route={route} me={me(admin)} />
+      <NodesTab cluster={null} now={0} onToast={onToast} route={route} me={me(admin)} />
     </ToolboxContext.Provider>,
   )
   return api
@@ -41,9 +42,13 @@ const pick = (i: number) => fireEvent.click(screen.getAllByTestId('fleet-pick-no
 
 describe('picked nodes on the Nodes page', () => {
   const answer = vi.fn()
+  const facts = vi.fn()
   beforeEach(() => {
     answer.mockReturnValue({ off: {}, ssh: { enabled: true, pairings: {} } })
-    vi.stubGlobal('fetch', async () => new Response(JSON.stringify(answer())))
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      if (String(url).includes('automation/facts')) return new Response(JSON.stringify(facts(JSON.parse(String(init?.body)))))
+      return new Response(JSON.stringify(answer()))
+    })
   })
   afterEach(() => {
     cleanup()
@@ -68,14 +73,38 @@ describe('picked nodes on the Nodes page', () => {
     expect(screen.getByTestId('fleet-nodebar-new').textContent).toBe('New fleet…')
   })
 
-  it('picks all in view, and Cancel drops them', () => {
+  it('picks all in view from the heading, half ticked when some are, and Cancel drops them', () => {
     nodes(true, { available: false })
+    const all = screen.getByTestId('fleet-pick-all') as HTMLInputElement
+    expect(all.checked).toBe(false)
+    expect(all.title).toBe('Pick the 3 nodes in view')
     pick(0)
-    fireEvent.click(screen.getByTestId('fleet-nodebar-all'))
+    expect(all.indeterminate).toBe(true)
+    fireEvent.click(all)
     expect(screen.getByTestId('fleet-nodebar').textContent).toContain('Picked 3 nodes')
-    expect(screen.queryByTestId('fleet-nodebar-all')).toBeNull()
+    expect(all.checked).toBe(true)
+    expect(all.indeterminate).toBe(false)
+    expect(all.title).toBe('Unpick the 3 nodes in view')
+    fireEvent.click(all)
+    expect(screen.queryByTestId('fleet-nodebar')).toBeNull()
+    fireEvent.click(all)
     fireEvent.click(screen.getByTestId('fleet-nodebar-cancel'))
     expect(screen.queryByTestId('fleet-nodebar')).toBeNull()
+  })
+
+  it("collects the picked nodes' facts and says which answered", async () => {
+    facts.mockReturnValue({ nodes: [{ cluster: 'local', node: 'n1', at: '' }, { cluster: 'local', node: 'n3', at: '', error: 'timed out' }] })
+    const toast = vi.fn()
+    nodes(true, { available: false }, toast)
+    pick(0)
+    pick(1)
+    pick(2)
+    const collect = screen.getByTestId('fleet-nodebar-facts') as HTMLButtonElement
+    fireEvent.click(collect)
+    expect(collect.textContent).toBe('Collecting…')
+    await waitFor(() => expect(toast).toHaveBeenCalledWith('Collected facts from 1 of 3 nodes. 1 did not answer. 1 skipped: not paired for SSH, or in no fleet.'))
+    expect(facts).toHaveBeenCalledWith({ nodes: ['n1', 'n2', 'n3'] })
+    expect(collect.textContent).toBe('Collect facts')
   })
 
   it('sends the picked nodes to one pairing dialog', async () => {

@@ -431,6 +431,20 @@ func (a *Accounts) Update(ctx context.Context, username string, c Change) (Accou
 	return u, end, err
 }
 
+// RestorePasswordHash puts back a local user's password hash from a
+// backup that carried it sealed (ADR-137): only a hash of the form this
+// console makes is taken, and the hash never reaches a log.
+func (a *Accounts) RestorePasswordHash(ctx context.Context, username, hash string) error {
+	if !validHash(hash) {
+		return errors.New("the backup's password hash is not one this console makes")
+	}
+	_, err := a.edit(ctx, username, func(u *Account) error {
+		u.PasswordHash = hash
+		return nil
+	})
+	return err
+}
+
 // Delete removes a local user, their group memberships and super roles with
 // them.
 func (a *Accounts) Delete(ctx context.Context, username string) error {

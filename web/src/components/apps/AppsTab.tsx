@@ -248,7 +248,7 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
               if (r) navigate(href('helm', [r.namespace, r.name]))
             }}
             now={now}
-            empty={loaded ? 'No Helm release here yet. New application installs one from a git repository.' : 'Loading…'}
+            empty={loaded ? 'No Helm release here yet. New application installs one from git, a Helm repository or an OCI registry.' : 'Loading…'}
             rowAttr="release"
           />
         </section>

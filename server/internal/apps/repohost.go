@@ -122,3 +122,13 @@ func init() {
 	client.InstallProtocol("https", c)
 	client.InstallProtocol("http", c)
 }
+
+// CheckSourceHost is CheckRepoHost for any source's address: a git
+// repository's, a Helm repository's or an OCI registry's (Phase 12, wave
+// 5). The tests' repositories on the loopback pass with AllowLocalRepos.
+func CheckSourceHost(ctx context.Context, address string) error {
+	if AllowLocalRepos {
+		return nil
+	}
+	return CheckRepoHost(ctx, strings.Replace(address, "oci://", "https://", 1))
+}

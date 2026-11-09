@@ -21,10 +21,13 @@ import (
 
 // Actions the console records.
 const (
-	ActionSignIn        = "signin"
-	ActionSignInFailed  = "signin.failed"
-	ActionSignOut       = "signout"
-	ActionSettings      = "settings.update"
+	ActionSignIn       = "signin"
+	ActionSignInFailed = "signin.failed"
+	ActionSignOut      = "signout"
+	ActionSettings     = "settings.update"
+	// ActionSettingsUI is a SuperAdmin's change of the console-wide page
+	// settings: Show costs (Phase 12, wave 6c, CF-40).
+	ActionSettingsUI    = "settings.ui"
 	ActionFleets        = "fleets.update"
 	ActionAlertAck      = "alert.ack"
 	ActionAlertUnack    = "alert.unack"
@@ -37,6 +40,14 @@ const (
 	ActionSherlockAsk      = "sherlock.ask"
 	ActionSherlockSettings = "sherlock.settings"
 	ActionSherlockKey      = "sherlock.key"
+	// AI agents (Phase 12): each agent's call, with who asked it; changes
+	// to providers, agents and their credentials; instructions saved,
+	// tested, piloted, made live or restored; test cases saved.
+	ActionAgentCall  = "ai.agent"
+	ActionAISettings = "ai.settings"
+	ActionAIKey      = "ai.key"
+	ActionAIPrompt   = "ai.prompt"
+	ActionAITest     = "ai.test"
 	// Roles and users (Phase 6.1, RB-54): first-run setup, changes to local
 	// users, their groups and super roles, the directory's syncs, the
 	// reserved names refused, and drift of the deployed roles.
@@ -63,6 +74,40 @@ const (
 	ActionAutomationRun     = "automation.run"
 	ActionAutomationCommand = "automation.command"
 	ActionAutomationConfig  = "automation.config"
+	// Hosts outside Kubernetes (Phase 12): added, their key trusted or
+	// trusted again, paired, removed. The bootstrap account is named; its
+	// credential never is.
+	ActionHostAdd    = "host.add"
+	ActionHostTrust  = "host.trust"
+	ActionHostPair   = "host.pair"
+	ActionHostRemove = "host.remove"
+	ActionHostRename = "host.rename"
+	// --- Watson cards (Phase 12, ADR-99 to ADR-102) ---
+	// An agent's proposal: stored, replaced by a newer one, approved (one
+	// person's approval, or a standing approval's), rejected, checked
+	// again, expired, its actions applied; a standing approval set or
+	// removed; the notification settings saved or a channel failing. A
+	// host's labels changed from a card.
+	ActionHostLabel      = "host.label"
+	ActionCardPropose    = "cards.propose"
+	ActionCardReplace    = "cards.replace"
+	ActionCardApprove    = "cards.approve"
+	ActionCardReject     = "cards.reject"
+	ActionCardRecheck    = "cards.recheck"
+	ActionCardExpire     = "cards.expire"
+	ActionCardApply      = "cards.apply"
+	ActionCardStanding   = "cards.standing"
+	ActionCardNotify     = "cards.notify"
+	ActionCardNotifySent = "cards.notify.send"
+	// A proposed change's Sherlock and Watson (Phase 12, CF-61): a
+	// question asked on its conversation, the conversation deleted when it
+	// is decided, and a command run from its drawer.
+	ActionCardChat    = "cards.chat"
+	ActionCardCommand = "cards.command"
+	// --- end of Watson cards.
+	// --- Getting started (Phase 12, GS-04): a step dismissed or brought
+	// back.
+	ActionSetupDismiss = "setup.dismiss"
 )
 
 // Outcomes of an action.

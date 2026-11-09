@@ -81,7 +81,7 @@ export const TABS: { id: Tab; label: string; tip: string }[] = [
   {
     id: "helm",
     label: "Helm",
-    tip: "Helm releases: their source, drift and history; install and upgrade from a git repository",
+    tip: "Helm releases: their source, drift and history; install and upgrade from git, a Helm repository or an OCI registry",
   },
   {
     id: "services",
@@ -105,8 +105,8 @@ export const TABS: { id: Tab; label: string; tip: string }[] = [
   },
 ];
 
-/** The top bar's areas: Kubernetes, and Automation for a SuperAdmin (AU-01). */
-export type Area = "kubernetes" | "automation";
+/** The top bar's areas: Kubernetes, Automation for a SuperAdmin (AU-01), and Cases for whoever has something in it (CS-01). */
+export type Area = "kubernetes" | "automation" | "cases";
 
 /** Whether a tab is Automation's alone; Nodes is in both areas. */
 export function isAutomationTab(tab: Tab | null): boolean {
@@ -123,7 +123,7 @@ export const LOCAL = "local";
 
 /** The page: every cluster at a glance (the landing page), a cluster's tabs, its own page (its connection, P3-07), the Administration area (RB-41), or Sherlock in a window of its own (P5-08). */
 export type View =
-  "home" | "tabs" | "cluster" | "sherlock" | "watson" | "assistants" | "admin";
+  "home" | "tabs" | "cluster" | "sherlock" | "watson" | "assistants" | "admin" | "cases";
 
 /** The first tab, where a cluster opens. */
 export const FIRST_TAB: Tab = "alerts";
@@ -191,6 +191,76 @@ export function parseHash(hash: string): Route {
   // The Administration area (RB-41): #/admin/roles, #/admin/permissions, #/admin/users and #/admin/settings/<section>.
   // Roles and Permissions describe a cluster, so they take the cluster prefix; Users and Settings belong to the console.
   // Sessions and Audit log moved under Logs: their old links land there.
+  // --- Cases (Phase 12, CS-01) ---
+  // Administration › Approvals moved to Cases › Inbox (CS-06): its old
+  // link opens the Inbox on approvals.
+  if (first === "admin" && segs[1] === "approvals") {
+    const params = new URLSearchParams(query);
+    params.set("kind", "approvals");
+    return { cluster, view: "cases", tab: FIRST_TAB, path: ["inbox"], params };
+  }
+  // #/cases is the Inbox; #/cases/reports/12 a report, and so on.
+  if (first === "cases") {
+    // Old addresses of tabs that moved: Runs under Jobs; cases and reports
+    // in the Inbox; known issues and the wiki under Mycroft.
+    const moved: Record<string, string[]> = {
+      cases: ["inbox", "case"],
+      reports: ["inbox", "report"],
+      known: ["mycroft", "known"],
+      knowledge: ["mycroft", "wiki"],
+    };
+    // --- Mycroft tab (Phase 12, wave 5) ---
+    // Since wave 6e an RCA is part of its case, and past RCAs are found by
+    // searching the closed cases: Mycroft › RCAs' old addresses, and the
+    // wiki's before it, open the Inbox showing all (an RCA's id opens
+    // nothing now).
+    if ((segs[1] === "mycroft" || segs[1] === "knowledge") && segs[2] === "rcas") {
+      const params = new URLSearchParams(query);
+      params.set("show", "all");
+      return { cluster, view: "cases", tab: FIRST_TAB, path: ["inbox"], params };
+    }
+    // The wiki's exceptions are Mycroft's tab of their own now:
+    // #/cases/knowledge/exceptions/EX-3 opens #/cases/mycroft/exceptions/EX-3.
+    if (segs[1] === "knowledge" && segs[2] === "exceptions")
+      return {
+        cluster,
+        view: "cases",
+        tab: FIRST_TAB,
+        path: ["mycroft", ...segs.slice(2)],
+        params: new URLSearchParams(query),
+      };
+    // --- end of the Mycroft tab.
+    const to = moved[segs[1] ?? ""];
+    if (to) {
+      const params = new URLSearchParams(query);
+      return {
+        cluster,
+        view: "cases",
+        tab: FIRST_TAB,
+        path: [...(segs.length > 2 || to[0] === "mycroft" ? to : ["inbox"]), ...segs.slice(2)],
+        params,
+      };
+    }
+    if (segs[1] === "runs")
+      return {
+        cluster,
+        view: "cases",
+        tab: FIRST_TAB,
+        path: ["jobs", "runs", ...segs.slice(2)],
+        params: new URLSearchParams(query),
+      };
+    const page = CASES_TABS.some((t) => t.id === segs[1])
+      ? (segs[1] as CasesTab)
+      : "inbox";
+    return {
+      cluster,
+      view: "cases",
+      tab: FIRST_TAB,
+      path: [page, ...(page === segs[1] ? segs.slice(2) : [])],
+      params: new URLSearchParams(query),
+    };
+  }
+  // --- end Cases ---
   if (first === "admin")
     return {
       cluster,
@@ -295,13 +365,12 @@ export function clusterHref(
   );
 }
 
-/** The pages of the Administration area, in order (RB-41). */
+/** The pages of the Administration area, in order (RB-41). Approvals moved to Cases › Inbox (CS-06). */
 export type AdminPage =
   | "roles"
   | "permissions"
   | "users"
   | "toolbox"
-  | "approvals"
   | "logs"
   | "settings"
   | "backup";
@@ -311,11 +380,56 @@ export const ADMIN_PAGES: AdminPage[] = [
   "permissions",
   "users",
   "toolbox",
-  "approvals",
   "logs",
   "settings",
   "backup",
 ];
+
+// --- Cases (Phase 12, CS-01) ---
+
+/** The tabs of the Cases area, in order (CS-02). */
+export type CasesTab =
+  | "inbox"
+  | "cases"
+  | "runs"
+  | "reports"
+  | "known"
+  | "jobs"
+  | "knowledge"
+  | "mycroft";
+
+export const CASES_TABS: { id: CasesTab; label: string; tip: string }[] = [
+  {
+    id: "inbox",
+    label: "Inbox",
+    tip: "Every case, proposed change, approval and draft, pending first",
+  },
+  {
+    id: "jobs",
+    label: "Jobs",
+    tip: "The agents' schedules and triggers, and each run with its report, what its findings did and its proposed changes",
+  },
+  {
+    id: "mycroft",
+    label: "Mycroft",
+    tip: "The wiki, known issues, accepted exceptions and saved fixes",
+  },
+];
+
+/** A page of the Cases area: "#/cases/reports/12", in the cluster open now so the dock stays on it. */
+export function casesHref(
+  tab: CasesTab = "inbox",
+  path: string[] = [],
+  params: Record<string, string | string[] | undefined> = {},
+): string {
+  return (
+    prefix(current.cluster) +
+    ["cases", tab, ...path.map(encodeURIComponent)].join("/") +
+    query(params)
+  );
+}
+
+// --- end Cases ---
 
 /** A page of the Administration area: "#/admin/roles/admin", or "#/c/dev/admin/permissions" for another cluster. */
 export function adminHref(
@@ -459,10 +573,10 @@ export function withParams(
   for (const [k, v] of route.params.entries()) merged[k] = v;
   Object.assign(merged, changes);
   if (route.view === "home") return HOME + query(merged);
-  if (route.view === "admin")
+  if (route.view === "admin" || route.view === "cases")
     return (
       prefix(route.cluster) +
-      ["admin", ...route.path.map(encodeURIComponent)].join("/") +
+      [route.view, ...route.path.map(encodeURIComponent)].join("/") +
       query(merged)
     );
   return clusterHref(route.cluster, route.tab, route.path, merged);

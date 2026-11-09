@@ -5,7 +5,7 @@ import { href } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
 import { NameCell, Tone } from './cells'
 import { NameWithTools } from '../components/toolbox/ToolsMenu'
-import { RowPickBox } from '../components/NodePicks'
+import { HeadPickBox, RowPickBox } from '../components/NodePicks'
 
 const GIB = 1024 * 1024 * 1024
 
@@ -39,8 +39,26 @@ function FreeCell({ amount, share, title }: { amount: string; share: number; tit
   )
 }
 
+/** What only Kubernetes knows of a node: a host outside it shows a dash, and exports nothing. */
+function kubeOnly(c: ColumnDef<NodeRow>): ColumnDef<NodeRow> {
+  return {
+    ...c,
+    cell: (r, now) =>
+      r.host ? (
+        <span style={{ color: 'var(--fg3)' }} title="A host outside Kubernetes">
+          —
+        </span>
+      ) : (
+        c.cell(r, now)
+      ),
+    export: (r, now) => c.export(r, now).map((x) => (r.host ? { ...x, cell: null, json: undefined } : x)),
+  }
+}
+
+const KUBE_ONLY = new Set(['cpu', 'cpuAlloc', 'cpuFree', 'memory', 'memAlloc', 'memFree', 'pods', 'reserved', 'kubelet'])
+
 /** The Nodes table's columns, in the prototype's order. */
-export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
+export const NODE_COLUMNS: ColumnDef<NodeRow>[] = ([
   {
     id: 'name',
     label: 'Node',
@@ -50,13 +68,21 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     min: 180,
     compactMin: 160,
     sortValue: (r) => r.name,
-    // The Tools button beside the name (TB-01).
-    cell: (r) => (
-      <NameWithTools target={{ kind: 'node', name: r.name, cordoned: r.cordoned, role: r.role === 'control-plane' ? 'control plane' : 'worker', problem: r.problems.length ? r.problems.map((p) => p.title).join('; ') : undefined }}>
-        <RowPickBox name={r.name} />
-        <NameCell name={r.name} what="node name" />
-      </NameWithTools>
-    ),
+    // The Tools button beside the name (TB-01); a host has no Kubernetes
+    // tools, so none.
+    head: () => <HeadPickBox />,
+    cell: (r) =>
+      r.host ? (
+        <span className="tb-namecell">
+          <RowPickBox name={r.name} />
+          <NameCell name={r.name} what="host name" />
+        </span>
+      ) : (
+        <NameWithTools target={{ kind: 'node', name: r.name, cordoned: r.cordoned, role: r.role === 'control-plane' ? 'control plane' : 'worker', problem: r.problems.length ? r.problems.map((p) => p.title).join('; ') : undefined }}>
+          <RowPickBox name={r.name} />
+          <NameCell name={r.name} what="node name" />
+        </NameWithTools>
+      ),
     export: (r) => [{ head: 'Node', cell: r.name }],
   },
   {
@@ -67,7 +93,7 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     compactWidth: '76px',
     min: 80,
     compactMin: 76,
-    sortValue: (r) => (r.role === 'control-plane' ? 0 : 1),
+    sortValue: (r) => (r.role === 'control-plane' ? 0 : r.role === 'host' ? 2 : 1),
     cell: (r) => {
       const t = roleTag(r)
       return (
@@ -76,7 +102,7 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
         </span>
       )
     },
-    export: (r) => [{ head: 'Role', cell: r.role === 'control-plane' ? 'Control plane' : 'Worker' }],
+    export: (r) => [{ head: 'Role', cell: r.role === 'control-plane' ? 'Control plane' : r.role === 'host' ? 'Host' : 'Worker' }],
   },
   {
     id: 'status',
@@ -317,7 +343,7 @@ export const NODE_COLUMNS: ColumnDef<NodeRow>[] = [
     ),
     export: (r) => [{ head: 'Joined', cell: fmtTs(r.created) }],
   },
-]
+] as ColumnDef<NodeRow>[]).map((c) => (KUBE_ONLY.has(c.id) ? kubeOnly(c) : c))
 
 /** What the search box matches and suggests for a node. */
 export function nodeTerms(r: NodeRow): Term[] {
@@ -325,6 +351,7 @@ export function nodeTerms(r: NodeRow): Term[] {
     { kind: 'name', text: r.name },
     { kind: 'status', text: r.status },
   ]
+  if (r.host) out.push({ kind: 'status', text: 'host' })
   if (r.zone) out.push({ kind: 'label', text: `zone=${r.zone}` })
   for (const [k, v] of Object.entries(r.labels)) out.push({ kind: 'label', text: v ? `${k}=${v}` : k })
   for (const t of r.taints) out.push({ kind: 'taint', text: taintId(t) })

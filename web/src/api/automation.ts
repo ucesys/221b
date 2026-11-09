@@ -1,5 +1,5 @@
-import { BACKGROUND, unauthorized } from "./auth";
 import { apiPath, LOCAL } from "../lib/router";
+import { call, post } from "./call";
 import reserveNodeResources from "../scripts/reserve-node-resources.sh?raw";
 
 /**
@@ -10,11 +10,7 @@ import reserveNodeResources from "../scripts/reserve-node-resources.sh?raw";
 
 export type Privilege = "none" | "full";
 export type VersionState =
-  | "draft"
-  | "review"
-  | "approved"
-  | "superseded"
-  | "rejected";
+  "draft" | "review" | "approved" | "superseded" | "rejected";
 
 /** The longest reason a decision may carry, as the server allows. */
 export const MAX_COMMENT = 500;
@@ -373,41 +369,6 @@ export function inState(s: ScriptSummary, state: string): boolean {
 
 const BASE = "/api/v1/automation";
 
-async function call<T>(
-  url: string,
-  init: RequestInit = {},
-  background = false,
-): Promise<T> {
-  let res: Response;
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    ...(background ? BACKGROUND : {}),
-  };
-  if (init.body !== undefined) headers["Content-Type"] = "application/json";
-  try {
-    res = await fetch(url, { ...init, headers });
-  } catch {
-    throw new Error("The server could not be reached.");
-  }
-  if (!res.ok) {
-    if (unauthorized(res))
-      throw new Error("Your session has ended; sign in again.");
-    let msg = `The server answered ${res.status}.`;
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (body.error) msg = body.error;
-    } catch {
-      // Not JSON: keep the status.
-    }
-    throw new Error(msg);
-  }
-  return (await res.json()) as T;
-}
-
-const post = (body: unknown): RequestInit => ({
-  method: "POST",
-  body: JSON.stringify(body),
-});
 const nameURL = (name: string) => `${BASE}/scripts/${encodeURIComponent(name)}`;
 
 export const fetchAutomation = (background = false) =>
@@ -452,7 +413,10 @@ export const saveFleetVariables = (
   p: FleetVariables & { reason?: string },
 ) =>
   call<{ params: FleetVariables; change?: VariableChange }>(
-    apiPath(`automation/fleets/${encodeURIComponent(fleet)}/variables`, cluster),
+    apiPath(
+      `automation/fleets/${encodeURIComponent(fleet)}/variables`,
+      cluster,
+    ),
     { method: "PUT", body: JSON.stringify(p) },
   );
 export const startRun = (cluster: string, req: RunRequest) =>
@@ -493,23 +457,12 @@ export const deleteProfile = (id: string) =>
 
 // ---------- facts ----------
 
-export interface NodeFacts {
-  cluster: string;
-  node: string;
-  at: string;
-  facts?: Record<string, string>;
-  error?: string;
-}
-
-export const fetchFacts = (cluster: string) =>
-  call<{ nodes: NodeFacts[]; keys: string[] }>(
-    apiPath("automation/facts", cluster),
-  );
-export const refreshFacts = (cluster: string, nodes?: string[]) =>
-  call<{ nodes: NodeFacts[] }>(
-    apiPath("automation/facts", cluster),
-    post({ nodes }),
-  );
+export {
+  collectFacts,
+  fetchFacts,
+  refreshFacts,
+  type NodeFacts,
+} from "./facts";
 
 // ---------- parameter changes ----------
 
@@ -542,7 +495,9 @@ export interface VariableChange {
 }
 
 export const fetchVariableChanges = (cluster: string) =>
-  call<{ changes: VariableChange[] }>(apiPath("automation/variable-changes", cluster));
+  call<{ changes: VariableChange[] }>(
+    apiPath("automation/variable-changes", cluster),
+  );
 export const decideVariableChange = (
   cluster: string,
   id: number,

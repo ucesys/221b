@@ -5,7 +5,7 @@
 import type { NodeRow, Taint, Tone } from '../api/types'
 import { fCores, fMem, nWord, pct, pctTxt } from './format'
 
-export type RoleFilter = 'all' | 'control-plane' | 'worker'
+export type RoleFilter = 'all' | 'control-plane' | 'worker' | 'host'
 
 export const toneRank: Record<Tone, number> = { err: 3, warn: 2, info: 1, muted: 0, ok: 0 }
 
@@ -146,6 +146,7 @@ export function problemsCell(r: NodeRow): ProblemsCell {
 
 /** The short role tag: control-plane nodes are "master", as RKE2 and kubectl get nodes call them (6.4). */
 export function roleTag(r: NodeRow): { text: string; title: string } {
+  if (r.role === 'host') return { text: 'host', title: 'A host outside Kubernetes, reached by SSH from the console' }
   if (r.role === 'control-plane') {
     const extra = r.roles.filter((x) => x !== 'control-plane' && x !== 'master')
     return { text: 'master', title: 'Control plane' + (extra.length ? ` (also ${extra.join(', ')})` : '') }

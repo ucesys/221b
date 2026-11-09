@@ -80,6 +80,9 @@ type Target struct {
 	// (Phase 10); nil keeps none.
 	Cluster string
 	Apps    apps.Store
+	// Repos are the chart repositories the console knows (Phase 12, wave
+	// 5, HR-07); nil fetches charts from git alone.
+	Repos *apps.Repos
 	// pin is what a card of a deploy showed: its planning fills it, and
 	// its dry run and its run hold to it. A nil pin is no card.
 	pin *appPin

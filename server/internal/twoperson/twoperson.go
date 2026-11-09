@@ -1,8 +1,9 @@
 // Package twoperson keeps the changes one SuperAdmin asks for and another
-// must approve: a cluster's environment taken off production, and a local
-// user made a SuperAdmin. Either would let one person loosen what needs
-// two, so each waits, in the settings ConfigMap, until a different
-// SuperAdmin approves or rejects it.
+// must approve: a cluster's environment taken off production, a local
+// user made a SuperAdmin, and an agent's instructions put live (Phase 12).
+// The first two would let one person loosen what needs two, and the last
+// changes what every agent's answer rests on, so each waits, in the
+// settings ConfigMap, until a different SuperAdmin approves or rejects it.
 package twoperson
 
 import (
@@ -30,6 +31,8 @@ const (
 	// KindSuperAdmin makes a local user a SuperAdmin, by the role itself
 	// or by groups that give it.
 	KindSuperAdmin = "superadmin"
+	// KindPrompt puts an agent's draft instructions live (Phase 12).
+	KindPrompt = "prompt"
 )
 
 // States of a request.
@@ -57,6 +60,9 @@ var (
 	ErrInvalid  = errors.New("not valid")
 	// ErrWaits is a request for what already has one waiting.
 	ErrWaits = errors.New("a request for it already waits")
+	// ErrDecided is a decision on a request someone already decided: the
+	// error says who and when (Phase 12, IB-09).
+	ErrDecided = errors.New("decided already")
 )
 
 // Who is a person: Key tells people apart, Name is shown.
@@ -80,6 +86,11 @@ type Request struct {
 	User   string   `json:"user,omitempty"`
 	Super  bool     `json:"super,omitempty"`
 	Groups []string `json:"groups,omitempty"`
+	// Agent, its name and the draft's revision, for instructions that go
+	// live.
+	Agent     string `json:"agent,omitempty"`
+	AgentName string `json:"agentName,omitempty"`
+	Rev       int    `json:"rev,omitempty"`
 
 	By        Who        `json:"by"`
 	At        time.Time  `json:"at"`
@@ -108,6 +119,8 @@ func (r Request) What() string {
 			how = append(how, "groups "+strings.Join(r.Groups, ", "))
 		}
 		return fmt.Sprintf("%s becomes a SuperAdmin (%s)", r.User, strings.Join(how, " and "))
+	case KindPrompt:
+		return fmt.Sprintf("%s: instructions, draft %d, go live", r.AgentName, r.Rev)
 	}
 	return r.Kind
 }
@@ -117,15 +130,23 @@ func (r Request) about(o Request) bool {
 	if r.Kind != o.Kind {
 		return false
 	}
-	if r.Kind == KindEnvironment {
+	switch r.Kind {
+	case KindEnvironment:
 		return r.Cluster == o.Cluster
+	case KindPrompt:
+		return r.Agent == o.Agent
 	}
 	return r.User == o.User
 }
 
 // Store keeps the requests in the key-value storage.
 type Store struct {
-	mu  sync.Mutex
+	mu sync.Mutex
+	// dmu orders decisions from the first read to the record: an approval
+	// applies its change before it is recorded, so a second decision must
+	// not find the request still waiting meanwhile. Writes are the
+	// leader's (ADR-70), so one replica's order is everyone's.
+	dmu sync.Mutex
 	now func() time.Time
 	// bmu guards backend, which SetBackend may change once at start.
 	bmu     sync.Mutex
@@ -222,7 +243,7 @@ func (s *Store) List(ctx context.Context) ([]Request, error) {
 // Add records a request that waits. One for what already has one waiting
 // is refused.
 func (s *Store) Add(ctx context.Context, r Request) (Request, error) {
-	if r.Kind != KindEnvironment && r.Kind != KindSuperAdmin {
+	if r.Kind != KindEnvironment && r.Kind != KindSuperAdmin && r.Kind != KindPrompt {
 		return r, fmt.Errorf("%w: kind %q", ErrInvalid, r.Kind)
 	}
 	if r.By.Key == "" {
@@ -282,6 +303,8 @@ func (s *Store) Decide(ctx context.Context, id int, approve bool, comment string
 	if by.Key == "" {
 		return Request{}, fmt.Errorf("%w: nobody decides it", ErrInvalid)
 	}
+	s.dmu.Lock()
+	defer s.dmu.Unlock()
 	rec, _, err := s.load(ctx)
 	if err != nil {
 		return Request{}, err
@@ -292,7 +315,7 @@ func (s *Store) Decide(ctx context.Context, id int, approve bool, comment string
 	}
 	r := rec.Requests[i]
 	if r.State != Waiting {
-		return r, fmt.Errorf("%w: request %d is %s", ErrInvalid, id, r.State)
+		return r, fmt.Errorf("%w: %s", ErrDecided, DecidedText(r))
 	}
 	if approve && by.Key == r.By.Key {
 		return r, fmt.Errorf("%w: you asked for this", ErrOwn)
@@ -310,7 +333,8 @@ func (s *Store) Decide(ctx context.Context, id int, approve bool, comment string
 				continue
 			}
 			if x.State != Waiting {
-				return fmt.Errorf("%w: request %d is %s", ErrInvalid, id, x.State)
+				out = *x
+				return fmt.Errorf("%w: %s", ErrDecided, DecidedText(*x))
 			}
 			now := s.now().UTC()
 			x.State, x.DecidedBy, x.DecidedAt, x.Comment = Rejected, &by, &now, comment
@@ -323,4 +347,23 @@ func (s *Store) Decide(ctx context.Context, id int, approve bool, comment string
 		return ErrNotFound
 	})
 	return out, err
+}
+
+// DecidedText says who decided a request and when: "already approved by
+// Sam at 2026-11-06 14:03:07 UTC", or withdrawn when the person who asked
+// rejected it.
+func DecidedText(r Request) string {
+	what := "approved"
+	switch {
+	case r.State == Waiting:
+		return "it still waits"
+	case r.State == Rejected && r.DecidedBy != nil && r.DecidedBy.Key == r.By.Key:
+		what = "withdrawn"
+	case r.State == Rejected:
+		what = "rejected"
+	}
+	if r.DecidedBy == nil || r.DecidedAt == nil {
+		return "already " + what
+	}
+	return fmt.Sprintf("already %s by %s at %s", what, r.DecidedBy.Name, r.DecidedAt.UTC().Format("2006-01-02 15:04:05 UTC"))
 }

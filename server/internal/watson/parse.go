@@ -15,6 +15,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/ucesys/221b/server/internal/apps"
 )
 
 // MaxLine bounds a command's length.
@@ -187,12 +189,15 @@ var specs = []*spec{
 			"no-hooks": {}, "cleanup-on-fail": {}, "history-max": {value: true}, "wait-for-jobs": {}})},
 	// Helm applications (Phase 10): a chart from a git repository, at a
 	// branch or a tag; --app takes the console's saved values for it.
-	{tool: "helm", verb: []string{"install"}, change: true, min: 1, max: 1, usage: "helm install RELEASE --git URL [--path DIR] --ref BRANCH|TAG [--tag] -n NAMESPACE [--app] [--create-namespace]",
-		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "app": {}, "create-namespace": {}, "set": {value: true},
-			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}})},
-	{tool: "helm", verb: []string{"upgrade"}, change: true, min: 1, max: 1, usage: "helm upgrade RELEASE [--git URL] [--path DIR] [--ref BRANCH|TAG] [--tag] -n NAMESPACE [--app] [--install] [--create-namespace]",
-		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "app": {}, "install": {short: "i"}, "create-namespace": {}, "set": {value: true},
-			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}})},
+	// Phase 12, wave 5 (HR-07): or a chart of a Helm repository the
+	// console knows (REPO/CHART) or of an OCI registry (oci://...), at
+	// --version (the newest when none is named).
+	{tool: "helm", verb: []string{"install"}, change: true, min: 1, max: 2, usage: "helm install RELEASE --git URL [--path DIR] --ref BRANCH|TAG [--tag] -n NAMESPACE [--app] [--create-namespace] | helm install RELEASE REPO/CHART|oci://REGISTRY/PATH/CHART [--version VERSION] -n NAMESPACE [--app] [--create-namespace]",
+		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "version": {value: true}, "app": {}, "create-namespace": {}, "set": {value: true},
+			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}}), check: checkChartSource},
+	{tool: "helm", verb: []string{"upgrade"}, change: true, min: 1, max: 2, usage: "helm upgrade RELEASE [--git URL] [--path DIR] [--ref BRANCH|TAG] [--tag] -n NAMESPACE [--app] [--install] [--create-namespace] | helm upgrade RELEASE REPO/CHART|oci://REGISTRY/PATH/CHART [--version VERSION] -n NAMESPACE [--app] [--install]",
+		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "version": {value: true}, "app": {}, "install": {short: "i"}, "create-namespace": {}, "set": {value: true},
+			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}}), check: checkChartSource},
 	{tool: "helm", verb: []string{"uninstall"}, change: true, min: 1, max: 1, usage: "helm uninstall RELEASE -n NAMESPACE [--keep-history]",
 		flags: flags(map[string]flag{"keep-history": {}, "dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}})},
 }
@@ -717,6 +722,27 @@ func checkCanI(c *Command) *Refusal {
 	}
 	if len(c.Positionals) < 2 {
 		return refuse("usage", "Usage: %s", c.spec.usage)
+	}
+	return nil
+}
+
+// --- Helm repositories (Phase 12, wave 5) ---
+
+// checkChartSource takes one source of a chart (HR-07): --git with its
+// ref, or REPO/CHART or oci://.../CHART with --version, never both;
+// --version goes with a repository's chart, --ref and --tag with git.
+func checkChartSource(c *Command) *Refusal {
+	if len(c.Positionals) < 2 {
+		if c.Has("version") {
+			return refuse("usage", "--version is a repository chart's: name it as REPO/CHART or oci://REGISTRY/PATH/CHART after the release.")
+		}
+		return nil
+	}
+	if c.Has("git") || c.Has("path") || c.Has("ref") || c.Has("tag") {
+		return refuse("usage", "Name the chart once: --git with --ref for a chart in git, or REPO/CHART (or oci://...) with --version for a repository's.")
+	}
+	if _, err := apps.ParseChartRef(c.Positionals[1], c.Flag("version")); err != nil {
+		return refuse("usage", "%s", err.Error())
 	}
 	return nil
 }

@@ -3,35 +3,94 @@ import { DEFAULT_GRACE, GRACE_CHOICES, REFRESH_CHOICES, refreshLabel, saveSettin
 import type { Settings } from '../api/types'
 import { DEFAULT_TIME_FORMAT, fmtClock, fmtTs, setTimeFormat, type TimeFormat } from '../lib/format'
 import { adminHref, navigate, type Route } from '../lib/router'
+import { IssueSettings } from './IssueSettings'
+import { SLASettings } from './SLASettings'
+import { CasesSettings } from './CasesSettings' // One flow for findings and cases (Phase 12, wave 6)
 import { SaveBar } from './SaveBar'
-import { SherlockSettings } from './SherlockSettings'
 import { WatsonSettings } from './WatsonSettings'
+import { AgentsSection } from './ai/AgentsSection'
+import { KnowledgeSection } from './ai/KnowledgeSection'
+import { ProvidersSection } from './ai/ProvidersSection'
+import { JobsSettings } from './cases/JobsSettings'
+import { GettingStartedSection } from './GettingStarted'
+import { HelmReposSettings } from './apps/HelmReposSettings' // Helm repositories (Phase 12, wave 5)
+import { leftText, useSetup } from '../api/setup'
 
-type Section = 'general' | 'sherlock' | 'watson'
+type Section = 'start' | 'general' | 'providers' | 'agents' | 'knowledge' | 'watson' | 'apps' | 'issues' | 'jobs' | 'sla' | 'cases'
 
-const SECTIONS: { id: Section; label: string; hint: string }[] = [
-  { id: 'general', label: 'General', hint: 'Refresh rate, times, alerts' },
-  { id: 'sherlock', label: 'Sherlock', hint: 'On per cluster, API key, model, caps' },
-  { id: 'watson', label: 'Watson', hint: 'Where it runs, approvals' },
+interface SectionInfo {
+  id: Section
+  label: string
+  hint: string
+}
+
+// The sections, in groups under a heading (Phase 12): the AI agents'
+// replace Sherlock's of before, whose address leads to Agents.
+const GROUPS: { label?: string; sections: SectionInfo[] }[] = [
+  {
+    sections: [
+      // --- Getting started (Phase 12, GS-05): first, with what is left.
+      { id: 'start', label: 'Getting started', hint: 'What is left to set up' },
+      { id: 'general', label: 'General', hint: 'Refresh rate, times, alerts' },
+    ],
+  },
+  {
+    label: 'AI',
+    sections: [
+      { id: 'providers', label: 'Providers', hint: 'Where models come from' },
+      { id: 'agents', label: 'Agents', hint: 'Sherlock and the others: models, tools, budgets' },
+      { id: 'knowledge', label: 'Knowledge', hint: 'Mycroft’s sources and storage' },
+    ],
+  },
+  {
+    label: 'Changes',
+    sections: [
+      { id: 'watson', label: 'Watson', hint: 'Where it runs, approvals' },
+      // --- Helm repositories (Phase 12, wave 5) ---
+      { id: 'apps', label: 'Applications', hint: 'Helm repositories and OCI registries' },
+    ],
+  },
+  {
+    label: 'Cases',
+    sections: [
+      { id: 'issues', label: 'Issues', hint: 'Report page, timers, API tokens' },
+      // --- Cases replace reports (Phase 12, wave 5): the SLA, for every case.
+      { id: 'sla', label: 'SLA', hint: 'Response and resolution targets, P0 to P4' },
+      // --- One flow for findings and cases (Phase 12, wave 6) ---
+      { id: 'cases', label: 'Cases', hint: 'Keeping agent-found cases, exceptions, caps' },
+      // --- Jobs (Phase 12) ---
+      { id: 'jobs', label: 'Jobs', hint: 'Who may edit jobs, what agents read as' },
+    ],
+  },
 ]
 
+const SECTIONS: SectionInfo[] = GROUPS.flatMap((g) => g.sections)
+
 const settingsHref = (section: Section) => adminHref('settings', section === 'general' ? [] : [section])
+
+/** The section an address asks for: Sherlock's of before is Agents now. */
+export function sectionOf(asked: string | undefined): Section {
+  if (asked === 'sherlock') return 'agents'
+  return SECTIONS.find((s) => s.id === asked)?.id ?? 'general'
+}
 
 interface Props {
   route: Route
   settings: Settings | null
   refreshedAt: Date | null
+  onToast?: (msg: string) => void
 }
 
 /**
  * Settings, the last page of the Administration area (RB-47), for
- * SuperAdmins: General (the refresh rate, kept on the server), Sherlock and
- * Watson. The theme is personal and lives in the account menu. The page and
- * its frame, with Back and Escape, are the Administration area's.
+ * SuperAdmins: General (the refresh rate, kept on the server), the AI
+ * agents' Providers, Agents and Knowledge (Phase 12), Watson, and the issue
+ * service's (Phase 12). The theme is personal and lives in the account
+ * menu. The page and its frame, with Back and Escape, are the
+ * Administration area's.
  */
-export function SettingsPanel({ route, settings, refreshedAt }: Props) {
-  const asked = route.path[1] as Section | undefined
-  const section: Section = SECTIONS.some((s) => s.id === asked) ? asked! : 'general'
+export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) {
+  const section = sectionOf(route.path[1])
   const heading = useRef<HTMLHeadingElement>(null)
 
   useEffect(() => {
@@ -39,10 +98,18 @@ export function SettingsPanel({ route, settings, refreshedAt }: Props) {
   }, [section])
 
   const label = SECTIONS.find((s) => s.id === section)!.label
+  // Getting started's hint says how many steps are left (Phase 12).
+  const { view: setup } = useSetup(true)
   return (
     <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="settings-page">
       <nav aria-label="Settings sections" style={{ flex: '0 0 200px', display: 'flex', flexDirection: 'column', gap: 2, position: 'sticky', top: 16 }} className="rk-setnav">
-        {SECTIONS.map((s) => (
+        {GROUPS.map((g) => [
+          g.label && (
+            <span key={g.label} className="rk-fhint" style={{ padding: '10px 12px 2px', fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.4 }} data-testid="settings-group">
+              {g.label}
+            </span>
+          ),
+          ...g.sections.map((s) => (
           <a
             key={s.id}
             href={settingsHref(s.id)}
@@ -56,17 +123,26 @@ export function SettingsPanel({ route, settings, refreshedAt }: Props) {
             style={{ display: 'flex', flexDirection: 'column', padding: '8px 12px', borderRadius: 8, textDecoration: 'none', color: 'var(--fg)', background: s.id === section ? 'var(--surface)' : 'transparent', boxShadow: s.id === section ? 'inset 3px 0 0 var(--accent)' : undefined }}
           >
             <span style={{ fontWeight: 600, fontSize: 13 }}>{s.label}</span>
-            <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{s.hint}</span>
+            <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{s.id === 'start' ? leftText(setup) : s.hint}</span>
           </a>
-        ))}
+          )),
+        ])}
       </nav>
       <section className="rk-card" style={{ flex: '1 1 480px', minWidth: 0, padding: '20px 24px 24px', display: 'flex', flexDirection: 'column', gap: 20 }} aria-labelledby="settings-heading">
         <h2 id="settings-heading" ref={heading} tabIndex={-1} style={{ margin: 0, fontSize: 16, fontWeight: 600, outline: 'none' }}>
           {label}
         </h2>
+        {section === 'start' && <GettingStartedSection onToast={onToast} />}
         {section === 'general' && <General settings={settings} refreshedAt={refreshedAt} />}
-        {section === 'sherlock' && <SherlockSettings open />}
+        {section === 'providers' && <ProvidersSection onToast={onToast} />}
+        {section === 'agents' && <AgentsSection onToast={onToast} />}
+        {section === 'knowledge' && <KnowledgeSection onToast={onToast} />}
         {section === 'watson' && <WatsonSettings open />}
+        {section === 'apps' && <HelmReposSettings onToast={onToast} />}
+        {section === 'issues' && <IssueSettings open />}
+        {section === 'jobs' && <JobsSettings />}
+        {section === 'sla' && <SLASettings />}
+        {section === 'cases' && <CasesSettings />}
       </section>
     </div>
   )

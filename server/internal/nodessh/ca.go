@@ -74,6 +74,9 @@ type CA struct {
 	busy   chan struct{}
 	mu     sync.Mutex
 	signer ssh.Signer
+	// pem is the key as kept, for a backup (ADR-137): what the Secret
+	// holds, or, in memory, what was made.
+	pem []byte
 }
 
 // NewCA returns the authority over its Secret; nil keeps the key in memory.
@@ -92,10 +95,10 @@ func (c *CA) loaded() bool {
 	return c.signer != nil
 }
 
-func (c *CA) use(s ssh.Signer) {
+func (c *CA) use(s ssh.Signer, pem []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.signer = s
+	c.signer, c.pem = s, pem
 }
 
 func (c *CA) load(ctx context.Context, makeOne bool) error {
@@ -117,11 +120,11 @@ func (c *CA) load(ctx context.Context, makeOne bool) error {
 		if !makeOne {
 			return nil
 		}
-		_, signer, err := newKey()
+		encoded, signer, err := newKey()
 		if err != nil {
 			return err
 		}
-		c.use(signer)
+		c.use(signer, encoded)
 		return nil
 	}
 	// The first write is conditional, as the accounts' is: of two replicas
@@ -137,7 +140,7 @@ func (c *CA) load(ctx context.Context, makeOne bool) error {
 			if err != nil {
 				return fmt.Errorf("the saved SSH authority key is not readable: %w", err)
 			}
-			c.use(signer)
+			c.use(signer, saved)
 			return nil
 		}
 		if !makeOne {
@@ -154,10 +157,58 @@ func (c *CA) load(ctx context.Context, makeOne bool) error {
 		if err != nil {
 			return fmt.Errorf("saving the SSH authority's key: %w", err)
 		}
-		c.use(signer)
+		c.use(signer, encoded)
 		return nil
 	}
 	return errors.New("saving the SSH authority's key: its Secret keeps changing")
+}
+
+// PrivateKey is the authority's private key as kept, PEM, for a backup
+// that seals it (ADR-137); nil when there is no authority yet. It never
+// reaches a log or a page.
+func (c *CA) PrivateKey(ctx context.Context) ([]byte, error) {
+	if err := c.Peek(ctx); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]byte(nil), c.pem...), nil
+}
+
+// ErrHasAuthority is a restore of an authority's key on a console that
+// has one: it stays, since its pairings depend on it.
+var ErrHasAuthority = errors.New("this console has an SSH authority of its own")
+
+// Restore puts back an authority's private key from a backup, on a
+// console with none yet: the pairings made with it work again.
+func (c *CA) Restore(ctx context.Context, pem []byte) error {
+	signer, err := ssh.ParsePrivateKey(pem)
+	if err != nil {
+		return errors.New("the backup's SSH authority key is not readable")
+	}
+	if err := c.Peek(ctx); err != nil {
+		return err
+	}
+	if c.loaded() {
+		return ErrHasAuthority
+	}
+	if c.store != nil {
+		_, version, found, err := c.store.LoadKey(ctx, keyPrivate)
+		if err != nil {
+			return fmt.Errorf("reading the SSH authority's key: %w", err)
+		}
+		if found {
+			return ErrHasAuthority
+		}
+		if err := c.store.SaveKeyIf(ctx, keyPrivate, pem, version); err != nil {
+			if errors.Is(err, kube.ErrConflict) {
+				return ErrHasAuthority
+			}
+			return fmt.Errorf("saving the SSH authority's key: %w", err)
+		}
+	}
+	c.use(signer, append([]byte(nil), pem...))
+	return nil
 }
 
 // newKey makes a key pair: the private key as PEM, and its signer.

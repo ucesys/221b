@@ -178,6 +178,9 @@ jobs:
           version: ${{ env.HELM_VERSION }}
       - name: Lint and validate
         run: hack/check-chart.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
+      # Phase 12: every source a prompt copies from is recorded, with its license.
+      - name: Prompt sources
+        run: hack/check-prompt-sources.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Shell scripts
         run: shellcheck -x --severity=warning hack/*.sh 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Report

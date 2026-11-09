@@ -5,6 +5,8 @@ import type { ClusterInfo } from '../api/types'
 import type { StreamState } from '../api/live'
 import { fmtTs } from '../lib/format'
 import { AlertIcon, ClockIcon } from './Icons'
+import { errorSummary } from '../lib/reportLink'
+import { ReportPageLink } from './cases/ReportPageLink'
 
 interface Props {
   cluster: ClusterInfo | null
@@ -105,6 +107,12 @@ export function Banners({ cluster, stream, now, summary, pageHref, accessError, 
             <a href={b.link.href} data-testid={b.link.testid ?? 'banner-link'}>
               {b.link.label}
             </a>
+          )}
+          {/* Phase 12 (CS-19): a failed load can be reported, the screen and the error filled in. */}
+          {b.tone === 'err' && b.testid !== 'alert-banner' && (
+            <ReportPageLink className="rk-link" text={() => errorSummary(`${cluster?.name ?? 'a cluster'}'s pages`, `${b.title}. ${b.detail}`)} testId="banner-report">
+              Report this problem ↗
+            </ReportPageLink>
           )}
         </div>
       ))}

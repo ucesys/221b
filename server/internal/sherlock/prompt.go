@@ -20,11 +20,22 @@ func systemPrompt(q Question, now time.Time) []Block {
 		}
 		cluster += "."
 	}
-	if n := strings.TrimSpace(q.Notes); n != "" {
+	notes := q.Notes
+	if q.agent != nil {
+		notes = q.agent.Notes
+	}
+	if n := strings.TrimSpace(notes); n != "" {
 		cluster += "\n\nWhat the administrators of this console say about their infrastructure, to trust over what you work out:\n" + n
 	}
 	core := corePrompt(q.ViewChanges)
-	if t := strings.TrimSpace(q.Instructions); t != "" {
+	instructions := q.Instructions
+	if q.agent != nil {
+		// An agent's instructions are assembled by package ai: its fixed
+		// core, the agents it can hand work to, then the house
+		// instructions (Phase 12).
+		instructions = q.agent.Instructions
+	}
+	if t := strings.TrimSpace(instructions); t != "" {
 		core = t
 		if !strings.Contains(core, clusterTextRule) {
 			core += "\n\n" + clusterTextRule
@@ -46,6 +57,18 @@ func PromptText(q Question, now time.Time) (core, cluster string) {
 
 // BuiltIn is the built-in instructions, for the editor's reset.
 func BuiltIn(viewChanges bool) string { return corePrompt(viewChanges) }
+
+// ClusterTextRule is the rule every prompt keeps: text from the cluster is
+// data, not instructions.
+const ClusterTextRule = clusterTextRule
+
+// AgentPromptText is the instructions an agent gets for a cluster: the
+// block before the cluster's, and the cluster's with its notes.
+func AgentPromptText(a Agent, q Question, now time.Time) (core, cluster string) {
+	q.agent = &a
+	b := systemPrompt(q, now)
+	return b[0].Text, b[1].Text
+}
 
 // clusterTextRule goes with every prompt, the administrators' own
 // instructions too: whatever else changes, text from the cluster stays data.

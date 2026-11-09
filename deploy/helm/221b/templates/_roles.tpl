@@ -158,10 +158,13 @@ name of what is wrong. Renders nothing.
 {{- fail (printf "auth.local.groups: %q is defined twice" $g.name) -}}
 {{- end -}}
 {{- $_ := set $names $g.name true -}}
-{{- if not (has $g.role (list "viewer" "admin")) -}}
-{{- fail (printf "auth.local.groups: %q has role %q; a local group is viewer or admin (SuperAdmin and SuperViewer are given to a user)" $g.name (toString $g.role)) -}}
+{{- if not (has $g.role (list "viewer" "admin" "reporter")) -}}
+{{- fail (printf "auth.local.groups: %q has role %q; a local group is viewer, admin or reporter (SuperAdmin and SuperViewer are given to a user)" $g.name (toString $g.role)) -}}
 {{- end -}}
-{{- if not $g.namespaces -}}
+{{- if and (eq $g.role "reporter") $g.namespaces -}}
+{{- fail (printf "auth.local.groups: %q is a reporter group, which reports problems and is bound in no namespace; remove its namespaces" $g.name) -}}
+{{- end -}}
+{{- if and (ne $g.role "reporter") (not $g.namespaces) -}}
 {{- fail (printf "auth.local.groups: %q needs at least one namespace" $g.name) -}}
 {{- end -}}
 {{- end -}}
@@ -198,6 +201,27 @@ name of what is wrong. Renders nothing.
 {{- if and (has $role (list "superViewer" "superAdmin")) $e.namespaces -}}
 {{- fail (printf "auth.%s.roles.%s: %s applies in every namespace, so %q cannot take namespaces" $v.auth.mode $role $role $e.group) -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- /* The issue service (Phase 12): its roles, and the reporters' groups. */ -}}
+{{- $issues := $v.issues | default dict -}}
+{{- range $r := concat ($issues.reportRoles | default list) ($issues.operatorRoles | default list) -}}
+{{- if not (has $r (list "viewer" "admin" "superViewer" "superAdmin")) -}}
+{{- fail (printf "issues.reportRoles and issues.operatorRoles take viewer, admin, superViewer and superAdmin, not %q (the Reporter role always reports)" (toString $r)) -}}
+{{- end -}}
+{{- end -}}
+{{- /* The agents' proposals (Phase 12): who approves them. */ -}}
+{{- range $r := (($v.cases | default dict).approverRoles | default list) -}}
+{{- if not (has $r (list "viewer" "admin" "superViewer" "superAdmin")) -}}
+{{- fail (printf "cases.approverRoles takes viewer, admin, superViewer and superAdmin, not %q" (toString $r)) -}}
+{{- end -}}
+{{- end -}}
+{{- range $g := ($issues.reporterGroups | default list) -}}
+{{- if not (and (kindIs "string" $g) $g) -}}
+{{- fail "issues.reporterGroups lists group names, each a non-empty string" -}}
+{{- end -}}
+{{- if or (hasPrefix "system:" $g) (hasPrefix "221b:" $g) -}}
+{{- fail (printf "the group name %q is reserved: names that start with system: or 221b: are never accepted" $g) -}}
 {{- end -}}
 {{- end -}}
 {{- /* Names no source may use. */ -}}
@@ -324,6 +348,7 @@ before, and so cannot be. Renders "true" or nothing.
 {{- end -}}
 {{- end -}}
 {{- $cfg := dict "lists" $lists "localGroups" $groups "rbacEnforce" $v.rbac.enforce -}}
+{{- with (($v.issues | default dict).reporterGroups) -}}{{- $_ := set $cfg "reporterGroups" . -}}{{- end -}}
 {{- $_ := set $cfg "templates" (dict "admin" $v.rbac.roles.admin.template "superAdmin" $v.rbac.roles.superAdmin.template "adminExec" (and (eq $v.rbac.roles.admin.template "full") ($v.rbac.roles.admin.exec | default false))) -}}
 {{- $_ := set $cfg "prefixes" (dict "local" $v.auth.prefixes.local "ldap" $v.auth.prefixes.ldap) -}}
 {{- /* The RoleBindings this chart renders, so the console can write the same YAML for a cluster the chart is not installed in. */ -}}

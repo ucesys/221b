@@ -62,8 +62,49 @@ func (f *Fake) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasSuffix(r.URL.Path, "/chat/completions") && r.Method == http.MethodPost:
 		f.chat(w, r)
 		return
+	case strings.HasSuffix(r.URL.Path, "/models") && r.Method == http.MethodGet:
+		f.models(w, r)
+		return
 	}
 	http.NotFound(w, r)
+}
+
+// Open is the path prefix of the fake's in-house endpoint, which takes no
+// credential, like a vLLM server inside the network (Phase 12, wave 5):
+// <fake>/open/v1 speaks the Chat Completions API and lists OpenModels.
+const Open = "/open/"
+
+// OpenModels are the models the in-house endpoint lists, with their
+// context windows as vLLM gives them (max_model_len).
+var OpenModels = map[string]int{"qwen3.8-27b": 16384, "llama-4-scout-17b": 8192}
+
+// models lists the models: the in-house endpoint's, OpenAI-shaped as vLLM
+// does, or the Claude API's with its key.
+func (f *Fake) models(w http.ResponseWriter, r *http.Request) {
+	type model struct {
+		ID          string `json:"id"`
+		Object      string `json:"object,omitempty"`
+		Type        string `json:"type,omitempty"`
+		OwnedBy     string `json:"owned_by,omitempty"`
+		MaxModelLen int    `json:"max_model_len,omitempty"`
+	}
+	var list []model
+	switch {
+	case strings.Contains(r.URL.Path, Open):
+		for id, n := range OpenModels {
+			list = append(list, model{ID: id, Object: "model", OwnedBy: "vllm", MaxModelLen: n})
+		}
+	case r.Header.Get("x-api-key") == "" || strings.Contains(r.Header.Get("x-api-key"), "invalid"):
+		apiError(w, 401, "authentication_error", "invalid x-api-key")
+		return
+	default:
+		for _, id := range []string{"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"} {
+			list = append(list, model{ID: id, Type: "model"})
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	b, _ := json.Marshal(map[string]any{"object": "list", "data": list})
+	w.Write(b)
 }
 
 type block struct {
@@ -217,8 +258,14 @@ func where(msgs []message) (question string, round int, results []string) {
 	return "", round, results
 }
 
-// splitView takes the console's view state (P6U-03) out of a question.
+// splitView takes the console's view state (P6U-03) out of a question,
+// and a case's context (CF-47), which the scripts do not read.
 func splitView(q string) (question, view string) {
+	if i := strings.Index(q, "<case-context>"); i >= 0 {
+		if j := strings.Index(q[i:], "</case-context>"); j >= 0 {
+			q = strings.TrimSpace(q[:i] + q[i+j+len("</case-context>"):])
+		}
+	}
 	i := strings.Index(q, "<console-view>")
 	if i < 0 {
 		return q, ""
@@ -230,6 +277,9 @@ func splitView(q string) (question, view string) {
 	return strings.TrimSpace(q[:i] + q[i+j+len("</console-view>"):]), strings.TrimSpace(q[i+len("<console-view>") : i+j])
 }
 
+// reChain is a scripted chain of hand-overs: [[chain troubleshooter,auditor]].
+var reChain = regexp.MustCompile(`\[\[chain ([a-zA-Z,]*)\]\]`)
+
 // reDirective is a scripted tool call in a question: [[view_filter {...}]].
 var reDirective = regexp.MustCompile(`\[\[([a-z_]+)(?:\s+(\{.*?\}))?\]\]`)
 
@@ -239,6 +289,24 @@ func scripted(question, view string, round int, results []string) reply {
 	last := ""
 	if len(results) > 0 {
 		last = results[0]
+	}
+	// A test's grading (Phase 12): a point is made when the answer says
+	// it word for word, ignoring case.
+	if strings.Contains(question, "<points>") && strings.Contains(question, "<answer>") {
+		return reply{text: []string{grade(question)}}
+	}
+	// A chain of hand-overs (Phase 12): [[chain a,b,c]] hands the rest of
+	// the chain to a, which hands it to b, and so on; the last one answers.
+	if m := reChain.FindStringSubmatch(question); m != nil {
+		agents := strings.Split(m[1], ",")
+		if agents[0] == "" {
+			return reply{text: []string{"End of the chain."}}
+		}
+		if round == 0 {
+			rest := strings.Join(agents[1:], ",")
+			return reply{text: []string{"Asking " + agents[0] + "."}, tool: "hand_over", input: map[string]any{"agent": agents[0], "task": "[[chain " + rest + "]]", "context": "a test chain"}}
+		}
+		return reply{text: []string{"Chain: " + summarize(last)}}
 	}
 	if found := reDirective.FindAllStringSubmatch(question, -1); len(found) > 0 {
 		// [[sleep 2000]] waits before the next call, as a slow model would.
@@ -294,6 +362,16 @@ func scripted(question, view string, round int, results []string) reply {
 			}
 			return reply{text: []string{uiSummary(last)}}
 		}
+	}
+	// Sherlock's setup skill (Phase 12, GS-07 to GS-10).
+	if r, ok := setupReply(question, round, last); ok {
+		return r
+	}
+	// Agents on their own (Phase 12, jobs): an investigation of a report,
+	// a check of its fix, the nightly audit, an alert's diagnosis and the
+	// daily digest, each ending with the JSON block the console reads.
+	if r, ok := jobReply(question, round, last); ok {
+		return r
 	}
 	// The home page's troubleshooting of a cluster with errors or warnings.
 	if strings.Contains(strings.ToLower(question), "troubleshooting report for cluster") {
@@ -761,6 +839,10 @@ func (f *Fake) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Unlock()
 	auth := r.Header.Get("Authorization")
+	if strings.Contains(r.URL.Path, Open) {
+		// The in-house endpoint takes no credential.
+		auth = "Bearer none"
+	}
 	if !strings.HasPrefix(auth, "Bearer ") || strings.Contains(auth, "invalid") {
 		apiError(w, 401, "invalid_api_key", "Incorrect API key provided")
 		return
@@ -845,4 +927,186 @@ func (f *Fake) chat(w http.ResponseWriter, r *http.Request) {
 	send(chunk(map[string]any{}, finish))
 	send(map[string]any{"id": "chatcmpl-fake", "object": "chat.completion.chunk", "choices": []any{}, "usage": map[string]int{"prompt_tokens": len(body) / 4, "completion_tokens": out + 1, "total_tokens": len(body)/4 + out + 1}})
 	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+// grade answers a grading request: {"points":[…]}, true for each numbered
+// point the answer contains.
+func grade(q string) string {
+	answer := q
+	if i, j := strings.Index(q, "<answer>"), strings.Index(q, "</answer>"); i >= 0 && j > i {
+		answer = q[i+len("<answer>") : j]
+	}
+	answer = strings.ToLower(answer)
+	var got []bool
+	if i, j := strings.Index(q, "<points>"), strings.Index(q, "</points>"); i >= 0 && j > i {
+		for _, line := range strings.Split(strings.TrimSpace(q[i+len("<points>"):j]), "\n") {
+			_, point, ok := strings.Cut(line, ". ")
+			if !ok {
+				continue
+			}
+			got = append(got, strings.Contains(answer, strings.ToLower(strings.TrimSpace(point))))
+		}
+	}
+	b, _ := json.Marshal(map[string]any{"points": got})
+	return string(b)
+}
+
+// between is the text between <tag> and </tag>, or "".
+func between(s, tag string) string {
+	_, rest, ok := strings.Cut(s, "<"+tag+">")
+	if !ok {
+		return ""
+	}
+	in, _, _ := strings.Cut(rest, "</"+tag+">")
+	return strings.TrimSpace(in)
+}
+
+// jobBlock is an answer with the JSON block of an agent on its own.
+func jobBlock(prose string, v any) reply {
+	b, _ := json.Marshal(v)
+	return reply{text: []string{prose + "\n\n```json\n" + string(b) + "\n```"}}
+}
+
+// jobReply answers the tasks of the jobs (Phase 12).
+func jobReply(question string, round int, last string) (reply, bool) {
+	q := strings.ToLower(question)
+	switch {
+	// --- Case work (Phase 12): a case's RCA drafted, and a case analysed:
+	// a Deployment named is restarted.
+	case strings.Contains(q, "<case-history>"):
+		return jobBlock("Read the case's record.", map[string]any{"cause": "The pods behind it ran out of memory under load.", "fixApplied": "The deployment was restarted with a higher memory limit.", "prevention": "Alert on memory use above 80% of the limit."}), true
+	case strings.Contains(q, "<case>"):
+		object := ""
+		for _, line := range strings.Split(between(question, "case"), "\n") {
+			if v, ok := strings.CutPrefix(line, "object: "); ok {
+				object = strings.TrimSpace(v)
+			}
+		}
+		fix := map[string]any{"summary": "", "commands": []string{}}
+		if parts := strings.Split(object, "/"); len(parts) == 3 && strings.EqualFold(parts[1], "deployment") {
+			fix = map[string]any{"summary": "Restart " + parts[2], "commands": []string{"kubectl rollout restart deployment/" + parts[2] + " -n " + parts[0]}}
+		}
+		// A case about something asleep is the system working as intended
+		// (CF-82): no problem, which lowers a case the console opened (CF-83).
+		if strings.Contains(strings.ToLower(between(question, "case")), "asleep") {
+			return jobBlock("**Case analysis**: the node was put to sleep on purpose.", map[string]any{"summary": "No change needed: the node sleeps on purpose.", "cause": "",
+				"evidence": []string{"nodepower/status: asleep"}, "fix": map[string]any{"summary": "", "commands": []string{}}, "proposals": []any{},
+				"expected": true, "expectedWhy": "Its node is annotated nodepower/status: asleep and was cordoned before it stopped reporting."}), true
+		}
+		return jobBlock("**Case analysis**: read the object, its events and its pods.", map[string]any{"summary": "The pods restart: they run out of memory.", "cause": "The memory limit is too low for the load.",
+			"evidence": []string{"OOMKilled 4 times in the last hour"}, "fix": fix, "proposals": []any{}}), true
+	// --- end of case work.
+	case strings.Contains(q, "<report>") && strings.Contains(q, "marked fixed"):
+		fixed := !strings.Contains(strings.ToLower(between(question, "report")), "still broken")
+		return jobBlock("Looked again at what the investigation named.", map[string]any{"fixed": fixed, "evidence": []string{"the pods it named run and are ready"}, "technical": "Checked again."}), true
+	case strings.Contains(q, "<report>"):
+		report := strings.ToLower(between(question, "report"))
+		service, confidence := "", 0
+		for _, line := range strings.Split(between(question, "services"), "\n") {
+			id, rest, ok := strings.Cut(line, ": ")
+			name, _, _ := strings.Cut(rest, ";")
+			name, _, _ = strings.Cut(name, " (")
+			if ok && name != "" && strings.Contains(report, strings.ToLower(strings.TrimSpace(name))) {
+				service, confidence = strings.TrimSpace(id), 80
+				break
+			}
+		}
+		out := map[string]any{"service": service, "confidence": confidence, "cause": "The pods behind it restart: they run out of memory.",
+			"evidence": []string{"shop/web-7f9: OOMKilled 4 times in the last hour"}, "technical": "The web pods are OOMKilled under load; their memory limit is 256Mi.",
+			"plain": "The shop is slow because part of it keeps restarting. We are looking into it.", "knownIssue": nil, "proposals": []any{}}
+		if strings.Contains(report, "everyone") {
+			out["knownIssue"] = map[string]any{"title": "The shop is slow", "symptoms": []string{"the shop is slow"}, "services": []string{service}, "workaround": "Try again in a few minutes."}
+		}
+		if strings.Contains(report, "restart") {
+			out["proposals"] = []any{map[string]any{"title": "Restart the web pods", "reasoning": "They are stuck.", "commands": []string{"kubectl rollout restart deployment/web -n shop"}, "impact": "a rolling restart", "risk": "low"}}
+		}
+		return jobBlock("Read the alerts and the pods behind the service.", out), true
+	case strings.Contains(q, "nightly audit"):
+		if round == 0 {
+			return reply{text: []string{"Reviewing the cluster."}, tool: "review_cluster", input: map[string]any{}}, true
+		}
+		// Its proposal names the finding it fixes (Phase 12, wave 6b), so
+		// it resolves the finding's case. Its second finding is
+		// information (P4), below the job's lowest priority by default:
+		// the run keeps it as ignored (wave 6c, CF-33). Two more, also
+		// information, name ids of the agent's own, alike in words, each
+		// with its description (CF-86): the validation rules list them as
+		// not on the list, and the housekeeping suggests them as one rule
+		// once found in three runs (CF-85, CF-87).
+		return jobBlock("**Nightly audit**: the review found what is below. "+summarize(last), map[string]any{"findings": []any{map[string]any{"severity": "warning", "check": "netpol.missing", "title": "Namespaces without network policies", "detail": "Pods there accept traffic from anywhere.", "evidence": []string{summarize(last)}, "resource": "Namespace/analytics"},
+			map[string]any{"severity": "info", "check": "quota.missing", "title": "analytics has no resource quota", "detail": "A shared namespace without a quota can take the cluster's room.", "resource": "Namespace/analytics"},
+			map[string]any{"severity": "info", "check": "other.node-clock-skew", "title": "The nodes' clocks differ by seconds", "detail": "Certificates and leases depend on the clocks agreeing.", "resource": "",
+				"checkWhy": "The nodes' clocks are not in step with each other. No rule given covers time keeping on the nodes."},
+			map[string]any{"severity": "info", "check": "other.node-clock-drift", "title": "A node's clock drifts", "detail": "Its time moves away from the others between syncs.", "resource": "",
+				"checkWhy": "A node's clock drifts from true time between syncs. The rules given are about workloads and access, none about time."}},
+			"proposals": []any{map[string]any{"title": "Mark analytics for a default-deny network policy", "reasoning": "Its pods accept traffic from anywhere.", "fixes": []any{1}, "commands": []string{"kubectl label namespace analytics e2e.221b/netpol=wanted"}, "impact": "a label on the namespace; no traffic changes yet", "risk": "low"}}}), true
+	case strings.Contains(q, "<alert>"):
+		alert := between(question, "alert")
+		object := ""
+		for _, line := range strings.Split(alert, "\n") {
+			if v, ok := strings.CutPrefix(line, "object: "); ok {
+				object = strings.TrimSpace(v)
+			}
+		}
+		if round == 0 {
+			return reply{text: []string{"Reading the events."}, tool: "list_events", input: map[string]any{}}, true
+		}
+		kind := "Pod"
+		for _, line := range strings.Split(alert, "\n") {
+			if v, ok := strings.CutPrefix(line, "kind: "); ok && strings.TrimSpace(v) != "" {
+				kind = strings.TrimSpace(v)
+			}
+		}
+		props := []any{}
+		resource := kind + "/" + object
+		if ns, name, ok := strings.Cut(object, "/"); ok {
+			resource = ns + "/" + kind + "/" + name
+			props = append(props, map[string]any{"title": "Delete the pod " + object + " so it starts again", "reasoning": "It is stuck.", "fixes": []any{1}, "commands": []string{"kubectl delete pod " + name + " -n " + ns}, "impact": "the pod is made again", "risk": "low"})
+		}
+		// An object asleep is expected (CF-82): an expected finding, no
+		// case, the alert acknowledged.
+		if strings.Contains(strings.ToLower(object), "asleep") {
+			return jobBlock("**Diagnosis** of "+object+": its node sleeps on purpose.", map[string]any{"findings": []any{map[string]any{"severity": "critical", "check": "node.not-ready", "title": object + " stopped with its node", "detail": alert, "resource": resource,
+				"expected": true, "expectedWhy": "Its node is annotated nodepower/status: asleep and was cordoned before it stopped reporting."}}, "proposals": []any{}}), true
+		}
+		return jobBlock("**Diagnosis** of "+object+": it fails to start.", map[string]any{"findings": []any{map[string]any{"severity": "critical", "check": "pod.crashloop", "title": object + " fails to start", "detail": alert, "resource": resource}}, "proposals": props}), true
+	case strings.Contains(q, "daily digest"):
+		n := 0
+		if log := between(question, "audit-log"); log != "" {
+			n = strings.Count(log, "\n") + 1
+		}
+		return jobBlock(fmt.Sprintf("**Digest**: %d records in the audit log; nothing needs anyone today.", n), map[string]any{"findings": []any{}, "proposals": []any{}}), true
+	}
+	return reply{}, false
+}
+
+// setupReply answers the setup skill's questions: what is next, from
+// setup_status; a token pasted into the chat, refused; and which model
+// the Auditor takes, from the knowledge base.
+func setupReply(question string, round int, last string) (reply, bool) {
+	q := strings.ToLower(strings.ReplaceAll(question, "’", "'"))
+	switch {
+	case strings.Contains(q, "what's next") || strings.Contains(q, "what is next"):
+		if round == 0 {
+			return reply{text: []string{"Reading Getting started."}, tool: "setup_status", input: map[string]any{}}, true
+		}
+		next := ""
+		for _, line := range strings.Split(last, "\n") {
+			if v, ok := strings.CutPrefix(line, "Next: "); ok {
+				next = v
+			}
+		}
+		if next == "" {
+			return reply{text: []string{"Every step of Getting started is done or dismissed."}}, true
+		}
+		return reply{text: []string{"Next is " + next + " The other open steps are on Settings › Getting started. A password, key or token goes into its own field on that screen, never into this chat."}}, true
+	case strings.Contains(q, "token") && strings.Contains(q, "set it up"):
+		return reply{text: []string{"I will not take a token in the chat. Type it into the token field of the source on [Settings › Knowledge](#/admin/settings/knowledge), which keeps it in a Kubernetes Secret, and replace it if others could have seen it here."}}, true
+	case strings.Contains(q, "which model") && strings.Contains(q, "auditor"):
+		if round == 0 {
+			return reply{text: []string{"Asking the knowledge base."}, tool: "ask_knowledge", input: map[string]any{"question": "Which model should the Auditor use?"}}, true
+		}
+		return reply{text: []string{"For the Auditor, a strong model with a long context: it reads a whole cluster's review at once. The knowledge base says: " + summarize(last)}}, true
+	}
+	return reply{}, false
 }

@@ -128,6 +128,7 @@ export function NodeFleets({ cluster, fleets, defs, nodes, sel, onSel, loaded, m
           fleets={defs}
           nodes={nodes}
           now={now}
+          onToast={onToast}
           onClose={() => setEditor(null)}
           onSave={async (f, isNew) => {
             await saveFleets(cluster, isNew ? [...defs, f] : defs.map((x) => (x.id === f.id ? f : x)))

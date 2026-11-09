@@ -12,6 +12,7 @@ import { ExportMenu } from './ExportMenu'
 import { SearchIcon } from './Icons'
 import type { TabProps } from './tabs'
 import { AskSherlock } from './Sherlock'
+import { AlertAckTag, AlertReports } from './cases/AlertReports'
 import { troubleshootQuestion } from '../lib/sherlock'
 
 const KINDS: [AlertKind, string][] = [
@@ -96,7 +97,7 @@ function exportEvents(rows: AlertRow[], format: ExportFormat, cluster: string | 
   onToast(`Downloaded ${base}.${format}`)
 }
 
-function AlertCard({ r, now, onOpen, onPod, onExport, onAck }: { r: AlertRow; now: number; onOpen: () => void; onPod: (key: string) => void; onExport: (format: ExportFormat) => void; onAck: (acknowledge: boolean) => Promise<void> }) {
+function AlertCard({ r, now, onOpen, onPod, onExport, onAck, clusters }: { r: AlertRow; now: number; onOpen: () => void; onPod: (key: string) => void; onExport: (format: ExportFormat) => void; onAck: (acknowledge: boolean) => Promise<void>; clusters: string[] }) {
   const [sort, setSort] = useState<Sort>({ col: 'i', dir: 'asc' })
   const [busy, setBusy] = useState(false)
   const ack = async (on: boolean) => {
@@ -139,11 +140,7 @@ function AlertCard({ r, now, onOpen, onPod, onExport, onAck }: { r: AlertRow; no
           {r.name}
         </span>
         <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{metaText(r)}</span>
-        {r.ack && (
-          <span className="rk-tag" data-tone="warn" style={{ fontSize: 11, padding: '2px 8px' }} title={`Acknowledged by ${r.ack.by} at ${fmtTs(r.ack.at, { seconds: true })}. It stays off the banners until it changes or clears; the tab still counts it.`} data-testid="alert-acked">
-            Acknowledged by {r.ack.by} at {fmtTs(r.ack.at)}
-          </span>
-        )}
+        {r.ack && <AlertAckTag ack={r.ack} />}
         <span style={{ flex: '1 1 auto' }} />
         {r.status && (
           <span className="rk-pill" data-tone={r.statusTone}>
@@ -163,6 +160,8 @@ function AlertCard({ r, now, onOpen, onPod, onExport, onAck }: { r: AlertRow; no
           </button>
         )}
         {isActive(r) && <AskSherlock question={troubleshootQuestion(r)} label="Troubleshoot" testId="alert-troubleshoot" />}
+        {/* Phase 12 (CS-20): open reports on a service that runs here. */}
+        {isActive(r) && <AlertReports row={r} clusters={clusters} />}
         <button className="rk-btn" onClick={onOpen} data-testid="alert-open">
           {openLabel(r)}
         </button>
@@ -331,7 +330,7 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
     navigate(peekHref(target))
   }
   const openNode = (name: string) => navigate(peekHref({ kind: 'node', name }))
-  const card = (r: AlertRow) => <AlertCard key={r.key} r={r} now={now} onOpen={() => openRow(r)} onPod={openPod} onExport={(f) => exportEvents([r], f, cluster?.name, `${r.kind}-${r.name}-events`, onToast)} onAck={(on) => ack(r, on)} />
+  const card = (r: AlertRow) => <AlertCard key={r.key} r={r} now={now} onOpen={() => openRow(r)} onPod={openPod} onExport={(f) => exportEvents([r], f, cluster?.name, `${r.kind}-${r.name}-events`, onToast)} onAck={(on) => ack(r, on)} clusters={[route.cluster, cluster?.name ?? '']} />
   const groupTitle = kind === 'pods' ? 'Pods by node' : kind === 'nodes' ? 'Nodes' : 'Nodes and their pods'
   const groupEmpty = q ? `No ${kind === 'pods' ? 'pod' : kind === 'nodes' ? 'node' : 'node or pod'} alerts match this search.` : `No ${kind === 'pods' ? 'pod' : kind === 'nodes' ? 'node' : 'node or pod'} problems right now.`
   const openPod = (key: string) => {

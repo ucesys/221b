@@ -207,10 +207,13 @@ auth:
     # Groups for local users: a name, a role (viewer or admin) and the
     # namespaces it is bound to, which the chart refuses to be the console's
     # own namespace or the toolbox's. Who is in a group is kept in the console
-    # (the Users page, or groups below) and changes without an upgrade.
+    # (the Users page, or groups below) and changes without an upgrade. A
+    # group of the role reporter (Phase 12) has no namespaces: its members
+    # only report problems, on the report page (see issues below).
     groups: []
     #  - { name: web-readers,  role: viewer, namespaces: [web] }
     #  - { name: checkout-ops, role: admin,  namespaces: [checkout, web] }
+    #  - { name: staff,        role: reporter }
     # Accounts, with passwords as hashes. Make a hash with
     #   kubectl run hash --rm -it --restart=Never --image=ghcr.io/ucesys/221b:main -- hash-password
     # (type the password, then Ctrl-D, at least 12 characters), or
@@ -314,6 +317,40 @@ sherlock:
   # Allow the console's network policy to reach the Claude API (HTTPS).
   egress: true
 
+agents:
+  # The AI agents (Phase 12): Sherlock at the front desk, and an agent for
+  # each other purpose, configured in Administration › Settings › AI. Each
+  # agent's instructions are its fixed core (in the console, changed only
+  # by releases), then house instructions, then notes per cluster. What is
+  # set here is the baseline of the house instructions: an edit made in
+  # the console overrides it until you put the same text here, and an
+  # upgrade that changes a baseline while an edit is in force is flagged on
+  # the agent, never applied over the edit. At most 2,000 words each; keep
+  # facts about systems (addresses, hosts, ports) for Knowledge. The
+  # console reads them at start, and a change restarts it. Long text is
+  # easiest from a file:
+  #   helm upgrade … --set-file agents.troubleshooter.instructions=troubleshooter.md
+  # The agents' providers, models, budgets and versions of instructions are
+  # kept in the ConfigMap <release>-ai.
+  sherlock:
+    instructions: ""
+  troubleshooter:
+    instructions: ""
+  changePlanner:
+    instructions: ""
+  auditor:
+    instructions: ""
+  hostDoctor:
+    instructions: ""
+  automationAuthor:
+    instructions: ""
+  scriptReviewer:
+    instructions: ""
+  mycroft:
+    instructions: ""
+  summarizer:
+    instructions: ""
+
 secrets:
   # Read Secrets. The Namespaces tab then lists each Secret with its key
   # names and sizes, and the Helm tab reads release records, which Helm
@@ -351,6 +388,204 @@ automation:
   # role; Kubernetes still checks that whoever starts the run may impersonate
   # it. Empty, Kubernetes commands run as the person who starts the run.
   runIdentities: []
+
+issues:
+  # The issue service (Phase 12, docs/issues.md): people report problems in
+  # plain words on the report page, /report, outside the console's tabs;
+  # each report is matched against the known issues, and the reporter is
+  # told how it stands until it is resolved. Its API is /api/issues/v1/
+  # (docs/issues-api.yaml). Its reports, known issues, services and
+  # settings live in the ConfigMap <release>-issues. Since Phase 12's wave
+  # 5 a report is a case, and every case (reported, from a finding or an
+  # alert, or opened by hand) is kept there: false turns off the report
+  # page and the issue API only, and Cases keep working.
+  enabled: true
+  # The roles that may report problems, of superAdmin, superViewer, admin
+  # and viewer. The Reporter role always may.
+  reportRoles: [superAdmin, superViewer, admin, viewer]
+  # The roles that see every report and triage it: set its priority, owner
+  # and service, link it to a known issue, send replies, close it; and
+  # write known issues and services. The settings and API tokens are a
+  # SuperAdmin's whatever this says.
+  operatorRoles: [superAdmin, admin]
+  # Groups whose members hold the Reporter role: a fifth role, outside
+  # Kubernetes, that only reports problems and follows its own reports. A
+  # person who holds only it signs in like anyone else and sees the report
+  # page and nothing else. Names as the source has them: LDAP or OIDC
+  # groups, or local groups (auth.local.groups, role reporter, or any
+  # local group named here). Members of these groups may sign in with LDAP
+  # even when they are in no group under auth.ldap.roles.
+  reporterGroups: []
+  # The issue service's webhook is set in its settings at run time; with
+  # networkPolicy.enabled, let the console reach it: list its address
+  # under networkPolicy.outboundCIDRs and its port under outboundPorts.
+
+cases:
+  # The agents' proposals (Phase 12, ADR-99 to ADR-102): every change an
+  # agent wants, asked in a chat or on its own, waits as a durable Watson
+  # card in Cases › Inbox and the cluster's Watson panel, in the ConfigMap
+  # <release>-cases, until people approve or reject it, it expires (24
+  # hours, or when its alert resolves), or a newer one replaces it.
+  # The roles that may approve proposals, of superAdmin, superViewer,
+  # admin and viewer: the approval permission. A SuperAdmin always may; a
+  # card that changes the console's own records (hosts, fleets, Automation
+  # parameters) needs a SuperAdmin whatever this says, and kubectl and
+  # helm run as the person who approves, so Kubernetes still decides. On
+  # production, with Watson's two-person rule on, an agent's change needs
+  # two people. The same roles work the cases (open, close and reopen
+  # them) and accept and remove exceptions. Those who triage reports
+  # (issues.operatorRoles) work the cases too (wave 5), but do not accept
+  # exceptions.
+  approverRoles: [superAdmin, admin]
+  # --- One flow for findings and cases (Phase 12, wave 6, CF-20, CF-23) ---
+  # Every case is a ConfigMap of its own the console makes and deletes,
+  # <release>-case-<n> (labels app.kubernetes.io/instance=<release> and
+  # 221b.io/case=<n>), with one line per case in <release>-issues. So the
+  # console's Role grants create, list, get, update, patch and delete on
+  # ConfigMaps in its namespace: Kubernetes cannot grant by a name that
+  # does not exist yet, and the console lists only those with its labels.
+  # Keep the console in a namespace of its own.
+  #
+  # The clean start: 0.12.0 changed what a case and a finding are, without
+  # a migration. Set token to any new text (the date, say) and the leader
+  # deletes the Cases area's records once at start: the cases (the index
+  # and every case's ConfigMap) and known issues; the cases' work, the
+  # exceptions and RCAs; the jobs' runs and findings (the jobs, schedules
+  # and instructions stay); the proposed changes agents made for cases or
+  # runs (Watson's own cards and the standing approvals stay); Mycroft's
+  # pages, drafts and excerpts (its sources and credentials stay). It
+  # keeps the issue service's settings, services and tokens, the SLA
+  # targets (renumbered P1-P5 to P0-P4, values kept) and everything
+  # outside Cases. It runs again only when the token changes. dryRun logs
+  # what it would delete, one line per item, and deletes nothing.
+  cleanStart:
+    token: ""
+    dryRun: false
+  # Standing approvals and notification channels (a generic webhook, Slack
+  # and Microsoft Teams incoming webhooks) are set at run time in
+  # Administration › Settings › Watson; each channel's address is kept in
+  # the Secret <release>-cases with connections.store secrets. With
+  # networkPolicy.enabled, sherlock.egress opens HTTPS to any address,
+  # which covers Slack and Teams; otherwise list the webhooks' addresses
+  # under networkPolicy.outboundCIDRs and their ports under outboundPorts.
+  # --- Case work (Phase 12, ADR-105 to ADR-107) ---
+  # The same roles work the cases of Cases › Cases (numbered C-1, C-2…):
+  # they open a case by hand or from a finding, change its priority,
+  # complete it with an RCA, which goes to Knowledge, and reopen it. The
+  # console-wide roles and those who may edit jobs read them. The cases
+  # are kept in the ConfigMap <release>-casework, which the chart creates
+  # empty; opening one starts the Troubleshooter when the case analysis
+  # job is on in Cases › Jobs. Nothing to set here.
+
+jobs:
+  # Jobs (Phase 12, ADR-90 to ADR-93): Cases › Jobs starts the agents on
+  # their own, on a schedule or when something happens: the Auditor's
+  # nightly audit, the Troubleshooter's diagnosis of a new alert and its
+  # investigation of each new report, the Summarizer's daily digest. All
+  # are off until a SuperAdmin turns them on there, each with its own
+  # budget. Their output is read-only: runs with a report and findings,
+  # kept in the ConfigMap <release>-runs, and proposals that wait for a
+  # person in Cases › Inbox. They read the clusters as the user
+  # 221b:agents with the role Settings › Jobs chooses (Viewer by default;
+  # bind a role to that user to let them read a namespace, or pick a group
+  # of the role Viewer there).
+  # The time zone a new schedule starts in, an IANA name such as
+  # Europe/Berlin; each schedule can have its own. Empty is UTC.
+  timeZone: ""
+
+backup:
+  # Scheduled backups to S3 (Phase 12, ADR-81): set up on Administration ›
+  # Backup, where a SuperAdmin names the bucket, the schedule, retention
+  # and encryption. The access key and the passphrase are kept in the
+  # Secret <release>-backup with connections.store secrets (in memory
+  # otherwise); or the console signs with the ServiceAccount's own AWS
+  # identity (serviceAccount.annotations for IRSA, or EKS Pod Identity).
+  #
+  # Every backup, downloaded or sent to S3, carries the console's secrets
+  # sealed with the install's backup key (ADR-137): 256 random bits the
+  # console makes at its first start in the Secret <release>-backup-key
+  # (with connections.store secrets; in memory there is no key, and a
+  # backup holds placeholders). The Secret is kept when the release is
+  # uninstalled (it is not the chart's, and is annotated
+  # helm.sh/resource-policy: keep), so a reinstall in the same
+  # namespace reads the old backups. The console never shows the key: a
+  # SuperAdmin keeps a copy from the Secret,
+  #   kubectl -n <namespace> get secret <release>-backup-key -o jsonpath='{.data.key}' | base64 -d
+  # and on a new install puts it back in that Secret before restoring (see
+  # docs/getting-started.md, The backup key). A lost key means the
+  # backups' secrets cannot be recovered; everything else still restores.
+  s3:
+    # The S3 endpoint's addresses, as CIDRs. Listed, the network policy
+    # lets the console reach them on egressPorts. Empty adds no rule: with
+    # sherlock.egress on (the default) the console reaches any address on
+    # 443 already, which is enough for AWS S3; list the CIDRs of an
+    # S3-compatible store on another port (MinIO's 9000, say), or of any
+    # store when sherlock.egress is off.
+    egressCIDRs: []
+    egressPorts: [443]
+
+# --- Knowledge (Phase 12, ADR-94 to ADR-98) ---
+knowledge:
+  # Mycroft's knowledge: the sources a SuperAdmin connects in Settings ›
+  # Knowledge (Confluence spaces, git repositories of runbooks, uploaded
+  # documents, and what the console knows), and the wiki it keeps in a git
+  # repository or an S3 bucket. Its records are in the ConfigMap
+  # <release>-knowledge, every credential in the Secret <release>-knowledge
+  # (with connections.store secrets). The Confluence publisher of known
+  # issues (Settings › Issues) keeps its state there too.
+  #
+  # The addresses the console reaches for knowledge, as CIDRs: Confluence,
+  # the git hosts and the bucket. Listed, the network policy lets the
+  # console reach them on egressPorts. Empty adds no rule: with
+  # sherlock.egress on (the default) the console reaches any address on 443
+  # already; list them when it is off, or for a store on another port.
+  # The web sites people add in Cases › Mycroft › Wiki › Add are read from
+  # the console too (Phase 12, wave 5): list theirs here as well, with 80
+  # in egressPorts for an http site.
+  egressCIDRs: []
+  egressPorts: [443]
+  # Each replica keeps a copy of the approved pages, and the source
+  # repositories, on its own disk: an emptyDir of at most this size,
+  # read again at start.
+  localCopy:
+    sizeLimit: 512Mi
+  # How often the local copy is read again from a git repository (besides
+  # each push to the webhook) or an S3 bucket (besides each bucket
+  # notification); Settings › Knowledge may set its own.
+  refresh:
+    git: 15m
+    s3: 5m
+  # The console's address as people reach it, for the links back from
+  # Confluence pages to the known issues; empty is the ingress's host when
+  # ingress.enabled, and no links otherwise.
+  consoleURL: ""
+  # The temporary wiki store (CF-57): the ConfigMap <release>-wiki keeps
+  # the wiki while Settings › Knowledge names no store, so Mycroft's wiki
+  # can be tried without a repository or a bucket. Settings › Knowledge
+  # shows it as "ConfigMap (temporary, for testing — will be removed; move
+  # to Git or S3 before relying on it)". It holds at most 900 KiB, and a
+  # write past that is refused; it will be removed, so move the wiki to
+  # Git or S3 there (Move the wiki here) before relying on it. false makes
+  # no such ConfigMap: the wiki is kept nowhere until a store is chosen.
+  configMapStore:
+    enabled: true
+
+# --- Helm repositories (Phase 12, wave 5, ADR-123 to ADR-125) ---
+helmRepositories:
+  # Applications install charts from git, and from the Helm repositories
+  # and OCI registries a SuperAdmin lists in Settings › Applications. The
+  # list is kept in the settings ConfigMap; each password or token in the
+  # Secret <release>-helm-repositories (with connections.store secrets),
+  # which the console writes.
+  #
+  # The repositories' and registries' addresses, as CIDRs (the hosts the
+  # charts' archives and a registry's token service are on too). Listed,
+  # the network policy lets the console reach them on egressPorts. Empty
+  # adds no rule: with sherlock.egress on (the default) the console
+  # reaches any address on 443 already; list them when it is off, or for
+  # a repository on another port.
+  egressCIDRs: []
+  egressPorts: [443]
 
 toolbox:
   # The Toolbox (Phase 9, docs/toolbox.md): the Tools menu beside each pod
@@ -575,8 +810,13 @@ networkPolicy:
   ldapCIDRs: []
   # With SSH to nodes on (toolbox.ssh.enabled) the console reaches the
   # nodes on toolbox.ssh.port. List the nodes' CIDRs to allow nothing
-  # else; empty allows any address on that port.
+  # else; empty allows any address on that port. Hosts outside Kubernetes
+  # (Automation's "Add host", docs/automation.md) are reached the same
+  # way: their addresses must be inside these CIDRs too.
   nodeCIDRs: []
+  # The SSH ports of hosts outside Kubernetes whose sshd does not listen
+  # on toolbox.ssh.port, allowed to the same addresses.
+  hostPorts: []
 
 # The server keeps a watched copy of every node, pod, workload and Service,
 # trimmed to what the tabs show; 1Gi holds 500 nodes and 15,000 pods with

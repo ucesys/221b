@@ -69,6 +69,8 @@ type Config struct {
 	Lists RoleLists
 	// LocalGroups are the groups of local users, defined in values (RB-50).
 	LocalGroups []LocalGroup
+	// ReporterGroups give the Reporter role, whatever the source (IS-20).
+	ReporterGroups []string
 	// Prefixes go before the names Kubernetes sees (RB-15).
 	Prefixes roles.Prefixes
 	// SetupToken, when set, must be typed on the first-run page (RB-27).
@@ -197,8 +199,8 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 			s.people = newPeople(cfg.Directory.URL(), now)
 		}
 		for _, g := range cfg.LocalGroups {
-			if !roles.ValidGroupName(g.Name) || (g.Role != roles.Viewer && g.Role != roles.Admin) {
-				return nil, fmt.Errorf("local group %q: a name of lowercase letters, digits, dot, dash and underscore, and the role viewer or admin", g.Name)
+			if !roles.ValidGroupName(g.Name) || (g.Role != roles.Viewer && g.Role != roles.Admin && g.Role != roles.Reporter) {
+				return nil, fmt.Errorf("local group %q: a name of lowercase letters, digits, dot, dash and underscore, and the role viewer, admin or reporter", g.Name)
 			}
 		}
 		var managed []Account
@@ -468,6 +470,11 @@ type pageData struct {
 
 func (s *Service) renderSignIn(w http.ResponseWriter, r *http.Request, msg string, code int) {
 	d := pageData{Title: s.cfg.Title, Mode: s.cfg.Mode, Error: msg, Next: safeNext(r.URL.Query().Get("next")), Local: s.cfg.Mode == ModeLocal || s.cfg.Mode == ModeLDAP, OIDC: s.cfg.Mode == ModeOIDC, Off: s.cfg.Mode == ModeNone}
+	if r.Method == http.MethodGet && !strings.HasPrefix(r.URL.Path, "/signin") && r.URL.Query().Get("next") == "" {
+		// Served in place of a page, such as the report page (Phase 12):
+		// back to it after signing in.
+		d.Next = safeNext(r.URL.RequestURI())
+	}
 	if s.provider != nil {
 		d.Provider = s.provider.Name()
 	}

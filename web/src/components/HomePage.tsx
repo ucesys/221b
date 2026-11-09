@@ -4,6 +4,7 @@ import type { Me } from '../api/types'
 import { activeAlerts, alertTone, healthOf, nodeTone, podLine, podsReady, podTone, resourceLine, storageTone, type UseLine } from '../lib/home'
 import { clusterHref, clusterPageHref } from '../lib/router'
 import { SherlockIcon } from './Icons'
+import { GettingStartedCard } from './GettingStarted'
 
 interface Props {
   me: Me | null
@@ -175,6 +176,8 @@ export function HomePage({ me, onAdd, onEdit }: Props) {
           </button>
         )}
       </div>
+      {/* Getting started (Phase 12, GS-06): a SuperAdmin's, until every step is done or dismissed. */}
+      {me?.admin && <GettingStartedCard />}
       {error && (
         <div className="rk-card" data-tone="err" style={{ padding: '10px 14px', fontSize: 13, color: 'var(--err)' }} role="alert">
           {error}

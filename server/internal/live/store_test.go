@@ -515,7 +515,7 @@ func TestRefreshEventsAndSettings(t *testing.T) {
 	sub, start, _ := s.Subscribe([]string{ViewNodes, ViewPods}, nil)
 	defer s.Unsubscribe(sub)
 	snap := decodeSnapshot(t, start)
-	if string(snap.Settings) != `{"refreshSeconds":10,"storage":"memory"}` || snap.RefreshedAt != nil || snap.Views[ViewNodes].Version != 1 {
+	if string(snap.Settings) != `{"refreshSeconds":10,"storage":"memory","showCosts":true}` || snap.RefreshedAt != nil || snap.Views[ViewNodes].Version != 1 {
 		t.Fatalf("snapshot %+v", snap)
 	}
 
@@ -537,7 +537,7 @@ func TestRefreshEventsAndSettings(t *testing.T) {
 	// New settings reach every browser.
 	s.SetSettings(2*time.Second, []byte(`{"refreshSeconds":2,"storage":"memory"}`))
 	got = take(t, sub)
-	if len(got.meta) != 1 || string(got.meta[0].Settings) != `{"refreshSeconds":2,"storage":"memory"}` {
+	if len(got.meta) != 1 || string(got.meta[0].Settings) != `{"refreshSeconds":2,"storage":"memory","showCosts":true}` {
 		t.Fatalf("got %+v", got)
 	}
 	// The same settings again publish nothing.

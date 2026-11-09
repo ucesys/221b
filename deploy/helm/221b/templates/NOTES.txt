@@ -125,6 +125,12 @@ named {{ include "b221.fullname" . }}-cluster-<id> in this namespace, which the 
 keep it in a namespace of its own. List them with
 
   kubectl -n {{ .Release.Namespace }} get secrets -l app.kubernetes.io/component=cluster-connection
+
+Backups carry their secrets sealed with this install's backup key, in the Secret {{ include "b221.fullname" . }}-backup-key
+(made at the first start, kept when the release is uninstalled; the console never shows it). Keep a copy where you keep
+secrets: without it a backup's secrets cannot be recovered. Read it with
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "b221.fullname" . }}-backup-key -o jsonpath='{.data.key}' | base64 -d
 {{- else }}
 
 Connections to other clusters are kept in memory (connections.store=memory) and lost on restart.
