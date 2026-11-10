@@ -2,15 +2,16 @@
 // wave 5, IN-06): an approval and a knowledge draft, each at
 // #/cases/inbox/<kind>/<id>. A case opens in CaseDrawer, a proposed change
 // in ProposalDrawer and a known-issue draft in KnownDrawer, their owners'.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ApprovalRow } from '../../api/automation'
-import type { ConfluenceConflict, DraftRun } from '../../api/knowledge'
+import { fetchPageRequests, type ConfluenceConflict, type DraftRun, type PageRequest } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
 import { Drawer } from '../Drawer'
 import { DecidedVersion, linkOf, RequestActions } from './InboxApprovals'
 import { APPROVAL_KIND, APPROVAL_STATE } from './inboxRows'
 import { ConflictCard, DraftRunCard } from './KnowledgeDraft'
 import { Tag } from './parts'
+import { PageRequestCard } from './WikiPageActions'
 
 /** A drawer for what the Inbox no longer lists, or has not read yet. */
 function Missing({ label, what, loaded, onClose, testId }: { label: string; what: string; loaded: boolean; onClose: () => void; testId: string }) {
@@ -112,8 +113,31 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
   )
 }
 
-/** A knowledge draft (KN-08): a run of Mycroft's wiki changes with every page's diff, or a Confluence page someone edited. */
-export function KnowledgeDrawer({ id, run, conflict, loaded, onClose, onChanged, onToast }: { id: string; run?: DraftRun; conflict?: ConfluenceConflict; loaded: boolean; onClose: () => void; onChanged: () => void; onToast?: (msg: string) => void }) {
+/** A knowledge draft (KN-08): a run of Mycroft's wiki changes with every page's diff, a Confluence page someone edited, or a request to retire a page or make it active again (KN-24). */
+export function KnowledgeDrawer({ id, run, conflict, request: waiting, loaded, onClose, onChanged, onToast }: { id: string; run?: DraftRun; conflict?: ConfluenceConflict; request?: PageRequest; loaded: boolean; onClose: () => void; onChanged: () => void; onToast?: (msg: string) => void }) {
+  // A request the Inbox no longer lists was decided: just now, here, or
+  // before the link was opened. It stays open, read from all the requests,
+  // with who decided it.
+  const [decided, setDecided] = useState<PageRequest>()
+  useEffect(() => {
+    if (waiting || run || conflict || !loaded) return
+    let live = true
+    fetchPageRequests(true).then(
+      (r) => live && setDecided((r.requests ?? []).find((x) => x.id === id)),
+      () => undefined,
+    )
+    return () => {
+      live = false
+    }
+  }, [id, waiting, run, conflict, loaded])
+  const request = waiting ?? (decided?.id === id ? decided : undefined)
+  if (request && !run && !conflict) {
+    return (
+      <Drawer label="Wiki page request" kicker={`Wiki page · asked by ${request.name}, ${fmtTs(request.at)}`} title={`${request.action === 'activate' ? 'Make active again' : 'Retire'}: ${request.title}`} onClose={onClose} width={640} copy={false} testId="knowledge-drawer">
+        <PageRequestCard r={request} onChanged={onChanged} onToast={onToast} />
+      </Drawer>
+    )
+  }
   if (!run && !conflict) return <Missing label="Knowledge draft" what={id} loaded={loaded} onClose={onClose} testId="knowledge-drawer" />
   return (
     <Drawer label="Knowledge draft" kicker={run ? `Knowledge draft · ${run.store} · started by ${run.startedBy ?? run.by}, ${fmtTs(run.started)}` : 'Knowledge draft · Confluence'} title={run ? `Wiki changes ${run.id}` : conflict!.title} onClose={onClose} width={960} copy={false} testId="knowledge-drawer">

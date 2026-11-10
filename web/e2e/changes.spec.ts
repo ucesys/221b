@@ -120,7 +120,7 @@ test.afterAll(async ({ browser }) => {
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   const queued = ((await api(page, 'GET', '/api/v1/cases/proposals?state=queued')).json as { proposals?: Card[] } | null)?.proposals ?? []
   for (const c of queued.filter((p) => p.id === chatId || (caseId && p.resolves?.includes(caseId)))) await api(page, 'POST', `/api/v1/cases/proposals/${c.id}/reject`, { reason: 'e2e: done' })
-  if (caseId && (await getCase(page, caseId)).status !== 'closed') await api(page, 'POST', `/api/v1/cases/cases/${caseId}/close`, { outcome: 'noFixNeeded', explanation: 'e2e: done' })
+  if (caseId && (await getCase(page, caseId)).status !== 'closed') await api(page, 'POST', `/api/v1/cases/cases/${caseId}/close`, { outcome: 'noAction', explanation: 'e2e: done' })
   await api(page, 'PUT', '/api/v1/jobs/nightly-audit', { clusters: [] })
   await api(page, 'PUT', '/api/v1/sherlock/config', { ...ON, clusters: {} })
   await page.close()

@@ -46,6 +46,7 @@ func main() {
 	sshHostOnly := flag.Bool("ssh-host-only", false, "serve only the fake SSH host, at -ssh-host")
 	// --- Mycroft tab (Phase 12, wave 5) ---
 	wikiBucket := flag.String("fake-s3-bucket", "sim-wiki", "serve a fake S3 bucket of this name, path-style at http://<listen>/<bucket>, for Mycroft's wiki (region us-east-1, access key \"sim-access-key\", secret \"sim-secret-key\"); empty: none")
+	docsBucket := flag.String("fake-s3-docs", "sim-docs", "serve a second fake S3 bucket of this name, as -fake-s3-bucket does, with a few documents for a Mycroft source (KN-25): a Markdown runbook and a CSV under docs/, and a picture Mycroft skips; empty: none")
 	oidc := flag.String("oidc-issuer", "", "serve a simulated OpenID Connect provider at this URL, which must be this server's address plus /oidc (for example http://127.0.0.1:7443/oidc); accounts: admin@corp.example, dev@corp.example and viewer@corp.example with the password \"password\"")
 	flag.Parse()
 
@@ -76,7 +77,7 @@ func main() {
 	} else {
 		s = sim.New(sim.Options{Nodes: *nodes, Pods: *pods, Seed: *seed, Metrics: *metrics, KubeletStats: *kubeletStats, SettingsConfigMap: *settingsCM, Problems: *problems, Planted: *planted, OIDCIssuer: *oidc, Preload: preload(*seedCases)})
 		handler = s
-		if *claude || *wikiBucket != "" {
+		if *claude || *wikiBucket != "" || *docsBucket != "" {
 			mux := http.NewServeMux()
 			if *claude {
 				mux.Handle("/claude/", http.StripPrefix("/claude", fakeclaude.New()))
@@ -85,6 +86,12 @@ func main() {
 				bucket := s3test.NewHandler(*wikiBucket, "us-east-1", awsv4.Credentials{AccessKeyID: "sim-access-key", SecretAccessKey: "sim-secret-key"})
 				mux.Handle("/"+*wikiBucket, bucket.Handler())
 				mux.Handle("/"+*wikiBucket+"/", bucket.Handler())
+			}
+			if *docsBucket != "" && *docsBucket != *wikiBucket {
+				docs := s3test.NewHandler(*docsBucket, "us-east-1", awsv4.Credentials{AccessKeyID: "sim-access-key", SecretAccessKey: "sim-secret-key"})
+				seedDocs(docs)
+				mux.Handle("/"+*docsBucket, docs.Handler())
+				mux.Handle("/"+*docsBucket+"/", docs.Handler())
 			}
 			mux.Handle("/", s)
 			handler = mux
@@ -122,6 +129,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// seedDocs puts the documents of the simulator's bucket of documents
+// (KN-25): two Mycroft reads and one it skips. The runbook carries the
+// fake model's mark that cuts the answer to a batch of more than it, so
+// a Wiki sync of the bucket splits its batch (KN-27).
+func seedDocs(f *s3test.Fake) {
+	at := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	f.Set("docs/runbooks/restart-the-wombat-cache.md", []byte("# Restarting the wombat cache\n\nThe wombat cache runs as three pods in the shop namespace. Restart it with a rollout restart of deploy/wombat-cache; it is warm again within five minutes.\n\n"+fakeclaude.CutMark+"\n"), at)
+	f.Set("docs/backup-windows.csv", []byte("service,owner,backup window\nwombat-db,storage team,02:00-03:00\nshop-api,web team,03:00-04:00\n"), at)
+	f.Set("docs/diagram.png", []byte("\x89PNG\r\n\x1a\n"), at)
 }
 
 // preload is the sample cases the console starts with (Phase 12, wave 6):

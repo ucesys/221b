@@ -53,11 +53,9 @@ const (
 	OutcomeFix Outcome = "fix"
 	// OutcomeDuplicate is the same problem as another case, its original.
 	OutcomeDuplicate Outcome = "duplicate"
-	// OutcomeNotAProblem is a wrong expectation or a misunderstanding;
-	// never for a case an agent found (use an exception).
-	OutcomeNotAProblem Outcome = "notAProblem"
-	// OutcomeNoFixNeeded is real but one-off, transient or already gone.
-	OutcomeNoFixNeeded Outcome = "noFixNeeded"
+	// OutcomeNoAction is not a problem, or it went away: an explanation
+	// says why, and a reporter reads it (CF-90). Any case may close so.
+	OutcomeNoAction Outcome = "noAction"
 	// OutcomeKnownIssue is a problem a known issue follows.
 	OutcomeKnownIssue Outcome = "knownIssue"
 	// OutcomeException is intended or acceptable behaviour an agent
@@ -66,7 +64,31 @@ const (
 )
 
 // Outcomes lists them.
-var Outcomes = []Outcome{OutcomeFix, OutcomeDuplicate, OutcomeNotAProblem, OutcomeNoFixNeeded, OutcomeKnownIssue, OutcomeException}
+var Outcomes = []Outcome{OutcomeFix, OutcomeDuplicate, OutcomeNoAction, OutcomeKnownIssue, OutcomeException}
+
+// The outcomes noAction replaced (CF-90): still accepted wherever an
+// outcome is given, and read so from a case stored before.
+const (
+	legacyNotAProblem Outcome = "notAProblem"
+	legacyNoFixNeeded Outcome = "noFixNeeded"
+)
+
+// Canonical is the outcome as it is now: notAProblem and noFixNeeded
+// read as noAction (CF-90); any other value is itself.
+func (o Outcome) Canonical() Outcome {
+	if o == legacyNotAProblem || o == legacyNoFixNeeded {
+		return OutcomeNoAction
+	}
+	return o
+}
+
+// UnmarshalText reads an outcome, an old one as noAction (CF-90): a
+// request's and a stored case's alike, so a stored case keeps its record
+// until it changes, and reads as noAction.
+func (o *Outcome) UnmarshalText(b []byte) error {
+	*o = Outcome(b).Canonical()
+	return nil
+}
 
 // Valid reports whether o is an outcome.
 func (o Outcome) Valid() bool {
@@ -255,7 +277,7 @@ type Report struct {
 	DuplicateOf int   `json:"duplicateOf,omitempty"`
 	Similar     []int `json:"similar,omitempty"`
 	// Waiting is when an operator asked the reporter for more: the case
-	// closes as no fix needed after the silence (IS-15).
+	// closes as no action needed after the silence (IS-15, CF-90).
 	Waiting *time.Time `json:"waiting,omitempty"`
 	// Watchers follow the report besides its reporter.
 	Watchers []Person  `json:"watchers,omitempty"`
@@ -329,7 +351,7 @@ type Seen struct {
 }
 
 // PreviousClose is how an earlier case of the same problem was closed:
-// shown on a repeat after noFixNeeded or notAProblem, and on a regression.
+// shown on a repeat after noAction, and on a regression.
 type PreviousClose struct {
 	Case        int       `json:"case"`
 	Outcome     Outcome   `json:"outcome"`

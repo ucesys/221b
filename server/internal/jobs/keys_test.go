@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -135,6 +136,10 @@ func TestFindingsAreKeyedAndRouted(t *testing.T) {
 		"]}\n```"
 	on(t, w.s, "test", Change{})
 	ctx := context.Background()
+	// Rebuild now is a Wiki sync's (KN-29): an audit has nothing to rebuild.
+	if _, err := w.s.RebuildNow(ctx, "test", Person{Email: "bob"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an audit rebuilt: %v", err)
+	}
 	b, err := w.s.RunNow(ctx, "test", Person{Email: "bob"})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +175,7 @@ func TestFindingsAreKeyedAndRouted(t *testing.T) {
 	if len(router.in) != 1 || router.in[0].Run != r.ID || router.in[0].Job != "test" || !router.in[0].OK || len(router.in[0].Clusters) == 0 {
 		t.Errorf("router input: %+v", router.in)
 	}
-	for _, want := range []string{"<check-ids>", "- pod.privileged:", "other.<slug>", `"checkWhy"`, "<keys-in-use>", "pod.no-limits on shop/Pod/web: No limits on web (case C-9)"} {
+	for _, want := range []string{"<check-ids>", "- pod.privileged:", "other.<slug>", "<keys-in-use>", "pod.no-limits on shop/Pod/web: No limits on web (case C-9)"} {
 		if !strings.Contains(task, want) {
 			t.Errorf("the task lacks %q: %s", want, task)
 		}

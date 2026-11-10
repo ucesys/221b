@@ -1,4 +1,4 @@
-// Cases › Inbox as one table (Phase 12, wave 5, IN-01 to IN-06): every
+// AIOps › Inbox as one table (Phase 12, wave 5, IN-01 to IN-06): every
 // case, proposed change, approval and draft as one row of one kind, with
 // its priority, cluster, object, status, how long it has waited and who
 // has it; the table's columns, and the filters on top (Pending | All,
@@ -15,7 +15,7 @@ import type { ApprovalRow } from '../../api/automation'
 import { caseOf, sourceText, stateText, stateTone, type Proposal } from '../../api/cards'
 import { caseShownStatus, caseStatusText, caseStatusTone, caseTypeText, VERIFICATION, type CaseBrief, type ShownStatus, type Verification } from '../../api/casework'
 import type { OpKnown } from '../../api/issues'
-import type { ConfluenceConflict, DraftRun } from '../../api/knowledge'
+import type { ConfluenceConflict, DraftRun, PageRequest } from '../../api/knowledge'
 import type { Suggestion } from '../../api/rules'
 import { INBOX_KINDS, inboxOrderKey, type InboxKind, type Who } from '../../lib/cases'
 import { fmtMinutes, fmtTs, minutesSince } from '../../lib/format'
@@ -252,6 +252,36 @@ export function draftRunRow(r: DraftRun): InboxRow {
     mine: !!r.mine,
     words: [r.store, r.by, ...r.pages.map((p) => p.path)],
     origin: 'agents',
+  }
+}
+
+const REQUEST_STATE: Record<PageRequest['state'], [string, string]> = { waiting: ['Waiting for approval', 'warn'], approved: ['Approved', 'ok'], rejected: ['Rejected', 'muted'] }
+
+/**
+ * A request to retire a wiki page or make it active again (KN-24):
+ * pending until one person other than who asked approves it, or anyone
+ * rejects it; for that person (the gear's count), not for who asked.
+ */
+export function pageRequestRow(r: PageRequest): InboxRow {
+  const pending = r.state === 'waiting'
+  const [status, tone] = pending ? [r.action === 'activate' ? 'Make active again: waits for approval' : 'Retire: waits for approval', 'warn'] : (REQUEST_STATE[r.state] ?? REQUEST_STATE.waiting)
+  return {
+    key: `knowledge:${r.id}`,
+    kind: 'knowledge',
+    open: ['knowledge', r.id],
+    ref: r.id,
+    title: `${r.action === 'activate' ? 'Make active again' : 'Retire'}: ${r.title}`,
+    status,
+    tone,
+    pending,
+    forMe: pending && r.canApprove !== false && !r.mine,
+    since: pending ? r.at : (r.decided ?? r.at),
+    assignable: false,
+    mine: !!r.mine,
+    words: [r.path, r.name, r.reason, r.action === 'activate' ? 'make active again' : 'retire'],
+    origin: 'people',
+    lastBy: pending ? r.name : (r.decidedName ?? r.name),
+    lastAt: pending ? r.at : (r.decided ?? r.at),
   }
 }
 

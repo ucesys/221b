@@ -295,6 +295,10 @@ func scripted(question, view string, round int, results []string) reply {
 	if strings.Contains(question, "<points>") && strings.Contains(question, "<answer>") {
 		return reply{text: []string{grade(question)}}
 	}
+	// Mycroft's Wiki sync (KN-27, KN-28): a page for each source.
+	if r, ok := syncReply(question); ok {
+		return r
+	}
 	// A chain of hand-overs (Phase 12): [[chain a,b,c]] hands the rest of
 	// the chain to a, which hands it to b, and so on; the last one answers.
 	if m := reChain.FindStringSubmatch(question); m != nil {
@@ -422,6 +426,44 @@ func scripted(question, view string, round int, results []string) reply {
 	return script(question, round, results)
 }
 
+// reSyncSource is a source a Wiki sync gives Mycroft.
+var reSyncSource = regexp.MustCompile(`<source key="([^"]+)" title="([^"]+)" version="([^"]*)" date="([^"]*)"`)
+
+// CutMark in a source's text cuts a Wiki sync's answer at the output limit
+// while its batch holds more than one source, as a model's answer to too
+// much is (KN-27): the console splits the batch and asks each half again.
+const CutMark = "[[cut-when-batched]]"
+
+// syncReply answers a Wiki sync's batch as Mycroft does: one page for
+// each source, naming it with its version and date.
+func syncReply(question string) (reply, bool) {
+	if !strings.HasPrefix(question, "The wiki's pages now") {
+		return reply{}, false
+	}
+	type page struct {
+		Path    string   `json:"path"`
+		Title   string   `json:"title"`
+		Sources []string `json:"sources"`
+		Body    string   `json:"body"`
+	}
+	pages := []page{}
+	found := reSyncSource.FindAllStringSubmatch(question, -1)
+	for _, m := range found {
+		slug := strings.Trim(regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(strings.ToLower(m[2]), "-"), "-")
+		if slug == "" {
+			continue
+		}
+		pages = append(pages, page{Path: "pages/system/" + slug + ".md", Title: m[2], Sources: []string{m[1]},
+			Body: fmt.Sprintf("# %s\n\nWhat %s says (source: “%s”, %s).", m[2], m[2], m[2], m[4])})
+	}
+	b, _ := json.Marshal(map[string]any{"pages": pages, "hosts": []any{}, "fleets": []any{}})
+	text := "```json\n" + string(b) + "\n```"
+	if len(found) > 1 && strings.Contains(question, CutMark) {
+		return reply{text: []string{text[:len(text)/2]}, cut: true}, true
+	}
+	return reply{text: []string{text}}, true
+}
+
 // uiSummary words the result of the last scripted call.
 func uiSummary(last string) string {
 	var r struct {
@@ -470,6 +512,9 @@ type reply struct {
 	slow  bool
 	// pause is waited before the reply starts.
 	pause time.Duration
+	// cut ends the reply at the output limit, as a provider stops an
+	// answer that would be longer (KN-27).
+	cut bool
 }
 
 var (
@@ -792,6 +837,9 @@ func (f *Fake) stream(w http.ResponseWriter, r *http.Request, inBytes int, rep r
 		idx++
 	}
 	stop := "end_turn"
+	if rep.cut {
+		stop = "max_tokens"
+	}
 	if rep.tool != "" {
 		in, _ := json.Marshal(rep.input)
 		send("content_block_start", map[string]any{"type": "content_block_start", "index": idx, "content_block": map[string]any{"type": "tool_use", "id": fmt.Sprintf("toolu_fake_%d", time.Now().UnixNano()), "name": rep.tool, "input": map[string]any{}}})
@@ -916,6 +964,9 @@ func (f *Fake) chat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	finish := "stop"
+	if rep.cut {
+		finish = "length"
+	}
 	if rep.tool != "" {
 		args, _ := json.Marshal(rep.input)
 		id := fmt.Sprintf("call_%d", time.Now().UnixNano())

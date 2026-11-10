@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// --- Cases › Mycroft › Fixes (CF-51) ---
+// --- AIOps › Mycroft › Fixes (CF-51) ---
 //
 // The fixes under /api/v1/cases/fixes: those who see the cases read
 // them; those who work the cases edit, accept, turn off and delete them.

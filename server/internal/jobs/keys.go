@@ -78,6 +78,23 @@ var DigestChecks = []Check{
 	{"digest.approval-waiting", "approvals or proposed changes waiting long", "other"},
 }
 
+// KindDrift is Mycroft's drift check (package knowledge's JobDrift,
+// KN-19): it has no agent to offer rules to, but its differences are
+// keyed by the rules below, so an exception or a known issue stops a
+// proposal as it stops a finding (KN-31).
+const KindDrift = "driftCheck"
+
+// InventoryChecks are the inventory's and the drift check's: what a
+// difference between the documents and the console is (KN-31). No audit
+// job is offered them.
+var InventoryChecks = []Check{
+	{"inventory.host-missing", "a document lists a host the console does not know", "configuration"},
+	{"inventory.host-unreachable", "a host a document lists is not answering", "availability"},
+	{"inventory.address-differs", "a document gives a host another address than the console reaches it at", "configuration"},
+	{"inventory.host-unlisted", "the console knows a host no document names", "configuration"},
+	{"inventory.fleet-missing", "a document names a group of hosts the console has no fleet for", "configuration"},
+}
+
 // KindRules is a kind with a catalogue: its id, its label and its
 // built-in rules.
 type KindRules struct {
@@ -88,11 +105,11 @@ type KindRules struct {
 
 // BuiltinRules are the kinds with a catalogue and the rules they ship
 // with (ADR-138): what the merged list of validation rules starts from.
-var BuiltinRules = []KindRules{{KindAudit, "Nightly audit", AuditChecks}, {KindAlert, "Alert diagnosis", AlertChecks}, {KindDigest, "Daily digest", DigestChecks}}
+var BuiltinRules = []KindRules{{KindAudit, "Nightly audit", AuditChecks}, {KindAlert, "Alert diagnosis", AlertChecks}, {KindDigest, "Daily digest", DigestChecks}, {KindDrift, "Drift check", InventoryChecks}}
 
 // Rules is the list of validation rules (check ids) as it stands
 // (ADR-138): the built-in catalogues, with what a SuperAdmin added,
-// changed, retired or replaced in Cases › Mycroft › Validation rules
+// changed, retired or replaced in AIOps › Mycroft › Validation rules
 // (package casework keeps them). A kind's agent is told the rules it is
 // offered; a finding is valid with any rule of its kind, retired or
 // replaced ones too, so the cases and exceptions keyed by them still
@@ -137,7 +154,7 @@ func (s *Service) rules(ctx context.Context) Rules {
 // CheckType is the type of the case a finding of a check opens (CF-37):
 // the catalogues', other for other.<slug> and any check they do not hold.
 func CheckType(check string) string {
-	for _, list := range [][]Check{AuditChecks, AlertChecks, DigestChecks} {
+	for _, list := range [][]Check{AuditChecks, AlertChecks, DigestChecks, InventoryChecks} {
 		for _, c := range list {
 			if c.ID == check && c.Type != "" {
 				return c.Type
@@ -355,7 +372,7 @@ func (e *RunEnv) Keys(ctx context.Context, cluster string) string {
 	}
 	offered := e.s.rules(ctx).Offered(e.Kind)
 	var b strings.Builder
-	b.WriteString("Name each finding's check with one of these ids, or, when none fits, other.<slug> (lower case, digits and dashes, at most 48 characters), with its \"checkWhy\": what the id means, and why none of these fits. A finding with any other check is refused. Name its resource as namespace/Kind/name, or Kind/name for a cluster-scoped object, or leave it empty for the cluster as a whole.\n\n")
+	b.WriteString("The validation rules: name each finding's check with one of these ids or, when none fits, other.<slug> (lower case, digits and dashes, at most 48 characters). A finding with any other check is refused.\n\n")
 	var cat strings.Builder
 	for _, c := range offered {
 		fmt.Fprintf(&cat, "- %s: %s\n", c.ID, c.Says)
@@ -367,7 +384,7 @@ func (e *RunEnv) Keys(ctx context.Context, cluster string) string {
 			for _, k := range keys {
 				fmt.Fprintf(&in, "- %s on %s: %s (%s)\n", k.Check, orCluster(k.Object), clip(k.Title, 160), k.What)
 			}
-			b.WriteString("\n\nThese keys are in use on this cluster already. When you find the same problem again, use the same check id on the same resource, so it joins what people already know. Findings covered by an accepted exception are left out by the console anyway.\n\n")
+			b.WriteString("\n\nThe keys in use on this cluster: for the same problem again, use the same check on the same resource, so it joins what people already know. The console drops findings an exception covers.\n\n")
 			b.WriteString(Quote("keys-in-use", in.String()))
 		}
 	}

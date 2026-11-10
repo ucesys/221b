@@ -1,4 +1,4 @@
-// Approvals in Cases › Inbox (CS-06, IN-02): what was Administration ›
+// Approvals in AIOps › Inbox (CS-06, IN-02): what was Administration ›
 // Approvals until Phase 12, now rows of the Inbox's one table, each
 // opening in its drawer (InboxDrawers.tsx) with what is here: a decided
 // script version read in place, a console change decided on the spot, and

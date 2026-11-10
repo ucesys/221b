@@ -17,7 +17,7 @@ func TestTheAnalysisStartsFromWhatTheConsoleHoldsCF43(t *testing.T) {
 	w := setup(t)
 	ctx := context.Background()
 	first := w.route(t, "nightly-audit", true, finding("pod.no-limits", "shop/Deployment/web", "web has no limits")).Findings[0].Case
-	if _, err := w.svc.Close(ctx, first, CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "A test deployment, gone the next day."}, olivia); err != nil {
+	if _, err := w.svc.Close(ctx, first, CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "A test deployment, gone the next day."}, olivia); err != nil {
 		t.Fatal(err)
 	}
 	fixed, _ := w.svc.Create(ctx, NewCase{Title: "Web pods have no memory limits", Cluster: "prod", Resource: "shop/Deployment/web"}, olivia)
@@ -36,7 +36,7 @@ func TestTheAnalysisStartsFromWhatTheConsoleHoldsCF43(t *testing.T) {
 	got := w.svc.related(ctx, infoOf(v))
 	for _, want := range []string{
 		"Earlier cases with the same check on the same object:\n- " + first + ", closed ",
-		"as no fix needed: web has no limits\n  explanation: A test deployment, gone the next day.",
+		"as no action needed: web has no limits\n  explanation: A test deployment, gone the next day.",
 		"Cases closed lately on the same object or with a title like it:\n- " + fixed.ID,
 		"as fixed: Web pods have no memory limits\n  what was done: Set limits in the chart\n  RCA cause: The chart sets no limits.\n  RCA prevention: Defaults in the chart.",
 		"Open cases like it, which may be the same problem:\n- " + open.ID,

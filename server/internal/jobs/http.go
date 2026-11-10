@@ -57,6 +57,7 @@ func (s *Service) Routes(caller func(*http.Request) (Caller, bool)) []Route {
 		{"PUT /api/v1/jobs/{id}", "job-update", edit(h.update)},
 		{"DELETE /api/v1/jobs/{id}", "job-remove", edit(h.remove)},
 		{"POST /api/v1/jobs/{id}/run", "job-run", edit(h.runNow)},
+		{"POST /api/v1/jobs/{id}/rebuild", "job-rebuild", edit(h.rebuildNow)},
 		{"GET /api/v1/jobs/{id}/runs", "job-runs", read(h.jobRuns)},
 		{"GET /api/v1/runs", "runs", read(h.runs)},
 		{"GET /api/v1/runs/{id}", "run", read(h.run)},
@@ -121,7 +122,7 @@ func (h *handler) wrap(f func(w http.ResponseWriter, r *http.Request, c Caller),
 			fail(w, http.StatusForbidden, "Only a SuperAdmin, or a role Settings › Jobs names, may change jobs.")
 			return
 		case !c.Read && !may && !c.Approve:
-			fail(w, http.StatusForbidden, "Jobs, runs and findings are for those who may see Cases › Jobs.")
+			fail(w, http.StatusForbidden, "Jobs, runs and findings are for those who may see AIOps › Jobs.")
 			return
 		}
 		f(w, r, c)
@@ -158,7 +159,7 @@ type KindView struct {
 	AddMore bool `json:"addMore,omitempty"`
 }
 
-// listView is Cases › Jobs.
+// listView is AIOps › Jobs.
 type listView struct {
 	Jobs     []View     `json:"jobs"`
 	Kinds    []KindView `json:"kinds"`
@@ -233,6 +234,15 @@ func (h *handler) remove(w http.ResponseWriter, r *http.Request, c Caller) {
 
 func (h *handler) runNow(w http.ResponseWriter, r *http.Request, c Caller) {
 	b, err := h.s.RunNow(r.Context(), r.PathValue("id"), c.Person)
+	if err != nil {
+		failErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, b)
+}
+
+func (h *handler) rebuildNow(w http.ResponseWriter, r *http.Request, c Caller) {
+	b, err := h.s.RebuildNow(r.Context(), r.PathValue("id"), c.Person)
 	if err != nil {
 		failErr(w, err)
 		return

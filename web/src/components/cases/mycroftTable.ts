@@ -1,4 +1,4 @@
-// The tables of Cases › Mycroft's sub-tabs are one size (build 14): each
+// The tables of AIOps › Mycroft's sub-tabs are one size (build 14): each
 // fills the column in a card that scrolls sideways when narrower, and
 // none is narrower than this, so switching sub-tabs keeps the table's
 // size. Exceptions set it first; Wiki (its sources), Known issues, Fixes

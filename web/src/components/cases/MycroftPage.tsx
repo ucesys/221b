@@ -1,4 +1,5 @@
-// One page layout for every sub-tab of Cases › Mycroft (CF-55): the intro
+// One page layout for every sub-tab of AIOps › Mycroft (CF-55), and for
+// Jobs › Validation rules, which moved there keeping it (CF-89): the intro
 // line on top; then one toolbar row with the filter on the left, a search
 // box (and the rules' job select) where the page has one, a spacer, and
 // the page's main action on the right; then the content. The page fills

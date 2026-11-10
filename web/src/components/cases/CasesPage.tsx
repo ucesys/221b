@@ -29,18 +29,19 @@ export function CasesPage({ route, me, onToast, alerts, clusterName }: Props) {
   const asked = (route.path[0] ?? 'inbox') as CasesTab
   // A tab the person is not offered opens the first one they are.
   const tab: CasesTab | null = access.tabs.includes(asked) ? asked : (access.tabs[0] ?? null)
-  const label = CASES_TABS.find((t) => t.id === tab)?.label ?? 'Cases'
+  const label = CASES_TABS.find((t) => t.id === tab)?.label ?? 'AIOps'
   // The old Administration › Approvals link (CS-06) shows the Inbox's
-  // address once it has opened it.
-  const old = typeof window !== 'undefined' && /^#\/(c\/[^/]+\/)?admin\/approvals/.test(window.location.hash)
+  // address once it has opened it; an old Mycroft › Validation rules link
+  // the rules' address in Jobs (CF-89).
+  const old = typeof window !== 'undefined' && /^#\/(c\/[^/]+\/)?(admin\/approvals|cases\/mycroft\/rules)/.test(window.location.hash)
   useEffect(() => {
     if (old) navigate(withParams(route, {}), true)
   }, [old, route])
   // The Inbox, Mycroft and Jobs take the wide column (CF-66).
   const wide = tab === 'inbox' || tab === 'mycroft' || tab === 'jobs'
   return (
-    <main className={'rk-main cs-page' + (wide ? ' cs-page-inbox' : '')} aria-label="Cases" data-testid="cases-page">
-      <h1 className="rk-sr">Cases: {label}</h1>
+    <main className={'rk-main cs-page' + (wide ? ' cs-page-inbox' : '')} aria-label="AIOps" data-testid="cases-page">
+      <h1 className="rk-sr">AIOps: {label}</h1>
       {me === null || !settled ? (
         <p className="tb-hint">Loading…</p>
       ) : tab === null ? (

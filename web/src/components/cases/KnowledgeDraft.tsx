@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import { approveDraft, rejectDraft, resolveConflict, type ConfluenceConflict, type DraftPage, type DraftRun } from '../../api/knowledge'
+import { approveDraft, contradictionText, rejectDraft, resolveConflict, type ConfluenceConflict, type DraftPage, type DraftRun } from '../../api/knowledge'
+import { fixHref } from '../../api/fixes'
 import { fmtTs } from '../../lib/format'
+import { SourceLink } from './SourceLink'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -62,6 +64,7 @@ const stateWords: Record<DraftPage['state'], [string, string]> = {
   published: ['Published', 'ok'],
   conflict: ['Changed meanwhile: waits for a person', 'warn'],
   rejected: ['Rejected', 'muted'],
+  held: ['Retired page: held', 'muted'],
 }
 
 /** How many approvals a page has of those it needs. */
@@ -78,6 +81,9 @@ export function DraftRunCard({ run, onChanged, onToast, open: startOpen }: { run
   const [rejecting, setRejecting] = useState(false)
   const [comment, setComment] = useState('')
   const critical = run.pages.filter((p) => p.critical).length
+  // Pages that say otherwise than an active fix, flagged for the reviewer
+  // even while the card is closed (KN-33).
+  const contradicting = run.pages.filter((p) => (p.contradicts ?? []).length > 0).length
   const waiting = run.state === 'waiting' || run.state === 'partial'
   const act = async (fn: () => Promise<unknown>, msg: string) => {
     setBusy(true)
@@ -99,6 +105,11 @@ export function DraftRunCard({ run, onChanged, onToast, open: startOpen }: { run
         <button className="rk-link" style={{ fontWeight: 600 }} onClick={() => setOpen(!open)} aria-expanded={open} data-testid="knowledge-run-open">
           {run.pages.length} {run.pages.length === 1 ? 'page' : 'pages'} from Mycroft{critical ? `, ${critical} critical` : ''}
         </button>
+        {contradicting > 0 && (
+          <span className="rk-pill" data-tone="warn" title="Mycroft wrote what a source says where it differs from a fix of past cases: decide which is right" data-testid="knowledge-run-contradicts">
+            Contradicts a fix{contradicting > 1 ? ` (${contradicting} pages)` : ''}
+          </span>
+        )}
         <span className="rk-fhint">
           {run.by} · {fmtTs(run.started)} · run {run.id}
         </span>
@@ -134,13 +145,7 @@ export function DraftRunCard({ run, onChanged, onToast, open: startOpen }: { run
                   {p.sources.map((s, i) => (
                     <span key={s.key}>
                       {i > 0 ? '; ' : ''}
-                      {s.url ? (
-                        <a className="rk-link" href={s.url} target="_blank" rel="noreferrer">
-                          {s.title}
-                        </a>
-                      ) : (
-                        s.title
-                      )}
+                      <SourceLink title={s.title} url={s.url} />
                       {s.version && s.version.length <= 12 ? `, version ${s.version}` : ''}
                       {s.date ? `, ${s.date.slice(0, 10)}` : ''}
                     </span>
@@ -148,6 +153,16 @@ export function DraftRunCard({ run, onChanged, onToast, open: startOpen }: { run
                 </span>
               )}
               {p.reason && <span className="rk-fhint">{p.reason}</span>}
+              {p.contradicts?.map((c) => (
+                <p key={c.fix} className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }} data-testid="knowledge-page-contradicts" title={contradictionText(c)}>
+                  Contradicts{' '}
+                  <a className="rk-link" href={fixHref(c.fix)}>
+                    {c.fix} “{c.title}”
+                  </a>
+                  , used in {c.cases} {c.cases === 1 ? 'case' : 'cases'}
+                  {c.why ? `: ${c.why}` : ''}. Decide which is right before approving.
+                </p>
+              ))}
               {p.diff ? <Diff text={p.diff} /> : <span className="rk-fhint">The diff is no longer kept.</span>}
               {p.clipped && <span className="rk-fhint">The diff is cut short here.</span>}
             </div>

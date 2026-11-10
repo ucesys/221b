@@ -136,7 +136,7 @@ export function ConfluenceSettings({ open }: { open: boolean }) {
           <>
             <dt>Edits waiting</dt>
             <dd>
-              {view.conflicts} in <a className="rk-link" href="#/cases/inbox">Cases › Inbox</a>
+              {view.conflicts} in <a className="rk-link" href="#/cases/inbox">AIOps › Inbox</a>
             </dd>
           </>
         )}

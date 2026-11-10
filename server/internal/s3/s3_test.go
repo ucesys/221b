@@ -87,6 +87,26 @@ func TestAListingOfManyPages(t *testing.T) {
 	}
 }
 
+// ListMax stops at its bound, asking S3 for no more keys than it needs,
+// and says when the bucket holds more (Phase 12, KN-25).
+func TestAListingStopsAtItsBound(t *testing.T) {
+	f := s3test.New("b", "us-east-1", testKey)
+	defer f.Close()
+	f.PageSize = 2
+	for i := 0; i < 5; i++ {
+		f.Set(fmt.Sprintf("p/%d", i), []byte("x"), time.Now())
+	}
+	c := client(t, f, true)
+	list, more, err := c.ListMax(context.Background(), "p/", 3)
+	if err != nil || len(list) != 3 || list[2].Key != "p/2" || !more || f.Requests["LIST"] != 2 {
+		t.Fatalf("%+v %v %v %v", list, more, err, f.Requests)
+	}
+	list, more, err = c.ListMax(context.Background(), "p/", 5)
+	if err != nil || len(list) != 5 || more {
+		t.Fatalf("all five: %+v %v %v", list, more, err)
+	}
+}
+
 // S3's refusals come back as errors that say what S3 said; a wrong key is
 // refused by the signature check.
 func TestRefusals(t *testing.T) {

@@ -20,7 +20,7 @@ import (
 // --- Validation rules (Phase 12, ADR-138, amends ADR-127) ---
 //
 // The check ids the agents name their findings by are validation rules,
-// listed in Cases › Mycroft › Validation rules. The built-in ones ship in
+// listed in AIOps › Jobs › Validation rules (CF-89). The built-in ones ship in
 // code (package jobs' catalogues); what a SuperAdmin adds or changes is
 // kept apart, in the casework ConfigMap (RulesKey), so an upgrade still
 // adds the new built-ins without undoing an edit. The list as it stands
@@ -680,7 +680,7 @@ type RuleJob struct {
 	Label string `json:"label"`
 }
 
-// RulesView is Cases › Mycroft › Validation rules: the rules, the ids
+// RulesView is AIOps › Jobs › Validation rules (CF-89): the rules, the ids
 // found outside the list and the suggestions, which the page shows as
 // rows of one table (CF-85).
 type RulesView struct {

@@ -270,6 +270,10 @@ func (a agentRunner) Run(ctx context.Context, req jobs.AgentRequest) jobs.AgentR
 		// The audit record of the agent's call names the job and who set
 		// its trigger, and the reader it read as.
 		Who: audit.Who{Subject: auth.ReaderName, Name: fmt.Sprintf("job %s (%s, %s), trigger set by %s", req.Job, req.Label, req.RunID, setBy)},
+		// A job's findings go to those who see the cases, who read the
+		// exceptions; the report triage's answer reaches the reporter,
+		// who does not (KN-32).
+		Exceptions: !req.ForReporters,
 	}
 	agent, err := a.ai.Agent(req.Agent, q)
 	if err != nil {

@@ -19,7 +19,7 @@ import (
 	"github.com/ucesys/221b/server/internal/settings"
 )
 
-// Cases › Cases (CW-10): the approvers (here Admins, as the chart's
+// AIOps › Cases (CW-10): the approvers (here Admins, as the chart's
 // default) open, change and close cases; a SuperViewer reads them; a
 // Viewer reads them only once the jobs' settings let Viewers edit jobs.
 func TestCaseworkAccess(t *testing.T) {
@@ -99,6 +99,10 @@ func TestCaseworkAccess(t *testing.T) {
 	}
 	if resp, _ := send(t, vera, "POST", url+"/C-1/close", `{"outcome": "noFixNeeded", "explanation": "c"}`); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("a Viewer who may edit jobs closes a case: %d", resp.StatusCode)
+	}
+	// notAProblem, an outcome before CF-90, closes as noAction.
+	if resp, body := send(t, adam, "POST", url+"/C-1/close", `{"outcome": "notAProblem", "explanation": "As designed."}`); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"outcome":"noAction"`) {
+		t.Fatalf("closed as notAProblem: %d %s", resp.StatusCode, body)
 	}
 	// Settings › Cases (CF-19): read by those who see the cases, set by a
 	// SuperAdmin.

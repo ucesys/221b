@@ -155,7 +155,7 @@ var layout = map[string]map[string]kv.Limit{
 		casework.FoundKey:     {Bytes: casework.DefaultFoundBytes},
 		lessons.ExceptionsKey: {Bytes: lessons.DefaultExceptionsBytes, Hint: "remove the accepted exceptions no longer needed"},
 		// The fixes (wave 6g, CF-50) and the mark of their one import.
-		fixes.Key:               {Bytes: fixes.DefaultBytes, Hint: "delete the inactive fixes in Cases › Mycroft › Fixes"},
+		fixes.Key:               {Bytes: fixes.DefaultBytes, Hint: "delete the inactive fixes in AIOps › Mycroft › Fixes"},
 		casework.FixesImportKey: {Bytes: 4 << 10},
 		// The work on the cases of builds before wave 6, and the RCAs of
 		// builds before wave 6e (CF-44): the clean start's.

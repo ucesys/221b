@@ -253,7 +253,7 @@ function Shell() {
         : view === "admin"
           ? "Administration · 221B"
           : view === "cases"
-            ? "Cases · 221B"
+            ? "AIOps · 221B"
           : clusterName
             ? `${clusterName} · ${view === "cluster" ? "Connection" : tabLabel} · 221B`
             : "221B";

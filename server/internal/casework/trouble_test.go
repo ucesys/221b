@@ -180,7 +180,7 @@ func TestEveryCloseDeletesTheConversationCF47(t *testing.T) {
 		}
 	}
 	a := open("closed in the drawer")
-	if _, err := w.svc.Close(ctx, a, CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "Gone by itself."}, olivia); err != nil {
+	if _, err := w.svc.Close(ctx, a, CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "Gone by itself."}, olivia); err != nil {
 		t.Fatal(err)
 	}
 	gone("Close", a)
@@ -195,7 +195,7 @@ func TestEveryCloseDeletesTheConversationCF47(t *testing.T) {
 	}
 	gone("Known issue", k)
 	d1, d2 := open("bulk one"), open("bulk two")
-	res, err := w.svc.Bulk(ctx, BulkInput{Cases: []string{d1, d2}, Action: BulkClose, Outcome: issues.OutcomeNoFixNeeded, Explanation: "Both gone."}, olivia)
+	res, err := w.svc.Bulk(ctx, BulkInput{Cases: []string{d1, d2}, Action: BulkClose, Outcome: issues.OutcomeNoAction, Explanation: "Both gone."}, olivia)
 	if err != nil || len(res) != 2 || !res[0].OK || !res[1].OK {
 		t.Fatalf("bulk %+v %v", res, err)
 	}
@@ -385,7 +385,7 @@ func TestTheFixIsReusedCF49(t *testing.T) {
 		t.Fatalf("related:\n%s", got)
 	}
 	asked := task(request{Case: infoOf(w.get(t, again.ID)), Related: got}, "prod", AnalysisTask)
-	if !strings.Contains(asked, "you may propose them again, as a proposed change, once you have checked on the cluster that they still apply") || !strings.Contains(asked, "never run them, and never propose them unchecked") {
+	if !strings.Contains(asked, "may be proposed again once you have checked on the cluster that they still apply") || !strings.Contains(asked, "never propose them unchecked") {
 		t.Errorf("task:\n%s", asked)
 	}
 	if k := w.svc.Kind(); !strings.Contains(k.Reads, "the commands that fixed them") {

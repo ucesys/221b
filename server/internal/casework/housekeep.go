@@ -27,7 +27,7 @@ import (
 // Since ADR-138 it also looks at the ids the agents made up (other.<slug>):
 // an exact repeat found often enough, with no variant, is promoted to a
 // validation rule as it is (undone by retiring it); the other candidates,
-// with their likely variants, are suggested in Cases › Mycroft ›
+// with their likely variants, are suggested in AIOps › Mycroft ›
 // Validation rules for a person to promote, edit or dismiss.
 
 // KindHousekeeping is the housekeeping job's kind.
@@ -37,7 +37,7 @@ const KindHousekeeping = "housekeeping"
 // until a SuperAdmin turns it off.
 func (s *Service) HousekeepingKind() jobs.Kind {
 	return jobs.Kind{ID: KindHousekeeping, Label: "Housekeeping", Order: 90, On: true,
-		Does:        "Makes the fixes, known issues and exceptions that repeat another inactive, marks the fixes that contradict each other pending, and suggests validation rules from the ids the agents made up",
+		Does:        "Makes the fixes, known issues and exceptions that repeat another inactive, marks the fixes that contradict each other pending, offers Mycroft the fixes proven in cases for a runbook, and suggests validation rules from the ids the agents made up",
 		Default:     jobs.When{Schedule: &schedule.Spec{Kind: schedule.Daily, At: "03:30"}},
 		Schedulable: true,
 		Run: func(ctx context.Context, env *jobs.RunEnv) (jobs.Outcome, error) {
@@ -62,11 +62,28 @@ func (s *Service) Housekeep(ctx context.Context) (string, error) {
 			if d.What == fixes.ReasonDuplicate {
 				dup = append(dup, fmt.Sprintf("- %s made inactive: a duplicate of %s, which keeps its cases", d.ID, d.Of))
 			} else {
-				pend = append(pend, fmt.Sprintf("- %s and %s pending: they fix the same problem differently; accept the right one in Cases › Mycroft › Fixes", d.ID, d.Of))
+				pend = append(pend, fmt.Sprintf("- %s and %s pending: they fix the same problem differently; accept the right one in AIOps › Mycroft › Fixes", d.ID, d.Of))
 			}
 		}
 		n += section(&b, "Fixes made inactive as duplicates", dup)
 		n += section(&b, "Fixes pending, contradicting each other", pend)
+	}
+	// A fix proven in cases goes to Mycroft for a runbook (KN-34), once,
+	// and again when it changes; after the duplicates are made inactive.
+	if s.o.Runbooks != nil {
+		offered, started, err := s.o.Runbooks.OfferFixes(ctx)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("the fixes for Mycroft's runbooks: %w", err))
+		}
+		next := "its job Wiki sync: Fixes drafts a runbook from it, which waits for review in AIOps › Inbox"
+		if !started {
+			next = "not read yet: the job Wiki sync: Fixes is paused or not running; it reads it at its next run"
+		}
+		var lines []string
+		for _, o := range offered {
+			lines = append(lines, "- "+o+": "+next)
+		}
+		n += section(&b, "Fixes offered to Mycroft for a runbook", lines)
 	}
 	if s.o.Issues != nil {
 		done, err := s.o.Issues.HousekeepKnown(ctx, issues.Person{ID: "system:housekeeping", Name: "Housekeeping", System: true})
@@ -97,16 +114,16 @@ func (s *Service) Housekeep(ctx context.Context) (string, error) {
 		}
 		var auto, sugg []string
 		for _, r := range done.Promoted {
-			auto = append(auto, fmt.Sprintf("- %s promoted to a validation rule as it is: an exact repeat with no variant; it means “%s”, case type %s. Undo: retire it in Cases › Mycroft › Validation rules", r.ID, r.Says, r.Type))
+			auto = append(auto, fmt.Sprintf("- %s promoted to a validation rule as it is: an exact repeat with no variant; it means “%s”, case type %s. Undo: retire it in AIOps › Mycroft › Validation rules", r.ID, r.Says, r.Type))
 		}
 		for _, x := range done.Suggested {
-			sugg = append(sugg, fmt.Sprintf("- %s suggested, from %s: found in %d runs on %d clusters; promote, edit or dismiss it in Cases › Mycroft › Validation rules or the Inbox", x.ID, strings.Join(x.From, ", "), x.Runs, x.Clusters))
+			sugg = append(sugg, fmt.Sprintf("- %s suggested, from %s: found in %d runs on %d clusters; promote, edit or dismiss it in AIOps › Mycroft › Validation rules or the Inbox", x.ID, strings.Join(x.From, ", "), x.Runs, x.Clusters))
 		}
 		n += section(&b, "Validation rules promoted (exact repeats)", auto)
 		n += section(&b, "Validation rules suggested", sugg)
 	}
 	if n == 0 {
-		b.WriteString("Nothing to do: no fix, known issue or exception repeats or contradicts another, and no validation rule to suggest.\n")
+		b.WriteString("Nothing to do: no fix, known issue or exception repeats or contradicts another, no fix to offer Mycroft for a runbook, and no validation rule to suggest.\n")
 	}
 	if len(errs) > 0 {
 		b.WriteString("\n### Not done\n\n")

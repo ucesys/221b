@@ -26,7 +26,7 @@ stateDiagram-v2
     }
     New --> Closed: a person closes it with an outcome
     InProgress --> Closed: a person closes it with an outcome
-    Waiting --> Closed: timer, no answer for 5 days (Settings › Issues), as no fix needed
+    Waiting --> Closed: timer, no answer for 5 days (Settings › Issues), as no action needed
     InProgress --> Closed: an agent-found case below P1 whose applied fix the next run no longer sees: closed as fixed by the console (CF-30)
     Closed --> New: reopened (a person with a reason, its reporter, or the next run of its job finding it again after a fix: the fix did not hold, CF-30)
     Closed --> InProgress: reopened the same ways, when it has an assignee
@@ -34,11 +34,13 @@ stateDiagram-v2
 ```
 
 The outcomes of a close: Fixed (with Save fix, CF-50; an RCA at P0-P1),
-Duplicate (of an open original), Not a problem, No fix needed, Known issue,
-Exception. A finding of a closed case found again: a duplicate's goes to its
-original; a known issue's counts as still present on the known issue; a
-fixed one (not waiting for verification), a no-fix-needed or a
-not-a-problem one opens a new case, a regression of it.
+Duplicate (of an open original), No action needed (since CF-90: it replaces
+Not a problem and No fix needed, for every case; a case stored with either
+reads as it), Known issue, Exception. A finding of a closed case found
+again: a duplicate's goes to its original; a known issue's counts as still
+present on the known issue; a fixed one (not waiting for verification) opens
+a new case, a regression of it; a no-action-needed one opens a new case
+with the earlier explanation.
 
 A case the console or an agent opened (from an alert or a finding, at
 P0-P2, its priority not set by a person) goes down to P3 when its analysis
@@ -174,3 +176,29 @@ unlisted row, its tag *unlisted · dismissed*. A suggestion is drafted
 again by every housekeeping run, so it leaves Suggested when promoted,
 dismissed, or no longer a candidate; it waits in a SuperAdmin's Inbox
 while it is Suggested (CF-87).
+
+## Wiki pages
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Draft: Mycroft writes or rewrites a page from its sources, or redrafts it from a correction (This is outdated…, KN-23)
+    Draft --> Approved: one reviewer approves it, two different people a critical page (KN-08)
+    Draft --> [*]: a reviewer rejects the run
+    Approved --> Draft: Mycroft rewrites it, or a person sends This is outdated…
+    Approved --> RetireAsked: a reviewer asks to retire it, with a reason (KN-24)
+    RetireAsked --> Retired: one reviewer other than who asked approves it
+    RetireAsked --> Approved: anyone who reviews rejects it, or who asked withdraws it
+    Retired --> ActivateAsked: a reviewer asks to make it active again, with a reason
+    ActivateAsked --> Approved: one reviewer other than who asked approves it
+    ActivateAsked --> Retired: rejected or withdrawn
+```
+
+A request waits in AIOps › Inbox as a wiki row; the one who asked never
+approves their own (403), and an agent never counts. A retired page is out
+of every replica's index, so no agent reads it, and its file stays in the
+store: a page is never deleted. Mycroft is told which pages are retired; a
+change it writes to one anyway is *held* in its run, shown but never
+published, and so is a waiting draft of a page retired before its approval.
+A correction waits on its page (*Correction sent … by …*) until its redraft
+is approved or rejected.

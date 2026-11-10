@@ -117,7 +117,7 @@ func TestTheQueueRunsOneAtATimeHighestFirstCF32(t *testing.T) {
 		t.Fatal(err)
 	}
 	// One closed leaves the queue.
-	if _, err := w.svc.Close(ctx, gone, CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "It went away."}, olivia); err != nil {
+	if _, err := w.svc.Close(ctx, gone, CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "It went away."}, olivia); err != nil {
 		t.Fatal(err)
 	}
 	if w.get(t, gone).AnalysisQueued || w.report(t, gone).AnalysisQueued != nil {
@@ -225,7 +225,7 @@ func TestClosingACaseSettlesItsWaitingChangesCF34(t *testing.T) {
 		c.Expires = w.now.Add(time.Hour)
 	}
 	put(t, st, only, both, withKI, applied, dup)
-	if _, err := w.svc.Close(ctx, "C-1", CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "It went away."}, olivia); err != nil {
+	if _, err := w.svc.Close(ctx, "C-1", CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "It went away."}, olivia); err != nil {
 		t.Fatal(err)
 	}
 	got := func(id string) cards.Card {
@@ -235,7 +235,7 @@ func TestClosingACaseSettlesItsWaitingChangesCF34(t *testing.T) {
 		}
 		return c
 	}
-	if c := got("PC-1"); c.State != cards.Rejected || c.Rejection == nil || c.Rejection.By.Name != "Olivia" || c.Rejection.Comment != "Case C-1 was closed as no fix needed" {
+	if c := got("PC-1"); c.State != cards.Rejected || c.Rejection == nil || c.Rejection.By.Name != "Olivia" || c.Rejection.Comment != "Case C-1 was closed as no action needed" {
 		t.Fatalf("the change resolving only C-1: %+v %+v", c.State, c.Rejection)
 	}
 	if c := got("PC-2"); c.State != cards.Queued {
@@ -270,7 +270,7 @@ func TestClosingACaseSettlesItsWaitingChangesCF34(t *testing.T) {
 	last.Expires = w.now.Add(time.Hour)
 	put(t, st, last)
 	status := issues.StatusClosed
-	if _, err := w.iss.Triage(ctx, system, 5, issues.Triage{Status: &status, Outcome: issues.OutcomeNoFixNeeded, Explanation: "Gone."}); err != nil {
+	if _, err := w.iss.Triage(ctx, system, 5, issues.Triage{Status: &status, Outcome: issues.OutcomeNoAction, Explanation: "Gone."}); err != nil {
 		t.Fatal(err)
 	}
 	w.svc.Wait()
@@ -436,9 +436,10 @@ func TestManyCasesAtOnceCF38(t *testing.T) {
 	if err != nil || len(out) != 2 || !out[0].OK || !out[1].OK || w.get(t, "C-3").Assignee == nil {
 		t.Fatalf("assign: %+v %v", out, err)
 	}
-	// notAProblem is not offered on an agent-found case: refused there.
-	out, err = w.svc.Bulk(ctx, BulkInput{Cases: []string{"C-2", agentCase}, Action: BulkClose, Outcome: issues.OutcomeNotAProblem, Explanation: "Expected."}, olivia)
-	if err != nil || !out[0].OK || out[1].OK || !strings.Contains(out[1].Error, "found by an agent") {
+	// No action needed closes a person's case and an agent-found one
+	// alike; notAProblem, its name before CF-90, is taken as it.
+	out, err = w.svc.Bulk(ctx, BulkInput{Cases: []string{"C-2", agentCase}, Action: BulkClose, Outcome: "notAProblem", Explanation: "Expected."}, olivia)
+	if err != nil || !out[0].OK || !out[1].OK || w.get(t, "C-2").Outcome != issues.OutcomeNoAction || w.get(t, agentCase).Outcome != issues.OutcomeNoAction {
 		t.Fatalf("close: %+v %v", out, err)
 	}
 	// A duplicate of a closed original is refused with what fits instead.
@@ -468,7 +469,7 @@ func TestManyCasesAtOnceCF38(t *testing.T) {
 	if _, err := w.svc.Bulk(ctx, BulkInput{Cases: []string{"C-2"}, Action: "explode"}, olivia); err == nil {
 		t.Error("an action that is none taken")
 	}
-	if !strings.Contains(w.audit.String(), `"action":"cases.bulk"`) || !strings.Contains(w.audit.String(), "close on 2 cases: 1 done, 1 refused") {
+	if !strings.Contains(w.audit.String(), `"action":"cases.bulk"`) || !strings.Contains(w.audit.String(), "close on 2 cases: 2 done, 0 refused") {
 		t.Errorf("audit: %s", w.audit.String())
 	}
 	// Analyse queues each for the job, which runs them in turn.

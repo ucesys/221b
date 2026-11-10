@@ -46,6 +46,28 @@ type model struct {
 	texts []string
 	// reply, when set, answers instead.
 	reply func(text string) string
+	// cut, when it says so for a request, cuts the answer halfway, as a
+	// provider does at the output limit (KN-27).
+	cut func(text string) bool
+}
+
+// CompleteMeasured answers as CompleteAs does, saying what it took: a
+// token in for every four bytes, a hundred out, a cent each.
+func (m *model) CompleteMeasured(ctx context.Context, agent string, who audit.Who, cluster, label, system, text string) (Completion, error) {
+	answer, err := m.CompleteAs(ctx, agent, who, cluster, label, system, text)
+	c := Completion{Model: "claude-test", In: len(text) / 4, Out: 100, CostUSD: 0.01, MaxTokens: 16000}
+	if err != nil {
+		return c, err
+	}
+	m.mu.Lock()
+	cut := m.cut
+	m.mu.Unlock()
+	if cut != nil && cut(text) {
+		c.Text, c.Cut = answer[:len(answer)/2], true
+		return c, nil
+	}
+	c.Text = answer
+	return c, nil
 }
 
 var sourceTag = regexp.MustCompile(`<source key="([^"]+)" title="([^"]+)" version="([^"]*)"`)

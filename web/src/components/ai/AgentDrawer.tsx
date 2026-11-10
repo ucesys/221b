@@ -273,7 +273,7 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
         <p style={{ margin: 0, fontSize: 12.5 }}>
           {sherlock ? 'Sherlock answers when someone asks.' : `The ${agent.name} works when another agent hands it a part of a question.`} Jobs that run an agent by themselves, on new alerts or on a schedule, are set in{' '}
           <a className="rk-link" href="#/cases/jobs" data-testid="agent-jobs-link">
-            Cases › Jobs
+            AIOps › Jobs
           </a>
           .
         </p>
@@ -729,7 +729,7 @@ function Stepper({ ins, edited, busy, testing, panel, onPanel, onBack, onStopPil
       name: 'Live',
       action: 'Make live',
       testId: 'ins-live',
-      why: edited ? common : !d ? `Nothing waits to go live: ${ins.live ? `version ${ins.live} is in force` : 'the built-in and chart instructions are in force'}. Edit and save a draft.` : d.request ? `Waiting for another SuperAdmin: request ${d.request} on Approvals in Cases › Inbox.` : stage < 1 && !d.restored ? 'Run the tests first.' : '',
+      why: edited ? common : !d ? `Nothing waits to go live: ${ins.live ? `version ${ins.live} is in force` : 'the built-in and chart instructions are in force'}. Edit and save a draft.` : d.request ? `Waiting for another SuperAdmin: request ${d.request} on Approvals in AIOps › Inbox.` : stage < 1 && !d.restored ? 'Run the tests first.' : '',
       onClick: () => onPanel('live'),
       open: panel === 'live',
     },

@@ -12,7 +12,7 @@ import (
 )
 
 // BackupKind is the scheduled backups to S3 as a job (JB-02): listed in
-// Cases › Jobs with their schedule and last run, run now and paused from
+// AIOps › Jobs with their schedule and last run, run now and paused from
 // there, and set in Administration › Backup. The backups' scheduler keeps
 // its own schedule (ADR-81); nothing here runs it twice.
 func BackupKind(b *backup.Scheduler) Kind {

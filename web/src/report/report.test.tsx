@@ -98,14 +98,14 @@ describe('your reports', () => {
       report(143, { status: 'closed', outcome: 'knownIssue', knownIssue: 'KI-1' }),
       report(138, { status: 'inProgress', priority: 0 }),
       report(131, { status: 'closed', outcome: 'fix' }),
-      report(127, { status: 'closed', outcome: 'notAProblem', reason: 'A browser extension blocks the second step.' }),
+      report(127, { status: 'closed', outcome: 'noAction', reason: 'A browser extension blocks the second step.' }),
       report(120),
     ]
     render(<MyReports reports={list} onReopen={vi.fn()} onMessage={vi.fn()} />)
     expect(screen.getByTestId('report-143').textContent).toContain('A known problem')
     expect(screen.getByTestId('report-138').textContent).toContain('Being worked on')
     expect(screen.getByTestId('report-131').textContent).toContain('Fixed')
-    expect(screen.getByTestId('report-127').textContent).toContain('Closed: not a problem')
+    expect(screen.getByTestId('report-127').textContent).toContain('Closed: no action needed')
     expect(screen.getByTestId('report-120').textContent).toContain('Received')
     // No "It works" any more: a fixed case is closed, and Still broken opens it again.
     expect(screen.queryByRole('button', { name: 'It works' })).toBeNull()
@@ -327,12 +327,15 @@ describe('matching known problems (wave 6)', () => {
 
 describe('the pills', () => {
   it('reads a status as a reporter would', () => {
-    expect(api.statusPill({ status: 'closed', outcome: 'noFixNeeded' })).toEqual({ text: 'Closed: no fix needed', tone: 'muted' })
+    expect(api.statusPill({ status: 'closed', outcome: 'noAction' })).toEqual({ text: 'Closed: no action needed', tone: 'muted' })
+    // The outcomes before CF-90 read as no action needed (CF-90).
+    expect(api.statusPill({ status: 'closed', outcome: 'notAProblem' }).text).toBe('Closed: no action needed')
+    expect(api.statusPill({ status: 'closed', outcome: 'noFixNeeded' }).text).toBe('Closed: no action needed')
     expect(api.statusPill({ status: 'closed', outcome: 'fix' })).toEqual({ text: 'Fixed', tone: 'ok' })
     expect(api.statusPill({ status: 'new' }).text).toBe('Received')
     // Asked something, the reporter reads that it waits for their answer (CF-67).
     expect(api.statusPill({ status: 'inProgress', waiting: '2026-11-05T09:10:00Z' })).toEqual({ text: 'Waiting for your answer', tone: 'warn' })
-    expect(api.statusPill({ status: 'closed', outcome: 'noFixNeeded', waiting: '2026-11-05T09:10:00Z' }).text).toBe('Closed: no fix needed')
+    expect(api.statusPill({ status: 'closed', outcome: 'noAction', waiting: '2026-11-05T09:10:00Z' }).text).toBe('Closed: no action needed')
     expect(api.priorityText(0)).toBe('P0: Outage')
     expect(api.priorityText(4)).toBe('P4: Question')
     expect(api.knownPill({ status: 'fixInProgress', kind: 'normal' })).toEqual({ text: 'Fix in progress', tone: 'warn' })

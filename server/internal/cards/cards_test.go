@@ -3,6 +3,7 @@ package cards
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -536,5 +537,26 @@ func TestDecidedTextNamesEachEnding(t *testing.T) {
 		if got := DecidedText(tc.c); got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.c.State, got, tc.want)
 		}
+	}
+}
+
+// A job's proposal keeps the job's name, trimmed, so the drawer says
+// "Nightly audit, run-12" (CF-92).
+func TestAProposalKeepsTheJobThatMadeIt(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	p := restart("dev-1", "restart:dev-1/shop/web")
+	p.Source = Source{Kind: SourceJob, ID: "run-12", Label: "Every day at 02:00, UTC", SetBy: "Sam", Job: "  Nightly audit "}
+	id, err := w.st.Propose(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ := w.st.Get(ctx, id)
+	if c.Source.Job != "Nightly audit" || c.Source.ID != "run-12" {
+		t.Fatalf("source: %+v", c.Source)
+	}
+	b, _ := json.Marshal(c.Source)
+	if !strings.Contains(string(b), `"job":"Nightly audit"`) {
+		t.Fatalf("JSON: %s", b)
 	}
 }

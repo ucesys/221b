@@ -1,10 +1,12 @@
-// Cases › Mycroft › Wiki › Add (Phase 12, wave 5, MY-04 to MY-07): what a
+// Add to Mycroft's wiki (Phase 12, wave 5, MY-04 to MY-07): what a
 // person adds to the wiki: a note of plain text, a web address to read
 // (the pages of its site it links to, as deep and as many as asked,
 // robots.txt respected), or documents (PDF, Word .docx, Markdown, HTML,
 // plain text, CSV). Each is a source item: scrubbed of secrets, quoted by
 // the agents once read, and written up by Mycroft as pages that wait for
 // review under Drafts. Admins and SuperAdmins add; the server decides.
+// Since MY-11 the form is in Settings › Knowledge's Added in Mycroft card
+// (AddedInMycroft.tsx) only; AIOps › Mycroft › Wiki has no Add view.
 import { useRef, useState } from 'react'
 import { addKnowledge, fileBase64, wikiHref, type AddKind, type AddResult, type WikiState } from '../../api/knowledge'
 import { Select } from '../Select'
@@ -27,7 +29,8 @@ const extOf = (name: string) => {
   return i < 0 ? '' : name.slice(i).toLowerCase()
 }
 
-export function WikiAdd({ wiki, onAdded, onToast }: { wiki: WikiState | null; onAdded: () => void; onToast?: (msg: string) => void }) {
+/** The form; embedded, it fills the card it is in rather than being one. */
+export function WikiAdd({ wiki, onAdded, onToast, embedded = false }: { wiki: WikiState | null; onAdded: () => void; onToast?: (msg: string) => void; embedded?: boolean }) {
   const [kind, setKind] = useState<AddKind>('text')
   const [title, setTitle] = useState('')
   const [text, setText] = useState('')
@@ -85,7 +88,7 @@ export function WikiAdd({ wiki, onAdded, onToast }: { wiki: WikiState | null; on
     }
   }
   return (
-    <section className="rk-card" style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 760 }} aria-label="Add to the wiki" data-testid="wiki-add">
+    <section className={embedded ? undefined : 'rk-card'} style={{ padding: embedded ? 0 : '14px 18px', display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 760 }} aria-label="Add to the wiki" data-testid="wiki-add">
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div className="rk-seg" role="group" aria-label="What to add">
           {KINDS.map((k) => (

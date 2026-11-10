@@ -1,4 +1,4 @@
-// The validation rules (Phase 12, ADR-138), listed in Cases › Mycroft ›
+// The validation rules (Phase 12, ADR-138), listed in AIOps › Mycroft ›
 // Validation rules: the check ids the agents name their findings by. The
 // built-in ones ship in code; a SuperAdmin adds rules, changes their
 // meaning, case type and jobs, retires them (the agents are no longer
@@ -205,5 +205,5 @@ export const dismissSuggestion = (id: string) => send(`${base}/suggestions/${enc
 /** The suggested rules, for a SuperAdmin's Inbox (CF-87); anyone else is refused. */
 export const fetchSuggestions = (background = false) => call<{ suggestions: Suggestion[] }>(`${base}/suggestions`, {}, background)
 
-/** Where a rule opens: Cases › Mycroft › Validation rules. */
-export const ruleHref = (id: string) => `#/cases/mycroft/rules/${enc(id)}`
+/** Where a rule opens: AIOps › Jobs › Validation rules (CF-89). */
+export const ruleHref = (id: string) => `#/cases/jobs/rules/${enc(id)}`

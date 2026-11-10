@@ -17,7 +17,7 @@ import (
 // --- Fixes (Phase 12, wave 6g, CF-50 to CF-55) ---
 //
 // A case closed as Fixed with Save fix on (the default) saves its fix in
-// Cases › Mycroft › Fixes: the problem (the case's title, the agents'
+// AIOps › Mycroft › Fixes: the problem (the case's title, the agents'
 // check, the object), the cause and the prevention of its RCA, what was
 // done and the changes run from its drawer that finished done. The case
 // names the fix it was saved as; cases fixed together save one fix.

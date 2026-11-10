@@ -3,7 +3,7 @@ import type { ApprovalRow } from '../../api/automation'
 import type { Proposal } from '../../api/cards'
 import { inboxKindOf, inboxOrderKey } from '../../lib/cases'
 import { sortRows } from '../../lib/table'
-import { approvalId, approvalRow, caseRow, conflictRow, draftRunRow, filterRows, INBOX_COLUMNS, knownRow, pendingByKind, proposalRow, rowTerms, whoseMatch, type InboxCase, type InboxFilter, type RowContext } from './inboxRows'
+import { approvalId, approvalRow, caseRow, conflictRow, draftRunRow, filterRows, INBOX_COLUMNS, knownRow, pageRequestRow, pendingByKind, proposalRow, rowTerms, whoseMatch, type InboxCase, type InboxFilter, type RowContext } from './inboxRows'
 
 const ctx: RowContext = { me: 'Ann (ann)', person: 'ann', names: new Map([['prod', 'Production']]) }
 
@@ -55,8 +55,8 @@ const approval = (over: Partial<ApprovalRow> = {}): ApprovalRow => ({ kind: 'scr
 describe('the Inbox’s rows (IN-02)', () => {
   it('keeps every case New or In progress pending, with its object and cluster', () => {
     for (const status of ['new', 'inProgress'] as const) expect(caseRow(kase(1, { status }), ctx).pending).toBe(true)
-    const done = caseRow(kase(2, { status: 'closed', outcome: 'noFixNeeded' }), ctx)
-    expect(done).toMatchObject({ pending: false, status: 'Closed: no fix needed', tone: 'muted' })
+    const done = caseRow(kase(2, { status: 'closed', outcome: 'noAction' }), ctx)
+    expect(done).toMatchObject({ pending: false, status: 'Closed: no action needed', tone: 'muted' })
     // Closed, it orders by when it was closed.
     expect(done.since).toBe('2026-11-02T00:00:00Z')
     expect(caseRow(kase(2, { status: 'closed', outcome: 'fix', closedAt: '2026-11-03T00:00:00Z' }), ctx)).toMatchObject({ since: '2026-11-03T00:00:00Z', tone: 'ok' })
@@ -104,6 +104,15 @@ describe('the Inbox’s rows (IN-02)', () => {
     const run = draftRunRow({ id: 'd1', started: '2026-11-01T00:00:00Z', by: 'mycroft', state: 'partial', store: 'git', pages: [{ path: 'a.md', title: 'Alpha', kind: 'page', diff: '', added: 1, removed: 0, state: 'waiting' }, { path: 'b.md', title: 'Beta', kind: 'page', diff: '', added: 1, removed: 0, state: 'published' }] })
     expect(run).toMatchObject({ title: 'Alpha and 1 more page', pending: true, status: 'Partly reviewed' })
     expect(conflictRow({ id: 'cf1', kind: 'known', title: 'VPN', their: '', at: '2026-11-01T00:00:00Z', ownerName: 'Ann' })).toMatchObject({ title: 'Edited in Confluence: VPN', pending: true, assignee: 'Ann' })
+  })
+
+  it('lists a request to retire a wiki page: pending for another person, never for who asked (KN-24)', () => {
+    const req = { id: 'p-1', action: 'retire' as const, path: 'pages/system/backups.md', title: 'Backups', reason: 'The NAS was replaced.', by: 'bob', name: 'Bob', at: '2026-11-09T10:00:00Z', state: 'waiting' as const }
+    expect(pageRequestRow({ ...req, canApprove: true })).toMatchObject({ key: 'knowledge:p-1', kind: 'knowledge', open: ['knowledge', 'p-1'], title: 'Retire: Backups', status: 'Retire: waits for approval', pending: true, forMe: true, mine: false, origin: 'people', since: '2026-11-09T10:00:00Z' })
+    expect(pageRequestRow({ ...req, canApprove: false, mine: true })).toMatchObject({ pending: true, forMe: false, mine: true })
+    expect(pageRequestRow({ ...req, action: 'activate', canApprove: true }).title).toBe('Make active again: Backups')
+    expect(pageRequestRow({ ...req, state: 'approved', decidedName: 'Ann', decided: '2026-11-09T11:00:00Z' })).toMatchObject({ pending: false, forMe: false, status: 'Approved', since: '2026-11-09T11:00:00Z', lastBy: 'Ann' })
+    expect(rowTerms(pageRequestRow(req)).map((t) => t.text)).toContain('The NAS was replaced.')
   })
 })
 
@@ -193,10 +202,10 @@ describe('the Inbox’s rows since wave 6c (CF-32, CF-35 to CF-38)', () => {
       caseRow(kase(1, { source: { kind: 'report' }, status: 'inProgress', askedReporter: true }), ctx),
       caseRow(kase(2, { source: { kind: 'report' }, status: 'inProgress' }), ctx),
       caseRow(kase(3), ctx),
-      caseRow(kase(4, { status: 'closed', outcome: 'noFixNeeded', askedReporter: false }), ctx),
+      caseRow(kase(4, { status: 'closed', outcome: 'noAction', askedReporter: false }), ctx),
       proposalRow(card('PC-1')),
     ]
-    expect(rows.map((r) => r.status)).toEqual(['Waiting for the reporter', 'In progress', 'New', 'Closed: no fix needed', expect.any(String)])
+    expect(rows.map((r) => r.status)).toEqual(['Waiting for the reporter', 'In progress', 'New', 'Closed: no action needed', expect.any(String)])
     expect(rows[0]).toMatchObject({ shownStatus: 'waiting', tone: 'muted', pending: true })
     expect(rows[1]).toMatchObject({ shownStatus: 'inProgress', tone: 'info' })
     const col = INBOX_COLUMNS.find((c) => c.id === 'status')!

@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CallError } from '../../api/call'
 import * as api from '../../api/fixes'
+import * as knowledge from '../../api/knowledge'
 import type { CasesAccess } from '../../lib/cases'
 import { parseHash } from '../../lib/router'
 import { FixesView, fixPatchOf, fixesShown } from './FixesView'
@@ -13,6 +14,10 @@ vi.mock('../../api/fixes', async (original) => ({
   fetchFixes: vi.fn(),
   saveFix: vi.fn(),
   deleteFix: vi.fn(),
+}))
+vi.mock('../../api/knowledge', async (original) => ({
+  ...(await original<typeof import('../../api/knowledge')>()),
+  fetchPages: vi.fn(() => Promise.resolve({ pages: [], connected: true })),
 }))
 vi.mock('../../api/lessons', async (original) => ({
   ...(await original<typeof import('../../api/lessons')>()),
@@ -50,7 +55,7 @@ const LIST: api.Fix[] = [
 const ids = () => screen.getAllByTestId('fix-row').map((r) => r.getAttribute('data-id'))
 const head = (col: string) => document.querySelector(`[data-testid="fixes-table"] button[data-col="${col}"]`)!
 
-describe('Cases › Mycroft › Fixes (wave 6g)', () => {
+describe('AIOps › Mycroft › Fixes (wave 6g)', () => {
   beforeAll(() => {
     Element.prototype.scrollIntoView = () => {}
     // jsdom has no scrollTo on elements; the drawer scrolls its body to the top.
@@ -58,6 +63,7 @@ describe('Cases › Mycroft › Fixes (wave 6g)', () => {
   })
   beforeEach(() => {
     vi.mocked(api.fetchFixes).mockResolvedValue({ fixes: LIST, mayChange: true })
+    vi.mocked(knowledge.fetchPages).mockResolvedValue({ pages: [], connected: true })
   })
   afterEach(() => {
     cleanup()
@@ -125,6 +131,33 @@ describe('Cases › Mycroft › Fixes (wave 6g)', () => {
     expect(seen).toHaveLength(1)
     expect(seen[0]!.querySelector('a')!.getAttribute('href')).toBe('#/cases/inbox/case/13')
     expect(screen.getAllByTestId('fix-row').find((r) => r.getAttribute('aria-selected') === 'true')?.getAttribute('data-id')).toBe('F-3')
+  })
+
+  it('links the approved wiki pages that draw on a fix, its runbook first among them (KN-34)', async () => {
+    vi.mocked(knowledge.fetchPages).mockResolvedValue({
+      connected: true,
+      pages: [
+        { path: 'pages/runbook/namespace-labels.md', title: 'Label new namespaces', kind: 'runbook', sources: [{ key: 'fixes:F-3', title: 'Fix F-3: Middle' }], updated: '2026-11-08T00:00:00Z' },
+        { path: 'pages/system/shop.md', title: 'Shop', kind: 'system', sources: [{ key: 'infra:12', title: 'Shop' }] },
+        { path: 'pages/runbook/other.md', title: 'Other', kind: 'runbook', sources: [{ key: 'fixes:F-31', title: 'Fix F-31' }] },
+      ],
+    })
+    render(<FixesView open="F-3" />)
+    const pages = await screen.findAllByTestId('fix-page')
+    expect(pages).toHaveLength(1)
+    expect(pages[0]!.textContent).toContain('Label new namespaces · Runbook')
+    expect(pages[0]!.querySelector('a')!.getAttribute('href')).toBe('#/cases/mycroft/wiki/pages/runbook/namespace-labels.md')
+  })
+
+  it('says no page draws on a fix yet, and shows nothing when the wiki cannot be read (KN-34)', async () => {
+    render(<FixesView open="F-3" />)
+    expect((await screen.findByTestId('fix-pages')).textContent).toContain('No approved page draws on it yet.')
+    cleanup()
+    vi.mocked(knowledge.fetchPages).mockRejectedValue(new CallError('no', 403))
+    render(<FixesView open="F-1" />)
+    await screen.findByTestId('fix-drawer')
+    await waitFor(() => expect(knowledge.fetchPages).toHaveBeenCalled())
+    expect(screen.queryByTestId('fix-pages')).toBeNull()
   })
 
   it('says a pending fix contradicts another and is not given to the agents; Accept makes it active', async () => {

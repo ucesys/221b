@@ -326,7 +326,17 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 // List lists the objects whose keys start with prefix (ListObjectsV2),
 // every page of them, in key order.
 func (c *Client) List(ctx context.Context, prefix string) ([]Object, error) {
-	var out []Object
+	out, more, err := c.ListMax(ctx, prefix, 0)
+	if err == nil && more {
+		err = errors.New("the bucket's listing did not end")
+	}
+	return out, err
+}
+
+// ListMax lists at most max objects whose keys start with prefix, page by
+// page, in key order (max 0 is every page); more says the bucket holds
+// others after them (Phase 12, a bucket of documents for Mycroft, KN-25).
+func (c *Client) ListMax(ctx context.Context, prefix string, max int) (out []Object, more bool, err error) {
 	token := ""
 	for page := 0; page < 1000; page++ {
 		q := url.Values{"list-type": {"2"}}
@@ -336,9 +346,12 @@ func (c *Client) List(ctx context.Context, prefix string) ([]Object, error) {
 		if token != "" {
 			q.Set("continuation-token", token)
 		}
+		if max > 0 && max-len(out) < 1000 {
+			q.Set("max-keys", strconv.Itoa(max-len(out)))
+		}
 		res, err := c.do(ctx, http.MethodGet, "", q, nil, nil)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		var r struct {
 			Contents []struct {
@@ -353,17 +366,24 @@ func (c *Client) List(ctx context.Context, prefix string) ([]Object, error) {
 		err = xml.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(&r)
 		res.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("reading the bucket's listing: %w", err)
+			return nil, false, fmt.Errorf("reading the bucket's listing: %w", err)
 		}
 		for _, o := range r.Contents {
+			if max > 0 && len(out) == max {
+				// A store that does not honour max-keys gave more.
+				return out, true, nil
+			}
 			size, _ := strconv.ParseInt(o.Size, 10, 64)
 			mod, _ := time.Parse(time.RFC3339, o.LastModified)
 			out = append(out, Object{Key: o.Key, Size: size, Modified: mod, ETag: o.ETag})
 		}
 		if !r.IsTruncated || r.NextContinuationToken == "" {
-			return out, nil
+			return out, false, nil
+		}
+		if max > 0 && len(out) >= max {
+			return out, true, nil
 		}
 		token = r.NextContinuationToken
 	}
-	return out, errors.New("the bucket's listing did not end")
+	return out, true, nil
 }

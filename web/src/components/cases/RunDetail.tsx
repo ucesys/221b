@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { caseHref } from '../../api/casework'
-import { cancelRun, fetchRun, HEALTH_LABEL, healthTone, mergedNote, runStatus, usd, type Finding, type FindingRouting, type Routed, type Run } from '../../api/jobs'
+import { cancelRun, fetchRun, HEALTH_LABEL, healthTone, mergedNote, runStatus, usd, type Finding, type FindingRouting, type Routed, type Run, type RunFact } from '../../api/jobs'
 import { useCasesItem } from '../../lib/casesItem'
 import { useShowCosts } from '../../lib/costs'
 import { fmtAge, fmtTs, nWord } from '../../lib/format'
@@ -81,6 +81,10 @@ const ruleOf = (f: { key?: { check: string }; check?: string }) => f.key?.check 
  * exception, the validation rules new on the cluster (each finding's with
  * what it means), the proposed changes it filed,
  * and its tokens and cost; a run under way may be cancelled (FX-12).
+ * A run of a kind that makes no findings (a Wiki sync, KN-28) says what
+ * it did instead: its facts (the source, items read, unchanged, gone and
+ * skipped, the drafts with a link to AIOps › Inbox), its report, and no
+ * findings or proposed changes sections.
  */
 export function RunDetail({ id, onToast }: { id: string; onToast?: (msg: string) => void }) {
   const [run, setRun] = useState<Run | null>(null)
@@ -184,6 +188,7 @@ export function RunDetail({ id, onToast }: { id: string; onToast?: (msg: string)
           {mergedNote(run.note)}
         </p>
       )}
+      {(run.facts ?? []).length > 0 && <RunFacts facts={run.facts!} />}
       <section aria-label="Report" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>Report</h3>
         {run.report ? (
@@ -210,138 +215,168 @@ export function RunDetail({ id, onToast }: { id: string; onToast?: (msg: string)
           </p>
         )}
       </section>
-      <section aria-label="What its findings did" style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="run-routed">
-        <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>What its findings did</h3>
-        {routed.length === 0 ? (
-          <p className="rk-fhint" style={{ margin: 0 }}>
-            {run.status === 'running' ? 'The run is under way.' : findings.length ? 'Not routed.' : 'No findings.'}
-          </p>
-        ) : (
-          <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {routed.map((p) => (
-              <span key={p.key} className="rk-tag" data-tone={p.key === 'reopened' || p.key === 'regression' ? 'err' : p.key === 'opened' ? 'warn' : p.key === 'verified' ? 'ok' : 'muted'} data-testid={`run-routed-${p.key}`}>
-                {p.text}
-              </span>
-            ))}
-          </span>
-        )}
-        {(run.verifiedCases ?? []).length > 0 && (
-          <span style={{ fontSize: 12.5 }} data-testid="run-verified">
-            Fixes that held (no longer seen):{' '}
-            {run.verifiedCases!.map((id, i) => (
-              <span key={id}>
-                {i > 0 ? ', ' : ''}
-                <a className="rk-link rk-mono" href={caseHref(id)}>
-                  {id}
-                </a>
-              </span>
-            ))}
-          </span>
-        )}
-        {(run.newChecks ?? []).length > 0 && (
-          <span style={{ fontSize: 12.5 }} data-testid="run-new-checks">
-            Validation rules new on this cluster:{' '}
-            {run.newChecks!.map((c, i) => (
-              <span key={c}>
-                {i > 0 ? ', ' : ''}
-                <span className="rk-mono" title={run.ruleMeanings?.[c]}>
-                  {c}
+      {!run.noFindings && (
+        <section aria-label="What its findings did" style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="run-routed">
+          <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>What its findings did</h3>
+          {routed.length === 0 ? (
+            <p className="rk-fhint" style={{ margin: 0 }}>
+              {run.status === 'running' ? 'The run is under way.' : findings.length ? 'Not routed.' : 'No findings.'}
+            </p>
+          ) : (
+            <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {routed.map((p) => (
+                <span key={p.key} className="rk-tag" data-tone={p.key === 'reopened' || p.key === 'regression' ? 'err' : p.key === 'opened' ? 'warn' : p.key === 'verified' ? 'ok' : 'muted'} data-testid={`run-routed-${p.key}`}>
+                  {p.text}
                 </span>
+              ))}
+            </span>
+          )}
+          {(run.verifiedCases ?? []).length > 0 && (
+            <span style={{ fontSize: 12.5 }} data-testid="run-verified">
+              Fixes that held (no longer seen):{' '}
+              {run.verifiedCases!.map((id, i) => (
+                <span key={id}>
+                  {i > 0 ? ', ' : ''}
+                  <a className="rk-link rk-mono" href={caseHref(id)}>
+                    {id}
+                  </a>
+                </span>
+              ))}
+            </span>
+          )}
+          {(run.newChecks ?? []).length > 0 && (
+            <span style={{ fontSize: 12.5 }} data-testid="run-new-checks">
+              Validation rules new on this cluster:{' '}
+              {run.newChecks!.map((c, i) => (
+                <span key={c}>
+                  {i > 0 ? ', ' : ''}
+                  <span className="rk-mono" title={run.ruleMeanings?.[c]}>
+                    {c}
+                  </span>
+                </span>
+              ))}
+            </span>
+          )}
+        </section>
+      )}
+      {!run.noFindings && (
+        <section aria-label="Findings" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>
+            Findings <span style={{ color: 'var(--fg3)', fontWeight: 400 }}>{findings.length || 'none'}</span>
+          </h3>
+          {findings.map((f) => (
+            <div key={f.id} className="rk-card" style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="run-finding" data-routing={f.routing}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <SeverityPill severity={f.severity} />
+                <strong style={{ fontSize: 13, flex: '1 1 auto' }}>{f.title}</strong>
+                <RoutingChip f={f} testId={`finding-${f.id}-routing`} />
+              </div>
+              <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <FindingObject f={f} />
+                {ruleOf(f) && (
+                  <span style={{ fontSize: 12, color: 'var(--fg3)' }} title="Validation rule" data-testid={`finding-${f.id}-rule`}>
+                    <span className="rk-mono">{ruleOf(f)}</span>
+                    {run.ruleMeanings?.[ruleOf(f)] ? ` · ${run.ruleMeanings[ruleOf(f)]}` : ''}
+                  </span>
+                )}
+                {f.newCheck && (
+                  <span className="rk-tag" data-tone="info" title="Never seen on this cluster before this run" data-testid={`finding-${f.id}-new-check`}>
+                    new validation rule
+                  </span>
+                )}
               </span>
-            ))}
-          </span>
-        )}
-      </section>
-      <section aria-label="Findings" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>
-          Findings <span style={{ color: 'var(--fg3)', fontWeight: 400 }}>{findings.length || 'none'}</span>
-        </h3>
-        {findings.map((f) => (
-          <div key={f.id} className="rk-card" style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="run-finding" data-routing={f.routing}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <SeverityPill severity={f.severity} />
-              <strong style={{ fontSize: 13, flex: '1 1 auto' }}>{f.title}</strong>
-              <RoutingChip f={f} testId={`finding-${f.id}-routing`} />
-            </div>
-            <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <FindingObject f={f} />
-              {ruleOf(f) && (
-                <span style={{ fontSize: 12, color: 'var(--fg3)' }} title="Validation rule" data-testid={`finding-${f.id}-rule`}>
-                  <span className="rk-mono">{ruleOf(f)}</span>
-                  {run.ruleMeanings?.[ruleOf(f)] ? ` · ${run.ruleMeanings[ruleOf(f)]}` : ''}
+              {f.routing === 'invalid' && f.invalidReason && (
+                <span className="rk-t" data-tone="warn" style={{ fontSize: 12.5 }} data-testid={`finding-${f.id}-invalid`}>
+                  Not routed: {f.invalidReason}
                 </span>
               )}
-              {f.newCheck && (
-                <span className="rk-tag" data-tone="info" title="Never seen on this cluster before this run" data-testid={`finding-${f.id}-new-check`}>
-                  new validation rule
+              {f.routing === 'expected' && (
+                <span className="rk-fhint" style={{ fontSize: 12.5 }} data-testid={`finding-${f.id}-expected`}>
+                  Opened no case: expected{f.expectedWhy ? ` — ${f.expectedWhy.replace(/\.$/, '')}` : ''}.
                 </span>
+              )}
+              {f.routing === 'ignored' && (
+                <span className="rk-fhint" style={{ fontSize: 12.5 }} data-testid={`finding-${f.id}-ignored`}>
+                  Opened no case: below the job’s lowest priority{typeof f.priority === 'number' ? ` (it is P${f.priority})` : ''}.
+                </span>
+              )}
+              {f.detail && <span style={{ fontSize: 12.5 }}>{f.detail}</span>}
+              {f.evidence?.length ? (
+                <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--fg2)' }}>
+                  {f.evidence.map((e, i) => (
+                    <li key={i} className="rk-mono">
+                      {e}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ))}
+        </section>
+      )}
+      {!(run.noFindings && !run.proposals?.length) && (
+        <section aria-label="Proposals" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>Proposed changes</h3>
+          {run.proposals?.length ? (
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 4 }} data-testid="run-proposals">
+              {run.proposals.map((p, i) => (
+                // What each change resolves (CF-25); one that named nothing was not filed (CF-27).
+                <li key={p.id || `${i}-${p.title}`} data-testid="run-proposal" data-filed={p.error ? 'false' : 'true'}>
+                  {p.title}
+                  {p.error ? (
+                    <span className="rk-t" data-tone="err" data-testid="run-proposal-error">
+                      {' '}
+                      — not filed: {p.error}
+                    </span>
+                  ) : (
+                    <>
+                      {' '}
+                      —{' '}
+                      <a className="rk-link" href={p.id ? proposalHref(p.id) : '#/cases/inbox'}>
+                        {p.id ? `${p.id} in the Inbox` : 'in the Inbox'}
+                      </a>
+                    </>
+                  )}
+                  {p.resolves?.length ? (
+                    <span style={{ display: 'block', color: 'var(--fg2)' }}>
+                      <Resolves ids={p.resolves} titles={{ ...known, ...p.resolvesTitles }} testId="run-proposal-resolves" />
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="rk-fhint" style={{ margin: 0 }}>
+              None. A change an agent wants waits for a person in AIOps › Inbox; nothing a job does changes anything.
+            </p>
+          )}
+        </section>
+      )}
+    </div>
+  )
+}
+
+/** What a run did, as its kind says it (KN-28): each fact with its value, linked where it leads, toned when it went wrong. */
+function RunFacts({ facts }: { facts: RunFact[] }) {
+  return (
+    <section aria-label="What it did" style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="run-facts">
+      <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>What it did</h3>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
+        {facts.map((f) => (
+          <Fact key={f.label} label={f.label}>
+            <span className={f.tone ? 'rk-t' : undefined} data-tone={f.tone} data-testid="run-fact" data-label={f.label}>
+              {f.href && f.href.startsWith('#') ? (
+                <a className="rk-link" href={f.href}>
+                  {f.text}
+                </a>
+              ) : (
+                f.text
               )}
             </span>
-            {f.routing === 'invalid' && f.invalidReason && (
-              <span className="rk-t" data-tone="warn" style={{ fontSize: 12.5 }} data-testid={`finding-${f.id}-invalid`}>
-                Not routed: {f.invalidReason}
-              </span>
-            )}
-            {f.routing === 'expected' && (
-              <span className="rk-fhint" style={{ fontSize: 12.5 }} data-testid={`finding-${f.id}-expected`}>
-                Opened no case: expected{f.expectedWhy ? ` — ${f.expectedWhy.replace(/\.$/, '')}` : ''}.
-              </span>
-            )}
-            {f.routing === 'ignored' && (
-              <span className="rk-fhint" style={{ fontSize: 12.5 }} data-testid={`finding-${f.id}-ignored`}>
-                Opened no case: below the job’s lowest priority{typeof f.priority === 'number' ? ` (it is P${f.priority})` : ''}.
-              </span>
-            )}
-            {f.detail && <span style={{ fontSize: 12.5 }}>{f.detail}</span>}
-            {f.evidence?.length ? (
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: 'var(--fg2)' }}>
-                {f.evidence.map((e, i) => (
-                  <li key={i} className="rk-mono">
-                    {e}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-          </div>
+          </Fact>
         ))}
-      </section>
-      <section aria-label="Proposals" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <h3 style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>Proposed changes</h3>
-        {run.proposals?.length ? (
-          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 4 }} data-testid="run-proposals">
-            {run.proposals.map((p, i) => (
-              // What each change resolves (CF-25); one that named nothing was not filed (CF-27).
-              <li key={p.id || `${i}-${p.title}`} data-testid="run-proposal" data-filed={p.error ? 'false' : 'true'}>
-                {p.title}
-                {p.error ? (
-                  <span className="rk-t" data-tone="err" data-testid="run-proposal-error">
-                    {' '}
-                    — not filed: {p.error}
-                  </span>
-                ) : (
-                  <>
-                    {' '}
-                    —{' '}
-                    <a className="rk-link" href={p.id ? proposalHref(p.id) : '#/cases/inbox'}>
-                      {p.id ? `${p.id} in the Inbox` : 'in the Inbox'}
-                    </a>
-                  </>
-                )}
-                {p.resolves?.length ? (
-                  <span style={{ display: 'block', color: 'var(--fg2)' }}>
-                    <Resolves ids={p.resolves} titles={{ ...known, ...p.resolvesTitles }} testId="run-proposal-resolves" />
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="rk-fhint" style={{ margin: 0 }}>
-            None. A change an agent wants waits for a person in Cases › Inbox; nothing a job does changes anything.
-          </p>
-        )}
-      </section>
-    </div>
+      </div>
+    </section>
   )
 }
 

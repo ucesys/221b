@@ -56,9 +56,10 @@ const disabled = (id: string) => (screen.getByTestId(id) as HTMLButtonElement).d
 
 const sla = { target: { responseMinutes: 15, resolveMinutes: 240 }, responseDue: '2026-11-06T10:15:00Z', resolveDue: '2026-11-06T14:00:00Z' }
 
-const HUMAN: api.Outcome[] = ['fix', 'duplicate', 'notAProblem', 'noFixNeeded', 'knownIssue']
-// Since CF-42 an agent-found case may close as a duplicate too.
-const AGENT: api.Outcome[] = ['fix', 'duplicate', 'noFixNeeded', 'knownIssue', 'exception']
+const HUMAN: api.Outcome[] = ['fix', 'duplicate', 'noAction', 'knownIssue']
+// Since CF-42 an agent-found case may close as a duplicate too, and since
+// CF-90 as no action needed.
+const AGENT: api.Outcome[] = ['fix', 'duplicate', 'noAction', 'knownIssue', 'exception']
 
 const kase = (over: Partial<Case> = {}): Case => ({
   id: 'C-12',
@@ -190,7 +191,7 @@ describe('one drawer for every case (CU-09, CU-10)', () => {
     fireEvent.click(await screen.findByTestId('case-close-open'))
     for (const old of ['case-fix-open', 'case-known-open', 'case-exception-open']) expect(screen.queryByTestId(old)).toBeNull()
     // A person's case: nothing to mute, so no exception.
-    expect(listed()).toEqual(['fix', 'duplicate', 'notAProblem', 'noFixNeeded', 'knownIssue'])
+    expect(listed()).toEqual(['fix', 'duplicate', 'noAction', 'knownIssue'])
     // Nothing is picked until the person picks; then only its fields show.
     expect(screen.queryByTestId('case-fix-form')).toBeNull()
     fireEvent.click(screen.getByTestId('case-outcome-knownIssue'))
@@ -200,15 +201,28 @@ describe('one drawer for every case (CU-09, CU-10)', () => {
     vi.mocked(api.fetchCase).mockResolvedValue(found())
     render(<CaseDrawer id="20" onClose={() => undefined} />)
     fireEvent.click(await screen.findByTestId('case-close-open'))
-    // Agent-found: Duplicate is offered as for any case; not a problem is not allowed here.
-    expect(listed()).toEqual(['fix', 'duplicate', 'noFixNeeded', 'knownIssue', 'exception'])
+    // Agent-found: Duplicate and No action needed are offered as for any case.
+    expect(listed()).toEqual(['fix', 'duplicate', 'noAction', 'knownIssue', 'exception'])
+  })
+
+  it('lists No action needed once, with its hint, for a person’s case and an agent-found one (CF-90)', async () => {
+    for (const c of [kase(), found()]) {
+      vi.mocked(api.fetchCase).mockResolvedValue(c)
+      const { unmount } = render(<CaseDrawer id={String(c.number)} onClose={() => undefined} />)
+      fireEvent.click(await screen.findByTestId('case-close-open'))
+      const form = txt(screen.getByTestId('case-close-form'))
+      expect(form.split('No action needed').length - 1).toBe(1)
+      expect(form).toContain('Not a problem, or it went away: say why.')
+      expect(form).not.toContain('No fix needed')
+      unmount()
+    }
   })
 
   it('picks the only outcome a case allows, and offers no Close… when none', async () => {
-    vi.mocked(api.fetchCase).mockResolvedValue(found({ allowedOutcomes: ['noFixNeeded'] }))
+    vi.mocked(api.fetchCase).mockResolvedValue(found({ allowedOutcomes: ['noAction'] }))
     const { unmount } = render(<CaseDrawer id="20" onClose={() => undefined} />)
     fireEvent.click(await screen.findByTestId('case-close-open'))
-    expect((screen.getByTestId('case-outcome-noFixNeeded') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByTestId('case-outcome-noAction') as HTMLInputElement).checked).toBe(true)
     expect(screen.getByTestId('case-close-reason')).toBeTruthy()
     unmount()
     vi.mocked(api.fetchCase).mockResolvedValue(kase({ allowedOutcomes: [] }))
@@ -367,17 +381,17 @@ describe('one drawer for every case (CU-09, CU-10)', () => {
     expect(screen.queryByTestId('case-rca-together')).toBeNull()
   })
 
-  it('closes as not a problem only with an explanation', async () => {
+  it('closes as no action needed only with an explanation', async () => {
     vi.mocked(api.fetchCase).mockResolvedValue(kase())
-    vi.mocked(api.closeCase).mockResolvedValue(kase({ status: 'closed', outcome: 'notAProblem', pending: false, explanation: 'The shop is slow on purpose at night.' }))
+    vi.mocked(api.closeCase).mockResolvedValue(kase({ status: 'closed', outcome: 'noAction', pending: false, explanation: 'The shop is slow on purpose at night.' }))
     render(<CaseDrawer id="12" onClose={() => undefined} onToast={() => undefined} />)
-    await closeAs('notAProblem')
+    await closeAs('noAction')
     expect(disabled('case-close-save')).toBe(true)
-    expect(txt(screen.getByTestId('case-close-save'))).toBe('Close as not a problem')
+    expect(txt(screen.getByTestId('case-close-save'))).toBe('Close as no action needed')
     fireEvent.change(screen.getByTestId('case-close-reason'), { target: { value: 'The shop is slow on purpose at night.' } })
     fireEvent.click(screen.getByTestId('case-close-save'))
-    await waitFor(() => expect(api.closeCase).toHaveBeenCalledWith('C-12', { outcome: 'notAProblem', explanation: 'The shop is slow on purpose at night.' }))
-    expect(txt(await screen.findByTestId('case-status'))).toContain('Closed: not a problem')
+    await waitFor(() => expect(api.closeCase).toHaveBeenCalledWith('C-12', { outcome: 'noAction', explanation: 'The shop is slow on purpose at night.' }))
+    expect(txt(await screen.findByTestId('case-status'))).toContain('Closed: no action needed')
     expect(txt(screen.getByTestId('case-reason'))).toContain('on purpose at night')
     expect(screen.getByTestId('case-reopen')).toBeTruthy()
   })
@@ -483,7 +497,7 @@ describe('one drawer for every case (CU-09, CU-10)', () => {
   })
 
   it('reopens a closed case only with a reason', async () => {
-    vi.mocked(api.fetchCase).mockResolvedValue(kase({ status: 'closed', outcome: 'noFixNeeded', pending: false, explanation: 'Gone by itself.' }))
+    vi.mocked(api.fetchCase).mockResolvedValue(kase({ status: 'closed', outcome: 'noAction', pending: false, explanation: 'Gone by itself.' }))
     vi.mocked(api.reopenCase).mockResolvedValue(kase())
     render(<CaseDrawer id="12" onClose={() => undefined} onToast={() => undefined} />)
     expect(screen.queryByTestId('case-close-open')).toBeNull()
@@ -506,7 +520,7 @@ describe('one drawer for every case (CU-09, CU-10)', () => {
       found({
         possibleDuplicateOf: 'C-9',
         related: [{ id: 'C-3', number: 3, title: 'Shop is slow' }],
-        previous: { case: 'C-11', outcome: 'noFixNeeded', explanation: 'A one-off during the upgrade.', by: 'olivia', at: '2026-11-01T09:00:00Z' },
+        previous: { case: 'C-11', outcome: 'noAction', explanation: 'A one-off during the upgrade.', by: 'olivia', at: '2026-11-01T09:00:00Z' },
         suggestException: true,
         ruleMeaning: 'a container has no CPU or memory limits',
       }),
@@ -526,7 +540,7 @@ describe('one drawer for every case (CU-09, CU-10)', () => {
     expect(screen.queryByTestId('case-late')).toBeNull()
     expect(txt(screen.getByTestId('case-possible-duplicate'))).toContain('C-9')
     expect(txt(screen.getByTestId('case-related'))).toContain('C-3 Shop is slow')
-    expect(txt(screen.getByTestId('case-previous'))).toContain('C-11 was closed as no fix needed by olivia')
+    expect(txt(screen.getByTestId('case-previous'))).toContain('C-11 was closed as no action needed by olivia')
     expect(txt(screen.getByTestId('case-previous'))).toContain('A one-off during the upgrade.')
     fireEvent.click(screen.getByTestId('case-suggest-exception-open'))
     // Close… opens on Exception.
@@ -627,7 +641,7 @@ describe('New Case shows what is like it (wave 6)', () => {
     vi.mocked(api.fetchSimilar).mockResolvedValue(
       similar({
         exceptions: [{ id: 'EX-1', cluster: 'prod', object: 'shop/Deployment/web', check: 'pod.no-limits', reason: 'Batch jobs', by: 'olga', at: '2026-11-01T00:00:00Z' }],
-        recentNoProblem: [{ id: 'C-7', number: 7, title: 'Checkout slow at night', status: 'closed', outcome: 'notAProblem', explanation: 'Backups run then.', score: 0.6 }],
+        recentNoProblem: [{ id: 'C-7', number: 7, title: 'Checkout slow at night', status: 'closed', outcome: 'noAction', explanation: 'Backups run then.', score: 0.6 }],
         recentFixed: [{ id: 'C-8', number: 8, title: 'Checkout slow', status: 'closed', outcome: 'fix', rcaCause: 'The pool was too small.', score: 0.6 }],
       }),
     )
@@ -647,7 +661,7 @@ describe('New Case shows what is like it (wave 6)', () => {
   })
 
   it('reopens a case closed lately, with what was typed as the reason', async () => {
-    vi.mocked(api.fetchSimilar).mockResolvedValue(similar({ recentNoProblem: [{ id: 'C-7', number: 7, title: 'Disk full', status: 'closed', outcome: 'noFixNeeded', score: 0.6 }] }))
+    vi.mocked(api.fetchSimilar).mockResolvedValue(similar({ recentNoProblem: [{ id: 'C-7', number: 7, title: 'Disk full', status: 'closed', outcome: 'noAction', score: 0.6 }] }))
     vi.mocked(api.reopenCase).mockResolvedValue(kase({ id: 'C-7', number: 7 }))
     render(<CaseDrawer id="new" onClose={() => undefined} onToast={() => undefined} />)
     await typeTitle('Disk full again')
@@ -679,13 +693,13 @@ describe('the parts around the drawer', () => {
     expect(api.caseHref('C-12')).toBe('#/cases/inbox/case/12')
     expect(api.caseNumber('c-12')).toBe(12)
     expect(api.caseNumber('KI-2')).toBe(0)
-    expect(api.caseStatusText({ status: 'closed', outcome: 'noFixNeeded' })).toBe('Closed: no fix needed')
+    expect(api.caseStatusText({ status: 'closed', outcome: 'noAction' })).toBe('Closed: no action needed')
     expect(api.caseStatusText({ status: 'new' })).toBe('New')
     // A case that waits for its reporter is shown so; closed, it is closed (CF-67).
     expect(api.caseStatusText({ status: 'inProgress', askedReporter: true })).toBe('Waiting for the reporter')
-    expect(api.caseStatusText({ status: 'closed', outcome: 'noFixNeeded', askedReporter: true })).toBe('Closed: no fix needed')
+    expect(api.caseStatusText({ status: 'closed', outcome: 'noAction', askedReporter: true })).toBe('Closed: no action needed')
     expect(api.caseShownStatus({ status: 'new', askedReporter: true })).toBe('waiting')
-    expect(offerText({ kind: 'reopenOriginal', original: 'C-4' }, { outcome: 'noFixNeeded' })).toBe('Reopen C-4')
+    expect(offerText({ kind: 'reopenOriginal', original: 'C-4' }, { outcome: 'noAction' })).toBe('Reopen C-4')
     expect(offerText({ kind: 'removeException', original: 'C-4', exception: 'EX-1' }, {})).toBe('Remove exception EX-1 and keep this case open')
     expect(offerText({ kind: 'sameAs', original: 'C-4' }, {})).toBe('Keep this case open, marked the same as C-4')
   })

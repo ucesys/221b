@@ -49,6 +49,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/ldap"
 	"github.com/ucesys/221b/server/internal/leader"
+	"github.com/ucesys/221b/server/internal/lessons"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/roles"
@@ -436,15 +437,23 @@ func run(args []string) error {
 		stored = append(stored, aiSvc.stored)
 	}
 	// Mycroft's knowledge answers ask_knowledge (Phase 12), with the open
-	// known issues it matches (CF-43); both are opened below, once what
-	// the console knows can be read.
+	// known issues it matches (CF-43), the active fixes (CF-52) and, for
+	// who may read them, the active exceptions (KN-32); they are opened
+	// below, once what the console knows can be read.
 	var knowledgeSvc *knowledge.Service
 	var knownSvc *issues.Service
 	var fixesSvc *fixes.Service
+	var exceptionsSvc *lessons.Service
+	clusterName := func(id string) string {
+		if sum, ok := manager.Summary(id); ok {
+			return sum.Name
+		}
+		return ""
+	}
 	sherlockSvc := sherlock.New(sherlock.Options{
 		Agent:    aiSvc.Agent,
 		OnAnswer: aiSvc.OnAnswer,
-		Knowledge: func(ctx context.Context, q string, limit int) ([]sherlock.KnowledgeHit, error) {
+		Knowledge: func(ctx context.Context, q string, limit int, exceptions bool) ([]sherlock.KnowledgeHit, error) {
 			if knowledgeSvc == nil && knownSvc == nil && fixesSvc == nil {
 				return nil, errors.New("the knowledge base is not open yet")
 			}
@@ -458,6 +467,9 @@ func run(args []string) error {
 			}
 			if fixesSvc != nil {
 				out = append(out, fixHits(ctx, fixesSvc, q)...)
+			}
+			if exceptions && exceptionsSvc != nil {
+				out = append(out, exceptionHits(ctx, exceptionsSvc, q, clusterName)...)
 			}
 			if len(out) > 0 {
 				return out, nil
@@ -789,7 +801,7 @@ func run(args []string) error {
 	// wiki's local copy and index on every replica, and the Confluence
 	// publisher, which writes on the leader.
 	{
-		svc, l, wl, err := openKnowledge(ctx, cfg, restCfg, knowledgeOptions{auditLog: auditLog, leads: elector.IsLeader, model: sherlockSvc,
+		svc, l, wl, err := openKnowledge(ctx, cfg, restCfg, knowledgeOptions{auditLog: auditLog, leads: elector.IsLeader, model: mycroftModel{sherlockSvc},
 			console: consoleKnowledge{manager: manager, hosts: hosts, settings: shared, apps: appStore, auto: autoStore}, issues: issueSvc, proposer: mycroftProposals, log: log})
 		if err != nil {
 			return err
@@ -818,7 +830,7 @@ func run(args []string) error {
 	if cardsStored != nil {
 		stored = append(stored, cardsStored)
 	}
-	cardConsole := cards.Console{Fleets: fleetBook{shared}, Audit: auditLog, LoginUser: func() string { return toolboxCfg.SSH.LoginUser }}
+	cardConsole := cards.Console{Fleets: fleetBook{shared}, Members: fleetMembers{manager: manager, hosts: hosts}, Audit: auditLog, LoginUser: func() string { return toolboxCfg.SSH.LoginUser }}
 	if autoStore != nil {
 		cardConsole.Params = autoStore
 	}
@@ -830,7 +842,7 @@ func run(args []string) error {
 	// What the jobs propose waits as cards (JB-15, WC-01).
 	jobsW.svc.SetProposer(jobsProposer{cardsProposer{cardStore}})
 	mycroftProposals.cards.Store(&cardsProposer{cardStore})
-	registerKnowledgeJobs(knowledgeSvc)
+	registerKnowledgeJobs(ctx, knowledgeSvc, jobsW.svc)
 	// --- end of Watson cards.
 	// --- Case work (Phase 12, ADR-105 to ADR-107; wave 6): the cases'
 	// settings in <release>-casework, each case in its own ConfigMap; their
@@ -864,7 +876,13 @@ func run(args []string) error {
 	// cases save them, the agents read the active ones, the daily
 	// housekeeping keeps them from repeating.
 	fixesSvc = openFixes(lessonsBackend, auditLog, log)
+	exceptionsSvc = lessonsSvc
 	caseSvc.SetFixes(fixesSvc)
+	// Mycroft is given the active fixes on the subject of what it writes
+	// (KN-33), and the housekeeping offers it the fixes proven in cases
+	// for a runbook (KN-34).
+	knowledgeSvc.SetFixes(knowledgeFixes{fixesSvc})
+	caseSvc.SetRunbooks(knowledgeSvc)
 	jobs.Register(caseSvc.HousekeepingKind())
 	// --- One flow for findings and cases (Phase 12, wave 6): each finding
 	// of a run becomes a case or joins one; its object is checked on its
@@ -881,6 +899,9 @@ func run(args []string) error {
 	jobsW.svc.SetRules(caseSvc.Rules().Book)
 	jobs.SetRuleMeaning(caseSvc.Rules().Meaning)
 	jobsW.svc.SetObjects(objectsOf(manager))
+	// Mycroft's inventory and drift check leave out what an open known
+	// issue or an active exception covers (KN-31).
+	knowledgeSvc.SetCovers(knowledgeCovers{issues: issueSvc, lessons: lessonsSvc, rules: caseSvc.Rules().Book})
 	// --- Alerts and cases (CF-77 to CF-79): an alert run that sent its
 	// findings to a case acknowledges its alert in the job's name, and the
 	// cases' safety net watches the alerts the jobs' leader reads.

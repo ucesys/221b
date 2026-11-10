@@ -56,7 +56,7 @@ export const createIssueToken = (name: string, account: string, scopes: string[]
 export const revokeIssueToken = (id: string) => call<{ revoked: boolean }>(`${base}tokens/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 // --- Cases (Phase 12, CS-07 to CS-14) ---
-// The operators' calls, for Cases › Inbox, Reports and Known issues: the
+// The operators' calls, for AIOps › Inbox, Reports and Known issues: the
 // same API the report page uses, as an operator sees it.
 
 export type { IssueMe, KnownStatus, Outcome, Person, Status }

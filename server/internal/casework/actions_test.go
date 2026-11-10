@@ -65,10 +65,11 @@ func TestFixAndItsRCA(t *testing.T) {
 	}
 }
 
-// Close takes duplicate, not a problem and no fix needed, with an
-// explanation always; a duplicate of a closed original is refused with
-// what fits instead (409 with the check through the API); not a problem
-// is no outcome for an agent's finding (CF-03, CF-04).
+// Close takes duplicate and no action needed, with an explanation always;
+// a duplicate of a closed original is refused with what fits instead (409
+// with the check through the API); no action needed is an outcome for an
+// agent's finding too, and the old notAProblem and noFixNeeded close as it
+// (CF-03, CF-04, CF-90).
 func TestCloseAndTheDuplicateRule(t *testing.T) {
 	w := setup(t)
 	ctx := context.Background()
@@ -76,7 +77,7 @@ func TestCloseAndTheDuplicateRule(t *testing.T) {
 	b, _ := w.svc.Create(ctx, NewCase{Title: "Shop slow too"}, olivia)
 	fixed, _ := w.svc.Create(ctx, NewCase{Title: "Fixed one"}, olivia)
 	w.svc.Fix(ctx, fixed.ID, FixInput{Text: "done"}, olivia)
-	for _, in := range []CloseInput{{Outcome: issues.OutcomeNoFixNeeded}, {Outcome: issues.OutcomeFix, Explanation: "x"}, {Outcome: issues.OutcomeDuplicate, Explanation: "x"}, {Outcome: issues.OutcomeDuplicate, Explanation: "x", Original: b.ID + "x"}} {
+	for _, in := range []CloseInput{{Outcome: issues.OutcomeNoAction}, {Outcome: "noFixNeeded"}, {Outcome: issues.OutcomeFix, Explanation: "x"}, {Outcome: issues.OutcomeDuplicate, Explanation: "x"}, {Outcome: issues.OutcomeDuplicate, Explanation: "x", Original: b.ID + "x"}} {
 		if _, err := w.svc.Close(ctx, a.ID, in, olivia); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%+v: %v", in, err)
 		}
@@ -98,15 +99,16 @@ func TestCloseAndTheDuplicateRule(t *testing.T) {
 	}
 	res := w.route(t, "nightly-audit", true, finding("pod.no-limits", "shop/Pod/web", "No limits"))
 	ag := res.Findings[0].Case
-	if _, err := w.svc.Close(ctx, ag, CloseInput{Outcome: issues.OutcomeNotAProblem, Explanation: "fine"}, olivia); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("not a problem for an agent's finding: %v", err)
-	}
 	// An agent-found case may be a duplicate of an open original (CF-42).
 	if dc, err := w.svc.DuplicateCheck(ctx, ag, b.ID, olivia); err != nil || !dc.Allowed {
 		t.Fatalf("an agent's duplicate of an open case: %+v %v", dc, err)
 	}
-	if v, err := w.svc.Close(ctx, ag, CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "One-off"}, olivia); err != nil || v.Outcome != issues.OutcomeNoFixNeeded {
-		t.Fatalf("no fix needed: %+v %v", v.Brief, err)
+	// notAProblem, refused here before CF-90, closes it as noAction.
+	if v, err := w.svc.Close(ctx, ag, CloseInput{Outcome: "notAProblem", Explanation: "One-off"}, olivia); err != nil || v.Outcome != issues.OutcomeNoAction {
+		t.Fatalf("no action needed: %+v %v", v.Brief, err)
+	}
+	if h := w.get(t, ag).History; !strings.Contains(h[len(h)-1].What, "Closed as no action needed: One-off") {
+		t.Fatalf("the history: %+v", h)
 	}
 	// The check, as the UI asks it.
 	chk, err := w.svc.DuplicateCheck(ctx, b.ID, fixed.ID, olivia)
@@ -152,16 +154,17 @@ func TestTheOffers(t *testing.T) {
 	if _, err := w.svc.Offer(ctx, me2, issues.Offer{Kind: issues.OfferSameAs, Original: fx2}, olivia); !errors.As(err, &d) {
 		t.Fatalf("an offer not made: %v", err)
 	}
-	// notAProblem: with the original's explanation.
-	np := mk("not a problem")
-	w.svc.Close(ctx, np, CloseInput{Outcome: issues.OutcomeNotAProblem, Explanation: "Works as designed."}, olivia)
+	// noAction: with the original's explanation; asked by its name
+	// before CF-90, notAProblem, too.
+	np := mk("no action")
+	w.svc.Close(ctx, np, CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "Works as designed."}, olivia)
 	me3 := mk("me three")
-	if v, err := w.svc.Offer(ctx, me3, issues.Offer{Kind: issues.OfferNotAProblem, Original: np}, olivia); err != nil || v.Outcome != issues.OutcomeNotAProblem || v.Explanation != "Works as designed." {
-		t.Fatalf("not a problem: %+v %v", v.Brief, err)
+	if v, err := w.svc.Offer(ctx, me3, issues.Offer{Kind: "notAProblem", Original: np}, olivia); err != nil || v.Outcome != issues.OutcomeNoAction || v.Explanation != "Works as designed." {
+		t.Fatalf("no action needed: %+v %v", v.Brief, err)
 	}
 	// sameAs: linked, kept open.
 	nf := mk("no fix")
-	w.svc.Close(ctx, nf, CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "transient"}, olivia)
+	w.svc.Close(ctx, nf, CloseInput{Outcome: "noFixNeeded", Explanation: "transient"}, olivia)
 	me4 := mk("me four")
 	if v, err := w.svc.Offer(ctx, me4, issues.Offer{Kind: issues.OfferSameAs, Original: nf}, olivia); err != nil || !v.Pending || v.SameAs != nf {
 		t.Fatalf("same as: %+v %v", v.Brief, err)
@@ -266,7 +269,7 @@ func TestKnownIssueExceptionAndReopen(t *testing.T) {
 
 // New Case shows what is like the case being typed (CF-12): an open case
 // on the same object, a known issue it matches, an exception on the same
-// object, and cases closed lately as not a problem, no fix needed or
+// object, and cases closed lately as no action needed or
 // fixed (with its RCA); Add to C-n follows it and comments; a case may be
 // created as a regression, or closed as a known issue at once.
 func TestNewCaseSimilarAndJoin(t *testing.T) {
@@ -274,11 +277,11 @@ func TestNewCaseSimilarAndJoin(t *testing.T) {
 	ctx := context.Background()
 	open, _ := w.svc.Create(ctx, NewCase{Title: "Checkout returns 502", Cluster: "prod", Resource: "shop/Deployment/checkout"}, olivia)
 	np, _ := w.svc.Create(ctx, NewCase{Title: "Checkout button grey", Cluster: "prod"}, olivia)
-	w.svc.Close(ctx, np.ID, CloseInput{Outcome: issues.OutcomeNotAProblem, Explanation: "Grey while the cart loads."}, olivia)
+	w.svc.Close(ctx, np.ID, CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "Grey while the cart loads."}, olivia)
 	fx, _ := w.svc.Create(ctx, NewCase{Title: "Checkout slow at night", Cluster: "prod", Priority: pr(1)}, olivia)
 	w.svc.Fix(ctx, fx.ID, FixInput{Text: "Moved the backup", RCA: &Completion{Cause: "The backup ran at peak"}}, olivia)
 	old, _ := w.svc.Create(ctx, NewCase{Title: "Checkout grey long ago", Cluster: "prod"}, olivia)
-	w.svc.Close(ctx, old.ID, CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "old"}, olivia)
+	w.svc.Close(ctx, old.ID, CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "old"}, olivia)
 	w.iss.SaveKnown(ctx, olivia.issue(), "", issues.KnownInput{Title: ptrS("Checkout fails with 502 errors"), Symptoms: []string{"checkout returns 502 bad gateway"}, Workaround: ptrS("Retry")})
 	res := w.route(t, "nightly-audit", true, finding("pod.no-limits", "shop/Deployment/checkout", "No limits"))
 	w.svc.Exception(ctx, res.Findings[0].Case, ExceptionInput{Reason: "Load-tested"}, olivia)
@@ -369,7 +372,7 @@ func TestSettingsAndRetention(t *testing.T) {
 	res := w.route(t, "nightly-audit", true, finding("pod.no-limits", "shop/Pod/a", "a"), finding("pod.no-limits", "shop/Pod/b", "b"))
 	h, _ := w.svc.Create(ctx, NewCase{Title: "A person's"}, olivia)
 	for _, id := range []string{res.Findings[0].Case, h.ID} {
-		w.svc.Close(ctx, id, CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "x"}, olivia)
+		w.svc.Close(ctx, id, CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "x"}, olivia)
 	}
 	w.svc.Tick(ctx)
 	if names, _ := w.objects.List(ctx); len(names) != 3 {
@@ -477,7 +480,7 @@ func TestTheHTTPContract(t *testing.T) {
 	}
 	code, out := do("POST", Prefix, `{"title": "Shop slow", "cluster": "prod", "resource": "shop/deploy/web", "priority": 0}`)
 	if code != http.StatusCreated || out["id"] != "C-1" || out["priority"] != float64(0) || out["status"] != "new" || out["agentFound"] != false || out["slaApplies"] != true ||
-		out["rcaRequired"] != true || out["mayReopen"] != false || out["related"] == nil || len(out["allowedOutcomes"].([]any)) != 5 || out["resource"] != "shop/Deployment/web" {
+		out["rcaRequired"] != true || out["mayReopen"] != false || out["related"] == nil || len(out["allowedOutcomes"].([]any)) != 4 || out["resource"] != "shop/Deployment/web" {
 		t.Fatalf("create: %d %v", code, out)
 	}
 	if code, _ := do("POST", Prefix, `{"title": "x", "fromFinding": "run-1.1"}`); code != http.StatusBadRequest {

@@ -3,7 +3,7 @@
 // it, New → In progress → Closed with one outcome. A case opened by hand
 // with New Case about any words, its drawer, its priority P0 to P4, Save
 // Draft, Fix with an RCA (required at P1), Reopen with a reason and Close
-// as not a problem; a person's report, which is a case too, triaged in
+// as no action needed (CF-90); a person's report, which is a case too, triaged in
 // the same drawer with a reply and a note, and closed as a known issue
 // made from it; duplicates, whose original is checked, with what fits
 // instead when it is closed; New Case offering to add to a case like it;
@@ -55,12 +55,12 @@ test.afterAll(async ({ browser }) => {
   for (const c of cards.proposals.filter((p) => p.source.kind === 'case')) await call(page, `/api/v1/cases/proposals/${c.id}/reject`, { reason: 'e2e: done' }, 'POST')
   for (const status of ['new', 'inProgress']) {
     const list = (await (await page.request.get(`/api/v1/cases/cases?status=${status}`)).json()) as { cases: { id: string }[] }
-    for (const c of list.cases) await call(page, `/api/v1/cases/cases/${c.id}/close`, { outcome: 'noFixNeeded', explanation: 'e2e: done' }, 'POST')
+    for (const c of list.cases) await call(page, `/api/v1/cases/cases/${c.id}/close`, { outcome: 'noAction', explanation: 'e2e: done' }, 'POST')
   }
   await page.close()
 })
 
-test('a case opened by hand about any words: New Case, its drawer, priority P0 to P4, its title in place, Save of the shared draft, Fix with an RCA at P1, Reopen with a reason, Close as not a problem (CU-02, CU-03, CU-09, CF-58 to CF-60)', async ({ page }) => {
+test('a case opened by hand about any words: New Case, its drawer, priority P0 to P4, its title in place, Save of the shared draft, Fix with an RCA at P1, Reopen with a reason, Close as no action needed (CU-02, CU-03, CU-09, CF-58 to CF-60, CF-90)', async ({ page }) => {
   await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   expect(await call(page, '/api/v1/jobs/case-analysis', { on: false })).toBe(200)
@@ -155,13 +155,16 @@ test('a case opened by hand about any words: New Case, its drawer, priority P0 t
   await drawer.getByTestId('case-reopen-save').click()
   await expect(drawer.getByTestId('case-status')).toHaveText(/^(New|In progress)$/)
 
-  // Close as not a problem: the explanation is required.
+  // Close as no action needed: the explanation is required. Not a
+  // problem and No fix needed are no longer listed (CF-90).
   await drawer.getByTestId('case-close-open').click()
-  await drawer.getByTestId('case-outcome-notAProblem').check()
+  await expect(drawer.getByTestId('case-outcome-notAProblem')).toHaveCount(0)
+  await expect(drawer.getByTestId('case-outcome-noFixNeeded')).toHaveCount(0)
+  await drawer.getByTestId('case-outcome-noAction').check()
   await expect(drawer.getByTestId('case-close-save')).toBeDisabled()
   await drawer.getByTestId('case-close-reason').fill('The disk was resized meanwhile.')
   await drawer.getByTestId('case-close-save').click()
-  await expect(drawer.getByTestId('case-status')).toHaveText('Closed: not a problem')
+  await expect(drawer.getByTestId('case-status')).toHaveText('Closed: no action needed')
   await expect(drawer.getByTestId('case-reason')).toHaveText('The disk was resized meanwhile.')
 
   // The API lists it among every case, with its kind.
@@ -272,9 +275,11 @@ test('a duplicate names its original, which is checked; a closed original offers
   await expect(drawer.getByTestId('case-status')).toHaveText('Closed: duplicate')
   await expect(drawer.getByTestId('case-duplicate-of')).toContainText(original.id)
 
-  // An original closed as no fix needed: the case may not close as its duplicate.
+  // An original closed as no action needed: the case may not close as its
+  // duplicate. noFixNeeded, its name before CF-90, is still taken as it.
   const gone = await open(page, `Backups slow ${stamp}`)
   expect(await call(page, `/api/v1/cases/cases/${gone.id}/close`, { outcome: 'noFixNeeded', explanation: 'A one-off during the upgrade.' }, 'POST')).toBe(200)
+  expect(((await (await page.request.get(`/api/v1/cases/cases/${gone.id}`)).json()) as { outcome: string }).outcome).toBe('noAction')
   const later = await open(page, `Backups slow again ${stamp}`)
   await page.goto(`/#/cases/inbox/case/${later.number}`)
   await drawer.getByTestId('case-close-open').click()
@@ -303,7 +308,7 @@ test('New Case offers to add to an open case like it, instead of opening another
   await expect(page.getByTestId('case-drawer')).toContainText('From the CI runners too.')
 })
 
-test('the old addresses open the cases: Cases › Cases, Reports, and On behalf of from the Inbox', async ({ page }) => {
+test('the old addresses open the cases: AIOps › Cases, Reports, and On behalf of from the Inbox', async ({ page }) => {
   const n = await file(page, `An old address ${Date.now()}`)
   // A case of before's address: with nothing carried over, the same number.
   await page.goto(`/#/cases/cases/${n}`)

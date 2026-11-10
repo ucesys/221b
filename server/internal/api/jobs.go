@@ -11,7 +11,7 @@ import (
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
-// Jobs (Phase 12, JB-15 to JB-18): Cases › Jobs and Runs and the Inbox's
+// Jobs (Phase 12, JB-15 to JB-18): AIOps › Jobs and Runs and the Inbox's
 // findings, served by package jobs under /api/v1/jobs, /api/v1/runs and
 // /api/v1/findings; and the read-only toolbox agents on their own read
 // the clusters with (JB-08).

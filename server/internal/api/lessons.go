@@ -10,7 +10,7 @@ import (
 // --- Findings, exceptions and RCAs (Phase 12, FX-06, FX-10) ---
 //
 // The accepted exceptions, served by package lessons under
-// /api/v1/cases/exceptions for Cases › Mycroft (an RCA is its case's
+// /api/v1/cases/exceptions for AIOps › Mycroft (an RCA is its case's
 // since wave 6e, CF-44).
 // Those who see the cases read them: the approvers (cases.approverRoles),
 // the console-wide roles and the job editors; the approvers remove an
@@ -46,4 +46,12 @@ func (s *Server) lessonsCaller(r *http.Request) (lessons.Caller, bool) {
 		}
 	}
 	return c, true
+}
+
+// readsExceptions says whether the person asking may read the accepted
+// exceptions, as Mycroft › Exceptions decides: Sherlock's ask_knowledge
+// gives them only then (KN-32).
+func (s *Server) readsExceptions(r *http.Request) bool {
+	c, ok := s.lessonsCaller(r)
+	return ok && (c.Read || c.Change)
 }

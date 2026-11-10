@@ -171,7 +171,42 @@ func TestTheAnalysisIsGivenTheFixesCF52(t *testing.T) {
 	w.svc.Fix(ctx, first, FixInput{Text: "kubectl set resources deployment/web -n shop --limits=memory=512Mi", RCA: &Completion{Cause: "The chart sets no limits."}}, olivia)
 	again := w.route(t, "nightly-audit", true, finding("pod.no-limits", "shop/Deployment/web", "web has no limits")).Findings[0].Case
 	got := w.svc.related(ctx, infoOf(w.get(t, again)))
-	if !strings.Contains(got, "Fixes of the problem, saved from earlier cases (CF-52):\n- F-1") || !strings.Contains(got, "changes that worked: kubectl set resources") && !strings.Contains(got, "what fixed it: kubectl set resources") {
+	if !strings.Contains(got, "Fixes of the problem, saved from earlier cases:\n- F-1") || !strings.Contains(got, "changes that worked: kubectl set resources") && !strings.Contains(got, "what fixed it: kubectl set resources") {
 		t.Errorf("related: %s", got)
+	}
+}
+
+// runbooks is Mycroft's side of the proven fixes in a test: it offers
+// what it is told, once.
+type runbooks struct {
+	offer   []string
+	started bool
+	calls   int
+}
+
+func (r *runbooks) OfferFixes(context.Context) ([]string, bool, error) {
+	r.calls++
+	out := r.offer
+	r.offer = nil
+	return out, r.started, nil
+}
+
+// The housekeeping offers Mycroft the fixes proven in cases, and its
+// report says which and whether the Wiki sync job started (KN-34).
+func TestTheHousekeepingOffersProvenFixesKN34(t *testing.T) {
+	w := setup(t)
+	ctx := context.Background()
+	r := &runbooks{offer: []string{"F-3, seen in 4 cases"}, started: true}
+	w.svc.SetRunbooks(r)
+	text, err := w.svc.Housekeep(ctx)
+	if err != nil || !strings.Contains(text, "### Fixes offered to Mycroft for a runbook") || !strings.Contains(text, "- F-3, seen in 4 cases: its job Wiki sync: Fixes drafts a runbook from it") {
+		t.Fatalf("%v: %s", err, text)
+	}
+	if again, _ := w.svc.Housekeep(ctx); !strings.Contains(again, "Nothing to do") || r.calls != 2 {
+		t.Fatalf("a second round, %d calls: %s", r.calls, again)
+	}
+	r.offer, r.started = []string{"F-4, seen in 3 cases"}, false
+	if text, _ := w.svc.Housekeep(ctx); !strings.Contains(text, "F-4, seen in 3 cases: not read yet") {
+		t.Fatalf("a paused job: %s", text)
 	}
 }

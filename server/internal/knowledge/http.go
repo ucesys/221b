@@ -56,13 +56,14 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("DELETE sources/{id}", h.deleteSource)
 	route("POST sources/{id}/on", h.postSourceOn)
 	route("POST sources/{id}/test", h.postSourceTest)
+	// A source's values as typed in its dialog, not saved (KN-26).
+	route("POST sources/test", h.postSourceTestTyped)
 	route("POST sources/{id}/documents", h.postDocument)
 	route("DELETE sources/{id}/documents/{name}", h.deleteDocument)
 	route("PUT store", h.putStore)
 	route("POST store/test", h.postStoreTest)
 	route("POST store/move", h.postStoreMove)
 	route("PUT hook", h.putHook)
-	route("POST sync", h.postSync)
 	route("GET status", h.getStatus)
 	route("GET pages", h.getPages)
 	route("GET page", h.getPage)
@@ -71,6 +72,12 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("GET wiki", h.getWiki)
 	route("POST add", h.postAdd)
 	route("DELETE added/{name}", h.deleteAdded)
+	// A page's own actions (KN-23, KN-24).
+	route("POST outdated", h.postOutdated)
+	route("GET requests", h.getRequests)
+	route("POST requests", h.postRequest)
+	route("POST requests/{id}/approve", h.postRequestApprove)
+	route("POST requests/{id}/reject", h.postRequestReject)
 	route("GET drafts", h.getDrafts)
 	route("GET drafts/count", h.getDraftsCount)
 	route("GET drafts/{id}", h.getDraft)
@@ -112,7 +119,7 @@ func fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNotLeader):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
-	case errors.Is(err, ErrNoStore), errors.Is(err, ErrBusy), errors.Is(err, ErrConflictStore):
+	case errors.Is(err, ErrNoStore), errors.Is(err, ErrBusy), errors.Is(err, ErrConflictStore), errors.Is(err, ErrConflict):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.As(err, &ce):
 		writeError(w, http.StatusBadGateway, err.Error())
@@ -155,6 +162,18 @@ func (h *handler) putSettings(w http.ResponseWriter, r *http.Request, c Caller) 
 type sourceInput struct {
 	Source Source  `json:"source"`
 	Token  *string `json:"token,omitempty"`
+	// Keys are a bucket's access key (KN-25): a value replaces, ""
+	// removes, absent keeps.
+	Keys CredsChange `json:"keys"`
+}
+
+// creds is the input's credential change.
+func (in sourceInput) creds() CredsChange {
+	ch := in.Keys
+	if in.Token != nil {
+		ch.Token = in.Token
+	}
+	return ch
 }
 
 func (h *handler) postSource(w http.ResponseWriter, r *http.Request, c Caller) {
@@ -162,7 +181,7 @@ func (h *handler) postSource(w http.ResponseWriter, r *http.Request, c Caller) {
 	if !decode(w, r, maxBody, &in) {
 		return
 	}
-	x, err := h.s.SaveSource(r.Context(), c, in.Source, in.Token, true)
+	x, err := h.s.SaveSourceWith(r.Context(), c, in.Source, in.creds(), true)
 	if err != nil {
 		fail(w, err)
 		return
@@ -176,7 +195,7 @@ func (h *handler) putSource(w http.ResponseWriter, r *http.Request, c Caller) {
 		return
 	}
 	in.Source.ID = r.PathValue("id")
-	x, err := h.s.SaveSource(r.Context(), c, in.Source, in.Token, false)
+	x, err := h.s.SaveSourceWith(r.Context(), c, in.Source, in.creds(), false)
 	if err != nil {
 		fail(w, err)
 		return
@@ -207,12 +226,36 @@ func (h *handler) postSourceOn(w http.ResponseWriter, r *http.Request, c Caller)
 }
 
 func (h *handler) postSourceTest(w http.ResponseWriter, r *http.Request, c Caller) {
-	n, err := h.s.TestSource(r.Context(), c, r.PathValue("id"))
+	t, err := h.s.TestSource(r.Context(), c, r.PathValue("id"))
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": n})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": t.Items, "sample": t.Sample, "skipped": t.Skipped, "skippedWhy": t.SkippedWhy})
+}
+
+// sourceTestInput is a source's dialog as typed (KN-26): saved is the id
+// of the source being edited, whose saved credential a blank field keeps.
+type sourceTestInput struct {
+	sourceInput
+	Saved string `json:"saved,omitempty"`
+}
+
+func (h *handler) postSourceTestTyped(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in sourceTestInput
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	t, err := h.s.TestSourceAsTyped(r.Context(), c, in.Source, in.creds(), in.Saved)
+	if errors.Is(err, ErrDenied) {
+		fail(w, err)
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": t.Items, "sample": t.Sample, "skipped": t.Skipped, "skippedWhy": t.SkippedWhy})
 }
 
 func (h *handler) postDocument(w http.ResponseWriter, r *http.Request, c Caller) {
@@ -320,39 +363,6 @@ func (h *handler) postHook(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]bool{"accepted": true})
 }
 
-func (h *handler) postSync(w http.ResponseWriter, r *http.Request, c Caller) {
-	var in struct {
-		Full   bool   `json:"full"`
-		Source string `json:"source"`
-	}
-	if !decode(w, r, maxBody, &in) {
-		return
-	}
-	if !c.SuperAdmin {
-		fail(w, wrapf(ErrDenied, "only a SuperAdmin starts a sync"))
-		return
-	}
-	if err := h.s.leads(); err != nil {
-		fail(w, err)
-		return
-	}
-	if _, _, err := h.s.currentStore(r.Context()); err != nil {
-		fail(w, err)
-		return
-	}
-	if h.s.syncing.Load() {
-		fail(w, ErrBusy)
-		return
-	}
-	req := SyncRequest{Full: in.Full, Source: in.Source, By: "Sync now by " + c.label(), Who: c.who()}
-	go func() {
-		if _, err := h.s.SyncWith(context.WithoutCancel(r.Context()), req); err != nil && !errors.Is(err, ErrBusy) {
-			h.s.o.Logger.Warn("a knowledge sync failed", "by", c.label(), "err", err)
-		}
-	}()
-	writeJSON(w, http.StatusAccepted, map[string]bool{"started": true})
-}
-
 func (h *handler) getStatus(w http.ResponseWriter, r *http.Request, c Caller) {
 	if !c.SuperAdmin {
 		fail(w, wrapf(ErrDenied, "only a SuperAdmin sees the syncs"))
@@ -378,7 +388,7 @@ func (h *handler) getPages(w http.ResponseWriter, r *http.Request, c Caller) {
 	if !h.reader(w, c) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"pages": h.s.Pages(), "connected": h.s.Connected()})
+	writeJSON(w, http.StatusOK, map[string]any{"pages": h.s.Pages(), "retired": h.s.RetiredPages(), "connected": h.s.Connected()})
 }
 
 // --- Mycroft tab (Phase 12, wave 5) ---
@@ -413,7 +423,97 @@ func (h *handler) deleteAdded(w http.ResponseWriter, r *http.Request, c Caller) 
 	writeJSON(w, http.StatusOK, map[string]bool{"removed": true})
 }
 
+// --- A page's own actions (KN-23, KN-24) ---
+
+func (h *handler) postOutdated(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in struct {
+		Path string `json:"path"`
+		Text string `json:"text"`
+	}
+	if !decode(w, r, MaxNote+64<<10, &in) {
+		return
+	}
+	res, err := h.s.Outdated(r.Context(), c, in.Path, in.Text)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, res)
+}
+
+func (h *handler) getRequests(w http.ResponseWriter, r *http.Request, c Caller) {
+	if !c.Reviewer {
+		fail(w, wrapf(ErrDenied, "only an Admin or a SuperAdmin decides a request to retire a page"))
+		return
+	}
+	list, err := h.s.PageRequests(r.Context(), r.URL.Query().Get("all") == "1")
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	type row struct {
+		PageRequest
+		CanApprove bool `json:"canApprove"`
+		Mine       bool `json:"mine"`
+	}
+	out := make([]row, 0, len(list))
+	for _, x := range list {
+		out = append(out, row{PageRequest: x, CanApprove: x.CanApprove(c.ID), Mine: x.By == c.ID})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"requests": out})
+}
+
+func (h *handler) postRequest(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in struct {
+		Action string `json:"action"`
+		Path   string `json:"path"`
+		Reason string `json:"reason"`
+	}
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	req, err := h.s.AskPage(r.Context(), c, in.Action, in.Path, in.Reason)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, req)
+}
+
+func (h *handler) postRequestApprove(w http.ResponseWriter, r *http.Request, c Caller) {
+	req, err := h.s.DecidePage(r.Context(), c, r.PathValue("id"), true, "")
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, req)
+}
+
+func (h *handler) postRequestReject(w http.ResponseWriter, r *http.Request, c Caller) {
+	var in struct {
+		Comment string `json:"comment"`
+	}
+	if !decode(w, r, maxBody, &in) {
+		return
+	}
+	req, err := h.s.DecidePage(r.Context(), c, r.PathValue("id"), false, in.Comment)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, req)
+}
+
 // --- end of the Mycroft tab.
+
+// pageView is a page as its view shows it: the page, the correction that
+// waits for it and the request to retire it or make it active again that
+// waits, if any (KN-23, KN-24).
+type pageView struct {
+	Page
+	Correction *Correction  `json:"correction,omitempty"`
+	Request    *PageRequest `json:"request,omitempty"`
+}
 
 func (h *handler) getPage(w http.ResponseWriter, r *http.Request, c Caller) {
 	if !h.reader(w, c) {
@@ -424,7 +524,14 @@ func (h *handler) getPage(w http.ResponseWriter, r *http.Request, c Caller) {
 		fail(w, wrapf(ErrNotFound, "no approved page %q", r.URL.Query().Get("path")))
 		return
 	}
-	writeJSON(w, http.StatusOK, p)
+	v := pageView{Page: p}
+	// What waits for the page is said to those who may act on the wiki;
+	// a failure to read it leaves it out rather than the page.
+	if c.MayAdd() {
+		v.Correction, _ = h.s.PendingCorrection(r.Context(), p.Path)
+		v.Request, _ = h.s.PageRequestFor(r.Context(), p.Path)
+	}
+	writeJSON(w, http.StatusOK, v)
 }
 
 func (h *handler) getSearch(w http.ResponseWriter, r *http.Request, c Caller) {

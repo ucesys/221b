@@ -18,7 +18,7 @@ import (
 // fix a case. When the case closes, with any outcome, each waiting change
 // that resolves it and nothing else still open is rejected, by whoever
 // closed the case (the system for a close of its own), saying why: "Case
-// C-12 was closed as no fix needed". A change that also resolves another
+// C-12 was closed as no action needed". A change that also resolves another
 // open case, or a known issue not yet resolved, keeps waiting, with this
 // case still listed. A case closed as a duplicate passes its waiting
 // changes on instead: they resolve its original too, linked by the
@@ -28,13 +28,11 @@ import (
 // outcomeWords are a close's outcome as the reason of a rejection says
 // it: "Case C-12 was closed as <words>".
 func outcomeWords(o issues.Outcome, known string) string {
-	switch o {
+	switch o.Canonical() {
 	case issues.OutcomeFix:
 		return "fixed"
-	case issues.OutcomeNotAProblem:
-		return "not a problem"
-	case issues.OutcomeNoFixNeeded:
-		return "no fix needed"
+	case issues.OutcomeNoAction:
+		return "no action needed"
 	case issues.OutcomeKnownIssue:
 		if known != "" {
 			return "the known issue " + known

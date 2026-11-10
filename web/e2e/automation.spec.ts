@@ -359,7 +359,7 @@ test('the Automation pages old names still open them', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Run History' })).toBeVisible()
 })
 
-test('Approvals moved to Cases › Inbox, where the old Administration link opens it, with nothing to approve on it', async ({ page }) => {
+test('Approvals moved to AIOps › Inbox, where the old Administration link opens it, with nothing to approve on it', async ({ page }) => {
   await page.goto('/#/admin/approvals')
   await expect(page).toHaveURL(/#\/cases\/inbox\?kind=approvals$/)
   // The Inbox is one table now (IN-01), with no Kind filter since wave 6c (CF-38): the old group's name is let go.
@@ -555,7 +555,7 @@ test('the bell says what waits for you and opens it in the Inbox; the gear opens
   await expect(page.getByTestId('admin-flag')).toHaveCount(0)
   const bell = page.getByTestId('inbox-bell')
   await expect(bell).toHaveAttribute('data-state', /^(p01|waiting)$/)
-  await expect(bell).toHaveAttribute('title', /^\d+ waiting for you(, .+)?: open Cases › Inbox$/)
+  await expect(bell).toHaveAttribute('title', /^\d+ waiting for you(, .+)?: open AIOps › Inbox$/)
   await expect(bell).toHaveText('')
   // Live first, then the bell (CF-41).
   const [l, b] = [await page.getByTestId('live').boundingBox(), await bell.boundingBox()]

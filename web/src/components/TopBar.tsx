@@ -175,23 +175,23 @@ function RingArc({ every, elapsed }: { every: number; elapsed: number }) {
 }
 
 /**
- * The bell (CF-80): what waits for this person in Cases › Inbox, the same
- * rows the Cases switch and the Inbox tab count. Red while a P0 or P1 case
- * waits, yellow while anything else does, plain when nothing does; never
- * a number.
+ * The bell (CF-80): what waits for this person in AIOps › Inbox, the same
+ * rows the Inbox tab counts; the Cases switch has no count (CF-88). Red
+ * while a P0 or P1 case waits, yellow while anything else does, plain when
+ * nothing does; never a number.
  */
 export function bellOf(c: InboxCounts): {
   state: "p01" | "waiting" | "none";
   text: string;
 } {
   if (c.total === 0)
-    return { state: "none", text: "Nothing waiting for you in Cases › Inbox" };
+    return { state: "none", text: "Nothing waiting for you in AIOps › Inbox" };
   const urgent = [c.p0 > 0 && `${c.p0} P0`, c.p1 > 0 && `${c.p1} P1`]
     .filter(Boolean)
     .join(" and ");
   return {
     state: urgent ? "p01" : "waiting",
-    text: `${c.total} waiting for you${urgent ? `, ${urgent}` : ""}: open Cases › Inbox`,
+    text: `${c.total} waiting for you${urgent ? `, ${urgent}` : ""}: open AIOps › Inbox`,
   };
 }
 
@@ -504,30 +504,39 @@ export function TopBar({
     .join(" ");
 
   // Automation is an area of its own, a SuperAdmin's (AU-01, AU-13). Nodes
-  // is in both, and stays in the area it was opened from; so do the pages
-  // with no tab, such as Administration.
+  // is in both, and stays in the area it was opened from.
   const [nodesArea, setNodesArea] = usePref<Area>("221b.nodes-area", "kubernetes");
+  // The pages with no tab, such as Administration, keep the area the person
+  // came from, Cases too (CF-88): the last area a tab or a Cases page was in.
+  const [lastArea, setLastArea] = usePref<Area>("221b.last-area", "kubernetes");
   const automationOn = me?.admin === true;
   // Cases is the third area (CS-01), for whoever has something in it.
   const issueMe = useIssueMe();
   const cases = casesAccess(me, issueMe);
   // --- Top bar (Phase 12, wave 5, IN-07; CF-80): what is pending in the
-  // Inbox, for the Cases count and the bell.
+  // Inbox, for the Inbox tab's count and the bell.
   const casesCount = useInboxCounts(cases);
   const bell = bellOf(casesCount);
   // --- end top bar ---
   const area: Area = route.view === "cases"
     ? "cases"
-    : !automationOn
-    ? "kubernetes"
-    : isAutomationTab(tab)
-      ? "automation"
-      : tab === "nodes" || tab === null
-        ? nodesArea
-        : "kubernetes";
+    : tab === null
+      ? (lastArea === "automation" && automationOn) || (lastArea === "cases" && cases.show)
+        ? lastArea
+        : "kubernetes"
+      : !automationOn
+        ? "kubernetes"
+        : isAutomationTab(tab)
+          ? "automation"
+          : tab === "nodes"
+            ? nodesArea
+            : "kubernetes";
   useEffect(() => {
     if (tab && tab !== "nodes" && area !== nodesArea && area !== "cases") setNodesArea(area);
   }, [tab, area, nodesArea, setNodesArea]);
+  useEffect(() => {
+    if ((tab !== null || route.view === "cases") && area !== lastArea) setLastArea(area);
+  }, [tab, route.view, area, lastArea, setLastArea]);
   // The Helm tab needs Secrets; without them there is nothing to show.
   const tabs = TABS.filter(
     (t) =>
@@ -658,24 +667,10 @@ export function TopBar({
                 type="button"
                 aria-pressed={area === "cases"}
                 onClick={() => navigate(casesHref(cases.tabs[0]))}
-                title={
-                  casesCount.total > 0
-                    ? `Cases: ${casesCount.total} waiting for you`
-                    : "Cases: reports, approvals and what the agents found"
-                }
+                title="AIOps"
                 data-testid="area-cases"
               >
-                Cases
-                {casesCount.total > 0 && (
-                  <span
-                    className="rk-count"
-                    data-tone="info"
-                    style={{ marginLeft: 6 }}
-                    data-testid="cases-count"
-                  >
-                    {casesCount.total}
-                  </span>
-                )}
+                AIOps
               </button>
             )}
           </div>
@@ -684,7 +679,7 @@ export function TopBar({
       {area === "cases" ? (
         <nav
           className="rk-views"
-          aria-label="Cases"
+          aria-label="AIOps"
           style={{ flex: "1 1 0", minWidth: 0, display: "flex", alignItems: "stretch" }}
           data-testid="cases-nav"
         >
@@ -849,7 +844,7 @@ export function TopBar({
           )}
           {live ? "Live" : conn.label}
         </span>
-        {/* --- Top bar (Phase 12, wave 5, IN-07; wave 6c, CF-41; CF-80): the bell, right of Live, in every area: what waits for this person in Cases › Inbox. No bell for whoever has no Inbox. --- */}
+        {/* --- Top bar (Phase 12, wave 5, IN-07; wave 6c, CF-41; CF-80): the bell, right of Live, in every area: what waits for this person in AIOps › Inbox. No bell for whoever has no Inbox. --- */}
         {cases.tabs.includes("inbox") && (
           <a
             className="rk-icon-btn"

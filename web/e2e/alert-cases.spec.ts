@@ -24,7 +24,7 @@ async function closeCovering(request: APIRequestContext, key: string, object: st
   expect(res.status(), await res.text()).toBe(200)
   const covers = (await res.json()) as AlertCovers
   const ids = new Set([...(covers.alerts[key] ?? []), ...(covers.objects[object.toLowerCase()] ?? [])].map((c) => c.id))
-  for (const id of ids) await request.post(`/api/v1/cases/cases/${id}/close`, { headers: SAME, data: { outcome: 'noFixNeeded', explanation: 'e2e: done' } })
+  for (const id of ids) await request.post(`/api/v1/cases/cases/${id}/close`, { headers: SAME, data: { outcome: 'noAction', explanation: 'e2e: done' } })
 }
 
 test('an alert an open case covers shows the case in place of New Case, and opens it (CF-77)', async ({ page, request }) => {
@@ -76,7 +76,7 @@ test('an alert an open case covers shows the case in place of New Case, and open
     await open(page)
     await expect(card.getByTestId('alert-new-case')).toBeVisible({ timeout: 15_000 })
   } finally {
-    if (opened) await request.post(`/api/v1/cases/cases/${opened}/close`, { headers: SAME, data: { outcome: 'noFixNeeded', explanation: 'e2e: done' } })
+    if (opened) await request.post(`/api/v1/cases/cases/${opened}/close`, { headers: SAME, data: { outcome: 'noAction', explanation: 'e2e: done' } })
     await cleanup()
   }
 })

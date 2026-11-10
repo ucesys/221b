@@ -6,7 +6,7 @@ import { GettingStartedCard, GettingStartedSection } from './GettingStarted'
 const ids = ['signin', 'clusters', 'provider', 'agents', 'knowledge', 'jobs', 'fleets', 'hosts', 'backup']
 const where: Record<string, [string, string]> = {
   knowledge: ['#/admin/settings/knowledge', 'Administration › Settings › Knowledge'],
-  jobs: ['#/cases/jobs', 'Cases › Jobs, and Administration › Settings › Watson for the notification channels'],
+  jobs: ['#/cases/jobs', 'AIOps › Jobs, and Administration › Settings › Watson for the notification channels'],
 }
 
 function viewOf(states: Record<string, SetupStep['state']>): SetupView {
@@ -100,7 +100,7 @@ describe('Getting started', () => {
     expect(leftText(null)).toBe('What is left to set up')
     expect(leftText(viewOf({ jobs: 'open' }))).toBe('1 step left')
     expect(leftText(viewOf({}))).toBe('Every step done or dismissed')
-    expect(shortWhere('Cases › Jobs, and Administration › Settings › Watson')).toBe('Jobs')
+    expect(shortWhere('AIOps › Jobs, and Administration › Settings › Watson')).toBe('Jobs')
     expect(shortWhere('Home › Clusters')).toBe('Clusters')
   })
 })

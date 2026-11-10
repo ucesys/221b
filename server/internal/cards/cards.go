@@ -1,6 +1,6 @@
 // Package cards keeps the agents' proposals as durable Watson cards
 // (Phase 12, ADR-99 to ADR-102). Any change an agent wants, asked in a
-// chat or on its own at night, becomes a card that waits in Cases › Inbox
+// chat or on its own at night, becomes a card that waits in AIOps › Inbox
 // and the cluster's Watson panel until people approve or reject it, it
 // expires, or a newer proposal for the same thing replaces it. A card
 // says what started it, which agent proposed it and why, the evidence,
@@ -128,6 +128,9 @@ type Source struct {
 	Label string `json:"label"`
 	// SetBy names who set the trigger, or asked in the chat.
 	SetBy string `json:"setBy,omitempty"`
+	// Job names the job whose run made it ("Nightly audit"), so the
+	// drawer says "Nightly audit, run-12" (CF-92); empty for none.
+	Job string `json:"job,omitempty"`
 }
 
 // Evidence is one thing the agent read: a log line, an event, a fact, a
@@ -277,6 +280,10 @@ type Plan struct {
 	Fingerprint string   `json:"fingerprint,omitempty"`
 	// Unread says why Watson could not read the target then.
 	Unread string `json:"unread,omitempty"`
+	// Warning is what approving it would do that is likely not meant,
+	// though allowed: a fleet with no node now (KN-30). Check again says
+	// it too.
+	Warning string `json:"warning,omitempty"`
 }
 
 // Recheck is the last check of a card: its condition still holds and its
@@ -287,6 +294,9 @@ type Recheck struct {
 	// Why says what failed; Checked what held.
 	Why     string   `json:"why,omitempty"`
 	Checked []string `json:"checked,omitempty"`
+	// Warnings are the actions' warnings now, each with its action, when
+	// it holds (Plan.Warning).
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // Result is how one action went. Never its output: a kubectl command's is

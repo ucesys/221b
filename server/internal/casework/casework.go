@@ -7,8 +7,8 @@
 // v1), opened it in the console (New Case, an alert) or an agent found it
 // (each finding of a job's run becomes a case or joins one: Route). A
 // case is New while nobody has taken it, In progress once someone has,
-// and Closed with exactly one outcome: fix, duplicate, notAProblem,
-// noFixNeeded, knownIssue or exception; a person may reopen any closed
+// and Closed with exactly one outcome: fix, duplicate, noAction (since
+// CF-90; notAProblem and noFixNeeded read so), knownIssue or exception; a person may reopen any closed
 // case, with a reason.
 //
 // The case itself (its number, title, priority P0 to P4, status and
@@ -236,11 +236,12 @@ func (c Completion) Empty() bool {
 	return c.Cause == "" && c.Prevention == "" && c.Text == ""
 }
 
-// Closing is a close being written, kept in a draft.
+// Closing is a close being written, kept in a draft. An outcome before
+// CF-90, notAProblem or noFixNeeded, reads as noAction.
 type Closing struct {
-	Outcome     string `json:"outcome"`
-	Explanation string `json:"explanation"`
-	Original    string `json:"original,omitempty"`
+	Outcome     issues.Outcome `json:"outcome"`
+	Explanation string         `json:"explanation"`
+	Original    string         `json:"original,omitempty"`
 }
 
 // The parts of a case's draft (CF-59).
@@ -289,7 +290,7 @@ func (d Draft) part(name string) string {
 		if d.Close == nil || d.Close.Outcome == "" && d.Close.Explanation == "" {
 			return ""
 		}
-		return d.Close.Outcome + "\x00" + d.Close.Explanation + "\x00" + d.Close.Original
+		return string(d.Close.Outcome) + "\x00" + d.Close.Explanation + "\x00" + d.Close.Original
 	case partRCA:
 		if d.RCA == nil || d.RCA.Empty() {
 			return ""
@@ -397,8 +398,8 @@ type Settings struct {
 	// KeepAgentClosedDays is how long a closed agent-found case is kept
 	// before it is deleted.
 	KeepAgentClosedDays int `json:"keepAgentClosedDays"`
-	// LookBackDays is how far back New Case shows cases closed as fixed,
-	// not a problem or no fix needed.
+	// LookBackDays is how far back New Case shows cases closed as fixed
+	// or no action needed.
 	LookBackDays int `json:"lookBackDays"`
 	// ExceptionStaleDays is after how many days without a match an
 	// exception is stale.

@@ -124,6 +124,28 @@ describe('who is offered which page (RB-41, RB-31)', () => {
     expect(screen.queryByRole('link', { name: /^Users/ })).toBeNull()
     expect(calls).toHaveLength(0)
   })
+
+  // MY-11: an Admin adds to Mycroft's wiki in Settings › Knowledge's Added in Mycroft card, the rest of Settings closed.
+  it('shows an Admin Settings › Knowledge’s Added in Mycroft card alone, and refuses a Viewer there', async () => {
+    const wiki = (mayAdd: boolean) => ({ store: 'git', model: true, pages: 0, excerpts: 0, running: false, mayAdd, mayReview: mayAdd, maySetup: false, sources: [], added: [], limits: { note: 204800, document: 20 << 20, depth: 3, defaultDepth: 1, pages: 50, defaultPages: 20, formats: ['.md'] } })
+    serve((_m, url) => (url.endsWith('/knowledge/wiki') ? { body: wiki(true) } : {}))
+    const admin = me({ admin: false, roles: ['admin'], user: { subject: 'carol', username: 'carol' } })
+    render(<AdminPageView {...common('#/admin/settings/knowledge/added', admin)} settings={null} refreshedAt={null} />)
+    expect(await screen.findByTestId('wiki-add')).toBeTruthy()
+    expect(screen.getByTestId('admin-knowledge-added').textContent).toContain('is for SuperAdmins')
+    expect(screen.queryByTestId('admin-refusal')).toBeNull()
+    expect(screen.queryByTestId('settings-page')).toBeNull()
+    expect(calls.map((c) => c.url)).toEqual(['/api/v1/knowledge/wiki'])
+    cleanup()
+    serve((_m, url) => (url.endsWith('/knowledge/wiki') ? { body: wiki(false) } : {}))
+    render(<AdminPageView {...common('#/admin/settings/knowledge', viewer)} settings={null} refreshedAt={null} />)
+    expect((await screen.findByTestId('admin-refusal')).textContent).toContain('Settings is for SuperAdmins')
+    expect(screen.queryByTestId('wiki-add')).toBeNull()
+    cleanup()
+    // Another section of Settings stays closed to an Admin.
+    render(<AdminPageView {...common('#/admin/settings/agents', admin)} settings={null} refreshedAt={null} />)
+    expect(screen.getByTestId('admin-refusal')).toBeTruthy()
+  })
 })
 
 describe('Roles (RB-42)', () => {

@@ -142,7 +142,7 @@ func TestTheSafetyNetLeavesWhatADiagnosisConcludedCF82(t *testing.T) {
 		t.Errorf("the acknowledgements are not audited: %s", w.audit.String())
 	}
 	// A person closes the crash's case while its alert goes on.
-	if _, err := w.svc.Close(ctx, "C-1", CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "It is a test pod."}, olivia); err != nil {
+	if _, err := w.svc.Close(ctx, "C-1", CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "It is a test pod."}, olivia); err != nil {
 		t.Fatal(err)
 	}
 	// A job acknowledged one that no run kept here; another no run saw as

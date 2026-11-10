@@ -46,7 +46,7 @@ const kase = (over: Partial<Case> = {}): Case => ({
   history: [],
   mayChange: true,
   related: [],
-  allowedOutcomes: ['fix', 'noFixNeeded', 'knownIssue', 'exception'],
+  allowedOutcomes: ['fix', 'noAction', 'knownIssue', 'exception'],
   rcaRequired: false,
   mayReopen: true,
   ...over,
@@ -165,7 +165,7 @@ describe('a case lists the changes that resolve it, and a person links one (CF-2
     expect(screen.queryByTestId('case-link-change')).toBeNull()
     expect(screen.queryByTestId('case-card-unlink')).toBeNull()
     cleanup()
-    vi.mocked(api.fetchCase).mockResolvedValue(kase({ status: 'closed', outcome: 'noFixNeeded', pending: false }))
+    vi.mocked(api.fetchCase).mockResolvedValue(kase({ status: 'closed', outcome: 'noAction', pending: false }))
     render(<CaseDrawer id="20" onClose={() => undefined} />)
     await screen.findByTestId('case-cards')
     expect(screen.queryByTestId('case-link-change')).toBeNull()
@@ -326,10 +326,10 @@ describe('who proposed and decided a change, and the titles of what it resolves 
         state: 'rejected',
         proposedBy: { name: 'Auditor', kind: 'agent' },
         decidedBy: { name: 'system', kind: 'system' },
-        rejection: { by: { key: 'system', name: 'System' }, at: '2026-11-07T03:00:00Z', comment: 'Case C-20 was closed as no fix needed' },
+        rejection: { by: { key: 'system', name: 'System' }, at: '2026-11-07T03:00:00Z', comment: 'Case C-20 was closed as no action needed' },
         history: [
           { at: '2026-11-07T02:00:00Z', what: 'Proposed', by: 'auditor', actor: { name: 'Auditor', kind: 'agent' } },
-          { at: '2026-11-07T03:00:00Z', what: 'Rejected: Case C-20 was closed as no fix needed', by: 'system', actor: { name: 'system', kind: 'system' } },
+          { at: '2026-11-07T03:00:00Z', what: 'Rejected: Case C-20 was closed as no action needed', by: 'system', actor: { name: 'system', kind: 'system' } },
           { at: '2026-11-07T03:01:00Z', what: 'A note of before', by: 'Pat' },
         ],
       }),

@@ -27,7 +27,7 @@ vi.mock('../../api/issues', async (original) => ({
 vi.mock('../../api/automation', async (original) => ({ ...(await original<typeof import('../../api/automation')>()), fetchApprovals: vi.fn(), decideRequest: vi.fn() }))
 vi.mock('../../api/casework', async (original) => ({ ...(await original<typeof import('../../api/casework')>()), fetchCases: vi.fn(), fetchCase: vi.fn(), bulkCases: vi.fn(), closeKnown: vi.fn(), fetchOpenKnown: vi.fn() }))
 vi.mock('../../api/cards', async (original) => ({ ...(await original<typeof import('../../api/cards')>()), fetchProposals: vi.fn(), fetchProposal: vi.fn() }))
-vi.mock('../../api/knowledge', async (original) => ({ ...(await original<typeof import('../../api/knowledge')>()), fetchDrafts: vi.fn(), fetchConflicts: vi.fn() }))
+vi.mock('../../api/knowledge', async (original) => ({ ...(await original<typeof import('../../api/knowledge')>()), fetchDrafts: vi.fn(), fetchConflicts: vi.fn(), fetchPageRequests: vi.fn(), approvePageRequest: vi.fn(), rejectPageRequest: vi.fn() }))
 vi.mock('../../api/rules', async (original) => ({ ...(await original<typeof import('../../api/rules')>()), fetchSuggestions: vi.fn(), fetchRules: vi.fn(), promoteRule: vi.fn() }))
 
 const admin: Me = { mode: 'oidc', user: { subject: 's', username: 'ann', name: 'Ann' }, admin: true, roles: ['superAdmin'], method: 'oidc', sessionIdleSeconds: 0 }
@@ -111,6 +111,7 @@ beforeEach(() => {
   vi.mocked(cards.fetchProposal).mockResolvedValue(proposal)
   vi.mocked(knowledge.fetchDrafts).mockResolvedValue({ runs: [] })
   vi.mocked(knowledge.fetchConflicts).mockResolvedValue({ conflicts: [] })
+  vi.mocked(knowledge.fetchPageRequests).mockResolvedValue({ requests: [] })
   vi.mocked(rules.fetchSuggestions).mockResolvedValue({ suggestions: [] })
   setIssueMeForTests(op)
 })
@@ -189,6 +190,36 @@ describe('the Inbox as one table (IN-01 to IN-04)', () => {
     await waitFor(() => expect(keys().length).toBeGreaterThan(0))
     expect(rules.fetchSuggestions).not.toHaveBeenCalled()
     expect(keys()).not.toContain('rule:node.etcd-slow')
+  })
+
+  it('lists a request to retire a wiki page; who asked may not approve it, another person does (KN-24)', async () => {
+    const req: knowledge.PageRequest = { id: 'p-1', action: 'retire', path: 'pages/system/backups.md', title: 'Backups', reason: 'The NAS was replaced.', by: 'ann', name: 'Ann', at: '2026-11-09T10:00:00Z', state: 'waiting', canApprove: false, mine: true }
+    vi.mocked(knowledge.fetchPageRequests).mockResolvedValue({ requests: [req] })
+    page('#/cases/inbox')
+    await waitFor(() => expect(keys()).toContain('knowledge:p-1'))
+    const row = document.querySelector('[data-inbox-row="knowledge:p-1"]') as HTMLElement
+    expect(row.textContent).toContain('Retire: Backups')
+    cleanup()
+    page('#/cases/inbox/knowledge/p-1')
+    const card = await screen.findByTestId('page-request')
+    expect(within(card).getByTestId('page-request-reason').textContent).toBe('The NAS was replaced.')
+    expect(within(card).getByTestId('page-request-approve')).toHaveProperty('disabled', true)
+    expect(within(card).getByTestId('page-request-rule').textContent).toContain('You asked for this')
+    expect(within(card).getByTestId('page-request-reject').textContent).toBe('Withdraw…')
+    // Another reviewer approves it.
+    cleanup()
+    forgetSharedForTests()
+    vi.mocked(knowledge.fetchPageRequests).mockResolvedValue({ requests: [{ ...req, canApprove: true, mine: false }] })
+    vi.mocked(knowledge.approvePageRequest).mockResolvedValue({ ...req, state: 'approved' })
+    page('#/cases/inbox/knowledge/p-1')
+    const approve = await screen.findByTestId('page-request-approve')
+    expect(approve).toHaveProperty('disabled', false)
+    // Decided, it leaves Pending; its drawer stays open and says so.
+    vi.mocked(knowledge.fetchPageRequests).mockImplementation((all) => Promise.resolve({ requests: all ? [{ ...req, state: 'approved', decidedName: 'Bob', decided: '2026-11-09T11:00:00Z' }] : [] }))
+    fireEvent.click(approve)
+    await waitFor(() => expect(knowledge.approvePageRequest).toHaveBeenCalledWith('p-1'))
+    await waitFor(() => expect(screen.getByTestId('page-request-state').textContent).toBe('Approved'))
+    expect(screen.queryByTestId('page-request-approve')).toBeNull()
   })
 
   it('adds under All what was done, newest first, after what is pending', async () => {
@@ -533,7 +564,7 @@ describe('the Inbox since wave 6c (CF-35 to CF-38)', () => {
     fireEvent.click(screen.getByTestId('confirm-ok'))
     await waitFor(() => expect(casework.bulkCases).toHaveBeenLastCalledWith(['C-1', 'C-3'], 'duplicate', { outcome: 'duplicate', explanation: 'Same as C-5', original: 'C-5' }))
     fireEvent.click(await screen.findByTestId('confirm-ok'))
-    // Exception, with a reason and a last day; No fix needed goes as Close.
+    // Exception, with a reason and a last day; No action needed goes as Close.
     pick('C-1')
     fireEvent.click(screen.getByTestId('inbox-bulk-close'))
     fireEvent.click(screen.getByTestId('inbox-bulk-close-exception'))
@@ -544,10 +575,14 @@ describe('the Inbox since wave 6c (CF-35 to CF-38)', () => {
     fireEvent.click(await screen.findByTestId('confirm-ok'))
     pick('C-1')
     fireEvent.click(screen.getByTestId('inbox-bulk-close'))
-    fireEvent.click(screen.getByTestId('inbox-bulk-close-noFixNeeded'))
+    // One No action needed for every case, since CF-90: no Not a problem, no No fix needed.
+    const choices = [...screen.getByTestId('confirm').querySelectorAll('input[name="bulk-close"]')].map((r) => r.getAttribute('data-testid'))
+    expect(choices).toEqual(['inbox-bulk-close-fix', 'inbox-bulk-close-noAction', 'inbox-bulk-close-knownIssue', 'inbox-bulk-close-duplicate', 'inbox-bulk-close-exception'])
+    expect(screen.getByTestId('confirm').textContent).toContain('No action needed Not a problem, or it went away: say why.')
+    fireEvent.click(screen.getByTestId('inbox-bulk-close-noAction'))
     fireEvent.change(screen.getByTestId('inbox-bulk-text'), { target: { value: 'Gone by itself' } })
     fireEvent.click(screen.getByTestId('confirm-ok'))
-    await waitFor(() => expect(casework.bulkCases).toHaveBeenLastCalledWith(['C-1'], 'close', { outcome: 'noFixNeeded', explanation: 'Gone by itself' }))
+    await waitFor(() => expect(casework.bulkCases).toHaveBeenLastCalledWith(['C-1'], 'close', { outcome: 'noAction', explanation: 'Gone by itself' }))
   })
 
   it('shows the RCA’s fields under Fixed, with a hint by priority, and sends an RCA only with its cause (CF-42)', async () => {
@@ -602,7 +637,7 @@ describe('the Inbox since wave 6c (CF-35 to CF-38)', () => {
     // Another outcome sends no saveFix.
     pick('C-1')
     fireEvent.click(screen.getByTestId('inbox-bulk-close'))
-    fireEvent.click(screen.getByTestId('inbox-bulk-close-noFixNeeded'))
+    fireEvent.click(screen.getByTestId('inbox-bulk-close-noAction'))
     expect(screen.queryByTestId('inbox-bulk-save-fix')).toBeNull()
   })
 

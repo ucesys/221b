@@ -60,7 +60,7 @@ func TestTheSimulatorsCases(t *testing.T) {
 		"fixed with its RCA, verified": func(b Brief) bool { return b.Outcome == issues.OutcomeFix && b.RCACause != "" && b.Verified != nil },
 		"an exception":                 func(b Brief) bool { return b.Outcome == issues.OutcomeException && b.Exception != "" },
 		"a known issue":                func(b Brief) bool { return b.Outcome == issues.OutcomeKnownIssue && b.KnownIssue != "" },
-		"no fix needed":                func(b Brief) bool { return b.Outcome == issues.OutcomeNoFixNeeded },
+		"no action needed":             func(b Brief) bool { return b.Outcome == issues.OutcomeNoAction },
 		// The owner's feedback (wave 6c): an incident number and a type, a
 		// case queued for its analysis, the agent named as the creator.
 		"a report with an incident number": func(b Brief) bool {

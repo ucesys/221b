@@ -732,7 +732,7 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
         )}
         {showEarlier && split.earlier.map((it) => card(it))}
         {split.active && card(split.active)}
-        {/* The agents' proposed changes wait in Cases › Inbox, not here: the
+        {/* The agents' proposed changes wait in AIOps › Inbox, not here: the
             panel keeps its room for commands (Phase 12, wave 5, IN-08).
             Only a proposal's own drawer shows its card, at the foot (CF-62). */}
         {tail}

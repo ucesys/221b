@@ -341,7 +341,50 @@ func (s *Service) RunNow(ctx context.Context, id string, by Person) (RunBrief, e
 		w := describeWhen(j.When)
 		return RunBrief{}, fmt.Errorf("%w: %s cannot be run by hand; it runs %s", ErrInvalid, k.Label, strings.ToLower(w[:1])+w[1:])
 	}
-	trig := Trigger{Kind: TriggerManual, What: "Run now by " + by.Label(), SetBy: j.SetBy, By: by.Label()}
+	return s.start(ctx, j, k, Trigger{Kind: TriggerManual, What: "Run now by " + by.Label(), SetBy: j.SetBy, By: by.Label()})
+}
+
+// RebuildNow starts a run that redoes everything, by hand (KN-29): a
+// Wiki sync that gives Mycroft every item again, unchanged ones too.
+// Only a kind that offers it; a paused job runs too, as with Run now.
+func (s *Service) RebuildNow(ctx context.Context, id string, by Person) (RunBrief, error) {
+	rec, err := s.loadJobs(ctx)
+	if err != nil {
+		return RunBrief{}, err
+	}
+	j, k, ok := s.job(rec, id)
+	if !ok {
+		return RunBrief{}, fmt.Errorf("%w: there is no job %q", ErrNotFound, id)
+	}
+	if !k.Rebuild || k.Run == nil {
+		return RunBrief{}, fmt.Errorf("%w: %s has nothing to rebuild; use Run now", ErrInvalid, k.Label)
+	}
+	return s.start(ctx, j, k, Trigger{Kind: TriggerManual, What: "Rebuild now by " + by.Label(), SetBy: j.SetBy, By: by.Label(), Rebuild: true})
+}
+
+// Start starts a run of a job at once, by hand as by, saying what
+// started it ("Source added by ann"), and returns it; the run goes on in
+// the background. It runs a paused job too, as Run now does: a person
+// asked for it (a knowledge source added or changed is read once at once,
+// KN-28).
+func (s *Service) Start(ctx context.Context, id, what string, by Person) (RunBrief, error) {
+	rec, err := s.loadJobs(ctx)
+	if err != nil {
+		return RunBrief{}, err
+	}
+	j, k, ok := s.job(rec, id)
+	if !ok {
+		return RunBrief{}, fmt.Errorf("%w: there is no job %q", ErrNotFound, id)
+	}
+	if k.Run == nil || k.External != nil {
+		return RunBrief{}, fmt.Errorf("%w: %s cannot be started here", ErrInvalid, k.Label)
+	}
+	return s.start(ctx, j, k, Trigger{Kind: TriggerManual, What: what, SetBy: j.SetBy, By: by.Label()})
+}
+
+// start runs a job by hand in the background, and returns the run once
+// it is under way, or how it ended when it never started.
+func (s *Service) start(ctx context.Context, j Job, k Kind, trig Trigger) (RunBrief, error) {
 	started := make(chan Run, 1)
 	s.wg.Add(1)
 	go func() {
@@ -364,6 +407,79 @@ func (s *Service) RunNow(ctx context.Context, id string, by Person) (RunBrief, e
 	case <-ctx.Done():
 		return RunBrief{}, ctx.Err()
 	}
+}
+
+// SetOn pauses or resumes a job for the console, not a person: a
+// knowledge source switched off pauses its Wiki sync job, and switched on
+// resumes it (KN-28). why says it for the audit log ("source turned off
+// by ann"). A job already so is left as it is.
+func (s *Service) SetOn(ctx context.Context, id string, on bool, by Person, why string) error {
+	var before, after Job
+	var kind Kind
+	changed := false
+	err := s.updateJobs(ctx, func(rec *jobsRecord) error {
+		j, k, ok := s.job(*rec, id)
+		if !ok {
+			return fmt.Errorf("%w: there is no job %q", ErrNotFound, id)
+		}
+		if k.External != nil {
+			return fmt.Errorf("%w: %s is set in %s", ErrInvalid, k.Label, k.External.Where)
+		}
+		if changed = j.On != on; !changed {
+			return errUnchanged
+		}
+		kind, before = k, j
+		now := s.o.Now().UTC()
+		if on && !j.On {
+			j.Since = now
+		}
+		j.On = on
+		j.SetBy, j.SetAt = by.Label(), now
+		if rec.Jobs == nil {
+			rec.Jobs = map[string]Job{}
+		}
+		rec.Jobs[id] = j
+		after = j
+		return nil
+	})
+	if err != nil || !changed {
+		return err
+	}
+	if before.On != after.On {
+		s.record(audit.Event{Action: ActionJob, Who: who(by), Target: id, From: by.From, Outcome: audit.OutcomeOK, Detail: s.describeChange(kind, before, after) + " (" + why + ")"})
+	}
+	return nil
+}
+
+// Drop lets go of a job whose kind is gone: its settings, schedule state
+// and day's spend; its runs are kept. A knowledge source removed drops
+// its Wiki sync job, and the jobs of the kinds a release retired are
+// dropped at start (KN-28). It says whether there was one to drop.
+func (s *Service) Drop(ctx context.Context, id string, by Person, why string) (bool, error) {
+	var gone Job
+	found := false
+	err := s.updateJobs(ctx, func(rec *jobsRecord) error {
+		j, ok := rec.Jobs[id]
+		_, handled := rec.Handled[id]
+		_, spent := rec.Spend[id]
+		if found = ok || handled || spent; !found {
+			return errUnchanged
+		}
+		gone = j
+		delete(rec.Jobs, id)
+		delete(rec.Handled, id)
+		delete(rec.Spend, id)
+		return nil
+	})
+	if err != nil || !found {
+		return false, err
+	}
+	kind := gone.Kind
+	if kind == "" {
+		kind = id
+	}
+	s.record(audit.Event{Action: ActionJob, Who: who(by), Target: id, From: by.From, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("job %s (%s) let go, its runs kept: %s", id, kind, why)})
+	return true, nil
 }
 
 // Preview reads a schedule back as it is edited: in words, and its next

@@ -6,7 +6,7 @@ import { jobHref } from './jobsRoute'
 /**
  * An agent's jobs, in its drawer's "On its own" card (Phase 12, JB-15):
  * what starts it with nobody at the screen, on which clusters, within
- * what budget, each a link to Cases › Jobs. Nothing when it has none.
+ * what budget, each a link to AIOps › Jobs. Nothing when it has none.
  */
 export function AgentJobs({ agent }: { agent: string }) {
   const [jobs, setJobs] = useState<Job[]>([])

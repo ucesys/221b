@@ -178,6 +178,9 @@ func (s *Server) askShared(w http.ResponseWriter, r *http.Request, key sherlock.
 		// pages (IB-10).
 		Cases:   true,
 		Context: data,
+		// The exceptions are for those who see the cases (KN-32): one
+		// who only reads this conversation may not.
+		Exceptions: s.readsExceptions(r),
 	})
 	var capErr *sherlock.ErrCap
 	switch {

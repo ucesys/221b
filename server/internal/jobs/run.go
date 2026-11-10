@@ -91,7 +91,7 @@ func (e *RunEnv) Ask(ctx context.Context, cluster, task string) (AgentResult, er
 	if e.Kind.Agent == "" {
 		return AgentResult{}, errors.New("this job has no agent")
 	}
-	res := e.s.o.Agents.Run(ctx, AgentRequest{Agent: e.Kind.Agent, Cluster: cluster, Task: task, Job: e.Job.ID, RunID: e.RunID, Label: e.Kind.Label, SetBy: e.Job.SetBy, Reader: e.settings})
+	res := e.s.o.Agents.Run(ctx, AgentRequest{Agent: e.Kind.Agent, Cluster: cluster, Task: task, Job: e.Job.ID, RunID: e.RunID, Label: e.Kind.Label, SetBy: e.Job.SetBy, Reader: e.settings, ForReporters: e.Kind.ForReporters})
 	e.mu.Lock()
 	e.cost += res.CostUSD
 	e.tokens.In += res.Tokens.In
@@ -101,6 +101,29 @@ func (e *RunEnv) Ask(ctx context.Context, cluster, task string) (AgentResult, er
 	}
 	e.mu.Unlock()
 	return res, res.Err
+}
+
+// Spend counts a call a kind made to its agent by itself, outside Ask (a
+// Wiki sync's call to Mycroft, KN-28): its model, tokens and cost go on
+// the run and its day's spend. It says when the run's or the day's
+// budget is spent, so the kind stops before its next call.
+func (e *RunEnv) Spend(model string, t Tokens, usd float64) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.cost += usd
+	e.tokens.In += t.In
+	e.tokens.Out += t.Out
+	if model != "" {
+		e.model = model
+	}
+	return e.budgetErr()
+}
+
+// Budget says whether the run's or the day's budget is spent already.
+func (e *RunEnv) Budget() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.budgetErr()
 }
 
 // ---------- running ----------
@@ -194,7 +217,7 @@ func (s *Service) setRun(ctx context.Context, r Run) error {
 // takes it in as a repeat instead, so they do not pile up.
 func (s *Service) noteRun(ctx context.Context, j Job, k Kind, trig Trigger, ev *Event, status, note string) Run {
 	now := s.o.Now().UTC()
-	r := Run{Job: j.ID, Kind: k.ID, Label: labelOf(j, k), Agent: k.Agent, Trigger: trig, Started: now, Ended: now, Status: status, Note: note, Clusters: s.covered(j, ev), Instance: s.instance}
+	r := Run{Job: j.ID, Kind: k.ID, Label: labelOf(j, k), Agent: k.Agent, Trigger: trig, Started: now, Ended: now, Status: status, Note: note, Clusters: s.covered(j, ev), Instance: s.instance, NoFindings: k.NoFindings}
 	if ev != nil {
 		r.Subject, r.Ref = ev.Key, ev.Ref
 	}
@@ -274,7 +297,7 @@ func (s *Service) execute(ctx context.Context, j Job, k Kind, trig Trigger, ev *
 		return r, Outcome{}, fmt.Errorf("%w: %s", ErrBudget, r.Note)
 	}
 	env := &RunEnv{Job: j, Kind: k, Trigger: trig, Event: ev, Clusters: s.covered(j, ev), Started: now, s: s, settings: rec.Settings, daySpent: d.USD}
-	r := Run{Job: j.ID, Kind: k.ID, Label: labelOf(j, k), Agent: k.Agent, Trigger: trig, Clusters: env.Clusters, Started: now, Status: StatusRunning, Instance: s.instance}
+	r := Run{Job: j.ID, Kind: k.ID, Label: labelOf(j, k), Agent: k.Agent, Trigger: trig, Clusters: env.Clusters, Started: now, Status: StatusRunning, Instance: s.instance, NoFindings: k.NoFindings}
 	if ev != nil {
 		r.Subject, r.Ref, r.LastSeen = ev.Key, ev.Ref, now
 		if ev.Kind == EventAlert {
@@ -349,6 +372,7 @@ func (s *Service) execute(ctx context.Context, j Job, k Kind, trig Trigger, ev *
 		notes = append(notes, rerr.Error())
 	}
 	r.Report = clip(out.Report, maxReport)
+	r.Facts = keepFacts(out.Facts)
 	findings, at := s.tidy(sctx, k, r.ID, out.Findings)
 	r.Findings = findings
 	// Each finding becomes a case or joins one (CF-01).
@@ -461,6 +485,9 @@ func (s *Service) file(ctx context.Context, j Job, k Kind, r Run, ev *Event, at 
 			p.Source.Label = r.Trigger.What
 		}
 		p.Source.SetBy = j.SetBy
+		// The job by its name, so the proposal reads "Nightly audit,
+		// run-12" (CF-92).
+		p.Source.Job = labelOf(j, k)
 		if p.Cluster == "" && len(r.Clusters) == 1 {
 			p.Cluster = r.Clusters[0]
 		}
@@ -762,6 +789,9 @@ func (s *Service) sweep(ctx context.Context) {
 // takes says whether a job takes an event.
 func takes(j Job, k Kind, ev Event) bool {
 	if !j.On || k.Run == nil || k.External != nil || j.When.Event != ev.Kind || !j.Covers(ev.Cluster) {
+		return false
+	}
+	if ev.JobKind != "" && ev.JobKind != k.ID {
 		return false
 	}
 	if ev.Kind == EventAlert && j.When.Severity == SeverityError && ev.Severity != SeverityError {

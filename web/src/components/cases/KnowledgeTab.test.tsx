@@ -57,7 +57,7 @@ function stub(over: Record<string, Answer> = {}) {
   })
 }
 
-describe('Cases › Mycroft › Wiki', () => {
+describe('AIOps › Mycroft › Wiki', () => {
   beforeEach(() => stub())
   afterEach(() => {
     cleanup()
@@ -129,80 +129,118 @@ describe('Cases › Mycroft › Wiki', () => {
     await waitFor(() => expect(calls.some((c) => c.url === '/api/v1/knowledge/added/note%20Backups.md' && c.init?.method === 'DELETE')).toBe(true))
     await waitFor(() => expect(toast).toHaveBeenCalledWith('“Backups” removed: the agents no longer quote it.'))
   })
+
+  // MY-11: Add is in Settings › Knowledge only.
+  it('has no Add view: Sources’ Add… and the empty wiki lead to Settings › Knowledge’s Added in Mycroft card', async () => {
+    render(<KnowledgeTab route={route(['wiki', 'sources'])} />)
+    expect((await screen.findByTestId('wiki-added-add')).getAttribute('href')).toBe(adminHref('settings', ['knowledge', 'added']))
+    expect(screen.queryByTestId('knowledge-view-add')).toBeNull()
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).not.toContain('Add')
+    cleanup()
+    stub({ wiki: () => state({ added: [] }), pages: () => ({ pages: [], connected: true }) })
+    render(<KnowledgeTab route={route(['wiki', 'sources'])} />)
+    expect((await screen.findByTestId('wiki-added-empty')).querySelector('a')?.getAttribute('href')).toBe(adminHref('settings', ['knowledge', 'added']))
+    cleanup()
+    render(<KnowledgeTab route={route(['wiki'])} />)
+    expect((await screen.findByTestId('knowledge-empty-add')).getAttribute('href')).toBe(adminHref('settings', ['knowledge', 'added']))
+    cleanup()
+    // A Viewer is told who adds, with no link.
+    stub({ wiki: () => state({ added: [], mayAdd: false }) })
+    render(<KnowledgeTab route={route(['wiki', 'sources'])} />)
+    expect((await screen.findByTestId('wiki-added-empty')).textContent).toContain('Admins and SuperAdmins add')
+    expect(screen.queryByTestId('wiki-added-add')).toBeNull()
+  })
 })
 
-describe('Cases › Mycroft › Wiki › Add', () => {
+// A page's own actions (KN-23, KN-24): This is outdated…, Retire page…,
+// Make active again…, and the retired pages listed apart.
+describe('AIOps › Mycroft › Wiki › a page’s actions', () => {
   afterEach(() => {
     cleanup()
     vi.unstubAllGlobals()
   })
-  const posted = () => calls.filter((c) => c.url === '/api/v1/knowledge/add').map((c) => JSON.parse(String(c.init?.body)) as Record<string, unknown>)
+  const shop = () => ({ ...pages[0], body: '# Shop\n\nShop runs on db-3.' })
+  const body = (name: string) => calls.filter((c) => c.url.startsWith('/api/v1/knowledge/' + name) && c.init?.method === 'POST').map((c) => JSON.parse(String(c.init?.body)) as Record<string, unknown>)
 
-  it('adds a note', async () => {
-    stub({ add: (_u, init) => ({ kind: 'text', items: [{ id: 'note Shop.md', title: JSON.parse(String(init?.body)).title, bytes: 20 }], model: true, text: '“Shop” was added. Mycroft reads it now.' }) })
-    const toast = vi.fn()
-    render(<KnowledgeTab route={route(['wiki', 'add'])} onToast={toast} />)
-    const submit = await screen.findByTestId('wiki-add-submit')
-    expect(submit).toHaveProperty('disabled', true)
-    fireEvent.change(screen.getByTestId('wiki-add-title'), { target: { value: 'Shop' } })
-    fireEvent.change(screen.getByTestId('wiki-add-text'), { target: { value: 'The shop runs on db-3.' } })
-    fireEvent.click(submit)
-    expect((await screen.findByTestId('wiki-add-result')).textContent).toContain('Mycroft reads it now.')
-    expect(posted()).toEqual([{ kind: 'text', title: 'Shop', text: 'The shop runs on db-3.' }])
-    expect(toast).toHaveBeenCalledWith('“Shop” added to the wiki’s sources.')
-  })
-
-  it('reads a web address as deep and as many pages as asked, and says what it left out', async () => {
+  it('This is outdated… sends a correction of the page, and the page then says a correction waits', async () => {
+    let sent = false
     stub({
-      add: () => ({
-        kind: 'url',
-        items: [{ id: 'web a', title: 'Docs', url: 'https://docs.example.com/', bytes: 2048 }],
-        skipped: [{ url: 'https://docs.example.com/private', why: 'robots.txt asks crawlers not to read it' }],
-        model: true,
-        text: '1 pages were read and added. 1 were left out.',
-      }),
+      page: () => (sent ? { ...shop(), correction: { id: 'correction shop.md', path: pages[0]!.path, title: 'Application: shop', by: 'bob', name: 'Bob', at: '2026-11-09T10:00:00Z', state: 'drafted', run: 'r-1' } } : shop()),
+      outdated: () => {
+        sent = true
+        return { correction: {}, model: true, text: 'The correction was sent. Mycroft redrafts the page with it now; the redraft waits for review under Drafts.' }
+      },
     })
-    render(<KnowledgeTab route={route(['wiki', 'add'])} />)
-    fireEvent.click(await screen.findByTestId('wiki-add-kind-url'))
-    fireEvent.change(screen.getByTestId('wiki-add-url'), { target: { value: 'https://docs.example.com/' } })
-    fireEvent.change(screen.getByTestId('wiki-add-depth'), { target: { value: '2' } })
-    fireEvent.change(screen.getByTestId('wiki-add-pages'), { target: { value: '5' } })
-    fireEvent.click(screen.getByTestId('wiki-add-submit'))
-    expect((await screen.findByTestId('wiki-add-skipped')).textContent).toContain('robots.txt')
-    expect(posted()).toEqual([{ kind: 'url', url: 'https://docs.example.com/', depth: 2, pages: 5 }])
+    const toast = vi.fn()
+    render(<KnowledgeTab route={route(['wiki', 'pages', 'application', 'shop.md'])} onToast={toast} />)
+    fireEvent.click(await screen.findByTestId('wiki-page-outdated'))
+    expect(screen.getByTestId('wiki-outdated-hint').textContent).toContain('the redraft waits for review')
+    expect(screen.getByTestId('confirm-ok')).toHaveProperty('disabled', true)
+    fireEvent.change(screen.getByTestId('wiki-outdated-text'), { target: { value: 'The shop runs on db-4 since November.' } })
+    fireEvent.click(screen.getByTestId('confirm-ok'))
+    await waitFor(() => expect(body('outdated')).toEqual([{ path: 'pages/application/shop.md', text: 'The shop runs on db-4 since November.' }]))
+    expect((await screen.findByTestId('wiki-page-correction')).textContent).toMatch(/^Correction sent .+ by Bob; the redraft waits for review under Drafts\.$/)
+    expect(toast).toHaveBeenCalledWith(expect.stringContaining('Mycroft redrafts the page'))
+    expect(screen.queryByTestId('confirm')).toBeNull()
   })
 
-  it('adds documents one by one, and refuses a kind it does not read before sending', async () => {
-    stub({ add: (_u, init) => ({ kind: 'document', items: [{ id: JSON.parse(String(init?.body)).name, title: JSON.parse(String(init?.body)).name, bytes: 3 }], model: true, text: 'added.' }) })
-    render(<KnowledgeTab route={route(['wiki', 'add'])} />)
-    fireEvent.click(await screen.findByTestId('wiki-add-kind-document'))
-    const input = screen.getByTestId('wiki-add-file')
-    fireEvent.change(input, { target: { files: [new File(['x'], 'photo.png')] } })
-    expect(screen.getByTestId('wiki-add-files').textContent).toContain('not a kind the console reads')
-    expect(screen.getByTestId('wiki-add-submit')).toHaveProperty('disabled', true)
-    fireEvent.change(input, { target: { files: [new File(['a,b\n1,2'], 'hosts.csv'), new File(['# Runbook'], 'runbook.md')] } })
-    fireEvent.click(screen.getByTestId('wiki-add-submit'))
-    await waitFor(() => expect(posted().map((p) => p.name)).toEqual(['hosts.csv', 'runbook.md']))
-    expect(posted()[0]!.data).toBe(btoa('a,b\n1,2'))
-  })
-
-  it('says why nothing can be added: no store, or not an Admin', async () => {
-    stub({ wiki: () => state({ store: '' }) })
-    render(<KnowledgeTab route={route(['wiki', 'add'])} />)
-    expect((await screen.findByTestId('wiki-add-refused')).textContent).toContain('No wiki is kept yet')
-    expect(screen.getByTestId('wiki-add-title')).toHaveProperty('disabled', true)
+  it('says before sending that no page is written without a model; a reader has no actions', async () => {
+    stub({ wiki: () => state({ model: false }), page: shop })
+    render(<KnowledgeTab route={route(['wiki', 'pages', 'application', 'shop.md'])} />)
+    fireEvent.click(await screen.findByTestId('wiki-page-outdated'))
+    expect(screen.getByTestId('wiki-outdated-hint').textContent).toContain('no page is written')
     cleanup()
-    stub({ wiki: () => state({ mayAdd: false }) })
-    render(<KnowledgeTab route={route(['wiki', 'add'])} />)
-    expect((await screen.findByTestId('wiki-add-refused')).textContent).toBe('Admins and SuperAdmins add to the wiki.')
+    stub({ wiki: () => state({ mayAdd: false, mayReview: false }), page: shop })
+    render(<KnowledgeTab route={route(['wiki', 'pages', 'application', 'shop.md'])} />)
+    await screen.findByTestId('knowledge-page')
+    expect(screen.queryByTestId('wiki-page-actions')).toBeNull()
   })
 
-  it('shows the server’s refusal', async () => {
-    stub({ add: () => new Response(JSON.stringify({ error: 'nothing was read from https://x.example: it answered 404 Not Found' }), { status: 400 }) })
-    render(<KnowledgeTab route={route(['wiki', 'add'])} />)
-    fireEvent.click(await screen.findByTestId('wiki-add-kind-url'))
-    fireEvent.change(screen.getByTestId('wiki-add-url'), { target: { value: 'https://x.example' } })
-    fireEvent.click(screen.getByTestId('wiki-add-submit'))
-    expect((await screen.findByTestId('wiki-add-error')).textContent).toContain('404')
+  it('Retire page… asks with a reason; the request waiting is shown in place of the button', async () => {
+    let asked = false
+    stub({
+      page: () => (asked ? { ...shop(), request: { id: 'p-1', action: 'retire', path: pages[0]!.path, title: 'Application: shop', reason: 'The shop moved.', by: 'ann', name: 'Ann', at: '2026-11-09T10:00:00Z', state: 'waiting' } } : shop()),
+      requests: () => {
+        asked = true
+        return { id: 'p-1' }
+      },
+    })
+    render(<KnowledgeTab route={route(['wiki', 'pages', 'application', 'shop.md'])} />)
+    fireEvent.click(await screen.findByTestId('wiki-page-retire'))
+    expect(screen.getByTestId('confirm-ok')).toHaveProperty('disabled', true)
+    fireEvent.change(screen.getByTestId('wiki-request-reason'), { target: { value: 'The shop moved.' } })
+    fireEvent.click(screen.getByTestId('confirm-ok'))
+    await waitFor(() => expect(body('requests')).toEqual([{ action: 'retire', path: 'pages/application/shop.md', reason: 'The shop moved.' }]))
+    const waiting = await screen.findByTestId('wiki-page-request')
+    expect(waiting.textContent).toContain('Ann asked')
+    expect(waiting.textContent).toContain('to retire this page: “The shop moved.”')
+    expect(within(waiting).getByText('AIOps › Inbox').getAttribute('href')).toContain('#/cases/inbox/knowledge/p-1')
+    expect(screen.queryByTestId('wiki-page-retire')).toBeNull()
+  })
+
+  it('lists the retired pages under Retired; a retired page says why, who asked and approved, and offers Make active again only', async () => {
+    const retirement = { reason: 'The NAS was replaced.', askedBy: 'Bob', askedAt: '2026-11-08T09:00:00Z', approvedBy: 'Ann', at: '2026-11-08T10:00:00Z' }
+    const old = { path: 'pages/system/nas.md', title: 'NAS backups', kind: 'system', retired: retirement }
+    stub({ pages: () => ({ pages, retired: [old], connected: true }), page: () => ({ ...old, body: 'Kept on nas-1.' }) })
+    render(<KnowledgeTab route={route(['wiki', 'pages', 'system', 'nas.md'])} />)
+    expect((await screen.findAllByTestId('knowledge-page-link')).map((l) => l.textContent)).toEqual(['Application: shop', 'Backup policy'])
+    expect(screen.getByTestId('knowledge-pages-retired').textContent).toBe('Retired 1')
+    fireEvent.click(screen.getByTestId('knowledge-pages-retired'))
+    const link = await screen.findByTestId('knowledge-retired-link')
+    expect(link.textContent).toBe('NAS backups')
+    expect(screen.queryAllByTestId('knowledge-page-link')).toHaveLength(0)
+    const notice = await screen.findByTestId('wiki-page-retired')
+    expect(screen.getByTestId('wiki-page-retired-reason').textContent).toBe('The NAS was replaced.')
+    expect(notice.textContent).toContain('Asked by Bob')
+    expect(notice.textContent).toContain('approved by Ann')
+    expect(screen.getByTestId('knowledge-page-retired')).toBeTruthy()
+    expect(screen.queryByTestId('wiki-page-outdated')).toBeNull()
+    expect(screen.queryByTestId('wiki-page-retire')).toBeNull()
+    fireEvent.click(screen.getByTestId('wiki-page-activate'))
+    fireEvent.change(screen.getByTestId('wiki-request-reason'), { target: { value: 'The NAS is back.' } })
+    fireEvent.click(screen.getByTestId('confirm-ok'))
+    await waitFor(() => expect(body('requests')).toEqual([{ action: 'activate', path: 'pages/system/nas.md', reason: 'The NAS is back.' }]))
+    fireEvent.click(screen.getByTestId('knowledge-pages-active'))
+    expect(await screen.findAllByTestId('knowledge-page-link')).toHaveLength(2)
   })
 })

@@ -123,7 +123,7 @@ func (s *Service) Enqueue(ctx context.Context, id string, c Caller) error {
 	case s.analyzing(ctx)[n] || s.running(n):
 		return fmt.Errorf("%w: %s is being analysed", ErrState, caseID(n))
 	case s.o.Jobs == nil || !s.o.Jobs.On(ctx, jobs.KindCase, jobs.Event{Kind: jobs.EventCase, Cluster: v.Cluster}):
-		return fmt.Errorf("%w: turn the case analysis job on in Cases › Jobs (it must cover %s)", ErrOff, v.Cluster)
+		return fmt.Errorf("%w: turn the case analysis job on in AIOps › Jobs (it must cover %s)", ErrOff, v.Cluster)
 	}
 	_, err = s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Report) error {
 		if !r.Status.Open() {

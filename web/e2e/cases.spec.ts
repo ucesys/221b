@@ -34,13 +34,15 @@ test.afterAll(async ({ browser }) => {
   await page.close()
 })
 
-test('Cases is the third area, with its tabs and a count of what waits (CS-01, CS-02, CS-04)', async ({ page }) => {
+test('Cases is the third area, with its tabs, no count on the switch, and kept in Administration (CS-01, CS-02, CS-04, CF-88)', async ({ page }) => {
   const n = await file(page, `The intranet is slow today, case ${Date.now()}`)
   await page.goto('/#/alerts')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   const cases = page.getByTestId('area-cases')
   await expect(cases).toBeVisible()
-  await expect(cases.getByTestId('cases-count')).toHaveText(/^\d+$/)
+  // No count on the switch: the bell says what waits (CF-88).
+  await expect(cases.getByTestId('cases-count')).toHaveCount(0)
+  await expect(cases).toHaveText('AIOps')
   await cases.click()
   await expect(page).toHaveURL(/#\/cases\/inbox$/)
   await expect(cases).toHaveAttribute('aria-pressed', 'true')
@@ -59,9 +61,19 @@ test('Cases is the third area, with its tabs and a count of what waits (CS-01, C
   await expect(row).toHaveCount(0)
   await page.getByTestId('inbox-unassigned').click()
   await expect(row).toBeVisible()
+  // Administration keeps Cases selected, the area it was opened from (CF-88).
+  await page.getByTestId('admin-link').click()
+  await expect(page.getByTestId('admin-page')).toBeVisible()
+  await expect(cases).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('area-kubernetes')).toHaveAttribute('aria-pressed', 'false')
+  await expect(page.getByTestId('cases-nav')).toBeVisible()
   // Back to Kubernetes, where the cluster's tabs are.
   await page.getByTestId('area-kubernetes').click()
   await expect(page.locator('.rk-tab[data-tab=alerts]')).toBeVisible()
+  // And Administration keeps Kubernetes now.
+  await page.getByTestId('admin-link').click()
+  await expect(page.getByTestId('admin-page')).toBeVisible()
+  await expect(page.getByTestId('area-kubernetes')).toHaveAttribute('aria-pressed', 'true')
 })
 
 // A report triaged end to end, New Case and On behalf of are Cases now:

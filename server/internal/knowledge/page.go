@@ -74,6 +74,9 @@ type Page struct {
 	Stale bool `json:"stale,omitempty"`
 	// Version is the store's.
 	Version string `json:"version,omitempty"`
+	// Retired, when set, says the page is retired (KN-24): out of the
+	// index, and why.
+	Retired *Retirement `json:"retired,omitempty"`
 }
 
 type frontMatter struct {

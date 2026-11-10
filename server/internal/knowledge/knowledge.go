@@ -24,7 +24,9 @@ package knowledge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -35,6 +37,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/awsv4"
 	"github.com/ucesys/221b/server/internal/confluence"
+	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
@@ -87,9 +90,18 @@ const (
 	ActionReview  = "knowledge.review"
 	ActionPublish = "knowledge.publish"
 	ActionHook    = "knowledge.hook"
-	// ActionAdd is a note, web pages or a document added in Cases ›
+	// ActionAdd is a note, web pages or a document added in AIOps ›
 	// Mycroft (Phase 12, wave 5).
 	ActionAdd = "knowledge.add"
+	// ActionOutdated is a correction sent with This is outdated… (KN-23).
+	ActionOutdated = "knowledge.outdated"
+	// ActionRetireRequest is a request to retire a page or make it active
+	// again; ActionRetire and ActionActivate their approvals, and
+	// ActionRetireReject a rejection (KN-24).
+	ActionRetireRequest = "knowledge.retire.request"
+	ActionRetire        = "knowledge.retire"
+	ActionActivate      = "knowledge.activate"
+	ActionRetireReject  = "knowledge.retire.reject"
 )
 
 // Errors the API turns into answers.
@@ -103,7 +115,17 @@ var (
 	ErrNoStore = errors.New("choose where the wiki is kept first, in Settings › Knowledge")
 	// ErrBusy is a sync asked for while one runs.
 	ErrBusy = errors.New("a sync is running")
+	// ErrConflict is a request another came before (KN-24): one waits
+	// already, or someone decided it first.
+	ErrConflict = errors.New("someone came first")
 )
+
+// conflict is an ErrConflict that says only what came first.
+type conflict struct{ msg string }
+
+func (e conflict) Error() string              { return e.msg }
+func (conflict) Is(target error) bool         { return target == ErrConflict }
+func conflictf(format string, a ...any) error { return conflict{fmt.Sprintf(format, a...)} }
 
 func invalid(format string, a ...any) error { return wrapf(ErrInvalid, format, a...) }
 
@@ -112,6 +134,35 @@ func invalid(format string, a ...any) error { return wrapf(ErrInvalid, format, a
 // the agent's budget and audits the call.
 type Completer interface {
 	CompleteAs(ctx context.Context, agent string, who audit.Who, cluster, label, system, text string) (string, error)
+}
+
+// Completion is one of Mycroft's answers with what it took (KN-27): the
+// model, the tokens and cost, the most it was let write, and whether the
+// provider cut the answer there.
+type Completion struct {
+	Text      string
+	Model     string
+	In, Out   int
+	CostUSD   float64
+	MaxTokens int
+	Cut       bool
+}
+
+// MeasuredCompleter is a Completer that also says what an answer took
+// and whether it was cut at the output limit (KN-27): package sherlock's
+// CompleteMeasured, through cmd/221b. A Completer without it is asked
+// with CompleteAs, and a cut answer is known by its JSON alone.
+type MeasuredCompleter interface {
+	CompleteMeasured(ctx context.Context, agent string, who audit.Who, cluster, label, system, text string) (Completion, error)
+}
+
+// ask asks Mycroft one batch of a sync.
+func (s *Service) ask(ctx context.Context, who audit.Who, system, text string) (Completion, error) {
+	if m, ok := s.o.Model.(MeasuredCompleter); ok {
+		return m.CompleteMeasured(ctx, MycroftID, who, "local", "write the wiki", system, text)
+	}
+	t, err := s.o.Model.CompleteAs(ctx, MycroftID, who, "local", "write the wiki", system, text)
+	return Completion{Text: t}, err
 }
 
 // MycroftID is the agent that writes the wiki (package ai's Mycroft).
@@ -149,9 +200,13 @@ type Options struct {
 	// When it also lists the console's fleets (ConsoleFleets), the groups
 	// of hosts the documents name are proposed as fleets the console lacks.
 	Console Console
+	// Fixes are the console's active fixes (KN-33, KN-34); nil gives
+	// Mycroft none and leaves the source Fixes empty. SetFixes gives them
+	// later.
+	Fixes Fixes
 	// ReadNew reads a source at once, in the background, when it is added
 	// (Mycroft's first import, GS-11), so the inventory it describes waits
-	// in Cases › Inbox without waiting for the nightly sync.
+	// in AIOps › Inbox without waiting for the nightly sync.
 	ReadNew bool
 	// Publisher puts approved pages into Confluence; nil leaves them out.
 	Publisher *confluence.Publisher
@@ -185,6 +240,10 @@ type Service struct {
 
 	// writeMu serialises this process's writes to the ConfigMap.
 	writeMu sync.Mutex
+	// manifestMu serialises the writes of the manifest that must not
+	// lose a page's retirement (KN-24): a sync's, a removal's, a
+	// retirement's.
+	manifestMu sync.Mutex
 	// syncMu lets one sync run at a time; syncing says one runs.
 	syncMu sync.Mutex
 	// bg counts the first reads running in the background.
@@ -205,10 +264,27 @@ type Service struct {
 
 	// open makes a store from typed settings (tests).
 	open func(StoreSettings, Creds) (Store, error)
+	// dial connects a source's test to its address (tests; nil is a
+	// net.Dialer's, KN-26).
+	dial func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// covers are the known issues and the exceptions that keep a
+	// difference from being proposed, once SetCovers gives them (KN-31).
+	covers atomic.Pointer[Covers]
 
 	// pending are uploaded documents read but not yet given to Mycroft.
 	pendingMu sync.Mutex
 	pending   map[string]pendingDoc
+
+	// jobs are the console's jobs, once SetJobs gives them: each source
+	// is read by its Wiki sync job (KN-28). nil reads in the background,
+	// as before (tests, and a console without jobs).
+	jobs     atomic.Pointer[jobs.Service]
+	migrated atomic.Bool
+	kindsMu  sync.Mutex
+
+	// fixes are the console's fixes, from Options or SetFixes (KN-33).
+	fixes atomic.Pointer[Fixes]
 }
 
 // New builds the service; Start reads the local copy.
@@ -250,6 +326,7 @@ func New(o Options) *Service {
 	if o.WikiConfigMap != nil {
 		s.cmStore = NewConfigMapStore(o.WikiConfigMap, o.WikiBytes)
 	}
+	s.SetFixes(o.Fixes)
 	// Runs are numbered from the clock, so a restart does not reuse one.
 	s.runSeq.Store(o.Now().Unix() % 100000)
 	return s

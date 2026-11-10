@@ -1,4 +1,4 @@
-// The accepted exceptions (Phase 12, FX-03 to FX-11), listed in Cases ›
+// The accepted exceptions (Phase 12, FX-03 to FX-11), listed in AIOps ›
 // Mycroft. Since wave 6 an exception is made by closing an agent-found case
 // as an exception (api/casework.ts), and since build 14 by hand with New
 // exception; an inactive one (removed) may be made active again. Since
@@ -96,5 +96,5 @@ export const fetchCaseObjects = (cluster: string, q: string, limit = 20) => call
 /** Make active again (build 14): refused (409) while an active one covers the same cluster, object and rule. */
 export const reactivateException = (id: string) => call<AcceptedException>('/api/v1/cases/exceptions/' + enc(id) + '/reactivate', { method: 'POST' })
 
-/** Where an exception opens: Cases › Mycroft › Exceptions (MY-01). */
+/** Where an exception opens: AIOps › Mycroft › Exceptions (MY-01). */
 export const exceptionHref = (id: string) => `#/cases/mycroft/exceptions/${enc(id)}`

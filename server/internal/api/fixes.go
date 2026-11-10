@@ -8,7 +8,7 @@ import (
 
 // --- Fixes (Phase 12, wave 6g, CF-51) ---
 //
-// The fixes, served by package fixes under /api/v1/cases/fixes for Cases ›
+// The fixes, served by package fixes under /api/v1/cases/fixes for AIOps ›
 // Mycroft › Fixes. Who works the cases changes them, as the cases; who
 // reads the cases reads them.
 

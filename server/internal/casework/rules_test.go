@@ -75,7 +75,7 @@ func TestTheMergedListOfValidationRules(t *testing.T) {
 		total += len(k.Checks)
 	}
 	pvc, ok := ruleOf(v, "pvc.nearly-full")
-	if !ok || !pvc.BuiltIn || pvc.State != RuleActive || fmt.Sprint(pvc.Jobs) != "["+jobs.KindAudit+" "+jobs.KindAlert+"]" || len(v.Rules) >= total || !v.MayChange || len(v.Jobs) != 3 {
+	if !ok || !pvc.BuiltIn || pvc.State != RuleActive || fmt.Sprint(pvc.Jobs) != "["+jobs.KindAudit+" "+jobs.KindAlert+"]" || len(v.Rules) >= total || !v.MayChange || len(v.Jobs) != 4 {
 		t.Fatalf("the built-ins: %+v of %d", pvc, len(v.Rules))
 	}
 	if v.ClusterNames["prod"] != "Production" || v.ClusterNames["local"] != "local" {
@@ -127,6 +127,32 @@ func TestTheMergedListOfValidationRules(t *testing.T) {
 	}
 	if !rs.Known(jobs.Kind{ID: jobs.KindAlert}, "pod.extra") || rs.Known(auditKind, "pod.extra") {
 		t.Error("an added rule is its jobs'")
+	}
+}
+
+// The inventory's and the drift check's differences are validation rules
+// too (KN-31): listed with what they mean under the Drift check, built
+// in, and offered to no audit job, so an exception keyed by one stops a
+// proposal as it stops a finding.
+func TestTheInventoryRulesAreInTheCatalogueKN31(t *testing.T) {
+	w := setup(t)
+	v := w.rules(t)
+	for _, id := range []string{"inventory.host-missing", "inventory.host-unreachable", "inventory.address-differs", "inventory.host-unlisted", "inventory.fleet-missing"} {
+		r, ok := ruleOf(v, id)
+		if !ok || !r.BuiltIn || r.State != RuleActive || r.Says == "" || fmt.Sprint(r.Jobs) != "["+jobs.KindDrift+"]" {
+			t.Errorf("%s: %+v", id, r)
+		}
+		if w.svc.Rules().Meaning(id) != r.Says || jobs.RuleMeaning(id) == "" {
+			t.Errorf("%s has no meaning", id)
+		}
+		for _, k := range []string{jobs.KindAudit, jobs.KindAlert, jobs.KindDigest} {
+			if slices.Contains(offered(w, k), id) {
+				t.Errorf("%s is offered to %s", id, k)
+			}
+		}
+	}
+	if jobLabel(jobs.KindDrift) != "Drift check" {
+		t.Errorf("the drift check's label: %q", jobLabel(jobs.KindDrift))
 	}
 }
 

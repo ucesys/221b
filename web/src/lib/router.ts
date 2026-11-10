@@ -192,7 +192,7 @@ export function parseHash(hash: string): Route {
   // Roles and Permissions describe a cluster, so they take the cluster prefix; Users and Settings belong to the console.
   // Sessions and Audit log moved under Logs: their old links land there.
   // --- Cases (Phase 12, CS-01) ---
-  // Administration › Approvals moved to Cases › Inbox (CS-06): its old
+  // Administration › Approvals moved to AIOps › Inbox (CS-06): its old
   // link opens the Inbox on approvals.
   if (first === "admin" && segs[1] === "approvals") {
     const params = new URLSearchParams(query);
@@ -219,6 +219,19 @@ export function parseHash(hash: string): Route {
       params.set("show", "all");
       return { cluster, view: "cases", tab: FIRST_TAB, path: ["inbox"], params };
     }
+    // Add moved to Settings › Knowledge's Added in Mycroft card (MY-11):
+    // the Wiki's Add view's old addresses open it there.
+    if (
+      ((segs[1] === "mycroft" && segs[2] === "wiki") || segs[1] === "knowledge") &&
+      segs[segs[1] === "mycroft" ? 3 : 2] === "add"
+    )
+      return {
+        cluster: LOCAL,
+        view: "admin",
+        tab: FIRST_TAB,
+        path: ["settings", "knowledge", "added"],
+        params: new URLSearchParams(query),
+      };
     // The wiki's exceptions are Mycroft's tab of their own now:
     // #/cases/knowledge/exceptions/EX-3 opens #/cases/mycroft/exceptions/EX-3.
     if (segs[1] === "knowledge" && segs[2] === "exceptions")
@@ -230,6 +243,16 @@ export function parseHash(hash: string): Route {
         params: new URLSearchParams(query),
       };
     // --- end of the Mycroft tab.
+    // Validation rules moved from Mycroft to Jobs (CF-89):
+    // #/cases/mycroft/rules/<id>/<section> opens #/cases/jobs/rules/<id>/<section>.
+    if (segs[1] === "mycroft" && segs[2] === "rules")
+      return {
+        cluster,
+        view: "cases",
+        tab: FIRST_TAB,
+        path: ["jobs", ...segs.slice(2)],
+        params: new URLSearchParams(query),
+      };
     const to = moved[segs[1] ?? ""];
     if (to) {
       const params = new URLSearchParams(query);
@@ -365,7 +388,7 @@ export function clusterHref(
   );
 }
 
-/** The pages of the Administration area, in order (RB-41). Approvals moved to Cases › Inbox (CS-06). */
+/** The pages of the Administration area, in order (RB-41). Approvals moved to AIOps › Inbox (CS-06). */
 export type AdminPage =
   | "roles"
   | "permissions"

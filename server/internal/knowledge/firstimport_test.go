@@ -12,10 +12,10 @@ import (
 // fleetConsole is the console with its fleets.
 type fleetConsole struct {
 	*console
-	fleets []string
+	fleets []ConsoleFleet
 }
 
-func (c fleetConsole) Fleets(context.Context, string) ([]string, error) { return c.fleets, nil }
+func (c fleetConsole) Fleets(context.Context, string) ([]ConsoleFleet, error) { return c.fleets, nil }
 
 // Mycroft's first import (GS-11): a source just added is read at once,
 // and the hosts and groups of hosts it lists that the console lacks wait
@@ -25,7 +25,7 @@ func (c fleetConsole) Fleets(context.Context, string) ([]string, error) { return
 func TestTheFirstImportProposesTheInventory(t *testing.T) {
 	f := newFixture(t)
 	f.s.o.ReadNew = true
-	f.s.o.Console = fleetConsole{console: f.console, fleets: []string{"Web servers"}}
+	f.s.o.Console = fleetConsole{console: f.console, fleets: []ConsoleFleet{{Name: "Web servers", Members: []string{"web-1"}}}}
 	f.console.hosts = []ConsoleHost{{Cluster: "local", Name: "web-1", Address: "10.0.0.4", Kind: "host", Answering: true}}
 	f.model.reply = func(text string) string {
 		var key string
@@ -62,6 +62,10 @@ func TestTheFirstImportProposesTheInventory(t *testing.T) {
 	fl := p.Actions[2].Args
 	if fl["name"] != "Backup servers" || !slices.Equal(fl["labels"].([]string), []string{"role=backup"}) {
 		t.Fatalf("the fleet: %+v", fl)
+	}
+	// Its members count the hosts the same card adds (KN-30).
+	if !strings.Contains(p.Actions[2].Impact, "no node now; 2 with the hosts this card adds: backup-1, backup-2") {
+		t.Fatalf("the fleet's members: %s", p.Actions[2].Impact)
 	}
 	b, _ := json.Marshal(p)
 	for _, never := range []string{"read-token-123456", "password", "hostKey"} {

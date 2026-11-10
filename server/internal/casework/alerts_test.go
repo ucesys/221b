@@ -60,7 +60,7 @@ func TestTheCasesThatCoverAnAlertCF77(t *testing.T) {
 	node := mk("prod", "Node/n1")     // C-2, closed below
 	mk("local", "shop/Pod/web-1")     // C-3, another cluster
 	mk("prod", "shop/Deployment/web") // C-4, not what an alert is about
-	if _, err := w.svc.Close(ctx, node, CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "It came back."}, olivia); err != nil {
+	if _, err := w.svc.Close(ctx, node, CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "It came back."}, olivia); err != nil {
 		t.Fatal(err)
 	}
 	// The alert's run sends its finding to a new agent-found case, C-5.
@@ -161,7 +161,7 @@ func TestTheSafetyNetCF78(t *testing.T) {
 		t.Fatalf("not audited: %s", out)
 	}
 	// Not twice while it goes on, even once its case is closed.
-	if _, err := w.svc.Close(ctx, "C-2", CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "Watching it."}, olivia); err != nil {
+	if _, err := w.svc.Close(ctx, "C-2", CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "Watching it."}, olivia); err != nil {
 		t.Fatal(err)
 	}
 	look(30)

@@ -238,7 +238,9 @@ type Options struct {
 	OnAnswer func(Answered)
 	// Knowledge answers ask_knowledge from Mycroft's wiki and the
 	// sources' excerpts (Phase 12, ADR-96); nil answers NoKnowledge.
-	Knowledge func(ctx context.Context, query string, limit int) ([]KnowledgeHit, error)
+	// exceptions says the question's asker may be given the accepted
+	// exceptions (Question.Exceptions, KN-32).
+	Knowledge func(ctx context.Context, query string, limit int, exceptions bool) ([]KnowledgeHit, error)
 	// Keeper keeps the conversations that outlive a session: a case's
 	// (Phase 12, wave 6f, CF-47); nil keeps none.
 	Keeper Keeper
@@ -437,6 +439,12 @@ type Question struct {
 	// Context is what a kept conversation starts from, sent before its
 	// first question each time (a case, quoted as data: CF-47).
 	Context string
+	// Exceptions says ask_knowledge may give the accepted exceptions the
+	// question matches (KN-32): the asker sees the cases, who read the
+	// exceptions in Mycroft › Exceptions, or a job whose answers stay
+	// with them. Never for a reporter's question (the report triage);
+	// false gives none.
+	Exceptions bool
 
 	// agent is the agent resolved, for its prompt.
 	agent *Agent
@@ -544,14 +552,36 @@ func (s *Service) Complete(ctx context.Context, who audit.Who, cluster, label, s
 // provider, with its instructions before system, against its budget too.
 // "" is Sherlock.
 func (s *Service) CompleteAs(ctx context.Context, agent string, who audit.Who, cluster, label, system, text string) (string, error) {
+	c, err := s.CompleteMeasured(ctx, agent, who, cluster, label, system, text)
+	return c.Text, err
+}
+
+// Completion is an answer of CompleteMeasured, with what it took (KN-27):
+// the model, the tokens and cost, the most the model was let write, and
+// whether the answer was cut there (the provider stopped it at its
+// output limit).
+type Completion struct {
+	Text      string
+	Model     string
+	In, Out   int
+	CostUSD   float64
+	MaxTokens int
+	Cut       bool
+}
+
+// CompleteMeasured is CompleteAs saying what the answer took, and whether
+// it was cut at the output limit, for a caller that keeps its own count
+// (a Wiki sync job's run, KN-27). The spend is counted and audited as
+// CompleteAs does; a failed call says what it spent too.
+func (s *Service) CompleteMeasured(ctx context.Context, agent string, who audit.Who, cluster, label, system, text string) (Completion, error) {
 	q := Question{Text: label, Cluster: cluster, Who: who, Key: Key{Cluster: cluster}, Agent: agent}
 	a, err := s.agentFor(agent, q)
 	if err != nil {
-		return "", err
+		return Completion{}, err
 	}
 	if err := s.capsErr(ctx, &a); err != nil {
 		s.record(q, "", nil, Usage{}, 0, audit.OutcomeDenied, err.Error())
-		return "", err
+		return Completion{}, err
 	}
 	blocks := []Block{{Type: "text", Text: system}}
 	if s.opts.Agent != nil && strings.TrimSpace(a.Instructions) != "" {
@@ -569,9 +599,10 @@ func (s *Service) CompleteAs(ctx context.Context, agent string, who audit.Who, c
 	if a.ID != SherlockID {
 		agentNote = "agent " + a.ID
 	}
+	out := Completion{Model: a.Model, In: resp.Usage.Prompt(), Out: resp.Usage.OutputTokens, CostUSD: cost, MaxTokens: req.MaxTokens, Cut: resp.StopReason == "max_tokens"}
 	if err != nil {
 		s.record(q, a.Model, nil, resp.Usage, cost, audit.OutcomeFailed, strings.TrimPrefix(agentNote+"; "+err.Error(), "; "))
-		return "", errors.New(explain(err))
+		return out, errors.New(explain(err))
 	}
 	s.record(q, a.Model, nil, resp.Usage, cost, audit.OutcomeOK, agentNote)
 	var b strings.Builder
@@ -580,7 +611,8 @@ func (s *Service) CompleteAs(ctx context.Context, agent string, who audit.Who, c
 			b.WriteString(block.Text)
 		}
 	}
-	return b.String(), nil
+	out.Text = b.String()
+	return out, nil
 }
 
 // Stop stops the answer in progress, if any.

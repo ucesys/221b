@@ -21,6 +21,12 @@ type Item struct {
 	Version  string
 	Modified time.Time
 	URL      string
+	// By is who added an item in Mycroft, and Corrects the page a
+	// correction was written for (KN-23).
+	By, Corrects string
+	// Check is the agents' check the item is about, when it has one (a
+	// fix's, KN-34): the fixes of that check are given with it first.
+	Check string
 }
 
 // reader reads one source.
@@ -45,10 +51,19 @@ type Console interface {
 	Hosts(ctx context.Context) ([]ConsoleHost, error)
 }
 
-// ConsoleFleets is a Console that also lists the fleets of a cluster by
-// name, so Mycroft's first import proposes only the fleets it lacks.
+// ConsoleFleets is a Console that also lists the fleets of a cluster,
+// each with its members now, so Mycroft's first import proposes only the
+// fleets it lacks: not one of a name the console has, nor one whose
+// labels select the same nodes as a fleet it has (KN-30).
 type ConsoleFleets interface {
-	Fleets(ctx context.Context, cluster string) ([]string, error)
+	Fleets(ctx context.Context, cluster string) ([]ConsoleFleet, error)
+}
+
+// ConsoleFleet is a fleet the console has, with the names of the nodes and
+// hosts in it now.
+type ConsoleFleet struct {
+	Name    string
+	Members []string
 }
 
 // ConsoleItem is one record of the console, as text.
@@ -70,16 +85,27 @@ type ConsoleHost struct {
 	// Answering says it answered the console's last check: a node Ready,
 	// a host reached.
 	Answering bool `json:"answering"`
+	// Labels are its labels now: what a fleet's labels select (KN-30).
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
-// readerFor makes a source's reader.
+// readerFor makes a source's reader, with its saved credential.
 func (s *Service) readerFor(ctx context.Context, x Source) (reader, error) {
-	switch x.Kind {
-	case SourceConfluence:
-		c, err := s.creds(ctx, sourceKey(x.ID))
-		if err != nil {
+	var c Creds
+	if x.Kind == SourceConfluence || x.Kind == SourceGit || x.Kind == SourceS3 {
+		var err error
+		if c, err = s.creds(ctx, sourceKey(x.ID)); err != nil {
 			return nil, err
 		}
+	}
+	return s.readerWith(x, c)
+}
+
+// readerWith makes a source's reader with a credential: the saved one,
+// or one typed in its dialog and not saved (KN-26).
+func (s *Service) readerWith(x Source, c Creds) (reader, error) {
+	switch x.Kind {
+	case SourceConfluence:
 		if c.Token == "" {
 			return nil, invalid("no read token is saved for %s", x.Name)
 		}
@@ -93,11 +119,9 @@ func (s *Service) readerFor(ctx context.Context, x Source) (reader, error) {
 		}
 		return &confluenceReader{c: client, key: x.Space}, nil
 	case SourceGit:
-		c, err := s.creds(ctx, sourceKey(x.ID))
-		if err != nil {
-			return nil, err
-		}
 		return &gitReader{g: newRepo(repoDir(s.dir(), "source", x.URL, x.Branch), x.URL, x.Branch, x.Username, c.Token, x.CAPEM), dir: strings.Trim(x.Path, "/"), web: x.URL}, nil
+	case SourceS3:
+		return s.bucketReader(x, c)
 	case SourceUpload:
 		return &uploadReader{s: s, source: x.ID}, nil
 	case SourceConsole:
@@ -105,8 +129,10 @@ func (s *Service) readerFor(ctx context.Context, x Source) (reader, error) {
 			return nil, errors.New("the console's own records are not offered here")
 		}
 		return &consoleReader{c: s.o.Console}, nil
+	case SourceFixes:
+		return &fixesReader{s: s}, nil
 	}
-	return nil, invalid("a source is confluence, git, upload or console")
+	return nil, invalid("a source is confluence, git, s3, upload or console")
 }
 
 // confluenceReader reads a Confluence space's pages.
@@ -235,6 +261,8 @@ type pendingDoc struct {
 	// title and url, when set, are a web page's or a note's (MY-04):
 	// what its excerpt and the pages drawing on it name.
 	title, url string
+	// corrects is the page a correction is for (KN-23).
+	corrects string
 }
 
 // label is how the document is named: its title, or its file's name.
@@ -262,13 +290,13 @@ func (r *uploadReader) List(context.Context, time.Time) ([]Item, bool, error) {
 	var out []Item
 	for _, p := range r.s.pending {
 		if p.source == r.source {
-			out = append(out, Item{ID: p.name, Title: p.label(), Version: p.hash[:16], Modified: p.at, URL: p.url})
+			out = append(out, Item{ID: p.name, Title: p.label(), Version: p.hash[:16], Modified: p.at, URL: p.url, By: p.by, Corrects: p.corrects})
 			seen[p.name] = true
 		}
 	}
 	for _, st := range m.bySource(r.source) {
 		if !seen[st.ID] && !st.Gone {
-			out = append(out, Item{ID: st.ID, Title: st.Title, Version: st.Version, Modified: st.Modified, URL: st.URL})
+			out = append(out, Item{ID: st.ID, Title: st.Title, Version: st.Version, Modified: st.Modified, URL: st.URL, By: st.By, Corrects: st.Corrects})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

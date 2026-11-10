@@ -1,5 +1,5 @@
 // Saved fixes (Phase 12, wave 6g): a case closed as Fixed with Save fix
-// on (the default) becomes a fix in Cases › Mycroft › Fixes, which the
+// on (the default) becomes a fix in AIOps › Mycroft › Fixes, which the
 // case links ("Saved as F-n"); the fix is active, lists the case under
 // Seen in, and is edited there. The Fixes, Known issues and Exceptions
 // tables sort by their Updated column, newest first, either way.
@@ -33,7 +33,7 @@ test.afterAll(async ({ browser }) => {
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   if (fixId) await call(page, `/api/v1/cases/fixes/${fixId}`, null, 'DELETE')
   const list = (await (await page.request.get('/api/v1/cases/cases?open=1')).json()) as { cases: { id: string; title: string }[] }
-  for (const c of list.cases.filter((x) => x.title.startsWith('Fixes e2e'))) await call(page, `/api/v1/cases/cases/${c.id}/close`, { outcome: 'noFixNeeded', explanation: 'e2e: done' }, 'POST')
+  for (const c of list.cases.filter((x) => x.title.startsWith('Fixes e2e'))) await call(page, `/api/v1/cases/cases/${c.id}/close`, { outcome: 'noAction', explanation: 'e2e: done' }, 'POST')
   await page.close()
 })
 

@@ -53,6 +53,9 @@ type Options struct {
 	Lessons *lessons.Service
 	// Fixes keeps the fixes (Mycroft › Fixes, CF-50); nil saves none.
 	Fixes *fixes.Service
+	// Runbooks offers Mycroft the fixes proven in cases, from the
+	// housekeeping (KN-34); nil offers none.
+	Runbooks Runbooks
 	// Cards reads the proposed changes' state; nil shows their ids only.
 	Cards Cards
 	// Clusters lists the clusters a case may be on; nil takes any id.
@@ -144,6 +147,21 @@ func (s *Service) SetLessons(l *lessons.Service) {
 func (s *Service) SetFixes(f *fixes.Service) {
 	if f != nil {
 		s.o.Fixes = f
+	}
+}
+
+// Runbooks is Mycroft's side of a proven fix (KN-34): package
+// knowledge's OfferFixes, which offers it the fixes seen in enough cases
+// that no runbook draws on, and says which ("F-3, seen in 4 cases") and
+// whether its Wiki sync job started.
+type Runbooks interface {
+	OfferFixes(ctx context.Context) (offered []string, started bool, err error)
+}
+
+// SetRunbooks gives the service Mycroft's side of the proven fixes.
+func (s *Service) SetRunbooks(r Runbooks) {
+	if r != nil {
+		s.o.Runbooks = r
 	}
 }
 
@@ -370,8 +388,8 @@ type Brief struct {
 	ClosedAt *time.Time     `json:"closedAt,omitempty"`
 	// Verified is when a later run verified the fix (CF-06).
 	Verified *time.Time `json:"verified,omitempty"`
-	// SuggestException says the same check was closed as no fix needed
-	// three times on its cluster (CF-13).
+	// SuggestException says the same check was closed as no action
+	// needed three times on its cluster (CF-13, CF-90).
 	SuggestException bool `json:"suggestException,omitempty"`
 	AskedReporter    bool `json:"askedReporter,omitempty"`
 	// Verification is how the run after a change applied saw it
@@ -415,21 +433,22 @@ func lateOf(v issues.ReportView) *Late {
 	return &l
 }
 
-// noFixCounts counts the agent-found cases closed as no fix needed by
-// cluster and check, for "suggest an exception".
+// noFixCounts counts the agent-found cases closed as no action needed
+// (before CF-90, no fix needed) by cluster and check, for "suggest an
+// exception".
 type noFixCounts map[string]int
 
 func countNoFix(lines []issues.Line) noFixCounts {
 	out := noFixCounts{}
 	for _, l := range lines {
-		if l.AgentFound && l.Key != nil && l.Outcome == issues.OutcomeNoFixNeeded {
+		if l.AgentFound && l.Key != nil && l.Outcome == issues.OutcomeNoAction {
 			out[l.Key.Cluster+" "+l.Key.Check]++
 		}
 	}
 	return out
 }
 
-// suggest says an open agent-found case's check was closed as no fix
+// suggest says an open agent-found case's check was closed as no action
 // needed three times on its cluster (CF-13).
 func (c noFixCounts) suggest(r *issues.Report) bool {
 	return r.AgentFound() && r.Status.Open() && r.Key != nil && c[r.Key.Cluster+" "+r.Key.Check] >= 3

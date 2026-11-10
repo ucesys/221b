@@ -27,16 +27,16 @@ Done when the default provider has its credential and a default model, on **Admi
 Done when Sherlock is on for at least one cluster and the overall limits (a day's and a month's spend) are set, on **Administration › Settings › Agents**. Choices worth making here:
 
 - **Which model.** Sherlock and the Change planner do well on a balanced model; the Troubleshooter on the strongest reasoning model; the Auditor on a strong model with a long context, since it reads a whole cluster's review at once; the Summarizer on the cheapest. The Script reviewer runs on another provider than the Automation author, so its second opinion is independent.
-- **What acting on its own costs.** A job runs an agent with no person asking; every run is charged to the agent's own budget and to the job's daily budget, and stops when either is spent. Start small, read what the first runs cost on **Cases › Jobs › Runs**, then raise it.
+- **What acting on its own costs.** A job runs an agent with no person asking; every run is charged to the agent's own budget and to the job's daily budget, and stops when either is spent. Start small, read what the first runs cost on **AIOps › Jobs › Runs**, then raise it.
 - **Which role an agent on its own reads with.** An agent asked by a person reads as that person. On its own it reads as a reserved identity with the role a SuperAdmin picks in **Settings › Jobs**: Viewer unless a job needs to read more, and never a role that may change anything.
 
 ### 5. Knowledge
 
-Done when the wiki has a store (a git repository or an S3 bucket) and at least one source besides the console itself is connected: a Confluence space, a git repository of runbooks, or an uploaded document, on **Administration › Settings › Knowledge**. A source's token is typed into its own field. Mycroft reads a new source at once and proposes the hosts and the groups of hosts it lists, with their labels, as cards in **Cases › Inbox** (its *first import*); approved hosts are then paired in the Add host flow. That is why knowledge comes before fleets and hosts.
+Done when the wiki has a store (a git repository or an S3 bucket) and at least one source besides the console itself is connected: a Confluence space, a git repository of runbooks, or an uploaded document, on **Administration › Settings › Knowledge**. A source's token is typed into its own field. Mycroft reads a new source at once and proposes the hosts and the groups of hosts it lists, with their labels, as cards in **AIOps › Inbox** (its *first import*); approved hosts are then paired in the Add host flow. That is why knowledge comes before fleets and hosts.
 
 ### 6. Jobs and notifications
 
-Done when an agent's job is on (the nightly audit, an alert's diagnosis, the report triage) on **Cases › Jobs**, and a notification channel is on with its address set on **Administration › Settings › Watson**. A webhook's address is typed into its own field and kept in a Secret. Jobs only read; what they propose waits for a person in Cases.
+Done when an agent's job is on (the nightly audit, an alert's diagnosis, the report triage) on **AIOps › Jobs**, and a notification channel is on with its address set on **Administration › Settings › Watson**. A webhook's address is typed into its own field and kept in a Secret. Jobs only read; what they propose waits for a person in Cases.
 
 ### 7. Fleets
 

@@ -90,7 +90,7 @@ func TestFindingsAndLessonsAccess(t *testing.T) {
 	}
 }
 
-// Cases › Jobs: the super roles read the jobs; only a SuperAdmin changes
+// AIOps › Jobs: the super roles read the jobs; only a SuperAdmin changes
 // them, and the roles the settings add; the settings are a SuperAdmin's.
 func TestJobsAccess(t *testing.T) {
 	srv, _, _ := jobsSetup(t)

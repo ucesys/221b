@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ACTION_KINDS, approveProposal, commandOf, fetchProposal, inWords, ProposalConflict, recheckProposal, rejectProposal, secondText, stateText, stateTone, targetResource, type CardAction, type CardPlan, type Proposal } from '../../api/cards'
+import { approveProposal, caseOf, fetchProposal, inWords, ProposalConflict, recheckProposal, rejectProposal, secondText, startedBy, stateText, stateTone, type Proposal } from '../../api/cards'
 import { actorFull, actorText } from '../../api/actor'
 import { useCasesItem } from '../../lib/casesItem'
 import { fmtTs } from '../../lib/format'
@@ -8,11 +8,10 @@ import { Drawer } from '../Drawer'
 import { RunInWatson } from '../Sherlock'
 import { CaseLink, Resolves } from './ProposalLinks'
 import { ProposalCommands, ProposalTroubleshoot } from './ProposalTroubleshoot'
-import { ObjectLink, OpenFor } from './ObjectLink'
+import { OpenFor } from './ObjectLink'
+import { ProposalSteps } from './ProposalSteps'
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
-
-const RISK = { low: 'ok', medium: 'warn', high: 'err' } as const
 
 /** What the card says its condition is, in words. */
 function conditionText(p: Proposal): string {
@@ -22,56 +21,27 @@ function conditionText(p: Proposal): string {
   return ''
 }
 
-/** One action: the exact command, or the console change, with its impact and risk. */
-function ActionBlock({ a, plan, n, of, cluster }: { a: CardAction; plan?: CardPlan; n: number; of: number; cluster: string }) {
-  const cmd = commandOf(a)
+/**
+ * "Started by" in words (CF-92): "Mycroft, from sandbox-knowledge
+ * “nodes.md” (run-38, Rebuild now by Super Admin)", a job's "Nightly audit,
+ * run-12", a case's "Case analysis of C-7" with the case linked; what the
+ * source said as it came is its tooltip.
+ */
+function StartedBy({ p }: { p: Proposal }) {
+  const s = startedBy(p)
+  const at = s.link && caseOf(p) ? s.text.indexOf(s.link) : -1
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="proposal-action">
-      <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12.5 }}>
-        {of > 1 && <strong>{n}.</strong>}
-        <span>{ACTION_KINDS[a.kind] ?? a.kind}</span>
-        {a.risk && (
-          <span className="rk-tag" data-tone={RISK[a.risk]}>
-            risk: {a.risk}
-          </span>
-        )}
-      </span>
-      {cmd ? (
-        <pre className="rk-code" style={{ margin: 0, padding: '8px 12px', whiteSpace: 'pre-wrap' }}>
-          $ {cmd}
-        </pre>
+    <span title={s.title || undefined} data-testid="proposal-started-by">
+      {at < 0 ? (
+        s.text
       ) : (
-        <div style={{ fontWeight: 500 }}>{plan?.summary ?? a.kind}</div>
+        <>
+          {s.text.slice(0, at)}
+          <CaseLink p={p} />
+          {s.text.slice(at + s.link!.length)}
+        </>
       )}
-      {a.impact && <span style={{ color: 'var(--fg2)', fontSize: 12.5 }}>The agent says: {a.impact}</span>}
-      {plan?.targets && plan.targets.length > 0 && (
-        <span style={{ color: 'var(--fg2)', fontSize: 12.5, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'baseline' }} data-testid="proposal-targets">
-          Acts on:
-          {plan.targets.map((t, i) => {
-            // Each object linked to its page, with how long it has run (IB-06).
-            const r = targetResource(t)
-            return (
-              <span key={t}>
-                {r ? <ObjectLink cluster={cluster} resource={r} label={t} /> : t}
-                {i < plan.targets!.length - 1 && ','}
-              </span>
-            )
-          })}
-        </span>
-      )}
-      {plan?.impact && plan.impact.length > 0 && (
-        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: 'var(--fg2)' }}>
-          {plan.impact.map((l, i) => (
-            <li key={i}>{l}</li>
-          ))}
-        </ul>
-      )}
-      {plan?.unread && (
-        <span className="tb-err" style={{ fontSize: 12.5 }}>
-          Watson could not read its target when it was proposed: {plan.unread}
-        </span>
-      )}
-    </div>
+    </span>
   )
 }
 
@@ -103,7 +73,9 @@ export function decidedText(p: Pick<Proposal, 'state' | 'decidedBy' | 'approvals
  * was Approve, brings its commands to that Watson as one card, the
  * proposal's own, where Watson asks for the approval: that approval is the
  * proposal's. Check again and Reject… stay at the foot, and "Needs a
- * second approval" when one of two was given.
+ * second approval" when one of two was given. Since CF-92 each action is
+ * one line (ProposalSteps.tsx), under "What it changes in the console" or
+ * "What Watson will run" by its kind, and "Started by" reads in words.
  */
 export function ProposalDrawer({ id, initial, onClose, onDecided, onToast }: { id: string; initial?: Proposal; onClose: () => void; onDecided?: (p: Proposal) => void; onToast?: (msg: string) => void }) {
   const [p, setP] = useState<Proposal | null>(initial ?? null)
@@ -265,14 +237,7 @@ export function ProposalDrawer({ id, initial, onClose, onDecided, onToast }: { i
         <dl className="rk-kv">
           <dt>Started by</dt>
           <dd>
-            {p.source.label || p.source.kind}
-            {p.source.setBy && p.source.kind !== 'chat' && ` · trigger set by ${p.source.setBy}`}
-            {p.source.kind === 'case' && (
-              <>
-                {' · '}
-                <CaseLink p={p} />
-              </>
-            )}
+            <StartedBy p={p} />
           </dd>
           <dt>Resolves</dt>
           <dd data-testid="proposal-resolves">
@@ -319,12 +284,8 @@ export function ProposalDrawer({ id, initial, onClose, onDecided, onToast }: { i
             )}
           </dd>
         </dl>
-        <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }} aria-label="What Watson will run">
-          <h3 className="rk-h">{open ? 'What Watson will run' : 'What Watson was to run'}</h3>
-          {p.actions.map((a, i) => (
-            <ActionBlock key={i} a={a} plan={p.plans[i]} n={i + 1} of={p.actions.length} cluster={p.cluster} />
-          ))}
-        </section>
+        {/* One line per step, under the heading its kind of step takes (CF-92). */}
+        <ProposalSteps actions={p.actions} plans={p.plans} cluster={p.cluster} open={open} />
         {open && (
           <div className="rk-callout" style={{ flexDirection: 'column', gap: 4, background: 'var(--surface2)' }} data-testid="proposal-checks">
             <strong>Checked again when you approve it in Watson</strong>
@@ -336,6 +297,12 @@ export function ProposalDrawer({ id, initial, onClose, onDecided, onToast }: { i
                 {p.recheck.ok ? `Checked ${fmtTs(p.recheck.at)}: it holds.` : `Checked ${fmtTs(p.recheck.at)}: ${p.recheck.why}`}
               </span>
             )}
+            {p.recheck?.ok &&
+              p.recheck.warnings?.map((w) => (
+                <span key={w} style={{ fontSize: 12.5, color: 'var(--warn)' }} data-testid="proposal-recheck-warning">
+                  {w}
+                </span>
+              ))}
           </div>
         )}
         <ProposalCommands p={p} />

@@ -10,11 +10,11 @@ import { fetchApprovals, type Approvals } from '../../api/automation'
 import { CallError } from '../../api/call'
 import { fetchProposals, type Proposals } from '../../api/cards'
 import { fetchCases, type CasesView } from '../../api/casework'
-import { fetchConflicts, fetchDrafts, type ConfluenceConflict, type DraftRun } from '../../api/knowledge'
+import { fetchConflicts, fetchDrafts, fetchPageRequests, type ConfluenceConflict, type DraftRun, type PageRequest } from '../../api/knowledge'
 import { fetchSuggestions, type Suggestion } from '../../api/rules'
 import { INBOX_KINDS, knownPending, useIssueMe, useShared, type CasesAccess, type InboxKind } from '../../lib/cases'
 import { useAllKnown } from './count'
-import { approvalRow, caseRow, conflictRow, draftRunRow, knownRow, pendingByKind, proposalRow, suggestionRow, type InboxCase, type InboxRow, type RowContext } from './inboxRows'
+import { approvalRow, caseRow, conflictRow, draftRunRow, knownRow, pageRequestRow, pendingByKind, proposalRow, suggestionRow, type InboxCase, type InboxRow, type RowContext } from './inboxRows'
 
 /**
  * Who sees which kind (IN-02): cases to anyone with a case to work or
@@ -60,9 +60,14 @@ const loadProposals = (background: boolean) => fetchProposals({}, background).ca
 export const INBOX_APPROVALS = 'cases.approvals'
 const loadApprovals = (background: boolean) => fetchApprovals(background).catch(quiet<Approvals>({ items: [] }))
 
-type Knowledge = { runs: DraftRun[]; conflicts: ConfluenceConflict[] }
+/** The wiki's rows: Mycroft's runs, Confluence edits, and requests to retire a page or make it active again (KN-24). */
+type Knowledge = { runs: DraftRun[]; conflicts: ConfluenceConflict[]; requests: PageRequest[] }
 const loadKnowledge = (all: boolean) => () =>
-  Promise.all([fetchDrafts(all).then((r) => r.runs, quiet<DraftRun[]>([])), fetchConflicts().then((r) => r.conflicts, quiet<ConfluenceConflict[]>([]))]).then(([runs, conflicts]): Knowledge => ({ runs, conflicts }))
+  Promise.all([
+    fetchDrafts(all).then((r) => r.runs, quiet<DraftRun[]>([])),
+    fetchConflicts().then((r) => r.conflicts, quiet<ConfluenceConflict[]>([])),
+    fetchPageRequests(all).then((r) => r.requests ?? [], quiet<PageRequest[]>([])),
+  ]).then(([runs, conflicts, requests]): Knowledge => ({ runs, conflicts, requests }))
 export const INBOX_RULES = 'cases.inbox.rules'
 const loadSuggestions = (background: boolean) => fetchSuggestions(background).catch(quiet<{ suggestions: Suggestion[] }>({ suggestions: [] }))
 export const INBOX_KNOWLEDGE_OPEN = 'cases.inbox.knowledge.open'
@@ -118,6 +123,7 @@ export function useInbox(access: CasesAccess, all = false, fresh = false): Inbox
     for (const k of knownPending(known.value ?? [], ctx.person)) out.push(knownRow(k, ctx))
     for (const r of knowledge.value?.runs ?? []) out.push(draftRunRow(r))
     for (const c of knowledge.value?.conflicts ?? []) out.push(conflictRow(c))
+    for (const r of knowledge.value?.requests ?? []) out.push(pageRequestRow(r))
     for (const s of rules.value?.suggestions ?? []) out.push(suggestionRow(s))
     // Each row once: a source read again may overlap another's last answer.
     const seen = new Set<string>()

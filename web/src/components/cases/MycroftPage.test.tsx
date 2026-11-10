@@ -41,10 +41,17 @@ const SUBS: [MycroftSub, string, string, string | null, string | null][] = [
   ['known', 'cases-known', 'known-show-open', 'known-new', 'known-table'],
   ['exceptions', 'knowledge-exceptions', 'exceptions-show-active', 'exceptions-new', 'exceptions-table'],
   ['fixes', 'mycroft-fixes', 'fixes-show-active', null, 'fixes-table'],
-  ['rules', 'mycroft-rules', 'rules-show-active', 'rule-add', 'rules-table'],
 ]
 
-describe('Cases › Mycroft: one column and one page layout for every sub-tab (CF-55)', () => {
+// Each sub-tab's intro, in the owner's words (CF-55).
+const LEADS: [MycroftSub, string, string][] = [
+  ['wiki', 'knowledge-tab', 'Mycroft’s notes on how your system works: how-tos, runbooks and good practices, written from your documents or public sources. Agents use only approved pages.'],
+  ['known', 'cases-known', 'Known problems. A case can be closed as a Known issue. Agents will keep checking whether the problem still happens but will stop reporting on it.'],
+  ['exceptions', 'knowledge-exceptions', 'Issues that have been accepted as-is. While an exception is active, agents stop creating cases for that object. Closing a case as an exception will create a new exception.'],
+  ['fixes', 'mycroft-fixes', 'Actions that fixed a problem before. Created when a case is closed as Fixed. Agents will reuse it when the same problem comes back. Duplicates are cleaned up. A fix that contradicts another one waits for approval.'],
+]
+
+describe('AIOps › Mycroft: one column and one page layout for every sub-tab (CF-55)', () => {
   beforeAll(() => {
     Element.prototype.scrollIntoView = () => {}
   })
@@ -70,7 +77,7 @@ describe('Cases › Mycroft: one column and one page layout for every sub-tab (C
     if (action) await waitFor(() => expect(bar.lastElementChild!.getAttribute('data-testid')).toBe(action))
     else expect(bar.lastElementChild!.classList.contains('cs-grow')).toBe(true)
     if (!table) return
-    // The same card and table in all four; empty, it keeps its header and says so in one row.
+    // The same card and table in all three; empty, it keeps its header and says so in one row.
     const t = await within(el).findByTestId(table)
     expect(t.classList.contains('tb-table')).toBe(true)
     expect(t.style.minWidth).toBe(`${MYCROFT_TABLE_MIN}px`)
@@ -80,11 +87,15 @@ describe('Cases › Mycroft: one column and one page layout for every sub-tab (C
     expect(t.querySelector('tbody td')!.getAttribute('colspan')).toBeTruthy()
   })
 
-  it('keeps the rules’ job select and search between the filter and Add rule', async () => {
-    render(<MycroftTab route={parseHash('#/cases/mycroft/rules')} access={access} />)
-    const bar = within(await screen.findByTestId('mycroft-rules')).getByTestId('mycroft-toolbar')
-    await waitFor(() => expect(within(bar).getByTestId('rule-add')).toBeTruthy())
-    const order = [...bar.querySelectorAll('[data-testid]')].map((x) => x.getAttribute('data-testid')).filter((x) => ['rules-show', 'rules-job', 'rules-search', 'rule-add'].includes(x!))
-    expect(order).toEqual(['rules-show', 'rules-job', 'rules-search', 'rule-add'])
+  it.each(LEADS)('%s says plainly what it holds', async (sub, page, lead) => {
+    render(<MycroftTab route={parseHash(`#/cases/mycroft/${sub}`)} access={access} />)
+    const el = await screen.findByTestId(page)
+    expect(el.querySelector('.cs-lead')!.textContent).toBe(lead)
+  })
+
+  it('has no Validation rules, which are in Jobs since CF-89', () => {
+    render(<MycroftTab route={parseHash('#/cases/mycroft/wiki')} access={access} />)
+    expect(screen.getAllByRole('button').map((b) => b.getAttribute('data-testid')).filter((t) => t?.startsWith('mycroft-sub-'))).toEqual(['mycroft-sub-wiki', 'mycroft-sub-known', 'mycroft-sub-exceptions', 'mycroft-sub-fixes'])
+    expect(screen.queryByTestId('rules-page')).toBeNull()
   })
 })

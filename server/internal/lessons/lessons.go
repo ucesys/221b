@@ -344,7 +344,7 @@ func (s *Service) fitExceptions(r *exceptionsRecord) ([]byte, error) {
 			return b, nil
 		}
 		if !drop() {
-			return nil, fmt.Errorf("%w: the accepted exceptions fill their record; remove some in Cases › Mycroft › Exceptions first", ErrFull)
+			return nil, fmt.Errorf("%w: the accepted exceptions fill their record; remove some in AIOps › Mycroft › Exceptions first", ErrFull)
 		}
 	}
 }
@@ -467,7 +467,7 @@ func (s *Service) AddException(ctx context.Context, in NewException, by Person) 
 	s.record(audit.Event{Action: ActionExceptionAdd, Who: by.who(), Cluster: e.Cluster, Target: e.ID, From: by.From, Outcome: audit.OutcomeOK,
 		Detail: fmt.Sprintf("exception %s %s (%s) on %s, check %s, %s: %s", e.ID, of(e), e.Title, orNone(e.Resource), e.Check, until, e.Reason)})
 	// --- Mycroft tab (Phase 12, wave 5, MY-09) ---
-	// An exception is the console's record only, listed in Cases ›
+	// An exception is the console's record only, listed in AIOps ›
 	// Mycroft › Exceptions: no wiki page is written for it any more; the
 	// agents are told the active ones in their task (FX-04).
 	return e, nil
@@ -539,6 +539,23 @@ func (s *Service) Active(ctx context.Context, cluster string) []Exception {
 	var out []Exception
 	for _, e := range cached {
 		if e.Cluster == cluster && e.Active(now) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// ActiveAll are the exceptions that apply now on every cluster, for
+// ask_knowledge (KN-32). A failure to read them leaves none.
+func (s *Service) ActiveAll(ctx context.Context) []Exception {
+	now := s.o.Now()
+	cached, err := s.cached(ctx, now)
+	if err != nil {
+		return nil
+	}
+	var out []Exception
+	for _, e := range cached {
+		if e.Active(now) {
 			out = append(out, e)
 		}
 	}

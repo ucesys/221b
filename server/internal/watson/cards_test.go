@@ -82,7 +82,7 @@ func TestADurableCardsChangeIsFingerprintedAndRunsAsItsApprover(t *testing.T) {
 	// A card that something else took the place of goes, and the hook
 	// hears of it.
 	pending := svc.Submit(ctx, cl, alice(), "kubectl uncordon worker-002", "Sherlock", "", false)[0]
-	svc.Supersede(pending.ID, "Approved as proposal c3 in Cases › Inbox.")
+	svc.Supersede(pending.ID, "Approved as proposal c3 in AIOps › Inbox.")
 	if got := wait(t, svc, pending.ID, func(i Item) bool { return finished(i.Status) }); got.Status != StatusDiscarded {
 		t.Fatalf("superseded: %s", got.Status)
 	}

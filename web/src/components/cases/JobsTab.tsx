@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { addJob, budgetText, describeJobSchedule, fetchJobRuns, fetchJobs, removeJob, runJobNow, updateJob, usd, type Job, type JobChange, type JobEvent, type JobsView, type JobWhen, type RunBrief } from '../../api/jobs'
+import { addJob, budgetText, describeJobSchedule, fetchJobRuns, fetchJobs, rebuildJobNow, removeJob, runJobNow, updateJob, usd, type Job, type JobChange, type JobEvent, type JobsView, type JobWhen, type RunBrief } from '../../api/jobs'
 import { hideAmounts, useShowCosts } from '../../lib/costs'
 import { fmtTs } from '../../lib/format'
+import { ConfirmDialog } from '../ConfirmDialog'
 import { adminHref, navigate, type Route } from '../../lib/router'
 import { Drawer } from '../Drawer'
 import { SchedulePicker, type Schedule } from '../SchedulePicker'
@@ -16,12 +17,17 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 const EVENT_LABEL: Record<JobEvent, string> = {
   alert: 'When an alert fires',
   report: 'When a report arrives',
-  source: 'When a source changes',
+  source: 'When its source changes',
   case: 'When a case is opened',
 }
 
+/** A source's Wiki sync job (KN-28): it reads its source, on no cluster. */
+const isWikiSync = (j: Pick<Job, 'kind'>) => j.kind.startsWith('wiki-sync-')
+
 /** The clusters a job covers, in words. */
 function clustersText(j: Job, names: Map<string, string>): string {
+  if (isWikiSync(j)) return 'reads its knowledge source'
+
   if (!j.clusters?.length) return 'all clusters'
   return j.clusters.map((c) => names.get(c) ?? c).join(', ')
 }
@@ -88,7 +94,7 @@ function LastCell({ j }: { j: Job }) {
 }
 
 /**
- * Cases › Jobs › Schedule (Phase 12, JB-15, FX-13): every job that starts an agent with
+ * AIOps › Jobs › Schedule (Phase 12, JB-15, FX-13): every job that starts an agent with
  * nobody at the screen, and the scheduled backup. Each shows its agent,
  * when it runs in plain words, its budget, its last and next run and its
  * state; one opens in a drawer (#/cases/jobs/<id>) with Run now, Pause,
@@ -98,6 +104,7 @@ export function JobsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
   const open = pathId(route.path, 'jobs')
   const costs = useShowCosts()
   const [view, setView] = useState<JobsView | null>(null)
+  const saved = (j: Job) => setView((v) => (v ? { ...v, jobs: v.jobs.map((x) => (x.id === j.id ? j : x)) } : v))
   const [error, setError] = useState('')
   const load = useCallback((background = false) => {
     fetchJobs(background).then(
@@ -175,9 +182,9 @@ export function JobsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
         </div>
       )}
       {open && view && (
-        <Drawer label="Job" kicker={job ? `${job.agentName ?? 'No agent'} · job` : 'Job'} title={job?.label ?? open} facts={job?.setBy ? `Set by ${job.setBy}${job.setAt ? `, ${fmtTs(job.setAt)}` : ''}` : job ? 'Not set yet' : undefined} onClose={() => navigate(scheduleHref)} width={820} copy={false} testId="job-drawer">
+        <Drawer label="Job" kicker={job ? `${job.agentName ?? 'No agent'} · job` : 'Job'} title={job?.label ?? open} facts={job ? <span data-testid="job-drawer-state">{stateLine(job)}</span> : undefined} footer={job && view.mayEdit ? <JobActions key={job.id} job={job} onSaved={saved} onToast={onToast} /> : undefined} onClose={() => navigate(scheduleHref)} width={820} copy={false} testId="job-drawer">
           {job ? (
-            <JobPanel key={job.id + (job.setAt ?? '')} job={job} view={view} onSaved={(j) => setView((v) => (v ? { ...v, jobs: v.jobs.map((x) => (x.id === j.id ? j : x)) } : v))} onRemoved={() => load()} onAdded={(j) => (load(), navigate(jobHref(j.id)))} onToast={onToast} />
+            <JobPanel key={job.id + (job.setAt ?? '')} job={job} view={view} onSaved={saved} onRemoved={() => load()} onAdded={(j) => (load(), navigate(jobHref(j.id)))} onToast={onToast} />
           ) : (
             <p className="rk-fhint">There is no job “{open}”.</p>
           )}
@@ -248,6 +255,80 @@ function changeOf(d: Draft, j: Job): JobChange {
   return c
 }
 
+/** The header's line: whether the job runs, and when. */
+function stateLine(j: Job): string {
+  const state = j.running ? 'Running' : j.on ? 'On' : 'Off'
+  return j.whenText ? `${state} · ${j.whenText}` : state
+}
+
+/**
+ * The drawer's footer: turn the job on or pause it on the left; the runs a
+ * person starts by hand on the right, Run now and, for a Wiki sync,
+ * Rebuild now… (KN-29). Always in view while the settings or runs scroll.
+ */
+function JobActions({ job, onSaved, onToast }: { job: Job; onSaved: (j: Job) => void; onToast?: (msg: string) => void }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [rebuilding, setRebuilding] = useState(false)
+  const act = async (what: string, f: () => Promise<unknown>) => {
+    setBusy(true)
+    setError('')
+    try {
+      await f()
+      onToast?.(what)
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const setOn = (on: boolean) =>
+    act(on ? `${job.label} resumed.` : `${job.label} paused.`, async () => {
+      onSaved(await updateJob(job.id, { on }))
+    })
+  const runNow = () =>
+    act(`${job.label} started.`, async () => {
+      const r = await runJobNow(job.id)
+      if (r.id) onSaved({ ...job, running: true, last: r })
+    })
+  const rebuildNow = () =>
+    act(`${job.label}: rebuilding.`, async () => {
+      const r = await rebuildJobNow(job.id)
+      setRebuilding(false)
+      if (r.id) onSaved({ ...job, running: true, last: r })
+    })
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, width: '100%' }} data-testid="job-actions">
+      <button className="rk-btn" disabled={busy || (!!job.external && !job.external.ready)} onClick={() => void setOn(!job.on)} data-testid="job-toggle">
+        {job.on ? 'Pause' : job.external ? 'Resume' : 'Turn on'}
+      </button>
+      {error && (
+        <span className="rk-t" data-tone="err" style={{ fontSize: 12.5 }} data-testid="job-action-error">
+          {error}
+        </span>
+      )}
+      <span style={{ flex: '1 1 auto' }} />
+      {job.manual && (
+        <button className="rk-btn" disabled={busy || job.running} onClick={() => void runNow()} data-testid="job-run-now">
+          Run now
+        </button>
+      )}
+      {job.manual && job.rebuild && (
+        <button className="rk-btn" disabled={busy || job.running} onClick={() => setRebuilding(true)} title="Gives Mycroft every item again, unchanged ones too, and redrafts the pages from all of them" data-testid="job-rebuild-now">
+          Rebuild now…
+        </button>
+      )}
+      {rebuilding && (
+        <ConfirmDialog title={`Rebuild ${job.label}?`} confirm="Rebuild now" busy={busy} onCancel={() => setRebuilding(false)} onConfirm={() => void rebuildNow()}>
+          <p style={{ margin: 0 }} data-testid="job-rebuild-text">
+            Mycroft gets every item of this source again, unchanged ones too, and redrafts the pages from them. Nothing is deleted; the drafts wait for review in AIOps › Inbox. It costs as much as reading the source the first time.
+          </p>
+        </ConfirmDialog>
+      )}
+    </div>
+  )
+}
+
 /** The open job: its actions, its settings, its runs. */
 function JobPanel({ job, view, onSaved, onRemoved, onAdded, onToast }: { job: Job; view: JobsView; onSaved: (j: Job) => void; onRemoved: () => void; onAdded: (j: Job) => void; onToast?: (msg: string) => void }) {
   const [tab, setTab] = useState<'settings' | 'history'>('settings')
@@ -270,15 +351,6 @@ function JobPanel({ job, view, onSaved, onRemoved, onAdded, onToast }: { job: Jo
       setBusy(false)
     }
   }
-  const setOn = (on: boolean) =>
-    act(on ? `${job.label} resumed.` : `${job.label} paused.`, async () => {
-      onSaved(await updateJob(job.id, { on }))
-    })
-  const runNow = () =>
-    act(`${job.label} started.`, async () => {
-      const r = await runJobNow(job.id)
-      if (r.id) onSaved({ ...job, running: true, last: r })
-    })
   const save = () =>
     act('Saved.', async () => {
       const j = await updateJob(job.id, changeOf(draft, job))
@@ -299,19 +371,6 @@ function JobPanel({ job, view, onSaved, onRemoved, onAdded, onToast }: { job: Jo
   const toggleEvent = (e: JobEvent, on: boolean) => set({ events: on ? [e] : draft.events.filter((x) => x !== e) })
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }} data-testid="job-panel">
-      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
-        <span style={{ flex: '1 1 auto', fontSize: 12.5, color: 'var(--fg2)' }}>{job.does}</span>
-        {may && job.manual && (
-          <button className="rk-btn" disabled={busy || job.running} onClick={() => void runNow()} data-testid="job-run-now">
-            Run now
-          </button>
-        )}
-        {may && (
-          <button className="rk-btn" disabled={busy || (!!job.external && !job.external.ready)} onClick={() => void setOn(!job.on)} data-testid="job-toggle">
-            {job.on ? 'Pause' : job.external ? 'Resume' : 'Turn on'}
-          </button>
-        )}
-      </div>
       {job.unusable && (
         <p className="rk-callout" style={{ margin: 0, fontSize: 12.5 }} data-testid="job-unusable">
           {job.unusable}
@@ -328,13 +387,18 @@ function JobPanel({ job, view, onSaved, onRemoved, onAdded, onToast }: { job: Jo
         </p>
       )}
       {!job.external && (
-        <div className="rk-tabs" role="tablist" style={{ display: 'flex', gap: 18 }}>
+        <div className="rk-seg" role="tablist" aria-label="Job" style={{ alignSelf: 'flex-start' }}>
           {(['settings', 'history'] as const).map((t) => (
-            <button key={t} role="tab" aria-selected={tab === t} className="rk-btn" data-on={tab === t} onClick={() => setTab(t)} data-testid={`job-tab-${t}`}>
+            <button key={t} type="button" role="tab" aria-selected={tab === t} aria-pressed={tab === t} onClick={() => setTab(t)} data-testid={`job-tab-${t}`}>
               {t === 'settings' ? 'Settings' : 'Runs'}
             </button>
           ))}
         </div>
+      )}
+      {(job.external || tab === 'settings') && (
+        <span className="rk-fhint" data-testid="job-set-by">
+          {job.setBy ? `Set by ${job.setBy}${job.setAt ? `, ${fmtTs(job.setAt)}` : ''}` : 'Not changed since it was made.'}
+        </span>
       )}
       {job.external ? (
         <ExternalPanel job={job} />
@@ -380,7 +444,7 @@ function JobPanel({ job, view, onSaved, onRemoved, onAdded, onToast }: { job: Jo
               </div>
             ))}
           </div>
-          {job.kind !== 'report-triage' && (
+          {job.kind !== 'report-triage' && !isWikiSync(job) && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <span style={label}>Clusters</span>
               <label className="rk-tcheck" style={{ color: 'var(--fg)' }}>

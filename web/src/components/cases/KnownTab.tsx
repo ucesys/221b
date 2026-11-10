@@ -1,4 +1,4 @@
-// Cases › Mycroft › Known issues (CS-13, CS-14; wave 6): the shared
+// AIOps › Mycroft › Known issues (CS-13, CS-14; wave 6): the shared
 // answers to repeat problems. Operators list them open, resolved or
 // proposed, and write them in a drawer: title, symptoms in users' words,
 // services, status, workaround, expected fix, owner, the dated updates,
@@ -71,7 +71,7 @@ export function KnownTab({ route, access, onToast }: { route: Route; access: Cas
   return (
     <MycroftPage
       testId="cases-known"
-      lead="The problems the operators know about: a case closed as one links it, its reporters are told its status, workaround and expected fix as written here, and the agents keep checking it quietly."
+      lead="Known problems. A case can be closed as a Known issue. Agents will keep checking whether the problem still happens but will stop reporting on it."
       filter={
         <div className="rk-seg" role="group" aria-label="Show">
           {(

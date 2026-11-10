@@ -1,5 +1,5 @@
 // The jobs that start an agent on their own, their runs and findings
-// (Phase 12, JB-15 to JB-18, FX-01 to FX-12): Cases › Jobs › Schedule and
+// (Phase 12, JB-15 to JB-18, FX-01 to FX-12): AIOps › Jobs › Schedule and
 // Runs. Since wave 6 a finding is not decided on its own: the console
 // routes each finding of a run to a case (a new one, or the open case of
 // the same problem), a known issue or an exception, and the run says
@@ -182,6 +182,18 @@ export interface Run {
   mayCancel?: boolean
   health?: RunHealth
   severities?: Severities
+  /** What the run did, as its kind says it: a Wiki sync's source, items read, drafts (KN-28). */
+  facts?: RunFact[]
+  /** Its kind makes no findings: it is not an audit (a Wiki sync, the drift check). */
+  noFindings?: boolean
+}
+
+/** One thing a run did, for its drawer (KN-28): a label, the value in words, where it leads. */
+export interface RunFact {
+  label: string
+  text: string
+  href?: string
+  tone?: 'err' | 'warn'
 }
 
 /** A change a run proposed: filed as a card (its id), or not, with why; and what it resolves (CF-25 to CF-27). */
@@ -238,6 +250,8 @@ export interface Job {
   proposes?: string
   schedulable: boolean
   manual: boolean
+  /** Rebuild now is offered beside Run now: a Wiki sync gives Mycroft every item again (KN-29). */
+  rebuild?: boolean
   whenText: string
   next?: string
   nextText?: string
@@ -321,6 +335,7 @@ export async function removeJob(id: string): Promise<void> {
   }
 }
 export const runJobNow = (id: string) => call<RunBrief>('/api/v1/jobs/' + enc(id) + '/run', post({}))
+export const rebuildJobNow = (id: string) => call<RunBrief>('/api/v1/jobs/' + enc(id) + '/rebuild', post({}))
 export const fetchJobRuns = (id: string, limit = 20) => call<{ runs: RunBrief[]; total: number }>(`/api/v1/jobs/${enc(id)}/runs?limit=${limit}`)
 export const describeJobSchedule = (s: ScheduleSpec) => call<{ description?: string; next?: string[]; error?: string }>('/api/v1/jobs/schedule', post(s))
 export const fetchJobsSettings = () => call<JobsSettings>('/api/v1/jobs/settings')

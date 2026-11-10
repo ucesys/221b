@@ -2,6 +2,7 @@ package casework
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
+	"github.com/ucesys/221b/server/internal/kv"
 )
 
 // finding is a finding of a run with its key, as package jobs gives it.
@@ -42,7 +44,7 @@ func (w *world) report(t *testing.T, id string) issues.Report {
 // issue its case was closed as; is dropped while its exception holds;
 // reopens a case closed as fixed on the first run of its job since, and
 // opens a regression later; opens a case with the earlier explanation
-// after no fix needed; and opens a new one when there is none. Agent
+// after no action needed; and opens a new one when there is none. Agent
 // repeats never match a person's case, which they list as related.
 func TestTheRoutingTable(t *testing.T) {
 	w := setup(t)
@@ -56,7 +58,7 @@ func TestTheRoutingTable(t *testing.T) {
 	}
 	c := w.get(t, "C-1")
 	if !c.AgentFound || c.Priority != 3 || c.Status != issues.StatusNew || c.Key == nil || c.Key.Check != "pod.no-limits" || c.Seen.Count != 1 || c.Source.Kind != SourceFinding ||
-		c.Source.Run != "run-1" || c.Source.Job != "nightly-audit" || c.Source.Finding != "run-1.1" || c.SLAApplies || fmt.Sprint(c.AllowedOutcomes) != "[fix duplicate noFixNeeded knownIssue exception]" {
+		c.Source.Run != "run-1" || c.Source.Job != "nightly-audit" || c.Source.Finding != "run-1.1" || c.SLAApplies || fmt.Sprint(c.AllowedOutcomes) != "[fix duplicate noAction knownIssue exception]" {
 		t.Fatalf("the case: %+v", c.Brief)
 	}
 	// Open: the next run joins it, seen ×2, last seen; nothing new.
@@ -151,16 +153,16 @@ func TestTheRoutingTable(t *testing.T) {
 	if c = w.get(t, f.Case); c.RegressionOf != fx || c.Previous == nil || c.Previous.Outcome != issues.OutcomeFix || c.Previous.Case != fx {
 		t.Fatalf("the regression: %+v", c.Brief)
 	}
-	// Closed as no fix needed: a new case showing the earlier explanation,
+	// Closed as no action needed: a new case showing the earlier explanation,
 	// who wrote it and when.
 	res = w.route(t, "nightly-audit", true, finding("node.disk-pressure", "Node/worker-3", "Disk pressure"))
 	nf := res.Findings[0].Case
-	if _, err := w.svc.Close(ctx, nf, CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "A log burst; it cleared."}, olivia); err != nil {
+	if _, err := w.svc.Close(ctx, nf, CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "A log burst; it cleared."}, olivia); err != nil {
 		t.Fatal(err)
 	}
 	res = w.route(t, "nightly-audit", true, finding("node.disk-pressure", "Node/worker-3", "Disk pressure"))
 	if f = res.Findings[0]; f.Routing != jobs.RoutedOpened || f.Case == nf {
-		t.Fatalf("after no fix needed: %+v", f)
+		t.Fatalf("after no action needed: %+v", f)
 	}
 	if c = w.get(t, f.Case); c.Previous == nil || c.Previous.Explanation != "A log burst; it cleared." || c.Previous.By != "Olivia" || c.Previous.Case != nf || c.RegressionOf != "" {
 		t.Fatalf("previous: %+v", c.Previous)
@@ -318,7 +320,7 @@ func TestSuggestException(t *testing.T) {
 		if c := w.get(t, res.Findings[0].Case); c.SuggestException {
 			t.Fatalf("suggested after %d", i)
 		}
-		w.svc.Close(ctx, res.Findings[0].Case, CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "batch"}, olivia)
+		w.svc.Close(ctx, res.Findings[0].Case, CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "batch"}, olivia)
 	}
 	res := w.route(t, "nightly-audit", true, finding("pod.no-limits", "shop/Pod/w9", "No limits"))
 	if c := w.get(t, res.Findings[0].Case); !c.SuggestException {
@@ -326,5 +328,74 @@ func TestSuggestException(t *testing.T) {
 	}
 	if list, _ := w.svc.List(ctx, olivia, Filter{Open: true}); !list[0].SuggestException {
 		t.Fatal("not in the list")
+	}
+}
+
+// A case stored before CF-90 as not a problem or no fix needed keeps its
+// record and reads as no action needed: in its drawer, in New Case's
+// recently closed, and when an agent finds the same again (a new case
+// with the earlier explanation).
+func TestOldOutcomesReadAsNoActionCF90(t *testing.T) {
+	ib := &kv.Memory{}
+	w := setupOn(t, &kv.Memory{}, ib)
+	ctx := context.Background()
+	res := w.route(t, "nightly-audit", true, finding("node.disk-pressure", "Node/worker-3", "Disk pressure"))
+	ag := res.Findings[0].Case
+	h, _ := w.svc.Create(ctx, NewCase{Title: "Checkout button grey", Cluster: "prod"}, olivia)
+	for _, id := range []string{ag, h.ID} {
+		if _, err := w.svc.Close(ctx, id, CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "It cleared by itself."}, olivia); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// As a release before CF-90 wrote them: the index and each case's
+	// object.
+	old := map[string]string{ag: "noFixNeeded", h.ID: "notAProblem"}
+	b, version, err := ib.LoadKey(ctx, issues.IndexKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var idx map[string]any
+	json.Unmarshal(b, &idx)
+	for _, l := range idx["cases"].([]any) {
+		line := l.(map[string]any)
+		line["outcome"] = old[fmt.Sprintf("C-%v", line["number"])]
+	}
+	b, _ = json.Marshal(idx)
+	if _, err := ib.SaveKey(ctx, issues.IndexKey, b, version); err != nil {
+		t.Fatal(err)
+	}
+	for id, was := range old {
+		name := strings.TrimPrefix(id, "C-")
+		keys, version, err := w.objects.Load(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rec := strings.Replace(string(keys[issues.CaseKey]), `"outcome":"noAction"`, `"outcome":"`+was+`"`, 1)
+		if _, err := w.objects.Save(ctx, name, issues.CaseKey, []byte(rec), version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	w.now = w.now.Add(time.Minute)
+	for id := range old {
+		if v := w.get(t, id); v.Outcome != issues.OutcomeNoAction || v.Explanation != "It cleared by itself." {
+			t.Fatalf("%s reads as %q", id, v.Outcome)
+		}
+	}
+	sim, _ := w.svc.SimilarTo(ctx, SimilarInput{Title: "Checkout button grey", Cluster: "prod"})
+	if len(sim.RecentNoProblem) != 1 || sim.RecentNoProblem[0].ID != h.ID || sim.RecentNoProblem[0].Outcome != issues.OutcomeNoAction {
+		t.Fatalf("recently closed: %+v", sim.RecentNoProblem)
+	}
+	res = w.route(t, "nightly-audit", true, finding("node.disk-pressure", "Node/worker-3", "Disk pressure"))
+	f := res.Findings[0]
+	if f.Routing != jobs.RoutedOpened || f.Case == ag {
+		t.Fatalf("found again: %+v", f)
+	}
+	if c := w.get(t, f.Case); c.Previous == nil || c.Previous.Case != ag || c.Previous.Outcome != issues.OutcomeNoAction || c.Previous.Explanation != "It cleared by itself." {
+		t.Fatalf("previous: %+v", c.Previous)
+	}
+	// The stored record is kept as it was.
+	keys, _, _ := w.objects.Load(ctx, strings.TrimPrefix(h.ID, "C-"))
+	if !strings.Contains(string(keys[issues.CaseKey]), `"outcome":"notAProblem"`) {
+		t.Fatalf("the record was rewritten: %s", keys[issues.CaseKey])
 	}
 }

@@ -13,16 +13,20 @@ import (
 // command in it becomes a proposal that waits for a person.
 
 // OutputFormat ends every task of an agent on its own.
-const OutputFormat = `Nobody is at the screen: you work on your own and read only. You cannot change anything, and nothing you write runs; a change you think is needed becomes a proposal a person approves or not.
+const OutputFormat = `Nobody is at the screen: you work on your own, read only, and nothing you write runs. A change you propose waits for a person to approve it.
 
 Write your report for an operator who reads it later: what you checked, what you found and why it matters, most important first, short. Then end with exactly one fenced block of JSON, and nothing after it:
 
 ` + "```json" + `
-{"findings": [{"severity": "critical|warning|info", "check": "a check id given above, or other.<slug>", "title": "one line", "detail": "what and why", "evidence": ["what you saw, quoted"], "cluster": "cluster id", "resource": "namespace/Kind/name, Kind/name, or empty for the cluster", "expected": false, "expectedWhy": "", "checkWhy": ""}],
+{"findings": [{"severity": "critical|warning|info", "check": "a validation rule's id given above, or other.<slug>", "title": "one line", "detail": "what and why", "evidence": ["what you saw, quoted"], "cluster": "cluster id", "resource": "namespace/Kind/name, Kind/name, or empty for the cluster", "expected": false, "expectedWhy": "", "checkWhy": ""}],
  "proposals": [{"title": "what to change, one line", "reasoning": "why", "cluster": "cluster id", "fixes": [1], "commands": ["kubectl ..."], "impact": "what changes for whom", "risk": "low|medium|high", "evidence": [{"kind": "log|event|fact|finding", "text": "...", "ref": "namespace/kind/name"}]}]}
 ` + "```" + `
 
-Use empty lists when there is nothing. Each finding becomes a case, or joins the one people already have for the same cluster, resource and check: name the check the same way every time for the same problem. When no check id given fits and you name a finding's check other.<slug>, also write its "checkWhy": first what your id means, in one sentence, then why none of the ids given fits; leave it empty for a check id given. Set "expected" true on a finding, with "expectedWhy" saying why and the evidence that shows it, only when what you found is the system working as intended, and the cluster shows it: a node annotated asleep by its power manager and cordoned just before it stopped reporting, a planned drain or maintenance. An expected finding opens no case, whatever its severity. Otherwise leave it false and give the severity as usual. Propose only kubectl or helm commands Watson runs, one per line, and only when the evidence supports them. Every proposal names in "fixes" what it fixes: the positions of findings in your findings list above (1 is the first), and/or ids of cases (C-12) or known issues (KI-3) from the keys in use; a proposal that fixes nothing you found is not filed. Never put a secret's value, a token or a password in the report or the block.`
+Use empty lists when there is nothing.
+- A finding becomes a case, or joins the one people already have for the same cluster, resource and check: name the same problem the same way every time. Its severity sets the case's priority: critical P1, warning P3, info P4.
+- With a check other.<slug>, write "checkWhy": first what your id means, in one sentence, then why none of the ids given fits. Leave it empty for an id given.
+- Set "expected" true, with "expectedWhy" giving why and the evidence, only when the cluster shows the system working as intended: a node annotated asleep by its power manager and cordoned just before it stopped reporting, a planned drain or maintenance. An expected finding opens no case, whatever its severity. Otherwise leave it false.
+- Propose only kubectl or helm commands Watson runs, one per line, and only when the evidence supports them. "fixes" names what a proposal fixes: positions in your findings list (1 is the first) and/or ids of cases (C-12) or known issues (KI-3) from the keys in use; a proposal that fixes nothing you found is not filed.`
 
 // Quote puts text the agent must treat as data, never as instructions,
 // between tags, so nothing inside can close them.

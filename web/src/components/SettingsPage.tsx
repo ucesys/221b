@@ -51,7 +51,7 @@ const GROUPS: { label?: string; sections: SectionInfo[] }[] = [
     ],
   },
   {
-    label: 'Cases',
+    label: 'AIOps',
     sections: [
       { id: 'issues', label: 'Issues', hint: 'Report page, timers, API tokens' },
       // --- Cases replace reports (Phase 12, wave 5): the SLA, for every case.
@@ -136,7 +136,7 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
         {section === 'general' && <General settings={settings} refreshedAt={refreshedAt} />}
         {section === 'providers' && <ProvidersSection onToast={onToast} />}
         {section === 'agents' && <AgentsSection onToast={onToast} />}
-        {section === 'knowledge' && <KnowledgeSection onToast={onToast} />}
+        {section === 'knowledge' && <KnowledgeSection onToast={onToast} focus={route.path[2]} />}
         {section === 'watson' && <WatsonSettings open />}
         {section === 'apps' && <HelmReposSettings onToast={onToast} />}
         {section === 'issues' && <IssueSettings open />}

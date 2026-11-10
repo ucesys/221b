@@ -23,7 +23,7 @@ import (
 // --- Watson cards (Phase 12, ADR-99 to ADR-102) ---
 //
 // The agents' proposals as durable cards: listed for the people who may
-// approve them, in Cases › Inbox and the cluster's Watson panel; approved
+// approve them, in AIOps › Inbox and the cluster's Watson panel; approved
 // or rejected with a reason; checked again; and the SuperAdmin's standing
 // approvals and notification channels. Approving needs the approval
 // permission (the chart's cases.approverRoles), not admin rights; a card
@@ -293,7 +293,7 @@ func (s *Server) postProposalApprove(w http.ResponseWriter, r *http.Request) {
 	// A chat's card the person sent to Watson too: approved here, the
 	// card there goes, so it cannot run twice.
 	if c.WatsonItem != "" && c.State != cards.Queued && s.opts.Watson != nil {
-		s.opts.Watson.Supersede(c.WatsonItem, "Approved as proposal "+c.ID+" in Cases › Inbox.")
+		s.opts.Watson.Supersede(c.WatsonItem, "Approved as proposal "+c.ID+" in AIOps › Inbox.")
 	}
 	writeValue(w, r, s.viewProposal(r, c))
 }

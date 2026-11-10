@@ -209,6 +209,8 @@ func (s *Server) postSherlockAsk(w http.ResponseWriter, r *http.Request) {
 		SuperAdmin: s.isSuperAdmin(r),
 		// Asked from Cases, Sherlock knows its pages (IB-10).
 		Cases: fromCases(in.View),
+		// The exceptions are for those who see the cases (KN-32).
+		Exceptions: s.readsExceptions(r),
 	})
 	var capErr *sherlock.ErrCap
 	switch {
@@ -533,6 +535,8 @@ func (s *Server) postSherlockTest(w http.ResponseWriter, r *http.Request) {
 		Tools: s.toolboxFor(r, id, cl),
 		Who:   audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name},
 		From:  fromAddr(r),
+		// The exceptions are for those who see the cases (KN-32).
+		Exceptions: s.readsExceptions(r),
 	})
 	if err != nil {
 		jsonError(w, http.StatusConflict, err.Error())

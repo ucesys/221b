@@ -12,8 +12,11 @@ info:
     every case of the console is one of these records, whatever opened it
     (a person's report, New Case, an alert, or a finding of a job's run).
     A case is `new`, `inProgress` or `closed` with exactly one outcome
-    (`fix`, `duplicate`, `notAProblem`, `noFixNeeded`, `knownIssue`,
-    `exception`) and its `explanation`; priorities are 0 (P0, an outage) to
+    (`fix`, `duplicate`, `noAction`, `knownIssue`, `exception`) and its
+    `explanation`. Since CF-90 `noAction` (no action needed) replaces
+    `notAProblem` and `noFixNeeded`: both are still taken wherever an
+    outcome is given, as `noAction`, and a case closed with one before is
+    answered as `noAction`; priorities are 0 (P0, an outage) to
     4 (P4, a question). The paths stay; an operator's list holds the cases
     opened in the console and found by agents too, which have no reporter,
     and its rows carry no conversation (read one case for it).
@@ -363,7 +366,11 @@ components:
       content: { application/json: { schema: { type: object, properties: { error: { type: string } } } } }
   schemas:
     Status: { type: string, enum: [new, inProgress, closed] }
-    Outcome: { type: string, enum: [fix, duplicate, notAProblem, noFixNeeded, knownIssue, exception] }
+    Outcome: { type: string, enum: [fix, duplicate, noAction, knownIssue, exception] }
+    OutcomeGiven:
+      type: string
+      description: An outcome as a request gives it; notAProblem and noFixNeeded, the outcomes before CF-90, are taken as noAction
+      enum: [fix, duplicate, noAction, knownIssue, exception, notAProblem, noFixNeeded]
     KnownStatus: { type: string, enum: [investigating, identified, fixInProgress, resolved] }
     Scope: { type: string, enum: ["reports:create", "reports:read", "reports:onBehalf"] }
     Person:
@@ -523,9 +530,9 @@ components:
         knownIssue: { type: string, description: 'Closes the case as this known issue; "" unlinks it and opens it again' }
         duplicateOf: { type: integer, description: "Closes the case as a duplicate of this original (the end of its chain); 409 when that is closed" }
         status: { $ref: "#/components/schemas/Status" }
-        outcome: { $ref: "#/components/schemas/Outcome", description: "With status closed: fix (below P1), notAProblem or noFixNeeded" }
+        outcome: { $ref: "#/components/schemas/OutcomeGiven", description: "With status closed: fix (below P1) or noAction (notAProblem and noFixNeeded are taken as noAction)" }
         explanation: { type: string, maxLength: 4000, description: "Required to close; with status new, the reason for reopening" }
-        askInfo: { type: boolean, description: Starts (true) or stops the clock that closes a silent case as noFixNeeded }
+        askInfo: { type: boolean, description: Starts (true) or stops the clock that closes a silent case as noAction }
     Known:
       type: object
       properties:

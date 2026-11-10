@@ -27,7 +27,7 @@ import (
 //	closed as fix, first run    the same case reopens: the fix did not hold
 //	  of its job since the fix
 //	closed as fix, later        a new case, a regression of it
-//	closed as noFixNeeded       a new case with the earlier explanation
+//	closed as noAction          a new case with the earlier explanation
 //	none                        a new agent-found case
 //
 // A run that does not see the key of a case its job's finding opened and
@@ -364,7 +364,7 @@ func (r *router) by(f *jobs.Finding, k issues.Key, n, depth int) error {
 			return nil
 		}
 		return r.open(f, k, c)
-	case issues.OutcomeNoFixNeeded, issues.OutcomeNotAProblem:
+	case issues.OutcomeNoAction:
 		c, err := r.tx.Case(n)
 		if err != nil {
 			return err
@@ -376,7 +376,7 @@ func (r *router) by(f *jobs.Finding, k issues.Key, n, depth int) error {
 
 // open opens a new agent-found case of a finding: a regression of an
 // earlier case closed as fixed, or with the explanation of one closed as
-// needing no fix; capped past the run's newCasesPerRun.
+// needing no action (CF-90); capped past the run's newCasesPerRun.
 func (r *router) open(f *jobs.Finding, k issues.Key, earlier *issues.Report) error {
 	if r.opened >= r.cap {
 		f.Routing = jobs.RoutedCapped

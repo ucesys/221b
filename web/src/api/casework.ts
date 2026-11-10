@@ -112,7 +112,7 @@ export interface CaseSeen {
   last: string
 }
 
-/** How a case like this one was closed before: shown on a repeat after no fix needed or not a problem, and on a regression. */
+/** How a case like this one was closed before: shown on a repeat after no action needed, and on a regression. */
 export interface PreviousClose {
   case: string
   outcome: Outcome
@@ -252,7 +252,7 @@ export interface CaseBrief extends CaseRef {
   regressionOf?: string
   /** "C-12": an open case on the same object with a like title, for a person to confirm. */
   possibleDuplicateOf?: string
-  /** "C-12": the same problem as a case kept apart (an original closed as no fix needed). */
+  /** "C-12": the same problem as a case kept apart (an original closed as no action needed). */
   sameAs?: string
   /** "C-12": the original of a case closed as duplicate. */
   duplicateOf?: string
@@ -268,7 +268,7 @@ export interface CaseBrief extends CaseRef {
   closedAt?: string
   /** When a later run no longer saw the problem of a case closed as fixed. */
   verified?: string
-  /** The same check was closed as no fix needed three times: an exception may fit. */
+  /** The same check was closed as no action needed three times: an exception may fit. */
   suggestException?: boolean
   /** Where the check of a fix applied by a change stands (CF-31). */
   verification?: Verification
@@ -330,7 +330,7 @@ export interface CaseSLA {
 }
 
 /** The outcomes the close route takes; Fixed, Known issue and Exception have their own routes, all under one Close… (CF-42). */
-export type CloseOutcome = 'duplicate' | 'notAProblem' | 'noFixNeeded'
+export type CloseOutcome = 'duplicate' | 'noAction'
 
 /** Close: the outcome, the explanation (always) and, for a duplicate, the original. */
 export interface Closing {
@@ -386,7 +386,7 @@ export interface FieldConflict {
 
 /** What a person does instead when a duplicate's original is closed. */
 export interface Offer {
-  kind: 'reopenOriginal' | 'regression' | 'sameKnownIssue' | 'notAProblem' | 'removeException' | 'sameAs'
+  kind: 'reopenOriginal' | 'regression' | 'sameKnownIssue' | 'noAction' | 'removeException' | 'sameAs'
   original: string
   knownIssue?: string
   exception?: string
@@ -672,7 +672,7 @@ export const closeKnown = (id: string, link: { id?: string; create?: { title: st
  */
 export const fixCase = (id: string, text: string, rca?: Completion, saveFix?: boolean) =>
   call<Case>(one(id) + '/fix', post({ text, ...(rca ? { rca } : {}), ...(saveFix === undefined ? {} : { saveFix }) }))
-/** Close as duplicate, not a problem or no fix needed; a duplicate whose original does not allow it answers 409 with the check. */
+/** Close as duplicate or no action needed; a duplicate whose original does not allow it answers 409 with the check. */
 export const closeCase = (id: string, c: Closing) => call<Case>(one(id) + '/close', post(c))
 /** Whether the case may close as a duplicate of the original, and what fits instead. */
 export const checkDuplicate = (id: string, original: string) => call<DuplicateCheck>(`${one(id)}/duplicate-check?original=${enc(original)}`)
@@ -775,8 +775,7 @@ export const CASE_STATUS: Record<CaseStatus, string> = {
 export const OUTCOMES: Record<Outcome, string> = {
   fix: 'Fixed',
   duplicate: 'Duplicate',
-  notAProblem: 'Not a problem',
-  noFixNeeded: 'No fix needed',
+  noAction: 'No action needed',
   knownIssue: 'Known issue',
   exception: 'Exception',
 }

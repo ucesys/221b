@@ -546,14 +546,14 @@ func TestStorageLimitsAndRetention(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.s.SetStatus(ctx, operator, rec.Report.Number, StatusClosed, OutcomeNoFixNeeded, "Not for now.")
+		f.s.SetStatus(ctx, operator, rec.Report.Number, StatusClosed, OutcomeNoAction, "Not for now.")
 	}
 	f.clock.add(31 * day)
 	if err := f.s.Sweep(ctx); err != nil {
 		t.Fatal(err)
 	}
 	r, _ := f.s.Report(ctx, operator, 1)
-	if !r.Pruned || r.Text != "" || r.Outcome != OutcomeNoFixNeeded || len(r.Messages) != 0 {
+	if !r.Pruned || r.Text != "" || r.Outcome != OutcomeNoAction || len(r.Messages) != 0 {
 		t.Fatalf("%+v", r)
 	}
 	// New reports push the pruned ones out, counted.
@@ -566,7 +566,7 @@ func TestStorageLimitsAndRetention(t *testing.T) {
 				t.Fatalf("%v", err)
 			}
 			st, _ := f.s.load(ctx, true)
-			if st.index.Archived[string(OutcomeNoFixNeeded)] != 10 {
+			if st.index.Archived[string(OutcomeNoAction)] != 10 {
 				t.Fatalf("archived %v", st.index.Archived)
 			}
 			if objs, _ := f.s.cases.List(ctx); len(objs) != len(st.index.Lines) {

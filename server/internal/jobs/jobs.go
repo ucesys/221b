@@ -3,7 +3,7 @@
 // something happens (an alert fires, a report arrives, a source changes),
 // with nobody at the screen. What they make is read-only: a run with its
 // report and findings, kept in the runs ConfigMap, and proposals that wait
-// for a person in Cases › Inbox. Nothing a job does changes a cluster.
+// for a person in AIOps › Inbox. Nothing a job does changes a cluster.
 //
 // A job is of a kind. The kinds are registered, the console's own here and
 // in package investigate, and other packages' at start-up, each with the
@@ -18,6 +18,7 @@ import (
 	"errors"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -205,6 +206,9 @@ type Trigger struct {
 	// Event is the event's kind and its key, for an event's run.
 	Event string `json:"event,omitempty"`
 	Key   string `json:"key,omitempty"`
+	// Rebuild says a person asked to rebuild, not just run: a Wiki sync
+	// gives Mycroft every item again, unchanged ones too (KN-29).
+	Rebuild bool `json:"rebuild,omitempty"`
 }
 
 // Event is something that happened that a job may start on.
@@ -225,6 +229,10 @@ type Event struct {
 	// Data is the event's own record, for the kind's Run: an alert, a
 	// report.
 	Data any
+	// JobKind, when set, is the only kind whose jobs take it: a change to
+	// one knowledge source starts that source's Wiki sync job alone
+	// (KN-28).
+	JobKind string
 }
 
 // Key names what a finding is about (CF-05): the cluster, the object as
@@ -350,6 +358,47 @@ type Run struct {
 	// Instance is the replica that ran it, to tell a run its replica left
 	// behind from one under way.
 	Instance string `json:"instance,omitempty"`
+	// --- A Wiki sync job per source (Phase 12, KN-28) ---
+	// Facts are what the run did, as its kind says it (a sync's source,
+	// the items it read, the drafts it wrote), for the run's drawer;
+	// NoFindings says its kind makes no findings: it is not an audit.
+	Facts      []Fact `json:"facts,omitempty"`
+	NoFindings bool   `json:"noFindings,omitempty"`
+}
+
+// Fact is one thing a run did, as its drawer shows it: a label, the value
+// in words, and where it leads (KN-28).
+type Fact struct {
+	Label string `json:"label"`
+	Text  string `json:"text"`
+	Href  string `json:"href,omitempty"`
+	// Tone is "err" or "warn" for what went wrong; empty otherwise.
+	Tone string `json:"tone,omitempty"`
+}
+
+// maxFacts and maxFactText bound what a run keeps of its facts.
+const (
+	maxFacts    = 20
+	maxFactText = 600
+)
+
+// keepFacts clips a run's facts to what is kept.
+func keepFacts(in []Fact) []Fact {
+	var out []Fact
+	for _, f := range in {
+		if len(out) == maxFacts {
+			break
+		}
+		if f.Label = clip(f.Label, 60); f.Label == "" {
+			continue
+		}
+		f.Text = clip(f.Text, maxFactText)
+		if f.Href != "" && !strings.HasPrefix(f.Href, "#/") {
+			f.Href = ""
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // Routed counts what a run's findings did (CF-01).
@@ -417,8 +466,9 @@ type Counts struct {
 
 // Health is how a run came out (JR-01): failed for one that failed or
 // was interrupted, otherwise the worst severity among its findings
-// (critical, warning, info), none when it found nothing; "" while it runs
-// and for a time let go (skipped, missed). The counts are its findings by
+// (critical, warning, info), none when it found nothing; "" while it runs,
+// for a time let go (skipped, missed), and for a run of a kind that makes
+// no findings that did not fail. The counts are its findings by
 // severity, whatever became of them since.
 func (r Run) Health() (string, Counts) {
 	var c Counts
@@ -437,6 +487,11 @@ func (r Run) Health() (string, Counts) {
 		return "", c
 	case StatusFailed, StatusInterrupted:
 		return HealthFailed, c
+	}
+	// A run of a kind that makes no findings found nothing to weigh
+	// (KN-28): it has no health but failed.
+	if r.NoFindings {
+		return "", c
 	}
 	switch {
 	case c.Critical > 0:
@@ -458,10 +513,12 @@ type Outcome struct {
 	// Data is the kind's own result, for a caller that waits for the run
 	// (the investigator's finding); it is not kept.
 	Data any
+	// Facts are what the run did, for its drawer (KN-28).
+	Facts []Fact
 }
 
 // External is a job that runs elsewhere, on its own schedule, and is only
-// shown and driven from Cases › Jobs: the backups to S3.
+// shown and driven from AIOps › Jobs: the backups to S3.
 type External struct {
 	// Where says where it is set: "Administration › Backup", with a link.
 	Where string
@@ -554,14 +611,27 @@ type Kind struct {
 	External *External
 	// Order places it in the list.
 	Order int
+	// --- A Wiki sync job per source (Phase 12, KN-28) ---
+	// Single says the kind's own job is its only one: it is one source's,
+	// and another would read the same source again. NoFindings says its
+	// runs make no findings (they are not audits).
+	Single     bool
+	NoFindings bool
+	// Rebuild says a person may also start a run that redoes everything,
+	// Rebuild now (a Wiki sync, KN-29), beside Run now.
+	Rebuild bool
+	// ForReporters says what its agent answers reaches reporters (the
+	// report triage's summary and reply): ask_knowledge gives it no
+	// accepted exception (KN-32).
+	ForReporters bool
 }
 
 // AddMore says whether another job of the kind may be added beside its
 // own (JR-07): not for a job run elsewhere, nor for one a report or a
 // case starts, which runs the kind's first job that takes it, so another
-// would never run.
+// would never run, nor for a kind of one job (a source's Wiki sync).
 func (k Kind) AddMore() bool {
-	return k.External == nil && !slices.Contains(k.Events, EventReport) && !slices.Contains(k.Events, EventCase)
+	return k.External == nil && !k.Single && !slices.Contains(k.Events, EventReport) && !slices.Contains(k.Events, EventCase)
 }
 
 // Registry is the kinds of jobs. Packages register theirs at start-up;
@@ -586,6 +656,14 @@ func (r *Registry) Register(k Kind) {
 
 // Register adds a kind to the console's registry.
 func Register(k Kind) { Default.Register(k) }
+
+// Unregister removes a kind: a knowledge source removed takes its Wiki
+// sync job's kind with it (KN-28). Its runs are kept.
+func (r *Registry) Unregister(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.kinds, id)
+}
 
 // Kind finds a kind.
 func (r *Registry) Kind(id string) (Kind, bool) {

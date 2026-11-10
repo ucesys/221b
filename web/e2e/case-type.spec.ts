@@ -37,7 +37,7 @@ test.afterAll(async ({ browser }) => {
   const page = await browser.newPage()
   await page.goto('/#/nodes')
   const list = (await (await page.request.get(`/api/v1/cases/cases?q=${encodeURIComponent(tag)}`)).json()) as { cases: Brief[] }
-  for (const c of list.cases.filter((x) => x.status !== 'closed')) await page.request.post(`/api/v1/cases/cases/${c.id}/close`, { headers: SAME, data: { outcome: 'noFixNeeded', explanation: 'e2e: done' } })
+  for (const c of list.cases.filter((x) => x.status !== 'closed')) await page.request.post(`/api/v1/cases/cases/${c.id}/close`, { headers: SAME, data: { outcome: 'noAction', explanation: 'e2e: done' } })
   await page.close()
 })
 

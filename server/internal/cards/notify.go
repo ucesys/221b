@@ -332,7 +332,7 @@ func (s *Store) messageFor(c Card, link string) message {
 	if link != "" {
 		m.Link = link + "/#/cases/inbox?proposal=" + url.QueryEscape(c.ID)
 	} else {
-		m.Text += " Open Cases › Inbox in 221B."
+		m.Text += " Open AIOps › Inbox in 221B."
 	}
 	return m
 }

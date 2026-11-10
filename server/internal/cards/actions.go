@@ -41,6 +41,12 @@ type FleetBook interface {
 	SetFleets(ctx context.Context, cluster string, list []fleets.Fleet) error
 }
 
+// MemberBook says which nodes and hosts of a cluster a fleet takes now
+// (KN-30): what a fleet's plan names.
+type MemberBook interface {
+	Members(ctx context.Context, cluster string, f fleets.Fleet) ([]string, error)
+}
+
 // ParamBook keeps Automation's parameters; *automation.Store is one.
 type ParamBook interface {
 	Variables(ctx context.Context, cluster string) (map[string]automation.FleetVariables, error)
@@ -53,6 +59,9 @@ type Console struct {
 	Hosts  HostBook
 	Fleets FleetBook
 	Params ParamBook
+	// Members names a new fleet's members in its plan; nil leaves them
+	// out.
+	Members MemberBook
 	// LoginUser is the login user a host gets when its card names none.
 	LoginUser func() string
 	Audit     *audit.Log
@@ -420,7 +429,47 @@ func (f fleetCreate) Describe(ctx context.Context, cluster string, a Action) (Pl
 	if x.Deploy != "" {
 		p.Impact = append(p.Impact, "Applications deployed to it are pinned to nodes labelled "+x.Deploy+".")
 	}
+	// Its members now (KN-30), which are not part of what Check again
+	// compares: a node may join or leave it meanwhile. None is a warning.
+	if f.c.Members != nil {
+		names, err := f.c.Members.Members(ctx, cluster, x)
+		switch {
+		case err != nil:
+			p.Impact = append(p.Impact, "Its nodes now could not be read: "+err.Error())
+		case len(names) == 0:
+			p.Impact = append(p.Impact, "0 nodes now.")
+			p.Warning = "No node or host has its labels now: the fleet would be empty."
+			if x.Kind == fleets.KindNodes {
+				p.Warning = "None of the nodes it lists is on the cluster now: the fleet would be empty."
+			}
+		default:
+			p.Impact = append(p.Impact, membersWords(names)+".")
+		}
+	}
 	return p, nil
+}
+
+// maxMembers is how many members a plan names.
+const maxMembers = 5
+
+// membersWords is a fleet's members now: "3 nodes now: a, b, c", the
+// list capped ("+N more").
+func membersWords(names []string) string {
+	names = slices.Clone(names)
+	sort.Strings(names)
+	shown := names
+	if len(shown) > maxMembers {
+		shown = shown[:maxMembers]
+	}
+	unit := "nodes"
+	if len(names) == 1 {
+		unit = "node"
+	}
+	out := fmt.Sprintf("%d %s now: %s", len(names), unit, strings.Join(shown, ", "))
+	if len(names) > len(shown) {
+		out += fmt.Sprintf(" +%d more", len(names)-len(shown))
+	}
+	return out
 }
 
 func (f fleetCreate) Apply(ctx context.Context, c Card, i int, by Approver) (Result, error) {

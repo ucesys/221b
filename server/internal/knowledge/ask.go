@@ -42,12 +42,26 @@ func (s *Service) Pages() []Page {
 	return pages
 }
 
-// PageAt is one approved page, with its body.
+// RetiredPages lists the pages people retired (KN-24), with why and who,
+// without their bodies; never nil.
+func (s *Service) RetiredPages() []Page {
+	s.mu.RLock()
+	idx := s.index
+	s.mu.RUnlock()
+	pages := append([]Page{}, idx.Retired()...)
+	for i := range pages {
+		pages[i].Body = ""
+	}
+	return pages
+}
+
+// PageAt is one approved page, with its body: a retired one too, marked
+// so (KN-24), for people to read; the agents never get it.
 func (s *Service) PageAt(path string) (Page, bool) {
 	s.mu.RLock()
 	idx := s.index
 	s.mu.RUnlock()
-	for _, p := range idx.Pages() {
+	for _, p := range append(idx.Pages(), idx.Retired()...) {
 		if p.Path == path {
 			return p, true
 		}

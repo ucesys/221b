@@ -67,7 +67,7 @@ export function JobsSettings() {
       <p className="rk-fhint" style={{ margin: 0 }}>
         Jobs start agents with nobody at the screen, in{' '}
         <a className="rk-link" href="#/cases/jobs">
-          Cases › Jobs
+          AIOps › Jobs
         </a>
         . Every change to a job is in the audit log with its old and new values.
       </p>

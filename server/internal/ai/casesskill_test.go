@@ -13,10 +13,10 @@ import (
 func TestTheCasesSkillIsSherlocksInCases(t *testing.T) {
 	w := setup(t, map[string]string{Sherlock: "Answer in English."})
 	skill := CasesSkill()
-	if !strings.HasPrefix(skill, "The Cases area.") || strings.Contains(skill, "<!--") {
+	if !strings.HasPrefix(skill, "AIOps.") || strings.Contains(skill, "<!--") {
 		t.Fatalf("the skill's text: %q", skill)
 	}
-	for _, want := range []string{"Proposed changes", "Jobs › Runs", "Exceptions", "You change nothing in Cases yourself", "who approved it and when"} {
+	for _, want := range []string{"Proposed changes", "Jobs › Runs", "Exceptions", "You change nothing in AIOps yourself", "who approved it and when", "Validation rules", "Fixes", "Rebuild now"} {
 		if !strings.Contains(skill, want) && !strings.Contains(strings.ToLower(skill), strings.ToLower(want)) {
 			t.Errorf("the skill does not say %q", want)
 		}

@@ -272,7 +272,7 @@ type Options struct {
 	CardRoles []roles.ID
 	// --- Jobs (Phase 12) ---
 	// Jobs runs the agents on their own and keeps their runs and findings
-	// (JB-01); nil leaves Cases › Jobs and Runs out.
+	// (JB-01); nil leaves AIOps › Jobs and Runs out.
 	Jobs *jobs.Service
 	// --- Findings, exceptions and RCAs (Phase 12) ---
 	// Lessons keeps the accepted exceptions, served under
@@ -287,7 +287,7 @@ type Options struct {
 	Knowledge *knowledge.Service
 	// --- Case work (Phase 12, CW-10) ---
 	// Casework keeps the cases, served under /api/v1/cases/cases; nil
-	// leaves Cases › Cases out.
+	// leaves AIOps › Cases out.
 	Casework *casework.Service
 	// --- end of Watson cards.
 }

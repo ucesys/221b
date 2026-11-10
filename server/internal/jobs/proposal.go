@@ -9,7 +9,7 @@ import (
 
 // Proposals (JB-12): any change a job's agent wants becomes a proposal,
 // which the Proposer files as a Watson card that waits for a person in
-// Cases › Inbox. The shape is shared with the cards' package (the seams of
+// AIOps › Inbox. The shape is shared with the cards' package (the seams of
 // Phase 12 wave 2); cmd/221b plugs the cards' store in. Never a secret
 // value or a host key.
 
@@ -59,6 +59,8 @@ type Source struct {
 	ID    string `json:"id"`
 	Label string `json:"label"`
 	SetBy string `json:"setBy,omitempty"`
+	// Job is the name of the job whose run made it (CF-92).
+	Job string `json:"job,omitempty"`
 }
 
 // Evidence is one piece of what the proposal rests on.

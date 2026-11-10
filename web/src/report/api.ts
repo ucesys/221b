@@ -5,8 +5,12 @@ import { call, post } from '../api/call'
 // --- One flow for findings and cases (Phase 12, wave 6) ---
 /** New: nobody has taken it; In progress: someone owns it; Closed: with exactly one outcome. */
 export type Status = 'new' | 'inProgress' | 'closed'
-/** How a case closed: fixed, the same as another, not a problem, real but needs no fix, a known issue, or an accepted exception. */
-export type Outcome = 'fix' | 'duplicate' | 'notAProblem' | 'noFixNeeded' | 'knownIssue' | 'exception'
+/** How a case closed: fixed, the same as another, no action needed (not a problem, or it went away), a known issue, or an accepted exception. */
+export type Outcome = 'fix' | 'duplicate' | 'noAction' | 'knownIssue' | 'exception'
+/** The outcomes noAction replaced (CF-90): the server reads them as noAction, and so does this page if it meets one. */
+export type OldOutcome = 'notAProblem' | 'noFixNeeded'
+/** An outcome as it is now: notAProblem and noFixNeeded are noAction (CF-90). */
+export const outcomeNow = (o: Outcome | OldOutcome): Outcome => (o === 'notAProblem' || o === 'noFixNeeded' ? 'noAction' : o)
 export type KnownStatus = 'investigating' | 'identified' | 'fixInProgress' | 'resolved'
 
 export interface Person {
@@ -60,7 +64,7 @@ export interface Report {
   updated: string
   status: Status
   statusAt: string
-  outcome?: Outcome
+  outcome?: Outcome | OldOutcome
   /** The explanation the case was closed with. */
   reason?: string
   /** 0 (P0, an outage) to 4 (P4, a question). */
@@ -157,7 +161,7 @@ export function statusPill(r: Pick<Report, 'status' | 'outcome' | 'knownIssue' |
     case 'closed':
       if (r.outcome === 'fix') return { text: 'Fixed', tone: 'ok' }
       if (r.outcome === 'knownIssue') return { text: 'A known problem', tone: 'warn' }
-      return { text: 'Closed: ' + (r.outcome ? outcomeWords[r.outcome] : 'done'), tone: 'muted' }
+      return { text: 'Closed: ' + (r.outcome ? outcomeWords[outcomeNow(r.outcome)] : 'done'), tone: 'muted' }
     default:
       return { text: String(r.status), tone: 'muted' }
   }
@@ -191,8 +195,7 @@ export const priorityText = (p: number) => (PRIORITY_NAMES[p] ? `P${p}: ${PRIORI
 export const outcomeWords: Record<Outcome, string> = {
   fix: 'fixed',
   duplicate: 'same as another case',
-  notAProblem: 'not a problem',
-  noFixNeeded: 'no fix needed',
+  noAction: 'no action needed',
   knownIssue: 'a known problem',
   exception: 'accepted as it is',
 }

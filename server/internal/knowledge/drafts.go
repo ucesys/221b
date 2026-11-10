@@ -13,7 +13,7 @@ import (
 )
 
 // Reviewed before published (ADR-95): each run's page changes wait as one
-// item in Cases › Inbox, with every page's diff. A page needs one person's
+// item in AIOps › Inbox, with every page's diff. A page needs one person's
 // approval, a critical one two different people's; an agent never counts.
 // Approved pages are published to the store (merged in git, copied with a
 // conditional write in S3); a page someone changed meanwhile is not
@@ -27,7 +27,13 @@ const (
 	StateRejected  = "rejected"
 	StatePublished = "published"
 	StateConflict  = "conflict"
+	// StateHeld is a change to a page people retired (KN-24): kept in
+	// its run to be seen, never published.
+	StateHeld = "held"
 )
+
+// heldReason says why a change to a retired page waits for a person.
+const heldReason = "The page is retired, so Mycroft does not rewrite it. Make it active again (a second person approves) and sync again to have it rewritten."
 
 // Run is one sync's page changes.
 type Run struct {
@@ -64,6 +70,9 @@ type DraftPage struct {
 	Approvals []Approval `json:"approvals,omitempty"`
 	// Reason says why a page waits for a person after all.
 	Reason string `json:"reason,omitempty"`
+	// Contradicts are the active fixes the page says otherwise than,
+	// flagged for its reviewer (KN-33).
+	Contradicts []Contradiction `json:"contradicts,omitempty"`
 }
 
 // Approval is one person's approval.
@@ -93,6 +102,11 @@ func (p DraftPage) Needed() int {
 
 type draftsDoc struct {
 	Runs []Run `json:"runs"`
+	// Requests are the requests to retire a page or make it active
+	// again (KN-24), and Corrections the corrections sent with This is
+	// outdated… (KN-23).
+	Requests    []PageRequest `json:"requests,omitempty"`
+	Corrections []Correction  `json:"corrections,omitempty"`
 }
 
 // keptRuns is how many decided runs stay listed.
@@ -148,6 +162,16 @@ func fitDrafts(d *draftsDoc) bool {
 			return true
 		}
 	}
+	for i := range d.Requests {
+		if d.Requests[i].State != RequestWaiting {
+			d.Requests = slices.Delete(d.Requests, i, i+1)
+			return true
+		}
+	}
+	if len(d.Corrections) > 0 {
+		d.Corrections = d.Corrections[1:]
+		return true
+	}
 	return false
 }
 
@@ -165,6 +189,17 @@ func (s *Service) editDrafts(ctx context.Context, fn func(*draftsDoc) error) (dr
 					d.Runs = slices.Delete(d.Runs, i, i+1)
 				}
 			}
+		}
+		decided = 0
+		for i := len(d.Requests) - 1; i >= 0; i-- {
+			if d.Requests[i].State != RequestWaiting {
+				if decided++; decided > keptRuns {
+					d.Requests = slices.Delete(d.Requests, i, i+1)
+				}
+			}
+		}
+		if len(d.Corrections) > keptCorrections {
+			d.Corrections = d.Corrections[len(d.Corrections)-keptCorrections:]
 		}
 		return nil
 	})
@@ -243,6 +278,17 @@ func (s *Service) Waiting(ctx context.Context, c Caller) (int, error) {
 			n++
 		}
 	}
+	// And the requests to retire a page or make it active again that
+	// someone else asked for (KN-24).
+	reqs, err := s.PageRequests(ctx, false)
+	if err != nil {
+		return 0, err
+	}
+	for _, r := range reqs {
+		if r.CanApprove(c.ID) {
+			n++
+		}
+	}
 	return n, nil
 }
 
@@ -277,10 +323,20 @@ func (s *Service) Approve(ctx context.Context, c Caller, id string) (Run, error)
 		if r.Store != store.Kind() {
 			return invalid("run %s was staged in the %s store, not the one the wiki is kept in now; reject it and sync again", id, r.Store)
 		}
-		gained := false
+		gained, heldNow := false, false
+		s.mu.RLock()
+		retired := s.manifest.Retired
+		s.mu.RUnlock()
 		for j := range r.Pages {
 			p := &r.Pages[j]
 			if p.State != StateWaiting {
+				continue
+			}
+			if _, gone := retired[p.Path]; gone {
+				// Retired since Mycroft wrote it (KN-24): held, not
+				// published.
+				p.State, p.Reason = StateHeld, heldReason
+				heldNow = true
 				continue
 			}
 			if !slices.ContainsFunc(p.Approvals, func(a Approval) bool { return a.By == c.ID }) {
@@ -294,7 +350,7 @@ func (s *Service) Approve(ctx context.Context, c Caller, id string) (Run, error)
 				readyPaths = append(readyPaths, p.Path)
 			}
 		}
-		if !gained && len(ready) == 0 {
+		if !gained && len(ready) == 0 && !heldNow {
 			return wrapf(ErrDenied, "you approved this already: a critical page needs a second person")
 		}
 		r.Decisions = append(r.Decisions, Decision{By: c.ID, Name: c.label(), At: now, Action: "approve", Pages: readyPaths})

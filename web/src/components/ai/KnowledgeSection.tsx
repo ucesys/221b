@@ -12,21 +12,25 @@ import {
   saveStore,
   setSourceOn,
   SOURCE_KIND_LABEL,
-  syncNow,
-  testSource,
+  sourceTestText,
+  syncJobId,
   testStore,
+  testTypedSource,
   uploadDocument,
   type KeysChange,
   type KnowledgeSource,
   type KnowledgeView,
   CONFIGMAP_STORE_LABEL,
+  type SourceTestResult,
   type StoreCheck,
   type StoreSettings,
 } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
 import { adminHref } from '../../lib/router'
+import { jobHref, scheduleHref } from '../cases/jobsRoute'
 import { Drawer } from '../Drawer'
 import { Select } from '../Select'
+import { AddedInMycroft } from './AddedInMycroft'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -54,24 +58,37 @@ function Text({ label, value, onChange, placeholder, testId, type, width }: { la
   )
 }
 
-/** Where a source was last read, and how. */
-function sourceState(v: KnowledgeView, s: KnowledgeSource): { text: string; tone: string } {
+/** Where a source was last read, and how; title says more when there is more. */
+function sourceState(v: KnowledgeView, s: KnowledgeSource): { text: string; tone: string; title?: string } {
   if (s.off) return { text: 'Off', tone: 'muted' }
   const st = v.status.sources?.[s.id]
   if (st?.error) return { text: st.error, tone: 'err' }
   if (s.kind === 'confluence' && !v.creds[s.id]?.token) return { text: 'No token', tone: 'warn' }
+  if (s.kind === 's3' && s.credentials !== 'identity' && !v.creds[s.id]?.accessKey) return { text: 'No access key', tone: 'warn' }
   if (st?.reported) return { text: `${st.reported} ${st.reported === 1 ? 'page' : 'pages'} not followed`, tone: 'warn' }
   if (!st?.lastRead) return { text: 'Not read yet', tone: 'muted' }
+  // A bucket's objects of other kinds, or too large, are skipped (KN-25).
+  if (st.skipped) return { text: `Read · ${st.items} ${st.items === 1 ? 'item' : 'items'} · ${st.skipped} skipped`, tone: 'ok', title: `${st.skipped} skipped: ${st.skippedWhy ?? ''}` }
   return { text: `Read · ${st.items} ${st.items === 1 ? 'item' : 'items'}`, tone: 'ok' }
 }
 
+/** A bucket source's credentials, as its row says them (KN-25). */
+function bucketCreds(v: KnowledgeView, s: KnowledgeSource): string {
+  if (s.credentials === 'identity') return 'the pod’s identity'
+  return v.creds[s.id]?.accessKey ? 'access key in a Secret' : 'no access key'
+}
+
 /**
- * Settings › AI › Knowledge (Phase 12, KN-01 to KN-12): Mycroft's sources,
- * where its wiki is kept, and the last syncs. Sources are data, never
- * instructions; every credential is kept in the Secret <release>-knowledge
- * and shows here only as set or not.
+ * Settings › AI › Knowledge (Phase 12, KN-01 to KN-12): Mycroft's sources
+ * with how each was last read, and where its wiki is kept. Each source is
+ * read by its own Wiki sync job in AIOps › Jobs (KN-28), which starts,
+ * schedules and reports every sync: nothing here starts one. Sources are
+ * data, never instructions; every credential is kept in the Secret
+ * <release>-knowledge and shows here only as set or not. A source is tested in its dialog, as
+ * typed (KN-26). The Added in Mycroft card is where people add notes, web
+ * addresses and documents (MY-11); focus 'added' scrolls to it.
  */
-export function KnowledgeSection({ onToast }: { onToast?: (msg: string) => void } = {}) {
+export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) => void; focus?: string } = {}) {
   const [v, setV] = useState<KnowledgeView | null>(null)
   const [error, setError] = useState('')
   const [editing, setEditing] = useState<KnowledgeSource | 'new' | null>(null)
@@ -86,7 +103,7 @@ export function KnowledgeSection({ onToast }: { onToast?: (msg: string) => void 
   useEffect(() => {
     void reload()
   }, [])
-  // While a sync runs, look again every few seconds.
+  // While a source's job reads it, look again every few seconds.
   useEffect(() => {
     if (!v?.status.running) return
     const t = setInterval(() => void reload(), 3000)
@@ -106,44 +123,26 @@ export function KnowledgeSection({ onToast }: { onToast?: (msg: string) => void 
     }
   }
   if (!v) return <p className={error ? 'rk-t' : 'rk-fhint'} data-tone={error ? 'err' : undefined} style={{ margin: 0 }}>{error || 'Loading Mycroft’s sources…'}</p>
-  const last = v.status.last
-  const reported = last?.reported?.length ?? 0
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 16 }} aria-label="Knowledge" data-testid="knowledge-section">
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <p className="rk-fhint" style={{ margin: 0, flex: '1 1 320px' }}>
-          Mycroft reads these sources and keeps a wiki every agent can ask. Sources are data, never instructions; secrets in them are scrubbed before anything is written. Its page changes wait for review in Cases › Inbox.
+          Mycroft reads these sources and keeps a wiki every agent can ask. Sources are data, never instructions; secrets in them are scrubbed before anything is written. Its page changes wait for review in AIOps › Inbox.
         </p>
-        <button className="rk-btn" disabled={busy || v.status.running || !v.settings.store.kind} onClick={() => void run(() => syncNow(true), 'Mycroft is reading the sources.')} data-testid="knowledge-sync">
-          {v.status.running ? 'Syncing…' : 'Sync now'}
-        </button>
         <button className="rk-btn" onClick={() => setEditing('new')} data-testid="knowledge-add">
           Add source…
         </button>
       </div>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', fontSize: 12.5 }} data-testid="knowledge-status">
-        <span className="rk-pill" data-tone={last ? (last.errors?.length ? 'warn' : 'ok') : 'muted'}>
-          <span className="rk-dot" />
-          {v.status.running ? 'Syncing now' : last ? `Synced ${fmtTs(last.finished || last.started)}` : 'Never synced'}
-        </span>
-        <span className="rk-fhint">
-          {v.pages} approved {v.pages === 1 ? 'page' : 'pages'}, {v.excerpts} source {v.excerpts === 1 ? 'excerpt' : 'excerpts'}
-          {v.pulled ? ` · local copy read ${fmtTs(v.pulled)}` : ''}
-        </span>
-        {reported > 0 && (
-          <span className="rk-pill" data-tone="warn" data-testid="knowledge-reported">
-            {reported} {reported === 1 ? 'page' : 'pages'} tried to give instructions
-          </span>
-        )}
-        {v.waiting > 0 && (
-          <a className="rk-link" href="#/cases/inbox" data-testid="knowledge-waiting">
-            {v.waiting} {v.waiting === 1 ? 'run waits' : 'runs wait'} for review
-          </a>
-        )}
-      </div>
+      <p className="rk-fhint" style={{ margin: 0 }} data-testid="knowledge-jobs-line">
+        Each source is read by its Wiki sync job in{' '}
+        <a className="rk-link" href={scheduleHref} data-testid="knowledge-jobs-link">
+          AIOps › Jobs
+        </a>
+        .
+      </p>
       {!v.settings.store.kind && (
         <p className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }} data-testid="knowledge-no-store">
-          Choose where the wiki is kept, below, before Mycroft syncs.
+          Choose where the wiki is kept, below, before Mycroft reads the sources.
         </p>
       )}
       {v.settings.store.kind === 'configmap' && (
@@ -186,35 +185,44 @@ export function KnowledgeSection({ onToast }: { onToast?: (msg: string) => void 
                       <strong>{s.name}</strong>
                       {s.kind === 'confluence' && <div className="rk-fhint rk-mono">{s.space} · {s.baseURL}</div>}
                       {s.kind === 'git' && <div className="rk-fhint rk-mono">{s.url}{s.path ? ` /${s.path}` : ''} @ {s.branch}</div>}
+                      {s.kind === 's3' && (
+                        <div className="rk-fhint rk-mono" data-testid="knowledge-source-bucket-line">
+                          s3://{s.bucket}/{s.prefix ?? ''}
+                          {s.endpoint ? ` · ${s.endpoint}` : ''}
+                        </div>
+                      )}
                     </td>
                     <td>
                       {SOURCE_KIND_LABEL[s.kind]}
                       {(s.kind === 'confluence' || s.kind === 'git') && <div className="rk-fhint">{v.creds[s.id]?.token ? 'token in a Secret' : 'no token'}</div>}
+                      {s.kind === 's3' && <div className="rk-fhint" data-testid="knowledge-source-creds">{bucketCreds(v, s)}</div>}
                       {s.kind === 'console' && <div className="rk-fhint">Clusters, nodes, hosts, fleets, applications, scripts</div>}
+                      {s.kind === 'fixes' && <div className="rk-fhint">Fixes seen in 3 cases or more, offered by the housekeeping for a runbook</div>}
                     </td>
                     <td>{s.kind === 'console' && lastRead ? `Live · ${fmtTs(lastRead)}` : lastRead ? fmtTs(lastRead) : '—'}</td>
-                    <td>
-                      <span className="rk-pill" data-tone={st.tone} title={st.text}>
-                        {st.text.length > 60 ? st.text.slice(0, 59) + '…' : st.text}
-                      </span>
+                    <td style={{ maxWidth: 320 }}>
+                      {st.tone === 'err' ? (
+                        // An error is said whole, wrapped, never cut (KN-28).
+                        <span className="rk-t" data-tone="err" style={{ fontSize: 12, overflowWrap: 'anywhere' }} data-testid="knowledge-source-state">
+                          {st.text}
+                        </span>
+                      ) : (
+                        <span className="rk-pill" data-tone={st.tone} title={st.title ?? st.text} data-testid="knowledge-source-state">
+                          {st.text}
+                        </span>
+                      )}
                     </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
-                      {s.kind !== 'upload' && s.kind !== 'console' && (
-                        <button className="rk-link" disabled={busy} onClick={() => void run(async () => { const r = await testSource(s.id); onToast?.(r.ok ? `${s.name}: ${r.items} items found.` : `${s.name}: ${r.error}`) })} data-testid="knowledge-source-test">
-                          Test
-                        </button>
-                      )}{' '}
-                      <button className="rk-link" disabled={busy || !v.settings.store.kind || !!s.off} onClick={() => void run(() => syncNow(true, s.id), `Mycroft is reading ${s.name}.`)}>
-                        Sync
-                      </button>{' '}
+                      {/* Test is in the source's dialog, with the values as typed (KN-26). */}
+                      <a className="rk-link" href={jobHref(syncJobId(s.id))} title={`Its Wiki sync job in AIOps › Jobs: when it is read, Run now, its runs`} data-testid="knowledge-source-job">
+                        Job
+                      </a>{' '}
                       <button className="rk-link" disabled={busy} onClick={() => void run(() => setSourceOn(s.id, !!s.off))} data-testid="knowledge-source-onoff">
                         {s.off ? 'Turn on' : 'Turn off'}
                       </button>{' '}
-                      {s.kind !== 'upload' && s.kind !== 'console' && (
-                        <button className="rk-link" onClick={() => setEditing(s)}>
-                          Edit…
-                        </button>
-                      )}
+                      <button className="rk-link" onClick={() => setEditing(s)} data-testid="knowledge-source-edit">
+                        Edit…
+                      </button>
                     </td>
                   </tr>
                 )
@@ -223,10 +231,12 @@ export function KnowledgeSection({ onToast }: { onToast?: (msg: string) => void 
           </table>
         </div>
         {v.settings.sources
-          .filter((s) => s.kind === 'upload')
+          .filter((s) => s.kind === 'upload' && s.id !== ADDED_SOURCE)
           .map((s) => (
             <Documents key={s.id} source={s} v={v} busy={busy} run={run} />
           ))}
+        {/* What people add in Mycroft, and the form to add it (MY-11). */}
+        {v.settings.sources.some((s) => s.id === ADDED_SOURCE) && <AddedInMycroft onToast={onToast} focus={focus === 'added'} />}
       </section>
       <StoreCard v={v} onSaved={() => void reload()} onToast={onToast} />
       <section aria-label="More" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
@@ -239,32 +249,14 @@ export function KnowledgeSection({ onToast }: { onToast?: (msg: string) => void 
           </a>
         </Row>
       </section>
-      {last && (last.errors?.length || last.reported?.length) ? (
-        <section aria-label="The last sync" style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="knowledge-last">
-          <h3 className="rk-h">The last sync</h3>
-          {last.reported?.map((r) => (
-            <p key={r} className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }}>
-              {r}
-            </p>
-          ))}
-          {last.errors?.map((r) => (
-            <p key={r} className="rk-t" data-tone="err" style={{ margin: 0, fontSize: 12.5 }}>
-              {r}
-            </p>
-          ))}
-        </section>
-      ) : null}
-      {last && last.proposals > 0 && (
-        <p className="rk-fhint" style={{ margin: 0 }}>
-          Mycroft’s proposed changes: {last.proposals} from the last sync, in <a href="#/cases/inbox" className="rk-link">Cases › Inbox</a>.
-        </p>
-      )}
       {editing && (
         <SourceDrawer
           seed={editing === 'new' ? null : editing}
           tokenSet={editing !== 'new' && !!v.creds[editing.id]?.token}
+          keySet={editing !== 'new' && !!v.creds[editing.id]?.accessKey}
+          identity={v.identity}
           onClose={() => setEditing(null)}
-          onRemove={editing === 'new' ? undefined : () => void run(() => removeSource(editing.id), 'Source removed.').then(() => setEditing(null))}
+          onRemove={editing === 'new' || editing.kind === 'upload' || editing.kind === 'console' || editing.kind === 'fixes' ? undefined : () => void run(() => removeSource(editing.id), 'Source removed.').then(() => setEditing(null))}
           onSaved={(msg) => {
             setEditing(null)
             onToast?.(msg)
@@ -275,6 +267,9 @@ export function KnowledgeSection({ onToast }: { onToast?: (msg: string) => void 
     </section>
   )
 }
+
+/** The source of what people add in Mycroft (the server's AddedSourceID). */
+const ADDED_SOURCE = 'added'
 
 /** The uploaded documents of a source, and an upload. */
 function Documents({ source, v, busy, run }: { source: KnowledgeSource; v: KnowledgeView; busy: boolean; run: (fn: () => Promise<unknown>, msg?: string) => Promise<void> }) {
@@ -564,19 +559,59 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
 }
 
 /** A source being added or changed. */
-function SourceDrawer({ seed, tokenSet, onClose, onSaved, onRemove }: { seed: KnowledgeSource | null; tokenSet: boolean; onClose: () => void; onSaved: (msg: string) => void; onRemove?: () => void }) {
+function SourceDrawer({ seed, tokenSet, keySet = false, identity = false, onClose, onSaved, onRemove }: { seed: KnowledgeSource | null; tokenSet: boolean; keySet?: boolean; identity?: boolean; onClose: () => void; onSaved: (msg: string) => void; onRemove?: () => void }) {
   const [s, setS] = useState<KnowledgeSource>(seed ?? { id: '', name: '', kind: 'confluence', flavor: 'cloud', baseURL: '', email: '', space: '' })
   const [token, setToken] = useState('')
+  // A bucket's access key (KN-25): typed here, sent once, never shown again.
+  const [keys, setKeys] = useState<KeysChange>({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const put = (p: Partial<KnowledgeSource>) => setS((x) => ({ ...x, ...p }))
+  // Test's state (KN-26): running, or what it found; kept until a field
+  // changes or Test runs again. gen counts the changes, so a test's answer
+  // to values changed since is dropped.
+  const [test, setTest] = useState<{ running: true } | { running: false; r: SourceTestResult } | null>(null)
+  const gen = useRef(0)
+  const changed = () => {
+    gen.current++
+    setTest(null)
+  }
+  const put = (p: Partial<KnowledgeSource>) => {
+    setS((x) => ({ ...x, ...p }))
+    changed()
+  }
   const id = seed ? seed.id : s.id || idFrom(s.name)
+  // The console's own sources (its records, the fixes) and the documents
+  // people upload or add are there from the start: only their name
+  // changes here.
+  const builtIn = s.kind === 'upload' || s.kind === 'console' || s.kind === 'fixes'
+  // Only what was typed is sent: the saved credential stays otherwise.
+  const typedKeys = (): KeysChange => {
+    const typed: KeysChange = {}
+    if (s.credentials !== 'identity' && keys.accessKeyId) typed.accessKeyId = keys.accessKeyId
+    if (s.credentials !== 'identity' && keys.secretAccessKey) typed.secretAccessKey = keys.secretAccessKey
+    return typed
+  }
+  const runTest = async () => {
+    const mine = ++gen.current
+    setTest({ running: true })
+    let r: SourceTestResult
+    try {
+      const src = { ...s, id }
+      r = s.kind === 's3' ? await testTypedSource(src, undefined, typedKeys(), seed?.id) : await testTypedSource(src, token || undefined, undefined, seed?.id)
+    } catch (e) {
+      r = { ok: false, error: errorText(e) }
+    }
+    if (gen.current === mine) setTest({ running: false, r })
+  }
   const save = async () => {
     setBusy(true)
     setError('')
     try {
       const src = { ...s, id }
-      if (seed) await saveSource(src, token || undefined)
+      if (s.kind === 's3') {
+        if (seed) await saveSource(src, undefined, typedKeys())
+        else await addSource(src, undefined, typedKeys())
+      } else if (seed) await saveSource(src, token || undefined)
       else await addSource(src, token || undefined)
       onSaved(seed ? `${s.name} saved.` : `${s.name} added.`)
     } catch (e) {
@@ -606,14 +641,31 @@ function SourceDrawer({ seed, tokenSet, onClose, onSaved, onRemove }: { seed: Kn
               Remove
             </button>
           )}
+          {/* Test, apart from the rest: the values as typed, before they are saved (KN-26). */}
+          {!builtIn && (
+          <button className="rk-btn" style={{ marginLeft: 24 }} disabled={busy || !!test?.running} onClick={() => void runTest()} data-testid="knowledge-source-test">
+            Test
+          </button>
+          )}
         </div>
       }
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '4px 0' }}>
         {!seed && (
-          <Select label="Kind" value={s.kind} options={[['confluence', 'Confluence space'], ['git', 'Git repository of runbooks']]} onChange={(k) => put(k === 'git' ? { kind: 'git', branch: 'main' } : { kind: 'confluence', flavor: 'cloud' })} testId="knowledge-source-kind" />
+          <Select
+            label="Kind"
+            value={s.kind}
+            options={[['confluence', 'Confluence space'], ['git', 'Git repository of runbooks'], ['s3', 'S3 bucket of documents']]}
+            onChange={(k) => {
+              if (k === 's3') {
+                setS({ id: s.id, name: s.name, kind: 's3', bucket: '', prefix: '', region: '', endpoint: '', pathStyle: false, credentials: 'keys' })
+                changed()
+              } else put(k === 'git' ? { kind: 'git', branch: 'main' } : { kind: 'confluence', flavor: 'cloud' })
+            }}
+            testId="knowledge-source-kind"
+          />
         )}
-        <Text label="Name" value={s.name} onChange={(x) => put({ name: x })} placeholder={s.kind === 'git' ? 'Runbooks repository' : 'Confluence space: Infrastructure'} testId="knowledge-source-name" />
+        <Text label="Name" value={s.name} onChange={(x) => put({ name: x })} placeholder={s.kind === 'git' ? 'Runbooks repository' : s.kind === 's3' ? 'Runbooks bucket' : 'Confluence space: Infrastructure'} testId="knowledge-source-name" />
         {s.kind === 'confluence' && (
           <>
             <Select label="Confluence" value={s.flavor ?? 'cloud'} options={[['cloud', 'Confluence Cloud (email and API token)'], ['datacenter', 'Confluence Data Center (personal access token)']]} onChange={(x) => put({ flavor: x as 'cloud' | 'datacenter' })} testId="knowledge-source-flavor" />
@@ -632,12 +684,59 @@ function SourceDrawer({ seed, tokenSet, onClose, onSaved, onRemove }: { seed: Kn
             </div>
           </>
         )}
-        <Text label={tokenSet ? 'Token (saved; type a new one to replace it)' : s.kind === 'git' ? 'Token (read access)' : 'API token (read-only)'} type="password" value={token} onChange={setToken} testId="knowledge-source-token" />
+        {s.kind === 's3' && (
+          <>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Text label="Bucket" value={s.bucket ?? ''} onChange={(x) => put({ bucket: x })} width={200} testId="knowledge-source-bucket" />
+              <Text label="Prefix (empty: all)" value={s.prefix ?? ''} onChange={(x) => put({ prefix: x })} placeholder="runbooks/" width={160} testId="knowledge-source-prefix" />
+              <Text label="Region" value={s.region ?? ''} onChange={(x) => put({ region: x })} placeholder="us-east-1" width={130} testId="knowledge-source-region" />
+            </div>
+            <Text label="Endpoint (empty for AWS)" value={s.endpoint ?? ''} onChange={(x) => put({ endpoint: x })} placeholder="https://minio.example.internal" testId="knowledge-source-endpoint" />
+            <label className="rk-tcheck">
+              <input type="checkbox" checked={!!s.pathStyle} onChange={(e) => put({ pathStyle: e.target.checked })} data-testid="knowledge-source-pathstyle" />
+              Path-style addresses (most S3-compatible stores)
+            </label>
+            <span className="rk-fhint">Mycroft reads Markdown, text, Word (.docx), PDF, HTML and CSV under the prefix, up to 20 MiB each and 1000 objects a read; anything else is skipped and counted.</span>
+            <Select
+              label="Credentials"
+              value={s.credentials ?? 'keys'}
+              options={[['keys', 'A read-only access key in a Secret'], ['identity', identity ? 'The pod’s identity' : 'The pod’s identity (none found)']]}
+              onChange={(x) => put({ credentials: x as 'keys' | 'identity' })}
+              testId="knowledge-source-credentials"
+            />
+            {s.credentials !== 'identity' && (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <Text label={keySet ? 'Access key ID (saved; type to replace)' : 'Access key ID'} value={keys.accessKeyId ?? ''} onChange={(x) => { setKeys({ ...keys, accessKeyId: x }); changed() }} width={220} testId="knowledge-source-akid" />
+                <Text label={keySet ? 'Secret access key (saved; type to replace)' : 'Secret access key'} type="password" value={keys.secretAccessKey ?? ''} onChange={(x) => { setKeys({ ...keys, secretAccessKey: x }); changed() }} width={240} testId="knowledge-source-secret" />
+              </div>
+            )}
+          </>
+        )}
+        {builtIn && <span className="rk-fhint" data-testid="knowledge-source-builtin">There from the start: only its name changes here. Its Wiki sync job is renamed with it.</span>}
+        {!builtIn && (
+          <>
+        {s.kind !== 's3' && <Text label={tokenSet ? 'Token (saved; type a new one to replace it)' : s.kind === 'git' ? 'Token (read access)' : 'API token (read-only)'} type="password" value={token} onChange={(x) => { setToken(x); changed() }} testId="knowledge-source-token" />}
         <span className="rk-fhint">Kept in the Secret &lt;release&gt;-knowledge and never shown again. Use a read-only credential: Mycroft never writes to its sources.</span>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg2)' }}>
           Private CA (optional)
           <textarea className="rk-area" rows={2} spellCheck={false} value={s.caPEM ?? ''} onChange={(e) => put({ caPEM: e.target.value })} />
         </label>
+        {/* Test's result, under the fields; its button is in the footer (KN-26). */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+          <span className="rk-fhint">Test lists what Mycroft would read with the values typed here, without saving them{seed ? '; a credential left blank is the saved one' : ''}.</span>
+          {test?.running && (
+            <p className="rk-fhint" role="status" style={{ margin: 0 }} data-testid="knowledge-source-test-result" data-state="running">
+              Testing…
+            </p>
+          )}
+          {test && !test.running && (
+            <p className="rk-t" data-tone={test.r.ok ? 'ok' : 'err'} role={test.r.ok ? 'status' : 'alert'} style={{ margin: 0, fontSize: 12.5, overflowWrap: 'anywhere' }} data-testid="knowledge-source-test-result" data-state={test.r.ok ? 'ok' : 'error'}>
+              {sourceTestText(test.r)}
+            </p>
+          )}
+        </div>
+          </>
+        )}
         {error && (
           <p className="rk-t" data-tone="err" role="alert" style={{ margin: 0, fontSize: 12.5 }} data-testid="knowledge-source-error">
             {error}

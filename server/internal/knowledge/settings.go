@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -20,12 +21,15 @@ const (
 	SourceGit        = "git"
 	SourceUpload     = "upload"
 	SourceConsole    = "console"
+	// SourceS3 is a bucket of documents (Phase 12, KN-25).
+	SourceS3 = "s3"
 )
 
 // ConsoleSourceID is the console's own source, there from the start.
 const ConsoleSourceID = "console"
 
-// AddedSourceID is the source of what people add in Cases › Mycroft:
+// AddedSourceID is the source of what people add in Mycroft (Settings ›
+// Knowledge's Added in Mycroft card, MY-11):
 // notes, web pages read from an address, and documents (MY-04); a source
 // of uploaded documents, there from the start.
 const AddedSourceID = "added"
@@ -51,6 +55,17 @@ type Source struct {
 	Branch   string `json:"branch,omitempty"`
 	Path     string `json:"path,omitempty"`
 	Username string `json:"username,omitempty"`
+	// A bucket of documents (KN-25): its name, the prefix to read under
+	// ("" for all), its region, its endpoint ("" for AWS) and path-style
+	// addressing for MinIO or another S3-compatible store, and its
+	// credentials: CredentialsKeys (a read-only access key, in the Secret)
+	// or CredentialsIdentity (the pod's).
+	Bucket      string `json:"bucket,omitempty"`
+	Prefix      string `json:"prefix,omitempty"`
+	Region      string `json:"region,omitempty"`
+	Endpoint    string `json:"endpoint,omitempty"`
+	PathStyle   bool   `json:"pathStyle,omitempty"`
+	Credentials string `json:"credentials,omitempty"`
 	// CAPEM is a private CA for the source's TLS.
 	CAPEM   string    `json:"caPEM,omitempty"`
 	Added   time.Time `json:"added,omitzero"`
@@ -135,9 +150,13 @@ func (s Settings) withDefaults() Settings {
 		s.Sources = append(s.Sources, Source{ID: "documents", Name: "Uploaded documents", Kind: SourceUpload})
 	}
 	// --- Mycroft tab (Phase 12, wave 5) ---
-	// What people add in Cases › Mycroft › Wiki › Add (MY-04).
+	// What people add in Settings › Knowledge's Added in Mycroft card (MY-04, MY-11).
 	if !slices.ContainsFunc(s.Sources, func(x Source) bool { return x.ID == AddedSourceID }) {
 		s.Sources = append(s.Sources, Source{ID: AddedSourceID, Name: "Added in Mycroft", Kind: SourceUpload})
+	}
+	// The fixes proven in cases, offered for a runbook (KN-34).
+	if !slices.ContainsFunc(s.Sources, func(x Source) bool { return x.ID == FixesSourceID }) {
+		s.Sources = append(s.Sources, Source{ID: FixesSourceID, Name: "Fixes", Kind: SourceFixes})
 	}
 	return s
 }
@@ -211,9 +230,41 @@ func (x Source) Validate() error {
 		if strings.Contains(x.Path, "..") || strings.HasPrefix(x.Path, "/") {
 			return invalid("the directory is a path inside the repository")
 		}
-	case SourceUpload, SourceConsole:
+	case SourceS3:
+		if err := checkBucket(x.Bucket, x.Region, x.Endpoint, x.Prefix); err != nil {
+			return err
+		}
+		if x.Credentials != CredentialsKeys && x.Credentials != CredentialsIdentity {
+			return invalid("a bucket's credentials are an access key or the pod's identity")
+		}
+	case SourceUpload, SourceConsole, SourceFixes:
 	default:
-		return invalid("a source is confluence, git, upload or console")
+		return invalid("a source is confluence, git, s3, upload or console")
+	}
+	return nil
+}
+
+var (
+	bucketPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$`)
+	regionPattern = regexp.MustCompile(`^[a-z0-9-]{0,40}$`)
+)
+
+// checkBucket checks a bucket of documents' name, region, endpoint and
+// prefix (KN-25).
+func checkBucket(bucket, region, endpoint, prefix string) error {
+	if !bucketPattern.MatchString(bucket) {
+		return invalid("give the bucket's name: letters, digits, dots and dashes, up to 63")
+	}
+	if !regionPattern.MatchString(region) {
+		return invalid("the region is a name such as eu-west-1")
+	}
+	if endpoint != "" {
+		if err := httpsURL("the endpoint", endpoint, true); err != nil {
+			return err
+		}
+	}
+	if strings.HasPrefix(prefix, "/") || strings.Contains(prefix, "..") || len(prefix) > 200 {
+		return invalid("the prefix is a path such as runbooks/")
 	}
 	return nil
 }
@@ -307,23 +358,59 @@ func (s *Service) editSettings(ctx context.Context, fn func(*Settings) error) (S
 // SaveSource adds a source (create) or changes one, with its credential:
 // a value replaces it, "" removes it, nil keeps it.
 func (s *Service) SaveSource(ctx context.Context, c Caller, x Source, token *string, create bool) (Source, error) {
+	return s.SaveSourceWith(ctx, c, x, CredsChange{Token: token}, create)
+}
+
+// normalized is a source as it is saved and tested: its fields trimmed,
+// a repository's branch main by default, a bucket's prefix ending in a
+// slash and its credentials an access key by default.
+func (x Source) normalized() Source {
+	x.Name, x.BaseURL, x.URL, x.Space = strings.TrimSpace(x.Name), strings.TrimRight(strings.TrimSpace(x.BaseURL), "/"), strings.TrimSpace(x.URL), strings.TrimSpace(x.Space)
+	if x.Kind == SourceGit && x.Branch == "" {
+		x.Branch = "main"
+	}
+	if x.Kind == SourceS3 {
+		x.Bucket, x.Region, x.Prefix = strings.TrimSpace(x.Bucket), strings.TrimSpace(x.Region), strings.TrimSpace(x.Prefix)
+		x.Endpoint = strings.TrimRight(strings.TrimSpace(x.Endpoint), "/")
+		if x.Prefix != "" && !strings.HasSuffix(x.Prefix, "/") {
+			x.Prefix += "/"
+		}
+		if x.Credentials == "" {
+			x.Credentials = CredentialsKeys
+		}
+	}
+	return x
+}
+
+// SaveSourceWith is SaveSource with any credential: a token, or a
+// bucket's access key (KN-25).
+func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch CredsChange, create bool) (Source, error) {
 	if !c.SuperAdmin {
 		return Source{}, wrapf(ErrDenied, "only a SuperAdmin changes Mycroft's sources")
 	}
 	if err := s.leads(); err != nil {
 		return Source{}, err
 	}
-	x.Name, x.BaseURL, x.URL, x.Space = strings.TrimSpace(x.Name), strings.TrimRight(strings.TrimSpace(x.BaseURL), "/"), strings.TrimSpace(x.URL), strings.TrimSpace(x.Space)
-	if x.Kind == SourceGit && x.Branch == "" {
-		x.Branch = "main"
-	}
+	x = x.normalized()
 	if err := x.Validate(); err != nil {
 		return Source{}, err
 	}
-	if create && (x.Kind == SourceConsole || x.Kind == SourceUpload) {
-		return Source{}, invalid("the console and the uploaded documents are there already")
+	if x.Kind == SourceS3 && x.Credentials == CredentialsKeys {
+		have, err := s.creds(ctx, sourceKey(x.ID))
+		if err != nil {
+			return Source{}, err
+		}
+		if k := ch.apply(have); k.AccessKeyID == "" || k.SecretAccessKey == "" {
+			return Source{}, invalid("an access key is needed: give its ID and secret, or use the pod's identity")
+		}
+	}
+	if create && (x.Kind == SourceConsole || x.Kind == SourceUpload || x.Kind == SourceFixes) {
+		return Source{}, invalid("the console, the uploaded documents and the fixes are there already")
 	}
 	var saved Source
+	// renamedOnly says an edit changed the name alone: its job is renamed,
+	// and the source is not read again for it.
+	renamedOnly := false
 	_, err := s.editSettings(ctx, func(set *Settings) error {
 		i := slices.IndexFunc(set.Sources, func(o Source) bool { return o.ID == x.ID })
 		switch {
@@ -343,6 +430,9 @@ func (s *Service) SaveSource(ctx context.Context, c Caller, x Source, token *str
 				return invalid("a source keeps its kind; add a new one instead")
 			}
 			x.Added, x.AddedBy = old.Added, old.AddedBy
+			same := old
+			same.Name = x.Name
+			renamedOnly = reflect.DeepEqual(same, x) && ch.none()
 			set.Sources[i] = x
 		}
 		saved = x
@@ -352,23 +442,33 @@ func (s *Service) SaveSource(ctx context.Context, c Caller, x Source, token *str
 		return Source{}, err
 	}
 	detail := fmt.Sprintf("source %s (%s) %s", x.ID, x.Kind, map[bool]string{true: "added", false: "changed"}[create])
-	if token != nil {
-		if err := s.saveCreds(ctx, sourceKey(x.ID), CredsChange{Token: token}); err != nil {
+	if x.Kind == SourceS3 {
+		detail += fmt.Sprintf(": the bucket %s under %q, credentials %s", x.Bucket, x.Prefix, x.Credentials)
+	}
+	if !ch.none() {
+		if err := s.saveCreds(ctx, sourceKey(x.ID), ch); err != nil {
 			return saved, err
 		}
-		detail += map[bool]string{true: "; its token removed", false: "; its token replaced"}[*token == ""]
+		// Which parts changed, never their values.
+		for _, p := range []struct {
+			v    *string
+			name string
+		}{{ch.Token, "token"}, {ch.AccessKeyID, "access key ID"}, {ch.SecretAccessKey, "secret access key"}} {
+			if p.v != nil {
+				detail += map[bool]string{true: "; its " + p.name + " removed", false: "; its " + p.name + " replaced"}[*p.v == ""]
+			}
+		}
 	}
 	s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: x.ID, Detail: detail, Outcome: audit.OutcomeOK, From: c.From})
-	if create && s.o.ReadNew && !x.Off {
-		s.firstRead(ctx, c, x)
-	}
+	s.sourceSaved(ctx, c, x, create, !renamedOnly)
 	return saved, nil
 }
 
 // firstRead reads a source just added, in the background, once the wiki
 // has a store (Mycroft's first import, GS-11): the inventory it describes
-// becomes proposals in Cases › Inbox at once. Without a store the source
-// waits for the first sync after one is chosen.
+// becomes proposals in AIOps › Inbox at once. Without a store the source
+// waits for the first sync after one is chosen. With the jobs, the read
+// is a run of the source's Wiki sync job instead (KN-28, sourceSaved).
 func (s *Service) firstRead(ctx context.Context, c Caller, x Source) {
 	if _, _, err := s.currentStore(ctx); err != nil {
 		return
@@ -405,8 +505,8 @@ func (s *Service) RemoveSource(ctx context.Context, c Caller, id string) error {
 	if err := s.leads(); err != nil {
 		return err
 	}
-	if id == ConsoleSourceID {
-		return invalid("the console's own source can be switched off, not removed")
+	if id == ConsoleSourceID || id == FixesSourceID {
+		return invalid("the console's own sources can be switched off, not removed")
 	}
 	_, err := s.editSettings(ctx, func(set *Settings) error {
 		i := slices.IndexFunc(set.Sources, func(o Source) bool { return o.ID == id })
@@ -426,6 +526,7 @@ func (s *Service) RemoveSource(ctx context.Context, c Caller, id string) error {
 		s.o.Logger.Warn("a removed source's token stays in the Secret", "source", id, "err", err)
 	}
 	s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: id, Detail: "source " + id + " removed", Outcome: audit.OutcomeOK, From: c.From})
+	s.sourceRemoved(ctx, c, id)
 	return nil
 }
 
@@ -447,6 +548,7 @@ func (s *Service) SetSourceOn(ctx context.Context, c Caller, id string, on bool)
 	})
 	if err == nil {
 		s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: id, Detail: "source " + id + map[bool]string{true: " switched on", false: " switched off"}[on], Outcome: audit.OutcomeOK, From: c.From})
+		s.sourceSwitched(ctx, c, id, on)
 	}
 	return err
 }

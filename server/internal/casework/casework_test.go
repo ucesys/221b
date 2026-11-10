@@ -180,7 +180,7 @@ func TestACaseOpenedByHandWhileTheJobIsPaused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v.ID != "C-1" || v.Number != 1 || v.Status != issues.StatusNew || !v.Pending || v.Priority != 1 || v.AgentFound || !v.SLAApplies || len(v.AllowedOutcomes) != 5 || !v.RCARequired || v.MayReopen || v.Title != "The shop is slow" || v.CreatedBy == nil || *v.CreatedBy != (issues.Actor{Name: "Olivia", Kind: issues.ActorPerson}) || v.Source.Kind != SourceManual {
+	if v.ID != "C-1" || v.Number != 1 || v.Status != issues.StatusNew || !v.Pending || v.Priority != 1 || v.AgentFound || !v.SLAApplies || len(v.AllowedOutcomes) != 4 || !v.RCARequired || v.MayReopen || v.Title != "The shop is slow" || v.CreatedBy == nil || *v.CreatedBy != (issues.Actor{Name: "Olivia", Kind: issues.ActorPerson}) || v.Source.Kind != SourceManual {
 		t.Fatalf("case %+v", v.Brief)
 	}
 	if v.Object == nil || v.Object.Namespace != "shop" || v.Object.Kind != "Deployment" || v.Object.Name != "web" {

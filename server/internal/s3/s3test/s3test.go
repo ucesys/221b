@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -255,8 +256,13 @@ func (f *Fake) list(w http.ResponseWriter, r *http.Request) {
 		NextContinuationToken string    `xml:"NextContinuationToken,omitempty"`
 	}
 	var res result
+	// A page is PageSize keys, or max-keys when that is fewer, as S3 has it.
+	size := f.PageSize
+	if n, err := strconv.Atoi(q.Get("max-keys")); err == nil && n > 0 && (size == 0 || n < size) {
+		size = n
+	}
 	for i, k := range keys {
-		if f.PageSize > 0 && i == f.PageSize {
+		if size > 0 && i == size {
 			res.IsTruncated, res.NextContinuationToken = true, keys[i-1]
 			break
 		}

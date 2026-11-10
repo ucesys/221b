@@ -4,7 +4,8 @@
 // server says only whether each is set.
 import { call, post } from './call'
 
-export type SourceKind = 'confluence' | 'git' | 'upload' | 'console'
+/** fixes: the fixes proven in cases, offered for a runbook (KN-34); there from the start, renamed only. */
+export type SourceKind = 'confluence' | 'git' | 's3' | 'upload' | 'console' | 'fixes'
 
 export interface KnowledgeSource {
   id: string
@@ -19,6 +20,13 @@ export interface KnowledgeSource {
   branch?: string
   path?: string
   username?: string
+  /** A bucket of documents (KN-25): its name, the prefix read under, region, endpoint (empty for AWS), path-style, and an access key in the Secret or the pod's identity. */
+  bucket?: string
+  prefix?: string
+  region?: string
+  endpoint?: string
+  pathStyle?: boolean
+  credentials?: 'keys' | 'identity'
   caPEM?: string
   added?: string
   addedBy?: string
@@ -57,6 +65,24 @@ export interface SourceStatus {
   items: number
   error?: string
   reported?: number
+  /** Items the source holds that Mycroft does not read, and why (KN-25). */
+  skipped?: number
+  skippedWhy?: string
+  /** The last read of every item: a Confluence space's Wiki sync reads all once a night (KN-28). */
+  lastFull?: string
+}
+
+/** A source's Wiki sync job, in AIOps › Jobs (KN-28). */
+export const syncJobId = (source: string) => `wiki-sync-${source}`
+
+/** What a source's Test found: its items, the first few, and what it skips (KN-25). */
+export interface SourceTestResult {
+  ok: boolean
+  items?: number
+  sample?: string[]
+  skipped?: number
+  skippedWhy?: string
+  error?: string
 }
 
 export interface SyncResult {
@@ -73,6 +99,12 @@ export interface SyncResult {
   reported?: string[]
   errors?: string[]
   text: string
+  /** The source a sync of one source read (KN-28). */
+  source?: string
+  sourceName?: string
+  /** The active fixes Mycroft was given, and the pages that contradict one, in words (KN-33). */
+  fixes?: string[]
+  contradictions?: string[]
 }
 
 export interface ItemState {
@@ -124,6 +156,16 @@ export interface SourceRef {
   url?: string
 }
 
+/** Why a page was retired, who asked, who approved and when (KN-24). */
+export interface Retirement {
+  reason: string
+  askedBy: string
+  askedAt?: string
+  approvedBy: string
+  at: string
+  request?: string
+}
+
 export interface WikiPage {
   path: string
   title: string
@@ -133,6 +175,46 @@ export interface WikiPage {
   updated?: string
   body?: string
   stale?: boolean
+  /** Set on a retired page: out of the index, no agent reads it (KN-24). */
+  retired?: Retirement
+}
+
+/** A correction sent with This is outdated… (KN-23): waiting to be read, or its redraft waiting for review in a run. */
+export interface Correction {
+  id: string
+  path: string
+  title: string
+  by: string
+  name: string
+  at: string
+  state: 'waiting' | 'drafted' | 'done'
+  run?: string
+  note?: string
+}
+
+/** A request to retire a page or make it active again, waiting for one approver other than who asked (KN-24). */
+export interface PageRequest {
+  id: string
+  action: 'retire' | 'activate'
+  path: string
+  title: string
+  reason: string
+  by: string
+  name: string
+  at: string
+  state: 'waiting' | 'approved' | 'rejected'
+  decidedBy?: string
+  decidedName?: string
+  decided?: string
+  comment?: string
+  canApprove?: boolean
+  mine?: boolean
+}
+
+/** A page as its view reads it: with the correction and the request that wait for it, if any. */
+export interface PageView extends WikiPage {
+  correction?: Correction
+  request?: PageRequest
 }
 
 export interface SearchHit {
@@ -159,10 +241,29 @@ export interface DraftPage {
   removed: number
   clipped?: boolean
   sources?: SourceRef[]
-  state: 'waiting' | 'published' | 'conflict' | 'rejected'
+  /** held: a change to a retired page, never published (KN-24). */
+  state: 'waiting' | 'published' | 'conflict' | 'rejected' | 'held'
   approvals?: { by: string; name: string; at: string }[]
   reason?: string
+  /** The active fixes the page says otherwise than, for its reviewer (KN-33). */
+  contradicts?: Contradiction[]
 }
+
+/** A fix a drafted page contradicts: its id, title, how many cases it fixed, and Mycroft's why (KN-33). */
+export interface Contradiction {
+  fix: string
+  title: string
+  cases: number
+  why?: string
+}
+
+/** How the review card and the run's report say it: "contradicts F-3, used in 4 cases: why". */
+export function contradictionText(c: Contradiction): string {
+  return `contradicts ${c.fix}, used in ${c.cases} case${c.cases === 1 ? '' : 's'}` + (c.why ? `: ${c.why}` : '')
+}
+
+/** The key a page names a fix by among its sources (KN-33, KN-34). */
+export const fixSourceKey = (id: string) => 'fixes:' + id
 
 export interface DraftRun {
   id: string
@@ -228,20 +329,38 @@ const enc = encodeURIComponent
 
 export const fetchKnowledge = () => call<KnowledgeView>(base + 'settings')
 export const saveStaleDays = (staleDays: number) => call<KnowledgeView>(base + 'settings', { method: 'PUT', body: JSON.stringify({ staleDays }) })
-export const addSource = (source: KnowledgeSource, token?: string) => call<KnowledgeSource>(base + 'sources', post({ source, token }))
-export const saveSource = (source: KnowledgeSource, token?: string) => call<KnowledgeSource>(base + 'sources/' + enc(source.id), { method: 'PUT', body: JSON.stringify({ source, token }) })
+export const addSource = (source: KnowledgeSource, token?: string, keys?: KeysChange) => call<KnowledgeSource>(base + 'sources', post(keys ? { source, keys } : { source, token }))
+export const saveSource = (source: KnowledgeSource, token?: string, keys?: KeysChange) => call<KnowledgeSource>(base + 'sources/' + enc(source.id), { method: 'PUT', body: JSON.stringify(keys ? { source, keys } : { source, token }) })
 export const removeSource = (id: string) => call<{ removed: boolean }>(base + 'sources/' + enc(id), { method: 'DELETE' })
 export const setSourceOn = (id: string, on: boolean) => call<{ on: boolean }>(base + 'sources/' + enc(id) + '/on', post({ on }))
-export const testSource = (id: string) => call<{ ok: boolean; items?: number; error?: string }>(base + 'sources/' + enc(id) + '/test', post({}))
+/**
+ * Tests a source's values as typed in its dialog, before they are saved
+ * (KN-26). saved is the id of the source being edited: a credential left
+ * blank is its saved one, read on the server and never sent back.
+ */
+export const testTypedSource = (source: KnowledgeSource, token?: string, keys?: KeysChange, saved?: string) => call<SourceTestResult>(base + 'sources/test', post({ source, token, keys, saved }))
+
+/** A source's Test, in words: what it reached, the first few items, and what is skipped; or what is wrong. */
+export function sourceTestText(r: SourceTestResult): string {
+  if (!r.ok) return r.error ?? 'The test failed.'
+  const n = r.items ?? 0
+  let text = `Reached: ${n} ${n === 1 ? 'item' : 'items'}`
+  if (r.sample?.length) text += `, e.g. ${r.sample.join(', ')}`
+  text += '.'
+  if (r.skipped) text += ` ${r.skipped} skipped${r.skippedWhy ? `: ${r.skippedWhy}` : ''}.`
+  return text
+}
+
+/** Whether a source's address opens in a browser; a bucket's s3://bucket/key does not (KN-25). */
+export const isWebUrl = (url?: string) => !!url && /^https?:\/\//i.test(url)
 export const uploadDocument = (source: string, name: string, data: string) => call<{ version: string }>(base + 'sources/' + enc(source) + '/documents', post({ name, data }))
 export const removeDocument = (source: string, name: string) => call<{ removed: boolean }>(base + 'sources/' + enc(source) + '/documents/' + enc(name), { method: 'DELETE' })
 export const saveStore = (store: StoreSettings, keys: KeysChange) => call<KnowledgeView>(base + 'store', { method: 'PUT', body: JSON.stringify({ store, keys }) })
 export const testStore = (store: StoreSettings, keys: KeysChange) => call<{ ok: boolean; check?: StoreCheck; error?: string }>(base + 'store/test', post({ store, keys }))
 export const moveStore = (store: StoreSettings, keys: KeysChange) => call<{ files: number }>(base + 'store/move', post({ store, keys }))
 export const saveHookToken = (token: string) => call<{ hook: boolean }>(base + 'hook', { method: 'PUT', body: JSON.stringify({ token }) })
-export const syncNow = (full: boolean, source?: string) => call<{ started: boolean }>(base + 'sync', post({ full, source }))
-export const fetchPages = () => call<{ pages: WikiPage[]; connected: boolean }>(base + 'pages')
-export const fetchPage = (path: string) => call<WikiPage>(base + 'page?path=' + enc(path))
+export const fetchPages = () => call<{ pages: WikiPage[]; retired?: WikiPage[]; connected: boolean }>(base + 'pages')
+export const fetchPage = (path: string) => call<PageView>(base + 'page?path=' + enc(path))
 export const searchKnowledge = (q: string) => call<{ hits: SearchHit[] }>(base + 'search?q=' + enc(q))
 export const fetchDrafts = (all = false) => call<{ runs: DraftRun[] }>(base + 'drafts' + (all ? '?all=1' : ''))
 export const fetchDraftsCount = () => call<{ count: number }>(base + 'drafts/count', {}, true)
@@ -256,7 +375,7 @@ export const resolveConflict = (id: string, action: 'keep' | 'replace') => call<
 
 // --- Mycroft tab (Phase 12, wave 5, MY-01 to MY-10) ---
 
-/** A source as Cases › Mycroft › Wiki › Sources lists it: never its address or credential. */
+/** A source as AIOps › Mycroft › Wiki › Sources lists it: never its address or credential. */
 export interface SourceBrief {
   id: string
   name: string
@@ -266,6 +385,8 @@ export interface SourceBrief {
   lastRead?: string
   error?: string
   reported?: number
+  skipped?: number
+  skippedWhy?: string
 }
 
 /** One item people added in Mycroft: a note, a web page or a document. */
@@ -280,6 +401,9 @@ export interface AddedItem {
   lastSeen?: string
   pages?: string[]
   reported?: string
+  /** The page a correction is for (KN-23), and who added the item. */
+  corrects?: string
+  by?: string
 }
 
 export interface AddLimits {
@@ -330,15 +454,31 @@ export interface AddResult {
   text: string
 }
 
-/** A wiki page's address: Cases › Mycroft › Wiki, #/cases/mycroft/wiki/pages/<kind>/<name>.md. */
+/** A wiki page's address: AIOps › Mycroft › Wiki, #/cases/mycroft/wiki/pages/<kind>/<name>.md. */
 export const pageHref = (path: string) => '#/cases/mycroft/wiki/' + path.split('/').map(encodeURIComponent).join('/')
 
 /** The Wiki's views' addresses. */
-export const wikiHref = (view: 'pages' | 'drafts' | 'sources' | 'add' = 'pages') => '#/cases/mycroft/wiki' + (view === 'pages' ? '' : '/' + view)
+export const wikiHref = (view: 'pages' | 'drafts' | 'sources' = 'pages') => '#/cases/mycroft/wiki' + (view === 'pages' ? '' : '/' + view)
 
 export const fetchWiki = (background = false) => call<WikiState>(base + 'wiki', {}, background)
 export const addKnowledge = (input: AddInput) => call<AddResult>(base + 'add', post(input))
 export const removeAdded = (id: string) => call<{ removed: boolean }>(base + 'added/' + enc(id), { method: 'DELETE' })
+
+// --- A wiki page's own actions (KN-23, KN-24) ---
+
+export interface OutdatedResult {
+  correction: Correction
+  model: boolean
+  text: string
+}
+
+/** This is outdated…: what is outdated on a page and what is true now, for Mycroft to redraft it (KN-23). */
+export const sendOutdated = (path: string, text: string) => call<OutdatedResult>(base + 'outdated', post({ path, text }))
+/** The requests to retire a page or make it active again: those waiting, or all (KN-24). */
+export const fetchPageRequests = (all = false) => call<{ requests: PageRequest[] }>(base + 'requests' + (all ? '?all=1' : ''))
+export const askPageRequest = (action: PageRequest['action'], path: string, reason: string) => call<PageRequest>(base + 'requests', post({ action, path, reason }))
+export const approvePageRequest = (id: string) => call<PageRequest>(base + 'requests/' + enc(id) + '/approve', post({}))
+export const rejectPageRequest = (id: string, comment: string) => call<PageRequest>(base + 'requests/' + enc(id) + '/reject', post({ comment }))
 
 /** A file's bytes as base64, for an upload. */
 export async function fileBase64(f: Blob): Promise<string> {
@@ -351,6 +491,8 @@ export async function fileBase64(f: Blob): Promise<string> {
 export const SOURCE_KIND_LABEL: Record<SourceKind, string> = {
   confluence: 'Confluence',
   git: 'Git repository',
+  s3: 'S3 bucket',
   upload: 'Uploaded documents',
   console: 'This console',
+  fixes: 'Fixes',
 }

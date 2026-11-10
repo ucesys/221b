@@ -13,7 +13,7 @@ import (
 )
 
 // cardsProposer hands what the agents on their own propose to the cards
-// store (WC-01), so it waits in Cases › Inbox and survives a restart. The
+// store (WC-01), so it waits in AIOps › Inbox and survives a restart. The
 // producers keep a proposal of their own with the cards' JSON shape, so a
 // proposal crosses as JSON.
 type cardsProposer struct{ store *cards.Store }
@@ -50,31 +50,21 @@ func (k *knowledgeProposer) Propose(ctx context.Context, p knowledge.Proposal) (
 	return c.propose(ctx, p)
 }
 
-// registerKnowledgeJobs shows Mycroft's syncs and drift check in Cases ›
-// Jobs (KN-07, JB-03), where a SuperAdmin turns them on and sets when.
-func registerKnowledgeJobs(svc *knowledge.Service) {
+// registerKnowledgeJobs shows Mycroft's jobs in AIOps › Jobs (KN-07,
+// JB-03): each source's Wiki sync job (KN-28), made from the sources and
+// changed with them, and the drift check (KN-19), which a SuperAdmin
+// turns on and sets when.
+func registerKnowledgeJobs(ctx context.Context, svc *knowledge.Service, js *jobs.Service) {
 	if svc == nil {
 		return
 	}
-	kind := func(k knowledge.JobKind, order int, does string, run func(ctx context.Context) (string, error)) jobs.Kind {
-		spec := k.Default
-		return jobs.Kind{ID: k.ID, Label: k.Label, Agent: k.Agent, AgentName: "Mycroft", Order: order, Does: does,
-			Default: jobs.When{Schedule: &spec}, Schedulable: true,
-			Run: func(ctx context.Context, env *jobs.RunEnv) (jobs.Outcome, error) {
-				text, err := run(ctx)
-				return jobs.Outcome{Report: text}, err
-			}}
-	}
-	sync := func(full bool) func(ctx context.Context) (string, error) {
-		return func(ctx context.Context) (string, error) {
-			res, err := svc.Sync(ctx, full)
-			return res.Text, err
-		}
-	}
-	jobs.Register(kind(knowledge.JobSync, 60, "Reads every source again and proposes the wiki's pages", sync(true)))
-	jobs.Register(kind(knowledge.JobSyncChanges, 61, "Reads the source items changed since the last read", sync(false)))
-	jobs.Register(kind(knowledge.JobDrift, 62, "Compares the documents with what the console sees, and proposes a card for each difference", func(ctx context.Context) (string, error) {
-		res, err := svc.Drift(ctx)
-		return res.Text, err
-	}))
+	k := knowledge.JobDrift
+	spec := k.Default
+	jobs.Register(jobs.Kind{ID: k.ID, Label: k.Label, Agent: k.Agent, AgentName: "Mycroft", Order: 62, Does: "Compares the documents with what the console sees, and proposes a card for each difference",
+		Default: jobs.When{Schedule: &spec}, Schedulable: true, NoFindings: true,
+		Run: func(ctx context.Context, env *jobs.RunEnv) (jobs.Outcome, error) {
+			res, err := svc.Drift(ctx)
+			return jobs.Outcome{Report: res.Text}, err
+		}})
+	svc.SetJobs(ctx, js)
 }

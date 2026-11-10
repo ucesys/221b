@@ -63,7 +63,7 @@ func (s *Service) Export(ctx context.Context, seal Seal) (*BackupPart, error) {
 		}
 	}
 	s.mu.RLock()
-	if len(s.manifest.Items) > 0 {
+	if len(s.manifest.Items) > 0 || len(s.manifest.Retired) > 0 {
 		out.Manifest = s.manifest.clone()
 	}
 	s.mu.RUnlock()
@@ -96,13 +96,16 @@ func credName(k string, set Settings) (string, string) {
 		return "the knowledge webhook's token", "Settings › Knowledge › Webhook"
 	case strings.HasPrefix(k, "source-"):
 		id := strings.TrimPrefix(k, "source-")
-		name := id
+		name, what := id, "the token"
 		for _, x := range set.Sources {
 			if x.ID == id && x.Name != "" {
 				name = x.Name
 			}
+			if x.ID == id && x.Kind == SourceS3 {
+				what = "the access key"
+			}
 		}
-		return "the token of the knowledge source " + name, "Settings › Knowledge › Sources › " + name
+		return what + " of the knowledge source " + name, "Settings › Knowledge › Sources › " + name
 	}
 	return "the knowledge credential " + k, "Settings › Knowledge"
 }

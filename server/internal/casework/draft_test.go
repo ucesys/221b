@@ -146,7 +146,7 @@ func TestDraftsBeforeCF59AreShared(t *testing.T) {
 	for range 2 {
 		v := w.get(t, c.ID)
 		d := v.Draft
-		if d == nil || d.Reply != "His, newer" || d.Fix != "Her fix" || d.Close == nil || d.Close.Explanation != "Gone" || d.By != "sam" || d.Updated.Format(time.RFC3339) != at(5) {
+		if d == nil || d.Reply != "His, newer" || d.Fix != "Her fix" || d.Close == nil || d.Close.Explanation != "Gone" || d.Close.Outcome != issues.OutcomeNoAction || d.By != "sam" || d.Updated.Format(time.RFC3339) != at(5) {
 			t.Fatalf("shared: %+v", d)
 		}
 		if d.Drafters[partReply][0] != "sam" || d.Drafters[partFix][0] != "olivia" {

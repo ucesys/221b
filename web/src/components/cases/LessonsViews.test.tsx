@@ -45,7 +45,7 @@ const ex = (id: string, state: api.ExceptionState, title: string, over: Partial<
   ...over,
 })
 
-describe('Cases › Mycroft: exceptions (FX-06, MY-01); no RCAs since wave 6e', () => {
+describe('AIOps › Mycroft: exceptions (FX-06, MY-01); no RCAs since wave 6e', () => {
   beforeAll(() => {
     Element.prototype.scrollIntoView = () => {}
     // jsdom has no scrollTo on elements; the drawer scrolls its body to the top.
@@ -295,10 +295,10 @@ describe('Cases › Mycroft: exceptions (FX-06, MY-01); no RCAs since wave 6e', 
       expect(screen.getAllByTestId('exception').find((c) => c.getAttribute('aria-current') === 'true')?.getAttribute('data-id')).toBe('EX-3')
       cleanup()
     }
-    // No RCAs, which are part of their cases now (wave 6e); Fixes since wave 6g.
+    // No RCAs, which are part of their cases now (wave 6e); Fixes since wave 6g; Validation rules in Jobs since CF-89.
     render(<MycroftTab route={parseHash('#/cases/mycroft/exceptions')} access={access} />)
     expect(await screen.findByTestId('knowledge-exceptions')).toBeTruthy()
-    expect(screen.getAllByRole('button').map((b) => b.getAttribute('data-testid')).filter((t) => t?.startsWith('mycroft-sub-'))).toEqual(['mycroft-sub-wiki', 'mycroft-sub-known', 'mycroft-sub-exceptions', 'mycroft-sub-fixes', 'mycroft-sub-rules'])
+    expect(screen.getAllByRole('button').map((b) => b.getAttribute('data-testid')).filter((t) => t?.startsWith('mycroft-sub-'))).toEqual(['mycroft-sub-wiki', 'mycroft-sub-known', 'mycroft-sub-exceptions', 'mycroft-sub-fixes'])
   })
 
   it('tells a role without the records so', async () => {

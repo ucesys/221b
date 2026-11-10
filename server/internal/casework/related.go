@@ -3,12 +3,10 @@ package casework
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/issues"
 )
 
@@ -123,7 +121,7 @@ func (s *Service) related(ctx context.Context, c caseInfo) string {
 		key = self.Key.Check
 	}
 	if fx := s.fixesFor(ctx, key, text); len(fx) > 0 {
-		parts = append(parts, "Fixes of the problem, saved from earlier cases (CF-52):")
+		parts = append(parts, "Fixes of the problem, saved from earlier cases:")
 		parts = append(parts, fx...)
 	}
 	return strings.Join(parts, "\n")
@@ -135,23 +133,7 @@ func (s *Service) fixesFor(ctx context.Context, key, text string) []string {
 	if s.o.Fixes == nil {
 		return nil
 	}
-	var picked []fixes.Fix
-	if key != "" {
-		if list, err := s.o.Fixes.List(ctx); err == nil {
-			for _, f := range list {
-				if f.Status == fixes.Active && strings.EqualFold(f.Key, key) && len(picked) < relatedFixes {
-					picked = append(picked, f)
-				}
-			}
-		}
-	}
-	if hits, err := s.o.Fixes.Match(ctx, text, relatedFixes); err == nil {
-		for _, h := range hits {
-			if len(picked) < relatedFixes && !slices.ContainsFunc(picked, func(f fixes.Fix) bool { return f.ID == h.Fix.ID }) {
-				picked = append(picked, h.Fix)
-			}
-		}
-	}
+	picked, _ := s.o.Fixes.For(ctx, key, text, relatedFixes)
 	var out []string
 	for _, f := range picked {
 		line := fmt.Sprintf("- %s, updated %s, fixed %d case(s): %s", f.ID, f.Updated.UTC().Format("2006-01-02"), len(f.Cases), clip(f.Title, 200))

@@ -1,14 +1,14 @@
-// Cases › Mycroft › Validation rules (Phase 12, ADR-138): the check ids
-// the agents name their findings by, as a table as wide as the other
-// Mycroft tables, sortable by any column, filtered by state, job and
-// words. Since CF-85 it is one table: the rules, the ids the agents made
+// AIOps › Jobs › Validation rules (Phase 12, ADR-138; in Mycroft until
+// CF-89): the check ids the agents name their findings by, as a table as
+// wide as the Mycroft tables, sortable by any column, filtered by state,
+// job and words. Since CF-85 it is one table: the rules, the ids the agents made
 // up that are unlisted (other.…), and the rules the daily
 // housekeeping suggests from them are rows alike, each with the same
 // columns (id, meaning, case type, jobs, findings, runs, clusters, open
 // cases, exceptions, last found, origin, state, and a control once any
 // rule has one). Show: Active | Suggested | Unlisted | Retired |
 // Replaced | All. Every row opens its drawer at
-// #/cases/mycroft/rules/<id>, and its counts link into it
+// #/cases/jobs/rules/<id>, and its counts link into it
 // (…/<id>/<section>): its cases with their status, the runs that found
 // it, its latest findings with what became of each, its exceptions. In a
 // rule's drawer a SuperAdmin edits its meaning, case type, jobs and
@@ -18,8 +18,9 @@
 // titles and descriptions of it (CF-86) and promotes it, as it is or
 // edited, or dismisses it; a suggestion's says why it was made and lists
 // the ids it groups: Promote, Edit then promote, or Dismiss, also from
-// the Inbox, where it is a SuperAdmin's row (CF-87). Everyone who reads
-// the cases reads the page.
+// the Inbox, where it is a SuperAdmin's row (CF-87). The page is in Jobs,
+// the console-wide roles' tab (CF-89); the server lets everyone who reads
+// the cases read the list.
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type ReactNode } from 'react'
 import { CallError } from '../../api/call'
 import { CASE_STATUS, CASE_TYPE_IDS, caseHref, caseTypeText, OUTCOMES, type CaseStatus, type Outcome } from '../../api/casework'
@@ -56,12 +57,12 @@ import { ConfirmDialog } from '../ConfirmDialog'
 import { Drawer } from '../Drawer'
 import { Select } from '../Select'
 import { knownHref, ROUTING } from './FindingParts'
-import { runHref } from './jobsRoute'
+import { rulesHref, runHref } from './jobsRoute'
 import { errText, Tag } from './parts'
 import { EmptyRow, MycroftPage, MycroftTable } from './MycroftPage'
 
 /** The list's address, where a closed drawer goes back to. */
-const LIST = '#/cases/mycroft/rules'
+const LIST = rulesHref
 
 const errorText = (e: unknown) => (e instanceof CallError && e.status === 403 ? 'Only a SuperAdmin changes the validation rules; your role reads them, or not at all.' : errText(e))
 
@@ -321,7 +322,7 @@ const jobNames = (jobs: RuleJob[], ids: string[]) => ids.map((id) => jobs.find((
 /** A text cut short for a cell, whole in its title. */
 const short = (t: string, n = 140) => (t.length > n ? `${t.slice(0, n - 1)}…` : t)
 
-/** Mycroft › Validation rules; open is the row a link names, section the list in its drawer a count links to. */
+/** Jobs › Validation rules; open is the row a link names, section the list in its drawer a count links to. */
 export function RulesView({ open, section = '', onToast, onCount }: { open: string; section?: string; onToast?: (msg: string) => void; onCount?: (n: number) => void }): JSX.Element {
   const [page, setPage] = useState<RulesPage | null>(null)
   const [error, setError] = useState('')
@@ -367,8 +368,8 @@ export function RulesView({ open, section = '', onToast, onCount }: { open: stri
   }
   return (
     <MycroftPage
-      testId="mycroft-rules"
-      lead="The validation rules the agents name their findings by: each finding becomes a case by its cluster, object and rule. The ids the agents made up when no rule fitted, and the rules the housekeeping suggests from them, are rows too: promote one to a rule, or dismiss it. Retire a rule to stop offering it (what is keyed by it still matches); replace one by another to merge them. Ids never change."
+      testId="rules-page"
+      lead="Agents use these rules for a portion of a problem identifiers - each finding becomes a case identified by cluster, object and rule. When no rule fits, an agent makes up a name: it shows as Unlisted, for a SuperAdmin to make it a rule or dismiss it."
       filter={
         <div className="rk-seg" role="group" aria-label="Show" data-testid="rules-show">
           {SHOW.map(([v, label, tip]) => (

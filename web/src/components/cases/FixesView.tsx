@@ -1,4 +1,4 @@
-// Cases › Mycroft › Fixes (Phase 12, wave 6g): what worked before. A case
+// AIOps › Mycroft › Fixes (Phase 12, wave 6g): what worked before. A case
 // closed as Fixed with Save fix on becomes a fix: its symptoms, cause,
 // steps, the commands that worked and how to prevent it, with the cases it
 // was seen in. Active fixes are given to the agents (case analysis,
@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState, type JSX, type ReactNode } from 'reac
 import { CallError } from '../../api/call'
 import { caseHref } from '../../api/casework'
 import { deleteFix, fetchFixes, fixHref, saveFix, type Fix, type FixPatch, type FixStatus } from '../../api/fixes'
+import { fetchPages, fixSourceKey, pageHref, type WikiPage } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
 import { navigate } from '../../lib/router'
 import type { SortCol } from '../../lib/useSorted'
@@ -127,7 +128,7 @@ export function FixesView({ open, onToast, onCount }: { open: string; onToast?: 
   return (
     <MycroftPage
       testId="mycroft-fixes"
-      lead="What worked before: a case closed as Fixed with Save fix on becomes a fix. The agents are given the active ones when they analyse a case like it, and Sherlock finds them. Housekeeping turns duplicates off, and marks a fix that contradicts another as pending until someone accepts it."
+      lead="Actions that fixed a problem before. Created when a case is closed as Fixed. Agents will reuse it when the same problem comes back. Duplicates are cleaned up. A fix that contradicts another one waits for approval."
       filter={
         <div className="rk-seg" role="group" aria-label="Show" data-testid="fixes-show">
           {SHOW.map(([v, label, tip]) => (
@@ -237,6 +238,48 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       <dt>{label}</dt>
       <dd style={{ whiteSpace: 'pre-wrap' }}>{children}</dd>
     </>
+  )
+}
+
+/**
+ * The approved wiki pages that draw on a fix (KN-33, KN-34): the runbook
+ * Mycroft wrote from it once two people approved it, and pages that name
+ * it as a source. Nothing is shown when the wiki cannot be read.
+ */
+function FixPages({ id }: { id: string }) {
+  const [pages, setPages] = useState<WikiPage[] | null>(null)
+  useEffect(() => {
+    let live = true
+    fetchPages()
+      .then((r) => live && setPages(r.pages.filter((p) => (p.sources ?? []).some((s) => s.key === fixSourceKey(id)))))
+      .catch(() => live && setPages(null))
+    return () => {
+      live = false
+    }
+  }, [id])
+  if (!pages) return null
+  return (
+    <div className="cs-sec" data-testid="fix-pages">
+      <span className="rk-h">In the wiki</span>
+      {pages.length === 0 ? (
+        <span className="tb-hint">No approved page draws on it yet. Once it is seen in 3 cases, the housekeeping offers it to Mycroft for a runbook, which two people approve.</span>
+      ) : (
+        <ul className="cs-msgs">
+          {pages.map((p) => (
+            <li key={p.path} className="cs-msg" data-testid="fix-page">
+              <a className="rk-link" href={pageHref(p.path)}>
+                {p.title}
+              </a>
+              <span className="cs-meta">
+                {' '}
+                · {p.kind === 'runbook' ? 'Runbook' : p.kind}
+                {p.updated ? ` · ${fmtTs(p.updated)}` : ''}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 
@@ -438,6 +481,7 @@ function FixDrawer({ f, may, onClose, onChanged, onToast }: { f: Fix; may: boole
           </ol>
         )}
       </div>
+      <FixPages id={f.id} />
       {deleting && (
         <ConfirmDialog title={`Delete ${f.id}?`} confirm="Delete" danger busy={busy} error={err} onCancel={() => setDeleting(false)} onConfirm={() => void act(() => deleteFix(f.id), (x) => `${x.id} deleted.`, true)}>
           <p style={{ margin: 0 }}>“{f.title}” is gone for good: the agents are no longer given it, and the cases it was saved from keep their RCA. Deactivate keeps it listed instead.</p>

@@ -489,6 +489,7 @@ func (s *Store) check(p *Proposal, now time.Time) error {
 	p.Title = clean(p.Title, MaxTitle)
 	p.Reasoning = clean(p.Reasoning, MaxReasoning)
 	p.Source.Label, p.Source.SetBy = clean(p.Source.Label, MaxTitle), clean(p.Source.SetBy, 120)
+	p.Source.Job = clean(p.Source.Job, 120)
 	p.Source.ID = audit.Clip(strings.TrimSpace(p.Source.ID), 120)
 	p.DedupKey = audit.Clip(strings.TrimSpace(p.DedupKey), 300)
 	switch {
@@ -1134,6 +1135,9 @@ func (s *Store) recheck(ctx context.Context, c Card) Recheck {
 			return fail("Action %d (%s): %s changed since the proposal, so the card no longer says what approving it does. Reject it; a fresh proposal shows the state as it is.", i+1, was.Summary, what)
 		}
 		rc.Checked = append(rc.Checked, fmt.Sprintf("Action %d (%s): its target is unchanged since the proposal.", i+1, was.Summary))
+		if now.Warning != "" {
+			rc.Warnings = append(rc.Warnings, fmt.Sprintf("Action %d (%s): %s", i+1, was.Summary, now.Warning))
+		}
 	}
 	return rc
 }

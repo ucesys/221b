@@ -1,5 +1,5 @@
 // The agents' proposals as durable Watson cards (Phase 12, ADR-99 to
-// ADR-102): listed in Cases › Inbox, approved or rejected with a reason,
+// ADR-102): listed in AIOps › Inbox, approved or rejected with a reason,
 // checked again; and a SuperAdmin's standing approvals and notification
 // channels, in Settings › Watson.
 import { call, CallError, post } from './call'
@@ -41,6 +41,9 @@ export interface CardPlan {
   impact?: string[]
   fingerprint?: string
   unread?: string
+  // warning is what approving would do that is likely not meant: a fleet
+  // with no node now (KN-30).
+  warning?: string
 }
 
 export interface CardRecheck {
@@ -48,6 +51,8 @@ export interface CardRecheck {
   ok: boolean
   why?: string
   checked?: string[]
+  // warnings are the actions' warnings at the check, when it holds.
+  warnings?: string[]
 }
 
 export interface CardResult {
@@ -66,7 +71,8 @@ export type SourceKind = 'job' | 'alert' | 'report' | 'knowledge' | 'chat' | 'ca
 export interface Proposal {
   id: string
   agent: string
-  source: { kind: SourceKind; id?: string; label: string; setBy?: string }
+  /** What started it; `job` names the job whose run made it (CF-92). */
+  source: { kind: SourceKind; id?: string; label: string; setBy?: string; job?: string }
   cluster: string
   title: string
   reasoning?: string
@@ -356,6 +362,53 @@ export function inWords(at: string, now = Date.now()): string {
   if (min < 60) return `in ${Math.max(min, 1)} ${min === 1 ? 'minute' : 'minutes'}`
   const h = Math.round(min / 60)
   return `in ${h} ${h === 1 ? 'hour' : 'hours'}`
+}
+
+/** Whether an action is a command Watson runs (kubectl, helm), not a change the console makes itself (CF-92). */
+export const isWatsonCommand = (a: Pick<CardAction, 'kind'>) => a.kind === 'kubectl' || a.kind === 'helm'
+
+/**
+ * "Started by" in words, the same way for every kind of source (CF-92):
+ * "Mycroft, from sandbox-knowledge “nodes.md” (run-38, Rebuild now by
+ * Super Admin)", "Nightly audit, run-12 (Every day at 02:00, UTC; set up
+ * by Sam)", "Case analysis of C-7: web crash-loops", or a chat's own
+ * words. `link` is the case id in the text, which the drawer links;
+ * `title` is what the source said as it came.
+ */
+export function startedBy(p: Pick<Proposal, 'source' | 'agentName'>): { text: string; link?: string; title: string } {
+  const { kind, id = '', label = '', setBy = '', job = '' } = p.source
+  const title = [label, setBy && kind !== 'chat' ? `set by ${setBy}` : ''].filter(Boolean).join(' · ')
+  const agent = p.agentName || 'The agent'
+  const paren = (parts: string[]) => {
+    const x = parts.filter(Boolean).join('; ')
+    return x ? ` (${x})` : ''
+  }
+  const setUp = setBy ? `set up by ${setBy}` : ''
+  switch (kind) {
+    case 'knowledge':
+      // The drift check names itself; a page or document is where it came from.
+      if (id === 'drift' && label) return { text: `${agent}, ${label.charAt(0).toLowerCase()}${label.slice(1)}`, title }
+      return { text: `${agent}, from ${label || 'the knowledge sources'}${paren([setBy])}`, title }
+    case 'job': {
+      const name = job || label || `${agent}’s job`
+      const run = id ? `, ${id}` : ''
+      return { text: `${name}${run}${paren([job && label !== job ? label : '', setUp])}`, title }
+    }
+    case 'alert':
+    case 'report':
+      return { text: `${label || (kind === 'alert' ? 'An alert' : 'A report')}${paren([[job, id].filter(Boolean).join(', '), setUp])}`, title }
+    case 'case': {
+      const c = /^C-\d+$/i.test(id) ? id.toUpperCase() : ''
+      if (!c) return { text: label || 'A case', title }
+      // "Case C-7: web crash-loops" says the rest after the case's id.
+      const m = new RegExp(`^case ${c}\\b`, 'i').exec(label)
+      const rest = m ? label.slice(m[0].length) : label ? ` (${label})` : ''
+      return { text: `Case analysis of ${c}${rest}`, link: c, title: [title, job].filter(Boolean).join(' · ') }
+    }
+    case 'chat':
+      return { text: label || (setBy ? `A chat with ${setBy}` : 'A chat'), title }
+  }
+  return { text: label || kind, title }
 }
 
 /** A kubectl or helm action's command line, or "". */

@@ -32,7 +32,7 @@ test.afterAll(async ({ browser }) => {
   await call(page, '/api/v1/sherlock/config', { ...ON, clusters: {} })
   if (node) await cluster.cordon(node, false)
   const list = (await (await page.request.get('/api/v1/cases/cases?open=1')).json()) as { cases: { id: string; title: string }[] }
-  for (const c of list.cases.filter((x) => x.title.startsWith('Troubleshoot e2e'))) await call(page, `/api/v1/cases/cases/${c.id}/close`, { outcome: 'noFixNeeded', explanation: 'e2e: done' }, 'POST')
+  for (const c of list.cases.filter((x) => x.title.startsWith('Troubleshoot e2e'))) await call(page, `/api/v1/cases/cases/${c.id}/close`, { outcome: 'noAction', explanation: 'e2e: done' }, 'POST')
   await page.close()
 })
 

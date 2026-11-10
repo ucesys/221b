@@ -15,7 +15,8 @@ import (
 
 // --- Mycroft tab (Phase 12, wave 5, MY-04 to MY-08, ADR-118) ---
 //
-// What people add in Cases › Mycroft › Wiki › Add: a note of plain text,
+// What people add in Mycroft's wiki (since MY-11 in Settings › Knowledge's
+// Added in Mycroft card, once AIOps › Mycroft › Wiki › Add): a note of plain text,
 // a web address to read (the pages of that site it links to, as deep and
 // as many as asked, robots.txt respected), or documents. Each goes in as
 // an item of the source "Added in Mycroft" through the same path as an
@@ -270,6 +271,10 @@ type SourceBrief struct {
 	LastRead time.Time `json:"lastRead,omitzero"`
 	Error    string    `json:"error,omitempty"`
 	Reported int       `json:"reported,omitempty"`
+	// Skipped are the items it holds that Mycroft does not read, and why
+	// (KN-25).
+	Skipped    int    `json:"skipped,omitempty"`
+	SkippedWhy string `json:"skippedWhy,omitempty"`
 }
 
 // WikiState is what the Mycroft tab's Wiki needs before anything else
@@ -339,6 +344,7 @@ func (s *Service) Wiki(ctx context.Context, c Caller) (WikiState, error) {
 		b := SourceBrief{ID: x.ID, Name: x.Name, Kind: x.Kind, Off: x.Off}
 		if ss, ok := st.Sources[x.ID]; ok {
 			b.LastRead, b.Error, b.Reported = ss.LastRead, ss.Error, ss.Reported
+			b.Skipped, b.SkippedWhy = ss.Skipped, ss.SkippedWhy
 		}
 		for _, it := range m.bySource(x.ID) {
 			if !it.Gone {
@@ -349,7 +355,7 @@ func (s *Service) Wiki(ctx context.Context, c Caller) (WikiState, error) {
 	}
 	for _, it := range s.AddedItems() {
 		// What the tab shows of an item: never its hosts, fleets or hash.
-		w.Added = append(w.Added, ItemState{Source: it.Source, ID: it.ID, Title: it.Title, Version: it.Version, URL: it.URL, Modified: it.Modified, LastRead: it.LastRead, LastSeen: it.LastSeen, Pages: it.Pages, Reported: it.Reported})
+		w.Added = append(w.Added, ItemState{Source: it.Source, ID: it.ID, Title: it.Title, Version: it.Version, URL: it.URL, Modified: it.Modified, LastRead: it.LastRead, LastSeen: it.LastSeen, Pages: it.Pages, Reported: it.Reported, Corrects: it.Corrects, By: it.By})
 	}
 	return w, nil
 }

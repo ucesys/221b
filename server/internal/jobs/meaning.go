@@ -29,7 +29,7 @@ func RuleMeaning(id string) string {
 	if f := meaningOf.Load(); f != nil {
 		return (*f)(id)
 	}
-	for _, list := range [][]Check{AuditChecks, AlertChecks, DigestChecks} {
+	for _, list := range [][]Check{AuditChecks, AlertChecks, DigestChecks, InventoryChecks} {
 		for _, c := range list {
 			if c.ID == id {
 				return c.Says

@@ -216,7 +216,7 @@ func (s *Service) update(ctx context.Context, f func(*record) error) error {
 		}
 		b, _ := json.Marshal(rec)
 		if len(b) > s.o.Bytes || len(rec.Items) > maxFixes {
-			return fmt.Errorf("%w: the fixes fill their record; delete the inactive ones in Cases › Mycroft › Fixes first", ErrFull)
+			return fmt.Errorf("%w: the fixes fill their record; delete the inactive ones in AIOps › Mycroft › Fixes first", ErrFull)
 		}
 		if _, err = s.o.Backend.SaveKey(ctx, Key, b, version); errors.Is(err, kv.ErrConflict) {
 			continue
@@ -670,6 +670,51 @@ func (s *Service) Match(ctx context.Context, text string, limit int) ([]Hit, err
 
 // matchMin is how much of a fix's problem a text names for it to match.
 const matchMin = 50
+
+// For gives the active fixes of a problem (CF-52): those of the agents'
+// check first, then those its text matches, at most limit. A case's
+// analysis is given them so, and Mycroft's batches on the same subject
+// (KN-33). A failure to list them by check still gives those the text
+// matches, with the error.
+func (s *Service) For(ctx context.Context, check, text string, limit int) ([]Fix, error) {
+	var picked []Fix
+	var errs []error
+	if check != "" {
+		list, err := s.List(ctx)
+		errs = append(errs, err)
+		for _, f := range list {
+			if f.Status == Active && strings.EqualFold(f.Key, check) && len(picked) < limit {
+				picked = append(picked, f)
+			}
+		}
+	}
+	hits, err := s.Match(ctx, text, limit)
+	errs = append(errs, err)
+	for _, h := range hits {
+		if len(picked) < limit && !slices.ContainsFunc(picked, func(f Fix) bool { return f.ID == h.Fix.ID }) {
+			picked = append(picked, h.Fix)
+		}
+	}
+	return picked, errors.Join(errs...)
+}
+
+// Proven are the active fixes seen in at least n cases, those of the
+// most cases first (KN-34): what the housekeeping offers Mycroft for a
+// runbook.
+func (s *Service) Proven(ctx context.Context, n int) ([]Fix, error) {
+	list, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []Fix
+	for _, f := range list {
+		if f.Status == Active && len(f.Cases) >= n {
+			out = append(out, f)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return len(out[i].Cases) > len(out[j].Cases) })
+	return out, nil
+}
 
 // ---------- the same problem, the same advice ----------
 

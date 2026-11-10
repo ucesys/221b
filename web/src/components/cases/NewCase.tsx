@@ -8,8 +8,8 @@
 // While the person types, what is like it shows beside the form (the
 // issue service's match; no agent runs): an open case to add to instead,
 // a known issue to link (the case is made closed as it), an exception
-// that explains why the agents are quiet, a case closed lately as not a
-// problem or no fix needed to open or reopen, and one fixed lately to
+// that explains why the agents are quiet, a case closed lately as no
+// action needed (CF-90) to open or reopen, and one fixed lately to
 // open this one as its regression. Opening the case anyway is always
 // there. Opening it starts the case analysis job when it is on and the
 // case names a cluster; the drawer of the new case opens then.
@@ -139,7 +139,7 @@ export function NewCaseDrawer({ clusters: given, cluster, prefill = {}, onClose,
       footer={
         <span style={{ display: 'flex', gap: 8, width: '100%', alignItems: 'center' }}>
           <span className="tb-hint" style={{ fontSize: 12 }}>
-            {anySimilar(similar) ? 'Something like it is listed: add to it, or open a new case anyway.' : 'The case analysis job analyses it when it is on and the case names a cluster (Cases › Jobs).'}
+            {anySimilar(similar) ? 'Something like it is listed: add to it, or open a new case anyway.' : 'The case analysis job analyses it when it is on and the case names a cluster (AIOps › Jobs).'}
           </span>
           <span className="cs-grow" />
           <button className="rk-btn" onClick={onClose} disabled={busy}>
@@ -297,7 +297,7 @@ function SimilarPanel({ similar: s, looking, typed, busy, choose }: { similar: S
         </Group>
       )}
       {s && s.recentNoProblem.length > 0 && (
-        <Group title="Closed lately as not a problem or no fix needed" testId="similar-noproblem">
+        <Group title="Closed lately as no action needed" testId="similar-noproblem">
           {s.recentNoProblem.map((c) => (
             <div key={c.id} className="rk-card" style={card} data-testid={`similar-noproblem-${c.id}`}>
               <CaseLine c={c} />

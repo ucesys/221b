@@ -159,7 +159,7 @@ test('a proposed change someone else approved first is refused with who and when
   await row.locator('[role=rowheader]').click()
   await expect(page).toHaveURL(/#\/cases\/inbox\/proposal\/PC-900$/)
   const drawer = page.getByTestId('proposal-drawer')
-  await expect(drawer).toContainText('Case C-41: web crash-loops')
+  await expect(drawer.getByTestId('proposal-started-by')).toHaveText('Case analysis of C-41: web crash-loops')
   // Run in Watson brings its card to the drawer's Watson, which asks for the approval (CF-62).
   await drawer.getByTestId('proposal-run-watson').click()
   await drawer.getByTestId('watson-proposal-card').getByTestId('proposal-approve').click()
@@ -220,7 +220,7 @@ test('the bell stands for what waits in the Inbox, in every area, and opens it; 
     await expect(page.getByTestId('admin-flag')).toHaveCount(0)
     // Its colour says what waits; it carries no number.
     await expect(bell).toHaveAttribute('data-state', /^(p01|waiting|none)$/)
-    await expect(bell).toHaveAttribute('title', /^(\d+ waiting for you(, .+)?: open Cases › Inbox|Nothing waiting for you in Cases › Inbox)$/)
+    await expect(bell).toHaveAttribute('title', /^(\d+ waiting for you(, .+)?: open AIOps › Inbox|Nothing waiting for you in AIOps › Inbox)$/)
     await expect(bell).toHaveText('')
   }
   await page.getByTestId('inbox-bell').click()
@@ -251,8 +251,8 @@ test('Sherlock is in the dock over Cases and is told the page and the item open;
   await input.press('Enter')
   await expect(page.getByTestId('sherlock-answer').last()).toHaveAttribute('data-status', /done|stopped|failed/, { timeout: 30_000 })
   const sent = (await cluster.claudeRequests()).join('\n')
-  // The Cases skill, and the view: the Inbox, with the change open.
-  expect(sent).toContain('The Cases area.')
+  // The Cases skill (AIOps), and the view: the Inbox, with the change open.
+  expect(sent).toContain('AIOps. The person is asking from AIOps')
   expect(sent).toMatch(/\\"view\\":\\"cases\\"/)
   expect(sent).toMatch(/\\"kind\\":\\"proposal\\",\\"id\\":\\"PC-900\\"/)
   expect(sent).toContain('Restart web')

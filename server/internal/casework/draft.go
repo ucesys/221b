@@ -52,7 +52,7 @@ func (s *Service) Keep(ctx context.Context, id string, in DraftInput, c Caller) 
 	}
 	d := Draft{Reply: clip(in.Reply, MaxDetail), Fix: clip(in.Fix, MaxDetail)}
 	if x := in.Close; x != nil {
-		d.Close = &Closing{Outcome: clip(x.Outcome, 40), Explanation: clip(x.Explanation, MaxDetail), Original: clip(x.Original, 20)}
+		d.Close = &Closing{Outcome: issues.Outcome(clip(string(x.Outcome), 40)).Canonical(), Explanation: clip(x.Explanation, MaxDetail), Original: clip(x.Original, 20)}
 	}
 	if x := in.RCA; x != nil {
 		d.RCA = &Completion{Cause: clip(x.Cause, MaxRCAField), Fix: clip(x.Fix, MaxRCAField), Prevention: clip(x.Prevention, MaxRCAField), Text: clip(x.Text, MaxRCAField)}

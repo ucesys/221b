@@ -93,7 +93,7 @@ func MakeSeed(now time.Time) (Seed, error) {
 	if _, err := svc.Known(ctx, id(3), KnownLink{Create: &NewKnown{Title: "Certificates are renewed by hand", Workaround: "Renew with the runbook until cert-manager is in."}}, admin); err != nil {
 		return Seed{}, err
 	}
-	if _, err := svc.Close(ctx, id(4), CloseInput{Outcome: issues.OutcomeNoFixNeeded, Explanation: "A log burst during the backup; it cleared by itself."}, admin); err != nil {
+	if _, err := svc.Close(ctx, id(4), CloseInput{Outcome: issues.OutcomeNoAction, Explanation: "A log burst during the backup; it cleared by itself."}, admin); err != nil {
 		return Seed{}, err
 	}
 	// Day two: the same again; then the tag is pinned, which the next run

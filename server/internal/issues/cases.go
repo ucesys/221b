@@ -68,21 +68,19 @@ func (r *Report) AgentFound() bool { return r.Source == CaseFinding }
 func (r *Report) Pending() bool { return r.Status.Open() }
 
 // AllowedOutcomes are the outcomes an open case may close with (CF-03):
-// one a person opened every one but exception (nothing to mute); one an
-// agent found every one but notAProblem (an exception says that) and
-// duplicate (its repeats join the open case), unless it is marked a
-// possible duplicate, which a person confirms by closing it so (CF-18).
+// every one, whoever opened it, but exception, which is for what an agent
+// found (there is nothing to mute on a person's). Since CF-90, noAction
+// is offered for every case. Any case may be a duplicate of an open
+// original (CF-04): a person may see two agent-found cases are one
+// problem though their keys differ.
 func (r *Report) AllowedOutcomes() []Outcome {
 	if !r.Status.Open() {
 		return []Outcome{}
 	}
-	// Any case may be a duplicate of an open original (CF-04): a person
-	// may see two agent-found cases are one problem though their keys
-	// differ.
 	if r.AgentFound() {
-		return []Outcome{OutcomeFix, OutcomeDuplicate, OutcomeNoFixNeeded, OutcomeKnownIssue, OutcomeException}
+		return []Outcome{OutcomeFix, OutcomeDuplicate, OutcomeNoAction, OutcomeKnownIssue, OutcomeException}
 	}
-	return []Outcome{OutcomeFix, OutcomeDuplicate, OutcomeNotAProblem, OutcomeNoFixNeeded, OutcomeKnownIssue}
+	return []Outcome{OutcomeFix, OutcomeDuplicate, OutcomeNoAction, OutcomeKnownIssue}
 }
 
 // RCARequired says a fix needs its RCA: at P0 and P1 (CF-03).
@@ -90,15 +88,13 @@ func (r *Report) RCARequired() bool { return r.Priority <= 1 }
 
 // MayClose says why a case may not close with an outcome, if it may not.
 func (r *Report) MayClose(o Outcome) error {
+	o = o.Canonical()
 	if !o.Valid() {
-		return invalid("say why it is closed: fix, duplicate, notAProblem, noFixNeeded, knownIssue or exception")
+		return invalid("say why it is closed: fix, duplicate, noAction, knownIssue or exception")
 	}
 	if !slices.Contains(r.AllowedOutcomes(), o) {
-		switch {
-		case !r.Status.Open():
+		if !r.Status.Open() {
 			return invalid("C-%d is closed already", r.Number)
-		case r.AgentFound():
-			return invalid("C-%d was found by an agent: accept it as an exception instead of not a problem", r.Number)
 		}
 		return invalid("C-%d was opened by a person: an exception is for what agents find", r.Number)
 	}
@@ -381,8 +377,9 @@ func (s *Service) CaseViews(ctx context.Context, c Caller, f Filter) ([]ReportVi
 
 // Offer is what fits instead of a duplicate whose original is closed.
 type Offer struct {
-	// Kind is reopenOriginal, regression, sameKnownIssue, notAProblem,
-	// removeException or sameAs.
+	// Kind is reopenOriginal, regression, sameKnownIssue, noAction,
+	// removeException or sameAs; notAProblem, its name before CF-90, is
+	// still accepted as noAction.
 	Kind        string `json:"kind"`
 	Original    string `json:"original"`
 	KnownIssue  string `json:"knownIssue,omitempty"`
@@ -395,7 +392,7 @@ const (
 	OfferReopenOriginal  = "reopenOriginal"
 	OfferRegression      = "regression"
 	OfferSameKnownIssue  = "sameKnownIssue"
-	OfferNotAProblem     = "notAProblem"
+	OfferNoAction        = "noAction"
 	OfferRemoveException = "removeException"
 	OfferSameAs          = "sameAs"
 )
@@ -458,14 +455,13 @@ func (st *state) duplicateCheck(r *Report, original int) DuplicateCheck {
 		}
 	case OutcomeException:
 		out.Reason = id + " was accepted as the exception " + l.Exception
-		out.Offers = append(out.Offers, Offer{Kind: OfferNotAProblem, Original: id, Exception: l.Exception, Explanation: l.Explanation},
+		out.Offers = append(out.Offers, Offer{Kind: OfferNoAction, Original: id, Exception: l.Exception, Explanation: l.Explanation},
 			Offer{Kind: OfferRemoveException, Original: id, Exception: l.Exception})
-	case OutcomeNotAProblem:
-		out.Reason = id + " was closed as not a problem"
-		out.Offers = append(out.Offers, Offer{Kind: OfferNotAProblem, Original: id, Explanation: l.Explanation}, Offer{Kind: OfferReopenOriginal, Original: id})
-	case OutcomeNoFixNeeded:
-		out.Reason = id + " was closed as needing no fix"
-		out.Offers = append(out.Offers, Offer{Kind: OfferReopenOriginal, Original: id}, Offer{Kind: OfferSameAs, Original: id})
+	case OutcomeNoAction:
+		// What not a problem and no fix needed offered, together (CF-90).
+		out.Reason = id + " was closed as no action needed"
+		out.Offers = append(out.Offers, Offer{Kind: OfferNoAction, Original: id, Explanation: l.Explanation}, Offer{Kind: OfferReopenOriginal, Original: id},
+			Offer{Kind: OfferSameAs, Original: id})
 	default:
 		out.Reason = id + " is closed"
 	}

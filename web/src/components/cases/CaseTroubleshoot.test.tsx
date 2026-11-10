@@ -39,7 +39,7 @@ const kase = (over: Partial<Case> = {}): Case => ({
   slaApplies: true,
   mayChange: true,
   related: [],
-  allowedOutcomes: ['fix', 'duplicate', 'notAProblem', 'noFixNeeded', 'knownIssue'],
+  allowedOutcomes: ['fix', 'duplicate', 'noAction', 'knownIssue'],
   rcaRequired: false,
   mayReopen: false,
   commands: [],

@@ -535,7 +535,8 @@ knowledge:
   # issues (Settings › Issues) keeps its state there too.
   #
   # The addresses the console reaches for knowledge, as CIDRs: Confluence,
-  # the git hosts and the bucket. Listed, the network policy lets the
+  # the git hosts and the buckets (the wiki's, and any bucket of documents
+  # Mycroft reads, KN-25). Listed, the network policy lets the
   # console reach them on egressPorts. Empty adds no rule: with
   # sherlock.egress on (the default) the console reaches any address on 443
   # already; list them when it is off, or for a store on another port.

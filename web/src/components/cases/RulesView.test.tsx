@@ -1,9 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../../api/rules'
-import type { CasesAccess } from '../../lib/cases'
 import { parseHash } from '../../lib/router'
-import { MycroftTab } from './MycroftTab'
+import { JobsArea } from './JobsArea'
 import { behindOf, casesState, InboxSuggestionDrawer, meaningOf, originText, promoteOf, rowOf, rowsOf, rowsShown, rulePatchOf, RulesView } from './RulesView'
 
 vi.mock('../../api/rules', async (original) => ({
@@ -90,7 +89,7 @@ const PAGE: api.RulesPage = {
       last: '2026-11-07T02:00:00Z',
       caseList: [
         { id: 'C-9', title: 'etcd is slow on cp-1', status: 'new', priority: 3, open: true },
-        { id: 'C-8', title: 'etcd is slow on cp-9', status: 'closed', outcome: 'noFixNeeded', priority: 3, open: false },
+        { id: 'C-8', title: 'etcd is slow on cp-9', status: 'closed', outcome: 'noAction', priority: 3, open: false },
       ],
       runIds: ['run-12', 'run-1'],
       latest: [
@@ -126,7 +125,7 @@ const PAGE: api.RulesPage = {
 
 const ids = () => screen.getAllByTestId('rule-row').map((r) => r.getAttribute('data-id'))
 
-describe('Cases › Mycroft › Validation rules (ADR-138)', () => {
+describe('AIOps › Mycroft › Validation rules (ADR-138)', () => {
   beforeAll(() => {
     Element.prototype.scrollIntoView = () => {}
     Element.prototype.scrollTo = () => {}
@@ -161,8 +160,8 @@ describe('Cases › Mycroft › Validation rules (ADR-138)', () => {
     expect(within(row).getByTestId('rule-findings').textContent).toBe('5')
     expect(within(row).getByTestId('rule-runs').textContent).toBe('4')
     expect(within(row).getByTestId('rule-clusters').textContent).toBe('Production, dev')
-    expect(within(row).getByTestId('rule-open').getAttribute('href')).toBe('#/cases/mycroft/rules/pod.privileged/cases')
-    expect(within(row).getByTestId('rule-findings').getAttribute('href')).toBe('#/cases/mycroft/rules/pod.privileged/findings')
+    expect(within(row).getByTestId('rule-open').getAttribute('href')).toBe('#/cases/jobs/rules/pod.privileged/cases')
+    expect(within(row).getByTestId('rule-findings').getAttribute('href')).toBe('#/cases/jobs/rules/pod.privileged/findings')
     expect(within(screen.getAllByTestId('rule-row')[0]!).getByTestId('rule-open').tagName).toBe('SPAN')
     const nr = screen.getAllByTestId('rule-row')[0]!
     expect(within(nr).getByTestId('rule-jobs').textContent).toBe('Nightly audit, Alert diagnosis')
@@ -285,7 +284,7 @@ describe('Cases › Mycroft › Validation rules (ADR-138)', () => {
     expect(within(findings[0]!).getByTestId('rule-finding-routing').textContent).toBe('Seen againC-9')
     expect(within(findings[1]!).getByTestId('rule-finding-routing').getAttribute('data-routing')).toBe('ignored')
     expect(within(d).getAllByTestId('rule-run').map((a) => a.textContent)).toEqual(['run-12', 'run-1'])
-    expect(within(d).getAllByTestId('rule-case-status').map((t) => t.textContent)).toEqual(['New', 'Closed: no fix needed'])
+    expect(within(d).getAllByTestId('rule-case-status').map((t) => t.textContent)).toEqual(['New', 'Closed: no action needed'])
     expect(within(d).getAllByTestId('rule-case')[0]!.querySelector('a')!.getAttribute('href')).toBe('#/cases/inbox/case/9')
     // A count in the table opens the drawer at its list.
     expect(within(d).getByTestId('rule-cases-list').getAttribute('data-at')).toBe('true')
@@ -327,7 +326,7 @@ describe('Cases › Mycroft › Validation rules (ADR-138)', () => {
     render(<RulesView open="node.dns-timeout" />)
     const d = await screen.findByTestId('rule-drawer')
     expect(within(d).getByTestId('suggestion-why').textContent).toContain('grouped with other.dns-timeout-errors because their ids are alike in words')
-    expect(within(d).getAllByTestId('suggestion-from-id').map((a) => a.getAttribute('href'))).toEqual(['#/cases/mycroft/rules/other.dns-timeout', '#/cases/mycroft/rules/other.dns-timeout-errors'])
+    expect(within(d).getAllByTestId('suggestion-from-id').map((a) => a.getAttribute('href'))).toEqual(['#/cases/jobs/rules/other.dns-timeout', '#/cases/jobs/rules/other.dns-timeout-errors'])
     expect(within(d).getByTestId('rule-descriptions').textContent).toContain('other.dns-timeout: Lookups time out.')
     expect(within(d).getAllByTestId('rule-run').map((a) => a.textContent)).toEqual(['run-11'])
     fireEvent.click(within(d).getByTestId('suggestion-promote'))
@@ -358,7 +357,7 @@ describe('Cases › Mycroft › Validation rules (ADR-138)', () => {
     render(<InboxSuggestionDrawer id="node.dns-timeout" onClose={onClose} onDone={onDone} />)
     await screen.findByTestId('suggestion-why')
     const d = screen.getByTestId('rule-drawer')
-    expect(within(d).getByTestId('suggestion-rules-link').getAttribute('href')).toBe('#/cases/mycroft/rules/node.dns-timeout')
+    expect(within(d).getByTestId('suggestion-rules-link').getAttribute('href')).toBe('#/cases/jobs/rules/node.dns-timeout')
     fireEvent.click(within(d).getByTestId('suggestion-dismiss'))
     await waitFor(() => expect(onDone).toHaveBeenCalled())
     expect(onClose).toHaveBeenCalled()
@@ -392,13 +391,20 @@ describe('Cases › Mycroft › Validation rules (ADR-138)', () => {
     expect(originText(rule('x.y', { builtIn: false, auto: true }))).toBe('Added by housekeeping')
   })
 
-  it('is a sub-tab of Mycroft at #/cases/mycroft/rules', async () => {
-    const access: CasesAccess = { show: true, approver: true, operator: true, reporter: true, console: true, tabs: ['inbox', 'mycroft'] }
-    render(<MycroftTab route={parseHash('#/cases/mycroft/rules/pod.crashloop')} access={access} />)
-    expect(screen.getByTestId('mycroft-sub-rules').getAttribute('aria-pressed')).toBe('true')
-    expect(screen.getByTestId('mycroft-sub-rules').textContent).toContain('Validation rules')
-    expect(await screen.findByTestId('rule-drawer')).toBeTruthy()
-    expect(within(screen.getByTestId('rule-drawer')).getByTestId('rule-drawer-aliases').textContent).toBe('pod.restart-loop')
+  it('is a sub-tab of Jobs at #/cases/jobs/rules, where the old Mycroft address leads (CF-89)', async () => {
+    for (const hash of ['#/cases/jobs/rules/pod.crashloop', '#/cases/mycroft/rules/pod.crashloop']) {
+      render(<JobsArea route={parseHash(hash)} />)
+      expect(screen.getByTestId('jobs-sub-rules').getAttribute('aria-pressed')).toBe('true')
+      expect(screen.getByTestId('jobs-sub-rules').textContent).toBe('Validation rules')
+      expect(await screen.findByTestId('rule-drawer')).toBeTruthy()
+      expect(within(screen.getByTestId('rule-drawer')).getByTestId('rule-drawer-aliases').textContent).toBe('pod.restart-loop')
+      cleanup()
+    }
+    // A count's link opens the rule's drawer at that list.
+    render(<JobsArea route={parseHash('#/cases/jobs/rules/pod.privileged/findings')} />)
+    const d = await screen.findByTestId('rule-drawer')
+    expect(d.querySelector('[data-section=findings]')!.getAttribute('data-at')).toBe('true')
+    expect(api.ruleHref('a.b')).toBe('#/cases/jobs/rules/a.b')
   })
 
   it('names clusters as cases do, the id in the hover, says how many cases are open, and leaves out exceptions when there are none', async () => {

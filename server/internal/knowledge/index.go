@@ -51,6 +51,9 @@ type Index struct {
 	df    map[string]int
 	avg   float64
 	pages []Page
+	// retired are the pages people retired (KN-24): kept to be shown,
+	// never searched.
+	retired []Page
 }
 
 // stopWords say nothing a search is about.
@@ -121,6 +124,12 @@ func NewIndex(files map[string]File, m *Manifest, staleDays int, now time.Time) 
 		switch {
 		case strings.HasPrefix(f.Path, PagesDir):
 			p := ParsePage(f)
+			if r, ok := m.Retired[p.Path]; ok {
+				// A retired page is out of the index: no agent reads it.
+				p.Retired = &r
+				idx.retired = append(idx.retired, p)
+				continue
+			}
 			if last, found := m.lastSeen(p.Sources); found && staleDays > 0 && now.Sub(last) > time.Duration(staleDays)*24*time.Hour {
 				p.Stale = true
 			}
@@ -143,6 +152,7 @@ func NewIndex(files map[string]File, m *Manifest, staleDays int, now time.Time) 
 		}
 	}
 	sort.Slice(idx.pages, func(i, j int) bool { return idx.pages[i].Path < idx.pages[j].Path })
+	sort.Slice(idx.retired, func(i, j int) bool { return idx.retired[i].Path < idx.retired[j].Path })
 	sort.SliceStable(idx.docs, func(i, j int) bool {
 		a, b := idx.docs[i].hit, idx.docs[j].hit
 		if a.Kind != b.Kind {
@@ -165,6 +175,10 @@ func NewIndex(files map[string]File, m *Manifest, staleDays int, now time.Time) 
 
 // Pages are the approved pages, without their bodies' search terms.
 func (x *Index) Pages() []Page { return append([]Page(nil), x.pages...) }
+
+// Retired are the pages people retired, with their bodies; no search
+// finds them.
+func (x *Index) Retired() []Page { return append([]Page(nil), x.retired...) }
 
 // Size is how many documents the index holds.
 func (x *Index) Size() int { return len(x.docs) }

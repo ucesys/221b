@@ -10,6 +10,7 @@ vi.mock('../../api/jobs', async (original) => ({
   fetchJobs: vi.fn(),
   updateJob: vi.fn(),
   runJobNow: vi.fn(),
+  rebuildJobNow: vi.fn(),
   addJob: vi.fn(),
   removeJob: vi.fn(),
   fetchJobRuns: vi.fn(),
@@ -35,7 +36,7 @@ const audit: api.Job = {
   does: 'A report of new RBAC risks, volumes nearly full and practices not met',
   builtinTask: 'Find what has gone wrong or become risky.',
   reads: 'Each cluster the job covers, read-only.',
-  proposes: 'A report, findings, and changes that wait in Cases › Inbox.',
+  proposes: 'A report, findings, and changes that wait in AIOps › Inbox.',
   schedulable: true,
   manual: true,
   whenText: 'Every day at 02:00, Europe/Berlin',
@@ -102,7 +103,7 @@ const view = (mayEdit = true): api.JobsView => ({
   timeZone: 'Europe/Berlin',
 })
 
-describe('Cases › Jobs', () => {
+describe('AIOps › Jobs', () => {
   beforeAll(() => {
     // jsdom has no scrollTo on elements; the drawer scrolls its body to the top.
     Element.prototype.scrollTo = () => {}
@@ -177,21 +178,52 @@ describe('Cases › Jobs', () => {
     expect(vi.mocked(api.updateJob).mock.calls[0]![1].when).toEqual({ event: 'alert', severity: 'error' })
   })
 
+  it('offers Rebuild now only where a job has something to rebuild, after asking (KN-29)', async () => {
+    const v = view()
+    vi.mocked(api.fetchJobs).mockResolvedValue({ ...v, jobs: v.jobs.map((j) => (j.id === 'nightly-audit' ? { ...j, rebuild: true } : j)) })
+    vi.mocked(api.rebuildJobNow).mockResolvedValue({ ...audit.last!, id: 'run-9', status: 'running' })
+    render(<JobsTab route={route('nightly-audit')} />)
+    await screen.findByTestId('job-panel')
+    fireEvent.click(within(screen.getByTestId('job-actions')).getByTestId('job-rebuild-now'))
+    expect(screen.getByTestId('job-rebuild-text').textContent).toContain('unchanged ones too')
+    expect(api.rebuildJobNow).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('confirm-ok'))
+    await waitFor(() => expect(api.rebuildJobNow).toHaveBeenCalledWith('nightly-audit'))
+    cleanup()
+    vi.mocked(api.fetchJobs).mockResolvedValue(view())
+    render(<JobsTab route={route('nightly-audit')} />)
+    await screen.findByTestId('job-panel')
+    expect(screen.queryByTestId('job-rebuild-now')).toBeNull()
+  })
+
+  it('says in the header whether the job runs and when, keeps its actions in the footer, and its tabs apart from them', async () => {
+    render(<JobsTab route={route('nightly-audit')} />)
+    const drawer = await screen.findByTestId('job-drawer')
+    expect(within(drawer).getByTestId('job-drawer-state').textContent).toMatch(/^(On|Off|Running) · /)
+    const actions = within(drawer).getByTestId('job-actions')
+    expect([...actions.querySelectorAll('button')].map((b) => b.textContent)).toEqual([audit.on ? 'Pause' : 'Turn on', 'Run now'])
+    expect(within(screen.getByTestId('job-panel')).queryByTestId('job-run-now')).toBeNull()
+    const tabs = screen.getByTestId('job-tab-settings').parentElement!
+    expect(tabs.classList.contains('rk-seg')).toBe(true)
+    expect(screen.getByTestId('job-tab-settings').classList.contains('rk-btn')).toBe(false)
+    expect(screen.getByTestId('job-set-by').textContent).toMatch(/^(Set by |Not changed)/)
+  })
+
   it('shows the backup to S3 as set elsewhere, with Run now and Resume', async () => {
     render(<JobsTab route={route('backup-s3')} />)
     const panel = await screen.findByTestId('job-panel')
     expect(within(panel).getByTestId('job-external').textContent).toContain('Administration › Backup')
     expect(within(panel).queryByTestId('job-form')).toBeNull()
-    expect(within(panel).getByTestId('job-toggle').textContent).toBe('Resume')
-    expect(within(panel).getByTestId('job-run-now')).toBeTruthy()
+    expect(screen.getByTestId('job-toggle').textContent).toBe('Resume')
+    expect(screen.getByTestId('job-run-now')).toBeTruthy()
   })
 
   it('lets someone who may not edit read, not change', async () => {
     vi.mocked(api.fetchJobs).mockResolvedValue(view(false))
     render(<JobsTab route={route('nightly-audit')} />)
     const panel = await screen.findByTestId('job-panel')
-    expect(within(panel).queryByTestId('job-run-now')).toBeNull()
-    expect(within(panel).queryByTestId('job-toggle')).toBeNull()
+    expect(screen.queryByTestId('job-run-now')).toBeNull()
+    expect(screen.queryByTestId('job-toggle')).toBeNull()
     expect((within(panel).getByTestId('job-form') as HTMLFieldSetElement).disabled).toBe(true)
     expect(screen.queryByTestId('jobs-add-kind')).toBeNull()
   })
@@ -203,7 +235,7 @@ describe('Cases › Jobs', () => {
     const panel = await screen.findByTestId('job-panel')
     expect(within(panel).getByTestId('job-def-does').textContent).toContain('RBAC risks')
     expect(within(panel).getByTestId('job-def-reads').textContent).toContain('read-only')
-    expect(within(panel).getByTestId('job-def-proposes').textContent).toContain('Cases › Inbox')
+    expect(within(panel).getByTestId('job-def-proposes').textContent).toContain('AIOps › Inbox')
     const task = within(panel).getByTestId('job-task') as HTMLTextAreaElement
     expect(task.value).toBe('Find what has gone wrong or become risky.')
     expect(within(panel).getByTestId('job-task-state').textContent).toBe('Built-in')
@@ -252,7 +284,7 @@ describe('Cases › Jobs', () => {
 
 // --- Owner's feedback on Cases (Phase 12, wave 6c) ---
 
-describe('Cases › Jobs since wave 6c (CF-33, CF-40)', () => {
+describe('AIOps › Jobs since wave 6c (CF-33, CF-40)', () => {
   beforeAll(() => {
     Element.prototype.scrollTo = () => {}
   })

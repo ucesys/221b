@@ -174,9 +174,9 @@ test('closed as an exception with a reason: the next run leaves the finding out 
 
   await page.goto(`/#/cases/inbox/case/${c.number}`)
   const drawer = page.getByTestId('case-drawer')
-  // An agent-found case is never "not a problem": it is an exception. It may be a duplicate (CF-42).
+  // An agent-found case may close as no action needed (CF-90), an exception or a duplicate (CF-42).
   await drawer.getByTestId('case-close-open').click()
-  await expect(drawer.getByTestId('case-outcome-notAProblem')).toHaveCount(0)
+  await expect(drawer.getByTestId('case-outcome-noAction')).toBeVisible()
   await expect(drawer.getByTestId('case-outcome-duplicate')).toBeVisible()
   await drawer.getByTestId('case-outcome-exception').check()
   await expect(drawer.getByTestId('case-exception-save')).toBeDisabled()

@@ -313,35 +313,18 @@ func (s *Service) Hook(ctx context.Context, target string) error {
 	if !ok || x.Kind != SourceGit {
 		return wrapf(ErrNotFound, "no git source %q", target)
 	}
+	// A push starts a run of the source's Wiki sync job (KN-28).
+	if s.jobs.Load() != nil {
+		detail := "a push to " + x.Name + " starts a run of its Wiki sync job"
+		if !s.changedNow(x.ID, "A push to "+x.Name, nil) {
+			detail = "a push to " + x.Name + ": its Wiki sync job is paused or does not start on a push, and reads it at its next run"
+		}
+		s.audit(audit.Event{Action: ActionHook, Who: audit.Who{Name: "webhook"}, Target: target, Outcome: audit.OutcomeOK, Detail: detail})
+		return nil
+	}
 	s.audit(audit.Event{Action: ActionHook, Who: audit.Who{Name: "webhook"}, Target: target, Outcome: audit.OutcomeOK, Detail: "a push to " + x.Name + " starts a sync of it"})
 	go func() {
 		_, _ = s.SyncWith(context.WithoutCancel(ctx), SyncRequest{Source: target, By: "a push to " + x.Name, Who: audit.Who{Name: "webhook"}})
 	}()
 	return nil
-}
-
-// TestSource reads a source's listing as saved, without reading items.
-func (s *Service) TestSource(ctx context.Context, c Caller, id string) (int, error) {
-	if !c.SuperAdmin {
-		return 0, wrapf(ErrDenied, "only a SuperAdmin tests Mycroft's sources")
-	}
-	if err := s.leads(); err != nil {
-		return 0, err
-	}
-	set, err := s.Settings(ctx)
-	if err != nil {
-		return 0, err
-	}
-	x, ok := set.source(id)
-	if !ok {
-		return 0, wrapf(ErrNotFound, "no source %q", id)
-	}
-	rd, err := s.readerFor(ctx, x)
-	if err != nil {
-		return 0, err
-	}
-	tctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	items, _, err := rd.List(tctx, time.Time{})
-	return len(items), err
 }

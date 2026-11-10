@@ -142,7 +142,7 @@ func (s *Service) open(ctx context.Context, in NewCase, op opener) (caseInfo, bo
 		case r.Cluster == "":
 			addEvent(w, Event{At: now, What: "Not analysed: it names no cluster"})
 		default:
-			addEvent(w, Event{At: now, What: "Not analysed: the case analysis job is paused, or does not cover this cluster (Cases › Jobs)"})
+			addEvent(w, Event{At: now, What: "Not analysed: the case analysis job is paused, or does not cover this cluster (AIOps › Jobs)"})
 		}
 		return nil
 	})
@@ -230,7 +230,7 @@ const knownScore = 40
 // SimilarTo finds what is like the case a person is about to create
 // (CF-12): open cases on the same object or with a title alike, the
 // known issues it matches, the exceptions on the same object, and the
-// cases closed as not a problem, no fix needed or fixed within
+// cases closed as no action needed (CF-90) or fixed within
 // lookBackDays. No agent runs; creating anyway is always allowed.
 func (s *Service) SimilarTo(ctx context.Context, in SimilarInput) (Similar, error) {
 	out := Similar{Open: []SimilarCase{}, Known: []SimilarKnown{}, Exceptions: []SimilarException{}, RecentNoProblem: []SimilarCase{}, RecentFixed: []SimilarCase{}}
@@ -250,7 +250,7 @@ func (s *Service) SimilarTo(ctx context.Context, in SimilarInput) (Similar, erro
 		switch {
 		case x.Open() && len(out.Open) < similarMax:
 			out.Open = append(out.Open, sc)
-		case recent && (x.Outcome == issues.OutcomeNotAProblem || x.Outcome == issues.OutcomeNoFixNeeded) && len(out.RecentNoProblem) < similarMax:
+		case recent && x.Outcome == issues.OutcomeNoAction && len(out.RecentNoProblem) < similarMax:
 			out.RecentNoProblem = append(out.RecentNoProblem, sc)
 		case recent && x.Outcome == issues.OutcomeFix && len(out.RecentFixed) < similarMax:
 			out.RecentFixed = append(out.RecentFixed, sc)
@@ -750,8 +750,9 @@ func (s *Service) Fix(ctx context.Context, id string, in FixInput, c Caller) (Vi
 	return s.Get(ctx, c, caseID(n))
 }
 
-// CloseInput closes a case as a duplicate, not a problem or no fix
-// needed, with an explanation, always; a duplicate names its original.
+// CloseInput closes a case as a duplicate or no action needed, with an
+// explanation, always; a duplicate names its original. notAProblem and
+// noFixNeeded, the outcomes before CF-90, read as noAction.
 type CloseInput struct {
 	Outcome     issues.Outcome `json:"outcome"`
 	Explanation string         `json:"explanation"`
@@ -765,15 +766,17 @@ type DuplicateError struct{ Check issues.DuplicateCheck }
 func (e *DuplicateError) Error() string { return "not a duplicate: " + e.Check.Reason }
 
 // Close closes a case with an outcome that is only words (CF-03):
-// duplicate, notAProblem or noFixNeeded. A duplicate's original is the
+// duplicate or noAction (notAProblem and noFixNeeded too, as noAction:
+// CF-90). A duplicate's original is the
 // end of its chain, which must be open; its reporter follows it from
 // now on, and its history says so.
 func (s *Service) Close(ctx context.Context, id string, in CloseInput, c Caller) (View, error) {
 	explanation := clip(in.Explanation, MaxDetail)
+	in.Outcome = in.Outcome.Canonical()
 	switch in.Outcome {
-	case issues.OutcomeDuplicate, issues.OutcomeNotAProblem, issues.OutcomeNoFixNeeded:
+	case issues.OutcomeDuplicate, issues.OutcomeNoAction:
 	default:
-		return View{}, fmt.Errorf("%w: close with duplicate, notAProblem or noFixNeeded here; a fix, a known issue and an exception have their own actions", ErrInvalid)
+		return View{}, fmt.Errorf("%w: close with duplicate or noAction here; a fix, a known issue and an exception have their own actions", ErrInvalid)
 	}
 	n, _, err := s.target(ctx, c, id)
 	if err != nil {
@@ -811,7 +814,7 @@ func (s *Service) Close(ctx context.Context, id string, in CloseInput, c Caller)
 	if err != nil {
 		return View{}, err
 	}
-	what := fmt.Sprintf("Closed (%s): %s", in.Outcome, explanation)
+	what := fmt.Sprintf("Closed as %s: %s", outcomeWords(in.Outcome, ""), explanation)
 	if end != 0 {
 		what = fmt.Sprintf("Closed as a duplicate of %s: %s", caseID(end), explanation)
 		s.note(ctx, end, Event{At: s.now(), What: fmt.Sprintf("%s (%s) was closed as a duplicate of this case; its reporter follows it here", caseID(n), clip(r.Title, 120)), By: c.actor()})
@@ -977,6 +980,10 @@ func (s *Service) Offer(ctx context.Context, id string, in issues.Offer, c Calle
 	if err != nil {
 		return View{}, s.fromIssues(err)
 	}
+	if in.Kind == "notAProblem" {
+		// The offer's name before CF-90.
+		in.Kind = issues.OfferNoAction
+	}
 	i := slices.IndexFunc(chk.Offers, func(x issues.Offer) bool { return x.Kind == in.Kind })
 	if i < 0 {
 		return View{}, &DuplicateError{Check: chk}
@@ -1037,9 +1044,9 @@ func (s *Service) Offer(ctx context.Context, id string, in issues.Offer, c Calle
 				}
 				tx.LinkKnown(r, k, p)
 				what = "Closed as the known issue " + k.ID + ", as " + caseID(end) + " was"
-			case issues.OfferNotAProblem:
-				issues.CloseCase(r, p, issues.OutcomeNotAProblem, firstOf(offer.Explanation, "As "+caseID(end)+": not a problem."), tx.Now())
-				what = "Closed as not a problem, as " + caseID(end) + " explains"
+			case issues.OfferNoAction:
+				issues.CloseCase(r, p, issues.OutcomeNoAction, firstOf(offer.Explanation, "As "+caseID(end)+": no action needed."), tx.Now())
+				what = "Closed as no action needed, as " + caseID(end) + " explains"
 			case issues.OfferSameAs:
 				r.SameAs = end
 				what = "Linked: the same as " + caseID(end)
@@ -1085,7 +1092,7 @@ func (s *Service) Analyze(ctx context.Context, id string, c Caller) (View, error
 	}
 	info := infoOf(cur)
 	if s.o.Jobs == nil || !s.o.Jobs.On(ctx, jobs.KindCase, s.event(info, false)) {
-		return View{}, fmt.Errorf("%w: turn the case analysis job on in Cases › Jobs (it must cover %s)", ErrOff, v.Cluster)
+		return View{}, fmt.Errorf("%w: turn the case analysis job on in AIOps › Jobs (it must cover %s)", ErrOff, v.Cluster)
 	}
 	s.note(ctx, n, Event{At: s.now(), What: "Asked the case analysis job to analyse it again", By: c.actor()})
 	s.record(audit.Event{Action: ActionAnalyze, Who: who(c.Person), Cluster: v.Cluster, Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("case %s: its analysis started again", caseID(n))})

@@ -48,7 +48,7 @@ test.afterAll(async ({ browser }) => {
   await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   if (cardId) await api(page, 'POST', `/api/v1/cases/proposals/${cardId}/reject`, { reason: 'e2e: done' })
-  for (const id of caseIds) await api(page, 'POST', `/api/v1/cases/cases/${id}/close`, { outcome: 'noFixNeeded', explanation: 'e2e: done' })
+  for (const id of caseIds) await api(page, 'POST', `/api/v1/cases/cases/${id}/close`, { outcome: 'noAction', explanation: 'e2e: done' })
   await api(page, 'PUT', '/api/v1/sherlock/config', { ...ON, clusters: {} })
   if (node) await cluster.cordon(node, false)
   await page.close()

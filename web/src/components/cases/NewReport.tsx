@@ -1,4 +1,4 @@
-// New Case and On behalf of… in Cases › Inbox (CW-02, CS-15, CU-02): New
+// New Case and On behalf of… in AIOps › Inbox (CW-02, CS-15, CU-02): New
 // Case opens the create-case form, for the people who work the cases;
 // people who use the services report a problem (a case too) from the
 // report page, the avatar menu and Sherlock, as before. On behalf of lets support (an

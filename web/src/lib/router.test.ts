@@ -114,7 +114,8 @@ describe('the Cases area (CS-01, CS-06)', () => {
     expect(parseHash('#/cases/knowledge/apps/shop')).toMatchObject({ path: ['mycroft', 'wiki', 'apps', 'shop'] })
     // Mycroft's own tabs (Phase 12, wave 5, MY-01): exceptions left the wiki.
     expect(parseHash('#/cases/knowledge/exceptions/EX-3')).toMatchObject({ view: 'cases', path: ['mycroft', 'exceptions', 'EX-3'] })
-    expect(parseHash('#/cases/mycroft/wiki/add')).toMatchObject({ view: 'cases', path: ['mycroft', 'wiki', 'add'] })
+    // Add moved to Settings › Knowledge (MY-11).
+    expect(parseHash('#/cases/mycroft/wiki/add')).toMatchObject({ view: 'admin', path: ['settings', 'knowledge', 'added'] })
     expect(parseHash('#/c/dev/cases/runs/run-4')).toMatchObject({ view: 'cases', cluster: 'dev', path: ['jobs', 'runs', 'run-4'] })
     expect(parseHash('#/cases/bogus')).toMatchObject({ view: 'cases', path: ['inbox'] })
   })
@@ -129,6 +130,16 @@ describe('the Cases area (CS-01, CS-06)', () => {
     expect(parseHash('#/c/dev/cases/mycroft/rcas/RCA-4?q=disk')).toMatchObject({ cluster: 'dev' })
     expect(parseHash('#/c/dev/cases/mycroft/rcas/RCA-4?q=disk').params.get('q')).toBe('disk')
     expect(casesItemOf(parseHash('#/cases/mycroft/rcas/RCA-4'))).toBeNull()
+  })
+
+  it('opens the old Mycroft › Validation rules addresses in Jobs › Validation rules (CF-89)', () => {
+    expect(parseHash('#/cases/mycroft/rules')).toMatchObject({ view: 'cases', path: ['jobs', 'rules'] })
+    expect(parseHash('#/cases/mycroft/rules/pod.privileged')).toMatchObject({ view: 'cases', path: ['jobs', 'rules', 'pod.privileged'] })
+    const r = parseHash('#/c/dev/cases/mycroft/rules/pod.privileged/findings?q=x')
+    expect(r).toMatchObject({ view: 'cases', cluster: 'dev', path: ['jobs', 'rules', 'pod.privileged', 'findings'] })
+    // Its address in Jobs, which the page shows once it has opened it.
+    expect(withParams(r, {})).toBe('#/c/dev/cases/jobs/rules/pod.privileged/findings?q=x')
+    expect(parseHash('#/cases/jobs/rules/pod.privileged')).toMatchObject({ view: 'cases', path: ['jobs', 'rules', 'pod.privileged'] })
   })
 
   it('opens the old Administration › Approvals link on the Inbox, filtered to approvals', () => {

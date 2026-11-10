@@ -15,8 +15,9 @@
 // required at P0 and P1, whose fix is what was done; since wave 6e the RCA
 // stays on the case, no record of its own), Duplicate (the original is checked first, and
 // what fits instead is offered when it is closed; agent-found cases too),
-// Not a problem or No fix needed (each with an explanation), Known issue
-// (link one or make one) and Exception; and Reopen with a reason. Since
+// No action needed (with an explanation; since CF-90 it replaces Not a
+// problem and No fix needed, for every case), Known issue (link one or
+// make one) and Exception; and Reopen with a reason. Since
 // wave 6c: the case's type (CF-37) and incident number (CF-36) in its
 // header, set by those who work the cases; who opened it and who did each
 // thing in its history, person, agent or system (CF-35); and "Analysis
@@ -124,12 +125,11 @@ export const slaHref = () => adminHref('settings', ['sla'])
 /** What each way of closing means, in a line, as Close offers them. */
 export const CLOSE_HINT: Record<CloseOutcome, string> = {
   duplicate: 'The same problem as another open case: its reporter and history go to that case.',
-  notAProblem: 'Works as intended, or a misunderstanding: your explanation is shown if it is reported again.',
-  noFixNeeded: 'Real, but a one-off, passing or already gone: nothing to fix.',
+  noAction: 'Not a problem, or it went away: say why.',
 }
 
 /** The outcomes one Close… lists, in its order, as far as the case allows them (CF-42). */
-export const CLOSE_ORDER: Outcome[] = ['fix', 'duplicate', 'notAProblem', 'noFixNeeded', 'knownIssue', 'exception']
+export const CLOSE_ORDER: Outcome[] = ['fix', 'duplicate', 'noAction', 'knownIssue', 'exception']
 
 /** An outcome's line beside its choice in Close…. */
 function outcomeHint(o: Outcome, c: Case): string {
@@ -731,7 +731,7 @@ function CaseBody({ c, onRun, busy, writing, onWriting, act, onField, onCloseAs,
       )}
       {c.suggestException && open && (
         <div className="rk-callout" data-tone="warn" data-testid="case-suggest-exception" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ flex: '1 1 300px' }}>This validation rule was closed as no fix needed three times. If it is acceptable here, an exception stops the agents reporting it.</span>
+          <span style={{ flex: '1 1 300px' }}>This validation rule was closed as no action needed three times. If it is acceptable here, an exception stops the agents reporting it.</span>
           {c.mayChange && allowed.has('exception') && (
             <button className="rk-btn" data-size="sm" disabled={busy} onClick={() => onCloseAs('exception')} data-testid="case-suggest-exception-open">
               Accept as exception…
@@ -911,7 +911,7 @@ function CaseBody({ c, onRun, busy, writing, onWriting, act, onField, onCloseAs,
             Analysis queued: the case analysis job analyses it when its turn comes, the highest priority first, within its budgets. Analyse runs it now.
           </span>
         )}
-        {!a && !c.analyzing && !c.analysisQueued && <span className="tb-hint">{c.cluster ? 'Not analysed. The case analysis job analyses a case when it is on (Cases › Jobs).' : 'Not analysed: the case names no cluster for the agent to look at.'}</span>}
+        {!a && !c.analyzing && !c.analysisQueued && <span className="tb-hint">{c.cluster ? 'Not analysed. The case analysis job analyses a case when it is on (AIOps › Jobs).' : 'Not analysed: the case names no cluster for the agent to look at.'}</span>}
         {a && (
           <>
             {a.error && (
@@ -1333,8 +1333,8 @@ interface FormProps {
 
 /**
  * Close…: one form for every outcome the case allows (CF-42), as choices
- * in one order (Fixed, Duplicate, Not a problem, No fix needed, Known
- * issue, Exception); what the chosen one needs shows under it, with its
+ * in one order (Fixed, Duplicate, No action needed, Known issue,
+ * Exception); what the chosen one needs shows under it, with its
  * own button, which calls that outcome's own route.
  */
 function CloseForm({ c, busy, writing, onWriting, onCancel, act, err, onDone }: FormProps & { writing: Writing; onWriting: Dispatch<SetStateAction<Writing>> }) {
@@ -1515,8 +1515,8 @@ export function offerText(o: Offer, check: Pick<DuplicateCheck, 'outcome'>): str
       return `Keep this case open as a regression of ${o.original}`
     case 'sameKnownIssue':
       return `Close as known issue ${o.knownIssue ?? ''}`.trim()
-    case 'notAProblem':
-      return `Close as not a problem, as ${o.original} was`
+    case 'noAction':
+      return `Close as no action needed, as ${o.original} was`
     case 'removeException':
       return o.exception ? `Remove exception ${o.exception} and keep this case open` : 'Remove the exception and keep this case open'
     case 'sameAs':
@@ -1533,8 +1533,8 @@ function offerDone(o: Offer, v: Case): string {
       return `${v.id} stays open as a regression of ${o.original}.`
     case 'sameKnownIssue':
       return `${v.id} is closed as known issue ${o.knownIssue ?? ''}.`
-    case 'notAProblem':
-      return `${v.id} is closed as not a problem.`
+    case 'noAction':
+      return `${v.id} is closed as no action needed.`
     case 'removeException':
       return `Exception ${o.exception ?? ''} is removed; ${v.id} stays open.`
     case 'sameAs':
@@ -1561,7 +1561,7 @@ function DuplicateAnswer({ c, check, busy, act, onDone }: { c: Case; check: Dupl
           <button className="rk-btn" data-size="sm" style={{ alignSelf: 'flex-start' }} disabled={busy} onClick={() => void act(() => applyOffer(c.id, o), (v) => offerDone(o, v), onDone)} data-testid={`case-offer-${o.kind}`}>
             {offerText(o, check)}
           </button>
-          {o.kind === 'notAProblem' && o.explanation && <span className="tb-sub">“{o.explanation}”</span>}
+          {o.kind === 'noAction' && o.explanation && <span className="tb-sub">“{o.explanation}”</span>}
         </span>
       ))}
     </div>
@@ -1569,7 +1569,7 @@ function DuplicateAnswer({ c, check, busy, act, onDone }: { c: Case; check: Dupl
 }
 
 /**
- * Duplicate, Not a problem or No fix needed: each with an explanation. A
+ * Duplicate or No action needed: each with an explanation. A
  * duplicate names its original, which is checked as it is typed (the end
  * of its chain, and whether it is open); a closed original offers what
  * fits instead, and the server checks again when the case is closed.
@@ -1629,7 +1629,7 @@ function ExplainFields({ c, busy, outcome, close, onClose, onCancel, act, err, o
       )}
       <label className="cs-lbl">
         Explanation (required){c.source.kind === 'report' ? ': the reporter reads it' : ''}
-        <textarea className="cs-ta" style={{ minHeight: 64 }} value={close.explanation} maxLength={1000} onChange={(e) => onClose({ ...close, explanation: e.target.value })} placeholder={outcome === 'notAProblem' ? 'Why it is not a problem: shown if it is reported again' : outcome === 'noFixNeeded' ? 'Why nothing needs fixing' : 'Why it is the same problem'} data-testid="case-close-reason" />
+        <textarea className="cs-ta" style={{ minHeight: 64 }} value={close.explanation} maxLength={1000} onChange={(e) => onClose({ ...close, explanation: e.target.value })} placeholder={outcome === 'noAction' ? 'Not a problem, or it went away: say why' : 'Why it is the same problem'} data-testid="case-close-reason" />
       </label>
       <FormButtons busy={busy} ready={ready} label={`Close as ${OUTCOMES[outcome].toLowerCase()}`} testId="case-close-save" onCancel={onCancel} onSave={save} err={err} />
     </div>

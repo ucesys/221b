@@ -1,4 +1,4 @@
-// The saved fixes (Phase 12, wave 6g), listed in Cases › Mycroft › Fixes.
+// The saved fixes (Phase 12, wave 6g), listed in AIOps › Mycroft › Fixes.
 // A fix is saved when a case is closed as Fixed with Save fix on: what the
 // problem looked like, its cause, the steps and commands that worked, and
 // how to prevent it. Active fixes go to the agents (case analysis,
@@ -69,5 +69,5 @@ export const fetchFix = (id: string) => call<Fix>(`${base}/${enc(id)}`)
 export const saveFix = (id: string, patch: FixPatch) => call<Fix>(`${base}/${enc(id)}`, { method: 'PATCH', body: JSON.stringify(patch) })
 export const deleteFix = (id: string) => call<Fix>(`${base}/${enc(id)}`, { method: 'DELETE' })
 
-/** Where a fix opens: Cases › Mycroft › Fixes. */
+/** Where a fix opens: AIOps › Mycroft › Fixes. */
 export const fixHref = (id: string) => `#/cases/mycroft/fixes/${enc(id)}`

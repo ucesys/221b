@@ -53,8 +53,10 @@ func (s *Service) Upload(ctx context.Context, c Caller, source, name string, bod
 }
 
 // readSoon holds documents read but not yet given to Mycroft, and starts
-// a sync of their source in the background, after any sync running; the
-// text is let go once that sync has read it.
+// a run of their source's Wiki sync job (KN-28), or without the jobs a
+// sync of the source in the background, after any sync running; the text
+// is let go once a sync has given it to Mycroft (SyncWith). A paused job
+// reads them at its next run.
 func (s *Service) readSoon(ctx context.Context, c Caller, docs []pendingDoc, what string) {
 	if len(docs) == 0 {
 		return
@@ -65,6 +67,13 @@ func (s *Service) readSoon(ctx context.Context, c Caller, docs []pendingDoc, wha
 		s.pending[d.source+"/"+d.name] = d
 	}
 	s.pendingMu.Unlock()
+	label := strings.ToUpper(what[:1]) + what[1:] + " by " + c.label()
+	if s.jobs.Load() != nil {
+		if !s.changedNow(source, label, &c) {
+			s.o.Logger.Info("the source's Wiki sync job is paused or does not start on a change; it reads what was added at its next run", "source", source)
+		}
+		return
+	}
 	s.bg.Add(1)
 	go func() {
 		defer s.bg.Done()
@@ -78,13 +87,6 @@ func (s *Service) readSoon(ctx context.Context, c Caller, docs []pendingDoc, wha
 			s.syncMu.Lock()
 			s.syncMu.Unlock()
 		}
-		s.pendingMu.Lock()
-		for _, d := range docs {
-			if p, ok := s.pending[d.source+"/"+d.name]; ok && p.hash == d.hash {
-				delete(s.pending, d.source+"/"+d.name)
-			}
-		}
-		s.pendingMu.Unlock()
 	}()
 }
 
@@ -106,7 +108,7 @@ func (s *Service) Documents(source string) []ItemState {
 	defer s.pendingMu.Unlock()
 	for _, p := range s.pending {
 		if p.source == source && !seen[p.name] {
-			out = append(out, ItemState{Source: source, ID: p.name, Title: p.label(), URL: p.url, Version: p.hash[:16], Modified: p.at})
+			out = append(out, ItemState{Source: source, ID: p.name, Title: p.label(), URL: p.url, Version: p.hash[:16], Modified: p.at, Corrects: p.corrects, By: p.by})
 		}
 	}
 	return out
@@ -134,6 +136,8 @@ func (s *Service) removeDocument(ctx context.Context, c Caller, source, name str
 	if err != nil {
 		return err
 	}
+	s.manifestMu.Lock()
+	defer s.manifestMu.Unlock()
 	s.mu.RLock()
 	m := s.manifest.clone()
 	s.mu.RUnlock()

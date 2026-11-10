@@ -43,7 +43,7 @@ const run: api.Run = {
   tokens: { in: 5200, out: 800 },
 }
 
-describe('Cases › Runs', () => {
+describe('AIOps › Runs', () => {
   beforeAll(() => {
     // jsdom has no scrollTo on elements; the drawer scrolls its body to the top.
     Element.prototype.scrollTo = () => {}
@@ -203,7 +203,7 @@ describe('Cases › Runs', () => {
 
 // --- Owner's feedback on Cases (Phase 12, wave 6c) ---
 
-describe('Cases › Runs since wave 6c (CF-33, CF-39, CF-40)', () => {
+describe('AIOps › Runs since wave 6c (CF-33, CF-39, CF-40)', () => {
   beforeAll(() => {
     Element.prototype.scrollTo = () => {}
   })

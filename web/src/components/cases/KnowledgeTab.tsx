@@ -1,11 +1,16 @@
-// Cases › Mycroft › Wiki (Phase 12, KN-09, KN-10, KN-12, MY-02 to MY-08):
+// AIOps › Mycroft › Wiki (Phase 12, KN-09, KN-10, KN-12, MY-02 to MY-08):
 // Mycroft's wiki. Pages: browse the approved pages, each with its sources
 // and their dates and whether it is stale, and search them and the
 // sources' excerpts. Drafts: the runs of changes waiting for review, with
 // every page's diff. Sources: what Mycroft reads, and what people added.
-// Add: a note, a web address to read, or documents. Each view has its
-// address: #/cases/mycroft/wiki[/drafts|/sources|/add], a page
-// #/cases/mycroft/wiki/pages/<kind>/<name>.md.
+// Each view has its address: #/cases/mycroft/wiki[/drafts|/sources], a
+// page #/cases/mycroft/wiki/pages/<kind>/<name>.md. Since MY-11 a note, a
+// web address or documents are added in Settings › Knowledge's Added in
+// Mycroft card only: the Add view's old address opens it there.
+//
+// A page's view has its own actions (KN-23, KN-24, WikiPageActions.tsx):
+// This is outdated…, Retire page… and Make active again…; retired pages
+// are listed apart, under the page list's Retired filter.
 //
 // The Wiki first asks the server what it is (GET /api/v1/knowledge/wiki):
 // whether a wiki is kept at all, and what the person may do. With no store
@@ -15,14 +20,15 @@
 // below the intro, and its sections stay in the Mycroft column.
 import { useCallback, useEffect, useMemo, useState, type JSX } from 'react'
 import { CallError } from '../../api/call'
-import { fetchDrafts, fetchPage, fetchPages, fetchWiki, pageHref, searchKnowledge, wikiHref, type DraftRun, type SearchHit, type WikiPage, type WikiState } from '../../api/knowledge'
+import { fetchDrafts, fetchPage, fetchPages, fetchWiki, pageHref, searchKnowledge, wikiHref, type DraftRun, type PageView as PageData, type SearchHit, type WikiPage, type WikiState } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
 import { Markdown } from '../../lib/markdown'
 import { adminHref, navigate, type Route } from '../../lib/router'
 import { DraftRunCard } from './KnowledgeDraft'
 import { MycroftPage } from './MycroftPage'
-import { WikiAdd } from './WikiAdd'
-import { WikiSources } from './WikiSources'
+import { SourceLink } from './SourceLink'
+import { PageActions, PageNotices } from './WikiPageActions'
+import { ADD_HREF, WikiSources } from './WikiSources'
 
 export { pageHref } from '../../api/knowledge'
 
@@ -41,8 +47,8 @@ const KIND_LABEL: Record<string, string> = {
 }
 
 /** The Wiki's views. */
-export type WikiView = 'pages' | 'drafts' | 'sources' | 'add'
-const VIEWS: WikiView[] = ['pages', 'drafts', 'sources', 'add']
+export type WikiView = 'pages' | 'drafts' | 'sources'
+const VIEWS: WikiView[] = ['pages', 'drafts', 'sources']
 
 /** What a route opens: a view, or a page (#/cases/mycroft/wiki/pages/<kind>/<name>.md). */
 export function wikiRoute(route: Route): { view: WikiView; page: string } {
@@ -52,12 +58,15 @@ export function wikiRoute(route: Route): { view: WikiView; page: string } {
   return { view: 'pages', page: segs.join('/') || route.params.get('page') || '' }
 }
 
-/** The Wiki of Cases › Mycroft. onPages hears how many approved pages there are. */
+/** The Wiki of AIOps › Mycroft. onPages hears how many approved pages there are. */
 export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToast?: (msg: string) => void; onPages?: (n: number) => void }): JSX.Element {
   const { view, page: open } = wikiRoute(route)
   const [wiki, setWiki] = useState<WikiState | null>(null)
   const [wikiError, setWikiError] = useState('')
   const [pages, setPages] = useState<WikiPage[] | null>(null)
+  const [retired, setRetired] = useState<WikiPage[]>([])
+  // The page list shows the active pages, or the retired ones (KN-24).
+  const [showRetired, setShowRetired] = useState(false)
   const [pagesError, setPagesError] = useState('')
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<SearchHit[] | null>(null)
@@ -66,13 +75,6 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
   const [runsError, setRunsError] = useState('')
   const [tick, setTick] = useState(0)
   const refresh = useCallback(() => setTick((t) => t + 1), [])
-  // After an addition, the state is read again every few seconds while
-  // what was added waits to be read, for two minutes at most.
-  const [pollUntil, setPollUntil] = useState(0)
-  const added = useCallback(() => {
-    setPollUntil(Date.now() + 120_000)
-    refresh()
-  }, [refresh])
   useEffect(() => {
     fetchWiki().then(
       (w) => {
@@ -88,6 +90,7 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
         // An answer always ends the loading, whatever it holds.
         const list = r.pages ?? []
         setPages(list)
+        setRetired(r.retired ?? [])
         setPagesError('')
         onPages?.(list.length)
       },
@@ -123,11 +126,6 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
     }, 250)
     return () => clearTimeout(t)
   }, [q])
-  useEffect(() => {
-    if (!wiki || Date.now() > pollUntil || !(wiki.running || wiki.added.some((a) => !a.lastRead))) return
-    const t = setTimeout(refresh, 3000)
-    return () => clearTimeout(t)
-  }, [wiki, pollUntil, refresh])
   const groups = useMemo(() => {
     const m = new Map<string, WikiPage[]>()
     for (const p of pages ?? []) m.set(p.kind, [...(m.get(p.kind) ?? []), p])
@@ -135,6 +133,7 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
   }, [pages])
   const waiting = (runs ?? []).filter((r) => r.state === 'waiting' || r.state === 'partial')
   const shown = q.trim().length >= 2 ? hits : null
+  const listRetired = showRetired && retired.length > 0
   const noStore = wiki !== null && !wiki.store
   const show = (v: WikiView) => {
     if (v !== view || open) navigate(wikiHref(v))
@@ -142,7 +141,7 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
   return (
     <MycroftPage
       testId="knowledge-tab"
-      lead="Mycroft’s wiki: how things work and why, runbooks and best practices, each claim naming its source. Agents read only approved pages, citing them with their dates."
+      lead="Mycroft’s notes on how your system works: how-tos, runbooks and good practices, written from your documents or public sources. Agents use only approved pages."
       filter={
         <div className="rk-seg" role="group" aria-label="Wiki">
           <button aria-pressed={view === 'pages'} onClick={() => show('pages')} data-testid="knowledge-view-pages">
@@ -154,9 +153,6 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
           <button aria-pressed={view === 'sources'} onClick={() => show('sources')} title="What Mycroft reads, and what people added" data-testid="knowledge-view-sources">
             Sources
           </button>
-          <button aria-pressed={view === 'add'} onClick={() => show('add')} title="Add a note, a web address to read, or documents" data-testid="knowledge-view-add">
-            Add
-          </button>
         </div>
       }
     >
@@ -166,9 +162,7 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
         </p>
       )}
       {noStore && <NoStore maySetup={wiki.maySetup} />}
-      {view === 'add' ? (
-        <WikiAdd wiki={wiki} onAdded={added} onToast={onToast} />
-      ) : view === 'sources' ? (
+      {view === 'sources' ? (
         <WikiSources wiki={wiki} onChanged={refresh} onToast={onToast} />
       ) : view === 'drafts' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }} data-testid="knowledge-drafts">
@@ -187,6 +181,16 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
               <input type="search" placeholder="Search pages and sources" value={q} onChange={(e) => setQ(e.target.value)} data-testid="knowledge-search" />
             </label>
             {searchError && shown && <span className="tb-err">{searchError}</span>}
+            {!shown && retired.length > 0 && (
+              <div className="rk-seg" role="group" aria-label="Which pages" data-testid="knowledge-pages-filter">
+                <button aria-pressed={!listRetired} onClick={() => setShowRetired(false)} data-testid="knowledge-pages-active">
+                  Active <span className="rk-cnt">{pages?.length ?? 0}</span>
+                </button>
+                <button aria-pressed={listRetired} onClick={() => setShowRetired(true)} title="Pages taken out of what the agents read; never deleted" data-testid="knowledge-pages-retired">
+                  Retired <span className="rk-cnt">{retired.length}</span>
+                </button>
+              </div>
+            )}
             {shown ? (
               <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="knowledge-hits">
                 {shown.length === 0 && <li className="rk-fhint">Nothing matches.</li>}
@@ -201,13 +205,7 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
                         <span className="rk-pill" data-tone="muted">
                           Source
                         </span>{' '}
-                        {h.url ? (
-                          <a className="rk-link" href={h.url} target="_blank" rel="noreferrer">
-                            {h.title}
-                          </a>
-                        ) : (
-                          h.title
-                        )}
+                        <SourceLink title={h.title} url={h.url} />
                       </span>
                     )}
                     {h.stale && (
@@ -219,6 +217,21 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
                   </li>
                 ))}
               </ul>
+            ) : listRetired ? (
+              <ul style={{ listStyle: 'none', margin: 0, padding: 0 }} data-testid="knowledge-retired">
+                {retired.map((p) => (
+                  <li key={p.path} style={{ fontSize: 12.5, padding: '2px 0' }}>
+                    <a className="rk-link" href={pageHref(p.path)} aria-current={p.path === open ? 'page' : undefined} style={{ fontWeight: p.path === open ? 600 : undefined }} data-testid="knowledge-retired-link">
+                      {p.title}
+                    </a>
+                    <span className="rk-fhint">
+                      {' '}
+                      · {KIND_LABEL[p.kind] ?? p.kind}
+                      {p.retired ? ` · retired ${fmtTs(p.retired.at)}` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             ) : pages === null ? (
               <span className="rk-fhint">Loading…</span>
             ) : pagesError ? (
@@ -227,7 +240,19 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
               </span>
             ) : pages.length === 0 ? (
               <span className="rk-fhint" data-testid="knowledge-empty">
-                {noStore ? 'No pages: no wiki is kept yet.' : 'No approved pages yet: add knowledge under Add, or connect sources, and approve Mycroft’s first changes under Drafts.'}
+                {noStore ? (
+                  'No pages: no wiki is kept yet.'
+                ) : wiki?.mayAdd ? (
+                  <>
+                    No approved pages yet: add knowledge or connect sources in{' '}
+                    <a className="rk-link" href={ADD_HREF} data-testid="knowledge-empty-add">
+                      Settings › Knowledge
+                    </a>
+                    , and approve Mycroft’s first changes under Drafts.
+                  </>
+                ) : (
+                  'No approved pages yet: an Admin adds knowledge, or a SuperAdmin connects sources, in Settings › Knowledge.'
+                )}
               </span>
             ) : (
               groups.map(([kind, list]) => (
@@ -251,7 +276,7 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
               ))
             )}
           </nav>
-          {open ? <PageView key={open} path={open} /> : <p className="rk-fhint" style={{ flex: '1 1 400px', margin: 0 }}>Pick a page, or search the pages and the sources.</p>}
+          {open ? <PageView key={open} path={open} wiki={wiki} onChanged={refresh} onToast={onToast} /> : <p className="rk-fhint" style={{ flex: '1 1 400px', margin: 0 }}>Pick a page, or search the pages and the sources.</p>}
         </div>
       )}
     </MycroftPage>
@@ -277,10 +302,11 @@ function NoStore({ maySetup }: { maySetup: boolean }) {
   )
 }
 
-/** One approved page: its sources with their dates, freshness, and its text. */
-function PageView({ path }: { path: string }) {
-  const [page, setPage] = useState<WikiPage | null>(null)
+/** One approved page: its sources with their dates, freshness, its text, and what waits for it; retired, why. */
+function PageView({ path, wiki, onChanged, onToast }: { path: string; wiki: WikiState | null; onChanged: () => void; onToast?: (msg: string) => void }) {
+  const [page, setPage] = useState<PageData | null>(null)
   const [error, setError] = useState('')
+  const [tick, setTick] = useState(0)
   useEffect(() => {
     let stop = false
     fetchPage(path).then(
@@ -294,7 +320,11 @@ function PageView({ path }: { path: string }) {
     return () => {
       stop = true
     }
-  }, [path])
+  }, [path, tick])
+  const changed = () => {
+    setTick((t) => t + 1)
+    onChanged()
+  }
   if (error) return <p className="rk-t" data-tone="err" style={{ flex: '1 1 400px', margin: 0 }}>{error}</p>
   if (!page) return <p className="rk-fhint" style={{ flex: '1 1 400px', margin: 0 }}>Loading…</p>
   return (
@@ -304,7 +334,10 @@ function PageView({ path }: { path: string }) {
         <span className="rk-pill" data-tone="muted">{KIND_LABEL[page.kind] ?? page.kind}</span>
         {page.critical && <span className="rk-pill" data-tone="info" title="Changes need two people">Critical</span>}
         {page.stale && <span className="rk-pill" data-tone="warn" data-testid="knowledge-page-stale">Stale: its sources were not seen in a while</span>}
+        {page.retired && <span className="rk-pill" data-tone="muted" data-testid="knowledge-page-retired">Retired</span>}
       </div>
+      <PageNotices page={page} />
+      {wiki && <PageActions page={page} mayAdd={wiki.mayAdd && !!wiki.store} mayReview={wiki.mayReview} model={wiki.model} onChanged={changed} onToast={onToast} />}
       <span className="rk-fhint rk-mono">{page.path}{page.updated ? ` · updated ${fmtTs(page.updated)}` : ''}</span>
       {page.sources && page.sources.length > 0 && (
         <div style={{ fontSize: 12.5 }} data-testid="knowledge-page-sources">
@@ -312,13 +345,7 @@ function PageView({ path }: { path: string }) {
           <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
             {page.sources.map((s) => (
               <li key={s.key}>
-                {s.url ? (
-                  <a className="rk-link" href={s.url} target="_blank" rel="noreferrer">
-                    {s.title}
-                  </a>
-                ) : (
-                  s.title
-                )}
+                <SourceLink title={s.title} url={s.url} />
                 {s.version && s.version.length <= 12 ? `, version ${s.version}` : ''}
                 {s.date ? `, ${s.date.slice(0, 10)}` : ''}
               </li>

@@ -33,7 +33,7 @@ const (
 	// SettingsPath Settings › Cases (CF-19).
 	SimilarPath  = "/api/v1/cases/similar"
 	SettingsPath = "/api/v1/cases/settings"
-	// RulesPath is Cases › Mycroft › Validation rules (ADR-138).
+	// RulesPath is AIOps › Mycroft › Validation rules (ADR-138).
 	RulesPath = "/api/v1/cases/rules"
 )
 

@@ -1,4 +1,4 @@
-// Cases › Mycroft › Exceptions (Phase 12, FX-06, MY-01; wave 6). An
+// AIOps › Mycroft › Exceptions (Phase 12, FX-06, MY-01; wave 6). An
 // exception is an agent-found case someone closed as intended or
 // acceptable, with why and until when; while it is active the
 // agents stop reporting the same check on the same object, it counts the
@@ -212,7 +212,7 @@ export function ExceptionsView({ open, onToast, onCount }: { open: string; onToa
   return (
     <MycroftPage
       testId="knowledge-exceptions"
-      lead="What people accepted as it is: closing an agent-found case as an exception records one, with its justification and until when, or an approver creates one with New exception. While it is active, the agents stop reporting the same validation rule on the same object, and it counts what it left out. Stale ones never matched, or not lately: remove what no longer applies. They are the console’s records, not pages of the wiki."
+      lead="Issues that have been accepted as-is. While an exception is active, agents stop creating cases for that object. Closing a case as an exception will create a new exception."
       filter={
         <div className="rk-seg" role="group" aria-label="Show" data-testid="exceptions-show">
           {SHOW.map(([v, label, tip]) => (

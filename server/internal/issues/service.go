@@ -514,7 +514,7 @@ func (f Filter) match(c Caller, l *Line, q []string) bool {
 	if f.Mine && l.Reporter != c.ID && l.FiledBy != c.ID && !l.watchedBy(c.ID) {
 		return false
 	}
-	if (f.Status != "" && l.Status != f.Status) || (f.Outcome != "" && l.Outcome != f.Outcome) || (f.Open && !l.Open()) || (f.Service != "" && l.Service != f.Service) ||
+	if (f.Status != "" && l.Status != f.Status) || (f.Outcome != "" && l.Outcome.Canonical() != f.Outcome.Canonical()) || (f.Open && !l.Open()) || (f.Service != "" && l.Service != f.Service) ||
 		(f.Priority != nil && l.Priority != *f.Priority) || (f.Known != "" && l.KnownIssue != f.Known) {
 		return false
 	}
@@ -896,6 +896,7 @@ func (s *Service) reopen(st *state, r *Report, ch *change, c Caller, reason stri
 // CloseCase closes a case with its outcome and explanation, with the
 // times that go with it. The caller checked the outcome is allowed.
 func CloseCase(r *Report, by Person, outcome Outcome, explanation string, now time.Time) {
+	outcome = outcome.Canonical()
 	r.Status, r.StatusAt, r.Outcome, r.Explanation, r.Closed, r.Waiting = StatusClosed, now, outcome, explanation, ptr(now), nil
 	r.ClosedBy = &Person{ID: by.ID, Name: by.Name, System: by.System}
 	if r.Resolved == nil {
@@ -1150,9 +1151,11 @@ var ErrDuplicate = errors.New("not a duplicate")
 
 // move checks and makes an operator's status change through the API: In
 // progress, a reopening with a reason, or a close with an outcome the
-// case allows (fix, notAProblem, noFixNeeded; the others have their own
-// fields or the console's actions).
+// case allows (fix, noAction; the others have their own fields or the
+// console's actions). An old outcome, notAProblem or noFixNeeded, is
+// noAction (CF-90).
 func (s *Service) move(r *Report, ch *change, c Caller, to Status, outcome Outcome, explanation string, now time.Time) error {
+	outcome = outcome.Canonical()
 	switch to {
 	case StatusInProgress:
 		if r.Status == StatusClosed {
@@ -1210,7 +1213,7 @@ func (s *Service) SetStatus(ctx context.Context, c Caller, n int, to Status, out
 }
 
 // Sweep runs the timers (IS-15, IS-17): a question unanswered closes the
-// case as no fix needed, and a closed case a person opened loses its
+// case as no action needed (CF-90), and a closed case a person opened loses its
 // text past the retention.
 func (s *Service) Sweep(ctx context.Context) error {
 	return s.update(ctx, func(st *state, ch *change) (int, error) {
@@ -1227,7 +1230,7 @@ func (s *Service) Sweep(ctx context.Context) error {
 					continue
 				}
 				why := fmt.Sprintf("No answer to our question for %d days; closed. Reopen it with the answer, or send a new report.", set.NeedInfoDays)
-				CloseCase(r, systemPerson, OutcomeNoFixNeeded, why, now)
+				CloseCase(r, systemPerson, OutcomeNoAction, why, now)
 				_ = addMessage(r, Message{At: now, Kind: FromSystem, Text: why})
 				statusChanged(ch, systemPerson, "", r, now)
 				changed = true
@@ -1317,7 +1320,7 @@ func (s *Service) Updates(ctx context.Context, c Caller, since time.Time) ([]Not
 			continue
 		}
 		if l.StatusAt.After(since) && l.Status != StatusNew {
-			out = append(out, Notice{At: l.StatusAt, Report: l.Number, Text: fmt.Sprintf("#%d is %s.", l.Number, statusWords(l.Status, l.Outcome))})
+			out = append(out, Notice{At: l.StatusAt, Report: l.Number, Text: fmt.Sprintf("#%d is %s.", l.Number, statusWords(l.Status, l.Outcome.Canonical()))})
 		}
 		r := st.report(l.Number)
 		if r == nil {
@@ -1352,7 +1355,7 @@ func statusWords(s Status, o Outcome) string {
 	case StatusInProgress:
 		return "being worked on"
 	}
-	return map[Outcome]string{OutcomeFix: "fixed", OutcomeDuplicate: "closed as a duplicate", OutcomeNotAProblem: "closed: not a problem", OutcomeNoFixNeeded: "closed: no fix needed",
+	return map[Outcome]string{OutcomeFix: "fixed", OutcomeDuplicate: "closed as a duplicate", OutcomeNoAction: "closed: no action needed",
 		OutcomeKnownIssue: "a known issue", OutcomeException: "closed as an accepted exception"}[o]
 }
 

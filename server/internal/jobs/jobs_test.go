@@ -511,12 +511,12 @@ func TestProposalsGoToTheProposer(t *testing.T) {
 		t.Fatalf("proposals: %+v", props)
 	}
 	p := props[0]
-	if p.Agent != "troubleshooter" || p.Source.Kind != "alert" || p.Source.ID != "run-1" || p.Source.Label != "Alert BackOff on shop/web at 03:12" || p.Source.SetBy != "alice@example.com" ||
+	if p.Agent != "troubleshooter" || p.Source.Kind != "alert" || p.Source.ID != "run-1" || p.Source.Label != "Alert BackOff on shop/web at 03:12" || p.Source.SetBy != "alice@example.com" || p.Source.Job != "Test job" ||
 		p.Cluster != "prod" || len(p.Actions) != 1 || p.Actions[0].Kind != "kubectl" || p.Actions[0].Risk != "low" || p.Condition.Kind != "alert-firing" || p.Expires.IsZero() || p.DedupKey == "" {
 		t.Fatalf("proposal: %+v", p)
 	}
 	b, _ := json.Marshal(p)
-	for _, key := range []string{`"agent"`, `"source"`, `"setBy"`, `"cluster"`, `"title"`, `"reasoning"`, `"actions"`, `"impact"`, `"condition"`, `"dedupKey"`, `"expires"`} {
+	for _, key := range []string{`"agent"`, `"source"`, `"setBy"`, `"job"`, `"cluster"`, `"title"`, `"reasoning"`, `"actions"`, `"impact"`, `"condition"`, `"dedupKey"`, `"expires"`} {
 		if !strings.Contains(string(b), key) {
 			t.Errorf("the proposal's JSON lacks %s: %s", key, b)
 		}

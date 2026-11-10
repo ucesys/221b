@@ -46,6 +46,9 @@ type AgentRequest struct {
 	SetBy string
 	// Reader is the jobs' settings, for the role and group to read with.
 	Reader Settings
+	// ForReporters says the answer reaches reporters (Kind.ForReporters):
+	// the agent is given no accepted exception (KN-32).
+	ForReporters bool
 }
 
 // AgentResult is what an agent's call came to.
@@ -409,7 +412,7 @@ func brief(r Run) RunBrief {
 	return b
 }
 
-// View is a job as Cases › Jobs lists it.
+// View is a job as AIOps › Jobs lists it.
 type View struct {
 	Job
 	Label     string   `json:"label"`
@@ -427,6 +430,8 @@ type View struct {
 	// Schedulable says a schedule may start it; Manual that Run now may.
 	Schedulable bool `json:"schedulable"`
 	Manual      bool `json:"manual"`
+	// Rebuild says Rebuild now is offered beside Run now (KN-29).
+	Rebuild bool `json:"rebuild,omitempty"`
 	// WhenText is what starts it, in plain words (JB-05).
 	WhenText string    `json:"whenText"`
 	Next     time.Time `json:"next,omitzero"`
@@ -468,7 +473,7 @@ func describeWhen(w When) string {
 	case EventReport:
 		parts = append(parts, "When a report arrives")
 	case EventSource:
-		parts = append(parts, "When a source changes")
+		parts = append(parts, "When its source changes")
 	case EventCase:
 		parts = append(parts, "When a case is opened")
 	}
@@ -486,7 +491,7 @@ var nextEvent = map[string]string{EventAlert: "On the next alert", EventReport: 
 // view builds a job's row.
 func (s *Service) view(ctx context.Context, rec jobsRecord, runs []Run, j Job, k Kind) View {
 	v := View{Job: j, Label: k.Label, Agent: k.Agent, AgentName: k.AgentName, Does: k.Does, Events: k.Events, Schedulable: k.Schedulable, Manual: k.Schedulable || k.Run != nil && slices.Contains(k.Events, EventAlert),
-		BuiltinTask: k.Task, Reads: k.Reads, Proposes: k.Proposes}
+		BuiltinTask: k.Task, Reads: k.Reads, Proposes: k.Proposes, Rebuild: k.Rebuild && k.Run != nil}
 	if j.Name != "" {
 		v.Label = j.Name
 	}

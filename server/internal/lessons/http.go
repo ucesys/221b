@@ -13,7 +13,7 @@ import (
 	"github.com/ucesys/221b/server/internal/jobs"
 )
 
-// The HTTP API (FX-06, FX-10): /api/v1/cases/exceptions, which Cases ›
+// The HTTP API (FX-06, FX-10): /api/v1/cases/exceptions, which AIOps ›
 // Mycroft lists. Reading is for those who see the cases (approvers, the
 // console-wide roles and job editors); creating, removing (making
 // inactive) and making active again an exception is the approvers'

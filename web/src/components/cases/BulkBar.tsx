@@ -1,8 +1,8 @@
 // Many cases at once (Phase 12, wave 6c, CF-38): with cases picked in
 // the Inbox, a bar says how many and offers one action for all of them:
 // Assign, Priority, Type, Incident number, Analyse, and Close with one
-// outcome (Fix with one text and RCA; No fix needed or Not a problem with
-// one explanation; Known issue, linked or made once; Duplicate of one
+// outcome (Fix with one text and RCA; No action needed with one
+// explanation, since CF-90 for every case; Known issue, linked or made once; Duplicate of one
 // case; Exception with one reason and last day). The server checks each
 // case by the rules of its single action and answers for each; the
 // results show here, done or refused with why. Since wave 6d (CF-42)
@@ -42,12 +42,11 @@ import { errText, PRIORITIES, PRIORITY } from './parts'
 export type BulkDialog = 'assign' | 'priority' | 'type' | 'incident' | 'analyze' | 'close'
 
 /** The outcomes Close offers for many cases, in its order. */
-const CLOSE_OUTCOMES: Outcome[] = ['fix', 'noFixNeeded', 'notAProblem', 'knownIssue', 'duplicate', 'exception']
+const CLOSE_OUTCOMES: Outcome[] = ['fix', 'noAction', 'knownIssue', 'duplicate', 'exception']
 
 const OUTCOME_HINT: Record<Outcome, string> = {
   fix: 'Fixed: one text says what was done for all of them, and one RCA covers them; at P0 and P1 it is required.',
-  noFixNeeded: CLOSE_HINT.noFixNeeded,
-  notAProblem: CLOSE_HINT.notAProblem + ' Not for agent-found cases.',
+  noAction: CLOSE_HINT.noAction,
   knownIssue: 'A real problem with a workaround and a fix to come: link one known issue, or make one, for all of them.',
   duplicate: 'The same problem as one other open case: their reporters and history go to it.',
   exception: 'Intended or acceptable here: the agents stop reporting it. Agent-found cases only.',
@@ -81,7 +80,7 @@ export function doneText(action: BulkAction, fields: BulkFields): string {
     case 'exception':
       return 'Closed as exception'
     case 'close':
-      return `Closed as ${OUTCOMES[fields.outcome ?? 'noFixNeeded'].toLowerCase()}`
+      return `Closed as ${OUTCOMES[fields.outcome ?? 'noAction'].toLowerCase()}`
   }
 }
 
@@ -330,8 +329,7 @@ function CloseDialog({ cases, busy, err, onCancel, onRun }: { cases: CaseBrief[]
       // Without a cause no RCA goes: the P0 and P1 cases are refused, the others close.
       ready = !!text.trim()
       break
-    case 'noFixNeeded':
-    case 'notAProblem':
+    case 'noAction':
       ready = !!text.trim()
       break
     case 'knownIssue':
@@ -348,8 +346,7 @@ function CloseDialog({ cases, busy, err, onCancel, onRun }: { cases: CaseBrief[]
     switch (outcome) {
       case 'fix':
         return onRun('fix', rca.cause.trim() ? { text: text.trim(), rca: { cause: rca.cause.trim(), prevention: rca.prevention.trim(), ...(rca.text?.trim() ? { text: rca.text.trim() } : {}) }, saveFix } : { text: text.trim(), saveFix })
-      case 'noFixNeeded':
-      case 'notAProblem':
+      case 'noAction':
         return onRun('close', { outcome, explanation: text.trim() })
       case 'duplicate':
         return onRun('duplicate', { outcome: 'duplicate', explanation: text.trim(), original: `C-${orig}` })
@@ -437,7 +434,7 @@ function CloseDialog({ cases, busy, err, onCancel, onRun }: { cases: CaseBrief[]
           </label>
         </>
       )}
-      {(outcome === 'noFixNeeded' || outcome === 'notAProblem' || outcome === 'duplicate') && (
+      {(outcome === 'noAction' || outcome === 'duplicate') && (
         <>
           {outcome === 'duplicate' && (
             <label className="cs-lbl">

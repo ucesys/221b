@@ -55,7 +55,7 @@ func TestTheAPIKeepsItsRoles(t *testing.T) {
 	}
 	var v View
 	_ = json.Unmarshal(w.Body.Bytes(), &v)
-	if !v.Creds["ops"].Token || len(v.Settings.Sources) != 4 {
+	if !v.Creds["ops"].Token || len(v.Settings.Sources) != 5 {
 		t.Fatalf("the token shows as set, the console, documents and what is added in Mycroft are listed: %+v", v)
 	}
 	if w := serve(t, f.s, &viewer, "GET", "pages", "", nil); w.Code != http.StatusOK {

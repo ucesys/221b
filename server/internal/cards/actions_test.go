@@ -265,3 +265,66 @@ func TestARecordTypeIsAddedOneByOne(t *testing.T) {
 		t.Fatalf("owners %v", owners)
 	}
 }
+
+// fakeMembers are the nodes of a cluster with their labels.
+type fakeMembers struct {
+	mu    sync.Mutex
+	nodes []fleets.Node
+}
+
+func (f *fakeMembers) Members(_ context.Context, _ string, x fleets.Fleet) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, n := range f.nodes {
+		if x.Takes(n) {
+			out = append(out, n.Name)
+		}
+	}
+	return out, nil
+}
+
+// A new fleet's plan says its members now, the list capped (KN-30); none
+// is a warning, which Check again says too when a fleet proposed with
+// members has none left. Its members are not what Check again compares:
+// the card still holds.
+func TestAFleetPlanSaysItsMembersKN30(t *testing.T) {
+	ctx := context.Background()
+	w := newWorld(t)
+	m := &fakeMembers{}
+	for _, name := range []string{"rke2cp3", "rke2cp1", "rke2cp2"} {
+		m.nodes = append(m.nodes, fleets.Node{Name: name, Labels: map[string]string{"node-role.kubernetes.io/control-plane": "true"}})
+	}
+	for i := 1; i <= 7; i++ {
+		m.nodes = append(m.nodes, fleets.Node{Name: fmt.Sprintf("web-%d", i), Labels: map[string]string{"role": "web"}})
+	}
+	w.st.RegisterConsole(Console{Fleets: &fakeFleets{list: map[string][]fleets.Fleet{}}, Members: m, Audit: w.st.opts.Audit})
+	id, err := w.st.Propose(ctx, proposal(
+		Action{Kind: KindFleetCreate, Args: map[string]any{"name": "Masters", "labels": []any{"node-role.kubernetes.io/control-plane=true"}}},
+		Action{Kind: KindFleetCreate, Args: map[string]any{"name": "Web", "labels": []any{"role=web"}}},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, _ := w.st.Get(ctx, id)
+	if got := strings.Join(card.Plans[0].Impact, " "); !strings.Contains(got, "3 nodes now: rke2cp1, rke2cp2, rke2cp3.") || card.Plans[0].Warning != "" {
+		t.Fatalf("the first plan: %+v", card.Plans[0])
+	}
+	if got := strings.Join(card.Plans[1].Impact, " "); !strings.Contains(got, "7 nodes now: web-1, web-2, web-3, web-4, web-5 +2 more.") {
+		t.Fatalf("the second plan: %+v", card.Plans[1])
+	}
+	// The web nodes lose their label: Check again holds, with a warning.
+	m.mu.Lock()
+	m.nodes = m.nodes[:3]
+	m.mu.Unlock()
+	card, err = w.st.Recheck(ctx, id, Person{Key: "pat", Name: "Pat"})
+	if err != nil || !card.Recheck.OK || len(card.Recheck.Warnings) != 1 || card.Recheck.Warnings[0] != "Action 2 (Create fleet Web): No node or host has its labels now: the fleet would be empty." {
+		t.Fatalf("the recheck: %+v %v", card.Recheck, err)
+	}
+	// A fleet proposed with none says so in its plan.
+	id, _ = w.st.Propose(ctx, proposal(Action{Kind: KindFleetCreate, Args: map[string]any{"name": "Burst", "labels": []any{"pool=burst"}}}))
+	card, _ = w.st.Get(ctx, id)
+	if !strings.Contains(strings.Join(card.Plans[0].Impact, " "), "0 nodes now.") || card.Plans[0].Warning == "" {
+		t.Fatalf("an empty fleet's plan: %+v", card.Plans[0])
+	}
+}

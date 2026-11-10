@@ -76,7 +76,7 @@ export function cronOf(s: Schedule): string {
 /**
  * The schedule picker (Phase 12): every day, weekdays, weekly on some
  * days, every N hours or a cron expression, with a time zone, read back
- * in plain words with its next three times as it is edited. Cases › Jobs
+ * in plain words with its next three times as it is edited. AIOps › Jobs
  * uses it; Administration › Backup's scheduled backups can too.
  */
 export function SchedulePicker({ value, onChange, describe, defaultZone = 'UTC', disabled, testId = 'sched' }: { value: Schedule; onChange: (s: Schedule) => void; describe?: (s: Schedule) => Promise<ScheduleWords>; defaultZone?: string; disabled?: boolean; testId?: string }) {

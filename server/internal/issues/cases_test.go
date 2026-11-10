@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -54,7 +56,7 @@ func TestACaseOpenedInTheConsole(t *testing.T) {
 
 // New until someone takes it, In progress once someone owns it, Closed
 // with one outcome the case allows, and reopened with a reason (CF-01,
-// CF-03, CF-02); a question unanswered closes as no fix needed; a known
+// CF-03, CF-02); a question unanswered closes as no action needed; a known
 // issue resolved tells its cases and reopens none (CF-06).
 func TestTheStatusesAndOutcomes(t *testing.T) {
 	f := newFixture(t, Options{})
@@ -72,15 +74,16 @@ func TestTheStatusesAndOutcomes(t *testing.T) {
 	for _, c := range []struct {
 		o   Outcome
 		why string
-	}{{"", ""}, {OutcomeNoFixNeeded, ""}, {OutcomeException, "x"}, {OutcomeDuplicate, "x"}, {OutcomeKnownIssue, "x"}, {"wontFix", "x"}} {
+	}{{"", ""}, {OutcomeNoAction, ""}, {"noFixNeeded", ""}, {OutcomeException, "x"}, {OutcomeDuplicate, "x"}, {OutcomeKnownIssue, "x"}, {"wontFix", "x"}} {
 		if _, err := f.s.SetStatus(ctx, operator, n, StatusClosed, c.o, c.why); !errors.Is(err, ErrInvalid) {
 			t.Errorf("closed as %q (%q): %v", c.o, c.why, err)
 		}
 	}
-	if _, err := f.s.SetStatus(ctx, operator, n, StatusClosed, OutcomeNotAProblem, "A browser extension."); err != nil {
+	// notAProblem, the outcome before CF-90, closes as noAction.
+	if _, err := f.s.SetStatus(ctx, operator, n, StatusClosed, "notAProblem", "A browser extension."); err != nil {
 		t.Fatal(err)
 	}
-	if r, _ = f.s.Report(ctx, operator, n); r.Status != StatusClosed || r.Outcome != OutcomeNotAProblem || r.Explanation != "A browser extension." || r.ClosedBy == nil || r.Closed == nil {
+	if r, _ = f.s.Report(ctx, operator, n); r.Status != StatusClosed || r.Outcome != OutcomeNoAction || r.Explanation != "A browser extension." || r.ClosedBy == nil || r.Closed == nil {
 		t.Fatalf("closed: %+v", r)
 	}
 	if _, err := f.s.SetStatus(ctx, operator, n, StatusNew, "", ""); !errors.Is(err, ErrInvalid) {
@@ -106,7 +109,7 @@ func TestTheStatusesAndOutcomes(t *testing.T) {
 	if r, err = f.s.SetStatus(ctx, operator, n, StatusNew, "", "It came back."); err != nil || r.Status != StatusInProgress {
 		t.Fatalf("an operator reopens with a reason: %+v %v", r, err)
 	}
-	// A question unanswered for five days: closed as no fix needed; an
+	// A question unanswered for five days: closed as no action needed; an
 	// answer stops the clock.
 	ask, _ := f.s.Submit(ctx, carol, Submission{Text: "something about the shop is odd"})
 	an := ask.Report.Number
@@ -121,7 +124,7 @@ func TestTheStatusesAndOutcomes(t *testing.T) {
 	f.s.Triage(ctx, operator, an, Triage{AskInfo: ptr(true)})
 	f.clock.add(5 * day)
 	f.s.Sweep(ctx)
-	if r, _ := f.s.Report(ctx, operator, an); r.Status != StatusClosed || r.Outcome != OutcomeNoFixNeeded {
+	if r, _ := f.s.Report(ctx, operator, an); r.Status != StatusClosed || r.Outcome != OutcomeNoAction {
 		t.Fatalf("%s %s", r.Status, r.Outcome)
 	}
 	// A report matching a known issue is closed as it; resolving the
@@ -144,16 +147,16 @@ func TestTheStatusesAndOutcomes(t *testing.T) {
 }
 
 // The outcomes a case allows depend on who opened it (CF-03): a person's
-// every one but exception; an agent's every one but notAProblem and
-// duplicate, unless it is a possible duplicate a person confirms.
+// every one but exception; an agent's every one. No action needed is
+// offered for both (CF-90).
 func TestOutcomesPerSource(t *testing.T) {
 	human := Report{Status: StatusNew, Source: CaseManual}
 	agent := Report{Status: StatusNew, Source: CaseFinding}
-	if fmt.Sprint(human.AllowedOutcomes()) != "[fix duplicate notAProblem noFixNeeded knownIssue]" {
+	if fmt.Sprint(human.AllowedOutcomes()) != "[fix duplicate noAction knownIssue]" {
 		t.Errorf("human: %v", human.AllowedOutcomes())
 	}
 	// Any case may be a duplicate of an open original (CF-42).
-	if fmt.Sprint(agent.AllowedOutcomes()) != "[fix duplicate noFixNeeded knownIssue exception]" {
+	if fmt.Sprint(agent.AllowedOutcomes()) != "[fix duplicate noAction knownIssue exception]" {
 		t.Errorf("agent: %v", agent.AllowedOutcomes())
 	}
 	closed := Report{Status: StatusClosed, Source: CaseManual}
@@ -163,8 +166,12 @@ func TestOutcomesPerSource(t *testing.T) {
 	if (&Report{Priority: 1}).RCARequired() != true || (&Report{Priority: 2}).RCARequired() != false {
 		t.Error("RCA required at P0-P1 only")
 	}
-	if err := (&Report{Status: StatusNew, Source: CaseFinding}).MayClose(OutcomeNotAProblem); err == nil || !strings.Contains(err.Error(), "exception") {
-		t.Errorf("an agent's not a problem: %v", err)
+	// What was not a problem and no fix needed is no action needed, for
+	// an agent's case too (CF-90).
+	for _, o := range []Outcome{OutcomeNoAction, "notAProblem", "noFixNeeded"} {
+		if err := (&Report{Status: StatusNew, Source: CaseFinding}).MayClose(o); err != nil {
+			t.Errorf("an agent's %s: %v", o, err)
+		}
 	}
 	if err := (&Report{Status: StatusNew, Source: CaseReport}).MayClose(OutcomeException); err == nil {
 		t.Error("a person's case accepted as an exception")
@@ -281,29 +288,24 @@ func TestTheDuplicateCheck(t *testing.T) {
 	if d := check(ki); kinds(d) != "regression" {
 		t.Fatalf("resolved known issue: %+v", d)
 	}
-	// Closed as an exception: not a problem with its reason, or remove it.
+	// Closed as an exception: no action needed with its reason, or remove it.
 	ex := open("excepted")
 	closeAs(ex, func(tx *Tx, r *Report) {
 		r.Source = CaseFinding
 		CloseCase(r, operator.Person, OutcomeException, "batch jobs run without limits", tx.Now())
 		r.Exception = "EX-1"
 	})
-	if d := check(ex); kinds(d) != "notAProblem,removeException" || d.Offers[0].Explanation != "batch jobs run without limits" || d.Offers[1].Exception != "EX-1" {
+	if d := check(ex); kinds(d) != "noAction,removeException" || d.Offers[0].Explanation != "batch jobs run without limits" || d.Offers[1].Exception != "EX-1" {
 		t.Fatalf("exception: %+v", d)
 	}
-	// Closed as not a problem: the same explanation, or reopen it.
-	np := open("not a problem")
+	// Closed as no action needed: the same explanation, reopen it, or
+	// the same as it (what not a problem and no fix needed offered, CF-90).
+	np := open("no action")
 	closeAs(np, func(tx *Tx, r *Report) {
-		CloseCase(r, operator.Person, OutcomeNotAProblem, "works as designed", tx.Now())
+		CloseCase(r, operator.Person, OutcomeNoAction, "works as designed", tx.Now())
 	})
-	if d := check(np); kinds(d) != "notAProblem,reopenOriginal" || d.Offers[0].Explanation != "works as designed" {
-		t.Fatalf("not a problem: %+v", d)
-	}
-	// Closed as no fix needed: reopen it, or the same as it.
-	nf := open("no fix")
-	closeAs(nf, func(tx *Tx, r *Report) { CloseCase(r, operator.Person, OutcomeNoFixNeeded, "transient", tx.Now()) })
-	if d := check(nf); kinds(d) != "reopenOriginal,sameAs" {
-		t.Fatalf("no fix needed: %+v", d)
+	if d := check(np); kinds(d) != "noAction,reopenOriginal,sameAs" || d.Offers[0].Explanation != "works as designed" || !strings.Contains(d.Reason, "no action needed") {
+		t.Fatalf("no action needed: %+v", d)
 	}
 	// A chain is followed to its end; a chain back to the case itself, or
 	// the case itself, is refused.
@@ -417,7 +419,7 @@ func TestEachCaseIsAnObjectOfItsOwn(t *testing.T) {
 	human, _ := f.s.Open(ctx, operator, Opening{Source: CaseManual, Title: "a person's"})
 	for _, n := range []int{nums[0], nums[1], human.Number} {
 		f.s.Apply(ctx, n, func(tx *Tx, r *Report) error {
-			CloseCase(r, operator.Person, OutcomeNoFixNeeded, "x", tx.Now())
+			CloseCase(r, operator.Person, OutcomeNoAction, "x", tx.Now())
 			return nil
 		})
 	}
@@ -577,8 +579,65 @@ func TestAReplyMovesTheCaseCF67(t *testing.T) {
 	}
 	// A closed case stays closed.
 	closed := submit("the old page")
-	f.s.SetStatus(ctx, operator, closed, StatusClosed, OutcomeNotAProblem, "It works as designed.")
+	f.s.SetStatus(ctx, operator, closed, StatusClosed, OutcomeNoAction, "It works as designed.")
 	if r, _ = f.s.AddMessage(ctx, operator, closed, "It works as designed.", false); r.Status != StatusClosed {
 		t.Errorf("a reply to a closed case: %s", r.Status)
+	}
+}
+
+// No action needed replaces not a problem and no fix needed (CF-90): the
+// issue API still takes the old values and closes as noAction; a case
+// stored with one keeps its record and reads as noAction, in a list's
+// filter too; a reporter reads "closed: no action needed".
+func TestNoActionReplacesTheOldOutcomesCF90(t *testing.T) {
+	// Stored before: the record is read as noAction, the case and its
+	// line alike.
+	var r Report
+	if err := json.Unmarshal([]byte(`{"number":3,"status":"closed","outcome":"notAProblem","explanation":"As designed."}`), &r); err != nil || r.Outcome != OutcomeNoAction {
+		t.Fatalf("a stored notAProblem: %q %v", r.Outcome, err)
+	}
+	var l Line
+	if err := json.Unmarshal([]byte(`{"number":4,"status":"closed","outcome":"noFixNeeded"}`), &l); err != nil || l.Outcome != OutcomeNoAction {
+		t.Fatalf("a stored noFixNeeded: %q %v", l.Outcome, err)
+	}
+	for o, want := range map[Outcome]Outcome{"notAProblem": OutcomeNoAction, "noFixNeeded": OutcomeNoAction, OutcomeNoAction: OutcomeNoAction, OutcomeFix: OutcomeFix, "wontFix": "wontFix"} {
+		if o.Canonical() != want {
+			t.Errorf("%s reads as %s", o, o.Canonical())
+		}
+	}
+	if Outcome("notAProblem").Valid() || Outcome("noFixNeeded").Valid() || !OutcomeNoAction.Valid() {
+		t.Error("the old outcomes are listed")
+	}
+
+	// Through the issue API, as before.
+	f := newFixture(t, Options{})
+	h := f.s.Handler(func(*http.Request) (Caller, bool) { return operator, true })
+	call := func(method, path, body string) (int, map[string]any) {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		var out map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &out)
+		return w.Code, out
+	}
+	for i, old := range []string{"notAProblem", "noFixNeeded", "noAction"} {
+		rec, err := f.s.Submit(ctx, alice, Submission{Text: fmt.Sprintf("the page %d is grey", i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := rec.Report.Number
+		code, out := call("PATCH", fmt.Sprintf("%sreports/%d", Prefix, n), `{"status":"closed","outcome":"`+old+`","explanation":"It went away."}`)
+		if code != http.StatusOK || out["outcome"] != "noAction" {
+			t.Fatalf("closed as %s through the API: %d %v", old, code, out)
+		}
+	}
+	code, out := call("GET", Prefix+"reports?scope=all&outcome=notAProblem", "")
+	if list, _ := out["reports"].([]any); code != http.StatusOK || len(list) != 3 {
+		t.Fatalf("the old value as a filter: %d %v", code, out)
+	}
+	notices, err := f.s.Updates(ctx, alice, time.Time{})
+	if err != nil || len(notices) == 0 || !strings.Contains(fmt.Sprint(notices), "closed: no action needed") {
+		t.Fatalf("what the reporter reads: %+v %v", notices, err)
 	}
 }

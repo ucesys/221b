@@ -1,4 +1,4 @@
-// Cases › Mycroft (Phase 12, wave 5, MY-01, ADR-118): what the console
+// AIOps › Mycroft (Phase 12, wave 5, MY-01, ADR-118): what the console
 // knows and what people decided, in three sub-tabs. Wiki is Mycroft's wiki
 // (its pages, the drafts to review, its sources, and Add for a note, a web
 // address or documents) at #/cases/mycroft/wiki[/...]; Known issues at
@@ -9,9 +9,8 @@
 // closed cases in the Inbox (lib/router.ts sends its old addresses there).
 // Since wave 6g, Fixes at #/cases/mycroft/fixes[/<id>]: what worked
 // before, saved when a case is closed as Fixed, given to the agents.
-// Since ADR-138, Validation rules at #/cases/mycroft/rules[/<id>]: the
-// check ids the agents name their findings by, edited by a SuperAdmin,
-// with the ids found outside the list to promote and the suggestions.
+// Validation rules, a sub-tab here since ADR-138, moved to AIOps › Jobs
+// in CF-89 (#/cases/jobs/rules; the old addresses lead there).
 // Since CF-55's layout pass the tab is one fixed column, as wide as the
 // other Cases tabs', and every sub-tab is a MycroftPage in it: the same
 // width, intro, toolbar row and table whatever it holds.
@@ -24,16 +23,14 @@ import { KnowledgeTab } from './KnowledgeTab'
 import { KnownTab } from './KnownTab'
 import { FixesView } from './FixesView'
 import { ExceptionsView } from './LessonsViews'
-import { RulesView } from './RulesView'
 
-export type MycroftSub = 'wiki' | 'known' | 'exceptions' | 'fixes' | 'rules'
+export type MycroftSub = 'wiki' | 'known' | 'exceptions' | 'fixes'
 
 const SUBS: { id: MycroftSub; label: string; tip: string }[] = [
-  { id: 'wiki', label: 'Wiki', tip: 'Mycroft’s wiki: its pages, the changes waiting for review, its sources, and Add' },
+  { id: 'wiki', label: 'Wiki', tip: 'Mycroft’s wiki: its pages, the changes waiting for review, and its sources' },
   { id: 'known', label: 'Known issues', tip: 'The known issues: symptoms, workaround and status' },
   { id: 'exceptions', label: 'Exceptions', tip: 'What people accepted as it is: the agents stop reporting it' },
   { id: 'fixes', label: 'Fixes', tip: 'What worked before: saved when a case is closed as Fixed, given to the agents for the cases like it' },
-  { id: 'rules', label: 'Validation rules', tip: 'The rules the agents name their findings by: edit, retire, merge, and promote the ids they made up' },
 ]
 
 /** A sub-tab's address. */
@@ -53,7 +50,6 @@ export function MycroftTab({ route, access, onToast }: { route: Route; access: C
   const onExceptions = useCallback((n: number) => count('exceptions')(n), [count])
   const onPages = useCallback((n: number) => count('wiki')(n), [count])
   const onFixes = useCallback((n: number) => count('fixes')(n), [count])
-  const onRules = useCallback((n: number) => count('rules')(n), [count])
   // The counts on the sub-tabs, read once; a person who may not see
   // exceptions or fixes gets no count, and the tab says why when opened.
   useEffect(() => {
@@ -84,7 +80,6 @@ export function MycroftTab({ route, access, onToast }: { route: Route; access: C
       {sub === 'known' && <KnownTab route={{ ...route, path: ['known', ...rest] }} access={access} onToast={onToast} />}
       {sub === 'exceptions' && <ExceptionsView open={rest[0] ?? ''} onToast={onToast} onCount={onExceptions} />}
       {sub === 'fixes' && <FixesView open={rest[0] ?? ''} onToast={onToast} onCount={onFixes} />}
-      {sub === 'rules' && <RulesView open={rest[0] ?? ''} section={rest[1] ?? ''} onToast={onToast} onCount={onRules} />}
     </div>
   )
 }

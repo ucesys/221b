@@ -53,7 +53,7 @@ export function runSummary(r: RunBrief): string {
 }
 
 /**
- * Cases › Jobs › Runs (Phase 12, JB-16, FX-13, JR-03): every run of a
+ * AIOps › Jobs › Runs (Phase 12, JB-16, FX-13, JR-03): every run of a
  * job, scheduled or started by an event or by hand, newest first, with
  * when it started and ended, its status and health (the worst of what it
  * found), its result and cost; one opens in a drawer at

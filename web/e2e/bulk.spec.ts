@@ -1,4 +1,4 @@
-// Many cases at once (Phase 12, wave 6c, CF-38): in Cases › Inbox the
+// Many cases at once (Phase 12, wave 6c, CF-38): in AIOps › Inbox the
 // cases a search lists are picked with the heading's box, the bar says how
 // many, and Close closes them all with one outcome. Each case is checked
 // by the rules of its own Close: a fix at P1 without an RCA is refused and
@@ -48,7 +48,7 @@ test.afterAll(async ({ browser }) => {
   const page = await browser.newPage()
   await page.goto('/#/nodes')
   const list = (await (await page.request.get(`/api/v1/cases/cases?q=${encodeURIComponent(tag)}`)).json()) as { cases: Brief[] }
-  for (const c of list.cases.filter((x) => x.status !== 'closed')) await page.request.post(`/api/v1/cases/cases/${c.id}/close`, { headers: SAME, data: { outcome: 'noFixNeeded', explanation: 'e2e: done' } })
+  for (const c of list.cases.filter((x) => x.status !== 'closed')) await page.request.post(`/api/v1/cases/cases/${c.id}/close`, { headers: SAME, data: { outcome: 'noAction', explanation: 'e2e: done' } })
   await page.close()
 })
 
@@ -98,15 +98,18 @@ test('closes the picked cases with one outcome; a case the outcome does not fit 
   expect((await read(page, urgent.id)).status).not.toBe('closed')
   await expect(bar.getByTestId('inbox-bulk-count')).toHaveText('1 selected')
 
-  // The refused one closes as no fix needed, with one explanation.
+  // The refused one closes as no action needed, with one explanation;
+  // the old two are gone (CF-90).
   await bar.getByTestId('inbox-bulk-close').click()
-  await page.getByTestId('confirm').getByTestId('inbox-bulk-close-noFixNeeded').check()
+  await expect(page.getByTestId('confirm').getByTestId('inbox-bulk-close-noFixNeeded')).toHaveCount(0)
+  await expect(page.getByTestId('confirm').getByTestId('inbox-bulk-close-notAProblem')).toHaveCount(0)
+  await page.getByTestId('confirm').getByTestId('inbox-bulk-close-noAction').check()
   await page.getByTestId('confirm').getByTestId('inbox-bulk-text').fill('It came back by itself after the failover.')
   await page.getByTestId('confirm').getByTestId('confirm-ok').click()
   await expect(page.getByTestId('inbox-bulk-results').locator(`[data-id="${urgent.id}"]`)).toHaveAttribute('data-ok', 'true')
   await page.getByTestId('confirm').getByTestId('confirm-ok').click()
   await expect(page.getByTestId('inbox-bulkbar')).toHaveCount(0)
-  expect(await read(page, urgent.id)).toMatchObject({ status: 'closed', outcome: 'noFixNeeded' })
+  expect(await read(page, urgent.id)).toMatchObject({ status: 'closed', outcome: 'noAction' })
   // Pending no longer lists them.
   await expect.poll(() => listed(page)).toHaveLength(0)
 })

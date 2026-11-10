@@ -1,4 +1,4 @@
-// Cases › Inbox (Phase 12, wave 5, IN-01 to IN-06; wave 6): one flat
+// AIOps › Inbox (Phase 12, wave 5, IN-01 to IN-06; wave 6): one flat
 // table, as the Nodes and Namespaces pages have them, of everything that
 // waits for a person across clusters, and under All what was done too:
 // cases (whether a person or an agent found the problem), proposed
@@ -258,6 +258,7 @@ export function InboxTab({ route, access, onToast, alerts, clusterName }: { rout
           id={openId}
           run={inbox.knowledge?.runs.find((r) => r.id === openId)}
           conflict={inbox.knowledge?.conflicts.find((c) => c.id === openId)}
+          request={inbox.knowledge?.requests.find((r) => r.id === openId)}
           loaded={inbox.loaded}
           onClose={close}
           onChanged={() => reload('knowledge')}

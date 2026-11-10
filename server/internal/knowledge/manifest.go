@@ -14,6 +14,24 @@ import (
 type Manifest struct {
 	Items   map[string]*ItemState `json:"items"`
 	Updated time.Time             `json:"updated,omitzero"`
+	// Retired are the pages people retired (KN-24), by path: out of every
+	// replica's index, never rewritten by Mycroft, their files kept in the
+	// store. The manifest holds them because every replica reads it with
+	// the pages, and it travels with the wiki to another store and into a
+	// backup.
+	Retired map[string]Retirement `json:"retired,omitempty"`
+}
+
+// Retirement is why a page was retired, who asked, who approved, and
+// when.
+type Retirement struct {
+	Reason     string    `json:"reason"`
+	AskedBy    string    `json:"askedBy"`
+	AskedAt    time.Time `json:"askedAt,omitzero"`
+	ApprovedBy string    `json:"approvedBy"`
+	At         time.Time `json:"at"`
+	// Request is the request approved.
+	Request string `json:"request,omitempty"`
 }
 
 // ItemState is one source item.
@@ -40,6 +58,11 @@ type ItemState struct {
 	// Reported is what in it tried to give instructions, when something
 	// did.
 	Reported string `json:"reported,omitempty"`
+	// Corrects is the page a correction was written for (This is
+	// outdated…, KN-23), and By who added the item, for what people add
+	// in Mycroft.
+	Corrects string `json:"corrects,omitempty"`
+	By       string `json:"by,omitempty"`
 }
 
 // HostFact is a host a document lists, with the labels it gives it.
