@@ -178,6 +178,9 @@ test('admin settings', async () => {
   await page.goto('/#/admin/settings/agents')
   await expect(page.getByTestId('cluster')).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('[data-testid=settings-section][data-section=agents]')).toBeVisible({ timeout: 20_000 })
+  // The dock the test above opened would cover half the page.
+  const min = page.getByTestId('sherlock-minimize').first()
+  if (await min.isVisible().catch(() => false)) await min.click()
   await save('admin-settings')
 })
 

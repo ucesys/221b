@@ -15,7 +15,7 @@ The architecture is sound: one composition root, small packages that do not impo
 | --- | --- | --- |
 | High | 3 | W-1, W-2, W-3 |
 | Medium | 9 | W-4, W-5, W-6, W-7, S-1, S-2, S-3, P-1 (with P-2), A-1 |
-| Low | 37 | W-8 to W-11, S-4 to S-8, P-3 to P-9, A-2 to A-7, U-1 to U-9, I-1 to I-5, D-9 |
+| Low | 43 | W-8 to W-11, S-4 to S-8, P-3 to P-9, A-2 to A-7, U-1 to U-16, I-1 to I-4, D-9 |
 
 Severity: **High** is a wrong outcome recorded with no person involved; **Medium** is wrong or misleading behaviour a person can catch; **Low** is consistency, text or structure.
 
@@ -25,7 +25,7 @@ Severity: **High** is a wrong outcome recorded with no person involved; **Medium
 - Ran: `gofmt -l` (clean), `tsc --noEmit` (clean), `eslint` (clean), `vitest` (all pass), and a script over the internal imports (acyclic; `api` imports 36 packages and nothing imports `api`).
 - Compared by script: the 27 tool names in `ai/catalog.go` against `api/sherlock_tools.go`; every console address the server and the prompts emit against the router; every button label in the browser app for case and wording.
 - **Not run:** `go build`, `go vet` and the Go tests (the review environment had Go 1.24 and `go.mod` needs 1.26), the kind and simulator end-to-end tests, and the chart checks.
-- **Not seen:** the running console. The test install could not be reached from the review's browser, so the UI findings come from the source and from `docs/screenshots` (taken October 26). The section [To check on a running console](#to-check-on-a-running-console) lists what that leaves open.
+- **Not seen:** the running console. The test install could not be reached from the review's browser, so the UI findings U-1 to U-9 come from the source. On November 10 the Screenshots workflow retook `docs/screenshots` from the simulated cluster, with six new AIOps pages; U-10 to U-16 were found on those. The section [To check on a running console](#to-check-on-a-running-console) lists what is still open.
 - Read at outline level only: `knowledge` apart from `sync.go` and `jobs.go`, `confluence`, `auth`, `automation`, `nodessh`, `apps`, `backup`, the chart's templates.
 
 ## How to work through this
@@ -55,7 +55,7 @@ For whoever makes the changes (a person or Claude Code):
 | 2 | W-5, W-6, W-7, P-1 | The cluster an agent may name, whole changes only, exceptions fail closed, `check_command` for the Troubleshooter |
 | 3 | S-1, S-3, S-4, S-5, S-6, S-7, then S-2 with P-8 | Sherlock's lists built from the code, and a test that keeps prompt names true |
 | 4 | A-1, with A-5 | Names |
-| 5 | U-1 to U-9, I-1 to I-5 | Labels, texts and the UI improvements |
+| 5 | U-1 to U-16, I-1 to I-4 | Labels, texts and the UI improvements |
 | 6 | W-8 to W-11, A-2 to A-4, A-6, P-3 | The remaining Low findings |
 | 7 | D-9 and the documentation left open | Documents and screenshots, once the names have settled |
 
@@ -305,13 +305,29 @@ This replaces the last sentence of CF-91 ("Addresses and the API keep their name
 
 Each label change needs its tests and end-to-end specs changed with it (`grep -rn` the old text under `web/src` and `web/e2e`).
 
+### Seen on the retaken screenshots
+
+Found on November 10 on the screenshots the workflow took from the simulated cluster (`docs/screenshots/aiops-*.png`, `admin-settings.png`).
+
+| ID | Where | What is wrong | Change to |
+| --- | --- | --- | --- |
+| U-10 | `CaseDrawer.tsx:781-793` (Validation rule), `:797-800` (Seen), `SourceText` (Opened from) | Adjacent parts have no space between them: "netpol.missinga namespace has no network policyon Namespace/analytics · local", "last 2026-11-09 6:48pm UTCfirst 2026-11-09 …", "an agent's finding in run-3nightly-audit" | A space or a separator between the parts (the spans sit side by side with none). Add a vitest that reads the row's text. |
+| U-11 | `CaseDrawer.tsx:791` (`c.key.cluster`), `CaseTroubleshoot.tsx:123`, `ProposalTroubleshoot.tsx:113`, `RunsTab.tsx` (the Job cell) | The cluster's id is shown where its name belongs: "· local" and "Ask Sherlock about C-6 on local" on a cluster the top bar calls *simulated*; Runs says "auditor · local" | The cluster's name (`clusterName`), as the Inbox and the rules page show it |
+| U-12 | `RunsTab.tsx:145` | The agent's id, "auditor", where Schedule shows its name, "Auditor" | The agent's name |
+| U-13 | `RulesView.tsx:372` | The page's lead does not parse: "Agents use these rules for a portion of a problem identifiers - each finding becomes a case identified by cluster, object and rule." | "Agents name each finding with one of these rules. A finding becomes a case identified by its cluster, object and rule. When no rule fits, …" |
+| U-14 | `RulesView.tsx:84` (`STATE_TEXT`) | State tags in lower case ("active", "retired") where every other tag is capitalised ("Paused", "Identified", "New") | Active, Retired, Replaced, Suggested |
+| U-15 | The Inbox's table, Object column | A long object is cut with no ellipsis ("shop/Deployment/checl") | An ellipsis and the full name in the title, as the Title column does |
+| U-16 | The case drawer's header and every `select` | The case's title and the values of select boxes are in the monospace face ("analytics has no network policy", "P2: Service degradation", "Nobody"), where the same words are proportional in the Inbox and in text inputs | The proportional face for words; monospace only for ids, object names and commands |
+
+Also seen, and already covered: Watson's own help line in the dock lists `helm install`, `helm upgrade` and `helm uninstall` among its changes, which Sherlock's prompt does not (S-1); the case drawer's button reads *Analyse* (U-1); at 1440 px the Kubernetes area's tabs already need *More* (see [To check on a running console](#to-check-on-a-running-console)).
+
 ### UI improvements
 
 - **I-1. Show what a verification rested on.** On a case whose fix is verified, name the run and what it re-checked ("Verified by the Nightly audit of Nov 12: read the Deployment, 3 of 3 ready"), from the `rechecked` evidence of W-1. On a case still waiting, say since when and how many runs have passed.
 - **I-2. Mark an incomplete change on its card**, if W-6 keeps such cards at all.
 - **I-3. Say on a run what it could not be used for.** In AIOps › Jobs › Runs: the clusters that failed (W-2), findings left out by the cap (W-3), fixes not re-checked (W-1), routing that did not happen (W-8).
 - **I-4. One dialog for Reject… and Withdraw….** Four places build their own: `InboxApprovals.tsx:99`, `WikiPageActions.tsx:225`, `ProposalDrawer.tsx:218`, `ScriptDrawer.tsx:997`. One shared component keeps the wording and the required reason the same.
-- **I-5. Show the agent on each job's row** ("Nightly audit · Auditor"), so it is plain that several jobs share one agent and its settings.
+- **I-5. Show the agent on each job's row.** *Not a defect:* AIOps › Jobs already shows it under each job's name ("Auditor · all clusters"), as `docs/screenshots/aiops-jobs.png` shows. Nothing to do.
 
 ---
 
@@ -332,7 +348,7 @@ Each label change needs its tests and end-to-end specs changed with it (`grep -r
 
 **Left open (D-9):**
 
-- **Screenshots.** `docs/screenshots` dates from October 26 and shows Settings with three sections, and nothing of AIOps or Automation. After the label changes: `make screenshots`, add shots of AIOps › Inbox, a case's drawer, AIOps › Jobs and Settings, and put them in the README's table. The spec is `web/screenshots/`.
+- **Screenshots.** Retaken on November 10 by the Screenshots workflow: all nineteen, plus six of AIOps (Inbox, a case, Jobs, Runs, Validation rules, known issues), which are in the README's table. They show the labels as they were that day. After the label and name changes, run the workflow again by hand (Actions › Screenshots › Run workflow on the branch) or change `web/screenshots/readme.spec.ts`; the spec's addresses (`#/cases/…`) need the new ones after A-1. Still missing: the Automation area (the simulator has no sample scripts, so the spec would have to make some) and the Troubleshoot view of a case with Sherlock on.
 - **The 0.12.0 changelog reads as a diary.** Early lines describe the Cases area, a Reports tab and *New report*; later lines replace them. Before the release (`docs/releasing.md`), rewrite the 0.12.0 section as what ships.
 - **After A-1:** `docs/architecture.md` (the area's row, the API and ConfigMap names, ADR-88's note), `docs/states.md`, `docs/issues.md`, `docs/upgrading.md` (the renamed ConfigMap and its one-time copy), `docs/prompt-sources.md` (`aiops.md`), `README.md`.
 - **After W-1:** `docs/states.md`, the paragraphs on verification.
@@ -350,9 +366,9 @@ The owner will ask for a second review once this work is done, to update the age
 
 The review did not see the console run. With `make dev-sim` or the test install:
 
-- The top bar at 1280 px with three areas, the bell and every tab of the Kubernetes area: nothing in use hidden behind *More*.
+- The top bar at 1280 px with three areas, the bell and the tabs of the Kubernetes area. At 1440 px two tabs are already behind *More* (`docs/screenshots/admin-settings.png`); check that the tab in use is never the hidden one.
 - A case's drawer with *Troubleshoot* open: the case on the left, Sherlock and Watson on the right.
-- Whether select boxes still show their value in a monospace face while text inputs do not, as in `docs/screenshots/admin-settings.png`.
+- Select boxes do show their value in a monospace face (confirmed on the retaken screenshots; U-16).
 - Every label changed in U-1 to U-6, in place, and that no truncation follows from the longer ones.
 - An old address of each kind (`#/cases/inbox/case/1`, `#/cases/known/KI-1`, `#/cases/inbox?proposal=PC-1`) opens its new place after A-1.
 
