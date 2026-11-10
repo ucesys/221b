@@ -183,7 +183,8 @@ test('admin settings', async () => {
   const dock = page.getByTestId('sherlock-dock')
   await expect(dock.or(page.getByTestId('sherlock-fab')).first()).toBeVisible({ timeout: 15_000 })
   if (await dock.isVisible()) {
-    await page.getByTestId('sherlock-minimize').first().click()
+    // Two panes, two headers: the button that shows is the right-hand pane's.
+    await page.locator('[data-testid=sherlock-minimize]:visible').first().click()
     await expect(dock).toHaveCount(0)
   }
   await save('admin-settings')
