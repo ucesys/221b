@@ -816,8 +816,8 @@ func number0(id string) int {
 // View is the page: every rule with its counts, the ids found outside the
 // list, and the suggestions, each with what its counts stand for.
 func (r *Rules) View(ctx context.Context, c Caller) (RulesView, error) {
-	if !c.Approver && !c.Read && !c.Admin {
-		return RulesView{}, fmt.Errorf("%w: the validation rules are for the people who work the cases", ErrDenied)
+	if !c.Admin {
+		return RulesView{}, fmt.Errorf("%w: the validation rules are a SuperAdmin's", ErrDenied)
 	}
 	rs, rec, err := r.load(ctx)
 	if err != nil {

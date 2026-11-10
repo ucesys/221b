@@ -79,6 +79,8 @@ export interface CasesAccess {
   reporter: boolean
   /** A console-wide role (SuperAdmin, SuperViewer): runs, jobs and the wiki. */
   console: boolean
+  /** A SuperAdmin: the only one who reads and keeps the validation rules (CF-93). */
+  superAdmin: boolean
   /** The tabs offered, in order. */
   tabs: CasesTab[]
 }
@@ -99,7 +101,7 @@ export function casesAccess(me: Me | null, im: IssueMe | null): CasesAccess {
   if (approver || operator || console || reporter) tabs.push('inbox')
   if (console) tabs.push('jobs')
   if (console || operator || reporter) tabs.push('mycroft')
-  return { show: tabs.length > 0, approver, operator, reporter, console, tabs }
+  return { show: tabs.length > 0, approver, operator, reporter, console, superAdmin: !!me && me.admin, tabs }
 }
 
 // ---------- what waits for a person (CS-03, CS-04, IB-01 to IB-03) ----------

@@ -214,7 +214,7 @@ describe('the known-issue editor (CS-13, CS-14)', () => {
 })
 
 describe('the known issues table (wave 6g)', () => {
-  const opAccess: CasesAccess = { show: true, approver: true, operator: true, reporter: true, console: true, tabs: ['inbox', 'jobs', 'mycroft'] }
+  const opAccess: CasesAccess = { show: true, approver: true, operator: true, reporter: true, console: true, superAdmin: true, tabs: ['inbox', 'jobs', 'mycroft'] }
   // As Mycroft hands it over: the sub-tab's path, and the show filter in the query.
   const at = (q = '') => ({ ...parseHash('#/cases/mycroft/known' + q), path: ['known'] })
   const ids = () => screen.getAllByTestId(/^known-row-/).map((r) => r.getAttribute('data-testid')!.replace('known-row-', ''))

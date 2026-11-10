@@ -32,7 +32,7 @@ vi.mock('../../api/rules', async (original) => ({
   fetchRules: vi.fn(() => Promise.resolve({ rules: [], found: [], suggestions: [], jobs: [], types: [], mayChange: true })),
 }))
 
-const access: CasesAccess = { show: true, approver: true, operator: true, reporter: false, console: true, tabs: ['inbox', 'jobs', 'mycroft'] }
+const access: CasesAccess = { show: true, approver: true, operator: true, reporter: false, console: true, superAdmin: true, tabs: ['inbox', 'jobs', 'mycroft'] }
 
 // Each sub-tab: its page, the filter first in its toolbar, its main
 // action last (Fixes has none, so the spacer is), and its table.

@@ -83,6 +83,7 @@ Phase 12: AI.
 
 ### Changed
 
+- **Validation rules are a SuperAdmin's** (CF-93): only a SuperAdmin sees AIOps › Jobs › Validation rules and reads them through the API.
 - **Agents' and jobs' instructions tightened**: 9% shorter (51 KB from 56 KB), each rule said once, in today's words (AIOps, validation rules, Unlisted, *No action needed*, known issues, exceptions, fixes, Wiki sync, *Rebuild now*); a task's output format wins over an agent's own *What you return*, findings say what each severity becomes (critical P1, warning P3, info P4), and Sherlock's Cases skill covers Jobs › Validation rules and Mycroft › Fixes.
 - **A proposed change reads as one line per step** (CF-92): "1. Create fleet **burst pool**: labels power=on-demand · 3 nodes now · risk low", or the exact command, with only what Watson read that the line does not say under it and the agent's words in *Details*. Steps the console makes itself (fleets, hosts, Automation parameters, records) are headed *What it changes in the console*; *What Watson will run* is only for kubectl and helm commands, both when a proposal has both. *Started by* reads "Mycroft, from sandbox-knowledge “nodes.md” (run-38, Rebuild now by Super Admin)", "Nightly audit, run-12" or "Case analysis of C-7"; a job's proposal carries the job's name (`source.job`).
 - **The Cases area is called AIOps** (CF-91): the area switch reads *Kubernetes · Automation · AIOps*, and every path says *AIOps › Inbox*, *AIOps › Jobs*, *AIOps › Mycroft*. Addresses and the API keep their names, so links still work.

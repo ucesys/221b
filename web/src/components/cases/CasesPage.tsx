@@ -52,7 +52,7 @@ export function CasesPage({ route, me, onToast, alerts, clusterName }: Props) {
       ) : (
         <>
           {tab === 'inbox' && <InboxTab route={route} access={access} onToast={onToast} alerts={alerts} clusterName={clusterName} />}
-          {tab === 'jobs' && <JobsArea route={route} onToast={onToast} />}
+          {tab === 'jobs' && <JobsArea route={route} onToast={onToast} rules={access.superAdmin} />}
           {tab === 'mycroft' && <MycroftTab route={route} access={access} onToast={onToast} />}
         </>
       )}

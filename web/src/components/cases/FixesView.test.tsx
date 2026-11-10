@@ -231,7 +231,7 @@ describe('AIOps › Mycroft › Fixes (wave 6g)', () => {
   })
 
   it('is Mycroft’s Fixes sub-tab, with the active count', async () => {
-    const access: CasesAccess = { show: true, approver: true, operator: true, reporter: false, console: true, tabs: ['inbox', 'jobs', 'mycroft'] }
+    const access: CasesAccess = { show: true, approver: true, operator: true, reporter: false, console: true, superAdmin: true, tabs: ['inbox', 'jobs', 'mycroft'] }
     render(<MycroftTab route={parseHash('#/cases/mycroft/fixes/F-3')} access={access} />)
     expect(await screen.findByTestId('mycroft-fixes')).toBeTruthy()
     expect(screen.getByTestId('mycroft-sub-fixes').getAttribute('aria-pressed')).toBe('true')

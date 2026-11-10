@@ -62,6 +62,14 @@ describe('AIOps › Jobs: Schedule, Runs and Validation rules (FX-13, CF-89)', (
     await waitFor(() => expect(window.location.hash).toBe('#/cases/jobs/rules'))
   })
 
+  it('offers Validation rules to a SuperAdmin only: anyone else gets two sub-tabs, and its address shows the Schedule (CF-93)', async () => {
+    window.location.hash = '#/cases/jobs/rules'
+    render(<JobsArea route={parseHash('#/cases/jobs/rules')} rules={false} />)
+    expect(screen.queryByTestId('jobs-sub-rules')).toBeNull()
+    expect(screen.getByTestId('jobs-sub-schedule').getAttribute('aria-pressed')).toBe('true')
+    await waitFor(() => expect(window.location.hash).toBe('#/cases/jobs'))
+  })
+
   it('shows the rules page in the Jobs column, with the shared intro, toolbar and table (CF-55, CF-66)', async () => {
     render(<JobsArea route={parseHash('#/cases/jobs/rules')} />)
     const root = screen.getByTestId('jobs-area')

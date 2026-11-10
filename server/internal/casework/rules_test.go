@@ -23,6 +23,21 @@ func on(cluster, check, object, title string) jobs.Finding {
 	return f
 }
 
+// The validation rules are a SuperAdmin's (CF-93): anyone else, an
+// approver or a reader of the cases, is refused.
+func TestOnlyASuperAdminReadsTheRulesCF93(t *testing.T) {
+	w := setup(t)
+	ctx := context.Background()
+	for _, c := range []Caller{olivia, otto, {Person: Person{Subject: "rita"}, ID: "rita", Read: true}} {
+		if _, err := w.svc.Rules().View(ctx, c); !errors.Is(err, ErrDenied) {
+			t.Fatalf("%s read the rules: %v", c.ID, err)
+		}
+	}
+	if _, err := w.svc.Rules().View(ctx, sam); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (w *world) rules(t *testing.T) RulesView {
 	t.Helper()
 	v, err := w.svc.Rules().View(context.Background(), sam)
@@ -495,14 +510,17 @@ func call(h http.Handler, method, path, body string) (int, map[string]any) {
 	return rec.Code, out
 }
 
-// Who reads the cases reads the rules; only a SuperAdmin changes them,
-// every route (ADR-138).
+// Only a SuperAdmin reads the rules (CF-93) and changes them, every
+// route (ADR-138).
 func TestOnlyASuperAdminChangesTheRules(t *testing.T) {
 	w := setup(t)
 	w.route(t, "nightly-audit", true, finding("other.x-y", "", "x"))
 	reader := w.rulesAPI(olivia)
-	code, body := call(reader, "GET", RulesPath, "")
-	if code != http.StatusOK || body["mayChange"] != false || len(body["rules"].([]any)) == 0 || len(body["found"].([]any)) != 1 {
+	if code, _ := call(reader, "GET", RulesPath, ""); code != http.StatusForbidden {
+		t.Fatalf("read by an approver: %d", code)
+	}
+	code, body := call(w.rulesAPI(sam), "GET", RulesPath, "")
+	if code != http.StatusOK || body["mayChange"] != true || len(body["rules"].([]any)) == 0 || len(body["found"].([]any)) != 1 {
 		t.Fatalf("read: %d %v", code, body["mayChange"])
 	}
 	writes := [][3]string{
@@ -604,7 +622,7 @@ func TestTheRowsListWhatTheirCountsStandForCF85(t *testing.T) {
 		t.Errorf("empty lists are lists: %+v", none)
 	}
 	// The JSON has the lists.
-	code, body := call(w.rulesAPI(olivia), "GET", RulesPath, "")
+	code, body := call(w.rulesAPI(sam), "GET", RulesPath, "")
 	found := body["found"].([]any)[0].(map[string]any)
 	if code != http.StatusOK || len(found["caseList"].([]any)) != 2 || len(found["runIds"].([]any)) != 2 || len(found["latest"].([]any)) != 4 || len(found["exceptionIds"].([]any)) != 1 {
 		t.Errorf("the API: %d %v", code, found)

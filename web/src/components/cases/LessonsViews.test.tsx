@@ -286,7 +286,7 @@ describe('AIOps › Mycroft: exceptions (FX-06, MY-01); no RCAs since wave 6e', 
   })
 
   it('opens Mycroft › Exceptions on an exception’s old and new addresses, with the counts on the sub-tabs', async () => {
-    const access: CasesAccess = { show: true, approver: true, operator: false, reporter: false, console: true, tabs: ['inbox', 'jobs', 'mycroft'] }
+    const access: CasesAccess = { show: true, approver: true, operator: false, reporter: false, console: true, superAdmin: true, tabs: ['inbox', 'jobs', 'mycroft'] }
     for (const hash of ['#/cases/knowledge/exceptions/EX-3', '#/cases/mycroft/exceptions/EX-3']) {
       render(<MycroftTab route={parseHash(hash)} access={access} />)
       expect(await screen.findByTestId('knowledge-exceptions')).toBeTruthy()
