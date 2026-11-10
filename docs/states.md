@@ -1,6 +1,6 @@
 # How the records change state
 
-The states of the records the Cases area keeps, and what moves each one: a
+The states of the records the AIOps area keeps, and what moves each one: a
 person, an agent, a job, the daily housekeeping or a timer. Drawn from the
 code of 0.12.0 (Phase 12, wave 6 and after); the requirements are named on
 the arrows where one rules the step.

@@ -17,7 +17,7 @@ From the simulated cluster (`make screenshots`; the Screenshots workflow retakes
 | [![Alerts](docs/screenshots/alerts.png)](docs/screenshots/alerts.png)<br>**Alerts**: active, acknowledged, resolved | [![Fleets](docs/screenshots/fleets.png)](docs/screenshots/fleets.png)<br>**Fleets** by labels and taints | [![Networks](docs/screenshots/networks.png)](docs/screenshots/networks.png)<br>**Networks**: a route traced to the pod |
 | [![Access](docs/screenshots/access.png)](docs/screenshots/access.png)<br>**Access**: who can do what | [![Policies](docs/screenshots/policies.png)](docs/screenshots/policies.png)<br>**Policies** and drainability | [![Helm](docs/screenshots/helm.png)](docs/screenshots/helm.png)<br>**Helm** releases |
 | [![Sherlock](docs/screenshots/sherlock.png)](docs/screenshots/sherlock.png)<br>**Sherlock** answers from live state | [![Watson](docs/screenshots/watson-approval.png)](docs/screenshots/watson-approval.png)<br>**Watson**: a change waits on its approval card | [![Add a cluster](docs/screenshots/add-cluster.png)](docs/screenshots/add-cluster.png)<br>**Add a cluster**, with the RBAC it needs |
-| [![Roles](docs/screenshots/admin-roles.png)](docs/screenshots/admin-roles.png)<br>**Administration → Roles** | [![Settings](docs/screenshots/admin-settings.png)](docs/screenshots/admin-settings.png)<br>**Administration → Settings**: refresh, Sherlock, Watson | [![Storage](docs/screenshots/storage.png)](docs/screenshots/storage.png)<br>**Storage**: volumes and claims by namespace, node and class |
+| [![Roles](docs/screenshots/admin-roles.png)](docs/screenshots/admin-roles.png)<br>**Administration → Roles** | [![Settings](docs/screenshots/admin-settings.png)](docs/screenshots/admin-settings.png)<br>**Administration → Settings** (an earlier release; it now also holds Getting started, AI providers and agents, Knowledge, Applications and the AIOps sections) | [![Storage](docs/screenshots/storage.png)](docs/screenshots/storage.png)<br>**Storage**: volumes and claims by namespace, node and class |
 
 ## Overview
 
@@ -96,7 +96,7 @@ The cluster the console runs in is the connection named `local`. The chart has a
 
    Then on **Administration → Users**, create local users and add them to a group, or give them SuperAdmin or SuperViewer. With a directory, list its groups per role under `auth.ldap.roles` (or `auth.oidc.roles`) instead. The namespaces named must exist.
 
-3. **Turn on Sherlock**, if you want questions answered and Watson available. **Administration → Settings → Sherlock** ([screenshot](docs/screenshots/admin-settings.png)): choose the AI provider (the Claude API by default), save its API key, tick the clusters Sherlock may answer about, and set spending caps. Watson, which runs `kubectl` and `helm`, appears wherever Sherlock is on.
+3. **Turn on Sherlock**, if you want questions answered and Watson available. On **Administration → Settings → Providers**, choose the AI provider (the Claude API by default), save its credential and pick a default model. Then on **Administration → Settings → Agents**, turn Sherlock on for the clusters it may answer about and set the spending limits for a day and a month. **Settings → Getting started** lists what is left ([docs/getting-started.md](docs/getting-started.md)). Watson, which runs `kubectl` and `helm`, appears wherever Sherlock is on.
 
 4. **Decide whether Watson may change this cluster.** By default (`localCluster.mode=read`) Watson runs reads here and refuses every change. To allow changes, each approved on a card and run as the person who approves it:
 
@@ -146,7 +146,7 @@ The console reaches another cluster's API server directly with an account you cr
 
    Click **Test connection**: it checks the address, TLS, sign-in, Kubernetes and permissions one by one and says which step fails and why. Then **Add cluster**. The connection is kept as a Secret in the console's namespace, and its credential never comes back to a browser.
 
-5. **Check it and turn Sherlock on there.** The new cluster is on the home page and in the cluster menu in the top bar. With it selected, **Administration → Permissions** should say the roles match. To have Sherlock (and Watson) on it, tick it in **Administration → Settings → Sherlock**. A cluster's tile on the home page has **Edit cluster** to change the connection later; removing a cluster deletes its stored credential.
+5. **Check it and turn Sherlock on there.** The new cluster is on the home page and in the cluster menu in the top bar. With it selected, **Administration → Permissions** should say the roles match. To have Sherlock (and Watson) on it, turn Sherlock on for it in **Administration → Settings → Agents**. A cluster's tile on the home page has **Edit cluster** to change the connection later; removing a cluster deletes its stored credential.
 
 ## Security: why an AI model cannot hurt the cluster
 
