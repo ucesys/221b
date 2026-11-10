@@ -188,6 +188,12 @@ test('admin settings', async () => {
     await expect(dock).toHaveCount(0)
   }
   await save('admin-settings')
+  // Open again: the next shot looks for Watson's card in the dock.
+  const fab = page.getByTestId('sherlock-fab')
+  if (await fab.isVisible()) {
+    await fab.click()
+    await expect(dock).toBeVisible()
+  }
 })
 
 test('watson approval card', async () => {
