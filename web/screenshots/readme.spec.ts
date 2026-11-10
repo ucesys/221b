@@ -99,6 +99,48 @@ for (const [name, hash] of [
   })
 }
 
+// AIOps (Phase 12). The simulator starts with sample cases, three runs of
+// the nightly audit and a known issue (casework's seed), so these pages
+// have something to show. They are taken before Sherlock is turned on
+// below, so the dock is not over them.
+async function aiops(name: string, hash: string, ready: (p: Page) => Promise<void>) {
+  await page.goto('/' + hash)
+  await ready(page)
+  await save(name)
+}
+
+test('aiops inbox', async () => {
+  await aiops('aiops-inbox', '#/cases/inbox', async (p) => {
+    await expect(p.getByRole('grid', { name: 'Inbox' })).toHaveCount(1, { timeout: 20_000 })
+    await expect(p.locator('[data-inbox-row]').first()).toBeVisible({ timeout: 20_000 })
+  })
+})
+
+test('aiops case', async () => {
+  // An agent-found case: its finding, how often it was seen and its analysis.
+  await page.goto('/#/cases/inbox?source=agents')
+  const row = page.locator('[data-inbox-row^="case:"]').first()
+  await expect(row).toBeVisible({ timeout: 20_000 })
+  const n = (await row.getAttribute('data-inbox-row'))!.split(':')[1]
+  await aiops('aiops-case', `#/cases/inbox/case/${n}`, async (p) => {
+    await expect(p.getByTestId('case-drawer')).toBeVisible({ timeout: 20_000 })
+  })
+  await page.keyboard.press('Escape')
+})
+
+for (const [name, hash, testid] of [
+  ['aiops-jobs', '#/cases/jobs', 'jobs-tab'],
+  ['aiops-runs', '#/cases/jobs/runs', 'runs-table'],
+  ['aiops-rules', '#/cases/jobs/rules', 'rules-table'],
+  ['aiops-known-issues', '#/cases/mycroft/known', 'mycroft-tab'],
+] as const) {
+  test(name, async () => {
+    await aiops(name, hash, async (p) => {
+      await expect(p.getByTestId(testid)).toBeVisible({ timeout: 20_000 })
+    })
+  })
+}
+
 test('add a cluster', async () => {
   await page.goto('/#/')
   await page.getByTestId('home-add').click()
@@ -132,9 +174,10 @@ test('sherlock', async () => {
 })
 
 test('admin settings', async () => {
-  await page.goto('/#/admin/settings')
+  // Settings › Agents, with Sherlock on and its key saved by the test above.
+  await page.goto('/#/admin/settings/agents')
   await expect(page.getByTestId('cluster')).toBeVisible({ timeout: 20_000 })
-  await page.getByText('On per cluster, API key, model, caps').click()
+  await expect(page.locator('[data-testid=settings-section][data-section=agents]')).toBeVisible({ timeout: 20_000 })
   await save('admin-settings')
 })
 
