@@ -178,9 +178,14 @@ test('admin settings', async () => {
   await page.goto('/#/admin/settings/agents')
   await expect(page.getByTestId('cluster')).toBeVisible({ timeout: 20_000 })
   await expect(page.locator('[data-testid=settings-section][data-section=agents]')).toBeVisible({ timeout: 20_000 })
-  // The dock the test above opened would cover half the page.
-  const min = page.getByTestId('sherlock-minimize').first()
-  if (await min.isVisible().catch(() => false)) await min.click()
+  // The dock the test above opened would cover half the page. It comes a
+  // moment after the page, so wait for it (or for its icon) before looking.
+  const dock = page.getByTestId('sherlock-dock')
+  await expect(dock.or(page.getByTestId('sherlock-fab')).first()).toBeVisible({ timeout: 15_000 })
+  if (await dock.isVisible()) {
+    await page.getByTestId('sherlock-minimize').first().click()
+    await expect(dock).toHaveCount(0)
+  }
   await save('admin-settings')
 })
 
