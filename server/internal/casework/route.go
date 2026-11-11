@@ -653,33 +653,37 @@ func (s *Service) ChecksSeen(ctx context.Context) map[string][]string {
 // A key under an id a rule replaced is listed under the rule (ADR-138),
 // so the agent names it by the rule from then on.
 //
-// An exception that cannot be read is an error (W-7): the caller says so,
-// and does not take the list for all there is.
+// A case, a known issue or an exception that cannot be read is an error
+// (W-7, R2-12): the caller says so, and does not take the list for all
+// there is.
 func (s *Service) KeysInUse(ctx context.Context, cluster string) ([]jobs.KeyInUse, error) {
 	canon := s.rules.set(ctx).Canon
 	var out []jobs.KeyInUse
 	lines, err := s.o.Issues.Index(ctx)
-	if err == nil {
-		for _, l := range lines {
-			if !l.AgentFound || l.Key == nil || l.Key.Cluster != cluster || !l.Open() && !l.VerifyPending {
-				continue
-			}
-			k := jobs.KeyInUse{Key: jobs.Key{Cluster: cluster, Object: l.Key.Object, Check: canon(l.Key.Check)}, What: "case " + caseID(l.Number), Title: l.Title, Job: l.Job}
-			if l.VerifyPending {
-				k.What, k.Recheck = "fix applied, re-check: "+caseID(l.Number), true
-			}
-			out = append(out, k)
-		}
+	if err != nil {
+		return nil, fmt.Errorf("the cases could not be read: %w", err)
 	}
-	if known, err := s.o.Issues.Known(ctx, system, true); err == nil {
-		for _, k := range known {
-			if k.StillPresent == nil || k.Draft {
-				continue
-			}
-			for _, x := range k.Keys {
-				if x.Cluster == cluster {
-					out = append(out, jobs.KeyInUse{Key: jobs.Key{Cluster: cluster, Object: x.Object, Check: canon(x.Check)}, What: "known issue " + k.ID, Title: k.Title})
-				}
+	for _, l := range lines {
+		if !l.AgentFound || l.Key == nil || l.Key.Cluster != cluster || !l.Open() && !l.VerifyPending {
+			continue
+		}
+		k := jobs.KeyInUse{Key: jobs.Key{Cluster: cluster, Object: l.Key.Object, Check: canon(l.Key.Check)}, What: "case " + caseID(l.Number), Title: l.Title, Job: l.Job}
+		if l.VerifyPending {
+			k.What, k.Recheck = "fix applied, re-check: "+caseID(l.Number), true
+		}
+		out = append(out, k)
+	}
+	known, err := s.o.Issues.Known(ctx, system, true)
+	if err != nil {
+		return nil, fmt.Errorf("the known issues could not be read: %w", err)
+	}
+	for _, k := range known {
+		if k.StillPresent == nil || k.Draft {
+			continue
+		}
+		for _, x := range k.Keys {
+			if x.Cluster == cluster {
+				out = append(out, jobs.KeyInUse{Key: jobs.Key{Cluster: cluster, Object: x.Object, Check: canon(x.Check)}, What: "known issue " + k.ID, Title: k.Title})
 			}
 		}
 	}

@@ -91,6 +91,18 @@ func TestAFailedReadOfTheExceptionsOpensNoCaseCF99(t *testing.T) {
 	}
 }
 
+// R2-12: with the cases' store down, the keys in use are an error, as
+// for the exceptions, never a list without the cases.
+func TestAFailedReadOfTheCasesGivesNoKeysR212(t *testing.T) {
+	w := setup(t)
+	w.route(t, "nightly-audit", true, finding("pod.no-limits", "shop/Pod/web", "No limits on web"))
+	w.svc.o.Issues = issues.New(issues.Options{Backend: downKV{}, Cases: w.objects, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Now: func() time.Time { return w.now }})
+	keys, err := w.svc.KeysInUse(context.Background(), "prod")
+	if err == nil || !strings.HasPrefix(err.Error(), "the cases could not be read: the store is down") || keys != nil {
+		t.Fatalf("keys %+v, %v", keys, err)
+	}
+}
+
 // Housekeeping puts right what a case's second write left behind (W-9,
 // CF-100): a closed case's conversation and commands, its waiting
 // changes, and an applied change its case does not record; each in the

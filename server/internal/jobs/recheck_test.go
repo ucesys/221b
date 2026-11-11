@@ -177,6 +177,38 @@ func TestADigestHasNoScopeW1(t *testing.T) {
 	}
 }
 
+// downRouter cannot read the keys in use (R2-12).
+type downRouter struct{ fakeRouter }
+
+func (r *downRouter) KeysInUse(context.Context, string) ([]KeyInUse, error) {
+	return nil, errors.New("the cases could not be read: the store is down")
+}
+
+// R2-12: keys in use that cannot be read are said on the run, and the
+// agent works without them.
+func TestKeysThatCannotBeReadAreSaidOnTheRunR212(t *testing.T) {
+	w := setup(t)
+	w.s.RegisterBuiltins()
+	w.s.SetRouter(&downRouter{})
+	quiet := "Quiet day.\n\n```json\n{\"findings\": [], \"proposals\": []}\n```"
+	agents := &clusterAgents{text: map[string]string{"local": quiet, "prod": quiet}}
+	w.s.SetAgents(agents)
+	on(t, w.s, KindAudit, Change{})
+	ctx := context.Background()
+	b, err := w.s.RunNow(ctx, KindAudit, Person{Email: "bob"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.s.Wait()
+	if strings.Contains(agents.task("prod"), "<keys-in-use>") {
+		t.Error("the agent was given keys")
+	}
+	r, _ := w.s.GetRun(ctx, b.ID)
+	if !strings.Contains(r.Note, "could not be read, so the agent was not given them: the cases could not be read: the store is down") {
+		t.Errorf("the run's note: %q", r.Note)
+	}
+}
+
 // W-3: of 45 findings, the critical ones last, the run keeps 40 with
 // every critical one, in the order they came; it says how many it left
 // out and of which severity, and gives the router their keys.

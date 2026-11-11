@@ -102,6 +102,7 @@ Phase 12: AI agents, the AIOps area (cases, jobs, proposed changes and Mycroft's
 - **A verified fix that is found again no longer reads as verified** (CF-108): at P0–P1 a case whose fix a run verified waits for its RCA; when a later run found the problem again it went on saying *Verified: add the RCA to close*. It now says the fix did not hold.
 - **A case a re-check reopens is analyzed again** (CF-108): closed as Fixed and found still there by a run that re-checked it, it is queued for its analysis as one reopened by a finding is.
 - **A page that fails to draw** shows an error screen with Reload and *Report this problem* instead of going blank (CS-19).
+- **A run whose cases cannot be read says so** (CF-111): when the cases or the known issues could not be read, the agent was given the keys in use without them, as if no case were open and no fix waited, and the run said nothing. Now the run notes that its agent was not given the keys, as it does when the exceptions cannot be read.
 
 ## 0.11.1 (2026-11-04)
 
