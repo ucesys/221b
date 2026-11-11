@@ -492,8 +492,9 @@ func (s *Service) firstRead(ctx context.Context, c Caller, x Source) {
 	}()
 }
 
-// Wait waits for the first reads, and the reads of what was uploaded or
-// added, started in the background (tests).
+// Wait waits for the first reads, the reads of what was uploaded or
+// added, and those after a new store or a push, started in the
+// background (tests).
 func (s *Service) Wait() { s.bg.Wait() }
 
 // RemoveSource removes a source and its credential. Its pages stay, and

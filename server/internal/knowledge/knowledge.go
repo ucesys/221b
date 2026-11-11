@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -267,6 +268,9 @@ type Service struct {
 	// dial connects a source's test to its address (tests; nil is a
 	// net.Dialer's, KN-26).
 	dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// proxy is the proxy a source's test would go through (tests; nil is
+	// http.ProxyFromEnvironment, which reads the environment once).
+	proxy func(*http.Request) (*url.URL, error)
 
 	// covers are the known issues and the exceptions that keep a
 	// difference from being proposed, once SetCovers gives them (KN-31).

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -149,6 +151,11 @@ func newFixture(t *testing.T) *fixture {
 	f.s = New(Options{Store: f.store, Model: f.model, Console: f.console, Proposer: f.props, Dir: t.TempDir(), HTTP: f.conf.Client(), Now: f.clock.now,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Audit:  func(e audit.Event) { f.mu.Lock(); f.audits = append(f.audits, e); f.mu.Unlock() }})
+	// Registered after t.TempDir, so it runs first: the background work
+	// that writes into Dir ends before the folder is removed (R2-13).
+	t.Cleanup(f.s.Wait)
+	// No proxy, whatever the environment says: the source tests dial.
+	f.s.proxy = func(*http.Request) (*url.URL, error) { return nil, nil }
 	return f
 }
 

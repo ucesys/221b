@@ -515,10 +515,11 @@ Proposed with other commands, the change waits beside the first, one more card e
 | R2-10 | `casework/route.go`, verification | A finding of a waiting fix's key that opens no case (below the job's lowest priority, marked expected, or covered by an exception) counts as found again, so the fix is neither verified nor said not to hold, and the run does not count it as not re-checked. The case waits with nothing said. | Count it with the fixes not re-checked, and say on the case why |
 | R2-11 | `jobs/reroute.go`, `jobs/run.go` | A routing that succeeds while the run cannot be saved after it is done again on the next look: seen counts and notes twice. | Record on the cases which run was routed, or save the run first |
 | R2-12 | `casework/route.go` `KeysInUse` | It returns an error when the exceptions cannot be read (W-7) but goes on without the cases or the known issues when their index cannot. | Return the error, as for the exceptions |
-| R2-13 | `knowledge/store_test.go`, `knowledge/sourcetest_test.go` | Two tests, two causes. `TestMovingTheWikiCopiesEveryFile` fails at random (23 of 40 runs alone): saving the store starts a read of the wiki that nothing waits for, and the test ends while it writes into the test's folder. `TestATestSaysWhatIsWrongKN26` fails when `HTTPS_PROXY` is set: the code rightly checks nothing behind a proxy. | Count that read in the service's background work and wait for it in the tests; give the service its proxy lookup, as it has `dial`. See the [hand-over](#r2-13-one-knowledge-test-fails-at-random-another-behind-a-proxy) |
+| R2-13 | `knowledge/store_test.go`, `knowledge/sourcetest_test.go` | Two tests, two causes. `TestMovingTheWikiCopiesEveryFile` fails at random (23 of 40 runs alone): saving the store starts a read of the wiki that nothing waits for, and the test ends while it writes into the test's folder. `TestATestSaysWhatIsWrongKN26` fails when `HTTPS_PROXY` is set: the code rightly checks nothing behind a proxy. | *fixed*: the read after a new store and the sync after a push are counted in the service's background work, which the tests wait for; the service has its proxy lookup beside `dial` |
 | R2-14 | `web/e2e/watson.spec.ts:424` | *requests do not pile up* counts every request left waiting, so it fails when an earlier spec leaves one. It failed here when run right after `sherlock.spec.ts`; it passes alone and in the suite's own order. | Discard the requests left waiting at the start of the test |
 | R2-15 | `CaseDrawer.tsx`, the first line and *Opened from* | The job's id shows where its name belongs: "found by Auditor (nightly-audit)", "nightly-audit" under the run. U-11 and U-12 put names where the cluster's and the agent's ids stood. | The job's label, "Nightly audit" |
 | R2-16 | AIOps › Jobs, Schedule | One row gives its times in two zones: *When* in the console's ("Every day at 02:00 UTC"), *Last run* in the browser's ("7:36pm PST"). | One zone on the row, the console's, or the zone named on both |
+| R2-18 | `jobs/jobs_test.go:319` `TestBudgetStopsForTheDay` | Found on November 11 by the first `make test` of the hand-over, before any change: it failed once in the whole run with "the job's last run is still going" at the run of the next day, right after `w.s.Wait()`; run alone 40 times with the race detector it passed every time. A run seems to be still marked as going after `Wait` returns, under load. | Find what `Wait` does not wait for (the run's end being saved, or its *running* mark let go), and wait for it in `Wait` or in the test; not fixed with the eight, as the hand-over asked |
 
 ### Seen on the running console
 
@@ -563,6 +564,8 @@ Eight findings of the second review are open: R2-8 and R2-10 to R2-16, all Low. 
 | 8 | R2-11 | Server, case flow | Medium |
 
 ### R2-13. One knowledge test fails at random, another behind a proxy
+
+*fixed*: `SaveStore`'s read of the wiki and `Hook`'s sync after a push are counted in `s.bg`; `newFixture` registers `t.Cleanup(f.s.Wait)` after `t.TempDir()` and sets a proxy lookup that returns none; `reach` takes `s.proxy` (`http.ProxyFromEnvironment` when nil), and `TestATestSaysWhatIsWrongKN26` has a case with a proxy, where nothing is dialed. The Confluence check started by hand (`http.go`) writes no file into the folder and is left as it was; the jobs' ticker in `jobs.go` runs until its context ends and is not background work to wait for.
 
 **Where:** `server/internal/knowledge`: `storeapi.go` (the goroutine started after the store is saved, near line 184), `helpers_test.go` `newFixture`, `store_test.go` `TestMovingTheWikiCopiesEveryFile`; `sourcetest.go` `reach` (line 219), `sourcetest_test.go` `TestATestSaysWhatIsWrongKN26`.
 
@@ -649,3 +652,8 @@ Eight findings of the second review are open: R2-8 and R2-10 to R2-16, all Low. 
 **Do:** Make a second routing of the same run change no count. Remember the run that counted last where a count is kept (`Seen.Run`, `StillPresent.Run`; a case already has `Run`, the run that opened it) and, in `by` and the known-issue branch, skip the count when it is `in.Run`. Count an exception's hit only for a finding whose routing was not already counted for this run, or leave the hits to the first routing. The findings of the result must still name their cases, so that the run can be saved with them.
 
 **Done when:** a test routes one `RouteInput` twice and finds the same cases, seen counts, known issue's count, exception hits and notes after the second as after the first, and the same `RouteResult.Findings`.
+
+### Found while fixing them
+
+- **R2-18.** `TestBudgetStopsForTheDay` (`jobs`) failed once in the first `make test` of November 11, before any change, and passed 40 runs of 40 alone. See its row in the [Low table](#low-1). Left as it is: it is not one of the eight.
+

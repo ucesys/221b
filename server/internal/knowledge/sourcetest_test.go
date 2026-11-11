@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -160,6 +161,14 @@ func TestATestSaysWhatIsWrongKN26(t *testing.T) {
 	if dialed != "docs.s3.eu-west-1.amazonaws.com:443" || err == nil || strings.Contains(err.Error(), "MinIO") {
 		t.Fatalf("AWS: %v (dialed %q)", err, dialed)
 	}
+	// Through a proxy the console does not reach the source itself: the
+	// connection is not checked, and the test goes on (R2-13).
+	dialed = ""
+	f.s.proxy = func(*http.Request) (*url.URL, error) { return url.Parse("http://proxy.example:3128") }
+	if _, err = f.s.TestSourceAsTyped(ctx, admin, Source{Name: "Local", Kind: SourceS3, Bucket: "docs", Endpoint: "http://127.0.0.1:1", PathStyle: true}, keys, ""); dialed != "" {
+		t.Fatalf("through a proxy: %v (dialed %q)", err, dialed)
+	}
+	f.s.proxy = func(*http.Request) (*url.URL, error) { return nil, nil }
 	f.s.dial = nil
 
 	// Nothing listens.

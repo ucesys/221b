@@ -181,7 +181,10 @@ func (s *Service) SaveStore(ctx context.Context, c Caller, in StoreInput) (Store
 		return st, err
 	}
 	s.audit(audit.Event{Action: ActionStore, Who: c.who(), Outcome: audit.OutcomeOK, From: c.From, Detail: describeStore(st, in.Keys)})
+	// Counted, so that Wait waits for it: it writes the wiki's copy into Dir.
+	s.bg.Add(1)
 	go func() {
+		defer s.bg.Done()
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		defer cancel()
 		if err := s.Refresh(ctx); err != nil && !errors.Is(err, ErrNoStore) {
@@ -323,7 +326,9 @@ func (s *Service) Hook(ctx context.Context, target string) error {
 		return nil
 	}
 	s.audit(audit.Event{Action: ActionHook, Who: audit.Who{Name: "webhook"}, Target: target, Outcome: audit.OutcomeOK, Detail: "a push to " + x.Name + " starts a sync of it"})
+	s.bg.Add(1)
 	go func() {
+		defer s.bg.Done()
 		_, _ = s.SyncWith(context.WithoutCancel(ctx), SyncRequest{Source: target, By: "a push to " + x.Name, Who: audit.Who{Name: "webhook"}})
 	}()
 	return nil

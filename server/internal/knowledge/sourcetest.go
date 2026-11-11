@@ -216,7 +216,11 @@ func (s *Service) reach(ctx context.Context, x Source) error {
 	if u == nil {
 		return nil
 	}
-	if p, err := http.ProxyFromEnvironment(&http.Request{URL: u}); err != nil || p != nil {
+	proxy := s.proxy
+	if proxy == nil {
+		proxy = http.ProxyFromEnvironment
+	}
+	if p, err := proxy(&http.Request{URL: u}); err != nil || p != nil {
 		return nil
 	}
 	dial := s.dial
