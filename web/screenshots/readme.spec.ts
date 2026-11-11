@@ -128,7 +128,6 @@ test('aiops case', async () => {
 
 for (const [name, hash, testid] of [
   ['aiops-jobs', '#/aiops/jobs', 'jobs-tab'],
-  ['aiops-runs', '#/aiops/jobs/runs', 'runs-table'],
   ['aiops-rules', '#/aiops/jobs/rules', 'rules-table'],
   ['aiops-known-issues', '#/aiops/mycroft/known', 'mycroft-tab'],
 ] as const) {
@@ -138,6 +137,15 @@ for (const [name, hash, testid] of [
     })
   })
 }
+
+test('aiops runs', async () => {
+  // A run carries its agent's and clusters' ids; the page shows their names
+  // once the jobs' list has come (U-11, U-12), so wait for them.
+  await aiops('aiops-runs', '#/aiops/jobs/runs', async (p) => {
+    await expect(p.getByTestId('runs-table')).toBeVisible({ timeout: 20_000 })
+    await expect(p.getByTestId('run-row').first()).toContainText('Auditor · simulated', { timeout: 20_000 })
+  })
+})
 
 test('add a cluster', async () => {
   await page.goto('/#/')
