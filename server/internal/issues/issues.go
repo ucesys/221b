@@ -203,6 +203,11 @@ type Case struct {
 	// (phase 12 review, W-1, I-1).
 	VerifiedBy *VerifiedBy `json:"verifiedBy,omitempty"`
 	Unchecked  int         `json:"unchecked,omitempty"`
+	// UncheckedWhy says why the last of those runs did not: it found the
+	// problem again and opened no case ("run-12 found it again and opened
+	// no case: the agent marked it expected"); "" when it simply did not
+	// re-check it (R2-10). It goes with the wait.
+	UncheckedWhy string `json:"uncheckedWhy,omitempty"`
 	// SLAFrom is when its SLA clock started: at once for a case a person
 	// opened, at P0-P1 only for an agent-found one (CF-02); nil is no SLA.
 	SLAFrom *time.Time `json:"slaFrom,omitempty"`

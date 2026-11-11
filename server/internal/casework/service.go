@@ -754,6 +754,9 @@ func (s *Service) view(ctx context.Context, c Caller, v issues.ReportView, w Wor
 type VerifyWait struct {
 	Since     time.Time `json:"since"`
 	Unchecked int       `json:"unchecked"`
+	// Why says why the last run that did not re-check it did not: it
+	// found it again and opened no case (R2-10).
+	Why string `json:"why,omitempty"`
 }
 
 // verifyWait is a waiting fix's wait; nil for a case whose fix does not
@@ -762,7 +765,7 @@ func verifyWait(r issues.Case) *VerifyWait {
 	if !r.VerifyPending {
 		return nil
 	}
-	w := &VerifyWait{Unchecked: r.Unchecked}
+	w := &VerifyWait{Unchecked: r.Unchecked, Why: r.UncheckedWhy}
 	switch {
 	case r.Status.Open() && r.AppliedBy != nil:
 		w.Since = r.AppliedBy.At

@@ -165,6 +165,10 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 			}
 		}
 		hits, fixed, queued, notRechecked = map[string]int{}, nil, nil, 0
+		// The keys of the findings that reached a case (opened, joined,
+		// reopened), and why each of the others opened none: an exception,
+		// expected, below the job's lowest priority (R2-10).
+		reached, noCase := map[string]bool{}, map[string]string{}
 		tx.As(agent)
 		r := router{s: s, tx: tx, in: in, now: now, cap: set.NewCasesPerRun, byKey: map[string]int{}, agent: agent, queue: queue, queued: &queued, rules: rules}
 		for _, l := range tx.Lines() {
@@ -181,25 +185,34 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 		for i := range out.Findings {
 			f := &out.Findings[i]
 			if f.Routing == jobs.RoutedInvalid || f.Key == nil {
+				if f.Key != nil {
+					reached[keyString(keyOf(f.Key), canon)] = true
+				}
 				f.Routing = jobs.RoutedInvalid
 				out.Routed.Add(f.Routing)
 				continue
 			}
 			k := keyOf(f.Key)
+			ks := keyString(k, canon)
 			if e := covering(exceptions, k, now, canon); e != nil {
 				f.Routing, f.Exception = jobs.RoutedExcepted, e.ID
 				hits[e.ID]++
+				noCase[ks] = "exception " + e.ID + " covers it"
 			} else if f.Expected {
 				// The system working as intended, the agent says with its
 				// evidence: no case, none joined, whatever the severity
 				// (CF-82).
 				f.Routing = jobs.RoutedExpected
+				noCase[ks] = "the agent marked it expected"
 			} else if in.MinPriority != nil && PriorityOf(f.Severity) > *in.MinPriority {
 				// Below the job's lowest priority: no case, none joined
 				// (CF-33).
 				f.Routing = jobs.RoutedIgnored
+				noCase[ks] = "below the job's lowest priority"
 			} else if err := r.route(f, k); err != nil {
 				return err
+			} else {
+				reached[ks] = true
 			}
 			out.Routed.Add(f.Routing)
 		}
@@ -212,14 +225,24 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 					continue
 				}
 				k := keyString(*l.Key, canon)
-				// Found again: routed above (reopened, or the fix did not
-				// hold). Left out past the cap: nothing is concluded.
-				if seenKeys[k] || leftOut[k] {
+				// Found again and routed to the case above (reopened, or the
+				// fix did not hold). Left out past the cap: nothing is
+				// concluded.
+				if reached[k] || leftOut[k] {
 					continue
 				}
 				c, err := tx.Case(l.Number)
 				if err != nil {
 					return err
+				}
+				// Found again, but the finding opened no case and joined
+				// none: not re-checked, and the case says why. It is not
+				// reopened, and the fix is not said not to hold (R2-10).
+				if why, ok := noCase[k]; ok {
+					c.Unchecked++
+					c.UncheckedWhy = fmt.Sprintf("%s found it again and opened no case: %s", in.Run, why)
+					notRechecked++
+					continue
 				}
 				x, ok := rechecked[k]
 				if !ok {

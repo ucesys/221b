@@ -280,7 +280,7 @@ func (s *Service) onCard(ctx context.Context, n int, c cards.Card) {
 				// person's case only records the fix, and a person closes it.
 				if r.AgentFound() && r.Key != nil && r.Job != "" {
 					r.VerifyPending, r.Verified, r.Verification = true, nil, issues.VerifyWaiting
-					r.VerifiedBy, r.Unchecked = nil, 0
+					r.VerifiedBy, r.Unchecked, r.UncheckedWhy = nil, 0, ""
 				}
 			}
 			tx.Changed(r, &system.Person)

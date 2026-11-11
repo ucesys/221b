@@ -511,7 +511,8 @@ export interface Case extends CaseBrief {
   /** The run that verified its fix, and what the agent read when it re-checked it (I-1). */
   verifiedBy?: VerifiedBy
   /** For a fix still waiting: since when, and how many runs of its job, with it in their scope, did not re-check it (I-1). */
-  verifyWait?: { since: string; unchecked: number }
+  /** A waiting fix's wait: since when, how many runs did not re-check it, and why the last one did not, when it found the problem again and opened no case (R2-10). */
+  verifyWait?: { since: string; unchecked: number; why?: string }
   rca?: CaseRCA
   history: CaseEvent[]
   draft?: CaseDraft
@@ -851,9 +852,9 @@ export function verifiedText(v: VerifiedBy, when: (at: string) => string): strin
 }
 
 /** How long a fix has waited for a run to re-check it, in a line (I-1): "Waiting since <date>; 2 runs did not re-check it." */
-export function waitText(w: { since: string; unchecked: number }, when: (at: string) => string): string {
+export function waitText(w: { since: string; unchecked: number; why?: string }, when: (at: string) => string): string {
   const n = w.unchecked
-  const runs = n > 0 ? `; ${n} ${n === 1 ? 'run' : 'runs'} of the job did not re-check it` : ''
+  const runs = n > 0 ? `; ${n} ${n === 1 ? 'run' : 'runs'} of the job did not re-check it${w.why ? ` (${w.why})` : ''}` : ''
   return `Waiting since ${when(w.since)}${runs}.`
 }
 

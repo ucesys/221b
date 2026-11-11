@@ -1003,7 +1003,7 @@ func (s *Service) SkipValidation(ctx context.Context, id string, c Caller) (View
 		if !waits(*r) {
 			return fmt.Errorf("%w: %s does not wait for a validation run", issues.ErrInvalid, caseID(n))
 		}
-		r.VerifyPending, r.Unchecked = false, 0
+		r.VerifyPending, r.Unchecked, r.UncheckedWhy = false, 0, ""
 		return tx.Note(r, p, what, true)
 	})
 	if err != nil {

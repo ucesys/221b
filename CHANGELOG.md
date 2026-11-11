@@ -106,6 +106,7 @@ Phase 12: AI agents, the AIOps area (cases, jobs, proposed changes and Mycroft's
 - **A run whose cases cannot be read says so** (CF-111): when the cases or the known issues could not be read, the agent was given the keys in use without them, as if no case were open and no fix waited, and the run said nothing. Now the run notes that its agent was not given the keys, as it does when the exceptions cannot be read.
 - **A case names its job** (CF-112): a case's drawer showed the job's id ("found by Auditor (nightly-audit)"); it now shows its name, "Nightly audit", as the rest of the console does.
 - **A case's drawer keeps its full height with the dock open** (CF-114): with Sherlock and Watson open in the dock, a case's drawer ended above the dock, a third shorter, with a second Sherlock and Watson under its own. The dock now steps aside while a drawer shows a Sherlock you can ask in, and comes back when it closes.
+- **A waiting fix says why a run left it** (CF-115): when a run found a waiting fix's problem again but an exception, the agent's *expected* or the job's lowest priority kept it from opening a case, the case waited with nothing said and the run did not count it. It now counts as not re-checked, and the case says why ("run-12 found it again and opened no case: the agent marked it expected"); use *Skip validation* or reopen it.
 
 ## 0.11.1 (2026-11-04)
 

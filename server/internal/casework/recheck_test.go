@@ -3,12 +3,14 @@ package casework
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
+	"github.com/ucesys/221b/server/internal/lessons"
 )
 
 // --- Verification rests on what a run re-checked (phase 12 review, W-1
@@ -248,5 +250,69 @@ func TestAVerifiedFixFoundAgainNoLongerReadsAsVerified(t *testing.T) {
 	}
 	if !strings.Contains(messages(c), "The fix did not hold: run-3 (Nightly audit) found it again after it was verified.") {
 		t.Errorf("no note: %s", messages(c))
+	}
+}
+
+// R2-10: a waiting fix's key found again by a finding that opens no case
+// and joins none (an exception covers it, the agent marked it expected,
+// it is below the job's lowest priority) leaves the case closed and
+// waiting: the run counts it among the fixes it did not re-check, the
+// case counts the run and says why. It is not reopened, and the fix is
+// not said not to hold.
+func TestAFindingThatOpensNoCaseLeavesTheFixWaitingR210(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name string
+		// prepare makes the finding route that way; it returns the job's
+		// lowest priority, and the reason's end.
+		prepare func(t *testing.T, w *world, f *jobs.Finding) (*int, string)
+		routing string
+	}{
+		{"excepted", func(t *testing.T, w *world, f *jobs.Finding) (*int, string) {
+			e, err := w.lessons.AddException(ctx, lessons.NewException{Cluster: "prod", Resource: "shop/Deployment/web", Check: "pod.no-limits", Title: "web has no limits", Reason: "a test app"}, lessons.Person{Name: "Olivia"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return nil, "exception " + e.ID + " covers it"
+		}, jobs.RoutedExcepted},
+		{"expected", func(_ *testing.T, _ *world, f *jobs.Finding) (*int, string) {
+			f.Expected = true
+			return nil, "the agent marked it expected"
+		}, jobs.RoutedExpected},
+		{"below the lowest priority", func(_ *testing.T, _ *world, _ *jobs.Finding) (*int, string) {
+			lowest := 1
+			return &lowest, "below the job's lowest priority"
+		}, jobs.RoutedIgnored},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := setup(t)
+			id := w.fixed(t, "nightly-audit", finding("pod.no-limits", "shop/Deployment/web", "web has no limits"))
+			w.now = w.now.Add(24 * time.Hour)
+			f := finding("pod.no-limits", "shop/Deployment/web", "web has no limits")
+			lowest, why := tc.prepare(t, w, &f)
+			w.runs++
+			run := fmt.Sprintf("run-%d", w.runs)
+			f.ID = run + ".1"
+			res := w.svc.Route(ctx, jobs.RouteInput{Run: run, Job: "nightly-audit", Kind: jobs.KindAudit, Label: "Nightly audit", Clusters: []string{"prod"}, OK: true,
+				Findings: []jobs.Finding{f}, Scope: &jobs.Scope{Clusters: []string{"prod"}}, MinPriority: lowest})
+			if res.Findings[0].Routing != tc.routing || res.Findings[0].Case != "" || res.NotRechecked != 1 || len(res.Verified) != 0 || res.Routed.Reopened != 0 || res.Routed.Regression != 0 {
+				t.Fatalf("routed %+v, findings %+v", res, res.Findings)
+			}
+			c := w.get(t, id)
+			want := run + " found it again and opened no case: " + why
+			if c.Status != issues.StatusClosed || c.Verified != nil || c.VerifyWait == nil || c.VerifyWait.Unchecked != 1 || c.VerifyWait.Why != want {
+				t.Fatalf("the case: %+v, wait %+v", c.Brief, c.VerifyWait)
+			}
+			if r := w.report(t, id); !r.VerifyPending || r.Verification == issues.VerifyNotHeld || r.UncheckedWhy != want {
+				t.Errorf("the record: %+v", r)
+			}
+			// The wait ends with its reason: skipped by a person.
+			if _, err := w.svc.SkipValidation(ctx, id, olivia); err != nil {
+				t.Fatal(err)
+			}
+			if r := w.report(t, id); r.VerifyPending || r.UncheckedWhy != "" || r.Unchecked != 0 {
+				t.Errorf("after the wait: %+v", r)
+			}
+		})
 	}
 }

@@ -95,7 +95,7 @@ func forReporter(r Case) Case {
 	// The change that fixed it is the console's own (CF-29).
 	out.AppliedBy, out.Verification = nil, ""
 	// What the run that verified it read is the console's too (I-1).
-	out.VerifiedBy, out.Unchecked = nil, 0
+	out.VerifiedBy, out.Unchecked, out.UncheckedWhy = nil, 0, ""
 	// The incident number is support's, and the queue the console's
 	// (CF-32, CF-36).
 	out.Incident, out.AnalysisQueued = "", nil

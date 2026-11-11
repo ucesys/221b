@@ -332,6 +332,16 @@ describe('a fix a change applied, and its check (CF-29 to CF-31)', () => {
     expect(api.verifiedText({ run: 'run-3', at: '2026-11-07T04:00:00Z' }, at)).toBe('Verified by run-3 on 2026-11-07.')
     expect(api.verifiedText({ run: 'run-3', job: 'Alert diagnosis', at: '2026-11-07T04:00:00Z', evidence: 'web-1 runs, 0 restarts...' }, at)).toBe('Verified by the Alert diagnosis, run-3, on 2026-11-07: web-1 runs, 0 restarts.')
     expect(api.waitText({ since: '2026-11-06T00:00:00Z', unchecked: 0 }, at)).toBe('Waiting since 2026-11-06.')
+    expect(api.waitText({ since: '2026-11-06T00:00:00Z', unchecked: 2, why: 'run-12 found it again and opened no case: the agent marked it expected' }, at)).toBe(
+      'Waiting since 2026-11-06; 2 runs of the job did not re-check it (run-12 found it again and opened no case: the agent marked it expected).',
+    )
+  })
+
+  it('says on a waiting case why the last run did not re-check it (R2-10)', async () => {
+    const why = 'run-12 found it again and opened no case: below the job’s lowest priority'
+    vi.mocked(api.fetchCase).mockResolvedValue(kase({ status: 'closed', outcome: 'fix', closedAt: '2026-11-07T04:00:00Z', verifyWait: { since: '2026-11-07T04:00:00Z', unchecked: 1, why } }))
+    render(<CaseDrawer id="20" onClose={() => undefined} />)
+    expect(txt(await screen.findByTestId('case-verified'))).toContain(`1 run of the job did not re-check it (${why}).`)
   })
 
   it('shows no check for a case a person opened: the fix is recorded, a person closes it', async () => {

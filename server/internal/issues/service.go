@@ -903,7 +903,7 @@ func CloseCase(r *Case, by Person, outcome Outcome, explanation string, now time
 		r.Resolved = ptr(now)
 	}
 	r.VerifyPending, r.Verified = outcome == OutcomeFix && r.AgentFound() && r.Job != "", nil
-	r.Verification, r.AnalysisQueued, r.VerifiedBy, r.Unchecked = "", nil, nil, 0
+	r.Verification, r.AnalysisQueued, r.VerifiedBy, r.Unchecked, r.UncheckedWhy = "", nil, nil, 0, ""
 	if outcome != OutcomeDuplicate {
 		r.DuplicateOf = 0
 	}
@@ -930,7 +930,7 @@ func ReopenCase(r *Case, now time.Time) {
 	r.Outcome, r.Explanation, r.Resolved, r.Closed, r.ClosedBy = "", "", nil, nil, nil
 	r.DuplicateOf, r.Exception, r.KnownIssue, r.MatchConfidence, r.RCACause = 0, "", "", 0, ""
 	r.VerifyPending, r.Verified, r.Verification, r.AnalysisQueued = false, nil, "", nil
-	r.VerifiedBy, r.Unchecked = nil, 0
+	r.VerifiedBy, r.Unchecked, r.UncheckedWhy = nil, 0, ""
 	r.Updated = now
 }
 
