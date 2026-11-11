@@ -107,6 +107,7 @@ Phase 12: AI agents, the AIOps area (cases, jobs, proposed changes and Mycroft's
 - **A case names its job** (CF-112): a case's drawer showed the job's id ("found by Auditor (nightly-audit)"); it now shows its name, "Nightly audit", as the rest of the console does.
 - **A case's drawer keeps its full height with the dock open** (CF-114): with Sherlock and Watson open in the dock, a case's drawer ended above the dock, a third shorter, with a second Sherlock and Watson under its own. The dock now steps aside while a drawer shows a Sherlock you can ask in, and comes back when it closes.
 - **A waiting fix says why a run left it** (CF-115): when a run found a waiting fix's problem again but an exception, the agent's *expected* or the job's lowest priority kept it from opening a case, the case waited with nothing said and the run did not count it. It now counts as not re-checked, and the case says why ("run-12 found it again and opened no case: the agent marked it expected"); use *Skip validation* or reopen it.
+- **A run routed twice no longer counts twice** (CF-116): a run whose findings were routed but which could not be saved was routed again on the next look, and every case it joined counted it twice (*seen ×N*), as did a known issue's *still present* and an exception's matches. Routing it again now changes nothing. A case is also seen once per run, however many of the run's findings name it.
 
 ## 0.11.1 (2026-11-04)
 

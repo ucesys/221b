@@ -136,6 +136,9 @@ type Exception struct {
 	Case        string    `json:"case,omitempty"`
 	Matches     int       `json:"matches"`
 	LastMatched time.Time `json:"lastMatched,omitzero"`
+	// LastRun is the run whose findings it dropped last: a second routing
+	// of that run counts nothing again (R2-11).
+	LastRun string `json:"lastRun,omitempty"`
 	// Updated is when the exception last changed (CF-55): accepted,
 	// removed, made active again; a match is not a change. DuplicateOf names the exception
 	// the daily housekeeping found it repeats, removing it (CF-53).
@@ -601,17 +604,19 @@ func (s *Service) Objects(ctx context.Context, cluster string) ([]string, error)
 }
 
 // Match counts what exceptions dropped (CF-13): each id once per finding
-// it covered, at a time.
-func (s *Service) Match(ctx context.Context, hits map[string]int, at time.Time) error {
+// it covered, at a time, for a run; an exception that counted the run
+// already is left alone, so a run routed again counts nothing twice
+// (R2-11).
+func (s *Service) Match(ctx context.Context, run string, hits map[string]int, at time.Time) error {
 	if len(hits) == 0 {
 		return nil
 	}
 	return s.updateExceptions(ctx, func(rec *exceptionsRecord) error {
 		n := 0
 		for i := range rec.Items {
-			if c := hits[rec.Items[i].ID]; c > 0 {
+			if c := hits[rec.Items[i].ID]; c > 0 && (run == "" || rec.Items[i].LastRun != run) {
 				rec.Items[i].Matches += c
-				rec.Items[i].LastMatched = at.UTC()
+				rec.Items[i].LastMatched, rec.Items[i].LastRun = at.UTC(), run
 				n++
 			}
 		}

@@ -679,7 +679,8 @@ func (k knowledgeCovers) Matched(ctx context.Context, hits map[string]int) {
 	if k.lessons == nil {
 		return
 	}
-	if err := k.lessons.Match(ctx, hits, time.Now()); err != nil {
+	// Mycroft's differences are not a run's: every match counts.
+	if err := k.lessons.Match(ctx, "", hits, time.Now()); err != nil {
 		slog.Default().Warn("the exceptions' matches could not be counted", "err", err)
 	}
 }

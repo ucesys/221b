@@ -2,6 +2,7 @@ package casework
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -314,5 +315,100 @@ func TestAFindingThatOpensNoCaseLeavesTheFixWaitingR210(t *testing.T) {
 				t.Errorf("after the wait: %+v", r)
 			}
 		})
+	}
+}
+
+// R2-11: a run routed twice (its first routing went through, the run
+// could not be saved with it, and the next look routed it again) counts
+// nothing twice: the same cases, seen counts, notes, known issue's count,
+// exception hits and not-re-checked counts after the second as after the
+// first, and the same findings, each naming its case as before.
+func TestARunRoutedTwiceCountsOnceR211(t *testing.T) {
+	ctx := context.Background()
+	w := setup(t)
+	// An open case to be seen again, a fixed one whose fix will not hold,
+	// one closed as a known issue, an exception, and a fix nobody re-checks.
+	w.route(t, "nightly-audit", true, finding("pod.no-probes", "shop/Deployment/api", "api has no probes"))
+	reopen := w.fixed(t, "nightly-audit", finding("pod.no-limits", "shop/Deployment/web", "web has no limits"))
+	waits := w.fixed(t, "nightly-audit", finding("pod.root-user", "shop/Deployment/db", "db runs as root"))
+	res := w.route(t, "nightly-audit", true, finding("cert.expiring", "shop/Certificate/tls", "The certificate expires"))
+	if _, err := w.svc.Known(ctx, res.Findings[0].Case, KnownLink{Create: &NewKnown{Title: "Certificates are renewed by hand", Workaround: "Renew it"}}, olivia); err != nil {
+		t.Fatal(err)
+	}
+	kid := w.get(t, res.Findings[0].Case).KnownIssue
+	e, err := w.lessons.AddException(ctx, lessons.NewException{Cluster: "prod", Resource: "batch/Pod/runner", Check: "pod.privileged", Title: "Privileged runner", Reason: "a test app"}, lessons.Person{Name: "Olivia"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.now = w.now.Add(24 * time.Hour)
+	w.runs++
+	in := jobs.RouteInput{Run: fmt.Sprintf("run-%d", w.runs), Job: "nightly-audit", Kind: jobs.KindAudit, Label: "Nightly audit", Clusters: []string{"prod"}, OK: true, Scope: &jobs.Scope{Clusters: []string{"prod"}},
+		Findings: []jobs.Finding{
+			finding("pod.no-probes", "shop/Deployment/api", "api has no probes"),
+			finding("pod.no-limits", "shop/Deployment/web", "web has no limits"),
+			finding("cert.expiring", "shop/Certificate/tls", "The certificate expires"),
+			finding("pod.privileged", "batch/Pod/runner", "Privileged runner"),
+			finding("pod.crashloop", "shop/Pod/new-1", "new-1 restarts"),
+			// The same problem twice in one run: one case, seen once.
+			finding("pod.crashloop", "shop/Pod/new-1", "new-1 restarts again"),
+		}}
+	for i := range in.Findings {
+		in.Findings[i].ID = fmt.Sprintf("%s.%d", in.Run, i+1)
+	}
+	// What the run leaves: every case as the console keeps it, the known
+	// issue and the exception.
+	state := func() string {
+		lines, err := w.iss.Index(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var b strings.Builder
+		for _, l := range lines {
+			v := w.get(t, caseID(l.Number))
+			r := w.report(t, caseID(l.Number))
+			j, _ := json.Marshal(struct {
+				S, O, V, Why string
+				Seen         *issues.Seen
+				N, Unchk     int
+				Msgs         string
+			}{string(v.Status), string(v.Outcome), string(r.Verification), r.UncheckedWhy, r.Seen, r.Reopened, r.Unchecked, messages(v)})
+			fmt.Fprintf(&b, "%s %s\n", caseID(l.Number), j)
+		}
+		k, _ := w.iss.KnownIssue(ctx, system, kid)
+		x, _ := w.lessons.Exception(ctx, e.ID)
+		fmt.Fprintf(&b, "%s still present %+v; %s matched %d\n", kid, *k.StillPresent, e.ID, x.Matches)
+		return b.String()
+	}
+	first := w.svc.Route(ctx, in)
+	after := state()
+	second := w.svc.Route(ctx, in)
+	if again := state(); again != after {
+		t.Errorf("the second routing changed what the first left:\n%s\nthen:\n%s", after, again)
+	}
+	a, _ := json.Marshal(first.Findings)
+	b, _ := json.Marshal(second.Findings)
+	if string(a) != string(b) || first.Routed != second.Routed || first.NotRechecked != second.NotRechecked {
+		t.Errorf("the findings: %s\nthen: %s\ncounts %+v then %+v", a, b, first.Routed, second.Routed)
+	}
+	// What the first routing did, as before R2-11.
+	want := []string{jobs.RoutedSeen, jobs.RoutedReopened, jobs.RoutedKnown, jobs.RoutedExcepted, jobs.RoutedOpened, jobs.RoutedSeen}
+	for i, f := range first.Findings {
+		if f.Routing != want[i] {
+			t.Errorf("finding %d routed %s, want %s", i+1, f.Routing, want[i])
+		}
+	}
+	if first.Findings[5].Case != first.Findings[4].Case || first.Findings[1].Case != reopen || first.NotRechecked != 1 {
+		t.Errorf("the run: %+v", first)
+	}
+	// The run before counted it once, this run once.
+	if r := w.report(t, waits); r.Unchecked != 2 {
+		t.Errorf("the fix not re-checked was counted %d times", r.Unchecked)
+	}
+	// Opened by the run, seen once: by the finding that opened it.
+	if r := w.report(t, first.Findings[4].Case); r.Seen != nil && r.Seen.Count != 1 {
+		t.Errorf("a case the run opened is seen by it again: %+v", r.Seen)
+	}
+	if len(first.NewChecks) != 2 || fmt.Sprint(first.NewChecks) != fmt.Sprint(second.NewChecks) {
+		t.Errorf("new checks %v, then %v", first.NewChecks, second.NewChecks)
 	}
 }

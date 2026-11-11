@@ -239,7 +239,7 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 				// none: not re-checked, and the case says why. It is not
 				// reopened, and the fix is not said not to hold (R2-10).
 				if why, ok := noCase[k]; ok {
-					c.Unchecked++
+					uncheck(c, in.Run)
 					c.UncheckedWhy = fmt.Sprintf("%s found it again and opened no case: %s", in.Run, why)
 					notRechecked++
 					continue
@@ -247,7 +247,7 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 				x, ok := rechecked[k]
 				if !ok {
 					// Not re-checked: it keeps waiting (CF-95).
-					c.Unchecked++
+					uncheck(c, in.Run)
 					notRechecked++
 					continue
 				}
@@ -311,10 +311,10 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 		return jobs.RouteResult{Findings: in.Findings, NotRouted: "the cases could not be saved: " + clip(err.Error(), 300)}
 	}
 	out.NotRechecked = notRechecked
-	if err := s.o.Lessons.Match(ctx, hits, now); err != nil {
+	if err := s.o.Lessons.Match(ctx, in.Run, hits, now); err != nil {
 		s.o.Logger.Warn("the exceptions' matches could not be counted", "run", in.Run, "err", err)
 	}
-	out.NewChecks = s.newChecks(ctx, out.Findings)
+	out.NewChecks = s.newChecks(ctx, in.Run, out.Findings)
 	s.rules.noteFound(ctx, in, out.Findings, now)
 	s.noteFixed(ctx, fixed, in)
 	r := out.Routed
@@ -401,6 +401,10 @@ func (r *router) by(f *jobs.Finding, k issues.Key, n, depth int) error {
 		if err != nil {
 			return err
 		}
+		if as, ok := r.counted(c, f); ok {
+			f.Routing, f.Case = as, caseID(n)
+			return nil
+		}
 		// A change was applied to fix it, and the next run of its job
 		// found it again: the fix did not hold; it stays open (CF-30).
 		if c.VerifyPending && c.Job == r.in.Job && c.AppliedBy != nil {
@@ -421,6 +425,7 @@ func (r *router) by(f *jobs.Finding, k issues.Key, n, depth int) error {
 		}
 		c.Seen.Count++
 		c.Seen.Last, c.Updated = r.now, r.now
+		c.Seen.Run, c.Seen.Finding, c.Seen.As = r.in.Run, f.ID, jobs.RoutedSeen
 		f.Routing, f.Case = jobs.RoutedSeen, caseID(n)
 		return nil
 	}
@@ -434,8 +439,11 @@ func (r *router) by(f *jobs.Finding, k issues.Key, n, depth int) error {
 			if ki.StillPresent == nil {
 				ki.StillPresent = &issues.StillPresent{}
 			}
-			ki.StillPresent.Count++
-			ki.StillPresent.Last = r.now
+			// Once a run (R2-11).
+			if r.in.Run == "" || ki.StillPresent.Run != r.in.Run {
+				ki.StillPresent.Count++
+				ki.StillPresent.Last, ki.StillPresent.Run = r.now, r.in.Run
+			}
 			ki.AddKey(k, r.in.Job)
 			f.Routing, f.KnownIssue, f.Case = jobs.RoutedKnown, ki.ID, caseID(n)
 			return nil
@@ -454,6 +462,7 @@ func (r *router) by(f *jobs.Finding, k issues.Key, n, depth int) error {
 			}
 			c.Seen.Count++
 			c.Seen.Last = r.now
+			c.Seen.Run, c.Seen.Finding, c.Seen.As = r.in.Run, f.ID, jobs.RoutedReopened
 			if err := r.tx.Note(c, system.Person, fmt.Sprintf("Reopened: the fix did not hold; %s (%s) found it again.", r.in.Run, r.in.Label), true); err != nil {
 				return err
 			}
@@ -470,6 +479,46 @@ func (r *router) by(f *jobs.Finding, k issues.Key, n, depth int) error {
 		return r.open(f, k, c)
 	}
 	return r.open(f, k, nil)
+}
+
+// counted is how this run already routed a finding to an open case, when
+// it did: the case was opened by the run (by this finding, as it was
+// opened then; by another of its findings, seen), or seen again or
+// reopened by it. A run is routed again when its first routing could not
+// be saved with it (W-8); the second counts nothing again, and gives each
+// finding what the first gave it (R2-11).
+func (r *router) counted(c *issues.Case, f *jobs.Finding) (string, bool) {
+	run := r.in.Run
+	switch {
+	case run == "":
+		return "", false
+	case c.Run == run:
+		if c.Finding != f.ID {
+			return jobs.RoutedSeen, true
+		}
+		// Opened by this finding: within the run's cap, as then.
+		r.opened++
+		if c.RegressionOf != 0 {
+			return jobs.RoutedRegression, true
+		}
+		return jobs.RoutedOpened, true
+	case c.Seen != nil && c.Seen.Run == run:
+		if c.Seen.Finding == f.ID && c.Seen.As != "" {
+			return c.Seen.As, true
+		}
+		return jobs.RoutedSeen, true
+	}
+	return "", false
+}
+
+// uncheck counts a run that did not re-check a waiting fix on its case,
+// once a run (CF-95, R2-11).
+func uncheck(c *issues.Case, run string) {
+	if run != "" && c.UncheckedRun == run {
+		return
+	}
+	c.Unchecked++
+	c.UncheckedRun = run
 }
 
 // open opens a new agent-found case of a finding: a regression of an
@@ -614,12 +663,15 @@ func (s *Service) noteFixed(ctx context.Context, fixed []autoFix, in jobs.RouteI
 
 // newChecks marks the findings whose check was never seen on their
 // cluster, keeps them as seen, and returns them.
-func (s *Service) newChecks(ctx context.Context, findings []jobs.Finding) []string {
+func (s *Service) newChecks(ctx context.Context, run string, findings []jobs.Finding) []string {
 	var out []string
 	err := update(ctx, s.o.Backend, ChecksKey, func(rec *checksRecord) error {
 		out = nil
 		if rec.Clusters == nil {
 			rec.Clusters = map[string][]string{}
+		}
+		if rec.FirstRun == nil {
+			rec.FirstRun = map[string]string{}
 		}
 		changed := false
 		for i := range findings {
@@ -630,9 +682,19 @@ func (s *Service) newChecks(ctx context.Context, findings []jobs.Finding) []stri
 			}
 			seen := rec.Clusters[f.Key.Cluster]
 			if slices.Contains(seen, f.Key.Check) {
+				// New still to the run that saw it first, routed again.
+				if run != "" && rec.FirstRun[f.Key.Cluster+"/"+f.Key.Check] == run {
+					f.NewCheck = true
+					if !slices.Contains(out, f.Key.Check) {
+						out = append(out, f.Key.Check)
+					}
+				}
 				continue
 			}
 			rec.Clusters[f.Key.Cluster] = append(seen, f.Key.Check)
+			if run != "" {
+				rec.FirstRun[f.Key.Cluster+"/"+f.Key.Check] = run
+			}
 			f.NewCheck, changed = true, true
 			if !slices.Contains(out, f.Key.Check) {
 				out = append(out, f.Key.Check)

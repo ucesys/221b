@@ -208,6 +208,9 @@ type Case struct {
 	// no case: the agent marked it expected"); "" when it simply did not
 	// re-check it (R2-10). It goes with the wait.
 	UncheckedWhy string `json:"uncheckedWhy,omitempty"`
+	// UncheckedRun is the run that counted last in Unchecked: a second
+	// routing of it counts nothing again (R2-11).
+	UncheckedRun string `json:"uncheckedRun,omitempty"`
 	// SLAFrom is when its SLA clock started: at once for a case a person
 	// opened, at P0-P1 only for an agent-found one (CF-02); nil is no SLA.
 	SLAFrom *time.Time `json:"slaFrom,omitempty"`
@@ -369,6 +372,12 @@ type Seen struct {
 	Count int       `json:"count"`
 	First time.Time `json:"first"`
 	Last  time.Time `json:"last"`
+	// Run is the run that counted last, Finding its finding that did and
+	// As how it was routed (seen, reopened): a second routing of the same
+	// run counts nothing again and routes that finding the same (R2-11).
+	Run     string `json:"run,omitempty"`
+	Finding string `json:"finding,omitempty"`
+	As      string `json:"as,omitempty"`
 }
 
 // PreviousClose is how an earlier case of the same problem was closed:
@@ -507,6 +516,9 @@ type KnownFound struct {
 type StillPresent struct {
 	Count int       `json:"count"`
 	Last  time.Time `json:"last"`
+	// Run is the run that counted last: a second routing of it counts
+	// nothing again (R2-11).
+	Run string `json:"run,omitempty"`
 }
 
 // MaxKnownKeys bounds the keys of one known issue.

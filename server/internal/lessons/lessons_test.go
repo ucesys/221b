@@ -334,11 +334,15 @@ func TestExceptionMatchesAndStale(t *testing.T) {
 		t.Fatalf("audit: %s", w.audit.String())
 	}
 	w.now = t0.Add(5 * 24 * time.Hour)
-	if err := w.s.Match(ctx, map[string]int{a.ID: 2}, w.now); err != nil {
+	if err := w.s.Match(ctx, "run-1", map[string]int{a.ID: 2}, w.now); err != nil {
+		t.Fatal(err)
+	}
+	// The same run again counts nothing (R2-11).
+	if err := w.s.Match(ctx, "run-1", map[string]int{a.ID: 2}, w.now); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := w.s.Exception(ctx, a.ID)
-	if got.Matches != 2 || !got.LastMatched.Equal(w.now) {
+	if got.Matches != 2 || !got.LastMatched.Equal(w.now) || got.LastRun != "run-1" {
 		t.Fatalf("matched: %+v", got)
 	}
 	// Eleven days on: b never matched since it was accepted, a matched six

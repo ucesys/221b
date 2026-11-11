@@ -128,9 +128,12 @@ type record struct {
 	Retained   time.Time            `json:"retained,omitzero"`
 }
 
-// checksRecord is ChecksKey: the check ids seen on each cluster.
+// checksRecord is ChecksKey: the check ids seen on each cluster, and the
+// run that saw each first ("<cluster>/<check>"), so that a run routed
+// again finds the same checks new (R2-11).
 type checksRecord struct {
 	Clusters map[string][]string `json:"clusters,omitempty"`
+	FirstRun map[string]string   `json:"firstRun,omitempty"`
 }
 
 func loadJSON[T any](ctx context.Context, b kv.Backend, key string, v *T) (string, error) {
