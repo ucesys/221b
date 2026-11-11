@@ -276,3 +276,53 @@ test('a person links a change asked for in a chat from the case drawer, and unli
   expect((await api(page, 'DELETE', `/api/v1/aiops/cases/${caseId}/changes/${cardId}`)).status).toBe(409)
   await expect(drawer.locator(`[data-testid="case-card"][data-id="${cardId}"]`)).toBeVisible()
 })
+
+test('a person closes the case as fixed without validation; closed again as fixed and waiting, it stops waiting with Skip validation (CF-109)', async ({ page }) => {
+  await page.goto(`/#/aiops/inbox/case/${caseNumber}`)
+  const drawer = page.getByTestId('case-drawer')
+  const closeAsFixed = async (text: string, without: boolean) => {
+    await drawer.getByTestId('case-close-open').click()
+    await drawer.getByTestId('case-outcome-fix').check()
+    await drawer.getByTestId('case-fix-text').fill(text)
+    // At P0 and P1 the RCA is required.
+    if (await drawer.getByTestId('case-rca-required').count()) await drawer.getByTestId('case-rca-cause').fill('The policy was never applied to this namespace.')
+    // The option is offered on a case an agent found, off until ticked.
+    const box = drawer.getByTestId('case-no-validation')
+    await expect(box).not.toBeChecked()
+    if (without) await box.check()
+    await drawer.getByTestId('case-fix-save').click()
+    await expect(drawer.getByTestId('case-status')).toHaveText('Closed: fixed')
+  }
+
+  // Closed without validation: nothing waits, and no run is asked to re-check it.
+  await closeAsFixed('Applied the policy by hand and checked it.', true)
+  await expect(drawer.getByTestId('case-stage')).toHaveCount(0)
+  await expect(drawer.getByTestId('case-verified')).toHaveText('Closed without validation: no run re-checks the fix.')
+  await expect(drawer.getByTestId('case-skip-validation')).toHaveCount(0)
+  await expect(drawer.getByTestId('case-history')).toContainText('Closed as fixed, without validation: Applied the policy by hand and checked it.')
+  expect((await getCase(page, caseId)).status).toBe('closed')
+
+  // Open again and closed as fixed the usual way: it waits for its run.
+  await drawer.getByTestId('case-reopen').click()
+  await drawer.getByTestId('case-reopen-reason').fill('To close it again, with its validation.')
+  await drawer.getByTestId('case-reopen-save').click()
+  await expect(drawer.getByTestId('case-status')).toHaveText(/^(New|In progress)$/)
+  await closeAsFixed('Applied the policy by hand.', false)
+  await expect(drawer.getByTestId('case-stage')).toHaveText('Waiting for a validation run')
+  await page.goto('/#/aiops/inbox?show=all&source=agents')
+  await page.reload()
+  await expect(page.locator(`[data-inbox-row="case:${caseNumber}"]`).getByTestId('inbox-row-stage')).toHaveText('Waiting for a validation run')
+
+  // Skip validation: it stays closed and no longer waits.
+  await page.goto(`/#/aiops/inbox/case/${caseNumber}`)
+  await drawer.getByTestId('case-skip-validation').click()
+  await expect(drawer.getByTestId('case-skip-validation-form')).toContainText('no run re-checks it and it stays closed')
+  await drawer.getByTestId('case-skip-validation-save').click()
+  await expect(drawer.getByTestId('case-skip-validation')).toHaveCount(0)
+  await expect(drawer.getByTestId('case-stage')).toHaveCount(0)
+  await expect(drawer.getByTestId('case-status')).toHaveText('Closed: fixed')
+  await expect(drawer.getByTestId('case-verified')).toHaveText('Closed without validation: no run re-checks the fix.')
+  await expect(drawer.getByTestId('case-history')).toContainText('Validation skipped: no run re-checks the fix.')
+  // Not waiting, it has nothing more to skip.
+  expect((await api(page, 'POST', `/api/v1/aiops/cases/${caseId}/skip-validation`, {})).status).toBe(409)
+})

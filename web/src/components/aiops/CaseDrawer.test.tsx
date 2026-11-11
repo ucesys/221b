@@ -37,6 +37,7 @@ vi.mock('../../api/casework', async (original) => {
     applyOffer: vi.fn(),
     closeException: vi.fn(),
     reopenCase: vi.fn(),
+    skipValidation: vi.fn(),
     joinCase: vi.fn(),
     fetchSimilar: vi.fn(),
     analyzeCase: vi.fn(),
@@ -284,7 +285,7 @@ describe('one drawer for every case (CU-09, CU-10)', () => {
     expect(val(screen.getByTestId('case-fix-text'))).toBe('Raised the limit to 512Mi.')
     expect(disabled('case-fix-save')).toBe(false)
     fireEvent.click(screen.getByTestId('case-fix-save'))
-    await waitFor(() => expect(api.fixCase).toHaveBeenCalledWith('C-12', 'Raised the limit to 512Mi.', { cause: 'The limit.', prevention: 'Load tests.', text: '' }, true))
+    await waitFor(() => expect(api.fixCase).toHaveBeenCalledWith('C-12', 'Raised the limit to 512Mi.', { cause: 'The limit.', prevention: 'Load tests.', text: '' }, true, false))
     // No RCA id, no Mycroft: the RCA stays on the case.
     await waitFor(() => expect(toast).toHaveBeenCalledWith('C-12 is fixed.'))
     expect(txt(await screen.findByTestId('case-outcome'))).toBe('Fixed')
@@ -306,7 +307,7 @@ describe('one drawer for every case (CU-09, CU-10)', () => {
     expect(disabled('case-fix-save')).toBe(true)
     fireEvent.change(screen.getByTestId('case-rca-prevention'), { target: { value: '' } })
     fireEvent.click(screen.getByTestId('case-fix-save'))
-    await waitFor(() => expect(api.fixCase).toHaveBeenCalledWith('C-12', 'Restarted it.', undefined, true))
+    await waitFor(() => expect(api.fixCase).toHaveBeenCalledWith('C-12', 'Restarted it.', undefined, true, false))
     unmount()
     vi.mocked(api.fixCase).mockClear()
     render(<CaseDrawer id="12" onClose={() => undefined} onToast={() => undefined} />)
@@ -314,7 +315,7 @@ describe('one drawer for every case (CU-09, CU-10)', () => {
     fireEvent.change(screen.getByTestId('case-fix-text'), { target: { value: 'Restarted it.' } })
     fireEvent.change(screen.getByTestId('case-rca-cause'), { target: { value: 'A leak.' } })
     fireEvent.click(screen.getByTestId('case-fix-save'))
-    await waitFor(() => expect(api.fixCase).toHaveBeenCalledWith('C-12', 'Restarted it.', { cause: 'A leak.', prevention: '', text: '' }, true))
+    await waitFor(() => expect(api.fixCase).toHaveBeenCalledWith('C-12', 'Restarted it.', { cause: 'A leak.', prevention: '', text: '' }, true, false))
   })
 
   it('the Fixed form has no second fix field and the RCA’s fix is what was done (wave 6e)', async () => {
@@ -341,6 +342,46 @@ describe('one drawer for every case (CU-09, CU-10)', () => {
     expect(rca).not.toHaveProperty('fix')
   })
 
+  it('closes an agent-found case as fixed without validation when the person ticks it (CF-109)', async () => {
+    // A case a person opened waits for no run: the option is not offered.
+    vi.mocked(api.fetchCase).mockResolvedValue(kase({ allowedOutcomes: HUMAN }))
+    const { unmount } = render(<CaseDrawer id="12" onClose={() => undefined} onToast={() => undefined} />)
+    await closeAs('fix')
+    expect(screen.queryByTestId('case-no-validation')).toBeNull()
+    unmount()
+    // An agent-found one: offered, off until ticked.
+    vi.mocked(api.fetchCase).mockResolvedValue(found({ allowedOutcomes: HUMAN, stage: 'validation', verification: 'waiting' }))
+    vi.mocked(api.fixCase).mockResolvedValue(found({ status: 'closed', outcome: 'fix' }))
+    render(<CaseDrawer id="20" onClose={() => undefined} onToast={() => undefined} />)
+    await closeAs('fix')
+    const box = screen.getByTestId('case-no-validation') as HTMLInputElement
+    expect(box.checked).toBe(false)
+    expect(txt(screen.getByTestId('case-fix-form'))).toContain('The next run of its job checks that the fix holds')
+    expect(txt(screen.getByTestId('case-fix-form'))).toContain('Close without validation No run re-checks the fix, and the case does not wait for one.')
+    fireEvent.click(box)
+    expect(txt(screen.getByTestId('case-fix-form'))).not.toContain('The next run of its job checks that the fix holds')
+    fireEvent.change(screen.getByTestId('case-fix-text'), { target: { value: 'Set a limit.' } })
+    fireEvent.click(screen.getByTestId('case-fix-save'))
+    await waitFor(() => expect(api.fixCase).toHaveBeenCalledWith('C-20', 'Set a limit.', undefined, true, true))
+  })
+
+  it('lets a case closed as fixed stop waiting for its validation run (CF-109)', async () => {
+    const closed = { status: 'closed', outcome: 'fix', closedAt: '2026-11-07T04:00:00Z', mayReopen: true, mayChange: true } as const
+    // One that does not wait has nothing to skip, and says no run re-checks it.
+    vi.mocked(api.fetchCase).mockResolvedValue(found({ ...closed }))
+    const { unmount } = render(<CaseDrawer id="20" onClose={() => undefined} onToast={() => undefined} />)
+    expect(txt(await screen.findByTestId('case-verified'))).toBe('Closed without validation: no run re-checks the fix.')
+    expect(screen.queryByTestId('case-skip-validation')).toBeNull()
+    unmount()
+    vi.mocked(api.fetchCase).mockResolvedValue(found({ ...closed, stage: 'validation', verifyWait: { since: '2026-11-07T04:00:00Z', unchecked: 0 }, verifyJob: { id: 'alert-diagnosis', label: 'Alert diagnosis' } }))
+    vi.mocked(api.skipValidation).mockResolvedValue(found({ ...closed }))
+    render(<CaseDrawer id="20" onClose={() => undefined} onToast={() => undefined} />)
+    fireEvent.click(await screen.findByTestId('case-skip-validation'))
+    expect(txt(screen.getByTestId('case-skip-validation-form'))).toContain('C-20 is closed as fixed and waits for a run of Alert diagnosis to re-check the fix.')
+    fireEvent.click(screen.getByTestId('case-skip-validation-save'))
+    await waitFor(() => expect(api.skipValidation).toHaveBeenCalledWith('C-20'))
+  })
+
   it('saves a fix by default; Save fix unticked sends saveFix false, and a closed case links the fix it saved (wave 6g)', async () => {
     vi.mocked(api.fetchCase).mockResolvedValue(kase({ priority: 3 }))
     vi.mocked(api.fixCase).mockResolvedValue(kase({ priority: 3, status: 'closed', outcome: 'fix', pending: false, fix: 'F-3' }))
@@ -353,7 +394,7 @@ describe('one drawer for every case (CU-09, CU-10)', () => {
     expect(box.checked).toBe(false)
     fireEvent.change(screen.getByTestId('case-fix-text'), { target: { value: 'Restarted it.' } })
     fireEvent.click(screen.getByTestId('case-fix-save'))
-    await waitFor(() => expect(api.fixCase).toHaveBeenCalledWith('C-12', 'Restarted it.', undefined, false))
+    await waitFor(() => expect(api.fixCase).toHaveBeenCalledWith('C-12', 'Restarted it.', undefined, false, false))
     const saved = await screen.findByTestId('case-saved-fix')
     expect(txt(saved)).toBe('F-3')
     expect(saved.getAttribute('href')).toBe('#/aiops/mycroft/fixes/F-3')

@@ -73,6 +73,7 @@ func (s *Service) Routes(caller func(*http.Request) (Caller, bool)) []Route {
 		{"GET " + Prefix + "/{id}/duplicate-check", "case-duplicate-check", read(h.duplicateCheck)},
 		{"POST " + Prefix + "/{id}/exception", "case-exception", work(h.exception)},
 		{"POST " + Prefix + "/{id}/reopen", "case-reopen", work(h.reopen)},
+		{"POST " + Prefix + "/{id}/skip-validation", "case-skip-validation", work(h.skipValidation)},
 		{"POST " + Prefix + "/{id}/offer", "case-offer", work(h.offer)},
 		{"POST " + Prefix + "/{id}/rca-draft", "case-rca-draft", work(h.draft)},
 		{"POST " + Prefix + "/{id}/analyze", "case-analyze", work(h.analyze)},
@@ -409,6 +410,11 @@ func (h *handler) reopen(w http.ResponseWriter, r *http.Request, c Caller) {
 		return
 	}
 	v, err := h.s.Reopen(r.Context(), r.PathValue("id"), in.Reason, c)
+	h.answer(w, http.StatusOK, c, v, err)
+}
+
+func (h *handler) skipValidation(w http.ResponseWriter, r *http.Request, c Caller) {
+	v, err := h.s.SkipValidation(r.Context(), r.PathValue("id"), c)
 	h.answer(w, http.StatusOK, c, v, err)
 }
 

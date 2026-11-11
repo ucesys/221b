@@ -91,18 +91,26 @@ person comes before one that needs a run, in the order of this table.
 | Change running | open | a proposed change for it is approved and Watson runs it | applied, or failed |
 | Waiting for approval | open | a proposed change for it is queued, with no approval yet | a person approves or rejects it; it expires or is replaced |
 | Waiting for a second approval | open | a queued change on production has one of its two approvals | the second person approves or rejects it |
-| Waiting for a validation run | open | a change applied its fix (agent-found cases) | a run of the job that found it re-checks it: gone below P1 closes it as Fixed, gone at P0-P1 makes it Waiting for closure, still there makes it Fix did not hold |
+| Waiting for a validation run | open | a change applied its fix (agent-found cases) | a run of the job that found it re-checks it: gone below P1 closes it as Fixed, gone at P0-P1 makes it Waiting for closure, still there makes it Fix did not hold; or a person closes it as Fixed without validation (CF-109) |
 | Waiting for analysis | open | it is queued for the Case analysis job | its turn comes, or a person presses Analyze |
 | Waiting for closure | open | a run verified its fix (P0-P1), or a change applied the fix of a case no run re-checks (a person's, not reopened since) | a person closes it as Fixed, with its RCA at P0-P1 |
 | Fix did not hold | open | a run found the problem again after the fix: on an open case a change was applied to, and on a case closed as Fixed that the run reopened | a new analysis, a new change, or a person closing it |
 | Change failed | open | the change that ran last for it failed, and none waits | a new change, or a person closing it |
 | Fix suggested | open | its analysis suggested a fix, and no change waits or ran | a person acts on it |
-| Waiting for a validation run | closed as Fixed | a person closed an agent-found case as Fixed | a run re-checks it: gone makes it Fix verified, still there reopens it |
+| Waiting for a validation run | closed as Fixed | a person closed an agent-found case as Fixed | a run re-checks it: gone makes it Fix verified, still there reopens it; or a person skips the validation (CF-109) |
 | Fix verified | closed as Fixed | a run re-checked it and found the problem gone | nothing: it stays |
 
 A case with none of these has no stage: one a person works on, or one
 closed with nothing left to wait for. "Waiting for the reporter" stays
 the status shown (CF-67), not a stage.
+
+A validation run may never come: a case the Alert diagnosis found is
+re-checked only when an alert fires again on its object, and a job may be
+off. A person ends the wait (CF-109): *Close without validation* on the
+Fixed form, or *Skip validation…* on a case already closed and waiting.
+The case is then closed as Fixed with no stage; no run verifies or
+reopens it, and the problem found again opens a new case, a regression of
+it.
 
 ## Proposed changes (PC-n)
 

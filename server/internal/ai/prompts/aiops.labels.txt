@@ -53,3 +53,5 @@ Waiting for a validation run
 Waiting for closure
 Fix did not hold
 Fix verified
+Close without validation
+Skip validation

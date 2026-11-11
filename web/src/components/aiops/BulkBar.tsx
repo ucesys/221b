@@ -19,8 +19,10 @@ import {
   closeKnown,
   fetchCase,
   fetchOpenKnown,
+  fixWaits,
   incidentError,
   INCIDENT_MAX,
+  NO_VALIDATION_HINT,
   OUTCOMES,
   type BulkAction,
   type BulkFields,
@@ -272,6 +274,9 @@ function CloseDialog({ cases, busy, err, onCancel, onRun }: { cases: CaseBrief[]
   const [text, setText] = useState('')
   const [rca, setRCA] = useState<Completion>({ cause: '', prevention: '', text: '' })
   const [saveFix, setSaveFix] = useState(true)
+  // Close without validation: offered when a picked case would wait for a run to re-check its fix (CF-109).
+  const waits = cases.some(fixWaits)
+  const [noValidation, setNoValidation] = useState(false)
   const [original, setOriginal] = useState('')
   const [reason, setReason] = useState('')
   const [expires, setExpires] = useState('')
@@ -345,7 +350,12 @@ function CloseDialog({ cases, busy, err, onCancel, onRun }: { cases: CaseBrief[]
   const confirm = () => {
     switch (outcome) {
       case 'fix':
-        return onRun('fix', rca.cause.trim() ? { text: text.trim(), rca: { cause: rca.cause.trim(), prevention: rca.prevention.trim(), ...(rca.text?.trim() ? { text: rca.text.trim() } : {}) }, saveFix } : { text: text.trim(), saveFix })
+        return onRun('fix', {
+          text: text.trim(),
+          ...(rca.cause.trim() ? { rca: { cause: rca.cause.trim(), prevention: rca.prevention.trim(), ...(rca.text?.trim() ? { text: rca.text.trim() } : {}) } } : {}),
+          saveFix,
+          ...(waits && noValidation ? { noValidation: true } : {}),
+        })
       case 'noAction':
         return onRun('close', { outcome, explanation: text.trim() })
       case 'duplicate':
@@ -432,6 +442,14 @@ function CloseDialog({ cases, busy, err, onCancel, onRun }: { cases: CaseBrief[]
               Save fix <span className="tb-hint">One fix for all of them in Mycroft › Fixes, given to the agents for the cases like these.</span>
             </span>
           </label>
+          {waits && (
+            <label className="cs-inline" style={{ alignItems: 'flex-start', color: 'var(--fg)' }}>
+              <input type="checkbox" checked={noValidation} onChange={(e) => setNoValidation(e.target.checked)} data-testid="inbox-bulk-no-validation" />
+              <span>
+                Close without validation <span className="tb-hint">{NO_VALIDATION_HINT}</span>
+              </span>
+            </label>
+          )}
         </>
       )}
       {(outcome === 'noAction' || outcome === 'duplicate') && (

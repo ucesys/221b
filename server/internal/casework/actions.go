@@ -658,6 +658,10 @@ type FixInput struct {
 	RCA  *Completion `json:"rca,omitempty"`
 	// SaveFix saves the fix in Mycroft › Fixes (CF-50); absent is on.
 	SaveFix *bool `json:"saveFix,omitempty"`
+	// NoValidation closes an agent-found case without waiting for a run
+	// of its job to re-check the fix (CF-109): the person checked it, or
+	// no run will come.
+	NoValidation bool `json:"noValidation,omitempty"`
 }
 
 // saving says whether a fix is saved: on unless turned off.
@@ -695,6 +699,7 @@ func (s *Service) Fix(ctx context.Context, id string, in FixInput, c Caller) (Vi
 		}
 	}
 	p := c.issue().Person
+	unvalidated := false
 	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Case) error {
 		if err := r.MayClose(issues.OutcomeFix); err != nil {
 			return err
@@ -706,6 +711,10 @@ func (s *Service) Fix(ctx context.Context, id string, in FixInput, c Caller) (Vi
 		if verified {
 			r.VerifyPending, r.Verified, r.VerifiedBy = false, at, by
 		}
+		// Closed without validation, no run re-checks it (CF-109).
+		if in.NoValidation && r.VerifyPending {
+			r.VerifyPending, unvalidated = false, true
+		}
 		if rca != nil {
 			r.RCACause = clip(rca.Cause, issues.MaxShort)
 		}
@@ -715,6 +724,9 @@ func (s *Service) Fix(ctx context.Context, id string, in FixInput, c Caller) (Vi
 		return View{}, err
 	}
 	what := "Closed as fixed: " + text
+	if unvalidated {
+		what = "Closed as fixed, without validation: " + text
+	}
 	if rca != nil {
 		what += " (with its RCA)"
 	}
@@ -743,6 +755,8 @@ func (s *Service) Fix(ctx context.Context, id string, in FixInput, c Caller) (Vi
 	verify := ""
 	if r.VerifyPending {
 		verify = "; the next run of " + r.Job + " verifies it"
+	} else if unvalidated {
+		verify = "; without validation, no run verifies it"
 	}
 	s.record(audit.Event{Action: ActionFix, Who: who(c.Person), Cluster: r.Cluster, Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("case %s closed as fixed, %s%s", caseID(n), kept, verify)})
 	// Its troubleshooting ends and its waiting changes are settled (CF-34, CF-47).
@@ -965,6 +979,38 @@ func (s *Service) Reopen(ctx context.Context, id, reason string, c Caller) (View
 	}
 	s.note(ctx, n, Event{At: s.now(), What: what, By: c.actor()})
 	s.record(audit.Event{Action: ActionReopen, Who: who(c.Person), Cluster: r.Cluster, Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("case %s reopened (was %s)%s", caseID(n), v.Outcome, prefixed("; exception removed: ", ex))})
+	return s.Get(ctx, c, caseID(n))
+}
+
+// SkipValidation ends the wait of a case closed as fixed for a run of
+// its job to re-check the fix (CF-109): it stays closed, and no run
+// verifies or reopens it. For a fix a person checked, and for a case no
+// run will come to: its alert no longer fires, its job is off.
+func (s *Service) SkipValidation(ctx context.Context, id string, c Caller) (View, error) {
+	n, v, err := s.target(ctx, c, id)
+	if err != nil {
+		return View{}, err
+	}
+	waits := func(r issues.Case) bool {
+		return !r.Status.Open() && r.Outcome.Canonical() == issues.OutcomeFix && r.VerifyPending
+	}
+	if !waits(v.Case) {
+		return View{}, fmt.Errorf("%w: %s does not wait for a validation run", ErrState, caseID(n))
+	}
+	p := c.issue().Person
+	const what = "Validation skipped: no run re-checks the fix."
+	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Case) error {
+		if !waits(*r) {
+			return fmt.Errorf("%w: %s does not wait for a validation run", issues.ErrInvalid, caseID(n))
+		}
+		r.VerifyPending, r.Unchecked = false, 0
+		return tx.Note(r, p, what, true)
+	})
+	if err != nil {
+		return View{}, err
+	}
+	s.note(ctx, n, Event{At: s.now(), What: what, By: c.actor()})
+	s.record(audit.Event{Action: ActionSkipValidation, Who: who(c.Person), Cluster: r.Cluster, Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("case %s, closed as fixed, no longer waits for a run of %s to verify it", caseID(n), r.Job)})
 	return s.Get(ctx, c, caseID(n))
 }
 

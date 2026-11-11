@@ -45,6 +45,8 @@ import {
   caseTypeText,
   incidentError,
   INCIDENT_MAX,
+  NO_VALIDATION_HINT,
+  NO_VALIDATION_WHEN,
   applyOffer,
   caseHref,
   caseNumber,
@@ -61,10 +63,12 @@ import {
   fetchCase,
   fetchOpenKnown,
   fixCase,
+  fixWaits,
   fixPrefill,
   keepDraft,
   OUTCOMES,
   reopenCase,
+  skipValidation,
   sayOnCase,
   sendCaseDraft,
   SOURCE,
@@ -233,7 +237,7 @@ const asDraft = (w: Writing): CaseDraft => ({
   rca: hasRCA(w.rca) ? { cause: w.rca.cause, prevention: w.rca.prevention, text: w.rca.text } : undefined,
 })
 
-type Panel = '' | 'close' | 'reopen'
+type Panel = '' | 'close' | 'reopen' | 'skip'
 
 interface Props {
   /** The case: "C-12", "12", or "new" for New Case. */
@@ -516,6 +520,7 @@ function OneCase({ id, onClose, onChanged, onToast }: Props) {
             />
           )}
           {panel === 'reopen' && <ReopenForm c={c} busy={busy} onCancel={back} act={act} err={actErr} onDone={() => setPanel('')} />}
+          {panel === 'skip' && <SkipValidationForm c={c} busy={busy} onCancel={back} act={act} err={actErr} onDone={() => setPanel('')} />}
           {panel === '' && (
             <CaseBody
               c={c}
@@ -754,6 +759,8 @@ function fixCheckText(c: Case): string {
   if (c.verifiedBy) return verifiedText(c.verifiedBy, fmtTs)
   if (c.verified) return `Verified ${fmtTs(c.verified)}: a later run no longer saw it.`
   if (!c.agentFound) return ''
+  // Closed without validation, or its validation skipped: nothing waits (CF-109).
+  if (!c.verifyWait) return 'Closed without validation: no run re-checks the fix.'
   const next = 'The next run of the job re-checks that the fix holds.'
   return c.verifyWait ? `${next} ${waitText(c.verifyWait, fmtTs)}` : next
 }
@@ -1474,6 +1481,12 @@ function CaseFooter({ c, busy, panel, onPanel, onKeep, err }: { c: Case; busy: b
                 Reopen…
               </button>
             )}
+            {c.mayReopen && c.outcome === 'fix' && !!c.verifyWait && (
+              // Closed as fixed and waiting for a run that may not come (CF-109).
+              <button className="rk-btn" disabled={off} onClick={() => onPanel('skip')} title="Stop waiting for a run to re-check the fix" data-testid="case-skip-validation">
+                Skip validation…
+              </button>
+            )}
           </>
         )}
         <span className="cs-grow" />
@@ -1607,6 +1620,9 @@ function FixFields({ c, busy, text, onText, rca, onRCA, onDrafted, onCancel, act
   const [drafted, setDrafted] = useState('')
   // Save fix: on unless the person turns it off; the server saves one fix from what was done and the RCA (wave 6g).
   const [keep, setKeep] = useState(true)
+  // Close without validation: offered where closing would wait for a run to re-check the fix (CF-109).
+  const waits = fixWaits(c)
+  const [noValidation, setNoValidation] = useState(false)
   const commands = c.analysis?.fix.commands ?? []
   // What was done starts from the changes run from the case that finished
   // done (CF-49), only while nothing is written there; the person edits it.
@@ -1634,7 +1650,7 @@ function FixFields({ c, busy, text, onText, rca, onRCA, onDrafted, onCancel, act
   const ready = !!text.trim() && (!withRCA || !!rca.cause.trim())
   const save = () =>
     void act(
-      () => fixCase(c.id, text.trim(), withRCA ? { cause: rca.cause.trim(), prevention: rca.prevention.trim(), text: (rca.text ?? '').trim() } : undefined, keep),
+      () => fixCase(c.id, text.trim(), withRCA ? { cause: rca.cause.trim(), prevention: rca.prevention.trim(), text: (rca.text ?? '').trim() } : undefined, keep, waits && noValidation),
       (v) => `${v.id} is fixed.`,
       onDone,
       true,
@@ -1696,8 +1712,22 @@ function FixFields({ c, busy, text, onText, rca, onRCA, onDrafted, onCancel, act
       </label>
       <span className="tb-hint" style={{ fontSize: 12 }}>
         The case closes as fixed{withRCA ? '; what was done is the RCA’s fix, and the RCA stays on the case, where the agents read it when they analyze a like case later' : ''}.
-        {c.agentFound ? ' The next run of its job checks that the fix holds, and reopens the case if not.' : c.source.kind === 'report' ? ' The reporter is told, and may say it is still broken.' : ''}
+        {waits && noValidation
+          ? ' No run re-checks the fix.'
+          : c.agentFound
+            ? ' The next run of its job checks that the fix holds, and reopens the case if not.'
+            : c.source.kind === 'report'
+              ? ' The reporter is told, and may say it is still broken.'
+              : ''}
       </span>
+      {waits && (
+        <label className="cs-inline" style={{ alignItems: 'flex-start', color: 'var(--fg)' }}>
+          <input type="checkbox" checked={noValidation} onChange={(e) => setNoValidation(e.target.checked)} data-testid="case-no-validation" />
+          <span>
+            Close without validation <span className="tb-hint">{NO_VALIDATION_HINT}</span>
+          </span>
+        </label>
+      )}
       <label className="cs-inline" style={{ alignItems: 'flex-start', color: 'var(--fg)' }}>
         <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} data-testid="case-save-fix" />
         <span>
@@ -1984,6 +2014,32 @@ function ExceptionFields({ c, busy, onCancel, act, err, onDone }: FormProps) {
         }
       />
     </div>
+  )
+}
+
+/** Skip validation: a case closed as fixed stops waiting for a run to re-check it (CF-109). */
+function SkipValidationForm({ c, busy, onCancel, act, err, onDone }: FormProps) {
+  return (
+    <Sec title={`Skip the validation of ${c.id}`} testId="case-skip-validation-form">
+      <span className="tb-hint" style={{ fontSize: 12.5 }}>
+        {c.id} is closed as fixed and waits for a run{c.verifyJob ? ` of ${c.verifyJob.label}` : ''} to re-check the fix. Skipped, no run re-checks it and it stays closed. {NO_VALIDATION_WHEN}
+      </span>
+      <FormButtons
+        busy={busy}
+        ready
+        label="Skip validation"
+        testId="case-skip-validation-save"
+        onCancel={onCancel}
+        err={err}
+        onSave={() =>
+          void act(
+            () => skipValidation(c.id),
+            (v) => `${v.id} no longer waits for a validation run.`,
+            onDone,
+          )
+        }
+      />
+    </Sec>
   )
 }
 

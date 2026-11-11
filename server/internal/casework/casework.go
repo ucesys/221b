@@ -69,22 +69,25 @@ const (
 // The audit log's actions of the cases (CW-12, CU-13, CF-24); the issue
 // service records its own (issue.*) besides.
 const (
-	ActionCreate    = "case.create"
-	ActionUpdate    = "case.update"
-	ActionAnalyze   = "case.analyze"
-	ActionDraft     = "case.draft"
-	ActionReopen    = "case.reopen"
-	ActionFix       = "case.fix"
-	ActionClose     = "case.close"
-	ActionKnown     = "case.known"
-	ActionKeep      = "case.keep"
-	ActionJoin      = "case.join"
-	ActionException = "case.exception"
-	ActionOffer     = "case.offer"
-	ActionRoute     = "case.route"
-	ActionSettings  = "case.settings"
-	ActionRetention = "case.retention"
-	ActionClean     = "cases.clean"
+	ActionCreate  = "case.create"
+	ActionUpdate  = "case.update"
+	ActionAnalyze = "case.analyze"
+	ActionDraft   = "case.draft"
+	ActionReopen  = "case.reopen"
+	ActionFix     = "case.fix"
+	// ActionSkipValidation ends a closed case's wait for a run to
+	// verify its fix (CF-109).
+	ActionSkipValidation = "case.skip-validation"
+	ActionClose          = "case.close"
+	ActionKnown          = "case.known"
+	ActionKeep           = "case.keep"
+	ActionJoin           = "case.join"
+	ActionException      = "case.exception"
+	ActionOffer          = "case.offer"
+	ActionRoute          = "case.route"
+	ActionSettings       = "case.settings"
+	ActionRetention      = "case.retention"
+	ActionClean          = "cases.clean"
 	// --- A proposed change names the cases it resolves (wave 6b): a
 	// person links a change to a case or unlinks it (CF-28), and a change
 	// applied records the fix on the cases it resolves (CF-29).

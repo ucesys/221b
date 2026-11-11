@@ -483,7 +483,9 @@ Proposed with other commands, the change waits beside the first, one more card e
 
 **Done when:** a test approves once, proposes the same change again and finds one card with one approval; another finds the task names the waiting change.
 
-#### R2-6. A case can wait for a run that will not come
+#### R2-6. A case can wait for a run that will not come. *decided* (0.12.0, CF-109)
+
+*Decided* (the owner, November 10, 2026): a person may close the case without validation. *Close without validation* on the Fixed form, and *Skip validation…* on a case already closed and waiting, end the wait; the stage's hint and Sherlock's skill name them. What follows under **Do** was not taken: a whole-cluster run does not re-check other jobs' fixes, and a case does not say that its job is off.
 
 **Where:** `casework/route.go` (a fix is verified only by a run of the job that found the case), `jobs/kinds.go` `runAlert`, `casework/queue.go` `drain`; the texts of CF-107.
 

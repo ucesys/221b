@@ -683,8 +683,19 @@ export const closeKnown = (id: string, link: { id?: string; create?: { title: st
  * Fix: what was done, with an RCA (required at P0 and P1) whose fix is that
  * text; the case closes as fixed. saveFix false keeps it from becoming a
  * fix in Mycroft › Fixes; left out, the server saves one (wave 6g).
+ * noValidation closes an agent-found case without waiting for a run of
+ * its job to re-check the fix (CF-109).
  */
-export const fixCase = (id: string, text: string, rca?: Completion, saveFix?: boolean) => call<Case>(one(id) + '/fix', post({ text, ...(rca ? { rca } : {}), ...(saveFix === undefined ? {} : { saveFix }) }))
+export const fixCase = (id: string, text: string, rca?: Completion, saveFix?: boolean, noValidation?: boolean) =>
+  call<Case>(one(id) + '/fix', post({ text, ...(rca ? { rca } : {}), ...(saveFix === undefined ? {} : { saveFix }), ...(noValidation ? { noValidation } : {}) }))
+/** Ends the wait of a case closed as fixed for a run to re-check it: it stays closed (CF-109). */
+export const skipValidation = (id: string) => call<Case>(one(id) + '/skip-validation', post({}))
+/** Whether closing the case as fixed would wait for a run of its job to re-check the fix: an agent found it, and no run verified the fix yet. */
+export const fixWaits = (c: Pick<CaseBrief, 'agentFound' | 'source' | 'verification'>) => !!c.agentFound && !!c.source.job && c.verification !== 'verified'
+/** When to close without validation, said where it is offered (CF-109). */
+export const NO_VALIDATION_WHEN = 'For a fix you checked yourself, or when no run will come: the alert no longer fires, or the job is off. Found again later, the problem opens a new case.'
+/** What closing without validation means, and when to. */
+export const NO_VALIDATION_HINT = `No run re-checks the fix, and the case does not wait for one. ${NO_VALIDATION_WHEN}`
 /** Close as duplicate or no action needed; a duplicate whose original does not allow it answers 409 with the check. */
 export const closeCase = (id: string, c: Closing) => call<Case>(one(id) + '/close', post(c))
 /** Whether the case may close as a duplicate of the original, and what fits instead. */
@@ -728,6 +739,8 @@ export interface BulkFields {
   expires?: string
   /** Fixed: whether one fix is saved for all the cases fixed together; left out, it is (wave 6g). */
   saveFix?: boolean
+  /** Fixed: the cases close without waiting for a run to re-check them (CF-109). */
+  noValidation?: boolean
 }
 
 /** How one case took it: done, or refused with why (and, for a duplicate, what fits instead). */
@@ -812,7 +825,7 @@ export const STAGE: Record<CaseStage, { tag: string; tone: string; hint: string 
   validation: {
     tag: 'Waiting for a validation run',
     tone: 'info',
-    hint: 'Its fix is in. The next run of the job that found it re-checks it: one run that finds the problem gone verifies the fix, a run that still sees it means the fix did not hold',
+    hint: 'Its fix is in. The next run of the job that found it re-checks it: one run that finds the problem gone verifies the fix, a run that still sees it means the fix did not hold. When no run will come, end the wait: Close without validation, or Skip validation on a closed case',
   },
   closure: { tag: 'Waiting for closure', tone: 'ok', hint: 'Its fix is in: a run re-checked it and found the problem gone, or a change applied it to a case no run re-checks. A person closes it as Fixed, at P0 and P1 with its RCA' },
   notHeld: { tag: 'Fix did not hold', tone: 'err', hint: 'A run found the problem again after its fix; the case stays open' },

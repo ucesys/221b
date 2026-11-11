@@ -755,6 +755,27 @@ describe('the Inbox since wave 6c (CF-35 to CF-38)', () => {
     expect(screen.queryByTestId('inbox-bulk-save-fix')).toBeNull()
   })
 
+  it('closes the picked cases as fixed without validation when one of them would wait for a run (CF-109)', async () => {
+    vi.mocked(casework.bulkCases).mockResolvedValue({ results: [{ id: 'C-6', ok: true }] })
+    page('#/aiops/inbox')
+    await waitFor(() => expect(keys()).toContain('case:6'))
+    // People's cases only: nothing waits, the option is not offered.
+    pick('C-1')
+    fireEvent.click(screen.getByTestId('inbox-bulk-close'))
+    expect(screen.queryByTestId('inbox-bulk-no-validation')).toBeNull()
+    fireEvent.click(screen.getByText('Cancel'))
+    // With a case an agent found among them, it is.
+    pick('C-1')
+    pick('C-6')
+    fireEvent.click(screen.getByTestId('inbox-bulk-close'))
+    const box = screen.getByTestId('inbox-bulk-no-validation') as HTMLInputElement
+    expect(box.checked).toBe(false)
+    fireEvent.click(box)
+    fireEvent.change(screen.getByTestId('inbox-bulk-text'), { target: { value: 'Set the limits' } })
+    fireEvent.click(screen.getByTestId('confirm-ok'))
+    await waitFor(() => expect(casework.bulkCases).toHaveBeenLastCalledWith(['C-6'], 'fix', { text: 'Set the limits', saveFix: true, noValidation: true }))
+  })
+
   it('offers Duplicate for any picked case, agent-found too, and lets the server check each (CF-42)', async () => {
     vi.mocked(casework.bulkCases).mockResolvedValue({ results: [{ id: 'C-6', ok: true }] })
     page('#/aiops/inbox')

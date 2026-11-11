@@ -60,6 +60,9 @@ type BulkInput struct {
 	Expires     string         `json:"expires,omitempty"`
 	// SaveFix saves one fix for every case fixed (CF-50); absent is on.
 	SaveFix *bool `json:"saveFix,omitempty"`
+	// NoValidation closes the cases fixed without waiting for a run to
+	// re-check them (CF-109).
+	NoValidation bool `json:"noValidation,omitempty"`
 }
 
 // BulkResult is how the action went on one case: done, or refused with
@@ -195,7 +198,7 @@ func (s *Service) bulkAction(in BulkInput, c Caller) (func(ctx context.Context, 
 		// (CF-44), naming the others closed with it.
 		// Their one fix is saved once all are fixed, not each case's.
 		off := false
-		fi := FixInput{Text: in.Text, RCA: in.RCA, SaveFix: &off}
+		fi := FixInput{Text: in.Text, RCA: in.RCA, SaveFix: &off, NoValidation: in.NoValidation}
 		return func(ctx context.Context, id string) error {
 			_, err := s.Fix(ctx, id, fi, c)
 			return err
