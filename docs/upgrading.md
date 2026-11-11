@@ -54,7 +54,7 @@ The earlier release reads what the newer one saved: it ignores fields it does no
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
-## 0.12.0 (unreleased)
+## 0.12.0 (2026-11-11)
 
 - **Helm repositories** (wave 5): a new key in the settings ConfigMap, `helm-repositories.json` (empty until a SuperAdmin adds one in Settings › Applications), and a Secret the console creates, `<release>-helm-repositories`, with their passwords and tokens (with `connections.store: secrets`, as `<release>-backup` is). A new chart value, `helmRepositories.egressCIDRs` (empty, with `egressPorts: [443]`): listed, the network policy lets the console reach the repositories there; empty, nothing changes. Applications from git are unchanged.
 - **Jobs' instructions** (wave 5): each job runs with its kind's built-in instructions until someone changes them; a job's own are kept in its settings (the runs ConfigMap, `jobs.json`).

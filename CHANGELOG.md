@@ -2,13 +2,13 @@
 
 What changed in each release of 221B, for people who use it and people who install it. Versions follow [semantic versioning](https://semver.org/): while the major version is 0, a minor version (0.7.0) may change behaviour and chart values, and a patch version (0.7.1) only fixes. [docs/upgrading.md](docs/upgrading.md) says how to upgrade and what each upgrade changes.
 
-## 0.12.0 (unreleased)
+## 0.12.0 (2026-11-11)
 
 Phase 12: AI agents, the AIOps area (cases, jobs, proposed changes and Mycroft's knowledge), hosts outside Kubernetes, backups to S3 and Helm repositories, with the fixes of the Phase 12 review (`docs/phase-12-review.md`). Requirement rows before CF-91 call the AIOps area *Cases*.
 
 ### Upgrading
 
-- **New records, nothing to migrate from 0.11.** The chart makes the ConfigMaps `<release>-ai`, `<release>-agents`, `<release>-issues`, `<release>-proposals`, `<release>-runs`, `<release>-knowledge`, `<release>-wiki` and `<release>-casework`, and each case is a ConfigMap of its own, `<release>-case-<n>`, so the console's Role may now create, list and delete ConfigMaps in its namespace. The console makes the Secrets it needs (`<release>-backup-key` at its first start, the others when a credential is first saved). Every job is off until a SuperAdmin turns it on. New chart values are listed in [docs/upgrading.md](docs/upgrading.md#0120-unreleased).
+- **New records, nothing to migrate from 0.11.** The chart makes the ConfigMaps `<release>-ai`, `<release>-agents`, `<release>-issues`, `<release>-proposals`, `<release>-runs`, `<release>-knowledge`, `<release>-wiki` and `<release>-casework`, and each case is a ConfigMap of its own, `<release>-case-<n>`, so the console's Role may now create, list and delete ConfigMaps in its namespace. The console makes the Secrets it needs (`<release>-backup-key` at its first start, the others when a credential is first saved). Every job is off until a SuperAdmin turns it on. New chart values are listed in [docs/upgrading.md](docs/upgrading.md#0120-2026-11-11).
 - **Builds of 0.12.0 before the AIOps rename** (CF-104, ADR-152) kept the proposed changes in `<release>-cases`: at its first start the console copies them into `<release>-proposals` once, never over what the new ConfigMap holds, and logs it; the chart still makes `<release>-cases` so that the upgrade does not delete it first. The browser app's API moved from `/api/v1/cases/…` to `/api/v1/aiops/…`, with no alias; the issue API, `/api/issues/v1/…`, keeps its paths. Links of before, `#/cases/…`, open their place under `#/aiops/…`.
 - **Builds of 0.12.0 before the one case flow** (wave 6) are not converted: set `cases.cleanStart.token` once to clear their AIOps records (CF-23, ADR-130). An upgrade from 0.11 has nothing to clean.
 
