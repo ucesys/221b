@@ -3,7 +3,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import * as api from '../../api/jobs'
 import { setShowCosts } from '../../lib/costs'
 import type { Route } from '../../lib/router'
-import { JobsTab } from './JobsTab'
+import { JobsTab, WhenCell } from './JobsTab'
+import { clockInBrowser } from '../../lib/format'
 
 vi.mock('../../api/jobs', async (original) => ({
   ...(await original<typeof import('../../api/jobs')>()),
@@ -340,5 +341,24 @@ describe('AIOps › Jobs since wave 6c (CF-33, CF-40)', () => {
     // No amount; the budget fields' labels still say US$.
     expect(panel.textContent).not.toMatch(/\$\d/)
     expect((within(panel).getByTestId('job-runUSD') as HTMLInputElement).value).toBe('4')
+  })
+})
+
+describe("a job's schedule beside the browser's time (R2-16)", () => {
+  afterEach(cleanup)
+  const job = (timeZone: string) => ({ whenText: `Every day at 09:00, ${timeZone}`, when: { schedule: { kind: 'daily', at: '09:00', timeZone } } }) as unknown as api.Job
+
+  it("adds the browser's time beside the zone where the two differ", () => {
+    // Tokyo keeps UTC+9 all year; a browser there has nothing to add.
+    const here = clockInBrowser('09:00', 'Asia/Tokyo')
+    render(<WhenCell j={job('Asia/Tokyo')} />)
+    expect(screen.getByTestId('job-when-zone').textContent).toBe(here ? `Asia/Tokyo · ${here}` : 'Asia/Tokyo')
+    expect(new Date().getTimezoneOffset() === -9 * 60 || here !== '').toBe(true)
+  })
+
+  it('shows one time where the zones agree', () => {
+    const browser = Intl.DateTimeFormat().resolvedOptions().timeZone
+    render(<WhenCell j={job(browser)} />)
+    expect(screen.getByTestId('job-when-zone').textContent).toBe(browser)
   })
 })

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { addJob, budgetText, describeJobSchedule, fetchJobRuns, fetchJobs, rebuildJobNow, removeJob, runJobNow, updateJob, usd, type Job, type JobChange, type JobEvent, type JobsView, type JobWhen, type RunBrief } from '../../api/jobs'
 import { hideAmounts, useShowCosts } from '../../lib/costs'
-import { fmtTs } from '../../lib/format'
+import { clockInBrowser, fmtTs } from '../../lib/format'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { adminHref, navigate, type Route } from '../../lib/router'
 import { Drawer } from '../Drawer'
@@ -59,16 +59,24 @@ function StatePill({ j }: { j: Job }) {
   )
 }
 
-/** When a job runs, as the list shows it: the schedule, its zone under it. */
-function WhenCell({ j }: { j: Job }) {
+/**
+ * When a job runs, as the list shows it: the schedule, its zone under it,
+ * and beside the zone the browser's time where the two differ ("UTC ·
+ * 6:00pm PST"), as Last run and Next run are in the browser's (R2-16).
+ */
+export function WhenCell({ j }: { j: Job }) {
   const text = j.whenText
   const cut = j.when.schedule && !j.when.event ? text.lastIndexOf(', ') : -1
   if (cut < 0) return <>{text}</>
+  const here = clockInBrowser(j.when.schedule?.at, j.when.schedule?.timeZone)
   return (
     <>
       {text.slice(0, cut)}
       <br />
-      <span style={{ color: 'var(--fg2)', fontSize: 12 }}>{text.slice(cut + 2)}</span>
+      <span style={{ color: 'var(--fg2)', fontSize: 12 }} data-testid="job-when-zone">
+        {text.slice(cut + 2)}
+        {here && <span title="The same time in your browser's time zone"> · {here}</span>}
+      </span>
     </>
   )
 }

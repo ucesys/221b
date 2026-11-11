@@ -518,7 +518,7 @@ Proposed with other commands, the change waits beside the first, one more card e
 | R2-13 | `knowledge/store_test.go`, `knowledge/sourcetest_test.go` | Two tests, two causes. `TestMovingTheWikiCopiesEveryFile` fails at random (23 of 40 runs alone): saving the store starts a read of the wiki that nothing waits for, and the test ends while it writes into the test's folder. `TestATestSaysWhatIsWrongKN26` fails when `HTTPS_PROXY` is set: the code rightly checks nothing behind a proxy. | *fixed*: the read after a new store and the sync after a push are counted in the service's background work, which the tests wait for; the service has its proxy lookup beside `dial` |
 | R2-14 | `web/e2e/watson.spec.ts:424` | *requests do not pile up* counts every request left waiting, so it fails when an earlier spec leaves one. It failed here when run right after `sherlock.spec.ts`; it passes alone and in the suite's own order. | *fixed*: the test discards what still waits before it starts |
 | R2-15 | `CaseDrawer.tsx`, the first line and *Opened from* | The job's id shows where its name belongs: "found by Auditor (nightly-audit)", "nightly-audit" under the run. U-11 and U-12 put names where the cluster's and the agent's ids stood. | *fixed* (CF-112): the job's label, its id as the hint |
-| R2-16 | AIOps › Jobs, Schedule | One row gives its times in two zones: *When* in the console's ("Every day at 02:00 UTC"), *Last run* in the browser's ("7:36pm PST"). | One zone on the row, the console's, or the zone named on both |
+| R2-16 | AIOps › Jobs, Schedule | One row gives its times in two zones: *When* in the console's ("Every day at 02:00 UTC"), *Last run* in the browser's ("7:36pm PST"). | *fixed* (CF-113), as the owner chose: the browser's time beside the zone where the two differ |
 | R2-18 | `jobs/jobs_test.go:319` `TestBudgetStopsForTheDay` | Found on November 11 by the first `make test` of the hand-over, before any change: it failed once in the whole run with "the job's last run is still going" at the run of the next day, right after `w.s.Wait()`; run alone 40 times with the race detector it passed every time. A run seems to be still marked as going after `Wait` returns, under load. | Find what `Wait` does not wait for (the run's end being saved, or its *running* mark let go), and wait for it in `Wait` or in the test; not fixed with the eight, as the hand-over asked |
 
 ### Seen on the running console
@@ -618,6 +618,8 @@ Eight findings of the second review are open: R2-8 and R2-10 to R2-16, all Low. 
 **Done when:** a drawer test finds "found by Auditor (Nightly audit)" and no "nightly-audit" in the drawer's text, and `runNames.test.tsx` covers `job`.
 
 ### R2-16. A job's row gives its times in two time zones
+
+*fixed* (CF-113): `clockInBrowser` (`lib/format.ts`) gives the browser's time of a schedule's HH:MM in its zone on that zone's current day, or "" where the two zones agree; `WhenCell` shows it after the zone ("UTC · 6:00pm PST"). A cron schedule has no one time and shows none. Tests: `JobsTab.test.tsx` (another zone: both times; the browser's zone: one), `format.test.ts` (the zones, UTC by default, a day the clocks change, what cannot be read).
 
 **Where:** `web/src/components/aiops/JobsTab.tsx`: `WhenCell` (line 62) and the *Last run* and *Next run* cells (lines 81 to 88, 184); `describeJobSchedule` in `web/src/api/jobs.ts`.
 

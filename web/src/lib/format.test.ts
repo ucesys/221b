@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { compareNatural, compareValues, fCores, fMem, fmtAge, fmtClock, fmtMinutes, fmtTs, localTimes, setTimeFormat, nWord, pct, pctTxt, round, trimNum } from './format'
+import { clockInBrowser, compareNatural, compareValues, fCores, fMem, fmtAge, fmtClock, fmtMinutes, fmtTs, localTimes, setTimeFormat, nWord, pct, pctTxt, round, trimNum } from './format'
 
 describe('numbers', () => {
   it('trims trailing zeros', () => {
@@ -99,5 +99,33 @@ describe('dates and times', () => {
     const utc = new Date(Date.UTC(2026, 9, 12, 14, 3, 7))
     expect(localTimes('Ready since 2026-10-12 14:03:07 UTC.')).toBe(`Ready since ${fmtTs(utc)}.`)
     expect(localTimes(undefined)).toBeUndefined()
+  })
+})
+
+describe("a time of day in another zone, by the browser's clock (R2-16)", () => {
+  const now = new Date('2026-11-11T12:00:00Z')
+  const browser = Intl.DateTimeFormat().resolvedOptions().timeZone
+
+  it("gives the browser's time where the zones differ, and nothing where they agree", () => {
+    // 09:00 in Tokyo (UTC+9, no daylight saving) on its November 11 is 00:00 UTC.
+    const tokyo = new Date('2026-11-11T00:00:00Z')
+    const same = tokyo.getTimezoneOffset() === -9 * 60
+    expect(clockInBrowser('09:00', 'Asia/Tokyo', now)).toBe(same ? '' : fmtClock(tokyo))
+    expect(clockInBrowser('09:00', browser, now)).toBe('')
+  })
+
+  it('takes an empty zone for UTC, and says nothing of what it cannot read', () => {
+    const utc = new Date('2026-11-11T02:00:00Z')
+    expect(clockInBrowser('02:00', '', now)).toBe(utc.getTimezoneOffset() === 0 ? '' : fmtClock(utc))
+    expect(clockInBrowser('2am', 'UTC', now)).toBe('')
+    expect(clockInBrowser(undefined, 'UTC', now)).toBe('')
+    expect(clockInBrowser('02:00', 'Nowhere/Atlantis', now)).toBe('')
+  })
+
+  it("reads the zone's own day, across a change of the clocks", () => {
+    // New York on November 1, 2026 goes from EDT to EST at 2:00: 09:00 is 14:00 UTC.
+    const day = new Date('2026-11-01T16:00:00Z')
+    const nine = new Date('2026-11-01T14:00:00Z')
+    expect(clockInBrowser('09:00', 'America/New_York', day)).toBe(nine.getTimezoneOffset() === 5 * 60 ? '' : fmtClock(nine))
   })
 })
