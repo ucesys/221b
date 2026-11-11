@@ -88,6 +88,30 @@ async function open(page: Page, hash = '#/nodes') {
 }
 
 const pane = (page: Page) => page.getByTestId('watson')
+
+// discardWaiting discards every request on the local cluster still waiting
+// for its card, as the stream lists them, so that a test's counts are its
+// own whatever an earlier spec left behind (R2-14).
+async function discardWaiting(page: Page) {
+  const ids = await page.evaluate(
+    () =>
+      new Promise<string[]>((resolve, reject) => {
+        const es = new EventSource('/api/v1/watson/events')
+        es.addEventListener('items', (e) => {
+          es.close()
+          resolve((JSON.parse((e as MessageEvent<string>).data) as { id: string; status: string }[]).filter((it) => it.status === 'pending').map((it) => it.id))
+        })
+        es.addEventListener('error', () => {
+          es.close()
+          reject(new Error('the Watson stream failed'))
+        })
+      }),
+  )
+  for (const id of ids) {
+    const res = await page.request.post(`/api/v1/watson/commands/${id}/discard`, { headers: SAME })
+    expect(res.ok(), await res.text()).toBe(true)
+  }
+}
 const lastRan = (page: Page) => pane(page).getByTestId('watson-ran').last()
 
 /** A ready worker the console does not run on, not cordoned, to cordon and drain. */
@@ -424,6 +448,8 @@ test('a card lapses when its objects change before anyone approves it (P6-04)', 
 test('requests do not pile up: the newest is the card, the earlier one folds into a line and still waits (CF-65)', async ({ page }) => {
   const node = await spareWorker(page.request)
   await open(page)
+  await discardWaiting(page)
+  await expect(pane(page).getByTestId('watson-waiting-count')).toHaveCount(0)
   const cordon = `kubectl cordon ${node}`
   const label = `kubectl label nodes ${node} e2e.221b/cf65=yes`
   await pane(page).getByTestId('watson-input').fill(cordon)
