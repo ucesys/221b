@@ -153,7 +153,8 @@ function Panes({
   ) : undefined
   return (
     <WatsonContext.Provider value={watsonApi}>
-      <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }} data-testid="case-trouble" data-pane={shown}>
+      {/* Its own Sherlock takes questions: the open dock is put away while it shows (R2-8). */}
+      <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }} data-testid="case-trouble" data-pane={shown} data-own-chat={c.mayChange && sherlock.status?.enabled ? 'true' : undefined}>
         <div className="cs-tpane" style={{ display: shown === 'sherlock' ? 'flex' : 'none' }}>
           <SherlockPane cluster={cluster} clusterName={name} state={sherlock} onToast={onToast} switcher={switcher} shared={shared} />
         </div>

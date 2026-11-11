@@ -140,3 +140,31 @@ test('a case is troubleshot in its drawer: Sherlock on the case, Watson from it,
   await expect(log.getByTestId('case-command')).toHaveCount(1)
   await expect(log).toContainText(`kubectl cordon ${node}`)
 })
+
+test('the open dock is put away while a case’s own Sherlock shows, and is back when the drawer closes (R2-8)', async ({ page }) => {
+  await page.goto('/#/nodes')
+  await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  expect(await call(page, '/api/v1/sherlock/config', ON)).toBe(200)
+  expect(await call(page, '/api/v1/sherlock/key', { key: KEY })).toBe(200)
+  await page.reload()
+  await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  const dock = page.getByTestId('sherlock-dock')
+  await expect(dock.or(page.getByTestId('sherlock-fab')).first()).toBeVisible()
+  if (!(await dock.isVisible())) await page.getByTestId('sherlock-fab').click()
+  await expect(dock).toBeVisible()
+  // An agent-found case: the simulator starts with some.
+  await page.goto('/#/aiops/inbox?source=agents')
+  const row = page.locator('[data-inbox-row^="case:"]').first()
+  await expect(row).toBeVisible({ timeout: 20_000 })
+  const n = (await row.getAttribute('data-inbox-row'))!.split(':')[1]
+  await page.goto(`/#/aiops/inbox/case/${n}`)
+  const drawer = page.getByTestId('case-drawer')
+  await expect(drawer.getByTestId('case-trouble')).toHaveAttribute('data-own-chat', 'true')
+  await expect(dock).toBeHidden()
+  // As tall as the page allows: to the bottom of the window.
+  const height = page.viewportSize()!.height
+  await expect.poll(async () => Math.round((await drawer.boundingBox())!.y + (await drawer.boundingBox())!.height)).toBeGreaterThanOrEqual(height - 2)
+  await page.keyboard.press('Escape')
+  await expect(drawer).toHaveCount(0)
+  await expect(dock).toBeVisible()
+})

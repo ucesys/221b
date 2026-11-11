@@ -2449,6 +2449,20 @@ button.rk-gr:hover .rk-pname {
 .rk:has([data-split='true']) .rk-popfab {
   display: none;
 }
+/*
+ * A split drawer whose own Sherlock takes questions (a case's Troubleshoot,
+ * a waiting proposed change's) puts the open dock away while it shows: under
+ * the drawer the dock took a third of its height and showed a second
+ * Sherlock and Watson (R2-8). One whose conversation cannot be asked in
+ * keeps the dock, where the person asks (IB-10 to IB-13). A maximized dock
+ * is left as it is, and the dock comes back when the drawer closes.
+ */
+.rk[data-dock='open']:has([data-split='true'] [data-own-chat='true']):not(:has(.rk-dock[data-mode='max'])) {
+  --dock-space: 0px;
+}
+.rk:has([data-split='true'] [data-own-chat='true']) .rk-dock:not([data-mode='max']) {
+  display: none;
+}
 .rk[data-dock='open'] {
   --dock-space: min(var(--dock-h), calc(100vh - 150px));
 }

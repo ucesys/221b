@@ -126,7 +126,8 @@ function Panes({ p, onToast, onCommands, bring, onApprove, busy, error }: Props)
   const card = brought ? <ProposalCard p={p} onApprove={onApprove} busy={busy} error={error} /> : null
   return (
     <WatsonContext.Provider value={watsonApi}>
-      <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }} data-testid="proposal-trouble" data-pane={shown}>
+      {/* Its own Sherlock takes questions: the open dock is put away while it shows (R2-8). */}
+      <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }} data-testid="proposal-trouble" data-pane={shown} data-own-chat={waiting && p.mayAsk && sherlock.status?.enabled ? 'true' : undefined}>
         <div className="cs-tpane" style={{ display: shown === 'sherlock' ? 'flex' : 'none' }}>
           <SherlockPane cluster={p.cluster} clusterName={name} state={sherlock} onToast={toast} switcher={switcher} shared={shared} />
         </div>
