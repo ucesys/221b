@@ -614,7 +614,7 @@ Eight findings of the second review are open: R2-8 and R2-10 to R2-16, all Low. 
 
 **What is wrong:** *When* is in the console's zone ("Every day at 02:00", "UTC" under it), because that is how the schedule is set. *Last run* and *Next run* are in the browser's ("2026-11-09 7:36pm PST"), as every time in the console is. On one row, a reader has to convert to see that 02:00 UTC is the run of 6:00 pm.
 
-**Do:** Keep both as they are and add the browser's time to *When* where the two zones differ: under the schedule, beside the zone, "UTC · 6:00pm PST". Where they are the same, show nothing more. This is the reviewer's choice; the owner has not chosen between it and showing *Last run* and *Next run* in the console's zone. If the owner says otherwise, do that.
+**Do** (the owner's choice, November 11, 2026): keep both as they are and add the browser's time to *When* where the two zones differ: under the schedule, beside the zone, "UTC · 6:00pm PST". Where they are the same, show nothing more. *Last run* and *Next run* stay in the browser's zone, as every other time in the console.
 
 **Done when:** a test of `WhenCell` with a console zone other than the browser's finds both times, and one with the same zone finds one.
 
