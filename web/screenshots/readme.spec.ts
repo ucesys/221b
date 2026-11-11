@@ -147,6 +147,67 @@ test('aiops runs', async () => {
   })
 })
 
+// Automation. The simulator has no scripts of its own, so the shot makes
+// three, written with the header the console teaches (# 221b:describe).
+const SCRIPTS = [
+  {
+    name: 'disk-usage',
+    group: 'Checks',
+    text: `#!/bin/sh
+# 221b:describe Reports the file systems above a threshold
+# 221b:param THRESHOLD optional percent used that counts as full (85)
+# 221b:privilege nobody
+# 221b:facts os.family
+set -eu
+df -P -x tmpfs -x devtmpfs | awk -v t="\${THRESHOLD:-85}" 'NR > 1 && $5 + 0 >= t { print $6, $5 }'
+`,
+  },
+  {
+    name: 'rotate-journal',
+    group: 'Maintenance',
+    text: `#!/bin/sh
+# 221b:describe Trims the systemd journal to a size
+# 221b:param KEEP optional how much to keep (500M)
+# 221b:privilege elevated
+# 221b:dry-run yes
+set -eu
+if [ "\${DRY_RUN:-0}" = 1 ]; then journalctl --disk-usage; exit 0; fi
+journalctl --vacuum-size="\${KEEP:-500M}"
+`,
+  },
+  {
+    name: 'restart-checkout',
+    group: 'Maintenance',
+    text: `#!/bin/sh
+# 221b:describe Restarts the shop's checkout and waits for it
+# 221b:target kubernetes
+# 221b:privilege none
+# 221b:dry-run yes
+# 221b:k8s rollout restart deployments
+# 221b:k8s rollout status deployments
+kubectl -n shop rollout restart deployment/checkout
+kubectl -n shop rollout status deployment/checkout --timeout=120s
+`,
+  },
+]
+
+test('automation', async () => {
+  for (const script of SCRIPTS) {
+    // 409 when a run before this one made it already.
+    const res = await page.request.post('/api/v1/automation/scripts', { data: script, headers: SAME })
+    expect([200, 201, 409], await res.text()).toContain(res.status())
+  }
+  await shot('automation', '#/scripts', async (p) => {
+    await expect(p.getByTestId('scripts-table')).toBeVisible({ timeout: 20_000 })
+    await expect(p.getByTestId('script-row')).toHaveCount(SCRIPTS.length, { timeout: 20_000 })
+  })
+  // One of them open: its text, its header as the console read it, its versions.
+  await page.locator('[data-testid=script-row][data-name=rotate-journal]').getByTestId('script-open').click()
+  await expect(page.getByTestId('script-drawer')).toBeVisible({ timeout: 20_000 })
+  await save('automation-script')
+  await page.keyboard.press('Escape')
+})
+
 test('add a cluster', async () => {
   await page.goto('/#/')
   await page.getByTestId('home-add').click()
@@ -218,6 +279,41 @@ test('watson approval card', async () => {
   await page.getByTestId('watson').getByTestId('sherlock-maximize').first().click()
   await card.evaluate((el) => el.scrollIntoView({ block: 'start' }))
   await save('watson-approval')
+})
+
+test('aiops troubleshoot', async () => {
+  // A case's drawer with Sherlock on (the test above): the case on the
+  // left, Sherlock and Watson on the right, the conversation the case's.
+  // The case is one made here, about a pod that does not run, so Sherlock
+  // has something to read.
+  const rows = podRows(await snapshot(page.request, ['pods']))
+  const pod = rows.find((r) => r.status === 'CrashLoopBackOff') ?? rows.find((r) => r.status !== 'Running') ?? rows[0]!
+  const res = await page.request.post('/api/v1/aiops/cases', {
+    data: { title: `${pod.name} keeps restarting`, cluster: 'local', resource: `${pod.namespace}/Pod/${pod.name}`, priority: 2, type: 'availability' },
+    headers: SAME,
+  })
+  expect(res.status(), await res.text()).toBe(201)
+  const { number } = (await res.json()) as { number: number }
+  // The dock of the shots before would sit under the drawer: put it away.
+  await page.goto('/#/aiops/inbox')
+  await page.reload()
+  const dock = page.getByTestId('sherlock-dock')
+  await expect(dock.or(page.getByTestId('sherlock-fab')).first()).toBeVisible({ timeout: 15_000 })
+  if (await dock.isVisible()) {
+    await page.locator('[data-testid=sherlock-minimize]:visible').first().click()
+    await expect(dock).toHaveCount(0)
+  }
+  await page.goto(`/#/aiops/inbox/case/${number}`)
+  const drawer = page.getByTestId('case-drawer')
+  await expect(drawer.getByTestId('drawer-split')).toHaveAttribute('data-layout', 'split', { timeout: 20_000 })
+  const sherlock = drawer.getByTestId('case-trouble').getByTestId('sherlock')
+  await sherlock.getByTestId('sherlock-input').fill(`Why is ${pod.namespace}/${pod.name} failing?`)
+  // Asking waits for the case's stream to say Sherlock is available.
+  await expect(sherlock.getByTestId('sherlock-send')).toBeEnabled({ timeout: 20_000 })
+  await sherlock.getByTestId('sherlock-send').click()
+  await expect(sherlock.getByTestId('sherlock-answer').last()).toHaveAttribute('data-status', 'done', { timeout: 30_000 })
+  await save('aiops-troubleshoot')
+  await page.keyboard.press('Escape')
 })
 
 // The Storage tab (docs/storage.png), and the other four pages of

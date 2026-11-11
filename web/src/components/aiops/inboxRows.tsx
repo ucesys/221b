@@ -437,8 +437,8 @@ export const INBOX_COLUMNS: ColumnDef<InboxRow>[] = [
   {
     id: 'title',
     label: 'Title',
-    width: 'minmax(240px, 3fr)',
-    min: 240,
+    width: 'minmax(220px, 3fr)',
+    min: 220,
     sortValue: (r) => r.title.toLowerCase(),
     cell: (r) => (
       <span style={{ ...clip, display: 'inline-flex', gap: 8, alignItems: 'baseline' }} title={r.title}>
@@ -462,8 +462,8 @@ export const INBOX_COLUMNS: ColumnDef<InboxRow>[] = [
     // --- Case type (Phase 12, wave 6c, CF-37) ---
     id: 'type',
     label: 'Type',
-    width: 'minmax(104px, 0.8fr)',
-    min: 104,
+    width: 'minmax(96px, 0.7fr)',
+    min: 96,
     hint: 'What kind of problem a case is.',
     sortValue: (r) => (r.type ? caseTypeText(r.type) : null),
     cell: (r) =>
@@ -480,8 +480,8 @@ export const INBOX_COLUMNS: ColumnDef<InboxRow>[] = [
     // --- Incident number (Phase 12, wave 6c, CF-36) ---
     id: 'incident',
     label: 'Incident',
-    width: 'minmax(110px, 0.9fr)',
-    min: 110,
+    width: 'minmax(100px, 0.7fr)',
+    min: 100,
     hint: 'The incident number elsewhere, as a case was given it.',
     sortValue: (r) => r.incident ?? null,
     cell: (r) =>
@@ -507,8 +507,8 @@ export const INBOX_COLUMNS: ColumnDef<InboxRow>[] = [
     id: 'object',
     label: 'Object',
     hint: 'The object it is about, linked to its page, with how long it has been running.',
-    width: 'minmax(180px, 2fr)',
-    min: 180,
+    width: 'minmax(150px, 1.8fr)',
+    min: 150,
     sortValue: (r) => r.resource ?? '',
     cell: (r) =>
       r.resource ? (
@@ -523,17 +523,18 @@ export const INBOX_COLUMNS: ColumnDef<InboxRow>[] = [
   {
     id: 'status',
     label: 'Status',
-    width: 'minmax(150px, 1.3fr)',
-    min: 150,
+    // Wide enough for a status with its stage, "In progress" and "Waiting for a validation run" (CF-107).
+    width: 'minmax(250px, 2.4fr)',
+    min: 250,
     sortValue: (r) => r.status,
     cell: (r) => (
       <span style={{ ...clip, display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-        <span className="rk-tag" data-tone={r.tone} data-testid="inbox-row-status">
+        <span className="rk-tag" data-tone={r.tone} data-testid="inbox-row-status" style={{ flex: 'none' }}>
           {r.status}
         </span>
         {r.stage && (
-          // What the case waits for now: its analysis, an approval, the validation run, its closure (CF-107).
-          <span className="rk-tag" data-tone={STAGE[r.stage].tone} title={STAGE[r.stage].hint} data-testid="inbox-row-stage" data-stage={r.stage}>
+          // What the case waits for now: its analysis, an approval, the validation run, its closure (CF-107). In a narrow column it is cut with an ellipsis, whole in its hint.
+          <span className="rk-tag" data-tone={STAGE[r.stage].tone} title={`${STAGE[r.stage].tag}. ${STAGE[r.stage].hint}`} data-testid="inbox-row-stage" data-stage={r.stage} style={{ ...clip, display: 'block' }}>
             {STAGE[r.stage].tag}
           </span>
         )}

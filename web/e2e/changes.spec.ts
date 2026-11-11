@@ -226,7 +226,8 @@ test('approved and applied, the change puts the case In progress, waiting for th
   await page.goto(`/#/aiops/inbox/case/${caseNumber}`)
   await expect(drawer.getByTestId('case-verification')).toHaveAttribute('data-state', 'notHeld')
   await expect(drawer.getByTestId('case-verification')).toContainText('The fix did not hold.')
-  await expect(drawer.getByTestId('case-stage')).toHaveText('Fix did not hold')
+  // Its stage says so, unless the run proposed a new change for it: then that waits for approval, which comes first (CF-107).
+  await expect(drawer.getByTestId('case-stage')).toHaveText(/^(Fix did not hold|Waiting for approval)$/)
   await expect(drawer.getByTestId('case-status')).toHaveText('In progress')
 })
 
