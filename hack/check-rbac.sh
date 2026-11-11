@@ -3,7 +3,8 @@
 # their logs, namespaces, workloads, Services, metrics, the kubelets'
 # stats, from Phase 4 roles, bindings and the policy kinds, and from Phase
 # 8 volumes, storage classes and volume attachments), patch and
-# update its own settings ConfigMap, hold its replicas' Lease (P7-02),
+# update its own settings ConfigMap, write ConfigMaps in its own namespace
+# (one per case, ADR-128), hold its replicas' Lease (P7-02),
 # manage the Secrets of its own namespace (the connections to other
 # clusters, P3-04), and nothing else
 # (P1-09, X-03, P2-10). Secrets elsewhere are readable only when the chart
@@ -124,11 +125,15 @@ expect "$people" create subjectaccessreviews.authorization.k8s.io
 expect no impersonate serviceaccounts
 expect no impersonate uids
 expect no impersonate userextras.authentication.k8s.io
-# The kubelets' endpoints are read-only through the proxy, and only the one
-# ConfigMap is written.
+# The kubelets' endpoints are read-only through the proxy. ConfigMaps are
+# written in the console's own namespace only: each case is one it makes
+# and deletes, <release>-case-<n>, and names made at run time cannot be
+# listed in resourceNames (ADR-128). Elsewhere none is (below).
 expect no create nodes --subresource=proxy
-expect no patch configmaps/kube-root-ca.crt -n "$NS"
-expect no delete "configmaps/$NAME" -n "$NS"
+expect yes create configmaps -n "$NS"
+expect yes delete "configmaps/$NAME-case-1" -n "$NS"
+expect no create configmaps -n default
+expect no patch configmaps/kube-root-ca.crt -n kube-system
 # Subresources need --subresource: "pods/log" would mean the pod named log.
 for args in "create pods" "delete pods" "patch nodes" "update nodes" "delete nodes" "delete namespaces" \
   "create pods --subresource=exec" "create pods --subresource=attach" "create pods --subresource=portforward" \
@@ -175,7 +180,8 @@ for ns in default kube-system "$NS"; do
   fi
   # Every granted verb list is read-only, except the console's own
   # ConfigMaps' (the settings, the audit log, the session records and
-  # Automation's two),
+  # Automation's two; in its own namespace also Phase 12's and every
+  # ConfigMap, for the cases, ADR-128),
   # the self-reviews every identity may create and, in the console's own
   # namespace, the connection Secrets.
   # The reviews of people's access are created, with sign-in on.
@@ -183,7 +189,7 @@ for ns in default kube-system "$NS"; do
   if [ "$ns" = "$NS" ]; then
     # The Lease: created when none exists (the listing may merge the
     # create with the ClusterRole's reads), then only this one renewed.
-    own_writes="^(configmaps +\[\] +\[$NAME(-audit|-sessions|-automation|-automation-runs)?\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\]|leases.coordination.k8s.io +\[\] +\[\] +\[(get list watch )?create\]|leases.coordination.k8s.io +\[\] +\[$NAME-leader\] +\[get update\])"
+    own_writes="^(configmaps +\[\] +\[$NAME(-audit|-sessions|-automation|-automation-runs|-ai|-knowledge|-wiki|-runs|-issues|-proposals|-cases|-casework)?\]|configmaps +\[\] +\[\] +\[get list watch create update patch delete\]|selfsubject|subjectaccessreviews.authorization.k8s.io +\[\] +\[\] +\[create\]|leases.coordination.k8s.io +\[\] +\[\] +\[(get list watch )?create\]|leases.coordination.k8s.io +\[\] +\[$NAME-leader\] +\[get update\])"
   fi
   if [ "$ns" = "$NS" ] && [ "$connections" = yes ]; then
     # The Role's writes merge with the ClusterRole's reads in the listing:

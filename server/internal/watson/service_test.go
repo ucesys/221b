@@ -110,6 +110,8 @@ func TestReadsRunAtOnce(t *testing.T) {
 	if out := outputOf(svc, it.ID); !strings.Contains(out, "NAME") || !strings.Contains(out, "worker-001") {
 		t.Fatalf("output %q", out)
 	}
+	// The result is audited just after the item is done.
+	resultOf(t, buf, it.ID, "kubectl get nodes")
 	evs := buf.events()
 	if len(evs) != 2 || evs[0].Action != ActionCommand || evs[1].Action != ActionResult || evs[1].Who.Email != "alice@corp.example" || evs[1].Cluster != "local" {
 		t.Fatalf("audit %+v", evs)
