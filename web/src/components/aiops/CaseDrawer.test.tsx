@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CallError } from '../../api/call'
 import * as api from '../../api/casework'
+import * as jobsApi from '../../api/jobs'
 import type { Case, DuplicateCheck } from '../../api/casework'
 import { LiveContext, LiveStore } from '../../api/live'
 import type { AlertRow } from '../../api/types'
@@ -49,6 +50,12 @@ vi.mock('../../api/casework', async (original) => {
     saveCasesSettings: vi.fn(),
   }
 })
+
+// The jobs' list, for the job's name (R2-15); not there unless a test gives it.
+vi.mock('../../api/jobs', async (original) => ({
+  ...(await original<typeof import('../../api/jobs')>()),
+  fetchJobs: vi.fn(() => Promise.reject(new Error('not in this test'))),
+}))
 
 /** An element's text, and a field's value. */
 const txt = (el: Element) => el.textContent ?? ''
@@ -1128,5 +1135,23 @@ describe('a case opened from an alert links its alert (CF-84)', () => {
     // Without the live alerts, the link alone.
     expect(screen.getByTestId('case-alert-link')).toBeTruthy()
     expect(screen.queryByTestId('case-alert-state')).toBeNull()
+  })
+})
+
+describe('a case names its job, not its id (R2-15)', () => {
+  it('shows the job by its name in the header and under Opened from, its id as the hint', async () => {
+    vi.mocked(jobsApi.fetchJobs).mockResolvedValueOnce({ jobs: [], kinds: [{ id: 'nightly-audit', label: 'Nightly audit', agent: 'auditor', agentName: 'Auditor' }], clusters: [] } as unknown as jobsApi.JobsView)
+    vi.mocked(api.fetchCase).mockResolvedValue(found({ createdBy: { name: 'Auditor', kind: 'agent' }, source: { kind: 'finding', run: 'run-3', job: 'nightly-audit' } }))
+    render(<CaseDrawer id="20" onClose={() => undefined} />)
+    await waitFor(() => expect(txt(screen.getByTestId('case-kicker'))).toContain('found by Auditor (Nightly audit)'))
+    expect(txt(screen.getByTestId('case-source'))).toContain('Nightly audit')
+    expect(txt(screen.getByTestId('case-drawer'))).not.toContain('nightly-audit')
+    expect(screen.getByTestId('case-kicker').querySelector('[title="nightly-audit"]')).not.toBeNull()
+  })
+
+  it('keeps the id for whoever may not read the jobs', async () => {
+    vi.mocked(api.fetchCase).mockResolvedValue(found({ createdBy: { name: 'Auditor', kind: 'agent' }, source: { kind: 'finding', run: 'run-3', job: 'nightly-audit' } }))
+    render(<CaseDrawer id="20" onClose={() => undefined} />)
+    expect(txt(await screen.findByTestId('case-kicker'))).toContain('found by Auditor (nightly-audit)')
   })
 })

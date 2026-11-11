@@ -105,6 +105,7 @@ import { Drawer } from '../Drawer'
 import { Select } from '../Select'
 import { knownHref } from './FindingParts'
 import { runHref } from './jobsRoute'
+import { useRunNames } from './runNames'
 import { CaseChanges, Verification } from './CaseChanges'
 import { CaseCommands, CaseTroubleshoot, type CaseRun } from './CaseTroubleshoot'
 import { RunInWatson } from '../Sherlock'
@@ -258,6 +259,8 @@ export function CaseDrawer(props: Props) {
 }
 
 function OneCase({ id, onClose, onChanged, onToast }: Props) {
+  // The job by its name, not its id (R2-15).
+  const names = useRunNames()
   const [c, setC] = useState<Case | null>(null)
   const [err, setErr] = useState('')
   const [panel, setPanel] = useState<Panel>('')
@@ -407,13 +410,29 @@ function OneCase({ id, onClose, onChanged, onToast }: Props) {
   const kicker = c ? (
     <span data-testid="case-kicker">
       Case {c.id} ·{' '}
-      {c.source.kind === 'report'
-        ? `reported by ${who(c.reporter) || actorName(c.createdBy)}${c.filedBy ? `, filed by ${who(c.filedBy)}` : ''}`
-        : c.agentFound
-          ? actorKind(c.createdBy) === 'agent'
-            ? `found by ${actorName(c.createdBy)}${c.source.job ? ` (${c.source.job})` : ''}`
-            : `found by ${c.source.job || 'an agent'}`
-          : `opened by ${actorName(c.createdBy) || 'someone'}`}{' '}
+      {c.source.kind === 'report' ? (
+        `reported by ${who(c.reporter) || actorName(c.createdBy)}${c.filedBy ? `, filed by ${who(c.filedBy)}` : ''}`
+      ) : c.agentFound ? (
+        actorKind(c.createdBy) === 'agent' ? (
+          <>
+            found by {actorName(c.createdBy)}
+            {c.source.job ? (
+              <>
+                {' '}
+                (<span title={c.source.job}>{names.job(c.source.job)}</span>)
+              </>
+            ) : null}
+          </>
+        ) : c.source.job ? (
+          <>
+            found by <span title={c.source.job}>{names.job(c.source.job)}</span>
+          </>
+        ) : (
+          'found by an agent'
+        )
+      ) : (
+        `opened by ${actorName(c.createdBy) || 'someone'}`
+      )}{' '}
       · {fmtTs(c.created)}
     </span>
   ) : (
@@ -524,6 +543,7 @@ function OneCase({ id, onClose, onChanged, onToast }: Props) {
           {panel === '' && (
             <CaseBody
               c={c}
+              jobName={names.job}
               onRun={watsonHere ? toWatson : undefined}
               busy={busy}
               writing={writing}
@@ -571,7 +591,7 @@ function Sec({ title, children, testId }: { title: string; children: ReactNode; 
   )
 }
 
-function SourceText({ c }: { c: Case }) {
+function SourceText({ c, jobName }: { c: Case; jobName: (id?: string) => string }) {
   switch (c.source.kind) {
     case 'finding':
       return (
@@ -585,7 +605,11 @@ function SourceText({ c }: { c: Case }) {
               </a>
             </>
           ) : null}
-          {c.source.job ? <span className="tb-sub">{c.source.job}</span> : null}
+          {c.source.job ? (
+            <span className="tb-sub" title={c.source.job}>
+              {jobName(c.source.job)}
+            </span>
+          ) : null}
         </>
       )
     case 'alert':
@@ -770,6 +794,7 @@ type OnField = (field: CaseField, next: string, from: string) => Promise<boolean
 
 function CaseBody({
   c,
+  jobName,
   onRun,
   busy,
   writing,
@@ -781,6 +806,7 @@ function CaseBody({
   onLinked,
 }: {
   c: Case
+  jobName: (id?: string) => string
   onRun?: (command: string) => void
   busy: boolean
   writing: Writing
@@ -848,7 +874,7 @@ function CaseBody({
           </dd>
           <dt>Opened from</dt>
           <dd data-testid="case-source">
-            <SourceText c={c} />
+            <SourceText c={c} jobName={jobName} />
           </dd>
           {c.createdBy && (
             <>

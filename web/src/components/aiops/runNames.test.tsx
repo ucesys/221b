@@ -9,6 +9,7 @@ import * as api from '../../api/jobs'
 import type { Route } from '../../lib/router'
 import { keyClusterName } from './CaseDrawer'
 import { RunsTab } from './RunsTab'
+import { useRunNames } from './runNames'
 
 vi.mock('../../api/jobs', async (original) => ({
   ...(await original<typeof import('../../api/jobs')>()),
@@ -77,5 +78,29 @@ describe('styles that keep parts apart (U-10, U-15)', () => {
 
   it('ends a long object in a table’s cell with an ellipsis', () => {
     expect(rule('.cs-obj-clip .cs-obj > :first-child')).toContain('text-overflow: ellipsis')
+  })
+})
+
+describe('a job by its name (R2-15)', () => {
+  afterEach(() => {
+    cleanup()
+    vi.clearAllMocks()
+  })
+
+  function JobName({ id }: { id?: string }) {
+    return <span data-testid="job-name">{useRunNames().job(id)}</span>
+  }
+
+  it('gives a job its label, a job’s own over its kind’s, and the id until the list comes or for an unknown one', async () => {
+    vi.mocked(api.fetchJobs).mockResolvedValue({ ...jobs, jobs: [{ id: 'audit-eu', kind: 'nightly-audit', label: 'Audit of the EU clusters' }] } as unknown as api.JobsView)
+    const { rerender } = render(<JobName id="nightly-audit" />)
+    expect(screen.getByTestId('job-name').textContent).toBe('nightly-audit')
+    await waitFor(() => expect(screen.getByTestId('job-name').textContent).toBe('Nightly audit'))
+    rerender(<JobName id="audit-eu" />)
+    expect(screen.getByTestId('job-name').textContent).toBe('Audit of the EU clusters')
+    rerender(<JobName id="gone" />)
+    expect(screen.getByTestId('job-name').textContent).toBe('gone')
+    rerender(<JobName />)
+    expect(screen.getByTestId('job-name').textContent).toBe('')
   })
 })
