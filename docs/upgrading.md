@@ -52,7 +52,7 @@ helm rollback k8s-console -n 221b    # to the previous revision
 
 The earlier release reads what the newer one saved: it ignores fields it does not know. A console that finds a document saved in a **newer format than it knows** keeps reading it but refuses to save it, so it cannot destroy what the newer release wrote: the Settings page and the Users page say so until you upgrade again. CI checks a rollback from this release to each of the two before it.
 
-The objects that are not the chart's (connections, accounts, Sherlock's key, sessions) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
+The objects that are not the chart's (connections, accounts, Sherlock's key, sessions, and from 0.12.0 the AIOps cases, the backup key and the credentials of AI providers, knowledge sources and Helm repositories) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
 ## 0.12.0 (2026-11-11)
 
