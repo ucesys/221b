@@ -100,7 +100,7 @@ jobs:
     # One job per browser: together they outgrew one job's half hour.
     name: Browser tests (${{ matrix.name }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     # Firefox's page loads stall in CI, failing a different test each run:
     # its job still shows red, but does not fail the run or hold back an
     # image. Chromium and WebKit must pass.
