@@ -522,7 +522,14 @@ export const INBOX_COLUMNS: ColumnDef<InboxRow>[] = [
     width: 'minmax(180px, 2fr)',
     min: 180,
     sortValue: (r) => r.resource ?? '',
-    cell: (r) => (r.resource ? <span style={{ ...clip, display: 'inline-flex' }}>{<ObjectLink cluster={r.cluster ?? ''} resource={r.resource} />}</span> : dash),
+    cell: (r) =>
+      r.resource ? (
+        <span className="cs-obj-clip" title={r.resource} data-testid="inbox-row-object">
+          <ObjectLink cluster={r.cluster ?? ''} resource={r.resource} />
+        </span>
+      ) : (
+        dash
+      ),
     export: (r) => [{ head: 'Object', cell: r.resource ?? null }],
   },
   {

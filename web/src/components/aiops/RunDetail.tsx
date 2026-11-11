@@ -9,6 +9,7 @@ import { clusterHref } from '../../lib/router'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { FindingObject, RoutingChip, SeverityPill } from './FindingParts'
 import { proposalHref, Resolves } from './ProposalLinks'
+import { useRunNames } from './runNames'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -103,6 +104,7 @@ export function RunLimitsNote({ run }: { run: Run }) {
  * findings or proposed changes sections.
  */
 export function RunDetail({ id, onToast }: { id: string; onToast?: (msg: string) => void }) {
+  const names = useRunNames()
   const [run, setRun] = useState<Run | null>(null)
   const [error, setError] = useState('')
   const status = useRef('')
@@ -167,14 +169,14 @@ export function RunDetail({ id, onToast }: { id: string; onToast?: (msg: string)
           {run.trigger.setBy ? <span style={{ color: 'var(--fg3)' }}> · trigger set by {run.trigger.setBy}</span> : null}
         </Fact>
         <Fact label="Agent">
-          {run.agent ?? '—'}
+          {run.agent ? names.agent(run.agent) : '—'}
           {run.model ? <span style={{ color: 'var(--fg3)' }}> · {run.model}</span> : null}
         </Fact>
         <Fact label="When">
           {fmtTs(run.started)}
           {run.ended ? ` to ${fmtTs(run.ended)}` : <span style={{ color: 'var(--fg3)' }}> · running {fmtAge(run.started, now)}</span>}
         </Fact>
-        <Fact label="Clusters">{run.clusters?.length ? run.clusters.join(', ') : '—'}</Fact>
+        <Fact label="Clusters">{run.clusters?.length ? run.clusters.map(names.cluster).join(', ') : '—'}</Fact>
         {costs ? (
           <Fact label="Cost">
             <span data-testid="run-cost">{usd(run.costUSD)}</span>

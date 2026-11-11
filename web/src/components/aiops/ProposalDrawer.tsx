@@ -170,6 +170,7 @@ export function ProposalDrawer({ id, initial, onClose, onDecided, onToast }: { i
   return (
     <Drawer
       label="Review: a proposed change"
+      prose
       kicker={`Proposed change · ${p.clusterName}`}
       title={p.title}
       copy={false}

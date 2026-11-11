@@ -285,7 +285,7 @@ describe('AIOps › Mycroft › Validation rules (ADR-138)', () => {
     expect(within(row).getByTestId('rule-description').textContent).toBe('etcd answers writes late. No rule given is about the control plane’s store.')
     expect(within(row).getByTestId('rule-clusters').textContent).toBe('Production, dev')
     expect(within(row).getByTestId('rule-findings').textContent).toBe('4')
-    expect(within(row).getByTestId('rule-state').textContent).toBe('unlisted')
+    expect(within(row).getByTestId('rule-state').textContent).toBe('Unlisted')
     expect(within(row).getByTestId('rule-origin').textContent).toBe('Agent')
     // A found id a suggestion groups says so.
     expect(within(screen.getAllByTestId('rule-row').find((r) => r.getAttribute('data-id') === 'other.dns-timeout')!).getByTestId('rule-in-suggestion').textContent).toBe('in suggestion node.dns-timeout')
@@ -344,7 +344,7 @@ describe('AIOps › Mycroft › Validation rules (ADR-138)', () => {
     expect(ids()).toEqual(['node.dns-timeout'])
     const row = screen.getByTestId('rule-row')
     expect(within(row).getByTestId('rule-from').textContent).toBe('from other.dns-timeout, other.dns-timeout-errors')
-    expect(within(row).getByTestId('rule-state').textContent).toBe('suggested')
+    expect(within(row).getByTestId('rule-state').textContent).toBe('Suggested')
     expect(within(row).getByTestId('rule-runs').textContent).toBe('6')
     expect(within(row).getByTestId('rule-findings').textContent).toBe('5')
     cleanup()

@@ -120,6 +120,15 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* A row's second line in a case: small and on a line of its own, as a
+   table's .tb-sub is. Without this the parts ran together (U-10). */
+.cs-kv dd .tb-sub,
+.cs-sec .tb-sub {
+  display: block;
+  font-size: 11.5px;
+  color: var(--fg3);
+  line-height: 1.4;
+}
 .cs-row {
   cursor: pointer;
 }
@@ -299,6 +308,23 @@
   flex-wrap: wrap;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+/* In a table's cell the object stays on one line and ends in an ellipsis (U-15). */
+.cs-obj-clip {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+.cs-obj-clip .cs-obj {
+  flex-wrap: nowrap;
+  max-width: 100%;
+}
+.cs-obj-clip .cs-obj > :first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cs-obj-age,
 .cs-open {

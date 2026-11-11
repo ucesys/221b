@@ -1774,8 +1774,10 @@ button.rk-mxc:hover {
 }
 .rk-sel select {
   padding-right: 20px;
-  font-family: var(--mono);
-  font-size: 12px;
+  /* Its values are mostly words (a status, a priority, a role), so the
+     page's own face; monospace is for ids, object names and commands (U-16). */
+  font-family: var(--font);
+  font-size: 12.5px;
 }
 .rk-sel select:disabled {
   color: var(--fg3);

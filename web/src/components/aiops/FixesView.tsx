@@ -37,6 +37,8 @@ const SHOW: [Show, string, string][] = [
 ]
 
 const STATUS_TONE: Record<FixStatus, string> = { active: 'ok', pending: 'warn', inactive: 'muted' }
+/** A status as its tag reads: capitalised, as every other tag is (U-14). */
+const STATUS_TEXT: Record<FixStatus, string> = { active: 'Active', pending: 'Pending', inactive: 'Inactive' }
 const STATUS_ORDER: Record<FixStatus, number> = { active: 0, pending: 1, inactive: 2 }
 
 /** Which fixes a view keeps. */
@@ -71,7 +73,7 @@ function StatusCell({ f }: { f: Fix }) {
   return (
     <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
       <Tag tone={STATUS_TONE[f.status] ?? 'muted'} testId="fix-status">
-        {f.status}
+        {STATUS_TEXT[f.status] ?? f.status}
       </Tag>
       {f.duplicateOf && (
         <span className="tb-sub" data-testid="fix-duplicate-of">

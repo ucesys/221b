@@ -7,6 +7,7 @@ import { Drawer } from '../Drawer'
 import { Select } from '../Select'
 import { pathId, runHref, runsHref, scheduleHref } from './jobsRoute'
 import { refLink, RunDetail } from './RunDetail'
+import { useRunNames } from './runNames'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -65,6 +66,7 @@ export function RunsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
   const [mine, setMine] = useState(false)
   const [runs, setRuns] = useState<RunBrief[] | null>(null)
   const costs = useShowCosts()
+  const names = useRunNames()
   const [total, setTotal] = useState(0)
   const [error, setError] = useState('')
   const load = useCallback(
@@ -142,8 +144,8 @@ export function RunsTab({ route, onToast }: { route: Route; onToast?: (msg: stri
                       <strong>{r.label}</strong>
                       <br />
                       <span style={{ color: 'var(--fg2)', fontSize: 12 }}>
-                        {r.agent ?? 'no agent'}
-                        {r.clusters?.length ? ` · ${r.clusters.join(', ')}` : ''}
+                        {r.agent ? names.agent(r.agent) : 'no agent'}
+                        {r.clusters?.length ? ` · ${r.clusters.map(names.cluster).join(', ')}` : ''}
                       </span>
                     </td>
                     <td style={td}>

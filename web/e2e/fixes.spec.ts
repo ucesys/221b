@@ -67,7 +67,7 @@ test('closing a case as Fixed with Save fix on saves a fix: the case links it, M
   await expect(page.getByTestId('mycroft-sub-fixes')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('fixes-show-active')).toHaveAttribute('aria-pressed', 'true')
   const row = page.locator(`[data-testid="fix-row"][data-id="${fixId}"]`)
-  await expect(row.getByTestId('fix-status')).toHaveText('active')
+  await expect(row.getByTestId('fix-status')).toHaveText('Active')
   await expect(row.getByTestId('fix-cases')).toHaveText('1')
   const fd = page.getByTestId('fix-drawer')
   await expect(fd).toBeVisible()

@@ -42,7 +42,7 @@ export interface CaseRun {
 export function CaseTroubleshoot({ c, clusterName, onToast, onCommands, run, onRan, onWatson }: Props) {
   const open = c.status !== 'closed'
   const cluster = c.cluster ?? ''
-  const name = clusterName || cluster
+  const name = clusterName || c.clusterName || cluster
   const toast = onToast ?? (() => undefined)
   if (!cluster) {
     return (

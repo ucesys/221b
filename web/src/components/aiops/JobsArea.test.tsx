@@ -82,7 +82,7 @@ describe('AIOps › Jobs: Schedule, Runs and Validation rules (FX-13, CF-89)', (
     const el = await screen.findByTestId('rules-page')
     expect(el.parentElement).toBe(root)
     expect(el.children[0]!.textContent).toBe(
-      'Agents use these rules for a portion of a problem identifiers - each finding becomes a case identified by cluster, object and rule. When no rule fits, an agent makes up a name: it shows as Unlisted, for a SuperAdmin to make it a rule or dismiss it.',
+      'Agents name each finding with one of these rules. A finding becomes a case identified by its cluster, object and rule. When no rule fits, an agent makes up a name: it shows as Unlisted, for a SuperAdmin to make it a rule or dismiss it.',
     )
     expect(el.children[0]!.classList.contains('cs-lead')).toBe(true)
     const bar = within(el).getByTestId('mycroft-toolbar')

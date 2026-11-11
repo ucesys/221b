@@ -125,7 +125,7 @@ test('the validation rules are a table as wide as the Mycroft tables in Jobs, fi
   // Every row has Findings, Runs and Clusters (CF-85), seen before a drawer narrows the table.
   for (const col of ['findings', 'runs', 'clusters']) await expect(table.locator(`thead button[data-col="${col}"]`)).toHaveCount(1)
   const priv = page.locator('[data-testid="rule-row"][data-id="pod.privileged"]')
-  await expect(priv.getByTestId('rule-state')).toHaveText('active')
+  await expect(priv.getByTestId('rule-state')).toHaveText('Active')
   await expect(priv.getByTestId('rule-origin')).toHaveText(/^Built-in/)
   // A rule of the alert diagnosis only is not a nightly audit's.
   await page.getByTestId('rules-job').selectOption('nightly-audit')
@@ -219,7 +219,7 @@ test('an id an agent made up is a row of the one table with its description; its
   await page.goto('/#/aiops/jobs/rules')
   await page.getByTestId('rules-show-found').click()
   const row = page.locator(`[data-testid="rule-row"][data-kind="found"][data-id="${SKEW}"]`)
-  await expect(row.getByTestId('rule-state')).toHaveText('unlisted')
+  await expect(row.getByTestId('rule-state')).toHaveText('Unlisted')
   await expect(row.getByTestId('rule-description')).toContainText('not in step')
   // A cluster by its name, its id in the hover, as cases name it.
   await expect(row.locator('[data-testid="rule-cluster"][title="local"]')).toHaveCount(1)
@@ -250,7 +250,7 @@ test('the housekeeping suggests the ids alike as one rule: a row under Suggested
   await page.goto('/#/aiops/jobs/rules')
   await page.getByTestId('rules-show-suggested').click()
   const row = page.locator(`[data-testid="rule-row"][data-kind="suggestion"][data-id="${s!.id}"]`)
-  await expect(row.getByTestId('rule-state')).toHaveText('suggested')
+  await expect(row.getByTestId('rule-state')).toHaveText('Suggested')
   await expect(row.getByTestId('rule-origin')).toHaveText('Housekeeping')
   await row.click()
   const d = page.getByTestId('rule-drawer')

@@ -85,7 +85,7 @@ describe('AIOps › Mycroft › Fixes (wave 6g)', () => {
     const row = screen.getAllByTestId('fix-row')[1]!
     expect(row.textContent).toContain('Middle')
     expect(within(row).getByTestId('fix-cases').textContent).toBe('1')
-    expect(within(row).getByTestId('fix-status').textContent).toBe('active')
+    expect(within(row).getByTestId('fix-status').textContent).toBe('Active')
     // Pending: what it contradicts, linked.
     fireEvent.click(screen.getByTestId('fixes-show-pending'))
     expect(ids()).toEqual(['F-4'])

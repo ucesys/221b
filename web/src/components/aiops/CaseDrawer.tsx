@@ -495,6 +495,7 @@ function OneCase({ id, onClose, onChanged, onToast }: Props) {
       sideOn={run?.n}
       copy={false}
       testId="case-drawer"
+      prose
       footer={c && c.mayChange ? <CaseFooter c={c} busy={busy} panel={panel} onPanel={setPanel} onKeep={() => void keep()} err={panel === '' ? actErr : ''} /> : undefined}
     >
       {err && <p className="tb-err">{err}</p>}
@@ -883,7 +884,7 @@ function CaseBody({
                   </span>
                 )}
                 <span className="tb-sub">
-                  {c.key.object ? `on ${c.key.object}` : 'cluster-wide'} · {c.key.cluster}
+                  {c.key.object ? `on ${c.key.object}` : 'cluster-wide'} · <span title={c.key.cluster}>{keyClusterName(c)}</span>
                 </span>
               </dd>
             </>
@@ -926,7 +927,7 @@ function CaseBody({
                 {c.slaApplies && c.sla ? (
                   <>
                     P{c.priority}: first response {minutes(c.sla.target.responseMinutes)}, resolved {minutes(c.sla.target.resolveMinutes)}
-                    {c.sla.resolveDue && !c.resolved ? <span className="tb-sub"> · resolution due {fmtTs(c.sla.resolveDue)}</span> : null}{' '}
+                    {c.sla.resolveDue && !c.resolved ? <span className="tb-sub">resolution due {fmtTs(c.sla.resolveDue)}</span> : null}{' '}
                   </>
                 ) : c.slaApplies ? (
                   'Targets of its priority '
@@ -1407,6 +1408,12 @@ function DraftStamp({ d }: { d: CaseDraft }) {
       {d.updated ? `, ${fmtTs(d.updated)}` : ''}
     </span>
   )
+}
+
+/** The name of the cluster a case's key is on: the case's own cluster by its name, another by its id (U-11). */
+export function keyClusterName(c: Pick<Case, 'key' | 'cluster' | 'clusterName'>): string {
+  const id = c.key?.cluster ?? ''
+  return id && id === c.cluster ? c.clusterName || id : id
 }
 
 /** The cluster by its name, its id in the hover; one the console no longer has says so (CF-60). */

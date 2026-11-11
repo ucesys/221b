@@ -19,6 +19,8 @@ interface Props {
   title: string
   /** What the title line shows in place of the title's text: a case's title edited in place (CF-60). */
   heading?: ReactNode
+  /** The heading is words (a case's title), not an object's name: the proportional face, not monospace (U-16). */
+  prose?: boolean
   /** The facts line under the title. */
   facts?: ReactNode
   tabs?: DrawerTab[]
@@ -78,7 +80,7 @@ export function useWide(min = SPLIT_MIN): boolean {
  * The prototype's details drawer: over the page from the right, with a
  * backdrop that closes it, a header with tabs, and a scrolling body.
  */
-export function Drawer({ label, kicker, title, heading, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId, ask, copy, tools, tabsEnd, size, split, sideOn }: Props) {
+export function Drawer({ label, kicker, title, heading, facts, tabs, tab, onTab, onClose, notice, children, footer, width = 1000, testId, ask, copy, tools, tabsEnd, size, split, sideOn, prose }: Props) {
   const wide = useWide()
   // Narrow, a split drawer shows one part at a time: the body first. Each
   // part stays mounted once shown, so what is written in it stays.
@@ -197,7 +199,7 @@ export function Drawer({ label, kicker, title, heading, facts, tabs, tab, onTab,
           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
             <div style={{ flex: '1 1 auto', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: 'var(--fg3)' }}>{kicker}</div>
-              <h2 className="rk-mono" style={{ margin: 0, fontSize: 17, fontWeight: 600, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
+              <h2 className={prose ? undefined : 'rk-mono'} style={{ margin: 0, fontSize: 17, fontWeight: 600, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
                 {heading ?? title}
                 {copy !== false && <CopyName text={copy ?? title} />}
               </h2>

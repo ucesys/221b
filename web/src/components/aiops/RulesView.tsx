@@ -81,7 +81,7 @@ const SHOW: [Show, string, string][] = [
 ]
 
 /** A state as its tag says it. */
-const STATE_TEXT: Record<RowState, string> = { active: 'active', retired: 'retired', replaced: 'replaced', suggested: 'suggested', found: 'unlisted' }
+const STATE_TEXT: Record<RowState, string> = { active: 'Active', retired: 'Retired', replaced: 'Replaced', suggested: 'Suggested', found: 'Unlisted' }
 const STATE_TONE: Record<RowState, string> = { active: 'ok', retired: 'muted', replaced: 'info', suggested: 'warn', found: 'muted' }
 const STATE_ORDER: Record<RowState, number> = { active: 0, suggested: 1, found: 2, retired: 3, replaced: 4 }
 
@@ -364,7 +364,7 @@ export function RulesView({ open, section = '', onToast, onCount }: { open: stri
   return (
     <MycroftPage
       testId="rules-page"
-      lead="Agents use these rules for a portion of a problem identifiers - each finding becomes a case identified by cluster, object and rule. When no rule fits, an agent makes up a name: it shows as Unlisted, for a SuperAdmin to make it a rule or dismiss it."
+      lead="Agents name each finding with one of these rules. A finding becomes a case identified by its cluster, object and rule. When no rule fits, an agent makes up a name: it shows as Unlisted, for a SuperAdmin to make it a rule or dismiss it."
       filter={
         <div className="rk-seg" role="group" aria-label="Show" data-testid="rules-show">
           {SHOW.map(([v, label, tip]) => (
