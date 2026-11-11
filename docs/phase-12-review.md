@@ -281,17 +281,17 @@ This replaces the last sentence of CF-91 ("Addresses and the API keep their name
 - **S-5. Two id sets for the Policies sections.** — *fixed* (0.12.0). `list_policies` takes `priority`, `drain` and `limits` (`api/sherlock_tools.go:1279-1287`); the Policies tab's path takes `prio` and has no `drain` or `limits` (`web/src/lib/uiControl.ts`, `policies`). Make the tab accept the tool's ids (keep `prio` as an alias), so Sherlock can show what it just read.
 - **S-6. Two step labels show raw ids.** — *fixed* (0.12.0). `sherlock/ui.go:270` (`uiLabel`) has no case for `open_tool_dialog`; `sherlock/agents.go:673` returns `"Ask " + in.Agent`, which reads "Ask changePlanner". Label them "Opened a tool dialog" and "Asked the Change planner" (the agent's `Name`).
 - **S-7. Two limits on view changes.** — *fixed* (0.12.0). The prompt says at most four changes for one question; `sherlock/ui.go:79` allows ten actions, reads included. Keep ten as the hard cap, and build the prompt's number from a constant.
-- **S-8. Three formats for an object.** `221b://Kind/namespace/name` in answers, `namespace/Kind/name` for a finding's resource, `namespace/kind/name` for evidence (`jobs/parse.go`, `OutputFormat`). `NormalizeObject` accepts either order. Left for the prompt review; no code change.
+- **S-8. Three formats for an object.** *fixed* (0.12.0, CF-106): an evidence's `ref` is `namespace/Kind/name`, as a finding's resource; the link form in answers stays, being an address. `221b://Kind/namespace/name` in answers, `namespace/Kind/name` for a finding's resource, `namespace/kind/name` for evidence (`jobs/parse.go`, `OutputFormat`). `NormalizeObject` accepts either order. Left for the prompt review; no code change.
 
 ### Prompts
 
 - **P-3. Prompt text is in about twelve places.** — *fixed* (0.12.0); the move of the Automation prompts with A-2. `ai/prompts/*.md`, `sherlock/prompt.go`, `sherlock/agents.go` (tool descriptions), `sherlock/ui_actions.json`, `jobs/kinds.go`, `jobs/parse.go`, `jobs/keys.go`, `casework/analysis.go`, `casework/trouble.go`, `investigate/investigate.go`, `knowledge/sync.go`, `api/automation_more.go`. Add one Go test that renders every prompt and task with sample data into a golden directory (`server/internal/ai/testdata/prompts/`), so a review reads one place and a change shows in a diff. Move the three Automation prompts out of `api` into `automation` (A-2).
-- **P-4.** The audit task opens "This is the nightly audit" whatever started it (`jobs/kinds.go:140`). *Prompt review.*
-- **P-5.** "Check" and "validation rule" name one thing inside one prompt (`jobs/keys.go:380`, `OutputFormat`). *Prompt review.*
-- **P-6.** Spelling is mixed in prompts ("Analyse it", "analysed", "catalogue" against "Analyze"). American, with U-1. *Prompt review* for the prompts; U-1 for the console.
-- **P-7.** The script header is written `# 221b: k8s verb resource` in the draft prompt and `# 221b:k8s` in the review prompt and the parser's messages (`api/automation_more.go:312-340`, `automation/header.go`). The parser accepts both; the form without the space is the one to teach. *Prompt review.*
+- **P-4.** *fixed* (0.12.0, CF-106) The audit task opens "This is the nightly audit" whatever started it (`jobs/kinds.go:140`). *Prompt review.*
+- **P-5.** *fixed* (0.12.0, CF-106) "Check" and "validation rule" name one thing inside one prompt (`jobs/keys.go:380`, `OutputFormat`). *Prompt review.*
+- **P-6.** *fixed* (0.12.0, CF-106) Spelling is mixed in prompts ("Analyse it", "analysed", "catalogue" against "Analyze"). American, with U-1. *Prompt review* for the prompts; U-1 for the console.
+- **P-7.** *fixed* (0.12.0, CF-106) The script header is written `# 221b: k8s verb resource` in the draft prompt and `# 221b:k8s` in the review prompt and the parser's messages (`api/automation_more.go:312-340`, `automation/header.go`). The parser accepts both; the form without the space is the one to teach. *Prompt review.*
 - **P-8. A test for the names in prompts.** — *fixed* (0.12.0). A Go test (or a vitest that reads the prompt files) that takes the console names a prompt quotes and fails when one is not a label in `web/src`. Start with the AIOps skill; the list of names can be a small file beside the prompt. `ai/casesskill_test.go` checks a few phrases of the skill today, but not that the console has them. It would have caught S-2.
-- **P-9.** Alerts are error or warning; findings are critical, warning or info; `jobs/store.go:223` maps high and error to critical. Say the mapping in the alert task. *Prompt review.*
+- **P-9.** *fixed* (0.12.0, CF-106) Alerts are error or warning; findings are critical, warning or info; `jobs/store.go:223` maps high and error to critical. Say the mapping in the alert task. *Prompt review.*
 
 ### Architecture and code
 
@@ -328,7 +328,7 @@ Notes on the fixes (0.12.0): U-1 also covers *analyzes*, *analyzing*, *analyzed*
 
 Found on November 10 on the screenshots the workflow took from the simulated cluster (`docs/screenshots/aiops-*.png`, `admin-settings.png`).
 
-*Open:* found while the findings above were being fixed, and not in 0.12.0 yet. One more of U-10's kind was fixed: the SLA line read "resolved 1 dresolution due" (`CaseDrawer.tsx`, now " · resolution due").
+*Fixed* (0.12.0, CF-105), all seven. U-10: `.tb-sub` was styled only inside a table, so in a case's drawer its second lines ran on; `styles/cases.css` now gives them a line of their own in a case's rows and sections (the SLA line too). U-11 and U-12: `aiops/runNames.ts` reads the agents' and clusters' names from the jobs' list for the Runs table and a run's drawer; a case's rule row and Troubleshoot pane use the case's cluster name. U-14 also covers a fix's status tag. U-15: `.cs-obj-clip`. U-16: the shared `Drawer` takes `prose` for a title in words, and `.rk-sel select` uses the page's face. Tests: `aiops/runNames.test.tsx`.
 
 | ID | Where | What is wrong | Change to |
 | --- | --- | --- | --- |
@@ -379,7 +379,7 @@ Also seen, and already covered: Watson's own help line in the dock lists `helm i
 
 ## Left for the prompt review
 
-The owner will ask for a second review once this work is done, to update the agents' and jobs' prompts. Do not rewrite these now:
+*Done* on November 10, 2026 (CF-106): P-4 to P-7, P-9 and S-8 as marked above; the AIOps skill rewritten in short sections (and corrected: it still said a run that no longer sees a problem verifies the fix, which W-1 ended); the re-check rule's wording made plain. `knowledge/sync.go`'s `syncPrompt` was read again and left as it is. The golden copies were changed by hand with their sources, since the review environment cannot run the Go tests; the pull request's CI is their check. What was left then:
 
 - The wording of `ai/prompts/*.md` beyond the exact name corrections of S-2 and S-4, the sentence of P-1 and the generated list of S-1. The AIOps skill is about 1,600 words in ten long bullets and should be restructured then.
 - P-4, P-5, P-6 (in prompts), P-7, P-9 and S-8.

@@ -43,7 +43,7 @@ const (
 - RBAC risks: bindings to cluster-admin or to wildcard rules, who can read Secrets, exec into pods or create pods in other namespaces, ServiceAccounts with more than they need.
 - Volumes nearly full (85% or more of their capacity) or claims that cannot bind.
 - Practices not met: Pod Security levels, namespaces without network policies, containers without resource limits or probes, quotas missing on shared namespaces.`
-	AlertTask  = `Read the object, its events, its logs and what it depends on, and say what is wrong and why, with the evidence. Report each cause as a finding on the object. When the evidence shows the alert is the system working as intended (its node put to sleep by a power manager, a planned drain), report it as an expected finding.`
+	AlertTask  = `Read the object, its events, its logs and what it depends on, and say what is wrong and why, with the evidence. Report each cause as a finding on the object. The alert's severity above is the Alerts tab's (error or warning); give each finding your own: critical, warning or info. When the evidence shows the alert is the system working as intended (its node put to sleep by a power manager, a planned drain), report it as an expected finding.`
 	DigestTask = `Group them: changes to clusters and applications, approvals and commands run, sign-ins and access changes, AI agents and their spend, jobs and what they found. Say what stands out and what needs someone today; the cluster's alerts and events now show what is still wrong.`
 )
 
@@ -163,7 +163,7 @@ func (s *Service) runAudit(ctx context.Context, env *RunEnv) (Outcome, error) {
 	out := Outcome{Scope: &Scope{}}
 	for _, cl := range env.Clusters {
 		name := env.ClusterName(cl)
-		task := fmt.Sprintf(`This is the nightly audit of the cluster %s (id %s).
+		task := fmt.Sprintf(`This is a run of the Nightly audit job on the cluster %s (id %s).
 
 %s
 

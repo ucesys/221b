@@ -20,15 +20,15 @@ Write your report for an operator who reads it later: what you checked, what you
 
 ` + "```json" + `
 {"findings": [{"severity": "critical|warning|info", "check": "a validation rule's id given above, or other.<slug>", "title": "one line", "detail": "what and why", "evidence": ["what you saw, quoted"], "cluster": "cluster id", "resource": "namespace/Kind/name, Kind/name, or empty for the cluster", "expected": false, "expectedWhy": "", "checkWhy": ""}],
- "proposals": [{"title": "what to change, one line", "reasoning": "why", "cluster": "cluster id", "fixes": [1], "commands": ["kubectl ..."], "impact": "what changes for whom", "risk": "low|medium|high", "evidence": [{"kind": "log|event|fact|finding", "text": "...", "ref": "namespace/kind/name"}]}],
+ "proposals": [{"title": "what to change, one line", "reasoning": "why", "cluster": "cluster id", "fixes": [1], "commands": ["kubectl ..."], "impact": "what changes for whom", "risk": "low|medium|high", "evidence": [{"kind": "log|event|fact|finding", "text": "...", "ref": "namespace/Kind/name"}]}],
  "rechecked": [{"check": "the rule id of a fix to re-check", "resource": "its object", "still": true, "evidence": "what you read"}]}
 ` + "```" + `
 
 Use empty lists when there is nothing.
-- A finding becomes a case, or joins the one people already have for the same cluster, resource and check: name the same problem the same way every time. Its severity sets the case's priority: critical P1, warning P3, info P4.
-- With a check other.<slug>, write "checkWhy": first what your id means, in one sentence, then why none of the ids given fits. Leave it empty for an id given.
+- A finding becomes a case, or joins the one people already have for the same cluster, resource and validation rule: name the same problem the same way every time. Its severity sets the case's priority: critical P1, warning P3, info P4.
+- With a rule id other.<slug>, write "checkWhy": first what your id means, in one sentence, then why none of the ids given fits. Leave it empty for an id given.
 - Set "expected" true, with "expectedWhy" giving why and the evidence, only when the cluster shows the system working as intended: a node annotated asleep by its power manager and cordoned just before it stopped reporting, a planned drain or maintenance. An expected finding opens no case, whatever its severity. Otherwise leave it false.
-- When fixes to re-check are listed above, give an entry in "rechecked" for every one, with "still" true or false and what you read; a problem still there is also a finding.
+- When fixes to re-check are listed above, give an entry in "rechecked" for every one: "still" true when the problem is still there, false when it is gone, with what you read. A problem still there is also a finding, with the same rule id and resource. Leave "rechecked" empty when none are listed.
 - Propose only kubectl or helm commands Watson runs, one per line, and only when the evidence supports them. "fixes" names what a proposal fixes: positions in your findings list (1 is the first) and/or ids of cases (C-12) or known issues (KI-3) from the keys in use; a proposal that fixes nothing you found is not filed.`
 
 // Quote puts text the agent must treat as data, never as instructions,

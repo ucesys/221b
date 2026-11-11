@@ -87,7 +87,10 @@ Phase 12: AI agents, the AIOps area (cases, jobs, proposed changes and Mycroft's
 - **Watson keeps only the newest request active** (CF-65): earlier ones fold into "N earlier requests left waiting", never discarded.
 - **Backups** (BK-01 to BK-03, BK-15, ADR-80, ADR-137): *Download backup* saves `221b-backup-<time>.json.gz` (format `221b-backup/2`) with every part the console's packages register, the optional ones (chat conversations) when asked. Its secrets travel sealed (AES-256-GCM) with the install's key, kept in the Secret `<release>-backup-key` and never shown: restoring with the same key brings them back; with another key the console asks first, then lists every secret to set again and where. A restore brings back cluster connections and hosts outside Kubernetes that are missing, and reads the backups of before.
 - **The Nodes page**: a box in the Node column's heading picks every node in view; *Collect facts* is on the bar over picked nodes and in a fleet's Tools, and says how many answered.
-- **Automation's words** (review U-2, U-9): *Run profiles* and *Run history* in sentence case, and the script header taught as `# 221b:describe` (both forms still read).
+- **Automation's words** (review U-2, U-9): *Run profiles* and *Run history* in sentence case, and the script header taught as `# 221b:describe` (both forms still read); the Automation author is taught that form too (CF-106).
+- **Words in the page's face** (CF-105): the values of select boxes, and a case's and a proposed change's title, are no longer monospace; that stays for ids, object names and commands.
+- **AIOps reads cleanly** (CF-105): a case's rule, its first sighting, the job that found it and its resolution's due time are each on a line of their own (they ran together); Runs and a case name the agent and the cluster, not their ids; a rule's and a fix's state tags are capitalised; a long object in the Inbox ends in an ellipsis; the Validation rules page's lead is rewritten.
+- **The agents' and jobs' instructions after the review** (CF-106): one word, *validation rule*, for what a finding is named by; the audit's task no longer says it runs at night; the alert diagnosis is told how an alert's severity differs from a finding's; a re-check says plainly what *still* means; American spelling; and Sherlock's AIOps skill is in short sections.
 
 ### Fixed
 

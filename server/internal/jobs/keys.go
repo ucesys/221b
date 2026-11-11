@@ -397,7 +397,7 @@ func (e *RunEnv) KeysIn(ctx context.Context, cluster string, scope *Scope) strin
 	}
 	offered := e.s.rules(ctx).Offered(e.Kind)
 	var b strings.Builder
-	b.WriteString("The validation rules: name each finding's check with one of these ids or, when none fits, other.<slug> (lower case, digits and dashes, at most 48 characters). A finding with any other check is refused.\n\n")
+	b.WriteString("The validation rules: give each finding, as its \"check\", one of these rule ids or, when none fits, other.<slug> (lower case, digits and dashes, at most 48 characters). A finding with any other id is refused.\n\n")
 	var cat strings.Builder
 	for _, c := range offered {
 		fmt.Fprintf(&cat, "- %s: %s\n", c.ID, c.Says)
@@ -415,7 +415,7 @@ func (e *RunEnv) KeysIn(ctx context.Context, cluster string, scope *Scope) strin
 			for _, k := range keys {
 				fmt.Fprintf(&in, "- %s on %s: %s (%s)\n", k.Check, orCluster(k.Object), clip(k.Title, 160), k.What)
 			}
-			b.WriteString("\n\nThe keys in use on this cluster: for the same problem again, use the same check on the same resource, so it joins what people already know. The console drops findings an exception covers.\n\n")
+			b.WriteString("\n\nThe keys in use on this cluster: for the same problem again, use the same rule id on the same resource, so it joins what people already know. The console drops findings an exception covers.\n\n")
 			b.WriteString(Quote("keys-in-use", in.String()))
 			if part := recheckList(keys, e.Job.ID, scope); part != "" {
 				b.WriteString("\n\n" + part)

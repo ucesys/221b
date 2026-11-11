@@ -409,7 +409,7 @@ func caseText(c caseInfo, cluster string) string {
 
 // AnalysisTask is the case analysis job's built-in instructions (JR-05);
 // drafting an RCA keeps its own.
-const AnalysisTask = "Analyse it: what is wrong and why, with the evidence, and how to fix it. Read the object it names, its events, its logs and what it depends on; look at the alerts firing now and at what changed recently (events, Helm releases). When the evidence shows the system working as intended (a node put to sleep by its power manager, a planned drain), say so with expected."
+const AnalysisTask = "Analyze it: what is wrong and why, with the evidence, and how to fix it. Read the object it names, its events, its logs and what it depends on; look at the alerts firing now and at what changed recently (events, Helm releases). When the evidence shows the system working as intended (a node put to sleep by its power manager, a planned drain), say so with expected."
 
 // task is the agent's task for a request, with the job's instructions.
 func task(req request, cluster, instructions string) string {
