@@ -70,10 +70,13 @@ func TestAProposalsConversationIsKeptUntilItIsDecidedCF61(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.clock.add(Lifetime / 2)
-	// A newer proposal for the same thing replaces the older one.
+	// A newer proposal for the same thing, whose objects changed since,
+	// replaces the older one.
+	w.exec.set("v2")
 	if _, err := w.st.Propose(ctx, restart("dev-1", "restart:replace")); err != nil {
 		t.Fatal(err)
 	}
+	w.exec.set("v1")
 	if _, err := w.st.Approve(ctx, ids["apply"], Approver{Person: Person{Key: "sam", Name: "Sam"}}, ""); err != nil {
 		t.Fatal(err)
 	}

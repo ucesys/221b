@@ -408,7 +408,7 @@ With the decision came CF-107: a case says what it waits for, one stage beside i
 
 ## Second review
 
-A second review on November 10, 2026, after the fixes: of `9148164` (*Phase 12 review: fix all findings*), of what followed it (`97c07f7`, `1e9e2ba`, the status work of CF-107) and, for the first time, of the console running. Findings are numbered R2-1 and on. Those marked *fixed* are on the branch with their tests (CF-107, CF-108); the others wait for a decision.
+A second review on November 10, 2026, after the fixes: of `9148164` (*Phase 12 review: fix all findings*), of what followed it (`97c07f7`, `1e9e2ba`, the status work of CF-107) and, for the first time, of the console running. Findings are numbered R2-1 and on. Those marked *fixed* or *decided* are on the branch with their tests (CF-107 to CF-110); the others are open.
 
 ### What ran
 
@@ -471,7 +471,9 @@ Read again with their tests: W-1 to W-4 (verification on what a run re-checked i
 
 **Done:** the test reads the new line. All of CF-106's golden files were written by hand; `go test -update` now agrees with every one of them.
 
-#### R2-5. A change proposed again discards an approval already given
+#### R2-5. A change proposed again discards an approval already given. *fixed* (0.12.0, CF-110, ADR-153)
+
+*Decided* (the owner, November 10, 2026): keep the card that waits, with its approvals, and say in its history that it was proposed again. It is replaced only when the change is no longer the same (what it acts on changed since, other steps, another case). The second part of **Do**, telling the agent which cases have a change waiting, was not taken: a change proposed with other commands still waits beside the first.
 
 **Where:** `cards/store.go` `propose` (CF-101, ADR-148).
 

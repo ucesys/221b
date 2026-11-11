@@ -97,6 +97,7 @@ Phase 12: AI agents, the AIOps area (cases, jobs, proposed changes and Mycroft's
 ### Fixed
 
 - **A console change waiting for a second SuperAdmin is applied once** when two approve at once; the second is told who approved it and when, as is a second approval of a Watson command (IB-09, ADR-111).
+- **A change proposed again no longer loses its approvals** (CF-110, ADR-153): the same change an agent proposed again replaced the card that waited, and the card's approvals went with it. On a production cluster, where a change needs two people, the first approval was gone each time the nightly audit proposed the change again. The card that waits is now kept, with its approvals, and its history says *proposed again*; it is replaced only when what it acts on changed since.
 - **A re-check is about the cluster the agent was asked about** (CF-108): in a run over several clusters, an answer about one could verify, or reopen, a fix on another by naming it; such an entry is now left out and the run says so. A re-check that names the cluster by its name, not its id, now counts.
 - **A verified fix that is found again no longer reads as verified** (CF-108): at P0–P1 a case whose fix a run verified waits for its RCA; when a later run found the problem again it went on saying *Verified: add the RCA to close*. It now says the fix did not hold.
 - **A case a re-check reopens is analyzed again** (CF-108): closed as Fixed and found still there by a run that re-checked it, it is queued for its analysis as one reopened by a finding is.

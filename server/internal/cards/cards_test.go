@@ -190,7 +190,8 @@ func waitState(t *testing.T, st *Store, id, want string) Card {
 }
 
 // A proposal is stored with what Watson read, survives a restart, and a
-// newer one for the same thing replaces it.
+// newer one for the same thing replaces it once what it acts on changed
+// (the same change proposed again is kept, CF-110).
 func TestAProposalIsDurableAndANewerOneReplacesIt(t *testing.T) {
 	ctx := context.Background()
 	w := newWorld(t)
@@ -207,6 +208,7 @@ func TestAProposalIsDurableAndANewerOneReplacesIt(t *testing.T) {
 	if c2, err := again.Get(ctx, id); err != nil || c2.Title != "Restart shop/web" {
 		t.Fatalf("after a restart: %+v %v", c2, err)
 	}
+	w.exec.set("v2")
 	newer, err := again.Propose(ctx, restart("dev-1", "restart:dev-1/shop/web"))
 	if err != nil {
 		t.Fatal(err)

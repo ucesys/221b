@@ -131,6 +131,8 @@ func TestTheStoreTellsOfEachCardStateCF29(t *testing.T) {
 		mu.Unlock()
 	})
 	a, _ := w.st.Propose(ctx, restart("dev-1", "same"))
+	// What it acts on changed: the newer proposal replaces the older.
+	w.exec.set("v2")
 	b, _ := w.st.Propose(ctx, restart("dev-1", "same"))
 	if _, err := w.st.Reject(ctx, b, Person{Key: "pat", Name: "Pat"}, "not now"); err != nil {
 		t.Fatal(err)

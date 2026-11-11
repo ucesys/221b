@@ -56,7 +56,7 @@ What a finding does:
 Proposed changes:
 - Each is a card, with what started it, the agent's reasoning, the evidence, the exact commands with their impact and risk, what it resolves ("Resolves C-12, KI-3") and when it expires.
 - Approve runs it through Watson as the approver; Reject… keeps the reason; Check again re-reads the target.
-- On production two people approve, never an agent, and not the same person twice: the second approver is told who approved it and when.
+- On production two people approve, never an agent, and not the same person twice: the second approver is told who approved it and when. A change an agent proposes again while it waits stays the same card, with the approval given; its history says proposed again. It is replaced by a newer one only when what it acts on changed since.
 - A person who works a case may Link a change to it or unlink one a person linked.
 - Once a change is applied its cases say "Fix applied by change …" and go In progress. An agent-found one closes as Fixed by itself when a run of its job re-checks it and finds it gone (at P0 and P1 it is marked verified and waits for its RCA), or says the fix did not hold.
 - A case closed otherwise rejects the waiting changes that resolve only it; a Duplicate's go to its original.

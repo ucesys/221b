@@ -118,19 +118,25 @@ it.
 stateDiagram-v2
     direction LR
     [*] --> Queued: an agent proposes it (a run, a case analysis, report triage)
-    Queued --> Queued: Check again re-plans it; one of two approvals given (production)
+    Queued --> Queued: Check again re-plans it; one of two approvals given (production); an agent proposes the same change again (CF-110)
     Queued --> Approved: Run in Watson, then the card's approval in Watson; on production, the second person's (CF-62)
     Approved --> Applied: Watson ran every action, each finished done
     Approved --> Failed: an action failed ("action 2 of 3 failed")
     Queued --> Rejected: a person rejects it with a reason, or closing the only case it was for (CF-34)
     Queued --> Expired: its expiry passes
-    Queued --> Replaced: an agent proposes the same change for the same cases again (CF-101)
+    Queued --> Replaced: an agent proposes it again and it is no longer the same change, what it acts on changed since (CF-101, CF-110)
     Applied --> [*]
     Failed --> [*]
     Rejected --> [*]
     Expired --> [*]
     Replaced --> [*]
 ```
+
+The same change proposed again while it waits is the card that waits
+(CF-110, ADR-153): it keeps its approvals and its history says "proposed
+again". A newer card replaces it only when the change is no longer the
+same: what it acts on changed since it was proposed, its steps or its
+condition differ, or it names a case the card does not.
 
 A proposed change's own conversation is deleted when it leaves Queued
 (CF-61); its command log stays with it, and its changes that finished done

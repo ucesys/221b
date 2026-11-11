@@ -1,6 +1,7 @@
 package cards
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -272,6 +273,50 @@ func loadJSON[T any](ctx context.Context, b kv.Backend, key string) (T, string, 
 
 // replacedText starts the history line of a card a newer one replaced.
 const replacedText = "replaced by the newer proposal "
+
+// againText starts the history line of a waiting card an agent proposed
+// again (CF-110).
+const againText = "proposed again "
+
+// sameChange says whether a proposal is the change a waiting card already
+// is: the same steps under the same condition, for cases the card names,
+// acting on objects that read as they did when the card was proposed. A step that cannot be read
+// now says nothing against it. A card whose own plan could not be read is
+// never the same: nobody can approve it, and the new proposal replaces it.
+func sameChange(x, c Card) bool {
+	if len(x.Actions) != len(c.Actions) || len(x.Plans) != len(x.Actions) || len(c.Plans) != len(c.Actions) {
+		return false
+	}
+	same := func(a, b any) bool {
+		ja, err := json.Marshal(a)
+		if err != nil {
+			return false
+		}
+		jb, err := json.Marshal(b)
+		return err == nil && bytes.Equal(ja, jb)
+	}
+	if x.Condition.Kind != c.Condition.Kind || !same(x.Condition.Args, c.Condition.Args) {
+		return false
+	}
+	// It resolves nothing the card does not: a proposal that names
+	// another case is a newer one, which takes the card's links over.
+	for _, r := range c.Resolves {
+		if !slices.Contains(x.Resolves, r) {
+			return false
+		}
+	}
+	for i, a := range x.Actions {
+		b := c.Actions[i]
+		if a.Kind != b.Kind || !same(a.Args, b.Args) {
+			return false
+		}
+		was, now := x.Plans[i].Fingerprint, c.Plans[i].Fingerprint
+		if was == "" || (now != "" && now != was) {
+			return false
+		}
+	}
+	return true
+}
 
 // canon writes the cards' ids the one way, PC-<n>: a card kept as c<n>
 // before CF-56 reads as PC-<n> from now on, and is saved so the next time
@@ -736,8 +781,26 @@ func (s *Store) propose(ctx context.Context, p Proposal, requester *Person, wats
 	c.ProposedBy = ptrActor(proposer)
 	addEvent(&c, now, what, p.Source.SetBy, proposer)
 	var replaced []Card
+	var kept *Card
 	err := s.changeCards(ctx, func(rec *record) error {
-		replaced = nil
+		replaced, kept = nil, nil
+		// The same change an agent proposed waits already: it is kept,
+		// with the approvals it has, and says it was proposed again
+		// (CF-110). Replacing it took a first approval away each time the
+		// nightly audit proposed it again.
+		if requester == nil && watsonItem == "" && c.DedupKey != "" {
+			for i := range rec.Cards {
+				if x := &rec.Cards[i]; x.Open() && x.DedupKey == c.DedupKey && sameChange(*x, c) {
+					if c.Expires.After(x.Expires) {
+						x.Expires = c.Expires
+					}
+					addEvent(x, now, againText+strings.TrimPrefix(what, "proposed "), p.Source.SetBy, proposer)
+					k := *x
+					kept = &k
+					return nil
+				}
+			}
+		}
 		open := 0
 		for _, x := range rec.Cards {
 			if x.Open() {
@@ -766,6 +829,13 @@ func (s *Store) propose(ctx context.Context, p Proposal, requester *Person, wats
 	})
 	if err != nil {
 		return Card{}, err
+	}
+	if kept != nil {
+		// No new card: the one that waits is the proposal, and nobody is
+		// told of it a second time.
+		s.record(audit.ActionCardPropose, *kept, Person{Name: s.agentName(p.Agent)}, audit.OutcomeOK, fmt.Sprintf("proposed again; %s waits already and is kept, with %d of %d approval(s)", kept.ID, len(kept.Approvals), kept.Needed))
+		s.changed(*kept)
+		return *kept, nil
 	}
 	for _, x := range replaced {
 		s.record(audit.ActionCardReplace, x, Person{Name: s.agentName(p.Agent)}, audit.OutcomeOK, "replaced by "+c.ID+", a newer proposed change for the same thing ("+c.DedupKey+")")
