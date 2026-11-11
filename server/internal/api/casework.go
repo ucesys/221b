@@ -11,7 +11,7 @@ import (
 
 // --- Case work (Phase 12, CW-10) ---
 //
-// The cases, served by package casework under /api/v1/cases/cases. The
+// The cases, served by package casework under /api/v1/aiops/cases. The
 // people who may approve proposed changes (cases.approverRoles, and a
 // SuperAdmin) and, since the reports became cases (Phase 12, wave 5,
 // CU-11), those who triage reports (issues.operatorRoles) work the

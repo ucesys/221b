@@ -318,7 +318,11 @@ export function useView<R>(name: string | null): { rows: R[]; usage: Map<string,
 /** Increments on every refresh tick; details screens fetch again on it. */
 export function useRefreshTick(): number {
   const store = useStore()
-  return useSyncExternalStore(store.subscribe, () => store.getState().tick, () => 0)
+  return useSyncExternalStore(
+    store.subscribe,
+    () => store.getState().tick,
+    () => 0,
+  )
 }
 
 /** A store per stream URL: a new one when another cluster is opened; tests pass their own. */

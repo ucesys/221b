@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/watson"
 )
 
 // An agent's instructions come in three layers: the fixed core, in code;
@@ -466,7 +467,7 @@ func (s *Service) Migrate(ctx context.Context) error {
 	defer s.forget()
 	sh := s.sherlockSettings()
 	instructions, notes := strings.TrimSpace(sh.Instructions), strings.TrimSpace(sh.Notes)
-	if instructions == strings.TrimSpace(sherlock.BuiltIn(true)) || instructions == strings.TrimSpace(sherlock.BuiltIn(false)) {
+	if instructions == strings.TrimSpace(sherlock.BuiltIn(true, watson.Commands())) || instructions == strings.TrimSpace(sherlock.BuiltIn(false, watson.Commands())) {
 		instructions = ""
 	}
 	if instructions != "" || notes != "" {

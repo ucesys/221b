@@ -4,7 +4,7 @@
 // with the screen and the error filled in.
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { errorSummary } from '../lib/reportLink'
-import { ReportPageLink } from './cases/ReportPageLink'
+import { ReportPageLink } from './aiops/ReportPageLink'
 
 interface Props {
   /** The screen, as the report names it. */
@@ -35,7 +35,11 @@ export class ErrorBoundary extends Component<Props, State> {
 
 export function ErrorScreen({ screen, error }: { screen: string; error: string }) {
   return (
-    <main className="rk" style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13 }} data-testid="error-screen">
+    <main
+      className="rk"
+      style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'var(--font)', fontSize: 13 }}
+      data-testid="error-screen"
+    >
       <section className="rk-card" role="alert" style={{ maxWidth: 560, padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         <h1 style={{ margin: 0, fontSize: 17, fontWeight: 600 }}>Something went wrong on this page</h1>
         <p style={{ margin: 0, color: 'var(--fg2)' }}>221B could not show {screen}. Reloading usually helps; if it happens again, tell the people who run 221B.</p>

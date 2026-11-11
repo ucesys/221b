@@ -451,7 +451,7 @@ func syncReport(r SyncResult) string {
 		b.WriteString(" No page changes.")
 	}
 	if r.Proposals > 0 {
-		fmt.Fprintf(&b, " %d inventory proposals wait for approval in [AIOps › Inbox](#/cases/inbox).", r.Proposals)
+		fmt.Fprintf(&b, " %d inventory changes wait for approval in [AIOps › Inbox](#/aiops/inbox).", r.Proposals)
 	}
 	if r.Unsent > 0 {
 		fmt.Fprintf(&b, " %d changed items were not given to Mycroft; the next run reads them again.", r.Unsent)
@@ -502,9 +502,9 @@ func syncReport(r SyncResult) string {
 // (KN-08).
 func DraftHref(run string) string {
 	if run == "" {
-		return "#/cases/inbox"
+		return "#/aiops/inbox"
 	}
-	return "#/cases/inbox/knowledge/" + url.PathEscape(run)
+	return "#/aiops/inbox/knowledge/" + url.PathEscape(run)
 }
 
 // itemWords names a batch's items: the first few titles, and how many

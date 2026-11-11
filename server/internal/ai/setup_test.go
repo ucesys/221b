@@ -76,7 +76,7 @@ func TestTheSetupSkillIsSherlocksWhileAStepIsOpen(t *testing.T) {
 func TestTheSetupSkillsBaseCasesPass(t *testing.T) {
 	w := setup(t, nil)
 	ids := map[string]bool{}
-	for _, c := range BaseCases() {
+	for _, c := range BaseTests() {
 		if strings.HasPrefix(c.ID, "base-sherlock-setup-") {
 			ids[c.ID] = true
 		}

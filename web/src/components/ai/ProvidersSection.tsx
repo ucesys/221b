@@ -1,5 +1,21 @@
 import { useEffect, useState } from 'react'
-import { addProvider, fetchAI, fetchModelsFor, kindLabel, removeProvider, removeProviderKey, saveProvider, saveProviderKey, testProvider, tokensText, tryProvider, type AIOverview, type AIProvider, type ProviderTestResult, type ProviderView } from '../../api/ai'
+import {
+  addProvider,
+  fetchAI,
+  fetchModelsFor,
+  kindLabel,
+  removeProvider,
+  removeProviderKey,
+  saveProvider,
+  saveProviderKey,
+  testProvider,
+  tokensText,
+  tryProvider,
+  type AIOverview,
+  type AIProvider,
+  type ProviderTestResult,
+  type ProviderView,
+} from '../../api/ai'
 import type { ProviderAuth } from '../../api/sherlock'
 import { fmtTs } from '../../lib/format'
 import { Drawer } from '../Drawer'
@@ -22,7 +38,12 @@ export function ProvidersSection({ onToast }: { onToast?: (msg: string) => void 
       .then(setOv)
       .catch((e: Error) => setError(e.message))
   }, [])
-  if (!ov) return <p className={error ? 'rk-t' : 'rk-fhint'} data-tone={error ? 'err' : undefined} style={{ margin: 0 }}>{error || 'Loading the providers…'}</p>
+  if (!ov)
+    return (
+      <p className={error ? 'rk-t' : 'rk-fhint'} data-tone={error ? 'err' : undefined} style={{ margin: 0 }}>
+        {error || 'Loading the providers…'}
+      </p>
+    )
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
@@ -69,10 +90,18 @@ export function keyText(p: ProviderView): { pill: string; tone: string; text: st
   if (!p.key.set) {
     return auth === 'header'
       ? { pill: 'No key', tone: 'warn', text: 'No key yet: the agents on this provider answer nothing until one is saved, or until a test passes without one (an in-house endpoint that takes none).' }
-      : { pill: 'The pod’s own identity', tone: 'muted', text: auth === 'aws' ? 'Nothing saved: the console uses its ServiceAccount’s IAM role (IRSA or EKS Pod Identity).' : 'Nothing saved: the console uses its ServiceAccount’s Google identity (Workload Identity).' }
+      : {
+          pill: 'The pod’s own identity',
+          tone: 'muted',
+          text: auth === 'aws' ? 'Nothing saved: the console uses its ServiceAccount’s IAM role (IRSA or EKS Pod Identity).' : 'Nothing saved: the console uses its ServiceAccount’s Google identity (Workload Identity).',
+        }
   }
   if (p.key.source === 'chart') return { pill: 'Key set by the chart', tone: 'ok', text: 'Set by the chart (sherlock.existingSecret); change it there.' }
-  return { pill: 'Key saved', tone: 'ok', text: `Saved${p.key.setBy ? ` by ${p.key.setBy}` : ''}${p.key.setAt ? `, ${fmtTs(p.key.setAt)}` : ''}. ${p.key.store === 'secret' ? 'Kept in a Secret in the console’s namespace.' : 'Kept in memory: it is lost when the console restarts.'} It is never shown again.` }
+  return {
+    pill: 'Key saved',
+    tone: 'ok',
+    text: `Saved${p.key.setBy ? ` by ${p.key.setBy}` : ''}${p.key.setAt ? `, ${fmtTs(p.key.setAt)}` : ''}. ${p.key.store === 'secret' ? 'Kept in a Secret in the console’s namespace.' : 'Kept in memory: it is lost when the console restarts.'} It is never shown again.`,
+  }
 }
 
 /** A test's result in one line. */
@@ -110,9 +139,19 @@ function ProviderCard({ p, onEdit, onChange, onError }: { p: ProviderView; onEdi
   return (
     <section className="rk-card" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }} aria-label={`Provider ${p.name}`} data-testid="provider" data-provider={p.id}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <h3 className="rk-h" style={{ fontSize: 14 }}>{p.name}</h3>
-        {p.default && <span className="rk-pill" data-tone="info">Default</span>}
-        {p.locked && <span className="rk-pill" data-tone="muted" title="The chart fixes this provider (sherlock.provider, sherlock.lockProvider)">Locked by the chart</span>}
+        <h3 className="rk-h" style={{ fontSize: 14 }}>
+          {p.name}
+        </h3>
+        {p.default && (
+          <span className="rk-pill" data-tone="info">
+            Default
+          </span>
+        )}
+        {p.locked && (
+          <span className="rk-pill" data-tone="muted" title="The chart fixes this provider (sherlock.provider, sherlock.lockProvider)">
+            Locked by the chart
+          </span>
+        )}
         <span className="rk-pill" data-tone={k.tone} data-testid="provider-key-pill">
           <span className="rk-dot" />
           {k.pill}
@@ -148,13 +187,19 @@ function ProviderCard({ p, onEdit, onChange, onError }: { p: ProviderView; onEdi
       )}
       <dl className="rk-kv">
         <dt>Kind</dt>
-        <dd>{kindLabel(p.resolved.kind)}{presetOf(p) === 'anthropic' ? ' — the Claude API' : ''}</dd>
+        <dd>
+          {kindLabel(p.resolved.kind)}
+          {presetOf(p) === 'anthropic' ? ' — the Claude API' : ''}
+        </dd>
         <dt>Endpoint</dt>
         <dd className="rk-mono">{p.endpoint ? p.endpoint : 'The provider’s own'}</dd>
         {p.region && (
           <>
             <dt>Region</dt>
-            <dd className="rk-mono">{p.region}{p.project ? ` · ${p.project}` : ''}</dd>
+            <dd className="rk-mono">
+              {p.region}
+              {p.project ? ` · ${p.project}` : ''}
+            </dd>
           </>
         )}
         {p.caCert && (
@@ -164,7 +209,10 @@ function ProviderCard({ p, onEdit, onChange, onError }: { p: ProviderView; onEdi
           </>
         )}
         <dt>Default model</dt>
-        <dd className="rk-mono">{p.model || '—'}{p.contextWindow ? <span className="rk-fhint"> · {tokensText(p.contextWindow)} of context</span> : null}</dd>
+        <dd className="rk-mono">
+          {p.model || '—'}
+          {p.contextWindow ? <span className="rk-fhint"> · {tokensText(p.contextWindow)} of context</span> : null}
+        </dd>
         {p.tested && (
           <>
             <dt>Last test</dt>
@@ -188,12 +236,30 @@ function ProviderCard({ p, onEdit, onChange, onError }: { p: ProviderView; onEdi
             {auth === 'google' ? (
               <label style={{ flex: '1 1 100%', display: 'flex' }}>
                 <span className="rk-sr">Service account key</span>
-                <textarea className="rk-area" rows={3} spellCheck={false} autoComplete="off" placeholder="{&quot;type&quot;: &quot;service_account&quot;, …} — the key file’s JSON" value={key} onChange={(e) => setKey(e.target.value)} style={{ width: '100%' }} data-testid="provider-key" />
+                <textarea
+                  className="rk-area"
+                  rows={3}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder='{"type": "service_account", …} — the key file’s JSON'
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                  style={{ width: '100%' }}
+                  data-testid="provider-key"
+                />
               </label>
             ) : (
               <label className="rk-field" style={{ flex: '1 1 240px' }}>
                 <span className="rk-sr">{auth === 'aws' ? 'Access key ID' : 'API key'}</span>
-                <input type={auth === 'aws' ? 'text' : 'password'} autoComplete="off" spellCheck={false} placeholder={auth === 'aws' ? 'Access key ID (AKIA…)' : p.key.set ? '•••••••• saved. Paste a new key to replace it' : 'Paste the key'} value={key} onChange={(e) => setKey(e.target.value)} data-testid="provider-key" />
+                <input
+                  type={auth === 'aws' ? 'text' : 'password'}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder={auth === 'aws' ? 'Access key ID (AKIA…)' : p.key.set ? '•••••••• saved. Paste a new key to replace it' : 'Paste the key'}
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                  data-testid="provider-key"
+                />
               </label>
             )}
             {auth === 'aws' && (
@@ -283,7 +349,9 @@ function ProviderDrawer({ seed, ov, onClose, onSaved }: { seed: ProviderView | n
       if (tested) {
         const r = await testProvider(p.id, p.model).catch(() => null)
         next = await fetchAI().catch(() => next)
-        msg = r?.ok ? `${seed ? 'Saved' : 'Added'} ${p.name}; its test passed${r.keyless ? ' without a key: the agents on it may use it now' : ''}.` : `${seed ? 'Saved' : 'Added'} ${p.name}, but its test as saved failed: ${r?.error ?? 'no answer'}.`
+        msg = r?.ok
+          ? `${seed ? 'Saved' : 'Added'} ${p.name}; its test passed${r.keyless ? ' without a key: the agents on it may use it now' : ''}.`
+          : `${seed ? 'Saved' : 'Added'} ${p.name}, but its test as saved failed: ${r?.error ?? 'no answer'}.`
       }
       onSaved(next, msg)
     } catch (e) {
@@ -327,7 +395,14 @@ function ProviderDrawer({ seed, ov, onClose, onSaved }: { seed: ProviderView | n
             Cancel
           </button>
           {seed && !seed.default && (
-            <button className="rk-btn" disabled={busy || !!seed.usedBy?.length} title={seed.usedBy?.length ? 'Move the agents that use it to another provider first' : undefined} onClick={() => void remove()} data-testid="provider-remove" style={{ marginLeft: 'auto' }}>
+            <button
+              className="rk-btn"
+              disabled={busy || !!seed.usedBy?.length}
+              title={seed.usedBy?.length ? 'Move the agents that use it to another provider first' : undefined}
+              onClick={() => void remove()}
+              data-testid="provider-remove"
+              style={{ marginLeft: 'auto' }}
+            >
               Remove
             </button>
           )}
@@ -417,7 +492,16 @@ function ProviderDrawer({ seed, ov, onClose, onSaved }: { seed: ProviderView | n
           <summary style={{ fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}>Gateway options: headers, query, CA certificate</summary>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 10 }}>
             <Field label="Extra headers" hint="One “Name: value” per line, sent with every request. Not secret: keep keys in the credential." wide>
-              <textarea className="rk-area" rows={3} spellCheck={false} value={f.headersText} placeholder={'X-Team: platform'} onChange={(e) => set({ headersText: e.target.value })} style={{ width: '100%' }} data-testid="provider-headers" />
+              <textarea
+                className="rk-area"
+                rows={3}
+                spellCheck={false}
+                value={f.headersText}
+                placeholder={'X-Team: platform'}
+                onChange={(e) => set({ headersText: e.target.value })}
+                style={{ width: '100%' }}
+                data-testid="provider-headers"
+              />
             </Field>
             {(f.kind === 'openai' || f.kind === 'anthropic') && (
               <Field label="Query" hint="Added to every request, such as api-version=2024-10-21 for Azure OpenAI." wide>
@@ -427,7 +511,15 @@ function ProviderDrawer({ seed, ov, onClose, onSaved }: { seed: ProviderView | n
               </Field>
             )}
             <Field label="CA certificate" hint="PEM, for a gateway whose certificate a private authority signed. Empty trusts the system’s." wide>
-              <textarea className="rk-area" rows={3} spellCheck={false} value={f.caCert ?? ''} placeholder="-----BEGIN CERTIFICATE-----" onChange={(e) => set({ caCert: e.target.value.trim() ? e.target.value : undefined })} style={{ width: '100%' }} />
+              <textarea
+                className="rk-area"
+                rows={3}
+                spellCheck={false}
+                value={f.caCert ?? ''}
+                placeholder="-----BEGIN CERTIFICATE-----"
+                onChange={(e) => set({ caCert: e.target.value.trim() ? e.target.value : undefined })}
+                style={{ width: '100%' }}
+              />
             </Field>
           </div>
         </details>
@@ -453,7 +545,15 @@ function ProviderDrawer({ seed, ov, onClose, onSaved }: { seed: ProviderView | n
         />
         <Field label="Context window (tokens)" hint="Of the default model: from the endpoint’s list when it says, else as its server is set (vLLM’s --max-model-len). Empty is not known.">
           <span className="rk-field" style={{ width: 160 }}>
-            <input type="number" min={0} step={1024} value={f.contextWindow ?? ''} placeholder="Not known" onChange={(e) => set({ contextWindow: Math.max(0, Math.round(Number(e.target.value) || 0)) || undefined })} data-testid="provider-context" />
+            <input
+              type="number"
+              min={0}
+              step={1024}
+              value={f.contextWindow ?? ''}
+              placeholder="Not known"
+              onChange={(e) => set({ contextWindow: Math.max(0, Math.round(Number(e.target.value) || 0)) || undefined })}
+              data-testid="provider-context"
+            />
           </span>
         </Field>
       </div>
@@ -469,8 +569,11 @@ function ProviderDrawer({ seed, ov, onClose, onSaved }: { seed: ProviderView | n
           </span>
         </Field>
       </div>
-      {!seed && <p className="rk-fhint" style={{ margin: 0 }}>Once it is added, save its credential on its card and press Test.</p>}
+      {!seed && (
+        <p className="rk-fhint" style={{ margin: 0 }}>
+          Once it is added, save its credential on its card and press Test.
+        </p>
+      )}
     </Drawer>
   )
 }
-

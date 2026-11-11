@@ -116,7 +116,7 @@ func (s *Service) proposeInventory(ctx context.Context, changed []readItem, m *M
 			impact := "Adds " + h.Name + " as a pending host"
 			if len(h.Labels) > 0 {
 				args["labels"] = h.Labels
-				impact += ", labelled " + strings.Join(labelList(h.Labels), ", ")
+				impact += ", labeled " + strings.Join(labelList(h.Labels), ", ")
 			}
 			actions = append(actions, ProposalAction{Kind: "host.add", Args: args, Impact: impact + "; it is paired afterwards in the Add host flow, with its own credential and key approval.", Risk: "low"})
 			names = append(names, h.Name)
@@ -142,7 +142,7 @@ func (s *Service) proposeInventory(ctx context.Context, changed []readItem, m *M
 				continue
 			}
 			actions = append(actions, ProposalAction{Kind: "fleet.create", Args: map[string]any{"name": f.Name, "labels": labels, "taints": []string{}},
-				Impact: "Adds the fleet " + f.Name + " of the nodes and hosts labelled " + strings.Join(labels, ", ") + "; " + nowWords(members, more) + "; nothing on them changes.", Risk: "low"})
+				Impact: "Adds the fleet " + f.Name + " of the nodes and hosts labeled " + strings.Join(labels, ", ") + "; " + nowWords(members, more) + "; nothing on them changes.", Risk: "low"})
 			groups = append(groups, f.Name)
 		}
 		if len(actions) == 0 {

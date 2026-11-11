@@ -226,7 +226,7 @@ func (st Standing) Matches(c Card, info ClusterInfo) (bool, string) {
 	case !slices.Contains(st.Clusters, c.Cluster):
 		return false, "it does not cover the cluster"
 	case st.Agent != "" && st.Agent != c.Agent:
-		return false, "it covers another agent's proposals"
+		return false, "it covers another agent's proposed changes"
 	case st.Condition != "" && st.Condition != c.Condition.Kind:
 		return false, "the card does not carry its condition"
 	case c.Requester != nil:
@@ -311,7 +311,7 @@ func (s *Store) tryStanding(ctx context.Context, c Card) {
 			continue
 		}
 		if !took {
-			s.recordStanding(st, Person{Name: "Watson"}, audit.OutcomeDenied, fmt.Sprintf("not applied to proposal %s: it approved %d this hour already, its most; the card waits for a person", c.ID, st.PerHour))
+			s.recordStanding(st, Person{Name: "Watson"}, audit.OutcomeDenied, fmt.Sprintf("not applied to proposed change %s: it approved %d this hour already, its most; the card waits for a person", c.ID, st.PerHour))
 			_, _ = s.edit(ctx, c.ID, func(x *Card) error {
 				addEvent(x, now, fmt.Sprintf("the standing approval “%s” approved %d this hour already; it waits for a person", st.Name, st.PerHour), "", SystemActor)
 				return nil

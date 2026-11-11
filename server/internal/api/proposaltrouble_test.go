@@ -83,7 +83,7 @@ func TestTroubleshootingAProposalCF61CF62(t *testing.T) {
 	if err != nil || card != "PC-1" {
 		t.Fatalf("propose: %q %v", card, err)
 	}
-	base := srv.URL + "/api/v1/cases/proposals/PC-1"
+	base := srv.URL + "/api/v1/aiops/proposals/PC-1"
 	chat := base + "/sherlock"
 	conversation := func(c *http.Client) (int, sherlock.View) {
 		t.Helper()
@@ -130,7 +130,7 @@ func TestTroubleshootingAProposalCF61CF62(t *testing.T) {
 	if code, _ := conversation(viewer); code != http.StatusForbidden {
 		t.Fatalf("a Viewer read it: %d", code)
 	}
-	if r, _ := send(t, ops, http.MethodPost, srv.URL+"/api/v1/cases/proposals/PC-9/sherlock/ask", `{"question":"Why?"}`); r.StatusCode != http.StatusNotFound {
+	if r, _ := send(t, ops, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/PC-9/sherlock/ask", `{"question":"Why?"}`); r.StatusCode != http.StatusNotFound {
 		t.Fatalf("no such proposal: %d", r.StatusCode)
 	}
 

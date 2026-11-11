@@ -450,14 +450,14 @@ func countNoFix(lines []issues.Line) noFixCounts {
 
 // suggest says an open agent-found case's check was closed as no action
 // needed three times on its cluster (CF-13).
-func (c noFixCounts) suggest(r *issues.Report) bool {
+func (c noFixCounts) suggest(r *issues.Case) bool {
 	return r.AgentFound() && r.Status.Open() && r.Key != nil && c[r.Key.Cluster+" "+r.Key.Check] >= 3
 }
 
 // shownStatus is a case's status as people see it (CF-67): an open case
 // that waits for its reporter's answer is "Waiting for the reporter",
 // though it is kept In progress.
-func shownStatus(r issues.Report) string {
+func shownStatus(r issues.Case) string {
 	switch {
 	case r.Waiting != nil && r.Status.Open():
 		return "Waiting for the reporter"
@@ -470,7 +470,7 @@ func shownStatus(r issues.Report) string {
 }
 
 func brief(v issues.ReportView, analyzing bool, nofix noFixCounts) Brief {
-	r := v.Report
+	r := v.Case
 	b := Brief{ID: caseID(r.Number), Number: r.Number, Title: firstOf(v.Title, "Case "+caseID(r.Number)), Priority: r.Priority, Status: r.Status, Outcome: r.Outcome,
 		Pending: r.Pending(), Cluster: r.Cluster, Resource: r.Object, Object: ParseObject(r.Object), Source: Source{Kind: r.Kind()},
 		AgentFound: r.AgentFound(), Key: r.Key, Seen: r.Seen, Created: r.Created, Updated: r.Updated, Since: r.StatusAt, Assignee: r.Owner, Late: lateOf(v),
@@ -667,8 +667,13 @@ type View struct {
 	// job whose next run checks it (CF-29, CF-31).
 	AppliedBy *issues.AppliedChange `json:"appliedBy,omitempty"`
 	VerifyJob *JobRef               `json:"verifyJob,omitempty"`
-	RCADetail *RCA                  `json:"rca,omitempty"`
-	History   []Event               `json:"history"`
+	// VerifiedBy is the run that verified its fix and what it read; Wait,
+	// for a fix still waiting, since when and how many runs in scope did
+	// not re-check it (I-1).
+	VerifiedBy *issues.VerifiedBy `json:"verifiedBy,omitempty"`
+	VerifyWait *VerifyWait        `json:"verifyWait,omitempty"`
+	RCADetail  *RCA               `json:"rca,omitempty"`
+	History    []Event            `json:"history"`
 	// Draft is the case's one draft, unsent, shared (CF-59).
 	Draft *Draft `json:"draft,omitempty"`
 	// RuleMeaning is what the validation rule (the check) of an
@@ -686,7 +691,7 @@ type View struct {
 func (v View) Open() bool { return v.Status.Open() }
 
 func (s *Service) view(ctx context.Context, c Caller, v issues.ReportView, w Work, lines []issues.Line) View {
-	r := v.Report
+	r := v.Case
 	out := View{Brief: brief(v, s.analyzing(ctx)[r.Number], countNoFix(lines)), Detail: r.Text, Scrubbed: r.Scrubbed, Pruned: r.Pruned, FiledBy: r.FiledBy, OpenedBy: r.OpenedBy,
 		ClosedBy: r.ClosedBy, ServiceName: v.ServiceName, ServiceBy: r.ServiceBy, ServiceConfidence: r.ServiceConfidence, Known: v.Known, MatchConfidence: r.MatchConfidence,
 		Rejected: r.Rejected, Similar: r.Similar, Messages: r.Messages, SLA: v.SLA, Acknowledged: r.Acknowledged, FirstResponse: r.FirstResponse, Resolved: r.Resolved,
@@ -726,15 +731,42 @@ func (s *Service) view(ctx context.Context, c Caller, v issues.ReportView, w Wor
 	}
 	out.Proposals = s.proposalsOf(ctx, r.Number, w)
 	out.Cards, out.AppliedBy = out.Proposals, r.AppliedBy
-	if r.Verification != "" && r.Job != "" {
+	if (r.Verification != "" || r.VerifyPending) && r.Job != "" {
 		out.VerifyJob = &JobRef{ID: r.Job, Label: s.jobLabel(ctx, r)}
 	}
+	out.VerifiedBy, out.VerifyWait = r.VerifiedBy, verifyWait(r)
 	return out
+}
+
+// VerifyWait is how long a fix has waited for a run to re-check it
+// (I-1): since it was closed as fixed, or its change applied, and how
+// many runs of its job, with it in their scope, did not re-check it.
+type VerifyWait struct {
+	Since     time.Time `json:"since"`
+	Unchecked int       `json:"unchecked"`
+}
+
+// verifyWait is a waiting fix's wait; nil for a case whose fix does not
+// wait.
+func verifyWait(r issues.Case) *VerifyWait {
+	if !r.VerifyPending {
+		return nil
+	}
+	w := &VerifyWait{Unchecked: r.Unchecked}
+	switch {
+	case r.Status.Open() && r.AppliedBy != nil:
+		w.Since = r.AppliedBy.At
+	case r.Closed != nil:
+		w.Since = *r.Closed
+	default:
+		w.Since = r.Updated
+	}
+	return w
 }
 
 // related are the open cases of the other kind (agent-found or a
 // person's) on the same cluster and object (CF-18).
-func related(r issues.Report, lines []issues.Line) []CaseRef {
+func related(r issues.Case, lines []issues.Line) []CaseRef {
 	out := []CaseRef{}
 	obj := r.Object
 	if r.Key != nil {
@@ -830,7 +862,7 @@ func (s *Service) proposalsOf(ctx context.Context, n int, w Work) []CardRef {
 
 // jobLabel is the name of the job that found a case: its run's label,
 // its id when the run is let go of.
-func (s *Service) jobLabel(ctx context.Context, r issues.Report) string {
+func (s *Service) jobLabel(ctx context.Context, r issues.Case) string {
 	if s.o.Jobs != nil && r.Run != "" {
 		if run, err := s.o.Jobs.GetRun(ctx, r.Run); err == nil && run.Label != "" {
 			return run.Label

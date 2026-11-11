@@ -11,7 +11,12 @@ describe('Watson history', () => {
       { cmd: 'kubectl get nodes', at: '2026-10-30T10:00:00Z' },
       { cmd: 'kubectl exec -it web-0 -- sh', at: '2026-10-30T10:02:00Z' },
     ]
-    const cards = [card('helm upgrade shop --git x --ref main -n web --app', '2026-10-30T09:00:00Z'), card('kubectl get nodes', '2026-10-30T10:00:01Z'), card('helm uninstall old -n web', '2026-10-30T09:30:00Z', { mine: false }), card('toolbox shell', '2026-10-30T10:03:00Z', { session: {} })]
+    const cards = [
+      card('helm upgrade shop --git x --ref main -n web --app', '2026-10-30T09:00:00Z'),
+      card('kubectl get nodes', '2026-10-30T10:00:01Z'),
+      card('helm uninstall old -n web', '2026-10-30T09:30:00Z', { mine: false }),
+      card('toolbox shell', '2026-10-30T10:03:00Z', { session: {} }),
+    ]
     expect(mergeHistory(typed, cards)).toEqual(['helm upgrade shop --git x --ref main -n web --app', 'kubectl get nodes', 'kubectl exec -it web-0 -- sh'])
   })
 

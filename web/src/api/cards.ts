@@ -149,7 +149,7 @@ export interface ProposalQuery {
   mine?: boolean
 }
 
-const base = '/api/v1/cases/'
+const base = '/api/v1/aiops/'
 const enc = encodeURIComponent
 
 export function fetchProposals(q: ProposalQuery = {}, background = false): Promise<Proposals> {
@@ -225,7 +225,7 @@ export function conflictText(p: Proposal, server = ''): string {
     case 'expired':
       return `It expired at ${fmtTs(p.updated)}.`
     case 'replaced':
-      return `A newer proposal${p.replacedBy ? `, ${p.replacedBy},` : ''} replaced it at ${fmtTs(p.updated)}.`
+      return `A newer proposed change${p.replacedBy ? `, ${p.replacedBy},` : ''} replaced it at ${fmtTs(p.updated)}.`
   }
   return server ? localTimes(server) : 'It cannot be decided now.'
 }
@@ -253,8 +253,7 @@ export interface Standing {
 
 export const fetchStanding = () => call<{ standing: Standing[] }>(base + 'standing').then((r) => r.standing)
 
-export const saveStanding = (st: Standing) =>
-  st.id ? call<Standing>(`${base}standing/${enc(st.id)}`, { method: 'PUT', body: JSON.stringify(st) }) : call<Standing>(base + 'standing', post(st))
+export const saveStanding = (st: Standing) => (st.id ? call<Standing>(`${base}standing/${enc(st.id)}`, { method: 'PUT', body: JSON.stringify(st) }) : call<Standing>(base + 'standing', post(st)))
 
 export const deleteStanding = (id: string) => call<{ removed: boolean }>(`${base}standing/${enc(id)}`, { method: 'DELETE' })
 
@@ -351,8 +350,7 @@ export function stateText(p: Pick<Proposal, 'state' | 'needed' | 'approvals'>): 
   }
 }
 
-export const stateTone = (s: CardState): 'warn' | 'ok' | 'err' | 'muted' | 'info' =>
-  s === 'queued' ? 'warn' : s === 'applied' ? 'ok' : s === 'failed' || s === 'rejected' ? 'err' : s === 'approved' ? 'info' : 'muted'
+export const stateTone = (s: CardState): 'warn' | 'ok' | 'err' | 'muted' | 'info' => (s === 'queued' ? 'warn' : s === 'applied' ? 'ok' : s === 'failed' || s === 'rejected' ? 'err' : s === 'approved' ? 'info' : 'muted')
 
 /** "in 5 hours", "in 12 minutes", or "now" for what has passed. */
 export function inWords(at: string, now = Date.now()): string {

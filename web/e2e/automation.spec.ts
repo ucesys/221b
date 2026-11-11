@@ -10,7 +10,7 @@ test('Automation is an area of its own, and Nodes stays in the area it was opene
   await page.getByTestId('area-automation').click()
   await expect(page.getByTestId('area-automation')).toHaveAttribute('aria-pressed', 'true')
   await expect(page).toHaveURL(/#\/scripts/)
-  for (const name of ['Nodes', 'Scripts', 'Variables', 'Run Profiles', 'Run History']) await expect(views.getByRole('link', { name, exact: true })).toBeVisible()
+  for (const name of ['Nodes', 'Scripts', 'Variables', 'Run profiles', 'Run history']) await expect(views.getByRole('link', { name, exact: true })).toBeVisible()
   await views.getByRole('link', { name: 'Nodes', exact: true }).click()
   await expect(page).toHaveURL(/#\/nodes/)
   await expect(page.getByTestId('area-automation')).toHaveAttribute('aria-pressed', 'true')
@@ -21,7 +21,7 @@ test('Automation is an area of its own, and Nodes stays in the area it was opene
   await views.getByRole('link', { name: 'Nodes', exact: true }).click()
   await expect(page.getByTestId('area-kubernetes')).toHaveAttribute('aria-pressed', 'true')
   await page.goto('/#/automation/runs')
-  await expect(views.getByRole('link', { name: 'Run History' })).toHaveAttribute('aria-current', 'page')
+  await expect(views.getByRole('link', { name: 'Run history' })).toHaveAttribute('aria-current', 'page')
   // Administration keeps the area it was opened from.
   await page.getByTestId('admin-link').click()
   await expect(page.getByTestId('admin-page')).toBeVisible()
@@ -50,15 +50,24 @@ test('groups filter one Scripts table from the left, as fleets do on Nodes', asy
   }
   const pane = page.getByTestId('script-groups')
   const row = (name: string) => page.locator(`[data-testid=script-row][data-name=${name}]`)
-  await pane.locator('.rk-fl', { hasText: `group 0, ${stamp}` }).getByTestId('script-group-pick').click()
+  await pane
+    .locator('.rk-fl', { hasText: `group 0, ${stamp}` })
+    .getByTestId('script-group-pick')
+    .click()
   await expect(row(names[0]!)).toBeVisible()
   await expect(row(names[1]!)).toHaveCount(0)
-  await pane.locator('.rk-fl', { hasText: `group 1, ${stamp}` }).getByTestId('script-group-check').check()
+  await pane
+    .locator('.rk-fl', { hasText: `group 1, ${stamp}` })
+    .getByTestId('script-group-check')
+    .check()
   await expect(row(names[1]!)).toBeVisible()
   await expect(page.locator('table')).toHaveCount(1)
   await pane.getByTestId('script-group-all').click()
   const edit = async (i: number) => {
-    await pane.locator('.rk-fl', { hasText: `group ${i}, ${stamp}` }).getByTestId('script-group-edit').click()
+    await pane
+      .locator('.rk-fl', { hasText: `group ${i}, ${stamp}` })
+      .getByTestId('script-group-edit')
+      .click()
     await expect(page.getByTestId('group-drawer')).toBeVisible()
   }
   await edit(0)
@@ -130,8 +139,8 @@ test('the script that reserves resources passes the checks and can go to review'
   await expect(page.getByTestId('script-drawer')).toHaveCount(0)
 })
 
-test('a node\'s details show what its Kubernetes agent keeps from pods, read-only', async ({ page }) => {
-  test.skip(inKind, 'the simulator\'s kubelets report reservations and an eviction threshold; kind\'s keep none')
+test("a node's details show what its Kubernetes agent keeps from pods, read-only", async ({ page }) => {
+  test.skip(inKind, "the simulator's kubelets report reservations and an eviction threshold; kind's keep none")
   await page.goto('/#/nodes')
   await page.locator('[data-node]').first().focus()
   await page.keyboard.press('Enter')
@@ -141,13 +150,17 @@ test('a node\'s details show what its Kubernetes agent keeps from pods, read-onl
   await expect(page.getByTestId('resource-cpu').locator('input, select, textarea, button')).toHaveCount(0)
 })
 
-test('Run Profiles lists who a script runs as, and a new one can be made and removed', async ({ page }) => {
+test('Run profiles lists who a script runs as, and a new one can be made and removed', async ({ page }) => {
   const views = page.getByRole('navigation', { name: 'Views' })
   await page.goto('/#/scripts')
-  await views.getByRole('link', { name: 'Run Profiles', exact: true }).click()
+  await views.getByRole('link', { name: 'Run profiles', exact: true }).click()
   await expect(page).toHaveURL(/#\/run-profiles/)
   const table = page.getByTestId('profiles-table')
-  for (const [id, name, kind] of [['read-only', 'nobody', 'ssh'], ['login-user', 'ssh-paired account', 'ssh'], ['as-the-person', 'login-user', 'k8s']] as const) {
+  for (const [id, name, kind] of [
+    ['read-only', 'nobody', 'ssh'],
+    ['login-user', 'ssh-paired account', 'ssh'],
+    ['as-the-person', 'login-user', 'k8s'],
+  ] as const) {
     await expect(table.locator(`[data-id="${id}"]`)).toContainText(name)
     await expect(table.locator(`[data-id="${id}"]`).getByTestId('config-kind')).toHaveText(kind)
   }
@@ -294,10 +307,10 @@ test('a fleet can be started from Variables, and it opens there', async ({ page 
   await expect(page.getByTestId('params-scope').first()).toHaveAttribute('aria-pressed', 'true')
 })
 
-test('Scripts and Run History sort by a column, and Run History comes last in the menu', async ({ page }) => {
+test('Scripts and Run history sort by a column, and Run history comes last in the menu', async ({ page }) => {
   await page.goto('/#/scripts')
   const views = page.getByRole('navigation', { name: 'Views' })
-  await expect(views.getByRole('link').last()).toHaveText('Run History')
+  await expect(views.getByRole('link').last()).toHaveText('Run history')
   const stamp = Date.now()
   const names = [`sort-a-${stamp}`, `sort-b-${stamp}`]
   const api = (method: string, path: string, body?: unknown) =>
@@ -318,8 +331,8 @@ test('Scripts and Run History sort by a column, and Run History comes last in th
   await expect(page.getByTestId('scripts-table').locator('th[aria-sort=descending]')).toContainText('Script')
   await heading.click()
   for (const name of names) await api('DELETE', `/api/v1/automation/scripts/${name}`)
-  await views.getByRole('link', { name: 'Run History', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Run History' })).toBeVisible()
+  await views.getByRole('link', { name: 'Run history', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'Run history' })).toBeVisible()
 })
 
 test('New group in the script drawer opens over it, and the box takes the new group', async ({ page }) => {
@@ -356,12 +369,12 @@ test('the Automation pages old names still open them', async ({ page }) => {
   await page.goto('/#/configurations')
   await expect(page.getByTestId('profiles-table')).toBeVisible()
   await page.goto('/#/executions')
-  await expect(page.getByRole('heading', { name: 'Run History' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Run history' })).toBeVisible()
 })
 
 test('Approvals moved to AIOps › Inbox, where the old Administration link opens it, with nothing to approve on it', async ({ page }) => {
   await page.goto('/#/admin/approvals')
-  await expect(page).toHaveURL(/#\/cases\/inbox\?kind=approvals$/)
+  await expect(page).toHaveURL(/#\/aiops\/inbox\?kind=approvals$/)
   // The Inbox is one table now (IN-01), with no Kind filter since wave 6c (CF-38): the old group's name is let go.
   await expect(page.getByTestId('inbox-kinds')).toHaveCount(0)
   const grid = page.getByRole('grid', { name: 'Inbox' })
@@ -383,7 +396,7 @@ test('Approvals lists what waits on top, then what was decided, each opening wit
   await page.keyboard.press('Escape')
   const sub = await request.post(`/api/v1/automation/scripts/${name}/versions/1/submit`, { headers: SAME })
   expect(sub.status(), await sub.text()).toBe(200)
-  await page.goto('/#/cases/inbox?show=all')
+  await page.goto('/#/aiops/inbox?show=all')
   await expect(page.getByRole('grid', { name: 'Inbox' })).toBeVisible()
   // Pending approvals come before decided ones (IN-03); no Kind filter (CF-38), so the approvals' rows are read.
   await expect(page.getByText('Loading the Inbox…')).toHaveCount(0)
@@ -397,7 +410,7 @@ test('Approvals lists what waits on top, then what was decided, each opening wit
   const row = page.locator(`[data-inbox-row="approval:script-${name}-v1"]`)
   await expect(row.getByTestId('inbox-row-status')).toHaveText('Pending')
   await row.locator('[role=rowheader]').click()
-  await expect(page).toHaveURL(new RegExp(`#/cases/inbox/approval/script-${name}-v1\\?show=all$`))
+  await expect(page).toHaveURL(new RegExp(`#/aiops/inbox/approval/script-${name}-v1\\?show=all$`))
   const drawer = page.getByTestId('approval-drawer')
   await expect(drawer).toContainText('Requested by')
   await expect(drawer).toContainText('Bea')
@@ -486,9 +499,13 @@ test('a decided version opens in place in the Inbox, under All', async ({ page }
   // Someone else rejected it: the list is the server's, with one row made up.
   const decidedAt = new Date().toISOString()
   await page.route('**/api/v1/admin/approvals', (route) =>
-    route.fulfill({ json: { items: [{ kind: 'script', state: 'rejected', what: `${name} v1`, requestedBy: 'Ada Admin', requestedAt: decidedAt, approvedBy: 'Bea', approvedAt: decidedAt, script: name, version: 1, comment: 'pin the version', mine: true }] } }),
+    route.fulfill({
+      json: {
+        items: [{ kind: 'script', state: 'rejected', what: `${name} v1`, requestedBy: 'Ada Admin', requestedAt: decidedAt, approvedBy: 'Bea', approvedAt: decidedAt, script: name, version: 1, comment: 'pin the version', mine: true }],
+      },
+    }),
   )
-  await page.goto('/#/cases/inbox?show=all')
+  await page.goto('/#/aiops/inbox?show=all')
   // There is no yellow i any more: the bell is the Inbox's (CF-80).
   await expect(page.getByTestId('admin-flag')).toHaveCount(0)
   const row = page.locator(`[data-inbox-row="approval:script-${name}-v1"]`)
@@ -498,10 +515,10 @@ test('a decided version opens in place in the Inbox, under All', async ({ page }
   await expect(drawer).toBeVisible()
   await expect(drawer).toContainText('pin the version')
   await expect(drawer.getByTestId('version-text')).toBeVisible()
-  await expect(page).toHaveURL(new RegExp(`#/cases/inbox/approval/script-${name}-v1\\?show=all$`))
+  await expect(page).toHaveURL(new RegExp(`#/aiops/inbox/approval/script-${name}-v1\\?show=all$`))
   await page.keyboard.press('Escape')
   await expect(drawer).toHaveCount(0)
-  await expect(page).toHaveURL(/#\/cases\/inbox\?show=all$/)
+  await expect(page).toHaveURL(/#\/aiops\/inbox\?show=all$/)
   await page.unroute('**/api/v1/admin/approvals')
   await page.request.delete(`/api/v1/automation/scripts/${name}`, { headers: SAME })
 })
@@ -546,10 +563,8 @@ test('a fleet sets how long its rebooted nodes have, and a node its own', async 
 
 test('the bell says what waits for you and opens it in the Inbox; the gear opens Administration (IN-07, CF-80)', async ({ page }) => {
   const at = new Date().toISOString()
-  await page.route('**/api/v1/admin/approvals', (route) =>
-    route.fulfill({ json: { items: [{ kind: 'script', state: 'pending', what: 'someone-else v1', requestedBy: 'Bea', requestedAt: at, script: 'someone-else', version: 1 }] } }),
-  )
-  await page.route('**/api/v1/cases/proposals**', (route) => route.fulfill({ json: { proposals: [], waiting: 0, mayApprove: true } }))
+  await page.route('**/api/v1/admin/approvals', (route) => route.fulfill({ json: { items: [{ kind: 'script', state: 'pending', what: 'someone-else v1', requestedBy: 'Bea', requestedAt: at, script: 'someone-else', version: 1 }] } }))
+  await page.route('**/api/v1/aiops/proposals**', (route) => route.fulfill({ json: { proposals: [], waiting: 0, mayApprove: true } }))
   await page.goto('/#/scripts')
   // No yellow i: the bell, coloured and with no number, stands for what waits (CF-80).
   await expect(page.getByTestId('admin-flag')).toHaveCount(0)
@@ -562,12 +577,12 @@ test('the bell says what waits for you and opens it in the Inbox; the gear opens
   expect(l!.x).toBeLessThan(b!.x)
   await bell.click()
   // The Inbox, with no Kind filter (CF-38).
-  await expect(page).toHaveURL(/#\/cases\/inbox$/)
+  await expect(page).toHaveURL(/#\/aiops\/inbox$/)
   await expect(page.locator('[data-inbox-row="approval:script-someone-else-v1"]')).toBeVisible()
   // The bell stays while it waits; the gear itself opens Administration.
   await expect(bell).toHaveAttribute('data-state', /^(p01|waiting)$/)
   await page.getByTestId('admin-link').click()
   await expect(page).toHaveURL(/#\/(c\/[^/]+\/)?admin\//)
   await page.unroute('**/api/v1/admin/approvals')
-  await page.unroute('**/api/v1/cases/proposals**')
+  await page.unroute('**/api/v1/aiops/proposals**')
 })

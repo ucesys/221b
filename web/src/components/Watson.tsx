@@ -1,6 +1,22 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useToolbox } from './toolbox/context'
-import { APPROVE_ALL_CHOICES, approveAllWatson, approveWatson, clearWatson, discardWatson, editWatson, endApproveAllWatson, sendToWatson, stopWatson, WatsonError, watsonSupports, type Send, type WatsonItem, type WatsonLine, type WatsonState } from '../api/watson'
+import {
+  APPROVE_ALL_CHOICES,
+  approveAllWatson,
+  approveWatson,
+  clearWatson,
+  discardWatson,
+  editWatson,
+  endApproveAllWatson,
+  sendToWatson,
+  stopWatson,
+  WatsonError,
+  watsonSupports,
+  type Send,
+  type WatsonItem,
+  type WatsonLine,
+  type WatsonState,
+} from '../api/watson'
 import { fmtClock } from '../lib/format'
 import { readJSON, writeJSON } from '../lib/storage'
 import { CopyIcon, WatsonIcon } from './Icons'
@@ -247,7 +263,13 @@ export function ApproveAll({ max, busy, give }: { max: number; busy: boolean; gi
           </option>
         ))}
       </select>
-      <button className="rk-tbtn" onClick={() => give(Number(minutes))} disabled={busy || !minutes} title={minutes ? 'Approves this card and every card you could approve, for the time chosen' : 'Choose how long first'} data-testid="watson-approve-all-go">
+      <button
+        className="rk-tbtn"
+        onClick={() => give(Number(minutes))}
+        disabled={busy || !minutes}
+        title={minutes ? 'Approves this card and every card you could approve, for the time chosen' : 'Choose how long first'}
+        data-testid="watson-approve-all-go"
+      >
         Approve all
       </button>
     </span>
@@ -293,7 +315,11 @@ function Card({ it, cluster, now, onToast, standing }: CardProps) {
         </span>
         <span style={{ fontSize: 11.5, color: 'var(--term-dim)' }}>From {it.from}</span>
         {change && it.expires && (
-          <span style={{ fontSize: 11.5, color: left < 60_000 ? 'var(--term-warn)' : 'var(--term-dim)', marginLeft: 'auto' }} title="An approval card is good for 10 minutes, and lapses sooner if the objects it acts on change." data-testid="watson-expiry">
+          <span
+            style={{ fontSize: 11.5, color: left < 60_000 ? 'var(--term-warn)' : 'var(--term-dim)', marginLeft: 'auto' }}
+            title="An approval card is good for 10 minutes, and lapses sooner if the objects it acts on change."
+            data-testid="watson-expiry"
+          >
             lapses in {remaining(left)}
           </span>
         )}
@@ -380,22 +406,33 @@ function Card({ it, cluster, now, onToast, standing }: CardProps) {
         ) : (
           <>
             {(it.canApprove || !it.waiting) && (
-              <button className="rk-tbtn" data-primary="true" onClick={() => void act(() => approveWatson(cluster, it.id))} disabled={busy || !ready || !it.canApprove} data-testid="watson-approve" title={ready ? undefined : 'Watson is still working out what it changes'}>
+              <button
+                className="rk-tbtn"
+                data-primary="true"
+                onClick={() => void act(() => approveWatson(cluster, it.id))}
+                disabled={busy || !ready || !it.canApprove}
+                data-testid="watson-approve"
+                title={ready ? undefined : 'Watson is still working out what it changes'}
+              >
                 {session ? 'Approve and open' : change ? 'Approve and run' : 'Run'}
               </button>
             )}
-            {change && it.canApprove && standing && standing.max > 0 && (standingOn(standing.until, now) ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} data-testid="watson-standing">
-                <span className="rk-tl" data-k="warn" style={{ margin: 0 }} title="Every card you could approve is approved as it is ready, until then">
-                  approving all until {fmtClock(standing.until!)}
+            {change &&
+              it.canApprove &&
+              standing &&
+              standing.max > 0 &&
+              (standingOn(standing.until, now) ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} data-testid="watson-standing">
+                  <span className="rk-tl" data-k="warn" style={{ margin: 0 }} title="Every card you could approve is approved as it is ready, until then">
+                    approving all until {fmtClock(standing.until!)}
+                  </span>
+                  <button className="rk-tbtn" onClick={standing.end} disabled={busy} data-testid="watson-standing-end">
+                    Stop
+                  </button>
                 </span>
-                <button className="rk-tbtn" onClick={standing.end} disabled={busy} data-testid="watson-standing-end">
-                  Stop
-                </button>
-              </span>
-            ) : (
-              <ApproveAll max={standing.max} busy={busy} give={standing.give} />
-            ))}
+              ) : (
+                <ApproveAll max={standing.max} busy={busy} give={standing.give} />
+              ))}
             {it.mine && (
               <>
                 {!session && (
@@ -470,7 +507,12 @@ function Ran({ it, prompt, cluster, now, onToast, onAgain }: { it: WatsonItem; p
         <div className="rk-tstat">
           <span className="rk-spin" aria-hidden="true" />
           <span>{status}</span>
-          <button className="rk-tbtn" onClick={() => void stopWatson(cluster, it.id).catch((e: unknown) => onToast(e instanceof Error ? e.message : String(e)))} style={{ height: 22, padding: '0 8px', fontSize: 11.5 }} data-testid="watson-stop">
+          <button
+            className="rk-tbtn"
+            onClick={() => void stopWatson(cluster, it.id).catch((e: unknown) => onToast(e instanceof Error ? e.message : String(e)))}
+            style={{ height: 22, padding: '0 8px', fontSize: 11.5 }}
+            data-testid="watson-stop"
+          >
             Stop
           </button>
         </div>
@@ -627,7 +669,9 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
       onToast(e instanceof Error ? e.message : String(e))
     }
   }
-  const card = (it: WatsonItem) => <Card key={it.id} it={it} cluster={cluster} now={now} onToast={onToast} standing={status?.readOnly ? undefined : { max: approveAllMax, until, give: (m) => void approveAll(m), end: () => void endApproveAll() }} />
+  const card = (it: WatsonItem) => (
+    <Card key={it.id} it={it} cluster={cluster} now={now} onToast={onToast} standing={status?.readOnly ? undefined : { max: approveAllMax, until, give: (m) => void approveAll(m), end: () => void endApproveAll() }} />
+  )
   const finishedCount = rest.filter((x) => x.status !== 'running' && x.status !== 'queued').length
   return (
     <section className="rk-dpane rk-wat" aria-label="Watson" data-testid="watson">

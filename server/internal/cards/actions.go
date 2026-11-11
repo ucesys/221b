@@ -92,14 +92,14 @@ func digest(v any) string {
 
 // by names who made a change from a card in the records it changes.
 func byOf(c Card, by Approver) string {
-	return fmt.Sprintf("%s (proposal %s by %s)", by.Name, c.ID, c.Agent)
+	return fmt.Sprintf("%s (proposed change %s by %s)", by.Name, c.ID, c.Agent)
 }
 
 func (c Console) record(action string, card Card, by Approver, target, outcome, detail string) {
 	if c.Audit == nil {
 		return
 	}
-	c.Audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: by.Key, Name: by.Name}, Cluster: card.Cluster, Target: target, Outcome: outcome, Detail: detail + " (approved proposal " + card.ID + ")"})
+	c.Audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: by.Key, Name: by.Name}, Cluster: card.Cluster, Target: target, Outcome: outcome, Detail: detail + " (approved proposed change " + card.ID + ")"})
 }
 
 func labelsText(m map[string]string) string {
@@ -292,10 +292,10 @@ func (h hostLabel) Apply(ctx context.Context, c Card, i int, by Approver) (Resul
 	}
 	got, err := h.c.Hosts.LabelHost(ctx, c.Cluster, in.Name, in.next(x.Labels))
 	if err != nil {
-		h.c.record(audit.ActionHostLabel, c, by, "host "+in.Name, audit.OutcomeFailed, "labelling host "+in.Name+" failed: "+err.Error())
+		h.c.record(audit.ActionHostLabel, c, by, "host "+in.Name, audit.OutcomeFailed, "labeling host "+in.Name+" failed: "+err.Error())
 		return Result{}, err
 	}
-	h.c.record(audit.ActionHostLabel, c, by, "host "+got.Name, audit.OutcomeOK, fmt.Sprintf("host %s labelled: %s", got.Name, labelsText(got.Labels)))
+	h.c.record(audit.ActionHostLabel, c, by, "host "+got.Name, audit.OutcomeOK, fmt.Sprintf("host %s labeled: %s", got.Name, labelsText(got.Labels)))
 	return Result{OK: true, Summary: fmt.Sprintf("host %s now has labels %s", got.Name, labelsText(got.Labels))}, nil
 }
 
@@ -427,7 +427,7 @@ func (f fleetCreate) Describe(ctx context.Context, cluster string, a Action) (Pl
 	}
 	p.Impact = append(p.Impact, fmt.Sprintf("Creates the fleet %s: %s.", x.Name, fleetText(x)))
 	if x.Deploy != "" {
-		p.Impact = append(p.Impact, "Applications deployed to it are pinned to nodes labelled "+x.Deploy+".")
+		p.Impact = append(p.Impact, "Applications deployed to it are pinned to nodes labeled "+x.Deploy+".")
 	}
 	// Its members now (KN-30), which are not part of what Check again
 	// compares: a node may join or leave it meanwhile. None is a warning.
@@ -607,7 +607,7 @@ func (f fleetUpdate) Describe(ctx context.Context, cluster string, a Action) (Pl
 		p.Impact = append(p.Impact, "changes its description")
 	}
 	if next.Color != x.Color {
-		p.Impact = append(p.Impact, "changes its colour")
+		p.Impact = append(p.Impact, "changes its color")
 	}
 	p.Impact = append(p.Impact, diffList("label", x.Labels, next.Labels)...)
 	p.Impact = append(p.Impact, diffList("taint", x.Taints, next.Taints)...)

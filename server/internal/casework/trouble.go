@@ -236,7 +236,7 @@ func (s *Service) Trouble(ctx context.Context, c Caller, id string, withContext 
 		if err != nil {
 			return Trouble{}, s.fromIssues(err)
 		}
-		return Trouble{Number: n, ID: caseID(n), Cluster: v.Report.Cluster, Open: v.Report.Status.Open()}, nil
+		return Trouble{Number: n, ID: caseID(n), Cluster: v.Case.Cluster, Open: v.Case.Status.Open()}, nil
 	}
 	v, err := s.Get(ctx, c, id)
 	if err != nil {
@@ -297,12 +297,12 @@ func (s *Service) CheckCommand(ctx context.Context, c Caller, n int, cluster str
 		return s.fromIssues(err)
 	}
 	switch {
-	case !v.Report.Status.Open():
+	case !v.Case.Status.Open():
 		return fmt.Errorf("%w: %s is closed: reopen it to troubleshoot it", ErrState, caseID(n))
-	case v.Report.Cluster == "":
+	case v.Case.Cluster == "":
 		return fmt.Errorf("%w: %s names no cluster", ErrInvalid, caseID(n))
-	case v.Report.Cluster != cluster:
-		return fmt.Errorf("%w: %s is on the cluster %s, not %s", ErrInvalid, caseID(n), v.Report.Cluster, cluster)
+	case v.Case.Cluster != cluster:
+		return fmt.Errorf("%w: %s is on the cluster %s, not %s", ErrInvalid, caseID(n), v.Case.Cluster, cluster)
 	}
 	return nil
 }

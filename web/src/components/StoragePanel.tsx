@@ -233,7 +233,7 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
         <>
           {' '}
           · bound to{' '}
-          {scope?.volumes ?? true ? (
+          {(scope?.volumes ?? true) ? (
             <a className="rk-mono rk-st-a" {...peekLink({ kind: 'volume', name: p.volume })}>
               {p.volume}
             </a>
@@ -339,7 +339,10 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
       )}
       {data.alert && (
         <span>
-          Alert <a className="rk-st-a" href={href('alerts', [], { q: p.claim })}>open on the Alerts tab</a>
+          Alert{' '}
+          <a className="rk-st-a" href={href('alerts', [], { q: p.claim })}>
+            open on the Alerts tab
+          </a>
         </span>
       )}
     </>
@@ -365,7 +368,10 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
   const lackOfSpace = /space|ResourceExhausted|insufficient/i.test(data.events.find((e) => e.reason === 'ProvisioningFailed')?.message ?? '')
   const hint: ReactNode =
     p.state === 'pending' && fromSet ? (
-      <>A StatefulSet recreates a deleted claim from the same template, so {lackOfSpace ? `free ${provisioner} space first (reclaim a volume, add a disk)` : 'fix the cause first'} and the provisioner’s next retry binds it. Anything that changes goes through Watson: a server dry run, then your approval.</>
+      <>
+        A StatefulSet recreates a deleted claim from the same template, so {lackOfSpace ? `free ${provisioner} space first (reclaim a volume, add a disk)` : 'fix the cause first'} and the provisioner’s next retry binds it. Anything that
+        changes goes through Watson: a server dry run, then your approval.
+      </>
     ) : reclaim ? (
       <>
         Changes go through Watson: a server dry run, then your approval. Reclaim policy is <b>{reclaim}</b>, so deleting this claim {reclaim === 'Delete' ? 'deletes the volume and its data' : 'keeps the volume and its data, Released'}.
@@ -382,7 +388,13 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
             <span className="rk-field" style={{ width: 96 }}>
               <input className="rk-mono" value={sizeNow} onChange={(e) => setSize(e.target.value)} aria-label="New size" aria-invalid={!sizeOk} data-testid="storage-expand-size" />
             </span>
-            <button className="rk-btn" disabled={!sizeOk} title={sizeOk ? `Asks Watson to grow the claim to ${sizeNow}` : 'A size larger than now, such as 150Gi'} onClick={() => send(expandCommand(ns, p.claim!, sizeNow.trim()), `Expand ${ns}/${p.claim} from ${bytes(p.capacity)} to ${sizeNow.trim()}.`)} data-testid="storage-expand">
+            <button
+              className="rk-btn"
+              disabled={!sizeOk}
+              title={sizeOk ? `Asks Watson to grow the claim to ${sizeNow}` : 'A size larger than now, such as 150Gi'}
+              onClick={() => send(expandCommand(ns, p.claim!, sizeNow.trim()), `Expand ${ns}/${p.claim} from ${bytes(p.capacity)} to ${sizeNow.trim()}.`)}
+              data-testid="storage-expand"
+            >
               Expand
             </button>
           </div>
@@ -491,9 +503,23 @@ export function StoragePanel({ target, clusterId, now, onClose, onToast }: Props
                       {x.mountPath && <span className="rk-mono">{x.mountPath}</span>}
                       {x.mountPath && ' · '}
                       {x.readOnly ? 'read-only' : 'read-write'}
-                      {x.subPath && <> · subPath <span className="rk-mono">{x.subPath}</span></>}
-                      {x.container && <> · container <span className="rk-mono">{x.container}</span></>}
-                      {x.note && <span className="rk-st-reason" data-tone="warn">{x.note}</span>}
+                      {x.subPath && (
+                        <>
+                          {' '}
+                          · subPath <span className="rk-mono">{x.subPath}</span>
+                        </>
+                      )}
+                      {x.container && (
+                        <>
+                          {' '}
+                          · container <span className="rk-mono">{x.container}</span>
+                        </>
+                      )}
+                      {x.note && (
+                        <span className="rk-st-reason" data-tone="warn">
+                          {x.note}
+                        </span>
+                      )}
                     </td>
                     <td>
                       <span className="rk-pill" data-tone={x.tone}>

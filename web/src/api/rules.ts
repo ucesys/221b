@@ -188,7 +188,7 @@ export interface PromoteInput {
 }
 
 const enc = encodeURIComponent
-const base = '/api/v1/cases/rules'
+const base = '/api/v1/aiops/rules'
 const send = (url: string, method: string, body?: unknown) => call<RulesPage>(url, { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
 
 /** The page; every change answers it as it stands. */
@@ -206,4 +206,4 @@ export const dismissSuggestion = (id: string) => send(`${base}/suggestions/${enc
 export const fetchSuggestions = (background = false) => call<{ suggestions: Suggestion[] }>(`${base}/suggestions`, {}, background)
 
 /** Where a rule opens: AIOps › Jobs › Validation rules (CF-89). */
-export const ruleHref = (id: string) => `#/cases/jobs/rules/${enc(id)}`
+export const ruleHref = (id: string) => `#/aiops/jobs/rules/${enc(id)}`

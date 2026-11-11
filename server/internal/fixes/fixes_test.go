@@ -140,17 +140,17 @@ func TestRoutesCF51(t *testing.T) {
 		mux.ServeHTTP(rec, r)
 		return rec
 	}
-	if rec := do("GET", "/api/v1/cases/fixes", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"mayChange":true`) || !strings.Contains(rec.Body.String(), `"F-1"`) {
+	if rec := do("GET", "/api/v1/aiops/fixes", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"mayChange":true`) || !strings.Contains(rec.Body.String(), `"F-1"`) {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
-	if rec := do("PATCH", "/api/v1/cases/fixes/F-1", `{"steps":"Renew it with cert-manager"}`); rec.Code != 200 || !strings.Contains(rec.Body.String(), "cert-manager") {
+	if rec := do("PATCH", "/api/v1/aiops/fixes/F-1", `{"steps":"Renew it with cert-manager"}`); rec.Code != 200 || !strings.Contains(rec.Body.String(), "cert-manager") {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
-	if rec := do("PATCH", "/api/v1/cases/fixes/F-9", `{"steps":"x"}`); rec.Code != 404 {
+	if rec := do("PATCH", "/api/v1/aiops/fixes/F-9", `{"steps":"x"}`); rec.Code != 404 {
 		t.Errorf("missing: %d", rec.Code)
 	}
 	reader = true
-	if rec := do("DELETE", "/api/v1/cases/fixes/F-1", ""); rec.Code != 403 {
+	if rec := do("DELETE", "/api/v1/aiops/fixes/F-1", ""); rec.Code != 403 {
 		t.Errorf("a reader deleted: %d", rec.Code)
 	}
 }

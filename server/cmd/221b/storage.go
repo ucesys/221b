@@ -42,9 +42,10 @@ const (
 	objAI             = "ai"
 	// objIssues is the issue service's (Phase 12, docs/issues.md).
 	objIssues = "issues"
-	// objCases is the agents' proposals' (Phase 12, ADR-99): the cards,
-	// the standing approvals and the notification settings.
-	objCases = "cases"
+	// objProposals is the agents' proposed changes' (Phase 12, ADR-99):
+	// the cards, the standing approvals and the notification settings, in
+	// <release>-proposals (<release>-cases before CF-104).
+	objProposals = "proposals"
 	// --- Jobs (Phase 12) ---
 	// objRuns holds the jobs, their runs and findings (JB-14, ADR-91).
 	objRuns = "runs"
@@ -120,12 +121,12 @@ var layout = map[string]map[string]kv.Limit{
 		casework.OldReportsKey: {},
 	},
 	// --- Watson cards (Phase 12, ADR-99) ---
-	objCases: {
-		cards.CardsKey:    {Bytes: cards.DefaultCardsBytes, Hint: "decide or reject the proposals that wait"},
+	objProposals: {
+		cards.CardsKey:    {Bytes: cards.DefaultCardsBytes, Hint: "decide or reject the proposed changes that wait"},
 		cards.StandingKey: {Bytes: cards.DefaultStandingBytes, Hint: "remove standing approvals no longer used"},
 		cards.NotifyKey:   {Bytes: cards.DefaultNotifyBytes},
 		// The waiting proposals' conversations with Sherlock (CF-61).
-		cards.ChatsKey: {Bytes: cards.DefaultChatsBytes, Hint: "decide the proposals that wait"},
+		cards.ChatsKey: {Bytes: cards.DefaultChatsBytes, Hint: "decide the proposed changes that wait"},
 	},
 	// --- end of Watson cards.
 	// --- Jobs (Phase 12) ---
@@ -206,7 +207,7 @@ func openConfigMap(ctx context.Context, cfg *rest.Config, ref string) (*kube.Con
 		}
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%w (check -audit-configmap, -sessions-configmap, -automation-runs-configmap, -issues-configmap, -cases-configmap, -runs-configmap, -knowledge-configmap, -wiki-configmap and -casework-configmap against the chart)", err)
+		return nil, fmt.Errorf("%w (check -audit-configmap, -sessions-configmap, -automation-runs-configmap, -issues-configmap, -proposals-configmap, -runs-configmap, -knowledge-configmap, -wiki-configmap and -casework-configmap against the chart)", err)
 	}
 	return cm, nil
 }

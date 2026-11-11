@@ -157,7 +157,7 @@ func TestAProvenFixBecomesARunbookDraftKN34(t *testing.T) {
 		t.Fatalf("Mycroft was given the proven fix as a source, not as a fix to agree with:\n%s", sent)
 	}
 	run, _ := f.s.RunByID(ctx, res.Run)
-	if len(run.Pages) != 1 || !run.Pages[0].Critical || run.Pages[0].Needed() != 2 || run.Pages[0].Sources[0].Key != "fixes:F-3" || run.Pages[0].Sources[0].URL != "#/cases/mycroft/fixes/F-3" {
+	if len(run.Pages) != 1 || !run.Pages[0].Critical || run.Pages[0].Needed() != 2 || run.Pages[0].Sources[0].Key != "fixes:F-3" || run.Pages[0].Sources[0].URL != "#/aiops/mycroft/fixes/F-3" {
 		t.Fatalf("a runbook from the fix, for two approvers: %+v", run.Pages)
 	}
 	if offered, _, _ := f.s.OfferFixes(ctx); len(offered) != 0 {

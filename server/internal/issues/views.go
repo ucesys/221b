@@ -26,7 +26,7 @@ type SLA struct {
 
 // slaOf works a case's targets out from when its clock started (CF-02):
 // nil for a case without one, which shows "no SLA", never late.
-func (set Settings) slaOf(r *Report, now time.Time) *SLA {
+func (set Settings) slaOf(r *Case, now time.Time) *SLA {
 	if r.SLAFrom == nil {
 		return nil
 	}
@@ -60,7 +60,7 @@ type KnownView struct {
 
 // ReportView is a report as a caller sees it.
 type ReportView struct {
-	Report
+	Case
 	ServiceName string     `json:"serviceName,omitempty"`
 	Known       *KnownView `json:"known,omitempty"`
 	// Mine says the caller reported or filed it; Watching that they
@@ -81,7 +81,7 @@ func redactedPerson(p *Person) *Person {
 }
 
 // forReporter strips a report to what its reporter may see.
-func forReporter(r Report) Report {
+func forReporter(r Case) Case {
 	out := r
 	out.Owner = redactedPerson(r.Owner)
 	out.ServiceConfidence, out.ServiceBy, out.MatchConfidence, out.PriorityBy = 0, "", 0, ""
@@ -94,6 +94,8 @@ func forReporter(r Report) Report {
 	out.OpenedBy = redactedPerson(r.OpenedBy)
 	// The change that fixed it is the console's own (CF-29).
 	out.AppliedBy, out.Verification = nil, ""
+	// What the run that verified it read is the console's too (I-1).
+	out.VerifiedBy, out.Unchecked = nil, 0
 	// The incident number is support's, and the queue the console's
 	// (CF-32, CF-36).
 	out.Incident, out.AnalysisQueued = "", nil
@@ -139,9 +141,9 @@ func (st *state) knownView(c Caller, k *KnownIssue) *KnownView {
 
 // reportView is a report as a caller sees it, with its service's name and
 // its known issue as they stand.
-func (st *state) reportView(c Caller, r *Report, now time.Time) ReportView {
+func (st *state) reportView(c Caller, r *Case, now time.Time) ReportView {
 	set := st.settings()
-	v := ReportView{Report: *copyReport(r), Mine: isReporter(c, r), Watching: r.watchedBy(c.ID)}
+	v := ReportView{Case: *copyReport(r), Mine: isReporter(c, r), Watching: r.watchedBy(c.ID)}
 	// A report's title is its first line until someone gives it one: kept
 	// only then, so it goes with the text after the retention.
 	if v.Title == "" {
@@ -160,6 +162,6 @@ func (st *state) reportView(c Caller, r *Report, now time.Time) ReportView {
 		v.SLA = set.slaOf(r, now)
 		return v
 	}
-	v.Report = forReporter(v.Report)
+	v.Case = forReporter(v.Case)
 	return v
 }

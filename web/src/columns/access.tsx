@@ -152,13 +152,7 @@ export const BINDING_COLUMNS: ColumnDef<BindingView>[] = [
 ]
 
 export function bindingTerms(r: BindingView): Term[] {
-  return [
-    { kind: 'name', text: r.name },
-    { kind: 'namespace', text: r.namespace ?? '' },
-    { kind: 'role', text: r.roleName },
-    ...r.subjects.map((s) => ({ kind: 'subject', text: s.name })),
-    { kind: 'source', text: sourceText(r.source) },
-  ]
+  return [{ kind: 'name', text: r.name }, { kind: 'namespace', text: r.namespace ?? '' }, { kind: 'role', text: r.roleName }, ...r.subjects.map((s) => ({ kind: 'subject', text: s.name })), { kind: 'source', text: sourceText(r.source) }]
 }
 
 export interface RoleView extends RoleRow {
@@ -271,13 +265,7 @@ export const ROLE_COLUMNS: ColumnDef<RoleView>[] = [
 ]
 
 export function roleTerms(r: RoleView): Term[] {
-  return [
-    { kind: 'name', text: r.name },
-    { kind: 'namespace', text: r.namespace ?? '' },
-    { kind: 'purpose', text: purpose(r) },
-    ...r.powers.map((p) => ({ kind: 'power', text: p })),
-    { kind: 'source', text: sourceText(r.source) },
-  ]
+  return [{ kind: 'name', text: r.name }, { kind: 'namespace', text: r.namespace ?? '' }, { kind: 'purpose', text: purpose(r) }, ...r.powers.map((p) => ({ kind: 'power', text: p })), { kind: 'source', text: sourceText(r.source) }]
 }
 
 export interface WhoView extends WhoRow {

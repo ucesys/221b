@@ -221,7 +221,7 @@ func TestSherlockIsCompactOnASmallModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !a.Compact || !strings.HasPrefix(a.Instructions, CompactCore()) || !strings.Contains(a.Instructions, "Our on-call rota") || strings.Contains(a.Instructions, "hand_over") || strings.Contains(a.Instructions, CasesSkill()) || len(a.Roster) != 0 || a.MaxTokens != 4096 {
+	if !a.Compact || !strings.HasPrefix(a.Instructions, CompactCore()) || !strings.Contains(a.Instructions, "Our on-call rota") || strings.Contains(a.Instructions, "hand_over") || strings.Contains(a.Instructions, AIOpsSkill()) || len(a.Roster) != 0 || a.MaxTokens != 4096 {
 		t.Fatalf("compact %v, roster %d, max %d:\n%s", a.Compact, len(a.Roster), a.MaxTokens, a.Instructions)
 	}
 	for _, tool := range a.Tools {

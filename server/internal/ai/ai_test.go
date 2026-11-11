@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http/httptest"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +22,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/watson"
 )
 
 // fakeSettings is the console's settings in memory.
@@ -233,7 +236,7 @@ func TestThePromptIsCoreThenHouseThenCluster(t *testing.T) {
 	// Sherlock's core keeps its built-in instructions, with the front
 	// desk's part; only Sherlock is told it may change the view.
 	s, _ := w.ai.Agent(Sherlock, sherlock.Question{Key: sherlock.Key{Cluster: "local"}})
-	if !strings.HasPrefix(s.Instructions, sherlock.BuiltIn(true)) || !strings.Contains(s.Instructions, "front desk") {
+	if !strings.HasPrefix(s.Instructions, sherlock.BuiltIn(true, watson.Commands())) || !strings.Contains(s.Instructions, "front desk") {
 		t.Fatal("Sherlock's core")
 	}
 	if strings.Contains(a.Instructions, "The view_* tools") {
@@ -443,7 +446,7 @@ func TestTheAnswerShowsItsHandOvers(t *testing.T) {
 	w.engine.Wait()
 	v := c.View()
 	m := v.Messages[len(v.Messages)-1]
-	if m.Status != "done" || len(m.Hands) != 1 || m.Hands[0].To != Troubleshooter || m.Hands[0].Task != "[[chain ]]" || m.Hands[0].Text != "End of the chain." || len(m.Steps) != 1 || m.Steps[0].Label != "Ask troubleshooter" {
+	if m.Status != "done" || len(m.Hands) != 1 || m.Hands[0].To != Troubleshooter || m.Hands[0].Task != "[[chain ]]" || m.Hands[0].Text != "End of the chain." || len(m.Steps) != 1 || m.Steps[0].Label != "Asked the Troubleshooter" {
 		t.Fatalf("%+v", m)
 	}
 	if !strings.Contains(w.audit.String(), "hand-overs [troubleshooter]") {
@@ -459,13 +462,13 @@ func TestTheTestRunnerUsesRecordedResults(t *testing.T) {
 	w := setup(t, nil)
 	ctx := context.Background()
 	pod := `{"name":"web-1","status":"CrashLoopBackOff","password":"PlantedPass-77Qz"}`
-	good, err := w.ai.SaveCase(ctx, TestCase{Agent: Troubleshooter, Name: "a crash loop", Question: `Why? [[get_pod {"namespace":"shop","name":"web-1"}]]`,
+	good, err := w.ai.SaveTest(ctx, TestCase{Agent: Troubleshooter, Name: "a crash loop", Question: `Why? [[get_pod {"namespace":"shop","name":"web-1"}]]`,
 		Recorded: []sherlock.Recorded{{Tool: "get_pod", Input: json.RawMessage(`{"name":"web-1","namespace":"shop"}`), Result: pod}},
 		Expect:   Expect{Tools: []string{"get_pod"}, Points: []string{"CrashLoopBackOff"}, Secrets: []string{"PlantedPass-77Qz"}}}, "ann")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.ai.SaveCase(ctx, TestCase{Agent: Troubleshooter, Name: "misses a point", Question: `Why? [[get_pod {"namespace":"shop","name":"web-1"}]]`,
+	if _, err := w.ai.SaveTest(ctx, TestCase{Agent: Troubleshooter, Name: "misses a point", Question: `Why? [[get_pod {"namespace":"shop","name":"web-1"}]]`,
 		Recorded: []sherlock.Recorded{{Tool: "get_pod", Result: pod}}, Expect: Expect{Tools: []string{"pod_logs"}, Points: []string{"OOMKilled"}}}, "ann"); err != nil {
 		t.Fatal(err)
 	}
@@ -474,7 +477,7 @@ func TestTheTestRunnerUsesRecordedResults(t *testing.T) {
 	}
 	usd, cases, _, err := w.ai.Estimate(ctx, Troubleshooter, TestOptions{Draft: true})
 	base := 0
-	for _, c := range BaseCases() {
+	for _, c := range BaseTests() {
 		if c.Agent == Troubleshooter {
 			base++
 		}
@@ -487,7 +490,7 @@ func TestTheTestRunnerUsesRecordedResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	byName := map[string]CaseResult{}
+	byName := map[string]TestResult{}
 	for _, r := range run.Results {
 		byName[r.Name] = r
 	}
@@ -612,7 +615,7 @@ func TestMigrationFrom011(t *testing.T) {
 	}
 	// The built-in text itself is not carried over: it is the core now.
 	w2 := setup(t, nil)
-	w2.set.sh.Instructions = sherlock.BuiltIn(true)
+	w2.set.sh.Instructions = sherlock.BuiltIn(true, watson.Commands())
 	if err := w2.ai.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -681,7 +684,7 @@ func TestTheCatalog(t *testing.T) {
 		}
 	}
 	seen := map[string]int{}
-	for _, c := range BaseCases() {
+	for _, c := range BaseTests() {
 		if _, ok := InfoOf(c.Agent); !ok {
 			t.Errorf("%s is for no agent", c.ID)
 		}
@@ -692,4 +695,66 @@ func TestTheCatalog(t *testing.T) {
 			t.Errorf("%s ships no test case", info.ID)
 		}
 	}
+}
+
+// Sherlock, its compact form and the Troubleshooter are told every command
+// Watson runs, from Watson's own list, so the list cannot fall behind it
+// (S-1, P-1); and the Troubleshooter may check its commands, as the
+// Change planner does.
+func TestPromptsNameEveryCommandWatsonRuns(t *testing.T) {
+	w := setup(t, nil)
+	assembled := func(id string) string {
+		a, err := w.ai.Agent(id, sherlock.Question{Key: sherlock.Key{Cluster: "local"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a.Instructions
+	}
+	for name, text := range map[string]string{
+		"Sherlock":                   assembled(Sherlock),
+		"Sherlock, view changes off": Core(Sherlock, false),
+		"Sherlock's compact form":    CompactCore(),
+		"the Troubleshooter":         assembled(Troubleshooter),
+		"the Change planner":         assembled(ChangePlanner),
+	} {
+		if strings.Count(text, watson.Commands()) != 1 {
+			t.Errorf("%s is not told once what Watson runs:\n%s", name, text)
+		}
+		for _, cmd := range missingCommands(text) {
+			t.Errorf("%s is not told that Watson runs %s", name, cmd)
+		}
+	}
+	info, _ := InfoOf(Troubleshooter)
+	if !slices.Contains(info.Tools, sherlock.ToolCheckCommand) || !strings.Contains(Core(Troubleshooter, false), "with check_command before you give it") {
+		t.Errorf("the Troubleshooter cannot check its commands: %v", info.Tools)
+	}
+}
+
+// missingCommands are the commands Watson runs that a prompt's sentence
+// "Watson runs ..." does not name, each in the part of its tool.
+func missingCommands(text string) []string {
+	var parts []string
+	for rest := text; ; {
+		i := strings.Index(rest, "Watson runs ")
+		if i < 0 {
+			break
+		}
+		rest = rest[i+len("Watson runs "):]
+		end := len(rest)
+		if m := regexp.MustCompile(`\.(\s|$)`).FindStringIndex(rest); m != nil {
+			end = m[0]
+		}
+		for _, p := range strings.Split(rest[:end], "; ") {
+			parts = append(parts, strings.TrimPrefix(p, "and "))
+		}
+	}
+	var out []string
+	for _, cmd := range append(watson.Supported(false), watson.Supported(true)...) {
+		tool, verb, _ := strings.Cut(cmd, " ")
+		named := regexp.MustCompile(`[ ,]` + regexp.QuoteMeta(verb) + `\b`)
+		if !slices.ContainsFunc(parts, func(p string) bool { return strings.HasPrefix(p, tool+" ") && named.MatchString(p) }) {
+			out = append(out, cmd)
+		}
+	}
+	return out
 }

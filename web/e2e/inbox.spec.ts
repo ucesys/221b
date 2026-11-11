@@ -18,10 +18,7 @@ const KEY = 'sk-ant-e2e-fake-key-0123456789'
 const ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
 
 async function put(page: Page, path: string, body: unknown, method = 'PUT'): Promise<number> {
-  return page.evaluate(
-    async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === null ? undefined : JSON.stringify(b) })).status,
-    [path, body, method] as const,
-  )
+  return page.evaluate(async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === null ? undefined : JSON.stringify(b) })).status, [path, body, method] as const)
 }
 
 /**
@@ -56,11 +53,11 @@ function card(pod: string, over: Partial<Proposal> = {}): Proposal {
 /** Serves the card to the page; Approve answers as the server does when Sam approved it first. */
 async function serveCard(page: Page, c: Proposal) {
   const approved: Proposal = { ...c, state: 'approved', approvals: [{ by: { key: 'sam', name: 'Sam' }, at: new Date(Date.now() - 60_000).toISOString() }] }
-  await page.route('**/api/v1/cases/proposals**', async (route: Route) => {
+  await page.route('**/api/v1/aiops/proposals**', async (route: Route) => {
     const url = new URL(route.request().url())
     // The drawer's Sherlock on this made-up card: there is none (CF-61).
     if (url.pathname.includes('/sherlock/')) {
-      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'no such proposal' }) })
+      await route.fulfill({ status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'no such proposed change' }) })
       return
     }
     if (url.pathname.endsWith('/approve')) {
@@ -95,10 +92,10 @@ test('the Inbox is one table of every kind, pending first, with its filters in t
   expect(res.status(), await res.text()).toBe(201)
   const n = ((await res.json()) as { report: { number: number } }).report.number
   // A case being analysed is listed as well (the wave-4 Inbox left it out).
-  const made = await page.request.post('/api/v1/cases/cases', { headers: SAME, data: { title: `Inbox case ${Date.now()}`, cluster: 'local', priority: 1 } })
+  const made = await page.request.post('/api/v1/aiops/cases', { headers: SAME, data: { title: `Inbox case ${Date.now()}`, cluster: 'local', priority: 1 } })
   expect(made.status(), await made.text()).toBe(201)
   const c = (await made.json()) as { number: number }
-  await page.goto('/#/cases/inbox')
+  await page.goto('/#/aiops/inbox')
   await expect(page.getByTestId('inbox-groups')).toHaveCount(0)
   await expect(page.getByRole('grid', { name: 'Inbox' })).toHaveCount(1)
   // No Kind filter or column since wave 6c (CF-38): a row's id and status say what it is.
@@ -118,26 +115,26 @@ test('the Inbox is one table of every kind, pending first, with its filters in t
   expect(order.indexOf(`case:${c.number}`)).toBeLessThan(order.indexOf(`case:${n}`))
   // Source: the agents' rows alone leave people's cases out; People keeps them.
   await page.getByTestId('inbox-source-agents').click()
-  await expect(page).toHaveURL(/#\/cases\/inbox\?source=agents$/)
+  await expect(page).toHaveURL(/#\/aiops\/inbox\?source=agents$/)
   await expect(row).toHaveCount(0)
   await page.getByTestId('inbox-source-people').click()
-  await expect(page).toHaveURL(/#\/cases\/inbox\?source=people$/)
+  await expect(page).toHaveURL(/#\/aiops\/inbox\?source=people$/)
   await expect(row).toBeVisible()
   await page.getByTestId('inbox-source-all').click()
-  await expect(page).toHaveURL(/#\/cases\/inbox$/)
+  await expect(page).toHaveURL(/#\/aiops\/inbox$/)
   await page.getByTestId('inbox-show-all').click()
-  await expect(page).toHaveURL(/#\/cases\/inbox\?show=all$/)
+  await expect(page).toHaveURL(/#\/aiops\/inbox\?show=all$/)
   await expect(row).toBeVisible()
   // A row opens its drawer at its own address, and Escape closes it.
   await row.locator('[role=rowheader]').click()
-  await expect(page).toHaveURL(new RegExp(`#/cases/inbox/case/${n}\\?show=all$`))
+  await expect(page).toHaveURL(new RegExp(`#/aiops/inbox/case/${n}\\?show=all$`))
   await expect(page.getByTestId('case-drawer')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('case-drawer')).toHaveCount(0)
-  await expect(page).toHaveURL(/#\/cases\/inbox\?show=all$/)
+  await expect(page).toHaveURL(/#\/aiops\/inbox\?show=all$/)
   // The old addresses land on the same drawers.
   await page.goto(`/#/cases/inbox?report=${n}`)
-  await expect(page).toHaveURL(new RegExp(`#/cases/inbox/report/${n}$`))
+  await expect(page).toHaveURL(new RegExp(`#/aiops/inbox/report/${n}$`))
   await expect(page.getByTestId('case-drawer')).toContainText(`C-${n}`)
   await page.goto(`/#/cases/cases/${c.number}`)
   await expect(page.getByTestId('case-drawer')).toBeVisible()
@@ -150,14 +147,14 @@ test('a proposed change someone else approved first is refused with who and when
   const pod = await runningPod(page)
   await serveCard(page, card(pod))
   // An address of before, with a kind: the kind is let go (CF-38), the row is there.
-  await page.goto('/#/cases/inbox?kind=proposals')
+  await page.goto('/#/aiops/inbox?kind=proposals')
   const row = page.locator('[data-inbox-row="proposal:PC-900"]')
   await expect(row).toHaveAttribute('aria-label', /^Proposed change PC-900: /)
   const obj = row.getByTestId('object-link')
   await expect(obj.locator('a')).toHaveAttribute('href', `#/pods?open=${encodeURIComponent(pod)}`)
   await expect(obj.getByTestId('object-age')).toHaveText(/^running \d+/)
   await row.locator('[role=rowheader]').click()
-  await expect(page).toHaveURL(/#\/cases\/inbox\/proposal\/PC-900$/)
+  await expect(page).toHaveURL(/#\/aiops\/inbox\/proposal\/PC-900$/)
   const drawer = page.getByTestId('proposal-drawer')
   await expect(drawer.getByTestId('proposal-started-by')).toHaveText('Case analysis of C-41: web crash-loops')
   // Run in Watson brings its card to the drawer's Watson, which asks for the approval (CF-62).
@@ -173,9 +170,34 @@ test('a proposed change someone else approved first is refused with who and when
   await expect(page).toHaveURL(new RegExp(`#/pods\\?open=${encodeURIComponent(pod).replace(/[.]/g, '\\.')}`))
 })
 
+test('the area’s addresses of before the rename, #/cases/…, open their new place under #/aiops/… (CF-104)', async ({ page }) => {
+  await page.goto('/#/nodes')
+  await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  const res = await page.request.post('/api/issues/v1/reports', { headers: SAME, data: { text: `An old link from a notification ${Date.now()}`, for: { id: 'dev', name: 'Dev Person' } } })
+  expect(res.status(), await res.text()).toBe(201)
+  const n = ((await res.json()) as { report: { number: number } }).report.number
+  const ki = await page.request.post('/api/issues/v1/known', { headers: SAME, data: { title: `An old link to a known issue ${Date.now()}`, symptoms: ['old link'], workaround: 'None needed.', status: 'identified' } })
+  expect(ki.status(), await ki.text()).toBeLessThan(300)
+  const kiId = ((await ki.json()) as { id: string }).id
+  await serveCard(page, card(await runningPod(page)))
+  // A case's drawer, as a notification linked it.
+  await page.goto(`/#/cases/inbox/case/${n}`)
+  await expect(page).toHaveURL(new RegExp(`#/aiops/inbox/case/${n}$`))
+  await expect(page.getByTestId('case-drawer')).toContainText(`C-${n}`)
+  // A known issue, as a Confluence page linked it.
+  await page.goto(`/#/cases/known/${kiId}`)
+  await expect(page).toHaveURL(new RegExp(`#/aiops/mycroft/known/${kiId}$`))
+  await expect(page.getByTestId('known-drawer')).toBeVisible()
+  // A proposed change, as a notification linked it.
+  await page.goto('/#/cases/inbox?proposal=PC-900')
+  await expect(page).toHaveURL(/#\/aiops\/inbox\/proposal\/PC-900$/)
+  await expect(page.getByTestId('proposal-drawer')).toBeVisible()
+  await page.unroute('**/api/v1/aiops/proposals**')
+})
+
 test('the Inbox takes most of a wide screen, with Columns and Export just above its table (CF-66)', async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1000 })
-  await page.goto('/#/cases/inbox')
+  await page.goto('/#/aiops/inbox')
   const grid = page.getByRole('grid', { name: 'Inbox' })
   await expect(grid).toHaveCount(1)
   const area = (await page.getByTestId('cases-page').boundingBox())!
@@ -194,14 +216,14 @@ test('the Inbox takes most of a wide screen, with Columns and Export just above 
   await expect(tools.getByTestId('cases-new-case')).toHaveCount(0)
   expect((await page.getByTestId('cases-new-case').boundingBox())!.y).toBeLessThan((await page.getByTestId('inbox-source').boundingBox())!.y)
   // Jobs, Schedule and Runs alike, is as wide as the Inbox.
-  for (const hash of ['#/cases/jobs', '#/cases/jobs/runs']) {
+  for (const hash of ['#/aiops/jobs', '#/aiops/jobs/runs']) {
     await page.goto('/' + hash)
     const jobs = (await page.getByTestId('jobs-area').boundingBox())!
     expect(Math.abs(jobs.width - col.width), `${hash} is as wide as the Inbox`).toBeLessThanOrEqual(2)
   }
   // On a phone the toolbar wraps without a sideways scroll.
   await page.setViewportSize({ width: 390, height: 800 })
-  await page.goto('/#/cases/inbox')
+  await page.goto('/#/aiops/inbox')
   await expect(grid).toHaveCount(1)
   for (const row of [page.getByTestId('inbox-show').locator('..'), page.getByTestId('inbox-table-tools')]) {
     expect(await row.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && el.getBoundingClientRect().right <= window.innerWidth + 1)).toBe(true)
@@ -209,7 +231,7 @@ test('the Inbox takes most of a wide screen, with Columns and Export just above 
 })
 
 test('the bell stands for what waits in the Inbox, in every area, and opens it; the Inbox links to the alerts (CF-80, CF-81)', async ({ page }) => {
-  for (const hash of ['#/nodes', '#/scripts', '#/cases/inbox', '#/admin/users']) {
+  for (const hash of ['#/nodes', '#/scripts', '#/aiops/inbox', '#/admin/users']) {
     await page.goto('/' + hash)
     const bell = page.getByTestId('inbox-bell')
     await expect(bell).toBeVisible()
@@ -224,7 +246,7 @@ test('the bell stands for what waits in the Inbox, in every area, and opens it; 
     await expect(bell).toHaveText('')
   }
   await page.getByTestId('inbox-bell').click()
-  await expect(page).toHaveURL(/#\/cases\/inbox$/)
+  await expect(page).toHaveURL(/#\/aiops\/inbox$/)
   // The simulator has alerts going on: the Inbox says how many, and opens the Alerts tab.
   const link = page.getByTestId('inbox-alerts')
   await expect(link).toHaveText(/^\d+ alerts? now$/)
@@ -241,8 +263,8 @@ test('Sherlock is in the dock over Cases and is told the page and the item open;
   const pod = await runningPod(page)
   await serveCard(page, card(pod))
   // A link of before: the query, and the card's c<n> (CF-56).
-  await page.goto('/#/cases/inbox?proposal=c900')
-  await expect(page).toHaveURL(/#\/cases\/inbox\/proposal\/PC-900$/)
+  await page.goto('/#/aiops/inbox?proposal=c900')
+  await expect(page).toHaveURL(/#\/aiops\/inbox\/proposal\/PC-900$/)
   await expect(page.getByTestId('proposal-drawer')).toContainText('Restart web')
   const input = page.getByTestId('sherlock-input')
   await expect(input).toBeVisible({ timeout: 15_000 })
@@ -253,7 +275,7 @@ test('Sherlock is in the dock over Cases and is told the page and the item open;
   const sent = (await cluster.claudeRequests()).join('\n')
   // The Cases skill (AIOps), and the view: the Inbox, with the change open.
   expect(sent).toContain('AIOps. The person is asking from AIOps')
-  expect(sent).toMatch(/\\"view\\":\\"cases\\"/)
+  expect(sent).toMatch(/\\"view\\":\\"aiops\\"/)
   expect(sent).toMatch(/\\"kind\\":\\"proposal\\",\\"id\\":\\"PC-900\\"/)
   expect(sent).toContain('Restart web')
   // Open in Watson: the command waits in Watson's box; nothing runs.
@@ -275,7 +297,7 @@ for (const width of [1440, 800]) {
     expect(await put(page, '/api/v1/sherlock/key', { key: KEY })).toBe(200)
     expect(await put(page, '/api/v1/sherlock/config', ON)).toBe(200)
     await page.evaluate(() => localStorage.removeItem('221b.dock'))
-    for (const hash of ['#/cases/inbox', '#/nodes']) {
+    for (const hash of ['#/aiops/inbox', '#/nodes']) {
       await page.goto('/' + hash)
       const input = page.getByTestId('sherlock-input')
       await expect(input).toBeVisible({ timeout: 15_000 })

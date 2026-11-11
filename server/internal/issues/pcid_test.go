@@ -7,7 +7,7 @@ import (
 
 // A case fixed before CF-56 names the change c<n>: it reads as PC-<n>.
 func TestAnOldAppliedChangeReadsAsPC(t *testing.T) {
-	var r Report
+	var r Case
 	if err := json.Unmarshal([]byte(`{"number":3,"appliedBy":{"card":"c12","title":"Set web's limits","by":"Pat","at":"2026-11-06T10:00:00Z"}}`), &r); err != nil {
 		t.Fatal(err)
 	}

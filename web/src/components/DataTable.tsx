@@ -313,7 +313,21 @@ export function DataTable<R>({ label, rows, cols, rowKey, rowLabel, sort, onSort
         {groups.length > 0 && (
           <div className="rk-ghg" aria-hidden="true">
             {groups.map((g) => (
-              <span key={g.label} className="rk-thl" style={{ gridColumn: `${g.start + 1} / ${g.end + 2}`, fontSize: 11, fontWeight: 600, letterSpacing: '.05em', textTransform: 'uppercase', color: 'var(--fg3)', borderBottom: '1px solid var(--line2)', margin: '6px 10px 0', padding: '0 0 4px' }}>
+              <span
+                key={g.label}
+                className="rk-thl"
+                style={{
+                  gridColumn: `${g.start + 1} / ${g.end + 2}`,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  letterSpacing: '.05em',
+                  textTransform: 'uppercase',
+                  color: 'var(--fg3)',
+                  borderBottom: '1px solid var(--line2)',
+                  margin: '6px 10px 0',
+                  padding: '0 0 4px',
+                }}
+              >
                 {g.label}
               </span>
             ))}
@@ -326,7 +340,15 @@ export function DataTable<R>({ label, rows, cols, rowKey, rowLabel, sort, onSort
             return (
               <div key={c.id} role="columnheader" aria-colindex={i + 1} aria-sort={on ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'} className="rk-thc">
                 {c.head?.()}
-                <button className={c.right ? 'rk-th rk-r' : 'rk-th'} style={c.head ? { paddingLeft: 4 } : undefined} data-active={on} data-col={c.id} title={(on ? 'Sorted by ' : 'Sort by ') + name + (c.hint ? '\n\n' + c.hint : '')} aria-label={`${c.group ? c.group + ' ' : ''}${c.label}: ${on ? `sorted ${sort.dir === 'asc' ? 'ascending' : 'descending'}` : 'sort'}`} onClick={() => onSort(c.id)}>
+                <button
+                  className={c.right ? 'rk-th rk-r' : 'rk-th'}
+                  style={c.head ? { paddingLeft: 4 } : undefined}
+                  data-active={on}
+                  data-col={c.id}
+                  title={(on ? 'Sorted by ' : 'Sort by ') + name + (c.hint ? '\n\n' + c.hint : '')}
+                  aria-label={`${c.group ? c.group + ' ' : ''}${c.label}: ${on ? `sorted ${sort.dir === 'asc' ? 'ascending' : 'descending'}` : 'sort'}`}
+                  onClick={() => onSort(c.id)}
+                >
                   {c.label}
                   <span className="rk-arrow" aria-hidden="true">
                     {on ? (sort.dir === 'asc' ? '↑' : '↓') : ''}
@@ -340,7 +362,23 @@ export function DataTable<R>({ label, rows, cols, rowKey, rowLabel, sort, onSort
           {above > 0 && <div style={{ height: above }} aria-hidden="true" />}
           {shown.map((r, i) => {
             const k = rowKey(r)
-            return <Row<R> key={k} r={r} cols={cols} rowKey={k} index={first + i} label={rowLabel(r, selected === k)} selected={selected === k} onOpen={onOpen} onJump={jump} now={now} rowAttr={rowAttr} style={{ height: rowHeight }} highlighted={k === hlKey} />
+            return (
+              <Row<R>
+                key={k}
+                r={r}
+                cols={cols}
+                rowKey={k}
+                index={first + i}
+                label={rowLabel(r, selected === k)}
+                selected={selected === k}
+                onOpen={onOpen}
+                onJump={jump}
+                now={now}
+                rowAttr={rowAttr}
+                style={{ height: rowHeight }}
+                highlighted={k === hlKey}
+              />
+            )
           })}
           {below > 0 && <div style={{ height: below }} aria-hidden="true" />}
         </div>

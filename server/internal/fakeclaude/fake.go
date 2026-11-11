@@ -1012,6 +1012,36 @@ func between(s, tag string) string {
 	return strings.TrimSpace(in)
 }
 
+// rechecked answers the fixes a task lists to re-check (W-1), one entry
+// each: still there when one of the findings has its check and object
+// ("Namespace/analytics" as the task writes it), gone otherwise.
+func rechecked(question string, findings []any) []any {
+	out := []any{}
+	for _, line := range strings.Split(between(question, "recheck"), "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "- "))
+		check, rest, ok := strings.Cut(line, " on ")
+		if !ok {
+			continue
+		}
+		object, _, _ := strings.Cut(rest, ": ")
+		if object == "the cluster as a whole" {
+			object = ""
+		}
+		still := false
+		for _, f := range findings {
+			if m, ok := f.(map[string]any); ok && m["check"] == check && strings.EqualFold(fmt.Sprint(m["resource"]), object) {
+				still = true
+			}
+		}
+		evidence := "read " + object + " again: the problem is gone"
+		if still {
+			evidence = "read " + object + " again: the problem is still there"
+		}
+		out = append(out, map[string]any{"check": check, "resource": object, "still": still, "evidence": evidence})
+	}
+	return out
+}
+
 // jobBlock is an answer with the JSON block of an agent on its own.
 func jobBlock(prose string, v any) reply {
 	b, _ := json.Marshal(v)
@@ -1084,13 +1114,17 @@ func jobReply(question string, round int, last string) (reply, bool) {
 		// with its description (CF-86): the validation rules list them as
 		// not on the list, and the housekeeping suggests them as one rule
 		// once found in three runs (CF-85, CF-87).
-		return jobBlock("**Nightly audit**: the review found what is below. "+summarize(last), map[string]any{"findings": []any{map[string]any{"severity": "warning", "check": "netpol.missing", "title": "Namespaces without network policies", "detail": "Pods there accept traffic from anywhere.", "evidence": []string{summarize(last)}, "resource": "Namespace/analytics"},
+		// It re-checks every fix it is given (W-1): still there when it
+		// is one of its findings, gone otherwise.
+		findings := []any{map[string]any{"severity": "warning", "check": "netpol.missing", "title": "Namespaces without network policies", "detail": "Pods there accept traffic from anywhere.", "evidence": []string{summarize(last)}, "resource": "Namespace/analytics"},
 			map[string]any{"severity": "info", "check": "quota.missing", "title": "analytics has no resource quota", "detail": "A shared namespace without a quota can take the cluster's room.", "resource": "Namespace/analytics"},
 			map[string]any{"severity": "info", "check": "other.node-clock-skew", "title": "The nodes' clocks differ by seconds", "detail": "Certificates and leases depend on the clocks agreeing.", "resource": "",
 				"checkWhy": "The nodes' clocks are not in step with each other. No rule given covers time keeping on the nodes."},
 			map[string]any{"severity": "info", "check": "other.node-clock-drift", "title": "A node's clock drifts", "detail": "Its time moves away from the others between syncs.", "resource": "",
-				"checkWhy": "A node's clock drifts from true time between syncs. The rules given are about workloads and access, none about time."}},
-			"proposals": []any{map[string]any{"title": "Mark analytics for a default-deny network policy", "reasoning": "Its pods accept traffic from anywhere.", "fixes": []any{1}, "commands": []string{"kubectl label namespace analytics e2e.221b/netpol=wanted"}, "impact": "a label on the namespace; no traffic changes yet", "risk": "low"}}}), true
+				"checkWhy": "A node's clock drifts from true time between syncs. The rules given are about workloads and access, none about time."}}
+		return jobBlock("**Nightly audit**: the review found what is below. "+summarize(last), map[string]any{"findings": findings,
+			"proposals": []any{map[string]any{"title": "Mark analytics for a default-deny network policy", "reasoning": "Its pods accept traffic from anywhere.", "fixes": []any{1}, "commands": []string{"kubectl label namespace analytics e2e.221b/netpol=wanted"}, "impact": "a label on the namespace; no traffic changes yet", "risk": "low"}},
+			"rechecked": rechecked(question, findings)}), true
 	case strings.Contains(q, "<alert>"):
 		alert := between(question, "alert")
 		object := ""
@@ -1117,10 +1151,12 @@ func jobReply(question string, round int, last string) (reply, bool) {
 		// An object asleep is expected (CF-82): an expected finding, no
 		// case, the alert acknowledged.
 		if strings.Contains(strings.ToLower(object), "asleep") {
-			return jobBlock("**Diagnosis** of "+object+": its node sleeps on purpose.", map[string]any{"findings": []any{map[string]any{"severity": "critical", "check": "node.not-ready", "title": object + " stopped with its node", "detail": alert, "resource": resource,
-				"expected": true, "expectedWhy": "Its node is annotated nodepower/status: asleep and was cordoned before it stopped reporting."}}, "proposals": []any{}}), true
+			findings := []any{map[string]any{"severity": "critical", "check": "node.not-ready", "title": object + " stopped with its node", "detail": alert, "resource": resource,
+				"expected": true, "expectedWhy": "Its node is annotated nodepower/status: asleep and was cordoned before it stopped reporting."}}
+			return jobBlock("**Diagnosis** of "+object+": its node sleeps on purpose.", map[string]any{"findings": findings, "proposals": []any{}, "rechecked": rechecked(question, findings)}), true
 		}
-		return jobBlock("**Diagnosis** of "+object+": it fails to start.", map[string]any{"findings": []any{map[string]any{"severity": "critical", "check": "pod.crashloop", "title": object + " fails to start", "detail": alert, "resource": resource}}, "proposals": props}), true
+		findings := []any{map[string]any{"severity": "critical", "check": "pod.crashloop", "title": object + " fails to start", "detail": alert, "resource": resource}}
+		return jobBlock("**Diagnosis** of "+object+": it fails to start.", map[string]any{"findings": findings, "proposals": props, "rechecked": rechecked(question, findings)}), true
 	case strings.Contains(q, "daily digest"):
 		n := 0
 		if log := between(question, "audit-log"); log != "" {

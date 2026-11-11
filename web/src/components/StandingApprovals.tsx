@@ -125,13 +125,18 @@ export function StandingApprovals() {
     }
   }
   return (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Standing approvals for agents' proposals" data-testid="standing-approvals">
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Standing approvals for proposed changes" data-testid="standing-approvals">
       <h3 className="rk-h">Standing approvals for proposed changes</h3>
       <p className="rk-fhint" style={{ margin: 0 }}>
-        A narrow class of proposed change, approved as it arrives, outside production only: for example, restarting a crash-looping pod in development, at most 3 an hour. Watson checks each card again first, its changes run as you, and the audit log names the standing approval. Actions are a kubectl or helm command’s first words, such as kubectl rollout restart, or a console action: host.label, fleet.update, automation.params.
+        A narrow class of proposed change, approved as it arrives, outside production only: for example, restarting a crash-looping pod in development, at most 3 an hour. Watson checks each card again first, its changes run as you, and the
+        audit log names the standing approval. Actions are a kubectl or helm command’s first words, such as kubectl rollout restart, or a console action: host.label, fleet.update, automation.params.
       </p>
       {err && <p className="tb-err">{err}</p>}
-      {items && items.length === 0 && !editing && <p className="tb-hint" style={{ margin: 0 }}>None set.</p>}
+      {items && items.length === 0 && !editing && (
+        <p className="tb-hint" style={{ margin: 0 }}>
+          None set.
+        </p>
+      )}
       {items && items.length > 0 && (
         <table className="tb-table" data-testid="standing-list">
           <thead>

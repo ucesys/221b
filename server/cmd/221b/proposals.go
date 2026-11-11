@@ -25,7 +25,7 @@ func (c cardsProposer) propose(ctx context.Context, v any) (string, error) {
 	}
 	var p cards.Proposal
 	if err := json.Unmarshal(b, &p); err != nil {
-		return "", fmt.Errorf("the proposal does not fit a card: %w", err)
+		return "", fmt.Errorf("the proposed change does not fit a card: %w", err)
 	}
 	return c.store.Propose(ctx, p)
 }
@@ -45,7 +45,7 @@ type knowledgeProposer struct{ cards atomic.Pointer[cardsProposer] }
 func (k *knowledgeProposer) Propose(ctx context.Context, p knowledge.Proposal) (string, error) {
 	c := k.cards.Load()
 	if c == nil {
-		return "", errors.New("the store of proposals is not open yet")
+		return "", errors.New("the store of proposed changes is not open yet")
 	}
 	return c.propose(ctx, p)
 }

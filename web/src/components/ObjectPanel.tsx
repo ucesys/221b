@@ -60,12 +60,7 @@ export function ObjectPanel({ kind, namespace: ns, name, row, gone, cluster, now
   const ready = pods.filter((p) => p.tone === 'ok' && !p.done).length
   const failing = pods.filter((p) => p.tone === 'err').length
 
-  const tabs = [
-    { id: 'details', label: 'Details' },
-    ...(workload ? [{ id: 'pods', label: 'Pods', count: d?.pods.length }] : []),
-    { id: 'events', label: 'Events', count: d?.events.length },
-    { id: 'yaml', label: 'YAML' },
-  ]
+  const tabs = [{ id: 'details', label: 'Details' }, ...(workload ? [{ id: 'pods', label: 'Pods', count: d?.pods.length }] : []), { id: 'events', label: 'Events', count: d?.events.length }, { id: 'yaml', label: 'YAML' }]
 
   const facts: [string, string][] = [
     ...(d?.facts ?? []).map((f) => [f.label, localTimes(f.value)] as [string, string]),
@@ -157,7 +152,11 @@ export function ObjectPanel({ kind, namespace: ns, name, row, gone, cluster, now
           {details.error}
         </p>
       )}
-      {!d && !details.error && <p data-peek-loading="" style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Loading…</p>}
+      {!d && !details.error && (
+        <p data-peek-loading="" style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>
+          Loading…
+        </p>
+      )}
       {d && tab === 'details' && (
         <>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(390px, 100%), 1fr))', gap: 16, alignItems: 'start' }}>
@@ -255,7 +254,19 @@ export function ObjectPanel({ kind, namespace: ns, name, row, gone, cluster, now
               <ExportMenu onExport={(f) => podTable.exportRows(f, cluster?.name, `${name}-pods`, onToast)} disabled={!podTable.shown.length} what="the pods in view" />
             </div>
           </div>
-          <DataTable<PodView> label={`Pods of ${name}`} rows={podTable.shown} cols={podTable.cols} rowKey={(r) => r.key} rowLabel={podLabel} sort={podTable.sort} onSort={podTable.onSort} onOpen={(k) => navigate(linkTo('Pod', k.split('/')[1] ?? k))} now={now} empty={pods.length ? 'No pod matches.' : `No pod is controlled by this ${kind}${kind === 'CronJob' ? ': its Jobs create pods when they run' : ''}.`} rowAttr="pod" />
+          <DataTable<PodView>
+            label={`Pods of ${name}`}
+            rows={podTable.shown}
+            cols={podTable.cols}
+            rowKey={(r) => r.key}
+            rowLabel={podLabel}
+            sort={podTable.sort}
+            onSort={podTable.onSort}
+            onOpen={(k) => navigate(linkTo('Pod', k.split('/')[1] ?? k))}
+            now={now}
+            empty={pods.length ? 'No pod matches.' : `No pod is controlled by this ${kind}${kind === 'CronJob' ? ': its Jobs create pods when they run' : ''}.`}
+            rowAttr="pod"
+          />
           <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>Pods whose owners lead to this {kind}, through its ReplicaSets or Jobs. Click a pod for its containers, events and logs.</p>
         </>
       )}

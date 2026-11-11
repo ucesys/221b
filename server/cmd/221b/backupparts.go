@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/ucesys/221b/server/internal/ai"
 	"github.com/ucesys/221b/server/internal/backup"
@@ -13,7 +14,9 @@ import (
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/knowledge"
+	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/lessons"
+	"github.com/ucesys/221b/server/internal/version"
 )
 
 // registerBackupParts adds the Phase 12 packages' records to every backup
@@ -221,7 +224,7 @@ func registerCardsBackup(r *backup.Registry, st *cards.Store) {
 	if st == nil {
 		return
 	}
-	r.Register(backup.Part{Name: "cases", Label: "Agents' proposals", Order: 240,
+	r.Register(backup.Part{Name: "cases", Label: "Agents' proposed changes", Order: 240,
 		How: "are added where missing, with their decisions; standing approvals are added or replaced; the notification settings are replaced, a channel's address coming back where this console has none",
 		Export: func(ctx context.Context, env *backup.Env) (any, error) {
 			b, err := st.Export(ctx, env.Seal)
@@ -236,13 +239,13 @@ func registerCardsBackup(r *backup.Registry, st *cards.Store) {
 		Restore: func(ctx context.Context, raw json.RawMessage, env *backup.Env) (int, error) {
 			var b cards.Backup
 			if err := json.Unmarshal(raw, &b); err != nil {
-				env.Note("agents' proposals: %v", err)
+				env.Note("agents' proposed changes: %v", err)
 				return 0, backup.ErrNotApplied
 			}
 			if b.Notify != nil {
 				for _, ch := range b.Notify.Channels {
 					if err := backup.CheckSecret(ch.URL); err != nil {
-						env.Note("agents' proposals: the channel %q holds an address in clear, not a sealed one or the placeholder; it was not restored", ch.Name)
+						env.Note("agents' proposed changes: the channel %q holds an address in clear, not a sealed one or the placeholder; it was not restored", ch.Name)
 						return 0, backup.ErrNotApplied
 					}
 				}
@@ -252,7 +255,7 @@ func registerCardsBackup(r *backup.Registry, st *cards.Store) {
 				env.Note("%s", line)
 			}
 			if err != nil {
-				env.Note("agents' proposals: %v", err)
+				env.Note("agents' proposed changes: %v", err)
 				return n, backup.ErrNotApplied
 			}
 			return n, nil
@@ -293,4 +296,57 @@ func aiCredentials(keys map[string]json.RawMessage) ([]aiCredential, error) {
 		out = append(out, aiCredential{id: p.ID, name: cmp.Or(p.Name, p.ID), sealed: p.Credential})
 	}
 	return out, nil
+}
+
+// wireBackups opens the backups and registers each package's part.
+func (w *wiring) wireBackups(ctx context.Context) error {
+	cfg, log := w.cfg, w.log
+	// Backups (Phase 12, ADR-80 to ADR-82): every package registers
+	// its part of a backup in backup.Default (the API registers the
+	// console's own). The scheduled backups to S3 keep their settings
+	// beside the console's, their keys in the Secret <release>-backup, and
+	// run on the leader only.
+	var backupKeys backup.SecretStore = &backup.MemorySecret{}
+	if cfg.ConnectionsSecrets != "" {
+		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
+		sk, err := kube.NewSecretKey(w.restCfg, ns, prefix+"-backup", map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "backup", "app.kubernetes.io/managed-by": "221b"})
+		if err != nil {
+			return fmt.Errorf("the backups' Secret: %w", err)
+		}
+		backupKeys = sk
+	}
+	// The backups' key (ADR-137): the Secret <release>-backup-key, made
+	// here at start when there is none, and read again for every backup
+	// and restore, so a key put back by hand is the one used. Never logged.
+	if cfg.ConnectionsSecrets != "" {
+		ns, prefix, _ := strings.Cut(cfg.ConnectionsSecrets, "/")
+		name := prefix + backup.KeySecretSuffix
+		ks, err := kube.NewSecretKey(w.restCfg, ns, name, map[string]string{"app.kubernetes.io/name": "221b", "app.kubernetes.io/component": "backup-key", "app.kubernetes.io/managed-by": "221b"})
+		if err != nil {
+			return fmt.Errorf("the backup key's Secret: %w", err)
+		}
+		ks.WithAnnotations(map[string]string{"helm.sh/resource-policy": "keep"})
+		if k, err := backup.EnsureSecretsKey(ctx, ks); err != nil {
+			log.Warn("the backup key is not ready: backups fail until it is", "secret", ns+"/"+name, "err", err)
+		} else {
+			log.Info("backup key ready", "secret", ns+"/"+name, "fingerprint", k.Fingerprint())
+		}
+		backup.Default.SetKey(name, func(ctx context.Context) (*backup.SecretsKey, error) { return backup.EnsureSecretsKey(ctx, ks) })
+	}
+	backups := backup.NewScheduler(backup.Options{Registry: backup.Default, Store: w.spendBackend, Secrets: backupKeys, Leads: w.elector.IsLeader, Audit: w.auditLog, Version: version.String(), Logger: log.With("component", "backup")})
+	go backups.Run(ctx)
+	registerBackupParts(backup.Default, w.aiSvc.Service, w.issueSvc)
+	// Jobs (Phase 12): the backups to S3 show as a job, and the jobs'
+	// settings are in every backup.
+	jobs.Register(jobs.BackupKind(backups))
+	registerJobsBackup(backup.Default, w.jobsW.svc)
+	registerKnowledgeBackup(backup.Default, w.knowledgeSvc)
+	registerCardsBackup(backup.Default, w.cardStore) // Watson cards (Phase 12)
+	registerFixesBackup(backup.Default, w.fixesSvc)
+	registerLessonsBackup(backup.Default, w.lessonsSvc)  // Findings, exceptions and RCAs (Phase 12)
+	registerHelmReposBackup(backup.Default, w.helmRepos) // Helm repositories (Phase 12, wave 5)
+	// Case work (Phase 12): the cases in every backup.
+	registerCaseworkBackup(backup.Default, w.caseSvc)
+	w.backups = backups
+	return nil
 }

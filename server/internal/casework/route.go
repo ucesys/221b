@@ -30,16 +30,23 @@ import (
 //	closed as noAction          a new case with the earlier explanation
 //	none                        a new agent-found case
 //
-// A run that does not see the key of a case its job's finding opened and
-// that was closed as fix since verifies the fix; a resolved known issue
-// the run's job saw is checked the same way, and reopens when still seen.
+// A run of the job whose finding opened a case closed as fix since
+// verifies the fix only on positive evidence (W-1, CF-94): the case's
+// object is inside the run's scope (each cluster an audit read whole,
+// the objects of the alerts a diagnosis read; nothing for other kinds),
+// and the agent, given the key to re-check, says the problem is gone.
+// Re-checked and still there, or found again, the fix did not hold. In
+// scope and not re-checked, the case keeps waiting and the run says how
+// many (CF-95). A finding left out past the run's cap never counts as
+// not seen (W-3). A resolved known issue the run's job saw is checked
+// inside the scope, and reopens when still seen.
 // A run opens at most newCasesPerRun cases; the rest are capped. Agent
 // repeats never match a case a person opened (it has no check).
 //
 // An open case a change was applied to (CF-29) is checked the same way by
-// the next run of its job (CF-30): not seen, it closes as fixed by itself
-// below P1, and at P0-P1 is marked verified and waits for its RCA; seen,
-// the fix did not hold, and it stays In progress.
+// the next run of its job that re-checks it (CF-30): gone, it closes as
+// fixed by itself below P1, and at P0-P1 is marked verified and waits for
+// its RCA; still there, the fix did not hold, and it stays In progress.
 //
 // Since wave 6c: a finding below its job's lowest priority (from its
 // severity, PriorityOf) opens no case and joins none: it stays on the run
@@ -79,12 +86,19 @@ func covering(list []lessons.Exception, k issues.Key, now time.Time, canon func(
 }
 
 // Route routes a run's findings into cases (CF-01). A finding whose key
-// is not valid stays invalid. What could not be saved is logged, and the
-// findings stay as they came.
+// is not valid stays invalid. When the exceptions cannot be read, or the
+// cases cannot be saved, nothing is routed: the findings stay as they
+// came, and the result says why, so the run is routed again later (W-7,
+// W-8, CF-99); an exception unread never lets a finding it covers open a
+// case.
 func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResult {
 	now := s.now()
 	set := s.settings(ctx)
-	exceptions, _ := s.o.Lessons.Exceptions(ctx)
+	exceptions, err := s.o.Lessons.Exceptions(ctx)
+	if err != nil {
+		s.o.Logger.Warn("a run's findings were not routed: the exceptions could not be read", "run", in.Run, "err", err)
+		return jobs.RouteResult{Findings: in.Findings, NotRouted: "the exceptions could not be read: " + clip(err.Error(), 300)}
+	}
 	// The validation rules as they stand: a finding under an id a rule
 	// replaced routes by the rule (ADR-138).
 	rules := s.rules.set(ctx)
@@ -100,9 +114,18 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 			seenKeys[keyString(keyOf(f.Key), canon)] = true
 		}
 	}
-	covered := map[string]bool{}
-	for _, c := range in.Clusters {
-		covered[c] = true
+	// The keys of the findings left out past the cap: neither seen nor
+	// not seen (W-3).
+	leftOut := map[string]bool{}
+	for i := range in.LeftOut {
+		leftOut[keyString(keyOf(&in.LeftOut[i]), canon)] = true
+	}
+	// What the agent said of the fixes it re-checked, by key (W-1).
+	rechecked := map[string]jobs.Recheck{}
+	for _, x := range in.Rechecked {
+		if x.Key != nil && x.Still != nil {
+			rechecked[keyString(keyOf(x.Key), canon)] = x
+		}
 	}
 	// The clusters whose new cases are queued for their analysis (CF-32).
 	queue := map[string]bool{}
@@ -117,7 +140,9 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 	}
 	agent := issues.AgentActor(in.Agent)
 	var queued []int
-	err := s.o.Issues.Batch(ctx, func(tx *issues.Tx) error {
+	// notRechecked counts the fixes in scope the agent did not re-check.
+	var notRechecked int
+	err = s.o.Issues.Batch(ctx, func(tx *issues.Tx) error {
 		// Again from the start on a retry: the counts and the findings.
 		out = jobs.RouteResult{Findings: append([]jobs.Finding(nil), in.Findings...)}
 		for i := range out.Findings {
@@ -129,7 +154,7 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 				f.Key = &k
 			}
 		}
-		hits, fixed, queued = map[string]int{}, nil, nil
+		hits, fixed, queued, notRechecked = map[string]int{}, nil, nil, 0
 		tx.As(agent)
 		r := router{s: s, tx: tx, in: in, now: now, cap: set.NewCasesPerRun, byKey: map[string]int{}, agent: agent, queue: queue, queued: &queued, rules: rules}
 		for _, l := range tx.Lines() {
@@ -168,18 +193,39 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 			}
 			out.Routed.Add(f.Routing)
 		}
-		// What the run did not see verifies the fixes its job's findings
-		// opened and people closed since (CF-06).
-		if in.OK {
+		// The fixes its job's findings opened and people or changes fixed
+		// since: verified when the run re-checked them inside its scope and
+		// found them gone (CF-06, CF-94).
+		if in.OK && in.Scope != nil {
 			for _, l := range tx.Lines() {
-				if !l.VerifyPending || l.Job != in.Job || l.Key == nil || !covered[l.Key.Cluster] || seenKeys[keyString(*l.Key, canon)] {
+				if !l.VerifyPending || l.Job != in.Job || l.Key == nil || !in.Scope.Has(l.Key.Cluster, l.Key.Object) {
+					continue
+				}
+				k := keyString(*l.Key, canon)
+				// Found again: routed above (reopened, or the fix did not
+				// hold). Left out past the cap: nothing is concluded.
+				if seenKeys[k] || leftOut[k] {
 					continue
 				}
 				c, err := tx.Case(l.Number)
 				if err != nil {
 					return err
 				}
+				x, ok := rechecked[k]
+				if !ok {
+					// Not re-checked: it keeps waiting (CF-95).
+					c.Unchecked++
+					notRechecked++
+					continue
+				}
 				tx.By(c, sys)
+				if *x.Still {
+					if err := r.stillThere(c, x); err != nil {
+						return err
+					}
+					continue
+				}
+				c.VerifiedBy = &issues.VerifiedBy{Run: in.Run, Job: in.Label, At: now, Evidence: x.Evidence}
 				if c.Status.Open() && c.AppliedBy != nil {
 					f, err := verifyApplied(tx, c, in, now)
 					if err != nil {
@@ -188,7 +234,7 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 					fixed = append(fixed, f)
 				} else {
 					c.VerifyPending, c.Verified, c.Updated = false, &now, now
-					if err := tx.Note(c, system.Person, fmt.Sprintf("The fix is verified: %s (%s) did not find it again.", in.Run, in.Label), true); err != nil {
+					if err := tx.Note(c, system.Person, fmt.Sprintf("The fix is verified: %s (%s) re-checked it%s.", in.Run, in.Label, evidenceWords(x.Evidence)), true); err != nil {
 						return err
 					}
 				}
@@ -202,17 +248,26 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 			if k.Status != issues.KnownResolved || !slices.Contains(k.VerifyJobs, in.Job) {
 				continue
 			}
-			still := false
+			// One of its keys seen again (or re-checked and still there)
+			// reopens it; every key inside the run's scope, none seen and
+			// none left out past the cap, the job is done with it.
+			still, all, read := false, true, false
 			for _, x := range k.Keys {
-				if covered[x.Cluster] && seenKeys[keyString(x.Key, canon)] {
+				ks := keyString(x.Key, canon)
+				if seenKeys[ks] || rechecked[ks].Still != nil && *rechecked[ks].Still {
 					still = true
 				}
+				if !in.Scope.Has(x.Cluster, x.Object) || leftOut[ks] {
+					all = false
+					continue
+				}
+				read = true
 			}
 			switch {
 			case still:
 				k.Status, k.Resolved, k.VerifyJobs, k.Pending, k.Updated = issues.KnownInvestigating, nil, nil, true, now
 				k.Log(issues.Update{At: now, By: system.Person, Status: issues.KnownInvestigating, Text: fmt.Sprintf("Still seen by %s (%s) after it was resolved: reopened.", in.Run, in.Label)})
-			case in.OK:
+			case in.OK && read && all:
 				k.VerifyJobs = slices.DeleteFunc(k.VerifyJobs, func(j string) bool { return j == in.Job })
 			}
 		}
@@ -220,8 +275,9 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 	})
 	if err != nil {
 		s.o.Logger.Warn("a run's findings could not be routed into cases", "run", in.Run, "err", err)
-		return jobs.RouteResult{Findings: in.Findings}
+		return jobs.RouteResult{Findings: in.Findings, NotRouted: "the cases could not be saved: " + clip(err.Error(), 300)}
 	}
+	out.NotRechecked = notRechecked
 	if err := s.o.Lessons.Match(ctx, hits, now); err != nil {
 		s.o.Logger.Warn("the exceptions' matches could not be counted", "run", in.Run, "err", err)
 	}
@@ -275,7 +331,7 @@ func lowestWords(p *int) string {
 // enqueue queues a case new to the people who work the cases for its
 // analysis (CF-32): at P0-P2, while the case analysis job is on for its
 // cluster.
-func (r *router) enqueue(c *issues.Report) {
+func (r *router) enqueue(c *issues.Case) {
 	if c.Priority > 2 || !r.queue[c.Cluster] || !c.Status.Open() {
 		return
 	}
@@ -377,7 +433,7 @@ func (r *router) by(f *jobs.Finding, k issues.Key, n, depth int) error {
 // open opens a new agent-found case of a finding: a regression of an
 // earlier case closed as fixed, or with the explanation of one closed as
 // needing no action (CF-90); capped past the run's newCasesPerRun.
-func (r *router) open(f *jobs.Finding, k issues.Key, earlier *issues.Report) error {
+func (r *router) open(f *jobs.Finding, k issues.Key, earlier *issues.Case) error {
 	if r.opened >= r.cap {
 		f.Routing = jobs.RoutedCapped
 		return nil
@@ -434,12 +490,12 @@ type autoFix struct {
 // P1 the case closes as fixed by the console, with no RCA, its fix
 // verified; at P0-P1 it is marked verified and stays In progress until a
 // person gives the fix with its RCA (CF-30).
-func verifyApplied(tx *issues.Tx, c *issues.Report, in jobs.RouteInput, now time.Time) (autoFix, error) {
+func verifyApplied(tx *issues.Tx, c *issues.Case, in jobs.RouteInput, now time.Time) (autoFix, error) {
 	a := c.AppliedBy
 	f := autoFix{Number: c.Number, Cluster: c.Cluster}
 	if c.RCARequired() {
 		c.VerifyPending, c.Verified, c.Verification, c.Updated = false, &now, issues.VerifyVerified, now
-		f.Text = fmt.Sprintf("The fix is verified: %s (%s) did not find it again after change %s; add the RCA to close it.", in.Run, in.Label, a.Card)
+		f.Text = fmt.Sprintf("The fix is verified: %s (%s) re-checked it after change %s%s; add the RCA to close it.", in.Run, in.Label, a.Card, evidenceWords(verifiedEvidence(c)))
 		return f, tx.Note(c, system.Person, f.Text, true)
 	}
 	f.Closed = true
@@ -447,6 +503,43 @@ func verifyApplied(tx *issues.Tx, c *issues.Report, in jobs.RouteInput, now time
 	issues.CloseCase(c, system.Person, issues.OutcomeFix, f.Text, now)
 	c.VerifyPending, c.Verified = false, &now
 	return f, tx.Note(c, system.Person, f.Text+".", true)
+}
+
+// verifiedEvidence is what the run that verified a case's fix read.
+func verifiedEvidence(c *issues.Case) string {
+	if c.VerifiedBy == nil {
+		return ""
+	}
+	return c.VerifiedBy.Evidence
+}
+
+// evidenceWords ends a note with what a run read, when it said.
+func evidenceWords(evidence string) string {
+	if evidence = strings.TrimSpace(evidence); evidence == "" {
+		return ""
+	}
+	return ": " + strings.TrimRight(evidence, ".")
+}
+
+// stillThere is a waiting fix the run re-checked and found still there,
+// with no finding for it (W-1): as when it is found again, a case closed
+// as fixed reopens, and an open one a change was applied to keeps going,
+// the fix did not hold (CF-06, CF-30).
+func (r *router) stillThere(c *issues.Case, x jobs.Recheck) error {
+	if c.Status.Open() {
+		c.VerifyPending, c.Verified, c.Verification, c.Updated = false, nil, issues.VerifyNotHeld, r.now
+		change := "it was fixed"
+		if c.AppliedBy != nil {
+			change = "change " + c.AppliedBy.Card
+		}
+		return r.tx.Note(c, system.Person, fmt.Sprintf("The fix did not hold: %s (%s) re-checked it after %s%s.", r.in.Run, r.in.Label, change, evidenceWords(x.Evidence)), true)
+	}
+	issues.ReopenCase(c, r.now)
+	if err := r.tx.Note(c, system.Person, fmt.Sprintf("Reopened: the fix did not hold; %s (%s) re-checked it%s.", r.in.Run, r.in.Label, evidenceWords(x.Evidence)), true); err != nil {
+		return err
+	}
+	r.enqueue(c)
+	return nil
 }
 
 // noteFixed puts the cases a run verified after a change in their history
@@ -531,20 +624,31 @@ func (s *Service) ChecksSeen(ctx context.Context) map[string][]string {
 }
 
 // KeysInUse are the keys on a cluster an agent's task lists (CF-10): the
-// open agent-found cases, the known issues still present, and the active
-// exceptions up to exceptionsPerAgent, the most recently matched first.
+// open agent-found cases, the cases whose fix waits for verification
+// (closed as fixed, or a change applied), said as such so the job that
+// found them re-checks them (W-4, CF-96), the known issues still present,
+// and the active exceptions up to exceptionsPerAgent, the most recently
+// matched first.
 //
 // A key under an id a rule replaced is listed under the rule (ADR-138),
 // so the agent names it by the rule from then on.
-func (s *Service) KeysInUse(ctx context.Context, cluster string) []jobs.KeyInUse {
+//
+// An exception that cannot be read is an error (W-7): the caller says so,
+// and does not take the list for all there is.
+func (s *Service) KeysInUse(ctx context.Context, cluster string) ([]jobs.KeyInUse, error) {
 	canon := s.rules.set(ctx).Canon
 	var out []jobs.KeyInUse
 	lines, err := s.o.Issues.Index(ctx)
 	if err == nil {
 		for _, l := range lines {
-			if l.AgentFound && l.Open() && l.Key != nil && l.Key.Cluster == cluster {
-				out = append(out, jobs.KeyInUse{Key: jobs.Key{Cluster: cluster, Object: l.Key.Object, Check: canon(l.Key.Check)}, What: "case " + caseID(l.Number), Title: l.Title})
+			if !l.AgentFound || l.Key == nil || l.Key.Cluster != cluster || !l.Open() && !l.VerifyPending {
+				continue
 			}
+			k := jobs.KeyInUse{Key: jobs.Key{Cluster: cluster, Object: l.Key.Object, Check: canon(l.Key.Check)}, What: "case " + caseID(l.Number), Title: l.Title, Job: l.Job}
+			if l.VerifyPending {
+				k.What, k.Recheck = "fix applied, re-check: "+caseID(l.Number), true
+			}
+			out = append(out, k)
 		}
 	}
 	if known, err := s.o.Issues.Known(ctx, system, true); err == nil {
@@ -559,7 +663,10 @@ func (s *Service) KeysInUse(ctx context.Context, cluster string) []jobs.KeyInUse
 			}
 		}
 	}
-	list, _ := s.o.Lessons.Exceptions(ctx)
+	list, err := s.o.Lessons.Exceptions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("the exceptions could not be read: %w", err)
+	}
 	now := s.now()
 	var active []lessons.Exception
 	for _, e := range list {
@@ -574,7 +681,7 @@ func (s *Service) KeysInUse(ctx context.Context, cluster string) []jobs.KeyInUse
 	for _, e := range active {
 		out = append(out, jobs.KeyInUse{Key: jobs.Key{Cluster: cluster, Object: e.Resource, Check: canon(e.Check)}, What: "exception " + e.ID, Title: e.Title})
 	}
-	return out
+	return out, nil
 }
 
 var _ jobs.Router = (*Service)(nil)

@@ -148,13 +148,13 @@ type Message struct {
 	SentBy *Person `json:"sentBy,omitempty"`
 }
 
-// Report is one case (IS-01 to IS-15; CU-01; CF-01): the one record of a
+// Case is one case (IS-01 to IS-15; CU-01; CF-01): the one record of a
 // problem someone works on until it is closed, whether a person reported
 // it (the report page, the avatar menu, Sherlock's "Report this", the
 // issue API v1), opened it in the console (New Case, an alert), or an
 // agent found it (a finding of a job's run). The API keeps calling it a
 // report.
-type Report struct {
+type Case struct {
 	Number int `json:"number"`
 	// Title is the case in a line, as the person who opened it or an
 	// operator wrote it; a report without one shows its first line.
@@ -197,6 +197,12 @@ type Report struct {
 	// agent-found case; Verified is when a run did not find it again.
 	VerifyPending bool       `json:"verifyPending,omitempty"`
 	Verified      *time.Time `json:"verified,omitempty"`
+	// VerifiedBy is the run that verified the fix and what it read when
+	// it re-checked it; Unchecked counts the runs of its job, with the
+	// case in their scope, that did not re-check it while it waited
+	// (phase 12 review, W-1, I-1).
+	VerifiedBy *VerifiedBy `json:"verifiedBy,omitempty"`
+	Unchecked  int         `json:"unchecked,omitempty"`
 	// SLAFrom is when its SLA clock started: at once for a case a person
 	// opened, at P0-P1 only for an agent-found one (CF-02); nil is no SLA.
 	SLAFrom *time.Time `json:"slaFrom,omitempty"`
@@ -320,6 +326,15 @@ func (a *AppliedChange) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// VerifiedBy is the run that verified a fix (W-1, I-1): the run, its
+// job's label, when, and what the agent read when it re-checked it.
+type VerifiedBy struct {
+	Run      string    `json:"run"`
+	Job      string    `json:"job,omitempty"`
+	At       time.Time `json:"at"`
+	Evidence string    `json:"evidence,omitempty"`
+}
+
 // How the run after a change applied saw an agent-found case (CF-30).
 const (
 	// VerifyWaiting is a fix applied, the next run of the job not yet.
@@ -361,7 +376,7 @@ type PreviousClose struct {
 }
 
 // watchedBy reports whether a person follows the report.
-func (r *Report) watchedBy(id string) bool {
+func (r *Case) watchedBy(id string) bool {
 	for _, w := range r.Watchers {
 		if w.ID == id {
 			return true
@@ -371,7 +386,7 @@ func (r *Report) watchedBy(id string) bool {
 }
 
 // nextMessageID is the ID the report's next message takes.
-func (r *Report) nextMessageID() int {
+func (r *Case) nextMessageID() int {
 	n := 0
 	for _, m := range r.Messages {
 		n = max(n, m.ID)

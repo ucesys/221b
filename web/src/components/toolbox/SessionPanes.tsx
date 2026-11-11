@@ -109,18 +109,28 @@ export function SessionPane({ cluster, session: s, admin, dark, controls, onToas
     <div className="rk-dph" style={{ flexWrap: 'wrap' }}>
       <h2>{s.tool === 'forward' ? 'Port forward' : toolLabel(s.tool)}</h2>
       <small className="rk-mono" title={s.summary}>
-        {HOST_TOOLS.includes(s.tool) ? `node ${s.request.node}${s.pod ? ' · pod ' + s.pod : ''}${s.tool === 'ssh-pair' && s.request.loginUser ? ' · as ' + s.request.loginUser : ''}` : `${s.namespace ?? s.request.namespace}/${s.pod ?? s.request.pod ?? ''}${s.container ? ' · ' + s.container : ''}`}
+        {HOST_TOOLS.includes(s.tool)
+          ? `node ${s.request.node}${s.pod ? ' · pod ' + s.pod : ''}${s.tool === 'ssh-pair' && s.request.loginUser ? ' · as ' + s.request.loginUser : ''}`
+          : `${s.namespace ?? s.request.namespace}/${s.pod ?? s.request.pod ?? ''}${s.container ? ' · ' + s.container : ''}`}
       </small>
       <span style={{ flex: '1 1 auto' }} />
       {!s.mine && <span className="rk-pill">{s.owner}’s</span>}
-      {s.approver && <span className="rk-pill" data-tone="info">Approved by {s.approver}</span>}
+      {s.approver && (
+        <span className="rk-pill" data-tone="info">
+          Approved by {s.approver}
+        </span>
+      )}
       {live && s.ends && (
         <span className="rk-pill" title={`The hard limit: ${fmtTs(s.ends)}`}>
           Ends {fmtClock(s.ends)} · {Math.max(0, Math.round(limit / 60))} min
         </span>
       )}
       {s.recorded && <span className="rk-pill">Recorded</span>}
-      {(s.watchers?.length ?? 0) > 0 && <span className="rk-pill" data-tone="warn">Watched by {s.watchers!.join(', ')}</span>}
+      {(s.watchers?.length ?? 0) > 0 && (
+        <span className="rk-pill" data-tone="warn">
+          Watched by {s.watchers!.join(', ')}
+        </span>
+      )}
       {s.recorded && (s.mine || admin) && (
         <a className="rk-btn" href={transcriptHref(cluster, s.id)} download>
           <DownloadIcon />
@@ -242,7 +252,8 @@ function ForwardBody({ s, now }: { s: SessionView; now: number }) {
       {s.token && s.state !== 'ended' && <CopyLine text={s.token} label="The forward’s token" secret />}
       {s.cli && !connected && s.state !== 'ended' && (
         <p className="tb-hint" style={{ margin: 0 }}>
-          The <span className="rk-mono">221b</span> command comes with each release. It asks for the token, which is this forward’s alone and ends with it; a script sets <span className="rk-mono">TWOTWENTYONEB_TOKEN</span> instead. The session waits 5 minutes for it.
+          The <span className="rk-mono">221b</span> command comes with each release. It asks for the token, which is this forward’s alone and ends with it; a script sets <span className="rk-mono">TWOTWENTYONEB_TOKEN</span> instead. The
+          session waits 5 minutes for it.
         </p>
       )}
       <div className="tb-stats">
@@ -287,15 +298,23 @@ function ForwardBody({ s, now }: { s: SessionView; now: number }) {
             </tr>
           </thead>
           <tbody>
-            {f!.conns!
-              .slice()
+            {f!
+              .conns!.slice()
               .reverse()
               .map((c) => (
                 <tr key={c.id}>
                   <td className="rk-mono">{c.id}</td>
                   <td className="rk-mono">{c.from || '—'}</td>
                   <td>{fmtClock(c.opened, { seconds: true })}</td>
-                  <td>{c.closed && !c.closed.startsWith('0001') ? fmtClock(c.closed, { seconds: true }) : <span className="rk-t" data-tone="ok">open</span>}</td>
+                  <td>
+                    {c.closed && !c.closed.startsWith('0001') ? (
+                      fmtClock(c.closed, { seconds: true })
+                    ) : (
+                      <span className="rk-t" data-tone="ok">
+                        open
+                      </span>
+                    )}
+                  </td>
                   <td className="rk-num">{fBytes(c.bytes)}</td>
                 </tr>
               ))}

@@ -91,7 +91,7 @@ func (s *Service) Tick(ctx context.Context) {
 			delete(rec.Analyzing, strconv.Itoa(n))
 			return nil
 		})
-		s.note(ctx, n, Event{At: now, What: "The analysis stopped: the replica running it went down or lost the lead; analyse it again"})
+		s.note(ctx, n, Event{At: now, What: "The analysis stopped: the replica running it went down or lost the lead; analyze it again"})
 		s.record(audit.Event{Action: ActionAnalyze, Who: audit.Who{Subject: "221b", Name: "case analysis"}, Target: caseID(n), Outcome: audit.OutcomeFailed, Detail: fmt.Sprintf("case %s: its analysis stopped with the replica running it", caseID(n))})
 	}
 }

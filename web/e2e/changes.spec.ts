@@ -90,8 +90,8 @@ async function audit(page: Page): Promise<Run> {
   return run
 }
 
-const getCase = async (page: Page, id: string) => (await api(page, 'GET', `/api/v1/cases/cases/${id}`)).json as Case
-const getCard = async (page: Page, id: string) => (await api(page, 'GET', `/api/v1/cases/proposals/${id}`)).json as Card
+const getCase = async (page: Page, id: string) => (await api(page, 'GET', `/api/v1/aiops/cases/${id}`)).json as Case
+const getCard = async (page: Page, id: string) => (await api(page, 'GET', `/api/v1/aiops/proposals/${id}`)).json as Card
 
 // What the tests share, in order: the case the audit's finding went to,
 // the change that resolves it, and the chat's change a person links.
@@ -118,9 +118,9 @@ test.afterAll(async ({ browser }) => {
   const page = await browser.newPage()
   await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
-  const queued = ((await api(page, 'GET', '/api/v1/cases/proposals?state=queued')).json as { proposals?: Card[] } | null)?.proposals ?? []
-  for (const c of queued.filter((p) => p.id === chatId || (caseId && p.resolves?.includes(caseId)))) await api(page, 'POST', `/api/v1/cases/proposals/${c.id}/reject`, { reason: 'e2e: done' })
-  if (caseId && (await getCase(page, caseId)).status !== 'closed') await api(page, 'POST', `/api/v1/cases/cases/${caseId}/close`, { outcome: 'noAction', explanation: 'e2e: done' })
+  const queued = ((await api(page, 'GET', '/api/v1/aiops/proposals?state=queued')).json as { proposals?: Card[] } | null)?.proposals ?? []
+  for (const c of queued.filter((p) => p.id === chatId || (caseId && p.resolves?.includes(caseId)))) await api(page, 'POST', `/api/v1/aiops/proposals/${c.id}/reject`, { reason: 'e2e: done' })
+  if (caseId && (await getCase(page, caseId)).status !== 'closed') await api(page, 'POST', `/api/v1/aiops/cases/${caseId}/close`, { outcome: 'noAction', explanation: 'e2e: done' })
   await api(page, 'PUT', '/api/v1/jobs/nightly-audit', { clusters: [] })
   await api(page, 'PUT', '/api/v1/sherlock/config', { ...ON, clusters: {} })
   await page.close()
@@ -150,13 +150,13 @@ test('the audit’s proposed change resolves the case its finding went to: the r
   expect(card.resolvesBy?.[caseId]).toBe('agent')
 
   // The run: what each change resolves, linked to the case.
-  await page.goto(`/#/cases/jobs/runs/${run.id}`)
+  await page.goto(`/#/aiops/jobs/runs/${run.id}`)
   const detail = page.getByTestId('run-detail')
   const row = detail.getByTestId('run-proposal').filter({ hasText: p!.title }).first()
   await expect(row).toHaveAttribute('data-filed', 'true')
   await expect(row.getByTestId('run-proposal-resolves')).toContainText(caseId)
   await row.getByTestId('run-proposal-resolves-link').filter({ hasText: caseId }).click()
-  await expect(page).toHaveURL(new RegExp(`#/cases/inbox/case/${caseNumber}$`))
+  await expect(page).toHaveURL(new RegExp(`#/aiops/inbox/case/${caseNumber}$`))
 
   // The case lists the change, named by the agent, linked to its drawer.
   const drawer = page.getByTestId('case-drawer')
@@ -167,21 +167,21 @@ test('the audit’s proposed change resolves the case its finding went to: the r
   await expect(listed.getByTestId('case-card-unlink')).toHaveCount(0)
 
   // The Inbox row of the change, and its drawer, say what it resolves.
-  await page.goto('/#/cases/inbox')
+  await page.goto('/#/aiops/inbox')
   const inboxRow = page.locator(`[data-inbox-row="proposal:${cardId}"]`)
   await expect(inboxRow.getByTestId('inbox-row-resolves')).toContainText(caseId)
   // Its address of before, c<n>, opens it as PC-<n> (CF-56).
-  await page.goto(`/#/cases/inbox/proposal/${cardId.replace('PC-', 'c')}`)
-  await expect(page).toHaveURL(new RegExp(`#/cases/inbox/proposal/${cardId}$`))
+  await page.goto(`/#/aiops/inbox/proposal/${cardId.replace('PC-', 'c')}`)
+  await expect(page).toHaveURL(new RegExp(`#/aiops/inbox/proposal/${cardId}$`))
   const proposal = page.getByTestId('proposal-drawer')
   await expect(proposal.getByTestId('proposal-resolves')).toContainText(caseId)
-  await expect(proposal.getByTestId('resolves-link').filter({ hasText: caseId })).toHaveAttribute('href', `#/cases/inbox/case/${caseNumber}`)
+  await expect(proposal.getByTestId('resolves-link').filter({ hasText: caseId })).toHaveAttribute('href', `#/aiops/inbox/case/${caseNumber}`)
 })
 
 test('approved and applied, the change puts the case In progress, waiting for the next run to check; the next run still sees it: the fix did not hold (CF-29 to CF-31)', async ({ page }) => {
   // Approved in its drawer, as a person does: Run in Watson brings its
   // card to the drawer's Watson, which asks; Watson runs it as them (CF-62).
-  await page.goto(`/#/cases/inbox/proposal/${cardId}`)
+  await page.goto(`/#/aiops/inbox/proposal/${cardId}`)
   const proposal = page.getByTestId('proposal-drawer')
   await expect(proposal.getByTestId('proposal-run-watson')).toBeEnabled()
   await proposal.getByTestId('proposal-run-watson').click()
@@ -205,7 +205,7 @@ test('approved and applied, the change puts the case In progress, waiting for th
   const c = await getCase(page, caseId)
   expect(c.status).toBe('inProgress')
   expect(c.fixApplied?.change).toBe(cardId)
-  await page.goto(`/#/cases/inbox/case/${caseNumber}`)
+  await page.goto(`/#/aiops/inbox/case/${caseNumber}`)
   const drawer = page.getByTestId('case-drawer')
   await expect(drawer.getByTestId('case-status')).toHaveText('In progress')
   const banner = drawer.getByTestId('case-verification')
@@ -215,14 +215,14 @@ test('approved and applied, the change puts the case In progress, waiting for th
   await expect(drawer.locator(`[data-testid="case-card"][data-id="${cardId}"]`)).toContainText('Applied')
   await expect(drawer.getByTestId('case-fix-applied')).toContainText(`Fix applied by change ${cardId}`)
   // The Inbox badges the case: read afresh, not at its half-minute turn.
-  await page.goto('/#/cases/inbox?source=agents')
+  await page.goto('/#/aiops/inbox?source=agents')
   await page.reload()
   await expect(page.locator(`[data-inbox-row="case:${caseNumber}"]`).getByTestId('inbox-row-verification')).toHaveText('fix applied')
 
   // The fake audit finds the same problem again: the fix did not hold, and the case stays In progress.
   await audit(page)
   await expect.poll(async () => (await getCase(page, caseId)).verification, { timeout: 30_000 }).toBe('notHeld')
-  await page.goto(`/#/cases/inbox/case/${caseNumber}`)
+  await page.goto(`/#/aiops/inbox/case/${caseNumber}`)
   await expect(drawer.getByTestId('case-verification')).toHaveAttribute('data-state', 'notHeld')
   await expect(drawer.getByTestId('case-verification')).toContainText('The fix did not hold.')
   await expect(drawer.getByTestId('case-status')).toHaveText('In progress')
@@ -238,7 +238,7 @@ test('a person links a change asked for in a chat from the case drawer, and unli
   let chat: Card | undefined
   await expect
     .poll(async () => {
-      const list = ((await api(page, 'GET', '/api/v1/cases/proposals?cluster=local')).json as { proposals: Card[] }).proposals
+      const list = ((await api(page, 'GET', '/api/v1/aiops/proposals?cluster=local')).json as { proposals: Card[] }).proposals
       chat = list.find((p) => p.source.kind === 'chat' && p.title === command)
       return !!chat
     })
@@ -247,7 +247,7 @@ test('a person links a change asked for in a chat from the case drawer, and unli
   expect(chat!.resolves ?? []).toHaveLength(0)
 
   // Link a change: found by what it does, picked, linked.
-  await page.goto(`/#/cases/inbox/case/${caseNumber}`)
+  await page.goto(`/#/aiops/inbox/case/${caseNumber}`)
   const drawer = page.getByTestId('case-drawer')
   await drawer.getByTestId('case-link-change').click()
   const dialog = page.getByTestId('confirm')
@@ -264,12 +264,12 @@ test('a person links a change asked for in a chat from the case drawer, and unli
   expect(linked.resolves).toContain(caseId)
   expect(linked.resolvesBy?.[caseId]).not.toBe('agent')
   // Linked twice is refused.
-  expect((await api(page, 'POST', `/api/v1/cases/cases/${caseId}/changes`, { card: chatId })).status).toBe(409)
+  expect((await api(page, 'POST', `/api/v1/aiops/cases/${caseId}/changes`, { card: chatId })).status).toBe(409)
 
   // Unlinked by a person; an agent's own link cannot be.
   await listed.getByTestId('case-card-unlink').click()
   await expect(listed).toHaveCount(0)
   expect((await getCard(page, chatId)).resolves ?? []).not.toContain(caseId)
-  expect((await api(page, 'DELETE', `/api/v1/cases/cases/${caseId}/changes/${cardId}`)).status).toBe(409)
+  expect((await api(page, 'DELETE', `/api/v1/aiops/cases/${caseId}/changes/${cardId}`)).status).toBe(409)
   await expect(drawer.locator(`[data-testid="case-card"][data-id="${cardId}"]`)).toBeVisible()
 })

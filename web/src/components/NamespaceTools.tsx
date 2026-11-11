@@ -93,7 +93,17 @@ export function NamespaceTools({ namespace, canCreate, onPick }: { namespace: st
       </button>
       {open &&
         createPortal(
-          <div ref={menu} className="tb-menu" role="menu" aria-label={`Tools for namespace ${namespace}`} style={style} onKeyDown={keys} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} data-testid="namespace-menu">
+          <div
+            ref={menu}
+            className="tb-menu"
+            role="menu"
+            aria-label={`Tools for namespace ${namespace}`}
+            style={style}
+            onKeyDown={keys}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            data-testid="namespace-menu"
+          >
             <div className="tb-mhead">
               Tools for namespace <span className="rk-mono">{namespace}</span>
             </div>

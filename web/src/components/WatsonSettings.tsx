@@ -99,10 +99,19 @@ export function WatsonSettings({ open }: { open: boolean }) {
               </span>
             </label>
             <p className="rk-fhint" style={{ margin: 0 }}>
-              With it on, Watson offers <i>Approve all for…</i>: for that long, every card the person could approve is approved as soon as it is ready, their own and, with the two-person rule, other people’s. Every other rule still applies, and the audit log names them as the approver.
+              With it on, Watson offers <i>Approve all for…</i>: for that long, every card the person could approve is approved as soon as it is ready, their own and, with the two-person rule, other people’s. Every other rule still applies,
+              and the audit log names them as the approver.
             </p>
           </section>
-          <SaveBar changed={draft !== cfg.twoPerson || approveAll !== (cfg.approveAllMinutes ?? 0)} busy={busy} onSave={() => void save()} onUndo={() => (setDraft(cfg.twoPerson), setApproveAll(cfg.approveAllMinutes ?? 0))} error={error} saved={saved} testId="watson-settings-save" />
+          <SaveBar
+            changed={draft !== cfg.twoPerson || approveAll !== (cfg.approveAllMinutes ?? 0)}
+            busy={busy}
+            onSave={() => void save()}
+            onUndo={() => (setDraft(cfg.twoPerson), setApproveAll(cfg.approveAllMinutes ?? 0))}
+            error={error}
+            saved={saved}
+            testId="watson-settings-save"
+          />
           {/* Phase 12: the agents' proposals, saved on their own. */}
           <StandingApprovals />
           <NotificationChannels />

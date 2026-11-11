@@ -24,7 +24,7 @@ func TestOneJobPerSourceKN28(t *testing.T) {
 				if err := env.Spend("claude-test", Tokens{In: 900, Out: 100}, 0.4); err != nil {
 					t.Errorf("the first spend is within the budget: %v", err)
 				}
-				return Outcome{Report: "Read.", Facts: []Fact{{Label: "Items read", Text: "2 changed items"}, {Label: "Pages drafted", Text: "1 waits", Href: "#/cases/inbox/knowledge/r-1"}, {Label: "Bad", Text: "x", Href: "https://elsewhere"}}}, nil
+				return Outcome{Report: "Read.", Facts: []Fact{{Label: "Items read", Text: "2 changed items"}, {Label: "Pages drafted", Text: "1 waits", Href: "#/aiops/inbox/knowledge/r-1"}, {Label: "Bad", Text: "x", Href: "https://elsewhere"}}}, nil
 			}}
 	}
 	w.kinds.Register(kind("wiki-sync-a"))
@@ -55,7 +55,7 @@ func TestOneJobPerSourceKN28(t *testing.T) {
 	if h, _ := r.Health(); h != "" {
 		t.Fatalf("a run of a kind without findings has no health: %q", h)
 	}
-	if len(r.Facts) != 3 || r.Facts[1].Href != "#/cases/inbox/knowledge/r-1" || r.Facts[2].Href != "" {
+	if len(r.Facts) != 3 || r.Facts[1].Href != "#/aiops/inbox/knowledge/r-1" || r.Facts[2].Href != "" {
 		t.Fatalf("the facts: %+v", r.Facts)
 	}
 

@@ -22,9 +22,7 @@ function operations(a: string[], b: string[]): Op[] {
     // table[i][j] is the longest common subsequence of x from i and y from j.
     const w = y.length + 1
     const table = new Uint32Array((x.length + 1) * w)
-    for (let i = x.length - 1; i >= 0; i--)
-      for (let j = y.length - 1; j >= 0; j--)
-        table[i * w + j] = x[i] === y[j] ? table[(i + 1) * w + j + 1]! + 1 : Math.max(table[(i + 1) * w + j]!, table[i * w + j + 1]!)
+    for (let i = x.length - 1; i >= 0; i--) for (let j = y.length - 1; j >= 0; j--) table[i * w + j] = x[i] === y[j] ? table[(i + 1) * w + j + 1]! + 1 : Math.max(table[(i + 1) * w + j]!, table[i * w + j + 1]!)
     let i = 0
     let j = 0
     while (i < x.length || j < y.length) {

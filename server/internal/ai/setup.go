@@ -50,9 +50,9 @@ func recordedSetup(rec []sherlock.Recorded) func(context.Context) string {
 	return nil
 }
 
-// --- Inbox and Sherlock in Cases (Phase 12) ---
+// --- Inbox and Sherlock in AIOps (Phase 12) ---
 
-// CasesSkill is the Cases skill's section of Sherlock's instructions
-// (IB-10, ADR-112): every page of the Cases area and what can be done
-// there, added while the person asks from Cases.
-func CasesSkill() string { return promptFile("cases") }
+// AIOpsSkill is the AIOps skill's section of Sherlock's instructions
+// (IB-10, ADR-112): every page of the AIOps area and what can be done
+// there, added while the person asks from AIOps.
+func AIOpsSkill() string { return promptFile("aiops") }

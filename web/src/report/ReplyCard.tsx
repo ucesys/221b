@@ -42,9 +42,7 @@ export function ReplyCard({ receipt, onUnlink }: ReplyCardProps) {
         <h2 id="rp-got" className="rp-h2">
           Received as case <strong>C-{report.number}</strong>
         </h2>
-        <span className="rk-dim">
-          {unlinked ? 'Thanks. We will look into it as a problem of its own and tell you here when we know more.' : 'We will look into it and tell you here when we know more.'}
-        </span>
+        <span className="rk-dim">{unlinked ? 'Thanks. We will look into it as a problem of its own and tell you here when we know more.' : 'We will look into it and tell you here when we know more.'}</span>
         {scrubbed}
       </section>
     )

@@ -563,6 +563,9 @@ func (s *Service) loop(ctx context.Context, a *Agent, q Question, task string, r
 	}
 	qa := q
 	qa.agent = a
+	if qa.Commands == "" {
+		qa.Commands = s.opts.Commands
+	}
 	system := systemPrompt(qa, s.opts.Now())
 	history := []Message{{Role: "user", Content: []Block{{Type: "text", Text: task}}}}
 	client := s.clientOf(a)
@@ -627,7 +630,7 @@ func (s *Service) loop(ctx context.Context, a *Agent, q Question, task string, r
 			r.lock()
 			start = len(h.Steps)
 			for _, b := range calls {
-				h.Steps = append(h.Steps, Step{Label: s.labelOf(q, b), Tool: b.Name, Status: "running"})
+				h.Steps = append(h.Steps, Step{Label: s.labelOf(a, q, b), Tool: b.Name, Status: "running"})
 			}
 			h.Text = ""
 			r.unlock()
@@ -664,13 +667,13 @@ func (s *Service) loop(ctx context.Context, a *Agent, q Question, task string, r
 	}
 }
 
-// labelOf says what a call does, for the steps.
-func (s *Service) labelOf(q Question, b Block) string {
+// labelOf says what a call of agent a does, for the steps.
+func (s *Service) labelOf(a *Agent, q Question, b Block) string {
 	switch {
 	case b.Name == ToolHandOver:
 		var in handOverInput
 		_ = json.Unmarshal(b.Input, &in)
-		return "Ask " + in.Agent
+		return askedLabel(a, in.Agent)
 	case b.Name == ToolAskKnowledge:
 		return "Ask the knowledge base"
 	case b.Name == ToolCheckCommand:
@@ -683,6 +686,22 @@ func (s *Service) labelOf(q Question, b Block) string {
 		return q.Tools.Label(b.Name, b.Input)
 	}
 	return b.Name
+}
+
+// askedLabel is the step of a hand-over to the agent id, by the name a's
+// roster gives it (S-6): "Asked the Change planner", and "Asked Mycroft"
+// for an agent named as a person is.
+func askedLabel(a *Agent, id string) string {
+	name := id
+	if a != nil {
+		if i := slices.IndexFunc(a.Roster, func(e RosterEntry) bool { return e.ID == id }); i >= 0 && a.Roster[i].Name != "" {
+			name = a.Roster[i].Name
+		}
+	}
+	if name == "Sherlock" || name == "Mycroft" || name == id {
+		return "Asked " + name
+	}
+	return "Asked the " + name
 }
 
 // recordAgent writes an agent call's audit record (Phase 12): the agent,

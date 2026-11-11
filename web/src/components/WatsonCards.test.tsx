@@ -34,7 +34,14 @@ describe('Settings › Watson: standing approvals', () => {
     fireEvent.change(screen.getByLabelText('At most, an hour'), { target: { value: '3' } })
     fireEvent.click(screen.getByTestId('standing-save'))
     await waitFor(() => expect(api.saveStanding).toHaveBeenCalled())
-    expect(vi.mocked(api.saveStanding).mock.calls[0]![0]).toMatchObject({ name: 'Restart crash-looping pods in development', clusters: ['dev-1', 'staging'], actions: ['kubectl rollout restart', 'kubectl delete pod'], condition: 'alert-firing', perHour: 3, on: true })
+    expect(vi.mocked(api.saveStanding).mock.calls[0]![0]).toMatchObject({
+      name: 'Restart crash-looping pods in development',
+      clusters: ['dev-1', 'staging'],
+      actions: ['kubectl rollout restart', 'kubectl delete pod'],
+      condition: 'alert-firing',
+      perHour: 3,
+      on: true,
+    })
     await waitFor(() => expect(api.fetchStanding).toHaveBeenCalledTimes(2))
   })
 

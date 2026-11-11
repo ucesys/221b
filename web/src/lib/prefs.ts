@@ -47,7 +47,11 @@ export function setPref(key: string, value: unknown): void {
 
 /** A preference as React state: [value, set]. */
 export function usePref<T>(key: string, fallback: T): [T, (v: T) => void] {
-  useSyncExternalStore(subscribe, () => version, () => version)
+  useSyncExternalStore(
+    subscribe,
+    () => version,
+    () => version,
+  )
   const value = getPref<T>(key, fallback)
   const set = useCallback((v: T) => setPref(key, v), [key])
   return [value, set]

@@ -17,10 +17,7 @@ const ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, 
 const LOG_PLANTED = ['LogPlanted-9f3K2xQ', 'LogPlantedKey-77QzXwv4']
 
 async function put(page: Page, path: string, body: unknown, method = 'PUT'): Promise<number> {
-  return page.evaluate(
-    async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) })).status,
-    [path, body, method] as const,
-  )
+  return page.evaluate(async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) })).status, [path, body, method] as const)
 }
 
 async function open(page: Page, hash = '#/nodes') {
@@ -101,9 +98,7 @@ test('Sherlock stays away until an administrator turns it on, and the key is nev
   await page.keyboard.press('Escape')
   await expect(dock(page)).toBeVisible()
   await expect(page.getByTestId('alert-troubleshoot').first()).toBeVisible()
-  await expect
-    .poll(async () => (await cluster.auditLog()).filter((r) => r.action === 'ai.key' || r.action === 'ai.settings').length, { timeout: 15_000 })
-    .toBeGreaterThanOrEqual(2)
+  await expect.poll(async () => (await cluster.auditLog()).filter((r) => r.action === 'ai.key' || r.action === 'ai.settings').length, { timeout: 15_000 }).toBeGreaterThanOrEqual(2)
   expect(JSON.stringify(await cluster.auditLog())).not.toContain(KEY)
 })
 
@@ -144,9 +139,7 @@ test('a question streams from the tools, cites what it read, and every cited lin
   }
 
   // The question is audited with its tools and tokens.
-  await expect
-    .poll(async () => (await cluster.auditLog()).some((r) => r.action === 'sherlock.ask' && String(r.detail ?? '').includes('tools [list_alerts]') && String(r.detail ?? '').includes('tokens in')), { timeout: 15_000 })
-    .toBe(true)
+  await expect.poll(async () => (await cluster.auditLog()).some((r) => r.action === 'sherlock.ask' && String(r.detail ?? '').includes('tools [list_alerts]') && String(r.detail ?? '').includes('tokens in')), { timeout: 15_000 }).toBe(true)
 })
 
 test('the panel resizes, maximizes over the page and minimizes to an icon (P5-01)', async ({ page }) => {
@@ -206,7 +199,12 @@ test('the round button stays clear of what a drawer has at the bottom right', as
   const del = page.getByTestId('group-delete')
   await expect(del).toBeVisible()
   const left = (await fab.boundingBox())!.x
-  await expect.poll(async () => { const a = (await del.boundingBox())!; return a.x + a.width }).toBeLessThanOrEqual(left)
+  await expect
+    .poll(async () => {
+      const a = (await del.boundingBox())!
+      return a.x + a.width
+    })
+    .toBeLessThanOrEqual(left)
   await del.click()
   await expect(page.getByTestId('group-drawer')).toHaveCount(0)
 })
@@ -379,7 +377,13 @@ test('Sherlock moves to a window of its own, with Watson, and back, and the main
 
   // Docking it back closes the window, and the conversation is here.
   // The window closes as the click lands, which the click may report.
-  await Promise.all([popup.waitForEvent('close'), popup.locator('[data-testid=assistants-dock-back]:visible').click().catch(() => undefined)])
+  await Promise.all([
+    popup.waitForEvent('close'),
+    popup
+      .locator('[data-testid=assistants-dock-back]:visible')
+      .click()
+      .catch(() => undefined),
+  ])
   expect(popup.isClosed()).toBe(true)
   await expect(dock(page)).toBeVisible({ timeout: 10_000 })
   await expect(page.getByTestId('sherlock-question').last()).toHaveText(q)
@@ -467,7 +471,13 @@ test('the panel meets WCAG 2.2 AA, docked, maximized and in the settings (X-12)'
   const violations = async () => {
     await page.evaluate(() => Promise.allSettled(document.getAnimations().map((a) => a.finished)))
     const r = await new AxeBuilder({ page }).include('[data-testid=sherlock-dock], [data-testid=settings-page], [data-testid=sherlock-fab]').withTags(TAGS).analyze()
-    return r.violations.map((v) => `${v.id}: ${v.help} — ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(', ')}`)
+    return r.violations.map(
+      (v) =>
+        `${v.id}: ${v.help} — ${v.nodes
+          .slice(0, 3)
+          .map((n) => n.target.join(' '))
+          .join(', ')}`,
+    )
   }
   for (const theme of ['light', 'dark'] as const) {
     await page.addInitScript((t) => window.localStorage.setItem('221b.theme', JSON.stringify(t)), theme)

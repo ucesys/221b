@@ -173,6 +173,8 @@ type Service struct {
 	// severity.
 	seen  map[string]string
 	swept time.Time
+	// rerouted is when the runs not routed were last tried again (W-8).
+	rerouted time.Time
 	// alertCases are the cases the alert runs went to, as AlertCases last
 	// read them, and when (CF-77).
 	alertCases   map[string][]string
@@ -399,15 +401,23 @@ type RunBrief struct {
 	Proposals int     `json:"proposals"`
 	CostUSD   float64 `json:"costUSD"`
 	Model     string  `json:"model,omitempty"`
+	// NotRouted says why its findings were not routed into cases (W-8).
+	NotRouted string `json:"notRouted,omitempty"`
 	// Health is the worst of what it found, or failed, and Severities its
 	// findings by severity (JR-01).
 	Health     string `json:"health,omitempty"`
 	Severities Counts `json:"severities"`
+	// What the run could not be used for (I-3): a run done with a cluster
+	// that failed reads "Done, with errors" (W-2).
+	FailedClusters []string `json:"failedClusters,omitempty"`
+	LeftOut        *LeftOut `json:"leftOut,omitempty"`
+	NotRechecked   int      `json:"notRechecked,omitempty"`
 }
 
 func brief(r Run) RunBrief {
 	b := RunBrief{ID: r.ID, Job: r.Job, Label: r.Label, Agent: r.Agent, Trigger: r.Trigger, Subject: r.Subject, Repeats: r.Repeats, Ref: r.Ref, Clusters: r.Clusters,
-		Started: r.Started, Ended: r.Ended, Status: r.Status, Note: r.Note, Findings: len(r.Findings), Open: r.Open(), Routed: r.Routed, Proposals: len(r.Proposals), CostUSD: r.CostUSD, Model: r.Model}
+		Started: r.Started, Ended: r.Ended, Status: r.Status, Note: r.Note, Findings: len(r.Findings), Open: r.Open(), Routed: r.Routed, NotRouted: r.NotRouted, Proposals: len(r.Proposals), CostUSD: r.CostUSD, Model: r.Model,
+		FailedClusters: r.FailedClusters, LeftOut: r.LeftOut, NotRechecked: r.NotRechecked}
 	b.Health, b.Severities = r.Health()
 	return b
 }

@@ -45,10 +45,12 @@ export function isList(f: Pick<Fleet, 'kind'>): boolean {
 /** Whether a node is in a fleet: on its list, or with every one of its labels and taints. */
 export function has(f: Pick<Fleet, 'labels' | 'taints' | 'kind' | 'nodes'>, n: Pick<NodeRow, 'labels' | 'taints'> & { name?: string }): boolean {
   if (isList(f)) return !!n.name && (f.nodes ?? []).includes(n.name)
-  return f.labels.every((l) => {
-    const [k, v] = splitLabel(l)
-    return k in n.labels && n.labels[k] === v
-  }) && f.taints.every((t) => n.taints.some((x) => taintId(x) === t))
+  return (
+    f.labels.every((l) => {
+      const [k, v] = splitLabel(l)
+      return k in n.labels && n.labels[k] === v
+    }) && f.taints.every((t) => n.taints.some((x) => taintId(x) === t))
+  )
 }
 
 export interface Missing {
@@ -310,7 +312,12 @@ export function presets(cols: MxColumn[], nodes: NodeRow[], fleets: Pick<Fleet, 
   }
   const every = (c: MxColumn) => nodes.length > 0 && nodes.every((n) => mxHas(n, c))
   return [
-    { id: 'sys', label: 'Hide kubernetes.io labels', tip: 'kubernetes.io, beta.kubernetes.io and node.kubernetes.io labels', cols: cols.filter((c) => c.kind === 'l' && /^(beta\.kubernetes\.io|kubernetes\.io|node\.kubernetes\.io)\//.test(c.key)).map((c) => c.id) },
+    {
+      id: 'sys',
+      label: 'Hide kubernetes.io labels',
+      tip: 'kubernetes.io, beta.kubernetes.io and node.kubernetes.io labels',
+      cols: cols.filter((c) => c.kind === 'l' && /^(beta\.kubernetes\.io|kubernetes\.io|node\.kubernetes\.io)\//.test(c.key)).map((c) => c.id),
+    },
     { id: 'host', label: 'Hide hostnames', tip: 'One kubernetes.io/hostname column per node', cols: cols.filter((c) => c.kind === 'l' && c.key === 'kubernetes.io/hostname').map((c) => c.id) },
     { id: 'every', label: 'Hide columns every node has', tip: 'Labels and taints that every node shares tell no node apart', cols: cols.filter(every).map((c) => c.id) },
     { id: 'def', label: 'Only what defines a fleet', tip: 'Hides every label and taint that no fleet uses; roles stay', cols: cols.filter((c) => c.kind !== 'r' && !used.has(c.id)).map((c) => c.id) },
@@ -416,9 +423,15 @@ export function leaveNotes(f: Pick<Fleet, 'id' | 'labels' | 'taints'>, nodes: Pi
   const gone = new Set([...f.labels, ...f.taints])
   const inSel = new Set(nodes.map((n) => n.name))
   const others = rows.filter((r) => r.kind === 'fleet' && r.id !== f.id && [...r.labels, ...r.taints].some((x) => gone.has(x)) && r.members.some((m) => inSel.has(m)))
-  if (others.length) out.push(`${listText(others.map((r) => r.name!))} ${others.length === 1 ? 'needs' : 'need'} some of the same labels or taints, so ${nodes.length === 1 ? 'the node leaves' : 'these nodes leave'} ${others.length === 1 ? 'it' : 'them'} too.`)
+  if (others.length)
+    out.push(
+      `${listText(others.map((r) => r.name!))} ${others.length === 1 ? 'needs' : 'need'} some of the same labels or taints, so ${nodes.length === 1 ? 'the node leaves' : 'these nodes leave'} ${others.length === 1 ? 'it' : 'them'} too.`,
+    )
   const sys = f.labels.map((l) => splitLabel(l)[0]).filter((k) => /(^|\.)(kubernetes\.io|k8s\.io)\//.test(k))
-  if (sys.length) out.push(`${listText(sys)} ${sys.length === 1 ? 'is a label' : 'are labels'} Kubernetes or the kubelet may set; the kubelet can put ${sys.length === 1 ? 'it' : 'them'} back, and workloads may select on ${sys.length === 1 ? 'it' : 'them'}.`)
+  if (sys.length)
+    out.push(
+      `${listText(sys)} ${sys.length === 1 ? 'is a label' : 'are labels'} Kubernetes or the kubelet may set; the kubelet can put ${sys.length === 1 ? 'it' : 'them'} back, and workloads may select on ${sys.length === 1 ? 'it' : 'them'}.`,
+    )
   if (f.labels.length) out.push('Pods already running stay; new pods that select these labels no longer land on these nodes.')
   return out
 }

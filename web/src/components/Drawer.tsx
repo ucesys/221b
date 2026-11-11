@@ -74,7 +74,6 @@ export function useWide(min = SPLIT_MIN): boolean {
   return wide
 }
 
-
 /**
  * The prototype's details drawer: over the page from the right, with a
  * backdrop that closes it, a header with tabs, and a scrolling body.
@@ -157,7 +156,11 @@ export function Drawer({ label, kicker, title, heading, facts, tabs, tab, onTab,
     }
   }, [tab, children])
   return (
-    <div style={{ position: 'fixed', top: size === 'full' ? 'var(--hdr-h, 0px)' : 0, right: 0, bottom: 'var(--dock-space, 0px)', left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }} data-by-sherlock={bySherlock ? 'true' : undefined} data-split={split ? 'true' : undefined}>
+    <div
+      style={{ position: 'fixed', top: size === 'full' ? 'var(--hdr-h, 0px)' : 0, right: 0, bottom: 'var(--dock-space, 0px)', left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }}
+      data-by-sherlock={bySherlock ? 'true' : undefined}
+      data-split={split ? 'true' : undefined}
+    >
       <button aria-label={`Close ${label.toLowerCase()}`} tabIndex={-1} onClick={onClose} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
       <aside
         ref={aside}
@@ -177,7 +180,17 @@ export function Drawer({ label, kicker, title, heading, facts, tabs, tab, onTab,
             trapTab(e)
           }
         }}
-        style={{ position: 'relative', width: size === 'full' ? 'min(96vw, 100%)' : `min(${width}px, 100%)`, height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderLeft: '1px solid var(--line)', boxShadow: 'var(--shadow)', outline: 'none' }}
+        style={{
+          position: 'relative',
+          width: size === 'full' ? 'min(96vw, 100%)' : `min(${width}px, 100%)`,
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          background: 'var(--surface)',
+          borderLeft: '1px solid var(--line)',
+          boxShadow: 'var(--shadow)',
+          outline: 'none',
+        }}
         data-size={size}
       >
         <div style={{ flex: 'none', padding: '16px 20px 0', display: 'flex', flexDirection: 'column', gap: 10, borderBottom: '1px solid var(--line)' }}>
@@ -198,16 +211,16 @@ export function Drawer({ label, kicker, title, heading, facts, tabs, tab, onTab,
           {facts && <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 16px', fontSize: 12, color: 'var(--fg3)' }}>{facts}</div>}
           {(tabs?.length || tabsEnd) && (
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 16px' }}>
-          {tabs && tabs.length > 0 && (
-            <nav aria-label={`${label} sections`} style={{ display: 'flex', flexWrap: 'wrap', gap: '0 20px' }}>
-              {tabs.map((t) => (
-                <button key={t.id} className="rk-tab" aria-current={tab === t.id ? 'page' : undefined} onClick={() => onTab?.(t.id)} style={{ height: 38 }} data-dtab={t.id}>
-                  {t.label}
-                  {t.count !== undefined && t.count !== 0 && <span className="rk-count">{t.count}</span>}
-                </button>
-              ))}
-            </nav>
-          )}
+              {tabs && tabs.length > 0 && (
+                <nav aria-label={`${label} sections`} style={{ display: 'flex', flexWrap: 'wrap', gap: '0 20px' }}>
+                  {tabs.map((t) => (
+                    <button key={t.id} className="rk-tab" aria-current={tab === t.id ? 'page' : undefined} onClick={() => onTab?.(t.id)} style={{ height: 38 }} data-dtab={t.id}>
+                      {t.label}
+                      {t.count !== undefined && t.count !== 0 && <span className="rk-count">{t.count}</span>}
+                    </button>
+                  ))}
+                </nav>
+              )}
               {tabsEnd && <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, padding: tabs?.length ? 0 : '0 0 10px' }}>{tabsEnd}</div>}
             </div>
           )}
@@ -225,13 +238,40 @@ export function Drawer({ label, kicker, title, heading, facts, tabs, tab, onTab,
         <div style={{ flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'row' }} data-testid={split ? 'drawer-split' : undefined} data-layout={split ? (wide ? 'split' : 'tabs') : undefined}>
           <div style={{ flex: split && wide ? '0 0 50%' : '1 1 auto', minWidth: 0, minHeight: 0, display: showMain ? 'flex' : 'none', flexDirection: 'column' }}>
             {notice}
-            <div ref={body} className="rk-drawer-body" tabIndex={scrolls ? 0 : undefined} role={scrolls ? 'region' : undefined} aria-label={scrolls ? `${label} content` : undefined} style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: footer ? '18px 20px 32px' : '18px 20px calc(32px + var(--fab-space, 0px))', display: 'flex', flexDirection: 'column', gap: 16, background: 'var(--bg)' }}>
+            <div
+              ref={body}
+              className="rk-drawer-body"
+              tabIndex={scrolls ? 0 : undefined}
+              role={scrolls ? 'region' : undefined}
+              aria-label={scrolls ? `${label} content` : undefined}
+              style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', padding: footer ? '18px 20px 32px' : '18px 20px calc(32px + var(--fab-space, 0px))', display: 'flex', flexDirection: 'column', gap: 16, background: 'var(--bg)' }}
+            >
               {children}
             </div>
-            {footer && <div style={{ flex: 'none', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: split && wide ? '12px 20px' : '12px calc(20px + var(--fab-space, 0px)) 12px 20px', borderTop: '1px solid var(--line)', background: 'var(--surface)' }}>{footer}</div>}
+            {footer && (
+              <div
+                style={{
+                  flex: 'none',
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: split && wide ? '12px 20px' : '12px calc(20px + var(--fab-space, 0px)) 12px 20px',
+                  borderTop: '1px solid var(--line)',
+                  background: 'var(--surface)',
+                }}
+              >
+                {footer}
+              </div>
+            )}
           </div>
           {split && (wide || sideSeen) && (
-            <section aria-label={split.label} hidden={!showSide} style={{ flex: '1 1 auto', minWidth: 0, minHeight: 0, display: showSide ? 'flex' : 'none', flexDirection: 'column', borderLeft: wide ? '1px solid var(--line)' : undefined, background: 'var(--surface)' }} data-testid="drawer-split-side">
+            <section
+              aria-label={split.label}
+              hidden={!showSide}
+              style={{ flex: '1 1 auto', minWidth: 0, minHeight: 0, display: showSide ? 'flex' : 'none', flexDirection: 'column', borderLeft: wide ? '1px solid var(--line)' : undefined, background: 'var(--surface)' }}
+              data-testid="drawer-split-side"
+            >
               {split.content}
             </section>
           )}

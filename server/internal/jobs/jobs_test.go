@@ -500,7 +500,7 @@ func TestProposalsGoToTheProposer(t *testing.T) {
 		merge(&out, env, w.s.o.CommandOK, env.Clusters[0], "", Parse(res.Text))
 		return out, nil
 	}})
-	w.agents.text = "The pod is stuck.\n\n```json\n{\"findings\": [], \"proposals\": [{\"title\": \"Restart web\", \"reasoning\": \"stuck\", \"fixes\": [\"C-4\"], \"commands\": [\"kubectl rollout restart deployment/web -n shop\", \"rm -rf /\"], \"impact\": \"a rolling restart\", \"risk\": \"low\"}, {\"title\": \"Remove shop\", \"commands\": [\"kubectl delete namespace shop\"]}]}\n```"
+	w.agents.text = "The pod is stuck.\n\n```json\n{\"findings\": [], \"proposals\": [{\"title\": \"Restart web\", \"reasoning\": \"stuck\", \"fixes\": [\"C-4\"], \"commands\": [\"kubectl rollout restart deployment/web -n shop\"], \"impact\": \"a rolling restart\", \"risk\": \"low\"}, {\"title\": \"Remove shop\", \"fixes\": [\"C-4\"], \"commands\": [\"kubectl delete namespace shop\"]}, {\"title\": \"Restart and clean\", \"fixes\": [\"C-4\"], \"commands\": [\"kubectl rollout restart deployment/web -n shop\", \"rm -rf /\"]}]}\n```"
 	on(t, w.s, "test", Change{When: &When{Event: EventAlert}})
 	if n := w.s.Fire(Event{Kind: EventAlert, Cluster: "prod", Key: "alert:prod/pod:shop/web", Label: "Alert BackOff on shop/web at 03:12", Severity: SeverityError}); n != 1 {
 		t.Fatalf("fired %d", n)
@@ -522,7 +522,7 @@ func TestProposalsGoToTheProposer(t *testing.T) {
 		}
 	}
 	r, _ := w.s.GetRun(context.Background(), "run-1")
-	if len(r.Proposals) != 1 || r.Proposals[0].ID != "proposal-1" || len(r.Proposals[0].Resolves) != 1 || r.Proposals[0].Resolves[0] != "C-4" || !strings.Contains(r.Note, "refuse") || !strings.Contains(r.Note, "not kubectl or helm") {
+	if len(r.Proposals) != 1 || r.Proposals[0].ID != "proposal-1" || len(r.Proposals[0].Resolves) != 1 || r.Proposals[0].Resolves[0] != "C-4" || !strings.Contains(r.Note, "Watson would refuse “kubectl delete namespace shop”: refused: Remove shop") || !strings.Contains(r.Note, "“rm -rf /” is not a kubectl or helm command: Restart and clean") {
 		t.Fatalf("run: %+v", r)
 	}
 }

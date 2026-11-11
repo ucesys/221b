@@ -331,7 +331,10 @@ test('installs a chart from a public git repository through Watson, checks its d
   await dlg.getByTestId('app-submit').click()
   await expect(dlg).toHaveCount(0)
   // The install is a card: read, then approved.
-  const card = page.getByTestId('watson').locator('[data-testid=watson-card]').filter({ hasText: `helm install ${name}` })
+  const card = page
+    .getByTestId('watson')
+    .locator('[data-testid=watson-card]')
+    .filter({ hasText: `helm install ${name}` })
   await expect(card.getByTestId('watson-approve')).toBeEnabled({ timeout: 90_000 })
   await card.getByTestId('watson-approve').click()
   try {
@@ -350,7 +353,10 @@ test('installs a chart from a public git repository through Watson, checks its d
   } finally {
     const res = await request.delete(`/api/v1/apps/${ns}/${name}`, { headers: SAME })
     expect([202, 404]).toContain(res.status())
-    const gone = page.getByTestId('watson').locator('[data-testid=watson-card]').filter({ hasText: `helm uninstall ${name}` })
+    const gone = page
+      .getByTestId('watson')
+      .locator('[data-testid=watson-card]')
+      .filter({ hasText: `helm uninstall ${name}` })
     await expect(gone.getByTestId('watson-approve')).toBeEnabled({ timeout: 60_000 })
     await gone.getByTestId('watson-approve').click()
     await expect(page.getByTestId('apps-table').locator(`[data-release="${ns}/${name}"]`)).toHaveCount(0, { timeout: 120_000 })

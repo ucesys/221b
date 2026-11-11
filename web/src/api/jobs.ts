@@ -74,11 +74,36 @@ export interface RunBrief {
   status: RunStatus
   note?: string
   findings: number
+  /** Why its findings were not routed into cases (W-8). */
+  notRouted?: string
   proposals: number
   costUSD: number
   model?: string
   health?: RunHealth
   severities?: Severities
+  /** What the run could not be used for (I-3): see RunLimits. */
+  failedClusters?: string[]
+  leftOut?: LeftOut
+  notRechecked?: number
+}
+
+/**
+ * What a run could not be used for (phase 12 review, I-3): the clusters
+ * that did not answer, so none of their fixes was verified (W-2); the
+ * findings left out past the run's cap, the least severe first (W-3); and
+ * how many fixes in its scope the agent did not re-check (W-1).
+ */
+export interface RunLimits {
+  failedClusters?: string[]
+  leftOut?: LeftOut
+  notRechecked?: number
+}
+
+/** The findings a run left out past its cap, by severity (W-3). */
+export interface LeftOut {
+  count: number
+  severities: Severities
+  cap: number
 }
 
 // --- One flow for findings and cases (Phase 12, wave 6) ---
@@ -169,10 +194,13 @@ export interface Run {
   findings?: Finding[]
   /** What its findings did; missing on a run under way. */
   routed?: Routed
-  /** The cases closed as fixed whose problem this run no longer saw. */
+  /** The fixes this run verified: it re-checked each one and found the problem gone (W-1). */
   verifiedCases?: string[]
   /** Validation rules (check ids) never seen on the cluster before this run. */
   newChecks?: string[]
+  /** Why its findings were not routed into cases (W-8, I-3); reroute: the console tries again on its next look. */
+  notRouted?: string
+  reroute?: boolean
   /** What the validation rules of its findings and the new ones mean, by id, when the catalogue says (build 14). */
   ruleMeanings?: Record<string, string>
   proposals?: ProposalRef[]
@@ -186,6 +214,10 @@ export interface Run {
   facts?: RunFact[]
   /** Its kind makes no findings: it is not an audit (a Wiki sync, the drift check). */
   noFindings?: boolean
+  /** What the run could not be used for (I-3): see RunLimits. */
+  failedClusters?: string[]
+  leftOut?: LeftOut
+  notRechecked?: number
 }
 
 /** One thing a run did, for its drawer (KN-28): a label, the value in words, where it leads. */
@@ -386,14 +418,34 @@ export const healthTone = (h: RunHealth | undefined) => (h ? HEALTH_TONE[h] : un
  * found, and says the worst of it: "Done · 2 critical", amber "Done · 1
  * warning", green "Done" for info or nothing.
  */
-export function runStatus(r: Pick<RunBrief, 'status' | 'health' | 'severities'>): [string, 'ok' | 'warn' | 'err' | undefined] {
-  const [label, tone] = STATUS[r.status] ?? [r.status, undefined]
-  if (r.status === 'running' || r.status === 'skipped' || r.status === 'missed') return [label, tone]
+export function runStatus(r: Pick<RunBrief, 'status' | 'health' | 'severities' | 'failedClusters'>): [string, 'ok' | 'warn' | 'err' | undefined] {
+  const [status, tone] = STATUS[r.status] ?? [r.status, undefined]
+  if (r.status === 'running' || r.status === 'skipped' || r.status === 'missed') return [status, tone]
+  // A run done with a cluster that did not answer is done with errors (W-2).
+  const errors = r.status === 'ok' && (r.failedClusters ?? []).length > 0
+  const label = errors ? 'Done, with errors' : status
   const s = r.severities ?? {}
   const worst = s.critical ? `${s.critical} critical` : s.warning ? `${s.warning} warning${s.warning === 1 ? '' : 's'}` : ''
   const words = worst ? `${label} · ${worst}` : label
   if (r.status !== 'ok') return [words, tone]
-  return [words, healthTone(r.health) ?? tone]
+  const found = healthTone(r.health) ?? tone
+  return [words, errors && found !== 'err' ? 'warn' : found]
+}
+
+/** A run's limits in words, one line each (I-3): what failed, what was left out, what was not re-checked. */
+export function runLimits(r: RunLimits): { key: 'failed' | 'leftOut' | 'notRechecked'; text: string }[] {
+  const out: { key: 'failed' | 'leftOut' | 'notRechecked'; text: string }[] = []
+  const failed = r.failedClusters ?? []
+  if (failed.length) out.push({ key: 'failed', text: `${failed.length === 1 ? 'A cluster' : 'Clusters'} that did not answer: ${failed.join(', ')}. No fix there was verified.` })
+  const l = r.leftOut
+  if (l && l.count > 0) {
+    const s = l.severities ?? {}
+    const by = [s.critical ? `${s.critical} critical` : '', s.warning ? `${s.warning} warning${s.warning === 1 ? '' : 's'}` : '', s.info ? `${s.info} info` : ''].filter(Boolean).join(', ')
+    out.push({ key: 'leftOut', text: `${l.count} ${l.count === 1 ? 'finding' : 'findings'} left out past the cap of ${l.cap}${by ? ` (${by})` : ''}: the least severe go first. Their problems count as neither seen nor gone.` })
+  }
+  const n = r.notRechecked ?? 0
+  if (n > 0) out.push({ key: 'notRechecked', text: `${n} ${n === 1 ? 'fix' : 'fixes'} in its scope ${n === 1 ? 'was' : 'were'} not re-checked: ${n === 1 ? 'it keeps' : 'they keep'} waiting for a run that does.` })
+  return out
 }
 
 /** A run's note with each line said once, with how many, for runs kept before notes were merged (JR-02); without amounts while costs are hidden (CF-40). */

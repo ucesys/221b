@@ -93,7 +93,7 @@ function routedToCase(run: Run): Finding {
 
 const sameKey = (a?: Key, b?: Key) => !!a && !!b && a.cluster === b.cluster && a.object === b.object && a.check === b.check
 
-const getCase = async (page: Page, id: string) => (await api(page, 'GET', `/api/v1/cases/cases/${id}`)).json as Case
+const getCase = async (page: Page, id: string) => (await api(page, 'GET', `/api/v1/aiops/cases/${id}`)).json as Case
 
 test.beforeAll(async ({ browser }) => {
   const page = await browser.newPage()
@@ -112,8 +112,8 @@ test.afterAll(async ({ browser }) => {
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   // The fake audit proposes a change each run (CF-26): left waiting, it
   // would raise the gear's flag for the specs after.
-  const queued = ((await api(page, 'GET', '/api/v1/cases/proposals?state=queued')).json as { proposals?: { id: string; source: { kind: string; id?: string } }[] } | null)?.proposals ?? []
-  for (const c of queued.filter((p) => p.source.kind === 'job')) await api(page, 'POST', `/api/v1/cases/proposals/${c.id}/reject`, { reason: 'e2e: done' })
+  const queued = ((await api(page, 'GET', '/api/v1/aiops/proposals?state=queued')).json as { proposals?: { id: string; source: { kind: string; id?: string } }[] } | null)?.proposals ?? []
+  for (const c of queued.filter((p) => p.source.kind === 'job')) await api(page, 'POST', `/api/v1/aiops/proposals/${c.id}/reject`, { reason: 'e2e: done' })
   await api(page, 'PUT', '/api/v1/jobs/nightly-audit', { clusters: [] })
   await api(page, 'PUT', '/api/v1/sherlock/config', { ...ON, clusters: {} })
   await page.close()
@@ -130,7 +130,7 @@ test('a run’s finding becomes a case; the next run of the same problem joins i
   expect(before.agentFound).toBe(true)
 
   // The run opens under Jobs › Runs: what its findings did, each linked to its case; no finding buttons.
-  await page.goto(`/#/cases/jobs/runs/${first.id}`)
+  await page.goto(`/#/aiops/jobs/runs/${first.id}`)
   const detail = page.getByTestId('run-detail')
   await expect(detail).toBeVisible()
   await expect(page.getByTestId('jobs-sub-runs')).toHaveAttribute('aria-pressed', 'true')
@@ -150,9 +150,9 @@ test('a run’s finding becomes a case; the next run of the same problem joins i
   expect(after.seen?.count ?? 0).toBeGreaterThan(before.seen?.count ?? 0)
 
   // The case's link opens its drawer in the Inbox, with the check and how often it was seen.
-  await page.goto(`/#/cases/jobs/runs/${second.id}`)
+  await page.goto(`/#/aiops/jobs/runs/${second.id}`)
   await page.getByTestId(`finding-${again!.id}-routing-case`).click()
-  await expect(page).toHaveURL(new RegExp(`#/cases/inbox/case/${after.number}$`))
+  await expect(page).toHaveURL(new RegExp(`#/aiops/inbox/case/${after.number}$`))
   const drawer = page.getByTestId('case-drawer')
   await expect(drawer.getByTestId('case-source-kind')).toHaveText('Agent')
   await expect(drawer.getByTestId('case-key')).toContainText(f.key?.check ?? '')
@@ -161,7 +161,7 @@ test('a run’s finding becomes a case; the next run of the same problem joins i
   const p = (await drawer.getByTestId('case-priority-set').inputValue()) || ''
   if (Number(p) > 1) await expect(drawer.getByTestId('case-no-sla')).toBeVisible()
   // The Inbox lists it under the agents' rows.
-  await page.goto('/#/cases/inbox?source=agents')
+  await page.goto('/#/aiops/inbox?source=agents')
   await expect(page.locator(`[data-inbox-row="case:${after.number}"]`)).toBeVisible()
 })
 
@@ -172,7 +172,7 @@ test('closed as an exception with a reason: the next run leaves the finding out 
   const f = routedToCase(run)
   const c = await getCase(page, f.case!)
 
-  await page.goto(`/#/cases/inbox/case/${c.number}`)
+  await page.goto(`/#/aiops/inbox/case/${c.number}`)
   const drawer = page.getByTestId('case-drawer')
   // An agent-found case may close as no action needed (CF-90), an exception or a duplicate (CF-42).
   await drawer.getByTestId('case-close-open').click()
@@ -184,7 +184,7 @@ test('closed as an exception with a reason: the next run leaves the finding out 
   await drawer.getByTestId('case-exception-save').click()
   await expect(drawer.getByTestId('case-status')).toHaveText('Closed: exception')
   const link = drawer.getByTestId('case-closed-exception')
-  await expect(link).toHaveAttribute('href', /^#\/cases\/mycroft\/exceptions\/EX-\d+$/)
+  await expect(link).toHaveAttribute('href', /^#\/aiops\/mycroft\/exceptions\/EX-\d+$/)
   const exId = ((await link.textContent()) ?? '').trim()
 
   // The next run leaves it out, and the exception counts the match.
@@ -194,18 +194,18 @@ test('closed as an exception with a reason: the next run leaves the finding out 
   expect(left!.routing).toBe('excepted')
   expect(left!.exception).toBe(exId)
   expect(next.routed?.excepted ?? 0).toBeGreaterThan(0)
-  const exception = (await api(page, 'GET', `/api/v1/cases/exceptions/${exId}`)).json as { reason?: string; matches?: number; lastMatched?: string }
+  const exception = (await api(page, 'GET', `/api/v1/aiops/exceptions/${exId}`)).json as { reason?: string; matches?: number; lastMatched?: string }
   expect(exception.reason).toBe('The analytics namespace sits behind its own firewall.')
   expect(exception.matches ?? 0).toBeGreaterThan(0)
   expect(exception.lastMatched).toBeTruthy()
 
   // Mycroft › Exceptions shows how often it matched.
-  await page.goto(`/#/cases/mycroft/exceptions/${exId}`)
+  await page.goto(`/#/aiops/mycroft/exceptions/${exId}`)
   const card = page.locator(`[data-testid="exception"][data-id="${exId}"]`)
   await expect(card.getByTestId('exception-matches')).toContainText(/\d+ times?/)
 
   // Removed, it stops applying.
-  expect((await api(page, 'DELETE', `/api/v1/cases/exceptions/${exId}`)).status).toBeLessThan(300)
+  expect((await api(page, 'DELETE', `/api/v1/aiops/exceptions/${exId}`)).status).toBeLessThan(300)
   const third = await audit(page)
   const back = (third.findings ?? []).find((x) => sameKey(x.key, f.key))
   expect(back, JSON.stringify(third.findings)).toBeTruthy()
@@ -218,7 +218,7 @@ test('closed as a known issue made from it: the next run records the problem on 
   const run = await audit(page)
   const f = routedToCase(run)
   const c = await getCase(page, f.case!)
-  await page.goto(`/#/cases/inbox/case/${c.number}`)
+  await page.goto(`/#/aiops/inbox/case/${c.number}`)
   const drawer = page.getByTestId('case-drawer')
   await drawer.getByTestId('case-close-open').click()
   await drawer.getByTestId('case-outcome-knownIssue').check()
@@ -240,7 +240,7 @@ test('closed as a known issue made from it: the next run records the problem on 
   expect(known.stillPresent?.count ?? 0).toBeGreaterThan(0)
   expect(known.cases ?? []).toContain(c.id)
   // Mycroft › Known issues shows it still seen, and the case closed as it.
-  await page.goto(`/#/cases/mycroft/known/${kiId}`)
+  await page.goto(`/#/aiops/mycroft/known/${kiId}`)
   await expect(page.getByTestId('known-still-present')).toContainText('×')
   await expect(page.getByTestId('known-linked')).toContainText(c.id)
 })
@@ -249,7 +249,7 @@ test('a run reads as what it found: Started, Ended and Health in Runs, and the s
   await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   const run = await audit(page)
-  await page.goto('/#/cases/jobs/runs')
+  await page.goto('/#/aiops/jobs/runs')
   const table = page.getByTestId('runs-table')
   await expect(table.locator('thead')).toContainText('Ended')
   await expect(table.locator('thead')).toContainText('Health')
@@ -267,24 +267,24 @@ test('a run reads as what it found: Started, Ended and Health in Runs, and the s
 })
 
 test('Jobs has Schedule and Runs, and an old link to a run opens it under Runs (FX-13)', async ({ page }) => {
-  await page.goto('/#/cases/jobs')
+  await page.goto('/#/aiops/jobs')
   await expect(page.getByTestId('jobs-tab')).toBeVisible()
   await expect(page.getByTestId('jobs-sub-schedule')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('cases-nav').locator('[data-cases-tab]').first()).toBeVisible()
   expect((await page.getByTestId('cases-nav').locator('[data-cases-tab]').allTextContents()).some((t) => /^Runs/.test(t))).toBe(false)
   await page.getByTestId('jobs-sub-runs').click()
-  await expect(page).toHaveURL(/#\/cases\/jobs\/runs$/)
+  await expect(page).toHaveURL(/#\/aiops\/jobs\/runs$/)
   const row = page.getByTestId('run-row').first()
   await expect(row).toBeVisible()
   await row.click()
-  await expect(page).toHaveURL(/#\/cases\/jobs\/runs\/run-\d+$/)
+  await expect(page).toHaveURL(/#\/aiops\/jobs\/runs\/run-\d+$/)
   const id = page.url().split('/').pop() ?? ''
   await expect(page.getByTestId('run-drawer')).toBeVisible()
   // Closed, the drawer goes back to the Runs.
   await page.keyboard.press('Escape')
-  await expect(page).toHaveURL(/#\/cases\/jobs\/runs$/)
+  await expect(page).toHaveURL(/#\/aiops\/jobs\/runs$/)
   await page.getByTestId('jobs-sub-schedule').click()
-  await expect(page).toHaveURL(/#\/cases\/jobs$/)
+  await expect(page).toHaveURL(/#\/aiops\/jobs$/)
   await expect(page.getByTestId('job-row').first()).toBeVisible()
   // A link from before Jobs had sub-tabs.
   await page.goto(`/#/cases/runs/${id}`)

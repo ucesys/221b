@@ -652,7 +652,7 @@ func (s *Server) getAITests(w http.ResponseWriter, r *http.Request) {
 	if !s.aiAdmin(w, r) {
 		return
 	}
-	cases, err := s.opts.AI.CasesOf(r.Context(), r.PathValue("id"))
+	cases, err := s.opts.AI.TestsOf(r.Context(), r.PathValue("id"))
 	if err != nil {
 		s.aiFail(w, err)
 		return
@@ -840,7 +840,7 @@ func (s *Server) postAICase(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "Name an answer of your conversation, or give the case.")
 		return
 	}
-	saved, err := s.opts.AI.SaveCase(r.Context(), c, aiBy(r))
+	saved, err := s.opts.AI.SaveTest(r.Context(), c, aiBy(r))
 	if err != nil {
 		s.aiFail(w, err)
 		return
@@ -854,7 +854,7 @@ func (s *Server) deleteAICase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if err := s.opts.AI.DeleteCase(r.Context(), id); err != nil {
+	if err := s.opts.AI.DeleteTest(r.Context(), id); err != nil {
 		s.aiFail(w, err)
 		return
 	}

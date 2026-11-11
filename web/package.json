@@ -9,6 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "vitest run",
     "e2e": "playwright test",
     "licenses": "license-checker-rseidelsohn --production --excludePrivatePackages --failOn 'GPL-1.0;GPL-2.0;GPL-3.0;AGPL-1.0;AGPL-3.0;LGPL-2.0;LGPL-2.1;LGPL-3.0;SSPL-1.0' --summary"
@@ -43,6 +45,7 @@
     "eslint-plugin-react-hooks": "7.1.1",
     "jsdom": "30.1.2",
     "license-checker-rseidelsohn": "5.0.1",
+    "prettier": "3.9.10",
     "typescript": "6.0.3",
     "typescript-eslint": "8.71.2",
     "vite": "8.3.4",

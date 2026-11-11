@@ -30,10 +30,7 @@ interface View {
 }
 
 async function call(page: Page, path: string, body: unknown, method = 'PUT'): Promise<number> {
-  return page.evaluate(
-    async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === null ? undefined : JSON.stringify(b) })).status,
-    [path, body, method] as const,
-  )
+  return page.evaluate(async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === null ? undefined : JSON.stringify(b) })).status, [path, body, method] as const)
 }
 
 async function checklist(page: Page): Promise<View> {

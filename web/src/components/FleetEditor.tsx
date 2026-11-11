@@ -314,170 +314,184 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete, on
           {kind === 'nodes' ? (
             <NodeList nodes={nodes} listed={listed} onChange={setListed} />
           ) : (
-          <>
-          <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '4px 10px' }}>
-              <h3 className="rk-h">Nodes in this fleet have all of these</h3>
-              {reqCount > 0 && (
-                <span style={{ fontSize: 12, color: 'var(--fg3)' }}>
-                  {reqCount} {reqCount === 1 ? 'requirement' : 'requirements'}
-                </span>
-              )}
-            </div>
-            {reqCount > 0 ? (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }} data-testid="fleet-reqs">
-                {reqsOf(draft).map((r) => {
-                  const aria = r.kind === 'l' ? `Stop requiring ${r.text}` : `Stop requiring the taint ${r.id}`
-                  return (
-                    <button key={r.kind + r.id} className="rk-fchip" data-on="true" aria-label={aria} title={aria} onClick={() => (r.kind === 'l' ? setLabels(labels.filter((x) => x !== r.id)) : setTaints(taints.filter((x) => x !== r.id)))}>
-                      {r.text}
-                      {r.effect && (
-                        <span className="rk-tag" data-tone={r.tone}>
-                          {r.effect}
-                        </span>
-                      )}
-                      <XIcon />
-                    </button>
-                  )
-                })}
-              </div>
-            ) : (
-              <p style={{ margin: 0, padding: '12px 14px', fontSize: 12.5, color: 'var(--fg3)', border: '1px dashed var(--line2)', borderRadius: 8 }}>Pick at least one label or taint below.</p>
-            )}
-          </section>
-
-          <section className="rk-card" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px' }}>
-              <h3 className="rk-h" style={{ marginRight: 'auto' }}>
-                Labels and taints in the cluster
-              </h3>
-              <label className="rk-field" style={{ width: 230, maxWidth: '100%' }}>
-                <SearchIcon />
-                <span className="rk-sr">Find a label or taint</span>
-                <input type="search" placeholder="Find a label or taint" value={q} onChange={(e) => setQ(e.target.value)} />
-              </label>
-            </div>
-            <div className="rk-fgroups">
-              {labelGroups.map((g) => (
-                <div key={g.key} style={{ minWidth: 0 }}>
-                  <span className="rk-fkey" title={g.key}>
-                    {g.key}
-                  </span>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                    {g.values.map(([v, ns]) => {
-                      const on = labels.includes(g.key + '=' + v)
+            <>
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '4px 10px' }}>
+                  <h3 className="rk-h">Nodes in this fleet have all of these</h3>
+                  {reqCount > 0 && (
+                    <span style={{ fontSize: 12, color: 'var(--fg3)' }}>
+                      {reqCount} {reqCount === 1 ? 'requirement' : 'requirements'}
+                    </span>
+                  )}
+                </div>
+                {reqCount > 0 ? (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }} data-testid="fleet-reqs">
+                    {reqsOf(draft).map((r) => {
+                      const aria = r.kind === 'l' ? `Stop requiring ${r.text}` : `Stop requiring the taint ${r.id}`
                       return (
-                        <button key={v} className="rk-fchip" aria-pressed={on} title={`${labelText(g.key, v)} — on ${nodeList(ns)}\n${on ? 'Click to remove it' : 'Click to require it'}`} onClick={() => toggleLabel(g.key, v)} data-label={g.key + '=' + v}>
-                          {v || '(set)'}
-                          <span className="rk-cnt">{ns.length}</span>
+                        <button
+                          key={r.kind + r.id}
+                          className="rk-fchip"
+                          data-on="true"
+                          aria-label={aria}
+                          title={aria}
+                          onClick={() => (r.kind === 'l' ? setLabels(labels.filter((x) => x !== r.id)) : setTaints(taints.filter((x) => x !== r.id)))}
+                        >
+                          {r.text}
+                          {r.effect && (
+                            <span className="rk-tag" data-tone={r.tone}>
+                              {r.effect}
+                            </span>
+                          )}
+                          <XIcon />
                         </button>
                       )
                     })}
                   </div>
-                </div>
-              ))}
-            </div>
-            {taintChips.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <span className="rk-fkey">taints</span>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {taintChips.map((t) => {
-                    const on = taints.includes(t.id)
-                    return (
-                      <button key={t.id} className="rk-fchip" aria-pressed={on} title={`Taint ${t.id} — on ${nodeList(t.nodes)}\n${on ? 'Click to remove it' : 'Click to require it'}`} onClick={() => toggleTaint(t.id)} data-taint={t.id}>
-                        {t.key}
-                        <span className="rk-tag" data-tone={effectTone(t.effect)}>
-                          {t.effect}
-                        </span>
-                        <span className="rk-cnt">{t.nodes.length}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-            {lq && labelGroups.length === 0 && taintChips.length === 0 && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Nothing in the cluster matches “{q.trim()}”. Type it below to require it anyway.</p>}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
-              <span style={{ fontSize: 12, color: 'var(--fg3)' }}>
-                Or type one that no node has yet: <span className="rk-mono">key=value</span> for a label, <span className="rk-mono">key=value:NoSchedule</span> for a taint
-              </span>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <label className="rk-field" style={{ flex: '1 1 auto' }}>
-                  <span className="rk-sr">Label or taint to require</span>
-                  <input
-                    type="text"
-                    value={text}
-                    onChange={(e) => {
-                      setText(e.target.value)
-                      setTextErr('')
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        addText()
-                      }
-                    }}
-                    placeholder="gpu=a100 or nvidia.com/gpu=true:NoSchedule"
-                    spellCheck={false}
-                    style={{ fontFamily: 'var(--mono)' }}
-                    data-testid="fleet-text"
-                  />
-                </label>
-                <button className="rk-btn" onClick={addText} disabled={!text.trim()} data-testid="fleet-text-add">
-                  Add
-                </button>
-              </div>
-              {textErr && (
-                <span className="rk-t" data-tone="err" style={{ fontSize: 12 }} data-testid="fleet-text-error">
-                  {textErr}
-                </span>
-              )}
-            </div>
-          </section>
+                ) : (
+                  <p style={{ margin: 0, padding: '12px 14px', fontSize: 12.5, color: 'var(--fg3)', border: '1px dashed var(--line2)', borderRadius: 8 }}>Pick at least one label or taint below.</p>
+                )}
+              </section>
 
-          <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '4px 10px' }}>
-              <h3 className="rk-h">Preview</h3>
-              <span style={{ fontSize: 12, color: 'var(--fg3)' }} data-testid="fleet-preview">
-                {matchText}
-              </span>
-            </div>
-            {members.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {members.map((m) => (
-                  <span key={m.name} className="rk-chip" data-member={m.name}>
-                    {m.name}
-                    {m.cordoned && <em>cordoned</em>}
-                  </span>
-                ))}
-              </div>
-            )}
-            {near.length > 0 && (
-              <div className="rk-card" style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="fleet-near">
-                <strong style={{ fontSize: 12.5, fontWeight: 600 }}>Almost in: nodes that miss one requirement</strong>
-                {near.map(({ n, miss }) => {
-                  const m = miss[0]!
-                  const cmd = fixCommand(n.name, m)
-                  return (
-                    <div key={n.name} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 12px', paddingTop: 8, borderTop: '1px solid var(--line)' }}>
-                      <span className="rk-mono" style={{ fontWeight: 600 }}>
-                        {n.name}
+              <section className="rk-card" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px' }}>
+                  <h3 className="rk-h" style={{ marginRight: 'auto' }}>
+                    Labels and taints in the cluster
+                  </h3>
+                  <label className="rk-field" style={{ width: 230, maxWidth: '100%' }}>
+                    <SearchIcon />
+                    <span className="rk-sr">Find a label or taint</span>
+                    <input type="search" placeholder="Find a label or taint" value={q} onChange={(e) => setQ(e.target.value)} />
+                  </label>
+                </div>
+                <div className="rk-fgroups">
+                  {labelGroups.map((g) => (
+                    <div key={g.key} style={{ minWidth: 0 }}>
+                      <span className="rk-fkey" title={g.key}>
+                        {g.key}
                       </span>
-                      <span style={{ flex: '1 1 260px', fontSize: 12, color: 'var(--fg2)' }}>
-                        Missing {m.text}
-                        {m.kind === 'l' && m.conflict !== null ? ` (its ${m.key} is ${m.conflict || '""'})` : ''}
-                      </span>
-                      <button className="rk-btn" onClick={() => copy(cmd)} title={`${cmd}\nCopies the command; the console does not change the cluster.`}>
-                        <CopyIcon />
-                        {copied === cmd ? 'Copied' : 'Copy the command'}
-                      </button>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                        {g.values.map(([v, ns]) => {
+                          const on = labels.includes(g.key + '=' + v)
+                          return (
+                            <button
+                              key={v}
+                              className="rk-fchip"
+                              aria-pressed={on}
+                              title={`${labelText(g.key, v)} — on ${nodeList(ns)}\n${on ? 'Click to remove it' : 'Click to require it'}`}
+                              onClick={() => toggleLabel(g.key, v)}
+                              data-label={g.key + '=' + v}
+                            >
+                              {v || '(set)'}
+                              <span className="rk-cnt">{ns.length}</span>
+                            </button>
+                          )
+                        })}
+                      </div>
                     </div>
-                  )
-                })}
-              </div>
-            )}
-          </section>
-          </>
+                  ))}
+                </div>
+                {taintChips.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <span className="rk-fkey">taints</span>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                      {taintChips.map((t) => {
+                        const on = taints.includes(t.id)
+                        return (
+                          <button key={t.id} className="rk-fchip" aria-pressed={on} title={`Taint ${t.id} — on ${nodeList(t.nodes)}\n${on ? 'Click to remove it' : 'Click to require it'}`} onClick={() => toggleTaint(t.id)} data-taint={t.id}>
+                            {t.key}
+                            <span className="rk-tag" data-tone={effectTone(t.effect)}>
+                              {t.effect}
+                            </span>
+                            <span className="rk-cnt">{t.nodes.length}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+                {lq && labelGroups.length === 0 && taintChips.length === 0 && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Nothing in the cluster matches “{q.trim()}”. Type it below to require it anyway.</p>}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
+                  <span style={{ fontSize: 12, color: 'var(--fg3)' }}>
+                    Or type one that no node has yet: <span className="rk-mono">key=value</span> for a label, <span className="rk-mono">key=value:NoSchedule</span> for a taint
+                  </span>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <label className="rk-field" style={{ flex: '1 1 auto' }}>
+                      <span className="rk-sr">Label or taint to require</span>
+                      <input
+                        type="text"
+                        value={text}
+                        onChange={(e) => {
+                          setText(e.target.value)
+                          setTextErr('')
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            addText()
+                          }
+                        }}
+                        placeholder="gpu=a100 or nvidia.com/gpu=true:NoSchedule"
+                        spellCheck={false}
+                        style={{ fontFamily: 'var(--mono)' }}
+                        data-testid="fleet-text"
+                      />
+                    </label>
+                    <button className="rk-btn" onClick={addText} disabled={!text.trim()} data-testid="fleet-text-add">
+                      Add
+                    </button>
+                  </div>
+                  {textErr && (
+                    <span className="rk-t" data-tone="err" style={{ fontSize: 12 }} data-testid="fleet-text-error">
+                      {textErr}
+                    </span>
+                  )}
+                </div>
+              </section>
+
+              <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '4px 10px' }}>
+                  <h3 className="rk-h">Preview</h3>
+                  <span style={{ fontSize: 12, color: 'var(--fg3)' }} data-testid="fleet-preview">
+                    {matchText}
+                  </span>
+                </div>
+                {members.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {members.map((m) => (
+                      <span key={m.name} className="rk-chip" data-member={m.name}>
+                        {m.name}
+                        {m.cordoned && <em>cordoned</em>}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {near.length > 0 && (
+                  <div className="rk-card" style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="fleet-near">
+                    <strong style={{ fontSize: 12.5, fontWeight: 600 }}>Almost in: nodes that miss one requirement</strong>
+                    {near.map(({ n, miss }) => {
+                      const m = miss[0]!
+                      const cmd = fixCommand(n.name, m)
+                      return (
+                        <div key={n.name} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 12px', paddingTop: 8, borderTop: '1px solid var(--line)' }}>
+                          <span className="rk-mono" style={{ fontWeight: 600 }}>
+                            {n.name}
+                          </span>
+                          <span style={{ flex: '1 1 260px', fontSize: 12, color: 'var(--fg2)' }}>
+                            Missing {m.text}
+                            {m.kind === 'l' && m.conflict !== null ? ` (its ${m.key} is ${m.conflict || '""'})` : ''}
+                          </span>
+                          <button className="rk-btn" onClick={() => copy(cmd)} title={`${cmd}\nCopies the command; the console does not change the cluster.`}>
+                            <CopyIcon />
+                            {copied === cmd ? 'Copied' : 'Copy the command'}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </section>
+            </>
           )}
           <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>
             {kind === 'nodes' ? 'Fleets are saved in this console, not in the cluster.' : 'Fleets are saved in this console, not in the cluster. A node joins or leaves this fleet only through its own labels and taints.'}
@@ -506,4 +520,3 @@ export function FleetEditor({ seed, fleets, nodes, onClose, onSave, onDelete, on
     </div>
   )
 }
-

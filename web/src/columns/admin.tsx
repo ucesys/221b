@@ -13,12 +13,7 @@ const DEFINITION = { full: 'Elevated', readOnly: 'Read-only' } as const
 
 /** What a Roles search matches. */
 export function roleTerms(r: RoleRow): Term[] {
-  return [
-    { kind: 'name', text: ROLE_NAME[r.id] },
-    { kind: 'name', text: r.clusterRole },
-    ...r.subjects.map((s) => ({ kind: 'name', text: s.name })),
-    ...r.subjects.flatMap((s) => s.namespaces.map((n) => ({ kind: 'namespace', text: n }))),
-  ]
+  return [{ kind: 'name', text: ROLE_NAME[r.id] }, { kind: 'name', text: r.clusterRole }, ...r.subjects.map((s) => ({ kind: 'name', text: s.name })), ...r.subjects.flatMap((s) => s.namespaces.map((n) => ({ kind: 'namespace', text: n })))]
 }
 
 function holdersText(r: RoleRow): string {
@@ -187,12 +182,7 @@ export const MATRIX_COLUMNS: ColumnDef<MatrixRow>[] = [
 
 /** What a Permissions search matches. */
 export function matrixTerms(r: MatrixRow): Term[] {
-  return [
-    { kind: 'name', text: r.resource },
-    { kind: 'type', text: groupText(r.group) },
-    ...r.verbs.map((v) => ({ kind: 'detail', text: v })),
-    ...r.flags.map((f) => ({ kind: 'detail', text: f })),
-  ]
+  return [{ kind: 'name', text: r.resource }, { kind: 'type', text: groupText(r.group) }, ...r.verbs.map((v) => ({ kind: 'detail', text: v })), ...r.flags.map((f) => ({ kind: 'detail', text: f }))]
 }
 
 function rolesText(u: UserRow): string {

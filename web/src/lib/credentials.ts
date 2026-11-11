@@ -145,7 +145,8 @@ export function credentialNote(d: Draft, now = Date.now()): CredNote | null {
       if (!k.contexts.length) return { tone: 'err', text: 'That kubeconfig has no contexts.' }
       const kc = kubeContext(k, (d.context ?? '').trim())
       if (!kc.ctx) return { tone: 'err', text: `The kubeconfig has no context “${kc.name}”. It has ${listText(k.contexts.map((c) => c.name ?? '?'))}.` }
-      if (kc.user?.exec) return { tone: 'warn', text: `Context ${kc.name} signs in through an exec plugin${kc.user.command ? ' (' + kc.user.command + ')' : ''}, which the console can’t run. Use a token or a client certificate for it instead.` }
+      if (kc.user?.exec)
+        return { tone: 'warn', text: `Context ${kc.name} signs in through an exec plugin${kc.user.command ? ' (' + kc.user.command + ')' : ''}, which the console can’t run. Use a token or a client certificate for it instead.` }
       const srv = kc.cluster?.server
       const field = (d.server ?? '').trim()
       const differs = !!(srv && field && srv !== field)

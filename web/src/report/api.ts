@@ -201,7 +201,45 @@ export const outcomeWords: Record<Outcome, string> = {
 }
 
 // Words too common to match a problem by.
-const COMMON = new Set(['about', 'after', 'again', 'also', 'because', 'been', 'cannot', 'could', 'does', 'doesn', 'every', 'from', 'have', 'into', 'just', 'like', 'more', 'only', 'other', 'please', 'since', 'some', 'than', 'that', 'there', 'their', 'them', 'they', 'this', 'when', 'where', 'which', 'while', 'with', 'will', 'would', 'your'])
+const COMMON = new Set([
+  'about',
+  'after',
+  'again',
+  'also',
+  'because',
+  'been',
+  'cannot',
+  'could',
+  'does',
+  'doesn',
+  'every',
+  'from',
+  'have',
+  'into',
+  'just',
+  'like',
+  'more',
+  'only',
+  'other',
+  'please',
+  'since',
+  'some',
+  'than',
+  'that',
+  'there',
+  'their',
+  'them',
+  'they',
+  'this',
+  'when',
+  'where',
+  'which',
+  'while',
+  'with',
+  'will',
+  'would',
+  'your',
+])
 
 const words = (t: string) => new Set((t.toLowerCase().match(/[a-z0-9][a-z0-9-]{3,}/g) ?? []).filter((w) => !COMMON.has(w)))
 
@@ -225,7 +263,10 @@ export function matchKnown(text: string, list: Known[]): Known[] {
     const n = title.size || 1
     if (hits >= 2 || hits / n >= 0.5) scored.push([k, hits / n + hits / 10])
   }
-  return scored.sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k]) => k)
+  return scored
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([k]) => k)
 }
 
 /** A known issue's status as people read it, with its tone. */

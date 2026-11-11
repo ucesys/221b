@@ -78,7 +78,7 @@ func setup(t *testing.T) *world {
 var operator = issues.Caller{Person: issues.Person{ID: "olivia", Name: "Olivia"}, Report: true, Operator: true, Admin: true}
 
 // waitReport waits for a report to have what f looks for.
-func waitReport(t *testing.T, w *world, n int, f func(issues.Report) bool) issues.Report {
+func waitReport(t *testing.T, w *world, n int, f func(issues.Case) bool) issues.Case {
 	t.Helper()
 	for i := 0; i < 400; i++ {
 		r, err := w.issues.Report(context.Background(), operator, n)
@@ -144,7 +144,7 @@ func TestInvestigateAndVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := rc.Report.Number
-	r := waitReport(t, w, n, func(r issues.Report) bool { return r.Technical != "" })
+	r := waitReport(t, w, n, func(r issues.Case) bool { return r.Technical != "" })
 	if r.Service != "shop" || r.ServiceBy != "investigator" && r.ServiceBy != "match" || r.Cause == "" || len(r.Evidence) == 0 || r.Plain == "" || r.Status != issues.StatusNew {
 		t.Fatalf("report: %+v", r)
 	}
@@ -196,7 +196,7 @@ func TestInvestigateAndVerify(t *testing.T) {
 	if _, err := w.issues.SetStatus(ctx, operator, n, issues.StatusClosed, issues.OutcomeFix, "Restarted the shop."); err != nil {
 		t.Fatal(err)
 	}
-	r = waitReport(t, w, n, func(r issues.Report) bool {
+	r = waitReport(t, w, n, func(r issues.Case) bool {
 		for _, m := range r.Messages {
 			if strings.Contains(m.Text, "confirms the fix") {
 				return true

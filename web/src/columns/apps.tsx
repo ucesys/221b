@@ -26,7 +26,10 @@ export function behindSource(r: AppRow): string | undefined {
   // A source set on a release that already runs exactly what it renders (round 2 review).
   if (r.app.matchedRevision && r.app.matchedRevision === r.revision && r.chartVersion === r.app.chartVersion) return undefined
   // A commit is written by a deploy: none means the source never was.
-  if (!r.app.commit) return r.app.sourceDiff ? `the source has not been deployed yet, and ${r.app.sourceDiff}; revision ${r.revision} (${r.chart}-${r.chartVersion}) runs` : `the source has not been deployed yet; revision ${r.revision} (${r.chart}-${r.chartVersion}) is "${r.description || 'not from the console'}"`
+  if (!r.app.commit)
+    return r.app.sourceDiff
+      ? `the source has not been deployed yet, and ${r.app.sourceDiff}; revision ${r.revision} (${r.chart}-${r.chartVersion}) runs`
+      : `the source has not been deployed yet; revision ${r.revision} (${r.chart}-${r.chartVersion}) is "${r.description || 'not from the console'}"`
   const sha = r.app.commit.slice(0, 12)
   if ((r.description ?? '').includes(sha) && r.chartVersion === r.app.chartVersion) return undefined
   return `revision ${r.revision} (${r.chart}-${r.chartVersion}) is "${r.description || 'not from the console'}"; the source last deployed ${r.app.chartVersion} @ ${sha}`
@@ -124,7 +127,16 @@ export const APP_COLUMNS: ColumnDef<AppRow>[] = [
     width: 'minmax(96px, .6fr)',
     min: 96,
     sortValue: (r) => ({ err: 0, warn: 1, muted: 2, ok: 3 })[driftTone(r)],
-    cell: (r) => (r.app ? <Tone tone={driftTone(r)} text={driftText(r)} tip={[behindSource(r), r.app.drift ? `${r.app.drift.changed} changed · ${r.app.drift.missing} missing · ${r.app.drift.same} as applied` : 'Open the release to check'].filter(Boolean).join('\n')} /> : <span className="rk-dim">—</span>),
+    cell: (r) =>
+      r.app ? (
+        <Tone
+          tone={driftTone(r)}
+          text={driftText(r)}
+          tip={[behindSource(r), r.app.drift ? `${r.app.drift.changed} changed · ${r.app.drift.missing} missing · ${r.app.drift.same} as applied` : 'Open the release to check'].filter(Boolean).join('\n')}
+        />
+      ) : (
+        <span className="rk-dim">—</span>
+      ),
     export: (r) => [{ head: 'Drift', cell: driftText(r) }],
   },
   {
@@ -134,7 +146,8 @@ export const APP_COLUMNS: ColumnDef<AppRow>[] = [
     width: 'minmax(220px, 1.6fr)',
     min: 200,
     sortValue: (r) => (r.app ? sourceText(r.app.source) : ''),
-    cell: (r) => (r.app ? <Mono text={sourceText(r.app.source)} tip={r.app.commit ? `commit ${r.app.commit.slice(0, 12)}${r.app.commitSubject ? ': ' + r.app.commitSubject : ''}` : undefined} size={12} /> : <span className="rk-dim">—</span>),
+    cell: (r) =>
+      r.app ? <Mono text={sourceText(r.app.source)} tip={r.app.commit ? `commit ${r.app.commit.slice(0, 12)}${r.app.commitSubject ? ': ' + r.app.commitSubject : ''}` : undefined} size={12} /> : <span className="rk-dim">—</span>,
     export: (r) => [{ head: 'Source', cell: r.app ? sourceText(r.app.source) : '' }],
   },
   {
@@ -155,7 +168,12 @@ export function appTerms(r: AppRow): Term[] {
     { kind: 'chart', text: `${r.chart}-${r.chartVersion}` },
     { kind: 'status', text: r.status },
     { kind: 'drift', text: driftText(r) },
-    ...(r.app ? [{ kind: 'source', text: sourceText(r.app.source) }, { kind: 'ref', text: r.app.source.ref }] : []),
+    ...(r.app
+      ? [
+          { kind: 'source', text: sourceText(r.app.source) },
+          { kind: 'ref', text: r.app.source.ref },
+        ]
+      : []),
   ]
 }
 export const appLabel = (r: AppRow) => `${r.namespace}/${r.name}`

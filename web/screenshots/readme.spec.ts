@@ -91,9 +91,7 @@ test('pod details', async () => {
   await shot('pod-details', `#/pods?peek=pod:${pod.namespace}/${pod.name}`, connected)
 })
 
-for (const [name, hash] of [
-  ['admin-roles', '#/admin/roles'],
-] as const) {
+for (const [name, hash] of [['admin-roles', '#/admin/roles']] as const) {
   test(name, async () => {
     await shot(name, hash)
   })
@@ -110,7 +108,7 @@ async function aiops(name: string, hash: string, ready: (p: Page) => Promise<voi
 }
 
 test('aiops inbox', async () => {
-  await aiops('aiops-inbox', '#/cases/inbox', async (p) => {
+  await aiops('aiops-inbox', '#/aiops/inbox', async (p) => {
     await expect(p.getByRole('grid', { name: 'Inbox' })).toHaveCount(1, { timeout: 20_000 })
     await expect(p.locator('[data-inbox-row]').first()).toBeVisible({ timeout: 20_000 })
   })
@@ -118,21 +116,21 @@ test('aiops inbox', async () => {
 
 test('aiops case', async () => {
   // An agent-found case: its finding, how often it was seen and its analysis.
-  await page.goto('/#/cases/inbox?source=agents')
+  await page.goto('/#/aiops/inbox?source=agents')
   const row = page.locator('[data-inbox-row^="case:"]').first()
   await expect(row).toBeVisible({ timeout: 20_000 })
   const n = (await row.getAttribute('data-inbox-row'))!.split(':')[1]
-  await aiops('aiops-case', `#/cases/inbox/case/${n}`, async (p) => {
+  await aiops('aiops-case', `#/aiops/inbox/case/${n}`, async (p) => {
     await expect(p.getByTestId('case-drawer')).toBeVisible({ timeout: 20_000 })
   })
   await page.keyboard.press('Escape')
 })
 
 for (const [name, hash, testid] of [
-  ['aiops-jobs', '#/cases/jobs', 'jobs-tab'],
-  ['aiops-runs', '#/cases/jobs/runs', 'runs-table'],
-  ['aiops-rules', '#/cases/jobs/rules', 'rules-table'],
-  ['aiops-known-issues', '#/cases/mycroft/known', 'mycroft-tab'],
+  ['aiops-jobs', '#/aiops/jobs', 'jobs-tab'],
+  ['aiops-runs', '#/aiops/jobs/runs', 'runs-table'],
+  ['aiops-rules', '#/aiops/jobs/rules', 'rules-table'],
+  ['aiops-known-issues', '#/aiops/mycroft/known', 'mycroft-tab'],
 ] as const) {
   test(name, async () => {
     await aiops(name, hash, async (p) => {

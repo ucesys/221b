@@ -32,18 +32,18 @@ import (
 // so Kubernetes still decides.
 
 func (s *Server) cardsRoutes() {
-	s.handle("GET /api/v1/cases/proposals", "cases-proposals", s.getProposals)
-	s.handle("GET /api/v1/cases/proposals/{id}", "cases-proposal", s.getProposal)
-	s.handle("POST /api/v1/cases/proposals/{id}/approve", "cases-proposal-approve", s.postProposalApprove)
-	s.handle("POST /api/v1/cases/proposals/{id}/reject", "cases-proposal-reject", s.postProposalReject)
-	s.handle("POST /api/v1/cases/proposals/{id}/recheck", "cases-proposal-recheck", s.postProposalRecheck)
-	s.handle("GET /api/v1/cases/standing", "cases-standing", s.getStanding)
-	s.handle("POST /api/v1/cases/standing", "cases-standing-add", s.postStanding)
-	s.handle("PUT /api/v1/cases/standing/{id}", "cases-standing-save", s.putStanding)
-	s.handle("DELETE /api/v1/cases/standing/{id}", "cases-standing-delete", s.deleteStanding)
-	s.handle("GET /api/v1/cases/notifications", "cases-notifications", s.getNotifications)
-	s.handle("PUT /api/v1/cases/notifications", "cases-notifications-save", s.putNotifications)
-	s.handle("POST /api/v1/cases/notifications/{id}/test", "cases-notifications-test", s.postNotificationTest)
+	s.handle("GET /api/v1/aiops/proposals", "cases-proposals", s.getProposals)
+	s.handle("GET /api/v1/aiops/proposals/{id}", "cases-proposal", s.getProposal)
+	s.handle("POST /api/v1/aiops/proposals/{id}/approve", "cases-proposal-approve", s.postProposalApprove)
+	s.handle("POST /api/v1/aiops/proposals/{id}/reject", "cases-proposal-reject", s.postProposalReject)
+	s.handle("POST /api/v1/aiops/proposals/{id}/recheck", "cases-proposal-recheck", s.postProposalRecheck)
+	s.handle("GET /api/v1/aiops/standing", "cases-standing", s.getStanding)
+	s.handle("POST /api/v1/aiops/standing", "cases-standing-add", s.postStanding)
+	s.handle("PUT /api/v1/aiops/standing/{id}", "cases-standing-save", s.putStanding)
+	s.handle("DELETE /api/v1/aiops/standing/{id}", "cases-standing-delete", s.deleteStanding)
+	s.handle("GET /api/v1/aiops/notifications", "cases-notifications", s.getNotifications)
+	s.handle("PUT /api/v1/aiops/notifications", "cases-notifications-save", s.putNotifications)
+	s.handle("POST /api/v1/aiops/notifications/{id}/test", "cases-notifications-test", s.postNotificationTest)
 	s.opts.Cards.SetCondition(s.cardCondition)
 	if s.opts.Watson != nil {
 		s.opts.Cards.Register(cards.KindKubectl, watsonAction{s: s, tool: "kubectl"})
@@ -86,7 +86,7 @@ func (s *Server) maySeeCards(r *http.Request) bool {
 
 func (s *Server) cardsReady(w http.ResponseWriter, r *http.Request) bool {
 	if !s.maySeeCards(r) {
-		jsonError(w, http.StatusForbidden, "Only the people who may approve proposals see them (cases.approverRoles).")
+		jsonError(w, http.StatusForbidden, "Only the people who may approve proposed changes see them (cases.approverRoles).")
 		return false
 	}
 	return true
@@ -138,7 +138,7 @@ func cardError(w http.ResponseWriter, err error) {
 		msg = strings.Replace(msg, e.Error()+": ", "", 1)
 	}
 	if errors.Is(err, cards.ErrStale) {
-		msg = "This proposal cannot be approved as it stands: " + msg
+		msg = "This proposed change cannot be approved as it stands: " + msg
 	}
 	jsonError(w, cardStatus(err), upperFirst(msg))
 }
@@ -211,7 +211,7 @@ func (s *Server) viewProposalWith(r *http.Request, c cards.Card, titles map[stri
 	if c.Open() {
 		switch {
 		case !s.mayApproveCards(r):
-			v.Cannot = "You may see proposals, not approve them."
+			v.Cannot = "You may see proposed changes, not approve them."
 		default:
 			if err := s.opts.Cards.CanApprove(c, s.cardApprover(r)); err != nil {
 				msg := err.Error()
@@ -244,7 +244,7 @@ func (s *Server) getProposals(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := s.opts.Cards.List(r.Context(), f)
 	if err != nil {
-		jsonError(w, http.StatusServiceUnavailable, "The proposals could not be read: "+err.Error())
+		jsonError(w, http.StatusServiceUnavailable, "The proposed changes could not be read: "+err.Error())
 		return
 	}
 	out := make([]proposalView, 0, len(list))
@@ -274,7 +274,7 @@ func (s *Server) getProposal(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) postProposalApprove(w http.ResponseWriter, r *http.Request) {
 	if !s.mayApproveCards(r) {
-		jsonError(w, http.StatusForbidden, "Approving proposals needs the approval permission (cases.approverRoles).")
+		jsonError(w, http.StatusForbidden, "Approving proposed changes needs the approval permission (cases.approverRoles).")
 		return
 	}
 	var in struct {
@@ -293,7 +293,7 @@ func (s *Server) postProposalApprove(w http.ResponseWriter, r *http.Request) {
 	// A chat's card the person sent to Watson too: approved here, the
 	// card there goes, so it cannot run twice.
 	if c.WatsonItem != "" && c.State != cards.Queued && s.opts.Watson != nil {
-		s.opts.Watson.Supersede(c.WatsonItem, "Approved as proposal "+c.ID+" in AIOps › Inbox.")
+		s.opts.Watson.Supersede(c.WatsonItem, "Approved as proposed change "+c.ID+" in AIOps › Inbox.")
 	}
 	writeValue(w, r, s.viewProposal(r, c))
 }
@@ -309,7 +309,7 @@ func (s *Server) cardConflict(w http.ResponseWriter, r *http.Request, c cards.Ca
 	}
 	msg := upperFirst(strings.Replace(err.Error(), cards.ErrState.Error()+": ", "", 1))
 	if errors.Is(err, cards.ErrStale) {
-		msg = "This proposal cannot be approved as it stands: " + strings.TrimPrefix(err.Error(), cards.ErrStale.Error()+": ")
+		msg = "This proposed change cannot be approved as it stands: " + strings.TrimPrefix(err.Error(), cards.ErrStale.Error()+": ")
 	}
 	b, _ := json.Marshal(map[string]any{"error": msg, "proposal": s.viewProposal(r, c)})
 	writeJSONStatus(w, r, http.StatusConflict, b)
@@ -323,7 +323,7 @@ func (s *Server) postProposalReject(w http.ResponseWriter, r *http.Request) {
 		// The person who asked in a chat withdraws their own.
 		c, err := s.opts.Cards.Get(r.Context(), id)
 		if err != nil || c.Requester == nil || me.Key == "" || c.Requester.Key != me.Key {
-			jsonError(w, http.StatusForbidden, "Rejecting proposals needs the approval permission (cases.approverRoles).")
+			jsonError(w, http.StatusForbidden, "Rejecting proposed changes needs the approval permission (cases.approverRoles).")
 			return
 		}
 	}
@@ -341,7 +341,7 @@ func (s *Server) postProposalReject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if c.WatsonItem != "" && s.opts.Watson != nil {
-		s.opts.Watson.Supersede(c.WatsonItem, "Rejected as proposal "+c.ID+": "+in.Reason)
+		s.opts.Watson.Supersede(c.WatsonItem, "Rejected as proposed change "+c.ID+": "+in.Reason)
 	}
 	writeValue(w, r, s.viewProposal(r, c))
 }

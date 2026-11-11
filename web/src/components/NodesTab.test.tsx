@@ -7,7 +7,21 @@ import { HeadPickBox, RowPickBox } from './NodePicks'
 import { NodesTab } from './NodesTab'
 import { ToolboxContext, type ToolboxApi } from './toolbox/context'
 
-const row = (name: string) => ({ name, role: 'worker', roles: [], status: 'Ready', problems: [], errors: 0, warnings: 0, taints: [], labels: {}, conditions: [], cpu: { allocatable: 1000, capacity: 1000 }, memory: { allocatable: 1000, capacity: 1000 } }) as unknown as NodeRow
+const row = (name: string) =>
+  ({
+    name,
+    role: 'worker',
+    roles: [],
+    status: 'Ready',
+    problems: [],
+    errors: 0,
+    warnings: 0,
+    taints: [],
+    labels: {},
+    conditions: [],
+    cpu: { allocatable: 1000, capacity: 1000 },
+    memory: { allocatable: 1000, capacity: 1000 },
+  }) as unknown as NodeRow
 const rows = [row('n1'), row('n2'), row('n3')]
 
 vi.mock('../api/live', () => ({
@@ -93,7 +107,12 @@ describe('picked nodes on the Nodes page', () => {
   })
 
   it("collects the picked nodes' facts and says which answered", async () => {
-    facts.mockReturnValue({ nodes: [{ cluster: 'local', node: 'n1', at: '' }, { cluster: 'local', node: 'n3', at: '', error: 'timed out' }] })
+    facts.mockReturnValue({
+      nodes: [
+        { cluster: 'local', node: 'n1', at: '' },
+        { cluster: 'local', node: 'n3', at: '', error: 'timed out' },
+      ],
+    })
     const toast = vi.fn()
     nodes(true, { available: false }, toast)
     pick(0)

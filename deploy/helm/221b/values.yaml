@@ -423,8 +423,8 @@ issues:
 cases:
   # The agents' proposals (Phase 12, ADR-99 to ADR-102): every change an
   # agent wants, asked in a chat or on its own, waits as a durable Watson
-  # card in Cases › Inbox and the cluster's Watson panel, in the ConfigMap
-  # <release>-cases, until people approve or reject it, it expires (24
+  # card in AIOps › Inbox and the cluster's Watson panel, in the ConfigMap
+  # <release>-proposals, until people approve or reject it, it expires (24
   # hours, or when its alert resolves), or a newer one replaces it.
   # The roles that may approve proposals, of superAdmin, superViewer,
   # admin and viewer: the approval permission. A SuperAdmin always may; a

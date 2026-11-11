@@ -75,14 +75,25 @@ export function ConfluenceSettings({ open }: { open: boolean }) {
     <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }} aria-label="Confluence" data-testid="confluence-settings">
       <h3 className="rk-h">Confluence</h3>
       <p className="rk-fhint" style={{ margin: 0 }}>
-        The known issues are published to one space: a Status page grouped by service, one page per known issue, and a resolved archive by month. Each page has a part the issue service rewrites and a Notes part people edit freely; a person’s edit inside the rewritten part is never overwritten, its owner is asked. Pages are never deleted. A page someone writes under the tree becomes a draft known issue.
+        The known issues are published to one space: a Status page grouped by service, one page per known issue, and a resolved archive by month. Each page has a part the issue service rewrites and a Notes part people edit freely; a
+        person’s edit inside the rewritten part is never overwritten, its owner is asked. Pages are never deleted. A page someone writes under the tree becomes a draft known issue.
       </p>
       <label className="rk-tcheck">
         <input type="checkbox" checked={draft.on} onChange={(e) => put({ on: e.target.checked })} data-testid="confluence-on" />
         Publish the known issues to Confluence
       </label>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-        <Select label="Confluence" value={draft.flavor} options={[['cloud', 'Confluence Cloud (email and API token)'], ['datacenter', 'Confluence Data Center (personal access token)']]} onChange={(x) => put({ flavor: x as Settings['flavor'] })} width={320} testId="confluence-flavor" />
+        <Select
+          label="Confluence"
+          value={draft.flavor}
+          options={[
+            ['cloud', 'Confluence Cloud (email and API token)'],
+            ['datacenter', 'Confluence Data Center (personal access token)'],
+          ]}
+          onChange={(x) => put({ flavor: x as Settings['flavor'] })}
+          width={320}
+          testId="confluence-flavor"
+        />
         {field('baseURL', 'Address', 'https://example.atlassian.net', 280)}
         {draft.flavor === 'cloud' && field('email', 'Account email', 'publisher@example.com', 220)}
       </div>
@@ -104,7 +115,8 @@ export function ConfluenceSettings({ open }: { open: boolean }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         <span style={{ fontSize: 12.5 }}>Write token</span>
         <span className="rk-fhint" data-testid="confluence-token-state">
-          {view.token ? 'A write token is saved in the Secret <release>-knowledge; it is never shown again.' : 'No write token saved.'} Use a token that may write the space(s) and nothing else: it is apart from the read-only tokens Mycroft reads its sources with.
+          {view.token ? 'A write token is saved in the Secret <release>-knowledge; it is never shown again.' : 'No write token saved.'} Use a token that may write the space(s) and nothing else: it is apart from the read-only tokens Mycroft
+          reads its sources with.
         </span>
         {replace || !view.token ? (
           <span className="rk-field" style={{ maxWidth: 360 }}>
@@ -136,7 +148,10 @@ export function ConfluenceSettings({ open }: { open: boolean }) {
           <>
             <dt>Edits waiting</dt>
             <dd>
-              {view.conflicts} in <a className="rk-link" href="#/cases/inbox">AIOps › Inbox</a>
+              {view.conflicts} in{' '}
+              <a className="rk-link" href="#/aiops/inbox">
+                AIOps › Inbox
+              </a>
             </dd>
           </>
         )}

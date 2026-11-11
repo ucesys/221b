@@ -3,17 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ClusterInfo, Me } from '../api/types'
 import { setPref } from '../lib/prefs'
 import { parseHash } from '../lib/router'
-import type { InboxCounts } from './cases/useInbox'
-import { inboxCounts } from './cases/useInbox'
-import { suggestionRow, type InboxRow } from './cases/inboxRows'
+import type { InboxCounts } from './aiops/useInbox'
+import { inboxCounts } from './aiops/useInbox'
+import { suggestionRow, type InboxRow } from './aiops/inboxRows'
 import { bellOf, TopBar } from './TopBar'
 
 // What the Inbox has pending for the person, as each test sets it.
 let counts: InboxCounts
 const none: InboxCounts = { total: 0, byKind: { case: 0, proposal: 0, approval: 0, known: 0, knowledge: 0, rule: 0 }, p0: 0, p1: 0 }
 
-vi.mock('./cases/useInbox', async (original) => ({
-  ...(await original<typeof import('./cases/useInbox')>()),
+vi.mock('./aiops/useInbox', async (original) => ({
+  ...(await original<typeof import('./aiops/useInbox')>()),
   useInboxCounts: () => counts,
 }))
 vi.mock('../lib/cases', async (original) => ({ ...(await original<typeof import('../lib/cases')>()), useIssueMe: () => null }))
@@ -23,13 +23,36 @@ const admin: Me = { mode: 'oidc', user: { subject: 's', username: 'ann', name: '
 const nobody: Me = { mode: 'oidc', user: { subject: 'n', username: 'ned', name: 'Ned' }, admin: false, roles: [], method: 'oidc', sessionIdleSeconds: 0 }
 const cluster = { id: 'local', name: 'Here', state: 'connected' } as unknown as ClusterInfo
 
-const bar = (me: Me = admin, hash = '#/cases/inbox') => {
+const bar = (me: Me = admin, hash = '#/aiops/inbox') => {
   const route = parseHash(hash)
-  return render(<TopBar cluster={cluster} counts={{ alerts: 2 }} tones={{ alerts: 'err' }} tab={route.view === 'tabs' ? route.tab : null} stream="open" updatedAt={null} refreshedAt={null} settings={null} theme="light" onTheme={() => undefined} me={me} route={route} onEditCluster={() => undefined} />)
+  return render(
+    <TopBar
+      cluster={cluster}
+      counts={{ alerts: 2 }}
+      tones={{ alerts: 'err' }}
+      tab={route.view === 'tabs' ? route.tab : null}
+      stream="open"
+      updatedAt={null}
+      refreshedAt={null}
+      settings={null}
+      theme="light"
+      onTheme={() => undefined}
+      me={me}
+      route={route}
+      onEditCluster={() => undefined}
+    />,
+  )
 }
 
 beforeEach(() => {
-  vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} })
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    },
+  )
   counts = { total: 3, byKind: { case: 2, proposal: 1, approval: 0, known: 0, knowledge: 0, rule: 0 }, p0: 0, p1: 0 }
   setPref('221b.last-area', 'kubernetes')
   setPref('221b.nodes-area', 'kubernetes')
@@ -65,7 +88,7 @@ describe('the bell is the Inbox’s (CF-80)', () => {
     expect(bell.getAttribute('title')).toBe('Nothing waiting for you in AIOps › Inbox')
     expect(bell.getAttribute('aria-label')).toBe('Nothing waiting for you in AIOps › Inbox')
     expect(bell.textContent).toBe('')
-    expect(bell.getAttribute('href')).toBe('#/cases/inbox')
+    expect(bell.getAttribute('href')).toBe('#/aiops/inbox')
   })
 
   it('is yellow while something waits, says how much, and opens the Inbox', () => {
@@ -77,7 +100,7 @@ describe('the bell is the Inbox’s (CF-80)', () => {
     // No count on it, and none on the Cases switch either (CF-88).
     expect(bell.textContent).toBe('')
     expect(screen.queryByTestId('cases-count')).toBeNull()
-    expect(bell.getAttribute('href')).toBe('#/cases/inbox')
+    expect(bell.getAttribute('href')).toBe('#/aiops/inbox')
   })
 
   it('is red while a P0 or P1 case waits, in every area', () => {
@@ -110,7 +133,21 @@ describe('the bell is the Inbox’s (CF-80)', () => {
   })
 
   it('counts what the Inbox counts, and the P0 and P1 cases among it', () => {
-    const row = (over: Partial<InboxRow>): InboxRow => ({ key: Math.random().toString(36), kind: 'case', open: ['case', '1'], ref: 'C-1', title: 't', status: 'New', tone: 'info', pending: true, since: '', assignable: true, mine: false, origin: 'people', ...over })
+    const row = (over: Partial<InboxRow>): InboxRow => ({
+      key: Math.random().toString(36),
+      kind: 'case',
+      open: ['case', '1'],
+      ref: 'C-1',
+      title: 't',
+      status: 'New',
+      tone: 'info',
+      pending: true,
+      since: '',
+      assignable: true,
+      mine: false,
+      origin: 'people',
+      ...over,
+    })
     const c = inboxCounts([
       row({ priority: 0 }),
       row({ priority: 1 }),
@@ -146,7 +183,7 @@ describe('the area switch (CF-88)', () => {
   })
 
   it('keeps Cases selected in Administration after coming from Cases', () => {
-    bar(admin, '#/cases/mycroft/wiki')
+    bar(admin, '#/aiops/mycroft/wiki')
     expect(pressed()).toEqual(['cases'])
     cleanup()
     bar(admin, '#/admin/settings/general')
@@ -166,7 +203,7 @@ describe('the area switch (CF-88)', () => {
   })
 
   it('keeps Kubernetes after coming from Kubernetes, Cases before it or not', () => {
-    bar(admin, '#/cases/inbox')
+    bar(admin, '#/aiops/inbox')
     cleanup()
     bar(admin, '#/alerts')
     expect(pressed()).toEqual(['kubernetes'])

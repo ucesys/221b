@@ -200,7 +200,10 @@ export function csvText(head: string[], rows: Cell[][]): string {
 
 /** A file name: cluster-nodes-20261013-1403.xlsx. */
 export function exportFileName(cluster: string | undefined, what: string, format: ExportFormat): string {
-  const name = (cluster || 'cluster').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  const name = (cluster || 'cluster')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
   const ext = EXPORT_FORMATS.find((f) => f.id === format)?.ext ?? ''
   return `${name}-${what}-${fileStamp()}${ext}`
 }

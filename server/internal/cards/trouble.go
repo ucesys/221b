@@ -160,7 +160,7 @@ func (c chats) Load(ctx context.Context, k sherlock.Key) ([]sherlock.Msg, error)
 }
 
 // errDecidedChat refuses to keep the conversation of a decided proposal.
-var errDecidedChat = fmt.Errorf("%w: the proposal is decided, and keeps no conversation", ErrState)
+var errDecidedChat = fmt.Errorf("%w: the proposed change is decided, and keeps no conversation", ErrState)
 
 // startsWithQuestion drops a conversation's first messages until it
 // starts with a question.
@@ -231,7 +231,7 @@ func (c chats) Save(ctx context.Context, k sherlock.Key, msgs []sherlock.Msg) er
 			if len(r.Messages) == 0 {
 				delete(rec.Chats, oldest)
 				if oldest == id {
-					return fmt.Errorf("%w: the proposals' conversations have no room left", ErrFull)
+					return fmt.Errorf("%w: the proposed changes' conversations have no room left", ErrFull)
 				}
 				continue
 			}
@@ -293,7 +293,7 @@ func (c Card) TroubleText(clusterName, agentName string) string {
 // ChatAsked records a question asked on a proposal's conversation
 // (cards.chat): who asked, never what.
 func (s *Store) ChatAsked(c Card, by Person) {
-	s.record(audit.ActionCardChat, c, by, audit.OutcomeOK, "asked Sherlock on the proposal's conversation")
+	s.record(audit.ActionCardChat, c, by, audit.OutcomeOK, "asked Sherlock on the proposed change's conversation")
 }
 
 // ---------- the command log ----------
@@ -382,7 +382,7 @@ func (s *Store) LogCommands(ctx context.Context, id string, cmds []Command, by P
 	}
 	for _, cmd := range added {
 		kind := map[bool]string{true: "change", false: "read"}[cmd.Change]
-		s.record(audit.ActionCardCommand, c, by, audit.OutcomeOK, fmt.Sprintf("command %q from the proposal's drawer; kind %s; status %s", clipLine(cmd.Line), kind, cmd.Status))
+		s.record(audit.ActionCardCommand, c, by, audit.OutcomeOK, fmt.Sprintf("command %q from the proposed change's drawer; kind %s; status %s", clipLine(cmd.Line), kind, cmd.Status))
 	}
 	return nil
 }

@@ -47,8 +47,8 @@ test.afterAll(async ({ browser }) => {
   const page = await browser.newPage()
   await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
-  if (cardId) await api(page, 'POST', `/api/v1/cases/proposals/${cardId}/reject`, { reason: 'e2e: done' })
-  for (const id of caseIds) await api(page, 'POST', `/api/v1/cases/cases/${id}/close`, { outcome: 'noAction', explanation: 'e2e: done' })
+  if (cardId) await api(page, 'POST', `/api/v1/aiops/proposals/${cardId}/reject`, { reason: 'e2e: done' })
+  for (const id of caseIds) await api(page, 'POST', `/api/v1/aiops/cases/${id}/close`, { outcome: 'noAction', explanation: 'e2e: done' })
   await api(page, 'PUT', '/api/v1/sherlock/config', { ...ON, clusters: {} })
   if (node) await cluster.cordon(node, false)
   await page.close()
@@ -74,7 +74,7 @@ test('a proposed change is troubleshot in its drawer, and approved in its Watson
     .not.toBe('')
   // Two cases the change resolves: a proposal links several, so it has a conversation of its own.
   for (const what of ['restarts', 'is slow']) {
-    const res = await page.request.post('/api/v1/cases/cases', { headers: SAME, data: { title: `Proposal e2e: ${pod.name} ${what} ${Date.now()}`, cluster: 'local', resource: `${pod.namespace}/Pod/${pod.name}`, priority: 3 } })
+    const res = await page.request.post('/api/v1/aiops/cases', { headers: SAME, data: { title: `Proposal e2e: ${pod.name} ${what} ${Date.now()}`, cluster: 'local', resource: `${pod.namespace}/Pod/${pod.name}`, priority: 3 } })
     expect(res.status(), await res.text()).toBe(201)
     caseIds.push(((await res.json()) as { id: string }).id)
   }
@@ -84,18 +84,18 @@ test('a proposed change is troubleshot in its drawer, and approved in its Watson
   expect(sent.status, JSON.stringify(sent.json)).toBe(202)
   await expect
     .poll(async () => {
-      const list = ((await api(page, 'GET', '/api/v1/cases/proposals?state=queued&cluster=local')).json as { proposals: Card[] }).proposals
+      const list = ((await api(page, 'GET', '/api/v1/aiops/proposals?state=queued&cluster=local')).json as { proposals: Card[] }).proposals
       cardId = list.find((p) => p.source.kind === 'chat' && p.title === command)?.id ?? ''
       return cardId
     })
     .not.toBe('')
   for (const id of caseIds) {
-    const linked = await api(page, 'POST', `/api/v1/cases/cases/${id}/changes`, { card: cardId })
+    const linked = await api(page, 'POST', `/api/v1/aiops/cases/${id}/changes`, { card: cardId })
     expect(linked.status, JSON.stringify(linked.json)).toBe(200)
   }
 
   // Near full screen, split: the proposal on the left, Troubleshoot on the right, its cases linked.
-  await page.goto(`/#/cases/inbox/proposal/${cardId}`)
+  await page.goto(`/#/aiops/inbox/proposal/${cardId}`)
   const drawer = page.getByTestId('proposal-drawer')
   await expect(drawer).toHaveAttribute('data-size', 'full')
   await expect(drawer.getByTestId('drawer-split')).toHaveAttribute('data-layout', 'split')
@@ -137,7 +137,7 @@ test('a proposed change is troubleshot in its drawer, and approved in its Watson
   await expect
     .poll(
       async () => {
-        decided = (await api(page, 'GET', `/api/v1/cases/proposals/${cardId}`)).json as Card
+        decided = (await api(page, 'GET', `/api/v1/aiops/proposals/${cardId}`)).json as Card
         return decided.state
       },
       { timeout: 60_000 },
@@ -145,14 +145,14 @@ test('a proposed change is troubleshot in its drawer, and approved in its Watson
     .toBe('applied')
   expect(decided.approvals).toHaveLength(1)
   // Decided: the log keeps the change that finished done, never output; the read goes.
-  await expect.poll(async () => ((await api(page, 'GET', `/api/v1/cases/proposals/${cardId}`)).json as Card).commands?.map((c) => `${c.change ? 'change' : 'read'}:${c.status}:${c.line}`)).toEqual([`change:done:${command}`])
+  await expect.poll(async () => ((await api(page, 'GET', `/api/v1/aiops/proposals/${cardId}`)).json as Card).commands?.map((c) => `${c.change ? 'change' : 'read'}:${c.status}:${c.line}`)).toEqual([`change:done:${command}`])
   await expect(drawer.getByTestId('proposal-commands')).toContainText(command, { timeout: 15_000 })
-  const chat = (await api(page, 'GET', `/api/v1/cases/proposals/${cardId}/sherlock/conversation`)).json as { messages: unknown[] }
+  const chat = (await api(page, 'GET', `/api/v1/aiops/proposals/${cardId}/sherlock/conversation`)).json as { messages: unknown[] }
   expect(chat.messages).toHaveLength(0)
   cardId = ''
 
   // Each case it resolves starts closing as Fixed from the change (CF-49).
   for (const id of caseIds) {
-    await expect.poll(async () => ((await api(page, 'GET', `/api/v1/cases/cases/${id}`)).json as { fixCommands: string[] }).fixCommands, { timeout: 15_000 }).toEqual([command])
+    await expect.poll(async () => ((await api(page, 'GET', `/api/v1/aiops/cases/${id}`)).json as { fixCommands: string[] }).fixCommands, { timeout: 15_000 }).toEqual([command])
   }
 })

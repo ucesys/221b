@@ -137,7 +137,7 @@ func syncOnAtFirst(x Source) bool {
 func (s *Service) syncKind(x Source) jobs.Kind {
 	id := x.ID
 	k := jobs.Kind{ID: SyncJobID(x.ID), Label: "Wiki sync: " + x.Name, Agent: MycroftID, AgentName: "Mycroft", Order: 61, On: syncOnAtFirst(x),
-		Proposes:    "Changes to the wiki's pages, which wait for review in AIOps › Inbox, and the hosts and fleets its documents list that the console lacks, as proposals there. A run makes no findings, and nothing it makes changes anything.",
+		Proposes:    "Changes to the wiki's pages, which wait for review in AIOps › Inbox, and the hosts and fleets its documents list that the console lacks, as proposed changes there. A run makes no findings, and nothing it makes changes anything.",
 		Budget:      SyncBudget,
 		Schedulable: true, Single: true, NoFindings: true, Rebuild: true,
 		Run: func(ctx context.Context, env *jobs.RunEnv) (jobs.Outcome, error) { return s.runSync(ctx, env, id) }}
@@ -302,13 +302,13 @@ func syncFacts(r SyncResult, x Source) []jobs.Fact {
 		drafts = jobs.Fact{Label: "Pages drafted", Text: n(r.Pages, "page change waits", "page changes wait") + " for review in AIOps › Inbox", Href: DraftHref(r.Run)}
 	}
 	out = append(out, drafts)
-	props := jobs.Fact{Label: "Proposals", Text: "None"}
+	props := jobs.Fact{Label: "Proposed changes", Text: "None"}
 	if r.Proposals > 0 {
-		props = jobs.Fact{Label: "Proposals", Text: n(r.Proposals, "proposal waits", "proposals wait") + " in AIOps › Inbox", Href: "#/cases/inbox"}
+		props = jobs.Fact{Label: "Proposed changes", Text: n(r.Proposals, "proposed change waits", "proposed changes wait") + " in AIOps › Inbox", Href: "#/aiops/inbox"}
 	}
 	out = append(out, props)
 	if len(r.Fixes) > 0 {
-		out = append(out, jobs.Fact{Label: "Fixes given", Text: strings.Join(r.Fixes, ", "), Href: "#/cases/mycroft/fixes"})
+		out = append(out, jobs.Fact{Label: "Fixes given", Text: strings.Join(r.Fixes, ", "), Href: "#/aiops/mycroft/fixes"})
 	}
 	if len(r.Contradictions) > 0 {
 		out = append(out, jobs.Fact{Label: "Contradicting a fix", Text: n(len(r.Contradictions), "page says", "pages say") + " otherwise than a fix; the reviewer decides", Tone: "warn", Href: DraftHref(r.Run)})

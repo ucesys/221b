@@ -244,7 +244,13 @@ describe('the report page', () => {
   // CF-64: the reporter may choose the priority, each with what it means,
   // and the cluster by its name; left alone, nothing is sent for them.
   it('sends the priority and cluster the reporter chose, each option saying what it means', async () => {
-    vi.mocked(api.fetchIssueMe).mockResolvedValue({ ...me, clusters: [{ id: 'local', name: 'local' }, { id: 'c-prod', name: 'Production' }] })
+    vi.mocked(api.fetchIssueMe).mockResolvedValue({
+      ...me,
+      clusters: [
+        { id: 'local', name: 'local' },
+        { id: 'c-prod', name: 'Production' },
+      ],
+    })
     vi.mocked(api.sendReport).mockResolvedValue({ report: report(150, { priority: 1 }), removed: false })
     render(<ReportApp />)
     const box = await screen.findByTestId('report-text')
@@ -320,7 +326,10 @@ describe('matching known problems (wave 6)', () => {
   })
 
   it('never suggests a known issue made inactive as a duplicate (CF-63)', () => {
-    const list: api.Known[] = [{ ...known, id: 'KI-1' }, { ...known, id: 'KI-9', inactive: true }]
+    const list: api.Known[] = [
+      { ...known, id: 'KI-1' },
+      { ...known, id: 'KI-9', inactive: true },
+    ]
     expect(api.matchKnown('checkout times out', list).map((x) => x.id)).toEqual(['KI-1'])
   })
 })

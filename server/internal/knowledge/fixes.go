@@ -63,7 +63,7 @@ const (
 )
 
 // FixHref is a fix's drawer in AIOps › Mycroft › Fixes.
-func FixHref(id string) string { return "#/cases/mycroft/fixes/" + url.PathEscape(id) }
+func FixHref(id string) string { return "#/aiops/mycroft/fixes/" + url.PathEscape(id) }
 
 // FixKey is how a page names a fix among its sources: the key of its item
 // in the source Fixes.

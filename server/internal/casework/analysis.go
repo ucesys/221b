@@ -65,7 +65,7 @@ type request struct {
 // Kind is the case analysis job's kind, for the jobs' registry.
 func (s *Service) Kind() jobs.Kind {
 	return jobs.Kind{ID: jobs.KindCase, Label: "Case analysis", Agent: "troubleshooter", AgentName: "Troubleshooter", Order: 45,
-		Does: "Analyses each new case: the cause and evidence, a fix with the Watson command to run, and changes to propose; drafts a case's RCA",
+		Does: "Analyzes each new case: the cause and evidence, a fix with the Watson command to run, and changes to propose; drafts a case's RCA",
 		// --- Jobs and findings, round 2 (Phase 12, wave 5): its
 		// instructions are the job's to change (JR-05, JR-06).
 		Task:     AnalysisTask,
@@ -220,7 +220,7 @@ func (s *Service) finish(n int, run jobs.Run, out jobs.Outcome, rerr error) {
 	// The analysis found no problem: a case the console or an agent
 	// opened goes down to P3 (CF-83).
 	lowerFrom := -1
-	if r, err := s.o.Issues.Apply(ctx, n, func(tx *issues.Tx, r *issues.Report) error {
+	if r, err := s.o.Issues.Apply(ctx, n, func(tx *issues.Tx, r *issues.Case) error {
 		lowerFrom = -1
 		if fix && r.Status.Open() {
 			r.FixProposed = true
@@ -263,7 +263,7 @@ const (
 // or an agent opened, from an alert or a finding, whose priority came
 // from the alert or the finding's severity, never one a person opened or
 // whose priority a person set.
-func mayLower(r *issues.Report) bool {
+func mayLower(r *issues.Case) bool {
 	if !r.Status.Open() || r.Priority >= lowerTo || r.CreatedBy == nil {
 		return false
 	}
@@ -520,16 +520,29 @@ func (s *Service) run(ctx context.Context, env *jobs.RunEnv) (jobs.Outcome, erro
 			an.Evidence = append(an.Evidence, e)
 		}
 	}
+	// The suggested fix is kept whole or not at all (W-6, CF-98): one with
+	// a command Watson would refuse, or more commands than MaxCommands, is
+	// left out, and the run and the analysis say which command and why.
+	why := ""
 	for _, line := range a.Fix.Commands {
 		line = strings.TrimSpace(line)
-		if line == "" || len(an.Fix.Commands) >= MaxCommands {
+		if line == "" {
 			continue
+		}
+		if len(an.Fix.Commands) == MaxCommands {
+			why = fmt.Sprintf("it has more than %d commands", MaxCommands)
+			break
 		}
 		if err := s.commandOK(line); err != nil {
-			env.Note("a suggested command Watson would refuse was left out: %v", err)
-			continue
+			why = fmt.Sprintf("Watson would refuse “%s”: %v", clip(line, 200), err)
+			break
 		}
 		an.Fix.Commands = append(an.Fix.Commands, line)
+	}
+	if why != "" {
+		an.Fix = Fix{}
+		an.LeftOut = append(an.LeftOut, "The suggested fix, with all its commands, because "+why)
+		env.Note("the suggested fix was left out, with all its commands, because %s", why)
 	}
 	out.Data = an
 	// The fix it suggests waits as a card too, when it proposed none.
@@ -544,7 +557,6 @@ func (s *Service) run(ctx context.Context, env *jobs.RunEnv) (jobs.Outcome, erro
 	changes, notes := jobs.Parsed{Proposals: proposed}.Changes(s.o.CommandOK, c.Cluster, jobs.Evidence{Kind: "finding", Text: firstOf(an.Cause, an.Summary, c.Title), Ref: firstOf(c.Resource, c.ID)})
 	for i := range changes {
 		changes[i].Source = jobs.Source{Kind: "case", ID: c.ID, Label: clip(fmt.Sprintf("Case %s: %s", c.ID, c.Title), 200)}
-		changes[i].DedupKey = fmt.Sprintf("case:%s:%s", c.ID, strings.ToLower(changes[i].Title))
 		// It resolves its case, and the other cases it names (CF-26): the
 		// run checks them as it does every run's.
 		changes[i].Resolves = []string{c.ID}
@@ -559,6 +571,7 @@ func (s *Service) run(ctx context.Context, env *jobs.RunEnv) (jobs.Outcome, erro
 	out.Proposals = changes
 	for _, n := range notes {
 		env.Note("%s", n)
+		an.LeftOut = append(an.LeftOut, upper(clip(n, 500)))
 	}
 	return out, nil
 }

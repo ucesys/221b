@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/issues"
+	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
@@ -225,7 +226,7 @@ func TestEveryCloseDeletesTheConversationCF47(t *testing.T) {
 	}
 	w.applyTo(t, st, ver)
 	w.now = w.now.Add(time.Hour)
-	w.route(t, "nightly-audit", true)
+	w.routeWith(t, "nightly-audit", true, []jobs.Recheck{recheck("pod.privileged", "ci/DaemonSet/runner", false, "the runner runs unprivileged")})
 	if v := w.get(t, ver); v.Status != issues.StatusClosed {
 		t.Fatalf("not closed on verification: %+v", v.Brief)
 	}

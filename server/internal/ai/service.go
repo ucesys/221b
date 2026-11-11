@@ -435,7 +435,7 @@ func (s *Service) Agent(id string, q sherlock.Question) (sherlock.Agent, error) 
 	if g := s.setupGuide(); id == Sherlock && q.SuperAdmin && g != nil && g.Open(context.Background()) {
 		setup = g.Status
 	}
-	// Sherlock's Cases skill (IB-10): asked from the Cases area, it knows
+	// Sherlock's AIOps skill (IB-10): asked from the AIOps area, it knows
 	// the area's pages.
 	var over *draftText
 	if house != nil || notes != nil {
@@ -521,7 +521,7 @@ func replyBound(window int) int {
 
 // resolve builds the agent; over, when given, is the instructions to use
 // instead (a test of a draft). setup, for Sherlock, turns its setup skill
-// on with what setup_status reads; cases its Cases skill (IB-10).
+// on with what setup_status reads; cases its AIOps skill (IB-10).
 func (s *Service) resolve(snap snapshot, id, cluster string, names []string, over *draftText, setup func(context.Context) string, cases bool) (sherlock.Agent, error) {
 	info, ok := InfoOf(id)
 	if !ok {
@@ -578,7 +578,7 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 		tools = append(tools, sherlock.ToolSetupStatus)
 	}
 	if cases && id == Sherlock {
-		core += "\n\n" + CasesSkill()
+		core += "\n\n" + AIOpsSkill()
 	}
 	window, _ := windowOf(set, p, model)
 	a := sherlock.Agent{

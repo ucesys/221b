@@ -1,5 +1,5 @@
 // The cases (Phase 12, CW-01 to CW-14; since wave 5, CU-01 to CU-14; since
-// wave 6, one flow for findings and cases): under /api/v1/cases/cases. A
+// wave 6, one flow for findings and cases): under /api/v1/aiops/cases. A
 // case is the one record of every problem, whatever opened it: a person's
 // report (the report page, the avatar menu, Sherlock's "Report this", a
 // system through the issue API), an agent's finding, an alert, or a
@@ -169,6 +169,8 @@ export interface CaseAnalysis {
   expectedWhy?: string
   /** Why it did not finish. */
   error?: string
+  /** What it suggested that was left out, and why: a fix or change with a command Watson would refuse is dropped whole (W-6). */
+  leftOut?: string[]
 }
 
 /** The RCA a case was fixed with: part of the case, no record of its own (wave 6e). */
@@ -266,7 +268,7 @@ export interface CaseBrief extends CaseRef {
   /** Whether the SLA's targets apply: every human-created case, an agent-found one at P0 or P1. */
   slaApplies: boolean
   closedAt?: string
-  /** When a later run no longer saw the problem of a case closed as fixed. */
+  /** When a run verified the fix of a case closed as fixed: since the review, one that re-checked it and found the problem gone (CF-94). */
   verified?: string
   /** The same check was closed as no action needed three times: an exception may fit. */
   suggestException?: boolean
@@ -495,8 +497,12 @@ export interface Case extends CaseBrief {
   proposals: CaseCard[]
   /** The fix applied: by a person's Fix, or by a change (its card's id) once applied (CF-29). */
   fixApplied?: { text: string; by: string; at: string; change?: string }
-  /** The job whose next run checks the fix a change applied. */
+  /** The job whose run re-checks a fix that waits for verification. */
   verifyJob?: { id: string; label: string }
+  /** The run that verified its fix, and what the agent read when it re-checked it (I-1). */
+  verifiedBy?: VerifiedBy
+  /** For a fix still waiting: since when, and how many runs of its job, with it in their scope, did not re-check it (I-1). */
+  verifyWait?: { since: string; unchecked: number }
   rca?: CaseRCA
   history: CaseEvent[]
   draft?: CaseDraft
@@ -612,7 +618,7 @@ export interface SLATargets {
   maySet: boolean
 }
 
-const base = '/api/v1/cases/cases'
+const base = '/api/v1/aiops/cases'
 const enc = encodeURIComponent
 const put = (body: unknown): RequestInit => ({ method: 'PUT', body: JSON.stringify(body) })
 const one = (id: string | number) => `${base}/${enc(String(id))}`
@@ -654,8 +660,7 @@ export const discardCaseDraft = (id: string, msg: number) => call<Case>(`${one(i
  * draft changed since is refused with 409 (DraftConflict), unless force
  * saves over it.
  */
-export const keepDraft = (id: string, d: CaseDraft, base = '', force = false) =>
-  call<Case>(one(id) + '/draft', put({ reply: d.reply, fix: d.fix, close: d.close, rca: d.rca, ...(base ? { base } : {}), ...(force ? { force } : {}) }))
+export const keepDraft = (id: string, d: CaseDraft, base = '', force = false) => call<Case>(one(id) + '/draft', put({ reply: d.reply, fix: d.fix, close: d.close, rca: d.rca, ...(base ? { base } : {}), ...(force ? { force } : {}) }))
 export const dropDraft = (id: string, base = '', force = false) => {
   const q = new URLSearchParams()
   if (base) q.set('base', base)
@@ -670,8 +675,7 @@ export const closeKnown = (id: string, link: { id?: string; create?: { title: st
  * text; the case closes as fixed. saveFix false keeps it from becoming a
  * fix in Mycroft › Fixes; left out, the server saves one (wave 6g).
  */
-export const fixCase = (id: string, text: string, rca?: Completion, saveFix?: boolean) =>
-  call<Case>(one(id) + '/fix', post({ text, ...(rca ? { rca } : {}), ...(saveFix === undefined ? {} : { saveFix }) }))
+export const fixCase = (id: string, text: string, rca?: Completion, saveFix?: boolean) => call<Case>(one(id) + '/fix', post({ text, ...(rca ? { rca } : {}), ...(saveFix === undefined ? {} : { saveFix }) }))
 /** Close as duplicate or no action needed; a duplicate whose original does not allow it answers 409 with the check. */
 export const closeCase = (id: string, c: Closing) => call<Case>(one(id) + '/close', post(c))
 /** Whether the case may close as a duplicate of the original, and what fits instead. */
@@ -684,12 +688,12 @@ export const reopenCase = (id: string, reason: string) => call<Case>(one(id) + '
 /** Add to a case instead of opening another: the person follows it, and the text is added. */
 export const joinCase = (id: string, text: string) => call<Case>(one(id) + '/join', post({ text }))
 /** What matches a case being written (no agent runs). */
-export const fetchSimilar = (q: { title: string; detail?: string; cluster?: string; resource?: string }) => call<Similar>('/api/v1/cases/similar', post(q))
+export const fetchSimilar = (q: { title: string; detail?: string; cluster?: string; resource?: string }) => call<Similar>('/api/v1/aiops/similar', post(q))
 export const analyzeCase = (id: string) => call<Case>(one(id) + '/analyze', post({}))
 export const draftRCA = (id: string) => call<RCADraft>(one(id) + '/rca-draft', post({}))
-export const fetchOpenKnown = () => call<{ known: OpenKnown[] }>('/api/v1/cases/known-open').then((r) => r.known)
-export const fetchSLA = () => call<SLATargets>('/api/v1/cases/sla')
-export const saveSLA = (targets: SLATargets['targets']) => call<SLATargets>('/api/v1/cases/sla', put({ targets }))
+export const fetchOpenKnown = () => call<{ known: OpenKnown[] }>('/api/v1/aiops/known-open').then((r) => r.known)
+export const fetchSLA = () => call<SLATargets>('/api/v1/aiops/sla')
+export const saveSLA = (targets: SLATargets['targets']) => call<SLATargets>('/api/v1/aiops/sla', put({ targets }))
 /** Links a change to the case: it resolves it too (CF-28); 409 when the card is on another cluster, linked already, or the case is closed. */
 export const linkChange = (id: string, card: string) => call<Case>(one(id) + '/changes', post({ card }))
 /** Unlinks a change a person linked; an agent's own link stays (409). */
@@ -731,8 +735,8 @@ export const BULK_MAX = 100
 /** One action for up to 100 cases, each checked by the rules of its single route; the answer says how each took it. */
 export const bulkCases = (cases: string[], action: BulkAction, fields: BulkFields = {}) => call<{ results: BulkResult[] }>(base + '/bulk', post({ cases, action, ...fields }))
 
-export const fetchCasesSettings = () => call<CasesSettings>('/api/v1/cases/settings')
-export const saveCasesSettings = (s: CasesSettings) => call<CasesSettings>('/api/v1/cases/settings', put(s))
+export const fetchCasesSettings = () => call<CasesSettings>('/api/v1/aiops/settings')
+export const saveCasesSettings = (s: CasesSettings) => call<CasesSettings>('/api/v1/aiops/settings', put(s))
 
 /** An open case that covers an alert (CF-77). */
 export interface CoverCase {
@@ -752,7 +756,7 @@ export interface AlertCovers {
   alerts: Record<string, CoverCase[]>
 }
 
-export const fetchAlertCovers = (cluster: string, background = false) => call<AlertCovers>(`/api/v1/cases/alert-cases?cluster=${enc(cluster)}`, {}, background)
+export const fetchAlertCovers = (cluster: string, background = false) => call<AlertCovers>(`/api/v1/aiops/alert-cases?cluster=${enc(cluster)}`, {}, background)
 
 /** The open cases that cover one alert, newest first: by its key, then by its object. */
 export function coversOf(c: AlertCovers | null | undefined, key: string, object: string): CoverCase[] {
@@ -762,8 +766,8 @@ export function coversOf(c: AlertCovers | null | undefined, key: string, object:
   return out.sort((a, b) => b.number - a.number)
 }
 
-/** Where a case opens: its drawer in the Inbox, #/cases/inbox/case/12. */
-export const caseHref = (number: number | string) => `#/cases/inbox/case/${enc(String(number).replace(/^C-/i, ''))}`
+/** Where a case opens: its drawer in the Inbox, #/aiops/inbox/case/12. */
+export const caseHref = (number: number | string) => `#/aiops/inbox/case/${enc(String(number).replace(/^C-/i, ''))}`
 
 export const CASE_STATUS: Record<CaseStatus, string> = {
   new: 'New',
@@ -789,9 +793,31 @@ export const SOURCE: Record<CaseSourceKind, string> = {
 
 /** The check of a fix a change applied, as a tag says it, with a line that says more (CF-31). */
 export const VERIFICATION: Record<Verification, { tag: string; tone: string; hint: string }> = {
-  waiting: { tag: 'fix applied', tone: 'info', hint: 'A change applied its fix; the next run of the job that found it checks that it holds' },
-  verified: { tag: 'fix verified', tone: 'ok', hint: 'The next run no longer saw it; the RCA closes it' },
-  notHeld: { tag: 'fix did not hold', tone: 'err', hint: 'The next run found it again after the change was applied' },
+  waiting: { tag: 'fix applied', tone: 'info', hint: 'A change applied its fix; the next run of the job that found it re-checks that it holds' },
+  verified: { tag: 'fix verified', tone: 'ok', hint: 'A run re-checked it and found the problem gone; the RCA closes it' },
+  notHeld: { tag: 'fix did not hold', tone: 'err', hint: 'A run found it again after the change was applied' },
+}
+
+/** The run that verified a fix (I-1): the run, its job's label, when, and what the agent read when it re-checked it. */
+export interface VerifiedBy {
+  run: string
+  job?: string
+  at: string
+  evidence?: string
+}
+
+/** What a verification rested on, in a line (I-1): "Verified by the Nightly audit, run-12, on <date>: read the Deployment, 3 of 3 ready." */
+export function verifiedText(v: VerifiedBy, when: (at: string) => string): string {
+  const by = v.job ? `the ${v.job}, ${v.run},` : v.run
+  const read = v.evidence?.trim().replace(/\.+$/, '')
+  return `Verified by ${by} on ${when(v.at)}${read ? `: ${read}` : ''}.`
+}
+
+/** How long a fix has waited for a run to re-check it, in a line (I-1): "Waiting since <date>; 2 runs did not re-check it." */
+export function waitText(w: { since: string; unchecked: number }, when: (at: string) => string): string {
+  const n = w.unchecked
+  const runs = n > 0 ? `; ${n} ${n === 1 ? 'run' : 'runs'} of the job did not re-check it` : ''
+  return `Waiting since ${when(w.since)}${runs}.`
 }
 
 /** A case's status as people see it (CF-67): an open case that waits for its reporter's answer is shown "Waiting for the reporter", though kept In progress. */

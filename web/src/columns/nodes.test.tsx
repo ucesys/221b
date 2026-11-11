@@ -28,7 +28,7 @@ const rows = [
       { title: 'Not ready', severity: 'error', summary: 'The kubelet stopped posting status.', entries: [] },
       { title: 'Disk pressure', severity: 'warning', summary: 'The kubelet is evicting pods.', entries: [] },
     ],
-    labels: { 'workload': 'analytics' },
+    labels: { workload: 'analytics' },
     pods: { running: 3, capacity: 110, notReady: 2, failing: 1, starting: 1, unready: 0, completed: 4 },
     cpu: { requested: 2000, limits: 4000, allocatable: 16000, capacity: 16000, used: null },
     memory: { requested: 8 * GI, limits: 8 * GI, allocatable: 64 * GI, capacity: 64 * GI, used: null },
@@ -175,6 +175,10 @@ describe('a host outside Kubernetes', () => {
   })
 
   it('sorts after the workers by role', () => {
-    expect(sortRows([...rows, host], NODE_COLUMNS, { col: 'role', dir: 'asc' }, now).map((r) => r.name).at(-1)).toBe('backup-1')
+    expect(
+      sortRows([...rows, host], NODE_COLUMNS, { col: 'role', dir: 'asc' }, now)
+        .map((r) => r.name)
+        .at(-1),
+    ).toBe('backup-1')
   })
 })

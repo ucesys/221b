@@ -86,15 +86,15 @@ export interface CaseObject {
 const enc = encodeURIComponent
 
 /** The exceptions; stale ones only with stale. */
-export const fetchExceptions = (background = false, stale = false) => call<ExceptionsList>('/api/v1/cases/exceptions' + (stale ? '?stale=1' : ''), {}, background)
-export const fetchException = (id: string) => call<AcceptedException>('/api/v1/cases/exceptions/' + enc(id))
-export const removeException = (id: string) => call<AcceptedException>('/api/v1/cases/exceptions/' + enc(id), { method: 'DELETE' })
+export const fetchExceptions = (background = false, stale = false) => call<ExceptionsList>('/api/v1/aiops/exceptions' + (stale ? '?stale=1' : ''), {}, background)
+export const fetchException = (id: string) => call<AcceptedException>('/api/v1/aiops/exceptions/' + enc(id))
+export const removeException = (id: string) => call<AcceptedException>('/api/v1/aiops/exceptions/' + enc(id), { method: 'DELETE' })
 /** New exception (build 14): approvers only; refused (409) while an active one covers the same cluster, object and rule. */
-export const createException = (input: NewExceptionInput) => call<AcceptedException>('/api/v1/cases/exceptions', post(input))
+export const createException = (input: NewExceptionInput) => call<AcceptedException>('/api/v1/aiops/exceptions', post(input))
 /** What New exception suggests for the object typed so far (two characters or more), on the cluster: approvers only; only what the person may see. */
-export const fetchCaseObjects = (cluster: string, q: string, limit = 20) => call<{ objects: CaseObject[] }>(`/api/v1/cases/objects?cluster=${enc(cluster)}&q=${enc(q)}&limit=${limit}`)
+export const fetchCaseObjects = (cluster: string, q: string, limit = 20) => call<{ objects: CaseObject[] }>(`/api/v1/aiops/objects?cluster=${enc(cluster)}&q=${enc(q)}&limit=${limit}`)
 /** Make active again (build 14): refused (409) while an active one covers the same cluster, object and rule. */
-export const reactivateException = (id: string) => call<AcceptedException>('/api/v1/cases/exceptions/' + enc(id) + '/reactivate', { method: 'POST' })
+export const reactivateException = (id: string) => call<AcceptedException>('/api/v1/aiops/exceptions/' + enc(id) + '/reactivate', { method: 'POST' })
 
 /** Where an exception opens: AIOps › Mycroft › Exceptions (MY-01). */
-export const exceptionHref = (id: string) => `#/cases/mycroft/exceptions/${enc(id)}`
+export const exceptionHref = (id: string) => `#/aiops/mycroft/exceptions/${enc(id)}`

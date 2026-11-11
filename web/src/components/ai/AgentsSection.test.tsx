@@ -28,7 +28,18 @@ const agent = (id: string, name: string, extra: Partial<AgentView> = {}): AgentV
 function overview(): AIOverview {
   return {
     providers: [
-      { id: 'default', name: 'Anthropic', kind: 'anthropic', model: 'claude-opus-5-5', resolved: { kind: 'anthropic', auth: 'header' }, default: true, locked: false, needsKey: true, key: { set: true, store: 'secret' }, usedBy: ['Sherlock'] },
+      {
+        id: 'default',
+        name: 'Anthropic',
+        kind: 'anthropic',
+        model: 'claude-opus-5-5',
+        resolved: { kind: 'anthropic', auth: 'header' },
+        default: true,
+        locked: false,
+        needsKey: true,
+        key: { set: true, store: 'secret' },
+        usedBy: ['Sherlock'],
+      },
       { id: 'gw', name: 'Gateway', kind: 'openai', model: 'gpt-5', resolved: { kind: 'openai', auth: 'header' }, default: false, locked: false, needsKey: true, key: { set: true, store: 'secret' }, usedBy: [] },
     ],
     agents: [
@@ -91,7 +102,11 @@ describe('the Agents section', () => {
         return new Response(JSON.stringify(ins))
       }
       if (String(url).endsWith('/draft')) {
-        ins = { ...ins, draft: { rev: 3, house: body.house, notes: body.notes, stage: 'draft', by: 'ann', at: '2026-11-05T10:00:00Z' }, warnings: ['Line 1 looks like a fact about your infrastructure (db at 10.0.0.1): facts belong in Knowledge, where they are kept current.'] }
+        ins = {
+          ...ins,
+          draft: { rev: 3, house: body.house, notes: body.notes, stage: 'draft', by: 'ann', at: '2026-11-05T10:00:00Z' },
+          warnings: ['Line 1 looks like a fact about your infrastructure (db at 10.0.0.1): facts belong in Knowledge, where they are kept current.'],
+        }
         return new Response(JSON.stringify(ins))
       }
       if (String(url).includes('/api/v1/ai/agents/scriptReviewer') && method === 'PUT' && !body.confirmSingleProvider) {
@@ -136,7 +151,7 @@ describe('the Agents section', () => {
     const stages = within(drawer).getByTestId('ins-stages')
     expect(stages.querySelector('[aria-current=step] [data-testid=ins-step-name]')?.textContent).toBe('Live')
     expect(within(drawer).getAllByTestId('ins-restore')).toHaveLength(1)
-    expect(within(drawer).getByTestId('agent-jobs-link').getAttribute('href')).toBe('#/cases/jobs')
+    expect(within(drawer).getByTestId('agent-jobs-link').getAttribute('href')).toBe('#/aiops/jobs')
     expect(within(drawer).getByTestId('agent-handovers').textContent).toContain('Hands work over to Automation author, Script reviewer')
     expect(within(drawer).getByTestId('agent-handovers').textContent).toContain('cannot change your view')
     // Compare shows the chart's baseline beside what is in force.
@@ -281,7 +296,15 @@ describe('an agent’s built-in text, stages and context', () => {
         ins = { ...ins, draft: { rev: 3, house: body.house, notes: body.notes, stage: 'draft', by: 'ann', at: '2026-11-05T10:00:00Z', parts: body.parts } }
         return new Response(JSON.stringify(ins))
       }
-      if (u.endsWith('/models')) return new Response(JSON.stringify({ models: [{ id: 'qwen3.8-27b', contextWindow: 16384 }, { id: 'llama-4-scout-17b', contextWindow: 8192 }] }))
+      if (u.endsWith('/models'))
+        return new Response(
+          JSON.stringify({
+            models: [
+              { id: 'qwen3.8-27b', contextWindow: 16384 },
+              { id: 'llama-4-scout-17b', contextWindow: 8192 },
+            ],
+          }),
+        )
       return new Response(JSON.stringify(ov))
     })
   })
@@ -316,7 +339,10 @@ describe('an agent’s built-in text, stages and context', () => {
     let drawer = await screen.findByTestId('agent-drawer')
     // No draft: Live is in force, and every action says what to do first.
     await waitFor(() => expect(within(drawer).getByTestId('ins-stages').querySelector('[aria-current=step] [data-testid=ins-step-name]')?.textContent).toBe('Live'))
-    const why = () => within(drawer).getAllByTestId('ins-step-why').map((x) => x.textContent)
+    const why = () =>
+      within(drawer)
+        .getAllByTestId('ins-step-why')
+        .map((x) => x.textContent)
     expect(why()).toContain('Nothing waits to go live: version 2 is in force. Edit and save a draft.')
     expect((within(drawer).getByTestId('ins-test') as HTMLButtonElement).disabled).toBe(true)
     cleanup()
@@ -336,7 +362,11 @@ describe('an agent’s built-in text, stages and context', () => {
   })
 
   it('says how much of its model’s context Sherlock takes, and saves its compact form’s choice and a model from the endpoint', async () => {
-    ov.agents[0] = { ...ov.agents[0]!, model: 'qwen3.8-27b', footprint: { instructions: 736, tools: 1732, toolCount: 12, whole: { instructions: 3449, tools: 6810, toolCount: 38 }, window: 16384, windowFrom: 'provider', compact: true, mode: '', share: 0.5, maxTokens: 4096 } }
+    ov.agents[0] = {
+      ...ov.agents[0]!,
+      model: 'qwen3.8-27b',
+      footprint: { instructions: 736, tools: 1732, toolCount: 12, whole: { instructions: 3449, tools: 6810, toolCount: 38 }, window: 16384, windowFrom: 'provider', compact: true, mode: '', share: 0.5, maxTokens: 4096 },
+    }
     ins = instructions({ agent: 'sherlock', parts: [ins.parts[0]!, { name: 'compact', label: 'Compact form', builtIn: 'You are Sherlock, briefly.', text: 'You are Sherlock, briefly.', edited: false }] })
     render(<AgentsSection />)
     fireEvent.click((await screen.findAllByTestId('agent-open'))[0]!)

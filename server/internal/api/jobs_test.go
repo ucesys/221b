@@ -18,6 +18,7 @@ import (
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/settings"
+	"github.com/ucesys/221b/server/internal/sherlocktools"
 )
 
 // jobsSetup serves a console with the jobs, local sign-in and four
@@ -73,19 +74,19 @@ func TestFindingsAndLessonsAccess(t *testing.T) {
 	if resp, _ := send(t, adam, "GET", srv.URL+"/api/v1/findings", ""); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("the findings' list: %d", resp.StatusCode)
 	}
-	if resp, body := send(t, adam, "GET", srv.URL+"/api/v1/cases/exceptions?stale=1", ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"exceptions":[]`) {
+	if resp, body := send(t, adam, "GET", srv.URL+"/api/v1/aiops/exceptions?stale=1", ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"exceptions":[]`) {
 		t.Fatalf("an approver lists the stale exceptions: %d %s", resp.StatusCode, body)
 	}
-	if resp, _ := send(t, vera, "GET", srv.URL+"/api/v1/cases/exceptions", ""); resp.StatusCode != http.StatusForbidden {
+	if resp, _ := send(t, vera, "GET", srv.URL+"/api/v1/aiops/exceptions", ""); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("a Viewer lists the exceptions: %d", resp.StatusCode)
 	}
-	if resp, body := send(t, sue, "GET", srv.URL+"/api/v1/cases/exceptions", ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"exceptions":[]`) {
+	if resp, body := send(t, sue, "GET", srv.URL+"/api/v1/aiops/exceptions", ""); resp.StatusCode != http.StatusOK || !strings.Contains(body, `"exceptions":[]`) {
 		t.Fatalf("a SuperViewer lists the exceptions: %d %s", resp.StatusCode, body)
 	}
-	if resp, _ := send(t, sue, "DELETE", srv.URL+"/api/v1/cases/exceptions/EX-1", ""); resp.StatusCode != http.StatusForbidden {
+	if resp, _ := send(t, sue, "DELETE", srv.URL+"/api/v1/aiops/exceptions/EX-1", ""); resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("a SuperViewer removes an exception: %d", resp.StatusCode)
 	}
-	if resp, _ := send(t, adam, "DELETE", srv.URL+"/api/v1/cases/exceptions/EX-1", ""); resp.StatusCode != http.StatusNotFound {
+	if resp, _ := send(t, adam, "DELETE", srv.URL+"/api/v1/aiops/exceptions/EX-1", ""); resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("an approver removes an exception not there: %d", resp.StatusCode)
 	}
 }
@@ -143,9 +144,9 @@ func TestReaderIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tb := rd.Tools.(*toolbox)
-	if !tb.hasSess || h.opts.Impersonation.personOf(tb.sess.User).User != auth.ReaderName || len(tb.Defs()) == 0 {
-		t.Fatalf("the toolbox reads as %+v", tb.sess.User)
+	tb := rd.Tools.(*sherlocktools.Toolbox)
+	if tsess, ok := tb.Session(); !ok || h.opts.Impersonation.personOf(tsess.User).User != auth.ReaderName || len(tb.Defs()) == 0 {
+		t.Fatalf("the toolbox reads as %+v", tsess.User)
 	}
 	if _, err := h.ReaderFor(context.Background(), "elsewhere", &sess); err == nil {
 		t.Fatal("a cluster that is not there")

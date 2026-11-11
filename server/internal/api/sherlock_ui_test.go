@@ -13,6 +13,7 @@ import (
 
 	"github.com/ucesys/221b/server/internal/scrub"
 	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/sherlocktools"
 )
 
 // Sherlock's UI actions (P6U-04 to P6U-17): the server sends each to the
@@ -311,8 +312,8 @@ func TestSherlockUIActionsList(t *testing.T) {
 		if a.Changes == (a.Name == "view_state") {
 			t.Errorf("%s: changes is %v", a.Name, a.Changes)
 		}
-		for _, tl := range sherlockTools {
-			if tl.def.Name == a.Name {
+		for _, d := range sherlocktools.Defs() {
+			if d.Name == a.Name {
 				t.Errorf("%s is both a cluster tool and a UI action", a.Name)
 			}
 		}

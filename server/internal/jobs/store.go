@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -201,31 +202,71 @@ func clip(s string, n int) string {
 }
 
 // tidy bounds and scrubs a run's findings, numbers them, and gives each
-// its key, or says why it has none (CF-05).
-func (s *Service) tidy(ctx context.Context, k Kind, runID string, in []Finding) ([]Finding, []int) {
+// its key, or says why it has none (CF-05). Past maxFindings the least
+// severe are left out, whatever their order (W-3): it says how many, by
+// severity, with the keys of those left out, which never count as not
+// seen.
+func (s *Service) tidy(ctx context.Context, k Kind, runID string, in []Finding) ([]Finding, []int, *LeftOut, []Key) {
 	var out []Finding
 	// at is where each finding the run made went among those kept, -1 for
 	// one dropped: the proposals name them by position (CF-26).
 	at := make([]int, len(in))
 	// The validation rules, read once for the run (ADR-138).
 	var rules Rules
+	// Which findings are kept: every one with a title, up to the cap, the
+	// most severe first; those kept stay in the order they came.
+	var titled []int
+	in = slices.Clone(in)
+	for i := range in {
+		in[i].Title = clip(in[i].Title, maxTitle)
+		in[i].Severity = normalSeverity(in[i].Severity)
+		if in[i].Title != "" {
+			titled = append(titled, i)
+		}
+	}
+	keep := map[int]bool{}
+	var left *LeftOut
+	var leftKeys []Key
+	if len(titled) > maxFindings {
+		order := slices.Clone(titled)
+		slices.SortStableFunc(order, func(a, b int) int { return findingRank(in[a].Severity) - findingRank(in[b].Severity) })
+		left = &LeftOut{Cap: maxFindings}
+		for n, i := range order {
+			if n < maxFindings {
+				keep[i] = true
+				continue
+			}
+			f := in[i]
+			left.Count++
+			switch f.Severity {
+			case FindingCritical:
+				left.Severities.Critical++
+			case FindingInfo:
+				left.Severities.Info++
+			default:
+				left.Severities.Warning++
+			}
+			if len(k.Checks) > 0 {
+				if rules == nil {
+					rules = s.rules(ctx)
+				}
+				f.Cluster = clip(f.Cluster, 100)
+				f.Resource = clip(f.Resource, 300)
+				f.Check = clip(f.Check, 100)
+				if key, ok := leftOutKey(k, rules, f); ok {
+					leftKeys = append(leftKeys, key)
+				}
+			}
+		}
+	} else {
+		for _, i := range titled {
+			keep[i] = true
+		}
+	}
 	for i, f := range in {
 		at[i] = -1
-		if len(out) >= maxFindings {
+		if !keep[i] {
 			continue
-		}
-		f.Title = clip(f.Title, maxTitle)
-		if f.Title == "" {
-			continue
-		}
-		switch f.Severity {
-		case FindingInfo, FindingWarning, FindingCritical:
-		case "high", "error":
-			f.Severity = FindingCritical
-		case "low":
-			f.Severity = FindingInfo
-		default:
-			f.Severity = FindingWarning
 		}
 		f.Detail = clip(f.Detail, maxDetail)
 		var ev []string
@@ -265,5 +306,5 @@ func (s *Service) tidy(ctx context.Context, k Kind, runID string, in []Finding) 
 		at[i] = len(out)
 		out = append(out, f)
 	}
-	return out, at
+	return out, at, left, leftKeys
 }

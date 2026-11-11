@@ -23,7 +23,22 @@ const rows: R[] = [
 ]
 
 function table(onOpen = vi.fn()) {
-  const r = render(<DataTable<R> label="Things" rows={rows} cols={cols} rowKey={(r) => r.name} rowLabel={(r, open) => `${r.name}${open ? ', open' : ''}`} sort={{ col: 'name', dir: 'asc' }} onSort={() => {}} selected="b" onOpen={onOpen} now={0} empty="None" rowAttr="thing" />)
+  const r = render(
+    <DataTable<R>
+      label="Things"
+      rows={rows}
+      cols={cols}
+      rowKey={(r) => r.name}
+      rowLabel={(r, open) => `${r.name}${open ? ', open' : ''}`}
+      sort={{ col: 'name', dir: 'asc' }}
+      onSort={() => {}}
+      selected="b"
+      onOpen={onOpen}
+      now={0}
+      empty="None"
+      rowAttr="thing"
+    />,
+  )
   return { ...r, onOpen, row: (name: string) => r.container.querySelector<HTMLElement>(`[data-thing="${name}"]`)! }
 }
 
@@ -78,7 +93,14 @@ describe('the grid', () => {
 
   it('renders the first rows of a long table at once, also when it grows past the window threshold', () => {
     // jsdom has no layout: the window is measured as zeros, which is the case before layout in a browser.
-    vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} })
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      },
+    )
     const many = (n: number): R[] => Array.from({ length: n }, (_, i) => ({ name: `r${String(i).padStart(3, '0')}`, ns: 'web' }))
     const props = { label: 'Things', cols, rowKey: (r: R) => r.name, rowLabel: (r: R) => r.name, sort: { col: 'name', dir: 'asc' as const }, onSort: () => {}, now: 0, empty: 'None', rowAttr: 'thing' }
     const r = render(<DataTable<R> {...props} rows={many(150)} />)

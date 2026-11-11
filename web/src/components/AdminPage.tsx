@@ -25,7 +25,7 @@ const PAGES: { id: Page; label: string; tip: string; superOnly: boolean }[] = [
   { id: 'toolbox', label: 'Toolbox', tip: 'SuperAdmin only: what the chart allows the Toolbox', superOnly: true },
   // Approvals moved to AIOps › Inbox (Phase 12, CS-06); #/admin/approvals opens it there.
   { id: 'logs', label: 'Logs', tip: 'SuperAdmin only: the Toolbox’s sessions, and the audit log of who did what', superOnly: true },
-  { id: 'settings', label: 'Settings', tip: 'SuperAdmin only: refresh rate, Sherlock and Watson', superOnly: true },
+  { id: 'settings', label: 'Settings', tip: 'SuperAdmin only: general, AI, changes and AIOps settings', superOnly: true },
   { id: 'backup', label: 'Backup', tip: 'SuperAdmin only: a backup of the console’s own data, and a restore', superOnly: true },
 ]
 
@@ -156,7 +156,12 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
 
   const props: AdminProps = { route, me, now, cluster, onToast }
   return (
-    <main className="rk-main" style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '24px 20px 48px', overflow: 'auto', background: 'var(--bg)' }} aria-label="Administration" data-testid="admin-page">
+    <main
+      className="rk-main"
+      style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '24px 20px 48px', overflow: 'auto', background: 'var(--bg)' }}
+      aria-label="Administration"
+      data-testid="admin-page"
+    >
       <div style={{ width: 'min(1280px, 100%)', display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 16px' }}>
           <button className="rk-btn" onClick={closeAdmin} title="Back (Esc)" data-testid="admin-back">
@@ -168,7 +173,15 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>Administration</h1>
           <nav aria-label="Administration pages" style={{ display: 'flex', flexWrap: 'wrap', gap: '0 18px', marginLeft: 8 }}>
             {PAGES.filter((p) => offered.includes(p.id)).map((p) => (
-              <a key={p.id} className="rk-tab" href={adminHref(p.id, [], p.id === 'roles' || p.id === 'permissions' || p.id === 'logs' || p.id === 'toolbox' ? route.cluster : 'local')} aria-current={p.id === page ? 'page' : undefined} title={p.tip} data-admin-page={p.id} style={{ height: 36 }}>
+              <a
+                key={p.id}
+                className="rk-tab"
+                href={adminHref(p.id, [], p.id === 'roles' || p.id === 'permissions' || p.id === 'logs' || p.id === 'toolbox' ? route.cluster : 'local')}
+                aria-current={p.id === page ? 'page' : undefined}
+                title={p.tip}
+                data-admin-page={p.id}
+                style={{ height: 36 }}
+              >
                 {p.label}
               </a>
             ))}

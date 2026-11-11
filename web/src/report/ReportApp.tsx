@@ -11,7 +11,26 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { signOut, useActivity } from '../api/auth'
 import { readJSON } from '../lib/storage'
 import { takeHandoff } from '../lib/reportLink'
-import { addMessage, fetchIssueMe, fetchKnown, fetchMine, fetchUpdates, followKnown, knownPill, matchKnown, priorityText, reopenReport, REPORT_PRIORITIES, sendReport, unlinkReport, type IssueMe, type Known, type Notice, type Receipt, type Report } from './api'
+import {
+  addMessage,
+  fetchIssueMe,
+  fetchKnown,
+  fetchMine,
+  fetchUpdates,
+  followKnown,
+  knownPill,
+  matchKnown,
+  priorityText,
+  reopenReport,
+  REPORT_PRIORITIES,
+  sendReport,
+  unlinkReport,
+  type IssueMe,
+  type Known,
+  type Notice,
+  type Receipt,
+  type Report,
+} from './api'
 import { Pill } from './Pill'
 import { KnownPanel } from './KnownPanel'
 import { MyReports } from './MyReports'
@@ -254,7 +273,11 @@ export function ReportApp() {
                   <span className="rp-note">Still yours to send: if it is the same, we link your case to it and keep you posted.</span>
                 </div>
               )}
-              {!mayReport && <span className="rk-t" data-tone="warn">Your role may not report problems here; ask an administrator.</span>}
+              {!mayReport && (
+                <span className="rk-t" data-tone="warn">
+                  Your role may not report problems here; ask an administrator.
+                </span>
+              )}
               {sendError && (
                 <span className="rk-t" data-tone="err" role="alert">
                   {sendError}
@@ -270,12 +293,7 @@ export function ReportApp() {
               }}
             />
           )}
-          <MyReports
-            reports={reports}
-            error={reportsError}
-            onReopen={async (n, reason) => replace(await reopenReport(n, reason))}
-            onMessage={async (n, t) => replace(await addMessage(n, t))}
-          />
+          <MyReports reports={reports} error={reportsError} onReopen={async (n, reason) => replace(await reopenReport(n, reason))} onMessage={async (n, t) => replace(await addMessage(n, t))} />
         </div>
         <KnownPanel
           known={known}

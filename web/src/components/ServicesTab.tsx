@@ -100,7 +100,17 @@ export function ServicesTab({ cluster, now, onToast, route }: TabProps) {
 
   return (
     <>
-      <SideList label="Namespaces with services" title="Namespaces" query={listQuery} onQuery={setListQuery} placeholder="Filter namespaces" groups={groups} empty={loaded ? 'No namespaces match.' : 'Waiting for the first list…'} testId="service-namespaces" foot="A Service gives a set of pods one stable name and address. Its endpoints are the pods its selector matches that have an IP; only ready ones get traffic." />
+      <SideList
+        label="Namespaces with services"
+        title="Namespaces"
+        query={listQuery}
+        onQuery={setListQuery}
+        placeholder="Filter namespaces"
+        groups={groups}
+        empty={loaded ? 'No namespaces match.' : 'Waiting for the first list…'}
+        testId="service-namespaces"
+        foot="A Service gives a set of pods one stable name and address. Its endpoints are the pods its selector matches that have an IP; only ready ones get traffic."
+      />
       <main className="rk-pane" aria-label="Services" style={{ flex: '999 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         <section aria-label="Service list" style={{ padding: '18px 24px 28px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '4px 12px' }}>
@@ -123,7 +133,20 @@ export function ServicesTab({ cluster, now, onToast, route }: TabProps) {
               <ExportMenu onExport={(f) => table.exportRows(f, cluster?.name, 'services', onToast)} disabled={!table.shown.length} what="the services in view" />
             </div>
           </div>
-          <DataTable<ServiceRow> label="Services" rows={table.shown} cols={table.cols} rowKey={(r) => r.key} rowLabel={serviceLabel} sort={table.sort} onSort={table.onSort} selected={selected} onOpen={(k) => set({ open: selected === k ? undefined : k })} now={now} empty={loaded ? 'No services match these filters.' : 'Waiting for the first list of services…'} rowAttr="service" />
+          <DataTable<ServiceRow>
+            label="Services"
+            rows={table.shown}
+            cols={table.cols}
+            rowKey={(r) => r.key}
+            rowLabel={serviceLabel}
+            sort={table.sort}
+            onSort={table.onSort}
+            selected={selected}
+            onOpen={(k) => set({ open: selected === k ? undefined : k })}
+            now={now}
+            empty={loaded ? 'No services match these filters.' : 'Waiting for the first list of services…'}
+            rowAttr="service"
+          />
         </section>
       </main>
       {selected && <ServicePanel serviceKey={selected} row={selectedRow} gone={loaded && !selectedRow} now={now} onClose={() => set({ open: undefined })} onToast={onToast} />}

@@ -266,7 +266,7 @@ func (s *Service) onCard(ctx context.Context, n int, c cards.Card) {
 		return
 	}
 	var was issues.Status
-	r, err := s.o.Issues.Apply(ctx, n, func(tx *issues.Tx, r *issues.Report) error {
+	r, err := s.o.Issues.Apply(ctx, n, func(tx *issues.Tx, r *issues.Case) error {
 		tx.As(by)
 		was = r.Status
 		if c.State == cards.Applied {
@@ -280,6 +280,7 @@ func (s *Service) onCard(ctx context.Context, n int, c cards.Card) {
 				// person's case only records the fix, and a person closes it.
 				if r.AgentFound() && r.Key != nil && r.Job != "" {
 					r.VerifyPending, r.Verified, r.Verification = true, nil, issues.VerifyWaiting
+					r.VerifiedBy, r.Unchecked = nil, 0
 				}
 			}
 			tx.Changed(r, &system.Person)

@@ -6,7 +6,7 @@
 import { useSharedSherlock } from './caseSherlock'
 import { sherlockCall, type Conversation, type SherlockState } from './sherlock'
 
-const base = (id: string) => `/api/v1/cases/proposals/${encodeURIComponent(id)}/sherlock`
+const base = (id: string) => `/api/v1/aiops/proposals/${encodeURIComponent(id)}/sherlock`
 
 export const askProposalSherlock = (id: string, question: string) => sherlockCall<Conversation>('POST', `${base(id)}/ask`, { question })
 export const stopProposalSherlock = (id: string) => sherlockCall<{ stopped: boolean }>('POST', `${base(id)}/stop`, {})

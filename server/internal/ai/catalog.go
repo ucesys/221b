@@ -52,7 +52,7 @@ var Catalog = []Info{
 	{ID: Troubleshooter, Name: "Troubleshooter", Purpose: "Root cause of a failing pod, node, ingress, volume or alert", On: true, Tools: []string{
 		"cluster_overview", "list_alerts", "list_nodes", "get_node", "list_pods", "get_pod", "pod_logs", "list_events",
 		"list_objects", "get_object", "get_yaml", "list_services", "get_service", "trace_ingress", "check_connection",
-		"top", "list_volumes", "list_storage_classes", sherlock.ToolAskKnowledge}},
+		"top", "list_volumes", "list_storage_classes", sherlock.ToolCheckCommand, sherlock.ToolAskKnowledge}},
 	{ID: ChangePlanner, Name: "Change planner", Purpose: "Turns an intent into exact Watson actions, with their impact and risk", On: true, Tools: []string{
 		"cluster_overview", "list_nodes", "get_node", "list_pods", "get_pod", "list_objects", "get_object", "get_yaml",
 		"list_services", "get_service", "list_helm_releases", "get_helm_release", "list_policies", "list_fleets", sherlock.ToolCheckCommand, sherlock.ToolAskKnowledge}},

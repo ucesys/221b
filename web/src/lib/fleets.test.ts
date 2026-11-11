@@ -48,7 +48,20 @@ describe('fleets', () => {
     expect(has(list, { name: 'w1', labels: {}, taints: [] })).toBe(true)
     expect(has(list, { name: 'w2', labels: { pool: 'gpu' }, taints: [] })).toBe(false)
     expect(reqText(list)).toBe('a list of 2 nodes')
-    const row: FleetRow = { key: 'fleet:batch', kind: 'fleet', id: 'batch', name: 'Batch', color: 0, labels: [], taints: [], by: 'nodes', listed: ['w1', 'gone'], order: 0, members: ['w1'], stats: { nodes: 1, cpu: 0, memory: 0, cpuReq: 0, memoryReq: 0, pods: 0, cordoned: 0, errors: 0, warnings: 0 } }
+    const row: FleetRow = {
+      key: 'fleet:batch',
+      kind: 'fleet',
+      id: 'batch',
+      name: 'Batch',
+      color: 0,
+      labels: [],
+      taints: [],
+      by: 'nodes',
+      listed: ['w1', 'gone'],
+      order: 0,
+      members: ['w1'],
+      stats: { nodes: 1, cpu: 0, memory: 0, cpuReq: 0, memoryReq: 0, pods: 0, cordoned: 0, errors: 0, warnings: 0 },
+    }
     expect(fleetOf(row)).toMatchObject({ kind: 'nodes', nodes: ['w1', 'gone'] })
   })
 
@@ -65,7 +78,18 @@ describe('fleets', () => {
   })
 
   it('says what else changes: fleets the nodes leave, taints that keep pods off', () => {
-    const row = (id: string, labels: string[], members: string[]): FleetRow => ({ key: id, kind: 'fleet', id, name: id, color: 0, labels, taints: [], order: 0, members, stats: { nodes: 0, cpu: 0, memory: 0, cpuReq: 0, memoryReq: 0, pods: 0, cordoned: 0, errors: 0, warnings: 0 } })
+    const row = (id: string, labels: string[], members: string[]): FleetRow => ({
+      key: id,
+      kind: 'fleet',
+      id,
+      name: id,
+      color: 0,
+      labels,
+      taints: [],
+      order: 0,
+      members,
+      stats: { nodes: 0, cpu: 0, memory: 0, cpuReq: 0, memoryReq: 0, pods: 0, cordoned: 0, errors: 0, warnings: 0 },
+    })
     const rows = [row('gpu', ['pool=gpu'], []), row('cpu', ['pool=cpu'], ['w1']), row('big', ['pool=gpu', 'size=l'], ['w3'])]
     const notes = joinNotes({ id: 'gpu', ...gpu }, [{ name: 'w1', labels: { pool: 'cpu' }, taints: [] }], rows)
     expect(notes[0]).toBe('w1: pool changes from cpu to gpu, so it leaves cpu.')

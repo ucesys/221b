@@ -29,7 +29,10 @@ test('lists every pod with its status, node and namespace, and filters by each',
   const ns = pods[0]!.namespace
   const inNs = pods.filter((p) => p.namespace === ns)
   const nsRow = page.getByTestId('namespace-list').locator('.rk-frow', { hasText: ns }).first()
-  await page.getByRole('checkbox', { name: /Select all/ }).last().uncheck()
+  await page
+    .getByRole('checkbox', { name: /Select all/ })
+    .last()
+    .uncheck()
   await nsRow.getByRole('checkbox').check()
   await expect(page).toHaveURL(new RegExp(`ns=${ns}`))
   await expect.poll(() => countShown(page)).toBe(inNs.length)
@@ -37,11 +40,17 @@ test('lists every pod with its status, node and namespace, and filters by each',
 
   // Back to every namespace, then one node alone.
   await page.getByTestId('namespace-list').locator('.rk-frow', { hasText: ns }).first().getByRole('checkbox').check()
-  await page.getByRole('checkbox', { name: /Select all \(\d+\)/ }).last().check()
+  await page
+    .getByRole('checkbox', { name: /Select all \(\d+\)/ })
+    .last()
+    .check()
   const node = pods.find((p) => p.node)!.node
   const onNode = pods.filter((p) => p.node === node)
   const nodeRow = page.getByTestId('node-list').locator('.rk-frow', { hasText: node }).first()
-  await page.getByRole('checkbox', { name: /Select all/ }).first().uncheck()
+  await page
+    .getByRole('checkbox', { name: /Select all/ })
+    .first()
+    .uncheck()
   await nodeRow.getByRole('checkbox').check()
   await expect(page).toHaveURL(new RegExp(`node=${node}`))
   await expect.poll(() => countShown(page)).toBe(onNode.length)
@@ -172,7 +181,12 @@ test('pod details: containers, environment, volumes, events and logs that start 
   await panel.locator('[data-dtab="containers"]').click()
   await expect(panel.getByRole('region', { name: /^Container / }).first()).toBeVisible()
   await expect(panel.locator('.rk-pill', { hasText: 'Running' }).first()).toBeVisible()
-  await expect(panel.locator('dt', { hasText: /^Image$/ }).first().locator('+ dd')).not.toHaveText('')
+  await expect(
+    panel
+      .locator('dt', { hasText: /^Image$/ })
+      .first()
+      .locator('+ dd'),
+  ).not.toHaveText('')
 
   await panel.locator('[data-dtab="environment"]').click()
   const env = panel.getByRole('table', { name: /^Environment of / }).first()
@@ -208,7 +222,11 @@ test('pod details: containers, environment, volumes, events and logs that start 
   await expect(picker.locator('option')).toHaveCount(containers)
   const [logFile] = await Promise.all([page.waitForEvent('download'), panel.getByRole('button', { name: 'Download' }).click()])
   expect(logFile.suggestedFilename()).toMatch(new RegExp(`^${target.name}.*\\.log$`))
-  expect(readFileSync(await logFile.path(), 'utf8').split('\n').filter(Boolean).length).toBeGreaterThan(0)
+  expect(
+    readFileSync(await logFile.path(), 'utf8')
+      .split('\n')
+      .filter(Boolean).length,
+  ).toBeGreaterThan(0)
 
   await panel.locator('[data-dtab="yaml"]').click()
   await expect(panel.getByTestId('yaml')).toContainText('kind: Pod')
@@ -253,7 +271,11 @@ test('searches with suggestions, and exports the pods on screen as CSV', async (
   const running = pods.filter((p) => p.status === 'Running')
   // The table holds every running pod; the screen shows the first of them.
   await expect(page.locator('.rk-grid[data-total]')).toHaveAttribute('data-total', String(running.length))
-  for (const k of await shownKeys(page)) expect(running.some((p) => p.key === k), k).toBe(true)
+  for (const k of await shownKeys(page))
+    expect(
+      running.some((p) => p.key === k),
+      k,
+    ).toBe(true)
 
   await page.getByRole('button', { name: /^Export/ }).click()
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'CSV' }).click()])
@@ -280,13 +302,19 @@ test('the Columns menu and the Export menu are the same on every table', async (
     await page.goto('/' + hash)
     await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
     await expect(page.locator('.rk-gr').first()).toBeVisible()
-    await page.getByRole('button', { name: /^Columns/ }).first().click()
+    await page
+      .getByRole('button', { name: /^Columns/ })
+      .first()
+      .click()
     const menu = page.getByRole('group', { name: 'Columns to show' })
     await expect(menu).toBeVisible()
     await expect(menu.getByText('The first column always shows')).toBeVisible()
     await expect(menu.getByRole('button', { name: 'Reset to default' })).toBeVisible()
     await page.keyboard.press('Escape')
-    await page.getByRole('button', { name: /^Export/ }).first().click()
+    await page
+      .getByRole('button', { name: /^Export/ })
+      .first()
+      .click()
     const exp = page.getByRole('group', { name: 'Export format' })
     await expect(exp.getByRole('button', { name: 'Excel' })).toBeVisible()
     await expect(exp.getByRole('button', { name: 'CSV' })).toBeVisible()

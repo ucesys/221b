@@ -102,7 +102,7 @@ func (p Profile) Facts(cluster string) string {
 	case dist != "":
 		fmt.Fprintf(&b, ", %s.", dist)
 	case p.Version != "":
-		fmt.Fprintf(&b, ", Kubernetes %s; its distribution was not recognised.", p.Version)
+		fmt.Fprintf(&b, ", Kubernetes %s; its distribution was not recognized.", p.Version)
 	default:
 		b.WriteString(".")
 	}
@@ -133,7 +133,7 @@ func (p Profile) Facts(cluster string) string {
 	if p.Network != "" {
 		fmt.Fprintf(&b, "\n- Network plugin: %s.", p.Network)
 	} else {
-		b.WriteString("\n- Network plugin: not recognised.")
+		b.WriteString("\n- Network plugin: not recognized.")
 	}
 	if len(p.Ingress) > 0 {
 		fmt.Fprintf(&b, "\n- Ingress classes: %s.", strings.Join(p.Ingress, ", "))

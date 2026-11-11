@@ -14,9 +14,9 @@ import (
 // finds nothing and the report waits for an operator.
 type Investigator interface {
 	// Investigate works out what a report is about and why.
-	Investigate(ctx context.Context, r Report) (Finding, error)
+	Investigate(ctx context.Context, r Case) (Finding, error)
 	// Verify checks whether a report marked fixed is.
-	Verify(ctx context.Context, r Report) (Verdict, error)
+	Verify(ctx context.Context, r Case) (Verdict, error)
 }
 
 // Finding is what an investigation found. Every field may be empty.
@@ -56,9 +56,9 @@ var ErrSkipped = errors.New("the investigator did not look")
 // NoInvestigator finds nothing.
 type NoInvestigator struct{}
 
-func (NoInvestigator) Investigate(context.Context, Report) (Finding, error) { return Finding{}, nil }
+func (NoInvestigator) Investigate(context.Context, Case) (Finding, error) { return Finding{}, nil }
 
-func (NoInvestigator) Verify(context.Context, Report) (Verdict, error) { return Verdict{}, nil }
+func (NoInvestigator) Verify(context.Context, Case) (Verdict, error) { return Verdict{}, nil }
 
 // investigateTime bounds one investigation.
 const investigateTime = 10 * time.Minute

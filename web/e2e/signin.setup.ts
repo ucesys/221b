@@ -37,8 +37,8 @@ setup('sign in', async ({ page }, testInfo) => {
   // would get one partway through the run, and change what other specs
   // count. Off for the suite.
   if (me.admin) {
-    const cur = (await (await page.request.get('/api/v1/cases/settings')).json()) as Record<string, unknown>
-    const res = await page.request.put('/api/v1/cases/settings', { headers: { 'Sec-Fetch-Site': 'same-origin' }, data: { ...cur, criticalAlertMinutes: 0 } })
+    const cur = (await (await page.request.get('/api/v1/aiops/settings')).json()) as Record<string, unknown>
+    const res = await page.request.put('/api/v1/aiops/settings', { headers: { 'Sec-Fetch-Site': 'same-origin' }, data: { ...cur, criticalAlertMinutes: 0 } })
     expect(res.status(), await res.text()).toBe(200)
   }
   await page.context().storageState({ path: sessionFile(testInfo.project.name) })

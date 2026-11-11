@@ -16,10 +16,7 @@ const KEY = 'sk-ant-e2e-fake-key-0123456789'
 const ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
 
 async function call(page: Page, path: string, body: unknown, method = 'PUT'): Promise<number> {
-  return page.evaluate(
-    async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === null ? undefined : JSON.stringify(b) })).status,
-    [path, body, method] as const,
-  )
+  return page.evaluate(async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === null ? undefined : JSON.stringify(b) })).status, [path, body, method] as const)
 }
 
 let node = ''
@@ -31,8 +28,8 @@ test.afterAll(async ({ browser }) => {
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   await call(page, '/api/v1/sherlock/config', { ...ON, clusters: {} })
   if (node) await cluster.cordon(node, false)
-  const list = (await (await page.request.get('/api/v1/cases/cases?open=1')).json()) as { cases: { id: string; title: string }[] }
-  for (const c of list.cases.filter((x) => x.title.startsWith('Troubleshoot e2e'))) await call(page, `/api/v1/cases/cases/${c.id}/close`, { outcome: 'noAction', explanation: 'e2e: done' }, 'POST')
+  const list = (await (await page.request.get('/api/v1/aiops/cases?open=1')).json()) as { cases: { id: string; title: string }[] }
+  for (const c of list.cases.filter((x) => x.title.startsWith('Troubleshoot e2e'))) await call(page, `/api/v1/aiops/cases/${c.id}/close`, { outcome: 'noAction', explanation: 'e2e: done' }, 'POST')
   await page.close()
 })
 
@@ -54,12 +51,12 @@ test('a case is troubleshot in its drawer: Sherlock on the case, Watson from it,
       return node
     })
     .not.toBe('')
-  const res = await page.request.post('/api/v1/cases/cases', { headers: SAME, data: { title: `Troubleshoot e2e: ${pod.name} restarts ${Date.now()}`, cluster: 'local', resource: `${pod.namespace}/Pod/${pod.name}`, priority: 3 } })
+  const res = await page.request.post('/api/v1/aiops/cases', { headers: SAME, data: { title: `Troubleshoot e2e: ${pod.name} restarts ${Date.now()}`, cluster: 'local', resource: `${pod.namespace}/Pod/${pod.name}`, priority: 3 } })
   expect(res.status(), await res.text()).toBe(201)
   const { id, number } = (await res.json()) as { id: string; number: number }
 
   // Near full screen, split: the case on the left, Troubleshoot on the right (CF-46).
-  await page.goto(`/#/cases/inbox/case/${number}`)
+  await page.goto(`/#/aiops/inbox/case/${number}`)
   const drawer = page.getByTestId('case-drawer')
   await expect(drawer.getByTestId('case-kicker')).toContainText(`Case ${id}`)
   await expect(drawer).toHaveAttribute('data-size', 'full')
@@ -116,7 +113,7 @@ test('a case is troubleshot in its drawer: Sherlock on the case, Watson from it,
   await expect(log.getByTestId('case-command')).toHaveCount(2, { timeout: 15_000 })
   await expect(log.locator('[data-testid=case-command][data-kind=change][data-status=done]')).toContainText(`kubectl cordon ${node}`)
   await expect(log.locator('[data-testid=case-command][data-kind=read][data-status=done]')).toContainText('describe pod')
-  const kept = (await (await page.request.get(`/api/v1/cases/cases/${id}`)).json()) as { commands: { line: string; lines?: unknown }[]; fixCommands: string[] }
+  const kept = (await (await page.request.get(`/api/v1/aiops/cases/${id}`)).json()) as { commands: { line: string; lines?: unknown }[]; fixCommands: string[] }
   expect(kept.fixCommands).toEqual([`kubectl cordon ${node}`])
   expect(JSON.stringify(kept.commands)).not.toContain('cordoned')
 
@@ -130,7 +127,7 @@ test('a case is troubleshot in its drawer: Sherlock on the case, Watson from it,
   await expect(drawer.getByTestId('case-trouble-closed')).toBeVisible()
   await expect(log.getByTestId('case-command')).toHaveCount(1)
   await expect(log).toContainText(`kubectl cordon ${node}`)
-  const chat = (await (await page.request.get(`/api/v1/cases/cases/${id}/sherlock/conversation`)).json()) as { messages: unknown[] }
+  const chat = (await (await page.request.get(`/api/v1/aiops/cases/${id}/sherlock/conversation`)).json()) as { messages: unknown[] }
   expect(chat.messages).toHaveLength(0)
 
   // Reopened: an empty conversation, and only the change kept.

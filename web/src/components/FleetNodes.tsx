@@ -63,7 +63,11 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
   const valBad = !LABEL_VAL_RE.test(value)
   const label = how === 'own' ? ownPick : `${key.trim()}=${value}`
   const draft: Fleet | null =
-    mode !== 'new' ? null : how === 'list' ? { id: newId(name.trim(), fleets), name: name.trim(), color: nextColor(fleets), labels: [], taints: [], kind: 'nodes', nodes: names } : { id: newId(name.trim(), fleets), name: name.trim(), color: nextColor(fleets), labels: label ? [label] : [], taints: [] }
+    mode !== 'new'
+      ? null
+      : how === 'list'
+        ? { id: newId(name.trim(), fleets), name: name.trim(), color: nextColor(fleets), labels: [], taints: [], kind: 'nodes', nodes: names }
+        : { id: newId(name.trim(), fleets), name: name.trim(), color: nextColor(fleets), labels: label ? [label] : [], taints: [] }
   const fleet = mode === 'new' ? (draft ?? undefined) : fleets.find((f) => f.id === fleetId)
   const list = !!fleet && isList(fleet)
 
@@ -94,7 +98,12 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
 
   const pickedText = nWord(nodes.length, 'node', 'nodes')
   const title = mode === 'new' ? `New fleet from ${pickedText}` : mode === 'add' ? `Add ${pickedText} to a fleet` : `Remove ${pickedText} from a fleet`
-  const why = mode === 'new' ? `Puts ${nodes.length === 1 ? 'this node' : 'these nodes'} in the new fleet “${draft?.name}”.` : mode === 'add' ? `Adds ${nodes.length === 1 ? 'this node' : 'these nodes'} to the fleet “${fleet?.name}”.` : `Takes ${inIt.length === 1 ? 'this node' : 'these nodes'} out of the fleet “${fleet?.name}”.`
+  const why =
+    mode === 'new'
+      ? `Puts ${nodes.length === 1 ? 'this node' : 'these nodes'} in the new fleet “${draft?.name}”.`
+      : mode === 'add'
+        ? `Adds ${nodes.length === 1 ? 'this node' : 'these nodes'} to the fleet “${fleet?.name}”.`
+        : `Takes ${inIt.length === 1 ? 'this node' : 'these nodes'} out of the fleet “${fleet?.name}”.`
 
   const copy = async () => {
     if (await copyText(commands.join('\n'))) {
@@ -117,7 +126,11 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
       if (commands.length && runs) watson.send(commands.join('\n'), { from: 'Fleets', why })
       if (commands.length && !runs) await copyText(commands.join('\n'))
       const n = commands.length
-      const sent = n ? (runs ? ` Watson has ${nWord(n, 'command', 'commands')} for approval; ${mode === 'remove' ? 'the nodes leave' : 'the nodes join'} once ${n === 1 ? 'it runs' : 'they run'}.` : ` The ${nWord(n, 'command is', 'commands are')} copied: run ${n === 1 ? 'it' : 'them'} to ${mode === 'remove' ? 'take the nodes out' : 'bring the nodes in'}.`) : ''
+      const sent = n
+        ? runs
+          ? ` Watson has ${nWord(n, 'command', 'commands')} for approval; ${mode === 'remove' ? 'the nodes leave' : 'the nodes join'} once ${n === 1 ? 'it runs' : 'they run'}.`
+          : ` The ${nWord(n, 'command is', 'commands are')} copied: run ${n === 1 ? 'it' : 'them'} to ${mode === 'remove' ? 'take the nodes out' : 'bring the nodes in'}.`
+        : ''
       onDone(mode === 'new' ? `Created the fleet “${draft?.name}”.${sent}` : sent.trim())
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -125,7 +138,20 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
     }
   }
 
-  const goLabel = mode === 'new' ? (commands.length && runs ? 'Create and send to Watson' : commands.length ? 'Create and copy the commands' : 'Create fleet') : list ? (mode === 'add' ? 'Add to fleet' : 'Remove from fleet') : runs ? 'Send to Watson' : 'Copy the commands'
+  const goLabel =
+    mode === 'new'
+      ? commands.length && runs
+        ? 'Create and send to Watson'
+        : commands.length
+          ? 'Create and copy the commands'
+          : 'Create fleet'
+      : list
+        ? mode === 'add'
+          ? 'Add to fleet'
+          : 'Remove from fleet'
+        : runs
+          ? 'Send to Watson'
+          : 'Copy the commands'
   const fleetOption = (f: Fleet): [string, string] => [f.id, `${f.name} — ${reqText(f)}`]
 
   return (
@@ -220,7 +246,15 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
         {mode !== 'new' && (
           <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--fg3)' }}>
             Fleet
-            <Select label="Fleet" value={fleetId} options={choices.length ? choices.map(fleetOption) : [['', mode === 'add' ? 'No fleet to add them to' : 'They are in no fleet']]} onChange={setFleetId} disabled={!choices.length} width="100%" testId="fleet-nodes-fleet" />
+            <Select
+              label="Fleet"
+              value={fleetId}
+              options={choices.length ? choices.map(fleetOption) : [['', mode === 'add' ? 'No fleet to add them to' : 'They are in no fleet']]}
+              onChange={setFleetId}
+              disabled={!choices.length}
+              width="100%"
+              testId="fleet-nodes-fleet"
+            />
           </label>
         )}
         {mode !== 'new' && fleet && (
@@ -234,7 +268,11 @@ export function FleetNodes({ mode, nodes, all, fleets, rows, current, onClose, o
         {commands.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{commands.length === 1 ? 'The command' : 'The commands'}</span>
-            <pre className="rk-mono" data-testid="fleet-nodes-commands" style={{ margin: 0, padding: '10px 12px', fontSize: 12, background: 'var(--surface2)', border: '1px solid var(--line)', borderRadius: 8, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+            <pre
+              className="rk-mono"
+              data-testid="fleet-nodes-commands"
+              style={{ margin: 0, padding: '10px 12px', fontSize: 12, background: 'var(--surface2)', border: '1px solid var(--line)', borderRadius: 8, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+            >
               {commands.join('\n')}
             </pre>
           </div>

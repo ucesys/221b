@@ -11,7 +11,7 @@ import { WatsonSettings } from './WatsonSettings'
 import { AgentsSection } from './ai/AgentsSection'
 import { KnowledgeSection } from './ai/KnowledgeSection'
 import { ProvidersSection } from './ai/ProvidersSection'
-import { JobsSettings } from './cases/JobsSettings'
+import { JobsSettings } from './aiops/JobsSettings'
 import { GettingStartedSection } from './GettingStarted'
 import { HelmReposSettings } from './apps/HelmReposSettings' // Helm repositories (Phase 12, wave 5)
 import { leftText, useSetup } from '../api/setup'
@@ -110,21 +110,30 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
             </span>
           ),
           ...g.sections.map((s) => (
-          <a
-            key={s.id}
-            href={settingsHref(s.id)}
-            aria-current={s.id === section ? 'page' : undefined}
-            onClick={(e) => {
-              e.preventDefault()
-              navigate(settingsHref(s.id), true)
-            }}
-            data-testid="settings-section"
-            data-section={s.id}
-            style={{ display: 'flex', flexDirection: 'column', padding: '8px 12px', borderRadius: 8, textDecoration: 'none', color: 'var(--fg)', background: s.id === section ? 'var(--surface)' : 'transparent', boxShadow: s.id === section ? 'inset 3px 0 0 var(--accent)' : undefined }}
-          >
-            <span style={{ fontWeight: 600, fontSize: 13 }}>{s.label}</span>
-            <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{s.id === 'start' ? leftText(setup) : s.hint}</span>
-          </a>
+            <a
+              key={s.id}
+              href={settingsHref(s.id)}
+              aria-current={s.id === section ? 'page' : undefined}
+              onClick={(e) => {
+                e.preventDefault()
+                navigate(settingsHref(s.id), true)
+              }}
+              data-testid="settings-section"
+              data-section={s.id}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                padding: '8px 12px',
+                borderRadius: 8,
+                textDecoration: 'none',
+                color: 'var(--fg)',
+                background: s.id === section ? 'var(--surface)' : 'transparent',
+                boxShadow: s.id === section ? 'inset 3px 0 0 var(--accent)' : undefined,
+              }}
+            >
+              <span style={{ fontWeight: 600, fontSize: 13 }}>{s.label}</span>
+              <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{s.id === 'start' ? leftText(setup) : s.hint}</span>
+            </a>
           )),
         ])}
       </nav>
@@ -199,12 +208,7 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
   const choices: number[] = [...REFRESH_CHOICES]
   if (current && !choices.includes(current)) choices.push(current)
   choices.sort((a, b) => a - b)
-  const kept =
-    settings?.storage === 'configmap'
-      ? 'Kept on the server in its ConfigMap, so it survives restarts.'
-      : settings
-        ? 'Kept on the server until it restarts; it was started without a ConfigMap to keep settings in.'
-        : ''
+  const kept = settings?.storage === 'configmap' ? 'Kept on the server in its ConfigMap, so it survives restarts.' : settings ? 'Kept on the server until it restarts; it was started without a ConfigMap to keep settings in.' : ''
   return (
     <>
       <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Refresh rate">
@@ -234,7 +238,21 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
       <GraceSection picked={pickedGrace} current={currentGrace} disabled={!settings || busy} onPick={(g) => setGraceDraft(g === currentGrace ? undefined : g)} />
       <BannersSection picked={pickedBanners} disabled={!settings || busy} onPick={(b) => setBannersDraft(b === currentBanners ? undefined : b)} />
       <FleetsPageSection picked={pickedFleets} disabled={!settings || busy} onPick={(b) => setFleetsDraft(b === currentFleets ? undefined : b)} />
-      <SaveBar changed={changed} busy={busy} onSave={() => void save()} onUndo={() => { setDraft(undefined); setFormatDraft(undefined); setGraceDraft(undefined); setBannersDraft(undefined); setFleetsDraft(undefined) }} error={error} saved={saved} testId="settings-save" />
+      <SaveBar
+        changed={changed}
+        busy={busy}
+        onSave={() => void save()}
+        onUndo={() => {
+          setDraft(undefined)
+          setFormatDraft(undefined)
+          setGraceDraft(undefined)
+          setBannersDraft(undefined)
+          setFleetsDraft(undefined)
+        }}
+        error={error}
+        saved={saved}
+        testId="settings-save"
+      />
     </>
   )
 }
@@ -341,7 +359,9 @@ function TimeFormatSection({ picked, current, disabled, onPick }: { picked: Time
       <p className="rk-fhint" style={{ margin: 0 }} data-testid="time-format-example">
         Now: <span className="rk-mono">{example}</span>
       </p>
-      <p className="rk-fhint" style={{ margin: 0 }}>For everyone: every date and time in the console reads this way, each in the time zone of the browser that shows it.</p>
+      <p className="rk-fhint" style={{ margin: 0 }}>
+        For everyone: every date and time in the console reads this way, each in the time zone of the browser that shows it.
+      </p>
     </section>
   )
 }

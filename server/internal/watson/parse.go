@@ -107,6 +107,10 @@ type spec struct {
 	check func(c *Command) *Refusal
 	// usage is shown when the arguments are wrong.
 	usage string
+	// prompt, when set, is how the agents' prompts name the command after
+	// its tool, where its verb alone would say more than Watson runs
+	// (S-1); it starts with the verb.
+	prompt string
 }
 
 var (
@@ -163,9 +167,10 @@ var specs = []*spec{
 		flags: flags(map[string]flag{"to-revision": {value: true}, "dry-run": fDryRun}), check: checkRollout},
 	{tool: "kubectl", verb: []string{"delete"}, change: true, min: 1, max: -1, usage: "kubectl delete pod NAME [NAME...] | kubectl delete pvc NAME | kubectl delete secret NAME | kubectl delete namespace NAME",
 		flags: flags(map[string]flag{"selector": fSelector, "grace-period": {value: true}, "now": {}, "force": {}, "wait": {optional: true, value: true, values: []string{"true", "false"}}, "timeout": {value: true}, "dry-run": fDryRun, "ignore-not-found": {}}),
-		check: checkDelete},
+		check: checkDelete, prompt: "delete pod (or one pvc, secret or namespace, by name)"},
 	{tool: "kubectl", verb: []string{"patch"}, change: true, min: 1, max: 2, usage: `kubectl patch pvc NAME -n NAMESPACE --type merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'`,
-		flags: flags(map[string]flag{"type": {value: true, values: []string{"merge", "strategic"}}, "patch": {short: "p", value: true}, "dry-run": fDryRun}), check: checkPatch},
+		flags: flags(map[string]flag{"type": {value: true, values: []string{"merge", "strategic"}}, "patch": {short: "p", value: true}, "dry-run": fDryRun}), check: checkPatch,
+		prompt: `patch pvc (a claim's size only: kubectl patch pvc NAME -n NAMESPACE --type merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}')`},
 	{tool: "kubectl", verb: []string{"label"}, change: true, min: 2, max: -1, usage: "kubectl label TYPE NAME KEY=VALUE|KEY- [--overwrite]",
 		flags: flags(map[string]flag{"overwrite": {}, "selector": fSelector, "resource-version": {value: true}, "dry-run": fDryRun, "list": {}}), check: checkLabel},
 	{tool: "kubectl", verb: []string{"taint"}, change: true, min: 2, max: -1, usage: "kubectl taint nodes NODE [NODE...] KEY[=VALUE]:EFFECT|KEY[=VALUE][:EFFECT]- [--overwrite]",
@@ -214,6 +219,53 @@ func Supported(change bool) []string {
 		}
 	}
 	return out
+}
+
+// Commands is the sentence that tells an agent what Watson runs, built
+// from the commands above so that it cannot fall behind them (S-1): one
+// part for each tool's reads and one for its changes, in the order above,
+// the parts separated by semicolons.
+func Commands() string {
+	type part struct {
+		tool   string
+		change bool
+		verbs  []string
+	}
+	var parts []*part
+	for _, s := range specs {
+		var p *part
+		for _, q := range parts {
+			if q.tool == s.tool && q.change == s.change {
+				p = q
+			}
+		}
+		if p == nil {
+			p = &part{tool: s.tool, change: s.change}
+			parts = append(parts, p)
+		}
+		v := strings.Join(s.verb, " ")
+		if s.prompt != "" {
+			v = s.prompt
+		}
+		p.verbs = append(p.verbs, v)
+	}
+	var out []string
+	for i, p := range parts {
+		text := p.tool + " " + andList(p.verbs)
+		if i == len(parts)-1 && len(parts) > 1 {
+			text = "and " + text
+		}
+		out = append(out, text)
+	}
+	return "Watson runs " + strings.Join(out, "; ") + "."
+}
+
+// andList joins words as a sentence does: "a, b and c".
+func andList(words []string) string {
+	if len(words) < 2 {
+		return strings.Join(words, "")
+	}
+	return strings.Join(words[:len(words)-1], ", ") + " and " + words[len(words)-1]
 }
 
 // Parse reads a command line. It never involves a shell: quotes group

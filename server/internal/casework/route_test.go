@@ -18,18 +18,40 @@ func finding(check, object, title string) jobs.Finding {
 	return jobs.Finding{Severity: jobs.FindingWarning, Check: check, Title: title, Cluster: "prod", Resource: object, Key: &jobs.Key{Cluster: "prod", Object: object, Check: check}}
 }
 
-// route routes one run of a job's findings.
+// route routes one run of a job's findings, an audit of the cluster prod
+// that re-checked nothing.
 func (w *world) route(t *testing.T, job string, ok bool, fs ...jobs.Finding) jobs.RouteResult {
+	t.Helper()
+	return w.routeWith(t, job, ok, nil, fs...)
+}
+
+// routeWith routes one run of a job's findings, an audit of the cluster
+// prod, with what it re-checked (W-1).
+func (w *world) routeWith(t *testing.T, job string, ok bool, rechecked []jobs.Recheck, fs ...jobs.Finding) jobs.RouteResult {
+	t.Helper()
+	return w.routeIn(t, job, ok, &jobs.Scope{Clusters: []string{"prod"}}, rechecked, fs...)
+}
+
+// routeIn routes one run of a job's findings with its scope and what it
+// re-checked (W-1).
+func (w *world) routeIn(t *testing.T, job string, ok bool, scope *jobs.Scope, rechecked []jobs.Recheck, fs ...jobs.Finding) jobs.RouteResult {
 	t.Helper()
 	w.runs++
 	run := fmt.Sprintf("run-%d", w.runs)
 	for i := range fs {
 		fs[i].ID = fmt.Sprintf("%s.%d", run, i+1)
 	}
-	return w.svc.Route(context.Background(), jobs.RouteInput{Run: run, Job: job, Kind: jobs.KindAudit, Label: "Nightly audit", Clusters: []string{"prod"}, OK: ok, Findings: fs})
+	return w.svc.Route(context.Background(), jobs.RouteInput{Run: run, Job: job, Kind: jobs.KindAudit, Label: "Nightly audit", Clusters: []string{"prod"}, OK: ok, Findings: fs,
+		Scope: scope, Rechecked: rechecked})
 }
 
-func (w *world) report(t *testing.T, id string) issues.Report {
+// recheck is what an agent says of a key on prod it re-checked: still
+// there or gone, with what it read, keyed as package jobs keys it.
+func recheck(check, object string, still bool, evidence string) jobs.Recheck {
+	return jobs.Recheck{Check: check, Resource: object, Cluster: "prod", Still: &still, Evidence: evidence, Key: &jobs.Key{Cluster: "prod", Object: object, Check: check}}
+}
+
+func (w *world) report(t *testing.T, id string) issues.Case {
 	t.Helper()
 	n, _ := number(id)
 	r, err := w.iss.Report(context.Background(), system, n)
@@ -138,7 +160,7 @@ func TestTheRoutingTable(t *testing.T) {
 	if _, err := w.svc.Fix(ctx, fx, FixInput{Text: "Pinned it, really."}, olivia); err != nil {
 		t.Fatal(err)
 	}
-	res = w.route(t, "nightly-audit", true)
+	res = w.routeWith(t, "nightly-audit", true, []jobs.Recheck{recheck("image.latest-tag", "shop/Deployment/api", false, "api runs api:1.2.3")})
 	if res.Routed.Verified != 1 || fmt.Sprint(res.Verified) != "["+fx+"]" {
 		t.Fatalf("verified: %+v", res)
 	}
@@ -284,28 +306,40 @@ func TestAResolvedKnownIssueIsVerified(t *testing.T) {
 }
 
 // The keys in use on a cluster, for the agents' tasks (CF-10): the open
-// agent-found cases, the known issues still present, and the active
-// exceptions up to exceptionsPerAgent, the most recently matched first.
-func TestKeysInUse(t *testing.T) {
+// agent-found cases, the cases closed as fixed whose fix waits for
+// verification, said as such and marked for their job to re-check (W-4,
+// CF-96), the known issues still present, and the active exceptions up
+// to exceptionsPerAgent, the most recently matched first.
+func TestKeysInUseW4(t *testing.T) {
 	w := setup(t)
 	ctx := context.Background()
 	set := DefaultSettings()
 	set.ExceptionsPerAgent = 1
 	w.svc.SaveSettings(ctx, set, sam)
-	res := w.route(t, "nightly-audit", true, finding("pod.no-limits", "shop/Pod/a", "open one"), finding("pod.privileged", "x/Pod/p", "old exception"), finding("pod.privileged", "y/Pod/q", "new exception"))
+	res := w.route(t, "nightly-audit", true, finding("pod.no-limits", "shop/Pod/a", "open one"), finding("pod.privileged", "x/Pod/p", "old exception"), finding("pod.privileged", "y/Pod/q", "new exception"),
+		finding("pod.no-probes", "shop/Pod/b", "fixed one"))
 	w.svc.Exception(ctx, res.Findings[1].Case, ExceptionInput{Reason: "old"}, olivia)
 	w.svc.Exception(ctx, res.Findings[2].Case, ExceptionInput{Reason: "new"}, olivia)
+	if _, err := w.svc.Fix(ctx, res.Findings[3].Case, FixInput{Text: "Added the probes."}, olivia); err != nil {
+		t.Fatal(err)
+	}
 	w.now = w.now.Add(time.Hour)
 	w.route(t, "nightly-audit", true, finding("pod.privileged", "y/Pod/q", "new exception"))
-	keys := w.svc.KeysInUse(ctx, "prod")
+	keys, err := w.svc.KeysInUse(ctx, "prod")
+	if err != nil {
+		t.Fatal(err)
+	}
 	var got []string
 	for _, k := range keys {
 		got = append(got, k.Object+" "+k.What)
+		if k.Recheck != (k.Object == "shop/Pod/b") || k.Object == "shop/Pod/b" && k.Job != "nightly-audit" {
+			t.Errorf("re-check of %s: %+v", k.Object, k)
+		}
 	}
-	if fmt.Sprint(got) != "[shop/Pod/a case C-1 y/Pod/q exception EX-2]" {
+	if fmt.Sprint(got) != "[shop/Pod/a case C-1 shop/Pod/b fix applied, re-check: C-4 y/Pod/q exception EX-2]" {
 		t.Fatalf("keys %v", got)
 	}
-	if len(w.svc.KeysInUse(ctx, "dev")) != 0 {
+	if dev, _ := w.svc.KeysInUse(ctx, "dev"); len(dev) != 0 {
 		t.Fatal("another cluster's keys")
 	}
 }

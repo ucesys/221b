@@ -63,11 +63,12 @@ type Config struct {
 	IssuesReportRoles   []string
 	IssuesOperatorRoles []string
 	// --- Watson cards (Phase 12, ADR-99) ---
-	// CasesConfigMap is the "namespace/name" of the ConfigMap the agents'
-	// proposals, the standing approvals and the notification settings are
-	// kept in; empty keeps them in memory. CasesApproverRoles are the roles
-	// that may approve proposals, besides a SuperAdmin.
-	CasesConfigMap     string
+	// ProposalsConfigMap is the "namespace/name" of the ConfigMap the
+	// agents' proposed changes, the standing approvals and the notification
+	// settings are kept in (<release>-proposals; <release>-cases before
+	// CF-104); empty keeps them in memory. CasesApproverRoles are the roles
+	// that may approve proposed changes, besides a SuperAdmin.
+	ProposalsConfigMap string
 	CasesApproverRoles []string
 	// --- Case work (Phase 12, CW-13) ---
 	// CaseworkConfigMap is the "namespace/name" of the ConfigMap the cases'
@@ -260,7 +261,7 @@ func Parse(args []string) (Config, error) {
 	reportRoles := fs.String("issues-report-roles", env("ISSUES_REPORT_ROLES", "superAdmin,superViewer,admin,viewer"), "comma-separated roles that may report problems; the Reporter role always may")
 	operatorRoles := fs.String("issues-operator-roles", env("ISSUES_OPERATOR_ROLES", "superAdmin,admin"), "comma-separated roles that see every report and triage them")
 	// --- Watson cards (Phase 12) ---
-	fs.StringVar(&c.CasesConfigMap, "cases-configmap", env("CASES_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the agents' proposals, standing approvals and notification settings in (empty: in memory)")
+	fs.StringVar(&c.ProposalsConfigMap, "proposals-configmap", env("PROPOSALS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the agents' proposed changes, standing approvals and notification settings in (empty: in memory); at start, the records of <release>-cases, where builds before kept them, are copied in once")
 	approverRoles := fs.String("cases-approver-roles", env("CASES_APPROVER_ROLES", "superAdmin,admin"), "comma-separated roles that may approve the agents' proposals; a SuperAdmin always may")
 	// --- end of Watson cards.
 	// --- Case work (Phase 12) ---
@@ -313,7 +314,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.SherlockSecret, "sherlock-secret", env("SHERLOCK_SECRET", ""), "namespace/name of the Secret to keep the Claude API key in (empty: in memory, lost on restart)")
 	c.SherlockAPIKey = os.Getenv("SHERLOCK_API_KEY")
 	fs.BoolVar(&c.HTTPSRedirect, "https-redirect", envBool("HTTPS_REDIRECT", false), "send plain-HTTP requests (by X-Forwarded-Proto) to HTTPS, behind an Ingress with TLS")
-	fs.DurationVar(&c.TerminationGrace, "termination-grace", envDuration("TERMINATION_GRACE", 20*time.Second), "how long this process has to stop once signalled: answers and commands in progress get most of it")
+	fs.DurationVar(&c.TerminationGrace, "termination-grace", envDuration("TERMINATION_GRACE", 20*time.Second), "how long this process has to stop once signaled: answers and commands in progress get most of it")
 	fs.StringVar(&c.LeaderLease, "leader-lease", env("LEADER_LEASE", ""), "namespace/name of the Lease the replicas elect the one that runs Sherlock and Watson with (empty: a single replica)")
 	c.PodName = os.Getenv("POD_NAME")
 	c.PodIP = os.Getenv("POD_IP")

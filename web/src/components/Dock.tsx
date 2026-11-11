@@ -74,7 +74,10 @@ export function Dock(p: Props) {
 
   if (mode === 'min') {
     const what = [p.sherlock && 'Sherlock', p.watson && 'Watson'].filter(Boolean).join(' and ') || 'the sessions'
-    const label = `Open ${what}` + (p.waiting ? ` — ${p.waiting === 1 ? '1 command waits' : `${p.waiting} commands wait`} for approval` : p.busy ? ' — something is running' : '') + (ss?.open ? ` — ${ss.open === 1 ? '1 session is' : `${ss.open} sessions are`} open` : '')
+    const label =
+      `Open ${what}` +
+      (p.waiting ? ` — ${p.waiting === 1 ? '1 command waits' : `${p.waiting} commands wait`} for approval` : p.busy ? ' — something is running' : '') +
+      (ss?.open ? ` — ${ss.open === 1 ? '1 session is' : `${ss.open} sessions are`} open` : '')
     return (
       <button className="rk-fab" aria-label={label} title={label} onClick={() => onMode('open')} data-testid="sherlock-fab">
         <AssistantsIcon />
@@ -117,7 +120,13 @@ export function Dock(p: Props) {
       <button className={'rk-icon-btn' + (cls ? ' ' + cls : '')} aria-label="Minimize" title="Minimize to an icon" onClick={() => onMode('min')} data-testid="sherlock-minimize">
         <MinimizeIcon />
       </button>
-      <button className={'rk-icon-btn' + (cls ? ' ' + cls : '')} aria-label={mode === 'max' ? 'Restore to the bottom of the page' : 'Maximize'} title={mode === 'max' ? 'Restore to the bottom of the page' : 'Maximize'} onClick={() => onMode(mode === 'max' ? 'open' : 'max')} data-testid="sherlock-maximize">
+      <button
+        className={'rk-icon-btn' + (cls ? ' ' + cls : '')}
+        aria-label={mode === 'max' ? 'Restore to the bottom of the page' : 'Maximize'}
+        title={mode === 'max' ? 'Restore to the bottom of the page' : 'Maximize'}
+        onClick={() => onMode(mode === 'max' ? 'open' : 'max')}
+        data-testid="sherlock-maximize"
+      >
         {mode === 'max' ? <RestoreIcon /> : <MaximizeIcon />}
       </button>
     </>
@@ -191,7 +200,17 @@ export function Dock(p: Props) {
         {mode === 'open' && (
           <>
             <div className="rk-dock-edge" aria-hidden="true" onPointerDown={(e) => down('h', e)} onPointerMove={move} onPointerUp={up} onPointerCancel={up} />
-            <button className="rk-grip" aria-label={`Resize the ${names} panel`} title="Drag to resize — the arrow keys work too" onPointerDown={(e) => down('h', e)} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onKeyDown={hKey} data-testid="sherlock-grip">
+            <button
+              className="rk-grip"
+              aria-label={`Resize the ${names} panel`}
+              title="Drag to resize — the arrow keys work too"
+              onPointerDown={(e) => down('h', e)}
+              onPointerMove={move}
+              onPointerUp={up}
+              onPointerCancel={up}
+              onKeyDown={hKey}
+              data-testid="sherlock-grip"
+            >
               <i />
             </button>
           </>
@@ -222,9 +241,20 @@ export function Dock(p: Props) {
                   <button className="tb-stab" data-state={st} aria-current={active === t.id} onClick={() => ss.onActive(t.id)} title={t.summary + (t.mine ? '' : ` — ${t.owner}’s`)} data-testid={`dock-tab-${t.id}`}>
                     <span className="rk-dot" />
                     <span className="rk-mono">{tabLabel(t)}</span>
-                    {st === 'ended' ? <span className="tb-ttl">ended</span> : st === 'starting' ? <span className="tb-ttl">opening</span> : t.ends ? <span className="tb-ttl">ends {new Date(t.ends).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span> : null}
+                    {st === 'ended' ? (
+                      <span className="tb-ttl">ended</span>
+                    ) : st === 'starting' ? (
+                      <span className="tb-ttl">opening</span>
+                    ) : t.ends ? (
+                      <span className="tb-ttl">ends {new Date(t.ends).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                    ) : null}
                   </button>
-                  <button className="tb-x" aria-label={`Close the tab of ${tabLabel(t)}${t.state === 'ended' ? '' : ' (the session goes on)'}`} title={t.state === 'ended' ? 'Close the tab' : 'Close the tab; the session goes on, in Sessions'} onClick={() => ss.onCloseTab(t.id)}>
+                  <button
+                    className="tb-x"
+                    aria-label={`Close the tab of ${tabLabel(t)}${t.state === 'ended' ? '' : ' (the session goes on)'}`}
+                    title={t.state === 'ended' ? 'Close the tab' : 'Close the tab; the session goes on, in Sessions'}
+                    onClick={() => ss.onCloseTab(t.id)}
+                  >
                     <CloseIcon />
                   </button>
                 </span>
@@ -236,7 +266,19 @@ export function Dock(p: Props) {
         {active === 'assistants' ? (
           <div className="rk-dock-body">
             {p.sherlock?.(strip ? null : sherlockControls, switcher)}
-            {both && <button className="rk-vgrip" aria-label="Resize Sherlock and Watson" title="Drag to share the width — the arrow keys work too" onPointerDown={(e) => down('s', e)} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onKeyDown={sKey} data-testid="dock-vgrip" />}
+            {both && (
+              <button
+                className="rk-vgrip"
+                aria-label="Resize Sherlock and Watson"
+                title="Drag to share the width — the arrow keys work too"
+                onPointerDown={(e) => down('s', e)}
+                onPointerMove={move}
+                onPointerUp={up}
+                onPointerCancel={up}
+                onKeyDown={sKey}
+                data-testid="dock-vgrip"
+              />
+            )}
             {p.watson?.(strip ? null : watsonControls, switcher)}
           </div>
         ) : (

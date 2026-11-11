@@ -16,10 +16,7 @@ const KEY = 'sk-ant-e2e-fake-key-0123456789'
 const ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
 
 async function call(page: Page, method: string, path: string, body?: unknown): Promise<number> {
-  return page.evaluate(
-    async ([m, p, b]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === undefined ? undefined : JSON.stringify(b) })).status,
-    [method, path, body] as const,
-  )
+  return page.evaluate(async ([m, p, b]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === undefined ? undefined : JSON.stringify(b) })).status, [method, path, body] as const)
 }
 
 async function open(page: Page, hash: string) {

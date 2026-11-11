@@ -353,8 +353,19 @@ type Run struct {
 	VerifiedCases []string      `json:"verifiedCases,omitempty"`
 	NewChecks     []string      `json:"newChecks,omitempty"`
 	Proposals     []ProposalRef `json:"proposals,omitempty"`
-	Tokens        Tokens        `json:"tokens"`
-	CostUSD       float64       `json:"costUSD"`
+	// What the run could not be used for (I-3): FailedClusters did not
+	// answer, so none of their fixes was verified (W-2); LeftOut are the
+	// findings left out past the cap (W-3); NotRechecked counts the fixes
+	// in its scope the agent did not re-check (W-1).
+	FailedClusters []string `json:"failedClusters,omitempty"`
+	LeftOut        *LeftOut `json:"leftOut,omitempty"`
+	NotRechecked   int      `json:"notRechecked,omitempty"`
+	Tokens         Tokens   `json:"tokens"`
+	CostUSD        float64  `json:"costUSD"`
+	// NotRouted says why its findings were not routed into cases (W-8,
+	// I-3, CF-99); Reroute that the leader tries again on its next look.
+	NotRouted string `json:"notRouted,omitempty"`
+	Reroute   bool   `json:"reroute,omitempty"`
 	// Instance is the replica that ran it, to tell a run its replica left
 	// behind from one under way.
 	Instance string `json:"instance,omitempty"`
@@ -515,6 +526,13 @@ type Outcome struct {
 	Data any
 	// Facts are what the run did, for its drawer (KN-28).
 	Facts []Fact
+	// Scope is what the run read, for verifying fixes; nil verifies
+	// nothing. Rechecked are what the agent said of the fixes it was
+	// given to re-check, and Failed the clusters that did not answer
+	// (W-1, W-2).
+	Scope     *Scope
+	Rechecked []Recheck
+	Failed    []string
 }
 
 // External is a job that runs elsewhere, on its own schedule, and is only

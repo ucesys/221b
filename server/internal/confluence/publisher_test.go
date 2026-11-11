@@ -134,7 +134,7 @@ func TestAKnownIssuePublishesItsPageAndTheStatus(t *testing.T) {
 	k := x.known(t)
 	x.flush(t)
 	pg := x.page(t, k.ID+": Checkout times out")
-	for _, want := range []string{"Fix in progress", "checkout hangs after Pay", "Shop", "today, 15:00", "Olga", "How to report more", "https://221b.example.com/#/cases/known/" + k.ID, "<h2>Notes</h2>"} {
+	for _, want := range []string{"Fix in progress", "checkout hangs after Pay", "Shop", "today, 15:00", "Olga", "How to report more", "https://221b.example.com/#/aiops/mycroft/known/" + k.ID, "<h2>Notes</h2>"} {
 		if !strings.Contains(pg.Body, want) {
 			t.Errorf("%q is not on the page:\n%s", want, pg.Body)
 		}

@@ -613,6 +613,32 @@ func passResolves(c *Card, old Card) {
 	}
 }
 
+// keyedBefore says whether a waiting card filed under a key of before
+// W-10 (the job or the case, and the title) is the change a new key names
+// (W-10, CF-101): its key, worked out from its cluster, what the agent
+// linked it to and its steps, is the new one. So a card that waits since
+// before the keys changed is replaced by the same change, not joined by
+// it; such a card waits a day at most.
+func keyedBefore(x Card, key string) bool {
+	if !strings.HasPrefix(key, cardid.KeyPrefix) || x.DedupKey == "" || strings.HasPrefix(x.DedupKey, cardid.KeyPrefix) {
+		return false
+	}
+	if !strings.HasPrefix(x.DedupKey, "job:") && !strings.HasPrefix(x.DedupKey, "case:") && !strings.HasPrefix(x.DedupKey, "report:") {
+		return false
+	}
+	var refs []string
+	for _, r := range x.Resolves {
+		if by := x.ResolvesBy[r]; by == "" || by == LinkedByAgent {
+			refs = append(refs, r)
+		}
+	}
+	steps := make([]string, len(x.Actions))
+	for i, a := range x.Actions {
+		steps[i] = cardid.Step(a.Kind, a.Args)
+	}
+	return cardid.Key(x.Cluster, refs, steps) == key
+}
+
 func firstNonEmpty(v ...string) string {
 	for _, s := range v {
 		if s != "" {
@@ -719,14 +745,14 @@ func (s *Store) propose(ctx context.Context, p Proposal, requester *Person, wats
 			}
 		}
 		if open >= MaxOpen {
-			return fmt.Errorf("%w: %d proposals wait already; decide some first", ErrFull, open)
+			return fmt.Errorf("%w: %d proposed changes wait already; decide some first", ErrFull, open)
 		}
 		rec.Next++
 		c.ID = cardid.Of(rec.Next)
 		if c.DedupKey != "" {
 			for i := range rec.Cards {
 				x := &rec.Cards[i]
-				if x.Open() && x.DedupKey == c.DedupKey {
+				if x.Open() && (x.DedupKey == c.DedupKey || keyedBefore(*x, c.DedupKey)) {
 					x.State, x.ReplacedBy = Replaced, c.ID
 					addEvent(x, now, replacedText+c.ID, "", SystemActor)
 					c.Replaces = x.ID
@@ -742,7 +768,7 @@ func (s *Store) propose(ctx context.Context, p Proposal, requester *Person, wats
 		return Card{}, err
 	}
 	for _, x := range replaced {
-		s.record(audit.ActionCardReplace, x, Person{Name: s.agentName(p.Agent)}, audit.OutcomeOK, "replaced by "+c.ID+", a newer proposal for the same thing ("+c.DedupKey+")")
+		s.record(audit.ActionCardReplace, x, Person{Name: s.agentName(p.Agent)}, audit.OutcomeOK, "replaced by "+c.ID+", a newer proposed change for the same thing ("+c.DedupKey+")")
 	}
 	detail := fmt.Sprintf("proposed %s; actions: %s; needs %d approval(s)", strconv.Quote(c.Title), strings.Join(c.Kinds(), ", "), c.Needed)
 	if len(c.Resolves) > 0 {
@@ -778,7 +804,7 @@ func (s *Store) record(action string, c Card, by Person, outcome, detail string)
 	if s.opts.Audit == nil {
 		return
 	}
-	d := fmt.Sprintf("proposal %s by %s", c.ID, s.agentName(c.Agent))
+	d := fmt.Sprintf("proposed change %s by %s", c.ID, s.agentName(c.Agent))
 	if c.Model != "" {
 		d += " (" + c.Model + ")"
 	}
@@ -879,9 +905,9 @@ func DecidedText(c Card) string {
 		return "it expired at " + at(c.Updated)
 	case Replaced:
 		if c.ReplacedBy != "" {
-			return "a newer proposal, " + c.ReplacedBy + ", replaced it at " + at(c.Updated)
+			return "a newer proposed change, " + c.ReplacedBy + ", replaced it at " + at(c.Updated)
 		}
-		return "a newer proposal replaced it at " + at(c.Updated)
+		return "a newer proposed change replaced it at " + at(c.Updated)
 	}
 	return "it is " + c.State
 }
@@ -1000,7 +1026,18 @@ func (s *Store) apply(c Card, by Approver) {
 	}
 	saveCtx, cancelSave := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelSave()
+	// A new leader's sweep may have failed the card while this replica
+	// still ran it (W-11, ADR-149): that state stays, and what was done is
+	// kept on the card with a note, so its state never flips twice.
+	late := ""
 	out, err := s.edit(saveCtx, c.ID, func(x *Card) error {
+		late = ""
+		if x.State != Approved {
+			late = x.State
+			x.Results = results
+			addEvent(x, s.now(), fmt.Sprintf("the actions it was running finished after it was marked %s: %s; it stays %s, and the results are what was done", x.State, state, x.State), by.Name, ActorOf(by.Person))
+			return nil
+		}
 		x.State, x.Results, x.Reason = state, results, reason
 		addEvent(x, s.now(), state, by.Name, ActorOf(by.Person))
 		return nil
@@ -1021,7 +1058,11 @@ func (s *Store) apply(c Card, by Approver) {
 	if state == Failed {
 		outcome = audit.OutcomeFailed
 	}
-	s.record(audit.ActionCardApply, out, by.Person, outcome, fmt.Sprintf("%s, approved by %s; %s", state, strings.Join(names, ", "), strings.Join(done, "; ")))
+	detail := fmt.Sprintf("%s, approved by %s; %s", state, strings.Join(names, ", "), strings.Join(done, "; "))
+	if late != "" {
+		detail = fmt.Sprintf("the actions finished %s after the card was marked %s, which it stays; approved by %s; %s", state, late, strings.Join(names, ", "), strings.Join(done, "; "))
+	}
+	s.record(audit.ActionCardApply, out, by.Person, outcome, detail)
 	if err == nil {
 		s.changed(out)
 	}
@@ -1132,9 +1173,9 @@ func (s *Store) recheck(ctx context.Context, c Card) Recheck {
 			if what == "" {
 				what = "what it acts on"
 			}
-			return fail("Action %d (%s): %s changed since the proposal, so the card no longer says what approving it does. Reject it; a fresh proposal shows the state as it is.", i+1, was.Summary, what)
+			return fail("Action %d (%s): %s changed since it was proposed, so the card no longer says what approving it does. Reject it; a fresh proposed change shows the state as it is.", i+1, was.Summary, what)
 		}
-		rc.Checked = append(rc.Checked, fmt.Sprintf("Action %d (%s): its target is unchanged since the proposal.", i+1, was.Summary))
+		rc.Checked = append(rc.Checked, fmt.Sprintf("Action %d (%s): its target is unchanged since it was proposed.", i+1, was.Summary))
 		if now.Warning != "" {
 			rc.Warnings = append(rc.Warnings, fmt.Sprintf("Action %d (%s): %s", i+1, was.Summary, now.Warning))
 		}
@@ -1292,7 +1333,7 @@ func (s *Store) WatsonEnded(ctx context.Context, item, status string, approver P
 			addEvent(x, now, detail, by.Name, ActorOf(by))
 		case "lapsed":
 			x.WatsonItem = ""
-			addEvent(x, now, "its Watson card lapsed; the proposal waits on in the Inbox", "", SystemActor)
+			addEvent(x, now, "its Watson card lapsed; the proposed change waits on in the Inbox", "", SystemActor)
 		default:
 			return ErrState
 		}

@@ -22,7 +22,7 @@
 // shared by the people who work it (CF-59); and, in the ConfigMap <release>-casework, the
 // settings of Settings › Cases, the check ids seen per cluster and the
 // analyses under way. It routes the runs' findings, serves the console's
-// Cases under /api/v1/cases/cases and runs the case analysis job.
+// Cases under /api/v1/aiops/cases and runs the case analysis job.
 //
 // Every change is in the audit log (case.*, and the issue service's
 // issue.*), and writes run on the leader (ADR-70), where the analysis,
@@ -97,6 +97,9 @@ const (
 	ActionType     = "case.type"
 	ActionIncident = "case.incident"
 	ActionBulk     = "cases.bulk"
+	// ActionReconcile is Housekeeping putting a case and its work right
+	// after a write that failed (W-9, CF-100).
+	ActionReconcile = "case.reconcile"
 )
 
 // Limits of one case; longer text is cut.
@@ -174,6 +177,10 @@ type Analysis struct {
 	ExpectedWhy string `json:"expectedWhy,omitempty"`
 	// Error says why it did not finish.
 	Error string `json:"error,omitempty"`
+	// LeftOut is what the analysis suggested that was left out, and why
+	// (W-6, CF-98): a suggested fix or a proposed change with a command
+	// Watson would refuse is dropped whole, never filed shortened.
+	LeftOut []string `json:"leftOut,omitempty"`
 }
 
 // RCA is a case's root-cause analysis: what a person gave closing it as

@@ -4,7 +4,7 @@
 import { useCallback, useSyncExternalStore } from 'react'
 import type { Me } from '../api/types'
 import { fetchIssueMe, type IssueMe, type OpKnown } from '../api/issues'
-import type { CasesTab } from './router'
+import type { AIOpsTab } from './router'
 
 // ---------- who is signed in, as the issue service sees them ----------
 
@@ -82,7 +82,7 @@ export interface CasesAccess {
   /** A SuperAdmin: the only one who reads and keeps the validation rules (CF-93). */
   superAdmin: boolean
   /** The tabs offered, in order. */
-  tabs: CasesTab[]
+  tabs: AIOpsTab[]
 }
 
 /**
@@ -97,7 +97,7 @@ export function casesAccess(me: Me | null, im: IssueMe | null): CasesAccess {
   const operator = !!im?.operator
   const reporter = mayReport(im)
   const console = !!me && (me.admin || (me.roles ?? []).includes('superViewer'))
-  const tabs: CasesTab[] = []
+  const tabs: AIOpsTab[] = []
   if (approver || operator || console || reporter) tabs.push('inbox')
   if (console) tabs.push('jobs')
   if (console || operator || reporter) tabs.push('mycroft')

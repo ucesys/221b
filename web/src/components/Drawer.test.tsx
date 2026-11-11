@@ -70,9 +70,19 @@ describe('Drawer', () => {
 
   it('leaves focus alone in a drawer Sherlock opened, which is not modal', () => {
     Element.prototype.scrollTo = () => {}
-    const { rerender } = drive(() => render(<Drawer label="Pod" kicker="Pod" title="a" onClose={() => {}}><p>Body</p></Drawer>))
+    const { rerender } = drive(() =>
+      render(
+        <Drawer label="Pod" kicker="Pod" title="a" onClose={() => {}}>
+          <p>Body</p>
+        </Drawer>,
+      ),
+    )
     ;(document.activeElement as HTMLElement).blur()
-    rerender(<Drawer label="Pod" kicker="Pod" title="b" onClose={() => {}}><p>Body</p></Drawer>)
+    rerender(
+      <Drawer label="Pod" kicker="Pod" title="b" onClose={() => {}}>
+        <p>Body</p>
+      </Drawer>,
+    )
     expect(document.activeElement).toBe(document.body)
   })
 })

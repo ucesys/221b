@@ -312,7 +312,7 @@ func TestWhoDidItEverywhereCF35(t *testing.T) {
 	// A case the system closes is the system's.
 	st := w.withCards(t)
 	w.applyTo(t, st, id)
-	w.routeAs(t, nil)
+	w.routeWith(t, "nightly-audit", true, []jobs.Recheck{recheck("pod.no-limits", "shop/Deployment/web", false, "limits set")})
 	if c := w.get(t, id); c.Status != issues.StatusClosed || c.LastBy == nil || c.LastBy.Kind != issues.ActorSystem || !strings.Contains(historyOf(c), "[System/system]") {
 		t.Errorf("closed by the system: %s %+v\n%s", c.Status, c.LastBy, historyOf(c))
 	}

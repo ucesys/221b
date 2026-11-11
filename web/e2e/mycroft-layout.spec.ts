@@ -16,12 +16,12 @@ const TABLES = [
 
 test('the Mycroft tables are one width and start at one left edge at 1440px, and the toolbar wraps on a phone (CF-55)', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
-  await page.goto('/#/cases/mycroft/known')
+  await page.goto('/#/aiops/mycroft/known')
   await expect(page.getByTestId('mycroft-tab')).toBeVisible({ timeout: 20_000 })
   const boxes: { sub: string; x: number; width: number }[] = []
   for (const [sub, id] of TABLES) {
     await page.getByTestId(`mycroft-sub-${sub}`).click()
-    await expect(page).toHaveURL(new RegExp(`#/cases/mycroft/${sub}$`))
+    await expect(page).toHaveURL(new RegExp(`#/aiops/mycroft/${sub}$`))
     const table = page.getByTestId(id)
     await expect(table).toBeVisible({ timeout: 20_000 })
     await expect(table.locator('thead th').first()).toBeVisible()
@@ -40,12 +40,12 @@ test('the Mycroft tables are one width and start at one left edge at 1440px, and
   // The column is the Inbox's: wide, its side margins about a quarter of
   // the 1280px column's (CF-66), as wide as the Inbox's own.
   const mycroft = (await page.getByTestId('mycroft-tab').boundingBox())!
-  await page.goto('/#/cases/inbox')
+  await page.goto('/#/aiops/inbox')
   const inbox = (await page.getByTestId('cases-inbox').boundingBox())!
   expect(Math.abs(mycroft.width - inbox.width)).toBeLessThanOrEqual(2)
   expect(first.width).toBeGreaterThan(1000)
   // The Wiki's page fills the same column as the others' pages.
-  await page.goto('/#/cases/mycroft/known')
+  await page.goto('/#/aiops/mycroft/known')
   const known = (await page.getByTestId('cases-known').boundingBox())!
   await page.getByTestId('mycroft-sub-wiki').click()
   await expect(page.getByTestId('knowledge-tab')).toBeVisible()
@@ -55,7 +55,7 @@ test('the Mycroft tables are one width and start at one left edge at 1440px, and
   // No Validation rules here: they are in Jobs (CF-89), where their
   // table is as wide as Mycroft's and starts at the same left edge.
   await expect(page.getByTestId('mycroft-sub-rules')).toHaveCount(0)
-  await page.goto('/#/cases/jobs/rules')
+  await page.goto('/#/aiops/jobs/rules')
   const rulesTable = page.getByTestId('rules-table')
   await expect(rulesTable).toBeVisible({ timeout: 20_000 })
   const rt = (await rulesTable.boundingBox())!

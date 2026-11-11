@@ -13,7 +13,7 @@ import { isUndone, onUndone } from '../lib/uiControl'
 import { askContext, askUndo, followedWindow } from '../lib/uiWindow'
 import { copyText } from '../lib/clipboard'
 import { sherlockSummary } from '../lib/reportLink'
-import { ReportPageLink } from './cases/ReportPageLink'
+import { ReportPageLink } from './aiops/ReportPageLink'
 import { mayReport, useIssueMe } from '../lib/cases'
 
 // ---------- asking from anywhere ----------
@@ -106,7 +106,11 @@ function CodeBlock({ text, lang, open, why, draft }: { text: string; lang: strin
  */
 export function RunInWatson({ onClick, disabled, testId = 'sherlock-run-watson', title }: { onClick: () => void; disabled?: boolean; testId?: string; title?: string }) {
   const { onCase } = useWatsonApi()
-  const tip = title ?? (onCase === 'proposal' ? 'Hands the command to Watson beside the proposed change. Nothing runs until you approve it there; it runs as you.' : 'Hands the command to Watson beside the case. Nothing runs until you approve it there; it runs as you.')
+  const tip =
+    title ??
+    (onCase === 'proposal'
+      ? 'Hands the command to Watson beside the proposed change. Nothing runs until you approve it there; it runs as you.'
+      : 'Hands the command to Watson beside the case. Nothing runs until you approve it there; it runs as you.')
   return (
     <button className="rk-btn" data-on="true" onClick={onClick} disabled={disabled} title={tip} data-testid={testId}>
       <WatsonIcon />
@@ -290,7 +294,23 @@ function ViewNotice({ m, cluster, onToast }: { m: SherlockMsg; cluster: string; 
   )
 }
 
-function Answer({ m, cluster, link, admin, question, onToast, testCase = true }: { m: SherlockMsg; cluster: string; link: (url: string, label: string) => ReactNode | null; admin: boolean; question?: string; onToast: (msg: string) => void; testCase?: boolean }) {
+function Answer({
+  m,
+  cluster,
+  link,
+  admin,
+  question,
+  onToast,
+  testCase = true,
+}: {
+  m: SherlockMsg
+  cluster: string
+  link: (url: string, label: string) => ReactNode | null
+  admin: boolean
+  question?: string
+  onToast: (msg: string) => void
+  testCase?: boolean
+}) {
   const thinking = (m.status === 'thinking' || m.status === 'answering') && !m.text
   const costs = useShowCosts()
   const meta = [m.model, m.doneAt ? seconds(m.at, m.doneAt) : '', admin && costs && m.costUSD ? usd(m.costUSD) : ''].filter(Boolean).join(' · ')
@@ -321,7 +341,11 @@ function Answer({ m, cluster, link, admin, question, onToast, testCase = true }:
       )}
       {m.text && (
         <div className="rk-ans-body" data-testid="sherlock-text">
-          <Markdown text={m.text} link={link} code={(text, lang, open, key) => <CodeBlock key={key} text={text} lang={lang} open={open && m.status !== 'done'} why={question ? `Sherlock proposed this answering “${question}”.` : undefined} />} />
+          <Markdown
+            text={m.text}
+            link={link}
+            code={(text, lang, open, key) => <CodeBlock key={key} text={text} lang={lang} open={open && m.status !== 'done'} why={question ? `Sherlock proposed this answering “${question}”.` : undefined} />}
+          />
         </div>
       )}
       {(m.view?.length ?? 0) > 0 && <ViewNotice m={m} cluster={cluster} onToast={onToast} />}
@@ -339,7 +363,11 @@ function Answer({ m, cluster, link, admin, question, onToast, testCase = true }:
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }} data-testid="sherlock-refs">
           {m.refs!.slice(0, 3).map((r) => {
             const el = link(`221b://${r.kind}/${r.namespace ? r.namespace + '/' : ''}${r.name}`, refLabel(r) + ' →')
-            return el ? <span key={`${r.kind}/${r.namespace}/${r.name}`} className="rk-refbtn">{el}</span> : null
+            return el ? (
+              <span key={`${r.kind}/${r.namespace}/${r.name}`} className="rk-refbtn">
+                {el}
+              </span>
+            ) : null
           })}
         </div>
       )}
@@ -633,7 +661,8 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
           {msgs.length === 0 && !shared && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }} data-testid="sherlock-empty">
               <p style={{ margin: 0, maxWidth: '82ch', fontSize: 12.5, color: 'var(--fg2)' }}>
-                Ask about the nodes, fleets, pods, releases, access and alerts in {clusterName}. Sherlock reads only what you may read, never sees Secret values, and changes nothing: when something needs a change, it hands the command to Watson, where nothing runs until someone approves it.
+                Ask about the nodes, fleets, pods, releases, access and alerts in {clusterName}. Sherlock reads only what you may read, never sees Secret values, and changes nothing: when something needs a change, it hands the command to
+                Watson, where nothing runs until someone approves it.
               </p>
               {status?.available && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>

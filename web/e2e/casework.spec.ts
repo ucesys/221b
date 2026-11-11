@@ -22,10 +22,7 @@ const KEY = 'sk-ant-e2e-fake-key-0123456789'
 const ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
 
 async function call(page: Page, path: string, body: unknown, method = 'PUT'): Promise<number> {
-  return page.evaluate(
-    async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === null ? undefined : JSON.stringify(b) })).status,
-    [path, body, method] as const,
-  )
+  return page.evaluate(async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === null ? undefined : JSON.stringify(b) })).status, [path, body, method] as const)
 }
 
 /** Files a report through the issue API, for someone else, as support does: a case. */
@@ -37,7 +34,7 @@ async function file(page: Page, text: string, forUser = 'dev'): Promise<number> 
 
 /** Opens a case by hand through the API. */
 async function open(page: Page, title: string, more: Record<string, unknown> = {}): Promise<{ id: string; number: number }> {
-  const res = await page.request.post('/api/v1/cases/cases', { headers: SAME, data: { title, priority: 3, ...more } })
+  const res = await page.request.post('/api/v1/aiops/cases', { headers: SAME, data: { title, priority: 3, ...more } })
   expect(res.status(), await res.text()).toBe(201)
   return (await res.json()) as { id: string; number: number }
 }
@@ -51,24 +48,26 @@ test.afterAll(async ({ browser }) => {
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   await call(page, '/api/v1/jobs/case-analysis', { on: false })
   await call(page, '/api/v1/sherlock/config', { ...ON, clusters: {} })
-  const cards = (await (await page.request.get('/api/v1/cases/proposals?state=queued')).json()) as { proposals: { id: string; source: { kind: string } }[] }
-  for (const c of cards.proposals.filter((p) => p.source.kind === 'case')) await call(page, `/api/v1/cases/proposals/${c.id}/reject`, { reason: 'e2e: done' }, 'POST')
+  const cards = (await (await page.request.get('/api/v1/aiops/proposals?state=queued')).json()) as { proposals: { id: string; source: { kind: string } }[] }
+  for (const c of cards.proposals.filter((p) => p.source.kind === 'case')) await call(page, `/api/v1/aiops/proposals/${c.id}/reject`, { reason: 'e2e: done' }, 'POST')
   for (const status of ['new', 'inProgress']) {
-    const list = (await (await page.request.get(`/api/v1/cases/cases?status=${status}`)).json()) as { cases: { id: string }[] }
-    for (const c of list.cases) await call(page, `/api/v1/cases/cases/${c.id}/close`, { outcome: 'noAction', explanation: 'e2e: done' }, 'POST')
+    const list = (await (await page.request.get(`/api/v1/aiops/cases?status=${status}`)).json()) as { cases: { id: string }[] }
+    for (const c of list.cases) await call(page, `/api/v1/aiops/cases/${c.id}/close`, { outcome: 'noAction', explanation: 'e2e: done' }, 'POST')
   }
   await page.close()
 })
 
-test('a case opened by hand about any words: New Case, its drawer, priority P0 to P4, its title in place, Save of the shared draft, Fix with an RCA at P1, Reopen with a reason, Close as no action needed (CU-02, CU-03, CU-09, CF-58 to CF-60, CF-90)', async ({ page }) => {
+test('a case opened by hand about any words: New case, its drawer, priority P0 to P4, its title in place, Save of the shared draft, Fix with an RCA at P1, Reopen with a reason, Close as no action needed (CU-02, CU-03, CU-09, CF-58 to CF-60, CF-90)', async ({
+  page,
+}) => {
   await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   expect(await call(page, '/api/v1/jobs/case-analysis', { on: false })).toBe(200)
   const title = `The disk of db-1 is 90% full ${Date.now()}`
 
-  await page.goto('/#/cases/inbox')
+  await page.goto('/#/aiops/inbox')
   await page.getByTestId('cases-new-case').click()
-  await expect(page).toHaveURL(/#\/cases\/inbox\/case\/new$/)
+  await expect(page).toHaveURL(/#\/aiops\/inbox\/case\/new$/)
   await page.getByTestId('case-new-title').fill(title)
   await page.getByTestId('case-new-detail').fill('Since 10:00, /var grows by 1 GB an hour.')
   // Not a Kubernetes object (the owner's item 1): any words are fine.
@@ -81,7 +80,7 @@ test('a case opened by hand about any words: New Case, its drawer, priority P0 t
 
   const drawer = page.getByTestId('case-drawer')
   await expect(drawer).toBeVisible()
-  await expect(page).toHaveURL(/#\/cases\/inbox\/case\/\d+$/)
+  await expect(page).toHaveURL(/#\/aiops\/inbox\/case\/\d+$/)
   const number = Number(new URL(page.url()).hash.split('/').pop())
   await expect(drawer.getByTestId('case-kicker')).toContainText(`Case C-${number}`)
   await expect(drawer.getByTestId('case-status')).toHaveText(/^(New|In progress)$/)
@@ -99,7 +98,7 @@ test('a case opened by hand about any words: New Case, its drawer, priority P0 t
   // The priority, P0 to P4, from the header (CF-58).
   await drawer.getByTestId('case-priority-set').selectOption('1')
   await expect(drawer.getByTestId('case-priority-set')).toHaveValue('1')
-  expect(((await (await page.request.get(`/api/v1/cases/cases/C-${number}`)).json()) as { priority: number }).priority).toBe(1)
+  expect(((await (await page.request.get(`/api/v1/aiops/cases/C-${number}`)).json()) as { priority: number }).priority).toBe(1)
 
   // The title, edited in place: Escape leaves it and the drawer as they were, Enter saves (CF-60).
   await drawer.getByTestId('case-title-edit').click()
@@ -120,7 +119,7 @@ test('a case opened by hand about any words: New Case, its drawer, priority P0 t
   await drawer.getByTestId('case-keep').click()
   await expect(drawer.getByTestId('case-draft-at')).toContainText('Draft last edited by')
   // A save from a draft someone changed since is refused with theirs: 409.
-  const stale = await page.request.put(`/api/v1/cases/cases/C-${number}/draft`, { headers: SAME, data: { fix: 'Someone else', base: '2020-01-01T00:00:00Z' } })
+  const stale = await page.request.put(`/api/v1/aiops/cases/C-${number}/draft`, { headers: SAME, data: { fix: 'Someone else', base: '2020-01-01T00:00:00Z' } })
   expect(stale.status(), await stale.text()).toBe(409)
   expect(((await stale.json()) as { draft: { fix?: string } }).draft.fix).toBe('Cleaned /var/tmp')
   await page.reload()
@@ -144,7 +143,7 @@ test('a case opened by hand about any words: New Case, its drawer, priority P0 t
   await expect(drawer.getByTestId('case-fix-applied')).toContainText('Cleaned /var/tmp and rotated the logs.')
   await expect(drawer.getByTestId('case-rca-fix-applied')).toHaveCount(0)
   await expect(drawer.getByTestId('case-rca')).not.toContainText('Mycroft')
-  const fixed = (await (await page.request.get(`/api/v1/cases/cases/C-${number}`)).json()) as { rca?: { id?: string; fix: string } }
+  const fixed = (await (await page.request.get(`/api/v1/aiops/cases/C-${number}`)).json()) as { rca?: { id?: string; fix: string } }
   expect(fixed.rca).toMatchObject({ fix: 'Cleaned /var/tmp and rotated the logs.' })
   expect(fixed.rca?.id).toBeUndefined()
 
@@ -168,7 +167,7 @@ test('a case opened by hand about any words: New Case, its drawer, priority P0 t
   await expect(drawer.getByTestId('case-reason')).toHaveText('The disk was resized meanwhile.')
 
   // The API lists it among every case, with its kind.
-  const all = (await (await page.request.get('/api/v1/cases/cases?q=' + encodeURIComponent('db-1'))).json()) as { cases: { number: number; pending: boolean; source: { kind: string } }[] }
+  const all = (await (await page.request.get('/api/v1/aiops/cases?q=' + encodeURIComponent('db-1'))).json()) as { cases: { number: number; pending: boolean; source: { kind: string } }[] }
   expect(all.cases.find((c) => c.number === number)).toMatchObject({ pending: false, source: { kind: 'manual' } })
 })
 
@@ -223,7 +222,7 @@ test('a report is a case: triaged in the same drawer with an assignee, a reply a
 test('a reply moves the case: a note leaves it New, Ask for info shows it Waiting for the reporter, kept In progress, in the drawer and the Inbox (CF-67)', async ({ page }) => {
   const stamp = Date.now()
   const n = await file(page, `The shop shows an error ${stamp}`)
-  await page.goto(`/#/cases/inbox/case/${n}`)
+  await page.goto(`/#/aiops/inbox/case/${n}`)
   const drawer = page.getByTestId('case-drawer')
   await expect(drawer.getByTestId('case-status')).toHaveText('New')
 
@@ -239,11 +238,11 @@ test('a reply moves the case: a note leaves it New, Ask for info shows it Waitin
   await expect(drawer.getByTestId('case-message').filter({ hasText: 'What app is it?' })).toBeVisible()
   await expect(drawer.getByTestId('case-status')).toHaveText('Waiting for the reporter')
   await expect(drawer.getByTestId('case-history-entry').first()).toContainText('Question sent, now Waiting for the reporter')
-  const asApi = (await (await page.request.get(`/api/v1/cases/cases/C-${n}`)).json()) as { status: string; askedReporter?: boolean }
+  const asApi = (await (await page.request.get(`/api/v1/aiops/cases/C-${n}`)).json()) as { status: string; askedReporter?: boolean }
   expect(asApi).toMatchObject({ status: 'inProgress', askedReporter: true })
 
   // The Inbox shows it so, and its Status filter finds it.
-  await page.goto('/#/cases/inbox?status=waiting')
+  await page.goto('/#/aiops/inbox?status=waiting')
   const row = page.locator(`[data-inbox-row="case:${n}"]`)
   await expect(row.getByTestId('inbox-row-status')).toHaveText('Waiting for the reporter')
   await expect(page.getByTestId('inbox-status')).toHaveValue('waiting')
@@ -253,7 +252,7 @@ test('a reply moves the case: a note leaves it New, Ask for info shows it Waitin
 
   // A plain reply to another report moves it In progress.
   const m = await file(page, `Checkout is odd ${stamp}`)
-  await page.goto(`/#/cases/inbox/case/${m}`)
+  await page.goto(`/#/aiops/inbox/case/${m}`)
   await drawer.getByTestId('case-reply').fill('We are looking at it.')
   await drawer.getByTestId('case-send').click()
   await expect(drawer.getByTestId('case-status')).toHaveText('In progress')
@@ -264,7 +263,7 @@ test('a duplicate names its original, which is checked; a closed original offers
   const stamp = Date.now()
   const original = await open(page, `Grafana is down ${stamp}`)
   const dup = await open(page, `Grafana does not load ${stamp}`)
-  await page.goto(`/#/cases/inbox/case/${dup.number}`)
+  await page.goto(`/#/aiops/inbox/case/${dup.number}`)
   const drawer = page.getByTestId('case-drawer')
   await drawer.getByTestId('case-close-open').click()
   await drawer.getByTestId('case-outcome-duplicate').check()
@@ -278,10 +277,10 @@ test('a duplicate names its original, which is checked; a closed original offers
   // An original closed as no action needed: the case may not close as its
   // duplicate. noFixNeeded, its name before CF-90, is still taken as it.
   const gone = await open(page, `Backups slow ${stamp}`)
-  expect(await call(page, `/api/v1/cases/cases/${gone.id}/close`, { outcome: 'noFixNeeded', explanation: 'A one-off during the upgrade.' }, 'POST')).toBe(200)
-  expect(((await (await page.request.get(`/api/v1/cases/cases/${gone.id}`)).json()) as { outcome: string }).outcome).toBe('noAction')
+  expect(await call(page, `/api/v1/aiops/cases/${gone.id}/close`, { outcome: 'noFixNeeded', explanation: 'A one-off during the upgrade.' }, 'POST')).toBe(200)
+  expect(((await (await page.request.get(`/api/v1/aiops/cases/${gone.id}`)).json()) as { outcome: string }).outcome).toBe('noAction')
   const later = await open(page, `Backups slow again ${stamp}`)
-  await page.goto(`/#/cases/inbox/case/${later.number}`)
+  await page.goto(`/#/aiops/inbox/case/${later.number}`)
   await drawer.getByTestId('case-close-open').click()
   await drawer.getByTestId('case-outcome-duplicate').check()
   await drawer.getByTestId('case-close-original').fill(gone.id)
@@ -294,17 +293,17 @@ test('a duplicate names its original, which is checked; a closed original offers
   await expect(drawer.getByTestId('case-status')).toHaveText(/^(New|In progress)$/)
 })
 
-test('New Case offers to add to an open case like it, instead of opening another', async ({ page }) => {
+test('New case offers to add to an open case like it, instead of opening another', async ({ page }) => {
   const title = `Harbor pushes fail with 413 ${Date.now()}`
   const there = await open(page, title, { resource: 'registry/Deployment/harbor' })
-  await page.goto('/#/cases/inbox/case/new')
+  await page.goto('/#/aiops/inbox/case/new')
   await page.getByTestId('case-new-title').fill(title)
   const join = page.getByTestId(`similar-join-${there.id}`)
   await expect(join).toBeVisible({ timeout: 10_000 })
   await expect(page.getByTestId('case-new-open')).toHaveText('Open a new case anyway')
   await page.getByTestId('case-new-detail').fill('From the CI runners too.')
   await join.click()
-  await expect(page).toHaveURL(new RegExp(`#/cases/inbox/case/${there.number}$`))
+  await expect(page).toHaveURL(new RegExp(`#/aiops/inbox/case/${there.number}$`))
   await expect(page.getByTestId('case-drawer')).toContainText('From the CI runners too.')
 })
 
@@ -319,7 +318,7 @@ test('the old addresses open the cases: AIOps › Cases, Reports, and On behalf 
   await expect(page.getByTestId('case-drawer')).toHaveCount(0)
 
   // On behalf of: the report page for the person whose problem it is.
-  await page.goto('/#/cases/inbox')
+  await page.goto('/#/aiops/inbox')
   await page.getByTestId('cases-on-behalf').click()
   await page.getByTestId('cases-on-behalf-user').fill('dev')
   const [behalf] = await Promise.all([page.context().waitForEvent('page'), page.getByTestId('cases-on-behalf-open').click()])
@@ -335,12 +334,12 @@ test('with the case analysis job on, the Troubleshooter analyses a case, suggest
   expect(await call(page, '/api/v1/sherlock/key', { key: KEY })).toBe(200)
   expect(await call(page, '/api/v1/sherlock/config', ON)).toBe(200)
   expect(await call(page, '/api/v1/jobs/case-analysis', { on: true })).toBe(200)
-  const res = await page.request.post('/api/v1/cases/cases', { headers: SAME, data: { title: `DNS is slow ${Date.now()}`, cluster: 'local', resource: 'kube-system/Deployment/coredns', priority: 2 } })
+  const res = await page.request.post('/api/v1/aiops/cases', { headers: SAME, data: { title: `DNS is slow ${Date.now()}`, cluster: 'local', resource: 'kube-system/Deployment/coredns', priority: 2 } })
   expect(res.status(), await res.text()).toBe(201)
   const made = (await res.json()) as { id: string; number: number; analyzing: boolean }
   expect(made.analyzing).toBe(true)
 
-  await page.goto(`/#/cases/inbox/case/${made.number}`)
+  await page.goto(`/#/aiops/inbox/case/${made.number}`)
   const drawer = page.getByTestId('case-drawer')
   await expect(drawer.getByTestId('case-analysis')).toContainText('The memory limit is too low for the load.', { timeout: 45_000 })
   // The analysis does not take the case in progress: only a person does.
@@ -352,12 +351,12 @@ test('with the case analysis job on, the Troubleshooter analyses a case, suggest
 
   // The proposed change names the case.
   const href = await drawer.getByTestId('case-card').getByRole('link').getAttribute('href')
-  const card = decodeURIComponent((href ?? '').split('proposal=')[1] ?? '')
-  const got = (await (await page.request.get(`/api/v1/cases/proposals/${card}`)).json()) as { source: { kind: string; id: string } }
+  const card = /PC-\d+/.exec(decodeURIComponent(href ?? ''))?.[0] ?? ''
+  const got = (await (await page.request.get(`/api/v1/aiops/proposals/${card}`)).json()) as { source: { kind: string; id: string } }
   expect(got.source).toMatchObject({ kind: 'case', id: made.id })
 
   // The run is the case analysis job's, and links back.
-  await expect(drawer.getByTestId('case-analysis').getByRole('link').first()).toHaveAttribute('href', /#\/cases\/jobs\/runs\/run-\d+$/)
+  await expect(drawer.getByTestId('case-analysis').getByRole('link').first()).toHaveAttribute('href', /#\/aiops\/jobs\/runs\/run-\d+$/)
 
   // Fix with an RCA the agent drafts; a person saves it. At P2 the RCA's fields show, optional.
   // The draft fills cause and prevention; What was done, written already, stays as the person wrote it.
@@ -390,9 +389,9 @@ test('Settings › SLA has P0 to P4, and Settings › Cases keeps its values wit
   await expect(settings.getByTestId('cases-setting-newCasesPerRun')).toContainText('From 1 to 500.')
   await settings.getByTestId('cases-newCasesPerRun').fill('40')
   await page.getByTestId('cases-save').click()
-  await expect.poll(async () => ((await (await page.request.get('/api/v1/cases/settings')).json()) as { newCasesPerRun: number }).newCasesPerRun).toBe(40)
+  await expect.poll(async () => ((await (await page.request.get('/api/v1/aiops/settings')).json()) as { newCasesPerRun: number }).newCasesPerRun).toBe(40)
   await settings.getByTestId('cases-newCasesPerRun').fill(was)
   await page.getByTestId('cases-save').click()
-  await expect.poll(async () => ((await (await page.request.get('/api/v1/cases/settings')).json()) as { newCasesPerRun: number }).newCasesPerRun).toBe(Number(was))
+  await expect.poll(async () => ((await (await page.request.get('/api/v1/aiops/settings')).json()) as { newCasesPerRun: number }).newCasesPerRun).toBe(Number(was))
   await expect(settings.getByTestId('cases-duplicates')).toContainText('closed as duplicates')
 })

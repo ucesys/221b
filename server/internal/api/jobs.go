@@ -80,12 +80,13 @@ func (s *Server) ReaderFor(ctx context.Context, cluster string, sess *auth.Sessi
 			return AgentReader{}, ErrNoCluster
 		}
 	}
-	tb := &toolbox{s: s, cluster: cluster, cl: cl}
+	var as auth.Session
+	hasSess := false
 	if sess != nil && s.opts.Auth != nil {
-		tb.sess, tb.hasSess = *sess, true
+		as, hasSess = *sess, true
 		ctx = auth.WithSession(ctx, *sess)
 	}
-	out := AgentReader{Tools: tb, Name: cluster}
+	out := AgentReader{Tools: s.newToolbox(cluster, cl, as, hasSess), Name: cluster}
 	if s.opts.Clusters != nil {
 		if sum, ok := s.opts.Clusters.Summary(cluster); ok {
 			out.Name, out.Version = sum.Name, sum.Version

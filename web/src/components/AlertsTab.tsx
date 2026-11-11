@@ -12,7 +12,7 @@ import { ExportMenu } from './ExportMenu'
 import { SearchIcon } from './Icons'
 import type { TabProps } from './tabs'
 import { AskSherlock } from './Sherlock'
-import { AlertAckTag, AlertReports } from './cases/AlertReports'
+import { AlertAckTag, AlertReports } from './aiops/AlertReports'
 import { troubleshootQuestion } from '../lib/sherlock'
 
 const KINDS: [AlertKind, string][] = [
@@ -97,7 +97,23 @@ function exportEvents(rows: AlertRow[], format: ExportFormat, cluster: string | 
   onToast(`Downloaded ${base}.${format}`)
 }
 
-function AlertCard({ r, now, onOpen, onPod, onExport, onAck, clusters }: { r: AlertRow; now: number; onOpen: () => void; onPod: (key: string) => void; onExport: (format: ExportFormat) => void; onAck: (acknowledge: boolean) => Promise<void>; clusters: string[] }) {
+function AlertCard({
+  r,
+  now,
+  onOpen,
+  onPod,
+  onExport,
+  onAck,
+  clusters,
+}: {
+  r: AlertRow
+  now: number
+  onOpen: () => void
+  onPod: (key: string) => void
+  onExport: (format: ExportFormat) => void
+  onAck: (acknowledge: boolean) => Promise<void>
+  clusters: string[]
+}) {
   const [sort, setSort] = useState<Sort>({ col: 'i', dir: 'asc' })
   const [busy, setBusy] = useState(false)
   const ack = async (on: boolean) => {
@@ -128,7 +144,15 @@ function AlertCard({ r, now, onOpen, onPod, onExport, onAck, clusters }: { r: Al
   return (
     // A border in the alert's colour around the whole card, so each alert
     // stands apart and its title reads as the head of what follows (6.5).
-    <div className="rk-card" style={{ overflow: 'hidden', borderColor: isActive(r) ? `var(--${sev.tone})` : undefined }} data-testid="alert" data-alert={r.key} data-severity={r.severity} data-acked={r.ack ? 'true' : undefined} data-tone={isActive(r) ? sev.tone : undefined}>
+    <div
+      className="rk-card"
+      style={{ overflow: 'hidden', borderColor: isActive(r) ? `var(--${sev.tone})` : undefined }}
+      data-testid="alert"
+      data-alert={r.key}
+      data-severity={r.severity}
+      data-acked={r.ack ? 'true' : undefined}
+      data-tone={isActive(r) ? sev.tone : undefined}
+    >
       <div style={{ padding: '12px 16px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px', borderBottom: '1px solid var(--line)' }}>
         <span className="rk-tag" data-tone={sev.tone} style={{ fontSize: 11, padding: '2px 8px' }} data-testid="alert-sev">
           {sev.label}
@@ -174,7 +198,11 @@ function AlertCard({ r, now, onOpen, onPod, onExport, onAck, clusters }: { r: Al
         <ExportMenu onExport={onExport} disabled={!r.events.length} what="these events" />
       </div>
       {ctx.text && (
-        <p className={ctx.mono ? 'rk-mono' : undefined} data-testid="alert-context" style={{ margin: 0, padding: '10px 16px', fontSize: 12, color: 'var(--fg2)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', background: 'var(--surface2)', borderBottom: '1px solid var(--line)' }}>
+        <p
+          className={ctx.mono ? 'rk-mono' : undefined}
+          data-testid="alert-context"
+          style={{ margin: 0, padding: '10px 16px', fontSize: 12, color: 'var(--fg2)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', background: 'var(--surface2)', borderBottom: '1px solid var(--line)' }}
+        >
           {ctx.text}
         </p>
       )}
@@ -326,11 +354,23 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
 
   // The object's details over this tab.
   const openRow = (r: AlertRow) => {
-    const target: Peek = r.kind === 'node' ? { kind: 'node', name: r.name } : r.kind === 'pod' ? { kind: 'pod', namespace: r.namespace!, name: r.name } : { kind: 'object', type: 'PersistentVolumeClaim', namespace: r.namespace!, name: r.name }
+    const target: Peek =
+      r.kind === 'node' ? { kind: 'node', name: r.name } : r.kind === 'pod' ? { kind: 'pod', namespace: r.namespace!, name: r.name } : { kind: 'object', type: 'PersistentVolumeClaim', namespace: r.namespace!, name: r.name }
     navigate(peekHref(target))
   }
   const openNode = (name: string) => navigate(peekHref({ kind: 'node', name }))
-  const card = (r: AlertRow) => <AlertCard key={r.key} r={r} now={now} onOpen={() => openRow(r)} onPod={openPod} onExport={(f) => exportEvents([r], f, cluster?.name, `${r.kind}-${r.name}-events`, onToast)} onAck={(on) => ack(r, on)} clusters={[route.cluster, cluster?.name ?? '']} />
+  const card = (r: AlertRow) => (
+    <AlertCard
+      key={r.key}
+      r={r}
+      now={now}
+      onOpen={() => openRow(r)}
+      onPod={openPod}
+      onExport={(f) => exportEvents([r], f, cluster?.name, `${r.kind}-${r.name}-events`, onToast)}
+      onAck={(on) => ack(r, on)}
+      clusters={[route.cluster, cluster?.name ?? '']}
+    />
+  )
   const groupTitle = kind === 'pods' ? 'Pods by node' : kind === 'nodes' ? 'Nodes' : 'Nodes and their pods'
   const groupEmpty = q ? `No ${kind === 'pods' ? 'pod' : kind === 'nodes' ? 'node' : 'node or pod'} alerts match this search.` : `No ${kind === 'pods' ? 'pod' : kind === 'nodes' ? 'node' : 'node or pod'} problems right now.`
   const openPod = (key: string) => {
@@ -389,12 +429,20 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
             data-testid="alert-active"
           />
           Hide resolved
-          {hiddenRecovered > 0 && <span className="rk-cnt" title={`${hiddenRecovered} resolved alerts not shown`}>{hiddenRecovered} hidden</span>}
+          {hiddenRecovered > 0 && (
+            <span className="rk-cnt" title={`${hiddenRecovered} resolved alerts not shown`}>
+              {hiddenRecovered} hidden
+            </span>
+          )}
         </label>
         <label className="rk-check" title="Leave out the alerts someone acknowledged" style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
           <input type="checkbox" checked={hideAcked} onChange={(e) => set({ acked: e.target.checked ? 'hide' : undefined })} data-testid="alert-hide-acked" />
           Hide acknowledged
-          {hiddenAcked > 0 && <span className="rk-cnt" title={`${hiddenAcked} acknowledged alerts not shown`}>{hiddenAcked} hidden</span>}
+          {hiddenAcked > 0 && (
+            <span className="rk-cnt" title={`${hiddenAcked} acknowledged alerts not shown`}>
+              {hiddenAcked} hidden
+            </span>
+          )}
         </label>
         <label className="rk-field" style={{ width: 260 }}>
           <SearchIcon />
@@ -416,7 +464,12 @@ export function AlertsTab({ cluster, now, onToast, route }: TabProps) {
                 <div key={g.node} style={{ display: 'flex', flexDirection: 'column', gap: 10 }} data-testid="alert-group" data-node={g.node}>
                   {g.row ? card(g.row) : <NodeHead name={g.node} node={nodeOf.get(g.node)} pods={g.pods.length} onOpen={() => openNode(g.node)} />}
                   {g.pods.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginLeft: 18, paddingLeft: 16, borderLeft: '2px solid var(--line2)' }} role="group" aria-label={`Pods with alerts on ${g.node}`} data-testid="alert-node-pods">
+                    <div
+                      style={{ display: 'flex', flexDirection: 'column', gap: 10, marginLeft: 18, paddingLeft: 16, borderLeft: '2px solid var(--line2)' }}
+                      role="group"
+                      aria-label={`Pods with alerts on ${g.node}`}
+                      data-testid="alert-node-pods"
+                    >
                       {g.pods.map(card)}
                     </div>
                   )}

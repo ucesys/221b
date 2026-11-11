@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/watson"
 )
 
 // The fixed core of each agent's instructions: one file per agent, and the
@@ -25,8 +26,13 @@ func promptFile(name string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(htmlComment.ReplaceAllString(string(b), ""))
+	text := strings.TrimSpace(htmlComment.ReplaceAllString(string(b), ""))
+	return strings.ReplaceAll(text, commandsMark, watson.Commands())
 }
+
+// commandsMark in a prompt file stands for the sentence that says what
+// Watson runs, built from Watson's own list (S-1).
+const commandsMark = "{{watson.Commands}}"
 
 // htmlComment is a comment in a prompt file, such as the source: comment
 // that names where a part came from (docs/prompt-sources.md); it is for
@@ -34,14 +40,16 @@ func promptFile(name string) string {
 var htmlComment = regexp.MustCompile(`(?s)<!--.*?-->\n?`)
 
 // Core is an agent's fixed instructions. Sherlock's are its built-in
-// instructions (which say how it may change the view when viewChanges),
-// then the rules every agent keeps and its front desk's part.
+// instructions (which say how it may change the view when viewChanges,
+// and what Watson runs), then the rules every agent keeps and its front
+// desk's part. Every other agent's are its own, then the rules every
+// agent keeps with what Watson runs (S-1, P-1).
 func Core(id string, viewChanges bool) string {
 	common := promptFile("common")
 	if id == Sherlock {
-		return sherlock.BuiltIn(viewChanges) + "\n\n" + common + "\n\n" + promptFile("sherlock")
+		return sherlock.BuiltIn(viewChanges, watson.Commands()) + "\n\n" + common + "\n\n" + promptFile("sherlock")
 	}
-	return promptFile(id) + "\n\n" + common + "\n\n" + sherlock.ClusterTextRule
+	return promptFile(id) + "\n\n" + common + "\n\n" + watson.Commands() + "\n\n" + sherlock.ClusterTextRule
 }
 
 // --- AI settings, round 2 (Phase 12, wave 5) ---

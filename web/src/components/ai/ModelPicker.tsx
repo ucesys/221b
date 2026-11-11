@@ -68,7 +68,10 @@ export function ModelPicker({ label, hint, value, onChange, load, auto, from = '
     if (!auto) return
     let live = true
     load()
-      .then((r) => live && take(r), (e: unknown) => live && fail(e))
+      .then(
+        (r) => live && take(r),
+        (e: unknown) => live && fail(e),
+      )
       .finally(() => live && setBusy(false))
     return () => {
       live = false
@@ -95,7 +98,10 @@ export function ModelPicker({ label, hint, value, onChange, load, auto, from = '
                 return
               }
               setTyping(false)
-              onChange(v, listed.find((m) => m.id === v))
+              onChange(
+                v,
+                listed.find((m) => m.id === v),
+              )
             }}
             disabled={disabled}
             testId={`${testId}-list`}

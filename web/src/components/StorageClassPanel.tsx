@@ -147,10 +147,21 @@ export function StorageClassPanel({ name, now, onClose, onToast }: Props) {
               </dd>
               <dt>Binding mode</dt>
               <dd>
-                <b>{c.binding}</b> — {c.binding === 'WaitForFirstConsumer' ? 'the volume is made, or chosen, when a pod that mounts the claim is scheduled, on that pod’s node' : 'the volume is created as soon as the claim is, before any pod'}
+                <b>{c.binding}</b> —{' '}
+                {c.binding === 'WaitForFirstConsumer' ? 'the volume is made, or chosen, when a pod that mounts the claim is scheduled, on that pod’s node' : 'the volume is created as soon as the claim is, before any pod'}
               </dd>
               <dt>Volume expansion</dt>
-              <dd>{c.expansion ? <><b>Allowed</b> — online, while mounted</> : <><b>Not allowed</b> — a bigger volume means a new claim and a copy</>}</dd>
+              <dd>
+                {c.expansion ? (
+                  <>
+                    <b>Allowed</b> — online, while mounted
+                  </>
+                ) : (
+                  <>
+                    <b>Not allowed</b> — a bigger volume means a new claim and a copy
+                  </>
+                )}
+              </dd>
               <dt>Mount options</dt>
               <dd className={c.mountOptions?.length ? 'rk-mono' : undefined}>{c.mountOptions?.length ? c.mountOptions.join(', ') : 'none'}</dd>
               <dt>Allowed topologies</dt>
@@ -233,41 +244,41 @@ export function StorageClassPanel({ name, now, onClose, onToast }: Props) {
       )}
       {tab === 'volumes' && (
         <>
-        <p style={{ margin: '0 0 10px', fontSize: 12.5 }}>
-          <a className="rk-st-a" href={href('storage', [], { class: c.name })} data-testid="storage-class-filter">
-            Show these on the Storage tab
-          </a>{' '}
-          <span style={{ color: 'var(--fg3)' }}>— the table filtered to this class, to sort, search and export.</span>
-        </p>
-        <table className="rk-st-ev" aria-label={`Volumes and claims of ${c.name}`} data-testid="storage-class-volumes">
-          <thead>
-            <tr>
-              <th>Volume</th>
-              <th>Claim</th>
-              <th>Status</th>
-              <th className="rk-r">Capacity</th>
-              <th className="rk-r">Used</th>
-            </tr>
-          </thead>
-          <tbody>
-            {group.pairs.map((p) => (
-              <tr key={pairPeek(p)}>
-                <td className="rk-mono">{p.state === 'pending' ? <span className="rk-dim">none yet</span> : p.volume}</td>
-                <td className="rk-mono">
-                  <a {...(p.claim ? peekLink({ kind: 'claim', namespace: p.namespace!, name: p.claim }) : peekLink({ kind: 'volume', name: p.volume! }))}>{p.claim ? `${p.namespace}/${p.claim}` : p.wasClaim ? `was ${p.wasClaim}` : '—'}</a>
-                </td>
-                <td>
-                  <span className="rk-pill" data-tone={p.tone}>
-                    <span className="rk-dot" />
-                    {p.phase}
-                  </span>
-                </td>
-                <td className="rk-r rk-num">{bytes(p.state === 'pending' ? p.requested : p.capacity)}</td>
-                <td className="rk-r rk-num">{p.usage ? `${Math.round(p.usage.pct)}%` : '—'}</td>
+          <p style={{ margin: '0 0 10px', fontSize: 12.5 }}>
+            <a className="rk-st-a" href={href('storage', [], { class: c.name })} data-testid="storage-class-filter">
+              Show these on the Storage tab
+            </a>{' '}
+            <span style={{ color: 'var(--fg3)' }}>— the table filtered to this class, to sort, search and export.</span>
+          </p>
+          <table className="rk-st-ev" aria-label={`Volumes and claims of ${c.name}`} data-testid="storage-class-volumes">
+            <thead>
+              <tr>
+                <th>Volume</th>
+                <th>Claim</th>
+                <th>Status</th>
+                <th className="rk-r">Capacity</th>
+                <th className="rk-r">Used</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {group.pairs.map((p) => (
+                <tr key={pairPeek(p)}>
+                  <td className="rk-mono">{p.state === 'pending' ? <span className="rk-dim">none yet</span> : p.volume}</td>
+                  <td className="rk-mono">
+                    <a {...(p.claim ? peekLink({ kind: 'claim', namespace: p.namespace!, name: p.claim }) : peekLink({ kind: 'volume', name: p.volume! }))}>{p.claim ? `${p.namespace}/${p.claim}` : p.wasClaim ? `was ${p.wasClaim}` : '—'}</a>
+                  </td>
+                  <td>
+                    <span className="rk-pill" data-tone={p.tone}>
+                      <span className="rk-dot" />
+                      {p.phase}
+                    </span>
+                  </td>
+                  <td className="rk-r rk-num">{bytes(p.state === 'pending' ? p.requested : p.capacity)}</td>
+                  <td className="rk-r rk-num">{p.usage ? `${Math.round(p.usage.pct)}%` : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </>
       )}
       {tab === 'parameters' && (

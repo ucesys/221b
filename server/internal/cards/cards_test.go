@@ -284,7 +284,7 @@ func TestApprovalRechecksTheConditionAndTheTarget(t *testing.T) {
 	id, _ := w.st.Propose(ctx, restart("dev-1", ""))
 	w.exec.set("v2")
 	c, err := w.st.Approve(ctx, id, person("pat"), "")
-	if !errors.Is(err, ErrStale) || c.State != Queued || c.Recheck == nil || c.Recheck.OK || !strings.Contains(c.Recheck.Why, "changed since the proposal") {
+	if !errors.Is(err, ErrStale) || c.State != Queued || c.Recheck == nil || c.Recheck.OK || !strings.Contains(c.Recheck.Why, "changed since it was proposed") {
 		t.Fatalf("a changed target: %v %+v", err, c.Recheck)
 	}
 	if len(w.exec.runs()) != 0 {
@@ -532,7 +532,7 @@ func TestDecidedTextNamesEachEnding(t *testing.T) {
 		{Card{State: Failed, Approvals: []Decision{{By: Person{Name: "rule"}, At: at, Standing: "s1"}}}, "already approved by a standing approval at 2026-11-06 14:03:00 UTC; it failed"},
 		{Card{State: Rejected, Rejection: &Decision{By: Person{Name: "Cy"}, At: at}}, "already rejected by Cy at 2026-11-06 14:03:00 UTC"},
 		{Card{State: Expired, Updated: at}, "it expired at 2026-11-06 14:03:00 UTC"},
-		{Card{State: Replaced, ReplacedBy: "PC-9", Updated: at}, "a newer proposal, PC-9, replaced it at 2026-11-06 14:03:00 UTC"},
+		{Card{State: Replaced, ReplacedBy: "PC-9", Updated: at}, "a newer proposed change, PC-9, replaced it at 2026-11-06 14:03:00 UTC"},
 	} {
 		if got := DecidedText(tc.c); got != tc.want {
 			t.Errorf("%s: %q, want %q", tc.c.State, got, tc.want)

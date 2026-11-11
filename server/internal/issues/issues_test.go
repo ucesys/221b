@@ -251,7 +251,7 @@ func TestUnlinkSendsAReportToInvestigation(t *testing.T) {
 		}
 	}
 	if v.Technical != "" || v.Cause != "" || v.Plain == "" {
-		t.Fatalf("%+v", v.Report)
+		t.Fatalf("%+v", v.Case)
 	}
 	// Only an operator's Send sends it.
 	sent, err := f.s.Send(ctx, operator, r.Number, draft.ID, "")
@@ -278,13 +278,13 @@ type fakeInvestigator struct {
 	done chan int
 }
 
-func (f *fakeInvestigator) Investigate(_ context.Context, r Report) (Finding, error) {
+func (f *fakeInvestigator) Investigate(_ context.Context, r Case) (Finding, error) {
 	f.done <- r.Number
 	return Finding{Technical: "upstream payments-api p99 at 31s in namespace shop", Plain: "The payment provider is slow.", Cause: "payments-api latency",
 		Reply: "We are looking at the payment provider. password=letmein", Service: "shop", Confidence: 90}, nil
 }
 
-func (f *fakeInvestigator) Verify(context.Context, Report) (Verdict, error) {
+func (f *fakeInvestigator) Verify(context.Context, Case) (Verdict, error) {
 	return Verdict{Fixed: true}, nil
 }
 

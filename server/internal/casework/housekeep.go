@@ -29,6 +29,9 @@ import (
 // validation rule as it is (undone by retiring it); the other candidates,
 // with their likely variants, are suggested in AIOps › Mycroft ›
 // Validation rules for a person to promote, edit or dismiss.
+//
+// Since the phase 12 review (W-9) it also puts a case and its work right
+// when the second of their two writes failed (reconcile.go).
 
 // KindHousekeeping is the housekeeping job's kind.
 const KindHousekeeping = "housekeeping"
@@ -37,7 +40,7 @@ const KindHousekeeping = "housekeeping"
 // until a SuperAdmin turns it off.
 func (s *Service) HousekeepingKind() jobs.Kind {
 	return jobs.Kind{ID: KindHousekeeping, Label: "Housekeeping", Order: 90, On: true,
-		Does:        "Makes the fixes, known issues and exceptions that repeat another inactive, marks the fixes that contradict each other pending, offers Mycroft the fixes proven in cases for a runbook, and suggests validation rules from the ids the agents made up",
+		Does:        "Makes the fixes, known issues and exceptions that repeat another inactive, marks the fixes that contradict each other pending, offers Mycroft the fixes proven in cases for a runbook, suggests validation rules from the ids the agents made up, and puts a case right with its work when a write failed",
 		Default:     jobs.When{Schedule: &schedule.Spec{Kind: schedule.Daily, At: "03:30"}},
 		Schedulable: true,
 		Run: func(ctx context.Context, env *jobs.RunEnv) (jobs.Outcome, error) {
@@ -122,8 +125,17 @@ func (s *Service) Housekeep(ctx context.Context) (string, error) {
 		n += section(&b, "Validation rules promoted (exact repeats)", auto)
 		n += section(&b, "Validation rules suggested", sugg)
 	}
+	// A case and its work kept in two writes: what a failed second write
+	// left behind is done now (W-9, CF-100).
+	if s.o.Issues != nil {
+		done, err := s.reconcile(ctx)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("the cases and their work: %w", err))
+		}
+		n += section(&b, "Cases put right with their work", done)
+	}
 	if n == 0 {
-		b.WriteString("Nothing to do: no fix, known issue or exception repeats or contradicts another, no fix to offer Mycroft for a runbook, and no validation rule to suggest.\n")
+		b.WriteString("Nothing to do: no fix, known issue or exception repeats or contradicts another, no fix to offer Mycroft for a runbook, no validation rule to suggest, and no case to put right with its work.\n")
 	}
 	if len(errs) > 0 {
 		b.WriteString("\n### Not done\n\n")

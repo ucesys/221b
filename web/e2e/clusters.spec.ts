@@ -275,7 +275,33 @@ test('a kubeconfig signs in too, with the context picked and the address taken f
   await removeIfThere(request, id)
   // Two contexts, the current one pointing nowhere: the picked one is used.
   const ca = other.ca === 'pem' ? `      certificate-authority-data: ${Buffer.from(other.caPem).toString('base64')}\n` : ''
-  const kubeconfig = ['apiVersion: v1', 'kind: Config', 'clusters:', '  - name: other', '    cluster:', `      server: ${other.server}`, ca.trimEnd(), '  - name: nowhere', '    cluster:', '      server: https://nowhere.invalid:6443', 'contexts:', '  - name: e2e', '    context:', '      cluster: other', '      user: console', '  - name: elsewhere', '    context:', '      cluster: nowhere', '      user: console', 'current-context: elsewhere', 'users:', '  - name: console', '    user:', `      token: ${other.token}`, '']
+  const kubeconfig = [
+    'apiVersion: v1',
+    'kind: Config',
+    'clusters:',
+    '  - name: other',
+    '    cluster:',
+    `      server: ${other.server}`,
+    ca.trimEnd(),
+    '  - name: nowhere',
+    '    cluster:',
+    '      server: https://nowhere.invalid:6443',
+    'contexts:',
+    '  - name: e2e',
+    '    context:',
+    '      cluster: other',
+    '      user: console',
+    '  - name: elsewhere',
+    '    context:',
+    '      cluster: nowhere',
+    '      user: console',
+    'current-context: elsewhere',
+    'users:',
+    '  - name: console',
+    '    user:',
+    `      token: ${other.token}`,
+    '',
+  ]
     .filter((line) => line !== '')
     .join('\n')
   const draft = { name: id, env: 'development', description: 'Added by the end-to-end suite, from a kubeconfig', server: '', ca: other.ca, auth: 'kubeconfig', kubeconfig, context: 'e2e', mode: 'read' }

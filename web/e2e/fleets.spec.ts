@@ -28,12 +28,14 @@ async function putFleets(page: Page, fleets: Fleet[]): Promise<number> {
 const row = (page: Page, id: string) => page.locator(`[data-fleet="${id}"]`)
 
 test('a fleet shows what its nodes keep from pods, nodes that differ apart (AU-18)', async ({ page }) => {
-  test.skip(inKind, 'the simulator\'s kubelets keep resources from pods; kind\'s keep none')
+  test.skip(inKind, "the simulator's kubelets keep resources from pods; kind's keep none")
   await open(page)
-  expect(await putFleets(page, [
-    { id: 'e2e-workers', name: 'Workers', color: 0, labels: ['node-role.kubernetes.io/worker='], taints: [] },
-    { id: 'e2e-cp', name: 'Control plane', color: 1, labels: ['node-role.kubernetes.io/control-plane='], taints: [] },
-  ])).toBe(200)
+  expect(
+    await putFleets(page, [
+      { id: 'e2e-workers', name: 'Workers', color: 0, labels: ['node-role.kubernetes.io/worker='], taints: [] },
+      { id: 'e2e-cp', name: 'Control plane', color: 1, labels: ['node-role.kubernetes.io/control-plane='], taints: [] },
+    ]),
+  ).toBe(200)
   await expect(row(page, 'e2e-cp').getByTestId('fleet-reserved')).toContainText('per node')
   await expect(row(page, 'e2e-workers').getByTestId('fleet-reserved')).toContainText('Reserved differs')
   await row(page, 'e2e-workers').getByTestId('fleet-pick').click()
@@ -103,9 +105,7 @@ test('an administrator creates a fleet in the drawer, and its nodes are its memb
   await page.keyboard.press('Escape')
 
   // The change is in the audit log.
-  await expect
-    .poll(async () => (await cluster.auditLog()).some((r) => r.action === 'fleets.update' && String(r.detail ?? '').includes('Linux nodes')), { timeout: 15_000 })
-    .toBe(true)
+  await expect.poll(async () => (await cluster.auditLog()).some((r) => r.action === 'fleets.update' && String(r.detail ?? '').includes('Linux nodes')), { timeout: 15_000 }).toBe(true)
 
   // Deleting takes a second click.
   await f.getByTestId('fleet-edit').click()

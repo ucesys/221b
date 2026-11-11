@@ -26,9 +26,10 @@ async function rowKeys(page: Page): Promise<string[]> {
 
 /** The entries of a sidebar section, and which are ticked. */
 async function entries(page: Page, list: 'ns' | 'node' | 'class'): Promise<{ key: string; on: boolean; n: number }[]> {
-  return page.getByTestId(`storage-${list}-list`).locator('[data-key]').evaluateAll((rows) =>
-    rows.map((r) => ({ key: r.getAttribute('data-key') ?? '', on: r.getAttribute('data-sel') === 'true', n: Number(r.querySelector('.rk-num')?.textContent ?? '0') })),
-  )
+  return page
+    .getByTestId(`storage-${list}-list`)
+    .locator('[data-key]')
+    .evaluateAll((rows) => rows.map((r) => ({ key: r.getAttribute('data-key') ?? '', on: r.getAttribute('data-sel') === 'true', n: Number(r.querySelector('.rk-num')?.textContent ?? '0') })))
 }
 
 const sorted = async (page: Page) => (await rowKeys(page)).sort()
@@ -258,7 +259,12 @@ test.describe('on the kind cluster (ST-24)', () => {
       },
       { apiVersion: 'v1', kind: 'PersistentVolumeClaim', metadata: { name: 'no-class', namespace: NS }, spec: { storageClassName: 'e2e-no-such-class', accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '64Mi' } } } },
       // A volume made by hand, kept when its claim goes: Released once the claim is deleted.
-      { apiVersion: 'v1', kind: 'PersistentVolume', metadata: { name: PV, labels: { e2e: 'storage' } }, spec: { storageClassName: '', capacity: { storage: '64Mi' }, accessModes: ['ReadWriteOnce'], persistentVolumeReclaimPolicy: 'Retain', hostPath: { path: '/tmp/e2e-storage-released' } } },
+      {
+        apiVersion: 'v1',
+        kind: 'PersistentVolume',
+        metadata: { name: PV, labels: { e2e: 'storage' } },
+        spec: { storageClassName: '', capacity: { storage: '64Mi' }, accessModes: ['ReadWriteOnce'], persistentVolumeReclaimPolicy: 'Retain', hostPath: { path: '/tmp/e2e-storage-released' } },
+      },
       { apiVersion: 'v1', kind: 'PersistentVolumeClaim', metadata: { name: 'goes', namespace: NS }, spec: { storageClassName: '', volumeName: PV, accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '64Mi' } } } },
     ]
     const remove = await cluster.applyObjects(objs)

@@ -6,7 +6,7 @@
 // and linking here. Read by those who work the cases; set by a SuperAdmin.
 import { useEffect, useState } from 'react'
 import { fetchSLA, saveSLA, type SLATargets } from '../api/casework'
-import { PRIORITIES, PRIORITY } from './cases/parts'
+import { PRIORITIES, PRIORITY } from './aiops/parts'
 import { SaveBar } from './SaveBar'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -57,11 +57,19 @@ export function SLASettings() {
       setBusy(false)
     }
   }
-  if (!draft) return error ? <p className="rk-t" data-tone="err">{error}</p> : <p className="rk-fhint">Loading…</p>
+  if (!draft)
+    return error ? (
+      <p className="rk-t" data-tone="err">
+        {error}
+      </p>
+    ) : (
+      <p className="rk-fhint">Loading…</p>
+    )
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }} data-testid="sla-settings">
       <p className="rk-fhint" style={{ margin: 0 }}>
-        How soon each priority asks for a first response from a person and for a resolution. They apply to every case a person made (reported, opened by hand, from an alert) and to an agent-found case only at P0 and P1; the others show “no SLA”. A case opened in the console counts as responded to when it is opened. 0 sets no target. A case past a target shows it as late.
+        How soon each priority asks for a first response from a person and for a resolution. They apply to every case a person made (reported, opened by hand, from an alert) and to an agent-found case only at P0 and P1; the others show “no
+        SLA”. A case opened in the console counts as responded to when it is opened. 0 sets no target. A case past a target shows it as late.
       </p>
       <table className="rp-settable">
         <thead>

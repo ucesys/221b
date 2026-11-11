@@ -6,7 +6,7 @@ import { GettingStartedCard, GettingStartedSection } from './GettingStarted'
 const ids = ['signin', 'clusters', 'provider', 'agents', 'knowledge', 'jobs', 'fleets', 'hosts', 'backup']
 const where: Record<string, [string, string]> = {
   knowledge: ['#/admin/settings/knowledge', 'Administration › Settings › Knowledge'],
-  jobs: ['#/cases/jobs', 'AIOps › Jobs, and Administration › Settings › Watson for the notification channels'],
+  jobs: ['#/aiops/jobs', 'AIOps › Jobs, and Administration › Settings › Watson for the notification channels'],
 }
 
 function viewOf(states: Record<string, SetupStep['state']>): SetupView {

@@ -66,7 +66,9 @@ export function HelmReposSettings({ onToast }: { onToast?: (msg: string) => void
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }} aria-label="Helm repositories" data-testid="helm-repos-settings">
       <p className="rk-fhint" style={{ margin: 0 }}>
-        Applications install charts from git, and from the Helm repositories and OCI registries listed here: in the Helm tab’s new application, and in Watson as <code className="rk-mono rk-icode">helm install NAME REPO/CHART --version V</code> or <code className="rk-mono rk-icode">oci://REGISTRY/PATH/CHART</code>. An OCI registry’s entry signs in to every chart under its address. Passwords and tokens are kept in a Secret, never shown again, never in a backup.
+        Applications install charts from git, and from the Helm repositories and OCI registries listed here: in the Helm tab’s new application, and in Watson as{' '}
+        <code className="rk-mono rk-icode">helm install NAME REPO/CHART --version V</code> or <code className="rk-mono rk-icode">oci://REGISTRY/PATH/CHART</code>. An OCI registry’s entry signs in to every chart under its address. Passwords
+        and tokens are kept in a Secret, never shown again, never in a backup.
       </p>
       {error && (
         <p className="rk-t" data-tone="err" style={{ margin: 0 }} data-testid="helm-repos-error">
@@ -117,7 +119,12 @@ export function HelmReposSettings({ onToast }: { onToast?: (msg: string) => void
                         <button className="rk-btn" data-size="sm" disabled={testing === r.name} onClick={() => void retest(r)} data-testid="helm-repo-test">
                           {testing === r.name ? 'Testing…' : 'Test'}
                         </button>
-                        <button className="rk-btn" data-size="sm" onClick={() => setEditing({ saved: r, draft: { name: r.name, kind: r.kind, url: r.url, auth: r.auth, username: r.username ?? '', secret: '' } })} data-testid="helm-repo-edit">
+                        <button
+                          className="rk-btn"
+                          data-size="sm"
+                          onClick={() => setEditing({ saved: r, draft: { name: r.name, kind: r.kind, url: r.url, auth: r.auth, username: r.username ?? '', secret: '' } })}
+                          data-testid="helm-repo-edit"
+                        >
                           Edit
                         </button>
                         <button className="rk-btn" data-size="sm" data-danger="true" onClick={() => setRemoving(r)} data-testid="helm-repo-remove">
@@ -266,7 +273,14 @@ function RepoEditor({ initial, saved, onCancel, onSaved }: { initial: Draft; sav
           <label style={fieldLabel}>
             {d.auth === 'basic' ? 'Password' : 'Token'}
             <span className="rk-field">
-              <input type="password" autoComplete="new-password" value={d.secret} onChange={(e) => set({ secret: e.target.value })} placeholder={saved?.hasSecret && !moved ? '•••••••• kept; type to replace' : ''} data-testid="helm-repo-secret" />
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={d.secret}
+                onChange={(e) => set({ secret: e.target.value })}
+                placeholder={saved?.hasSecret && !moved ? '•••••••• kept; type to replace' : ''}
+                data-testid="helm-repo-secret"
+              />
             </span>
             {moved && <span className="rk-fhint">The address changed: give it again, as the kept one belongs to the old address.</span>}
           </label>
@@ -314,9 +328,7 @@ function RemoveRepo({ repo, onCancel, onRemoved }: { repo: HelmRepository; onCan
   }
   return (
     <ConfirmDialog title={`Remove ${repo.name}?`} confirm="Remove" danger busy={busy} error={error} onCancel={onCancel} onConfirm={() => void remove()}>
-      <p style={{ margin: 0 }}>
-        Its {repo.hasSecret ? 'password or token is deleted with it. ' : ''}Applications installed from it stay as they are; their next deploy says the repository is gone, until it is added again.
-      </p>
+      <p style={{ margin: 0 }}>Its {repo.hasSecret ? 'password or token is deleted with it. ' : ''}Applications installed from it stay as they are; their next deploy says the repository is gone, until it is added again.</p>
     </ConfirmDialog>
   )
 }

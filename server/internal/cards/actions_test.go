@@ -150,7 +150,7 @@ func TestTheConsoleActions(t *testing.T) {
 	}
 	waitState(t, w.st, id, Applied)
 	hosts, _ := c.hosts.Hosts(ctx, "dev-1")
-	if len(hosts) != 2 || hosts[0].State != nodessh.HostPending || hosts[0].LoginUser != "ops" || hosts[1].Port != 2222 || !strings.Contains(c.hosts.by[0], "proposal "+id) {
+	if len(hosts) != 2 || hosts[0].State != nodessh.HostPending || hosts[0].LoginUser != "ops" || hosts[1].Port != 2222 || !strings.Contains(c.hosts.by[0], "proposed change "+id) {
 		t.Fatalf("hosts %+v by %v", hosts, c.hosts.by)
 	}
 	// A bad host is refused as it is proposed.

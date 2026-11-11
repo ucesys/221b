@@ -97,7 +97,7 @@ var CaseTypes = []string{TypeSecurity, TypeOutage, TypePerformance, TypeAvailabi
 func ValidType(t string) bool { return slices.Contains(CaseTypes, t) }
 
 // CaseType is the case's type: other when it has none.
-func (r *Report) CaseType() string {
+func (r *Case) CaseType() string {
 	if r.Type == "" {
 		return TypeOther
 	}
@@ -146,7 +146,7 @@ func CleanIncident(s string) (string, error) {
 }
 
 // stamp names who changed a case and when (CF-35).
-func stamp(r *Report, by Actor, at time.Time) {
+func stamp(r *Case, by Actor, at time.Time) {
 	b := by
 	r.LastBy, r.LastAt = &b, &at
 }

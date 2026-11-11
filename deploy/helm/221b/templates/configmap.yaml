@@ -126,10 +126,22 @@ metadata:
 {{- end }}
 {{- if ne (include "b221.shared" .) "only" }}
 ---
-# The agents' proposals as durable Watson cards, the standing approvals
-# and the notification settings (Phase 12, ADR-99), in a ConfigMap of
-# their own. Created empty; the console writes its keys, and helm upgrade
-# keeps them.
+# The agents' proposed changes as durable Watson cards, the standing
+# approvals and the notification settings (Phase 12, ADR-99, CF-104), in a
+# ConfigMap of their own. Created empty; the console writes its keys, and
+# helm upgrade keeps them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "b221.fullname" . }}-proposals
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "b221.labels" . | nindent 4 }}
+---
+# Where builds before CF-104 kept the proposed changes. Kept so that helm
+# upgrade does not delete it before the console has copied its records
+# into <release>-proposals once at start (docs/upgrading.md); the console
+# no longer writes it, and a later release drops it.
 apiVersion: v1
 kind: ConfigMap
 metadata:

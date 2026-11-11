@@ -24,7 +24,7 @@ interface Brief {
 }
 
 async function read(page: Page, id: string | number): Promise<Brief> {
-  const res = await page.request.get(`/api/v1/cases/cases/${id}`)
+  const res = await page.request.get(`/api/v1/aiops/cases/${id}`)
   expect(res.status(), await res.text()).toBe(200)
   return (await res.json()) as Brief
 }
@@ -36,17 +36,17 @@ const INC = `INC${stamp}`
 test.afterAll(async ({ browser }) => {
   const page = await browser.newPage()
   await page.goto('/#/nodes')
-  const list = (await (await page.request.get(`/api/v1/cases/cases?q=${encodeURIComponent(tag)}`)).json()) as { cases: Brief[] }
-  for (const c of list.cases.filter((x) => x.status !== 'closed')) await page.request.post(`/api/v1/cases/cases/${c.id}/close`, { headers: SAME, data: { outcome: 'noAction', explanation: 'e2e: done' } })
+  const list = (await (await page.request.get(`/api/v1/aiops/cases?q=${encodeURIComponent(tag)}`)).json()) as { cases: Brief[] }
+  for (const c of list.cases.filter((x) => x.status !== 'closed')) await page.request.post(`/api/v1/aiops/cases/${c.id}/close`, { headers: SAME, data: { outcome: 'noAction', explanation: 'e2e: done' } })
   await page.close()
 })
 
-test('New Case takes a type and an incident number; the drawer shows them, changes the type and clears the number; the history says who (CF-35 to CF-37)', async ({ page }) => {
+test('New case takes a type and an incident number; the drawer shows them, changes the type and clears the number; the history says who (CF-35 to CF-37)', async ({ page }) => {
   await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   expect((await page.request.put('/api/v1/jobs/case-analysis', { headers: SAME, data: { on: false } })).status()).toBe(200)
 
-  await page.goto('/#/cases/inbox')
+  await page.goto('/#/aiops/inbox')
   await page.getByTestId('cases-new-case').click()
   await page.getByTestId('case-new-title').fill(`${tag} anyone can read the secrets of shop`)
   // Other unless picked.
@@ -83,7 +83,7 @@ test('New Case takes a type and an incident number; the drawer shows them, chang
 })
 
 test('the Inbox shows Type, Incident and Last change, filters by type and finds a case by its incident number (CF-35 to CF-37)', async ({ page }) => {
-  await page.goto(`/#/cases/inbox?q=${encodeURIComponent(INC)}`)
+  await page.goto(`/#/aiops/inbox?q=${encodeURIComponent(INC)}`)
   const row = page.locator('[data-inbox-row^="case:"]').filter({ hasText: tag })
   await expect(row).toHaveCount(1)
   await expect(row.getByTestId('inbox-row-type')).toHaveText('Compliance')
@@ -106,11 +106,11 @@ test('the bar sets one type and one incident number on many cases (CF-38)', asyn
   await page.goto('/#/nodes')
   const made: string[] = []
   for (const n of [1, 2]) {
-    const res = await page.request.post('/api/v1/cases/cases', { headers: SAME, data: { title: `${tag}-many ${n}: pods evicted on worker-${n}`, priority: 3 } })
+    const res = await page.request.post('/api/v1/aiops/cases', { headers: SAME, data: { title: `${tag}-many ${n}: pods evicted on worker-${n}`, priority: 3 } })
     expect(res.status(), await res.text()).toBe(201)
     made.push(((await res.json()) as Brief).id)
   }
-  await page.goto(`/#/cases/inbox?q=${encodeURIComponent(`${tag}-many`)}`)
+  await page.goto(`/#/aiops/inbox?q=${encodeURIComponent(`${tag}-many`)}`)
   for (const id of made) await page.locator(`[data-testid="inbox-pick"][data-id="${id}"]`).check()
   await expect(page.getByTestId('inbox-bulk-count')).toHaveText('2 selected')
 
@@ -139,7 +139,7 @@ test('the issue API takes an incident number and a type (CF-36, CF-37)', async (
   expect(res.status(), await res.text()).toBe(201)
   const n = ((await res.json()) as { report: { number: number } }).report.number
   expect(await read(page, n)).toMatchObject({ incident: `${INC}-API`, type: 'performance' })
-  await page.goto(`/#/cases/inbox/case/${n}`)
+  await page.goto(`/#/aiops/inbox/case/${n}`)
   await expect(page.getByTestId('case-drawer').getByTestId('case-type-set')).toHaveValue('performance')
   await expect(page.getByTestId('case-drawer').getByTestId('case-incident')).toHaveText(`${INC}-API`)
 })

@@ -139,7 +139,7 @@ func TestExceptions(t *testing.T) {
 	if list, _ := w.s.Exceptions(ctx); len(list) != 2 || list[0].ID != "EX-2" {
 		t.Fatalf("list: %+v", list)
 	}
-	for _, want := range []string{`"action":"exception.add"`, "exception EX-1 accepted for finding run-4.1 (No network policy) on shop/Namespace/shop, check netpol.missing, until 2026-11-08", `"action":"exception.remove"`} {
+	for _, want := range []string{`"action":"exception.add"`, "exception EX-1 accepted for finding run-4.1 (No network policy) on shop/Namespace/shop, validation rule netpol.missing, until 2026-11-08", `"action":"exception.remove"`} {
 		if !strings.Contains(w.audit.String(), want) {
 			t.Fatalf("audit lacks %q: %s", want, w.audit.String())
 		}
@@ -173,7 +173,7 @@ func TestNoRCAsHere(t *testing.T) {
 	for _, rt := range w.s.Routes(func(*http.Request) (Caller, bool) { return Caller{Read: true}, true }) {
 		mux.Handle(rt.Pattern, rt.Handler)
 	}
-	for _, path := range []string{"/api/v1/cases/rcas", "/api/v1/cases/rcas/RCA-1"} {
+	for _, path := range []string{"/api/v1/aiops/rcas", "/api/v1/aiops/rcas/RCA-1"} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
 		if rec.Code != http.StatusNotFound {
@@ -271,29 +271,29 @@ func TestAPI(t *testing.T) {
 		return rec.Code, out
 	}
 	signed = false
-	if code, _ := do("GET", "/api/v1/cases/exceptions"); code != http.StatusUnauthorized {
+	if code, _ := do("GET", "/api/v1/aiops/exceptions"); code != http.StatusUnauthorized {
 		t.Fatalf("signed out: %d", code)
 	}
 	signed = true
 	caller = Caller{Person: Person{Email: "viewer"}}
-	if code, _ := do("GET", "/api/v1/cases/exceptions"); code != http.StatusForbidden {
+	if code, _ := do("GET", "/api/v1/aiops/exceptions"); code != http.StatusForbidden {
 		t.Fatalf("a viewer: %d", code)
 	}
 	caller = Caller{Person: Person{Email: "sv"}, Read: true}
-	if code, out := do("GET", "/api/v1/cases/exceptions"); code != http.StatusOK || out["mayChange"] != false || len(out["exceptions"].([]any)) != 1 {
+	if code, out := do("GET", "/api/v1/aiops/exceptions"); code != http.StatusOK || out["mayChange"] != false || len(out["exceptions"].([]any)) != 1 {
 		t.Fatalf("list: %d %v", code, out)
 	}
-	if code, out := do("GET", "/api/v1/cases/exceptions/EX-1"); code != http.StatusOK || out["state"] != "active" {
+	if code, out := do("GET", "/api/v1/aiops/exceptions/EX-1"); code != http.StatusOK || out["state"] != "active" {
 		t.Fatalf("one: %d %v", code, out)
 	}
-	if code, _ := do("DELETE", "/api/v1/cases/exceptions/EX-1"); code != http.StatusForbidden {
+	if code, _ := do("DELETE", "/api/v1/aiops/exceptions/EX-1"); code != http.StatusForbidden {
 		t.Fatalf("a reader removes: %d", code)
 	}
 	caller = Caller{Person: Person{Email: "approver"}, Change: true}
-	if code, out := do("DELETE", "/api/v1/cases/exceptions/EX-1"); code != http.StatusOK || out["state"] != "removed" || out["removedBy"] != "approver" {
+	if code, out := do("DELETE", "/api/v1/aiops/exceptions/EX-1"); code != http.StatusOK || out["state"] != "removed" || out["removedBy"] != "approver" {
 		t.Fatalf("remove: %d %v", code, out)
 	}
-	if code, _ := do("DELETE", "/api/v1/cases/exceptions/EX-1"); code != http.StatusBadRequest {
+	if code, _ := do("DELETE", "/api/v1/aiops/exceptions/EX-1"); code != http.StatusBadRequest {
 		t.Fatalf("remove again: %d", code)
 	}
 }
@@ -353,7 +353,7 @@ func TestExceptionMatchesAndStale(t *testing.T) {
 		mux.Handle(rt.Pattern, rt.Handler)
 	}
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/cases/exceptions?stale=1", nil))
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/v1/aiops/exceptions?stale=1", nil))
 	var out struct {
 		Exceptions []ExceptionView `json:"exceptions"`
 	}
@@ -399,7 +399,7 @@ func TestNewExceptionAPI(t *testing.T) {
 		})
 	caller := Caller{Person: Person{Email: "sv"}, Read: true}
 	do := apiOf(w, &caller)
-	if code, _ := do("POST", "/api/v1/cases/exceptions", `{"cluster":"local","check":"pod.root-user","reason":"r"}`); code != http.StatusForbidden {
+	if code, _ := do("POST", "/api/v1/aiops/exceptions", `{"cluster":"local","check":"pod.root-user","reason":"r"}`); code != http.StatusForbidden {
 		t.Fatalf("a reader creates: %d", code)
 	}
 	caller = Caller{Person: Person{Email: "ann@example.com", From: "10.0.0.1"}, Change: true}
@@ -413,33 +413,33 @@ func TestNewExceptionAPI(t *testing.T) {
 		{`{"cluster":"local","check":"pod.root-user","reason":"r","expires":"next week"}`, "YYYY-MM-DD"},
 		{`{"cluster":"local","check":"pod.root-user","reason":"r","expires":"2026-11-01"}`, "in the past"},
 	} {
-		code, out := do("POST", "/api/v1/cases/exceptions", c.body)
+		code, out := do("POST", "/api/v1/aiops/exceptions", c.body)
 		if code != http.StatusBadRequest || !strings.Contains(fmt.Sprint(out["error"]), c.want) {
 			t.Fatalf("%s: %d %v, want %q", c.body, code, out, c.want)
 		}
 	}
-	if code, _ := do("POST", "/api/v1/cases/exceptions", `not json`); code != http.StatusBadRequest {
+	if code, _ := do("POST", "/api/v1/aiops/exceptions", `not json`); code != http.StatusBadRequest {
 		t.Fatalf("not json: %d", code)
 	}
-	code, out := do("POST", "/api/v1/cases/exceptions", `{"cluster":"local","resource":"deploy/shop/web","check":"Pod.Root-User","reason":"The image needs root; tracked in JIRA-12.","expires":"2026-12-31"}`)
+	code, out := do("POST", "/api/v1/aiops/exceptions", `{"cluster":"local","resource":"deploy/shop/web","check":"Pod.Root-User","reason":"The image needs root; tracked in JIRA-12.","expires":"2026-12-31"}`)
 	if code != http.StatusCreated || out["id"] != "EX-1" || out["resource"] != "shop/Deployment/web" || out["check"] != "pod.root-user" || out["title"] != "A container runs as root" ||
 		out["clusterName"] != "Lakehouse" || out["ruleMeaning"] != "a container runs as root" || out["state"] != "active" || out["by"] != "ann@example.com" || out["expires"] != "2026-12-31T23:59:59Z" {
 		t.Fatalf("created: %d %v", code, out)
 	}
 	// The same cluster, object and rule while it is active: refused.
-	if code, out := do("POST", "/api/v1/cases/exceptions", `{"cluster":"local","resource":"shop/Deployment/web","check":"pod.root-user","reason":"again"}`); code != http.StatusConflict || !strings.Contains(fmt.Sprint(out["error"]), "EX-1 already covers") {
+	if code, out := do("POST", "/api/v1/aiops/exceptions", `{"cluster":"local","resource":"shop/Deployment/web","check":"pod.root-user","reason":"again"}`); code != http.StatusConflict || !strings.Contains(fmt.Sprint(out["error"]), "EX-1 already covers") {
 		t.Fatalf("a duplicate: %d %v", code, out)
 	}
 	// Cluster-wide, a rule in words (a finding's title), on a cluster without a name of its own.
-	code, out = do("POST", "/api/v1/cases/exceptions", `{"cluster":"prod","check":"Volume 91% full","reason":"Scratch volumes fill up."}`)
+	code, out = do("POST", "/api/v1/aiops/exceptions", `{"cluster":"prod","check":"Volume 91% full","reason":"Scratch volumes fill up."}`)
 	if code != http.StatusCreated || out["resource"] != nil || out["check"] != "title:volume # full" || out["title"] != "Volume 91% full" || out["clusterName"] != "prod" || out["ruleMeaning"] != nil || out["expires"] != nil {
 		t.Fatalf("cluster-wide: %d %v", code, out)
 	}
-	if !strings.Contains(w.audit.String(), "exception EX-1 created in Mycroft › Exceptions (A container runs as root) on shop/Deployment/web, check pod.root-user, until 2026-12-31") {
+	if !strings.Contains(w.audit.String(), "exception EX-1 created in Mycroft › Exceptions (A container runs as root) on shop/Deployment/web, validation rule pod.root-user, until 2026-12-31") {
 		t.Fatalf("audit: %s", w.audit.String())
 	}
 	// The list: names and meanings, and the form's clusters with the rules seen, sorted, once each.
-	code, out = do("GET", "/api/v1/cases/exceptions", "")
+	code, out = do("GET", "/api/v1/aiops/exceptions", "")
 	clusters, _ := json.Marshal(out["clusters"])
 	want := `[{"id":"local","name":"Lakehouse","rules":[{"id":"netpol.missing","meaning":"a namespace has no network policy"},{"id":"other.odd-thing"},{"id":"pod.root-user","meaning":"a container runs as root"}]},{"id":"prod","name":"prod","rules":[]}]`
 	if code != http.StatusOK || string(clusters) != want {
@@ -447,7 +447,7 @@ func TestNewExceptionAPI(t *testing.T) {
 	}
 	// A reader gets no form.
 	caller = Caller{Read: true}
-	if _, out := do("GET", "/api/v1/cases/exceptions", ""); out["clusters"] != nil {
+	if _, out := do("GET", "/api/v1/aiops/exceptions", ""); out["clusters"] != nil {
 		t.Fatalf("a reader's list: %v", out)
 	}
 	if e, _ := w.s.Exception(ctx, "EX-1"); !e.Covers("local", "shop/Deployment/web", "pod.root-user") {
@@ -479,18 +479,18 @@ func TestReactivateException(t *testing.T) {
 	}
 	caller := Caller{Read: true}
 	do := apiOf(w, &caller)
-	if code, _ := do("POST", "/api/v1/cases/exceptions/"+b.ID+"/reactivate", ""); code != http.StatusForbidden {
+	if code, _ := do("POST", "/api/v1/aiops/exceptions/"+b.ID+"/reactivate", ""); code != http.StatusForbidden {
 		t.Fatalf("a reader reactivates: %d", code)
 	}
 	caller = Caller{Person: Person{Email: "carol"}, Change: true}
 	// b repeats a, which is active: refused, saying which covers it.
-	if code, out := do("POST", "/api/v1/cases/exceptions/"+b.ID+"/reactivate", ""); code != http.StatusConflict || !strings.Contains(fmt.Sprint(out["error"]), a.ID+" already covers") {
+	if code, out := do("POST", "/api/v1/aiops/exceptions/"+b.ID+"/reactivate", ""); code != http.StatusConflict || !strings.Contains(fmt.Sprint(out["error"]), a.ID+" already covers") {
 		t.Fatalf("covered: %d %v", code, out)
 	}
-	if code, _ := do("POST", "/api/v1/cases/exceptions/"+a.ID+"/reactivate", ""); code != http.StatusBadRequest {
+	if code, _ := do("POST", "/api/v1/aiops/exceptions/"+a.ID+"/reactivate", ""); code != http.StatusBadRequest {
 		t.Fatalf("active already: %d", code)
 	}
-	if code, _ := do("POST", "/api/v1/cases/exceptions/EX-9/reactivate", ""); code != http.StatusNotFound {
+	if code, _ := do("POST", "/api/v1/aiops/exceptions/EX-9/reactivate", ""); code != http.StatusNotFound {
 		t.Fatalf("unknown: %d", code)
 	}
 	// a turned off, b may come back.
@@ -499,14 +499,14 @@ func TestReactivateException(t *testing.T) {
 		t.Fatal(err)
 	}
 	w.now = t0.Add(4 * time.Hour)
-	code, out := do("POST", "/api/v1/cases/exceptions/"+b.ID+"/reactivate", "")
+	code, out := do("POST", "/api/v1/aiops/exceptions/"+b.ID+"/reactivate", "")
 	if code != http.StatusOK || out["state"] != "active" || out["removedBy"] != nil || out["removedAt"] != nil || out["duplicateOf"] != nil || out["updated"] != w.now.Format(time.RFC3339) {
 		t.Fatalf("reactivated: %d %v", code, out)
 	}
 	if got := w.s.Active(ctx, "prod"); len(got) != 1 || got[0].ID != b.ID {
 		t.Fatalf("active: %+v", got)
 	}
-	if !strings.Contains(w.audit.String(), `"action":"exception.reactivate"`) || !strings.Contains(w.audit.String(), "exception "+b.ID+" made active again (No limits on shop/Pod/web, check pod.no-limits), was a duplicate of "+a.ID) {
+	if !strings.Contains(w.audit.String(), `"action":"exception.reactivate"`) || !strings.Contains(w.audit.String(), "exception "+b.ID+" made active again (No limits on shop/Pod/web, validation rule pod.no-limits), was a duplicate of "+a.ID) {
 		t.Fatalf("audit: %s", w.audit.String())
 	}
 	// Now a is covered by b.

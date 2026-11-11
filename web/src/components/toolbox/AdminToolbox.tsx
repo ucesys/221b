@@ -65,7 +65,9 @@ export function AdminSessions({ route, cluster, onToast }: AdminProps) {
         </span>
       </div>
       {err && <p className="tb-err">{err}</p>}
-      <h3 className="rk-h" style={{ margin: 0 }}>Open now</h3>
+      <h3 className="rk-h" style={{ margin: 0 }}>
+        Open now
+      </h3>
       {live === null ? (
         <p className="tb-hint">Loading…</p>
       ) : live.filter(match).length === 0 ? (
@@ -108,7 +110,9 @@ export function AdminSessions({ route, cluster, onToast }: AdminProps) {
           </tbody>
         </table>
       )}
-      <h3 className="rk-h" style={{ margin: 0 }}>History</h3>
+      <h3 className="rk-h" style={{ margin: 0 }}>
+        History
+      </h3>
       {history === null ? (
         <p className="tb-hint">Loading…</p>
       ) : rows.length === 0 ? (
@@ -286,7 +290,9 @@ export function AdminToolbox({ route, cluster }: AdminProps) {
           ))}
         </tbody>
       </table>
-      <h3 className="rk-h" style={{ margin: 0 }}>Images</h3>
+      <h3 className="rk-h" style={{ margin: 0 }}>
+        Images
+      </h3>
       <table className="tb-table">
         <thead>
           <tr>
@@ -307,7 +313,15 @@ export function AdminToolbox({ route, cluster }: AdminProps) {
               </td>
               <td>{im.caps?.join(', ') || '—'}</td>
               <td>{im.tools || '—'}</td>
-              <td>{[info.debugContainerImages.includes(im.name) && 'debug containers', info.debugPodProfiles.includes(im.name) && 'debug pods', (info.values as { nodeShell?: { image?: string } })?.nodeShell?.image === im.name && 'node shells'].filter(Boolean).join(', ') || '—'}</td>
+              <td>
+                {[
+                  info.debugContainerImages.includes(im.name) && 'debug containers',
+                  info.debugPodProfiles.includes(im.name) && 'debug pods',
+                  (info.values as { nodeShell?: { image?: string } })?.nodeShell?.image === im.name && 'node shells',
+                ]
+                  .filter(Boolean)
+                  .join(', ') || '—'}
+              </td>
             </tr>
           ))}
         </tbody>

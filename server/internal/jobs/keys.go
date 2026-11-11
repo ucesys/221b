@@ -177,12 +177,12 @@ func ValidCheck(k Kind, check string) string {
 // stand, nor other.<slug>, if it is not (ADR-138).
 func validCheck(k Kind, rules Rules, check string) string {
 	if check == "" {
-		return "the finding names no check"
+		return "the finding names no validation rule"
 	}
 	if rules.Known(k, check) || slugPattern.MatchString(check) {
 		return ""
 	}
-	return fmt.Sprintf("the check %q is not one of the %s's, nor other.<slug> (lower case, digits, dashes, at most 48)", clip(check, 80), strings.ToLower(k.Label))
+	return fmt.Sprintf("the validation rule %q is not one of the %s's, nor other.<slug> (lower case, digits, dashes, at most 48)", clip(check, 80), strings.ToLower(k.Label))
 }
 
 // kindAliases are the short names and plurals of the kinds, lower case,
@@ -320,7 +320,7 @@ func (s *Service) keyOf(ctx context.Context, k Kind, rules Rules, f *Finding) {
 // and says the keys in use on a cluster, for the agents' tasks.
 type Router interface {
 	Route(ctx context.Context, in RouteInput) RouteResult
-	KeysInUse(ctx context.Context, cluster string) []KeyInUse
+	KeysInUse(ctx context.Context, cluster string) ([]KeyInUse, error)
 }
 
 // RouteInput is a run's findings to route, with the run.
@@ -330,10 +330,17 @@ type RouteInput struct {
 	Kind     string
 	Label    string
 	Clusters []string
-	// OK says the run ended well: only then does what it did not find
-	// verify a fix.
+	// OK says the run ended well: only then may it verify a fix.
 	OK       bool
 	Findings []Finding
+	// Scope is what the run read (W-1): a fix waiting for verification is
+	// verified only inside it, and only when Rechecked has its key with
+	// still false; nil verifies nothing. Rechecked are the agent's
+	// re-checks, keyed; LeftOut the keys of the findings left out past
+	// the run's cap, which never count as not seen (W-3).
+	Scope     *Scope
+	Rechecked []Recheck
+	LeftOut   []Key
 	// Agent is the name of the job's agent, who the cases it opens name
 	// as their creator; MinPriority the job's lowest priority, below which
 	// a finding opens no case (CF-33, CF-35); nil routes every priority.
@@ -347,6 +354,12 @@ type RouteResult struct {
 	Routed    Routed
 	Verified  []string
 	NewChecks []string
+	// NotRechecked counts the fixes waiting inside the run's scope that
+	// the agent did not re-check: they keep waiting (W-1).
+	NotRechecked int
+	// NotRouted says why nothing was routed (W-8, CF-99): the run keeps its
+	// findings as they came and is routed again on a later look.
+	NotRouted string
 }
 
 // KeyInUse is a key the cluster's cases, known issues and exceptions
@@ -354,9 +367,14 @@ type RouteResult struct {
 type KeyInUse struct {
 	Key
 	// What is "case C-12", "known issue KI-3" or "exception EX-4", with
-	// its title.
+	// its title; for a case whose fix waits for verification, "fix
+	// applied, re-check: C-12" (W-4).
 	What  string
 	Title string
+	// Recheck says the case's fix waits for verification by a run of Job,
+	// which is given it to re-check (W-1, W-4).
+	Recheck bool
+	Job     string
 }
 
 // SetRouter gives the service its router.
@@ -367,6 +385,13 @@ func (s *Service) SetRouter(r Router) { s.o.Router = r }
 // and the keys in use there to reuse for the same problem. Quoted, as
 // data.
 func (e *RunEnv) Keys(ctx context.Context, cluster string) string {
+	return e.KeysIn(ctx, cluster, nil)
+}
+
+// KeysIn is Keys with the job's fixes waiting for verification inside
+// what this request reads, to re-check (W-1, P-2); a nil scope lists
+// none.
+func (e *RunEnv) KeysIn(ctx context.Context, cluster string, scope *Scope) string {
 	if len(e.Kind.Checks) == 0 {
 		return ""
 	}
@@ -379,13 +404,22 @@ func (e *RunEnv) Keys(ctx context.Context, cluster string) string {
 	}
 	b.WriteString(Quote("check-ids", cat.String()))
 	if e.s.o.Router != nil {
-		if keys := e.s.o.Router.KeysInUse(ctx, cluster); len(keys) > 0 {
+		keys, err := e.s.o.Router.KeysInUse(ctx, cluster)
+		if err != nil {
+			// The agent works without them; what an exception covers is
+			// dropped when the findings are routed, or they wait (W-7).
+			e.Note("the keys in use on %s could not be read, so the agent was not given them: %v", e.ClusterName(cluster), err)
+		}
+		if len(keys) > 0 {
 			var in strings.Builder
 			for _, k := range keys {
 				fmt.Fprintf(&in, "- %s on %s: %s (%s)\n", k.Check, orCluster(k.Object), clip(k.Title, 160), k.What)
 			}
 			b.WriteString("\n\nThe keys in use on this cluster: for the same problem again, use the same check on the same resource, so it joins what people already know. The console drops findings an exception covers.\n\n")
 			b.WriteString(Quote("keys-in-use", in.String()))
+			if part := recheckList(keys, e.Job.ID, scope); part != "" {
+				b.WriteString("\n\n" + part)
+			}
 		}
 	}
 	return b.String()

@@ -12,10 +12,7 @@ const KEY = 'sk-ant-e2e-fake-key-0123456789'
 const ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
 
 async function put(page: Page, path: string, body: unknown, method = 'PUT'): Promise<number> {
-  return page.evaluate(
-    async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === null ? undefined : JSON.stringify(b) })).status,
-    [path, body, method] as const,
-  )
+  return page.evaluate(async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === null ? undefined : JSON.stringify(b) })).status, [path, body, method] as const)
 }
 
 /** Files a report through the API, for someone else, as support does. */
@@ -44,7 +41,7 @@ test('Cases is the third area, with its tabs, no count on the switch, and kept i
   await expect(cases.getByTestId('cases-count')).toHaveCount(0)
   await expect(cases).toHaveText('AIOps')
   await cases.click()
-  await expect(page).toHaveURL(/#\/cases\/inbox$/)
+  await expect(page).toHaveURL(/#\/aiops\/inbox$/)
   await expect(cases).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('cases-nav').locator('[data-cases-tab]')).toHaveText(['Inbox', 'Jobs', 'Mycroft'].map((t) => new RegExp(`^${t}`)))
   // The report, a case of its own (CU-01).

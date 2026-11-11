@@ -38,7 +38,16 @@ describe('the Automation part of a backup', () => {
 })
 
 describe('reading a backup file', () => {
-  const b = { format: BACKUP_FORMAT, version: 'x', taken: '2026-11-04T10:00:00Z', leftOut: [], connections: [{ id: 'local', name: 'Here', server: 'https://h', auth: 'incluster', local: true }, { id: 'prod', name: 'Prod', server: 'https://p', auth: 'token', credential: { token: '<secret: not in the backup>' } }] }
+  const b = {
+    format: BACKUP_FORMAT,
+    version: 'x',
+    taken: '2026-11-04T10:00:00Z',
+    leftOut: [],
+    connections: [
+      { id: 'local', name: 'Here', server: 'https://h', auth: 'incluster', local: true },
+      { id: 'prod', name: 'Prod', server: 'https://p', auth: 'token', credential: { token: '<secret: not in the backup>' } },
+    ],
+  }
   it('reads one gzipped, as the console writes it, and one of the first format in plain JSON', async () => {
     const gz = await readBackup(new File([gzipSync(JSON.stringify(b))], 'b.json.gz'))
     expect(gz.connections?.[1]?.credential?.token).toBe('<secret: not in the backup>')

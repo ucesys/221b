@@ -1,14 +1,54 @@
 import { describe, expect, it } from 'vitest'
 import type { HookRow, PolicyNSRow, RolloutRow } from '../api/types'
-import { findings, flagOf, modelOf, sectionSub } from './policies'
+import { findings, flagOf, modelOf, sectionOf, sectionSub } from './policies'
 
 const psa = { level: 'baseline', version: 'latest', fail: [], warnings: [] }
-const ns = (name: string, o: Partial<PolicyNSRow> = {}): PolicyNSRow => ({ key: `ns:${name}`, name, pods: 3, hostNetwork: 0, policies: 0, isolatedIn: 0, isolatedOut: 0, open: ['api'], baseline: psa, restricted: { ...psa, level: 'restricted' }, quotas: [], limitRanges: [], budgets: 0, ...o })
+const ns = (name: string, o: Partial<PolicyNSRow> = {}): PolicyNSRow => ({
+  key: `ns:${name}`,
+  name,
+  pods: 3,
+  hostNetwork: 0,
+  policies: 0,
+  isolatedIn: 0,
+  isolatedOut: 0,
+  open: ['api'],
+  baseline: psa,
+  restricted: { ...psa, level: 'restricted' },
+  quotas: [],
+  limitRanges: [],
+  budgets: 0,
+  ...o,
+})
 
 describe('policies', () => {
   it('finds open namespaces, stalled rollouts and unreachable webhooks', () => {
-    const rollout: RolloutRow = { key: 'rollout:shop/api', namespace: 'shop', name: 'api', replicas: 1, strategy: 'RollingUpdate', surge: 1, unavailable: 0, requests: {}, limits: {}, short: [{ quota: 'q', resource: 'requests.memory', need: '512Mi', left: '256Mi' }], stalls: true }
-    const hook = { key: 'hook:Validating/x/w.example', kind: 'Validating', config: 'x', webhook: 'w.example', rules: ['pods (core) · CREATE'], service: 'ns/svc:443', failurePolicy: 'Fail', timeout: 10, namespaces: 'all namespaces', objects: 'every object', caBundle: true, reach: { state: 'noEndpoints', ready: 0, total: 0, text: 'no endpoints', tone: 'err', pods: [] } } as HookRow
+    const rollout: RolloutRow = {
+      key: 'rollout:shop/api',
+      namespace: 'shop',
+      name: 'api',
+      replicas: 1,
+      strategy: 'RollingUpdate',
+      surge: 1,
+      unavailable: 0,
+      requests: {},
+      limits: {},
+      short: [{ quota: 'q', resource: 'requests.memory', need: '512Mi', left: '256Mi' }],
+      stalls: true,
+    }
+    const hook = {
+      key: 'hook:Validating/x/w.example',
+      kind: 'Validating',
+      config: 'x',
+      webhook: 'w.example',
+      rules: ['pods (core) · CREATE'],
+      service: 'ns/svc:443',
+      failurePolicy: 'Fail',
+      timeout: 10,
+      namespaces: 'all namespaces',
+      objects: 'every object',
+      caBundle: true,
+      reach: { state: 'noEndpoints', ready: 0, total: 0, text: 'no endpoints', tone: 'err', pods: [] },
+    } as HookRow
     const m = modelOf([ns('shop'), ns('kube-system', { system: true }), ns('safe', { isolatedIn: 3, enforce: 'baseline' }), rollout, hook])
     const fs = findings(m)
     expect(fs.map((f) => [f.id, f.severity])).toEqual([
@@ -22,5 +62,17 @@ describe('policies', () => {
     expect(flagOf(fs)).toEqual({ count: 4, tone: 'err' })
     expect(sectionSub('netpol', m, fs)).toBe('0 policies · 1 of 2 app namespaces isolated')
     expect(sectionSub('psa', m, fs)).toBe('baseline or stricter in 1 of 3 namespaces')
+  })
+})
+
+describe('the Policies tab’s sections (S-5)', () => {
+  it('opens the section of each id list_policies takes, and its own ids, prio among them', () => {
+    expect(sectionOf('priority')).toBe('prio')
+    expect(sectionOf('prio')).toBe('prio')
+    expect(sectionOf('drain')).toBe('pdb')
+    expect(sectionOf('limits')).toBe('quota')
+    for (const s of ['netpol', 'pdb', 'quota', 'psa', 'webhooks']) expect(sectionOf(s)).toBe(s)
+    expect(sectionOf(undefined)).toBe('overview')
+    expect(sectionOf('toString')).toBe('overview')
   })
 })

@@ -1145,7 +1145,7 @@ func kiTitle(k issues.KnownIssue, w *writer) string {
 // knownManaged is a known issue's page.
 func (w *writer) knownManaged(k issues.KnownIssue) string {
 	var b strings.Builder
-	b.WriteString(w.banner(w.consoleLink("/#/cases/known/"+k.ID, k.ID)))
+	b.WriteString(w.banner(w.consoleLink("/#/aiops/mycroft/known/"+k.ID, k.ID)))
 	b.WriteString("<h2>Status</h2><p>" + statusWords[k.Status])
 	if k.Kind == issues.KindPlanned && k.Window != nil {
 		b.WriteString(" · planned maintenance, " + k.Window.Start.UTC().Format("2006-01-02 15:04") + " to " + k.Window.End.UTC().Format("2006-01-02 15:04") + " UTC")
@@ -1304,7 +1304,7 @@ func (w *writer) status(ctx context.Context) error {
 		return err
 	}
 	var b strings.Builder
-	b.WriteString(w.banner(w.consoleLink("/#/cases/known", "Known issues")))
+	b.WriteString(w.banner(w.consoleLink("/#/aiops/mycroft/known", "Known issues")))
 	b.WriteString("<p>Updated " + w.now.UTC().Format("2006-01-02 15:04") + " UTC.</p><h2>Open</h2>")
 	groups := map[string][]issues.KnownIssue{}
 	var planned, resolved []issues.KnownIssue

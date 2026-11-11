@@ -112,7 +112,7 @@ type proposalsAnswer struct {
 
 func listProposals(t *testing.T, srv *httptest.Server, c *http.Client, q string) proposalsAnswer {
 	t.Helper()
-	r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/cases/proposals"+q, "")
+	r, b := send(t, c, http.MethodGet, srv.URL+"/api/v1/aiops/proposals"+q, "")
 	if r.StatusCode != 200 {
 		t.Fatalf("list: %d %s", r.StatusCode, b)
 	}
@@ -133,10 +133,10 @@ func TestProposalsAreApprovedByThePeopleWhoMay(t *testing.T) {
 	prod, _ := st.Propose(ctx, agentProposal("prod-1", cards.KindKubectl))
 	host, _ := st.Propose(ctx, cards.Proposal{Agent: "mycroft", Source: cards.Source{Kind: cards.SourceKnowledge, Label: "Server inventory"}, Cluster: "dev-1", Title: "Add backup-1", Actions: []cards.Action{{Kind: cards.KindHostAdd, Args: map[string]any{}}}})
 	vera, adam, sam, sue := signIn(t, srv, "vera"), signIn(t, srv, "adam"), signIn(t, srv, "sam"), signIn(t, srv, "sue")
-	if r, _ := send(t, vera, http.MethodGet, srv.URL+"/api/v1/cases/proposals", ""); r.StatusCode != http.StatusForbidden {
+	if r, _ := send(t, vera, http.MethodGet, srv.URL+"/api/v1/aiops/proposals", ""); r.StatusCode != http.StatusForbidden {
 		t.Fatalf("a Viewer listed them: %d", r.StatusCode)
 	}
-	if r, _ := send(t, vera, http.MethodPost, srv.URL+"/api/v1/cases/proposals/"+dev+"/approve", ""); r.StatusCode != http.StatusForbidden {
+	if r, _ := send(t, vera, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/"+dev+"/approve", ""); r.StatusCode != http.StatusForbidden {
 		t.Fatalf("a Viewer approved: %d", r.StatusCode)
 	}
 	list := listProposals(t, srv, adam, "?state=queued")
@@ -151,39 +151,39 @@ func TestProposalsAreApprovedByThePeopleWhoMay(t *testing.T) {
 			t.Fatalf("the production card: %+v", p)
 		}
 	}
-	if r, b := send(t, adam, http.MethodPost, srv.URL+"/api/v1/cases/proposals/"+host+"/approve", ""); r.StatusCode != http.StatusForbidden {
+	if r, b := send(t, adam, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/"+host+"/approve", ""); r.StatusCode != http.StatusForbidden {
 		t.Fatalf("an Admin approved a host: %d %s", r.StatusCode, b)
 	}
-	if r, b := send(t, adam, http.MethodPost, srv.URL+"/api/v1/cases/proposals/"+dev+"/approve", `{"comment":"ok"}`); r.StatusCode != 200 || !strings.Contains(b, `"state":"approved"`) {
+	if r, b := send(t, adam, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/"+dev+"/approve", `{"comment":"ok"}`); r.StatusCode != 200 || !strings.Contains(b, `"state":"approved"`) {
 		t.Fatalf("Adam approves: %d %s", r.StatusCode, b)
 	}
 	// Sam comes second: refused with who approved it and when, and the
 	// card as it is now, so the page shows it (IB-08).
-	if r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/cases/proposals/"+dev+"/approve", ""); r.StatusCode != http.StatusConflict || !strings.Contains(b, `"error":"Already approved by Adam at `) || !strings.Contains(b, `"proposal":{"id":"`+dev+`"`) {
+	if r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/"+dev+"/approve", ""); r.StatusCode != http.StatusConflict || !strings.Contains(b, `"error":"Already approved by Adam at `) || !strings.Contains(b, `"proposal":{"id":"`+dev+`"`) {
 		t.Fatalf("a second approval: %d %s", r.StatusCode, b)
 	}
 	// Production: one of two, then the same person again, then another.
-	if r, b := send(t, adam, http.MethodPost, srv.URL+"/api/v1/cases/proposals/"+prod+"/approve", ""); r.StatusCode != 200 || !strings.Contains(b, `"state":"queued"`) {
+	if r, b := send(t, adam, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/"+prod+"/approve", ""); r.StatusCode != 200 || !strings.Contains(b, `"state":"queued"`) {
 		t.Fatalf("the first of two: %d %s", r.StatusCode, b)
 	}
-	if r, _ := send(t, adam, http.MethodPost, srv.URL+"/api/v1/cases/proposals/"+prod+"/approve", ""); r.StatusCode != http.StatusConflict {
+	if r, _ := send(t, adam, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/"+prod+"/approve", ""); r.StatusCode != http.StatusConflict {
 		t.Fatalf("Adam twice: %d", r.StatusCode)
 	}
 	// The target changes: Sam is told why, with the card.
 	exec.mu.Lock()
 	exec.print = "v2"
 	exec.mu.Unlock()
-	r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/cases/proposals/"+prod+"/approve", "")
+	r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/"+prod+"/approve", "")
 	if r.StatusCode != http.StatusConflict || !strings.Contains(b, "cannot be approved as it stands") || !strings.Contains(b, `"recheck":{`) {
 		t.Fatalf("a stale card: %d %s", r.StatusCode, b)
 	}
 	exec.mu.Lock()
 	exec.print = "v1"
 	exec.mu.Unlock()
-	if r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/cases/proposals/"+prod+"/recheck", ""); r.StatusCode != 200 || !strings.Contains(b, `"ok":true`) {
+	if r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/"+prod+"/recheck", ""); r.StatusCode != 200 || !strings.Contains(b, `"ok":true`) {
 		t.Fatalf("recheck: %d %s", r.StatusCode, b)
 	}
-	if r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/cases/proposals/"+prod+"/approve", ""); r.StatusCode != 200 || !strings.Contains(b, `"state":"approved"`) {
+	if r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/"+prod+"/approve", ""); r.StatusCode != 200 || !strings.Contains(b, `"state":"approved"`) {
 		t.Fatalf("Sam, the second: %d %s", r.StatusCode, b)
 	}
 	st.Wait()
@@ -194,10 +194,10 @@ func TestProposalsAreApprovedByThePeopleWhoMay(t *testing.T) {
 		t.Fatalf("ran as %s", ran)
 	}
 	// A rejection needs its reason.
-	if r, _ := send(t, sue, http.MethodPost, srv.URL+"/api/v1/cases/proposals/"+host+"/reject", `{"reason":""}`); r.StatusCode != http.StatusBadRequest {
+	if r, _ := send(t, sue, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/"+host+"/reject", `{"reason":""}`); r.StatusCode != http.StatusBadRequest {
 		t.Fatalf("no reason: %d", r.StatusCode)
 	}
-	if r, b := send(t, sue, http.MethodPost, srv.URL+"/api/v1/cases/proposals/"+host+"/reject", `{"reason":"not ours"}`); r.StatusCode != 200 || !strings.Contains(b, `"state":"rejected"`) {
+	if r, b := send(t, sue, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/"+host+"/reject", `{"reason":"not ours"}`); r.StatusCode != 200 || !strings.Contains(b, `"state":"rejected"`) {
 		t.Fatalf("reject: %d %s", r.StatusCode, b)
 	}
 	if mine := listProposals(t, srv, sue, "?mine=1"); len(mine.Proposals) != 1 || mine.Proposals[0].ID != host {
@@ -220,14 +220,14 @@ func TestAProposalAnswersToItsOldID(t *testing.T) {
 	}
 	sam := signIn(t, srv, "sam")
 	for _, path := range []string{"PC-1", "c1", "C1", "pc-1"} {
-		if r, b := send(t, sam, http.MethodGet, srv.URL+"/api/v1/cases/proposals/"+path, ""); r.StatusCode != 200 || !strings.Contains(b, `"id":"PC-1"`) || strings.Contains(b, `"id":"c1"`) {
+		if r, b := send(t, sam, http.MethodGet, srv.URL+"/api/v1/aiops/proposals/"+path, ""); r.StatusCode != 200 || !strings.Contains(b, `"id":"PC-1"`) || strings.Contains(b, `"id":"c1"`) {
 			t.Errorf("GET %s: %d %s", path, r.StatusCode, b)
 		}
 	}
-	if r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/cases/proposals/c1/reject", `{"reason":"not now"}`); r.StatusCode != 200 || !strings.Contains(b, `"id":"PC-1"`) || !strings.Contains(b, `"state":"rejected"`) {
+	if r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/c1/reject", `{"reason":"not now"}`); r.StatusCode != 200 || !strings.Contains(b, `"id":"PC-1"`) || !strings.Contains(b, `"state":"rejected"`) {
 		t.Errorf("reject c1: %d %s", r.StatusCode, b)
 	}
-	if r, _ := send(t, sam, http.MethodGet, srv.URL+"/api/v1/cases/proposals/C-1", ""); r.StatusCode != http.StatusNotFound {
+	if r, _ := send(t, sam, http.MethodGet, srv.URL+"/api/v1/aiops/proposals/C-1", ""); r.StatusCode != http.StatusNotFound {
 		t.Errorf("the case C-1 found a card: %d", r.StatusCode)
 	}
 }
@@ -236,22 +236,22 @@ func TestStandingApprovalsAndChannelsAreASuperAdmins(t *testing.T) {
 	srv, _, _, auditOut := cardsSetup(t)
 	adam, sam := signIn(t, srv, "adam"), signIn(t, srv, "sam")
 	body := `{"name":"Restart in development","on":true,"clusters":["dev-1"],"actions":["kubectl rollout restart"],"perHour":3}`
-	if r, _ := send(t, adam, http.MethodPost, srv.URL+"/api/v1/cases/standing", body); r.StatusCode != http.StatusForbidden {
+	if r, _ := send(t, adam, http.MethodPost, srv.URL+"/api/v1/aiops/standing", body); r.StatusCode != http.StatusForbidden {
 		t.Fatalf("an Admin set one: %d", r.StatusCode)
 	}
-	if r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/cases/standing", strings.Replace(body, "dev-1", "prod-1", 1)); r.StatusCode != http.StatusBadRequest || !strings.Contains(b, "production") {
+	if r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/aiops/standing", strings.Replace(body, "dev-1", "prod-1", 1)); r.StatusCode != http.StatusBadRequest || !strings.Contains(b, "production") {
 		t.Fatalf("on production: %d %s", r.StatusCode, b)
 	}
-	r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/cases/standing", body)
+	r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/aiops/standing", body)
 	if r.StatusCode != http.StatusCreated || strings.Contains(b, "221b-local") {
 		t.Fatalf("set: %d %s", r.StatusCode, b)
 	}
 	var made cards.Standing
 	_ = json.Unmarshal([]byte(b), &made)
-	if r, b := send(t, adam, http.MethodGet, srv.URL+"/api/v1/cases/standing", ""); r.StatusCode != 200 || !strings.Contains(b, made.ID) {
+	if r, b := send(t, adam, http.MethodGet, srv.URL+"/api/v1/aiops/standing", ""); r.StatusCode != 200 || !strings.Contains(b, made.ID) {
 		t.Fatalf("Adam sees them: %d %s", r.StatusCode, b)
 	}
-	if r, _ := send(t, sam, http.MethodDelete, srv.URL+"/api/v1/cases/standing/"+made.ID, ""); r.StatusCode != 200 {
+	if r, _ := send(t, sam, http.MethodDelete, srv.URL+"/api/v1/aiops/standing/"+made.ID, ""); r.StatusCode != 200 {
 		t.Fatalf("remove: %d", r.StatusCode)
 	}
 	var mu sync.Mutex
@@ -264,19 +264,19 @@ func TestStandingApprovalsAndChannelsAreASuperAdmins(t *testing.T) {
 	}))
 	defer hook.Close()
 	secret := hook.URL + "/hooks/TOKEN-0123456789abcdef"
-	if r, _ := send(t, adam, http.MethodGet, srv.URL+"/api/v1/cases/notifications", ""); r.StatusCode != http.StatusForbidden {
+	if r, _ := send(t, adam, http.MethodGet, srv.URL+"/api/v1/aiops/notifications", ""); r.StatusCode != http.StatusForbidden {
 		t.Fatalf("an Admin read the channels: %d", r.StatusCode)
 	}
-	r, b = send(t, sam, http.MethodPut, srv.URL+"/api/v1/cases/notifications", `{"link":"https://221b.example.com","channels":[{"kind":"webhook","name":"ops","on":true,"url":"`+secret+`"}]}`)
+	r, b = send(t, sam, http.MethodPut, srv.URL+"/api/v1/aiops/notifications", `{"link":"https://221b.example.com","channels":[{"kind":"webhook","name":"ops","on":true,"url":"`+secret+`"}]}`)
 	if r.StatusCode != 200 || strings.Contains(b, "TOKEN-0123456789abcdef") || !strings.Contains(b, `"urlSet":true`) {
 		t.Fatalf("saved: %d %s", r.StatusCode, b)
 	}
 	var v cards.NotifyView
 	_ = json.Unmarshal([]byte(b), &v)
-	if r, b := send(t, sam, http.MethodGet, srv.URL+"/api/v1/cases/notifications", ""); r.StatusCode != 200 || strings.Contains(b, "TOKEN") {
+	if r, b := send(t, sam, http.MethodGet, srv.URL+"/api/v1/aiops/notifications", ""); r.StatusCode != 200 || strings.Contains(b, "TOKEN") {
 		t.Fatalf("read: %d %s", r.StatusCode, b)
 	}
-	if r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/cases/notifications/"+v.Channels[0].ID+"/test", ""); r.StatusCode != 200 {
+	if r, b := send(t, sam, http.MethodPost, srv.URL+"/api/v1/aiops/notifications/"+v.Channels[0].ID+"/test", ""); r.StatusCode != 200 {
 		t.Fatalf("test: %d %s", r.StatusCode, b)
 	}
 	mu.Lock()
@@ -324,7 +324,7 @@ func TestAChatsChangeIsADurableCardToo(t *testing.T) {
 	if p.WatsonItem != items[0].ID || p.Source.Kind != cards.SourceChat || p.Requester == nil || p.Reasoning != "worker-002 reports disk pressure" || len(p.Plans) != 1 || p.Plans[0].Fingerprint == "" {
 		t.Fatalf("the chat's card: %+v", p)
 	}
-	if r, b := send(t, ops, http.MethodPost, srv.URL+"/api/v1/cases/proposals/"+p.ID+"/approve", ""); r.StatusCode != 200 {
+	if r, b := send(t, ops, http.MethodPost, srv.URL+"/api/v1/aiops/proposals/"+p.ID+"/approve", ""); r.StatusCode != 200 {
 		t.Fatalf("approve: %d %s", r.StatusCode, b)
 	}
 	st.Wait()

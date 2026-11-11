@@ -27,8 +27,8 @@ stateDiagram-v2
     New --> Closed: a person closes it with an outcome
     InProgress --> Closed: a person closes it with an outcome
     Waiting --> Closed: timer, no answer for 5 days (Settings › Issues), as no action needed
-    InProgress --> Closed: an agent-found case below P1 whose applied fix the next run no longer sees: closed as fixed by the console (CF-30)
-    Closed --> New: reopened (a person with a reason, its reporter, or the next run of its job finding it again after a fix: the fix did not hold, CF-30)
+    InProgress --> Closed: an agent-found case below P1 whose applied fix a run of its job re-checked inside its scope and found gone: closed as fixed by the console (CF-30, CF-94)
+    Closed --> New: reopened (a person with a reason, its reporter, or a run of its job finding it again, or re-checking it and finding it still there, after a fix: the fix did not hold, CF-30, CF-94)
     Closed --> InProgress: reopened the same ways, when it has an assignee
     Closed --> [*]: an agent-found case is deleted after 90 days (Settings › Cases); a person's keeps its record, its text dropped after the retention
 ```
@@ -49,10 +49,30 @@ of priority, recorded in its history and the audit log, not a change of
 state; the case stays New or In progress until a person closes it. An
 agent's finding marked expected opens no case at all (CF-82).
 
-Agent-found cases fixed by an applied change are verified by the next run of
-their job (CF-30): not seen → closed as fixed below P1, or marked verified
-and left In progress at P0-P1 until a person gives the RCA; seen again → the
-fix did not hold, and it stays open (or is reopened).
+A fix of an agent-found case (closed as fixed by a person, or an applied
+change on an open case) waits for verification by a run of the job that
+found it, and is verified only on positive evidence (CF-94, ADR-145). The
+run's scope comes from its kind: the nightly audit reads each cluster that
+answered as a whole (a cluster that failed is left out, W-2), the alert
+diagnosis the objects of the alerts it diagnosed, and every other kind,
+the daily digest among them, nothing, so it never verifies. The run's
+agent is given the job's waiting fixes inside the scope to re-check
+(CF-96) and says of each whether the problem is still there, with what it
+read:
+
+- re-checked and gone → verified, with the run and what it read on the
+  case (I-1): closed as fixed below P1 (an applied change), or marked
+  verified and left In progress at P0-P1 until a person gives the RCA; a
+  case already closed as fixed stays closed, its fix verified;
+- re-checked and still there, or found again → the fix did not hold: an
+  open case stays In progress, a closed one is reopened;
+- not re-checked → it keeps waiting; the case counts the runs that passed,
+  and the run says how many fixes it did not re-check (CF-95);
+- a finding the run left out past its cap (the least severe go first)
+  counts as neither seen nor gone (W-3).
+
+One clean, re-checked run is enough below P1; whether two should be needed
+is an open question of the review (`docs/phase-12-review.md`).
 
 ## Proposed changes (PC-n)
 
@@ -66,7 +86,7 @@ stateDiagram-v2
     Approved --> Failed: an action failed ("action 2 of 3 failed")
     Queued --> Rejected: a person rejects it with a reason, or closing the only case it was for (CF-34)
     Queued --> Expired: its expiry passes
-    Queued --> Replaced: an agent proposes a newer one for the same thing
+    Queued --> Replaced: an agent proposes the same change for the same cases again (CF-101)
     Applied --> [*]
     Failed --> [*]
     Rejected --> [*]

@@ -4,13 +4,13 @@
 // › Add), with what was added, each removable. Admins and SuperAdmins add
 // (MY-04): a SuperAdmin finds the card in Settings › Knowledge with the
 // rest, and an Admin, for whom the rest of Settings is closed, finds it
-// alone at the same address. #/cases/mycroft/wiki/add, the old address,
+// alone at the same address. #/aiops/mycroft/wiki/add, the old address,
 // opens it (lib/router.ts).
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { CallError } from '../../api/call'
 import { fetchWiki, type WikiState } from '../../api/knowledge'
-import { WikiAdd } from '../cases/WikiAdd'
-import { AddedItems } from '../cases/WikiSources'
+import { WikiAdd } from '../aiops/WikiAdd'
+import { AddedItems } from '../aiops/WikiSources'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -86,7 +86,11 @@ export function AddedInMycroft({ onToast, focus = false, fallback, after }: { on
             </div>
           </>
         ) : (
-          !error && <p className="rk-fhint" style={{ margin: 0 }}>Loading…</p>
+          !error && (
+            <p className="rk-fhint" style={{ margin: 0 }}>
+              Loading…
+            </p>
+          )
         )}
       </section>
       {after}

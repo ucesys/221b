@@ -50,7 +50,11 @@ function Command({ text, testId }: { text: string; testId: string }) {
   const [copied, setCopied] = useState(false)
   return (
     <div style={{ position: 'relative' }}>
-      <pre className="rk-mono" data-testid={testId} style={{ margin: 0, padding: '8px 36px 8px 10px', maxHeight: 220, overflow: 'auto', fontSize: 11.5, background: 'var(--sunken)', border: '1px solid var(--line)', borderRadius: 6, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+      <pre
+        className="rk-mono"
+        data-testid={testId}
+        style={{ margin: 0, padding: '8px 36px 8px 10px', maxHeight: 220, overflow: 'auto', fontSize: 11.5, background: 'var(--sunken)', border: '1px solid var(--line)', borderRadius: 6, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}
+      >
         {text}
       </pre>
       <button
@@ -155,7 +159,10 @@ export function HostDialog({ cluster, host, start, onClose, onDone }: Props) {
   // whose key is not trusted yet.
   const [reads, setReads] = useState(0)
   const names = rows.map((r) => r.name).join(' ')
-  const unread = rows.filter((r) => r.reading).map((r) => r.name).join(' ')
+  const unread = rows
+    .filter((r) => r.reading)
+    .map((r) => r.name)
+    .join(' ')
   useEffect(() => {
     if (step !== 'key' || !unread) return
     let gone = false
@@ -199,7 +206,17 @@ export function HostDialog({ cluster, host, start, onClose, onDone }: Props) {
   const parsed = parseLabels(labels)
   const portN = port.trim() === '' ? defaults.port : Number(port)
   const detailsProblem =
-    typeof entries === 'string' ? entries : !entries.length ? 'Give the host’s address, or several.' : !Number.isInteger(portN) || portN < 1 || portN > 65535 ? 'The SSH port is 1 to 65535.' : typeof parsed === 'string' ? parsed : mode === 'credential' ? credProblem : ''
+    typeof entries === 'string'
+      ? entries
+      : !entries.length
+        ? 'Give the host’s address, or several.'
+        : !Number.isInteger(portN) || portN < 1 || portN > 65535
+          ? 'The SSH port is 1 to 65535.'
+          : typeof parsed === 'string'
+            ? parsed
+            : mode === 'credential'
+              ? credProblem
+              : ''
   const register = async () => {
     if (detailsProblem || typeof parsed === 'string' || typeof entries === 'string') return
     setBusy(true)
@@ -328,7 +345,10 @@ export function HostDialog({ cluster, host, start, onClose, onDone }: Props) {
   )
   const credFields = (
     <>
-      <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>Give an account that may use sudo, or root{one ? '' : ', the same on every host'}. The console signs in with it once{one ? '' : ' on each host'}, runs the pairing as root and then logs in with its own certificate. The credential is not kept, logged or shown anywhere.</p>
+      <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>
+        Give an account that may use sudo, or root{one ? '' : ', the same on every host'}. The console signs in with it once{one ? '' : ' on each host'}, runs the pairing as root and then logs in with its own certificate. The credential is
+        not kept, logged or shown anywhere.
+      </p>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12 }}>
         <Field label="Account">
           <input value={user} onChange={(e) => setUser(e.target.value)} data-testid="host-cred-user" autoComplete="off" spellCheck={false} />
@@ -351,7 +371,16 @@ export function HostDialog({ cluster, host, start, onClose, onDone }: Props) {
       ) : (
         <>
           <Field label="Private key" hint="As the file holds it, from -----BEGIN to -----END." tall>
-            <textarea className="rk-mono" rows={5} value={privateKey} onChange={(e) => setPrivateKey(e.target.value)} data-testid="host-cred-key" autoComplete="off" spellCheck={false} style={{ width: '100%', border: 0, outline: 0, background: 'transparent', resize: 'vertical', color: 'var(--fg)', fontSize: 11.5 }} />
+            <textarea
+              className="rk-mono"
+              rows={5}
+              value={privateKey}
+              onChange={(e) => setPrivateKey(e.target.value)}
+              data-testid="host-cred-key"
+              autoComplete="off"
+              spellCheck={false}
+              style={{ width: '100%', border: 0, outline: 0, background: 'transparent', resize: 'vertical', color: 'var(--fg)', fontSize: 11.5 }}
+            />
           </Field>
           <Field label="Passphrase, if it has one">
             <input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} data-testid="host-cred-passphrase" autoComplete="new-password" />
@@ -438,9 +467,25 @@ export function HostDialog({ cluster, host, start, onClose, onDone }: Props) {
 
         {step === 'details' && (
           <>
-            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>Machines outside Kubernetes that the console reaches by SSH. Once paired, Automation runs scripts on them as on nodes: in fleets, in runs, with their facts. Their addresses must be ones the console's network policy lets it reach (networkPolicy.nodeCIDRs).</p>
-            <Field label="Hosts" hint="IP addresses or DNS names, one or many, separated by spaces, tabs, commas or semicolons. Each is named after its address, as a node name; write name=address to name one otherwise. Not the name of a node." tall>
-              <textarea className="rk-mono" rows={2} value={list} onChange={(e) => setList(e.target.value)} data-testid="host-list" autoComplete="off" spellCheck={false} style={{ width: '100%', border: 0, outline: 0, background: 'transparent', resize: 'vertical', color: 'var(--fg)', fontSize: 12.5 }} />
+            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>
+              Machines outside Kubernetes that the console reaches by SSH. Once paired, Automation runs scripts on them as on nodes: in fleets, in runs, with their facts. Their addresses must be ones the console's network policy lets it
+              reach (networkPolicy.nodeCIDRs).
+            </p>
+            <Field
+              label="Hosts"
+              hint="IP addresses or DNS names, one or many, separated by spaces, tabs, commas or semicolons. Each is named after its address, as a node name; write name=address to name one otherwise. Not the name of a node."
+              tall
+            >
+              <textarea
+                className="rk-mono"
+                rows={2}
+                value={list}
+                onChange={(e) => setList(e.target.value)}
+                data-testid="host-list"
+                autoComplete="off"
+                spellCheck={false}
+                style={{ width: '100%', border: 0, outline: 0, background: 'transparent', resize: 'vertical', color: 'var(--fg)', fontSize: 12.5 }}
+              />
             </Field>
             {typeof entries !== 'string' && entries.length > 1 && (
               <p style={{ margin: 0, fontSize: 12, color: 'var(--fg2)' }} data-testid="host-list-count">
@@ -484,7 +529,8 @@ export function HostDialog({ cluster, host, start, onClose, onDone }: Props) {
               ) : (
                 <>The console read the host key of each host, without signing in. Untick any you do not expect.</>
               )}{' '}
-              Trusting {one ? 'it pins it' : 'them pins them'}: from then on a host that shows another key is refused until a SuperAdmin trusts it again. Nothing is sent to a host before{upFront ? ', and then the account you gave pairs each in turn' : ''}.
+              Trusting {one ? 'it pins it' : 'them pins them'}: from then on a host that shows another key is refused until a SuperAdmin trusts it again. Nothing is sent to a host before
+              {upFront ? ', and then the account you gave pairs each in turn' : ''}.
             </p>
             {keyCommand && (
               <details style={{ fontSize: 12, color: 'var(--fg2)' }} data-testid="host-compare">
@@ -495,7 +541,17 @@ export function HostDialog({ cluster, host, start, onClose, onDone }: Props) {
             )}
             {rowList((r) => (
               <>
-                {!one && <input type="checkbox" checked={!!r.tick && !r.trusted} disabled={!r.offer || r.trusted} onChange={() => patch(r.name, { tick: !r.tick })} aria-label={`Trust the key of ${r.name}`} data-testid="host-tick" style={{ alignSelf: 'center' }} />}
+                {!one && (
+                  <input
+                    type="checkbox"
+                    checked={!!r.tick && !r.trusted}
+                    disabled={!r.offer || r.trusted}
+                    onChange={() => patch(r.name, { tick: !r.tick })}
+                    aria-label={`Trust the key of ${r.name}`}
+                    data-testid="host-tick"
+                    style={{ alignSelf: 'center' }}
+                  />
+                )}
                 {who(r)}
                 {r.offer ? (
                   <span style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
@@ -534,7 +590,10 @@ export function HostDialog({ cluster, host, start, onClose, onDone }: Props) {
               (host || (unpaired.length > 0 && !busy)) && credFields
             ) : (
               <>
-                <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>Run this on {one ? 'the host' : 'each host'} as root, or as an account that may use sudo. It makes the login user if missing, writes the console's public key to /etc/ssh/221b, sets TrustedUserCAKeys and AuthorizedPrincipalsFile, and reloads sshd. Then check the connection.</p>
+                <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>
+                  Run this on {one ? 'the host' : 'each host'} as root, or as an account that may use sudo. It makes the login user if missing, writes the console's public key to /etc/ssh/221b, sets TrustedUserCAKeys and
+                  AuthorizedPrincipalsFile, and reloads sshd. Then check the connection.
+                </p>
                 {command ? <Command text={command} testId="host-setup-command" /> : <span style={{ fontSize: 12, color: 'var(--fg3)' }}>Making the command…</span>}
               </>
             )}
@@ -572,7 +631,11 @@ export function HostDialog({ cluster, host, start, onClose, onDone }: Props) {
         )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {step === 'details' && detailsProblem && list.trim() && <span style={{ fontSize: 12, color: 'var(--fg3)', marginRight: 'auto' }} data-testid="host-problem">{detailsProblem}</span>}
+          {step === 'details' && detailsProblem && list.trim() && (
+            <span style={{ fontSize: 12, color: 'var(--fg3)', marginRight: 'auto' }} data-testid="host-problem">
+              {detailsProblem}
+            </span>
+          )}
           <button className="rk-btn" onClick={close} disabled={busy} data-testid="host-close">
             {step === 'done' ? 'Close' : 'Cancel'}
           </button>
@@ -598,7 +661,7 @@ export function HostDialog({ cluster, host, start, onClose, onDone }: Props) {
           )}
           {step === 'pair' && mode === 'command' && (
             <button className="rk-btn" data-on="true" onClick={check} disabled={busy || !command || !unpaired.length} aria-busy={busy} data-testid="host-check">
-              {busy ? 'Checking…' : 'Check connection'}
+              {busy ? 'Testing…' : 'Test connection'}
             </button>
           )}
         </div>

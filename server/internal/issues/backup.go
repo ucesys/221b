@@ -141,7 +141,7 @@ func (s *Service) ExportCases(ctx context.Context) (map[string]map[string]string
 func (s *Service) ImportCases(ctx context.Context, objs map[string]map[string]string, by Person) (int, int, error) {
 	added, kept := 0, 0
 	for name, keys := range objs {
-		var r Report
+		var r Case
 		if json.Unmarshal([]byte(keys[CaseKey]), &r) != nil || caseName(r.Number) != name {
 			return added, kept, invalid("the case %q in the backup cannot be read", name)
 		}

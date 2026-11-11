@@ -373,14 +373,26 @@ func (s *Service) execute(ctx context.Context, j Job, k Kind, trig Trigger, ev *
 	}
 	r.Report = clip(out.Report, maxReport)
 	r.Facts = keepFacts(out.Facts)
-	findings, at := s.tidy(sctx, k, r.ID, out.Findings)
-	r.Findings = findings
-	// Each finding becomes a case or joins one (CF-01).
+	findings, at, leftOut, leftKeys := s.tidy(sctx, k, r.ID, out.Findings)
+	r.Findings, r.LeftOut, r.FailedClusters = findings, leftOut, out.Failed
+	if n := leftOutNote(leftOut); n != "" {
+		notes = append(notes, n)
+	}
+	// Each finding becomes a case or joins one (CF-01); the fixes the run
+	// re-checked inside its scope are verified (W-1).
 	r.Routed = Routed{}
 	if s.o.Router != nil && len(k.Checks) > 0 {
 		res := s.o.Router.Route(sctx, RouteInput{Run: r.ID, Job: j.ID, Kind: k.ID, Label: r.Label, Clusters: r.Clusters, OK: r.Status == StatusOK, Findings: r.Findings,
-			Agent: firstNonEmpty(k.AgentName, k.Agent), MinPriority: ptrInt(j.Lowest())})
-		r.Findings, r.Routed, r.VerifiedCases, r.NewChecks = res.Findings, res.Routed, res.Verified, res.NewChecks
+			Agent: firstNonEmpty(k.AgentName, k.Agent), MinPriority: ptrInt(j.Lowest()), Scope: out.Scope, Rechecked: s.keyRechecks(sctx, out.Rechecked), LeftOut: leftKeys})
+		r.Findings, r.Routed, r.VerifiedCases, r.NewChecks, r.NotRechecked = res.Findings, res.Routed, res.Verified, res.NewChecks, res.NotRechecked
+		if res.NotRechecked > 0 {
+			notes = append(notes, notRecheckedNote(res.NotRechecked))
+		}
+		// Not routed, it is kept so and routed on a later look (W-8).
+		if res.NotRouted != "" {
+			r.NotRouted, r.Reroute = res.NotRouted, true
+			notes = append(notes, "its findings were not routed into cases ("+res.NotRouted+"); the console tries again")
+		}
 	} else {
 		for _, f := range r.Findings {
 			r.Routed.Add(f.Routing)
@@ -501,9 +513,6 @@ func (s *Service) file(ctx context.Context, j Job, k Kind, r Run, ev *Event, at 
 				p.Condition = Condition{Kind: "alert-firing", Args: map[string]any{"cluster": ev.Cluster, "key": strings.TrimPrefix(ev.Key, "alert:"+ev.Cluster+"/")}}
 			}
 		}
-		if p.DedupKey == "" {
-			p.DedupKey = fmt.Sprintf("job:%s:%s:%s", j.ID, p.Cluster, strings.ToLower(p.Title))
-		}
 		if p.Expires.IsZero() {
 			p.Expires = now.Add(24 * time.Hour)
 		}
@@ -514,6 +523,10 @@ func (s *Service) file(ctx context.Context, j Job, k Kind, r Run, ev *Event, at 
 			out = append(out, ProposalRef{Title: p.Title, Error: NamesNothing})
 			notes = append(notes, fmt.Sprintf("a proposed change that names no case it resolves was not filed: %s", p.Title))
 			continue
+		}
+		// What it is about (W-10, CF-101): known once what it resolves is.
+		if p.DedupKey == "" {
+			p.DedupKey = ProposalKey(p)
 		}
 		id, err := s.o.Proposer.Propose(ctx, p)
 		ref := ProposalRef{ID: id, Title: p.Title, Resolves: p.Resolves}
@@ -666,6 +679,7 @@ func (s *Service) Tick(ctx context.Context) {
 		s.o.Logger.Warn("the jobs cannot be read", "err", err)
 		return
 	}
+	s.reroute(ctx, rec)
 	// The alerts are read once per look, by whoever wants them: the alert
 	// jobs, and the cases' safety net (CF-78).
 	var listed []Alert

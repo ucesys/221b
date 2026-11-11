@@ -330,7 +330,8 @@ export interface AgentChange extends AgentSettings {
 }
 export const saveAgent = (id: string, change: AgentChange) => call<AIOverview>('PUT', `/api/v1/ai/agents/${enc(id)}`, change)
 export const fetchInstructions = (id: string) => call<Instructions>('GET', `/api/v1/ai/agents/${enc(id)}/instructions`)
-export const fetchPrompt = (id: string, cluster: string, draft: boolean) => call<{ instructions: string; cluster: string; model: string; tools?: string[]; compact?: boolean }>('GET', `/api/v1/ai/agents/${enc(id)}/prompt?cluster=${enc(cluster)}${draft ? '&draft=1' : ''}`)
+export const fetchPrompt = (id: string, cluster: string, draft: boolean) =>
+  call<{ instructions: string; cluster: string; model: string; tools?: string[]; compact?: boolean }>('GET', `/api/v1/ai/agents/${enc(id)}/prompt?cluster=${enc(cluster)}${draft ? '&draft=1' : ''}`)
 /** Saves a draft; parts, when given, are the edits of the built-in text (absent keeps those in force). */
 export const saveDraft = (id: string, house: string, notes: Record<string, string>, parts?: Record<string, string>) => call<Instructions>('PUT', `/api/v1/ai/agents/${enc(id)}/draft`, { house, notes, ...(parts ? { parts } : {}) })
 export const discardDraft = (id: string) => call<Instructions>('DELETE', `/api/v1/ai/agents/${enc(id)}/draft`)

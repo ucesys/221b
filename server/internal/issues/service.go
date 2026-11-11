@@ -45,7 +45,7 @@ var (
 type Event struct {
 	Kind   string      `json:"kind"`
 	At     time.Time   `json:"at"`
-	Report *Report     `json:"report,omitempty"`
+	Report *Case       `json:"report,omitempty"`
 	Known  *KnownIssue `json:"known,omitempty"`
 	// By is who made the change; a system change has none.
 	By *Person `json:"by,omitempty"`
@@ -222,8 +222,8 @@ func (s *Service) record(a AuditRecord) {
 	s.audit(a)
 }
 
-func copyReport(r *Report) *Report {
-	var out Report
+func copyReport(r *Case) *Case {
+	var out Case
 	copyJSON(&out, r)
 	return &out
 }
@@ -291,7 +291,7 @@ func (s *Service) checkChoice(in Submission) (int, string, error) {
 
 // Receipt is what the reporter is told once a report is in.
 type Receipt struct {
-	Report Report `json:"report"`
+	Report Case `json:"report"`
 	// Known is the known issue it was linked to, with its status,
 	// workaround and expected fix as they stand (IS-10).
 	Known *KnownIssue `json:"known,omitempty"`
@@ -364,7 +364,7 @@ func (s *Service) Submit(ctx context.Context, c Caller, in Submission) (Receipt,
 			}
 		}
 		st.actor = ptr(ActorOf(c.Person))
-		r := Report{Text: text, Scrubbed: removed, Reporter: reporter, FiledBy: filedBy, Created: now, Updated: now,
+		r := Case{Text: text, Scrubbed: removed, Reporter: reporter, FiledBy: filedBy, Created: now, Updated: now,
 			Status: StatusNew, StatusAt: now, Priority: priority, PriorityBy: priorityBy, LastReporter: now, Source: CaseReport, SLAFrom: ptr(now),
 			Type: typ, Incident: incident, Cluster: cluster, CreatedBy: ptr(ActorOf(reporter))}
 		if svc := st.matchService(text); len(svc) > 0 && svc[0].Confidence >= serviceThreshold {
@@ -415,7 +415,7 @@ var systemPerson = Person{ID: "system", Name: "Issue service", System: true}
 // linkKnown closes a case as a known issue (CF-06): a known issue follows
 // the problem, its workaround and expected fix; it takes the known
 // issue's service when it has none.
-func linkKnown(st *state, r *Report, k *KnownIssue, confidence int, by Person, now time.Time) {
+func linkKnown(st *state, r *Case, k *KnownIssue, confidence int, by Person, now time.Time) {
 	r.KnownIssue, r.MatchConfidence = k.ID, confidence
 	if r.Acknowledged == nil {
 		r.Acknowledged = ptr(now)
@@ -432,7 +432,7 @@ func linkKnown(st *state, r *Report, k *KnownIssue, confidence int, by Person, n
 
 // similarTo lists the open reports on the same service, sent within the
 // duplicate window, whose titles read like r's (IS-12).
-func (st *state) similarTo(r *Report, set Settings, now time.Time) []int {
+func (st *state) similarTo(r *Case, set Settings, now time.Time) []int {
 	if r.Service == "" {
 		return nil
 	}
@@ -562,12 +562,12 @@ func (s *Service) Lines(ctx context.Context, c Caller, f Filter) ([]Line, error)
 
 // Reports lists the cases a caller may see, newest first, as their rows
 // show them: from the index, without their conversations.
-func (s *Service) Reports(ctx context.Context, c Caller, f Filter) ([]Report, error) {
+func (s *Service) Reports(ctx context.Context, c Caller, f Filter) ([]Case, error) {
 	lines, err := s.Lines(ctx, c, f)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Report, 0, len(lines))
+	out := make([]Case, 0, len(lines))
 	for _, l := range lines {
 		out = append(out, l.lite())
 	}
@@ -575,28 +575,28 @@ func (s *Service) Reports(ctx context.Context, c Caller, f Filter) ([]Report, er
 }
 
 // Report is one report, whole, for a caller who may see it.
-func (s *Service) Report(ctx context.Context, c Caller, n int) (Report, error) {
+func (s *Service) Report(ctx context.Context, c Caller, n int) (Case, error) {
 	st, err := s.load(ctx, false)
 	if err != nil {
-		return Report{}, err
+		return Case{}, err
 	}
 	l := st.line(n)
 	if l == nil || !st.visible(c, l) {
-		return Report{}, fmt.Errorf("%w: no report #%d", ErrNotFound, n)
+		return Case{}, fmt.Errorf("%w: no report #%d", ErrNotFound, n)
 	}
 	r := st.report(n)
 	if r == nil {
 		if st.err != nil {
-			return Report{}, st.err
+			return Case{}, st.err
 		}
-		return Report{}, fmt.Errorf("%w: no report #%d", ErrNotFound, n)
+		return Case{}, fmt.Errorf("%w: no report #%d", ErrNotFound, n)
 	}
 	return *r, nil
 }
 
 // onReport changes one report the caller may see, saving it.
-func (s *Service) onReport(ctx context.Context, c Caller, n int, fn func(st *state, r *Report, ch *change, now time.Time) error) (Report, error) {
-	var out Report
+func (s *Service) onReport(ctx context.Context, c Caller, n int, fn func(st *state, r *Case, ch *change, now time.Time) error) (Case, error) {
+	var out Case
 	err := s.update(ctx, func(st *state, ch *change) (int, error) {
 		st.actor = ptr(ActorOf(c.Person))
 		l := st.line(n)
@@ -622,11 +622,11 @@ func (s *Service) onReport(ctx context.Context, c Caller, n int, fn func(st *sta
 }
 
 // isReporter says whether the caller is the report's reporter, or filed it.
-func isReporter(c Caller, r *Report) bool {
+func isReporter(c Caller, r *Case) bool {
 	return r.Reporter.ID == c.ID || (r.FiledBy != nil && r.FiledBy.ID == c.ID)
 }
 
-func addMessage(r *Report, m Message) error {
+func addMessage(r *Case, m Message) error {
 	if len(r.Messages) >= MaxMessages {
 		return invalid("report #%d has %d messages, the most it keeps; send a new report and mention #%d", r.Number, MaxMessages, r.Number)
 	}
@@ -638,12 +638,12 @@ func addMessage(r *Report, m Message) error {
 // AddMessage adds to a report's conversation (IS-14). The reporter's
 // message answers a question an operator asked; an operator's is sent to
 // the reporter at once, or kept as an internal note.
-func (s *Service) AddMessage(ctx context.Context, c Caller, n int, text string, internal bool) (Report, error) {
+func (s *Service) AddMessage(ctx context.Context, c Caller, n int, text string, internal bool) (Case, error) {
 	clean, removed, err := cleanText(text)
 	if err != nil {
-		return Report{}, err
+		return Case{}, err
 	}
-	return s.onReport(ctx, c, n, func(st *state, r *Report, ch *change, now time.Time) error {
+	return s.onReport(ctx, c, n, func(st *state, r *Case, ch *change, now time.Time) error {
 		m := Message{At: now, From: c.Person, Text: clean}
 		switch {
 		// An operator writes as one, also on a report they filed for
@@ -696,7 +696,7 @@ func (s *Service) AddMessage(ctx context.Context, c Caller, n int, text string, 
 // reporter, or sends a reply an agent drafted (CF-45, CF-67): a person
 // works on it. An internal note, and anything an agent does alone, leave
 // its status as it is.
-func replied(ch *change, c Caller, r *Report, now time.Time) {
+func replied(ch *change, c Caller, r *Case, now time.Time) {
 	if c.System || r.Status != StatusNew {
 		return
 	}
@@ -708,7 +708,7 @@ func replied(ch *change, c Caller, r *Report, now time.Time) {
 // times (IS-06): acknowledged by any, and first responded to by a reply
 // the reporter sees, or, on a case with no reporter, by anything a
 // person does to it.
-func markHandled(r *Report, now time.Time, reply bool) {
+func markHandled(r *Case, now time.Time, reply bool) {
 	if r.Acknowledged == nil {
 		r.Acknowledged = ptr(now)
 	}
@@ -719,27 +719,27 @@ func markHandled(r *Report, now time.Time, reply bool) {
 
 // Draft keeps a reply that waits for an operator's Send (IS-14): an
 // investigator's, by "agent", or an operator's own.
-func (s *Service) Draft(ctx context.Context, c Caller, n int, text, by string) (Report, error) {
+func (s *Service) Draft(ctx context.Context, c Caller, n int, text, by string) (Case, error) {
 	if !c.Operator {
-		return Report{}, fmt.Errorf("%w: only operators draft replies", ErrDenied)
+		return Case{}, fmt.Errorf("%w: only operators draft replies", ErrDenied)
 	}
 	clean, _, err := cleanText(text)
 	if err != nil {
-		return Report{}, err
+		return Case{}, err
 	}
 	if by == "" {
 		by = c.Label()
 	}
-	return s.onReport(ctx, c, n, func(st *state, r *Report, ch *change, now time.Time) error {
+	return s.onReport(ctx, c, n, func(st *state, r *Case, ch *change, now time.Time) error {
 		return addMessage(r, Message{At: now, Kind: FromOperator, From: c.Person, Text: clean, Draft: true, DraftBy: by})
 	})
 }
 
 // Send sends a reply (IS-14): a draft, as it is or with text an operator
 // edited, or text they typed (draft 0). Nothing else ever sends a draft.
-func (s *Service) Send(ctx context.Context, c Caller, n, draft int, text string) (Report, error) {
+func (s *Service) Send(ctx context.Context, c Caller, n, draft int, text string) (Case, error) {
 	if !c.Operator {
-		return Report{}, fmt.Errorf("%w: only operators send replies", ErrDenied)
+		return Case{}, fmt.Errorf("%w: only operators send replies", ErrDenied)
 	}
 	if draft == 0 {
 		return s.AddMessage(ctx, c, n, text, false)
@@ -748,10 +748,10 @@ func (s *Service) Send(ctx context.Context, c Caller, n, draft int, text string)
 	if strings.TrimSpace(text) != "" {
 		var err error
 		if clean, _, err = cleanText(text); err != nil {
-			return Report{}, err
+			return Case{}, err
 		}
 	}
-	return s.onReport(ctx, c, n, func(st *state, r *Report, ch *change, now time.Time) error {
+	return s.onReport(ctx, c, n, func(st *state, r *Case, ch *change, now time.Time) error {
 		for i := range r.Messages {
 			m := &r.Messages[i]
 			if m.ID != draft || !m.Draft {
@@ -775,11 +775,11 @@ func (s *Service) Send(ctx context.Context, c Caller, n, draft int, text string)
 }
 
 // Discard drops a draft.
-func (s *Service) Discard(ctx context.Context, c Caller, n, draft int) (Report, error) {
+func (s *Service) Discard(ctx context.Context, c Caller, n, draft int) (Case, error) {
 	if !c.Operator {
-		return Report{}, fmt.Errorf("%w: only operators discard drafts", ErrDenied)
+		return Case{}, fmt.Errorf("%w: only operators discard drafts", ErrDenied)
 	}
-	return s.onReport(ctx, c, n, func(st *state, r *Report, ch *change, now time.Time) error {
+	return s.onReport(ctx, c, n, func(st *state, r *Case, ch *change, now time.Time) error {
 		for i, m := range r.Messages {
 			if m.ID == draft && m.Draft {
 				r.Messages = append(r.Messages[:i], r.Messages[i+1:]...)
@@ -791,7 +791,7 @@ func (s *Service) Discard(ctx context.Context, c Caller, n, draft int) (Report, 
 }
 
 // follow makes a person follow a case, or stop.
-func follow(r *Report, p Person, on bool) error {
+func follow(r *Case, p Person, on bool) error {
 	kept := r.Watchers[:0:0]
 	for _, w := range r.Watchers {
 		if w.ID != p.ID {
@@ -809,8 +809,8 @@ func follow(r *Report, p Person, on bool) error {
 }
 
 // Watch makes the caller follow a report they may see, or stop.
-func (s *Service) Watch(ctx context.Context, c Caller, n int, on bool) (Report, error) {
-	return s.onReport(ctx, c, n, func(st *state, r *Report, ch *change, now time.Time) error {
+func (s *Service) Watch(ctx context.Context, c Caller, n int, on bool) (Case, error) {
+	return s.onReport(ctx, c, n, func(st *state, r *Case, ch *change, now time.Time) error {
 		return follow(r, c.Person, on)
 	})
 }
@@ -818,8 +818,8 @@ func (s *Service) Watch(ctx context.Context, c Caller, n int, on bool) (Report, 
 // Unlink is the reporter's "No, mine is something else" (IS-11): the
 // case leaves the known issue, which will not be matched to it again,
 // and opens again for investigation.
-func (s *Service) Unlink(ctx context.Context, c Caller, n int) (Report, error) {
-	r, err := s.onReport(ctx, c, n, func(st *state, r *Report, ch *change, now time.Time) error {
+func (s *Service) Unlink(ctx context.Context, c Caller, n int) (Case, error) {
+	r, err := s.onReport(ctx, c, n, func(st *state, r *Case, ch *change, now time.Time) error {
 		if !isReporter(c, r) && !c.Operator {
 			return fmt.Errorf("%w: only the reporter says it is something else", ErrDenied)
 		}
@@ -846,8 +846,8 @@ func (s *Service) Unlink(ctx context.Context, c Caller, n int) (Report, error) {
 
 // Confirm is the reporter's answer to a fix (IS-15): "It works" is noted,
 // "Still broken" reopens the case.
-func (s *Service) Confirm(ctx context.Context, c Caller, n int, works bool) (Report, error) {
-	return s.onReport(ctx, c, n, func(st *state, r *Report, ch *change, now time.Time) error {
+func (s *Service) Confirm(ctx context.Context, c Caller, n int, works bool) (Case, error) {
+	return s.onReport(ctx, c, n, func(st *state, r *Case, ch *change, now time.Time) error {
 		if !isReporter(c, r) && !c.Operator {
 			return fmt.Errorf("%w: only the reporter confirms a fix", ErrDenied)
 		}
@@ -865,8 +865,8 @@ func (s *Service) Confirm(ctx context.Context, c Caller, n int, works bool) (Rep
 
 // Reopen is the reporter's "Still broken" on a recently closed report
 // (IS-15), or an operator's reopening with a reason.
-func (s *Service) Reopen(ctx context.Context, c Caller, n int, reason string) (Report, error) {
-	return s.onReport(ctx, c, n, func(st *state, r *Report, ch *change, now time.Time) error {
+func (s *Service) Reopen(ctx context.Context, c Caller, n int, reason string) (Case, error) {
+	return s.onReport(ctx, c, n, func(st *state, r *Case, ch *change, now time.Time) error {
 		if !isReporter(c, r) && !c.Operator {
 			return fmt.Errorf("%w: only the reporter reopens a report", ErrDenied)
 		}
@@ -874,7 +874,7 @@ func (s *Service) Reopen(ctx context.Context, c Caller, n int, reason string) (R
 	})
 }
 
-func (s *Service) reopen(st *state, r *Report, ch *change, c Caller, reason string, now time.Time) error {
+func (s *Service) reopen(st *state, r *Case, ch *change, c Caller, reason string, now time.Time) error {
 	set := st.settings()
 	if r.Status.Open() {
 		return invalid("C-%d is still open", r.Number)
@@ -895,7 +895,7 @@ func (s *Service) reopen(st *state, r *Report, ch *change, c Caller, reason stri
 
 // CloseCase closes a case with its outcome and explanation, with the
 // times that go with it. The caller checked the outcome is allowed.
-func CloseCase(r *Report, by Person, outcome Outcome, explanation string, now time.Time) {
+func CloseCase(r *Case, by Person, outcome Outcome, explanation string, now time.Time) {
 	outcome = outcome.Canonical()
 	r.Status, r.StatusAt, r.Outcome, r.Explanation, r.Closed, r.Waiting = StatusClosed, now, outcome, explanation, ptr(now), nil
 	r.ClosedBy = &Person{ID: by.ID, Name: by.Name, System: by.System}
@@ -903,7 +903,7 @@ func CloseCase(r *Report, by Person, outcome Outcome, explanation string, now ti
 		r.Resolved = ptr(now)
 	}
 	r.VerifyPending, r.Verified = outcome == OutcomeFix && r.AgentFound() && r.Job != "", nil
-	r.Verification, r.AnalysisQueued = "", nil
+	r.Verification, r.AnalysisQueued, r.VerifiedBy, r.Unchecked = "", nil, nil, 0
 	if outcome != OutcomeDuplicate {
 		r.DuplicateOf = 0
 	}
@@ -921,7 +921,7 @@ func CloseCase(r *Report, by Person, outcome Outcome, explanation string, now ti
 
 // ReopenCase opens a closed case again: In progress when someone owns
 // it, New otherwise; the outcome goes.
-func ReopenCase(r *Report, now time.Time) {
+func ReopenCase(r *Case, now time.Time) {
 	r.Status = StatusNew
 	if r.Owner != nil {
 		r.Status = StatusInProgress
@@ -930,17 +930,18 @@ func ReopenCase(r *Report, now time.Time) {
 	r.Outcome, r.Explanation, r.Resolved, r.Closed, r.ClosedBy = "", "", nil, nil, nil
 	r.DuplicateOf, r.Exception, r.KnownIssue, r.MatchConfidence, r.RCACause = 0, "", "", 0, ""
 	r.VerifyPending, r.Verified, r.Verification, r.AnalysisQueued = false, nil, "", nil
+	r.VerifiedBy, r.Unchecked = nil, 0
 	r.Updated = now
 }
 
 // Take moves a new case in progress: someone works on it.
-func Take(r *Report, now time.Time) {
+func Take(r *Case, now time.Time) {
 	if r.Status == StatusNew {
 		r.Status, r.StatusAt = StatusInProgress, now
 	}
 }
 
-func statusChanged(ch *change, by Person, from string, r *Report, now time.Time) {
+func statusChanged(ch *change, by Person, from string, r *Case, now time.Time) {
 	ch.event(Event{Kind: EventReportStatus, At: now, Report: copyReport(r), By: &by})
 	detail := fmt.Sprintf("C-%d is %s", r.Number, r.Status)
 	if r.Outcome != "" {
@@ -954,7 +955,7 @@ func statusChanged(ch *change, by Person, from string, r *Report, now time.Time)
 }
 
 // reopened records a case reopened.
-func reopened(ch *change, by Person, from string, r *Report, why string, now time.Time) {
+func reopened(ch *change, by Person, from string, r *Case, why string, now time.Time) {
 	ch.event(Event{Kind: EventReportStatus, At: now, Report: copyReport(r), By: &by})
 	detail := fmt.Sprintf("C-%d reopened, now %s", r.Number, r.Status)
 	if why != "" {
@@ -1000,7 +1001,7 @@ type Triage struct {
 // SetPriority sets a case's priority and its SLA clock (CF-02): a case a
 // person opened has one at every priority; an agent-found one only at
 // P0-P1, from the moment it is raised there, and lowering it stops it.
-func SetPriority(r *Report, p int, by string, now time.Time) {
+func SetPriority(r *Case, p int, by string, now time.Time) {
 	r.Priority, r.PriorityBy = p, by
 	switch {
 	case !r.AgentFound():
@@ -1012,16 +1013,16 @@ func SetPriority(r *Report, p int, by string, now time.Time) {
 }
 
 // Triage applies an operator's change.
-func (s *Service) Triage(ctx context.Context, c Caller, n int, t Triage) (Report, error) {
+func (s *Service) Triage(ctx context.Context, c Caller, n int, t Triage) (Case, error) {
 	if !c.Operator {
-		return Report{}, fmt.Errorf("%w: only operators triage reports", ErrDenied)
+		return Case{}, fmt.Errorf("%w: only operators triage reports", ErrDenied)
 	}
 	explanation := strings.TrimSpace(t.Explanation)
 	if utf8.RuneCountInString(explanation) > MaxText {
-		return Report{}, invalid("keep the explanation under %d characters", MaxText)
+		return Case{}, invalid("keep the explanation under %d characters", MaxText)
 	}
 	explanation = scrub.Text(explanation)
-	r, err := s.onReport(ctx, c, n, func(st *state, r *Report, ch *change, now time.Time) error {
+	r, err := s.onReport(ctx, c, n, func(st *state, r *Case, ch *change, now time.Time) error {
 		if err := t.Expect.check(r); err != nil {
 			return err
 		}
@@ -1154,7 +1155,7 @@ var ErrDuplicate = errors.New("not a duplicate")
 // case allows (fix, noAction; the others have their own fields or the
 // console's actions). An old outcome, notAProblem or noFixNeeded, is
 // noAction (CF-90).
-func (s *Service) move(r *Report, ch *change, c Caller, to Status, outcome Outcome, explanation string, now time.Time) error {
+func (s *Service) move(r *Case, ch *change, c Caller, to Status, outcome Outcome, explanation string, now time.Time) error {
 	outcome = outcome.Canonical()
 	switch to {
 	case StatusInProgress:
@@ -1208,7 +1209,7 @@ func (s *Service) move(r *Report, ch *change, c Caller, to Status, outcome Outco
 }
 
 // SetStatus moves a report to a status, as Triage does with only that.
-func (s *Service) SetStatus(ctx context.Context, c Caller, n int, to Status, outcome Outcome, explanation string) (Report, error) {
+func (s *Service) SetStatus(ctx context.Context, c Caller, n int, to Status, outcome Outcome, explanation string) (Case, error) {
 	return s.Triage(ctx, c, n, Triage{Status: &to, Outcome: outcome, Explanation: explanation})
 }
 
@@ -1252,7 +1253,7 @@ func (s *Service) Sweep(ctx context.Context) error {
 
 // prune drops what a closed report says once the retention has passed,
 // keeping what it was and how it ended (IS-17).
-func prune(r *Report) {
+func prune(r *Case) {
 	r.Text, r.Messages, r.Technical, r.Plain, r.Cause, r.Evidence, r.Watchers, r.Similar = "", nil, "", "", "", nil, nil, nil
 	r.Pruned = true
 }

@@ -117,3 +117,18 @@ func registerHelmReposBackup(r *backup.Registry, repos *apps.Repos) {
 		},
 	})
 }
+
+// wireHelmRepos opens the Helm repositories.
+func (w *wiring) wireHelmRepos() error {
+	cfg := w.cfg
+	// Helm repositories (Phase 12, wave 5, ADR-123 to ADR-125): the
+	// chart repositories and OCI registries applications install from
+	// besides git; the list beside the settings, each password or token
+	// in the Secret <release>-helm-repositories.
+	helmRepos, err := openHelmRepos(cfg, w.restCfg, w.spendBackend)
+	if err != nil {
+		return err
+	}
+	w.helmRepos = helmRepos
+	return nil
+}

@@ -25,13 +25,13 @@ interface Brief {
 
 /** Opens a case by hand through the API. */
 async function open(page: Page, title: string, more: Record<string, unknown> = {}): Promise<{ id: string; number: number }> {
-  const res = await page.request.post('/api/v1/cases/cases', { headers: SAME, data: { title, priority: 3, ...more } })
+  const res = await page.request.post('/api/v1/aiops/cases', { headers: SAME, data: { title, priority: 3, ...more } })
   expect(res.status(), await res.text()).toBe(201)
   return (await res.json()) as { id: string; number: number }
 }
 
 async function read(page: Page, id: string): Promise<Brief> {
-  const res = await page.request.get(`/api/v1/cases/cases/${id}`)
+  const res = await page.request.get(`/api/v1/aiops/cases/${id}`)
   expect(res.status(), await res.text()).toBe(200)
   return (await res.json()) as Brief
 }
@@ -47,8 +47,8 @@ test.afterAll(async ({ browser }) => {
   // What this spec opened and left open is closed again, so other specs see the Inbox as before.
   const page = await browser.newPage()
   await page.goto('/#/nodes')
-  const list = (await (await page.request.get(`/api/v1/cases/cases?q=${encodeURIComponent(tag)}`)).json()) as { cases: Brief[] }
-  for (const c of list.cases.filter((x) => x.status !== 'closed')) await page.request.post(`/api/v1/cases/cases/${c.id}/close`, { headers: SAME, data: { outcome: 'noAction', explanation: 'e2e: done' } })
+  const list = (await (await page.request.get(`/api/v1/aiops/cases?q=${encodeURIComponent(tag)}`)).json()) as { cases: Brief[] }
+  for (const c of list.cases.filter((x) => x.status !== 'closed')) await page.request.post(`/api/v1/aiops/cases/${c.id}/close`, { headers: SAME, data: { outcome: 'noAction', explanation: 'e2e: done' } })
   await page.close()
 })
 
@@ -63,7 +63,7 @@ test('closes the picked cases with one outcome; a case the outcome does not fit 
   // At P1 a fix needs an RCA: Close as fixed without one is refused for this one.
   const urgent = await open(page, `${tag} d: checkout down`, { priority: 1 })
 
-  await page.goto(`/#/cases/inbox?q=${encodeURIComponent(tag)}`)
+  await page.goto(`/#/aiops/inbox?q=${encodeURIComponent(tag)}`)
   await expect.poll(() => listed(page)).toHaveLength(4)
   await expect(page.getByTestId('inbox-bulkbar')).toHaveCount(0)
   // The heading's box picks every case in view.
@@ -122,7 +122,7 @@ test('fixed together with one RCA: what was done is its fix, each case keeps it 
   // A word only the RCA's cause has: the search finds the cases by it, not by their titles.
   const word = `watchcap${Date.now()}`
 
-  await page.goto(`/#/cases/inbox?q=${encodeURIComponent(`${tag} rca`)}`)
+  await page.goto(`/#/aiops/inbox?q=${encodeURIComponent(`${tag} rca`)}`)
   await expect.poll(() => listed(page)).toEqual(expect.arrayContaining([one.id, two.id]))
   for (const x of [one, two]) await page.locator(`[data-testid="inbox-pick"][data-id="${x.id}"]`).check()
   await page.getByTestId('inbox-bulk-close').click()
@@ -147,14 +147,14 @@ test('fixed together with one RCA: what was done is its fix, each case keeps it 
     expect(v.rca?.cause).toContain(word)
     expect(v.rca?.id).toBeUndefined()
   }
-  await page.goto(`/#/cases/inbox/case/${one.number}`)
+  await page.goto(`/#/aiops/inbox/case/${one.number}`)
   const rca = page.getByTestId('case-drawer').getByTestId('case-rca')
   await expect(rca).toContainText(word)
   await expect(rca.getByTestId('case-rca-together')).toContainText(`Closed together with ${two.id} (one RCA)`)
-  await expect(rca.getByTestId('case-rca-together-link')).toHaveAttribute('href', `#/cases/inbox/case/${two.number}`)
+  await expect(rca.getByTestId('case-rca-together-link')).toHaveAttribute('href', `#/aiops/inbox/case/${two.number}`)
 
   // Past RCAs are found by searching the closed cases: All, and a word of the cause.
-  await page.goto(`/#/cases/inbox?show=all&q=${word}`)
+  await page.goto(`/#/aiops/inbox?show=all&q=${word}`)
   await expect.poll(() => listed(page)).toEqual(expect.arrayContaining([one.id, two.id]))
 })
 
@@ -165,7 +165,7 @@ test('closes many as duplicates of one open case; the original cannot be one of 
   const one = await open(page, `${tag} dup 1: VPN drops`)
   const two = await open(page, `${tag} dup 2: the VPN keeps dropping`)
 
-  await page.goto(`/#/cases/inbox?q=${encodeURIComponent(`${tag} dup`)}`)
+  await page.goto(`/#/aiops/inbox?q=${encodeURIComponent(`${tag} dup`)}`)
   await expect.poll(() => listed(page)).toEqual(expect.arrayContaining([one.id, two.id]))
   for (const x of [one, two]) await page.locator(`[data-testid="inbox-pick"][data-id="${x.id}"]`).check()
   await expect(page.getByTestId('inbox-bulk-count')).toHaveText('2 selected')
@@ -188,7 +188,7 @@ test('closes many as duplicates of one open case; the original cannot be one of 
 test('the bulk route answers for each case, and refuses an empty list or more than 100 (CF-38)', async ({ page }) => {
   await page.goto('/#/nodes')
   const x = await open(page, `${tag} route: one case`)
-  const ok = await page.request.post('/api/v1/cases/cases/bulk', { headers: SAME, data: { cases: [x.id, 'C-999999'], action: 'priority', priority: 2 } })
+  const ok = await page.request.post('/api/v1/aiops/cases/bulk', { headers: SAME, data: { cases: [x.id, 'C-999999'], action: 'priority', priority: 2 } })
   expect(ok.status(), await ok.text()).toBe(200)
   const body = (await ok.json()) as { results: { id: string; ok: boolean; error?: string }[] }
   expect(body.results.find((r) => r.id === x.id)).toMatchObject({ ok: true })
@@ -196,7 +196,7 @@ test('the bulk route answers for each case, and refuses an empty list or more th
   expect(missing?.ok).toBe(false)
   expect(missing?.error).toBeTruthy()
   expect((await read(page, x.id)) as unknown as { priority: number }).toMatchObject({ priority: 2 })
-  expect((await page.request.post('/api/v1/cases/cases/bulk', { headers: SAME, data: { cases: [], action: 'analyze' } })).status()).toBe(400)
+  expect((await page.request.post('/api/v1/aiops/cases/bulk', { headers: SAME, data: { cases: [], action: 'analyze' } })).status()).toBe(400)
   const many = Array.from({ length: 101 }, (_, i) => `C-${i + 1}`)
-  expect((await page.request.post('/api/v1/cases/cases/bulk', { headers: SAME, data: { cases: many, action: 'analyze' } })).status()).toBe(400)
+  expect((await page.request.post('/api/v1/aiops/cases/bulk', { headers: SAME, data: { cases: many, action: 'analyze' } })).status()).toBe(400)
 })

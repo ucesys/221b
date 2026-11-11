@@ -48,7 +48,8 @@ type Options struct {
 	// SettingsConfigMap is a "namespace/name" ConfigMap that exists from
 	// the start, empty, as the chart's does, with the others the chart makes
 	// beside it: <name>-audit, -sessions, -automation, -automation-runs, -ai,
-	// -issues, -runs, -cases, -knowledge, -wiki and -casework.
+	// -issues, -runs, -proposals, -cases (kept for the copy of CF-104),
+	// -knowledge, -wiki and -casework.
 	// Empty means none.
 	SettingsConfigMap string
 	// Preload, with SettingsConfigMap, fills the console's ConfigMaps
@@ -206,7 +207,7 @@ func New(o Options) *Sim {
 		if o.Preload != nil {
 			data, objects = o.Preload(name)
 		}
-		for _, n := range []string{name, name + "-audit", name + "-sessions", name + "-automation", name + "-automation-runs", name + "-ai", name + "-issues", name + "-runs", name + "-cases", name + "-knowledge", name + "-wiki", name + "-casework"} {
+		for _, n := range []string{name, name + "-audit", name + "-sessions", name + "-automation", name + "-automation-runs", name + "-ai", name + "-issues", name + "-runs", name + "-proposals", name + "-cases", name + "-knowledge", name + "-wiki", name + "-casework"} {
 			d := map[string]string{}
 			for k, v := range data[n] {
 				d[k] = v

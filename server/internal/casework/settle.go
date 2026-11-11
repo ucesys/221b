@@ -176,7 +176,7 @@ func (s *Service) settleLater(n int, by cards.Person) {
 
 // answeredLater notes in a case's history that its reporter answered
 // the question asked: it no longer waits for them (CF-67).
-func (s *Service) answeredLater(n int, r issues.Report, by *issues.Person) {
+func (s *Service) answeredLater(n int, r issues.Case, by *issues.Person) {
 	actor := issues.Actor{Name: "the reporter", Kind: issues.ActorPerson}
 	if by != nil {
 		actor.Name = firstOf(by.Name, by.ID, actor.Name)

@@ -10,7 +10,7 @@ import (
 // --- Findings, exceptions and RCAs (Phase 12, FX-06, FX-10) ---
 //
 // The accepted exceptions, served by package lessons under
-// /api/v1/cases/exceptions for AIOps › Mycroft (an RCA is its case's
+// /api/v1/aiops/exceptions for AIOps › Mycroft (an RCA is its case's
 // since wave 6e, CF-44).
 // Those who see the cases read them: the approvers (cases.approverRoles),
 // the console-wide roles and the job editors; the approvers remove an
@@ -21,7 +21,7 @@ func (s *Server) lessonsRoutes() {
 		s.handle(rt.Pattern, rt.Name, rt.Handler)
 	}
 	// What New exception suggests as the object is typed (caseobjects.go).
-	s.handle("GET /api/v1/cases/objects", "cases-objects", s.caseObjects)
+	s.handle("GET /api/v1/aiops/objects", "cases-objects", s.caseObjects)
 }
 
 func (s *Server) lessonsCaller(r *http.Request) (lessons.Caller, bool) {

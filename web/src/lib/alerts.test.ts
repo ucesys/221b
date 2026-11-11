@@ -5,11 +5,73 @@ import type { AlertRow } from '../api/types'
 const now = Date.parse('2026-10-14T12:00:00Z')
 const ago = (min: number) => new Date(now - min * 60_000).toISOString()
 
-const pull: AlertRow = { key: 'pod:web/a', kind: 'pod', severity: 'failed', name: 'a', namespace: 'web', status: 'ImagePullBackOff', statusTone: 'err', node: 'w1', restarts: 0, started: ago(5), waiting: 'ImagePullBackOff', waitingMessage: 'Back-off pulling image "x"', events: [] }
-const pending: AlertRow = { key: 'pod:web/b', kind: 'pod', severity: 'pending', name: 'b', namespace: 'web', status: 'Pending', statusTone: 'warn', started: ago(12), why: "0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/selector.", events: [] }
-const oom: AlertRow = { key: 'pod:web/c', kind: 'pod', severity: 'recovered', name: 'c', namespace: 'web', status: 'Running', statusTone: 'ok', ready: 1, total: 1, restarts: 1, started: ago(30), lastReason: 'OOMKilled', lastExit: 137, lastAt: ago(4), oom: true, events: [] }
-const cordoned: AlertRow = { key: 'node:w2', kind: 'node', severity: 'warning', name: 'w2', role: 'worker', status: 'Ready,SchedulingDisabled', statusTone: 'warn', problems: [{ title: 'Cordoned', severity: 'warning', summary: 'New pods are not scheduled here.' }], events: [] }
-const down: AlertRow = { key: 'node:cp', kind: 'node', severity: 'error', name: 'cp', role: 'control-plane', status: 'Unknown', statusTone: 'err', problems: [{ title: 'Kubelet stopped reporting', severity: 'error', summary: 'No heartbeat.' }], events: [] }
+const pull: AlertRow = {
+  key: 'pod:web/a',
+  kind: 'pod',
+  severity: 'failed',
+  name: 'a',
+  namespace: 'web',
+  status: 'ImagePullBackOff',
+  statusTone: 'err',
+  node: 'w1',
+  restarts: 0,
+  started: ago(5),
+  waiting: 'ImagePullBackOff',
+  waitingMessage: 'Back-off pulling image "x"',
+  events: [],
+}
+const pending: AlertRow = {
+  key: 'pod:web/b',
+  kind: 'pod',
+  severity: 'pending',
+  name: 'b',
+  namespace: 'web',
+  status: 'Pending',
+  statusTone: 'warn',
+  started: ago(12),
+  why: "0/3 nodes are available: 3 node(s) didn't match Pod's node affinity/selector.",
+  events: [],
+}
+const oom: AlertRow = {
+  key: 'pod:web/c',
+  kind: 'pod',
+  severity: 'recovered',
+  name: 'c',
+  namespace: 'web',
+  status: 'Running',
+  statusTone: 'ok',
+  ready: 1,
+  total: 1,
+  restarts: 1,
+  started: ago(30),
+  lastReason: 'OOMKilled',
+  lastExit: 137,
+  lastAt: ago(4),
+  oom: true,
+  events: [],
+}
+const cordoned: AlertRow = {
+  key: 'node:w2',
+  kind: 'node',
+  severity: 'warning',
+  name: 'w2',
+  role: 'worker',
+  status: 'Ready,SchedulingDisabled',
+  statusTone: 'warn',
+  problems: [{ title: 'Cordoned', severity: 'warning', summary: 'New pods are not scheduled here.' }],
+  events: [],
+}
+const down: AlertRow = {
+  key: 'node:cp',
+  kind: 'node',
+  severity: 'error',
+  name: 'cp',
+  role: 'control-plane',
+  status: 'Unknown',
+  statusTone: 'err',
+  problems: [{ title: 'Kubelet stopped reporting', severity: 'error', summary: 'No heartbeat.' }],
+  events: [],
+}
 
 describe('alerts', () => {
   it('colours the Alerts tab’s name: red for failures, amber once they are acknowledged, nothing when all is well', () => {
@@ -83,7 +145,11 @@ describe('alerts', () => {
     const rows = [acked, pull, oom]
     expect(badgeOf(rows)).toEqual({ count: 2, tone: 'err' })
     expect(badgeOf([acked])).toEqual({ count: 1, tone: 'warn' })
-    expect(bannersOf(rows, now).map((b) => b.detail).join(' ')).not.toContain('web/d')
+    expect(
+      bannersOf(rows, now)
+        .map((b) => b.detail)
+        .join(' '),
+    ).not.toContain('web/d')
     expect(sectionsOf(rows).pods.map((r) => r.name)).toEqual(['a', 'd', 'c'])
     expect(sevLabel(oom)).toEqual({ label: 'Resolved', tone: 'ok' })
     expect(sevLabel(pending)).toEqual({ label: 'Pending', tone: 'warn' })

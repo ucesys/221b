@@ -223,7 +223,7 @@ func (h *handler) me(w http.ResponseWriter, r *http.Request, c Caller) {
 }
 
 // views turns reports into what the caller sees.
-func (h *handler) views(ctx context.Context, c Caller, list []Report) ([]ReportView, error) {
+func (h *handler) views(ctx context.Context, c Caller, list []Case) ([]ReportView, error) {
 	st, err := h.s.load(ctx, false)
 	if err != nil {
 		return nil, err
@@ -236,12 +236,12 @@ func (h *handler) views(ctx context.Context, c Caller, list []Report) ([]ReportV
 	return out, nil
 }
 
-func (h *handler) one(w http.ResponseWriter, r *http.Request, c Caller, rep Report, err error) {
+func (h *handler) one(w http.ResponseWriter, r *http.Request, c Caller, rep Case, err error) {
 	if err != nil {
 		failErr(w, err)
 		return
 	}
-	v, err := h.views(r.Context(), c, []Report{rep})
+	v, err := h.views(r.Context(), c, []Case{rep})
 	if err != nil {
 		failErr(w, err)
 		return

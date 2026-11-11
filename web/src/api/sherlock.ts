@@ -189,8 +189,7 @@ export interface AskContext {
   view: string
 }
 
-export const askSherlock = (cluster: string, question: string, ctx?: AskContext) =>
-  call<Conversation>('POST', apiPath('sherlock/ask', cluster), { question, ...(ctx ? { window: ctx.window, view: ctx.view } : {}) })
+export const askSherlock = (cluster: string, question: string, ctx?: AskContext) => call<Conversation>('POST', apiPath('sherlock/ask', cluster), { question, ...(ctx ? { window: ctx.window, view: ctx.view } : {}) })
 
 /** Sends a window's result of a UI action back to the answer waiting for it (P6U-17). */
 export async function postUIResult(cluster: string, id: string, result: unknown): Promise<void> {
@@ -214,9 +213,11 @@ export const saveSherlockConfig = (s: SherlockSettings) => call<SherlockConfig>(
 export const saveSherlockKey = (key: string) => call<SherlockConfig>('PUT', '/api/v1/sherlock/key', { key })
 export const deleteSherlockKey = () => call<SherlockConfig>('DELETE', '/api/v1/sherlock/key')
 /** The instructions Sherlock gets for a cluster, with the notes given (R2-05). */
-export const fetchSherlockPrompt = (cluster: string, notes: string, instructions: string) => call<{ core: string; cluster: string; builtIn: string }>('GET', `/api/v1/sherlock/prompt?cluster=${encodeURIComponent(cluster)}&notes=${encodeURIComponent(notes)}&instructions=${encodeURIComponent(instructions)}`)
+export const fetchSherlockPrompt = (cluster: string, notes: string, instructions: string) =>
+  call<{ core: string; cluster: string; builtIn: string }>('GET', `/api/v1/sherlock/prompt?cluster=${encodeURIComponent(cluster)}&notes=${encodeURIComponent(notes)}&instructions=${encodeURIComponent(instructions)}`)
 /** One question to Sherlock with the notes and instructions given, answered in full; the conversation is not kept. */
-export const testSherlock = (cluster: string, notes: string, instructions: string, question = '') => call<{ answer: string; model?: string; status?: string; error?: string }>('POST', '/api/v1/sherlock/test', { cluster, notes, instructions, question })
+export const testSherlock = (cluster: string, notes: string, instructions: string, question = '') =>
+  call<{ answer: string; model?: string; status?: string; error?: string }>('POST', '/api/v1/sherlock/test', { cluster, notes, instructions, question })
 
 export interface SherlockState {
   status: SherlockStatus | null

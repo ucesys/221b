@@ -1,6 +1,28 @@
 import { describe, expect, it } from 'vitest'
 import type { StorageClassInfo, StoragePair } from '../api/storage'
-import { bytes, bytesLong, classEntries, classKeyOf, comparePairs, heading, labelMatch, namespaceEntries, NO_CLAIM, NO_CLASS, NO_NODE, nodeEntries, nodeKeysOf, nsKeyOf, pairTerms, podsOpenByDefault, quotaText, scopeText, sidebarMatch, totals, type Selections } from './volumes'
+import {
+  bytes,
+  bytesLong,
+  classEntries,
+  classKeyOf,
+  comparePairs,
+  heading,
+  labelMatch,
+  namespaceEntries,
+  NO_CLAIM,
+  NO_CLASS,
+  NO_NODE,
+  nodeEntries,
+  nodeKeysOf,
+  nsKeyOf,
+  pairTerms,
+  podsOpenByDefault,
+  quotaText,
+  scopeText,
+  sidebarMatch,
+  totals,
+  type Selections,
+} from './volumes'
 import { matchesQuery, queryWords } from './table'
 
 const cls = (name: string, def = false, binding = 'Immediate'): StorageClassInfo => ({ name, provisioner: 'driver.longhorn.io', reclaim: 'Delete', binding, expansion: true, default: def, created: '2026-04-01T00:00:00Z' })
@@ -54,7 +76,11 @@ describe('storage', () => {
     const pairs = [rwx, pair({ state: 'pending', phase: 'Pending', claim: 'p', namespace: 'web' }), pair({ claim: 'etcd', namespace: 'kube-system', nodes: ['cp-1'] })]
     expect(nodeKeysOf(rwx).sort()).toEqual(['w1', 'w2'])
     expect(nodeKeysOf(pairs[1]!)).toEqual([NO_NODE])
-    const withNodes = nodeEntries(pairs, [{ name: 'cp-1', role: 'control-plane', cordoned: false }, { name: 'w1', role: 'worker', cordoned: true }, { name: 'w2', role: 'worker', cordoned: false }])
+    const withNodes = nodeEntries(pairs, [
+      { name: 'cp-1', role: 'control-plane', cordoned: false },
+      { name: 'w1', role: 'worker', cordoned: true },
+      { name: 'w2', role: 'worker', cordoned: false },
+    ])
     expect(withNodes.map((x) => [x.key, x.tag?.text ?? '', x.flag ?? ''])).toEqual([
       [NO_NODE, '', ''],
       ['cp-1', 'control-plane', ''],
@@ -113,9 +139,25 @@ describe('storage', () => {
   })
 
   it('writes the heading for a cluster-wide role and a namespace-bound one (ST-01)', () => {
-    const d = { classes: [cls('longhorn', true), cls('nfs')], quotas: [], pairs: [pair({ volume: 'a', claim: 'a', namespace: 'web', capacity: 4 * 2 ** 40, requested: 4 * 2 ** 40 }), pair({ volume: 'b', claim: 'b', namespace: 'batch', capacity: 2 * 2 ** 40, requested: 300 * GI }), pair({ state: 'available', phase: 'Available', volume: 'c', capacity: 2.6 * 2 ** 40 })] }
-    expect(heading(d, true).parts.map((p) => p.text).join('')).toBe('3 volumes · 8.6 TiB provisioned · 2 classes, default longhorn · 2 claims in 2 namespaces')
-    expect(heading(d, false).parts.map((p) => p.text).join('')).toBe('2 claims in batch and web · 4.3 TiB requested · the namespaces your role can see')
+    const d = {
+      classes: [cls('longhorn', true), cls('nfs')],
+      quotas: [],
+      pairs: [
+        pair({ volume: 'a', claim: 'a', namespace: 'web', capacity: 4 * 2 ** 40, requested: 4 * 2 ** 40 }),
+        pair({ volume: 'b', claim: 'b', namespace: 'batch', capacity: 2 * 2 ** 40, requested: 300 * GI }),
+        pair({ state: 'available', phase: 'Available', volume: 'c', capacity: 2.6 * 2 ** 40 }),
+      ],
+    }
+    expect(
+      heading(d, true)
+        .parts.map((p) => p.text)
+        .join(''),
+    ).toBe('3 volumes · 8.6 TiB provisioned · 2 classes, default longhorn · 2 claims in 2 namespaces')
+    expect(
+      heading(d, false)
+        .parts.map((p) => p.text)
+        .join(''),
+    ).toBe('2 claims in batch and web · 4.3 TiB requested · the namespaces your role can see')
   })
 
   it('formats sizes with three figures at most', () => {
@@ -136,7 +178,9 @@ describe('storage', () => {
 
   it('filters and sorts 2,000 claims in 50 classes within 200 ms (ST-12, ST-25)', () => {
     const classes = Array.from({ length: 50 }, (_, i) => cls(`class-${i}`, i === 0))
-    const pairs = Array.from({ length: 2000 }, (_, i) => pair({ claim: `data-${i}`, namespace: `ns-${i % 40}`, volume: `pvc-${i}`, class: `class-${i % 50}`, nodes: [`w${i % 30}`], capacity: (i % 100) * GI, state: i % 97 ? 'bound' : 'pending', phase: i % 97 ? 'Bound' : 'Pending' }))
+    const pairs = Array.from({ length: 2000 }, (_, i) =>
+      pair({ claim: `data-${i}`, namespace: `ns-${i % 40}`, volume: `pvc-${i}`, class: `class-${i % 50}`, nodes: [`w${i % 30}`], capacity: (i % 100) * GI, state: i % 97 ? 'bound' : 'pending', phase: i % 97 ? 'Bound' : 'Pending' }),
+    )
     const start = performance.now()
     const entries = [namespaceEntries(pairs, []), nodeEntries(pairs, []), classEntries(pairs, classes, true)]
     const s: Selections = { ns: new Set(['ns-1', 'ns-2']), node: null, cls: new Set(['class-1', 'class-2', 'class-11']) }

@@ -53,13 +53,15 @@ func MakeSeed(now time.Time) (Seed, error) {
 	dev := issues.Caller{Person: issues.Person{ID: "dev@corp.example", Name: "Dev Person", Email: "dev@corp.example"}, Report: true}
 	var runs []jobs.Run
 	var lowest *int
+	// rechecked is what the next run says of the fixes it re-checked (W-1).
+	var rechecked []jobs.Recheck
 	run := func(fs ...jobs.Finding) (jobs.RouteResult, error) {
 		id := fmt.Sprintf("run-%d", len(runs)+1)
 		for i := range fs {
 			fs[i].ID = fmt.Sprintf("%s.%d", id, i+1)
 		}
 		res := svc.Route(ctx, jobs.RouteInput{Run: id, Job: jobs.KindAudit, Kind: jobs.KindAudit, Label: "Nightly audit", Clusters: []string{"local"}, OK: true, Findings: fs,
-			Agent: "Auditor", MinPriority: lowest})
+			Agent: "Auditor", MinPriority: lowest, Scope: &jobs.Scope{Clusters: []string{"local"}}, Rechecked: rechecked})
 		r := jobs.Run{ID: id, Job: jobs.KindAudit, Kind: jobs.KindAudit, Label: "Nightly audit", Agent: "auditor",
 			Trigger: jobs.Trigger{Kind: jobs.TriggerSchedule, What: "Every day at 02:00, UTC", SetBy: "admin@corp.example"}, Clusters: []string{"local"},
 			Started: clock, Ended: clock.Add(3 * time.Minute), Status: jobs.StatusOK, Model: "claude-opus-5-5", Tokens: jobs.Tokens{In: 41000, Out: 2300}, CostUSD: 0.42,
@@ -76,8 +78,8 @@ func MakeSeed(now time.Time) (Seed, error) {
 	cert := f(jobs.FindingWarning, "cert.expiring", "shop/Certificate/shop-tls", "shop-tls expires in 12 days")
 	disk := f(jobs.FindingInfo, "node.disk-pressure", "Node/node-2", "node-2 reported disk pressure")
 	netpol := f(jobs.FindingWarning, "netpol.missing", "Namespace/analytics", "analytics has no network policy")
-	invalid := jobs.Finding{Severity: jobs.FindingWarning, Check: "rbac.everything", Title: "A check not in the catalogue", Cluster: "local", Resource: "crb/everyone",
-		Routing: jobs.RoutedInvalid, InvalidReason: `the check "rbac.everything" is not one of the nightly audit's, nor other.<slug> (lower case, digits, dashes, at most 48)`}
+	invalid := jobs.Finding{Severity: jobs.FindingWarning, Check: "rbac.everything", Title: "A validation rule not in the catalog", Cluster: "local", Resource: "crb/everyone",
+		Routing: jobs.RoutedInvalid, InvalidReason: `the validation rule "rbac.everything" is not one of the nightly audit's, nor other.<slug> (lower case, digits, dashes, at most 48)`}
 	// Day one: the first run opens a case of each.
 	res, err := run(limits, latest, priv, cert, disk)
 	if err != nil {
@@ -106,9 +108,12 @@ func MakeSeed(now time.Time) (Seed, error) {
 		return Seed{}, err
 	}
 	// Day three: every kind of routing; the job's lowest priority is P3
-	// by now, so the information on probes is ignored.
+	// by now, so the information on probes is ignored. The run re-checks
+	// the pinned tag and finds it gone, which verifies the fix.
 	clock = clock.Add(24 * time.Hour)
 	lowest = intPtr(jobs.DefaultMinPriority)
+	gone := false
+	rechecked = []jobs.Recheck{{Check: latest.Check, Resource: latest.Resource, Cluster: "local", Still: &gone, Evidence: "web runs the image web:2.4.1", Key: latest.Key}}
 	probes := f(jobs.FindingInfo, "pod.no-probes", "shop/Deployment/web", "web has no readiness probe")
 	day3, err := run(limits, priv, cert, netpol, invalid, probes)
 	if err != nil {
@@ -120,7 +125,7 @@ func MakeSeed(now time.Time) (Seed, error) {
 			return Seed{}, err
 		}
 		n, _ := number(nc)
-		if _, err := iss.Apply(ctx, n, func(tx *issues.Tx, r *issues.Report) error {
+		if _, err := iss.Apply(ctx, n, func(tx *issues.Tx, r *issues.Case) error {
 			tx.As(issues.SystemActor)
 			at := tx.Now()
 			r.AnalysisQueued = &at

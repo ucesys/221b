@@ -53,7 +53,11 @@ export function CommandDialog({ cluster, row, command, onClose, onSaved, onRun }
     if (mode === 'edit') first.current?.focus()
     else primary.current?.focus()
   }, [mode])
-  const paramList = () => params.split('\n').map((s) => s.trim()).filter(Boolean)
+  const paramList = () =>
+    params
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
   const call = async (what: () => Promise<void>) => {
     setBusy(true)
     setError('')
@@ -135,7 +139,16 @@ export function CommandDialog({ cluster, row, command, onClose, onSaved, onRun }
               </span>
             </Field>
             <Field label="Parameters" hint="One key=value per line, as helm --set takes them; applied over the saved values and parameters">
-              <textarea className="rk-area rk-mono" value={params} onChange={(e) => setParams(e.target.value)} spellCheck={false} style={{ minHeight: 96, fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }} placeholder={'replicaCount=4\nimage.tag=v1.2.0'} aria-label="Parameters" data-testid="command-params" />
+              <textarea
+                className="rk-area rk-mono"
+                value={params}
+                onChange={(e) => setParams(e.target.value)}
+                spellCheck={false}
+                style={{ minHeight: 96, fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }}
+                placeholder={'replicaCount=4\nimage.tag=v1.2.0'}
+                aria-label="Parameters"
+                data-testid="command-params"
+              />
             </Field>
           </div>
         )}

@@ -1,0 +1,44 @@
+# The console's names that Sherlock's AIOps skill (aiops.md) quotes, one
+# per line: each must be in aiops.md as written there and a label of the
+# browser app in web/src (P-8, aiopsskill_test.go). A name the console
+# changes fails the test until the skill says the new one.
+Inbox
+Jobs
+Mycroft
+Report this
+New case
+Analyze
+Troubleshoot
+Run in Watson
+Accept as exception…
+Approve
+Reject…
+Check again
+Review
+Run now
+Rebuild now
+Pause
+New exception
+Make active again
+Validation rules
+Known issues
+Exceptions
+Fixes
+Wiki
+Pending
+All
+Mine
+Unassigned
+People
+Agents
+Last change
+Schedule
+Runs
+Suggested
+Unlisted
+Retired
+Replaced
+Active
+Stale
+Expired
+Inactive

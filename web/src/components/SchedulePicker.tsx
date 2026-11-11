@@ -79,7 +79,21 @@ export function cronOf(s: Schedule): string {
  * in plain words with its next three times as it is edited. AIOps › Jobs
  * uses it; Administration › Backup's scheduled backups can too.
  */
-export function SchedulePicker({ value, onChange, describe, defaultZone = 'UTC', disabled, testId = 'sched' }: { value: Schedule; onChange: (s: Schedule) => void; describe?: (s: Schedule) => Promise<ScheduleWords>; defaultZone?: string; disabled?: boolean; testId?: string }) {
+export function SchedulePicker({
+  value,
+  onChange,
+  describe,
+  defaultZone = 'UTC',
+  disabled,
+  testId = 'sched',
+}: {
+  value: Schedule
+  onChange: (s: Schedule) => void
+  describe?: (s: Schedule) => Promise<ScheduleWords>
+  defaultZone?: string
+  disabled?: boolean
+  testId?: string
+}) {
   const [tz] = useState(zones)
   const [words, setWords] = useState<ScheduleWords>({})
   const set = (p: Partial<Schedule>) => onChange({ ...value, ...p })
@@ -103,7 +117,15 @@ export function SchedulePicker({ value, onChange, describe, defaultZone = 'UTC',
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }} data-testid={testId}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 10, alignItems: 'end' }}>
         <Labeled label="Repeat">
-          <Select label="Repeat" value={value.kind} options={SCHEDULE_KINDS} disabled={disabled} onChange={(v) => set({ kind: v as Schedule['kind'], at: value.at || '02:00', every: value.every || 6, days: value.days?.length ? value.days : ['mon'] })} testId={`${testId}-kind`} width="100%" />
+          <Select
+            label="Repeat"
+            value={value.kind}
+            options={SCHEDULE_KINDS}
+            disabled={disabled}
+            onChange={(v) => set({ kind: v as Schedule['kind'], at: value.at || '02:00', every: value.every || 6, days: value.days?.length ? value.days : ['mon'] })}
+            testId={`${testId}-kind`}
+            width="100%"
+          />
         </Labeled>
         {value.kind === 'hours' && (
           <Labeled label="Every (hours)">
@@ -140,7 +162,13 @@ export function SchedulePicker({ value, onChange, describe, defaultZone = 'UTC',
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', fontSize: 12.5 }} role="group" aria-label="Days">
           {DAYS.map(([d, l]) => (
             <label key={d} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <input type="checkbox" disabled={disabled} checked={!!value.days?.includes(d)} onChange={(e) => set({ days: e.target.checked ? [...(value.days ?? []), d] : (value.days ?? []).filter((x) => x !== d) })} data-testid={`${testId}-day-${d}`} />
+              <input
+                type="checkbox"
+                disabled={disabled}
+                checked={!!value.days?.includes(d)}
+                onChange={(e) => set({ days: e.target.checked ? [...(value.days ?? []), d] : (value.days ?? []).filter((x) => x !== d) })}
+                data-testid={`${testId}-day-${d}`}
+              />
               {l}
             </label>
           ))}

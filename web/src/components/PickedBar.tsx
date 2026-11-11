@@ -46,7 +46,13 @@ export function PickedBar({ cluster, nodes, all, fleets, rows, current, inFlow, 
         <button className="rk-btn" onClick={() => setDialog('new')} title="A new fleet of these nodes, by a label they share or a new one" data-testid="fleet-nodebar-new">
           New fleet…
         </button>
-        <button className="rk-btn" onClick={() => setDialog('add')} disabled={!fleets.some((f) => nodes.some((n) => !has(f, n)))} title={fleets.length ? 'Put these nodes in a fleet you choose' : 'No fleets yet: make one first'} data-testid="fleet-nodebar-add">
+        <button
+          className="rk-btn"
+          onClick={() => setDialog('add')}
+          disabled={!fleets.some((f) => nodes.some((n) => !has(f, n)))}
+          title={fleets.length ? 'Put these nodes in a fleet you choose' : 'No fleets yet: make one first'}
+          data-testid="fleet-nodebar-add"
+        >
           Add to a fleet…
         </button>
         <button className="rk-btn" onClick={() => setDialog('remove')} disabled={!inOne} title={inOne ? 'Take these nodes out of a fleet you choose' : 'None of these nodes is in a fleet'} data-testid="fleet-nodebar-remove">

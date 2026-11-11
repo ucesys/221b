@@ -94,7 +94,7 @@ func TestANotificationCarriesASummaryAndALinkOnly(t *testing.T) {
 				t.Errorf("%s: the message holds %q: %s", kind, never, body)
 			}
 		}
-		for _, want := range []string{"Restart shop/web", "prod-1", "Troubleshooter", "https://221b.example.com/#/cases/inbox?proposal=" + id, "2 people"} {
+		for _, want := range []string{"Restart shop/web", "prod-1", "Troubleshooter", "https://221b.example.com/#/aiops/inbox/proposal/" + id, "2 people"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s: the message lacks %q: %s", kind, want, body)
 			}
@@ -156,10 +156,10 @@ func TestANotificationCarriesASummaryAndALinkOnly(t *testing.T) {
 
 // What each kind of channel is sent.
 func TestEachChannelGetsItsOwnShape(t *testing.T) {
-	m := message{Text: "A proposal waits <here> & there", Link: "https://x/#/cases/inbox?proposal=PC-1", Card: summary{ID: "PC-1", Title: "t"}}
+	m := message{Text: "A proposed change waits <here> & there", Link: "https://x/#/aiops/inbox/proposal/PC-1", Card: summary{ID: "PC-1", Title: "t"}}
 	var slack struct{ Text string }
 	_ = json.Unmarshal(payload(ChannelSlack, m, false), &slack)
-	if slack.Text != "A proposal waits &lt;here&gt; &amp; there <https://x/#/cases/inbox?proposal=PC-1|Open in 221B>" {
+	if slack.Text != "A proposed change waits &lt;here&gt; &amp; there <https://x/#/aiops/inbox/proposal/PC-1|Open in 221B>" {
 		t.Errorf("slack %q", slack.Text)
 	}
 	var teams struct {

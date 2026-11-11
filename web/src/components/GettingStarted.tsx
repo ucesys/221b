@@ -109,7 +109,11 @@ export function GettingStartedSection({ onToast }: { onToast?: (msg: string) => 
           <Step key={st.id} st={st} next={st.id === view.next} last={i === view.steps.length - 1} busy={busy} onDismiss={(id, d) => void change([id], d)} />
         ))}
       </ol>
-      {!view.kept && <p className="rk-fhint" style={{ margin: 0 }}>Dismissed steps are kept in memory until the console restarts: it was started without a ConfigMap for its settings.</p>}
+      {!view.kept && (
+        <p className="rk-fhint" style={{ margin: 0 }}>
+          Dismissed steps are kept in memory until the console restarts: it was started without a ConfigMap for its settings.
+        </p>
+      )}
     </div>
   )
 }

@@ -140,9 +140,9 @@ func (s *Service) open(ctx context.Context, in NewCase, op opener) (caseInfo, bo
 		case analyse:
 			addEvent(w, Event{At: now, What: "The case analysis job started on it"})
 		case r.Cluster == "":
-			addEvent(w, Event{At: now, What: "Not analysed: it names no cluster"})
+			addEvent(w, Event{At: now, What: "Not analyzed: it names no cluster"})
 		default:
-			addEvent(w, Event{At: now, What: "Not analysed: the case analysis job is paused, or does not cover this cluster (AIOps › Jobs)"})
+			addEvent(w, Event{At: now, What: "Not analyzed: the case analysis job is paused, or does not cover this cluster (AIOps › Jobs)"})
 		}
 		return nil
 	})
@@ -273,7 +273,10 @@ func (s *Service) SimilarTo(ctx context.Context, in SimilarInput) (Similar, erro
 		}
 	}
 	if obj != "" {
-		list, _ := s.o.Lessons.Exceptions(ctx)
+		list, err := s.o.Lessons.Exceptions(ctx)
+		if err != nil {
+			return out, err
+		}
 		now := s.now()
 		for _, e := range list {
 			if e.Active(now) && strings.EqualFold(e.Resource, obj) && (in.Cluster == "" || e.Cluster == in.Cluster) && len(out.Exceptions) < similarMax {
@@ -301,8 +304,8 @@ func (s *Service) target(ctx context.Context, c Caller, id string) (int, issues.
 
 // apply changes one case in the issue service, as one change by an
 // actor (CF-35).
-func (s *Service) apply(ctx context.Context, n int, by issues.Actor, fn func(tx *issues.Tx, r *issues.Report) error) (issues.Report, error) {
-	r, err := s.o.Issues.Apply(ctx, n, func(tx *issues.Tx, r *issues.Report) error {
+func (s *Service) apply(ctx context.Context, n int, by issues.Actor, fn func(tx *issues.Tx, r *issues.Case) error) (issues.Case, error) {
+	r, err := s.o.Issues.Apply(ctx, n, func(tx *issues.Tx, r *issues.Case) error {
 		tx.As(by)
 		return fn(tx, r)
 	})
@@ -328,7 +331,7 @@ func (s *Service) Join(ctx context.Context, id, text string, c Caller) (View, er
 		return View{}, err
 	}
 	p := c.issue().Person
-	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Report) error {
+	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Case) error {
 		if err := tx.Follow(r, p); err != nil {
 			return err
 		}
@@ -445,7 +448,7 @@ func (s *Service) Update(ctx context.Context, id string, ch Change, c Caller) (V
 			said = append(said, map[bool]string{true: "its SLA clock started", false: "its SLA clock stopped"}[after.SLAFrom != nil])
 		}
 	}
-	if after.Title != before.Report.Title && ch.Title != nil {
+	if after.Title != before.Case.Title && ch.Title != nil {
 		said = append(said, "title changed")
 	}
 	if after.Text != before.Text {
@@ -469,13 +472,13 @@ func (s *Service) Update(ctx context.Context, id string, ch Change, c Caller) (V
 	// The type and the incident number have audit actions of their own
 	// (CF-36, CF-37).
 	var own []string
-	if after.CaseType() != before.Report.CaseType() {
-		what := fmt.Sprintf("type %s → %s", before.Report.CaseType(), after.CaseType())
+	if after.CaseType() != before.Case.CaseType() {
+		what := fmt.Sprintf("type %s → %s", before.Case.CaseType(), after.CaseType())
 		own = append(own, what)
 		s.record(audit.Event{Action: ActionType, Who: who(c.Person), Cluster: after.Cluster, Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("case %s: %s", caseID(n), what)})
 	}
-	if after.Incident != before.Report.Incident {
-		what := fmt.Sprintf("incident number %s → %s", firstOf(before.Report.Incident, "none"), firstOf(after.Incident, "none"))
+	if after.Incident != before.Case.Incident {
+		what := fmt.Sprintf("incident number %s → %s", firstOf(before.Case.Incident, "none"), firstOf(after.Incident, "none"))
 		own = append(own, what)
 		s.record(audit.Event{Action: ActionIncident, Who: who(c.Person), Cluster: after.Cluster, Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("case %s: %s", caseID(n), what)})
 	}
@@ -509,7 +512,7 @@ func (s *Service) Say(ctx context.Context, id string, m Message, c Caller) (View
 	if !m.Internal && v.Kind() != SourceReport {
 		return View{}, fmt.Errorf("%w: %s has no reporter to reply to; add an internal note", ErrInvalid, caseID(n))
 	}
-	before := shownStatus(v.Report)
+	before := shownStatus(v.Case)
 	after, err := s.o.Issues.AddMessage(ctx, c.issue(), n, m.Text, m.Internal)
 	if err != nil {
 		return View{}, s.fromIssues(err)
@@ -550,7 +553,7 @@ func (s *Service) SendDraft(ctx context.Context, id string, msg int, text string
 	}
 	// Sent by a person, an agent's draft is the person's reply (CF-45,
 	// CF-67): a New case goes In progress.
-	if now := shownStatus(after); now != shownStatus(v.Report) {
+	if now := shownStatus(after); now != shownStatus(v.Case) {
 		s.note(ctx, n, Event{At: s.now(), What: "Reply sent, now " + now, By: c.actor()})
 	}
 	return s.Get(ctx, c, caseID(n))
@@ -599,12 +602,12 @@ func (s *Service) Known(ctx context.Context, id string, in KnownLink, c Caller) 
 	kid := strings.TrimSpace(in.ID)
 	made := false
 	if in.Create != nil {
-		title := firstOf(in.Create.Title, v.Report.Title)
+		title := firstOf(in.Create.Title, v.Case.Title)
 		status := issues.KnownIdentified
 		src := issues.SourceOperator
 		ki := issues.KnownInput{Title: &title, Symptoms: in.Create.Symptoms, Status: &status, Source: &src, Services: in.Create.Services}
-		if len(ki.Symptoms) == 0 && v.Report.Title != "" {
-			ki.Symptoms = []string{v.Report.Title}
+		if len(ki.Symptoms) == 0 && v.Case.Title != "" {
+			ki.Symptoms = []string{v.Case.Title}
 		}
 		if w := strings.TrimSpace(in.Create.Workaround); w != "" {
 			ki.Workaround = &w
@@ -622,7 +625,7 @@ func (s *Service) Known(ctx context.Context, id string, in KnownLink, c Caller) 
 		return View{}, fmt.Errorf("%w: name the known issue, or make one", ErrInvalid)
 	}
 	p := c.issue().Person
-	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Report) error {
+	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Case) error {
 		if err := r.MayClose(issues.OutcomeKnownIssue); err != nil {
 			return err
 		}
@@ -675,33 +678,33 @@ func (s *Service) Fix(ctx context.Context, id string, in FixInput, c Caller) (Vi
 	if text == "" {
 		return View{}, fmt.Errorf("%w: say what was done to fix it", ErrInvalid)
 	}
-	if err := v.Report.MayClose(issues.OutcomeFix); err != nil {
+	if err := v.Case.MayClose(issues.OutcomeFix); err != nil {
 		return View{}, s.fromIssues(err)
 	}
 	hasRCA := in.RCA != nil && !in.RCA.Empty()
-	if v.Report.RCARequired() && !hasRCA {
+	if v.Case.RCARequired() && !hasRCA {
 		return View{}, fmt.Errorf("%w: %w at P%d: give the cause and the prevention", ErrInvalid, ErrRCARequired, v.Priority)
 	}
 	now := s.now()
 	var rca *RCA
 	if hasRCA {
-		rca = &RCA{Case: caseID(n), Title: firstOf(v.Report.Title, caseID(n)), Cluster: v.Cluster, Resource: v.Object, Priority: v.Priority,
+		rca = &RCA{Case: caseID(n), Title: firstOf(v.Case.Title, caseID(n)), Cluster: v.Cluster, Resource: v.Object, Priority: v.Priority,
 			Cause: clip(in.RCA.Cause, MaxRCAField), Fix: clip(text, MaxRCAField), Prevention: clip(in.RCA.Prevention, MaxRCAField), Text: clip(in.RCA.Text, MaxRCAField), By: c.Label(), At: now}
 		if rca.Cause == "" {
 			return View{}, fmt.Errorf("%w: an RCA says what the cause was", ErrInvalid)
 		}
 	}
 	p := c.issue().Person
-	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Report) error {
+	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Case) error {
 		if err := r.MayClose(issues.OutcomeFix); err != nil {
 			return err
 		}
 		// A fix a change applied that a run verified already stays
 		// verified (CF-30): no run checks it again.
-		verified, at := r.Verification == issues.VerifyVerified, r.Verified
+		verified, at, by := r.Verification == issues.VerifyVerified, r.Verified, r.VerifiedBy
 		issues.CloseCase(r, p, issues.OutcomeFix, text, tx.Now())
 		if verified {
-			r.VerifyPending, r.Verified = false, at
+			r.VerifyPending, r.Verified, r.VerifiedBy = false, at, by
 		}
 		if rca != nil {
 			r.RCACause = clip(rca.Cause, issues.MaxShort)
@@ -794,7 +797,7 @@ func (s *Service) Close(ctx context.Context, id string, in CloseInput, c Caller)
 	}
 	p := c.issue().Person
 	end, agent := 0, false
-	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Report) error {
+	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Case) error {
 		if err := r.MayClose(in.Outcome); err != nil {
 			return err
 		}
@@ -866,7 +869,7 @@ func (s *Service) Exception(ctx context.Context, id string, in ExceptionInput, c
 	if err != nil {
 		return View{}, err
 	}
-	if err := v.Report.MayClose(issues.OutcomeException); err != nil {
+	if err := v.Case.MayClose(issues.OutcomeException); err != nil {
 		return View{}, s.fromIssues(err)
 	}
 	reason := clip(in.Reason, 1000)
@@ -881,12 +884,12 @@ func (s *Service) Exception(ctx context.Context, id string, in ExceptionInput, c
 		}
 		until = d.Add(24*time.Hour - time.Second)
 	}
-	k := v.Report.Key
+	k := v.Case.Key
 	if k == nil {
 		return View{}, fmt.Errorf("%w: %s has no key to except", ErrInvalid, caseID(n))
 	}
-	e, err := s.o.Lessons.AddException(ctx, lessons.NewException{Cluster: k.Cluster, Resource: k.Object, Check: k.Check, Title: v.Report.Title, Detail: v.Text,
-		Finding: v.Report.Finding, Run: v.Report.Run, Job: v.Report.Job, Reason: reason, Expires: until, Case: caseID(n)}, lessons.Person(c.Person))
+	e, err := s.o.Lessons.AddException(ctx, lessons.NewException{Cluster: k.Cluster, Resource: k.Object, Check: k.Check, Title: v.Case.Title, Detail: v.Text,
+		Finding: v.Case.Finding, Run: v.Case.Run, Job: v.Case.Job, Reason: reason, Expires: until, Case: caseID(n)}, lessons.Person(c.Person))
 	if err != nil {
 		if errors.Is(err, lessons.ErrInvalid) {
 			return View{}, fmt.Errorf("%w: %s", ErrInvalid, strings.TrimPrefix(err.Error(), lessons.ErrInvalid.Error()+": "))
@@ -894,7 +897,7 @@ func (s *Service) Exception(ctx context.Context, id string, in ExceptionInput, c
 		return View{}, err
 	}
 	p := c.issue().Person
-	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Report) error {
+	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Case) error {
 		if err := r.MayClose(issues.OutcomeException); err != nil {
 			return err
 		}
@@ -934,14 +937,14 @@ func (s *Service) Reopen(ctx context.Context, id, reason string, c Caller) (View
 		return View{}, fmt.Errorf("%w: %s is still open", ErrState, caseID(n))
 	}
 	ex := ""
-	if v.Outcome == issues.OutcomeException && v.Report.Exception != "" {
+	if v.Outcome == issues.OutcomeException && v.Case.Exception != "" {
 		if !c.Approve {
-			return View{}, fmt.Errorf("%w: %s is the exception %s; only those who may approve proposed changes remove it", ErrDenied, caseID(n), v.Report.Exception)
+			return View{}, fmt.Errorf("%w: %s is the exception %s; only those who may approve proposed changes remove it", ErrDenied, caseID(n), v.Case.Exception)
 		}
-		ex = v.Report.Exception
+		ex = v.Case.Exception
 	}
 	p := c.issue().Person
-	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Report) error {
+	r, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Case) error {
 		if r.Status.Open() {
 			return fmt.Errorf("%w: %s is still open", issues.ErrInvalid, caseID(n))
 		}
@@ -1001,7 +1004,7 @@ func (s *Service) Offer(ctx context.Context, id string, in issues.Offer, c Calle
 			return View{}, err
 		}
 		what = fmt.Sprintf("The exception %s of %s removed; this case stays open", offer.Exception, caseID(end))
-		if _, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Report) error {
+		if _, err := s.apply(ctx, n, c.actor(), func(tx *issues.Tx, r *issues.Case) error {
 			r.SameAs = end
 			return tx.Note(r, p, what, true)
 		}); err != nil {
@@ -1088,13 +1091,13 @@ func (s *Service) Analyze(ctx context.Context, id string, c Caller) (View, error
 		return View{}, err
 	}
 	if cur.Analyzing {
-		return View{}, fmt.Errorf("%w: %s is being analysed", ErrState, caseID(n))
+		return View{}, fmt.Errorf("%w: %s is being analyzed", ErrState, caseID(n))
 	}
 	info := infoOf(cur)
 	if s.o.Jobs == nil || !s.o.Jobs.On(ctx, jobs.KindCase, s.event(info, false)) {
 		return View{}, fmt.Errorf("%w: turn the case analysis job on in AIOps › Jobs (it must cover %s)", ErrOff, v.Cluster)
 	}
-	s.note(ctx, n, Event{At: s.now(), What: "Asked the case analysis job to analyse it again", By: c.actor()})
+	s.note(ctx, n, Event{At: s.now(), What: "Asked the case analysis job to analyze it again", By: c.actor()})
 	s.record(audit.Event{Action: ActionAnalyze, Who: who(c.Person), Cluster: v.Cluster, Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("case %s: its analysis started again", caseID(n))})
 	s.startAnalysis(ctx, n, c.actor())
 	out, err := s.Get(ctx, c, caseID(n))
@@ -1114,7 +1117,7 @@ func (s *Service) startAnalysis(ctx context.Context, n int, by issues.Actor) {
 		rec.Analyzing[fmt.Sprint(n)] = now
 		return nil
 	})
-	if _, err := s.o.Issues.Apply(ctx, n, func(tx *issues.Tx, r *issues.Report) error {
+	if _, err := s.o.Issues.Apply(ctx, n, func(tx *issues.Tx, r *issues.Case) error {
 		tx.As(by)
 		r.AnalysisQueued = nil
 		return nil

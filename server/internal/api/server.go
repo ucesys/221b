@@ -265,7 +265,7 @@ type Options struct {
 	Issues     *issues.Service
 	IssueRoles IssueRoles
 	// --- Watson cards (Phase 12, ADR-99 to ADR-102) ---
-	// Cards keeps the agents' proposals, served under /api/v1/cases/;
+	// Cards keeps the agents' proposals, served under /api/v1/aiops/;
 	// CardRoles are the roles that may approve them (cases.approverRoles),
 	// besides a SuperAdmin. nil leaves them out.
 	Cards     *cards.Store
@@ -276,9 +276,9 @@ type Options struct {
 	Jobs *jobs.Service
 	// --- Findings, exceptions and RCAs (Phase 12) ---
 	// Lessons keeps the accepted exceptions, served under
-	// /api/v1/cases/exceptions; nil leaves them out.
+	// /api/v1/aiops/exceptions; nil leaves them out.
 	Lessons *lessons.Service
-	// Fixes keeps the fixes, served under /api/v1/cases/fixes (wave 6g);
+	// Fixes keeps the fixes, served under /api/v1/aiops/fixes (wave 6g);
 	// nil serves none.
 	Fixes *fixes.Service
 	// --- Knowledge (Phase 12) ---
@@ -286,7 +286,7 @@ type Options struct {
 	// served under /api/v1/knowledge/; nil leaves them out.
 	Knowledge *knowledge.Service
 	// --- Case work (Phase 12, CW-10) ---
-	// Casework keeps the cases, served under /api/v1/cases/cases; nil
+	// Casework keeps the cases, served under /api/v1/aiops/cases; nil
 	// leaves AIOps › Cases out.
 	Casework *casework.Service
 	// --- end of Watson cards.

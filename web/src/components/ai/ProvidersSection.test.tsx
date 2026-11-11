@@ -7,7 +7,18 @@ function overview(): AIOverview {
   return {
     providers: [
       // The default provider as an upgrade from 0.11 has it: no kind saved.
-      { id: 'default', name: 'Anthropic', kind: '' as 'anthropic', model: 'claude-opus-5-5', resolved: { kind: 'anthropic', auth: 'header' }, default: true, locked: false, needsKey: true, key: { set: false, store: 'secret' }, usedBy: ['Sherlock'] },
+      {
+        id: 'default',
+        name: 'Anthropic',
+        kind: '' as 'anthropic',
+        model: 'claude-opus-5-5',
+        resolved: { kind: 'anthropic', auth: 'header' },
+        default: true,
+        locked: false,
+        needsKey: true,
+        key: { set: false, store: 'secret' },
+        usedBy: ['Sherlock'],
+      },
     ],
     agents: [],
     models: [{ id: 'claude-opus-5-5', label: 'Claude Opus 5.5', in: 4, out: 20 }],
@@ -70,7 +81,19 @@ describe('the Providers section', () => {
 // --- AI settings, round 2 (Phase 12, wave 5) ---
 describe('a provider without a credential, tested in its dialog', () => {
   const calls: { method: string; url: string; body?: unknown }[] = []
-  const a5000 = { id: 'a5000', name: 'A5000', kind: 'openai' as const, endpoint: 'http://a5000.lan:8000/v1', model: 'qwen3.8-27b', resolved: { kind: 'openai' as const, auth: 'header' as const }, default: false, locked: false, needsKey: true, key: { set: false, store: 'secret' as const }, usedBy: [] }
+  const a5000 = {
+    id: 'a5000',
+    name: 'A5000',
+    kind: 'openai' as const,
+    endpoint: 'http://a5000.lan:8000/v1',
+    model: 'qwen3.8-27b',
+    resolved: { kind: 'openai' as const, auth: 'header' as const },
+    default: false,
+    locked: false,
+    needsKey: true,
+    key: { set: false, store: 'secret' as const },
+    usedBy: [],
+  }
   let tested = false
   beforeEach(() => {
     Element.prototype.scrollTo = () => {}
@@ -81,7 +104,15 @@ describe('a provider without a credential, tested in its dialog', () => {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       calls.push({ method: init?.method ?? 'GET', url: u, body })
       if (u.endsWith('/providers/try')) return new Response(JSON.stringify({ ok: true, model: body.model, ms: 800, answer: 'I can hear the console.', keyless: true }))
-      if (u.endsWith('/models')) return new Response(JSON.stringify({ models: [{ id: 'qwen3.8-27b', contextWindow: 16384 }, { id: 'llama-4-scout-17b', contextWindow: 8192 }] }))
+      if (u.endsWith('/models'))
+        return new Response(
+          JSON.stringify({
+            models: [
+              { id: 'qwen3.8-27b', contextWindow: 16384 },
+              { id: 'llama-4-scout-17b', contextWindow: 8192 },
+            ],
+          }),
+        )
       if (u.endsWith('/a5000/test')) {
         tested = true
         return new Response(JSON.stringify({ ok: true, model: 'qwen3.8-27b', ms: 700, answer: 'Heard.', keyless: true }))

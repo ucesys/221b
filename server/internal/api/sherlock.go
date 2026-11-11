@@ -19,6 +19,7 @@ import (
 	"github.com/ucesys/221b/server/internal/platform"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/watson"
 )
 
 // Sherlock (Phase 5) answers questions about a cluster. Each person has a
@@ -208,7 +209,7 @@ func (s *Server) postSherlockAsk(w http.ResponseWriter, r *http.Request) {
 		// Sherlock's setup skill is a SuperAdmin's (Phase 12, GS-07).
 		SuperAdmin: s.isSuperAdmin(r),
 		// Asked from Cases, Sherlock knows its pages (IB-10).
-		Cases: fromCases(in.View),
+		Cases: fromAIOps(in.View),
 		// The exceptions are for those who see the cases (KN-32).
 		Exceptions: s.readsExceptions(r),
 	})
@@ -479,8 +480,8 @@ func (s *Server) getSherlockPrompt(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, r, b)
 		return
 	}
-	core, cluster := sherlock.PromptText(sherlock.Question{Cluster: name, Version: version, Platform: s.platformPrompt(r, cl, name, version), Notes: notes, Instructions: instructions, ViewChanges: view}, s.opts.Now())
-	b, _ := json.Marshal(map[string]string{"core": core, "cluster": cluster, "builtIn": sherlock.BuiltIn(view)})
+	core, cluster := sherlock.PromptText(sherlock.Question{Cluster: name, Version: version, Platform: s.platformPrompt(r, cl, name, version), Notes: notes, Instructions: instructions, ViewChanges: view, Commands: watson.Commands()}, s.opts.Now())
+	b, _ := json.Marshal(map[string]string{"core": core, "cluster": cluster, "builtIn": sherlock.BuiltIn(view, watson.Commands())})
 	writeJSON(w, r, b)
 }
 
@@ -800,13 +801,14 @@ func (s *Server) recordOutcome(r *http.Request, action, target, detail, outcome 
 	s.opts.Audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, Target: target, Detail: detail, Outcome: outcome, From: fromAddr(r)})
 }
 
-// --- Inbox and Sherlock in Cases (Phase 12) ---
+// --- Inbox and Sherlock in AIOps (Phase 12) ---
 
-// fromCases says whether a question's view state is a page of the Cases
-// area (lib/uiControl.ts viewState: "view":"cases").
-func fromCases(view string) bool {
+// fromAIOps says whether a question's view state is a page of the AIOps
+// area (lib/uiControl.ts viewState: "view":"aiops"). A page loaded before
+// the area's id was aiops (CF-104) still says "cases" until it reloads.
+func fromAIOps(view string) bool {
 	var v struct {
 		View string `json:"view"`
 	}
-	return view != "" && json.Unmarshal([]byte(view), &v) == nil && v.View == "cases"
+	return view != "" && json.Unmarshal([]byte(view), &v) == nil && (v.View == "aiops" || v.View == "cases")
 }

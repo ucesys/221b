@@ -323,14 +323,14 @@ func (s *Store) messageFor(c Card, link string) message {
 	if c.Needed > 1 {
 		people = fmt.Sprintf("%d people's approval", c.Needed)
 	}
-	text := fmt.Sprintf("A proposal waits for approval on %s: %s. Proposed by %s", sum.Cluster, sum.Title, sum.Agent)
+	text := fmt.Sprintf("A proposed change waits for approval on %s: %s. Proposed by %s", sum.Cluster, sum.Title, sum.Agent)
 	if sum.Source != "" {
 		text += ", " + sum.Source
 	}
 	text += fmt.Sprintf(". It needs %s and expires %s.", people, c.Expires.UTC().Format("2006-01-02 15:04 UTC"))
 	m := message{Text: text, Card: sum}
 	if link != "" {
-		m.Link = link + "/#/cases/inbox?proposal=" + url.QueryEscape(c.ID)
+		m.Link = link + "/#/aiops/inbox/proposal/" + url.PathEscape(c.ID)
 	} else {
 		m.Text += " Open AIOps › Inbox in 221B."
 	}
@@ -452,9 +452,9 @@ func (s *Store) TestChannel(ctx context.Context, id string, by Person) error {
 	if urls[id] == "" {
 		return fmt.Errorf("%w: %s has no address", ErrInvalid, ch.Name)
 	}
-	m := message{Text: "A test message from 221B, sent by " + by.Name + ": proposals that wait for approval are announced here."}
+	m := message{Text: "A test message from 221B, sent by " + by.Name + ": proposed changes that wait for approval are announced here."}
 	if set.Link != "" {
-		m.Link = set.Link + "/#/cases/inbox"
+		m.Link = set.Link + "/#/aiops/inbox"
 	}
 	err = s.deliver(ctx, ch, urls[id], payload(ch.Kind, m, true), "a test")
 	if s.opts.Audit != nil {

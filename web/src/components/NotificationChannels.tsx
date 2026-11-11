@@ -88,7 +88,9 @@ export function NotificationChannels() {
     <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Notifications" data-testid="notify-channels">
       <h3 className="rk-h">Notifications of proposed changes</h3>
       <p className="rk-fhint" style={{ margin: 0 }}>
-        A proposed change that waits for approval is announced here as well as on the gear: its title, cluster, agent and a link, never its reasoning, evidence, commands or any output. Each address is kept {saved.inSecret ? 'in a Secret' : 'in memory, until the console restarts'} and never shown again. With the chart’s network policy on, the console reaches Slack and Teams over sherlock.egress; list other webhooks under networkPolicy.outboundCIDRs.
+        A proposed change that waits for approval is announced here as well as on the gear: its title, cluster, agent and a link, never its reasoning, evidence, commands or any output. Each address is kept{' '}
+        {saved.inSecret ? 'in a Secret' : 'in memory, until the console restarts'} and never shown again. With the chart’s network policy on, the console reaches Slack and Teams over sherlock.egress; list other webhooks under
+        networkPolicy.outboundCIDRs.
       </p>
       <label className="rk-field" style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 420 }}>
         <span className="rk-flabel">The console’s address, for the links</span>
@@ -172,7 +174,11 @@ export function NotificationChannels() {
             {note}
           </span>
         ) : (
-          changed && <span className="rk-fhint" style={{ fontSize: 12.5 }}>Not saved yet.</span>
+          changed && (
+            <span className="rk-fhint" style={{ fontSize: 12.5 }}>
+              Not saved yet.
+            </span>
+          )
         )}
       </div>
     </section>

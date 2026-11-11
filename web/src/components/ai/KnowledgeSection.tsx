@@ -27,7 +27,7 @@ import {
 } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
 import { adminHref } from '../../lib/router'
-import { jobHref, scheduleHref } from '../cases/jobsRoute'
+import { jobHref, scheduleHref } from '../aiops/jobsRoute'
 import { Drawer } from '../Drawer'
 import { Select } from '../Select'
 import { AddedInMycroft } from './AddedInMycroft'
@@ -122,7 +122,12 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
       setBusy(false)
     }
   }
-  if (!v) return <p className={error ? 'rk-t' : 'rk-fhint'} data-tone={error ? 'err' : undefined} style={{ margin: 0 }}>{error || 'Loading Mycroft’s sources…'}</p>
+  if (!v)
+    return (
+      <p className={error ? 'rk-t' : 'rk-fhint'} data-tone={error ? 'err' : undefined} style={{ margin: 0 }}>
+        {error || 'Loading Mycroft’s sources…'}
+      </p>
+    )
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 16 }} aria-label="Knowledge" data-testid="knowledge-section">
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
@@ -183,8 +188,17 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
                   <tr key={s.id} data-testid="knowledge-source" data-source={s.id}>
                     <td>
                       <strong>{s.name}</strong>
-                      {s.kind === 'confluence' && <div className="rk-fhint rk-mono">{s.space} · {s.baseURL}</div>}
-                      {s.kind === 'git' && <div className="rk-fhint rk-mono">{s.url}{s.path ? ` /${s.path}` : ''} @ {s.branch}</div>}
+                      {s.kind === 'confluence' && (
+                        <div className="rk-fhint rk-mono">
+                          {s.space} · {s.baseURL}
+                        </div>
+                      )}
+                      {s.kind === 'git' && (
+                        <div className="rk-fhint rk-mono">
+                          {s.url}
+                          {s.path ? ` /${s.path}` : ''} @ {s.branch}
+                        </div>
+                      )}
                       {s.kind === 's3' && (
                         <div className="rk-fhint rk-mono" data-testid="knowledge-source-bucket-line">
                           s3://{s.bucket}/{s.prefix ?? ''}
@@ -195,7 +209,11 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
                     <td>
                       {SOURCE_KIND_LABEL[s.kind]}
                       {(s.kind === 'confluence' || s.kind === 'git') && <div className="rk-fhint">{v.creds[s.id]?.token ? 'token in a Secret' : 'no token'}</div>}
-                      {s.kind === 's3' && <div className="rk-fhint" data-testid="knowledge-source-creds">{bucketCreds(v, s)}</div>}
+                      {s.kind === 's3' && (
+                        <div className="rk-fhint" data-testid="knowledge-source-creds">
+                          {bucketCreds(v, s)}
+                        </div>
+                      )}
                       {s.kind === 'console' && <div className="rk-fhint">Clusters, nodes, hosts, fleets, applications, scripts</div>}
                       {s.kind === 'fixes' && <div className="rk-fhint">Fixes seen in 3 cases or more, offered by the housekeeping for a runbook</div>}
                     </td>
@@ -240,7 +258,9 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
       </section>
       <StoreCard v={v} onSaved={() => void reload()} onToast={onToast} />
       <section aria-label="More" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-        <h3 className="rk-h" style={{ marginBottom: 4 }}>Freshness and pushes</h3>
+        <h3 className="rk-h" style={{ marginBottom: 4 }}>
+          Freshness and pushes
+        </h3>
         <StaleDays v={v} run={run} busy={busy} />
         <HookToken set={v.hook} run={run} busy={busy} />
         <Row label="Mycroft’s model" hint="Its model, budget and instructions">
@@ -338,7 +358,8 @@ function HookToken({ set, run, busy }: { set: boolean; run: (fn: () => Promise<u
   return (
     <Row label="Webhook" hint="Pushes and bucket notifications read the wiki again at once">
       <span className="rk-fhint">
-        A git host or bucket calls <span className="rk-mono">/api/v1/knowledge/hook/wiki</span> (or <span className="rk-mono">hook/&lt;source id&gt;</span> for a repository of runbooks) with this token: as GitHub’s secret, GitLab’s token, or a bearer token.
+        A git host or bucket calls <span className="rk-mono">/api/v1/knowledge/hook/wiki</span> (or <span className="rk-mono">hook/&lt;source id&gt;</span> for a repository of runbooks) with this token: as GitHub’s secret, GitLab’s token,
+        or a bearer token.
       </span>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span className="rk-pill" data-tone={set ? 'ok' : 'muted'} data-testid="knowledge-hook-state">
@@ -353,7 +374,16 @@ function HookToken({ set, run, busy }: { set: boolean; run: (fn: () => Promise<u
             <span className="rk-field" style={{ width: 260 }}>
               <input type="password" autoComplete="off" value={token} placeholder="16 characters or more" onChange={(e) => setToken(e.target.value)} aria-label="Webhook token" data-testid="knowledge-hook-token" />
             </span>
-            <button className="rk-btn" disabled={busy || token.length < 16} onClick={() => void run(() => saveHookToken(token), 'Webhook token saved.').then(() => { setToken(''); setOpen(false) })}>
+            <button
+              className="rk-btn"
+              disabled={busy || token.length < 16}
+              onClick={() =>
+                void run(() => saveHookToken(token), 'Webhook token saved.').then(() => {
+                  setToken('')
+                  setOpen(false)
+                })
+              }
+            >
               Save
             </button>
             {set && (
@@ -369,7 +399,13 @@ function HookToken({ set, run, busy }: { set: boolean; run: (fn: () => Promise<u
 }
 
 const blankStore = (kind: StoreSettings['kind']): StoreSettings =>
-  kind === 'git' ? { kind, url: '', branch: 'main', username: '' } : kind === 's3' ? { kind, endpoint: '', region: '', bucket: '', prefix: 'wiki/', pathStyle: false, credentials: 'keys', sse: '' } : kind === 'configmap' ? { kind } : { kind: '' }
+  kind === 'git'
+    ? { kind, url: '', branch: 'main', username: '' }
+    : kind === 's3'
+      ? { kind, endpoint: '', region: '', bucket: '', prefix: 'wiki/', pathStyle: false, credentials: 'keys', sse: '' }
+      : kind === 'configmap'
+        ? { kind }
+        : { kind: '' }
 
 /** Where the wiki is kept: a git repository, an S3 bucket, or the temporary ConfigMap store (CF-57). */
 function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => void; onToast?: (msg: string) => void }) {
@@ -401,7 +437,9 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
   const credSet = v.storeCreds
   return (
     <section className="rk-card" style={{ padding: '6px 16px 14px', display: 'flex', flexDirection: 'column' }} aria-label="Wiki" data-testid="knowledge-store">
-      <h3 className="rk-h" style={{ margin: '8px 0' }}>Wiki</h3>
+      <h3 className="rk-h" style={{ margin: '8px 0' }}>
+        Wiki
+      </h3>
       <Row label="Stored in">
         <div className="rk-seg" role="group" aria-label="Stored in" style={{ alignSelf: 'flex-start' }}>
           <button aria-pressed={st.kind === 'git'} onClick={() => setSt(saved.kind === 'git' ? saved : blankStore('git'))} data-testid="knowledge-store-git">
@@ -436,7 +474,9 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
             </div>
           </Row>
           <Row label="Credentials" hint="A token that can read and write the repository">
-            <span className="rk-fhint" data-testid="knowledge-store-cred">{credSet.token ? `Token saved${saved.savedBy ? ` by ${saved.savedBy}` : ''}${saved.savedAt ? `, ${fmtTs(saved.savedAt)}` : ''} · never shown again` : 'No token saved.'}</span>
+            <span className="rk-fhint" data-testid="knowledge-store-cred">
+              {credSet.token ? `Token saved${saved.savedBy ? ` by ${saved.savedBy}` : ''}${saved.savedAt ? `, ${fmtTs(saved.savedAt)}` : ''} · never shown again` : 'No token saved.'}
+            </span>
             {replace || !credSet.token ? (
               <Text label="Token" type="password" value={keys.token ?? ''} onChange={(x) => setKeys({ ...keys, token: x })} testId="knowledge-store-token" />
             ) : (
@@ -463,10 +503,21 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
             </label>
           </Row>
           <Row label="Credentials">
-            <Select label="Credentials" value={st.credentials ?? 'keys'} options={[['keys', 'An access key in a Secret'], ['identity', v.identity ? 'The pod’s identity' : 'The pod’s identity (none found)']]} onChange={(x) => put({ credentials: x as 'keys' | 'identity' })} width={260} />
+            <Select
+              label="Credentials"
+              value={st.credentials ?? 'keys'}
+              options={[
+                ['keys', 'An access key in a Secret'],
+                ['identity', v.identity ? 'The pod’s identity' : 'The pod’s identity (none found)'],
+              ]}
+              onChange={(x) => put({ credentials: x as 'keys' | 'identity' })}
+              width={260}
+            />
             {st.credentials !== 'identity' && (
               <>
-                <span className="rk-fhint" data-testid="knowledge-store-cred">{credSet.accessKey ? `Access key saved${saved.savedBy ? ` by ${saved.savedBy}` : ''}${saved.savedAt ? `, ${fmtTs(saved.savedAt)}` : ''} · never shown again` : 'No access key saved.'}</span>
+                <span className="rk-fhint" data-testid="knowledge-store-cred">
+                  {credSet.accessKey ? `Access key saved${saved.savedBy ? ` by ${saved.savedBy}` : ''}${saved.savedAt ? `, ${fmtTs(saved.savedAt)}` : ''} · never shown again` : 'No access key saved.'}
+                </span>
                 {replace || !credSet.accessKey ? (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                     <Text label="Access key ID" value={keys.accessKeyId ?? ''} onChange={(x) => setKeys({ ...keys, accessKeyId: x })} width={220} testId="knowledge-store-akid" />
@@ -481,7 +532,17 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
             )}
           </Row>
           <Row label="Encryption">
-            <Select label="Server-side encryption" value={st.sse ?? ''} options={[['', 'The bucket’s default'], ['AES256', 'SSE-S3'], ['aws:kms', 'SSE-KMS']]} onChange={(x) => put({ sse: x as StoreSettings['sse'], kmsKeyId: x === 'aws:kms' ? st.kmsKeyId : '' })} width={220} />
+            <Select
+              label="Server-side encryption"
+              value={st.sse ?? ''}
+              options={[
+                ['', 'The bucket’s default'],
+                ['AES256', 'SSE-S3'],
+                ['aws:kms', 'SSE-KMS'],
+              ]}
+              onChange={(x) => put({ sse: x as StoreSettings['sse'], kmsKeyId: x === 'aws:kms' ? st.kmsKeyId : '' })}
+              width={220}
+            />
             {st.sse === 'aws:kms' && <Text label="KMS key (empty: the account’s default)" value={st.kmsKeyId ?? ''} onChange={(x) => put({ kmsKeyId: x })} />}
           </Row>
           <Row label="Versioning" hint="Every page keeps its history">
@@ -548,18 +609,49 @@ function StoreCard({ v, onSaved, onToast }: { v: KnowledgeView; onSaved: () => v
           Save changes
         </button>
         {moving && (
-          <button className="rk-btn" disabled={busy} onClick={() => void act(async () => { const r = await moveStore(st, keys); onToast?.(`${r.files} files copied.`) }, 'The wiki moved.')} data-testid="knowledge-store-move" title="Copies every page and the manifest from where the wiki is kept now, then keeps it here">
+          <button
+            className="rk-btn"
+            disabled={busy}
+            onClick={() =>
+              void act(async () => {
+                const r = await moveStore(st, keys)
+                onToast?.(`${r.files} files copied.`)
+              }, 'The wiki moved.')
+            }
+            data-testid="knowledge-store-move"
+            title="Copies every page and the manifest from where the wiki is kept now, then keeps it here"
+          >
             Move the wiki here
           </button>
         )}
-        {!changed && <span className="rk-fhint" style={{ alignSelf: 'center' }}>No changes.</span>}
+        {!changed && (
+          <span className="rk-fhint" style={{ alignSelf: 'center' }}>
+            No changes.
+          </span>
+        )}
       </div>
     </section>
   )
 }
 
 /** A source being added or changed. */
-function SourceDrawer({ seed, tokenSet, keySet = false, identity = false, onClose, onSaved, onRemove }: { seed: KnowledgeSource | null; tokenSet: boolean; keySet?: boolean; identity?: boolean; onClose: () => void; onSaved: (msg: string) => void; onRemove?: () => void }) {
+function SourceDrawer({
+  seed,
+  tokenSet,
+  keySet = false,
+  identity = false,
+  onClose,
+  onSaved,
+  onRemove,
+}: {
+  seed: KnowledgeSource | null
+  tokenSet: boolean
+  keySet?: boolean
+  identity?: boolean
+  onClose: () => void
+  onSaved: (msg: string) => void
+  onRemove?: () => void
+}) {
   const [s, setS] = useState<KnowledgeSource>(seed ?? { id: '', name: '', kind: 'confluence', flavor: 'cloud', baseURL: '', email: '', space: '' })
   const [token, setToken] = useState('')
   // A bucket's access key (KN-25): typed here, sent once, never shown again.
@@ -643,9 +735,9 @@ function SourceDrawer({ seed, tokenSet, keySet = false, identity = false, onClos
           )}
           {/* Test, apart from the rest: the values as typed, before they are saved (KN-26). */}
           {!builtIn && (
-          <button className="rk-btn" style={{ marginLeft: 24 }} disabled={busy || !!test?.running} onClick={() => void runTest()} data-testid="knowledge-source-test">
-            Test
-          </button>
+            <button className="rk-btn" style={{ marginLeft: 24 }} disabled={busy || !!test?.running} onClick={() => void runTest()} data-testid="knowledge-source-test">
+              Test
+            </button>
           )}
         </div>
       }
@@ -655,7 +747,11 @@ function SourceDrawer({ seed, tokenSet, keySet = false, identity = false, onClos
           <Select
             label="Kind"
             value={s.kind}
-            options={[['confluence', 'Confluence space'], ['git', 'Git repository of runbooks'], ['s3', 'S3 bucket of documents']]}
+            options={[
+              ['confluence', 'Confluence space'],
+              ['git', 'Git repository of runbooks'],
+              ['s3', 'S3 bucket of documents'],
+            ]}
             onChange={(k) => {
               if (k === 's3') {
                 setS({ id: s.id, name: s.name, kind: 's3', bucket: '', prefix: '', region: '', endpoint: '', pathStyle: false, credentials: 'keys' })
@@ -668,7 +764,16 @@ function SourceDrawer({ seed, tokenSet, keySet = false, identity = false, onClos
         <Text label="Name" value={s.name} onChange={(x) => put({ name: x })} placeholder={s.kind === 'git' ? 'Runbooks repository' : s.kind === 's3' ? 'Runbooks bucket' : 'Confluence space: Infrastructure'} testId="knowledge-source-name" />
         {s.kind === 'confluence' && (
           <>
-            <Select label="Confluence" value={s.flavor ?? 'cloud'} options={[['cloud', 'Confluence Cloud (email and API token)'], ['datacenter', 'Confluence Data Center (personal access token)']]} onChange={(x) => put({ flavor: x as 'cloud' | 'datacenter' })} testId="knowledge-source-flavor" />
+            <Select
+              label="Confluence"
+              value={s.flavor ?? 'cloud'}
+              options={[
+                ['cloud', 'Confluence Cloud (email and API token)'],
+                ['datacenter', 'Confluence Data Center (personal access token)'],
+              ]}
+              onChange={(x) => put({ flavor: x as 'cloud' | 'datacenter' })}
+              testId="knowledge-source-flavor"
+            />
             <Text label="Address" value={s.baseURL ?? ''} onChange={(x) => put({ baseURL: x })} placeholder="https://example.atlassian.net" testId="knowledge-source-url" />
             {s.flavor !== 'datacenter' && <Text label="Account email" value={s.email ?? ''} onChange={(x) => put({ email: x })} testId="knowledge-source-email" />}
             <Text label="Space key" value={s.space ?? ''} onChange={(x) => put({ space: x })} placeholder="INFRA" testId="knowledge-source-space" />
@@ -700,41 +805,85 @@ function SourceDrawer({ seed, tokenSet, keySet = false, identity = false, onClos
             <Select
               label="Credentials"
               value={s.credentials ?? 'keys'}
-              options={[['keys', 'A read-only access key in a Secret'], ['identity', identity ? 'The pod’s identity' : 'The pod’s identity (none found)']]}
+              options={[
+                ['keys', 'A read-only access key in a Secret'],
+                ['identity', identity ? 'The pod’s identity' : 'The pod’s identity (none found)'],
+              ]}
               onChange={(x) => put({ credentials: x as 'keys' | 'identity' })}
               testId="knowledge-source-credentials"
             />
             {s.credentials !== 'identity' && (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <Text label={keySet ? 'Access key ID (saved; type to replace)' : 'Access key ID'} value={keys.accessKeyId ?? ''} onChange={(x) => { setKeys({ ...keys, accessKeyId: x }); changed() }} width={220} testId="knowledge-source-akid" />
-                <Text label={keySet ? 'Secret access key (saved; type to replace)' : 'Secret access key'} type="password" value={keys.secretAccessKey ?? ''} onChange={(x) => { setKeys({ ...keys, secretAccessKey: x }); changed() }} width={240} testId="knowledge-source-secret" />
+                <Text
+                  label={keySet ? 'Access key ID (saved; type to replace)' : 'Access key ID'}
+                  value={keys.accessKeyId ?? ''}
+                  onChange={(x) => {
+                    setKeys({ ...keys, accessKeyId: x })
+                    changed()
+                  }}
+                  width={220}
+                  testId="knowledge-source-akid"
+                />
+                <Text
+                  label={keySet ? 'Secret access key (saved; type to replace)' : 'Secret access key'}
+                  type="password"
+                  value={keys.secretAccessKey ?? ''}
+                  onChange={(x) => {
+                    setKeys({ ...keys, secretAccessKey: x })
+                    changed()
+                  }}
+                  width={240}
+                  testId="knowledge-source-secret"
+                />
               </div>
             )}
           </>
         )}
-        {builtIn && <span className="rk-fhint" data-testid="knowledge-source-builtin">There from the start: only its name changes here. Its Wiki sync job is renamed with it.</span>}
+        {builtIn && (
+          <span className="rk-fhint" data-testid="knowledge-source-builtin">
+            There from the start: only its name changes here. Its Wiki sync job is renamed with it.
+          </span>
+        )}
         {!builtIn && (
           <>
-        {s.kind !== 's3' && <Text label={tokenSet ? 'Token (saved; type a new one to replace it)' : s.kind === 'git' ? 'Token (read access)' : 'API token (read-only)'} type="password" value={token} onChange={(x) => { setToken(x); changed() }} testId="knowledge-source-token" />}
-        <span className="rk-fhint">Kept in the Secret &lt;release&gt;-knowledge and never shown again. Use a read-only credential: Mycroft never writes to its sources.</span>
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg2)' }}>
-          Private CA (optional)
-          <textarea className="rk-area" rows={2} spellCheck={false} value={s.caPEM ?? ''} onChange={(e) => put({ caPEM: e.target.value })} />
-        </label>
-        {/* Test's result, under the fields; its button is in the footer (KN-26). */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
-          <span className="rk-fhint">Test lists what Mycroft would read with the values typed here, without saving them{seed ? '; a credential left blank is the saved one' : ''}.</span>
-          {test?.running && (
-            <p className="rk-fhint" role="status" style={{ margin: 0 }} data-testid="knowledge-source-test-result" data-state="running">
-              Testing…
-            </p>
-          )}
-          {test && !test.running && (
-            <p className="rk-t" data-tone={test.r.ok ? 'ok' : 'err'} role={test.r.ok ? 'status' : 'alert'} style={{ margin: 0, fontSize: 12.5, overflowWrap: 'anywhere' }} data-testid="knowledge-source-test-result" data-state={test.r.ok ? 'ok' : 'error'}>
-              {sourceTestText(test.r)}
-            </p>
-          )}
-        </div>
+            {s.kind !== 's3' && (
+              <Text
+                label={tokenSet ? 'Token (saved; type a new one to replace it)' : s.kind === 'git' ? 'Token (read access)' : 'API token (read-only)'}
+                type="password"
+                value={token}
+                onChange={(x) => {
+                  setToken(x)
+                  changed()
+                }}
+                testId="knowledge-source-token"
+              />
+            )}
+            <span className="rk-fhint">Kept in the Secret &lt;release&gt;-knowledge and never shown again. Use a read-only credential: Mycroft never writes to its sources.</span>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg2)' }}>
+              Private CA (optional)
+              <textarea className="rk-area" rows={2} spellCheck={false} value={s.caPEM ?? ''} onChange={(e) => put({ caPEM: e.target.value })} />
+            </label>
+            {/* Test's result, under the fields; its button is in the footer (KN-26). */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
+              <span className="rk-fhint">Test lists what Mycroft would read with the values typed here, without saving them{seed ? '; a credential left blank is the saved one' : ''}.</span>
+              {test?.running && (
+                <p className="rk-fhint" role="status" style={{ margin: 0 }} data-testid="knowledge-source-test-result" data-state="running">
+                  Testing…
+                </p>
+              )}
+              {test && !test.running && (
+                <p
+                  className="rk-t"
+                  data-tone={test.r.ok ? 'ok' : 'err'}
+                  role={test.r.ok ? 'status' : 'alert'}
+                  style={{ margin: 0, fontSize: 12.5, overflowWrap: 'anywhere' }}
+                  data-testid="knowledge-source-test-result"
+                  data-state={test.r.ok ? 'ok' : 'error'}
+                >
+                  {sourceTestText(test.r)}
+                </p>
+              )}
+            </div>
           </>
         )}
         {error && (

@@ -50,7 +50,7 @@ func TestOldCardIDsOnACaseReadAsPC(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.iss.Apply(ctx, 1, func(_ *issues.Tx, r *issues.Report) error {
+	if _, err := w.iss.Apply(ctx, 1, func(_ *issues.Tx, r *issues.Case) error {
 		r.AppliedBy = &issues.AppliedChange{Card: "c2", Title: "Set web's limits", By: "Pat", At: w.now}
 		return nil
 	}); err != nil {

@@ -10,6 +10,7 @@ import (
 	"github.com/ucesys/221b/server/internal/ai"
 	"github.com/ucesys/221b/server/internal/fakeclaude"
 	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/sherlocktools"
 )
 
 // AI settings, round 2 (Phase 12, wave 5).
@@ -158,10 +159,10 @@ func TestSherlocksRequestSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	whole := sherlock.Measure(a, ToolDefs(), true)
+	whole := sherlock.Measure(a, sherlocktools.Defs(), true)
 	c := a
 	c.Instructions, c.Tools, c.Roster, c.Compact = ai.Assemble(ai.CompactCore(), nil, ""), ai.CompactTools, nil, true
-	compact := sherlock.Measure(c, ToolDefs(), true)
+	compact := sherlock.Measure(c, sherlocktools.Defs(), true)
 	t.Logf("whole %+v = %d, compact %+v = %d", whole, whole.Total(), compact, compact.Total())
 	if whole.Total() < 8000 || whole.Total() > 14000 || compact.Total() > 4000 || compact.ToolCount != len(ai.CompactTools) {
 		t.Fatalf("whole %+v, compact %+v", whole, compact)

@@ -1,5 +1,21 @@
 import { useEffect, useState } from 'react'
-import { describeSchedule, fetchBackupFromS3, fetchBackupS3, listBackupsS3, runBackupS3, saveBackupS3, testBackupS3, type BackupFile, type S3Backup, type S3Keys, type S3Run, type S3Settings, type S3Step, type S3View, type ScheduleSpec } from '../api/admin'
+import {
+  describeSchedule,
+  fetchBackupFromS3,
+  fetchBackupS3,
+  listBackupsS3,
+  runBackupS3,
+  saveBackupS3,
+  testBackupS3,
+  type BackupFile,
+  type S3Backup,
+  type S3Keys,
+  type S3Run,
+  type S3Settings,
+  type S3Step,
+  type S3View,
+  type ScheduleSpec,
+} from '../api/admin'
 import { fMem, fmtTs } from '../lib/format'
 import type { AdminProps } from './AdminPage'
 import { Select } from './Select'
@@ -254,7 +270,16 @@ export function AdminBackupS3({ onToast, onRestore }: Pick<AdminProps, 'onToast'
         </label>
         <details open={!!draft.caPem}>
           <summary style={{ cursor: 'pointer' }}>Private CA</summary>
-          <textarea rows={3} spellCheck={false} className="rk-area" style={{ width: '100%', marginTop: 6 }} value={draft.caPem ?? ''} placeholder="-----BEGIN CERTIFICATE-----, for an endpoint whose certificate a private authority signed" onChange={(e) => set({ caPem: e.target.value })} data-testid="s3-ca" />
+          <textarea
+            rows={3}
+            spellCheck={false}
+            className="rk-area"
+            style={{ width: '100%', marginTop: 6 }}
+            value={draft.caPem ?? ''}
+            placeholder="-----BEGIN CERTIFICATE-----, for an endpoint whose certificate a private authority signed"
+            onChange={(e) => set({ caPem: e.target.value })}
+            data-testid="s3-ca"
+          />
         </details>
       </Row>
 
@@ -294,7 +319,14 @@ export function AdminBackupS3({ onToast, onRestore }: Pick<AdminProps, 'onToast'
       <Row label="Schedule" hint="Runs on the leading replica. A time missed while the console was down runs once within the hour, else waits." testId="s3-schedule">
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <Labeled label="Repeat" width={220}>
-            <Select label="Repeat" value={sc.kind} options={KINDS} onChange={(v) => setSched({ kind: v as ScheduleSpec['kind'], at: sc.at || '03:00', every: sc.every || 6, days: sc.days?.length ? sc.days : ['mon'] })} testId="s3-sched-kind" width="100%" />
+            <Select
+              label="Repeat"
+              value={sc.kind}
+              options={KINDS}
+              onChange={(v) => setSched({ kind: v as ScheduleSpec['kind'], at: sc.at || '03:00', every: sc.every || 6, days: sc.days?.length ? sc.days : ['mon'] })}
+              testId="s3-sched-kind"
+              width="100%"
+            />
           </Labeled>
           {sc.kind === 'hours' && (
             <Labeled label="Every (hours)" width={110}>
@@ -418,7 +450,11 @@ export function AdminBackupS3({ onToast, onRestore }: Pick<AdminProps, 'onToast'
 
       <Row label="Status" testId="s3-status">
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          {view.running && <span className="rk-pill" data-tone="info">A backup is running</span>}
+          {view.running && (
+            <span className="rk-pill" data-tone="info">
+              A backup is running
+            </span>
+          )}
           {last ? (
             <span className="rk-pill" data-tone={last.ok ? 'ok' : 'err'} data-testid="s3-last">
               {last.ok ? 'Last backup worked' : last.missed ? 'Last time was missed' : 'Last backup failed'}
@@ -453,7 +489,11 @@ export function AdminBackupS3({ onToast, onRestore }: Pick<AdminProps, 'onToast'
           </button>
         </div>
         {listErr && <p className="tb-err">{listErr}</p>}
-        {list && list.length === 0 && <p className="tb-hint" style={{ margin: 0 }}>No backup under this prefix yet.</p>}
+        {list && list.length === 0 && (
+          <p className="tb-hint" style={{ margin: 0 }}>
+            No backup under this prefix yet.
+          </p>
+        )}
         {list && list.length > 0 && (
           <table className="rk-table" style={{ fontSize: 12.5, borderCollapse: 'collapse' }} data-testid="s3-backups">
             <thead>

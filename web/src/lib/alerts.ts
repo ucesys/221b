@@ -65,7 +65,10 @@ export function contextOf(r: AlertRow, now: number): { text: string; mono: boole
     }
     const ready = `${r.ready ?? 0}/${r.total ?? 0}`
     if (r.oom && r.lastAt) {
-      return { text: `Now ${r.status} (${ready} ready). A container was killed for running out of memory ${fmtAge(r.lastAt, now)} ago (OOMKilled, exit code ${r.lastExit ?? 137}); ${nWord(r.restarts ?? 0, 'restart', 'restarts')} in all.`, mono: false }
+      return {
+        text: `Now ${r.status} (${ready} ready). A container was killed for running out of memory ${fmtAge(r.lastAt, now)} ago (OOMKilled, exit code ${r.lastExit ?? 137}); ${nWord(r.restarts ?? 0, 'restart', 'restarts')} in all.`,
+        mono: false,
+      }
     }
     return { text: `Now ${r.status} (${ready} ready). These warnings were raised while it started ${fmtAge(r.started, now)} ago.`, mono: false }
   }
@@ -260,13 +263,33 @@ export function bannersOf(all: AlertRow[], now: number): AlertBanner[] {
     return b
   }
   if (failed.length || nodeErr.length || volErr.length) {
-    const title = [failed.length ? nWord(failed.length, 'pod failed to start', 'pods failed to start') : '', nodeErr.length ? nWord(nodeErr.length, 'node error', 'node errors') : '', volErr.length ? nWord(volErr.length, 'volume error', 'volume errors') : ''].filter(Boolean).join(' · ')
-    const items: BannerItem[] = [...failed.map((r) => ({ text: `${r.namespace}/${r.name} — ${r.status}${r.restarts ? `, ${nWord(r.restarts, 'restart', 'restarts')}` : ''}` })), ...nodeErr.map((r) => ({ text: nodeItem(r, 'error') })), ...volErr.map(volumeItem)]
+    const title = [
+      failed.length ? nWord(failed.length, 'pod failed to start', 'pods failed to start') : '',
+      nodeErr.length ? nWord(nodeErr.length, 'node error', 'node errors') : '',
+      volErr.length ? nWord(volErr.length, 'volume error', 'volume errors') : '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    const items: BannerItem[] = [
+      ...failed.map((r) => ({ text: `${r.namespace}/${r.name} — ${r.status}${r.restarts ? `, ${nWord(r.restarts, 'restart', 'restarts')}` : ''}` })),
+      ...nodeErr.map((r) => ({ text: nodeItem(r, 'error') })),
+      ...volErr.map(volumeItem),
+    ]
     out.push(banner('err', title, items))
   }
   if (pending.length || nodeWarn.length || volWarn.length) {
-    const title = [pending.length ? nWord(pending.length, 'pod pending', 'pods pending') : '', nodeWarn.length ? nWord(nodeWarn.length, 'node warning', 'node warnings') : '', volWarn.length ? nWord(volWarn.length, 'volume warning', 'volume warnings') : ''].filter(Boolean).join(' · ')
-    const items: BannerItem[] = [...pending.map((r) => ({ text: `${r.namespace}/${r.name} — ${r.node ? r.status : 'Unschedulable'} for ${fmtAge(r.started, now)}` })), ...nodeWarn.map((r) => ({ text: nodeItem(r, 'any') })), ...volWarn.map(volumeItem)]
+    const title = [
+      pending.length ? nWord(pending.length, 'pod pending', 'pods pending') : '',
+      nodeWarn.length ? nWord(nodeWarn.length, 'node warning', 'node warnings') : '',
+      volWarn.length ? nWord(volWarn.length, 'volume warning', 'volume warnings') : '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    const items: BannerItem[] = [
+      ...pending.map((r) => ({ text: `${r.namespace}/${r.name} — ${r.node ? r.status : 'Unschedulable'} for ${fmtAge(r.started, now)}` })),
+      ...nodeWarn.map((r) => ({ text: nodeItem(r, 'any') })),
+      ...volWarn.map(volumeItem),
+    ]
     out.push(banner('warn', title, items))
   }
   return out

@@ -13,7 +13,7 @@ import (
 	"github.com/ucesys/221b/server/internal/jobs"
 )
 
-// The HTTP API (FX-06, FX-10): /api/v1/cases/exceptions, which AIOps ›
+// The HTTP API (FX-06, FX-10): /api/v1/aiops/exceptions, which AIOps ›
 // Mycroft lists. Reading is for those who see the cases (approvers, the
 // console-wide roles and job editors); creating, removing (making
 // inactive) and making active again an exception is the approvers'
@@ -42,11 +42,11 @@ type Route struct {
 func (s *Service) Routes(caller func(*http.Request) (Caller, bool)) []Route {
 	h := &handler{s: s, caller: caller}
 	return []Route{
-		{"GET /api/v1/cases/exceptions", "cases-exceptions", h.wrap(h.exceptions, false)},
-		{"POST /api/v1/cases/exceptions", "cases-exception-add", h.wrap(h.addException, true)},
-		{"GET /api/v1/cases/exceptions/{id}", "cases-exception", h.wrap(h.exception, false)},
-		{"DELETE /api/v1/cases/exceptions/{id}", "cases-exception-remove", h.wrap(h.removeException, true)},
-		{"POST /api/v1/cases/exceptions/{id}/reactivate", "cases-exception-reactivate", h.wrap(h.reactivateException, true)},
+		{"GET /api/v1/aiops/exceptions", "cases-exceptions", h.wrap(h.exceptions, false)},
+		{"POST /api/v1/aiops/exceptions", "cases-exception-add", h.wrap(h.addException, true)},
+		{"GET /api/v1/aiops/exceptions/{id}", "cases-exception", h.wrap(h.exception, false)},
+		{"DELETE /api/v1/aiops/exceptions/{id}", "cases-exception-remove", h.wrap(h.removeException, true)},
+		{"POST /api/v1/aiops/exceptions/{id}/reactivate", "cases-exception-reactivate", h.wrap(h.reactivateException, true)},
 	}
 }
 

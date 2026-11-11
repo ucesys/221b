@@ -56,7 +56,7 @@ func TestNewExceptionSuggestsObjects(t *testing.T) {
 	}
 
 	get := func(c *http.Client, query string) (int, []CaseObject, string) {
-		resp, body := send(t, c, http.MethodGet, srv.URL+"/api/v1/cases/objects?"+query, "")
+		resp, body := send(t, c, http.MethodGet, srv.URL+"/api/v1/aiops/objects?"+query, "")
 		var out struct{ Objects []CaseObject }
 		json.Unmarshal([]byte(body), &out)
 		return resp.StatusCode, out.Objects, body

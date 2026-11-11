@@ -149,7 +149,7 @@ type Line struct {
 }
 
 // lineOf is a case's line in the index.
-func lineOf(r *Report) Line {
+func lineOf(r *Case) Line {
 	l := Line{Number: r.Number, Title: r.Title, Status: r.Status, Outcome: r.Outcome, Priority: r.Priority, Source: r.Kind(), AgentFound: r.AgentFound(),
 		Cluster: r.Cluster, Object: r.Object, Key: r.Key, Job: r.Job, Reporter: r.Reporter.ID, ReporterName: r.Reporter.Label(), Assignee: r.Owner,
 		Service: r.Service, KnownIssue: r.KnownIssue, Exception: r.Exception, RCA: r.RCA, RCACause: r.RCACause, DuplicateOf: r.DuplicateOf, RegressionOf: r.RegressionOf,
@@ -189,8 +189,8 @@ func (l Line) watchedBy(id string) bool {
 }
 
 // lite is a line as a report, for the lists: what a row shows.
-func (l Line) lite() Report {
-	r := Report{Number: l.Number, Title: l.Title, Source: l.Source, Cluster: l.Cluster, Object: l.Object, Key: l.Key, Job: l.Job,
+func (l Line) lite() Case {
+	r := Case{Number: l.Number, Title: l.Title, Source: l.Source, Cluster: l.Cluster, Object: l.Object, Key: l.Key, Job: l.Job,
 		Reporter: Person{ID: l.Reporter, Name: l.ReporterName}, Created: l.Created, Updated: l.Updated, Status: l.Status, StatusAt: l.StatusAt,
 		Outcome: l.Outcome, Explanation: l.Explanation, Priority: l.Priority, Owner: l.Assignee, Service: l.Service, KnownIssue: l.KnownIssue,
 		Exception: l.Exception, RCA: l.RCA, RCACause: l.RCACause, DuplicateOf: l.DuplicateOf, RegressionOf: l.RegressionOf, SameAs: l.SameAs, PossibleDuplicateOf: l.PossibleDup,
@@ -239,7 +239,7 @@ type configDoc struct {
 // loaded is a case object read in one change: its record, the bytes it
 // was read as (to tell a change), its version, and what becomes of it.
 type loaded struct {
-	r       *Report
+	r       *Case
 	was     []byte
 	version string
 	created bool
@@ -286,7 +286,7 @@ func (st *state) line(n int) *Line {
 // report is a case's whole record, read from its object the first time a
 // change asks for it; nil when there is none. A change may change it:
 // what changed is saved.
-func (st *state) report(n int) *Report {
+func (st *state) report(n int) *Case {
 	if l, ok := st.cases[n]; ok {
 		if l.dropped {
 			return nil
@@ -336,7 +336,7 @@ func (st *state) actorFor(n int) Actor {
 
 // touch names who changed a case, when fn changed it, so what a change
 // returns says it before it is saved (CF-35).
-func (st *state) touch(r *Report, now time.Time, fn func() error) error {
+func (st *state) touch(r *Case, now time.Time, fn func() error) error {
 	was, _ := json.Marshal(r)
 	if err := fn(); err != nil {
 		return err
@@ -348,7 +348,7 @@ func (st *state) touch(r *Report, now time.Time, fn func() error) error {
 }
 
 // add keeps a new case, numbered next.
-func (st *state) add(r Report) *Report {
+func (st *state) add(r Case) *Case {
 	r.Number = st.index.Next
 	st.index.Next++
 	if st.cases == nil {
@@ -419,7 +419,7 @@ const readFresh = 2 * time.Second
 func caseName(n int) string { return strconv.Itoa(n) }
 
 // loadCase reads one case object's record.
-func (s *Service) loadCase(ctx context.Context, n int) (*Report, []byte, string, error) {
+func (s *Service) loadCase(ctx context.Context, n int) (*Case, []byte, string, error) {
 	keys, version, err := s.cases.Load(ctx, caseName(n))
 	if errors.Is(err, kv.ErrNotFound) {
 		return nil, nil, "", fmt.Errorf("%w: no case C-%d", ErrNotFound, n)
@@ -431,7 +431,7 @@ func (s *Service) loadCase(ctx context.Context, n int) (*Report, []byte, string,
 	if !ok {
 		return nil, nil, "", fmt.Errorf("%w: no case C-%d", ErrNotFound, n)
 	}
-	var r Report
+	var r Case
 	if err := json.Unmarshal(b, &r); err != nil {
 		return nil, nil, "", fmt.Errorf("the case C-%d cannot be read: %w", n, err)
 	}

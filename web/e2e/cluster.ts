@@ -87,7 +87,27 @@ export interface KubeObject {
   [k: string]: unknown
 }
 
-const RESOURCES: Record<string, string> = { ClusterRole: 'clusterroles', ClusterRoleBinding: 'clusterrolebindings', Role: 'roles', RoleBinding: 'rolebindings', ServiceAccount: 'serviceaccounts', NetworkPolicy: 'networkpolicies', PodDisruptionBudget: 'poddisruptionbudgets', ResourceQuota: 'resourcequotas', LimitRange: 'limitranges', PriorityClass: 'priorityclasses', Ingress: 'ingresses', IngressClass: 'ingressclasses', Service: 'services', Pod: 'pods', Deployment: 'deployments', Namespace: 'namespaces', Secret: 'secrets', ValidatingWebhookConfiguration: 'validatingwebhookconfigurations', MutatingWebhookConfiguration: 'mutatingwebhookconfigurations' }
+const RESOURCES: Record<string, string> = {
+  ClusterRole: 'clusterroles',
+  ClusterRoleBinding: 'clusterrolebindings',
+  Role: 'roles',
+  RoleBinding: 'rolebindings',
+  ServiceAccount: 'serviceaccounts',
+  NetworkPolicy: 'networkpolicies',
+  PodDisruptionBudget: 'poddisruptionbudgets',
+  ResourceQuota: 'resourcequotas',
+  LimitRange: 'limitranges',
+  PriorityClass: 'priorityclasses',
+  Ingress: 'ingresses',
+  IngressClass: 'ingressclasses',
+  Service: 'services',
+  Pod: 'pods',
+  Deployment: 'deployments',
+  Namespace: 'namespaces',
+  Secret: 'secrets',
+  ValidatingWebhookConfiguration: 'validatingwebhookconfigurations',
+  MutatingWebhookConfiguration: 'mutatingwebhookconfigurations',
+}
 
 /** Runs a command in a pod (kind only); resolves to whether it succeeded. */
 export async function kubectlExecOK(namespace: string, pod: string, ...cmd: string[]): Promise<boolean> {
@@ -227,8 +247,7 @@ export async function podCrashing(pod: string): Promise<boolean> {
   const out = await kubectl('-n', ns, 'get', 'pod', name, '-o', 'json')
   const p = JSON.parse(out) as { status?: { containerStatuses?: { restartCount?: number; state?: State; lastState?: State }[] } }
   const cs = p.status?.containerStatuses?.[0]
-  const crashing =
-    cs?.state?.waiting?.reason === 'CrashLoopBackOff' || ((cs?.restartCount ?? 0) > 0 && (cs?.state?.terminated?.exitCode ?? 0) !== 0)
+  const crashing = cs?.state?.waiting?.reason === 'CrashLoopBackOff' || ((cs?.restartCount ?? 0) > 0 && (cs?.state?.terminated?.exitCode ?? 0) !== 0)
   if (!crashing) console.log(`${pod} is not crash-looping yet: ${JSON.stringify(cs ?? p.status ?? {})}`)
   return crashing
 }
@@ -299,9 +318,7 @@ export const cluster = {
   /** Stops or starts the Kubernetes API server; start waits until it answers. */
   async apiServer(up: boolean): Promise<void> {
     if (!inKind) return simPost(`/sim/down?on=${!up}`)
-    const [from, to] = up
-      ? ['/etc/kubernetes/kube-apiserver.yaml', '/etc/kubernetes/manifests/kube-apiserver.yaml']
-      : ['/etc/kubernetes/manifests/kube-apiserver.yaml', '/etc/kubernetes/kube-apiserver.yaml']
+    const [from, to] = up ? ['/etc/kubernetes/kube-apiserver.yaml', '/etc/kubernetes/manifests/kube-apiserver.yaml'] : ['/etc/kubernetes/manifests/kube-apiserver.yaml', '/etc/kubernetes/kube-apiserver.yaml']
     await docker('exec', CONTROL_PLANE, 'mv', from, to)
     if (up) {
       await kubectlRetry('get', '--raw', '/readyz')
@@ -354,14 +371,24 @@ export const cluster = {
   async storageClaim(namespace: string): Promise<() => Promise<void>> {
     if (!inKind) return async () => {}
     await kubectlApply({ apiVersion: 'v1', kind: 'Namespace', metadata: { name: namespace, labels: { e2e: 'storage' } } })
-    await kubectlApply({ apiVersion: 'v1', kind: 'PersistentVolumeClaim', metadata: { name: 'data', namespace }, spec: { storageClassName: 'e2e-no-such-class', accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '64Mi' } } } })
+    await kubectlApply({
+      apiVersion: 'v1',
+      kind: 'PersistentVolumeClaim',
+      metadata: { name: 'data', namespace },
+      spec: { storageClassName: 'e2e-no-such-class', accessModes: ['ReadWriteOnce'], resources: { requests: { storage: '64Mi' } } },
+    })
     return async () => void (await kubectlRetry('delete', 'namespace', namespace, '--ignore-not-found', '--wait=false'))
   },
 
   async pendingLoadBalancer(): Promise<{ namespace: string; name: string; cleanup: () => Promise<void> }> {
     if (!inKind) return { namespace: 'web', name: 'gateway-lb', cleanup: async () => {} }
     const name = `e2e-lb-${Date.now().toString(36)}`
-    await kubectlApply({ apiVersion: 'v1', kind: 'Service', metadata: { name, namespace: NAMESPACE, labels: { e2e: 'lb' } }, spec: { type: 'LoadBalancer', selector: { 'app.kubernetes.io/name': '221b' }, ports: [{ name: 'http', port: 80, targetPort: 8081 }] } })
+    await kubectlApply({
+      apiVersion: 'v1',
+      kind: 'Service',
+      metadata: { name, namespace: NAMESPACE, labels: { e2e: 'lb' } },
+      spec: { type: 'LoadBalancer', selector: { 'app.kubernetes.io/name': '221b' }, ports: [{ name: 'http', port: 80, targetPort: 8081 }] },
+    })
     return { namespace: NAMESPACE, name, cleanup: async () => void (await kubectlRetry('-n', NAMESPACE, 'delete', 'service', name, '--ignore-not-found')) }
   },
 
@@ -478,7 +505,9 @@ export const cluster = {
       await kubectlApply(pod(names.pull, { nodeName: node }, { image: 'registry.invalid/e2e/nope:1', resources: { requests: { cpu: '10m', memory: '16Mi' } } }))
       await kubectlApply(pod(names.unschedulable, { nodeSelector: { 'e2e.221b/nowhere': 'true' } }, { image: IMAGE, imagePullPolicy: 'Never', resources: { requests: { cpu: '10m', memory: '16Mi' } } }))
       // tail keeps everything after the last newline, and /dev/zero has none.
-      await kubectlApply(pod(names.oom, { nodeName: node }, { image: 'registry.k8s.io/e2e-test-images/busybox:1.36.1-1', command: ['sh', '-c', 'tail /dev/zero'], resources: { requests: { cpu: '10m', memory: '24Mi' }, limits: { memory: '24Mi' } } }))
+      await kubectlApply(
+        pod(names.oom, { nodeName: node }, { image: 'registry.k8s.io/e2e-test-images/busybox:1.36.1-1', command: ['sh', '-c', 'tail /dev/zero'], resources: { requests: { cpu: '10m', memory: '24Mi' }, limits: { memory: '24Mi' } } }),
+      )
       const ns = NAMESPACE
       return {
         pull: `${ns}/${names.pull}`,
@@ -512,35 +541,62 @@ export const cluster = {
       source: { component, host: component === 'kubelet' ? node : undefined },
     })
     const image = 'registry.invalid/e2e/nope:1'
-    await simPostJSON('/sim/objects', pod(names.pull, { nodeName: node, containers: [{ name: 'main', image, resources: res }] }, {
-      phase: 'Pending',
-      startTime: ts(20_000),
-      conditions: [{ type: 'PodScheduled', status: 'True' }, { type: 'Ready', status: 'False', reason: 'ContainersNotReady' }],
-      containerStatuses: [{ name: 'main', image, imageID: '', ready: false, restartCount: 0, state: { waiting: { reason: 'ImagePullBackOff', message: `Back-off pulling image "${image}"` } } }],
-    }))
-    await simPostJSON('/sim/objects', event(names.pull, 'Pod', 'Failed', `Failed to pull image "${image}": failed to resolve reference "${image}": no such host`, 'kubelet'))
-    await simPostJSON('/sim/objects', pod(names.unschedulable, { nodeSelector: { 'e2e.221b/nowhere': 'true' } }, {
-      phase: 'Pending',
-      conditions: [{ type: 'PodScheduled', status: 'False', reason: 'Unschedulable', message: "0/40 nodes are available: 40 node(s) didn't match Pod's node affinity/selector." }],
-    }))
-    await simPostJSON('/sim/objects', event(names.unschedulable, 'Pod', 'FailedScheduling', "0/40 nodes are available: 40 node(s) didn't match Pod's node affinity/selector.", 'default-scheduler'))
-    await simPostJSON('/sim/objects', pod(names.oom, { nodeName: node }, {
-      phase: 'Running',
-      startTime: ts(20_000),
-      conditions: [{ type: 'PodScheduled', status: 'True' }, { type: 'Ready', status: 'True' }],
-      containerStatuses: [
+    await simPostJSON(
+      '/sim/objects',
+      pod(
+        names.pull,
+        { nodeName: node, containers: [{ name: 'main', image, resources: res }] },
         {
-          name: 'main',
-          image: 'registry.example/e2e:1',
-          imageID: '',
-          ready: true,
-          started: true,
-          restartCount: 1,
-          state: { running: { startedAt: ts(5_000) } },
-          lastState: { terminated: { exitCode: 137, reason: 'OOMKilled', startedAt: ts(19_000), finishedAt: ts(6_000) } },
+          phase: 'Pending',
+          startTime: ts(20_000),
+          conditions: [
+            { type: 'PodScheduled', status: 'True' },
+            { type: 'Ready', status: 'False', reason: 'ContainersNotReady' },
+          ],
+          containerStatuses: [{ name: 'main', image, imageID: '', ready: false, restartCount: 0, state: { waiting: { reason: 'ImagePullBackOff', message: `Back-off pulling image "${image}"` } } }],
         },
-      ],
-    }))
+      ),
+    )
+    await simPostJSON('/sim/objects', event(names.pull, 'Pod', 'Failed', `Failed to pull image "${image}": failed to resolve reference "${image}": no such host`, 'kubelet'))
+    await simPostJSON(
+      '/sim/objects',
+      pod(
+        names.unschedulable,
+        { nodeSelector: { 'e2e.221b/nowhere': 'true' } },
+        {
+          phase: 'Pending',
+          conditions: [{ type: 'PodScheduled', status: 'False', reason: 'Unschedulable', message: "0/40 nodes are available: 40 node(s) didn't match Pod's node affinity/selector." }],
+        },
+      ),
+    )
+    await simPostJSON('/sim/objects', event(names.unschedulable, 'Pod', 'FailedScheduling', "0/40 nodes are available: 40 node(s) didn't match Pod's node affinity/selector.", 'default-scheduler'))
+    await simPostJSON(
+      '/sim/objects',
+      pod(
+        names.oom,
+        { nodeName: node },
+        {
+          phase: 'Running',
+          startTime: ts(20_000),
+          conditions: [
+            { type: 'PodScheduled', status: 'True' },
+            { type: 'Ready', status: 'True' },
+          ],
+          containerStatuses: [
+            {
+              name: 'main',
+              image: 'registry.example/e2e:1',
+              imageID: '',
+              ready: true,
+              started: true,
+              restartCount: 1,
+              state: { running: { startedAt: ts(5_000) } },
+              lastState: { terminated: { exitCode: 137, reason: 'OOMKilled', startedAt: ts(19_000), finishedAt: ts(6_000) } },
+            },
+          ],
+        },
+      ),
+    )
     return {
       pull: `${ns}/${names.pull}`,
       unschedulable: `${ns}/${names.unschedulable}`,
@@ -722,7 +778,13 @@ export const cluster = {
     if (!inKind) return async () => undefined
     const name = 'e2e-watson-nodes'
     await kubectlApply({ apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'ClusterRole', metadata: { name }, rules: [{ apiGroups: [''], resources: ['nodes'], verbs: ['get', 'list', 'watch', 'patch', 'update'] }] })
-    await kubectlApply({ apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'ClusterRoleBinding', metadata: { name }, roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name }, subjects: [{ apiGroup: 'rbac.authorization.k8s.io', kind: 'User', name: user }] })
+    await kubectlApply({
+      apiVersion: 'rbac.authorization.k8s.io/v1',
+      kind: 'ClusterRoleBinding',
+      metadata: { name },
+      roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name },
+      subjects: [{ apiGroup: 'rbac.authorization.k8s.io', kind: 'User', name: user }],
+    })
     return async () => void (await kubectl('delete', 'clusterrolebinding,clusterrole', name, '--ignore-not-found'))
   },
 

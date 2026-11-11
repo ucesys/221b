@@ -53,7 +53,18 @@ export function ConfirmDialog({ title, children, confirm, danger, busy, disabled
           }
           trapTab(e)
         }}
-        style={{ position: 'relative', width: 'min(460px, 100%)', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 12, boxShadow: 'var(--shadow)', overflowWrap: 'anywhere', maxHeight: 'calc(100vh - 32px)', overflowY: 'auto' }}
+        style={{
+          position: 'relative',
+          width: 'min(460px, 100%)',
+          padding: '18px 20px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+          boxShadow: 'var(--shadow)',
+          overflowWrap: 'anywhere',
+          maxHeight: 'calc(100vh - 32px)',
+          overflowY: 'auto',
+        }}
       >
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{title}</h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>{children}</div>
@@ -73,7 +84,17 @@ export function ConfirmDialog({ title, children, confirm, danger, busy, disabled
               {also.label}
             </button>
           )}
-          <button ref={ok} className="rk-btn" data-on={!danger} data-danger={danger ? 'true' : undefined} aria-busy={busy} disabled={busy || disabled} onClick={onConfirm} data-testid="confirm-ok" style={danger ? { borderColor: 'var(--err)', color: 'var(--err)' } : undefined}>
+          <button
+            ref={ok}
+            className="rk-btn"
+            data-on={!danger}
+            data-danger={danger ? 'true' : undefined}
+            aria-busy={busy}
+            disabled={busy || disabled}
+            onClick={onConfirm}
+            data-testid="confirm-ok"
+            style={danger ? { borderColor: 'var(--err)', color: 'var(--err)' } : undefined}
+          >
             {confirm}
           </button>
         </div>

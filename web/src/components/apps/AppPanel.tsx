@@ -1,5 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchAppInspect, fetchAppRefs, fetchDrift, fetchImages, fetchRevisions, fromRepository, inspectRepo, isCard, sourceText, updateApp, type AppDrift, type AppImage, type AppInput, type AppRefs, type AppSource, type AppView, type RefKind, type RepoInspection, type RevisionView } from '../../api/apps'
+import {
+  fetchAppInspect,
+  fetchAppRefs,
+  fetchDrift,
+  fetchImages,
+  fetchRevisions,
+  fromRepository,
+  inspectRepo,
+  isCard,
+  sourceText,
+  updateApp,
+  type AppDrift,
+  type AppImage,
+  type AppInput,
+  type AppRefs,
+  type AppSource,
+  type AppView,
+  type RefKind,
+  type RepoInspection,
+  type RevisionView,
+} from '../../api/apps'
 import { useLiveMeta } from '../../api/live'
 import { useDetails } from '../../api/details'
 import type { ClusterInfo, ReleaseDetails } from '../../api/types'
@@ -114,7 +134,12 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
   const commit = app?.commit ? shortDigest(app.commit) : ''
 
   // --- Helm repositories (Phase 12, wave 5): a repository's chart is kept by its version, not a branch.
-  const overview = fromRepository(app?.source) && app ? <RepoSourceCard clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} now={now} /> : <SourceCard clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} now={now} />
+  const overview =
+    fromRepository(app?.source) && app ? (
+      <RepoSourceCard clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} now={now} />
+    ) : (
+      <SourceCard clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} now={now} />
+    )
 
   const imagesTab = (
     <Card
@@ -232,13 +257,22 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
           {!row.orphan && (
             <>
               <span>
-                Chart <span className="rk-mono" style={{ color: 'var(--fg)' }}>{row.chart}-{row.chartVersion}</span>
+                Chart{' '}
+                <span className="rk-mono" style={{ color: 'var(--fg)' }}>
+                  {row.chart}-{row.chartVersion}
+                </span>
               </span>
               <span>
-                App version <span className="rk-mono" style={{ color: 'var(--fg)' }}>{row.appVersion || '—'}</span>
+                App version{' '}
+                <span className="rk-mono" style={{ color: 'var(--fg)' }}>
+                  {row.appVersion || '—'}
+                </span>
               </span>
               <span>
-                Updated <span className="rk-num" style={{ color: 'var(--fg)' }}>{row.updated ? `${fmtAge(row.updated, now)} ago · ${fmtTs(row.updated)}` : '—'}</span>
+                Updated{' '}
+                <span className="rk-num" style={{ color: 'var(--fg)' }}>
+                  {row.updated ? `${fmtAge(row.updated, now)} ago · ${fmtTs(row.updated)}` : '—'}
+                </span>
               </span>
             </>
           )}
@@ -251,7 +285,13 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
             </span>
           )}
           {drift && driftState(drift) !== 'in sync' && (
-            <span data-testid="app-drift" title={drift.objects.filter((o) => o.state !== 'same').map((o) => `${o.kind} ${o.name}: ${o.state}${o.fields?.length ? ' (' + o.fields.join(', ') + ')' : ''}`).join('\n')}>
+            <span
+              data-testid="app-drift"
+              title={drift.objects
+                .filter((o) => o.state !== 'same')
+                .map((o) => `${o.kind} ${o.name}: ${o.state}${o.fields?.length ? ' (' + o.fields.join(', ') + ')' : ''}`)
+                .join('\n')}
+            >
               <span className="rk-pill" data-tone={driftTone(row) === 'muted' ? 'warn' : driftTone(row)}>
                 <span className="rk-dot" />
                 {driftState(drift)}
@@ -273,11 +313,17 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
           <span data-testid="app-source-line">
             {app ? (
               <>
-                Source <span className="rk-mono" style={{ color: 'var(--fg)' }}>{sourceText(app.source)}</span>
+                Source{' '}
+                <span className="rk-mono" style={{ color: 'var(--fg)' }}>
+                  {sourceText(app.source)}
+                </span>
                 {commit ? (
                   <>
                     {' '}
-                    · {commit.startsWith('sha256:') ? 'archive' : 'commit'} <span className="rk-mono" style={{ color: 'var(--fg)' }}>{commit}</span>
+                    · {commit.startsWith('sha256:') ? 'archive' : 'commit'}{' '}
+                    <span className="rk-mono" style={{ color: 'var(--fg)' }}>
+                      {commit}
+                    </span>
                   </>
                 ) : (
                   ' · not deployed from it yet'
@@ -331,23 +377,27 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
               driftOff: !app ? 'no source to check against' : !drift ? 'not checked yet' : drift.unknown > 0 && drift.same + drift.changed + drift.missing === 0 ? 'the check could not read the cluster' : 'the cluster is as deployed',
             }}
           >
-          <ReleaseBody
-            cluster={cluster}
-            now={now}
-            onToast={onToast}
-            route={route}
-            current={row}
-            d={d}
-            error={details.error}
-            sub={tab}
-            onSub={(id) => onTab(id as AppTab)}
-            before={before}
-            after={after}
-            above={{
-              values: app ? <ValuesEditor clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} /> : <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>A values file and parameters are kept for releases with a source.</p>,
-              history: historyAbove,
-            }}
-          />
+            <ReleaseBody
+              cluster={cluster}
+              now={now}
+              onToast={onToast}
+              route={route}
+              current={row}
+              d={d}
+              error={details.error}
+              sub={tab}
+              onSub={(id) => onTab(id as AppTab)}
+              before={before}
+              after={after}
+              above={{
+                values: app ? (
+                  <ValuesEditor clusterId={clusterId} row={row} app={app} canChange={canChange} onResult={onResult} />
+                ) : (
+                  <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>A values file and parameters are kept for releases with a source.</p>
+                ),
+                history: historyAbove,
+              }}
+            />
           </RevisionActions.Provider>
         )}
         {diffFor !== null && revisions && <DiffDialog clusterId={clusterId} namespace={row.namespace} name={row.name} revisions={revisions} revision={diffFor} app={app} refs={refs} onClose={() => setDiffFor(null)} />}
@@ -423,12 +473,22 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(save, 1200)
   }
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current)
-  }, [])
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current)
+    },
+    [],
+  )
   const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? 'Unsaved; saves in a moment' : state === 'error' ? error : 'Saved'
   return (
-    <Card title="Values file and parameters" aside={<span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-values-state">{status}</span>}>
+    <Card
+      title="Values file and parameters"
+      aside={
+        <span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-values-state">
+          {status}
+        </span>
+      }
+    >
       <YamlEditor
         value={values}
         onChange={({ text, errors }) => {
@@ -469,7 +529,9 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
         />
       </div>
       <p className="rk-hint" style={{ margin: 0 }}>
-        {canChange ? 'What you type here is kept with the application; Redeploy at the top deploys it, as you, after your approval in Watson. The chart\'s defaults apply underneath.' : 'What the console deploys this application with; the chart\'s defaults apply underneath.'}
+        {canChange
+          ? "What you type here is kept with the application; Redeploy at the top deploys it, as you, after your approval in Watson. The chart's defaults apply underneath."
+          : "What the console deploys this application with; the chart's defaults apply underneath."}
       </p>
     </Card>
   )
@@ -514,7 +576,14 @@ function RepoSourceCard({ clusterId, row, app, canChange, onResult, now }: { clu
   }
   const digest = app.commit ? shortDigest(app.commit) : ''
   return (
-    <Card title="Setup" aside={<span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-source-state">{state === 'saving' ? 'Saving…' : state === 'error' ? error : version.trim() !== app.source.ref ? 'Not saved yet: press Save' : 'Saved'}</span>}>
+    <Card
+      title="Setup"
+      aside={
+        <span style={{ fontSize: 12, color: state === 'error' ? 'var(--err)' : 'var(--fg3)' }} role={state === 'error' ? 'alert' : undefined} data-testid="app-source-state">
+          {state === 'saving' ? 'Saving…' : state === 'error' ? error : version.trim() !== app.source.ref ? 'Not saved yet: press Save' : 'Saved'}
+        </span>
+      }
+    >
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '8px 16px' }} data-testid="app-repo-source">
         <span style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: 11.5, fontWeight: 600, color: 'var(--fg3)' }}>
           {app.source.kind === 'oci' ? 'Chart in an OCI registry' : `Chart of the Helm repository ${app.source.repository ?? ''}`}
@@ -538,11 +607,17 @@ function RepoSourceCard({ clusterId, row, app, canChange, onResult, now }: { clu
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 18px', fontSize: 12, color: 'var(--fg3)' }}>
         <span>
-          Archive <span className="rk-mono" style={{ color: 'var(--fg)' }}>{digest ? `${digest}${app.commitSubject ? ` — ${app.commitSubject}` : ''}` : 'not deployed from here yet'}</span>
+          Archive{' '}
+          <span className="rk-mono" style={{ color: 'var(--fg)' }}>
+            {digest ? `${digest}${app.commitSubject ? ` — ${app.commitSubject}` : ''}` : 'not deployed from here yet'}
+          </span>
           {app.matchedRevision ? ` · renders what revision ${app.matchedRevision} runs` : app.sourceDiff ? ` · ${app.sourceDiff}` : ''}
         </span>
         <span title={`kept by ${app.createdBy || 'the console'}, ${fmtTs(app.created)}`}>
-          Last change <span style={{ color: 'var(--fg)' }}>{app.updatedBy || '—'}, {fmtAge(app.updated, now)} ago</span>
+          Last change{' '}
+          <span style={{ color: 'var(--fg)' }}>
+            {app.updatedBy || '—'}, {fmtAge(app.updated, now)} ago
+          </span>
         </span>
         <span>A new version deploys with Redeploy; another repository or chart is set with Source in the tools menu.</span>
       </div>
@@ -683,7 +758,16 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
           filled.push(`${d.refKind} ${d.ref}`)
         }
         if (filled.length) edited()
-        setLook({ repo: url, state: 'done', text: d.charts.length === 0 ? `No Chart.yaml within four directories of the root at ${d.ref}.` : filled.length ? `Filled from the repository: ${filled.join(', ')}.` : `${d.charts.length === 1 ? 'Chart' : `${d.charts.length} charts; chart`} ${chart!.path || '/'} (${chart!.name} ${chart!.version}) at ${d.ref}.` })
+        setLook({
+          repo: url,
+          state: 'done',
+          text:
+            d.charts.length === 0
+              ? `No Chart.yaml within four directories of the root at ${d.ref}.`
+              : filled.length
+                ? `Filled from the repository: ${filled.join(', ')}.`
+                : `${d.charts.length === 1 ? 'Chart' : `${d.charts.length} charts; chart`} ${chart!.path || '/'} (${chart!.name} ${chart!.version}) at ${d.ref}.`,
+        })
       })
       .catch((e: unknown) => setLook({ repo: url, state: 'error', text: e instanceof Error ? e.message : String(e) }))
   }
@@ -731,7 +815,12 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
   const [local, setLocal] = useState<{ key: string; valuesFile: string; ignoreDefaults: boolean; fleet: string } | null>(null)
   const opts = local && local.key === optKey ? local : { key: optKey, valuesFile: app?.valuesFile ?? '', ignoreDefaults: !!app?.ignoreDefaults, fleet: app?.fleet ?? '' }
   const saveOption = (input: AppInput) => {
-    setLocal({ ...opts, ...(input.valuesFile !== undefined ? { valuesFile: input.valuesFile } : {}), ...(input.ignoreDefaults !== undefined ? { ignoreDefaults: input.ignoreDefaults } : {}), ...(input.fleet !== undefined ? { fleet: input.fleet } : {}) })
+    setLocal({
+      ...opts,
+      ...(input.valuesFile !== undefined ? { valuesFile: input.valuesFile } : {}),
+      ...(input.ignoreDefaults !== undefined ? { ignoreDefaults: input.ignoreDefaults } : {}),
+      ...(input.fleet !== undefined ? { fleet: input.fleet } : {}),
+    })
     setOptState('saving')
     queue.current = queue.current
       .then(() => updateApp(clusterId, row.namespace, row.name, input))
@@ -745,7 +834,18 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
         setOptError(e instanceof Error ? e.message : String(e))
       })
   }
-  const status = state === 'saving' ? 'Saving…' : state === 'dirty' ? (repo.trim() && ref.trim() ? 'Not saved yet: press Save, or leave the field' : 'Not saved yet: needs a repository and a branch or tag') : state === 'error' ? error : saved ? 'Saved' : 'Not set'
+  const status =
+    state === 'saving'
+      ? 'Saving…'
+      : state === 'dirty'
+        ? repo.trim() && ref.trim()
+          ? 'Not saved yet: press Save, or leave the field'
+          : 'Not saved yet: needs a repository and a branch or tag'
+        : state === 'error'
+          ? error
+          : saved
+            ? 'Saved'
+            : 'Not set'
   return (
     <Card
       title="Setup"
@@ -755,7 +855,14 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             {status}
           </span>
           {canChange && (
-            <button className="rk-btn" data-on={state === 'dirty' && repo.trim() && ref.trim() ? 'true' : undefined} onClick={() => save(undefined, undefined, true)} disabled={state === 'saving' || (state !== 'dirty' && state !== 'error')} style={{ height: 26 }} data-testid="app-src-save">
+            <button
+              className="rk-btn"
+              data-on={state === 'dirty' && repo.trim() && ref.trim() ? 'true' : undefined}
+              onClick={() => save(undefined, undefined, true)}
+              disabled={state === 'saving' || (state !== 'dirty' && state !== 'error')}
+              style={{ height: 26 }}
+              data-testid="app-src-save"
+            >
               {saved ? 'Save' : 'Set source'}
             </button>
           )}
@@ -781,7 +888,19 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             </span>
           </span>
         </label>
-        {field(app?.hasToken && repo.trim() !== app.source.repo ? 'GitHub token (the saved one is removed with the repository change; paste one for the new repository)' : app?.hasToken ? 'GitHub token (one is saved; paste a new one to replace it)' : 'GitHub token (for a private repository; kept in the console, never shown again)', token, setToken, app?.hasToken ? '••••••••' : 'ghp_… or github_pat_…, optional', 'app-src-token', 'password', 3)}
+        {field(
+          app?.hasToken && repo.trim() !== app.source.repo
+            ? 'GitHub token (the saved one is removed with the repository change; paste one for the new repository)'
+            : app?.hasToken
+              ? 'GitHub token (one is saved; paste a new one to replace it)'
+              : 'GitHub token (for a private repository; kept in the console, never shown again)',
+          token,
+          setToken,
+          app?.hasToken ? '••••••••' : 'ghp_… or github_pat_…, optional',
+          'app-src-token',
+          'password',
+          3,
+        )}
       </div>
       {look && (
         <p style={{ margin: 0, fontSize: 12, color: look.state === 'error' ? 'var(--err)' : 'var(--fg2)' }} data-testid="app-src-inspect" data-state={look.state}>
@@ -807,16 +926,25 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
         {app && (
           <>
             <span>
-              Commit <span className="rk-mono" style={{ color: 'var(--fg)' }}>{commit ? `${commit}${app.commitSubject ? ` — ${app.commitSubject}` : ''}` : 'not deployed from here yet'}</span>
+              Commit{' '}
+              <span className="rk-mono" style={{ color: 'var(--fg)' }}>
+                {commit ? `${commit}${app.commitSubject ? ` — ${app.commitSubject}` : ''}` : 'not deployed from here yet'}
+              </span>
               {app.matchedRevision ? ` · renders what revision ${app.matchedRevision} runs` : app.sourceDiff ? ` · ${app.sourceDiff}` : ''}
             </span>
             {app.chartVersion && (
               <span>
-                Chart at commit <span className="rk-mono" style={{ color: 'var(--fg)' }}>{app.chartVersion}</span>
+                Chart at commit{' '}
+                <span className="rk-mono" style={{ color: 'var(--fg)' }}>
+                  {app.chartVersion}
+                </span>
               </span>
             )}
             <span title={`kept by ${app.createdBy || 'the console'}, ${fmtTs(app.created)}`}>
-              Last change <span style={{ color: 'var(--fg)' }}>{app.updatedBy || '—'}, {fmtAge(app.updated, now)} ago</span>
+              Last change{' '}
+              <span style={{ color: 'var(--fg)' }}>
+                {app.updatedBy || '—'}, {fmtAge(app.updated, now)} ago
+              </span>
             </span>
           </>
         )}
@@ -844,8 +972,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             {optState === 'saving' ? 'Saving…' : optState === 'error' ? optError : optState === 'saved' ? 'Saved. ' : ''}
             Applied lowest first: {opts.ignoreDefaults ? <s>the chart’s values.yaml</s> : 'the chart’s values.yaml'}
             {opts.valuesFile ? `, ${opts.valuesFile}` : ''}, the Values tab, then its parameters
-            {app.fleetLabel ? `; the fleet adds nodeSelector ${app.fleetLabel}` : ''}.
-            {inspect?.key === inspectKey && inspect.error ? ` The repository could not be read for its files: ${inspect.error}` : ''}
+            {app.fleetLabel ? `; the fleet adds nodeSelector ${app.fleetLabel}` : ''}.{inspect?.key === inspectKey && inspect.error ? ` The repository could not be read for its files: ${inspect.error}` : ''}
           </span>
         </div>
       )}
@@ -868,7 +995,11 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             </span>
           </label>
           <span style={{ fontSize: 12, color: 'var(--fg3)', paddingBottom: 6, flex: '1 1 260px' }} data-testid="app-fleet-hint">
-            {fleets.length === 0 ? 'No fleet has a label configured: give a fleet a deploy label in its editor, and it is offered here.' : app.fleetLabel ? `The deploy adds nodeSelector ${app.fleetLabel}, so the pods run on the fleet’s nodes.` : 'The fleet’s deploy label becomes the pods’ nodeSelector on the next deploy.'}
+            {fleets.length === 0
+              ? 'No fleet has a label configured: give a fleet a deploy label in its editor, and it is offered here.'
+              : app.fleetLabel
+                ? `The deploy adds nodeSelector ${app.fleetLabel}, so the pods run on the fleet’s nodes.`
+                : 'The fleet’s deploy label becomes the pods’ nodeSelector on the next deploy.'}
           </span>
         </div>
       )}

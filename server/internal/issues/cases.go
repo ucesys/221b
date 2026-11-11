@@ -52,7 +52,7 @@ const (
 )
 
 // Kind is what opened the case.
-func (r *Report) Kind() string {
+func (r *Case) Kind() string {
 	if r.Source == "" {
 		return CaseReport
 	}
@@ -61,11 +61,11 @@ func (r *Report) Kind() string {
 
 // AgentFound says an agent found the case: it was opened from a run's
 // finding.
-func (r *Report) AgentFound() bool { return r.Source == CaseFinding }
+func (r *Case) AgentFound() bool { return r.Source == CaseFinding }
 
 // Pending says whether the case waits for the people who work the cases
 // (CF-17): New or In progress.
-func (r *Report) Pending() bool { return r.Status.Open() }
+func (r *Case) Pending() bool { return r.Status.Open() }
 
 // AllowedOutcomes are the outcomes an open case may close with (CF-03):
 // every one, whoever opened it, but exception, which is for what an agent
@@ -73,7 +73,7 @@ func (r *Report) Pending() bool { return r.Status.Open() }
 // is offered for every case. Any case may be a duplicate of an open
 // original (CF-04): a person may see two agent-found cases are one
 // problem though their keys differ.
-func (r *Report) AllowedOutcomes() []Outcome {
+func (r *Case) AllowedOutcomes() []Outcome {
 	if !r.Status.Open() {
 		return []Outcome{}
 	}
@@ -84,10 +84,10 @@ func (r *Report) AllowedOutcomes() []Outcome {
 }
 
 // RCARequired says a fix needs its RCA: at P0 and P1 (CF-03).
-func (r *Report) RCARequired() bool { return r.Priority <= 1 }
+func (r *Case) RCARequired() bool { return r.Priority <= 1 }
 
 // MayClose says why a case may not close with an outcome, if it may not.
-func (r *Report) MayClose(o Outcome) error {
+func (r *Case) MayClose(o Outcome) error {
 	o = o.Canonical()
 	if !o.Valid() {
 		return invalid("say why it is closed: fix, duplicate, noAction, knownIssue or exception")
@@ -120,7 +120,7 @@ func oneLine(what, s string, limit int) (string, error) {
 }
 
 // about applies a triage's change to what a case is about (CU-03).
-func (t Triage) about(r *Report, did *[]string) error {
+func (t Triage) about(r *Case, did *[]string) error {
 	if t.Title != nil {
 		v, err := oneLine("the title", *t.Title, MaxTitle)
 		if err != nil {
@@ -191,7 +191,7 @@ func (e *FieldConflict) Error() string {
 // check says which field no longer holds what the edit started from: the
 // title as a case's view shows it (a report's first line until it has
 // one).
-func (e *Expect) check(r *Report) error {
+func (e *Expect) check(r *Case) error {
 	if e == nil {
 		return nil
 	}
@@ -256,8 +256,8 @@ type Opening struct {
 // it counts as acknowledged and responded to at once, and its SLA clock
 // runs. An agent-found case waits for a person; its clock runs at P0-P1
 // only (CF-02).
-func (s *Service) Open(ctx context.Context, c Caller, in Opening) (Report, error) {
-	var out Report
+func (s *Service) Open(ctx context.Context, c Caller, in Opening) (Case, error) {
+	var out Case
 	err := s.update(ctx, func(st *state, ch *change) (int, error) {
 		r, err := (&Tx{st: st, ch: ch, now: s.now()}).Open(c, in)
 		if err != nil {
@@ -275,7 +275,7 @@ func (s *Service) Open(ctx context.Context, c Caller, in Opening) (Report, error
 
 var sourceWords = map[string]string{CaseFinding: "from a finding", CaseManual: "by hand", CaseAlert: "from an alert", CaseReport: "from a report"}
 
-func aboutWords(r *Report) string {
+func aboutWords(r *Case) string {
 	var w []string
 	if r.Cluster != "" {
 		w = append(w, "on "+r.Cluster)
@@ -290,13 +290,13 @@ func aboutWords(r *Report) string {
 }
 
 // caseOf checks what a case is opened with.
-func caseOf(in Opening) (Report, error) {
+func caseOf(in Opening) (Case, error) {
 	title, err := oneLine("the title", in.Title, MaxTitle)
 	if err != nil {
-		return Report{}, err
+		return Case{}, err
 	}
 	if title == "" {
-		return Report{}, invalid("give the case a title")
+		return Case{}, invalid("give the case a title")
 	}
 	text := strings.TrimSpace(strings.ToValidUTF8(in.Text, ""))
 	if utf8.RuneCountInString(text) > MaxText {
@@ -305,31 +305,31 @@ func caseOf(in Opening) (Report, error) {
 	clean := scrub.Text(text)
 	cluster, err := oneLine("the cluster", in.Cluster, MaxID)
 	if err != nil {
-		return Report{}, err
+		return Case{}, err
 	}
 	object, err := oneLine("what it is about", in.Object, MaxObject)
 	if err != nil {
-		return Report{}, err
+		return Case{}, err
 	}
 	p := DefaultPriority
 	if in.Priority != nil {
 		p = *in.Priority
 	}
 	if p < MinPriority || p > MaxPriority {
-		return Report{}, invalid("a priority is P%d to P%d", MinPriority, MaxPriority)
+		return Case{}, invalid("a priority is P%d to P%d", MinPriority, MaxPriority)
 	}
 	if in.Source == CaseFinding && p == 0 {
-		return Report{}, invalid("agents never set P0")
+		return Case{}, invalid("agents never set P0")
 	}
 	typ, err := checkType(in.Type)
 	if err != nil {
-		return Report{}, err
+		return Case{}, err
 	}
 	incident, err := CleanIncident(in.Incident)
 	if err != nil {
-		return Report{}, err
+		return Case{}, err
 	}
-	return Report{Title: title, Text: clean, Scrubbed: clean != text, Source: in.Source, Cluster: cluster, Object: object, Priority: p, Type: typ, Incident: incident}, nil
+	return Case{Title: title, Text: clean, Scrubbed: clean != text, Source: in.Source, Cluster: cluster, Object: object, Priority: p, Type: typ, Incident: incident}, nil
 }
 
 // CaseView is one case as a caller sees it (as ReportView), whole, for
@@ -415,7 +415,7 @@ func (d DuplicateCheck) End() int { return d.end }
 
 // duplicateCheck follows the duplicate chain from original to its end and
 // says whether r may close as its duplicate (CF-04).
-func (st *state) duplicateCheck(r *Report, original int) DuplicateCheck {
+func (st *state) duplicateCheck(r *Case, original int) DuplicateCheck {
 	out := DuplicateCheck{Original: "C-" + strconv.Itoa(original), Offers: []Offer{}}
 	seen := map[int]bool{r.Number: true}
 	cur := original
@@ -487,7 +487,7 @@ func (s *Service) DuplicateCheck(ctx context.Context, n, original int) (Duplicat
 
 // closeDuplicate closes r as a duplicate of its original: its reporter
 // follows the original from now on, and the original notes it.
-func closeDuplicate(st *state, r *Report, original int, by Person, explanation string, now time.Time) {
+func closeDuplicate(st *state, r *Case, original int, by Person, explanation string, now time.Time) {
 	CloseCase(r, by, OutcomeDuplicate, explanation, now)
 	r.DuplicateOf = original
 	o := st.report(original)
@@ -505,7 +505,7 @@ func closeDuplicate(st *state, r *Report, original int, by Person, explanation s
 	o.Updated = now
 }
 
-func firstTitle(r *Report) string {
+func firstTitle(r *Case) string {
 	if r.Title != "" {
 		return r.Title
 	}
@@ -549,8 +549,8 @@ func (s *Service) Batch(ctx context.Context, fn func(tx *Tx) error) error {
 }
 
 // Apply changes one case in a Tx and returns it as saved.
-func (s *Service) Apply(ctx context.Context, n int, fn func(tx *Tx, r *Report) error) (Report, error) {
-	var out Report
+func (s *Service) Apply(ctx context.Context, n int, fn func(tx *Tx, r *Case) error) (Case, error) {
+	var out Case
 	err := s.Batch(ctx, func(tx *Tx) error {
 		r, err := tx.Case(n)
 		if err != nil {
@@ -575,7 +575,7 @@ func (tx *Tx) As(a Actor) { tx.st.actor = &a }
 
 // By names who changed one case in the change, when not the change's
 // actor: the agent whose run found it again, say.
-func (tx *Tx) By(r *Report, a Actor) {
+func (tx *Tx) By(r *Case, a Actor) {
 	if l, ok := tx.st.cases[r.Number]; ok && l.r == r {
 		l.by = &a
 	}
@@ -589,7 +589,7 @@ func (tx *Tx) Lines() []Line { return tx.st.index.Lines }
 func (tx *Tx) Line(n int) *Line { return tx.st.line(n) }
 
 // Case is a case's whole record, which the Tx saves when changed.
-func (tx *Tx) Case(n int) (*Report, error) {
+func (tx *Tx) Case(n int) (*Case, error) {
 	r := tx.st.report(n)
 	if r == nil {
 		if tx.st.err != nil {
@@ -626,7 +626,7 @@ func (tx *Tx) Settings() Settings { return tx.st.settings() }
 func (tx *Tx) Audit(a AuditRecord) { tx.ch.audit(a) }
 
 // Changed raises the event of a case changed, for the subscribers.
-func (tx *Tx) Changed(r *Report, by *Person) {
+func (tx *Tx) Changed(r *Case, by *Person) {
 	tx.ch.event(Event{Kind: EventReportTriaged, At: tx.now, Report: copyReport(r), By: by})
 }
 
@@ -637,19 +637,19 @@ func (tx *Tx) Drop(n int) {
 }
 
 // DuplicateCheck says whether r may close as a duplicate of original.
-func (tx *Tx) DuplicateCheck(r *Report, original int) DuplicateCheck {
+func (tx *Tx) DuplicateCheck(r *Case, original int) DuplicateCheck {
 	return tx.st.duplicateCheck(r, original)
 }
 
 // CloseDuplicate closes r as a duplicate of its original (the end of the
 // chain a DuplicateCheck allowed).
-func (tx *Tx) CloseDuplicate(r *Report, original int, by Person, explanation string) {
+func (tx *Tx) CloseDuplicate(r *Case, original int, by Person, explanation string) {
 	closeDuplicate(tx.st, r, original, by, explanation, tx.now)
 }
 
 // LinkKnown closes r as a known issue a person chose: an agent-found
 // case's key is added to it, so its repeats are recorded there.
-func (tx *Tx) LinkKnown(r *Report, k *KnownIssue, by Person) {
+func (tx *Tx) LinkKnown(r *Case, k *KnownIssue, by Person) {
 	tx.known = true
 	linkKnown(tx.st, r, k, 100, by, tx.now)
 	if r.Key != nil {
@@ -659,7 +659,7 @@ func (tx *Tx) LinkKnown(r *Report, k *KnownIssue, by Person) {
 
 // Note adds a line to a case's conversation: internal, or for its
 // reporter too.
-func (tx *Tx) Note(r *Report, from Person, text string, internal bool) error {
+func (tx *Tx) Note(r *Case, from Person, text string, internal bool) error {
 	kind := FromSystem
 	if !from.System {
 		kind = FromOperator
@@ -702,10 +702,10 @@ func (tx *Tx) SimilarOpen(title, cluster, object string, skip int) int {
 }
 
 // Follow makes a person follow a case.
-func (tx *Tx) Follow(r *Report, p Person) error { return follow(r, p, true) }
+func (tx *Tx) Follow(r *Case, p Person) error { return follow(r, p, true) }
 
 // Open opens a case (see Service.Open) in the Tx.
-func (tx *Tx) Open(c Caller, in Opening) (*Report, error) {
+func (tx *Tx) Open(c Caller, in Opening) (*Case, error) {
 	if !c.Operator {
 		return nil, fmt.Errorf("%w: only the people who work the cases open them", ErrDenied)
 	}

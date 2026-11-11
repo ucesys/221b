@@ -130,7 +130,7 @@ var setupDefs = []setupDef{
 		"#/admin/settings/knowledge", "Administration › Settings › Knowledge", "where the wiki is kept, then Add source; a source's token goes in its own field", "docs/getting-started.md#5-knowledge"},
 	{"jobs", "Jobs and notifications, in Cases",
 		"Jobs run agents on their own, read only (the nightly audit, an alert's diagnosis), and notifications tell people what waits for them in Cases.",
-		"#/cases/jobs", "AIOps › Jobs, and Administration › Settings › Watson for the notification channels", "a job's switch and budget; a channel's webhook address is typed in its own field", "docs/getting-started.md#6-jobs-and-notifications"},
+		"#/aiops/jobs", "AIOps › Jobs, and Administration › Settings › Watson for the notification channels", "a job's switch and budget; a channel's webhook address is typed in its own field", "docs/getting-started.md#6-jobs-and-notifications"},
 	{"fleets", "Fleets",
 		"Fleets group nodes by the labels and taints they share; Automation runs on fleets, and the views filter by them.",
 		"#/nodes", "Kubernetes › Nodes, the fleet list", "New fleet, from the labels and taints the nodes share", "docs/getting-started.md#7-fleets"},

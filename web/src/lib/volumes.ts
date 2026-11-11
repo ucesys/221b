@@ -110,12 +110,7 @@ export function pairPeek(p: StoragePair): string {
 const STATE_RANK: Record<PairState, number> = { lost: 0, failed: 0, bound: 1, pending: 2, released: 3, available: 4 }
 
 export function comparePairs(a: StoragePair, b: StoragePair): number {
-  return (
-    STATE_RANK[a.state] - STATE_RANK[b.state] ||
-    compareNatural(a.namespace ?? '', b.namespace ?? '') ||
-    compareNatural(a.claim ?? a.volume ?? '', b.claim ?? b.volume ?? '') ||
-    compareNatural(a.volume ?? '', b.volume ?? '')
-  )
+  return STATE_RANK[a.state] - STATE_RANK[b.state] || compareNatural(a.namespace ?? '', b.namespace ?? '') || compareNatural(a.claim ?? a.volume ?? '', b.claim ?? b.volume ?? '') || compareNatural(a.volume ?? '', b.volume ?? '')
 }
 
 // ---- totals ----

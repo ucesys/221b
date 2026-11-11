@@ -212,9 +212,12 @@ type Options struct {
 	// CommandOK says whether Watson would run a command line; nil checks
 	// none. An answer's shell blocks are kept to what it runs (FixBlocks).
 	CommandOK func(line string) error
-	Audit     *audit.Log
-	Now       func() time.Time
-	Logger    *slog.Logger
+	// Commands is the sentence that says what Watson runs, for the
+	// built-in instructions (watson.Commands, S-1).
+	Commands string
+	Audit    *audit.Log
+	Now      func() time.Time
+	Logger   *slog.Logger
 	// MaxRounds bounds the tool rounds of one answer.
 	MaxRounds int
 	// MaxTokens bounds one reply, its thinking included.
@@ -428,6 +431,10 @@ type Question struct {
 	View string
 	// ViewChanges offers the UI actions that change the view (P6U-14).
 	ViewChanges bool
+	// Commands is the sentence of the built-in instructions that says what
+	// Watson runs (watson.Commands, S-1), since this package cannot import
+	// watson; empty, the service's Options.Commands.
+	Commands string
 	// Agent is the agent asked (Phase 12); "" is Sherlock.
 	Agent string
 	// SuperAdmin says the person asking is a SuperAdmin: Sherlock's setup
@@ -718,6 +725,9 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		defs = append([]ToolDef(nil), defs...)
 		defs[n-1].CacheControl = &CacheControl{Type: "ephemeral"}
 	}
+	if q.Commands == "" {
+		q.Commands = s.opts.Commands
+	}
 	system := systemPrompt(q, s.opts.Now())
 	first := func() {
 		if ans.FirstAt == nil {
@@ -870,7 +880,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		ans.Status = "thinking"
 		start := len(ans.Steps)
 		for _, b := range calls {
-			ans.Steps = append(ans.Steps, Step{Label: s.labelOf(q, b), Tool: b.Name, Status: "running"})
+			ans.Steps = append(ans.Steps, Step{Label: s.labelOf(&a, q, b), Tool: b.Name, Status: "running"})
 			tools = append(tools, b.Name)
 		}
 		first()

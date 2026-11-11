@@ -86,7 +86,7 @@ func TestProposalsSayWhoAndWhatTheyResolveCF35CF39(t *testing.T) {
 	ui := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "app") })
 	srv := httptest.NewServer(New(Options{Store: live.New(src, live.Options{}), Cluster: src, Settings: shared, Audit: log, UI: ui, Logger: quietLog(), Cards: st, Casework: cw, CardRoles: []roles.ID{roles.SuperAdmin}}))
 	t.Cleanup(srv.Close)
-	for _, path := range []string{"/api/v1/cases/proposals", "/api/v1/cases/proposals/" + id} {
+	for _, path := range []string{"/api/v1/aiops/proposals", "/api/v1/aiops/proposals/" + id} {
 		r, err := http.Get(srv.URL + path)
 		if err != nil {
 			t.Fatal(err)

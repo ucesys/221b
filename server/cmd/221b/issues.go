@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"k8s.io/client-go/rest"
 
@@ -84,4 +85,33 @@ func issueRoles(cfg config.Config) api.IssueRoles {
 		out.Operate = append(out.Operate, roles.ID(r))
 	}
 	return out
+}
+
+// wireIssues opens the issue service, which keeps the cases.
+func (w *wiring) wireIssues(ctx context.Context) error {
+	cfg, log := w.cfg, w.log
+	// The issue service (Phase 12, docs/issues.md): reports, known issues
+	// and services in a ConfigMap of its own; its timers run on the leader.
+	// Cases replace reports (Phase 12, wave 5, ADR-113): the cases are
+	// kept there whether or not people report problems (issues.enabled,
+	// which offers the report page and the issue API, issueAPI below).
+	var issueSvc, issueAPI *issues.Service
+	var issueStored *kv.Limited
+	svc, l, err := openIssues(ctx, cfg, w.restCfg, w.manager, w.auditLog, w.jobsW.investigator(), log)
+	if err != nil {
+		return err
+	}
+	if l != nil {
+		w.stored = append(w.stored, l)
+	}
+	issueStored = l
+	issueSvc = svc
+	w.knownSvc = svc
+	w.jobsW.setIssues(issueSvc)
+	go issueSvc.Run(ctx, 5*time.Minute, w.activity.Active)
+	if cfg.Issues {
+		issueAPI = issueSvc
+	}
+	w.issueSvc, w.issueAPI, w.issueStored = issueSvc, issueAPI, issueStored
+	return nil
 }

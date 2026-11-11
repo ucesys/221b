@@ -24,7 +24,12 @@ export const PRESETS: Preset[] = [
   { id: 'anthropic', label: 'Anthropic — the Claude API', p: { kind: 'anthropic' }, models: [] },
   { id: 'openai', label: 'OpenAI', p: { kind: 'openai' }, models: ['gpt-5', 'gpt-5-mini', 'gpt-4.1'] },
   { id: 'azure', label: 'Azure OpenAI', p: { kind: 'openai', endpoint: '', authHeader: 'api-key', authPrefix: '', query: 'api-version=2024-10-21' }, models: [] },
-  { id: 'bedrock', label: 'Amazon Bedrock', p: { kind: 'bedrock', region: 'us-east-1' }, models: ['us.anthropic.claude-opus-5-5-v1:0', 'us.anthropic.claude-sonnet-5-5-v1:0', 'amazon.nova-pro-v1:0', 'meta.llama4-maverick-17b-instruct-v1:0'] },
+  {
+    id: 'bedrock',
+    label: 'Amazon Bedrock',
+    p: { kind: 'bedrock', region: 'us-east-1' },
+    models: ['us.anthropic.claude-opus-5-5-v1:0', 'us.anthropic.claude-sonnet-5-5-v1:0', 'amazon.nova-pro-v1:0', 'meta.llama4-maverick-17b-instruct-v1:0'],
+  },
   { id: 'vertex', label: 'Google Vertex AI', p: { kind: 'vertex', region: 'us-east5', project: '' }, models: ['claude-opus-5-5', 'claude-sonnet-5-5', 'google/gemini-2.5-pro', 'google/gemini-2.5-flash'] },
   { id: 'compatible', label: 'Another OpenAI-compatible API or gateway (vLLM, Ollama, LiteLLM, Portkey, Kong, …)', p: { kind: 'openai', endpoint: '' }, models: [] },
   { id: 'anthropic-gateway', label: 'A gateway in front of the Claude API', p: { kind: 'anthropic', endpoint: '' }, models: [] },
@@ -109,7 +114,11 @@ export function Field({ label, hint, children, wide }: { label: string; hint?: s
     <label className={wide ? 'rk-ffield rk-fwide' : 'rk-ffield'} style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600, minWidth: 0 }}>
       {label}
       {children}
-      {hint && <span className="rk-fhint" style={{ fontWeight: 400 }}>{hint}</span>}
+      {hint && (
+        <span className="rk-fhint" style={{ fontWeight: 400 }}>
+          {hint}
+        </span>
+      )}
     </label>
   )
 }

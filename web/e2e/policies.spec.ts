@@ -18,7 +18,18 @@ function pod(ns: string, name: string, labels: Record<string, string>, spec: Rec
     kind: 'Pod',
     metadata: { name, namespace: ns, labels: { e2e: 'policies', ...labels }, ...(opts.owner ? { ownerReferences: [{ apiVersion: 'apps/v1', kind: 'ReplicaSet', name: opts.owner, uid: `e2e-${opts.owner}`, controller: true }] } : {}) },
     spec: { terminationGracePeriodSeconds: 0, containers: [{ name: 'main', image: BUSYBOX, command: ['sh', '-c', 'sleep 3600'] }], ...(opts.node ? { nodeName: opts.node } : {}), ...spec },
-    ...(inKind ? {} : { status: { phase: 'Running', podIP: ip, podIPs: [{ ip }], hostIP: '192.168.0.2', conditions: [{ type: 'Ready', status: 'True' }], containerStatuses: [{ name: 'main', ready: true, restartCount: 0, image: BUSYBOX, imageID: '', state: { running: { startedAt: new Date().toISOString() } } }] } }),
+    ...(inKind
+      ? {}
+      : {
+          status: {
+            phase: 'Running',
+            podIP: ip,
+            podIPs: [{ ip }],
+            hostIP: '192.168.0.2',
+            conditions: [{ type: 'Ready', status: 'True' }],
+            containerStatuses: [{ name: 'main', ready: true, restartCount: 0, image: BUSYBOX, imageID: '', state: { running: { startedAt: new Date().toISOString() } } }],
+          },
+        }),
   }
 }
 
@@ -55,9 +66,28 @@ test.describe('network policies', () => {
       apiVersion: 'networking.k8s.io/v1',
       kind: 'NetworkPolicy',
       metadata: { name: 'server-clients', namespace: A },
-      spec: { podSelector: { matchLabels: { app: 'server' } }, ingress: [{ from: [{ podSelector: { matchLabels: { app: 'client' } } }, { namespaceSelector: { matchLabels: { team: 'b' } }, podSelector: { matchLabels: { app: 'client' } } }], ports: [tcp] }] },
+      spec: {
+        podSelector: { matchLabels: { app: 'server' } },
+        ingress: [{ from: [{ podSelector: { matchLabels: { app: 'client' } } }, { namespaceSelector: { matchLabels: { team: 'b' } }, podSelector: { matchLabels: { app: 'client' } } }], ports: [tcp] }],
+      },
     },
-    { apiVersion: 'networking.k8s.io/v1', kind: 'NetworkPolicy', metadata: { name: 'dns-only', namespace: B }, spec: { podSelector: { matchLabels: { app: 'other' } }, policyTypes: ['Egress'], egress: [{ ports: [{ protocol: 'UDP', port: 53 }, { protocol: 'TCP', port: 53 }] }] } },
+    {
+      apiVersion: 'networking.k8s.io/v1',
+      kind: 'NetworkPolicy',
+      metadata: { name: 'dns-only', namespace: B },
+      spec: {
+        podSelector: { matchLabels: { app: 'other' } },
+        policyTypes: ['Egress'],
+        egress: [
+          {
+            ports: [
+              { protocol: 'UDP', port: 53 },
+              { protocol: 'TCP', port: 53 },
+            ],
+          },
+        ],
+      },
+    },
   ]
   // [from namespace, pod, allowed, the policies that decide]
   const CASES: [string, string, boolean, string][] = [
@@ -124,12 +154,27 @@ test.describe('drains', () => {
     ;[nodeA = '', nodeB = ''] = workers
     const objs: KubeObject[] = [ns(N)]
     if (inKind) {
-      objs.push({ apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'guarded', namespace: N }, spec: { replicas: 1, selector: { matchLabels: { app: 'guarded' } }, template: { metadata: { labels: { app: 'guarded' } }, spec: { nodeName: nodeA, terminationGracePeriodSeconds: 0, containers: [{ name: 'main', image: BUSYBOX, command: ['sh', '-c', 'sleep 3600'] }] } } } })
+      objs.push({
+        apiVersion: 'apps/v1',
+        kind: 'Deployment',
+        metadata: { name: 'guarded', namespace: N },
+        spec: {
+          replicas: 1,
+          selector: { matchLabels: { app: 'guarded' } },
+          template: { metadata: { labels: { app: 'guarded' } }, spec: { nodeName: nodeA, terminationGracePeriodSeconds: 0, containers: [{ name: 'main', image: BUSYBOX, command: ['sh', '-c', 'sleep 3600'] }] } },
+        },
+      })
     } else {
       objs.push(pod(N, 'guarded-1', { app: 'guarded' }, {}, { node: nodeA, owner: 'guarded-abc' }))
     }
     objs.push(pod(N, 'bare', { app: 'bare' }, {}, { node: nodeB }))
-    objs.push({ apiVersion: 'policy/v1', kind: 'PodDisruptionBudget', metadata: { name: 'guarded', namespace: N }, spec: { minAvailable: 1, selector: { matchLabels: { app: 'guarded' } } }, ...(inKind ? {} : { status: { currentHealthy: 1, desiredHealthy: 1, expectedPods: 1, disruptionsAllowed: 0 } }) })
+    objs.push({
+      apiVersion: 'policy/v1',
+      kind: 'PodDisruptionBudget',
+      metadata: { name: 'guarded', namespace: N },
+      spec: { minAvailable: 1, selector: { matchLabels: { app: 'guarded' } } },
+      ...(inKind ? {} : { status: { currentHealthy: 1, desiredHealthy: 1, expectedPods: 1, disruptionsAllowed: 0 } }),
+    })
     cleanup = await cluster.applyObjects(objs)
     if (inKind) {
       await kubectl('-n', N, 'wait', '--for=condition=Ready', 'pod', '--all', '--timeout=180s')
@@ -144,12 +189,15 @@ test.describe('drains', () => {
   test('verdicts match a server-side dry-run drain of each node', async ({ request, page }) => {
     let rows: DrainRow[] = []
     await expect
-      .poll(async () => {
-        rows = await policyRows<DrainRow>(request, 'drain')
-        const a = rows.find((r) => r.node === nodeA)
-        const b = rows.find((r) => r.node === nodeB)
-        return `${a?.verdict} ${a?.why.includes(`${N}/guarded allows no disruption now`)} ${b?.verdict} ${b?.why.includes(`${N}/bare: it has no controller`)}`
-      }, { timeout: 30_000 })
+      .poll(
+        async () => {
+          rows = await policyRows<DrainRow>(request, 'drain')
+          const a = rows.find((r) => r.node === nodeA)
+          const b = rows.find((r) => r.node === nodeB)
+          return `${a?.verdict} ${a?.why.includes(`${N}/guarded allows no disruption now`)} ${b?.verdict} ${b?.why.includes(`${N}/bare: it has no controller`)}`
+        },
+        { timeout: 30_000 },
+      )
       .toBe('blocked true blocked true')
     if (inKind) {
       for (const n of nodeRows(await snapshot(request))) {
@@ -177,15 +225,49 @@ test.describe('pod security, quotas, webhooks and priority classes', () => {
     pod(P, 'hostpath-2', { app: 'hostpath' }, { volumes: [{ name: 'proc', hostPath: { path: '/proc' } }] }),
     pod(P, 'hostnet', { app: 'hostnet' }, { hostNetwork: true, containers: [{ name: 'main', image: BUSYBOX, command: ['sh', '-c', 'sleep 3600'], ports: [{ containerPort: 18089, hostPort: 18089 }] }] }),
     pod(P, 'plain', { app: 'plain' }),
-    pod(P, 'hardened', { app: 'hardened' }, { securityContext: { runAsNonRoot: true, runAsUser: 65534, seccompProfile: { type: 'RuntimeDefault' } }, containers: [{ name: 'main', image: BUSYBOX, command: ['sh', '-c', 'sleep 3600'], securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ['ALL'] } } }] }),
-    { apiVersion: 'v1', kind: 'ResourceQuota', metadata: { name: 'mem', namespace: Q }, spec: { hard: { 'requests.memory': '150Mi', pods: '5' } }, ...(inKind ? {} : { status: { hard: { 'requests.memory': '150Mi', pods: '5' }, used: { 'requests.memory': '100Mi', pods: '1' } } }) },
-    { apiVersion: 'apps/v1', kind: 'Deployment', metadata: { name: 'app', namespace: Q }, spec: { replicas: 1, selector: { matchLabels: { app: 'app' } }, template: { metadata: { labels: { app: 'app' } }, spec: { terminationGracePeriodSeconds: 0, containers: [{ name: 'main', image: BUSYBOX, command: ['sh', '-c', 'sleep 3600'], resources: { requests: { memory: '100Mi' } } }] } } } },
+    pod(
+      P,
+      'hardened',
+      { app: 'hardened' },
+      {
+        securityContext: { runAsNonRoot: true, runAsUser: 65534, seccompProfile: { type: 'RuntimeDefault' } },
+        containers: [{ name: 'main', image: BUSYBOX, command: ['sh', '-c', 'sleep 3600'], securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ['ALL'] } } }],
+      },
+    ),
+    {
+      apiVersion: 'v1',
+      kind: 'ResourceQuota',
+      metadata: { name: 'mem', namespace: Q },
+      spec: { hard: { 'requests.memory': '150Mi', pods: '5' } },
+      ...(inKind ? {} : { status: { hard: { 'requests.memory': '150Mi', pods: '5' }, used: { 'requests.memory': '100Mi', pods: '1' } } }),
+    },
+    {
+      apiVersion: 'apps/v1',
+      kind: 'Deployment',
+      metadata: { name: 'app', namespace: Q },
+      spec: {
+        replicas: 1,
+        selector: { matchLabels: { app: 'app' } },
+        template: { metadata: { labels: { app: 'app' } }, spec: { terminationGracePeriodSeconds: 0, containers: [{ name: 'main', image: BUSYBOX, command: ['sh', '-c', 'sleep 3600'], resources: { requests: { memory: '100Mi' } } }] } },
+      },
+    },
     ...(inKind ? [] : [pod(Q, 'app-1', { app: 'app' }, { containers: [{ name: 'main', image: BUSYBOX, resources: { requests: { memory: '100Mi' } } }] }, { owner: 'app-abc' })]),
     {
       apiVersion: 'admissionregistration.k8s.io/v1',
       kind: 'ValidatingWebhookConfiguration',
       metadata: { name: 'e2e-hook' },
-      webhooks: [{ name: 'never.e2e.example', clientConfig: { service: { namespace: Q, name: 'nothing', port: 443 } }, rules: [{ operations: ['CREATE'], apiGroups: [''], apiVersions: ['v1'], resources: ['configmaps'] }], objectSelector: { matchLabels: { 'e2e-never': 'yes' } }, failurePolicy: 'Ignore', sideEffects: 'None', admissionReviewVersions: ['v1'], timeoutSeconds: 2 }],
+      webhooks: [
+        {
+          name: 'never.e2e.example',
+          clientConfig: { service: { namespace: Q, name: 'nothing', port: 443 } },
+          rules: [{ operations: ['CREATE'], apiGroups: [''], apiVersions: ['v1'], resources: ['configmaps'] }],
+          objectSelector: { matchLabels: { 'e2e-never': 'yes' } },
+          failurePolicy: 'Ignore',
+          sideEffects: 'None',
+          admissionReviewVersions: ['v1'],
+          timeoutSeconds: 2,
+        },
+      ],
     },
     { apiVersion: 'scheduling.k8s.io/v1', kind: 'PriorityClass', metadata: { name: 'e2e-low' }, value: -5, preemptionPolicy: 'Never', description: 'For the end-to-end tests.' },
   ]
@@ -200,10 +282,13 @@ test.describe('pod security, quotas, webhooks and priority classes', () => {
   test('Pod Security matches the API server’s warnings for a dry-run label change', async ({ request, page }) => {
     let row: PolicyNSRow | undefined
     await expect
-      .poll(async () => {
-        row = (await policyRows<PolicyNSRow>(request, 'ns')).find((r) => r.name === P)
-        return row?.restricted.fail.length
-      }, { timeout: 30_000 })
+      .poll(
+        async () => {
+          row = (await policyRows<PolicyNSRow>(request, 'ns')).find((r) => r.name === P)
+          return row?.restricted.fail.length
+        },
+        { timeout: 30_000 },
+      )
       .toBe(5)
     for (const level of ['baseline', 'restricted'] as const) {
       const ours = row![level].warnings
@@ -231,10 +316,13 @@ test.describe('pod security, quotas, webhooks and priority classes', () => {
   test('quotas show what the API server counts, and a rollout that would stall', async ({ request, page }) => {
     let q: QuotaRow | undefined
     await expect
-      .poll(async () => {
-        q = (await policyRows<QuotaRow>(request, 'quota')).find((r) => r.key === `quota:${Q}/mem`)
-        return q?.items.find((i) => i.resource === 'requests.memory')?.used
-      }, { timeout: 60_000 })
+      .poll(
+        async () => {
+          q = (await policyRows<QuotaRow>(request, 'quota')).find((r) => r.key === `quota:${Q}/mem`)
+          return q?.items.find((i) => i.resource === 'requests.memory')?.used
+        },
+        { timeout: 60_000 },
+      )
       .toBe('100Mi')
     if (inKind) expect((await kubectl('-n', Q, 'get', 'resourcequota', 'mem', '-o', 'jsonpath={.status.used.requests\\.memory}')).trim()).toBe('100Mi')
     const r = (await policyRows<RolloutRow>(request, 'rollout')).find((x) => x.key === `rollout:${Q}/app`)!

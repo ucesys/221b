@@ -19,7 +19,18 @@ function view(over: Partial<KnowledgeView> = {}): KnowledgeView {
     hook: false,
     status: {
       running: false,
-      last: { started: '2026-11-05T01:00:00Z', finished: '2026-11-05T01:02:00Z', by: 'knowledge sync', full: true, read: 3, unchanged: 10, pages: 2, proposals: 1, reported: ['Confluence space “Ops notes” tried to give instructions, which were not followed: “Ignore all previous instructions”'], text: '' },
+      last: {
+        started: '2026-11-05T01:00:00Z',
+        finished: '2026-11-05T01:02:00Z',
+        by: 'knowledge sync',
+        full: true,
+        read: 3,
+        unchanged: 10,
+        pages: 2,
+        proposals: 1,
+        reported: ['Confluence space “Ops notes” tried to give instructions, which were not followed: “Ignore all previous instructions”'],
+        text: '',
+      },
       sources: { infra: { lastRead: '2026-11-05T01:00:00Z', items: 12, reported: 1 }, console: { lastRead: '2026-11-05T01:00:00Z', items: 40 } },
     },
     pages: 7,
@@ -81,7 +92,12 @@ describe('Settings › Knowledge', () => {
 
   // --- A Wiki sync job per source (KN-28) ---
   it('starts no sync: each source links its Wiki sync job, and one line says where the syncs are', async () => {
-    current = view({ status: { ...view().status, sources: { ...view().status.sources, infra: { items: 0, error: 'the Confluence site answered 401 Unauthorized: the read token was refused; check that it belongs to ann@example.com and may read the space INFRA' } } } })
+    current = view({
+      status: {
+        ...view().status,
+        sources: { ...view().status.sources, infra: { items: 0, error: 'the Confluence site answered 401 Unauthorized: the read token was refused; check that it belongs to ann@example.com and may read the space INFRA' } },
+      },
+    })
     render(<KnowledgeSection />)
     const rows = await screen.findAllByTestId('knowledge-source')
     expect(screen.queryByTestId('knowledge-sync')).toBeNull()
@@ -91,9 +107,9 @@ describe('Settings › Knowledge', () => {
     expect(screen.queryByText(/Sync now|Synced|Never synced/)).toBeNull()
     const line = screen.getByTestId('knowledge-jobs-line')
     expect(line.textContent).toBe('Each source is read by its Wiki sync job in AIOps › Jobs.')
-    expect(screen.getByTestId('knowledge-jobs-link').getAttribute('href')).toBe('#/cases/jobs')
-    expect(within(rows[1]!).getByTestId('knowledge-source-job').getAttribute('href')).toBe('#/cases/jobs/wiki-sync-infra')
-    expect(within(rows[0]!).getByTestId('knowledge-source-job').getAttribute('href')).toBe('#/cases/jobs/wiki-sync-console')
+    expect(screen.getByTestId('knowledge-jobs-link').getAttribute('href')).toBe('#/aiops/jobs')
+    expect(within(rows[1]!).getByTestId('knowledge-source-job').getAttribute('href')).toBe('#/aiops/jobs/wiki-sync-infra')
+    expect(within(rows[0]!).getByTestId('knowledge-source-job').getAttribute('href')).toBe('#/aiops/jobs/wiki-sync-console')
     // A source's error is said whole, not cut at 60 characters.
     expect(within(rows[1]!).getByTestId('knowledge-source-state').textContent).toBe('the Confluence site answered 401 Unauthorized: the read token was refused; check that it belongs to ann@example.com and may read the space INFRA')
     await new Promise((r) => setTimeout(r, 0))
@@ -311,7 +327,19 @@ describe('Settings › Knowledge', () => {
   it('has the Added in Mycroft card with the form to add a note, a web address or documents, and scrolls to it when asked', async () => {
     const base = view()
     current = view({ settings: { ...base.settings, sources: [...base.settings.sources, { id: 'added', name: 'Added in Mycroft', kind: 'upload' }] } })
-    const wiki = { store: 'git', model: true, pages: 0, excerpts: 0, running: false, mayAdd: true, mayReview: true, maySetup: true, sources: [], added: [], limits: { note: 204800, document: 20 << 20, depth: 3, defaultDepth: 1, pages: 50, defaultPages: 20, formats: ['.md'] } }
+    const wiki = {
+      store: 'git',
+      model: true,
+      pages: 0,
+      excerpts: 0,
+      running: false,
+      mayAdd: true,
+      mayReview: true,
+      maySetup: true,
+      sources: [],
+      added: [],
+      limits: { note: 204800, document: 20 << 20, depth: 3, defaultDepth: 1, pages: 50, defaultPages: 20, formats: ['.md'] },
+    }
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       calls.push({ method: init?.method ?? 'GET', url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
       if (String(url).endsWith('/knowledge/wiki')) return new Response(JSON.stringify(wiki))

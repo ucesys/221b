@@ -288,7 +288,7 @@ func TestNewCaseSimilarAndJoin(t *testing.T) {
 	// The look-back: a case closed long ago is not shown.
 	w.now = w.now.Add(24 * time.Hour)
 	w.svc.SaveSettings(ctx, Settings{KeepAgentClosedDays: 90, LookBackDays: 2, ExceptionStaleDays: 90, ExceptionsPerAgent: 50, NewCasesPerRun: 50}, sam)
-	w.iss.Apply(ctx, 4, func(tx *issues.Tx, r *issues.Report) error {
+	w.iss.Apply(ctx, 4, func(tx *issues.Tx, r *issues.Case) error {
 		at := w.now.Add(-72 * time.Hour)
 		r.Closed = &at
 		return nil

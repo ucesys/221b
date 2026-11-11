@@ -70,7 +70,9 @@ func TestNotesMerged(t *testing.T) {
 		merge(&out, env, w.s.o.CommandOK, "local", "", Parse(res.Text))
 		return out, nil
 	}})
-	w.agents.text = "Report.\n\n```json\n{\"findings\": [], \"proposals\": [{\"title\": \"a\", \"commands\": [\"kubectl delete ns a\"]}, {\"title\": \"b\", \"commands\": [\"kubectl delete ns b\"]}, {\"title\": \"c\", \"commands\": [\"kubectl delete ns c\", \"kubectl delete ns d\"]}]}\n```"
+	// Since W-6 a note names the proposal and its command refused: the
+	// same proposal said three times is noted once, with how many.
+	w.agents.text = "Report.\n\n```json\n{\"findings\": [], \"proposals\": [{\"title\": \"a\", \"commands\": [\"kubectl delete ns a\"]}, {\"title\": \"a\", \"commands\": [\"kubectl delete ns a\"]}, {\"title\": \"a\", \"commands\": [\"kubectl delete ns a\", \"kubectl delete ns d\"]}]}\n```"
 	on(t, w.s, "test", Change{})
 	b, err := w.s.RunNow(context.Background(), "test", Person{Email: "bob"})
 	if err != nil {
@@ -78,7 +80,7 @@ func TestNotesMerged(t *testing.T) {
 	}
 	w.s.Wait()
 	r, _ := w.s.GetRun(context.Background(), b.ID)
-	if r.Note != "4 proposed commands Watson would refuse were left out: the namespace is protected" {
+	if r.Note != "a proposed change was not filed, with none of its commands, because Watson would refuse “kubectl delete ns a”: the namespace is protected: a (3 times)" {
 		t.Fatalf("note: %q", r.Note)
 	}
 }

@@ -81,9 +81,7 @@ export function RevisionTools({ revision }: { revision: number }) {
       run: () => ctx.rollback?.(revision),
     },
     // The deployed revision is the one the cluster can drift from (R2-10).
-    ...(current
-      ? [{ key: 'drift', icon: <DiffIcon />, label: 'What drifted…', hint: 'the cluster against this revision', off: ctx.drift ? undefined : (ctx.driftOff ?? 'not checked yet'), run: () => ctx.drift?.() }]
-      : []),
+    ...(current ? [{ key: 'drift', icon: <DiffIcon />, label: 'What drifted…', hint: 'the cluster against this revision', off: ctx.drift ? undefined : (ctx.driftOff ?? 'not checked yet'), run: () => ctx.drift?.() }] : []),
   ]
   return (
     <>
@@ -108,7 +106,17 @@ export function RevisionTools({ revision }: { revision: number }) {
       </button>
       {open &&
         createPortal(
-          <div ref={menu} className="tb-menu" role="menu" aria-label={`Tools for revision ${revision}`} style={style} onKeyDown={keys} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} data-testid="revision-menu">
+          <div
+            ref={menu}
+            className="tb-menu"
+            role="menu"
+            aria-label={`Tools for revision ${revision}`}
+            style={style}
+            onKeyDown={keys}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            data-testid="revision-menu"
+          >
             <div className="tb-mhead">
               Tools for revision <span className="rk-mono">{revision}</span>
               {current ? ' · runs now' : ''}

@@ -55,7 +55,20 @@ describe("the fleet drawer's Tools", () => {
   })
 
   it("collect the fleet's facts and say how it went", async () => {
-    facts.mockImplementation((body?: { nodes: string[] }) => (body ? { status: 200, body: { nodes: [{ cluster: 'local', node: 'n1', at: '' }, { cluster: 'local', node: 'n3', at: '' }, { cluster: 'local', node: 'h1', at: '' }] } } : { status: 200, body: { nodes: [], keys: [] } }))
+    facts.mockImplementation((body?: { nodes: string[] }) =>
+      body
+        ? {
+            status: 200,
+            body: {
+              nodes: [
+                { cluster: 'local', node: 'n1', at: '' },
+                { cluster: 'local', node: 'n3', at: '' },
+                { cluster: 'local', node: 'h1', at: '' },
+              ],
+            },
+          }
+        : { status: 200, body: { nodes: [], keys: [] } },
+    )
     const { onToast } = editor(fleet)
     fireEvent.click(screen.getByTestId('tools-fleet-Databases'))
     const collect = screen.getByTestId('tool-facts')

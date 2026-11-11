@@ -34,7 +34,7 @@ import (
 // proposalTroubleRoutes serves a proposal's conversation under the
 // proposal.
 func (s *Server) proposalTroubleRoutes() {
-	base := "/api/v1/cases/proposals/{id}/sherlock"
+	base := "/api/v1/aiops/proposals/{id}/sherlock"
 	s.handle("GET "+base+"/events", "cases-proposal-sherlock-events", s.proposalSherlockEvents)
 	s.handle("GET "+base+"/conversation", "cases-proposal-sherlock-conversation", s.getProposalSherlock)
 	s.handle("POST "+base+"/ask", "cases-proposal-sherlock-ask", s.postProposalSherlockAsk)
@@ -74,10 +74,10 @@ func (s *Server) proposalChat(w http.ResponseWriter, r *http.Request, ask, withC
 	var none sherlock.Key
 	switch {
 	case ask && !s.proposalMayAsk(r):
-		jsonError(w, http.StatusForbidden, "Only the people who may approve proposals or work the cases ask Sherlock on a proposal.")
+		jsonError(w, http.StatusForbidden, "Only the people who may approve proposed changes or work the cases ask Sherlock on a proposed change.")
 		return cards.Card{}, none, nil, "", false
 	case !s.proposalMayRead(r):
-		jsonError(w, http.StatusForbidden, "Only the people who may approve proposals see them (cases.approverRoles).")
+		jsonError(w, http.StatusForbidden, "Only the people who may approve proposed changes see them (cases.approverRoles).")
 		return cards.Card{}, none, nil, "", false
 	}
 	c, err := s.opts.Cards.Get(r.Context(), r.PathValue("id"))
@@ -155,7 +155,7 @@ func (s *Server) postProposalSherlockAsk(w http.ResponseWriter, r *http.Request)
 	if asker.Name == "" {
 		asker.Name = p.Name
 	}
-	conv, ok := s.askShared(w, r, key, cl, asker, data, "Sherlock is still answering the last question on this proposal; wait for it or stop it.")
+	conv, ok := s.askShared(w, r, key, cl, asker, data, "Sherlock is still answering the last question on this proposed change; wait for it or stop it.")
 	if !ok {
 		return
 	}
@@ -183,11 +183,11 @@ func (s *Server) postProposalSherlockStop(w http.ResponseWriter, r *http.Request
 // not.
 func (s *Server) proposalCommandFrom(w http.ResponseWriter, r *http.Request, id, cluster string) (cards.Person, bool) {
 	if s.opts.Cards == nil {
-		jsonError(w, http.StatusBadRequest, "there are no proposals here to run a command from")
+		jsonError(w, http.StatusBadRequest, "there are no proposed changes here to run a command from")
 		return cards.Person{}, false
 	}
 	if !s.proposalMayAsk(r) {
-		jsonError(w, http.StatusForbidden, "Only the people who may approve proposals or work the cases run commands from a proposal.")
+		jsonError(w, http.StatusForbidden, "Only the people who may approve proposed changes or work the cases run commands from a proposed change.")
 		return cards.Person{}, false
 	}
 	if _, err := s.opts.Cards.CheckCommand(r.Context(), id, cluster); err != nil {

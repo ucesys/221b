@@ -47,7 +47,16 @@ describe('the details of a host', () => {
   })
 
   it('offer to check a changed key again', async () => {
-    render(<NodePanel r={host({ status: 'Key changed', tone: 'err', host: { address: '10.0.0.9', port: 22, loginUser: 'root', state: 'paired', fingerprint: 'SHA256:abc', keyChanged: true } })} metrics={false} metricsNote="" uptimeNote="" now={now} onClose={() => undefined} />)
+    render(
+      <NodePanel
+        r={host({ status: 'Key changed', tone: 'err', host: { address: '10.0.0.9', port: 22, loginUser: 'root', state: 'paired', fingerprint: 'SHA256:abc', keyChanged: true } })}
+        metrics={false}
+        metricsNote=""
+        uptimeNote=""
+        now={now}
+        onClose={() => undefined}
+      />,
+    )
     expect((await screen.findByTestId('host-next-step')).textContent).toBe('Check the key again…')
   })
 

@@ -250,7 +250,8 @@ export const fetchAppRefs = (cluster: string, ns: string, name: string) => call<
 /** A kept application's repository looked over at its ref, with the saved token (R2-08). */
 export const fetchAppInspect = (cluster: string, ns: string, name: string) => call<RepoInspection>('GET', app(cluster, ns, name, '/inspect'))
 /** Looks over a repository for the new-application form: its charts and the README's install example (M-07). */
-export const inspectRepo = (cluster: string, repo: string, ref: string, refKind: RefKind, token?: string) => call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { repo, ...(ref ? { ref, refKind } : {}), ...(token ? { token } : {}) })
+export const inspectRepo = (cluster: string, repo: string, ref: string, refKind: RefKind, token?: string) =>
+  call<RepoInspection>('POST', apiPath('apps/inspect', cluster), { repo, ...(ref ? { ref, refKind } : {}), ...(token ? { token } : {}) })
 
 export const fetchRepoRefs = (cluster: string, repo: string, token = '') => call<RepoRefs>('POST', apiPath('apps/refs', cluster), token ? { repo, token } : { repo })
 /** A repository chart looked over at a version (the newest when none): its values files, its version and digest (HR-05). */
@@ -311,7 +312,8 @@ export const testHelmRepo = (input: HelmRepositoryInput & { name?: string }) => 
 export const retestHelmRepo = (name: string) => call<RepoTest>('POST', `${repos}/${encodeURIComponent(name)}/test`)
 export const fetchRepoCharts = (name: string) => call<{ charts: ChartInfo[] }>('GET', `${repos}/${encodeURIComponent(name)}/charts`)
 /** A repository chart's versions, newest first, and the newest stable one. */
-export const fetchChartVersions = (src: Pick<AppSource, 'kind' | 'repo' | 'repository' | 'chart'>) => call<{ versions: string[]; newest: string }>('POST', `${repos}/versions`, { kind: src.kind, repo: src.repo ?? '', repository: src.repository ?? '', chart: src.chart ?? '', ref: '', refKind: 'version' })
+export const fetchChartVersions = (src: Pick<AppSource, 'kind' | 'repo' | 'repository' | 'chart'>) =>
+  call<{ versions: string[]; newest: string }>('POST', `${repos}/versions`, { kind: src.kind, repo: src.repo ?? '', repository: src.repository ?? '', chart: src.chart ?? '', ref: '', refKind: 'version' })
 export const fetchRevisions = (cluster: string, ns: string, name: string, background = false) => call<RevisionView[]>('GET', app(cluster, ns, name, '/revisions'), undefined, background)
 export const fetchImages = (cluster: string, ns: string, name: string, revision?: number) =>
   call<{ revision: number; images: AppImage[] }>('GET', app(cluster, ns, name, '/images') + (revision ? `?revision=${revision}` : ''), undefined, true)
@@ -357,7 +359,8 @@ export const updateApp = (cluster: string, ns: string, name: string, input: AppI
 export const upgradeApp = (cluster: string, ns: string, name: string, input: AppInput = {}) => call<WatsonItem>('POST', app(cluster, ns, name, '/upgrade'), input)
 export const uninstallApp = (cluster: string, ns: string, name: string, keepHistory = false) => call<WatsonItem>('DELETE', app(cluster, ns, name) + (keepHistory ? '?keepHistory=1' : ''))
 /** Adds a command, or changes the one named (a new name renames it); the answer is the record. */
-export const saveCommand = (cluster: string, ns: string, name: string, command: string, input: { name?: string; note?: string; params: string[] }) => call<AppView>('PUT', app(cluster, ns, name, '/commands/' + encodeURIComponent(command)), input)
+export const saveCommand = (cluster: string, ns: string, name: string, command: string, input: { name?: string; note?: string; params: string[] }) =>
+  call<AppView>('PUT', app(cluster, ns, name, '/commands/' + encodeURIComponent(command)), input)
 export const deleteCommand = (cluster: string, ns: string, name: string, command: string) => call<AppView>('DELETE', app(cluster, ns, name, '/commands/' + encodeURIComponent(command)))
 /** Redeploys with the command's parameters: the answer is the Watson card. */
 export const runCommand = (cluster: string, ns: string, name: string, command: string, install = false) => call<WatsonItem>('POST', app(cluster, ns, name, '/commands/' + encodeURIComponent(command) + '/run') + (install ? '?install=1' : ''))

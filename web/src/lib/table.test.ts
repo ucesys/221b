@@ -56,7 +56,14 @@ describe('searching', () => {
 
 describe('exports', () => {
   it('writes CSV with a byte-order mark, CRLF and quoting', () => {
-    const text = csvText(['Name', 'Note'], [['a', 'plain'], ['b,c', 'says "hi"\nthen'], [null, 3]])
+    const text = csvText(
+      ['Name', 'Note'],
+      [
+        ['a', 'plain'],
+        ['b,c', 'says "hi"\nthen'],
+        [null, 3],
+      ],
+    )
     expect(text).toBe('﻿Name,Note\r\na,plain\r\n"b,c","says ""hi""\nthen"\r\n,3\r\n')
   })
 

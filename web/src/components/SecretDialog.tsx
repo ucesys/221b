@@ -85,7 +85,18 @@ export function SecretDialog({ namespace, reveal, onClose, onDone }: { namespace
               <span className="rk-field">
                 <input className="rk-mono" value={r.key} onChange={(e) => setRows((l) => l.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} placeholder="key" aria-label="Key" data-testid={`secret-new-key-${i}`} />
               </span>
-              <textarea className={`rk-area rk-mono${showTyping || reveal ? '' : ' rk-secret'}`} value={r.value} onChange={(e) => setRows((l) => l.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))} placeholder="value" aria-label="Value" spellCheck={false} autoComplete="off" rows={2} style={{ minHeight: 44, fontSize: 12.5, resize: 'vertical' }} data-testid={`secret-new-value-${i}`} />
+              <textarea
+                className={`rk-area rk-mono${showTyping || reveal ? '' : ' rk-secret'}`}
+                value={r.value}
+                onChange={(e) => setRows((l) => l.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
+                placeholder="value"
+                aria-label="Value"
+                spellCheck={false}
+                autoComplete="off"
+                rows={2}
+                style={{ minHeight: 44, fontSize: 12.5, resize: 'vertical' }}
+                data-testid={`secret-new-value-${i}`}
+              />
               <button className="rk-link" onClick={() => setRows((l) => (l.length > 1 ? l.filter((_, j) => j !== i) : l))} style={{ marginTop: 8 }} aria-label="Drop this key">
                 Drop
               </button>

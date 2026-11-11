@@ -454,11 +454,11 @@ export interface AddResult {
   text: string
 }
 
-/** A wiki page's address: AIOps › Mycroft › Wiki, #/cases/mycroft/wiki/pages/<kind>/<name>.md. */
-export const pageHref = (path: string) => '#/cases/mycroft/wiki/' + path.split('/').map(encodeURIComponent).join('/')
+/** A wiki page's address: AIOps › Mycroft › Wiki, #/aiops/mycroft/wiki/pages/<kind>/<name>.md. */
+export const pageHref = (path: string) => '#/aiops/mycroft/wiki/' + path.split('/').map(encodeURIComponent).join('/')
 
 /** The Wiki's views' addresses. */
-export const wikiHref = (view: 'pages' | 'drafts' | 'sources' = 'pages') => '#/cases/mycroft/wiki' + (view === 'pages' ? '' : '/' + view)
+export const wikiHref = (view: 'pages' | 'drafts' | 'sources' = 'pages') => '#/aiops/mycroft/wiki' + (view === 'pages' ? '' : '/' + view)
 
 export const fetchWiki = (background = false) => call<WikiState>(base + 'wiki', {}, background)
 export const addKnowledge = (input: AddInput) => call<AddResult>(base + 'add', post(input))

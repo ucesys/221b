@@ -93,8 +93,8 @@ func (f *fakeRouter) Route(_ context.Context, in RouteInput) RouteResult {
 	return out
 }
 
-func (f *fakeRouter) KeysInUse(context.Context, string) []KeyInUse {
-	return []KeyInUse{{Key: Key{Cluster: "local", Object: "shop/Pod/web", Check: "pod.no-limits"}, What: "case C-9", Title: "No limits on web"}}
+func (f *fakeRouter) KeysInUse(context.Context, string) ([]KeyInUse, error) {
+	return []KeyInUse{{Key: Key{Cluster: "local", Object: "shop/Pod/web", Check: "pod.no-limits"}, What: "case C-9", Title: "No limits on web"}}, nil
 }
 
 // Each finding gets its key, the object normalised and checked on the

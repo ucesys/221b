@@ -53,11 +53,17 @@ export function ServicePanel({ serviceKey, row, gone, now, onClose, onToast }: P
               {head.status}
             </span>
             <span>
-              Type <span className="rk-mono" style={{ color: 'var(--fg)' }}>{head.headless ? 'Headless' : head.type}</span>
+              Type{' '}
+              <span className="rk-mono" style={{ color: 'var(--fg)' }}>
+                {head.headless ? 'Headless' : head.type}
+              </span>
             </span>
             {!head.headless && (
               <span>
-                Cluster IP <span className="rk-mono" style={{ color: 'var(--fg)' }}>{head.clusterIP}</span>
+                Cluster IP{' '}
+                <span className="rk-mono" style={{ color: 'var(--fg)' }}>
+                  {head.clusterIP}
+                </span>
               </span>
             )}
             {head.pending && (
@@ -67,7 +73,10 @@ export function ServicePanel({ serviceKey, row, gone, now, onClose, onToast }: P
             )}
             {head.externalIPs.length > 0 && (
               <span>
-                External IP <span className="rk-mono" style={{ color: 'var(--fg)' }}>{head.externalIPs.join(', ')}</span>
+                External IP{' '}
+                <span className="rk-mono" style={{ color: 'var(--fg)' }}>
+                  {head.externalIPs.join(', ')}
+                </span>
               </span>
             )}
             {head.release && (
@@ -102,7 +111,11 @@ export function ServicePanel({ serviceKey, row, gone, now, onClose, onToast }: P
           {details.error}
         </p>
       )}
-      {!d && !details.error && <p data-peek-loading="" style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Loading…</p>}
+      {!d && !details.error && (
+        <p data-peek-loading="" style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>
+          Loading…
+        </p>
+      )}
       {d && tab === 'overview' && (
         <>
           {d.pending && (
@@ -173,7 +186,15 @@ export function ServicePanel({ serviceKey, row, gone, now, onClose, onToast }: P
                       <span>
                         <Tone tone={e.ready ? 'ok' : 'warn'} text={e.ready ? 'ready' : 'not ready'} />
                       </span>
-                      <span>{e.pod ? <a className="rk-mono rk-cell-link" {...peekLink({ kind: 'pod', namespace: e.namespace ?? ns, name: e.pod })} style={{ fontSize: 12 }} data-testid="endpoint-pod">{e.pod}</a> : <span style={{ color: 'var(--fg3)' }}>—</span>}</span>
+                      <span>
+                        {e.pod ? (
+                          <a className="rk-mono rk-cell-link" {...peekLink({ kind: 'pod', namespace: e.namespace ?? ns, name: e.pod })} style={{ fontSize: 12 }} data-testid="endpoint-pod">
+                            {e.pod}
+                          </a>
+                        ) : (
+                          <span style={{ color: 'var(--fg3)' }}>—</span>
+                        )}
+                      </span>
                       <span className="rk-mono" style={{ fontSize: 12, color: 'var(--fg2)' }}>
                         {e.node || '—'}
                       </span>

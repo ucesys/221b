@@ -9,7 +9,7 @@ import (
 
 // --- AIOps › Mycroft › Fixes (CF-51) ---
 //
-// The fixes under /api/v1/cases/fixes: those who see the cases read
+// The fixes under /api/v1/aiops/fixes: those who see the cases read
 // them; those who work the cases edit, accept, turn off and delete them.
 
 // Caller is who asks.
@@ -32,10 +32,10 @@ const maxBody = 64 << 10
 func (s *Service) Routes(caller func(*http.Request) (Caller, bool)) []Route {
 	h := &handler{s: s, caller: caller}
 	return []Route{
-		{"GET /api/v1/cases/fixes", "cases-fixes", h.wrap(h.list, false)},
-		{"GET /api/v1/cases/fixes/{id}", "cases-fix", h.wrap(h.get, false)},
-		{"PATCH /api/v1/cases/fixes/{id}", "cases-fix-edit", h.wrap(h.edit, true)},
-		{"DELETE /api/v1/cases/fixes/{id}", "cases-fix-delete", h.wrap(h.remove, true)},
+		{"GET /api/v1/aiops/fixes", "cases-fixes", h.wrap(h.list, false)},
+		{"GET /api/v1/aiops/fixes/{id}", "cases-fix", h.wrap(h.get, false)},
+		{"PATCH /api/v1/aiops/fixes/{id}", "cases-fix-edit", h.wrap(h.edit, true)},
+		{"DELETE /api/v1/aiops/fixes/{id}", "cases-fix-delete", h.wrap(h.remove, true)},
 	}
 }
 

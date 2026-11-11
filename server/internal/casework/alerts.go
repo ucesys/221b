@@ -26,7 +26,7 @@ import (
 // covers them, or they are expected or below the job's lowest priority.
 
 // AlertsPath serves the open cases that cover a cluster's alerts (CF-77).
-const AlertsPath = "/api/v1/cases/alert-cases"
+const AlertsPath = "/api/v1/aiops/alert-cases"
 
 // CoverCase is an open case that covers an alert.
 type CoverCase struct {

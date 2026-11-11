@@ -206,18 +206,37 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
         off: sherlock.available ? undefined : 'Sherlock is off here',
         run: () => {
           onClose()
-          sherlock.ask(troubleshootQuestion({ kind: target.kind === 'claim' ? 'pvc' : target.kind === 'volume' ? 'pv' : target.kind, name: target.name, namespace: 'namespace' in target ? target.namespace : undefined, status: target.problem }), true)
+          sherlock.ask(
+            troubleshootQuestion({ kind: target.kind === 'claim' ? 'pvc' : target.kind === 'volume' ? 'pv' : target.kind, name: target.name, namespace: 'namespace' in target ? target.namespace : undefined, status: target.problem }),
+            true,
+          )
         },
       }
     : null
   let items: Item[]
   if (target.kind === 'pod') {
     const ports = (pod?.containers ?? []).filter((c) => !c.init).flatMap((c) => c.ports.filter((p) => p.protocol === 'TCP').map((p) => p.port))
-    const images = info?.debugContainerImages.map((n) => info.images.find((i) => i.name === n)?.image.split('/').pop()?.split(':')[0] ?? n).join(', ')
+    const images = info?.debugContainerImages
+      .map(
+        (n) =>
+          info.images
+            .find((i) => i.name === n)
+            ?.image.split('/')
+            .pop()
+            ?.split(':')[0] ?? n,
+      )
+      .join(', ')
     items = [
       { key: 'shell', icon: <TerminalIcon />, label: 'Shell…', hint: pod ? `${pod.containers.find((c) => !c.init)?.name ?? ''}` : undefined, off: why('shell'), run: () => open('shell') },
       // The dialog lists the pod's ports; the first is chosen.
-      { key: 'forward', icon: <ForwardIcon />, label: 'Port forward…', hint: ports.length ? `${ports.length} port${ports.length === 1 ? '' : 's'}` : undefined, off: why('forward'), run: () => open('forward', ports.length ? { port: ports[0], localPort: ports[0] } : {}) },
+      {
+        key: 'forward',
+        icon: <ForwardIcon />,
+        label: 'Port forward…',
+        hint: ports.length ? `${ports.length} port${ports.length === 1 ? '' : 's'}` : undefined,
+        off: why('forward'),
+        run: () => open('forward', ports.length ? { port: ports[0], localPort: ports[0] } : {}),
+      },
       { key: 'debug-container', icon: <BoxIcon />, label: 'Debug container…', hint: images, off: why('debug-container'), run: () => open('debug-container') },
       {
         key: 'delete',
@@ -250,7 +269,11 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
         key: 'ssh-pair',
         icon: <KeyIcon />,
         label: 'Pair for SSH…',
-        hint: <span className="rk-tag" data-tone="err">root</span>,
+        hint: (
+          <span className="rk-tag" data-tone="err">
+            root
+          </span>
+        ),
         off: none ?? noKube ?? why('ssh-pair') ?? (info && !info.ssh ? 'SSH is turned off on this console' : undefined),
         run: () => {
           onClose()
@@ -271,14 +294,58 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
     ]
   } else if (target.kind === 'node') {
     items = [
-      { key: 'node-shell', icon: <TerminalIcon />, label: 'K8S node shell…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('node-shell'), run: () => open('node-shell') },
+      {
+        key: 'node-shell',
+        icon: <TerminalIcon />,
+        label: 'K8S node shell…',
+        hint: (
+          <span className="rk-tag" data-tone="err">
+            root
+          </span>
+        ),
+        off: why('node-shell'),
+        run: () => open('node-shell'),
+      },
       { key: 'debug-pod', icon: <BoxIcon />, label: 'Debug pod on this node…', off: why('debug-pod'), run: () => open('debug-pod') },
       // SSH (Phase 11, ADR-72): a session once the node is paired; pairing and unpairing are node commands.
       ...(info?.ssh
         ? [
-            { key: 'ssh', icon: <TerminalIcon />, label: 'SSH…', hint: pairing ? `as ${pairing.loginUser}${pairing.stale ? ' · pair again' : ''}` : 'pair the node first', off: why('ssh') ?? (pairing ? (pairing.stale ? 'paired with another authority; pair it again' : undefined) : 'not paired yet: Pair for SSH… first'), run: () => open('ssh') },
-            { key: 'ssh-pair', icon: <KeyIcon />, label: pairing ? 'Pair for SSH again…' : 'Pair for SSH…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('ssh-pair'), run: () => open('ssh-pair', pairing ? { loginUser: pairing.loginUser, port: pairing.port } : {}) },
-            ...(pairing ? [{ key: 'ssh-unpair', icon: <KeyIcon />, label: 'Unpair from SSH…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('ssh-unpair'), run: () => open('ssh-unpair') }] : []),
+            {
+              key: 'ssh',
+              icon: <TerminalIcon />,
+              label: 'SSH…',
+              hint: pairing ? `as ${pairing.loginUser}${pairing.stale ? ' · pair again' : ''}` : 'pair the node first',
+              off: why('ssh') ?? (pairing ? (pairing.stale ? 'paired with another authority; pair it again' : undefined) : 'not paired yet: Pair for SSH… first'),
+              run: () => open('ssh'),
+            },
+            {
+              key: 'ssh-pair',
+              icon: <KeyIcon />,
+              label: pairing ? 'Pair for SSH again…' : 'Pair for SSH…',
+              hint: (
+                <span className="rk-tag" data-tone="err">
+                  root
+                </span>
+              ),
+              off: why('ssh-pair'),
+              run: () => open('ssh-pair', pairing ? { loginUser: pairing.loginUser, port: pairing.port } : {}),
+            },
+            ...(pairing
+              ? [
+                  {
+                    key: 'ssh-unpair',
+                    icon: <KeyIcon />,
+                    label: 'Unpair from SSH…',
+                    hint: (
+                      <span className="rk-tag" data-tone="err">
+                        root
+                      </span>
+                    ),
+                    off: why('ssh-unpair'),
+                    run: () => open('ssh-unpair'),
+                  },
+                ]
+              : []),
           ]
         : []),
       {
@@ -304,11 +371,7 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
             confirm: 'Drain node',
             action: { action: 'drain', node: target.name },
             what: `node ${target.name}`,
-            body: (
-              <p style={{ margin: 0 }}>
-                Cordons the node, then evicts every pod on it except DaemonSets’; data in their emptyDir volumes is lost. A PodDisruptionBudget can hold it up. Watson shows its progress.
-              </p>
-            ),
+            body: <p style={{ margin: 0 }}>Cordons the node, then evicts every pod on it except DaemonSets’; data in their emptyDir volumes is lost. A PodDisruptionBudget can hold it up. Watson shows its progress.</p>,
           })
         },
       },
@@ -386,7 +449,17 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
   // At the end of the app's root, for the theme's colours: a table cell's
   // styles (its text does not wrap) and keyboard handling stay out of it.
   return createPortal(
-    <div ref={menu} className="tb-menu" role="menu" aria-label={`Tools for ${kindWord(target)} ${target.name}`} style={style} onKeyDown={keys} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} data-testid="tools-menu">
+    <div
+      ref={menu}
+      className="tb-menu"
+      role="menu"
+      aria-label={`Tools for ${kindWord(target)} ${target.name}`}
+      style={style}
+      onKeyDown={keys}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      data-testid="tools-menu"
+    >
       <div className="tb-mhead">{head}</div>
       {trouble && item(trouble, true)}
       {trouble && items.length > 0 && <div className="tb-msep" role="separator" />}

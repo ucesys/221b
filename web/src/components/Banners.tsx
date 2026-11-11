@@ -6,7 +6,7 @@ import type { StreamState } from '../api/live'
 import { fmtTs } from '../lib/format'
 import { AlertIcon, ClockIcon } from './Icons'
 import { errorSummary } from '../lib/reportLink'
-import { ReportPageLink } from './cases/ReportPageLink'
+import { ReportPageLink } from './aiops/ReportPageLink'
 
 interface Props {
   cluster: ClusterInfo | null
@@ -78,7 +78,8 @@ export function Banners({ cluster, stream, now, summary, pageHref, accessError, 
   // What is failing in the cluster comes after what is wrong with the view
   // of it, and only while the cluster is connected.
   if (cluster?.state === 'connected') {
-    for (const a of alerts) list.push({ tone: a.tone, title: a.title, detail: a.detail, items: a.items, mono: true, testid: 'alert-banner', link: alertsHref ? { href: alertsHref, label: 'View alerts →', testid: 'alert-banner-link' } : undefined })
+    for (const a of alerts)
+      list.push({ tone: a.tone, title: a.title, detail: a.detail, items: a.items, mono: true, testid: 'alert-banner', link: alertsHref ? { href: alertsHref, label: 'View alerts →', testid: 'alert-banner-link' } : undefined })
   }
   if (!list.length) return null
   return (

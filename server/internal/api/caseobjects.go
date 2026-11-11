@@ -20,7 +20,7 @@ import (
 
 // --- The objects New exception suggests (Mycroft › Exceptions) ---
 //
-// GET /api/v1/cases/objects?cluster=<id>&q=<text>&limit=20 suggests the
+// GET /api/v1/aiops/objects?cluster=<id>&q=<text>&limit=20 suggests the
 // objects a new exception may be on as someone types: first those the
 // cluster's cases and exceptions name (the agents' keys), the likeliest
 // targets and kinds the console may not keep, then the objects the
@@ -28,7 +28,7 @@ import (
 // caches: Kubernetes is not asked per keystroke), by name and kind, best
 // match first, each once, written as the exceptions write them. It is for
 // those who may create an exception (cases.approverRoles), as POST
-// /api/v1/cases/exceptions is. A person is offered only the objects they
+// /api/v1/aiops/exceptions is. A person is offered only the objects they
 // may list (P3-02), as the tabs show them. Names only: never what an
 // object holds.
 

@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -19,13 +20,15 @@ Write your report for an operator who reads it later: what you checked, what you
 
 ` + "```json" + `
 {"findings": [{"severity": "critical|warning|info", "check": "a validation rule's id given above, or other.<slug>", "title": "one line", "detail": "what and why", "evidence": ["what you saw, quoted"], "cluster": "cluster id", "resource": "namespace/Kind/name, Kind/name, or empty for the cluster", "expected": false, "expectedWhy": "", "checkWhy": ""}],
- "proposals": [{"title": "what to change, one line", "reasoning": "why", "cluster": "cluster id", "fixes": [1], "commands": ["kubectl ..."], "impact": "what changes for whom", "risk": "low|medium|high", "evidence": [{"kind": "log|event|fact|finding", "text": "...", "ref": "namespace/kind/name"}]}]}
+ "proposals": [{"title": "what to change, one line", "reasoning": "why", "cluster": "cluster id", "fixes": [1], "commands": ["kubectl ..."], "impact": "what changes for whom", "risk": "low|medium|high", "evidence": [{"kind": "log|event|fact|finding", "text": "...", "ref": "namespace/kind/name"}]}],
+ "rechecked": [{"check": "the rule id of a fix to re-check", "resource": "its object", "still": true, "evidence": "what you read"}]}
 ` + "```" + `
 
 Use empty lists when there is nothing.
 - A finding becomes a case, or joins the one people already have for the same cluster, resource and check: name the same problem the same way every time. Its severity sets the case's priority: critical P1, warning P3, info P4.
 - With a check other.<slug>, write "checkWhy": first what your id means, in one sentence, then why none of the ids given fits. Leave it empty for an id given.
 - Set "expected" true, with "expectedWhy" giving why and the evidence, only when the cluster shows the system working as intended: a node annotated asleep by its power manager and cordoned just before it stopped reporting, a planned drain or maintenance. An expected finding opens no case, whatever its severity. Otherwise leave it false.
+- When fixes to re-check are listed above, give an entry in "rechecked" for every one, with "still" true or false and what you read; a problem still there is also a finding.
 - Propose only kubectl or helm commands Watson runs, one per line, and only when the evidence supports them. "fixes" names what a proposal fixes: positions in your findings list (1 is the first) and/or ids of cases (C-12) or known issues (KI-3) from the keys in use; a proposal that fixes nothing you found is not filed.`
 
 // Quote puts text the agent must treat as data, never as instructions,
@@ -43,6 +46,9 @@ type Parsed struct {
 	Report    string
 	Findings  []Finding
 	Proposals []Proposed
+	// Rechecked are what the agent says of the fixes it was given to
+	// re-check (W-1), as it wrote them.
+	Rechecked []Recheck
 	// Raw is the block, for a kind that asked for more fields.
 	Raw json.RawMessage
 }
@@ -116,50 +122,46 @@ func Parse(text string) Parsed {
 		var b struct {
 			Findings  []Finding  `json:"findings"`
 			Proposals []Proposed `json:"proposals"`
+			Rechecked []Recheck  `json:"rechecked"`
 		}
 		if json.Unmarshal([]byte(body), &b) != nil {
 			continue
 		}
 		out.Report = strings.TrimSpace(text[:m[i][0]] + text[m[i][1]:])
 		out.Findings, out.Proposals, out.Raw = b.Findings, b.Proposals, json.RawMessage(body)
+		out.Rechecked = b.Rechecked
 		return out
 	}
 	return out
 }
 
 // Changes turns what the agent proposed into proposals: kubectl and
-// helm commands Watson runs, each an action; one with none left is
-// dropped, with why in the notes.
+// helm commands Watson runs, each an action. A proposal is filed whole or
+// not at all (W-6, CF-98): one with a command Watson would refuse, or one
+// that is not kubectl or helm, is dropped with every other command it
+// has, and the notes say which command and why. A request is about one
+// cluster (W-5, CF-97): a proposal that names another is dropped too,
+// with a note; one that names none is the cluster's.
 func (p Parsed) Changes(check func(string) error, cluster string, evidence ...Evidence) ([]Proposal, []string) {
 	var out []Proposal
 	var notes []string
 	for _, c := range p.Proposals {
-		var actions []Action
+		title := strings.TrimSpace(c.Title)
 		risk := strings.ToLower(strings.TrimSpace(c.Risk))
 		if risk != "low" && risk != "medium" && risk != "high" {
 			risk = "medium"
 		}
-		for _, line := range c.Commands {
-			line = strings.TrimSpace(line)
-			kind, _, _ := strings.Cut(line, " ")
-			if kind != "kubectl" && kind != "helm" {
-				notes = append(notes, "a proposed command that is not kubectl or helm was left out")
-				continue
-			}
-			if check != nil {
-				if err := check(line); err != nil {
-					notes = append(notes, "a proposed command Watson would refuse was left out: "+err.Error())
-					continue
-				}
-			}
-			actions = append(actions, Action{Kind: kind, Args: map[string]any{"command": line}, Impact: c.Impact, Risk: risk})
-		}
-		if len(actions) == 0 || strings.TrimSpace(c.Title) == "" {
+		if cl := strings.TrimSpace(c.Cluster); cl != "" && !strings.EqualFold(cl, cluster) {
+			notes = append(notes, fmt.Sprintf("a proposed change named the cluster %q, not %s, which it was asked about, and was not filed: %s", clip(cl, 60), cluster, clip(title, 120)))
 			continue
 		}
-		cl := strings.TrimSpace(c.Cluster)
-		if cl == "" {
-			cl = cluster
+		actions, why := commands(c.Commands, check, c.Impact, risk)
+		if why != "" {
+			notes = append(notes, fmt.Sprintf("a proposed change was not filed, with none of its commands, because %s: %s", why, clip(title, 120)))
+			continue
+		}
+		if len(actions) == 0 || title == "" {
+			continue
 		}
 		ev := append(append([]Evidence(nil), c.Evidence...), evidence...)
 		for i := range ev {
@@ -167,7 +169,32 @@ func (p Parsed) Changes(check func(string) error, cluster string, evidence ...Ev
 				ev[i].Kind = "fact"
 			}
 		}
-		out = append(out, Proposal{Cluster: cl, Title: c.Title, Reasoning: c.Reasoning, Evidence: ev, Actions: actions, Fixes: c.Fixes})
+		out = append(out, Proposal{Cluster: cluster, Title: c.Title, Reasoning: c.Reasoning, Evidence: ev, Actions: actions, Fixes: c.Fixes})
 	}
 	return out, notes
+}
+
+// commands are a proposal's command lines as actions, all of them, or
+// none and why: the first line that is not kubectl or helm, or that
+// Watson would refuse, named with the reason (W-6). Blank lines are no
+// commands.
+func commands(lines []string, check func(string) error, impact, risk string) ([]Action, string) {
+	var actions []Action
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		kind, _, _ := strings.Cut(line, " ")
+		if kind != "kubectl" && kind != "helm" {
+			return nil, fmt.Sprintf("“%s” is not a kubectl or helm command", clip(line, 200))
+		}
+		if check != nil {
+			if err := check(line); err != nil {
+				return nil, fmt.Sprintf("Watson would refuse “%s”: %v", clip(line, 200), err)
+			}
+		}
+		actions = append(actions, Action{Kind: kind, Args: map[string]any{"command": line}, Impact: impact, Risk: risk})
+	}
+	return actions, ""
 }

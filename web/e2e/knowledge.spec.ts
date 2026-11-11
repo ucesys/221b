@@ -69,7 +69,7 @@ test('Settings › Knowledge takes a source whose token never comes back, and ke
 const SIM = process.env.E2E_SIM_URL ?? 'http://127.0.0.1:7443'
 
 test('AIOps › Mycroft has Wiki, Known issues and Exceptions (no RCAs: an RCA is part of its case); the Wiki is kept in the default ConfigMap store', async ({ page }) => {
-  await page.goto('/#/cases/mycroft')
+  await page.goto('/#/aiops/mycroft')
   const tab = page.getByTestId('mycroft-tab')
   await expect(tab).toBeVisible({ timeout: 20_000 })
   await expect(page.getByTestId('mycroft-sub-wiki')).toHaveAttribute('aria-pressed', 'true')
@@ -84,9 +84,9 @@ test('AIOps › Mycroft has Wiki, Known issues and Exceptions (no RCAs: an RCA i
   await expect(page.getByTestId('wiki-sources').locator('[data-testid=wiki-source][data-source=added]')).toContainText('Added in Mycroft')
 
   for (const [sub, url, view] of [
-    ['known', /#\/cases\/mycroft\/known$/, 'known-tab'],
-    ['exceptions', /#\/cases\/mycroft\/exceptions$/, 'knowledge-exceptions'],
-    ['wiki', /#\/cases\/mycroft\/wiki$/, 'knowledge-tab'],
+    ['known', /#\/aiops\/mycroft\/known$/, 'known-tab'],
+    ['exceptions', /#\/aiops\/mycroft\/exceptions$/, 'knowledge-exceptions'],
+    ['wiki', /#\/aiops\/mycroft\/wiki$/, 'knowledge-tab'],
   ] as const) {
     await page.getByTestId(`mycroft-sub-${sub}`).click()
     await expect(page).toHaveURL(url)
@@ -158,12 +158,15 @@ test('Settings › Knowledge › Added in Mycroft with a store: a note and a CSV
 
     // Both are read, listed under Sources, and quoted by the search.
     await expect
-      .poll(async () => {
-        const w = JSON.parse((await api('/api/v1/knowledge/wiki')).body) as { added: { title: string; lastRead?: string }[] }
-        return w.added.filter((a) => a.lastRead && /zephyr|quokka/.test(a.title)).length
-      }, { timeout: 60_000 })
+      .poll(
+        async () => {
+          const w = JSON.parse((await api('/api/v1/knowledge/wiki')).body) as { added: { title: string; lastRead?: string }[] }
+          return w.added.filter((a) => a.lastRead && /zephyr|quokka/.test(a.title)).length
+        },
+        { timeout: 60_000 },
+      )
       .toBe(2)
-    await page.goto('/#/cases/mycroft/wiki/sources')
+    await page.goto('/#/aiops/mycroft/wiki/sources')
     const added = page.getByTestId('wiki-added')
     await expect(added.getByTestId('wiki-added-item').filter({ hasText: 'E2E zephyr backups' })).toContainText('read ')
     await expect(added.getByTestId('wiki-added-item').filter({ hasText: 'e2e-quokka-hosts.csv' })).toBeVisible()
@@ -205,7 +208,10 @@ async function putSimObject(key: string, body: string): Promise<void> {
   const url = new URL(`${SIM}/sim-wiki/${key}`)
   const sha = (s: string) => createHash('sha256').update(s).digest('hex')
   const hmac = (k: string | Buffer, s: string) => createHmac('sha256', k).update(s).digest()
-  const amzDate = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+  const amzDate = new Date()
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d{3}/, '')
   const day = amzDate.slice(0, 8)
   const payload = sha(body)
   const headers: Record<string, string> = { 'content-type': 'text/markdown', host: url.host, 'x-amz-content-sha256': payload, 'x-amz-date': amzDate }
@@ -231,7 +237,7 @@ test('a wiki page: This is outdated… sends a correction; Retire page asked by 
   const word = `wombat${stamp}`
   // An approved page, written straight into the bucket as a person would.
   await putSimObject(prefix + path, `---\ntitle: E2E ${word} backups\nkind: system\n---\n\n# E2E ${word} backups\n\nThe ${word} backups are kept 30 days on nas-1.\n`)
-  await page.goto('/#/cases/mycroft/wiki')
+  await page.goto('/#/aiops/mycroft/wiki')
   await expect(page.getByTestId('knowledge-tab')).toBeVisible({ timeout: 20_000 })
   const api = (p: string, method = 'GET', body?: unknown, on = page) =>
     on.evaluate(
@@ -246,7 +252,7 @@ test('a wiki page: This is outdated… sends a correction; Retire page asked by 
   expect(saved.status, saved.body).toBe(200)
   const other = await signInAs(browser, E2E_ADMIN2)
   try {
-    await page.goto('/#/cases/mycroft/wiki/' + path)
+    await page.goto('/#/aiops/mycroft/wiki/' + path)
     const view = page.getByTestId('knowledge-page')
     await expect(view).toContainText(`kept 30 days on nas-1`, { timeout: 15_000 })
     expect((await api(`/api/v1/knowledge/search?q=${word}`)).body).toContain(path)
@@ -257,10 +263,13 @@ test('a wiki page: This is outdated… sends a correction; Retire page asked by 
     await page.getByTestId('confirm-ok').click()
     await expect(page.getByTestId('confirm')).toHaveCount(0)
     await expect
-      .poll(async () => {
-        const w = JSON.parse((await api('/api/v1/knowledge/wiki')).body) as { added: { title: string; corrects?: string; by?: string }[] }
-        return w.added.some((a) => a.corrects === path && a.title === `Correction to E2E ${word} backups`)
-      }, { timeout: 30_000 })
+      .poll(
+        async () => {
+          const w = JSON.parse((await api('/api/v1/knowledge/wiki')).body) as { added: { title: string; corrects?: string; by?: string }[] }
+          return w.added.some((a) => a.corrects === path && a.title === `Correction to E2E ${word} backups`)
+        },
+        { timeout: 30_000 },
+      )
       .toBe(true)
 
     // Retire page: asked here, refused to the one who asked (403), approved by a second person.
@@ -272,7 +281,7 @@ test('a wiki page: This is outdated… sends a correction; Retire page asked by 
     const req = asked.requests.find((r) => r.path === path)!
     expect(req.mine).toBe(true)
     expect((await api(`/api/v1/knowledge/requests/${req.id}/approve`, 'POST', {})).status).toBe(403)
-    await other.goto(`/#/cases/inbox/knowledge/${req.id}`)
+    await other.goto(`/#/aiops/inbox/knowledge/${req.id}`)
     const card = other.getByTestId('page-request')
     await expect(card).toContainText('The NAS was replaced.', { timeout: 20_000 })
     await card.getByTestId('page-request-approve').click()
@@ -301,10 +310,13 @@ test('a wiki page: This is outdated… sends a correction; Retire page asked by 
     expect((await api(`/api/v1/knowledge/search?q=${word}&kind=page`)).body).toContain(path)
 
     await expect
-      .poll(async () => {
-        const actions = (await cluster.auditLog()).map((r) => r.action)
-        return ['knowledge.outdated', 'knowledge.retire.request', 'knowledge.retire', 'knowledge.activate'].every((a) => actions.includes(a))
-      }, { timeout: 15_000 })
+      .poll(
+        async () => {
+          const actions = (await cluster.auditLog()).map((r) => r.action)
+          return ['knowledge.outdated', 'knowledge.retire.request', 'knowledge.retire', 'knowledge.activate'].every((a) => actions.includes(a))
+        },
+        { timeout: 15_000 },
+      )
       .toBe(true)
     expect(JSON.stringify(await cluster.auditLog())).not.toContain('kept 90 days now')
   } finally {
@@ -388,7 +400,7 @@ test('Settings › Knowledge reads an S3 bucket of documents through its Wiki sy
   try {
     await expect(row.getByTestId('knowledge-source-creds')).toHaveText('access key in a Secret')
     await expect(row.getByTestId('knowledge-source-bucket-line')).toContainText('s3://sim-docs/docs/')
-    await expect(row.getByTestId('knowledge-source-job')).toHaveAttribute('href', `#/cases/jobs/${JOB}`)
+    await expect(row.getByTestId('knowledge-source-job')).toHaveAttribute('href', `#/aiops/jobs/${JOB}`)
     for (const path of ['/api/v1/knowledge/settings', '/api/v1/knowledge/status', '/api/v1/knowledge/wiki', `/api/v1/jobs/${JOB}`]) {
       expect((await api(path)).body).not.toContain(SECRET)
     }
@@ -408,29 +420,38 @@ test('Settings › Knowledge reads an S3 bucket of documents through its Wiki sy
     expect(first.trigger.what).toMatch(/^Source added by /)
 
     // Its job, in AIOps › Jobs › Schedule: Mycroft's, every night.
-    await page.goto('/#/cases/jobs')
+    await page.goto('/#/aiops/jobs')
     const job = page.locator(`[data-testid=job-row][data-job=${JOB}]`)
     await expect(job).toContainText('Wiki sync: E2E docs bucket', { timeout: 20_000 })
-    await expect(job).toContainText('Mycroft')
+    // Its agent beside its name (I-5).
+    await expect(job.getByTestId('job-agent')).toContainText('Mycroft')
     await expect(job).toContainText('Every day at 01:00')
 
     // The first read's run: what it read, the split batch, the drafts linked, no findings.
-    await page.goto(`/#/cases/jobs/runs/${first.id}`)
+    await page.goto(`/#/aiops/jobs/runs/${first.id}`)
     const detail = page.getByTestId('run-detail')
     const fact = (label: string) => detail.locator(`[data-testid=run-fact][data-label="${label}"]`)
     await expect(fact('Items read')).toHaveText('2 changed items', { timeout: 20_000 })
     await expect(fact('Skipped')).toContainText('1 item: 1 not a kind Mycroft reads (.png)')
     await expect(fact('Source')).toHaveText('E2E docs bucket (S3 bucket)')
-    await expect(fact('Pages drafted').locator('a')).toHaveAttribute('href', /^#\/cases\/inbox\/knowledge\/r-/)
+    await expect(fact('Pages drafted').locator('a')).toHaveAttribute('href', /^#\/aiops\/inbox\/knowledge\/r-/)
     await expect(fact('Mycroft’s batches')).toContainText('1 cut and split in two')
     await expect(detail.getByTestId('run-report')).toContainText('split in two and asked again: its answer was cut at the most Mycroft may write')
     await expect(detail.getByTestId('run-routed')).toHaveCount(0)
 
     // Run now runs the job again: nothing changed since.
-    await page.goto(`/#/cases/jobs/${JOB}`)
+    await page.goto(`/#/aiops/jobs/${JOB}`)
     await page.getByTestId('job-run-now').click()
-    await expect.poll(async () => { const r = await runs(); return r.length >= 2 && r[0]!.status !== 'running' ? r[0]!.trigger.what : '' }, { timeout: 90_000 }).toMatch(/^Run now by /)
-    await page.goto(`/#/cases/jobs/runs/${(await runs())[0]!.id}`)
+    await expect
+      .poll(
+        async () => {
+          const r = await runs()
+          return r.length >= 2 && r[0]!.status !== 'running' ? r[0]!.trigger.what : ''
+        },
+        { timeout: 90_000 },
+      )
+      .toMatch(/^Run now by /)
+    await page.goto(`/#/aiops/jobs/runs/${(await runs())[0]!.id}`)
     await expect(fact('Items read')).toHaveText('0 changed items', { timeout: 20_000 })
     await expect(fact('Unchanged')).toHaveText('2 items')
 
@@ -442,7 +463,7 @@ test('Settings › Knowledge reads an S3 bucket of documents through its Wiki sy
     expect(JSON.stringify(await cluster.auditLog())).not.toContain(SECRET)
 
     // Mycroft › Wiki › Sources lists it with its items; the search quotes it, by its s3:// address.
-    await page.goto('/#/cases/mycroft')
+    await page.goto('/#/aiops/mycroft')
     await expect(page.getByTestId('mycroft-tab')).toBeVisible({ timeout: 20_000 })
     await page.getByTestId('knowledge-view-sources').click()
     const listed = page.getByTestId('wiki-sources').locator(`[data-testid=wiki-source][data-source=${ID}]`)
@@ -471,9 +492,9 @@ test('Mycroft › Exceptions: New exception, Inactive with why, and Make active 
   const SAME = { 'Sec-Fetch-Site': 'same-origin' }
   const stamp = Date.now().toString(36)
   const object = `e2e-${stamp}/Deployment/web`
-  await page.goto('/#/cases/mycroft/exceptions')
+  await page.goto('/#/aiops/mycroft/exceptions')
   await expect(page.getByTestId('knowledge-exceptions')).toBeVisible({ timeout: 20_000 })
-  const listed = (await (await page.request.get('/api/v1/cases/exceptions')).json()) as { clusters?: { id: string; name: string }[] }
+  const listed = (await (await page.request.get('/api/v1/aiops/exceptions')).json()) as { clusters?: { id: string; name: string }[] }
   const where = listed.clusters?.[0]
   expect(where, 'the console offers a cluster to New exception').toBeTruthy()
 
@@ -486,7 +507,7 @@ test('Mycroft › Exceptions: New exception, Inactive with why, and Make active 
   await form.getByTestId('exception-new-reason').fill('The image needs root; tracked elsewhere.')
   await form.getByTestId('exception-new-save').click()
   await expect(form).toHaveCount(0)
-  await expect(page).toHaveURL(/#\/cases\/mycroft\/exceptions\/EX-\d+$/)
+  await expect(page).toHaveURL(/#\/aiops\/mycroft\/exceptions\/EX-\d+$/)
   const first = decodeURIComponent(page.url().split('/').pop()!)
   const drawer = page.getByTestId('exception-drawer')
   await expect(drawer).toBeVisible()
@@ -500,7 +521,7 @@ test('Mycroft › Exceptions: New exception, Inactive with why, and Make active 
   await expect(details).not.toContainText('Accepted')
 
   // The same cluster, object and rule again: refused while it is active.
-  const again = await page.request.post('/api/v1/cases/exceptions', { headers: SAME, data: { cluster: where!.id, resource: object, check: 'pod.root-user', reason: 'again' } })
+  const again = await page.request.post('/api/v1/aiops/exceptions', { headers: SAME, data: { cluster: where!.id, resource: object, check: 'pod.root-user', reason: 'again' } })
   expect(again.status()).toBe(409)
 
   // Turned off: Inactive, saying by whom; then made active again.
@@ -511,28 +532,28 @@ test('Mycroft › Exceptions: New exception, Inactive with why, and Make active 
   await drawer.getByTestId('exception-drawer-reactivate').click()
   await page.getByTestId('confirm-ok').click()
   await expect(drawer.getByTestId('exception-drawer-state')).toHaveText('Active')
-  const back = (await (await page.request.get(`/api/v1/cases/exceptions/${first}`)).json()) as { state: string; removedBy?: string }
+  const back = (await (await page.request.get(`/api/v1/aiops/exceptions/${first}`)).json()) as { state: string; removedBy?: string }
   expect(back.state).toBe('active')
   expect(back.removedBy).toBeUndefined()
 
   // Turned off again, and another made for the same: the first may not come back while the second covers it.
-  expect((await page.request.delete(`/api/v1/cases/exceptions/${first}`, { headers: SAME })).status()).toBeLessThan(300)
-  const second = await page.request.post('/api/v1/cases/exceptions', { headers: SAME, data: { cluster: where!.id, resource: object, check: 'pod.root-user', reason: 'A second one.' } })
+  expect((await page.request.delete(`/api/v1/aiops/exceptions/${first}`, { headers: SAME })).status()).toBeLessThan(300)
+  const second = await page.request.post('/api/v1/aiops/exceptions', { headers: SAME, data: { cluster: where!.id, resource: object, check: 'pod.root-user', reason: 'A second one.' } })
   expect(second.status()).toBe(201)
   const secondId = ((await second.json()) as { id: string }).id
   // Changed behind the page's back: read again.
-  await page.goto(`/#/cases/mycroft/exceptions/${first}`)
+  await page.goto(`/#/aiops/mycroft/exceptions/${first}`)
   await page.reload()
   await page.getByTestId('exception-drawer').getByTestId('exception-drawer-reactivate').click()
   await page.getByTestId('confirm-ok').click()
   await expect(page.getByTestId('confirm')).toContainText(`${secondId} already covers`)
   await page.getByTestId('confirm').getByRole('button', { name: 'Cancel' }).click()
-  expect((await page.request.delete(`/api/v1/cases/exceptions/${secondId}`, { headers: SAME })).status()).toBeLessThan(300)
+  expect((await page.request.delete(`/api/v1/aiops/exceptions/${secondId}`, { headers: SAME })).status()).toBeLessThan(300)
 
   // The object is suggested as it is typed: an object of the cluster
   // (Kubernetes' own ClusterRoleBinding, in the simulator and in kind),
   // shown with its kind, picked from the list, is the exception's object.
-  await page.goto('/#/cases/mycroft/exceptions')
+  await page.goto('/#/aiops/mycroft/exceptions')
   await expect(page.getByTestId('knowledge-exceptions')).toBeVisible({ timeout: 20_000 })
   await page.getByTestId('exceptions-new').click()
   const pickForm = page.getByTestId('exception-new')
@@ -550,8 +571,8 @@ test('Mycroft › Exceptions: New exception, Inactive with why, and Make active 
   await pickForm.getByTestId('exception-new-reason').fill('Picked from the suggestions.')
   await pickForm.getByTestId('exception-new-save').click()
   await expect(pickForm).toHaveCount(0)
-  await expect(page).toHaveURL(/#\/cases\/mycroft\/exceptions\/EX-\d+$/)
+  await expect(page).toHaveURL(/#\/aiops\/mycroft\/exceptions\/EX-\d+$/)
   const picked = decodeURIComponent(page.url().split('/').pop()!)
   await expect(page.getByTestId('exception-drawer').getByTestId('exception-details')).toContainText('ClusterRoleBinding/cluster-admin')
-  expect((await page.request.delete(`/api/v1/cases/exceptions/${picked}`, { headers: SAME })).status()).toBeLessThan(300)
+  expect((await page.request.delete(`/api/v1/aiops/exceptions/${picked}`, { headers: SAME })).status()).toBeLessThan(300)
 })

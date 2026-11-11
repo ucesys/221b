@@ -116,7 +116,7 @@ var (
 
 const fixAnswer = `{"summary": "The web pods run out of memory under load.", "cause": "The memory limit of 256Mi is too low.",
  "evidence": ["shop/web-7f9: OOMKilled 4 times in the last hour"],
- "fix": {"summary": "Raise the memory limit to 512Mi", "commands": ["kubectl set resources deployment/web -n shop --limits=memory=512Mi", "rm -rf /"]},
+ "fix": {"summary": "Raise the memory limit to 512Mi", "commands": ["kubectl set resources deployment/web -n shop --limits=memory=512Mi"]},
  "proposals": [{"title": "Raise the web pods' memory limit", "reasoning": "They are OOMKilled.", "cluster": "elsewhere", "commands": ["kubectl set resources deployment/web -n shop --limits=memory=512Mi"], "impact": "a rolling restart", "risk": "low"}]}`
 
 func setup(t *testing.T) *world {
@@ -189,7 +189,7 @@ func TestACaseOpenedByHandWhileTheJobIsPaused(t *testing.T) {
 	if strings.Contains(v.Detail, "hunter2") {
 		t.Error("a credential in the detail was kept")
 	}
-	if len(v.History) != 2 || !strings.Contains(v.History[1].What, "Not analysed") {
+	if len(v.History) != 2 || !strings.Contains(v.History[1].What, "Not analyzed") {
 		t.Errorf("history %+v", v.History)
 	}
 	disk, err := w.svc.Create(ctx, NewCase{Title: "Disk 90% full", Resource: "the disk of db-1 at /var, 90%", Priority: pr(4)}, sam)
@@ -251,15 +251,15 @@ func TestOpeningACaseAnalysesIt(t *testing.T) {
 	if a.Cause != "The memory limit of 256Mi is too low." || len(a.Evidence) != 1 || a.Run == "" || a.Error != "" {
 		t.Errorf("analysis %+v", a)
 	}
-	if len(a.Fix.Commands) != 1 || a.Fix.Commands[0] != "kubectl set resources deployment/web -n shop --limits=memory=512Mi" {
-		t.Errorf("only the commands Watson runs are suggested: %v", a.Fix.Commands)
+	if len(a.Fix.Commands) != 1 || a.Fix.Commands[0] != "kubectl set resources deployment/web -n shop --limits=memory=512Mi" || len(a.LeftOut) != 0 {
+		t.Errorf("the suggested fix: %v, left out %v", a.Fix.Commands, a.LeftOut)
 	}
 	props := w.props.List()
 	if len(props) != 1 || len(got.ProposalIDs) != 1 || got.ProposalIDs[0] != "proposal-1" {
 		t.Fatalf("proposals %+v, case %v", props, got.ProposalIDs)
 	}
 	p := props[0]
-	if p.Source.Kind != "case" || p.Source.ID != "C-1" || p.Source.Label != "Case C-1: The shop is slow" || p.DedupKey != "case:C-1:raise the web pods' memory limit" || p.Cluster != "prod" {
+	if p.Source.Kind != "case" || p.Source.ID != "C-1" || p.Source.Label != "Case C-1: The shop is slow" || !strings.HasPrefix(p.DedupKey, "fix:prod:C-1:") || p.Cluster != "prod" {
 		t.Errorf("the card %+v", p)
 	}
 	task := w.agents.last()

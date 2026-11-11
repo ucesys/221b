@@ -19,7 +19,7 @@ export const CRITICAL_ALERT_MINUTES = 15
 /** Each setting: its words, its unit, what it does, and its range (from 1 unless min says otherwise). */
 export const FIELDS: { id: Field; label: string; unit: string; hint: string; max: number; min?: number }[] = [
   { id: 'keepAgentClosedDays', label: 'Keep closed agent-found cases', unit: 'days', hint: 'Then they are deleted. Cases people made keep the issue service’s retention.', max: 3650 },
-  { id: 'lookBackDays', label: 'New Case looks back', unit: 'days', hint: 'For cases closed as fixed or no action needed, to show beside a new one.', max: 3650 },
+  { id: 'lookBackDays', label: 'New case looks back', unit: 'days', hint: 'For cases closed as fixed or no action needed, to show beside a new one.', max: 3650 },
   { id: 'exceptionStaleDays', label: 'An exception is stale after', unit: 'days', hint: 'Without a match: Mycroft › Exceptions shows it as stale, to review.', max: 3650 },
   { id: 'exceptionsPerAgent', label: 'Exceptions an agent is told', unit: 'at most', hint: 'The most recently matched first. The console still drops every excepted finding.', max: 500 },
   { id: 'newCasesPerRun', label: 'New cases one run may open', unit: 'at most', hint: 'The rest are listed in the run’s report as capped.', max: 500 },
@@ -110,7 +110,18 @@ export function CasesSettings() {
           <label key={f.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }} data-testid={`cases-setting-${f.id}`}>
             <span style={{ fontSize: 12.5, fontWeight: 500 }}>{f.label}</span>
             <span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
-              <input className="rk-field" type="number" min={f.min ?? 1} max={f.max} style={{ width: 110 }} disabled={!maySet || busy} value={Number.isFinite(v) ? v : ''} onChange={(e) => setDraft({ ...draft, [f.id]: e.target.value === '' ? NaN : Number(e.target.value) })} aria-invalid={why ? true : undefined} data-testid={`cases-${f.id}`} />
+              <input
+                className="rk-field"
+                type="number"
+                min={f.min ?? 1}
+                max={f.max}
+                style={{ width: 110 }}
+                disabled={!maySet || busy}
+                value={Number.isFinite(v) ? v : ''}
+                onChange={(e) => setDraft({ ...draft, [f.id]: e.target.value === '' ? NaN : Number(e.target.value) })}
+                aria-invalid={why ? true : undefined}
+                data-testid={`cases-${f.id}`}
+              />
               <span className="rk-fhint">{f.unit}</span>
             </span>
             {why ? (
@@ -127,7 +138,18 @@ export function CasesSettings() {
         Agent-found cases people closed as duplicates: <strong>{saved.duplicatesOfAgentCases ?? 0}</strong>. Many mean the agents name the same problem differently; their validation rules may need work.
       </p>
       {maySet ? (
-        <SaveBar changed={changed} busy={busy} onSave={() => void save()} onUndo={() => { setDraft(saved); setError('') }} error={error} saved={note} testId="cases-save" />
+        <SaveBar
+          changed={changed}
+          busy={busy}
+          onSave={() => void save()}
+          onUndo={() => {
+            setDraft(saved)
+            setError('')
+          }}
+          error={error}
+          saved={note}
+          testId="cases-save"
+        />
       ) : (
         <p className="rk-fhint">Only a SuperAdmin changes these.</p>
       )}

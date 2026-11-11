@@ -140,7 +140,13 @@ export function useTable<R>({ id, columns, rows, terms, now, compact = false, de
       find: (name) => {
         const want = name.trim().toLowerCase()
         const shown = latest.current.shown
-        const r = shown.find((x) => nameOf(x).toLowerCase() === want) ?? shown.find((x) => nameOf(x).toLowerCase().endsWith('/' + want))
+        const r =
+          shown.find((x) => nameOf(x).toLowerCase() === want) ??
+          shown.find((x) =>
+            nameOf(x)
+              .toLowerCase()
+              .endsWith('/' + want),
+          )
         return (r as object | undefined) ?? null
       },
     }

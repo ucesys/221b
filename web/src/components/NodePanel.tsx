@@ -55,7 +55,10 @@ function conditionTags(r: NodeRow): { label: string; tone: Tone; tip: string }[]
 
 export function Section({ title, count, aside, children, label, wide, ruled }: { title: string; count?: number | string; aside?: ReactNode; children: ReactNode; label?: string; wide?: boolean; ruled?: boolean }) {
   return (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, gridColumn: wide ? '1 / -1' : undefined, paddingBottom: ruled ? 16 : undefined, borderBottom: ruled ? '1px solid var(--line)' : undefined }} aria-label={label ?? title}>
+    <section
+      style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0, gridColumn: wide ? '1 / -1' : undefined, paddingBottom: ruled ? 16 : undefined, borderBottom: ruled ? '1px solid var(--line)' : undefined }}
+      aria-label={label ?? title}
+    >
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         <h3 className="rk-h">{title}</h3>
         {count !== undefined && <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>{count}</span>}
@@ -227,7 +230,12 @@ function KubeNodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, onTo
   // Over the page, as every details pane is (asked at the Phase 4 review).
   return (
     <div style={{ position: 'fixed', top: 0, right: 0, bottom: 'var(--dock-space, 0px)', left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }}>
-      <button aria-label={`Close the details of ${r.name}`} tabIndex={-1} onClick={onClose} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
+      <button
+        aria-label={`Close the details of ${r.name}`}
+        tabIndex={-1}
+        onClick={onClose}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }}
+      />
       <aside
         className="rk-npanel rk-drawer"
         role="dialog"
@@ -388,9 +396,7 @@ function KubeNodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, onTo
                 </div>
               ))}
             </dl>
-            {!r.bootedAt && uptimeNote && (
-              <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>{uptimeNote}</p>
-            )}
+            {!r.bootedAt && uptimeNote && <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>{uptimeNote}</p>}
           </Section>
           <FactsSection node={r.name} />
           {params && (
@@ -423,7 +429,8 @@ function KubeNodePanel({ r, metrics, metricsNote, uptimeNote, now, onClose, onTo
             </Section>
           )}
           <p style={{ gridColumn: '1 / -1', margin: 0, fontSize: 11.5, color: 'var(--fg3)' }} data-testid="node-agent">
-            Reservations are the kubelet&apos;s settings, read from the node{kubelet?.note ? `; its breakdown is not shown: ${kubelet.note}` : ''}. Read-only: a script in Automation changes them, and the Kubernetes agent restarts to take them.
+            Reservations are the kubelet&apos;s settings, read from the node{kubelet?.note ? `; its breakdown is not shown: ${kubelet.note}` : ''}. Read-only: a script in Automation changes them, and the Kubernetes agent restarts to take
+            them.
           </p>
         </div>
       </aside>

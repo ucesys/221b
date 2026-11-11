@@ -157,9 +157,9 @@ describe('Settings › Knowledge › Added in Mycroft: the card (MY-07, MY-11)',
   })
 
   it('is where the Wiki’s old Add address leads', () => {
-    for (const hash of ['#/cases/mycroft/wiki/add', '#/cases/knowledge/add', '#/c/dev/cases/mycroft/wiki/add']) {
+    for (const hash of ['#/aiops/mycroft/wiki/add', '#/aiops/knowledge/add', '#/c/dev/aiops/mycroft/wiki/add']) {
       expect(parseHash(hash), hash).toMatchObject({ view: 'admin', cluster: 'local', path: ['settings', 'knowledge', 'added'] })
     }
-    expect(parseHash('#/cases/mycroft/wiki/sources')).toMatchObject({ view: 'cases', path: ['mycroft', 'wiki', 'sources'] })
+    expect(parseHash('#/aiops/mycroft/wiki/sources')).toMatchObject({ view: 'aiops', path: ['mycroft', 'wiki', 'sources'] })
   })
 })

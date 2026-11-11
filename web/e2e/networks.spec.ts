@@ -29,7 +29,18 @@ function pod(ns: string, name: string, labels: Record<string, string>, container
     kind: 'Pod',
     metadata: { name, namespace: ns, labels: { e2e: 'networks', ...labels }, ...(inKind ? {} : { ownerReferences: [{ apiVersion: 'apps/v1', kind: 'ReplicaSet', name: `${name}-abc`, uid: `e2e-${name}`, controller: true }] }) },
     spec: { terminationGracePeriodSeconds: 0, containers: [{ name: 'main', image: BUSYBOX, ...container }] },
-    ...(inKind ? {} : { status: { phase: 'Running', podIP: ip, podIPs: [{ ip }], hostIP: '192.168.0.2', conditions: [{ type: 'Ready', status: 'True' }], containerStatuses: [{ name: 'main', ready: true, restartCount: 0, image: BUSYBOX, imageID: '', state: { running: { startedAt: new Date().toISOString() } } }] } }),
+    ...(inKind
+      ? {}
+      : {
+          status: {
+            phase: 'Running',
+            podIP: ip,
+            podIPs: [{ ip }],
+            hostIP: '192.168.0.2',
+            conditions: [{ type: 'Ready', status: 'True' }],
+            containerStatuses: [{ name: 'main', ready: true, restartCount: 0, image: BUSYBOX, imageID: '', state: { running: { startedAt: new Date().toISOString() } } }],
+          },
+        }),
   }
 }
 
@@ -198,7 +209,9 @@ test.describe('tracing a request', () => {
   test('the TLS certificate: missing, expired, for another host', async ({ request }) => {
     const restore = await certificate(HOST)
     // Deleting the Secret: applying it again hands back its removal.
-    await (await put(tlsSecret(restore)))()
+    await (
+      await put(tlsSecret(restore))
+    )()
     await expectHop(request, 'TLS certificate', 'secret missing', 'Fails')
     await put(tlsSecret(await certificate(HOST, true)))
     await expectHop(request, 'TLS certificate', 'expired', 'Fails')
@@ -236,7 +249,10 @@ test.describe('tracing a request', () => {
       apiVersion: 'networking.k8s.io/v1',
       kind: 'NetworkPolicy',
       metadata: { name: 'from-ingress', namespace: N },
-      spec: { podSelector: { matchLabels: { app: 'web' } }, ingress: [{ from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': C } }, podSelector: { matchLabels: CTL_LABELS } }], ports: [{ protocol: 'TCP', port: 8080 }] }] },
+      spec: {
+        podSelector: { matchLabels: { app: 'web' } },
+        ingress: [{ from: [{ namespaceSelector: { matchLabels: { 'kubernetes.io/metadata.name': C } }, podSelector: { matchLabels: CTL_LABELS } }], ports: [{ protocol: 'TCP', port: 8080 }] }],
+      },
     }
     extra.push(await put(allow))
     const ok = await expectHop(request, 'Network policy', 'allowed', 'Works')

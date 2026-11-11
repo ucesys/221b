@@ -8,8 +8,29 @@ import { AgentsSection } from './AgentsSection'
 // --- Show costs (Phase 12, wave 6c, CF-40) ---
 
 const overview = {
-  providers: [{ id: 'default', name: 'Anthropic', kind: 'anthropic', model: 'claude-opus-5-5', resolved: { kind: 'anthropic', auth: 'header' }, default: true, locked: false, needsKey: true, key: { set: true, store: 'secret' }, usedBy: ['Sherlock'] }],
-  agents: [{ id: 'troubleshooter', name: 'Troubleshooter', purpose: 'Finds causes', tools: [], on: true, settings: { dailyUSD: 15 }, enabled: true, providerId: 'default', providerName: 'Anthropic', model: 'claude-opus-5-5', defaultModel: true, inForce: [], clusters: null, state: 'in-sync', valuesKey: 'agents.troubleshooter.instructions', spend: { dayUSD: 0.5, monthUSD: 3, dayAsked: 2, monthAsked: 9 } }],
+  providers: [
+    { id: 'default', name: 'Anthropic', kind: 'anthropic', model: 'claude-opus-5-5', resolved: { kind: 'anthropic', auth: 'header' }, default: true, locked: false, needsKey: true, key: { set: true, store: 'secret' }, usedBy: ['Sherlock'] },
+  ],
+  agents: [
+    {
+      id: 'troubleshooter',
+      name: 'Troubleshooter',
+      purpose: 'Finds causes',
+      tools: [],
+      on: true,
+      settings: { dailyUSD: 15 },
+      enabled: true,
+      providerId: 'default',
+      providerName: 'Anthropic',
+      model: 'claude-opus-5-5',
+      defaultModel: true,
+      inForce: [],
+      clusters: null,
+      state: 'in-sync',
+      valuesKey: 'agents.troubleshooter.instructions',
+      spend: { dayUSD: 0.5, monthUSD: 3, dayAsked: 2, monthAsked: 9 },
+    },
+  ],
   models: [],
   defaultModel: 'claude-opus-5-5',
   dailyUSD: 60,

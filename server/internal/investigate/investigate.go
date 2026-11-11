@@ -60,13 +60,13 @@ var _ issues.Investigator = (*Investigator)(nil)
 // request is what a triage run is asked: a report to investigate, or a
 // fix to check.
 type request struct {
-	Report issues.Report
+	Report issues.Case
 	Verify bool
 }
 
 // Kind is the report triage job's kind, for the jobs' registry.
 func (t *Investigator) Kind() jobs.Kind {
-	return jobs.Kind{ID: jobs.KindTriage, Label: "Report triage", Agent: "troubleshooter", AgentName: "Troubleshooter", Order: 40,
+	return jobs.Kind{ID: jobs.KindTriage, Label: "Case triage", Agent: "troubleshooter", AgentName: "Troubleshooter", Order: 40,
 		// Its summary and reply reach the reporter, who never reads the
 		// accepted exceptions (KN-32).
 		ForReporters: true,
@@ -85,7 +85,7 @@ func (t *Investigator) Kind() jobs.Kind {
 // Investigate investigates a report through the report triage job, and
 // waits for it. A paused job, or one whose budget is spent, does not look
 // (issues.ErrSkipped).
-func (t *Investigator) Investigate(ctx context.Context, r issues.Report) (issues.Finding, error) {
+func (t *Investigator) Investigate(ctx context.Context, r issues.Case) (issues.Finding, error) {
 	out, err := t.ask(ctx, request{Report: r})
 	if err != nil {
 		return issues.Finding{}, err
@@ -96,7 +96,7 @@ func (t *Investigator) Investigate(ctx context.Context, r issues.Report) (issues
 
 // Verify checks whether the original symptom of a report marked fixed is
 // gone.
-func (t *Investigator) Verify(ctx context.Context, r issues.Report) (issues.Verdict, error) {
+func (t *Investigator) Verify(ctx context.Context, r issues.Case) (issues.Verdict, error) {
 	out, err := t.ask(ctx, request{Report: r, Verify: true})
 	if err != nil {
 		return issues.Verdict{}, err
@@ -261,7 +261,7 @@ func task(req request, cluster string, services []issues.ServiceDef, known []iss
 
 // clustersFor are where to look: the clusters the report's service runs
 // on, those the job covers, at most three.
-func clustersFor(r issues.Report, services []issues.ServiceDef, covered []string) []string {
+func clustersFor(r issues.Case, services []issues.ServiceDef, covered []string) []string {
 	var out []string
 	for _, s := range services {
 		if s.ID != r.Service {
@@ -398,7 +398,6 @@ func (t *Investigator) run(ctx context.Context, env *jobs.RunEnv) (jobs.Outcome,
 	changes, notes := p.Changes(t.o.CommandOK, bestCluster, jobs.Evidence{Kind: "finding", Text: firstOf(f.Cause, f.Technical), Ref: fmt.Sprintf("case C-%d", req.Report.Number)})
 	for i := range changes {
 		changes[i].Source = jobs.Source{Kind: "case", ID: fmt.Sprintf("C-%d", req.Report.Number), Label: fmt.Sprintf("Case C-%d (a report)", req.Report.Number)}
-		changes[i].DedupKey = fmt.Sprintf("report:%d:%s", req.Report.Number, strings.ToLower(changes[i].Title))
 		// It resolves the reported case, and only that (CF-26).
 		changes[i].Resolves, changes[i].Fixes = []string{fmt.Sprintf("C-%d", req.Report.Number)}, nil
 	}

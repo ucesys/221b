@@ -155,7 +155,7 @@ func TestKubeadmFromItsStaticPods(t *testing.T) {
 		"pods":  {&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "kube-system", Name: "kube-apiserver-cp-1", Labels: map[string]string{"component": "kube-apiserver", "tier": "control-plane"}}}},
 	}
 	prompt := Detect(src, "v1.34.1", Can{Nodes: true, AddOns: true}).Prompt("lab")
-	for _, want := range []string{"kubeadm, Kubernetes v1.34.1", "/etc/kubernetes/manifests", "Ubuntu nodes:", "Network plugin: not recognised."} {
+	for _, want := range []string{"kubeadm, Kubernetes v1.34.1", "/etc/kubernetes/manifests", "Ubuntu nodes:", "Network plugin: not recognized."} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the prompt lacks %q", want)
 		}
@@ -185,7 +185,7 @@ func TestUnknownClusterGetsOnlyFacts(t *testing.T) {
 	if p.Distribution != "" || len(p.Sections()) != 0 {
 		t.Fatalf("profile %+v, sections %v", p, p.Sections())
 	}
-	if !strings.Contains(p.Prompt("x"), "its distribution was not recognised") {
+	if !strings.Contains(p.Prompt("x"), "its distribution was not recognized") {
 		t.Error(p.Prompt("x"))
 	}
 }

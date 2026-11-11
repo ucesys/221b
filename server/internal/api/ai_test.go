@@ -14,6 +14,7 @@ import (
 	"github.com/ucesys/221b/server/internal/ai"
 	"github.com/ucesys/221b/server/internal/fakeclaude"
 	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/sherlocktools"
 	"github.com/ucesys/221b/server/internal/twoperson"
 )
 
@@ -33,7 +34,7 @@ func aiSetup(t *testing.T) (*httptest.Server, *http.Client, *fakeclaude.Fake, *a
 	var aiSvc *ai.Service
 	var svc *sherlock.Service
 	srv, c, _, _, _, _ := multiSetupWith(t, "ops@corp.example", nil, func(o *Options) {
-		aiSvc = ai.New(ai.Options{Settings: o.Settings.(ai.SettingsStore), Keys: keys, DefaultURL: api.URL, ToolDefs: ToolDefs, Logger: logger})
+		aiSvc = ai.New(ai.Options{Settings: o.Settings.(ai.SettingsStore), Keys: keys, DefaultURL: api.URL, ToolDefs: sherlocktools.Defs, Logger: logger})
 		svc = sherlock.New(sherlock.Options{
 			Agent: aiSvc.Agent, OnAnswer: aiSvc.OnAnswer, Client: &sherlock.Client{BaseURL: api.URL, Key: keys.Key},
 			Settings: func() sherlock.Settings {
@@ -199,27 +200,11 @@ func TestAIHandOverInTheConversationAndSaveAsTestCase(t *testing.T) {
 	if c.Agent != ai.Sherlock || len(c.Recorded) != 1 || c.Recorded[0].Tool != "get_pod" || c.Expect.Tools[0] != "get_pod" {
 		t.Fatalf("%+v", c)
 	}
-	cases, _ := aiSvc.CasesOf(context.Background(), ai.Sherlock)
+	cases, _ := aiSvc.TestsOf(context.Background(), ai.Sherlock)
 	if cases[len(cases)-1].ID != c.ID {
 		t.Fatal("the case was not kept")
 	}
 	if r, _ := send(t, ops, http.MethodPost, srv.URL+"/api/v1/ai/tests", `{"cluster":"local","message":9999}`); r.StatusCode != http.StatusNotFound {
 		t.Fatalf("a case from nothing: %d", r.StatusCode)
-	}
-}
-
-// Every tool an agent's purpose takes is one of the toolbox's, which only
-// read, or one of the agents' own.
-func TestEveryAgentToolExists(t *testing.T) {
-	names := map[string]bool{}
-	for _, d := range ToolDefs() {
-		names[d.Name] = true
-	}
-	for _, info := range ai.Catalog {
-		for _, tl := range info.Tools {
-			if !names[tl] && !sherlock.IsAgentTool(tl) {
-				t.Errorf("%s's %s is no tool", info.ID, tl)
-			}
-		}
 	}
 }

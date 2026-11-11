@@ -150,8 +150,8 @@ func TestTheStatusesAndOutcomes(t *testing.T) {
 // every one but exception; an agent's every one. No action needed is
 // offered for both (CF-90).
 func TestOutcomesPerSource(t *testing.T) {
-	human := Report{Status: StatusNew, Source: CaseManual}
-	agent := Report{Status: StatusNew, Source: CaseFinding}
+	human := Case{Status: StatusNew, Source: CaseManual}
+	agent := Case{Status: StatusNew, Source: CaseFinding}
 	if fmt.Sprint(human.AllowedOutcomes()) != "[fix duplicate noAction knownIssue]" {
 		t.Errorf("human: %v", human.AllowedOutcomes())
 	}
@@ -159,21 +159,21 @@ func TestOutcomesPerSource(t *testing.T) {
 	if fmt.Sprint(agent.AllowedOutcomes()) != "[fix duplicate noAction knownIssue exception]" {
 		t.Errorf("agent: %v", agent.AllowedOutcomes())
 	}
-	closed := Report{Status: StatusClosed, Source: CaseManual}
+	closed := Case{Status: StatusClosed, Source: CaseManual}
 	if len(closed.AllowedOutcomes()) != 0 || closed.MayClose(OutcomeFix) == nil {
 		t.Error("a closed case allows an outcome")
 	}
-	if (&Report{Priority: 1}).RCARequired() != true || (&Report{Priority: 2}).RCARequired() != false {
+	if (&Case{Priority: 1}).RCARequired() != true || (&Case{Priority: 2}).RCARequired() != false {
 		t.Error("RCA required at P0-P1 only")
 	}
 	// What was not a problem and no fix needed is no action needed, for
 	// an agent's case too (CF-90).
 	for _, o := range []Outcome{OutcomeNoAction, "notAProblem", "noFixNeeded"} {
-		if err := (&Report{Status: StatusNew, Source: CaseFinding}).MayClose(o); err != nil {
+		if err := (&Case{Status: StatusNew, Source: CaseFinding}).MayClose(o); err != nil {
 			t.Errorf("an agent's %s: %v", o, err)
 		}
 	}
-	if err := (&Report{Status: StatusNew, Source: CaseReport}).MayClose(OutcomeException); err == nil {
+	if err := (&Case{Status: StatusNew, Source: CaseReport}).MayClose(OutcomeException); err == nil {
 		t.Error("a person's case accepted as an exception")
 	}
 }
@@ -246,8 +246,8 @@ func TestTheDuplicateCheck(t *testing.T) {
 		}
 		return r.Number
 	}
-	closeAs := func(n int, fn func(tx *Tx, r *Report)) {
-		if _, err := f.s.Apply(ctx, n, func(tx *Tx, r *Report) error { fn(tx, r); return nil }); err != nil {
+	closeAs := func(n int, fn func(tx *Tx, r *Case)) {
+		if _, err := f.s.Apply(ctx, n, func(tx *Tx, r *Case) error { fn(tx, r); return nil }); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -274,13 +274,13 @@ func TestTheDuplicateCheck(t *testing.T) {
 	}
 	// Closed as fix: reopen it, or a regression.
 	fx := open("fixed")
-	closeAs(fx, func(tx *Tx, r *Report) { CloseCase(r, operator.Person, OutcomeFix, "patched", tx.Now()) })
+	closeAs(fx, func(tx *Tx, r *Case) { CloseCase(r, operator.Person, OutcomeFix, "patched", tx.Now()) })
 	if d := check(fx); d.Allowed || kinds(d) != "reopenOriginal,regression" {
 		t.Fatalf("fix: %+v", d)
 	}
 	// Closed as a known issue: the same known issue; resolved, a regression.
 	ki := open("known")
-	closeAs(ki, func(tx *Tx, r *Report) { tx.LinkKnown(r, tx.Known(k.ID), operator.Person) })
+	closeAs(ki, func(tx *Tx, r *Case) { tx.LinkKnown(r, tx.Known(k.ID), operator.Person) })
 	if d := check(ki); d.Allowed || kinds(d) != "sameKnownIssue" || d.Offers[0].KnownIssue != k.ID {
 		t.Fatalf("known issue: %+v", d)
 	}
@@ -290,7 +290,7 @@ func TestTheDuplicateCheck(t *testing.T) {
 	}
 	// Closed as an exception: no action needed with its reason, or remove it.
 	ex := open("excepted")
-	closeAs(ex, func(tx *Tx, r *Report) {
+	closeAs(ex, func(tx *Tx, r *Case) {
 		r.Source = CaseFinding
 		CloseCase(r, operator.Person, OutcomeException, "batch jobs run without limits", tx.Now())
 		r.Exception = "EX-1"
@@ -301,7 +301,7 @@ func TestTheDuplicateCheck(t *testing.T) {
 	// Closed as no action needed: the same explanation, reopen it, or
 	// the same as it (what not a problem and no fix needed offered, CF-90).
 	np := open("no action")
-	closeAs(np, func(tx *Tx, r *Report) {
+	closeAs(np, func(tx *Tx, r *Case) {
 		CloseCase(r, operator.Person, OutcomeNoAction, "works as designed", tx.Now())
 	})
 	if d := check(np); kinds(d) != "noAction,reopenOriginal,sameAs" || d.Offers[0].Explanation != "works as designed" || !strings.Contains(d.Reason, "no action needed") {
@@ -310,11 +310,11 @@ func TestTheDuplicateCheck(t *testing.T) {
 	// A chain is followed to its end; a chain back to the case itself, or
 	// the case itself, is refused.
 	a, b := open("a"), open("b")
-	closeAs(a, func(tx *Tx, r *Report) { tx.CloseDuplicate(r, b, operator.Person, "same") })
+	closeAs(a, func(tx *Tx, r *Case) { tx.CloseDuplicate(r, b, operator.Person, "same") })
 	if d := check(a); !d.Allowed || d.Original != fmt.Sprintf("C-%d", b) {
 		t.Fatalf("chain: %+v", d)
 	}
-	closeAs(b, func(tx *Tx, r *Report) { tx.CloseDuplicate(r, me, operator.Person, "same") })
+	closeAs(b, func(tx *Tx, r *Case) { tx.CloseDuplicate(r, me, operator.Person, "same") })
 	if d := check(a); d.Allowed || !strings.Contains(d.Reason, "its own original") {
 		t.Fatalf("a loop: %+v", d)
 	}
@@ -377,7 +377,7 @@ func TestEachCaseIsAnObjectOfItsOwn(t *testing.T) {
 	if err != nil || objs.Writes != before+1 {
 		t.Fatalf("writes %d → %d: %v", before, objs.Writes, err)
 	}
-	var got Report
+	var got Case
 	_ = json.Unmarshal([]byte(objs.Keys("3")[CaseKey]), &got)
 	if got.Seen.Count != 4 {
 		t.Fatalf("seen %+v", got.Seen)
@@ -395,12 +395,12 @@ func TestEachCaseIsAnObjectOfItsOwn(t *testing.T) {
 	// Another writer's change to the same object first: the change is
 	// made again on top of it, neither lost.
 	keys, version, _ := objs.Load(ctx, "1")
-	var r1 Report
+	var r1 Case
 	_ = json.Unmarshal(keys[CaseKey], &r1)
 	r1.Title = "renamed elsewhere"
 	b, _ := json.Marshal(r1)
 	tries := 0
-	_, err = f.s.Apply(ctx, nums[0], func(tx *Tx, r *Report) error {
+	_, err = f.s.Apply(ctx, nums[0], func(tx *Tx, r *Case) error {
 		tries++
 		if tries == 1 {
 			if _, err := objs.Save(ctx, "1", CaseKey, b, version); err != nil {
@@ -418,7 +418,7 @@ func TestEachCaseIsAnObjectOfItsOwn(t *testing.T) {
 	// and object; open ones and a person's stay.
 	human, _ := f.s.Open(ctx, operator, Opening{Source: CaseManual, Title: "a person's"})
 	for _, n := range []int{nums[0], nums[1], human.Number} {
-		f.s.Apply(ctx, n, func(tx *Tx, r *Report) error {
+		f.s.Apply(ctx, n, func(tx *Tx, r *Case) error {
 			CloseCase(r, operator.Person, OutcomeNoAction, "x", tx.Now())
 			return nil
 		})
@@ -533,7 +533,7 @@ func TestAReplyMovesTheCaseCF67(t *testing.T) {
 	// A case left waiting while New (before CF-67) goes In progress when
 	// its reporter answers.
 	old := submit("the dashboards are slow")
-	if _, err := f.s.Apply(ctx, old, func(tx *Tx, r *Report) error { r.Waiting = ptr(f.clock.now()); return nil }); err != nil {
+	if _, err := f.s.Apply(ctx, old, func(tx *Tx, r *Case) error { r.Waiting = ptr(f.clock.now()); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if r, _ = f.s.AddMessage(ctx, carol, old, "Since this morning.", false); r.Status != StatusInProgress || r.Waiting != nil {
@@ -592,7 +592,7 @@ func TestAReplyMovesTheCaseCF67(t *testing.T) {
 func TestNoActionReplacesTheOldOutcomesCF90(t *testing.T) {
 	// Stored before: the record is read as noAction, the case and its
 	// line alike.
-	var r Report
+	var r Case
 	if err := json.Unmarshal([]byte(`{"number":3,"status":"closed","outcome":"notAProblem","explanation":"As designed."}`), &r); err != nil || r.Outcome != OutcomeNoAction {
 		t.Fatalf("a stored notAProblem: %q %v", r.Outcome, err)
 	}

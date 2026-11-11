@@ -11,11 +11,11 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/ai"
-	"github.com/ucesys/221b/server/internal/api"
 	"github.com/ucesys/221b/server/internal/config"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/sherlocktools"
 )
 
 // The AI agents (Phase 12): their ConfigMap, the Secrets of the providers
@@ -71,7 +71,7 @@ func openAI(ctx context.Context, restCfg *rest.Config, cfg config.Config, secret
 	out.Service = ai.New(ai.Options{
 		Backend: backend, Settings: o.shared, Keys: o.keys, KeyBackend: keyBackend,
 		ChartProvider: o.chartProvider, ProviderLocked: cfg.SherlockLockProvider, DefaultURL: cfg.SherlockAPIURL,
-		HTTP: &http.Client{Timeout: 5 * time.Minute}, Baselines: baselines, ToolDefs: api.ToolDefs, Logger: o.log,
+		HTTP: &http.Client{Timeout: 5 * time.Minute}, Baselines: baselines, ToolDefs: sherlocktools.Defs, Logger: o.log,
 	})
 	mctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()

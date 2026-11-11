@@ -108,16 +108,16 @@ const (
 
 // Errors the API turns into answers.
 var (
-	ErrNotFound = errors.New("no such proposal")
+	ErrNotFound = errors.New("no such proposed change")
 	ErrInvalid  = errors.New("not valid")
-	ErrState    = errors.New("the proposal cannot do that now")
+	ErrState    = errors.New("the proposed change cannot do that now")
 	// ErrOwn is an approval its requester may not give.
 	ErrOwn = errors.New("someone else must approve it")
 	// ErrForbidden is an approval this person may not give.
 	ErrForbidden = errors.New("not yours to approve")
 	// ErrStale is a card that does not hold as it stands: Recheck says why.
 	ErrStale = errors.New("cannot be approved as it stands")
-	ErrFull  = errors.New("too many proposals wait")
+	ErrFull  = errors.New("too many proposed changes wait")
 )
 
 // Source is what started the agent: a job, an alert, a report, a change

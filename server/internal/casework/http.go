@@ -13,7 +13,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kv"
 )
 
-// The HTTP API (CW-10, CU-11, CF-01 to CF-19): /api/v1/cases/cases,
+// The HTTP API (CW-10, CU-11, CF-01 to CF-19): /api/v1/aiops/cases,
 // every case whatever opened it. Reading is for the people who work the cases (who may
 // approve proposed changes, cases.approverRoles, or triage reports,
 // issues.operatorRoles), the console-wide roles and those who may edit
@@ -22,19 +22,19 @@ import (
 // where the analyses run (ADR-70).
 
 // Prefix is where the API is served.
-const Prefix = "/api/v1/cases/cases"
+const Prefix = "/api/v1/aiops/cases"
 
 // SLAPath is where the SLA is served (CU-06); KnownPath the known issues
 // a case may be linked to.
 const (
-	SLAPath   = "/api/v1/cases/sla"
-	KnownPath = "/api/v1/cases/known-open"
+	SLAPath   = "/api/v1/aiops/sla"
+	KnownPath = "/api/v1/aiops/known-open"
 	// SimilarPath is what New Case shows beside the form (CF-12);
 	// SettingsPath Settings › Cases (CF-19).
-	SimilarPath  = "/api/v1/cases/similar"
-	SettingsPath = "/api/v1/cases/settings"
+	SimilarPath  = "/api/v1/aiops/similar"
+	SettingsPath = "/api/v1/aiops/settings"
 	// RulesPath is AIOps › Mycroft › Validation rules (ADR-138).
-	RulesPath = "/api/v1/cases/rules"
+	RulesPath = "/api/v1/aiops/rules"
 )
 
 // Route is one route of the API.

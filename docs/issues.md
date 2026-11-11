@@ -17,7 +17,7 @@ In this document, and built:
 - **The report page** at `/report`, a page of its own outside the console's tabs.
 - **Settings**, **notifications** (on the page and a webhook), the **audit** records and the **backup** functions.
 
-Elsewhere, and built too: the operators' screens inside 221B (AIOps › Inbox, Reports, Known issues) and the links from the console's pages into `/report` are in the requirements' *Phase 12: Cases* (CS-01 to CS-22); the AI investigation, where the Troubleshooter is the `Investigator` (`server/internal/investigate`, run as the report triage job), in *Phase 12: Jobs* (JB-19); publishing known issues to Confluence in *Phase 12: Knowledge* (KN-13 to KN-18). The API those screens use is here.
+Elsewhere, and built too: the operators' screens inside 221B (AIOps › Inbox, where a report is a case, and AIOps › Mycroft › Known issues) and the links from the console's pages into `/report` are in the requirements' *Phase 12: Cases* (CS-01 to CS-22); the AI investigation, where the Troubleshooter is the `Investigator` (`server/internal/investigate`, run as the report triage job), in *Phase 12: Jobs* (JB-19); publishing known issues to Confluence in *Phase 12: Knowledge* (KN-13 to KN-18). The API those screens use is here.
 
 ## Approach
 
@@ -114,7 +114,7 @@ auth:
 
 ## Not in this document
 
-- The operators' screens in 221B (Inbox, Reports, Known issues) and the console's links to `/report`: the requirements' *Phase 12: Cases*.
+- The operators' screens in 221B (AIOps › Inbox and AIOps › Mycroft › Known issues) and the console's links to `/report`: the requirements' *Phase 12: Cases* and *Phase 12: Cases replace reports* (rows before CF-91 call the AIOps area *Cases*).
 - How the AI investigation runs (the report triage job, JB-19) and the Confluence publisher (KN-13 to KN-18): the requirements' *Phase 12: Jobs* and *Phase 12: Knowledge*.
 - Email notifications.
 - Reports with attachments or screenshots.

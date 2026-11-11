@@ -20,14 +20,14 @@ async function open(page: Page) {
 
 /** Closes the open cases that cover an alert, so it starts with none. */
 async function closeCovering(request: APIRequestContext, key: string, object: string) {
-  const res = await request.get(`/api/v1/cases/alert-cases?cluster=${LOCAL}`)
+  const res = await request.get(`/api/v1/aiops/alert-cases?cluster=${LOCAL}`)
   expect(res.status(), await res.text()).toBe(200)
   const covers = (await res.json()) as AlertCovers
   const ids = new Set([...(covers.alerts[key] ?? []), ...(covers.objects[object.toLowerCase()] ?? [])].map((c) => c.id))
-  for (const id of ids) await request.post(`/api/v1/cases/cases/${id}/close`, { headers: SAME, data: { outcome: 'noAction', explanation: 'e2e: done' } })
+  for (const id of ids) await request.post(`/api/v1/aiops/cases/${id}/close`, { headers: SAME, data: { outcome: 'noAction', explanation: 'e2e: done' } })
 }
 
-test('an alert an open case covers shows the case in place of New Case, and opens it (CF-77)', async ({ page, request }) => {
+test('an alert an open case covers shows the case in place of New case, and opens it (CF-77)', async ({ page, request }) => {
   test.setTimeout(inKind ? 300_000 : 90_000)
   let pod: string
   let cleanup = async () => {}
@@ -52,7 +52,7 @@ test('an alert an open case covers shows the case in place of New Case, and open
     await expect(card.getByTestId('alert-new-case')).toBeVisible()
     await expect(card.getByTestId('alert-case-link')).toHaveCount(0)
     await card.getByTestId('alert-new-case').click()
-    await expect(page).toHaveURL(/#\/cases\/inbox\/case\/\d+/)
+    await expect(page).toHaveURL(/#\/aiops\/inbox\/case\/\d+/)
     opened = `C-${/case\/(\d+)/.exec(page.url())![1]}`
     // The case names the alert by its reason (a crash loop's status flips
     // to Error between restarts), links it on its cluster's
@@ -68,7 +68,7 @@ test('an alert an open case covers shows the case in place of New Case, and open
     await expect(link).toHaveAttribute('data-case', opened)
     await expect(card.getByTestId('alert-new-case')).toHaveCount(0)
     await link.click()
-    await expect(page).toHaveURL(new RegExp(`#/cases/inbox/case/${opened.slice(2)}$`))
+    await expect(page).toHaveURL(new RegExp(`#/aiops/inbox/case/${opened.slice(2)}$`))
 
     // Closed, the case no longer covers it: New Case again.
     await closeCovering(request, key, object)
@@ -76,7 +76,7 @@ test('an alert an open case covers shows the case in place of New Case, and open
     await open(page)
     await expect(card.getByTestId('alert-new-case')).toBeVisible({ timeout: 15_000 })
   } finally {
-    if (opened) await request.post(`/api/v1/cases/cases/${opened}/close`, { headers: SAME, data: { outcome: 'noAction', explanation: 'e2e: done' } })
+    if (opened) await request.post(`/api/v1/aiops/cases/${opened}/close`, { headers: SAME, data: { outcome: 'noAction', explanation: 'e2e: done' } })
     await cleanup()
   }
 })

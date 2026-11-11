@@ -1,0 +1,161 @@
+## cluster_overview
+
+A summary of the cluster: its version, nodes ready and not, CPU and memory requested and in use, pods, namespaces and the alerts on now. Start here for broad questions.
+
+{"additionalProperties":false,"properties":{},"required":[],"type":"object"}
+
+## list_alerts
+
+What needs attention: pods failing to start or pending (with the scheduler's reason), recently recovered pods, node problems and volume claims waiting, each with its recent warning events. Acknowledged alerts say who acknowledged them.
+
+{"additionalProperties":false,"properties":{"include_recovered":{"description":"Include pods that failed and recovered (default false).","type":"boolean"},"kind":{"description":"Only alerts of this kind (pvc: volume claims).","enum":["pod","node","pvc"],"type":"string"},"namespace":{"description":"Only this namespace.","type":"string"}},"required":[],"type":"object"}
+
+## list_nodes
+
+Nodes with role, status, problems, taints, zone, kubelet version, pods, and CPU and memory requested, allocatable and in use (millicores and bytes).
+
+{"additionalProperties":false,"properties":{"limit":{"description":"At most this many (default 60).","type":"integer"},"query":{"description":"Only nodes whose row contains this text (a name, label, taint or status).","type":"string"},"with_labels":{"description":"Include each node's labels.","type":"boolean"}},"required":[],"type":"object"}
+
+## get_node
+
+One node in full: conditions, problems, taints, labels, capacity and allocatable, requested and in use, pods by state, and its recent events.
+
+{"additionalProperties":false,"properties":{"name":{"description":"The node's name.","type":"string"}},"required":["name"],"type":"object"}
+
+## list_pods
+
+Pods with status, readiness, restarts, last termination reason, node, owner, age, and CPU and memory in use (from metrics-server).
+
+{"additionalProperties":false,"properties":{"limit":{"description":"At most this many (default 60).","type":"integer"},"namespace":{"description":"Only this namespace.","type":"string"},"node":{"description":"Only pods on this node.","type":"string"},"query":{"description":"Only pods whose row contains this text.","type":"string"},"status":{"description":"Only pods whose status contains this (Running, Pending, CrashLoopBackOff, …).","type":"string"}},"required":[],"type":"object"}
+
+## get_pod
+
+One pod in full: containers and their states, last termination, environment (references, never Secret values), volumes, conditions, scheduling, owner chain, usage and recent events.
+
+{"additionalProperties":false,"properties":{"name":{"description":"The pod's name.","type":"string"},"namespace":{"description":"The pod's namespace.","type":"string"}},"required":["namespace","name"],"type":"object"}
+
+## pod_logs
+
+The last lines of a container's log (at most 200), with credentials replaced by [REDACTED]. Set previous to read the run before the last restart, which is where a crash's cause usually is.
+
+{"additionalProperties":false,"properties":{"container":{"description":"The container; the first when not given.","type":"string"},"name":{"description":"The pod's name.","type":"string"},"namespace":{"description":"The pod's namespace.","type":"string"},"previous":{"description":"Read the previous run's log.","type":"boolean"},"tail":{"description":"How many lines (default 80, at most 200).","type":"integer"}},"required":["namespace","name"],"type":"object"}
+
+## list_events
+
+Kubernetes events, newest first, with count, first and last seen.
+
+{"additionalProperties":false,"properties":{"kind":{"description":"Only events about this kind (Pod, Node, Deployment, …).","type":"string"},"limit":{"description":"At most this many (default 40).","type":"integer"},"namespace":{"description":"Only this namespace.","type":"string"},"object":{"description":"Only events about objects with this name.","type":"string"},"warnings_only":{"description":"Only warnings.","type":"boolean"}},"required":[],"type":"object"}
+
+## list_objects
+
+Everything a namespace holds, by kind (Deployments, StatefulSets, Jobs, ConfigMaps, Secrets by key name only, PVCs, Ingresses, NetworkPolicies, Roles, …), each with its status.
+
+{"additionalProperties":false,"properties":{"kind":{"description":"Only this kind.","type":"string"},"limit":{"description":"At most this many (default 80).","type":"integer"},"namespace":{"description":"The namespace.","type":"string"},"query":{"description":"Only objects whose row contains this text.","type":"string"}},"required":["namespace"],"type":"object"}
+
+## get_object
+
+One object in full by kind: replicas and rollout, schedule, rules, capacity, keys and sizes (never values), conditions, labels, annotations, owner chain, events, its Helm release, and the pods it controls.
+
+{"additionalProperties":false,"properties":{"kind":{"description":"The kind, such as Deployment or PersistentVolumeClaim.","type":"string"},"name":{"description":"Its name.","type":"string"},"namespace":{"description":"Its namespace.","type":"string"}},"required":["kind","namespace","name"],"type":"object"}
+
+## get_yaml
+
+An object's manifest as YAML, read live, without managed fields; a Secret's values are replaced by their sizes. Use for spec details the other tools do not show.
+
+{"additionalProperties":false,"properties":{"kind":{"description":"The kind.","type":"string"},"name":{"description":"Its name.","type":"string"},"namespace":{"description":"Its namespace, for a namespaced kind.","type":"string"}},"required":["kind","name"],"type":"object"}
+
+## list_services
+
+Services with type, cluster IP, external addresses (or why a LoadBalancer is pending), ports, endpoints ready and not, and the hostnames that publish them.
+
+{"additionalProperties":false,"properties":{"limit":{"description":"At most this many (default 60).","type":"integer"},"namespace":{"description":"Only this namespace.","type":"string"},"query":{"description":"Only Services whose row contains this text.","type":"string"}},"required":[],"type":"object"}
+
+## get_service
+
+One Service in full: ports, endpoints with the pods and nodes behind them, Ingresses that publish it, events, and why a LoadBalancer has no address.
+
+{"additionalProperties":false,"properties":{"name":{"description":"Its name.","type":"string"},"namespace":{"description":"Its namespace.","type":"string"}},"required":["namespace","name"],"type":"object"}
+
+## list_helm_releases
+
+Helm releases with status, chart, app version, revision and when last updated.
+
+{"additionalProperties":false,"properties":{"namespace":{"description":"Only this namespace.","type":"string"},"query":{"description":"Only releases whose row contains this text.","type":"string"}},"required":[],"type":"object"}
+
+## get_helm_release
+
+One Helm release: its history with each revision's status and description (a failed upgrade says why), and its resources with their state. Values and notes are not shown.
+
+{"additionalProperties":false,"properties":{"name":{"description":"The release's name.","type":"string"},"namespace":{"description":"Its namespace.","type":"string"}},"required":["namespace","name"],"type":"object"}
+
+## top
+
+The pods or nodes using the most CPU or memory now, from metrics-server.
+
+{"additionalProperties":false,"properties":{"by":{"description":"Sort by CPU or memory.","enum":["cpu","memory"],"type":"string"},"limit":{"description":"How many (default 15).","type":"integer"},"namespace":{"description":"Only pods in this namespace.","type":"string"},"of":{"description":"Pods or nodes.","enum":["pods","nodes"],"type":"string"}},"required":["of","by"],"type":"object"}
+
+## list_fleets
+
+The fleets (groups of nodes by labels and taints, or lists of nodes by name kept in the console) with their members, capacity and problems, and the nodes in no fleet.
+
+{"additionalProperties":false,"properties":{},"required":[],"type":"object"}
+
+## list_storage_classes
+
+The storage classes: provisioner, reclaim policy, binding mode, whether they allow expansion, which is the default, parameters, and their totals: volumes, capacity provisioned and used, claims and claims pending.
+
+{"additionalProperties":false,"properties":{},"required":[],"type":"object"}
+
+## list_volumes
+
+Persistent volumes and the claims that hold them, as pairs: status and, when not healthy, why (provisioning failed and the provisioner's message, no such class, waits for a pod, no volume matches, Released, Lost, resizing), capacity or the size requested, usage from the kubelets, access modes, class, reclaim policy, the Helm release, and the pods that mount each with their state and node.
+
+{"additionalProperties":false,"properties":{"class":{"description":"Only this storage class (an empty string: volumes made by hand).","type":"string"},"limit":{"description":"How many (default 60).","type":"integer"},"namespace":{"description":"Only claims in this namespace.","type":"string"},"needs_attention":{"description":"Only what needs attention: claims pending with a warning or naming a class that does not exist, lost claims, Released or Failed volumes, volumes 85% full or more.","type":"boolean"},"query":{"description":"Only rows whose text contains this.","type":"string"}},"required":[],"type":"object"}
+
+## trace_ingress
+
+The path of a request to an Ingress host, hop by hop: address, Ingress controller, TLS certificate, rule, Service, endpoints, network policy, pods, each with its state and the cause when it fails. Also the network facts: plugin, DNS, IngressClasses.
+
+{"additionalProperties":false,"properties":{"host":{"description":"Only routes for this hostname (or part of it).","type":"string"}},"required":[],"type":"object"}
+
+## check_connection
+
+Whether the NetworkPolicies let a pod connect to another pod (or to the pods behind a Service) on a port, and which policies decide.
+
+{"additionalProperties":false,"properties":{"from":{"description":"The client pod as namespace/name.","type":"string"},"port":{"description":"The port number.","type":"integer"},"protocol":{"description":"Default TCP.","enum":["TCP","UDP","SCTP"],"type":"string"},"to":{"description":"The server pod as namespace/name, or a Service as namespace/name with to_service true.","type":"string"},"to_service":{"description":"to is a Service.","type":"boolean"}},"required":["from","to","port"],"type":"object"}
+
+## list_policies
+
+Policies by section: netpol (NetworkPolicies and the plugin), pdb (disruption budgets and how many pods each lets go), drain (whether each node can be drained now and what blocks it), quota (quotas used against hard and rollouts they would stall), limits (LimitRanges), psa (Pod Security levels per namespace and the pods a stricter level rejects), webhooks (admission webhooks: failure policy, timeout, reachability), priority (priority classes).
+
+{"additionalProperties":false,"properties":{"namespace":{"description":"Only this namespace.","type":"string"},"query":{"description":"Only rows containing this text (a node, a name).","type":"string"},"section":{"description":"Which section.","enum":["netpol","pdb","drain","quota","limits","psa","webhooks","priority"],"type":"string"}},"required":["section"],"type":"object"}
+
+## who_can
+
+Who may do a verb on a resource, from the RBAC bindings the person may see: each subject with the binding and role that allow it.
+
+{"additionalProperties":false,"properties":{"group":{"description":"The API group: \"\" for core, apps, batch, rbac.authorization.k8s.io, …","type":"string"},"namespace":{"description":"In this namespace; empty for cluster-wide.","type":"string"},"resource":{"description":"The resource, plural (pods, secrets, nodes, deployments) or with a subresource (pods/exec).","type":"string"},"verb":{"description":"get, list, watch, create, update, patch, delete, escalate, bind, impersonate, …","type":"string"}},"required":["verb","resource"],"type":"object"}
+
+## list_access
+
+RBAC as the Access tab has it: bindings with their subjects, roles and risk findings (cluster-admin, wildcards, reading Secrets, escalate, bind, impersonate), roles with their rules, and ServiceAccounts with their pods and long-lived tokens.
+
+{"additionalProperties":false,"properties":{"limit":{"description":"At most this many (default 50).","type":"integer"},"namespace":{"description":"Only this namespace.","type":"string"},"query":{"description":"Only rows containing this text (a subject, a role).","type":"string"},"what":{"description":"Which rows (default findings: bindings with something to review).","enum":["bindings","roles","serviceaccounts","findings"],"type":"string"}},"required":[],"type":"object"}
+
+## review_cluster
+
+A review of how the cluster is set up, as counted findings with examples and advice, most severe first: reliability (failing and restarting pods, single replicas, workloads without disruption budgets, blocked drains), resources (missing requests and limits, quotas, LimitRanges), security (NetworkPolicies, Pod Security, host networking, RBAC grants) and platform health (nodes, kubelet versions, admission webhooks, Services, Helm releases, DNS). Use it first for questions about deficiencies, best practices or the cluster's overall health.
+
+{"additionalProperties":false,"properties":{"namespace":{"description":"Only this namespace; by default every namespace but the system ones.","type":"string"}},"required":[],"type":"object"}
+
+## node_facts
+
+Facts the console collected from paired nodes over SSH: operating system, family and version, kernel, package manager, init system, CPU, memory, disks, when collected. Only for a SuperAdmin, as Automation is.
+
+{"additionalProperties":false,"properties":{"node":{"description":"Only this node.","type":"string"}},"required":[],"type":"object"}
+
+## automation_runs
+
+Automation's recent runs: script, version, fleet, who started them, when, state and each node's outcome (no output). Only for a SuperAdmin, as Automation is.
+
+{"additionalProperties":false,"properties":{"limit":{"description":"At most this many (default 20).","type":"integer"},"query":{"description":"Only runs whose text contains this (a script, a node).","type":"string"}},"required":[],"type":"object"}

@@ -121,24 +121,14 @@ export function SearchBox<R>({ value, onChange, placeholder, label, rows, terms,
           onMouseDown={(e) => e.preventDefault()}
         >
           {items.map((s, i) => (
-          <button
-            key={s.kind + s.text}
-            id={`${listId}-${i}`}
-            role="option"
-            aria-selected={i === active}
-            className="rk-ddopt"
-            data-active={i === active}
-            tabIndex={-1}
-            onClick={() => pick(s)}
-            style={{ width: '100%', gap: 8 }}
-          >
-            <span className="rk-mono" style={{ flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>
-              {s.text}
-            </span>
-            <span style={{ fontSize: 11, color: 'var(--fg3)', whiteSpace: 'nowrap' }}>
-              {KIND_LABEL[s.kind] ?? s.kind} · {s.count}
-            </span>
-          </button>
+            <button key={s.kind + s.text} id={`${listId}-${i}`} role="option" aria-selected={i === active} className="rk-ddopt" data-active={i === active} tabIndex={-1} onClick={() => pick(s)} style={{ width: '100%', gap: 8 }}>
+              <span className="rk-mono" style={{ flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: 12 }}>
+                {s.text}
+              </span>
+              <span style={{ fontSize: 11, color: 'var(--fg3)', whiteSpace: 'nowrap' }}>
+                {KIND_LABEL[s.kind] ?? s.kind} · {s.count}
+              </span>
+            </button>
           ))}
         </div>
       )}

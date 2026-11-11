@@ -296,7 +296,11 @@ func TestAnAliasRoutesToTheCaseOfItsRuleAndExceptionsStillApply(t *testing.T) {
 	if res.Findings[0].Routing != jobs.RoutedExcepted || res.Findings[0].Exception != "EX-2" {
 		t.Errorf("the exception keyed by the new id: %+v", res.Findings[0])
 	}
-	for _, k := range w.svc.KeysInUse(ctx, "prod") {
+	inUse, err := w.svc.KeysInUse(ctx, "prod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range inUse {
 		if k.Check == "pod.restart-loop" {
 			t.Errorf("a key in use under the alias: %+v", k)
 		}

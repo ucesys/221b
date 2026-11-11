@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/cardid"
 )
 
 // Proposals (JB-12): any change a job's agent wants becomes a proposal,
@@ -36,6 +38,18 @@ type Proposal struct {
 	// Fixes is what the agent said it fixes: a position is a finding's in
 	// the run's outcome, from 1 (merge counts it on from the answer's).
 	Fixes []Fix `json:"-"`
+}
+
+// ProposalKey is what a proposal is about, as its dedup key (W-10,
+// CF-101): its cluster, the cases and known issues it resolves and its
+// commands, never its title, which the model writes. A run files each
+// proposal under it once it knows what the proposal resolves.
+func ProposalKey(p Proposal) string {
+	steps := make([]string, len(p.Actions))
+	for i, a := range p.Actions {
+		steps[i] = cardid.Step(a.Kind, a.Args)
+	}
+	return cardid.Key(p.Cluster, p.Resolves, steps)
 }
 
 // Resolver says why a proposal on a cluster may not name a case or a

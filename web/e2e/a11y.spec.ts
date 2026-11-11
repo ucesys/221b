@@ -12,7 +12,13 @@ async function violations(page: Page): Promise<string[]> {
   // restarted midway (the refresh ring's, every second) rejects, which is fine.
   await page.evaluate(() => Promise.allSettled(document.getAnimations().map((a) => a.finished)))
   const results = await new AxeBuilder({ page }).withTags(TAGS).analyze()
-  return results.violations.map((v) => `${v.id} (${v.impact}): ${v.help} — ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(', ')}`)
+  return results.violations.map(
+    (v) =>
+      `${v.id} (${v.impact}): ${v.help} — ${v.nodes
+        .slice(0, 3)
+        .map((n) => n.target.join(' '))
+        .join(', ')}`,
+  )
 }
 
 for (const theme of ['light', 'dark'] as const) {
@@ -72,7 +78,12 @@ for (const theme of ['light', 'dark'] as const) {
     await expect(panel.locator('dt').first()).toBeVisible()
     expect(await violations(page), 'object details').toEqual([])
     await panel.locator('[data-dtab="pods"]').click()
-    await expect(panel.locator('.rk-gr').first().or(panel.getByText(/^No pod/))).toBeVisible()
+    await expect(
+      panel
+        .locator('.rk-gr')
+        .first()
+        .or(panel.getByText(/^No pod/)),
+    ).toBeVisible()
     expect(await violations(page), 'object pods').toEqual([])
     await page.keyboard.press('Escape')
   })

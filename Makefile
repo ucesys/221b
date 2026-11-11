@@ -67,7 +67,7 @@ lint-go:
 	hack/check-prompt-sources.sh
 
 lint-web: web/node_modules
-	cd web && $(NPM) run typecheck && $(NPM) run lint
+	cd web && $(NPM) run typecheck && $(NPM) run lint && $(NPM) run format:check
 
 licenses: web/node_modules ## Check that every dependency's license is allowed
 	cd web && $(NPM) run licenses
@@ -93,7 +93,7 @@ SIM_STORE = -settings-configmap 221b/k8s-console-221b -connections-secrets 221b/
 	-audit-configmap 221b/k8s-console-221b-audit -sessions-configmap 221b/k8s-console-221b-sessions \
 	-automation-configmap 221b/k8s-console-221b-automation -automation-runs-configmap 221b/k8s-console-221b-automation-runs \
 	-ai-configmap 221b/k8s-console-221b-ai -issues-configmap 221b/k8s-console-221b-issues -runs-configmap 221b/k8s-console-221b-runs \
-	-cases-configmap 221b/k8s-console-221b-cases -knowledge-configmap 221b/k8s-console-221b-knowledge \
+	-proposals-configmap 221b/k8s-console-221b-proposals -knowledge-configmap 221b/k8s-console-221b-knowledge \
 	-wiki-configmap 221b/k8s-console-221b-wiki -casework-configmap 221b/k8s-console-221b-casework
 
 # Sherlock (Phase 5) talks to the simulator's fake Claude API; an

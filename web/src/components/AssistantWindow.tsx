@@ -89,15 +89,23 @@ export function AssistantWindow({ cluster, clusterName, onToast }: Props) {
   ) : undefined
   return (
     <WatsonContext.Provider value={watsonApi}>
-    <div className="rk-swin" data-pane={shown} data-both={both ? 'true' : 'false'} data-testid="assistants-window">
-      {hasS && <SherlockPane cluster={cluster} clusterName={clusterName || cluster} state={sherlock} inWindow onToast={onToast} controls={hasW ? <span className="rk-narrow">{back}</span> : back} switcher={switcher} fill={fill} onFilled={() => setFill('')} />}
-      {hasW && <WatsonPane cluster={cluster} clusterName={clusterName || cluster} state={watson} onToast={onToast} controls={back} switcher={switcher} fill={watsonFill} onFilled={() => setWatsonFill('')} />}
-      {!hasS && !hasW && (
-        <p style={{ margin: 0, padding: 24, color: 'var(--fg3)' }}>
-          Waiting for the console…
-        </p>
-      )}
-    </div>
+      <div className="rk-swin" data-pane={shown} data-both={both ? 'true' : 'false'} data-testid="assistants-window">
+        {hasS && (
+          <SherlockPane
+            cluster={cluster}
+            clusterName={clusterName || cluster}
+            state={sherlock}
+            inWindow
+            onToast={onToast}
+            controls={hasW ? <span className="rk-narrow">{back}</span> : back}
+            switcher={switcher}
+            fill={fill}
+            onFilled={() => setFill('')}
+          />
+        )}
+        {hasW && <WatsonPane cluster={cluster} clusterName={clusterName || cluster} state={watson} onToast={onToast} controls={back} switcher={switcher} fill={watsonFill} onFilled={() => setWatsonFill('')} />}
+        {!hasS && !hasW && <p style={{ margin: 0, padding: 24, color: 'var(--fg3)' }}>Waiting for the console…</p>}
+      </div>
     </WatsonContext.Provider>
   )
 }

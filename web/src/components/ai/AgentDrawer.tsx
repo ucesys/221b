@@ -37,7 +37,7 @@ import { lineDiff } from '../../lib/linediff'
 import { fmtTs } from '../../lib/format'
 import { Card, Drawer } from '../Drawer'
 import { Select } from '../Select'
-import { AgentJobs } from '../cases/AgentJobs'
+import { AgentJobs } from '../aiops/AgentJobs'
 import { ModelPicker } from './ModelPicker'
 import { useShowCosts } from '../../lib/costs'
 
@@ -90,12 +90,24 @@ export function stageIndex(ins: Instructions | null): number {
 
 /** Settings as text to compare, whatever order their keys were set in; an unset key is no key. */
 export function canon(o: object): string {
-  return JSON.stringify(Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b))))
+  return JSON.stringify(
+    Object.fromEntries(
+      Object.entries(o)
+        .filter(([, v]) => v !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b)),
+    ),
+  )
 }
 
 /** The values to put the instructions in force into the chart, as YAML. */
 export function valuesYAML(id: string, text: string): string {
-  const body = text.trim() ? text.trim().split('\n').map((l) => (l ? `      ${l}` : '')).join('\n') : '      '
+  const body = text.trim()
+    ? text
+        .trim()
+        .split('\n')
+        .map((l) => (l ? `      ${l}` : ''))
+        .join('\n')
+    : '      '
   return `agents:\n  ${id}:\n    instructions: |\n${body}\n`
 }
 
@@ -191,13 +203,26 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600 }}>
               Context window (tokens)
               <span className="rk-field" style={{ width: 150 }}>
-                <input type="number" min={0} step={1024} value={set.contextWindow ?? ''} placeholder="Not known" onChange={(e) => setSet({ ...set, contextWindow: Math.max(0, Math.round(Number(e.target.value) || 0)) || undefined })} data-testid="agent-context" />
+                <input
+                  type="number"
+                  min={0}
+                  step={1024}
+                  value={set.contextWindow ?? ''}
+                  placeholder="Not known"
+                  onChange={(e) => setSet({ ...set, contextWindow: Math.max(0, Math.round(Number(e.target.value) || 0)) || undefined })}
+                  data-testid="agent-context"
+                />
               </span>
             </label>
           )}
         </div>
         <label className="rk-tcheck" data-wrap="true" style={{ color: 'var(--fg)' }}>
-          <input type="checkbox" checked={!set.model} onChange={(e) => setSet({ ...set, model: e.target.checked ? undefined : provider?.model || ov.defaultModel, contextWindow: e.target.checked ? undefined : set.contextWindow })} data-testid="agent-default-model" />
+          <input
+            type="checkbox"
+            checked={!set.model}
+            onChange={(e) => setSet({ ...set, model: e.target.checked ? undefined : provider?.model || ov.defaultModel, contextWindow: e.target.checked ? undefined : set.contextWindow })}
+            data-testid="agent-default-model"
+          />
           <span>
             Use the default model instead ({provider?.model || ov.defaultModel} on {provider?.name ?? 'the default provider'})
           </span>
@@ -272,7 +297,7 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
       <Card title="On its own">
         <p style={{ margin: 0, fontSize: 12.5 }}>
           {sherlock ? 'Sherlock answers when someone asks.' : `The ${agent.name} works when another agent hands it a part of a question.`} Jobs that run an agent by themselves, on new alerts or on a schedule, are set in{' '}
-          <a className="rk-link" href="#/cases/jobs" data-testid="agent-jobs-link">
+          <a className="rk-link" href="#/aiops/jobs" data-testid="agent-jobs-link">
             AIOps › Jobs
           </a>
           .
@@ -330,7 +355,13 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
             {!!set.clusters?.length &&
               ov.clusters.map((c) => (
                 <label key={c.id} className="rk-tcheck" data-wrap="true" style={{ color: 'var(--fg)' }}>
-                  <input type="checkbox" checked={set.clusters!.includes(c.id)} onChange={(e) => setSet({ ...set, clusters: e.target.checked ? [...set.clusters!, c.id] : set.clusters!.filter((x) => x !== c.id) })} data-testid="agent-cluster" data-cluster={c.id} />
+                  <input
+                    type="checkbox"
+                    checked={set.clusters!.includes(c.id)}
+                    onChange={(e) => setSet({ ...set, clusters: e.target.checked ? [...set.clusters!, c.id] : set.clusters!.filter((x) => x !== c.id) })}
+                    data-testid="agent-cluster"
+                    data-cluster={c.id}
+                  />
                   {c.name}
                 </label>
               ))}
@@ -353,7 +384,12 @@ function sizeText(f: { instructions: number; tools: number; toolCount: number })
  */
 export function ContextLine({ agent }: { agent: AgentView }) {
   const f = agent.footprint
-  if (!f) return <p className="rk-fhint" style={{ margin: 0 }} data-testid="agent-context-line">How much of the model’s context its instructions take shows once the agent can answer.</p>
+  if (!f)
+    return (
+      <p className="rk-fhint" style={{ margin: 0 }} data-testid="agent-context-line">
+        How much of the model’s context its instructions take shows once the agent can answer.
+      </p>
+    )
   const total = f.instructions + f.tools
   const whole = f.whole.instructions + f.whole.tools
   const of = f.window ? ` of ${agent.model}’s ${tokensText(f.window)} (${Math.round((100 * total) / f.window)}%)` : ''
@@ -418,7 +454,16 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
     }, 2000)
     return () => window.clearInterval(t)
   }, [agent.testing, load, panel])
-  if (!ins) return <Card title="Instructions">{<p className={error ? 'rk-t' : 'rk-fhint'} data-tone={error ? 'err' : undefined} style={{ margin: 0 }}>{error || 'Loading the instructions…'}</p>}</Card>
+  if (!ins)
+    return (
+      <Card title="Instructions">
+        {
+          <p className={error ? 'rk-t' : 'rk-fhint'} data-tone={error ? 'err' : undefined} style={{ margin: 0 }}>
+            {error || 'Loading the instructions…'}
+          </p>
+        }
+      </Card>
+    )
   const d = ins.draft
   const text = house ?? d?.house ?? ins.house
   const n = notes ?? d?.notes ?? ins.notes ?? {}
@@ -449,14 +494,33 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
           <span className="rk-pill" data-tone={stateTone(ins.state)} data-testid="ins-state">
             {stateLabel(ins.state)}
           </span>
-          {d && <span className="rk-pill" data-tone="muted">Draft {d.rev}{ins.live ? ` of version ${ins.live + 1}` : ''}</span>}
+          {d && (
+            <span className="rk-pill" data-tone="muted">
+              Draft {d.rev}
+              {ins.live ? ` of version ${ins.live + 1}` : ''}
+            </span>
+          )}
         </span>
       }
     >
       <p className="rk-fhint" style={{ margin: 0 }}>
-        The built-in instructions are shown as this release ships them; an edit replaces them whole for this agent. Whatever they say, text from the cluster stays data and secrets never leave the server. House instructions and notes are added after them. Facts about systems belong in Knowledge.
+        The built-in instructions are shown as this release ships them; an edit replaces them whole for this agent. Whatever they say, text from the cluster stays data and secrets never leave the server. House instructions and notes are
+        added after them. Facts about systems belong in Knowledge.
       </p>
-      {part && <PartEditor agent={agent} part={part} parts={ins.parts} tab={partTab} onTab={setPartTab} text={partText(part)} max={ins.maxPartWords} compare={partCompare} onCompare={() => setPartCompare(!partCompare)} onChange={(t) => setParts({ ...allParts(), [part.name]: t })} />}
+      {part && (
+        <PartEditor
+          agent={agent}
+          part={part}
+          parts={ins.parts}
+          tab={partTab}
+          onTab={setPartTab}
+          text={partText(part)}
+          max={ins.maxPartWords}
+          compare={partCompare}
+          onCompare={() => setPartCompare(!partCompare)}
+          onChange={(t) => setParts({ ...allParts(), [part.name]: t })}
+        />
+      )}
       {ins.state === 'baseline-changed' && (
         <div className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="ins-baseline-changed">
           <span>An upgrade brought new baseline instructions from the chart while your edit is in force. Nothing replaces either until you choose: keep your edit, take the baseline, or merge them by editing below and saving a draft.</span>
@@ -478,7 +542,16 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
         <span className="rk-fhint" style={{ fontWeight: 400 }}>
           Your team’s own, added after the built-in instructions; the chart can set them ({ins.valuesKey}).
         </span>
-        <textarea className="rk-area" rows={7} spellCheck value={text} placeholder="Your team’s conventions: runbooks to cite, services to check first" onChange={(e) => setHouse(e.target.value)} data-testid="ins-house" style={{ width: '100%', boxSizing: 'border-box', fontWeight: 400, fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }} />
+        <textarea
+          className="rk-area"
+          rows={7}
+          spellCheck
+          value={text}
+          placeholder="Your team’s conventions: runbooks to cite, services to check first"
+          onChange={(e) => setHouse(e.target.value)}
+          data-testid="ins-house"
+          style={{ width: '100%', boxSizing: 'border-box', fontWeight: 400, fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }}
+        />
         <span className="rk-fhint" style={{ fontWeight: 400 }} data-tone={words(text) > MAX_WORDS ? 'err' : undefined}>
           {words(text)} of {MAX_WORDS.toLocaleString('en')} words.
         </span>
@@ -486,9 +559,24 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5, fontWeight: 600 }}>
           Notes for
-          <Select label="Notes for the cluster" value={cluster} options={[[ALL_CLUSTERS, 'Every cluster'], ...ov.clusters.map((c): [string, string] => [c.id, `${c.name} only${n[c.id] ? ' ·' : ''}`])]} onChange={setCluster} testId="ins-notes-cluster" />
+          <Select
+            label="Notes for the cluster"
+            value={cluster}
+            options={[[ALL_CLUSTERS, 'Every cluster'], ...ov.clusters.map((c): [string, string] => [c.id, `${c.name} only${n[c.id] ? ' ·' : ''}`])]}
+            onChange={setCluster}
+            testId="ins-notes-cluster"
+          />
         </span>
-        <textarea className="rk-area" rows={3} value={n[cluster] ?? ''} placeholder="Maintenance window: Sundays 02:00–04:00" onChange={(e) => setNotes({ ...n, [cluster]: e.target.value })} aria-label={`Notes for ${clusterName(cluster)}`} data-testid="ins-notes" style={{ width: '100%', boxSizing: 'border-box', fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }} />
+        <textarea
+          className="rk-area"
+          rows={3}
+          value={n[cluster] ?? ''}
+          placeholder="Maintenance window: Sundays 02:00–04:00"
+          onChange={(e) => setNotes({ ...n, [cluster]: e.target.value })}
+          aria-label={`Notes for ${clusterName(cluster)}`}
+          data-testid="ins-notes"
+          style={{ width: '100%', boxSizing: 'border-box', fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }}
+        />
       </div>
       {(warnings.length > 0 || (!edited && (ins.warnings?.length ?? 0) > 0)) && (
         <ul className="rk-callout" data-tone="info" style={{ margin: 0, fontSize: 12, paddingLeft: 24 }} data-testid="ins-warnings">
@@ -499,9 +587,16 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
       )}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: 12.5 }}>
         <span>
-          Helm value: <span className="rk-mono" data-testid="ins-values-key">{ins.valuesKey}</span>
+          Helm value:{' '}
+          <span className="rk-mono" data-testid="ins-values-key">
+            {ins.valuesKey}
+          </span>
         </span>
-        <button className="rk-btn" onClick={() => void copyText(valuesYAML(agent.id, ins.house)).then((ok) => onToast?.(ok ? `Copied the values for ${ins.valuesKey}: paste them into your values file.` : 'The browser refused the clipboard.'))} data-testid="ins-copy">
+        <button
+          className="rk-btn"
+          onClick={() => void copyText(valuesYAML(agent.id, ins.house)).then((ok) => onToast?.(ok ? `Copied the values for ${ins.valuesKey}: paste them into your values file.` : 'The browser refused the clipboard.'))}
+          data-testid="ins-copy"
+        >
           Copy
         </button>
         <button className="rk-btn" aria-expanded={compare} onClick={() => setCompare(!compare)} data-testid="ins-compare">
@@ -518,11 +613,15 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 8 }} data-testid="ins-diff">
           <div>
             <div className="rk-fhint">The chart’s baseline</div>
-            <pre className="rk-code rk-mono" style={{ margin: 0, padding: '8px 10px', fontSize: 12, whiteSpace: 'pre-wrap', background: 'var(--sunken)', borderRadius: 8, border: '1px solid var(--line)' }}>{ins.baseline || '(none: the chart sets no house instructions)'}</pre>
+            <pre className="rk-code rk-mono" style={{ margin: 0, padding: '8px 10px', fontSize: 12, whiteSpace: 'pre-wrap', background: 'var(--sunken)', borderRadius: 8, border: '1px solid var(--line)' }}>
+              {ins.baseline || '(none: the chart sets no house instructions)'}
+            </pre>
           </div>
           <div>
             <div className="rk-fhint">{d || edited ? 'Your draft' : 'In force'}</div>
-            <pre className="rk-code rk-mono" style={{ margin: 0, padding: '8px 10px', fontSize: 12, whiteSpace: 'pre-wrap', background: 'var(--sunken)', borderRadius: 8, border: '1px solid var(--line)' }}>{text || '(none)'}</pre>
+            <pre className="rk-code rk-mono" style={{ margin: 0, padding: '8px 10px', fontSize: 12, whiteSpace: 'pre-wrap', background: 'var(--sunken)', borderRadius: 8, border: '1px solid var(--line)' }}>
+              {text || '(none)'}
+            </pre>
           </div>
         </div>
       )}
@@ -543,7 +642,11 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
         </p>
       )}
       {d?.test?.results?.some((r) => !r.passed) && d.test.rev === d.rev && <Failures run={d.test} />}
-      {ins.baselineCheck && <p className="rk-fhint" style={{ margin: 0 }}>The chart’s new baseline was tested at start, {fmtTs(ins.baselineCheck.at)}: {testLine(ins.baselineCheck, costs ? usd : undefined)}</p>}
+      {ins.baselineCheck && (
+        <p className="rk-fhint" style={{ margin: 0 }}>
+          The chart’s new baseline was tested at start, {fmtTs(ins.baselineCheck.at)}: {testLine(ins.baselineCheck, costs ? usd : undefined)}
+        </p>
+      )}
       {error && (
         <p className="rk-t" data-tone="err" role="alert" style={{ margin: 0, fontSize: 12.5 }} data-testid="ins-error">
           {error}
@@ -598,10 +701,22 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
           }}
         />
       )}
-      {panel === 'pilot' && d && <PilotPanel id={agent.id} ins={ins} ov={ov} onDone={(v) => { setIns(v); setPanel('') }} />}
+      {panel === 'pilot' && d && (
+        <PilotPanel
+          id={agent.id}
+          ins={ins}
+          ov={ov}
+          onDone={(v) => {
+            setIns(v)
+            setPanel('')
+          }}
+        />
+      )}
       {panel === 'live' && (
         <div className="rk-callout" data-tone="info" style={{ margin: 0, fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="ins-live-confirm">
-          <span>The draft becomes the {agent.name}’s instructions for everyone, as version {(ins.versions[0]?.n ?? 0) + 1}. The version in force now is kept, to restore in one click.</span>
+          <span>
+            The draft becomes the {agent.name}’s instructions for everyone, as version {(ins.versions[0]?.n ?? 0) + 1}. The version in force now is kept, to restore in one click.
+          </span>
           <span style={{ display: 'flex', gap: 8 }}>
             <button
               className="rk-btn"
@@ -636,12 +751,21 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
                   {v.why ?? 'made live'} by {v.by}, {fmtTs(v.at)}
                 </span>
                 {v.n === ins.live ? (
-                  <span className="rk-pill" data-tone="ok">In force</span>
+                  <span className="rk-pill" data-tone="ok">
+                    In force
+                  </span>
                 ) : (
-                  <button className="rk-btn" disabled={busy || edited} onClick={() => void act(async () => {
-                    const r = await restoreVersion(agent.id, v.n)
-                    onToast?.(r.waiting ? `Version ${v.n} waits for another SuperAdmin on Approvals.` : `Version ${v.n} is live again, as version ${r.live?.n}.`)
-                  })} data-testid="ins-restore">
+                  <button
+                    className="rk-btn"
+                    disabled={busy || edited}
+                    onClick={() =>
+                      void act(async () => {
+                        const r = await restoreVersion(agent.id, v.n)
+                        onToast?.(r.waiting ? `Version ${v.n} waits for another SuperAdmin on Approvals.` : `Version ${v.n} is live again, as version ${r.live?.n}.`)
+                      })
+                    }
+                    data-testid="ins-restore"
+                  >
                     Restore
                   </button>
                 )}
@@ -660,7 +784,29 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
  * text, and compared with it. Sherlock has two: its whole form and its
  * compact form.
  */
-function PartEditor({ agent, part, parts, tab, onTab, text, max, compare, onCompare, onChange }: { agent: AgentView; part: PromptPart; parts: PromptPart[]; tab: string; onTab: (t: PromptPart['name']) => void; text: string; max: number; compare: boolean; onCompare: () => void; onChange: (t: string) => void }) {
+function PartEditor({
+  agent,
+  part,
+  parts,
+  tab,
+  onTab,
+  text,
+  max,
+  compare,
+  onCompare,
+  onChange,
+}: {
+  agent: AgentView
+  part: PromptPart
+  parts: PromptPart[]
+  tab: string
+  onTab: (t: PromptPart['name']) => void
+  text: string
+  max: number
+  compare: boolean
+  onCompare: () => void
+  onChange: (t: string) => void
+}) {
   const isBuiltIn = text.trim() === part.builtIn.trim()
   const state = isBuiltIn ? 'Built-in' : part.edited && text.trim() === part.text.trim() ? 'Edited' : 'Edited, not saved'
   return (
@@ -686,7 +832,17 @@ function PartEditor({ agent, part, parts, tab, onTab, text, max, compare, onComp
           The built-in text changed since this edit was made (an upgrade{agent.id === 'sherlock' ? ', or view changes turned on or off' : ''}). Compare them, then keep your edit or reset it.
         </p>
       )}
-      <textarea className="rk-area" rows={12} spellCheck value={text} onChange={(e) => onChange(e.target.value)} aria-label={part.label} data-testid="ins-part" data-part={part.name} style={{ width: '100%', boxSizing: 'border-box', fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }} />
+      <textarea
+        className="rk-area"
+        rows={12}
+        spellCheck
+        value={text}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={part.label}
+        data-testid="ins-part"
+        data-part={part.name}
+        style={{ width: '100%', boxSizing: 'border-box', fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }}
+      />
       <span style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <span className="rk-fhint" data-tone={words(text) > max ? 'err' : undefined}>
           {words(text).toLocaleString('en')} of {max.toLocaleString('en')} words.
@@ -716,7 +872,25 @@ const STAGE_TEXT: Record<string, string> = {
  * says what it is and offers its action, disabled with the reason when it
  * cannot be done now.
  */
-function Stepper({ ins, edited, busy, testing, panel, onPanel, onBack, onStopPilot }: { ins: Instructions; edited: boolean; busy: boolean; testing: boolean; panel: string; onPanel: (p: 'test' | 'pilot' | 'live') => void; onBack: () => void; onStopPilot: () => void }) {
+function Stepper({
+  ins,
+  edited,
+  busy,
+  testing,
+  panel,
+  onPanel,
+  onBack,
+  onStopPilot,
+}: {
+  ins: Instructions
+  edited: boolean
+  busy: boolean
+  testing: boolean
+  panel: string
+  onPanel: (p: 'test' | 'pilot' | 'live') => void
+  onBack: () => void
+  onStopPilot: () => void
+}) {
   const d = ins.draft
   const stage = stageIndex(ins)
   const pil = piloting(ins)
@@ -724,12 +898,28 @@ function Stepper({ ins, edited, busy, testing, panel, onPanel, onBack, onStopPil
   const steps: { name: string; action: string; testId: string; why: string; onClick: () => void; open?: boolean; note?: string }[] = [
     { name: 'Draft', action: 'Back to draft', testId: 'ins-back', why: common || (stage === 0 ? 'The draft is at this stage now.' : ''), onClick: onBack, note: d ? `Draft ${d.rev}, saved by ${d.by}, ${fmtTs(d.at)}.` : undefined },
     { name: 'Test', action: d?.test ? 'Run tests again' : 'Run tests', testId: 'ins-test', why: common || (testing ? 'The tests are running.' : ''), onClick: () => onPanel('test'), open: panel === 'test' },
-    { name: 'Pilot', action: pil ? 'Stop pilot' : 'Start pilot', testId: 'ins-pilot', why: common || (stage < 1 ? 'Run the tests first: a pilot serves a tested draft.' : ''), onClick: pil ? onStopPilot : () => onPanel('pilot'), open: panel === 'pilot', note: pil && d?.pilot ? `In pilot until ${fmtTs(d.pilot.until)}.` : undefined },
+    {
+      name: 'Pilot',
+      action: pil ? 'Stop pilot' : 'Start pilot',
+      testId: 'ins-pilot',
+      why: common || (stage < 1 ? 'Run the tests first: a pilot serves a tested draft.' : ''),
+      onClick: pil ? onStopPilot : () => onPanel('pilot'),
+      open: panel === 'pilot',
+      note: pil && d?.pilot ? `In pilot until ${fmtTs(d.pilot.until)}.` : undefined,
+    },
     {
       name: 'Live',
       action: 'Make live',
       testId: 'ins-live',
-      why: edited ? common : !d ? `Nothing waits to go live: ${ins.live ? `version ${ins.live} is in force` : 'the built-in and chart instructions are in force'}. Edit and save a draft.` : d.request ? `Waiting for another SuperAdmin: request ${d.request} on Approvals in AIOps › Inbox.` : stage < 1 && !d.restored ? 'Run the tests first.' : '',
+      why: edited
+        ? common
+        : !d
+          ? `Nothing waits to go live: ${ins.live ? `version ${ins.live} is in force` : 'the built-in and chart instructions are in force'}. Edit and save a draft.`
+          : d.request
+            ? `Waiting for another SuperAdmin: request ${d.request} on Approvals in AIOps › Inbox.`
+            : stage < 1 && !d.restored
+              ? 'Run the tests first.'
+              : '',
       onClick: () => onPanel('live'),
       open: panel === 'live',
     },
@@ -744,7 +934,17 @@ function Stepper({ ins, edited, busy, testing, panel, onPanel, onBack, onStopPil
             aria-current={state === 'current' ? 'step' : undefined}
             data-stage={st.name.toLowerCase()}
             data-state={state}
-            style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '8px 10px', borderRadius: 8, border: `1px solid ${state === 'current' ? 'var(--accent)' : 'var(--line)'}`, background: state === 'current' ? 'var(--sunken)' : undefined, minWidth: 0, fontSize: 12.5 }}
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              padding: '8px 10px',
+              borderRadius: 8,
+              border: `1px solid ${state === 'current' ? 'var(--accent)' : 'var(--line)'}`,
+              background: state === 'current' ? 'var(--sunken)' : undefined,
+              minWidth: 0,
+              fontSize: 12.5,
+            }}
           >
             <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
               <span className="rk-pill" data-tone={state === 'done' ? 'ok' : state === 'current' ? 'info' : 'muted'}>
@@ -795,8 +995,8 @@ function Failures({ run }: { run: TestRun }) {
     <details>
       <summary style={{ fontSize: 12.5, cursor: 'pointer' }}>What failed</summary>
       <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12 }} data-testid="ins-failures">
-        {run.results!
-          .filter((r) => !r.passed)
+        {run
+          .results!.filter((r) => !r.passed)
           .map((r) => (
             <li key={r.id || r.name}>
               <strong>{r.name}</strong>: {(r.why ?? []).join('; ')}
@@ -823,10 +1023,22 @@ function TestPanel({ id, onStarted }: { id: string; onStarted: () => void }) {
       <span>The draft answers the recorded test cases with their recorded tool results, and the latest real questions again, side by side with what was answered; nothing reads the cluster, and nothing proposed is filed.</span>
       <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         Replay the last
-        <Select label="Conversations to replay" value={String(replays)} options={[['0', 'no'], ['5', '5'], ['10', '10'], ['20', '20']]} onChange={(v) => setReplays(Number(v))} />
+        <Select
+          label="Conversations to replay"
+          value={String(replays)}
+          options={[
+            ['0', 'no'],
+            ['5', '5'],
+            ['10', '10'],
+            ['20', '20'],
+          ]}
+          onChange={(v) => setReplays(Number(v))}
+        />
         conversations
       </label>
-      <span data-testid="ins-test-estimate">{error || (est ? `${est.cases} recorded cases and ${est.replays} replays${costs ? `: about ${usd(est.estimateUSD)}, charged to this agent` : ', charged to this agent'}.` : costs ? 'Working out the cost…' : 'Counting the cases…')}</span>
+      <span data-testid="ins-test-estimate">
+        {error || (est ? `${est.cases} recorded cases and ${est.replays} replays${costs ? `: about ${usd(est.estimateUSD)}, charged to this agent` : ', charged to this agent'}.` : costs ? 'Working out the cost…' : 'Counting the cases…')}
+      </span>
       <span>
         <button className="rk-btn" data-primary="true" disabled={!est} onClick={() => void startTest(id, replays).then(onStarted, (e: Error) => setError(e.message))} data-testid="ins-test-run">
           Run the test
@@ -847,7 +1059,9 @@ function PilotPanel({ id, ins, ov, onDone }: { id: string; ins: Instructions; ov
     <div className="rk-callout" data-tone="info" style={{ margin: 0, fontSize: 12.5, display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="ins-pilot-panel">
       {live ? (
         <>
-          <span>In pilot until {fmtTs(p!.until)} for {[...(p!.people ?? []), ...(p!.clusters ?? []).map((c) => ov.clusters.find((x) => x.id === c)?.name ?? c)].join(', ')}.</span>
+          <span>
+            In pilot until {fmtTs(p!.until)} for {[...(p!.people ?? []), ...(p!.clusters ?? []).map((c) => ov.clusters.find((x) => x.id === c)?.name ?? c)].join(', ')}.
+          </span>
           <span>
             <button className="rk-btn" onClick={() => void stopPilot(id).then(onDone, (e: Error) => setError(e.message))} data-testid="ins-pilot-stop">
               Stop the pilot
@@ -873,7 +1087,17 @@ function PilotPanel({ id, ins, ov, onDone }: { id: string; ins: Instructions; ov
           </div>
           <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             For
-            <Select label="For how long" value={String(hours)} options={[['24', 'a day'], ['72', 'three days'], ['168', 'a week'], ['336', 'two weeks']]} onChange={(v) => setHours(Number(v))} />
+            <Select
+              label="For how long"
+              value={String(hours)}
+              options={[
+                ['24', 'a day'],
+                ['72', 'three days'],
+                ['168', 'a week'],
+                ['336', 'two weeks'],
+              ]}
+              onChange={(v) => setHours(Number(v))}
+            />
           </label>
           <span>
             <button
@@ -916,7 +1140,12 @@ function PilotLog({ id }: { id: string }) {
       .then((r) => setEntries(r.entries))
       .catch(() => setEntries([]))
   }, [id])
-  if (!entries.length) return <p className="rk-fhint" style={{ margin: 0 }}>No answer logged in this pilot yet.</p>
+  if (!entries.length)
+    return (
+      <p className="rk-fhint" style={{ margin: 0 }}>
+        No answer logged in this pilot yet.
+      </p>
+    )
   const rate = async (e: PilotEntry, r: number) => {
     await ratePilot(e.n, e.rating === r ? 0 : r)
     setEntries(entries.map((x) => (x.n === e.n ? { ...x, rating: e.rating === r ? 0 : r } : x)))

@@ -58,7 +58,11 @@ export const POD_COLUMNS: ColumnDef<PodView>[] = [
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.status}</span>
         </span>
         {!r.done && (
-          <span className="rk-num" style={{ color: r.readyUnknown || r.ready < r.total ? 'var(--warn)' : 'var(--fg3)', fontSize: 12 }} title={r.readyUnknown ? `Unknown: the node stopped reporting; it last said ${r.ready} of ${r.total} ready` : `${r.ready} of ${r.total} containers ready`}>
+          <span
+            className="rk-num"
+            style={{ color: r.readyUnknown || r.ready < r.total ? 'var(--warn)' : 'var(--fg3)', fontSize: 12 }}
+            title={r.readyUnknown ? `Unknown: the node stopped reporting; it last said ${r.ready} of ${r.total} ready` : `${r.ready} of ${r.total} containers ready`}
+          >
             {r.readyUnknown ? '?' : r.ready}/{r.total}
           </span>
         )}
@@ -82,11 +86,7 @@ export const POD_COLUMNS: ColumnDef<PodView>[] = [
     cell: (r, now) => (
       <span className="rk-num" title={r.lastRestart ? `Last restart ${fmtTs(r.lastRestart)}${r.lastTermination ? ': ' + r.lastTermination : ''}` : 'No restarts'}>
         <span style={{ color: r.restarts ? (r.restarts >= 5 ? 'var(--err)' : 'var(--warn)') : undefined, fontWeight: r.restarts ? 500 : undefined }}>{r.restarts}</span>
-        {r.lastRestart && r.restarts > 0 && (
-          <span style={{ color: 'var(--fg3)', fontSize: 11.5, marginLeft: 6 }}>
-            {fmtAge(r.lastRestart, now)} ago
-          </span>
-        )}
+        {r.lastRestart && r.restarts > 0 && <span style={{ color: 'var(--fg3)', fontSize: 11.5, marginLeft: 6 }}>{fmtAge(r.lastRestart, now)} ago</span>}
       </span>
     ),
     export: (r) => [

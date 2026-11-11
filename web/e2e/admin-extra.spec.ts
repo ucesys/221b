@@ -116,7 +116,7 @@ test('a backup sealed with another key asks first, restores the rest and lists t
   }
 })
 
-test('a role\'s See every permission opens Permissions on that role alone, and Full reads Elevated', async ({ page }) => {
+test("a role's See every permission opens Permissions on that role alone, and Full reads Elevated", async ({ page }) => {
   await page.goto('/#/admin/roles/admin', { waitUntil: 'domcontentloaded' })
   const drawer = page.getByTestId('role-drawer')
   await expect(drawer).toBeVisible()
@@ -127,4 +127,3 @@ test('a role\'s See every permission opens Permissions on that role alone, and F
   await expect(page.getByTestId('role-filter-clear')).toBeVisible()
   await expect(page.locator('[data-role-summary]').first()).not.toContainText(/\bFull\b/)
 })
-

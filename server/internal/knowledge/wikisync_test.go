@@ -202,13 +202,13 @@ func TestAWikiSyncJobPerSourceKN28(t *testing.T) {
 	if got := fact(r, "Items read").Text; got != "2 changed items" {
 		t.Fatalf("items read: %q", got)
 	}
-	if d := fact(r, "Pages drafted"); !strings.HasPrefix(d.Href, "#/cases/inbox/knowledge/r-") || d.Text != "2 page changes wait for review in AIOps › Inbox" {
+	if d := fact(r, "Pages drafted"); !strings.HasPrefix(d.Href, "#/aiops/inbox/knowledge/r-") || d.Text != "2 page changes wait for review in AIOps › Inbox" {
 		t.Fatalf("drafts: %+v", d)
 	}
 	if fact(r, "Source").Text != "Confluence space INFRA (Confluence space)" || fact(r, "Read").Text != "Every item" {
 		t.Fatalf("facts: %+v", r.Facts)
 	}
-	if !strings.Contains(r.Report, "2 page changes wait for review in [AIOps › Inbox](#/cases/inbox/knowledge/r-") {
+	if !strings.Contains(r.Report, "2 page changes wait for review in [AIOps › Inbox](#/aiops/inbox/knowledge/r-") {
 		t.Fatalf("report: %s", r.Report)
 	}
 
@@ -284,7 +284,7 @@ func TestAnUploadStartsARunKN28(t *testing.T) {
 		t.Fatalf("the upload's run: %+v", runs)
 	}
 	// Its drafts are Ann's, who uploaded it.
-	if d, _ := f.s.RunByID(ctx, strings.TrimPrefix(fact(runs[0], "Pages drafted").Href, "#/cases/inbox/knowledge/")); d.StartedBy != admin.ID {
+	if d, _ := f.s.RunByID(ctx, strings.TrimPrefix(fact(runs[0], "Pages drafted").Href, "#/aiops/inbox/knowledge/")); d.StartedBy != admin.ID {
 		t.Fatalf("the drafts are not the uploader's: %+v", d)
 	}
 	f.s.pendingMu.Lock()

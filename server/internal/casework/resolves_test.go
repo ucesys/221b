@@ -191,7 +191,7 @@ func TestAVerifiedFixClosesTheCaseBelowP1CF30(t *testing.T) {
 	if c := w.get(t, "C-1"); c.Status != issues.StatusInProgress || c.Verification != issues.VerifyWaiting {
 		t.Fatalf("another job's run verified it: %+v", c.Brief)
 	}
-	res := w.route(t, "nightly-audit", true)
+	res := w.routeWith(t, "nightly-audit", true, []jobs.Recheck{recheck("pod.no-limits", "shop/Deployment/web", false, "web's containers have limits")})
 	c := w.get(t, "C-1")
 	want := "Fixed by change PC-1 (Set web's limits), applied by Pat on 2026-11-06; verified by run-3 (Nightly audit)"
 	if c.Status != issues.StatusClosed || c.Outcome != issues.OutcomeFix || c.Explanation != want || c.ClosedBy == nil || !c.ClosedBy.System || c.Verified == nil || c.RCA != "" || c.Verification != "" {
@@ -224,7 +224,7 @@ func TestAVerifiedFixWaitsForItsRCAAtP1CF30(t *testing.T) {
 	w.route(t, "nightly-audit", true, f)
 	w.applyTo(t, st, "C-1")
 	w.now = w.now.Add(time.Hour)
-	w.route(t, "nightly-audit", true)
+	w.routeWith(t, "nightly-audit", true, []jobs.Recheck{recheck("pod.privileged", "ci/DaemonSet/runner", false, "the runner's pods run unprivileged")})
 	c := w.get(t, "C-1")
 	if c.Priority != 1 || c.Status != issues.StatusInProgress || c.Verification != issues.VerifyVerified || c.Verified == nil || !c.RCARequired {
 		t.Fatalf("not waiting for its RCA: %+v", c.Brief)

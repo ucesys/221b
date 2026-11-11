@@ -1,6 +1,29 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { createApp, fetchAppRefs, fetchChartVersions, fetchHelmRepos, fetchRepoCharts, fetchRepoRefs, fromRepository, inspectChart, inspectRepo, isCard, sourceText, updateApp, upgradeApp, type AppInput, type AppSource, type AppView, type ChartInfo, type HelmRepository, type RefKind, type RepoInspection, type RepoRefs, type SourceKind } from '../../api/apps'
+import {
+  createApp,
+  fetchAppRefs,
+  fetchChartVersions,
+  fetchHelmRepos,
+  fetchRepoCharts,
+  fetchRepoRefs,
+  fromRepository,
+  inspectChart,
+  inspectRepo,
+  isCard,
+  sourceText,
+  updateApp,
+  upgradeApp,
+  type AppInput,
+  type AppSource,
+  type AppView,
+  type ChartInfo,
+  type HelmRepository,
+  type RefKind,
+  type RepoInspection,
+  type RepoRefs,
+  type SourceKind,
+} from '../../api/apps'
 import { YamlEditor } from '../YamlEditor'
 import { useLiveMeta } from '../../api/live'
 import type { WatsonItem } from '../../api/watson'
@@ -349,7 +372,18 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
     const input: AppInput = {}
     switch (mode) {
       case 'create':
-        req = createApp(cluster, { namespace: namespace.trim(), name: name.trim(), source: source(), token: (!repoKind && token) || undefined, values, params: paramList(), createNamespace: createNs, ...(valuesFile ? { valuesFile } : {}), ...(ignoreDefaults ? { ignoreDefaults } : {}), ...(fleet ? { fleet } : {}) })
+        req = createApp(cluster, {
+          namespace: namespace.trim(),
+          name: name.trim(),
+          source: source(),
+          token: (!repoKind && token) || undefined,
+          values,
+          params: paramList(),
+          createNamespace: createNs,
+          ...(valuesFile ? { valuesFile } : {}),
+          ...(ignoreDefaults ? { ignoreDefaults } : {}),
+          ...(fleet ? { fleet } : {}),
+        })
         break
       case 'source':
         input.source = source()
@@ -468,7 +502,10 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
           )}
           {(mode === 'create' || mode === 'source') && kind === 'helm' && (
             <>
-              <Field label="Helm repository" hint={helmRepos && helmRepos.filter((r) => r.kind === 'helm').length === 0 ? 'None yet: a SuperAdmin adds them in Administration › Settings › Applications' : 'As Settings › Applications lists them'}>
+              <Field
+                label="Helm repository"
+                hint={helmRepos && helmRepos.filter((r) => r.kind === 'helm').length === 0 ? 'None yet: a SuperAdmin adds them in Administration › Settings › Applications' : 'As Settings › Applications lists them'}
+              >
                 <label className="rk-field">
                   <select value={repository} onChange={(e) => (setRepository(e.target.value), setChart(''), setRef(''), setVersions([]))} data-testid="app-repository">
                     <option value="">{helmRepos ? 'Choose a repository…' : 'Loading…'}</option>
@@ -513,7 +550,11 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
               </div>
               {inspected && inspected.state !== 'busy' && (
                 <span style={{ fontSize: 12, color: inspected.state === 'error' ? 'var(--err)' : 'var(--fg2)' }} data-testid="app-chart-inspect" data-state={inspected.state}>
-                  {inspected.state === 'error' ? inspected.message : inspected.data?.charts[0] ? `Chart ${inspected.data.charts[0].name} ${inspected.data.charts[0].version}${inspected.data.charts[0].appVersion ? ` (app ${inspected.data.charts[0].appVersion})` : ''}` : ''}
+                  {inspected.state === 'error'
+                    ? inspected.message
+                    : inspected.data?.charts[0]
+                      ? `Chart ${inspected.data.charts[0].name} ${inspected.data.charts[0].version}${inspected.data.charts[0].appVersion ? ` (app ${inspected.data.charts[0].appVersion})` : ''}`
+                      : ''}
                 </span>
               )}
             </Field>
@@ -523,7 +564,16 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
               <Field label="Repository" hint="An https:// git URL; GitHub, GitLab and Gitea work" wide>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <label className="rk-field" style={{ flex: '1 1 320px' }}>
-                    <input ref={mode === 'source' ? (first as never) : undefined} className="rk-mono" value={repo} onChange={(e) => setRepo(e.target.value)} onBlur={inspect} onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), inspect())} placeholder="https://github.com/org/app" data-testid="app-repo" />
+                    <input
+                      ref={mode === 'source' ? (first as never) : undefined}
+                      className="rk-mono"
+                      value={repo}
+                      onChange={(e) => setRepo(e.target.value)}
+                      onBlur={inspect}
+                      onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), inspect())}
+                      placeholder="https://github.com/org/app"
+                      data-testid="app-repo"
+                    />
                   </label>
                   <button type="button" className="rk-btn" onClick={loadRefs} disabled={!repo.trim() || loadingRefs} title="Lists the repository's branches and tags" data-testid="app-load-refs">
                     {loadingRefs ? 'Reading…' : 'List branches and tags'}
@@ -540,8 +590,8 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
                     ) : (
                       <>
                         <span>
-                          {inspected.data!.charts.length === 1 ? 'Chart' : `${inspected.data!.charts.length} charts, chart`}{' '}
-                          <span className="rk-mono">{inspected.data!.charts[0]!.path || '/'}</span> ({inspected.data!.charts[0]!.name} {inspected.data!.charts[0]!.version}) at {inspected.data!.ref}
+                          {inspected.data!.charts.length === 1 ? 'Chart' : `${inspected.data!.charts.length} charts, chart`} <span className="rk-mono">{inspected.data!.charts[0]!.path || '/'}</span> ({inspected.data!.charts[0]!.name}{' '}
+                          {inspected.data!.charts[0]!.version}) at {inspected.data!.ref}
                           {inspected.data!.readme ? `; ${inspected.data!.readme.file}'s helm install example filled what was empty` : ''}
                         </span>
                         {inspected.data!.charts.length > 1 && (
@@ -565,7 +615,16 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
                   <input className="rk-mono" value={path} onChange={(e) => setPath(e.target.value)} placeholder="charts/app" data-testid="app-path" />
                 </label>
               </Field>
-              <Field label="Token" hint={app?.hasToken && repo.trim() !== app.source.repo ? 'The saved token is removed with the repository change; paste one for the new repository' : app?.hasToken ? 'A token is saved; paste a new one to replace it' : 'Only for a private repository; it is kept in the console and never shown again'}>
+              <Field
+                label="Token"
+                hint={
+                  app?.hasToken && repo.trim() !== app.source.repo
+                    ? 'The saved token is removed with the repository change; paste one for the new repository'
+                    : app?.hasToken
+                      ? 'A token is saved; paste a new one to replace it'
+                      : 'Only for a private repository; it is kept in the console and never shown again'
+                }
+              >
                 <label className="rk-field">
                   <input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder={app?.hasToken ? '•••••••• saved' : 'optional'} data-testid="app-token" />
                 </label>
@@ -577,22 +636,47 @@ export function AppDialog({ cluster, mode, row, namespaces = [], onClose, onDone
               </Field>
             </>
           )}
-          {mode !== 'values' && !((mode === 'create' || mode === 'source') && repoKind) && ((mode === 'switch' || mode === 'upgrade' || mode === 'install') && appRepoKind ? (
-            <Field label={mode === 'upgrade' ? 'Version to deploy: the current one again, a newer one (upgrade) or an older one (rollback)' : 'Version'} wide hint={loadingRefs ? 'Reading the repository…' : refs ? `${refs.tags.length} versions` : undefined}>
-              <VersionPicker versions={refs?.tags ?? []} value={ref} onChange={(v) => (setRef(v), setRefKind('version'))} id="app" />
-            </Field>
-          ) : (
-            <Field label={mode === 'upgrade' ? 'Branch or tag to deploy: the current one again, a newer one (upgrade) or an older one (rollback)' : 'Branch or tag'} wide hint={loadingRefs ? 'Reading the repository…' : refs ? `${refs.branches.length} branches, ${refs.tags.length} tags` : mode === 'create' || mode === 'source' ? 'List branches and tags above to choose from them' : undefined}>
-              <RefPicker refs={refs} value={ref} kind={refKind === 'version' ? 'branch' : refKind} onChange={(r, k) => (setRef(r), setRefKind(k))} id="app" />
-            </Field>
-          ))}
+          {mode !== 'values' &&
+            !((mode === 'create' || mode === 'source') && repoKind) &&
+            ((mode === 'switch' || mode === 'upgrade' || mode === 'install') && appRepoKind ? (
+              <Field
+                label={mode === 'upgrade' ? 'Version to deploy: the current one again, a newer one (upgrade) or an older one (rollback)' : 'Version'}
+                wide
+                hint={loadingRefs ? 'Reading the repository…' : refs ? `${refs.tags.length} versions` : undefined}
+              >
+                <VersionPicker versions={refs?.tags ?? []} value={ref} onChange={(v) => (setRef(v), setRefKind('version'))} id="app" />
+              </Field>
+            ) : (
+              <Field
+                label={mode === 'upgrade' ? 'Branch or tag to deploy: the current one again, a newer one (upgrade) or an older one (rollback)' : 'Branch or tag'}
+                wide
+                hint={loadingRefs ? 'Reading the repository…' : refs ? `${refs.branches.length} branches, ${refs.tags.length} tags` : mode === 'create' || mode === 'source' ? 'List branches and tags above to choose from them' : undefined}
+              >
+                <RefPicker refs={refs} value={ref} kind={refKind === 'version' ? 'branch' : refKind} onChange={(r, k) => (setRef(r), setRefKind(k))} id="app" />
+              </Field>
+            ))}
           {(mode === 'create' || mode === 'values') && (
             <>
               <Field label="Values file" hint="YAML, as helm -f takes it; the chart's defaults apply underneath" wide>
-                <YamlEditor value={values} onChange={({ text, errors }) => (setValues(text), setYamlError(errors[0] ?? ''))} label="Values file" testId="app-values" minHeight={mode === 'values' ? 360 : 200} placeholder={'replicaCount: 2\nimage:\n  tag: v1.2.0'} />
+                <YamlEditor
+                  value={values}
+                  onChange={({ text, errors }) => (setValues(text), setYamlError(errors[0] ?? ''))}
+                  label="Values file"
+                  testId="app-values"
+                  minHeight={mode === 'values' ? 360 : 200}
+                  placeholder={'replicaCount: 2\nimage:\n  tag: v1.2.0'}
+                />
               </Field>
               <Field label="Parameters" hint="One key=value per line, as helm --set takes them; applied over the values file" wide>
-                <textarea className="rk-area rk-mono" value={params} onChange={(e) => setParams(e.target.value)} spellCheck={false} style={{ minHeight: 72, fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }} placeholder="image.tag=v1.2.0" data-testid="app-params" />
+                <textarea
+                  className="rk-area rk-mono"
+                  value={params}
+                  onChange={(e) => setParams(e.target.value)}
+                  spellCheck={false}
+                  style={{ minHeight: 72, fontSize: 12.5, lineHeight: 1.5, resize: 'vertical' }}
+                  placeholder="image.tag=v1.2.0"
+                  data-testid="app-params"
+                />
               </Field>
             </>
           )}

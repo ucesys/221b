@@ -187,10 +187,10 @@ spec:
               value: {{ join "," ($issues.reportRoles | default (list "superAdmin" "superViewer" "admin" "viewer")) | quote }}
             - name: ISSUES_OPERATOR_ROLES
               value: {{ join "," ($issues.operatorRoles | default (list "superAdmin" "admin")) | quote }}
-            # The agents' proposals (Phase 12): durable Watson cards in
-            # <release>-cases, approved by cases.approverRoles.
-            - name: CASES_CONFIGMAP
-              value: {{ printf "%s/%s-cases" .Release.Namespace (include "b221.fullname" .) | quote }}
+            # The agents' proposed changes (Phase 12): durable Watson cards in
+            # <release>-proposals (CF-104), approved by cases.approverRoles.
+            - name: PROPOSALS_CONFIGMAP
+              value: {{ printf "%s/%s-proposals" .Release.Namespace (include "b221.fullname" .) | quote }}
             - name: CASES_APPROVER_ROLES
               value: {{ join "," ((.Values.cases | default dict).approverRoles | default (list "superAdmin" "admin")) | quote }}
             # --- Case work (Phase 12): the cases' settings, exceptions and

@@ -73,7 +73,8 @@ export function IssueSettings({ open }: { open: boolean }) {
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 16 }} aria-label="Issues" data-testid="issue-settings">
       <p className="rk-fhint" style={{ margin: 0 }}>
-        People report problems at the report page, <a href={saved?.reportURL || '/report'}>{saved?.reportURL || '/report'}</a>. Each report is matched against the known issues; a confident match is linked and told the known issue's workaround and expected fix.
+        People report problems at the report page, <a href={saved?.reportURL || '/report'}>{saved?.reportURL || '/report'}</a>. Each report is matched against the known issues; a confident match is linked and told the known issue's
+        workaround and expected fix.
       </p>
       {!draft || !saved ? (
         <p className={error ? 'rk-t' : 'rk-fhint'} data-tone={error ? 'err' : undefined} style={{ margin: 0 }}>
@@ -173,7 +174,8 @@ function Tokens({ open }: { open: boolean }) {
           {tokens.map((t) => (
             <li key={t.id}>
               <span>
-                <strong>{t.name}</strong> <span className="rk-mono rk-fhint">{t.id}</span> as <span className="rk-mono">system:{t.account}</span> · {t.scopes.join(', ')} · made {fmtTs(t.created)} by {t.createdBy.name || t.createdBy.id} · {t.lastUsed ? `used ${fmtTs(t.lastUsed)}` : 'never used'}
+                <strong>{t.name}</strong> <span className="rk-mono rk-fhint">{t.id}</span> as <span className="rk-mono">system:{t.account}</span> · {t.scopes.join(', ')} · made {fmtTs(t.created)} by {t.createdBy.name || t.createdBy.id} ·{' '}
+                {t.lastUsed ? `used ${fmtTs(t.lastUsed)}` : 'never used'}
               </span>
               <button type="button" className="rk-btn" disabled={busy} onClick={() => void run(() => revokeIssueToken(t.id).then(() => undefined))}>
                 Revoke

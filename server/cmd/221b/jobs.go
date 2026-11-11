@@ -315,3 +315,20 @@ func objectsOf(manager *clusters.Manager) jobs.ObjectCheck {
 		return false, false
 	}
 }
+
+// wireJobs opens the jobs.
+func (w *wiring) wireJobs(ctx context.Context) error {
+	cfg, log := w.cfg, w.log
+	// Jobs (Phase 12, ADR-90 to ADR-93): the agents on their own, with
+	// their runs in <release>-runs; the report triage job is the issue
+	// service's investigator.
+	jobsW, err := openJobs(ctx, cfg, w.restCfg, w.manager, w.auditLog, w.elector.IsLeader, log)
+	if err != nil {
+		return err
+	}
+	if jobsW.stored != nil {
+		w.stored = append(w.stored, jobsW.stored)
+	}
+	w.jobsW = jobsW
+	return nil
+}

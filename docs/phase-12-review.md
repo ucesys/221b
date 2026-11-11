@@ -63,7 +63,7 @@ For whoever makes the changes (a person or Claude Code):
 
 ## High
 
-### W-1. An alert diagnosis verifies fixes it never looked at
+### W-1. An alert diagnosis verifies fixes it never looked at *fixed* (0.12.0)
 
 **Where:** `server/internal/casework/route.go:173-196` (verification), `:437-449` (`verifyApplied`); `server/internal/jobs/service.go:348-351` (`covered`); `server/internal/jobs/kinds.go` (`runAlert`); `server/internal/jobs/run.go:381` (the `RouteInput`).
 
@@ -89,7 +89,7 @@ An alert-triggered run of the Alert diagnosis job covers the whole cluster of it
 
 **Done when:** a Go test shows that (a) an alert run on object X leaves a waiting fix on object Y of the same cluster and job untouched; (b) a digest run verifies nothing; (c) an audit run verifies a waiting fix only with `rechecked` … `still: false`; (d) an audit run that lists nothing for a waiting key leaves the case waiting and notes it. `docs/states.md` says the new rule. Requirement row and ADR added (this replaces part of CF-06 and CF-30).
 
-### W-2. A cluster the audit failed to read still counts as audited
+### W-2. A cluster the audit failed to read still counts as audited *fixed* (0.12.0)
 
 **Where:** `server/internal/jobs/kinds.go:148-153` (`runAudit`), `server/internal/jobs/run.go:381`.
 
@@ -99,7 +99,7 @@ An alert-triggered run of the Alert diagnosis job covers the whole cluster of it
 
 **Done when:** a Go test with two clusters, one of which fails, shows no case on the failed cluster verified, and the run says which cluster failed.
 
-### W-3. Findings past the cap are dropped and then count as not seen
+### W-3. Findings past the cap are dropped and then count as not seen *fixed* (0.12.0)
 
 **Where:** `server/internal/jobs/store.go:34` (`maxFindings = 40`), `:214` (`tidy`).
 
@@ -113,7 +113,7 @@ An alert-triggered run of the Alert diagnosis job covers the whole cluster of it
 
 ## Medium
 
-### W-4. Cases closed as Fixed and waiting for verification are not in the agent's keys
+### W-4. Cases closed as Fixed and waiting for verification are not in the agent's keys *fixed* (0.12.0)
 
 **Where:** `server/internal/casework/route.go:545` (`l.AgentFound && l.Open()`).
 
@@ -123,7 +123,7 @@ An alert-triggered run of the Alert diagnosis job covers the whole cluster of it
 
 **Done when:** `TestKeysInUse…` covers a closed case with `VerifyPending`.
 
-### W-5. An agent can file findings and changes for a cluster it was not asked about
+### W-5. An agent can file findings and changes for a cluster it was not asked about *fixed* (0.12.0)
 
 **Where:** `server/internal/jobs/kinds.go:107` (`merge`: the cluster is filled in only when the agent left it empty), `server/internal/jobs/parse.go` (`Changes`: `cl := c.Cluster`), `server/internal/jobs/store.go:214` (`tidy` does not check the cluster).
 
@@ -133,7 +133,9 @@ An alert-triggered run of the Alert diagnosis job covers the whole cluster of it
 
 **Done when:** a Go test whose agent answers with another cluster's id shows nothing filed there and a note on the run.
 
-### W-6. A change is filed with its refused commands silently removed
+*Fixed* (0.12.0, CF-97, ADR-147): `merge` and `Changes` hold every request to the cluster its agent was asked on (named by id or name, or not at all); the rest is left out with a note. The digest, asked on its first cluster, is held to that one. `tidy` is left as it was: it gets findings already set to the cluster. `TestNothingIsFiledForAnotherClusterCF97`.
+
+### W-6. A change is filed with its refused commands silently removed *fixed* (0.12.0)
 
 **Where:** `server/internal/jobs/parse.go:141-153` (`Changes`); `server/internal/casework/analysis.go:521-530` (a case's suggested commands).
 
@@ -143,7 +145,9 @@ An alert-triggered run of the Alert diagnosis job covers the whole cluster of it
 
 **Done when:** tests for both paths; no card is ever filed with fewer commands than the agent gave without saying so on the card.
 
-### W-7. A failed read of the exceptions is ignored
+*Fixed* (0.12.0, CF-98, ADR-147): the whole proposal, or the whole suggested fix, is dropped; the run's note and the analysis's `leftOut` (shown under *Fix* in the case's drawer) name the command and why. A line that is not kubectl or helm, and a fix of more than five commands, are dropped the same way. No *Incomplete* card, so I-2 is not needed. `TestAChangeIsFiledWholeOrNotAtAllCF98`, `TestAnAnalysisKeepsAFixWholeOrNotAtAllCF98`.
+
+### W-7. A failed read of the exceptions is ignored *fixed* (0.12.0)
 
 **Where:** `server/internal/casework/route.go:87`, `:562`; `server/internal/casework/actions.go:276` (`list, _ := s.o.Lessons.Exceptions(ctx)`).
 
@@ -153,7 +157,9 @@ An alert-triggered run of the Alert diagnosis job covers the whole cluster of it
 
 **Done when:** a Go test with a failing lessons store shows no case opened.
 
-### S-1. Sherlock's list of what Watson runs is out of date
+*Fixed* (0.12.0, CF-99): `Route` returns the findings unrouted with why (`RouteResult.NotRouted`), retried as W-8 says; `KeysInUse` returns `([]KeyInUse, error)`, and a run whose keys cannot be read says so and goes on without them; `SimilarTo` returns the error. (`KeysInUse` still lists the cases and known issues it could read when those reads fail, as before; only the exceptions fail closed.) `TestAFailedReadOfTheExceptionsOpensNoCaseCF99`.
+
+### S-1. Sherlock's list of what Watson runs is out of date — *fixed* (0.12.0)
 
 **Where:** `server/internal/sherlock/prompt.go` (the paragraph "Watson runs kubectl get, describe, …"), `server/internal/ai/prompts/sherlockCompact.md`; the truth is `server/internal/watson/parse.go:126-203` and `Supported()` at `:209`, which `api/watson.go:227` already serves.
 
@@ -170,7 +176,7 @@ An alert-triggered run of the Alert diagnosis job covers the whole cluster of it
 
 **Done when:** a Go test fails if a command in `watson`'s list is missing from the assembled prompt of Sherlock, the compact form and the Troubleshooter.
 
-### S-2. Names in Sherlock's Cases skill that the console does not use
+### S-2. Names in Sherlock's Cases skill that the console does not use — *fixed* (0.12.0)
 
 **Where:** `server/internal/ai/prompts/cases.md`.
 
@@ -187,7 +193,7 @@ An alert-triggered run of the Alert diagnosis job covers the whole cluster of it
 
 **Done when:** the P-8 test passes.
 
-### S-3. The view tools describe filters and tabs differently from what the browser accepts
+### S-3. The view tools describe filters and tabs differently from what the browser accepts — *fixed* (0.12.0)
 
 **Where:** `server/internal/sherlock/ui_actions.json` (the `description` of `view_filter` and `view_open`) against `web/src/lib/uiControl.ts` (`TAB_SPECS`).
 
@@ -203,7 +209,9 @@ An alert-triggered run of the Alert diagnosis job covers the whole cluster of it
 
 **Done when:** that test exists and the five rows above agree.
 
-### P-1. The Troubleshooter proposes Watson commands without knowing what Watson runs
+Done with tests on both sides against a shared fixture, `server/internal/sherlock/testdata/ui_tabs.json`: `uiControl.test.ts` holds `TAB_SPECS` to it exactly, and `ui_test.go` holds the descriptions of `view_open` and `view_filter` to it. The descriptions stay written for the model, with what each value means, which a sentence generated from the table could not say.
+
+### P-1. The Troubleshooter proposes Watson commands without knowing what Watson runs — *fixed* (0.12.0)
 
 **Where:** `server/internal/ai/catalog.go` (`Troubleshooter`: no `check_command`; only `ChangePlanner` has it), `server/internal/ai/prompts/troubleshooter.md`, `common.md`.
 
@@ -213,11 +221,11 @@ An alert-triggered run of the Alert diagnosis job covers the whole cluster of it
 
 **Done when:** the S-1 test covers the Troubleshooter, and a test in `ai/ai_test.go` expects the tool among the Troubleshooter's.
 
-### P-2. No task asks the agent what it re-checked
+### P-2. No task asks the agent what it re-checked *fixed* (0.12.0)
 
 Part of W-1 (steps 2 and 3). Listed separately because it is the prompt half: `jobs/keys.go:387` tells the agent to reuse a key for the same problem, and nothing asks it to look at each listed key again and say what it found.
 
-### A-1. "Cases" names six different things
+### A-1. "Cases" names six different things *fixed* (0.12.0)
 
 **Where and what:**
 
@@ -250,64 +258,77 @@ This replaces the last sentence of CF-91 ("Addresses and the API keep their name
 
 **Done when:** `grep -rn '#/cases' web/src server` finds only the redirect table and its tests; `make e2e-sim` passes; an upgrade test (`hack/upgrade-kind.sh` or a Go test of the copy) shows a card filed before the rename still there after it; the old addresses in `cards/notify.go` and `confluence/publisher.go` are the new ones (A-5).
 
+*Fixed* (CF-104, ADR-152), as the table says. The router reads `#/cases/…` as the same page under `#/aiops/…` and `AIOpsPage` replaces the address; `lib/casesItem.ts` became `lib/aiopsItem.ts` and `CasesPage` `AIOpsPage` with the area. The server emits the drawer's own address where it had a query (`#/aiops/inbox/proposal/PC-n`, and `proposalHref` in the browser app), and a known issue at `#/aiops/mycroft/known/KI-n`. The copy of `<release>-cases` into `<release>-proposals` runs before the cards open, copies only keys the new object lacks, the cards last, and is logged; the chart keeps making `<release>-cases` so that `helm upgrade` does not delete it first (`TestTheProposedChangesOfBeforeAreCopiedOnceCF104`). Sherlock's view says `"view":"aiops"`, and the server still reads `"cases"` from a page loaded before. Also kept: the Secret `<release>-cases` (the channels' addresses, not a ConfigMap), the API's route names (`cases-proposals`…), the test ids (`cases-page`, `area-cases`…), `MaxCases` and `sherlock.Question.Cases` (the flag that turns the skill on).
+
 ---
 
 ## Low
 
 ### Case workflow
 
-- **W-8. Routing that fails is not retried.** `casework/route.go:222` logs a warning and returns the findings unrouted. Keep the run marked as *not routed* and route it on the next tick; show it on the run.
-- **W-9. A case and its work record are saved in two writes.** A failure of the second is only logged (`casework/changes.go:261`, `actions.go` after `apply`). Have Housekeeping reconcile: a closed case whose work record is open, a card applied whose case does not name it.
-- **W-10. A proposal's dedup key is its title.** `jobs/run.go:505` and `casework/analysis.go:547` key on the lower-cased title, which the model writes; a reworded title files the card again. Key on the cluster, the sorted cases it resolves and a hash of the commands.
-- **W-11. A leader change during an apply can flip a card's state twice.** The new leader's sweep fails an Approved card after five minutes (`cards/store.go:1225`) while the old leader may still be applying it, and the late result then overwrites Failed. Have `apply`'s last write keep a Failed state set by the sweep and add its results as a note, or stop the apply when the lease is lost.
+- **W-8. Routing that fails is not retried.** *fixed* (0.12.0) `casework/route.go:222` logs a warning and returns the findings unrouted. Keep the run marked as *not routed* and route it on the next tick; show it on the run.
+  *Fixed* (CF-99): the run keeps `notRouted` (why) and `reroute`; the leader's tick routes it again, at most once a minute, oldest first, with `OK: false` so a late routing verifies no fix; it lets a run go, with a note, when its job is gone, a later run of the job was routed since, or a day after it ended. The run's drawer says it. The proposed changes of a run not routed that fix its findings by position resolve nothing and are not filed (noted, as before); the next run proposes them again. `TestARunNotRoutedIsRoutedLaterCF99`, `TestARunNotRoutedIsLetGoAfterALaterOneCF99`.
+- **W-9. A case and its work record are saved in two writes.** *fixed* (0.12.0) A failure of the second is only logged (`casework/changes.go:261`, `actions.go` after `apply`). Have Housekeeping reconcile: a closed case whose work record is open, a card applied whose case does not name it.
+  *Fixed* (CF-100, `casework/reconcile.go`): "open" is read as what a close lets go of after its first write (`closed`: the conversation, the commands other than the changes that finished done, the waiting changes that resolve only the case); Housekeeping does that for the cases closed in the last 7 days, and acts again (`onCard`) for an applied change of the last 7 days whose case's `appliedBy` does not name it. Each in the case's history and audited `case.reconcile`. What a close writes to the work itself (*Closed as fixed: …*, the RCA) cannot be rebuilt from the case and is not. `TestHousekeepingPutsACaseRightWithItsWorkCF100`.
+- **W-10. A proposal's dedup key is its title.** *fixed* (0.12.0) `jobs/run.go:505` and `casework/analysis.go:547` key on the lower-cased title, which the model writes; a reworded title files the card again. Key on the cluster, the sorted cases it resolves and a hash of the commands.
+  *Fixed* (CF-101, ADR-148): `cardid.Key`, set in `jobs.file` once what a proposal resolves is known, for the runs, the case analysis and the case triage (`investigate`, which keyed on the title too). A card waiting under a key of before is replaced by the same change (`cards.keyedBefore`), so the change of form files nothing twice. `TestKey`, `TestAProposalIsKeyedOnWhatItIsAboutCF101`, `TestACardKeyedBeforeIsReplacedByTheSameChangeCF101`.
+- **W-11. A leader change during an apply can flip a card's state twice.** *fixed* (0.12.0) The new leader's sweep fails an Approved card after five minutes (`cards/store.go:1225`) while the old leader may still be applying it, and the late result then overwrites Failed. Have `apply`'s last write keep a Failed state set by the sweep and add its results as a note, or stop the apply when the lease is lost.
+  *Fixed* (CF-100, ADR-149): the first, simpler one. `TestALateApplyKeepsTheSweepsFailedCF100`.
 
 ### Sherlock's names
 
-- **S-4. The core prompt's list of tabs is short.** `sherlock/prompt.go`, "Your place in the console": add Storage, and say the Automation area's tabs (Scripts, Run history, Variables, Run profiles); "Admin" should read Administration; the Pods statuses should include `notready`. **Prompt**, exact names only.
-- **S-5. Two id sets for the Policies sections.** `list_policies` takes `priority`, `drain` and `limits` (`api/sherlock_tools.go:1279-1287`); the Policies tab's path takes `prio` and has no `drain` or `limits` (`web/src/lib/uiControl.ts`, `policies`). Make the tab accept the tool's ids (keep `prio` as an alias), so Sherlock can show what it just read.
-- **S-6. Two step labels show raw ids.** `sherlock/ui.go:270` (`uiLabel`) has no case for `open_tool_dialog`; `sherlock/agents.go:673` returns `"Ask " + in.Agent`, which reads "Ask changePlanner". Label them "Opened a tool dialog" and "Asked the Change planner" (the agent's `Name`).
-- **S-7. Two limits on view changes.** The prompt says at most four changes for one question; `sherlock/ui.go:79` allows ten actions, reads included. Keep ten as the hard cap, and build the prompt's number from a constant.
+- **S-4. The core prompt's list of tabs is short.** — *fixed* (0.12.0). `sherlock/prompt.go`, "Your place in the console": add Storage, and say the Automation area's tabs (Scripts, Run history, Variables, Run profiles); "Admin" should read Administration; the Pods statuses should include `notready`. **Prompt**, exact names only.
+- **S-5. Two id sets for the Policies sections.** — *fixed* (0.12.0). `list_policies` takes `priority`, `drain` and `limits` (`api/sherlock_tools.go:1279-1287`); the Policies tab's path takes `prio` and has no `drain` or `limits` (`web/src/lib/uiControl.ts`, `policies`). Make the tab accept the tool's ids (keep `prio` as an alias), so Sherlock can show what it just read.
+- **S-6. Two step labels show raw ids.** — *fixed* (0.12.0). `sherlock/ui.go:270` (`uiLabel`) has no case for `open_tool_dialog`; `sherlock/agents.go:673` returns `"Ask " + in.Agent`, which reads "Ask changePlanner". Label them "Opened a tool dialog" and "Asked the Change planner" (the agent's `Name`).
+- **S-7. Two limits on view changes.** — *fixed* (0.12.0). The prompt says at most four changes for one question; `sherlock/ui.go:79` allows ten actions, reads included. Keep ten as the hard cap, and build the prompt's number from a constant.
 - **S-8. Three formats for an object.** `221b://Kind/namespace/name` in answers, `namespace/Kind/name` for a finding's resource, `namespace/kind/name` for evidence (`jobs/parse.go`, `OutputFormat`). `NormalizeObject` accepts either order. Left for the prompt review; no code change.
 
 ### Prompts
 
-- **P-3. Prompt text is in about twelve places.** `ai/prompts/*.md`, `sherlock/prompt.go`, `sherlock/agents.go` (tool descriptions), `sherlock/ui_actions.json`, `jobs/kinds.go`, `jobs/parse.go`, `jobs/keys.go`, `casework/analysis.go`, `casework/trouble.go`, `investigate/investigate.go`, `knowledge/sync.go`, `api/automation_more.go`. Add one Go test that renders every prompt and task with sample data into a golden directory (`server/internal/ai/testdata/prompts/`), so a review reads one place and a change shows in a diff. Move the three Automation prompts out of `api` into `automation` (A-2).
+- **P-3. Prompt text is in about twelve places.** — *fixed* (0.12.0); the move of the Automation prompts with A-2. `ai/prompts/*.md`, `sherlock/prompt.go`, `sherlock/agents.go` (tool descriptions), `sherlock/ui_actions.json`, `jobs/kinds.go`, `jobs/parse.go`, `jobs/keys.go`, `casework/analysis.go`, `casework/trouble.go`, `investigate/investigate.go`, `knowledge/sync.go`, `api/automation_more.go`. Add one Go test that renders every prompt and task with sample data into a golden directory (`server/internal/ai/testdata/prompts/`), so a review reads one place and a change shows in a diff. Move the three Automation prompts out of `api` into `automation` (A-2).
 - **P-4.** The audit task opens "This is the nightly audit" whatever started it (`jobs/kinds.go:140`). *Prompt review.*
 - **P-5.** "Check" and "validation rule" name one thing inside one prompt (`jobs/keys.go:380`, `OutputFormat`). *Prompt review.*
 - **P-6.** Spelling is mixed in prompts ("Analyse it", "analysed", "catalogue" against "Analyze"). American, with U-1. *Prompt review* for the prompts; U-1 for the console.
 - **P-7.** The script header is written `# 221b: k8s verb resource` in the draft prompt and `# 221b:k8s` in the review prompt and the parser's messages (`api/automation_more.go:312-340`, `automation/header.go`). The parser accepts both; the form without the space is the one to teach. *Prompt review.*
-- **P-8. A test for the names in prompts.** A Go test (or a vitest that reads the prompt files) that takes the console names a prompt quotes and fails when one is not a label in `web/src`. Start with the AIOps skill; the list of names can be a small file beside the prompt. `ai/casesskill_test.go` checks a few phrases of the skill today, but not that the console has them. It would have caught S-2.
+- **P-8. A test for the names in prompts.** — *fixed* (0.12.0). A Go test (or a vitest that reads the prompt files) that takes the console names a prompt quotes and fails when one is not a label in `web/src`. Start with the AIOps skill; the list of names can be a small file beside the prompt. `ai/casesskill_test.go` checks a few phrases of the skill today, but not that the console has them. It would have caught S-2.
 - **P-9.** Alerts are error or warning; findings are critical, warning or info; `jobs/store.go:223` maps high and error to critical. Say the mapping in the alert task. *Prompt review.*
 
 ### Architecture and code
 
-- **A-2. `api` holds logic beside HTTP.** About 18,000 lines without tests. Move the Automation prompts (`api/automation_more.go:312-340`) to `automation`, and Sherlock's toolbox (`api/sherlock_tools.go`, 1,519 lines) to a package of its own that `api` wires. No change in behaviour.
-- **A-3. `cmd/221b/main.go` is 1,365 lines of wiring.** Finish the pattern of the files beside it (`ai.go`, `cards.go`, `casework.go`): one `wireX` function per feature.
-- **A-4. Two code styles in the browser app.** 25 files have semicolons and double quotes (`lib/router.ts`, `TopBar.tsx` among them), 325 have neither, and no formatter is configured. Add Prettier with the majority style to `web/package.json` and `make lint-web`, and format once in a commit of its own.
-- **A-5. The server emits addresses that only work through redirects.** `confluence/publisher.go:1148` and `:1307` (`#/cases/known…`), `cards/notify.go:333` (`#/cases/inbox?proposal=`). Emit the current addresses; with A-1, the new ones.
-- **A-6. A name is cut at 60 bytes.** `ai/cases.go:115` (`c.Name[:60]`) can split a multi-byte character. Cut on a rune boundary, as `viewBlock` in `sherlock/ui.go` does.
-- **A-7. One thing, several words.** Proposal, proposed change, card and change (PC-n); check and validation rule; reject and refuse. In everything a person reads: *proposed change*, *validation rule*, *reject* (U-3). In code the package names stay.
+- **A-2. `api` holds logic beside HTTP.** *fixed* (0.12.0) About 18,000 lines without tests. Move the Automation prompts (`api/automation_more.go:312-340`) to `automation`, and Sherlock's toolbox (`api/sherlock_tools.go`, 1,519 lines) to a package of its own that `api` wires. No change in behaviour.
+  *Fixed:* the three prompts are `automation.ImpactPrompt`, `DraftPrompt` and `ReviewPrompt` (`automation/prompts.go`), with their golden test. The toolbox, `review_cluster` with it, is package `sherlocktools`: `api` gives it the console's API (called in-process as before) and the two reads that do not go through it, the home page's summary and the cached events the person may list (`api/sherlock_tools.go`). `TestSherlockToolsOnlyRead`, `TestEveryAgentToolExists` and the toolbox's golden test moved with it; the tests that need a running console stay in `api`. The golden prompts are unchanged byte for byte.
+- **A-3. `cmd/221b/main.go` is 1,365 lines of wiring.** *fixed* (0.12.0) Finish the pattern of the files beside it (`ai.go`, `cards.go`, `casework.go`): one `wireX` function per feature.
+  *Fixed:* `main.go` (about 360 lines) keeps the flags, the order of the wiring and the server's start and stop; each feature is a `wireX` method of `wiring`, the console as it is wired, in a file of its own (`auth.go`, `leader.go`, `clusters.go`, `settings.go`, `sherlock.go`, `watson.go`, `ssh.go`, `automation.go`, `sessions.go`, `api.go` and `metrics.go`, and beside the existing `openX` in `helmrepos.go`, `jobs.go`, `issues.go`, `knowledge.go`, `cards.go`, `casework.go` and `backupparts.go`). The code moved as it was: the same steps in the same order, the same flags and logs.
+- **A-4. Two code styles in the browser app.** 25 files have semicolons and double quotes (`lib/router.ts`, `TopBar.tsx` among them), 325 have neither, and no formatter is configured. Add Prettier with the majority style to `web/package.json` and `make lint-web`, and format once in a commit of its own. *fixed* (0.12.0): Prettier 3.9.10 pinned in `web/package.json`, `npm run format` / `format:check`, in `make lint-web`; no semicolons, single quotes, trailing commas, and a print width of 240, the width the code was written to (160 would have grown the code by 16%, 240 by 3%); the code formatted once.
+- **A-5. The server emits addresses that only work through redirects.** *fixed* (0.12.0, with A-1) `confluence/publisher.go:1148` and `:1307` (`#/cases/known…`), `cards/notify.go:333` (`#/cases/inbox?proposal=`). Emit the current addresses; with A-1, the new ones.
+- **A-6. A name is cut at 60 bytes.** *fixed* (0.12.0) `ai/cases.go:115` (`c.Name[:60]`) can split a multi-byte character. Cut on a rune boundary, as `viewBlock` in `sherlock/ui.go` does.
+- **A-7. One thing, several words.** *fixed* (0.12.0) Proposal, proposed change, card and change (PC-n); check and validation rule; reject and refuse. In everything a person reads: *proposed change*, *validation rule*, *reject* (U-3). In code the package names stay. *Refuse* stays where the system declines something (Watson refusing a command, the server refusing a request); every decision a person makes on a proposed change already read *reject*.
 
 ### Labels and texts
 
 | ID | Where | Now | Change to |
 | --- | --- | --- | --- |
-| U-1 | `CaseDrawer.tsx:956` and `:911`, `BulkBar.tsx:174` and `:188`, `inboxRows.tsx:523` | Analyse, Analyse again, Analyse now | Analyze, Analyze again, Analyze now. Look for other British spellings in strings a person reads (`grep -rniE "analys|behaviour|colour|catalogue|organis|recognis" web/src`); comments may stay. |
-| U-2 | `NewReport.tsx:22`, `AlertReports.tsx:81`, `CasesSettings.tsx:22` | New Case; "New Case looks back" | New case; "New case looks back" |
-| U-2 | `web/src/lib/router.ts:57`, `:62` | Run Profiles, Run History | Run profiles, Run history |
-| U-3 | `server/internal/knowledge/jobs.go:305-307` and other run facts | "Proposals", "proposal waits", "proposals wait" | "Proposed changes", "proposed change waits", "proposed changes wait" |
-| U-4 | `HostDialog.tsx:601` | Check connection | Test connection, as the cluster editor and the S3 backup say |
-| U-5 | `AdminPage.tsx:28` | "SuperAdmin only: refresh rate, Sherlock and Watson" | "SuperAdmin only: general, AI, changes and AIOps settings" |
-| U-6 | `investigate/investigate.go:69`; `SettingsPage.tsx:56` | The job *Report triage*; the hint "Report page, timers, API tokens" | The job's label becomes *Case triage* (its id `report-triage` stays, so settings kept for it still apply). The Issues hint stays: the report page is still called that. |
-| U-7 | Steps under Sherlock's answers | `open_tool_dialog`, "Ask changePlanner" | See S-6. |
-| U-8 | Documents | The area is *Cases* in older requirement rows and changelog lines | See [Documentation](#documentation). |
-| U-9 | Script header help and messages | `# 221b:describe` and `# 221b: describe:` | The form without the space everywhere a person reads it (P-7). |
+| U-1 *fixed* (0.12.0) | `CaseDrawer.tsx:956` and `:911`, `BulkBar.tsx:174` and `:188`, `inboxRows.tsx:523` | Analyse, Analyse again, Analyse now | Analyze, Analyze again, Analyze now. Look for other British spellings in strings a person reads (`grep -rniE "analys|behaviour|colour|catalogue|organis|recognis" web/src`); comments may stay. |
+| U-2 *fixed* (0.12.0) | `NewReport.tsx:22`, `AlertReports.tsx:81`, `CasesSettings.tsx:22` | New Case; "New Case looks back" | New case; "New case looks back" |
+| U-2 *fixed* (0.12.0) | `web/src/lib/router.ts:57`, `:62` | Run Profiles, Run History | Run profiles, Run history |
+| U-3 *fixed* (0.12.0) | `server/internal/knowledge/jobs.go:305-307` and other run facts | "Proposals", "proposal waits", "proposals wait" | "Proposed changes", "proposed change waits", "proposed changes wait" |
+| U-4 *fixed* (0.12.0) | `HostDialog.tsx:601` | Check connection | Test connection, as the cluster editor and the S3 backup say |
+| U-5 *fixed* (0.12.0) | `AdminPage.tsx:28` | "SuperAdmin only: refresh rate, Sherlock and Watson" | "SuperAdmin only: general, AI, changes and AIOps settings" |
+| U-6 *fixed* (0.12.0) | `investigate/investigate.go:69`; `SettingsPage.tsx:56` | The job *Report triage*; the hint "Report page, timers, API tokens" | The job's label becomes *Case triage* (its id `report-triage` stays, so settings kept for it still apply). The Issues hint stays: the report page is still called that. |
+| U-7 (with S-6) | Steps under Sherlock's answers | `open_tool_dialog`, "Ask changePlanner" | See S-6. |
+| U-8 *fixed* (0.12.0) (with D-9) | Documents | The area is *Cases* in older requirement rows and changelog lines | See [Documentation](#documentation). |
+| U-9 *fixed* (0.12.0) | Script header help and messages | `# 221b:describe` and `# 221b: describe:` | The form without the space everywhere a person reads it (P-7). |
 
 Each label change needs its tests and end-to-end specs changed with it (`grep -rn` the old text under `web/src` and `web/e2e`).
+
+Notes on the fixes (0.12.0): U-1 also covers *analyzes*, *analyzing*, *analyzed*, *labeled*, *color* and *catalog* in what the console and the server show (case history, errors, a proposed change's impact, the audit log, the case analysis job's description); the task texts and `ai/prompts` are left to the prompt review. U-3 and A-7 also cover the server's errors, notifications, history lines and audit details about proposed changes (`cards`, `api/cards.go`, `api/proposaltrouble.go`, Backup's part *Agents' proposed changes*); the stored history line *replaced by the newer proposal PC-n* stays, as the store reads it back. U-6: the triage task's own text still says *report triage* (prompt review). U-7 is done with S-6 and U-8 with D-9. U-9: the new-script template, the drawer's hint and the bundled `reserve-node-resources.sh` use `# 221b:describe`; the draft prompt's header is P-7's.
+
 
 ### Seen on the retaken screenshots
 
 Found on November 10 on the screenshots the workflow took from the simulated cluster (`docs/screenshots/aiops-*.png`, `admin-settings.png`).
+
+*Open:* found while the findings above were being fixed, and not in 0.12.0 yet. One more of U-10's kind was fixed: the SLA line read "resolved 1 dresolution due" (`CaseDrawer.tsx`, now " · resolution due").
 
 | ID | Where | What is wrong | Change to |
 | --- | --- | --- | --- |
@@ -323,11 +344,12 @@ Also seen, and already covered: Watson's own help line in the dock lists `helm i
 
 ### UI improvements
 
-- **I-1. Show what a verification rested on.** On a case whose fix is verified, name the run and what it re-checked ("Verified by the Nightly audit of Nov 12: read the Deployment, 3 of 3 ready"), from the `rechecked` evidence of W-1. On a case still waiting, say since when and how many runs have passed.
-- **I-2. Mark an incomplete change on its card**, if W-6 keeps such cards at all.
-- **I-3. Say on a run what it could not be used for.** In AIOps › Jobs › Runs: the clusters that failed (W-2), findings left out by the cap (W-3), fixes not re-checked (W-1), routing that did not happen (W-8).
-- **I-4. One dialog for Reject… and Withdraw….** Four places build their own: `InboxApprovals.tsx:99`, `WikiPageActions.tsx:225`, `ProposalDrawer.tsx:218`, `ScriptDrawer.tsx:997`. One shared component keeps the wording and the required reason the same.
-- **I-5. Show the agent on each job's row.** *Not a defect:* AIOps › Jobs already shows it under each job's name ("Auditor · all clusters"), as `docs/screenshots/aiops-jobs.png` shows. Nothing to do.
+- **I-1. Show what a verification rested on.** On a case whose fix is verified, name the run and what it re-checked ("Verified by the Nightly audit of Nov 12: read the Deployment, 3 of 3 ready"), from the `rechecked` evidence of W-1. On a case still waiting, say since when and how many runs have passed. *fixed* (0.12.0)
+- **I-2. Mark an incomplete change on its card**, if W-6 keeps such cards at all. *Not needed:* W-6 drops such changes (0.12.0).
+- **I-3. Say on a run what it could not be used for.** In AIOps › Jobs › Runs: the clusters that failed (W-2), findings left out by the cap (W-3), fixes not re-checked (W-1), routing that did not happen (W-8). *fixed* (0.12.0) for the clusters that failed, the findings left out and the fixes not re-checked; routing that did not happen goes with W-8.
+  *The part of W-8 fixed* (0.12.0, CF-99): the run's drawer says "Not routed into cases: <why>", and whether the console tries again.
+- **I-4. One dialog for Reject… and Withdraw….** *fixed* (0.12.0) Four places build their own: `InboxApprovals.tsx:99`, `WikiPageActions.tsx:225`, `ProposalDrawer.tsx:218`, `ScriptDrawer.tsx:997`. One shared component keeps the wording and the required reason the same. Three of the four already used `automation/DecideDialog.tsx`; the wiki page's request had a field in its card, and a console change's Withdraw… opened a dialog that said *Reject*. Now all four use `DecideDialog`, which says *Withdraw* to whoever asked (CF-102). The reason stays required where it was (a console change, a proposed change, a script's version) and optional for a wiki page's request, as it was.
+- **I-5. Show the agent on each job's row** *fixed* (0.12.0) ("Nightly audit · Auditor"), so it is plain that several jobs share one agent and its settings. The agent was on the row's second line (*Auditor · all clusters*); it is now beside the name, with a hover on its shared settings (CF-103).
 
 ---
 
@@ -346,12 +368,14 @@ Also seen, and already covered: Watson's own help line in the dock lists `helm i
 
 **Not a defect:** D-6. `docs/prompt-sources.md` lists every source's commit as *to be recorded*; the file itself explains that this is allowed until text is copied, and none is.
 
-**Left open (D-9):**
+**D-9.** *fixed* (0.12.0), but for the screenshots themselves, which the integrator takes with `make screenshots`. It was left open:
 
-- **Screenshots.** Retaken on November 10 by the Screenshots workflow: all nineteen, plus six of AIOps (Inbox, a case, Jobs, Runs, Validation rules, known issues), which are in the README's table. They show the labels as they were that day. After the label and name changes, run the workflow again by hand (Actions › Screenshots › Run workflow on the branch) or change `web/screenshots/readme.spec.ts`; the spec's addresses (`#/cases/…`) need the new ones after A-1. Still missing: the Automation area (the simulator has no sample scripts, so the spec would have to make some) and the Troubleshoot view of a case with Sherlock on.
+- **Screenshots.** Retaken on November 10 by the Screenshots workflow: all nineteen, plus six of AIOps (Inbox, a case, Jobs, Runs, Validation rules, known issues), which are in the README's table. They show the labels as they were that day. After the label and name changes, run the workflow again by hand (Actions › Screenshots › Run workflow on the branch) or change `web/screenshots/readme.spec.ts`; the spec's addresses (`#/cases/…`) need the new ones after A-1. Still missing: the Automation area (the simulator has no sample scripts, so the spec would have to make some) and the Troubleshoot view of a case with Sherlock on. *fixed* (0.12.0) for the addresses: the spec uses `#/aiops/…`, and all twenty-five were retaken after the label and name changes; the two shots still missing stay open.
 - **The 0.12.0 changelog reads as a diary.** Early lines describe the Cases area, a Reports tab and *New report*; later lines replace them. Before the release (`docs/releasing.md`), rewrite the 0.12.0 section as what ships.
 - **After A-1:** `docs/architecture.md` (the area's row, the API and ConfigMap names, ADR-88's note), `docs/states.md`, `docs/issues.md`, `docs/upgrading.md` (the renamed ConfigMap and its one-time copy), `docs/prompt-sources.md` (`aiops.md`), `README.md`.
 - **After W-1:** `docs/states.md`, the paragraphs on verification.
+
+*Fixed* (0.12.0): `web/screenshots/readme.spec.ts` takes `aiops-inbox.png`, `aiops-case.png` and `aiops-jobs.png` (two cases made through the API first) and retakes `admin-settings.png` on Settings › Agents, and the README's table lists them. CHANGELOG.md's 0.12.0 section is rewritten as what ships: *Upgrading* (the records, the copy of `<release>-cases` into `<release>-proposals`, the API path), then *Added* by area, *Changed* for what differs from 0.11.1 and *Fixed* for what was wrong in it; the review's fixes are in the lines of the features they mend, with their ids. After A-1, `docs/architecture.md` (the area's row and ADR-88's note, the ConfigMap and API names), `docs/upgrading.md` (the copy) and `docs/prompt-sources.md` (`aiops.md`) were already right; the work-items row no longer gives an RCA to Knowledge (CF-44), and `docs/issues.md`, `docs/upgrading.md` and the README no longer name a Reports tab, *New report* in Cases, *Report triage* or a Cases page. `docs/states.md` says the W-1 rule (verified only on what a run re-checked inside its scope) and a proposed change is replaced by the same change for the same cases (CF-101). U-8: CF-91 says once that the rows before it name the area *Cases*, its addresses `#/cases/…` and its API `/api/v1/cases/…`, and the changelog's introduction says it too.
 
 ## Left for the prompt review
 

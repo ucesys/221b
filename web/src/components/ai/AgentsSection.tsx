@@ -21,7 +21,12 @@ export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) =>
       .then(setOv)
       .catch((e: Error) => setError(e.message))
   }, [])
-  if (!ov) return <p className={error ? 'rk-t' : 'rk-fhint'} data-tone={error ? 'err' : undefined} style={{ margin: 0 }}>{error || 'Loading the agents…'}</p>
+  if (!ov)
+    return (
+      <p className={error ? 'rk-t' : 'rk-fhint'} data-tone={error ? 'err' : undefined} style={{ margin: 0 }}>
+        {error || 'Loading the agents…'}
+      </p>
+    )
   const on = ov.agents.filter((a) => a.enabled).length
   const def = ov.providers.find((p) => p.default)
   const agent = ov.agents.find((a) => a.id === open)
@@ -97,7 +102,11 @@ export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) =>
                   <span className="rk-mono" style={{ fontSize: 12 }}>
                     {a.model}
                   </span>
-                  {a.providerId !== 'default' && <span className="rk-fhint" style={{ display: 'block', fontSize: 11 }}>on {a.providerName}</span>}
+                  {a.providerId !== 'default' && (
+                    <span className="rk-fhint" style={{ display: 'block', fontSize: 11 }}>
+                      on {a.providerName}
+                    </span>
+                  )}
                   {a.unusable && a.enabled && (
                     <span className="rk-t" data-tone="warn" style={{ display: 'block', fontSize: 11 }} title={a.unusable}>
                       cannot answer now
@@ -123,7 +132,9 @@ export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) =>
                 </td>
                 <td onClick={(e) => e.stopPropagation()}>
                   {a.id === 'sherlock' ? (
-                    <span className="rk-fhint" style={{ fontSize: 12 }}>{a.enabled ? 'On' : 'Off'}</span>
+                    <span className="rk-fhint" style={{ fontSize: 12 }}>
+                      {a.enabled ? 'On' : 'Off'}
+                    </span>
                   ) : (
                     <label className="rk-tcheck">
                       <input type="checkbox" checked={a.enabled} onChange={() => void toggle(a)} aria-label={`${a.name} on`} data-testid="agent-on" />

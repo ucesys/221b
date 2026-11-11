@@ -763,3 +763,32 @@ func fixRecords(list []fixes.Fix) []knowledge.FixRecord {
 	}
 	return out
 }
+
+// wireKnowledge opens Mycroft's knowledge.
+func (w *wiring) wireKnowledge(ctx context.Context) error {
+	cfg, log := w.cfg, w.log
+	mycroftProposals := &knowledgeProposer{}
+	var knowledgeStored *kv.Limited
+	// Knowledge (Phase 12, ADR-94 to ADR-98): Mycroft's sources, the
+	// wiki's local copy and index on every replica, and the Confluence
+	// publisher, which writes on the leader.
+	svc, l, wl, err := openKnowledge(ctx, cfg, w.restCfg, knowledgeOptions{auditLog: w.auditLog, leads: w.elector.IsLeader, model: mycroftModel{w.sherlockSvc},
+		console: consoleKnowledge{manager: w.manager, hosts: w.hosts, settings: w.shared, apps: w.appStore, auto: w.autoStore}, issues: w.issueSvc, proposer: mycroftProposals, log: log})
+	if err != nil {
+		return err
+	}
+	if l != nil {
+		w.stored = append(w.stored, l)
+	}
+	if wl != nil {
+		w.stored = append(w.stored, wl)
+	}
+	knowledgeStored = l
+	w.knowledgeSvc = svc
+	go func() {
+		w.knowledgeSvc.Start(ctx)
+		w.knowledgeSvc.Run(ctx)
+	}()
+	w.mycroftProposals, w.knowledgeStored = mycroftProposals, knowledgeStored
+	return nil
+}

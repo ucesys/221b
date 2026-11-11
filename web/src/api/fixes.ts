@@ -61,7 +61,7 @@ export interface FixPatch {
 }
 
 const enc = encodeURIComponent
-const base = '/api/v1/cases/fixes'
+const base = '/api/v1/aiops/fixes'
 
 /** Every fix, whatever its status, newest updated first; mayChange for those who work the cases. */
 export const fetchFixes = (background = false) => call<{ fixes: Fix[]; mayChange: boolean }>(base, {}, background)
@@ -70,4 +70,4 @@ export const saveFix = (id: string, patch: FixPatch) => call<Fix>(`${base}/${enc
 export const deleteFix = (id: string) => call<Fix>(`${base}/${enc(id)}`, { method: 'DELETE' })
 
 /** Where a fix opens: AIOps › Mycroft › Fixes. */
-export const fixHref = (id: string) => `#/cases/mycroft/fixes/${enc(id)}`
+export const fixHref = (id: string) => `#/aiops/mycroft/fixes/${enc(id)}`

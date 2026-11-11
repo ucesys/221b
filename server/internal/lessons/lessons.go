@@ -465,7 +465,7 @@ func (s *Service) AddException(ctx context.Context, in NewException, by Person) 
 		until = "until " + e.Expires.Format("2006-01-02")
 	}
 	s.record(audit.Event{Action: ActionExceptionAdd, Who: by.who(), Cluster: e.Cluster, Target: e.ID, From: by.From, Outcome: audit.OutcomeOK,
-		Detail: fmt.Sprintf("exception %s %s (%s) on %s, check %s, %s: %s", e.ID, of(e), e.Title, orNone(e.Resource), e.Check, until, e.Reason)})
+		Detail: fmt.Sprintf("exception %s %s (%s) on %s, validation rule %s, %s: %s", e.ID, of(e), e.Title, orNone(e.Resource), e.Check, until, e.Reason)})
 	// --- Mycroft tab (Phase 12, wave 5, MY-09) ---
 	// An exception is the console's record only, listed in AIOps ›
 	// Mycroft › Exceptions: no wiki page is written for it any more; the
@@ -646,7 +646,7 @@ func (s *Service) RemoveException(ctx context.Context, id string, by Person) (Ex
 		return Exception{}, err
 	}
 	s.record(audit.Event{Action: ActionExceptionRemove, Who: by.who(), Cluster: out.Cluster, Target: out.ID, From: by.From, Outcome: audit.OutcomeOK,
-		Detail: fmt.Sprintf("exception %s removed (%s on %s, check %s); findings like it are reported again", out.ID, out.Title, orNone(out.Resource), out.Check)})
+		Detail: fmt.Sprintf("exception %s removed (%s on %s, validation rule %s); findings like it are reported again", out.ID, out.Title, orNone(out.Resource), out.Check)})
 	// One written to the wiki before exceptions stopped being pages there
 	// (MY-09) keeps its page, which says it was removed.
 	if out.Wiki != "" {
@@ -693,7 +693,7 @@ func (s *Service) ReactivateException(ctx context.Context, id string, by Person)
 		return Exception{}, err
 	}
 	s.record(audit.Event{Action: ActionExceptionReactivate, Who: by.who(), Cluster: out.Cluster, Target: out.ID, From: by.From, Outcome: audit.OutcomeOK,
-		Detail: fmt.Sprintf("exception %s made active again (%s on %s, check %s), was %s; findings like it are left out again", out.ID, out.Title, orNone(out.Resource), out.Check, was)})
+		Detail: fmt.Sprintf("exception %s made active again (%s on %s, validation rule %s), was %s; findings like it are left out again", out.ID, out.Title, orNone(out.Resource), out.Check, was)})
 	return out, nil
 }
 
@@ -731,8 +731,8 @@ func exceptionPage(e Exception, now time.Time) string {
 	case "expired":
 		fmt.Fprintf(&b, "**Expired** on %s: findings like this one are reported again.\n\n", e.Expires.Format("2006-01-02"))
 	}
-	fmt.Fprintf(&b, "An accepted exception: the agents' runs leave out a finding of this check on this resource while it applies.\n\n")
-	fmt.Fprintf(&b, "- Cluster: %s\n- Resource: %s\n- Check: `%s`\n", orDash(e.Cluster), orDash(e.Resource), e.Check)
+	fmt.Fprintf(&b, "An accepted exception: the agents' runs leave out a finding of this validation rule on this resource while it applies.\n\n")
+	fmt.Fprintf(&b, "- Cluster: %s\n- Resource: %s\n- Validation rule: `%s`\n", orDash(e.Cluster), orDash(e.Resource), e.Check)
 	fmt.Fprintf(&b, "- Accepted by %s on %s\n", e.By, e.At.Format("2006-01-02 15:04 MST"))
 	if e.Expires.IsZero() {
 		b.WriteString("- Expires: never\n")

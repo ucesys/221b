@@ -89,7 +89,12 @@ export function HostPanel({ r, now, onClose, onToast }: Props) {
 
   return (
     <div style={{ position: 'fixed', top: 0, right: 0, bottom: 'var(--dock-space, 0px)', left: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end' }}>
-      <button aria-label={`Close the details of ${r.name}`} tabIndex={-1} onClick={onClose} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }} />
+      <button
+        aria-label={`Close the details of ${r.name}`}
+        tabIndex={-1}
+        onClick={onClose}
+        style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', border: 0, padding: 0, background: 'var(--backdrop)', cursor: 'default' }}
+      />
       <aside
         className="rk-npanel rk-drawer"
         role="dialog"
@@ -174,7 +179,9 @@ export function HostPanel({ r, now, onClose, onToast }: Props) {
                 </div>
               ))}
             </dl>
-            <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>Reached by SSH from the console, with a certificate it signs for each connection. Nothing cordons or drains a host, and a reboot is over once it answers from a new boot.</p>
+            <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>
+              Reached by SSH from the console, with a certificate it signs for each connection. Nothing cordons or drains a host, and a reboot is over once it answers from a new boot.
+            </p>
           </Section>
           <Section title="Labels" count={labels.length}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -221,7 +228,11 @@ export function HostPanel({ r, now, onClose, onToast }: Props) {
       {removing && (
         <ConfirmDialog title={`Remove the host ${r.name}?`} confirm="Remove host" danger busy={busy} error={error} onConfirm={remove} onCancel={() => setRemoving(null)}>
           <p style={{ margin: 0 }}>The console forgets it, its pinned key and its pairing; Automation no longer reaches it. To take the console&apos;s lines off the host too, run this there as root:</p>
-          <pre className="rk-mono" data-testid="host-cleanup" style={{ margin: 0, padding: '8px 10px', maxHeight: 160, overflow: 'auto', fontSize: 11, background: 'var(--sunken)', border: '1px solid var(--line)', borderRadius: 6, whiteSpace: 'pre-wrap' }}>
+          <pre
+            className="rk-mono"
+            data-testid="host-cleanup"
+            style={{ margin: 0, padding: '8px 10px', maxHeight: 160, overflow: 'auto', fontSize: 11, background: 'var(--sunken)', border: '1px solid var(--line)', borderRadius: 6, whiteSpace: 'pre-wrap' }}
+          >
             {removing.command}
           </pre>
           <button className="rk-link" style={{ alignSelf: 'flex-start', fontSize: 12 }} onClick={() => void copyText(removing.command).then((ok) => ok && onToast?.('Copied the cleanup command.'))}>

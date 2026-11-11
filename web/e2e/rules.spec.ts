@@ -59,7 +59,7 @@ async function runJob(page: Page, job: string): Promise<string> {
   return id
 }
 
-const rulesPage = async (page: Page) => (await api(page, 'GET', '/api/v1/cases/rules')).json as { found: Found[]; suggestions: Suggestion[] }
+const rulesPage = async (page: Page) => (await api(page, 'GET', '/api/v1/aiops/rules')).json as { found: Found[]; suggestions: Suggestion[] }
 
 interface Rule {
   id: string
@@ -71,14 +71,11 @@ interface Rule {
 }
 
 async function send(page: Page, path: string, method: string, body?: unknown): Promise<number> {
-  return page.evaluate(
-    async ([p, m, b]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === undefined ? undefined : JSON.stringify(b) })).status,
-    [path, method, body] as const,
-  )
+  return page.evaluate(async ([p, m, b]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: b === undefined ? undefined : JSON.stringify(b) })).status, [path, method, body] as const)
 }
 
 async function rules(page: Page): Promise<Rule[]> {
-  return ((await (await page.request.get('/api/v1/cases/rules')).json()) as { rules: Rule[] }).rules
+  return ((await (await page.request.get('/api/v1/aiops/rules')).json()) as { rules: Rule[] }).rules
 }
 
 const stamp = Date.now()
@@ -103,21 +100,21 @@ test.afterAll(async ({ browser }) => {
   await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
   // The fake audit proposes a change each run (CF-26): left waiting, it would wait in the Inbox of the specs after.
-  const queued = ((await api(page, 'GET', '/api/v1/cases/proposals?state=queued')).json as { proposals?: { id: string; source: { kind: string } }[] } | null)?.proposals ?? []
-  for (const c of queued.filter((p) => p.source.kind === 'job')) await api(page, 'POST', `/api/v1/cases/proposals/${c.id}/reject`, { reason: 'e2e: done' })
+  const queued = ((await api(page, 'GET', '/api/v1/aiops/proposals?state=queued')).json as { proposals?: { id: string; source: { kind: string } }[] } | null)?.proposals ?? []
+  for (const c of queued.filter((p) => p.source.kind === 'job')) await api(page, 'POST', `/api/v1/aiops/proposals/${c.id}/reject`, { reason: 'e2e: done' })
   await api(page, 'PUT', '/api/v1/jobs/nightly-audit', { clusters: [] })
   await api(page, 'PUT', '/api/v1/sherlock/config', { ...ON, clusters: {} })
   for (const r of (await rules(page)).filter((x) => x.id.startsWith('e2e.'))) {
-    if (r.state !== 'active') await send(page, `/api/v1/cases/rules/${r.id}/activate`, 'POST')
+    if (r.state !== 'active') await send(page, `/api/v1/aiops/rules/${r.id}/activate`, 'POST')
   }
-  for (const r of (await rules(page)).filter((x) => x.id.startsWith('e2e.'))) await send(page, `/api/v1/cases/rules/${r.id}`, 'DELETE')
+  for (const r of (await rules(page)).filter((x) => x.id.startsWith('e2e.'))) await send(page, `/api/v1/aiops/rules/${r.id}`, 'DELETE')
   await page.close()
 })
 
 test('the validation rules are a table as wide as the Mycroft tables in Jobs, filtered by state and job, each opening in a drawer (ADR-138, CF-89)', async ({ page }) => {
   // The old Mycroft address leads to Jobs › Validation rules, and says so in the address.
-  await page.goto('/#/cases/jobs/rules')
-  await expect(page).toHaveURL(/#\/cases\/jobs\/rules$/)
+  await page.goto('/#/aiops/jobs/rules')
+  await expect(page).toHaveURL(/#\/aiops\/jobs\/rules$/)
   await expect(page.getByTestId('jobs-sub-rules')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.locator('[data-cases-tab=jobs]')).toHaveAttribute('aria-current', 'page')
   await expect(page.getByTestId('mycroft-sub-rules')).toHaveCount(0)
@@ -139,7 +136,7 @@ test('the validation rules are a table as wide as the Mycroft tables in Jobs, fi
   await page.getByTestId('rules-search').fill('pod.privileged')
   await expect(page.getByTestId('rule-row')).toHaveCount(1)
   await page.getByTestId('rule-row').first().click()
-  await expect(page).toHaveURL(/#\/cases\/jobs\/rules\/pod\.privileged$/)
+  await expect(page).toHaveURL(/#\/aiops\/jobs\/rules\/pod\.privileged$/)
   const d = page.getByTestId('rule-drawer')
   await expect(d.getByTestId('rule-fields')).toContainText('Nightly audit')
   // A built-in is never deleted: retired instead.
@@ -153,7 +150,7 @@ test('the validation rules are a table as wide as the Mycroft tables in Jobs, fi
 })
 
 test('a SuperAdmin adds a rule, edits its meaning, retires it, makes it active and deletes it while nothing holds it (ADR-138)', async ({ page }) => {
-  await page.goto('/#/cases/jobs/rules')
+  await page.goto('/#/aiops/jobs/rules')
   await page.getByTestId('rule-add').click()
   const f = page.getByTestId('rule-form')
   await expect(f.getByTestId('rule-form-submit')).toBeDisabled()
@@ -182,7 +179,7 @@ test('a SuperAdmin adds a rule, edits its meaning, retires it, makes it active a
 
   await d.getByTestId('rule-delete').click()
   await page.getByTestId('confirm').getByRole('button', { name: 'Delete' }).click()
-  await expect(page).toHaveURL(/#\/cases\/jobs\/rules$/)
+  await expect(page).toHaveURL(/#\/aiops\/jobs\/rules$/)
   await expect(row).toHaveCount(0)
   expect((await rules(page)).some((r) => r.id === added)).toBe(false)
 })
@@ -190,8 +187,8 @@ test('a SuperAdmin adds a rule, edits its meaning, retires it, makes it active a
 test('Replace by merges two rules: the old id is an alias of the new, until made active again (ADR-138)', async ({ page }) => {
   await page.goto('/#/nodes')
   await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
-  for (const id of [oldId, newId]) expect(await send(page, '/api/v1/cases/rules', 'POST', { id, says: `e2e ${id}`, type: 'other', jobs: ['nightly-audit'] })).toBe(200)
-  await page.goto(`/#/cases/jobs/rules/${oldId}`)
+  for (const id of [oldId, newId]) expect(await send(page, '/api/v1/aiops/rules', 'POST', { id, says: `e2e ${id}`, type: 'other', jobs: ['nightly-audit'] })).toBe(200)
+  await page.goto(`/#/aiops/jobs/rules/${oldId}`)
   const d = page.getByTestId('rule-drawer')
   await d.getByTestId('rule-replace').click()
   await d.getByTestId('rule-replace-by').selectOption(newId)
@@ -219,7 +216,7 @@ test('an id an agent made up is a row of the one table with its description; its
   const run = await runJob(page, 'nightly-audit')
   const found = (await rulesPage(page)).found.find((f) => f.id === SKEW)
   expect(found, 'the fake audit names other.node-clock-skew').toBeTruthy()
-  await page.goto('/#/cases/jobs/rules')
+  await page.goto('/#/aiops/jobs/rules')
   await page.getByTestId('rules-show-found').click()
   const row = page.locator(`[data-testid="rule-row"][data-kind="found"][data-id="${SKEW}"]`)
   await expect(row.getByTestId('rule-state')).toHaveText('unlisted')
@@ -228,7 +225,7 @@ test('an id an agent made up is a row of the one table with its description; its
   await expect(row.locator('[data-testid="rule-cluster"][title="local"]')).toHaveCount(1)
   // A count links into the drawer, at its list.
   await row.getByTestId('rule-findings').click()
-  await expect(page).toHaveURL(new RegExp(`#/cases/jobs/rules/${SKEW.replace('.', '\\.')}/findings$`))
+  await expect(page).toHaveURL(new RegExp(`#/aiops/jobs/rules/${SKEW.replace('.', '\\.')}/findings$`))
   const d = page.getByTestId('rule-drawer')
   await expect(d.getByTestId('rule-descriptions')).toContainText('No rule given covers time keeping')
   await expect(d.getByTestId('rule-findings-list')).toHaveAttribute('data-at', 'true')
@@ -236,7 +233,7 @@ test('an id an agent made up is a row of the one table with its description; its
   await expect(latest.getByTestId('rule-finding-routing')).toHaveAttribute('data-routing', 'ignored')
   await expect(d.locator(`[data-testid="rule-run"]`, { hasText: run })).toHaveCount(1)
   await latest.getByTestId('rule-finding-run').click()
-  await expect(page).toHaveURL(new RegExp(`#/cases/jobs/runs/${run}$`))
+  await expect(page).toHaveURL(new RegExp(`#/aiops/jobs/runs/${run}$`))
 })
 
 test('the housekeeping suggests the ids alike as one rule: a row under Suggested that says why, and a row of the SuperAdmin’s Inbox (CF-85, CF-87)', async ({ page }) => {
@@ -250,7 +247,7 @@ test('the housekeeping suggests the ids alike as one rule: a row under Suggested
   expect(s!.from).toEqual(expect.arrayContaining([SKEW, DRIFT]))
   expect(s!.why).toMatch(/^Found \d+ times in \d+ runs on \d+ clusters? by Nightly audit; grouped with other\.node-clock-\w+ because their ids are alike in words/)
 
-  await page.goto('/#/cases/jobs/rules')
+  await page.goto('/#/aiops/jobs/rules')
   await page.getByTestId('rules-show-suggested').click()
   const row = page.locator(`[data-testid="rule-row"][data-kind="suggestion"][data-id="${s!.id}"]`)
   await expect(row.getByTestId('rule-state')).toHaveText('suggested')
@@ -261,24 +258,24 @@ test('the housekeeping suggests the ids alike as one rule: a row under Suggested
   await expect(d.getByTestId('suggestion-from-id')).toHaveCount(2)
   await expect(d.getByTestId('suggestion-promote')).toBeVisible()
   // A found id it groups says so.
-  await page.goto('/#/cases/jobs/rules')
+  await page.goto('/#/aiops/jobs/rules')
   await page.getByTestId('rules-show-found').click()
   await expect(page.locator(`[data-testid="rule-row"][data-kind="found"][data-id="${SKEW}"]`).getByTestId('rule-in-suggestion')).toContainText(s!.id)
 
   // The SuperAdmin's Inbox lists it, counted: the bell is not plain.
-  await page.goto('/#/cases/inbox')
+  await page.goto('/#/aiops/inbox')
   const inboxRow = page.locator(`[data-inbox-row="rule:${s!.id}"]`)
   await expect(inboxRow.getByTestId('inbox-row-status')).toHaveText('Suggested rule')
   await expect(page.getByTestId('inbox-bell')).toHaveAttribute('data-state', /^(p01|waiting)$/)
   await inboxRow.click()
-  await expect(page).toHaveURL(new RegExp(`#/cases/inbox/rule/${s!.id.replace(/\./g, '\\.')}`))
+  await expect(page).toHaveURL(new RegExp(`#/aiops/inbox/rule/${s!.id.replace(/\./g, '\\.')}`))
   const drawer = page.getByTestId('rule-drawer')
   await expect(drawer.getByTestId('suggestion-why')).toBeVisible()
   // Its link opens it in Jobs › Validation rules (CF-89).
   const link = drawer.getByTestId('suggestion-rules-link')
-  await expect(link).toHaveAttribute('href', `#/cases/jobs/rules/${s!.id}`)
+  await expect(link).toHaveAttribute('href', `#/aiops/jobs/rules/${s!.id}`)
   await link.click()
-  await expect(page).toHaveURL(new RegExp(`#/cases/jobs/rules/${s!.id.replace(/\./g, '\\.')}$`))
+  await expect(page).toHaveURL(new RegExp(`#/aiops/jobs/rules/${s!.id.replace(/\./g, '\\.')}$`))
   await expect(page.getByTestId('jobs-sub-rules')).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('rules-page')).toBeVisible()
   await expect(page.getByTestId('rule-drawer').getByTestId('suggestion-why')).toBeVisible()

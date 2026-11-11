@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { adminHref, apiPath, casesHref, clusterHref, clusterPageHref, href, listParam, parseHash, setRouteForTests, TABS, withParams } from './router'
-import { casesItemOf } from './casesItem'
+import { adminHref, apiPath, aiopsHref, clusterHref, clusterPageHref, href, listParam, parseHash, setRouteForTests, TABS, withParams } from './router'
+import { aiopsItemOf } from './aiopsItem'
 
 describe('routes', () => {
   it('parses the tab, path and parameters', () => {
@@ -90,72 +90,97 @@ describe('the Administration area', () => {
   })
 })
 
-describe("renamed Automation pages", () => {
-  it("open from the names a saved link still uses", () => {
-    expect(parseHash("#/parameters?fleet=web").tab).toBe("variables");
-    expect(parseHash("#/parameters?fleet=web").params.get("fleet")).toBe("web");
-    expect(parseHash("#/configurations").tab).toBe("run-profiles");
-    expect(parseHash("#/c/dev/executions").tab).toBe("run-history");
-    expect(parseHash("#/c/dev/executions").cluster).toBe("dev");
-    expect(parseHash("#/automation/params").tab).toBe("variables");
-  });
-});
+describe('renamed Automation pages', () => {
+  it('open from the names a saved link still uses', () => {
+    expect(parseHash('#/parameters?fleet=web').tab).toBe('variables')
+    expect(parseHash('#/parameters?fleet=web').params.get('fleet')).toBe('web')
+    expect(parseHash('#/configurations').tab).toBe('run-profiles')
+    expect(parseHash('#/c/dev/executions').tab).toBe('run-history')
+    expect(parseHash('#/c/dev/executions').cluster).toBe('dev')
+    expect(parseHash('#/automation/params').tab).toBe('variables')
+  })
+})
 
-describe('the Cases area (CS-01, CS-06)', () => {
+describe('the AIOps area (CS-01, CS-06)', () => {
   it('reads its tabs and what follows them', () => {
-    expect(parseHash('#/cases')).toMatchObject({ view: 'cases', cluster: 'local', path: ['inbox'] })
-    expect(parseHash('#/cases/inbox?kind=reports')).toMatchObject({ view: 'cases', path: ['inbox'] })
-    expect(parseHash('#/cases/reports/12')).toMatchObject({ view: 'cases', path: ['inbox', 'report', '12'] })
-    expect(parseHash('#/cases/cases/7')).toMatchObject({ view: 'cases', path: ['inbox', 'case', '7'] })
+    expect(parseHash('#/aiops')).toMatchObject({ view: 'aiops', cluster: 'local', path: ['inbox'] })
+    expect(parseHash('#/aiops/inbox?kind=reports')).toMatchObject({ view: 'aiops', path: ['inbox'] })
+    expect(parseHash('#/aiops/reports/12')).toMatchObject({ view: 'aiops', path: ['inbox', 'report', '12'] })
+    expect(parseHash('#/aiops/cases/7')).toMatchObject({ view: 'aiops', path: ['inbox', 'case', '7'] })
     // No carry-over marks since wave 6: the address is the case's own number.
-    expect(parseHash('#/cases/cases/7').params.get('was')).toBeNull()
-    expect(parseHash('#/cases/cases')).toMatchObject({ view: 'cases', path: ['inbox'] })
-    expect(parseHash('#/cases/known/KI-3')).toMatchObject({ view: 'cases', path: ['mycroft', 'known', 'KI-3'] })
-    expect(parseHash('#/cases/knowledge/apps/shop')).toMatchObject({ path: ['mycroft', 'wiki', 'apps', 'shop'] })
+    expect(parseHash('#/aiops/cases/7').params.get('was')).toBeNull()
+    expect(parseHash('#/aiops/cases')).toMatchObject({ view: 'aiops', path: ['inbox'] })
+    expect(parseHash('#/aiops/known/KI-3')).toMatchObject({ view: 'aiops', path: ['mycroft', 'known', 'KI-3'] })
+    expect(parseHash('#/aiops/knowledge/apps/shop')).toMatchObject({ path: ['mycroft', 'wiki', 'apps', 'shop'] })
     // Mycroft's own tabs (Phase 12, wave 5, MY-01): exceptions left the wiki.
-    expect(parseHash('#/cases/knowledge/exceptions/EX-3')).toMatchObject({ view: 'cases', path: ['mycroft', 'exceptions', 'EX-3'] })
+    expect(parseHash('#/aiops/knowledge/exceptions/EX-3')).toMatchObject({ view: 'aiops', path: ['mycroft', 'exceptions', 'EX-3'] })
     // Add moved to Settings › Knowledge (MY-11).
-    expect(parseHash('#/cases/mycroft/wiki/add')).toMatchObject({ view: 'admin', path: ['settings', 'knowledge', 'added'] })
-    expect(parseHash('#/c/dev/cases/runs/run-4')).toMatchObject({ view: 'cases', cluster: 'dev', path: ['jobs', 'runs', 'run-4'] })
-    expect(parseHash('#/cases/bogus')).toMatchObject({ view: 'cases', path: ['inbox'] })
+    expect(parseHash('#/aiops/mycroft/wiki/add')).toMatchObject({ view: 'admin', path: ['settings', 'knowledge', 'added'] })
+    expect(parseHash('#/c/dev/aiops/runs/run-4')).toMatchObject({ view: 'aiops', cluster: 'dev', path: ['jobs', 'runs', 'run-4'] })
+    expect(parseHash('#/aiops/bogus')).toMatchObject({ view: 'aiops', path: ['inbox'] })
   })
 
   it('opens the old RCAs addresses on the Inbox showing all, closed cases too: an RCA is part of its case (wave 6e)', () => {
-    for (const hash of ['#/cases/mycroft/rcas', '#/cases/mycroft/rcas/RCA-4', '#/cases/knowledge/rcas', '#/cases/knowledge/rcas/RCA-4', '#/c/dev/cases/mycroft/rcas/RCA-4?q=disk']) {
+    for (const hash of ['#/aiops/mycroft/rcas', '#/aiops/mycroft/rcas/RCA-4', '#/aiops/knowledge/rcas', '#/aiops/knowledge/rcas/RCA-4', '#/c/dev/aiops/mycroft/rcas/RCA-4?q=disk']) {
       const r = parseHash(hash)
-      expect(r, hash).toMatchObject({ view: 'cases', path: ['inbox'] })
+      expect(r, hash).toMatchObject({ view: 'aiops', path: ['inbox'] })
       expect(r.params.get('show'), hash).toBe('all')
     }
     // The cluster stays; an old RCA's id opens nothing, and what else the address asked is kept.
-    expect(parseHash('#/c/dev/cases/mycroft/rcas/RCA-4?q=disk')).toMatchObject({ cluster: 'dev' })
-    expect(parseHash('#/c/dev/cases/mycroft/rcas/RCA-4?q=disk').params.get('q')).toBe('disk')
-    expect(casesItemOf(parseHash('#/cases/mycroft/rcas/RCA-4'))).toBeNull()
+    expect(parseHash('#/c/dev/aiops/mycroft/rcas/RCA-4?q=disk')).toMatchObject({ cluster: 'dev' })
+    expect(parseHash('#/c/dev/aiops/mycroft/rcas/RCA-4?q=disk').params.get('q')).toBe('disk')
+    expect(aiopsItemOf(parseHash('#/aiops/mycroft/rcas/RCA-4'))).toBeNull()
   })
 
   it('opens the old Mycroft › Validation rules addresses in Jobs › Validation rules (CF-89)', () => {
-    expect(parseHash('#/cases/mycroft/rules')).toMatchObject({ view: 'cases', path: ['jobs', 'rules'] })
-    expect(parseHash('#/cases/mycroft/rules/pod.privileged')).toMatchObject({ view: 'cases', path: ['jobs', 'rules', 'pod.privileged'] })
-    const r = parseHash('#/c/dev/cases/mycroft/rules/pod.privileged/findings?q=x')
-    expect(r).toMatchObject({ view: 'cases', cluster: 'dev', path: ['jobs', 'rules', 'pod.privileged', 'findings'] })
+    expect(parseHash('#/aiops/mycroft/rules')).toMatchObject({ view: 'aiops', path: ['jobs', 'rules'] })
+    expect(parseHash('#/aiops/mycroft/rules/pod.privileged')).toMatchObject({ view: 'aiops', path: ['jobs', 'rules', 'pod.privileged'] })
+    const r = parseHash('#/c/dev/aiops/mycroft/rules/pod.privileged/findings?q=x')
+    expect(r).toMatchObject({ view: 'aiops', cluster: 'dev', path: ['jobs', 'rules', 'pod.privileged', 'findings'] })
     // Its address in Jobs, which the page shows once it has opened it.
-    expect(withParams(r, {})).toBe('#/c/dev/cases/jobs/rules/pod.privileged/findings?q=x')
-    expect(parseHash('#/cases/jobs/rules/pod.privileged')).toMatchObject({ view: 'cases', path: ['jobs', 'rules', 'pod.privileged'] })
+    expect(withParams(r, {})).toBe('#/c/dev/aiops/jobs/rules/pod.privileged/findings?q=x')
+    expect(parseHash('#/aiops/jobs/rules/pod.privileged')).toMatchObject({ view: 'aiops', path: ['jobs', 'rules', 'pod.privileged'] })
   })
 
   it('opens the old Administration › Approvals link on the Inbox, filtered to approvals', () => {
     const r = parseHash('#/admin/approvals')
-    expect(r).toMatchObject({ view: 'cases', path: ['inbox'] })
+    expect(r).toMatchObject({ view: 'aiops', path: ['inbox'] })
     expect(r.params.get('kind')).toBe('approvals')
-    expect(parseHash('#/c/dev/admin/approvals')).toMatchObject({ view: 'cases', cluster: 'dev' })
+    expect(parseHash('#/c/dev/admin/approvals')).toMatchObject({ view: 'aiops', cluster: 'dev' })
+  })
+
+  it('opens every address of before the rename at its new place (CF-104)', () => {
+    // The area's addresses were #/cases/… : links already sent in
+    // notifications and on Confluence pages still open, and the page puts
+    // the new address in their place (withParams of what they open).
+    const cases: [string, string][] = [
+      ['#/cases', '#/aiops/inbox'],
+      ['#/cases/inbox/case/1', '#/aiops/inbox/case/1'],
+      ['#/cases/known/KI-1', '#/aiops/mycroft/known/KI-1'],
+      ['#/cases/mycroft/known/KI-1', '#/aiops/mycroft/known/KI-1'],
+      ['#/cases/inbox?proposal=PC-1', '#/aiops/inbox?proposal=PC-1'],
+      ['#/c/dev/cases/jobs/runs/run-4', '#/c/dev/aiops/jobs/runs/run-4'],
+      ['#/cases/mycroft/rules/pod.privileged', '#/aiops/jobs/rules/pod.privileged'],
+    ]
+    for (const [old, now] of cases) {
+      const r = parseHash(old)
+      expect(r.view, old).toBe('aiops')
+      expect(withParams(r, {}), old).toBe(now)
+      expect(parseHash(now), old).toMatchObject({ view: 'aiops', cluster: r.cluster, path: r.path })
+    }
+    // The drawer an old address names is the same item.
+    expect(aiopsItemOf(parseHash('#/cases/inbox/case/1'))).toEqual({ kind: 'case', id: 'C-1' })
+    expect(aiopsItemOf(parseHash('#/cases/known/KI-1'))).toEqual({ kind: 'known', id: 'KI-1' })
+    expect(aiopsItemOf(parseHash('#/cases/inbox?proposal=PC-1'))).toEqual({ kind: 'proposal', id: 'PC-1' })
   })
 
   it('builds its links in the cluster open now, and keeps parameters', () => {
     setRouteForTests('#/')
-    expect(casesHref()).toBe('#/cases/inbox')
-    expect(casesHref('reports', ['12'], { open: 'true' })).toBe('#/cases/reports/12?open=true')
+    expect(aiopsHref()).toBe('#/aiops/inbox')
+    expect(aiopsHref('reports', ['12'], { open: 'true' })).toBe('#/aiops/reports/12?open=true')
     setRouteForTests('#/c/dev/pods')
-    expect(casesHref('known')).toBe('#/c/dev/cases/known')
-    expect(withParams(parseHash('#/cases/mycroft/known?open=true'), { q: 'pay' })).toBe('#/cases/mycroft/known?open=true&q=pay')
+    expect(aiopsHref('known')).toBe('#/c/dev/aiops/known')
+    expect(withParams(parseHash('#/aiops/mycroft/known?open=true'), { q: 'pay' })).toBe('#/aiops/mycroft/known?open=true&q=pay')
     setRouteForTests('#/')
   })
 })

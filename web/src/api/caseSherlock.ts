@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react'
 import { checkSession } from './auth'
 import { sherlockCall, type Conversation, type SherlockMsg, type SherlockState, type SherlockStatus } from './sherlock'
 
-const base = (id: string) => `/api/v1/cases/cases/${encodeURIComponent(id.replace(/^C-/i, ''))}/sherlock`
+const base = (id: string) => `/api/v1/aiops/cases/${encodeURIComponent(id.replace(/^C-/i, ''))}/sherlock`
 
 export const askCaseSherlock = (id: string, question: string) => sherlockCall<Conversation>('POST', `${base(id)}/ask`, { question })
 export const stopCaseSherlock = (id: string) => sherlockCall<{ stopped: boolean }>('POST', `${base(id)}/stop`, {})

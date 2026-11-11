@@ -235,11 +235,16 @@ ai_configmaps() {
     [ "$(grep 'checksum/agents' <<<"$with")" != "$(grep 'checksum/agents' "$out")" ] &&
     ! render k8s-console --set clusterName=ci --set agents.watson.instructions=x > /dev/null 2>&1
 }
-# The agents' proposals (Phase 12): their records in a ConfigMap of their
-# own, named in the env and the Role, approved by cases.approverRoles.
+# The agents' proposed changes (Phase 12): their records in a ConfigMap of
+# their own, <release>-proposals since CF-104, named in the env and the
+# Role, approved by cases.approverRoles. <release>-cases, where builds
+# before kept them, is still made, for the console's one copy at start,
+# and no longer named in the env or the Role.
 cases_values() {
-  sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-cases$' &&
-    grep -A1 'name: CASES_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-cases"' &&
+  sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-proposals$' &&
+    sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-cases$' &&
+    grep -A1 'name: PROPOSALS_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-proposals"' &&
+    ! grep -q 'name: CASES_CONFIGMAP' "$out" &&
     grep -A1 'name: CASES_APPROVER_ROLES' "$out" | has '"superAdmin,admin"' || return 1
   grep -A1 'name: CASES_APPROVER_ROLES' <<<"$(render k8s-console --set clusterName=ci --set 'cases.approverRoles[0]=viewer')" | has '"viewer"' &&
     ! render k8s-console --set clusterName=ci --set 'cases.approverRoles[0]=reporter' >/dev/null 2>&1
@@ -278,7 +283,7 @@ case_configmaps() {
 }
 auth_secret() { sed -n '/^kind: Secret$/,/^---/p' "$1" | has '^  name: k8s-console-221b-auth$'; }
 kinds() {
-  [ "$(grep -E '^kind: ' "$out" | sort | uniq -c | awk '{ printf "%s=%s ", $3, $1 }')" = "ClusterRole=6 ClusterRoleBinding=4 ConfigMap=15 Deployment=1 Lease=1 Namespace=1 NetworkPolicy=2 Role=1 RoleBinding=1 Secret=2 Service=1 ServiceAccount=1 " ]
+  [ "$(grep -E '^kind: ' "$out" | sort | uniq -c | awk '{ printf "%s=%s ", $3, $1 }')" = "ClusterRole=6 ClusterRoleBinding=4 ConfigMap=16 Deployment=1 Lease=1 Namespace=1 NetworkPolicy=2 Role=1 RoleBinding=1 Secret=2 Service=1 ServiceAccount=1 " ]
 }
 # Sign-in: local accounts by default, with the (empty) account list in a
 # Secret mounted as a file; OIDC with its client secret from a Secret;
@@ -395,7 +400,7 @@ sherlock_key() {
     ! grep -q 'name: SHERLOCK_SECRET' "$WORK/chart-sherlock.yaml"
 }
 settings_only() {
-  settings_role | has 'resources: \["configmaps"\]' && settings_role | has 'resourceNames: \["k8s-console-221b", "k8s-console-221b-audit", "k8s-console-221b-sessions", "k8s-console-221b-ai", "k8s-console-221b-knowledge", "k8s-console-221b-wiki", "k8s-console-221b-runs", "k8s-console-221b-automation", "k8s-console-221b-automation-runs", "k8s-console-221b-issues", "k8s-console-221b-cases", "k8s-console-221b-casework"\]' &&
+  settings_role | has 'resources: \["configmaps"\]' && settings_role | has 'resourceNames: \["k8s-console-221b", "k8s-console-221b-audit", "k8s-console-221b-sessions", "k8s-console-221b-ai", "k8s-console-221b-knowledge", "k8s-console-221b-wiki", "k8s-console-221b-runs", "k8s-console-221b-automation", "k8s-console-221b-automation-runs", "k8s-console-221b-issues", "k8s-console-221b-proposals", "k8s-console-221b-cases", "k8s-console-221b-casework"\]' &&
     [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","list","watch","patch","update"] verbs:["create","list","get","update","patch","delete"] verbs:["create"] verbs:["get","update"] verbs:["get"] verbs:["get","list","watch","create","update","delete"] ' ] &&
     [ "$(grep -E 'verbs:' "$out" | grep -c -E 'update|delete|\*')" = 4 ]
 }
@@ -659,5 +664,5 @@ check "the temporary wiki store has a ConfigMap of its own, named in the env and
 check "the jobs keep their runs in a ConfigMap of their own, named in the env and the Role; the time zone of new schedules when set" jobs_configmap
 check "the cases are kept in a ConfigMap of their own, named in the env and the Role" casework_configmap
 check "each case is a ConfigMap the console makes in its namespace, granted by the Role without names, with the clean start's values in the env" case_configmaps
-check "the agents' proposals keep their records in a ConfigMap of their own, named in the env and the Role, with who approves them" cases_values
+check "the agents' proposed changes keep their records in a ConfigMap of their own, <release>-proposals, named in the env and the Role, with who approves them; <release>-cases stays, readable, for the copy at start" cases_values
 exit "$fail"

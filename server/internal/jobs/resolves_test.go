@@ -39,7 +39,7 @@ func (routeByCheck) Route(_ context.Context, in RouteInput) RouteResult {
 	return out
 }
 
-func (routeByCheck) KeysInUse(context.Context, string) []KeyInUse { return nil }
+func (routeByCheck) KeysInUse(context.Context, string) ([]KeyInUse, error) { return nil, nil }
 
 func (routeByCheck) Resolvable(_ context.Context, _ string, id string) error {
 	if id == "C-99" {

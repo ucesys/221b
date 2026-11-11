@@ -37,7 +37,7 @@ describe('the tab bar', () => {
 })
 
 describe('sign-in off', () => {
-  const anon = (roles: Me['roles']): Me => ({ mode: 'none', admin: false, roles, method: 'none', user: { subject: 'anonymous', username: 'anonymous', name: 'Anonymous' } } as unknown as Me)
+  const anon = (roles: Me['roles']): Me => ({ mode: 'none', admin: false, roles, method: 'none', user: { subject: 'anonymous', username: 'anonymous', name: 'Anonymous' } }) as unknown as Me
   it('names the anonymous role and says what is off', () => {
     expect(anonymousRoleName(anon(['viewer']))).toBe('Viewer')
     expect(anonymousRoleName(anon(['admin']))).toBe('Admin')

@@ -33,17 +33,26 @@ describe('xlsx', () => {
   })
 
   it('writes a ZIP that reads back', () => {
-    const files = unzip(zipStore([{ name: 'a.txt', data: 'hello' }, { name: 'b/c.xml', data: '<x/>' }]))
+    const files = unzip(
+      zipStore([
+        { name: 'a.txt', data: 'hello' },
+        { name: 'b/c.xml', data: '<x/>' },
+      ]),
+    )
     expect([...files.keys()]).toEqual(['a.txt', 'b/c.xml'])
     expect(files.get('a.txt')).toBe('hello')
   })
 
   it('writes a workbook with typed, escaped cells', () => {
     const files = unzip(
-      xlsxBytes('Nodes', ['Node', 'CPU', 'Taints'], [
-        ['worker-1', 2.5, 'a=b:NoSchedule\nc:NoExecute'],
-        ['worker-<2>&', null, ''],
-      ]),
+      xlsxBytes(
+        'Nodes',
+        ['Node', 'CPU', 'Taints'],
+        [
+          ['worker-1', 2.5, 'a=b:NoSchedule\nc:NoExecute'],
+          ['worker-<2>&', null, ''],
+        ],
+      ),
     )
     expect([...files.keys()]).toContain('xl/worksheets/sheet1.xml')
     const sheet = files.get('xl/worksheets/sheet1.xml') ?? ''
