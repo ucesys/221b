@@ -2,7 +2,7 @@
 
 A review of 221B on `phase-12.0-ai`, read at commit `d255427` on November 9, 2026 and checked again at `52fc821` on November 10 (the one commit between them touches none of the findings). It covers the architecture, the consistency of the code, the names Sherlock is given against the application, the case workflow end to end, every agent's and job's prompt, and the console's labels and texts. Where a document and the code differ, the code was taken as truth.
 
-A **second review** on November 10, after the fixes, ran the tests and the console for the first time and is at the end: [Second review](#second-review).
+A **second review** on November 10, after the fixes, ran the tests and the console for the first time and is at the end: [Second review](#second-review). What is still open after it, written for whoever fixes it, is in [Hand-over: what is open after the second review](#hand-over-what-is-open-after-the-second-review).
 
 This file is also the hand-over: the owner accepted every finding, fix and improvement on November 10, 2026, and they are to be made on `phase-12.0-ai`. Each finding says where it is, what is wrong, what to do and how to tell it is done. The documentation fixes that could be made without code changes are already on the branch (see [Documentation](#documentation)).
 
@@ -417,7 +417,7 @@ The first review could build nothing. This one built Go 1.26 from its source and
 | Check | Result |
 | --- | --- |
 | `go build ./...`, `gofmt -l cmd internal`, `go vet ./...` | Clean. |
-| `go test ./...` | Every package passes on the tip. On the way: `TestJobInstructionsAreEditable` (`jobs`) failed (R2-4), and two tests of `knowledge` fail only where `HTTPS_PROXY` is set, as it was on this machine (R2-13). |
+| `go test ./...` | Every package passes on the tip. On the way: `TestJobInstructionsAreEditable` (`jobs`) failed (R2-4), and two tests of `knowledge` failed: one only where `HTTPS_PROXY` is set, as it was on this machine, and one at random, which a look on November 11 showed (R2-13). |
 | `go test -race ./...` (`make test-go`) | 48 of the 50 packages with tests pass. `api` and `nodessh` failed on data races, all three in the tests' own code (R2-17); with those fixed both pass. |
 | `hack/check-prompt-sources.sh` | Passes, once it could be run (R2-3). |
 | Browser app: `tsc`, `eslint`, `prettier --check`, `vitest` | Clean; 848 tests pass. |
@@ -515,7 +515,7 @@ Proposed with other commands, the change waits beside the first, one more card e
 | R2-10 | `casework/route.go`, verification | A finding of a waiting fix's key that opens no case (below the job's lowest priority, marked expected, or covered by an exception) counts as found again, so the fix is neither verified nor said not to hold, and the run does not count it as not re-checked. The case waits with nothing said. | Count it with the fixes not re-checked, and say on the case why |
 | R2-11 | `jobs/reroute.go`, `jobs/run.go` | A routing that succeeds while the run cannot be saved after it is done again on the next look: seen counts and notes twice. | Record on the cases which run was routed, or save the run first |
 | R2-12 | `casework/route.go` `KeysInUse` | It returns an error when the exceptions cannot be read (W-7) but goes on without the cases or the known issues when their index cannot. | Return the error, as for the exceptions |
-| R2-13 | `knowledge/sourcetest_test.go`, `knowledge` wiki tests | Two tests fail when `HTTPS_PROXY` is set in the environment: the code skips its own connection check behind a proxy, as intended. | `t.Setenv("HTTPS_PROXY", "")` in those tests |
+| R2-13 | `knowledge/store_test.go`, `knowledge/sourcetest_test.go` | Two tests, two causes. `TestMovingTheWikiCopiesEveryFile` fails at random (23 of 40 runs alone): saving the store starts a read of the wiki that nothing waits for, and the test ends while it writes into the test's folder. `TestATestSaysWhatIsWrongKN26` fails when `HTTPS_PROXY` is set: the code rightly checks nothing behind a proxy. | Count that read in the service's background work and wait for it in the tests; give the service its proxy lookup, as it has `dial`. See the [hand-over](#r2-13-one-knowledge-test-fails-at-random-another-behind-a-proxy) |
 | R2-14 | `web/e2e/watson.spec.ts:424` | *requests do not pile up* counts every request left waiting, so it fails when an earlier spec leaves one. It failed here when run right after `sherlock.spec.ts`; it passes alone and in the suite's own order. | Discard the requests left waiting at the start of the test |
 | R2-15 | `CaseDrawer.tsx`, the first line and *Opened from* | The job's id shows where its name belongs: "found by Auditor (nightly-audit)", "nightly-audit" under the run. U-11 and U-12 put names where the cluster's and the agent's ids stood. | The job's label, "Nightly audit" |
 | R2-16 | AIOps › Jobs, Schedule | One row gives its times in two zones: *When* in the console's ("Every day at 02:00 UTC"), *Last run* in the browser's ("7:36pm PST"). | One zone on the row, the console's, or the zone named on both |
@@ -536,3 +536,116 @@ The test install at `rke2cp1:8081` was still not reachable, so nothing here was 
 ### What a case says now (CF-107)
 
 Asked for with this review: a case says what it waits for, beside its status. The stages and what ends each are in `docs/states.md`. With one validation run chosen there is no stage for a second run. Two things came with it: a case closed as Fixed that waits for its run says so in the Inbox (it showed nothing), and one a run reopened says *Fix did not hold* (it said so only in its history).
+
+## Hand-over: what is open after the second review
+
+Eight findings of the second review are open: R2-8 and R2-10 to R2-16, all Low. This section is for whoever makes the changes (a person or Claude Code) and says for each where it is, what is wrong, what to do and how to tell it is done. Everything else of both reviews is done or decided.
+
+### How to work
+
+1. Work on `phase-12.0-ai`, from its tip. Take the findings in the order below; each builds and tests on its own, so commit after each (`git commit -s`).
+2. Follow `CONTRIBUTING.md` and steps 2, 5 and 6 of [How to work through this](#how-to-work-through-this): a requirement row for each change in behaviour (the next free id is **CF-111**), an ADR only for a decision (the next is **ADR-154**; none of these needs one except perhaps R2-10), a line under 0.12.0 in `CHANGELOG.md` for what a user would notice, tests with the change. A change to tests only (R2-13, R2-14) needs no row and no changelog line.
+3. Before each commit: `make lint` and `make test`. Before the last: `make e2e-sim`. Run `make test` **first**, before changing anything; on November 11 the Go tests, the race detector and the browser tests all passed on the tip, apart from the flaky test of R2-13.
+4. Do not open a pull request and do not start CI: the owner has not asked for it yet.
+5. When a finding is done, write *fixed* and the commit in its row of the [Low table](#low-1) and under its heading here. If one turns out not to be a defect, say so there (*not a defect:* and why) and change nothing.
+
+### Order
+
+| # | Finding | Kind | Size |
+| --- | --- | --- | --- |
+| 1 | R2-13 | A test that fails at random, and one that fails behind a proxy | Small; do it first, it can fail any run of `make test` |
+| 2 | R2-12 | Server, error handling | Small |
+| 3 | R2-14 | Browser test | Small |
+| 4 | R2-15 | Browser app, a label | Small |
+| 5 | R2-16 | Browser app, a label | Small |
+| 6 | R2-8 | Browser app, layout | Medium; an earlier attempt broke a test |
+| 7 | R2-10 | Server, case flow | Medium |
+| 8 | R2-11 | Server, case flow | Medium |
+
+### R2-13. One knowledge test fails at random, another behind a proxy
+
+**Where:** `server/internal/knowledge`: `storeapi.go` (the goroutine started after the store is saved, near line 184), `helpers_test.go` `newFixture`, `store_test.go` `TestMovingTheWikiCopiesEveryFile`; `sourcetest.go` `reach` (line 219), `sourcetest_test.go` `TestATestSaysWhatIsWrongKN26`.
+
+**What is wrong:** Two separate things; the review's table first put both down to the proxy.
+
+1. `TestMovingTheWikiCopiesEveryFile` fails at random with *TempDir RemoveAll cleanup: directory not empty*. Run alone 40 times it failed 23 times without a proxy and 5 times with one; in the whole package it usually passes, which is why the full runs did not show it. Saving the wiki's store starts a goroutine that reads the wiki again (`s.Refresh`) and writes its local copy into the service's folder, which in tests is `t.TempDir()`. The goroutine is not counted in `s.bg`, so nothing can wait for it, and the test ends while it still writes.
+2. `TestATestSaysWhatIsWrongKN26` fails wherever `HTTPS_PROXY` is set. `reach` asks `http.ProxyFromEnvironment` and, behind a proxy, rightly checks nothing; the test expects the check. `ProxyFromEnvironment` reads the environment once for the whole process, so `t.Setenv` in the test is not a dependable fix.
+
+**Do:**
+
+1. Count that goroutine in `s.bg` (`s.bg.Add(1)` before it, `defer s.bg.Done()` in it), and have `newFixture` wait for the background work when a test ends: `t.Cleanup(f.s.Wait)`, registered after `t.TempDir()` is called so that it runs before the folder is removed. Tried on November 11: with both, 80 runs of 80 pass with and without a proxy, and the package passes. Look at the other goroutines of the package that write into the folder (`go func` in `storeapi.go`, `http.go`, `jobs.go`) and count those that a test can leave running.
+2. Give the service the proxy lookup as a field beside `dial` (for example `proxy func(*http.Request) (*url.URL, error)`, `http.ProxyFromEnvironment` when nil), and have the fixture set one that returns no proxy. Add one case to the test: with a proxy, `reach` checks nothing and the test of the source goes on.
+
+**Done when:** `go test ./internal/knowledge/ -run 'TestMovingTheWikiCopiesEveryFile$' -count=100` passes, and `HTTPS_PROXY=http://127.0.0.1:9 go test ./internal/knowledge/` passes.
+
+### R2-12. The keys in use are given without the cases when the cases cannot be read
+
+**Where:** `server/internal/casework/route.go` `KeysInUse` (line 658); its caller `server/internal/jobs/keys.go` (line 407); the test `TestAFailedReadOfTheExceptionsOpensNoCaseCF99` in `casework/review_test.go`.
+
+**What is wrong:** `KeysInUse` returns an error when the exceptions cannot be read (W-7), but when the cases' index (`s.o.Issues.Index`) or the known issues (`s.o.Issues.Known`) cannot, it goes on without them: `if err == nil { … }`. The agent then gets a list with no open cases and no fixes to re-check, as if there were none, and the run says nothing. It names problems anew and re-checks nothing.
+
+**Do:** Return the error in both places, worded like the one for the exceptions ("the cases could not be read: …", "the known issues could not be read: …"). The caller already handles an error: it notes on the run that the agent was not given the keys, and the agent works without them. Nothing else changes.
+
+**Done when:** a test with a cases store that cannot be read gets an error from `KeysInUse`, and the run's note says the keys could not be read. Extend the test above or add one beside it.
+
+### R2-14. A Watson browser test counts requests another test left
+
+**Where:** `web/e2e/watson.spec.ts`, *requests do not pile up: the newest is the card, the earlier one folds into a line and still waits (CF-65)* (line 424).
+
+**What is wrong:** It expects "1 earlier request left waiting" and "2 waiting", which holds only when nothing waits at its start. Run after `sherlock.spec.ts` in one session it found a request that spec had left, and failed with "2 earlier requests". It passes alone and in the suite's own order, so it fails only when the order changes or an earlier test leaves more behind.
+
+**Do:** At the start of the test, discard every request that still waits, so the counts are its own: through the pane (open the *earlier requests* line and press *Discard* on each card) or through the API if one discards a waiting request (`POST /api/v1/watson/clear` is used in this file's setup; check whether it covers requests that wait). Do not weaken the assertions to "at least".
+
+**Done when:** `npx playwright test sherlock.spec watson.spec` (the two files in that order, one session) passes, and so does `watson.spec` alone.
+
+### R2-15. A case shows its job's id where the job's name belongs
+
+**Where:** `web/src/components/aiops/CaseDrawer.tsx`: the first line under the title (lines 414 and 415, "found by Auditor (nightly-audit)"), the job under the source (line 588), and *Opened from* (near line 849). `web/src/components/aiops/runNames.ts` already gives names for agents and clusters.
+
+**What is wrong:** The drawer shows `c.source.job`, the job's id (`nightly-audit`, `alert-diagnosis`), where every other place shows its name (*Nightly audit*). U-11 and U-12 put names where the cluster's and the agent's ids stood; the job was left.
+
+**Do:** Add `job(id)` to `useRunNames` (the jobs' list it already reads has each job's `id` and `label`), falling back to the id, and use it in those three places. Keep the id as the element's `title`, as U-11 did for the cluster. The server could send the label with the case instead (`verifyJob` already carries `{id, label}`); either is fine, pick the smaller change.
+
+**Done when:** a drawer test finds "found by Auditor (Nightly audit)" and no "nightly-audit" in the drawer's text, and `runNames.test.tsx` covers `job`.
+
+### R2-16. A job's row gives its times in two time zones
+
+**Where:** `web/src/components/aiops/JobsTab.tsx`: `WhenCell` (line 62) and the *Last run* and *Next run* cells (lines 81 to 88, 184); `describeJobSchedule` in `web/src/api/jobs.ts`.
+
+**What is wrong:** *When* is in the console's zone ("Every day at 02:00", "UTC" under it), because that is how the schedule is set. *Last run* and *Next run* are in the browser's ("2026-11-09 7:36pm PST"), as every time in the console is. On one row, a reader has to convert to see that 02:00 UTC is the run of 6:00 pm.
+
+**Do:** Keep both as they are and add the browser's time to *When* where the two zones differ: under the schedule, beside the zone, "UTC · 6:00pm PST". Where they are the same, show nothing more. This is the reviewer's choice; the owner has not chosen between it and showing *Last run* and *Next run* in the console's zone. If the owner says otherwise, do that.
+
+**Done when:** a test of `WhenCell` with a console zone other than the browser's finds both times, and one with the same zone finds one.
+
+### R2-8. With the dock open, a case's drawer loses its lower third
+
+**Where:** `web/src/styles/design.css`, the rules after "Over a split drawer the dock's round buttons are hidden" (`.rk:has([data-split='true']) .rk-fab`); `web/src/components/Drawer.tsx` (`data-split`); `web/src/components/aiops/CaseTroubleshoot.tsx` and `ProposalTroubleshoot.tsx` (the drawer's own Sherlock); `web/e2e/inbox.spec.ts:257` (*Sherlock is in the dock over Cases and is told the page and the item open*, IB-10 to IB-13).
+
+**What is wrong:** A case's drawer with *Troubleshoot* has its own Sherlock and Watson on the right. When the dock at the bottom is open, it stays open under the drawer: the drawer ends above it and loses about a third of its height, and a second Sherlock and Watson show under the case's own. Only the dock's round button is hidden over a split drawer.
+
+**What was tried:** Hiding the open dock under every split drawer (`.rk:has([data-split='true']) .rk-dock:not([data-mode='max']) { display: none }` and `--dock-space: 0px`). It fixed the case's drawer and broke `inbox.spec.ts:257`: there a proposed change's drawer is open, its own conversation cannot be asked in, and the person asks in the dock, which is what IB-10 to IB-13 require. The change was taken back.
+
+**Do:** Put the dock away only while a drawer shows a Sherlock of its own that the person can ask in. Mark that on the drawer: for example `data-own-chat="true"` on the element that has `data-split`, set by `CaseTroubleshoot` and `ProposalTroubleshoot` when their pane takes questions (not when it is read-only or absent). Then the two rules above with `[data-split='true'][data-own-chat='true']`. The dock comes back as it was when the drawer closes; a maximized dock is left alone.
+
+**Done when:** an end-to-end test opens the dock, opens an agent-found case and finds the dock gone and the drawer as tall as the page allows, then closes the drawer and finds the dock back; `inbox.spec.ts`, `troubleshoot.spec.ts`, `proposal-trouble.spec.ts`, `sherlock-ui` and `watson.spec.ts` pass. Take the README shot `aiops-troubleshoot` again (the Screenshots workflow does on a push that touches `web/screenshots/`).
+
+### R2-10. A finding that opens no case leaves a waiting fix neither verified nor counted
+
+**Where:** `server/internal/casework/route.go` `Route`: `seenKeys` (lines 111 to 115) and the verification loop (`if seenKeys[k] || leftOut[k] { continue }`, line 217); the routings `RoutedExcepted`, `RoutedExpected`, `RoutedIgnored` (`jobs/jobs.go`); `verifyWait` and `VerifyWait` in `casework/service.go`; `waitText` in `web/src/api/casework.ts`.
+
+**What is wrong:** `seenKeys` holds the key of every finding of the run. The loop that verifies waiting fixes skips a case whose key is in it, on the ground that the finding was "routed above (reopened, or the fix did not hold)". That is true only of a finding that reached the case. One that an exception covers, that the agent marked expected, or that is below the job's lowest priority opens and joins nothing, so the case is neither reopened nor verified, and the run does not count it among the fixes it did not re-check. The case waits with nothing said, run after run, for as long as the finding is reported that way.
+
+**Do:** Keep the skip for the findings that did reach a case. For the other three routings, count the case as not re-checked by this run (`Unchecked++`, and the run's count) and say why on the case: a short text kept with the wait ("run-12 found it again and opened no case: below the job's lowest priority" / "…: the agent marked it expected" / "…: exception E-3 covers it"), given in `verifyWait` and shown where the wait is shown (`waitText`). Clear it when the wait ends. Do not reopen the case and do not say the fix did not hold: whether such a finding means that is not decided, and the person now sees why it waits and can use *Skip validation* (CF-109) or reopen it.
+
+**Done when:** three tests, one per routing, close an agent-found case as Fixed, route a finding of its key that way, and find the case still closed and waiting, its `Unchecked` one higher, the reason on its wait, and the run's count of fixes not re-checked one higher; a drawer test shows the reason.
+
+### R2-11. A routing done twice counts twice
+
+**Where:** `server/internal/jobs/reroute.go` (the loop that routes a run again, lines 70 to 100) and `jobs/run.go` (line 383, the first routing); `server/internal/casework/route.go` `by` (the seen count, line 396) and the known issues' and exceptions' counts (`StillPresent.Count++`, `hits[e.ID]++`); `issues.Seen` and `issues.StillPresent` in `issues/issues.go`.
+
+**What is wrong:** A run whose findings could not be routed is routed again on a later look (W-8). When that routing succeeds and the run then cannot be saved (`updateRuns` fails), the run still says *to route*, and the next look routes it once more. `Route` is not safe to repeat: every finding that joins a case adds one to its *seen ×N*, a known issue's *still present* count and an exception's hits go up again, and a case the first routing opened is counted as seen by the same run. It needs two failures in a row, so it is rare, and nothing is lost; the numbers are wrong.
+
+**Do:** Make a second routing of the same run change no count. Remember the run that counted last where a count is kept (`Seen.Run`, `StillPresent.Run`; a case already has `Run`, the run that opened it) and, in `by` and the known-issue branch, skip the count when it is `in.Run`. Count an exception's hit only for a finding whose routing was not already counted for this run, or leave the hits to the first routing. The findings of the result must still name their cases, so that the run can be saved with them.
+
+**Done when:** a test routes one `RouteInput` twice and finds the same cases, seen counts, known issue's count, exception hits and notes after the second as after the first, and the same `RouteResult.Findings`.
