@@ -152,12 +152,11 @@ test('the open dock is put away while a case’s own Sherlock shows, and is back
   await expect(dock.or(page.getByTestId('sherlock-fab')).first()).toBeVisible()
   if (!(await dock.isVisible())) await page.getByTestId('sherlock-fab').click()
   await expect(dock).toBeVisible()
-  // An agent-found case: the simulator starts with some.
-  await page.goto('/#/aiops/inbox?source=agents')
-  const row = page.locator('[data-inbox-row^="case:"]').first()
-  await expect(row).toBeVisible({ timeout: 20_000 })
-  const n = (await row.getAttribute('data-inbox-row'))!.split(':')[1]
-  await page.goto(`/#/aiops/inbox/case/${n}`)
+  // A case of its own: the simulator's agent-found ones may be closed by the specs before this one.
+  const res = await page.request.post('/api/v1/aiops/cases', { headers: SAME, data: { title: `Troubleshoot e2e: the dock ${Date.now()}`, cluster: 'local', priority: 3 } })
+  expect(res.status(), await res.text()).toBe(201)
+  const { number } = (await res.json()) as { number: number }
+  await page.goto(`/#/aiops/inbox/case/${number}`)
   const drawer = page.getByTestId('case-drawer')
   await expect(drawer.getByTestId('case-trouble')).toHaveAttribute('data-own-chat', 'true')
   await expect(dock).toBeHidden()
