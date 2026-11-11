@@ -36,6 +36,7 @@ export interface ProviderTest {
 
 export interface ProviderView extends AIProvider {
   resolved: SherlockProvider
+  /** Agents that name no provider use it. */
   default: boolean
   /** The chart fixes it (sherlock.lockProvider). */
   locked: boolean
@@ -287,6 +288,8 @@ export const saveLimits = (dailyUSD: number, monthlyUSD: number) => call<AIOverv
 export const addProvider = (p: AIProvider) => call<AIOverview>('POST', '/api/v1/ai/providers', p)
 export const saveProvider = (p: AIProvider) => call<AIOverview>('PUT', `/api/v1/ai/providers/${enc(p.id)}`, p)
 export const removeProvider = (id: string) => call<AIOverview>('DELETE', `/api/v1/ai/providers/${enc(id)}`)
+/** Makes a provider the one agents that name none use (KI-2). */
+export const makeDefaultProvider = (id: string) => call<AIOverview>('POST', `/api/v1/ai/providers/${enc(id)}/default`)
 export const saveProviderKey = (id: string, key: string) => call<AIOverview>('PUT', `/api/v1/ai/providers/${enc(id)}/key`, { key })
 export const removeProviderKey = (id: string) => call<AIOverview>('DELETE', `/api/v1/ai/providers/${enc(id)}/key`)
 export interface ProviderTestResult {

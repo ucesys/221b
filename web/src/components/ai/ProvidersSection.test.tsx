@@ -71,6 +71,39 @@ describe('the Providers section', () => {
     await waitFor(() => expect((within(card).getByTestId('provider-key') as HTMLInputElement).value).toBe(''))
   })
 
+  it('lets Remove be pressed on a provider in use, and shows why the server refused (KI-2)', async () => {
+    const why = 'Anthropic cannot be removed: Sherlock uses it. Move it to another provider first.'
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      calls.push({ method: init?.method ?? 'GET', url: String(url) })
+      if (init?.method === 'DELETE') return new Response(JSON.stringify({ error: why }), { status: 400 })
+      return new Response(JSON.stringify(overview()))
+    })
+    render(<ProvidersSection />)
+    fireEvent.click(within(await screen.findByTestId('provider')).getByTestId('provider-edit'))
+    const drawer = screen.getByTestId('provider-drawer')
+    // The default has no Make default of its own.
+    expect(within(drawer).queryByTestId('provider-make-default')).toBeNull()
+    const remove = within(drawer).getByTestId('provider-remove') as HTMLButtonElement
+    expect(remove.disabled).toBe(false)
+    fireEvent.click(remove)
+    await waitFor(() => expect(within(drawer).getByTestId('provider-error').textContent).toBe(why))
+    expect(calls.find((c) => c.method === 'DELETE')?.url).toBe('/api/v1/ai/providers/default')
+  })
+
+  it('makes another provider the default', async () => {
+    const two = overview()
+    two.providers.push({ ...two.providers[0]!, id: 'gw', name: 'Gateway', kind: 'openai', default: false, usedBy: [] })
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      calls.push({ method: init?.method ?? 'GET', url: String(url) })
+      return new Response(JSON.stringify(two))
+    })
+    render(<ProvidersSection />)
+    const cards = await screen.findAllByTestId('provider')
+    fireEvent.click(within(cards[1]!).getByTestId('provider-edit'))
+    fireEvent.click(within(screen.getByTestId('provider-drawer')).getByTestId('provider-make-default'))
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url === '/api/v1/ai/providers/gw/default')).toBe(true))
+  })
+
   it('makes an id from a name and keeps only what was given', () => {
     expect(idFromName('Second gateway!')).toBe('second-gateway')
     expect(idFromName('42 Corp AI')).toBe('corp-ai')

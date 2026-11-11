@@ -102,6 +102,12 @@ type Providers struct {
 	// wave 5).
 	DefaultWindow int           `json:"defaultWindow,omitempty"`
 	DefaultTested *ProviderTest `json:"defaultTested,omitempty"`
+	// DefaultID is the provider agents that name none use, made the
+	// default in Settings › Providers; "" is the default provider.
+	DefaultID string `json:"defaultId,omitempty"`
+	// DefaultRemoved says the default provider (Sherlock's of before
+	// Phase 12) was removed, once another was made the default.
+	DefaultRemoved bool `json:"defaultRemoved,omitempty"`
 }
 
 // MaxProviders bounds the providers.

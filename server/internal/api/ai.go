@@ -30,6 +30,7 @@ func (s *Server) aiRoutes() {
 	s.handle("POST /api/v1/ai/providers", "ai-provider-add", s.postAIProvider)
 	s.handle("PUT /api/v1/ai/providers/{id}", "ai-provider-update", s.putAIProvider)
 	s.handle("DELETE /api/v1/ai/providers/{id}", "ai-provider-remove", s.deleteAIProvider)
+	s.handle("POST /api/v1/ai/providers/{id}/default", "ai-provider-default", s.postAIProviderDefault)
 	s.handle("PUT /api/v1/ai/providers/{id}/key", "ai-provider-key", s.putAIProviderKey)
 	s.handle("DELETE /api/v1/ai/providers/{id}/key", "ai-provider-key", s.deleteAIProviderKey)
 	s.handle("POST /api/v1/ai/providers/{id}/test", "ai-provider-test", s.postAIProviderTest)
@@ -182,6 +183,21 @@ func (s *Server) deleteAIProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.record(r, audit.ActionAISettings, "provider "+id, "provider "+id+" removed, with its credential")
+	s.getAI(w, r)
+}
+
+// postAIProviderDefault makes a provider the one agents that name none
+// use (KI-2).
+func (s *Server) postAIProviderDefault(w http.ResponseWriter, r *http.Request) {
+	if !s.aiAdmin(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	if err := s.opts.AI.MakeDefault(r.Context(), id); err != nil {
+		s.aiFail(w, err)
+		return
+	}
+	s.record(r, audit.ActionAISettings, "provider "+id, "provider "+id+" made the default: agents that name no provider use it")
 	s.getAI(w, r)
 }
 

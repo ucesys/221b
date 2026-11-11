@@ -1,10 +1,12 @@
 package ai
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"slices"
 	"sort"
@@ -175,9 +177,24 @@ func (s *Service) defaultProvider(snap snapshot) Provider {
 	return Provider{ID: DefaultProvider, Name: name, Provider: p, Model: sh.Model, PriceIn: sh.PriceIn, PriceOut: sh.PriceOut, ContextWindow: snap.providers.DefaultWindow, Tested: snap.providers.DefaultTested}
 }
 
-// provider finds a provider by id.
+// defaultID is the provider agents that name none use: the one made the
+// default, or the default provider.
+func (s *Service) defaultID(snap snapshot) string {
+	if id := snap.providers.DefaultID; id != "" && slices.ContainsFunc(snap.providers.List, func(p Provider) bool { return p.ID == id }) {
+		return id
+	}
+	return DefaultProvider
+}
+
+// provider finds a provider by id; "" is the one agents that name none use.
 func (s *Service) provider(snap snapshot, id string) (Provider, bool) {
-	if id == "" || id == DefaultProvider {
+	if id == "" {
+		id = s.defaultID(snap)
+	}
+	if id == DefaultProvider {
+		if snap.providers.DefaultRemoved {
+			return Provider{}, false
+		}
 		return s.defaultProvider(snap), true
 	}
 	for _, p := range snap.providers.List {
@@ -255,7 +272,7 @@ func (s *Service) Run(ctx context.Context, every time.Duration) {
 // for every request, so a change takes effect at once.
 func (s *Service) Client(id string) *sherlock.Client {
 	if id == "" {
-		id = DefaultProvider
+		id = s.defaultID(s.cached())
 	}
 	keys := s.KeysFor(id)
 	s.mu.Lock()
@@ -343,6 +360,7 @@ func (s *Service) RecordTest(ctx context.Context, id, model string, err error) e
 	if !ok {
 		return ErrNotFound
 	}
+	id = p.ID
 	t := &ProviderTest{At: s.opts.Now().UTC(), OK: err == nil, Model: model, Keyless: s.KeysFor(id).Key() == "", Conn: ConnHash(p.Provider)}
 	if err != nil {
 		t.Error = clip(sherlock.Explain(err), 300)
@@ -776,7 +794,7 @@ func (s *Service) View(ctx context.Context) Overview {
 		set := s.settingsOf(snap, info.ID)
 		pid := set.Provider
 		if pid == "" {
-			pid = DefaultProvider
+			pid = s.defaultID(snap)
 		}
 		p, ok := s.provider(snap, pid)
 		v := AgentView{Info: info, Settings: set, ProviderID: pid, ProviderName: p.Name, InForce: set.tools(info), Clusters: set.Clusters, ValuesKey: ValuesKey(info.ID), Spend: spend.Agent(info.ID), Testing: s.testing(info.ID)}
@@ -816,10 +834,15 @@ func (s *Service) View(ctx context.Context) Overview {
 		v.Footprint = s.footprint(snap, info)
 		o.Agents = append(o.Agents, v)
 	}
-	for _, p := range append([]Provider{s.defaultProvider(snap)}, snap.providers.List...) {
+	list := snap.providers.List
+	if !snap.providers.DefaultRemoved {
+		list = append([]Provider{s.defaultProvider(snap)}, list...)
+	}
+	def := s.defaultID(snap)
+	for _, p := range list {
 		k := s.KeysFor(p.ID)
 		r := p.Provider.Normalized(s.opts.DefaultURL)
-		o.Providers = append(o.Providers, ProviderView{Provider: p, Resolved: r, Default: p.ID == DefaultProvider, Locked: p.ID == DefaultProvider && s.opts.ProviderLocked, NeedsKey: r.Auth == sherlock.AuthHeader, Key: k.Info(), UsedBy: used[p.ID], KeylessOK: r.Auth == sherlock.AuthHeader && !k.Info().Set && KeylessOK(p)})
+		o.Providers = append(o.Providers, ProviderView{Provider: p, Resolved: r, Default: p.ID == def, Locked: p.ID == DefaultProvider && s.opts.ProviderLocked, NeedsKey: r.Auth == sherlock.AuthHeader, Key: k.Info(), UsedBy: used[p.ID], KeylessOK: r.Auth == sherlock.AuthHeader && !k.Info().Set && KeylessOK(p)})
 	}
 	return o
 }
@@ -841,7 +864,10 @@ func (s *Service) SaveProvider(ctx context.Context, p Provider, adding bool) err
 	defer s.forget()
 	if p.ID == DefaultProvider {
 		if adding {
-			return fmt.Errorf("%w: the default provider exists", ErrInvalid)
+			return fmt.Errorf("%w: the id %q is the default provider's", ErrInvalid, DefaultProvider)
+		}
+		if s.read(ctx).providers.DefaultRemoved {
+			return ErrNotFound
 		}
 		sh := s.sherlockSettings()
 		before := s.defaultProvider(s.read(ctx))
@@ -905,20 +931,70 @@ func (s *Service) SaveProvider(ctx context.Context, p Provider, adding bool) err
 	return err
 }
 
-// DeleteProvider removes a provider no agent uses, and its credential.
-func (s *Service) DeleteProvider(ctx context.Context, id string) error {
-	defer s.forget()
-	if id == DefaultProvider {
-		return fmt.Errorf("%w: the default provider stays", ErrInvalid)
-	}
-	snap := s.read(ctx)
-	for aid, a := range snap.agents.Agents {
-		if a.Provider == id {
-			info, _ := InfoOf(aid)
-			return fmt.Errorf("%w: the %s uses it; move it to another provider first", ErrInvalid, info.Name)
+// refusal is a change refused for a reason a person reads as it is.
+type refusal string
+
+func (r refusal) Error() string        { return string(r) }
+func (r refusal) Is(target error) bool { return target == ErrInvalid }
+
+// usersOf names the agents on a provider, on or off: those that name it
+// and, on the one agents that name none use, those.
+func (s *Service) usersOf(snap snapshot, id string) []string {
+	def := s.defaultID(snap)
+	var out []string
+	for _, info := range Catalog {
+		set := s.settingsOf(snap, info.ID)
+		pid := set.Provider
+		if pid == "" {
+			pid = def
+		}
+		if pid != id {
+			continue
+		}
+		on := set.on(info)
+		if info.ID == Sherlock {
+			on = slices.Contains(slices.Collect(maps.Values(s.sherlockSettings().Clusters)), true)
+		}
+		if on {
+			out = append(out, info.Name)
+		} else {
+			out = append(out, info.Name+" (off)")
 		}
 	}
+	return out
+}
+
+// DeleteProvider removes a provider no agent uses, on or off, and its
+// credential (KI-2). The default stays until another is made the
+// default; one the chart fixes, or whose key the chart sets, stays.
+func (s *Service) DeleteProvider(ctx context.Context, id string) error {
+	defer s.forget()
+	snap := s.read(ctx)
+	p, ok := s.provider(snap, id)
+	if id == "" || !ok {
+		return ErrNotFound
+	}
+	if id == DefaultProvider && s.opts.ProviderLocked {
+		return refusal(fmt.Sprintf("%s stays: the chart fixes it (sherlock.lockProvider).", p.Name))
+	}
+	if users := s.usersOf(snap, id); len(users) > 0 {
+		verb, them := "use", "them"
+		if len(users) == 1 {
+			verb, them = "uses", "it"
+		}
+		return refusal(fmt.Sprintf("%s cannot be removed: %s %s it. Move %s to another provider first.", p.Name, joinAnd(users), verb, them))
+	}
+	if id == s.defaultID(snap) {
+		return refusal(fmt.Sprintf("%s cannot be removed: it is the default. Make another provider the default first.", p.Name))
+	}
+	if id == DefaultProvider && s.opts.Keys.Fixed() {
+		return refusal(fmt.Sprintf("%s stays: the chart sets its key.", p.Name))
+	}
 	if _, err := change(ctx, s.opts.Backend, ProvidersKey, func(ps *Providers) error {
+		if id == DefaultProvider {
+			ps.DefaultRemoved, ps.DefaultTested = true, nil
+			return nil
+		}
 		i := slices.IndexFunc(ps.List, func(x Provider) bool { return x.ID == id })
 		if i < 0 {
 			return ErrNotFound
@@ -932,10 +1008,48 @@ func (s *Service) DeleteProvider(ctx context.Context, id string) error {
 		return err
 	}
 	s.mu.Lock()
-	delete(s.keys, id)
+	if id != DefaultProvider {
+		delete(s.keys, id)
+	}
 	delete(s.clients, id)
 	s.mu.Unlock()
 	return nil
+}
+
+// MakeDefault makes a provider the one agents that name none use (KI-2):
+// they move to it with their settings.
+func (s *Service) MakeDefault(ctx context.Context, id string) error {
+	defer s.forget()
+	snap := s.read(ctx)
+	p, ok := s.provider(snap, id)
+	if id == "" || !ok {
+		return ErrNotFound
+	}
+	if s.opts.ProviderLocked && id != DefaultProvider {
+		return refusal("The chart fixes the default provider (sherlock.lockProvider): change it there.")
+	}
+	// The Automation author and the Script reviewer may come to share it.
+	author, reviewer := snap.agents.Agents[AutomationAuthor].Provider, snap.agents.Agents[ScriptReviewer].Provider
+	shared := func(def string) bool { return cmp.Or(author, def) == cmp.Or(reviewer, def) }
+	if shared(id) && !shared(s.defaultID(snap)) && snap.agents.Agents[ScriptReviewer].on(mustInfo(ScriptReviewer)) && !snap.agents.SingleProvider {
+		return refusal(fmt.Sprintf("%s cannot be the default: the Automation author and the Script reviewer would both be on it, and an independent second opinion needs another provider. Move one of them first.", p.Name))
+	}
+	_, err := change(ctx, s.opts.Backend, ProvidersKey, func(ps *Providers) error {
+		ps.DefaultID = id
+		if id == DefaultProvider {
+			ps.DefaultID = ""
+		}
+		return nil
+	})
+	return err
+}
+
+// joinAnd lists names: "A", "A and B", "A, B and C".
+func joinAnd(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
 // ProviderOf finds a provider, for its credential's kind.
@@ -970,7 +1084,7 @@ func (s *Service) SaveAgent(ctx context.Context, id string, in AgentChange) erro
 	if _, ok := s.provider(snap, set.Provider); !ok {
 		return fmt.Errorf("%w: there is no provider %q", ErrInvalid, set.Provider)
 	}
-	if set.Provider == DefaultProvider {
+	if set.Provider == s.defaultID(snap) {
 		set.Provider = ""
 	}
 	if id == Sherlock {
@@ -997,7 +1111,7 @@ func (s *Service) SaveAgent(ctx context.Context, id string, in AgentChange) erro
 		}
 		next := cloneAgents(a.Agents)
 		next[id] = set
-		author, reviewer := next[AutomationAuthor].Provider, next[ScriptReviewer].Provider
+		author, reviewer := cmp.Or(next[AutomationAuthor].Provider, s.defaultID(snap)), cmp.Or(next[ScriptReviewer].Provider, s.defaultID(snap))
 		if (id == AutomationAuthor || id == ScriptReviewer) && author == reviewer && next[ScriptReviewer].on(mustInfo(ScriptReviewer)) {
 			if !in.ConfirmSingleProvider && !a.SingleProvider {
 				return ErrSameProvider

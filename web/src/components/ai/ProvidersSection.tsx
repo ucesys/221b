@@ -4,6 +4,7 @@ import {
   fetchAI,
   fetchModelsFor,
   kindLabel,
+  makeDefaultProvider,
   removeProvider,
   removeProviderKey,
   saveProvider,
@@ -360,18 +361,21 @@ function ProviderDrawer({ seed, ov, onClose, onSaved }: { seed: ProviderView | n
       setBusy(false)
     }
   }
-  const remove = async () => {
-    if (!seed) return
+  // Remove and Make default ask the server, which says why not: the
+  // agents that still use the provider, the default, the chart (KI-2).
+  const act = async (fn: () => Promise<AIOverview>, msg: string) => {
     setBusy(true)
     setError('')
     try {
-      onSaved(await removeProvider(seed.id), `Removed ${seed.name} and its credential.`)
+      onSaved(await fn(), msg)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
     }
   }
+  const remove = () => seed && act(() => removeProvider(seed.id), `Removed ${seed.name} and its credential.`)
+  const makeDefault = () => seed && act(() => makeDefaultProvider(seed.id), `${seed.name} is the default now: agents that name no provider use it.`)
   const pr = PRESETS.find((x) => x.id === preset) ?? PRESETS[0]!
   const models = [...pr.models, ...(f.kind === 'anthropic' ? ov.models.map((m) => m.id) : [])]
   return (
@@ -395,14 +399,12 @@ function ProviderDrawer({ seed, ov, onClose, onSaved }: { seed: ProviderView | n
             Cancel
           </button>
           {seed && !seed.default && (
-            <button
-              className="rk-btn"
-              disabled={busy || !!seed.usedBy?.length}
-              title={seed.usedBy?.length ? 'Move the agents that use it to another provider first' : undefined}
-              onClick={() => void remove()}
-              data-testid="provider-remove"
-              style={{ marginLeft: 'auto' }}
-            >
+            <button className="rk-btn" disabled={busy} onClick={() => void makeDefault()} title="Agents that name no provider move to it" data-testid="provider-make-default" style={{ marginLeft: 'auto' }}>
+              Make default
+            </button>
+          )}
+          {seed && (
+            <button className="rk-btn" disabled={busy} onClick={() => void remove()} data-testid="provider-remove" style={seed.default ? { marginLeft: 'auto' } : undefined}>
               Remove
             </button>
           )}
