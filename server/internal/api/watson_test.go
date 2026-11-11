@@ -22,7 +22,7 @@ import (
 
 // watsonSetup is the test console with Watson, its local cluster a
 // simulated one it can change.
-func watsonSetup(t *testing.T, who string, env, mode string) (*httptest.Server, *http.Client, *sim.Sim, *bytes.Buffer, *clusters.Manager) {
+func watsonSetup(t *testing.T, who string, env, mode string) (*httptest.Server, *http.Client, *sim.Sim, *lockedBuffer, *clusters.Manager) {
 	t.Helper()
 	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
 	simSrv := httptest.NewServer(s)

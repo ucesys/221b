@@ -116,6 +116,14 @@ func (h *sshHost) setKey() {
 
 func (h *sshHost) port() int { return h.ln.Addr().(*net.TCPAddr).Port }
 
+// set changes how the host answers, under its lock: it serves from
+// other goroutines, which read these fields while a test changes them.
+func (h *sshHost) set(f func(h *sshHost)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	f(h)
+}
+
 func (h *sshHost) fingerprint() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -378,7 +386,7 @@ func TestAPasswordPairsAHostAndIsKeptNowhere(t *testing.T) {
 	ctx := context.Background()
 	e := newHostEnv(t)
 	e.trust(t)
-	e.host.env = []string{"SUDO_PASSWORD=" + sudoPassword}
+	e.host.set(func(h *sshHost) { h.env = []string{"SUDO_PASSWORD=" + sudoPassword} })
 	cred := Credential{User: bootUser, Password: bootPassword, SudoPassword: sudoPassword}
 	h, steps, err := e.svc.PairHost(ctx, "local", "backup-1", &cred, "Pat")
 	if err != nil {
@@ -444,8 +452,7 @@ func TestAPrivateKeyPairsAHost(t *testing.T) {
 	block, _ := ssh.MarshalPrivateKeyWithPassphrase(priv, "boot", []byte(passphrase))
 	pemKey := string(pem.EncodeToMemory(block))
 	sshPub, _ := ssh.NewPublicKey(pub)
-	e.host.bootKey = sshPub
-	e.host.env = []string{"SUDO_NOPASSWD=1"}
+	e.host.set(func(h *sshHost) { h.bootKey, h.env = sshPub, []string{"SUDO_NOPASSWD=1"} })
 	for _, c := range []struct {
 		cred Credential
 		want string
@@ -505,7 +512,7 @@ func TestAFailedPairingSaysWhyAndLeaksNothing(t *testing.T) {
 			e := newHostEnv(t)
 			e.trust(t)
 			if c.setup != nil {
-				c.setup(e.host)
+				e.host.set(c.setup)
 			}
 			if c.name == "a host that echoes the password" {
 				// A host whose sudo prints what it read, on both streams.
@@ -575,7 +582,7 @@ func TestAChangedHostKeyRefusesEveryConnectionUntilTrustedAgain(t *testing.T) {
 	ctx := context.Background()
 	e := newHostEnv(t)
 	e.trust(t)
-	e.host.env = []string{"SUDO_PASSWORD=" + sudoPassword}
+	e.host.set(func(h *sshHost) { h.env = []string{"SUDO_PASSWORD=" + sudoPassword} })
 	cred := Credential{User: bootUser, Password: bootPassword, SudoPassword: sudoPassword}
 	if _, _, err := e.svc.PairHost(ctx, "local", "backup-1", &cred, "Pat"); err != nil {
 		t.Fatal(err)

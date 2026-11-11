@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,7 +35,7 @@ type autoEnv struct {
 	c      *http.Client
 	store  *automation.Store
 	engine *automation.Engine
-	audit  *bytes.Buffer
+	audit  *lockedBuffer
 }
 
 func autoSetup(t *testing.T, who, env string) autoEnv {

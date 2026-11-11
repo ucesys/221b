@@ -437,8 +437,8 @@ export const INBOX_COLUMNS: ColumnDef<InboxRow>[] = [
   {
     id: 'title',
     label: 'Title',
-    width: 'minmax(220px, 3fr)',
-    min: 220,
+    width: 'minmax(200px, 3fr)',
+    min: 200,
     sortValue: (r) => r.title.toLowerCase(),
     cell: (r) => (
       <span style={{ ...clip, display: 'inline-flex', gap: 8, alignItems: 'baseline' }} title={r.title}>
@@ -577,8 +577,8 @@ export const INBOX_COLUMNS: ColumnDef<InboxRow>[] = [
     // --- Who did it (Phase 12, wave 6c, CF-35) ---
     id: 'last',
     label: 'Last change',
-    width: 'minmax(150px, 1.1fr)',
-    min: 150,
+    width: 'minmax(138px, 1.1fr)',
+    min: 138,
     hint: 'Who changed it last, a person, an agent or the system, and how long ago.',
     defaultDir: 'desc',
     sortValue: (r) => (r.lastAt ? Date.parse(r.lastAt) : null),

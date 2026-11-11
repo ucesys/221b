@@ -47,7 +47,7 @@ type hostsEnv struct {
 	srv   *httptest.Server
 	c     *http.Client
 	spy   *pairSpy
-	audit *bytes.Buffer
+	audit *lockedBuffer
 	log   *bytes.Buffer
 }
 

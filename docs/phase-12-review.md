@@ -2,6 +2,8 @@
 
 A review of 221B on `phase-12.0-ai`, read at commit `d255427` on November 9, 2026 and checked again at `52fc821` on November 10 (the one commit between them touches none of the findings). It covers the architecture, the consistency of the code, the names Sherlock is given against the application, the case workflow end to end, every agent's and job's prompt, and the console's labels and texts. Where a document and the code differ, the code was taken as truth.
 
+A **second review** on November 10, after the fixes, ran the tests and the console for the first time and is at the end: [Second review](#second-review).
+
 This file is also the hand-over: the owner accepted every finding, fix and improvement on November 10, 2026, and they are to be made on `phase-12.0-ai`. Each finding says where it is, what is wrong, what to do and how to tell it is done. The documentation fixes that could be made without code changes are already on the branch (see [Documentation](#documentation)).
 
 ## Summary
@@ -388,6 +390,8 @@ Also seen, and already covered: Watson's own help line in the dock lists `helm i
 
 ## To check on a running console
 
+*Answered* by the second review, on the simulated console: see [Seen on the running console](#seen-on-the-running-console). The list as the first review left it:
+
 The review did not see the console run. With `make dev-sim` or the test install:
 
 - The top bar at 1280 px with three areas, the bell and the tabs of the Kubernetes area. At 1440 px two tabs are already behind *More* (`docs/screenshots/admin-settings.png`); check that the tab in use is never the hidden one.
@@ -401,3 +405,130 @@ The review did not see the console run. With `make dev-sim` or the test install:
 *Decided* (the owner, November 10, 2026): **one clean run is enough.** Below P1, a run of the job that found the case, which re-checked its object (W-1) and found the problem gone, closes it as Fixed; at P0 and P1 it marks the fix verified and the case waits for a person's RCA. No case waits for a second run, and `docs/states.md` says so.
 
 With the decision came CF-107: a case says what it waits for, one stage beside its status (*Waiting for analysis*, *Waiting for approval*, *Waiting for a validation run*, *Waiting for closure* and the rest; the table is in `docs/states.md`).
+
+## Second review
+
+A second review on November 10, 2026, after the fixes: of `9148164` (*Phase 12 review: fix all findings*), of what followed it (`97c07f7`, `1e9e2ba`, the status work of CF-107) and, for the first time, of the console running. Findings are numbered R2-1 and on. Those marked *fixed* are on the branch with their tests (CF-107, CF-108); the others wait for a decision.
+
+### What ran
+
+The first review could build nothing. This one built Go 1.26 from its source and fetched the modules from their repositories (checked against `go.sum`), so everything below ran here, on the branch's tip.
+
+| Check | Result |
+| --- | --- |
+| `go build ./...`, `gofmt -l cmd internal`, `go vet ./...` | Clean. |
+| `go test ./...` | Every package passes on the tip. On the way: `TestJobInstructionsAreEditable` (`jobs`) failed (R2-4), and two tests of `knowledge` fail only where `HTTPS_PROXY` is set, as it was on this machine (R2-13). |
+| `go test -race ./...` (`make test-go`) | 48 of the 50 packages with tests pass. `api` and `nodessh` failed on data races, all three in the tests' own code (R2-17); with those fixed both pass. |
+| `hack/check-prompt-sources.sh` | Passes, once it could be run (R2-3). |
+| Browser app: `tsc`, `eslint`, `prettier --check`, `vitest` | Clean; 848 tests pass. |
+| `make e2e-sim`, Chromium | 270 tests: 264 pass and 6 are skipped on the simulator. The first full run had my change to the dock in it (R2-8), which failed `inbox.spec.ts:257` and kept the two tests after it from running; with the change taken back the file passes. One test depends on what ran before it (R2-14). |
+| `make screenshots` | Every shot is taken (28 files), here and in the Screenshots workflow. |
+
+Not run: the chart's checks (`hack/check-chart.sh` needs Helm), `shellcheck`, the end-to-end tests on kind, Firefox and WebKit, and anything on a real cluster.
+
+**CI has not run on this branch.** `ci.yml` runs on pull requests and on `main`; the last run is of November 4. Every result above is from this review's machine. Open a pull request for `phase-12.0-ai` (a draft is enough) so that CI runs the same checks, the chart's and kind's among them, before more is built on the branch.
+
+### The fixes of the first review
+
+Read again with their tests: W-1 to W-4 (verification on what a run re-checked inside its scope, a failed cluster left out, the cap by severity, the list of fixes to re-check) do what the hand-over asked, and `recheck_test.go` in `jobs` and `casework` covers each case `docs/states.md` lists. A-1 is complete: the old addresses lead to the new ones (seen on the running console, below), and the old ConfigMap is kept by the chart and readable by the console's Role until its records are copied. S-1 and S-2 are held by tests that fail when the console's names move. `sherlocktools` is `api/sherlock_tools.go` moved behind an interface, with no change in what the tools do. The defects below are in what the fixes did not reach; R2-4 is mine.
+
+### Findings
+
+| Severity | Count | Findings |
+| --- | --- | --- |
+| Medium | 7 | R2-1 to R2-6, R2-17 |
+| Low | 10 | R2-7 to R2-16 |
+
+#### R2-1. A re-check that names another cluster was taken at its word. *fixed* (0.12.0, CF-108)
+
+**Where:** `jobs/recheck.go` `withCluster`, called from `runAudit` and `runAlert` (`jobs/kinds.go`).
+
+**What was wrong:** A finding that names another cluster than the one its answer was asked about is left out, and one that names the cluster by its name gets its id (`merge`, ADR-147). A re-check got neither: `withCluster` only filled an empty cluster. In an audit over several clusters the scope is every cluster that answered, so an answer about cluster A that said `"cluster": "B", "still": false` for a fix waiting on B verified it, and below P1 closed its case, though the call never read B. The same entry with `still: true` reopened B's case. A re-check that named the cluster by its name ("simulated", as the task's first line gives it beside the id) matched no key and counted as not re-checked.
+
+**Done:** a re-check is its answer's cluster's, by id, when it names none, the id or the name; one that names another cluster is left out and the run's note says how many.
+
+#### R2-2. At P0 and P1 a verified fix stayed verified when the problem came back. *fixed* (0.12.0, CF-108)
+
+**Where:** `casework/route.go` `by`.
+
+**What was wrong:** At P0 and P1 a run that re-checks a fix marks it verified and the case waits, In progress, for a person's RCA. A later run that found the same problem again only counted it (seen ×N): the case went on saying *Verified: add the RCA to close*, and nothing re-checks a case that is no longer waiting. A person could close a P1 as Fixed, verified, on a problem the last run still saw.
+
+**Done:** found again by a run of its job, such a case says the fix did not hold, with a note; `TestAVerifiedFixFoundAgainNoLongerReadsAsVerified` failed before the change.
+
+#### R2-3. `hack/check-prompt-sources.sh` could not be run. *fixed*
+
+**Where:** the file's mode in git (100644), since `50dd5d2`; `Makefile` `lint-go`, `ci.yml` *Prompt sources*.
+
+**What was wrong:** Both call it as `hack/check-prompt-sources.sh`, which fails with *Permission denied*. `make lint` stopped there, and the CI step would have failed at the first pull request.
+
+**Done:** the file is executable.
+
+#### R2-4. A Go test failed since the prompt review. *fixed*
+
+**Where:** `jobs/round2_test.go` `TestJobInstructionsAreEditable`.
+
+**What was wrong:** My change of CF-106 gave the audit's task a new first line; this test read the old one. I had checked the string literals of the tests by script and missed a partial one, and could not run the tests. It failed from `1e9e2ba` until this review.
+
+**Done:** the test reads the new line. All of CF-106's golden files were written by hand; `go test -update` now agrees with every one of them.
+
+#### R2-5. A change proposed again discards an approval already given
+
+**Where:** `cards/store.go` `propose` (CF-101, ADR-148).
+
+**What is wrong:** A change with the same cluster, cases and commands as one that waits replaces it: the card that waited becomes *Replaced* and a new one starts with no approvals. On a production cluster a change needs two people. When the first has approved and the same change is proposed again, the approval is gone, and the case goes from *Waiting for a second approval* back to *Waiting for approval*. The nightly audit is not told that a change already waits for a case, so it may propose it again every night: the second approver has until the next run. Checked with a test: after one approval and the same proposal, the new card has 0 of 2 approvals.
+
+Proposed with other commands, the change waits beside the first, one more card each night until the cap of waiting changes.
+
+**Do:** when the same change waits already, keep that card: plan it again as *Check again* does, add "proposed again by <run>" to its history and move its expiry, and keep its approvals when the plan did not change. Replace only when it did. And tell the agent which cases have a change waiting (the keys in use can say "change PC-4 waits"), so it does not propose for them again.
+
+**Done when:** a test approves once, proposes the same change again and finds one card with one approval; another finds the task names the waiting change.
+
+#### R2-6. A case can wait for a run that will not come
+
+**Where:** `casework/route.go` (a fix is verified only by a run of the job that found the case), `jobs/kinds.go` `runAlert`, `casework/queue.go` `drain`; the texts of CF-107.
+
+**What is wrong:** Since W-1 a fix is verified only by a run of the job that found the case, with the case's object in its scope. That is right for the nightly audit. For a case the **Alert diagnosis** found, the scope of a run is the object of the alert that started it, and once the fix works the alert no longer fires: no run re-checks it. An open case with an applied change stays *Waiting for a validation run* (and at P0 and P1 never reaches *Waiting for closure*); one a person closed as Fixed waits unseen. The same holds for any case whose job was turned off or no longer covers its cluster, and a case queued for the Case analysis job stays *Waiting for analysis* while that job is paused. The case says "the next run of <job> re-checks it" in each of these.
+
+**Do:** (1) Let a run that read a cluster whole re-check every fix waiting on it, whichever job found it: list them in the audit's task and verify on its answer, the case naming the run that did. (2) Where no run can come (the job is off, paused or does not cover the cluster), say so on the case in place of the stage's hint: "Its job is off: nothing will re-check it. Close it once you have checked."
+
+**Done when:** a test fixes a case the Alert diagnosis found and an audit of its cluster verifies it; the drawer of a case whose job is off says so.
+
+#### R2-17. `make test-go` fails on data races in three tests. *fixed*
+
+**Where:** `api/casetrouble_test.go:155`, `api/proposaltrouble_test.go:189` (the audit buffer of `multiSetupWith`), `nodessh/hosts_test.go:493` (`TestAFailedPairingSaysWhyAndLeaksNothing`). All three since `50dd5d2`.
+
+**What was wrong:** `make test-go` runs with the race detector, which found the two API tests reading the audit log's plain `bytes.Buffer` while a request's goroutine still wrote to it, and the SSH test changing its fake host's settings while the host served. The console's own code is not involved. Whether they fail depends on timing: they did on this machine, so they can in CI.
+
+**Done:** the shared setup of the API tests hands out a buffer with a lock (the `lockedBuffer` the package already had), and the fake host's settings change under its lock.
+
+#### Low
+
+| ID | Where | What is wrong | Do |
+| --- | --- | --- | --- |
+| R2-7 | `casework/route.go`, the queue for analyses | A case reopened by a re-check alone (still there, no finding) was not queued for its analysis unless the same run also had a finding on that cluster. | *fixed* (CF-108) |
+| R2-8 | The case drawer with *Troubleshoot*, `styles/design.css` | With the dock open, a case's drawer keeps the dock under it: the drawer loses its lower third, and a second Sherlock and Watson show under the case's own. Only the dock's round button is hidden. | Put the dock away while a drawer shows its own Sherlock. *Tried and taken back:* hiding it under every split drawer broke `inbox.spec.ts:257` (IB-10 to IB-13), where a proposed change's drawer is open and the person asks in the dock. So hide it only where the drawer's own conversation can be asked in |
+| R2-9 | The Inbox, Status column | 150 px wide: a status with its stage was cut with no ellipsis ("Waiting for analys"). Found on the first screenshot. | *fixed*: 250 px, an ellipsis, the whole text in the hint |
+| R2-10 | `casework/route.go`, verification | A finding of a waiting fix's key that opens no case (below the job's lowest priority, marked expected, or covered by an exception) counts as found again, so the fix is neither verified nor said not to hold, and the run does not count it as not re-checked. The case waits with nothing said. | Count it with the fixes not re-checked, and say on the case why |
+| R2-11 | `jobs/reroute.go`, `jobs/run.go` | A routing that succeeds while the run cannot be saved after it is done again on the next look: seen counts and notes twice. | Record on the cases which run was routed, or save the run first |
+| R2-12 | `casework/route.go` `KeysInUse` | It returns an error when the exceptions cannot be read (W-7) but goes on without the cases or the known issues when their index cannot. | Return the error, as for the exceptions |
+| R2-13 | `knowledge/sourcetest_test.go`, `knowledge` wiki tests | Two tests fail when `HTTPS_PROXY` is set in the environment: the code skips its own connection check behind a proxy, as intended. | `t.Setenv("HTTPS_PROXY", "")` in those tests |
+| R2-14 | `web/e2e/watson.spec.ts:424` | *requests do not pile up* counts every request left waiting, so it fails when an earlier spec leaves one. It failed here when run right after `sherlock.spec.ts`; it passes alone and in the suite's own order. | Discard the requests left waiting at the start of the test |
+| R2-15 | `CaseDrawer.tsx`, the first line and *Opened from* | The job's id shows where its name belongs: "found by Auditor (nightly-audit)", "nightly-audit" under the run. U-11 and U-12 put names where the cluster's and the agent's ids stood. | The job's label, "Nightly audit" |
+| R2-16 | AIOps › Jobs, Schedule | One row gives its times in two zones: *When* in the console's ("Every day at 02:00 UTC"), *Last run* in the browser's ("7:36pm PST"). | One zone on the row, the console's, or the zone named on both |
+
+### Seen on the running console
+
+The simulated console (`make dev-sim`'s setup), in Chrome, at 1440 and 1280 px. The list [To check on a running console](#to-check-on-a-running-console) is answered there.
+
+- **The old addresses.** `#/cases/inbox/case/1`, `#/cases/known/KI-1`, `#/cases/inbox?proposal=PC-1`, `#/cases/jobs/runs`, `#/cases/mycroft/known` and `#/cases` each open their place under `#/aiops`.
+- **The top bar at 1280 px.** The three areas, the bell and the Kubernetes area's tabs fit; the tabs that do not are behind *More*, and the tab in use is always shown (Storage, Policies, Helm, Access and Networks were tried).
+- **A case's drawer with Troubleshoot.** Now a screenshot of the README (`aiops-troubleshoot.png`): the case on the left, Sherlock's answer with *Run in Watson* on the right. With the dock open it stays under the drawer (R2-8).
+- **The Inbox at 1280 px.** Its table is wider than the page and scrolls inside its card, as before: the room for the Status column came from Title, Type, Incident, Object and Last change, so the table's least width is what it was (1,356 px).
+- **The labels of U-1 to U-6 and U-10 to U-16.** In place on the pages seen (the Inbox, a case, Jobs, Runs, Validation rules, Known issues, Scripts, a script, Settings › Agents); none is cut.
+- **The simulator's sample case C-6** reads *Waiting for analysis* while the Case analysis job is paused there, as every job is: R2-6 on the README's own screenshot.
+
+The test install at `rke2cp1:8081` was still not reachable, so nothing here was seen on a real cluster.
+
+### What a case says now (CF-107)
+
+Asked for with this review: a case says what it waits for, beside its status. The stages and what ends each are in `docs/states.md`. With one validation run chosen there is no stage for a second run. Two things came with it: a case closed as Fixed that waits for its run says so in the Inbox (it showed nothing), and one a run reopened says *Fix did not hold* (it said so only in its history).

@@ -21,12 +21,12 @@ import (
 
 // sherlockSetup is the multi-cluster test console with Sherlock, its API
 // key set and turned on for the local cluster, talking to a fake Claude.
-func sherlockSetup(t *testing.T, who string, deny map[string]bool) (*httptest.Server, *http.Client, *fakeclaude.Fake, *bytes.Buffer, *source, *sherlock.Service) {
+func sherlockSetup(t *testing.T, who string, deny map[string]bool) (*httptest.Server, *http.Client, *fakeclaude.Fake, *lockedBuffer, *source, *sherlock.Service) {
 	t.Helper()
 	return sherlockSetupWith(t, who, deny, nil)
 }
 
-func sherlockSetupWith(t *testing.T, who string, deny map[string]bool, mod func(*sherlock.Options)) (*httptest.Server, *http.Client, *fakeclaude.Fake, *bytes.Buffer, *source, *sherlock.Service) {
+func sherlockSetupWith(t *testing.T, who string, deny map[string]bool, mod func(*sherlock.Options)) (*httptest.Server, *http.Client, *fakeclaude.Fake, *lockedBuffer, *source, *sherlock.Service) {
 	t.Helper()
 	fake := fakeclaude.New()
 	fake.Delay = time.Millisecond
