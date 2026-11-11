@@ -13,7 +13,7 @@
 import { actorName, actorText, lastChangeText, type Actor } from '../../api/actor'
 import type { ApprovalRow } from '../../api/automation'
 import { caseOf, sourceText, stateText, stateTone, type Proposal } from '../../api/cards'
-import { caseShownStatus, caseStatusText, caseStatusTone, caseTypeText, VERIFICATION, type CaseBrief, type ShownStatus, type Verification } from '../../api/casework'
+import { caseShownStatus, caseStatusText, caseStatusTone, caseTypeText, STAGE, type CaseBrief, type CaseStage, type ShownStatus } from '../../api/casework'
 import type { OpKnown } from '../../api/issues'
 import type { ConfluenceConflict, DraftRun, PageRequest } from '../../api/knowledge'
 import type { Suggestion } from '../../api/rules'
@@ -68,8 +68,8 @@ export interface InboxRow {
   origin: Origin
   /** What a proposed change resolves: "C-12", "KI-3" (CF-25). */
   resolves?: string[]
-  /** A case's check of the fix a change applied (CF-31). */
-  verification?: Verification
+  /** What a case waits for now: its analysis, an approval, the validation run, its closure (CF-107). */
+  stage?: CaseStage
   /** The titles of what it resolves, by id (CF-39). */
   resolvesTitles?: Record<string, string>
   /** A case's status as shown, for the Status filter: waiting for the reporter is one (CF-67). */
@@ -77,8 +77,6 @@ export interface InboxRow {
   /** A case's type (CF-37) and incident number (CF-36). */
   type?: string
   incident?: string
-  /** A case waits in the case analysis job's queue (CF-32). */
-  analysisQueued?: boolean
   /** Who changed it last, and when (CF-35). */
   lastBy?: Actor | string
   lastAt?: string
@@ -123,21 +121,11 @@ export function caseRow(c: InboxCase, ctx: RowContext): InboxRow {
     // Mine: assigned to the person, or opened by them while nobody has it.
     mine: c.assignee ? c.assignee.id === ctx.person : !!c.createdBy && actorName(c.createdBy) === ctx.me,
     late,
-    words: [
-      c.agentFound ? 'agent' : c.source.kind,
-      actorName(c.createdBy),
-      c.key?.check ?? '',
-      c.source.job ?? '',
-      c.verification ? VERIFICATION[c.verification].tag : '',
-      c.analysisQueued ? 'analysis queued' : '',
-      c.rcaCause ?? '',
-      c.rcaId ?? '',
-    ],
+    words: [c.agentFound ? 'agent' : c.source.kind, actorName(c.createdBy), c.key?.check ?? '', c.source.job ?? '', c.stage && STAGE[c.stage] ? STAGE[c.stage].tag.toLowerCase() : '', c.rcaCause ?? '', c.rcaId ?? ''],
     origin: c.agentFound ? 'agents' : 'people',
-    verification: c.verification,
+    stage: c.stage && STAGE[c.stage] ? c.stage : undefined,
     type: c.type || undefined,
     incident: c.incident || undefined,
-    analysisQueued: !!c.analysisQueued,
     lastBy: c.lastBy,
     lastAt: c.lastAt ?? c.updated,
   }
@@ -543,16 +531,10 @@ export const INBOX_COLUMNS: ColumnDef<InboxRow>[] = [
         <span className="rk-tag" data-tone={r.tone} data-testid="inbox-row-status">
           {r.status}
         </span>
-        {r.analysisQueued && (
-          // Waits for the case analysis job, highest priority first (CF-32).
-          <span className="rk-tag" data-tone="info" title="The case analysis job analyzes it when its turn comes; Analyze in the case runs it now" data-testid="inbox-row-analysis-queued">
-            Analysis queued
-          </span>
-        )}
-        {r.verification && VERIFICATION[r.verification] && (
-          // A fix a change applied: waiting for its check, verified, or not held (CF-31).
-          <span className="rk-tag" data-tone={VERIFICATION[r.verification].tone} title={VERIFICATION[r.verification].hint} data-testid="inbox-row-verification">
-            {VERIFICATION[r.verification].tag}
+        {r.stage && (
+          // What the case waits for now: its analysis, an approval, the validation run, its closure (CF-107).
+          <span className="rk-tag" data-tone={STAGE[r.stage].tone} title={STAGE[r.stage].hint} data-testid="inbox-row-stage" data-stage={r.stage}>
+            {STAGE[r.stage].tag}
           </span>
         )}
         {r.late && (
@@ -563,7 +545,7 @@ export const INBOX_COLUMNS: ColumnDef<InboxRow>[] = [
         )}
       </span>
     ),
-    export: (r) => [{ head: 'Status', cell: [r.status, r.analysisQueued ? '(analysis queued)' : '', r.verification ? `(${VERIFICATION[r.verification]?.tag ?? r.verification})` : '', r.late ? '(late)' : ''].filter(Boolean).join(' ') }],
+    export: (r) => [{ head: 'Status', cell: [r.status, r.stage ? `(${STAGE[r.stage].tag.toLowerCase()})` : '', r.late ? '(late)' : ''].filter(Boolean).join(' ') }],
   },
   {
     id: 'waiting',

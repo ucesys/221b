@@ -407,6 +407,8 @@ func (r *router) by(f *jobs.Finding, k issues.Key, n, depth int) error {
 		}
 		if c.VerifyPending && c.Job == r.in.Job {
 			issues.ReopenCase(c, r.now)
+			// Open again, it says why: the fix did not hold (CF-107).
+			c.Verification = issues.VerifyNotHeld
 			if c.Seen == nil {
 				c.Seen = &issues.Seen{Count: 1, First: c.Created}
 			}
@@ -535,6 +537,7 @@ func (r *router) stillThere(c *issues.Case, x jobs.Recheck) error {
 		return r.tx.Note(c, system.Person, fmt.Sprintf("The fix did not hold: %s (%s) re-checked it after %s%s.", r.in.Run, r.in.Label, change, evidenceWords(x.Evidence)), true)
 	}
 	issues.ReopenCase(c, r.now)
+	c.Verification = issues.VerifyNotHeld
 	if err := r.tx.Note(c, system.Person, fmt.Sprintf("Reopened: the fix did not hold; %s (%s) re-checked it%s.", r.in.Run, r.in.Label, evidenceWords(x.Evidence)), true); err != nil {
 		return err
 	}

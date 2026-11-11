@@ -274,7 +274,16 @@ export interface CaseBrief extends CaseRef {
   suggestException?: boolean
   /** Where the check of a fix applied by a change stands (CF-31). */
   verification?: Verification
+  /** What the case waits for now, as the server says it (CF-107). */
+  stage?: CaseStage
 }
+
+/**
+ * What a case waits for now, beside its status (CF-107): its analysis, a
+ * change's approval or run, the validation run that re-checks the fix,
+ * its closure. A case has one stage at most; the server chooses it.
+ */
+export type CaseStage = 'analysisQueued' | 'analyzing' | 'fixSuggested' | 'approval' | 'secondApproval' | 'applying' | 'changeFailed' | 'validation' | 'closure' | 'notHeld' | 'verified'
 
 /**
  * Where the check of a fix a change applied stands (CF-29 to CF-31):
@@ -791,12 +800,27 @@ export const SOURCE: Record<CaseSourceKind, string> = {
   alert: 'Alert',
 }
 
-/** The check of a fix a change applied, as a tag says it, with a line that says more (CF-31). */
-export const VERIFICATION: Record<Verification, { tag: string; tone: string; hint: string }> = {
-  waiting: { tag: 'fix applied', tone: 'info', hint: 'A change applied its fix; the next run of the job that found it re-checks that it holds' },
-  verified: { tag: 'fix verified', tone: 'ok', hint: 'A run re-checked it and found the problem gone; the RCA closes it' },
-  notHeld: { tag: 'fix did not hold', tone: 'err', hint: 'A run found it again after the change was applied' },
+/** A case's stage as a tag says it, with a line that says more (CF-107). */
+export const STAGE: Record<CaseStage, { tag: string; tone: string; hint: string }> = {
+  analysisQueued: { tag: 'Waiting for analysis', tone: 'info', hint: 'The case analysis job analyzes it when its turn comes: the highest priority first, then the oldest. Analyze in the case runs it now' },
+  analyzing: { tag: 'Analysis running', tone: 'info', hint: 'An agent is analyzing it now' },
+  fixSuggested: { tag: 'Fix suggested', tone: 'info', hint: 'Its analysis suggested a fix; a person decides what to do with it' },
+  approval: { tag: 'Waiting for approval', tone: 'warn', hint: 'A proposed change for it waits for a person to approve or reject it' },
+  secondApproval: { tag: 'Waiting for a second approval', tone: 'warn', hint: 'A proposed change for it has one of the two approvals its cluster needs; a second person approves it' },
+  applying: { tag: 'Change running', tone: 'info', hint: 'A change for it was approved, and Watson is running it' },
+  changeFailed: { tag: 'Change failed', tone: 'err', hint: 'The last change run for it failed: look at the change, then analyze the case again or fix it by hand' },
+  validation: {
+    tag: 'Waiting for a validation run',
+    tone: 'info',
+    hint: 'Its fix is in. The next run of the job that found it re-checks it: one run that finds the problem gone verifies the fix, a run that still sees it means the fix did not hold',
+  },
+  closure: { tag: 'Waiting for closure', tone: 'ok', hint: 'Its fix is in: a run re-checked it and found the problem gone, or a change applied it to a case no run re-checks. A person closes it as Fixed, at P0 and P1 with its RCA' },
+  notHeld: { tag: 'Fix did not hold', tone: 'err', hint: 'A run found the problem again after its fix; the case stays open' },
+  verified: { tag: 'Fix verified', tone: 'ok', hint: 'A run re-checked it and found the problem gone' },
 }
+
+/** The stage of a case to show, or none: one the console has no words for is not shown. */
+export const caseStage = (c: Pick<CaseBrief, 'stage'>) => (c.stage && STAGE[c.stage] ? { id: c.stage, ...STAGE[c.stage] } : undefined)
 
 /** The run that verified a fix (I-1): the run, its job's label, when, and what the agent read when it re-checked it. */
 export interface VerifiedBy {

@@ -91,7 +91,7 @@ func TestAnAuditVerifiesOnlyWhatItRecheckedW1(t *testing.T) {
 		t.Errorf("not verified: %+v", c.Brief)
 	}
 	c := w.get(t, still)
-	if c.Status != issues.StatusNew || c.Outcome != "" || w.report(t, still).VerifyPending {
+	if c.Status != issues.StatusNew || c.Outcome != "" || w.report(t, still).VerifyPending || c.Verification != issues.VerifyNotHeld {
 		t.Fatalf("still there, not reopened: %+v", c.Brief)
 	}
 	if !strings.Contains(messages(c), "Reopened: the fix did not hold; run-3 (Nightly audit) re-checked it: api still has no readiness probe.") {

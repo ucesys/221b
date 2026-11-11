@@ -74,7 +74,7 @@ export function Verification({ c, busy, onFix }: { c: Case; busy: boolean; onFix
     return (
       <div className="rk-callout" data-tone="info" data-testid="case-verification" data-state="waiting" style={{ flexDirection: 'column', gap: 4 }}>
         <span>
-          <strong>Fix applied by {by}</strong> — waiting for the next run of <VerifyJob c={c} /> to check.
+          <strong>Fix applied by {by}</strong> — waiting for a validation run: the next run of <VerifyJob c={c} /> re-checks it.
         </span>
         {c.verifyWait && (
           <span style={{ fontSize: 12.5 }} data-testid="case-verify-wait">
@@ -107,10 +107,10 @@ export function Verification({ c, busy, onFix }: { c: Case; busy: boolean; onFix
   return (
     <div className="rk-callout" data-tone="err" data-testid="case-verification" data-state="notHeld" style={{ flexDirection: 'column', gap: 4 }}>
       <span>
-        <strong>The fix did not hold.</strong> The next run of <VerifyJob c={c} /> found the problem again after {by}.
+        <strong>The fix did not hold.</strong> The next run of <VerifyJob c={c} /> found the problem again after {change || c.fixApplied === undefined ? by : 'it was closed as fixed'}.
       </span>
       <span className="tb-hint" style={{ fontSize: 12 }}>
-        The case stays in progress: look at it again, or link another change.
+        The case stays open: analyze it again, or link another change.
       </span>
     </div>
   )

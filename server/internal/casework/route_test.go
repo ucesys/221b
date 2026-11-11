@@ -156,6 +156,11 @@ func TestTheRoutingTable(t *testing.T) {
 	if c = w.get(t, fx); c.Status != issues.StatusNew || c.Outcome != "" || c.Seen.Count != 2 {
 		t.Fatalf("the fix did not hold: %+v", c.Brief)
 	}
+	// Open again, it says the fix did not hold, as its stage unless it
+	// waits for a new analysis (CF-107).
+	if c.Verification != issues.VerifyNotHeld || (c.Stage != StageNotHeld && c.Stage != StageAnalysisQueued) {
+		t.Fatalf("reopened, it does not say why: verification %q, stage %q", c.Verification, c.Stage)
+	}
 	// Closed as fixed, verified since: a new case, a regression of it.
 	if _, err := w.svc.Fix(ctx, fx, FixInput{Text: "Pinned it, really."}, olivia); err != nil {
 		t.Fatal(err)

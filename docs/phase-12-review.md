@@ -396,6 +396,8 @@ The review did not see the console run. With `make dev-sim` or the test install:
 - Every label changed in U-1 to U-6, in place, and that no truncation follows from the longer ones.
 - An old address of each kind (`#/cases/inbox/case/1`, `#/cases/known/KI-1`, `#/cases/inbox?proposal=PC-1`) opens its new place after A-1.
 
-## Open question
+## Open question: answered
 
-Below P1, one clean run closes an agent-found case as Fixed. With W-1 that run must have re-checked the object, which removes the false closures found here. Whether a fix should need two clean runs in a row before the console closes the case is a product decision that this review leaves to the owner; the code and `docs/states.md` say one.
+*Decided* (the owner, November 10, 2026): **one clean run is enough.** Below P1, a run of the job that found the case, which re-checked its object (W-1) and found the problem gone, closes it as Fixed; at P0 and P1 it marks the fix verified and the case waits for a person's RCA. No case waits for a second run, and `docs/states.md` says so.
+
+With the decision came CF-107: a case says what it waits for, one stage beside its status (*Waiting for analysis*, *Waiting for approval*, *Waiting for a validation run*, *Waiting for closure* and the rest; the table is in `docs/states.md`).

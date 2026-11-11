@@ -217,7 +217,8 @@ type Case struct {
 	// AppliedBy is the change (a Watson card) whose applying fixed the
 	// case, last; Verification is how the next run of the job that found
 	// it saw it since: VerifyWaiting, VerifyVerified (P0-P1, waiting for
-	// the RCA) or VerifyNotHeld; "" otherwise.
+	// the RCA) or VerifyNotHeld; "" otherwise. A case closed as fixed
+	// that a run reopened is VerifyNotHeld too (CF-107).
 	AppliedBy    *AppliedChange `json:"appliedBy,omitempty"`
 	Verification string         `json:"verification,omitempty"`
 	// --- end of resolves.

@@ -264,7 +264,7 @@ describe('a fix a change applied, and its check (CF-29 to CF-31)', () => {
     render(<CaseDrawer id="20" onClose={() => undefined} />)
     const banner = await screen.findByTestId('case-verification')
     expect(banner.getAttribute('data-state')).toBe('waiting')
-    expect(txt(banner)).toContain('Fix applied by change p-1 — waiting for the next run of Nightly audit to check.')
+    expect(txt(banner)).toContain('Fix applied by change p-1 — waiting for a validation run: the next run of Nightly audit re-checks it.')
     expect(txt(banner)).toContain('the case closes as fixed by itself')
     expect(within(banner).getByTestId('case-verification-change').getAttribute('href')).toBe('#/aiops/inbox/proposal/p-1')
     expect(within(banner).getByTestId('case-verify-job').getAttribute('href')).toBe('#/aiops/jobs/nightly-audit')
@@ -289,6 +289,18 @@ describe('a fix a change applied, and its check (CF-29 to CF-31)', () => {
     expect(banner.getAttribute('data-state')).toBe('notHeld')
     expect(txt(banner)).toContain('The fix did not hold.')
     expect(txt(banner)).toContain('found the problem again after change p-1')
+  })
+
+  it('says the fix did not hold on a case a run reopened, closed as fixed by a person (CF-107)', async () => {
+    vi.mocked(api.fetchCase).mockResolvedValue(
+      kase({ status: 'new', stage: 'notHeld', fixApplied: { text: 'Pinned the tag.', by: 'Olivia', at: '2026-11-07T03:00:00Z' }, verification: 'notHeld', verifyJob: { id: 'nightly-audit', label: 'Nightly audit' } }),
+    )
+    render(<CaseDrawer id="20" onClose={() => undefined} />)
+    const banner = await screen.findByTestId('case-verification')
+    expect(txt(banner)).toContain('found the problem again after it was closed as fixed.')
+    expect(txt(banner)).toContain('The case stays open')
+    expect(txt(screen.getByTestId('case-stage'))).toBe('Fix did not hold')
+    expect(screen.getByTestId('case-stage').getAttribute('data-stage')).toBe('notHeld')
   })
 
   it('says how long the fix has waited and how many runs did not re-check it (I-1)', async () => {
@@ -331,20 +343,21 @@ describe('a fix a change applied, and its check (CF-29 to CF-31)', () => {
 
   it('badges a case row in the Inbox with its check, found by search and in the export', () => {
     const ctx: RowContext = { me: 'Ann (ann)', person: 'ann', names: new Map() }
-    const brief: CaseBrief = { ...kase(), verification: 'waiting' }
+    const brief: CaseBrief = { ...kase(), verification: 'waiting', stage: 'validation' }
     const row = caseRow(brief, ctx)
-    expect(row.verification).toBe('waiting')
-    expect(row.words).toContain('fix applied')
+    expect(row.stage).toBe('validation')
+    expect(row.words).toContain('waiting for a validation run')
     const status = INBOX_COLUMNS.find((c) => c.id === 'status')!
     render(<>{status.cell(row, NOW)}</>)
-    expect(txt(screen.getByTestId('inbox-row-verification'))).toBe('fix applied')
-    expect(status.export(row, NOW)).toEqual([{ head: 'Status', cell: 'In progress (fix applied)' }])
+    expect(txt(screen.getByTestId('inbox-row-stage'))).toBe('Waiting for a validation run')
+    expect(status.export(row, NOW)).toEqual([{ head: 'Status', cell: 'In progress (waiting for a validation run)' }])
     cleanup()
-    render(<>{status.cell(caseRow({ ...brief, verification: 'notHeld' }, ctx), NOW)}</>)
-    expect(screen.getByTestId('inbox-row-verification').getAttribute('data-tone')).toBe('err')
+    render(<>{status.cell(caseRow({ ...brief, verification: 'notHeld', stage: 'notHeld' }, ctx), NOW)}</>)
+    expect(screen.getByTestId('inbox-row-stage').getAttribute('data-tone')).toBe('err')
+    expect(txt(screen.getByTestId('inbox-row-stage'))).toBe('Fix did not hold')
     cleanup()
-    render(<>{status.cell(caseRow({ ...brief, verification: undefined }, ctx), NOW)}</>)
-    expect(screen.queryByTestId('inbox-row-verification')).toBeNull()
+    render(<>{status.cell(caseRow({ ...brief, verification: undefined, stage: undefined }, ctx), NOW)}</>)
+    expect(screen.queryByTestId('inbox-row-stage')).toBeNull()
   })
 })
 

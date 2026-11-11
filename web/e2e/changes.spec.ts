@@ -211,13 +211,14 @@ test('approved and applied, the change puts the case In progress, waiting for th
   const banner = drawer.getByTestId('case-verification')
   await expect(banner).toHaveAttribute('data-state', 'waiting')
   await expect(banner).toContainText(`Fix applied by change ${cardId}`)
-  await expect(banner).toContainText('waiting for the next run of')
+  await expect(banner).toContainText('waiting for a validation run')
+  await expect(drawer.getByTestId('case-stage')).toHaveText('Waiting for a validation run')
   await expect(drawer.locator(`[data-testid="case-card"][data-id="${cardId}"]`)).toContainText('Applied')
   await expect(drawer.getByTestId('case-fix-applied')).toContainText(`Fix applied by change ${cardId}`)
   // The Inbox badges the case: read afresh, not at its half-minute turn.
   await page.goto('/#/aiops/inbox?source=agents')
   await page.reload()
-  await expect(page.locator(`[data-inbox-row="case:${caseNumber}"]`).getByTestId('inbox-row-verification')).toHaveText('fix applied')
+  await expect(page.locator(`[data-inbox-row="case:${caseNumber}"]`).getByTestId('inbox-row-stage')).toHaveText('Waiting for a validation run')
 
   // The fake audit finds the same problem again: the fix did not hold, and the case stays In progress.
   await audit(page)
@@ -225,6 +226,7 @@ test('approved and applied, the change puts the case In progress, waiting for th
   await page.goto(`/#/aiops/inbox/case/${caseNumber}`)
   await expect(drawer.getByTestId('case-verification')).toHaveAttribute('data-state', 'notHeld')
   await expect(drawer.getByTestId('case-verification')).toContainText('The fix did not hold.')
+  await expect(drawer.getByTestId('case-stage')).toHaveText('Fix did not hold')
   await expect(drawer.getByTestId('case-status')).toHaveText('In progress')
 })
 

@@ -393,8 +393,12 @@ type Brief struct {
 	SuggestException bool `json:"suggestException,omitempty"`
 	AskedReporter    bool `json:"askedReporter,omitempty"`
 	// Verification is how the run after a change applied saw it
-	// (CF-31): waiting, verified (P0-P1, add the RCA) or notHeld.
+	// (CF-31): waiting, verified (P0-P1, add the RCA) or notHeld; notHeld
+	// too on a case closed as fixed that a run reopened (CF-107).
 	Verification string `json:"verification,omitempty"`
+	// Stage is what the case waits for now (CF-107): its analysis, a
+	// change's approval, the validation run, its closure; "" for none.
+	Stage string `json:"stage,omitempty"`
 }
 
 // ParseObject reads a Kubernetes object from what a case is about:
@@ -469,7 +473,7 @@ func shownStatus(r issues.Case) string {
 	return "Closed"
 }
 
-func brief(v issues.ReportView, analyzing bool, nofix noFixCounts) Brief {
+func brief(v issues.ReportView, analyzing bool, nofix noFixCounts, change string) Brief {
 	r := v.Case
 	b := Brief{ID: caseID(r.Number), Number: r.Number, Title: firstOf(v.Title, "Case "+caseID(r.Number)), Priority: r.Priority, Status: r.Status, Outcome: r.Outcome,
 		Pending: r.Pending(), Cluster: r.Cluster, Resource: r.Object, Object: ParseObject(r.Object), Source: Source{Kind: r.Kind()},
@@ -488,6 +492,7 @@ func brief(v issues.ReportView, analyzing bool, nofix noFixCounts) Brief {
 		b.Previous = &PreviousClose{Case: caseID(r.Previous.Case), Outcome: r.Previous.Outcome, Explanation: r.Previous.Explanation, By: r.Previous.By, At: r.Previous.At}
 	}
 	b.Type, b.Incident, b.LastBy, b.LastAt = r.CaseType(), r.Incident, r.LastBy, r.LastAt
+	b.Stage = stageOf(r, analyzing, change)
 	if r.AnalysisQueued != nil && !analyzing {
 		b.AnalysisState, b.AnalysisQueued = "queued", true
 	}
@@ -554,10 +559,10 @@ func (s *Service) List(ctx context.Context, c Caller, f Filter) ([]Brief, error)
 		return nil, err
 	}
 	nofix := countNoFix(lines)
-	busy := s.analyzing(ctx)
+	busy, changes := s.analyzing(ctx), s.changeStages(ctx)
 	out := make([]Brief, 0, len(views))
 	for _, v := range views {
-		out = append(out, brief(v, busy[v.Number], nofix))
+		out = append(out, brief(v, busy[v.Number], nofix, changes[caseID(v.Number)]))
 	}
 	named := s.clusterNamer()
 	for i := range out {
@@ -692,7 +697,8 @@ func (v View) Open() bool { return v.Status.Open() }
 
 func (s *Service) view(ctx context.Context, c Caller, v issues.ReportView, w Work, lines []issues.Line) View {
 	r := v.Case
-	out := View{Brief: brief(v, s.analyzing(ctx)[r.Number], countNoFix(lines)), Detail: r.Text, Scrubbed: r.Scrubbed, Pruned: r.Pruned, FiledBy: r.FiledBy, OpenedBy: r.OpenedBy,
+	analyzing := s.analyzing(ctx)[r.Number]
+	out := View{Brief: brief(v, analyzing, countNoFix(lines), ""), Detail: r.Text, Scrubbed: r.Scrubbed, Pruned: r.Pruned, FiledBy: r.FiledBy, OpenedBy: r.OpenedBy,
 		ClosedBy: r.ClosedBy, ServiceName: v.ServiceName, ServiceBy: r.ServiceBy, ServiceConfidence: r.ServiceConfidence, Known: v.Known, MatchConfidence: r.MatchConfidence,
 		Rejected: r.Rejected, Similar: r.Similar, Messages: r.Messages, SLA: v.SLA, Acknowledged: r.Acknowledged, FirstResponse: r.FirstResponse, Resolved: r.Resolved,
 		Related: related(r, lines), AllowedOutcomes: r.AllowedOutcomes(), RCARequired: r.RCARequired(), MayReopen: !r.Status.Open(),
@@ -729,8 +735,12 @@ func (s *Service) view(ctx context.Context, c Caller, v issues.ReportView, w Wor
 	if out.Commands == nil {
 		out.Commands = []Command{}
 	}
-	out.Proposals = s.proposalsOf(ctx, r.Number, w)
+	var changes []cards.Card
+	out.Proposals, changes = s.proposalsOf(ctx, r.Number, w)
 	out.Cards, out.AppliedBy = out.Proposals, r.AppliedBy
+	// The stage of the whole view counts the changes linked to the case
+	// on its own record too, as the list above does (CF-107).
+	out.Stage = stageOf(r, analyzing, changeStage(changes))
 	if (r.Verification != "" || r.VerifyPending) && r.Job != "" {
 		out.VerifyJob = &JobRef{ID: r.Job, Label: s.jobLabel(ctx, r)}
 	}
@@ -823,8 +833,10 @@ func (s *Service) fromIssues(err error) error {
 // proposalsOf reads the changes that resolve a case, with their state
 // now (CF-28): the cards the case kept, and every card that names it
 // (its link is the card's), newest first. A card let go of is "gone".
-func (s *Service) proposalsOf(ctx context.Context, n int, w Work) []CardRef {
+// The cards it read come with them, for the case's stage (CF-107).
+func (s *Service) proposalsOf(ctx context.Context, n int, w Work) ([]CardRef, []cards.Card) {
 	out := []CardRef{}
+	var found []cards.Card
 	id := caseID(n)
 	var all []cards.Card
 	read := false
@@ -852,12 +864,13 @@ func (s *Service) proposalsOf(ctx context.Context, n int, w Work) []CardRef {
 			if at := c.AppliedAt(); !at.IsZero() {
 				ref.AppliedAt = &at
 			}
+			found = append(found, c)
 		} else if read {
 			ref.State = "gone"
 		}
 		out = append(out, ref)
 	}
-	return out
+	return out, found
 }
 
 // jobLabel is the name of the job that found a case: its run's label,

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ApprovalRow } from '../../api/automation'
 import type { Proposal } from '../../api/cards'
 import { inboxKindOf, inboxOrderKey } from '../../lib/cases'
+import { STAGE } from '../../api/casework'
 import { sortRows } from '../../lib/table'
 import {
   approvalId,
@@ -241,10 +242,10 @@ describe('the Inbox’s rows since wave 6c (CF-32, CF-35 to CF-38)', () => {
   })
 
   it('reads a case’s type, incident number, queued analysis and last change', () => {
-    const r = caseRow(agent(9, { type: 'security', incident: 'INC0012345', analysisQueued: true, lastBy: { name: 'Auditor', kind: 'agent' }, lastAt: '2026-11-06T00:00:00Z' }), ctx)
-    expect(r).toMatchObject({ type: 'security', incident: 'INC0012345', analysisQueued: true, lastBy: { name: 'Auditor', kind: 'agent' }, lastAt: '2026-11-06T00:00:00Z' })
+    const r = caseRow(agent(9, { type: 'security', incident: 'INC0012345', stage: 'analysisQueued', lastBy: { name: 'Auditor', kind: 'agent' }, lastAt: '2026-11-06T00:00:00Z' }), ctx)
+    expect(r).toMatchObject({ type: 'security', incident: 'INC0012345', stage: 'analysisQueued', lastBy: { name: 'Auditor', kind: 'agent' }, lastAt: '2026-11-06T00:00:00Z' })
     // The search finds it by its type in words, its incident number and who changed it.
-    expect(rowTerms(r).map((t) => t.text)).toEqual(expect.arrayContaining(['Security', 'INC0012345', 'Auditor', 'analysis queued']))
+    expect(rowTerms(r).map((t) => t.text)).toEqual(expect.arrayContaining(['Security', 'INC0012345', 'Auditor', 'waiting for analysis']))
     // Without a last change of its own, the last update is when.
     expect(caseRow(kase(10), ctx).lastAt).toBe('2026-11-02T00:00:00Z')
     // createdBy as an actor: Mine still finds what the person opened.
@@ -285,11 +286,33 @@ describe('the Inbox’s rows since wave 6c (CF-32, CF-35 to CF-38)', () => {
   })
 
   it('shows the type, incident, last change and queued analysis in their columns, and exports them', () => {
-    const r = caseRow(kase(12, { type: 'outage', incident: 'INC7', analysisQueued: true, lastBy: { name: 'Pat', kind: 'person' }, lastAt: new Date(Date.now() - 5 * 60_000).toISOString() }), ctx)
+    const r = caseRow(kase(12, { type: 'outage', incident: 'INC7', stage: 'analysisQueued', lastBy: { name: 'Pat', kind: 'person' }, lastAt: new Date(Date.now() - 5 * 60_000).toISOString() }), ctx)
     const col = (id: string) => INBOX_COLUMNS.find((c) => c.id === id)!
     expect(col('type').export(r, Date.now())).toEqual([{ head: 'Type', cell: 'Outage' }])
     expect(col('incident').export(r, Date.now())).toEqual([{ head: 'Incident', cell: 'INC7' }])
     expect(col('last').export(r, Date.now())[0]).toEqual({ head: 'Last change by', cell: 'Pat' })
-    expect(col('status').export(r, Date.now())[0]!.cell).toContain('(analysis queued)')
+    expect(col('status').export(r, Date.now())[0]!.cell).toContain('(waiting for analysis)')
+  })
+
+  it('says what a case waits for, one stage beside its status, in the export and to the search (CF-107)', () => {
+    const said = (over: Partial<InboxCase>) => INBOX_COLUMNS.find((c) => c.id === 'status')!.export(caseRow(kase(5, over), ctx), Date.now())[0]!.cell
+    expect(Object.keys(STAGE)).toEqual(['analysisQueued', 'analyzing', 'fixSuggested', 'approval', 'secondApproval', 'applying', 'changeFailed', 'validation', 'closure', 'notHeld', 'verified'])
+    expect(said({ status: 'new', stage: 'analysisQueued' })).toBe('New (waiting for analysis)')
+    expect(said({ status: 'new', stage: 'analyzing' })).toBe('New (analysis running)')
+    expect(said({ status: 'new', stage: 'fixSuggested' })).toBe('New (fix suggested)')
+    expect(said({ status: 'new', stage: 'approval' })).toBe('New (waiting for approval)')
+    expect(said({ status: 'new', stage: 'secondApproval' })).toBe('New (waiting for a second approval)')
+    expect(said({ status: 'new', stage: 'applying' })).toBe('New (change running)')
+    expect(said({ status: 'inProgress', stage: 'changeFailed' })).toBe('In progress (change failed)')
+    expect(said({ status: 'inProgress', stage: 'validation' })).toBe('In progress (waiting for a validation run)')
+    expect(said({ status: 'inProgress', stage: 'closure' })).toBe('In progress (waiting for closure)')
+    expect(said({ status: 'inProgress', stage: 'notHeld' })).toBe('In progress (fix did not hold)')
+    // A case a person closed as fixed still waits for its run; verified, it says so.
+    expect(said({ status: 'closed', outcome: 'fix', pending: false, stage: 'validation' })).toBe('Closed: fixed (waiting for a validation run)')
+    expect(said({ status: 'closed', outcome: 'fix', pending: false, stage: 'verified' })).toBe('Closed: fixed (fix verified)')
+    // No stage, and one this console has no words for, add nothing.
+    expect(said({ status: 'inProgress' })).toBe('In progress')
+    expect(said({ status: 'inProgress', stage: 'later' as never })).toBe('In progress')
+    expect(rowTerms(caseRow(kase(5, { stage: 'closure' }), ctx)).map((t) => t.text)).toContain('waiting for closure')
   })
 })

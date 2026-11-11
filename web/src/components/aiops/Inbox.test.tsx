@@ -485,7 +485,7 @@ describe('the Inbox since wave 6c (CF-35 to CF-38)', () => {
   it('shows a case’s type, incident number, queued analysis and last change, and narrows by type', async () => {
     vi.mocked(casework.fetchCases).mockResolvedValue({
       cases: [
-        kase(1, { type: 'security', incident: 'INC0012345', analysisQueued: true, lastBy: { name: 'Auditor', kind: 'agent' }, lastAt: new Date(Date.now() - 2 * 3600_000).toISOString() }),
+        kase(1, { type: 'security', incident: 'INC0012345', analysisQueued: true, stage: 'analysisQueued', lastBy: { name: 'Auditor', kind: 'agent' }, lastAt: new Date(Date.now() - 2 * 3600_000).toISOString() }),
         kase(3, { type: 'capacity', lastBy: { name: 'Pat', kind: 'person' }, lastAt: new Date(Date.now() - 5 * 60_000).toISOString() }),
       ],
       clusters: [],
@@ -497,7 +497,7 @@ describe('the Inbox since wave 6c (CF-35 to CF-38)', () => {
     const one = document.querySelector('[data-inbox-row="case:1"]') as HTMLElement
     expect(within(one).getByTestId('inbox-row-type').textContent).toBe('Security')
     expect(within(one).getByTestId('inbox-row-incident').textContent).toBe('INC0012345')
-    expect(within(one).getByTestId('inbox-row-analysis-queued').textContent).toBe('Analysis queued')
+    expect(within(one).getByTestId('inbox-row-stage').textContent).toBe('Waiting for analysis')
     expect(within(one).getByTestId('inbox-row-last').textContent).toBe('Auditor (agent) · 2h ago')
     expect(within(document.querySelector('[data-inbox-row="case:3"]') as HTMLElement).getByTestId('inbox-row-last').textContent).toBe('Pat · 5m ago')
     // The type filter: in the address, cases of that type only.

@@ -116,7 +116,7 @@ func TestJobInstructionsAreEditable(t *testing.T) {
 		return task
 	}
 	on(t, w.s, KindAudit, Change{Clusters: &[]string{"local"}})
-	if task := runAudit(); !strings.Contains(task, "Volumes nearly full (85% or more") || !strings.Contains(task, "nightly audit of the cluster local") || !strings.Contains(task, OutputFormat) {
+	if task := runAudit(); !strings.Contains(task, "Volumes nearly full (85% or more") || !strings.Contains(task, "Nightly audit job on the cluster local (id local)") || !strings.Contains(task, OutputFormat) {
 		t.Fatalf("the built-in task: %s", task)
 	}
 	own := "Only look for PersistentVolumeClaims above 90%.\r\nNothing else."

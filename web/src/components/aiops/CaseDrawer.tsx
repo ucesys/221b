@@ -49,6 +49,7 @@ import {
   caseHref,
   caseNumber,
   caseShownStatus,
+  caseStage,
   caseStatusText,
   caseStatusTone,
   checkDuplicate,
@@ -269,7 +270,7 @@ function OneCase({ id, onClose, onChanged, onToast }: Props) {
   const seeded = useRef('')
   const now = useNow()
   // Sherlock is told which case "this" is, and the dock follows its cluster (IB-11).
-  useAIOpsItem(c ? { kind: 'case', id: c.id, cluster: c.cluster || undefined, summary: `${c.title} · P${c.priority} · ${caseStatusText(c)}` } : { kind: 'case', id })
+  useAIOpsItem(c ? { kind: 'case', id: c.id, cluster: c.cluster || undefined, summary: `${c.title} · P${c.priority} · ${caseStatusText(c)}${caseStage(c) ? ` (${caseStage(c)!.tag.toLowerCase()})` : ''}` } : { kind: 'case', id })
   const load = useCallback(
     (background = false) =>
       fetchCase(id, background).then(
@@ -415,6 +416,7 @@ function OneCase({ id, onClose, onChanged, onToast }: Props) {
     `Case ${id}`
   )
   const open = !!c && c.status !== 'closed'
+  const stage = c && caseStage(c)
   // Those who work the case set the priority and type at the right of this line (CF-58); the others read them as tags.
   const facts = c && (
     <>
@@ -427,6 +429,12 @@ function OneCase({ id, onClose, onChanged, onToast }: Props) {
         <Tag tone={caseStatusTone(caseShownStatus(c), c.outcome)} testId="case-status">
           {caseStatusText(c)}
         </Tag>
+        {stage && (
+          // What it waits for now, beside its status (CF-107).
+          <span className="rk-tag" data-tone={stage.tone} title={stage.hint} data-testid="case-stage" data-stage={stage.id}>
+            {stage.tag}
+          </span>
+        )}
         <Tag tone="muted" testId="case-source-kind">
           {SOURCE[c.source.kind] ?? c.source.kind}
         </Tag>
@@ -440,11 +448,6 @@ function OneCase({ id, onClose, onChanged, onToast }: Props) {
             {c.incident}
           </span>
         )}
-        {open && c.analysisQueued && !c.analyzing && (
-          <span className="rk-tag" data-tone="info" title="The case analysis job analyzes it when its turn comes: the highest priority first, then the oldest" data-testid="case-analysis-queued">
-            Analysis queued
-          </span>
-        )}
         {c.seen && c.seen.count > 1 && (
           <Tag tone="info" testId="case-seen-tag">
             seen ×{c.seen.count}
@@ -456,11 +459,6 @@ function OneCase({ id, onClose, onChanged, onToast }: Props) {
           </Tag>
         )}
         {open && !c.assignee && <Tag tone="warn">unassigned</Tag>}
-        {open && c.fixProposed && (
-          <Tag tone="info" testId="case-fix-proposed">
-            Fix suggested
-          </Tag>
-        )}
         {open && !c.slaApplies && (
           <span className="rk-tag" data-tone="muted" data-testid="case-no-sla" title="Agent-found cases have SLA targets only at P0 and P1">
             no SLA
@@ -1005,7 +1003,7 @@ function CaseBody({
         )}
         {open && c.analysisQueued && !c.analyzing && (
           <span className="tb-hint" data-testid="case-analysis-queued-hint">
-            Analysis queued: the case analysis job analyzes it when its turn comes, the highest priority first, within its budgets. Analyze runs it now.
+            Waiting for analysis: the case analysis job analyzes it when its turn comes, the highest priority first, within its budgets. Analyze runs it now.
           </span>
         )}
         {!a && !c.analyzing && !c.analysisQueued && (

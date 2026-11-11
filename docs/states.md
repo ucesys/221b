@@ -71,8 +71,36 @@ read:
 - a finding the run left out past its cap (the least severe go first)
   counts as neither seen nor gone (W-3).
 
-One clean, re-checked run is enough below P1; whether two should be needed
-is an open question of the review (`docs/phase-12-review.md`).
+One clean, re-checked run is enough below P1: the owner's decision on the
+review's open question (`docs/phase-12-review.md`), so no case waits for a
+second run.
+
+### What a case waits for: its stage
+
+The three states say little of a case an agent found, so a case also has
+at most one stage (CF-107), which the server chooses (`casework.stageOf`)
+and the Inbox and the case's header show as a tag beside the status. It is
+what the case waits for now; where two things hold, a step that needs a
+person comes before one that needs a run, in the order of this table.
+
+| Stage (the tag) | The case is | It holds while | What ends it |
+| --- | --- | --- | --- |
+| Analysis running | open | an agent analyzes it | the analysis ends |
+| Change running | open | a proposed change for it is approved and Watson runs it | applied, or failed |
+| Waiting for approval | open | a proposed change for it is queued, with no approval yet | a person approves or rejects it; it expires or is replaced |
+| Waiting for a second approval | open | a queued change on production has one of its two approvals | the second person approves or rejects it |
+| Waiting for a validation run | open | a change applied its fix (agent-found cases) | a run of the job that found it re-checks it: gone below P1 closes it as Fixed, gone at P0-P1 makes it Waiting for closure, still there makes it Fix did not hold |
+| Waiting for analysis | open | it is queued for the Case analysis job | its turn comes, or a person presses Analyze |
+| Waiting for closure | open | a run verified its fix (P0-P1), or a change applied the fix of a case no run re-checks (a person's, not reopened since) | a person closes it as Fixed, with its RCA at P0-P1 |
+| Fix did not hold | open | a run found the problem again after the fix: on an open case a change was applied to, and on a case closed as Fixed that the run reopened | a new analysis, a new change, or a person closing it |
+| Change failed | open | the change that ran last for it failed, and none waits | a new change, or a person closing it |
+| Fix suggested | open | its analysis suggested a fix, and no change waits or ran | a person acts on it |
+| Waiting for a validation run | closed as Fixed | a person closed an agent-found case as Fixed | a run re-checks it: gone makes it Fix verified, still there reopens it |
+| Fix verified | closed as Fixed | a run re-checked it and found the problem gone | nothing: it stays |
+
+A case with none of these has no stage: one a person works on, or one
+closed with nothing left to wait for. "Waiting for the reporter" stays
+the status shown (CF-67), not a stage.
 
 ## Proposed changes (PC-n)
 

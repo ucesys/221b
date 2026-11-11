@@ -841,9 +841,9 @@ describe('a case’s type, incident number, actors and queued analysis (CF-32, C
   })
 
   it('says the analysis is queued, and still offers Analyze now', async () => {
-    vi.mocked(api.fetchCase).mockResolvedValue(found({ analysisQueued: true }))
+    vi.mocked(api.fetchCase).mockResolvedValue(found({ analysisQueued: true, stage: 'analysisQueued' }))
     render(<CaseDrawer id="20" onClose={() => undefined} />)
-    expect(txt(await screen.findByTestId('case-analysis-queued'))).toBe('Analysis queued')
+    expect(txt(await screen.findByTestId('case-stage'))).toBe('Waiting for analysis')
     expect(txt(screen.getByTestId('case-analysis-queued-hint'))).toContain('Analyze runs it now')
     expect(screen.getByTestId('case-analyze')).toBeTruthy()
   })

@@ -42,3 +42,14 @@ Active
 Stale
 Expired
 Inactive
+Waiting for analysis
+Analysis running
+Fix suggested
+Waiting for approval
+Waiting for a second approval
+Change running
+Change failed
+Waiting for a validation run
+Waiting for closure
+Fix did not hold
+Fix verified
