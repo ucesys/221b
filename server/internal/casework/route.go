@@ -128,13 +128,23 @@ func (s *Service) Route(ctx context.Context, in jobs.RouteInput) jobs.RouteResul
 		}
 	}
 	// The clusters whose new cases are queued for their analysis (CF-32).
+	// A re-check that finds a fix did not hold reopens a case with no
+	// finding of its own, so its cluster counts too.
 	queue := map[string]bool{}
 	if s.o.Jobs != nil {
+		on := func(c string) {
+			if _, ok := queue[c]; !ok && c != "" {
+				queue[c] = s.o.Jobs.On(ctx, jobs.KindCase, jobs.Event{Kind: jobs.EventCase, Cluster: c})
+			}
+		}
 		for _, f := range in.Findings {
-			if c := f.Cluster; c != "" && f.Key != nil {
-				if _, ok := queue[c]; !ok {
-					queue[c] = s.o.Jobs.On(ctx, jobs.KindCase, jobs.Event{Kind: jobs.EventCase, Cluster: c})
-				}
+			if f.Key != nil {
+				on(f.Cluster)
+			}
+		}
+		for _, x := range in.Rechecked {
+			if x.Key != nil && x.Still != nil && *x.Still {
+				on(x.Key.Cluster)
 			}
 		}
 	}
@@ -373,6 +383,13 @@ func (r *router) by(f *jobs.Finding, k issues.Key, n, depth int) error {
 		if c.VerifyPending && c.Job == r.in.Job && c.AppliedBy != nil {
 			c.VerifyPending, c.Verified, c.Verification = false, nil, issues.VerifyNotHeld
 			if err := r.tx.Note(c, system.Person, fmt.Sprintf("The fix did not hold: %s (%s) found it again after change %s.", r.in.Run, r.in.Label, c.AppliedBy.Card), true); err != nil {
+				return err
+			}
+		} else if c.Verification == issues.VerifyVerified && c.Job == r.in.Job {
+			// Verified at P0-P1 and waiting for its RCA, it is found again
+			// before a person closed it: it no longer reads as verified.
+			c.Verified, c.VerifiedBy, c.Verification = nil, nil, issues.VerifyNotHeld
+			if err := r.tx.Note(c, system.Person, fmt.Sprintf("The fix did not hold: %s (%s) found it again after it was verified.", r.in.Run, r.in.Label), true); err != nil {
 				return err
 			}
 		}

@@ -96,6 +96,9 @@ Phase 12: AI agents, the AIOps area (cases, jobs, proposed changes and Mycroft's
 ### Fixed
 
 - **A console change waiting for a second SuperAdmin is applied once** when two approve at once; the second is told who approved it and when, as is a second approval of a Watson command (IB-09, ADR-111).
+- **A re-check is about the cluster the agent was asked about** (CF-108): in a run over several clusters, an answer about one could verify, or reopen, a fix on another by naming it; such an entry is now left out and the run says so. A re-check that names the cluster by its name, not its id, now counts.
+- **A verified fix that is found again no longer reads as verified** (CF-108): at P0–P1 a case whose fix a run verified waits for its RCA; when a later run found the problem again it went on saying *Verified: add the RCA to close*. It now says the fix did not hold.
+- **A case a re-check reopens is analyzed again** (CF-108): closed as Fixed and found still there by a run that re-checked it, it is queued for its analysis as one reopened by a finding is.
 - **A page that fails to draw** shows an error screen with Reload and *Report this problem* instead of going blank (CS-19).
 
 ## 0.11.1 (2026-11-04)

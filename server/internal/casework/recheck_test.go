@@ -195,3 +195,58 @@ func TestAFailedClusterVerifiesNothingW2(t *testing.T) {
 		t.Errorf("a fix on the failed cluster was verified: %+v", c)
 	}
 }
+
+// Second review: a fix a run re-checked and found still there reopens
+// its case with no finding of its own; with the case analysis job on, a
+// case at P0-P2 is queued for an analysis as one reopened by a finding
+// is (CF-32), and it says the fix did not hold until then (CF-107).
+func TestACaseReopenedByARecheckIsQueuedForAnalysis(t *testing.T) {
+	w := setup(t)
+	ctx := context.Background()
+	w.jobOn(t, true)
+	res := w.route(t, "nightly-audit", true, critical("pod.privileged", "ci/DaemonSet/runner", "The runner is privileged"))
+	id := res.Findings[0].Case
+	if _, err := w.svc.Fix(ctx, id, FixInput{Text: "Dropped the privileged flag.", RCA: &Completion{Cause: "A debug setting was left on."}}, olivia); err != nil {
+		t.Fatal(err)
+	}
+	if c := w.get(t, id); c.Status != issues.StatusClosed || c.Stage != StageValidation || c.AnalysisQueued {
+		t.Fatalf("closed as fixed, waiting for its run: %s, stage %q, queued %v", c.Status, c.Stage, c.AnalysisQueued)
+	}
+	w.routeWith(t, "nightly-audit", true, []jobs.Recheck{recheck("pod.privileged", "ci/DaemonSet/runner", true, "the runner is still privileged")})
+	c := w.get(t, id)
+	if c.Status.Open() != true || c.Verification != issues.VerifyNotHeld {
+		t.Fatalf("not reopened as a fix that did not hold: %s, verification %q", c.Status, c.Verification)
+	}
+	if !c.AnalysisQueued || c.Stage != StageAnalysisQueued {
+		t.Fatalf("reopened by a re-check, it is not queued for its analysis: queued %v, stage %q", c.AnalysisQueued, c.Stage)
+	}
+}
+
+// Second review: at P0-P1 a verified fix waits for a person's RCA, and
+// the problem may come back before it is given. A run of its job that
+// finds it again, or re-checks it and finds it still there, says the fix
+// did not hold: the case no longer reads as verified.
+func TestAVerifiedFixFoundAgainNoLongerReadsAsVerified(t *testing.T) {
+	w := setup(t)
+	st := w.withCards(t)
+	f := critical("pod.privileged", "ci/DaemonSet/runner", "The runner is privileged")
+	w.route(t, "nightly-audit", true, f)
+	w.applyTo(t, st, "C-1")
+	w.now = w.now.Add(time.Hour)
+	w.routeWith(t, "nightly-audit", true, []jobs.Recheck{recheck("pod.privileged", "ci/DaemonSet/runner", false, "the runner's pods run unprivileged")})
+	if c := w.get(t, "C-1"); c.Verification != issues.VerifyVerified || c.Stage != StageClosure {
+		t.Fatalf("not verified and waiting for its closure: %q, stage %q", c.Verification, c.Stage)
+	}
+	w.now = w.now.Add(24 * time.Hour)
+	res := w.route(t, "nightly-audit", true, f)
+	c := w.get(t, "C-1")
+	if res.Findings[0].Routing != jobs.RoutedSeen || c.Status != issues.StatusInProgress {
+		t.Fatalf("found again: %+v %+v", res.Findings[0], c.Brief)
+	}
+	if c.Verification != issues.VerifyNotHeld || c.Verified != nil || c.Stage != StageNotHeld {
+		t.Fatalf("found again after it was verified, it still reads as verified: %q, verified %v, stage %q", c.Verification, c.Verified, c.Stage)
+	}
+	if !strings.Contains(messages(c), "The fix did not hold: run-3 (Nightly audit) found it again after it was verified.") {
+		t.Errorf("no note: %s", messages(c))
+	}
+}

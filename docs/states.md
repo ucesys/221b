@@ -65,7 +65,9 @@ read:
   verified and left In progress at P0-P1 until a person gives the RCA; a
   case already closed as fixed stays closed, its fix verified;
 - re-checked and still there, or found again → the fix did not hold: an
-  open case stays In progress, a closed one is reopened;
+  open case stays In progress, a closed one is reopened; a case verified
+  at P0-P1 that a run finds again before its RCA is given no longer
+  reads as verified (CF-108);
 - not re-checked → it keeps waiting; the case counts the runs that passed,
   and the run says how many fixes it did not re-check (CF-95);
 - a finding the run left out past its cap (the least severe go first)

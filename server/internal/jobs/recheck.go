@@ -131,16 +131,31 @@ func (r *Recheck) UnmarshalJSON(b []byte) error {
 const maxRechecks = 100
 
 // withCluster gives the re-checks of one answer the cluster it was
-// asked about, where they name none.
-func withCluster(in []Recheck, cluster string) []Recheck {
-	out := make([]Recheck, 0, len(in))
+// asked about, as a finding gets it (ADR-147): one that names none, the
+// cluster's id or its name is that cluster's; one that names another
+// cluster is left out and counted, so an answer about one cluster never
+// verifies, or reopens, a fix on another the run read.
+func withCluster(in []Recheck, cluster, name string) (out []Recheck, others int) {
+	out = make([]Recheck, 0, len(in))
 	for _, r := range in {
-		if strings.TrimSpace(r.Cluster) == "" {
-			r.Cluster = cluster
+		if cl := strings.TrimSpace(r.Cluster); cl != "" && !strings.EqualFold(cl, cluster) && !strings.EqualFold(cl, name) {
+			others++
+			continue
 		}
+		r.Cluster = cluster
 		out = append(out, r)
 	}
-	return out
+	return out, others
+}
+
+// addRechecks takes one answer's re-checks into the run's, and says on
+// the run how many named another cluster than the one asked about.
+func addRechecks(out *Outcome, env *RunEnv, cluster string, in []Recheck) {
+	list, others := withCluster(in, cluster, env.ClusterName(cluster))
+	out.Rechecked = append(out.Rechecked, list...)
+	if others > 0 {
+		env.Note("%d %s named another cluster than %s, which it was asked about, and %s left out", others, plural(others, "re-check", "re-checks"), cluster, plural(others, "was", "were"))
+	}
 }
 
 // keyRechecks keys a run's re-checks as the console writes keys: the

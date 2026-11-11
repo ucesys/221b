@@ -81,7 +81,8 @@ func TestTheAuditScopeIsTheClustersThatAnsweredW2(t *testing.T) {
 	agents := &clusterAgents{fail: map[string]bool{"local": true}, text: map[string]string{"prod": "Read it.\n\n```json\n" + `{"findings": [], "proposals": [], "rechecked": [
  {"check": "pod.no-probes", "resource": "shop/deploy/api", "still": "false", "evidence": "api has readiness and liveness probes"},
  {"check": "pod.no-limits", "resource": "shop/Pod/web", "evidence": "said nothing"},
- {"check": "pod.no-limits", "resource": "not an object", "still": false}]}` + "\n```"}}
+ {"check": "pod.no-limits", "resource": "not an object", "still": false},
+ {"check": "pod.no-limits", "resource": "shop/Deployment/web", "cluster": "local", "still": false, "evidence": "said of a cluster it was not asked about"}]}` + "\n```"}}
 	w.s.SetAgents(agents)
 	on(t, w.s, KindAudit, Change{})
 	ctx := context.Background()
@@ -113,6 +114,10 @@ func TestTheAuditScopeIsTheClustersThatAnsweredW2(t *testing.T) {
 	r, _ := w.s.GetRun(ctx, b.ID)
 	if r.Status != StatusOK || fmt.Sprint(r.FailedClusters) != "[local]" || !strings.Contains(r.Note, "local: the cluster did not answer") {
 		t.Errorf("the run: %s %v %q", r.Status, r.FailedClusters, r.Note)
+	}
+	// An answer about prod says nothing of a fix on local (second review).
+	if !strings.Contains(r.Note, "1 re-check named another cluster than prod, which it was asked about, and was left out") {
+		t.Errorf("the run does not say a re-check named another cluster: %q", r.Note)
 	}
 	if list := runs(t, w.s); len(list) != 1 || fmt.Sprint(list[0].FailedClusters) != "[local]" {
 		t.Errorf("the list's row: %+v", list)
@@ -223,6 +228,31 @@ func TestTheCapKeepsTheMostSevereW3(t *testing.T) {
 	}
 	if list := runs(t, w.s); list[0].LeftOut == nil || list[0].LeftOut.Count != 5 {
 		t.Errorf("the list's row: %+v", list[0].LeftOut)
+	}
+}
+
+// A re-check is about the cluster its answer was asked about, as a
+// finding is (ADR-147): named by its id, its name or not at all it is
+// that cluster's, by its id; one that names another is left out.
+func TestARecheckIsAboutTheClusterAsked(t *testing.T) {
+	yes := true
+	in := []Recheck{
+		{Check: "a", Resource: "shop/Pod/a", Still: &yes},
+		{Check: "b", Resource: "shop/Pod/b", Cluster: " Production ", Still: &yes},
+		{Check: "c", Resource: "shop/Pod/c", Cluster: "PROD", Still: &yes},
+		{Check: "d", Resource: "shop/Pod/d", Cluster: "staging", Still: &yes},
+	}
+	out, others := withCluster(in, "prod", "Production")
+	if others != 1 || len(out) != 3 {
+		t.Fatalf("kept %d, left out %d: %+v", len(out), others, out)
+	}
+	for i, r := range out {
+		if r.Cluster != "prod" || r.Check != in[i].Check {
+			t.Errorf("re-check %d: %+v", i, r)
+		}
+	}
+	if in[1].Cluster != " Production " {
+		t.Error("the answer's own entries were changed")
 	}
 }
 
