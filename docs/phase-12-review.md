@@ -519,7 +519,7 @@ Proposed with other commands, the change waits beside the first, one more card e
 | R2-14 | `web/e2e/watson.spec.ts:424` | *requests do not pile up* counts every request left waiting, so it fails when an earlier spec leaves one. It failed here when run right after `sherlock.spec.ts`; it passes alone and in the suite's own order. | *fixed* (`910b339`): the test discards what still waits before it starts |
 | R2-15 | `CaseDrawer.tsx`, the first line and *Opened from* | The job's id shows where its name belongs: "found by Auditor (nightly-audit)", "nightly-audit" under the run. U-11 and U-12 put names where the cluster's and the agent's ids stood. | *fixed* (`699d9d9`) (CF-112): the job's label, its id as the hint |
 | R2-16 | AIOps › Jobs, Schedule | One row gives its times in two zones: *When* in the console's ("Every day at 02:00 UTC"), *Last run* in the browser's ("7:36pm PST"). | *fixed* (`31f893a`) (CF-113), as the owner chose: the browser's time beside the zone where the two differ |
-| R2-18 | `jobs/jobs_test.go:319` `TestBudgetStopsForTheDay` | Found on November 11 by the first `make test` of the hand-over, before any change: it failed once in the whole run with "the job's last run is still going" at the run of the next day, right after `w.s.Wait()`; run alone 40 times with the race detector it passed every time. A run seems to be still marked as going after `Wait` returns, under load. | Find what `Wait` does not wait for (the run's end being saved, or its *running* mark let go), and wait for it in `Wait` or in the test; not fixed with the eight, as the hand-over asked |
+| R2-18 | `jobs/jobs_test.go:319` `TestBudgetStopsForTheDay` | Found on November 11 by the first `make test` of the hand-over, before any change: it failed once in the whole run with "the job's last run is still going" at the run of the next day, right after `w.s.Wait()`; run alone 40 times with the race detector it passed every time. A run seems to be still marked as going after `Wait` returns, under load. | *fixed* (`beec403`): the run refused for the budget answers *Run now* before it lets the job go, and the test did not wait for it; it waits now, as for the others (300 runs with the race detector pass). Found again by the CI of the 0.12.0 pull request |
 
 ### Seen on the running console
 
@@ -669,5 +669,5 @@ Eight findings of the second review are open: R2-8 and R2-10 to R2-16, all Low. 
 
 ### Found while fixing them
 
-- **R2-18.** `TestBudgetStopsForTheDay` (`jobs`) failed once in the first `make test` of November 11, before any change, and passed 40 runs of 40 alone. See its row in the [Low table](#low-1). Left as it is: it is not one of the eight.
+- **R2-18.** `TestBudgetStopsForTheDay` (`jobs`) failed once in the first `make test` of November 11, before any change, and passed 40 runs of 40 alone. See its row in the [Low table](#low-1). Left then, as it is not one of the eight; *fixed* (`beec403`) for the 0.12.0 release, when CI failed on it.
 
