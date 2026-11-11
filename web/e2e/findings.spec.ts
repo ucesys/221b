@@ -10,9 +10,14 @@
 // its health. Jobs has Schedule and Runs, and an old link to a run opens
 // it under Runs.
 import type { Page } from '@playwright/test'
+import { inKind } from './cluster'
 import { expect, test } from './test'
 
 test.describe.configure({ mode: 'serial' })
+// The fake audit's findings name the simulator's namespaces (analytics,
+// shop), which a kind cluster does not have: there they are invalid and
+// open no case. The Browser tests jobs run this file on the simulator.
+test.skip(inKind, "the fake audit's findings name the simulator's namespaces")
 
 const SAME = { 'Sec-Fetch-Site': 'same-origin' }
 const KEY = 'sk-ant-e2e-fake-key-0123456789'

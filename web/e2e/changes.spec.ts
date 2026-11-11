@@ -8,9 +8,14 @@
 // problem, says the fix did not hold. A person links a change asked for in
 // a chat from the case drawer, and unlinks it; an agent's own link stays.
 import type { Page } from '@playwright/test'
+import { inKind } from './cluster'
 import { expect, test } from './test'
 
 test.describe.configure({ mode: 'serial' })
+// The fake audit's findings name the simulator's namespaces (analytics,
+// shop), which a kind cluster does not have: there they are invalid and
+// open no case. The Browser tests jobs run this file on the simulator.
+test.skip(inKind, "the fake audit's findings name the simulator's namespaces")
 
 const SAME = { 'Sec-Fetch-Site': 'same-origin' }
 const KEY = 'sk-ant-e2e-fake-key-0123456789'

@@ -6,7 +6,7 @@
 // simulator's fake Claude API.
 import type { Page } from '@playwright/test'
 import { expect, test } from './test'
-import { cluster } from './cluster'
+import { cluster, inKind } from './cluster'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -72,9 +72,10 @@ test('the checklist is the console as it is, and a step ticks itself once done (
   await expect(nav.first()).toContainText(/Getting started\s*(\d+ steps? left|Every step done or dismissed)/)
   await expect(page.getByTestId('setup-step')).toHaveCount(9)
   await expect(page.getByTestId('setup-step').first()).toContainText('Sign-in')
-  // The simulator signs people in through OIDC, and its cluster is connected.
+  // The simulator signs people in through OIDC, kind with the chart's
+  // local users; either way the cluster is connected.
   await expect(step(page, 'signin')).toHaveAttribute('data-state', 'done')
-  await expect(step(page, 'signin').getByTestId('setup-detail')).toHaveText('People sign in through OIDC.')
+  await expect(step(page, 'signin').getByTestId('setup-detail')).toHaveText(inKind ? /^\d+ local users?\.$/ : 'People sign in through OIDC.')
   await expect(step(page, 'clusters')).toHaveAttribute('data-state', 'done')
   // Fleets: done exactly when a cluster has one.
   const settings = (await (await page.request.get('/api/v1/settings')).json()) as { fleets?: Record<string, unknown[]> }

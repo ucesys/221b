@@ -8,7 +8,7 @@
 // and the top bar's bell, which is the Inbox's (CF-80).
 import type { Page, Route } from '@playwright/test'
 import { expect, test } from './test'
-import { cluster, podRows, snapshot } from './cluster'
+import { cluster, inKind, podRows, snapshot } from './cluster'
 import type { Proposal } from '../src/api/cards'
 
 test.describe.configure({ mode: 'serial' })
@@ -247,7 +247,9 @@ test('the bell stands for what waits in the Inbox, in every area, and opens it; 
   }
   await page.getByTestId('inbox-bell').click()
   await expect(page).toHaveURL(/#\/aiops\/inbox$/)
-  // The simulator has alerts going on: the Inbox says how many, and opens the Alerts tab.
+  // The simulator has alerts going on: the Inbox says how many, and opens
+  // the Alerts tab. A kind cluster has none.
+  if (inKind) return
   const link = page.getByTestId('inbox-alerts')
   await expect(link).toHaveText(/^\d+ alerts? now$/)
   await link.click()

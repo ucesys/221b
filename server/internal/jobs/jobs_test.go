@@ -308,6 +308,8 @@ func TestBudgetStopsForTheDay(t *testing.T) {
 	if _, err := w.s.RunNow(ctx, "test", Person{Email: "bob"}); !errors.Is(err, ErrBudget) {
 		t.Fatalf("a run past the day's budget: %v", err)
 	}
+	// The refused run answers before it lets the job go (R2-18).
+	w.s.Wait()
 	if r := runs(t, w.s)[0]; r.Status != StatusBudget || !strings.Contains(r.Note, "tomorrow") {
 		t.Fatalf("run: %+v", r)
 	}
