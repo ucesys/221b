@@ -97,10 +97,12 @@ jobs:
         run: hack/annotate.sh "Browser app" "$RUNNER_TEMP/ci.log"
 
   browsers:
-    # One job per browser: together they outgrew one job's half hour.
-    name: Browser tests (${{ matrix.name }})
+    # Each browser's suite runs in three shards, one job each: serially a
+    # browser took 25 to 43 minutes. Every shard starts its own simulator
+    # and console, so shards share no state.
+    name: Browser tests (${{ matrix.name }} ${{ matrix.shard }}/3)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 35
     # Firefox's page loads stall in CI, failing a different test each run:
     # its job still shows red, but does not fail the run or hold back an
     # image. Chromium and WebKit must pass.
@@ -108,6 +110,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        browser: [chromium, firefox, webkit]
+        shard: [1, 2, 3]
         include:
           - browser: chromium
             name: Chromium
@@ -134,8 +138,13 @@ jobs:
         env:
           BROWSER: ${{ matrix.browser }}
       - name: End-to-end tests against a simulated cluster
+        # A step that runs out of time fails; a job that does is cancelled,
+        # which continue-on-error does not cover, so a stalled Firefox shard
+        # would hold back a release tag's image.
+        timeout-minutes: 25
         env:
           E2E_BROWSERS: ${{ matrix.browser }}
+          E2E_ARGS: --shard=${{ matrix.shard }}/3
         run: make e2e-sim 2>&1 | tee -a "$RUNNER_TEMP/ci.log"
       - name: Report
         if: failure()
