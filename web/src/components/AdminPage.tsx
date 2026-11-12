@@ -5,10 +5,10 @@ import { PermissionsPage } from './PermissionsPage'
 import { RolesPage } from './RolesPage'
 import { SettingsPanel } from './SettingsPage'
 import { UsersPage } from './UsersPage'
-import { AdminApprovals } from './AdminApprovals'
 import { AdminAudit } from './AdminAudit'
 import { AdminBackup } from './AdminBackup'
 import { AdminSessions, AdminToolbox } from './toolbox/AdminToolbox'
+import { AddedInMycroft } from './ai/AddedInMycroft'
 
 export interface AdminProps {
   route: Route
@@ -23,9 +23,9 @@ const PAGES: { id: Page; label: string; tip: string; superOnly: boolean }[] = [
   { id: 'permissions', label: 'Permissions', tip: 'What each role may read and change', superOnly: false },
   { id: 'users', label: 'Users', tip: 'SuperAdmin only: the people 221B knows', superOnly: true },
   { id: 'toolbox', label: 'Toolbox', tip: 'SuperAdmin only: what the chart allows the Toolbox', superOnly: true },
-  { id: 'approvals', label: 'Approvals', tip: 'SuperAdmin only: what waits for your approval, and what was decided', superOnly: true },
+  // Approvals moved to AIOps › Inbox (Phase 12, CS-06); #/admin/approvals opens it there.
   { id: 'logs', label: 'Logs', tip: 'SuperAdmin only: the Toolbox’s sessions, and the audit log of who did what', superOnly: true },
-  { id: 'settings', label: 'Settings', tip: 'SuperAdmin only: refresh rate, Sherlock and Watson', superOnly: true },
+  { id: 'settings', label: 'Settings', tip: 'SuperAdmin only: general, AI, changes and AIOps settings', superOnly: true },
   { id: 'backup', label: 'Backup', tip: 'SuperAdmin only: a backup of the console’s own data, and a restore', superOnly: true },
 ]
 
@@ -103,6 +103,28 @@ function Refusal({ page, signedIn }: { page: Page; signedIn: boolean }) {
 }
 
 /**
+ * Settings › Knowledge for someone who is not a SuperAdmin: the Added in
+ * Mycroft card alone, for an Admin (MY-11); anyone else is refused, as for
+ * the rest of Settings.
+ */
+function AdminKnowledge({ onToast, focus }: { onToast: (msg: string) => void; focus: boolean }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }} data-testid="admin-knowledge-added">
+      <AddedInMycroft
+        onToast={onToast}
+        focus={focus}
+        fallback={<Refusal page="settings" signedIn />}
+        after={
+          <p className="rk-fhint" style={{ margin: 0 }}>
+            The rest of Settings › Knowledge, Mycroft’s sources and where the wiki is kept, is for SuperAdmins.
+          </p>
+        }
+      />
+    </div>
+  )
+}
+
+/**
  * The Administration area (RB-41): Roles, Permissions, Users and Settings
  * under one heading. Back or Escape returns to where it was opened from.
  */
@@ -134,7 +156,12 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
 
   const props: AdminProps = { route, me, now, cluster, onToast }
   return (
-    <main className="rk-main" style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '24px 20px 48px', overflow: 'auto', background: 'var(--bg)' }} aria-label="Administration" data-testid="admin-page">
+    <main
+      className="rk-main"
+      style={{ flex: '1 1 auto', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', padding: '24px 20px 48px', overflow: 'auto', background: 'var(--bg)' }}
+      aria-label="Administration"
+      data-testid="admin-page"
+    >
       <div style={{ width: 'min(1280px, 100%)', display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 16px' }}>
           <button className="rk-btn" onClick={closeAdmin} title="Back (Esc)" data-testid="admin-back">
@@ -146,7 +173,15 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
           <h1 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>Administration</h1>
           <nav aria-label="Administration pages" style={{ display: 'flex', flexWrap: 'wrap', gap: '0 18px', marginLeft: 8 }}>
             {PAGES.filter((p) => offered.includes(p.id)).map((p) => (
-              <a key={p.id} className="rk-tab" href={adminHref(p.id, [], p.id === 'roles' || p.id === 'permissions' || p.id === 'logs' || p.id === 'toolbox' ? route.cluster : 'local')} aria-current={p.id === page ? 'page' : undefined} title={p.tip} data-admin-page={p.id} style={{ height: 36 }}>
+              <a
+                key={p.id}
+                className="rk-tab"
+                href={adminHref(p.id, [], p.id === 'roles' || p.id === 'permissions' || p.id === 'logs' || p.id === 'toolbox' ? route.cluster : 'local')}
+                aria-current={p.id === page ? 'page' : undefined}
+                title={p.tip}
+                data-admin-page={p.id}
+                style={{ height: 36 }}
+              >
                 {p.label}
               </a>
             ))}
@@ -156,14 +191,15 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
           {PAGES.find((p) => p.id === page)!.label}
         </h2>
         {me === null && <p style={{ margin: 0, color: 'var(--fg3)' }}>Loading…</p>}
-        {me && refused && <Refusal page={page} signedIn />}
+        {/* Settings › Knowledge's Added in Mycroft card is where Admins add to the wiki too (MY-04, MY-11): the rest of Settings stays closed to them. */}
+        {me && refused && page === 'settings' && route.path[1] === 'knowledge' && <AdminKnowledge onToast={onToast} focus={route.path[2] === 'added'} />}
+        {me && refused && !(page === 'settings' && route.path[1] === 'knowledge') && <Refusal page={page} signedIn />}
         {me && !refused && page === 'roles' && <RolesPage {...props} />}
         {me && !refused && page === 'permissions' && <PermissionsPage {...props} />}
         {me && !refused && page === 'users' && <UsersPage {...props} />}
         {me && !refused && page === 'toolbox' && <AdminToolbox {...props} />}
-        {me && !refused && page === 'approvals' && <AdminApprovals {...props} />}
         {me && !refused && page === 'logs' && <Logs {...props} />}
-        {me && !refused && page === 'settings' && <SettingsPanel route={route} settings={settings} refreshedAt={refreshedAt} />}
+        {me && !refused && page === 'settings' && <SettingsPanel route={route} settings={settings} refreshedAt={refreshedAt} onToast={onToast} />}
         {me && !refused && page === 'backup' && <AdminBackup {...props} />}
       </div>
     </main>

@@ -20,28 +20,73 @@ import (
 	"time"
 )
 
-// RefKind says what a ref names.
+// RefKind says what a ref names: a git branch or tag, or a repository
+// chart's version.
 const (
-	RefBranch = "branch"
-	RefTag    = "tag"
+	RefBranch  = "branch"
+	RefTag     = "tag"
+	RefVersion = "version"
+)
+
+// --- Helm repositories (Phase 12, wave 5, HR-01 to HR-12) ---
+
+// The kinds of source: a git repository (the default, also ""), a Helm
+// chart repository over HTTP with its index.yaml, or an OCI registry.
+const (
+	KindGit  = "git"
+	KindHelm = "helm"
+	KindOCI  = "oci"
 )
 
 // Source is where an application's chart comes from: a git repository
-// reachable over HTTPS, a directory in it, and a branch or a tag.
+// reachable over HTTPS, a directory in it, and a branch or a tag; or a
+// chart of a Helm repository or an OCI registry, at a version (HR-01).
 type Source struct {
-	// Repo is the repository's HTTPS URL (https://github.com/org/app).
+	// Kind is git (or ""), helm or oci.
+	Kind string `json:"kind,omitempty"`
+	// Repo is the git repository's HTTPS URL (https://github.com/org/app),
+	// the Helm repository's URL (https://charts.example.com/stable), or
+	// the OCI registry's address with the charts' path, without the
+	// chart's name (oci://registry.example.com/charts).
 	Repo string `json:"repo"`
-	// Path is the chart's directory in the repository ("" for the root).
+	// Path is the chart's directory in a git repository ("" for the root).
 	Path string `json:"path,omitempty"`
-	// Ref is the branch or tag deployed.
+	// Chart is a Helm repository's or an OCI registry's chart, by name.
+	Chart string `json:"chart,omitempty"`
+	// Repository names the repository of Settings › Applications the chart
+	// comes from, whose credentials it is fetched with: always for a Helm
+	// repository, for an OCI registry when one covers its address.
+	Repository string `json:"repository,omitempty"`
+	// Ref is the branch or tag deployed, or the chart's version.
 	Ref string `json:"ref"`
-	// RefKind is branch or tag.
+	// RefKind is branch or tag, or version for a repository's chart.
 	RefKind string `json:"refKind"`
 }
 
+// FromRepository says the chart comes from a Helm repository or an OCI
+// registry rather than git.
+func (s Source) FromRepository() bool { return s.Kind == KindHelm || s.Kind == KindOCI }
+
+// ChartRef is a repository chart as a helm line names it: repo/chart, or
+// oci://registry/path/chart.
+func (s Source) ChartRef() string {
+	if s.Kind == KindOCI {
+		return s.Repo + "/" + s.Chart
+	}
+	return s.Repository + "/" + s.Chart
+}
+
 // String is the source as the table and the audit log show it:
-// github.com/org/app/charts/app @ v1.2.0.
+// github.com/org/app/charts/app @ v1.2.0; bitnami/nginx @ 18.1.0;
+// oci://ghcr.io/org/charts/app @ 1.2.0.
 func (s Source) String() string {
+	if s.FromRepository() {
+		v := s.Ref
+		if v == "" {
+			v = "newest"
+		}
+		return s.ChartRef() + " @ " + v
+	}
 	repo := strings.TrimPrefix(strings.TrimPrefix(s.Repo, "https://"), "http://")
 	repo = strings.TrimSuffix(repo, ".git")
 	if s.Path != "" {
@@ -67,6 +112,14 @@ var AllowLocalRepos bool
 // host the console connects to, the path must stay inside the repository
 // and hold plain path characters only, and the ref must be a plain name.
 func Normalize(s Source) (Source, error) {
+	switch s.Kind {
+	case KindHelm, KindOCI:
+		return normalizeRepoChart(s)
+	case "", KindGit:
+		s.Kind = ""
+	default:
+		return s, fmt.Errorf("a source is git, helm (a chart repository) or oci (an OCI registry), not %q", s.Kind)
+	}
 	repo := strings.TrimSpace(s.Repo)
 	if repo == "" {
 		return s, errors.New("name the repository, as https://github.com/org/app")
@@ -128,12 +181,134 @@ func normalizeRest(s Source) (Source, error) {
 // writes it. A token belongs to its repository: it never follows a source
 // to another one. A source that cannot be normalized matches nothing.
 func SameRepo(a, b Source) bool {
+	if a.FromRepository() || b.FromRepository() {
+		x, err := Normalize(Source{Kind: a.Kind, Repo: a.Repo, Chart: "x", Repository: a.Repository})
+		if err != nil {
+			return false
+		}
+		y, err := Normalize(Source{Kind: b.Kind, Repo: b.Repo, Chart: "x", Repository: b.Repository})
+		if err != nil || x.Kind != y.Kind {
+			return false
+		}
+		if x.Repo == "" || y.Repo == "" {
+			return x.Repository != "" && x.Repository == y.Repository
+		}
+		return x.Repo == y.Repo
+	}
 	x, err := Normalize(Source{Repo: a.Repo, Ref: "x"})
 	if err != nil {
 		return false
 	}
 	y, err := Normalize(Source{Repo: b.Repo, Ref: "x"})
 	return err == nil && x.Repo == y.Repo
+}
+
+// chartName is a repository chart's name, as Helm allows them; it goes on
+// a Watson line, so nothing in it reads as a flag or a separator.
+var chartName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+// chartVersion is a chart's version: a semantic version or a plain tag.
+var chartVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.+_-]{0,127}$`)
+
+// ociPath is an OCI repository's path, as the distribution spec allows.
+var ociPath = regexp.MustCompile(`^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$`)
+
+// RepoURL cleans a Helm repository's or an OCI registry's address and
+// says what is wrong with it: https:// (or oci://) on a host the console
+// connects to, without a user, query or fragment. A Helm repository's
+// trailing slash and index.yaml are taken off.
+func RepoURL(kind, raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	switch kind {
+	case KindHelm:
+		if !strings.Contains(raw, "://") {
+			raw = "https://" + raw
+		}
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || !(u.Scheme == "https" || AllowLocalRepos && u.Scheme == "http") {
+			return "", errors.New("a Helm repository's address is an https:// URL without a user, query or fragment")
+		}
+		if refusedName(u.Hostname()) && !AllowLocalRepos {
+			return "", errHostRefused
+		}
+		u.Path = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/index.yaml"), "/")
+		return u.String(), nil
+	case KindOCI:
+		rest, ok := strings.CutPrefix(raw, "oci://")
+		if !ok {
+			return "", errors.New("an OCI registry's address starts with oci://, as oci://registry.example.com/charts")
+		}
+		host, p, _ := strings.Cut(strings.TrimSuffix(rest, "/"), "/")
+		u, err := url.Parse("https://" + host)
+		if err != nil || u.Host == "" || u.User != nil || u.Path != "" || host == "" {
+			return "", errors.New("an OCI registry's address is oci://host[:port]/path")
+		}
+		if refusedName(u.Hostname()) && !AllowLocalRepos {
+			return "", errHostRefused
+		}
+		if p != "" && !ociPath.MatchString(p) {
+			return "", errors.New("an OCI registry's path holds lowercase letters, digits and . _ - between slashes")
+		}
+		out := "oci://" + strings.ToLower(host)
+		if p != "" {
+			out += "/" + p
+		}
+		return out, nil
+	}
+	return "", fmt.Errorf("a repository is helm or oci, not %q", kind)
+}
+
+// normalizeRepoChart checks a Helm repository's or an OCI registry's
+// chart: the address, the chart's name, and the version, which may be
+// left empty for the newest (a deploy settles it before anything is
+// kept). A Helm repository's chart is named by the repository it is in;
+// the address is the repository's, filled in from the list of
+// repositories (Repos.Resolve).
+func normalizeRepoChart(s Source) (Source, error) {
+	s.Path = ""
+	s.Chart = strings.TrimSpace(s.Chart)
+	s.Repository = strings.TrimSpace(s.Repository)
+	if s.Kind == KindHelm && s.Repository == "" {
+		return s, errors.New("name the chart repository, as Settings › Applications lists it")
+	}
+	if s.Repository != "" && !repoName.MatchString(s.Repository) {
+		return s, fmt.Errorf("%q is not a repository's name", s.Repository)
+	}
+	if s.Repo != "" || s.Kind == KindOCI {
+		u, err := RepoURL(s.Kind, s.Repo)
+		if err != nil {
+			return s, err
+		}
+		s.Repo = u
+	}
+	if !chartName.MatchString(s.Chart) {
+		return s, errors.New("name the chart: letters, digits and . _ -, starting with a letter or digit")
+	}
+	s.Ref = strings.TrimSpace(s.Ref)
+	if s.Ref != "" && !chartVersion.MatchString(s.Ref) {
+		return s, fmt.Errorf("%q is not a chart version", s.Ref)
+	}
+	s.RefKind = RefVersion
+	return s, nil
+}
+
+// ParseChartRef reads a chart as a helm line names it (HR-07): repo/chart,
+// a chart of a repository Settings › Applications lists, or
+// oci://registry/path/chart; version is --version, "" for the newest.
+func ParseChartRef(ref, version string) (Source, error) {
+	ref = strings.TrimSpace(ref)
+	if strings.HasPrefix(ref, "oci://") {
+		i := strings.LastIndex(ref, "/")
+		if i <= len("oci://") {
+			return Source{}, errors.New("an OCI chart is oci://registry/path/chart")
+		}
+		return Normalize(Source{Kind: KindOCI, Repo: ref[:i], Chart: ref[i+1:], Ref: version})
+	}
+	repo, chart, ok := strings.Cut(ref, "/")
+	if !ok || strings.Contains(chart, "/") || strings.Contains(ref, "://") {
+		return Source{}, fmt.Errorf("%q is not a chart: name it as repo/chart, with a repository Settings › Applications lists, or as oci://registry/path/chart (a chart in git is --git URL)", ref)
+	}
+	return Normalize(Source{Kind: KindHelm, Repository: repo, Chart: chart, Ref: version})
 }
 
 // Record is what the console keeps about an application (HA-03).

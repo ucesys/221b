@@ -2,7 +2,6 @@ package api
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -52,14 +51,14 @@ func (s *source) RestConfig() *rest.Config { return s.restCfg }
 // multiSetup runs the console with sign-in by local accounts (an
 // administrator and a viewer), the fake cache as the local cluster and a
 // manager over a memory store, and returns a client signed in as who.
-func multiSetup(t *testing.T, who string) (*httptest.Server, *http.Client, *clusters.Manager, *bytes.Buffer) {
+func multiSetup(t *testing.T, who string) (*httptest.Server, *http.Client, *clusters.Manager, *lockedBuffer) {
 	srv, c, m, out, _, _ := multiSetupWith(t, who, nil)
 	return srv, c, m, out
 }
 
 // multiSetupWith is multiSetup with the fake authorizer refusing some
 // "resource/namespace" pairs to every person (P3-02).
-func multiSetupWith(t *testing.T, who string, deny map[string]bool, mods ...func(*Options)) (*httptest.Server, *http.Client, *clusters.Manager, *bytes.Buffer, *source, *live.Store) {
+func multiSetupWith(t *testing.T, who string, deny map[string]bool, mods ...func(*Options)) (*httptest.Server, *http.Client, *clusters.Manager, *lockedBuffer, *source, *live.Store) {
 	t.Helper()
 	local := &source{Source: fake.New("n1", "n2"), logs: map[string][]string{}, deny: deny}
 	for _, ns := range []string{"default", "kube-system", "web"} {
@@ -81,7 +80,9 @@ func multiSetupWith(t *testing.T, who string, deny map[string]bool, mods ...func
 	if err := m.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var auditOut bytes.Buffer
+	// The audit log is written from the requests' goroutines and those
+	// they start, while the tests read it: a buffer with a lock.
+	var auditOut lockedBuffer
 	hash, _ := auth.HashPassword("correct horse battery staple")
 	svc, err := auth.New(auth.Config{
 		Mode: auth.ModeLocal,

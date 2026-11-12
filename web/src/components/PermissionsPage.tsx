@@ -74,7 +74,12 @@ function RoleDrawer({ perm, row, differences, onClose, onToast }: { perm: PermRo
                 ['Kubernetes object', <span className="rk-mono">ClusterRole {perm.clusterRole}</span>],
                 ['Definition', perm.definition === 'full' ? 'Elevated: the changes Watson supports, within its reach' : 'Read-only: no verb that changes anything'],
                 ['Where it applies', row?.scope ?? reachText(perm.id)],
-                ['How people get it', perm.id === 'admin' || perm.id === 'viewer' ? 'A group listed for it in values (auth.ldap.roles, auth.oidc.roles or auth.local.groups), bound by Helm in each of its namespaces' : 'Held in 221B: a directory group listed for it, or given to a local user on the Users page'],
+                [
+                  'How people get it',
+                  perm.id === 'admin' || perm.id === 'viewer'
+                    ? 'A group listed for it in values (auth.ldap.roles, auth.oidc.roles or auth.local.groups), bound by Helm in each of its namespaces'
+                    : 'Held in 221B: a directory group listed for it, or given to a local user on the Users page',
+                ],
                 ['On this cluster', perm.present ? 'Installed' : 'Not installed: people with it see nothing here'],
                 ['Permissions', `${roleTotalsText(perm)} · ${t.kinds} ${t.kinds === 1 ? 'kind' : 'kinds'} in all`],
                 ['Sensitive', sensitive.length ? sensitive.join(', ') : 'None'],
@@ -190,13 +195,7 @@ export function PermissionsPage({ route, now, cluster, onToast }: AdminProps) {
                   data-role-summary={r.id}
                   data-selected={on ? 'true' : undefined}
                 >
-                  <button
-                    aria-pressed={on}
-                    onClick={() => setRole(on ? null : r.id)}
-                    title={on ? 'Show every role' : `Show only ${ROLE_NAME[r.id]}`}
-                    className="rk-roletile"
-                    data-testid={`role-filter-${r.id}`}
-                  >
+                  <button aria-pressed={on} onClick={() => setRole(on ? null : r.id)} title={on ? 'Show every role' : `Show only ${ROLE_NAME[r.id]}`} className="rk-roletile" data-testid={`role-filter-${r.id}`}>
                     <span style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
                       <span style={{ fontWeight: 600 }}>{ROLE_NAME[r.id]}</span>
                       <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{r.definition === 'full' ? 'Elevated' : 'Read-only'}</span>

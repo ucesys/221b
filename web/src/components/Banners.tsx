@@ -5,6 +5,8 @@ import type { ClusterInfo } from '../api/types'
 import type { StreamState } from '../api/live'
 import { fmtTs } from '../lib/format'
 import { AlertIcon, ClockIcon } from './Icons'
+import { errorSummary } from '../lib/reportLink'
+import { ReportPageLink } from './aiops/ReportPageLink'
 
 interface Props {
   cluster: ClusterInfo | null
@@ -76,7 +78,8 @@ export function Banners({ cluster, stream, now, summary, pageHref, accessError, 
   // What is failing in the cluster comes after what is wrong with the view
   // of it, and only while the cluster is connected.
   if (cluster?.state === 'connected') {
-    for (const a of alerts) list.push({ tone: a.tone, title: a.title, detail: a.detail, items: a.items, mono: true, testid: 'alert-banner', link: alertsHref ? { href: alertsHref, label: 'View alerts →', testid: 'alert-banner-link' } : undefined })
+    for (const a of alerts)
+      list.push({ tone: a.tone, title: a.title, detail: a.detail, items: a.items, mono: true, testid: 'alert-banner', link: alertsHref ? { href: alertsHref, label: 'View alerts →', testid: 'alert-banner-link' } : undefined })
   }
   if (!list.length) return null
   return (
@@ -105,6 +108,12 @@ export function Banners({ cluster, stream, now, summary, pageHref, accessError, 
             <a href={b.link.href} data-testid={b.link.testid ?? 'banner-link'}>
               {b.link.label}
             </a>
+          )}
+          {/* Phase 12 (CS-19): a failed load can be reported, the screen and the error filled in. */}
+          {b.tone === 'err' && b.testid !== 'alert-banner' && (
+            <ReportPageLink className="rk-link" text={() => errorSummary(`${cluster?.name ?? 'a cluster'}'s pages`, `${b.title}. ${b.detail}`)} testId="banner-report">
+              Report this problem ↗
+            </ReportPageLink>
           )}
         </div>
       ))}

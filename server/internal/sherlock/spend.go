@@ -25,7 +25,22 @@ type Spend struct {
 	Month      string  `json:"month"`
 	MonthUSD   float64 `json:"monthUSD"`
 	MonthAsked int     `json:"monthAsked"`
+	// Agents is each agent's share of the figures above, by its id (Phase
+	// 12): what an agent spends counts against its own caps and, with
+	// every other agent's, against the overall ones.
+	Agents map[string]AgentSpend `json:"agents,omitempty"`
 }
+
+// AgentSpend is one agent's share of the spend, of the same day and month.
+type AgentSpend struct {
+	DayUSD     float64 `json:"dayUSD"`
+	DayAsked   int     `json:"dayAsked"`
+	MonthUSD   float64 `json:"monthUSD"`
+	MonthAsked int     `json:"monthAsked"`
+}
+
+// Agent is an agent's share; nothing spent is zero.
+func (s Spend) Agent(id string) AgentSpend { return s.Agents[id] }
 
 // Ledger counts the spend and keeps it next to the settings, so a
 // restart does not reset it. With several replicas (P7-02) it never saves
@@ -77,30 +92,71 @@ func NewLedger(b kv.Backend, now func() time.Time, log *slog.Logger) *Ledger {
 	return &Ledger{backend: b, now: now, log: log}
 }
 
-// rolled is the spend as of t: a new day or month starts from zero.
+// rolled is the spend as of t: a new day or month starts from zero, the
+// agents' shares too.
 func rolled(s Spend, t time.Time) Spend {
 	t = t.UTC()
 	day, month := t.Format("2006-01-02"), t.Format("2006-01")
-	if s.Month != month {
+	newMonth, newDay := s.Month != month, s.Day != day
+	if newMonth {
 		s.Month, s.MonthUSD, s.MonthAsked = month, 0, 0
 	}
-	if s.Day != day {
+	if newDay {
 		s.Day, s.DayUSD, s.DayAsked = day, 0, 0
+	}
+	if (newMonth || newDay) && s.Agents != nil {
+		agents := make(map[string]AgentSpend, len(s.Agents))
+		for id, a := range s.Agents {
+			if newMonth {
+				a.MonthUSD, a.MonthAsked = 0, 0
+			}
+			if newDay {
+				a.DayUSD, a.DayAsked = 0, 0
+			}
+			if a != (AgentSpend{}) {
+				agents[id] = a
+			}
+		}
+		s.Agents = agents
 	}
 	return s
 }
 
 // plus adds counts of the same day and month to s.
 func plus(s, p Spend) Spend {
+	if len(p.Agents) > 0 {
+		agents := make(map[string]AgentSpend, len(s.Agents)+len(p.Agents))
+		for id, a := range s.Agents {
+			agents[id] = a
+		}
+		s.Agents = agents
+	}
 	if p.Day == s.Day {
 		s.DayUSD += p.DayUSD
 		s.DayAsked += p.DayAsked
+		for id, a := range p.Agents {
+			x := s.Agents[id]
+			x.DayUSD += a.DayUSD
+			x.DayAsked += a.DayAsked
+			s.Agents[id] = x
+		}
 	}
 	if p.Month == s.Month {
 		s.MonthUSD += p.MonthUSD
 		s.MonthAsked += p.MonthAsked
+		for id, a := range p.Agents {
+			x := s.Agents[id]
+			x.MonthUSD += a.MonthUSD
+			x.MonthAsked += a.MonthAsked
+			s.Agents[id] = x
+		}
 	}
 	return s
+}
+
+// empty says whether nothing was counted.
+func (s Spend) empty() bool {
+	return s.DayUSD == 0 && s.DayAsked == 0 && s.MonthUSD == 0 && s.MonthAsked == 0 && len(s.Agents) == 0
 }
 
 // read loads the saved spend and its version.
@@ -155,6 +211,11 @@ func (l *Ledger) Now(ctx context.Context) Spend {
 
 // Add counts a cost; asked counts a new question. Save writes it.
 func (l *Ledger) Add(ctx context.Context, usd float64, asked bool) Spend {
+	return l.AddFor(ctx, "", usd, asked)
+}
+
+// AddFor counts a cost as an agent's too (Phase 12); "" is no agent's.
+func (l *Ledger) AddFor(ctx context.Context, agent string, usd float64, asked bool) Spend {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.refreshLocked(ctx)
@@ -165,6 +226,19 @@ func (l *Ledger) Add(ctx context.Context, usd float64, asked bool) Spend {
 	if asked {
 		l.pending.DayAsked++
 		l.pending.MonthAsked++
+	}
+	if agent != "" {
+		if l.pending.Agents == nil {
+			l.pending.Agents = map[string]AgentSpend{}
+		}
+		a := l.pending.Agents[agent]
+		a.DayUSD += usd
+		a.MonthUSD += usd
+		if asked {
+			a.DayAsked++
+			a.MonthAsked++
+		}
+		l.pending.Agents[agent] = a
 	}
 	return plus(rolled(l.saved, t), l.pending)
 }
@@ -181,7 +255,7 @@ func (l *Ledger) Save(ctx context.Context) (err error) {
 			l.unsaved = ""
 		}
 	}()
-	if l.pending == (Spend{Day: l.pending.Day, Month: l.pending.Month}) {
+	if l.pending.empty() {
 		return nil
 	}
 	for attempt := 1; ; attempt++ {
@@ -214,12 +288,17 @@ type Caps struct {
 type ErrCap struct {
 	Which string
 	Cap   float64
+	// Agent names the agent whose own cap it is; "" is the overall cap.
+	Agent string
 }
 
 func (e *ErrCap) Error() string {
 	when := "tomorrow (UTC)"
 	if e.Which == "monthly" {
 		when = "next month"
+	}
+	if e.Agent != "" {
+		return fmt.Sprintf("%s has reached its %s spending cap of $%.2f an administrator set. It works again %s, or when an administrator raises the cap in Settings › Agents.", e.Agent, e.Which, e.Cap, when)
 	}
 	return fmt.Sprintf("Sherlock has reached the %s spending cap of $%.2f an administrator set. It answers again %s, or when an administrator raises the cap in Settings.", e.Which, e.Cap, when)
 }
@@ -231,6 +310,19 @@ func (c Caps) Check(s Spend) error {
 	}
 	if c.MonthlyUSD > 0 && s.MonthUSD >= c.MonthlyUSD {
 		return &ErrCap{Which: "monthly", Cap: c.MonthlyUSD}
+	}
+	return nil
+}
+
+// CheckAgent says whether an agent's share of the spend is under its own
+// caps; name names it in the message.
+func (c Caps) CheckAgent(s Spend, id, name string) error {
+	a := s.Agent(id)
+	if c.DailyUSD > 0 && a.DayUSD >= c.DailyUSD {
+		return &ErrCap{Which: "daily", Cap: c.DailyUSD, Agent: name}
+	}
+	if c.MonthlyUSD > 0 && a.MonthUSD >= c.MonthlyUSD {
+		return &ErrCap{Which: "monthly", Cap: c.MonthlyUSD, Agent: name}
 	}
 	return nil
 }

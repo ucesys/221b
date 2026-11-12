@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { NodeRow } from '../api/types'
 import { pickedNodes, setPickedNodes } from '../lib/fleets'
 
@@ -37,11 +37,30 @@ export function PickBox({ name, picked, onToggle }: { name: string; picked: bool
 }
 
 /** The Nodes table's picks, for its name column: nothing where this person has nothing to do with them. */
-export const NodePicking = createContext<{ picked: Set<string>; toggle: (name: string) => void } | null>(null)
+export const NodePicking = createContext<{ picked: Set<string>; toggle: (name: string) => void; shown: string[]; setMany: (names: string[], on: boolean) => void } | null>(null)
 
 /** The box in a table row, from the page's picks. */
 export function RowPickBox({ name }: { name: string }) {
   const ctx = useContext(NodePicking)
   if (!ctx) return null
   return <PickBox name={name} picked={ctx.picked.has(name)} onToggle={ctx.toggle} />
+}
+
+/** The box in the name column's heading: picks every node in view, or, when all are, unpicks them; half ticked when some are. */
+export function HeadPickBox() {
+  const ctx = useContext(NodePicking)
+  const box = useRef<HTMLInputElement>(null)
+  const n = ctx ? ctx.shown.filter((name) => ctx.picked.has(name)).length : 0
+  const all = !!ctx && ctx.shown.length > 0 && n === ctx.shown.length
+  const some = n > 0 && !all
+  useEffect(() => {
+    if (box.current) box.current.indeterminate = some
+  }, [some])
+  if (!ctx) return null
+  const what = all ? `Unpick the ${ctx.shown.length} nodes in view` : `Pick the ${ctx.shown.length} nodes in view`
+  return (
+    <label className="rk-pickbox" style={{ alignSelf: 'center', margin: '0 0 0 4px' }}>
+      <input ref={box} type="checkbox" checked={all} disabled={!ctx.shown.length} onChange={() => ctx.setMany(ctx.shown, !all)} aria-label={what} title={what} data-testid="fleet-pick-all" />
+    </label>
+  )
 }

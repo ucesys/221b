@@ -112,7 +112,12 @@ function ContainerCard({ c, now, usage }: { c: ContainerDetail; now: number; usa
           <ul className="rk-mono" style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.6 }}>
             {c.mounts.map((m) => (
               <li key={m.path}>
-                {m.path} <span style={{ color: 'var(--fg3)' }}>← {m.volume}{m.subPath ? '/' + m.subPath : ''}{m.readOnly ? ' (read-only)' : ''}</span>
+                {m.path}{' '}
+                <span style={{ color: 'var(--fg3)' }}>
+                  ← {m.volume}
+                  {m.subPath ? '/' + m.subPath : ''}
+                  {m.readOnly ? ' (read-only)' : ''}
+                </span>
               </li>
             ))}
           </ul>
@@ -260,7 +265,11 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
           {details.error}
         </p>
       )}
-      {!d && !details.error && <p data-peek-loading="" style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>Loading…</p>}
+      {!d && !details.error && (
+        <p data-peek-loading="" style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>
+          Loading…
+        </p>
+      )}
       {d && tab === 'overview' && (
         <>
           {d.unschedulable && (
@@ -338,13 +347,29 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
                 <dt>Tolerations</dt>
                 <dd>
                   <span style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                    {d.tolerations.length ? d.tolerations.map((t) => <span key={t} className="rk-chip">{t}</span>) : <span className="rk-chip">none</span>}
+                    {d.tolerations.length ? (
+                      d.tolerations.map((t) => (
+                        <span key={t} className="rk-chip">
+                          {t}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="rk-chip">none</span>
+                    )}
                   </span>
                 </dd>
                 <dt>Affinity</dt>
                 <dd>
                   <span style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                    {d.affinity.length ? d.affinity.map((a) => <span key={a} className="rk-chip">{a}</span>) : <span className="rk-chip">none</span>}
+                    {d.affinity.length ? (
+                      d.affinity.map((a) => (
+                        <span key={a} className="rk-chip">
+                          {a}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="rk-chip">none</span>
+                    )}
                   </span>
                 </dd>
               </dl>
@@ -352,7 +377,12 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
           </div>
           <Card title="Resources per container" pad={false}>
             <ScrollBox label="Resources per container">
-              <Table label="Resources per container" template="minmax(190px, 1.6fr) 90px 90px 100px 100px" minWidth={570} cols={[{ label: 'Container' }, { label: 'CPU req', right: true }, { label: 'CPU limit', right: true }, { label: 'Mem req', right: true }, { label: 'Mem limit', right: true }]}>
+              <Table
+                label="Resources per container"
+                template="minmax(190px, 1.6fr) 90px 90px 100px 100px"
+                minWidth={570}
+                cols={[{ label: 'Container' }, { label: 'CPU req', right: true }, { label: 'CPU limit', right: true }, { label: 'Mem req', right: true }, { label: 'Mem limit', right: true }]}
+              >
                 {d.containers.map((c) => (
                   <TR key={c.name}>
                     <span>
@@ -406,9 +436,17 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
               <span style={{ fontSize: 12, color: 'var(--fg3)' }}>run to completion before the app containers start; sidecars keep running</span>
             </div>
           )}
-          {d.containers.filter((c) => c.init).map((c) => <ContainerCard key={c.name} c={c} now={now} usage={null} />)}
+          {d.containers
+            .filter((c) => c.init)
+            .map((c) => (
+              <ContainerCard key={c.name} c={c} now={now} usage={null} />
+            ))}
           {d.containers.some((c) => c.init) && <h3 className="rk-h">Containers</h3>}
-          {d.containers.filter((c) => !c.init).map((c) => <ContainerCard key={c.name} c={c} now={now} usage={null} />)}
+          {d.containers
+            .filter((c) => !c.init)
+            .map((c) => (
+              <ContainerCard key={c.name} c={c} now={now} usage={null} />
+            ))}
         </>
       )}
       {d && tab === 'environment' && (
@@ -487,7 +525,14 @@ export function PodPanel({ podKey, row, gone, cluster, now, onClose, onToast }: 
                 </span>
                 {v.claim && (
                   // ST-21: the claim's pill opens its drawer on the Storage tab.
-                  <a className="rk-pill" data-tone={v.claim.phase === 'Bound' ? 'ok' : 'warn'} href={href('storage', [], { peek: `claim:${ns}/${v.claim.name}` })} title={`Open the claim ${v.claim.name} on the Storage tab`} style={{ textDecoration: 'none' }} data-testid="pod-claim-link">
+                  <a
+                    className="rk-pill"
+                    data-tone={v.claim.phase === 'Bound' ? 'ok' : 'warn'}
+                    href={href('storage', [], { peek: `claim:${ns}/${v.claim.name}` })}
+                    title={`Open the claim ${v.claim.name} on the Storage tab`}
+                    style={{ textDecoration: 'none' }}
+                    data-testid="pod-claim-link"
+                  >
                     <span className="rk-dot" />
                     {v.claim.phase}
                     {v.claim.capacity ? ` · ${v.claim.capacity}` : ''}

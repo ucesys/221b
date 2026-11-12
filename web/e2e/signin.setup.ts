@@ -32,5 +32,14 @@ setup('sign in', async ({ page }, testInfo) => {
   const me = await page.evaluate(() => fetch('/api/v1/me').then((r) => r.json() as Promise<{ mode: string; admin: boolean }>))
   // With sign-in off everyone is a Viewer (the scale run reads only).
   if (me.mode !== 'none') expect(me.admin, 'the test account is an administrator').toBe(true)
+  // The cases' safety net opens a P0 case on its own for a critical alert
+  // still going after its minutes (CF-78): the simulator's crash-looping pod
+  // would get one partway through the run, and change what other specs
+  // count. Off for the suite.
+  if (me.admin) {
+    const cur = (await (await page.request.get('/api/v1/aiops/settings')).json()) as Record<string, unknown>
+    const res = await page.request.put('/api/v1/aiops/settings', { headers: { 'Sec-Fetch-Site': 'same-origin' }, data: { ...cur, criticalAlertMinutes: 0 } })
+    expect(res.status(), await res.text()).toBe(200)
+  }
   await page.context().storageState({ path: sessionFile(testInfo.project.name) })
 })

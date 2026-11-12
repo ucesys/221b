@@ -162,7 +162,8 @@ export function AdminAudit({ onToast }: AdminProps) {
       )}
       {page && (
         <p className="tb-hint" style={{ margin: 0 }}>
-          {events.length} of {page.total} kept events shown{events.length === 500 ? ' (the newest 500; narrow the search for older ones)' : ''}. The console keeps the newest 2,000 events beside its settings; the full log is on its standard output and the audit webhook, when one is configured.
+          {events.length} of {page.total} kept events shown{events.length === 500 ? ' (the newest 500; narrow the search for older ones)' : ''}. The console keeps the newest 2,000 events beside its settings; the full log is on its standard
+          output and the audit webhook, when one is configured.
         </p>
       )}
     </section>

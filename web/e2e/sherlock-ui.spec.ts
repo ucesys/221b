@@ -16,10 +16,7 @@ const KEY = 'sk-ant-e2e-fake-key-0123456789'
 const ON = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
 
 async function put(page: Page, path: string, body: unknown, method = 'PUT'): Promise<number> {
-  return page.evaluate(
-    async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) })).status,
-    [path, body, method] as const,
-  )
+  return page.evaluate(async ([p, b, m]) => (await fetch(p as string, { method: m as string, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) })).status, [path, body, method] as const)
 }
 
 async function open(page: Page, hash = '#/pods') {
@@ -188,7 +185,10 @@ test('Sherlock yields when the person changes the view during the answer (P6U-09
   await open(page, '#/pods')
   await ask(page, '[[view_state]] [[sleep 2500]] [[view_filter {"set":{"status":"failing"}}]]')
   await expect(lastAnswer(page).getByTestId('sherlock-steps').locator('[data-status=done]')).toHaveCount(1, { timeout: 15_000 })
-  await page.getByRole('link', { name: /^Nodes/ }).first().click()
+  await page
+    .getByRole('link', { name: /^Nodes/ })
+    .first()
+    .click()
   await expect(page).toHaveURL(/#\/nodes/)
   await done(page)
   expect(page.url()).not.toContain('status=failing')

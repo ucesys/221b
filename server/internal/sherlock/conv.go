@@ -54,8 +54,10 @@ type Msg struct {
 	Refs   []Ref  `json:"refs,omitempty"`
 	Status string `json:"status,omitempty"` // thinking, answering, done, stopped, failed
 	Error  string `json:"error,omitempty"`
-	// Asker names who asked, for a conversation seen in another window.
-	At time.Time `json:"at"`
+	// Asker names who asked, in a conversation shared by the people who
+	// work a case (CF-47).
+	Asker string    `json:"asker,omitempty"`
+	At    time.Time `json:"at"`
 	// FirstAt is when the first step or word arrived; DoneAt when the
 	// answer ended.
 	FirstAt *time.Time `json:"firstAt,omitempty"`
@@ -65,6 +67,10 @@ type Msg struct {
 	CostUSD float64    `json:"costUSD,omitempty"`
 	// View is what the answer changed in the asking window's view (P6U-10).
 	View []ViewChange `json:"view,omitempty"`
+	// Agent is who answered, when not Sherlock as the settings have it
+	// (Phase 12); Hands are the parts it handed to other agents.
+	Agent string  `json:"agent,omitempty"`
+	Hands []*Hand `json:"hands,omitempty"`
 }
 
 // Key names a conversation: one per session and cluster.
@@ -94,7 +100,27 @@ type Conversation struct {
 	uiOut  []UIRequest
 	uiSeq  int
 	uiWait map[string]chan UIResult
+	// traces are the tool calls of the latest answers, by message, for
+	// saving one as a test case (Phase 12).
+	traces map[int]Trace
+	// kept says a Keeper keeps it (a case's, CF-47); forgotten that it was
+	// dropped (the case closed), so nothing more is saved of it.
+	kept      bool
+	forgotten bool
 }
+
+// Trace is an answer's question and tool calls, as sent to the model.
+type Trace struct {
+	Agent    string     `json:"agent"`
+	Cluster  string     `json:"cluster"`
+	Question string     `json:"question"`
+	Answer   string     `json:"answer"`
+	Tools    []Recorded `json:"tools"`
+	At       time.Time  `json:"at"`
+}
+
+// maxTraces bounds the traces a conversation keeps.
+const maxTraces = 20
 
 // View is a conversation as the browser receives it.
 type View struct {
@@ -118,6 +144,7 @@ func (c *Conversation) viewLocked() View {
 		cp.Steps = append([]Step(nil), m.Steps...)
 		cp.Refs = append([]Ref(nil), m.Refs...)
 		cp.View = append([]ViewChange(nil), m.View...)
+		cp.Hands = copyHands(m.Hands)
 		out[i] = &cp
 	}
 	return View{ID: c.ID, Messages: out, Busy: c.busy, Rev: c.rev}
@@ -185,9 +212,12 @@ type Options struct {
 	// CommandOK says whether Watson would run a command line; nil checks
 	// none. An answer's shell blocks are kept to what it runs (FixBlocks).
 	CommandOK func(line string) error
-	Audit     *audit.Log
-	Now       func() time.Time
-	Logger    *slog.Logger
+	// Commands is the sentence that says what Watson runs, for the
+	// built-in instructions (watson.Commands, S-1).
+	Commands string
+	Audit    *audit.Log
+	Now      func() time.Time
+	Logger   *slog.Logger
 	// MaxRounds bounds the tool rounds of one answer.
 	MaxRounds int
 	// MaxTokens bounds one reply, its thinking included.
@@ -203,6 +233,30 @@ type Options struct {
 	MaxQuestions int
 	// UITimeout is how long a UI action waits for the browser.
 	UITimeout time.Duration
+	// Agent resolves an agent for a question (Phase 12): its model and
+	// provider, instructions, tools, budget and the agents it can hand
+	// work to. nil answers as Sherlock with Settings and Client.
+	Agent func(id string, q Question) (Agent, error)
+	// OnAnswer is told of every answer that ended, for the pilot's log.
+	OnAnswer func(Answered)
+	// Knowledge answers ask_knowledge from Mycroft's wiki and the
+	// sources' excerpts (Phase 12, ADR-96); nil answers NoKnowledge.
+	// exceptions says the question's asker may be given the accepted
+	// exceptions (Question.Exceptions, KN-32).
+	Knowledge func(ctx context.Context, query string, limit int, exceptions bool) ([]KnowledgeHit, error)
+	// Keeper keeps the conversations that outlive a session: a case's
+	// (Phase 12, wave 6f, CF-47); nil keeps none.
+	Keeper Keeper
+}
+
+// Answered is an answer that ended, as OnAnswer is told of it.
+type Answered struct {
+	Agent   string
+	Version string
+	Who     audit.Who
+	Cluster string
+	Msg     Msg
+	Trace   Trace
 }
 
 // Service keeps the conversations and answers questions.
@@ -215,7 +269,12 @@ type Service struct {
 	wg      sync.WaitGroup
 	// noUsage names the providers and models seen to report no usage.
 	noUsage map[string]bool
+	// recent are the latest answers' traces, newest last, for a replay.
+	recent []Trace
 }
+
+// maxRecent bounds the traces kept for replays.
+const maxRecent = 60
 
 // New returns the service.
 func New(o Options) *Service {
@@ -257,8 +316,8 @@ func New(o Options) *Service {
 
 // noteNoUsage warns, once for each provider and model, of answers whose
 // spend can only be estimated.
-func (s *Service) noteNoUsage(model string) {
-	who := s.opts.Client.provider().Name() + " with " + model
+func (s *Service) noteNoUsage(client *Client, model string) {
+	who := client.provider().Name() + " with " + model
 	s.mu.Lock()
 	seen := s.noUsage[who]
 	s.noUsage[who] = true
@@ -284,13 +343,26 @@ func (s *Service) NoUsage() []string {
 // Ledger is the spend.
 func (s *Service) Ledger() *Ledger { return s.opts.Ledger }
 
-// Conversation returns the conversation for a key, making it if needed.
+// Conversation returns the conversation for a key, making it if needed:
+// a kept one (CF-47) is read from its keeper.
 func (s *Service) Conversation(k Key) *Conversation {
 	s.mu.Lock()
+	if c := s.convs[k]; c != nil {
+		c.lastUsed = s.opts.Now()
+		s.mu.Unlock()
+		return c
+	}
+	s.mu.Unlock()
+	c := &Conversation{ID: newID(), known: Known{}, subs: map[chan struct{}]struct{}{}, uiWait: map[string]chan UIResult{}, traces: map[int]Trace{}}
+	if kp := s.keeperOf(k); kp != nil {
+		c.kept = true
+		s.loadKept(c, kp, k)
+	}
+	s.mu.Lock()
 	defer s.mu.Unlock()
-	c := s.convs[k]
-	if c == nil {
-		c = &Conversation{ID: newID(), known: Known{}, subs: map[chan struct{}]struct{}{}, uiWait: map[string]chan UIResult{}}
+	if have := s.convs[k]; have != nil {
+		c = have
+	} else {
 		s.convs[k] = c
 	}
 	c.lastUsed = s.opts.Now()
@@ -319,7 +391,9 @@ func (s *Service) Sweep(alive func(session string) bool) {
 	defer s.mu.Unlock()
 	for k, c := range s.convs {
 		c.mu.Lock()
-		gone := !c.busy && (now.Sub(c.lastUsed) > s.opts.Idle || (alive != nil && k.Session != "" && !alive(k.Session)))
+		// A kept conversation is no session's: it goes when idle only, and
+		// is read again from its keeper when next used.
+		gone := !c.busy && (now.Sub(c.lastUsed) > s.opts.Idle || (alive != nil && k.Session != "" && !c.kept && !alive(k.Session)))
 		c.mu.Unlock()
 		if gone {
 			delete(s.convs, k)
@@ -357,6 +431,30 @@ type Question struct {
 	View string
 	// ViewChanges offers the UI actions that change the view (P6U-14).
 	ViewChanges bool
+	// Commands is the sentence of the built-in instructions that says what
+	// Watson runs (watson.Commands, S-1), since this package cannot import
+	// watson; empty, the service's Options.Commands.
+	Commands string
+	// Agent is the agent asked (Phase 12); "" is Sherlock.
+	Agent string
+	// SuperAdmin says the person asking is a SuperAdmin: Sherlock's setup
+	// skill is theirs, while Getting started has a step open (GS-07).
+	SuperAdmin bool
+	// Cases says the person asks from the Cases area: Sherlock's Cases
+	// skill joins its instructions (Phase 12, IB-10).
+	Cases bool
+	// Context is what a kept conversation starts from, sent before its
+	// first question each time (a case, quoted as data: CF-47).
+	Context string
+	// Exceptions says ask_knowledge may give the accepted exceptions the
+	// question matches (KN-32): the asker sees the cases, who read the
+	// exceptions in Mycroft › Exceptions, or a job whose answers stay
+	// with them. Never for a reporter's question (the report triage);
+	// false gives none.
+	Exceptions bool
+
+	// agent is the agent resolved, for its prompt.
+	agent *Agent
 }
 
 // MaxQuestion bounds a question, in characters.
@@ -372,8 +470,11 @@ func (s *Service) Ask(q Question) (*Conversation, error) {
 		return nil, fmt.Errorf("a question is kept to %d characters", MaxQuestion)
 	}
 	q.Text = text
-	set := s.opts.Settings()
-	if err := set.Caps.Check(s.opts.Ledger.Now(context.Background())); err != nil {
+	a, err := s.agentFor(q.Agent, q)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.capsErr(context.Background(), &a); err != nil {
 		s.record(q, "", nil, Usage{}, 0, audit.OutcomeDenied, err.Error())
 		return nil, err
 	}
@@ -384,19 +485,38 @@ func (s *Service) Ask(q Question) (*Conversation, error) {
 		return c, ErrBusy
 	}
 	now := s.opts.Now()
+	// A kept conversation's history is rebuilt from what everyone sees
+	// (CF-47): the questions and answers, the context first.
+	if c.kept {
+		c.history, c.starts = keptHistory(c.msgs, q.Context)
+	}
 	c.seq++
-	c.msgs = append(c.msgs, &Msg{ID: c.seq, Role: "user", Text: text, At: now})
+	question := &Msg{ID: c.seq, Role: "user", Text: text, At: now}
+	if c.kept {
+		question.Asker = firstNonEmpty(q.Who.Name, q.Who.Email, q.Who.Subject, "someone")
+	}
+	c.msgs = append(c.msgs, question)
 	c.seq++
-	ans := &Msg{ID: c.seq, Role: "sherlock", Status: "thinking", At: now, Model: set.Model}
+	ans := &Msg{ID: c.seq, Role: "sherlock", Status: "thinking", At: now, Model: a.Model}
+	if a.ID != SherlockID {
+		ans.Agent = a.ID
+	}
 	c.msgs = append(c.msgs, ans)
 	// A conversation kept open for days shows its last questions only, as
 	// the history sent to the model holds the last ones only: each change
 	// sends the whole conversation to every panel that shows it.
-	if n := len(c.msgs) - 2*s.opts.MaxQuestions; n > 0 {
+	limit := 2 * s.opts.MaxQuestions
+	if c.kept {
+		limit = KeptMessages
+	}
+	if n := len(c.msgs) - limit; n > 0 {
 		c.msgs = append([]*Msg(nil), c.msgs[n:]...)
 	}
 	c.starts = append(c.starts, len(c.history))
 	content := []Block{{Type: "text", Text: text}}
+	if c.kept && len(c.history) == 0 && q.Context != "" {
+		content = append([]Block{{Type: "text", Text: q.Context}}, content...)
+	}
 	if v := s.viewBlock(q.View); v != "" {
 		content = append(content, Block{Type: "text", Text: v})
 	}
@@ -404,7 +524,11 @@ func (s *Service) Ask(q Question) (*Conversation, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.busy, c.cancel = true, cancel
 	c.changedLocked()
+	kept := c.kept
 	c.mu.Unlock()
+	if kept {
+		s.keep(c, q.Key)
+	}
 
 	s.mu.Lock()
 	s.running++
@@ -413,7 +537,10 @@ func (s *Service) Ask(q Question) (*Conversation, error) {
 	go func() {
 		defer s.wg.Done()
 		defer cancel()
-		s.answer(ctx, c, ans, q, set)
+		s.answer(ctx, c, ans, q, a)
+		if kept {
+			s.keep(c, q.Key)
+		}
 		s.mu.Lock()
 		s.running--
 		s.mu.Unlock()
@@ -425,32 +552,74 @@ func (s *Service) Ask(q Question) (*Conversation, error) {
 // writing or weighing a script. The text is scrubbed first, it counts
 // against the spending caps, and it is audited as a question is.
 func (s *Service) Complete(ctx context.Context, who audit.Who, cluster, label, system, text string) (string, error) {
-	set := s.opts.Settings()
-	q := Question{Text: label, Cluster: cluster, Who: who}
-	if err := set.Caps.Check(s.opts.Ledger.Now(ctx)); err != nil {
-		s.record(q, "", nil, Usage{}, 0, audit.OutcomeDenied, err.Error())
-		return "", err
+	return s.CompleteAs(ctx, "", who, cluster, label, system, text)
+}
+
+// CompleteAs is Complete answered by an agent (Phase 12): its model and
+// provider, with its instructions before system, against its budget too.
+// "" is Sherlock.
+func (s *Service) CompleteAs(ctx context.Context, agent string, who audit.Who, cluster, label, system, text string) (string, error) {
+	c, err := s.CompleteMeasured(ctx, agent, who, cluster, label, system, text)
+	return c.Text, err
+}
+
+// Completion is an answer of CompleteMeasured, with what it took (KN-27):
+// the model, the tokens and cost, the most the model was let write, and
+// whether the answer was cut there (the provider stopped it at its
+// output limit).
+type Completion struct {
+	Text      string
+	Model     string
+	In, Out   int
+	CostUSD   float64
+	MaxTokens int
+	Cut       bool
+}
+
+// CompleteMeasured is CompleteAs saying what the answer took, and whether
+// it was cut at the output limit, for a caller that keeps its own count
+// (a Wiki sync job's run, KN-27). The spend is counted and audited as
+// CompleteAs does; a failed call says what it spent too.
+func (s *Service) CompleteMeasured(ctx context.Context, agent string, who audit.Who, cluster, label, system, text string) (Completion, error) {
+	q := Question{Text: label, Cluster: cluster, Who: who, Key: Key{Cluster: cluster}, Agent: agent}
+	a, err := s.agentFor(agent, q)
+	if err != nil {
+		return Completion{}, err
 	}
-	req := Request{Model: set.Model, MaxTokens: s.opts.MaxTokens, System: []Block{{Type: "text", Text: system}},
-		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: scrub.Text(text)}}}}}
-	resp, err := s.opts.Client.Stream(ctx, req, func(Delta) {})
-	cost := set.Price().Cost(resp.Usage)
-	s.opts.Ledger.Add(context.Background(), cost, true)
+	if err := s.capsErr(ctx, &a); err != nil {
+		s.record(q, "", nil, Usage{}, 0, audit.OutcomeDenied, err.Error())
+		return Completion{}, err
+	}
+	blocks := []Block{{Type: "text", Text: system}}
+	if s.opts.Agent != nil && strings.TrimSpace(a.Instructions) != "" {
+		blocks = []Block{{Type: "text", Text: a.Instructions}, {Type: "text", Text: system}}
+	}
+	req := Request{Model: a.Model, MaxTokens: s.maxTokens(&a), System: blocks,
+		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: scrub.Known(scrub.Text(text), a.Secrets)}}}}}
+	resp, err := s.clientOf(&a).Stream(ctx, req, func(Delta) {})
+	cost := a.Price.Cost(resp.Usage)
+	s.opts.Ledger.AddFor(context.Background(), a.ID, cost, true)
 	if serr := s.opts.Ledger.Save(context.Background()); serr != nil {
 		s.opts.Logger.Warn("saving the Sherlock spend failed", "err", serr)
 	}
-	if err != nil {
-		s.record(q, set.Model, nil, resp.Usage, cost, audit.OutcomeFailed, err.Error())
-		return "", errors.New(explain(err))
+	agentNote := ""
+	if a.ID != SherlockID {
+		agentNote = "agent " + a.ID
 	}
-	s.record(q, set.Model, nil, resp.Usage, cost, audit.OutcomeOK, "")
+	out := Completion{Model: a.Model, In: resp.Usage.Prompt(), Out: resp.Usage.OutputTokens, CostUSD: cost, MaxTokens: req.MaxTokens, Cut: resp.StopReason == "max_tokens"}
+	if err != nil {
+		s.record(q, a.Model, nil, resp.Usage, cost, audit.OutcomeFailed, strings.TrimPrefix(agentNote+"; "+err.Error(), "; "))
+		return out, errors.New(explain(err))
+	}
+	s.record(q, a.Model, nil, resp.Usage, cost, audit.OutcomeOK, agentNote)
 	var b strings.Builder
 	for _, block := range resp.Content {
 		if block.Type == "text" {
 			b.WriteString(block.Text)
 		}
 	}
-	return b.String(), nil
+	out.Text = b.String()
+	return out, nil
 }
 
 // Stop stops the answer in progress, if any.
@@ -529,8 +698,14 @@ func (s *Service) Drain(ctx context.Context, settle time.Duration) {
 
 // answer runs the rounds of one answer: the model replies, the tools it
 // asks for run, their results go back, until it is done.
-func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Question, set Settings) {
-	model := set.Price()
+func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Question, a Agent) {
+	model := a.Price
+	client := s.clientOf(&a)
+	q.agent = &a
+	ch := &chain{agents: []string{a.ID}}
+	var trace []Recorded
+	hseq := 0
+	r := &run{conv: c, chain: ch, known: c.known, hands: &ans.Hands, seq: &hseq, trace: &trace}
 	var (
 		total     Usage
 		cost      float64
@@ -540,14 +715,18 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		detail    string
 		ui        uiLog
 	)
-	var defs []ToolDef
-	if q.Tools != nil {
-		defs = append(defs, q.Tools.Defs()...)
+	// Only Sherlock changes the person's view; another agent asked
+	// directly may only suggest a view in words.
+	defs := defsFor(&a, q.Tools, 0)
+	if !a.Compact {
+		defs = append(defs, uiDefs(q.ViewChanges && a.ID == SherlockID)...)
 	}
-	defs = append(defs, uiDefs(q.ViewChanges)...)
 	if n := len(defs); n > 0 {
 		defs = append([]ToolDef(nil), defs...)
 		defs[n-1].CacheControl = &CacheControl{Type: "ephemeral"}
+	}
+	if q.Commands == "" {
+		q.Commands = s.opts.Commands
 	}
 	system := systemPrompt(q, s.opts.Now())
 	first := func() {
@@ -573,7 +752,29 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		c.repairLocked(status)
 		c.busy, c.cancel = false, nil
 		c.lastUsed = now
+		tr := Trace{Agent: a.ID, Cluster: q.Key.Cluster, Question: q.Text, Answer: ans.Text, Tools: trace, At: now}
+		c.traces[ans.ID] = tr
+		for id := range c.traces {
+			if len(c.traces) <= maxTraces {
+				break
+			}
+			if id < ans.ID-2*maxTraces {
+				delete(c.traces, id)
+			}
+		}
 		c.changedLocked()
+		done := *ans
+		s.mu.Lock()
+		if status == "done" {
+			s.recent = append(s.recent, tr)
+			if len(s.recent) > maxRecent {
+				s.recent = append([]Trace(nil), s.recent[len(s.recent)-maxRecent:]...)
+			}
+		}
+		s.mu.Unlock()
+		if s.opts.OnAnswer != nil {
+			go s.opts.OnAnswer(Answered{Agent: a.ID, Version: a.Version, Who: q.Who, Cluster: q.Key.Cluster, Msg: done, Trace: tr})
+		}
 	}
 	defer func() {
 		if err := s.opts.Ledger.Save(context.Background()); err != nil {
@@ -585,11 +786,25 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		if estimated {
 			detail = strings.TrimPrefix(detail+"; tokens and cost estimated, not all reported by the model's API", "; ")
 		}
-		s.record(q, set.Model, tools, total, cost, outcome, detail)
+		if a.ID != SherlockID || len(ch.asked) > 0 || (a.Version != "" && a.Version != "live") {
+			who := "agent " + a.ID
+			if len(ch.asked) > 0 {
+				who += "; hand-overs [" + strings.Join(ch.asked, ", ") + "]"
+			}
+			if a.Version != "" && a.Version != "live" {
+				who += "; instructions " + a.Version
+			}
+			detail = strings.TrimPrefix(detail+"; "+who, "; ")
+		}
+		s.record(q, a.Model, tools, total, cost, outcome, detail)
 	}()
 
 	for round := 0; ; round++ {
-		if err := set.Caps.Check(s.opts.Ledger.Now(ctx)); err != nil && round > 0 {
+		err := ch.stop
+		if err == nil {
+			err = s.capsErr(ctx, &a)
+		}
+		if err != nil && (round > 0 || ch.stop != nil) {
 			outcome, detail = audit.OutcomeDenied, err.Error()
 			finish("stopped", err.Error())
 			return
@@ -604,11 +819,11 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		}
 		c.mu.Lock()
 		s.trimLocked(c)
-		req := Request{Model: set.Model, MaxTokens: s.opts.MaxTokens, System: system, Messages: append([]Message(nil), c.history...), Tools: defs}
+		req := Request{Model: a.Model, MaxTokens: s.maxTokens(&a), System: system, Messages: append([]Message(nil), c.history...), Tools: defs}
 		c.mu.Unlock()
 		// Each round's text starts afresh: the answer is the last round's.
 		var roundText strings.Builder
-		resp, err := s.opts.Client.Stream(ctx, req, func(d Delta) {
+		resp, err := client.Stream(ctx, req, func(d Delta) {
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			first()
@@ -624,10 +839,10 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		cost += used
 		estimated = estimated || resp.Estimated
 		if resp.NoUsage {
-			s.noteNoUsage(set.Model)
+			s.noteNoUsage(client, a.Model)
 		}
 		if used > 0 || round == 0 {
-			s.opts.Ledger.Add(context.Background(), used, round == 0)
+			s.opts.Ledger.AddFor(context.Background(), a.ID, used, round == 0)
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -665,13 +880,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		ans.Status = "thinking"
 		start := len(ans.Steps)
 		for _, b := range calls {
-			label := ""
-			if IsUITool(b.Name) {
-				label = uiLabel(b.Name)
-			} else {
-				label = q.Tools.Label(b.Name, b.Input)
-			}
-			ans.Steps = append(ans.Steps, Step{Label: label, Tool: b.Name, Status: "running"})
+			ans.Steps = append(ans.Steps, Step{Label: s.labelOf(&a, q, b), Tool: b.Name, Status: "running"})
 			tools = append(tools, b.Name)
 		}
 		first()
@@ -680,22 +889,31 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 
 		results := make([]Block, 0, len(calls))
 		for i, b := range calls {
-			var r ToolResult
-			if IsUITool(b.Name) {
-				r = s.runUI(ctx, c, ans, q, b, &ui)
-			} else {
-				r = q.Tools.Run(ctx, b.Name, b.Input)
+			var res ToolResult
+			switch {
+			case IsUITool(b.Name) && a.ID == SherlockID && !a.Compact:
+				res = s.runUI(ctx, c, ans, q, b, &ui)
+			case IsAgentTool(b.Name):
+				res = s.runAgentTool(ctx, &a, q, r, b)
+			case q.Tools != nil && a.allows(b.Name) && !IsUITool(b.Name):
+				res = q.Tools.Run(ctx, b.Name, b.Input)
+			default:
+				res = ToolResult{Text: "The tool " + b.Name + " is not one of " + a.Name + "'s tools.", Error: true}
 			}
 			if ctx.Err() != nil {
 				outcome, detail = audit.OutcomeStopped, "stopped by the person asking"
 				finish("stopped", "")
 				return
 			}
-			text := s.clip(scrub.Known(r.Text, s.secrets()))
-			results = append(results, Block{Type: "tool_result", ToolUseID: b.ID, Content: text, IsError: r.Error})
+			text := s.clip(scrub.Known(res.Text, append(s.secrets(), a.Secrets...)))
+			block := Block{Type: "tool_result", ToolUseID: b.ID, Content: text, IsError: res.Error}
+			results = append(results, block)
+			if !IsAgentTool(b.Name) && !IsUITool(b.Name) {
+				record(&trace, b, block)
+			}
 			c.mu.Lock()
-			c.known.Add(r.Refs...)
-			if r.Error {
+			c.known.Add(res.Refs...)
+			if res.Error {
 				ans.Steps[start+i].Status = "failed"
 			} else {
 				ans.Steps[start+i].Status = "done"

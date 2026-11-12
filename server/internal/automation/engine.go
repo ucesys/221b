@@ -45,16 +45,30 @@ type Options struct {
 	// running run says it lives.
 	RebootWait, RebootPoll, BeatEvery time.Duration
 	// Node says what Kubernetes reports of a node: a rebooted node is back
-	// once it is Ready, and control-plane nodes are taken one at a time.
+	// once it is Ready, and control-plane nodes are taken one at a time. A
+	// host outside Kubernetes is known too, as a host.
 	Node func(cluster, node string) (NodeState, bool)
 	// MaxParallel bounds the nodes a batch runs at once.
 	MaxParallel int
 }
 
 // NodeState is what the engine needs to know of a node from Kubernetes.
+// Host is a machine outside Kubernetes (Phase 12): reached by SSH alone,
+// back from a reboot once it answers from a new boot, never cordoned or
+// drained, never part of a control plane.
 type NodeState struct {
 	Ready        bool
 	ControlPlane bool
+	Host         bool
+}
+
+// isHost says whether a target is a host outside Kubernetes.
+func (e *Engine) isHost(cluster, node string) bool {
+	if e.opts.Node == nil {
+		return false
+	}
+	st, ok := e.opts.Node(cluster, node)
+	return ok && st.Host
 }
 
 // Engine runs scripts on nodes, on the leader.
@@ -360,7 +374,7 @@ func (e *Engine) claimControlPlane(ctx context.Context, r Run, node string) (fun
 	if r.DryRun || r.Target == TargetKubernetes || e.opts.Node == nil {
 		return func() {}, nil
 	}
-	if st, ok := e.opts.Node(r.Cluster, node); !ok || !st.ControlPlane {
+	if st, ok := e.opts.Node(r.Cluster, node); !ok || !st.ControlPlane || st.Host {
 		return func() {}, nil
 	}
 	e.mu.Lock()
@@ -690,9 +704,15 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 	}
 	fmt.Fprintf(out, "[221B] %s, for %s: %s\n", r.Watson(), who, r.Basis)
 	res := NodeResult{}
-	hookErr := e.hooks(ctx, r, a, node, a.before, env, out)
+	// A host is no Kubernetes node: nothing cordons or drains it.
+	before, after := a.before, a.after
+	if (len(before) > 0 || len(after) > 0) && header.Target != TargetKubernetes && e.isHost(r.Cluster, node) {
+		fmt.Fprintf(out, "[221B] %s is a host outside Kubernetes: the hooks around each node do not run on it\n", node)
+		before, after = nil, nil
+	}
+	hookErr := e.hooks(ctx, r, a, node, before, env, out)
 	// Drained, the node stays cordoned until the hooks after uncordon it.
-	cordoned := hookErr == nil && !r.DryRun && len(a.before) > 0 && len(a.after) > 0
+	cordoned := hookErr == nil && !r.DryRun && len(before) > 0 && len(after) > 0
 	if cordoned {
 		e.setNode(a, node, func(n *NodeResult) { n.Cordoned = true })
 	}
@@ -784,7 +804,7 @@ func (e *Engine) node(ctx context.Context, a *activeRun, node string, ro Rollout
 	healthy := res.State == NodeChanged || res.State == NodeNoChange
 	switch {
 	case healthy:
-		if err := e.hooks(ctx, r, a, node, a.after, env, out); err != nil {
+		if err := e.hooks(ctx, r, a, node, after, env, out); err != nil {
 			res.State, res.Error = NodeFailed, "after the script: "+err.Error()
 		} else {
 			cordoned = false
@@ -849,6 +869,18 @@ func newMask(w io.Writer, values []string) *mask {
 
 // Stderr is where the command's errors go.
 func (m *mask) Stderr() io.Writer { return m.errs }
+
+// Masked is a writer that blanks secret values, a stream apart for errors.
+type Masked interface {
+	io.Writer
+	Stderr() io.Writer
+	Flush()
+}
+
+// NewMask wraps w so none of the values reach it, as a run's output is
+// masked: a host's pairing gives the session its bootstrap credential's
+// mask (Phase 12).
+func NewMask(w io.Writer, values []string) Masked { return newMask(w, values) }
 
 const maskText = "••••••"
 
@@ -925,7 +957,8 @@ func (e *Engine) bootID(ctx context.Context, r Run, node string) (string, error)
 
 // reboot reboots a node and waits for it to come back (AU-09): it is back
 // once it answers with a boot ID other than the one before, and, when
-// Kubernetes knows it, once it is Ready again.
+// Kubernetes knows it, once it is Ready again. A host is back once it
+// answers SSH from a new boot: Kubernetes has nothing to say of it.
 func (e *Engine) reboot(ctx context.Context, r Run, node string, wait time.Duration, out io.Writer) error {
 	before, err := e.bootID(ctx, r, node)
 	if err != nil {
@@ -971,7 +1004,7 @@ func (e *Engine) reboot(ctx context.Context, r Run, node string, wait time.Durat
 			return nil
 		}
 		st, known := e.opts.Node(r.Cluster, node)
-		if !known || st.Ready {
+		if !known || st.Ready || st.Host {
 			fmt.Fprintf(out, "[221B] %s is back\n", node)
 			return nil
 		}

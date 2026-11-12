@@ -75,8 +75,12 @@ func uiDefs(changes bool) []ToolDef {
 }
 
 const (
-	// MaxUIActions bounds the UI actions of one answer (P6U-09).
+	// MaxUIActions bounds the UI actions of one answer (P6U-09), reads
+	// included: the hard cap.
 	MaxUIActions = 10
+	// ViewChangesAsked is how many view changes the prompt asks Sherlock
+	// to keep to for one question, below the hard cap (S-7).
+	ViewChangesAsked = 4
 	// UITimeout is how long a UI action waits for the window (P6U-08).
 	UITimeout = 5 * time.Second
 	// MaxView bounds the view state sent with a question (P6U-03).
@@ -285,6 +289,8 @@ func uiLabel(name string) string {
 		return "Opened the details"
 	case "view_highlight":
 		return "Highlighted a row"
+	case "open_tool_dialog":
+		return "Opened a tool dialog"
 	}
 	return name
 }

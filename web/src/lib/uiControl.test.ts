@@ -37,6 +37,12 @@ describe('Sherlock’s UI actions are one list (P6U-04, P6U-12)', () => {
     expect(names).toEqual(['view_state', 'view_open', 'view_filter', 'view_search', 'view_sort', 'view_columns', 'view_details', 'view_highlight', 'open_tool_dialog'])
   })
 
+  it('accepts exactly the tabs, filters and values of the fixture the server’s descriptions are tested against (S-3)', () => {
+    const fixture = JSON.parse(readFileSync(resolve(__dirname, '../../../server/internal/sherlock/testdata/ui_tabs.json'), 'utf8')) as { tabs: unknown }
+    expect(JSON.parse(JSON.stringify(TAB_SPECS))).toEqual(fixture.tabs)
+    expect(Object.keys(TAB_SPECS).sort()).toEqual(TABS.map((t) => t.id).sort())
+  })
+
   it('has nothing that clicks, types, runs script, reads the page, or reaches Watson or shared settings', () => {
     for (const a of ACTIONS) {
       // The one exception (TB-42, amending P6U-12): a tool's dialog, which the person sends.
@@ -79,7 +85,18 @@ describe('Sherlock’s UI actions are one list (P6U-04, P6U-12)', () => {
   // from its URL is declared, but open (the row whose pane is open, which
   // view_details opens) and the search boxes, which view_search sets.
   it('declares every filter a tab reads from its URL', () => {
-    const files: Record<string, string> = { alerts: 'AlertsTab', nodes: 'NodesTab', fleets: 'FleetsTab', namespaces: 'NamespacesTab', pods: 'PodsTab', helm: 'apps/AppsTab', services: 'ServicesTab', networks: 'NetworksTab', access: 'AccessTab', policies: 'PoliciesTab' }
+    const files: Record<string, string> = {
+      alerts: 'AlertsTab',
+      nodes: 'NodesTab',
+      fleets: 'FleetsTab',
+      namespaces: 'NamespacesTab',
+      pods: 'PodsTab',
+      helm: 'apps/AppsTab',
+      services: 'ServicesTab',
+      networks: 'NetworksTab',
+      access: 'AccessTab',
+      policies: 'PoliciesTab',
+    }
     for (const [tab, file] of Object.entries(files)) {
       const src = readFileSync(resolve(__dirname, `../components/${file}.tsx`), 'utf8')
       const read = new Set([...src.matchAll(/(?:\.get\(|listParam\(\w+, )'([a-z]+)'/g)].map((m) => m[1]!))

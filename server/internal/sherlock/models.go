@@ -28,6 +28,10 @@ var Models = []Model{
 	{ID: "claude-fable-5-1", Label: "Claude Fable 5.1", In: 10, Out: 50, Note: "The most capable, at the highest price."},
 }
 
+// ClaudeContext is the context window of the listed Claude models, in
+// tokens (Phase 12, wave 5).
+const ClaudeContext = 200_000
+
 // DefaultModel is what a new installation uses.
 const DefaultModel = "claude-opus-5-5"
 

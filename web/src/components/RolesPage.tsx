@@ -235,7 +235,8 @@ export function RolesPage({ route, me, now, cluster, onToast }: AdminProps) {
             <SubjectsTable role={selected} cluster={name} canAdd={sup && route.cluster === 'local'} onAdd={(g) => void addMember(g)} />
           </Card>
           <Note>
-            Groups come from <span className="rk-mono">auth.ldap.roles</span> and <span className="rk-mono">auth.local.groups</span>; change them with <span className="rk-mono">helm upgrade</span>. Neither this console nor Watson creates or removes bindings. A local user gets a role by joining a local group.
+            Groups come from <span className="rk-mono">auth.ldap.roles</span> and <span className="rk-mono">auth.local.groups</span>; change them with <span className="rk-mono">helm upgrade</span>. Neither this console nor Watson creates or
+            removes bindings. A local user gets a role by joining a local group.
           </Note>
         </Drawer>
       )}

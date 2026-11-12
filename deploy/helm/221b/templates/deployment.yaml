@@ -46,6 +46,8 @@ spec:
         # change of them restarts the console.
         checksum/auth-config: {{ include "b221.authConfig" . | sha256sum }}
         checksum/toolbox: {{ include "b221.toolboxConfig" . | sha256sum }}
+        # The agents' baseline instructions are read at start-up too.
+        checksum/agents: {{ include "b221.agentBaselines" . | sha256sum }}
         # The local accounts, the OIDC client secret, the setup code and the
         # webhook token are read at start-up too. A Secret named by an
         # existingSecret value is not the chart's: after changing one, run
@@ -127,6 +129,37 @@ spec:
               value: {{ printf "%s/%s-audit" .Release.Namespace (include "b221.fullname" .) | quote }}
             - name: SESSIONS_CONFIGMAP
               value: {{ printf "%s/%s-sessions" .Release.Namespace (include "b221.fullname" .) | quote }}
+            # The AI agents (Phase 12): their records, and the chart's
+            # baseline instructions mounted as files.
+            - name: AI_CONFIGMAP
+              value: {{ printf "%s/%s-ai" .Release.Namespace (include "b221.fullname" .) | quote }}
+            - name: AGENTS_DIR
+              value: /etc/221b/agents
+            # Mycroft's knowledge (Phase 12): its records in
+            # <release>-knowledge, the wiki's local copy in an emptyDir.
+            {{- $knowledge := .Values.knowledge | default dict }}
+            - name: KNOWLEDGE_CONFIGMAP
+              value: {{ printf "%s/%s-knowledge" .Release.Namespace (include "b221.fullname" .) | quote }}
+            {{- if ne (toString (dig "configMapStore" "enabled" true $knowledge)) "false" }}
+            # The temporary wiki store (CF-57), while Settings › Knowledge
+            # names no store.
+            - name: WIKI_CONFIGMAP
+              value: {{ printf "%s/%s-wiki" .Release.Namespace (include "b221.fullname" .) | quote }}
+            {{- end }}
+            - name: KNOWLEDGE_DIR
+              value: /var/lib/221b/knowledge
+            - name: KNOWLEDGE_REFRESH_GIT
+              value: {{ (($knowledge.refresh | default dict).git | default "15m") | quote }}
+            - name: KNOWLEDGE_REFRESH_S3
+              value: {{ (($knowledge.refresh | default dict).s3 | default "5m") | quote }}
+            {{- $consoleURL := $knowledge.consoleURL | default "" }}
+            {{- if and (not $consoleURL) .Values.ingress.enabled .Values.ingress.host }}
+            {{- $consoleURL = printf "%s://%s" (ternary "https" "http" (and .Values.ingress.tls .Values.ingress.tls.enabled | default false)) .Values.ingress.host }}
+            {{- end }}
+            {{- with $consoleURL }}
+            - name: CONSOLE_URL
+              value: {{ . | quote }}
+            {{- end }}
             # Automation (Phase 11 part 2): on with automation.enabled, and
             # runs only where toolbox.ssh.enabled is on too. A values file
             # from before the setting has no automation block: on.
@@ -141,6 +174,41 @@ spec:
             {{- else }}
             - name: AUTOMATION
               value: "false"
+            {{- end }}
+            # The issue service (Phase 12): the report page with
+            # issues.enabled; its records, every case among them (wave 5),
+            # in <release>-issues either way.
+            {{- $issues := .Values.issues | default dict }}
+            - name: ISSUES
+              value: {{ ternary "true" "false" (eq (include "b221.issuesOn" .) "true") | quote }}
+            - name: ISSUES_CONFIGMAP
+              value: {{ printf "%s/%s-issues" .Release.Namespace (include "b221.fullname" .) | quote }}
+            - name: ISSUES_REPORT_ROLES
+              value: {{ join "," ($issues.reportRoles | default (list "superAdmin" "superViewer" "admin" "viewer")) | quote }}
+            - name: ISSUES_OPERATOR_ROLES
+              value: {{ join "," ($issues.operatorRoles | default (list "superAdmin" "admin")) | quote }}
+            # The agents' proposed changes (Phase 12): durable Watson cards in
+            # <release>-proposals (CF-104), approved by cases.approverRoles.
+            - name: PROPOSALS_CONFIGMAP
+              value: {{ printf "%s/%s-proposals" .Release.Namespace (include "b221.fullname" .) | quote }}
+            - name: CASES_APPROVER_ROLES
+              value: {{ join "," ((.Values.cases | default dict).approverRoles | default (list "superAdmin" "admin")) | quote }}
+            # --- Case work (Phase 12): the cases' settings, exceptions and
+            # RCAs in <release>-casework.
+            - name: CASEWORK_CONFIGMAP
+              value: {{ printf "%s/%s-casework" .Release.Namespace (include "b221.fullname" .) | quote }}
+            # --- One flow for findings and cases (Phase 12, wave 6): each
+            # case in a ConfigMap of its own, <release>-case-<n>, and the
+            # clean start.
+            - name: CASE_CONFIGMAPS
+              value: {{ printf "%s/%s-case-" .Release.Namespace (include "b221.fullname" .) | quote }}
+            - name: CASE_INSTANCE
+              value: {{ .Release.Name | quote }}
+            {{- with (dig "cleanStart" dict (.Values.cases | default dict)) }}
+            - name: CASES_CLEAN_START_TOKEN
+              value: {{ .token | default "" | quote }}
+            - name: CASES_CLEAN_START_DRY_RUN
+              value: {{ .dryRun | default false | quote }}
             {{- end }}
             {{- if eq .Values.connections.store "secrets" }}
             # The connections to other clusters, one Secret each, named
@@ -169,6 +237,14 @@ spec:
             {{- if .Values.sherlock.lockProvider }}
             - name: SHERLOCK_LOCK_PROVIDER
               value: "true"
+            {{- end }}
+            # --- Jobs (Phase 12): the jobs, runs and findings in
+            # <release>-runs, and the time zone a new schedule starts in.
+            - name: RUNS_CONFIGMAP
+              value: {{ printf "%s/%s-runs" .Release.Namespace (include "b221.fullname" .) | quote }}
+            {{- with (dig "timeZone" "" (.Values.jobs | default dict)) }}
+            - name: JOBS_TIME_ZONE
+              value: {{ . | quote }}
             {{- end }}
             {{- if eq .Values.connections.store "secrets" }}
             - name: SHERLOCK_SECRET
@@ -290,6 +366,11 @@ spec:
             - name: toolbox
               mountPath: /etc/221b/toolbox
               readOnly: true
+            - name: agents
+              mountPath: /etc/221b/agents
+              readOnly: true
+            - name: knowledge
+              mountPath: /var/lib/221b/knowledge
             {{- if and .Values.toolbox.enabled (eq .Values.toolbox.transcripts "pvc") }}
             - name: transcripts
               mountPath: /var/lib/221b/transcripts
@@ -331,6 +412,14 @@ spec:
         - name: toolbox
           configMap:
             name: {{ include "b221.fullname" . }}-toolbox
+        - name: agents
+          configMap:
+            name: {{ include "b221.fullname" . }}-agents
+        # The wiki's local copy (Phase 12): each replica's own, read again
+        # at start.
+        - name: knowledge
+          emptyDir:
+            sizeLimit: {{ (((.Values.knowledge | default dict).localCopy | default dict).sizeLimit | default "512Mi") | quote }}
         {{- if and .Values.toolbox.enabled (eq .Values.toolbox.transcripts "pvc") }}
         - name: transcripts
           persistentVolumeClaim:

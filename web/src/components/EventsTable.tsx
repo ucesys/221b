@@ -8,7 +8,12 @@ export function EventsTable({ events, now, label = 'Events' }: { events: Event[]
   if (!events.length) return <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>No events in the last hour. Kubernetes keeps events for about an hour.</p>
   return (
     <ScrollBox label={label} className="rk-card">
-      <Table label={label} template="82px 150px minmax(260px, 2fr) 60px 110px 110px" minWidth={772} cols={[{ label: 'Type' }, { label: 'Reason' }, { label: 'Message' }, { label: 'Count', right: true }, { label: 'Last seen' }, { label: 'From' }]}>
+      <Table
+        label={label}
+        template="82px 150px minmax(260px, 2fr) 60px 110px 110px"
+        minWidth={772}
+        cols={[{ label: 'Type' }, { label: 'Reason' }, { label: 'Message' }, { label: 'Count', right: true }, { label: 'Last seen' }, { label: 'From' }]}
+      >
         {events.map((e, i) => (
           <TR key={i} top style={{ minHeight: 34 }}>
             <span>

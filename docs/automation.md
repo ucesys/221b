@@ -12,11 +12,11 @@ In, for this first step (Auto-1 core):
 - Runs on a fleet's paired nodes over Phase 11's SSH: dry run, privilege nobody or full, batches, a failure limit, a timeout per node, reboot and wait, cancel, per-node results and output.
 - A ConfigMap of Automation's own for scripts, parameters and runs.
 
-Built since (see *As built*): Auto-1's second step, Auto-2 and Auto-3.
+Built since (see *As built*): Auto-1's second step, Auto-2 and Auto-3, and hosts outside Kubernetes (Phase 12, see *Hosts outside Kubernetes*).
 
 Later: Auto-4, a Schedules area shared with Kubernetes actions, notifications, a script library.
 
-Out: Ansible or another tool as the executor; a module library, playbooks and handlers; a file store or templating in the console; app deployment through scripts (Apps does that); hosts outside the cluster (SSH-08); limited sudo (needs sudoers rules on the node).
+Out: Ansible or another tool as the executor; a module library, playbooks and handlers; a file store or templating in the console; app deployment through scripts (Apps does that); limited sudo (needs sudoers rules on the node).
 
 ## Approach
 
@@ -96,8 +96,36 @@ What a run checks and keeps, as built after the review of November 3, 2026:
 - A node runs under the strictest ceiling of the fleets it is in (All nodes' when it is in none), and on production a variable change waiting on any of its fleets suspends the versions it touches there, whichever fleet the run picked. On production a run takes no values of its own.
 - Only the newest change on a fleet can be approved; approving applies it over the values it was asked against, or refuses and says what differs.
 - A node is in one live run at a time (dry runs and scripts on the cluster aside), and a cluster's control-plane nodes are worked on one at a time. A request id makes a start sent twice one run.
-- A reboot runs with the script's privilege, so a nobody script cannot ask for one. The node is back when its boot ID changed and Kubernetes reports it Ready, within its reboot timeout: the node's own, else the longest of its fleets', else 10 minutes.
+- A reboot runs with the script's privilege, so a nobody script cannot ask for one. The node is back when its boot ID changed and Kubernetes reports it Ready, within its reboot timeout: the node's own, else the longest of its fleets', else 10 minutes. A host outside Kubernetes is back when its boot ID changed, which SSH answering again tells.
 - A console that loses the lead stops its runs; a cancel also goes through the run's record; a production run re-reads its version before each batch and stops when it changed or lost its approval. Runs and facts live in `<release>-automation-runs`.
+
+## Hosts outside Kubernetes (Phase 12)
+
+A **host** is a machine that is not a Kubernetes node, which the console reaches by SSH and Automation then treats as a node: a backup server, a load balancer, a database VM. It is added per cluster connection, by a SuperAdmin, on the Nodes tab (*Add host…*), and it shows in the table with a *host* tag, the columns only Kubernetes fills left empty.
+
+**Adding hosts.** The dialog adds one host or many at once (asked November 5, 2026), in three steps:
+
+1. **Details:** the hosts, by spaces, tabs, commas, semicolons or lines: each an address (IP or DNS name), named after it as a node name (lower-cased), or `name=address` to name it otherwise (an IPv6 address needs a name). A host named after its address takes its own name once paired: as the console first logs in with its certificate it reads `uname -n` and, lower-cased, renames the host to it when that is a node name no node or other host has; its pairing and the lists of nodes that named it follow, and the audit log has `host.rename`. Otherwise it keeps its address as its name, and the console stops trying. A name is a node name, not one a node of the cluster or another host has; it is the host's name in fleets, runs and the audit log. Then, for every host given, the SSH port (22); the login user the console logs in as is the chart's (`toolbox.ssh.loginUser`, root unless the chart says otherwise). And how to pair them (asked November 5, 2026): an account that may use sudo, or root, with its password or private key, kept in the page and sent nowhere until the keys are trusted; or the setup command, run by hand. Each host is *pending*; one the console refuses (a node's name, say) is named, and the others go on. A pending host given again at the same address is taken up again with what was given now, its trusted key kept; a name a paired host, or a host at another address, has is refused, saying which. A host whose SSH port does not answer is named with why (no answer in time, refused, no route) and where to look: sshd on it, a firewall, and `networkPolicy.nodeCIDRs`, outside which the console opens no SSH connection.
+2. **Host keys:** the console connects to each host with no credential at all, reads the key sshd presents (ed25519 first) and lists every host with its SHA256 fingerprint, each ticked. **One approval** trusts them all (*Trust N keys and pair*): each is pinned, and a host that later shows another key is refused until a SuperAdmin trusts it again; with an account given, each host is then paired with it in turn. Comparing a key on its host is optional: the step shows the command, `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`, for a network where someone could stand between the console and the hosts. Unticking a host leaves it pending. The key itself is never shown or answered by the API, only its fingerprint.
+3. **Pair**, one of two ways:
+   - **Sign in once.** An account that may use sudo, or root, with its password or its private key (and passphrase), and sudo's password if it is another. The console opens one SSH session with it, the pinned key checked, and runs the pairing script nodes run (`PairScript`, with the login user made first when missing) as `sudo -S -k -p '' -- sh -c '…'`, sudo's password on standard input and never on a command line (root needs no sudo; an account with a key and no sudo password gets `sudo -n`). It then logs in as the login user with a certificate, as it does to a node, and the host is *paired*. The credential is wiped once the request ends: it is never stored, logged, audited, cached, answered or sent to Sherlock (X-01), and the session's output goes through the same per-stream mask as a run's secret parameters before anything reads it. When it fails the dialog says why and what to do: password sign-in off on the host (give a key, or run the command), sudo that needs a terminal or a second factor (run the command), sudo that refused the password or the account, or the step of the script that stopped it (another authority already trusted, sshd on another port, no sshd).
+   - **Run this command yourself.** The dialog shows the same setup as a command to paste on the host as root (`sudo sh <<'221B-SETUP' … 221B-SETUP`): it makes the login user when missing, writes the console's public key to `/etc/ssh/221b/ca.pub`, sets `TrustedUserCAKeys` and `AuthorizedPrincipalsFile` in a drop-in and reloads sshd. *Check connection* then logs in with a certificate and marks the host paired, or says the host did not take the certificate.
+
+There is no second-person approval: whoever holds sudo on the host can do anything there anyway (decided November 4, 2026).
+
+**As a node.** A paired host can be in fleets (a fleet of labels takes it by its labels; a list of nodes takes it by name, and *Add to fleet…* on picked rows works for it), be a run's target, have its facts collected and a reboot timeout of its own, and has variables like any node. The differences: it is reached by direct SSH from the console at its own address, with no node-shell pod; a reboot is over when its boot ID changed and SSH answers again, with no Kubernetes Ready to wait for; hooks around each node (cordon, drain, uncordon, Kubernetes scripts) do not run on it, and the run's output says so; it is never counted as control plane. Kubernetes-only tools (node shell, kubectl, YAML, pods) are not offered for it.
+
+**Removing one** forgets the host, its pinned key and its pairing. Its details show, before it goes, the cleanup command that takes this console's lines off it (`UnpairScript`, to run as root on the host).
+
+**Audit.** `host.add`, `host.trust` (trusted, or trusted again, with the fingerprint), `host.pair` (with the bootstrap account's name, or by the setup command, and failures) and `host.remove`, each with who and when; never a credential.
+
+**From an agent's proposal** (ADR-101). An approved Watson card may add, label or remove hosts (`host.add`, `host.label`, `host.remove`), create or change fleets, and set a fleet's parameters and per-node values; a SuperAdmin approves it, and each change is audited under its own action, naming the card. A card never carries a host key or a credential: a host it adds waits as pending until a person pairs it here, with one credential and one approval of every key.
+
+**Storage.** Hosts are kept under `ssh-hosts.json` in the settings ConfigMap, beside `ssh-pairings.json` (128 KiB, at most 150 hosts); a paired host's pairing is an ordinary pairing under its name. The leader reads them again every 30 seconds, so a host added through another replica shows within that.
+
+**Network.** The console reaches hosts through the same network policy rule as the nodes: their addresses must be inside `networkPolicy.nodeCIDRs` (when it lists any), and a host whose sshd listens on a port other than `toolbox.ssh.port` needs that port in `networkPolicy.hostPorts`. Hosts need `toolbox.ssh.enabled`, like Automation.
+
+**API.** Under `/api/v1/hosts` and `/api/v1/clusters/{cluster}/hosts`, a SuperAdmin's: `GET` (the hosts, with the chart's login user and port), `POST` (add), `POST {name}/scan` (read the key: fingerprint, type, command), `POST {name}/trust` (`{fingerprint}`), `POST {name}/pair` (`{user, password | privateKey, passphrase, sudoPassword}`; a request that is not valid is refused without quoting it), `GET {name}/setup`, `POST {name}/check`, `GET {name}/cleanup`, `DELETE {name}`.
 
 ## Open questions
 

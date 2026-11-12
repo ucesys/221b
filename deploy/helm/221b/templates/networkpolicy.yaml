@@ -12,7 +12,10 @@
 # the console may only connect to its other replicas, Kubernetes API
 # servers' ports (at the addresses in networkPolicy.apiServerCIDRs when
 # given), DNS, and with OIDC sign-in, an audit webhook or Sherlock their
-# HTTPS port.
+# HTTPS port, the scheduled backups' S3 endpoint when its addresses are
+# listed, Mycroft's sources and wiki store when theirs are
+# (knowledge.egressCIDRs), and the Helm repositories when theirs are
+# (helmRepositories.egressCIDRs).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -95,11 +98,19 @@ spec:
       {{- end }}
     {{- end }}
     {{- if include "b221.sshOn" . }}
-    # SSH to the nodes (Phase 11, ADR-72): sshd's port, on the nodes'
-    # addresses when networkPolicy.nodeCIDRs lists them.
+    # SSH to the nodes (Phase 11, ADR-72) and to the hosts outside
+    # Kubernetes (Phase 12): sshd's port, and the hosts' other ports, on
+    # the nodes' and hosts' addresses when networkPolicy.nodeCIDRs lists
+    # them.
     - ports:
         - port: {{ .Values.toolbox.ssh.port }}
           protocol: TCP
+        {{- range .Values.networkPolicy.hostPorts }}
+        {{- if ne (int .) (int $.Values.toolbox.ssh.port) }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+        {{- end }}
       {{- with .Values.networkPolicy.nodeCIDRs }}
       to:
         {{- range . }}
@@ -107,6 +118,54 @@ spec:
             cidr: {{ . | quote }}
         {{- end }}
       {{- end }}
+    {{- end }}
+    {{- $s3 := (.Values.backup | default dict).s3 | default dict }}
+    {{- with $s3.egressCIDRs }}
+    # The scheduled backups' S3 endpoint (Phase 12, ADR-81), at the
+    # addresses backup.s3.egressCIDRs lists, on backup.s3.egressPorts.
+    - ports:
+        {{- range ($s3.egressPorts | default (list 443)) }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+    {{- $knowledge := .Values.knowledge | default dict }}
+    {{- with $knowledge.egressCIDRs }}
+    # Mycroft's sources and the wiki's store (Phase 12, ADR-95): Confluence,
+    # git hosts and the bucket, at the addresses knowledge.egressCIDRs
+    # lists, on knowledge.egressPorts.
+    - ports:
+        {{- range ($knowledge.egressPorts | default (list 443)) }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+    {{- /* --- Helm repositories (Phase 12, wave 5) --- */}}
+    {{- $helmRepos := .Values.helmRepositories | default dict }}
+    {{- with $helmRepos.egressCIDRs }}
+    # The Helm repositories and OCI registries charts are installed from
+    # (Phase 12, ADR-123), at the addresses helmRepositories.egressCIDRs
+    # lists, on helmRepositories.egressPorts.
+    - ports:
+        {{- range ($helmRepos.egressPorts | default (list 443)) }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+      to:
+        {{- range . }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
     {{- end }}
     {{- if eq .Values.auth.mode "ldap" }}
     # The directory (LDAP sign-in): its port, from auth.ldap.url.

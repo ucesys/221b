@@ -48,6 +48,9 @@ type Row struct {
 	// BootedAt is when the node last booted, as its kubelet reports it;
 	// absent when the kubelet has not been asked or could not be.
 	BootedAt *time.Time `json:"bootedAt,omitempty"`
+	// Host is set on a machine outside Kubernetes, reached by SSH (Phase
+	// 12): its role is "host", and what only Kubernetes knows is empty.
+	Host *Host `json:"host,omitempty"`
 }
 
 // Resource is a node's CPU (in millicores) or memory (in bytes).

@@ -279,7 +279,14 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
               <input type="text" value={delText} onChange={(e) => setDelText(e.target.value)} placeholder={`Type ${orig.name}`} spellCheck={false} autoComplete="off" style={{ fontFamily: 'var(--mono)' }} data-testid="cluster-remove-name" />
             </label>
           )}
-          <button className="rk-btn" onClick={() => void remove()} disabled={removing || (confirmDel && isProd && delText.trim() !== orig.name)} title="Removes the connection from this console; nothing changes in the cluster" style={{ height: 34, color: 'var(--err)' }} data-testid="cluster-remove">
+          <button
+            className="rk-btn"
+            onClick={() => void remove()}
+            disabled={removing || (confirmDel && isProd && delText.trim() !== orig.name)}
+            title="Removes the connection from this console; nothing changes in the cluster"
+            style={{ height: 34, color: 'var(--err)' }}
+            data-testid="cluster-remove"
+          >
             {removing ? 'Removing…' : !confirmDel ? 'Remove cluster' : isProd ? 'Remove' : 'Click again to remove'}
           </button>
           {confirmDel && <span style={{ flex: '1 1 100%', fontSize: 11.5, color: 'var(--fg3)', textAlign: 'right' }}>Removes the connection and its stored credentials from this console. Nothing changes in the cluster.</span>}
@@ -293,7 +300,18 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
       <Card title="Cluster">
         <Field label="Name" hint="Shown in the console only; the cluster doesn’t know this name.">
           <span className="rk-field">
-            <input ref={nameRef} type="text" value={f.name} onChange={(e) => upd({ name: e.target.value }, true)} spellCheck={false} autoComplete="off" placeholder="For example: lakehouse-qa" style={{ fontFamily: 'var(--mono)' }} data-testid="cluster-name" {...bad('name')} />
+            <input
+              ref={nameRef}
+              type="text"
+              value={f.name}
+              onChange={(e) => upd({ name: e.target.value }, true)}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder="For example: lakehouse-qa"
+              style={{ fontFamily: 'var(--mono)' }}
+              data-testid="cluster-name"
+              {...bad('name')}
+            />
           </span>
         </Field>
         <div className="rk-flabel">
@@ -309,7 +327,9 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
       </Card>
       {local && orig ? (
         <Card title="Connection">
-          <span style={{ fontSize: 12.5, color: 'var(--fg2)' }}>This is the cluster the console runs in, reached with the console’s own ServiceAccount. Its address and credentials come from the installation and cannot be changed here.</span>
+          <span style={{ fontSize: 12.5, color: 'var(--fg2)' }}>
+            This is the cluster the console runs in, reached with the console’s own ServiceAccount. Its address and credentials come from the installation and cannot be changed here.
+          </span>
           <dl className="rk-kv">
             <dt>API server</dt>
             <dd className="rk-mono">{orig.server}</dd>
@@ -324,7 +344,17 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
           <Card title="Connection">
             <Field label="API server" hint="The server: line of a kubeconfig, or the control plane’s load balancer.">
               <span className="rk-field">
-                <input type="url" value={f.server} onChange={(e) => upd({ server: e.target.value })} spellCheck={false} autoComplete="off" placeholder="https://k8s-api.example.internal:6443" style={{ fontFamily: 'var(--mono)' }} data-testid="cluster-server" {...bad('server')} />
+                <input
+                  type="url"
+                  value={f.server}
+                  onChange={(e) => upd({ server: e.target.value })}
+                  spellCheck={false}
+                  autoComplete="off"
+                  placeholder="https://k8s-api.example.internal:6443"
+                  style={{ fontFamily: 'var(--mono)' }}
+                  data-testid="cluster-server"
+                  {...bad('server')}
+                />
               </span>
             </Field>
             <div className="rk-flabel">
@@ -382,21 +412,47 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
             {needCred && f.auth === 'token' && (
               <Field label="Token" hint="kubectl -n kube-system create token cluster-console --duration=8760h">
                 <span className="rk-field">
-                  <input type="password" value={f.token} onChange={(e) => upd({ token: e.target.value })} spellCheck={false} autoComplete="off" placeholder="eyJhbGciOiJSUzI1NiIs…" style={{ fontFamily: 'var(--mono)' }} data-testid="cluster-token" {...bad('token')} />
+                  <input
+                    type="password"
+                    value={f.token}
+                    onChange={(e) => upd({ token: e.target.value })}
+                    spellCheck={false}
+                    autoComplete="off"
+                    placeholder="eyJhbGciOiJSUzI1NiIs…"
+                    style={{ fontFamily: 'var(--mono)' }}
+                    data-testid="cluster-token"
+                    {...bad('token')}
+                  />
                 </span>
               </Field>
             )}
             {needCred && f.auth === 'kubeconfig' && (
               <>
                 <Field label="Kubeconfig" hint="Pasting one fills in the API server, the context and its CA certificate.">
-                  <textarea className="rk-area" value={f.kubeconfig} onChange={(e) => onKubeconfig(e.target.value)} spellCheck={false} placeholder={'apiVersion: v1\nkind: Config\nclusters: …'} style={{ minHeight: 120 }} data-testid="cluster-kubeconfig" {...bad('kubeconfig')} />
+                  <textarea
+                    className="rk-area"
+                    value={f.kubeconfig}
+                    onChange={(e) => onKubeconfig(e.target.value)}
+                    spellCheck={false}
+                    placeholder={'apiVersion: v1\nkind: Config\nclusters: …'}
+                    style={{ minHeight: 120 }}
+                    data-testid="cluster-kubeconfig"
+                    {...bad('kubeconfig')}
+                  />
                 </Field>
                 {kc && kc.contexts.length > 1 && (
                   <div className="rk-flabel">
                     Context
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                       {kc.contexts.map((x) => (
-                        <button key={x.name} className="rk-fchip" aria-pressed={(f.context || kubeContext(kc, '').name) === x.name} onClick={() => upd({ context: x.name ?? '' })} style={{ fontFamily: 'var(--mono)' }} data-testid="cluster-context">
+                        <button
+                          key={x.name}
+                          className="rk-fchip"
+                          aria-pressed={(f.context || kubeContext(kc, '').name) === x.name}
+                          onClick={() => upd({ context: x.name ?? '' })}
+                          style={{ fontFamily: 'var(--mono)' }}
+                          data-testid="cluster-context"
+                        >
                           {x.name}
                         </button>
                       ))}
@@ -450,7 +506,12 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
                 Keep the saved credentials
               </button>
             )}
-            {f.auth === 'oidc' && <span className="rk-fhint">With OIDC the console signs in as itself with a refresh token it renews; each person’s own access is then checked by impersonation, as with the other methods. This method is not available yet: choose a token, a kubeconfig or a certificate.</span>}
+            {f.auth === 'oidc' && (
+              <span className="rk-fhint">
+                With OIDC the console signs in as itself with a refresh token it renews; each person’s own access is then checked by impersonation, as with the other methods. This method is not available yet: choose a token, a kubeconfig or
+                a certificate.
+              </span>
+            )}
           </Card>
           <Card title="What the console may do">
             <Seg
@@ -462,7 +523,11 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
               value={f.mode}
               onChange={(mode) => upd({ mode })}
             />
-            <span style={{ fontSize: 12.5, color: 'var(--fg2)' }}>{f.mode === 'write' ? 'Watson runs the changes people approve: cordon and drain, scale, rollout restarts and undos, pod deletes, labels, annotations and Helm rollbacks. With sign-in on, each runs as the person who approves it, so their own RBAC decides.' : 'The console only reads. Watson refuses anything that would change the cluster before it is sent.'}</span>
+            <span style={{ fontSize: 12.5, color: 'var(--fg2)' }}>
+              {f.mode === 'write'
+                ? 'Watson runs the changes people approve: cordon and drain, scale, rollout restarts and undos, pod deletes, labels, annotations and Helm rollbacks. With sign-in on, each runs as the person who approves it, so their own RBAC decides.'
+                : 'The console only reads. Watson refuses anything that would change the cluster before it is sent.'}
+            </span>
             {f.auth !== 'oidc' && (
               <>
                 <button className="rk-link" aria-expanded={showRbac} onClick={() => setShowRbac(!showRbac)} style={{ alignSelf: 'flex-start', fontSize: 12 }} data-testid="rbac-toggle">
@@ -482,13 +547,22 @@ export function ClusterEditor({ orig, now, onClose, onSaved, onRemoved }: Props)
               </>
             )}
           </Card>
-          <Card title="Test the connection" aside={<button className="rk-btn" onClick={() => void runTest()} disabled={testing} style={{ height: 32 }} data-testid="cluster-test">{testing ? 'Testing…' : test ? 'Test again' : 'Test connection'}</button>}>
+          <Card
+            title="Test the connection"
+            aside={
+              <button className="rk-btn" onClick={() => void runTest()} disabled={testing} style={{ height: 32 }} data-testid="cluster-test">
+                {testing ? 'Testing…' : test ? 'Test again' : 'Test connection'}
+              </button>
+            }
+          >
             {(test || testing) && <TestSteps result={test} running={testing} />}
             <span className="rk-fhint">The console connects from where it runs: the address must resolve and answer from inside its cluster, not only from your machine.</span>
           </Card>
         </>
       )}
-      <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>Connections are kept in this console, in Secrets of its own namespace, not in the cluster. A token, key or kubeconfig is never shown again once saved, only what it says about itself.</p>
+      <p style={{ margin: 0, fontSize: 11.5, color: 'var(--fg3)' }}>
+        Connections are kept in this console, in Secrets of its own namespace, not in the cluster. A token, key or kubeconfig is never shown again once saved, only what it says about itself.
+      </p>
     </Drawer>
   )
 }

@@ -28,14 +28,23 @@ import (
 
 	"github.com/ucesys/221b/server/internal/access"
 	"github.com/ucesys/221b/server/internal/acks"
+	"github.com/ucesys/221b/server/internal/ai"
 	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/automation"
+	"github.com/ucesys/221b/server/internal/backup"
+	"github.com/ucesys/221b/server/internal/cards"
+	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/clusters"
+	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/fleets"
+	"github.com/ucesys/221b/server/internal/issues"
+	"github.com/ucesys/221b/server/internal/jobs"
+	"github.com/ucesys/221b/server/internal/knowledge"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
+	"github.com/ucesys/221b/server/internal/lessons"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
 	"github.com/ucesys/221b/server/internal/nodessh"
@@ -119,6 +128,11 @@ type Clusters interface {
 	Remove(ctx context.Context, id string) error
 	TestDraft(ctx context.Context, id string, d clusters.Draft) (clusters.TestResult, error)
 	TestSaved(ctx context.Context, id string) (clusters.TestResult, error)
+	// Sealed and Restore are the backup's: a credential with each secret
+	// sealed for a backup (ADR-137), and a connection brought back with
+	// one, opened or a placeholder.
+	Sealed(ctx context.Context, id string, seal func(string) string) (clusters.Credential, error)
+	Restore(ctx context.Context, spec clusters.Spec, cred clusters.Credential) (clusters.Summary, error)
 }
 
 // Options configure the HTTP handler.
@@ -147,6 +161,9 @@ type Options struct {
 	Sherlock *sherlock.Service
 	// SherlockKeys holds the Claude API key.
 	SherlockKeys *sherlock.Keys
+	// AI is the agents (Phase 12): providers, agents, their instructions,
+	// tests and pilots; nil leaves Settings › AI out.
+	AI *ai.Service
 	// Watson runs kubectl and helm commands (Phase 6); nil leaves it out.
 	Watson *watson.Service
 	// WatsonLocalWrite allows changes in the one cluster of a console
@@ -218,6 +235,10 @@ type Options struct {
 	// Apps keeps the Helm applications (Phase 10); nil, or no Watson,
 	// leaves the Helm1 page's routes out.
 	Apps apps.Store
+	// --- Helm repositories (Phase 12, wave 5) ---
+	// Repos are the chart repositories and OCI registries applications
+	// install from besides git (HR-01); nil is git alone.
+	Repos *apps.Repos
 	// Sessions runs the toolbox's sessions (Phase 9); nil, or no Watson,
 	// leaves the toolbox out.
 	Sessions *sessions.Manager
@@ -228,6 +249,47 @@ type Options struct {
 	// TwoPerson keeps what waits for a second SuperAdmin: a cluster taken
 	// off production, a local user made a SuperAdmin. Nil applies at once.
 	TwoPerson *twoperson.Store
+	// Hosts keeps the machines outside Kubernetes that Automation reaches
+	// by SSH (Phase 12); nil, or no Automation, leaves them out.
+	Hosts HostsService
+	// Backup holds the parts of a backup (Phase 12, ADR-80): the console's
+	// own are registered in it by New, the other packages' by themselves.
+	// nil is a registry of the console's own parts only (tests).
+	Backup *backup.Registry
+	// BackupS3 runs the scheduled backups to S3 (ADR-81); nil leaves them
+	// out of the Backup page.
+	BackupS3 *backup.Scheduler
+	// Issues is the issue service (Phase 12, docs/issues.md), served under
+	// /api/issues/v1/, and IssueRoles who may report and who triage; nil
+	// leaves it out.
+	Issues     *issues.Service
+	IssueRoles IssueRoles
+	// --- Watson cards (Phase 12, ADR-99 to ADR-102) ---
+	// Cards keeps the agents' proposals, served under /api/v1/aiops/;
+	// CardRoles are the roles that may approve them (cases.approverRoles),
+	// besides a SuperAdmin. nil leaves them out.
+	Cards     *cards.Store
+	CardRoles []roles.ID
+	// --- Jobs (Phase 12) ---
+	// Jobs runs the agents on their own and keeps their runs and findings
+	// (JB-01); nil leaves AIOps › Jobs and Runs out.
+	Jobs *jobs.Service
+	// --- Findings, exceptions and RCAs (Phase 12) ---
+	// Lessons keeps the accepted exceptions, served under
+	// /api/v1/aiops/exceptions; nil leaves them out.
+	Lessons *lessons.Service
+	// Fixes keeps the fixes, served under /api/v1/aiops/fixes (wave 6g);
+	// nil serves none.
+	Fixes *fixes.Service
+	// --- Knowledge (Phase 12) ---
+	// Knowledge is Mycroft's knowledge and the Confluence publisher,
+	// served under /api/v1/knowledge/; nil leaves them out.
+	Knowledge *knowledge.Service
+	// --- Case work (Phase 12, CW-10) ---
+	// Casework keeps the cases, served under /api/v1/aiops/cases; nil
+	// leaves AIOps › Cases out.
+	Casework *casework.Service
+	// --- end of Watson cards.
 }
 
 // Impersonation says how a person's name and groups are given to the API
@@ -307,6 +369,11 @@ type Server struct {
 	// sign-in checks of people who asked for sessions.
 	toolCache toolCache
 	owners    sync.Map
+
+	// backups holds the parts of a backup (Options.Backup).
+	backups *backup.Registry
+	// setup is Getting started's (Phase 12).
+	setup setupState
 }
 
 type reqKey struct {
@@ -344,6 +411,9 @@ func New(o Options) *Server {
 		o.Roles.Monitor = &roles.Monitor{}
 	}
 	s := &Server{opts: o, mux: http.NewServeMux(), reqs: map[reqKey]uint64{}, allowedHosts: map[string]bool{}, leaderChecks: leaderChecks, roleCheck: make(chan struct{}, 1)}
+	if s.backups = o.Backup; s.backups == nil {
+		s.backups = backup.NewRegistry()
+	}
 	for _, h := range o.AllowedHosts {
 		if h = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), "."); h != "" {
 			s.allowedHosts[h] = true
@@ -382,6 +452,9 @@ func New(o Options) *Server {
 	if o.Settings != nil {
 		s.handle("GET /api/v1/settings", "settings", s.getSettings)
 		s.handle("PUT /api/v1/settings", "settings-update", s.putSettings)
+		// --- Show costs (Phase 12, wave 6c, CF-40).
+		s.handle("GET /api/v1/settings/ui", "settings-ui", s.getUISettings)
+		s.handle("PUT /api/v1/settings/ui", "settings-ui-update", s.putUISettings)
 		s.handle("PUT /api/v1/fleets", "fleets-update", s.putFleets)
 		s.handle("POST /api/v1/alerts/ack", "alert-ack", s.postAck)
 		s.handle("POST /api/v1/clusters/{cluster}/alerts/ack", "alert-ack", s.postAck)
@@ -404,6 +477,10 @@ func New(o Options) *Server {
 		s.handle("PUT /api/v1/sherlock/key", "sherlock-key", s.putSherlockKey)
 		s.handle("DELETE /api/v1/sherlock/key", "sherlock-key", s.deleteSherlockKey)
 	}
+	// Phase 12: the AI agents.
+	if o.AI != nil && o.Sherlock != nil && o.Settings != nil {
+		s.aiRoutes()
+	}
 	if o.Watson != nil {
 		s.watsonRoutes()
 	}
@@ -414,6 +491,10 @@ func New(o Options) *Server {
 	}
 	if o.Watson != nil && o.Apps != nil {
 		s.appsRoutes()
+		// --- Helm repositories (Phase 12, wave 5) ---
+		if o.Repos != nil {
+			s.helmReposRoutes()
+		}
 	}
 	s.secretsRoutes()
 	if o.Watson != nil && o.Sessions != nil {
@@ -427,7 +508,44 @@ func New(o Options) *Server {
 	if o.Automation != nil && o.AutomationStore != nil {
 		s.automationRoutes()
 		o.Automation.SetKube(automationKube{s})
+		if o.Hosts != nil {
+			s.hostsRoutes()
+		}
 	}
+	if o.Issues != nil {
+		s.issuesRoutes()
+	}
+	if o.Knowledge != nil {
+		s.knowledgeRoutes()
+	}
+	// --- Jobs (Phase 12) ---
+	if o.Jobs != nil {
+		s.jobsRoutes()
+	}
+	// --- Findings, exceptions and RCAs (Phase 12) ---
+	if o.Lessons != nil {
+		s.lessonsRoutes()
+	}
+	// --- Fixes (Phase 12, wave 6g) ---
+	if o.Fixes != nil {
+		s.fixesRoutes()
+	}
+	// --- Watson cards (Phase 12) ---
+	if o.Cards != nil {
+		s.cardsRoutes()
+	}
+	// --- Case work (Phase 12) ---
+	if o.Casework != nil {
+		s.caseworkRoutes()
+	}
+	// --- end of Watson cards.
+	// --- Getting started (Phase 12): the checklist, and Sherlock's setup
+	// skill reading it.
+	s.setupRoutes()
+	if o.AI != nil {
+		o.AI.SetSetup(setupGuide{s})
+	}
+	// --- end of Getting started.
 	s.rolesRoutes()
 	s.auditRoutes()
 	s.backupRoutes()
@@ -626,10 +744,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A port forward's CLI carries the forward's token, not a cookie
-	// (TB-20); its handler checks it.
-	if s.opts.Auth != nil && !IsTunnelPath(r.URL.Path) {
+	// (TB-20), and so does a system filing an issue (IS-24), and a git host
+	// or bucket calling the knowledge webhook (Phase 12); their
+	// handlers check it.
+	if s.opts.Auth != nil && !IsTunnelPath(r.URL.Path) && !issues.IntakePath(r.URL.Path) && !knowledge.HookPath(r.URL.Path) {
 		if r = s.opts.Auth.Gate(w, r); r == nil {
 			s.observeOnly("gate", http.StatusUnauthorized)
+			return
+		}
+		if s.reporterOnly(w, r) {
 			return
 		}
 	}
@@ -941,6 +1064,11 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
 		jsonError(w, http.StatusBadRequest, "the settings are not valid: "+err.Error())
+		return
+	}
+	// Show costs is a SuperAdmin's, on its own route (CF-40).
+	if in.HideCosts {
+		jsonError(w, http.StatusBadRequest, "Show costs is changed in Settings › AI, by a SuperAdmin")
 		return
 	}
 	// Sherlock's and Watson's settings change on their own routes, which

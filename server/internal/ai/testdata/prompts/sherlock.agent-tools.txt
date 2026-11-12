@@ -1,0 +1,27 @@
+## hand_over
+
+Ask another agent to do part of the work, with its own tools, and get its answer back. Name the agent, say exactly what you need from it in task, and give in context what you already know, so it does not read it again. It reads the cluster as the person asking, with its own tools, never yours.
+
+{"type":"object","properties":{"agent":{"type":"string","enum":["troubleshooter","changePlanner"],"description":"The agent to ask."},"task":{"type":"string","description":"What you need from it, in one or two sentences."},"context":{"type":"string","description":"What you know already: objects, symptoms, what you ruled out."}},"required":["agent","task"]}
+
+## ask_knowledge
+
+Ask the console's knowledge base about the infrastructure: Mycroft's wiki and runbooks, the open known issues, the fixes of past cases and the accepted exceptions. What an application depends on, its runbooks, who owns it, whether a problem is known, fixed before or accepted.
+
+{"type":"object","properties":{"question":{"type":"string","description":"The question."}},"required":["question"]}
+
+## setup_status
+
+Read Getting started as the console is now: each step of setting the console up, whether it is done, dismissed or open, what is missing, why it comes where it does, and the link to the screen where it is done. Read only; it changes nothing and holds no secret.
+
+{"type":"object","properties":{},"additionalProperties":false}
+
+## check_command
+
+Check kubectl or helm command lines against Watson before proposing them: for each line, whether Watson runs it or why it refuses it. Nothing is run.
+
+{"type":"object","properties":{"commands":{"type":"string","description":"One command per line."}},"required":["commands"]}
+
+## when no knowledge is connected
+
+No knowledge is connected yet: Mycroft has no sources here. Answer from what the tools show, and say what you could not confirm.

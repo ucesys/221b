@@ -1,3 +1,4 @@
+import { render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { fmtTs } from '../lib/format'
 import { controlPlane, row } from '../test/rows'
@@ -27,7 +28,7 @@ const rows = [
       { title: 'Not ready', severity: 'error', summary: 'The kubelet stopped posting status.', entries: [] },
       { title: 'Disk pressure', severity: 'warning', summary: 'The kubelet is evicting pods.', entries: [] },
     ],
-    labels: { 'workload': 'analytics' },
+    labels: { workload: 'analytics' },
     pods: { running: 3, capacity: 110, notReady: 2, failing: 1, starting: 1, unready: 0, completed: 4 },
     cpu: { requested: 2000, limits: 4000, allocatable: 16000, capacity: 16000, used: null },
     memory: { requested: 8 * GI, limits: 8 * GI, allocatable: 64 * GI, capacity: 64 * GI, used: null },
@@ -142,5 +143,42 @@ describe('columns and export', () => {
     expect(out[0]).toEqual({ Node: 'cp-1', Role: 'Control plane', Status: 'Ready', Taints: ['node-role.kubernetes.io/control-plane:NoSchedule'], Labels: [] })
     expect(out[3]).toMatchObject({ Node: 'worker-3', Labels: ['workload=analytics'] })
     expect(JSON.parse(JSON.stringify(out))).toEqual(out)
+  })
+})
+
+describe('a host outside Kubernetes', () => {
+  const host = row('backup-1', {
+    role: 'host',
+    status: 'Paired',
+    labels: { role: 'backup' },
+    internalIP: '10.0.0.9',
+    host: { address: '10.0.0.9', port: 22, loginUser: 'root', state: 'paired', fingerprint: 'SHA256:abc' },
+  })
+
+  it('is tagged a host, and shows nothing only Kubernetes knows', () => {
+    const cell = (id: string) => {
+      const c = NODE_COLUMNS.find((x) => x.id === id)!
+      return render(<div data-testid={`cell-${id}`}>{c.cell(host, now)}</div>).getByTestId(`cell-${id}`).textContent
+    }
+    expect(cell('role')).toBe('host')
+    for (const id of ['cpu', 'cpuAlloc', 'memory', 'memFree', 'pods', 'reserved', 'kubelet']) expect(cell(id)).toBe('—')
+    expect(cell('name')).toContain('backup-1')
+    expect(nodeTerms(host).map((t) => t.text)).toContain('host')
+  })
+
+  it('exports blanks where a node has figures, and its role as Host', () => {
+    const t = exportTable([host], visibleColumns(NODE_COLUMNS, defaultHidden(NODE_COLUMNS), false), now)
+    const at = (head: string) => t.rows[0]![t.head.indexOf(head)]
+    expect(at('Role')).toBe('Host')
+    expect(at('Pods')).toBe(null)
+    expect(at('CPU requested (cores)')).toBe(null)
+  })
+
+  it('sorts after the workers by role', () => {
+    expect(
+      sortRows([...rows, host], NODE_COLUMNS, { col: 'role', dir: 'asc' }, now)
+        .map((r) => r.name)
+        .at(-1),
+    ).toBe('backup-1')
   })
 })

@@ -22,8 +22,32 @@ const roles: RolesResponse = {
   definitions: { admin: 'full', superAdmin: 'readOnly' },
   nodesRole: '221b-nodes',
   roles: [
-    { id: 'superAdmin', name: 'SuperAdmin', description: 'Everything', scope: 'Every namespace, every cluster', definition: 'readOnly', clusterRole: '221b-super-admin', present: true, can: ['Read everything'], cannot: ['Change anything'], subjects: [{ kind: 'Group', name: 'platform-admins', source: 'ldap', namespaces: [], managed: true }], holders: { groups: 1, users: 2 } },
-    { id: 'superViewer', name: 'SuperViewer', description: 'Reads', scope: 'Every namespace, every cluster', definition: 'readOnly', clusterRole: '221b-super-viewer', present: true, can: [], cannot: [], subjects: [], holders: { groups: 0, users: 0 } },
+    {
+      id: 'superAdmin',
+      name: 'SuperAdmin',
+      description: 'Everything',
+      scope: 'Every namespace, every cluster',
+      definition: 'readOnly',
+      clusterRole: '221b-super-admin',
+      present: true,
+      can: ['Read everything'],
+      cannot: ['Change anything'],
+      subjects: [{ kind: 'Group', name: 'platform-admins', source: 'ldap', namespaces: [], managed: true }],
+      holders: { groups: 1, users: 2 },
+    },
+    {
+      id: 'superViewer',
+      name: 'SuperViewer',
+      description: 'Reads',
+      scope: 'Every namespace, every cluster',
+      definition: 'readOnly',
+      clusterRole: '221b-super-viewer',
+      present: true,
+      can: [],
+      cannot: [],
+      subjects: [],
+      holders: { groups: 0, users: 0 },
+    },
     {
       id: 'admin',
       name: 'Admin',
@@ -50,7 +74,14 @@ const perms: PermissionsResponse = {
   checkedAt: '2026-10-16T12:04:00Z',
   drift: { state: 'differs', roles: [{ id: 'admin', differences: ['adds delete on nodes'] }] },
   roles: [
-    { id: 'superAdmin', name: 'SuperAdmin', clusterRole: '221b-super-admin', definition: 'readOnly', present: true, rules: [{ group: '', resource: 'secrets', verbs: ['get', 'list', 'watch'], kind: 'read', scope: 'all', flags: ['Secrets'] }] },
+    {
+      id: 'superAdmin',
+      name: 'SuperAdmin',
+      clusterRole: '221b-super-admin',
+      definition: 'readOnly',
+      present: true,
+      rules: [{ group: '', resource: 'secrets', verbs: ['get', 'list', 'watch'], kind: 'read', scope: 'all', flags: ['Secrets'] }],
+    },
     { id: 'superViewer', name: 'SuperViewer', clusterRole: '221b-super-viewer', definition: 'readOnly', present: true, rules: [] },
     { id: 'admin', name: 'Admin', clusterRole: '221b-admin', definition: 'full', present: true, rules: [{ group: 'apps', resource: 'deployments', verbs: ['get', 'list', 'watch', 'patch'], kind: 'write', scope: 'bound', flags: [] }] },
     { id: 'viewer', name: 'Viewer', clusterRole: '221b-viewer', definition: 'readOnly', present: true, rules: [{ group: 'apps', resource: 'deployments', verbs: ['get', 'list', 'watch'], kind: 'read', scope: 'bound', flags: [] }] },
@@ -66,8 +97,31 @@ const users: UsersResponse = {
   ],
   ldap: { url: 'ldaps://ldap.corp.example:636', state: 'connected', people: 214, groups: 6, errors: [], running: false, lastSync: '2026-10-16T12:04:00Z' },
   users: [
-    { id: 'local:bob', username: 'bob', name: 'bob', email: 'bob@corp.example', source: 'local', status: 'active', holdings: [{ role: 'admin', via: 'checkout-ops', namespaces: ['checkout', 'web'] }], groups: ['checkout-ops'], superRoles: [], managed: false, kubeName: '221b-local:bob' },
-    { id: 'ldap:priya', username: 'priya', name: 'Priya Raman', source: 'ldap', status: 'active', holdings: [{ role: 'superAdmin', via: 'platform-admins' }], groups: ['platform-admins'], superRoles: [], managed: false, kubeName: '221b-ldap:priya' },
+    {
+      id: 'local:bob',
+      username: 'bob',
+      name: 'bob',
+      email: 'bob@corp.example',
+      source: 'local',
+      status: 'active',
+      holdings: [{ role: 'admin', via: 'checkout-ops', namespaces: ['checkout', 'web'] }],
+      groups: ['checkout-ops'],
+      superRoles: [],
+      managed: false,
+      kubeName: '221b-local:bob',
+    },
+    {
+      id: 'ldap:priya',
+      username: 'priya',
+      name: 'Priya Raman',
+      source: 'ldap',
+      status: 'active',
+      holdings: [{ role: 'superAdmin', via: 'platform-admins' }],
+      groups: ['platform-admins'],
+      superRoles: [],
+      managed: false,
+      kubeName: '221b-ldap:priya',
+    },
     { id: 'local:break-glass', username: 'break-glass', source: 'local', status: 'active', holdings: [{ role: 'superAdmin' }], groups: [], superRoles: ['superAdmin'], managed: true, kubeName: '221b-local:break-glass' },
   ],
 }
@@ -109,7 +163,7 @@ afterEach(() => {
 
 describe('who is offered which page (RB-41, RB-31)', () => {
   it('offers Roles and Permissions to everyone, Users and Settings to a SuperAdmin', () => {
-    expect(pagesFor(me())).toEqual(['roles', 'permissions', 'users', 'toolbox', 'approvals', 'logs', 'settings', 'backup'])
+    expect(pagesFor(me())).toEqual(['roles', 'permissions', 'users', 'toolbox', 'logs', 'settings', 'backup'])
     expect(pagesFor(viewer)).toEqual(['roles', 'permissions'])
     expect(pagesFor(null)).toEqual([])
   })
@@ -123,6 +177,40 @@ describe('who is offered which page (RB-41, RB-31)', () => {
     expect(screen.getByTestId('admin-refusal').textContent).toContain('Users is for SuperAdmins')
     expect(screen.queryByRole('link', { name: /^Users/ })).toBeNull()
     expect(calls).toHaveLength(0)
+  })
+
+  // MY-11: an Admin adds to Mycroft's wiki in Settings › Knowledge's Added in Mycroft card, the rest of Settings closed.
+  it('shows an Admin Settings › Knowledge’s Added in Mycroft card alone, and refuses a Viewer there', async () => {
+    const wiki = (mayAdd: boolean) => ({
+      store: 'git',
+      model: true,
+      pages: 0,
+      excerpts: 0,
+      running: false,
+      mayAdd,
+      mayReview: mayAdd,
+      maySetup: false,
+      sources: [],
+      added: [],
+      limits: { note: 204800, document: 20 << 20, depth: 3, defaultDepth: 1, pages: 50, defaultPages: 20, formats: ['.md'] },
+    })
+    serve((_m, url) => (url.endsWith('/knowledge/wiki') ? { body: wiki(true) } : {}))
+    const admin = me({ admin: false, roles: ['admin'], user: { subject: 'carol', username: 'carol' } })
+    render(<AdminPageView {...common('#/admin/settings/knowledge/added', admin)} settings={null} refreshedAt={null} />)
+    expect(await screen.findByTestId('wiki-add')).toBeTruthy()
+    expect(screen.getByTestId('admin-knowledge-added').textContent).toContain('is for SuperAdmins')
+    expect(screen.queryByTestId('admin-refusal')).toBeNull()
+    expect(screen.queryByTestId('settings-page')).toBeNull()
+    expect(calls.map((c) => c.url)).toEqual(['/api/v1/knowledge/wiki'])
+    cleanup()
+    serve((_m, url) => (url.endsWith('/knowledge/wiki') ? { body: wiki(false) } : {}))
+    render(<AdminPageView {...common('#/admin/settings/knowledge', viewer)} settings={null} refreshedAt={null} />)
+    expect((await screen.findByTestId('admin-refusal')).textContent).toContain('Settings is for SuperAdmins')
+    expect(screen.queryByTestId('wiki-add')).toBeNull()
+    cleanup()
+    // Another section of Settings stays closed to an Admin.
+    render(<AdminPageView {...common('#/admin/settings/agents', admin)} settings={null} refreshedAt={null} />)
+    expect(screen.getByTestId('admin-refusal')).toBeTruthy()
   })
 })
 
@@ -151,7 +239,11 @@ describe('Roles (RB-42)', () => {
     expect(carol.textContent).toContain('Not managed by 221B')
     expect(carol.textContent).toContain('Orphaned: no such user')
     expect(within(carol as HTMLElement).queryByRole('button')).toBeNull()
-    expect(within(carol as HTMLElement).getByRole('link', { name: 'Open in Access' }).getAttribute('href')).toBe('#/access?q=carol')
+    expect(
+      within(carol as HTMLElement)
+        .getByRole('link', { name: 'Open in Access' })
+        .getAttribute('href'),
+    ).toBe('#/access?q=carol')
   })
 
   it('gives a Viewer no Add member', async () => {

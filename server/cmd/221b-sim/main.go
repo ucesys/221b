@@ -13,13 +13,17 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/awsv4"
+	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/fakeclaude"
+	"github.com/ucesys/221b/server/internal/s3/s3test"
 	"github.com/ucesys/221b/server/internal/sim"
 )
 
@@ -31,13 +35,36 @@ func main() {
 	metrics := flag.Bool("metrics", true, "serve metrics.k8s.io node metrics")
 	kubeletStats := flag.Bool("kubelet-stats", true, "serve each node's boot time through the node proxy, as the API server does")
 	settingsCM := flag.String("settings-configmap", "221b/k8s-console-221b", "namespace/name of an empty ConfigMap to serve for the console's settings (empty: none)")
+	// --- One flow for findings and cases (Phase 12, wave 6) ---
+	seedCases := flag.Bool("seed-cases", true, "start the console's ConfigMaps with sample cases, runs, a known issue, an exception and an RCA (Phase 12)")
 	problems := flag.Bool("problems", true, "include a few unhealthy nodes and pods")
 	planted := flag.Bool("planted", false, "add a crash-looping pod whose annotation and log carry instructions to Sherlock, for the evaluation")
 	churn := flag.Duration("churn", 0, "change usage and some pods this often (0 = never)")
 	claude := flag.Bool("fake-claude", true, "serve a fake Claude Messages API under /claude, for Sherlock (the console's -sherlock-api-url http://<listen>/claude)")
 	claudeOnly := flag.Bool("claude-only", false, "serve only the fake Claude API, at / and /claude")
+	sshHost := flag.String("ssh-host", "", "also serve a fake SSH host outside Kubernetes at this address (for example 127.0.0.1:7522), which a console can add, pair with the account admin and the password \"host-password\", and run Automation on")
+	sshHostOnly := flag.Bool("ssh-host-only", false, "serve only the fake SSH host, at -ssh-host")
+	// --- Mycroft tab (Phase 12, wave 5) ---
+	wikiBucket := flag.String("fake-s3-bucket", "sim-wiki", "serve a fake S3 bucket of this name, path-style at http://<listen>/<bucket>, for Mycroft's wiki (region us-east-1, access key \"sim-access-key\", secret \"sim-secret-key\"); empty: none")
+	docsBucket := flag.String("fake-s3-docs", "sim-docs", "serve a second fake S3 bucket of this name, as -fake-s3-bucket does, with a few documents for a Mycroft source (KN-25): a Markdown runbook and a CSV under docs/, and a picture Mycroft skips; empty: none")
 	oidc := flag.String("oidc-issuer", "", "serve a simulated OpenID Connect provider at this URL, which must be this server's address plus /oidc (for example http://127.0.0.1:7443/oidc); accounts: admin@corp.example, dev@corp.example and viewer@corp.example with the password \"password\"")
 	flag.Parse()
+
+	if *sshHost != "" {
+		h, err := sim.NewSSHHost()
+		if err != nil {
+			log.Fatal(err)
+		}
+		ln, err := net.Listen("tcp", *sshHost)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("serving a fake SSH host on %s, host key %s", ln.Addr(), h.Fingerprint())
+		if *sshHostOnly {
+			log.Fatal(h.Serve(ln))
+		}
+		go h.Serve(ln)
+	}
 
 	var handler http.Handler
 	var s *sim.Sim
@@ -48,11 +75,24 @@ func main() {
 		mux.Handle("/", fake)
 		handler = mux
 	} else {
-		s = sim.New(sim.Options{Nodes: *nodes, Pods: *pods, Seed: *seed, Metrics: *metrics, KubeletStats: *kubeletStats, SettingsConfigMap: *settingsCM, Problems: *problems, Planted: *planted, OIDCIssuer: *oidc})
+		s = sim.New(sim.Options{Nodes: *nodes, Pods: *pods, Seed: *seed, Metrics: *metrics, KubeletStats: *kubeletStats, SettingsConfigMap: *settingsCM, Problems: *problems, Planted: *planted, OIDCIssuer: *oidc, Preload: preload(*seedCases)})
 		handler = s
-		if *claude {
+		if *claude || *wikiBucket != "" || *docsBucket != "" {
 			mux := http.NewServeMux()
-			mux.Handle("/claude/", http.StripPrefix("/claude", fakeclaude.New()))
+			if *claude {
+				mux.Handle("/claude/", http.StripPrefix("/claude", fakeclaude.New()))
+			}
+			if *wikiBucket != "" {
+				bucket := s3test.NewHandler(*wikiBucket, "us-east-1", awsv4.Credentials{AccessKeyID: "sim-access-key", SecretAccessKey: "sim-secret-key"})
+				mux.Handle("/"+*wikiBucket, bucket.Handler())
+				mux.Handle("/"+*wikiBucket+"/", bucket.Handler())
+			}
+			if *docsBucket != "" && *docsBucket != *wikiBucket {
+				docs := s3test.NewHandler(*docsBucket, "us-east-1", awsv4.Credentials{AccessKeyID: "sim-access-key", SecretAccessKey: "sim-secret-key"})
+				seedDocs(docs)
+				mux.Handle("/"+*docsBucket, docs.Handler())
+				mux.Handle("/"+*docsBucket+"/", docs.Handler())
+			}
 			mux.Handle("/", s)
 			handler = mux
 		}
@@ -88,5 +128,38 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+}
+
+// seedDocs puts the documents of the simulator's bucket of documents
+// (KN-25): two Mycroft reads and one it skips. The runbook carries the
+// fake model's mark that cuts the answer to a batch of more than it, so
+// a Wiki sync of the bucket splits its batch (KN-27).
+func seedDocs(f *s3test.Fake) {
+	at := time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)
+	f.Set("docs/runbooks/restart-the-wombat-cache.md", []byte("# Restarting the wombat cache\n\nThe wombat cache runs as three pods in the shop namespace. Restart it with a rollout restart of deploy/wombat-cache; it is warm again within five minutes.\n\n"+fakeclaude.CutMark+"\n"), at)
+	f.Set("docs/backup-windows.csv", []byte("service,owner,backup window\nwombat-db,storage team,02:00-03:00\nshop-api,web team,03:00-04:00\n"), at)
+	f.Set("docs/diagram.png", []byte("\x89PNG\r\n\x1a\n"), at)
+}
+
+// preload is the sample cases the console starts with (Phase 12, wave 6):
+// the case analysis's and the routing's own records, made by
+// casework.MakeSeed, in the ConfigMaps the console reads and one of its
+// own per case, labelled as the console labels them.
+func preload(on bool) func(name string) (map[string]map[string]string, []sim.SeedObject) {
+	if !on {
+		return nil
+	}
+	return func(name string) (map[string]map[string]string, []sim.SeedObject) {
+		seed, err := casework.MakeSeed(time.Now())
+		if err != nil {
+			log.Fatalf("the sample cases: %v", err)
+		}
+		var objs []sim.SeedObject
+		for n, keys := range seed.Cases {
+			objs = append(objs, sim.SeedObject{Name: name + "-case-" + n, Data: keys,
+				Labels: map[string]string{"app.kubernetes.io/instance": name, "app.kubernetes.io/managed-by": "221b", "221b.io/case": n}})
+		}
+		return map[string]map[string]string{name + "-issues": seed.Issues, name + "-casework": seed.Casework, name + "-runs": seed.Runs}, objs
 	}
 }

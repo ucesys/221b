@@ -68,7 +68,17 @@ export function NamespaceDialog({ onClose, onDone }: { onClose: () => void; onDo
         </label>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, fontWeight: 600, color: 'var(--fg2)' }}>
           Labels
-          <textarea className="rk-area rk-mono" value={labels} onChange={(e) => setLabels(e.target.value)} spellCheck={false} rows={3} style={{ minHeight: 60, fontSize: 12.5, resize: 'vertical' }} placeholder={'team=platform\npod-security.kubernetes.io/enforce=restricted'} aria-label="Labels" data-testid="namespace-new-labels" />
+          <textarea
+            className="rk-area rk-mono"
+            value={labels}
+            onChange={(e) => setLabels(e.target.value)}
+            spellCheck={false}
+            rows={3}
+            style={{ minHeight: 60, fontSize: 12.5, resize: 'vertical' }}
+            placeholder={'team=platform\npod-security.kubernetes.io/enforce=restricted'}
+            aria-label="Labels"
+            data-testid="namespace-new-labels"
+          />
           <span className="rk-fhint">Optional, one key=value per line.</span>
         </label>
         {error && (

@@ -1,5 +1,21 @@
 /** The prototype's select: a field with a chevron, its label for screen readers. */
-export function Select({ label, value, options, onChange, disabled, testId, width }: { label: string; value: string; options: [string, string][]; onChange: (v: string) => void; disabled?: boolean; testId?: string; width?: number | string }) {
+export function Select({
+  label,
+  value,
+  options,
+  onChange,
+  disabled,
+  testId,
+  width,
+}: {
+  label: string
+  value: string
+  options: [string, string][]
+  onChange: (v: string) => void
+  disabled?: boolean
+  testId?: string
+  width?: number | string
+}) {
   return (
     <label className="rk-field rk-sel" style={{ width: width ?? 'auto', position: 'relative' }}>
       <span className="rk-sr">{label}</span>

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/roles"
 )
 
 // Config is everything the server needs to start.
@@ -46,6 +47,70 @@ type Config struct {
 	AuditConfigMap          string
 	SessionsConfigMap       string
 	AutomationRunsConfigMap string
+	// AIConfigMap is the "namespace/name" of the ConfigMap the AI agents
+	// are kept in (Phase 12): providers, agents, their instructions, test
+	// cases and pilots. Empty keeps them in memory. AgentsDir holds the
+	// chart's baseline house instructions, a file <agent>.md each.
+	AIConfigMap string
+	AgentsDir   string
+	// Issues turns the issue service on (Phase 12, docs/issues.md);
+	// IssuesConfigMap is the "namespace/name" of its own ConfigMap, empty
+	// keeping its records in memory. IssuesReportRoles and
+	// IssuesOperatorRoles are which of the four roles may report problems
+	// and which triage them.
+	Issues              bool
+	IssuesConfigMap     string
+	IssuesReportRoles   []string
+	IssuesOperatorRoles []string
+	// --- Watson cards (Phase 12, ADR-99) ---
+	// ProposalsConfigMap is the "namespace/name" of the ConfigMap the
+	// agents' proposed changes, the standing approvals and the notification
+	// settings are kept in (<release>-proposals; <release>-cases before
+	// CF-104); empty keeps them in memory. CasesApproverRoles are the roles
+	// that may approve proposed changes, besides a SuperAdmin.
+	ProposalsConfigMap string
+	CasesApproverRoles []string
+	// --- Case work (Phase 12, CW-13) ---
+	// CaseworkConfigMap is the "namespace/name" of the ConfigMap the cases'
+	// settings and the exceptions are kept in; empty keeps them in
+	// memory.
+	CaseworkConfigMap string
+	// --- One flow for findings and cases (Phase 12, wave 6, CF-20, CF-23) ---
+	// CaseConfigMaps is "namespace/prefix" of the ConfigMaps the console
+	// makes, one per case (<release>-case-<n>), labelled
+	// app.kubernetes.io/instance=CaseInstance; empty is derived from
+	// IssuesConfigMap ("<ns>/<name without -issues>-case-", instance the
+	// name without -issues).
+	CaseConfigMaps string
+	CaseInstance   string
+	// CleanStartToken, when set and not yet done, wipes the Cases area's
+	// records once on the leader at start; CleanStartDryRun only logs what
+	// it would delete.
+	CleanStartToken  string
+	CleanStartDryRun bool
+	// --- Jobs (Phase 12) ---
+	// RunsConfigMap is the "namespace/name" of the ConfigMap the jobs,
+	// their runs and findings are kept in; empty keeps them in memory.
+	// JobsTimeZone is the time zone a new schedule starts in; empty is UTC.
+	RunsConfigMap string
+	JobsTimeZone  string
+	// --- Knowledge (Phase 12, ADR-94 to ADR-98) ---
+	// KnowledgeConfigMap is the "namespace/name" of the ConfigMap Mycroft's
+	// sources, drafts and the Confluence publisher are kept in; empty keeps
+	// them in memory. KnowledgeDir is where the wiki's local copy and the
+	// source repositories are kept on the pod's disk; KnowledgeRefreshGit
+	// and KnowledgeRefreshS3 how often the local copy is read again.
+	// ConsoleURL is the console's address, for links back from Confluence.
+	KnowledgeConfigMap  string
+	KnowledgeDir        string
+	KnowledgeRefreshGit time.Duration
+	KnowledgeRefreshS3  time.Duration
+	ConsoleURL          string
+	// WikiConfigMap is the "namespace/name" of the ConfigMap the temporary
+	// wiki store keeps the wiki in (CF-57), used while Settings ›
+	// Knowledge names no store; empty leaves that store out.
+	WikiConfigMap string
+	// --- end of Watson cards.
 	// ConnectionsSecrets is the "namespace/prefix" of the Secrets the
 	// cluster connections added in the console are kept in, one Secret
 	// <prefix>-cluster-<id> each. Empty keeps them in memory until a restart.
@@ -180,6 +245,32 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.AuditConfigMap, "audit-configmap", env("AUDIT_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the audit log in (empty: with the settings)")
 	fs.StringVar(&c.SessionsConfigMap, "sessions-configmap", env("SESSIONS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the toolbox's session records in (empty: with the settings)")
 	fs.StringVar(&c.AutomationRunsConfigMap, "automation-runs-configmap", env("AUTOMATION_RUNS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep Automation's runs and nodes' facts in (empty: with its scripts)")
+	fs.StringVar(&c.AIConfigMap, "ai-configmap", env("AI_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the AI agents, their instructions and test cases in (empty: in memory)")
+	fs.StringVar(&c.AgentsDir, "agents-dir", env("AGENTS_DIR", ""), "directory of the chart's baseline house instructions for the AI agents, one <agent>.md each (empty: none)")
+	fs.BoolVar(&c.Issues, "issues", envBool("ISSUES", true), "offer the issue service: the report page at /report and its API at /api/issues/v1/")
+	fs.StringVar(&c.IssuesConfigMap, "issues-configmap", env("ISSUES_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the issue service's reports (every case, Phase 12 wave 5), known issues, services and settings in (empty: in memory)")
+	// --- Knowledge (Phase 12) ---
+	fs.StringVar(&c.KnowledgeConfigMap, "knowledge-configmap", env("KNOWLEDGE_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep Mycroft's sources, drafts and the Confluence publisher in (empty: in memory)")
+	fs.StringVar(&c.WikiConfigMap, "wiki-configmap", env("WIKI_CONFIGMAP", ""), "namespace/name of the ConfigMap of the temporary wiki store, used while Settings › Knowledge names no store (empty: no such store; it will be removed)")
+	fs.StringVar(&c.KnowledgeDir, "knowledge-dir", env("KNOWLEDGE_DIR", ""), "directory for the wiki's local copy and the source repositories (empty: a temporary directory)")
+	fs.DurationVar(&c.KnowledgeRefreshGit, "knowledge-refresh-git", envDuration("KNOWLEDGE_REFRESH_GIT", 15*time.Minute), "how often the wiki's local copy is read again from a git repository, besides each push")
+	fs.DurationVar(&c.KnowledgeRefreshS3, "knowledge-refresh-s3", envDuration("KNOWLEDGE_REFRESH_S3", 5*time.Minute), "how often the wiki's local copy is read again from an S3 bucket")
+	fs.StringVar(&c.ConsoleURL, "console-url", env("CONSOLE_URL", ""), "the console's address as people reach it, https://221b.example.com, for links back from Confluence pages (empty: no links)")
+	fs.StringVar(&c.RunsConfigMap, "runs-configmap", env("RUNS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the jobs, their runs and findings in (empty: in memory)")
+	fs.StringVar(&c.JobsTimeZone, "jobs-time-zone", env("JOBS_TIME_ZONE", ""), "the IANA time zone a job's schedule starts in, such as Europe/Berlin (empty: UTC)")
+	reportRoles := fs.String("issues-report-roles", env("ISSUES_REPORT_ROLES", "superAdmin,superViewer,admin,viewer"), "comma-separated roles that may report problems; the Reporter role always may")
+	operatorRoles := fs.String("issues-operator-roles", env("ISSUES_OPERATOR_ROLES", "superAdmin,admin"), "comma-separated roles that see every report and triage them")
+	// --- Watson cards (Phase 12) ---
+	fs.StringVar(&c.ProposalsConfigMap, "proposals-configmap", env("PROPOSALS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the agents' proposed changes, standing approvals and notification settings in (empty: in memory); at start, the records of <release>-cases, where builds before kept them, are copied in once")
+	approverRoles := fs.String("cases-approver-roles", env("CASES_APPROVER_ROLES", "superAdmin,admin"), "comma-separated roles that may approve the agents' proposals; a SuperAdmin always may")
+	// --- end of Watson cards.
+	// --- Case work (Phase 12) ---
+	fs.StringVar(&c.CaseworkConfigMap, "casework-configmap", env("CASEWORK_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the cases' settings and exceptions in (empty: in memory)")
+	// --- One flow for findings and cases (Phase 12, wave 6) ---
+	fs.StringVar(&c.CaseConfigMaps, "case-configmaps", env("CASE_CONFIGMAPS", ""), "namespace/prefix of the ConfigMaps the console makes, one per case (empty: from -issues-configmap, <name without -issues>-case-)")
+	fs.StringVar(&c.CaseInstance, "case-instance", env("CASE_INSTANCE", ""), "the app.kubernetes.io/instance label of the cases' ConfigMaps (empty: the issues ConfigMap's name without -issues)")
+	fs.StringVar(&c.CleanStartToken, "cases-clean-start-token", env("CASES_CLEAN_START_TOKEN", ""), "a token that, set and not yet done, deletes the Cases area's records once at start (cases, known issues, runs and findings, agents' proposals, Mycroft's pages)")
+	fs.BoolVar(&c.CleanStartDryRun, "cases-clean-start-dry-run", envBool("CASES_CLEAN_START_DRY_RUN", false), "with -cases-clean-start-token, only log what the clean start would delete")
 	fs.StringVar(&c.ConnectionsSecrets, "connections-secrets", env("CONNECTIONS_SECRETS", ""), "namespace/prefix of the Secrets to keep cluster connections in, one <prefix>-cluster-<id> each (empty: in memory, lost on restart)")
 	fs.BoolVar(&c.KubeletStats, "kubelet-stats", envBool("KUBELET_STATS", true), "read node boot times from the kubelets, for uptime (needs get on nodes/proxy)")
 	fs.BoolVar(&c.SecretsRead, "secrets-read", envBool("SECRETS_READ", true), "read Secrets for their keys and sizes and for Helm releases; values are never shown (off hides the Helm tab)")
@@ -223,7 +314,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.SherlockSecret, "sherlock-secret", env("SHERLOCK_SECRET", ""), "namespace/name of the Secret to keep the Claude API key in (empty: in memory, lost on restart)")
 	c.SherlockAPIKey = os.Getenv("SHERLOCK_API_KEY")
 	fs.BoolVar(&c.HTTPSRedirect, "https-redirect", envBool("HTTPS_REDIRECT", false), "send plain-HTTP requests (by X-Forwarded-Proto) to HTTPS, behind an Ingress with TLS")
-	fs.DurationVar(&c.TerminationGrace, "termination-grace", envDuration("TERMINATION_GRACE", 20*time.Second), "how long this process has to stop once signalled: answers and commands in progress get most of it")
+	fs.DurationVar(&c.TerminationGrace, "termination-grace", envDuration("TERMINATION_GRACE", 20*time.Second), "how long this process has to stop once signaled: answers and commands in progress get most of it")
 	fs.StringVar(&c.LeaderLease, "leader-lease", env("LEADER_LEASE", ""), "namespace/name of the Lease the replicas elect the one that runs Sherlock and Watson with (empty: a single replica)")
 	c.PodName = os.Getenv("POD_NAME")
 	c.PodIP = os.Getenv("POD_IP")
@@ -249,6 +340,20 @@ func Parse(args []string) (Config, error) {
 	c.Admins = splitList(*admins)
 	c.AdminGroups = splitList(*adminGroups)
 	c.TrustedProxies = splitList(*proxies)
+	c.IssuesReportRoles = splitList(*reportRoles)
+	c.IssuesOperatorRoles = splitList(*operatorRoles)
+	c.CasesApproverRoles = splitList(*approverRoles)
+	// --- One flow for findings and cases (Phase 12, wave 6) ---
+	if c.CaseConfigMaps == "" && c.IssuesConfigMap != "" {
+		ns, name, ok := strings.Cut(c.IssuesConfigMap, "/")
+		if ok && strings.HasSuffix(name, "-issues") {
+			base := strings.TrimSuffix(name, "-issues")
+			c.CaseConfigMaps = ns + "/" + base + "-case-"
+			if c.CaseInstance == "" {
+				c.CaseInstance = base
+			}
+		}
+	}
 	if fs.NArg() > 0 {
 		return c, fmt.Errorf("unexpected arguments: %v", fs.Args())
 	}
@@ -268,6 +373,16 @@ func splitList(s string) []string {
 
 func (c Config) validate() error {
 	var errs []error
+	for _, r := range append(append([]string(nil), c.IssuesReportRoles...), c.IssuesOperatorRoles...) {
+		if !roles.Valid(r) {
+			errs = append(errs, fmt.Errorf("-issues-report-roles and -issues-operator-roles take superAdmin, superViewer, admin and viewer, not %q", r))
+		}
+	}
+	for _, r := range c.CasesApproverRoles {
+		if !roles.Valid(r) {
+			errs = append(errs, fmt.Errorf("-cases-approver-roles takes superAdmin, superViewer, admin and viewer, not %q", r))
+		}
+	}
 	if c.LocalMode != "read" && c.LocalMode != "write" {
 		errs = append(errs, fmt.Errorf("-local-mode must be read or write, not %q", c.LocalMode))
 	}

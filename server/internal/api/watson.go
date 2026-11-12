@@ -15,6 +15,8 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
+	"github.com/ucesys/221b/server/internal/cards"
+	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/roles"
@@ -468,7 +470,38 @@ func (s *Server) postWatsonCommands(w http.ResponseWriter, r *http.Request) {
 	if len(why) > 2000 {
 		why = why[:2000]
 	}
+	// --- Troubleshooting a case (Phase 12, wave 6f, CF-48): a command
+	// from a case's drawer is checked against the case, and logged there.
+	caseN, fromCase := casework.CaseFrom(from)
+	var caller casework.Caller
+	if fromCase {
+		if caller, ok = s.caseCommandFrom(w, r, caseN, c.ID); !ok {
+			return
+		}
+		from = casework.ChatSession(caseN)
+	}
+	// --- A proposed change's Watson (CF-61): a command from its drawer is
+	// checked against the proposal, and logged there.
+	pid, fromProposal := cards.ProposalFrom(from)
+	var asker cards.Person
+	if fromProposal {
+		if asker, ok = s.proposalCommandFrom(w, r, pid, c.ID); !ok {
+			return
+		}
+		from = cards.ChatSession(pid)
+	}
 	items := s.opts.Watson.Submit(r.Context(), c, who, in.Command, from, why, in.Run)
+	if fromCase {
+		s.logCaseCommands(r, caller, caseN, items)
+	}
+	if fromProposal {
+		s.logProposalCommands(r, asker, pid, items)
+	}
+	// Phase 12: a change Sherlock proposed in a chat is kept as a durable
+	// card as well (ADR-99).
+	if strings.EqualFold(from, "Sherlock") {
+		s.proposeFromChat(r, c, who, items, why)
+	}
 	out := make([]watsonItem, 0, len(items))
 	for _, it := range items {
 		snap, lines, _ := s.opts.Watson.Snapshot(it.ID, 0)

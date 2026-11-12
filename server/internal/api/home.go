@@ -193,7 +193,8 @@ func (s *Server) fillHome(r *http.Request, h *homeCluster, st *live.Store, cl Cl
 			Memory   nodes.Resource  `json:"memory"`
 			Pods     nodes.PodCounts `json:"pods"`
 		}
-		if json.Unmarshal(raw, &n) != nil {
+		// Hosts outside Kubernetes are no part of the cluster's figures.
+		if json.Unmarshal(raw, &n) != nil || n.Role == nodes.RoleHost {
 			continue
 		}
 		h.Nodes.Total++

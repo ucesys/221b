@@ -142,7 +142,9 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
 
   const onDrift = useCallback(
     (d: AppDrift) => {
-      setApps((list) => list.map((a) => (current && a.namespace === current.namespace && a.name === current.name ? { ...a, drift: d, driftState: d.changed + d.missing > 0 ? 'drifted' : d.unknown > 0 && d.same === 0 ? 'unknown' : 'in sync' } : a)))
+      setApps((list) =>
+        list.map((a) => (current && a.namespace === current.namespace && a.name === current.name ? { ...a, drift: d, driftState: d.changed + d.missing > 0 ? 'drifted' : d.unknown > 0 && d.same === 0 ? 'unknown' : 'in sync' } : a)),
+      )
     },
     [current, setApps],
   )
@@ -233,7 +235,11 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
               {appsErr}
             </p>
           )}
-          {!canChange && tb?.off && <p className="rk-hint" style={{ margin: 0 }}>{tb.off} The releases and their history can still be read here.</p>}
+          {!canChange && tb?.off && (
+            <p className="rk-hint" style={{ margin: 0 }}>
+              {tb.off} The releases and their history can still be read here.
+            </p>
+          )}
           <DataTable<AppRow>
             label="Helm releases"
             rows={table.shown}
@@ -248,13 +254,28 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
               if (r) navigate(href('helm', [r.namespace, r.name]))
             }}
             now={now}
-            empty={loaded ? 'No Helm release here yet. New application installs one from a git repository.' : 'Loading…'}
+            empty={loaded ? 'No Helm release here yet. New application installs one from git, a Helm repository or an OCI registry.' : 'Loading…'}
             rowAttr="release"
           />
         </section>
       )}
       {current && (
-        <AppPanel key={`${current.key}#${version}`} cluster={cluster} clusterId={route.cluster} now={now} route={route} row={current} tab={tab} onTab={(t) => set({ tab: t === 'overview' ? undefined : t, open: undefined })} canChange={canChange} onAction={(a) => act(a, current)} onToast={onToast} onResult={handleResult} version={version} onDrift={onDrift} />
+        <AppPanel
+          key={`${current.key}#${version}`}
+          cluster={cluster}
+          clusterId={route.cluster}
+          now={now}
+          route={route}
+          row={current}
+          tab={tab}
+          onTab={(t) => set({ tab: t === 'overview' ? undefined : t, open: undefined })}
+          canChange={canChange}
+          onAction={(a) => act(a, current)}
+          onToast={onToast}
+          onResult={handleResult}
+          version={version}
+          onDrift={onDrift}
+        />
       )}
       {dialog && (
         <AppDialog
@@ -265,7 +286,11 @@ export function AppsTab({ cluster, now, onToast, route }: TabProps) {
           onClose={() => setDialog(null)}
           onDone={(r, mode) => {
             setDialog(null)
-            handleResult(r, { create: 'Installing', source: 'Deploying', switch: 'Switching and upgrading', upgrade: dialog.row?.orphan ? 'Installing' : 'Upgrading', install: 'Installing', values: 'Upgrading with the new values' }[mode] + (dialog.row ? ` ${dialog.row.name}` : ''))
+            handleResult(
+              r,
+              { create: 'Installing', source: 'Deploying', switch: 'Switching and upgrading', upgrade: dialog.row?.orphan ? 'Installing' : 'Upgrading', install: 'Installing', values: 'Upgrading with the new values' }[mode] +
+                (dialog.row ? ` ${dialog.row.name}` : ''),
+            )
           }}
         />
       )}

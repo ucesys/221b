@@ -3,7 +3,15 @@ import type { BindingRow, RoleRow, SARow } from '../api/types'
 import { canI, canICommand, check, grantsOf, identities, roleIndex, ruleAllows, summary, whoCan } from './rbac'
 
 const src = { kind: 'manual' as const }
-const role = (name: string, rules: RoleRow['rules'], namespace?: string): RoleRow => ({ key: `role:${namespace ? 'Role/' + namespace + '/' : 'ClusterRole/'}${name}`, kind: namespace ? 'Role' : 'ClusterRole', namespace, name, rules, powers: [], source: src })
+const role = (name: string, rules: RoleRow['rules'], namespace?: string): RoleRow => ({
+  key: `role:${namespace ? 'Role/' + namespace + '/' : 'ClusterRole/'}${name}`,
+  kind: namespace ? 'Role' : 'ClusterRole',
+  namespace,
+  name,
+  rules,
+  powers: [],
+  source: src,
+})
 const bind = (name: string, roleKind: 'ClusterRole' | 'Role', roleName: string, subjects: BindingRow['subjects'], namespace?: string): BindingRow => ({
   key: `binding:${namespace ? 'RoleBinding/' + namespace + '/' : 'ClusterRoleBinding/'}${name}`,
   kind: namespace ? 'RoleBinding' : 'ClusterRoleBinding',
@@ -25,7 +33,16 @@ const roles = roleIndex([
 const bindings = [
   bind('readers', 'ClusterRole', 'reader', [{ kind: 'Group', name: 'ops' }]),
   bind('tls', 'ClusterRole', 'named', [{ kind: 'Group', name: 'ops' }], 'web'),
-  bind('deployer', 'Role', 'deployer', [{ kind: 'ServiceAccount', name: 'ci', namespace: 'web' }, { kind: 'User', name: 'dana' }], 'web'),
+  bind(
+    'deployer',
+    'Role',
+    'deployer',
+    [
+      { kind: 'ServiceAccount', name: 'ci', namespace: 'web' },
+      { kind: 'User', name: 'dana' },
+    ],
+    'web',
+  ),
   bind('auth', 'ClusterRole', 'reader', [{ kind: 'Group', name: 'system:serviceaccounts:batch' }]),
 ]
 

@@ -15,6 +15,8 @@ import (
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/ucesys/221b/server/internal/apps"
 )
 
 // MaxLine bounds a command's length.
@@ -105,6 +107,10 @@ type spec struct {
 	check func(c *Command) *Refusal
 	// usage is shown when the arguments are wrong.
 	usage string
+	// prompt, when set, is how the agents' prompts name the command after
+	// its tool, where its verb alone would say more than Watson runs
+	// (S-1); it starts with the verb.
+	prompt string
 }
 
 var (
@@ -161,9 +167,10 @@ var specs = []*spec{
 		flags: flags(map[string]flag{"to-revision": {value: true}, "dry-run": fDryRun}), check: checkRollout},
 	{tool: "kubectl", verb: []string{"delete"}, change: true, min: 1, max: -1, usage: "kubectl delete pod NAME [NAME...] | kubectl delete pvc NAME | kubectl delete secret NAME | kubectl delete namespace NAME",
 		flags: flags(map[string]flag{"selector": fSelector, "grace-period": {value: true}, "now": {}, "force": {}, "wait": {optional: true, value: true, values: []string{"true", "false"}}, "timeout": {value: true}, "dry-run": fDryRun, "ignore-not-found": {}}),
-		check: checkDelete},
+		check: checkDelete, prompt: "delete pod (or one pvc, secret or namespace, by name)"},
 	{tool: "kubectl", verb: []string{"patch"}, change: true, min: 1, max: 2, usage: `kubectl patch pvc NAME -n NAMESPACE --type merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'`,
-		flags: flags(map[string]flag{"type": {value: true, values: []string{"merge", "strategic"}}, "patch": {short: "p", value: true}, "dry-run": fDryRun}), check: checkPatch},
+		flags: flags(map[string]flag{"type": {value: true, values: []string{"merge", "strategic"}}, "patch": {short: "p", value: true}, "dry-run": fDryRun}), check: checkPatch,
+		prompt: `patch pvc (a claim's size only: kubectl patch pvc NAME -n NAMESPACE --type merge -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}')`},
 	{tool: "kubectl", verb: []string{"label"}, change: true, min: 2, max: -1, usage: "kubectl label TYPE NAME KEY=VALUE|KEY- [--overwrite]",
 		flags: flags(map[string]flag{"overwrite": {}, "selector": fSelector, "resource-version": {value: true}, "dry-run": fDryRun, "list": {}}), check: checkLabel},
 	{tool: "kubectl", verb: []string{"taint"}, change: true, min: 2, max: -1, usage: "kubectl taint nodes NODE [NODE...] KEY[=VALUE]:EFFECT|KEY[=VALUE][:EFFECT]- [--overwrite]",
@@ -187,12 +194,15 @@ var specs = []*spec{
 			"no-hooks": {}, "cleanup-on-fail": {}, "history-max": {value: true}, "wait-for-jobs": {}})},
 	// Helm applications (Phase 10): a chart from a git repository, at a
 	// branch or a tag; --app takes the console's saved values for it.
-	{tool: "helm", verb: []string{"install"}, change: true, min: 1, max: 1, usage: "helm install RELEASE --git URL [--path DIR] --ref BRANCH|TAG [--tag] -n NAMESPACE [--app] [--create-namespace]",
-		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "app": {}, "create-namespace": {}, "set": {value: true},
-			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}})},
-	{tool: "helm", verb: []string{"upgrade"}, change: true, min: 1, max: 1, usage: "helm upgrade RELEASE [--git URL] [--path DIR] [--ref BRANCH|TAG] [--tag] -n NAMESPACE [--app] [--install] [--create-namespace]",
-		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "app": {}, "install": {short: "i"}, "create-namespace": {}, "set": {value: true},
-			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}})},
+	// Phase 12, wave 5 (HR-07): or a chart of a Helm repository the
+	// console knows (REPO/CHART) or of an OCI registry (oci://...), at
+	// --version (the newest when none is named).
+	{tool: "helm", verb: []string{"install"}, change: true, min: 1, max: 2, usage: "helm install RELEASE --git URL [--path DIR] --ref BRANCH|TAG [--tag] -n NAMESPACE [--app] [--create-namespace] | helm install RELEASE REPO/CHART|oci://REGISTRY/PATH/CHART [--version VERSION] -n NAMESPACE [--app] [--create-namespace]",
+		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "version": {value: true}, "app": {}, "create-namespace": {}, "set": {value: true},
+			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}}), check: checkChartSource},
+	{tool: "helm", verb: []string{"upgrade"}, change: true, min: 1, max: 2, usage: "helm upgrade RELEASE [--git URL] [--path DIR] [--ref BRANCH|TAG] [--tag] -n NAMESPACE [--app] [--install] [--create-namespace] | helm upgrade RELEASE REPO/CHART|oci://REGISTRY/PATH/CHART [--version VERSION] -n NAMESPACE [--app] [--install]",
+		flags: flags(map[string]flag{"git": {value: true}, "path": {value: true}, "ref": {value: true}, "tag": {}, "version": {value: true}, "app": {}, "install": {short: "i"}, "create-namespace": {}, "set": {value: true},
+			"dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}}), check: checkChartSource},
 	{tool: "helm", verb: []string{"uninstall"}, change: true, min: 1, max: 1, usage: "helm uninstall RELEASE -n NAMESPACE [--keep-history]",
 		flags: flags(map[string]flag{"keep-history": {}, "dry-run": {optional: true, value: true, values: []string{"true", "false", "none", "client", "server"}}, "wait": {optional: true, value: true, values: []string{"true", "false", "watcher", "hookOnly", "legacy"}}, "timeout": {value: true}, "no-hooks": {}})},
 }
@@ -209,6 +219,53 @@ func Supported(change bool) []string {
 		}
 	}
 	return out
+}
+
+// Commands is the sentence that tells an agent what Watson runs, built
+// from the commands above so that it cannot fall behind them (S-1): one
+// part for each tool's reads and one for its changes, in the order above,
+// the parts separated by semicolons.
+func Commands() string {
+	type part struct {
+		tool   string
+		change bool
+		verbs  []string
+	}
+	var parts []*part
+	for _, s := range specs {
+		var p *part
+		for _, q := range parts {
+			if q.tool == s.tool && q.change == s.change {
+				p = q
+			}
+		}
+		if p == nil {
+			p = &part{tool: s.tool, change: s.change}
+			parts = append(parts, p)
+		}
+		v := strings.Join(s.verb, " ")
+		if s.prompt != "" {
+			v = s.prompt
+		}
+		p.verbs = append(p.verbs, v)
+	}
+	var out []string
+	for i, p := range parts {
+		text := p.tool + " " + andList(p.verbs)
+		if i == len(parts)-1 && len(parts) > 1 {
+			text = "and " + text
+		}
+		out = append(out, text)
+	}
+	return "Watson runs " + strings.Join(out, "; ") + "."
+}
+
+// andList joins words as a sentence does: "a, b and c".
+func andList(words []string) string {
+	if len(words) < 2 {
+		return strings.Join(words, "")
+	}
+	return strings.Join(words[:len(words)-1], ", ") + " and " + words[len(words)-1]
 }
 
 // Parse reads a command line. It never involves a shell: quotes group
@@ -717,6 +774,27 @@ func checkCanI(c *Command) *Refusal {
 	}
 	if len(c.Positionals) < 2 {
 		return refuse("usage", "Usage: %s", c.spec.usage)
+	}
+	return nil
+}
+
+// --- Helm repositories (Phase 12, wave 5) ---
+
+// checkChartSource takes one source of a chart (HR-07): --git with its
+// ref, or REPO/CHART or oci://.../CHART with --version, never both;
+// --version goes with a repository's chart, --ref and --tag with git.
+func checkChartSource(c *Command) *Refusal {
+	if len(c.Positionals) < 2 {
+		if c.Has("version") {
+			return refuse("usage", "--version is a repository chart's: name it as REPO/CHART or oci://REGISTRY/PATH/CHART after the release.")
+		}
+		return nil
+	}
+	if c.Has("git") || c.Has("path") || c.Has("ref") || c.Has("tag") {
+		return refuse("usage", "Name the chart once: --git with --ref for a chart in git, or REPO/CHART (or oci://...) with --version for a repository's.")
+	}
+	if _, err := apps.ParseChartRef(c.Positionals[1], c.Flag("version")); err != nil {
+		return refuse("usage", "%s", err.Error())
 	}
 	return nil
 }

@@ -27,7 +27,10 @@ export function FacetPicker({ nodes, value, onChange, block = false }: Props) {
   const facets = useMemo(() => nodeFacets(nodes), [nodes])
   const active = facetsActive(value)
   const matching = useMemo(() => (active ? nodes.filter((n) => facetMatch(n, value)) : nodes), [nodes, value, active])
-  const chips = [...value.labels.map((l) => ({ id: l, text: l, remove: () => onChange({ ...value, labels: value.labels.filter((x) => x !== l) }) })), ...value.taints.map((t) => ({ id: t, text: t, remove: () => onChange({ ...value, taints: value.taints.filter((x) => x !== t) }) }))]
+  const chips = [
+    ...value.labels.map((l) => ({ id: l, text: l, remove: () => onChange({ ...value, labels: value.labels.filter((x) => x !== l) }) })),
+    ...value.taints.map((t) => ({ id: t, text: t, remove: () => onChange({ ...value, taints: value.taints.filter((x) => x !== t) }) })),
+  ]
   const count = value.labels.length + value.taints.length
   const close = () => {
     setOpen(false)
@@ -45,7 +48,16 @@ export function FacetPicker({ nodes, value, onChange, block = false }: Props) {
           }
         }}
       >
-        <button ref={button} className="rk-btn" aria-expanded={open} aria-haspopup="true" data-on={active} onClick={() => setOpen(!open)} style={{ height: 32, justifyContent: 'flex-start', width: block ? '100%' : undefined }} title="Narrow the nodes by their labels and taints">
+        <button
+          ref={button}
+          className="rk-btn"
+          aria-expanded={open}
+          aria-haspopup="true"
+          data-on={active}
+          onClick={() => setOpen(!open)}
+          style={{ height: 32, justifyContent: 'flex-start', width: block ? '100%' : undefined }}
+          title="Narrow the nodes by their labels and taints"
+        >
           <FilterIcon />
           <span style={{ flex: block ? '1 1 auto' : undefined, textAlign: 'left' }}>Select nodes by label and taint</span>
           {count > 0 && <span className="rk-cnt">{count}</span>}
@@ -68,7 +80,14 @@ export function FacetPicker({ nodes, value, onChange, block = false }: Props) {
                     </span>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
                       {g.values.map((v) => (
-                        <button key={v.text} className="rk-fchip" aria-pressed={value.labels.includes(v.text)} title={`${v.text} — ${v.count} ${v.count === 1 ? 'node' : 'nodes'}`} data-label={v.text} onClick={() => onChange({ ...value, labels: toggle(value.labels, v.text) })}>
+                        <button
+                          key={v.text}
+                          className="rk-fchip"
+                          aria-pressed={value.labels.includes(v.text)}
+                          title={`${v.text} — ${v.count} ${v.count === 1 ? 'node' : 'nodes'}`}
+                          data-label={v.text}
+                          onClick={() => onChange({ ...value, labels: toggle(value.labels, v.text) })}
+                        >
                           {v.value || 'set'}
                           <span className="rk-cnt">{v.count}</span>
                         </button>
@@ -81,7 +100,14 @@ export function FacetPicker({ nodes, value, onChange, block = false }: Props) {
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {facets.taints.length === 0 && <span style={{ fontSize: 12, color: 'var(--fg3)' }}>No node has a taint</span>}
                 {facets.taints.map((t) => (
-                  <button key={t.id} className="rk-fchip" aria-pressed={value.taints.includes(t.id)} title={`Taint ${t.id} — ${t.count} ${t.count === 1 ? 'node' : 'nodes'}`} data-taint={t.id} onClick={() => onChange({ ...value, taints: toggle(value.taints, t.id) })}>
+                  <button
+                    key={t.id}
+                    className="rk-fchip"
+                    aria-pressed={value.taints.includes(t.id)}
+                    title={`Taint ${t.id} — ${t.count} ${t.count === 1 ? 'node' : 'nodes'}`}
+                    data-taint={t.id}
+                    onClick={() => onChange({ ...value, taints: toggle(value.taints, t.id) })}
+                  >
                     {t.key}
                     {t.value ? '=' + t.value : ''}
                     <span className="rk-t" data-tone={effectTone(t.effect)} style={{ fontSize: 10.5 }}>

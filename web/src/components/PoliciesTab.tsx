@@ -2,9 +2,28 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { jsonHeaders } from '../api/auth'
 import { useView } from '../api/live'
 import type { NetCheckResult, PodRow, PolicyNSRow, PolicyRow, QuotaRow, ServiceRow } from '../api/types'
-import { COVERAGE_COLUMNS, DRAIN_COLUMNS, drainTerms, HOOK_COLUMNS, hookTerms, ISOLATION_COLUMNS, LIMITS_COLUMNS, limitsTerms, NETPOL_COLUMNS, netpolTerms, nsTerms, PDB_COLUMNS, pdbTerms, PRIORITY_COLUMNS, priorityTerms, PSA_COLUMNS, ROLLOUT_COLUMNS, rolloutTerms } from '../columns/policies'
+import {
+  COVERAGE_COLUMNS,
+  DRAIN_COLUMNS,
+  drainTerms,
+  HOOK_COLUMNS,
+  hookTerms,
+  ISOLATION_COLUMNS,
+  LIMITS_COLUMNS,
+  limitsTerms,
+  NETPOL_COLUMNS,
+  netpolTerms,
+  nsTerms,
+  PDB_COLUMNS,
+  pdbTerms,
+  PRIORITY_COLUMNS,
+  priorityTerms,
+  PSA_COLUMNS,
+  ROLLOUT_COLUMNS,
+  rolloutTerms,
+} from '../columns/policies'
 import { fmtAge, nWord } from '../lib/format'
-import { appNamespaces, enforced, findings, flagOf, modelOf, openNamespaces, qtyNice, SECTIONS, sectionSub, countsText, type PolicyFinding, type PolicyModel, type Section } from '../lib/policies'
+import { appNamespaces, enforced, findings, flagOf, modelOf, openNamespaces, qtyNice, SECTIONS, sectionOf, sectionSub, countsText, type PolicyFinding, type PolicyModel, type Section } from '../lib/policies'
 import { listText, SEV_TEXT, SEV_TONE } from '../lib/rbac'
 import { apiPath, href, navigate, withParams } from '../lib/router'
 import type { ColumnDef, Term } from '../lib/table'
@@ -29,14 +48,19 @@ export function PoliciesTab({ cluster, now, onToast, route }: TabProps) {
   const view = useView<PolicyRow>('policies')
   const m = useMemo(() => modelOf(view.rows), [view.rows])
   const fs = useMemo(() => findings(m), [m])
-  const sel: Section = SECTIONS.some(([s]) => s === route.path[0]) ? (route.path[0] as Section) : 'overview'
+  const sel: Section = sectionOf(route.path[0])
   const set = (changes: Record<string, string | undefined>) => navigate(withParams(route, changes), true)
   const open = route.params.get('open') ?? ''
   const go = (s: Section) => navigate(href('policies', s === 'overview' ? [] : [s]))
   const common = { m, fs, now, set, onToast, cluster: cluster?.name, loaded: view.loaded, route }
   return (
     <>
-      <aside className="rk-pane" aria-label="Kinds of policy" data-testid="policies-aside" style={{ flex: '1 1 320px', maxWidth: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRight: '1px solid var(--line)' }}>
+      <aside
+        className="rk-pane"
+        aria-label="Kinds of policy"
+        data-testid="policies-aside"
+        style={{ flex: '1 1 320px', maxWidth: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRight: '1px solid var(--line)' }}
+      >
         <div style={{ padding: '14px 16px 12px', borderBottom: '1px solid var(--line)' }}>
           <h2 className="rk-h">Policies</h2>
         </div>
@@ -45,7 +69,15 @@ export function PoliciesTab({ cluster, now, onToast, route }: TabProps) {
             const mine = s === 'overview' ? fs : fs.filter((f) => f.section === s)
             const flag = flagOf(mine)
             return (
-              <a key={s} className="rk-rrow" href={href('policies', s === 'overview' ? [] : [s])} data-sel={sel === s} aria-current={sel === s ? 'page' : undefined} data-section={s} style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '11px 16px', borderBottom: '1px solid var(--line)', textDecoration: 'none', color: 'inherit' }}>
+              <a
+                key={s}
+                className="rk-rrow"
+                href={href('policies', s === 'overview' ? [] : [s])}
+                data-sel={sel === s}
+                aria-current={sel === s ? 'page' : undefined}
+                data-section={s}
+                style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '11px 16px', borderBottom: '1px solid var(--line)', textDecoration: 'none', color: 'inherit' }}
+              >
                 <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 13, fontWeight: 500 }}>{name}</span>
                   <span style={{ flex: '1 1 auto' }} />
@@ -159,7 +191,41 @@ function Review({ fs, set, onToast, go, empty = 'Nothing to review.' }: { fs: Po
   )
 }
 
-function Table<R>({ title, sub, id, columns, rows, terms, sort, now, onOpen, rowAttr, rowKey, rowLabel, cluster, onToast, empty = 'Nothing to show.', note }: { title: string; sub?: string; id: string; columns: ColumnDef<R>[]; rows: R[]; terms: (r: R) => Term[]; sort: { col: string; dir: 'asc' | 'desc' }; now: number; onOpen?: (key: string) => void; rowAttr: string; rowKey: (r: R) => string; rowLabel: (r: R) => string; cluster?: string; onToast: (m: string) => void; empty?: string; note?: ReactNode }) {
+function Table<R>({
+  title,
+  sub,
+  id,
+  columns,
+  rows,
+  terms,
+  sort,
+  now,
+  onOpen,
+  rowAttr,
+  rowKey,
+  rowLabel,
+  cluster,
+  onToast,
+  empty = 'Nothing to show.',
+  note,
+}: {
+  title: string
+  sub?: string
+  id: string
+  columns: ColumnDef<R>[]
+  rows: R[]
+  terms: (r: R) => Term[]
+  sort: { col: string; dir: 'asc' | 'desc' }
+  now: number
+  onOpen?: (key: string) => void
+  rowAttr: string
+  rowKey: (r: R) => string
+  rowLabel: (r: R) => string
+  cluster?: string
+  onToast: (m: string) => void
+  empty?: string
+  note?: ReactNode
+}) {
   const t = useTable<R>({ id, columns, rows, terms, now, defaultSort: sort })
   return (
     <section className="rk-card" aria-label={title} style={{ overflow: 'hidden', flex: 'none' }} data-testid={`table-${id}`}>
@@ -208,7 +274,21 @@ function Overview(p: SecProps & { go: (s: Section) => void }) {
         ]}
       />
       <Review fs={fs} set={p.set} onToast={p.onToast} go={p.go} empty={p.loaded ? 'Nothing to review.' : 'Reading the cluster’s policies…'} />
-      <Table<PolicyNSRow> title="Coverage by namespace" sub="which policies apply where" id="policy-coverage" columns={COVERAGE_COLUMNS} rows={m.namespaces} terms={nsTerms} sort={{ col: 'np', dir: 'asc' }} now={p.now} rowAttr="ns" rowKey={(r) => r.name} rowLabel={(r) => `Namespace ${r.name}`} cluster={p.cluster} onToast={p.onToast} />
+      <Table<PolicyNSRow>
+        title="Coverage by namespace"
+        sub="which policies apply where"
+        id="policy-coverage"
+        columns={COVERAGE_COLUMNS}
+        rows={m.namespaces}
+        terms={nsTerms}
+        sort={{ col: 'np', dir: 'asc' }}
+        now={p.now}
+        rowAttr="ns"
+        rowKey={(r) => r.name}
+        rowLabel={(r) => `Namespace ${r.name}`}
+        cluster={p.cluster}
+        onToast={p.onToast}
+      />
     </>
   )
 }
@@ -219,10 +299,7 @@ function NetPolicies(p: SecProps) {
   const enforcedBy = cni?.name ? (cni.enforces === 'yes' ? ` · enforced by ${cni.name}` : cni.enforces === 'no' ? ` · ${cni.name} does not enforce them` : ` · ${cni.name}: enforcement unknown`) : ''
   return (
     <>
-      <Head
-        title="Network policies"
-        summary={sectionSub('netpol', m, p.fs) + enforcedBy}
-      />
+      <Head title="Network policies" summary={sectionSub('netpol', m, p.fs) + enforcedBy} />
       {cni && cni.enforces !== 'yes' && (
         <div className="rk-callout" data-tone="warn" data-testid="cni-callout">
           <WarnIcon />
@@ -231,8 +308,37 @@ function NetPolicies(p: SecProps) {
       )}
       <Checker {...p} />
       <Review fs={p.fs.filter((f) => f.section === 'netpol')} set={p.set} onToast={p.onToast} />
-      <Table<PolicyNSRow> title="Isolation by namespace" id="policy-isolation" columns={ISOLATION_COLUMNS} rows={m.namespaces.filter((n) => n.pods > 0)} terms={nsTerms} sort={{ col: 'iso', dir: 'asc' }} now={p.now} onOpen={(k) => navigate(href('namespaces', [k], { kinds: 'NetworkPolicy' }))} rowAttr="ns" rowKey={(r) => r.name} rowLabel={(r) => `${r.name} — show its NetworkPolicies in the Namespaces tab`} cluster={p.cluster} onToast={p.onToast} />
-      <Table title="NetworkPolicies" id="policy-netpols" columns={NETPOL_COLUMNS} rows={m.netpols} terms={netpolTerms} sort={{ col: 'ns', dir: 'asc' }} now={p.now} onOpen={(k) => p.set({ open: k })} rowAttr="netpol" rowKey={(r) => r.key} rowLabel={(r) => `NetworkPolicy ${r.namespace}/${r.name} — open details and YAML`} cluster={p.cluster} onToast={p.onToast} empty="No NetworkPolicies in this cluster." />
+      <Table<PolicyNSRow>
+        title="Isolation by namespace"
+        id="policy-isolation"
+        columns={ISOLATION_COLUMNS}
+        rows={m.namespaces.filter((n) => n.pods > 0)}
+        terms={nsTerms}
+        sort={{ col: 'iso', dir: 'asc' }}
+        now={p.now}
+        onOpen={(k) => navigate(href('namespaces', [k], { kinds: 'NetworkPolicy' }))}
+        rowAttr="ns"
+        rowKey={(r) => r.name}
+        rowLabel={(r) => `${r.name} — show its NetworkPolicies in the Namespaces tab`}
+        cluster={p.cluster}
+        onToast={p.onToast}
+      />
+      <Table
+        title="NetworkPolicies"
+        id="policy-netpols"
+        columns={NETPOL_COLUMNS}
+        rows={m.netpols}
+        terms={netpolTerms}
+        sort={{ col: 'ns', dir: 'asc' }}
+        now={p.now}
+        onOpen={(k) => p.set({ open: k })}
+        rowAttr="netpol"
+        rowKey={(r) => r.key}
+        rowLabel={(r) => `NetworkPolicy ${r.namespace}/${r.name} — open details and YAML`}
+        cluster={p.cluster}
+        onToast={p.onToast}
+        empty="No NetworkPolicies in this cluster."
+      />
     </>
   )
 }
@@ -292,7 +398,17 @@ function Checker(p: SecProps) {
         <Select label="Port" value={port} options={ports.map((x) => [String(x.port), `${x.port}/${x.protocol}`])} onChange={(v) => p.set({ port: v })} testId="netcheck-port" />
       </div>
       <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="netcheck-answer">
-        {!fromPod || !svc ? <span style={{ fontSize: 12.5, color: 'var(--fg3)' }}>{pods.loaded && services.loaded ? 'Pick a workload and a Service with pods behind it.' : 'Reading pods and Services…'}</span> : r?.error ? <span className="rk-t" data-tone="err" style={{ fontSize: 12.5 }}>{r.error}</span> : r?.data ? <Answer data={r.data} from={from} fromPod={fromPod} to={to} set={p.set} /> : <span style={{ fontSize: 12.5, color: 'var(--fg3)' }}>Checking…</span>}
+        {!fromPod || !svc ? (
+          <span style={{ fontSize: 12.5, color: 'var(--fg3)' }}>{pods.loaded && services.loaded ? 'Pick a workload and a Service with pods behind it.' : 'Reading pods and Services…'}</span>
+        ) : r?.error ? (
+          <span className="rk-t" data-tone="err" style={{ fontSize: 12.5 }}>
+            {r.error}
+          </span>
+        ) : r?.data ? (
+          <Answer data={r.data} from={from} fromPod={fromPod} to={to} set={p.set} />
+        ) : (
+          <span style={{ fontSize: 12.5, color: 'var(--fg3)' }}>Checking…</span>
+        )}
       </div>
     </section>
   )
@@ -305,15 +421,32 @@ function Answer({ data, from, fromPod, to, set }: { data: NetCheckResult; from: 
   const none = data.allowed === 0
   const target = `${data.service?.protocol ?? c.protocol} ${c.port}`
   const toPod = c.to.split('/')[1]
-  const verdict = c.toHost ? { text: 'Allowed', tone: 'muted' } : !c.ingress.isolated && !c.egress.isolated ? { text: 'Allowed — no policy', tone: 'info' } : all ? { text: 'Allowed', tone: 'ok' } : none ? { text: 'Denied', tone: 'err' } : { text: `${data.allowed} of ${data.checks.length} pods allowed`, tone: 'warn' }
+  const verdict = c.toHost
+    ? { text: 'Allowed', tone: 'muted' }
+    : !c.ingress.isolated && !c.egress.isolated
+      ? { text: 'Allowed — no policy', tone: 'info' }
+      : all
+        ? { text: 'Allowed', tone: 'ok' }
+        : none
+          ? { text: 'Denied', tone: 'err' }
+          : { text: `${data.allowed} of ${data.checks.length} pods allowed`, tone: 'warn' }
   const why: string[] = []
   if (c.toHost) why.push(`${toPod} uses its node’s network, so NetworkPolicies don’t apply to it.`)
   const side = (name: 'egress' | 'ingress') => {
     const s = c[name]
     const dir = name === 'egress' ? `Out of ${from}` : `Into ${to}`
     if (!s.isolated) return name === 'egress' ? '' : `No NetworkPolicy selects ${toPod} for incoming connections, so it accepts them from any pod.`
-    if (s.allowed) return `${dir}: ${listText(s.allowedBy)} ${s.allowedBy.length === 1 ? 'allows' : 'allow'} it (${Object.values(s.rules ?? {})[0] ?? ''}).${s.selecting.length > s.allowedBy.length ? ` Also selecting: ${listText(s.selecting.filter((x) => !s.allowedBy.includes(x)))}.` : ''}`
-    const who = name === 'ingress' ? (c.fromHost ? `traffic from a node’s address (${fromPod.name} uses its node’s network)` : `pods with ${Object.entries(fromPod.labels).filter(([k]) => !k.includes('pod-template-hash') && !k.includes('controller-revision')).map(([k, v]) => `${k}=${v}`).join(', ')} from namespace ${fromPod.namespace}`) : `${to} on ${target}`
+    if (s.allowed)
+      return `${dir}: ${listText(s.allowedBy)} ${s.allowedBy.length === 1 ? 'allows' : 'allow'} it (${Object.values(s.rules ?? {})[0] ?? ''}).${s.selecting.length > s.allowedBy.length ? ` Also selecting: ${listText(s.selecting.filter((x) => !s.allowedBy.includes(x)))}.` : ''}`
+    const who =
+      name === 'ingress'
+        ? c.fromHost
+          ? `traffic from a node’s address (${fromPod.name} uses its node’s network)`
+          : `pods with ${Object.entries(fromPod.labels)
+              .filter(([k]) => !k.includes('pod-template-hash') && !k.includes('controller-revision'))
+              .map(([k, v]) => `${k}=${v}`)
+              .join(', ')} from namespace ${fromPod.namespace}`
+        : `${to} on ${target}`
     return `${dir}: ${listText(s.selecting)} ${s.selecting.length === 1 ? 'selects' : 'select'} it and none of ${s.selecting.length === 1 ? 'its' : 'their'} rules admits ${who}${name === 'ingress' ? ` on ${target}` : ''}.`
   }
   if (!c.toHost) {
@@ -369,8 +502,38 @@ function Budgets(p: SecProps) {
     <>
       <Head title="Disruption budgets" summary={sectionSub('pdb', m, p.fs)} />
       <Review fs={p.fs.filter((f) => f.section === 'pdb')} set={p.set} onToast={p.onToast} />
-      <Table title="Can each node be drained?" sub={`kubectl drain --ignore-daemonsets --delete-emptydir-data`} id="policy-drains" columns={DRAIN_COLUMNS} rows={m.drains} terms={drainTerms} sort={{ col: 'verdict', dir: 'asc' }} now={p.now} rowAttr="drain" rowKey={(r) => r.node} rowLabel={(r) => `${r.node}: ${r.verdict}`} cluster={p.cluster} onToast={p.onToast} note="The verdicts follow kubectl’s drain logic and the eviction API: what a server-side dry run of the drain refuses is Blocked; a drain that needs more disruptions than a budget allows at once waits for replacements." />
-      <Table title="PodDisruptionBudgets" id="policy-pdbs" columns={PDB_COLUMNS} rows={m.pdbs} terms={pdbTerms} sort={{ col: 'ns', dir: 'asc' }} now={p.now} onOpen={(k) => p.set({ open: k })} rowAttr="pdb" rowKey={(r) => r.key} rowLabel={(r) => `PodDisruptionBudget ${r.namespace}/${r.name} — open details`} cluster={p.cluster} onToast={p.onToast} empty="No PodDisruptionBudgets in this cluster." />
+      <Table
+        title="Can each node be drained?"
+        sub={`kubectl drain --ignore-daemonsets --delete-emptydir-data`}
+        id="policy-drains"
+        columns={DRAIN_COLUMNS}
+        rows={m.drains}
+        terms={drainTerms}
+        sort={{ col: 'verdict', dir: 'asc' }}
+        now={p.now}
+        rowAttr="drain"
+        rowKey={(r) => r.node}
+        rowLabel={(r) => `${r.node}: ${r.verdict}`}
+        cluster={p.cluster}
+        onToast={p.onToast}
+        note="The verdicts follow kubectl’s drain logic and the eviction API: what a server-side dry run of the drain refuses is Blocked; a drain that needs more disruptions than a budget allows at once waits for replacements."
+      />
+      <Table
+        title="PodDisruptionBudgets"
+        id="policy-pdbs"
+        columns={PDB_COLUMNS}
+        rows={m.pdbs}
+        terms={pdbTerms}
+        sort={{ col: 'ns', dir: 'asc' }}
+        now={p.now}
+        onOpen={(k) => p.set({ open: k })}
+        rowAttr="pdb"
+        rowKey={(r) => r.key}
+        rowLabel={(r) => `PodDisruptionBudget ${r.namespace}/${r.name} — open details`}
+        cluster={p.cluster}
+        onToast={p.onToast}
+        empty="No PodDisruptionBudgets in this cluster."
+      />
     </>
   )
 }
@@ -428,8 +591,36 @@ function Quotas(p: SecProps) {
       ) : (
         <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>No namespace has a ResourceQuota.</p>
       )}
-      <Table title="Room for a rolling update" sub="Deployments in namespaces with a quota" id="policy-rollouts" columns={ROLLOUT_COLUMNS} rows={m.rollouts} terms={rolloutTerms} sort={{ col: 'verdict', dir: 'asc' }} now={p.now} rowAttr="rollout" rowKey={(r) => r.key} rowLabel={(r) => `Deployment ${r.namespace}/${r.name}`} cluster={p.cluster} onToast={p.onToast} />
-      <Table title="LimitRanges" id="policy-limits" columns={LIMITS_COLUMNS} rows={m.limits} terms={limitsTerms} sort={{ col: 'ns', dir: 'asc' }} now={p.now} onOpen={(k) => p.set({ open: k })} rowAttr="limits" rowKey={(r) => r.key} rowLabel={(r) => `LimitRange ${r.namespace}/${r.name} — open details`} cluster={p.cluster} onToast={p.onToast} />
+      <Table
+        title="Room for a rolling update"
+        sub="Deployments in namespaces with a quota"
+        id="policy-rollouts"
+        columns={ROLLOUT_COLUMNS}
+        rows={m.rollouts}
+        terms={rolloutTerms}
+        sort={{ col: 'verdict', dir: 'asc' }}
+        now={p.now}
+        rowAttr="rollout"
+        rowKey={(r) => r.key}
+        rowLabel={(r) => `Deployment ${r.namespace}/${r.name}`}
+        cluster={p.cluster}
+        onToast={p.onToast}
+      />
+      <Table
+        title="LimitRanges"
+        id="policy-limits"
+        columns={LIMITS_COLUMNS}
+        rows={m.limits}
+        terms={limitsTerms}
+        sort={{ col: 'ns', dir: 'asc' }}
+        now={p.now}
+        onOpen={(k) => p.set({ open: k })}
+        rowAttr="limits"
+        rowKey={(r) => r.key}
+        rowLabel={(r) => `LimitRange ${r.namespace}/${r.name} — open details`}
+        cluster={p.cluster}
+        onToast={p.onToast}
+      />
     </>
   )
 }
@@ -440,7 +631,21 @@ function PodSecurity(p: SecProps) {
     <>
       <Head title="Pod Security" summary={sectionSub('psa', m, p.fs)} />
       <Review fs={p.fs.filter((f) => f.section === 'psa')} set={p.set} onToast={p.onToast} />
-      <Table<PolicyNSRow> title="Pod Security by namespace" id="policy-psa" columns={PSA_COLUMNS} rows={m.namespaces} terms={nsTerms} sort={{ col: 'enforce', dir: 'asc' }} now={p.now} onOpen={(k) => p.set({ open: `ns:${k}` })} rowAttr="psa" rowKey={(r) => r.name} rowLabel={(r) => `Namespace ${r.name} — what each level would reject`} cluster={p.cluster} onToast={p.onToast} />
+      <Table<PolicyNSRow>
+        title="Pod Security by namespace"
+        id="policy-psa"
+        columns={PSA_COLUMNS}
+        rows={m.namespaces}
+        terms={nsTerms}
+        sort={{ col: 'enforce', dir: 'asc' }}
+        now={p.now}
+        onOpen={(k) => p.set({ open: `ns:${k}` })}
+        rowAttr="psa"
+        rowKey={(r) => r.name}
+        rowLabel={(r) => `Namespace ${r.name} — what each level would reject`}
+        cluster={p.cluster}
+        onToast={p.onToast}
+      />
       <p style={{ margin: 0, fontSize: 12, color: 'var(--fg3)' }}>{appNamespaces(m).length} application namespaces; open one for the pods each level rejects and what kubectl warns when the enforce label changes.</p>
     </>
   )
@@ -452,7 +657,22 @@ function Webhooks(p: SecProps) {
     <>
       <Head title="Admission webhooks" summary={sectionSub('webhooks', m, p.fs)} />
       <Review fs={p.fs.filter((f) => f.section === 'webhooks')} set={p.set} onToast={p.onToast} />
-      <Table title="Admission webhooks" id="policy-hooks" columns={HOOK_COLUMNS} rows={m.hooks} terms={hookTerms} sort={{ col: 'reach', dir: 'asc' }} now={p.now} onOpen={(k) => p.set({ open: k })} rowAttr="hook" rowKey={(r) => r.key} rowLabel={(r) => `${r.kind}WebhookConfiguration ${r.config} — open details`} cluster={p.cluster} onToast={p.onToast} empty="No admission webhooks in this cluster." />
+      <Table
+        title="Admission webhooks"
+        id="policy-hooks"
+        columns={HOOK_COLUMNS}
+        rows={m.hooks}
+        terms={hookTerms}
+        sort={{ col: 'reach', dir: 'asc' }}
+        now={p.now}
+        onOpen={(k) => p.set({ open: k })}
+        rowAttr="hook"
+        rowKey={(r) => r.key}
+        rowLabel={(r) => `${r.kind}WebhookConfiguration ${r.config} — open details`}
+        cluster={p.cluster}
+        onToast={p.onToast}
+        empty="No admission webhooks in this cluster."
+      />
     </>
   )
 }
@@ -478,7 +698,11 @@ function Priorities(p: SecProps) {
         rowLabel={(r) => `PriorityClass ${r.name} — open details`}
         cluster={p.cluster}
         onToast={p.onToast}
-        note={nc ? `The other ${nWord(nc.pods, 'running or waiting pod has', 'running or waiting pods have')} no class and ${def ? `get ${def.name}’s value` : 'run at priority 0'}${nc.waiting ? `, among them ${nc.waiting}, which waits for room instead of preempting anything.` : '.'}` : undefined}
+        note={
+          nc
+            ? `The other ${nWord(nc.pods, 'running or waiting pod has', 'running or waiting pods have')} no class and ${def ? `get ${def.name}’s value` : 'run at priority 0'}${nc.waiting ? `, among them ${nc.waiting}, which waits for room instead of preempting anything.` : '.'}`
+            : undefined
+        }
       />
     </>
   )

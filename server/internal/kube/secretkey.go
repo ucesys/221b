@@ -20,10 +20,18 @@ import (
 // namespace (X-04): written when an administrator saves it, read at start,
 // never sent back to a browser.
 type SecretKey struct {
-	secrets corev1client.SecretInterface
-	ref     string
-	name    string
-	labels  map[string]string
+	secrets     corev1client.SecretInterface
+	ref         string
+	name        string
+	labels      map[string]string
+	annotations map[string]string
+}
+
+// WithAnnotations has the Secret made with these annotations, such as
+// helm.sh/resource-policy: keep for one that must outlive the release.
+func (s *SecretKey) WithAnnotations(a map[string]string) *SecretKey {
+	s.annotations = a
+	return s
 }
 
 // ErrConflict says a conditional write found the Secret changed since it
@@ -124,7 +132,7 @@ func (s *SecretKey) LoadKey(ctx context.Context, key string) (b []byte, version 
 // returns ErrConflict when another writer got there first.
 func (s *SecretKey) SaveKeyIf(ctx context.Context, key string, b []byte, version string) error {
 	if version == NoSecret {
-		sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: s.name, Labels: s.labels}, Type: corev1.SecretTypeOpaque, Data: map[string][]byte{key: b}}
+		sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: s.name, Labels: s.labels, Annotations: s.annotations}, Type: corev1.SecretTypeOpaque, Data: map[string][]byte{key: b}}
 		_, err := s.secrets.Create(ctx, sec, metav1.CreateOptions{})
 		if apierrors.IsAlreadyExists(err) {
 			return ErrConflict

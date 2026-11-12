@@ -3,7 +3,6 @@ package sherlock
 import (
 	"context"
 	"crypto"
-	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -19,9 +18,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"sort"
 	"strings"
 	"time"
+
+	"github.com/ucesys/221b/server/internal/awsv4"
 )
 
 // Credentials for Amazon Bedrock and Vertex AI: a stored one, or the pod's
@@ -202,105 +202,10 @@ func sha256Hex(b []byte) string {
 	return hex.EncodeToString(h[:])
 }
 
-func hmacSHA256(key []byte, s string) []byte {
-	m := hmac.New(sha256.New, key)
-	m.Write([]byte(s))
-	return m.Sum(nil)
-}
-
-// awsEscape escapes a path or query value as SigV4 wants: everything but
-// unreserved characters.
-func awsEscape(s string, path bool) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.' || c == '~' || (path && c == '/') {
-			b.WriteByte(c)
-		} else {
-			fmt.Fprintf(&b, "%%%02X", c)
-		}
-	}
-	return b.String()
-}
-
-// signV4 signs a request with AWS Signature Version 4, over its method,
-// path, query, the host, content type, date and security token headers
-// and the body.
+// signV4 signs a request with AWS Signature Version 4 (awsv4.Sign, shared
+// with the backups to S3).
 func signV4(r *http.Request, body []byte, k AWSCredentials, region, service string, now time.Time) {
-	t := now.UTC()
-	amzDate := t.Format("20060102T150405Z")
-	day := t.Format("20060102")
-	r.Header.Set("X-Amz-Date", amzDate)
-	if k.SessionToken != "" {
-		r.Header.Set("X-Amz-Security-Token", k.SessionToken)
-	}
-	payload := sha256Hex(body)
-	if service == "s3" {
-		r.Header.Set("X-Amz-Content-Sha256", payload)
-	}
-	host := r.URL.Host
-	if r.Host != "" {
-		host = r.Host
-	}
-	// Canonical path: each segment escaped once more (except for S3).
-	path := r.URL.EscapedPath()
-	if path == "" {
-		path = "/"
-	}
-	if service != "s3" {
-		segs := strings.Split(path, "/")
-		for i, s := range segs {
-			u, err := url.PathUnescape(s)
-			if err != nil {
-				u = s
-			}
-			segs[i] = awsEscape(awsEscape(u, false), false)
-		}
-		path = strings.Join(segs, "/")
-	}
-	q := r.URL.Query()
-	keys := make([]string, 0, len(q))
-	for key := range q {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	var qs []string
-	for _, key := range keys {
-		vals := append([]string(nil), q[key]...)
-		sort.Strings(vals)
-		for _, v := range vals {
-			qs = append(qs, awsEscape(key, false)+"="+awsEscape(v, false))
-		}
-	}
-	headers := map[string]string{"host": host, "x-amz-date": amzDate}
-	if ct := r.Header.Get("Content-Type"); ct != "" {
-		headers["content-type"] = ct
-	}
-	if k.SessionToken != "" {
-		headers["x-amz-security-token"] = k.SessionToken
-	}
-	if service == "s3" {
-		headers["x-amz-content-sha256"] = payload
-	}
-	names := make([]string, 0, len(headers))
-	for n := range headers {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	var canonHeaders strings.Builder
-	for _, n := range names {
-		canonHeaders.WriteString(n + ":" + strings.Join(strings.Fields(headers[n]), " ") + "\n")
-	}
-	signed := strings.Join(names, ";")
-	canonical := strings.Join([]string{r.Method, path, strings.Join(qs, "&"), canonHeaders.String(), signed, payload}, "\n")
-	scope := day + "/" + region + "/" + service + "/aws4_request"
-	toSign := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" + sha256Hex([]byte(canonical))
-	key := hmacSHA256([]byte("AWS4"+k.SecretAccessKey), day)
-	key = hmacSHA256(key, region)
-	key = hmacSHA256(key, service)
-	key = hmacSHA256(key, "aws4_request")
-	sig := hex.EncodeToString(hmacSHA256(key, toSign))
-	r.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+k.AccessKeyID+"/"+scope+", SignedHeaders="+signed+", Signature="+sig)
+	awsv4.Sign(r, body, awsv4.Credentials(k), region, service, now)
 }
 
 // ---------- Google ----------

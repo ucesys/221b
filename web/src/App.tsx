@@ -1,154 +1,115 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { useActivity, useMe } from "./api/auth";
-import { useClusters, type ClusterSummary } from "./api/clusters";
-import { LiveContext, useLiveMeta, useLiveStore, useView } from "./api/live";
-import type { AccessRow, PolicyRow } from "./api/types";
-import { useAlerts } from "./api/acks";
-import { AccessTab } from "./components/AccessTab";
-import { NetworksTab } from "./components/NetworksTab";
-import { PeekPane } from "./components/PeekPane";
-import { PoliciesTab } from "./components/PoliciesTab";
-import { StorageTab } from "./components/StorageTab";
-import { AlertsTab } from "./components/AlertsTab";
-import { Banners } from "./components/Banners";
-import { ClusterEditor } from "./components/ClusterEditor";
-import { ClusterPage } from "./components/ClusterPage";
-import { AutomationTab } from "./components/AutomationTab";
-import { FleetsTab } from "./components/FleetsTab";
-import { AppsTab } from "./components/apps/AppsTab";
-import { HomePage } from "./components/HomePage";
-import { NamespacesTab } from "./components/NamespacesTab";
-import { NodesTab } from "./components/NodesTab";
-import { PodsTab } from "./components/PodsTab";
-import { ServicesTab } from "./components/ServicesTab";
-import { AdminPageView } from "./components/AdminPage";
-import { TipLayer } from "./components/TipLayer";
-import { Toast } from "./components/Toast";
-import { TopBar, type Theme } from "./components/TopBar";
-import { badgeOf, bannersOf, tabTone } from "./lib/alerts";
-import { accessBadge } from "./lib/rbac";
-import {
-  findings as policyFindings,
-  flagOf as policyFlag,
-  modelOf as policyModel,
-} from "./lib/policies";
-import {
-  adminHref,
-  apiPath,
-  clusterHref,
-  clusterPageHref,
-  currentRoute,
-  FIRST_TAB,
-  HOME,
-  href,
-  LOCAL,
-  navigate,
-  TABS,
-  isAutomationTab,
-  useRoute,
-  withParams,
-} from "./lib/router";
-import { askSherlock, useSherlock } from "./api/sherlock";
-import { sendToWatson, useWatson, WatsonError, type Send } from "./api/watson";
-import {
-  canPopOut,
-  clusterTroubleshootQuestion,
-  focusPopup,
-  onPop,
-  opensHere,
-  popOut,
-  post,
-  reviewQuestion,
-  usePopped,
-  WINDOW_VIEWS,
-  type Pane,
-} from "./lib/sherlock";
-import {
-  openTarget,
-  SherlockContext,
-  SherlockPane,
-} from "./components/Sherlock";
-import { Dock, PoppedOutFab, type DockMode } from "./components/Dock";
-import {
-  autoRunReads,
-  WatsonContext,
-  watsonOff,
-  WatsonPane,
-} from "./components/Watson";
-import { askContext, useUIControl } from "./lib/uiWindow";
-import { setToolOpener, WINDOW_ID } from "./lib/uiControl";
-import type { ToolName } from "./api/toolbox";
-import { ViewAnnouncer } from "./components/ViewAnnouncer";
-import { AssistantWindow } from "./components/AssistantWindow";
-import { readJSON, writeJSON } from "./lib/storage";
-import { runToolAction, shownSessions, useSessions } from "./api/toolbox";
-import {
-  ToolboxContext,
-  type OpenTool,
-  type ToolboxApi,
-} from "./components/toolbox/context";
-import { ToolDialog } from "./components/toolbox/ToolDialog";
-import { SessionPane, SessionsPane } from "./components/toolbox/SessionPanes";
-import { setTimeFormat } from "./lib/format";
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useActivity, useMe } from './api/auth'
+import { useClusters, type ClusterSummary } from './api/clusters'
+import { LiveContext, useLiveMeta, useLiveStore, useView } from './api/live'
+import type { AccessRow, PolicyRow } from './api/types'
+import { useAlerts } from './api/acks'
+import { AccessTab } from './components/AccessTab'
+import { NetworksTab } from './components/NetworksTab'
+import { PeekPane } from './components/PeekPane'
+import { PoliciesTab } from './components/PoliciesTab'
+import { StorageTab } from './components/StorageTab'
+import { AlertsTab } from './components/AlertsTab'
+import { Banners } from './components/Banners'
+import { ClusterEditor } from './components/ClusterEditor'
+import { ClusterPage } from './components/ClusterPage'
+import { AutomationTab } from './components/AutomationTab'
+import { FleetsTab } from './components/FleetsTab'
+import { AppsTab } from './components/apps/AppsTab'
+import { HomePage } from './components/HomePage'
+import { NamespacesTab } from './components/NamespacesTab'
+import { NodesTab } from './components/NodesTab'
+import { PodsTab } from './components/PodsTab'
+import { ServicesTab } from './components/ServicesTab'
+import { AdminPageView } from './components/AdminPage'
+import { TipLayer } from './components/TipLayer'
+import { Toast } from './components/Toast'
+import { TopBar, type Theme } from './components/TopBar'
+import { badgeOf, bannersOf, tabTone } from './lib/alerts'
+import { accessBadge } from './lib/rbac'
+import { findings as policyFindings, flagOf as policyFlag, modelOf as policyModel } from './lib/policies'
+import { adminHref, apiPath, clusterHref, clusterPageHref, currentRoute, FIRST_TAB, HOME, href, LOCAL, navigate, TABS, isAutomationTab, useRoute, withParams } from './lib/router'
+import { askSherlock, useSherlock } from './api/sherlock'
+import { sendToWatson, useWatson, WatsonError, type Send } from './api/watson'
+import { canPopOut, clusterTroubleshootQuestion, focusPopup, onPop, opensHere, popOut, post, reviewQuestion, usePopped, WINDOW_VIEWS, type Pane } from './lib/sherlock'
+import { openTarget, SherlockContext, SherlockPane } from './components/Sherlock'
+import { Dock, PoppedOutFab, type DockMode } from './components/Dock'
+import { autoRunReads, WatsonContext, watsonOff, WatsonPane } from './components/Watson'
+import { askContext, useUIControl } from './lib/uiWindow'
+import { setToolOpener, WINDOW_ID } from './lib/uiControl'
+import type { ToolName } from './api/toolbox'
+import { ViewAnnouncer } from './components/ViewAnnouncer'
+import { AssistantWindow } from './components/AssistantWindow'
+import { readJSON, writeJSON } from './lib/storage'
+import { runToolAction, shownSessions, useSessions } from './api/toolbox'
+import { ToolboxContext, type OpenTool, type ToolboxApi } from './components/toolbox/context'
+import { ToolDialog } from './components/toolbox/ToolDialog'
+import { SessionPane, SessionsPane } from './components/toolbox/SessionPanes'
+import { setTimeFormat } from './lib/format'
+import { setShowCosts } from './lib/costs'
+// --- Cases (Phase 12) ---
+import { AIOpsPage } from './components/aiops/AIOpsPage'
+import { useOpenAIOpsItem } from './lib/aiopsItem'
+import { onWatsonFill, type WatsonFill } from './lib/watsonFill'
+import { ErrorBoundary } from './components/ErrorScreen'
+// --- end Cases ---
 
-const THEME_KEY = "221b.theme";
+const THEME_KEY = '221b.theme'
 
 function initialTheme(): Theme {
-  const saved = readJSON<Theme | null>(THEME_KEY, null);
-  if (saved === "light" || saved === "dark") return saved;
+  const saved = readJSON<Theme | null>(THEME_KEY, null)
+  if (saved === 'light' || saved === 'dark') return saved
   try {
-    return window.matchMedia("(prefers-color-scheme: dark)").matches
-      ? "dark"
-      : "light";
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
   } catch {
-    return "light";
+    return 'light'
   }
 }
 
 /** Ticks once a minute so ages stay current without a change from the server. */
 function useNow(every = 60_000): number {
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), every);
-    return () => clearInterval(t);
-  }, [every]);
-  return now;
+    const t = setInterval(() => setNow(Date.now()), every)
+    return () => clearInterval(t)
+  }, [every])
+  return now
 }
 
 export function App() {
-  const route = useRoute();
-  useActivity();
+  const route = useRoute()
+  useActivity()
   // Sherlock and Watson in their window have no tabs (P5-08, P6-09).
-  if ((WINDOW_VIEWS as readonly string[]).includes(route.view))
-    return <AssistantShell />;
-  return <Console />;
+  if ((WINDOW_VIEWS as readonly string[]).includes(route.view)) return <AssistantShell />
+  return <Console />
 }
 
 function Console() {
-  const route = useRoute();
+  const route = useRoute()
   // One stream per cluster: opening another cluster opens its own (P3-09).
-  const store = useLiveStore(apiPath("events", route.cluster));
+  const store = useLiveStore(apiPath('events', route.cluster))
   return (
     <LiveContext.Provider value={store}>
-      <Shell />
+      {/* A page that fails to draw says so, and can be reported (CS-19). */}
+      <ErrorBoundary screen="the console">
+        <Shell />
+      </ErrorBoundary>
     </LiveContext.Provider>
-  );
+  )
 }
 
 /** Sherlock's and Watson's own window: the panels alone, in the console's theme. */
 function AssistantShell() {
-  const route = useRoute();
-  const { clusters } = useClusters();
-  const [theme] = useState<Theme>(initialTheme);
-  const [toast, setToast] = useState("");
-  const clearToast = useCallback(() => setToast(""), []);
+  const route = useRoute()
+  const { clusters } = useClusters()
+  const [theme] = useState<Theme>(initialTheme)
+  const [toast, setToast] = useState('')
+  const clearToast = useCallback(() => setToast(''), [])
   useEffect(() => {
-    document.documentElement.style.colorScheme = theme;
-    document.body.style.background = theme === "dark" ? "#0D1013" : "#F2F3F5";
-  }, [theme]);
-  const name =
-    clusters.find((c) => c.id === route.cluster)?.name ??
-    (route.cluster === LOCAL ? "" : route.cluster);
+    document.documentElement.style.colorScheme = theme
+    document.body.style.background = theme === 'dark' ? '#0D1013' : '#F2F3F5'
+  }, [theme])
+  const name = clusters.find((c) => c.id === route.cluster)?.name ?? (route.cluster === LOCAL ? '' : route.cluster)
   return (
     <div
       className="rk"
@@ -157,262 +118,209 @@ function AssistantShell() {
       data-density="comfortable"
       data-dock="off"
       style={{
-        minHeight: "100vh",
-        background: "var(--bg)",
-        color: "var(--fg)",
-        fontFamily: "var(--font)",
+        minHeight: '100vh',
+        background: 'var(--bg)',
+        color: 'var(--fg)',
+        fontFamily: 'var(--font)',
         fontSize: 13,
         lineHeight: 1.45,
-        WebkitFontSmoothing: "antialiased",
+        WebkitFontSmoothing: 'antialiased',
       }}
     >
-      <AssistantWindow
-        cluster={route.cluster}
-        clusterName={name}
-        onToast={setToast}
-      />
+      <AssistantWindow cluster={route.cluster} clusterName={name} onToast={setToast} />
       {toast && <Toast message={toast} onDone={clearToast} />}
     </div>
-  );
+  )
 }
 
-const DOCK_KEY = "221b.dock";
+const DOCK_KEY = '221b.dock'
 
 interface DockState {
-  mode: DockMode;
-  h: number;
+  mode: DockMode
+  h: number
   /** Sherlock's share of the width, and the panel a narrow screen shows. */
-  split?: number;
-  pane?: Pane;
+  split?: number
+  pane?: Pane
 }
 
 /** The connection editor's subject: a cluster's id, null for a new one, undefined when closed. */
-type Editing = string | null | undefined;
+type Editing = string | null | undefined
 
 function Shell() {
-  const live = useLiveMeta();
+  const live = useLiveMeta()
   // Every date and time follows the format the settings carry.
-  setTimeFormat(live.settings?.timeFormat);
-  const route = useRoute();
-  const now = useNow();
-  const me = useMe();
-  const { clusters, loaded: clustersLoaded } = useClusters();
-  const [theme, setTheme] = useState<Theme>(initialTheme);
-  const [editing, setEditing] = useState<Editing>(undefined);
-  const [toast, setToast] = useState("");
-  const clearToast = useCallback(() => setToast(""), []);
-  const closeEditor = useCallback(() => setEditing(undefined), []);
+  setTimeFormat(live.settings?.timeFormat)
+  // Show costs (CF-40): every dollar amount follows the setting the settings carry.
+  const showCostsSetting = live.settings?.showCosts
+  useEffect(() => {
+    if (typeof showCostsSetting === 'boolean') setShowCosts(showCostsSetting)
+  }, [showCostsSetting])
+  const route = useRoute()
+  const now = useNow()
+  const me = useMe()
+  const { clusters, loaded: clustersLoaded } = useClusters()
+  const [theme, setTheme] = useState<Theme>(initialTheme)
+  const [editing, setEditing] = useState<Editing>(undefined)
+  const [toast, setToast] = useState('')
+  const clearToast = useCallback(() => setToast(''), [])
+  const closeEditor = useCallback(() => setEditing(undefined), [])
 
   const changeTheme = (t: Theme) => {
-    setTheme(t);
-    writeJSON(THEME_KEY, t);
-  };
+    setTheme(t)
+    writeJSON(THEME_KEY, t)
+  }
 
-  const summary = clusters.find((c) => c.id === route.cluster);
-  const editOrig = editing ? clusters.find((c) => c.id === editing) : undefined;
+  const summary = clusters.find((c) => c.id === route.cluster)
+  const editOrig = editing ? clusters.find((c) => c.id === editing) : undefined
   // A cluster whose connection could not even start has no data: its page
   // says why. One that is not there at all gets the same page's notice.
-  const view =
-    route.view === "home"
-      ? "home"
-      : route.view === "admin"
-        ? "admin"
-        : route.view === "cluster" ||
-            (clustersLoaded && (!summary || summary.state === "failed"))
-          ? "cluster"
-          : "tabs";
+  const view = route.view === 'home' ? 'home' : route.view === 'admin' ? 'admin' : route.view === 'aiops' ? 'aiops' : route.view === 'cluster' || (clustersLoaded && (!summary || summary.state === 'failed')) ? 'cluster' : 'tabs'
   // The Helm tab needs Secrets; with them off it is not offered.
-  const tab =
-    route.tab === "helm" && live.cluster?.secrets === "off"
-      ? FIRST_TAB
-      : route.tab;
-  const tabLabel = TABS.find((t) => t.id === tab)?.label ?? "Alerts";
-  const clusterName = summary?.name ?? live.cluster?.name ?? "";
+  const tab = route.tab === 'helm' && live.cluster?.secrets === 'off' ? FIRST_TAB : route.tab
+  const tabLabel = TABS.find((t) => t.id === tab)?.label ?? 'Alerts'
+  const clusterName = summary?.name ?? live.cluster?.name ?? ''
 
   useEffect(() => {
-    document.title =
-      view === "home"
-        ? "Clusters · 221B"
-        : view === "admin"
-          ? "Administration · 221B"
-          : clusterName
-            ? `${clusterName} · ${view === "cluster" ? "Connection" : tabLabel} · 221B`
-            : "221B";
-    document.documentElement.style.colorScheme = theme;
-    document.body.style.background = theme === "dark" ? "#0D1013" : "#F2F3F5";
-  }, [clusterName, tabLabel, theme, view]);
+    document.title = view === 'home' ? 'Clusters · 221B' : view === 'admin' ? 'Administration · 221B' : view === 'aiops' ? 'AIOps · 221B' : clusterName ? `${clusterName} · ${view === 'cluster' ? 'Connection' : tabLabel} · 221B` : '221B'
+    document.documentElement.style.colorScheme = theme
+    document.body.style.background = theme === 'dark' ? '#0D1013' : '#F2F3F5'
+  }, [clusterName, tabLabel, theme, view])
 
   const onSaved = (c: ClusterSummary, added: boolean) => {
-    setEditing(undefined);
+    setEditing(undefined)
     if (added) {
-      setToast(`Added ${c.name}.`);
-      navigate(clusterHref(c.id, FIRST_TAB));
+      setToast(`Added ${c.name}.`)
+      navigate(clusterHref(c.id, FIRST_TAB))
     } else {
-      setToast(
-        `Saved ${c.name}.${c.state === "failed" ? " It cannot start: " + (c.message ?? "") : ""}${c.held ? " " + c.held : ""}`,
-      );
+      setToast(`Saved ${c.name}.${c.state === 'failed' ? ' It cannot start: ' + (c.message ?? '') : ''}${c.held ? ' ' + c.held : ''}`)
     }
-  };
+  }
   const onRemoved = (c: ClusterSummary) => {
-    setEditing(undefined);
-    setToast(`Removed ${c.name} and its credentials.`);
-    if (route.cluster === c.id) navigate(HOME);
-  };
+    setEditing(undefined)
+    setToast(`Removed ${c.name} and its credentials.`)
+    if (route.cluster === c.id) navigate(HOME)
+  }
 
   // Every tab shows what the Alerts tab has (P4-07), and the bar counts it.
-  const alerts = useAlerts();
-  const alertBadge = badgeOf(alerts.rows);
-  const alertTab = alerts.loaded ? tabTone(alerts.rows) : undefined;
-  const fleetDefs = live.settings?.fleets?.[route.cluster] ?? [];
+  const alerts = useAlerts()
+  const alertBadge = badgeOf(alerts.rows)
+  const alertTab = alerts.loaded ? tabTone(alerts.rows) : undefined
+  const fleetDefs = live.settings?.fleets?.[route.cluster] ?? []
   // The Access tab counts its findings while it is open (P4-03).
-  const access = useView<AccessRow>(
-    tab === "access" && view === "tabs" ? "access" : null,
-  );
-  const accessCount = accessBadge(
-    access.rows.flatMap((r) => ("findings" in r ? r.findings : [])),
-  );
-  const policies = useView<PolicyRow>(
-    tab === "policies" && view === "tabs" ? "policies" : null,
-  );
-  const policyCount = policyFlag(
-    policies.loaded ? policyFindings(policyModel(policies.rows)) : [],
-  );
+  const access = useView<AccessRow>(tab === 'access' && view === 'tabs' ? 'access' : null)
+  const accessCount = accessBadge(access.rows.flatMap((r) => ('findings' in r ? r.findings : [])))
+  const policies = useView<PolicyRow>(tab === 'policies' && view === 'tabs' ? 'policies' : null)
+  const policyCount = policyFlag(policies.loaded ? policyFindings(policyModel(policies.rows)) : [])
   const counts = {
     ...live.counts,
     fleets: fleetDefs.length,
     ...(alerts.loaded ? { alerts: alertBadge.count } : {}),
     ...(access.loaded ? { access: accessCount.count } : {}),
     ...(policies.loaded ? { policies: policyCount.count } : {}),
-  };
-  const common = { cluster: live.cluster, now, onToast: setToast, route };
+  }
+  const common = { cluster: live.cluster, now, onToast: setToast, route }
 
   // Sherlock (Phase 5) and Watson (Phase 6): docked at the bottom of every
   // tab, or in windows of their own (P5-08, P6-09).
-  const sherlock = useSherlock(route.cluster);
+  const sherlock = useSherlock(route.cluster)
   // Kept on the settings page too, so going there and back does not
   // reconnect the shared stream (ADR-56).
-  const watson = useWatson(route.cluster, view !== "cluster" || !!summary);
-  const popped = usePopped();
+  const watson = useWatson(route.cluster, view !== 'cluster' || !!summary)
+  const popped = usePopped()
   // Sherlock's UI actions run in this window (P6U-08).
-  useUIControl(route.cluster, sherlock.conv);
+  useUIControl(route.cluster, sherlock.conv)
   const [dock, setDockState] = useState<DockState>(() => {
-    const d = readJSON<DockState | null>(DOCK_KEY, null);
-    return d &&
-      (d.mode === "open" || d.mode === "min" || d.mode === "max") &&
-      typeof d.h === "number"
-      ? d
-      : { mode: "open", h: 300 };
-  });
+    const d = readJSON<DockState | null>(DOCK_KEY, null)
+    return d && (d.mode === 'open' || d.mode === 'min' || d.mode === 'max') && typeof d.h === 'number' ? d : { mode: 'open', h: 300 }
+  })
   const setDock = useCallback((d: DockState) => {
-    setDockState(d);
-    writeJSON(DOCK_KEY, { ...d, mode: d.mode === "max" ? "open" : d.mode });
-  }, []);
-  const sherlockOn = !!sherlock.status?.enabled;
+    setDockState(d)
+    writeJSON(DOCK_KEY, { ...d, mode: d.mode === 'max' ? 'open' : d.mode })
+  }, [])
+  const sherlockOn = !!sherlock.status?.enabled
   // Watson shows only beside Sherlock: where Sherlock is off, so is Watson.
-  const watsonOn = sherlockOn && !!watson.status?.available;
+  const watsonOn = sherlockOn && !!watson.status?.available
   // Both leave the main window together, for one window of their own.
-  const sherlockDocked = sherlockOn && !popped;
-  const watsonDocked = watsonOn && !popped;
+  const sherlockDocked = sherlockOn && !popped
+  const watsonDocked = watsonOn && !popped
   // The Toolbox's sessions (Phase 9) are tabs in the dock: those of the
   // person, and others' they open from the list (TB-08, TB-09).
-  const [dockTab, setDockTab] = useState("assistants");
+  const [dockTab, setDockTab] = useState('assistants')
   // A session of the person's that opens comes forward in the dock.
-  const dockRef = useRef(dock);
+  const dockRef = useRef(dock)
   useEffect(() => {
-    dockRef.current = dock;
-  }, [dock]);
+    dockRef.current = dock
+  }, [dock])
   const onNewSession = useCallback(
     (x: { id: string; mine: boolean }) => {
-      if (!x.mine) return;
-      setDockTab(x.id);
-      if (dockRef.current.mode === "min")
-        setDock({ ...dockRef.current, mode: "open" });
+      if (!x.mine) return
+      setDockTab(x.id)
+      if (dockRef.current.mode === 'min') setDock({ ...dockRef.current, mode: 'open' })
     },
     [setDock],
-  );
-  const sessions = useSessions(route.cluster, watsonOn, onNewSession);
+  )
+  const sessions = useSessions(route.cluster, watsonOn, onNewSession)
   const [tabs, setTabs] = useState<{
-    cluster: string;
-    closed: string[];
-    opened: string[];
-  }>({ cluster: route.cluster, closed: [], opened: [] });
-  const tabsHere =
-    tabs.cluster === route.cluster
-      ? tabs
-      : { cluster: route.cluster, closed: [], opened: [] };
+    cluster: string
+    closed: string[]
+    opened: string[]
+  }>({ cluster: route.cluster, closed: [], opened: [] })
+  const tabsHere = tabs.cluster === route.cluster ? tabs : { cluster: route.cluster, closed: [], opened: [] }
   // An ended session whose tab was closed is done with: it leaves the list too (asked October 30, 2026); a live one stays, as the tab's tooltip says.
-  const shown = shownSessions(
-    sessions.sessions,
-    tabsHere.closed,
-    tabsHere.opened,
-  );
-  const tabSessions = shown.filter(
-    (x) =>
-      (x.mine && !tabsHere.closed.includes(x.id)) ||
-      tabsHere.opened.includes(x.id),
-  );
-  const openSessions = shown.filter((x) => x.state !== "ended").length;
+  const shown = shownSessions(sessions.sessions, tabsHere.closed, tabsHere.opened)
+  const tabSessions = shown.filter((x) => (x.mine && !tabsHere.closed.includes(x.id)) || tabsHere.opened.includes(x.id))
+  const openSessions = shown.filter((x) => x.state !== 'ended').length
   // A tool's dialog stays on the cluster it was opened on, wherever the route goes while it is open.
-  const [toolDialog, setToolDialog] = useState<
-    (OpenTool & { cluster: string }) | null
-  >(null);
+  const [toolDialog, setToolDialog] = useState<(OpenTool & { cluster: string }) | null>(null)
   // The same on the home page, a cluster's page and Administration as on
   // the tabs.
-  const dockShown =
-    sherlockDocked || watsonDocked || (watsonOn && shown.length > 0);
+  const dockShown = sherlockDocked || watsonDocked || (watsonOn && shown.length > 0)
   useEffect(() => {
-    if (popped) post({ type: "cluster", cluster: route.cluster });
-  }, [popped, route.cluster]);
+    if (popped) post({ type: 'cluster', cluster: route.cluster })
+  }, [popped, route.cluster])
   useEffect(
     () =>
       onPop((m) => {
-        if (m.type !== "open") return;
-        const here = currentRoute();
-        if (!opensHere(m, WINDOW_ID, here.cluster)) return;
-        const hash =
-          m.cluster === here.cluster && here.view === "tabs"
-            ? openTarget(m.target)
-            : "peek" in m.target
-              ? clusterHref(m.cluster, FIRST_TAB, [], { peek: m.target.peek })
-              : m.target.href;
-        if (hash) navigate(hash);
-        window.focus();
+        if (m.type !== 'open') return
+        const here = currentRoute()
+        if (!opensHere(m, WINDOW_ID, here.cluster)) return
+        const hash = m.cluster === here.cluster && here.view === 'tabs' ? openTarget(m.target) : 'peek' in m.target ? clusterHref(m.cluster, FIRST_TAB, [], { peek: m.target.peek }) : m.target.href
+        if (hash) navigate(hash)
+        window.focus()
       }),
     [],
-  );
-  const [sherlockFill, setSherlockFill] = useState("");
+  )
+  const [sherlockFill, setSherlockFill] = useState('')
   const sherlockApi = {
-    available: !!sherlock.status?.available && view === "tabs",
+    // Sherlock in Cases (IB-10): its pages may ask too.
+    available: !!sherlock.status?.available && (view === 'tabs' || view === 'aiops'),
     ask: (q: string, over?: boolean) => {
-      const away = popped;
-      if (!away && (over || dock.mode === "min"))
-        setDock({ ...dock, mode: over ? "max" : "open", pane: "sherlock" });
-      else if (!away) setDock({ ...dock, pane: "sherlock" });
+      const away = popped
+      if (!away && (over || dock.mode === 'min')) setDock({ ...dock, mode: over ? 'max' : 'open', pane: 'sherlock' })
+      else if (!away) setDock({ ...dock, pane: 'sherlock' })
       askContext()
         .then((ctx) => askSherlock(route.cluster, q, ctx))
         .then(() => {
-          if (away) focusPopup();
+          if (away) focusPopup()
         })
-        .catch((e: unknown) =>
-          setToast(e instanceof Error ? e.message : String(e)),
-        );
+        .catch((e: unknown) => setToast(e instanceof Error ? e.message : String(e)))
     },
     /** Puts a question in the box, for the person to send. */
     fill: (text: string) => {
       if (popped) {
-        post({ type: "fill", cluster: route.cluster, text });
-        focusPopup();
-        return;
+        post({ type: 'fill', cluster: route.cluster, text })
+        focusPopup()
+        return
       }
-      setDockTab("assistants");
+      setDockTab('assistants')
       setDock({
         ...dock,
-        mode: dock.mode === "min" ? "open" : dock.mode,
-        pane: "sherlock",
-      });
-      setSherlockFill(text);
+        mode: dock.mode === 'min' ? 'open' : dock.mode,
+        pane: 'sherlock',
+      })
+      setSherlockFill(text)
     },
-  };
+  }
   // Buttons and Sherlock hand commands to Watson (P6-06): the panel opens,
   // or Watson's window comes forward, with the card to approve. Wherever
   // the dock is, so an answer read on the home page can be sent too.
@@ -424,151 +332,167 @@ function Shell() {
       installed: !!watson.status?.available,
       sherlockOn,
       admin: !!sherlock.status?.admin,
-      settingsHref: adminHref("settings", ["sherlock"]),
+      settingsHref: adminHref('settings', ['sherlock']),
     }),
     send: (command: string, o: Send = {}) => {
-      const away = popped;
+      const away = popped
       if (!away)
         setDock({
           ...dock,
-          mode: o.over ? "max" : dock.mode === "min" ? "open" : dock.mode,
-          pane: "watson",
-        });
+          mode: o.over ? 'max' : dock.mode === 'min' ? 'open' : dock.mode,
+          pane: 'watson',
+        })
       sendToWatson(route.cluster, command, { run: autoRunReads(), ...o })
         .then(() => {
-          if (away) focusPopup();
+          if (away) focusPopup()
         })
-        .catch((e: unknown) =>
-          setToast(e instanceof WatsonError ? e.message : String(e)),
-        );
+        .catch((e: unknown) => setToast(e instanceof WatsonError ? e.message : String(e)))
     },
-  };
+  }
+  // --- Sherlock and Watson in Cases (Phase 12, IB-11 to IB-13) ---
+  // The dock follows the cluster of the item open in Cases: the page's
+  // address moves to that cluster, which is then the last one used.
+  const aiopsItem = useOpenAIOpsItem()
+  const itemCluster = view === 'aiops' ? (aiopsItem?.cluster ?? '') : ''
+  useEffect(() => {
+    if (!itemCluster || itemCluster === route.cluster || !clusters.some((c) => c.id === itemCluster)) return
+    navigate(withParams({ ...currentRoute(), cluster: itemCluster }, {}), true)
+  }, [itemCluster, route.cluster, clusters])
+  // Open in Watson: Watson's pane on that cluster, the command in its box.
+  const [watsonFill, setWatsonFill] = useState<WatsonFill | null>(null)
+  useEffect(
+    () =>
+      onWatsonFill((f) => {
+        if (clustersLoaded && !clusters.some((c) => c.id === f.cluster)) {
+          setToast(`The cluster ${f.cluster} is not connected to this console.`)
+          return
+        }
+        const here = currentRoute()
+        if (f.cluster !== here.cluster) navigate(here.view === 'home' || here.view === 'cluster' ? clusterHref(f.cluster, FIRST_TAB) : withParams({ ...here, cluster: f.cluster }, {}), true)
+        if (popped) {
+          post({ type: 'fill', cluster: f.cluster, text: f.command, pane: 'watson' })
+          focusPopup()
+          return
+        }
+        const d = dockRef.current
+        setDockTab('assistants')
+        setDock({ ...d, mode: d.mode === 'min' ? 'open' : d.mode, pane: 'watson' })
+        setWatsonFill(f)
+      }),
+    [clusters, clustersLoaded, popped, setDock],
+  )
+  // Watson off on that cluster: say so, rather than leave the command
+  // waiting for a pane that does not come.
+  const fillRefused = !!watsonFill && watsonFill.cluster === route.cluster && ((!!sherlock.status && !sherlock.status.enabled) || (!!watson.status && !watson.status.available))
+  useEffect(() => {
+    if (!fillRefused) return
+    void Promise.resolve().then(() => {
+      setToast('Watson is off on this cluster, so the command cannot wait in its box. Copy it from the case instead.')
+      setWatsonFill(null)
+    })
+  }, [fillRefused])
+  // --- end Sherlock and Watson in Cases ---
   // Pending approvals links to a Watson card with ?watson=open: the panel
   // comes up on Watson, where the card can be read and approved.
-  const reviewWatson = view === "tabs" && route.params.get("watson") === "open";
+  const reviewWatson = view === 'tabs' && route.params.get('watson') === 'open'
   useEffect(() => {
-    if (!reviewWatson || !dockShown) return;
+    if (!reviewWatson || !dockShown) return
     void Promise.resolve().then(() => {
-      const d = dockRef.current;
-      setDockTab("assistants");
-      setDock({ ...d, mode: d.mode === "min" ? "open" : d.mode, pane: "watson" });
-      navigate(clusterHref(route.cluster, route.tab), true);
-    });
-  }, [reviewWatson, dockShown, setDock, route.cluster, route.tab]);
+      const d = dockRef.current
+      setDockTab('assistants')
+      setDock({ ...d, mode: d.mode === 'min' ? 'open' : d.mode, pane: 'watson' })
+      navigate(clusterHref(route.cluster, route.tab), true)
+    })
+  }, [reviewWatson, dockShown, setDock, route.cluster, route.tab])
   // A home card's Audit button (Phase 6 review) opens the cluster with
   // ?ask=review, its Troubleshoot button with ?ask=troubleshoot: the
   // question waits in Sherlock's box once it can be asked. A link cannot
   // start a question: that takes the person pressing Ask.
-  const askFor = view === "tabs" ? route.params.get("ask") : null;
-  const reviewAsked = askFor === "review" || askFor === "troubleshoot";
-  const reviewReady =
-    reviewAsked && sherlockApi.available && clusterName !== "";
-  const reviewRefused =
-    reviewAsked && !!sherlock.status && !sherlock.status.available;
+  const askFor = view === 'tabs' ? route.params.get('ask') : null
+  const reviewAsked = askFor === 'review' || askFor === 'troubleshoot'
+  const reviewReady = reviewAsked && sherlockApi.available && clusterName !== ''
+  const reviewRefused = reviewAsked && !!sherlock.status && !sherlock.status.available
   useEffect(() => {
-    if (!reviewReady && !reviewRefused) return;
-    navigate(withParams(currentRoute(), { ask: undefined }), true);
+    if (!reviewReady && !reviewRefused) return
+    navigate(withParams(currentRoute(), { ask: undefined }), true)
     // Refused (Sherlock went off since the home page showed the button), the
     // dock says why.
-    if (reviewReady)
-      sherlockApi.fill(
-        askFor === "troubleshoot"
-          ? clusterTroubleshootQuestion(clusterName)
-          : reviewQuestion(clusterName),
-      );
+    if (reviewReady) sherlockApi.fill(askFor === 'troubleshoot' ? clusterTroubleshootQuestion(clusterName) : reviewQuestion(clusterName))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reviewReady, reviewRefused]);
+  }, [reviewReady, reviewRefused])
   const popOutNow = () => {
-    if (popOut(route.cluster))
-      setDock({ ...dock, mode: dock.mode === "max" ? "open" : dock.mode });
-    else
-      setToast(
-        "The browser did not open a new window. Allow pop-ups for the console to move Sherlock and Watson to a window of their own.",
-      );
-  };
+    if (popOut(route.cluster)) setDock({ ...dock, mode: dock.mode === 'max' ? 'open' : dock.mode })
+    else setToast('The browser did not open a new window. Allow pop-ups for the console to move Sherlock and Watson to a window of their own.')
+  }
   const showWatson = () => {
-    if (popped) focusPopup();
+    if (popped) focusPopup()
     else {
-      setDockTab("assistants");
+      setDockTab('assistants')
       setDock({
         ...dock,
-        mode: dock.mode === "min" ? "open" : dock.mode,
-        pane: "watson",
-      });
+        mode: dock.mode === 'min' ? 'open' : dock.mode,
+        pane: 'watson',
+      })
     }
-  };
+  }
   const showSession = (id: string) => {
     setTabs({
       ...tabsHere,
       closed: tabsHere.closed.filter((x) => x !== id),
-      opened: tabsHere.opened.includes(id)
-        ? tabsHere.opened
-        : [...tabsHere.opened, id],
-    });
-    setDockTab(id);
-    if (dock.mode === "min") setDock({ ...dock, mode: "open" });
-  };
+      opened: tabsHere.opened.includes(id) ? tabsHere.opened : [...tabsHere.opened, id],
+    })
+    setDockTab(id)
+    if (dock.mode === 'min') setDock({ ...dock, mode: 'open' })
+  }
   const toolboxApi: ToolboxApi = {
     available: watsonOn && !watson.status?.readOnly,
     showWatson,
     off: !watsonOn
-      ? (watsonApi.off?.text.replace(
-          "To run it from here",
-          "To use the tools",
-        ) ?? "The tools need Watson, which is off here.")
+      ? (watsonApi.off?.text.replace('To run it from here', 'To use the tools') ?? 'The tools need Watson, which is off here.')
       : watson.status?.readOnly
-        ? watson.status.how || "This cluster is connected read-only."
+        ? watson.status.how || 'This cluster is connected read-only.'
         : undefined,
     cluster: route.cluster,
     openTool: (o) => setToolDialog({ ...o, cluster: route.cluster }),
     action: (a, what) => {
       const doing = {
-        cordon: "Cordoning",
-        uncordon: "Uncordoning",
-        drain: "Draining",
-        "delete-pod": "Deleting",
-      }[a.action];
+        cordon: 'Cordoning',
+        uncordon: 'Uncordoning',
+        drain: 'Draining',
+        'delete-pod': 'Deleting',
+      }[a.action]
       runToolAction(route.cluster, a).then(
         (it) => {
-          if (it.status === "refused")
-            setToast(it.reason || "Watson refused it.");
-          else if (it.status === "pending") {
-            setToast(
-              `${it.command}: the card is in Watson. Read it and approve it there.`,
-            );
-            showWatson();
-          } else setToast(`${doing} ${what}. Watson shows how it goes.`);
+          if (it.status === 'refused') setToast(it.reason || 'Watson refused it.')
+          else if (it.status === 'pending') {
+            setToast(`${it.command}: the card is in Watson. Read it and approve it there.`)
+            showWatson()
+          } else setToast(`${doing} ${what}. Watson shows how it goes.`)
         },
         (e: unknown) => setToast(e instanceof Error ? e.message : String(e)),
-      );
+      )
     },
     showSession,
-  };
+  }
   // Sherlock may open a tool's dialog, filled in, for the person to send (TB-42).
-  const toolsOff = toolboxApi.available
-    ? null
-    : (toolboxApi.off ?? "The tools are off here.");
+  const toolsOff = toolboxApi.available ? null : (toolboxApi.off ?? 'The tools are off here.')
   useEffect(() => {
     setToolOpener((a) => {
-      if (toolsOff) return toolsOff;
+      if (toolsOff) return toolsOff
       setToolDialog({
         tool: a.tool as ToolName,
         pod: a.pod,
         node: a.node,
         prefill: a.prefill,
-        from: "Sherlock",
+        from: 'Sherlock',
         cluster: currentRoute().cluster,
-      });
-      return null;
-    });
-    return () => setToolOpener(null);
-  }, [toolsOff]);
-  const waiting = watson.items.filter(
-    (x) => x.status === "pending" && x.kind === "change" && x.canApprove,
-  ).length;
-  const busy =
-    !!sherlock.conv?.busy ||
-    watson.items.some((x) => x.status === "running" || x.status === "queued");
+      })
+      return null
+    })
+    return () => setToolOpener(null)
+  }, [toolsOff])
+  const waiting = watson.items.filter((x) => x.status === 'pending' && x.kind === 'change' && x.canApprove).length
+  const busy = !!sherlock.conv?.busy || watson.items.some((x) => x.status === 'running' || x.status === 'queued')
   return (
     <SherlockContext.Provider value={sherlockApi}>
       <WatsonContext.Provider value={watsonApi}>
@@ -578,18 +502,18 @@ function Shell() {
             data-theme={theme}
             data-accent="teal"
             data-density="comfortable"
-            data-dock={dockShown ? dock.mode : "off"}
+            data-dock={dockShown ? dock.mode : 'off'}
             style={{
-              ["--dock-h" as string]: `${dock.h}px`,
-              minHeight: "100vh",
-              display: "flex",
-              flexDirection: "column",
-              background: "var(--bg)",
-              color: "var(--fg)",
-              fontFamily: "var(--font)",
+              ['--dock-h' as string]: `${dock.h}px`,
+              minHeight: '100vh',
+              display: 'flex',
+              flexDirection: 'column',
+              background: 'var(--bg)',
+              color: 'var(--fg)',
+              fontFamily: 'var(--font)',
               fontSize: 13,
               lineHeight: 1.45,
-              WebkitFontSmoothing: "antialiased",
+              WebkitFontSmoothing: 'antialiased',
             }}
           >
             <TopBar
@@ -599,10 +523,9 @@ function Shell() {
               tones={{
                 alerts: alertBadge.tone,
                 access: accessCount.tone,
-                policies:
-                  policyCount.tone === "info" ? "muted" : policyCount.tone,
+                policies: policyCount.tone === 'info' ? 'muted' : policyCount.tone,
               }}
-              tab={view === "tabs" ? tab : null}
+              tab={view === 'tabs' ? tab : null}
               stream={live.stream}
               updatedAt={live.updatedAt}
               refreshedAt={live.refreshedAt}
@@ -613,71 +536,48 @@ function Shell() {
               route={route}
               onEditCluster={(id) => setEditing(id)}
             />
-            {view !== "home" && view !== "admin" && (
+            {view !== 'home' && view !== 'admin' && view !== 'aiops' && (
               <Banners
                 cluster={live.cluster}
                 stream={live.stream}
                 now={now}
                 summary={summary ?? null}
-                pageHref={
-                  view === "tabs" ? clusterPageHref(route.cluster) : undefined
-                }
+                pageHref={view === 'tabs' ? clusterPageHref(route.cluster) : undefined}
                 accessError={live.accessError}
-                alerts={
-                  view === "tabs" &&
-                  tab !== "alerts" &&
-                  live.settings?.alertBanners !== false
-                    ? bannersOf(alerts.rows, now)
-                    : []
-                }
-                alertsHref={href("alerts")}
+                alerts={view === 'tabs' && tab !== 'alerts' && live.settings?.alertBanners !== false ? bannersOf(alerts.rows, now) : []}
+                alertsHref={href('alerts')}
               />
             )}
-            {view === "home" ? (
-              <HomePage
-                me={me}
-                onAdd={() => setEditing(null)}
-                onEdit={(id) => setEditing(id)}
-              />
-            ) : view === "admin" ? (
-              <AdminPageView
-                route={route}
-                me={me}
-                now={now}
-                cluster={live.cluster}
-                onToast={setToast}
-                settings={live.settings}
-                refreshedAt={live.refreshedAt}
-              />
-            ) : view === "cluster" ? (
-              <ClusterPage
-                route={route}
-                me={me}
-                now={now}
-                onEdit={(id) => setEditing(id)}
-              />
+            {view === 'home' ? (
+              <HomePage me={me} onAdd={() => setEditing(null)} onEdit={(id) => setEditing(id)} />
+            ) : view === 'admin' ? (
+              <AdminPageView route={route} me={me} now={now} cluster={live.cluster} onToast={setToast} settings={live.settings} refreshedAt={live.refreshedAt} />
+            ) : view === 'aiops' ? (
+              <AIOpsPage route={route} me={me} onToast={setToast} alerts={counts.alerts} clusterName={live.cluster?.name} />
+            ) : view === 'cluster' ? (
+              <ClusterPage route={route} me={me} now={now} onEdit={(id) => setEditing(id)} />
             ) : (
               <div
                 className="rk-main"
                 style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  flex: "1 1 auto",
-                  alignItems: "stretch",
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  flex: '1 1 auto',
+                  alignItems: 'stretch',
                 }}
               >
-                {tab === "nodes" && <NodesTab {...common} me={me} />}
-                {tab === "fleets" && <FleetsTab {...common} me={me} />}
+                {tab === 'nodes' && <NodesTab {...common} me={me} />}
+                {tab === 'fleets' && <FleetsTab {...common} me={me} />}
                 {isAutomationTab(tab) && <AutomationTab {...common} me={me} />}
-                {tab === "alerts" && <AlertsTab {...common} />}
-                {tab === "pods" && <PodsTab {...common} />}
-                {tab === "namespaces" && <NamespacesTab {...common} />}
-                {tab === "services" && <ServicesTab {...common} />}
-                {tab === "helm" && <AppsTab {...common} />}
-                {tab === "access" && <AccessTab {...common} />}
-                {tab === "networks" && <NetworksTab {...common} />}
-                {tab === "storage" && <StorageTab {...common} />}
-                {tab === "policies" && <PoliciesTab {...common} />}
+                {tab === 'alerts' && <AlertsTab {...common} />}
+                {tab === 'pods' && <PodsTab {...common} />}
+                {tab === 'namespaces' && <NamespacesTab {...common} />}
+                {tab === 'services' && <ServicesTab {...common} />}
+                {tab === 'helm' && <AppsTab {...common} />}
+                {tab === 'access' && <AccessTab {...common} />}
+                {tab === 'networks' && <NetworksTab {...common} />}
+                {tab === 'storage' && <StorageTab {...common} />}
+                {tab === 'policies' && <PoliciesTab {...common} />}
               </div>
             )}
             {dockShown && (
@@ -688,21 +588,12 @@ function Shell() {
                 onHeight={(h) => setDock({ ...dock, h })}
                 split={dock.split ?? 0.5}
                 onSplit={(split) => setDock({ ...dock, split })}
-                pane={dock.pane ?? "sherlock"}
+                pane={dock.pane ?? 'sherlock'}
                 onPane={(pane) => setDock({ ...dock, pane })}
                 sherlock={
                   sherlockDocked
                     ? (controls, switcher) => (
-                        <SherlockPane
-                          cluster={route.cluster}
-                          clusterName={clusterName}
-                          state={sherlock}
-                          onToast={setToast}
-                          controls={controls}
-                          switcher={switcher}
-                          fill={sherlockFill}
-                          onFilled={() => setSherlockFill("")}
-                        />
+                        <SherlockPane cluster={route.cluster} clusterName={clusterName} state={sherlock} onToast={setToast} controls={controls} switcher={switcher} fill={sherlockFill} onFilled={() => setSherlockFill('')} />
                       )
                     : null
                 }
@@ -716,6 +607,8 @@ function Shell() {
                           onToast={setToast}
                           controls={controls}
                           switcher={switcher}
+                          fill={watsonFill?.cluster === route.cluster ? watsonFill.command : ''}
+                          onFilled={() => setWatsonFill(null)}
                         />
                       )
                     : null
@@ -728,124 +621,52 @@ function Shell() {
                     ? {
                         tabs: tabSessions,
                         open: openSessions,
-                        active:
-                          dockTab === "assistants" ||
-                          dockTab === "sessions" ||
-                          shown.some((x) => x.id === dockTab)
-                            ? dockTab
-                            : "assistants",
+                        active: dockTab === 'assistants' || dockTab === 'sessions' || shown.some((x) => x.id === dockTab) ? dockTab : 'assistants',
                         onActive: (a) => {
-                          if (
-                            a !== "assistants" &&
-                            a !== "sessions" &&
-                            !tabsHere.opened.includes(a) &&
-                            !shown.find((x) => x.id === a)?.mine
-                          )
+                          if (a !== 'assistants' && a !== 'sessions' && !tabsHere.opened.includes(a) && !shown.find((x) => x.id === a)?.mine)
                             setTabs({
                               ...tabsHere,
                               opened: [...tabsHere.opened, a],
-                            });
-                          setDockTab(a);
+                            })
+                          setDockTab(a)
                         },
                         onCloseTab: (id) => {
                           setTabs({
                             ...tabsHere,
                             closed: [...tabsHere.closed, id],
                             opened: tabsHere.opened.filter((x) => x !== id),
-                          });
-                          if (dockTab === id)
-                            setDockTab(
-                              sherlockDocked || watsonDocked
-                                ? "assistants"
-                                : "sessions",
-                            );
+                          })
+                          if (dockTab === id) setDockTab(sherlockDocked || watsonDocked ? 'assistants' : 'sessions')
                         },
                         now,
                         render: (a, controls) => {
-                          const one = shown.find((x) => x.id === a);
-                          if (one)
-                            return (
-                              <SessionPane
-                                key={one.id}
-                                cluster={route.cluster}
-                                session={one}
-                                admin={!!watson.status?.admin}
-                                dark={theme === "dark"}
-                                controls={controls}
-                                onToast={setToast}
-                              />
-                            );
-                          return (
-                            <SessionsPane
-                              cluster={route.cluster}
-                              sessions={shown}
-                              admin={!!watson.status?.admin}
-                              controls={controls}
-                              onOpen={showSession}
-                              onToast={setToast}
-                            />
-                          );
+                          const one = shown.find((x) => x.id === a)
+                          if (one) return <SessionPane key={one.id} cluster={route.cluster} session={one} admin={!!watson.status?.admin} dark={theme === 'dark'} controls={controls} onToast={setToast} />
+                          return <SessionsPane cluster={route.cluster} sessions={shown} admin={!!watson.status?.admin} controls={controls} onOpen={showSession} onToast={setToast} />
                         },
                       }
                     : undefined
                 }
               />
             )}
-            {popped && (
-              <PoppedOutFab
-                onFocus={() => focusPopup()}
-                onDock={() => post({ type: "close" })}
-              />
-            )}
-            {view === "tabs" && (
-              <PeekPane
-                route={route}
-                cluster={live.cluster}
-                now={now}
-                onToast={setToast}
-              />
-            )}
+            {popped && <PoppedOutFab onFocus={() => focusPopup()} onDock={() => post({ type: 'close' })} />}
+            {view === 'tabs' && <PeekPane route={route} cluster={live.cluster} now={now} onToast={setToast} />}
             {popped && <ViewAnnouncer />}
-            {editing === null && (
-              <ClusterEditor
-                key="+"
-                orig={null}
-                now={now}
-                onClose={closeEditor}
-                onSaved={onSaved}
-                onRemoved={onRemoved}
-              />
-            )}
-            {editing && editOrig && (
-              <ClusterEditor
-                key={editing}
-                orig={editOrig}
-                now={now}
-                onClose={closeEditor}
-                onSaved={onSaved}
-                onRemoved={onRemoved}
-              />
-            )}
+            {editing === null && <ClusterEditor key="+" orig={null} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
+            {editing && editOrig && <ClusterEditor key={editing} orig={editOrig} now={now} onClose={closeEditor} onSaved={onSaved} onRemoved={onRemoved} />}
             {toolDialog && (
               <ToolDialog
                 cluster={toolDialog.cluster}
-                clusterName={
-                  toolDialog.cluster === route.cluster
-                    ? clusterName
-                    : (clusters.find((c) => c.id === toolDialog.cluster)
-                        ?.name ?? toolDialog.cluster)
-                }
+                clusterName={toolDialog.cluster === route.cluster ? clusterName : (clusters.find((c) => c.id === toolDialog.cluster)?.name ?? toolDialog.cluster)}
                 open={toolDialog}
                 onClose={() => setToolDialog(null)}
                 onSent={(r) => {
                   if (r.opened) {
-                    showSession(r.opened);
-                    return;
+                    showSession(r.opened)
+                    return
                   }
-                  setToast(
-                    `Sent to Watson: ${r.summary}. It opens once another SuperAdmin approves it.`,
-                  );
-                  showWatson();
+                  setToast(`Sent to Watson: ${r.summary}. It opens once another SuperAdmin approves it.`)
+                  showWatson()
                 }}
               />
             )}
@@ -855,5 +676,5 @@ function Shell() {
         </ToolboxContext.Provider>
       </WatsonContext.Provider>
     </SherlockContext.Provider>
-  );
+  )
 }

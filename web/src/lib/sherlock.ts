@@ -105,7 +105,7 @@ export type PopMessage =
   | { type: 'undo'; cluster: string; answer: number }
   | { type: 'undone'; cluster: string; answer: number }
   /** A question for the box in Sherlock's window, for the person to send. */
-  | { type: 'fill'; cluster: string; text: string }
+  | { type: 'fill'; cluster: string; text: string; pane?: 'sherlock' | 'watson' }
 
 let channel: BroadcastChannel | null = null
 const listeners = new Set<(m: PopMessage) => void>()

@@ -9,7 +9,12 @@ vi.mock('../lib/xlsx', async (original) => ({ ...(await original<typeof import('
 vi.mock('../api/admin', async (original) => ({ ...(await original<typeof import('../api/admin')>()), fetchAudit: vi.fn() }))
 
 const event = (action: string, over: Partial<AuditEvent> = {}): AuditEvent => ({ time: '2026-10-30T10:00:00Z', action, who: { name: 'Ada', email: 'ada@example.com' }, outcome: 'ok', ...over })
-const events = [event('settings.update', { detail: 'refresh 4s' }), event('backup.export', { who: { subject: 'bob' }, target: 'Backup-1' }), event('backup.restore', { outcome: 'denied' }), event('session.end', { cluster: 'edge', from: '10.0.0.9' })]
+const events = [
+  event('settings.update', { detail: 'refresh 4s' }),
+  event('backup.export', { who: { subject: 'bob' }, target: 'Backup-1' }),
+  event('backup.restore', { outcome: 'denied' }),
+  event('session.end', { cluster: 'edge', from: '10.0.0.9' }),
+]
 const page: AuditPage = { events, total: events.length, stored: true, dropped: 0, actions: ['settings.update', 'backup.export', 'backup.restore', 'session.end'] }
 
 describe('the audit filter', () => {

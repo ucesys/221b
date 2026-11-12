@@ -462,3 +462,29 @@ func TestWhatABrowserGetsOfTheSettings(t *testing.T) {
 		t.Fatalf("for anyone: %+v", got)
 	}
 }
+
+// A host that takes its hostname keeps its place in the lists of nodes
+// that named it; a list that has the new name already keeps one.
+func TestARenamedNodeKeepsItsPlaceInTheLists(t *testing.T) {
+	ctx := context.Background()
+	svc := settings.NewService(ctx, &settings.Memory{}, settings.Default, quiet, nil)
+	in := []fleets.Fleet{
+		{ID: "a", Name: "A", Color: 1, Labels: []string{}, Taints: []string{}, Kind: fleets.KindNodes, Nodes: []string{"n1", "10.0.0.5"}},
+		{ID: "b", Name: "B", Color: 2, Labels: []string{}, Taints: []string{}, Kind: fleets.KindNodes, Nodes: []string{"10.0.0.5", "db1"}},
+		{ID: "c", Name: "C", Color: 3, Labels: []string{"pool=db"}, Taints: []string{}},
+	}
+	if _, err := svc.UpdateFleets(ctx, "local", in); err != nil {
+		t.Fatal(err)
+	}
+	st, err := svc.RenameNode(ctx, "local", "10.0.0.5", "db1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := st.Settings.Fleets["local"]
+	if strings.Join(got[0].Nodes, ",") != "n1,db1" || strings.Join(got[1].Nodes, ",") != "db1" || len(got[2].Labels) != 1 {
+		t.Fatalf("the lists after the rename: %+v", got)
+	}
+	if strings.Join(in[0].Nodes, ",") != "n1,10.0.0.5" {
+		t.Fatal("the rename changed the fleets it was given")
+	}
+}

@@ -149,9 +149,7 @@ test('an acknowledged alert leaves the banners for everyone, and stays here and 
     // The tab's name keeps its colour while any alert is on, acknowledged or not.
     await expect(page.locator('[data-tab="alerts"]').first()).toHaveAttribute('data-tone', /^(err|warn)$/)
     // Everyone sees it: the server marks the row.
-    await expect
-      .poll(async () => ((await snapshot(request, ['alerts'])).views.alerts?.rows as { key: string; ack?: { by: string } }[]).find((r) => r.key === `pod:${f.pull}`)?.ack?.by ?? '')
-      .not.toBe('')
+    await expect.poll(async () => ((await snapshot(request, ['alerts'])).views.alerts?.rows as { key: string; ack?: { by: string } }[]).find((r) => r.key === `pod:${f.pull}`)?.ack?.by ?? '').not.toBe('')
     // Still on the badge, which counts every active alert, acknowledged or not
     // (asked at the Phase 6 review; others may come and go meanwhile).
     await expect.poll(async () => (await badge()) === (await active())).toBe(true)

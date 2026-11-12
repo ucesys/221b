@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { collectFacts, fetchFacts } from '../../api/facts'
 import { fetchToolbox, HOST_TOOLS, type ToolAction, type ToolboxInfo, type ToolName } from '../../api/toolbox'
 import type { PodDetails } from '../../api/types'
 import { layer } from '../../lib/layer'
 import { apiPath } from '../../lib/router'
 import { ConfirmDialog } from '../ConfirmDialog'
-import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, KeyIcon, SherlockIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
+import { BoxIcon, CordonIcon, DrainIcon, ForwardIcon, InfoIcon, KeyIcon, SherlockIcon, TerminalIcon, TrashIcon, WrenchIcon } from '../Icons'
 import { useSherlockApi } from '../sherlockContext'
 import { troubleshootQuestion } from '../../lib/sherlock'
 import { useToolbox, type ToolboxApi } from './context'
@@ -16,6 +17,9 @@ export type ToolsTarget =
   | { kind: 'node'; name: string; cordoned?: boolean; role?: string; problem?: string }
   | { kind: 'claim'; name: string; namespace: string; problem?: string }
   | { kind: 'volume'; name: string; problem?: string }
+  // A fleet's drawer: its nodes, and where to say how Collect facts went.
+  // kube are its Kubernetes nodes, which the node pairing is for; a host pairs from its own panel.
+  | { kind: 'fleet'; name: string; nodes: string[]; kube: string[]; onDone?: (msg: string) => void; problem?: undefined }
 
 /** The target's kind as a person reads it. */
 function kindWord(t: ToolsTarget): string {
@@ -114,6 +118,8 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
   const [info, setInfo] = useState<ToolboxInfo | null>(null)
   const [err, setErr] = useState('')
   const [pod, setPod] = useState<PodDetails | null>(null)
+  // Why a fleet's facts cannot be collected: Automation is the SuperAdmin's.
+  const [factsOff, setFactsOff] = useState<string | undefined>()
   const menu = useRef<HTMLDivElement>(null)
   const [style] = useState(() => place(anchor))
 
@@ -124,9 +130,15 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
   const targetName = target.name
   const targetNs = target.kind === 'pod' ? target.namespace : ''
   useEffect(() => {
-    if (!tb.available || (kind !== 'pod' && kind !== 'node')) return
+    if (!tb.available || (kind !== 'pod' && kind !== 'node' && kind !== 'fleet')) return
     let live = true
-    fetchToolbox(tb.cluster, kind === 'pod' ? [targetNs] : [], kind === 'node').then(
+    if (kind === 'fleet') {
+      fetchFacts(tb.cluster).then(
+        () => live && setFactsOff(undefined),
+        (e: unknown) => live && setFactsOff(e instanceof Error ? e.message : String(e)),
+      )
+    }
+    fetchToolbox(tb.cluster, kind === 'pod' ? [targetNs] : [], kind !== 'pod').then(
       (i) => live && setInfo(i),
       (e: unknown) => live && setErr(e instanceof Error ? e.message : String(e)),
     )
@@ -194,18 +206,37 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
         off: sherlock.available ? undefined : 'Sherlock is off here',
         run: () => {
           onClose()
-          sherlock.ask(troubleshootQuestion({ kind: target.kind === 'claim' ? 'pvc' : target.kind === 'volume' ? 'pv' : target.kind, name: target.name, namespace: 'namespace' in target ? target.namespace : undefined, status: target.problem }), true)
+          sherlock.ask(
+            troubleshootQuestion({ kind: target.kind === 'claim' ? 'pvc' : target.kind === 'volume' ? 'pv' : target.kind, name: target.name, namespace: 'namespace' in target ? target.namespace : undefined, status: target.problem }),
+            true,
+          )
         },
       }
     : null
   let items: Item[]
   if (target.kind === 'pod') {
     const ports = (pod?.containers ?? []).filter((c) => !c.init).flatMap((c) => c.ports.filter((p) => p.protocol === 'TCP').map((p) => p.port))
-    const images = info?.debugContainerImages.map((n) => info.images.find((i) => i.name === n)?.image.split('/').pop()?.split(':')[0] ?? n).join(', ')
+    const images = info?.debugContainerImages
+      .map(
+        (n) =>
+          info.images
+            .find((i) => i.name === n)
+            ?.image.split('/')
+            .pop()
+            ?.split(':')[0] ?? n,
+      )
+      .join(', ')
     items = [
       { key: 'shell', icon: <TerminalIcon />, label: 'Shell…', hint: pod ? `${pod.containers.find((c) => !c.init)?.name ?? ''}` : undefined, off: why('shell'), run: () => open('shell') },
       // The dialog lists the pod's ports; the first is chosen.
-      { key: 'forward', icon: <ForwardIcon />, label: 'Port forward…', hint: ports.length ? `${ports.length} port${ports.length === 1 ? '' : 's'}` : undefined, off: why('forward'), run: () => open('forward', ports.length ? { port: ports[0], localPort: ports[0] } : {}) },
+      {
+        key: 'forward',
+        icon: <ForwardIcon />,
+        label: 'Port forward…',
+        hint: ports.length ? `${ports.length} port${ports.length === 1 ? '' : 's'}` : undefined,
+        off: why('forward'),
+        run: () => open('forward', ports.length ? { port: ports[0], localPort: ports[0] } : {}),
+      },
       { key: 'debug-container', icon: <BoxIcon />, label: 'Debug container…', hint: images, off: why('debug-container'), run: () => open('debug-container') },
       {
         key: 'delete',
@@ -229,16 +260,92 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
         },
       },
     ]
+  } else if (target.kind === 'fleet') {
+    const { nodes, kube, onDone } = target
+    const none = nodes.length ? undefined : 'no node is in this fleet'
+    const noKube = kube.length ? undefined : 'its hosts pair from their own panel'
+    items = [
+      {
+        key: 'ssh-pair',
+        icon: <KeyIcon />,
+        label: 'Pair for SSH…',
+        hint: (
+          <span className="rk-tag" data-tone="err">
+            root
+          </span>
+        ),
+        off: none ?? noKube ?? why('ssh-pair') ?? (info && !info.ssh ? 'SSH is turned off on this console' : undefined),
+        run: () => {
+          onClose()
+          tb.openTool(kube.length === 1 ? { tool: 'ssh-pair', node: kube[0], from: 'Fleet' } : { tool: 'ssh-pair', nodes: kube, from: 'Fleet' })
+        },
+      },
+      {
+        key: 'facts',
+        icon: <InfoIcon />,
+        label: 'Collect facts',
+        hint: `${nodes.length} node${nodes.length === 1 ? '' : 's'}`,
+        off: none ?? factsOff,
+        run: () => {
+          onClose()
+          void collectFacts(tb.cluster, nodes).then(onDone)
+        },
+      },
+    ]
   } else if (target.kind === 'node') {
     items = [
-      { key: 'node-shell', icon: <TerminalIcon />, label: 'K8S node shell…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('node-shell'), run: () => open('node-shell') },
+      {
+        key: 'node-shell',
+        icon: <TerminalIcon />,
+        label: 'K8S node shell…',
+        hint: (
+          <span className="rk-tag" data-tone="err">
+            root
+          </span>
+        ),
+        off: why('node-shell'),
+        run: () => open('node-shell'),
+      },
       { key: 'debug-pod', icon: <BoxIcon />, label: 'Debug pod on this node…', off: why('debug-pod'), run: () => open('debug-pod') },
       // SSH (Phase 11, ADR-72): a session once the node is paired; pairing and unpairing are node commands.
       ...(info?.ssh
         ? [
-            { key: 'ssh', icon: <TerminalIcon />, label: 'SSH…', hint: pairing ? `as ${pairing.loginUser}${pairing.stale ? ' · pair again' : ''}` : 'pair the node first', off: why('ssh') ?? (pairing ? (pairing.stale ? 'paired with another authority; pair it again' : undefined) : 'not paired yet: Pair for SSH… first'), run: () => open('ssh') },
-            { key: 'ssh-pair', icon: <KeyIcon />, label: pairing ? 'Pair for SSH again…' : 'Pair for SSH…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('ssh-pair'), run: () => open('ssh-pair', pairing ? { loginUser: pairing.loginUser, port: pairing.port } : {}) },
-            ...(pairing ? [{ key: 'ssh-unpair', icon: <KeyIcon />, label: 'Unpair from SSH…', hint: <span className="rk-tag" data-tone="err">root</span>, off: why('ssh-unpair'), run: () => open('ssh-unpair') }] : []),
+            {
+              key: 'ssh',
+              icon: <TerminalIcon />,
+              label: 'SSH…',
+              hint: pairing ? `as ${pairing.loginUser}${pairing.stale ? ' · pair again' : ''}` : 'pair the node first',
+              off: why('ssh') ?? (pairing ? (pairing.stale ? 'paired with another authority; pair it again' : undefined) : 'not paired yet: Pair for SSH… first'),
+              run: () => open('ssh'),
+            },
+            {
+              key: 'ssh-pair',
+              icon: <KeyIcon />,
+              label: pairing ? 'Pair for SSH again…' : 'Pair for SSH…',
+              hint: (
+                <span className="rk-tag" data-tone="err">
+                  root
+                </span>
+              ),
+              off: why('ssh-pair'),
+              run: () => open('ssh-pair', pairing ? { loginUser: pairing.loginUser, port: pairing.port } : {}),
+            },
+            ...(pairing
+              ? [
+                  {
+                    key: 'ssh-unpair',
+                    icon: <KeyIcon />,
+                    label: 'Unpair from SSH…',
+                    hint: (
+                      <span className="rk-tag" data-tone="err">
+                        root
+                      </span>
+                    ),
+                    off: why('ssh-unpair'),
+                    run: () => open('ssh-unpair'),
+                  },
+                ]
+              : []),
           ]
         : []),
       {
@@ -264,11 +371,7 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
             confirm: 'Drain node',
             action: { action: 'drain', node: target.name },
             what: `node ${target.name}`,
-            body: (
-              <p style={{ margin: 0 }}>
-                Cordons the node, then evicts every pod on it except DaemonSets’; data in their emptyDir volumes is lost. A PodDisruptionBudget can hold it up. Watson shows its progress.
-              </p>
-            ),
+            body: <p style={{ margin: 0 }}>Cordons the node, then evicts every pod on it except DaemonSets’; data in their emptyDir volumes is lost. A PodDisruptionBudget can hold it up. Watson shows its progress.</p>,
           })
         },
       },
@@ -308,6 +411,10 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
         Tools for node <span className="rk-mono">{target.name}</span>
         {target.role ? ` · ${target.role}` : ''}
       </>
+    ) : target.kind === 'fleet' ? (
+      <>
+        Tools for fleet <span className="rk-mono">{target.name}</span> · {target.nodes.length} node{target.nodes.length === 1 ? '' : 's'}
+      </>
     ) : target.kind === 'claim' ? (
       <>
         Tools for volume claim <span className="rk-mono">{target.name}</span> in <span className="rk-mono">{target.namespace}</span>
@@ -342,7 +449,17 @@ function ToolsMenu({ tb, target, anchor, onClose, onConfirm }: { tb: ToolboxApi;
   // At the end of the app's root, for the theme's colours: a table cell's
   // styles (its text does not wrap) and keyboard handling stay out of it.
   return createPortal(
-    <div ref={menu} className="tb-menu" role="menu" aria-label={`Tools for ${kindWord(target)} ${target.name}`} style={style} onKeyDown={keys} onClick={(e) => e.stopPropagation()} onMouseDown={(e) => e.stopPropagation()} data-testid="tools-menu">
+    <div
+      ref={menu}
+      className="tb-menu"
+      role="menu"
+      aria-label={`Tools for ${kindWord(target)} ${target.name}`}
+      style={style}
+      onKeyDown={keys}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      data-testid="tools-menu"
+    >
       <div className="tb-mhead">{head}</div>
       {trouble && item(trouble, true)}
       {trouble && items.length > 0 && <div className="tb-msep" role="separator" />}

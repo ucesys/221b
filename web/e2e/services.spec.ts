@@ -34,7 +34,10 @@ test('lists every Service with its type, cluster IP, ports, endpoints and the Ex
 
   // Namespaces on the left narrow the table.
   const ns = svc.namespace
-  await page.getByTestId('service-namespaces').getByRole('link', { name: new RegExp(`^${ns}\\b`) }).click()
+  await page
+    .getByTestId('service-namespaces')
+    .getByRole('link', { name: new RegExp(`^${ns}\\b`) })
+    .click()
   await expect(page).toHaveURL(new RegExp(`ns=${ns}`))
   const inNs = services.filter((s) => s.namespace === ns)
   await expect(page.getByTestId('services-summary')).toHaveText(`${nWord(inNs.length, 'Service', 'Services')} in ${ns}`)
@@ -57,7 +60,9 @@ test('a LoadBalancer without an external IP shows as pending, with the reason', 
     await expect(page.getByTestId('service-cards')).toHaveCount(0)
     await page.getByRole('group', { name: 'Services by type' }).locator('[data-type="LoadBalancer"]').click()
     await expect(page).toHaveURL(/type=LoadBalancer/)
-    await expect(page.locator('[data-service]')).toHaveCount((await snapshot(request, ['services'])).views.services!.rows.filter((r) => (r as { namespace: string; type: string; headless: boolean }).namespace === lb.namespace && (r as { type: string }).type === 'LoadBalancer').length)
+    await expect(page.locator('[data-service]')).toHaveCount(
+      (await snapshot(request, ['services'])).views.services!.rows.filter((r) => (r as { namespace: string; type: string; headless: boolean }).namespace === lb.namespace && (r as { type: string }).type === 'LoadBalancer').length,
+    )
 
     // Its details say why.
     await row.click()

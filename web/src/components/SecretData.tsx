@@ -67,9 +67,7 @@ export function SecretDelete({ namespace: ns, name, keys, onToast }: { namespace
             onToast('Watson has the change: it runs once someone approves it.')
           }}
         >
-          <p style={{ margin: 0 }}>
-            Its {nWord(keys, 'key', 'keys')} go for good. Pods that read it keep what they read, but cannot start again without it; Watson’s card lists them, with any Ingress that serves TLS from it.
-          </p>
+          <p style={{ margin: 0 }}>Its {nWord(keys, 'key', 'keys')} go for good. Pods that read it keep what they read, but cannot start again without it; Watson’s card lists them, with any Ingress that serves TLS from it.</p>
           <p className="rk-fhint" style={{ margin: 0 }}>
             Watson shows a server dry run first; nothing is deleted until someone approves it, and on a production cluster with the rule on, a second person approves (P6-07).
           </p>
@@ -180,7 +178,20 @@ export function SecretData({ namespace: ns, name, keys, resourceVersion, onToast
   const canEdit = !!cfg?.edit
   const canReveal = !!cfg?.reveal && canEdit
   const valueBox = (value: string, onChange: (v: string) => void, label: string, testId: string, id?: string, problem?: string) => (
-    <textarea id={id} className={`rk-area rk-mono${showTyping || canReveal ? '' : ' rk-secret'}`} value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} aria-invalid={problem ? true : undefined} aria-describedby={problem} spellCheck={false} autoComplete="off" rows={2} style={{ minHeight: 44, fontSize: 12.5, resize: 'vertical' }} data-testid={testId} />
+    <textarea
+      id={id}
+      className={`rk-area rk-mono${showTyping || canReveal ? '' : ' rk-secret'}`}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label={label}
+      aria-invalid={problem ? true : undefined}
+      aria-describedby={problem}
+      spellCheck={false}
+      autoComplete="off"
+      rows={2}
+      style={{ minHeight: 44, fontSize: 12.5, resize: 'vertical' }}
+      data-testid={testId}
+    />
   )
 
   return (
@@ -189,7 +200,12 @@ export function SecretData({ namespace: ns, name, keys, resourceVersion, onToast
         <p style={{ margin: 0, padding: '0 16px 12px', fontSize: 12.5, color: 'var(--fg3)' }}>No data.</p>
       ) : (
         <ScrollBox label="Keys">
-          <Table label="Keys" template={canEdit ? 'minmax(160px, 1fr) 90px minmax(220px, 2fr)' : 'minmax(200px, 1fr) 110px'} minWidth={canEdit ? 480 : 310} cols={canEdit ? [{ label: 'Key' }, { label: 'Size', right: true }, { label: 'Value' }] : [{ label: 'Key' }, { label: 'Size', right: true }]}>
+          <Table
+            label="Keys"
+            template={canEdit ? 'minmax(160px, 1fr) 90px minmax(220px, 2fr)' : 'minmax(200px, 1fr) 110px'}
+            minWidth={canEdit ? 480 : 310}
+            cols={canEdit ? [{ label: 'Key' }, { label: 'Size', right: true }, { label: 'Value' }] : [{ label: 'Key' }, { label: 'Size', right: true }]}
+          >
             {keys.map((k) => {
               const v = shown[k.key]
               const gone = removed.has(k.key)
@@ -207,7 +223,11 @@ export function SecretData({ namespace: ns, name, keys, resourceVersion, onToast
                         valueBox(draft, (val) => setDrafts((d) => ({ ...d, [k.key]: val })), `New value of ${k.key}`, `secret-draft-${k.key}`, fieldId(k.key), blank ? `${fieldId(k.key)}-blank` : undefined)
                       ) : v ? (
                         <span style={{ display: 'flex', alignItems: 'flex-start', gap: 6, minWidth: 0 }}>
-                          <code className="rk-mono" style={{ fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', flex: '1 1 auto', minWidth: 0, maxHeight: 160, overflow: 'auto', background: 'var(--sunken)', padding: '4px 6px', borderRadius: 6 }} data-testid={`secret-value-${k.key}`}>
+                          <code
+                            className="rk-mono"
+                            style={{ fontSize: 12, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', flex: '1 1 auto', minWidth: 0, maxHeight: 160, overflow: 'auto', background: 'var(--sunken)', padding: '4px 6px', borderRadius: 6 }}
+                            data-testid={`secret-value-${k.key}`}
+                          >
                             {v.value}
                           </code>
                           <CopyName text={v.value} what={`value of ${k.key}`} />
@@ -272,7 +292,15 @@ export function SecretData({ namespace: ns, name, keys, resourceVersion, onToast
               added.map((a, i) => (
                 <TR key={'new' + i}>
                   <span>
-                    <input className="rk-mono" value={a.key} onChange={(e) => setAdded((l) => l.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} placeholder="new-key" aria-label="New key" style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, padding: '4px 6px', border: '1px solid var(--line)', borderRadius: 6, background: 'var(--surface)', color: 'var(--fg)' }} data-testid={`secret-new-key-${i}`} />
+                    <input
+                      className="rk-mono"
+                      value={a.key}
+                      onChange={(e) => setAdded((l) => l.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))}
+                      placeholder="new-key"
+                      aria-label="New key"
+                      style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, padding: '4px 6px', border: '1px solid var(--line)', borderRadius: 6, background: 'var(--surface)', color: 'var(--fg)' }}
+                      data-testid={`secret-new-key-${i}`}
+                    />
                   </span>
                   <span className="rk-r rk-num" style={{ color: 'var(--fg3)' }}>
                     new
@@ -330,7 +358,11 @@ export function SecretData({ namespace: ns, name, keys, resourceVersion, onToast
       )}
       <p style={{ margin: 0, padding: '0 16px 12px', fontSize: 11.5, color: 'var(--fg3)' }} data-testid="keys-note">
         221B shows a Secret’s keys and their sizes, never their values (X-01); the YAML tab hides them too.
-        {cfg?.edit ? (cfg.reveal ? ' Reveal reads one value live, as you, and the audit log records it. Edits are written as you; Kubernetes decides.' : ' Edits are written as you, without showing the old values; Kubernetes decides. Revealing is off here (secrets.reveal in the chart).') : ''}
+        {cfg?.edit
+          ? cfg.reveal
+            ? ' Reveal reads one value live, as you, and the audit log records it. Edits are written as you; Kubernetes decides.'
+            : ' Edits are written as you, without showing the old values; Kubernetes decides. Revealing is off here (secrets.reveal in the chart).'
+          : ''}
       </p>
     </>
   )

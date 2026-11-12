@@ -44,7 +44,12 @@ export function NodeFleets({ cluster, fleets, defs, nodes, sel, onSel, loaded, m
   const list = fleets.filter((r) => r.kind === 'fleet').sort((a, b) => a.order - b.order)
   const pick = (f: FleetRow, checked: boolean) => onSel(checked ? sel.filter((s) => s !== f.id) : [...sel.filter((s) => s !== 'none'), f.id!])
   return (
-    <aside className="rk-pane rk-nodefleets" aria-label="Fleets" data-testid="node-fleets" style={{ flex: '0 0 250px', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRight: '1px solid var(--line)', overflow: 'auto' }}>
+    <aside
+      className="rk-pane rk-nodefleets"
+      aria-label="Fleets"
+      data-testid="node-fleets"
+      style={{ flex: '0 0 250px', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRight: '1px solid var(--line)', overflow: 'auto' }}
+    >
       <div style={{ padding: '14px 14px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, borderBottom: '1px solid var(--line)' }}>
         <h2 className="rk-h">
           Fleets <span style={{ fontWeight: 500, letterSpacing: 0, textTransform: 'none' }}>{list.length}</span>
@@ -73,7 +78,14 @@ export function NodeFleets({ cluster, fleets, defs, nodes, sel, onSel, loaded, m
               <label className="rk-fl-check" title={checked ? `Show every node again` : `Show only the nodes of ${f.name}`}>
                 <input type="checkbox" checked={checked} aria-label={checked ? `Stop filtering by ${f.name}` : `Filter the nodes by ${f.name}`} onChange={() => pick(f, checked)} data-testid="node-fleet-check" />
               </label>
-              <button className="rk-fl-main" aria-pressed={checked} onClick={() => onSel(checked && sel.length === 1 ? undefined : [f.id!])} title={checked && sel.length === 1 ? 'Show all nodes again' : `Show only ${f.name}`} data-testid="node-fleet-pick" style={{ padding: '8px 6px 8px 0' }}>
+              <button
+                className="rk-fl-main"
+                aria-pressed={checked}
+                onClick={() => onSel(checked && sel.length === 1 ? undefined : [f.id!])}
+                title={checked && sel.length === 1 ? 'Show all nodes again' : `Show only ${f.name}`}
+                data-testid="node-fleet-pick"
+                style={{ padding: '8px 6px 8px 0' }}
+              >
                 <span className="rk-fl-top">
                   <span className="rk-fdot" data-c={f.color} />
                   <span className="rk-fl-name">{f.name}</span>
@@ -98,9 +110,7 @@ export function NodeFleets({ cluster, fleets, defs, nodes, sel, onSel, loaded, m
           )
         })}
         {loaded && list.length === 0 && (
-          <p style={{ margin: 0, padding: '12px 14px', fontSize: 12.5, color: 'var(--fg3)' }}>
-            No fleets yet. {admin ? 'Create one: nodes join it by their labels and taints, or by name.' : 'An administrator can create them.'}
-          </p>
+          <p style={{ margin: 0, padding: '12px 14px', fontSize: 12.5, color: 'var(--fg3)' }}>No fleets yet. {admin ? 'Create one: nodes join it by their labels and taints, or by name.' : 'An administrator can create them.'}</p>
         )}
         {none && list.length > 0 && (
           <button className="rk-fl rk-fl-main" data-sel={sel[0] === 'none'} aria-pressed={sel[0] === 'none'} onClick={() => onSel(sel[0] === 'none' ? undefined : ['none'])} style={{ padding: '9px 14px' }} data-testid="node-fleet-none">
@@ -128,6 +138,7 @@ export function NodeFleets({ cluster, fleets, defs, nodes, sel, onSel, loaded, m
           fleets={defs}
           nodes={nodes}
           now={now}
+          onToast={onToast}
           onClose={() => setEditor(null)}
           onSave={async (f, isNew) => {
             await saveFleets(cluster, isNew ? [...defs, f] : defs.map((x) => (x.id === f.id ? f : x)))
@@ -136,7 +147,10 @@ export function NodeFleets({ cluster, fleets, defs, nodes, sel, onSel, loaded, m
             onSel([f.id])
           }}
           onDelete={async (f) => {
-            await saveFleets(cluster, defs.filter((x) => x.id !== f.id))
+            await saveFleets(
+              cluster,
+              defs.filter((x) => x.id !== f.id),
+            )
             onToast(`Deleted the fleet “${f.name}”. Its nodes keep their labels and taints.`)
             setEditor(null)
             onSel(undefined)

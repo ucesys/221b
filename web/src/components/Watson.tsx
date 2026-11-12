@@ -1,6 +1,22 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useToolbox } from './toolbox/context'
-import { APPROVE_ALL_CHOICES, approveAllWatson, approveWatson, clearWatson, discardWatson, editWatson, endApproveAllWatson, sendToWatson, stopWatson, WatsonError, watsonSupports, type Send, type WatsonItem, type WatsonLine, type WatsonState } from '../api/watson'
+import {
+  APPROVE_ALL_CHOICES,
+  approveAllWatson,
+  approveWatson,
+  clearWatson,
+  discardWatson,
+  editWatson,
+  endApproveAllWatson,
+  sendToWatson,
+  stopWatson,
+  WatsonError,
+  watsonSupports,
+  type Send,
+  type WatsonItem,
+  type WatsonLine,
+  type WatsonState,
+} from '../api/watson'
 import { fmtClock } from '../lib/format'
 import { readJSON, writeJSON } from '../lib/storage'
 import { CopyIcon, WatsonIcon } from './Icons'
@@ -18,6 +34,13 @@ export interface WatsonApi {
   off?: WatsonOff
   /** Hands commands to Watson: changes get an approval card, reads run. */
   send: (command: string, o?: Send) => void
+  /**
+   * Watson beside a case in its drawer (CF-48), or a proposed change in
+   * its drawer ('proposal', CF-61): Sherlock's commands offer Run in
+   * Watson, which hands them to that Watson, sent from the case or the
+   * proposal.
+   */
+  onCase?: boolean | 'proposal'
 }
 
 /** Why Watson is not offered here, and where to turn it on. */
@@ -240,7 +263,13 @@ export function ApproveAll({ max, busy, give }: { max: number; busy: boolean; gi
           </option>
         ))}
       </select>
-      <button className="rk-tbtn" onClick={() => give(Number(minutes))} disabled={busy || !minutes} title={minutes ? 'Approves this card and every card you could approve, for the time chosen' : 'Choose how long first'} data-testid="watson-approve-all-go">
+      <button
+        className="rk-tbtn"
+        onClick={() => give(Number(minutes))}
+        disabled={busy || !minutes}
+        title={minutes ? 'Approves this card and every card you could approve, for the time chosen' : 'Choose how long first'}
+        data-testid="watson-approve-all-go"
+      >
         Approve all
       </button>
     </span>
@@ -286,7 +315,11 @@ function Card({ it, cluster, now, onToast, standing }: CardProps) {
         </span>
         <span style={{ fontSize: 11.5, color: 'var(--term-dim)' }}>From {it.from}</span>
         {change && it.expires && (
-          <span style={{ fontSize: 11.5, color: left < 60_000 ? 'var(--term-warn)' : 'var(--term-dim)', marginLeft: 'auto' }} title="An approval card is good for 10 minutes, and lapses sooner if the objects it acts on change." data-testid="watson-expiry">
+          <span
+            style={{ fontSize: 11.5, color: left < 60_000 ? 'var(--term-warn)' : 'var(--term-dim)', marginLeft: 'auto' }}
+            title="An approval card is good for 10 minutes, and lapses sooner if the objects it acts on change."
+            data-testid="watson-expiry"
+          >
             lapses in {remaining(left)}
           </span>
         )}
@@ -373,22 +406,33 @@ function Card({ it, cluster, now, onToast, standing }: CardProps) {
         ) : (
           <>
             {(it.canApprove || !it.waiting) && (
-              <button className="rk-tbtn" data-primary="true" onClick={() => void act(() => approveWatson(cluster, it.id))} disabled={busy || !ready || !it.canApprove} data-testid="watson-approve" title={ready ? undefined : 'Watson is still working out what it changes'}>
+              <button
+                className="rk-tbtn"
+                data-primary="true"
+                onClick={() => void act(() => approveWatson(cluster, it.id))}
+                disabled={busy || !ready || !it.canApprove}
+                data-testid="watson-approve"
+                title={ready ? undefined : 'Watson is still working out what it changes'}
+              >
                 {session ? 'Approve and open' : change ? 'Approve and run' : 'Run'}
               </button>
             )}
-            {change && it.canApprove && standing && standing.max > 0 && (standingOn(standing.until, now) ? (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} data-testid="watson-standing">
-                <span className="rk-tl" data-k="warn" style={{ margin: 0 }} title="Every card you could approve is approved as it is ready, until then">
-                  approving all until {fmtClock(standing.until!)}
+            {change &&
+              it.canApprove &&
+              standing &&
+              standing.max > 0 &&
+              (standingOn(standing.until, now) ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }} data-testid="watson-standing">
+                  <span className="rk-tl" data-k="warn" style={{ margin: 0 }} title="Every card you could approve is approved as it is ready, until then">
+                    approving all until {fmtClock(standing.until!)}
+                  </span>
+                  <button className="rk-tbtn" onClick={standing.end} disabled={busy} data-testid="watson-standing-end">
+                    Stop
+                  </button>
                 </span>
-                <button className="rk-tbtn" onClick={standing.end} disabled={busy} data-testid="watson-standing-end">
-                  Stop
-                </button>
-              </span>
-            ) : (
-              <ApproveAll max={standing.max} busy={busy} give={standing.give} />
-            ))}
+              ) : (
+                <ApproveAll max={standing.max} busy={busy} give={standing.give} />
+              ))}
             {it.mine && (
               <>
                 {!session && (
@@ -463,7 +507,12 @@ function Ran({ it, prompt, cluster, now, onToast, onAgain }: { it: WatsonItem; p
         <div className="rk-tstat">
           <span className="rk-spin" aria-hidden="true" />
           <span>{status}</span>
-          <button className="rk-tbtn" onClick={() => void stopWatson(cluster, it.id).catch((e: unknown) => onToast(e instanceof Error ? e.message : String(e)))} style={{ height: 22, padding: '0 8px', fontSize: 11.5 }} data-testid="watson-stop">
+          <button
+            className="rk-tbtn"
+            onClick={() => void stopWatson(cluster, it.id).catch((e: unknown) => onToast(e instanceof Error ? e.message : String(e)))}
+            style={{ height: 22, padding: '0 8px', fontSize: 11.5 }}
+            data-testid="watson-stop"
+          >
             Stop
           </button>
         </div>
@@ -491,13 +540,60 @@ interface PaneProps {
   /** The Sherlock and Watson switch on narrow screens. */
   switcher?: ReactNode
   onToast: (msg: string) => void
+  /** A command handed over (Open in Watson, IB-13): it waits in the box for the person to run. */
+  fill?: string
+  onFilled?: () => void
+  /**
+   * Watson on a case (Phase 12, wave 6f, CF-48): what is typed is sent from
+   * the case ("case:C-12"), and only the commands sent from it show.
+   */
+  scope?: { from: string; label: string }
+  /**
+   * What follows the cards in the terminal: a proposed change's own card,
+   * brought in by Run in Watson in its drawer (CF-62).
+   */
+  tail?: ReactNode
+}
+
+/**
+ * Which waiting card is the person's current request (CF-65): requests do
+ * not pile up. Only the newest pending card, by when it was made, is
+ * active; the earlier ones are left as they are on the server, never
+ * discarded, and fold into one line. `seen` is the newest request this pane
+ * has seen: once that one is approved, discarded or run, nothing earlier
+ * becomes active again. A change that is no longer pending, or a card that
+ * was discarded or lapsed, was a request too, so a pane opened later keeps
+ * the same answer.
+ */
+export function splitPending(items: WatsonItem[], seen = 0): { active?: WatsonItem; earlier: WatsonItem[]; newest: number } {
+  const at = (x: WatsonItem) => Date.parse(x.created) || 0
+  const wasCard = (x: WatsonItem) => x.status === 'pending' || x.status === 'discarded' || x.status === 'lapsed' || (x.kind === 'change' && x.status !== 'refused')
+  const newest = items.reduce((m, x) => (wasCard(x) ? Math.max(m, at(x)) : m), seen)
+  const pending = items.filter((x) => x.status === 'pending')
+  let active: WatsonItem | undefined
+  for (const x of pending) if (at(x) >= newest && (!active || at(x) >= at(active))) active = x
+  return { active, earlier: pending.filter((x) => x !== active), newest }
 }
 
 /** Watson's pane (P6-01): a terminal of commands, cards and output. */
-export function WatsonPane({ cluster, clusterName, state, controls, switcher, onToast }: PaneProps) {
+export function WatsonPane({ cluster, clusterName, state, controls, switcher, onToast, fill, onFilled, scope, tail }: PaneProps) {
   const status = state.status
-  const items = state.items
-  const [draft, setDraft] = useState('')
+  const items = useMemo(() => (scope ? state.items.filter((x) => x.from === scope.from) : state.items), [scope, state.items])
+  const [draft, setDraft] = useState(fill ?? '')
+  // A command handed over waits in the box; it is the person who runs it,
+  // as themselves (as Sherlock's box does with a question).
+  const box = useRef<HTMLInputElement>(null)
+  const [filled, setFilled] = useState(fill)
+  if (fill !== filled) {
+    setFilled(fill)
+    if (fill) setDraft(fill)
+  }
+  useEffect(() => {
+    if (!fill) return
+    box.current?.focus()
+    onFilled?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fill])
   const [auto, setAuto] = useState(autoRunReads)
   const [hist, setHist] = useState<Typed[]>(readTyped)
   const [pos, setPos] = useState(-1)
@@ -508,6 +604,13 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
   const pinned = useRef(true)
   const pending = items.filter((x) => x.status === 'pending')
   const rest = items.filter((x) => x.status !== 'pending')
+  // Only the newest request is active (CF-65); the newest seen is kept per
+  // cluster and scope, so that one decided does not bring an earlier back.
+  const where = `${cluster}|${scope?.from ?? ''}`
+  const [seen, setSeen] = useState({ where, at: 0 })
+  const split = splitPending(items, seen.where === where ? seen.at : 0)
+  if (seen.where !== where || split.newest > seen.at) setSeen({ where, at: split.newest })
+  const [showEarlier, setShowEarlier] = useState(false)
   const [standing, setStanding] = useState<{ cluster: string; until: string | null } | null>(null)
   const until = standing?.cluster === cluster ? standing.until : (status?.approvedUntil ?? null)
   const now = useTick(items.some((x) => x.status === 'running' || (x.status === 'pending' && x.kind === 'change')) || !!until)
@@ -553,7 +656,7 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
     setDraft('')
     try {
       // Typed reads run at once (P6-01); changes wait for their card.
-      await sendToWatson(cluster, cmd, { from: 'Typed', run: true })
+      await sendToWatson(cluster, cmd, { from: scope?.from ?? 'Typed', run: true })
     } catch (e) {
       onToast(e instanceof WatsonError ? e.message : String(e))
       setDraft(cmd)
@@ -566,6 +669,9 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
       onToast(e instanceof Error ? e.message : String(e))
     }
   }
+  const card = (it: WatsonItem) => (
+    <Card key={it.id} it={it} cluster={cluster} now={now} onToast={onToast} standing={status?.readOnly ? undefined : { max: approveAllMax, until, give: (m) => void approveAll(m), end: () => void endApproveAll() }} />
+  )
   const finishedCount = rest.filter((x) => x.status !== 'running' && x.status !== 'queued').length
   return (
     <section className="rk-dpane rk-wat" aria-label="Watson" data-testid="watson">
@@ -574,7 +680,7 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
           <WatsonIcon />
         </span>
         <h2 className={switcher ? 'rk-wide' : undefined}>Watson</h2>
-        <small className="rk-wide">Runs commands once you approve them</small>
+        <small className={scope ? undefined : 'rk-wide'}>{scope ? `Runs commands on ${clusterName} for ${scope.label}` : 'Runs commands once you approve them'}</small>
         {switcher}
         {waiting > 0 && (
           <span className="rk-count rk-wide" data-tone="warn" style={{ flex: 'none', whiteSpace: 'nowrap' }} data-testid="watson-waiting-count">
@@ -605,7 +711,7 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
             </button>
           </span>
         )}
-        {finishedCount > 0 && (
+        {finishedCount > 0 && !scope && (
           <button className="rk-btn" onClick={() => void clear()} title="Remove finished commands from the console" style={{ height: 28 }} data-testid="watson-clear">
             Clear
           </button>
@@ -625,7 +731,7 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
         }}
         data-testid="watson-log"
       >
-        {items.length === 0 && (
+        {items.length === 0 && !tail && (
           <div data-testid="watson-empty">
             <div className="rk-tl" data-k="head">
               Watson · kubectl and helm on {clusterName}
@@ -659,15 +765,26 @@ export function WatsonPane({ cluster, clusterName, state, controls, switcher, on
           </div>
         )}
         {rest.map((it) => (
-          <Ran key={it.id} it={it} prompt={prompt} cluster={cluster} now={now} onToast={onToast} onAgain={(cmd) => void sendToWatson(cluster, cmd, { from: 'Typed again' }).catch((e: unknown) => onToast(String(e)))} />
+          <Ran key={it.id} it={it} prompt={prompt} cluster={cluster} now={now} onToast={onToast} onAgain={(cmd) => void sendToWatson(cluster, cmd, { from: scope?.from ?? 'Typed again' }).catch((e: unknown) => onToast(String(e)))} />
         ))}
-        {pending.map((it) => (
-          <Card key={it.id} it={it} cluster={cluster} now={now} onToast={onToast} standing={status?.readOnly ? undefined : { max: approveAllMax, until, give: (m) => void approveAll(m), end: () => void endApproveAll() }} />
-        ))}
+        {/* Earlier requests fold into one line (CF-65): left waiting, never
+            discarded; they still lapse on their own. */}
+        {split.earlier.length > 0 && (
+          <button type="button" className="rk-tl rk-tmore" aria-expanded={showEarlier} onClick={() => setShowEarlier((v) => !v)} data-testid="watson-earlier">
+            <span aria-hidden="true">{showEarlier ? '▾' : '▸'}</span> {split.earlier.length === 1 ? '1 earlier request' : `${split.earlier.length} earlier requests`} left waiting
+          </button>
+        )}
+        {showEarlier && split.earlier.map((it) => card(it))}
+        {split.active && card(split.active)}
+        {/* The agents' proposed changes wait in AIOps › Inbox, not here: the
+            panel keeps its room for commands (Phase 12, wave 5, IN-08).
+            Only a proposal's own drawer shows its card, at the foot (CF-62). */}
+        {tail}
       </div>
       <div className="rk-tin">
         <span aria-hidden="true">$</span>
         <input
+          ref={box}
           type="text"
           aria-label="Command for Watson"
           placeholder="Type a kubectl or helm command and press Enter"

@@ -51,19 +51,7 @@ func NewPairings(b kv.Backend) *Pairings { return &Pairings{backend: b} }
 func key(cluster, node string) string { return cluster + "/" + node }
 
 func (p *Pairings) load(ctx context.Context) (map[string]Pairing, string, error) {
-	b, version, err := p.backend.LoadKey(ctx, PairingsKey)
-	if errors.Is(err, kv.ErrNotFound) {
-		return map[string]Pairing{}, version, nil
-	}
-	if err != nil {
-		return nil, "", err
-	}
-	m := map[string]Pairing{}
-	if err := json.Unmarshal(b, &m); err != nil {
-		// Read as empty, the next save would wipe every pairing.
-		return nil, "", fmt.Errorf("%s in the settings ConfigMap is not readable: %w", PairingsKey, err)
-	}
-	return m, version, nil
+	return loadKey[Pairing](ctx, p.backend, PairingsKey)
 }
 
 // Get returns a node's pairing, if it has one.
@@ -93,12 +81,21 @@ func (p *Pairings) List(ctx context.Context, cluster string) ([]Pairing, error) 
 }
 
 // change edits the map over the version it read, again on a conflict.
-// The ConfigMap has one version for all its keys, and a card of many nodes
-// ends its sessions together, each writing its history, so the tries wait
-// a little longer each time, at random, to get out of each other's way.
 func (p *Pairings) change(ctx context.Context, edit func(map[string]Pairing)) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return changeKey(ctx, p.backend, PairingsKey, func(m map[string]Pairing) error {
+		edit(m)
+		return nil
+	})
+}
+
+// changeKey edits a map kept under a key over the version it read, again
+// on a conflict; an edit that fails saves nothing. The ConfigMap has one
+// version for all its keys, and a card of many nodes ends its sessions
+// together, each writing its history, so the tries wait a little longer
+// each time, at random, to get out of each other's way.
+func changeKey[T any](ctx context.Context, backend kv.Backend, key string, edit func(map[string]T) error) error {
 	var err error
 	for try := 0; try < changeTries; try++ {
 		if try > 0 {
@@ -108,20 +105,39 @@ func (p *Pairings) change(ctx context.Context, edit func(map[string]Pairing)) er
 				return ctx.Err()
 			}
 		}
-		var m map[string]Pairing
+		var m map[string]T
 		var version string
-		m, version, err = p.load(ctx)
+		m, version, err = loadKey[T](ctx, backend, key)
 		if err != nil {
 			return err
 		}
-		edit(m)
+		if err := edit(m); err != nil {
+			return err
+		}
 		b, _ := json.Marshal(m)
-		if _, err = p.backend.SaveKey(ctx, PairingsKey, b, version); errors.Is(err, kv.ErrConflict) {
+		if _, err = backend.SaveKey(ctx, key, b, version); errors.Is(err, kv.ErrConflict) {
 			continue
 		}
 		return err
 	}
 	return err
+}
+
+// loadKey reads a map kept under a key: empty when never saved, an error
+// when not readable, since read as empty the next save would wipe it.
+func loadKey[T any](ctx context.Context, backend kv.Backend, key string) (map[string]T, string, error) {
+	b, version, err := backend.LoadKey(ctx, key)
+	if errors.Is(err, kv.ErrNotFound) {
+		return map[string]T{}, version, nil
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	m := map[string]T{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, "", fmt.Errorf("%s in the settings ConfigMap is not readable: %w", key, err)
+	}
+	return m, version, nil
 }
 
 // Set records a pairing, replacing the node's earlier one.

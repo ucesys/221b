@@ -24,7 +24,7 @@ const rows = [
       { title: 'Not ready', severity: 'error', summary: 'The kubelet stopped posting status.', entries: [] },
       { title: 'Disk pressure', severity: 'warning', summary: 'The kubelet is evicting pods.', entries: [] },
     ],
-    labels: { 'workload': 'analytics' },
+    labels: { workload: 'analytics' },
     pods: { running: 3, capacity: 110, notReady: 2, failing: 1, starting: 1, unready: 0, completed: 4 },
     cpu: { requested: 2000, limits: 4000, allocatable: 16000, capacity: 16000, used: null },
     memory: { requested: 8 * GI, limits: 8 * GI, allocatable: 64 * GI, capacity: 64 * GI, used: null },
@@ -63,7 +63,7 @@ describe('cells', () => {
     expect(taintShort({ key: 'dedicated', value: 'analytics', effect: 'NoSchedule' })).toBe('dedicated=analytics')
   })
 
-  it('tags roles and lists a node\'s own labels', () => {
+  it("tags roles and lists a node's own labels", () => {
     expect(roleTag(rows[0]!)).toEqual({ text: 'master', title: 'Control plane' })
     expect(roleTag(controlPlane('cp-2', { roles: ['control-plane', 'etcd'] }))).toEqual({ text: 'master', title: 'Control plane (also etcd)' })
     expect(roleTag(rows[1]!)).toEqual({ text: 'worker', title: 'Worker (worker)' })
@@ -85,10 +85,25 @@ describe('resource sections', () => {
     const r = { ...rows[1]!, cpu: { ...rows[1]!.cpu, capacity: 16000, allocatable: 13500 }, memory: { ...rows[1]!.memory, capacity: 64 * GI, allocatable: 47 * GI } }
     const cfg = { systemReserved: { cpu: '2', memory: '12Gi' }, kubeReserved: { cpu: '500m', memory: '4Gi' }, evictionHard: { 'memory.available': '1Gi', 'nodefs.available': '5%' } }
     const [cpu, memory] = resourceSections(r, true, '', cfg)
-    expect(cpu!.lines.slice(0, 4).map((l) => [l.k, l.v])).toEqual([['Total on the node', '16 cores'], ['Reserved for the system', '2'], ['Reserved for Kubernetes', '0.5'], ['Allocatable', '13.5 cores']])
-    expect(memory!.lines.slice(0, 5).map((l) => [l.k, l.v])).toEqual([['Total on the node', '64Gi'], ['Reserved for the system', '12Gi'], ['Reserved for Kubernetes', '4Gi'], ['Eviction threshold', '1Gi'], ['Allocatable', '47Gi']])
+    expect(cpu!.lines.slice(0, 4).map((l) => [l.k, l.v])).toEqual([
+      ['Total on the node', '16 cores'],
+      ['Reserved for the system', '2'],
+      ['Reserved for Kubernetes', '0.5'],
+      ['Allocatable', '13.5 cores'],
+    ])
+    expect(memory!.lines.slice(0, 5).map((l) => [l.k, l.v])).toEqual([
+      ['Total on the node', '64Gi'],
+      ['Reserved for the system', '12Gi'],
+      ['Reserved for Kubernetes', '4Gi'],
+      ['Eviction threshold', '1Gi'],
+      ['Allocatable', '47Gi'],
+    ])
     const unread = resourceSections(r, true, '')[0]!
-    expect(unread.lines.slice(0, 3).map((l) => [l.k, l.v])).toEqual([['Total on the node', '16 cores'], ['Reserved', '2.5'], ['Allocatable', '13.5 cores']])
+    expect(unread.lines.slice(0, 3).map((l) => [l.k, l.v])).toEqual([
+      ['Total on the node', '16 cores'],
+      ['Reserved', '2.5'],
+      ['Allocatable', '13.5 cores'],
+    ])
     expect(quantity('500m', 'cpu')).toBe(500)
     expect(quantity('5%', 'memory')).toBe(0)
   })

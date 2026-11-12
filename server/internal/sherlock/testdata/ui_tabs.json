@@ -1,0 +1,370 @@
+{
+  "about": "What each tab of the console accepts from Sherlock's view actions: its filters with their values, its search and its path (S-3). web/src/lib/uiControl.test.ts checks that TAB_SPECS is exactly this; ui_test.go checks that the descriptions of view_open and view_filter in ui_actions.json name every tab, filter and value here. Change all three together.",
+  "tabs": {
+    "alerts": {
+      "search": "q",
+      "filters": {
+        "kind": {
+          "type": "enum",
+          "values": [
+            "all",
+            "pods",
+            "nodes",
+            "volumes"
+          ],
+          "none": "all"
+        },
+        "show": {
+          "type": "enum",
+          "values": [
+            "active",
+            "all"
+          ],
+          "none": "active"
+        },
+        "acked": {
+          "type": "enum",
+          "values": [
+            "show",
+            "hide"
+          ],
+          "none": "show"
+        },
+        "by": {
+          "type": "enum",
+          "values": [
+            "node",
+            "kind"
+          ],
+          "none": "node"
+        }
+      }
+    },
+    "nodes": {
+      "search": "q",
+      "filters": {
+        "role": {
+          "type": "enum",
+          "values": [
+            "all",
+            "control-plane",
+            "worker"
+          ],
+          "none": "all"
+        },
+        "err": {
+          "type": "enum",
+          "values": [
+            "all",
+            "problems",
+            "errors"
+          ],
+          "none": "all"
+        },
+        "label": {
+          "type": "list"
+        },
+        "taint": {
+          "type": "list"
+        },
+        "fleet": {
+          "type": "list"
+        }
+      }
+    },
+    "pods": {
+      "search": "q",
+      "filters": {
+        "role": {
+          "type": "enum",
+          "values": [
+            "all",
+            "control-plane",
+            "worker"
+          ],
+          "none": "all"
+        },
+        "status": {
+          "type": "enum",
+          "values": [
+            "all",
+            "running",
+            "notready",
+            "pending",
+            "failing",
+            "completed"
+          ],
+          "none": "all"
+        },
+        "ns": {
+          "type": "list"
+        },
+        "node": {
+          "type": "list"
+        },
+        "label": {
+          "type": "list"
+        },
+        "taint": {
+          "type": "list"
+        }
+      }
+    },
+    "services": {
+      "search": "q",
+      "filters": {
+        "ns": {
+          "type": "text"
+        },
+        "type": {
+          "type": "enum",
+          "values": [
+            "all",
+            "ClusterIP",
+            "Headless",
+            "NodePort",
+            "LoadBalancer",
+            "notReady"
+          ],
+          "none": "all"
+        }
+      }
+    },
+    "namespaces": {
+      "search": "q",
+      "filters": {
+        "kinds": {
+          "type": "list"
+        }
+      },
+      "path": [
+        {
+          "name": "namespace",
+          "type": "text"
+        }
+      ]
+    },
+    "helm": {
+      "search": "q",
+      "filters": {
+        "tab": {
+          "type": "enum",
+          "values": [
+            "overview",
+            "pods",
+            "workloads",
+            "storage",
+            "network",
+            "roles",
+            "other",
+            "values",
+            "notes",
+            "history",
+            "images"
+          ],
+          "none": "overview"
+        }
+      },
+      "path": [
+        {
+          "name": "namespace",
+          "type": "text"
+        },
+        {
+          "name": "release",
+          "type": "text"
+        }
+      ]
+    },
+    "storage": {
+      "search": "q",
+      "filters": {
+        "ns": {
+          "type": "list"
+        },
+        "node": {
+          "type": "list"
+        },
+        "class": {
+          "type": "list"
+        },
+        "attention": {
+          "type": "flag"
+        },
+        "label": {
+          "type": "list"
+        }
+      }
+    },
+    "fleets": {
+      "search": "q",
+      "filters": {
+        "fleet": {
+          "type": "list"
+        },
+        "pl": {
+          "type": "list"
+        },
+        "pt": {
+          "type": "list"
+        },
+        "group": {
+          "type": "enum",
+          "values": [
+            "fleet",
+            "none"
+          ],
+          "none": "fleet"
+        },
+        "err": {
+          "type": "enum",
+          "values": [
+            "all",
+            "problems",
+            "errors"
+          ],
+          "none": "all"
+        }
+      }
+    },
+    "scripts": {
+      "filters": {
+        "state": {
+          "type": "enum",
+          "values": [
+            "review",
+            "draft",
+            "approved",
+            "unapproved"
+          ]
+        }
+      }
+    },
+    "run-history": {
+      "filters": {}
+    },
+    "variables": {
+      "filters": {}
+    },
+    "run-profiles": {
+      "filters": {}
+    },
+    "networks": {
+      "filters": {
+        "route": {
+          "type": "text"
+        }
+      }
+    },
+    "access": {
+      "search": "q",
+      "filters": {
+        "kind": {
+          "type": "enum",
+          "values": [
+            "all",
+            "users",
+            "groups",
+            "sas"
+          ],
+          "none": "all"
+        },
+        "verb": {
+          "type": "enum",
+          "values": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "update",
+            "patch",
+            "delete"
+          ],
+          "none": "get"
+        },
+        "res": {
+          "type": "enum",
+          "values": [
+            "pods",
+            "pods/exec",
+            "pods/log",
+            "deployments",
+            "statefulsets",
+            "daemonsets",
+            "jobs",
+            "services",
+            "ingresses",
+            "configmaps",
+            "secrets",
+            "persistentvolumeclaims",
+            "serviceaccounts",
+            "serviceaccounts/token",
+            "roles",
+            "rolebindings",
+            "nodes",
+            "namespaces",
+            "persistentvolumes",
+            "storageclasses",
+            "clusterroles",
+            "clusterrolebindings",
+            "customresourcedefinitions"
+          ],
+          "none": "secrets"
+        },
+        "wns": {
+          "type": "text"
+        },
+        "tbl": {
+          "type": "enum",
+          "values": [
+            "bindings",
+            "roles"
+          ],
+          "none": "bindings"
+        },
+        "sys": {
+          "type": "flag"
+        },
+        "defaults": {
+          "type": "flag"
+        },
+        "id": {
+          "type": "text"
+        },
+        "scope": {
+          "type": "text"
+        }
+      }
+    },
+    "policies": {
+      "filters": {
+        "from": {
+          "type": "text"
+        },
+        "to": {
+          "type": "text"
+        },
+        "port": {
+          "type": "text"
+        }
+      },
+      "path": [
+        {
+          "name": "section",
+          "type": "enum",
+          "values": [
+            "netpol",
+            "pdb",
+            "drain",
+            "quota",
+            "limits",
+            "psa",
+            "webhooks",
+            "priority",
+            "prio"
+          ]
+        }
+      ]
+    }
+  }
+}

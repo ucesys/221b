@@ -96,7 +96,15 @@ export function AddToGroup({ users, groups, user: userProp, group: groupProp, on
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>Add to a local group</h2>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--fg3)' }}>
           Local user
-          <Select label="Local user" value={username} options={locals.length ? locals.map((u): [string, string] => [u.username, u.email ? `${u.username} (${u.email})` : u.username]) : [['', 'No local users']]} onChange={setUsername} disabled={!!userProp || !locals.length} width="100%" testId="add-user" />
+          <Select
+            label="Local user"
+            value={username}
+            options={locals.length ? locals.map((u): [string, string] => [u.username, u.email ? `${u.username} (${u.email})` : u.username]) : [['', 'No local users']]}
+            onChange={setUsername}
+            disabled={!!userProp || !locals.length}
+            width="100%"
+            testId="add-user"
+          />
           <span className="rk-fhint">LDAP people get their groups from the directory and do not appear here.</span>
         </label>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12, color: 'var(--fg3)' }}>
@@ -111,7 +119,8 @@ export function AddToGroup({ users, groups, user: userProp, group: groupProp, on
             testId="add-group"
           />
           <span className="rk-fhint">
-            Groups, their role and their namespaces are defined in <span className="rk-mono">auth.local.groups</span>. For a different set of namespaces, add a group there and run <span className="rk-mono">helm upgrade</span>; a group may have one member.
+            Groups, their role and their namespaces are defined in <span className="rk-mono">auth.local.groups</span>. For a different set of namespaces, add a group there and run <span className="rk-mono">helm upgrade</span>; a group may
+            have one member.
           </span>
         </label>
         {user && g && <Result user={user} group={member ? '' : g.name} groups={groups} />}
@@ -130,7 +139,8 @@ export function AddToGroup({ users, groups, user: userProp, group: groupProp, on
       {asking && user && g && (
         <ConfirmDialog title={`Add ${user.username} to ${g.name}?`} confirm="Add to group" busy={busy} error={error} onConfirm={() => void apply()} onCancel={() => setAsking(false)}>
           <p style={{ margin: 0 }}>
-            {user.username} will be {g.role === 'admin' ? 'an' : 'a'} {ROLE_NAME[g.role]} in <span className="rk-mono">{g.namespaces.join(', ')}</span>, on every cluster that has the group’s bindings. The change applies within 2 minutes, while {user.username} is signed in.
+            {user.username} will be {g.role === 'admin' ? 'an' : 'a'} {ROLE_NAME[g.role]} in <span className="rk-mono">{g.namespaces.join(', ')}</span>, on every cluster that has the group’s bindings. The change applies within 2 minutes,
+            while {user.username} is signed in.
           </p>
           <p className="rk-fhint" style={{ margin: 0 }}>
             Nothing is written to Kubernetes. The change is kept by 221B and recorded in the audit log with your name.

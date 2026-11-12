@@ -15,12 +15,20 @@ describe('commands in a code block', () => {
 
 describe('what Watson runs', () => {
   it('accepts its reads and changes, with flags before the verb', () => {
-    for (const c of ['kubectl get pods -A', 'kubectl -n web describe pod api-0', 'kubectl auth can-i list pods', 'kubectl rollout undo deploy/api -n web', 'kubectl delete pod api-0', 'helm get values shop -n web', 'helm -n web rollback shop 3', 'kubectl label namespace web a=b'])
+    for (const c of [
+      'kubectl get pods -A',
+      'kubectl -n web describe pod api-0',
+      'kubectl auth can-i list pods',
+      'kubectl rollout undo deploy/api -n web',
+      'kubectl delete pod api-0',
+      'helm get values shop -n web',
+      'helm -n web rollback shop 3',
+      'kubectl label namespace web a=b',
+    ])
       expect(watsonSupports(c), c).toBe(true)
   })
   it('refuses the rest', () => {
-    for (const c of ['kubectl apply -f x.yaml', 'kubectl delete deployment api', 'kubectl exec -it api -- sh', 'kubectl rollout status deploy/api', 'helm install x y', 'ls -la'])
-      expect(watsonSupports(c), c).toBe(false)
+    for (const c of ['kubectl apply -f x.yaml', 'kubectl delete deployment api', 'kubectl exec -it api -- sh', 'kubectl rollout status deploy/api', 'helm install x y', 'ls -la']) expect(watsonSupports(c), c).toBe(false)
   })
 })
 

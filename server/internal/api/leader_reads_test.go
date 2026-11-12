@@ -11,7 +11,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/ucesys/221b/server/internal/cards"
 	"github.com/ucesys/221b/server/internal/fake"
+	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/nodes"
@@ -25,7 +27,7 @@ import (
 func TestEveryRouteIsForwardedUnlessLocal(t *testing.T) {
 	src := &source{Source: fake.New("n1"), logs: map[string][]string{}}
 	shared := settings.NewService(context.Background(), &settings.Memory{}, settings.Default, quietLog(), nil)
-	s := New(Options{Store: live.New(src, live.Options{}), Cluster: src, Settings: shared, Logger: quietLog()})
+	s := New(Options{Store: live.New(src, live.Options{}), Cluster: src, Settings: shared, Logger: quietLog(), Issues: issues.New(issues.Options{}), Cards: cards.New(cards.Options{})})
 	if len(s.patterns) < 20 {
 		t.Fatalf("only %d routes registered", len(s.patterns))
 	}
@@ -36,7 +38,7 @@ func TestEveryRouteIsForwardedUnlessLocal(t *testing.T) {
 			path = pat
 		}
 		path = placeholder.ReplaceAllString(path, "x")
-		want := strings.HasPrefix(path, "/api/v1/")
+		want := strings.HasPrefix(path, "/api/v1/") || strings.HasPrefix(path, "/api/issues/")
 		for _, p := range localPaths {
 			if path == p || strings.HasPrefix(path, p+"/") {
 				want = false
@@ -54,6 +56,8 @@ func TestEveryRouteIsForwardedUnlessLocal(t *testing.T) {
 		"/api/v1/admin/ldap/refresh":       false,
 		"/api/v1/admin/roles/manifest":     true,
 		"/api/v1/meta":                     true,
+		"/api/issues/v1/reports":           true,
+		"/api/issues/v1/intake/reports":    true,
 		"/signin":                          false,
 		"/signin/callback":                 false,
 		"/setup":                           false,

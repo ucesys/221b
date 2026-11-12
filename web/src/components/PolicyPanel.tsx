@@ -65,11 +65,23 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
     const r = m.netpols.find((x) => x.key === keyOf)
     gone = !r
     if (r) {
-      facts = <span className="rk-pill" data-tone="ok"><span className="rk-dot" />{nWord(r.pods.length, 'pod selected', 'pods selected')}</span>
+      facts = (
+        <span className="rk-pill" data-tone="ok">
+          <span className="rk-dot" />
+          {nWord(r.pods.length, 'pod selected', 'pods selected')}
+        </span>
+      )
       body = (
         <>
           <Card title="NetworkPolicy">
-            <Facts items={[['Applies to', r.selector === 'every pod' ? `every pod in ${r.namespace}` : r.selector], ['Restricts', [r.ingress && 'Ingress', r.egress && 'Egress'].filter(Boolean).join(' and ') + (!r.egress ? ' (egress isn’t restricted)' : '')], ...(r.allows ? ([['Allows in', r.allows]] as [string, string][]) : []), ...(r.allowsOut ? ([['Allows out', r.allowsOut]] as [string, string][]) : [])]} />
+            <Facts
+              items={[
+                ['Applies to', r.selector === 'every pod' ? `every pod in ${r.namespace}` : r.selector],
+                ['Restricts', [r.ingress && 'Ingress', r.egress && 'Egress'].filter(Boolean).join(' and ') + (!r.egress ? ' (egress isn’t restricted)' : '')],
+                ...(r.allows ? ([['Allows in', r.allows]] as [string, string][]) : []),
+                ...(r.allowsOut ? ([['Allows out', r.allowsOut]] as [string, string][]) : []),
+              ]}
+            />
           </Card>
           <Card title="Pods it selects">
             <List items={r.pods.map((p) => ({ main: p, link: objectLink('pods', [], { open: `${r.namespace}/${p}` }) }))} empty="No running pod has these labels." />
@@ -83,21 +95,42 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
     const r = m.pdbs.find((x) => x.key === keyOf)
     gone = !r
     if (r) {
-      facts = <span className="rk-pill" data-tone={r.disruptionsAllowed > 0 ? 'ok' : 'warn'}><span className="rk-dot" />{nWord(r.disruptionsAllowed, 'disruption allowed', 'disruptions allowed')}</span>
+      facts = (
+        <span className="rk-pill" data-tone={r.disruptionsAllowed > 0 ? 'ok' : 'warn'}>
+          <span className="rk-dot" />
+          {nWord(r.disruptionsAllowed, 'disruption allowed', 'disruptions allowed')}
+        </span>
+      )
       const nodes = [...new Set(r.pods.map((p) => p.node).filter(Boolean))]
       body = (
         <>
           {r.overlap.length > 0 && (
             <div className="rk-callout" data-tone="warn">
               <WarnIcon />
-              <span style={{ fontSize: 12.5 }}>{nWord(r.overlap.length, 'pod has', 'pods have')} another budget too, so the eviction API refuses {r.overlap.length === 1 ? 'it' : 'them'}: {r.overlap.join(', ')}.</span>
+              <span style={{ fontSize: 12.5 }}>
+                {nWord(r.overlap.length, 'pod has', 'pods have')} another budget too, so the eviction API refuses {r.overlap.length === 1 ? 'it' : 'them'}: {r.overlap.join(', ')}.
+              </span>
             </div>
           )}
           <Card title="PodDisruptionBudget">
-            <Facts items={[['Selector', r.selector], ['Rule', r.rule], ['Current healthy', String(r.currentHealthy)], ['Desired healthy', String(r.desiredHealthy)], ['Expected pods', String(r.expectedPods)], ['Disruptions allowed', String(r.disruptionsAllowed)], ['Unhealthy pods', r.unhealthyPolicy === 'AlwaysAllow' ? 'always evictable' : 'evictable while the budget is healthy'], ...(nodes.length ? ([['Constrains the drain of', nodes.join(', ')]] as [string, string][]) : [])]} />
+            <Facts
+              items={[
+                ['Selector', r.selector],
+                ['Rule', r.rule],
+                ['Current healthy', String(r.currentHealthy)],
+                ['Desired healthy', String(r.desiredHealthy)],
+                ['Expected pods', String(r.expectedPods)],
+                ['Disruptions allowed', String(r.disruptionsAllowed)],
+                ['Unhealthy pods', r.unhealthyPolicy === 'AlwaysAllow' ? 'always evictable' : 'evictable while the budget is healthy'],
+                ...(nodes.length ? ([['Constrains the drain of', nodes.join(', ')]] as [string, string][]) : []),
+              ]}
+            />
           </Card>
           <Card title="Pods it selects">
-            <List items={r.pods.map((p) => ({ main: p.name, sub: p.node ?? 'no node', status: p.ready ? 'ready' : 'not ready', tone: p.ready ? 'ok' : 'warn', link: objectLink('pods', [], { open: `${r.namespace}/${p.name}` }) }))} empty="It selects no running pod." />
+            <List
+              items={r.pods.map((p) => ({ main: p.name, sub: p.node ?? 'no node', status: p.ready ? 'ready' : 'not ready', tone: p.ready ? 'ok' : 'warn', link: objectLink('pods', [], { open: `${r.namespace}/${p.name}` }) }))}
+              empty="It selects no running pod."
+            />
           </Card>
         </>
       )
@@ -110,7 +143,12 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
     if (r) {
       const worst = Math.max(0, ...r.items.map((x) => x.pct))
       const stalls = m.rollouts.filter((x) => x.namespace === r.namespace && x.stalls && x.short.some((s) => s.quota === r.name))
-      facts = <span className="rk-pill" data-tone={worst >= 90 || stalls.length ? 'warn' : 'ok'}><span className="rk-dot" />up to {Math.round(worst)}% used</span>
+      facts = (
+        <span className="rk-pill" data-tone={worst >= 90 || stalls.length ? 'warn' : 'ok'}>
+          <span className="rk-dot" />
+          up to {Math.round(worst)}% used
+        </span>
+      )
       body = (
         <>
           {stalls.map((s) => (
@@ -118,7 +156,14 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
               <WarnIcon />
               <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                 <strong style={{ fontSize: 12.5, fontWeight: 600 }}>A rolling update of {s.name} would stall here</strong>
-                <span style={{ fontSize: 12.5, color: 'var(--fg2)' }}>Its surge {s.surge === 1 ? 'pod needs' : 'pods need'} {s.short.filter((x) => x.quota === r.name).map((x) => `${x.need} of ${x.resource} (${x.left} left)`).join(', ')}.</span>
+                <span style={{ fontSize: 12.5, color: 'var(--fg2)' }}>
+                  Its surge {s.surge === 1 ? 'pod needs' : 'pods need'}{' '}
+                  {s.short
+                    .filter((x) => x.quota === r.name)
+                    .map((x) => `${x.need} of ${x.resource} (${x.left} left)`)
+                    .join(', ')}
+                  .
+                </span>
               </div>
             </div>
           ))}
@@ -134,12 +179,24 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
     const r = m.limits.find((x) => x.key === keyOf)
     gone = !r
     if (r) {
-      const t = (x?: Record<string, string>) => (x ? Object.entries(x).map(([k, v]) => `${k} ${v}`).join(' · ') : '—')
+      const t = (x?: Record<string, string>) =>
+        x
+          ? Object.entries(x)
+              .map(([k, v]) => `${k} ${v}`)
+              .join(' · ')
+          : '—'
       body = (
         <>
           {r.items.map((it, n) => (
             <Card key={n} title={`${it.type} limits`}>
-              <Facts items={[['Default request', t(it.defaultRequest)], ['Default limit', t(it.default)], ['Maximum', t(it.max)], ['Minimum', t(it.min)]]} />
+              <Facts
+                items={[
+                  ['Default request', t(it.defaultRequest)],
+                  ['Default limit', t(it.default)],
+                  ['Maximum', t(it.max)],
+                  ['Minimum', t(it.min)],
+                ]}
+              />
             </Card>
           ))}
           <Card title="Containers at the defaults">
@@ -158,7 +215,12 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
     gone = !hooks.length
     const r = hooks.find((x) => x.webhook === webhook) ?? hooks[0]
     if (r) {
-      facts = <span className="rk-pill" data-tone={r.reach.tone}><span className="rk-dot" />{r.reach.text}</span>
+      facts = (
+        <span className="rk-pill" data-tone={r.reach.tone}>
+          <span className="rk-dot" />
+          {r.reach.text}
+        </span>
+      )
       body = (
         <>
           {hooks.map((h) => (
@@ -176,7 +238,16 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
                   ['CA bundle', h.caBundle ? 'set' : 'not set: the API server must trust the backend’s certificate another way'],
                 ]}
               />
-              <List items={h.reach.pods.map((p) => ({ main: p.name, sub: p.node, status: p.ready ? 'ready' : 'not ready', tone: p.ready ? 'ok' : 'warn', link: h.serviceNamespace ? objectLink('pods', [], { open: `${h.serviceNamespace}/${p.name}` }) : undefined }))} empty="No pod behind it." />
+              <List
+                items={h.reach.pods.map((p) => ({
+                  main: p.name,
+                  sub: p.node,
+                  status: p.ready ? 'ready' : 'not ready',
+                  tone: p.ready ? 'ok' : 'warn',
+                  link: h.serviceNamespace ? objectLink('pods', [], { open: `${h.serviceNamespace}/${p.name}` }) : undefined,
+                }))}
+                empty="No pod behind it."
+              />
             </Card>
           ))}
         </>
@@ -190,10 +261,23 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
     const r = m.priorities.find((x) => x.key === keyOf)
     gone = !r
     if (r) {
-      facts = <span className="rk-pill"><span className="rk-dot" />{nWord(r.pods, 'pod', 'pods')}</span>
+      facts = (
+        <span className="rk-pill">
+          <span className="rk-dot" />
+          {nWord(r.pods, 'pod', 'pods')}
+        </span>
+      )
       body = (
         <Card title="PriorityClass">
-          <Facts items={[['Value', String(r.value)], ['Global default', r.globalDefault ? 'yes' : 'no'], ['Preemption', r.preemption], ['Description', r.description ?? '—'], ['Used by', r.workloads.join(', ') || '—']]} />
+          <Facts
+            items={[
+              ['Value', String(r.value)],
+              ['Global default', r.globalDefault ? 'yes' : 'no'],
+              ['Preemption', r.preemption],
+              ['Description', r.description ?? '—'],
+              ['Used by', r.workloads.join(', ') || '—'],
+            ]}
+          />
         </Card>
       )
     }
@@ -205,28 +289,44 @@ export function PolicyPanel({ keyOf, m, now, onClose, onToast }: Props) {
     const r = m.namespaces.find((x) => x.name === rest)
     gone = !r
     if (r) {
-      facts = <span className="rk-pill" data-tone={r.enforce === 'restricted' ? 'ok' : r.enforce === 'baseline' ? 'info' : 'muted'}><span className="rk-dot" />Pod Security {r.enforce || 'not enforced'}</span>
+      facts = (
+        <span className="rk-pill" data-tone={r.enforce === 'restricted' ? 'ok' : r.enforce === 'baseline' ? 'info' : 'muted'}>
+          <span className="rk-dot" />
+          Pod Security {r.enforce || 'not enforced'}
+        </span>
+      )
       const lv = (l?: string, v?: string) => (l ? l + (v ? `:${v}` : '') : '—')
       body = (
         <>
           <Card title="Pod Security">
-            <Facts items={[['Enforce', r.enforce ? lv(r.enforce, r.enforceVersion) : 'none — the cluster’s default applies, usually privileged'], ['Warn', lv(r.warn, r.warnVersion)], ['Audit', lv(r.audit, r.auditVersion)], ['Pods that fail baseline', r.baseline.fail.length ? `${r.baseline.fail.length} of ${r.pods}` : 'none'], ['Pods that fail restricted', r.restricted.fail.length ? `${r.restricted.fail.length} of ${r.pods}` : 'none']]} />
+            <Facts
+              items={[
+                ['Enforce', r.enforce ? lv(r.enforce, r.enforceVersion) : 'none — the cluster’s default applies, usually privileged'],
+                ['Warn', lv(r.warn, r.warnVersion)],
+                ['Audit', lv(r.audit, r.auditVersion)],
+                ['Pods that fail baseline', r.baseline.fail.length ? `${r.baseline.fail.length} of ${r.pods}` : 'none'],
+                ['Pods that fail restricted', r.restricted.fail.length ? `${r.restricted.fail.length} of ${r.pods}` : 'none'],
+              ]}
+            />
           </Card>
           {(['baseline', 'restricted'] as const).map((lvl) => (
             <Card key={lvl} title={`If it enforced ${lvl}`}>
               {r[lvl].warnings.length ? (
                 <>
-                  <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>
-                    The running pods keep running; kubectl label --dry-run=server would warn:
-                  </p>
-                  <pre className="rk-mono" style={{ margin: 0, padding: '10px 12px', fontSize: 11.5, whiteSpace: 'pre-wrap', background: 'var(--surface2)', border: '1px solid var(--line)', borderRadius: 8 }} data-testid={`psa-warnings-${lvl}`}>
+                  <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>The running pods keep running; kubectl label --dry-run=server would warn:</p>
+                  <pre
+                    className="rk-mono"
+                    style={{ margin: 0, padding: '10px 12px', fontSize: 11.5, whiteSpace: 'pre-wrap', background: 'var(--surface2)', border: '1px solid var(--line)', borderRadius: 8 }}
+                    data-testid={`psa-warnings-${lvl}`}
+                  >
                     {r[lvl].warnings.map((w) => `Warning: ${w}`).join('\n')}
                   </pre>
                   <List items={r[lvl].fail.map((p) => ({ main: p.name, sub: p.detail, link: objectLink('pods', [], { open: `${r.name}/${p.name}` }) }))} empty="" />
                 </>
               ) : (
                 <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }} data-testid={`psa-warnings-${lvl}`}>
-                  Every pod there passes {lvl}{r.pods ? '' : ' (it has none)'}.
+                  Every pod there passes {lvl}
+                  {r.pods ? '' : ' (it has none)'}.
                 </p>
               )}
               {r[lvl].fail.length > 0 && <span style={{ fontSize: 11.5, color: 'var(--fg3)' }}>Reasons: {shortReasons(r[lvl].fail)}</span>}

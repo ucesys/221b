@@ -123,7 +123,14 @@ test('a node’s menu cordons it through a card the person approves (reversed on
   await expect(page.getByText(/the card is in Watson/)).toBeVisible({ timeout: 10_000 })
   await approveCard(page, `kubectl ${verb} ${node}`)
   // Approved, the card becomes a run with its result.
-  await expect(page.getByTestId('watson').locator('[data-testid=watson-ran]').filter({ hasText: `kubectl ${verb} ${node}` }).last().getByTestId('watson-status')).toContainText(/done/, { timeout: 30_000 })
+  await expect(
+    page
+      .getByTestId('watson')
+      .locator('[data-testid=watson-ran]')
+      .filter({ hasText: `kubectl ${verb} ${node}` })
+      .last()
+      .getByTestId('watson-status'),
+  ).toContainText(/done/, { timeout: 30_000 })
   // Put the node back as it was, the same way: a card, approved.
   const back = await page.request.post('/api/v1/watson/actions', { data: { action: undo, node }, headers: SAME })
   expect(back.status(), await back.text()).toBe(202)

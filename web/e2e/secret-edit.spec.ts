@@ -118,7 +118,9 @@ test('a Secret’s Delete… hands its deletion to Watson, approved there', asyn
   test.skip(inKind, 'the simulator serves Secret writes')
   await page.request.put('/api/v1/sherlock/config', { data: { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }, headers: SAME })
   const name = `e2e-doomed-${Date.now()}`
-  const made = await request.post(`${SIM}/api/v1/namespaces/default/secrets`, { data: { apiVersion: 'v1', kind: 'Secret', metadata: { name, namespace: 'default' }, type: 'Opaque', data: { a: Buffer.from('gone-soon').toString('base64') } } })
+  const made = await request.post(`${SIM}/api/v1/namespaces/default/secrets`, {
+    data: { apiVersion: 'v1', kind: 'Secret', metadata: { name, namespace: 'default' }, type: 'Opaque', data: { a: Buffer.from('gone-soon').toString('base64') } },
+  })
   expect([200, 201]).toContain(made.status())
   try {
     await page.goto('/#/namespaces/default?kinds=Secret')
@@ -130,7 +132,11 @@ test('a Secret’s Delete… hands its deletion to Watson, approved there', asyn
     await expect(confirm).toContainText(`Delete Secret default/${name}`)
     await expect(confirm).toContainText('1 key go for good')
     await confirm.getByTestId('confirm-ok').click()
-    const card = page.getByTestId('watson').locator('[data-testid=watson-card]').filter({ hasText: `kubectl delete secret ${name}` }).first()
+    const card = page
+      .getByTestId('watson')
+      .locator('[data-testid=watson-card]')
+      .filter({ hasText: `kubectl delete secret ${name}` })
+      .first()
     await expect(card).toContainText(`Deletes Secret default/${name} and its 1 key`, { timeout: 30_000 })
     await expect(card).not.toContainText('gone-soon')
     await expect(card.getByTestId('watson-approve')).toBeEnabled({ timeout: 30_000 })

@@ -65,7 +65,7 @@ describe('the pick box', () => {
     render(<RowPickBox name="a" />)
     expect(screen.queryByTestId('fleet-pick-node')).toBeNull()
     render(
-      <NodePicking.Provider value={{ picked: new Set(['a']), toggle: () => undefined }}>
+      <NodePicking.Provider value={{ picked: new Set(['a']), toggle: () => undefined, shown: ['a'], setMany: () => undefined }}>
         <RowPickBox name="a" />
       </NodePicking.Provider>,
     )

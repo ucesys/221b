@@ -155,6 +155,37 @@ export function fmtClock(at: string | Date | null | undefined, opts: { seconds?:
   return `${clockText(d, timeFormat, !!opts.seconds)} ${zoneText(d)}`.trim()
 }
 
+/** A zone's offset from UTC at a moment, in milliseconds; throws on a zone the browser does not know. */
+function zoneOffset(zone: string, d: Date): number {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' }).formatToParts(d)
+  const n = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0)
+  return Date.UTC(n('year'), n('month') - 1, n('day'), n('hour'), n('minute'), n('second')) - Math.floor(d.getTime() / 1000) * 1000
+}
+
+/**
+ * A time of day set in another zone (a schedule's "02:00" in UTC), as the
+ * browser's clock reads it on that zone's day of `now`: "6:00pm PST". ""
+ * when the two zones agree then, for a zone the browser does not know, or
+ * for a time that is not HH:MM (R2-16).
+ */
+export function clockInBrowser(at: string | undefined, zone: string | undefined, now: Date = new Date()): string {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(at ?? '')
+  if (!m) return ''
+  const tz = zone || 'UTC'
+  try {
+    const day = new Date(now.getTime() + zoneOffset(tz, now))
+    // The wall time there, less the zone's offset; twice, for a day the clocks change.
+    const wall = Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate(), Number(m[1]), Number(m[2]))
+    let t = wall - zoneOffset(tz, new Date(wall))
+    t = wall - zoneOffset(tz, new Date(t))
+    const d = new Date(t)
+    if (zoneOffset(tz, d) === -d.getTimezoneOffset() * 60_000) return ''
+    return fmtClock(d)
+  } catch {
+    return ''
+  }
+}
+
 /**
  * Times the server writes into its own sentences, "Ready since 2026-10-12
  * 14:03:07 UTC.", in the console's format and the browser's time zone.

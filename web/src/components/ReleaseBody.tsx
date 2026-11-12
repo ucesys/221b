@@ -128,7 +128,19 @@ export function ReleaseBody({ cluster, now, onToast, route, current, d, error, s
   const counts: Partial<Record<string, number>> = { pods: pods.length, history: history.length }
   for (const r of d?.resources ?? []) counts[group(r)] = (counts[group(r)] ?? 0) + 1
   for (const t of [...before, ...after]) if (t.count !== undefined) counts[t.id] = t.count
-  const subtabs: [string, string][] = [...before.map((t) => [t.id, t.label] as [string, string]), ['pods', 'Pods'], ['workloads', 'Workloads'], ['storage', 'Storage'], ['network', 'Network'], ['roles', 'Roles'], ['other', 'Other'], ['values', 'Values'], ['notes', 'Notes'], ['history', 'History'], ...after.map((t) => [t.id, t.label] as [string, string])]
+  const subtabs: [string, string][] = [
+    ...before.map((t) => [t.id, t.label] as [string, string]),
+    ['pods', 'Pods'],
+    ['workloads', 'Workloads'],
+    ['storage', 'Storage'],
+    ['network', 'Network'],
+    ['roles', 'Roles'],
+    ['other', 'Other'],
+    ['values', 'Values'],
+    ['notes', 'Notes'],
+    ['history', 'History'],
+    ...after.map((t) => [t.id, t.label] as [string, string]),
+  ]
   const valueLines = useMemo(() => (d?.values ?? '').replace(/\n$/, '').split('\n'), [d])
   const extraTab = [...before, ...after].find((t) => t.id === sub)
 
@@ -155,10 +167,55 @@ export function ReleaseBody({ cluster, now, onToast, route, current, d, error, s
         </div>
       )}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }} data-testid="release-cards">
-        <StatCard title="CPU" head={`requests ${sums.cpuReq ? fCores(sums.cpuReq) + ' cores' : '—'}`} big={sums.usageN ? fCores(sums.cpuUse) : '—'} unit="cores in use" pctUse={pct(sums.cpuUse, sums.cpuReq)} lines={[['Requested', sums.cpuReq ? fCores(sums.cpuReq) : '—'], ['Used', sums.usageN ? `${fCores(sums.cpuUse)} ${sums.cpuReq ? pctTxt(pct(sums.cpuUse, sums.cpuReq)) : ''}` : '—'], ['Limits', sums.cpuLim ? fCores(sums.cpuLim) : 'none']]} />
-        <StatCard title="Memory" head={`requests ${sums.memReq ? fMem(sums.memReq) : '—'}`} big={sums.usageN ? fMem(sums.memUse) : '—'} unit="in use" pctUse={pct(sums.memUse, sums.memReq)} lines={[['Requested', sums.memReq ? fMem(sums.memReq) : '—'], ['Used', sums.usageN ? `${fMem(sums.memUse)} ${sums.memReq ? pctTxt(pct(sums.memUse, sums.memReq)) : ''}` : '—'], ['Limits', sums.memLim ? fMem(sums.memLim) : 'none']]} />
-        <StatCard title="Pods" head={`${live.length} expected`} big={`${live.length - notReady.length}/${live.length}`} unit="ready" pctUse={pct(live.length - notReady.length, live.length)} tone={notReady.some((r) => r.tone === 'err') ? 'err' : notReady.length ? 'warn' : 'ok'} lines={[['Ready', String(live.length - notReady.length)], ['Pending', String(notReady.filter((r) => r.tone !== 'err').length)], ['Failing', String(notReady.filter((r) => r.tone === 'err').length)]]} />
-        <StatCard title="Storage" head={nWord(claims.length, 'claim', 'claims')} big={String(claims.length)} unit={claims.length === 1 ? 'volume claim' : 'volume claims'} pctUse={0} lines={[['Bound', String(claims.filter((c) => c.status === 'Bound').length)], ['Pending', String(claims.filter((c) => c.status === 'Pending').length)], ['Not watched', String(claims.filter((c) => !c.watched).length)]]} />
+        <StatCard
+          title="CPU"
+          head={`requests ${sums.cpuReq ? fCores(sums.cpuReq) + ' cores' : '—'}`}
+          big={sums.usageN ? fCores(sums.cpuUse) : '—'}
+          unit="cores in use"
+          pctUse={pct(sums.cpuUse, sums.cpuReq)}
+          lines={[
+            ['Requested', sums.cpuReq ? fCores(sums.cpuReq) : '—'],
+            ['Used', sums.usageN ? `${fCores(sums.cpuUse)} ${sums.cpuReq ? pctTxt(pct(sums.cpuUse, sums.cpuReq)) : ''}` : '—'],
+            ['Limits', sums.cpuLim ? fCores(sums.cpuLim) : 'none'],
+          ]}
+        />
+        <StatCard
+          title="Memory"
+          head={`requests ${sums.memReq ? fMem(sums.memReq) : '—'}`}
+          big={sums.usageN ? fMem(sums.memUse) : '—'}
+          unit="in use"
+          pctUse={pct(sums.memUse, sums.memReq)}
+          lines={[
+            ['Requested', sums.memReq ? fMem(sums.memReq) : '—'],
+            ['Used', sums.usageN ? `${fMem(sums.memUse)} ${sums.memReq ? pctTxt(pct(sums.memUse, sums.memReq)) : ''}` : '—'],
+            ['Limits', sums.memLim ? fMem(sums.memLim) : 'none'],
+          ]}
+        />
+        <StatCard
+          title="Pods"
+          head={`${live.length} expected`}
+          big={`${live.length - notReady.length}/${live.length}`}
+          unit="ready"
+          pctUse={pct(live.length - notReady.length, live.length)}
+          tone={notReady.some((r) => r.tone === 'err') ? 'err' : notReady.length ? 'warn' : 'ok'}
+          lines={[
+            ['Ready', String(live.length - notReady.length)],
+            ['Pending', String(notReady.filter((r) => r.tone !== 'err').length)],
+            ['Failing', String(notReady.filter((r) => r.tone === 'err').length)],
+          ]}
+        />
+        <StatCard
+          title="Storage"
+          head={nWord(claims.length, 'claim', 'claims')}
+          big={String(claims.length)}
+          unit={claims.length === 1 ? 'volume claim' : 'volume claims'}
+          pctUse={0}
+          lines={[
+            ['Bound', String(claims.filter((c) => c.status === 'Bound').length)],
+            ['Pending', String(claims.filter((c) => c.status === 'Pending').length)],
+            ['Not watched', String(claims.filter((c) => !c.watched).length)],
+          ]}
+        />
       </div>
       <nav aria-label="Release sections" style={{ display: 'flex', flexWrap: 'wrap', gap: '0 20px', borderBottom: '1px solid var(--line)' }}>
         {subtabs.map(([id, label]) => (
@@ -198,7 +255,20 @@ export function ReleaseBody({ cluster, now, onToast, route, current, d, error, s
               <ExportMenu onExport={(f) => podTable.exportRows(f, cluster?.name, `${current.name}-pods`, onToast)} disabled={!podTable.shown.length} what="the pods in view" />
             </div>
           </div>
-          <DataTable<PodView> label="Pods in this release" rows={podTable.shown} cols={podTable.cols} rowKey={(r) => r.key} rowLabel={podLabel} sort={podTable.sort} onSort={podTable.onSort} selected={openPodKey} onOpen={(k) => openObject('Pod', k.split('/')[0] ?? current.namespace, k.split('/')[1] ?? k)} now={now} empty="No pods belong to this release." rowAttr="pod" />
+          <DataTable<PodView>
+            label="Pods in this release"
+            rows={podTable.shown}
+            cols={podTable.cols}
+            rowKey={(r) => r.key}
+            rowLabel={podLabel}
+            sort={podTable.sort}
+            onSort={podTable.onSort}
+            selected={openPodKey}
+            onOpen={(k) => openObject('Pod', k.split('/')[0] ?? current.namespace, k.split('/')[1] ?? k)}
+            now={now}
+            empty="No pods belong to this release."
+            rowAttr="pod"
+          />
         </>
       )}
       {d && (sub === 'workloads' || sub === 'storage' || sub === 'network' || sub === 'roles' || sub === 'other') && (
@@ -231,7 +301,14 @@ export function ReleaseBody({ cluster, now, onToast, route, current, d, error, s
         </>
       )}
       {d && sub === 'values' && (
-        <Card title={above.values ? 'Values as deployed' : 'User-supplied values'} aside={<span style={{ fontSize: 12, color: 'var(--fg3)' }}>{d.maskedValues.length ? `${nWord(d.maskedValues.length, 'value', 'values')} that look like credentials masked: ${d.maskedValues.join(', ')}` : 'what helm get values shows'}</span>}>
+        <Card
+          title={above.values ? 'Values as deployed' : 'User-supplied values'}
+          aside={
+            <span style={{ fontSize: 12, color: 'var(--fg3)' }}>
+              {d.maskedValues.length ? `${nWord(d.maskedValues.length, 'value', 'values')} that look like credentials masked: ${d.maskedValues.join(', ')}` : 'what helm get values shows'}
+            </span>
+          }
+        >
           {d.values ? (
             <div className="rk-code" role="region" aria-label="Values" data-testid="release-values" tabIndex={0}>
               {valueLines.map((l, i) => (
@@ -273,17 +350,44 @@ export function ReleaseBody({ cluster, now, onToast, route, current, d, error, s
               <ExportMenu onExport={(f) => histTable.exportRows(f, cluster?.name, `${current.name}-history`, onToast)} disabled={!histTable.shown.length} what="the history" />
             </div>
           </div>
-          <DataTable<Revision> label="History" rows={histTable.shown} cols={histTable.cols} rowKey={(r) => String(r.revision)} rowLabel={(r) => `Revision ${r.revision}, ${r.status}`} sort={histTable.sort} onSort={histTable.onSort} now={now} empty="No revisions." rowAttr="revision" />
+          <DataTable<Revision>
+            label="History"
+            rows={histTable.shown}
+            cols={histTable.cols}
+            rowKey={(r) => String(r.revision)}
+            rowLabel={(r) => `Revision ${r.revision}, ${r.status}`}
+            sort={histTable.sort}
+            onSort={histTable.onSort}
+            now={now}
+            empty="No revisions."
+            rowAttr="revision"
+          />
         </>
       )}
-      {open && open.kind === 'Pod' && <PodPanel podKey={`${open.namespace}/${open.name}`} row={pods.find((r) => r.key === `${open.namespace}/${open.name}`) ?? null} gone={false} cluster={cluster} now={now} onClose={close} onToast={onToast} />}
+      {open && open.kind === 'Pod' && (
+        <PodPanel podKey={`${open.namespace}/${open.name}`} row={pods.find((r) => r.key === `${open.namespace}/${open.name}`) ?? null} gone={false} cluster={cluster} now={now} onClose={close} onToast={onToast} />
+      )}
       {open && open.kind === 'Service' && <ServicePanel serviceKey={`${open.namespace}/${open.name}`} row={null} gone={false} now={now} onClose={close} onToast={onToast} />}
       {open && open.kind !== 'Pod' && open.kind !== 'Service' && (openRes ? openRes.watched : isWatchedKind(open.kind)) && (
         <ObjectPanel kind={open.kind} namespace={open.namespace} name={open.name} row={null} gone={false} cluster={cluster} now={now} linkTo={(k, n) => openKey(k, open.namespace, n)} onClose={close} onToast={onToast} />
       )}
       {open && open.kind !== 'Pod' && open.kind !== 'Service' && !(openRes ? openRes.watched : isWatchedKind(open.kind)) && (
-        <Drawer label={`${open.kind} details`} title={open.name} kicker={<span>{open.kind}{open.namespace ? ` in ${open.namespace}` : ''}</span>} onClose={close} width={860} testId="object-panel">
-          <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>221B does not watch {pluralKind(open.kind)}, so it cannot read this object. The release manifest lists it{openRes?.status ? ` as ${openRes.status}` : ''}.</p>
+        <Drawer
+          label={`${open.kind} details`}
+          title={open.name}
+          kicker={
+            <span>
+              {open.kind}
+              {open.namespace ? ` in ${open.namespace}` : ''}
+            </span>
+          }
+          onClose={close}
+          width={860}
+          testId="object-panel"
+        >
+          <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)' }}>
+            221B does not watch {pluralKind(open.kind)}, so it cannot read this object. The release manifest lists it{openRes?.status ? ` as ${openRes.status}` : ''}.
+          </p>
         </Drawer>
       )}
     </>
@@ -309,7 +413,10 @@ export function StatCard({ title, head, big, unit, pctUse, tone = 'ok', lines }:
       <div style={{ display: 'flex', gap: 14, fontSize: 11.5, color: 'var(--fg3)' }}>
         {lines.map(([k, v]) => (
           <span key={k}>
-            {k} <span className="rk-num" style={{ color: 'var(--fg)' }}>{v}</span>
+            {k}{' '}
+            <span className="rk-num" style={{ color: 'var(--fg)' }}>
+              {v}
+            </span>
           </span>
         ))}
       </div>

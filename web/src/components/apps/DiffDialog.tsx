@@ -19,7 +19,25 @@ interface Props {
 }
 
 /** One side's choices: the revisions, then the source at its saved ref and at each branch and tag (asked October 30, 2026). */
-function SideSelect({ label, value, onChange, revisions, latest, app, refs, testId }: { label: string; value: DiffSide; onChange: (s: DiffSide) => void; revisions: RevisionView[]; latest: number; app?: AppView; refs: AppRefs | null; testId: string }) {
+function SideSelect({
+  label,
+  value,
+  onChange,
+  revisions,
+  latest,
+  app,
+  refs,
+  testId,
+}: {
+  label: string
+  value: DiffSide
+  onChange: (s: DiffSide) => void
+  revisions: RevisionView[]
+  latest: number
+  app?: AppView
+  refs: AppRefs | null
+  testId: string
+}) {
   return (
     <label className="rk-field" style={{ minWidth: 200 }}>
       <select value={sideValue(value)} onChange={(e) => onChange(parseSide(e.target.value))} aria-label={label} data-testid={testId}>

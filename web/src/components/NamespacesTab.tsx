@@ -91,7 +91,35 @@ function ReleasesTable({ rows, now, cluster, onToast, search }: { rows: ReleaseR
 }
 
 /** A kind's table in the namespace, the tab's whole content. */
-function KindTable({ kind, apiVersion, rows, now, cluster, selected, onOpen, onToast, hidden, setHidden, defaults, search, extra }: { kind: string; apiVersion: string; rows: ObjectRow[]; now: number; cluster: string | undefined; selected: string | null; onOpen: (key: string) => void; onToast: (msg: string) => void; hidden: Set<string>; setHidden: (h: Set<string>) => void; defaults: Set<string>; search: ReactNode; extra?: ReactNode }) {
+function KindTable({
+  kind,
+  apiVersion,
+  rows,
+  now,
+  cluster,
+  selected,
+  onOpen,
+  onToast,
+  hidden,
+  setHidden,
+  defaults,
+  search,
+  extra,
+}: {
+  kind: string
+  apiVersion: string
+  rows: ObjectRow[]
+  now: number
+  cluster: string | undefined
+  selected: string | null
+  onOpen: (key: string) => void
+  onToast: (msg: string) => void
+  hidden: Set<string>
+  setHidden: (h: Set<string>) => void
+  defaults: Set<string>
+  search: ReactNode
+  extra?: ReactNode
+}) {
   const [sort, setSort] = useState<SortState>({ col: 'name', dir: 'asc' })
   const plural = pluralKind(kind)
   const sorted = useMemo(() => sortRows(rows, OBJECT_COLUMNS, sort, now), [rows, sort, now])
@@ -226,14 +254,23 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
 
   return (
     <>
-      <SideList label="Namespaces" title="Namespaces" query={listQuery} onQuery={setListQuery} placeholder="Filter namespaces" groups={groups} empty={loaded ? 'No namespaces match.' : 'Waiting for the first list…'} testId="namespace-list" extra={
-        secretsCfg?.edit ? (
-          <button className="rk-btn" onClick={() => setNewNamespace(true)} style={{ alignSelf: 'flex-start' }} data-testid="namespace-new">
-            New namespace…
-          </button>
-        ) : undefined
-      }
-    />
+      <SideList
+        label="Namespaces"
+        title="Namespaces"
+        query={listQuery}
+        onQuery={setListQuery}
+        placeholder="Filter namespaces"
+        groups={groups}
+        empty={loaded ? 'No namespaces match.' : 'Waiting for the first list…'}
+        testId="namespace-list"
+        extra={
+          secretsCfg?.edit ? (
+            <button className="rk-btn" onClick={() => setNewNamespace(true)} style={{ alignSelf: 'flex-start' }} data-testid="namespace-new">
+              New namespace…
+            </button>
+          ) : undefined
+        }
+      />
       <main className="rk-pane" aria-label="Namespace" style={{ flex: '999 1 560px', minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         {current && (
           <section aria-label={`Namespace ${ns}`} style={{ padding: '18px 24px 28px', display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -269,7 +306,14 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
             {tabs.length > 0 && (
               <nav aria-label="Kinds in this namespace" style={{ display: 'flex', flexWrap: 'wrap', gap: '0 20px', borderBottom: '1px solid var(--line)' }} data-testid="namespace-kinds">
                 {tabs.map((t) => (
-                  <button key={t.id} className="rk-tab" aria-current={tab?.id === t.id ? 'page' : undefined} onClick={() => set({ kinds: t.id === tabs[0]?.id ? undefined : [t.id], open: undefined })} style={{ height: 38 }} data-subtab={t.id}>
+                  <button
+                    key={t.id}
+                    className="rk-tab"
+                    aria-current={tab?.id === t.id ? 'page' : undefined}
+                    onClick={() => set({ kinds: t.id === tabs[0]?.id ? undefined : [t.id], open: undefined })}
+                    style={{ height: 38 }}
+                    data-subtab={t.id}
+                  >
                     {t.label}
                     {t.n > 0 && <span className="rk-count">{t.n}</span>}
                   </button>
@@ -347,7 +391,20 @@ export function NamespacesTab({ cluster, now, onToast, route }: TabProps) {
       )}
       {selected && selKind === 'Pod' && <PodPanel podKey={`${ns}/${selName}`} row={null} gone={objects.loaded && !selectedRow} cluster={cluster} now={now} onClose={closeDrawer} onToast={onToast} />}
       {selected && selKind === 'Service' && <ServicePanel serviceKey={`${ns}/${selName}`} row={null} gone={objects.loaded && !selectedRow} now={now} onClose={closeDrawer} onToast={onToast} />}
-      {selected && selKind !== 'Pod' && selKind !== 'Service' && <ObjectPanel kind={selKind} namespace={ns} name={selName} row={selectedRow} gone={objects.loaded && !selectedRow} cluster={cluster} now={now} linkTo={(k, n) => withParams(route, { open: `${k}/${n}` })} onClose={closeDrawer} onToast={onToast} />}
+      {selected && selKind !== 'Pod' && selKind !== 'Service' && (
+        <ObjectPanel
+          kind={selKind}
+          namespace={ns}
+          name={selName}
+          row={selectedRow}
+          gone={objects.loaded && !selectedRow}
+          cluster={cluster}
+          now={now}
+          linkTo={(k, n) => withParams(route, { open: `${k}/${n}` })}
+          onClose={closeDrawer}
+          onToast={onToast}
+        />
+      )}
     </>
   )
 }

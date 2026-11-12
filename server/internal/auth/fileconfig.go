@@ -19,6 +19,9 @@ type FileConfig struct {
 	Lists RoleLists `json:"lists"`
 	// LocalGroups are defined for local users (RB-50).
 	LocalGroups []LocalGroup `json:"localGroups"`
+	// ReporterGroups are issues.reporterGroups: the groups, of any source,
+	// whose members hold the Reporter role (Phase 12, IS-20).
+	ReporterGroups []string `json:"reporterGroups,omitempty"`
 	// Templates say which definition of Admin and SuperAdmin is installed.
 	Templates struct {
 		Admin      roles.Template `json:"admin"`
@@ -104,6 +107,11 @@ func ReadFileConfig(path string) (FileConfig, error) {
 			}
 		}
 	}
+	for _, g := range f.ReporterGroups {
+		if g == "" {
+			return f, fmt.Errorf("%s: an empty group under issues.reporterGroups", path)
+		}
+	}
 	for _, t := range []roles.Template{f.Templates.Admin, f.Templates.SuperAdmin} {
 		if t != "" && !t.Valid() {
 			return f, fmt.Errorf("%s: a role template must be full or readOnly, not %q", path, t)
@@ -129,6 +137,7 @@ func (f FileConfig) RoleTemplates() roles.Templates {
 func (f FileConfig) Apply(c *Config) {
 	c.Lists = f.Lists
 	c.LocalGroups = f.LocalGroups
+	c.ReporterGroups = f.ReporterGroups
 	if f.Prefixes.Local != "" {
 		c.Prefixes.Local = f.Prefixes.Local
 	}

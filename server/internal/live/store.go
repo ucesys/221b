@@ -137,8 +137,10 @@ type viewDef struct {
 	// lazy views exist only while a browser shows them.
 	lazy bool
 	// keys lists every row; build renders one, or ok=false when it is gone.
-	keys  func(src Source) []string
-	build func(src Source, key string, now time.Time) (any, bool)
+	// keysFrom lists them with the store at hand, in place of keys.
+	keys     func(src Source) []string
+	keysFrom func(s *Store) []string
+	build    func(src Source, key string, now time.Time) (any, bool)
 	// buildFrom renders one row with the store's settings at hand, in
 	// place of build: an alert reads the Pending grace period.
 	buildFrom func(s *Store, key string, now time.Time) (any, bool)
@@ -196,10 +198,18 @@ type Store struct {
 	// fleets are this cluster's fleets, from the settings.
 	fleets atomic.Pointer[[]fleets.Fleet]
 	acks   atomic.Pointer[map[string]acks.Ack]
+	// hosts are the cluster's hosts outside Kubernetes (Phase 12), as rows
+	// of the nodes view, by name.
+	hosts atomic.Pointer[map[string]nodes.Row]
 	// grace is the Pending grace period of the alerts, in nanoseconds.
 	grace      atomic.Int64
 	recomputes uint64
 	delays     Histogram
+	// objects is the index FindObjects searches, built again once changes
+	// came (objGen counts them) and it has aged; objMu builds one at a time.
+	objMu   sync.Mutex
+	objects atomic.Pointer[objectIndex]
+	objGen  atomic.Uint64
 
 	pendingMu   sync.Mutex
 	dirty       map[string]map[string]struct{}
@@ -283,11 +293,22 @@ func New(src Source, o Options) *Store {
 var staticViews = []viewDef{
 	{
 		name: ViewNodes,
-		keys: func(src Source) []string { return src.Keys("nodes") },
-		build: func(src Source, key string, now time.Time) (any, bool) {
+		keysFrom: func(s *Store) []string {
+			keys := s.src.Keys("nodes")
+			for name := range s.hostRows() {
+				if s.src.Node(name) == nil {
+					keys = append(keys, name)
+				}
+			}
+			return keys
+		},
+		buildFrom: func(s *Store, key string, now time.Time) (any, bool) {
+			src := s.src
 			node := src.Node(key)
 			if node == nil {
-				return nil, false
+				// A host outside Kubernetes; a node of its name comes first.
+				r, ok := s.hostRows()[key]
+				return r, ok
 			}
 			var usage *nodes.Usage
 			if u, ok := src.Usage(key); ok {
@@ -436,6 +457,7 @@ func ValidViews(names []string) error {
 // connection goes out promptly, as do the first rows after the cluster is
 // listed.
 func (s *Store) Notify(ch kube.Change) {
+	s.objGen.Add(1)
 	s.pendingMu.Lock()
 	for name, keys := range ch.Views {
 		d := s.dirty[name]
@@ -544,6 +566,30 @@ func (s *Store) SetSettings(refresh time.Duration, raw []byte) {
 	case s.reset <- struct{}{}:
 	default:
 	}
+}
+
+// hostRows are the hosts as rows, by name.
+func (s *Store) hostRows() map[string]nodes.Row {
+	if p := s.hosts.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// SetHosts gives the cluster's hosts outside Kubernetes (Phase 12), as
+// rows of the nodes view: they show as nodes and fleets take them. A new
+// list is published at once.
+func (s *Store) SetHosts(rows []nodes.Row) {
+	m := make(map[string]nodes.Row, len(rows))
+	for _, r := range rows {
+		m[r.Name] = r
+	}
+	if old := s.hosts.Load(); (old == nil && len(m) == 0) || (old != nil && reflect.DeepEqual(*old, m)) {
+		return
+	}
+	s.hosts.Store(&m)
+	s.Notify(kube.Change{Views: map[string][]string{ViewNodes: {kube.AllRows}, ViewFleets: {kube.AllRows}}})
+	s.PublishSoon()
 }
 
 // expectWindow is how long after a write made through the console its
@@ -838,7 +884,9 @@ func (s *Store) build(d viewDef, all bool, keys []string, usage bool, now time.T
 			encode(k, rows[k])
 		}
 	default:
-		if all {
+		if all && d.keysFrom != nil {
+			keys = d.keysFrom(s)
+		} else if all {
 			keys = d.keys(s.src)
 		}
 		sort.Strings(keys)
@@ -1413,7 +1461,7 @@ func decorateAlert(s *Store, key string, row any) any {
 		return row
 	}
 	if a, ok := (*m)[key]; ok && a.Fingerprint == views.AlertFingerprint(r) {
-		r.Ack = &views.AlertAck{By: a.By, At: a.At}
+		r.Ack = &views.AlertAck{By: a.By, At: a.At, Run: a.Run, Case: a.Case, Exception: a.Exception, Expected: a.Expected, Why: a.Why}
 	}
 	return r
 }
@@ -1459,6 +1507,11 @@ func buildFleets(s *Store, now time.Time) map[string]any {
 			}
 		}
 		ns = append(ns, n)
+	}
+	for name, r := range s.hostRows() {
+		if s.src.Node(name) == nil {
+			ns = append(ns, fleets.Node{Name: name, Labels: r.Labels, Errors: r.Errors, Warnings: r.Warnings})
+		}
 	}
 	out := map[string]any{}
 	for _, r := range fleets.Build(defs, ns) {

@@ -47,7 +47,10 @@ test('the planted Secret value reaches no response, export or log', async ({ pag
     await expect(page.locator(`[data-object="Secret/${secret.name}"]`)).toBeVisible({ timeout: 15_000 })
     // Excel is XML inside an uncompressed ZIP, so the bytes are searchable as text.
     for (const format of ['JSON', 'CSV', 'Excel']) {
-      await page.getByRole('button', { name: /^Export/ }).first().click()
+      await page
+        .getByRole('button', { name: /^Export/ })
+        .first()
+        .click()
       const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('group', { name: 'Export format' }).getByRole('button', { name: format }).click()])
       check(`namespace export ${format}`, readFileSync(await download.path(), 'latin1'))
     }

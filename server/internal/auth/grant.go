@@ -119,8 +119,15 @@ func (s *Service) grant(src roles.Source, u User, supers []roles.ID) Grant {
 	if s.isAdmin(u) {
 		held[roles.SuperAdmin] = true
 	}
+	// The Reporter role (IS-20): a listed group of any source, or a local
+	// group of the role reporter, which the switch above has given.
+	for _, g := range s.cfg.ReporterGroups {
+		if slices.Contains(u.Groups, g) {
+			held[roles.Reporter] = true
+		}
+	}
 	var out Grant
-	for _, id := range roles.All {
+	for _, id := range append(roles.All, roles.Reporter) {
 		if held[id] {
 			out.Roles = append(out.Roles, id)
 			if id.Super() {

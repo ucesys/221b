@@ -107,7 +107,21 @@ export function AccessTab({ cluster, now, onToast, route }: TabProps) {
         {selId ? (
           <IdentityPage id={selId} bindings={bindings} roles={roleIdx} items={items} namespaces={namespaces} now={now} route={route} set={set} onToast={onToast} cluster={cluster?.name} />
         ) : (
-          <Overview roles={roles} bindings={bindings} ids={ids} items={items} roleIdx={roleIdx} namespaces={namespaces} now={now} route={route} set={set} onToast={onToast} cluster={cluster?.name} clusterName={cluster?.name ?? 'the cluster'} loaded={view.loaded} />
+          <Overview
+            roles={roles}
+            bindings={bindings}
+            ids={ids}
+            items={items}
+            roleIdx={roleIdx}
+            namespaces={namespaces}
+            now={now}
+            route={route}
+            set={set}
+            onToast={onToast}
+            cluster={cluster?.name}
+            clusterName={cluster?.name ?? 'the cluster'}
+            loaded={view.loaded}
+          />
         )}
       </section>
       {open && <RbacPanel keyOf={open} roles={roles} bindings={bindings} sas={sas} now={now} onClose={() => set({ open: undefined })} onOpen={(k) => set({ open: k })} onToast={onToast} />}
@@ -174,7 +188,14 @@ function Aside({ ids, items, sel, showSys, route, set, loaded }: { ids: Identity
         </label>
       </div>
       <div style={{ flex: '1 1 auto' }}>
-        <a className="rk-rrow" href={linkTo('')} data-sel={!sel} aria-current={!sel ? 'page' : undefined} style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '11px 16px', textDecoration: 'none', color: 'inherit' }} data-testid="access-overview-link">
+        <a
+          className="rk-rrow"
+          href={linkTo('')}
+          data-sel={!sel}
+          aria-current={!sel ? 'page' : undefined}
+          style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '11px 16px', textDecoration: 'none', color: 'inherit' }}
+          data-testid="access-overview-link"
+        >
           <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600 }}>
             <ShieldIcon />
             Review and tables
@@ -193,7 +214,15 @@ function Aside({ ids, items, sel, showSys, route, set, loaded }: { ids: Identity
               {rows.map((i) => {
                 const f = flagOf(i.key, items)
                 return (
-                  <a key={i.key} className="rk-rrow" href={linkTo(i.key)} data-sel={sel === i.key} aria-current={sel === i.key ? 'page' : undefined} data-identity={i.key} style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '9px 16px', borderTop: '1px solid var(--line)', textDecoration: 'none', color: 'inherit' }}>
+                  <a
+                    key={i.key}
+                    className="rk-rrow"
+                    href={linkTo(i.key)}
+                    data-sel={sel === i.key}
+                    aria-current={sel === i.key ? 'page' : undefined}
+                    data-identity={i.key}
+                    style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '9px 16px', borderTop: '1px solid var(--line)', textDecoration: 'none', color: 'inherit' }}
+                  >
                     <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
                       <span className="rk-mono" style={{ fontSize: 12.5, fontWeight: 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {i.kind === 'ServiceAccount' && <span style={{ color: 'var(--fg3)', fontWeight: 400 }}>{i.namespace}/</span>}
@@ -218,7 +247,9 @@ function Aside({ ids, items, sel, showSys, route, set, loaded }: { ids: Identity
         })}
         {loaded && !shown.length && <p style={{ margin: 0, padding: '24px 16px', fontSize: 12.5, color: 'var(--fg3)', borderTop: '1px solid var(--line)' }}>No identity matches.</p>}
       </div>
-      <p style={{ margin: 'auto 0 0', padding: '10px 16px 14px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg3)', borderTop: '1px solid var(--line)' }}>Kubernetes keeps no list of users or groups. They appear here because a binding names them; the identity provider decides who belongs to a group.</p>
+      <p style={{ margin: 'auto 0 0', padding: '10px 16px 14px', fontSize: 11.5, lineHeight: 1.5, color: 'var(--fg3)', borderTop: '1px solid var(--line)' }}>
+        Kubernetes keeps no list of users or groups. They appear here because a binding names them; the identity provider decides who belongs to a group.
+      </p>
     </aside>
   )
 }
@@ -313,7 +344,29 @@ function ReviewCard({ items, onToast, open, loaded }: { items: ReviewItem[]; onT
   )
 }
 
-function WhoCanCard({ bindings, ids, items, roleIdx, namespaces, now, route, set, onToast, cluster }: { bindings: BindingRow[]; ids: Identity[]; items: ReviewItem[]; roleIdx: ReturnType<typeof roleIndex>; namespaces: string[]; now: number; route: TabProps['route']; set: (c: Record<string, string | undefined>) => void; onToast: (m: string) => void; cluster?: string }) {
+function WhoCanCard({
+  bindings,
+  ids,
+  items,
+  roleIdx,
+  namespaces,
+  now,
+  route,
+  set,
+  onToast,
+  cluster,
+}: {
+  bindings: BindingRow[]
+  ids: Identity[]
+  items: ReviewItem[]
+  roleIdx: ReturnType<typeof roleIndex>
+  namespaces: string[]
+  now: number
+  route: TabProps['route']
+  set: (c: Record<string, string | undefined>) => void
+  onToast: (m: string) => void
+  cluster?: string
+}) {
   const p = route.params
   const verb = (AC_VERBS as readonly string[]).includes(p.get('verb') ?? '') ? p.get('verb')! : 'get'
   const res = AC_RES.some((r) => r.res === p.get('res')) ? p.get('res')! : 'secrets'
@@ -356,12 +409,44 @@ function WhoCanCard({ bindings, ids, items, roleIdx, namespaces, now, route, set
           {r.cluster && <span style={{ color: 'var(--fg3)' }}>· {res} are cluster-scoped, so only ClusterRoleBindings count</span>}
         </p>
       </div>
-      {rows.length > 0 && <DataTable<WhoView> label={`Who can ${verb} ${res}`} rows={table.shown} cols={table.cols} rowKey={(x) => x.key} rowLabel={(x) => `${x.name}: ${x.wide ? 'everywhere' : x.namespaces.join(', ') || 'named objects'}`} sort={table.sort} onSort={table.onSort} onOpen={(k) => navigate(href('access', [], { id: k }))} now={now} empty="" rowAttr="who" />}
+      {rows.length > 0 && (
+        <DataTable<WhoView>
+          label={`Who can ${verb} ${res}`}
+          rows={table.shown}
+          cols={table.cols}
+          rowKey={(x) => x.key}
+          rowLabel={(x) => `${x.name}: ${x.wide ? 'everywhere' : x.namespaces.join(', ') || 'named objects'}`}
+          sort={table.sort}
+          onSort={table.onSort}
+          onOpen={(k) => navigate(href('access', [], { id: k }))}
+          now={now}
+          empty=""
+          rowAttr="who"
+        />
+      )}
     </section>
   )
 }
 
-function TablesCard({ roles, bindings, items, now, route, set, onToast, cluster }: { roles: RoleRow[]; bindings: BindingRow[]; items: ReviewItem[]; now: number; route: TabProps['route']; set: (c: Record<string, string | undefined>) => void; onToast: (m: string) => void; cluster?: string }) {
+function TablesCard({
+  roles,
+  bindings,
+  items,
+  now,
+  route,
+  set,
+  onToast,
+  cluster,
+}: {
+  roles: RoleRow[]
+  bindings: BindingRow[]
+  items: ReviewItem[]
+  now: number
+  route: TabProps['route']
+  set: (c: Record<string, string | undefined>) => void
+  onToast: (m: string) => void
+  cluster?: string
+}) {
   const p = route.params
   const tbl = p.get('tbl') === 'roles' ? 'roles' : 'bindings'
   const withDefaults = p.get('defaults') === '1'
@@ -381,7 +466,8 @@ function TablesCard({ roles, bindings, items, now, route, set, onToast, cluster 
   const shownRoles = withDefaults ? roleRows : roleRows.filter((r) => !isDefault(r.source) || (r.kind === 'ClusterRole' && always.has(r.name)))
   const bt = useTable<BindingView>({ id: 'access-bindings', columns: BINDING_COLUMNS, rows: shownBindings, terms: bindingTerms, now, defaultSort: { col: 'risk', dir: 'asc' }, query: tq, onQuery: (q) => set({ tq: q || undefined }) })
   const rt = useTable<RoleView>({ id: 'access-roles', columns: ROLE_COLUMNS, rows: shownRoles, terms: roleTerms, now, defaultSort: { col: 'notable', dir: 'asc' }, query: tq, onQuery: (q) => set({ tq: q || undefined }) })
-  const hiddenDefaults = tbl === 'bindings' ? bindingRows.length - bindingRows.filter((b) => !isDefault(b.source)).length : roleRows.length - roleRows.filter((r) => !isDefault(r.source) || (r.kind === 'ClusterRole' && always.has(r.name))).length
+  const hiddenDefaults =
+    tbl === 'bindings' ? bindingRows.length - bindingRows.filter((b) => !isDefault(b.source)).length : roleRows.length - roleRows.filter((r) => !isDefault(r.source) || (r.kind === 'ClusterRole' && always.has(r.name))).length
   return (
     <section className="rk-card" aria-label="Bindings and roles" style={{ overflow: 'hidden', flex: 'none' }} data-testid="access-tables">
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '12px 16px', borderBottom: '1px solid var(--line)' }}>
@@ -411,9 +497,33 @@ function TablesCard({ roles, bindings, items, now, route, set, onToast, cluster 
         </span>
       </div>
       {tbl === 'bindings' ? (
-        <DataTable<BindingView> label="Bindings" rows={bt.shown} cols={bt.cols} rowKey={(r) => r.key} rowLabel={(r) => `${r.kind} ${r.name} — open details`} sort={bt.sort} onSort={bt.onSort} onOpen={(k) => set({ open: k })} now={now} empty={tq ? `Nothing matches “${tq}”.` : 'No bindings.'} rowAttr="binding" />
+        <DataTable<BindingView>
+          label="Bindings"
+          rows={bt.shown}
+          cols={bt.cols}
+          rowKey={(r) => r.key}
+          rowLabel={(r) => `${r.kind} ${r.name} — open details`}
+          sort={bt.sort}
+          onSort={bt.onSort}
+          onOpen={(k) => set({ open: k })}
+          now={now}
+          empty={tq ? `Nothing matches “${tq}”.` : 'No bindings.'}
+          rowAttr="binding"
+        />
       ) : (
-        <DataTable<RoleView> label="Roles" rows={rt.shown} cols={rt.cols} rowKey={(r) => r.key} rowLabel={(r) => `${r.kind} ${r.name} — open details`} sort={rt.sort} onSort={rt.onSort} onOpen={(k) => set({ open: k })} now={now} empty={tq ? `Nothing matches “${tq}”.` : 'No roles.'} rowAttr="role" />
+        <DataTable<RoleView>
+          label="Roles"
+          rows={rt.shown}
+          cols={rt.cols}
+          rowKey={(r) => r.key}
+          rowLabel={(r) => `${r.kind} ${r.name} — open details`}
+          sort={rt.sort}
+          onSort={rt.onSort}
+          onOpen={(k) => set({ open: k })}
+          now={now}
+          empty={tq ? `Nothing matches “${tq}”.` : 'No roles.'}
+          rowAttr="role"
+        />
       )}
     </section>
   )
@@ -431,13 +541,41 @@ function cellText(level: Level, c: ReturnType<typeof check>, scope: string, clus
   return cluster ? 'cluster-wide' : scope === '*' ? 'in every namespace' : `in ${scope}`
 }
 
-function IdentityPage({ id, bindings, roles, items, namespaces, now, route, set, onToast, cluster }: { id: Identity; bindings: BindingRow[]; roles: ReturnType<typeof roleIndex>; items: ReviewItem[]; namespaces: string[]; now: number; route: TabProps['route']; set: (c: Record<string, string | undefined>) => void; onToast: (m: string) => void; cluster?: string }) {
+function IdentityPage({
+  id,
+  bindings,
+  roles,
+  items,
+  namespaces,
+  now,
+  route,
+  set,
+  onToast,
+  cluster,
+}: {
+  id: Identity
+  bindings: BindingRow[]
+  roles: ReturnType<typeof roleIndex>
+  items: ReviewItem[]
+  namespaces: string[]
+  now: number
+  route: TabProps['route']
+  set: (c: Record<string, string | undefined>) => void
+  onToast: (m: string) => void
+  cluster?: string
+}) {
   const scope = route.params.get('scope') ?? '*'
   const grants = useMemo(() => grantsOf(id, bindings), [id, bindings])
   const masters = isMasters(id)
   const findings = items.filter((f) => f.subject && subjectKey(f.subject) === id.key)
   const everything = masters || grants.some((g) => g.binding.kind === 'ClusterRoleBinding' && roles.get(`ClusterRole/${g.binding.roleName}`)?.powers.includes('everything'))
-  const text = everything ? 'Can do everything, in every namespace.' : id.bindings.length ? `Has ${summary(id)}.` : id.kind === 'ServiceAccount' ? 'No binding names it, so it has only what every service account has: API discovery and asking what it may do.' : 'No binding names it.'
+  const text = everything
+    ? 'Can do everything, in every namespace.'
+    : id.bindings.length
+      ? `Has ${summary(id)}.`
+      : id.kind === 'ServiceAccount'
+        ? 'No binding names it, so it has only what every service account has: API discovery and asking what it may do.'
+        : 'No binding names it.'
   const grantRows = useMemo<GrantView[]>(() => grants.map((g) => ({ ...g, key: g.binding.key + (g.via ?? ''), created: g.binding.created })), [grants])
   const gt = useTable<GrantView>({ id: 'access-grants', columns: GRANT_COLUMNS, rows: grantRows, terms: grantTerms, now, defaultSort: { col: 'how', dir: 'asc' } })
   const sections = [...new Set(AC_RES.map((r) => r.section))]
@@ -452,7 +590,11 @@ function IdentityPage({ id, bindings, roles, items, namespaces, now, route, set,
         <h1 style={{ margin: 0, fontSize: 19, fontWeight: 500 }} data-testid="identity-name">
           <IdentityName kind={id.kind} name={id.name} namespace={id.namespace} size={19} />
         </h1>
-        {id.system && <span className="rk-tag" data-tone="info">Kubernetes system identity</span>}
+        {id.system && (
+          <span className="rk-tag" data-tone="info">
+            Kubernetes system identity
+          </span>
+        )}
         <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8 }}>
           <AskSherlock question={`What can ${id.kind} ${id.namespace ? id.namespace + '/' : ''}${id.name} do?`} />
           <button className="rk-btn" onClick={() => copy(listCmd, onToast)} title={listCmd}>
@@ -464,7 +606,12 @@ function IdentityPage({ id, bindings, roles, items, namespaces, now, route, set,
       <p style={{ margin: 0, fontSize: 13, color: 'var(--fg2)' }} data-testid="identity-summary">
         {text}
       </p>
-      {id.kind === 'Group' && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)', maxWidth: 860 }}>Kubernetes doesn’t keep group members. The identity provider decides who is in {id.name}; anyone whose token carries the group gets these permissions.{masters ? ' Members of system:masters are allowed everything before RBAC is asked.' : ''}</p>}
+      {id.kind === 'Group' && (
+        <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg3)', maxWidth: 860 }}>
+          Kubernetes doesn’t keep group members. The identity provider decides who is in {id.name}; anyone whose token carries the group gets these permissions.
+          {masters ? ' Members of system:masters are allowed everything before RBAC is asked.' : ''}
+        </p>
+      )}
       {!id.exists && (
         <div className="rk-callout" data-tone="warn" data-testid="identity-missing">
           <WarnIcon />
@@ -544,7 +691,10 @@ function IdentityPage({ id, bindings, roles, items, namespaces, now, route, set,
                     {AC_VERBS.map((v) => {
                       const c = masters ? { level: 'all' as Level, namespaces: [], names: [], via: [] } : check(grants, v, r.res, scope, roles)
                       const t = cellText(c.level, c, scope, r.cluster)
-                      const tip = `${v} ${r.res}: ${t}` + c.via.map((x) => `\nthrough ${x.binding.namespace ? x.binding.namespace + '/' : ''}${x.binding.name} → ${x.role}${x.group ? ` (as ${x.group})` : ''}${x.named ? ` (only ${x.named.join(', ')})` : ''}`).join('') + (c.level !== 'none' ? `\n${canICommand(id, v, r.res, scope)}` : '')
+                      const tip =
+                        `${v} ${r.res}: ${t}` +
+                        c.via.map((x) => `\nthrough ${x.binding.namespace ? x.binding.namespace + '/' : ''}${x.binding.name} → ${x.role}${x.group ? ` (as ${x.group})` : ''}${x.named ? ` (only ${x.named.join(', ')})` : ''}`).join('') +
+                        (c.level !== 'none' ? `\n${canICommand(id, v, r.res, scope)}` : '')
                       return (
                         <span key={v} role="cell" title={tip} aria-label={`${v} ${r.res}: ${t}`} data-verb={v} data-res={r.res} data-level={c.level}>
                           <span className="rk-pm" data-lvl={c.level} />
@@ -565,10 +715,20 @@ function IdentityPage({ id, bindings, roles, items, namespaces, now, route, set,
             <ExportMenu onExport={(f) => gt.exportRows(f, cluster, `bindings-of-${id.name.replace(/[^A-Za-z0-9.-]+/g, '-')}`, onToast)} disabled={!gt.shown.length} what="these bindings" />
           </span>
         </div>
-        <DataTable<GrantView> label={`Bindings of ${id.name}`} rows={gt.shown} cols={gt.cols} rowKey={(r) => r.key} rowLabel={(r) => `${r.binding.kind} ${r.binding.name} — open details`} sort={gt.sort} onSort={gt.onSort} onOpen={(k) => set({ open: grantRows.find((g) => g.key === k)?.binding.key })} now={now} empty={masters ? 'No binding is needed: RBAC is not asked about system:masters.' : 'No binding applies to it.'} rowAttr="grant" />
+        <DataTable<GrantView>
+          label={`Bindings of ${id.name}`}
+          rows={gt.shown}
+          cols={gt.cols}
+          rowKey={(r) => r.key}
+          rowLabel={(r) => `${r.binding.kind} ${r.binding.name} — open details`}
+          sort={gt.sort}
+          onSort={gt.onSort}
+          onOpen={(k) => set({ open: grantRows.find((g) => g.key === k)?.binding.key })}
+          now={now}
+          empty={masters ? 'No binding is needed: RBAC is not asked about system:masters.' : 'No binding applies to it.'}
+          rowAttr="grant"
+        />
       </section>
     </>
   )
 }
-
-

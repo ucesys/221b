@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
@@ -119,6 +120,8 @@ func (s *Server) postTwoPerson(w http.ResponseWriter, r *http.Request) {
 			return s.applyEnvironment(r.Context(), req)
 		case twoperson.KindSuperAdmin:
 			return a.ApplySuperAdmin(r.Context(), req)
+		case twoperson.KindPrompt:
+			return s.applyPrompt(r.Context(), req, aiBy(r))
 		}
 		return fmt.Errorf("%w: kind %q", twoperson.ErrInvalid, req.Kind)
 	})
@@ -133,7 +136,12 @@ func (s *Server) postTwoPerson(w http.ResponseWriter, r *http.Request) {
 			code = http.StatusBadRequest
 		}
 		s.writeAudit(r, req.Cluster, audit.OutcomeDenied, ActionTwoPerson, strconv.Itoa(id), fmt.Sprintf("%s %s: %v", decision, req.What(), err))
-		jsonError(w, code, err.Error())
+		msg := err.Error()
+		if errors.Is(err, twoperson.ErrDecided) {
+			// Someone decided it first (IB-09): who and when, as 409.
+			msg = upperFirst(strings.TrimPrefix(msg, twoperson.ErrDecided.Error()+": ")) + "."
+		}
+		jsonError(w, code, msg)
 		return
 	}
 	detail := fmt.Sprintf("request %d %s: %s", req.ID, req.State, req.What())

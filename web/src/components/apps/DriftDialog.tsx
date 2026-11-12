@@ -50,7 +50,8 @@ export function DriftDialog({ name, drift, onClose }: { name: string; drift: App
           </button>
         </div>
         <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>
-          Drift is what the cluster has differently from the deployed manifest: a field the manifest sets and someone changed by hand, a scaled Deployment, a deleted object. Fields the cluster adds on its own (defaults, status, Helm’s labels) do not count. An upgrade from the source puts the manifest back; <i>Check again</i> reads the cluster again.
+          Drift is what the cluster has differently from the deployed manifest: a field the manifest sets and someone changed by hand, a scaled Deployment, a deleted object. Fields the cluster adds on its own (defaults, status, Helm’s
+          labels) do not count. An upgrade from the source puts the manifest back; <i>Check again</i> reads the cluster again.
         </p>
         <div style={{ flex: '1 1 auto', minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
           {off.length === 0 && (
@@ -70,23 +71,18 @@ export function DriftDialog({ name, drift, onClose }: { name: string; drift: App
                   {o.namespace ? <span style={{ color: 'var(--fg3)', fontWeight: 400 }}> in {o.namespace}</span> : null}
                 </span>
               </h3>
-              {o.state === 'missing' && (
-                <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>
-                  The deployed manifest has it; the cluster does not. It was deleted, or it never applied.
-                </p>
-              )}
-              {o.error && (
-                <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>
-                  {o.error}
-                </p>
-              )}
+              {o.state === 'missing' && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>The deployed manifest has it; the cluster does not. It was deleted, or it never applied.</p>}
+              {o.error && <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>{o.error}</p>}
               {o.fields && o.fields.length > 0 && (
                 <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>
                   Fields: <span className="rk-mono">{o.fields.join(', ')}</span>
                 </p>
               )}
               {o.diff && (
-                <pre className="rk-code rk-mono" style={{ margin: 0, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, overflow: 'auto', maxHeight: 420, whiteSpace: 'pre', background: 'var(--sunken)', borderRadius: 8, border: '1px solid var(--line)' }}>
+                <pre
+                  className="rk-code rk-mono"
+                  style={{ margin: 0, padding: '10px 12px', fontSize: 12, lineHeight: 1.5, overflow: 'auto', maxHeight: 420, whiteSpace: 'pre', background: 'var(--sunken)', borderRadius: 8, border: '1px solid var(--line)' }}
+                >
                   <DiffLines text={o.diff} />
                 </pre>
               )}

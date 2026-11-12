@@ -12,12 +12,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ucesys/221b/server/internal/ai"
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/platform"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/watson"
 )
 
 // Sherlock (Phase 5) answers questions about a cluster. Each person has a
@@ -39,6 +41,9 @@ type sherlockStatus struct {
 	Model  string `json:"model"`
 	// Admin says whether the person may change the settings.
 	Admin bool `json:"admin"`
+	// Setup says Sherlock's setup skill is on for the person: a
+	// SuperAdmin's, while Getting started has a step open (Phase 12).
+	Setup bool `json:"setup,omitempty"`
 }
 
 func (s *Server) sherlockSettings() settings.Sherlock {
@@ -53,16 +58,32 @@ func (s *Server) sherlockStatusFor(r *http.Request, cluster string) sherlockStat
 	sess, _ := auth.SessionFrom(r.Context())
 	st := sherlockStatus{Enabled: sh.Clusters[cluster], Key: s.opts.SherlockKeys != nil && s.opts.SherlockKeys.Key() != "", Model: sh.Model, Admin: s.opts.Auth == nil || sess.Admin}
 	p := s.sherlockProvider(sh)
+	// With the agents (Phase 12), Sherlock may be on another provider than
+	// the default, with caps of its own besides the overall ones.
+	var agent *sherlock.Agent
+	if s.opts.AI != nil {
+		if a, err := s.opts.AI.Preview(r.Context(), ai.Sherlock, cluster, nil, nil); err == nil {
+			agent, st.Model = &a, a.Model
+		}
+	}
 	switch {
 	case !st.Enabled:
 		st.Reason = "Sherlock is off for this cluster. An administrator turns it on in Settings."
-	case !st.Key && p.NeedsKey():
+	case s.opts.AI != nil && agent == nil:
+		st.Reason = s.opts.AI.Usable(ai.Sherlock, cluster)
+	case s.opts.AI == nil && !st.Key && p.NeedsKey():
 		st.Reason = "Sherlock has no API key. An administrator adds one in Settings."
 	}
-	if err := (sherlock.Caps{DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD}).Check(s.opts.Sherlock.Ledger().Now(r.Context())); err != nil {
+	spend := s.opts.Sherlock.Ledger().Now(r.Context())
+	if err := (sherlock.Caps{DailyUSD: sh.DailyUSD, MonthlyUSD: sh.MonthlyUSD}).Check(spend); err != nil {
 		st.Capped = err.Error()
+	} else if agent != nil {
+		if err := agent.Caps.CheckAgent(spend, agent.ID, agent.Name); err != nil {
+			st.Capped = err.Error()
+		}
 	}
 	st.Available = st.Reason == "" && st.Capped == ""
+	st.Setup = s.opts.AI != nil && st.Admin && st.Available && s.SetupOpen(r.Context())
 	return st
 }
 
@@ -164,14 +185,20 @@ func (s *Server) postSherlockAsk(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sess, _ := auth.SessionFrom(r.Context())
+	// With the agents (Phase 12) the instructions and notes are Sherlock's
+	// as an agent; given here, they would be tried instead.
+	notes, instructions := s.sherlockSettings().Notes, s.sherlockSettings().Instructions
+	if s.opts.AI != nil {
+		notes, instructions = "", ""
+	}
 	conv, err := s.opts.Sherlock.Ask(sherlock.Question{
 		Key:          convKey(r),
 		Text:         in.Question,
 		Cluster:      name,
 		Version:      version,
 		Platform:     s.platformPrompt(r, cl, name, version),
-		Notes:        s.sherlockSettings().Notes,
-		Instructions: s.sherlockSettings().Instructions,
+		Notes:        notes,
+		Instructions: instructions,
 		Tools:        s.toolboxFor(r, id, cl),
 		Who:          audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name},
 		From:         fromAddr(r),
@@ -179,6 +206,12 @@ func (s *Server) postSherlockAsk(w http.ResponseWriter, r *http.Request) {
 		View:         in.View,
 		// Read once per question, so a change applies to the next one.
 		ViewChanges: s.sherlockSettings().ChangesView(),
+		// Sherlock's setup skill is a SuperAdmin's (Phase 12, GS-07).
+		SuperAdmin: s.isSuperAdmin(r),
+		// Asked from Cases, Sherlock knows its pages (IB-10).
+		Cases: fromAIOps(in.View),
+		// The exceptions are for those who see the cases (KN-32).
+		Exceptions: s.readsExceptions(r),
 	})
 	var capErr *sherlock.ErrCap
 	switch {
@@ -254,11 +287,16 @@ func (s *Server) sherlockEvents(w http.ResponseWriter, r *http.Request) {
 // sherlockPart streams the person's conversation about the request's
 // cluster: its status, the conversation, then each change.
 func (s *Server) sherlockPart(r *http.Request) streamPart {
+	return s.conversationPart(r, convKey(r), clusterID(r))
+}
+
+// conversationPart streams a conversation on a cluster: the person's, or
+// a case's (CF-47).
+func (s *Server) conversationPart(r *http.Request, key sherlock.Key, id string) streamPart {
 	return func(ctx context.Context, write func(string, any) error) {
-		conv := s.opts.Sherlock.Conversation(convKey(r))
+		conv := s.opts.Sherlock.Conversation(key)
 		ch := conv.Subscribe()
 		defer conv.Unsubscribe(ch)
-		id := clusterID(r)
 		status := s.sherlockStatusFor(r, id)
 		if write("status", status) != nil {
 			return
@@ -363,7 +401,7 @@ func (s *Server) getSherlockConfig(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.sherlockAdmin(w, r); !ok {
 		return
 	}
-	sh := s.sherlockSettings()
+	sh := s.legacySherlock(r.Context())
 	p := s.sherlockProvider(sh)
 	cfg := sherlockConfig{Settings: sh, Provider: p, ProviderLocked: s.opts.SherlockProviderLocked, NeedsKey: p.NeedsKey(), Spend: s.opts.Sherlock.Ledger().Now(r.Context()), SpendError: s.opts.Sherlock.Ledger().SaveError(), NoUsage: s.opts.Sherlock.NoUsage(), Models: sherlock.Models, Running: s.opts.Sherlock.Running()}
 	if s.opts.SherlockKeys != nil {
@@ -381,6 +419,17 @@ func (s *Server) getSherlockConfig(w http.ResponseWriter, r *http.Request) {
 	})
 	b, _ := json.Marshal(cfg)
 	writeJSON(w, r, b)
+}
+
+// legacySherlock is Sherlock's settings as the endpoints from before Phase
+// 12 have them: with the agents, its instructions and the notes for every
+// cluster are Sherlock's as an agent.
+func (s *Server) legacySherlock(ctx context.Context) settings.Sherlock {
+	sh := s.sherlockSettings()
+	if s.opts.AI != nil {
+		sh.Instructions, sh.Notes = s.opts.AI.Legacy(ctx)
+	}
+	return sh
 }
 
 // getSherlockPrompt shows an administrator the instructions Sherlock gets
@@ -406,17 +455,33 @@ func (s *Server) getSherlockPrompt(w http.ResponseWriter, r *http.Request) {
 			name, version = sum.Name, sum.Version
 		}
 	}
-	notes := s.sherlockSettings().Notes
+	legacy := s.legacySherlock(r.Context())
+	notes := legacy.Notes
 	if v, ok := r.URL.Query()["notes"]; ok && len(v) > 0 {
 		notes = v[0]
 	}
-	instructions := s.sherlockSettings().Instructions
+	instructions := legacy.Instructions
 	if v, ok := r.URL.Query()["instructions"]; ok && len(v) > 0 {
 		instructions = v[0]
 	}
 	view := s.sherlockSettings().ChangesView()
-	core, cluster := sherlock.PromptText(sherlock.Question{Cluster: name, Version: version, Platform: s.platformPrompt(r, cl, name, version), Notes: notes, Instructions: instructions, ViewChanges: view}, s.opts.Now())
-	b, _ := json.Marshal(map[string]string{"core": core, "cluster": cluster, "builtIn": sherlock.BuiltIn(view)})
+	if s.opts.AI != nil {
+		house := instructions
+		if house == "" {
+			house = s.opts.AI.Baseline(ai.Sherlock)
+		}
+		a, err := s.opts.AI.Preview(r.Context(), ai.Sherlock, id, &house, map[string]string{ai.AllClusters: notes})
+		if err != nil {
+			jsonError(w, http.StatusConflict, err.Error())
+			return
+		}
+		core, cluster := sherlock.AgentPromptText(a, sherlock.Question{Cluster: name, Version: version, Platform: s.platformPrompt(r, cl, name, version)}, s.opts.Now())
+		b, _ := json.Marshal(map[string]string{"core": core, "cluster": cluster, "builtIn": s.opts.AI.Baseline(ai.Sherlock)})
+		writeJSON(w, r, b)
+		return
+	}
+	core, cluster := sherlock.PromptText(sherlock.Question{Cluster: name, Version: version, Platform: s.platformPrompt(r, cl, name, version), Notes: notes, Instructions: instructions, ViewChanges: view, Commands: watson.Commands()}, s.opts.Now())
+	b, _ := json.Marshal(map[string]string{"core": core, "cluster": cluster, "builtIn": sherlock.BuiltIn(view, watson.Commands())})
 	writeJSON(w, r, b)
 }
 
@@ -471,6 +536,8 @@ func (s *Server) postSherlockTest(w http.ResponseWriter, r *http.Request) {
 		Tools: s.toolboxFor(r, id, cl),
 		Who:   audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name},
 		From:  fromAddr(r),
+		// The exceptions are for those who see the cases (KN-32).
+		Exceptions: s.readsExceptions(r),
 	})
 	if err != nil {
 		jsonError(w, http.StatusConflict, err.Error())
@@ -536,12 +603,34 @@ func (s *Server) putSherlockConfig(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	before := s.sherlockSettings()
+	before := s.legacySherlock(r.Context())
 	if s.opts.SherlockProviderLocked && !reflect.DeepEqual(before.Provider, in.Provider) {
 		jsonError(w, http.StatusForbidden, "the chart fixes Sherlock's provider (sherlock.lockProvider); change it there")
 		return
 	}
-	if _, err := s.opts.Settings.UpdateSherlock(r.Context(), in); err != nil {
+	saved := in
+	if s.opts.AI != nil {
+		// Sherlock's instructions and notes for every cluster are its own
+		// as an agent now: saved here, they go live at once, as they did.
+		if in.Instructions != before.Instructions || in.Notes != before.Notes {
+			v, err := s.opts.AI.Instructions(r.Context(), ai.Sherlock)
+			if err != nil {
+				jsonError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			notes := map[string]string{}
+			for k, n := range v.Notes {
+				notes[k] = n
+			}
+			notes[ai.AllClusters] = in.Notes
+			if err := s.opts.AI.SetLive(r.Context(), ai.Sherlock, in.Instructions, notes, aiBy(r)); err != nil {
+				jsonError(w, http.StatusInternalServerError, "The instructions were not saved: "+err.Error())
+				return
+			}
+		}
+		saved.Instructions, saved.Notes = "", ""
+	}
+	if _, err := s.opts.Settings.UpdateSherlock(r.Context(), saved); err != nil {
 		s.opts.Logger.Warn("Sherlock settings not saved", "err", err)
 		jsonError(w, settingsStatus(err, http.StatusInternalServerError), "The settings were not saved: "+err.Error())
 		return
@@ -710,4 +799,16 @@ func (s *Server) recordOutcome(r *http.Request, action, target, detail, outcome 
 	}
 	sess, _ := auth.SessionFrom(r.Context())
 	s.opts.Audit.Record(audit.Event{Action: action, Who: audit.Who{Subject: sess.User.Subject, Email: sess.User.Email, Name: sess.User.Name}, Target: target, Detail: detail, Outcome: outcome, From: fromAddr(r)})
+}
+
+// --- Inbox and Sherlock in AIOps (Phase 12) ---
+
+// fromAIOps says whether a question's view state is a page of the AIOps
+// area (lib/uiControl.ts viewState: "view":"aiops"). A page loaded before
+// the area's id was aiops (CF-104) still says "cases" until it reloads.
+func fromAIOps(view string) bool {
+	var v struct {
+		View string `json:"view"`
+	}
+	return view != "" && json.Unmarshal([]byte(view), &v) == nil && (v.View == "aiops" || v.View == "cases")
 }

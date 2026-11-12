@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { APPROVE_ALL_CHOICES, fetchWatsonConfig, saveWatsonConfig, type WatsonSettings as Settings } from '../api/watson'
 import { adminHref } from '../lib/router'
+import { NotificationChannels } from './NotificationChannels'
 import { SaveBar } from './SaveBar'
+import { StandingApprovals } from './StandingApprovals'
 
 /**
  * Watson's settings, for administrators (P6-07): where it runs, which is
@@ -59,8 +61,8 @@ export function WatsonSettings({ open }: { open: boolean }) {
         <ul className="rk-fhint" style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 4 }}>
           <li>
             Only on clusters where Sherlock is on: turn it on per cluster in{' '}
-            <a className="rk-link" href={adminHref('settings', ['sherlock'])}>
-              Sherlock’s settings
+            <a className="rk-link" href={adminHref('settings', ['agents'])}>
+              Sherlock’s drawer under Agents
             </a>
             .
           </li>
@@ -97,10 +99,22 @@ export function WatsonSettings({ open }: { open: boolean }) {
               </span>
             </label>
             <p className="rk-fhint" style={{ margin: 0 }}>
-              With it on, Watson offers <i>Approve all for…</i>: for that long, every card the person could approve is approved as soon as it is ready, their own and, with the two-person rule, other people’s. Every other rule still applies, and the audit log names them as the approver.
+              With it on, Watson offers <i>Approve all for…</i>: for that long, every card the person could approve is approved as soon as it is ready, their own and, with the two-person rule, other people’s. Every other rule still applies,
+              and the audit log names them as the approver.
             </p>
           </section>
-          <SaveBar changed={draft !== cfg.twoPerson || approveAll !== (cfg.approveAllMinutes ?? 0)} busy={busy} onSave={() => void save()} onUndo={() => (setDraft(cfg.twoPerson), setApproveAll(cfg.approveAllMinutes ?? 0))} error={error} saved={saved} testId="watson-settings-save" />
+          <SaveBar
+            changed={draft !== cfg.twoPerson || approveAll !== (cfg.approveAllMinutes ?? 0)}
+            busy={busy}
+            onSave={() => void save()}
+            onUndo={() => (setDraft(cfg.twoPerson), setApproveAll(cfg.approveAllMinutes ?? 0))}
+            error={error}
+            saved={saved}
+            testId="watson-settings-save"
+          />
+          {/* Phase 12: the agents' proposals, saved on their own. */}
+          <StandingApprovals />
+          <NotificationChannels />
         </>
       )}
     </section>

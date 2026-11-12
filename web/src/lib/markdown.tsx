@@ -4,12 +4,7 @@
 
 import { Fragment, type ReactNode } from 'react'
 
-export type Block =
-  | { t: 'p'; text: string }
-  | { t: 'h'; text: string }
-  | { t: 'ul' | 'ol'; items: string[] }
-  | { t: 'code'; lang: string; text: string; open: boolean }
-  | { t: 'table'; head: string[]; rows: string[][] }
+export type Block = { t: 'p'; text: string } | { t: 'h'; text: string } | { t: 'ul' | 'ol'; items: string[] } | { t: 'code'; lang: string; text: string; open: boolean } | { t: 'table'; head: string[]; rows: string[][] }
 
 const fence = /^\s*(```|~~~)\s*([\w+-]*)\s*$/
 const bullet = /^\s*[-*+]\s+(.*)$/

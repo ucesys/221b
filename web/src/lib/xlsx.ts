@@ -4,13 +4,15 @@
 export type Cell = string | number | boolean | null | undefined
 
 function xmlEsc(s: string): string {
-  return s
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+  return (
+    s
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+  )
 }
 
 /** Column letters: 0 → A, 25 → Z, 26 → AA. */
@@ -114,7 +116,11 @@ export function zipStore(files: ZipFile[], when = new Date()): Uint8Array {
 
 /** One sheet with a bold, frozen, filterable header row. */
 export function xlsxBytes(sheet: string, head: string[], rows: Cell[][]): Uint8Array {
-  const name = sheet.replace(/[[\]:*?/\\]/g, ' ').trim().slice(0, 31) || 'Sheet1'
+  const name =
+    sheet
+      .replace(/[[\]:*?/\\]/g, ' ')
+      .trim()
+      .slice(0, 31) || 'Sheet1'
   const nCols = Math.max(1, head.length)
   const last = xlCol(nCols - 1) + (rows.length + 1)
   const widths = head.map((h, i) => {
@@ -134,9 +140,7 @@ export function xlsxBytes(sheet: string, head: string[], rows: Cell[][]): Uint8A
     const style = hdr ? ' s="1"' : s.includes('\n') ? ' s="2"' : ''
     return `<c r="${ref}" t="inlineStr"${style}><is><t xml:space="preserve">${xmlEsc(s)}</t></is></c>`
   }
-  const sheetData =
-    `<row r="1">${head.map((h, i) => cell(h, xlCol(i) + '1', true)).join('')}</row>` +
-    rows.map((r, ri) => `<row r="${ri + 2}">${r.map((v, i) => cell(v, xlCol(i) + (ri + 2), false)).join('')}</row>`).join('')
+  const sheetData = `<row r="1">${head.map((h, i) => cell(h, xlCol(i) + '1', true)).join('')}</row>` + rows.map((r, ri) => `<row r="${ri + 2}">${r.map((v, i) => cell(v, xlCol(i) + (ri + 2), false)).join('')}</row>`).join('')
   const X = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
   const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
   const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
@@ -151,9 +155,7 @@ export function xlsxBytes(sheet: string, head: string[], rows: Cell[][]): Uint8A
   const wb =
     X +
     `<workbook xmlns="${NS}" xmlns:r="${R}"><sheets><sheet name="${xmlEsc(name)}" sheetId="1" r:id="rId1"/></sheets>` +
-    (rows.length
-      ? `<definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">'${xmlEsc(name.replace(/'/g, "''"))}'!$A$1:$${xlCol(nCols - 1)}$${rows.length + 1}</definedName></definedNames>`
-      : '') +
+    (rows.length ? `<definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">'${xmlEsc(name.replace(/'/g, "''"))}'!$A$1:$${xlCol(nCols - 1)}$${rows.length + 1}</definedName></definedNames>` : '') +
     '</workbook>'
   const styles =
     X +

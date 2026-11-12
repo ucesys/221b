@@ -19,7 +19,8 @@ var dist embed.FS
 
 // Handler serves the app: hashed assets are cached for a year, index.html
 // never, and unknown paths fall back to index.html so links into the app
-// work.
+// work. The report page (Phase 12, IS-27) is a page of its own,
+// report.html, served at /report and below it.
 func Handler() http.Handler {
 	files, _ := fs.Sub(dist, "dist")
 	return handler(files)
@@ -27,6 +28,7 @@ func Handler() http.Handler {
 
 func handler(files fs.FS) http.Handler {
 	index, err := fs.ReadFile(files, "index.html")
+	report, reportErr := fs.ReadFile(files, "report.html")
 	server := http.FileServerFS(files)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
@@ -36,6 +38,16 @@ func handler(files fs.FS) http.Handler {
 			return
 		}
 		p := path.Clean("/" + r.URL.Path)
+		if p == "/report" || p == "/report.html" || strings.HasPrefix(p, "/report/") {
+			page := index
+			if reportErr == nil {
+				page = report
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Write(withNonce(w.Header(), page))
+			return
+		}
 		if p != "/" && p != "/index.html" {
 			if st, statErr := fs.Stat(files, strings.TrimPrefix(p, "/")); statErr == nil && !st.IsDir() {
 				if strings.HasPrefix(p, "/assets/") {

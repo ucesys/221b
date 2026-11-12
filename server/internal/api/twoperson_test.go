@@ -49,6 +49,10 @@ func TestTakingAClusterOffProductionWaitsForAnotherSuperAdmin(t *testing.T) {
 	if sum, _ := m.Summary(clusters.LocalID); sum.Env != clusters.EnvStaging || sum.Name != "Here" {
 		t.Fatalf("after the approval: %+v", sum.Spec)
 	}
+	// Approved again, by someone who had it open: 409, with who and when.
+	if resp, b := send(t, ops2, http.MethodPost, srv.URL+"/api/v1/admin/requests/1/approve", ""); resp.StatusCode != http.StatusConflict || !strings.Contains(b, `"Already approved by `) {
+		t.Fatalf("approved twice: %s %s", resp.Status, b)
+	}
 	_, b = send(t, ops, http.MethodGet, srv.URL+"/api/v1/admin/approvals", "")
 	_ = json.Unmarshal([]byte(b), &list)
 	if len(list.Items) == 0 || list.Items[0].State != approvalApproved || !list.Items[0].Mine || list.Items[0].ApprovedBy == "" {

@@ -39,6 +39,8 @@ export interface ColumnDef<R> {
   /** The first column: always shown, and the row's accessible name. */
   sortValue: (r: R, now: number) => number | string | null
   cell: (r: R, now: number) => ReactNode
+  /** Before the heading's sort button: the Nodes table's box that picks every node in view. */
+  head?: () => ReactNode
   /** The export columns this column becomes; one or more. */
   export: (r: R, now: number) => ExportValue[]
 }
@@ -198,7 +200,10 @@ export function csvText(head: string[], rows: Cell[][]): string {
 
 /** A file name: cluster-nodes-20261013-1403.xlsx. */
 export function exportFileName(cluster: string | undefined, what: string, format: ExportFormat): string {
-  const name = (cluster || 'cluster').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  const name = (cluster || 'cluster')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
   const ext = EXPORT_FORMATS.find((f) => f.id === format)?.ext ?? ''
   return `${name}-${what}-${fileStamp()}${ext}`
 }

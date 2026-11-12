@@ -21,7 +21,12 @@ function entries(bytes: Uint8Array): Map<string, string> {
   return out
 }
 
-const unescape = (s: string) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&amp;/g, '&')
+const unescape = (s: string) =>
+  s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
 
 function colIndex(ref: string): number {
   const letters = /^[A-Z]+/.exec(ref)?.[0] ?? 'A'

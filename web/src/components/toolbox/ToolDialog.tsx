@@ -201,22 +201,97 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
     )
   }
 
-  const icon = { shell: <TerminalIcon size={18} />, 'node-shell': <TerminalIcon size={18} />, command: <BoltIcon />, 'node-command': <BoltIcon />, forward: <ForwardIcon />, 'debug-container': <BoxIcon />, 'debug-pod': <BoxIcon />, ssh: <TerminalIcon size={18} />, 'ssh-pair': <TerminalIcon size={18} />, 'ssh-unpair': <TerminalIcon size={18} /> }[tool]
+  const icon = {
+    shell: <TerminalIcon size={18} />,
+    'node-shell': <TerminalIcon size={18} />,
+    command: <BoltIcon />,
+    'node-command': <BoltIcon />,
+    forward: <ForwardIcon />,
+    'debug-container': <BoxIcon />,
+    'debug-pod': <BoxIcon />,
+    ssh: <TerminalIcon size={18} />,
+    'ssh-pair': <TerminalIcon size={18} />,
+    'ssh-unpair': <TerminalIcon size={18} />,
+  }[tool]
   const title: ReactNode = {
-    shell: <>Shell in pod <span className="rk-mono">{podRef?.name}</span></>,
-    command: <>Run a command in pod <span className="rk-mono">{podRef?.name}</span></>,
-    forward: <>Port forward from pod <span className="rk-mono">{podRef?.name}</span></>,
-    'debug-container': <>Debug container for pod <span className="rk-mono">{podRef?.name}</span></>,
-    'debug-pod': <>Debug pod on node <span className="rk-mono">{node}</span></>,
-    'node-shell': <>K8S node shell on <span className="rk-mono">{node}</span></>,
-    'node-command': <>Run a command on node <span className="rk-mono">{node}</span></>,
-    ssh: <>SSH to node <span className="rk-mono">{node}</span></>,
-    'ssh-pair': nodes ? <>Pair {nodes.length} nodes for SSH</> : <>{pairing ? 'Pair again' : 'Pair'} node <span className="rk-mono">{node}</span> for SSH</>,
-    'ssh-unpair': <>Unpair node <span className="rk-mono">{node}</span> from SSH</>,
+    shell: (
+      <>
+        Shell in pod <span className="rk-mono">{podRef?.name}</span>
+      </>
+    ),
+    command: (
+      <>
+        Run a command in pod <span className="rk-mono">{podRef?.name}</span>
+      </>
+    ),
+    forward: (
+      <>
+        Port forward from pod <span className="rk-mono">{podRef?.name}</span>
+      </>
+    ),
+    'debug-container': (
+      <>
+        Debug container for pod <span className="rk-mono">{podRef?.name}</span>
+      </>
+    ),
+    'debug-pod': (
+      <>
+        Debug pod on node <span className="rk-mono">{node}</span>
+      </>
+    ),
+    'node-shell': (
+      <>
+        K8S node shell on <span className="rk-mono">{node}</span>
+      </>
+    ),
+    'node-command': (
+      <>
+        Run a command on node <span className="rk-mono">{node}</span>
+      </>
+    ),
+    ssh: (
+      <>
+        SSH to node <span className="rk-mono">{node}</span>
+      </>
+    ),
+    'ssh-pair': nodes ? (
+      <>Pair {nodes.length} nodes for SSH</>
+    ) : (
+      <>
+        {pairing ? 'Pair again' : 'Pair'} node <span className="rk-mono">{node}</span> for SSH
+      </>
+    ),
+    'ssh-unpair': (
+      <>
+        Unpair node <span className="rk-mono">{node}</span> from SSH
+      </>
+    ),
   }[tool]
   const verb = approvers
-    ? { shell: 'Request shell', command: 'Request command', forward: 'Request forward', 'debug-container': 'Request debug container', 'debug-pod': 'Request debug pod', 'node-shell': 'Request K8S node shell', 'node-command': 'Request command', ssh: 'Request SSH', 'ssh-pair': 'Request pairing', 'ssh-unpair': 'Request unpairing' }[tool]
-    : { shell: 'Open shell', command: 'Run', forward: 'Start forward', 'debug-container': 'Attach and open shell', 'debug-pod': 'Start debug pod', 'node-shell': 'Open K8S node shell', 'node-command': 'Run', ssh: 'Open SSH', 'ssh-pair': 'Pair the node', 'ssh-unpair': 'Unpair the node' }[tool]
+    ? {
+        shell: 'Request shell',
+        command: 'Request command',
+        forward: 'Request forward',
+        'debug-container': 'Request debug container',
+        'debug-pod': 'Request debug pod',
+        'node-shell': 'Request K8S node shell',
+        'node-command': 'Request command',
+        ssh: 'Request SSH',
+        'ssh-pair': 'Request pairing',
+        'ssh-unpair': 'Request unpairing',
+      }[tool]
+    : {
+        shell: 'Open shell',
+        command: 'Run',
+        forward: 'Start forward',
+        'debug-container': 'Attach and open shell',
+        'debug-pod': 'Start debug pod',
+        'node-shell': 'Open K8S node shell',
+        'node-command': 'Run',
+        ssh: 'Open SSH',
+        'ssh-pair': 'Pair the node',
+        'ssh-unpair': 'Unpair the node',
+      }[tool]
   const durationField = interactive && info && (
     <label className="tb-lbl" style={{ flex: '0 0 auto' }}>
       <span>For how long</span>
@@ -285,7 +360,15 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
           {tool === 'command' && <div className="tb-row">{containerField('Container', containerV, setContainer)}</div>}
           <label className="tb-lbl">
             <span>Command{tool === 'node-command' ? ' · runs on the node through chroot /host' : ''}</span>
-            <textarea ref={(el) => void (first.current ??= el)} className="rk-area tb-area" value={command} onChange={(e) => setCommand(e.target.value)} spellCheck={false} placeholder={tool === 'command' ? 'cat /etc/resolv.conf' : 'journalctl -u kubelet -n 200 --no-pager'} aria-label="Command" />
+            <textarea
+              ref={(el) => void (first.current ??= el)}
+              className="rk-area tb-area"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              spellCheck={false}
+              placeholder={tool === 'command' ? 'cat /etc/resolv.conf' : 'journalctl -u kubelet -n 200 --no-pager'}
+              aria-label="Command"
+            />
           </label>
           {quick(tool === 'command' ? info?.podCommands : info?.nodeCommands)}
           <p className="tb-hint" style={{ margin: 0 }}>
@@ -331,7 +414,8 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
             </div>
           )}
           <p className="tb-hint" style={{ margin: 0 }}>
-            The dock then shows one command to run on your computer: the <span className="rk-mono">221b</span> command{info?.cliMinVersion ? ` (${info.cliMinVersion} or newer)` : ''} listens on the local port, and any program there reaches the pod through the console. It ends after {Math.round((info?.idleSeconds ?? 600) / 60)} min without traffic.
+            The dock then shows one command to run on your computer: the <span className="rk-mono">221b</span> command{info?.cliMinVersion ? ` (${info.cliMinVersion} or newer)` : ''} listens on the local port, and any program there reaches
+            the pod through the console. It ends after {Math.round((info?.idleSeconds ?? 600) / 60)} min without traffic.
           </p>
         </>
       )
@@ -352,7 +436,10 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
                   <input type="radio" name="tb-image" checked={imageV === n} onChange={() => setImage(n)} ref={(el) => void (first.current ??= el)} />
                   <span>
                     <span>
-                      <b style={{ fontWeight: 500 }}>{n}</b> <span className="rk-mono rk-dim" style={{ fontSize: 12 }}>{im?.image}</span>
+                      <b style={{ fontWeight: 500 }}>{n}</b>{' '}
+                      <span className="rk-mono rk-dim" style={{ fontSize: 12 }}>
+                        {im?.image}
+                      </span>
                     </span>
                     <small>
                       {im?.tools}
@@ -431,7 +518,10 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
                   <input type="radio" name="tb-image" checked={imageV === n} onChange={() => setImage(n)} />
                   <span>
                     <span>
-                      <b style={{ fontWeight: 500 }}>{n}</b> <span className="rk-mono rk-dim" style={{ fontSize: 12 }}>{im?.image}</span>
+                      <b style={{ fontWeight: 500 }}>{n}</b>{' '}
+                      <span className="rk-mono rk-dim" style={{ fontSize: 12 }}>
+                        {im?.image}
+                      </span>
                     </span>
                     <small>{im?.tools}</small>
                   </span>
@@ -446,7 +536,8 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
             </span>
           </label>
           <p className="tb-hint" style={{ margin: 0 }}>
-            A pod of its own in the namespace, for looking at its Services and the network from inside. {info?.admin && serviceAccount.trim() ? 'It carries that account’s token, and a shell in it the account’s rights.' : 'It carries no ServiceAccount token.'} It is deleted when the session ends.
+            A pod of its own in the namespace, for looking at its Services and the network from inside.{' '}
+            {info?.admin && serviceAccount.trim() ? 'It carries that account’s token, and a shell in it the account’s rights.' : 'It carries no ServiceAccount token.'} It is deleted when the session ends.
           </p>
         </>
       )
@@ -455,7 +546,8 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
       body = (
         <>
           <p className="tb-hint" style={{ margin: 0 }}>
-            A terminal over SSH, as <span className="rk-mono">{pairing?.loginUser ?? '?'}</span> on port {pairing?.port ?? '?'}: the console signs you a certificate for this session alone (principal <span className="rk-mono">{pairing?.principal ?? info?.ssh?.principal}</span>) and checks the node's host key against what was pinned when it was paired. It works when the kubelet does not, as a node shell cannot.
+            A terminal over SSH, as <span className="rk-mono">{pairing?.loginUser ?? '?'}</span> on port {pairing?.port ?? '?'}: the console signs you a certificate for this session alone (principal{' '}
+            <span className="rk-mono">{pairing?.principal ?? info?.ssh?.principal}</span>) and checks the node's host key against what was pinned when it was paired. It works when the kubelet does not, as a node shell cannot.
           </p>
           <div className="tb-row">{durationField}</div>
           <div className="rk-callout" data-tone="err">
@@ -492,7 +584,16 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
             </p>
           )}
           <p className="tb-hint" style={{ margin: 0 }}>
-            Runs a command on the node, as root through a short-lived pod (as <i>Run a command on the node</i> does): it writes the console's certificate authority{info?.ssh?.caFingerprint ? <> (<span className="rk-mono">{info.ssh.caFingerprint}</span>)</> : null} to <span className="rk-mono">/etc/ssh/221b/ca.pub</span>, a principals file admitting <span className="rk-mono">{info?.ssh?.principal}</span> as the login user, and a drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span>; checks that sshd takes all that, or puts everything back and changes nothing; reloads sshd; and reads the node's host key, which every later session checks. Nothing personal goes on the node, and nothing long-lived: unpairing removes what this console put there, and another console's pairing of the node stays.
+            Runs a command on the node, as root through a short-lived pod (as <i>Run a command on the node</i> does): it writes the console's certificate authority
+            {info?.ssh?.caFingerprint ? (
+              <>
+                {' '}
+                (<span className="rk-mono">{info.ssh.caFingerprint}</span>)
+              </>
+            ) : null}{' '}
+            to <span className="rk-mono">/etc/ssh/221b/ca.pub</span>, a principals file admitting <span className="rk-mono">{info?.ssh?.principal}</span> as the login user, and a drop-in{' '}
+            <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span>; checks that sshd takes all that, or puts everything back and changes nothing; reloads sshd; and reads the node's host key, which every later session checks.
+            Nothing personal goes on the node, and nothing long-lived: unpairing removes what this console put there, and another console's pairing of the node stays.
           </p>
           <div className="rk-callout" data-tone="err">
             <ShieldSmallIcon />
@@ -505,7 +606,9 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
       body = (
         <>
           <p className="tb-hint" style={{ margin: 0 }}>
-            Runs a command on the node, as root through a short-lived pod: it removes this console's key and login user, and the drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span> and <span className="rk-mono">/etc/ssh/221b</span> when no other console is paired there, reloads sshd, and the console forgets the pairing{pairing ? ` (as ${pairing.loginUser}, since ${fmtTs(pairing.pairedAt)})` : ''}. No session from here can open afterwards.
+            Runs a command on the node, as root through a short-lived pod: it removes this console's key and login user, and the drop-in <span className="rk-mono">/etc/ssh/sshd_config.d/221b.conf</span> and{' '}
+            <span className="rk-mono">/etc/ssh/221b</span> when no other console is paired there, reloads sshd, and the console forgets the pairing{pairing ? ` (as ${pairing.loginUser}, since ${fmtTs(pairing.pairedAt)})` : ''}. No session
+            from here can open afterwards.
           </p>
         </>
       )
@@ -531,7 +634,8 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
           <div className="rk-callout" data-tone="err">
             <ShieldSmallIcon />
             <span>
-              A pod in <span className="rk-mono">{info?.nodeNamespace}</span> on <span className="rk-mono">{node}</span>, with the node’s root at <span className="rk-mono">/host</span>. Root on a node is root over every pod that runs there, their Secrets included. Run <span className="rk-mono">chroot /host</span> for the node’s own tools.
+              A pod in <span className="rk-mono">{info?.nodeNamespace}</span> on <span className="rk-mono">{node}</span>, with the node’s root at <span className="rk-mono">/host</span>. Root on a node is root over every pod that runs there,
+              their Secrets included. Run <span className="rk-mono">chroot /host</span> for the node’s own tools.
             </span>
           </div>
         </>
@@ -543,16 +647,7 @@ export function ToolDialog({ cluster, clusterName, open, onClose, onSent }: Prop
   return (
     <div className="tb-dlg-wrap">
       <button className="tb-dlg-bd" aria-label="Cancel" tabIndex={-1} onClick={onClose} />
-      <div
-        className="tb-dlg"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="tb-dlg-title"
-        ref={dlg}
-        tabIndex={-1}
-        onKeyDown={trapTab}
-        data-testid="tool-dialog"
-      >
+      <div className="tb-dlg" role="dialog" aria-modal="true" aria-labelledby="tb-dlg-title" ref={dlg} tabIndex={-1} onKeyDown={trapTab} data-testid="tool-dialog">
         <div className="tb-dlg-head">
           <span className="tb-dlg-icon" data-tone={tool === 'node-shell' ? 'err' : undefined}>
             {icon}

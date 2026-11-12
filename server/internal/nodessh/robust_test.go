@@ -175,3 +175,41 @@ func TestTheHandshakeHasADeadlineAndFollowsTheContext(t *testing.T) {
 		t.Fatalf("the context: %v after %s", err, time.Since(start))
 	}
 }
+
+// ADR-137: a backup carries the authority's key, and a console with no
+// authority yet takes it back, so the pairings made with it work again; a
+// console with its own keeps it.
+func TestTheAuthorityComesBackFromABackup(t *testing.T) {
+	ctx := context.Background()
+	ca := NewCA(kube.NewSecretKeyFor(fake.NewClientset(), "221b", "x-ssh-ca", nil))
+	if pem, err := ca.PrivateKey(ctx); err != nil || len(pem) != 0 {
+		t.Fatalf("no authority yet: %d bytes, %v", len(pem), err)
+	}
+	if err := ca.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pem, err := ca.PrivateKey(ctx)
+	if err != nil || !strings.Contains(string(pem), "PRIVATE KEY") {
+		t.Fatalf("the key: %v", err)
+	}
+	fresh := NewCA(kube.NewSecretKeyFor(fake.NewClientset(), "221b", "x-ssh-ca", nil))
+	if err := fresh.Restore(ctx, []byte("not a key")); err == nil || strings.Contains(err.Error(), "not a key") {
+		t.Fatalf("a key that is not one: %v", err)
+	}
+	if err := fresh.Restore(ctx, pem); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Fingerprint() != ca.Fingerprint() || fresh.Fingerprint() == "" {
+		t.Fatalf("fingerprints %q %q", fresh.Fingerprint(), ca.Fingerprint())
+	}
+	other := NewCA(nil)
+	if err := other.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Restore(ctx, pem); !errors.Is(err, ErrHasAuthority) || other.Fingerprint() == ca.Fingerprint() {
+		t.Fatalf("a console with its own authority: %v", err)
+	}
+	if mem, _ := other.PrivateKey(ctx); len(mem) == 0 {
+		t.Fatal("an authority in memory gives its key too")
+	}
+}

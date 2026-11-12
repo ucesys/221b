@@ -25,6 +25,24 @@ export interface SherlockUsage {
   cache_read_input_tokens: number
 }
 
+/** A part of a question one agent handed to another (Phase 12), with what came back. */
+export interface SherlockHand {
+  id: number
+  from: string
+  fromName: string
+  to: string
+  toName: string
+  task: string
+  status: 'running' | 'done' | 'failed' | 'refused' | 'stopped'
+  text?: string
+  error?: string
+  steps?: SherlockStep[]
+  model?: string
+  usage?: SherlockUsage
+  costUSD?: number
+  hands?: SherlockHand[]
+}
+
 export interface SherlockMsg {
   id: number
   role: 'user' | 'sherlock'
@@ -43,6 +61,12 @@ export interface SherlockMsg {
   costUSD?: number
   /** What the answer changed in the asking window's view (P6U-10). */
   view?: { label: string }[]
+  /** Who answered, when not Sherlock (Phase 12). */
+  agent?: string
+  /** The parts handed to other agents, in order (Phase 12). */
+  hands?: SherlockHand[]
+  /** Who asked, in a case's conversation, which the people who work the case share (CF-47). */
+  asker?: string
 }
 
 export interface Conversation {
@@ -60,6 +84,8 @@ export interface SherlockStatus {
   capped?: string
   model: string
   admin: boolean
+  /** Sherlock's setup skill is on: a SuperAdmin's, while Getting started has a step open (Phase 12). */
+  setup?: boolean
 }
 
 export interface SherlockModel {
@@ -136,6 +162,10 @@ export class SherlockError extends Error {
   }
 }
 
+export async function sherlockCall<T>(method: string, path: string, body?: unknown): Promise<T> {
+  return call<T>(method, path, body)
+}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   let res: Response
   try {
@@ -159,8 +189,7 @@ export interface AskContext {
   view: string
 }
 
-export const askSherlock = (cluster: string, question: string, ctx?: AskContext) =>
-  call<Conversation>('POST', apiPath('sherlock/ask', cluster), { question, ...(ctx ? { window: ctx.window, view: ctx.view } : {}) })
+export const askSherlock = (cluster: string, question: string, ctx?: AskContext) => call<Conversation>('POST', apiPath('sherlock/ask', cluster), { question, ...(ctx ? { window: ctx.window, view: ctx.view } : {}) })
 
 /** Sends a window's result of a UI action back to the answer waiting for it (P6U-17). */
 export async function postUIResult(cluster: string, id: string, result: unknown): Promise<void> {
@@ -184,9 +213,11 @@ export const saveSherlockConfig = (s: SherlockSettings) => call<SherlockConfig>(
 export const saveSherlockKey = (key: string) => call<SherlockConfig>('PUT', '/api/v1/sherlock/key', { key })
 export const deleteSherlockKey = () => call<SherlockConfig>('DELETE', '/api/v1/sherlock/key')
 /** The instructions Sherlock gets for a cluster, with the notes given (R2-05). */
-export const fetchSherlockPrompt = (cluster: string, notes: string, instructions: string) => call<{ core: string; cluster: string; builtIn: string }>('GET', `/api/v1/sherlock/prompt?cluster=${encodeURIComponent(cluster)}&notes=${encodeURIComponent(notes)}&instructions=${encodeURIComponent(instructions)}`)
+export const fetchSherlockPrompt = (cluster: string, notes: string, instructions: string) =>
+  call<{ core: string; cluster: string; builtIn: string }>('GET', `/api/v1/sherlock/prompt?cluster=${encodeURIComponent(cluster)}&notes=${encodeURIComponent(notes)}&instructions=${encodeURIComponent(instructions)}`)
 /** One question to Sherlock with the notes and instructions given, answered in full; the conversation is not kept. */
-export const testSherlock = (cluster: string, notes: string, instructions: string, question = '') => call<{ answer: string; model?: string; status?: string; error?: string }>('POST', '/api/v1/sherlock/test', { cluster, notes, instructions, question })
+export const testSherlock = (cluster: string, notes: string, instructions: string, question = '') =>
+  call<{ answer: string; model?: string; status?: string; error?: string }>('POST', '/api/v1/sherlock/test', { cluster, notes, instructions, question })
 
 export interface SherlockState {
   status: SherlockStatus | null

@@ -26,6 +26,7 @@ render k8s-console --set clusterName=ci --set service.type=NodePort --set servic
   --set serviceAccount.name=viewer | tee "$WORK/chart-nopolicy.yaml" | validate
 echo "--- without the kubelets' stats"
 render k8s-console --set clusterName=ci --set kubeletStats=false | tee "$WORK/chart-nostats.yaml" | validate
+render k8s-console --set clusterName=ci --set cases.cleanStart.token=2026-11-07 --set cases.cleanStart.dryRun=true | tee "$WORK/chart-clean.yaml" | validate
 echo "--- without reading Secrets"
 render k8s-console --set clusterName=ci --set secrets.read=false | tee "$WORK/chart-nosecrets.yaml" | validate
 render k8s-console --set clusterName=ci --set connections.store=memory | tee "$WORK/chart-memory.yaml" | validate
@@ -85,12 +86,22 @@ render k8s-console --set clusterName=ci --set rbac.roles.admin.exec=true --set t
 echo "--- SSH to nodes (Phase 11): off, with another login user"
 render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=false --set toolbox.ssh.loginUser=ops | tee "$WORK/chart-ssh-off.yaml" | validate
 render k8s-console --set clusterName=ci --set sherlock.egress=false --set 'networkPolicy.outboundCIDRs[0]=140.82.112.0/20' | tee "$WORK/chart-outbound.yaml" | validate
+render k8s-console --set clusterName=ci --set 'backup.s3.egressCIDRs[0]=10.20.0.0/16' --set 'backup.s3.egressPorts={9000}' | tee "$WORK/chart-backup-s3.yaml" | validate
+render k8s-console --set clusterName=ci --set backup=null | tee "$WORK/chart-backup-reuse.yaml" | validate
+# --- Knowledge (Phase 12): its egress, and values from before it.
+render k8s-console --set clusterName=ci --set 'knowledge.egressCIDRs[0]=10.30.0.0/16' --set 'knowledge.egressPorts={7990}' --set knowledge.consoleURL=https://221b.example.com | tee "$WORK/chart-knowledge.yaml" | validate
+render k8s-console --set clusterName=ci --set knowledge=null | tee "$WORK/chart-knowledge-reuse.yaml" | validate
+render k8s-console --set clusterName=ci --set knowledge.configMapStore.enabled=false | tee "$WORK/chart-knowledge-nowiki.yaml" | validate
+# --- Helm repositories (Phase 12, wave 5): their egress, and values from before it.
+render k8s-console --set clusterName=ci --set 'helmRepositories.egressCIDRs[0]=10.40.0.0/16' --set 'helmRepositories.egressPorts={8443}' | tee "$WORK/chart-helm-repos.yaml" | validate
+render k8s-console --set clusterName=ci --set helmRepositories=null | tee "$WORK/chart-helm-repos-reuse.yaml" | validate
 render k8s-console --set clusterName=ci --set 'service.externalIPs[0]=10.0.0.21' | tee "$WORK/chart-external.yaml" | validate
 render k8s-console --set clusterName=ci --set toolbox.transcripts=pvc | tee "$WORK/chart-pvc.yaml" | validate
 render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true --set rbac.roles.superAdmin.template=readOnly --set rbac.roles.admin.template=full | tee "$WORK/chart-ssh-readonly.yaml" | validate
 render k8s-console --set clusterName=ci --set toolbox.ssh=null | tee "$WORK/chart-ssh-reuse.yaml" | validate
 render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true | tee "$WORK/chart-ssh-on.yaml" | validate
 render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true --set toolbox.ssh.port=2222 --set 'networkPolicy.nodeCIDRs[0]=192.168.1.0/24' | tee "$WORK/chart-ssh-cidr.yaml" | validate
+render k8s-console --set clusterName=ci --set toolbox.ssh.enabled=true --set 'networkPolicy.hostPorts={2200,22}' --set 'networkPolicy.nodeCIDRs[0]=192.168.1.0/24' | tee "$WORK/chart-ssh-hosts.yaml" | validate
 echo "--- image tags that move, tags that do not, a digest and an explicit pull policy"
 render k8s-console --set clusterName=ci --set image.tag=pr-7 | tee "$WORK/chart-moving.yaml" | validate
 render k8s-console --set clusterName=ci --set image.tag=sha-d548f3953839 | tee "$WORK/chart-sha.yaml" | validate
@@ -129,6 +140,57 @@ ssh_egress() {
     ! netpol "$WORK/chart-ssh-off.yaml" | has 'port: 22$' &&
     netpol "$WORK/chart-ssh-cidr.yaml" | grep -A4 'port: 2222$' | has 'cidr: "192.168.1.0/24"'
 }
+# The scheduled backups' S3 endpoint (Phase 12): a rule only when its
+# CIDRs are listed, on its ports; values from an older release have none.
+backup_egress() {
+    netpol "$WORK/chart-backup-s3.yaml" | grep -A6 'port: 9000$' | has 'cidr: "10.20.0.0/16"' &&
+    ! netpol "$WORK/chart-default.yaml" | has 'port: 9000$' &&
+    ! netpol "$WORK/chart-backup-reuse.yaml" | has 'port: 9000$'
+}
+# --- Helm repositories (Phase 12, wave 5): the network policy reaches
+# them only at helmRepositories.egressCIDRs, a rule only when listed.
+helm_repos_egress() {
+    netpol "$WORK/chart-helm-repos.yaml" | grep -A6 'port: 8443$' | has 'cidr: "10.40.0.0/16"' &&
+    ! netpol "$WORK/chart-default.yaml" | has 'port: 8443$' &&
+    ! netpol "$WORK/chart-helm-repos-reuse.yaml" | has 'port: 8443$'
+}
+# Mycroft's knowledge (Phase 12): its records in a ConfigMap of its own,
+# named in the env and the Role; the wiki's local copy in an emptyDir;
+# its sources and store reached at knowledge.egressCIDRs, a rule only when
+# listed; values from an older release take the defaults.
+knowledge_values() {
+  sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-knowledge$' &&
+    grep -A1 'name: KNOWLEDGE_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-knowledge"' &&
+    grep -A1 'name: KNOWLEDGE_DIR' "$out" | has '/var/lib/221b/knowledge' &&
+    grep -A1 'name: KNOWLEDGE_REFRESH_GIT' "$out" | has '"15m"' &&
+    grep -A2 'name: knowledge$' "$out" | has 'sizeLimit: "512Mi"' &&
+    grep -B1 'mountPath: /var/lib/221b/knowledge' "$out" | has 'name: knowledge' &&
+    ! grep -q 'name: CONSOLE_URL' "$out" &&
+    grep -A1 'name: CONSOLE_URL' "$WORK/chart-knowledge.yaml" | has '"https://221b.example.com"' &&
+    grep -A1 'name: KNOWLEDGE_REFRESH_S3' "$WORK/chart-knowledge-reuse.yaml" | has '"5m"' &&
+    netpol "$WORK/chart-knowledge.yaml" | grep -A6 'port: 7990$' | has 'cidr: "10.30.0.0/16"' &&
+    ! netpol "$out" | has 'cidr: "10.30.0.0/16"' &&
+    ! netpol "$WORK/chart-knowledge-reuse.yaml" | has 'port: 7990$'
+}
+# The temporary wiki store (CF-57): its ConfigMap, named in the env and the
+# Role, on by default and with values from an older release; none with
+# knowledge.configMapStore.enabled=false.
+wiki_configmap() {
+  sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-wiki$' &&
+    grep -A1 'name: WIKI_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-wiki"' &&
+    grep -A1 'name: WIKI_CONFIGMAP' "$WORK/chart-knowledge-reuse.yaml" | has '"consoles/k8s-console-221b-wiki"' &&
+    ! grep -q 'k8s-console-221b-wiki' "$WORK/chart-knowledge-nowiki.yaml" &&
+    ! grep -q 'name: WIKI_CONFIGMAP' "$WORK/chart-knowledge-nowiki.yaml"
+}
+# Hosts outside Kubernetes (Phase 12) are reached on the same rule: their
+# other SSH ports are added once, to the same CIDRs; with SSH off, none.
+host_ports() {
+  render k8s-console --set clusterName=ci --set 'networkPolicy.hostPorts={2200}' > "$WORK/chart-hosts-off.yaml"
+  [ "$(netpol "$WORK/chart-ssh-hosts.yaml" | grep -c 'port: 22$')" = 1 ] &&
+    netpol "$WORK/chart-ssh-hosts.yaml" | grep -A6 'port: 22$' | has 'port: 2200$' &&
+    netpol "$WORK/chart-ssh-hosts.yaml" | grep -A6 'port: 2200$' | has 'cidr: "192.168.1.0/24"' &&
+    ! netpol "$WORK/chart-hosts-off.yaml" | has 'port: 2200$'
+}
 # The Secret with the local accounts, the OIDC client secret and such; the
 # replicas' proxy token is a Secret of its own, always there.
 automation_configmap() {
@@ -141,9 +203,87 @@ automation_configmap() {
   off=$(render k8s-console --set clusterName=ci --set automation.enabled=false)
   ! grep -q 'k8s-console-221b-automation' <<<"$off" && grep -A1 'name: AUTOMATION$' <<<"$off" | has '"false"'
 }
+issues_values() {
+  # On by default (Phase 12): a ConfigMap of its own, named in the env and
+  # in the settings Role, and who reports and triages; reporter groups and
+  # local reporter groups reach the auth file and bind nothing; off, the
+  # report page is off and the ConfigMap stays, for the cases (wave 5).
+  local off reporters
+  sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-issues$' &&
+    grep -A1 'name: ISSUES_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-issues"' &&
+    grep -A1 'name: ISSUES_REPORT_ROLES' "$out" | has '"superAdmin,superViewer,admin,viewer"' &&
+    grep -A1 'name: ISSUES_OPERATOR_ROLES' "$out" | has '"superAdmin,admin"' || return 1
+  off=$(render k8s-console --set clusterName=ci --set issues.enabled=false)
+  sed -n '/^kind: ConfigMap$/,/^---/p' <<<"$off" | has '^  name: k8s-console-221b-issues$' && grep -A1 'name: ISSUES_CONFIGMAP' <<<"$off" | has '"consoles/k8s-console-221b-issues"' &&
+    grep -q '"k8s-console-221b-issues"' <<<"$off" && grep -A1 'name: ISSUES$' <<<"$off" | has '"false"' || return 1
+  reporters=$(render k8s-console --set clusterName=ci --set 'issues.reporterGroups[0]=staff' \
+    --set 'auth.local.groups[0].name=helpdesk' --set 'auth.local.groups[0].role=reporter')
+  has '"reporterGroups": \[' <<<"$reporters" && has '"role": "reporter"' <<<"$reporters" && ! grep -q 'RoleBinding.*helpdesk\|221b-reporter-' <<<"$reporters" || return 1
+  ! render k8s-console --set clusterName=ci --set 'issues.operatorRoles[0]=reporter' >/dev/null 2>&1 &&
+    ! render k8s-console --set clusterName=ci --set 'auth.local.groups[0].name=helpdesk' --set 'auth.local.groups[0].role=reporter' --set 'auth.local.groups[0].namespaces[0]=web' >/dev/null 2>&1
+}
+# The AI agents (Phase 12): their records in a ConfigMap of their own, named
+# in the env and the Role; the baselines from values in another, mounted,
+# with a checksum that restarts the console when they change.
+ai_configmaps() {
+  local with
+  sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-ai$' &&
+    grep -A1 'name: AI_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-ai"' &&
+    grep -A1 'name: AGENTS_DIR' "$out" | has '/etc/221b/agents' || return 1
+  with=$(render k8s-console --set clusterName=ci --set agents.troubleshooter.instructions='Cite our runbooks.')
+  grep -q '^  troubleshooter.md: "Cite our runbooks."$' <<<"$with" &&
+    [ "$(grep 'checksum/agents' <<<"$with")" != "$(grep 'checksum/agents' "$out")" ] &&
+    ! render k8s-console --set clusterName=ci --set agents.watson.instructions=x > /dev/null 2>&1
+}
+# The agents' proposed changes (Phase 12): their records in a ConfigMap of
+# their own, <release>-proposals since CF-104, named in the env and the
+# Role, approved by cases.approverRoles. <release>-cases, where builds
+# before kept them, is still made, for the console's one copy at start,
+# and no longer named in the env or the Role.
+cases_values() {
+  sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-proposals$' &&
+    sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-cases$' &&
+    grep -A1 'name: PROPOSALS_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-proposals"' &&
+    ! grep -q 'name: CASES_CONFIGMAP' "$out" &&
+    grep -A1 'name: CASES_APPROVER_ROLES' "$out" | has '"superAdmin,admin"' || return 1
+  grep -A1 'name: CASES_APPROVER_ROLES' <<<"$(render k8s-console --set clusterName=ci --set 'cases.approverRoles[0]=viewer')" | has '"viewer"' &&
+    ! render k8s-console --set clusterName=ci --set 'cases.approverRoles[0]=reporter' >/dev/null 2>&1
+}
+# --- Jobs (Phase 12): their records in a ConfigMap of their own, named in
+# the env and the Role; the time zone of new schedules only when set.
+jobs_configmap() {
+  local with
+  sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-runs$' &&
+    grep -A1 'name: RUNS_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-runs"' &&
+    grep -q '"k8s-console-221b-runs"' "$out" && ! grep -q 'name: JOBS_TIME_ZONE' "$out" || return 1
+  with=$(render k8s-console --set clusterName=ci --set jobs.timeZone=Europe/Berlin)
+  grep -A1 'name: JOBS_TIME_ZONE' <<<"$with" | has '"Europe/Berlin"'
+}
+# --- Case work (Phase 12): the cases in a ConfigMap of their own, named
+# in the env and the Role.
+casework_configmap() {
+  sed -n '/^kind: ConfigMap$/,/^---/p' "$out" | has '^  name: k8s-console-221b-casework$' &&
+    grep -A1 'name: CASEWORK_CONFIGMAP' "$out" | has '"consoles/k8s-console-221b-casework"' &&
+    grep -q '"k8s-console-221b-casework"' "$out"
+}
+# --- One flow for findings and cases (Phase 12, wave 6): each case is a
+# ConfigMap the console makes, <release>-case-<n>, named by a prefix and
+# the release in the env; the Role grants ConfigMaps in the namespace only
+# (a Role, never the ClusterRole), without resourceNames, since the names
+# do not exist yet; the clean start's token and dry run reach the env.
+case_configmaps() {
+  grep -A1 'name: CASE_CONFIGMAPS' "$out" | has '"consoles/k8s-console-221b-case-"' &&
+    grep -A1 'name: CASE_INSTANCE' "$out" | has '"k8s-console"' &&
+    settings_role | grep -B2 'verbs: \["create", "list", "get", "update", "patch", "delete"\]' | has 'resources: \["configmaps"\]' &&
+    ! settings_role | grep -A1 'verbs: \["create", "list", "get", "update", "patch", "delete"\]' | has 'resourceNames' &&
+    grep -A1 'name: CASES_CLEAN_START_TOKEN' "$out" | has 'value: ""' &&
+    grep -A1 'name: CASES_CLEAN_START_DRY_RUN' "$out" | has '"false"' &&
+    grep -A1 'name: CASES_CLEAN_START_TOKEN' "$WORK/chart-clean.yaml" | has '"2026-11-07"' &&
+    grep -A1 'name: CASES_CLEAN_START_DRY_RUN' "$WORK/chart-clean.yaml" | has '"true"'
+}
 auth_secret() { sed -n '/^kind: Secret$/,/^---/p' "$1" | has '^  name: k8s-console-221b-auth$'; }
 kinds() {
-  [ "$(grep -E '^kind: ' "$out" | sort | uniq -c | awk '{ printf "%s=%s ", $3, $1 }')" = "ClusterRole=6 ClusterRoleBinding=4 ConfigMap=7 Deployment=1 Lease=1 Namespace=1 NetworkPolicy=2 Role=1 RoleBinding=1 Secret=2 Service=1 ServiceAccount=1 " ]
+  [ "$(grep -E '^kind: ' "$out" | sort | uniq -c | awk '{ printf "%s=%s ", $3, $1 }')" = "ClusterRole=6 ClusterRoleBinding=4 ConfigMap=16 Deployment=1 Lease=1 Namespace=1 NetworkPolicy=2 Role=1 RoleBinding=1 Secret=2 Service=1 ServiceAccount=1 " ]
 }
 # Sign-in: local accounts by default, with the (empty) account list in a
 # Secret mounted as a file; OIDC with its client secret from a Secret;
@@ -260,9 +400,9 @@ sherlock_key() {
     ! grep -q 'name: SHERLOCK_SECRET' "$WORK/chart-sherlock.yaml"
 }
 settings_only() {
-  settings_role | has 'resources: \["configmaps"\]' && settings_role | has 'resourceNames: \["k8s-console-221b", "k8s-console-221b-audit", "k8s-console-221b-sessions", "k8s-console-221b-automation", "k8s-console-221b-automation-runs"\]' &&
-    [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","list","watch","patch","update"] verbs:["create"] verbs:["get","update"] verbs:["get","list","watch","create","update","delete"] ' ] &&
-    [ "$(grep -E 'verbs:' "$out" | grep -c -E 'update|delete|\*')" = 3 ]
+  settings_role | has 'resources: \["configmaps"\]' && settings_role | has 'resourceNames: \["k8s-console-221b", "k8s-console-221b-audit", "k8s-console-221b-sessions", "k8s-console-221b-ai", "k8s-console-221b-knowledge", "k8s-console-221b-wiki", "k8s-console-221b-runs", "k8s-console-221b-automation", "k8s-console-221b-automation-runs", "k8s-console-221b-issues", "k8s-console-221b-proposals", "k8s-console-221b-cases", "k8s-console-221b-casework"\]' &&
+    [ "$(settings_role | grep -E 'verbs:' | tr -d ' ' | tr '\n' ' ')" = 'verbs:["get","list","watch","patch","update"] verbs:["create","list","get","update","patch","delete"] verbs:["create"] verbs:["get","update"] verbs:["get"] verbs:["get","list","watch","create","update","delete"] ' ] &&
+    [ "$(grep -E 'verbs:' "$out" | grep -c -E 'update|delete|\*')" = 4 ]
 }
 # The connections to other clusters: Secrets in the release namespace, by
 # default; in memory on request, and then nothing is granted on Secrets.
@@ -272,6 +412,13 @@ connections_store() {
     ! sed -n '/^kind: Role$/,/^---/p' "$WORK/chart-memory.yaml" | has 'secrets' &&
     ! grep -q 'CONNECTIONS_SECRETS' "$WORK/chart-memory.yaml" &&
     ! render k8s-console --set clusterName=ci --set connections.store=disk > /dev/null 2>&1
+}
+# The backups' key (ADR-137): its Secret named and only read; nothing on
+# Secrets with connections in memory, where there is no key.
+backup_key() {
+  settings_role | grep -A2 'resourceNames: \["k8s-console-221b-backup-key"\]' | has 'verbs: \["get"\]' &&
+    ! sed -n '/^kind: Role$/,/^---/p' "$WORK/chart-memory.yaml" | has 'backup-key' &&
+    grep -q 'backup-key' "$CHART/templates/NOTES.txt"
 }
 no_kubelet_stats() {
   grep -q 'nodes/proxy' "$out" && ! grep -q 'nodes/proxy' "$WORK/chart-nostats.yaml" &&
@@ -463,6 +610,7 @@ check "pod logs are only read" log_verbs
 check "secrets.read=false grants nothing on Secrets and tells the server" secrets_optional
 check "it writes only its own settings ConfigMap and the connection Secrets in its namespace" settings_only
 check "connections are kept in Secrets in the release namespace, or in memory on request" connections_store
+check "the backups' key Secret is named in the Role and only read" backup_key
 check "kubeletStats=false grants nothing on the kubelets" no_kubelet_stats
 check "the settings ConfigMap is created empty and named to the server" settings_configmap
 check "column choices stay in the browser: nothing about preferences reaches the server" no_user_prefs
@@ -504,6 +652,17 @@ check "node shells run in a namespace of their own at Pod Security privileged, c
 check "SSH to nodes is in the toolbox config, off by default with port 22 and root, and a value of its own when asked" ssh_values
 check "a read-only SuperAdmin definition, or values kept from an older release, leave SSH off and its egress out" ssh_gated
 check "the network policy lets the console reach sshd on the nodes only with SSH on, narrowed to networkPolicy.nodeCIDRs" ssh_egress
+check "the network policy lets the console reach the backups' S3 endpoint only at backup.s3.egressCIDRs" backup_egress
+check "hosts outside Kubernetes are reached on the SSH rule, with their own ports when listed" host_ports
+check "the network policy lets the console reach the Helm repositories only at helmRepositories.egressCIDRs" helm_repos_egress
 check "Admin forwards ports and starts debug pods, and opens shells only when asked" admin_exec
 check "Automation keeps its records in a ConfigMap of its own, named in the env and the Role; off, neither" automation_configmap
+check "the AI agents keep their records in a ConfigMap of their own, and their baselines come from values, mounted" ai_configmaps
+check "the issue service keeps its records in a ConfigMap of its own, named in the env and the Role, with its roles and reporter groups; off, the report page is off and the cases keep the ConfigMap" issues_values
+check "Mycroft's knowledge keeps its records in a ConfigMap of its own, its local copy in an emptyDir, and reaches its sources only at knowledge.egressCIDRs" knowledge_values
+check "the temporary wiki store has a ConfigMap of its own, named in the env and the Role, and none when knowledge.configMapStore.enabled is false" wiki_configmap
+check "the jobs keep their runs in a ConfigMap of their own, named in the env and the Role; the time zone of new schedules when set" jobs_configmap
+check "the cases are kept in a ConfigMap of their own, named in the env and the Role" casework_configmap
+check "each case is a ConfigMap the console makes in its namespace, granted by the Role without names, with the clean start's values in the env" case_configmaps
+check "the agents' proposed changes keep their records in a ConfigMap of their own, <release>-proposals, named in the env and the Role, with who approves them; <release>-cases stays, readable, for the copy at start" cases_values
 exit "$fail"

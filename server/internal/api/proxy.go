@@ -49,9 +49,10 @@ var localPaths = []string{"/api/v1/me", "/api/v1/admin/users", "/api/v1/admin/ld
 // replica-local ones, so a new data route is forwarded unless it is
 // listed here. The leader reads the clusters, so only it has their rows,
 // usage figures and connection states, and only it runs Sherlock, Watson,
-// the Toolbox and the applications.
+// the Toolbox and the applications. The issue service's API is the
+// leader's too (Phase 12): its investigations run there.
 func leaderOnly(path string) bool {
-	if !strings.HasPrefix(path, "/api/v1/") {
+	if !strings.HasPrefix(path, "/api/v1/") && !strings.HasPrefix(path, "/api/issues/") {
 		return false
 	}
 	for _, p := range localPaths {

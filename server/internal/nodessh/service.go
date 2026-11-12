@@ -38,6 +38,18 @@ type Options struct {
 	CertTTL time.Duration
 	// Handshake bounds the SSH handshake after the TCP connect.
 	Handshake time.Duration
+	// Hosts are the machines outside Kubernetes reached by SSH (Phase 12);
+	// nil has none. IsNode says whether a cluster has a node of that name,
+	// which a host may not take.
+	Hosts  *Hosts
+	IsNode func(cluster, name string) bool
+	// OnRename carries a host's new name, its hostname, to what names it
+	// elsewhere: the lists of nodes in the settings. Nil carries it nowhere.
+	OnRename func(ctx context.Context, cluster, from, to string)
+	// Mask wraps a pairing session's output so the bootstrap credential
+	// never reaches it (automation.NewMask); nil masks the whole output
+	// once it ended.
+	Mask func(w io.Writer, secrets []string) io.Writer
 }
 
 // Service implements sessions.SSH.
@@ -74,6 +86,18 @@ func (s *Service) Fingerprint() string {
 		return ""
 	}
 	return s.opts.CA.Fingerprint()
+}
+
+// AuthorityKey is the authority's private key, PEM, for a backup that
+// seals it (ADR-137).
+func (s *Service) AuthorityKey(ctx context.Context) ([]byte, error) {
+	return s.opts.CA.PrivateKey(ctx)
+}
+
+// RestoreAuthority puts back the authority's key from a backup, on a
+// console with no authority yet.
+func (s *Service) RestoreAuthority(ctx context.Context, pem []byte) error {
+	return s.opts.CA.Restore(ctx, pem)
 }
 
 // List is a cluster's pairings.
@@ -148,14 +172,25 @@ func (s *Service) Dial(ctx context.Context, cluster, node string, owner sessions
 
 // connect opens an SSH connection to a paired node with a certificate
 // whose key ID is keyID: the pairing's login user and port, the pinned
-// host keys.
+// host keys. A host is reached at its own address, and not at all while
+// it shows another key than the pinned one.
 func (s *Service) connect(ctx context.Context, cluster, node, keyID string) (*ssh.Client, Pairing, string, error) {
 	p, ok, err := s.opts.Pairings.Get(ctx, cluster, node)
 	if err != nil {
 		return nil, p, "", fmt.Errorf("reading the pairings: %w", err)
 	}
+	host, isHost, err := s.host(ctx, cluster, node)
+	if err != nil {
+		return nil, p, "", err
+	}
 	if !ok {
+		if isHost {
+			return nil, p, "", fmt.Errorf("host %s is not paired for SSH: pair it from the Nodes tab", node)
+		}
 		return nil, p, "", fmt.Errorf("node %s is not paired for SSH: pair it first, from its Tools menu", node)
+	}
+	if isHost && host.Mismatch != "" {
+		return nil, p, "", hostKeyChanged(node)
 	}
 	if err := s.opts.CA.Load(ctx); err != nil {
 		return nil, p, "", err
@@ -170,8 +205,10 @@ func (s *Service) connect(ctx context.Context, cluster, node, keyID string) (*ss
 	if err != nil {
 		return nil, p, "", fmt.Errorf("the pinned host keys of node %s are not readable: pair it again", node)
 	}
-	addr, err := s.opts.NodeAddr(cluster, node)
-	if err != nil {
+	var addr string
+	if isHost {
+		addr = host.Address
+	} else if addr, err = s.opts.NodeAddr(cluster, node); err != nil {
 		return nil, p, "", err
 	}
 	signer, err := s.opts.CA.Sign(keyID, []string{p.Principal}, s.opts.CertTTL, time.Now())
@@ -179,11 +216,6 @@ func (s *Service) connect(ctx context.Context, cluster, node, keyID string) (*ss
 		return nil, p, "", err
 	}
 	hostPort := net.JoinHostPort(addr, strconv.Itoa(p.Port))
-	dialer := net.Dialer{Timeout: dialTimeout}
-	conn, err := dialer.DialContext(ctx, "tcp", hostPort)
-	if err != nil {
-		return nil, p, hostPort, fmt.Errorf("connecting to %s: %w", hostPort, err)
-	}
 	var mismatch error
 	var verified ssh.PublicKey
 	cfg := &ssh.ClientConfig{
@@ -201,19 +233,21 @@ func (s *Service) connect(ctx context.Context, cluster, node, keyID string) (*ss
 			// The fingerprints go to the log, not to the page (asked
 			// October 30, 2026).
 			s.opts.Logger.Warn("SSH host key mismatch", "node", node, "presented", key.Type()+" "+ssh.FingerprintSHA256(key), "paired", fingerprints(pinned))
+			if isHost {
+				s.hostKeyMismatch(cluster, node, key)
+				mismatch = hostKeyChanged(node)
+				return mismatch
+			}
 			mismatch = fmt.Errorf("node %s presented a host key that is not among those it was paired with: the node was reinstalled, or something sits between; pair it again once you know which", node)
 			return mismatch
 		},
 	}
-	// NewClientConn has no deadline of its own and does not see ctx: the
-	// socket carries both, or a node that takes the connection and says
-	// nothing would hold the session for good.
-	_ = conn.SetDeadline(time.Now().Add(s.opts.Handshake))
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
-	c, chans, reqs, err := ssh.NewClientConn(conn, hostPort, cfg)
+	c, err := s.dial(ctx, hostPort, cfg)
 	if err != nil {
-		stop()
-		conn.Close()
+		var ce connectError
+		if errors.As(err, &ce) {
+			return nil, p, hostPort, err
+		}
 		if mismatch != nil {
 			return nil, p, hostPort, mismatch
 		}
@@ -222,13 +256,38 @@ func (s *Service) connect(ctx context.Context, cluster, node, keyID string) (*ss
 		}
 		return nil, p, hostPort, fmt.Errorf("SSH to %s as %s: %w", hostPort, p.LoginUser, err)
 	}
+	s.opts.Logger.Info("SSH connected", "node", node, "addr", hostPort, "user", p.LoginUser, "hostKey", verified.Type()+" "+ssh.FingerprintSHA256(verified), "keyID", keyID)
+	return c, p, hostPort, nil
+}
+
+// connectError is a TCP connect that failed: it says so itself.
+type connectError struct{ error }
+
+func (e connectError) Unwrap() error { return e.error }
+
+// dial connects and shakes hands. NewClientConn has no deadline of its
+// own and does not see ctx: the socket carries both, or a machine that
+// takes the connection and says nothing would hold the caller for good.
+func (s *Service) dial(ctx context.Context, hostPort string, cfg *ssh.ClientConfig) (*ssh.Client, error) {
+	dialer := net.Dialer{Timeout: dialTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", hostPort)
+	if err != nil {
+		return nil, connectError{fmt.Errorf("connecting to %s: %w", hostPort, err)}
+	}
+	_ = conn.SetDeadline(time.Now().Add(s.opts.Handshake))
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	c, chans, reqs, err := ssh.NewClientConn(conn, hostPort, cfg)
+	if err != nil {
+		stop()
+		conn.Close()
+		return nil, err
+	}
 	if !stop() {
 		c.Close()
-		return nil, p, hostPort, ctx.Err()
+		return nil, ctx.Err()
 	}
 	_ = conn.SetDeadline(time.Time{})
-	s.opts.Logger.Info("SSH connected", "node", node, "addr", hostPort, "user", p.LoginUser, "hostKey", verified.Type()+" "+ssh.FingerprintSHA256(verified), "keyID", keyID)
-	return ssh.NewClient(c, chans, reqs), p, hostPort, nil
+	return ssh.NewClient(c, chans, reqs), nil
 }
 
 // ErrUnreachable wraps a failure to connect to a node, as opposed to a

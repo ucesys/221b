@@ -55,7 +55,6 @@ export function RbacPanel({ keyOf, roles, bindings, now, onClose, onOpen, onToas
   const status = role ? roleStatus(role.powers) : null
   const boundBy = role ? bindings.filter((b) => roleKeyOf(b) === role.key) : []
 
-
   return (
     <Drawer
       ask={`What does ${kind} ${name} allow, and who has it?`}
@@ -93,20 +92,32 @@ export function RbacPanel({ keyOf, roles, bindings, now, onClose, onOpen, onToas
           {binding && (
             <>
               <span>
-                Role <span className="rk-mono" style={{ color: 'var(--fg)' }}>{binding.roleName}</span>
+                Role{' '}
+                <span className="rk-mono" style={{ color: 'var(--fg)' }}>
+                  {binding.roleName}
+                </span>
               </span>
               <span>
-                Subjects <span className="rk-num" style={{ color: 'var(--fg)' }}>{binding.subjects.length}</span>
+                Subjects{' '}
+                <span className="rk-num" style={{ color: 'var(--fg)' }}>
+                  {binding.subjects.length}
+                </span>
               </span>
             </>
           )}
           {role && (
             <>
               <span>
-                Rules <span className="rk-num" style={{ color: 'var(--fg)' }}>{role.rules.length}</span>
+                Rules{' '}
+                <span className="rk-num" style={{ color: 'var(--fg)' }}>
+                  {role.rules.length}
+                </span>
               </span>
               <span>
-                Bindings <span className="rk-num" style={{ color: 'var(--fg)' }}>{boundBy.length}</span>
+                Bindings{' '}
+                <span className="rk-num" style={{ color: 'var(--fg)' }}>
+                  {boundBy.length}
+                </span>
               </span>
             </>
           )}
@@ -172,7 +183,11 @@ export function RbacPanel({ keyOf, roles, bindings, now, onClose, onOpen, onToas
               <Card title="Role">
                 <Item
                   main={`${binding.roleKind} ${binding.roleName}`}
-                  sub={roleOfBinding ? [purpose(roleOfBinding), `${nWord(roleOfBinding.rules.length, 'rule', 'rules')}${roleOfBinding.powers.length ? ' · ' + roleOfBinding.powers.join(', ') : ''}`].filter(Boolean).join('\n') : 'not in the cluster'}
+                  sub={
+                    roleOfBinding
+                      ? [purpose(roleOfBinding), `${nWord(roleOfBinding.rules.length, 'rule', 'rules')}${roleOfBinding.powers.length ? ' · ' + roleOfBinding.powers.join(', ') : ''}`].filter(Boolean).join('\n')
+                      : 'not in the cluster'
+                  }
                   action={
                     roleOfBinding && (
                       <button className="rk-link" onClick={() => onOpen(roleOfBinding.key)} data-testid="rbac-open-role">
@@ -210,7 +225,7 @@ export function RbacPanel({ keyOf, roles, bindings, now, onClose, onOpen, onToas
                 items={[
                   ['Purpose', purpose(role) || '—'],
                   ['Notable', role.powers.join(', ') || 'nothing broad'],
-                  ...(role.aggregated ? ([['Aggregated', 'its rules are gathered from ClusterRoles labelled to join it']] as [string, string][]) : []),
+                  ...(role.aggregated ? ([['Aggregated', 'its rules are gathered from ClusterRoles labeled to join it']] as [string, string][]) : []),
                   ['Source', sourceText(role.source)],
                   ['Created', role.created ? `${fmtTs(role.created)} · ${fmtAge(role.created, now)} ago` : '—'],
                 ]}

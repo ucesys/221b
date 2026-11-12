@@ -2,6 +2,8 @@ package watson
 
 import (
 	"errors"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -182,5 +184,39 @@ func TestTaintTakesNodesAndATaint(t *testing.T) {
 		if !errors.As(err, &r) || r.Rule != "usage" {
 			t.Errorf("%s: %v", line, err)
 		}
+	}
+}
+
+// The sentence the agents are told names every command Watson runs, each
+// in the part of its tool and kind (S-1), and the kinds it says delete
+// takes are ones Watson deletes.
+func TestCommandsNamesEveryCommand(t *testing.T) {
+	text := Commands()
+	if !strings.HasPrefix(text, "Watson runs ") || !strings.HasSuffix(text, ".") {
+		t.Fatalf("sentence: %q", text)
+	}
+	parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(text, "Watson runs "), "."), "; ")
+	for _, change := range []bool{false, true} {
+		for _, name := range Supported(change) {
+			tool, verb, _ := strings.Cut(name, " ")
+			found := false
+			for _, p := range parts {
+				p = strings.TrimPrefix(p, "and ")
+				if strings.HasPrefix(p, tool+" ") && regexp.MustCompile(`[ ,]`+regexp.QuoteMeta(verb)+`\b`).MatchString(p) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s is not in %q", name, text)
+			}
+		}
+	}
+	for _, line := range []string{"kubectl delete pod api-0 -n web", "kubectl delete pvc data-0 -n web", "kubectl delete secret old -n web", "kubectl delete namespace old"} {
+		if _, err := Parse(line); err != nil {
+			t.Errorf("%s: %v", line, err)
+		}
+	}
+	if !strings.Contains(text, "delete pod (or one pvc, secret or namespace, by name)") || !strings.Contains(text, "helm rollback, install, upgrade and uninstall") {
+		t.Errorf("sentence: %q", text)
 	}
 }

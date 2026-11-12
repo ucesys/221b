@@ -1,5 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { askSherlock, newSherlockChat, stopSherlock, SherlockError, usd, type SherlockMsg, type SherlockRef, type SherlockState } from '../api/sherlock'
+import { askSherlock, newSherlockChat, stopSherlock, SherlockError, usd, type SherlockHand, type SherlockMsg, type SherlockRef, type SherlockState } from '../api/sherlock'
+import { useShowCosts } from '../lib/costs'
+import { saveTestCase } from '../api/ai'
 import { Markdown } from '../lib/markdown'
 import { peekClickHash } from '../lib/peek'
 import { clusterHref, currentRoute, FIRST_TAB } from '../lib/router'
@@ -10,6 +12,9 @@ import { useWatsonApi } from './Watson'
 import { isUndone, onUndone } from '../lib/uiControl'
 import { askContext, askUndo, followedWindow } from '../lib/uiWindow'
 import { copyText } from '../lib/clipboard'
+import { sherlockSummary } from '../lib/reportLink'
+import { ReportPageLink } from './aiops/ReportPageLink'
+import { mayReport, useIssueMe } from '../lib/cases'
 
 // ---------- asking from anywhere ----------
 
@@ -66,7 +71,9 @@ function CodeBlock({ text, lang, open, why, draft }: { text: string; lang: strin
       <pre aria-label={shell ? 'Commands' : 'Code'}>{text}</pre>
       {!open && (
         <div>
-          {commands && watson.available && !draft && (
+          {/* On a case (CF-48), the commands go to the case's Watson, which asks before it runs them. */}
+          {commands && watson.available && !draft && watson.onCase && <RunInWatson onClick={() => watson.send(text, { from: 'Sherlock', why })} />}
+          {commands && watson.available && !draft && !watson.onCase && (
             <button
               className="rk-btn"
               data-on={sent ? 'false' : 'true'}
@@ -92,6 +99,26 @@ function CodeBlock({ text, lang, open, why, draft }: { text: string; lang: strin
   )
 }
 
+/**
+ * Run in Watson on a case (CF-48): the same button on Sherlock's commands
+ * and on the case's suggested fix. It hands the command to the drawer's
+ * Watson, which asks before it runs, as the dock's Watson does.
+ */
+export function RunInWatson({ onClick, disabled, testId = 'sherlock-run-watson', title }: { onClick: () => void; disabled?: boolean; testId?: string; title?: string }) {
+  const { onCase } = useWatsonApi()
+  const tip =
+    title ??
+    (onCase === 'proposal'
+      ? 'Hands the command to Watson beside the proposed change. Nothing runs until you approve it there; it runs as you.'
+      : 'Hands the command to Watson beside the case. Nothing runs until you approve it there; it runs as you.')
+  return (
+    <button className="rk-btn" data-on="true" onClick={onClick} disabled={disabled} title={tip} data-testid={testId}>
+      <WatsonIcon />
+      Run in Watson
+    </button>
+  )
+}
+
 function Steps({ m }: { m: SherlockMsg }) {
   if (!m.steps?.length) return null
   return (
@@ -103,6 +130,114 @@ function Steps({ m }: { m: SherlockMsg }) {
           {s.status === 'failed' && <span className="rk-sr"> (did not succeed)</span>}
         </span>
       ))}
+    </div>
+  )
+}
+
+/** An agent named in a sentence: "the Troubleshooter", but "Mycroft". */
+export function agentRef(name: string): string {
+  return name === 'Sherlock' || name === 'Mycroft' ? name : `the ${name}`
+}
+
+const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+
+/**
+ * The parts of an answer handed to other agents (Phase 12): "Sherlock asked
+ * the Troubleshooter: …", opening to what it read and what came back, with
+ * its own hand-overs inside, its model and, for an administrator, its cost.
+ */
+export function Hands({ hands, link, admin }: { hands?: SherlockHand[]; link: (url: string, label: string) => ReactNode | null; admin: boolean }) {
+  // Show costs (CF-40): off, no cost for anyone.
+  const costs = useShowCosts()
+  if (!hands?.length) return null
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="sherlock-hands">
+      {hands.map((h) => (
+        <details key={h.id} open={h.status === 'running'} data-testid="sherlock-hand" data-status={h.status} data-agent={h.to} style={{ border: '1px solid var(--line)', borderRadius: 8, background: 'var(--sunken)' }}>
+          <summary style={{ cursor: 'pointer', padding: '7px 10px', fontSize: 12.5, color: 'var(--fg2)' }}>
+            {capital(agentRef(h.fromName))} asked <strong>{agentRef(h.toName)}</strong>
+            {h.task ? `: ${h.task.length > 160 ? h.task.slice(0, 160) + '…' : h.task}` : ''}
+            {h.model && (
+              <>
+                {' · '}
+                <span className="rk-mono">{h.model}</span>
+              </>
+            )}
+            {admin && costs && h.costUSD ? ` · ${usd(h.costUSD)}` : ''}
+            {h.status === 'running' && <span className="rk-spin rk-spin-ui" aria-label="working" style={{ marginLeft: 6 }} />}
+          </summary>
+          <div style={{ padding: '0 12px 10px', display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12.5 }}>
+            {!!h.steps?.length && (
+              <div className="rk-steps">
+                {h.steps.map((s, i) => (
+                  <span key={i} data-status={s.status}>
+                    {s.status === 'done' ? <CheckIcon /> : s.status === 'failed' ? <CrossIcon /> : <span className="rk-spin rk-spin-ui" aria-hidden="true" />}
+                    {s.label}
+                  </span>
+                ))}
+              </div>
+            )}
+            <Hands hands={h.hands} link={link} admin={admin} />
+            {h.text && (
+              <div className="rk-ans-body" data-testid="sherlock-hand-text">
+                <Markdown text={h.text} link={link} code={(text, lang, _open, key) => <CodeBlock key={key} text={text} lang={lang} open={false} draft />} />
+              </div>
+            )}
+            {(h.status === 'failed' || h.status === 'refused') && (
+              <p className="rk-t" data-tone="warn" style={{ margin: 0 }}>
+                {h.error || 'It could not finish.'}
+              </p>
+            )}
+          </div>
+        </details>
+      ))}
+    </div>
+  )
+}
+
+/** Saves an answer as a test case of the agent that gave it (Phase 12): for a SuperAdmin. */
+function SaveCase({ m, cluster, onToast }: { m: SherlockMsg; cluster: string; onToast: (msg: string) => void }) {
+  const [busy, setBusy] = useState(false)
+  return (
+    <button
+      className="rk-link"
+      style={{ fontSize: 11, alignSelf: 'flex-start' }}
+      disabled={busy}
+      data-testid="sherlock-save-case"
+      onClick={async () => {
+        setBusy(true)
+        try {
+          const c = await saveTestCase(cluster, m.id, '', [])
+          onToast(`Saved as test case ${c.id}, with its tool results recorded: it runs with the agent’s tests in Settings › Agents.`)
+        } catch (e) {
+          onToast(e instanceof Error ? e.message : String(e))
+        } finally {
+          setBusy(false)
+        }
+      }}
+    >
+      Save as test case
+    </button>
+  )
+}
+
+/**
+ * Report this (Phase 12, CS-18): once a conversation has ended, an offer to
+ * report the problem if it is not fixed, which opens the report page with
+ * the last question and answer filled in, for the person to edit first.
+ */
+function ReportThis({ msgs, clusterName }: { msgs: SherlockMsg[]; clusterName: string }) {
+  const im = useIssueMe()
+  const last = msgs[msgs.length - 1]
+  if (!mayReport(im) || !last || last.role !== 'sherlock' || !(last.status === 'done' || last.status === 'failed' || last.status === 'stopped')) return null
+  const answer = last.text || last.error || ''
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, padding: '8px 10px', border: '1px dashed var(--line2)', borderRadius: 8, fontSize: 12.5, color: 'var(--fg2)' }} data-testid="sherlock-report-box">
+      Still broken, or someone else should look?
+      <ReportPageLink text={() => sherlockSummary(clusterName, questionBefore(msgs, last.id) ?? '', answer)} testId="sherlock-report">
+        Report this ↗
+      </ReportPageLink>
+      <span>Opens the report page with this summary filled in, for you to edit before sending.</span>
     </div>
   )
 }
@@ -159,9 +294,26 @@ function ViewNotice({ m, cluster, onToast }: { m: SherlockMsg; cluster: string; 
   )
 }
 
-function Answer({ m, cluster, link, admin, question, onToast }: { m: SherlockMsg; cluster: string; link: (url: string, label: string) => ReactNode | null; admin: boolean; question?: string; onToast: (msg: string) => void }) {
+function Answer({
+  m,
+  cluster,
+  link,
+  admin,
+  question,
+  onToast,
+  testCase = true,
+}: {
+  m: SherlockMsg
+  cluster: string
+  link: (url: string, label: string) => ReactNode | null
+  admin: boolean
+  question?: string
+  onToast: (msg: string) => void
+  testCase?: boolean
+}) {
   const thinking = (m.status === 'thinking' || m.status === 'answering') && !m.text
-  const meta = [m.model, m.doneAt ? seconds(m.at, m.doneAt) : '', admin && m.costUSD ? usd(m.costUSD) : ''].filter(Boolean).join(' · ')
+  const costs = useShowCosts()
+  const meta = [m.model, m.doneAt ? seconds(m.at, m.doneAt) : '', admin && costs && m.costUSD ? usd(m.costUSD) : ''].filter(Boolean).join(' · ')
   return (
     <div className="rk-ans" data-testid="sherlock-answer" data-status={m.status}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--fg2)' }}>
@@ -171,6 +323,7 @@ function Answer({ m, cluster, link, admin, question, onToast }: { m: SherlockMsg
         Sherlock
       </div>
       <Steps m={m} />
+      <Hands hands={m.hands} link={link} admin={admin} />
       {thinking && (
         <div className="rk-steps">
           <span className="rk-dots">
@@ -188,7 +341,11 @@ function Answer({ m, cluster, link, admin, question, onToast }: { m: SherlockMsg
       )}
       {m.text && (
         <div className="rk-ans-body" data-testid="sherlock-text">
-          <Markdown text={m.text} link={link} code={(text, lang, open, key) => <CodeBlock key={key} text={text} lang={lang} open={open && m.status !== 'done'} why={question ? `Sherlock proposed this answering “${question}”.` : undefined} />} />
+          <Markdown
+            text={m.text}
+            link={link}
+            code={(text, lang, open, key) => <CodeBlock key={key} text={text} lang={lang} open={open && m.status !== 'done'} why={question ? `Sherlock proposed this answering “${question}”.` : undefined} />}
+          />
         </div>
       )}
       {(m.view?.length ?? 0) > 0 && <ViewNotice m={m} cluster={cluster} onToast={onToast} />}
@@ -206,7 +363,11 @@ function Answer({ m, cluster, link, admin, question, onToast }: { m: SherlockMsg
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }} data-testid="sherlock-refs">
           {m.refs!.slice(0, 3).map((r) => {
             const el = link(`221b://${r.kind}/${r.namespace ? r.namespace + '/' : ''}${r.name}`, refLabel(r) + ' →')
-            return el ? <span key={`${r.kind}/${r.namespace}/${r.name}`} className="rk-refbtn">{el}</span> : null
+            return el ? (
+              <span key={`${r.kind}/${r.namespace}/${r.name}`} className="rk-refbtn">
+                {el}
+              </span>
+            ) : null
           })}
         </div>
       )}
@@ -215,6 +376,7 @@ function Answer({ m, cluster, link, admin, question, onToast }: { m: SherlockMsg
           {meta}
         </span>
       )}
+      {m.status === 'done' && admin && testCase && <SaveCase m={m} cluster={cluster} onToast={onToast} />}
     </div>
   )
 }
@@ -233,6 +395,24 @@ interface PaneProps {
   /** A question to put in the box. It waits there for the person to send it. */
   fill?: string
   onFilled?: () => void
+  /** A conversation that is not the person's own: a case's (CF-47). */
+  shared?: SharedChat
+}
+
+/**
+ * A conversation the people who work a case share (Phase 12, wave 6f,
+ * CF-47): asked and stopped on the case, each question naming its asker;
+ * no New chat, no Report this, no test cases.
+ */
+export interface SharedChat {
+  ask: (question: string) => Promise<unknown>
+  stop: () => Promise<unknown>
+  /** The line beside the title. */
+  sub: string
+  /** What the conversation says while it is empty. */
+  empty: string
+  /** Why this person may only read it, when so. */
+  readOnly?: string
 }
 
 /** The question an answer answers. */
@@ -289,7 +469,7 @@ export function recall(key: 'ArrowUp' | 'ArrowDown', value: string, caret: numbe
 }
 
 /** Sherlock's pane: the conversation and the question box. */
-export function SherlockPane({ cluster, clusterName, state, inWindow, controls, switcher, onToast, fill, onFilled }: PaneProps) {
+export function SherlockPane({ cluster, clusterName, state, inWindow, controls, switcher, onToast, fill, onFilled, shared }: PaneProps) {
   const [draft, setDraft] = useState(fill ?? '')
   const history = useRef<string[]>(loadHistory())
   const at = useRef({ index: -1, draft: '' })
@@ -332,7 +512,8 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
     setError('')
     pinned.current = true
     try {
-      await askSherlock(cluster, q, await askContext())
+      if (shared) await shared.ask(q)
+      else await askSherlock(cluster, q, await askContext())
       history.current = remember(history.current, q)
       at.current = { index: -1, draft: '' }
       setDraft('')
@@ -415,7 +596,7 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
 
   const stop = async () => {
     try {
-      await stopSherlock(cluster)
+      await (shared ? shared.stop() : stopSherlock(cluster))
     } catch (e) {
       onToast(e instanceof Error ? e.message : String(e))
     }
@@ -431,15 +612,20 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
 
   const unavailable = status && !status.available ? status.reason || status.capped || '' : ''
   return (
-    <section className="rk-dpane rk-sher" aria-label="Sherlock" data-testid="sherlock">
+    <section className="rk-dpane rk-sher" aria-label="Sherlock" data-testid="sherlock" data-shared={shared ? 'true' : undefined}>
       <div className="rk-dph">
         <span className={'rk-avatar' + (switcher ? ' rk-wide' : '')} aria-hidden="true">
           <SherlockIcon />
         </span>
         <h2 className={switcher ? 'rk-wide' : undefined}>Sherlock</h2>
-        <small className={switcher ? 'rk-wide' : undefined} title={`Answers questions about ${clusterName}`}>
-          Answers questions about {clusterName}
+        <small className={switcher && !shared ? 'rk-wide' : undefined} title={shared?.sub ?? `Answers questions about ${clusterName}`}>
+          {shared?.sub ?? `Answers questions about ${clusterName}`}
         </small>
+        {status?.setup && (
+          <span className="rk-pill" data-tone="info" title="Getting started has steps open: ask “What’s next?”" data-testid="sherlock-setup">
+            setup
+          </span>
+        )}
         {switcher}
         <span style={{ flex: '1 1 auto' }} />
         {busy && (
@@ -447,7 +633,7 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
             Stop
           </button>
         )}
-        {msgs.length > 0 && !busy && (
+        {msgs.length > 0 && !busy && !shared && (
           <button className="rk-btn" onClick={() => void fresh()} style={{ height: 28 }} data-testid="sherlock-new">
             New chat
           </button>
@@ -467,10 +653,16 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
         }}
       >
         <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {msgs.length === 0 && (
+          {msgs.length === 0 && shared && (
+            <p style={{ margin: 0, maxWidth: '82ch', fontSize: 12.5, color: 'var(--fg2)' }} data-testid="sherlock-empty">
+              {shared.empty}
+            </p>
+          )}
+          {msgs.length === 0 && !shared && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }} data-testid="sherlock-empty">
               <p style={{ margin: 0, maxWidth: '82ch', fontSize: 12.5, color: 'var(--fg2)' }}>
-                Ask about the nodes, fleets, pods, releases, access and alerts in {clusterName}. Sherlock reads only what you may read, never sees Secret values, and changes nothing: when something needs a change, it hands the command to Watson, where nothing runs until someone approves it.
+                Ask about the nodes, fleets, pods, releases, access and alerts in {clusterName}. Sherlock reads only what you may read, never sees Secret values, and changes nothing: when something needs a change, it hands the command to
+                Watson, where nothing runs until someone approves it.
               </p>
               {status?.available && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -487,16 +679,28 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
             {msgs.map((m) =>
               m.role === 'user' ? (
                 <div key={m.id} className="rk-chat-user" data-testid="sherlock-question">
+                  {m.asker && (
+                    <span style={{ display: 'block', fontSize: 11, fontWeight: 600, opacity: 0.8 }} data-testid="sherlock-asker">
+                      {m.asker} asked
+                    </span>
+                  )}
                   {m.text}
                 </div>
               ) : (
-                <Answer key={m.id} m={m} cluster={cluster} link={link} admin={!!status?.admin} question={questionBefore(msgs, m.id)} onToast={onToast} />
+                <Answer key={m.id} m={m} cluster={cluster} link={link} admin={!!status?.admin} question={questionBefore(msgs, m.id)} onToast={onToast} testCase={!shared} />
               ),
             )}
           </div>
+          {!busy && msgs.length > 0 && !shared && <ReportThis msgs={msgs} clusterName={clusterName} />}
         </div>
       </div>
-      {unavailable ? (
+      {shared?.readOnly ? (
+        <div className="rk-cmp" data-testid="sherlock-read-only">
+          <p className="rk-t" data-tone="muted" style={{ margin: 0, fontSize: 12.5, padding: '6px 4px' }} role="status">
+            {shared.readOnly}
+          </p>
+        </div>
+      ) : unavailable ? (
         <div className="rk-cmp" data-testid="sherlock-unavailable">
           <p className="rk-t" data-tone={status?.capped ? 'warn' : 'muted'} style={{ margin: 0, fontSize: 12.5, padding: '6px 4px' }} role="status">
             {unavailable}
@@ -505,11 +709,11 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
       ) : (
         <div className="rk-cmp">
           <label className="rk-field rk-ta" style={{ flex: '1 1 auto' }}>
-            <span className="rk-sr">Ask Sherlock about this cluster</span>
+            <span className="rk-sr">{shared ? 'Ask Sherlock about this case' : 'Ask Sherlock about this cluster'}</span>
             <textarea
               ref={box}
               rows={2}
-              placeholder="Ask Sherlock — Enter sends, Shift+Enter starts a new line, ↑ recalls an earlier question"
+              placeholder={shared ? 'Ask Sherlock about this case — everyone who works it sees the conversation; Enter sends' : 'Ask Sherlock — Enter sends, Shift+Enter starts a new line, ↑ recalls an earlier question'}
               value={draft}
               maxLength={4000}
               onChange={(e) => {

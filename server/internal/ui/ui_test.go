@@ -48,6 +48,24 @@ func TestServesTheApp(t *testing.T) {
 	}
 }
 
+// The report page is a page of its own at /report and below it, never
+// cached (Phase 12, IS-27).
+func TestServesTheReportPage(t *testing.T) {
+	h := handler(fstest.MapFS{
+		"index.html":  {Data: []byte("<!doctype html><title>221B</title>")},
+		"report.html": {Data: []byte("<!doctype html><title>Report a problem</title>")},
+	})
+	for _, p := range []string{"/report", "/report/", "/report/mine", "/report.html", "/report?text=hello"} {
+		resp, body := serve(t, h, p)
+		if body != "<!doctype html><title>Report a problem</title>" || resp.Header.Get("Cache-Control") != "no-store" {
+			t.Fatalf("%s: %q %v", p, body, resp.Header)
+		}
+	}
+	if _, body := serve(t, h, "/reports"); body != "<!doctype html><title>221B</title>" {
+		t.Fatalf("/reports got %q", body)
+	}
+}
+
 func TestWithoutABuild(t *testing.T) {
 	h := handler(fstest.MapFS{".gitkeep": {Data: nil}})
 	resp, body := serve(t, h, "/")

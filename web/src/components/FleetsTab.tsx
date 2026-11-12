@@ -20,7 +20,6 @@ import { Chevron, ColumnsIcon, PlusIcon, SearchIcon } from './Icons'
 import type { TabProps } from './tabs'
 import { peekLink } from '../lib/peek'
 
-
 const HIDE_KEY = '221b.fleets.hidden'
 
 const RESERVED_TIP = 'Capacity less allocatable on each node: what the kubelet keeps from pods, for software beside Kubernetes and the agent itself.'
@@ -161,8 +160,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
   const picked = (n: NodeRow) => facetMatch(n, fx)
   const pickedCount = fxOn ? new Set(scope.filter((name) => picked(byName.get(name)!))).size : 0
 
-  const sortTip = (col: string, label: string) =>
-    sort.col === col ? `Sorted by ${label}, ${sort.dir === 'asc' ? 'ascending' : 'descending'} — click to reverse` : `Sort by ${label}`
+  const sortTip = (col: string, label: string) => (sort.col === col ? `Sorted by ${label}, ${sort.dir === 'asc' ? 'ascending' : 'descending'} — click to reverse` : `Sort by ${label}`)
   const sortBy = (col: string) => setSort(sort.col === col ? { col, dir: sort.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'asc' })
   const ind = (col: string) => (sort.col === col ? (sort.dir === 'asc' ? '↑' : '↓') : '')
 
@@ -209,12 +207,27 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
         rows.push(r)
       }
     const head = ['Node', 'Fleets', ...visCols.map((c) => (c.kind === 'r' ? `${c.main} (role)` : c.label))]
-    const cells: Cell[][] = rows.map((r) => [r.name, fleetsOfNode(r.name, fleetRows).map((f) => f.name).join(', '), ...visCols.map((c) => mxHas(r, c))])
+    const cells: Cell[][] = rows.map((r) => [
+      r.name,
+      fleetsOfNode(r.name, fleetRows)
+        .map((f) => f.name)
+        .join(', '),
+      ...visCols.map((c) => mxHas(r, c)),
+    ])
     const title = one ? one.name! : sel[0] === 'none' ? 'Not in any fleet' : 'Fleets'
     const base = `${(cluster?.name || 'cluster').replace(/[^A-Za-z0-9._-]+/g, '-')}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${fileStamp()}`
     if (format === 'xlsx') download(xlsxBytes(title.slice(0, 31), head, cells), base + '.xlsx')
     else if (format === 'csv') download(csvText(head, cells), base + '.csv', 'text/csv')
-    else download(JSON.stringify(cells.map((c) => Object.fromEntries(head.map((h, i) => [h, c[i]]))), null, 2), base + '.json', 'application/json')
+    else
+      download(
+        JSON.stringify(
+          cells.map((c) => Object.fromEntries(head.map((h, i) => [h, c[i]]))),
+          null,
+          2,
+        ),
+        base + '.json',
+        'application/json',
+      )
     onToast(`Downloaded ${base}.${format}`)
   }
 
@@ -295,7 +308,12 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
             return (
               <div key={f.key} className="rk-fl" data-sel={checked} data-fleet={f.id}>
                 <label className="rk-fl-check" title={checked ? `Remove ${f.name} from the selection` : `Add ${f.name} to the selection`}>
-                  <input type="checkbox" checked={checked} aria-label={checked ? `Remove ${f.name} from the selection` : `Add ${f.name} to the selection`} onChange={() => set({ fleet: checked ? sel.filter((s) => s !== f.id) : [...sel.filter((s) => s !== 'none'), f.id!] })} />
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    aria-label={checked ? `Remove ${f.name} from the selection` : `Add ${f.name} to the selection`}
+                    onChange={() => set({ fleet: checked ? sel.filter((s) => s !== f.id) : [...sel.filter((s) => s !== 'none'), f.id!] })}
+                  />
                 </label>
                 <button className="rk-fl-main" aria-pressed={checked} onClick={() => set({ fleet: only ? undefined : f.id })} title={only ? 'Show all nodes again' : `Show only ${f.name}`} data-testid="fleet-pick">
                   <span className="rk-fl-top">
@@ -337,9 +355,20 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
               </div>
             )
           })}
-          {loaded && fleets.length === 0 && <p style={{ margin: 0, padding: '14px 16px', fontSize: 12.5, color: 'var(--fg3)', borderTop: '1px solid var(--line)' }}>No fleets yet. {admin ? 'Create one, or save one of the groups below.' : 'An administrator can create them.'}</p>}
+          {loaded && fleets.length === 0 && (
+            <p style={{ margin: 0, padding: '14px 16px', fontSize: 12.5, color: 'var(--fg3)', borderTop: '1px solid var(--line)' }}>
+              No fleets yet. {admin ? 'Create one, or save one of the groups below.' : 'An administrator can create them.'}
+            </p>
+          )}
           {none && (none.members.length > 0 || sel[0] === 'none') && (
-            <button className="rk-fl rk-fl-main" data-sel={sel[0] === 'none'} aria-pressed={sel[0] === 'none'} onClick={() => set({ fleet: sel[0] === 'none' ? undefined : 'none' })} style={{ padding: '11px 16px 11px 36px' }} data-testid="fleet-none">
+            <button
+              className="rk-fl rk-fl-main"
+              data-sel={sel[0] === 'none'}
+              aria-pressed={sel[0] === 'none'}
+              onClick={() => set({ fleet: sel[0] === 'none' ? undefined : 'none' })}
+              style={{ padding: '11px 16px 11px 36px' }}
+              data-testid="fleet-none"
+            >
               <span className="rk-fl-top">
                 <span className="rk-fl-name" style={{ fontWeight: 500 }}>
                   Not in any fleet
@@ -363,7 +392,11 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                 </span>
                 {admin && (
                   <span>
-                    <button className="rk-link" onClick={() => setEditor({ fleet: null, name: defs.some((f) => f.name.toLowerCase() === (s.name ?? '').toLowerCase()) ? '' : s.name, labels: s.labels, taints: s.taints })} style={{ fontSize: 12 }}>
+                    <button
+                      className="rk-link"
+                      onClick={() => setEditor({ fleet: null, name: defs.some((f) => f.name.toLowerCase() === (s.name ?? '').toLowerCase()) ? '' : s.name, labels: s.labels, taints: s.taints })}
+                      style={{ fontSize: 12 }}
+                    >
                       Save as a fleet…
                     </button>
                   </span>
@@ -418,19 +451,19 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                 {(one.listed?.length ?? 0) > one.members.length ? `, ${(one.listed?.length ?? 0) - one.members.length} of them no longer in the cluster` : ''}. Nodes join and leave it only here; their labels and taints do not change.
               </p>
             ) : (
-            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 8px' }}>
-              <span style={{ fontSize: 12, color: 'var(--fg3)', marginRight: 2 }}>Nodes that have all of</span>
-              {reqsOf(one).map((r) => (
-                <span key={r.id} className="rk-chip">
-                  {r.text}
-                  {r.effect && (
-                    <span className="rk-tag" data-tone={r.tone}>
-                      {r.effect}
-                    </span>
-                  )}
-                </span>
-              ))}
-            </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 8px' }}>
+                <span style={{ fontSize: 12, color: 'var(--fg3)', marginRight: 2 }}>Nodes that have all of</span>
+                {reqsOf(one).map((r) => (
+                  <span key={r.id} className="rk-chip">
+                    {r.text}
+                    {r.effect && (
+                      <span className="rk-tag" data-tone={r.tone}>
+                        {r.effect}
+                      </span>
+                    )}
+                  </span>
+                ))}
+              </div>
             )}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 18px', fontSize: 12, color: 'var(--fg3)' }}>
               <span data-testid="fleet-stats">{metaText(one.stats)}</span>
@@ -483,7 +516,10 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                 {admin ? (
                   <>
                     {' '}
-                    · <a className="rk-link" href={href('scripts')}>a script changes it</a>
+                    ·{' '}
+                    <a className="rk-link" href={href('scripts')}>
+                      a script changes it
+                    </a>
                   </>
                 ) : null}
               </span>
@@ -540,7 +576,8 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 14px' }}>
               <h3 className="rk-h">Columns</h3>
               <span style={{ fontSize: 12, color: 'var(--fg3)' }}>
-                Showing {visCols.length} of {cols.length} columns: {nWord(cols.filter((c) => c.kind === 'r').length, 'role', 'roles')}, {nWord(cols.filter((c) => c.kind === 'l').length, 'label value', 'label values')}, {nWord(cols.filter((c) => c.kind === 't').length, 'taint', 'taints')}
+                Showing {visCols.length} of {cols.length} columns: {nWord(cols.filter((c) => c.kind === 'r').length, 'role', 'roles')}, {nWord(cols.filter((c) => c.kind === 'l').length, 'label value', 'label values')},{' '}
+                {nWord(cols.filter((c) => c.kind === 't').length, 'taint', 'taints')}
               </span>
               <span style={{ flex: '1 1 auto' }} />
               <label className="rk-field" style={{ width: 230, maxWidth: '100%' }}>
@@ -548,10 +585,20 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                 <span className="rk-sr">Find a column</span>
                 <input type="search" placeholder="Find a label or taint" value={colQuery} onChange={(e) => setColQuery(e.target.value)} />
               </label>
-              <button className="rk-btn" onClick={() => setHidden(new Set([...hidden].filter((id) => !cols.some((c) => c.id === id && colMatches(c)))))} title={cq ? 'Show every column that matches the search' : 'Show every column'} data-testid="fleet-cols-all">
+              <button
+                className="rk-btn"
+                onClick={() => setHidden(new Set([...hidden].filter((id) => !cols.some((c) => c.id === id && colMatches(c)))))}
+                title={cq ? 'Show every column that matches the search' : 'Show every column'}
+                data-testid="fleet-cols-all"
+              >
                 Select all
               </button>
-              <button className="rk-btn" onClick={() => setHidden(new Set([...hidden, ...cols.filter(colMatches).map((c) => c.id)]))} title={cq ? 'Hide every column that matches the search' : 'Hide every column'} data-testid="fleet-cols-none">
+              <button
+                className="rk-btn"
+                onClick={() => setHidden(new Set([...hidden, ...cols.filter(colMatches).map((c) => c.id)]))}
+                title={cq ? 'Hide every column that matches the search' : 'Hide every column'}
+                data-testid="fleet-cols-none"
+              >
                 Clear all
               </button>
               <button className="rk-btn" onClick={() => setColsOpen(false)}>
@@ -646,18 +693,18 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
               {admin ? (
                 <span className="rk-mxn" role="columnheader" style={{ padding: '0 0 0 6px', gap: 0 }}>
                   <label className="rk-pickbox">
-                  <input
-                    type="checkbox"
-                    checked={shownNames.length > 0 && shownPicked === shownNames.length}
-                    ref={(el) => {
-                      if (el) el.indeterminate = shownPicked > 0 && shownPicked < shownNames.length
-                    }}
-                    disabled={!shownNames.length}
-                    onChange={() => setPicks(shownPicked === shownNames.length ? picks.filter((n) => !shownNames.includes(n)) : [...new Set([...picks, ...shownNames])])}
-                    aria-label={shownPicked === shownNames.length ? 'Unpick every node shown' : 'Pick every node shown'}
-                    title={shownPicked === shownNames.length ? 'Unpick every node shown' : 'Pick every node shown, to put them in a fleet or take them out'}
-                    data-testid="fleet-pick-all"
-                  />
+                    <input
+                      type="checkbox"
+                      checked={shownNames.length > 0 && shownPicked === shownNames.length}
+                      ref={(el) => {
+                        if (el) el.indeterminate = shownPicked > 0 && shownPicked < shownNames.length
+                      }}
+                      disabled={!shownNames.length}
+                      onChange={() => setPicks(shownPicked === shownNames.length ? picks.filter((n) => !shownNames.includes(n)) : [...new Set([...picks, ...shownNames])])}
+                      aria-label={shownPicked === shownNames.length ? 'Unpick every node shown' : 'Pick every node shown'}
+                      title={shownPicked === shownNames.length ? 'Unpick every node shown' : 'Pick every node shown, to put them in a fleet or take them out'}
+                      data-testid="fleet-pick-all"
+                    />
                   </label>
                   <button className="rk-th" data-active={sort.col === 'node'} title={sortTip('node', 'node name')} onClick={() => sortBy('node')} style={{ flex: '1 1 auto' }}>
                     Node<span className="rk-arrow">{ind('node')}</span>
@@ -697,7 +744,11 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                 <div key={g.key} role="rowgroup" data-group={g.key}>
                   {g.title && (
                     <div className="rk-fgh" role="row">
-                      <div role="cell" aria-colspan={visCols.length + 2} style={{ position: 'sticky', left: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 10px', padding: '8px 12px', width: 'max-content', maxWidth: '100vw' }}>
+                      <div
+                        role="cell"
+                        aria-colspan={visCols.length + 2}
+                        style={{ position: 'sticky', left: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px 10px', padding: '8px 12px', width: 'max-content', maxWidth: '100vw' }}
+                      >
                         <span className="rk-fdot" data-c={g.row?.kind === 'fleet' ? g.row.color : undefined} />
                         <strong style={{ fontSize: 13, fontWeight: 600 }}>{g.title}</strong>
                         <span className="rk-tag" style={{ fontSize: 11, padding: '1px 7px' }}>
@@ -728,11 +779,14 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                     return (
                       <div key={g.key + n.name} className="rk-mxr" role="row" data-dim={fxOn && !picked(n)} data-node={n.name} data-picked={pickSet.has(n.name) || undefined}>
                         <span className="rk-mxn" role="rowheader">
-                          {admin && (
-                            <PickBox name={n.name} picked={pickSet.has(n.name)} onToggle={togglePickNode} />
-                          )}
+                          {admin && <PickBox name={n.name} picked={pickSet.has(n.name)} onToggle={togglePickNode} />}
                           <span className="rk-namecopy">
-                            <a className="rk-link rk-mono" {...peekLink({ kind: 'node', name: n.name })} title={`Open the details of ${n.name}`} style={{ minWidth: 0, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'none' }}>
+                            <a
+                              className="rk-link rk-mono"
+                              {...peekLink({ kind: 'node', name: n.name })}
+                              title={`Open the details of ${n.name}`}
+                              style={{ minWidth: 0, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'none' }}
+                            >
                               {n.name}
                             </a>
                             <CopyName text={n.name} what="node name" />
@@ -753,7 +807,14 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
                         {visCols.map((c) =>
                           mxHas(n, c) ? (
                             <span key={c.id} className="rk-contents" role="cell">
-                              <button className="rk-mxc" data-first={c.first} aria-pressed={pickedOn(c)} aria-label={`${n.name} has ${c.label}`} title={`${c.full} — on ${n.name}\n${pickedOn(c) ? 'Click to stop picking nodes by it' : 'Click to pick the nodes that have it'}`} onClick={() => togglePick(c)}>
+                              <button
+                                className="rk-mxc"
+                                data-first={c.first}
+                                aria-pressed={pickedOn(c)}
+                                aria-label={`${n.name} has ${c.label}`}
+                                title={`${c.full} — on ${n.name}\n${pickedOn(c) ? 'Click to stop picking nodes by it' : 'Click to pick the nodes that have it'}`}
+                                onClick={() => togglePick(c)}
+                              >
                                 <span className="rk-mk" data-tone={c.kind === 't' ? effectTone(c.effect ?? '') : undefined} aria-hidden="true" />
                               </button>
                             </span>
@@ -791,7 +852,15 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
           <div className="rk-card rk-pickbar" role="status" data-testid="fleet-pickbar">
             <strong style={{ fontSize: 12.5, fontWeight: 600 }}>{pickedCount ? `Picked ${nWord(pickedCount, 'node', 'nodes')} that have` : 'No node has all of'}</strong>
             {[...fx.labels.map((l) => ({ id: l, kind: 'l' as const, text: labelText(...splitLabel(l)) })), ...fx.taints.map((t) => ({ id: t, kind: 't' as const, text: 'taint ' + t }))].map((a) => (
-              <button key={a.kind + a.id} className="rk-fchip" data-on="true" onClick={() => (a.kind === 'l' ? set({ pl: fx.labels.filter((x) => x !== a.id) }) : set({ pt: fx.taints.filter((x) => x !== a.id) }))} aria-label={`Remove ${a.text}`} title={`Remove ${a.text}`} style={{ background: 'var(--surface)' }}>
+              <button
+                key={a.kind + a.id}
+                className="rk-fchip"
+                data-on="true"
+                onClick={() => (a.kind === 'l' ? set({ pl: fx.labels.filter((x) => x !== a.id) }) : set({ pt: fx.taints.filter((x) => x !== a.id) }))}
+                aria-label={`Remove ${a.text}`}
+                title={`Remove ${a.text}`}
+                style={{ background: 'var(--surface)' }}
+              >
                 {a.text}
                 <XIcon />
               </button>
@@ -801,7 +870,12 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
             </button>
             <span style={{ flex: '1 1 auto' }} />
             {admin && (
-              <button className="rk-btn" disabled={saveFxDisabled} onClick={() => setEditor({ fleet: null, labels: fx.labels, taints: fx.taints })} title={saveFxDisabled ? 'A fleet needs one value per label; remove the extra picks first' : 'Opens a new fleet with these labels and taints'}>
+              <button
+                className="rk-btn"
+                disabled={saveFxDisabled}
+                onClick={() => setEditor({ fleet: null, labels: fx.labels, taints: fx.taints })}
+                title={saveFxDisabled ? 'A fleet needs one value per label; remove the extra picks first' : 'Opens a new fleet with these labels and taints'}
+              >
                 Save as a fleet…
               </button>
             )}
@@ -825,6 +899,7 @@ export function FleetsTab({ cluster, now, onToast, route, me }: Props) {
           fleets={defs}
           nodes={nodes}
           now={now}
+          onToast={onToast}
           onClose={() => setEditor(null)}
           onSave={async (f, isNew) => {
             const next = isNew ? [...defs, f] : defs.map((x) => (x.id === f.id ? f : x))

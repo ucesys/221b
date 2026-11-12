@@ -182,7 +182,23 @@ function signInText(user: UserRow, now: number): string {
 
 const LAST_SUPER = 'The only SuperAdmin: make someone else SuperAdmin before taking the role away, disabling or deleting this user, or nobody could run the console.'
 
-function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onAdd }: { user: UserRow; groups: LocalGroup[]; lastSuperAdmin: boolean; now: number; onClose: () => void; onChanged: (message: string) => void; onAdd: () => void }) {
+function UserDrawer({
+  user,
+  groups,
+  lastSuperAdmin,
+  now,
+  onClose,
+  onChanged,
+  onAdd,
+}: {
+  user: UserRow
+  groups: LocalGroup[]
+  lastSuperAdmin: boolean
+  now: number
+  onClose: () => void
+  onChanged: (message: string) => void
+  onAdd: () => void
+}) {
   const [ask, setAsk] = useState<Ask | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -367,7 +383,13 @@ function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onA
                 <span className="rk-tag" data-tone="info">
                   {ROLE_NAME[r]}
                 </span>
-                <button className="rk-btn" aria-label={`Take ${ROLE_NAME[r]} from ${user.username}`} disabled={r === 'superAdmin' && lastSuperAdmin} title={r === 'superAdmin' && lastSuperAdmin ? LAST_SUPER : undefined} onClick={() => setAsk({ kind: 'super', user, roles: nextSuper(r, false) })}>
+                <button
+                  className="rk-btn"
+                  aria-label={`Take ${ROLE_NAME[r]} from ${user.username}`}
+                  disabled={r === 'superAdmin' && lastSuperAdmin}
+                  title={r === 'superAdmin' && lastSuperAdmin ? LAST_SUPER : undefined}
+                  onClick={() => setAsk({ kind: 'super', user, roles: nextSuper(r, false) })}
+                >
                   Take away
                 </button>
               </span>
@@ -404,7 +426,13 @@ function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onA
           <button className="rk-btn" disabled={lastSuperAdmin && user.status === 'active'} title={lastSuperAdmin ? LAST_SUPER : undefined} onClick={() => setAsk({ kind: user.status === 'active' ? 'disable' : 'enable', user })}>
             {user.status === 'active' ? 'Disable' : 'Enable'}
           </button>
-          <button className="rk-btn" disabled={lastSuperAdmin} title={lastSuperAdmin ? LAST_SUPER : undefined} style={lastSuperAdmin ? undefined : { borderColor: 'var(--err)', color: 'var(--err)' }} onClick={() => setAsk({ kind: 'delete', user })}>
+          <button
+            className="rk-btn"
+            disabled={lastSuperAdmin}
+            title={lastSuperAdmin ? LAST_SUPER : undefined}
+            style={lastSuperAdmin ? undefined : { borderColor: 'var(--err)', color: 'var(--err)' }}
+            onClick={() => setAsk({ kind: 'delete', user })}
+          >
             Delete
           </button>
         </div>
@@ -412,8 +440,34 @@ function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onA
       {user.managed && <span className="rk-fhint">Defined in values.yaml; change it with helm upgrade.</span>}
       {user.source === 'ldap' && <span className="rk-fhint">The directory owns this person: groups and status follow the next sync.</span>}
       {ask && (
-        <ConfirmDialog title={titles[ask.kind]} confirm={ask.kind === 'password' ? 'Change password' : ask.kind === 'remove' ? 'Remove' : ask.kind === 'super' ? 'Change' : ask.kind === 'signout' ? 'Sign out' : ask.kind === 'delete' ? 'Delete' : ask.kind === 'disable' ? 'Disable' : 'Enable'} danger={ask.kind === 'delete' || ask.kind === 'disable'} busy={busy} error={error} onConfirm={() => void confirm()} onCancel={cancel}>
-          {ask.kind === 'remove' && <p style={{ margin: 0 }}>{name} loses what {ask.group} gives within 2 minutes, while signed in. Nothing is written to Kubernetes; the change is kept by 221B and recorded in the audit log.</p>}
+        <ConfirmDialog
+          title={titles[ask.kind]}
+          confirm={
+            ask.kind === 'password'
+              ? 'Change password'
+              : ask.kind === 'remove'
+                ? 'Remove'
+                : ask.kind === 'super'
+                  ? 'Change'
+                  : ask.kind === 'signout'
+                    ? 'Sign out'
+                    : ask.kind === 'delete'
+                      ? 'Delete'
+                      : ask.kind === 'disable'
+                        ? 'Disable'
+                        : 'Enable'
+          }
+          danger={ask.kind === 'delete' || ask.kind === 'disable'}
+          busy={busy}
+          error={error}
+          onConfirm={() => void confirm()}
+          onCancel={cancel}
+        >
+          {ask.kind === 'remove' && (
+            <p style={{ margin: 0 }}>
+              {name} loses what {ask.group} gives within 2 minutes, while signed in. Nothing is written to Kubernetes; the change is kept by 221B and recorded in the audit log.
+            </p>
+          )}
           {ask.kind === 'super' && (
             <p style={{ margin: 0 }}>
               {name} will hold {ask.roles.length ? ask.roles.map((r) => ROLE_NAME[r]).join(' and ') : 'no super role'} on every cluster. It applies within 2 minutes, without signing out, and is recorded in the audit log.
@@ -426,7 +480,14 @@ function UserDrawer({ user, groups, lastSuperAdmin, now, onClose, onChanged, onA
           {ask.kind === 'password' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <PasswordField label="Your password" hint="Yours, as you sign in: it confirms the change is yours." autoComplete="current-password" value={own} onChange={setOwn} testId="password-own" />
-              <PasswordField label={`New password for ${user.username}`} hint="At least 12 characters, and not the user name. Their open sessions end." autoComplete="new-password" value={password} onChange={setPassword} testId="reset-password" />
+              <PasswordField
+                label={`New password for ${user.username}`}
+                hint="At least 12 characters, and not the user name. Their open sessions end."
+                autoComplete="new-password"
+                value={password}
+                onChange={setPassword}
+                testId="reset-password"
+              />
               <PasswordField label="Repeat the new password" autoComplete="new-password" value={again} onChange={setAgain} testId="password-again" />
             </div>
           )}

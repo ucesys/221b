@@ -4,6 +4,7 @@ import type { Me } from '../api/types'
 import { activeAlerts, alertTone, healthOf, nodeTone, podLine, podsReady, podTone, resourceLine, storageTone, type UseLine } from '../lib/home'
 import { clusterHref, clusterPageHref } from '../lib/router'
 import { SherlockIcon } from './Icons'
+import { GettingStartedCard } from './GettingStarted'
 
 interface Props {
   me: Me | null
@@ -66,9 +67,7 @@ function ClusterCard({ c, onEdit }: { c: HomeCluster; onEdit?: () => void }) {
               {env.label}
             </span>
           </h2>
-          <span style={{ fontSize: 12, color: 'var(--fg3)' }}>
-            {[c.version, c.local ? 'the console’s own cluster' : ''].filter(Boolean).join(' · ')}
-          </span>
+          <span style={{ fontSize: 12, color: 'var(--fg3)' }}>{[c.version, c.local ? 'the console’s own cluster' : ''].filter(Boolean).join(' · ')}</span>
         </div>
         <span className="rk-pill" data-tone={health.tone} title={health.reasons.map((r) => r.text).join('\n') || undefined} data-testid="home-health">
           {health.text}
@@ -104,32 +103,32 @@ function ClusterCard({ c, onEdit }: { c: HomeCluster; onEdit?: () => void }) {
             <Bar line={podLine(c)} testid="home-podroom" />
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {c.sherlock && (
-            // With errors or warnings, Sherlock troubleshoots them; with
-            // none, it audits the setup.
-            <a
-              className="rk-btn rk-ask"
-              href={at('alerts', { ask: trouble ? 'troubleshoot' : 'review' })}
-              style={{ alignSelf: 'flex-start', height: 30, textDecoration: 'none' }}
-              title={
-                trouble
-                  ? `Sherlock finds why ${c.name} has ${health.tone === 'err' ? 'errors' : 'warnings'} and how to fix each, most severe first`
-                  : `Sherlock reviews ${c.name} for gaps in its Kubernetes setup: probes, limits, disruption budgets, security, and more, with what to change first`
-              }
-              data-testid="home-review"
-              data-ask={trouble ? 'troubleshoot' : 'review'}
-            >
-              <span className="rk-avatar" style={{ width: 18, height: 18 }} aria-hidden="true">
-                <SherlockIcon size={10} />
-              </span>
-              {trouble ? 'Troubleshoot' : 'Audit'}
-            </a>
-          )}
-          {onEdit && (
-            <button className="rk-btn" onClick={onEdit} style={{ height: 30 }} title={`Edit the connection to ${c.name}`} data-testid="home-edit">
-              Edit cluster
-            </button>
-          )}
+            {c.sherlock && (
+              // With errors or warnings, Sherlock troubleshoots them; with
+              // none, it audits the setup.
+              <a
+                className="rk-btn rk-ask"
+                href={at('alerts', { ask: trouble ? 'troubleshoot' : 'review' })}
+                style={{ alignSelf: 'flex-start', height: 30, textDecoration: 'none' }}
+                title={
+                  trouble
+                    ? `Sherlock finds why ${c.name} has ${health.tone === 'err' ? 'errors' : 'warnings'} and how to fix each, most severe first`
+                    : `Sherlock reviews ${c.name} for gaps in its Kubernetes setup: probes, limits, disruption budgets, security, and more, with what to change first`
+                }
+                data-testid="home-review"
+                data-ask={trouble ? 'troubleshoot' : 'review'}
+              >
+                <span className="rk-avatar" style={{ width: 18, height: 18 }} aria-hidden="true">
+                  <SherlockIcon size={10} />
+                </span>
+                {trouble ? 'Troubleshoot' : 'Audit'}
+              </a>
+            )}
+            {onEdit && (
+              <button className="rk-btn" onClick={onEdit} style={{ height: 30 }} title={`Edit the connection to ${c.name}`} data-testid="home-edit">
+                Edit cluster
+              </button>
+            )}
           </div>
         </>
       ) : (
@@ -165,7 +164,16 @@ export function HomePage({ me, onAdd, onEdit }: Props) {
         <h1 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>Clusters</h1>
         {loaded && (
           <span style={{ fontSize: 12.5, color: 'var(--fg3)' }} data-testid="home-summary">
-            {[`${clusters.length} cluster${clusters.length === 1 ? '' : 's'}`, `${up.length} connected`, bad ? `${bad} need${bad === 1 ? 's' : ''} attention` : '', warn ? `${warn} with warnings` : '', `${sum((c) => c.nodes.total)} nodes`, `${sum((c) => c.pods.total)} pods`].filter(Boolean).join(' · ')}
+            {[
+              `${clusters.length} cluster${clusters.length === 1 ? '' : 's'}`,
+              `${up.length} connected`,
+              bad ? `${bad} need${bad === 1 ? 's' : ''} attention` : '',
+              warn ? `${warn} with warnings` : '',
+              `${sum((c) => c.nodes.total)} nodes`,
+              `${sum((c) => c.pods.total)} pods`,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
           </span>
         )}
         <span style={{ flex: '1 1 auto' }} />
@@ -175,6 +183,8 @@ export function HomePage({ me, onAdd, onEdit }: Props) {
           </button>
         )}
       </div>
+      {/* Getting started (Phase 12, GS-06): a SuperAdmin's, until every step is done or dismissed. */}
+      {me?.admin && <GettingStartedCard />}
       {error && (
         <div className="rk-card" data-tone="err" style={{ padding: '10px 14px', fontSize: 13, color: 'var(--err)' }} role="alert">
           {error}

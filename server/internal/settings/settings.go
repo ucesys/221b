@@ -10,9 +10,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -56,7 +58,15 @@ type Settings struct {
 	// Nodes tab's fleet list is where fleets are made and kept (Phase 10.1
 	// review, R2-03).
 	FleetsPage *bool `json:"fleetsPage,omitempty"`
+	// HideCosts hides every dollar amount from the console's pages for
+	// everyone, but the budgets where they are set (Phase 12, wave 6c,
+	// CF-40): a SuperAdmin's switch, Settings › AI › Show costs. The
+	// budgets are kept all the same. A State says it as showCosts.
+	HideCosts bool `json:"hideCosts,omitempty"`
 }
+
+// ShowsCosts says whether the pages show what AI costs (CF-40).
+func (s Settings) ShowsCosts() bool { return !s.HideCosts }
 
 // ShowsFleets says whether the Fleets tab shows.
 func (s Settings) ShowsFleets() bool { return s.FleetsPage == nil || *s.FleetsPage }
@@ -344,6 +354,16 @@ type State struct {
 	ChangedAt *time.Time `json:"changedAt,omitempty"`
 }
 
+// MarshalJSON says showCosts besides the settings, always, so that every
+// page that reads the settings reads it (CF-40).
+func (s State) MarshalJSON() ([]byte, error) {
+	type plain State
+	return json.Marshal(struct {
+		plain
+		ShowCosts bool `json:"showCosts"`
+	}{plain(s), s.ShowsCosts()})
+}
+
 // ForAnyone is the settings without what belongs to a cluster or to the
 // administrators: the part that every signed-in person may have.
 // Acknowledgements reach a browser on the alert rows it may see, and
@@ -460,7 +480,38 @@ func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
 		if next.FleetsPage == nil {
 			next.FleetsPage = cur.FleetsPage
 		}
+		// Show costs has its own route, a SuperAdmin's (CF-40).
+		next.HideCosts = cur.HideCosts
 		*cur = next
+		return nil
+	})
+}
+
+// RenameNode carries a node's new name into the lists of nodes that name
+// it: a host added under its address takes its hostname (Phase 12).
+func (s *Service) RenameNode(ctx context.Context, cluster, from, to string) (State, error) {
+	return s.change(ctx, func(cur *Settings) error {
+		list := slices.Clone(cur.Fleets[cluster])
+		for i, f := range list {
+			if f.Kind != fleets.KindNodes || !slices.Contains(f.Nodes, from) {
+				continue
+			}
+			nodes := make([]string, 0, len(f.Nodes))
+			for _, n := range f.Nodes {
+				switch {
+				case n != from:
+					nodes = append(nodes, n)
+				case !slices.Contains(f.Nodes, to):
+					nodes = append(nodes, to)
+				}
+			}
+			list[i].Nodes = nodes
+		}
+		next := maps.Clone(cur.Fleets)
+		if next != nil {
+			next[cluster] = list
+		}
+		cur.Fleets = next
 		return nil
 	})
 }
@@ -472,6 +523,14 @@ func (s *Service) UpdateWatson(ctx context.Context, w Watson) (State, error) {
 	}
 	return s.change(ctx, func(cur *Settings) error {
 		cur.Watson = &w
+		return nil
+	})
+}
+
+// UpdateCosts turns showing what AI costs on or off (CF-40).
+func (s *Service) UpdateCosts(ctx context.Context, show bool) (State, error) {
+	return s.change(ctx, func(cur *Settings) error {
+		cur.HideCosts = !show
 		return nil
 	})
 }

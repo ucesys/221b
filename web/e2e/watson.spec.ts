@@ -62,7 +62,11 @@ async function watson(request: APIRequestContext, command: string, c?: string): 
   return until(request, it.id, (x) => FINAL.includes(x.status), 120_000, c)
 }
 
-const text = (it: WatsonItem, k?: 'out' | 'err') => (it.lines ?? []).filter((l) => !k || l.k === k).map((l) => l.t).join('\n')
+const text = (it: WatsonItem, k?: 'out' | 'err') =>
+  (it.lines ?? [])
+    .filter((l) => !k || l.k === k)
+    .map((l) => l.t)
+    .join('\n')
 
 async function ok(request: APIRequestContext, command: string): Promise<WatsonItem> {
   const it = await watson(request, command)
@@ -84,6 +88,30 @@ async function open(page: Page, hash = '#/nodes') {
 }
 
 const pane = (page: Page) => page.getByTestId('watson')
+
+// discardWaiting discards every request on the local cluster still waiting
+// for its card, as the stream lists them, so that a test's counts are its
+// own whatever an earlier spec left behind (R2-14).
+async function discardWaiting(page: Page) {
+  const ids = await page.evaluate(
+    () =>
+      new Promise<string[]>((resolve, reject) => {
+        const es = new EventSource('/api/v1/watson/events')
+        es.addEventListener('items', (e) => {
+          es.close()
+          resolve((JSON.parse((e as MessageEvent<string>).data) as { id: string; status: string }[]).filter((it) => it.status === 'pending').map((it) => it.id))
+        })
+        es.addEventListener('error', () => {
+          es.close()
+          reject(new Error('the Watson stream failed'))
+        })
+      }),
+  )
+  for (const id of ids) {
+    const res = await page.request.post(`/api/v1/watson/commands/${id}/discard`, { headers: SAME })
+    expect(res.ok(), await res.text()).toBe(true)
+  }
+}
 const lastRan = (page: Page) => pane(page).getByTestId('watson-ran').last()
 
 /** A ready worker the console does not run on, not cordoned, to cordon and drain. */
@@ -156,7 +184,12 @@ test('a typed read runs at once and prints what kubectl prints; shell syntax is 
   const out = await lastRan(page).getByTestId('watson-output').innerText()
   expect(out.split('\n')[0]).toMatch(/^NAME\s+STATUS\s+ROLES\s+AGE\s+VERSION$/)
   const names = (await snapshot(page.request)).views.nodes!.rows.map((r) => (r as { name: string }).name).sort()
-  const printed = out.split('\n').slice(1).map((l) => l.split(/\s+/)[0]!).filter(Boolean).sort()
+  const printed = out
+    .split('\n')
+    .slice(1)
+    .map((l) => l.split(/\s+/)[0]!)
+    .filter(Boolean)
+    .sort()
   expect(printed).toEqual(names)
   await expect(lastRan(page).getByTestId('watson-status')).toContainText('done')
   if (inKind) {
@@ -232,7 +265,17 @@ test('every supported read runs as kubectl and helm would (P6-02)', async ({ req
     const values = await ok(request, `helm get values ${rname} -n ${rns}`)
     if (inKind) {
       expect(text(values, 'out')).toBe(await real('helm', 'get', 'values', rname!, '-n', rns!))
-      expect(text(list, 'out').split('\n').map((l) => l.split(/\s+/)[0]).sort()).toEqual((await real('helm', 'list', '-A')).split('\n').map((l) => l.split(/\s+/)[0]).sort())
+      expect(
+        text(list, 'out')
+          .split('\n')
+          .map((l) => l.split(/\s+/)[0])
+          .sort(),
+      ).toEqual(
+        (await real('helm', 'list', '-A'))
+          .split('\n')
+          .map((l) => l.split(/\s+/)[0])
+          .sort(),
+      )
     }
   }
   if (inKind) {
@@ -314,9 +357,7 @@ test('every supported change runs once approved, as the approver, and does what 
   }
 
   // Each change is in the audit log, naming the person and the cluster.
-  await expect
-    .poll(async () => (await cluster.auditLog()).filter((r) => r.action === 'watson.result' && String(r.detail ?? JSON.stringify(r)).includes(`deployment ${d}`)).length, { timeout: 15_000 })
-    .toBeGreaterThan(0)
+  await expect.poll(async () => (await cluster.auditLog()).filter((r) => r.action === 'watson.result' && String(r.detail ?? JSON.stringify(r)).includes(`deployment ${d}`)).length, { timeout: 15_000 }).toBeGreaterThan(0)
   const results = (await cluster.auditLog()).filter((r) => r.action === 'watson.approve')
   expect(results.length).toBeGreaterThan(0)
   expect(JSON.stringify(results.at(-1))).toContain(E2E_USER)
@@ -353,10 +394,13 @@ test('a cordon asks on a card that names the node, the pods, and the dry run; ap
 
     // The audit log has the request, the approval and the result, naming the person and the cluster.
     await expect
-      .poll(async () => {
-        const log = (await cluster.auditLog()).filter((r) => String(r.action).startsWith('watson.') && JSON.stringify(r).includes(`kubectl cordon ${node}`))
-        return ['watson.command', 'watson.approve', 'watson.result'].every((a) => log.some((r) => r.action === a && JSON.stringify(r).includes(E2E_USER) && JSON.stringify(r).includes('"cluster":"local"')))
-      }, { timeout: 15_000 })
+      .poll(
+        async () => {
+          const log = (await cluster.auditLog()).filter((r) => String(r.action).startsWith('watson.') && JSON.stringify(r).includes(`kubectl cordon ${node}`))
+          return ['watson.command', 'watson.approve', 'watson.result'].every((a) => log.some((r) => r.action === a && JSON.stringify(r).includes(E2E_USER) && JSON.stringify(r).includes('"cluster":"local"')))
+        },
+        { timeout: 15_000 },
+      )
       .toBe(true)
   } finally {
     await cluster.cordon(node, false)
@@ -401,11 +445,49 @@ test('a card lapses when its objects change before anyone approves it (P6-04)', 
   }
 })
 
+test('requests do not pile up: the newest is the card, the earlier one folds into a line and still waits (CF-65)', async ({ page }) => {
+  const node = await spareWorker(page.request)
+  await open(page)
+  await discardWaiting(page)
+  await expect(pane(page).getByTestId('watson-waiting-count')).toHaveCount(0)
+  const cordon = `kubectl cordon ${node}`
+  const label = `kubectl label nodes ${node} e2e.221b/cf65=yes`
+  await pane(page).getByTestId('watson-input').fill(cordon)
+  await pane(page).getByTestId('watson-input').press('Enter')
+  await expect(pane(page).getByTestId('watson-card').last()).toHaveAttribute('data-command', cordon)
+  await pane(page).getByTestId('watson-input').fill(label)
+  await pane(page).getByTestId('watson-input').press('Enter')
+  // Only the newest is a card; the earlier one is left waiting, not discarded.
+  const cards = pane(page).getByTestId('watson-card')
+  await expect(cards).toHaveCount(1)
+  await expect(cards.last()).toHaveAttribute('data-command', label)
+  const earlier = pane(page).getByTestId('watson-earlier')
+  await expect(earlier).toContainText('1 earlier request left waiting')
+  await expect(pane(page).getByTestId('watson-waiting-count')).toHaveText('2 waiting')
+  // Expanded, both are cards; the earlier one can still be decided.
+  await earlier.click()
+  await expect(cards).toHaveCount(2)
+  await expect(cards.first()).toHaveAttribute('data-command', cordon)
+  await earlier.click()
+  await expect(cards).toHaveCount(1)
+  // The newest decided, the earlier one does not come back as the card.
+  await cards.last().getByTestId('watson-discard').click()
+  await expect(cards).toHaveCount(0)
+  await expect(earlier).toContainText('1 earlier request left waiting')
+  await earlier.click()
+  await pane(page).locator(`[data-testid=watson-card][data-command="${cordon}"]`).getByTestId('watson-discard').click()
+  await expect(earlier).toHaveCount(0)
+  await expect(pane(page).getByTestId('watson-waiting-count')).toHaveCount(0)
+})
+
 test('a read-only connection runs reads and refuses changes, naming the rule (P6-05)', async ({ page, request, browserName }) => {
   const other = await cluster.other()
   const id = `${browserName}-watson-ro`
   await request.delete(`/api/v1/clusters/${id}`, { headers: SAME })
-  const added = await request.post('/api/v1/clusters', { data: { name: id, env: 'staging', description: 'Watson read-only test', server: other.server, ca: other.ca, caPem: other.caPem, auth: 'token', token: other.token, mode: 'read' }, headers: SAME })
+  const added = await request.post('/api/v1/clusters', {
+    data: { name: id, env: 'staging', description: 'Watson read-only test', server: other.server, ca: other.ca, caPem: other.caPem, auth: 'token', token: other.token, mode: 'read' },
+    headers: SAME,
+  })
   expect(added.status(), await added.text()).toBe(201)
   try {
     await expect.poll(async () => ((await (await request.get(`/api/v1/clusters/${id}`)).json()) as { state: string }).state, { timeout: 30_000 }).toBe('connected')
@@ -436,9 +518,7 @@ test('a change runs as the person who approves it, so their own access decides (
   const dev = await signInAs(browser, E2E_DEV)
   try {
     await expect(dev.getByTestId('cluster-state')).toHaveText('Connected', { timeout: 30_000 })
-    const can = inKind
-      ? await kubectl('auth', 'can-i', 'patch', 'nodes', `--as=${E2E_DEV_KUBE}`, '--as-group=221b:console-users', '--as-group=system:authenticated').catch((e: unknown) => String(e))
-      : 'n/a'
+    const can = inKind ? await kubectl('auth', 'can-i', 'patch', 'nodes', `--as=${E2E_DEV_KUBE}`, '--as-group=221b:console-users', '--as-group=system:authenticated').catch((e: unknown) => String(e)) : 'n/a'
     const it = await watson(dev.request, `kubectl cordon ${node}`)
     expect(it.status, `can-i patch nodes as ${E2E_DEV_KUBE}: ${can} ${JSON.stringify({ status: it.status, exit: it.exit, reason: it.reason, plan: it.plan?.dryRun })} ${text(it)}`).toBe('failed')
     expect(text(it, 'err')).toMatch(/forbidden/i)
@@ -480,9 +560,7 @@ test('on a production cluster with the rule on, a second person approves (P6-07)
     // It runs as the viewer, and the requester sees it run.
     await expect(lastRan(page)).toContainText(`node/${node} cordoned`, { timeout: 30_000 })
     await expect(lastRan(page).getByTestId('watson-status')).toContainText('approved by')
-    await expect
-      .poll(async () => (await cluster.auditLog()).some((r) => r.action === 'watson.approve' && JSON.stringify(r).includes(E2E_VIEWER) && JSON.stringify(r).includes(`kubectl cordon ${node}`)), { timeout: 15_000 })
-      .toBe(true)
+    await expect.poll(async () => (await cluster.auditLog()).some((r) => r.action === 'watson.approve' && JSON.stringify(r).includes(E2E_VIEWER) && JSON.stringify(r).includes(`kubectl cordon ${node}`)), { timeout: 15_000 }).toBe(true)
   } finally {
     await viewer?.context().close()
     await page.request.put('/api/v1/watson/config', { data: { twoPerson: false }, headers: SAME })
@@ -534,7 +612,13 @@ test('Watson moves to a window of its own, with Sherlock, approvals there run, a
   }
 
   // Docking it back closes the window; the commands are in the panel.
-  await Promise.all([popup.waitForEvent('close'), popup.locator('[data-testid=assistants-dock-back]:visible').click().catch(() => undefined)])
+  await Promise.all([
+    popup.waitForEvent('close'),
+    popup
+      .locator('[data-testid=assistants-dock-back]:visible')
+      .click()
+      .catch(() => undefined),
+  ])
   await expect(pane(page)).toBeVisible({ timeout: 10_000 })
   await expect(lastRan(page)).toContainText(`node/${node} cordoned`)
 })
@@ -552,7 +636,16 @@ test('the panel meets WCAG 2.2 AA, with a card and output, in both themes (X-12)
     await expect(pane(page).getByTestId('watson-card').last().getByTestId('watson-dryrun')).toBeVisible({ timeout: 30_000 })
     await page.evaluate(() => Promise.allSettled(document.getAnimations().map((a) => a.finished)))
     const r = await new AxeBuilder({ page }).include('[data-testid=watson]').withTags(TAGS).analyze()
-    expect(r.violations.map((v) => `${v.id}: ${v.help} — ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(', ')}`), theme).toEqual([])
+    expect(
+      r.violations.map(
+        (v) =>
+          `${v.id}: ${v.help} — ${v.nodes
+            .slice(0, 3)
+            .map((n) => n.target.join(' '))
+            .join(', ')}`,
+      ),
+      theme,
+    ).toEqual([])
     await pane(page).getByTestId('watson-card').last().getByTestId('watson-discard').click()
   }
 })

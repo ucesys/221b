@@ -13,7 +13,12 @@ const ALICE = 'e2e-alice@corp.example'
 const GROUP = 'e2e:readers'
 
 const rbacGroup = 'rbac.authorization.k8s.io'
-const role = (kind: 'ClusterRole' | 'Role', name: string, rules: unknown[], namespace?: string): KubeObject => ({ apiVersion: `${rbacGroup}/v1`, kind, metadata: { name, ...(namespace ? { namespace } : {}), labels: { e2e: 'rbac' } }, rules })
+const role = (kind: 'ClusterRole' | 'Role', name: string, rules: unknown[], namespace?: string): KubeObject => ({
+  apiVersion: `${rbacGroup}/v1`,
+  kind,
+  metadata: { name, ...(namespace ? { namespace } : {}), labels: { e2e: 'rbac' } },
+  rules,
+})
 const binding = (kind: 'ClusterRoleBinding' | 'RoleBinding', name: string, roleRef: [string, string], subjects: unknown[], namespace?: string): KubeObject => ({
   apiVersion: `${rbacGroup}/v1`,
   kind,

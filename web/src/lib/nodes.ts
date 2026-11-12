@@ -5,7 +5,7 @@
 import type { NodeRow, Taint, Tone } from '../api/types'
 import { fCores, fMem, nWord, pct, pctTxt } from './format'
 
-export type RoleFilter = 'all' | 'control-plane' | 'worker'
+export type RoleFilter = 'all' | 'control-plane' | 'worker' | 'host'
 
 export const toneRank: Record<Tone, number> = { err: 3, warn: 2, info: 1, muted: 0, ok: 0 }
 
@@ -146,6 +146,7 @@ export function problemsCell(r: NodeRow): ProblemsCell {
 
 /** The short role tag: control-plane nodes are "master", as RKE2 and kubectl get nodes call them (6.4). */
 export function roleTag(r: NodeRow): { text: string; title: string } {
+  if (r.role === 'host') return { text: 'host', title: 'A host outside Kubernetes, reached by SSH from the console' }
   if (r.role === 'control-plane') {
     const extra = r.roles.filter((x) => x !== 'control-plane' && x !== 'master')
     return { text: 'master', title: 'Control plane' + (extra.length ? ` (also ${extra.join(', ')})` : '') }
@@ -170,8 +171,7 @@ export function cpuMeter(r: NodeRow): Meter {
     text: pctTxt(req),
     sub: fCores(r.cpu.requested),
     tip:
-      `CPU requested ${fCores(r.cpu.requested)} of ${fCores(r.cpu.allocatable)} cores (${pctTxt(req)}); ${fCores(free(r.cpu))} free to schedule` +
-      (use == null ? '; in use unknown' : `; in use ${fCores(r.cpu.used ?? 0)} (${pctTxt(use)})`),
+      `CPU requested ${fCores(r.cpu.requested)} of ${fCores(r.cpu.allocatable)} cores (${pctTxt(req)}); ${fCores(free(r.cpu))} free to schedule` + (use == null ? '; in use unknown' : `; in use ${fCores(r.cpu.used ?? 0)} (${pctTxt(use)})`),
   }
 }
 
@@ -183,9 +183,7 @@ export function memoryMeter(r: NodeRow): Meter {
     usePct: use ?? 0,
     text: pctTxt(req),
     sub: fMem(r.memory.requested),
-    tip:
-      `Memory requested ${fMem(r.memory.requested)} of ${fMem(r.memory.allocatable)} (${pctTxt(req)}); ${fMem(free(r.memory))} free to schedule` +
-      (use == null ? '; in use unknown' : `; in use ${fMem(r.memory.used)} (${pctTxt(use)})`),
+    tip: `Memory requested ${fMem(r.memory.requested)} of ${fMem(r.memory.allocatable)} (${pctTxt(req)}); ${fMem(free(r.memory))} free to schedule` + (use == null ? '; in use unknown' : `; in use ${fMem(r.memory.used)} (${pctTxt(use)})`),
   }
 }
 
@@ -300,13 +298,7 @@ export function resourceSections(r: NodeRow, metrics: boolean, metricsNote: stri
         { k: 'In use', v: usage ? fMem(r.memory.used) : '—', sub: usage ? `${pctTxt(mU)} of the machine` : '', tone: mU > 85 ? 'err' : undefined },
         { k: 'Limits', v: fMem(r.memory.limits), sub: pctTxt(mL), tone: mL > 100 ? 'warn' : undefined },
       ],
-      note: !usage
-        ? ''
-        : mL > 100
-          ? `Memory limits exceed allocatable (${pctTxt(mL)}) — pods can be OOM-killed if they all grow at once.`
-          : mR > 75
-            ? `Less than ${pctTxt(100 - mR)} of memory is left for new requests.`
-            : '',
+      note: !usage ? '' : mL > 100 ? `Memory limits exceed allocatable (${pctTxt(mL)}) — pods can be OOM-killed if they all grow at once.` : mR > 75 ? `Less than ${pctTxt(100 - mR)} of memory is left for new requests.` : '',
       noteTone: 'warn',
     },
     {

@@ -79,9 +79,16 @@ function FilterSection({ title, entries, sel, counts, onSet, note, testId }: { t
         )}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12, minHeight: 22 }}>
           <label className="rk-hit" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: 'var(--fg2)' }}>
-            <input type="checkbox" checked={allOn} ref={(el) => {
+            <input
+              type="checkbox"
+              checked={allOn}
+              ref={(el) => {
                 if (el) el.indeterminate = !allOn && nOn > 0
-              }} onChange={() => onSet(allOn ? ['-'] : undefined)} style={{ width: 15, height: 15, margin: 0, accentColor: 'var(--accent)', cursor: 'pointer' }} data-testid={`${testId}-all`} />
+              }}
+              onChange={() => onSet(allOn ? ['-'] : undefined)}
+              style={{ width: 15, height: 15, margin: 0, accentColor: 'var(--accent)', cursor: 'pointer' }}
+              data-testid={`${testId}-all`}
+            />
             <span>
               Select all <span style={{ color: 'var(--fg3)' }}>({keys.length})</span>
             </span>
@@ -166,7 +173,17 @@ function LabelPicker({ pairs, value, onChange }: { pairs: StoragePair[]; value: 
         }
       }}
     >
-      <button ref={button} className="rk-btn" aria-expanded={open} aria-haspopup="true" data-on={value.length > 0} onClick={() => setOpen(!open)} style={{ height: 32 }} title="Narrow the rows by the labels of their claims and volumes" data-testid="storage-labels">
+      <button
+        ref={button}
+        className="rk-btn"
+        aria-expanded={open}
+        aria-haspopup="true"
+        data-on={value.length > 0}
+        onClick={() => setOpen(!open)}
+        style={{ height: 32 }}
+        title="Narrow the rows by the labels of their claims and volumes"
+        data-testid="storage-labels"
+      >
         <FilterIcon />
         Select by label
         {value.length > 0 && <span className="rk-cnt">{value.length}</span>}
@@ -239,7 +256,8 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
   // see; its counts and the table from the rows search, labels and Needs
   // attention leave.
   const sels: Selections = useMemo(() => ({ ns: readSelection(p, 'ns'), node: readSelection(p, 'node'), cls: readSelection(p, 'class') }), [p])
-  const nodeInfo = useMemo(() => nodesView.rows.map((n) => ({ name: n.name, role: n.role, cordoned: n.cordoned })), [nodesView.rows])
+  // Hosts outside Kubernetes hold no volumes.
+  const nodeInfo = useMemo(() => nodesView.rows.filter((n) => n.role !== 'host').map((n) => ({ name: n.name, role: n.role, cordoned: n.cordoned })), [nodesView.rows])
   const nsNames = useMemo(() => namespacesView.rows.map((n) => n.name), [namespacesView.rows])
   const nsList = useMemo(() => namespaceEntries(data.pairs, data.quotas, nsNames), [data.pairs, data.quotas, nsNames])
   const nodeList = useMemo(() => nodeEntries(data.pairs, nodeInfo), [data.pairs, nodeInfo])
@@ -281,7 +299,12 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
   const cell = (id: string, x: StoragePair): ReactNode => {
     switch (id) {
       case 'volume': {
-        if (x.state === 'pending' || !x.volume) return <div className="rk-st-name"><span className="rk-dim">{x.classMissing ? 'none' : 'none yet'}</span></div>
+        if (x.state === 'pending' || !x.volume)
+          return (
+            <div className="rk-st-name">
+              <span className="rk-dim">{x.classMissing ? 'none' : 'none yet'}</span>
+            </div>
+          )
         // A role that may not read volumes sees the name from the claim, which opens nothing (ST-20).
         const name = clusterWide ? (
           <a className="rk-mono rk-st-row" {...peekLink({ kind: 'volume', name: x.volume })} title={x.volume} data-testid="storage-volume">
@@ -416,14 +439,30 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
       case 'mode':
         return x.volumeMode ?? <span className="rk-dim">—</span>
       case 'source':
-        return x.source ? <span className="rk-mono" title={x.source.text}>{x.source.text}</span> : <span className="rk-dim">—</span>
+        return x.source ? (
+          <span className="rk-mono" title={x.source.text}>
+            {x.source.text}
+          </span>
+        ) : (
+          <span className="rk-dim">—</span>
+        )
       case 'labels':
-        return <span className="rk-mono" title={pairLabels(x).join('\n')}>{pairLabels(x).join(', ') || '—'}</span>
+        return (
+          <span className="rk-mono" title={pairLabels(x).join('\n')}>
+            {pairLabels(x).join(', ') || '—'}
+          </span>
+        )
       case 'release':
-        return x.release ? <a className="rk-mono rk-st-row" href={href('helm', [x.namespace ?? '', x.release])}>{x.release}</a> : <span className="rk-dim">—</span>
+        return x.release ? (
+          <a className="rk-mono rk-st-row" href={href('helm', [x.namespace ?? '', x.release])}>
+            {x.release}
+          </a>
+        ) : (
+          <span className="rk-dim">—</span>
+        )
       case 'binding': {
         const b = classOf.get(x.class)?.binding
-        return b ? (b === 'WaitForFirstConsumer' ? 'on first use' : 'immediate') : <span className="rk-dim">—</span>
+        return b ? b === 'WaitForFirstConsumer' ? 'on first use' : 'immediate' : <span className="rk-dim">—</span>
       }
     }
     return null
@@ -467,7 +506,17 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
     ]
   }
 
-  const empty = !loaded ? 'Waiting for the first list of volumes and claims…' : data.pairs.length === 0 ? (clusterWide ? 'No volumes or claims in this cluster.' : 'No claims in the namespaces your role can see.') : shown.length === 0 ? (attention ? 'No volume or claim needs attention.' : 'No volume or claim matches.') : ''
+  const empty = !loaded
+    ? 'Waiting for the first list of volumes and claims…'
+    : data.pairs.length === 0
+      ? clusterWide
+        ? 'No volumes or claims in this cluster.'
+        : 'No claims in the namespaces your role can see.'
+      : shown.length === 0
+        ? attention
+          ? 'No volume or claim needs attention.'
+          : 'No volume or claim matches.'
+        : ''
   const sortTh = (id: string) => {
     const c = visible.find((x) => x.id === id)!
     const act = table.sort.col === id
@@ -482,11 +531,32 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
 
   return (
     <>
-      <aside className="rk-pane" aria-label="Storage filters" style={{ flex: '1 1 320px', maxWidth: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRight: '1px solid var(--line)' }} data-testid="storage-sidebar">
+      <aside
+        className="rk-pane"
+        aria-label="Storage filters"
+        style={{ flex: '1 1 320px', maxWidth: '100%', display: 'flex', flexDirection: 'column', background: 'var(--surface)', borderRight: '1px solid var(--line)' }}
+        data-testid="storage-sidebar"
+      >
         <div style={{ marginTop: -1 }}>
           <FilterSection title="Filter by namespace" entries={nsList} sel={sels.ns} counts={counts.ns} onSet={(v) => set({ ns: v })} testId="storage-ns-list" />
-          <FilterSection title="Filter by node" entries={nodeList} sel={sels.node} counts={counts.node} onSet={(v) => set({ node: v })} note={namesOnlyNodes ? 'Kubernetes lets you list claims but not nodes, so the nodes are listed by the names your pods carry.' : undefined} testId="storage-node-list" />
-          <FilterSection title="Filter by storage class" entries={classList} sel={sels.cls} counts={counts.cls} onSet={(v) => set({ class: v })} note={canClasses ? undefined : 'Your role does not list storage classes, so the classes are the names your claims carry.'} testId="storage-class-list" />
+          <FilterSection
+            title="Filter by node"
+            entries={nodeList}
+            sel={sels.node}
+            counts={counts.node}
+            onSet={(v) => set({ node: v })}
+            note={namesOnlyNodes ? 'Kubernetes lets you list claims but not nodes, so the nodes are listed by the names your pods carry.' : undefined}
+            testId="storage-node-list"
+          />
+          <FilterSection
+            title="Filter by storage class"
+            entries={classList}
+            sel={sels.cls}
+            counts={counts.cls}
+            onSet={(v) => set({ class: v })}
+            note={canClasses ? undefined : 'Your role does not list storage classes, so the classes are the names your claims carry.'}
+            testId="storage-class-list"
+          />
         </div>
       </aside>
       <main className="rk-pane rk-st-page" aria-label="Storage" style={{ flex: '999 1 560px' }}>
@@ -517,7 +587,16 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
               {needing}
             </span>
           </label>
-          <SearchBox rows={labelled} terms={pairTerms} value={table.query} onChange={table.setQuery} placeholder={clusterWide ? 'Search volumes, claims and pods' : 'Search claims and pods'} label={clusterWide ? 'Search volumes, claims and pods' : 'Search claims and pods'} width={260} testId="storage-search" />
+          <SearchBox
+            rows={labelled}
+            terms={pairTerms}
+            value={table.query}
+            onChange={table.setQuery}
+            placeholder={clusterWide ? 'Search volumes, claims and pods' : 'Search claims and pods'}
+            label={clusterWide ? 'Search volumes, claims and pods' : 'Search claims and pods'}
+            width={260}
+            testId="storage-search"
+          />
           <LabelPicker pairs={data.pairs} value={labels} onChange={(v) => set({ label: v })} />
           <span className="rk-grow" />
           <ColumnsMenu cols={cols} hidden={table.hidden} defaults={table.defaults} onChange={table.setHidden} compact={false} />
@@ -560,7 +639,9 @@ export function StorageTab({ cluster, now, onToast, route }: TabProps) {
               <path d="M8 7.2v4M8 5h.01" />
             </svg>
             <span>
-              Volumes and storage classes are cluster-scoped. Your role reads them by name only, from your claims: the volume and class details, and the Available, Released and Failed volumes no claim holds, need a SuperViewer or SuperAdmin role. <b>Used</b> comes from each kubelet’s Summary API, which the console reads with its own ServiceAccount (<span className="rk-mono">kubeletStats</span> in the chart, as for node uptime), for the claims you may see; a claim no running pod mounts shows —.
+              Volumes and storage classes are cluster-scoped. Your role reads them by name only, from your claims: the volume and class details, and the Available, Released and Failed volumes no claim holds, need a SuperViewer or SuperAdmin
+              role. <b>Used</b> comes from each kubelet’s Summary API, which the console reads with its own ServiceAccount (<span className="rk-mono">kubeletStats</span> in the chart, as for node uptime), for the claims you may see; a claim
+              no running pod mounts shows —.
             </span>
           </div>
         )}

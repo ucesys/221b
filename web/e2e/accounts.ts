@@ -14,7 +14,6 @@ export const E2E_DEV_KUBE = process.env.E2E_DEV_KUBE ?? E2E_DEV
 /** A second SuperAdmin, who approves what the first asks for (the simulated provider has one). */
 export const E2E_ADMIN2 = process.env.E2E_ADMIN2 ?? 'admin2@corp.example'
 
-
 /**
  * Approves, as the second SuperAdmin, the console changes that wait: a
  * cluster taken off production waits for a second person where one could

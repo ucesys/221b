@@ -76,6 +76,15 @@ export const SECTIONS: [Section, string][] = [
   ['prio', 'Priority classes'],
 ]
 
+/** The section ids Sherlock's list_policies reads, as the section that shows each (S-5); prio is the tab's own id for priority. */
+const SECTION_ALIASES: Record<string, Section> = { priority: 'prio', drain: 'pdb', limits: 'quota' }
+
+/** The section a path segment opens: a section's id or list_policies' id for it, else the review. */
+export function sectionOf(id: string | undefined): Section {
+  if (id && Object.hasOwn(SECTION_ALIASES, id)) return SECTION_ALIASES[id]!
+  return SECTIONS.some(([s]) => s === id) ? (id as Section) : 'overview'
+}
+
 export interface PolicyFinding {
   id: string
   section: Section
@@ -115,7 +124,14 @@ export function hookUnreachable(h: HookRow): boolean {
 export function findings(m: PolicyModel): PolicyFinding[] {
   const out: PolicyFinding[] = []
   if (m.cni?.enforces === 'no') {
-    out.push({ id: 'cni', section: 'netpol', severity: 'medium', title: `${m.cni.name ?? 'The network plugin'} does not enforce NetworkPolicies`, text: `${m.cni.note ?? ''} Every policy here is stored and ignored: any pod can reach any other.`.trim(), path: [] })
+    out.push({
+      id: 'cni',
+      section: 'netpol',
+      severity: 'medium',
+      title: `${m.cni.name ?? 'The network plugin'} does not enforce NetworkPolicies`,
+      text: `${m.cni.note ?? ''} Every policy here is stored and ignored: any pod can reach any other.`.trim(),
+      path: [],
+    })
   }
   const open = openNamespaces(m)
   if (open.length) {
@@ -134,10 +150,28 @@ export function findings(m: PolicyModel): PolicyFinding[] {
     })
   }
   for (const d of m.drains.filter((x) => x.verdict === 'blocked')) {
-    out.push({ id: `drain-${d.node}`, section: 'pdb', severity: 'low', title: `Draining ${d.node} is blocked`, text: d.why, command: d.command, path: [{ text: `node ${d.node}`, link: { tab: 'nodes', params: { open: d.node } } }, ...d.blockers.filter((b) => b.budget).map((b) => ({ text: `PodDisruptionBudget ${b.namespace}/${b.budget}`, open: `pdb:${b.namespace}/${b.budget}` }))] })
+    out.push({
+      id: `drain-${d.node}`,
+      section: 'pdb',
+      severity: 'low',
+      title: `Draining ${d.node} is blocked`,
+      text: d.why,
+      command: d.command,
+      path: [
+        { text: `node ${d.node}`, link: { tab: 'nodes', params: { open: d.node } } },
+        ...d.blockers.filter((b) => b.budget).map((b) => ({ text: `PodDisruptionBudget ${b.namespace}/${b.budget}`, open: `pdb:${b.namespace}/${b.budget}` })),
+      ],
+    })
   }
   for (const b of m.pdbs.filter((x) => x.overlap.length)) {
-    out.push({ id: `pdb-overlap-${b.key}`, section: 'pdb', severity: 'medium', title: `${nWord(b.overlap.length, 'pod', 'pods')} of ${b.namespace}/${b.name} ${b.overlap.length === 1 ? 'has' : 'have'} more than one budget`, text: `${listText(b.overlap.slice(0, 5))}${b.overlap.length > 5 ? ' and more' : ''} ${b.overlap.length === 1 ? 'is' : 'are'} selected by another budget too. The eviction API refuses pods with more than one budget, so a drain stops at them.`, path: [{ text: `PodDisruptionBudget ${b.namespace}/${b.name}`, open: b.key }] })
+    out.push({
+      id: `pdb-overlap-${b.key}`,
+      section: 'pdb',
+      severity: 'medium',
+      title: `${nWord(b.overlap.length, 'pod', 'pods')} of ${b.namespace}/${b.name} ${b.overlap.length === 1 ? 'has' : 'have'} more than one budget`,
+      text: `${listText(b.overlap.slice(0, 5))}${b.overlap.length > 5 ? ' and more' : ''} ${b.overlap.length === 1 ? 'is' : 'are'} selected by another budget too. The eviction API refuses pods with more than one budget, so a drain stops at them.`,
+      path: [{ text: `PodDisruptionBudget ${b.namespace}/${b.name}`, open: b.key }],
+    })
   }
   for (const r of m.rollouts.filter((x) => x.stalls)) {
     const quotas = [...new Set(r.short.map((s) => s.quota))]
@@ -147,7 +181,10 @@ export function findings(m: PolicyModel): PolicyFinding[] {
       severity: 'medium',
       title: `A rolling update of ${r.name} would stall on ${listText(quotas)}`,
       text: `An update first adds ${nWord(r.surge, 'pod', 'pods')} and removes none until ${r.surge === 1 ? 'it is' : 'they are'} ready (maxUnavailable resolves to 0 for ${nWord(r.replicas, 'replica', 'replicas')}). The quota has too little room: ${listText(r.short.map((s) => `${s.resource} (${s.left} left, ${s.need} needed)`))}. The new ReplicaSet would report “exceeded quota” and the old pods would keep running the old version.`,
-      path: [...quotas.map((q) => ({ text: `ResourceQuota ${r.namespace}/${q}`, open: `quota:${r.namespace}/${q}` })), { text: `Deployment ${r.namespace}/${r.name}`, link: { tab: 'namespaces', path: [r.namespace], params: { open: 'Deployment/' + r.name } } }],
+      path: [
+        ...quotas.map((q) => ({ text: `ResourceQuota ${r.namespace}/${q}`, open: `quota:${r.namespace}/${q}` })),
+        { text: `Deployment ${r.namespace}/${r.name}`, link: { tab: 'namespaces', path: [r.namespace], params: { open: 'Deployment/' + r.name } } },
+      ],
     })
   }
   for (const n of appNamespaces(m).filter((x) => !x.enforce && x.pods > 0 && x.baseline.fail.length === 0)) {
@@ -168,18 +205,41 @@ export function findings(m: PolicyModel): PolicyFinding[] {
       section: 'psa',
       severity: 'info',
       title: `${listText(priv.map((n) => n.name))} ${priv.length === 1 ? 'allows' : 'allow'} privileged pods on purpose`,
-      text: priv.map((n) => `${n.name}: ${n.baseline.fail.length ? `${nWord(n.baseline.fail.length, 'pod fails', 'pods fail')} baseline (${shortReasons(n.baseline.fail)})` : 'every pod passes baseline'}`).join('. ') + '. Limit who can create pods in these namespaces.',
+      text:
+        priv.map((n) => `${n.name}: ${n.baseline.fail.length ? `${nWord(n.baseline.fail.length, 'pod fails', 'pods fail')} baseline (${shortReasons(n.baseline.fail)})` : 'every pod passes baseline'}`).join('. ') +
+        '. Limit who can create pods in these namespaces.',
       path: priv.map((n) => ({ text: `namespace ${n.name}`, link: { tab: 'namespaces', path: [n.name] } })),
     })
   }
   for (const h of m.hooks) {
     const svc = h.service ?? h.url ?? ''
     if (h.failurePolicy === 'Fail' && hookUnreachable(h)) {
-      out.push({ id: `hook-${h.key}`, section: 'webhooks', severity: 'high', title: `${h.webhook} rejects what it checks: its backend can’t answer`, text: `${h.kind} webhook ${h.webhook} (${h.config}) uses failurePolicy Fail and ${svc}: ${h.reach.text}. Until it answers, the API server rejects every request it matches: ${h.rules.join('; ')}.`, path: [{ text: `${h.kind}WebhookConfiguration ${h.config}`, open: h.key }] })
+      out.push({
+        id: `hook-${h.key}`,
+        section: 'webhooks',
+        severity: 'high',
+        title: `${h.webhook} rejects what it checks: its backend can’t answer`,
+        text: `${h.kind} webhook ${h.webhook} (${h.config}) uses failurePolicy Fail and ${svc}: ${h.reach.text}. Until it answers, the API server rejects every request it matches: ${h.rules.join('; ')}.`,
+        path: [{ text: `${h.kind}WebhookConfiguration ${h.config}`, open: h.key }],
+      })
     } else if (h.failurePolicy !== 'Fail' && hookUnreachable(h)) {
-      out.push({ id: `hook-${h.key}`, section: 'webhooks', severity: 'low', title: `${h.webhook} is skipped: its backend can’t answer`, text: `${h.kind} webhook ${h.webhook} (${h.config}) uses failurePolicy Ignore and ${svc}: ${h.reach.text}. The requests it matches (${h.rules.join('; ')}) go through unchecked.`, path: [{ text: `${h.kind}WebhookConfiguration ${h.config}`, open: h.key }] })
+      out.push({
+        id: `hook-${h.key}`,
+        section: 'webhooks',
+        severity: 'low',
+        title: `${h.webhook} is skipped: its backend can’t answer`,
+        text: `${h.kind} webhook ${h.webhook} (${h.config}) uses failurePolicy Ignore and ${svc}: ${h.reach.text}. The requests it matches (${h.rules.join('; ')}) go through unchecked.`,
+        path: [{ text: `${h.kind}WebhookConfiguration ${h.config}`, open: h.key }],
+      })
     } else if (h.failurePolicy === 'Fail' && h.reach.total === 1) {
-      out.push({ id: `hook-${h.key}`, section: 'webhooks', severity: 'low', title: `${h.webhook} runs one pod and fails closed`, text: `${h.kind} webhook ${h.webhook} (${h.config}) uses failurePolicy Fail with one pod behind ${svc}. While that pod restarts or its node drains, the API server rejects what it matches: ${h.rules.join('; ')}. Two replicas with a disruption budget remove the single point of failure.`, path: [{ text: `${h.kind}WebhookConfiguration ${h.config}`, open: h.key }] })
+      out.push({
+        id: `hook-${h.key}`,
+        section: 'webhooks',
+        severity: 'low',
+        title: `${h.webhook} runs one pod and fails closed`,
+        text: `${h.kind} webhook ${h.webhook} (${h.config}) uses failurePolicy Fail with one pod behind ${svc}. While that pod restarts or its node drains, the API server rejects what it matches: ${h.rules.join('; ')}. Two replicas with a disruption budget remove the single point of failure.`,
+        path: [{ text: `${h.kind}WebhookConfiguration ${h.config}`, open: h.key }],
+      })
     }
   }
   const order: Record<FindingSeverity, number> = { high: 0, medium: 1, low: 2, info: 3 }
@@ -194,7 +254,10 @@ export function shortReasons(pods: { reasons: string[] }[]): string {
 /** "1 high · 2 medium". */
 export function countsText(fs: PolicyFinding[]): string {
   const sev: FindingSeverity[] = ['high', 'medium', 'low', 'info']
-  const parts = sev.map((s) => [s, fs.filter((f) => f.severity === s).length] as const).filter(([, n]) => n).map(([s, n]) => `${n} ${s}`)
+  const parts = sev
+    .map((s) => [s, fs.filter((f) => f.severity === s).length] as const)
+    .filter(([, n]) => n)
+    .map(([s, n]) => `${n} ${s}`)
   return parts.length ? parts.join(' · ') : 'Nothing to review'
 }
 
@@ -225,7 +288,11 @@ export function sectionSub(s: Section, m: PolicyModel, fs: PolicyFinding[]): str
     case 'webhooks':
       return `${nWord(m.hooks.length, 'webhook', 'webhooks')} · ${m.hooks.filter((h) => h.failurePolicy === 'Fail').length} fail closed`
     case 'prio':
-      return `${nWord(m.priorities.length, 'class', 'classes')} · ${nWord(m.priorities.reduce((a, p) => a + p.pods, 0), 'pod uses', 'pods use')} one`
+      return `${nWord(m.priorities.length, 'class', 'classes')} · ${nWord(
+        m.priorities.reduce((a, p) => a + p.pods, 0),
+        'pod uses',
+        'pods use',
+      )} one`
   }
 }
 

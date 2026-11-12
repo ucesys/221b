@@ -47,9 +47,15 @@ type Options struct {
 	KubeletStats bool
 	// SettingsConfigMap is a "namespace/name" ConfigMap that exists from
 	// the start, empty, as the chart's does, with the others the chart makes
-	// beside it: <name>-audit, -sessions, -automation and -automation-runs.
+	// beside it: <name>-audit, -sessions, -automation, -automation-runs, -ai,
+	// -issues, -runs, -proposals, -cases (kept for the copy of CF-104),
+	// -knowledge, -wiki and -casework.
 	// Empty means none.
 	SettingsConfigMap string
+	// Preload, with SettingsConfigMap, fills the console's ConfigMaps
+	// beside it (by name) and adds ConfigMaps of the console's own, such
+	// as the cases' (Phase 12, wave 6); nil leaves them empty.
+	Preload func(name string) (map[string]map[string]string, []SeedObject)
 	// Problems adds a not-ready node, a cordoned node, a node under disk
 	// pressure and some failing pods, so the problem views have something
 	// to show.
@@ -194,12 +200,35 @@ func New(o Options) *Sim {
 	}
 	if ns, name, ok := strings.Cut(o.SettingsConfigMap, "/"); ok && ns != "" && name != "" {
 		// The settings' ConfigMap and the others the chart makes beside it.
-		for _, n := range []string{name, name + "-audit", name + "-sessions", name + "-automation", name + "-automation-runs"} {
-			s.addLocked(&corev1.ConfigMap{TypeMeta: metav1.TypeMeta{Kind: "ConfigMap", APIVersion: "v1"}, ObjectMeta: metav1.ObjectMeta{Name: n, Namespace: ns, UID: uid(ns + "/" + n)}, Data: map[string]string{}})
+		// --- One flow for findings and cases (Phase 12, wave 6): what the
+		// console starts with in them, and ConfigMaps of its own (the cases).
+		var data map[string]map[string]string
+		var objects []SeedObject
+		if o.Preload != nil {
+			data, objects = o.Preload(name)
+		}
+		for _, n := range []string{name, name + "-audit", name + "-sessions", name + "-automation", name + "-automation-runs", name + "-ai", name + "-issues", name + "-runs", name + "-proposals", name + "-cases", name + "-knowledge", name + "-wiki", name + "-casework"} {
+			d := map[string]string{}
+			for k, v := range data[n] {
+				d[k] = v
+			}
+			s.addLocked(&corev1.ConfigMap{TypeMeta: metav1.TypeMeta{Kind: "ConfigMap", APIVersion: "v1"}, ObjectMeta: metav1.ObjectMeta{Name: n, Namespace: ns, UID: uid(ns + "/" + n)}, Data: d})
+		}
+		for _, x := range objects {
+			s.addLocked(&corev1.ConfigMap{TypeMeta: metav1.TypeMeta{Kind: "ConfigMap", APIVersion: "v1"},
+				ObjectMeta: metav1.ObjectMeta{Name: x.Name, Namespace: ns, UID: uid(ns + "/" + x.Name), Labels: x.Labels}, Data: x.Data})
 		}
 	}
 	s.routes()
 	return s
+}
+
+// SeedObject is a ConfigMap the simulator starts with, as the console
+// would have made it.
+type SeedObject struct {
+	Name   string
+	Labels map[string]string
+	Data   map[string]string
 }
 
 // ServeHTTP serves the fake API and the admin API.

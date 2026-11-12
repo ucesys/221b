@@ -183,7 +183,9 @@ type Checkout struct {
 	Commit        string
 	CommitDate    time.Time
 	CommitSubject string
-	FS            billy.Filesystem
+	// Version is a repository chart's version (HR-01); "" for git.
+	Version string
+	FS      billy.Filesystem
 }
 
 // boundedStorage keeps objects in memory like memory.Storage, but takes

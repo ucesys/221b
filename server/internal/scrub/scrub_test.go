@@ -5,6 +5,17 @@ import (
 	"testing"
 )
 
+// Text scrubbed again stays as it is: a case's shared draft is scrubbed
+// on every save (CF-59).
+func TestScrubTwiceChangesNothing(t *testing.T) {
+	for _, in := range []string{"password=hunter2 same as C-4", "token: abc123def, next", `{"api_key":"hunter2"}`, "--db-password hunter2secret --port 80"} {
+		once := Text(in)
+		if twice := Text(once); twice != once {
+			t.Errorf("%q: %q, then %q", in, once, twice)
+		}
+	}
+}
+
 // Each credential form leaves the text, and what stands beside it stays.
 func TestScrubRemovesEveryCredentialForm(t *testing.T) {
 	for name, c := range map[string]struct{ in, gone, kept string }{

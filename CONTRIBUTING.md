@@ -15,7 +15,7 @@ You need Go 1.26, Node.js 24 and make. Docker, kind, kubectl and helm are needed
 ```sh
 make dev-sim     # the console on http://127.0.0.1:8080 against a simulated cluster
 make test        # Go and browser unit tests
-make lint        # gofmt, go vet, tsc and eslint
+make lint        # gofmt, go vet, tsc, eslint and prettier --check
 make e2e-sim     # browser end-to-end tests against the simulator
 make chart-lint  # lint and render the Helm chart
 make help        # everything else
@@ -26,7 +26,7 @@ The [README](README.md#develop) has more: running against a real cluster, the br
 ## What a change needs
 
 - **Tests.** Go code has unit tests next to it and passes `go test -race ./...`. Browser code has unit tests next to it (`*.test.ts`), and a change a person can see has a browser test in `web/e2e`. A fix comes with a test that fails without it.
-- **Lint.** `make lint` is clean. Go is formatted by gofmt; TypeScript passes `tsc` and `eslint`.
+- **Lint.** `make lint` is clean. Go is formatted by gofmt; TypeScript passes `tsc` and `eslint`, and is formatted by Prettier (`cd web && npm run format`; settings in `web/.prettierrc.json`).
 - **Requirements.** A change that meets or changes a requirement names it (for example `P3-02` or `RB-41`) in the code comment and the pull request, and updates [docs/requirements.md](docs/requirements.md). A design decision gets a record in [docs/architecture.md](docs/architecture.md).
 - **Security stance.** 221B never shows, logs or exports a Secret's value; every read and write is made as the person asking (Kubernetes impersonation); nothing an AI model writes runs without a person's approval. A change that touches any of these says so in the pull request.
 - **Upgrades.** A change to what the server keeps in the cluster (the settings ConfigMap, connection Secrets, local accounts) or to chart values keeps upgrades from the two previous releases working ([docs/upgrading.md](docs/upgrading.md)). Rename a value with a fallback for the old name rather than removing it.

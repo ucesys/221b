@@ -90,7 +90,12 @@ test('sorts by any column', async ({ page, request }) => {
   expect(await shownNames(page)).toEqual(rows.map((r) => r.name).sort(compareNatural))
   await name.click()
   await expect(name).toHaveAttribute('aria-label', /sorted descending/)
-  expect(await shownNames(page)).toEqual(rows.map((r) => r.name).sort(compareNatural).reverse())
+  expect(await shownNames(page)).toEqual(
+    rows
+      .map((r) => r.name)
+      .sort(compareNatural)
+      .reverse(),
+  )
 
   await page.locator('.rk-gh [data-col="cpu"]').click()
   await expect(page.locator('.rk-gh [data-col="cpu"]')).toHaveAttribute('aria-label', /sorted descending/)
@@ -115,19 +120,28 @@ test('sorts by any column', async ({ page, request }) => {
 test('filters by role and by search, which suggests as you type', async ({ page, request }) => {
   const rows = nodeRows(await snapshot(request))
   const cp = rows.filter((r) => r.role === 'control-plane')
-  await page.getByRole('group', { name: 'Show nodes by role' }).getByRole('button', { name: /Control plane/ }).click()
+  await page
+    .getByRole('group', { name: 'Show nodes by role' })
+    .getByRole('button', { name: /Control plane/ })
+    .click()
   // Problems first, then by name: compare the sets.
   expect((await shownNames(page)).sort(compareNatural)).toEqual(cp.map((r) => r.name).sort(compareNatural))
   await expect(page.getByTestId('shown')).toHaveText(`Showing ${cp.length} of ${rows.length} nodes`)
   await expect(page).toHaveURL(/role=control-plane/)
-  await page.getByRole('group', { name: 'Show nodes by role' }).getByRole('button', { name: /Workers/ }).click()
+  await page
+    .getByRole('group', { name: 'Show nodes by role' })
+    .getByRole('button', { name: /Workers/ })
+    .click()
   await expect(page.locator('[data-node]')).toHaveCount(rows.length - cp.length)
   await page.getByRole('group', { name: 'Show nodes by role' }).getByRole('button', { name: /^All/ }).click()
 
   const target = rows.find((r) => r.role === 'worker')!.name
   const search = page.getByTestId('node-search')
   await search.fill(target)
-  const expected = rows.filter((r) => matchesQuery(nodeTerms(r), queryWords(target))).map((r) => r.name).sort(compareNatural)
+  const expected = rows
+    .filter((r) => matchesQuery(nodeTerms(r), queryWords(target)))
+    .map((r) => r.name)
+    .sort(compareNatural)
   expect((await shownNames(page)).sort(compareNatural)).toEqual(expected)
   await expect(page.getByTestId('shown')).toHaveText(`Showing ${expected.length} of ${rows.length} nodes`)
 
@@ -143,7 +157,10 @@ test('filters by role and by search, which suggests as you type', async ({ page,
     const picked = (await search.inputValue()).trim()
     expect(picked.length).toBeGreaterThan(6)
     await expect(list).toHaveCount(0)
-    const expectedPicked = rows.filter((r) => matchesQuery(nodeTerms(r), queryWords(picked))).map((r) => r.name).sort(compareNatural)
+    const expectedPicked = rows
+      .filter((r) => matchesQuery(nodeTerms(r), queryWords(picked)))
+      .map((r) => r.name)
+      .sort(compareNatural)
     expect((await shownNames(page)).sort(compareNatural)).toEqual(expectedPicked)
   }
 
@@ -160,13 +177,19 @@ test('narrows the nodes by label and taint, and keeps that in the link (P2-09)',
   await expect(picker).toBeVisible()
   await picker.locator(`[data-taint="${taint!.id}"]`).click()
   await expect(picker.locator(`[data-taint="${taint!.id}"]`)).toHaveAttribute('aria-pressed', 'true')
-  const expected = rows.filter((r) => r.taints.some((t) => `${t.key}${t.value ? '=' + t.value : ''}:${t.effect}` === taint!.id)).map((r) => r.name).sort(compareNatural)
+  const expected = rows
+    .filter((r) => r.taints.some((t) => `${t.key}${t.value ? '=' + t.value : ''}:${t.effect}` === taint!.id))
+    .map((r) => r.name)
+    .sort(compareNatural)
   await expect(picker.getByTestId('facet-match')).toHaveText(`${expected.length} of ${rows.length} nodes match`)
   await page.getByRole('button', { name: 'Done', exact: true }).click()
   expect((await shownNames(page)).sort(compareNatural)).toEqual(expected)
   await expect(page).toHaveURL(new RegExp(`taint=${encodeURIComponent(taint!.id).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`))
   // The chip removes the taint again.
-  await page.getByTestId('facet-chips').getByRole('button', { name: `Remove ${taint!.id}` }).click()
+  await page
+    .getByTestId('facet-chips')
+    .getByRole('button', { name: `Remove ${taint!.id}` })
+    .click()
   await expect(page.locator('[data-node]')).toHaveCount(rows.length)
 })
 
@@ -204,7 +227,10 @@ test('exports what is on screen to Excel', async ({ page, request }) => {
   const snap = await snapshot(request)
   const rows = nodeRows(snap)
   // A filter, a sort and a hidden column, so the sheet has to follow all three.
-  await page.getByRole('group', { name: 'Show nodes by role' }).getByRole('button', { name: /Workers/ }).click()
+  await page
+    .getByRole('group', { name: 'Show nodes by role' })
+    .getByRole('button', { name: /Workers/ })
+    .click()
   await page.locator('.rk-gh [data-col="memory"]').click()
   await page.getByRole('button', { name: /^Columns/ }).click()
   await page.getByRole('checkbox', { name: 'Pods' }).uncheck()
@@ -227,7 +253,7 @@ test('exports what is on screen to Excel', async ({ page, request }) => {
   expect(sheet.length - 1).toBe(names.length)
   // Same values, apart from usage, which moves between reads.
   const usage = new Set(expected.head.flatMap((h, i) => (/in use/.test(h) ? [i] : [])))
-  const strip = (rows: unknown[][]) => rows.map((r) => r.map((v, i) => (usage.has(i) ? 0 : v ?? null)))
+  const strip = (rows: unknown[][]) => rows.map((r) => r.map((v, i) => (usage.has(i) ? 0 : (v ?? null))))
   expect(strip(sheet.slice(1))).toEqual(strip(expected.rows.map((r) => r.map((v) => (v === '' ? null : v)))))
 })
 
@@ -270,7 +296,9 @@ test('exports what is on screen as CSV, with the columns shown', async ({ page }
   const text = readFileSync(await download.path(), 'utf8')
   expect(text.startsWith('\uFEFF')).toBe(true)
   const lines = text.slice(1).split('\r\n').filter(Boolean)
-  expect(lines[0]).toBe('Node,Role,Status,CPU requested (cores),CPU requested %,CPU in use (cores),CPU allocatable (cores),CPU free (cores),Memory requested (GiB),Memory requested %,Memory in use (GiB),Memory allocatable (GiB),Memory free (GiB),Pods,Pod capacity,CPU reserved (cores),Memory reserved (GiB),Zone,Joined')
+  expect(lines[0]).toBe(
+    'Node,Role,Status,CPU requested (cores),CPU requested %,CPU in use (cores),CPU allocatable (cores),CPU free (cores),Memory requested (GiB),Memory requested %,Memory in use (GiB),Memory allocatable (GiB),Memory free (GiB),Pods,Pod capacity,CPU reserved (cores),Memory reserved (GiB),Zone,Joined',
+  )
   expect(lines.length - 1).toBe(names.length)
   expect(lines.slice(1).map((l) => l.split(',')[0])).toEqual(names)
 })
@@ -372,7 +400,9 @@ test.describe('on a phone', () => {
 })
 
 test('the fleets beside the table filter it, and an administrator keeps them there (R2-02, R2-11)', async ({ page, request }) => {
-  const names = nodeRows(await snapshot(request)).map((r) => r.name).sort(compareNatural)
+  const names = nodeRows(await snapshot(request))
+    .map((r) => r.name)
+    .sort(compareNatural)
   const one = names[0]!
   const put = (fleets: unknown[]) => page.evaluate(async (body) => (await fetch('/api/v1/fleets', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fleets: body }) })).status, fleets)
   expect(await put([{ id: 'one', name: 'One node', color: 1, labels: [], taints: [], kind: 'nodes', nodes: [one] }])).toBe(200)
@@ -408,7 +438,7 @@ test('the fleets beside the table filter it, and an administrator keeps them the
   }
 })
 
-test('picked nodes use the Fleets tab\'s bar and dialog, and go to an SSH pairing (asked October 30, 2026)', async ({ page, request }) => {
+test("picked nodes use the Fleets tab's bar and dialog, and go to an SSH pairing (asked October 30, 2026)", async ({ page, request }) => {
   const rows = nodeRows(await snapshot(request))
   const [a, b] = [rows[0]!, rows[1]!]
   const pick = (name: string) => page.locator(`[data-node="${name}"]`).getByTestId('fleet-pick-node')
@@ -450,4 +480,45 @@ test('picked nodes use the Fleets tab\'s bar and dialog, and go to an SSH pairin
   await bar.getByTestId('fleet-nodebar-cancel').click()
   await expect(bar).toHaveCount(0)
   await expect(pick(a.name)).not.toBeChecked()
+})
+
+test("the Node heading picks every node in view, the bar collects their facts, and a fleet's drawer has Tools for its nodes (asked November 4, 2026)", async ({ page, request }) => {
+  const names = nodeRows(await snapshot(request))
+    .map((r) => r.name)
+    .sort(compareNatural)
+  const bar = page.getByTestId('fleet-nodebar')
+  const all = page.getByTestId('fleet-pick-all')
+  await page.goto('/#/nodes')
+  await expect(page.getByTestId('cluster-state')).toHaveText('Connected')
+  await expect(all).not.toBeChecked()
+  await all.check()
+  await expect(bar).toContainText(`Picked ${names.length} nodes`)
+  // Collect facts says how it went, whatever this console's Automation allows.
+  await bar.getByTestId('fleet-nodebar-facts').click()
+  await expect(page.locator('.rk-toast')).toContainText(/Collected facts from \d+ of \d+ nodes|Could not collect facts/, { timeout: 30_000 })
+  await all.uncheck()
+  await expect(bar).toHaveCount(0)
+
+  // A fleet's drawer: the wrench lists Pair for SSH and Collect facts for its nodes.
+  const one = names[0]!
+  const put = (fleets: unknown[]) => page.evaluate(async (body) => (await fetch('/api/v1/fleets', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fleets: body }) })).status, fleets)
+  expect(await put([{ id: 'tools', name: 'Tools fleet', color: 2, labels: [], taints: [], kind: 'nodes', nodes: [one] }])).toBe(200)
+  // Watson runs where Sherlock is on: the tools open through it.
+  const sherlock = { clusters: { local: true }, model: 'claude-opus-5-5', dailyUSD: 20, monthlyUSD: 200 }
+  const same = { 'Sec-Fetch-Site': 'same-origin' }
+  expect((await page.request.put('/api/v1/sherlock/config', { data: sherlock, headers: same })).status()).toBe(200)
+  try {
+    await page.reload()
+    await page.getByTestId('node-fleets').getByTestId('node-fleet-edit').click()
+    const editor = page.getByTestId('fleet-editor')
+    await editor.getByTestId('tools-fleet-Tools fleet').click()
+    const menu = page.getByTestId('tools-menu')
+    await expect(menu).toContainText('Tools for fleet Tools fleet · 1 node')
+    await expect(menu.getByTestId('tool-ssh-pair')).toBeVisible()
+    await expect(menu.getByTestId('tool-facts')).toBeVisible()
+    await page.keyboard.press('Escape')
+  } finally {
+    await put([])
+    await page.request.put('/api/v1/sherlock/config', { data: { ...sherlock, clusters: {} }, headers: same })
+  }
 })

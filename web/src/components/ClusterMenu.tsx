@@ -144,7 +144,15 @@ export function ClusterMenu({ cluster, stream, route, me, onEdit }: Props) {
                       </span>
                     </span>
                   </button>
-                  <a className="rk-icon-btn" role="menuitem" aria-label={`${admin ? 'Edit the connection to' : 'About the connection to'} ${c.name}`} title={admin ? `Edit the connection to ${c.name}` : `About the connection to ${c.name}`} href={clusterPageHref(c.id)} onClick={() => setOpen(false)} data-testid="cluster-connection">
+                  <a
+                    className="rk-icon-btn"
+                    role="menuitem"
+                    aria-label={`${admin ? 'Edit the connection to' : 'About the connection to'} ${c.name}`}
+                    title={admin ? `Edit the connection to ${c.name}` : `About the connection to ${c.name}`}
+                    href={clusterPageHref(c.id)}
+                    onClick={() => setOpen(false)}
+                    data-testid="cluster-connection"
+                  >
                     <SlidersIcon />
                   </a>
                 </div>

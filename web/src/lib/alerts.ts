@@ -65,7 +65,10 @@ export function contextOf(r: AlertRow, now: number): { text: string; mono: boole
     }
     const ready = `${r.ready ?? 0}/${r.total ?? 0}`
     if (r.oom && r.lastAt) {
-      return { text: `Now ${r.status} (${ready} ready). A container was killed for running out of memory ${fmtAge(r.lastAt, now)} ago (OOMKilled, exit code ${r.lastExit ?? 137}); ${nWord(r.restarts ?? 0, 'restart', 'restarts')} in all.`, mono: false }
+      return {
+        text: `Now ${r.status} (${ready} ready). A container was killed for running out of memory ${fmtAge(r.lastAt, now)} ago (OOMKilled, exit code ${r.lastExit ?? 137}); ${nWord(r.restarts ?? 0, 'restart', 'restarts')} in all.`,
+        mono: false,
+      }
     }
     return { text: `Now ${r.status} (${ready} ready). These warnings were raised while it started ${fmtAge(r.started, now)} ago.`, mono: false }
   }
@@ -260,13 +263,33 @@ export function bannersOf(all: AlertRow[], now: number): AlertBanner[] {
     return b
   }
   if (failed.length || nodeErr.length || volErr.length) {
-    const title = [failed.length ? nWord(failed.length, 'pod failed to start', 'pods failed to start') : '', nodeErr.length ? nWord(nodeErr.length, 'node error', 'node errors') : '', volErr.length ? nWord(volErr.length, 'volume error', 'volume errors') : ''].filter(Boolean).join(' · ')
-    const items: BannerItem[] = [...failed.map((r) => ({ text: `${r.namespace}/${r.name} — ${r.status}${r.restarts ? `, ${nWord(r.restarts, 'restart', 'restarts')}` : ''}` })), ...nodeErr.map((r) => ({ text: nodeItem(r, 'error') })), ...volErr.map(volumeItem)]
+    const title = [
+      failed.length ? nWord(failed.length, 'pod failed to start', 'pods failed to start') : '',
+      nodeErr.length ? nWord(nodeErr.length, 'node error', 'node errors') : '',
+      volErr.length ? nWord(volErr.length, 'volume error', 'volume errors') : '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    const items: BannerItem[] = [
+      ...failed.map((r) => ({ text: `${r.namespace}/${r.name} — ${r.status}${r.restarts ? `, ${nWord(r.restarts, 'restart', 'restarts')}` : ''}` })),
+      ...nodeErr.map((r) => ({ text: nodeItem(r, 'error') })),
+      ...volErr.map(volumeItem),
+    ]
     out.push(banner('err', title, items))
   }
   if (pending.length || nodeWarn.length || volWarn.length) {
-    const title = [pending.length ? nWord(pending.length, 'pod pending', 'pods pending') : '', nodeWarn.length ? nWord(nodeWarn.length, 'node warning', 'node warnings') : '', volWarn.length ? nWord(volWarn.length, 'volume warning', 'volume warnings') : ''].filter(Boolean).join(' · ')
-    const items: BannerItem[] = [...pending.map((r) => ({ text: `${r.namespace}/${r.name} — ${r.node ? r.status : 'Unschedulable'} for ${fmtAge(r.started, now)}` })), ...nodeWarn.map((r) => ({ text: nodeItem(r, 'any') })), ...volWarn.map(volumeItem)]
+    const title = [
+      pending.length ? nWord(pending.length, 'pod pending', 'pods pending') : '',
+      nodeWarn.length ? nWord(nodeWarn.length, 'node warning', 'node warnings') : '',
+      volWarn.length ? nWord(volWarn.length, 'volume warning', 'volume warnings') : '',
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    const items: BannerItem[] = [
+      ...pending.map((r) => ({ text: `${r.namespace}/${r.name} — ${r.node ? r.status : 'Unschedulable'} for ${fmtAge(r.started, now)}` })),
+      ...nodeWarn.map((r) => ({ text: nodeItem(r, 'any') })),
+      ...volWarn.map(volumeItem),
+    ]
     out.push(banner('warn', title, items))
   }
   return out
@@ -289,4 +312,66 @@ export function minutesOf(iso: string | undefined, now: number): number {
 
 export function openLabel(r: AlertRow): string {
   return r.kind === 'pod' ? 'Open pod' : r.kind === 'pvc' ? 'Open claim' : 'Open node'
+}
+
+// --- Alerts that are not a problem (Phase 12, wave 6, CF-84) ---
+
+/** The most an alert's name by its reason keeps, as the server's. */
+const MAX_REASON = 120
+
+const BACK_OFF = /^back-off (?:\S+ )?(restarting failed container|pulling image)\b/i
+
+/** A message as an alert's name says it: its first sentence, without the kubelet's times and names, lower case first unless it starts with an acronym or a name, without its full stop. */
+function reasonText(msg: string | undefined): string {
+  let t = (msg ?? '').trim().split('\n')[0] ?? ''
+  const stop = t.indexOf('. ')
+  if (stop >= 0) t = t.slice(0, stop)
+  t = t.trim().replace(/\.$/, '').trim()
+  const m = BACK_OFF.exec(t)
+  if (m) t = `back-off ${m[1]!.toLowerCase()}`
+  if (/^[A-Z][a-z]/.test(t)) t = t[0]!.toLowerCase() + t.slice(1)
+  return t
+}
+
+const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+
+/**
+ * An alert's name by its reason, short (CF-84), as the server names it for
+ * the cases (jobs.Alert.Named): "Pod status Unknown: node r620-worker stopped
+ * reporting", "CrashLoopBackOff: back-off restarting failed container",
+ * "Node not ready: kubelet stopped reporting"; the status, or the kind, when
+ * nothing says why.
+ */
+export function alertReason(r: AlertRow): string {
+  let reason = (r.waiting || r.lastReason || '').trim()
+  let message = (r.waitingMessage || r.why || r.lastMessage || '').trim()
+  const problem = r.kind === 'node' ? r.problems?.[0] : undefined
+  if (problem) {
+    reason ||= problem.title
+    message ||= problem.summary
+  }
+  if (!reason && r.events.length > 0) {
+    reason = r.events[0]!.reason
+    message ||= r.events[0]!.message
+  }
+  const status = (r.status ?? '').trim()
+  const msg = reasonText(message)
+  let out: string
+  if (r.kind === 'pod' && same(status, 'Unknown')) {
+    out = r.node ? `Pod status Unknown: node ${r.node} stopped reporting` : 'Pod status Unknown: its node stopped reporting'
+  } else if (r.kind === 'node' && ['unknown', 'not ready', 'notready'].includes(status.toLowerCase())) {
+    const why = reasonText(reason)
+    out = 'Node not ready' + (why && !same(why, 'not ready') ? `: ${why}` : msg ? `: ${msg}` : '')
+  } else {
+    const head = r.kind === 'node' && reason ? reason : status || reason || r.kind
+    out = msg && !same(msg, head) ? `${head}: ${msg}` : reason && !same(reason, head) ? `${head}: ${reason}` : head
+  }
+  return out.length > MAX_REASON ? out.slice(0, MAX_REASON - 1) + '…' : out
+}
+
+/** The key of the alert about a case's object ("pod:shop/web-1", "node:n1"), as the Alerts tab keys them; "" for another kind. */
+export function alertKeyOf(o: { kind: string; namespace?: string; name: string } | undefined): string {
+  const kind = { Pod: 'pod', Node: 'node', PersistentVolumeClaim: 'pvc' }[o?.kind ?? '']
+  if (!o || !kind) return ''
+  return o.namespace && kind !== 'node' ? `${kind}:${o.namespace}/${o.name}` : `${kind}:${o.name}`
 }

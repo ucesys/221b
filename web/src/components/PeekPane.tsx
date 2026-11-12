@@ -56,49 +56,53 @@ export function PeekPane({ route, cluster, now, onToast }: Props) {
   )
 
   function panel() {
-  if (!peek) return null
-  switch (peek.kind) {
-    case 'node': {
-      const r = nodes.rows.find((n) => n.name === peek.name)
-      if (!r) return nodes.loaded ? <Missing what={`Node ${peek.name}`} onClose={close} /> : null
-      return <NodePanel r={r} metrics={cluster?.metrics === 'available'} metricsNote={cluster?.metricsMessage ?? ''} uptimeNote={cluster?.uptimeMessage ?? ''} now={now} onClose={close} onToast={onToast} />
+    if (!peek) return null
+    switch (peek.kind) {
+      case 'node': {
+        const r = nodes.rows.find((n) => n.name === peek.name)
+        if (!r) return nodes.loaded ? <Missing what={`Node ${peek.name}`} onClose={close} /> : null
+        return <NodePanel r={r} metrics={cluster?.metrics === 'available'} metricsNote={cluster?.metricsMessage ?? ''} uptimeNote={cluster?.uptimeMessage ?? ''} now={now} onClose={close} onToast={onToast} />
+      }
+      // The Storage drawers (ST-13, ST-17), over whatever tab is open.
+      case 'claim':
+      case 'volume':
+        return <StoragePanel key={peek.kind === 'claim' ? `claim:${peek.namespace}/${peek.name}` : `volume:${peek.name}`} target={peek} cluster={cluster} clusterId={route.cluster} now={now} onClose={close} onToast={onToast} />
+      case 'class':
+        return <StorageClassPanel key={`class:${peek.name}`} name={peek.name} now={now} onClose={close} onToast={onToast} />
+      case 'pod':
+        return <PodPanel key={`${peek.namespace}/${peek.name}`} podKey={`${peek.namespace}/${peek.name}`} row={null} gone={false} cluster={cluster} now={now} onClose={close} onToast={onToast} />
+      case 'service':
+        return <ServicePanel key={`${peek.namespace}/${peek.name}`} serviceKey={`${peek.namespace}/${peek.name}`} row={null} gone={false} now={now} onClose={close} onToast={onToast} />
+      case 'object':
+        return (
+          <ObjectPanel
+            key={`${peek.type}/${peek.namespace}/${peek.name}`}
+            kind={peek.type}
+            namespace={peek.namespace}
+            name={peek.name}
+            row={null}
+            gone={false}
+            cluster={cluster}
+            now={now}
+            linkTo={(k, n) =>
+              peekHref(k === 'Pod' ? { kind: 'pod', namespace: peek.namespace, name: n } : k === 'Service' ? { kind: 'service', namespace: peek.namespace, name: n } : { kind: 'object', type: k, namespace: peek.namespace, name: n })
+            }
+            onClose={close}
+            onToast={onToast}
+          />
+        )
+      case 'policy':
+        return policies.loaded ? <PolicyPanel key={peek.key} keyOf={peek.key} m={modelOf(policies.rows)} now={now} onClose={close} onToast={onToast} /> : null
     }
-    // The Storage drawers (ST-13, ST-17), over whatever tab is open.
-    case 'claim':
-    case 'volume':
-      return <StoragePanel key={peek.kind === 'claim' ? `claim:${peek.namespace}/${peek.name}` : `volume:${peek.name}`} target={peek} cluster={cluster} clusterId={route.cluster} now={now} onClose={close} onToast={onToast} />
-    case 'class':
-      return <StorageClassPanel key={`class:${peek.name}`} name={peek.name} now={now} onClose={close} onToast={onToast} />
-    case 'pod':
-      return <PodPanel key={`${peek.namespace}/${peek.name}`} podKey={`${peek.namespace}/${peek.name}`} row={null} gone={false} cluster={cluster} now={now} onClose={close} onToast={onToast} />
-    case 'service':
-      return <ServicePanel key={`${peek.namespace}/${peek.name}`} serviceKey={`${peek.namespace}/${peek.name}`} row={null} gone={false} now={now} onClose={close} onToast={onToast} />
-    case 'object':
-      return (
-        <ObjectPanel
-          key={`${peek.type}/${peek.namespace}/${peek.name}`}
-          kind={peek.type}
-          namespace={peek.namespace}
-          name={peek.name}
-          row={null}
-          gone={false}
-          cluster={cluster}
-          now={now}
-          linkTo={(k, n) => peekHref(k === 'Pod' ? { kind: 'pod', namespace: peek.namespace, name: n } : k === 'Service' ? { kind: 'service', namespace: peek.namespace, name: n } : { kind: 'object', type: k, namespace: peek.namespace, name: n })}
-          onClose={close}
-          onToast={onToast}
-        />
-      )
-    case 'policy':
-      return policies.loaded ? <PolicyPanel key={peek.key} keyOf={peek.key} m={modelOf(policies.rows)} now={now} onClose={close} onToast={onToast} /> : null
-  }
   }
 }
 
 function Missing({ what, onClose }: { what: string; onClose: () => void }) {
   return (
     <Drawer label="Details" kicker="Not found" title={what} onClose={onClose} width={560}>
-      <p data-peek-error="" style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>It is not in this cluster any more, or Kubernetes does not let you see it.</p>
+      <p data-peek-error="" style={{ margin: 0, fontSize: 12.5, color: 'var(--fg2)' }}>
+        It is not in this cluster any more, or Kubernetes does not let you see it.
+      </p>
     </Drawer>
   )
 }

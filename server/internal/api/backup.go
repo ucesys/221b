@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"reflect"
 	"slices"
@@ -23,6 +24,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/automation"
+	"github.com/ucesys/221b/server/internal/backup"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/kv"
@@ -35,16 +37,27 @@ import (
 )
 
 // Backup and restore (Administration › Backup, asked October 30, 2026):
-// one JSON file with everything the console keeps of its own, settings
-// and records alike, and never a credential; and the restore of the
-// parts a SuperAdmin picks from such a file.
+// one gzipped JSON file with everything the console keeps of its own,
+// settings and records alike, where every secret is sealed with the
+// install's backup key (ADR-137, asked November 9, 2026; before, and
+// without a key, a placeholder, clusters.Placeholder); and the restore of
+// the parts a SuperAdmin picks from such a file, which takes a secret back
+// only where the console has none, and lists every secret it could not
+// open to set again. Since Phase 12 the file is
+// made of parts registered with package backup (ADR-80): the console's
+// own are registered here, and every other package registers its own.
 
-// backupFormat marks the file; a restore refuses any other.
-const backupFormat = "221b-backup/1"
+// backupFormat marks the file; a restore takes it and the first format,
+// which left the secrets out rather than holding placeholders.
+const (
+	backupFormat   = backup.Format
+	backupFormatV1 = backup.FormatV1
+)
 
 const (
-	ActionBackup  = "backup.export"
-	ActionRestore = "backup.restore"
+	ActionBackup     = "backup.export"
+	ActionRestore    = "backup.restore"
+	ActionBackupOpen = "backup.open"
 )
 
 // backupUser is a local user without the password hash.
@@ -57,39 +70,39 @@ type backupUser struct {
 	Disabled   bool       `json:"disabled,omitempty"`
 	Created    time.Time  `json:"created"`
 	LastSignIn time.Time  `json:"lastSignIn,omitzero"`
+	// Password is the password's hash, sealed (ADR-137), or the
+	// placeholder.
+	Password string `json:"password,omitempty"`
 }
 
-// backupFile is the file.
-type backupFile struct {
-	Format  string    `json:"format"`
-	Version string    `json:"version"`
-	Taken   time.Time `json:"taken"`
-	By      string    `json:"by,omitempty"`
-	// LeftOut names what a backup never holds.
-	LeftOut []string `json:"leftOut"`
-	// Settings are the shared settings: refresh, time format, fleets,
-	// acknowledged alerts, Sherlock's and Watson's settings, grace, banners.
-	Settings *settings.Settings `json:"settings,omitempty"`
-	// Users are the local users made in the console; those from the
-	// deployment's values are not here (they come with the values).
-	Users []backupUser `json:"users,omitempty"`
-	// Connections are the cluster connections as the page shows them,
-	// without their credentials: for the record, and to add again by hand.
-	Connections []clusters.Spec `json:"connections,omitempty"`
-	// Apps are the Helm applications' records: source, values and
-	// parameters as typed, commands, and what was deployed from where.
-	Apps []apps.Record `json:"apps,omitempty"`
-	// ToolboxSessions are the records of ended Toolbox sessions.
-	ToolboxSessions []sessions.Record `json:"toolboxSessions,omitempty"`
-	// SherlockSpend is the spend ledger, as kept.
-	SherlockSpend json.RawMessage `json:"sherlockSpend,omitempty"`
-	// SSHPairings are the nodes paired for SSH, as kept: public keys only.
-	SSHPairings json.RawMessage `json:"sshPairings,omitempty"`
-	// Audit is the audit log the console kept, newest first.
-	Audit []audit.Event `json:"audit,omitempty"`
-	// Automation is Automation's scripts, fleet parameters, run profiles
-	// and groups.
-	Automation *backupAutomation `json:"automation,omitempty"`
+// backupConnection is a connection and its credential: each secret in it
+// sealed, or the placeholder.
+type backupConnection struct {
+	clusters.Spec
+	Credential *backupCredential `json:"credential,omitempty"`
+}
+
+// backupCredential is clusters.Credential as a backup writes it, field
+// for field, so the one converts to the other.
+type backupCredential struct {
+	Token            string `json:"token,omitempty"`
+	Kubeconfig       string `json:"kubeconfig,omitempty"`
+	Context          string `json:"context,omitempty"`
+	CertPEM          string `json:"certPem,omitempty"`
+	KeyPEM           string `json:"keyPem,omitempty"`
+	CAPEM            string `json:"caPem,omitempty"`
+	OIDCIssuer       string `json:"oidcIssuer,omitempty"`
+	OIDCClientID     string `json:"oidcClientId,omitempty"`
+	OIDCClientSecret string `json:"oidcClientSecret,omitempty"`
+	OIDCRefreshToken string `json:"oidcRefreshToken,omitempty"`
+	OIDCScopes       string `json:"oidcScopes,omitempty"`
+}
+
+// backupApp is an application's record; RepoToken is its repository
+// token, sealed, or the placeholder.
+type backupApp struct {
+	apps.Record
+	RepoToken string `json:"repoToken,omitempty"`
 }
 
 // backupAutomation is Automation's records: every script with its
@@ -104,21 +117,31 @@ type backupAutomation struct {
 	Groups    []automation.Group                              `json:"groups,omitempty"`
 }
 
-var backupLeftOut = []string{
-	"the passwords of local users (their hashes stay in the console's Secret; a restored user gets a new password on the Users page)",
-	"the credentials of cluster connections (tokens, kubeconfigs, certificates, OIDC secrets): a restore lists the connections to add again",
-	"the repository tokens of applications",
-	"Sherlock's API key",
-	"the SSH authority's private key (the Secret <release>-ssh-ca): pairings work again only with that Secret; without it, pair the nodes again",
-	"sign-in sessions",
-	"Watson's cards and Sherlock's conversations, which live in memory until the console restarts",
-	"the Toolbox's session recordings, which are in the transcript store",
-	"Automation's runs and the facts read from nodes",
+// restoreReport says what a restore did.
+type restoreReport = backup.Report
+
+// restoreRequest is a backup file and the parts of it to apply, and where
+// the file came from, for the audit log (a file's name, or the S3 object).
+//
+// WithoutSecrets is the SuperAdmin's yes to restoring a file whose
+// secrets this install's key cannot open (ADR-137): without it such a
+// restore is refused, and applies nothing.
+type restoreRequest struct {
+	Backup         backup.File     `json:"backup"`
+	Parts          map[string]bool `json:"parts"`
+	Source         string          `json:"source,omitempty"`
+	WithoutSecrets bool            `json:"withoutSecrets,omitempty"`
 }
 
 func (s *Server) backupRoutes() {
+	s.registerBackupParts()
 	s.handle("GET /api/v1/admin/backup", "admin-backup", s.getBackup)
+	s.handle("GET /api/v1/admin/backup/parts", "admin-backup-parts", s.getBackupParts)
+	s.handle("POST /api/v1/admin/backup/open", "admin-backup-open", s.postBackupOpen)
 	s.handle("POST /api/v1/admin/restore", "admin-restore", s.postRestore)
+	if s.opts.BackupS3 != nil {
+		s.backupS3Routes()
+	}
 }
 
 // loadKV reads one key of the key-value storage into v; false when there
@@ -134,113 +157,531 @@ func (s *Server) loadKV(ctx context.Context, key string, v any) (string, bool) {
 	return version, json.Unmarshal(b, v) == nil
 }
 
-func (s *Server) buildBackup(ctx context.Context, by string) (backupFile, error) {
-	f := backupFile{Format: backupFormat, Version: s.opts.Version, Taken: s.opts.Now().UTC(), By: by, LeftOut: backupLeftOut}
-	if s.opts.Settings != nil {
-		st := s.opts.Settings.Current().Settings
-		f.Settings = &st
-	}
-	if acc := s.accounts(); acc != nil {
-		for _, u := range acc.List() {
-			if u.Managed {
-				continue
-			}
-			f.Users = append(f.Users, backupUser{Username: u.Username, Name: u.Name, Email: u.Email, Groups: u.Groups, Super: u.Super, Disabled: u.Disabled, Created: u.Created, LastSignIn: u.LastSignIn})
-		}
-	}
-	if s.opts.Clusters != nil {
-		for _, sum := range s.opts.Clusters.List() {
-			f.Connections = append(f.Connections, sum.Spec)
-		}
-	}
-	if s.opts.Apps != nil {
-		recs, err := s.opts.Apps.List(ctx)
-		if err != nil {
-			return f, fmt.Errorf("reading the applications: %w", err)
-		}
-		f.Apps = recs
-	}
-	if s.opts.KV != nil {
-		var list []sessions.Record
-		if _, ok := s.loadKV(ctx, sessions.HistoryKey, &list); ok {
-			f.ToolboxSessions = list
-		}
-		var spend json.RawMessage
-		if _, ok := s.loadKV(ctx, sherlock.SpendKey, &spend); ok {
-			f.SherlockSpend = spend
-		}
-		var pairings json.RawMessage
-		if _, ok := s.loadKV(ctx, nodessh.PairingsKey, &pairings); ok {
-			f.SSHPairings = pairings
-		}
-	}
-	if s.opts.Audit != nil {
-		events, err := s.opts.Audit.Events(ctx)
-		if err != nil {
-			return f, fmt.Errorf("reading the audit log: %w", err)
-		}
-		f.Audit = events
-	}
-	if st := s.opts.AutomationStore; st != nil {
-		a := backupAutomation{}
-		var err error
-		if a.Scripts, err = st.Scripts(ctx); err == nil {
-			if a.Variables, err = st.AllVariables(ctx); err == nil {
-				var profiles []automation.RunProfile
-				if profiles, err = st.Profiles(ctx); err == nil {
-					for _, p := range profiles {
-						if !p.Builtin {
-							a.Profiles = append(a.Profiles, p)
-						}
-					}
-					a.Groups, err = st.Groups(ctx)
-				}
-			}
-		}
-		if err != nil {
-			return f, fmt.Errorf("reading Automation's records: %w", err)
-		}
-		f.Automation = &a
-	}
-	return f, nil
+// sshAuthorityBackup is the SSH authority's key as a backup carries it,
+// sealed (ADR-137); *nodessh.Service implements it.
+type sshAuthorityBackup interface {
+	AuthorityKey(ctx context.Context) ([]byte, error)
+	RestoreAuthority(ctx context.Context, pem []byte) error
 }
 
+// restoreRequestKey carries the restoring request to the console's own
+// parts, which record what they restore as its person.
+type restoreRequestKey struct{}
+
+func requestOf(ctx context.Context) *http.Request {
+	r, _ := ctx.Value(restoreRequestKey{}).(*http.Request)
+	return r
+}
+
+// fromReport hands a helper's report to the restore: its notes, and its
+// count, or nothing applied.
+func fromReport(env *backup.Env, rep restoreReport, part string) (int, error) {
+	for _, n := range rep.Notes {
+		env.Note("%s", n)
+	}
+	if n, ok := rep.Restored[part]; ok {
+		return n, nil
+	}
+	return 0, backup.ErrNotApplied
+}
+
+// helper runs one of the restore helpers below for a part.
+func helper(env *backup.Env, part string, f func(rep *restoreReport)) (int, error) {
+	rep := restoreReport{Restored: map[string]int{}}
+	f(&rep)
+	return fromReport(env, rep, part)
+}
+
+// skip notes why a part is not applied.
+func skip(env *backup.Env, format string, a ...any) (int, error) {
+	env.Note(format, a...)
+	return 0, backup.ErrNotApplied
+}
+
+// rawKV is a key of the storage as kept, or nothing.
+func (s *Server) rawKV(ctx context.Context, key string) (any, error) {
+	var raw json.RawMessage
+	if _, ok := s.loadKV(ctx, key, &raw); ok {
+		return raw, nil
+	}
+	return nil, nil
+}
+
+// registerBackupParts registers the console's own parts of a backup, in
+// the order a restore applies them: the hosts before the pairings, since a
+// host's pairing is of a host here.
+func (s *Server) registerBackupParts() {
+	r := s.backups
+	r.LeftOut("sign-in sessions", "Watson's cards and Sherlock's conversations, which live in memory until the console restarts")
+	r.Register(backup.Part{Name: "settings", Label: "Settings", Order: 10,
+		How: "replace the current ones: refresh, time format, fleets, acknowledged alerts, Sherlock and Watson",
+		Export: func(ctx context.Context, env *backup.Env) (any, error) {
+			if s.opts.Settings == nil {
+				return nil, nil
+			}
+			st := s.opts.Settings.Current().Settings
+			return &st, nil
+		},
+		Restore: func(ctx context.Context, raw json.RawMessage, env *backup.Env) (int, error) {
+			var in settings.Settings
+			if err := json.Unmarshal(raw, &in); err != nil {
+				return skip(env, "settings: %v", err)
+			}
+			if s.opts.Settings == nil {
+				return skip(env, "settings: this console keeps no settings")
+			}
+			if err := s.restorable(in); err != nil {
+				return skip(env, "settings: %v", err)
+			}
+			before := s.opts.Settings.Current()
+			after, err := s.opts.Settings.Update(ctx, in)
+			if err != nil {
+				return skip(env, "settings: %v", err)
+			}
+			s.recordRestoredSettings(requestOf(ctx), before.Settings, after.Settings)
+			return 1, nil
+		}})
+	r.Register(backup.Part{Name: "users", Label: "Local users", Order: 20,
+		How: "are added, with their password when the backup's key opens it, or updated: name, email, groups, super roles; a user here keeps their password",
+		Export: func(ctx context.Context, env *backup.Env) (any, error) {
+			acc := s.accounts()
+			if acc == nil {
+				return nil, nil
+			}
+			var users []backupUser
+			for _, u := range acc.List() {
+				if u.Managed {
+					continue
+				}
+				users = append(users, backupUser{Username: u.Username, Name: u.Name, Email: u.Email, Groups: u.Groups, Super: u.Super, Disabled: u.Disabled, Created: u.Created, LastSignIn: u.LastSignIn, Password: env.Seal(u.PasswordHash)})
+			}
+			return users, nil
+		},
+		Restore: func(ctx context.Context, raw json.RawMessage, env *backup.Env) (int, error) {
+			var users []backupUser
+			if err := json.Unmarshal(raw, &users); err != nil {
+				return skip(env, "users: %v", err)
+			}
+			return helper(env, "users", func(rep *restoreReport) { s.restoreUsers(requestOf(ctx), users, env, rep) })
+		}})
+	r.Register(backup.Part{Name: "connections", Label: "Cluster connections", Order: 30,
+		How: "missing here are added with their credentials when the backup's key opens them, or wait for them to be pasted again; a connection here keeps its own",
+		Export: func(ctx context.Context, env *backup.Env) (any, error) {
+			if s.opts.Clusters == nil {
+				return nil, nil
+			}
+			var out []backupConnection
+			for _, sum := range s.opts.Clusters.List() {
+				c := backupConnection{Spec: sum.Spec}
+				if !sum.Local {
+					cred, err := s.opts.Clusters.Sealed(ctx, sum.ID, env.Seal)
+					if err != nil {
+						return nil, fmt.Errorf("reading the connection %s: %w", sum.ID, err)
+					}
+					bc := backupCredential(cred)
+					c.Credential = &bc
+				}
+				out = append(out, c)
+			}
+			return out, nil
+		},
+		Restore: func(ctx context.Context, raw json.RawMessage, env *backup.Env) (int, error) {
+			var list []backupConnection
+			if err := json.Unmarshal(raw, &list); err != nil {
+				return skip(env, "connections: %v", err)
+			}
+			return helper(env, "connections", func(rep *restoreReport) { s.restoreConnections(requestOf(ctx), list, env, rep) })
+		},
+		Check: func(ctx context.Context, raw json.RawMessage, env *backup.Env) {
+			var list []backupConnection
+			if env.Picked("connections") || json.Unmarshal(raw, &list) != nil {
+				return
+			}
+			var missing []string
+			for _, c := range list {
+				if c.Local {
+					continue
+				}
+				if s.opts.Clusters != nil {
+					if _, ok := s.opts.Clusters.Summary(c.ID); ok {
+						continue
+					}
+				}
+				missing = append(missing, fmt.Sprintf("%s (%s, %s)", c.Name, c.Server, c.Auth))
+			}
+			if len(missing) > 0 {
+				env.Note("these connections are not here and were not restored: %s", strings.Join(missing, "; "))
+			}
+		}})
+	r.Register(backup.Part{Name: "apps", Label: "Helm applications", Order: 40,
+		How: "are added or replaced: source, values, parameters, commands; a repository token comes back when the backup's key opens it and this console has none. One this console would refuse is left out and named",
+		Export: func(ctx context.Context, env *backup.Env) (any, error) {
+			if s.opts.Apps == nil {
+				return nil, nil
+			}
+			recs, err := s.opts.Apps.List(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("reading the applications: %w", err)
+			}
+			var out []backupApp
+			for _, rec := range recs {
+				a := backupApp{Record: rec}
+				if rec.HasToken {
+					_, tok, err := s.opts.Apps.Get(ctx, rec.Cluster, rec.Namespace, rec.Name)
+					if err != nil {
+						return nil, fmt.Errorf("reading the application %s/%s: %w", rec.Namespace, rec.Name, err)
+					}
+					a.RepoToken = env.Seal(tok)
+				}
+				out = append(out, a)
+			}
+			return out, nil
+		},
+		Restore: func(ctx context.Context, raw json.RawMessage, env *backup.Env) (int, error) {
+			var list []backupApp
+			if err := json.Unmarshal(raw, &list); err != nil {
+				return skip(env, "applications: %v", err)
+			}
+			return helper(env, "apps", func(rep *restoreReport) { s.restoreApps(ctx, list, env, rep) })
+		}})
+	// Two secrets that are parts of their own, sealed (ADR-137): each
+	// is set here when this console has none, and listed to set again when
+	// the backup's key does not open it.
+	const sherlockKeyWhere = "Settings › Sherlock › API key"
+	r.Register(backup.Part{Name: "sherlockKey", Label: "Sherlock's API key", Order: 50,
+		How: "is set here when this console has none; a key here stays",
+		Export: func(ctx context.Context, env *backup.Env) (any, error) {
+			if k := s.opts.SherlockKeys; k != nil && k.Info().Set && !k.Fixed() {
+				return env.Seal(k.Key()), nil
+			}
+			return nil, nil
+		},
+		Restore: func(ctx context.Context, raw json.RawMessage, env *backup.Env) (int, error) {
+			var sealed string
+			if err := json.Unmarshal(raw, &sealed); err != nil {
+				return skip(env, "Sherlock's API key: %v", err)
+			}
+			k := s.opts.SherlockKeys
+			if k == nil {
+				return skip(env, "Sherlock's API key: this console has no place for it")
+			}
+			if k.Info().Set {
+				if err := backup.CheckSecret(sealed); err != nil {
+					return skip(env, "Sherlock's API key: %v", err)
+				}
+				return skip(env, "Sherlock's API key: this console has its own and keeps it")
+			}
+			key, err := env.Open(sealed, "Sherlock's API key", sherlockKeyWhere)
+			if err != nil {
+				return skip(env, "Sherlock's API key: %v", err)
+			}
+			if key == "" {
+				return 0, backup.ErrNotApplied
+			}
+			if err := k.SetFor(ctx, s.sherlockProvider(s.sherlockSettings()).Auth, key, env.By); err != nil {
+				env.SetAgain("Sherlock's API key", sherlockKeyWhere)
+				return skip(env, "Sherlock's API key: %v", err)
+			}
+			s.record(requestOf(ctx), audit.ActionSherlockSettings, "sherlock", "restored: the API key, from a backup")
+			return 1, nil
+		},
+		Check: func(ctx context.Context, raw json.RawMessage, env *backup.Env) {
+			if !env.Picked("sherlockKey") && (s.opts.SherlockKeys == nil || !s.opts.SherlockKeys.Info().Set) {
+				env.SetAgain("Sherlock's API key", sherlockKeyWhere)
+			}
+		}})
+	const sshWhere = "Nodes › Pair for SSH, each node again (or put the Secret <release>-ssh-ca back before restoring)"
+	r.Register(backup.Part{Name: "sshAuthority", Label: "The SSH authority's key", Order: 60,
+		How: "is set here when this console has no SSH authority yet, so the pairings work again; an authority here stays",
+		Export: func(ctx context.Context, env *backup.Env) (any, error) {
+			ca, ok := s.opts.SSH.(sshAuthorityBackup)
+			if !ok || s.opts.SSH.Fingerprint() == "" {
+				return nil, nil
+			}
+			if !env.Sealing() {
+				return backup.Placeholder, nil
+			}
+			pem, err := ca.AuthorityKey(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("reading the SSH authority's key: %w", err)
+			}
+			return env.Seal(string(pem)), nil
+		},
+		Restore: func(ctx context.Context, raw json.RawMessage, env *backup.Env) (int, error) {
+			var sealed string
+			if err := json.Unmarshal(raw, &sealed); err != nil {
+				return skip(env, "the SSH authority's key: %v", err)
+			}
+			ca, ok := s.opts.SSH.(sshAuthorityBackup)
+			if !ok {
+				return skip(env, "the SSH authority's key: SSH is off on this console")
+			}
+			if s.opts.SSH.Fingerprint() != "" {
+				if err := backup.CheckSecret(sealed); err != nil {
+					return skip(env, "the SSH authority's key: %v", err)
+				}
+				return skip(env, "the SSH authority's key: this console has its own SSH authority and keeps it; pairings made with the backup's work again only with that one")
+			}
+			pem, err := env.Open(sealed, "the SSH authority's private key", sshWhere)
+			if err != nil {
+				return skip(env, "the SSH authority's key: %v", err)
+			}
+			if pem == "" {
+				return 0, backup.ErrNotApplied
+			}
+			if err := ca.RestoreAuthority(ctx, []byte(pem)); err != nil {
+				env.SetAgain("the SSH authority's private key", sshWhere)
+				return skip(env, "the SSH authority's key: %v", err)
+			}
+			s.record(requestOf(ctx), ActionRestore, "ssh-authority", "restored the SSH authority's key, fingerprint "+s.opts.SSH.Fingerprint())
+			return 1, nil
+		},
+		Check: func(ctx context.Context, raw json.RawMessage, env *backup.Env) {
+			if !env.Picked("sshAuthority") && (s.opts.SSH == nil || s.opts.SSH.Fingerprint() == "") {
+				env.SetAgain("the SSH authority's private key", sshWhere)
+			}
+		}})
+	r.Register(backup.Part{Name: "toolboxSessions", Label: "Toolbox session records", Order: 70,
+		How:     "are merged with those here",
+		LeftOut: []string{"the Toolbox's session recordings, which are in the transcript store"},
+		Export: func(ctx context.Context, env *backup.Env) (any, error) {
+			var list []sessions.Record
+			if _, ok := s.loadKV(ctx, sessions.HistoryKey, &list); ok {
+				return list, nil
+			}
+			return nil, nil
+		},
+		Restore: func(ctx context.Context, raw json.RawMessage, env *backup.Env) (int, error) {
+			var list []sessions.Record
+			if err := json.Unmarshal(raw, &list); err != nil {
+				return skip(env, "toolbox sessions: %v", err)
+			}
+			if s.opts.KV == nil {
+				return skip(env, "toolbox sessions: this console has no storage for them")
+			}
+			n, err := s.mergeSessions(ctx, list)
+			if err != nil {
+				return skip(env, "toolbox sessions: %v", err)
+			}
+			return n, nil
+		}})
+	r.Register(backup.Part{Name: "sherlockSpend", Label: "Sherlock's spend", Order: 80,
+		How:    "replaces the ledger here",
+		Export: func(ctx context.Context, env *backup.Env) (any, error) { return s.rawKV(ctx, sherlock.SpendKey) },
+		Restore: func(ctx context.Context, raw json.RawMessage, env *backup.Env) (int, error) {
+			if s.opts.KV == nil {
+				return skip(env, "Sherlock's spend: this console has no storage for it")
+			}
+			if _, err := s.opts.KV.SaveKey(ctx, sherlock.SpendKey, raw, ""); err != nil {
+				return skip(env, "Sherlock's spend: %v", err)
+			}
+			if s.opts.Sherlock != nil {
+				s.opts.Sherlock.Ledger().Reload()
+			}
+			return 1, nil
+		}})
+	r.Register(backup.Part{Name: "sshHosts", Label: "Hosts outside Kubernetes", Order: 90,
+		How:    "missing here are added with their pinned host keys; a host or node of the same name here keeps its place",
+		Export: func(ctx context.Context, env *backup.Env) (any, error) { return s.rawKV(ctx, nodessh.HostsKey) },
+		Restore: func(ctx context.Context, raw json.RawMessage, env *backup.Env) (int, error) {
+			return helper(env, "sshHosts", func(rep *restoreReport) { s.restoreHosts(requestOf(ctx), raw, rep) })
+		}})
+	r.Register(backup.Part{Name: "sshPairings", Label: "SSH pairings", Order: 100,
+		How:    "are added to those here, each checked first; they work with the same SSH authority Secret",
+		Export: func(ctx context.Context, env *backup.Env) (any, error) { return s.rawKV(ctx, nodessh.PairingsKey) },
+		Restore: func(ctx context.Context, raw json.RawMessage, env *backup.Env) (int, error) {
+			var list map[string]nodessh.Pairing
+			if s.opts.KV == nil {
+				return skip(env, "SSH pairings: this console has no storage for them")
+			}
+			if err := json.Unmarshal(raw, &list); err != nil {
+				return skip(env, "SSH pairings: %v", err)
+			}
+			n, err := s.restorePairings(ctx, list, env.Note)
+			if err != nil {
+				return skip(env, "SSH pairings: %v", err)
+			}
+			return n, nil
+		}})
+	r.Register(backup.Part{Name: "audit", Label: "Audit log", Order: 110,
+		How: "is merged with the events here, each marked as restored",
+		Export: func(ctx context.Context, env *backup.Env) (any, error) {
+			if s.opts.Audit == nil {
+				return nil, nil
+			}
+			events, err := s.opts.Audit.Events(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("reading the audit log: %w", err)
+			}
+			return events, nil
+		},
+		Restore: func(ctx context.Context, raw json.RawMessage, env *backup.Env) (int, error) {
+			var events []audit.Event
+			if err := json.Unmarshal(raw, &events); err != nil {
+				return skip(env, "audit log: %v", err)
+			}
+			if s.opts.Audit == nil || !s.opts.Audit.Stored() {
+				return skip(env, "audit log: this console keeps no audit log to add to")
+			}
+			have, err := s.opts.Audit.Events(ctx)
+			if err != nil {
+				return skip(env, "audit log: %v", err)
+			}
+			seen := map[string]bool{}
+			for _, e := range have {
+				seen[auditKey(e)] = true
+			}
+			var add []audit.Event
+			for _, e := range events {
+				if !seen[auditKey(e)] {
+					seen[auditKey(e)] = true
+					add = append(add, e)
+				}
+			}
+			return s.opts.Audit.Import(add, env.Taken), nil
+		}})
+	r.Register(backup.Part{Name: "automation", Label: "Automation", Order: 120,
+		How:     "scripts come back as drafts to submit for review again; run profiles and groups are added; fleet parameters apply, or on production wait for another SuperAdmin",
+		LeftOut: []string{"Automation's runs and the facts read from nodes"},
+		Export: func(ctx context.Context, env *backup.Env) (any, error) {
+			st := s.opts.AutomationStore
+			if st == nil {
+				return nil, nil
+			}
+			a := backupAutomation{}
+			var err error
+			if a.Scripts, err = st.Scripts(ctx); err == nil {
+				if a.Variables, err = st.AllVariables(ctx); err == nil {
+					var profiles []automation.RunProfile
+					if profiles, err = st.Profiles(ctx); err == nil {
+						for _, p := range profiles {
+							if !p.Builtin {
+								a.Profiles = append(a.Profiles, p)
+							}
+						}
+						a.Groups, err = st.Groups(ctx)
+					}
+				}
+			}
+			if err != nil {
+				return nil, fmt.Errorf("reading Automation's records: %w", err)
+			}
+			return &a, nil
+		},
+		Restore: func(ctx context.Context, raw json.RawMessage, env *backup.Env) (int, error) {
+			var a backupAutomation
+			if err := json.Unmarshal(raw, &a); err != nil {
+				return skip(env, "Automation: %v", err)
+			}
+			return helper(env, "automation", func(rep *restoreReport) { s.restoreAutomation(requestOf(ctx), a, env.Taken, rep) })
+		}})
+}
+
+// backupBy names the person taking or restoring a backup.
+func backupBy(r *http.Request) string {
+	sess, _ := auth.SessionFrom(r.Context())
+	return cmp.Or(sess.User.Email, sess.User.Name)
+}
+
+// countDetail is what a backup holds, part by part, for the audit log.
+func countDetail(f *backup.File) string {
+	var parts []string
+	for _, name := range f.Names() {
+		parts = append(parts, fmt.Sprintf("%s=%d", name, backup.Count(f.Parts[name])))
+	}
+	return strings.Join(parts, " ")
+}
+
+// getBackup is the backup as a download; ?optional=1 takes the optional
+// parts too (chat conversations).
 func (s *Server) getBackup(w http.ResponseWriter, r *http.Request) {
 	if !s.superAdmin(w, r) {
 		return
 	}
-	sess, _ := auth.SessionFrom(r.Context())
-	by := sess.User.Email
-	if by == "" {
-		by = sess.User.Name
-	}
-	f, err := s.buildBackup(r.Context(), by)
+	f, err := s.backups.Export(r.Context(), &backup.Env{By: backupBy(r), Taken: s.opts.Now(), Version: s.opts.Version, Optional: r.URL.Query().Get("optional") == "1"})
 	if err != nil {
 		jsonError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	b, _ := json.MarshalIndent(f, "", "  ")
-	s.record(r, ActionBackup, "backup", fmt.Sprintf("users=%d connections=%d apps=%d sessions=%d audit=%d bytes=%d", len(f.Users), len(f.Connections), len(f.Apps), len(f.ToolboxSessions), len(f.Audit), len(b)))
+	gz, err := f.Gzip()
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.record(r, ActionBackup, "backup", fmt.Sprintf("%s bytes=%d%s", countDetail(f), len(gz), sealingDetail(f)))
+	s.noteFirstBackup(r) // Getting started (Phase 12)
 	h := w.Header()
-	h.Set("Content-Type", "application/json; charset=utf-8")
-	h.Set("Content-Disposition", `attachment; filename="221b-backup-`+f.Taken.Format("2006-01-02-150405")+`.json"`)
+	h.Set("Content-Type", "application/gzip")
+	h.Set("Content-Disposition", `attachment; filename="`+f.Name()+`"`)
 	h.Set("Cache-Control", "no-store")
-	_, _ = w.Write(b)
+	_, _ = w.Write(gz)
 }
 
-// restoreInput is a backup file and the parts of it to apply.
-type restoreInput struct {
-	Backup backupFile `json:"backup"`
-	// Parts: settings, users, apps, toolboxSessions, sherlockSpend, sshPairings, audit, automation.
-	Parts map[string]bool `json:"parts"`
+// sealingDetail names the key a backup's secrets are sealed with, by
+// fingerprint, for the audit log; never the key. (Words such as "secret="
+// would have the audit log's scrubbing hide what follows.)
+func sealingDetail(f *backup.File) string {
+	if f.Secrets == nil {
+		return " sealing=placeholders"
+	}
+	return " sealing=sealed fingerprint=" + f.Secrets.Key
 }
 
-// restoreReport says what a restore did.
-type restoreReport struct {
-	// Restored counts what each part applied.
-	Restored map[string]int `json:"restored"`
-	// Notes say what could not be applied, and what is left to do by hand.
-	Notes []string `json:"notes"`
+// backupKeyInfo is what the page learns of the install's backup key
+// (ADR-137): its fingerprint and the Secret that holds it, never the key.
+type backupKeyInfo struct {
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Secret      string `json:"secret,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// getBackupParts lists the parts a backup has, for the page's labels, and
+// names the install's backup key by fingerprint.
+func (s *Server) getBackupParts(w http.ResponseWriter, r *http.Request) {
+	if !s.superAdmin(w, r) {
+		return
+	}
+	var info backupKeyInfo
+	k, secret, err := s.backups.Key(r.Context())
+	info.Secret = secret
+	if err != nil {
+		info.Error = err.Error()
+	} else if k != nil {
+		info.Fingerprint = k.Fingerprint()
+	}
+	out, _ := json.Marshal(map[string]any{"parts": s.backups.Infos(), "key": info})
+	writeJSON(w, r, out)
+}
+
+// postBackupOpen reads an uploaded file the page cannot: one encrypted
+// with the scheduled backups' passphrase (ADR-82), opened here with the
+// passphrase this console keeps, and sent back as JSON for the restore.
+func (s *Server) postBackupOpen(w http.ResponseWriter, r *http.Request) {
+	if !s.superAdmin(w, r) {
+		return
+	}
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<20))
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "the file is over 64 MiB")
+		return
+	}
+	var f *backup.File
+	if s.opts.BackupS3 != nil {
+		f, err = s.opts.BackupS3.Open(r.Context(), b)
+	} else {
+		f, err = backup.Read(b, nil)
+	}
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.record(r, ActionBackupOpen, "backup", "opened an encrypted backup taken "+f.Taken.Format(time.RFC3339)+": "+countDetail(f))
+	out, err := json.Marshal(f)
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, r, out)
 }
 
 // randomPassword is a password nobody knows, for a user restored without
@@ -255,154 +696,35 @@ func (s *Server) postRestore(w http.ResponseWriter, r *http.Request) {
 	if !s.superAdmin(w, r) {
 		return
 	}
-	var in restoreInput
+	var in restoreRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<20))
 	if err := dec.Decode(&in); err != nil {
 		jsonError(w, http.StatusBadRequest, "the backup is not valid JSON: "+err.Error())
 		return
 	}
-	if in.Backup.Format != backupFormat {
-		jsonError(w, http.StatusBadRequest, fmt.Sprintf("this is not a 221B backup (format %q, want %q)", in.Backup.Format, backupFormat))
+	if err := in.Backup.CheckFormat(); err != nil {
+		jsonError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ctx := r.Context()
-	rep := restoreReport{Restored: map[string]int{}, Notes: []string{}}
-	note := func(format string, a ...any) { rep.Notes = append(rep.Notes, fmt.Sprintf(format, a...)) }
-	b := in.Backup
-
-	if in.Parts["settings"] && b.Settings != nil {
-		if s.opts.Settings == nil {
-			note("settings: this console keeps no settings")
-		} else if err := s.restorable(*b.Settings); err != nil {
-			note("settings: %v", err)
-		} else {
-			before := s.opts.Settings.Current()
-			if after, err := s.opts.Settings.Update(ctx, *b.Settings); err != nil {
-				note("settings: %v", err)
-			} else {
-				rep.Restored["settings"] = 1
-				s.recordRestoredSettings(r, before.Settings, after.Settings)
-			}
+	b := &in.Backup
+	// A file whose secrets this install's key cannot open is restored
+	// only on the SuperAdmin's yes (ADR-137): the page asks, and lists
+	// afterwards every secret to set again.
+	check := s.backups.CheckKey(r.Context(), b)
+	if check.Sealed && !check.Same && !in.WithoutSecrets {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusConflict)
+		msg := "The backup's secrets are sealed with another backup key than this install's, so they cannot be restored. Restore the rest without them?"
+		if check.Here == "" {
+			msg = "The backup's secrets are sealed with a backup key, and this install has none, so they cannot be restored. Restore the rest without them?"
 		}
+		out, _ := json.Marshal(map[string]any{"error": msg, "code": "backup-key", "key": check})
+		_, _ = w.Write(append(out, '\n'))
+		return
 	}
-
-	if in.Parts["users"] && len(b.Users) > 0 {
-		s.restoreUsers(r, b.Users, &rep)
-	}
-
-	if in.Parts["apps"] && len(b.Apps) > 0 {
-		if s.opts.Apps == nil {
-			note("applications: this console keeps none")
-		} else {
-			n := 0
-			for _, rec := range b.Apps {
-				if s.opts.Clusters != nil {
-					if _, ok := s.opts.Clusters.Summary(rec.Cluster); !ok {
-						note("application %s/%s: no connection %q here; add the connection first", rec.Namespace, rec.Name, rec.Cluster)
-						continue
-					}
-				}
-				if err := s.checkRestoredApp(ctx, &rec); err != nil {
-					note("application %s/%s is not restored: %v", rec.Namespace, rec.Name, err)
-					continue
-				}
-				cur, _, err := s.opts.Apps.Get(ctx, rec.Cluster, rec.Namespace, rec.Name)
-				hadToken := rec.HasToken
-				rec.HasToken = err == nil && cur.HasToken
-				if hadToken && !rec.HasToken {
-					note("application %s/%s: its repository token is not in the backup; paste it again in the source dialog", rec.Namespace, rec.Name)
-				}
-				if err := s.opts.Apps.Save(ctx, rec, nil); err != nil {
-					note("application %s/%s: %v", rec.Namespace, rec.Name, err)
-					continue
-				}
-				n++
-			}
-			rep.Restored["apps"] = n
-		}
-	}
-
-	if in.Parts["toolboxSessions"] && len(b.ToolboxSessions) > 0 {
-		if s.opts.KV == nil {
-			note("toolbox sessions: this console has no storage for them")
-		} else if n, err := s.mergeSessions(ctx, b.ToolboxSessions); err != nil {
-			note("toolbox sessions: %v", err)
-		} else {
-			rep.Restored["toolboxSessions"] = n
-		}
-	}
-
-	if in.Parts["sherlockSpend"] && len(b.SherlockSpend) > 0 {
-		if s.opts.KV == nil {
-			note("Sherlock's spend: this console has no storage for it")
-		} else if _, err := s.opts.KV.SaveKey(ctx, sherlock.SpendKey, b.SherlockSpend, ""); err != nil {
-			note("Sherlock's spend: %v", err)
-		} else {
-			if s.opts.Sherlock != nil {
-				s.opts.Sherlock.Ledger().Reload()
-			}
-			rep.Restored["sherlockSpend"] = 1
-		}
-	}
-
-	if in.Parts["sshPairings"] && len(b.SSHPairings) > 0 {
-		var list map[string]nodessh.Pairing
-		if s.opts.KV == nil {
-			note("SSH pairings: this console has no storage for them")
-		} else if err := json.Unmarshal(b.SSHPairings, &list); err != nil {
-			note("SSH pairings: %v", err)
-		} else if n, err := s.restorePairings(ctx, list, note); err != nil {
-			note("SSH pairings: %v", err)
-		} else {
-			rep.Restored["sshPairings"] = n
-		}
-	}
-
-	if in.Parts["audit"] && len(b.Audit) > 0 {
-		if s.opts.Audit == nil || !s.opts.Audit.Stored() {
-			note("audit log: this console keeps no audit log to add to")
-		} else {
-			have, err := s.opts.Audit.Events(ctx)
-			if err != nil {
-				note("audit log: %v", err)
-			} else {
-				seen := map[string]bool{}
-				for _, e := range have {
-					seen[auditKey(e)] = true
-				}
-				var add []audit.Event
-				for _, e := range b.Audit {
-					if !seen[auditKey(e)] {
-						seen[auditKey(e)] = true
-						add = append(add, e)
-					}
-				}
-				rep.Restored["audit"] = s.opts.Audit.Import(add, b.Taken)
-			}
-		}
-	}
-
-	if in.Parts["automation"] && b.Automation != nil {
-		s.restoreAutomation(r, *b.Automation, b.Taken, &rep)
-	}
-
-	if len(b.Connections) > 0 {
-		var missing []string
-		for _, c := range b.Connections {
-			if c.Local {
-				continue
-			}
-			if s.opts.Clusters != nil {
-				if _, ok := s.opts.Clusters.Summary(c.ID); ok {
-					continue
-				}
-			}
-			missing = append(missing, fmt.Sprintf("%s (%s, %s)", c.Name, c.Server, c.Auth))
-		}
-		if len(missing) > 0 {
-			note("connections are never restored, since their credentials are not in a backup; add these again on the Clusters page: %s", strings.Join(missing, "; "))
-		}
-	}
+	ctx := context.WithValue(r.Context(), restoreRequestKey{}, r)
+	rep := s.backups.Restore(ctx, b, in.Parts, &backup.Env{By: backupBy(r), Taken: b.Taken, Version: b.Version})
 
 	parts := []string{}
 	for p := range in.Parts {
@@ -412,12 +734,201 @@ func (s *Server) postRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(parts)
 	detail := "parts=" + strings.Join(parts, ",") + " taken=" + b.Taken.Format(time.RFC3339) + " version=" + strconv.Quote(b.Version)
+	if in.Source != "" {
+		detail += " from=" + strconv.Quote(in.Source)
+	}
 	for _, p := range parts {
 		detail += " " + p + "=" + strconv.Itoa(rep.Restored[p])
 	}
+	switch {
+	case !check.Sealed:
+		detail += " sealing=placeholders"
+	case check.Same:
+		detail += " sealing=opened fingerprint=" + check.File
+	default:
+		detail += " sealing=not-opened fingerprint=" + check.File
+	}
+	detail += " toSetAgain=" + strconv.Itoa(len(rep.Secrets))
 	s.record(r, ActionRestore, "backup", detail)
 	out, _ := json.Marshal(rep)
 	writeJSON(w, r, out)
+}
+
+// restoreApps brings the applications back: each checked as one created
+// here, and saved with the token here when there is one, or else with the
+// backup's when its key opens it.
+func (s *Server) restoreApps(ctx context.Context, list []backupApp, env *backup.Env, rep *restoreReport) {
+	note := func(format string, a ...any) { rep.Notes = append(rep.Notes, fmt.Sprintf(format, a...)) }
+	if s.opts.Apps == nil {
+		note("applications: this console keeps none")
+		return
+	}
+	n := 0
+	for _, a := range list {
+		rec := a.Record
+		if s.opts.Clusters != nil {
+			if _, ok := s.opts.Clusters.Summary(rec.Cluster); !ok {
+				note("application %s/%s: no connection %q here; add the connection first", rec.Namespace, rec.Name, rec.Cluster)
+				continue
+			}
+		}
+		if err := s.checkRestoredApp(ctx, &rec); err != nil {
+			note("application %s/%s is not restored: %v", rec.Namespace, rec.Name, err)
+			continue
+		}
+		cur, _, err := s.opts.Apps.Get(ctx, rec.Cluster, rec.Namespace, rec.Name)
+		// A token here stays; the file's is taken only where there is
+		// none, and only when the backup's key opens it.
+		hadToken := rec.HasToken || a.RepoToken != ""
+		rec.HasToken = err == nil && cur.HasToken
+		var token *string
+		if hadToken && !rec.HasToken {
+			name, where := fmt.Sprintf("the repository token of the application %s/%s", rec.Namespace, rec.Name), fmt.Sprintf("Applications › %s/%s › Source", rec.Namespace, rec.Name)
+			tok, err := env.Open(a.RepoToken, name, where)
+			switch {
+			case err != nil:
+				note("application %s/%s: %v; it is saved without a token", rec.Namespace, rec.Name, err)
+				env.SetAgain(name, where)
+			case tok != "":
+				token, rec.HasToken = &tok, true
+			case a.RepoToken == "":
+				// A file of the first format: no token, nor a placeholder.
+				env.SetAgain(name, where)
+			}
+		}
+		if err := s.opts.Apps.Save(ctx, rec, token); err != nil {
+			note("application %s/%s: %v", rec.Namespace, rec.Name, err)
+			continue
+		}
+		n++
+	}
+	rep.Restored["apps"] = n
+}
+
+// restoreHosts brings back the hosts outside Kubernetes missing here,
+// each checked as one added by hand; a host or node of the same name here
+// keeps its place.
+func (s *Server) restoreHosts(r *http.Request, raw json.RawMessage, rep *restoreReport) {
+	note := func(format string, a ...any) { rep.Notes = append(rep.Notes, fmt.Sprintf(format, a...)) }
+	var list map[string]nodessh.Host
+	if err := json.Unmarshal(raw, &list); err != nil {
+		note("hosts: %v", err)
+		return
+	}
+	if s.opts.Hosts == nil {
+		note("hosts: this console keeps no hosts (SSH or Automation is off)")
+		return
+	}
+	keys := make([]string, 0, len(list))
+	for k := range list {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	n := 0
+	for _, k := range keys {
+		h, err := s.opts.Hosts.RestoreHost(r.Context(), list[k])
+		if err != nil {
+			note("host %s is not restored: %v", k, err)
+			continue
+		}
+		s.recordHost(r, audit.ActionHostAdd, h.Cluster, h.Name, audit.OutcomeOK, fmt.Sprintf("restored: host %s at %s port %d, login user %s, %s", h.Name, h.Address, h.Port, h.LoginUser, h.State))
+		n++
+	}
+	rep.Restored["sshHosts"] = n
+}
+
+// restoreConnections brings back the connections missing here, each with
+// its credential when the backup's key opens it (ADR-137); a secret not
+// opened is the placeholder, and the connection shows as failed, saying
+// so, until it is pasted again. A connection here keeps its own
+// credential.
+func (s *Server) restoreConnections(r *http.Request, list []backupConnection, env *backup.Env, rep *restoreReport) {
+	note := func(format string, a ...any) { rep.Notes = append(rep.Notes, fmt.Sprintf(format, a...)) }
+	if s.opts.Clusters == nil {
+		note("connections: this console keeps no connections")
+		return
+	}
+	n := 0
+	for _, c := range list {
+		if c.Local {
+			continue
+		}
+		if _, ok := s.opts.Clusters.Summary(c.ID); ok {
+			note("connection %s is here already and keeps its own credential", c.Name)
+			continue
+		}
+		cred, err := restoredCredential(c, env)
+		if err == nil {
+			_, err = s.opts.Clusters.Restore(r.Context(), c.Spec, cred)
+		}
+		if err != nil {
+			s.recordCluster(r, audit.ActionClusterAdd, c.ID, audit.OutcomeFailed, "restored: "+err.Error())
+			note("connection %s is not restored: %v", c.Name, err)
+			continue
+		}
+		how := "with its credential"
+		if cred.HasPlaceholder() {
+			how = "its credential to paste again"
+		}
+		s.recordCluster(r, audit.ActionClusterAdd, c.ID, audit.OutcomeOK, fmt.Sprintf("restored: %s (%s), %s, sign-in by %s, %s, %s", c.Name, c.Env, c.Server, c.Auth, c.Mode, how))
+		n++
+	}
+	rep.Restored["connections"] = n
+}
+
+// restoredCredential is a backup's credential as a restore saves it. A
+// secret sealed with this install's key is opened: only a console with
+// the key could have sealed it, so it is this install's own, and the
+// connection starts with it. Any other secret is the placeholder, listed
+// to paste again; one in clear is refused, since a file is no way around
+// the connection editor's checks. A file of the first format, which had
+// no credential, gets placeholders where its sign-in method keeps it.
+func restoredCredential(c backupConnection, env *backup.Env) (clusters.Credential, error) {
+	var cred clusters.Credential
+	if c.Credential != nil {
+		cred = clusters.Credential(*c.Credential)
+	}
+	for _, f := range cred.Secrets() {
+		if err := backup.CheckSecret(*f); err != nil {
+			return clusters.Credential{}, errors.New("the file holds a secret in clear where a backup holds a sealed one or a placeholder; add the connection on the Clusters page instead")
+		}
+	}
+	where := "Clusters › " + c.Name + " › Edit connection"
+	fields := []struct {
+		name string
+		f    *string
+	}{{"token", &cred.Token}, {"kubeconfig", &cred.Kubeconfig}, {"client certificate", &cred.CertPEM}, {"client key", &cred.KeyPEM}, {"OIDC client secret", &cred.OIDCClientSecret}, {"OIDC refresh token", &cred.OIDCRefreshToken}}
+	held := false
+	for _, x := range fields {
+		if *x.f == "" {
+			continue
+		}
+		held = true
+		v, err := env.Open(*x.f, "the "+x.name+" of the connection "+c.Name, where)
+		if err != nil {
+			return clusters.Credential{}, err
+		}
+		if v == "" {
+			v = clusters.Placeholder
+		}
+		*x.f = v
+	}
+	if !held {
+		switch c.Auth {
+		case clusters.AuthToken:
+			cred.Token = clusters.Placeholder
+		case clusters.AuthKubeconfig:
+			cred.Kubeconfig = clusters.Placeholder
+		case clusters.AuthCert:
+			cred.CertPEM, cred.KeyPEM = clusters.Placeholder, clusters.Placeholder
+		case clusters.AuthOIDC:
+			cred.OIDCRefreshToken = clusters.Placeholder
+		}
+		if cred.HasPlaceholder() {
+			env.SetAgain("the credential of the connection "+c.Name, where)
+		}
+	}
+	return cred, nil
 }
 
 // recordRestoredSettings names what a restore changed of Sherlock and
@@ -458,7 +969,7 @@ func auditKey(e audit.Event) string {
 // restoreUsers brings the local users back: those here are updated, the
 // others created without a password. Making someone a SuperAdmin waits
 // for another SuperAdmin, as it does on the Users page.
-func (s *Server) restoreUsers(r *http.Request, users []backupUser, rep *restoreReport) {
+func (s *Server) restoreUsers(r *http.Request, users []backupUser, env *backup.Env, rep *restoreReport) {
 	ctx := r.Context()
 	note := func(format string, a ...any) { rep.Notes = append(rep.Notes, fmt.Sprintf(format, a...)) }
 	sess, _ := auth.SessionFrom(ctx)
@@ -473,7 +984,7 @@ func (s *Server) restoreUsers(r *http.Request, users []backupUser, rep *restoreR
 		note("users: this console keeps no local users of its own (sign-in is off, or they are not kept in a Secret)")
 		return
 	}
-	n, created := 0, 0
+	n := 0
 	for _, u := range users {
 		cur, exists := acc.Find(u.Username)
 		if exists && cur.Managed {
@@ -487,7 +998,22 @@ func (s *Server) restoreUsers(r *http.Request, users []backupUser, rep *restoreR
 				note("user %s: %v", u.Username, err)
 				continue
 			}
-			created++
+			// Created with a password nobody knows; the backup's, when its
+			// key opens it, replaces it (ADR-137).
+			name, where := "the password of the user "+u.Username, "Administration › Users › "+u.Username+" › Set password"
+			hash, err := env.Open(u.Password, name, where)
+			switch {
+			case err != nil:
+				note("user %s: %v", u.Username, err)
+				env.SetAgain(name, where)
+			case hash != "":
+				if err := acc.RestorePasswordHash(ctx, u.Username, hash); err != nil {
+					note("user %s: %v", u.Username, err)
+					env.SetAgain(name, where)
+				}
+			case u.Password == "":
+				env.SetAgain(name, where)
+			}
 			cur, _ = acc.Find(u.Username)
 		} else {
 			c = split(cur, u)
@@ -533,9 +1059,6 @@ func (s *Server) restoreUsers(r *http.Request, users []backupUser, rep *restoreR
 		n++
 	}
 	rep.Restored["users"] = n
-	if created > 0 {
-		note("%d users were created without a password; set each one's on the Users page before they sign in", created)
-	}
 }
 
 // mergeSessions adds the backup's session records to those kept, by id,

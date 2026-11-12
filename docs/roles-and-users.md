@@ -51,6 +51,8 @@ Today there are two console roles, decided from the sign-in provider's claims (`
 
 Everyone who signs in also gets the nodes (RB-07). A person with no assignment sees an empty console.
 
+**Phase 12 adds a fifth role outside Kubernetes, Reporter** ([issues.md](issues.md), IS-20, ADR-86). It only reports problems and follows its own reports, on the report page at `/report`; it has no ClusterRole and no binding, and a person who holds only it sees nothing else of the console. It comes from `issues.reporterGroups` and from local groups of the role `reporter`, which take no namespaces. The four roles here are unchanged; which of them may report and which triage reports are the chart's `issues.reportRoles` and `issues.operatorRoles`.
+
 **How a person gets a role.** Every route ends in a group, so Kubernetes only ever sees groups bound once by Helm.
 
 | Source | SuperAdmin and SuperViewer | Admin and Viewer |

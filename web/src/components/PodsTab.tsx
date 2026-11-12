@@ -53,7 +53,8 @@ function nodeMatches(n: NodeRow, q: string): boolean {
 export function PodsTab({ cluster, now, onToast, route }: TabProps) {
   const pods = useView<PodRow>('pods')
   const nodesView = useView<NodeRow>('nodes')
-  const nodes = nodesView.rows
+  // Hosts outside Kubernetes run no pods.
+  const nodes = useMemo(() => nodesView.rows.filter((n) => n.role !== 'host'), [nodesView.rows])
   const p = route.params
   const role: RoleFilter = ROLES.includes(p.get('role') as RoleFilter) ? (p.get('role') as RoleFilter) : 'all'
   const status: PodStatusFilter = POD_STATUSES.some(([id]) => id === p.get('status')) ? (p.get('status') as PodStatusFilter) : 'all'
@@ -189,9 +190,15 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
           {!namesOnly && <FacetPicker nodes={nodes} value={facets} onChange={(f) => set({ label: f.labels, taint: f.taints })} block />}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12, minHeight: 22 }}>
             <label className="rk-hit" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: 'var(--fg2)' }}>
-              <input type="checkbox" checked={allNodesOn} ref={(el) => {
+              <input
+                type="checkbox"
+                checked={allNodesOn}
+                ref={(el) => {
                   if (el) el.indeterminate = !allNodesOn && nS > 0
-                }} onChange={toggleAllNodes} style={{ width: 15, height: 15, margin: 0, accentColor: 'var(--accent)', cursor: 'pointer' }} />
+                }}
+                onChange={toggleAllNodes}
+                style={{ width: 15, height: 15, margin: 0, accentColor: 'var(--accent)', cursor: 'pointer' }}
+              />
               <span>
                 Select all <span style={{ color: 'var(--fg3)' }}>{listed.length === totalKeys ? `(${listed.length})` : `(${listed.length} of ${totalKeys})`}</span>
               </span>
@@ -238,9 +245,15 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
           <h2 className="rk-h">Filter by namespace</h2>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: 12, minHeight: 22 }}>
             <label className="rk-hit" style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', color: 'var(--fg2)' }}>
-              <input type="checkbox" checked={allNsOn} ref={(el) => {
+              <input
+                type="checkbox"
+                checked={allNsOn}
+                ref={(el) => {
                   if (el) el.indeterminate = !allNsOn && (nsSel?.size ?? 0) > 0
-                }} onChange={() => set({ ns: allNsOn ? ['-'] : undefined })} style={{ width: 15, height: 15, margin: 0, accentColor: 'var(--accent)', cursor: 'pointer' }} />
+                }}
+                onChange={() => set({ ns: allNsOn ? ['-'] : undefined })}
+                style={{ width: 15, height: 15, margin: 0, accentColor: 'var(--accent)', cursor: 'pointer' }}
+              />
               <span>
                 Select all <span style={{ color: 'var(--fg3)' }}>({namespaces.length})</span>
               </span>
@@ -299,7 +312,20 @@ export function PodsTab({ cluster, now, onToast, route }: TabProps) {
               <ExportMenu onExport={(f) => table.exportRows(f, cluster?.name, 'pods', onToast)} disabled={!table.shown.length} what="the pods in view" />
             </div>
           </div>
-          <DataTable<PodView> label="Pods" rows={table.shown} cols={table.cols} rowKey={(r) => r.key} rowLabel={podLabel} sort={table.sort} onSort={table.onSort} selected={selected} onOpen={onOpen} now={now} empty={waiting ? 'Waiting for the first list of pods…' : 'No pods match these filters.'} rowAttr="pod" />
+          <DataTable<PodView>
+            label="Pods"
+            rows={table.shown}
+            cols={table.cols}
+            rowKey={(r) => r.key}
+            rowLabel={podLabel}
+            sort={table.sort}
+            onSort={table.onSort}
+            selected={selected}
+            onOpen={onOpen}
+            now={now}
+            empty={waiting ? 'Waiting for the first list of pods…' : 'No pods match these filters.'}
+            rowAttr="pod"
+          />
         </section>
       </main>
       {selected && <PodPanel podKey={selected} row={selectedRow} gone={pods.loaded && !selectedRow} cluster={cluster} now={now} onClose={close} onToast={onToast} />}

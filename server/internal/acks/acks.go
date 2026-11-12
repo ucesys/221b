@@ -18,10 +18,26 @@ type Ack struct {
 	Key string `json:"key"`
 	// Fingerprint is what the alert was when it was acknowledged.
 	Fingerprint string `json:"fp"`
-	// By names who acknowledged it: their email, name or username.
+	// By names who acknowledged it: their email, name or username, or the
+	// job's name when a job did.
 	By string    `json:"by"`
 	At time.Time `json:"at"`
+	// Run and Case are a job's acknowledgement's (CF-79): the alert
+	// diagnosis run that handled the alert, and the case its findings went
+	// to. A person's has neither.
+	Run  string `json:"run,omitempty"`
+	Case string `json:"case,omitempty"`
+	// Exception, Expected and Why are a job's acknowledgement of an alert
+	// its run concluded on without a case (CF-82): the exception that
+	// covers what it found, or that it diagnosed the alert as expected,
+	// with the agent's reason.
+	Exception string `json:"exception,omitempty"`
+	Expected  bool   `json:"expected,omitempty"`
+	Why       string `json:"why,omitempty"`
 }
+
+// ByJob says a job acknowledged it, not a person.
+func (a Ack) ByJob() bool { return a.Run != "" }
 
 // Max keeps the settings small: more acknowledged alerts than this at once
 // means the cluster has bigger problems than its banners.
@@ -41,6 +57,10 @@ func Validate(list []Ack) error {
 			return fmt.Errorf("the acknowledgement of %s has no fingerprint", a.Key)
 		case len(a.By) > 320:
 			return fmt.Errorf("the acknowledgement of %s names too long an identity", a.Key)
+		case len(a.Run) > 64 || len(a.Case) > 32 || len(a.Exception) > 32:
+			return fmt.Errorf("the acknowledgement of %s names too long a run, case or exception", a.Key)
+		case len(a.Why) > 2000:
+			return fmt.Errorf("the acknowledgement of %s gives too long a reason", a.Key)
 		case seen[a.Key]:
 			return fmt.Errorf("%s is acknowledged twice", a.Key)
 		}
@@ -56,6 +76,22 @@ func Set(list []Ack, a Ack) []Ack {
 	out = append(out, a)
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
+}
+
+// SetByJob returns the list with a job's acknowledgement of an alert
+// (CF-79), and whether it was set. A person's acknowledgement of the
+// alert as the job saw it stands: a job never overwrites it. The list
+// stays within Max.
+func SetByJob(list []Ack, a Ack) ([]Ack, bool) {
+	for _, x := range list {
+		if x.Key == a.Key && !x.ByJob() && x.Fingerprint == a.Fingerprint {
+			return list, false
+		}
+	}
+	if len(Remove(list, a.Key)) >= Max {
+		return list, false
+	}
+	return Set(list, a), true
 }
 
 // Remove returns the list without the alert's acknowledgement.

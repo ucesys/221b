@@ -35,6 +35,7 @@ import (
 	"github.com/ucesys/221b/server/internal/nodes"
 	"github.com/ucesys/221b/server/internal/settings"
 	"github.com/ucesys/221b/server/internal/sherlock"
+	"github.com/ucesys/221b/server/internal/sherlocktools"
 )
 
 // source is the fake cache with the two reads that reach the API server.
@@ -582,7 +583,7 @@ func TestSettings(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	br := bufio.NewReader(resp.Body)
-	if ev, data := readEvent(t, br); ev != "snapshot" || !strings.Contains(data, `"settings":{"refreshSeconds":3,"storage":"memory"}`) {
+	if ev, data := readEvent(t, br); ev != "snapshot" || !strings.Contains(data, `"settings":{"refreshSeconds":3,"storage":"memory","showCosts":true}`) {
 		t.Fatalf("first event %s %.120s", ev, data)
 	}
 
@@ -1076,9 +1077,10 @@ func runTool(t *testing.T, src *source, name string, in map[string]any) sherlock
 	store.Notify(everything())
 	store.Process()
 	s := New(Options{Store: store, Cluster: src, Ready: func() bool { return true }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
-	for _, tl := range sherlockTools {
-		if tl.def.Name == name {
-			return tl.run(s.toolboxFor(httptest.NewRequest(http.MethodGet, "/", nil), clusters.LocalID, src), context.Background(), in)
+	for _, d := range sherlocktools.Defs() {
+		if d.Name == name {
+			raw, _ := json.Marshal(in)
+			return s.toolboxFor(httptest.NewRequest(http.MethodGet, "/", nil), clusters.LocalID, src).Run(context.Background(), name, raw)
 		}
 	}
 	t.Fatalf("no tool %s", name)
