@@ -1136,6 +1136,20 @@ describe('a case opened from an alert links its alert (CF-84)', () => {
     expect(screen.getByTestId('case-alert-link')).toBeTruthy()
     expect(screen.queryByTestId('case-alert-state')).toBeNull()
   })
+
+  it('says a cause is likely when the agent could not confirm it, and what it ruled out (PM-J1d, PM-J5)', async () => {
+    const analysis = { at: '2026-11-12T10:01:00Z', run: 'run-21', summary: 'The node’s kernel log would confirm it.', cause: 'The node runs out of memory.', evidence: ['shop/Pod/web-0: OOMKilled'], fix: {} }
+    vi.mocked(api.fetchCase).mockResolvedValue(fromAlert({ analysis: { ...analysis, confidence: 'likely', ruledOut: ['shop/Deployment/web: image pulls fine', 'shop/Service/web: endpoints ready'] } }))
+    const { unmount } = render(<CaseDrawer id="12" onClose={() => undefined} />)
+    expect(txt(await screen.findByTestId('case-analysis-cause'))).toBe('Likely cause: The node runs out of memory.')
+    expect([...screen.getByTestId('case-analysis-ruled-out').querySelectorAll('li')].map((li) => txt(li))).toEqual(['shop/Deployment/web: image pulls fine', 'shop/Service/web: endpoints ready'])
+    unmount()
+    // Confirmed, or an analysis of before the field: a cause, and no list.
+    vi.mocked(api.fetchCase).mockResolvedValue(fromAlert({ analysis }))
+    render(<CaseDrawer id="12" onClose={() => undefined} />)
+    expect(txt(await screen.findByTestId('case-analysis-cause'))).toBe('Cause: The node runs out of memory.')
+    expect(screen.queryByTestId('case-analysis-ruled-out')).toBeNull()
+  })
 })
 
 describe('a case names its job, not its id (R2-15)', () => {

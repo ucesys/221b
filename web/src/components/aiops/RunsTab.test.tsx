@@ -140,12 +140,15 @@ describe('AIOps › Runs', () => {
         { ...f, id: 'run-12.1', routing: 'seen', case: 'C-12' },
         { ...f, id: 'run-12.2', routing: 'known', case: undefined, knownIssue: 'KI-3' },
         { ...f, id: 'run-12.3', routing: 'excepted', case: undefined, exception: 'EX-2' },
-        { ...f, id: 'run-12.4', routing: 'reopened', case: 'C-9', newCheck: true },
+        { ...f, id: 'run-12.4', routing: 'reopened', case: 'C-9', newCheck: true, confidence: 'likely' },
         { ...f, id: 'run-12.5', routing: 'invalid', case: undefined, invalidReason: 'the check "made.up" is not in the list' },
       ],
     })
     render(<RunsTab route={route('run-12')} />)
     const detail = await screen.findByTestId('run-detail')
+    // A cause the agent could not confirm says so; a confirmed one, or a finding of before the field, says nothing (PM-J1d).
+    expect(within(detail).getByTestId('finding-run-12.4-likely').textContent).toBe('likely')
+    expect(within(detail).queryByTestId('finding-run-12.1-likely')).toBeNull()
     expect(within(detail).getByTestId('run-routed').textContent).toContain('1 case reopened: the fix did not hold')
     expect(within(detail).getByTestId('run-routed-capped').textContent).toBe('3 over the cap of new cases')
     expect(within(detail).getByTestId('run-routed-verified').textContent).toBe('2 fixes verified')

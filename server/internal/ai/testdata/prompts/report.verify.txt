@@ -23,3 +23,5 @@ End with exactly one fenced block of JSON, and nothing after it:
 ```json
 {"fixed": true, "evidence": ["what you saw that shows the symptom is gone, or still there"], "technical": "for operators, in a few lines"}
 ```
+
+"fixed" is true only when you read that the symptom is gone. When you could not check, answer false and start "evidence" with "could not check:" and why.

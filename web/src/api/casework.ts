@@ -158,7 +158,11 @@ export interface CaseAnalysis {
   at: string
   summary?: string
   cause?: string
+  /** How sure the agent is of the cause: confirmed when it read the evidence, likely when the cause fits and it could not confirm it (PM-J1d). */
+  confidence?: 'confirmed' | 'likely'
   evidence?: string[]
+  /** What the agent checked and found healthy, each with its object (PM-J5). */
+  ruledOut?: string[]
   fix: CaseFix
   /**
    * The analysis's verdict that there is no problem, the system working as
@@ -613,6 +617,8 @@ export interface RCADraft {
   cause: string
   fix: string
   prevention: string
+  /** The timeline, how the problem was detected and what it affected, a line each, for the RCA's free text (PM-J6). */
+  text?: string
   run?: string
 }
 

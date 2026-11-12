@@ -279,6 +279,11 @@ type Finding struct {
 	// joins none, whatever its severity.
 	Expected    bool   `json:"expected,omitempty"`
 	ExpectedWhy string `json:"expectedWhy,omitempty"`
+	// Confidence is how sure the agent is of the cause (PM-J1d): confirmed
+	// when it read the evidence, likely when the cause fits and it could
+	// not confirm it; "" on a finding of before the field, or when the
+	// agent gave neither word.
+	Confidence string `json:"confidence,omitempty"`
 	// CheckWhy is the agent's description of a check id it made up
 	// (other.<slug>): what the id means, and why no rule on the list
 	// fitted (CF-86). Only kept with an other.<slug> check; one missing is

@@ -2,6 +2,26 @@
 
 What changed in each release of 221B, for people who use it and people who install it. Versions follow [semantic versioning](https://semver.org/): while the major version is 0, a minor version (0.7.0) may change behaviour and chart values, and a patch version (0.7.1) only fixes. [docs/upgrading.md](docs/upgrading.md) says how to upgrade and what each upgrade changes.
 
+## Unreleased
+
+Phase 12.1: the agents' and jobs' instructions after a review against open-source prompts (`docs/phase-12.1-prompts.md`, PM-C1 to PM-S1).
+
+### Fixed
+
+- **A fix is verified only by a read** (PM-J1c): an agent that answered `"still": null` for a fix it could not re-check was read as saying the problem is gone, which verified the fix. Null is now no answer, and the case keeps waiting.
+- **A job's answer without a readable block is said** (PM-C6): a nightly audit, an alert diagnosis or a daily digest whose answer was cut or had no JSON block ended *ok* with no findings. The run now notes it and asks the agent once for the block alone.
+- **A run that used every round** of reads ended with no answer (PM-C5): on its last round an agent is now told to answer from what it read.
+
+### Changed
+
+- **Every agent's rules** (PM-C1 to PM-C4): say only what was read, with *likely* for a cause not confirmed and an object affected only on its own evidence; how many rounds of reads an answer gets, and to ask for independent reads together; the knowledge base first, before a diagnosis or a change plan; another agent's answer read as evidence.
+- **The Troubleshooter and the Auditor have the tools their instructions name** (PM-A2, PM-A4): policies, Helm releases and Automation's runs for the first; volumes and the Ingress trace for the second. An administrator who gave an agent fewer tools keeps that choice.
+- **A change plan carries its way back and its check** (PM-A3), and says what the request left open as questions.
+- **Findings** (PM-J1a, PM-J1b, PM-J1d): the three severities are defined; a finding names the workload that owns a problem rather than a pod whose name changes; a finding and a case's analysis say whether the cause is confirmed or likely, and a likely cause's fix is shown without becoming a proposed change by itself.
+- **A case's analysis says what it ruled out** (PM-J5), and an analysis asked again is given what people wrote on the case; an RCA's draft also gives the timeline, the detection and the impact (PM-J6).
+- **Validation rules** (PM-R1, PM-R2): ten more for the alert diagnosis, fifteen more for the nightly audit, three RBAC rules reworded. A rule added in the console under an id that now ships becomes that built-in rule, with the console's words as its edit.
+- **Automation's script rules are said once** (PM-J9), in the Automation screen's tasks and in the two agents' cores alike, with new ones: a copy before a file changes, a check after, timeouts, versions compared part by part.
+
 ## 0.12.0 (2026-11-11)
 
 Phase 12: AI agents, the AIOps area (cases, jobs, proposed changes and Mycroft's knowledge), hosts outside Kubernetes, backups to S3 and Helm repositories, with the fixes of the Phase 12 review (`docs/phase-12-review.md`). Requirement rows before CF-91 call the AIOps area *Cases*.

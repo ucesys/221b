@@ -118,8 +118,13 @@ func (r *Recheck) UnmarshalJSON(b []byte) error {
 		return s
 	}
 	r.Check, r.Resource, r.Cluster, r.Evidence = text("check"), text("resource"), text("cluster"), text("evidence")
+	// "still": null says the agent could not read the object (PM-J1c): it
+	// is no answer, so the fix keeps waiting. Without this, a null read
+	// into a bool is false, which would verify a fix nobody re-checked.
 	var still bool
-	if json.Unmarshal(m["still"], &still) == nil {
+	if raw := strings.TrimSpace(string(m["still"])); raw == "" || raw == "null" {
+		// no answer
+	} else if json.Unmarshal(m["still"], &still) == nil {
 		r.Still = &still
 	} else if v, err := strconv.ParseBool(strings.TrimSpace(text("still"))); err == nil {
 		r.Still = &v
@@ -234,6 +239,24 @@ func normalSeverity(severity string) string {
 		return FindingInfo
 	}
 	return FindingWarning
+}
+
+// The confidence an agent gives a cause (PM-J1d): confirmed when it read
+// the evidence, likely when the cause fits and it could not confirm it.
+const (
+	ConfidenceConfirmed = "confirmed"
+	ConfidenceLikely    = "likely"
+)
+
+// NormalConfidence reads a confidence as an agent wrote it: one of the
+// two words, in any case, or "" for anything else, an answer of before
+// the field among them.
+func NormalConfidence(confidence string) string {
+	switch c := strings.ToLower(strings.TrimSpace(confidence)); c {
+	case ConfidenceConfirmed, ConfidenceLikely:
+		return c
+	}
+	return ""
 }
 
 // leftOutNote is what a run says of the findings it left out (W-3, I-3).

@@ -99,11 +99,11 @@ func TestTheMergedListOfValidationRules(t *testing.T) {
 	if got := offered(w, jobs.KindAudit); len(got) != len(jobs.AuditChecks) || got[0] != jobs.AuditChecks[0].ID {
 		t.Fatalf("offered to the audit: %v", got)
 	}
-	v, err := w.svc.Rules().Add(ctx, RuleInput{ID: "pod.host-path", Says: "a pod mounts a host path", Type: "security", Jobs: []string{jobs.KindAudit}}, sam)
+	v, err := w.svc.Rules().Add(ctx, RuleInput{ID: "pod.host-port", Says: "a pod uses a host port", Type: "security", Jobs: []string{jobs.KindAudit}}, sam)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r, _ := ruleOf(v, "pod.host-path"); r.BuiltIn || r.State != RuleActive || r.By != "sam@corp.example" || !slices.Contains(offered(w, jobs.KindAudit), "pod.host-path") || slices.Contains(offered(w, jobs.KindAlert), "pod.host-path") {
+	if r, _ := ruleOf(v, "pod.host-port"); r.BuiltIn || r.State != RuleActive || r.By != "sam@corp.example" || !slices.Contains(offered(w, jobs.KindAudit), "pod.host-port") || slices.Contains(offered(w, jobs.KindAlert), "pod.host-port") {
 		t.Fatalf("added: %+v", r)
 	}
 	says := "a container has no CPU or memory limit set"
@@ -111,7 +111,7 @@ func TestTheMergedListOfValidationRules(t *testing.T) {
 	if r, _ := ruleOf(v, "pod.no-limits"); err != nil || !r.Edited || r.Says != says || w.svc.Rules().Meaning("pod.no-limits") != says {
 		t.Fatalf("edited: %+v %v", r, err)
 	}
-	shipped := jobs.AuditChecks[7].Says
+	shipped := shippedSays("pod.no-limits")
 	v, _ = w.svc.Rules().Edit(ctx, "pod.no-limits", RulePatch{Says: &shipped}, sam)
 	if r, _ := ruleOf(v, "pod.no-limits"); r.Edited || r.Says != shipped {
 		t.Fatalf("set back: %+v", r)
@@ -127,7 +127,7 @@ func TestTheMergedListOfValidationRules(t *testing.T) {
 		"gone.builtin":  {Retired: true},
 		"pod.extra":     {Added: true, Says: "extra", Type: "other", Jobs: &jl},
 	}})
-	if r, _ := rs.get("pod.root-user"); r.Type != "compliance" || !r.Edited || r.Says != jobs.AuditChecks[6].Says {
+	if r, _ := rs.get("pod.root-user"); r.Type != "compliance" || !r.Edited || r.Says != shippedSays("pod.root-user") {
 		t.Errorf("a kept change: %+v", r)
 	}
 	if _, ok := rs.get("gone.builtin"); ok {
@@ -379,7 +379,7 @@ func TestPromoteWithAndWithoutRename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rule, _ := ruleOf(v, "node.memory-pressure"); rule.Says != jobs.AuditChecks[17].Says || fmt.Sprint(rule.Aliases) != "[other.mem-pressure]" {
+	if rule, _ := ruleOf(v, "node.memory-pressure"); rule.Says != shippedSays("node.memory-pressure") || fmt.Sprint(rule.Aliases) != "[other.mem-pressure]" {
 		t.Errorf("joined: %+v", rule)
 	}
 	// What is on the list is not promoted again; only other.<slug> is.
@@ -835,4 +835,15 @@ func TestSuggestionsAreInboxRowsForASuperAdminCF87(t *testing.T) {
 			t.Errorf("%s: %d %v", c.Person.Name, code, body)
 		}
 	}
+}
+
+// shippedSays is what a built-in rule of the nightly audit says as it
+// ships, found by its id: the list grows, so its places move.
+func shippedSays(id string) string {
+	for _, c := range jobs.AuditChecks {
+		if c.ID == id {
+			return c.Says
+		}
+	}
+	return ""
 }

@@ -220,6 +220,7 @@ func (s *Service) tidy(ctx context.Context, k Kind, runID string, in []Finding) 
 	for i := range in {
 		in[i].Title = clip(in[i].Title, maxTitle)
 		in[i].Severity = normalSeverity(in[i].Severity)
+		in[i].Confidence = NormalConfidence(in[i].Confidence)
 		if in[i].Title != "" {
 			titled = append(titled, i)
 		}

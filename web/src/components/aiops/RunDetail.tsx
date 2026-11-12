@@ -308,6 +308,11 @@ export function RunDetail({ id, onToast }: { id: string; onToast?: (msg: string)
                     new validation rule
                   </span>
                 )}
+                {f.confidence === 'likely' && (
+                  <span className="rk-tag" data-tone="muted" title="The cause fits the evidence, and the agent could not confirm it" data-testid={`finding-${f.id}-likely`}>
+                    likely
+                  </span>
+                )}
               </span>
               {f.routing === 'invalid' && f.invalidReason && (
                 <span className="rk-t" data-tone="warn" style={{ fontSize: 12.5 }} data-testid={`finding-${f.id}-invalid`}>

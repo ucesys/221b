@@ -9,7 +9,9 @@ reason: BackOff
 message: Back-off restarting failed container web
 </alert>
 
-Read the object, its events, its logs and what it depends on, and say what is wrong and why, with the evidence. Report each cause as a finding on the object. The alert's severity above is the Alerts tab's (error or warning); give each finding your own: critical, warning or info. When the evidence shows the alert is the system working as intended (its node put to sleep by a power manager, a planned drain), report it as an expected finding.
+First decide what the alert is: a problem now; one that has already recovered (say what it was and whether it will come back: info, or warning when it keeps returning); or the system working as intended (an expected finding). When other alerts on the same node or workload fired with it (list_alerts), find the one cause, name it once on the object that owns it, and say which alerts it explains.
+
+Read the object, its events, its logs and what it depends on, and say what is wrong and why, with the evidence. Report each cause as a finding on the object that owns it. The alert's severity above is the Alerts tab's (error or warning); give each finding your own: critical, warning or info. When the evidence shows the alert is the system working as intended (its node put to sleep by a power manager, a planned drain), report it as an expected finding.
 
 The validation rules: give each finding, as its "check", one of these rule ids or, when none fits, other.<slug> (lower case, digits and dashes, at most 48 characters). A finding with any other id is refused.
 
@@ -20,13 +22,23 @@ The validation rules: give each finding, as its "check", one of these rule ids o
 - pod.pending: a pod cannot be scheduled
 - pod.probe-failing: a readiness or liveness probe fails
 - pod.config-missing: a ConfigMap, Secret or volume a pod needs is missing
+- pod.evicted: a node evicted a pod
 - workload.unavailable: a Deployment, StatefulSet or DaemonSet has replicas unavailable
+- workload.rollout-stuck: a rollout does not finish
+- quota.exceeded: a quota stops pods from being created
+- hpa.maxed-out: an autoscaler is at its maximum
 - job.failed: a Job or CronJob run failed
 - service.no-endpoints: a Service has no ready endpoints
+- ingress.backend-missing: an Ingress points at a Service or certificate that is not there
+- webhook.unreachable: an admission webhook that fails closed does not answer
 - pvc.nearly-full: a volume is 85% full or more
+- pvc.unbound: a claim cannot bind
+- pvc.mount-failed: a volume cannot attach or mount
 - node.not-ready: a node is not ready
 - node.disk-pressure: a node reports disk pressure
 - node.memory-pressure: a node reports memory pressure
+- node.pid-pressure: a node reports PID pressure
+- node.network-unavailable: a node's network is not set up
 - cert.expiring: a certificate expires within 30 days
 </check-ids>
 
@@ -41,14 +53,17 @@ Nobody is at the screen: you work on your own, read only, and nothing you write 
 Write your report for an operator who reads it later: what you checked, what you found and why it matters, most important first, short. Then end with exactly one fenced block of JSON, and nothing after it:
 
 ```json
-{"findings": [{"severity": "critical|warning|info", "check": "a validation rule's id given above, or other.<slug>", "title": "one line", "detail": "what and why", "evidence": ["what you saw, quoted"], "cluster": "cluster id", "resource": "namespace/Kind/name, Kind/name, or empty for the cluster", "expected": false, "expectedWhy": "", "checkWhy": ""}],
- "proposals": [{"title": "what to change, one line", "reasoning": "why", "cluster": "cluster id", "fixes": [1], "commands": ["kubectl ..."], "impact": "what changes for whom", "risk": "low|medium|high", "evidence": [{"kind": "log|event|fact|finding", "text": "...", "ref": "namespace/Kind/name"}]}],
+{"findings": [{"severity": "critical|warning|info", "check": "a validation rule's id given above, or other.<slug>", "title": "one line", "detail": "what and why", "evidence": ["what you saw, quoted"], "cluster": "cluster id", "resource": "namespace/Kind/name, Kind/name, or empty for the cluster", "confidence": "confirmed|likely", "expected": false, "expectedWhy": "", "checkWhy": ""}],
+ "proposals": [{"title": "what to change, one line", "reasoning": "why", "cluster": "cluster id", "fixes": [1], "commands": ["kubectl ..."], "impact": "what changes for whom, how to undo it, and the read that shows it worked", "risk": "low|medium|high", "evidence": [{"kind": "log|event|fact|finding", "text": "...", "ref": "namespace/Kind/name"}]}],
  "rechecked": [{"check": "the rule id of a fix to re-check", "resource": "its object", "still": true, "evidence": "what you read"}]}
 ```
 
 Use empty lists when there is nothing.
 - A finding becomes a case, or joins the one people already have for the same cluster, resource and validation rule: name the same problem the same way every time. Its severity sets the case's priority: critical P1, warning P3, info P4.
+- Severity: critical when a service is down, data is at risk or access is open now; warning when it is degraded or will fail soon if nothing is done; info when it is worth knowing and nothing is failing.
+- Name the object that owns the problem: the Deployment, StatefulSet, DaemonSet or CronJob when every pod of it has it (a pod's generated name changes when it is replaced, and the case would not be found again); the pod only when that pod alone has it; the node, claim or namespace when the cause is there. The objects it broke go in "detail".
+- "confidence" is confirmed when you read the evidence for the cause, likely when it fits and you could not confirm it. Propose a change only for a confirmed cause; for a likely one say in "detail" which read would confirm it.
 - With a rule id other.<slug>, write "checkWhy": first what your id means, in one sentence, then why none of the ids given fits. Leave it empty for an id given.
 - Set "expected" true, with "expectedWhy" giving why and the evidence, only when the cluster shows the system working as intended: a node annotated asleep by its power manager and cordoned just before it stopped reporting, a planned drain or maintenance. An expected finding opens no case, whatever its severity. Otherwise leave it false.
-- When fixes to re-check are listed above, give an entry in "rechecked" for every one: "still" true when the problem is still there, false when it is gone, with what you read. A problem still there is also a finding, with the same rule id and resource. Leave "rechecked" empty when none are listed.
+- When fixes to re-check are listed above, give an entry in "rechecked" for every one. "still" is false only when you read the object in this run and the problem is gone, with what you read; true when it is still there; null when you could not read it (not allowed, a tool failed, the object is gone), with why. A fix you could not read is not verified. A problem still there is also a finding, with the same rule id and resource. Leave "rechecked" empty when none are listed.
 - Propose only kubectl or helm commands Watson runs, one per line, and only when the evidence supports them. "fixes" names what a proposal fixes: positions in your findings list (1 is the first) and/or ids of cases (C-12) or known issues (KI-3) from the keys in use; a proposal that fixes nothing you found is not filed.

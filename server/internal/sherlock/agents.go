@@ -551,6 +551,31 @@ func (s *Service) RunAgent(ctx context.Context, a Agent, q Question, task string
 	return res
 }
 
+// DefaultMaxRounds is how many rounds of reads one answer gets when the
+// engine's options name none; the agents' instructions say the number
+// (package ai, the mark {{rounds}}, PM-C2).
+const DefaultMaxRounds = 12
+
+// LastRoundNote is what an agent is told on the last round it has (PM-C5),
+// so that it answers from what it read instead of asking for more reads
+// and ending with no answer at all.
+const LastRoundNote = "This is your last round: answer now from what you have read, and say what you did not get to."
+
+// lastRound is the messages of a round's request: on the last round the
+// engine allows, the last message, which is the person's, the task's or
+// the tools' results, also carries LastRoundNote. The history itself is
+// left as it is, so the note is never kept.
+func lastRound(history []Message, round, maxRounds int) []Message {
+	if round != maxRounds-1 || maxRounds < 2 || len(history) == 0 || history[len(history)-1].Role != "user" {
+		return history
+	}
+	out := append([]Message(nil), history...)
+	last := out[len(out)-1]
+	last.Content = append(append([]Block(nil), last.Content...), Block{Type: "text", Text: LastRoundNote})
+	out[len(out)-1] = last
+	return out
+}
+
 // loop runs an agent's rounds on a task: the model replies, the tools it
 // asks for run, until it is done. It is a hand-over's, a test's or a
 // replay's; a question's own answer runs in Service.answer. Progress
@@ -584,7 +609,7 @@ func (s *Service) loop(ctx context.Context, a *Agent, q Question, task string, r
 			out.Err = errors.New("too many tool rounds")
 			return out
 		}
-		req := Request{Model: a.Model, MaxTokens: s.maxTokens(a), System: system, Messages: history, Tools: defs}
+		req := Request{Model: a.Model, MaxTokens: s.maxTokens(a), System: system, Messages: lastRound(history, round, s.opts.MaxRounds), Tools: defs}
 		var roundText strings.Builder
 		resp, err := client.Stream(ctx, req, func(d Delta) {
 			if d.Text == "" || h == nil {

@@ -218,7 +218,8 @@ type Options struct {
 	Audit    *audit.Log
 	Now      func() time.Time
 	Logger   *slog.Logger
-	// MaxRounds bounds the tool rounds of one answer.
+	// MaxRounds bounds the tool rounds of one answer; 0 is
+	// DefaultMaxRounds.
 	MaxRounds int
 	// MaxTokens bounds one reply, its thinking included.
 	MaxTokens int
@@ -285,7 +286,7 @@ func New(o Options) *Service {
 		o.Logger = slog.Default()
 	}
 	if o.MaxRounds <= 0 {
-		o.MaxRounds = 12
+		o.MaxRounds = DefaultMaxRounds
 	}
 	if o.MaxTokens <= 0 {
 		o.MaxTokens = 16000
@@ -819,7 +820,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		}
 		c.mu.Lock()
 		s.trimLocked(c)
-		req := Request{Model: a.Model, MaxTokens: s.maxTokens(&a), System: system, Messages: append([]Message(nil), c.history...), Tools: defs}
+		req := Request{Model: a.Model, MaxTokens: s.maxTokens(&a), System: system, Messages: lastRound(append([]Message(nil), c.history...), round, s.opts.MaxRounds), Tools: defs}
 		c.mu.Unlock()
 		// Each round's text starts afresh: the answer is the last round's.
 		var roundText strings.Builder

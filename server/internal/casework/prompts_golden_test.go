@@ -18,8 +18,9 @@ func TestGoldenPrompts(t *testing.T) {
 	prompttest.Check(t, "case.analysis", task(request{Case: c, Related: "C-7 (closed as Fixed): web-0 ran out of memory; RCA: the limit was too low."}, "local", AnalysisTask))
 	c.Analysis = &Analysis{Run: "R-4", At: at, Summary: "The container runs out of memory at start.", Cause: "Its memory limit is 64Mi.", Evidence: []string{"shop/Pod/web-0: Last State Terminated, Reason OOMKilled"},
 		Fix: Fix{Summary: "Raise the limit.", Commands: []string{"kubectl rollout restart deployment/web -n shop"}}}
-	prompttest.Check(t, "case.analysis-again", task(request{Case: c}, "local", AnalysisTask))
+	// Sent back, the task carries what people wrote on the case (PM-J5).
 	c.Messages = []string{"2026-11-10 09:00 (operator): Raised the limit to 256Mi."}
+	prompttest.Check(t, "case.analysis-again", task(request{Case: c}, "local", AnalysisTask))
 	c.History = []Event{{At: at, What: "Fix applied", By: issues.Actor{Name: "Ann", Kind: issues.ActorPerson}}}
 	prompttest.Check(t, "case.rca-draft", task(request{Case: c, Draft: true, Cards: []CardRef{{ID: "PC-4", Title: "Raise web's memory limit", State: "applied"}}}, "local", AnalysisTask))
 }

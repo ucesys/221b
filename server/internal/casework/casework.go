@@ -172,6 +172,14 @@ type Analysis struct {
 	Cause    string   `json:"cause,omitempty"`
 	Evidence []string `json:"evidence,omitempty"`
 	Fix      Fix      `json:"fix"`
+	// Confidence is how sure the agent is of the cause (PM-J1d): confirmed
+	// when it read the evidence, likely when the cause fits and it could
+	// not confirm it; "" on an analysis of before the field. RuledOut is
+	// what it checked and found healthy, each with its object (PM-J5), so
+	// that the next analysis and the people on the case do not read it
+	// again.
+	Confidence string   `json:"confidence,omitempty"`
+	RuledOut   []string `json:"ruledOut,omitempty"`
 	// Expected is the analysis's verdict that there is no problem: the
 	// system works as intended, ExpectedWhy says why, with its evidence
 	// (CF-82). It lowers the priority of a case the console or an agent

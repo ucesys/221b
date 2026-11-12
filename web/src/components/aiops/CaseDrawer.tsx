@@ -1055,8 +1055,8 @@ function CaseBody({
               </span>
             )}
             {a.cause && (
-              <span>
-                <strong>Cause:</strong> {a.cause}
+              <span data-testid="case-analysis-cause" title={a.confidence === 'likely' ? 'The cause fits the evidence, and the agent could not confirm it (PM-J1d)' : undefined}>
+                <strong>{a.confidence === 'likely' ? 'Likely cause:' : 'Cause:'}</strong> {a.cause}
               </span>
             )}
             {a.summary && <span style={{ whiteSpace: 'pre-wrap' }}>{a.summary}</span>}
@@ -1068,6 +1068,16 @@ function CaseBody({
                   </li>
                 ))}
               </ul>
+            )}
+            {(a.ruledOut ?? []).length > 0 && (
+              <div data-testid="case-analysis-ruled-out" style={{ fontSize: 12.5 }}>
+                <strong>Ruled out:</strong>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  {a.ruledOut!.map((e, i) => (
+                    <li key={i}>{e}</li>
+                  ))}
+                </ul>
+              </div>
             )}
             {a.run && (
               <span className="tb-hint" style={{ fontSize: 12 }}>
@@ -1588,7 +1598,7 @@ function CloseForm({ c, busy, writing, onWriting, onCancel, act, err, onDone }: 
             rca={writing.rca}
             onRCA={(rca) => onWriting({ ...writing, rca })}
             // The agent's draft, as it is when it comes: its fix fills What was done only when nothing is written there.
-            onDrafted={(d) => onWriting((w) => ({ ...w, fix: w.fix.trim() ? w.fix : d.fix || w.fix, rca: { ...w.rca, cause: d.cause, prevention: d.prevention } }))}
+            onDrafted={(d) => onWriting((w) => ({ ...w, fix: w.fix.trim() ? w.fix : d.fix || w.fix, rca: { ...w.rca, cause: d.cause, prevention: d.prevention, text: w.rca.text?.trim() ? w.rca.text : d.text || w.rca.text } }))}
           />
         )
       case 'knownIssue':

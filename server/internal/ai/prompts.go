@@ -7,8 +7,10 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
+	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/watson"
 )
@@ -27,12 +29,31 @@ func promptFile(name string) string {
 		return ""
 	}
 	text := strings.TrimSpace(htmlComment.ReplaceAllString(string(b), ""))
-	return strings.ReplaceAll(text, commandsMark, watson.Commands())
+	return marks.Replace(text)
 }
 
 // commandsMark in a prompt file stands for the sentence that says what
 // Watson runs, built from Watson's own list (S-1).
 const commandsMark = "{{watson.Commands}}"
+
+// The other marks of a prompt file: {{rounds}} is how many rounds of
+// reads the engine gives one answer (PM-C2), and the two automation marks
+// are the rules every Automation script keeps and what a review of one
+// checks, which the Automation screen's tasks say too (PM-J9), so the
+// agents' cores and those tasks cannot part.
+const (
+	roundsMark      = "{{rounds}}"
+	scriptRulesMark = "{{automation.ScriptRules}}"
+	reviewRulesMark = "{{automation.ReviewRules}}"
+)
+
+// marks fills a prompt file's marks.
+var marks = strings.NewReplacer(
+	commandsMark, watson.Commands(),
+	roundsMark, strconv.Itoa(sherlock.DefaultMaxRounds),
+	scriptRulesMark, automation.ScriptRules,
+	reviewRulesMark, automation.ReviewRules,
+)
 
 // htmlComment is a comment in a prompt file, such as the source: comment
 // that names where a part came from (docs/prompt-sources.md); it is for
