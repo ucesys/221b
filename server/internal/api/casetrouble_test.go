@@ -24,12 +24,18 @@ import (
 
 // --- Troubleshooting a case in its drawer (wave 6f, CF-47, CF-48) ---
 
-// The HTTP contract: Sherlock on a case asks as the person, names them,
-// starts from the case, and is shared; Watson's commands from a case are
-// checked against it and logged there with how they ended; closing it as
-// fixed deletes the conversation and keeps the change that finished done;
-// reopened, the conversation starts empty. A Viewer does neither.
-func TestTroubleshootingACaseCF47CF48(t *testing.T) {
+// caseTrouble is a console with cases and Sherlock on the simulator, as
+// the tests of a case's conversation use it.
+type caseTrouble struct {
+	srv      *httptest.Server
+	ops      *http.Client
+	sh       *sherlock.Service
+	fake     *fakeclaude.Fake
+	auditOut *lockedBuffer
+}
+
+func caseTroubleSetup(t *testing.T) caseTrouble {
+	t.Helper()
 	s := sim.New(sim.Options{Nodes: 6, Pods: 60, Seed: 7})
 	simSrv := httptest.NewServer(s)
 	t.Cleanup(simSrv.Close)
@@ -65,6 +71,17 @@ func TestTroubleshootingACaseCF47CF48(t *testing.T) {
 		t.Fatal(err)
 	}
 	enableSherlock(t, srv, ops, `{"clusters":{"local":true},"model":"claude-opus-5-5","dailyUSD":20,"monthlyUSD":200}`)
+	return caseTrouble{srv: srv, ops: ops, sh: sh, fake: fake, auditOut: auditOut}
+}
+
+// The HTTP contract: Sherlock on a case asks as the person, names them,
+// starts from the case, and is shared; Watson's commands from a case are
+// checked against it and logged there with how they ended; closing it as
+// fixed deletes the conversation and keeps the change that finished done;
+// reopened, the conversation starts empty. A Viewer does neither.
+func TestTroubleshootingACaseCF47CF48(t *testing.T) {
+	ct := caseTroubleSetup(t)
+	srv, ops, sh, fake, auditOut := ct.srv, ct.ops, ct.sh, ct.fake, ct.auditOut
 	viewer := signIn(t, srv, "viewer@corp.example")
 	cases := srv.URL + casework.Prefix
 	if r, b := send(t, ops, http.MethodPost, cases, `{"title":"The shop pod restarts","cluster":"local","resource":"web/Pod/shop","priority":2}`); r.StatusCode != http.StatusCreated {
@@ -118,12 +135,21 @@ func TestTroubleshootingACaseCF47CF48(t *testing.T) {
 	if code, items := cmd(ops, `{"command":"kubectl get nodes","from":"case:C-1","run":true}`); code != http.StatusAccepted || items[0].From != "case:C-1" {
 		t.Fatalf("a read: %d %+v", code, items)
 	}
-	code, items := cmd(ops, `{"command":"kubectl cordon worker-002","from":"case:c-1"}`)
-	if code != http.StatusAccepted || items[0].Kind != "change" || items[0].From != "case:C-1" {
+	// Sent as Run in Watson sends it, with run (Auto-run reads on): run
+	// runs reads only; a change waits on its card for an approval.
+	code, items := cmd(ops, `{"command":"kubectl cordon worker-002","from":"case:c-1","run":true}`)
+	if code != http.StatusAccepted || items[0].Kind != "change" || items[0].From != "case:C-1" || items[0].Status != "pending" || items[0].Approver != "" {
 		t.Fatalf("a change: %d %+v", code, items)
 	}
 	ch := items[0].ID
-	watsonStream(t, srv, ops, func(m map[string]watsonItem) bool { return m[ch].Plan != nil && m[ch].Plan.Ready })
+	ready := watsonStream(t, srv, ops, func(m map[string]watsonItem) bool { return m[ch].Plan != nil && m[ch].Plan.Ready })
+	if it := ready[ch]; it.Status != "pending" || it.Approver != "" || it.Started != nil || !it.CanAct {
+		t.Fatalf("a change from the case ran or was approved before anyone approved it: %+v", it)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if r, b := send(t, ops, http.MethodGet, srv.URL+"/api/v1/watson/commands/"+ch, ""); r.StatusCode != 200 || !strings.Contains(b, `"status":"pending"`) {
+		t.Fatalf("the change still waits for its approval: %d %s", r.StatusCode, b)
+	}
 	if r, b := send(t, ops, http.MethodPost, srv.URL+"/api/v1/watson/commands/"+ch+"/approve", ""); r.StatusCode != 200 {
 		t.Fatalf("approve %d %s", r.StatusCode, b)
 	}
@@ -187,5 +213,60 @@ func TestTroubleshootingACaseCF47CF48(t *testing.T) {
 	sh.Wait()
 	if _, v := conversation(ops); len(v.Messages) != 2 {
 		t.Fatalf("reopened: %+v", v.Messages)
+	}
+}
+
+// Sherlock on a case takes any question and changes the view as in the
+// person's own panel (SR-19): its view actions are offered, go to the
+// asker's window only, are made once the answer is done (SR-18), and only
+// the asker's session may post their results.
+func TestCaseSherlockChangesTheAskersViewOnly(t *testing.T) {
+	ct := caseTroubleSetup(t)
+	srv, ops, sh, fake := ct.srv, ct.ops, ct.sh, ct.fake
+	cases := srv.URL + casework.Prefix
+	if r, b := send(t, ops, http.MethodPost, cases, `{"title":"The shop pod restarts","cluster":"local","resource":"web/Pod/shop","priority":2}`); r.StatusCode != http.StatusCreated {
+		t.Fatalf("open: %d %s", r.StatusCode, b)
+	}
+	chat := "/api/v1/aiops/cases/1/sherlock"
+	ops2 := signIn(t, srv, "ops2@corp.example")
+	forged := make(chan int, 4)
+	mine := runWindowAt(t, srv, ops, chat+"/events", chat+"/ui/", func(r sherlock.UIRequest) (sherlock.UIResult, bool) {
+		forged <- postResult(ops2, srv.URL+chat+"/ui/"+r.ID, `{"applied":true,"label":"forged"}`)
+		if r.Hold {
+			return sherlock.UIResult{Held: true}, true
+		}
+		return sherlock.UIResult{Applied: true, Label: "Showed the failing pods"}, true
+	})
+	theirs := runWindowAt(t, srv, ops2, chat+"/events", chat+"/ui/", func(sherlock.UIRequest) (sherlock.UIResult, bool) {
+		return sherlock.UIResult{Applied: true, Label: "wrong window"}, true
+	})
+	b, _ := json.Marshal(map[string]any{"question": `Which pods fail in kube-system? [[view_filter {"set":{"status":"failing"}}]]`, "window": testWindow, "view": `{"view":"aiops"}`})
+	if r, text := send(t, ops, http.MethodPost, srv.URL+chat+"/ask", string(b)); r.StatusCode != http.StatusAccepted {
+		t.Fatalf("ask: %d %s", r.StatusCode, text)
+	}
+	sh.Wait()
+	_, text := send(t, ops, http.MethodGet, srv.URL+chat+"/conversation", "")
+	var v sherlock.View
+	_ = json.Unmarshal([]byte(text), &v)
+	m := v.Messages[len(v.Messages)-1]
+	if m.Status != "done" || len(m.View) != 1 || m.View[0].Label != "Showed the failing pods" {
+		t.Fatalf("answer: %+v", m)
+	}
+	if seen := mine.requests(); len(seen) != 2 || !seen[0].Hold || seen[1].Hold || seen[0].Window != testWindow {
+		t.Fatalf("the asker's window: %+v", seen)
+	}
+	if seen := theirs.requests(); len(seen) != 0 {
+		t.Fatalf("another person's window got %+v", seen)
+	}
+	for range 2 {
+		if code := <-forged; code != http.StatusNotFound {
+			t.Fatalf("another person's result: %d", code)
+		}
+	}
+	first := string(fake.Requests()[0])
+	for _, want := range []string{`"name":"view_open"`, `"name":"view_aiops"`, "console-view", "may be about the case or about anything else"} {
+		if !strings.Contains(first, want) {
+			t.Errorf("the request lacks %q", want)
+		}
 	}
 }

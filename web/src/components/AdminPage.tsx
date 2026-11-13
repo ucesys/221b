@@ -9,6 +9,7 @@ import { AdminAudit } from './AdminAudit'
 import { AdminBackup } from './AdminBackup'
 import { AdminSessions, AdminToolbox } from './toolbox/AdminToolbox'
 import { AddedInMycroft } from './ai/AddedInMycroft'
+import { isSuperAdmin, pagesFor } from '../lib/adminAccess'
 
 export interface AdminProps {
   route: Route
@@ -18,33 +19,20 @@ export interface AdminProps {
   onToast: (msg: string) => void
 }
 
-const PAGES: { id: Page; label: string; tip: string; superOnly: boolean }[] = [
-  { id: 'roles', label: 'Roles', tip: 'The four roles and who holds them', superOnly: false },
-  { id: 'permissions', label: 'Permissions', tip: 'What each role may read and change', superOnly: false },
-  { id: 'users', label: 'Users', tip: 'SuperAdmin only: the people 221B knows', superOnly: true },
-  { id: 'toolbox', label: 'Toolbox', tip: 'SuperAdmin only: what the chart allows the Toolbox', superOnly: true },
+const PAGES: { id: Page; label: string; tip: string }[] = [
+  { id: 'roles', label: 'Roles', tip: 'The four roles and who holds them' },
+  { id: 'permissions', label: 'Permissions', tip: 'What each role may read and change' },
+  { id: 'users', label: 'Users', tip: 'SuperAdmin only: the people 221B knows' },
+  { id: 'toolbox', label: 'Toolbox', tip: 'SuperAdmin only: what the chart allows the Toolbox' },
   // Approvals moved to AIOps › Inbox (Phase 12, CS-06); #/admin/approvals opens it there.
-  { id: 'logs', label: 'Logs', tip: 'SuperAdmin only: the Toolbox’s sessions, and the audit log of who did what', superOnly: true },
-  { id: 'settings', label: 'Settings', tip: 'SuperAdmin only: general, AI, changes and AIOps settings', superOnly: true },
-  { id: 'backup', label: 'Backup', tip: 'SuperAdmin only: a backup of the console’s own data, and a restore', superOnly: true },
+  { id: 'logs', label: 'Logs', tip: 'SuperAdmin only: the Toolbox’s sessions, and the audit log of who did what' },
+  { id: 'settings', label: 'Settings', tip: 'SuperAdmin only: general, AI, changes and AIOps settings' },
+  { id: 'backup', label: 'Backup', tip: 'SuperAdmin only: a backup of the console’s own data, and a restore' },
 ]
 
-/** Whether this person is a SuperAdmin; with sign-in off nobody is. */
-export function isSuperAdmin(me: Me | null): boolean {
-  return !!me && me.admin
-}
-
-/**
- * The pages this person is offered (RB-41): Roles and Permissions for
- * everyone, Users and Settings for a SuperAdmin. With sign-in off there are
- * no users and no roles to list, and nobody is a SuperAdmin, so it offers
- * Permissions alone.
- */
-export function pagesFor(me: Me | null): Page[] {
-  if (!me) return []
-  if (me.mode === 'none') return ['permissions']
-  return ADMIN_PAGES.filter((p) => isSuperAdmin(me) || !PAGES.find((x) => x.id === p)!.superOnly)
-}
+// Who is offered which page lives in lib/adminAccess, which Sherlock's
+// view_admin asks too (SR-13).
+export { isSuperAdmin, pagesFor }
 
 type Log = 'sessions' | 'audit'
 

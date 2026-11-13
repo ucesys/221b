@@ -15,7 +15,8 @@ import (
 )
 
 // approvalRow is one thing that waits, or waited, for an approval: a
-// script version, a variable change or a Watson card. Approved by and on
+// script version, a variable change, a run with its own values or a
+// Watson card. Approved by and on
 // name whoever decided it, as State says how.
 type approvalRow struct {
 	Kind        string     `json:"kind"`
@@ -41,13 +42,17 @@ type approvalRow struct {
 	Own bool `json:"own,omitempty"`
 	// Overtaken says why a waiting change can only be rejected now.
 	Overtaken string `json:"overtaken,omitempty"`
+	// Run is the run an approved run request started.
+	Run int `json:"run,omitempty"`
 }
 
 // The kinds and states of an approval row.
 const (
-	approvalScript   = "script"
-	approvalChange   = "change"
-	approvalCommand  = "command"
+	approvalScript  = "script"
+	approvalChange  = "change"
+	approvalCommand = "command"
+	// approvalRun is a run whose own values wait on production (FU-05).
+	approvalRun      = "run"
 	approvalPending  = "pending"
 	approvalApproved = "approved"
 	approvalRejected = "rejected"
@@ -180,6 +185,35 @@ func (s *Server) getApprovals(w http.ResponseWriter, r *http.Request) {
 					row.Mine = me.Same(c.By) && !me.Same(*c.DecidedBy)
 				}
 				row.ApprovedAt, row.Comment = c.DecidedAt, c.Comment
+				decided = append(decided, row)
+			}
+		}
+		// Runs whose own values wait (FU-05): whoever asked sees theirs, to
+		// withdraw it; another admin approves it.
+		runs, err := st.WaitingRuns(r.Context(), "")
+		if err != nil {
+			jsonError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, q := range runs {
+			row := approvalRow{Kind: approvalRun, What: q.What(), Cluster: q.Cluster, ClusterName: names[q.Cluster], RequestedBy: q.By.Name, RequestedAt: timeRef(q.At), Script: q.Script, Version: q.Version, Fleet: q.Fleet, ID: strconv.Itoa(q.ID), Run: q.Run}
+			if row.ClusterName == "" {
+				row.ClusterName = q.Cluster
+			}
+			switch q.State {
+			case automation.ChangeWaiting:
+				row.State, row.Own = approvalPending, me.Same(q.By)
+				pending = append(pending, row)
+			default:
+				row.State = approvalApproved
+				if q.State == automation.ChangeRejected {
+					row.State = approvalRejected
+				}
+				if q.DecidedBy != nil {
+					row.ApprovedBy = q.DecidedBy.Name
+					row.Mine = me.Same(q.By) && !me.Same(*q.DecidedBy)
+				}
+				row.ApprovedAt, row.Comment = q.DecidedAt, q.Comment
 				decided = append(decided, row)
 			}
 		}

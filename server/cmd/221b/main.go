@@ -37,6 +37,7 @@ import (
 	"github.com/ucesys/221b/server/internal/leader"
 	"github.com/ucesys/221b/server/internal/lessons"
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/mail"
 	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/settings"
@@ -134,6 +135,7 @@ type wiring struct {
 	cardsStored      *kv.Limited
 	caseSvc          *casework.Service
 	caseStored       *kv.Limited
+	mailSvc          *mail.Service
 	lessonsSvc       *lessons.Service
 
 	// The backups and the HTTP API.

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { askSherlock, newSherlockChat, stopSherlock, SherlockError, usd, type SherlockHand, type SherlockMsg, type SherlockRef, type SherlockState } from '../api/sherlock'
+import { askSherlock, newSherlockChat, stopSherlock, SherlockError, usd, type AskContext, type SherlockHand, type SherlockMsg, type SherlockRef, type SherlockState } from '../api/sherlock'
 import { useShowCosts } from '../lib/costs'
 import { saveTestCase } from '../api/ai'
 import { Markdown } from '../lib/markdown'
@@ -8,9 +8,9 @@ import { clusterHref, currentRoute, FIRST_TAB } from '../lib/router'
 import { canPopOut, parseRef, post, refTarget, type RefTarget } from '../lib/sherlock'
 import { CheckIcon, CopyIcon, CrossIcon, SendIcon, SherlockIcon, WatsonIcon } from './Icons'
 import { isCommands } from '../api/watson'
-import { useWatsonApi } from './Watson'
+import { autoRunReads, useWatsonApi } from './Watson'
 import { isUndone, onUndone } from '../lib/uiControl'
-import { askContext, askUndo, followedWindow } from '../lib/uiWindow'
+import { askContext, askShow, askUndo, followedWindow, useSharedAnswering } from '../lib/uiWindow'
 import { copyText } from '../lib/clipboard'
 import { sherlockSummary } from '../lib/reportLink'
 import { ReportPageLink } from './aiops/ReportPageLink'
@@ -71,7 +71,7 @@ function CodeBlock({ text, lang, open, why, draft }: { text: string; lang: strin
       <pre aria-label={shell ? 'Commands' : 'Code'}>{text}</pre>
       {!open && (
         <div>
-          {/* On a case (CF-48), the commands go to the case's Watson, which asks before it runs them. */}
+          {/* On a case (CF-48), the commands go to the case's Watson: a change waits on its card for an approval, a read runs as Auto-run reads says. */}
           {commands && watson.available && !draft && watson.onCase && <RunInWatson onClick={() => watson.send(text, { from: 'Sherlock', why })} />}
           {commands && watson.available && !draft && !watson.onCase && (
             <button
@@ -102,21 +102,30 @@ function CodeBlock({ text, lang, open, why, draft }: { text: string; lang: strin
 /**
  * Run in Watson on a case (CF-48): the same button on Sherlock's commands
  * and on the case's suggested fix. It hands the command to the drawer's
- * Watson, which asks before it runs, as the dock's Watson does.
+ * Watson as the dock's Send to Watson does: a change always waits on its
+ * card for an approval; a read runs at once while Auto-run reads is on,
+ * and otherwise waits for Run. What it says follows that setting, read
+ * again as the pointer or the focus reaches it.
  */
 export function RunInWatson({ onClick, disabled, testId = 'sherlock-run-watson', title }: { onClick: () => void; disabled?: boolean; testId?: string; title?: string }) {
   const { onCase } = useWatsonApi()
-  const tip =
-    title ??
-    (onCase === 'proposal'
-      ? 'Hands the command to Watson beside the proposed change. Nothing runs until you approve it there; it runs as you.'
-      : 'Hands the command to Watson beside the case. Nothing runs until you approve it there; it runs as you.')
+  const [auto, setAuto] = useState(autoRunReads)
+  const where = onCase === 'proposal' ? 'the proposed change' : 'the case'
+  const tip = title ?? runInWatsonTip(where, auto)
+  const look = () => setAuto(autoRunReads())
   return (
-    <button className="rk-btn" data-on="true" onClick={onClick} disabled={disabled} title={tip} data-testid={testId}>
+    <button className="rk-btn" data-on="true" onClick={onClick} onMouseEnter={look} onFocus={look} disabled={disabled} title={tip} data-testid={testId}>
       <WatsonIcon />
       Run in Watson
     </button>
   )
+}
+
+/** What Run in Watson does, as Watson's Auto-run reads has it (CF-48). */
+export function runInWatsonTip(where: string, autoReads: boolean): string {
+  return autoReads
+    ? `Hands the command to Watson beside ${where}. A change waits there on its card until you approve it, and runs as you; a read runs at once, as Auto-run reads is on in Watson.`
+    : `Hands the command to Watson beside ${where}. It waits there on its card: a change until you approve it, a read until you press Run; it runs as you.`
 }
 
 function Steps({ m }: { m: SherlockMsg }) {
@@ -140,6 +149,87 @@ export function agentRef(name: string): string {
 }
 
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+
+// --- PM-U1: Sherlock is still running, said above the question box ---
+
+/** The running hand-over deepest in an answer: who is working now. */
+function runningHand(hands?: SherlockHand[]): SherlockHand | undefined {
+  for (const h of hands ?? []) {
+    if (h.status !== 'running') continue
+    return runningHand(h.hands) ?? h
+  }
+  return undefined
+}
+
+/** What the banner says Sherlock is doing, from its latest answer; first match wins. */
+export function workingLabel(m: SherlockMsg | undefined, sending: boolean): string {
+  const h = runningHand(m?.hands)
+  if (h) return `${capital(agentRef(h.toName))} is working`
+  const step = [...(m?.steps ?? [])].reverse().find((s) => s.status === 'running')
+  if (step) return step.label
+  if (m?.status === 'answering' && m.text) return 'Writing the answer'
+  return sending ? 'Sending' : 'Thinking'
+}
+
+/** m:ss since a time. */
+export function elapsed(from: string | undefined, now: number): string {
+  const t = from ? Date.parse(from) : NaN
+  const s = Number.isNaN(t) ? 0 : Math.max(0, Math.floor((now - t) / 1000))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+const TITLE_MARK = '● '
+
+/**
+ * The line above the question box while Sherlock works (PM-U1): a spinner,
+ * what it is doing, how many reads, how long, and Stop. While it shows, the
+ * page's title starts with a dot, for a tab in the background.
+ */
+export function WorkingBanner({ m, sending, onStop }: { m: SherlockMsg | undefined; sending: boolean; onStop?: () => void }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const mark = () => {
+      if (!document.title.startsWith(TITLE_MARK)) document.title = TITLE_MARK + document.title
+    }
+    mark()
+    const t = window.setInterval(() => {
+      setNow(Date.now())
+      mark()
+    }, 1000)
+    return () => {
+      window.clearInterval(t)
+      if (document.title.startsWith(TITLE_MARK)) document.title = document.title.slice(TITLE_MARK.length)
+    }
+  }, [])
+  const reads = m?.steps?.length ?? 0
+  const label = workingLabel(m, sending)
+  return (
+    <div className="rk-banner rk-working" data-tone="info" role="status" aria-live="polite" data-testid="sherlock-working">
+      <span className="rk-spin rk-spin-ui" aria-hidden="true" />
+      <span className="rk-banner-title rk-working-label" title={label} data-testid="sherlock-working-label">
+        {label}
+      </span>
+      {reads > 0 && (
+        <span data-testid="sherlock-working-reads">
+          {'· '}
+          {reads === 1 ? '1 read' : `${reads} reads`}
+        </span>
+      )}
+      {m?.at && !sending && (
+        <span className="rk-mono" aria-hidden="true" data-testid="sherlock-working-time">
+          {'· '}
+          {elapsed(m.at, now)}
+        </span>
+      )}
+      <span style={{ flex: '1 1 auto' }} />
+      {onStop && (
+        <button className="rk-btn" onClick={onStop} style={{ height: 26 }} data-testid="sherlock-stop">
+          Stop
+        </button>
+      )}
+    </div>
+  )
+}
 
 /**
  * The parts of an answer handed to other agents (Phase 12): "Sherlock asked
@@ -294,6 +384,78 @@ function ViewNotice({ m, cluster, onToast }: { m: SherlockMsg; cluster: string; 
   )
 }
 
+/** Why an answer's view changes were left, for the line above Show in 221B (SR-15). */
+function leftWhy(show: NonNullable<SherlockMsg['show']>): string {
+  if (show.some((s) => s.why === 'unsaved')) return 'Sherlock left your view as it was: you have unsaved changes open.'
+  if (show.some((s) => s.why === 'moved')) return 'Sherlock left your view as you set it during the answer.'
+  if (show.some((s) => s.why === 'stopped')) return 'The answer ended before it was done, so Sherlock left your view as it was.'
+  return 'The console window did not answer in time, so the view was left as it was.'
+}
+
+/**
+ * Under an answer whose view changes were left undone (SR-15): why, and
+ * Show in 221B, which applies them when the person presses it. With unsaved
+ * changes still open it asks first, and leaves them unless told to.
+ */
+function ShowNotice({ m, cluster }: { m: SherlockMsg; cluster: string }) {
+  const [busy, setBusy] = useState(false)
+  const [said, setSaid] = useState<{ text: string; tone?: string } | null>(null)
+  const [ask, setAsk] = useState<string[] | null>(null)
+  const show = m.show ?? []
+  const go = async (force: boolean) => {
+    setBusy(true)
+    setAsk(null)
+    const r = await askShow(
+      show.map((s) => ({ action: s.action, input: s.input })),
+      force,
+      cluster,
+    )
+    setBusy(false)
+    if (!r) setSaid({ text: 'No console window is open to show it in.', tone: 'err' })
+    else if (r.unsaved) setAsk(r.unsaved)
+    else if (r.failed.length) setSaid({ text: `${r.applied ? 'Shown in part: ' : 'Not shown: '}${r.failed.join(' ')}`, tone: 'err' })
+    else setSaid({ text: 'Shown.' })
+  }
+  return (
+    <div className="rk-viewnote" data-testid="sherlock-view-left">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+        <strong style={{ fontSize: 12, fontWeight: 600 }}>{leftWhy(show)}</strong>
+        {ask && (
+          <span style={{ fontSize: 12, color: 'var(--fg2)' }} data-testid="sherlock-show-unsaved">
+            {ask.join(', ')} still {ask.length === 1 ? 'has' : 'have'} unsaved changes, which showing this leaves behind.
+          </span>
+        )}
+        <span role="status" aria-live="polite" className="rk-t" data-tone={said?.tone} style={{ fontSize: 12 }} data-testid="sherlock-show-said">
+          {said?.text ?? ''}
+        </span>
+      </div>
+      {ask ? (
+        <span
+          style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}
+          // Escape here is Stay, not closing the panel.
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return
+            e.preventDefault()
+            e.stopPropagation()
+            setAsk(null)
+          }}
+        >
+          <button className="rk-btn" disabled={busy} onClick={() => void go(true)} data-testid="sherlock-show-anyway">
+            Leave them and show
+          </button>
+          <button className="rk-btn" disabled={busy} onClick={() => setAsk(null)} data-testid="sherlock-show-stay">
+            Stay
+          </button>
+        </span>
+      ) : (
+        <button className="rk-btn" disabled={busy} onClick={() => void go(false)} data-testid="sherlock-show">
+          Show in 221B
+        </button>
+      )}
+    </div>
+  )
+}
+
 function Answer({
   m,
   cluster,
@@ -302,6 +464,8 @@ function Answer({
   question,
   onToast,
   testCase = true,
+  scope,
+  views = true,
 }: {
   m: SherlockMsg
   cluster: string
@@ -310,6 +474,10 @@ function Answer({
   question?: string
   onToast: (msg: string) => void
   testCase?: boolean
+  /** What names the conversation to the view actions, when not the cluster: a shared one's (SR-19). */
+  scope?: string
+  /** Whether its view changes are this person's, to undo or show: on a shared conversation, only the asker's (SR-19). */
+  views?: boolean
 }) {
   const thinking = (m.status === 'thinking' || m.status === 'answering') && !m.text
   const costs = useShowCosts()
@@ -348,7 +516,8 @@ function Answer({
           />
         </div>
       )}
-      {(m.view?.length ?? 0) > 0 && <ViewNotice m={m} cluster={cluster} onToast={onToast} />}
+      {views && (m.view?.length ?? 0) > 0 && <ViewNotice m={m} cluster={scope ?? cluster} onToast={onToast} />}
+      {views && (m.show?.length ?? 0) > 0 && m.status !== 'thinking' && m.status !== 'answering' && <ShowNotice m={m} cluster={cluster} />}
       {m.status === 'stopped' && (
         <p className="rk-t" data-tone="muted" style={{ fontSize: 12.5 }} data-testid="sherlock-stopped">
           {m.error || 'Stopped.'}
@@ -405,7 +574,10 @@ interface PaneProps {
  * no New chat, no Report this, no test cases.
  */
 export interface SharedChat {
-  ask: (question: string) => Promise<unknown>
+  /** Asks, with the asker's window and view: Sherlock's view changes go to that window only (SR-19). */
+  ask: (question: string, ctx?: AskContext) => Promise<unknown>
+  /** What names the conversation to the view actions: its address (SR-19). */
+  scope: string
   stop: () => Promise<unknown>
   /** The line beside the title. */
   sub: string
@@ -468,9 +640,17 @@ export function recall(key: 'ArrowUp' | 'ArrowDown', value: string, caret: numbe
   return at.index === -1 ? at.draft : history[history.length - 1 - at.index]!
 }
 
+// A question being typed outlives the pane: closed to its icon (Escape,
+// SR-17) and opened again, the box has it back. Per cluster, in memory only.
+const keptDrafts = new Map<string, string>()
+
 /** Sherlock's pane: the conversation and the question box. */
 export function SherlockPane({ cluster, clusterName, state, inWindow, controls, switcher, onToast, fill, onFilled, shared }: PaneProps) {
-  const [draft, setDraft] = useState(fill ?? '')
+  const [draft, setDraft0] = useState(fill || (shared ? '' : (keptDrafts.get(cluster) ?? '')))
+  const setDraft = (text: string) => {
+    setDraft0(text)
+    if (!shared) keptDrafts.set(cluster, text)
+  }
   const history = useRef<string[]>(loadHistory())
   const at = useRef({ index: -1, draft: '' })
   const box = useRef<HTMLTextAreaElement>(null)
@@ -483,6 +663,10 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
   const msgs = conv?.messages ?? []
   const busy = !!conv?.busy
   const canAsk = !!status?.available && !busy && !sending
+  // On a shared conversation, the answers to the questions asked here: their
+  // view changes are this window's, as in the person's own (SR-19).
+  const [mine, setMine] = useState<ReadonlySet<number>>(() => new Set())
+  useSharedAnswering(shared?.scope ?? '', shared ? conv : null, mine)
 
   // A question handed over waits in the box; it is the person who asks it.
   const [filled, setFilled] = useState(fill)
@@ -512,8 +696,14 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
     setError('')
     pinned.current = true
     try {
-      if (shared) await shared.ask(q)
-      else await askSherlock(cluster, q, await askContext())
+      // Every Sherlock drives the main window: the dock, its own window, a
+      // case's and a proposal's (SR-19).
+      const ctx = await askContext(cluster)
+      if (shared) {
+        const asked = (await shared.ask(q, ctx)) as { messages?: SherlockMsg[] } | undefined
+        const answer = asked?.messages?.[asked.messages.length - 1]
+        if (answer?.role === 'sherlock') setMine((s) => new Set(s).add(answer.id))
+      } else await askSherlock(cluster, q, ctx)
       history.current = remember(history.current, q)
       at.current = { index: -1, draft: '' }
       setDraft('')
@@ -610,6 +800,7 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
     }
   }
 
+  const lastAnswer = [...msgs].reverse().find((m) => m.role === 'sherlock')
   const unavailable = status && !status.available ? status.reason || status.capped || '' : ''
   return (
     <section className="rk-dpane rk-sher" aria-label="Sherlock" data-testid="sherlock" data-shared={shared ? 'true' : undefined}>
@@ -628,11 +819,6 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
         )}
         {switcher}
         <span style={{ flex: '1 1 auto' }} />
-        {busy && (
-          <button className="rk-btn" onClick={() => void stop()} style={{ height: 28 }} data-testid="sherlock-stop">
-            Stop
-          </button>
-        )}
         {msgs.length > 0 && !busy && !shared && (
           <button className="rk-btn" onClick={() => void fresh()} style={{ height: 28 }} data-testid="sherlock-new">
             New chat
@@ -687,13 +873,14 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
                   {m.text}
                 </div>
               ) : (
-                <Answer key={m.id} m={m} cluster={cluster} link={link} admin={!!status?.admin} question={questionBefore(msgs, m.id)} onToast={onToast} testCase={!shared} />
+                <Answer key={m.id} m={m} cluster={cluster} link={link} admin={!!status?.admin} question={questionBefore(msgs, m.id)} onToast={onToast} testCase={!shared} scope={shared?.scope} views={!shared || mine.has(m.id)} />
               ),
             )}
           </div>
           {!busy && msgs.length > 0 && !shared && <ReportThis msgs={msgs} clusterName={clusterName} />}
         </div>
       </div>
+      {(busy || sending) && <WorkingBanner m={busy ? lastAnswer : undefined} sending={sending && !busy} onStop={busy && !shared?.readOnly ? () => void stop() : undefined} />}
       {shared?.readOnly ? (
         <div className="rk-cmp" data-testid="sherlock-read-only">
           <p className="rk-t" data-tone="muted" style={{ margin: 0, fontSize: 12.5, padding: '6px 4px' }} role="status">
@@ -713,7 +900,13 @@ export function SherlockPane({ cluster, clusterName, state, inWindow, controls, 
             <textarea
               ref={box}
               rows={2}
-              placeholder={shared ? 'Ask Sherlock about this case — everyone who works it sees the conversation; Enter sends' : 'Ask Sherlock — Enter sends, Shift+Enter starts a new line, ↑ recalls an earlier question'}
+              placeholder={
+                busy
+                  ? 'Sherlock is working. Stop to ask something else.'
+                  : shared
+                    ? 'Ask Sherlock about this case — everyone who works it sees the conversation; Enter sends'
+                    : 'Ask Sherlock — Enter sends, Shift+Enter starts a new line, ↑ recalls an earlier question'
+              }
               value={draft}
               maxLength={4000}
               onChange={(e) => {

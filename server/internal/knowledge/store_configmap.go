@@ -64,6 +64,15 @@ func NewConfigMapStore(b kv.Backend, limit int) *ConfigMapStore {
 
 func (c *ConfigMapStore) Kind() string { return StoreConfigMap }
 
+// Used is how many bytes the store holds now, of its limit (KN-37).
+func (c *ConfigMapStore) Used(ctx context.Context) (int, error) {
+	raw, _, err := c.b.LoadKey(ctx, WikiKey)
+	if errors.Is(err, kv.ErrNotFound) {
+		return 0, nil
+	}
+	return len(raw), err
+}
+
 func (w *cmWiki) version() string { w.Seq++; return "c" + strconv.Itoa(w.Seq) }
 
 // load reads the document, its version and its size.

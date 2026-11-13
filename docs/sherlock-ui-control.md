@@ -99,6 +99,8 @@ These apply on top of the requirements for every phase (X-01 to X-17). Those tha
 | `view_columns` | Shows or hides columns of a table. | That table's columns; not saved (P6U-11). |
 | `view_details` | Opens or closes the details pane of an object, as a link does with `peek`. | Objects you may see (P6U-07). |
 | `view_highlight` | Scrolls a row into view and marks it for a few seconds. | One row, not saved, no focus change. |
+| `view_aiops` | Opens a page of the AIOps area: the Inbox (pending or all, with its search), a case by its id, Jobs › Runs or a run by its id (SR-09). | Those four pages, in the cluster you are on; what they show comes through their API as for your own click. |
+| `view_admin` | Opens the home page, the connection page, a page of Administration or a section of Settings, with a role's, person's, provider's or agent's drawer and the search of Roles, Permissions or Users (SR-12). | Pages the person's role opens (SR-13); it only navigates. |
 
 ## Where the work lands
 
@@ -142,6 +144,15 @@ Built as specified, with the open questions settled as proposed. Where the work 
 
 Since Phase 12 (ADR-74, AI-02), Sherlock is the front desk of several agents and the only one offered the view actions: an agent it hands work to (the Troubleshooter, the Auditor, …) may suggest a view in words, and Sherlock decides whether to apply it. The switch is under Settings › AI › Agents, in Sherlock's drawer.
 
+### Phase 12.1: Administration, Settings and unsaved changes
+
+Asked for on November 13, 2026 (SR-12 to SR-16, ADR-157):
+
+- **`view_admin`** opens the pages of the console outside the cluster's tabs, always under the cluster the person is on (`#/c/<id>/admin/…`), so the conversation, which belongs to the cluster, stays on screen. The page ids, which take an item and which a search, are in `web/src/lib/uiControl.ts` (`ADMIN_VIEW_PAGES`) and `server/internal/sherlock/testdata/ui_admin.json`, which both sides' tests hold the list and the description to. The tables of Administration's pages are in the view state and take `view_search`, `view_sort` and `view_highlight`; filters and details stay the tabs'. The action's name avoids *setting*, which the contract test keeps out of action names as a guard against actions that change settings.
+- **Every answer shows its page**: the core's rule changed from *when asked to be shown, or for decisive evidence* to *with every answer about something on a page*. The rules that keep a view correct are unchanged.
+- **Unsaved changes.** `web/src/lib/unsaved.ts` holds who has edits not saved yet: the Save bar of every Settings section, the agent, provider, job and script drawers, an agent's instructions, the notification channels and a release's values and source. While any does, `runRequest` applies no change and answers `deferred`; the server keeps the action and its input on the answer (`show`) and tells the model. A change the person's own move dropped, or one the window did not answer in time, is kept the same way.
+- **Show in 221B** under the answer replays the kept actions through the registry in the main window, waiting a moment for a table the page before it opened. In Sherlock's own window it asks the main window it follows. With edits still open it asks first. What it applies is not part of the answer's Undo.
+
 ## Your review
 
 - [ ] The list of actions and what they may not touch (P6U-04 to P6U-06, P6U-12)
@@ -150,3 +161,13 @@ Since Phase 12 (ADR-74, AI-02), Sherlock is the front desk of several agents and
 - [ ] The rewording of P5-07 and the administrator switch (P6U-14, P6U-16)
 - [ ] The five open questions
 - [ ] Go-ahead to build it as part of Phase 6
+
+**Escape (SR-17).** With the focus in Sherlock's pane, Escape closes the docked panel to its round icon, which takes the focus; maximized, it first restores the panel to the bottom of the page. What the page has open stays open, and the question being typed is kept for when Sherlock opens again.
+
+### The view when the answer is done, every Sherlock, troubleshooting
+
+Asked for on November 13, 2026 (SR-18 to SR-20):
+
+- **The screen moves once the answer is done (SR-18).** The server holds the view changes the model makes and sends them to the window only when the answer ends done. During the answer each goes to the window as a `ui` event with `hold: true`: the window checks it without moving (`plan` in `lib/uiControl.ts` runs the action with navigation noted rather than done, against the page the answer's earlier held changes will open, and checks the tables on screen while none has moved the page) and answers `held`, or refuses it with the reason, or says *dropped* or *deferred* as before. The model reads that the change is held and made once its answer is complete, so it decides the view from its reads; `view_state` still reads the view at once. When the answer is done the server sends the held changes again, in order, without `hold`, and the window makes them as it made changes before: the Undo record, the change notice and the moved and unsaved rules are unchanged. A window that does not answer one is not asked the rest; all are kept for Show in 221B. An answer stopped or failed sends none and keeps them under it for the button, with *The answer ended before it was done*. The decision to hold on the server, not in the browser, keeps the change notice, Undo, the audit record and the Show in 221B list where they were.
+- **Every Sherlock drives the main window, for any question (SR-19).** Sherlock's own window names the main window that opened it, and when that one is gone asks the main windows on its cluster for one, as its links already did. A case's and a proposed change's conversation now send the asker's window and view with the question, so the view actions are offered there as in the dock; the server sends their `ui` events on the asker's session's stream only and takes their results only from that session, at `…/sherlock/ui/{uid}` under the case or proposal. In the main window `useSharedAnswering` marks the answer to a question asked there as the one being given, and only that person sees its Undo and Show in 221B. The case's and the proposal's context say the conversation starts from the record and may be about anything else, and Sherlock's AIOps skill says view actions work there as anywhere; it no longer says that AIOps pages open only from a link.
+- **Troubleshooting goes to the Troubleshooter (SR-20).** Sherlock already had `hand_over` and the Troubleshooter in its list, but its front-desk part told it to answer what it could itself and to hand over only *a failure whose cause is not plain*, and every agent's rules forbid handing over what one or two reads answer; with its own troubleshooting method in its core, it never handed a diagnosis over. Its front-desk part now sends every troubleshooting question to the Troubleshooter whenever it is in the list, even one a read or two might answer, and writes the answer from what comes back. The list holds only agents that are on, work on the cluster and have a usable provider, so with the Troubleshooter off Sherlock troubleshoots itself as before.

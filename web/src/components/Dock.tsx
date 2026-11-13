@@ -28,6 +28,8 @@ interface Props {
   /** Commands waiting for approval, and whether anything is running. */
   waiting: number
   busy: boolean
+  /** Sherlock is answering (PM-U1): a dot on its toggle while it is not in front. */
+  sherlockBusy?: boolean
   /** The Toolbox's sessions (Phase 9, TB-08): tabs beside the assistants. */
   sessions?: DockSessions
 }
@@ -56,6 +58,13 @@ export function Dock(p: Props) {
   const { mode, onMode, height, onHeight, split, onSplit } = p
   const drag = useRef<{ kind: 'h' | 's'; x0: number; y0: number; h0: number; w: number; s0: number } | null>(null)
   const section = useRef<HTMLElement>(null)
+  // The icon the panel closes to takes the focus when Escape closed it (SR-17).
+  const fab = useRef<HTMLButtonElement>(null)
+  const refocus = useRef(false)
+  useEffect(() => {
+    if (mode === 'min' && refocus.current) fab.current?.focus()
+    refocus.current = false
+  }, [mode])
   const clamp = (h: number) => Math.round(Math.max(MIN_H, Math.min(window.innerHeight - 150, h)))
   const clampS = (s: number) => Math.max(0.18, Math.min(0.82, s))
 
@@ -79,7 +88,7 @@ export function Dock(p: Props) {
       (p.waiting ? ` — ${p.waiting === 1 ? '1 command waits' : `${p.waiting} commands wait`} for approval` : p.busy ? ' — something is running' : '') +
       (ss?.open ? ` — ${ss.open === 1 ? '1 session is' : `${ss.open} sessions are`} open` : '')
     return (
-      <button className="rk-fab" aria-label={label} title={label} onClick={() => onMode('open')} data-testid="sherlock-fab">
+      <button ref={fab} className="rk-fab" aria-label={label} title={label} onClick={() => onMode('open')} data-testid="sherlock-fab">
         <AssistantsIcon />
         {p.waiting > 0 && <span className="rk-fab-badge">{p.waiting}</span>}
         {p.busy && <span className="rk-spin" aria-hidden="true" />}
@@ -140,6 +149,8 @@ export function Dock(p: Props) {
     <div className="rk-seg rk-narrow" role="group" aria-label="Show">
       <button aria-pressed={shown === 'sherlock'} onClick={() => p.onPane('sherlock')} data-testid="dock-show-sherlock">
         Sherlock
+        {p.sherlockBusy && (shown !== 'sherlock' || active !== 'assistants') && <span className="rk-busy-dot" title="Sherlock is working" data-testid="dock-sherlock-busy" />}
+        {p.sherlockBusy && (shown !== 'sherlock' || active !== 'assistants') && <span className="rk-sr"> (working)</span>}
       </button>
       <button aria-pressed={shown === 'watson'} onClick={() => p.onPane('watson')} data-testid="dock-show-watson">
         Watson
@@ -190,7 +201,20 @@ export function Dock(p: Props) {
         aria-label={`${names} panel`}
         style={{ ['--dock-cols' as string]: both ? `minmax(0, ${split.toFixed(3)}fr) 8px minmax(0, ${(1 - split).toFixed(3)}fr)` : 'minmax(0, 1fr)' }}
         onKeyDown={(e) => {
-          if (e.key === 'Escape' && mode === 'max') {
+          if (e.key !== 'Escape' || e.defaultPrevented || e.nativeEvent.isComposing) return
+          // SR-17: maximized, Escape restores the panel to the bottom of the
+          // page; there, with the focus in Sherlock, it closes the panel to
+          // its icon. In Watson or a session’s terminal it is theirs. The
+          // page behind keeps its panel or drawer.
+          const t = e.target as HTMLElement | null
+          if (mode === 'open' && t?.closest?.('[data-testid="sherlock"]') && section.current?.contains(t)) {
+            e.preventDefault()
+            e.stopPropagation()
+            refocus.current = true
+            onMode('min')
+            return
+          }
+          if (mode === 'max') {
             e.stopPropagation()
             onMode('open')
           }
@@ -221,6 +245,7 @@ export function Dock(p: Props) {
               <button className="tb-stab" aria-current={active === 'assistants'} onClick={() => ss.onActive('assistants')} data-testid="dock-tab-assistants">
                 <SearchIcon />
                 Assistants
+                {p.sherlockBusy && active !== 'assistants' && <span className="rk-busy-dot" title="Sherlock is working" data-testid="dock-assistants-busy" />}
                 {p.waiting > 0 && (
                   <span className="rk-cnt" data-tone="warn">
                     {p.waiting}

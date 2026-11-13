@@ -121,11 +121,33 @@ describe('the case drawer, near full screen (CF-46)', () => {
     const btn = await screen.findByTestId('case-open-watson')
     expect(txt(btn)).toBe('Run in Watson')
     expect(btn.getAttribute('data-on')).toBe('true')
+    // It says what happens: no promise that a read waits for an approval.
+    expect(btn.getAttribute('title')).not.toContain('Nothing runs until you approve')
+    expect(btn.getAttribute('title')).toContain('A change waits there on its card until you approve it')
+    expect(txt(screen.getByTestId('case-fix'))).toContain('a change waits there on its card until you approve it')
+    expect(txt(screen.getByTestId('case-fix'))).toContain('a read runs at once while Watson’s Auto-run reads is on')
     fireEvent.click(btn)
     await waitFor(() => expect(watson.sendToWatson).toHaveBeenCalledWith('prod', cmd, { from: 'case:C-12', run: true, why: undefined }))
     expect(watson.sendToWatson).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('case-trouble').getAttribute('data-pane')).toBe('watson')
     expect(opened).not.toHaveBeenCalled()
+    window.removeEventListener('221b-watson-fill', opened)
+  })
+
+  it('says, where the case has no Watson beside it, that the fix goes to the dock’s Watson box and runs only on Enter', async () => {
+    setWidth(1400)
+    vi.mocked(watson.useWatson).mockReturnValue({ ...watsonState, status: { ...watsonState.status!, available: false } })
+    const cmd = 'kubectl set resources deployment/web -n shop --limits=memory=512Mi'
+    vi.mocked(api.fetchCase).mockResolvedValue(kase({ analysis: { at: '2026-11-06T10:01:00Z', run: 'run-4', cause: 'The memory limit is too low.', fix: { summary: 'Raise it', commands: [cmd] } } }))
+    const opened = vi.fn()
+    window.addEventListener('221b-watson-fill', opened)
+    render(<CaseDrawer id="12" onClose={() => undefined} />)
+    const btn = await screen.findByTestId('case-open-watson')
+    expect(btn.getAttribute('title')).toContain('nothing runs until you press Enter there')
+    expect(txt(screen.getByTestId('case-fix'))).toContain('Run in Watson puts it in the box of the dock’s Watson')
+    fireEvent.click(btn)
+    await waitFor(() => expect(opened).toHaveBeenCalledTimes(1))
+    expect(watson.sendToWatson).not.toHaveBeenCalled()
     window.removeEventListener('221b-watson-fill', opened)
   })
 
@@ -180,7 +202,39 @@ describe('Sherlock and Watson on the case (CF-47, CF-48)', () => {
     expect(screen.queryByTestId('sherlock-report-box')).toBeNull()
     fireEvent.change(screen.getByTestId('sherlock-input'), { target: { value: 'Is the node full?' } })
     fireEvent.click(screen.getByTestId('sherlock-send'))
-    await waitFor(() => expect(caseSherlock.askCaseSherlock).toHaveBeenCalledWith('C-12', 'Is the node full?'))
+    // Asked from no main window here, it names none (SR-19).
+    await waitFor(() => expect(caseSherlock.askCaseSherlock).toHaveBeenCalledWith('C-12', 'Is the node full?', { window: '', view: '' }), { timeout: 3000 })
+  })
+
+  // Each person who shares the case sees the answers, but an answer's view
+  // changes are only the asker's to undo or show (SR-19).
+  it('offers an answer’s Undo and Show in 221B only to the person who asked it here', async () => {
+    const left = { action: 'view_open', input: { tab: 'pods' }, why: 'stopped' as const }
+    const withViews: SherlockState = {
+      ...chat,
+      conv: { ...chat.conv!, messages: chat.conv!.messages.map((m) => (m.id === 4 ? { ...m, view: [{ label: 'Opened Pods' }], show: [left] } : m)) },
+    }
+    vi.mocked(caseSherlock.useCaseSherlock).mockReturnValue(withViews)
+    const { rerender } = render(<CaseTroubleshoot c={kase()} />)
+    expect(screen.queryByTestId('sherlock-view-changed')).toBeNull()
+    expect(screen.queryByTestId('sherlock-view-left')).toBeNull()
+    const asked = {
+      ...withViews.conv!,
+      messages: [
+        ...withViews.conv!.messages,
+        { id: 5, role: 'user' as const, text: 'Show the pods', asker: 'Me', at: '2026-11-08T10:07:00Z' },
+        { id: 6, role: 'sherlock' as const, text: 'Here.', status: 'stopped' as const, at: '2026-11-08T10:07:00Z', view: [{ label: 'Opened Pods' }], show: [left] },
+      ],
+    }
+    vi.mocked(caseSherlock.askCaseSherlock).mockResolvedValue(asked)
+    fireEvent.change(screen.getByTestId('sherlock-input'), { target: { value: 'Show the pods' } })
+    fireEvent.click(screen.getByTestId('sherlock-send'))
+    await waitFor(() => expect(caseSherlock.askCaseSherlock).toHaveBeenCalled(), { timeout: 3000 })
+    vi.mocked(caseSherlock.useCaseSherlock).mockReturnValue({ ...withViews, conv: asked })
+    rerender(<CaseTroubleshoot c={kase()} />)
+    await waitFor(() => expect(screen.getAllByTestId('sherlock-view-changed')).toHaveLength(1))
+    expect(screen.getAllByTestId('sherlock-view-left')).toHaveLength(1)
+    expect(screen.getByTestId('sherlock-view-left').textContent).toContain('The answer ended before it was done')
   })
 
   it('Run in Watson hands the command to the case’s Watson, sent from the case, as the dock’s Send to Watson does', async () => {
@@ -194,6 +248,23 @@ describe('Sherlock and Watson on the case (CF-47, CF-48)', () => {
     // Only the commands sent from this case show.
     expect(screen.getAllByTestId('watson-ran').map((e) => e.getAttribute('data-id'))).toEqual(['w1'])
     expect(screen.queryByTestId('watson-clear')).toBeNull()
+  })
+
+  it('says what Run in Watson does as Auto-run reads has it: a change always waits for an approval, a read runs at once only while it is on', () => {
+    window.localStorage.removeItem('221b.watson.auto')
+    render(<CaseTroubleshoot c={kase()} />)
+    const btn = screen.getByTestId('sherlock-run-watson')
+    // The owner's report: the button promised an approval a read never asks for.
+    expect(btn.getAttribute('title')).not.toContain('Nothing runs until you approve')
+    expect(btn.getAttribute('title')).toBe('Hands the command to Watson beside the case. A change waits there on its card until you approve it, and runs as you; a read runs at once, as Auto-run reads is on in Watson.')
+    // Auto-run reads turned off in Watson: the button says a read waits too.
+    fireEvent.click(screen.getByTestId('watson-auto'))
+    expect(window.localStorage.getItem('221b.watson.auto')).toBe('false')
+    fireEvent.mouseEnter(btn)
+    expect(btn.getAttribute('title')).toBe('Hands the command to Watson beside the case. It waits there on its card: a change until you approve it, a read until you press Run; it runs as you.')
+    fireEvent.click(btn)
+    expect(watson.sendToWatson).toHaveBeenCalledWith('prod', 'kubectl -n shop rollout restart deployment/web', { from: 'case:C-12', run: false, why: 'Sherlock proposed this answering “Why does web restart?”.' })
+    window.localStorage.removeItem('221b.watson.auto')
   })
 
   it('takes a command handed over from the case’s side once, and says Watson is there', async () => {

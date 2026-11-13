@@ -145,6 +145,16 @@ let draft = (_: RequestInit, ok: (v: unknown) => Response): Response | Promise<R
     rounds: 1,
   })
 let calls: { url: string; method: string; body?: unknown }[] = []
+// FU-05: what weighing a run's own values says, and what a start answers.
+let weigh: unknown = { needsApproval: false, changed: [], impact: [] }
+let started: unknown = null
+// The Secrets a secret parameter may name (FU-03): names and keys, never values.
+let secretRefs: unknown = {
+  secrets: [
+    { namespace: 'web', name: 'db', keys: ['password', 'user'] },
+    { namespace: 'ops', name: 'ntp', keys: ['key'] },
+  ],
+}
 beforeEach(() => {
   calls = []
   Element.prototype.scrollTo = () => {}
@@ -168,7 +178,8 @@ beforeEach(() => {
       if (url.endsWith('/versions/1/revoke')) return ok(script)
       if (/\/versions\/\d+\/(approve|reject)$/.test(url)) return ok(script)
       if (url === '/api/v1/automation/runs' && method === 'GET') return ok({ runs: [run] })
-      if (url === '/api/v1/automation/runs' && method === 'POST') return ok({ ...run, id: 8, state: 'running' })
+      if (url === '/api/v1/automation/runs' && method === 'POST') return started ? new Response(JSON.stringify(started), { status: 202, headers: { 'Content-Type': 'application/json' } }) : ok({ ...run, id: 8, state: 'running' })
+      if (url === '/api/v1/automation/runs/weigh') return ok(weigh)
       if (url.startsWith('/api/v1/automation/runs/'))
         return ok({
           run,
@@ -178,6 +189,7 @@ beforeEach(() => {
       if (url === '/api/v1/automation/scripts/ensure-chrony') return ok(script)
       if (url === '/api/v1/automation/check') return ok({ header, findings: [] })
       if (url === '/api/v1/automation/fleets') return ok(fleets)
+      if (url === '/api/v1/automation/secret-refs') return secretRefs ? ok(secretRefs) : new Response(JSON.stringify({ error: 'Kubernetes said no' }), { status: 502 })
       return new Response(JSON.stringify({ error: 'unexpected ' + url }), {
         status: 500,
       })
@@ -502,7 +514,8 @@ describe('AutomationTab', () => {
     fireEvent.click(await screen.findByTestId('script-run'))
     const dialog = await screen.findByTestId('run-dialog')
     await waitFor(() => expect(within(dialog).getByTestId('run-nodes').textContent).toContain('w2'))
-    expect(within(dialog).getByTestId('run-param-PACKAGE').getAttribute('placeholder')).toBe('chrony')
+    // FU-06: the parameter starts bound to the variable of its name, which each node inherits anyway.
+    expect(within(dialog).getByTestId('run-param-PACKAGE-binding').dataset.auto).toBe('true')
     const start = within(dialog).getByTestId('run-start') as HTMLButtonElement
     expect(start.disabled).toBe(false)
     fireEvent.click(start)
@@ -517,6 +530,9 @@ describe('AutomationTab', () => {
     })
     expect((post.body as { nodes?: string[]; version?: number }).nodes).toEqual(['w1'])
     expect((post.body as { version?: number }).version).toBe(1)
+    // The automatic binding is not the run's own value: nothing is sent, and on production nothing is weighed.
+    expect((post.body as { params?: unknown }).params).toBeUndefined()
+    expect(calls.some((c) => c.url === '/api/v1/automation/runs/weigh')).toBe(false)
     expect(await screen.findByTestId('run-drawer')).toBeTruthy()
     fleets.production = false
   })
@@ -564,6 +580,250 @@ describe('AutomationTab', () => {
       expect(dry.title).toContain('does not declare dry-run')
     } finally {
       index.scripts[0]!.dryRun = true
+    }
+  })
+
+  // --- FU-03, FU-04: parameters typed with suggestions, by their kind ---
+  it('says each parameter’s kind, binds it to the variable of its name, and offers the variables from the keyboard (FU-06)', async () => {
+    render(<AutomationTab {...props()} />)
+    fireEvent.click(await screen.findByTestId('script-run'))
+    const dialog = await screen.findByTestId('run-dialog')
+    expect(within(dialog).getByTestId('run-param-type').textContent).toBe('Variable · required')
+    // Every node of the run inherits PACKAGE: the field holds its chip, with its one value, not an empty box.
+    const auto = await within(dialog).findByTestId('run-param-PACKAGE-binding')
+    expect(auto.dataset.auto).toBe('true')
+    expect(auto.getAttribute('role')).toBe('group')
+    expect(auto.getAttribute('aria-describedby')).toContain('run-param-type-PACKAGE')
+    expect(auto.textContent).toBe('variable PACKAGE · chrony✕')
+    // The chip's text is what the field's description reads; its tooltip gives each node's value and where it is set.
+    const textId = auto.getAttribute('aria-describedby')!.split(' ')[0]!
+    expect(document.getElementById(textId)!.textContent).toBe('variable PACKAGE · chrony')
+    expect(auto.querySelector('.rk-pill')!.getAttribute('title')).toBe('w1: chrony\nSet on fleet Workers, All nodes.')
+    expect(within(dialog).getByTestId('run-param-PACKAGE-source').textContent).toBe('from Workers')
+    const clear = within(auto).getByTestId('run-param-PACKAGE-unbind')
+    expect(clear.getAttribute('aria-label')).toBe('Clear variable PACKAGE from PACKAGE, to type a constant')
+    // Cleared, the box is empty, takes the focus and offers every variable, by name, with its value on the run's nodes and where it is set.
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/v1/automation/runs' && c.method === 'GET')).toBe(true))
+    fireEvent.click(clear)
+    const input = within(dialog).getByTestId('run-param-PACKAGE') as HTMLInputElement
+    expect(input.value).toBe('')
+    expect(document.activeElement).toBe(input)
+    expect(input.placeholder).toBe('a constant for every node, or a variable')
+    // FU-07: the empty box says it sends the empty string, as a chip the field's description reads too.
+    const empty = within(dialog).getByTestId('run-param-PACKAGE-empty')
+    expect(empty.getAttribute('data-empty')).toBe('empty')
+    expect(input.getAttribute('aria-describedby')).toBe(`run-param-type-PACKAGE ${empty.parentElement!.id}`)
+    expect(input.getAttribute('role')).toBe('combobox')
+    expect(within(dialog).queryByTestId('run-param-PACKAGE-badge')).toBeNull()
+    fireEvent.focus(input)
+    const options = () => within(dialog).queryAllByTestId('run-param-PACKAGE-option')
+    expect(options().map((o) => o.textContent)).toEqual(['PACKAGEchronyfleet Workers, All nodes'])
+    expect(input.getAttribute('aria-expanded')).toBe('true')
+    // Typing searches values too; the arrows move and Enter takes one, which binds.
+    fireEvent.change(input, { target: { value: 'CHR' } })
+    expect(options()).toHaveLength(1)
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(input.getAttribute('aria-activedescendant')).toBe(options()[0]!.id)
+    expect(options()[0]!.getAttribute('aria-selected')).toBe('true')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    const chip = within(dialog).getByTestId('run-param-PACKAGE-binding')
+    expect(chip.getAttribute('data-variable')).toBe('PACKAGE')
+    expect(within(chip).getByTestId('run-param-PACKAGE-spread').textContent).toBe('chrony')
+    // Typed, a value is a constant: a badge says so inside the field, and the field's description reads it.
+    fireEvent.click(within(chip).getByTestId('run-param-PACKAGE-unbind'))
+    const again = within(dialog).getByTestId('run-param-PACKAGE') as HTMLInputElement
+    fireEvent.change(again, { target: { value: 'zzz' } })
+    const badge = within(dialog).getByTestId('run-param-PACKAGE-badge')
+    expect(badge.textContent).toBe('constant')
+    expect(again.getAttribute('aria-describedby')).toBe(`run-param-type-PACKAGE ${badge.id}`)
+    expect(within(dialog).queryAllByTestId('run-param-PACKAGE-option')).toHaveLength(0)
+    expect(within(dialog).getByTestId('run-param-PACKAGE-source').textContent).toBe('this run’s, on every node')
+    // Escape closes the list and leaves the dialog open.
+    fireEvent.change(again, { target: { value: '' } })
+    expect(within(dialog).queryAllByTestId('run-param-PACKAGE-option')).toHaveLength(1)
+    fireEvent.keyDown(again, { key: 'Escape' })
+    expect(within(dialog).queryAllByTestId('run-param-PACKAGE-option')).toHaveLength(0)
+    expect(screen.getByTestId('run-dialog')).toBeTruthy()
+  })
+
+  it('stays bound where nodes differ, says how many values, and keeps what was typed when the nodes change (FU-04, FU-06)', async () => {
+    const all = fleets.fleets[1]!
+    all.params = { ...all.params, nodes: { w3: { PACKAGE: 'ntp' } } }
+    try {
+      render(<AutomationTab {...props()} />)
+      fireEvent.click(await screen.findByTestId('script-run'))
+      const dialog = await screen.findByTestId('run-dialog')
+      const spread = () => within(dialog).getByTestId('run-param-PACKAGE-spread').textContent
+      await waitFor(() => expect(spread()).toBe('chrony'))
+      fireEvent.change(within(dialog).getByTestId('run-fleet'), { target: { value: '_all' } })
+      // Over All nodes the chip follows the nodes: two values, each node's in its tooltip.
+      const chip = within(dialog).getByTestId('run-param-PACKAGE-binding')
+      expect(chip.dataset.auto).toBe('true')
+      expect(chip.textContent).toBe('variable PACKAGE · 2 values✕')
+      expect(chip.querySelector('.rk-pill')!.getAttribute('title')).toBe('w1: chrony\nw3: ntp\nSet on fleet Workers, All nodes, node w3.')
+      expect(within(dialog).getByTestId('run-param-varies').textContent).toBe('varies by node (2 values)')
+      fireEvent.change(within(dialog).getByTestId('run-fleet'), { target: { value: 'workers' } })
+      expect(spread()).toBe('chrony')
+      // What was typed stays when the nodes change.
+      fireEvent.click(within(dialog).getByTestId('run-param-PACKAGE-unbind'))
+      const box = () => within(dialog).getByTestId('run-param-PACKAGE') as HTMLInputElement
+      fireEvent.change(box(), { target: { value: 'var:typed' } })
+      fireEvent.change(within(dialog).getByTestId('run-fleet'), { target: { value: '_all' } })
+      expect(box().value).toBe('var:typed')
+      expect(within(dialog).getByTestId('run-param-PACKAGE-badge').textContent).toBe('constant')
+      // A constant that starts like a binding is sent escaped, so it never binds.
+      fireEvent.click(within(dialog).getByTestId('run-start'))
+      fireEvent.click(await screen.findByTestId('confirm-ok'))
+      await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url === '/api/v1/automation/runs')).toBe(true))
+      expect(calls.find((c) => c.method === 'POST' && c.url === '/api/v1/automation/runs')!.body).toMatchObject({ params: { PACKAGE: '\\var:typed' } })
+    } finally {
+      all.params = { values: { PACKAGE: 'chrony' }, ceiling: 'full' }
+    }
+  })
+
+  it('binds automatically where only some nodes have the variable, names the others, and sends nothing (FU-06)', async () => {
+    const all = fleets.fleets[1]!
+    all.params = { values: {}, ceiling: 'full' }
+    try {
+      render(<AutomationTab {...props()} />)
+      fireEvent.click(await screen.findByTestId('script-run'))
+      const dialog = await screen.findByTestId('run-dialog')
+      await within(dialog).findByTestId('run-param-PACKAGE-binding')
+      expect(within(dialog).queryByTestId('run-param-PACKAGE-unset')).toBeNull()
+      fireEvent.change(within(dialog).getByTestId('run-fleet'), { target: { value: '_all' } })
+      // w3 is in no fleet that sets PACKAGE: the chip stays, and the same warning as for a binding picked names it.
+      expect(within(dialog).getByTestId('run-param-PACKAGE-binding').dataset.auto).toBe('true')
+      expect(within(dialog).getByTestId('run-param-PACKAGE-unset').textContent).toBe('Not set on w3: they have no value for this required parameter.')
+      expect(within(dialog).getByTestId('run-blocked').textContent).toContain('w3: PACKAGE')
+      // Off w3, it starts with nothing of its own.
+      fireEvent.change(within(dialog).getByTestId('run-fleet'), { target: { value: 'workers' } })
+      expect(within(dialog).queryByTestId('run-param-PACKAGE-unset')).toBeNull()
+      fireEvent.click(within(dialog).getByTestId('run-start'))
+      fireEvent.click(await screen.findByTestId('confirm-ok'))
+      await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url === '/api/v1/automation/runs')).toBe(true))
+      expect((calls.find((c) => c.method === 'POST' && c.url === '/api/v1/automation/runs')!.body as { params?: unknown }).params).toBeUndefined()
+    } finally {
+      all.params = { values: { PACKAGE: 'chrony' }, ceiling: 'full' }
+    }
+  })
+
+  it('binds to another variable, warns of the nodes without it, and hides a sensitive one’s values (FU-04)', async () => {
+    const workers = fleets.fleets[0]!
+    workers.params = { ...workers.params, values: { PACKAGE: 'chrony', ZONE: 'eu-1', DB_PASS: 'hunter2' } }
+    try {
+      render(<AutomationTab {...props()} />)
+      fireEvent.click(await screen.findByTestId('script-run'))
+      const dialog = await screen.findByTestId('run-dialog')
+      fireEvent.click(await within(dialog).findByTestId('run-param-PACKAGE-unbind'))
+      const input = within(dialog).getByTestId('run-param-PACKAGE') as HTMLInputElement
+      fireEvent.focus(input)
+      fireEvent.change(input, { target: { value: 'pass' } })
+      const options = () => within(dialog).queryAllByTestId('run-param-PACKAGE-option')
+      expect(options().map((o) => o.textContent)).toEqual(['DB_PASSvalue hiddenfleet Workers'])
+      // Picked, a sensitive variable's chip hides its value, and its tooltip says only where it is set.
+      fireEvent.click(options()[0]!)
+      const hidden = within(dialog).getByTestId('run-param-PACKAGE-binding')
+      expect(hidden.textContent).toBe('variable DB_PASS · value hidden✕')
+      expect(hidden.querySelector('.rk-pill')!.getAttribute('title')).toBe('Set on fleet Workers.')
+      fireEvent.click(within(hidden).getByTestId('run-param-PACKAGE-unbind'))
+      const box = within(dialog).getByTestId('run-param-PACKAGE') as HTMLInputElement
+      fireEvent.change(box, { target: { value: 'hunter' } })
+      expect(options()).toHaveLength(0)
+      // A variable's exact name typed is a constant until it is picked from the list.
+      fireEvent.change(box, { target: { value: 'ZONE' } })
+      expect(within(dialog).getByTestId('run-param-PACKAGE-badge').textContent).toBe('constant')
+      expect(options()[0]!.dataset.bind).toBe('ZONE')
+      fireEvent.keyDown(box, { key: 'ArrowDown' })
+      fireEvent.keyDown(box, { key: 'Enter' })
+      const zone = within(dialog).getByTestId('run-param-PACKAGE-binding')
+      expect(zone.getAttribute('data-variable')).toBe('ZONE')
+      expect(zone.dataset.auto).toBe('false')
+      expect(zone.textContent).toBe('variable ZONE · eu-1✕')
+      // Over All nodes, w3 has no ZONE: a warning names it, and a required parameter stops the run.
+      fireEvent.change(within(dialog).getByTestId('run-fleet'), { target: { value: '_all' } })
+      expect(within(dialog).getByTestId('run-param-PACKAGE-unset').textContent).toContain('Not set on w3')
+      expect(within(dialog).getByTestId('run-blocked').textContent).toContain('w3: PACKAGE')
+      fireEvent.change(within(dialog).getByTestId('run-fleet'), { target: { value: 'workers' } })
+      fireEvent.click(within(dialog).getByTestId('run-start'))
+      fireEvent.click(await screen.findByTestId('confirm-ok'))
+      await waitFor(() => expect(calls.some((c) => c.method === 'POST' && c.url === '/api/v1/automation/runs')).toBe(true))
+      expect(calls.find((c) => c.method === 'POST' && c.url === '/api/v1/automation/runs')!.body).toMatchObject({ params: { PACKAGE: 'var:ZONE' } })
+    } finally {
+      workers.params = { values: { PACKAGE: 'chrony' }, ceiling: 'full' }
+    }
+  })
+
+  it('says on production which values wait for approval, and asks for it (FU-05)', async () => {
+    fleets.production = true
+    weigh = { needsApproval: true, changed: ['PACKAGE'], impact: [{ script: 'ensure-chrony', version: 1, decision: 'approval', why: 'PACKAGE is marked sensitive', by: 'rule' }] }
+    started = { waiting: { id: 4, cluster: 'local', script: 'ensure-chrony', version: 1, fleet: 'workers', targets: ['w1'], params: { PACKAGE: 'ntp' }, by: { name: 'Pat' }, at: '', changed: ['PACKAGE'], impact: [], state: 'waiting' } }
+    const p = props()
+    try {
+      render(<AutomationTab {...p} />)
+      fireEvent.click(await screen.findByTestId('script-run'))
+      const dialog = await screen.findByTestId('run-dialog')
+      fireEvent.click(await within(dialog).findByTestId('run-param-PACKAGE-unbind'))
+      const input = within(dialog).getByTestId('run-param-PACKAGE') as HTMLInputElement
+      expect(input.disabled).toBe(false)
+      fireEvent.change(input, { target: { value: 'ntp' } })
+      const note = await within(dialog).findByTestId('run-weigh', {}, { timeout: 2000 })
+      expect(note.textContent).toContain('need another admin’s approval before the run starts: PACKAGE (PACKAGE is marked sensitive)')
+      const weighed = calls.find((c) => c.url === '/api/v1/automation/runs/weigh')!
+      expect(weighed.body).toMatchObject({ params: { PACKAGE: 'ntp' }, dryRun: false })
+      expect(within(dialog).getByTestId('run-start').textContent).toBe('Ask for approval')
+      fireEvent.click(within(dialog).getByTestId('run-start'))
+      expect((await screen.findByTestId('confirm')).textContent).toContain('need another admin’s approval')
+      fireEvent.click(screen.getByTestId('confirm-ok'))
+      await waitFor(() => expect(p.onToast).toHaveBeenCalledWith(expect.stringContaining('Run request 4 waits for another admin’s approval of PACKAGE')))
+      expect(screen.queryByTestId('run-dialog')).toBeNull()
+    } finally {
+      fleets.production = false
+      weigh = { needsApproval: false, changed: [], impact: [] }
+      started = null
+    }
+  })
+
+  it('offers a secret parameter Secrets by name and key only, and says why when none can be listed', async () => {
+    header.params.push({ name: 'TOKEN', required: false, secret: true } as never)
+    try {
+      render(<AutomationTab {...props()} />)
+      fireEvent.click(await screen.findByTestId('script-run'))
+      const dialog = await screen.findByTestId('run-dialog')
+      const input = (await within(dialog).findByTestId('run-param-TOKEN')) as HTMLInputElement
+      const kinds = within(dialog).getAllByTestId('run-param-type')
+      expect(kinds.map((k) => k.dataset.kind)).toEqual(['variable', 'secret'])
+      expect(kinds[1]!.textContent).toBe('Secret · optional')
+      await waitFor(() => expect(calls.some((c) => c.url === '/api/v1/automation/secret-refs')).toBe(true))
+      fireEvent.focus(input)
+      const options = () =>
+        within(dialog)
+          .queryAllByTestId('run-param-TOKEN-option')
+          .map((o) => o.querySelector('.rk-mono')!.textContent)
+      await waitFor(() => expect(options()).toEqual(['secret:web/db/password', 'secret:web/db/user', 'secret:ops/ntp/key']))
+      fireEvent.change(input, { target: { value: 'ntp' } })
+      expect(options()).toEqual(['secret:ops/ntp/key'])
+      fireEvent.click(within(dialog).getAllByTestId('run-param-TOKEN-option')[0]!)
+      expect(input.value).toBe('secret:ops/ntp/key')
+      expect(within(dialog).getByTestId('run-param-TOKEN-badge').textContent).toBe('secret ref')
+      cleanup()
+      // The Secrets cannot be listed: the field still takes a reference typed by hand.
+      secretRefs = null
+      render(<AutomationTab {...props()} />)
+      fireEvent.click(await screen.findByTestId('script-run'))
+      const again = await screen.findByTestId('run-dialog')
+      const field = (await within(again).findByTestId('run-param-TOKEN')) as HTMLInputElement
+      fireEvent.focus(field)
+      await waitFor(() => expect(within(again).getByTestId('run-param-TOKEN-status').textContent).toBe('The Secrets could not be listed: Kubernetes said no. Type secret:namespace/name/key.'))
+      fireEvent.change(field, { target: { value: 'secret:web/other/key' } })
+      expect(field.value).toBe('secret:web/other/key')
+    } finally {
+      header.params.pop()
+      secretRefs = {
+        secrets: [
+          { namespace: 'web', name: 'db', keys: ['password', 'user'] },
+          { namespace: 'ops', name: 'ntp', keys: ['key'] },
+        ],
+      }
     }
   })
 

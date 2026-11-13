@@ -183,6 +183,31 @@ test('Sherlock is on the Administration pages too, and Escape in it stays there'
   await page.getByTestId('sherlock-input').focus()
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('admin-page')).toBeVisible()
+  // SR-17: Escape with the focus in Sherlock closes it to its icon, which takes the focus.
+  await expect(dock(page)).toHaveCount(0)
+  await expect(fab).toBeFocused()
+})
+
+test('Escape in Sherlock closes it to its icon, and maximized it first restores it (SR-17)', async ({ page }) => {
+  await open(page, '#/nodes')
+  const fab = page.getByTestId('sherlock-fab')
+  if (await fab.isVisible()) await fab.click()
+  await expect(dock(page)).toHaveAttribute('data-mode', 'open')
+  // A node's panel open on the page stays open.
+  await page.locator('[data-node]').first().click()
+  await expect(page.getByTestId('node-panel')).toBeVisible()
+  await page.locator('[data-testid=sherlock-maximize]:visible').click()
+  await expect(dock(page)).toHaveAttribute('data-mode', 'max')
+  await page.keyboard.press('Escape')
+  await expect(dock(page)).toHaveAttribute('data-mode', 'open')
+  await page.getByTestId('sherlock-input').fill('a draft')
+  await page.keyboard.press('Escape')
+  await expect(dock(page)).toHaveCount(0)
+  await expect(fab).toBeFocused()
+  await expect(page.getByTestId('node-panel')).toBeVisible()
+  // The draft is still there when it opens again.
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('sherlock-input')).toHaveValue('a draft')
 })
 
 test('the round button stays clear of what a drawer has at the bottom right', async ({ page }) => {

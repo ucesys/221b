@@ -73,7 +73,8 @@ No value is needed for the applications: they need Watson (`localCluster.mode: w
 | `GET apps/{ns}/{name}/inspect` | The charts and values files in the repository at its ref, with the saved token |
 | `GET apps/{ns}/{name}/revisions` | The release's revisions |
 | `GET apps/{ns}/{name}/diff?from=N&to=M` or `?to=source[&ref=&refKind=]` | A unified diff |
-| `GET apps/{ns}/{name}/images?revision=N` | The images a revision runs |
+| `GET apps/{ns}/{name}/images?revision=N` | The images a revision runs, with `checks`: by image, whether a newer one is published (HA-22) |
+| `GET helm/newer-images` | The releases the person may see with a newer image, by `namespace/name`; `enabled` false when Settings turned the check off, `pending` the images still being asked about (HA-22) |
 
 Every `apps/…` route is served by the leader replica, where Watson runs. What changes a record, and `inspect`, needs the role and Kubernetes' leave in the namespace, asked before the record is read (HA-02).
 
@@ -100,6 +101,22 @@ Every `apps/…` route is served by the leader replica, where Watson runs. What 
 | Date | Note |
 | --- | --- |
 | | |
+
+## Newer images
+
+Asked on November 13, 2026 (HA-21 to HA-23, ADR-154). For every image the newest deployed revision of a release runs, the console looks in the image's registry for a newer one, and says so:
+
+- **In the release's panel**, at the top: *A newer image is available: ghcr.io/acme/api:1.2.4 (running 1.2.3)*, the other images with a newer one after it, and a link to the Images tab. The notice informs; the image changes with the chart or its values, through an upgrade.
+- **On the Images tab**, beside each tag: *1.2.4 available*, *checking…* while the registry is asked, or *could not check* with the reason in its tip.
+- **In the table**, a *newer image* mark beside the App version, with the images in its tip; the export has a Newer images column.
+
+**What is newer.** The newest tag of the running tag's form: the same prefix (`v`), as many numbers, and the same suffix but for its last number, so `1.2.3-alpine` is compared with `1.2.9-alpine` and `1.25.3-debian-12-r4` with `1.25.4-debian-12-r0`, never with `1.26.0-debian-11-r0` or `1.2.4`. Pre-releases (`-rc.1`, `-beta`) count only when a pre-release runs, and then the release they lead to counts too. `latest`, commit hashes and date stamps are not versions. A tag that is not a version but is pinned by digest (`nginx:stable@sha256:…`) is newer when the tag points at another digest now. `latest` without a digest, and an image pinned by digest alone, are not checked: nothing says what runs.
+
+**How.** The leader asks, in the background, over the OCI distribution API: the tag list (`/v2/<repository>/tags/list`, following its pages) or the tag's manifest digest (a `HEAD`). Docker Hub's images are asked at `registry-1.docker.io`, official ones as `library/<name>`. A registry that challenges for a Bearer token (ghcr.io, Docker Hub, quay.io, Harbor and most others) is given one asked for **without credentials**; a Basic challenge, or a token service that refuses, is *could not check*. The console never reads the workloads' image pull secrets, so private repositories are not checked. Answers are kept per repository for six hours (a failure for one hour), at most four registries are asked at once, twenty seconds each, and no request waits for one: the page asks again while answers are pending, then every ten minutes. A standby replica asks no registry (ADR-70). Only HTTPS registries are asked.
+
+**Network.** The registries are reached over HTTPS (443) through the proxy in `HTTPS_PROXY` when set. The chart's network policy allows that by default: `sherlock.egress` (on) opens `networkPolicy.outboundPorts` to any address. With `sherlock.egress: false`, or `networkPolicy.outboundCIDRs` narrowed, list the registries' addresses there, or under `helmRepositories.egressCIDRs` with the chart registries; otherwise the checks say *could not check* and nothing else. An air-gapped cluster sees no notice and no error.
+
+**Off.** Settings › Newer images › Off: no registry is asked, and the Helm tab shows nothing of it.
 
 ## Who sees what
 

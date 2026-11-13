@@ -254,6 +254,8 @@ export interface CaseBrief extends CaseRef {
   rcaCause?: string
   /** It waits for the reporter's answer to a question. */
   askedReporter?: boolean
+  /** The person asking is involved in it (EM-08): reported, filed, opened, follows or closed it, it is assigned to them, they wrote in its conversation or approved its fix. */
+  involved?: boolean
   /** "C-12": a case closed as fixed this one is the problem of again. */
   regressionOf?: string
   /** "C-12": an open case on the same object with a like title, for a person to confirm. */

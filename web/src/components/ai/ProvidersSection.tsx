@@ -20,9 +20,11 @@ import {
 import type { ProviderAuth } from '../../api/sherlock'
 import { fmtTs } from '../../lib/format'
 import { Drawer } from '../Drawer'
+import { currentRoute, navigate, withParams } from '../../lib/router'
 import { Select } from '../Select'
 import { AUTHS, defaultAuth, ENDPOINT_HINT, Field, headersText, parseHeaders, PRESETS, presetOf } from '../SherlockSettings'
 import { ModelPicker } from './ModelPicker'
+import { useUnsaved } from '../../lib/unsaved'
 
 /**
  * Settings › AI › Providers (Phase 12): where the agents' models come from.
@@ -30,7 +32,7 @@ import { ModelPicker } from './ModelPicker'
  * with a credential kept in a Secret of its own and never shown again, and
  * a Test that sends it one short request.
  */
-export function ProvidersSection({ onToast }: { onToast?: (msg: string) => void }) {
+export function ProvidersSection({ onToast, initial }: { onToast?: (msg: string) => void; initial?: string }) {
   const [ov, setOv] = useState<AIOverview | null>(null)
   const [error, setError] = useState('')
   const [editing, setEditing] = useState<ProviderView | 'new' | null>(null)
@@ -39,6 +41,20 @@ export function ProvidersSection({ onToast }: { onToast?: (msg: string) => void 
       .then(setOv)
       .catch((e: Error) => setError(e.message))
   }, [])
+  // A provider named in the address (#/admin/settings/providers/<id>), as
+  // Sherlock's view_admin opens it (SR-12), opens its drawer once the
+  // providers are read.
+  const [opened, setOpened] = useState<string | undefined>(undefined)
+  if (ov && initial !== opened) {
+    setOpened(initial)
+    const p = initial ? ov.providers.find((x) => x.id === initial) : undefined
+    if (p) setEditing(p)
+  }
+  const close = () => {
+    setEditing(null)
+    const r = currentRoute()
+    if (r.view === 'admin' && r.path.length > 2) navigate(withParams({ ...r, path: r.path.slice(0, 2) }, {}), true)
+  }
   if (!ov)
     return (
       <p className={error ? 'rk-t' : 'rk-fhint'} data-tone={error ? 'err' : undefined} style={{ margin: 0 }}>
@@ -69,7 +85,7 @@ export function ProvidersSection({ onToast }: { onToast?: (msg: string) => void 
         <ProviderDrawer
           seed={editing === 'new' ? null : editing}
           ov={ov}
-          onClose={() => setEditing(null)}
+          onClose={close}
           onSaved={(next, msg) => {
             setOv(next)
             setEditing(null)
@@ -328,6 +344,8 @@ function ProviderDrawer({ seed, ov, onClose, onSaved }: { seed: ProviderView | n
   // --- AI settings, round 2 (Phase 12, wave 5): Test before saving, and the saved settings tested again on Save.
   const [test, setTest] = useState<{ busy: boolean; r?: ProviderTestResult; error?: string; form?: string } | null>(null)
   const formKey = JSON.stringify(providerFromForm(f))
+  const [startKey] = useState(formKey)
+  useUnsaved(formKey !== startKey, 'the provider drawer')
   const tested = test?.r?.ok && test.form === formKey
   const runTest = async () => {
     setTest({ busy: true })

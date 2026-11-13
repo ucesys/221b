@@ -58,6 +58,10 @@ type Settings struct {
 	// Nodes tab's fleet list is where fleets are made and kept (Phase 10.1
 	// review, R2-03).
 	FleetsPage *bool `json:"fleetsPage,omitempty"`
+	// ImageChecks says whether the leader asks the registries of the
+	// images Helm releases run for newer ones (HA-23); nil is true. Off,
+	// no registry is asked and the Helm tab shows no notice.
+	ImageChecks *bool `json:"imageChecks,omitempty"`
 	// HideCosts hides every dollar amount from the console's pages for
 	// everyone, but the budgets where they are set (Phase 12, wave 6c,
 	// CF-40): a SuperAdmin's switch, Settings › AI › Show costs. The
@@ -70,6 +74,9 @@ func (s Settings) ShowsCosts() bool { return !s.HideCosts }
 
 // ShowsFleets says whether the Fleets tab shows.
 func (s Settings) ShowsFleets() bool { return s.FleetsPage == nil || *s.FleetsPage }
+
+// ChecksImages says whether newer images are looked for (HA-23).
+func (s Settings) ChecksImages() bool { return s.ImageChecks == nil || *s.ImageChecks }
 
 // DefaultPendingGrace gives a pod time to pull its image and start before
 // it is an alert (asked at the Toolbox review).
@@ -479,6 +486,9 @@ func (s *Service) Update(ctx context.Context, in Settings) (State, error) {
 		}
 		if next.FleetsPage == nil {
 			next.FleetsPage = cur.FleetsPage
+		}
+		if next.ImageChecks == nil {
+			next.ImageChecks = cur.ImageChecks
 		}
 		// Show costs has its own route, a SuperAdmin's (CF-40).
 		next.HideCosts = cur.HideCosts

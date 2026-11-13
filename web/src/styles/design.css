@@ -851,6 +851,47 @@ button.rk-chip:hover {
   background: var(--warn-weak);
   color: var(--warn);
 }
+/* PM-U1: Sherlock is working, above its question box. */
+.rk-banner[data-tone='info'] {
+  background: var(--info-weak);
+  color: var(--info);
+}
+.rk-banner.rk-working {
+  flex: none;
+  flex-wrap: nowrap;
+  padding: 6px 12px;
+  border-bottom: 0;
+  border-top: 1px solid var(--line);
+  white-space: nowrap;
+}
+.rk-working > span {
+  flex: none;
+}
+.rk-working > .rk-working-label {
+  flex: 0 1 auto;
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rk-working + .rk-cmp {
+  border-top: 0;
+}
+.rk-busy-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--info);
+  vertical-align: middle;
+  animation: rkDot 1.4s infinite ease-in-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rk-busy-dot {
+    animation: none;
+  }
+}
 .rk-banner-detail {
   flex: 1 1 auto;
   min-width: 0;

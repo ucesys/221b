@@ -32,7 +32,7 @@ func TestSherlockToolsOnlyRead(t *testing.T) {
 		}
 	}
 	sort.Strings(names)
-	want := []string{"automation_runs", "check_connection", "cluster_overview", "get_helm_release", "get_node", "get_object", "get_pod", "get_service", "get_yaml", "list_access", "list_alerts", "list_events", "list_fleets", "list_helm_releases", "list_nodes", "list_objects", "list_pods", "list_policies", "list_services", "list_storage_classes", "list_volumes", "node_facts", "pod_logs", "review_cluster", "top", "trace_ingress", "who_can"}
+	want := []string{"audit_log", "automation_runs", "automation_variables", "check_connection", "cluster_overview", "get_automation_run", "get_case", "get_helm_release", "get_job_run", "get_node", "get_object", "get_pod", "get_script", "get_service", "get_yaml", "list_access", "list_alerts", "list_cases", "list_events", "list_fleets", "list_helm_releases", "list_job_runs", "list_nodes", "list_objects", "list_pods", "list_policies", "list_scripts", "list_services", "list_storage_classes", "list_volumes", "node_facts", "pod_logs", "review_cluster", "top", "trace_ingress", "watson_history", "who_can"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Fatalf("the toolset changed; review that each new tool only reads, then update this list:\n got %v\nwant %v", names, want)
 	}

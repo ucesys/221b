@@ -24,7 +24,7 @@ vi.mock('../../api/issues', async (original) => ({
   fetchServices: vi.fn(),
   previewMatch: vi.fn(),
 }))
-vi.mock('../../api/automation', async (original) => ({ ...(await original<typeof import('../../api/automation')>()), fetchApprovals: vi.fn(), decideRequest: vi.fn() }))
+vi.mock('../../api/automation', async (original) => ({ ...(await original<typeof import('../../api/automation')>()), fetchApprovals: vi.fn(), decideRequest: vi.fn(), fetchWaitingRuns: vi.fn(), decideWaitingRun: vi.fn() }))
 vi.mock('../../api/casework', async (original) => ({ ...(await original<typeof import('../../api/casework')>()), fetchCases: vi.fn(), fetchCase: vi.fn(), bulkCases: vi.fn(), closeKnown: vi.fn(), fetchOpenKnown: vi.fn() }))
 vi.mock('../../api/cards', async (original) => ({ ...(await original<typeof import('../../api/cards')>()), fetchProposals: vi.fn(), fetchProposal: vi.fn() }))
 vi.mock('../../api/knowledge', async (original) => ({
@@ -187,7 +187,7 @@ describe('the Inbox as one table (IN-01 to IN-04)', () => {
     expect(within(document.querySelector('[data-inbox-row="case:3"]') as HTMLElement).getByTestId('inbox-row-status').textContent).toBe('New')
     // The columns, as the Nodes table has them: a header that sorts.
     const heads = [...document.querySelectorAll('[role=columnheader]')].map((h) => h.textContent?.replace(/[↑↓]/g, ''))
-    expect(heads).toEqual(['Priority', 'Title', 'Type', 'Incident', 'Cluster', 'Object', 'Status', 'Waiting', 'Assignee', 'Last change'])
+    expect(heads).toEqual(['Priority', 'Title', 'Type', 'Incident', 'Cluster', 'Object', 'Status', 'Waiting', 'From', 'Assignee', 'Last change'])
     fireEvent.click(screen.getByRole('button', { name: /^Title: sort/ }))
     await waitFor(() => expect(keys()[0]).toBe('case:1'))
     expect(keys()[1]).toBe('case:3')
@@ -314,6 +314,18 @@ describe('the Inbox as one table (IN-01 to IN-04)', () => {
     await waitFor(() => expect(keys()).toHaveLength(8))
     fireEvent.click(screen.getByTestId('inbox-source-people'))
     expect(window.location.hash).toBe('#/aiops/inbox?source=people')
+  })
+
+  it('narrows to the cases the person is involved in, from the emails’ link too (EM-08)', async () => {
+    vi.mocked(casework.fetchCases).mockResolvedValue({ cases: [kase(1, { involved: true }), kase(2, { status: 'closed', outcome: 'fix', involved: true }), kase(3)], clusters: [], mayChange: true, me: '' })
+    const { unmount } = page('#/aiops/inbox?show=all&who=involved')
+    await waitFor(() => expect([...keys()].sort()).toEqual(['case:1', 'case:2']))
+    expect(screen.getByTestId('inbox-involved').getAttribute('aria-pressed')).toBe('true')
+    unmount()
+    page('#/aiops/inbox?involved=me')
+    await waitFor(() => expect(keys()).toEqual(['case:1']))
+    fireEvent.click(screen.getByTestId('inbox-who-all'))
+    expect(window.location.hash).toBe('#/aiops/inbox')
   })
 
   it('narrows to People or Agents with the Source filter (wave 6)', async () => {
@@ -458,6 +470,44 @@ describe('an approval in its drawer (CS-06, IB-09)', () => {
     await waitFor(() => expect(automation.decideRequest).toHaveBeenCalledWith('9', false, 'not now'))
   })
 
+  it('decides a run whose own values wait on production here, showing them (FU-05)', async () => {
+    const row: automation.ApprovalRow = { kind: 'run', state: 'pending', what: 'reads v1 on Web, with its own values for MODE', requestedBy: 'Cy', requestedAt: '2026-11-02T00:00:00Z', id: '4', cluster: 'prod', clusterName: 'Production' }
+    vi.mocked(automation.fetchApprovals).mockResolvedValue({ items: [row] })
+    vi.mocked(automation.fetchWaitingRuns).mockResolvedValue({
+      waiting: [
+        {
+          id: 4,
+          cluster: 'prod',
+          script: 'reads',
+          version: 1,
+          fleet: 'web',
+          fleetName: 'Web',
+          targets: ['n1', 'n2'],
+          params: { MODE: 'var:ZONE', NOTE: '\\var:x' },
+          by: { name: 'Cy' },
+          at: '2026-11-02T00:00:00Z',
+          changed: ['MODE'],
+          impact: [{ script: 'reads', version: 1, decision: 'approval', why: 'MODE is marked sensitive', by: 'rule' }],
+          state: 'waiting',
+        },
+      ],
+    })
+    vi.mocked(automation.decideWaitingRun)
+      .mockReset()
+      .mockResolvedValue({ waiting: {} as automation.WaitingRun })
+    page('#/aiops/inbox/approval/run-prod-4')
+    const values = await screen.findByTestId('waiting-run-values')
+    // FU-06: a binding reads as its variable's chip, anything else as a constant.
+    expect(values.textContent).toContain('MODEvariable ZONE')
+    expect(values.textContent).toContain('NOTEvar:xconstant')
+    expect(screen.getByTestId('impact-list').textContent).toContain('MODE is marked sensitive')
+    fireEvent.click(screen.getByTestId('approval-admin-approve'))
+    expect(screen.getByRole('alertdialog').textContent).toContain('Approving starts it now, as Cy')
+    fireEvent.click(screen.getByTestId('confirm-ok'))
+    await waitFor(() => expect(automation.decideWaitingRun).toHaveBeenCalledWith('prod', 4, 'approve', ''))
+    expect(automation.decideRequest).not.toHaveBeenCalled()
+  })
+
   it('says who decided it first when another SuperAdmin did, and shows it decided', async () => {
     // Sam approved it while the drawer was open: the list says so once read after.
     let samFirst = false
@@ -525,6 +575,30 @@ describe('the Inbox since wave 6c (CF-35 to CF-38)', () => {
     expect((screen.getByTestId('inbox-status') as HTMLSelectElement).value).toBe('waiting')
   })
 
+  // --- FU-02 ---
+  it('says who raised each row in the From column, and narrows to one with the From filter in the address', async () => {
+    vi.mocked(casework.fetchCases).mockResolvedValue({
+      cases: [kase(1, { createdBy: { name: 'Pat', kind: 'person' } }), kase(3, { createdBy: { name: 'Auditor', kind: 'agent' }, agentFound: true, source: { kind: 'finding', job: 'nightly-audit' } })],
+      clusters: [],
+      mayChange: true,
+      me: '',
+    })
+    const { unmount } = page('#/aiops/inbox')
+    await waitFor(() => expect(keys()).toContain('case:1'))
+    const from = (key: string) => document.querySelector(`[data-inbox-row="${key}"] [data-testid="inbox-row-from"]`)
+    expect(from('case:1')?.textContent).toBe('Pat')
+    expect(from('case:3')?.textContent).toBe('Auditor (agent) · nightly-audit')
+    expect(from('case:3')?.getAttribute('data-from-kind')).toBe('agent')
+    expect(from('approval:script-reserve-v2')?.textContent).toBe('Cy')
+    expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(expect.arrayContaining([expect.stringMatching(/^From/)]))
+    const filter = screen.getByTestId('inbox-from') as HTMLSelectElement
+    expect([...filter.options].map((o) => o.value)).toEqual(expect.arrayContaining(['', 'Pat', 'Auditor', 'Cy']))
+    unmount()
+    page('#/aiops/inbox?from=Pat')
+    await waitFor(() => expect(keys()).toEqual(['case:1']))
+    expect((screen.getByTestId('inbox-from') as HTMLSelectElement).value).toBe('Pat')
+  })
+
   it('finds a case by its incident number', async () => {
     vi.mocked(casework.fetchCases).mockResolvedValue({ cases: [kase(1, { incident: 'INC0099' }), kase(3)], clusters: [], mayChange: true, me: '' })
     page('#/aiops/inbox?q=INC0099')
@@ -537,7 +611,7 @@ describe('the Inbox since wave 6c (CF-35 to CF-38)', () => {
     const { unmount } = page('#/aiops/inbox?show=all&q=inotify')
     await waitFor(() => expect(keys()).toEqual(['case:1']))
     // The search box says what it searches.
-    expect(screen.getByTestId('inbox-search').getAttribute('placeholder')).toBe('Search by title, id, object, validation rule, person or RCA cause')
+    expect(screen.getByTestId('inbox-search').getAttribute('placeholder')).toBe('Search by title, id, object, validation rule, person, source or RCA cause')
     unmount()
     // An old case is found by its RCA's id still.
     page('#/aiops/inbox?show=all&q=RCA-4')

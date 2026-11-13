@@ -421,6 +421,10 @@ func TestTheRound2SettingsValidate(t *testing.T) {
 	off := false
 	s := settings.Default
 	s.FleetsPage = &off
+	s.ImageChecks = &off
+	if s.ChecksImages() || !settings.Default.ChecksImages() {
+		t.Error("the check for newer images is on unless turned off (HA-23)")
+	}
 	if s.ShowsFleets() || settings.Default.ShowsFleets() != true {
 		t.Error("the Fleets page switch")
 	}

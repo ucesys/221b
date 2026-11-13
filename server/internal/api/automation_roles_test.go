@@ -14,6 +14,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 
 	"github.com/ucesys/221b/server/internal/automation"
@@ -36,6 +37,8 @@ type autoEnv struct {
 	store  *automation.Store
 	engine *automation.Engine
 	audit  *lockedBuffer
+	// local is the fake cluster, for a test that puts objects in it.
+	local *source
 }
 
 func autoSetup(t *testing.T, who, env string) autoEnv {
@@ -60,7 +63,7 @@ func autoSetupDeny(t *testing.T, who, env string, deny map[string]bool) autoEnv 
 	if err := m.SetLocal(context.Background(), clusters.Spec{Name: "Here", Env: env, Mode: clusters.ModeWrite}, local, store); err != nil {
 		t.Fatal(err)
 	}
-	return autoEnv{srv: srv, c: c, store: st, engine: eng, audit: auditOut}
+	return autoEnv{srv: srv, c: c, store: st, engine: eng, audit: auditOut, local: local}
 }
 
 func (e autoEnv) do(t *testing.T, method, path, body string) (int, string) {
@@ -439,5 +442,40 @@ func TestApprovalsListWhatWaitsForThePersonThenWhatWasDecided(t *testing.T) {
 	viewer := autoSetup(t, "viewer@corp.example", clusters.EnvOther)
 	if code, _ := viewer.do(t, "GET", "/api/v1/admin/approvals", ""); code != http.StatusForbidden {
 		t.Fatalf("%d", code)
+	}
+}
+
+// --- Run parameters with suggestions (FU-03) ---
+
+// The Run dialog is offered the Secrets a secret parameter may name: their
+// namespaces, names and keys, never a value; only where Kubernetes lets
+// the person list Secrets, without Helm's records, and to a SuperAdmin.
+func TestTheRunDialogIsOfferedSecretNamesAndKeysOnlyFU03(t *testing.T) {
+	e := autoSetupDeny(t, "ops@corp.example", clusters.EnvOther, map[string]bool{"secrets/kube-system": true})
+	seedSecret(e.local)
+	e.local.putSecret(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "hidden", Namespace: "kube-system"}, Data: map[string][]byte{"token": []byte(plantedValue)}})
+	e.local.putSecret(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "sh.helm.release.v1.shop.v1", Namespace: "web"}, Type: "helm.sh/release.v1", Data: map[string][]byte{"release": []byte("x")}})
+	code, body := e.do(t, "GET", "/api/v1/automation/secret-refs", "")
+	if code != http.StatusOK {
+		t.Fatalf("%d %s", code, body)
+	}
+	if strings.Contains(body, plantedValue) {
+		t.Fatalf("a value left the server: %s", body)
+	}
+	var got struct {
+		Secrets []secretRef `json:"secrets"`
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Secrets) != 1 || got.Secrets[0].Namespace != "web" || got.Secrets[0].Name != "db" || strings.Join(got.Secrets[0].Keys, ",") != "blob,password" {
+		t.Fatalf("offered %+v", got.Secrets)
+	}
+	if code, _ := e.do(t, "GET", "/api/v1/clusters/local/automation/secret-refs", ""); code != http.StatusOK {
+		t.Errorf("by the cluster's path: %d", code)
+	}
+	v := autoSetup(t, "viewer@corp.example", clusters.EnvOther)
+	if code, _ := v.do(t, "GET", "/api/v1/automation/secret-refs", ""); code != http.StatusForbidden {
+		t.Errorf("someone who is not a SuperAdmin: %d", code)
 	}
 }

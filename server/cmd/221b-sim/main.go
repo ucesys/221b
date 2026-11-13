@@ -23,6 +23,7 @@ import (
 	"github.com/ucesys/221b/server/internal/awsv4"
 	"github.com/ucesys/221b/server/internal/casework"
 	"github.com/ucesys/221b/server/internal/fakeclaude"
+	"github.com/ucesys/221b/server/internal/mail"
 	"github.com/ucesys/221b/server/internal/s3/s3test"
 	"github.com/ucesys/221b/server/internal/sim"
 )
@@ -48,7 +49,17 @@ func main() {
 	wikiBucket := flag.String("fake-s3-bucket", "sim-wiki", "serve a fake S3 bucket of this name, path-style at http://<listen>/<bucket>, for Mycroft's wiki (region us-east-1, access key \"sim-access-key\", secret \"sim-secret-key\"); empty: none")
 	docsBucket := flag.String("fake-s3-docs", "sim-docs", "serve a second fake S3 bucket of this name, as -fake-s3-bucket does, with a few documents for a Mycroft source (KN-25): a Markdown runbook and a CSV under docs/, and a picture Mycroft skips; empty: none")
 	oidc := flag.String("oidc-issuer", "", "serve a simulated OpenID Connect provider at this URL, which must be this server's address plus /oidc (for example http://127.0.0.1:7443/oidc); accounts: admin@corp.example, dev@corp.example and viewer@corp.example with the password \"password\"")
+	fakeSMTP := flag.String("fake-smtp", "", "also serve a fake SMTP server at this address (for example 127.0.0.1:7525) for Settings › Email (EM-10): security none, no sign-in; it takes every message, and GET http://<listen>/fake-smtp/messages lists them as JSON, DELETE forgets them")
 	flag.Parse()
+
+	var smtpServer *mail.FakeServer
+	if *fakeSMTP != "" {
+		var err error
+		if smtpServer, err = mail.ListenFake(*fakeSMTP); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("serving a fake SMTP server on %s", smtpServer.Addr())
+	}
 
 	if *sshHost != "" {
 		h, err := sim.NewSSHHost()
@@ -77,8 +88,11 @@ func main() {
 	} else {
 		s = sim.New(sim.Options{Nodes: *nodes, Pods: *pods, Seed: *seed, Metrics: *metrics, KubeletStats: *kubeletStats, SettingsConfigMap: *settingsCM, Problems: *problems, Planted: *planted, OIDCIssuer: *oidc, Preload: preload(*seedCases)})
 		handler = s
-		if *claude || *wikiBucket != "" || *docsBucket != "" {
+		if *claude || *wikiBucket != "" || *docsBucket != "" || smtpServer != nil {
 			mux := http.NewServeMux()
+			if smtpServer != nil {
+				mux.Handle("/fake-smtp/messages", smtpServer.Handler())
+			}
 			if *claude {
 				mux.Handle("/claude/", http.StripPrefix("/claude", fakeclaude.New()))
 			}

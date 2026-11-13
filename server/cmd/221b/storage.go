@@ -23,6 +23,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/lessons"
+	"github.com/ucesys/221b/server/internal/mail"
 	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/sessions"
 	"github.com/ucesys/221b/server/internal/sherlock"
@@ -150,6 +151,8 @@ var layout = map[string]map[string]kv.Limit{
 		casework.SettingsKey: {Bytes: casework.DefaultSettingsBytes},
 		casework.ChecksKey:   {Bytes: casework.DefaultChecksBytes},
 		casework.CleanKey:    {Bytes: casework.DefaultCleanBytes},
+		// Settings › Email (EM-01): the password is in the Secret.
+		mail.ConfigKey: {Bytes: mail.DefaultConfigBytes},
 		// The validation rules people added or changed, and what the runs
 		// found under each id (ADR-138).
 		casework.RulesKey:     {Bytes: casework.DefaultRulesBytes, Hint: "dismiss the suggested validation rules no longer wanted"},

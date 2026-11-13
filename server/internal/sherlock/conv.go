@@ -67,6 +67,9 @@ type Msg struct {
 	CostUSD float64    `json:"costUSD,omitempty"`
 	// View is what the answer changed in the asking window's view (P6U-10).
 	View []ViewChange `json:"view,omitempty"`
+	// Show is what the window left undone, for the answer's Show in 221B
+	// button (SR-15).
+	Show []ViewShow `json:"show,omitempty"`
 	// Agent is who answered, when not Sherlock as the settings have it
 	// (Phase 12); Hands are the parts it handed to other agents.
 	Agent string  `json:"agent,omitempty"`
@@ -99,7 +102,7 @@ type Conversation struct {
 	// The UI actions sent to the browser, and those waiting for a result.
 	uiOut  []UIRequest
 	uiSeq  int
-	uiWait map[string]chan UIResult
+	uiWait map[string]uiWaiter
 	// traces are the tool calls of the latest answers, by message, for
 	// saving one as a test case (Phase 12).
 	traces map[int]Trace
@@ -144,6 +147,7 @@ func (c *Conversation) viewLocked() View {
 		cp.Steps = append([]Step(nil), m.Steps...)
 		cp.Refs = append([]Ref(nil), m.Refs...)
 		cp.View = append([]ViewChange(nil), m.View...)
+		cp.Show = append([]ViewShow(nil), m.Show...)
 		cp.Hands = copyHands(m.Hands)
 		out[i] = &cp
 	}
@@ -354,7 +358,7 @@ func (s *Service) Conversation(k Key) *Conversation {
 		return c
 	}
 	s.mu.Unlock()
-	c := &Conversation{ID: newID(), known: Known{}, subs: map[chan struct{}]struct{}{}, uiWait: map[string]chan UIResult{}, traces: map[int]Trace{}}
+	c := &Conversation{ID: newID(), known: Known{}, subs: map[chan struct{}]struct{}{}, uiWait: map[string]uiWaiter{}, traces: map[int]Trace{}}
 	if kp := s.keeperOf(k); kp != nil {
 		c.kept = true
 		s.loadKept(c, kp, k)
@@ -428,6 +432,12 @@ type Question struct {
 	// one that asked, or the main window Sherlock's own window follows
 	// (P6U-08). Empty when there is none.
 	Window string
+	// WindowSession is the session that window belongs to, in a
+	// conversation several people share (a case's or a proposed change's):
+	// only that session receives the view actions and may post their
+	// results, so they change only the asker's own window (SR-19). Empty
+	// in a person's own conversation, whose key is their session.
+	WindowSession string
 	// View is that window's view state when asked (P6U-03).
 	View string
 	// ViewChanges offers the UI actions that change the view (P6U-14).
@@ -777,6 +787,17 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 			go s.opts.OnAnswer(Answered{Agent: a.ID, Version: a.Version, Who: q.Who, Cluster: q.Key.Cluster, Msg: done, Trace: tr})
 		}
 	}
+	// The view changes the answer made are held until it is complete
+	// (SR-18): applied together, in order, once it is done; kept for the
+	// Show in 221B button when it stops or fails.
+	end := func(status, errText string) {
+		if status == "done" {
+			s.flushUI(ctx, c, ans, q, &ui)
+		} else {
+			c.keepHeld(ans, &ui, "stopped")
+		}
+		finish(status, errText)
+	}
 	defer func() {
 		if err := s.opts.Ledger.Save(context.Background()); err != nil {
 			s.opts.Logger.Warn("saving the Sherlock spend failed", "err", err)
@@ -807,7 +828,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		}
 		if err != nil && (round > 0 || ch.stop != nil) {
 			outcome, detail = audit.OutcomeDenied, err.Error()
-			finish("stopped", err.Error())
+			end("stopped", err.Error())
 			return
 		}
 		if round >= s.opts.MaxRounds {
@@ -815,7 +836,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 			ans.Text = strings.TrimSpace(answerOr(ans.Text, ans.Note) + "\n\nI stopped after reading the cluster " + fmt.Sprint(s.opts.MaxRounds) + " times without reaching an answer. Ask a narrower question, naming the object.")
 			c.mu.Unlock()
 			outcome, detail = audit.OutcomeFailed, "too many tool rounds"
-			finish("done", "")
+			end("done", "")
 			return
 		}
 		c.mu.Lock()
@@ -848,12 +869,12 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 		if err != nil {
 			if ctx.Err() != nil {
 				outcome, detail = audit.OutcomeStopped, "stopped by the person asking"
-				finish("stopped", "")
+				end("stopped", "")
 				return
 			}
 			outcome, detail = audit.OutcomeFailed, err.Error()
 			s.opts.Logger.Warn("Sherlock could not answer", "err", err)
-			finish("failed", explain(err))
+			end("failed", explain(err))
 			return
 		}
 		c.mu.Lock()
@@ -869,7 +890,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 				ans.Text = strings.TrimSpace(ans.Text) + "\n\n(The answer was cut off at its length limit.)"
 			}
 			c.mu.Unlock()
-			finish("done", "")
+			end("done", "")
 			return
 		}
 		// Text before a tool call is the model thinking aloud: it stays in
@@ -903,7 +924,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 			}
 			if ctx.Err() != nil {
 				outcome, detail = audit.OutcomeStopped, "stopped by the person asking"
-				finish("stopped", "")
+				end("stopped", "")
 				return
 			}
 			text := s.clip(scrub.Known(res.Text, append(s.secrets(), a.Secrets...)))

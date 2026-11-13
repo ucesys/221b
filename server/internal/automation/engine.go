@@ -172,6 +172,8 @@ type Spec struct {
 	// version is still approved, with the text it started with.
 	Request string
 	Recheck bool
+	// ValuesApproved is the approval the run's own values waited for.
+	ValuesApproved *ValuesApproval
 }
 
 // Start records a run and starts it; it goes on after the request ends.
@@ -189,7 +191,7 @@ func (e *Engine) Start(ctx context.Context, sp Spec) (Run, error) {
 	r := Run{Script: sp.Script, Version: sp.Version.N, Hash: sp.Version.Hash, DryRun: sp.DryRun, Privilege: sp.Version.Header.Privilege,
 		Cluster: sp.Cluster, ClusterName: sp.ClusterName, Fleet: sp.Fleet, FleetName: sp.FleetName, Overrides: sp.Overrides, Rollout: sp.Rollout,
 		By: sp.Who, State: RunRunning, Started: now, Beat: now, Target: sp.Version.Header.Target, Config: sp.Config, Identity: sp.Identity, Basis: sp.Basis, HookRefs: sp.HookRefs, RetryOf: sp.RetryOf,
-		Request: sp.Request}
+		Request: sp.Request, ValuesApproved: sp.ValuesApproved}
 	for _, ap := range sp.Version.Approvals {
 		r.Approvers = append(r.Approvers, ap.By)
 	}

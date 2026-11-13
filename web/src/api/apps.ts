@@ -175,6 +175,35 @@ export interface AppImage {
   init?: boolean
 }
 
+/** What the check for newer images says about one image (HA-21). */
+export interface ImageCheck {
+  /** newer, current, pending (the registry is being asked), unknown (could not check) or skipped (nothing to compare). */
+  state: 'newer' | 'current' | 'pending' | 'unknown' | 'skipped'
+  /** The newest tag of the running tag's form; for a tag that moved, the tag itself. */
+  newer?: string
+  /** For a tag that moved: the digest it points at now. */
+  digest?: string
+  reason?: string
+  checked?: string
+}
+
+/** An image of a release with a newer one published (HA-22). */
+export interface NewerImage {
+  image: string
+  registry?: string
+  repository: string
+  tag?: string
+  newer: string
+  digest?: string
+}
+
+/** The releases with a newer image, by namespace/name; enabled is false when Settings turned the check off. */
+export interface NewerImages {
+  enabled: boolean
+  releases: Record<string, NewerImage[]>
+  pending: number
+}
+
 export interface AppInput {
   namespace?: string
   name?: string
@@ -316,7 +345,43 @@ export const fetchChartVersions = (src: Pick<AppSource, 'kind' | 'repo' | 'repos
   call<{ versions: string[]; newest: string }>('POST', `${repos}/versions`, { kind: src.kind, repo: src.repo ?? '', repository: src.repository ?? '', chart: src.chart ?? '', ref: '', refKind: 'version' })
 export const fetchRevisions = (cluster: string, ns: string, name: string, background = false) => call<RevisionView[]>('GET', app(cluster, ns, name, '/revisions'), undefined, background)
 export const fetchImages = (cluster: string, ns: string, name: string, revision?: number) =>
-  call<{ revision: number; images: AppImage[] }>('GET', app(cluster, ns, name, '/images') + (revision ? `?revision=${revision}` : ''), undefined, true)
+  call<{ revision: number; images: AppImage[]; checks?: Record<string, ImageCheck> }>('GET', app(cluster, ns, name, '/images') + (revision ? `?revision=${revision}` : ''), undefined, true)
+
+export const fetchNewerImages = (cluster: string) => call<NewerImages>('GET', apiPath('helm/newer-images', cluster), undefined, true)
+
+const NO_NEWER: Record<string, NewerImage[]> = {}
+
+/**
+ * The releases with a newer image (HA-22), read when the tab opens, again
+ * soon while registries are still being asked, and every ten minutes
+ * after: the server keeps the registries' answers for hours. A failed read
+ * is no notice, never an error (an air-gapped cluster's registries).
+ */
+export function useNewerImages(cluster: string): Record<string, NewerImage[]> {
+  const [held, setHeld] = useState<{ cluster: string; releases: Record<string, NewerImage[]> }>({ cluster, releases: NO_NEWER })
+  useEffect(() => {
+    let stop = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const read = () => {
+      fetchNewerImages(cluster).then(
+        (v) => {
+          if (stop) return
+          setHeld({ cluster, releases: v.enabled ? v.releases : NO_NEWER })
+          timer = setTimeout(read, v.enabled && v.pending > 0 ? 15_000 : 600_000)
+        },
+        () => {
+          if (!stop) timer = setTimeout(read, 600_000)
+        },
+      )
+    }
+    read()
+    return () => {
+      stop = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [cluster])
+  return held.cluster === cluster ? held.releases : NO_NEWER
+}
 
 /** One side of a diff: a revision, or the source at its saved ref, or at a branch or tag named here. */
 export type DiffSide = { kind: 'revision'; revision: number } | { kind: 'source'; ref?: string; refKind?: RefKind }

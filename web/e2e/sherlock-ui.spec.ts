@@ -240,13 +240,62 @@ test('an action on an object the person may not see says only that it is not ava
     await cluster.resetClaude()
     await ask(dev, `[[view_details {"kind":"Pod","namespace":"${target.namespace}","name":"${target.name}"}]]`)
     await done(dev)
-    await expect(dev.getByTestId('sherlock-answer').last()).toContainText('not available')
+    // The pane opens once the answer is done (SR-18) and says only that it is not available.
+    await expect(dev.locator('[data-peek-error]').first()).toBeAttached({ timeout: 15_000 })
     const sent = (await cluster.claudeRequests()).join('\n')
     expect(sent).not.toContain(target.uid)
     if (target.node) expect(sent).not.toContain(`"node":"${target.node}"`)
   } finally {
     await dev.context().close()
   }
+})
+
+test('Sherlock opens a Settings page with an agent’s drawer, and a page’s search (SR-12)', async ({ page }) => {
+  const me = (await (await page.context().request.get('/api/v1/me')).json()) as { admin: boolean }
+  test.skip(!me.admin, 'Settings are a SuperAdmin’s')
+  await open(page, '#/pods')
+  await ask(page, '[[view_admin {"page":"agents","item":"sherlock"}]]')
+  await done(page)
+  expect(new URL(page.url()).hash).toBe('#/admin/settings/agents/sherlock')
+  await expect(page.getByTestId('agent-drawer')).toBeVisible()
+  await expect(lastAnswer(page).getByTestId('sherlock-view-changes')).toHaveText('Opened Settings › Agents, sherlock')
+  // Nothing in the drawer was changed or pressed.
+  await expect(page.getByTestId('agent-save-state')).toHaveText('No changes.')
+  await ask(page, '[[view_admin {"page":"roles","search":"admin"}]]', false)
+  await done(page)
+  expect(new URL(page.url()).hash).toBe('#/admin/roles')
+  await expect(page.getByRole('combobox', { name: 'Search roles' })).toHaveValue('admin')
+})
+
+test('with unsaved changes open, the view stays and Show in 221B applies it on the person’s word (SR-14, SR-15)', async ({ page }) => {
+  const me = (await (await page.context().request.get('/api/v1/me')).json()) as { admin: boolean }
+  test.skip(!me.admin, 'Settings are a SuperAdmin’s')
+  await open(page, '#/admin/settings/agents/sherlock')
+  await expect(page.getByTestId('agent-drawer')).toBeVisible()
+  const daily = page.getByTestId('agent-daily')
+  const was = await daily.inputValue()
+  const typed = String((Number(was) || 0) + 7)
+  await daily.fill(typed)
+  await expect(page.getByTestId('agent-save-state')).toContainText('Not saved yet')
+  // The drawer covers the page; the question box is still typed in.
+  await ask(page, '[[view_open {"tab":"nodes","filters":{"err":"errors"}}]]', false)
+  await done(page)
+  expect(new URL(page.url()).hash).toBe('#/admin/settings/agents/sherlock')
+  await expect(daily).toHaveValue(typed)
+  await expect(lastAnswer(page).getByTestId('sherlock-view-changed')).toHaveCount(0)
+  const left = lastAnswer(page).getByTestId('sherlock-view-left')
+  await expect(left).toContainText('you have unsaved changes open')
+  expect(await lastResults()).toContain('unsaved changes open in this window')
+  // Pressed while the edit is still open, it asks first; Stay keeps it.
+  await left.getByTestId('sherlock-show').click()
+  await expect(left.getByTestId('sherlock-show-unsaved')).toContainText('the agent drawer')
+  await left.getByTestId('sherlock-show-stay').click()
+  expect(new URL(page.url()).hash).toBe('#/admin/settings/agents/sherlock')
+  await expect(daily).toHaveValue(typed)
+  await left.getByTestId('sherlock-show').click()
+  await left.getByTestId('sherlock-show-anyway').click()
+  await expect(page).toHaveURL(/#\/nodes\?err=errors$/)
+  await expect(left.getByTestId('sherlock-show-said')).toHaveText('Shown.')
 })
 
 test('with view changes off, Sherlock only reads the view (P6U-14)', async ({ page }) => {

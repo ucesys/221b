@@ -28,6 +28,7 @@ import (
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/fleets"
+	"github.com/ucesys/221b/server/internal/imagecheck"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/live"
 	"github.com/ucesys/221b/server/internal/roles"
@@ -1174,10 +1175,12 @@ func (s *Server) getAppImages(w http.ResponseWriter, r *http.Request) {
 	if out == nil {
 		out = []apps.Image{}
 	}
+	// Checks say, by image, whether a newer one is published (HA-22).
 	b, _ := json.Marshal(struct {
-		Revision int          `json:"revision"`
-		Images   []apps.Image `json:"images"`
-	}{rel.Version, out})
+		Revision int                          `json:"revision"`
+		Images   []apps.Image                 `json:"images"`
+		Checks   map[string]imagecheck.Result `json:"checks,omitempty"`
+	}{rel.Version, out, s.imageChecks(out)})
 	writeJSON(w, r, b)
 }
 

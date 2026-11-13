@@ -146,6 +146,10 @@ type Line struct {
 	LastBy         *Actor     `json:"lastBy,omitempty"`
 	LastAt         *time.Time `json:"lastAt,omitempty"`
 	AnalysisQueued *time.Time `json:"analysisQueued,omitempty"`
+	// Involved are the ids of the people involved in it that the line
+	// names nowhere else (EM-05, EM-08): who opened, closed, wrote in or
+	// approved a fix of it.
+	Involved []string `json:"involved,omitempty"`
 }
 
 // lineOf is a case's line in the index.
@@ -172,6 +176,7 @@ func lineOf(r *Case) Line {
 	for _, w := range r.Watchers {
 		l.Watchers = append(l.Watchers, w.ID)
 	}
+	l.Involved = involvedIDs(r, &l)
 	return l
 }
 

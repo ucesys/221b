@@ -131,7 +131,7 @@ func (st *state) knownView(c Caller, k *KnownIssue) *KnownView {
 		return v
 	}
 	v.Owner = redactedPerson(k.Owner)
-	v.Symptoms, v.Followers, v.Updates, v.Source = nil, nil, nil, ""
+	v.Symptoms, v.Followers, v.Updates, v.Source, v.CreatedBy = nil, nil, nil, "", nil
 	v.Keys, v.VerifyJobs, v.Pending = nil, nil, false
 	if v.LastUpdate != nil {
 		v.LastUpdate.By = *redactedPerson(&v.LastUpdate.By)

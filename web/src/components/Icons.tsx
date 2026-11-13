@@ -409,6 +409,7 @@ export const DrainIcon = () => <Ico16 d="M8 2.5v8M4.8 7.3 8 10.5l3.2-3.2M3 13h10
 export const TrashIcon = () => <Ico16 d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5" />
 export const ShieldSmallIcon = () => <Ico16 round={false} d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z" />
 export const ChevronRightIcon = () => <Ico16 size={12} sw={1.8} d="m6 4 4 4-4 4" />
+export const RefreshIcon = () => <Ico16 d="M13.2 8a5.2 5.2 0 1 1-1.6-3.8M13.2 2.6v3.2H10" />
 export const ListIcon = () => <Ico16 size={14} d="M5 4h9M5 8h9M5 12h9M2 4h.01M2 8h.01M2 12h.01" />
 
 /** A key: SSH pairing (Phase 11). */

@@ -468,6 +468,7 @@ func syncReply(question string) (reply, bool) {
 func uiSummary(last string) string {
 	var r struct {
 		Applied bool   `json:"applied"`
+		Held    bool   `json:"held"`
 		Error   string `json:"error"`
 		Note    string `json:"note"`
 		Link    string `json:"link"`
@@ -485,6 +486,9 @@ func uiSummary(last string) string {
 	switch {
 	case r.Error != "":
 		b.WriteString("I could not: " + r.Error)
+	case r.Held:
+		// A view change is made once the answer is done (SR-18).
+		b.WriteString("I will show it once this answer is done.")
 	case r.Note != "":
 		b.WriteString("You changed the view yourself, so I left it as it is.")
 	case r.Applied:

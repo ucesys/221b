@@ -54,6 +54,12 @@ func (s *Server) automationRoutes() {
 		s.handle("GET "+base+"automation/fleets", "automation-fleets", s.getAutomationFleets)
 		s.handle("PUT "+base+"automation/fleets/{fleet}/variables", "automation-variables", s.putAutomationVariables)
 		s.handle("POST "+base+"automation/runs", "automation-run-start", s.postAutomationRun)
+		// --- Run values on production, weighed and approved (FU-05) ---
+		s.handle("POST "+base+"automation/runs/weigh", "automation-run-weigh", s.postAutomationRunWeigh)
+		s.handle("GET "+base+"automation/waiting-runs", "automation-waiting-runs", s.getWaitingRuns)
+		s.handle("POST "+base+"automation/waiting-runs/{id}/{decision}", "automation-waiting-run-decide", s.postWaitingRun)
+		// --- Run parameters with suggestions (FU-03) ---
+		s.handle("GET "+base+"automation/secret-refs", "automation-secret-refs", s.getAutomationSecretRefs)
 	}
 }
 
@@ -711,6 +717,22 @@ func (s *Server) postAutomationRun(w http.ResponseWriter, r *http.Request) {
 // startAutomationRun checks everything a run needs and starts it: a retry
 // goes through the same checks, as the world may have changed since.
 func (s *Server) startAutomationRun(w http.ResponseWriter, r *http.Request, in runRequest, retryOf int) {
+	s.startRun(w, r, in, retryOf, runMode{who: s.watsonWho(r)})
+}
+
+// runMode is how a start goes (FU-05): as the person asks it, a preview
+// that only weighs the run's values, or a waiting run a second admin
+// approved, started as the person who asked for it.
+type runMode struct {
+	who      watson.Who
+	preview  bool
+	approved *automation.WaitingRun
+	approver automation.Who
+	// onStarted answers for an approved run once it has started.
+	onStarted func(automation.Run)
+}
+
+func (s *Server) startRun(w http.ResponseWriter, r *http.Request, in runRequest, retryOf int, mode runMode) {
 	ctx := r.Context()
 	list, ok := s.automationFleetList(ctx, w, r)
 	if !ok {
@@ -721,6 +743,14 @@ func (s *Server) startAutomationRun(w http.ResponseWriter, r *http.Request, in r
 		return
 	}
 	refuse := func(code int, msg string) {
+		switch {
+		case mode.preview:
+			// A preview says what would stop the run, and records nothing.
+			answerJSON(w, r, runWeight{Changed: []string{}, Impact: []automation.ImpactItem{}, Refused: msg})
+			return
+		case mode.approved != nil:
+			msg = fmt.Sprintf("Run request %d can't start now, so it still waits: %s", mode.approved.ID, msg)
+		}
 		s.recordAutomation(r, audit.ActionAutomationRun, list.Cluster, in.Script, audit.OutcomeDenied, msg)
 		jsonError(w, code, msg)
 	}
@@ -779,15 +809,9 @@ func (s *Server) startAutomationRun(w http.ResponseWriter, r *http.Request, in r
 		refuse(http.StatusNotFound, "no fleet "+strconv.Quote(in.Fleet)+" here")
 		return
 	}
-	if !in.DryRun && list.Production && len(in.Params) > 0 {
-		names := make([]string, 0, len(in.Params))
-		for k := range in.Params {
-			names = append(names, k)
-		}
-		sort.Strings(names)
-		refuse(http.StatusConflict, fmt.Sprintf("On production a run takes its values from the fleets: values given for the run (%s) would skip the approval a parameter change needs here. Change them on the fleet instead.", strings.Join(names, ", ")))
-		return
-	}
+	// On production a run's own values are weighed as a change of the
+	// fleet's values for this run alone (launchRun); one that needs
+	// approval waits for a second admin (FU-05).
 	if !in.DryRun && !kube8s && !fleet.Params.Allows(v.Header.Privilege) {
 		refuse(http.StatusForbidden, fmt.Sprintf("%s declares privilege %s; the ceiling of fleet %s is %s", sc.Name, automation.PrivilegeName(v.Header.Privilege), fleet.Name, automation.PrivilegeName(fleet.Params.CeilingOrDefault())))
 		return
@@ -813,7 +837,7 @@ func (s *Server) startAutomationRun(w http.ResponseWriter, r *http.Request, in r
 		refuse(automationStatus(err), err.Error())
 		return
 	}
-	who := s.watsonWho(r)
+	who := mode.who
 	identity := ""
 	if kube8s || len(in.Hooks.Before)+len(in.Hooks.After) > 0 {
 		identity = config.Identity()
@@ -844,7 +868,7 @@ func (s *Server) startAutomationRun(w http.ResponseWriter, r *http.Request, in r
 				}
 			}
 			if err = automation.ValidateOverrides(in.Params); err == nil {
-				s.launchRun(w, r, launch{in: in, sc: sc, v: v, list: list, fleet: fleet, cl: cl, who: who, identity: identity, config: config, before: before, after: after, retryOf: retryOf, refuse: refuse})
+				s.launchRun(w, r, launch{in: in, sc: sc, v: v, list: list, fleet: fleet, cl: cl, who: who, identity: identity, config: config, before: before, after: after, retryOf: retryOf, refuse: refuse, mode: mode})
 				return
 			}
 		}
@@ -866,6 +890,7 @@ type launch struct {
 	before, after []automation.Hook
 	retryOf       int
 	refuse        func(int, string)
+	mode          runMode
 }
 
 func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
@@ -874,6 +899,7 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 	picked, unknown := pickNodes(fleet.Nodes, in.Nodes)
 	var targets, unpaired, missing, clash, capped, held []string
 	values := map[string]map[string]string{}
+	resolved := map[string]automation.Resolved{}
 	reboot := map[string]int{}
 	kube8s := v.Header.Target == automation.TargetKubernetes
 	// Each node answers to all its fleets, not only the one picked: the
@@ -919,8 +945,12 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 			clash = append(clash, fmt.Sprintf("%s on %s comes from fleets %s", c.Param, c.Node, strings.Join(c.Fleets, " and ")))
 		}
 		values[n.Name] = res.Values
+		resolved[n.Name] = res
 		targets = append(targets, n.Name)
 	}
+	// A binding to a variable no node of the run has stops it, required or
+	// not: the run would read nothing anywhere (FU-04).
+	_, unbound := automation.BindingGaps(v.Header, in.Params, resolved)
 	switch {
 	case len(unknown) > 0:
 		refuse(http.StatusBadRequest, "not in fleet "+fleet.Name+": "+strings.Join(unknown, ", "))
@@ -937,6 +967,9 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 	case len(clash) > 0:
 		refuse(http.StatusConflict, "defined on more than one fleet: "+strings.Join(clash, "; ")+". Keep it on one fleet, or set it on the node or the run")
 		return
+	case len(unbound) > 0:
+		refuse(http.StatusBadRequest, strings.Join(unbound, "; ")+". Bind it to a variable these nodes have, or type a value")
+		return
 	case len(missing) > 0:
 		refuse(http.StatusBadRequest, "required parameters have no value: "+strings.Join(missing, "; "))
 		return
@@ -944,14 +977,37 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 		refuse(http.StatusBadRequest, "fleet "+fleet.Name+" has no node to run on")
 		return
 	}
+	// Picked by hand, they are no fleet's: the dialog says so, and so does the run.
+	if fleet.ID == allNodes && len(targets) < paired {
+		fleetName = "custom selection"
+	}
+	// On production the run's own values are weighed as the fleet's values
+	// changed for this run (FU-05): one that needs approval waits for a
+	// second admin; once approved, it is not weighed again.
+	weighed := ""
+	if !in.DryRun && list.Production && len(in.Params) > 0 && l.mode.approved == nil {
+		wt := s.weighRun(r, list, l.sc, v, targets, in.Params, values, !l.mode.preview)
+		if l.mode.preview {
+			answerJSON(w, r, wt)
+			return
+		}
+		if wt.NeedsApproval {
+			s.waitForApproval(w, r, l, wt, targets, fleetName)
+			return
+		}
+		weighed = "its own values need no approval"
+		if len(wt.Changed) == 0 {
+			weighed = "its own values change nothing a node inherits"
+		}
+	}
+	if l.mode.preview {
+		answerJSON(w, r, runWeight{Changed: []string{}, Impact: []automation.ImpactItem{}})
+		return
+	}
 	secrets, err := readSecrets(ctx, l.cl, l.who.Person, v.Header, values)
 	if err != nil {
 		refuse(automationStatus(err), err.Error())
 		return
-	}
-	// Picked by hand, they are no fleet's: the dialog says so, and so does the run.
-	if fleet.ID == allNodes && len(targets) < paired {
-		fleetName = "custom selection"
 	}
 	clusterName := list.ClusterName()
 	basis := "approved code, no per-run approval"
@@ -961,13 +1017,24 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 	case v.State != automation.StateApproved:
 		basis = fmt.Sprintf("v%d is %s: this cluster is not production, so it may run", v.N, v.State)
 	}
+	var valuesApproved *automation.ValuesApproval
+	if a := l.mode.approved; a != nil {
+		valuesApproved = &automation.ValuesApproval{Request: a.ID, By: l.mode.approver, At: time.Now().UTC()}
+		basis += fmt.Sprintf("; its own values approved by %s (run request %d)", l.mode.approver.Name, a.ID)
+	} else if weighed != "" {
+		basis += "; " + weighed
+	}
 	run, err := s.opts.Automation.Start(ctx, automation.Spec{Script: l.sc.Name, Version: v, DryRun: in.DryRun, Cluster: list.Cluster, ClusterName: clusterName,
-		Fleet: fleet.ID, FleetName: fleetName, Nodes: targets, Values: values, Overrides: in.Params, Rollout: in.Rollout, Who: s.automationWho(r),
+		Fleet: fleet.ID, FleetName: fleetName, Nodes: targets, Values: values, Overrides: in.Params, Rollout: in.Rollout, Who: automation.Who{Name: l.who.Name, User: l.who.User}, ValuesApproved: valuesApproved,
 		Secrets: secrets, Config: l.config.ID, Identity: l.identity, Person: automation.Person{User: l.who.Person.User, Groups: l.who.Person.Groups}, Basis: basis,
 		Before: l.before, After: l.after, HookRefs: in.Hooks, RetryOf: l.retryOf, RebootMinutes: reboot, Request: in.Request,
 		Recheck: !in.DryRun && list.Production})
 	if errors.Is(err, automation.ErrSameRequest) {
 		// Asked twice, by a retry or a second click: the first start answers.
+		if l.mode.onStarted != nil {
+			l.mode.onStarted(run)
+			return
+		}
 		answerJSON(w, r, run)
 		return
 	}
@@ -986,7 +1053,16 @@ func (s *Server) launchRun(w http.ResponseWriter, r *http.Request, l launch) {
 	if l.retryOf != 0 {
 		detail += fmt.Sprintf(", retrying run %d", l.retryOf)
 	}
+	if a := l.mode.approved; a != nil {
+		detail += fmt.Sprintf(", asked for by %s with its own values (%s), approved by %s (run request %d)", a.By.Name, strings.Join(sortedKeys(in.Params), ", "), l.mode.approver.Name, a.ID)
+	} else if weighed != "" {
+		detail += ", " + weighed
+	}
 	s.recordAutomation(r, audit.ActionAutomationRun, list.Cluster, l.sc.Name, audit.OutcomeOK, detail)
+	if l.mode.onStarted != nil {
+		l.mode.onStarted(run)
+		return
+	}
 	answerJSON(w, r, run)
 }
 

@@ -309,6 +309,90 @@ var tools = []tool{
 		},
 		run: (*Toolbox).automationRuns,
 	},
+	// Phase 12.1 (SR-01 to SR-08): the console's own records, each read
+	// through the API of the screen it mirrors (console.go).
+	{
+		def: sherlock.ToolDef{Name: "get_automation_run", Description: "One Automation run in full: script and version, fleet, who started it, state and why it stopped, and each node's state, exit code, error and the last lines of its output (credentials replaced by [REDACTED]; at most 20 nodes, those that failed first). Parameter values are not shown. Only for a SuperAdmin, as Automation is.", InputSchema: toolSchema([]string{"id"}, map[string]string{
+			"id": "integer|The run's number, from automation_runs.", "node": "string|Only this node.", "tail": "integer|How many lines of each node's output (default 60, at most 200).",
+		})},
+		label: func(in map[string]any) string {
+			return fmt.Sprintf("Read Automation run %v", in["id"]) + suffixIf(" on ", str(in, "node"))
+		},
+		run: (*Toolbox).automationRun,
+	},
+	{
+		def: sherlock.ToolDef{Name: "list_scripts", Description: "Automation's scripts: group, description, latest version and its state, the version approved and its approvals, privilege, target, parameters (secret ones marked), the checks' errors and warnings, and the last run. Only for a SuperAdmin, as Automation is.", InputSchema: toolSchema(nil, map[string]string{
+			"query": "string|Only scripts whose row contains this text.", "limit": "integer|At most this many (default 40).",
+		})},
+		label: func(in map[string]any) string {
+			return "List Automation's scripts" + suffixIf(" matching ", str(in, "query"))
+		},
+		run: (*Toolbox).scripts,
+	},
+	{
+		def: sherlock.ToolDef{Name: "get_script", Description: "One version of an Automation script: its text (credentials replaced by [REDACTED]), header with parameters and privilege, the checks' findings, state, author, approvals or why it was rejected, and Sherlock's review; and the script's versions with their states. Only for a SuperAdmin, as Automation is.", InputSchema: toolSchema([]string{"name"}, map[string]string{
+			"name": "string|The script's name.", "version": "integer|The version's number; the latest when not given.",
+		})},
+		label: func(in map[string]any) string {
+			l := "Read script " + str(in, "name")
+			if v := num(in, "version", 0, 0, 1<<30); v > 0 {
+				l += fmt.Sprintf(" v%d", v)
+			}
+			return l
+		},
+		run: (*Toolbox).script,
+	},
+	{
+		def: sherlock.ToolDef{Name: "automation_variables", Description: "Automation's variables on this cluster, as the Variables tab shows them: each fleet's nodes, values and values per node, ceiling, sensitive parameters and reboot times, and the parameters a node gets from more than one fleet. A secret parameter shows only that it is set, never its value. Only for a SuperAdmin, as Automation is.", InputSchema: toolSchema(nil, map[string]string{
+			"fleet": "string|Only this fleet, by id or name.", "node": "string|Only the fleets this node is in, and its own values.",
+		})},
+		label: func(in map[string]any) string {
+			return "Read Automation's variables" + suffixIf(" of ", firstOf(str(in, "fleet"), str(in, "node")))
+		},
+		run: (*Toolbox).variables,
+	},
+	{
+		def: sherlock.ToolDef{Name: "watson_history", Description: "Watson's commands on this cluster that the person's Watson panel lists (those they asked for or approved), newest first: the command, read or change, where it came from and why, who asked and who approved, status, exit code, the reason it failed or was refused, when, and the last lines of its output (credentials replaced by [REDACTED]).", InputSchema: toolSchema(nil, map[string]string{
+			"query": "string|Only commands whose text contains this (a command, a name).", "status": "string|Only this status: pending, queued, running, done, failed, stopped, lapsed, discarded or refused.", "lines": "integer|How many of each command's last output lines (default 10, at most 50; 0 for none).", "limit": "integer|At most this many (default 20).",
+		})},
+		label: func(in map[string]any) string {
+			return "Read Watson's history" + suffixIf(" matching ", str(in, "query"))
+		},
+		run: (*Toolbox).watsonHistory,
+	},
+	{
+		def: sherlock.ToolDef{Name: "audit_log", Description: "The console's audit log, newest first, as Administration › Audit log shows it: action, who, cluster, target, outcome, detail and from where; and every action among the events kept. Only for a SuperAdmin, as that page is.", InputSchema: toolSchema(nil, map[string]string{
+			"query": "string|Only events with every one of these words.", "action": "string|Only this action or the actions under it (watson, watson.command, automation, ai.agent, …).", "outcome": "string|Only this outcome (ok, denied, failed, …).", "limit": "integer|At most this many (default 50, at most 200).",
+		})},
+		label: func(in map[string]any) string {
+			return "Read the audit log" + suffixIf(" for ", firstOf(str(in, "action"), str(in, "query")))
+		},
+		run: (*Toolbox).auditLog,
+	},
+	{
+		def: sherlock.ToolDef{Name: "list_cases", Description: "The cases of AIOps › Inbox, on every cluster: id, title, priority, status, outcome, cluster, the object it is about, source, assignee, its stage and analysis, when opened and changed. Only for those who may see the cases.", InputSchema: toolSchema(nil, map[string]string{
+			"status": "enum:new,inProgress,closed|Only this status.", "open": "boolean|Only cases not closed.", "query": "string|Only cases with this text.", "priority": "string|Only this priority (P0 to P4).", "cluster": "string|Only cases on this cluster, by id.", "limit": "integer|At most this many (default 30).",
+		})},
+		label: func(in map[string]any) string { return "List the cases" + suffixIf(" matching ", str(in, "query")) },
+		run:   (*Toolbox).cases,
+	},
+	{
+		def:   sherlock.ToolDef{Name: "get_case", Description: "One case in full: its detail, the object and cluster, who opened it, status and stage, its analysis, related cases, proposed changes and their state, the fix applied and its verification, and its last 20 messages. Only for those who may see the cases.", InputSchema: toolSchema([]string{"id"}, map[string]string{"id": "string|The case's id, such as C-12."})},
+		label: func(in map[string]any) string { return "Read case " + str(in, "id") },
+		run:   (*Toolbox).getCase,
+	},
+	{
+		def: sherlock.ToolDef{Name: "list_job_runs", Description: "The runs of AIOps › Jobs, newest first: job, kind, agent, trigger, clusters, status, started and ended, the counts of findings and what they did, and cost. Only for those who may see AIOps › Jobs.", InputSchema: toolSchema(nil, map[string]string{
+			"job": "string|Only this job's runs, by id.", "status": "string|Only this status (running, ok, failed, skipped, …).", "ref": "string|Only runs about this, such as report:143.", "limit": "integer|At most this many (default 20).",
+		})},
+		label: func(in map[string]any) string { return "List the jobs' runs" + suffixIf(" of ", str(in, "job")) },
+		run:   (*Toolbox).jobRuns,
+	},
+	{
+		def:   sherlock.ToolDef{Name: "get_job_run", Description: "One run of a job in full: its report, health, findings (at most 50) with their evidence and the case, known issue or exception each went to, proposed changes, the fixes it verified, and what it could not do. Only for those who may see AIOps › Jobs.", InputSchema: toolSchema([]string{"id"}, map[string]string{"id": "string|The run's id, such as run-12."})},
+		label: func(in map[string]any) string { return "Read job run " + str(in, "id") },
+		run:   (*Toolbox).jobRun,
+	},
 }
 
 func (tb *Toolbox) nodeFacts(ctx context.Context, in map[string]any) sherlock.ToolResult {

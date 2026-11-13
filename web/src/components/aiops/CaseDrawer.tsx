@@ -1110,13 +1110,21 @@ function CaseBody({
                 <pre className="rk-code" style={{ margin: 0, padding: '8px 12px', whiteSpace: 'pre-wrap', flex: '1 1 auto' }} data-testid="case-fix-command">
                   $ {cmd}
                 </pre>
-                {/* Beside the case, its Watson asks before it runs; without it, the dock's Watson has the command in its box. */}
-                <RunInWatson onClick={() => (onRun ? onRun(cmd) : openWatson(c.cluster ?? '', cmd))} disabled={!c.cluster} testId="case-open-watson" />
+                {/* Beside the case, its Watson: a change waits on its card, a read runs as Auto-run reads says; without it, the dock's Watson has the command in its box. */}
+                <RunInWatson
+                  onClick={() => (onRun ? onRun(cmd) : openWatson(c.cluster ?? '', cmd))}
+                  disabled={!c.cluster}
+                  testId="case-open-watson"
+                  title={onRun ? undefined : 'Opens Watson in the dock with the command in its box: nothing runs until you press Enter there, and a change then waits on its card until you approve it.'}
+                />
               </div>
             ))}
             {commands.length > 0 && (
               <span className="tb-hint" style={{ fontSize: 12 }}>
-                Run in Watson hands it to Watson beside the case, which asks before it runs it, as you, with your own rights. Then close it as Fixed and say what was done.
+                {onRun
+                  ? 'Run in Watson hands it to Watson beside the case: a change waits there on its card until you approve it, and runs as you, with your own rights; a read runs at once while Watson’s Auto-run reads is on.'
+                  : 'Run in Watson puts it in the box of the dock’s Watson: nothing runs until you press Enter there, and a change then waits on its card until you approve it.'}{' '}
+                Then close it as Fixed and say what was done.
               </span>
             )}
           </>

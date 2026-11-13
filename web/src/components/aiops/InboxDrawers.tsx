@@ -7,7 +7,7 @@ import type { ApprovalRow } from '../../api/automation'
 import { fetchPageRequests, type ConfluenceConflict, type DraftRun, type PageRequest } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
 import { Drawer } from '../Drawer'
-import { DecidedVersion, linkOf, RequestActions } from './InboxApprovals'
+import { DecidedVersion, linkOf, RequestActions, WaitingRunFacts } from './InboxApprovals'
 import { APPROVAL_KIND, APPROVAL_STATE } from './inboxRows'
 import { ConflictCard, DraftRunCard } from './KnowledgeDraft'
 import { Tag } from './parts'
@@ -52,7 +52,7 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
       }
       footer={
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          {row.kind === 'admin' ? (
+          {row.kind === 'admin' || (row.kind === 'run' && row.state === 'pending') ? (
             <RequestActions row={row} onConflict={setConflict} onDecided={onDecided} />
           ) : (
             link && (
@@ -97,6 +97,7 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
           {row.overtaken}
         </p>
       )}
+      {row.kind === 'run' && <WaitingRunFacts row={row} />}
       {conflict && (
         <p className="tb-err" role="alert" data-testid="approval-conflict">
           {conflict}
@@ -105,9 +106,11 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
       <p className="tb-hint" style={{ margin: 0 }}>
         {row.kind === 'admin'
           ? 'A console change has no page of its own: it is decided here. Whoever asked may only withdraw it.'
-          : row.state === 'pending'
-            ? 'Review opens it where it is read and approved. What you wrote or asked for yourself is left out where it takes a second person.'
-            : 'Decided; Open shows it where it lives.'}
+          : row.kind === 'run'
+            ? 'A run’s own values on production are weighed as a change of the fleet’s values; these need a second admin. It is decided here: approving starts the run as whoever asked; whoever asked may only withdraw it.'
+            : row.state === 'pending'
+              ? 'Review opens it where it is read and approved. What you wrote or asked for yourself is left out where it takes a second person.'
+              : 'Decided; Open shows it where it lives.'}
       </p>
     </Drawer>
   )

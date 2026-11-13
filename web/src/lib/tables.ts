@@ -29,9 +29,29 @@ export interface TableHandle {
 const tables = new Map<string, TableHandle>()
 const order: string[] = []
 
+// A search Sherlock asked of a table that is not on screen yet: the page
+// view_admin opened mounts it a moment later (SR-12).
+const queued = new Map<string, { q: string; until: number }>()
+const QUEUE_MS = 5000
+
+/** Sets a table's search text now, or when it mounts within a few seconds. */
+export function queueQuery(id: string, q: string): void {
+  const t = tables.get(id)
+  if (t) {
+    drive(() => t.setQuery(q))
+    return
+  }
+  queued.set(id, { q, until: Date.now() + QUEUE_MS })
+}
+
 /** Registers a table while it is mounted; the latest one with an id wins. */
 export function registerTable(h: TableHandle): () => void {
   tables.set(h.id, h)
+  const ask = queued.get(h.id)
+  if (ask) {
+    queued.delete(h.id)
+    if (ask.until > Date.now()) setTimeout(() => drive(() => h.setQuery(ask.q)), 0)
+  }
   const i = order.indexOf(h.id)
   if (i >= 0) order.splice(i, 1)
   order.push(h.id)

@@ -555,6 +555,7 @@ components:
         link: { type: string }
         following: { type: boolean }
         linked: { type: array, items: { type: integer }, description: Operators only }
+        createdBy: { $ref: "#/components/schemas/Person", description: "Operators only: who wrote it, or the source's system account (FU-02)" }
         created: { type: string, format: date-time }
         updated: { type: string, format: date-time }
         resolved: { type: string, format: date-time }

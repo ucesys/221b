@@ -72,6 +72,21 @@ func ReleaseKeys(src Source) []string {
 	return out
 }
 
+// ReleaseImages lists the images a release runs (HA-21): those of its
+// newest deployed revision, or of its newest when none is deployed.
+func ReleaseImages(src Source, namespace, name string) []string {
+	revs := releaseRevisions(src, namespace, name)
+	for _, r := range revs {
+		if r.Status == "deployed" {
+			return r.Images
+		}
+	}
+	if len(revs) > 0 {
+		return revs[0].Images
+	}
+	return nil
+}
+
 // BuildReleaseRow computes a release's row, or ok=false when it has no
 // revisions left.
 func BuildReleaseRow(src Source, namespace, name string, now time.Time) (ReleaseRow, bool) {

@@ -4,6 +4,7 @@ import (
 	"github.com/ucesys/221b/server/internal/api"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/backup"
+	"github.com/ucesys/221b/server/internal/imagecheck"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/ui"
 	"github.com/ucesys/221b/server/internal/version"
@@ -27,6 +28,13 @@ func (w *wiring) wireAPI() error {
 	if err != nil {
 		return err
 	}
+	// Newer images (HA-21, ADR-154): the leader asks the registries,
+	// anonymously, in the background.
+	images := imagecheck.New(imagecheck.Options{
+		Client: &imagecheck.Client{UserAgent: "221B/" + version.String()},
+		Active: w.activity.Active,
+		Logger: w.log.With("component", "imagecheck"),
+	})
 	handler := api.New(api.Options{
 		SSH:                     w.sshSvc,
 		KV:                      w.spendBackend,
@@ -34,6 +42,7 @@ func (w *wiring) wireAPI() error {
 		Watson:                  w.watsonSvc,
 		Apps:                    w.appStore,
 		Repos:                   w.helmRepos, // Helm repositories (Phase 12, wave 5)
+		ImageChecks:             images,
 		SecretsReveal:           cfg.SecretsRead && cfg.SecretsReveal,
 		Sessions:                w.sessionsMgr,
 		Automation:              w.autoEngine,
@@ -51,6 +60,7 @@ func (w *wiring) wireAPI() error {
 		Cards:                   w.cardStore,    // Watson cards (Phase 12)
 		CardRoles:               cardRoles(cfg), // Watson cards (Phase 12)
 		Casework:                w.caseSvc,      // Case work (Phase 12)
+		Mail:                    w.mailSvc,      // Settings › Email (EM-01)
 		Sherlock:                w.sherlockSvc,
 		SherlockKeys:            w.keys,
 		AI:                      w.aiSvc.Service,

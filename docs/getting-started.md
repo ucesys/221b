@@ -38,6 +38,10 @@ Done when the wiki has a store (a git repository or an S3 bucket) and at least o
 
 Done when an agent's job is on (the nightly audit, an alert's diagnosis, the report triage) on **AIOps › Jobs**, and a notification channel is on with its address set on **Administration › Settings › Watson**. A webhook's address is typed into its own field and kept in a Secret. Jobs only read; what they propose waits for a person in Cases.
 
+#### Email about cases
+
+Optional, and not a step of the checklist. On **Administration › Settings › Email** a SuperAdmin gives the SMTP server, its port and security (STARTTLS, TLS, or none for a relay inside the network that needs no sign-in), a user name and password, and the From address, saves, and presses **Send test email** (to their own address unless another is typed). Email is on only once that test got through, and any change of those settings turns it off until the next test. From then on the people involved in a case (who reported or opened it, its assignee, who follows it, wrote in its conversation or approved its fix) are emailed when it is opened and when its status, assignee or priority changes or someone writes in it: one email per case and minute, never about their own changes, with a link to the case and to **AIOps › Inbox › I'm involved**, every case they are involved in. The links start with the console's address set in Settings › Watson. The password is kept in the Secret `<release>-cases` and never shown again. With the chart's network policy on, the console reaches the SMTP server only once its address is listed under `networkPolicy.outboundCIDRs` and its port (587, 465 or 25) under `networkPolicy.outboundPorts`.
+
 ### 7. Fleets
 
 Done when any cluster has a fleet. Fleets are made on the **Nodes** tab's fleet list from the labels and taints nodes share; Automation runs on fleets, and the views filter by them.

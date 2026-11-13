@@ -12,6 +12,7 @@ import {
   updateApp,
   type AppDrift,
   type AppImage,
+  type ImageCheck,
   type AppInput,
   type AppRefs,
   type AppSource,
@@ -36,7 +37,9 @@ import { ReleaseBody, SUBTABS, type ExtraTab } from '../ReleaseBody'
 import { AppToolsButton, type AppAction } from './AppMenu'
 import { DiffDialog } from './DiffDialog'
 import { DriftDialog } from './DriftDialog'
+import { ImageCheckNote, NewerImageNotice } from './NewerImages'
 import { RevisionActions } from './revisionActions'
+import { useUnsaved } from '../../lib/unsaved'
 
 export const APP_TABS = ['overview', ...SUBTABS, 'images'] as const
 export type AppTab = (typeof APP_TABS)[number]
@@ -72,7 +75,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
   const [checking, setChecking] = useState(false)
   const [refs, setRefs] = useState<AppRefs | null>(null)
   const [revisions, setRevisions] = useState<RevisionView[] | null>(null)
-  const [images, setImages] = useState<{ revision: number; images: AppImage[] } | null>(null)
+  const [images, setImages] = useState<{ revision: number; images: AppImage[]; checks?: Record<string, ImageCheck> } | null>(null)
   const [imageRev, setImageRev] = useState<number | undefined>(undefined)
   const [diffFor, setDiffFor] = useState<number | null>(null)
   const [driftOpen, setDriftOpen] = useState(false)
@@ -179,6 +182,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
               </span>
               <span role="cell" className="rk-mono" style={{ padding: '7px 12px', borderBottom: '1px solid var(--line)' }}>
                 {im.tag || (im.digest ? '(digest)' : 'latest')}
+                <ImageCheckNote check={images.checks?.[im.image]} />
               </span>
               <span role="cell" className="rk-mono" style={{ padding: '7px 12px', borderBottom: '1px solid var(--line)', color: 'var(--fg3)' }}>
                 {im.registry || 'docker.io'}
@@ -341,6 +345,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
             )}
           </span>
         </div>
+        {!row.orphan && <NewerImageNotice images={row.newerImages} onImages={tab === 'images' ? undefined : () => onTab('images')} />}
         {row.orphan ? (
           <>
             <div className="rk-callout" data-tone="warn" data-testid="app-orphan">
@@ -416,6 +421,7 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
   const [values, setValues] = useState(app.values ?? '')
   const [params, setParams] = useState((app.params ?? []).join('\n'))
   const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>('saved')
+  useUnsaved(state === 'dirty', 'the values editor')
   const [error, setError] = useState('')
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const queue = useRef<Promise<void>>(Promise.resolve())
@@ -660,6 +666,7 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
   const [token, setToken] = useState('')
   const [createNs, setCreateNs] = useState(app?.createNamespace ?? false)
   const [state, setState] = useState<'saved' | 'dirty' | 'saving' | 'error'>(() => (draft ? 'error' : 'saved'))
+  useUnsaved(state === 'dirty', 'the release’s source')
   const [error, setError] = useState(() => (draft ? (draft.repo.trim() && draft.ref.trim() ? 'Not saved yet: press Save.' : 'Not saved: needs a repository and a branch or tag.') : ''))
   // The repository is looked over when its URL is typed (M-07): the chart's path and the default branch fill what is empty.
   const [look, setLook] = useState<{ repo: string; state: 'busy' | 'done' | 'error'; text: string } | null>(null)

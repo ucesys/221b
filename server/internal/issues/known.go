@@ -217,7 +217,8 @@ func (s *Service) saveKnown(ctx context.Context, by Person, from, id string, in 
 		var k *KnownIssue
 		before := KnownStatus("")
 		if id == "" {
-			st.known.Known = append(st.known.Known, KnownIssue{ID: fmt.Sprintf("KI-%d", st.known.Next), Status: KnownInvestigating, Kind: KindNormal, Source: SourceOperator, Created: now})
+			creator := by
+			st.known.Known = append(st.known.Known, KnownIssue{ID: fmt.Sprintf("KI-%d", st.known.Next), Status: KnownInvestigating, Kind: KindNormal, Source: SourceOperator, CreatedBy: &creator, Created: now})
 			st.known.Next++
 			k = &st.known.Known[len(st.known.Known)-1]
 		} else if k = st.knownIssue(id); k == nil {

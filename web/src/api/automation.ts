@@ -180,6 +180,21 @@ export interface AutomationFleet {
   params: FleetVariables
 }
 
+/** A Secret a secret parameter may name, as secret:namespace/name/key (FU-03): no value travels. */
+export interface SecretRef {
+  namespace: string
+  name: string
+  keys: string[]
+}
+
+export interface SecretRefs {
+  secrets: SecretRef[]
+  /** Why there are none: the chart turned reading Secrets off. */
+  off?: string
+  /** More Secrets than were listed. */
+  more?: boolean
+}
+
 export interface AutomationFleets {
   cluster: string
   off?: string
@@ -231,9 +246,12 @@ export interface Run {
   clusterName?: string
   fleet: string
   fleetName?: string
+  /** The run's own values: a value, or var:NAME for a binding to a variable (FU-04). */
   overrides?: Record<string, string>
   rollout: Rollout
   by: Who
+  /** Who approved the run's own values on production, and the request that waited (FU-05). */
+  valuesApproved?: { request: number; by: Who; at: string }
   state: RunState
   note?: string
   /** kubernetes for a script on the cluster. */
@@ -376,8 +394,15 @@ export const cancelRun = (id: number) => call<{ cancelled: boolean }>(`${BASE}/r
 export const fetchFleets = (cluster: string = LOCAL) => call<AutomationFleets>(apiPath('automation/fleets', cluster))
 export const saveFleetVariables = (cluster: string, fleet: string, p: FleetVariables & { reason?: string }) =>
   call<{ params: FleetVariables; change?: VariableChange }>(apiPath(`automation/fleets/${encodeURIComponent(fleet)}/variables`, cluster), { method: 'PUT', body: JSON.stringify(p) })
-export const startRun = (cluster: string, req: RunRequest) => call<Run>(apiPath('automation/runs', cluster), post(req))
-export const retryRun = (cluster: string, id: number) => call<Run>(apiPath(`automation/runs/${id}/retry`, cluster), post({}))
+/** A start answers the run, or, on production, the request its own values wait in for a second admin (FU-05). */
+export type RunStart = Run | { waiting: WaitingRun }
+export const isWaiting = (x: RunStart): x is { waiting: WaitingRun } => 'waiting' in x && !!x.waiting
+export const startRun = (cluster: string, req: RunRequest) => call<RunStart>(apiPath('automation/runs', cluster), post(req))
+/** Whether a run's own values would wait for approval, and what would stop it; nothing starts (FU-05). */
+export const weighRun = (cluster: string, req: RunRequest) => call<RunWeight>(apiPath('automation/runs/weigh', cluster), post(req), true)
+/** The Secrets a secret parameter may name (FU-03): by namespace, name and keys, never a value. */
+export const fetchSecretRefs = (cluster: string = LOCAL) => call<SecretRefs>(apiPath('automation/secret-refs', cluster), {}, true)
+export const retryRun = (cluster: string, id: number) => call<RunStart>(apiPath(`automation/runs/${id}/retry`, cluster), post({}))
 
 // ---------- configurations ----------
 
@@ -440,6 +465,46 @@ export interface VariableChange {
   overtaken?: string
 }
 
+/** What a run's own values weigh on production (FU-05): what they change, and whether that waits for a second admin. */
+export interface RunWeight {
+  needsApproval: boolean
+  changed: string[]
+  impact: ImpactItem[]
+  note?: string
+  /** Why the run would not start at all. */
+  refused?: string
+}
+
+/** A run on production whose own values wait for a second admin (FU-05). */
+export interface WaitingRun {
+  id: number
+  cluster: string
+  clusterName?: string
+  script: string
+  version: number
+  fleet: string
+  fleetName?: string
+  nodes?: string[]
+  targets: string[]
+  params: Record<string, string>
+  by: Who
+  at: string
+  changed: string[]
+  impact: ImpactItem[]
+  note?: string
+  state: 'waiting' | 'approved' | 'rejected'
+  decidedBy?: Who
+  decidedAt?: string
+  comment?: string
+  /** The run the approval started. */
+  run?: number
+}
+
+export const fetchWaitingRuns = (cluster: string) => call<{ waiting: WaitingRun[] }>(apiPath('automation/waiting-runs', cluster))
+/** Approves a waiting run, which starts it as whoever asked, or rejects it; whoever asked may only reject (withdraw) it. */
+export const decideWaitingRun = (cluster: string, id: number, decision: 'approve' | 'reject', comment = '') =>
+  call<{ waiting: WaitingRun; run?: Run }>(apiPath(`automation/waiting-runs/${id}/${decision}`, cluster), post(comment ? { comment } : {}))
+
 export const fetchVariableChanges = (cluster: string) => call<{ changes: VariableChange[] }>(apiPath('automation/variable-changes', cluster))
 export const decideVariableChange = (cluster: string, id: number, decision: 'approve' | 'reject', comment = '') => call<VariableChange>(apiPath(`automation/variable-changes/${id}/${decision}`, cluster), post(comment ? { comment } : {}))
 
@@ -462,7 +527,7 @@ export const draftScript = (request: string, text: string, signal: AbortSignal) 
 
 /** One thing that waits, or waited, for an approval; Approved by and on name whoever decided it. */
 export interface ApprovalRow {
-  kind: 'script' | 'change' | 'command' | 'admin'
+  kind: 'script' | 'change' | 'command' | 'admin' | 'run'
   state: 'pending' | 'approved' | 'rejected' | 'revoked'
   what: string
   cluster?: string
@@ -483,6 +548,8 @@ export interface ApprovalRow {
   own?: boolean
   /** Why a waiting change can only be rejected now. */
   overtaken?: string
+  /** The run an approved run request started. */
+  run?: number
 }
 
 /** What waits for this person, first, then what was decided, newest first. */
@@ -557,7 +624,28 @@ export const SCRIPT_TEMPLATES: {
   },
 ]
 
-export type Source = 'run' | 'node' | 'fleet'
+export type Source = 'run' | 'node' | 'fleet' | 'variable'
+
+// --- Run values bound to a variable (FU-04) ---
+
+/** A run value that binds a parameter to a variable by name: var:NAME gives each node its own value of NAME when the run starts. */
+export const BIND_PREFIX = 'var:'
+const BIND_RE = /^var:([A-Z_][A-Z0-9_]{0,63})$/
+const ESCAPED_RE = /^\\+var:/
+
+/** The variable a run value binds to, if it binds. */
+export function boundTo(v: string | undefined): string | undefined {
+  return v === undefined ? undefined : BIND_RE.exec(v)?.[1]
+}
+
+/** The run value that binds to a variable. */
+export const bindValue = (name: string) => `${BIND_PREFIX}${name}`
+
+/** The text a run value that binds nothing stands for: an escaped var: loses one backslash. */
+export const constantOf = (v: string) => (ESCAPED_RE.test(v) ? v.slice(1) : v)
+
+/** The run value for a text used as typed, which never binds: one that starts like a binding gets a backslash in front. */
+export const escapeConstant = (text: string) => (text.startsWith(BIND_PREFIX) || ESCAPED_RE.test(text) ? `\\${text}` : text)
 
 export interface ResolvedParam {
   name: string
@@ -569,11 +657,15 @@ export interface ResolvedParam {
   from?: string
   /** The fleets that both set it, which is an error. */
   conflict?: string[]
+  /** The variable the run binds it to (FU-04). */
+  bound?: string
 }
 
 /**
  * A script's parameters on one node, as the server resolves them (AU-06):
- * the run's value, then the node's, then the fleet's.
+ * the run's value, then the node's, then the fleet's. A run value that
+ * binds to a variable (var:NAME) is the node's own value of it (FU-04); a
+ * secret parameter's value is a reference, which never binds.
  */
 export function resolveParams(params: Param[] | null | undefined, fleets: AutomationFleet[], node: string, run: Record<string, string>): ResolvedParam[] {
   return (params ?? []).map((p) => {
@@ -583,7 +675,13 @@ export function resolveParams(params: Param[] | null | undefined, fleets: Automa
       desc: p.desc,
     }
     if (Object.prototype.hasOwnProperty.call(run, p.name)) {
-      out.value = run[p.name]
+      const v = run[p.name] ?? ''
+      const bound = p.secret ? undefined : boundTo(v)
+      if (bound) {
+        const got = inherited(fleets, node, bound)
+        return { ...out, ...got, bound, source: got.source ? 'variable' : undefined }
+      }
+      out.value = p.secret ? v : constantOf(v)
       out.source = 'run'
       return out
     }
@@ -636,7 +734,13 @@ export function paramClashes(params: Param[] | null | undefined, fleets: Automat
 
 export function missingParams(params: Param[] | null | undefined, fleets: AutomationFleet[], nodes: string[], run: Record<string, string>): string[] {
   const out: string[] = []
-  for (const n of nodes) for (const r of resolveParams(params, fleets, n, run)) if (r.required && r.value === undefined && !r.conflict) out.push(n ? `${n}: ${r.name}` : r.name)
+  for (const n of nodes)
+    for (const r of resolveParams(params, fleets, n, run)) {
+      if (r.conflict || !r.required) continue
+      // An empty string the run gives is no value for a required parameter (FU-07).
+      const name = r.value === undefined ? r.name : r.source === 'run' && r.value === '' ? `${r.name} (an empty string)` : ''
+      if (name) out.push(n ? `${n}: ${name}` : name)
+    }
   return out
 }
 

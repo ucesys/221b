@@ -271,9 +271,10 @@ func (w *window) listen(ctx context.Context) error {
 					Window string         `json:"window"`
 					Action string         `json:"action"`
 					Input  map[string]any `json:"input"`
+					Hold   bool           `json:"hold"`
 				}
 				if json.Unmarshal([]byte(d), &r) == nil && r.Window == evalWindow {
-					go w.answer(r.ID, r.Action, r.Input)
+					go w.answer(r.ID, r.Action, r.Input, r.Hold)
 				}
 			}
 		}
@@ -281,7 +282,17 @@ func (w *window) listen(ctx context.Context) error {
 	return nil
 }
 
-func (w *window) answer(id, action string, in map[string]any) {
+func (w *window) answer(id, action string, in map[string]any, hold bool) {
+	// A change is held until the answer is done (SR-18): the console
+	// window leaves the view as it is, and makes it when sent again.
+	if hold {
+		w.mu.Lock()
+		b, _ := json.Marshal(in)
+		w.actions = append(w.actions, fmt.Sprintf("%s %s held", action, b))
+		w.mu.Unlock()
+		_ = w.c.do(http.MethodPost, "/api/v1/sherlock/ui/"+id, map[string]any{"applied": false, "held": true}, nil)
+		return
+	}
 	w.mu.Lock()
 	label, err := w.view.apply(action, in)
 	b, _ := json.Marshal(in)

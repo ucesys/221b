@@ -271,6 +271,12 @@ func (s *Service) onCard(ctx context.Context, n int, c cards.Card) {
 		was = r.Status
 		if c.State == cards.Applied {
 			r.AppliedBy = &issues.AppliedChange{Card: c.ID, Title: clip(c.Title, 200), By: approver.Name, At: at}
+			// Who approved it is involved in the case (EM-05).
+			for _, d := range c.Approvals {
+				if d.Standing == "" && d.By.Kind == "" && d.By.Key != "" {
+					issues.AddApprovers(r, issues.Person{ID: d.By.Key, Name: d.By.Name})
+				}
+			}
 			if r.Status.Open() {
 				if r.Owner == nil && approver.Key != "" {
 					r.Owner = &issues.Person{ID: approver.Key, Name: approver.Name}
@@ -294,6 +300,7 @@ func (s *Service) onCard(ctx context.Context, n int, c cards.Card) {
 	if c.State != cards.Applied {
 		return
 	}
+	s.tell(n, mailChange{what: fmt.Sprintf("fix applied by the change %s, now %s", c.ID, shownStatus(r)), by: approver.Key, byName: approver.Name})
 	detail := fmt.Sprintf("case %s: fix applied by change %s (%s), approved by %s", cid, c.ID, clip(c.Title, 120), approver.Name)
 	switch {
 	case !r.Status.Open():

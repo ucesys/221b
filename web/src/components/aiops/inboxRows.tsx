@@ -9,8 +9,9 @@
 // number, every row who changed it last, and case rows can be picked for
 // one action on many (InboxPicks.tsx, BulkBar.tsx). The rows come from
 // their owners' APIs (useInbox.ts); nothing here reads one. Since CF-87 a
-// validation rule the housekeeping suggests is a SuperAdmin's row.
-import { actorName, actorText, lastChangeText, type Actor } from '../../api/actor'
+// validation rule the housekeeping suggests is a SuperAdmin's row. Since
+// FU-02 every row says who or what raised it, in the From column.
+import { actorKind, actorName, actorText, lastChangeText, type Actor, type ActorKind } from '../../api/actor'
 import type { ApprovalRow } from '../../api/automation'
 import { caseOf, sourceText, stateText, stateTone, type Proposal } from '../../api/cards'
 import { caseShownStatus, caseStatusText, caseStatusTone, caseTypeText, STAGE, type CaseBrief, type CaseStage, type ShownStatus } from '../../api/casework'
@@ -31,6 +32,24 @@ export type InboxCase = CaseBrief
 
 /** Who a row comes from, for the Source filter: people (a report, by hand, an alert, a request) or the agents. */
 export type Origin = 'people' | 'agents'
+
+/**
+ * Who or what raised a row (FU-02): a person (a report's reporter, who
+ * opened a case or asked for an approval), an agent (with the job it ran
+ * in), or the system's own source (an alert, the housekeeping, Confluence).
+ */
+export interface RowFrom {
+  name: string
+  kind: ActorKind
+  /** Through what: an agent's job, a chat. */
+  via?: string
+}
+
+/** A row's From in words: "Pat", "Auditor (agent) · nightly-audit", "Alert: KubePodCrashLooping". */
+export function fromText(f?: RowFrom): string {
+  if (!f) return ''
+  return `${f.name}${f.kind === 'agent' ? ' (agent)' : ''}${f.via ? ` · ${f.via}` : ''}`
+}
 
 /** One row of the Inbox: what it is, where its drawer opens, and what the columns show. */
 export interface InboxRow {
@@ -61,6 +80,8 @@ export interface InboxRow {
   assignee?: string
   /** The person's own: assigned to them, asked for by them, or from a job whose trigger they set. */
   mine: boolean
+  /** A case the person is involved in (EM-08), as the server works it out. */
+  involved?: boolean
   /** The SLA target that passed, in words (IN-05). */
   late?: string
   /** More words a search finds it by: its source, agent, check; a fixed case's RCA cause, how past RCAs are found (wave 6e). */
@@ -80,6 +101,8 @@ export interface InboxRow {
   /** Who changed it last, and when (CF-35). */
   lastBy?: Actor | string
   lastAt?: string
+  /** Who or what raised it (FU-02). */
+  from?: RowFrom
 }
 
 /** How the person is named: by the cases and jobs (a label), and by the issue service (an id). */
@@ -95,6 +118,35 @@ const LABEL = Object.fromEntries(INBOX_KINDS.map((k) => [k.id, k.label])) as Rec
 export const kindLabel = (k: InboxKind) => LABEL[k]
 
 // ---------- the rows, kind by kind ----------
+
+/**
+ * Who raised a case (FU-02): the alert it was opened from, the agent that
+ * found it with its job, or the person who reported or opened it.
+ */
+export function caseFrom(c: InboxCase): RowFrom | undefined {
+  if (c.source.kind === 'alert') return { name: c.source.alert ? `Alert: ${c.source.alert}` : 'An alert', kind: 'system' }
+  const name = actorName(c.createdBy)
+  if (c.agentFound) return { name: name && name !== 'an agent' ? name : 'An agent', kind: 'agent', via: c.source.job || undefined }
+  if (!name) return undefined
+  return { name, kind: actorKind(c.createdBy) || 'person' }
+}
+
+/** A known issue's source, or who wrote it (FU-02). */
+export function knownFrom(k: OpKnown): RowFrom | undefined {
+  switch (k.source) {
+    case 'agent':
+      return { name: 'An agent', kind: 'agent' }
+    case 'confluence':
+      return { name: 'Confluence', kind: 'system' }
+    case 'alert':
+      return { name: 'An alert', kind: 'system' }
+    case 'plannedChange':
+      return { name: 'A planned change', kind: 'system' }
+  }
+  const by = k.createdBy
+  if (!by || (!by.name && !by.id)) return undefined
+  return { name: by.name || by.id, kind: by.system ? 'system' : 'person' }
+}
 
 /** A case (IN-02): pending while New or In progress; late only where the SLA applies. */
 export function caseRow(c: InboxCase, ctx: RowContext): InboxRow {
@@ -120,6 +172,7 @@ export function caseRow(c: InboxCase, ctx: RowContext): InboxRow {
     assignee: c.assignee ? c.assignee.name || c.assignee.id : undefined,
     // Mine: assigned to the person, or opened by them while nobody has it.
     mine: c.assignee ? c.assignee.id === ctx.person : !!c.createdBy && actorName(c.createdBy) === ctx.me,
+    involved: !!c.involved,
     late,
     words: [c.agentFound ? 'agent' : c.source.kind, actorName(c.createdBy), c.key?.check ?? '', c.source.job ?? '', c.stage && STAGE[c.stage] ? STAGE[c.stage].tag.toLowerCase() : '', c.rcaCause ?? '', c.rcaId ?? ''],
     origin: c.agentFound ? 'agents' : 'people',
@@ -128,6 +181,7 @@ export function caseRow(c: InboxCase, ctx: RowContext): InboxRow {
     incident: c.incident || undefined,
     lastBy: c.lastBy,
     lastAt: c.lastAt ?? c.updated,
+    from: caseFrom(c),
   }
 }
 
@@ -156,10 +210,16 @@ export function proposalRow(p: Proposal): InboxRow {
     resolvesTitles: p.resolvesTitles,
     lastBy: p.lastBy ?? p.decidedBy ?? p.proposedBy,
     lastAt: p.lastAt ?? p.updated,
+    // The agent that proposed it, with its job, or the chat it came from.
+    from: {
+      name: actorName(p.proposedBy) || p.agentName || 'An agent',
+      kind: p.proposedBy ? actorKind(p.proposedBy) || 'agent' : 'agent',
+      via: p.source.job || (p.source.kind === 'chat' && p.source.setBy ? `chat with ${p.source.setBy}` : undefined),
+    },
   }
 }
 
-export const APPROVAL_KIND = { script: 'Script version', change: 'Variable change', command: 'Watson command', admin: 'Console change' } as const
+export const APPROVAL_KIND = { script: 'Script version', change: 'Variable change', command: 'Watson command', admin: 'Console change', run: 'Run with its own values' } as const
 
 export const APPROVAL_STATE = {
   pending: { text: 'Pending', tone: 'warn' },
@@ -177,6 +237,8 @@ function hash(text: string): string {
 
 /** An approval's id in the Inbox's address: its own, a script version's, or one made of what it is. */
 export function approvalId(r: ApprovalRow): string {
+  // A waiting run's number is its cluster's (FU-05).
+  if (r.kind === 'run') return `run-${r.cluster ?? ''}-${r.id ?? ''}`
   if (r.id) return r.id
   if (r.kind === 'script') return `script-${r.script ?? ''}-v${r.version ?? 0}`
   return `${r.kind}-${hash(`${r.cluster ?? ''}|${r.fleet ?? ''}|${r.what}|${r.requestedAt ?? ''}`)}`
@@ -205,6 +267,7 @@ export function approvalRow(r: ApprovalRow): InboxRow {
     origin: 'people',
     lastBy: pending ? r.requestedBy : (r.approvedBy ?? r.requestedBy),
     lastAt: pending ? r.requestedAt : (r.approvedAt ?? r.requestedAt),
+    from: r.requestedBy ? { name: r.requestedBy, kind: 'person' } : undefined,
   }
 }
 
@@ -225,6 +288,7 @@ export function knownRow(k: OpKnown, ctx: RowContext): InboxRow {
     mine: !!k.owner && k.owner.id === ctx.person,
     words: [k.source === 'agent' ? 'agent' : k.source],
     origin: k.source === 'agent' ? 'agents' : 'people',
+    from: knownFrom(k),
   }
 }
 
@@ -249,6 +313,8 @@ export function draftRunRow(r: DraftRun): InboxRow {
     mine: !!r.mine,
     words: [r.store, r.by, ...r.pages.map((p) => p.path)],
     origin: 'agents',
+    // Mycroft writes the wiki's changes; the sync that ran it says how.
+    from: { name: 'Mycroft', kind: 'agent', via: r.by || undefined },
   }
 }
 
@@ -279,6 +345,7 @@ export function pageRequestRow(r: PageRequest): InboxRow {
     origin: 'people',
     lastBy: pending ? r.name : (r.decidedName ?? r.name),
     lastAt: pending ? r.at : (r.decided ?? r.at),
+    from: r.name || r.by ? { name: r.name || r.by, kind: 'person' } : undefined,
   }
 }
 
@@ -299,6 +366,7 @@ export function conflictRow(c: ConfluenceConflict): InboxRow {
     mine: !!c.mine,
     words: ['confluence', c.kind],
     origin: 'people',
+    from: { name: 'Confluence', kind: 'system' },
   }
 }
 
@@ -320,6 +388,7 @@ export function suggestionRow(s: Suggestion): InboxRow {
     origin: 'agents',
     lastBy: 'Housekeeping',
     lastAt: s.created,
+    from: { name: 'Housekeeping', kind: 'system' },
   }
 }
 
@@ -339,12 +408,16 @@ export interface InboxFilter {
   type: string | null
   /** Cases in one status as shown, or null for every row (CF-67). */
   status?: ShownStatus | null
+  /** The rows one person, agent or source raised, by its name, or "" for every row (FU-02). */
+  from?: string
 }
 
 /** Whose a row is under Mine and Unassigned: the person's own; nobody's yet, or, for a kind with nobody to assign, what waits. */
 export function whoseMatch(r: InboxRow, w: Who): boolean {
   if (w === 'mine') return r.mine
   if (w === 'unassigned') return r.assignable ? !r.assignee : r.pending
+  // The cases the person is involved in (EM-08), the emails' link.
+  if (w === 'involved') return r.kind === 'case' && !!r.involved
   return true
 }
 
@@ -358,7 +431,8 @@ export function filterRows(rows: InboxRow[], f: InboxFilter): InboxRow[] {
       (!f.cluster || r.cluster === f.cluster) &&
       (!f.source || r.origin === f.source) &&
       (!f.type || (r.kind === 'case' && r.type === f.type)) &&
-      (!f.status || (r.kind === 'case' && r.shownStatus === f.status)),
+      (!f.status || (r.kind === 'case' && r.shownStatus === f.status)) &&
+      (!f.from || r.from?.name === f.from),
   )
 }
 
@@ -386,6 +460,8 @@ export function rowTerms(r: InboxRow): Term[] {
   if (r.type) t.push({ kind: 'detail', text: caseTypeText(r.type) })
   if (r.incident) t.push({ kind: 'name', text: r.incident })
   if (r.lastBy) t.push({ kind: 'owner', text: actorName(r.lastBy) })
+  if (r.from) t.push({ kind: 'owner', text: r.from.name })
+  if (r.from?.via) t.push({ kind: 'detail', text: r.from.via })
   for (const w of r.words ?? []) if (w) t.push({ kind: 'detail', text: w })
   return t
 }
@@ -563,6 +639,26 @@ export const INBOX_COLUMNS: ColumnDef<InboxRow>[] = [
       </span>
     ),
     export: (r) => [{ head: r.pending ? 'Waiting since' : 'Since', cell: r.since || null }],
+  },
+  {
+    // --- Who raised it (FU-02) ---
+    id: 'from',
+    label: 'From',
+    width: 'minmax(120px, 1fr)',
+    min: 120,
+    hint: 'Who or what raised it: a person (the reporter, who opened it or asked), an agent with its job, or an alert, the housekeeping or Confluence.',
+    sortValue: (r) => (r.from ? r.from.name.toLowerCase() : null),
+    cell: (r) =>
+      r.from ? (
+        <span style={clip} title={`${fromText(r.from)} (${r.from.kind})`} data-testid="inbox-row-from" data-from-kind={r.from.kind}>
+          {r.from.name}
+          {r.from.kind === 'agent' && <span style={{ color: 'var(--fg3)' }}> (agent)</span>}
+          {r.from.via && <span style={{ color: 'var(--fg3)' }}> · {r.from.via}</span>}
+        </span>
+      ) : (
+        dash
+      ),
+    export: (r) => [{ head: 'From', cell: fromText(r.from) || null }],
   },
   {
     id: 'assignee',

@@ -224,6 +224,11 @@ func (h *handler) list(w http.ResponseWriter, r *http.Request, c Caller) {
 	if truthy(q.Get("mine")) {
 		f.Owner = c.key()
 	}
+	// The cases the caller is involved in (EM-08): ?involved=me, or the
+	// Inbox's ?who=involved.
+	if v := q.Get("involved"); v == "me" || truthy(v) || q.Get("who") == "involved" {
+		f.Involved = true
+	}
 	list, err := h.s.List(r.Context(), c, f)
 	if err != nil {
 		failErr(w, err)

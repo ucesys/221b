@@ -1,5 +1,5 @@
 // The Run dialog: which version, which nodes, how, and with what values.
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import {
   allows,
   runProfilesFor,
@@ -19,8 +19,18 @@ import {
   rolloutHelp,
   resolveParams,
   fetchProfiles,
+  fetchRuns,
+  fetchSecretRefs,
   type RunProfile,
+  type SecretRefs,
   startRun,
+  weighRun,
+  isWaiting,
+  bindValue,
+  escapeConstant,
+  type RunRequest,
+  type RunWeight,
+  type WaitingRun,
   type AutomationFleets,
   type Param,
   type Run,
@@ -32,9 +42,23 @@ import { Seg } from './Seg'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { Drawer } from '../Drawer'
 import { ScrollBox } from '../Table'
+import { ParamInput } from './ParamInput'
+import { chipDetail, chipTitle, hiddenVariable, paramTypeText, PARAM_KINDS, paramKind, secretSuggestions, setInScope, uniformValue, variableSpread, variableSuggestions } from './paramSuggest'
+import { VariableChip } from './ValueTag'
 import { ROLLOUTS, errText, Field } from './parts'
 
 // ---------- running ----------
+
+// FU-04, FU-06: a variable parameter whose name a fleet or a node sets for
+// the run's nodes starts bound to that variable, shown as its chip: that is
+// what each node inherits anyway, so nothing is sent and each node keeps
+// its own. Picking another variable binds the parameter to it (var:NAME),
+// so each node gets its own value of that one; anything typed is a
+// constant, the same on every node, and never binds. Only a choice the
+// person made is sent, and a change of nodes never undoes it. FU-05: on
+// production the run's own values are weighed as a change of the fleet's
+// values, and the dialog says first whether they will wait for a second
+// admin.
 
 export function RunDialog({
   cluster,
@@ -45,6 +69,7 @@ export function RunDialog({
   maxTimeout,
   onClose,
   onStarted,
+  onWaiting,
 }: {
   cluster: string
   script: string
@@ -54,6 +79,8 @@ export function RunDialog({
   maxTimeout: number
   onClose: () => void
   onStarted: (r: Run) => void
+  /** On production: the run's own values wait for a second admin (FU-05). */
+  onWaiting?: (w: WaitingRun) => void
 }) {
   const [sc, setSc] = useState<Script | null>(null)
   const [fleets, setFleets] = useState<AutomationFleets | null>(null)
@@ -68,13 +95,22 @@ export function RunDialog({
   const [fleetId, setFleetId] = useState('') // CUSTOM_NODES: picked by hand
   const [listed, setListed] = useState('') // the fleet whose nodes the dialog lists
   const [picked, setPicked] = useState<string[]>([])
-  const [overrides, setOverrides] = useState<Record<string, string>>({})
+  // What was typed in a box, untouched boxes aside ('' once a chip is
+  // cleared); and the variables picked.
+  const [typed, setTyped] = useState<Record<string, string>>({})
+  const [bound, setBound] = useState<Record<string, string>>({})
+  // The box a cleared chip leaves, which takes the focus.
+  const [cleared, setCleared] = useState('')
+  const [weight, setWeight] = useState<RunWeight | null>(null)
   const [mode, setMode] = useState<RolloutMode>('canary')
   const [size, setSize] = useState(5)
   const [stopAfter, setStopAfter] = useState(1)
   const [timeout, setTimeout_] = useState(10)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
+  // --- FU-03: what a parameter is offered while it is typed ---
+  const [pastRuns, setPastRuns] = useState<Run[]>([])
+  const [secretRefs, setSecretRefs] = useState<{ refs?: SecretRefs; error?: string } | null>(null)
 
   useEffect(() => {
     let gone = false
@@ -126,10 +162,52 @@ export function RunDialog({
     setFleetId(fleetOf([...(listedFleet ? [listedFleet] : []), ...(fleets?.fleets ?? [])], next))
   }
   const params = version?.header.params ?? []
-  // On production a real run takes its values from the fleets alone: a
-  // value of its own would skip the approval a change needs there.
-  const fleetValuesOnly = fleets?.production !== false && !dryRun
-  const runValues = fleetValuesOnly ? {} : Object.fromEntries(Object.entries(overrides).filter(([, v]) => v !== ''))
+  const anySecret = params.some((p) => p.secret)
+  // This script's earlier runs, for the values they were given; nothing when they cannot be read.
+  useEffect(() => {
+    let gone = false
+    fetchRuns(true).then(
+      (rs) => !gone && setPastRuns(rs),
+      () => undefined,
+    )
+    return () => {
+      gone = true
+    }
+  }, [script])
+  // The Secrets a secret parameter may name, once the version has one.
+  useEffect(() => {
+    if (!anySecret) return
+    let gone = false
+    fetchSecretRefs(cluster).then(
+      (refs) => !gone && setSecretRefs({ refs }),
+      (e: unknown) => !gone && setSecretRefs({ error: errText(e) }),
+    )
+    return () => {
+      gone = true
+    }
+  }, [anySecret, cluster])
+  // The nodes a value is worked out for: a script on the cluster gets All nodes' values.
+  const scope = onCluster ? [''] : nodes
+  const prefill = (p: Param) => (p.secret ? undefined : uniformValue(fleets?.fleets ?? [], scope, p.name))
+  // The variable a parameter is bound to: the one picked, else its own
+  // name's when a node of the run has it and nothing was typed (FU-06).
+  const bindingOf = (p: Param): { variable: string; auto: boolean } | undefined => {
+    if (p.secret) return undefined
+    const b = bound[p.name]
+    if (b) return { variable: b, auto: b === p.name }
+    return typed[p.name] === undefined && setInScope(fleets?.fleets ?? [], scope, p.name) ? { variable: p.name, auto: true } : undefined
+  }
+  // The run's own values: a binding to another variable, or what was
+  // typed, an empty box once touched being the empty string (FU-07). A binding to the parameter's own name is what each node
+  // inherits, so it is not sent, and on production nothing is weighed.
+  const runValues: Record<string, string> = {}
+  for (const p of params) {
+    const b = bound[p.name]
+    const t = typed[p.name]
+    if (b && !p.secret) {
+      if (b !== p.name) runValues[p.name] = bindValue(b)
+    } else if (t !== undefined && (t !== '' || !p.secret)) runValues[p.name] = p.secret ? t : escapeConstant(t)
+  }
   // One name per opening of the dialog: a second click, or a retry of a
   // request that did reach the server, starts no second run.
   const [request] = useState(() => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`)
@@ -157,38 +235,68 @@ export function RunDialog({
   if (nodes.length === 0 && !onCluster) blocked.push('No paired node is picked.')
   if (clashes.length) blocked.push(`Defined on more than one fleet: ${clashes.slice(0, 4).join('; ')}${clashes.length > 4 ? '…' : ''}. Keep it on one fleet, or set it on the node or below.`)
   if (missing.length) blocked.push(`Required parameters have no value: ${missing.slice(0, 4).join('; ')}${missing.length > 4 ? '…' : ''}`)
+  for (const p of params) {
+    const b = bound[p.name]
+    if (b && !p.secret && scope.length && variableSpread(fleets?.fleets ?? [], scope, b).set === 0) blocked.push(`${p.name} is bound to variable ${b}, which no node of this run has.`)
+  }
   if (mode === 'size' && size < 1) blocked.push('A batch has at least one node.')
 
   // A real run asks first; a dry run changes nothing.
   const [confirming, setConfirming] = useState(false)
+  const request_: RunRequest | null =
+    fleet && version
+      ? {
+          script,
+          version: version.n,
+          dryRun,
+          fleet: onCluster ? '_cluster' : fleet.id,
+          nodes: onCluster ? undefined : nodes,
+          config: profile?.id,
+          hooks: onCluster
+            ? undefined
+            : {
+                before: [...(drain ? ['drain'] : []), ...(hookBefore ? [`script:${hookBefore}`] : [])],
+                after: [...(hookAfter ? [`script:${hookAfter}`] : []), ...(drain ? ['uncordon'] : [])],
+              },
+          params: Object.keys(runValues).length ? runValues : undefined,
+          request: `${request}-${dryRun ? 'dry' : 'run'}`,
+          rollout: {
+            mode,
+            size: mode === 'all' ? undefined : size,
+            stopAfter,
+            timeoutMinutes: timeout,
+          },
+        }
+      : null
+  // FU-05: on production, what the run's own values weigh, asked again a
+  // moment after they change; nothing starts.
+  const weighing = !!request_ && fleets?.production === true && !dryRun && Object.keys(runValues).length > 0
+  const weighBody = weighing ? JSON.stringify({ ...request_, request: undefined }) : ''
+  useEffect(() => {
+    if (!weighBody) return
+    let gone = false
+    const t = setTimeout(() => {
+      weighRun(cluster, JSON.parse(weighBody) as RunRequest).then(
+        (w) => !gone && setWeight(w),
+        (e: unknown) => !gone && setWeight({ needsApproval: false, changed: [], impact: [], refused: errText(e) }),
+      )
+    }, 400)
+    return () => {
+      gone = true
+      clearTimeout(t)
+    }
+  }, [weighBody, cluster])
+  const shownWeight = weighing ? weight : null
   const start = async () => {
-    if (!fleet || !version) return
+    if (!request_) return
     setBusy(true)
     setErr('')
     try {
-      const r = await startRun(cluster, {
-        script,
-        version: version.n,
-        dryRun,
-        fleet: onCluster ? '_cluster' : fleet.id,
-        nodes: onCluster ? undefined : nodes,
-        config: profile?.id,
-        hooks: onCluster
-          ? undefined
-          : {
-              before: [...(drain ? ['drain'] : []), ...(hookBefore ? [`script:${hookBefore}`] : [])],
-              after: [...(hookAfter ? [`script:${hookAfter}`] : []), ...(drain ? ['uncordon'] : [])],
-            },
-        params: Object.keys(runValues).length ? runValues : undefined,
-        request: `${request}-${dryRun ? 'dry' : 'run'}`,
-        rollout: {
-          mode,
-          size: mode === 'all' ? undefined : size,
-          stopAfter,
-          timeoutMinutes: timeout,
-        },
-      })
-      onStarted(r)
+      const r = await startRun(cluster, request_)
+      if (isWaiting(r)) {
+        if (onWaiting) onWaiting(r.waiting)
+        else onClose()
+      } else onStarted(r)
     } catch (e) {
       setErr(errText(e))
     } finally {
@@ -223,6 +331,7 @@ export function RunDialog({
                 {err}
               </p>
             )}
+            {shownWeight && <WeightNote w={shownWeight} />}
             {blocked.length > 0 && (
               <ul className="tb-hint" style={{ margin: 0, paddingLeft: 18 }} data-testid="run-blocked">
                 {blocked.map((b) => (
@@ -238,7 +347,7 @@ export function RunDialog({
                 Cancel
               </button>
               <button className="rk-btn" data-on onClick={() => (dryRun ? void start() : setConfirming(true))} disabled={busy || blocked.length > 0} data-testid="run-start">
-                {busy ? 'Starting…' : dryRun ? 'Start dry run' : `Run v${version?.n ?? ''}`}
+                {busy ? 'Starting…' : dryRun ? 'Start dry run' : shownWeight?.needsApproval ? 'Ask for approval' : `Run v${version?.n ?? ''}`}
               </button>
             </div>
           </div>
@@ -305,7 +414,7 @@ export function RunDialog({
             )}
             {fleets.production && !dryRun && (
               <p className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }} data-testid="run-production">
-                This is a production cluster: only an approved version runs.
+                This is a production cluster: only an approved version runs, and its own values are weighed as a change of the fleet’s values: if one needs approval, the run waits for another admin.
               </p>
             )}
             {anyVersion && !dryRun && version?.state !== 'approved' && version && (
@@ -413,9 +522,9 @@ export function RunDialog({
                   Parameters
                 </h3>
                 <p className="tb-hint" style={{ margin: '0 0 6px' }} data-testid="run-params-hint">
-                  {fleetValuesOnly
-                    ? `On production a run takes each node’s values from its fleets; change them on the Variables page, where a change that matters waits for approval${first ? `. Shown for ${first}` : ''}.`
-                    : `A value here is this run’s and wins over the node’s and the fleet’s. Left empty, each node takes its own value, then the fleet’s${first ? `; shown for ${first}` : ''}.`}
+                  A parameter starts bound to the variable of its name, which each node keeps as it inherits it. Clear it and type a constant, the same on every node, or pick another variable so that each node gets its own value of that
+                  one. A box left empty says what it sends: <em>empty string</em> sets the parameter to "" on every node; <em>not set</em> gives the script no value at all.
+                  {fleets.production && !dryRun ? ' On production, a value that matters waits for another admin’s approval.' : ''}
                 </p>
                 <table className="tb-table" data-testid="run-params">
                   <tbody>
@@ -424,37 +533,85 @@ export function RunDialog({
                         <td className="rk-mono" style={{ whiteSpace: 'nowrap' }}>
                           {p.name}
                           {p.required && <span style={{ color: 'var(--err)' }}> *</span>}
-                          {p.desc && (
-                            <div
-                              style={{
-                                color: 'var(--fg3)',
-                                fontSize: 12,
-                                fontFamily: 'inherit',
-                              }}
-                            >
-                              {p.desc}
-                            </div>
-                          )}
+                          {/* FU-03: what kind of parameter it is, then what the script says of it. */}
+                          <div
+                            id={`run-param-type-${p.name}`}
+                            title={PARAM_KINDS[paramKind({ secret: secretOf(params, p.name) })].help}
+                            style={{
+                              color: 'var(--fg3)',
+                              fontSize: 12,
+                              fontFamily: 'inherit',
+                              whiteSpace: 'normal',
+                            }}
+                            data-testid="run-param-type"
+                            data-kind={paramKind({ secret: secretOf(params, p.name) })}
+                          >
+                            {paramTypeText({ ...p, secret: secretOf(params, p.name) })}
+                          </div>
                         </td>
                         <td style={{ width: '50%' }}>
-                          <span className="rk-field">
-                            <input
-                              value={fleetValuesOnly ? '' : (overrides[p.name] ?? '')}
-                              disabled={fleetValuesOnly}
-                              onChange={(e) =>
-                                setOverrides({
-                                  ...overrides,
-                                  [p.name]: e.target.value,
-                                })
-                              }
-                              placeholder={secretOf(params, p.name) && !p.value ? 'secret:namespace/name/key' : p.source && p.source !== 'run' ? p.value : p.required ? 'required' : 'empty'}
-                              aria-label={p.name}
-                              data-testid={`run-param-${p.name}`}
-                            />
-                          </span>
+                          {(() => {
+                            const secret = secretOf(params, p.name)
+                            const b = bindingOf(paramOf(params, p.name))
+                            if (b)
+                              return (
+                                <Binding
+                                  name={p.name}
+                                  variable={b.variable}
+                                  auto={b.auto}
+                                  fleets={fleets.fleets}
+                                  nodes={scope}
+                                  required={p.required}
+                                  onClear={() => {
+                                    setBound(without(bound, p.name))
+                                    setTyped({ ...typed, [p.name]: '' })
+                                    setCleared(p.name)
+                                  }}
+                                />
+                              )
+                            return (
+                              <ParamInput
+                                value={typed[p.name] ?? ''}
+                                onChange={(v) => setTyped({ ...typed, [p.name]: v })}
+                                onPick={(sg) => {
+                                  if (sg.bind) {
+                                    setBound({ ...bound, [p.name]: sg.bind })
+                                    setTyped(without(typed, p.name))
+                                  } else setTyped({ ...typed, [p.name]: sg.value })
+                                }}
+                                suggest={(text) => (secret ? secretSuggestions(p.name, fleets.fleets, first ?? '', secretRefs?.refs?.secrets ?? [], text) : variableSuggestions(p.name, fleets.fleets, scope, pastRuns, script, text))}
+                                status={secret ? secretStatus(secretRefs) : undefined}
+                                placeholder={secret && !p.value ? 'secret:namespace/name/key' : secret && p.source && p.source !== 'run' ? p.value : !secret ? 'a constant for every node, or a variable' : p.required ? 'required' : 'empty'}
+                                badge={secret ? 'secret ref' : 'constant'}
+                                empty={
+                                  secret
+                                    ? undefined
+                                    : typed[p.name] === ''
+                                      ? {
+                                          kind: 'empty',
+                                          onClear: () => setTyped(without(typed, p.name)),
+                                          clearLabel: setInScope(fleets.fleets, scope, p.name) ? `Clear the empty string: back to variable ${p.name}` : `Clear the empty string: ${p.name} not set`,
+                                        }
+                                      : { kind: 'unset' }
+                                }
+                                focusOnMount={cleared === p.name}
+                                label={p.name}
+                                describedBy={`run-param-type-${p.name}`}
+                                testId={`run-param-${p.name}`}
+                              />
+                            )
+                          })()}
                         </td>
-                        <td style={{ color: 'var(--fg3)', whiteSpace: 'nowrap' }}>
-                          {p.conflict ? (
+                        <td style={{ color: 'var(--fg3)', whiteSpace: 'nowrap' }} data-testid={`run-param-${p.name}-source`}>
+                          {bound[p.name] && bound[p.name] !== p.name && !secretOf(params, p.name) ? (
+                            ''
+                          ) : runValues[p.name] !== undefined && !secretOf(params, p.name) ? (
+                            'this run’s, on every node'
+                          ) : !secretOf(params, p.name) && variableSpread(fleets.fleets, scope, p.name).values.length > 1 ? (
+                            <span data-testid="run-param-varies">varies by node ({variableSpread(fleets.fleets, scope, p.name).values.length} values)</span>
+                          ) : !secretOf(params, p.name) && prefill(paramOf(params, p.name)) !== undefined ? (
+                            `${scope.length > 1 ? `same on all ${scope.length} nodes, ` : ''}from ${p.from ?? `the ${p.source}`}`
+                          ) : p.conflict ? (
                             <span style={{ color: 'var(--err)' }} data-testid="run-param-conflict">
                               on {p.conflict.join(' and ')}
                             </span>
@@ -557,6 +714,7 @@ export function RunDialog({
             {onCluster ? 'It runs on the cluster' : `It runs on ${nodes.length} ${nodes.length === 1 ? 'node' : 'nodes'} of ${fleet?.name ?? 'the fleet'}, ${plan.length} ${plan.length === 1 ? 'batch' : 'batches'}`}
             {profile ? `, as ${profile.name}` : ''}. This is not a dry run: it changes what the script changes.
             {version.state === 'approved' ? '' : ' This version is not approved, so it runs only off production.'}
+            {shownWeight?.needsApproval ? ` Its own values (${shownWeight.changed.join(', ')}) need another admin’s approval: the run waits in AIOps › Inbox and starts, as you, when someone else approves it.` : ''}
           </p>
         </ConfirmDialog>
       )}
@@ -565,6 +723,102 @@ export function RunDialog({
 }
 
 export const secretOf = (params: Param[], name: string) => params.some((p) => p.name === name && p.secret)
+
+const paramOf = (params: Param[], name: string): Param => params.find((p) => p.name === name) ?? { name, required: false }
+
+const without = (m: Record<string, string>, k: string) => Object.fromEntries(Object.entries(m).filter(([x]) => x !== k))
+
+/**
+ * A parameter bound to a variable (FU-04, FU-06): a chip inside the field,
+ * "variable NAME · 3 values" (its one value when every node has the same,
+ * hidden for a sensitive or secret-looking variable), whose tooltip gives
+ * each node's value; ✕ clears it and leaves an empty box for a constant.
+ * Below it the nodes that have no value of it, which the run leaves
+ * without one (and refuses, for a required parameter). Bound to its own
+ * name (auto), it is what each node inherits, and nothing is sent.
+ */
+export function Binding({ name, variable, auto, fleets, nodes, required, onClear }: { name: string; variable: string; auto?: boolean; fleets: AutomationFleets['fleets']; nodes: string[]; required: boolean; onClear: () => void }) {
+  const spread = variableSpread(fleets, nodes, variable)
+  const hidden = hiddenVariable(fleets, variable)
+  const none = nodes.length > 0 && spread.set === 0 && spread.conflict.length === 0
+  const textId = useId()
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5 }}>
+      <div
+        className="rk-field"
+        role="group"
+        aria-label={name}
+        aria-describedby={`${textId} run-param-type-${name}`}
+        style={{ width: '100%', boxSizing: 'border-box' }}
+        data-testid={`run-param-${name}-binding`}
+        data-variable={variable}
+        data-auto={auto ? 'true' : 'false'}
+      >
+        <VariableChip
+          variable={variable}
+          detail={chipDetail(spread, hidden)}
+          title={chipTitle(fleets, nodes, variable, hidden)}
+          textId={textId}
+          onClear={onClear}
+          clearLabel={`Clear variable ${variable} from ${name}, to type a constant`}
+          detailTestId={`run-param-${name}-spread`}
+          clearTestId={`run-param-${name}-unbind`}
+        />
+      </div>
+      {none ? (
+        <span style={{ color: 'var(--err)' }} role="alert" data-testid={`run-param-${name}-none`}>
+          No node of this run has {variable}.
+        </span>
+      ) : (
+        spread.unset.length > 0 && (
+          <span style={{ color: required ? 'var(--err)' : 'var(--warn)' }} data-testid={`run-param-${name}-unset`}>
+            Not set on {spread.unset.slice(0, 5).join(', ')}
+            {spread.unset.length > 5 ? ` and ${spread.unset.length - 5} more` : ''}
+            {required ? ': they have no value for this required parameter.' : ': the script gets no value there.'}
+          </span>
+        )
+      )}
+      {spread.conflict.length > 0 && (
+        <span style={{ color: 'var(--err)' }} data-testid={`run-param-${name}-conflict`}>
+          Set on two fleets for {spread.conflict.slice(0, 5).join(', ')}
+          {spread.conflict.length > 5 ? ` and ${spread.conflict.length - 5} more` : ''}.
+        </span>
+      )}
+    </div>
+  )
+}
+
+/** What a run's own values weigh on production, before Run is pressed (FU-05). */
+function WeightNote({ w }: { w: RunWeight }) {
+  if (w.refused)
+    return (
+      <p className="tb-hint" style={{ margin: 0 }} data-testid="run-weigh" data-needs="refused">
+        The console would not start this run now: {w.refused}
+      </p>
+    )
+  if (w.needsApproval) {
+    const why = w.impact.filter((i) => i.decision === 'approval').map((i) => i.why)
+    return (
+      <p className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }} data-testid="run-weigh" data-needs="approval">
+        These values need another admin’s approval before the run starts: {w.changed.join(', ')} ({why.join('; ')}). Asking for approval keeps the run waiting in AIOps › Inbox; it starts, as you, once someone else approves it.
+      </p>
+    )
+  }
+  if (w.changed.length === 0) return null
+  return (
+    <p className="tb-hint" style={{ margin: 0 }} data-testid="run-weigh" data-needs="none">
+      These values need no approval: {w.changed.join(', ')}. The run starts at once.{w.note ? ` ${w.note}` : ''}
+    </p>
+  )
+}
+
+/** What a secret parameter's list says when it offers nothing (FU-03): still listing, why none can be listed, or that none match. */
+export function secretStatus(s: { refs?: SecretRefs; error?: string } | null): string {
+  if (!s) return 'Listing the Secrets you may read…'
+  if (s.error) return `The Secrets could not be listed: ${s.error.replace(/\.$/, '')}. Type secret:namespace/name/key.`
+  if (s.refs?.off) return `${s.refs.off}. Type secret:namespace/name/key.`
+  return 'No Secret you may read matches. Type secret:namespace/name/key.'
+}
 
 /** One of the numbers beside the rollout, its label left of its box. */
 export function RolloutInput({ label, hint, min, max, value, onChange, testId }: { label: string; hint?: string; min: number; max?: number; value: number; onChange: (v: number) => void; testId: string }) {

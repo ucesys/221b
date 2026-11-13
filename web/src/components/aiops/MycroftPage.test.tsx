@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { CasesAccess } from '../../lib/cases'
 import { forgetSharedForTests } from '../../lib/cases'
@@ -12,6 +12,7 @@ vi.mock('../../api/knowledge', async (original) => ({
   fetchPages: vi.fn(() => Promise.resolve({ pages: [], connected: true })),
   fetchDrafts: vi.fn(() => Promise.resolve({ runs: [] })),
   searchKnowledge: vi.fn(() => Promise.resolve({ hits: [] })),
+  findInMycroft: vi.fn(() => Promise.resolve({ hits: [{ kind: 'fix', id: 'F-2', title: 'Raise the memory', status: 'active', text: 'OOMKilled', score: 1 }], counts: { fix: 1 }, kinds: ['page', 'fix'] })),
 }))
 vi.mock('../../api/issues', async (original) => ({
   ...(await original<typeof import('../../api/issues')>()),
@@ -106,5 +107,17 @@ describe('AIOps › Mycroft: one column and one page layout for every sub-tab (C
         .filter((t) => t?.startsWith('mycroft-sub-')),
     ).toEqual(['mycroft-sub-wiki', 'mycroft-sub-known', 'mycroft-sub-exceptions', 'mycroft-sub-fixes'])
     expect(screen.queryByTestId('rules-page')).toBeNull()
+  })
+
+  it('searches every sub-tab from one box beside them: the results take the sub-tab’s place until a sub-tab is picked (KN-35)', async () => {
+    render(<MycroftTab route={parseHash('#/aiops/mycroft/known')} access={access} />)
+    expect(await screen.findByTestId('cases-known')).toBeTruthy()
+    fireEvent.change(screen.getByTestId('mycroft-search'), { target: { value: 'memory' } })
+    expect((await screen.findByTestId('mycroft-search-hit')).textContent).toContain('F-2')
+    expect(screen.queryByTestId('cases-known')).toBeNull()
+    expect(screen.getByTestId('mycroft-sub-known').getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(screen.getByTestId('mycroft-sub-known'))
+    expect(await screen.findByTestId('cases-known')).toBeTruthy()
+    expect((screen.getByTestId('mycroft-search') as HTMLInputElement).value).toBe('')
   })
 })

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchNotifications, saveNotifications, testChannel, type ChannelInput, type ChannelKind, type Notifications } from '../api/cards'
 import { fmtTs } from '../lib/format'
+import { Unsaved } from '../lib/unsaved'
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -86,6 +87,7 @@ export function NotificationChannels() {
   }
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Notifications" data-testid="notify-channels">
+      <Unsaved when={changed} what="Settings › Watson’s notification channels" />
       <h3 className="rk-h">Notifications of proposed changes</h3>
       <p className="rk-fhint" style={{ margin: 0 }}>
         A proposed change that waits for approval is announced here as well as on the gear: its title, cluster, agent and a link, never its reasoning, evidence, commands or any output. Each address is kept{' '}

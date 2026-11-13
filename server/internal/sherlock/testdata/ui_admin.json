@@ -1,0 +1,97 @@
+{
+  "about": "The pages view_admin opens (SR-12): the browser's ADMIN_VIEW_PAGES must equal this, and the action's description names each page, the ones that take an item and the ones that take a search (uiControl.test.ts, TestViewAdminDescribesThePagesTheBrowserOpens).",
+  "pages": {
+    "home": {
+      "item": false,
+      "search": false
+    },
+    "connection": {
+      "item": false,
+      "search": false
+    },
+    "roles": {
+      "item": true,
+      "search": true
+    },
+    "permissions": {
+      "item": true,
+      "search": true
+    },
+    "users": {
+      "item": true,
+      "search": true
+    },
+    "toolbox": {
+      "item": false,
+      "search": false
+    },
+    "sessions": {
+      "item": false,
+      "search": false
+    },
+    "audit-log": {
+      "item": false,
+      "search": false
+    },
+    "backup": {
+      "item": false,
+      "search": false
+    },
+    "getting-started": {
+      "item": false,
+      "search": false
+    },
+    "general": {
+      "item": false,
+      "search": false
+    },
+    "providers": {
+      "item": true,
+      "search": false
+    },
+    "agents": {
+      "item": true,
+      "search": false
+    },
+    "knowledge": {
+      "item": false,
+      "search": false
+    },
+    "watson": {
+      "item": false,
+      "search": false
+    },
+    "notification-channels": {
+      "item": false,
+      "search": false
+    },
+    "applications": {
+      "item": false,
+      "search": false
+    },
+    "issues": {
+      "item": false,
+      "search": false
+    },
+    "confluence": {
+      "item": false,
+      "search": false
+    },
+    "sla": {
+      "item": false,
+      "search": false
+    },
+    "case-settings": {
+      "item": false,
+      "search": false
+    },
+    "email": {
+      "item": false,
+      "search": false
+    },
+    "jobs-settings": {
+      "item": false,
+      "search": false
+    }
+  }
+}

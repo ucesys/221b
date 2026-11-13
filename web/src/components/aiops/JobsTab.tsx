@@ -11,6 +11,7 @@ import { jobHref, pathId, runHref, scheduleHref } from './jobsRoute'
 import { PRIORITIES, PRIORITY } from './parts'
 import { RunDetail } from './RunDetail'
 import { runSummary, StatusPill } from './RunsTab'
+import { useUnsaved } from '../../lib/unsaved'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -367,6 +368,7 @@ function JobPanel({ job, view, onSaved, onRemoved, onAdded, onToast }: { job: Jo
   const costs = useShowCosts()
   const may = view.mayEdit
   const changed = JSON.stringify(draft) !== JSON.stringify(draftOf(job, zone))
+  useUnsaved(changed, 'the job drawer')
   const act = async (what: string, f: () => Promise<unknown>) => {
     setBusy(true)
     setError('')

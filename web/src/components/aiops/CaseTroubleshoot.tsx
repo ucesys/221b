@@ -5,11 +5,12 @@
 // it is deleted when the case closes. Watson runs on the case's cluster with
 // every command sent from the case ("case:C-12"), which logs it; Run in
 // Watson, on Sherlock's commands and on the case's suggested fix, hands the
-// command to this Watson as the dock's Send to Watson does: a card that asks
-// before it runs, run as the person, with all of Watson's rules. The log
+// command to this Watson as the dock's Send to Watson does: a change waits on
+// a card that asks before it runs, a read runs at once while Auto-run reads
+// is on, run as the person, with all of Watson's rules. The log
 // itself is on the case's side (CaseCommands).
 import { useEffect, useRef, useState } from 'react'
-import { askCaseSherlock, stopCaseSherlock, useCaseSherlock } from '../../api/caseSherlock'
+import { askCaseSherlock, caseSherlockBase, stopCaseSherlock, useCaseSherlock } from '../../api/caseSherlock'
 import { caseFrom, type Case, type CaseCommand } from '../../api/casework'
 import { sendToWatson, useWatson, WatsonError } from '../../api/watson'
 import { fmtTs } from '../../lib/format'
@@ -135,7 +136,8 @@ function Panes({
     ran.current?.()
   }, [run, hasW])
   const shared: SharedChat = {
-    ask: (q) => askCaseSherlock(c.id, q),
+    ask: (q, ctx) => askCaseSherlock(c.id, q, ctx),
+    scope: caseSherlockBase(c.id),
     stop: () => stopCaseSherlock(c.id),
     sub: `The conversation on ${c.id}, shared by everyone who works it`,
     empty: `Ask Sherlock about ${c.id} on ${name}. Sherlock starts from the case, its analysis and the cases like it, and reads the cluster as you, with your rights. Everyone who works the case sees this conversation and adds to it; it is deleted when the case closes.`,

@@ -5,12 +5,14 @@
 // where every other kind is reviewed. Approving still takes the approval
 // permission (a SuperAdmin), as the API checks.
 import { useEffect, useState } from 'react'
-import { decideRequest, fetchScript, type ApprovalRow, type Script } from '../../api/automation'
+import { boundTo, constantOf, decideRequest, decideWaitingRun, fetchScript, fetchWaitingRuns, type ApprovalRow, type Script, type WaitingRun } from '../../api/automation'
 import { fmtTs, localTimes } from '../../lib/format'
 import { CallError } from '../../api/call'
 import { clusterHref, FIRST_TAB, href } from '../../lib/router'
 import { VersionPane } from '../AutomationTab'
 import { DecideDialog } from '../automation/DecideDialog'
+import { ImpactList } from '../automation/VariableChanges'
+import { ConstantBadge, EmptyChip, VariableChip } from '../automation/ValueTag'
 import { Drawer } from '../Drawer'
 import { APPROVAL_STATE } from './inboxRows'
 
@@ -60,8 +62,9 @@ export function DecidedVersion({ row, onClose }: { row: ApprovalRow; onClose: ()
 
 /**
  * A console change that waits for a second SuperAdmin: taking a cluster off
- * production, or making someone a SuperAdmin. It is decided here, as it has
- * no page of its own; whoever asked may only withdraw it.
+ * production, or making someone a SuperAdmin; or a run whose own values
+ * wait on production (FU-05). It is decided here, as it has no page of its
+ * own; whoever asked may only withdraw it.
  */
 export function RequestActions({ row, onDecided, onConflict }: { row: ApprovalRow; onDecided: () => void; onConflict: (msg: string) => void }) {
   const [how, setHow] = useState<'approve' | 'reject' | null>(null)
@@ -72,7 +75,8 @@ export function RequestActions({ row, onDecided, onConflict }: { row: ApprovalRo
     setBusy(true)
     setErr('')
     try {
-      await decideRequest(row.id ?? '', how === 'approve', comment)
+      if (row.kind === 'run') await decideWaitingRun(row.cluster ?? 'local', Number(row.id), how === 'approve' ? 'approve' : 'reject', comment)
+      else await decideRequest(row.id ?? '', how === 'approve', comment)
       setHow(null)
       onDecided()
     } catch (e) {
@@ -100,7 +104,9 @@ export function RequestActions({ row, onDecided, onConflict }: { row: ApprovalRo
       {how && (
         <DecideDialog how={how === 'reject' && row.own ? 'withdraw' : how} what={row.what} busy={busy} error={err} onCancel={() => setHow(null)} onConfirm={(c) => void decide(c)}>
           {how === 'approve'
-            ? `${row.requestedBy} asked for this. Approving makes the change now.`
+            ? row.kind === 'run'
+              ? `${row.requestedBy} asked for this run. Approving starts it now, as ${row.requestedBy}, with the values they gave; every check is made again first.`
+              : `${row.requestedBy} asked for this. Approving makes the change now.`
             : row.own
               ? 'You asked for this. Withdrawing leaves things as they are.'
               : `${row.requestedBy} reads your reason. Rejecting leaves things as they are.`}
@@ -110,9 +116,75 @@ export function RequestActions({ row, onDecided, onConflict }: { row: ApprovalRo
   )
 }
 
+/** A waiting run's values and what they weigh, for whoever decides it (FU-05). */
+export function WaitingRunFacts({ row }: { row: ApprovalRow }) {
+  const [w, setW] = useState<WaitingRun | null>(null)
+  const [err, setErr] = useState('')
+  useEffect(() => {
+    let gone = false
+    fetchWaitingRuns(row.cluster ?? 'local').then(
+      (x) => !gone && setW(x.waiting.find((q) => String(q.id) === row.id) ?? null),
+      (e: unknown) => !gone && setErr(errText(e)),
+    )
+    return () => {
+      gone = true
+    }
+  }, [row.cluster, row.id])
+  if (err) return <p className="tb-err">{err}</p>
+  if (!w) return null
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="waiting-run">
+      <p className="tb-hint" style={{ margin: 0 }}>
+        {w.script} v{w.version} on {w.fleetName || w.fleet}: {w.targets.length} {w.targets.length === 1 ? 'node' : 'nodes'} when it was asked for.
+        {w.run ? ` Approved, it started run #${w.run}.` : ''}
+      </p>
+      <table className="tb-table" data-testid="waiting-run-values">
+        <thead>
+          <tr>
+            <th>Parameter</th>
+            <th>The run’s value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {Object.entries(w.params)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([k, v]) => (
+              <tr key={k}>
+                <td className="rk-mono">{k}</td>
+                <td className="rk-mono">
+                  <RunValue v={v} name={k} />
+                </td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
+      <ImpactList items={w.impact} />
+      {w.note && (
+        <p className="tb-hint" style={{ margin: 0 }}>
+          {w.note}
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** A run's own value, read only: a binding is its variable's chip, anything else the text with its "constant" badge (FU-04, FU-06). */
+export function RunValue({ v, name = 'the parameter' }: { v: string; name?: string }) {
+  const bound = boundTo(v)
+  if (bound) return <VariableChip variable={bound} title="Each node gets its own value of it." />
+  if (v === '') return <EmptyChip kind="empty" name={name} />
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+      {constantOf(v)}
+      <ConstantBadge />
+    </span>
+  )
+}
+
 /** Where a row is read: the version, the fleet's variables, or Watson's card while it waits. */
 export function linkOf(r: ApprovalRow): string | undefined {
   if (r.kind === 'admin') return undefined
+  if (r.kind === 'run') return r.state === 'approved' ? href('run-history') : undefined
   if (r.kind === 'script') return href('scripts', [], { script: r.script, version: String(r.version) })
   if (r.kind === 'change') return clusterHref(r.cluster ?? 'local', 'variables', [], { fleet: r.fleet })
   return r.state === 'pending' ? clusterHref(r.cluster ?? 'local', FIRST_TAB, [], { watson: 'open' }) : undefined

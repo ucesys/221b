@@ -52,6 +52,7 @@ import { AIOpsPage } from './components/aiops/AIOpsPage'
 import { useOpenAIOpsItem } from './lib/aiopsItem'
 import { onWatsonFill, type WatsonFill } from './lib/watsonFill'
 import { ErrorBoundary } from './components/ErrorScreen'
+import { setUIMe } from './lib/uiControl'
 // --- end Cases ---
 
 const THEME_KEY = '221b.theme'
@@ -158,6 +159,8 @@ function Shell() {
   const route = useRoute()
   const now = useNow()
   const me = useMe()
+  // Sherlock's view_admin opens only the pages this person's role opens (SR-13).
+  useEffect(() => setUIMe(me), [me])
   const { clusters, loaded: clustersLoaded } = useClusters()
   const [theme, setTheme] = useState<Theme>(initialTheme)
   const [editing, setEditing] = useState<Editing>(undefined)
@@ -616,6 +619,7 @@ function Shell() {
                 onPopOut={canPopOut() ? popOutNow : undefined}
                 waiting={waiting}
                 busy={busy}
+                sherlockBusy={!!sherlock.conv?.busy}
                 sessions={
                   watsonOn
                     ? {

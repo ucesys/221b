@@ -493,6 +493,8 @@ export interface Settings {
   alertBanners?: boolean
   /** Whether the Fleets tab shows; absent is true. Off, fleets are kept from the Nodes tab (R2-03). */
   fleetsPage?: boolean
+  /** Whether the leader looks for newer images than the Helm releases run (HA-23); absent is true. */
+  imageChecks?: boolean
   /** Whether dollar amounts show anywhere (CF-40); absent is true. Set by a SuperAdmin at /api/v1/settings/ui. */
   showCosts?: boolean
   /** Each cluster's fleets (P4-01), by connection id. */

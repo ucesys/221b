@@ -6,6 +6,7 @@ import { adminHref, navigate, type Route } from '../lib/router'
 import { IssueSettings } from './IssueSettings'
 import { SLASettings } from './SLASettings'
 import { CasesSettings } from './CasesSettings' // One flow for findings and cases (Phase 12, wave 6)
+import { EmailSettings } from './EmailSettings' // Email about cases (EM-01)
 import { SaveBar } from './SaveBar'
 import { WatsonSettings } from './WatsonSettings'
 import { AgentsSection } from './ai/AgentsSection'
@@ -16,7 +17,7 @@ import { GettingStartedSection } from './GettingStarted'
 import { HelmReposSettings } from './apps/HelmReposSettings' // Helm repositories (Phase 12, wave 5)
 import { leftText, useSetup } from '../api/setup'
 
-type Section = 'start' | 'general' | 'providers' | 'agents' | 'knowledge' | 'watson' | 'apps' | 'issues' | 'jobs' | 'sla' | 'cases'
+type Section = 'start' | 'general' | 'providers' | 'agents' | 'knowledge' | 'watson' | 'apps' | 'issues' | 'jobs' | 'sla' | 'cases' | 'email'
 
 interface SectionInfo {
   id: Section
@@ -58,6 +59,8 @@ const GROUPS: { label?: string; sections: SectionInfo[] }[] = [
       { id: 'sla', label: 'SLA', hint: 'Response and resolution targets, P0 to P4' },
       // --- One flow for findings and cases (Phase 12, wave 6) ---
       { id: 'cases', label: 'Cases', hint: 'Keeping agent-found cases, exceptions, caps' },
+      // --- Email about cases (EM-01) ---
+      { id: 'email', label: 'Email', hint: 'Emails about cases: the SMTP server' },
       // --- Jobs (Phase 12) ---
       { id: 'jobs', label: 'Jobs', hint: 'Who may edit jobs, what agents read as' },
     ],
@@ -143,8 +146,8 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
         </h2>
         {section === 'start' && <GettingStartedSection onToast={onToast} />}
         {section === 'general' && <General settings={settings} refreshedAt={refreshedAt} />}
-        {section === 'providers' && <ProvidersSection onToast={onToast} />}
-        {section === 'agents' && <AgentsSection onToast={onToast} />}
+        {section === 'providers' && <ProvidersSection onToast={onToast} initial={route.path[2]} />}
+        {section === 'agents' && <AgentsSection onToast={onToast} initial={route.path[2]} />}
         {section === 'knowledge' && <KnowledgeSection onToast={onToast} focus={route.path[2]} />}
         {section === 'watson' && <WatsonSettings open />}
         {section === 'apps' && <HelmReposSettings onToast={onToast} />}
@@ -152,6 +155,7 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
         {section === 'jobs' && <JobsSettings />}
         {section === 'sla' && <SLASettings />}
         {section === 'cases' && <CasesSettings />}
+        {section === 'email' && <EmailSettings />}
       </section>
     </div>
   )
@@ -182,7 +186,10 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
   const [fleetsDraft, setFleetsDraft] = useState<boolean | undefined>(undefined)
   const currentFleets = settings?.fleetsPage ?? true
   const pickedFleets = fleetsDraft ?? currentFleets
-  const changed = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined || bannersDraft !== undefined || fleetsDraft !== undefined
+  const [imagesDraft, setImagesDraft] = useState<boolean | undefined>(undefined)
+  const currentImages = settings?.imageChecks ?? true
+  const pickedImages = imagesDraft ?? currentImages
+  const changed = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined || bannersDraft !== undefined || fleetsDraft !== undefined || imagesDraft !== undefined
 
   const save = async () => {
     if (picked === undefined) return
@@ -190,10 +197,11 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
     setError('')
     setSaved('')
     try {
-      await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace, alertBanners: pickedBanners, fleetsPage: pickedFleets })
+      await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace, alertBanners: pickedBanners, fleetsPage: pickedFleets, imageChecks: pickedImages })
       setDraft(undefined)
       setBannersDraft(undefined)
       setFleetsDraft(undefined)
+      setImagesDraft(undefined)
       setFormatDraft(undefined)
       setGraceDraft(undefined)
       setSaved('Saved.')
@@ -238,7 +246,9 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
       <GraceSection picked={pickedGrace} current={currentGrace} disabled={!settings || busy} onPick={(g) => setGraceDraft(g === currentGrace ? undefined : g)} />
       <BannersSection picked={pickedBanners} disabled={!settings || busy} onPick={(b) => setBannersDraft(b === currentBanners ? undefined : b)} />
       <FleetsPageSection picked={pickedFleets} disabled={!settings || busy} onPick={(b) => setFleetsDraft(b === currentFleets ? undefined : b)} />
+      <ImageChecksSection picked={pickedImages} disabled={!settings || busy} onPick={(b) => setImagesDraft(b === currentImages ? undefined : b)} />
       <SaveBar
+        what="Settings › General"
         changed={changed}
         busy={busy}
         onSave={() => void save()}
@@ -248,6 +258,7 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
           setGraceDraft(undefined)
           setBannersDraft(undefined)
           setFleetsDraft(undefined)
+          setImagesDraft(undefined)
         }}
         error={error}
         saved={saved}
@@ -292,6 +303,27 @@ function FleetsPageSection({ picked, disabled, onPick }: { picked: boolean; disa
       </div>
       <p className="rk-fhint" style={{ margin: 0 }}>
         For everyone: the Fleets tab, with every node against every label and taint. Fleets are made, changed and deleted from the Nodes tab’s fleet list either way, and filter the nodes there.
+      </p>
+    </section>
+  )
+}
+
+/** Whether the leader looks for newer images than the Helm releases run (HA-23). */
+function ImageChecksSection({ picked, disabled, onPick }: { picked: boolean; disabled: boolean; onPick: (b: boolean) => void }) {
+  return (
+    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Newer images">
+      <h3 className="rk-h">Newer images</h3>
+      <div className="rk-seg" role="group" aria-label="Look for newer images" style={{ alignSelf: 'flex-start' }} data-testid="settings-image-checks">
+        <button aria-pressed={picked} disabled={disabled} onClick={() => onPick(true)}>
+          Check
+        </button>
+        <button aria-pressed={!picked} disabled={disabled} onClick={() => onPick(false)}>
+          Off
+        </button>
+      </div>
+      <p className="rk-fhint" style={{ margin: 0 }}>
+        For everyone: the console asks the registries of the images the Helm releases run, anonymously and at most every six hours each, for a newer tag of the same form, and the Helm tab says when there is one. Private repositories and
+        registries it cannot reach are not checked. Off, no registry is asked.
       </p>
     </section>
   )

@@ -171,10 +171,12 @@ test('Settings › Knowledge › Added in Mycroft with a store: a note and a CSV
     await expect(added.getByTestId('wiki-added-item').filter({ hasText: 'E2E zephyr backups' })).toContainText('read ')
     await expect(added.getByTestId('wiki-added-item').filter({ hasText: 'e2e-quokka-hosts.csv' })).toBeVisible()
     await page.getByTestId('knowledge-view-pages').click()
-    await page.getByTestId('knowledge-search').fill('zephyr nightly')
-    await expect(page.getByTestId('knowledge-hits')).toContainText('E2E zephyr backups')
-    await page.getByTestId('knowledge-search').fill('quokka cache')
-    await expect(page.getByTestId('knowledge-hits')).toContainText('quokka-1 | 10.9.0.1 | cache')
+    await page.getByTestId('mycroft-search').fill('zephyr nightly')
+    await expect(page.getByTestId('mycroft-search-results')).toContainText('E2E zephyr backups')
+    await page.getByTestId('mycroft-search').fill('quokka cache')
+    await expect(page.getByTestId('mycroft-search-results')).toContainText('quokka-1 | 10.9.0.1 | cache')
+    // The results stand in for the sub-tabs until the search is cleared.
+    await page.getByTestId('mycroft-search').fill('')
     const search = await api('/api/v1/knowledge/search?q=zephyr')
     expect(search.body).not.toContain('e2e-hunter2-secret-value')
     await expect.poll(async () => (await cluster.auditLog()).some((r) => r.action === 'knowledge.add'), { timeout: 15_000 }).toBe(true)
@@ -471,8 +473,9 @@ test('Settings › Knowledge reads an S3 bucket of documents through its Wiki sy
     await expect(listed).toContainText('2')
     await expect(listed.getByTestId('wiki-source-skipped')).toHaveText('1 skipped')
     await page.getByTestId('knowledge-view-pages').click()
-    await page.getByTestId('knowledge-search').fill('wombat cache rollout')
-    await expect(page.getByTestId('knowledge-hits')).toContainText('s3://sim-docs/docs/runbooks/restart-the-wombat-cache.md')
+    await page.getByTestId('mycroft-search').fill('wombat cache rollout')
+    await expect(page.getByTestId('mycroft-search-results')).toContainText('restart-the-wombat-cache.md')
+    await expect(page.getByTestId('mycroft-search-results')).toContainText('rollout restart of deploy/wombat-cache')
   } finally {
     // Mycroft's drafts are rejected, and the source removed, for the other tests; its job goes with it.
     const drafts = JSON.parse((await api('/api/v1/knowledge/drafts')).body) as { runs?: { id: string }[] }

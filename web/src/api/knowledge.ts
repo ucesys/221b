@@ -361,6 +361,7 @@ export const moveStore = (store: StoreSettings, keys: KeysChange) => call<{ file
 export const saveHookToken = (token: string) => call<{ hook: boolean }>(base + 'hook', { method: 'PUT', body: JSON.stringify({ token }) })
 export const fetchPages = () => call<{ pages: WikiPage[]; retired?: WikiPage[]; connected: boolean }>(base + 'pages')
 export const fetchPage = (path: string) => call<PageView>(base + 'page?path=' + enc(path))
+/** Searches the approved pages and the sources' excerpts only; the Mycroft search (findInMycroft) searches the records too. */
 export const searchKnowledge = (q: string) => call<{ hits: SearchHit[] }>(base + 'search?q=' + enc(q))
 export const fetchDrafts = (all = false) => call<{ runs: DraftRun[] }>(base + 'drafts' + (all ? '?all=1' : ''))
 export const fetchDraftsCount = () => call<{ count: number }>(base + 'drafts/count', {}, true)
@@ -429,6 +430,8 @@ export interface WikiState {
   sources: SourceBrief[]
   added: AddedItem[]
   limits: AddLimits
+  /** The ConfigMap store's room, in bytes, when the wiki is kept there (KN-37). */
+  usage?: { used: number; limit: number }
 }
 
 export type AddKind = 'text' | 'url' | 'document'
@@ -496,3 +499,41 @@ export const SOURCE_KIND_LABEL: Record<SourceKind, string> = {
   console: 'This console',
   fixes: 'Fixes',
 }
+
+// --- One search across Mycroft (Phase 12.1, KN-35) ---
+
+/** What the Mycroft search finds: a wiki page, a source's excerpt, a known issue, a fix or an accepted exception. */
+export type FindKind = 'page' | 'excerpt' | 'knownIssue' | 'fix' | 'exception'
+
+/** One hit of the Mycroft search, ranked with the others whatever its kind. */
+export interface FindHit {
+  kind: FindKind
+  title: string
+  /** A page's path. */
+  path?: string
+  /** A record's id: "KI-3", "F-2", "EX-4"; status its state. */
+  id?: string
+  status?: string
+  pageKind?: string
+  date?: string
+  stale?: boolean
+  source?: string
+  version?: string
+  url?: string
+  /** The snippet: one line around the first word matched. */
+  text: string
+  score: number
+  /** The query's words the hit holds, lower case and stemmed, for the snippet to mark. */
+  terms?: string[]
+}
+
+export interface FindResult {
+  hits: FindHit[]
+  /** How many hits of each kind match, whichever kinds were asked. */
+  counts: Partial<Record<FindKind, number>>
+  /** The kinds the person may search. */
+  kinds: FindKind[]
+}
+
+/** Searches what AIOps › Mycroft holds, as the person may read it (GET /api/v1/aiops/mycroft/search). */
+export const findInMycroft = (q: string, kinds: FindKind[] = [], limit = 30) => call<FindResult>('/api/v1/aiops/mycroft/search?q=' + enc(q) + (kinds.length > 0 ? '&kind=' + kinds.map(enc).join(',') : '') + '&limit=' + limit, {}, true)

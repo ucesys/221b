@@ -5,11 +5,24 @@
 
 import { useEffect, useState } from 'react'
 import { checkSession } from './auth'
-import { sherlockCall, type Conversation, type SherlockMsg, type SherlockState, type SherlockStatus } from './sherlock'
+import { runSharedUI, sherlockCall, type AskContext, type Conversation, type SherlockMsg, type SherlockState, type SherlockStatus } from './sherlock'
 
 const base = (id: string) => `/api/v1/aiops/cases/${encodeURIComponent(id.replace(/^C-/i, ''))}/sherlock`
 
-export const askCaseSherlock = (id: string, question: string) => sherlockCall<Conversation>('POST', `${base(id)}/ask`, { question })
+/** A case's conversation's address, which also names it to the view actions (SR-19). */
+export const caseSherlockBase = base
+
+/** Asks on a case, with the asker's window and view: Sherlock's view changes go to that window only (SR-19). */
+export const askCaseSherlock = (id: string, question: string, ctx?: AskContext) => sherlockCall<Conversation>('POST', `${base(id)}/ask`, { question, ...(ctx ? { window: ctx.window, view: ctx.view } : {}) })
+
+/** Sends the asker's window's result of a view action back to a shared conversation's answer (SR-19). */
+export async function postSharedUIResult(url: string, id: string, result: unknown): Promise<void> {
+  try {
+    await fetch(`${url}/ui/${encodeURIComponent(id)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(result) })
+  } catch {
+    // The answer gives up after 5 seconds and says so.
+  }
+}
 export const stopCaseSherlock = (id: string) => sherlockCall<{ stopped: boolean }>('POST', `${base(id)}/stop`, {})
 
 /** Merges an answer that changed into the conversation. */
@@ -69,6 +82,11 @@ export function useSharedSherlock(url: string, on = true): SherlockState {
       src.addEventListener('conversation', (e) => {
         const conv = JSON.parse((e as MessageEvent<string>).data) as Conversation
         setState((s) => ({ ...mine(s), conv, live: true }))
+      })
+      // Sherlock's view actions for the asker's window: the server sends
+      // them on the asker's stream only, and the main window runs them (SR-19).
+      src.addEventListener('ui', (e) => {
+        runSharedUI(JSON.parse((e as MessageEvent<string>).data), url, (rid, res) => postSharedUIResult(url, rid, res))
       })
       src.addEventListener('answer', (e) => {
         const { rev, message } = JSON.parse((e as MessageEvent<string>).data) as { rev: number; message: SherlockMsg }

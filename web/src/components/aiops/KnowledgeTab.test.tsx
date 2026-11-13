@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WikiPage, WikiState } from '../../api/knowledge'
 import { adminHref, parseHash, type Route } from '../../lib/router'
-import { KnowledgeTab, pageHref, wikiRoute } from './KnowledgeTab'
+import { KnowledgeTab, PAGE_ROWS, pageHref, pagesShown, wikiRoute } from './KnowledgeTab'
 import { MYCROFT_TABLE_MIN } from './mycroftTable'
 
 const pages: WikiPage[] = [
@@ -79,10 +79,61 @@ describe('AIOps › Mycroft › Wiki', () => {
     expect([...page.querySelectorAll('.rk-ans-body strong')].map((x) => x.textContent)).toEqual(['Shop', 'db-3'])
   })
 
-  it('searches the pages and the sources’ excerpts', async () => {
+  it('filters the page list by title or path as it is typed; the full-text search is Mycroft’s (KN-36)', async () => {
     render(<KnowledgeTab route={route(['wiki'])} />)
-    fireEvent.change(await screen.findByTestId('knowledge-search'), { target: { value: 'db-3' } })
-    await waitFor(() => expect(screen.getByTestId('knowledge-hits').textContent).toContain('Server inventory'))
+    await screen.findAllByTestId('knowledge-page-link')
+    fireEvent.change(screen.getByTestId('knowledge-filter'), { target: { value: 'backup' } })
+    expect(screen.getAllByTestId('knowledge-page-link').map((l) => l.textContent)).toEqual(['Backup policy'])
+    expect(screen.getByTestId('knowledge-filter-count').textContent).toBe('1 of 2 pages')
+    fireEvent.change(screen.getByTestId('knowledge-filter'), { target: { value: 'application/sh' } })
+    expect(screen.getAllByTestId('knowledge-page-link').map((l) => l.textContent)).toEqual(['Application: shop'])
+    fireEvent.change(screen.getByTestId('knowledge-filter'), { target: { value: 'nothing like it' } })
+    expect(screen.getByTestId('knowledge-filter-none').textContent).toContain('search at the top of Mycroft')
+    fireEvent.keyDown(screen.getByTestId('knowledge-filter'), { key: 'Escape' })
+    expect(screen.getAllByTestId('knowledge-page-link')).toHaveLength(2)
+    // The search endpoint of the wiki alone is no longer asked from here.
+    expect(calls.some((c) => c.url.includes('/knowledge/search'))).toBe(false)
+  })
+
+  it('keeps hundreds of pages usable: folded groups by kind, the first rows of each, stale ones alone, sorted by update (KN-36)', async () => {
+    const many: WikiPage[] = Array.from({ length: 300 }, (_, i) => ({
+      path: `pages/${i % 3 === 0 ? 'runbook' : 'application'}/svc-${String(i).padStart(3, '0')}.md`,
+      title: `svc-${String(i).padStart(3, '0')}`,
+      kind: i % 3 === 0 ? 'runbook' : 'application',
+      updated: `2026-10-${String(1 + (i % 28)).padStart(2, '0')}T00:00:00Z`,
+      stale: i % 50 === 0,
+    }))
+    stub({ pages: () => ({ pages: many, connected: true }) })
+    render(<KnowledgeTab route={route(['wiki', 'pages', 'runbook', 'svc-003.md'])} />)
+    const toggles = await screen.findAllByTestId('knowledge-group-toggle')
+    expect(toggles.map((t) => t.textContent)).toEqual(['▸Applications 200', '▾Runbooks 100'])
+    // Only the group holding the open page is unfolded, and it shows its first rows.
+    expect(screen.getAllByTestId('knowledge-page-link')).toHaveLength(PAGE_ROWS)
+    fireEvent.click(screen.getByTestId('knowledge-group-more'))
+    expect(screen.getAllByTestId('knowledge-page-link')).toHaveLength(100)
+    fireEvent.click(toggles[0]!)
+    expect(screen.getAllByTestId('knowledge-page-link')).toHaveLength(100 + PAGE_ROWS)
+    fireEvent.click(screen.getByTestId('knowledge-stale-only'))
+    expect(screen.getAllByTestId('knowledge-page-link').map((l) => l.textContent)).toEqual(['svc-050', 'svc-100', 'svc-200', 'svc-250', 'svc-000', 'svc-150'])
+    expect(pagesShown(many, '', false, 'updated')[0]!.updated).toBe('2026-10-28T00:00:00Z')
+  })
+
+  it('says when the ConfigMap store is nearly full, and where to move the wiki (KN-37)', async () => {
+    stub({ wiki: () => state({ store: 'configmap', maySetup: true, usage: { used: 800 << 10, limit: 900 << 10 } }) })
+    render(<KnowledgeTab route={route(['wiki'])} />)
+    const room = await screen.findByTestId('wiki-store-room')
+    expect(room.textContent).toContain('nearly full: 800 KiB of 900 KiB used (89%)')
+    expect(screen.getByTestId('wiki-store-move').getAttribute('href')).toBe(adminHref('settings', ['knowledge']))
+    cleanup()
+    stub({ wiki: () => state({ store: 'configmap', usage: { used: 899 << 10, limit: 900 << 10 } }) })
+    render(<KnowledgeTab route={route(['wiki'])} />)
+    expect((await screen.findByTestId('wiki-store-room')).textContent).toContain('is full')
+    expect(screen.getByTestId('wiki-store-room').textContent).toContain('A SuperAdmin moves it')
+    cleanup()
+    stub({ wiki: () => state({ store: 'configmap', usage: { used: 100 << 10, limit: 900 << 10 } }) })
+    render(<KnowledgeTab route={route(['wiki'])} />)
+    await screen.findAllByTestId('knowledge-page-link')
+    expect(screen.queryByTestId('wiki-store-room')).toBeNull()
   })
 
   it('shows the drafts, and each view has its address', async () => {

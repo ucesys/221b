@@ -10,6 +10,9 @@ NPM     ?= npm
 # The simulated cluster for dev-sim and e2e-sim.
 SIM_NODES ?= 40
 SIM_PODS  ?= 900
+# A fake SMTP server for Settings › Email (EM-10): host 127.0.0.1, port
+# 7525, security none; its messages at http://127.0.0.1:7443/fake-smtp/messages.
+SIM_SMTP  ?= -fake-smtp 127.0.0.1:7525
 
 PKG     := github.com/ucesys/221b/server/internal/version
 LDFLAGS := -s -w -X $(PKG).Version=$(VERSION) -X $(PKG).Commit=$(COMMIT)
@@ -103,7 +106,7 @@ SIM_SHERLOCK = -sherlock-api-url http://127.0.0.1:7443/claude
 SIM_WATSON = -local-mode write -toolbox-config hack/e2e-toolbox.json
 
 dev-sim: build ## Run the console on http://127.0.0.1:8080 against a simulated cluster, signing in through the simulated provider
-	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) -churn 5s $(SIM_OIDC) & sim=$$!; \
+	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) -churn 5s $(SIM_OIDC) $(SIM_SMTP) & sim=$$!; \
 	bin/221b-sim -nodes 4 -pods 40 -seed 3 -listen 127.0.0.1:7444 & sim2=$$!; \
 	trap 'kill $$sim $$sim2 2>/dev/null' EXIT INT TERM; \
 	bin/221b -api-server http://127.0.0.1:7443 -cluster-name simulated $(SIM_STORE) $(SIM_SHERLOCK) $(SIM_WATSON) -log-format text $(SIM_AUTH)
@@ -111,7 +114,7 @@ dev-sim: build ## Run the console on http://127.0.0.1:8080 against a simulated c
 # A second simulator on 7444 stands in for another cluster (P3-09); the
 # tests tell it which token to require.
 e2e-sim: build ## Run the browser end-to-end tests against a simulated cluster
-	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) $(SIM_OIDC) & sim=$$!; \
+	@bin/221b-sim -nodes $(SIM_NODES) -pods $(SIM_PODS) $(SIM_OIDC) $(SIM_SMTP) & sim=$$!; \
 	bin/221b-sim -nodes 4 -pods 40 -seed 3 -listen 127.0.0.1:7444 & sim2=$$!; \
 	trap 'kill $$sim $$sim2 2>/dev/null' EXIT INT TERM; \
 	for i in $$(seq 50); do curl -fs http://127.0.0.1:7443/version >/dev/null && curl -fs http://127.0.0.1:7444/version >/dev/null && break; sleep 0.2; done; \

@@ -382,13 +382,56 @@ describe('an agent’s built-in text, stages and context', () => {
     expect((within(drawer).getByTestId('ins-part') as HTMLTextAreaElement).value).toBe('You are Sherlock, briefly.')
     // A model of its own, picked from the endpoint's list, brings its context window.
     fireEvent.click(within(drawer).getByTestId('agent-default-model'))
-    fireEvent.click(within(drawer).getByTestId('agent-model-load'))
     const list = (await within(drawer).findByTestId('agent-model-list')) as HTMLSelectElement
-    expect([...list.options].map((o) => o.textContent)).toContain('qwen3.8-27b · 16,384 tokens')
+    await waitFor(() => expect([...list.options].map((o) => o.textContent)).toContain('qwen3.8-27b · 16,384 tokens'))
     fireEvent.change(list, { target: { value: 'llama-4-scout-17b' } })
     fireEvent.click(drawer.querySelector('[data-testid=agent-compact] [data-mode=always]')!)
     fireEvent.click(within(drawer).getByTestId('agent-save'))
     await waitFor(() => expect(calls.find((c) => c.method === 'PUT')?.body).toMatchObject({ model: 'llama-4-scout-17b', contextWindow: 8192, compact: 'always' }))
     expect(calls.some((c) => c.url === '/api/v1/ai/providers/default/models')).toBe(true)
+  })
+
+  // --- FU-01: the agent's model is a dropdown of its provider's models ---
+  it('lists the provider’s models as the drawer opens, again when the provider changes, keeps a model not listed, and lets one be typed only when the list fails', async () => {
+    ov.agents[1] = { ...ov.agents[1]!, settings: { model: 'my-old-model' } }
+    const models = (id: string) => (id === 'gw' ? { models: [{ id: 'gpt-5' }, { id: 'gpt-5-mini' }] } : { models: [{ id: 'qwen3.8-27b', contextWindow: 16384 }] })
+    let fail = false
+    const base = globalThis.fetch
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const m = /\/providers\/([^/]+)\/models$/.exec(String(url))
+      if (m) {
+        calls.push({ method: 'GET', url: String(url) })
+        if (fail) return new Response(JSON.stringify({ error: 'the endpoint did not answer' }), { status: 502 })
+        return new Response(JSON.stringify(models(m[1]!)))
+      }
+      return base(url, init)
+    })
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const drawer = await screen.findByTestId('agent-drawer')
+    // Listed as it opens, with no button pressed; the saved model stays chosen though not listed.
+    await waitFor(() => expect(within(drawer).getByTestId('agent-model-picker').dataset.state).toBe('listed'))
+    let list = within(drawer).getByTestId('agent-model-list') as HTMLSelectElement
+    expect(list.value).toBe('my-old-model')
+    expect([...list.options].map((o) => o.textContent)).toEqual(['my-old-model (not listed by the provider)', 'qwen3.8-27b · 16,384 tokens'])
+    expect(within(drawer).queryByTestId('agent-model')).toBeNull()
+    expect([...list.options].some((o) => o.textContent === 'Another model…')).toBe(false)
+    // Another provider: its models.
+    fireEvent.change(within(drawer).getByTestId('agent-provider'), { target: { value: 'gw' } })
+    await waitFor(() => expect(calls.some((c) => c.url === '/api/v1/ai/providers/gw/models')).toBe(true))
+    await waitFor(() => expect([...(within(drawer).getByTestId('agent-model-list') as HTMLSelectElement).options].map((o) => o.value)).toContain('gpt-5-mini'))
+    list = within(drawer).getByTestId('agent-model-list') as HTMLSelectElement
+    fireEvent.change(list, { target: { value: 'gpt-5-mini' } })
+    fireEvent.click(within(drawer).getByTestId('agent-save'))
+    await waitFor(() => expect(calls.find((c) => c.method === 'PUT')?.body).toMatchObject({ provider: 'gw', model: 'gpt-5-mini' }))
+    cleanup()
+    // The list cannot be had: the model is typed, and why is said.
+    fail = true
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const again = await screen.findByTestId('agent-drawer')
+    await waitFor(() => expect(within(again).getByTestId('agent-model-picker').dataset.state).toBe('typed'))
+    expect((within(again).getByTestId('agent-model') as HTMLInputElement).value).toBe('my-old-model')
+    expect(within(again).getByTestId('agent-model-hint').textContent).toContain('Type the model’s name.')
   })
 })

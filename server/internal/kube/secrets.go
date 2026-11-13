@@ -92,6 +92,7 @@ func (s *SecretSummary) DeepCopyObject() runtime.Object {
 	if s.Release != nil {
 		r := *s.Release
 		r.Resources = append([]ReleaseResource(nil), s.Release.Resources...)
+		r.Images = append([]string(nil), s.Release.Images...)
 		out.Release = &r
 	}
 	return &out
@@ -140,6 +141,9 @@ type HelmRelease struct {
 	Values    json.RawMessage   `json:"values,omitempty"`
 	Masked    []string          `json:"maskedValues,omitempty"`
 	Resources []ReleaseResource `json:"resources,omitempty"`
+	// Images are the container images the manifest names, each once, as
+	// written (HA-21): what the check for newer images looks up.
+	Images []string `json:"images,omitempty"`
 }
 
 // ReleaseResource is one object a release's manifest creates.
@@ -373,7 +377,7 @@ func DecodeHelmRelease(data []byte) (*HelmRelease, error) {
 		sort.Strings(masked)
 		r.Masked = masked
 	}
-	r.Resources = manifestResources(rec.Manifest)
+	r.Resources, r.Images = manifestResources(rec.Manifest)
 	return r, nil
 }
 
@@ -568,12 +572,15 @@ func manifestSecrets(manifest string) []string {
 	return out
 }
 
-// manifestResources lists the objects a release's manifest creates.
-func manifestResources(manifest string) []ReleaseResource {
+// manifestResources lists the objects a release's manifest creates, and
+// the images its containers run, each once, sorted.
+func manifestResources(manifest string) ([]ReleaseResource, []string) {
 	if manifest == "" {
-		return nil
+		return nil, nil
 	}
 	var out []ReleaseResource
+	seen := map[string]bool{}
+	var images []string
 	for _, doc := range strings.Split(manifest, "\n---") {
 		doc = strings.TrimSpace(doc)
 		if doc == "" || strings.HasPrefix(doc, "#") && !strings.Contains(doc, "\nkind:") {
@@ -590,8 +597,49 @@ func manifestResources(manifest string) []ReleaseResource {
 			continue
 		}
 		out = append(out, ReleaseResource{Kind: head.Kind, Name: head.Metadata.Name, Namespace: head.Metadata.Namespace})
+		// Only the kinds that hold containers are read whole.
+		if !strings.Contains(doc, "image:") {
+			continue
+		}
+		var body map[string]any
+		if yaml.Unmarshal([]byte(doc), &body) != nil {
+			continue
+		}
+		containerImages(body, func(img string) {
+			if !seen[img] {
+				seen[img] = true
+				images = append(images, img)
+			}
+		})
 	}
-	return out
+	sort.Strings(images)
+	return out, images
+}
+
+// containerImages calls f with the image of every container,
+// initContainer and ephemeralContainer wherever it is in an object: a
+// Pod's spec, a workload's template, a CronJob's job template.
+func containerImages(v any, f func(image string)) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, child := range x {
+			if list, ok := child.([]any); ok && (k == "containers" || k == "initContainers" || k == "ephemeralContainers") {
+				for _, c := range list {
+					if cm, ok := c.(map[string]any); ok {
+						if img, _ := cm["image"].(string); img != "" {
+							f(img)
+						}
+					}
+				}
+				continue
+			}
+			containerImages(child, f)
+		}
+	case []any:
+		for _, child := range x {
+			containerImages(child, f)
+		}
+	}
 }
 
 // Secret-type labels the Namespaces tab shows.

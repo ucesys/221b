@@ -296,6 +296,16 @@ type WikiState struct {
 	Sources   []SourceBrief `json:"sources"`
 	Added     []ItemState   `json:"added"`
 	Limits    AddLimits     `json:"limits"`
+	// Usage is the ConfigMap store's room, when the wiki is kept there:
+	// a wiki of hundreds of pages fills it, and the Wiki says so before
+	// (KN-37).
+	Usage *StoreUsage `json:"usage,omitempty"`
+}
+
+// StoreUsage is how much of the ConfigMap wiki store is used, in bytes.
+type StoreUsage struct {
+	Used  int `json:"used"`
+	Limit int `json:"limit"`
 }
 
 // AddLimits are the additions' limits, for the form to say.
@@ -328,6 +338,12 @@ func (s *Service) Wiki(ctx context.Context, c Caller) (WikiState, error) {
 			Formats: []string{".pdf", ".docx", ".md", ".markdown", ".html", ".htm", ".txt", ".csv"}}}
 	if s.o.Store != nil && w.Store == "" {
 		w.Store = s.o.Store.Kind()
+	}
+	if w.Store == StoreConfigMap && s.cmStore != nil {
+		// A failure to read it leaves the room unsaid, not the Wiki.
+		if used, err := s.cmStore.Used(ctx); err == nil {
+			w.Usage = &StoreUsage{Used: used, Limit: s.cmStore.limit}
+		}
 	}
 	s.mu.RLock()
 	for p := range s.files {

@@ -129,6 +129,13 @@ func (s *Server) postSherlockUI(w http.ResponseWriter, r *http.Request) {
 	if _, _, ok := s.lookup(w, r); !ok {
 		return
 	}
+	s.deliverUI(w, r, convKey(r), r.PathValue("id"), "")
+}
+
+// deliverUI hands a window's posted result to the action of the key's
+// conversation waiting for it. session, for a shared conversation, is the
+// poster's: only the asker's result is taken (SR-19).
+func (s *Server) deliverUI(w http.ResponseWriter, r *http.Request, key sherlock.Key, id, session string) {
 	if ct, _, _ := strings.Cut(r.Header.Get("Content-Type"), ";"); strings.TrimSpace(strings.ToLower(ct)) != "application/json" {
 		jsonError(w, http.StatusUnsupportedMediaType, "send the result as application/json")
 		return
@@ -140,7 +147,7 @@ func (s *Server) postSherlockUI(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, "the result is not valid: "+err.Error())
 		return
 	}
-	if err := s.opts.Sherlock.DeliverUI(convKey(r), r.PathValue("id"), in); err != nil {
+	if err := s.opts.Sherlock.DeliverUIFrom(key, session, id, in); err != nil {
 		jsonError(w, http.StatusNotFound, err.Error())
 		return
 	}
@@ -306,8 +313,10 @@ func (s *Server) conversationPart(r *http.Request, key sherlock.Key, id string) 
 			return
 		}
 		// UI actions go to the window named in each; a window that connects
-		// later does not get earlier ones.
+		// later does not get earlier ones. On a shared conversation they go
+		// to the asker's session only (SR-19).
 		_, uiSeq := conv.UIRequestsAfter(1 << 62)
+		sess, _ := auth.SessionFrom(r.Context())
 		statusTick := time.NewTicker(5 * time.Second)
 		defer statusTick.Stop()
 		for {
@@ -336,6 +345,9 @@ func (s *Server) conversationPart(r *http.Request, key sherlock.Key, id string) 
 				var reqs []sherlock.UIRequest
 				reqs, uiSeq = conv.UIRequestsAfter(uiSeq)
 				for _, q := range reqs {
+					if !q.For(sess.ID) {
+						continue
+					}
 					if write("ui", q) != nil {
 						return
 					}

@@ -204,11 +204,22 @@ type Run struct {
 	Request     string `json:"request,omitempty"`
 	CancelAsked bool   `json:"cancelAsked,omitempty"`
 	// Approvers are who had approved the version when the run started.
-	Approvers []Who        `json:"approvers,omitempty"`
-	Started   time.Time    `json:"started"`
-	Ended     *time.Time   `json:"ended,omitempty"`
-	Beat      time.Time    `json:"beat"`
-	Nodes     []NodeResult `json:"nodes"`
+	Approvers []Who `json:"approvers,omitempty"`
+	// ValuesApproved is the approval the run's own values waited for on
+	// production (FU-05), when they needed one.
+	ValuesApproved *ValuesApproval `json:"valuesApproved,omitempty"`
+	Started        time.Time       `json:"started"`
+	Ended          *time.Time      `json:"ended,omitempty"`
+	Beat           time.Time       `json:"beat"`
+	Nodes          []NodeResult    `json:"nodes"`
+}
+
+// ValuesApproval is who approved a run's own values, and the request
+// that waited for it (FU-05).
+type ValuesApproval struct {
+	Request int       `json:"request"`
+	By      Who       `json:"by"`
+	At      time.Time `json:"at"`
 }
 
 // Watson is how every command of this run reads in the audit log.

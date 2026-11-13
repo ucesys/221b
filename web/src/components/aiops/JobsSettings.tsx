@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { fetchJobsSettings, saveJobsSettings, type JobsSettings as Settings } from '../../api/jobs'
 import { fmtTs } from '../../lib/format'
 import { Select } from '../Select'
+import { Unsaved } from '../../lib/unsaved'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -64,6 +65,7 @@ export function JobsSettings() {
   const changed = JSON.stringify({ e: [...editors].sort(), r: role, g: draft.readerGroup ?? '' }) !== JSON.stringify({ e: [...(saved.editors ?? [])].sort(), r: saved.readerRole ?? 'viewer', g: saved.readerGroup ?? '' })
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 18 }} aria-label="Jobs" data-testid="jobs-settings">
+      <Unsaved when={changed} what="Settings › Jobs" />
       <p className="rk-fhint" style={{ margin: 0 }}>
         Jobs start agents with nobody at the screen, in{' '}
         <a className="rk-link" href="#/aiops/jobs">

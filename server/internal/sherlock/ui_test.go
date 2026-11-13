@@ -174,3 +174,60 @@ func TestThePromptsViewChangesComeFromTheConstant(t *testing.T) {
 		t.Error("the prompt does not say the constant's number")
 	}
 }
+
+// view_admin's page list is the browser's, from one fixture its own test
+// holds ADMIN_VIEW_PAGES to, and its description names every page, the
+// pages that open an item's drawer and those with a search box (SR-12).
+func TestViewAdminDescribesThePagesTheBrowserOpens(t *testing.T) {
+	b, err := os.ReadFile("testdata/ui_admin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Pages map[string]struct {
+			Item   bool `json:"item"`
+			Search bool `json:"search"`
+		} `json:"pages"`
+	}
+	if err := json.Unmarshal(b, &f); err != nil {
+		t.Fatal(err)
+	}
+	a, ok := uiAction("view_admin")
+	if !ok || !a.Changes {
+		t.Fatal("no view_admin that changes the view")
+	}
+	var schema struct {
+		Properties struct {
+			Page struct {
+				Enum []string `json:"enum"`
+			} `json:"page"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(a.InputSchema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	var pages []string
+	for id := range f.Pages {
+		pages = append(pages, id)
+	}
+	slices.Sort(pages)
+	if enum := slices.Sorted(slices.Values(schema.Properties.Page.Enum)); !slices.Equal(pages, enum) {
+		t.Errorf("view_admin takes the pages %v; the browser opens %v", enum, pages)
+	}
+	i := strings.Index(a.Description, "search sets the search box of ")
+	if i < 0 {
+		t.Fatal("view_admin does not say which pages take a search")
+	}
+	searchable := a.Description[i : i+strings.Index(a.Description[i:], ".")]
+	for _, id := range pages {
+		if !word(id).MatchString(a.Description) {
+			t.Errorf("view_admin does not name the page %s", id)
+		}
+		if f.Pages[id].Item != strings.Contains(a.Description, id+" (item: ") {
+			t.Errorf("view_admin's description and the browser differ on whether %s takes an item", id)
+		}
+		if f.Pages[id].Search != word(id).MatchString(searchable) {
+			t.Errorf("view_admin's description and the browser differ on whether %s takes a search", id)
+		}
+	}
+}

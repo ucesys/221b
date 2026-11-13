@@ -4,9 +4,9 @@
 // cases (whether a person or an agent found the problem), proposed
 // changes, approvals, known issues pending for their owner and knowledge
 // drafts. Filters on top (Pending | All, Source: People | Agents, Mine |
-// Unassigned, Priority, Type, Status, Cluster, search), all in the address;
-// pending first, then P0 first, then the longest waiting, until someone
-// sorts by a column. A row opens its drawer at #/aiops/inbox/<kind>/<id>.
+// Unassigned | I'm involved (EM-08), Priority, Type, Status, Cluster, From since FU-02, search),
+// all in the address; pending first, then P0 first, then the longest
+// waiting, until someone sorts by a column. A row opens its drawer at #/aiops/inbox/<kind>/<id>.
 // Since wave 6c (CF-38) there is no Kind filter, and those who work the
 // cases pick case rows for one action on many (BulkBar.tsx). Since CF-87
 // a SuperAdmin's suggested validation rules are rows, opened here.
@@ -35,26 +35,27 @@ import { kindsFor, useInbox } from './useInbox'
 
 export { kindsFor }
 
-/** The filters an address asks for: ?show=all&source=agents&who=mine&priority=0&type=security&status=waiting&cluster=prod&q=; an old ?kind= is let go. */
+/** The filters an address asks for: ?show=all&source=agents&who=mine&priority=0&type=security&status=waiting&cluster=prod&from=Pat&q=; an old ?kind= is let go. ?involved=me is ?who=involved (EM-08). */
 export function filterOf(p: URLSearchParams): InboxFilter {
-  const who = p.get('who')
+  const who = p.get('involved') === 'me' ? 'involved' : p.get('who')
   const raw = p.get('priority')
   const priority = raw === null || raw === '' ? NaN : Number(raw)
   const source = p.get('source')
   const status = p.get('status') ?? ''
   return {
     show: p.get('show') === 'all' ? 'all' : 'pending',
-    who: who === 'mine' || who === 'unassigned' ? who : 'all',
+    who: who === 'mine' || who === 'unassigned' || who === 'involved' ? who : 'all',
     priority: isPriority(priority) ? priority : null,
     cluster: p.get('cluster') ?? '',
     source: source === 'people' || source === 'agents' ? source : null,
     type: p.get('type') || null,
     status: Object.hasOwn(SHOWN_STATUS, status) ? (status as ShownStatus) : null,
+    from: p.get('from') ?? '',
   }
 }
 
 /** The Inbox's filters, the parameters kept from row to row: not what an address hands one drawer (?title= for New Case). */
-const FILTERS = ['show', 'source', 'who', 'priority', 'type', 'status', 'cluster', 'q']
+const FILTERS = ['show', 'source', 'who', 'priority', 'type', 'status', 'cluster', 'from', 'q']
 
 const SOURCES: [Origin | 'all', string, string][] = [
   ['all', 'Everyone', 'People’s and the agents’'],
@@ -79,10 +80,19 @@ function clustersOf(rows: InboxRow[]): [string, string][] {
   return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1]))
 }
 
+/** Who or what raised the rows, by name, for the From filter (FU-02). */
+export function fromsOf(rows: InboxRow[]): [string, string][] {
+  const m = new Map<string, string>()
+  for (const r of rows) if (r.from) m.set(r.from.name, r.from.kind === 'agent' ? `${r.from.name} (agent)` : r.from.name)
+  return [...m.entries()].sort((a, b) => a[1].localeCompare(b[1]))
+}
+
 const WHO: [Who, string][] = [
   ['all', 'Everyone’s'],
   ['mine', 'Mine'],
   ['unassigned', 'Unassigned'],
+  // The cases the person reported, opened, owns, follows, wrote in or approved a fix of (EM-08).
+  ['involved', 'I’m involved'],
 ]
 
 /**
@@ -133,6 +143,7 @@ export function InboxTab({ route, access, onToast, alerts, clusterName }: { rout
   const total = kinds.reduce((n, k) => n + counts[k], 0)
   const kept = filterRows(rows, f)
   const clusters = clustersOf(rows)
+  const froms = fromsOf(rows)
   const table = useTable<InboxRow>({ id: 'cases-inbox', columns: INBOX_COLUMNS, rows: kept, terms: rowTerms, now, defaultSort: { col: 'waiting', dir: 'asc' }, query: route.params.get('q') ?? '', onQuery: (q) => set({ q: q || undefined }) })
 
   // Out of what Pending or All lists, before the other filters.
@@ -140,7 +151,7 @@ export function InboxTab({ route, access, onToast, alerts, clusterName }: { rout
   const shownText = !inbox.loaded ? 'Loading…' : table.shown.length < listed ? `Showing ${table.shown.length} of ${listed}` : ''
   const empty = !inbox.loaded
     ? 'Loading the Inbox…'
-    : f.show === 'pending' && !f.type && !f.status && f.who === 'all' && f.priority === null && !f.cluster && !f.source && !table.query
+    : f.show === 'pending' && !f.type && !f.status && f.who === 'all' && f.priority === null && !f.cluster && !f.source && !f.from && !table.query
       ? 'Nothing is pending for you.'
       : 'Nothing matches these filters.'
 
@@ -196,7 +207,16 @@ export function InboxTab({ route, access, onToast, alerts, clusterName }: { rout
               </button>
             ))}
           </div>
-          <SearchBox rows={kept} terms={rowTerms} value={table.query} onChange={table.setQuery} placeholder="Search by title, id, object, validation rule, person or RCA cause" label="Search the Inbox" testId="inbox-search" width={260} />
+          <SearchBox
+            rows={kept}
+            terms={rowTerms}
+            value={table.query}
+            onChange={table.setQuery}
+            placeholder="Search by title, id, object, validation rule, person, source or RCA cause"
+            label="Search the Inbox"
+            testId="inbox-search"
+            width={260}
+          />
           <span style={{ fontSize: 12, color: 'var(--fg3)', whiteSpace: 'nowrap' }} data-testid="inbox-shown">
             {shownText}
           </span>
@@ -232,6 +252,15 @@ export function InboxTab({ route, access, onToast, alerts, clusterName }: { rout
           )}
           {kinds.includes('case') && <Select label="Status" value={f.status ?? ''} options={[['', 'Any status'], ...Object.entries(SHOWN_STATUS)]} onChange={(v) => set({ status: v || undefined })} testId="inbox-status" />}
           {clusters.length > 1 && <Select label="Cluster" value={f.cluster} options={[['', 'Every cluster'], ...clusters]} onChange={(v) => set({ cluster: v || undefined })} testId="inbox-cluster" />}
+          {(froms.length > 1 || !!f.from) && (
+            <Select
+              label="From"
+              value={f.from ?? ''}
+              options={[['', 'From anyone'], ...froms, ...(f.from && !froms.some(([v]) => v === f.from) ? [[f.from, f.from] as [string, string]] : [])]}
+              onChange={(v) => set({ from: v || undefined })}
+              testId="inbox-from"
+            />
+          )}
         </div>
         {inbox.errors.map((e) => (
           <p key={e} className="tb-err" role="alert" style={{ margin: 0 }}>

@@ -14,6 +14,9 @@
 // Since CF-55's layout pass the tab is one fixed column, as wide as the
 // other Cases tabs', and every sub-tab is a MycroftPage in it: the same
 // width, intro, toolbar row and table whatever it holds.
+// Since KN-35 (Phase 12.1) one search box beside the sub-tabs searches
+// them all together (MycroftSearch.tsx): while it holds a query, its
+// results take the sub-tab's place.
 import { useCallback, useEffect, useState } from 'react'
 import { fetchFixes } from '../../api/fixes'
 import { fetchExceptions } from '../../api/lessons'
@@ -23,6 +26,7 @@ import { KnowledgeTab } from './KnowledgeTab'
 import { KnownTab } from './KnownTab'
 import { FixesView } from './FixesView'
 import { ExceptionsView } from './LessonsViews'
+import { MycroftSearchBox, MycroftSearchResults, useMycroftFind } from './MycroftSearch'
 
 export type MycroftSub = 'wiki' | 'known' | 'exceptions' | 'fixes'
 
@@ -50,6 +54,7 @@ export function MycroftTab({ route, access, onToast }: { route: Route; access: C
   const onExceptions = useCallback((n: number) => count('exceptions')(n), [count])
   const onPages = useCallback((n: number) => count('wiki')(n), [count])
   const onFixes = useCallback((n: number) => count('fixes')(n), [count])
+  const find = useMycroftFind()
   // The counts on the sub-tabs, read once; a person who may not see
   // exceptions or fixes gets no count, and the tab says why when opened.
   useEffect(() => {
@@ -68,18 +73,32 @@ export function MycroftTab({ route, access, onToast }: { route: Route; access: C
   }, [onExceptions, onFixes])
   return (
     <div className="cs-col cs-col-inbox" data-testid="mycroft-tab">
-      <div className="rk-seg" role="group" aria-label="Mycroft" style={{ alignSelf: 'flex-start' }}>
-        {SUBS.map((s) => (
-          <button key={s.id} aria-pressed={sub === s.id} title={s.tip} onClick={() => (sub !== s.id || rest.length > 0) && navigate(mycroftHref(s.id))} data-testid={`mycroft-sub-${s.id}`}>
-            {s.label}
-            {counts[s.id] !== undefined && <span className="rk-cnt">{counts[s.id]}</span>}
-          </button>
-        ))}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div className="rk-seg" role="group" aria-label="Mycroft">
+          {SUBS.map((s) => (
+            <button
+              key={s.id}
+              aria-pressed={sub === s.id && !find.active}
+              title={s.tip}
+              onClick={() => {
+                find.setQ('')
+                if (sub !== s.id || rest.length > 0) navigate(mycroftHref(s.id))
+              }}
+              data-testid={`mycroft-sub-${s.id}`}
+            >
+              {s.label}
+              {counts[s.id] !== undefined && <span className="rk-cnt">{counts[s.id]}</span>}
+            </button>
+          ))}
+        </div>
+        <span className="cs-grow" />
+        <MycroftSearchBox find={find} />
       </div>
-      {sub === 'wiki' && <KnowledgeTab route={{ ...route, path: ['wiki', ...rest] }} onToast={onToast} onPages={onPages} />}
-      {sub === 'known' && <KnownTab route={{ ...route, path: ['known', ...rest] }} access={access} onToast={onToast} />}
-      {sub === 'exceptions' && <ExceptionsView open={rest[0] ?? ''} onToast={onToast} onCount={onExceptions} />}
-      {sub === 'fixes' && <FixesView open={rest[0] ?? ''} onToast={onToast} onCount={onFixes} />}
+      {find.active && <MycroftSearchResults find={find} />}
+      {!find.active && sub === 'wiki' && <KnowledgeTab route={{ ...route, path: ['wiki', ...rest] }} onToast={onToast} onPages={onPages} />}
+      {!find.active && sub === 'known' && <KnownTab route={{ ...route, path: ['known', ...rest] }} access={access} onToast={onToast} />}
+      {!find.active && sub === 'exceptions' && <ExceptionsView open={rest[0] ?? ''} onToast={onToast} onCount={onExceptions} />}
+      {!find.active && sub === 'fixes' && <FixesView open={rest[0] ?? ''} onToast={onToast} onCount={onFixes} />}
     </div>
   )
 }

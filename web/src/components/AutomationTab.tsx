@@ -199,6 +199,10 @@ export function AutomationTab({ route, onToast, me, now }: TabProps & { me: Me |
             onToast(`${r.dryRun ? 'Dry run' : 'Run'} ${r.id} started on ${r.nodes.length} ${r.nodes.length === 1 ? 'node' : 'nodes'}.`)
             void load(true)
           }}
+          onWaiting={(w) => {
+            setRunning(null)
+            onToast(`Run request ${w.id} waits for another admin’s approval of ${w.changed.join(', ')}: it is in AIOps › Inbox, and starts when approved.`)
+          }}
         />
       )}
       {openRun !== null && (

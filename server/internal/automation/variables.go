@@ -16,9 +16,12 @@ const (
 	SourceRun         = "run"
 	SourceNode        = "node"
 	SourceFleet       = "fleet"
-	SourceMissing     = ""
-	defaultCeiling    = PrivilegeNobody
-	maxNodeOverride   = 500
+	// SourceVariable is a run value bound to a variable (FU-04): the
+	// node's own value of that variable.
+	SourceVariable  = "variable"
+	SourceMissing   = ""
+	defaultCeiling  = PrivilegeNobody
+	maxNodeOverride = 500
 	// MaxRebootMinutes is the longest a node may be given to come back
 	// from a reboot.
 	MaxRebootMinutes = 240
@@ -176,8 +179,14 @@ func ValidateVariables(fp FleetVariables) error {
 	return nil
 }
 
-// ValidateOverrides checks a run's own values.
-func ValidateOverrides(m map[string]string) error { return checkValues("the run", m) }
+// ValidateOverrides checks a run's own values: a value that starts with
+// var: must bind to a variable (FU-04).
+func ValidateOverrides(m map[string]string) error {
+	if err := checkValues("the run", m); err != nil {
+		return err
+	}
+	return checkBindings(m)
+}
 
 type variablesRecord struct {
 	// Clusters holds each cluster's fleets' parameters, by fleet id.
@@ -231,6 +240,9 @@ type Resolved struct {
 	Missing []string          `json:"missing,omitempty"`
 	// Conflicts are parameters that more than one of the node's fleets set.
 	Conflicts []Conflict `json:"conflicts,omitempty"`
+	// Bound are the parameters the run binds to a variable, and to which
+	// (FU-04).
+	Bound map[string]string `json:"bound,omitempty"`
 }
 
 // Layer is one place a node's values come from: a fleet it belongs to.
@@ -300,26 +312,59 @@ func inherited(layers []Layer, node, name string) (value, source string, conflic
 
 // ResolveLayers works out a node's values for the parameters a script
 // declares: the run's own, then what the node inherits from its fleets. A
-// conflict is an error for the run, not a value.
+// conflict is an error for the run, not a value. A run value that binds
+// to a variable (var:NAME, FU-04) is the node's own value of that
+// variable, inherited as any other; a node without one has no value, as
+// if the run gave none. A secret parameter's value is a Secret's
+// reference, which never binds.
 func ResolveLayers(h Header, layers []Layer, node string, run map[string]string) Resolved {
 	r := Resolved{Values: map[string]string{}, Sources: map[string]string{}}
 	for _, p := range h.Params {
+		from := p.Name
 		if v, ok := run[p.Name]; ok {
-			r.Values[p.Name], r.Sources[p.Name] = v, SourceRun
-			continue
+			name, bound := Bound(v)
+			if !bound || p.Secret {
+				if !p.Secret {
+					v = Constant(v)
+				}
+				// An empty string is a value the run may give, but none
+				// for a required parameter (FU-07).
+				if p.Required && v == "" {
+					r.Missing = append(r.Missing, p.Name+" (an empty string)")
+					continue
+				}
+				r.Values[p.Name], r.Sources[p.Name] = v, SourceRun
+				continue
+			}
+			if r.Bound == nil {
+				r.Bound = map[string]string{}
+			}
+			r.Bound[p.Name], from = name, name
 		}
-		v, source, conflict := inherited(layers, node, p.Name)
+		v, source, conflict := inherited(layers, node, from)
+		if r.Bound[p.Name] != "" && source != SourceMissing {
+			source = SourceVariable
+		}
 		switch {
 		case conflict != nil:
-			r.Conflicts = append(r.Conflicts, Conflict{Node: node, Param: p.Name, Fleets: conflict})
+			r.Conflicts = append(r.Conflicts, Conflict{Node: node, Param: from, Fleets: conflict})
 		case source != SourceMissing:
 			r.Values[p.Name], r.Sources[p.Name] = v, source
+		case p.Required && r.Bound[p.Name] != "":
+			r.Missing = append(r.Missing, fmt.Sprintf("%s (bound to variable %s, not set here)", p.Name, from))
 		case p.Required:
 			r.Missing = append(r.Missing, p.Name)
 		}
 	}
 	sort.Strings(r.Missing)
 	return r
+}
+
+// Inherited is what a node gets for a variable from its fleets, and
+// where from (SourceNode, SourceFleet, or SourceMissing); conflict names
+// the fleets that both set it.
+func Inherited(layers []Layer, node, name string) (value, source string, conflict []string) {
+	return inherited(layers, node, name)
 }
 
 // VariableConflicts lists every conflict among nodes' fleets, by node then

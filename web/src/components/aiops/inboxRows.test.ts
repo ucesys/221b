@@ -11,12 +11,14 @@ import {
   conflictRow,
   draftRunRow,
   filterRows,
+  fromText,
   INBOX_COLUMNS,
   knownRow,
   pageRequestRow,
   pendingByKind,
   proposalRow,
   rowTerms,
+  suggestionRow,
   whoseMatch,
   type InboxCase,
   type InboxFilter,
@@ -215,6 +217,13 @@ describe('the Inbox’s filters and order (IN-03, IN-04)', () => {
     expect(whoseMatch(proposalRow(card('PC-9', { state: 'applied' })), 'unassigned')).toBe(false)
   })
 
+  it('narrows to the cases the person is involved in, as the server says (EM-08)', () => {
+    const mixed = [caseRow(kase(8, { involved: true }), ctx), caseRow(kase(9), ctx), caseRow(kase(10, { status: 'closed', involved: true }), ctx), proposalRow(card('PC-2'))]
+    expect(filterRows(mixed, { ...f, who: 'involved' }).map((r) => r.ref)).toEqual(['C-8'])
+    expect(filterRows(mixed, { ...f, show: 'all', who: 'involved' }).map((r) => r.ref)).toEqual(['C-8', 'C-10'])
+    expect(pendingByKind(mixed, 'involved')).toMatchObject({ case: 1, proposal: 0 })
+  })
+
   it('counts what is pending of each kind', () => {
     expect(pendingByKind(rows)).toEqual({ case: 5, proposal: 1, approval: 0, known: 0, knowledge: 0, rule: 0 })
     expect(pendingByKind(rows, 'mine')).toMatchObject({ case: 2, proposal: 0 })
@@ -314,5 +323,55 @@ describe('the Inbox’s rows since wave 6c (CF-32, CF-35 to CF-38)', () => {
     expect(said({ status: 'inProgress' })).toBe('In progress')
     expect(said({ status: 'inProgress', stage: 'later' as never })).toBe('In progress')
     expect(rowTerms(caseRow(kase(5, { stage: 'closure' }), ctx)).map((t) => t.text)).toContain('waiting for closure')
+  })
+})
+
+// --- FU-02: who or what raised each row ---
+
+describe('the Inbox’s From column (FU-02)', () => {
+  it('says who raised each kind of row: a person, an agent with its job, or the system’s source', () => {
+    expect(caseRow(kase(1, { source: { kind: 'report' }, createdBy: { name: 'Pat', kind: 'person' } }), ctx).from).toEqual({ name: 'Pat', kind: 'person' })
+    // A bare name, as the server sent one before, is a person's.
+    expect(caseRow(kase(2), ctx).from).toEqual({ name: 'Bob (bob)', kind: 'person' })
+    expect(caseRow(agent(3, { createdBy: { name: 'Auditor', kind: 'agent' } }), ctx).from).toEqual({ name: 'Auditor', kind: 'agent', via: 'Auditor' })
+    expect(caseRow(agent(4, { createdBy: { name: 'an agent', kind: 'agent' }, source: { kind: 'finding', job: 'nightly-audit' } }), ctx).from).toEqual({ name: 'An agent', kind: 'agent', via: 'nightly-audit' })
+    expect(caseRow(kase(5, { source: { kind: 'alert', alert: 'KubePodCrashLooping' }, createdBy: { name: 'system', kind: 'system' } }), ctx).from).toEqual({ name: 'Alert: KubePodCrashLooping', kind: 'system' })
+    expect(caseRow(kase(6, { createdBy: undefined }), ctx).from).toBeUndefined()
+    expect(proposalRow(card('PC-1', { proposedBy: { name: 'Troubleshooter', kind: 'agent' }, source: { kind: 'job', job: 'alert-diagnosis' } } as Partial<Proposal>)).from).toEqual({
+      name: 'Troubleshooter',
+      kind: 'agent',
+      via: 'alert-diagnosis',
+    })
+    expect(proposalRow(card('PC-2', { source: { kind: 'chat', setBy: 'Ann' } } as Partial<Proposal>)).from).toEqual({ name: 'Troubleshooter', kind: 'agent', via: 'chat with Ann' })
+    expect(approvalRow(approval()).from).toEqual({ name: 'Cy', kind: 'person' })
+    const known = { id: 'KI-1', title: 'Slow', status: 'investigating', kind: 'normal', created: '2026-11-01T00:00:00Z', updated: '2026-11-01T00:00:00Z' }
+    expect(knownRow({ ...known, source: 'agent', draft: true } as never, ctx).from).toEqual({ name: 'An agent', kind: 'agent' })
+    expect(knownRow({ ...known, source: 'confluence', draft: true } as never, ctx).from).toEqual({ name: 'Confluence', kind: 'system' })
+    expect(knownRow({ ...known, source: 'operator', createdBy: { id: 'olga', name: 'Olga' } } as never, ctx).from).toEqual({ name: 'Olga', kind: 'person' })
+    // Older than FU-02: nobody is named.
+    expect(knownRow({ ...known, source: 'operator' } as never, ctx).from).toBeUndefined()
+    expect(draftRunRow({ id: 'r-1', started: '2026-11-01T00:00:00Z', by: 'schedule', state: 'waiting', store: 'git', pages: [] }).from).toEqual({ name: 'Mycroft', kind: 'agent', via: 'schedule' })
+    expect(pageRequestRow({ id: 'q-1', action: 'retire', path: 'a.md', title: 'A', reason: 'old', by: 'sam', name: 'Sam', at: '2026-11-01T00:00:00Z', state: 'waiting' }).from).toEqual({ name: 'Sam', kind: 'person' })
+    expect(conflictRow({ id: 'x', kind: 'wiki', title: 'A', their: '', at: '2026-11-01T00:00:00Z' }).from).toEqual({ name: 'Confluence', kind: 'system' })
+    expect(suggestionRow({ id: 'r', says: 'x', type: 't', jobs: [], from: [], runs: 1, clusters: 1, created: '2026-11-01T00:00:00Z' }).from).toEqual({ name: 'Housekeeping', kind: 'system' })
+  })
+
+  it('is a column before Assignee, sorted by name, exported, searched and filtered by', () => {
+    const ids = INBOX_COLUMNS.map((c) => c.id)
+    expect(ids.indexOf('from')).toBe(ids.indexOf('assignee') - 1)
+    const col = INBOX_COLUMNS.find((c) => c.id === 'from')!
+    expect(col.label).toBe('From')
+    const pat = caseRow(kase(1, { createdBy: { name: 'Pat', kind: 'person' } }), ctx)
+    const auditor = caseRow(agent(2, { createdBy: { name: 'Auditor', kind: 'agent' }, source: { kind: 'finding', job: 'nightly-audit' } }), ctx)
+    const none = caseRow(kase(3, { createdBy: undefined }), ctx)
+    const sorted = sortRows([pat, none, auditor], INBOX_COLUMNS, { col: 'from', dir: 'asc' }, Date.now())
+    expect(sorted.map((r) => r.ref)).toEqual(['C-2', 'C-1', 'C-3'])
+    expect(col.export(auditor, Date.now())).toEqual([{ head: 'From', cell: 'Auditor (agent) · nightly-audit' }])
+    expect(col.export(none, Date.now())).toEqual([{ head: 'From', cell: null }])
+    expect(fromText(pat.from)).toBe('Pat')
+    expect(rowTerms(auditor).map((t) => t.text)).toEqual(expect.arrayContaining(['Auditor', 'nightly-audit']))
+    const f: InboxFilter = { show: 'all', who: 'all', priority: null, cluster: '', source: null, type: null, from: 'Pat' }
+    expect(filterRows([pat, auditor, none], f).map((r) => r.ref)).toEqual(['C-1'])
+    expect(filterRows([pat, auditor, none], { ...f, from: '' })).toHaveLength(3)
   })
 })

@@ -118,6 +118,22 @@ func (w *wiring) wireCasework(ctx context.Context) error {
 		w.stored = append(w.stored, caseStored)
 	}
 	caseSvc.SetCards(w.cardStore)
+	// Email about cases (EM-01 to EM-10): Settings › Email beside
+	// Settings › Cases, the people's addresses from the cases, the local
+	// accounts and the directory.
+	{
+		var mailBackend kv.Backend
+		if caseStored != nil {
+			mailBackend = caseStored
+		}
+		w.mailSvc = openMail(cfg, w.restCfg, mailBackend, w.cardStore, w.auditLog, log)
+		caseSvc.SetMail(w.mailSvc, func(id string) string {
+			if w.authSvc == nil {
+				return ""
+			}
+			return w.authSvc.EmailOf(id)
+		})
+	}
 	// A proposed change names the cases it resolves (Phase 12, wave
 	// 6b, CF-29): a card applied, failed, rejected or expired acts on the
 	// cases it resolves; the cases' leader tick catches up with what this

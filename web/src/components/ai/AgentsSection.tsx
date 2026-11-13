@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { currentRoute, navigate, withParams } from '../../lib/router'
 import { fetchAI, saveAgent, saveLimits, stateLabel, stateTone, type AgentView, type AIOverview } from '../../api/ai'
 import { usd } from '../../api/sherlock'
 import { useShowCosts } from '../../lib/costs'
@@ -15,6 +16,18 @@ export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) =>
   const [ov, setOv] = useState<AIOverview | null>(null)
   const [error, setError] = useState('')
   const [open, setOpen] = useState<string | null>(initial ?? null)
+  // An agent named in the address (#/admin/settings/agents/sherlock), as
+  // Sherlock's view_admin opens it (SR-12), opens its drawer.
+  const [opened, setOpened] = useState(initial)
+  if (initial !== opened) {
+    setOpened(initial)
+    if (initial) setOpen(initial)
+  }
+  const close = () => {
+    setOpen(null)
+    const r = currentRoute()
+    if (r.view === 'admin' && r.path.length > 2) navigate(withParams({ ...r, path: r.path.slice(0, 2) }, {}), true)
+  }
   const costs = useShowCosts()
   useEffect(() => {
     fetchAI()
@@ -155,7 +168,7 @@ export function AgentsSection({ onToast, initial }: { onToast?: (msg: string) =>
         <AgentDrawer
           agent={agent}
           ov={ov}
-          onClose={() => setOpen(null)}
+          onClose={close}
           onSaved={(next, msg) => {
             setOv(next)
             if (msg) onToast?.(msg)

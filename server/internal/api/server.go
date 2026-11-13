@@ -39,6 +39,7 @@ import (
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/fleets"
+	"github.com/ucesys/221b/server/internal/imagecheck"
 	"github.com/ucesys/221b/server/internal/issues"
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/knowledge"
@@ -46,6 +47,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kv"
 	"github.com/ucesys/221b/server/internal/lessons"
 	"github.com/ucesys/221b/server/internal/live"
+	"github.com/ucesys/221b/server/internal/mail"
 	"github.com/ucesys/221b/server/internal/nodes"
 	"github.com/ucesys/221b/server/internal/nodessh"
 	"github.com/ucesys/221b/server/internal/roles"
@@ -235,6 +237,9 @@ type Options struct {
 	// Apps keeps the Helm applications (Phase 10); nil, or no Watson,
 	// leaves the Helm1 page's routes out.
 	Apps apps.Store
+	// ImageChecks looks for newer images than the releases run (HA-21,
+	// ADR-154); nil leaves the check out.
+	ImageChecks *imagecheck.Checker
 	// --- Helm repositories (Phase 12, wave 5) ---
 	// Repos are the chart repositories and OCI registries applications
 	// install from besides git (HR-01); nil is git alone.
@@ -289,6 +294,9 @@ type Options struct {
 	// Casework keeps the cases, served under /api/v1/aiops/cases; nil
 	// leaves AIOps › Cases out.
 	Casework *casework.Service
+	// Mail is Settings › Email (EM-01), served under
+	// /api/v1/settings/email; nil leaves it out.
+	Mail *mail.Service
 	// --- end of Watson cards.
 }
 
@@ -430,6 +438,9 @@ func New(o Options) *Server {
 		s.data("pods/{namespace}/{name}/log", "pod-log", s.podLog)
 		s.data("services/{namespace}/{name}", "service", s.service)
 		s.data("helm/{namespace}/{name}", "release", s.release)
+		if o.ImageChecks != nil {
+			s.data("helm/newer-images", "release-newer-images", s.getNewerImages)
+		}
 		s.data("objects/{kind}/{namespace}/{name}", "object", s.object)
 		s.data("yaml/{kind}/{name}", "yaml", s.yaml)
 		s.data("yaml/{kind}/{namespace}/{name}", "yaml", s.yaml)
@@ -530,6 +541,10 @@ func New(o Options) *Server {
 	if o.Fixes != nil {
 		s.fixesRoutes()
 	}
+	// --- One search across Mycroft (Phase 12.1, KN-35) ---
+	if o.Knowledge != nil || o.Issues != nil || o.Lessons != nil || o.Fixes != nil {
+		s.mycroftSearchRoutes()
+	}
 	// --- Watson cards (Phase 12) ---
 	if o.Cards != nil {
 		s.cardsRoutes()
@@ -537,6 +552,9 @@ func New(o Options) *Server {
 	// --- Case work (Phase 12) ---
 	if o.Casework != nil {
 		s.caseworkRoutes()
+	}
+	if o.Mail != nil {
+		s.mailRoutes()
 	}
 	// --- end of Watson cards.
 	// --- Getting started (Phase 12): the checklist, and Sherlock's setup
@@ -1095,6 +1113,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if b := st.AlertBanners; b != nil && !*b {
 		detail += ", alert banners hidden"
+	}
+	if !st.ChecksImages() {
+		detail += ", newer images not checked"
 	}
 	detail += changedByCluster("fleets", before.Fleets, st.Fleets) + changedByCluster("acknowledged alerts", before.Acks, st.Acks)
 	s.record(r, audit.ActionSettings, "settings", detail)

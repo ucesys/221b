@@ -42,13 +42,17 @@ func TestEveryMarkOfAPromptFileIsFilled(t *testing.T) {
 	}
 }
 
-// An agent has the tools its instructions send it to (PM-A2, PM-A4): the
-// Troubleshooter reads policies, Helm releases and Automation's runs,
-// the Auditor volumes and the Ingress path with its certificates.
+// An agent has the tools its instructions send it to (PM-A2, PM-A4, SR-10):
+// the Troubleshooter reads policies, Helm releases, Automation's runs and
+// their output, Watson's history, the audit log and the cases, the
+// Auditor volumes and the Ingress path with its certificates, the
+// Summarizer the jobs' runs and the cases.
 func TestAnAgentHasTheToolsItsInstructionsName(t *testing.T) {
 	for id, tools := range map[string][]string{
-		Troubleshooter: {"list_policies", "list_helm_releases", "get_helm_release", "automation_runs", "list_alerts"},
-		Auditor:        {"list_volumes", "trace_ingress", "review_cluster"},
+		Troubleshooter: {"list_policies", "list_helm_releases", "get_helm_release", "automation_runs", "list_alerts",
+			"get_automation_run", "watson_history", "audit_log", "list_cases", "get_case"},
+		Auditor:    {"list_volumes", "trace_ingress", "review_cluster"},
+		Summarizer: {"list_job_runs", "get_job_run", "list_cases"},
 	} {
 		info, _ := InfoOf(id)
 		for _, tool := range tools {

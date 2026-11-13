@@ -468,6 +468,11 @@ cases:
   # networkPolicy.enabled, sherlock.egress opens HTTPS to any address,
   # which covers Slack and Teams; otherwise list the webhooks' addresses
   # under networkPolicy.outboundCIDRs and their ports under outboundPorts.
+  # Email about cases (EM-01) is set at run time in Administration ›
+  # Settings › Email; its password is kept in the same Secret. With
+  # networkPolicy.enabled, list the SMTP server's address under
+  # networkPolicy.outboundCIDRs and its port (587, 465 or 25) under
+  # outboundPorts: nothing else opens it.
   # --- Case work (Phase 12, ADR-105 to ADR-107) ---
   # The same roles work the cases of Cases › Cases (numbered C-1, C-2…):
   # they open a case by hand or from a finding, change its priority,

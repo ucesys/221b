@@ -34,6 +34,7 @@ func (s *Server) watsonRoutes() {
 		s.handle("GET "+base+"watson/events", "watson-events", s.watsonEvents)
 		s.handle("POST "+base+"watson/commands", "watson-submit", s.postWatsonCommands)
 		s.handle("GET "+base+"watson/commands/{id}", "watson-command", s.getWatsonCommand)
+		s.handle("GET "+base+"watson/history", "watson-history", s.getWatsonHistory)
 		s.handle("POST "+base+"watson/commands/{id}/approve", "watson-approve", s.postWatsonApprove)
 		s.handle("POST "+base+"watson/commands/{id}/discard", "watson-discard", s.postWatsonDiscard)
 		s.handle("POST "+base+"watson/commands/{id}/stop", "watson-stop", s.postWatsonStop)
@@ -552,6 +553,36 @@ func (s *Server) getWatsonCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, _ := json.Marshal(s.watsonView(snap, who, c, lines, 0))
+	writeJSON(w, r, b)
+}
+
+// maxHistoryLines bounds the output lines of each command in Watson's
+// history.
+const maxHistoryLines = 200
+
+// getWatsonHistory is the person's commands on a cluster, the ones their
+// Watson panel lists, newest first, read once rather than streamed: for
+// Sherlock's watson_history (Phase 12.1, SR-03). lines says how many of
+// each command's last output lines come with it, none by default and at
+// most maxHistoryLines.
+func (s *Server) getWatsonHistory(w http.ResponseWriter, r *http.Request) {
+	c, who, ok := s.watsonReady(w, r)
+	if !ok {
+		return
+	}
+	n, _ := strconv.Atoi(r.URL.Query().Get("lines"))
+	n = max(0, min(n, maxHistoryLines))
+	items := s.opts.Watson.Items(c, who)
+	out := make([]watsonItem, 0, len(items))
+	for i := len(items) - 1; i >= 0; i-- {
+		snap, lines, ok := s.opts.Watson.Snapshot(items[i].ID, 0)
+		if !ok {
+			continue
+		}
+		start := max(0, len(lines)-n)
+		out = append(out, s.watsonView(snap, who, c, lines[start:], start))
+	}
+	b, _ := json.Marshal(map[string]any{"commands": out})
 	writeJSON(w, r, b)
 }
 

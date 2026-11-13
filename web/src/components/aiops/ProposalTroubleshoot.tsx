@@ -12,7 +12,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { commandOf, inWords, secondText, stateText, type Proposal } from '../../api/cards'
 import type { CaseCommand } from '../../api/casework'
-import { askProposalSherlock, proposalFrom, stopProposalSherlock, useProposalSherlock } from '../../api/proposalSherlock'
+import { askProposalSherlock, proposalFrom, proposalSherlockBase, stopProposalSherlock, useProposalSherlock } from '../../api/proposalSherlock'
 import { sendToWatson, useWatson, WatsonError } from '../../api/watson'
 import { fmtTs } from '../../lib/format'
 import type { Pane } from '../../lib/sherlock'
@@ -107,7 +107,8 @@ function Panes({ p, onToast, onCommands, bring, onApprove, busy, error }: Props)
     },
   }
   const shared: SharedChat = {
-    ask: (q) => askProposalSherlock(p.id, q),
+    ask: (q, ctx) => askProposalSherlock(p.id, q, ctx),
+    scope: proposalSherlockBase(p.id),
     stop: () => stopProposalSherlock(p.id),
     sub: `The conversation on ${p.id}, shared by everyone who may approve it or works its cases`,
     empty: `Ask Sherlock about ${p.id} on ${name}. Sherlock starts from the proposed change and the cases it resolves, and reads the cluster as you, with your rights. Everyone who may approve it or works its cases sees this conversation and adds to it; it is deleted when the proposed change is decided.`,

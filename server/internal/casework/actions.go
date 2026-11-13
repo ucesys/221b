@@ -341,6 +341,8 @@ func (s *Service) Join(ctx context.Context, id, text string, c Caller) (View, er
 		return View{}, err
 	}
 	s.note(ctx, n, Event{At: s.now(), What: "Joined: " + clip(text, 200), By: c.actor()})
+	id, name := c.mailBy()
+	s.tell(n, mailChange{what: "joined the case and added a comment", by: id, byName: name, internal: true})
 	s.record(audit.Event{Action: ActionJoin, Who: who(c.Person), Cluster: r.Cluster, Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK,
 		Detail: fmt.Sprintf("case %s joined by %s instead of a new case: follows it, a comment added", caseID(n), c.Label())})
 	return s.Get(ctx, c, caseID(n))
@@ -481,6 +483,20 @@ func (s *Service) Update(ctx context.Context, id string, ch Change, c Caller) (V
 		what := fmt.Sprintf("incident number %s → %s", firstOf(before.Case.Incident, "none"), firstOf(after.Incident, "none"))
 		own = append(own, what)
 		s.record(audit.Event{Action: ActionIncident, Who: who(c.Person), Cluster: after.Cluster, Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("case %s: %s", caseID(n), what)})
+	}
+	// The email says the priority, the assignee and the status (EM-06).
+	var mailed []string
+	if after.Priority != before.Priority {
+		mailed = append(mailed, fmt.Sprintf("priority P%d → P%d", before.Priority, after.Priority))
+	}
+	if personLabel(after.Owner) != personLabel(before.Owner) {
+		mailed = append(mailed, "assigned to "+firstOf(personLabel(after.Owner), "nobody"))
+	}
+	if after.Status != before.Status {
+		mailed = append(mailed, "now "+shownStatus(after))
+	}
+	if len(mailed) > 0 {
+		s.tellBy(n, c, strings.Join(mailed, ", "))
 	}
 	if len(said) > 0 || len(own) > 0 {
 		what := upper(strings.Join(append(append([]string{}, said...), own...), ", "))
@@ -644,6 +660,7 @@ func (s *Service) Known(ctx context.Context, id string, in KnownLink, c Caller) 
 		what = "Closed as the known issue " + kid + ", made from the case"
 	}
 	s.note(ctx, n, Event{At: s.now(), What: what, By: c.actor()}, partClose)
+	s.tellBy(n, c, "closed it as the known issue "+kid)
 	s.record(audit.Event{Action: ActionKnown, Who: who(c.Person), Cluster: r.Cluster, Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("case %s: %s", caseID(n), strings.ToLower(what[:1])+what[1:])})
 	// Its troubleshooting ends and its waiting changes are settled (CF-34, CF-47).
 	s.closed(ctx, n, c.card())
@@ -748,6 +765,7 @@ func (s *Service) Fix(ctx context.Context, id string, in FixInput, c Caller) (Vi
 	if err != nil {
 		s.o.Logger.Warn("a case's fix could not be noted on its work", "case", caseID(n), "err", err)
 	}
+	s.tellBy(n, c, "closed it as fixed")
 	kept := "no RCA"
 	if rca != nil {
 		kept = "with its RCA"
@@ -835,11 +853,17 @@ func (s *Service) Close(ctx context.Context, id string, in CloseInput, c Caller)
 	if end != 0 {
 		what = fmt.Sprintf("Closed as a duplicate of %s: %s", caseID(end), explanation)
 		s.note(ctx, end, Event{At: s.now(), What: fmt.Sprintf("%s (%s) was closed as a duplicate of this case; its reporter follows it here", caseID(n), clip(r.Title, 120)), By: c.actor()})
+		s.tellBy(end, c, caseID(n)+" was closed as a duplicate of this case")
 		if agent {
 			_ = s.updateRecord(ctx, func(rec *record) error { rec.Duplicates++; return nil })
 		}
 	}
 	s.note(ctx, n, Event{At: s.now(), What: what, By: c.actor()}, partClose)
+	if end != 0 {
+		s.tellBy(n, c, "closed it as a duplicate of "+caseID(end))
+	} else {
+		s.tellBy(n, c, "closed it as "+outcomeWords(in.Outcome, ""))
+	}
 	s.record(audit.Event{Action: ActionClose, Who: who(c.Person), Cluster: r.Cluster, Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("case %s closed, %s%s", caseID(n), in.Outcome, prefixed(" of ", idOf(end)))})
 	// Its troubleshooting ends and its waiting changes are settled (CF-34, CF-47).
 	s.closed(ctx, n, c.card())
@@ -928,6 +952,7 @@ func (s *Service) Exception(ctx context.Context, id string, in ExceptionInput, c
 		until2 = "until " + in.Expires
 	}
 	s.note(ctx, n, Event{At: s.now(), What: fmt.Sprintf("Accepted as the exception %s, %s: %s", e.ID, until2, reason), By: c.actor()}, partClose)
+	s.tellBy(n, c, "closed it as the exception "+e.ID)
 	s.record(audit.Event{Action: ActionException, Who: who(c.Person), Cluster: r.Cluster, Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK,
 		Detail: fmt.Sprintf("case %s closed as the exception %s (%s), %s", caseID(n), e.ID, k, until2)})
 	// Its troubleshooting ends and its waiting changes are settled (CF-34, CF-47).
@@ -978,6 +1003,7 @@ func (s *Service) Reopen(ctx context.Context, id, reason string, c Caller) (View
 		what += "; the exception " + ex + " is removed"
 	}
 	s.note(ctx, n, Event{At: s.now(), What: what, By: c.actor()})
+	s.tellBy(n, c, "reopened it, now "+shownStatus(r))
 	s.record(audit.Event{Action: ActionReopen, Who: who(c.Person), Cluster: r.Cluster, Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("case %s reopened (was %s)%s", caseID(n), v.Outcome, prefixed("; exception removed: ", ex))})
 	return s.Get(ctx, c, caseID(n))
 }
@@ -1108,8 +1134,12 @@ func (s *Service) Offer(ctx context.Context, id string, in issues.Offer, c Calle
 		}
 	}
 	s.note(ctx, n, Event{At: s.now(), What: what, By: c.actor()})
+	if offer.Kind != issues.OfferRegression && offer.Kind != issues.OfferSameAs {
+		s.tellBy(n, c, strings.ToLower(what[:1])+what[1:])
+	}
 	if offer.Kind == issues.OfferReopenOriginal {
 		s.note(ctx, end, Event{At: s.now(), What: fmt.Sprintf("Reopened: %s reported the same problem", caseID(n)), By: c.actor()})
+		s.tellBy(end, c, fmt.Sprintf("reopened it: %s reported the same problem", caseID(n)))
 	}
 	s.record(audit.Event{Action: ActionOffer, Who: who(c.Person), Target: caseID(n), From: c.From, Outcome: audit.OutcomeOK, Detail: fmt.Sprintf("case %s: %s (%s of %s)", caseID(n), strings.ToLower(what[:1])+what[1:], offer.Kind, caseID(end))})
 	// Its troubleshooting ends and its waiting changes are settled (CF-34, CF-47).

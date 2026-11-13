@@ -169,6 +169,10 @@ func RaiseImpact(items []ImpactItem, raised map[string]string) []ImpactItem {
 type changesRecord struct {
 	Next    int              `json:"next"`
 	Changes []VariableChange `json:"changes"`
+	// NextRun and Runs are the runs that wait for their values' approval
+	// (FU-05).
+	NextRun int          `json:"nextRun,omitempty"`
+	Runs    []WaitingRun `json:"runs,omitempty"`
 }
 
 // Changes lists a cluster's parameter changes, newest first.

@@ -73,6 +73,15 @@ type Options struct {
 	// Every is how often the leader looks for analyses left behind and
 	// whether the day's retention is due; 30 s.
 	Every time.Duration
+	// Mail is Settings › Email (EM-05): nil emails nobody. EmailOf finds
+	// a person's address by their id when the case does not hold it.
+	Mail    Mailer
+	EmailOf func(id string) string
+	// MailWindow is how long the changes to one case gather into one
+	// email, DefaultMailWindow; MailRetries the waits before each send
+	// again, 30 s, 2 and 10 minutes.
+	MailWindow  time.Duration
+	MailRetries []time.Duration
 }
 
 // Service keeps the cases' work and routes the runs' findings.
@@ -95,7 +104,9 @@ type Service struct {
 	// net (CF-78).
 	net alertNet
 	// rules keeps the validation rules (ADR-138).
-	rules  *Rules
+	rules *Rules
+	// mail gathers the changes to email (EM-05).
+	mail   mailer
 	wg     sync.WaitGroup
 	base   context.Context
 	cancel context.CancelFunc
@@ -127,12 +138,20 @@ func New(o Options) *Service {
 	if o.Every <= 0 {
 		o.Every = 30 * time.Second
 	}
+	if o.MailWindow <= 0 {
+		o.MailWindow = DefaultMailWindow
+	}
+	if o.MailRetries == nil {
+		o.MailRetries = defaultMailRetries
+	}
 	base, cancel := context.WithCancel(context.Background())
 	s := &Service{o: o, active: map[int]bool{}, base: base, cancel: cancel}
 	s.rules = &Rules{s: s}
 	// A case the issue service closes itself settles its waiting changes
 	// (CF-34).
 	o.Issues.OnChange(s.issueChanged)
+	// What the issue service changes is emailed too (EM-06).
+	o.Issues.OnChange(s.mailEvent)
 	return s
 }
 
@@ -187,6 +206,7 @@ func (s *Service) Wait() { s.wg.Wait() }
 func (s *Service) Stop() {
 	s.cancel()
 	s.wg.Wait()
+	s.mail.wg.Wait()
 }
 
 func (s *Service) now() time.Time { return s.o.Now().UTC() }
@@ -276,6 +296,8 @@ type Filter struct {
 	Unassigned bool
 	// Type keeps one type of case (CF-37).
 	Type string
+	// Involved keeps the cases the caller is involved in (EM-08).
+	Involved bool
 	// Q is words in the title, object, check, incident number or id.
 	Q string
 }
@@ -399,6 +421,10 @@ type Brief struct {
 	// Stage is what the case waits for now (CF-107): its analysis, a
 	// change's approval, the validation run, its closure; "" for none.
 	Stage string `json:"stage,omitempty"`
+	// Involved says the person asking is involved in it (EM-08): they
+	// reported, filed, opened, follow, closed it, it is assigned to them,
+	// they wrote in its conversation or approved a change that fixed it.
+	Involved bool `json:"involved,omitempty"`
 }
 
 // ParseObject reads a Kubernetes object from what a case is about:
@@ -550,7 +576,7 @@ func (s *Service) analyzing(ctx context.Context) map[int]bool {
 // List lists the cases, in their order.
 func (s *Service) List(ctx context.Context, c Caller, f Filter) ([]Brief, error) {
 	views, err := s.o.Issues.CaseViews(ctx, c.issue(), issues.Filter{Status: issues.Status(f.Status), Outcome: issues.Outcome(f.Outcome), Open: f.Open, Pending: f.Pending,
-		Cluster: f.Cluster, Priority: f.Priority, Source: f.Source, Agents: f.Agents, People: f.People, Owner: f.Owner, Unassigned: f.Unassigned, Type: f.Type, Query: f.Q})
+		Cluster: f.Cluster, Priority: f.Priority, Source: f.Source, Agents: f.Agents, People: f.People, Owner: f.Owner, Unassigned: f.Unassigned, Type: f.Type, Involved: f.Involved, Query: f.Q})
 	if err != nil {
 		return nil, err
 	}
@@ -560,9 +586,18 @@ func (s *Service) List(ctx context.Context, c Caller, f Filter) ([]Brief, error)
 	}
 	nofix := countNoFix(lines)
 	busy, changes := s.analyzing(ctx), s.changeStages(ctx)
+	involved := map[int]bool{}
+	me := c.key()
+	for _, l := range lines {
+		if l.Involves(me) {
+			involved[l.Number] = true
+		}
+	}
 	out := make([]Brief, 0, len(views))
 	for _, v := range views {
-		out = append(out, brief(v, busy[v.Number], nofix, changes[caseID(v.Number)]))
+		b := brief(v, busy[v.Number], nofix, changes[caseID(v.Number)])
+		b.Involved = involved[v.Number]
+		out = append(out, b)
 	}
 	named := s.clusterNamer()
 	for i := range out {

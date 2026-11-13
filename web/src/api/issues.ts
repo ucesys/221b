@@ -97,6 +97,8 @@ export interface OpKnown extends Known {
   inactive?: boolean
   /** With inactive: the known issue it duplicates, "KI-2". */
   duplicateOf?: string
+  /** Who wrote it, for the Inbox's From (FU-02): an operator, or the source's system account. */
+  createdBy?: Person
 }
 
 /** A report as an operator sees it (IS-22's fields included). */

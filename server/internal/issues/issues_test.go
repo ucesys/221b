@@ -913,3 +913,40 @@ func TestAReporterChoosesPriorityAndClusterCF64(t *testing.T) {
 		t.Fatal("no clusters must still be a list")
 	}
 }
+
+// --- FU-02: the Inbox says who raised a row ---
+
+// A known issue keeps who wrote it, for the Inbox's From column: the
+// operator, or the source's system account; a later change by another
+// does not change it, and a reporter is not told.
+func TestAKnownIssueKeepsWhoWroteItFU02(t *testing.T) {
+	f := newFixture(t, Options{})
+	k := seed(t, f)
+	if k.CreatedBy == nil || k.CreatedBy.ID != "olga" || k.CreatedBy.System {
+		t.Fatalf("createdBy %+v", k.CreatedBy)
+	}
+	changed, err := f.s.SaveKnown(ctx, admin, k.ID, KnownInput{Status: ptr(KnownIdentified)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.CreatedBy == nil || changed.CreatedBy.ID != "olga" {
+		t.Fatalf("a change made %+v its writer", changed.CreatedBy)
+	}
+	d, err := f.s.Propose(ctx, SourceAgent, KnownInput{Title: ptr("Dashboards show yesterday's numbers")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.CreatedBy == nil || !d.CreatedBy.System || d.CreatedBy.ID != "system:agent" {
+		t.Fatalf("a proposal's createdBy %+v", d.CreatedBy)
+	}
+	st, err := f.s.load(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := st.knownView(alice, &k); v.CreatedBy != nil {
+		t.Fatalf("a reporter sees who wrote it: %+v", v.CreatedBy)
+	}
+	if v := st.knownView(operator, &k); v.CreatedBy == nil || v.CreatedBy.Name != "Olga" {
+		t.Fatalf("an operator does not see who wrote it: %+v", v.CreatedBy)
+	}
+}

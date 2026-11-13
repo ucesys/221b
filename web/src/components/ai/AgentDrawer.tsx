@@ -40,6 +40,7 @@ import { Select } from '../Select'
 import { AgentJobs } from '../aiops/AgentJobs'
 import { ModelPicker } from './ModelPicker'
 import { useShowCosts } from '../../lib/costs'
+import { Unsaved, useUnsaved } from '../../lib/unsaved'
 
 /** What each tool lets an agent do, for its checkbox. */
 export const TOOL_LABELS: Record<string, string> = {
@@ -137,6 +138,7 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
   const author = ov.agents.find((a) => a.id === 'automationAuthor')
   const sameAsAuthor = agent.id === 'scriptReviewer' && (author?.providerId ?? 'default') === providerId && !ov.singleProvider
   const changed = canon(set) !== canon({ ...agent.settings, ...(sherlock ? { sherlockClusters: agent.clusters ?? [], viewControl: ov.viewControl } : {}) })
+  useUnsaved(changed, 'the agent drawer')
   const tools = set.tools ?? agent.tools
   const save = async () => {
     setBusy(true)
@@ -183,14 +185,17 @@ export function AgentDrawer({ agent, ov, onClose, onSaved, onToast }: Props) {
       }
     >
       <Card title="Model">
-        <div className="rk-frow" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600, flex: '1 1 200px' }}>
+        {/* Provider, model and the refresh icon on one line, their fields at one height: the labels above them are alike. */}
+        <div className="rk-frow" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-start' }} data-testid="agent-model-row">
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600, flex: '0 0 200px' }}>
             Provider
-            <Select label="Provider" value={providerId} options={ov.providers.map((p) => [p.id, p.name])} onChange={(v) => setSet({ ...set, provider: v === 'default' ? undefined : v })} testId="agent-provider" width="100%" />
+            <Select label="Provider" value={providerId} options={ov.providers.map((p) => [p.id, p.name])} onChange={(v) => setSet({ ...set, provider: v === 'default' ? undefined : v })} testId="agent-provider" width={200} />
           </label>
           {/* --- AI settings, round 2 (Phase 12, wave 5): the provider's models in a dropdown, and the model's context. --- */}
+          {/* --- FU-01: listed as the drawer opens and again when the provider changes; typed only when they cannot be listed. --- */}
           <ModelPicker
             label="Model"
+            listOnly
             value={set.model || provider?.model || ''}
             disabled={!set.model}
             onChange={(model, listed) => setSet({ ...set, model: model || undefined, contextWindow: listed?.contextWindow || set.contextWindow })}
@@ -491,6 +496,7 @@ function InstructionsCard({ agent, ov, onToast }: { agent: AgentView; ov: AIOver
       title="Instructions"
       aside={
         <span style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+          <Unsaved when={edited} what="the agent’s instructions" />
           <span className="rk-pill" data-tone={stateTone(ins.state)} data-testid="ins-state">
             {stateLabel(ins.state)}
           </span>

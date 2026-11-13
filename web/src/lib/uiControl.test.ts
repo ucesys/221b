@@ -2,7 +2,9 @@ import { act, renderHook } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ACTIONS, canUndo, checkInput, isUndone, markUndone, REGISTRY, runRequest, setAnswering, setToolOpener, TAB_SPECS, undo, viewState, type ActionDef } from './uiControl'
+import { ACTIONS, ADMIN_VIEW_PAGES, canUndo, checkInput, isUndone, markUndone, REGISTRY, runRequest, setAnswering, setToolOpener, setUIMe, showChanges, TAB_SPECS, undo, viewState, type ActionDef } from './uiControl'
+import { holdUnsaved } from './unsaved'
+import type { Me } from '../api/types'
 import { currentRoute, setRouteForTests, TABS } from './router'
 import { tableHandle, tableHandles } from './tables'
 import { useTable } from './useTable'
@@ -34,7 +36,7 @@ describe('Sherlock’s UI actions are one list (P6U-04, P6U-12)', () => {
     const names = server.actions.map((a) => a.name)
     expect(ACTIONS.map((a) => a.name)).toEqual(names)
     expect(Object.keys(REGISTRY).sort()).toEqual([...names].sort())
-    expect(names).toEqual(['view_state', 'view_open', 'view_filter', 'view_search', 'view_sort', 'view_columns', 'view_details', 'view_highlight', 'open_tool_dialog'])
+    expect(names).toEqual(['view_state', 'view_open', 'view_filter', 'view_search', 'view_sort', 'view_columns', 'view_details', 'view_highlight', 'view_aiops', 'view_admin', 'open_tool_dialog'])
   })
 
   it('accepts exactly the tabs, filters and values of the fixture the server’s descriptions are tested against (S-3)', () => {
@@ -63,16 +65,28 @@ describe('Sherlock’s UI actions are one list (P6U-04, P6U-12)', () => {
     expect(() => checkInput(search, { text: 'x'.repeat(201) })).toThrow('longer than 200')
   })
 
-  it('cannot reach the Administration area (RB-48)', () => {
+  it('opens the cluster’s tabs with view_open, and Administration only with view_admin (RB-48, SR-12)', () => {
     const open = ACTIONS.find((a) => a.name === 'view_open')!
     const tabs = (open.input_schema.properties as Record<string, { enum?: string[] }>).tab!.enum!
     expect(tabs).not.toContain('admin')
     expect(tabs.sort()).toEqual(TABS.map((t) => t.id).sort())
     setRouteForTests('#/pods')
     expect(() => REGISTRY.view_open!(currentRoute(), { tab: 'admin' })).toThrow('There is no tab "admin"')
-    // Nothing else drives a page that is not a tab: sorting and searching need one.
-    setRouteForTests('#/admin/users')
+    // A page that is neither a tab nor Administration's has no tables to drive.
+    setRouteForTests('#/aiops/inbox')
     expect(() => REGISTRY.view_sort!(currentRoute(), { column: 'name', direction: 'asc' })).toThrow('not on a tab')
+    // Administration's pages have their tables; with none on screen, it says so.
+    setRouteForTests('#/admin/users')
+    expect(() => REGISTRY.view_sort!(currentRoute(), { column: 'name', direction: 'asc' })).toThrow('No table on screen')
+    expect(() => REGISTRY.view_filter!(currentRoute(), { set: { status: 'x' } })).toThrow('not on a tab')
+  })
+
+  it('opens exactly the pages of the fixture the server’s description is tested against (SR-12)', () => {
+    const fixture = JSON.parse(readFileSync(resolve(__dirname, '../../../server/internal/sherlock/testdata/ui_admin.json'), 'utf8')) as { pages: Record<string, { item: boolean; search: boolean }> }
+    const mine = Object.fromEntries(Object.entries(ADMIN_VIEW_PAGES).map(([id, p]) => [id, { item: !!p.item, search: !!p.table }]))
+    expect(mine).toEqual(fixture.pages)
+    const a = ACTIONS.find((x) => x.name === 'view_admin')!
+    expect((a.input_schema.properties.page as { enum: string[] }).enum).toEqual(Object.keys(ADMIN_VIEW_PAGES))
   })
 
   it('declares the filters of every tab', () => {
@@ -279,5 +293,250 @@ describe('every table registers under its id (P6U-01, P6U-11)', () => {
     expect(tbl.rows).toBe('500 of 500')
     expect(tbl.hidden).toEqual(['extra'])
     expect(JSON.stringify(v).length).toBeLessThanOrEqual(2000)
+  })
+})
+
+describe('Sherlock points at a case or a run in AIOps (SR-09)', () => {
+  beforeEach(() => {
+    window.history.replaceState(null, '', '#/pods')
+    setRouteForTests('#/pods')
+  })
+
+  it('opens the Inbox, a case, the runs and a run, as their links do', () => {
+    const open = REGISTRY.view_aiops!
+    expect(open(currentRoute(), { page: 'case', id: 'C-12' }).label).toBe('Opened case C-12')
+    expect(window.location.hash).toBe('#/aiops/inbox/case/12')
+    open(currentRoute(), { page: 'case', id: '7' })
+    expect(window.location.hash).toBe('#/aiops/inbox/case/7')
+    open(currentRoute(), { page: 'inbox', show: 'all', search: 'web/api' })
+    expect(window.location.hash).toBe('#/aiops/inbox?show=all&q=web%2Fapi')
+    // The cases the person is involved in (EM-08), as the emails link them.
+    expect(open(currentRoute(), { page: 'inbox', show: 'all', who: 'involved' }).label).toBe('Opened AIOps › Inbox, closed cases included, the cases the person is involved in')
+    expect(window.location.hash).toBe('#/aiops/inbox?show=all&who=involved')
+    open(currentRoute(), { page: 'runs' })
+    expect(window.location.hash).toBe('#/aiops/jobs/runs')
+    open(currentRoute(), { page: 'run', id: 'run-41' })
+    expect(window.location.hash).toBe('#/aiops/jobs/runs/run-41')
+    // The view state then names what is open.
+    setRouteForTests('#/aiops/jobs/runs/run-41')
+    expect(viewState().item).toEqual({ kind: 'run', id: 'run-41' })
+  })
+
+  it('stays in the cluster the person is on', () => {
+    window.history.replaceState(null, '', '#/c/staging/pods')
+    setRouteForTests('#/c/staging/pods')
+    REGISTRY.view_aiops!(currentRoute(), { page: 'case', id: 'C-3' })
+    expect(window.location.hash).toBe('#/c/staging/aiops/inbox/case/3')
+  })
+
+  it('refuses what is not a case or a run, and filters on another page', () => {
+    const open = REGISTRY.view_aiops!
+    const before = window.location.hash
+    expect(() => open(currentRoute(), { page: 'admin' })).toThrow('page must be one of inbox, case, runs, run')
+    expect(() => open(currentRoute(), { page: 'case', id: '../../admin/users' })).toThrow('such as C-12')
+    expect(() => open(currentRoute(), { page: 'case' })).toThrow('such as C-12')
+    expect(() => open(currentRoute(), { page: 'run', id: 'javascript:alert(1)' })).toThrow('such as run-12')
+    expect(() => open(currentRoute(), { page: 'run', id: 'run-1/../../x' })).toThrow('such as run-12')
+    expect(() => open(currentRoute(), { page: 'inbox', id: 'C-1' })).toThrow('takes no id')
+    expect(() => open(currentRoute(), { page: 'runs', search: 'x' })).toThrow('for the inbox page')
+    expect(() => open(currentRoute(), { page: 'inbox', show: 'closed' })).toThrow('show must be one of pending, all')
+    expect(() => open(currentRoute(), { page: 'inbox', who: 'theirs' })).toThrow('who must be one of all, mine, unassigned, involved')
+    expect(() => open(currentRoute(), { page: 'case', id: 'C-1', who: 'mine' })).toThrow('for the inbox page')
+    const a = ACTIONS.find((x) => x.name === 'view_aiops')!
+    expect(() => checkInput(a, { page: 'case', id: 'C-1', cluster: 'prod' })).toThrow('takes no "cluster"')
+    expect(window.location.hash).toBe(before)
+  })
+})
+
+const ME = (over: Partial<Me> = {}): Me => ({ mode: 'oidc', user: { subject: 's', username: 'ana' }, admin: false, roles: ['viewer'], method: 'oidc', sessionIdleSeconds: 3600, ...over })
+const SUPER = ME({ admin: true, roles: ['superAdmin'] })
+
+describe('Sherlock opens Administration and Settings pages the person may open (SR-12, SR-13)', () => {
+  beforeEach(() => {
+    window.history.replaceState(null, '', '#/pods')
+    setRouteForTests('#/pods')
+    setUIMe(SUPER)
+  })
+  afterEach(() => setUIMe(null))
+  const open = (input: Record<string, unknown>) => REGISTRY.view_admin!(currentRoute(), input)
+
+  it('opens each page as its own link does, with an item’s drawer, in the cluster the person is on', () => {
+    expect(open({ page: 'agents', item: 'sherlock' }).label).toBe('Opened Settings › Agents, sherlock')
+    expect(window.location.hash).toBe('#/admin/settings/agents/sherlock')
+    open({ page: 'general' })
+    expect(window.location.hash).toBe('#/admin/settings')
+    open({ page: 'audit-log' })
+    expect(window.location.hash).toBe('#/admin/logs/audit')
+    open({ page: 'confluence' })
+    expect(window.location.hash).toBe('#/admin/settings/issues')
+    open({ page: 'providers', item: 'gateway' })
+    expect(window.location.hash).toBe('#/admin/settings/providers/gateway')
+    open({ page: 'roles', item: 'admin' })
+    expect(window.location.hash).toBe('#/admin/roles/admin')
+    open({ page: 'home' })
+    expect(window.location.hash).toBe('#/')
+    // The conversation is the cluster's: its pages open under it.
+    window.history.replaceState(null, '', '#/c/staging/pods')
+    setRouteForTests('#/c/staging/pods')
+    open({ page: 'users', item: 'bob' })
+    expect(window.location.hash).toBe('#/c/staging/admin/users/bob')
+    open({ page: 'connection' })
+    expect(window.location.hash).toBe('#/c/staging/cluster')
+    setRouteForTests('#/c/staging/cluster')
+    expect(viewState()).toMatchObject({ cluster: 'staging', view: 'cluster' })
+    try {
+      open({ page: 'home' })
+      expect.unreachable()
+    } catch (e) {
+      expect((e as { link?: string }).link).toBe('#/home')
+    }
+  })
+
+  it('sets a page’s search once its table is on screen, and reads and sorts the tables there', async () => {
+    open({ page: 'users', search: 'ana' })
+    setRouteForTests('#/admin/users')
+    const { result, unmount } = renderHook(() => useTable({ id: 'admin-users', columns: COLS, rows: rowsOf(5), terms, now: 0, defaultSort: { col: 'name', dir: 'asc' } }))
+    await vi.waitFor(() => expect(result.current.query).toBe('ana'))
+    expect(viewState().tables?.map((t) => t.id)).toContain('admin-users')
+    act(() => {
+      REGISTRY.view_sort!(currentRoute(), { table: 'admin-users', column: 'n', direction: 'desc' })
+    })
+    expect(result.current.sort).toEqual({ col: 'n', dir: 'desc' })
+    unmount()
+  })
+
+  it('refuses a page the person’s role does not open, and anything but a page', () => {
+    const before = window.location.hash
+    setUIMe(ME())
+    expect(() => open({ page: 'agents' })).toThrow('is for SuperAdmins')
+    expect(() => open({ page: 'users', item: 'bob' })).toThrow('is for SuperAdmins')
+    expect(() => open({ page: 'knowledge' })).toThrow('is for SuperAdmins')
+    expect(window.location.hash).toBe(before)
+    expect(open({ page: 'roles' }).label).toBe('Opened Administration › Roles')
+    // An Admin sees Knowledge's Added in Mycroft card.
+    setUIMe(ME({ roles: ['admin'] }))
+    expect(open({ page: 'knowledge' }).label).toBe('Opened Settings › Knowledge')
+    setUIMe(ME({ mode: 'none', roles: [] }))
+    expect(() => open({ page: 'roles' })).toThrow('Sign-in is off')
+    expect(open({ page: 'permissions' }).label).toBe('Opened Administration › Permissions')
+    setUIMe(null)
+    expect(() => open({ page: 'permissions' })).toThrow('not known')
+    setUIMe(SUPER)
+    expect(() => open({ page: 'general', item: 'x' })).toThrow('general takes no item')
+    expect(() => open({ page: 'agents', item: '../../users' })).toThrow('is not an id')
+    expect(() => open({ page: 'sla', search: 'P0' })).toThrow('has no search box')
+    expect(() => open({ page: 'https://evil.example' })).toThrow('page must be one of')
+    expect(() => open({ page: 'toString' })).toThrow('page must be one of')
+  })
+})
+
+describe('never away from unsaved changes; Show in 221B applies them later (SR-14, SR-15)', () => {
+  beforeEach(() => {
+    window.history.replaceState(null, '', '#/admin/settings')
+    setRouteForTests('#/admin/settings')
+    setUIMe(SUPER)
+  })
+  afterEach(() => {
+    setAnswering('local', null)
+    setUIMe(null)
+  })
+  const ask = (answer: number, action: string, input: unknown) => ({ id: `s${answer}`, window: 'w', answer, action, input })
+
+  it('leaves the view while a form holds unsaved changes, and says so', async () => {
+    const release = holdUnsaved('the agent drawer')
+    try {
+      setAnswering('local', 21)
+      const r = await runRequest(ask(21, 'view_admin', { page: 'agents', item: 'sherlock' }), 'local')
+      expect(r).toMatchObject({ applied: false, deferred: true })
+      expect(window.location.hash).toBe('#/admin/settings')
+      // Reading is not moving: view_state still answers.
+      expect((await runRequest(ask(21, 'view_state', {}), 'local')).view).toMatchObject({ view: 'admin' })
+      // A page the role does not open is refused now, not offered for later.
+      setUIMe(ME())
+      expect((await runRequest(ask(21, 'view_admin', { page: 'users' }), 'local')).error).toContain('is for SuperAdmins')
+      setUIMe(SUPER)
+      // Show in 221B asks before leaving the edits, then shows.
+      const changes = [{ action: 'view_admin', input: { page: 'agents', item: 'sherlock' } }]
+      expect(await showChanges(changes)).toEqual({ applied: [], failed: [], unsaved: ['the agent drawer'] })
+      expect(window.location.hash).toBe('#/admin/settings')
+      expect((await showChanges(changes, true)).applied).toEqual(['Opened Settings › Agents, sherlock'])
+      expect(window.location.hash).toBe('#/admin/settings/agents/sherlock')
+    } finally {
+      release()
+    }
+    // Saved or undone, the next change applies at once.
+    setAnswering('local', 22)
+    expect(await runRequest(ask(22, 'view_admin', { page: 'sla' }), 'local')).toMatchObject({ applied: true })
+    expect(window.location.hash).toBe('#/admin/settings/sla')
+  })
+
+  // The screen moves only once the answer is done (SR-18): during it a
+  // change is checked and held, a page the role does not open is refused at
+  // once, and unsaved changes still leave it for Show in 221B.
+  it('holds a change asked for during the answer, refusing at once what it never could do', async () => {
+    setAnswering('local', 23)
+    expect(await runRequest({ ...ask(23, 'view_admin', { page: 'sla' }), hold: true }, 'local')).toEqual({ applied: false, held: true })
+    expect(window.location.hash).toBe('#/admin/settings')
+    setUIMe(ME())
+    expect((await runRequest({ ...ask(23, 'view_admin', { page: 'users' }), hold: true }, 'local')).error).toContain('is for SuperAdmins')
+    setUIMe(SUPER)
+    const release = holdUnsaved('the agent drawer')
+    try {
+      expect(await runRequest({ ...ask(23, 'view_admin', { page: 'sla' }), hold: true }, 'local')).toMatchObject({ applied: false, deferred: true })
+    } finally {
+      release()
+    }
+    // Sent again once the answer is done, it is made.
+    expect(await runRequest(ask(23, 'view_admin', { page: 'sla' }), 'local')).toMatchObject({ applied: true })
+    expect(window.location.hash).toBe('#/admin/settings/sla')
+  })
+
+  it('applies what was left in order and says what it could not', async () => {
+    window.history.replaceState(null, '', '#/pods')
+    setRouteForTests('#/pods')
+    const r = await showChanges([
+      { action: 'view_open', input: { tab: 'nodes', filters: { err: 'errors' } } },
+      { action: 'view_state', input: {} },
+      { action: 'view_admin', input: { page: 'nowhere' } },
+    ])
+    expect(r.applied).toEqual(['Opened Nodes with err errors'])
+    expect(r.failed[0]).toContain('must be one of')
+    expect(window.location.hash).toBe('#/nodes?err=errors')
+  })
+})
+
+// A change held for the end of the answer (SR-18) is checked on the page
+// the answer's held changes will leave open, so the model hears of a wrong
+// filter or another cluster at once, and the screen does not move.
+describe('a change held for the end of the answer (SR-18)', () => {
+  afterEach(() => {
+    setAnswering('local', null)
+    window.location.hash = ''
+  })
+  const held = (answer: number, action: string, input: unknown) => ({ id: `h${answer}`, window: 'w', answer, action, input, hold: true })
+  const ask = (x: ReturnType<typeof held>) => runRequest(x, 'local')
+
+  it('is checked on the page the held changes before it open', async () => {
+    window.history.replaceState(null, '', '#/pods')
+    setRouteForTests('#/pods')
+    setAnswering('local', 31)
+    expect(await ask(held(31, 'view_open', { tab: 'nodes' }))).toEqual({ applied: false, held: true })
+    // Nodes is not open yet, but its filters are what the next change is checked against.
+    expect(await ask(held(31, 'view_filter', { set: { err: 'problems' } }))).toEqual({ applied: false, held: true })
+    expect((await ask(held(31, 'view_filter', { set: { status: 'failing' } }))).error).toBeTruthy()
+    const other = await ask(held(31, 'view_open', { tab: 'nodes', cluster: 'staging' }))
+    expect(other.error).toContain('does not switch to another cluster')
+    expect(other.link).toBe('#/c/staging/nodes')
+    expect(window.location.hash).toBe('#/pods')
+    // A table of a page not open yet is not there to check: held.
+    expect(await ask(held(31, 'view_sort', { table: 'nodes', column: 'name', direction: 'asc' }))).toEqual({ applied: false, held: true })
+  })
+
+  it('checks the tables on screen while no held change has moved the page', async () => {
+    window.history.replaceState(null, '', '#/pods')
+    setRouteForTests('#/pods')
+    setAnswering('local', 32)
+    expect((await ask(held(32, 'view_sort', { table: 'nowhere', column: 'name', direction: 'asc' }))).error).toContain('No table "nowhere" is on screen')
+    expect(window.location.hash).toBe('#/pods')
   })
 })

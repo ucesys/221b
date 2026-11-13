@@ -504,6 +504,8 @@ type Filter struct {
 	Known    string
 	// Type keeps one type of case (CF-37).
 	Type string
+	// Involved keeps the cases the caller is involved in (EM-08).
+	Involved bool
 	// Query keeps cases whose title, number, object or incident number
 	// holds every word.
 	Query string
@@ -519,6 +521,9 @@ func (f Filter) match(c Caller, l *Line, q []string) bool {
 		return false
 	}
 	if f.Owner != "" && (l.Assignee == nil || l.Assignee.ID != f.Owner) {
+		return false
+	}
+	if f.Involved && !l.Involves(c.ID) {
 		return false
 	}
 	if (f.Source != "" && l.Source != f.Source) || (f.Agents && !l.AgentFound) || (f.People && l.AgentFound) || (f.Cluster != "" && l.Cluster != f.Cluster) ||

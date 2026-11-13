@@ -214,6 +214,135 @@ kubectl get pods -A
   await expect(page.getByTestId('script-drawer')).toHaveCount(0)
 })
 
+// FU-04, FU-06: a run parameter starts bound to the variable of its name,
+// which is not sent; another is searched by a variable's name and bound to
+// it, so the run gives each node its own; a typed value is a constant.
+test('a run parameter binds to a variable picked by name, and the run says so', async ({ page }) => {
+  const SAME = { 'Sec-Fetch-Site': 'same-origin' }
+  const stamp = Date.now()
+  const name = `e2e-bind-${stamp}`
+  const variable = `E2E_ZONE_${stamp}`
+  const before = (await (await page.request.get('/api/v1/automation/fleets')).json()).fleets.find((f: { id: string }) => f.id === '_all').params
+  const put = await page.request.put('/api/v1/automation/fleets/_all/variables', { headers: SAME, data: { ...before, values: { ...(before.values ?? {}), [variable]: 'zone-b' } } })
+  expect(put.status(), await put.text()).toBe(200)
+  try {
+    await page.goto('/#/scripts')
+    await page.getByTestId('script-new').click()
+    await page.getByTestId('script-name').fill(name)
+    await page.getByTestId('script-text').fill(`#!/bin/sh
+# 221b:describe Read the pods
+# 221b:target kubernetes
+# 221b:privilege none
+# 221b:dry-run yes
+# 221b:k8s get pods
+# 221b:param TARGET_ZONE optional where
+# 221b:param ${variable} optional the same zone
+# 221b:param MODE optional how
+kubectl get pods -A
+`)
+    await page.getByTestId('script-save').click()
+    await expect(page.getByTestId('script-submit')).toBeVisible()
+    await page.getByTestId('script-drawer-run').click()
+    // A variable of its name: the parameter starts bound to it, as its chip.
+    const auto = page.getByTestId(`run-param-${variable}-binding`)
+    await expect(auto).toHaveAttribute('data-auto', 'true')
+    await expect(auto).toContainText(`variable ${variable} · zone-b`)
+    await expect(auto.getByRole('button', { name: `Clear variable ${variable} from ${variable}, to type a constant` })).toBeVisible()
+    const box = page.getByTestId('run-param-TARGET_ZONE')
+    // No variable of its name: the box is empty, and typing searches every variable by name.
+    await expect(box).toHaveValue('')
+    await expect(page.getByTestId('run-param-TARGET_ZONE-badge')).toHaveCount(0)
+    // FU-07: untouched, with nothing to inherit, it says the script gets no value.
+    await expect(page.getByTestId('run-param-MODE-empty')).toHaveAttribute('data-empty', 'unset')
+    await expect(page.getByTestId('run-param-MODE-empty')).toHaveText('not set')
+    await box.fill(`e2e_zone_${stamp}`)
+    const option = page.locator(`[data-testid=run-param-TARGET_ZONE-option][data-bind=${variable}]`)
+    await expect(option).toContainText('zone-b')
+    await box.press('ArrowDown')
+    await box.press('Enter')
+    const chip = page.getByTestId('run-param-TARGET_ZONE-binding')
+    await expect(chip).toHaveAttribute('data-variable', variable)
+    await expect(page.getByTestId('run-param-TARGET_ZONE-spread')).toHaveText('zone-b')
+    // Typed, a value is a constant, and says so inside its field.
+    await page.getByTestId('run-param-MODE').fill('fast')
+    await expect(page.getByTestId('run-param-MODE-badge')).toHaveText('constant')
+    await expect(page.getByTestId('run-param-MODE-empty')).toHaveCount(0)
+    // FU-07: a chip cleared and the box left empty sends the empty string, and says so; its ✕ goes back.
+    await page.getByTestId(`run-param-${variable}-unbind`).click()
+    const empty = page.getByTestId(`run-param-${variable}-empty`)
+    await expect(empty).toHaveAttribute('data-empty', 'empty')
+    await expect(empty).toContainText('empty string ""')
+    await page.getByTestId(`run-param-${variable}-empty-clear`).click()
+    await expect(auto).toHaveAttribute('data-auto', 'true')
+    await page.getByTestId(`run-param-${variable}-unbind`).click()
+    await expect(empty).toBeVisible()
+    await expect(page.getByTestId(`run-param-${variable}-source`)).toHaveText('this run’s, on every node')
+    await page.getByTestId('run-start').click()
+    await page.getByTestId('confirm-ok').click()
+    await expect(page.getByTestId('run-state')).toHaveText('succeeded')
+    // The run's own values are the binding and the constant; the automatic binding was not sent.
+    const origin = page.getByTestId('run-param-origin')
+    await expect(origin).toHaveCount(3)
+    await expect(origin.filter({ hasText: 'empty string' })).toHaveCount(1)
+    await expect(page.locator(`[data-testid=run-param-origin][data-bound=${variable}]`)).toHaveText(`variable ${variable}`)
+    await expect(origin.filter({ hasText: 'constant' })).toHaveCount(1)
+    await expect(page.getByTestId('run-parameters')).toContainText('zone-b')
+    await page.getByTestId('run-drawer').getByRole('button', { name: 'Close run' }).click()
+  } finally {
+    await page.request.delete(`/api/v1/automation/scripts/${name}`, { headers: SAME })
+    await page.request.put('/api/v1/automation/fleets/_all/variables', { headers: SAME, data: before })
+  }
+})
+
+// FU-05: on production the dialog says which of a run's own values wait for another admin's approval.
+test('on production the Run dialog says which values wait for approval, and asks for it', async ({ page }) => {
+  const SAME = { 'Sec-Fetch-Site': 'same-origin' }
+  const name = `e2e-prodvals-${Date.now()}`
+  await page.route('**/automation/fleets', async (route) => {
+    const res = await route.fetch()
+    route.fulfill({ response: res, json: { ...(await res.json()), production: true } })
+  })
+  await page.route('**/automation/runs/weigh', (route) => route.fulfill({ json: { needsApproval: true, changed: ['MODE'], impact: [{ script: name, version: 1, decision: 'approval', why: 'MODE is marked sensitive', by: 'rule' }] } }))
+  try {
+    await page.goto('/#/scripts')
+    await page.getByTestId('script-new').click()
+    await page.getByTestId('script-name').fill(name)
+    await page.getByTestId('script-text').fill(`#!/bin/sh
+# 221b:describe Read the pods
+# 221b:target kubernetes
+# 221b:privilege none
+# 221b:dry-run yes
+# 221b:k8s get pods
+# 221b:param MODE optional how
+kubectl get pods -A
+`)
+    await page.getByTestId('script-save').click()
+    await expect(page.getByTestId('script-submit')).toBeVisible()
+    // Production runs approved versions only, which takes a second person: the page is told v1 is.
+    await page.route(`**/api/v1/automation/scripts/${name}`, async (route) => {
+      const res = await route.fetch()
+      const sc = await res.json()
+      sc.versions[0] = { ...sc.versions[0], state: 'approved', approvals: [{ by: { name: 'Bea', user: 'bea' }, at: new Date().toISOString() }], may: { ...sc.versions[0].may, runProduction: true } }
+      await route.fulfill({ response: res, json: sc })
+    })
+    // Opened again, the script is read as the page is told.
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('script-drawer')).toHaveCount(0)
+    await page.locator(`[data-testid=script-row][data-name=${name}]`).getByTestId('script-open').click()
+    await page.getByTestId('script-drawer-run').click()
+    await expect(page.getByTestId('run-production')).toContainText('if one needs approval, the run waits for another admin')
+    // A box takes a value on production now; the dialog says it will wait.
+    await page.getByTestId('run-param-MODE').fill('wipe')
+    await expect(page.getByTestId('run-weigh')).toContainText('need another admin’s approval before the run starts: MODE (MODE is marked sensitive)')
+    await page.keyboard.press('Escape')
+  } finally {
+    await page.unroute('**/automation/fleets')
+    await page.unroute('**/automation/runs/weigh')
+    await page.unroute(`**/api/v1/automation/scripts/${name}`)
+    await page.request.delete(`/api/v1/automation/scripts/${name}`, { headers: SAME })
+  }
+})
+
 test('Sherlock is offered on a script, and says so when it is off', async ({ page }) => {
   await page.goto('/#/scripts')
   await page.getByTestId('script-new').click()

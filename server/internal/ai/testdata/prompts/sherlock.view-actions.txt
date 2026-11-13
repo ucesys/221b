@@ -1,6 +1,6 @@
 ## view_state
 
-Reads the person's console view as it is now: the tab and path, its filters, each table on screen (its id, search text, sort, shown and hidden columns, rows shown against rows in the table, the names of the first rows shown) and the open details pane. The view when the question was asked is already attached to it; call this after changing the view, or when the person may have moved.
+Reads the person's console view as it is now: the tab and path, its filters, each table on screen (its id, search text, sort, shown and hidden columns, rows shown against rows in the table, the names of the first rows shown) and the open details pane. The view when the question was asked is already attached to it; call this when the person may have moved. Your own view changes are made only once your answer is complete, so it does not show them.
 
 { "type": "object", "properties": {}, "required": [], "additionalProperties": false }
 
@@ -106,6 +106,38 @@ Scrolls a row of a table on screen into view and marks it for a few seconds. Use
           "row": { "type": "string", "description": "The row's name, as the view state lists it." }
         },
         "required": ["row"],
+        "additionalProperties": false
+      }
+
+## view_aiops
+
+Opens a page of the AIOps area in the person's window, to point them at what you read there: inbox (the Inbox; show all to list the closed cases too, who for whose rows: mine, unassigned, or involved for the cases the person is involved in, search for its search box), case (one case's drawer, id such as C-12 from list_cases), runs (AIOps › Jobs › Runs) or run (one run's drawer, id such as run-12 from list_job_runs). It opens only what the person may open there themselves.
+
+{
+        "type": "object",
+        "properties": {
+          "page": { "type": "string", "enum": ["inbox", "case", "runs", "run"], "description": "The page." },
+          "id": { "type": "string", "maxLength": 80, "description": "The case's id for case, the run's for run." },
+          "show": { "type": "string", "enum": ["pending", "all"], "description": "For inbox: pending (the default) or all, closed cases included." },
+          "who": { "type": "string", "enum": ["all", "mine", "unassigned", "involved"], "description": "For inbox: whose rows, all (the default), the person's own, what nobody has taken, or the cases the person is involved in (reported, opened, owns, follows, wrote in or approved a fix of)." },
+          "search": { "type": "string", "maxLength": 200, "description": "For inbox: the search text, such as a case's object or title." }
+        },
+        "required": ["page"],
+        "additionalProperties": false
+      }
+
+## view_admin
+
+Opens a page of the console outside the cluster's tabs, to show the person the setting, role, person or agent your answer is about: home (every cluster at a glance; only from the console's own cluster), connection (this cluster's connection page), Administration's roles (item: a role id, superAdmin, superViewer, admin or viewer, opens its drawer), permissions (item: a role id, opens its column), users (item: a username, opens that person's drawer), toolbox (what the chart allows the Toolbox), sessions (the Toolbox's sessions), audit-log and backup, and Settings: getting-started, general (refresh rate, times, alert banners), providers (item: a provider id, opens its drawer), agents (item: an agent id such as sherlock, troubleshooter, changePlanner, auditor, hostDoctor, automationAuthor, scriptReviewer, mycroft or summarizer, opens its drawer), knowledge (Mycroft's sources), watson (where it runs, approvals), notification-channels (on the Watson page), applications (Helm repositories and OCI registries), issues (the report page, timers, API tokens), confluence (on the Issues page), sla, case-settings, email (Settings › Email: the SMTP server the emails about cases go through) and jobs-settings (who may edit jobs). search sets the search box of roles, permissions or users. It only opens a page: it never edits, saves, toggles or presses anything there. A page the person's role does not open is refused, and you say so: roles and permissions are for everyone signed in, the rest for SuperAdmins (an Admin sees knowledge's Added in Mycroft card). The AIOps area's pages are view_aiops'.
+
+{
+        "type": "object",
+        "properties": {
+          "page": {"type": "string", "enum": ["home", "connection", "roles", "permissions", "users", "toolbox", "sessions", "audit-log", "backup", "getting-started", "general", "providers", "agents", "knowledge", "watson", "notification-channels", "applications", "issues", "confluence", "sla", "case-settings", "email", "jobs-settings"], "description": "The page."},
+          "item": {"type": "string", "maxLength": 120, "description": "For roles, permissions, users, providers and agents: the one to open, by its id or username."},
+          "search": {"type": "string", "maxLength": 200, "description": "For roles, permissions and users: the search text."}
+        },
+        "required": ["page"],
         "additionalProperties": false
       }
 

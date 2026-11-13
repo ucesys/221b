@@ -80,6 +80,10 @@ func walkImages(v any, f func(c map[string]any, init bool)) {
 	}
 }
 
+// ParseImage splits a reference into its registry, repository, tag and
+// digest (HA-21).
+func ParseImage(ref string) Image { return parseImage(ref) }
+
 // parseImage splits a reference into its parts, as containerd does.
 func parseImage(ref string) Image {
 	im := Image{Image: ref}
