@@ -34,7 +34,7 @@ func TestSherlockHandsTroubleshootingToTheTroubleshooter(t *testing.T) {
 	}
 	for _, want := range []string{
 		"You are the front desk of the console's agents",
-		"What you hand over whenever its owner is in your list, even when a read or two of your own might answer it:",
+		"Hand over whenever the owner is in your list, even when a read or two of your own might answer it:",
 		"or a request to troubleshoot or diagnose: the Troubleshooter.",
 		"Do not read the cluster for a cause, a plan or a review yourself",
 		"\n- Troubleshooter (troubleshooter): ",
@@ -115,7 +115,7 @@ func TestSherlocksOwnWorkFollowsItsRoster(t *testing.T) {
 	}
 	// Without the agents, the engine's built-in is the front desk's part
 	// and all of the work.
-	if got, want := sherlock.BuiltIn(true, watson.Commands()), sherlock.FrontDesk(true, watson.Commands())+"\n\n"+sherlock.OwnWork(sherlock.AllLanes, false); got != want {
+	if got, want := sherlock.BuiltIn(true, watson.Commands()), sherlock.FrontDesk(true)+"\n\n"+sherlock.OwnWork(sherlock.AllLanes, false, watson.Commands()); got != want {
 		t.Error("the engine's built-in is not the front desk's part and every lane")
 	}
 }
@@ -128,11 +128,11 @@ func TestSherlocksOwnWorkFollowsItsRoster(t *testing.T) {
 func TestEveryKindOfWorkHasOneOwner(t *testing.T) {
 	common := promptFile("common")
 	for _, want := range []string{
-		"Every kind of work has one owner.",
-		"the list of agents after these instructions says whose the rest is",
+		"Every kind of work has one owner:",
+		"the list of agents below says whose the rest is",
 		"If the person or a job asked you, hand that part to its owner with hand_over",
 		"If your task begins \"" + strings.TrimSpace(sherlock.HandedBy) + "\", hand nothing on",
-		"If the owner is not in your list or could not be asked, do that part yourself and say so",
+		"If the owner is not in your list or cannot be asked, do it yourself and say so",
 		"Keep an agent's findings as it gave them",
 		"answer it complete, as the person should read it",
 	} {
@@ -201,11 +201,11 @@ func TestEveryKindOfWorkHasOneOwner(t *testing.T) {
 // An agent's instructions stay short (PM-D6): what every agent is told is
 // said once, the owners of the work are named by the list of agents and
 // nowhere else, and only an agent that may give Watson's commands is told
-// what Watson runs. The limits are bytes of the assembled instructions
+// what Watson runs (Sherlock when they are its own work). The limits are bytes of the assembled instructions
 // with every agent on, before the cluster's description; a change that
 // passes one should shorten something else rather than raise it.
 func TestInstructionsStayShort(t *testing.T) {
-	limits := map[string]int{Sherlock: 14000, Troubleshooter: 10500}
+	limits := map[string]int{Sherlock: 9500, Troubleshooter: 10000}
 	for _, info := range Catalog {
 		var roster []sherlock.RosterEntry
 		for _, other := range Catalog {
@@ -216,17 +216,17 @@ func TestInstructionsStayShort(t *testing.T) {
 		text := Assemble(Core(info.ID, true), roster, "")
 		limit := limits[info.ID]
 		if limit == 0 {
-			limit = 7000
+			limit = 6500
 		}
 		if n := len(text); n > limit {
 			t.Errorf("%s's instructions are %d bytes, over %d", info.Name, n, limit)
 		}
 		told := strings.Contains(text, watson.Commands())
-		if want := info.ID == Sherlock || GivesCommands(info.ID); told != want {
+		if want := GivesCommands(info.ID); told != want {
 			t.Errorf("%s told what Watson runs: %v, want %v", info.Name, told, want)
 		}
 	}
-	if n := len(promptFile("common")); n > 3200 {
-		t.Errorf("the rules every agent keeps are %d bytes, over 3200", n)
+	if n := len(promptFile("common")); n > 2800 {
+		t.Errorf("the rules every agent keeps are %d bytes, over 2800", n)
 	}
 }

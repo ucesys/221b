@@ -28,7 +28,7 @@ func TestEveryMarkOfAPromptFileIsFilled(t *testing.T) {
 			}
 		}
 	}
-	rounds := "You have " + strconv.Itoa(sherlock.DefaultMaxRounds) + " rounds of reads for one answer; a hand-over is one of them."
+	rounds := "You have " + strconv.Itoa(sherlock.DefaultMaxRounds) + " rounds of reads for one answer; a hand-over is one."
 	for _, id := range []string{Sherlock, Troubleshooter, Auditor, Summarizer} {
 		if !strings.Contains(Core(id, false), rounds) {
 			t.Errorf("%s is not told its rounds", id)

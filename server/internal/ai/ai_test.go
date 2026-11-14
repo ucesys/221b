@@ -236,7 +236,7 @@ func TestThePromptIsCoreThenHouseThenCluster(t *testing.T) {
 	// Sherlock's core keeps its built-in instructions, with the front
 	// desk's part; only Sherlock is told it may change the view.
 	s, _ := w.ai.Agent(Sherlock, sherlock.Question{Key: sherlock.Key{Cluster: "local"}})
-	if !strings.HasPrefix(s.Instructions, sherlock.FrontDesk(true, watson.Commands())) || !strings.Contains(s.Instructions, "front desk") {
+	if !strings.HasPrefix(s.Instructions, sherlock.FrontDesk(true)) || !strings.Contains(s.Instructions, "front desk") {
 		t.Fatal("Sherlock's core")
 	}
 	if strings.Contains(a.Instructions, "The view_* tools") {
@@ -711,11 +711,13 @@ func TestPromptsNameEveryCommandWatsonRuns(t *testing.T) {
 		return a.Instructions
 	}
 	for name, text := range map[string]string{
-		"Sherlock":                   assembled(Sherlock),
-		"Sherlock, view changes off": Core(Sherlock, false),
-		"Sherlock's compact form":    CompactCore(),
-		"the Troubleshooter":         assembled(Troubleshooter),
-		"the Change planner":         assembled(ChangePlanner),
+		// Sherlock is told when the commands are its own work (PM-D6):
+		// with no Change planner to ask, and without the agents.
+		"Sherlock without a Change planner": Core(Sherlock, true) + "\n\n" + OwnWork([]sherlock.RosterEntry{{ID: Troubleshooter}}),
+		"Sherlock without the agents":       sherlock.BuiltIn(false, watson.Commands()),
+		"Sherlock's compact form":           CompactCore(),
+		"the Troubleshooter":                assembled(Troubleshooter),
+		"the Change planner":                assembled(ChangePlanner),
 	} {
 		if strings.Count(text, watson.Commands()) != 1 {
 			t.Errorf("%s is not told once what Watson runs:\n%s", name, text)

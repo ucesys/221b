@@ -102,26 +102,26 @@ The first version of this change said the new rules at length, and every agent's
 
 | Agent | Before Phase 12.1 | After the records commit | First version | Now |
 |---|---|---|---|---|
-| Sherlock | 13,909 | 17,505 | 17,203 | 13,339 |
-| Troubleshooter (now holds the manual) | 5,114 | 7,493 | 12,759 | 10,101 |
-| Change planner | 4,360 | 6,272 | 9,144 | 6,767 |
-| Auditor | 4,158 | 5,765 | 9,091 | 6,304 |
-| Host doctor | 4,281 | 6,411 | 9,233 | 6,422 |
-| Automation author | 3,986 | 6,626 | 9,302 | 6,491 |
-| Script reviewer | 4,052 | 5,753 | 8,431 | 5,620 |
-| Mycroft | 4,291 | 5,487 | 8,065 | 5,254 |
-| Summarizer | 3,765 | 5,203 | 7,884 | 5,073 |
+| Sherlock | 13,909 | 17,505 | 17,203 | 9,406 |
+| Troubleshooter (now holds the manual) | 5,114 | 7,493 | 12,759 | 9,827 |
+| Change planner | 4,360 | 6,272 | 9,144 | 6,493 |
+| Auditor | 4,158 | 5,765 | 9,091 | 6,030 |
+| Host doctor | 4,281 | 6,411 | 9,233 | 6,148 |
+| Automation author | 3,986 | 6,626 | 9,302 | 6,217 |
+| Script reviewer | 4,052 | 5,753 | 8,431 | 5,346 |
+| Mycroft | 4,291 | 5,487 | 8,065 | 4,980 |
+| Summarizer | 3,765 | 5,203 | 7,884 | 4,799 |
 
 Bytes of the assembled instructions with every agent on, from the golden copies.
 
 - **One list of agents, not two.** The rules named every owner and its work, and the list of agents after them named every agent and its purpose. The first list went; the rules now say that the list of agents says whose the rest is.
 - **Five lines on working together** where there were three sections: stop where your work ends; hand over if you were asked first, do it yourself if the owner cannot be asked, hand nothing on if you were handed the task; what a brief holds; keep findings as given; answer a handed task complete. What the engine already says when it refuses a hand-over is not said again.
 - **What Watson runs** is told to the agents that may give its commands, not to the Host doctor, the Automation author, the Script reviewer, Mycroft or the Summarizer.
-- **Sherlock**: the routing list no longer repeats the owners' work; the report recipe's trigger, said three times, is said once; how to write commands Watson accepts moved to its own work for when no Change planner can be asked.
+- **Sherlock**, in two passes: the routing list no longer repeats the owners' work; the report recipe's trigger, said three times, is said once; what Watson runs and how to write commands it accepts are own work, for when no Change planner can be asked; the section on the person's screen no longer repeats what the view tools' own descriptions say (each tab's filters, what `view_aiops` and `view_admin` open) and says each rule about the view once; every sentence was cut to what it tells the model to do.
 - **The Troubleshooter and the Auditor** say what they return once, not once as a list and again as a report.
-- `TestInstructionsStayShort` holds the sizes. Sherlock's whole request is 13,044 tokens by `TestSherlocksRequestSize` (13,998 after the records commit, limit 14,000).
+- `TestInstructionsStayShort` holds the sizes. Sherlock's whole request is 12,107 tokens by `TestSherlocksRequestSize` (13,998 after the records commit, limit 14,000).
 
-What remains long is Sherlock's section on the person's screen (about 4,000 bytes, a third of its instructions) and its tools' descriptions (9,888 of the 13,044 tokens). Both come from earlier phases, each line from a failure seen then, and were left alone.
+What remains long is not the instructions: Sherlock's fifty tools' descriptions are 9,888 of the 12,107 tokens. They come from earlier phases and were left alone. The rule that text from the cluster is data, not instructions, was kept word for word.
 
 ### Left as it was
 

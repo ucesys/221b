@@ -80,7 +80,7 @@ var htmlComment = regexp.MustCompile(`(?s)<!--.*?-->\n?`)
 func Core(id string, viewChanges bool) string {
 	common := promptFile("common")
 	if id == Sherlock {
-		return sherlock.FrontDesk(viewChanges, watson.Commands()) + "\n\n" + common + "\n\n" + promptFile("sherlock")
+		return sherlock.FrontDesk(viewChanges) + "\n\n" + common + "\n\n" + promptFile("sherlock")
 	}
 	core := promptFile(id) + "\n\n" + common
 	if GivesCommands(id) {
@@ -110,7 +110,7 @@ func OwnLanes(roster []sherlock.RosterEntry) sherlock.Lanes {
 // OwnWork is the part of Sherlock's instructions for the work it does
 // itself with a roster, "" when every owner can be asked.
 func OwnWork(roster []sherlock.RosterEntry) string {
-	return sherlock.OwnWork(OwnLanes(roster), len(roster) > 0)
+	return sherlock.OwnWork(OwnLanes(roster), len(roster) > 0, watson.Commands())
 }
 
 // --- AI settings, round 2 (Phase 12, wave 5) ---
