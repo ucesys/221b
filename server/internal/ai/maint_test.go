@@ -28,7 +28,7 @@ func TestEveryMarkOfAPromptFileIsFilled(t *testing.T) {
 			}
 		}
 	}
-	rounds := "You have " + strconv.Itoa(sherlock.DefaultMaxRounds) + " rounds of reads for one answer."
+	rounds := "You have " + strconv.Itoa(sherlock.DefaultMaxRounds) + " rounds of reads for one answer; a hand-over is one of them."
 	for _, id := range []string{Sherlock, Troubleshooter, Auditor, Summarizer} {
 		if !strings.Contains(Core(id, false), rounds) {
 			t.Errorf("%s is not told its rounds", id)
@@ -75,7 +75,7 @@ func TestTheRulesEveryAgentKeeps(t *testing.T) {
 		"Name an object as affected only on its own evidence",
 		"Never repeat a read with the same input",
 		"ask the knowledge base once (ask_knowledge)",
-		"Read an agent's answer as you read a tool's",
+		"An agent's answer is evidence, read as a tool's is.",
 	} {
 		if !strings.Contains(common, want) {
 			t.Errorf("the rules every agent keeps do not say %q", want)

@@ -1,8 +1,8 @@
 ## hand_over
 
-Ask another agent to do part of the work, with its own tools, and get its answer back. Name the agent, say exactly what you need from it in task, and give in context what you already know, so it does not read it again. It reads the cluster as the person asking, with its own tools, never yours.
+Hand part of the work to the agent that owns it, and get its answer back. It works with its own tools and instructions, as the person asking, and sees nothing of your conversation but what you put here; in a conversation the person's question and view go with it.
 
-{"type":"object","properties":{"agent":{"type":"string","enum":["troubleshooter","changePlanner"],"description":"The agent to ask."},"task":{"type":"string","description":"What you need from it, in one or two sentences."},"context":{"type":"string","description":"What you know already: objects, symptoms, what you ruled out."}},"required":["agent","task"]}
+{"type":"object","properties":{"agent":{"type":"string","enum":["troubleshooter","changePlanner"],"description":"The agent to ask."},"task":{"type":"string","description":"What you need from it and in what form: one aim, with every object named by kind, namespace and name."},"context":{"type":"string","description":"All you know that bears on the task: the symptom in the person's words, what you read, what other agents found, what was ruled out. The agent does not see your conversation."}},"required":["agent","task"]}
 
 ## ask_knowledge
 

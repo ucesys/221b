@@ -65,6 +65,42 @@ Nightly audit, new: `rbac.escalation-verbs`, `rbac.pod-create`, `sa.token-automo
 
 Nightly audit, reworded to what a tool can show: `rbac.secrets-read`, `rbac.pod-exec`, `rbac.sa-overprivileged`.
 
+## Who does what (November 13, PM-D1 to PM-D5)
+
+After the commit that gave Sherlock the console's records and sent troubleshooting to the Troubleshooter (SR-20), Sherlock's answers got worse. The instructions were read again as a model reads them, whole, and against eight permissively licensed multi-agent projects ([prompt-sources.md](prompt-sources.md); ideas only).
+
+### What was wrong
+
+1. **Two jobs in one prompt.** Sherlock's fixed text was still a site reliability engineer's: a six-layer troubleshooting manual, the recipes of two reports, the checks on a node. The text added after it said to hand all of that over and not to read the cluster for the cause. A model given both does some of each.
+2. **Two rules that disagreed.** Every agent was told never to hand over what one or two reads answer; Sherlock was told to hand troubleshooting over even when a read or two would answer it.
+3. **The work was done twice.** The knowledge-base rule applied to Sherlock and again to the Troubleshooter, and Sherlock was told to read what filled the gaps in the Troubleshooter's answer.
+4. **A thin brief, a thin answer, a long report.** The task was cut at 1,000 bytes; the agent asked saw neither the person's question nor their view and was told to answer briefly; Sherlock then wrote a six-part report from it.
+5. **The better manual was on the wrong side.** The Troubleshooter's own instructions were shorter than the manual Sherlock used when it diagnosed by itself.
+6. **The buttons asked Sherlock.** The Troubleshoot and Audit buttons' recipes were in Sherlock's text, as its own work.
+7. **The specialists overlapped.** The Troubleshooter wrote the commands of a plain fix and handed on to the Host doctor and the Change planner itself; the Auditor kept small fixes.
+8. **Staying on the cluster** was worded so that a question about the console's own settings read as off the subject.
+
+### What changed
+
+- **One owner for each kind of work**, said once to every agent (`common.md`, *Whose work is whose*; PM-D2), with what to do where one's work meets another's: stop, name the part and its owner, hand it over if you were asked first, do it yourself only when the owner cannot be asked.
+- **Sherlock is the front desk** (PM-D1): lookups, the console's records, the screen, the answer. The manual and the reports moved to their owners (PM-D3) and come back into Sherlock's instructions only for a kind of work whose owner is not in its list. With every agent on, Sherlock's instructions are about as long as before; they no longer say two things.
+- **Hub and spoke** (PM-D4): only the agent asked first hands work over. A handed task says so in its first words and its agent hands nothing on, so a chain of agents retelling each other does not form. The engine's depth and no-repeat limits stay as the guard.
+- **Findings are passed on, not retold** (PM-D2): Sherlock adds the sentence that answers the question, the view, the order and what nobody covered.
+- **Full briefs** (PM-D5): 4,000 bytes of task, 12,000 of context, and the engine adds the person's question and view.
+- Each agent's file ends at its own work: the Troubleshooter at the cause and what must change, in words; the Auditor at the finding; the Change planner plans what it is given and asks for a missing diagnosis; the Host doctor stays on the host; the Script reviewer does not rewrite; the Summarizer does not diagnose.
+
+### What it costs
+
+- **A diagnosis with a fix Watson can run is two hand-overs in a row**, the Troubleshooter and then the Change planner, where Sherlock or the Troubleshooter wrote the commands before. It is slower and uses both agents' budgets. The Troubleshoot button's report waits for both.
+- **In a job** (the nightly audit, an alert's diagnosis) the job's agent hands the changes of the run to the Change planner once, where it wrote small fixes itself before.
+- **The Troubleshooter's model now decides the quality of a diagnosis.** It should be at least as strong as Sherlock's.
+- **An administrator's edited Sherlock core** replaces the front-desk text as before, so it keeps whatever it says about troubleshooting; the own-work parts are still added by the list of agents.
+- Sherlock's whole request is 13,964 tokens by the test's count against a limit of 14,000 (`TestSherlocksRequestSize`); the ten read tools of the same branch took most of the room. The next tool or paragraph needs something else shortened.
+
+### Left as it was
+
+The view changes held until the answer is done (SR-18) and opening the page with every answer (SR-16) were not touched. Neither is about who does what; if the screen moving with every answer is part of what feels worse, the agent's view-changes switch turns it off.
+
 ## Not done
 
 - **A summary of a long conversation** when it no longer fits, where the engine drops the oldest turns. It matters most for a case's shared Troubleshoot conversation and deserves a design of its own.
@@ -73,4 +109,4 @@ Nightly audit, reworded to what a tool can show: `rbac.secrets-read`, `rbac.pod-
 
 ## How it was checked
 
-`go vet ./...` and `go test ./...` in `server`, the golden prompts regenerated and read, the browser app's type check and the unit tests of the case drawer and the runs. Nothing was built: no binary, no image, no chart, no CI run, no pull request.
+`go vet ./...` and `go test ./...` in `server` (again on November 13 for PM-D1 to PM-D5), the golden prompts regenerated and read, the browser app's type check and the unit tests of the case drawer and the runs. Nothing was built: no binary, no image, no chart, no CI run, no pull request. The instructions were not run against a live model: how the agents now divide a real question is to be seen in the simulator or on a cluster.

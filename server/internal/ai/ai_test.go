@@ -236,7 +236,7 @@ func TestThePromptIsCoreThenHouseThenCluster(t *testing.T) {
 	// Sherlock's core keeps its built-in instructions, with the front
 	// desk's part; only Sherlock is told it may change the view.
 	s, _ := w.ai.Agent(Sherlock, sherlock.Question{Key: sherlock.Key{Cluster: "local"}})
-	if !strings.HasPrefix(s.Instructions, sherlock.BuiltIn(true, watson.Commands())) || !strings.Contains(s.Instructions, "front desk") {
+	if !strings.HasPrefix(s.Instructions, sherlock.FrontDesk(true, watson.Commands())) || !strings.Contains(s.Instructions, "front desk") {
 		t.Fatal("Sherlock's core")
 	}
 	if strings.Contains(a.Instructions, "The view_* tools") {

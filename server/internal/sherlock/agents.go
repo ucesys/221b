@@ -81,8 +81,38 @@ type RosterEntry struct {
 const SherlockID = "sherlock"
 
 // MaxHandOverDepth bounds a chain of hand-overs: Sherlock asks one agent,
-// which asks another, which asks a third, and that one asks no more.
+// which asks another, which asks a third, and that one asks no more. The
+// agents' instructions keep a chain shorter than the engine lets it be
+// (PM-D4): only the agent asked first hands work over.
 const MaxHandOverDepth = 3
+
+// HandedBy opens the task of an agent another handed work to (PM-D4),
+// followed by that agent's name: the rules every agent keeps tell an
+// agent whose task begins so to do its own part and hand none of it on.
+const HandedBy = "Handed to you by "
+
+// HandOverHelp is what hand_over's description says (PM-D5): the agent
+// asked sees nothing of the asker's conversation, so the task and its
+// context carry everything.
+const HandOverHelp = "Hand part of the work to the agent that owns it, and get its answer back. It works with its own tools and instructions, as the person asking, and sees nothing of your conversation but what you put here; in a conversation the person's question and view go with it."
+
+// A hand-over's task and context are bounded (PM-D5): long enough for a
+// whole brief, which the 1,000 bytes of before were not.
+const (
+	MaxHandOverTask    = 4000
+	MaxHandOverContext = 12000
+)
+
+// clipBytes cuts a text to at most n bytes at a character's boundary.
+func clipBytes(text string, n int) string {
+	if len(text) <= n {
+		return text
+	}
+	for n > 0 && (text[n]&0xC0) == 0x80 {
+		n--
+	}
+	return text[:n] + "…"
+}
 
 // Tools that do not read the cluster: handing work to another agent,
 // asking the knowledge base, checking commands against Watson, and
@@ -215,7 +245,7 @@ func agentToolDefs(a *Agent, depth int) []ToolDef {
 			ids[i] = r.ID
 		}
 		enum, _ := json.Marshal(ids)
-		out = append(out, ToolDef{Name: ToolHandOver, Description: "Ask another agent to do part of the work, with its own tools, and get its answer back. Name the agent, say exactly what you need from it in task, and give in context what you already know, so it does not read it again. It reads the cluster as the person asking, with its own tools, never yours.", InputSchema: json.RawMessage(`{"type":"object","properties":{"agent":{"type":"string","enum":` + string(enum) + `,"description":"The agent to ask."},"task":{"type":"string","description":"What you need from it, in one or two sentences."},"context":{"type":"string","description":"What you know already: objects, symptoms, what you ruled out."}},"required":["agent","task"]}`)})
+		out = append(out, ToolDef{Name: ToolHandOver, Description: HandOverHelp, InputSchema: json.RawMessage(`{"type":"object","properties":{"agent":{"type":"string","enum":` + string(enum) + `,"description":"The agent to ask."},"task":{"type":"string","description":"What you need from it and in what form: one aim, with every object named by kind, namespace and name."},"context":{"type":"string","description":"All you know that bears on the task: the symptom in the person's words, what you read, what other agents found, what was ruled out. The agent does not see your conversation."}},"required":["agent","task"]}`)})
 	}
 	if a.allows(ToolAskKnowledge) {
 		out = append(out, ToolDef{Name: ToolAskKnowledge, Description: "Ask the console's knowledge base about the infrastructure: Mycroft's wiki and runbooks, the open known issues, the fixes of past cases and the accepted exceptions. What an application depends on, its runbooks, who owns it, whether a problem is known, fixed before or accepted.", InputSchema: json.RawMessage(`{"type":"object","properties":{"question":{"type":"string","description":"The question."}},"required":["question"]}`)})
@@ -463,10 +493,7 @@ func (s *Service) handOver(ctx context.Context, from *Agent, q Question, r *run,
 	if err != nil {
 		return refuse("Not asked: " + err.Error())
 	}
-	task := strings.TrimSpace(in.Task)
-	if len(task) > 1000 {
-		task = task[:1000]
-	}
+	task := clipBytes(strings.TrimSpace(in.Task), MaxHandOverTask)
 	h := &Hand{From: from.ID, FromName: from.Name, To: to.ID, ToName: to.Name, Task: task, Status: "running", Model: to.Model}
 	r.lock()
 	if r.seq != nil {
@@ -488,9 +515,20 @@ func (s *Service) handOver(ctx context.Context, from *Agent, q Question, r *run,
 	r.chain.asked = append(r.chain.asked, to.ID)
 	defer func() { r.chain.agents = r.chain.agents[:len(r.chain.agents)-1] }()
 
-	text := task
+	// The task says who handed it (PM-D4), and carries the asker's
+	// context and, in a conversation, what the person asked and saw, so
+	// that nothing the receiver needs stays behind with the asker (PM-D5).
+	text := HandedBy + from.Name + ".\n\n" + task
 	if c := strings.TrimSpace(in.Context); c != "" {
-		text += "\n\nWhat " + from.Name + " knows already:\n" + c
+		text += "\n\nWhat " + from.Name + " knows already:\n" + clipBytes(c, MaxHandOverContext)
+	}
+	if r.conv != nil {
+		if asked := strings.TrimSpace(q.Text); asked != "" {
+			text += "\n\nWhat the person asked, in their own words. It says what is wanted; your task is the one above:\n<question>\n" + clipBytes(asked, MaxHandOverTask) + "\n</question>"
+		}
+		if v := s.viewBlock(q.View); v != "" {
+			text += "\n\nWhat the person's console window showed when they asked (\"this node\" and \"here\" mean what it shows):\n" + v
+		}
 	}
 	sub := &run{conv: r.conv, chain: r.chain, known: r.known, hands: &h.Hands, seq: r.seq, trace: r.trace}
 	res := s.loop(ctx, &to, q, text, sub, h)

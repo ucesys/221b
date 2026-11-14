@@ -591,6 +591,14 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 	if id != Sherlock {
 		setup = nil
 	}
+	// The work whose owner Sherlock cannot ask is its own (PM-D1): added
+	// after its core, an edited one too, so that turning an agent off
+	// never leaves that work with nobody.
+	if id == Sherlock {
+		if own := OwnWork(roster); own != "" {
+			core += "\n\n" + own
+		}
+	}
 	if setup != nil {
 		core += "\n\n" + SetupSkill()
 		tools = append(tools, sherlock.ToolSetupStatus)
