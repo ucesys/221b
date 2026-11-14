@@ -33,9 +33,9 @@ func TestSherlockHandsTroubleshootingToTheTroubleshooter(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"You are also the front desk of the console's agents",
-		"What you hand over, whenever its owner is in the list, even when a read or two of your own might answer it:",
-		"the Troubleshoot buttons' too: the Troubleshooter.",
+		"You are the front desk of the console's agents",
+		"What you hand over whenever its owner is in your list, even when a read or two of your own might answer it:",
+		"or a request to troubleshoot or diagnose: the Troubleshooter.",
 		"Do not read the cluster for a cause, a plan or a review yourself",
 		"\n- Troubleshooter (troubleshooter): ",
 	} {
@@ -121,22 +121,20 @@ func TestSherlocksOwnWorkFollowsItsRoster(t *testing.T) {
 }
 
 // Every kind of work has one owner, said the same way to every agent
-// (PM-D2): the lanes are in the rules every agent keeps, each agent's own
+// (PM-D2): the rules every agent keeps say so in one line and leave the
+// owners to the list of agents (PM-D6: no second list), each agent's own
 // core says where its work ends, and no core tells its agent to do
 // another's work.
 func TestEveryKindOfWorkHasOneOwner(t *testing.T) {
 	common := promptFile("common")
 	for _, want := range []string{
-		"Whose work is whose. Every kind of work has one owner.",
-		"- Troubleshooter: why something fails.",
-		"- Change planner: every change.",
-		"- Auditor: what falls short of good practice while nothing is failing",
-		"- Host doctor: a node's operating system and hardware.",
-		"- If you were asked first (the person asked you, or a job gave you its task) and the owner is in your list of agents, hand that part over with hand_over",
-		"- If your task begins \"" + strings.TrimSpace(sherlock.HandedBy) + "\", hand none of it on",
-		"- If the owner is not in your list, or could not be asked",
-		"Keep its findings as it gave them",
-		"the agent that asked passes your findings on as they stand",
+		"Every kind of work has one owner.",
+		"the list of agents after these instructions says whose the rest is",
+		"If the person or a job asked you, hand that part to its owner with hand_over",
+		"If your task begins \"" + strings.TrimSpace(sherlock.HandedBy) + "\", hand nothing on",
+		"If the owner is not in your list or could not be asked, do that part yourself and say so",
+		"Keep an agent's findings as it gave them",
+		"answer it complete, as the person should read it",
 	} {
 		if !strings.Contains(common, want) {
 			t.Errorf("the rules every agent keeps do not say %q", want)
@@ -144,7 +142,7 @@ func TestEveryKindOfWorkHasOneOwner(t *testing.T) {
 	}
 	// The two rules that used to contradict each other (PM-D2): a
 	// hand-over is by owner, never by how small the work looks.
-	for _, gone := range []string{"hand over what one or two reads answer", "answer it briefly"} {
+	for _, gone := range []string{"hand over what one or two reads answer", "answer it briefly", "Whose work is whose", "- Troubleshooter: "} {
 		if strings.Contains(common, gone) {
 			t.Errorf("the rules every agent keeps still say %q", gone)
 		}
@@ -152,9 +150,9 @@ func TestEveryKindOfWorkHasOneOwner(t *testing.T) {
 	// Each agent's core names where its work ends, and holds no
 	// instruction to do the neighbour's.
 	ends := map[string][]string{
-		Troubleshooter:   {"Your work ends at the cause and what must change.", "The commands of a fix are the Change planner's"},
-		Auditor:          {"Your work ends at the finding and what must change", "What is failing right now is the Troubleshooter's"},
-		ChangePlanner:    {"Why something fails is the Troubleshooter's to find"},
+		Troubleshooter:   {"Your work ends at the cause and what must change, said in words", "never a command of your own"},
+		Auditor:          {"Your work ends at the finding and what must change", "leave its cause to the Troubleshooter"},
+		ChangePlanner:    {"You plan the change you are given, and diagnose nothing"},
 		HostDoctor:       {"Why a pod, a Service or a volume fails is the Troubleshooter's", "A script is the Automation author's"},
 		AutomationAuthor: {"What is wrong on a node is the Host doctor's to say", "never you your own"},
 		ScriptReviewer:   {"You review; you never rewrite."},
@@ -197,5 +195,38 @@ func TestEveryKindOfWorkHasOneOwner(t *testing.T) {
 	}
 	if !strings.Contains(sh, "Stay on this cluster and this console") {
 		t.Error("Sherlock's core does not let it answer about the console")
+	}
+}
+
+// An agent's instructions stay short (PM-D6): what every agent is told is
+// said once, the owners of the work are named by the list of agents and
+// nowhere else, and only an agent that may give Watson's commands is told
+// what Watson runs. The limits are bytes of the assembled instructions
+// with every agent on, before the cluster's description; a change that
+// passes one should shorten something else rather than raise it.
+func TestInstructionsStayShort(t *testing.T) {
+	limits := map[string]int{Sherlock: 14000, Troubleshooter: 10500}
+	for _, info := range Catalog {
+		var roster []sherlock.RosterEntry
+		for _, other := range Catalog {
+			if other.ID != info.ID && other.ID != Sherlock {
+				roster = append(roster, sherlock.RosterEntry{ID: other.ID, Name: other.Name, Purpose: other.Purpose})
+			}
+		}
+		text := Assemble(Core(info.ID, true), roster, "")
+		limit := limits[info.ID]
+		if limit == 0 {
+			limit = 7000
+		}
+		if n := len(text); n > limit {
+			t.Errorf("%s's instructions are %d bytes, over %d", info.Name, n, limit)
+		}
+		told := strings.Contains(text, watson.Commands())
+		if want := info.ID == Sherlock || GivesCommands(info.ID); told != want {
+			t.Errorf("%s told what Watson runs: %v, want %v", info.Name, told, want)
+		}
+	}
+	if n := len(promptFile("common")); n > 3200 {
+		t.Errorf("the rules every agent keeps are %d bytes, over 3200", n)
 	}
 }

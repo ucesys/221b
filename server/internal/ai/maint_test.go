@@ -73,9 +73,9 @@ func TestTheRulesEveryAgentKeeps(t *testing.T) {
 	for _, want := range []string{
 		"- Say only what you read.",
 		"Name an object as affected only on its own evidence",
-		"Never repeat a read with the same input",
+		"never repeat a read with the same input",
 		"ask the knowledge base once (ask_knowledge)",
-		"An agent's answer is evidence, read as a tool's is.",
+		"Keep an agent's findings as it gave them",
 	} {
 		if !strings.Contains(common, want) {
 			t.Errorf("the rules every agent keeps do not say %q", want)

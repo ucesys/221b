@@ -82,8 +82,8 @@ After the commit that gave Sherlock the console's records and sent troubleshooti
 
 ### What changed
 
-- **One owner for each kind of work**, said once to every agent (`common.md`, *Whose work is whose*; PM-D2), with what to do where one's work meets another's: stop, name the part and its owner, hand it over if you were asked first, do it yourself only when the owner cannot be asked.
-- **Sherlock is the front desk** (PM-D1): lookups, the console's records, the screen, the answer. The manual and the reports moved to their owners (PM-D3) and come back into Sherlock's instructions only for a kind of work whose owner is not in its list. With every agent on, Sherlock's instructions are about as long as before; they no longer say two things.
+- **One owner for each kind of work**, said once to every agent (`common.md`, *Working with the other agents*; PM-D2), with what to do where one's work meets another's: stop, name the part and its owner, hand it over if you were asked first, do it yourself only when the owner cannot be asked.
+- **Sherlock is the front desk** (PM-D1): lookups, the console's records, the screen, the answer. The manual and the reports moved to their owners (PM-D3) and come back into Sherlock's instructions only for a kind of work whose owner is not in its list. With every agent on, Sherlock's instructions no longer say two things, and are shorter (PM-D6).
 - **Hub and spoke** (PM-D4): only the agent asked first hands work over. A handed task says so in its first words and its agent hands nothing on, so a chain of agents retelling each other does not form. The engine's depth and no-repeat limits stay as the guard.
 - **Findings are passed on, not retold** (PM-D2): Sherlock adds the sentence that answers the question, the view, the order and what nobody covered.
 - **Full briefs** (PM-D5): 4,000 bytes of task, 12,000 of context, and the engine adds the person's question and view.
@@ -95,7 +95,33 @@ After the commit that gave Sherlock the console's records and sent troubleshooti
 - **In a job** (the nightly audit, an alert's diagnosis) the job's agent hands the changes of the run to the Change planner once, where it wrote small fixes itself before.
 - **The Troubleshooter's model now decides the quality of a diagnosis.** It should be at least as strong as Sherlock's.
 - **An administrator's edited Sherlock core** replaces the front-desk text as before, so it keeps whatever it says about troubleshooting; the own-work parts are still added by the list of agents.
-- Sherlock's whole request is 13,964 tokens by the test's count against a limit of 14,000 (`TestSherlocksRequestSize`); the ten read tools of the same branch took most of the room. The next tool or paragraph needs something else shortened.
+
+### Shortened the same day (PM-D6)
+
+The first version of this change said the new rules at length, and every agent's instructions grew by half. They were cut back without taking a rule away:
+
+| Agent | Before Phase 12.1 | After the records commit | First version | Now |
+|---|---|---|---|---|
+| Sherlock | 13,909 | 17,505 | 17,203 | 13,339 |
+| Troubleshooter (now holds the manual) | 5,114 | 7,493 | 12,759 | 10,101 |
+| Change planner | 4,360 | 6,272 | 9,144 | 6,767 |
+| Auditor | 4,158 | 5,765 | 9,091 | 6,304 |
+| Host doctor | 4,281 | 6,411 | 9,233 | 6,422 |
+| Automation author | 3,986 | 6,626 | 9,302 | 6,491 |
+| Script reviewer | 4,052 | 5,753 | 8,431 | 5,620 |
+| Mycroft | 4,291 | 5,487 | 8,065 | 5,254 |
+| Summarizer | 3,765 | 5,203 | 7,884 | 5,073 |
+
+Bytes of the assembled instructions with every agent on, from the golden copies.
+
+- **One list of agents, not two.** The rules named every owner and its work, and the list of agents after them named every agent and its purpose. The first list went; the rules now say that the list of agents says whose the rest is.
+- **Five lines on working together** where there were three sections: stop where your work ends; hand over if you were asked first, do it yourself if the owner cannot be asked, hand nothing on if you were handed the task; what a brief holds; keep findings as given; answer a handed task complete. What the engine already says when it refuses a hand-over is not said again.
+- **What Watson runs** is told to the agents that may give its commands, not to the Host doctor, the Automation author, the Script reviewer, Mycroft or the Summarizer.
+- **Sherlock**: the routing list no longer repeats the owners' work; the report recipe's trigger, said three times, is said once; how to write commands Watson accepts moved to its own work for when no Change planner can be asked.
+- **The Troubleshooter and the Auditor** say what they return once, not once as a list and again as a report.
+- `TestInstructionsStayShort` holds the sizes. Sherlock's whole request is 13,044 tokens by `TestSherlocksRequestSize` (13,998 after the records commit, limit 14,000).
+
+What remains long is Sherlock's section on the person's screen (about 4,000 bytes, a third of its instructions) and its tools' descriptions (9,888 of the 13,044 tokens). Both come from earlier phases, each line from a failure seen then, and were left alone.
 
 ### Left as it was
 
