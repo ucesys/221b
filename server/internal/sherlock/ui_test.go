@@ -170,7 +170,7 @@ func TestThePromptsViewChangesComeFromTheConstant(t *testing.T) {
 	if ViewChangesAsked >= MaxUIActions {
 		t.Fatalf("the prompt asks for %d view changes; the cap is %d", ViewChangesAsked, MaxUIActions)
 	}
-	if !strings.Contains(BuiltIn(true, ""), fmt.Sprintf("Make at most %d changes for one question.", ViewChangesAsked)) {
+	if !strings.Contains(BuiltIn(true, ""), fmt.Sprintf("at most %d for one question.", ViewChangesAsked)) {
 		t.Error("the prompt does not say the constant's number")
 	}
 }

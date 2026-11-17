@@ -230,11 +230,11 @@ func TestThePromptIsCoreThenHouseThenCluster(t *testing.T) {
 		t.Fatal(err)
 	}
 	core, cluster := sherlock.AgentPromptText(a, sherlock.Question{Cluster: "local", Version: "v1.37.1"}, time.Now())
-	iCore, iRules, iRoster, iHouse := strings.Index(core, "You are the Troubleshooter"), strings.Index(core, "Rules every agent"), strings.Index(core, "hand work to with hand_over"), strings.Index(core, "Cite our runbooks by name.")
+	iCore, iRules, iRoster, iHouse := strings.Index(core, "You are the Troubleshooter"), strings.Index(core, "Rules for every agent"), strings.Index(core, "hand work to with hand_over"), strings.Index(core, "Cite our runbooks by name.")
 	if iCore != 0 || iRules < iCore || iRoster < iRules || iHouse < iRoster {
 		t.Fatalf("the order: core %d, rules %d, roster %d, house %d\n%s", iCore, iRules, iRoster, iHouse, core)
 	}
-	if !strings.Contains(core, sherlock.ClusterTextRule) || !strings.Contains(core, "Secrets never leave the console") {
+	if !strings.Contains(core, sherlock.ClusterTextRule) || !strings.Contains(core, "Never ask for, repeat or output a credential") {
 		t.Fatal("the core lost a rule")
 	}
 	if strings.Contains(core, "Every cluster runs RKE2.") || !strings.Contains(cluster, "Every cluster runs RKE2.\n\nMaintenance on Sundays.") || strings.Index(cluster, "Kubernetes v1.37.1") > strings.Index(cluster, "RKE2") {
@@ -247,10 +247,10 @@ func TestThePromptIsCoreThenHouseThenCluster(t *testing.T) {
 	// Sherlock's core keeps its built-in instructions, with the front
 	// desk's part; only Sherlock is told it may change the view.
 	s, _ := w.ai.Agent(Sherlock, sherlock.Question{Key: sherlock.Key{Cluster: "local"}})
-	if !strings.HasPrefix(s.Instructions, sherlock.FrontDesk(true)) || !strings.Contains(s.Instructions, "front desk") {
+	if !strings.HasPrefix(s.Instructions, sherlock.FrontDesk(true)) || !strings.Contains(s.Instructions, "Hand over with hand_over") {
 		t.Fatal("Sherlock's core")
 	}
-	if strings.Contains(a.Instructions, "The view_* tools") {
+	if strings.Contains(a.Instructions, "Your view changes are made together") {
 		t.Fatal("another agent was told it may change the view")
 	}
 }
@@ -708,10 +708,10 @@ func TestTheCatalog(t *testing.T) {
 	}
 }
 
-// Sherlock, its compact form and the Troubleshooter are told every command
-// Watson runs, from Watson's own list, so the list cannot fall behind it
-// (S-1, P-1); and the Troubleshooter may check its commands, as the
-// Change planner does.
+// Sherlock, when the commands are its own work, and its compact form are
+// told every command Watson runs, from Watson's own list, so the list
+// cannot fall behind it (S-1, P-1). The Troubleshooter and the Change
+// planner check theirs with check_command instead (PM-D7).
 func TestPromptsNameEveryCommandWatsonRuns(t *testing.T) {
 	w := setup(t, nil)
 	assembled := func(id string) string {
@@ -727,8 +727,6 @@ func TestPromptsNameEveryCommandWatsonRuns(t *testing.T) {
 		"Sherlock without a Change planner": Core(Sherlock, true) + "\n\n" + OwnWork([]sherlock.RosterEntry{{ID: Troubleshooter}}),
 		"Sherlock without the agents":       sherlock.BuiltIn(false, watson.Commands()),
 		"Sherlock's compact form":           CompactCore(),
-		"the Troubleshooter":                assembled(Troubleshooter),
-		"the Change planner":                assembled(ChangePlanner),
 	} {
 		if strings.Count(text, watson.Commands()) != 1 {
 			t.Errorf("%s is not told once what Watson runs:\n%s", name, text)
@@ -737,9 +735,11 @@ func TestPromptsNameEveryCommandWatsonRuns(t *testing.T) {
 			t.Errorf("%s is not told that Watson runs %s", name, cmd)
 		}
 	}
-	info, _ := InfoOf(Troubleshooter)
-	if !slices.Contains(info.Tools, sherlock.ToolCheckCommand) || !strings.Contains(Core(Troubleshooter, false), "with check_command before you give it") {
-		t.Errorf("the Troubleshooter cannot check its commands: %v", info.Tools)
+	for _, id := range []string{Troubleshooter, ChangePlanner} {
+		info, _ := InfoOf(id)
+		if !slices.Contains(info.Tools, sherlock.ToolCheckCommand) || !strings.Contains(assembled(id), "check_command") {
+			t.Errorf("%s cannot check its commands: %v", id, info.Tools)
+		}
 	}
 }
 

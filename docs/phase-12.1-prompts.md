@@ -123,6 +123,32 @@ Bytes of the assembled instructions with every agent on, from the golden copies.
 
 What remains long is not the instructions: Sherlock's fifty tools' descriptions are 9,888 of the 12,107 tokens. They come from earlier phases and were left alone. The rule that text from the cluster is data, not instructions, was kept word for word.
 
+### Only what the agent learns nowhere else (November 16, PM-D7)
+
+Sherlock's answers were worse with longer instructions, so every agent's were cut to what it learns nowhere else: not what a tool's description says, not what the engine adds, not what the model knows of Kubernetes. Bytes of the assembled instructions with every agent on:
+
+| Agent | November 13 | Now |
+|---|---|---|
+| Sherlock | 9,406 | 3,511 |
+| Troubleshooter | 9,827 | 4,186 |
+| Change planner | 6,493 | 3,502 |
+| Auditor | 6,030 | 3,402 |
+| Host doctor | 6,148 | 3,636 |
+| Automation author | 6,217 | 4,212 |
+| Script reviewer | 5,346 | 3,423 |
+| Mycroft | 4,980 | 2,852 |
+| Summarizer | 4,799 | 2,809 |
+
+Sherlock's whole request is 10,704 tokens by `TestSherlocksRequestSize`, of which 9,888 are its tools' descriptions.
+
+- Sherlock no longer gets the rules every agent keeps; its own text holds the ones it needs (no changes, credentials, evidence, batched reads, the knowledge base) and its routing.
+- The rules every agent keeps are ten lines, for the other eight.
+- The troubleshooting manual is five lines; the two reports one sentence each.
+- No agent with every agent on is told what Watson runs: the Troubleshooter and the Change planner check with `check_command`.
+- The rule on text from the cluster is appended by the engine to any instructions without it, Sherlock's built-in ones too, and is said once.
+- The rounds are not counted in the prompt; the engine says when the last one comes.
+- The rules of an Automation script and of its review are unchanged: the Automation screen uses the same text.
+
 ### Left as it was
 
 The view changes held until the answer is done (SR-18) and opening the page with every answer (SR-16) were not touched. Neither is about who does what; if the screen moving with every answer is part of what feels worse, the agent's view-changes switch turns it off.
