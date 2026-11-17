@@ -566,6 +566,8 @@ export interface Me {
   method: string
   provider?: string
   sessionIdleSeconds: number
+  /** For a SuperAdmin: a peer that sent X-Forwarded-For, Forwarded or X-Real-IP without being listed under auth.trustedProxies (SEC-30). */
+  untrustedProxy?: string
 }
 
 /** One row of an alert's table: an event, or a node's condition or state (P4-07). */

@@ -36,6 +36,13 @@ It also answers on port {{ $.Values.service.port }} at {{ join ", " . }}.
 
 It is published through an Ingress at {{ if .Values.ingress.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}{{ .Values.ingress.path }}
 {{- if not .Values.ingress.tls.enabled }} without TLS: sessions travel in the clear; set ingress.tls.enabled=true with a certificate.{{ end }}
+{{- if not .Values.auth.trustedProxies }}
+
+WARNING: auth.trustedProxies is empty, so the console sees the Ingress controller's address on every request:
+the audit log's From is the controller, and everyone shares the controller's limit on sign-in attempts per
+address. List the controller there, usually by its pod CIDR (or the nodes' addresses when it runs on the host
+network), for example --set 'auth.trustedProxies={10.42.0.0/16}'.
+{{- end }}
 {{- else if eq .Values.service.type "ClusterIP" }}
 
 Open it with a port-forward:

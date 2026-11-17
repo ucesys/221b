@@ -172,6 +172,20 @@ describe('who is offered which page (RB-41, RB-31)', () => {
     expect(pagesFor(me({ mode: 'none', admin: false }))).toEqual(['permissions'])
   })
 
+  // SEC-30: a proxy the console does not trust is named to SuperAdmins on every page of Administration.
+  it('tells a SuperAdmin, and nobody else, about a proxy that is not trusted', () => {
+    render(<AdminPageView {...common('#/admin/roles', me({ untrustedProxy: '10.42.0.17' }))} settings={null} refreshedAt={null} />)
+    const notice = screen.getByTestId('untrusted-proxy')
+    expect(notice.textContent).toContain('through a proxy it does not trust (from 10.42.0.17)')
+    expect(notice.textContent).toContain('auth.trustedProxies')
+    cleanup()
+    render(<AdminPageView {...common('#/admin/roles', me())} settings={null} refreshedAt={null} />)
+    expect(screen.queryByTestId('untrusted-proxy')).toBeNull()
+    cleanup()
+    render(<AdminPageView {...common('#/admin/roles', { ...viewer, untrustedProxy: '10.42.0.17' })} settings={null} refreshedAt={null} />)
+    expect(screen.queryByTestId('untrusted-proxy')).toBeNull()
+  })
+
   it('refuses a Viewer who opens Users, and says why', () => {
     render(<AdminPageView {...common('#/admin/users', viewer)} settings={null} refreshedAt={null} />)
     expect(screen.getByTestId('admin-refusal').textContent).toContain('Users is for SuperAdmins')

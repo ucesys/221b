@@ -122,10 +122,17 @@ auth:
     ldap: "221b-ldap:"
   # CIDRs of the proxies in front of the console, such as your Ingress
   # controller's pods: their X-Forwarded-For says who a request is from, for
-  # the audit log's From and the limits on sign-in attempts. Empty believes
-  # no one's header: From is the socket's peer, and every address meets the
-  # same limit, as well as the limit per account. List every proxy on the
-  # way, not the clients.
+  # the audit log's From and the limits on sign-in attempts. Needed whenever
+  # people reach the console through a proxy (ingress.enabled, or a load
+  # balancer that proxies HTTP). Empty believes no one's header: From is the
+  # socket's peer, so behind a proxy it is the proxy's address for everyone,
+  # and everyone behind it shares that address's limit of 30 sign-in
+  # attempts a minute, as well as each account's own. List every proxy on
+  # the way, not the clients: usually the ingress controller's pod CIDR, or
+  # the nodes' addresses when it runs on the host network, for example
+  #   trustedProxies: ["10.42.0.0/16"]
+  # The log and Administration say when a proxy that is not listed sends
+  # X-Forwarded-For, Forwarded or X-Real-IP.
   trustedProxies: []
   # An optional code that must be typed on the first-run page, which asks
   # for the first administrator while no user exists. Empty asks for none.

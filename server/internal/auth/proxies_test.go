@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/sha256"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -157,5 +158,51 @@ func TestPasswordChecksRunInSlots(t *testing.T) {
 	}
 	if !<-done {
 		t.Fatal("the check failed once a slot came free")
+	}
+}
+
+// A forwarding header from a peer that is not trusted is noticed, logged
+// once and then at most once an hour; a trusted proxy and a request with
+// no such header are not.
+func TestProxyWatchNoticesAnUntrustedProxy(t *testing.T) {
+	proxies, err := ParseProxies([]string{"10.42.0.0/16"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	now := time.Unix(1_800_000_000, 0)
+	w := NewProxyWatch(slog.New(slog.NewTextHandler(&out, nil)), func() time.Time { return now })
+	warnings := func() int { return strings.Count(out.String(), "level=WARN") }
+
+	w.Check(proxies, request("203.0.113.9:4000"))
+	w.Check(proxies, request("10.42.1.2:4000", "203.0.113.9"))
+	if p := w.Peer(); p != "" || warnings() != 0 {
+		t.Fatalf("a direct client or a trusted proxy was noticed: %q, %s", p, out.String())
+	}
+	for _, h := range []string{"X-Forwarded-For", "Forwarded", "X-Real-IP"} {
+		r := request("[::ffff:192.0.2.50]:4000")
+		r.Header.Set(h, "for=198.51.100.1")
+		w.Check(proxies, r)
+		if p := w.Peer(); p != "192.0.2.50" {
+			t.Fatalf("%s from an untrusted peer: %q", h, p)
+		}
+	}
+	if warnings() != 1 || !strings.Contains(out.String(), "peer=192.0.2.50") {
+		t.Fatalf("want one warning naming the peer: %s", out.String())
+	}
+	now = now.Add(59 * time.Minute)
+	w.Check(proxies, request("192.0.2.51:4000", "198.51.100.1"))
+	if warnings() != 1 || w.Peer() != "192.0.2.51" {
+		t.Fatalf("within the hour: %d warnings, peer %q", warnings(), w.Peer())
+	}
+	now = now.Add(2 * time.Minute)
+	w.Check(proxies, request("192.0.2.51:4000", "198.51.100.1"))
+	if warnings() != 2 {
+		t.Fatalf("after the hour: %d warnings", warnings())
+	}
+	var none *ProxyWatch
+	none.Check(proxies, request("192.0.2.51:4000", "198.51.100.1"))
+	if none.Peer() != "" {
+		t.Fatal("a nil watch noticed something")
 	}
 }
