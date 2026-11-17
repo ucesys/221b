@@ -2,7 +2,6 @@ package ai
 
 import (
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -28,11 +27,10 @@ func TestEveryMarkOfAPromptFileIsFilled(t *testing.T) {
 			}
 		}
 	}
-	rounds := "You have " + strconv.Itoa(sherlock.DefaultMaxRounds) + " rounds of reads for one answer; a hand-over is one."
-	for _, id := range []string{Sherlock, Troubleshooter, Auditor, Summarizer} {
-		if !strings.Contains(Core(id, false), rounds) {
-			t.Errorf("%s is not told its rounds", id)
-		}
+	// The rounds are no longer counted in the prompt: the engine says
+	// when the last one comes (PM-D7, sherlock.LastRoundNote).
+	if !strings.Contains(sherlock.LastRoundNote, "last round") {
+		t.Error("the engine does not say when the last round comes")
 	}
 	if !strings.Contains(Core(AutomationAuthor, false), automation.ScriptRules) || !strings.Contains(automation.DraftPrompt, automation.ScriptRules) {
 		t.Error("the script rules are not in the Automation author's core and in the draft's task alike")
@@ -72,10 +70,9 @@ func TestTheRulesEveryAgentKeeps(t *testing.T) {
 	common := promptFile("common")
 	for _, want := range []string{
 		"- Say only what you read.",
-		"Name an object as affected only on its own evidence",
-		"never repeat a read with the same input",
-		"ask the knowledge base once (ask_knowledge)",
-		"Keep an agent's findings as it gave them",
+		"never repeat a read",
+		"ask_knowledge once",
+		"Keep other agents' findings as they gave them",
 	} {
 		if !strings.Contains(common, want) {
 			t.Errorf("the rules every agent keeps do not say %q", want)
