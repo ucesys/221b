@@ -1122,3 +1122,27 @@ func TestASecondSuperAdminApprovesANewOne(t *testing.T) {
 		t.Fatalf("bob after the approval: %+v", w)
 	}
 }
+
+// Local accounts still sign in with LDAP on, also while the directory cannot
+// be reached; a local name the directory also knows signs in with either
+// password (owner, 2026-11-17).
+func TestLDAPLocalAccountsSignInWhenTheDirectoryIsDown(t *testing.T) {
+	e, d := ldapEnvWith(t, func(c *auth.Config) {
+		c.Local = append(c.Local, auth.LocalUser{Username: "priya", PasswordHash: hashOf(t, "a-local-password-1"), Roles: []string{"superViewer"}})
+	})
+	if w, _ := e.whoami(e.mustSignIn("priya", "a-local-password-1")); w.KubeName != "221b-local:priya" {
+		t.Fatalf("priya with the local password: %+v", w)
+	}
+	if w, _ := e.whoami(e.mustSignIn("priya", goodPassword)); w.KubeName != "221b-ldap:priya" || !w.Admin {
+		t.Fatalf("priya with the directory password: %+v", w)
+	}
+	d.mu.Lock()
+	d.down = true
+	d.mu.Unlock()
+	if w, _ := e.whoami(e.mustSignIn("break-glass", goodPassword)); !w.Admin || w.KubeName != "221b-local:break-glass" {
+		t.Fatalf("break-glass with the directory down: %+v", w)
+	}
+	if _, resp := e.signIn("break-glass", "wrong"); resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("a wrong local password with the directory down: %d", resp.StatusCode)
+	}
+}

@@ -18,7 +18,7 @@ import { SearchBox } from './SearchBox'
 import { ServicePanel } from './ServicePanel'
 import { colorLine } from './YamlView'
 
-export const SUBTABS = ['pods', 'workloads', 'storage', 'network', 'roles', 'other', 'values', 'notes', 'history'] as const
+export const SUBTABS = ['values', 'pods', 'workloads', 'storage', 'network', 'roles', 'other', 'notes', 'history'] as const
 export type SubTab = (typeof SUBTABS)[number]
 
 const WORKLOADS = new Set(['Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Job', 'CronJob', 'Pod', 'HorizontalPodAutoscaler', 'PodDisruptionBudget'])
@@ -130,13 +130,15 @@ export function ReleaseBody({ cluster, now, onToast, route, current, d, error, s
   for (const t of [...before, ...after]) if (t.count !== undefined) counts[t.id] = t.count
   const subtabs: [string, string][] = [
     ...before.map((t) => [t.id, t.label] as [string, string]),
+    // The values come first after the page's own tabs (Setup), where they
+    // are edited (owner, 2026-11-17).
+    ['values', 'Values'],
     ['pods', 'Pods'],
     ['workloads', 'Workloads'],
     ['storage', 'Storage'],
     ['network', 'Network'],
     ['roles', 'Roles'],
     ['other', 'Other'],
-    ['values', 'Values'],
     ['notes', 'Notes'],
     ['history', 'History'],
     ...after.map((t) => [t.id, t.label] as [string, string]),

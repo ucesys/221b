@@ -35,6 +35,8 @@ Phase 12.1: the agents' and jobs' instructions after a review against open-sourc
 
 ### Fixed
 
+- **Local accounts sign in with LDAP on** (RB-28a): with `auth.mode: ldap` the accounts created in the console (the Secret `<release>-users`) were not read, so they could no longer sign in; now they are, also while the directory cannot be reached. A local account and a directory person of the same name sign in with either password, the local one tried first.
+- **Helm: Values next to Setup**: a release's Values tab is second, right after Setup, instead of after Other.
 - **A fix is verified only by a read** (PM-J1c): an agent that answered `"still": null` for a fix it could not re-check was read as saying the problem is gone, which verified the fix. Null is now no answer, and the case keeps waiting.
 - **A job's answer without a readable block is said** (PM-C6): a nightly audit, an alert diagnosis or a daily digest whose answer was cut or had no JSON block ended *ok* with no findings. The run now notes it and asks the agent once for the block alone.
 - **A run that used every round** of reads ended with no answer (PM-C5): on its last round an agent is now told to answer from what it read.
