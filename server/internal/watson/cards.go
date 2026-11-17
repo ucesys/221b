@@ -31,6 +31,9 @@ type Inspection struct {
 	// Fingerprint is a digest of every part of those objects the command
 	// depends on: the same guards that lapse a Watson card (ADR-51).
 	Fingerprint string `json:"fingerprint"`
+	// Refusal says why the change may not run, or "": it removes values
+	// from the console's own release.
+	Refusal string `json:"refusal,omitempty"`
 }
 
 // ErrNotChange is a line a durable card cannot carry: a read runs at
@@ -63,7 +66,8 @@ func (s *Service) Inspect(ctx context.Context, cl Cluster, line string) (Inspect
 		return out, fmt.Errorf("cannot reach the cluster: %w", err)
 	}
 	targets, guards, impact := cardFor(ctx, cs, c, t)
-	out.Targets, out.Impact = targets, impact
+	_, alert, refusal := s.cardAlert(cl.ID, c, t.pin)
+	out.Targets, out.Impact, out.Refusal = targets, withAlert(alert, impact), refusal
 	parts := make([]string, 0, len(guards))
 	for _, g := range guards {
 		got, err := g.read(ctx, cs)
@@ -95,6 +99,13 @@ func (s *Service) RunApproved(cl Cluster, approver Who, line, from, why string, 
 	it := &Item{ID: newID(), Cluster: cl.ID, cmd: c, Line: c.Line, Change: true, From: from, Why: why, Requester: approver, Created: now, Exit: -1}
 	s.record(ActionCommand, it, approver, audit.OutcomeOK, "kind=change from="+quote(from))
 	if r := s.refusalFor(cl, Who{}, nil, false, false); r != nil && r.Rule != "two people" {
+		it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
+		s.add(it)
+		s.record(ActionRefuse, it, approver, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))
+		return it, r
+	}
+	if inspected != nil && inspected.Refusal != "" {
+		r := refuse("own release", "%s", inspected.Refusal)
 		it.Status, it.Reason, it.Rule = StatusRefused, r.Message, r.Rule
 		s.add(it)
 		s.record(ActionRefuse, it, approver, audit.OutcomeDenied, "rule="+quote(r.Rule)+" reason="+quote(r.Message))

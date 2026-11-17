@@ -412,6 +412,10 @@ type Record struct {
 	// when it was set ("23 objects at 767275b73ce4"), or why it could
 	// not be compared; "" when it matched or was not compared.
 	SourceDiff string `json:"sourceDiff,omitempty"`
+	// AdoptedRevision is the revision of the release, running already,
+	// whose values (helm get values) the record's values started from
+	// when the console adopted it; 0 for none (asked November 17, 2026).
+	AdoptedRevision int `json:"adoptedRevision,omitempty"`
 	// HasToken says a credential for the repository is saved with the
 	// record; the token itself never leaves the server.
 	HasToken bool `json:"hasToken,omitempty"`

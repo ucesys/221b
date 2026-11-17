@@ -16,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
+	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/nodes"
 	"github.com/ucesys/221b/server/internal/views"
@@ -97,6 +98,11 @@ func (s *Server) release(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, fmt.Sprintf("no Helm release %s in %s: it may have been uninstalled", name, ns))
 		return
 	}
+	id := r.PathValue("cluster")
+	if id == "" {
+		id = clusters.LocalID
+	}
+	d.Self = s.opts.SelfRelease.Is(id, ns, name)
 	for _, p := range d.PodRows {
 		if u, ok := cl.PodUsageOf(p.Namespace, p.Name); ok {
 			if d.Usage == nil {

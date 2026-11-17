@@ -85,6 +85,11 @@ type appView struct {
 	// DriftState sums the drift up: in sync, drifted, unknown, or "" when
 	// it was not checked yet.
 	DriftState string `json:"driftState,omitempty"`
+	// ValuesMasked names the keys of the values file whose credentials
+	// are masked in Values; a masked value sent back keeps what it hid.
+	ValuesMasked []string `json:"valuesMasked,omitempty"`
+	// Self says this is the release that runs this console.
+	Self bool `json:"self,omitempty"`
 }
 
 type driftEntry struct {
@@ -264,7 +269,7 @@ func (s *Server) getApps(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		v := appView{Record: rec}
+		v := s.viewOf(rec)
 		if d := s.cachedDrift(s.driftKey(c.ID, rec.Namespace, rec.Name, who.Person), rec.Updated); d != nil {
 			v.Drift, v.DriftState = d, d.State()
 		}
@@ -305,7 +310,7 @@ func (s *Server) getApp(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadGateway, getErr.Error())
 		return
 	}
-	v := appView{Record: rec}
+	v := s.viewOf(rec)
 	if d := s.cachedDrift(s.driftKey(c.ID, ns, name, who.Person), rec.Updated); d != nil {
 		v.Drift, v.DriftState = d, d.State()
 	}
@@ -407,7 +412,13 @@ func validValuesFile(f string) bool {
 // is looked up in the cluster's fleets for its deploy label (R2-11).
 func (s *Server) applyAppInput(rec *apps.Record, in appInput, cluster string) error {
 	if in.Values != nil {
-		rec.Values = *in.Values
+		// The page shows credentials masked: one sent back as it was
+		// shown keeps the value saved (asked November 17, 2026).
+		v, err := restoreMasked(*in.Values, rec.Values)
+		if err != nil {
+			return err
+		}
+		rec.Values = v
 	}
 	if in.Params != nil {
 		rec.Params = in.Params
@@ -584,6 +595,11 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 	}
 	now := s.opts.Now().UTC()
 	rec, saved, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
+	// adopted are the values of the release this record adopts: the
+	// record starts from them, and values given now are laid over them
+	// (asked November 17, 2026: an upgrade takes only the values it is
+	// given, so a record of a few keys would reset the rest).
+	var adopted map[string]any
 	switch {
 	case errors.Is(err, apps.ErrNotFound):
 		if in.Source == nil {
@@ -593,6 +609,15 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		rec = apps.Record{Cluster: c.ID, Namespace: ns, Name: name, Created: now, CreatedBy: who.User}
 		if _, cl, ok := s.lookup(w, r); ok {
 			rec.CreatorNamespaces = s.reachableNamespaces(r, cl)
+		}
+		vals, revision, err := s.releaseValues(r.Context(), c, who, ns, name)
+		if err != nil {
+			jsonError(w, http.StatusBadGateway, "reading the release's values, which the application starts from: "+err.Error())
+			return
+		}
+		if len(vals) > 0 {
+			adopted = vals
+			rec.Values, rec.AdoptedRevision = apps.ValuesYAML(vals), revision
 		}
 	case err != nil:
 		jsonError(w, http.StatusBadGateway, err.Error())
@@ -608,6 +633,14 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 	if err := s.applyAppInput(&rec, in, c.ID); err != nil {
 		jsonError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if adopted != nil && in.Values != nil {
+		v, err := adoptedValues(adopted, rec.Values)
+		if err != nil {
+			jsonError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		rec.Values = v
 	}
 	if sourceChanged || (in.Source != nil && rec.Commit == "") {
 		// What runs may already be what the source renders: then the
@@ -641,12 +674,18 @@ func (s *Server) putApp(w http.ResponseWriter, r *http.Request) {
 		appSaveFailed(w, err)
 		return
 	}
-	s.recordOn(r, audit.OutcomeOK, ActionAppSave, ns+"/"+name, "source="+quoteDetail(rec.Source.String())+" token="+strconv.FormatBool(token != nil && *token != "")+" params="+strconv.Itoa(len(rec.Params))+" upgrade="+strconv.FormatBool(in.Upgrade))
+	detail := "source=" + quoteDetail(rec.Source.String()) + " token=" + strconv.FormatBool(token != nil && *token != "") + " params=" + strconv.Itoa(len(rec.Params)) + " upgrade=" + strconv.FormatBool(in.Upgrade)
+	if adopted != nil {
+		detail += " values_from_revision=" + strconv.Itoa(rec.AdoptedRevision)
+	}
+	s.recordOn(r, audit.OutcomeOK, ActionAppSave, ns+"/"+name, detail)
 	if !in.Upgrade {
 		if token != nil {
 			rec.HasToken = *token != ""
 		}
-		b, _ := json.Marshal(appView{Record: rec, TokenRemoved: tokenRemoved && !rec.HasToken})
+		v := s.viewOf(rec)
+		v.TokenRemoved = tokenRemoved && !rec.HasToken
+		b, _ := json.Marshal(v)
 		writeJSON(w, r, b)
 		return
 	}

@@ -83,6 +83,11 @@ type Config struct {
 	// name without -issues).
 	CaseConfigMaps string
 	CaseInstance   string
+	// SelfRelease is "namespace/name" of the Helm release that runs this
+	// console in its own cluster: Watson's cards for it say the console
+	// depends on it, and one that removes its values is refused (asked
+	// November 17, 2026). Empty: not known.
+	SelfRelease string
 	// CleanStartToken, when set and not yet done, wipes the Cases area's
 	// records once on the leader at start; CleanStartDryRun only logs what
 	// it would delete.
@@ -269,6 +274,7 @@ func Parse(args []string) (Config, error) {
 	// --- One flow for findings and cases (Phase 12, wave 6) ---
 	fs.StringVar(&c.CaseConfigMaps, "case-configmaps", env("CASE_CONFIGMAPS", ""), "namespace/prefix of the ConfigMaps the console makes, one per case (empty: from -issues-configmap, <name without -issues>-case-)")
 	fs.StringVar(&c.CaseInstance, "case-instance", env("CASE_INSTANCE", ""), "the app.kubernetes.io/instance label of the cases' ConfigMaps (empty: the issues ConfigMap's name without -issues)")
+	fs.StringVar(&c.SelfRelease, "self-release", env("SELF_RELEASE", ""), "namespace/name of the Helm release that runs this console in its own cluster, which Watson's cards warn about (empty: not known)")
 	fs.StringVar(&c.CleanStartToken, "cases-clean-start-token", env("CASES_CLEAN_START_TOKEN", ""), "a token that, set and not yet done, deletes the Cases area's records once at start (cases, known issues, runs and findings, agents' proposals, Mycroft's pages)")
 	fs.BoolVar(&c.CleanStartDryRun, "cases-clean-start-dry-run", envBool("CASES_CLEAN_START_DRY_RUN", false), "with -cases-clean-start-token, only log what the clean start would delete")
 	fs.StringVar(&c.ConnectionsSecrets, "connections-secrets", env("CONNECTIONS_SECRETS", ""), "namespace/prefix of the Secrets to keep cluster connections in, one <prefix>-cluster-<id> each (empty: in memory, lost on restart)")

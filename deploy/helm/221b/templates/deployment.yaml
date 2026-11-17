@@ -204,6 +204,10 @@ spec:
               value: {{ printf "%s/%s-case-" .Release.Namespace (include "b221.fullname" .) | quote }}
             - name: CASE_INSTANCE
               value: {{ .Release.Name | quote }}
+            # The release that runs this console: Watson's cards for it say
+            # so, and refuse an upgrade that drops its values.
+            - name: SELF_RELEASE
+              value: {{ printf "%s/%s" .Release.Namespace .Release.Name | quote }}
             {{- with (dig "cleanStart" dict (.Values.cases | default dict)) }}
             - name: CASES_CLEAN_START_TOKEN
               value: {{ .token | default "" | quote }}

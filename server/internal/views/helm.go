@@ -192,6 +192,9 @@ type ReleaseDetails struct {
 	// Usage is CPU and memory in use by pod key, when metrics-server has
 	// readings; the API fills it in.
 	Usage map[string]nodes.Usage `json:"usage,omitempty"`
+	// Self says this is the release that runs this console; the API
+	// fills it in.
+	Self bool `json:"self,omitempty"`
 }
 
 // Revision is one line of a release's history.

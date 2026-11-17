@@ -2887,6 +2887,12 @@ button.rk-gr:hover .rk-pname {
   font-size: 12.5px;
   line-height: 1.5;
 }
+.rk-appr[data-tone='warn'] {
+  border-width: 2px;
+}
+.rk-appr[data-tone='danger'] {
+  border: 2px solid var(--term-err);
+}
 .rk-appr[data-kind='read'] {
   border-color: #3a4552;
 }

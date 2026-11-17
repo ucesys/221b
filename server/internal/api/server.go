@@ -237,6 +237,9 @@ type Options struct {
 	// Apps keeps the Helm applications (Phase 10); nil, or no Watson,
 	// leaves the Helm1 page's routes out.
 	Apps apps.Store
+	// SelfRelease is the Helm release that runs this console: its panel
+	// and its cards say so (asked November 17, 2026).
+	SelfRelease apps.SelfRelease
 	// ImageChecks looks for newer images than the releases run (HA-21,
 	// ADR-154); nil leaves the check out.
 	ImageChecks *imagecheck.Checker
