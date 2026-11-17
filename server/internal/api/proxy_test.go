@@ -419,3 +419,42 @@ func TestTheAuditLogBelievesOnlyATrustedProxy(t *testing.T) {
 		t.Errorf("a header was believed with no proxy trusted: %s", from)
 	}
 }
+
+// A forwarding header from a peer auth.trustedProxies does not list tells
+// SuperAdmins, through /api/v1/me, which peer it was; one from a trusted
+// proxy does not, and nobody else is told.
+func TestAnUntrustedProxyIsShownToSuperAdmins(t *testing.T) {
+	me := func(t *testing.T, who string, proxies auth.Proxies) string {
+		t.Helper()
+		srv, c, _, _, _, _ := multiSetupWith(t, who, nil, func(o *Options) { o.Proxies = proxies })
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/settings", nil)
+		req.Header.Set("X-Forwarded-For", "203.0.113.9")
+		resp, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		r, body := send(t, c, http.MethodGet, srv.URL+"/api/v1/me", "")
+		if r.StatusCode != http.StatusOK {
+			t.Fatalf("me: %d %s", r.StatusCode, body)
+		}
+		var m auth.Me
+		if err := json.Unmarshal([]byte(body), &m); err != nil {
+			t.Fatal(err)
+		}
+		return m.UntrustedProxy
+	}
+	if got := me(t, "ops@corp.example", nil); got != "127.0.0.1" {
+		t.Errorf("untrusted proxy: %q", got)
+	}
+	local, err := auth.ParseProxies([]string{"127.0.0.0/8", "::1/128"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := me(t, "ops@corp.example", local); got != "" {
+		t.Errorf("trusted proxy noticed: %q", got)
+	}
+	if got := me(t, "viewer@corp.example", nil); got != "" {
+		t.Errorf("shown to a Viewer: %q", got)
+	}
+}

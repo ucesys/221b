@@ -88,6 +88,9 @@ type Config struct {
 	// AccessTTL is how long a person's groups stand before the directory is
 	// asked again (RB-23).
 	AccessTTL time.Duration
+	// ProxyWatch notices a proxy that is not trusted (SEC-30); nil makes
+	// one that logs here.
+	ProxyWatch *ProxyWatch
 }
 
 // Cookie names.
@@ -164,6 +167,9 @@ func New(cfg Config, log *slog.Logger, auditLog *audit.Log, now func() time.Time
 	}
 	if cfg.SyncInterval <= 0 {
 		cfg.SyncInterval = time.Hour
+	}
+	if cfg.ProxyWatch == nil {
+		cfg.ProxyWatch = NewProxyWatch(log, now)
 	}
 	s := &Service{cfg: cfg, setup: newLimiter(5, time.Minute, now), sessions: NewSessions(cfg.SessionIdle, cfg.SessionMax, now), audit: auditLog, log: log, now: now, perAccount: newLimiter(5, time.Minute, now), perAddress: newLimiter(30, time.Minute, now)}
 	if cfg.SessionStore != nil {
@@ -840,7 +846,14 @@ type Me struct {
 	// SessionIdle is how long the session lives without activity, in
 	// seconds.
 	SessionIdle int `json:"sessionIdleSeconds"`
+	// UntrustedProxy, for a SuperAdmin, is the address of a peer that sent
+	// a forwarding header without being listed under auth.trustedProxies
+	// (SEC-30).
+	UntrustedProxy string `json:"untrustedProxy,omitempty"`
 }
+
+// ProxyWatch is what notices a proxy that is not trusted (SEC-30).
+func (s *Service) ProxyWatch() *ProxyWatch { return s.cfg.ProxyWatch }
 
 func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 	sess, ok := SessionFrom(r.Context())
@@ -853,6 +866,9 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 	me := Me{Mode: s.cfg.Mode, User: sess.User, Admin: sess.Admin, Roles: sess.Roles, Method: sess.Method, SessionIdle: int(s.cfg.SessionIdle / time.Second)}
 	if s.provider != nil {
 		me.Provider = s.provider.Name()
+	}
+	if sess.Admin {
+		me.UntrustedProxy = s.cfg.ProxyWatch.Peer()
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")

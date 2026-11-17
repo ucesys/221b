@@ -80,6 +80,19 @@ interface Props extends AdminProps {
   refreshedAt: Date | null
 }
 
+/**
+ * SEC-30: requests came through a proxy the console does not trust, so it
+ * sees the proxy's address for everyone behind it.
+ */
+export function UntrustedProxyNotice({ me }: { me: Me | null }) {
+  if (!me?.admin || !me.untrustedProxy) return null
+  return (
+    <p className="rk-callout" data-tone="warn" role="status" style={{ margin: 0 }} data-testid="untrusted-proxy">
+      Requests reach the console through a proxy it does not trust (from {me.untrustedProxy}): the sign-in limit per address and the audit log see the proxy’s address. List the proxy under <code>auth.trustedProxies</code>.
+    </p>
+  )
+}
+
 function Refusal({ page, signedIn }: { page: Page; signedIn: boolean }) {
   const label = PAGES.find((p) => p.id === page)!.label
   return (
@@ -179,6 +192,7 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
           {PAGES.find((p) => p.id === page)!.label}
         </h2>
         {me === null && <p style={{ margin: 0, color: 'var(--fg3)' }}>Loading…</p>}
+        <UntrustedProxyNotice me={me} />
         {/* Settings › Knowledge's Added in Mycroft card is where Admins add to the wiki too (MY-04, MY-11): the rest of Settings stays closed to them. */}
         {me && refused && page === 'settings' && route.path[1] === 'knowledge' && <AdminKnowledge onToast={onToast} focus={route.path[2] === 'added'} />}
         {me && refused && !(page === 'settings' && route.path[1] === 'knowledge') && <Refusal page={page} signedIn />}

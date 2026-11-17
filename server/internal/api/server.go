@@ -193,6 +193,9 @@ type Options struct {
 	Standby func() bool
 	// Proxies are the proxies whose X-Forwarded-For is believed.
 	Proxies auth.Proxies
+	// ProxyWatch notices forwarding headers from anyone else (SEC-30); nil
+	// takes the sign-in's, so that /api/v1/me can tell a SuperAdmin.
+	ProxyWatch *auth.ProxyWatch
 	// ProxyToken is shared by the replicas: a forwarded request carries it,
 	// and only then is its client address believed.
 	ProxyToken string
@@ -417,6 +420,14 @@ func New(o Options) *Server {
 	}
 	if o.Roles.Monitor == nil {
 		o.Roles.Monitor = &roles.Monitor{}
+	}
+	if o.ProxyWatch == nil {
+		if a, ok := o.Auth.(interface{ ProxyWatch() *auth.ProxyWatch }); ok {
+			o.ProxyWatch = a.ProxyWatch()
+		}
+	}
+	if o.ProxyWatch == nil {
+		o.ProxyWatch = auth.NewProxyWatch(o.Logger, o.Now)
 	}
 	s := &Server{opts: o, mux: http.NewServeMux(), reqs: map[reqKey]uint64{}, allowedHosts: map[string]bool{}, leaderChecks: leaderChecks, roleCheck: make(chan struct{}, 1)}
 	if s.backups = o.Backup; s.backups == nil {
@@ -739,6 +750,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// A request another replica forwarded says whose it is (P7-02).
 	forwarded := s.trustForwarded(r)
 	if !forwarded {
+		s.opts.ProxyWatch.Check(s.opts.Proxies, r)
 		r = s.opts.Proxies.Resolve(r)
 	}
 	h := w.Header()
