@@ -28,8 +28,8 @@ Fixes go into a new patch release of the latest minor version. The previous mino
 
 | Version | Supported |
 |---|---|
-| The latest minor (0.13.x) | Yes |
-| The previous minor (0.12.x) | High and critical fixes, for three months after 0.13.0 (2026-11-17) |
+| The latest minor (0.12.x) | Yes |
+| The previous minor (0.11.x) | High and critical fixes, for three months after 0.12.0 (2026-11-11) |
 | Older | No |
 
 ## Especially interesting

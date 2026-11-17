@@ -1275,7 +1275,7 @@ Asked for on November 13, 2026: *Add configuration for email and if configured a
 | EM-09 | **Cases I'm involved in.** The Inbox's *Whose* filter has *I'm involved* (`?who=involved`, and `?involved=me`), keeping the cases the person is involved in by EM-05, as the server marks each (`involved` on a case of `GET /api/v1/aiops/cases`, which also takes `?involved=me`). The index line of a case names the people involved that it names nowhere else (`involved`); a case not changed since keeps finding its reporter, filer, assignee and followers. Sherlock's `view_aiops` takes `who` (all, mine, unassigned, involved) for the Inbox, and `view_admin` opens Settings › Email (`email`). | Go `TestCasesImInvolvedIn`; vitest *narrows to the cases the person is involved in…* (`Inbox.test.tsx`, `inboxRows.test.ts`), `uiControl.test.ts`. |
 | EM-10 | **The simulator's SMTP server.** `221b-sim -fake-smtp 127.0.0.1:7525` serves an SMTP server in memory (security none, no sign-in) that takes every message; `GET /fake-smtp/messages` on the simulator lists them as JSON and `DELETE` forgets them. `make dev-sim` and `make e2e-sim` start it (`SIM_SMTP`). Tests send through `mail.Capture`, or through the real SMTP client to the fake server. | Go `TestSMTPAgainstTheFakeServer`; e2e `email.spec.ts` (simulator only). |
 
-## Hardening and Helm safety (0.13.0)
+## Hardening and Helm safety (0.12.1)
 
 | ID | Requirement | Acceptance |
 |---|---|---|
