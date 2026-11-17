@@ -100,9 +100,9 @@ export function GettingStartedSection({ onToast }: { onToast?: (msg: string) => 
           </button>
         )}
       </div>
-      <p style={{ margin: 0, color: 'var(--fg2)' }}>
-        Each step is checked against the console as it is, and ticks itself when done. Passwords, keys and tokens are typed on each step’s own screen, never here or in a chat.
-        {view.complete ? ' Every step is done or dismissed, so the list has left the home page and Sherlock’s setup skill has ended.' : ' Sherlock helps with the rest: ask it “What’s next?”.'}
+      <p style={{ margin: 0, color: 'var(--fg2)' }} data-testid="setup-lead">
+        Each step ticks itself when done; secrets go on its own screen, never in a chat.
+        {view.complete ? '' : ' Ask Sherlock “What’s next?”.'}
       </p>
       <ol aria-label="Steps" style={{ listStyle: 'none', margin: 0, padding: 0, border: '1px solid var(--line)', borderRadius: 8, overflow: 'hidden' }}>
         {view.steps.map((st, i) => (

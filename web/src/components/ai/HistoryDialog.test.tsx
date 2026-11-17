@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HistoryEntry, HistoryText } from '../../api/ai'
-import { defaultPair, entryKey, HistoryDialog } from './HistoryDialog'
+import { defaultPair, entryKey, entryOption, HistoryDialog } from './HistoryDialog'
 import { versionFields } from './TextDiff'
 
 const core = (text: string) => [{ name: 'core', label: 'Built-in instructions', text }]
@@ -38,59 +38,51 @@ describe('the history dialog (AI-32)', () => {
     vi.unstubAllGlobals()
   })
 
-  it('lists the versions and drafts newest first and compares the draft now with the version in force, field by field', async () => {
+  it('compares the draft now with the version in force as one unified diff, any two picked in the selects (AI-41)', async () => {
     const onClose = vi.fn()
     render(<HistoryDialog agentId="auditor" agentName="Auditor" clusterName={(id) => (id === 'local' ? 'Here' : id)} onClose={onClose} />)
     const dlg = await screen.findByTestId('history-dialog')
     expect(dlg.getAttribute('role')).toBe('dialog')
-    await waitFor(() => expect(within(dlg).getAllByTestId('history-entry')).toHaveLength(4))
-    const rows = within(dlg).getAllByTestId('history-entry')
-    expect(rows.map((r) => r.getAttribute('data-key'))).toEqual(['draft:5', 'draft:4', 'live:2', 'live:1'])
-    expect(rows[0]!.textContent).toContain('The draft now')
-    expect(rows[0]!.textContent).toContain('tested: 5 of 6 passed')
-    expect(rows[2]!.textContent).toContain('made live untested: hotfix')
-    expect(within(dlg).getByTestId('history-pair').textContent).toBe('Version 2 → Draft 5')
-    await waitFor(() => expect(within(dlg).getAllByTestId('version-diff-field').length).toBeGreaterThan(0))
-    const fields = within(dlg).getAllByTestId('version-diff-field')
-    expect(fields.map((f) => f.textContent?.split(':')[0])).toEqual(['House instructions', 'Notes for Here'])
-    expect(fields[0]!.textContent).toContain('+Then SOC 2.')
-    expect(within(dlg).getByTestId('version-diff-unchanged').textContent).toBe('No change: Built-in instructions, Notes for every cluster.')
+    expect(within(dlg).getByRole('heading').textContent).toBe('Diff of Auditor instructions')
+    const from = within(dlg).getByTestId('history-from') as HTMLSelectElement
+    const to = within(dlg).getByTestId('history-to') as HTMLSelectElement
+    await waitFor(() => expect(from.options).toHaveLength(4))
+    expect([...to.options].map((o) => o.value)).toEqual(['draft:5', 'draft:4', 'live:2', 'live:1'])
+    expect(to.options[0]!.textContent).toMatch(/^Draft 5 · the draft now · tested 5\/6 passed · .+ · ann$/)
+    expect(to.options[2]!.textContent).toMatch(/^Version 2 · live · in force · .+ · bob$/)
+    expect(from.value).toBe('live:2')
+    expect(to.value).toBe('draft:5')
+    const diff = await within(dlg).findByTestId('app-diff')
+    expect(diff.querySelector('p')!.textContent).toBe('Version 2 → Draft 5: 2 changed — House instructions, Notes for Here')
+    const text = diff.querySelector('pre')!.textContent!
+    expect(text).toContain('--- house instructions (version 2)+++ house instructions (draft 5)@@')
+    expect(text).toContain('+Then SOC 2.')
+    expect(text).toContain('--- notes for Here (version 2)+++ notes for Here (draft 5)')
+    expect(text).not.toContain('built-in instructions')
+    expect(dlg.querySelectorAll('pre')).toHaveLength(1)
     // Any two: version 1 against draft 4.
-    fireEvent.click(within(rows[3]!).getByTestId('history-from'))
-    fireEvent.click(within(rows[1]!).getByTestId('history-to'))
-    expect(within(dlg).getByTestId('history-pair').textContent).toBe('Version 1 → Draft 4')
-    await waitFor(() =>
-      expect(
-        within(dlg)
-          .getAllByTestId('version-diff-field')
-          .map((f) => f.textContent?.split(':')[0]),
-      ).toEqual(['House instructions', 'Built-in instructions']),
-    )
+    fireEvent.change(from, { target: { value: 'live:1' } })
+    fireEvent.change(to, { target: { value: 'draft:4' } })
+    await waitFor(() => expect(within(dlg).getByTestId('app-diff').querySelector('p')!.textContent).toBe('Version 1 → Draft 4: 2 changed — House instructions, Built-in instructions'))
+    // The same twice: said so.
+    fireEvent.change(from, { target: { value: 'draft:4' } })
+    expect((await within(dlg).findByTestId('app-diff-same')).textContent).toBe('Draft 4 and Draft 4 are the same.')
     // Each side is read once.
     expect(calls.filter((c) => c.url.endsWith('/history/draft/5'))).toHaveLength(1)
-    fireEvent.click(within(dlg).getByTestId('history-close'))
+    expect(within(dlg).queryByTestId('history-restore')).toBeNull()
+    const close = within(dlg).getByTestId('history-close')
+    expect(close.className).toBe('rk-icon-btn')
+    fireEvent.click(close)
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
-  it('restores a version once live, not the one in force, and reads the history again', async () => {
-    const onRestore = vi.fn(async () => {})
-    render(<HistoryDialog agentId="auditor" agentName="Auditor" onRestore={onRestore} onClose={() => {}} />)
-    const dlg = await screen.findByTestId('history-dialog')
-    await waitFor(() => expect(within(dlg).getAllByTestId('history-entry')).toHaveLength(4))
-    const restores = within(dlg).getAllByTestId('history-restore')
-    expect(restores).toHaveLength(1)
-    fireEvent.click(restores[0]!)
-    await waitFor(() => expect(onRestore).toHaveBeenCalledWith(1))
-    await waitFor(() => expect(calls.filter((c) => c.url.endsWith('/history'))).toHaveLength(2))
-  })
-
-  it('blocks Restore while there are unsaved edits, and Escape closes it', async () => {
+  it('opens on a version against the one before it, and Escape closes it', async () => {
     const onClose = vi.fn()
-    render(<HistoryDialog agentId="auditor" agentName="Auditor" restoreBlocked="Save or undo your edits first." onRestore={async () => {}} onClose={onClose} />)
+    render(<HistoryDialog agentId="auditor" agentName="Auditor" version={2} onClose={onClose} />)
     const dlg = await screen.findByTestId('history-dialog')
-    const restore = await within(dlg).findByTestId('history-restore')
-    expect(restore.hasAttribute('disabled')).toBe(true)
-    expect(restore.getAttribute('title')).toBe('Save or undo your edits first.')
+    await waitFor(() => expect((within(dlg).getByTestId('history-to') as HTMLSelectElement).value).toBe('live:2'))
+    expect((within(dlg).getByTestId('history-from') as HTMLSelectElement).value).toBe('live:1')
+    await waitFor(() => expect(within(dlg).getByTestId('app-diff').querySelector('p')!.textContent).toContain('Version 1 → Version 2: 3 changed'))
     fireEvent.keyDown(dlg, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
   })
@@ -100,6 +92,10 @@ describe('the history dialog (AI-32)', () => {
     expect(defaultPair(entries.slice(2))).toEqual(['live:1', 'live:2'])
     expect(defaultPair([entries[2]!])).toEqual(['live:2', 'live:2'])
     expect(defaultPair([])).toBeNull()
+    expect(defaultPair(entries, 1)).toEqual(['live:1', 'live:1'])
+    expect(defaultPair(entries, 2)).toEqual(['live:1', 'live:2'])
+    expect(defaultPair(entries, 9)).toEqual(['live:2', 'draft:5'])
+    expect(entryOption({ kind: 'discarded', rev: 8 })).toBe('Draft 8 · discarded')
     expect(entryKey({ kind: 'discarded', rev: 7 })).toBe('draft:7')
     expect(entryKey({ kind: 'live', n: 0 })).toBe('live:0')
   })

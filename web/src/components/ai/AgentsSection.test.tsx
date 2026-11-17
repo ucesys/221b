@@ -97,6 +97,16 @@ describe('the Agents section', () => {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       calls.push({ method, url: String(url), body })
       if (String(url).endsWith('/instructions')) return new Response(JSON.stringify(ins))
+      if (String(url).endsWith('/history'))
+        return new Response(
+          JSON.stringify({
+            entries: [
+              { kind: 'live', n: 2, inForce: true },
+              { kind: 'live', n: 1 },
+            ],
+          }),
+        )
+      if (/\/history\/live\/\d$/.test(String(url))) return new Response(JSON.stringify({ kind: 'live', house: String(url).endsWith('2') ? 'b' : 'a', parts: [] }))
       if (String(url).endsWith('/baseline')) {
         ins = { ...ins, state: 'edited', previousBaseline: undefined }
         return new Response(JSON.stringify(ins))
@@ -151,6 +161,16 @@ describe('the Agents section', () => {
     const stages = within(drawer).getByTestId('ins-stages')
     expect(stages.querySelector('[aria-current=step] [data-testid=ins-step-name]')?.textContent).toBe('Live')
     expect(within(drawer).getAllByTestId('ins-restore')).toHaveLength(1)
+    // Each version's Diff… opens the diff on it against the one before it (AI-41).
+    const diffs = within(drawer).getAllByTestId('ins-version-diff')
+    expect(diffs).toHaveLength(2)
+    fireEvent.click(diffs[0]!)
+    const dlg = await screen.findByTestId('history-dialog')
+    await waitFor(() => expect((within(dlg).getByTestId('history-to') as HTMLSelectElement).value).toBe('live:2'))
+    expect((within(dlg).getByTestId('history-from') as HTMLSelectElement).value).toBe('live:1')
+    await waitFor(() => expect(within(dlg).getByTestId('app-diff').textContent).toContain('Version 1 → Version 2: 1 changed'))
+    fireEvent.click(within(dlg).getByTestId('history-close'))
+    expect(screen.queryByTestId('history-dialog')).toBeNull()
     expect(within(drawer).getByTestId('agent-jobs-link').getAttribute('href')).toBe('#/aiops/jobs')
     expect(within(drawer).getByTestId('agent-handovers').textContent).toContain('Hands work over to Automation author, Script reviewer')
     expect(within(drawer).getByTestId('agent-handovers').textContent).toContain('cannot change your view')

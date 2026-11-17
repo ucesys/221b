@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { APPROVE_ALL_CHOICES, fetchWatsonConfig, saveWatsonConfig, type WatsonSettings as Settings } from '../api/watson'
 import { adminHref } from '../lib/router'
-import { NotificationChannels } from './NotificationChannels'
+import { NotificationChannels, useNotifyForm } from './NotificationChannels'
 import { SaveBar } from './SaveBar'
 import { StandingApprovals } from './StandingApprovals'
 
@@ -35,26 +35,43 @@ export function WatsonSettings({ open }: { open: boolean }) {
       stop = true
     }
   }, [open])
-  const save = async () => {
+  // The notification channels are saved by the same bar (CU-16).
+  const notify = useNotifyForm()
+  const approvalsChanged = !!cfg && (draft !== cfg.twoPerson || approveAll !== (cfg.approveAllMinutes ?? 0))
+  // One Save for the page (CU-16): only the parts changed; a part that
+  // fails keeps what was typed and is named, the other stays saved.
+  const save = async (): Promise<boolean> => {
     setBusy(true)
     setError('')
     setSaved('')
-    try {
-      const c = await saveWatsonConfig({ twoPerson: draft, approveAllMinutes: approveAll })
-      setCfg(c)
-      setDraft(c.twoPerson)
-      setApproveAll(c.approveAllMinutes ?? 0)
-      setSaved('Saved.')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
+    const failed: string[] = []
+    const why = (e: unknown) => (e instanceof Error ? e.message : String(e))
+    if (approvalsChanged) {
+      try {
+        const c = await saveWatsonConfig({ twoPerson: draft, approveAllMinutes: approveAll })
+        setCfg(c)
+        setDraft(c.twoPerson)
+        setApproveAll(c.approveAllMinutes ?? 0)
+      } catch (e) {
+        failed.push(`Approvals not saved: ${why(e)}`)
+      }
     }
+    if (notify.changed) {
+      try {
+        await notify.save()
+      } catch (e) {
+        failed.push(`Notifications not saved: ${why(e)}`)
+      }
+    }
+    setError(failed.join(' '))
+    if (!failed.length) setSaved('Saved.')
+    setBusy(false)
+    return !failed.length
   }
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 12 }} aria-label="Watson" data-testid="watson-settings">
       <p className="rk-fhint" style={{ margin: 0 }}>
-        Watson runs kubectl and helm commands. Reads run at once; every change waits for an approval and runs as the person who approved it.
+        Watson runs kubectl and helm: reads at once, each change once approved, as the person who approved it.
       </p>
       <section style={{ display: 'flex', flexDirection: 'column', gap: 6 }} aria-label="Where Watson runs" data-testid="watson-where">
         <h3 className="rk-h">Where it runs</h3>
@@ -103,18 +120,25 @@ export function WatsonSettings({ open }: { open: boolean }) {
               and the audit log names them as the approver.
             </p>
           </section>
+          {/* Phase 12: the agents' proposals, each saved on its own. */}
+          <StandingApprovals />
+          <NotificationChannels form={notify} busy={busy} />
           <SaveBar
-            changed={draft !== cfg.twoPerson || approveAll !== (cfg.approveAllMinutes ?? 0)}
+            what="Settings › Watson"
+            changed={approvalsChanged || notify.changed}
             busy={busy}
             onSave={() => void save()}
-            onUndo={() => (setDraft(cfg.twoPerson), setApproveAll(cfg.approveAllMinutes ?? 0))}
+            save={save}
+            onUndo={() => {
+              setDraft(cfg.twoPerson)
+              setApproveAll(cfg.approveAllMinutes ?? 0)
+              notify.undo()
+              setError('')
+            }}
             error={error}
             saved={saved}
             testId="watson-settings-save"
           />
-          {/* Phase 12: the agents' proposals, saved on their own. */}
-          <StandingApprovals />
-          <NotificationChannels />
         </>
       )}
     </section>

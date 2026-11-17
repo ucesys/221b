@@ -40,7 +40,11 @@ test('a SuperAdmin sets Settings › General › Email, and a test email turns i
   await page.getByTestId('email-security').getByRole('button', { name: 'None' }).click()
   await page.getByTestId('email-port').fill(SMTP_PORT)
   await page.getByTestId('email-from').fill('221b@example.com')
-  await page.getByTestId('email-save').click()
+  // Unsaved changes wait: the test sends what is saved (CU-16).
+  await expect(page.getByTestId('email-test')).toBeDisabled()
+  // General's one Save bar saves the email with the rest (CU-16).
+  await expect(page.getByTestId('save-bar')).toHaveCount(1)
+  await page.getByTestId('settings-save').click()
   await expect(status).toContainText('Configured, not tested')
   await page.getByTestId('email-test-to').fill('e2e@example.com')
   await page.getByTestId('email-test').click()
@@ -48,6 +52,6 @@ test('a SuperAdmin sets Settings › General › Email, and a test email turns i
   await expect.poll(async () => (await taken()).map((m) => `${m.to} ${m.subject}`)).toContain('e2e@example.com 221B: test email')
   // A change of the port turns it off until the next test.
   await page.getByTestId('email-port').fill('2525')
-  await page.getByTestId('email-save').click()
+  await page.getByTestId('settings-save').click()
   await expect(status).toContainText('Configured, not tested')
 })

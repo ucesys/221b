@@ -65,7 +65,7 @@ export function ProvidersSection({ onToast, initial }: { onToast?: (msg: string)
     <>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
         <p className="rk-fhint" style={{ margin: 0, flex: '1 1 320px' }}>
-          Where agents’ models come from. A credential is kept in a Secret in the console’s namespace and is never shown again.
+          Where the agents’ models come from; each credential is kept in a Secret and never shown again.
         </p>
         <button className="rk-btn" onClick={() => setEditing('new')} data-testid="provider-add">
           Add provider…

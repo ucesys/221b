@@ -57,7 +57,7 @@ export function LimitsSection({ onToast }: { onToast?: (msg: string) => void }) 
     setProviders({})
     setSaveError('')
   }
-  const save = async () => {
+  const save = async (): Promise<boolean> => {
     setBusy(true)
     setSaveError('')
     setSaved('')
@@ -68,8 +68,10 @@ export function LimitsSection({ onToast }: { onToast?: (msg: string) => void }) 
       setProviders({})
       setSaved('Saved.')
       onToast?.('Limits saved')
+      return true
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e))
+      return false
     } finally {
       setBusy(false)
     }
@@ -82,8 +84,7 @@ export function LimitsSection({ onToast }: { onToast?: (msg: string) => void }) 
   return (
     <>
       <p className="rk-fhint" style={{ margin: 0 }}>
-        What the agents may spend, in US dollars, today and this month (UTC). Each limit counts the spend of every agent it covers; once one is reached, those agents stop until it lifts, tomorrow or next month. The total is checked first,
-        then the provider’s, then the agent’s own cap. {NO_LIMIT}
+        What the agents may spend in US dollars, a day and a month (UTC). {NO_LIMIT}
       </p>
       <section id={LIMITS_TOTAL_ID} style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Total" data-testid="limits-total">
         <h3 className="rk-h">Total</h3>
@@ -98,7 +99,7 @@ export function LimitsSection({ onToast }: { onToast?: (msg: string) => void }) 
           </label>
         </div>
         <p className="rk-fhint" style={{ margin: 0 }} data-testid="limits-total-hint">
-          All agents on all providers together. {NO_LIMIT}
+          All agents on all providers together, checked first, then the provider’s limit, then the agent’s own cap; once one is reached, the agents it covers stop until the next day or month. {NO_LIMIT}
           {costs ? ` Spent: ${usd(ov.spend.dayUSD)} today, ${usd(ov.spend.monthUSD)} this month.` : ''}
         </p>
       </section>
@@ -137,6 +138,9 @@ export function LimitsSection({ onToast }: { onToast?: (msg: string) => void }) 
                 )
               })}
             </tbody>
+            <tfoot>
+              <ProvidersTotal ov={ov} total={shownTotal} costs={costs} />
+            </tfoot>
           </table>
         </div>
         <p className="rk-fhint" style={{ margin: 0 }}>
@@ -179,8 +183,63 @@ export function LimitsSection({ onToast }: { onToast?: (msg: string) => void }) 
           An agent’s own cap is set in its drawer on Settings › Agents: open an agent to change it. {NO_LIMIT}
         </p>
       </section>
-      <SaveBar what="Settings › Limits" changed={changed} busy={busy} onSave={() => void save()} onUndo={undo} error={saveError} saved={changed ? '' : saved} testId="limits-save" />
+      <SaveBar what="Settings › Limits" changed={changed} busy={busy} onSave={() => void save()} save={save} onUndo={undo} error={saveError} saved={changed ? '' : saved} testId="limits-save" />
     </>
+  )
+}
+
+/** What the providers' spend leaves out of the ledger's total: spent before the upgrade counted per provider, or on a provider since removed (AI-42). */
+export function uncounted(ov: Pick<AIOverview, 'spend' | 'providers'>): { day: number; month: number } {
+  const sum = (k: 'dayUSD' | 'monthUSD') => ov.providers.reduce((n, p) => n + (p.spend?.[k] ?? 0), 0)
+  // Cents: the sums of floats differ by less.
+  const left = (all: number, k: 'dayUSD' | 'monthUSD') => {
+    const d = all - sum(k)
+    return d >= 0.005 ? d : 0
+  }
+  return { day: left(ov.spend.dayUSD, 'dayUSD'), month: left(ov.spend.monthUSD, 'monthUSD') }
+}
+
+/**
+ * The Providers table's Total row (AI-42): the total limits, set under
+ * Total above, and the spend today and this month from the ledger, which
+ * is the true total; where the providers' rows add up to less, it says how
+ * much was not counted per provider. No amount spent while costs are hidden.
+ */
+function ProvidersTotal({ ov, total, costs }: { ov: AIOverview; total: Caps; costs: boolean }) {
+  const left = uncounted(ov)
+  const limit = (v: number) => (
+    <a
+      className="rk-link"
+      href={`#${LIMITS_TOTAL_ID}`}
+      onClick={(e) => {
+        e.preventDefault()
+        document.getElementById(LIMITS_TOTAL_ID)?.scrollIntoView?.({ block: 'start' })
+      }}
+      title="Set under Total, above"
+    >
+      {v ? v : 'no limit'}
+    </a>
+  )
+  const spent = (v: number, x: number, testId: string) => (
+    <td className="rk-num" data-testid={testId}>
+      <strong>{usd(v)}</strong>
+      {x > 0 && (
+        <span className="rk-fhint" style={{ display: 'block', fontSize: 11, fontWeight: 400, whiteSpace: 'normal' }} data-testid="limits-providers-uncounted">
+          includes {usd(x)} not counted per provider (before the upgrade, or on a provider since removed)
+        </span>
+      )}
+    </td>
+  )
+  return (
+    <tr data-testid="limits-providers-total" style={{ borderTop: '2px solid var(--line)' }}>
+      <th scope="row" style={{ textAlign: 'left' }}>
+        Total
+      </th>
+      <td style={{ fontSize: 12.5 }}>{limit(total.dailyUSD)}</td>
+      <td style={{ fontSize: 12.5 }}>{limit(total.monthlyUSD)}</td>
+      {costs && spent(ov.spend.dayUSD, left.day, 'limits-providers-total-day')}
+      {costs && spent(ov.spend.monthUSD, left.month, 'limits-providers-total-month')}
+    </tr>
   )
 }
 

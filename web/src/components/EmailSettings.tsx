@@ -3,11 +3,10 @@
 // it changes. A SuperAdmin's. The password is written here and never shown
 // again. Email is on only once a test with the settings as saved got
 // through; changing any of them turns it off until the next test.
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { DEFAULT_PORTS, fetchMail, saveMail, testMail, type MailInput, type MailSecurity, type MailSettings } from '../api/mail'
 import { fmtTs } from '../lib/format'
 import { adminHref } from '../lib/router'
-import { SaveBar } from './SaveBar'
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -18,7 +17,7 @@ const SECURITIES: { id: MailSecurity; label: string; hint: string }[] = [
 ]
 
 /** The settings as the form edits them: a password typed, never the one kept. */
-interface Draft {
+export interface Draft {
   host: string
   port: string
   security: MailSecurity
@@ -49,77 +48,100 @@ export function mailStatus(m: MailSettings): { text: string; tone: 'ok' | 'warn'
   return { text: 'Configured, not tested: no email is sent until a test with these settings gets through.', tone: 'warn' }
 }
 
-export function EmailSettings() {
+/** The email settings as General edits them (CU-n): the page's one Save bar saves them with the rest, only when changed. */
+export interface MailForm {
+  saved: MailSettings | null
+  draft: Draft | null
+  /** The settings could not be read. */
+  loadError: string
+  changed: boolean
+  set: (d: Partial<Draft>) => void
+  undo: () => void
+  /** Saves the settings as typed; says what was done, or throws what failed. */
+  save: () => Promise<string>
+  /** Takes the settings as the server has them now (a test email changes their state). */
+  load: (m: MailSettings) => void
+}
+
+/** Reads the email settings and keeps the form's edits of them. */
+export function useMailForm(): MailForm {
   const [saved, setSaved] = useState<MailSettings | null>(null)
   const [draft, setDraft] = useState<Draft | null>(null)
-  const [to, setTo] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const [note, setNote] = useState('')
-  const load = (m: MailSettings) => {
+  const [loadError, setLoadError] = useState('')
+  const load = useCallback((m: MailSettings) => {
     setSaved(m)
     setDraft(draftOf(m))
-  }
+  }, [])
   useEffect(() => {
     let gone = false
     fetchMail().then(
-      (m) => {
-        if (gone) return
-        load(m)
-        setTo(m.you ?? '')
-      },
-      (e: unknown) => !gone && setError(errText(e)),
+      (m) => !gone && load(m),
+      (e: unknown) => !gone && setLoadError(errText(e)),
     )
     return () => {
       gone = true
     }
-  }, [])
-  if (!saved || !draft) {
-    return (
-      <p className={error ? 'rk-t' : 'rk-fhint'} data-tone={error ? 'err' : undefined} style={{ margin: 0 }} data-testid="email-settings">
-        {error || 'Loading…'}
-      </p>
-    )
-  }
-  const set = (d: Partial<Draft>) => setDraft({ ...draft, ...d })
-  const changed = !same(draft, draftOf(saved))
-  const port = Number(draft.port)
-  const portBad = !(Number.isInteger(port) && port >= 1 && port <= 65535)
-  const status = mailStatus(saved)
-  const save = async () => {
-    if (portBad) {
-      setError('The port is 1 to 65535.')
-      return
-    }
-    setBusy(true)
-    setError('')
-    setNote('')
-    try {
+  }, [load])
+  const changed = !!saved && !!draft && !same(draft, draftOf(saved))
+  return {
+    saved,
+    draft,
+    loadError,
+    changed,
+    set: (d) => setDraft((x) => (x ? { ...x, ...d } : x)),
+    undo: () => saved && setDraft(draftOf(saved)),
+    load,
+    save: async () => {
+      if (!draft) return ''
+      const port = Number(draft.port)
+      if (!(Number.isInteger(port) && port >= 1 && port <= 65535)) throw new Error('the port is 1 to 65535')
       const input: MailInput = { host: draft.host.trim(), port, security: draft.security, username: draft.username.trim(), from: draft.from.trim() }
+      // The password goes only when a new one is typed.
       if (draft.password) input.password = draft.password
       if (draft.clearPassword) input.clearPassword = true
       load(await saveMail(input))
-      setNote(input.host ? 'Saved. Send a test email to turn email on.' : 'Saved: email is off.')
-    } catch (e) {
-      setError(errText(e))
-    } finally {
-      setBusy(false)
-    }
+      return input.host ? 'Send a test email to turn email on.' : 'Email is off.'
+    },
   }
+}
+
+/**
+ * The Email section's fields (EM-01 to EM-04), edited in the form given;
+ * General's Save bar saves them. Send test email tests what is saved, so
+ * it waits while there are changes.
+ */
+export function EmailSettings({ mail, busy: saving }: { mail: MailForm; busy: boolean }) {
+  const { saved, draft, set, changed } = mail
+  const [to, setTo] = useState<string | null>(null)
+  const [testing, setTesting] = useState(false)
+  const [error, setError] = useState('')
+  const [note, setNote] = useState('')
+  if (!saved || !draft) {
+    return (
+      <p className={mail.loadError ? 'rk-t' : 'rk-fhint'} data-tone={mail.loadError ? 'err' : undefined} style={{ margin: 0 }} data-testid="email-settings">
+        {mail.loadError || 'Loading…'}
+      </p>
+    )
+  }
+  const testTo = to ?? saved.you ?? ''
+  const port = Number(draft.port)
+  const portBad = !(Number.isInteger(port) && port >= 1 && port <= 65535)
+  const status = mailStatus(saved)
   const test = async () => {
-    setBusy(true)
+    setTesting(true)
     setError('')
     setNote('')
     try {
-      const m = await testMail(to.trim())
-      load(m)
-      setNote(m.on ? `A test email went to ${m.tested?.to ?? to}: email is on.` : '')
+      const m = await testMail(testTo.trim())
+      mail.load(m)
+      setNote(m.on ? `A test email went to ${m.tested?.to ?? testTo}: email is on.` : '')
     } catch (e) {
       setError(errText(e))
     } finally {
-      setBusy(false)
+      setTesting(false)
     }
   }
+  const busy = saving || testing
   const sec = SECURITIES.find((s) => s.id === draft.security)!
   const field = { display: 'flex', flexDirection: 'column', gap: 4 } as const
   return (
@@ -214,29 +236,16 @@ export function EmailSettings() {
         )}{' '}
         With the chart’s network policy on, list the server’s address under networkPolicy.outboundCIDRs and its port under networkPolicy.outboundPorts.
       </p>
-      <SaveBar
-        what="Settings › Email"
-        changed={changed}
-        busy={busy}
-        onSave={() => void save()}
-        onUndo={() => {
-          setDraft(draftOf(saved))
-          setError('')
-        }}
-        error={error}
-        saved={note}
-        testId="email-save"
-      />
       <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Send a test email">
         <h3 className="rk-h">Test</h3>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end' }}>
           <label style={{ ...field, flex: '1 1 260px', maxWidth: 360 }}>
             <span className="rk-flabel">Send a test email to</span>
-            <input className="rk-field" type="email" value={to} onChange={(e) => setTo(e.target.value)} placeholder="you@example.com" disabled={busy} data-testid="email-test-to" />
+            <input className="rk-field" type="email" value={testTo} onChange={(e) => setTo(e.target.value)} placeholder="you@example.com" disabled={busy} data-testid="email-test-to" />
           </label>
           <button
             className="rk-btn"
-            disabled={busy || changed || saved.state === 'notConfigured' || !to.trim()}
+            disabled={busy || changed || saved.state === 'notConfigured' || !testTo.trim()}
             title={changed ? 'Save first' : saved.state === 'notConfigured' ? 'Save a server and a From address first' : 'Send a test email with the settings as saved'}
             onClick={() => void test()}
             data-testid="email-test"
@@ -244,6 +253,11 @@ export function EmailSettings() {
             Send test email
           </button>
         </div>
+        {(error || note) && (
+          <span className="rk-t" data-tone={error ? 'err' : 'ok'} role={error ? 'alert' : 'status'} style={{ fontSize: 12.5 }} data-testid="email-test-result">
+            {error || note}
+          </span>
+        )}
         {saved.lastSent && (
           <span className={saved.lastSent.error ? 'tb-err' : 'rk-fhint'} style={{ fontSize: 12 }} data-testid="email-last-sent">
             {saved.lastSent.error ? `Last email, ${fmtTs(saved.lastSent.at)}: not sent, ${saved.lastSent.error}.` : `Last email sent ${fmtTs(saved.lastSent.at)}.`}

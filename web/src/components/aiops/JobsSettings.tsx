@@ -71,7 +71,7 @@ export function JobsSettings() {
         <a className="rk-link" href="#/aiops/jobs">
           AIOps › Jobs
         </a>
-        . Every change to a job is in the audit log with its old and new values.
+        ; every change to one is audited.
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <span style={{ fontSize: 13, fontWeight: 600 }}>Who may edit jobs</span>
