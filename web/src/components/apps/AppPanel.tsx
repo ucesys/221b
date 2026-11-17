@@ -39,6 +39,7 @@ import { DiffDialog } from './DiffDialog'
 import { DriftDialog } from './DriftDialog'
 import { ImageCheckNote, NewerImageNotice } from './NewerImages'
 import { RevisionActions } from './revisionActions'
+import { SelfReleaseCallout, ValuesOriginNote } from './SelfRelease'
 import { useUnsaved } from '../../lib/unsaved'
 
 export const APP_TABS = ['overview', ...SUBTABS, 'images'] as const
@@ -345,6 +346,7 @@ export function AppPanel({ cluster, clusterId, now, route, row, tab, onTab, canC
             )}
           </span>
         </div>
+        {(app?.self || d?.self) && <SelfReleaseCallout />}
         {!row.orphan && <NewerImageNotice images={row.newerImages} onImages={tab === 'images' ? undefined : () => onTab('images')} />}
         {row.orphan ? (
           <>
@@ -495,6 +497,7 @@ function ValuesEditor({ clusterId, row, app, canChange, onResult }: { clusterId:
         </span>
       }
     >
+      <ValuesOriginNote app={app} />
       <YamlEditor
         value={values}
         onChange={({ text, errors }) => {
@@ -955,7 +958,12 @@ function SourceCard({ clusterId, row, app, canChange, onResult, now }: { cluster
             </span>
           </>
         )}
-        {!saved && <span>Once set, the release can be upgraded from here and checked for drift.</span>}
+        {!saved && (
+          <span data-testid="app-src-adopt-note">
+            Once set, the release can be upgraded from here and checked for drift.
+            {!row.orphan && ' Its values start from what the release runs now (helm get values), so a Redeploy keeps them.'}
+          </span>
+        )}
       </div>
       {app && (
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-end', gap: '8px 16px', paddingTop: 8, borderTop: '1px dashed var(--line)' }} data-testid="app-deploy-options">

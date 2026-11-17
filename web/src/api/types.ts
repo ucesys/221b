@@ -459,6 +459,8 @@ export interface ReleaseDetails extends ReleaseRow {
   resources: ReleaseResource[]
   podRows: PodRow[]
   usage?: Record<string, Usage>
+  /** This is the release that runs this console. */
+  self?: boolean
 }
 
 // ---- the stream ----

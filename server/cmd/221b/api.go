@@ -2,8 +2,10 @@ package main
 
 import (
 	"github.com/ucesys/221b/server/internal/api"
+	"github.com/ucesys/221b/server/internal/apps"
 	"github.com/ucesys/221b/server/internal/auth"
 	"github.com/ucesys/221b/server/internal/backup"
+	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/imagecheck"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/ui"
@@ -41,6 +43,7 @@ func (w *wiring) wireAPI() error {
 		Version:                 version.String(),
 		Watson:                  w.watsonSvc,
 		Apps:                    w.appStore,
+		SelfRelease:             apps.ParseSelfRelease(clusters.LocalID, cfg.SelfRelease),
 		Repos:                   w.helmRepos, // Helm repositories (Phase 12, wave 5)
 		ImageChecks:             images,
 		SecretsReveal:           cfg.SecretsRead && cfg.SecretsReveal,

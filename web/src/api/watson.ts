@@ -22,6 +22,10 @@ export interface WatsonPlan {
   dryRunning?: boolean
   /** The YAML of what a session creates or patches (TB-36). */
   object?: string
+  /** warn: a deploy removes values the release has; danger: a change to the release that runs this console. */
+  tone?: 'warn' | 'danger'
+  /** What the card says before anything else: the release runs this console. */
+  alert?: string
 }
 
 export type WatsonStatusName = 'pending' | 'queued' | 'running' | 'done' | 'failed' | 'stopped' | 'lapsed' | 'discarded' | 'refused'

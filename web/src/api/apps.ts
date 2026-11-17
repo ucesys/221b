@@ -54,6 +54,8 @@ export interface AppRecord {
   matchedRevision?: number
   /** How the source rendered differently from what runs when it was set, or why it could not be compared. */
   sourceDiff?: string
+  /** The release revision whose values (helm get values) the values file started from when the console adopted the release. */
+  adoptedRevision?: number
   hasToken?: boolean
   /** The application's own deploy commands: each a redeploy with its own parameters (asked October 30, 2026). */
   commands?: AppCommand[]
@@ -100,6 +102,10 @@ export interface AppView extends AppRecord {
   tokenRemoved?: boolean
   drift?: AppDrift
   driftState?: 'in sync' | 'drifted' | 'unknown'
+  /** The keys of the values file whose credentials show masked; a masked value saved as it is keeps what it hid. */
+  valuesMasked?: string[]
+  /** This is the release that runs this console. */
+  self?: boolean
 }
 
 /** A chart found in a repository, and what its README's install example says (M-07). */

@@ -53,6 +53,9 @@ type appPin struct {
 	src    apps.Source
 	commit string
 	values string
+	// removed counts the values the release has now that the deploy
+	// would remove (asked November 17, 2026).
+	removed int
 }
 
 // valuesDigest sums up the values a deploy uses, and whether the chart's
@@ -532,6 +535,13 @@ func appImpact(ctx context.Context, cs *clients, c *Command, t Target) (targets 
 		}
 		if len(removed) > 0 {
 			impact = append(impact, fmt.Sprintf("Deletes %s: %s.", plural(len(removed), "object", "objects"), listText(removed, 6)))
+		}
+		// The release's values the deploy would remove or change: an
+		// upgrade takes only the values it is given.
+		gone, changedVals := apps.ValueChanges(cur.Config, a.vals)
+		impact = append(impact, valueImpact(gone, changedVals)...)
+		if t.pin != nil {
+			t.pin.removed = len(gone)
 		}
 	}
 	if imgs := apps.Images(r.Manifest); len(imgs) > 0 {
