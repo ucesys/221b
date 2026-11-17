@@ -106,6 +106,13 @@ func (w *wiring) wireSherlock(ctx context.Context) error {
 			}
 			return out, err
 		},
+		// The live knowledge sources answer lookup_live_sources (0.12.1).
+		Live: func(ctx context.Context, q string) (sherlock.LiveLookup, error) {
+			if w.knowledgeSvc == nil {
+				return sherlock.LiveLookup{}, nil
+			}
+			return liveLookup(ctx, w.knowledgeSvc, q)
+		},
 		CommandOK: func(line string) error { _, err := watson.Parse(line); return err },
 		Commands:  watson.Commands(),
 		Client: &sherlock.Client{BaseURL: cfg.SherlockAPIURL, Key: w.keys.Key, HTTP: &http.Client{Timeout: 5 * time.Minute}, Retries: 2, Backoff: 2 * time.Second,

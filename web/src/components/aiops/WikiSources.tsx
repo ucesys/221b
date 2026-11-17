@@ -58,6 +58,8 @@ export function WikiSources({ wiki, onChanged, onToast }: { wiki: WikiState | nu
                       <span className="rk-pill" data-tone="muted">
                         Off
                       </span>
+                    ) : s.kind === 'live' ? (
+                      <span className="rk-fhint">looked up when asked, never copied</span>
                     ) : s.error ? (
                       <span className="tb-err" title={s.error}>
                         Failed: {s.error}

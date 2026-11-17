@@ -249,6 +249,9 @@ type Options struct {
 	// exceptions says the question's asker may be given the accepted
 	// exceptions (Question.Exceptions, KN-32).
 	Knowledge func(ctx context.Context, query string, limit int, exceptions bool) ([]KnowledgeHit, error)
+	// Live answers lookup_live_sources from the live knowledge sources
+	// (0.12.1, KN-40); nil answers NoLive.
+	Live func(ctx context.Context, query string) (LiveLookup, error)
 	// Keeper keeps the conversations that outlive a session: a case's
 	// (Phase 12, wave 6f, CF-47); nil keeps none.
 	Keeper Keeper

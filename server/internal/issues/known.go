@@ -609,7 +609,7 @@ func (s *Service) SaveSettings(ctx context.Context, c Caller, set Settings) (Set
 	if !c.Admin {
 		return Settings{}, fmt.Errorf("%w: only a SuperAdmin changes the issue settings", ErrDenied)
 	}
-	set.Company, set.StatusPage, set.ReportURL, set.Webhook.URL = strings.TrimSpace(set.Company), strings.TrimSpace(set.StatusPage), strings.TrimSpace(set.ReportURL), strings.TrimSpace(set.Webhook.URL)
+	set.Company, set.Webhook.URL = strings.TrimSpace(set.Company), strings.TrimSpace(set.Webhook.URL)
 	if err := set.Validate(); err != nil {
 		return Settings{}, err
 	}
@@ -628,12 +628,6 @@ func settingsChanges(a, b Settings) string {
 	var out []string
 	if a.Company != b.Company {
 		out = append(out, "company name")
-	}
-	if a.StatusPage != b.StatusPage {
-		out = append(out, "status page")
-	}
-	if a.ReportURL != b.ReportURL {
-		out = append(out, "report page address")
 	}
 	if a.MatchThreshold != b.MatchThreshold {
 		out = append(out, fmt.Sprintf("match threshold %d", b.MatchThreshold))

@@ -1,4 +1,5 @@
-// Settings › Email (EM-01 to EM-03, EM-10): a SuperAdmin points the console
+// Settings › General's Email section (EM-01 to EM-03, EM-10; its own page
+// before 0.12.1, whose address leads there): a SuperAdmin points the console
 // at the simulator's SMTP server (make e2e-sim starts it on 127.0.0.1:7525,
 // security none), and the test email turns email on.
 import { expect, test } from './test'
@@ -26,9 +27,13 @@ test.afterEach(async ({ request }) => {
   await request.put('/api/v1/settings/email', { data: { host: '', port: 587, security: 'starttls', username: '', from: '' } })
 })
 
-test('a SuperAdmin sets Settings › Email, and a test email turns it on (EM-01 to EM-03)', async ({ page }) => {
+test('a SuperAdmin sets Settings › General › Email, and a test email turns it on (EM-01 to EM-03)', async ({ page }) => {
   await fetch(`${SIM}/fake-smtp/messages`, { method: 'DELETE' })
   await page.goto('/#/admin/settings/email')
+  // The old address leads to General, at its Email section.
+  await expect(page).toHaveURL(/#\/admin\/settings$/)
+  await expect(page.locator('[data-testid=settings-section][data-section=general]')).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByTestId('settings-email-section')).toBeVisible()
   const status = page.getByTestId('email-status')
   await expect(status).toContainText('Not configured')
   await page.getByTestId('email-host').fill('127.0.0.1')

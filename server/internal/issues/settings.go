@@ -17,14 +17,11 @@ type Target struct {
 
 // Settings are the issue service's own (IS-29), kept with its records.
 type Settings struct {
-	// Company is the name in the report page's header ("Example Corp IT").
+	// Company is the name in the report page's header ("Example Corp IT"),
+	// set in Settings › General. The report page's address is the chart's
+	// issues.reportURL (Options.ReportURL) since 0.12.1, and the status
+	// page is gone; values saved here before are ignored.
 	Company string `json:"company"`
-	// StatusPage is where every known problem is published, on Confluence
-	// say; empty hides the link.
-	StatusPage string `json:"statusPage"`
-	// ReportURL is the report page's address other pages link to; empty is
-	// /report on the console's own address.
-	ReportURL string `json:"reportURL"`
 	// MatchThreshold is the confidence, 0 to 100, at which a report is
 	// linked to a known issue without asking anyone (IS-10).
 	MatchThreshold int `json:"matchThreshold"`
@@ -118,11 +115,6 @@ func invalid(format string, a ...any) error {
 func (s Settings) Validate() error {
 	if len(s.Company) > 120 {
 		return invalid("the company name is longer than 120 characters")
-	}
-	for _, u := range []struct{ name, v string }{{"the status page", s.StatusPage}, {"the report page", s.ReportURL}} {
-		if u.v != "" && !webURL(u.v) {
-			return invalid("%s must be an http or https address", u.name)
-		}
 	}
 	if s.Webhook.URL != "" && !webURL(s.Webhook.URL) {
 		return invalid("the webhook must be an http or https address")

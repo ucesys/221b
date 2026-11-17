@@ -2,12 +2,14 @@ package issues
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -24,10 +26,8 @@ type Caller struct {
 	Report bool
 	// Operator lets them see every report and triage it.
 	Operator bool
-	// Admin lets them change the settings and the API tokens.
+	// Admin lets them change the settings.
 	Admin bool
-	// Scopes are a token's (IS-24); empty for a person.
-	Scopes []string
 	// From is the address the request came from, for the audit log.
 	From string
 }
@@ -84,7 +84,6 @@ const (
 	ActionKnown    = "issue.known"
 	ActionService  = "issue.service"
 	ActionSettings = "issue.settings"
-	ActionToken    = "issue.token"
 	ActionImport   = "issue.import"
 	// ActionClose is a case closed with its outcome, ActionReopen one
 	// reopened with the reason (Phase 12, wave 6).
@@ -111,8 +110,11 @@ type Options struct {
 	// Clusters are the connected clusters, which a reporter may say a
 	// report is about (CF-64); nil knows none.
 	Clusters func() []Cluster
-	Now      func() time.Time
-	Logger   *slog.Logger
+	// ReportURL is the report page's address other pages link to, the
+	// chart's issues.reportURL; empty is /report on the console.
+	ReportURL string
+	Now       func() time.Time
+	Logger    *slog.Logger
 }
 
 // Cluster is a connected cluster as the report page names it: its id and
@@ -134,6 +136,13 @@ type Service struct {
 	log    *slog.Logger
 	// clusters are the connected clusters (CF-64).
 	clusters func() []Cluster
+	// reportURL is Options.ReportURL; movedOnce logs once that an address
+	// saved in the settings before 0.12.1 is not read any more.
+	reportURL string
+	movedOnce sync.Once
+	// live reads the live knowledge sources for matching (KN-43); nil
+	// reads none.
+	live atomic.Pointer[LiveFunc]
 
 	// writeMu serialises this process's changes, so they meet no conflict
 	// among themselves; cache is the last state read or saved.
@@ -145,9 +154,6 @@ type Service struct {
 	listeners []func(Event)
 	// investigating bounds investigations running at once.
 	investigating chan struct{}
-	// usedMu guards when each token was last written as used.
-	usedMu sync.Mutex
-	used   map[string]time.Time
 }
 
 // New builds the service.
@@ -171,7 +177,7 @@ func New(o Options) *Service {
 		o.HTTP = &http.Client{Timeout: 10 * time.Second}
 	}
 	s := &Service{kv: o.Backend, cases: o.Cases, limits: o.Limits.withDefaults(), inv: o.Investigator, audit: o.Audit, http: o.HTTP, now: o.Now, log: o.Logger,
-		investigating: make(chan struct{}, 4), used: map[string]time.Time{}, clusters: o.Clusters}
+		investigating: make(chan struct{}, 4), clusters: o.Clusters, reportURL: strings.TrimSpace(o.ReportURL)}
 	s.OnChange(s.notify)
 	return s
 }
@@ -255,10 +261,11 @@ func cleanText(text string) (string, bool, error) {
 type Submission struct {
 	Text string `json:"text"`
 	// For is the person the report is for, when support files it for
-	// them (IS-03): operators, and tokens with ScopeOnBehalf, only.
+	// them (IS-03): operators only.
 	For *Person `json:"for,omitempty"`
 	// Incident is another system's number for it, and Type what kind of
-	// problem it is (CF-36, CF-37): support and the API's tokens only.
+	// problem it is (CF-36, CF-37): support and the console's own system
+	// accounts only.
 	Incident string `json:"incident,omitempty"`
 	Type     string `json:"type,omitempty"`
 	// Priority is the reporter's, 1 to 4 (P0, an outage, is the
@@ -319,7 +326,7 @@ func (s *Service) Submit(ctx context.Context, c Caller, in Submission) (Receipt,
 	typ, incident := "", ""
 	if in.Incident != "" || in.Type != "" {
 		if !c.Operator && !c.System {
-			return Receipt{}, fmt.Errorf("%w: only support and the API's tokens set a report's incident number and type", ErrDenied)
+			return Receipt{}, fmt.Errorf("%w: only support sets a report's incident number and type", ErrDenied)
 		}
 		if typ, err = checkType(in.Type); err != nil {
 			return Receipt{}, err
@@ -338,7 +345,7 @@ func (s *Service) Submit(ctx context.Context, c Caller, in Submission) (Receipt,
 	}
 	reporter, filedBy := c.Person, (*Person)(nil)
 	if in.For != nil && strings.TrimSpace(in.For.ID) != "" && in.For.ID != c.ID {
-		if !c.Operator && !(c.System && contains(c.Scopes, ScopeOnBehalf)) {
+		if !c.Operator {
 			return Receipt{}, fmt.Errorf("%w: only support may report for someone else", ErrDenied)
 		}
 		reporter = Person{ID: strings.TrimSpace(in.For.ID), Name: strings.TrimSpace(in.For.Name), Email: strings.TrimSpace(in.For.Email)}
@@ -402,7 +409,7 @@ func (s *Service) Submit(ctx context.Context, c Caller, in Submission) (Receipt,
 		ch.audit(AuditRecord{Action: ActionReport, Who: c.Person, Target: fmt.Sprintf("report #%d", pr.Number), Detail: detail, From: c.From})
 		if known == nil {
 			n := pr.Number
-			ch.after = append(ch.after, func() { s.investigate(n) })
+			ch.after = append(ch.after, func() { s.matchLive(n, text); s.investigate(n) })
 		}
 		return saveReports, nil
 	})
@@ -1371,4 +1378,30 @@ func sortNotices(n []Notice) {
 			n[j], n[j-1] = n[j-1], n[j]
 		}
 	}
+}
+
+// ReportURL is the report page's address other pages link to: the chart's
+// issues.reportURL, or /report on the console.
+func (s *Service) ReportURL() string {
+	if s.reportURL == "" {
+		return "/report"
+	}
+	return s.reportURL
+}
+
+// noteMoved logs once when the stored settings still hold a report page
+// address from before 0.12.1 and the chart sets none: it moved to the
+// chart's issues.reportURL, and the stored one is not read.
+func (s *Service) noteMoved(config []byte) {
+	s.movedOnce.Do(func() {
+		var old struct {
+			Settings *struct {
+				ReportURL string `json:"reportURL"`
+			} `json:"settings"`
+		}
+		if json.Unmarshal(config, &old) != nil || old.Settings == nil || strings.TrimSpace(old.Settings.ReportURL) == "" || s.reportURL != "" {
+			return
+		}
+		s.log.Warn("the report page address saved in Settings › Issues is no longer read: it moved to the chart value issues.reportURL; set it there, or links go to /report on this console", "saved", strings.TrimSpace(old.Settings.ReportURL))
+	})
 }

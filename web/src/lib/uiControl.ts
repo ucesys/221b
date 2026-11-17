@@ -820,11 +820,11 @@ export const ADMIN_VIEW_PAGES: Record<string, AdminViewPage> = {
   watson: { label: 'Settings › Watson', area: 'settings', access: 'super', hash: settings('watson') },
   'notification-channels': { label: 'Settings › Watson, with its notification channels', area: 'settings', access: 'super', hash: settings('watson') },
   applications: { label: 'Settings › Applications', area: 'settings', access: 'super', hash: settings('apps') },
-  issues: { label: 'Settings › Issues', area: 'settings', access: 'super', hash: settings('issues') },
-  confluence: { label: 'Settings › Issues, with its Confluence settings', area: 'settings', access: 'super', hash: settings('issues') },
   sla: { label: 'Settings › SLA', area: 'settings', access: 'super', hash: settings('sla') },
+  issues: { label: 'Settings › Issues', area: 'settings', access: 'super', hash: settings('issues') },
   'case-settings': { label: 'Settings › Cases', area: 'settings', access: 'super', hash: settings('cases') },
-  email: { label: 'Settings › Email', area: 'settings', access: 'super', hash: settings('email') },
+  // Email is a section of General since 0.12.1; its old address leads there.
+  email: { label: 'Settings › General, at its Email section', area: 'settings', access: 'super', hash: settings('email') },
   'jobs-settings': { label: 'Settings › Jobs', area: 'settings', access: 'super', hash: settings('jobs') },
 }
 

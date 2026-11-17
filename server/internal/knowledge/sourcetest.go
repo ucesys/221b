@@ -42,6 +42,8 @@ type SourceTest struct {
 	Sample     []string `json:"sample,omitempty"`
 	Skipped    int      `json:"skipped,omitempty"`
 	SkippedWhy string   `json:"skippedWhy,omitempty"`
+	// Live is a live source's addresses, each read once (KN-42).
+	Live []LiveCheck `json:"live,omitempty"`
 }
 
 // testSample is how many items a Test names.
@@ -109,8 +111,8 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 	}
 	keys := ch.apply(have)
 	switch {
-	case x.Kind != SourceConfluence && x.Kind != SourceGit && x.Kind != SourceS3:
-		return SourceTest{}, invalid("only a Confluence space, a git repository or an S3 bucket is tested")
+	case x.Kind != SourceConfluence && x.Kind != SourceGit && x.Kind != SourceS3 && x.Kind != SourceLive:
+		return SourceTest{}, invalid("only a Confluence space, a git repository, an S3 bucket or a live source is tested")
 	case x.Kind == SourceConfluence && keys.Token == "":
 		return SourceTest{}, invalid("type the API token to test")
 	case x.Kind == SourceS3 && x.Credentials == CredentialsKeys && (keys.AccessKeyID == "" || keys.SecretAccessKey == ""):
@@ -122,6 +124,9 @@ func (s *Service) TestSourceAsTyped(ctx context.Context, c Caller, x Source, ch 
 // testSource connects to a source, lists its items and says what it
 // found, or what is wrong without a credential in it.
 func (s *Service) testSource(ctx context.Context, x Source, keys Creds) (SourceTest, error) {
+	if x.Kind == SourceLive {
+		return s.testLive(ctx, x, keys), nil
+	}
 	out, err := s.listForTest(ctx, x, keys)
 	if err != nil {
 		var secrets []string

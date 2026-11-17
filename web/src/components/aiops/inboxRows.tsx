@@ -16,7 +16,7 @@ import type { ApprovalRow } from '../../api/automation'
 import { caseOf, sourceText, stateText, stateTone, type Proposal } from '../../api/cards'
 import { caseShownStatus, caseStatusText, caseStatusTone, caseTypeText, STAGE, type CaseBrief, type CaseStage, type ShownStatus } from '../../api/casework'
 import type { OpKnown } from '../../api/issues'
-import type { ConfluenceConflict, DraftRun, PageRequest } from '../../api/knowledge'
+import type { DraftRun, PageRequest } from '../../api/knowledge'
 import type { Suggestion } from '../../api/rules'
 import { INBOX_KINDS, inboxOrderKey, type InboxKind, type Who } from '../../lib/cases'
 import { fmtMinutes, fmtTs, minutesSince } from '../../lib/format'
@@ -346,27 +346,6 @@ export function pageRequestRow(r: PageRequest): InboxRow {
     lastBy: pending ? r.name : (r.decidedName ?? r.name),
     lastAt: pending ? r.at : (r.decided ?? r.at),
     from: r.name || r.by ? { name: r.name || r.by, kind: 'person' } : undefined,
-  }
-}
-
-/** A Confluence page whose managed part someone edited: pending until kept or replaced. */
-export function conflictRow(c: ConfluenceConflict): InboxRow {
-  return {
-    key: `knowledge:${c.id}`,
-    kind: 'knowledge',
-    open: ['knowledge', c.id],
-    ref: c.issue ?? c.id,
-    title: `Edited in Confluence: ${c.title}`,
-    status: 'Edited in Confluence',
-    tone: 'warn',
-    pending: true,
-    since: c.at,
-    assignable: true,
-    assignee: c.ownerName || c.owner || undefined,
-    mine: !!c.mine,
-    words: ['confluence', c.kind],
-    origin: 'people',
-    from: { name: 'Confluence', kind: 'system' },
   }
 }
 

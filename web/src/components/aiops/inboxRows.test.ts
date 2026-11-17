@@ -8,7 +8,6 @@ import {
   approvalId,
   approvalRow,
   caseRow,
-  conflictRow,
   draftRunRow,
   filterRows,
   fromText,
@@ -156,7 +155,6 @@ describe('the Inbox’s rows (IN-02)', () => {
       ],
     })
     expect(run).toMatchObject({ title: 'Alpha and 1 more page', pending: true, status: 'Partly reviewed' })
-    expect(conflictRow({ id: 'cf1', kind: 'known', title: 'VPN', their: '', at: '2026-11-01T00:00:00Z', ownerName: 'Ann' })).toMatchObject({ title: 'Edited in Confluence: VPN', pending: true, assignee: 'Ann' })
   })
 
   it('lists a request to retire a wiki page: pending for another person, never for who asked (KN-24)', () => {
@@ -352,7 +350,6 @@ describe('the Inbox’s From column (FU-02)', () => {
     expect(knownRow({ ...known, source: 'operator' } as never, ctx).from).toBeUndefined()
     expect(draftRunRow({ id: 'r-1', started: '2026-11-01T00:00:00Z', by: 'schedule', state: 'waiting', store: 'git', pages: [] }).from).toEqual({ name: 'Mycroft', kind: 'agent', via: 'schedule' })
     expect(pageRequestRow({ id: 'q-1', action: 'retire', path: 'a.md', title: 'A', reason: 'old', by: 'sam', name: 'Sam', at: '2026-11-01T00:00:00Z', state: 'waiting' }).from).toEqual({ name: 'Sam', kind: 'person' })
-    expect(conflictRow({ id: 'x', kind: 'wiki', title: 'A', their: '', at: '2026-11-01T00:00:00Z' }).from).toEqual({ name: 'Confluence', kind: 'system' })
     expect(suggestionRow({ id: 'r', says: 'x', type: 't', jobs: [], from: [], runs: 1, clusters: 1, created: '2026-11-01T00:00:00Z' }).from).toEqual({ name: 'Housekeeping', kind: 'system' })
   })
 

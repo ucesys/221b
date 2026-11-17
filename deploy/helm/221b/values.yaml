@@ -423,6 +423,13 @@ issues:
   # local group named here). Members of these groups may sign in with LDAP
   # even when they are in no group under auth.ldap.roles.
   reporterGroups: []
+  # The report page's address that other pages link to (the AIOps pages'
+  # "Report page" links, the console's emails): a path on this console
+  # or an http or https address, such as https://help.example.com/report
+  # when a proxy serves it elsewhere. Empty is /report on this console.
+  # Set in Settings › Issues before 0.12.1; a value saved there is no
+  # longer read.
+  reportURL: ""
   # The issue service's webhook is set in its settings at run time; with
   # networkPolicy.enabled, let the console reach it: list its address
   # under networkPolicy.outboundCIDRs and its port under outboundPorts.
@@ -543,12 +550,13 @@ knowledge:
   # documents, and what the console knows), and the wiki it keeps in a git
   # repository or an S3 bucket. Its records are in the ConfigMap
   # <release>-knowledge, every credential in the Secret <release>-knowledge
-  # (with connections.store secrets). The Confluence publisher of known
-  # issues (Settings › Issues) keeps its state there too.
+  # (with connections.store secrets). A live source (Settings › Knowledge,
+  # mode Live) is never copied: its pages are fetched when an agent
+  # troubleshoots, so its hosts must be reachable too (egressCIDRs below).
   #
   # The addresses the console reaches for knowledge, as CIDRs: Confluence,
   # the git hosts and the buckets (the wiki's, and any bucket of documents
-  # Mycroft reads, KN-25). Listed, the network policy lets the
+  # Mycroft reads, KN-25), and the hosts of live sources' pages. Listed, the network policy lets the
   # console reach them on egressPorts. Empty adds no rule: with
   # sherlock.egress on (the default) the console reaches any address on 443
   # already; list them when it is off, or for a store on another port.
@@ -568,10 +576,6 @@ knowledge:
   refresh:
     git: 15m
     s3: 5m
-  # The console's address as people reach it, for the links back from
-  # Confluence pages to the known issues; empty is the ingress's host when
-  # ingress.enabled, and no links otherwise.
-  consoleURL: ""
   # The temporary wiki store (CF-57): the ConfigMap <release>-wiki keeps
   # the wiki while Settings › Knowledge names no store, so Mycroft's wiki
   # can be tried without a repository or a bucket. Settings › Knowledge

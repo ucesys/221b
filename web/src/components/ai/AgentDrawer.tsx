@@ -78,6 +78,7 @@ export const TOOL_LABELS: Record<string, string> = {
   node_facts: 'Facts of nodes and hosts',
   automation_runs: 'Automation runs (read only)',
   ask_knowledge: 'Ask knowledge',
+  lookup_live_sources: 'Look up live sources',
   check_command: 'Check commands with Watson',
 }
 

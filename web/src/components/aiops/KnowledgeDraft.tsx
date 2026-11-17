@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { approveDraft, contradictionText, rejectDraft, resolveConflict, type ConfluenceConflict, type DraftPage, type DraftRun } from '../../api/knowledge'
+import { approveDraft, contradictionText, rejectDraft, type DraftPage, type DraftRun } from '../../api/knowledge'
 import { fixHref } from '../../api/fixes'
 import { fmtTs } from '../../lib/format'
 import { SourceLink } from './SourceLink'
@@ -217,63 +217,6 @@ export function DraftRunCard({ run, onChanged, onToast, open: startOpen }: { run
           <span className="rk-fhint">Approved pages are published to the wiki; agents read only approved pages.</span>
         </div>
       )}
-    </section>
-  )
-}
-
-/** A person's edit inside a Confluence page's managed part, waiting for a decision. */
-export function ConflictCard({ c, onChanged, onToast }: { c: ConfluenceConflict; onChanged: () => void; onToast?: (msg: string) => void }) {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const act = async (action: 'keep' | 'replace') => {
-    setBusy(true)
-    setError('')
-    try {
-      await resolveConflict(c.id, action)
-      onToast?.(action === 'keep' ? 'Kept in the record.' : 'Replaced by the record.')
-      onChanged()
-    } catch (e) {
-      setError(errorText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  return (
-    <section className="rk-card" style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }} aria-label={`Confluence edit ${c.title}`} data-testid="knowledge-conflict">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span className="rk-pill" data-tone="warn">
-          Confluence edit
-        </span>
-        <strong style={{ fontSize: 12.5 }}>{c.title}</strong>
-        <span className="rk-fhint">
-          {fmtTs(c.at)}
-          {c.ownerName ? ` · owner ${c.ownerName}` : ''}
-        </span>
-        {c.url && (
-          <a className="rk-link" href={c.url} target="_blank" rel="noreferrer">
-            Open the page
-          </a>
-        )}
-      </div>
-      <span className="rk-fhint">Someone edited the part of this page the console keeps. It was not overwritten: keep the edit (it is copied into the known issue’s update log) or replace it with the record.</span>
-      <pre className="rk-mono" style={{ margin: 0, padding: '8px 10px', fontSize: 11.5, whiteSpace: 'pre-wrap', background: 'var(--surface)', borderRadius: 6, maxHeight: 220, overflow: 'auto' }}>
-        {c.their}
-      </pre>
-      {error && (
-        <p className="rk-t" data-tone="err" role="alert" style={{ margin: 0, fontSize: 12.5 }}>
-          {error}
-        </p>
-      )}
-      <div style={{ display: 'flex', gap: 8 }}>
-        {c.kind === 'known' && (
-          <button className="rk-btn" disabled={busy} onClick={() => void act('keep')} data-testid="knowledge-conflict-keep">
-            Keep their edit
-          </button>
-        )}
-        <button className="rk-btn" disabled={busy} onClick={() => void act('replace')} data-testid="knowledge-conflict-replace">
-          Replace with the record
-        </button>
-      </div>
     </section>
   )
 }

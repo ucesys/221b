@@ -94,7 +94,6 @@ export interface IssueMe {
   operator: boolean
   admin: boolean
   company: string
-  statusPage: string
   reportURL: string
   /** The connected clusters a report may be about: id and display name only (CF-64). */
   clusters?: Cluster[]

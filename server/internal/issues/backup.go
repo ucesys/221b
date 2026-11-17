@@ -12,8 +12,7 @@ const BackupFormat = "221b-issues/2"
 
 // backupFile is the issue service's part of a backup (IS-19): the known
 // issues, services and settings, and the cases' numbering. The cases are
-// the objects of their own a part of their own keeps (ExportCases). The
-// tokens are left out by construction: a restored console makes new ones.
+// the objects of their own a part of their own keeps (ExportCases).
 type backupFile struct {
 	Format    string         `json:"format"`
 	Next      int            `json:"next"`
@@ -32,7 +31,7 @@ func (s *Service) Export(ctx context.Context) ([]byte, error) {
 		return nil, err
 	}
 	f := backupFile{Format: BackupFormat, Next: st.index.Next, Archived: st.index.Archived, NextKnown: st.known.Next,
-		Known: st.known.Known, Services: st.config.Services, Settings: st.config.Settings, LeftOut: []string{"API tokens: make new ones after a restore"}}
+		Known: st.known.Known, Services: st.config.Services, Settings: st.config.Settings, LeftOut: []string{}}
 	if f.Known == nil {
 		f.Known = []KnownIssue{}
 	}

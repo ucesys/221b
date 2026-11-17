@@ -297,7 +297,6 @@ export function ReportApp() {
         </div>
         <KnownPanel
           known={known}
-          statusPage={me?.statusPage ?? ''}
           onFollow={async (id, on) => {
             const k = await followKnown(id, on)
             setKnown((list) => (list ?? []).map((x) => (x.id === k.id ? k : x)))

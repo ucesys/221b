@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -62,6 +63,9 @@ type Config struct {
 	IssuesConfigMap     string
 	IssuesReportRoles   []string
 	IssuesOperatorRoles []string
+	// IssuesReportURL is the report page's address other pages link to
+	// (issues.reportURL, 0.12.1); empty is /report on the console.
+	IssuesReportURL string
 	// --- Watson cards (Phase 12, ADR-99) ---
 	// ProposalsConfigMap is the "namespace/name" of the ConfigMap the
 	// agents' proposed changes, the standing approvals and the notification
@@ -101,16 +105,14 @@ type Config struct {
 	JobsTimeZone  string
 	// --- Knowledge (Phase 12, ADR-94 to ADR-98) ---
 	// KnowledgeConfigMap is the "namespace/name" of the ConfigMap Mycroft's
-	// sources, drafts and the Confluence publisher are kept in; empty keeps
+	// sources and drafts are kept in; empty keeps
 	// them in memory. KnowledgeDir is where the wiki's local copy and the
 	// source repositories are kept on the pod's disk; KnowledgeRefreshGit
 	// and KnowledgeRefreshS3 how often the local copy is read again.
-	// ConsoleURL is the console's address, for links back from Confluence.
 	KnowledgeConfigMap  string
 	KnowledgeDir        string
 	KnowledgeRefreshGit time.Duration
 	KnowledgeRefreshS3  time.Duration
-	ConsoleURL          string
 	// WikiConfigMap is the "namespace/name" of the ConfigMap the temporary
 	// wiki store keeps the wiki in (CF-57), used while Settings ›
 	// Knowledge names no store; empty leaves that store out.
@@ -259,15 +261,15 @@ func Parse(args []string) (Config, error) {
 	fs.BoolVar(&c.Issues, "issues", envBool("ISSUES", true), "offer the issue service: the report page at /report and its API at /api/issues/v1/")
 	fs.StringVar(&c.IssuesConfigMap, "issues-configmap", env("ISSUES_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the issue service's reports (every case, Phase 12 wave 5), known issues, services and settings in (empty: in memory)")
 	// --- Knowledge (Phase 12) ---
-	fs.StringVar(&c.KnowledgeConfigMap, "knowledge-configmap", env("KNOWLEDGE_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep Mycroft's sources, drafts and the Confluence publisher in (empty: in memory)")
+	fs.StringVar(&c.KnowledgeConfigMap, "knowledge-configmap", env("KNOWLEDGE_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep Mycroft's sources and drafts in (empty: in memory)")
 	fs.StringVar(&c.WikiConfigMap, "wiki-configmap", env("WIKI_CONFIGMAP", ""), "namespace/name of the ConfigMap of the temporary wiki store, used while Settings › Knowledge names no store (empty: no such store; it will be removed)")
 	fs.StringVar(&c.KnowledgeDir, "knowledge-dir", env("KNOWLEDGE_DIR", ""), "directory for the wiki's local copy and the source repositories (empty: a temporary directory)")
 	fs.DurationVar(&c.KnowledgeRefreshGit, "knowledge-refresh-git", envDuration("KNOWLEDGE_REFRESH_GIT", 15*time.Minute), "how often the wiki's local copy is read again from a git repository, besides each push")
 	fs.DurationVar(&c.KnowledgeRefreshS3, "knowledge-refresh-s3", envDuration("KNOWLEDGE_REFRESH_S3", 5*time.Minute), "how often the wiki's local copy is read again from an S3 bucket")
-	fs.StringVar(&c.ConsoleURL, "console-url", env("CONSOLE_URL", ""), "the console's address as people reach it, https://221b.example.com, for links back from Confluence pages (empty: no links)")
 	fs.StringVar(&c.RunsConfigMap, "runs-configmap", env("RUNS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the jobs, their runs and findings in (empty: in memory)")
 	fs.StringVar(&c.JobsTimeZone, "jobs-time-zone", env("JOBS_TIME_ZONE", ""), "the IANA time zone a job's schedule starts in, such as Europe/Berlin (empty: UTC)")
 	reportRoles := fs.String("issues-report-roles", env("ISSUES_REPORT_ROLES", "superAdmin,superViewer,admin,viewer"), "comma-separated roles that may report problems; the Reporter role always may")
+	fs.StringVar(&c.IssuesReportURL, "issues-report-url", env("ISSUES_REPORT_URL", ""), "the report page's address other pages link to: a path on the console or an http or https address (empty: /report on this console)")
 	operatorRoles := fs.String("issues-operator-roles", env("ISSUES_OPERATOR_ROLES", "superAdmin,admin"), "comma-separated roles that see every report and triage them")
 	// --- Watson cards (Phase 12) ---
 	fs.StringVar(&c.ProposalsConfigMap, "proposals-configmap", env("PROPOSALS_CONFIGMAP", ""), "namespace/name of the ConfigMap to keep the agents' proposed changes, standing approvals and notification settings in (empty: in memory); at start, the records of <release>-cases, where builds before kept them, are copied in once")
@@ -390,6 +392,9 @@ func (c Config) validate() error {
 			errs = append(errs, fmt.Errorf("-issues-report-roles and -issues-operator-roles take superAdmin, superViewer, admin and viewer, not %q", r))
 		}
 	}
+	if !reportURL(c.IssuesReportURL) {
+		errs = append(errs, fmt.Errorf("-issues-report-url (issues.reportURL) is a path such as /report or an http or https address, not %q", c.IssuesReportURL))
+	}
 	for _, r := range c.CasesApproverRoles {
 		if !roles.Valid(r) {
 			errs = append(errs, fmt.Errorf("-cases-approver-roles takes superAdmin, superViewer, admin and viewer, not %q", r))
@@ -481,4 +486,15 @@ func envDuration(key string, def time.Duration) time.Duration {
 		return time.Duration(n) * time.Second
 	}
 	return def
+}
+
+// reportURL says whether s is a report page address: empty, a path on the
+// console, or an http or https address.
+func reportURL(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || (strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "//")) {
+		return true
+	}
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != ""
 }

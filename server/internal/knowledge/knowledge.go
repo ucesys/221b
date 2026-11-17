@@ -17,8 +17,7 @@
 //
 // Every replica keeps its own copy of the approved pages on its disk and
 // its own index, and answers ask_knowledge from them, never the network.
-// Only the leader (ADR-70) reads sources, writes to the wiki and publishes
-// to Confluence.
+// Only the leader (ADR-70) reads sources and writes to the wiki.
 package knowledge
 
 import (
@@ -37,7 +36,6 @@ import (
 
 	"github.com/ucesys/221b/server/internal/audit"
 	"github.com/ucesys/221b/server/internal/awsv4"
-	"github.com/ucesys/221b/server/internal/confluence"
 	"github.com/ucesys/221b/server/internal/jobs"
 	"github.com/ucesys/221b/server/internal/kv"
 )
@@ -51,18 +49,14 @@ const (
 	DraftsKey = "knowledge-drafts.json"
 	// StatusKey holds the last sync's outcome, per source.
 	StatusKey = "knowledge-status.json"
-	// PublisherKey is the Confluence publisher's settings, outbox and
-	// pages.
-	PublisherKey = confluence.StateKey
 )
 
 // The most each key holds, by default; together under the ConfigMap's
 // budget.
 const (
-	DefaultSettingsBytes  = 64 << 10
-	DefaultDraftsBytes    = 512 << 10
-	DefaultStatusBytes    = 96 << 10
-	DefaultPublisherBytes = 256 << 10
+	DefaultSettingsBytes = 64 << 10
+	DefaultDraftsBytes   = 512 << 10
+	DefaultStatusBytes   = 96 << 10
 )
 
 // Limits are the keys' limits, as the ConfigMap's layout sets them.
@@ -209,8 +203,6 @@ type Options struct {
 	// (Mycroft's first import, GS-11), so the inventory it describes waits
 	// in AIOps › Inbox without waiting for the nightly sync.
 	ReadNew bool
-	// Publisher puts approved pages into Confluence; nil leaves them out.
-	Publisher *confluence.Publisher
 	// Leads says whether this replica leads (ADR-70); nil is always.
 	Leads func() bool
 	// Audit receives a record per change; nil records nothing.
@@ -227,10 +219,8 @@ type Options struct {
 	CrawlHTTP *http.Client
 	// Identity is the pod's AWS identity, for a bucket without keys.
 	Identity *awsv4.Identity
-	// ConsoleURL is the console's address, for links back from pages.
-	ConsoleURL string
-	Now        func() time.Time
-	Logger     *slog.Logger
+	Now      func() time.Time
+	Logger   *slog.Logger
 }
 
 // Service is Mycroft's knowledge.
@@ -271,6 +261,9 @@ type Service struct {
 	// proxy is the proxy a source's test would go through (tests; nil is
 	// http.ProxyFromEnvironment, which reads the environment once).
 	proxy func(*http.Request) (*url.URL, error)
+
+	// live keeps what the live sources' addresses gave (KN-41).
+	live liveCache
 
 	// covers are the known issues and the exceptions that keep a
 	// difference from being proposed, once SetCovers gives them (KN-31).
@@ -335,9 +328,6 @@ func New(o Options) *Service {
 	s.runSeq.Store(o.Now().Unix() % 100000)
 	return s
 }
-
-// Publisher is the Confluence publisher the service was given, or nil.
-func (s *Service) Publisher() *confluence.Publisher { return s.o.Publisher }
 
 func (s *Service) audit(e audit.Event) {
 	if s.o.Audit != nil {

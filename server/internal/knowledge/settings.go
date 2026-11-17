@@ -66,6 +66,12 @@ type Source struct {
 	Endpoint    string `json:"endpoint,omitempty"`
 	PathStyle   bool   `json:"pathStyle,omitempty"`
 	Credentials string `json:"credentials,omitempty"`
+	// A live source (0.12.1, KN-39): its addresses, never copied, read
+	// when an agent looks them up, and how it signs in: Auth is "",
+	// LiveAuthBearer (the token in the Secret) or LiveAuthBasic (Username
+	// and the token in the Secret as the password or API token).
+	Addresses []LiveAddress `json:"addresses,omitempty"`
+	Auth      string        `json:"auth,omitempty"`
 	// CAPEM is a private CA for the source's TLS.
 	CAPEM   string    `json:"caPEM,omitempty"`
 	Added   time.Time `json:"added,omitzero"`
@@ -237,9 +243,11 @@ func (x Source) Validate() error {
 		if x.Credentials != CredentialsKeys && x.Credentials != CredentialsIdentity {
 			return invalid("a bucket's credentials are an access key or the pod's identity")
 		}
+	case SourceLive:
+		return x.validateLive()
 	case SourceUpload, SourceConsole, SourceFixes:
 	default:
-		return invalid("a source is confluence, git, s3, upload or console")
+		return invalid("a source is confluence, git, s3, live, upload or console")
 	}
 	return nil
 }
@@ -369,6 +377,14 @@ func (x Source) normalized() Source {
 	if x.Kind == SourceGit && x.Branch == "" {
 		x.Branch = "main"
 	}
+	if x.Kind == SourceLive {
+		x.Addresses, x.Username = normalizedLive(x.Addresses), strings.TrimSpace(x.Username)
+		if x.Auth != LiveAuthBasic {
+			x.Username = ""
+		}
+	} else {
+		x.Addresses, x.Auth = nil, ""
+	}
 	if x.Kind == SourceS3 {
 		x.Bucket, x.Region, x.Prefix = strings.TrimSpace(x.Bucket), strings.TrimSpace(x.Region), strings.TrimSpace(x.Prefix)
 		x.Endpoint = strings.TrimRight(strings.TrimSpace(x.Endpoint), "/")
@@ -445,6 +461,10 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 	if x.Kind == SourceS3 {
 		detail += fmt.Sprintf(": the bucket %s under %q, credentials %s", x.Bucket, x.Prefix, x.Credentials)
 	}
+	if x.Kind == SourceLive {
+		detail += fmt.Sprintf(": live, %d addresses, never copied", len(x.Addresses))
+		s.live.forget(x.ID)
+	}
 	if !ch.none() {
 		if err := s.saveCreds(ctx, sourceKey(x.ID), ch); err != nil {
 			return saved, err
@@ -509,6 +529,7 @@ func (s *Service) RemoveSource(ctx context.Context, c Caller, id string) error {
 	if id == ConsoleSourceID || id == FixesSourceID {
 		return invalid("the console's own sources can be switched off, not removed")
 	}
+	live := false
 	_, err := s.editSettings(ctx, func(set *Settings) error {
 		i := slices.IndexFunc(set.Sources, func(o Source) bool { return o.ID == id })
 		if i < 0 {
@@ -517,6 +538,7 @@ func (s *Service) RemoveSource(ctx context.Context, c Caller, id string) error {
 		if set.Sources[i].Kind == SourceUpload {
 			return invalid("remove the documents one by one instead")
 		}
+		live = set.Sources[i].Kind == SourceLive
 		set.Sources = slices.Delete(set.Sources, i, i+1)
 		return nil
 	})
@@ -527,7 +549,10 @@ func (s *Service) RemoveSource(ctx context.Context, c Caller, id string) error {
 		s.o.Logger.Warn("a removed source's token stays in the Secret", "source", id, "err", err)
 	}
 	s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: id, Detail: "source " + id + " removed", Outcome: audit.OutcomeOK, From: c.From})
-	s.sourceRemoved(ctx, c, id)
+	s.live.forget(id)
+	if !live {
+		s.sourceRemoved(ctx, c, id)
+	}
 	return nil
 }
 
@@ -539,17 +564,21 @@ func (s *Service) SetSourceOn(ctx context.Context, c Caller, id string, on bool)
 	if err := s.leads(); err != nil {
 		return err
 	}
+	live := false
 	_, err := s.editSettings(ctx, func(set *Settings) error {
 		i := slices.IndexFunc(set.Sources, func(o Source) bool { return o.ID == id })
 		if i < 0 {
 			return wrapf(ErrNotFound, "no source %q", id)
 		}
 		set.Sources[i].Off = !on
+		live = set.Sources[i].Kind == SourceLive
 		return nil
 	})
 	if err == nil {
 		s.audit(audit.Event{Action: ActionSource, Who: c.who(), Target: id, Detail: "source " + id + map[bool]string{true: " switched on", false: " switched off"}[on], Outcome: audit.OutcomeOK, From: c.From})
-		s.sourceSwitched(ctx, c, id, on)
+		if !live {
+			s.sourceSwitched(ctx, c, id, on)
+		}
 	}
 	return err
 }

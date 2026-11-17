@@ -131,8 +131,10 @@ func (s *Service) readerWith(x Source, c Creds) (reader, error) {
 		return &consoleReader{c: s.o.Console}, nil
 	case SourceFixes:
 		return &fixesReader{s: s}, nil
+	case SourceLive:
+		return nil, invalid("%s is live: it is looked up when the agents troubleshoot, never read into the wiki", x.Name)
 	}
-	return nil, invalid("a source is confluence, git, s3, upload or console")
+	return nil, invalid("a source is confluence, git, s3, live, upload or console")
 }
 
 // confluenceReader reads a Confluence space's pages.

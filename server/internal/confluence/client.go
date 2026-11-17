@@ -1,7 +1,7 @@
 // Package confluence is the little of Confluence's REST API the console
 // needs (Phase 12, ADR-97): reading a space's pages for Mycroft's
-// knowledge, and writing the known-issue and wiki page trees the
-// publisher keeps. Confluence Cloud is reached through REST v2 with an
+// knowledge. The publisher that wrote page trees was removed in 0.12.1
+// (ADR-160). Confluence Cloud is reached through REST v2 with an
 // account's email and API token; Data Center through REST v1
 // (/rest/api) with a personal access token. Every call retries what
 // Confluence asks to be retried: 429 after its Retry-After, and 5xx with
@@ -100,13 +100,6 @@ func (e *Error) Error() string {
 func NotFound(err error) bool {
 	var e *Error
 	return errors.As(err, &e) && e.Status == http.StatusNotFound
-}
-
-// VersionConflict says whether err is a write refused because the page's version
-// moved on since it was read.
-func VersionConflict(err error) bool {
-	var e *Error
-	return errors.As(err, &e) && e.Status == http.StatusConflict
 }
 
 // New checks the configuration and makes the client.
@@ -485,56 +478,14 @@ func (c *Client) listV1(ctx context.Context, path string, q url.Values, since ti
 	return out, nil
 }
 
-// Create writes a new page under parentID (the space's home when empty).
-func (c *Client) Create(ctx context.Context, space Space, parentID, title, body string) (Page, error) {
-	if c.cfg.Flavor == Cloud {
-		in := map[string]any{"spaceId": space.ID, "status": "current", "title": title, "body": map[string]string{"representation": "storage", "value": body}}
-		if parentID != "" {
-			in["parentId"] = parentID
-		}
-		var p v2Page
-		if err := c.do(ctx, http.MethodPost, c.api(true, "/pages", nil), in, &p); err != nil {
-			return Page{}, err
-		}
-		return c.fromV2(p, space.Key), nil
+// clip cuts s to n bytes at most, on a character's boundary.
+func clip(s string, n int) string {
+	if len(s) <= n {
+		return s
 	}
-	in := map[string]any{"type": "page", "title": title, "space": map[string]string{"key": space.Key},
-		"body": map[string]any{"storage": map[string]string{"value": body, "representation": "storage"}}}
-	if parentID != "" {
-		in["ancestors"] = []map[string]string{{"id": parentID}}
+	cut := n
+	for cut > 0 && (s[cut]&0xC0) == 0x80 {
+		cut--
 	}
-	var p v1Content
-	if err := c.do(ctx, http.MethodPost, c.api(false, "/content", nil), in, &p); err != nil {
-		return Page{}, err
-	}
-	return c.fromV1(p), nil
-}
-
-// Update writes a page as its next version: version is the number it
-// was read at, and Confluence refuses (Conflict) when it moved on.
-// parentID, when set, moves the page under another.
-func (c *Client) Update(ctx context.Context, space Space, id string, version int, parentID, title, body, note string) (Page, error) {
-	if c.cfg.Flavor == Cloud {
-		in := map[string]any{"id": id, "status": "current", "title": title,
-			"body": map[string]string{"representation": "storage", "value": body}, "version": map[string]any{"number": version + 1, "message": note}}
-		if parentID != "" {
-			in["parentId"] = parentID
-		}
-		var p v2Page
-		if err := c.do(ctx, http.MethodPut, c.api(true, "/pages/"+url.PathEscape(id), nil), in, &p); err != nil {
-			return Page{}, err
-		}
-		return c.fromV2(p, space.Key), nil
-	}
-	in := map[string]any{"id": id, "type": "page", "title": title, "space": map[string]string{"key": space.Key},
-		"version": map[string]any{"number": version + 1, "message": note},
-		"body":    map[string]any{"storage": map[string]string{"value": body, "representation": "storage"}}}
-	if parentID != "" {
-		in["ancestors"] = []map[string]string{{"id": parentID}}
-	}
-	var p v1Content
-	if err := c.do(ctx, http.MethodPut, c.api(false, "/content/"+url.PathEscape(id), nil), in, &p); err != nil {
-		return Page{}, err
-	}
-	return c.fromV1(p), nil
+	return s[:cut] + "…"
 }

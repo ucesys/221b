@@ -414,82 +414,79 @@ func TestVisibilityByRole(t *testing.T) {
 	}
 }
 
-// A token files as its account, with its scopes and nothing more; a
-// revoked or made-up one is refused alike; the hash, never the token, is
-// kept.
-func TestTokensAndTheirScopes(t *testing.T) {
+// The token intake is gone (0.12.1): its paths answer 404, and the tokens
+// an older console kept stay in the ConfigMap as they were, unread.
+func TestTheIntakeIsGoneAndOldTokensStay(t *testing.T) {
 	mem := &kv.Memory{}
+	old := `{"tokens":[{"id":"t1","name":"Alertmanager","account":"alertmanager","scopes":["reports:create"],"hash":"abc"}]}`
+	if _, err := mem.SaveKey(ctx, ConfigKey, []byte(old), ""); err != nil {
+		t.Fatal(err)
+	}
 	f := newFixture(t, Options{Backend: mem})
-	if _, _, err := f.s.CreateToken(ctx, operator, TokenInput{Name: "x", Account: "alerts", Scopes: []string{ScopeCreate}}); !errors.Is(err, ErrDenied) {
-		t.Fatalf("an operator made a token: %v", err)
-	}
-	if _, _, err := f.s.CreateToken(ctx, admin, TokenInput{Name: "x", Account: "Alerts!", Scopes: []string{ScopeCreate}}); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("a bad account: %v", err)
-	}
-	tok, secret, err := f.s.CreateToken(ctx, admin, TokenInput{Name: "Alertmanager", Account: "alertmanager", Scopes: []string{ScopeCreate}})
-	if err != nil {
+	set := DefaultSettings()
+	set.Company = "Example IT"
+	if _, err := f.s.SaveSettings(ctx, admin, set); err != nil {
 		t.Fatal(err)
 	}
 	b, _, _ := mem.LoadKey(ctx, ConfigKey)
-	if strings.Contains(string(b), secret) || !strings.Contains(string(b), hashToken(secret)) || tok.Hash != "" {
-		t.Fatal("the token itself was kept, or its hash shown")
+	if !strings.Contains(string(b), `"hash":"abc"`) || !strings.Contains(string(b), "Example IT") {
+		t.Fatalf("the old tokens were not kept as they were: %s", b)
 	}
 	h := f.s.Handler(func(*http.Request) (Caller, bool) { return Caller{}, false })
-	call := func(method, path, auth, body string) (int, map[string]any) {
-		req := httptest.NewRequest(method, path, strings.NewReader(body))
+	for _, path := range []string{"/api/issues/v1/intake/reports", "/api/issues/v1/tokens"} {
+		req := httptest.NewRequest("POST", path, strings.NewReader(`{"text":"x"}`))
 		req.Header.Set("Content-Type", "application/json")
-		if auth != "" {
-			req.Header.Set("Authorization", auth)
-		}
+		req.Header.Set("Authorization", "Bearer 221bis_whatever")
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, req)
-		var out map[string]any
-		_ = json.Unmarshal(w.Body.Bytes(), &out)
-		return w.Code, out
-	}
-	code, out := call("POST", "/api/issues/v1/intake/reports", "Bearer "+secret, `{"text":"disk on db-1 is 95% full"}`)
-	if code != http.StatusCreated {
-		t.Fatalf("%d %v", code, out)
-	}
-	rep := out["report"].(map[string]any)
-	if rep["reporter"].(map[string]any)["id"] != "system:alertmanager" {
-		t.Fatalf("%v", rep["reporter"])
-	}
-	if code, _ := call("GET", "/api/issues/v1/intake/reports/1", "Bearer "+secret, ""); code != http.StatusForbidden {
-		t.Fatalf("read without the scope: %d", code)
-	}
-	if code, _ := call("POST", "/api/issues/v1/intake/reports", "Bearer "+secret, `{"text":"for bob","for":{"id":"bob"}}`); code != http.StatusForbidden {
-		t.Fatalf("filed for someone without the scope: %d", code)
-	}
-	for _, bad := range []string{"", "Bearer nonsense", "Bearer " + secret + "x", "Basic " + secret} {
-		if code, _ := call("POST", "/api/issues/v1/intake/reports", bad, `{"text":"x"}`); code != http.StatusUnauthorized && code != http.StatusForbidden {
-			t.Fatalf("%q: %d", bad, code)
+		if w.Code != http.StatusNotFound && w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: %d", path, w.Code)
 		}
 	}
-	// Without a session the rest of the API is closed, token or not.
-	if code, _ := call("GET", "/api/issues/v1/reports", "Bearer "+secret, ""); code != http.StatusUnauthorized {
-		t.Fatalf("a token reached the session API: %d", code)
-	}
-	if err := f.s.RevokeToken(ctx, admin, tok.ID); err != nil {
+}
+
+// The report page's address is the chart's (issues.reportURL, 0.12.1):
+// /report when it sets none; an address saved in the settings before is
+// not read, and logged once as moved.
+func TestTheReportURLIsTheCharts(t *testing.T) {
+	mem := &kv.Memory{}
+	if _, err := mem.SaveKey(ctx, ConfigKey, []byte(`{"settings":{"company":"Example IT","statusPage":"https://wiki.example.com/known","reportURL":"https://old.example.com/report","matchThreshold":80}}`), ""); err != nil {
 		t.Fatal(err)
 	}
-	if code, _ := call("POST", "/api/issues/v1/intake/reports", "Bearer "+secret, `{"text":"x"}`); code != http.StatusForbidden {
-		t.Fatalf("a revoked token: %d", code)
+	var logs bytes.Buffer
+	s := New(Options{Backend: mem, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	for range 2 {
+		set, err := s.Settings(ctx)
+		if err != nil || set.Company != "Example IT" {
+			t.Fatalf("%+v %v", set, err)
+		}
+		if _, err := s.load(ctx, true); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if n := strings.Count(strings.Join(f.actions(), " "), ActionToken); n != 2 {
-		t.Fatalf("%d token records", n)
+	if s.ReportURL() != "/report" {
+		t.Fatalf("the stored address was read: %s", s.ReportURL())
 	}
-	// One that may read reads what its account filed, and only that.
-	_, reader, _ := f.s.CreateToken(ctx, admin, TokenInput{Name: "Desk", Account: "desk", Scopes: []string{ScopeCreate, ScopeRead, ScopeOnBehalf}})
-	code, out = call("POST", "/api/issues/v1/intake/reports", "Bearer "+reader, `{"text":"printer jammed","for":{"id":"bob","name":"Bob"}}`)
-	if code != http.StatusCreated {
-		t.Fatalf("%d %v", code, out)
+	if n := strings.Count(logs.String(), "issues.reportURL"); n != 1 {
+		t.Fatalf("logged %d times: %s", n, logs.String())
 	}
-	if code, _ := call("GET", "/api/issues/v1/intake/reports/2", "Bearer "+reader, ""); code != http.StatusOK {
-		t.Fatalf("read its own: %d", code)
+	b, _ := json.Marshal(DefaultSettings())
+	if strings.Contains(string(b), "statusPage") || strings.Contains(string(b), "reportURL") {
+		t.Fatalf("the settings still carry them: %s", b)
 	}
-	if code, _ := call("GET", "/api/issues/v1/intake/reports/1", "Bearer "+reader, ""); code != http.StatusNotFound {
-		t.Fatalf("read another account's: %d", code)
+	logs.Reset()
+	chart := New(Options{Backend: mem, ReportURL: "https://help.example.com/report", Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	if _, err := chart.Settings(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if chart.ReportURL() != "https://help.example.com/report" || logs.Len() != 0 {
+		t.Fatalf("%s %s", chart.ReportURL(), logs.String())
+	}
+	h := chart.Handler(func(*http.Request) (Caller, bool) { return alice, true })
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/api/issues/v1/me", nil))
+	if !strings.Contains(w.Body.String(), `"reportURL":"https://help.example.com/report"`) || strings.Contains(w.Body.String(), "statusPage") {
+		t.Fatalf("%s", w.Body.String())
 	}
 }
 
@@ -641,7 +638,7 @@ func TestUpdatesForTheReportPage(t *testing.T) {
 	}
 }
 
-// A backup carries the records but no token, and a restore adds what is
+// A backup carries the records, and a restore adds what is
 // missing, keeps what is there, and numbers on above both.
 func TestExportAndImport(t *testing.T) {
 	f := newFixture(t, Options{})
@@ -651,13 +648,12 @@ func TestExportAndImport(t *testing.T) {
 	f.s.SaveSettings(ctx, admin, set)
 	f.s.Submit(ctx, alice, Submission{Text: "first"})
 	f.s.Submit(ctx, alice, Submission{Text: "second"})
-	_, secret, _ := f.s.CreateToken(ctx, admin, TokenInput{Name: "x", Account: "x", Scopes: []string{ScopeCreate}})
 	b, err := f.s.Export(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(b, []byte(hashToken(secret))) || !bytes.Contains(b, []byte(BackupFormat)) {
-		t.Fatal("a token's hash went into the backup")
+	if !bytes.Contains(b, []byte(BackupFormat)) {
+		t.Fatal("no format in the backup")
 	}
 	g := newFixture(t, Options{})
 	g.s.Submit(ctx, bob, Submission{Text: "here already"})
@@ -827,8 +823,7 @@ func TestInactiveKnownIssuesAreHiddenFromReportersCF63(t *testing.T) {
 }
 
 // A reporter may choose the priority, 1 to 4, which the SLA follows, and
-// the connected cluster it is about; the intake API takes both too
-// (CF-64).
+// the connected cluster it is about (CF-64).
 func TestAReporterChoosesPriorityAndClusterCF64(t *testing.T) {
 	f := newFixture(t, Options{Clusters: func() []Cluster {
 		return []Cluster{{ID: "local", Name: "local"}, {ID: "c-prod", Name: "Production"}, {ID: "c-bare"}}
@@ -893,18 +888,6 @@ func TestAReporterChoosesPriorityAndClusterCF64(t *testing.T) {
 	}
 	if code, _ := call("POST", "/api/issues/v1/reports", `{"text":"Builds fail","priority":0}`); code != http.StatusBadRequest {
 		t.Fatalf("P0 from a reporter: %d", code)
-	}
-	// The intake API.
-	_, secret, err := f.s.CreateToken(ctx, admin, TokenInput{Name: "Helpdesk", Account: "helpdesk", Scopes: []string{ScopeCreate}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	code, body = call("POST", "/api/issues/v1/intake/reports", `{"text":"Mail is slow","priority":4,"cluster":"local"}`, "Bearer "+secret)
-	if code != http.StatusCreated || !strings.Contains(body, `"priority":4`) {
-		t.Fatalf("%d %s", code, body)
-	}
-	if code, _ := call("POST", "/api/issues/v1/intake/reports", `{"text":"Mail is slow","cluster":"c-gone"}`, "Bearer "+secret); code != http.StatusBadRequest {
-		t.Fatalf("an unknown cluster through intake: %d", code)
 	}
 	if n := len(f.s.Clusters()); n != 3 {
 		t.Fatal(n)

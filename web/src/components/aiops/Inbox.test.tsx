@@ -30,7 +30,6 @@ vi.mock('../../api/cards', async (original) => ({ ...(await original<typeof impo
 vi.mock('../../api/knowledge', async (original) => ({
   ...(await original<typeof import('../../api/knowledge')>()),
   fetchDrafts: vi.fn(),
-  fetchConflicts: vi.fn(),
   fetchPageRequests: vi.fn(),
   approvePageRequest: vi.fn(),
   rejectPageRequest: vi.fn(),
@@ -39,7 +38,7 @@ vi.mock('../../api/rules', async (original) => ({ ...(await original<typeof impo
 
 const admin: Me = { mode: 'oidc', user: { subject: 's', username: 'ann', name: 'Ann' }, admin: true, roles: ['superAdmin'], method: 'oidc', sessionIdleSeconds: 0 }
 const viewer: Me = { ...admin, admin: false, roles: ['viewer'] }
-const op = { person: { id: 'ann', name: 'Ann' }, report: true, operator: true, admin: true, company: '', statusPage: '', reportURL: '/report' }
+const op = { person: { id: 'ann', name: 'Ann' }, report: true, operator: true, admin: true, company: '', reportURL: '/report' }
 
 const kase = (n: number, over: Partial<InboxCase> = {}): InboxCase => ({
   id: `C-${n}`,
@@ -141,7 +140,6 @@ beforeEach(() => {
   vi.mocked(cards.fetchProposals).mockResolvedValue({ proposals: [proposal], waiting: 1, mayApprove: true })
   vi.mocked(cards.fetchProposal).mockResolvedValue(proposal)
   vi.mocked(knowledge.fetchDrafts).mockResolvedValue({ runs: [] })
-  vi.mocked(knowledge.fetchConflicts).mockResolvedValue({ conflicts: [] })
   vi.mocked(knowledge.fetchPageRequests).mockResolvedValue({ requests: [] })
   vi.mocked(rules.fetchSuggestions).mockResolvedValue({ suggestions: [] })
   setIssueMeForTests(op)

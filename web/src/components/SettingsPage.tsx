@@ -3,6 +3,7 @@ import { DEFAULT_GRACE, GRACE_CHOICES, REFRESH_CHOICES, refreshLabel, saveSettin
 import type { Settings } from '../api/types'
 import { DEFAULT_TIME_FORMAT, fmtClock, fmtTs, setTimeFormat, type TimeFormat } from '../lib/format'
 import { adminHref, navigate, type Route } from '../lib/router'
+import { fetchIssueSettings, saveIssueSettings } from '../api/issues'
 import { IssueSettings } from './IssueSettings'
 import { SLASettings } from './SLASettings'
 import { CasesSettings } from './CasesSettings' // One flow for findings and cases (Phase 12, wave 6)
@@ -18,7 +19,7 @@ import { GettingStartedSection } from './GettingStarted'
 import { HelmReposSettings } from './apps/HelmReposSettings' // Helm repositories (Phase 12, wave 5)
 import { leftText, useSetup } from '../api/setup'
 
-type Section = 'start' | 'general' | 'providers' | 'agents' | 'limits' | 'knowledge' | 'watson' | 'apps' | 'issues' | 'jobs' | 'sla' | 'cases' | 'email'
+type Section = 'start' | 'general' | 'providers' | 'agents' | 'limits' | 'knowledge' | 'watson' | 'apps' | 'issues' | 'jobs' | 'sla' | 'cases'
 
 interface SectionInfo {
   id: Section
@@ -33,7 +34,8 @@ const GROUPS: { label?: string; sections: SectionInfo[] }[] = [
     sections: [
       // --- Getting started (Phase 12, GS-05): first, with what is left.
       { id: 'start', label: 'Getting started', hint: 'What is left to set up' },
-      { id: 'general', label: 'General', hint: 'Refresh rate, times, alerts' },
+      // Email is a section of General since 0.12.1 (its old address leads there).
+      { id: 'general', label: 'General', hint: 'Refresh rate, times, alerts, email' },
     ],
   },
   {
@@ -57,13 +59,12 @@ const GROUPS: { label?: string; sections: SectionInfo[] }[] = [
   {
     label: 'AIOps',
     sections: [
-      { id: 'issues', label: 'Issues', hint: 'Report page, timers, API tokens' },
-      // --- Cases replace reports (Phase 12, wave 5): the SLA, for every case.
+      // --- Cases replace reports (Phase 12, wave 5): the SLA, for every
+      // case; first, since every case has one.
       { id: 'sla', label: 'SLA', hint: 'Response and resolution targets, P0 to P4' },
+      { id: 'issues', label: 'Issues', hint: 'Matching, timers, webhook' },
       // --- One flow for findings and cases (Phase 12, wave 6) ---
       { id: 'cases', label: 'Cases', hint: 'Keeping agent-found cases, exceptions, caps' },
-      // --- Email about cases (EM-01) ---
-      { id: 'email', label: 'Email', hint: 'Emails about cases: the SMTP server' },
       // --- Jobs (Phase 12) ---
       { id: 'jobs', label: 'Jobs', hint: 'Who may edit jobs, what agents read as' },
     ],
@@ -74,9 +75,10 @@ const SECTIONS: SectionInfo[] = GROUPS.flatMap((g) => g.sections)
 
 const settingsHref = (section: Section) => adminHref('settings', section === 'general' ? [] : [section])
 
-/** The section an address asks for: Sherlock's of before is Agents now. */
+/** The section an address asks for: Sherlock's of before is Agents now, and Email is General's. */
 export function sectionOf(asked: string | undefined): Section {
   if (asked === 'sherlock') return 'agents'
+  if (asked === 'email') return 'general'
   return SECTIONS.find((s) => s.id === asked)?.id ?? 'general'
 }
 
@@ -102,6 +104,14 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
   useEffect(() => {
     heading.current?.focus({ preventScroll: true })
   }, [section])
+  // Settings › Email of before (EM-01): General's Email section, at its
+  // own address no more.
+  const askedEmail = route.path[1] === 'email'
+  useEffect(() => {
+    if (!askedEmail) return
+    document.getElementById('settings-email')?.scrollIntoView?.({ block: 'start' })
+    navigate(settingsHref('general'), true)
+  }, [askedEmail])
 
   const label = SECTIONS.find((s) => s.id === section)!.label
   // Getting started's hint says how many steps are left (Phase 12).
@@ -148,7 +158,16 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
           {label}
         </h2>
         {section === 'start' && <GettingStartedSection onToast={onToast} />}
-        {section === 'general' && <General settings={settings} refreshedAt={refreshedAt} />}
+        {section === 'general' && (
+          <>
+            <General settings={settings} refreshedAt={refreshedAt} />
+            {/* --- Email about cases (EM-01), in General since 0.12.1 --- */}
+            <section id="settings-email" style={{ display: 'flex', flexDirection: 'column', gap: 8, borderTop: '1px solid var(--line)', paddingTop: 16 }} aria-label="Email" data-testid="settings-email-section">
+              <h3 className="rk-h">Email</h3>
+              <EmailSettings />
+            </section>
+          </>
+        )}
         {section === 'providers' && <ProvidersSection onToast={onToast} initial={route.path[2]} />}
         {section === 'agents' && <AgentsSection onToast={onToast} initial={route.path[2]} />}
         {section === 'limits' && <LimitsSection onToast={onToast} />}
@@ -159,7 +178,6 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
         {section === 'jobs' && <JobsSettings />}
         {section === 'sla' && <SLASettings />}
         {section === 'cases' && <CasesSettings />}
-        {section === 'email' && <EmailSettings />}
       </section>
     </div>
   )
@@ -193,7 +211,23 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
   const [imagesDraft, setImagesDraft] = useState<boolean | undefined>(undefined)
   const currentImages = settings?.imageChecks ?? true
   const pickedImages = imagesDraft ?? currentImages
-  const changed = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined || bannersDraft !== undefined || fleetsDraft !== undefined || imagesDraft !== undefined
+  // The company or IT name on the report page (IS-29): the issue service's
+  // setting, kept where it was, set here since 0.12.1. Without the issue
+  // service the field is not shown.
+  const [company, setCompany] = useState<string | null>(null)
+  const [companyDraft, setCompanyDraft] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    let gone = false
+    fetchIssueSettings().then(
+      (s) => !gone && setCompany(s.company),
+      () => !gone && setCompany(null),
+    )
+    return () => {
+      gone = true
+    }
+  }, [])
+  const companyChanged = company !== null && companyDraft !== undefined && companyDraft.trim() !== company
+  const changed = (draft !== undefined && draft !== settings?.refreshSeconds) || formatDraft !== undefined || graceDraft !== undefined || bannersDraft !== undefined || fleetsDraft !== undefined || imagesDraft !== undefined || companyChanged
 
   const save = async () => {
     if (picked === undefined) return
@@ -202,6 +236,13 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
     setSaved('')
     try {
       await saveSettings({ refreshSeconds: picked, timeFormat: pickedFormat, pendingGraceSeconds: pickedGrace, alertBanners: pickedBanners, fleetsPage: pickedFleets, imageChecks: pickedImages })
+      if (companyChanged) {
+        // Read again just before, so Settings › Issues' other values stay as they are now.
+        const current = await fetchIssueSettings()
+        const s = await saveIssueSettings({ ...current, company: companyDraft.trim() })
+        setCompany(s.company)
+        setCompanyDraft(undefined)
+      }
       setDraft(undefined)
       setBannersDraft(undefined)
       setFleetsDraft(undefined)
@@ -251,6 +292,17 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
       <BannersSection picked={pickedBanners} disabled={!settings || busy} onPick={(b) => setBannersDraft(b === currentBanners ? undefined : b)} />
       <FleetsPageSection picked={pickedFleets} disabled={!settings || busy} onPick={(b) => setFleetsDraft(b === currentFleets ? undefined : b)} />
       <ImageChecksSection picked={pickedImages} disabled={!settings || busy} onPick={(b) => setImagesDraft(b === currentImages ? undefined : b)} />
+      {company !== null && (
+        <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Company or IT name">
+          <h3 className="rk-h">Company or IT name</h3>
+          <span className="rk-field" style={{ maxWidth: 360 }}>
+            <input value={companyDraft ?? company} maxLength={120} disabled={busy} onChange={(e) => setCompanyDraft(e.target.value)} aria-label="Company or IT name" data-testid="settings-company" />
+          </span>
+          <p className="rk-fhint" style={{ margin: 0 }}>
+            In the report page’s header, such as “Example Corp IT”.
+          </p>
+        </section>
+      )}
       <SaveBar
         what="Settings › General"
         changed={changed}
@@ -263,6 +315,7 @@ function General({ settings, refreshedAt }: Omit<Props, 'route'>) {
           setBannersDraft(undefined)
           setFleetsDraft(undefined)
           setImagesDraft(undefined)
+          setCompanyDraft(undefined)
         }}
         error={error}
         saved={saved}
