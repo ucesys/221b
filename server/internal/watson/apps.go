@@ -271,12 +271,7 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 	dry := c.Has("dry-run") && c.Flag("dry-run") != "false" && c.Flag("dry-run") != "none"
 	// A dry run prints what it renders, and Watson never prints Secret
 	// values. So it renders on the console, where lookup finds nothing,
-	// whatever --dry-run says; Secret objects are left out, and values that
-	// look like credentials are masked in every kind.
-	strategy := action.DryRunNone
-	if dry {
-		strategy = action.DryRunClient
-	}
+	// whatever --dry-run says, in a process of its own (render.go).
 	timeout := 300 * time.Second
 	if v := c.Flag("timeout"); v != "" {
 		var err error
@@ -335,7 +330,8 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 	// A template cannot be stopped once a deploy runs it, so a copy goes
 	// through the limits first. Anything else it finds is left to the real
 	// render, which has the cluster to ask.
-	if check, err := a.load(); err == nil {
+	// A dry run renders in that process anyway.
+	if check, err := a.load(); !dry && err == nil {
 		if _, err := apps.Render(ctx, check, a.vals, name, ns, ""); errors.Is(err, apps.ErrRenderLimit) {
 			return err
 		}
@@ -343,9 +339,6 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 	funcs, _ := apps.RenderFuncs(ch)
 	cfg.CustomTemplateFuncs = funcs
 	vals := a.vals
-	if dry {
-		vals = MaskValues(vals)
-	}
 	desc := "221B: " + a.src.String() + " (" + short(a.co.Commit) + ")"
 	install := c.Name() == "helm install"
 	if !install && c.Has("install") {
@@ -356,11 +349,13 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 			install = true
 		}
 	}
+	if dry {
+		return a.dryRun(ctx, cfg, out, ch, ns, name, install)
+	}
 	var rel *release.Release
 	if install {
 		i := action.NewInstall(cfg)
 		i.ReleaseName, i.Namespace, i.CreateNamespace = name, ns, c.Has("create-namespace")
-		i.DryRunStrategy, i.HideSecret = strategy, dry
 		i.Timeout, i.WaitStrategy, i.DisableHooks = timeout, wait, c.Has("no-hooks")
 		i.WaitOptions = append(i.WaitOptions, kube.WithStatusComputeWorkers(4))
 		// The API server validates what it is sent, and says what is wrong;
@@ -383,7 +378,6 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 	} else {
 		u := action.NewUpgrade(cfg)
 		u.Namespace = ns
-		u.DryRunStrategy, u.HideSecret = strategy, dry
 		u.Timeout, u.WaitStrategy, u.DisableHooks = timeout, wait, c.Has("no-hooks")
 		u.WaitOptions = append(u.WaitOptions, kube.WithStatusComputeWorkers(4))
 		u.DisableOpenAPIValidation = true
@@ -396,16 +390,8 @@ func helmApp(ctx context.Context, c *Command, t Target, out io.Writer, ns string
 			return err
 		}
 	}
-	if dry {
-		fmt.Fprintf(out, "DRY RUN: %s %s from %s at %s %s\n", map[bool]string{true: "install", false: "upgrade"}[install], name, a.src, commitWord(a.co.Commit), short(a.co.Commit))
-		fmt.Fprintln(out, "# watson: rendered without reading the cluster: lookup finds nothing here; Secrets are left out and credentials masked")
-	}
 	if err := (statusPrinter{rel: rel, showMetadata: true}).WriteTable(out); err != nil {
 		return err
-	}
-	if dry {
-		fmt.Fprintf(out, "MANIFEST:\n%s\n", strings.TrimSpace(rel.Manifest))
-		return nil
 	}
 	if t.Apps != nil {
 		if err := a.saveDeploy(ctx, c, t, out, ns, name, ch.Metadata.Version); err != nil {
@@ -569,9 +555,10 @@ func objectNames(manifest string) []string {
 }
 
 // RenderUpgrade renders what an upgrade of the release from the chart
-// would apply, as the person, with a server dry run (HA-17): the chart's
-// lookups, the cluster's capabilities and the next revision are the real
-// ones, which a render on the console alone cannot give.
+// would apply (HA-17): the release's revision and values are read as the
+// person, the cluster's version and APIs are the real ones, and the chart
+// renders on the console, in a process of its own, where lookup finds
+// nothing, so what it shows is what the chart and its values say.
 func (s *Service) RenderUpgrade(ctx context.Context, cl Cluster, who Who, ns, name string, ch *chart.Chart, vals map[string]any) (string, error) {
 	t := Target{Config: cl.Config, Person: who.Person, Cluster: cl.ID, Apps: s.opts.Apps, Repos: s.opts.Repos}
 	d, err := s.disc.For(cl.ID, cl.Config)
@@ -583,26 +570,10 @@ func (s *Service) RenderUpgrade(ctx context.Context, cl Cluster, who Who, ns, na
 	if err != nil {
 		return "", err
 	}
-	funcs, tripped := apps.RenderFuncs(ch)
-	cfg.CustomTemplateFuncs = funcs
-	manifest, err := apps.Bounded(ctx, func(ctx context.Context) (string, error) {
-		u := action.NewUpgrade(cfg)
-		u.Namespace = ns
-		u.DryRunStrategy = action.DryRunServer
-		u.DisableOpenAPIValidation = true
-		u.Timeout = 60 * time.Second
-		r, err := u.RunWithContext(ctx, name, ch, vals)
-		if err != nil {
-			return "", err
-		}
-		rel, err := v1(r)
-		if err != nil {
-			return "", err
-		}
-		return rel.Manifest, apps.CheckOutput(rel.Manifest)
-	})
-	if tripped() {
-		return "", fmt.Errorf("%w: it loops or repeats too much", apps.ErrRenderLimit)
+	o, err := upgradeOptions(cfg, ns, name)
+	if err != nil {
+		return "", err
 	}
-	return manifest, err
+	r, err := apps.RenderRelease(ctx, ch, vals, o)
+	return r.Manifest, err
 }

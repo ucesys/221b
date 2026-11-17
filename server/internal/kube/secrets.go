@@ -424,6 +424,8 @@ func MaskValues(v any, path string, masked *[]string) any {
 type masker struct {
 	paths  []string
 	values []string
+	// refs are names that look like credentials but only name one, kept.
+	refs map[string]bool
 }
 
 func (m *masker) hide(path string, value any) string {
@@ -447,7 +449,7 @@ func (m *masker) mask(v any, path string) any {
 				p = path + "." + k
 			}
 			switch {
-			case credentialKey(k):
+			case credentialKey(k) && !m.refs[k]:
 				out[k] = m.maskAll(val, p)
 			case k == "value" && credentialKey(name):
 				out[k] = m.maskAll(val, strings.TrimPrefix(path+"."+name, "."))
@@ -535,6 +537,55 @@ func MaskNotes(notes string, config, defaults map[string]any, manifest string) s
 		}
 		out = strings.ReplaceAll(out, v, MaskedValue)
 		out = strings.ReplaceAll(out, base64.StdEncoding.EncodeToString([]byte(v)), MaskedValue)
+	}
+	return out
+}
+
+// objectRefs are the fields of Kubernetes objects whose names look like
+// credentials but which only refer to a Secret or a token by name.
+var objectRefs = map[string]bool{"secretName": true, "secretKeyRef": true, "secretRef": true, "imagePullSecrets": true,
+	"secrets": true, "serviceAccountToken": true, "automountServiceAccountToken": true}
+
+// MaskObjects masks the objects of a rendered manifest, Secrets left out
+// (they are hidden whole elsewhere), as a release's values and notes are
+// masked: every value under a credential-looking name, the value of a
+// {name, value} pair named like one, a string that looks like a credential
+// by itself, and wherever it occurs, also in base64, any value masked so
+// or held by one of the manifest's Secrets (X-01). The objects are
+// returned as copies.
+func MaskObjects(objs []map[string]any, manifest string) []map[string]any {
+	m := &masker{refs: objectRefs}
+	out := make([]map[string]any, len(objs))
+	for i, o := range objs {
+		out[i], _ = m.mask(o, "").(map[string]any)
+	}
+	known := append(m.values, manifestSecrets(manifest)...)
+	sort.Slice(known, func(i, j int) bool { return len(known[i]) > len(known[j]) })
+	var hide func(v any) any
+	hide = func(v any) any {
+		switch x := v.(type) {
+		case map[string]any:
+			for k, val := range x {
+				x[k] = hide(val)
+			}
+		case []any:
+			for i, val := range x {
+				x[i] = hide(val)
+			}
+		case string:
+			for _, k := range known {
+				if len(k) < shortCredential {
+					continue
+				}
+				x = strings.ReplaceAll(x, k, MaskedValue)
+				x = strings.ReplaceAll(x, base64.StdEncoding.EncodeToString([]byte(k)), MaskedValue)
+			}
+			return x
+		}
+		return v
+	}
+	for _, o := range out {
+		hide(o)
 	}
 	return out
 }

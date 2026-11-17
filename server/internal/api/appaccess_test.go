@@ -230,3 +230,17 @@ func TestAnApplicationIsSeenInReachOrThroughTheCreatorsAccess(t *testing.T) {
 		t.Fatalf("the other record answered %d", r2.StatusCode)
 	}
 }
+
+// The source's side of a diff and the source's refs use the saved token
+// and values: a person who may list Secrets in the namespace, and not
+// create them, does not manage the application there and is refused.
+func TestTheSourceSideOfADiffIsForThoseWhoManageTheApplication(t *testing.T) {
+	srv, c, _, _ := appsSetup(t, map[string]bool{"create secrets/team-b": true})
+	base := srv.URL + "/api/v1/apps/team-b/pay"
+	for _, path := range []string{"/diff?to=source", "/diff?from=source&to=1", "/refs"} {
+		resp, body := send(t, c, http.MethodGet, base+path, "")
+		if resp.StatusCode != http.StatusForbidden || !strings.Contains(body, "does not let you manage applications in team-b") || strings.Contains(body, "git.invalid") {
+			t.Errorf("%s: %s %s", path, resp.Status, body)
+		}
+	}
+}

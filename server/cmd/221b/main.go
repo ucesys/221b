@@ -49,6 +49,11 @@ import (
 )
 
 func main() {
+	// The console starts itself again to render one chart (apps/child.go);
+	// it is not a command for people, so help does not list it.
+	if len(os.Args) > 1 && os.Args[1] == apps.RenderChartCommand {
+		os.Exit(apps.RenderChartMain(os.Stdin, os.Stdout))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "hash-password" {
 		if err := hashPassword(); err != nil {
 			fmt.Fprintln(os.Stderr, "221b:", err)

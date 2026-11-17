@@ -26,7 +26,8 @@ Out, for now:
 | Who deploys | Watson, as the person: `helm install\|upgrade\|uninstall … --git --path --ref [--tag] --app`; the card pins the commit and the values, and the run deploys those or refuses | The dry run, the card, the two-person rule, the audit log and the output are the ones every change has (ADR-66, ADR-68) |
 | What the console keeps | A record per application in a Secret of its namespace, beside the connections | Survives restarts and replicas; the release itself stays Helm's |
 | Drift | Each object of the manifest read as the person and compared with what the manifest sets; kept two minutes | Catches changes by hand without caching anything, and without showing values |
-| Comparing | Manifests rendered on the console (`helm template`-style) and diffed object by object | No cluster call for a comparison; the same render serves the card's impact |
+| Comparing | Manifests rendered on the console (`helm template`-style, `lookup` finds nothing; an upgrade takes the release's next revision and the cluster's version and APIs) and diffed object by object, every object masked as release values are and a Secret's values shown as sizes | No Secret read for a comparison; the same render serves the card's impact |
+| Rendering | Every render of a chart before approval (the card's impact, a dry run, the diff, the source check on save, the check before a deploy) runs in a child process, the console's binary started again as `221b render-chart`: 512 MiB of address space over its start, 60 s of CPU, killed after 60 s, four at a time, 32 MB of output, and the loop budget as an early stop | A chart's templates are untrusted code; a render past the limits ends with "its templates used more memory or time than allowed" and the console goes on |
 | Seeing a Secret's value | Only with `secrets.reveal`, one key at a time, as the person, audited | X-01 stays the default; the operator decides (ADR-69) |
 
 ## What exists today
@@ -69,14 +70,14 @@ No value is needed for the applications: they need Watson (`localCluster.mode: w
 | `POST apps/{ns}/{name}/upgrade` | Submits `helm upgrade`, moving the ref first when given |
 | `DELETE apps/{ns}/{name}` | Submits `helm uninstall`; `?record=1` forgets the source only |
 | `GET apps/{ns}/{name}/drift` | Compares the cluster with the manifest, as the person (`?refresh=1` asks again) |
-| `GET apps/{ns}/{name}/refs` | The repository's refs, the newer tags, whether the branch moved |
+| `GET apps/{ns}/{name}/refs` | The repository's refs, the newer tags, whether the branch moved, with the saved token |
 | `GET apps/{ns}/{name}/inspect` | The charts and values files in the repository at its ref, with the saved token |
 | `GET apps/{ns}/{name}/revisions` | The release's revisions |
 | `GET apps/{ns}/{name}/diff?from=N&to=M` or `?to=source[&ref=&refKind=]` | A unified diff |
 | `GET apps/{ns}/{name}/images?revision=N` | The images a revision runs, with `checks`: by image, whether a newer one is published (HA-22) |
 | `GET helm/newer-images` | The releases the person may see with a newer image, by `namespace/name`; `enabled` false when Settings turned the check off, `pending` the images still being asked about (HA-22) |
 
-Every `apps/…` route is served by the leader replica, where Watson runs. What changes a record, and `inspect`, needs the role and Kubernetes' leave in the namespace, asked before the record is read (HA-02).
+Every `apps/…` route is served by the leader replica, where Watson runs. What changes a record, and what uses its token or values (`inspect`, `refs`, a diff with the source on either side), needs the role and Kubernetes' leave in the namespace (list and create Secrets), asked before the record is read (HA-02).
 
 ## Open questions
 

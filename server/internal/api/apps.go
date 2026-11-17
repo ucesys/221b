@@ -984,8 +984,9 @@ func (s *Server) getAppRefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
-	_, cl, ok := s.lookup(w, r)
-	if !ok || !appNames(w, ns, name) || !s.mayList(w, r, cl, "secrets", ns) {
+	// The refs are read with the saved token: those who manage the
+	// application there use it.
+	if !appNames(w, ns, name) || !s.mayManageApp(w, r, ns) {
 		return
 	}
 	rec, token, err := s.opts.Apps.Get(r.Context(), c.ID, ns, name)
@@ -1218,6 +1219,11 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	ns, name := r.PathValue("namespace"), r.PathValue("name")
 	q := r.URL.Query()
+	// The source is fetched with the saved token and rendered with the
+	// saved values: those who manage the application there use them.
+	if (q.Get("from") == "source" || q.Get("to") == "source") && !s.mayManageApp(w, r, ns) {
+		return
+	}
 	// The record and its token are read once, when a side is the source.
 	var rec *apps.Record
 	var token string
@@ -1275,9 +1281,8 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, http.StatusBadGateway, err.Error())
 			return "", "", false
 		} else {
-			// Without a server dry run (no right to upgrade, or no release
-			// yet), the chart renders on the console: lookups and the
-			// cluster's capabilities are not the real ones.
+			// Without the release (none yet, or not readable), the chart
+			// renders as an install.
 			version := ""
 			if _, client, ok := s.opts.Clusters.Lookup(c.ID); ok && client != nil {
 				version = client.Info().Version
@@ -1287,7 +1292,7 @@ func (s *Server) getAppDiff(w http.ResponseWriter, r *http.Request) {
 				jsonError(w, http.StatusBadGateway, err2.Error())
 				return "", "", false
 			}
-			return rendered.Manifest, label + ", rendered on the console: " + strings.TrimPrefix(err.Error(), "Error: "), true
+			return rendered.Manifest, label + ", rendered as an install: " + strings.TrimPrefix(err.Error(), "Error: "), true
 		}
 	}
 	fromManifest, fromLabel, ok := side("from", "fromRef", "fromRefKind")

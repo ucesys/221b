@@ -1,28 +1,24 @@
 package apps
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"math"
 	"sync/atomic"
 	"text/template"
-	"time"
 
 	"github.com/Masterminds/sprig/v3"
 	chart "helm.sh/helm/v4/pkg/chart/v2"
 )
 
-// A chart's templates are untrusted code that runs inside the console. Go's
-// templates cannot be stopped from outside once they run, so what a render
-// may do is bounded around them: a render runs on its own goroutine under
-// a timeout and takes one of a few slots until it really ends, the
-// functions that generate loops and text spend a budget, and what comes out
+// A chart's templates are untrusted code. Go's templates cannot be stopped
+// from outside once they run, so a render runs in a process of its own
+// (child.go), under ceilings on its memory and CPU time, killed at
+// renderTimeout, in one of a few slots; the functions that generate loops
+// and text spend a budget, an early and friendlier stop; and what comes out
 // is measured. Helm itself bounds include's recursion.
 
 const (
-	// renderTimeout is how long a caller waits for one render.
-	renderTimeout = 60 * time.Second
 	// maxRenderOutput bounds what one render may produce.
 	maxRenderOutput = 32 << 20
 	// renderBudget bounds what until, untilStep, seq and repeat may
@@ -30,50 +26,16 @@ const (
 	// largest template, the most text one round can write out without
 	// another loop.
 	renderBudget = 256 << 20
+	// renderMemory is how much address space a render's process may take
+	// beyond what it holds once started; the Go runtime is asked to stay
+	// within half of it.
+	renderMemory = 512 << 20
+	// renderCPUSeconds is the CPU time a render's process may use.
+	renderCPUSeconds = 60
 )
 
 // ErrRenderLimit says a chart went past what a render may do.
 var ErrRenderLimit = errors.New("the chart is too much for the console to render")
-
-// renderSlots is how many renders run at once; a render that outlives its
-// timeout keeps its slot until it ends.
-var renderSlots = make(chan struct{}, 4)
-
-// Bounded runs a render on its own goroutine and waits for it for
-// renderTimeout at most. A render past that is left to end by itself, as
-// nothing can stop a template: so only what may be abandoned runs here, a
-// dry run and not a deploy.
-func Bounded[T any](ctx context.Context, render func(context.Context) (T, error)) (T, error) {
-	var zero T
-	ctx, cancel := context.WithTimeout(ctx, renderTimeout)
-	defer cancel()
-	select {
-	case renderSlots <- struct{}{}:
-	case <-ctx.Done():
-		return zero, fmt.Errorf("%w: other charts are still rendering, try again later", ErrRenderLimit)
-	}
-	type result struct {
-		v   T
-		err error
-	}
-	done := make(chan result, 1)
-	go func() {
-		defer func() { <-renderSlots }()
-		defer func() {
-			if r := recover(); r != nil {
-				done <- result{zero, fmt.Errorf("rendering the chart: %v", r)}
-			}
-		}()
-		v, err := render(ctx)
-		done <- result{v, err}
-	}()
-	select {
-	case r := <-done:
-		return r.v, r.err
-	case <-ctx.Done():
-		return zero, fmt.Errorf("%w: it did not finish rendering in time", ErrRenderLimit)
-	}
-}
 
 // CheckOutput refuses what a render produced when it is too large.
 func CheckOutput(out string) error {
