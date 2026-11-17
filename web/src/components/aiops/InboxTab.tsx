@@ -312,7 +312,6 @@ export function InboxTab({ route, access, onToast, alerts, clusterName }: { rout
           key={openId}
           id={openId}
           run={inbox.knowledge?.runs.find((r) => r.id === openId)}
-          conflict={inbox.knowledge?.conflicts.find((c) => c.id === openId)}
           request={inbox.knowledge?.requests.find((r) => r.id === openId)}
           loaded={inbox.loaded}
           onClose={close}

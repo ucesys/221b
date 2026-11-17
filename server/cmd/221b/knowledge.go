@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"slices"
 	"sort"
 	"strings"
@@ -18,7 +17,6 @@ import (
 	"github.com/ucesys/221b/server/internal/automation"
 	"github.com/ucesys/221b/server/internal/clusters"
 	"github.com/ucesys/221b/server/internal/config"
-	"github.com/ucesys/221b/server/internal/confluence"
 	"github.com/ucesys/221b/server/internal/fixes"
 	"github.com/ucesys/221b/server/internal/fleets"
 	"github.com/ucesys/221b/server/internal/issues"
@@ -33,8 +31,8 @@ import (
 	"github.com/ucesys/221b/server/internal/sherlock"
 )
 
-// Mycroft's knowledge (Phase 12, ADR-94 to ADR-98): its sources, drafts
-// and the Confluence publisher in the ConfigMap <release>-knowledge, its
+// Mycroft's knowledge (Phase 12, ADR-94 to ADR-98): its sources and
+// drafts in the ConfigMap <release>-knowledge, its
 // credentials in the Secret <release>-knowledge, and the wiki's local copy
 // in the chart's emptyDir.
 
@@ -43,12 +41,11 @@ type knowledgeOptions struct {
 	leads    func() bool
 	model    knowledge.Completer
 	console  knowledge.Console
-	issues   *issues.Service
 	proposer knowledge.Proposer
 	log      *slog.Logger
 }
 
-// openKnowledge builds the knowledge service and its publisher. It
+// openKnowledge builds the knowledge service. It
 // returns the ConfigMaps too, the knowledge's and the temporary wiki
 // store's, for the metrics of their size.
 func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config, o knowledgeOptions) (*knowledge.Service, *kv.Limited, *kv.Limited, error) {
@@ -86,28 +83,16 @@ func openKnowledge(ctx context.Context, cfg config.Config, restCfg *rest.Config,
 	}
 	record := func(e audit.Event) { o.auditLog.Record(e) }
 	l := layout[objKnowledge]
-	var pub *confluence.Publisher
-	if o.issues != nil {
-		pub = confluence.NewPublisher(confluence.PublisherOptions{
-			Backend: backend, Limit: l[knowledge.PublisherKey].Bytes, Secrets: secrets, Issues: confluence.IssueSource(o.issues),
-			Hidden:     func(ctx context.Context) []string { return hiddenNames(ctx, o.console) },
-			ConsoleURL: cfg.ConsoleURL, HTTP: &http.Client{Timeout: time.Minute}, Logger: o.log.With("component", "confluence"),
-		})
-		o.issues.OnChange(pub.OnIssue)
-	}
 	svc := knowledge.New(knowledge.Options{
-		Backend: backend, Secrets: secrets, Dir: cfg.KnowledgeDir, Model: o.model, Console: o.console, Publisher: pub, Proposer: o.proposer,
+		Backend: backend, Secrets: secrets, Dir: cfg.KnowledgeDir, Model: o.model, Console: o.console, Proposer: o.proposer,
 		Limits: knowledge.Limits{SettingsBytes: l[knowledge.SettingsKey].Bytes, DraftsBytes: l[knowledge.DraftsKey].Bytes, StatusBytes: l[knowledge.StatusKey].Bytes},
-		Leads:  o.leads, Audit: record, RefreshGit: cfg.KnowledgeRefreshGit, RefreshS3: cfg.KnowledgeRefreshS3, ConsoleURL: cfg.ConsoleURL,
+		Leads:  o.leads, Audit: record, RefreshGit: cfg.KnowledgeRefreshGit, RefreshS3: cfg.KnowledgeRefreshS3,
 		Logger:        o.log.With("component", "knowledge"),
 		WikiConfigMap: wiki, WikiBytes: layout[objWiki][knowledge.WikiKey].Bytes,
 		// Mycroft's first import (Phase 12, GS-11): a source is read once
 		// it is added.
 		ReadNew: true,
 	})
-	if pub != nil {
-		pub.SetWiki(svc)
-	}
 	return svc, stored, wikiStored, nil
 }
 
@@ -118,26 +103,6 @@ type mycroftModel struct{ *sherlock.Service }
 func (m mycroftModel) CompleteMeasured(ctx context.Context, agent string, who audit.Who, cluster, label, system, text string) (knowledge.Completion, error) {
 	c, err := m.Service.CompleteMeasured(ctx, agent, who, cluster, label, system, text)
 	return knowledge.Completion{Text: c.Text, Model: c.Model, In: c.In, Out: c.Out, CostUSD: c.CostUSD, MaxTokens: c.MaxTokens, Cut: c.Cut}, err
-}
-
-// hiddenNames are what the console knows by name that never reaches
-// Confluence: its nodes and hosts, and their addresses.
-func hiddenNames(ctx context.Context, c knowledge.Console) []string {
-	if c == nil {
-		return nil
-	}
-	hosts, err := c.Hosts(ctx)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, h := range hosts {
-		out = append(out, h.Name)
-		if h.Address != "" {
-			out = append(out, h.Address)
-		}
-	}
-	return out
 }
 
 // knowledgeHits is ask_knowledge's lookup, for Sherlock's agents.
@@ -771,10 +736,9 @@ func (w *wiring) wireKnowledge(ctx context.Context) error {
 	mycroftProposals := &knowledgeProposer{}
 	var knowledgeStored *kv.Limited
 	// Knowledge (Phase 12, ADR-94 to ADR-98): Mycroft's sources, the
-	// wiki's local copy and index on every replica, and the Confluence
-	// publisher, which writes on the leader.
+	// wiki's local copy and index on every replica.
 	svc, l, wl, err := openKnowledge(ctx, cfg, w.restCfg, knowledgeOptions{auditLog: w.auditLog, leads: w.elector.IsLeader, model: mycroftModel{w.sherlockSvc},
-		console: consoleKnowledge{manager: w.manager, hosts: w.hosts, settings: w.shared, apps: w.appStore, auto: w.autoStore}, issues: w.issueSvc, proposer: mycroftProposals, log: log})
+		console: consoleKnowledge{manager: w.manager, hosts: w.hosts, settings: w.shared, apps: w.appStore, auto: w.autoStore}, proposer: mycroftProposals, log: log})
 	if err != nil {
 		return err
 	}

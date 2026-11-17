@@ -83,12 +83,6 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("GET drafts/{id}", h.getDraft)
 	route("POST drafts/{id}/approve", h.postApprove)
 	route("POST drafts/{id}/reject", h.postReject)
-	route("GET confluence", h.getConfluence)
-	route("PUT confluence", h.putConfluence)
-	route("POST confluence/test", h.postConfluenceTest)
-	route("POST confluence/check", h.postConfluenceCheck)
-	route("GET confluence/conflicts", h.getConflicts)
-	route("POST confluence/conflicts/{id}", h.postConflict)
 	// The webhook: a token, not a session.
 	h.mux.HandleFunc("POST "+Prefix+"hook/{target}", h.postHook)
 	return h
@@ -115,7 +109,7 @@ func fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrDenied):
 		writeError(w, http.StatusForbidden, err.Error())
-	case errors.Is(err, ErrInvalid), errors.Is(err, confluence.ErrInvalid):
+	case errors.Is(err, ErrInvalid):
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrNotLeader):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
@@ -570,11 +564,6 @@ func (h *handler) getDraftsCount(w http.ResponseWriter, r *http.Request, c Calle
 		fail(w, err)
 		return
 	}
-	if p := h.s.o.Publisher; p != nil && c.Reviewer {
-		if list, err := p.Conflicts(r.Context()); err == nil {
-			n += len(list)
-		}
-	}
 	writeJSON(w, http.StatusOK, map[string]int{"count": n})
 }
 
@@ -613,152 +602,4 @@ func (h *handler) postReject(w http.ResponseWriter, r *http.Request, c Caller) {
 		return
 	}
 	writeJSON(w, http.StatusOK, run)
-}
-
-// The Confluence publisher (Settings › Issues › Confluence).
-
-func (h *handler) publisher(w http.ResponseWriter) *confluence.Publisher {
-	p := h.s.o.Publisher
-	if p == nil {
-		writeError(w, http.StatusNotFound, "the Confluence publisher is not offered here")
-	}
-	return p
-}
-
-func (h *handler) superAdmin(w http.ResponseWriter, c Caller) bool {
-	if !c.SuperAdmin {
-		fail(w, wrapf(ErrDenied, "only a SuperAdmin sets up publishing to Confluence"))
-		return false
-	}
-	return true
-}
-
-func (h *handler) getConfluence(w http.ResponseWriter, r *http.Request, c Caller) {
-	p := h.publisher(w)
-	if p == nil || !h.superAdmin(w, c) {
-		return
-	}
-	v, err := p.View(r.Context())
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, v)
-}
-
-type confluenceInput struct {
-	Settings confluence.Settings `json:"settings"`
-	Token    *string             `json:"token,omitempty"`
-}
-
-func (h *handler) putConfluence(w http.ResponseWriter, r *http.Request, c Caller) {
-	p := h.publisher(w)
-	if p == nil || !h.superAdmin(w, c) {
-		return
-	}
-	if err := h.s.leads(); err != nil {
-		fail(w, err)
-		return
-	}
-	var in confluenceInput
-	if !decode(w, r, maxBody, &in) {
-		return
-	}
-	detail, err := p.Save(r.Context(), in.Settings, in.Token, c.label())
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	h.s.audit(audit.Event{Action: ActionPublish, Who: c.who(), Outcome: audit.OutcomeOK, From: c.From, Detail: detail})
-	h.getConfluence(w, r, c)
-}
-
-func (h *handler) postConfluenceTest(w http.ResponseWriter, r *http.Request, c Caller) {
-	p := h.publisher(w)
-	if p == nil || !h.superAdmin(w, c) {
-		return
-	}
-	var in confluenceInput
-	if !decode(w, r, maxBody, &in) {
-		return
-	}
-	res, err := p.Test(r.Context(), in.Settings, in.Token)
-	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "spaces": res})
-}
-
-func (h *handler) postConfluenceCheck(w http.ResponseWriter, r *http.Request, c Caller) {
-	p := h.publisher(w)
-	if p == nil || !h.superAdmin(w, c) {
-		return
-	}
-	if err := h.s.leads(); err != nil {
-		fail(w, err)
-		return
-	}
-	h.s.audit(audit.Event{Action: ActionPublish, Who: c.who(), Outcome: audit.OutcomeOK, From: c.From, Detail: "the Confluence pages' check started by hand"})
-	go func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Minute)
-		defer cancel()
-		if _, err := p.Check(ctx); err != nil {
-			h.s.o.Logger.Warn("the Confluence pages' check failed", "err", err)
-		}
-	}()
-	writeJSON(w, http.StatusAccepted, map[string]bool{"started": true})
-}
-
-func (h *handler) getConflicts(w http.ResponseWriter, r *http.Request, c Caller) {
-	p := h.publisher(w)
-	if p == nil {
-		return
-	}
-	if !c.Reviewer {
-		fail(w, wrapf(ErrDenied, "only an Admin or a SuperAdmin decides the Confluence pages' edits"))
-		return
-	}
-	list, err := p.Conflicts(r.Context())
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	type row struct {
-		confluence.Conflict
-		Mine bool `json:"mine"`
-	}
-	out := make([]row, 0, len(list))
-	for _, x := range list {
-		out = append(out, row{Conflict: x, Mine: x.Owner != "" && x.Owner == c.ID})
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"conflicts": out})
-}
-
-func (h *handler) postConflict(w http.ResponseWriter, r *http.Request, c Caller) {
-	p := h.publisher(w)
-	if p == nil {
-		return
-	}
-	if !c.Reviewer {
-		fail(w, wrapf(ErrDenied, "only an Admin or a SuperAdmin decides the Confluence pages' edits"))
-		return
-	}
-	if err := h.s.leads(); err != nil {
-		fail(w, err)
-		return
-	}
-	var in struct {
-		Action string `json:"action"`
-	}
-	if !decode(w, r, maxBody, &in) {
-		return
-	}
-	detail, err := p.Resolve(r.Context(), r.PathValue("id"), in.Action, confluence.Person{ID: c.ID, Name: c.label(), Email: c.Email})
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	h.s.audit(audit.Event{Action: ActionPublish, Who: c.who(), Target: r.PathValue("id"), Outcome: audit.OutcomeOK, From: c.From, Detail: detail})
-	writeJSON(w, http.StatusOK, map[string]bool{"resolved": true})
 }

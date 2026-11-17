@@ -777,10 +777,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A port forward's CLI carries the forward's token, not a cookie
-	// (TB-20), and so does a system filing an issue (IS-24), and a git host
-	// or bucket calling the knowledge webhook (Phase 12); their
-	// handlers check it.
-	if s.opts.Auth != nil && !IsTunnelPath(r.URL.Path) && !issues.IntakePath(r.URL.Path) && !knowledge.HookPath(r.URL.Path) {
+	// (TB-20), and so does a git host or bucket calling the knowledge
+	// webhook (Phase 12); their handlers check it.
+	if s.opts.Auth != nil && !IsTunnelPath(r.URL.Path) && !knowledge.HookPath(r.URL.Path) {
 		if r = s.opts.Auth.Gate(w, r); r == nil {
 			s.observeOnly("gate", http.StatusUnauthorized)
 			return

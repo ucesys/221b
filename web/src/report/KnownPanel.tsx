@@ -1,6 +1,5 @@
 // "Known problems right now" (IS-27): the open known issues and planned
-// maintenance, each to follow instead of reporting, and the status page
-// when the settings name one.
+// maintenance, each to follow instead of reporting.
 import { useState } from 'react'
 import { fmtTs } from '../lib/format'
 import { knownPill, type Known } from './api'
@@ -8,7 +7,6 @@ import { Pill } from './Pill'
 
 export interface KnownPanelProps {
   known: Known[] | null
-  statusPage: string
   onFollow: (id: string, on: boolean) => Promise<void>
 }
 
@@ -17,7 +15,7 @@ export function windowText(w: { start: string; end: string }): string {
   return `${fmtTs(w.start)} – ${fmtTs(w.end)}`
 }
 
-export function KnownPanel({ known, statusPage, onFollow }: KnownPanelProps) {
+export function KnownPanel({ known, onFollow }: KnownPanelProps) {
   const [busy, setBusy] = useState('')
   const follow = async (k: Known) => {
     setBusy(k.id)
@@ -57,11 +55,6 @@ export function KnownPanel({ known, statusPage, onFollow }: KnownPanelProps) {
             </li>
           ))}
         </ul>
-      )}
-      {statusPage && (
-        <a className="rp-small" href={statusPage} target="_blank" rel="noreferrer">
-          All known problems, on Confluence
-        </a>
       )}
     </aside>
   )

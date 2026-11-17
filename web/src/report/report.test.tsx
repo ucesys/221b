@@ -51,7 +51,7 @@ const report = (n: number, over: Partial<api.Report> = {}): api.Report => ({
   ...over,
 })
 
-const me: api.IssueMe = { person: { id: 'ada', name: 'Ada Byron' }, report: true, operator: false, admin: false, company: 'Example IT', statusPage: 'https://wiki.example.com/status', reportURL: '/report' }
+const me: api.IssueMe = { person: { id: 'ada', name: 'Ada Byron' }, report: true, operator: false, admin: false, company: 'Example IT', reportURL: '/report' }
 
 afterEach(() => {
   cleanup()
@@ -147,19 +147,19 @@ describe('your reports', () => {
 })
 
 describe('known problems right now', () => {
-  it('follows a known issue and links the status page', async () => {
+  it('follows a known issue, with no status page link (0.12.1)', async () => {
     const onFollow = vi.fn().mockResolvedValue(undefined)
     const planned: api.Known = { ...known, id: 'KI-2', title: 'Database maintenance', kind: 'planned', status: 'identified', window: { start: '2026-11-08T02:00:00Z', end: '2026-11-08T04:00:00Z' }, link: undefined }
-    render(<KnownPanel known={[known, planned]} statusPage="https://wiki.example.com/status" onFollow={onFollow} />)
+    render(<KnownPanel known={[known, planned]} onFollow={onFollow} />)
     const list = screen.getByTestId('known-list')
     expect(list.textContent).toContain('Planned: Database maintenance')
     fireEvent.click(within(list).getAllByRole('button', { name: 'Follow' })[0]!)
     await waitFor(() => expect(onFollow).toHaveBeenCalledWith('KI-1', true))
-    expect(screen.getByRole('link', { name: 'All known problems, on Confluence' }).getAttribute('href')).toBe('https://wiki.example.com/status')
+    expect(screen.queryByRole('link', { name: /All known problems/ })).toBeNull()
   })
 
-  it('leaves the status page out when the settings name none', () => {
-    render(<KnownPanel known={[]} statusPage="" onFollow={vi.fn()} />)
+  it('says when there is none', () => {
+    render(<KnownPanel known={[]} onFollow={vi.fn()} />)
     expect(screen.queryByRole('link', { name: /Confluence/ })).toBeNull()
     expect(screen.getByText('None just now.')).toBeTruthy()
   })

@@ -15,10 +15,10 @@ type Caller struct {
 	ID    string
 	Name  string
 	Email string
-	// SuperAdmin changes the sources, the store and the publisher.
+	// SuperAdmin changes the sources and the store.
 	SuperAdmin bool
-	// Reviewer approves or rejects Mycroft's drafts and decides the
-	// publisher's conflicts: an Admin or a SuperAdmin.
+	// Reviewer approves or rejects Mycroft's drafts: an Admin or a
+	// SuperAdmin.
 	Reviewer bool
 	// Reader browses the approved pages: anyone signed in to the console.
 	Reader bool

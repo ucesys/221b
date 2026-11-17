@@ -13,15 +13,11 @@ import (
 )
 
 // The HTTP API (IS-23, docs/issues-api.yaml): versioned under
-// /api/issues/v1/, JSON in and out. The mount says who a request is from;
-// the intake paths take an API token instead and nothing else (IS-24).
+// /api/issues/v1/, JSON in and out. The mount says who a request is from.
+// The token intake (IS-24) was removed in 0.12.1.
 
 // Prefix is where the API is mounted.
 const Prefix = "/api/issues/v1/"
-
-// IntakePath says whether a path is the token intake, which a session
-// does not reach: whoever mounts the API lets it through without one.
-func IntakePath(p string) bool { return strings.HasPrefix(p, Prefix+"intake/") }
 
 // maxBody bounds a request: a report and its fields.
 const maxBody = 64 << 10
@@ -71,13 +67,7 @@ func (s *Service) Handler(caller func(*http.Request) (Caller, bool)) http.Handle
 	route("POST match", h.match)
 	route("GET settings", h.getSettings)
 	route("PUT settings", h.putSettings)
-	route("GET tokens", h.listTokens)
-	route("POST tokens", h.createToken)
-	route("DELETE tokens/{id}", h.revokeToken)
 	route("GET updates", h.updates)
-	// The intake (IS-24): a token, never a session.
-	h.mux.HandleFunc("POST "+Prefix+"intake/reports", h.intake(h.submit, ScopeCreate))
-	h.mux.HandleFunc("GET "+Prefix+"intake/reports/{n}", h.intake(h.getReport, ScopeRead))
 	h.mux.HandleFunc(Prefix, func(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "no such path in the issue API")
 	})
@@ -88,31 +78,6 @@ type handler struct {
 	s      *Service
 	caller func(*http.Request) (Caller, bool)
 	mux    *http.ServeMux
-}
-
-// intake checks the request's token and its scope.
-func (h *handler) intake(fn func(w http.ResponseWriter, r *http.Request, c Caller), scope string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		bearer, ok := strings.CutPrefix(auth, "Bearer ")
-		if !ok {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="221B issues"`)
-			fail(w, http.StatusUnauthorized, "send an API token as Authorization: Bearer <token>")
-			return
-		}
-		c, err := h.s.Authenticate(r.Context(), strings.TrimSpace(bearer))
-		if err != nil {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="221B issues", error="invalid_token"`)
-			failErr(w, err)
-			return
-		}
-		if !contains(c.Scopes, scope) {
-			fail(w, http.StatusForbidden, "the token does not hold the scope "+scope)
-			return
-		}
-		c.From = from(r)
-		fn(w, r, c)
-	}
 }
 
 func from(r *http.Request) string {
@@ -197,13 +162,13 @@ func number(w http.ResponseWriter, r *http.Request, name string) (int, bool) {
 // meView is who the page is for and what it may do, with the settings
 // the page shows.
 type meView struct {
-	Person     Person `json:"person"`
-	Report     bool   `json:"report"`
-	Operator   bool   `json:"operator"`
-	Admin      bool   `json:"admin"`
-	Company    string `json:"company"`
-	StatusPage string `json:"statusPage"`
-	ReportURL  string `json:"reportURL"`
+	Person   Person `json:"person"`
+	Report   bool   `json:"report"`
+	Operator bool   `json:"operator"`
+	Admin    bool   `json:"admin"`
+	Company  string `json:"company"`
+	// ReportURL is the chart's issues.reportURL, /report when empty.
+	ReportURL string `json:"reportURL"`
 	// Clusters are the connected clusters a report may be about, by id
 	// and display name only (CF-64).
 	Clusters []Cluster `json:"clusters"`
@@ -215,11 +180,7 @@ func (h *handler) me(w http.ResponseWriter, r *http.Request, c Caller) {
 		failErr(w, err)
 		return
 	}
-	reportURL := set.ReportURL
-	if reportURL == "" {
-		reportURL = "/report"
-	}
-	answer(w, http.StatusOK, meView{Person: c.Person, Report: c.Report, Operator: c.Operator, Admin: c.Admin, Company: set.Company, StatusPage: set.StatusPage, ReportURL: reportURL, Clusters: h.s.Clusters()})
+	answer(w, http.StatusOK, meView{Person: c.Person, Report: c.Report, Operator: c.Operator, Admin: c.Admin, Company: set.Company, ReportURL: h.s.ReportURL(), Clusters: h.s.Clusters()})
 }
 
 // views turns reports into what the caller sees.
@@ -608,36 +569,6 @@ func (h *handler) putSettings(w http.ResponseWriter, r *http.Request, c Caller) 
 		return
 	}
 	answer(w, http.StatusOK, out)
-}
-
-func (h *handler) listTokens(w http.ResponseWriter, r *http.Request, c Caller) {
-	list, err := h.s.Tokens(r.Context(), c)
-	if err != nil {
-		failErr(w, err)
-		return
-	}
-	answer(w, http.StatusOK, map[string]any{"tokens": list})
-}
-
-func (h *handler) createToken(w http.ResponseWriter, r *http.Request, c Caller) {
-	var in TokenInput
-	if !decode(w, r, &in) {
-		return
-	}
-	t, secret, err := h.s.CreateToken(r.Context(), c, in)
-	if err != nil {
-		failErr(w, err)
-		return
-	}
-	answer(w, http.StatusCreated, map[string]any{"token": t, "secret": secret, "note": "This is the only time the token is shown: keep it now."})
-}
-
-func (h *handler) revokeToken(w http.ResponseWriter, r *http.Request, c Caller) {
-	if err := h.s.RevokeToken(r.Context(), c, r.PathValue("id")); err != nil {
-		failErr(w, err)
-		return
-	}
-	answer(w, http.StatusOK, map[string]bool{"revoked": true})
 }
 
 func (h *handler) updates(w http.ResponseWriter, r *http.Request, c Caller) {

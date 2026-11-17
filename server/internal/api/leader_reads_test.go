@@ -61,7 +61,6 @@ func TestEveryRouteIsForwardedUnlessLocal(t *testing.T) {
 		// and sent there from any replica (Phase 12.1).
 		"/api/v1/ai/agents/sherlock/tests/run":  true,
 		"/api/v1/ai/agents/sherlock/tests/stop": true,
-		"/api/issues/v1/intake/reports":         true,
 		"/signin":                               false,
 		"/signin/callback":                      false,
 		"/setup":                                false,

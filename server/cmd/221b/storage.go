@@ -50,8 +50,9 @@ const (
 	// --- Jobs (Phase 12) ---
 	// objRuns holds the jobs, their runs and findings (JB-14, ADR-91).
 	objRuns = "runs"
-	// objKnowledge is Mycroft's knowledge and the Confluence publisher's
-	// (Phase 12, ADR-94 to ADR-98).
+	// objKnowledge is Mycroft's knowledge (Phase 12, ADR-94 to ADR-98).
+	// A key knowledge-publisher.json left by the Confluence publisher
+	// before 0.12.1 is no longer read.
 	objKnowledge = "knowledge"
 	// --- Case work (Phase 12, CW-13) ---
 	// objCasework holds Settings › Cases, the checks seen, the clean
@@ -137,10 +138,9 @@ var layout = map[string]map[string]kv.Limit{
 	},
 	// --- Knowledge (Phase 12) ---
 	objKnowledge: {
-		knowledge.SettingsKey:  {Bytes: knowledge.DefaultSettingsBytes, Hint: "remove sources no longer read"},
-		knowledge.DraftsKey:    {Bytes: knowledge.DefaultDraftsBytes, Hint: "approve or reject the wiki's waiting changes"},
-		knowledge.StatusKey:    {Bytes: knowledge.DefaultStatusBytes},
-		knowledge.PublisherKey: {Bytes: knowledge.DefaultPublisherBytes, Hint: "decide the Confluence pages' waiting edits"},
+		knowledge.SettingsKey: {Bytes: knowledge.DefaultSettingsBytes, Hint: "remove sources no longer read"},
+		knowledge.DraftsKey:   {Bytes: knowledge.DefaultDraftsBytes, Hint: "approve or reject the wiki's waiting changes"},
+		knowledge.StatusKey:   {Bytes: knowledge.DefaultStatusBytes},
 	},
 	// --- The temporary wiki store (CF-57) ---
 	objWiki: {

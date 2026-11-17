@@ -70,7 +70,8 @@ func openIssues(ctx context.Context, cfg config.Config, restCfg *rest.Config, ma
 			}
 			return out
 		},
-		Logger: log.With("component", "issues"),
+		ReportURL: cfg.IssuesReportURL,
+		Logger:    log.With("component", "issues"),
 	})
 	return svc, stored, nil
 }

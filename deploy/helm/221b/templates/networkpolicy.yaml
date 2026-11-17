@@ -137,8 +137,8 @@ spec:
     {{- $knowledge := .Values.knowledge | default dict }}
     {{- with $knowledge.egressCIDRs }}
     # Mycroft's sources and the wiki's store (Phase 12, ADR-95): Confluence,
-    # git hosts and the bucket, at the addresses knowledge.egressCIDRs
-    # lists, on knowledge.egressPorts.
+    # git hosts, the bucket and live sources' pages, at the addresses
+    # knowledge.egressCIDRs lists, on knowledge.egressPorts.
     - ports:
         {{- range ($knowledge.egressPorts | default (list 443)) }}
         - port: {{ . }}

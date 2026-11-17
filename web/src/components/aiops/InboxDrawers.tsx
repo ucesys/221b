@@ -4,12 +4,12 @@
 // in ProposalDrawer and a known-issue draft in KnownDrawer, their owners'.
 import { useEffect, useState } from 'react'
 import type { ApprovalRow } from '../../api/automation'
-import { fetchPageRequests, type ConfluenceConflict, type DraftRun, type PageRequest } from '../../api/knowledge'
+import { fetchPageRequests, type DraftRun, type PageRequest } from '../../api/knowledge'
 import { fmtTs } from '../../lib/format'
 import { Drawer } from '../Drawer'
 import { DecidedVersion, linkOf, RequestActions, WaitingRunFacts } from './InboxApprovals'
 import { APPROVAL_KIND, APPROVAL_STATE } from './inboxRows'
-import { ConflictCard, DraftRunCard } from './KnowledgeDraft'
+import { DraftRunCard } from './KnowledgeDraft'
 import { Tag } from './parts'
 import { PageRequestCard } from './WikiPageActions'
 
@@ -116,11 +116,10 @@ export function ApprovalDrawer({ id, row, loaded, onClose, onDecided }: { id: st
   )
 }
 
-/** A knowledge draft (KN-08): a run of Mycroft's wiki changes with every page's diff, a Confluence page someone edited, or a request to retire a page or make it active again (KN-24). */
+/** A knowledge draft (KN-08): a run of Mycroft's wiki changes with every page's diff, or a request to retire a page or make it active again (KN-24). */
 export function KnowledgeDrawer({
   id,
   run,
-  conflict,
   request: waiting,
   loaded,
   onClose,
@@ -129,7 +128,6 @@ export function KnowledgeDrawer({
 }: {
   id: string
   run?: DraftRun
-  conflict?: ConfluenceConflict
   request?: PageRequest
   loaded: boolean
   onClose: () => void
@@ -141,7 +139,7 @@ export function KnowledgeDrawer({
   // with who decided it.
   const [decided, setDecided] = useState<PageRequest>()
   useEffect(() => {
-    if (waiting || run || conflict || !loaded) return
+    if (waiting || run || !loaded) return
     let live = true
     fetchPageRequests(true).then(
       (r) => live && setDecided((r.requests ?? []).find((x) => x.id === id)),
@@ -150,9 +148,9 @@ export function KnowledgeDrawer({
     return () => {
       live = false
     }
-  }, [id, waiting, run, conflict, loaded])
+  }, [id, waiting, run, loaded])
   const request = waiting ?? (decided?.id === id ? decided : undefined)
-  if (request && !run && !conflict) {
+  if (request && !run) {
     return (
       <Drawer
         label="Wiki page request"
@@ -167,19 +165,18 @@ export function KnowledgeDrawer({
       </Drawer>
     )
   }
-  if (!run && !conflict) return <Missing label="Knowledge draft" what={id} loaded={loaded} onClose={onClose} testId="knowledge-drawer" />
+  if (!run) return <Missing label="Knowledge draft" what={id} loaded={loaded} onClose={onClose} testId="knowledge-drawer" />
   return (
     <Drawer
       label="Knowledge draft"
-      kicker={run ? `Knowledge draft · ${run.store} · started by ${run.startedBy ?? run.by}, ${fmtTs(run.started)}` : 'Knowledge draft · Confluence'}
-      title={run ? `Wiki changes ${run.id}` : conflict!.title}
+      kicker={`Knowledge draft · ${run.store} · started by ${run.startedBy ?? run.by}, ${fmtTs(run.started)}`}
+      title={`Wiki changes ${run.id}`}
       onClose={onClose}
       width={960}
       copy={false}
       testId="knowledge-drawer"
     >
-      {run && <DraftRunCard run={run} onChanged={onChanged} onToast={onToast} open />}
-      {conflict && <ConflictCard c={conflict} onChanged={onChanged} onToast={onToast} />}
+      <DraftRunCard run={run} onChanged={onChanged} onToast={onToast} open />
     </Drawer>
   )
 }

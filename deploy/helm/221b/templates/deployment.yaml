@@ -152,14 +152,6 @@ spec:
               value: {{ (($knowledge.refresh | default dict).git | default "15m") | quote }}
             - name: KNOWLEDGE_REFRESH_S3
               value: {{ (($knowledge.refresh | default dict).s3 | default "5m") | quote }}
-            {{- $consoleURL := $knowledge.consoleURL | default "" }}
-            {{- if and (not $consoleURL) .Values.ingress.enabled .Values.ingress.host }}
-            {{- $consoleURL = printf "%s://%s" (ternary "https" "http" (and .Values.ingress.tls .Values.ingress.tls.enabled | default false)) .Values.ingress.host }}
-            {{- end }}
-            {{- with $consoleURL }}
-            - name: CONSOLE_URL
-              value: {{ . | quote }}
-            {{- end }}
             # Automation (Phase 11 part 2): on with automation.enabled, and
             # runs only where toolbox.ssh.enabled is on too. A values file
             # from before the setting has no automation block: on.
@@ -187,6 +179,12 @@ spec:
               value: {{ join "," ($issues.reportRoles | default (list "superAdmin" "superViewer" "admin" "viewer")) | quote }}
             - name: ISSUES_OPERATOR_ROLES
               value: {{ join "," ($issues.operatorRoles | default (list "superAdmin" "admin")) | quote }}
+            # The report page's address other pages link to (issues.reportURL);
+            # empty is /report on this console.
+            {{- with $issues.reportURL }}
+            - name: ISSUES_REPORT_URL
+              value: {{ . | quote }}
+            {{- end }}
             # The agents' proposed changes (Phase 12): durable Watson cards in
             # <release>-proposals (CF-104), approved by cases.approverRoles.
             - name: PROPOSALS_CONFIGMAP

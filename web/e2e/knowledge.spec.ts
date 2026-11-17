@@ -2,8 +2,8 @@
 // lists the sources and keeps the wiki in the temporary ConfigMap store
 // until another is chosen (CF-57), saying it is temporary;
 // a source's token goes in and never comes back from any endpoint; the
-// webhook refuses a call without its token; and Settings › Issues has the
-// Confluence publisher's part. AIOps › Mycroft (Phase 12, wave 5, MY-01
+// webhook refuses a call without its token; and Settings › Issues has no
+// Confluence publisher or API tokens any more (0.12.1). AIOps › Mycroft (Phase 12, wave 5, MY-01
 // to MY-10): its sub-tabs and addresses, the Wiki in the default store
 // (never "Loading…" for good), and, since MY-11, adding in Settings ›
 // Knowledge's Added in Mycroft card with a store (the simulator's fake S3
@@ -58,10 +58,11 @@ test('Settings › Knowledge takes a source whose token never comes back, and ke
   await page.getByTestId('knowledge-source-remove').click()
   await expect(row).toHaveCount(0)
 
-  // The Confluence publisher's part of Settings › Issues.
+  // Settings › Issues: no Confluence publisher and no API tokens since 0.12.1.
   await page.locator('[data-testid=settings-section][data-section=issues]').click()
-  await expect(page.getByTestId('confluence-settings')).toContainText('Publish the known issues to Confluence')
-  await expect(page.getByTestId('confluence-token-state')).toContainText('No write token saved.')
+  await expect(page.getByTestId('issue-settings')).toContainText('issues.reportURL')
+  await expect(page.getByTestId('confluence-settings')).toHaveCount(0)
+  await expect(page.getByTestId('issue-tokens')).toHaveCount(0)
 })
 
 // --- Mycroft tab (Phase 12, wave 5) ---

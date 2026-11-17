@@ -218,12 +218,9 @@ func (s *Service) refreshEvery(ctx context.Context) time.Duration {
 	return s.o.RefreshGit
 }
 
-// Run keeps the local copy current on every replica, and on the leader
-// runs the publisher's outbox and nightly check. It returns when ctx ends.
+// Run keeps the local copy current on every replica. It returns when ctx
+// ends.
 func (s *Service) Run(ctx context.Context) {
-	if s.o.Publisher != nil {
-		go s.o.Publisher.Run(ctx, s.o.Leads)
-	}
 	for {
 		wait := s.refreshEvery(ctx)
 		select {

@@ -280,50 +280,6 @@ export interface DraftRun {
   mine?: boolean
 }
 
-export interface ConfluenceSettings {
-  on: boolean
-  baseURL: string
-  flavor: 'cloud' | 'datacenter'
-  email?: string
-  caPEM?: string
-  space: string
-  root?: string
-  wiki?: boolean
-  wikiSpace?: string
-  wikiRoot?: string
-  checkAt?: string
-  savedBy?: string
-  savedAt?: string
-}
-
-export interface ConfluenceView {
-  settings: ConfluenceSettings
-  token: boolean
-  outbox: number
-  failing: number
-  lastError?: string
-  lastWrite?: string
-  lastCheck?: string
-  nextCheck?: string
-  checkReport?: string[]
-  conflicts: number
-  pages: number
-  wikiPages: number
-}
-
-export interface ConfluenceConflict {
-  id: string
-  kind: 'known' | 'wiki' | 'status' | 'tree'
-  issue?: string
-  title: string
-  url?: string
-  their: string
-  at: string
-  owner?: string
-  ownerName?: string
-  mine?: boolean
-}
-
 const base = '/api/v1/knowledge/'
 const enc = encodeURIComponent
 
@@ -367,12 +323,6 @@ export const fetchDrafts = (all = false) => call<{ runs: DraftRun[] }>(base + 'd
 export const fetchDraftsCount = () => call<{ count: number }>(base + 'drafts/count', {}, true)
 export const approveDraft = (id: string) => call<DraftRun>(base + 'drafts/' + enc(id) + '/approve', post({}))
 export const rejectDraft = (id: string, comment: string) => call<DraftRun>(base + 'drafts/' + enc(id) + '/reject', post({ comment }))
-export const fetchConfluence = () => call<ConfluenceView>(base + 'confluence')
-export const saveConfluence = (settings: ConfluenceSettings, token?: string) => call<ConfluenceView>(base + 'confluence', { method: 'PUT', body: JSON.stringify({ settings, token }) })
-export const testConfluence = (settings: ConfluenceSettings, token?: string) => call<{ ok: boolean; spaces?: string[]; error?: string }>(base + 'confluence/test', post({ settings, token }))
-export const checkConfluence = () => call<{ started: boolean }>(base + 'confluence/check', post({}))
-export const fetchConflicts = () => call<{ conflicts: ConfluenceConflict[] }>(base + 'confluence/conflicts')
-export const resolveConflict = (id: string, action: 'keep' | 'replace') => call<{ resolved: boolean }>(base + 'confluence/conflicts/' + enc(id), post({ action }))
 
 // --- Mycroft tab (Phase 12, wave 5, MY-01 to MY-10) ---
 
