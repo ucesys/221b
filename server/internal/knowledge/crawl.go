@@ -2,6 +2,7 @@ package knowledge
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"html"
@@ -48,6 +49,8 @@ type crawlResult struct {
 	pages   []crawled
 	skipped []Skipped
 	more    bool
+	// excluded counts the pages not fetched as excluded (KN-45).
+	excluded int
 }
 
 // errRefusedAddress is an address the crawl does not reach.
@@ -68,9 +71,10 @@ func guardedDial(network, address string, _ syscall.RawConn) error {
 }
 
 // crawlClient is the crawl's HTTP client: the service's own in tests,
-// otherwise one whose dialer refuses the addresses above. Redirects are
-// followed on the same site only, five at most.
-func (s *Service) crawlClient(site *url.URL) *http.Client {
+// otherwise one whose dialer refuses the addresses above and trusts the
+// web site's private CA, if it has one (KN-44). Redirects are followed on
+// the same site only, five at most.
+func (s *Service) crawlClient(site *url.URL, x *Source) *http.Client {
 	var base http.RoundTripper
 	if s.o.CrawlHTTP != nil {
 		base = s.o.CrawlHTTP.Transport
@@ -83,6 +87,9 @@ func (s *Service) crawlClient(site *url.URL) *http.Client {
 		// sees the address connected to.
 		tr.Proxy = nil
 		tr.DialContext = (&net.Dialer{Timeout: 10 * time.Second, Control: guardedDial}).DialContext
+		if x != nil && strings.TrimSpace(x.CAPEM) != "" {
+			tr.TLSClientConfig = &tls.Config{RootCAs: s.rootsFor(*x), MinVersion: tls.VersionTLS12}
+		}
 		base = tr
 	}
 	return &http.Client{
@@ -125,15 +132,35 @@ func crawlStart(raw string) (*url.URL, error) {
 	return u, nil
 }
 
+// crawlOpts are what a web site source adds to a crawl (KN-44, KN-45):
+// its sign-in, sent to the site only, and the pages it excludes, which
+// are never fetched, so the links found only on them are never followed.
+type crawlOpts struct {
+	source *Source
+	auth   func(*http.Request)
+	// skip says a page is excluded, by its path and query.
+	skip func(path string) bool
+	// maxBytes bounds the crawl's text; 0 is MaxCrawlBytes.
+	maxBytes int
+}
+
 // crawl reads a site from an address.
 func (s *Service) crawl(ctx context.Context, raw string, depth, limit int) (crawlResult, error) {
+	return s.crawlWith(ctx, raw, depth, limit, crawlOpts{})
+}
+
+func (s *Service) crawlWith(ctx context.Context, raw string, depth, limit int, o crawlOpts) (crawlResult, error) {
 	start, err := crawlStart(raw)
 	if err != nil {
 		return crawlResult{}, err
 	}
+	maxBytes := o.maxBytes
+	if maxBytes <= 0 {
+		maxBytes = MaxCrawlBytes
+	}
 	res := crawlResult{start: start.String()}
-	hc := s.crawlClient(start)
-	rules, err := readRobots(ctx, hc, start)
+	hc := s.crawlClient(start, o.source)
+	rules, err := readRobots(ctx, hc, start, o.auth)
 	if err != nil {
 		return res, err
 	}
@@ -158,20 +185,25 @@ func (s *Service) crawl(ctx context.Context, raw string, depth, limit int) (craw
 		q := queue[0]
 		queue = queue[1:]
 		addr := q.u.String()
+		if o.skip != nil && o.skip(q.u.EscapedPath()+queryOf(q.u)) {
+			// Excluded: not fetched, and its links not followed (KN-45).
+			res.excluded++
+			continue
+		}
 		if !rules.allowed(q.u.EscapedPath() + queryOf(q.u)) {
 			res.skipped = append(res.skipped, Skipped{URL: addr, Why: "robots.txt asks crawlers not to read it"})
 			continue
 		}
-		page, links, err := fetchPage(ctx, hc, q.u, min(MaxCrawlPage, MaxCrawlBytes-total))
+		page, links, err := fetchPage(ctx, hc, q.u, min(MaxCrawlPage, maxBytes-total), o.auth)
 		if err != nil {
-			res.skipped = append(res.skipped, Skipped{URL: addr, Why: clip(err.Error(), 200)})
+			res.skipped = append(res.skipped, Skipped{URL: addr, Why: clip(err.Error(), 200), failed: true})
 			if errors.Is(err, errRefusedAddress) && q.depth == 0 {
 				return res, invalid("%s: %v", start.Host, errRefusedAddress)
 			}
 			continue
 		}
-		// A redirect may end on a page read already.
-		if read[page.url] {
+		// A redirect may end on a page read already, or on one excluded.
+		if read[page.url] || (o.skip != nil && o.skip(page.path)) {
 			continue
 		}
 		read[page.url], seen[page.url] = true, true
@@ -188,12 +220,12 @@ func (s *Service) crawl(ctx context.Context, raw string, depth, limit int) (craw
 			if !sameSite(start, l) {
 				continue
 			}
-			if k := l.String(); !seen[k] && len(seen) < 20*MaxCrawlPages {
+			if k := l.String(); !seen[k] && len(seen) < 20*max(limit, MaxCrawlPages) {
 				seen[k] = true
 				queue = append(queue, queued{l, q.depth + 1})
 			}
 		}
-		if total >= MaxCrawlBytes {
+		if total >= maxBytes {
 			res.more = len(queue) > 0
 			break
 		}
@@ -229,7 +261,7 @@ func htmlText(doc string) string {
 }
 
 // fetchPage reads one page: its text, title and the links it holds.
-func fetchPage(ctx context.Context, hc *http.Client, u *url.URL, limit int) (crawled, []*url.URL, error) {
+func fetchPage(ctx context.Context, hc *http.Client, u *url.URL, limit int, auth func(*http.Request)) (crawled, []*url.URL, error) {
 	page := crawled{url: u.String(), host: u.Host, path: u.EscapedPath() + queryOf(u)}
 	if limit <= 0 {
 		return page, nil, errors.New("the crawl read as much as it holds")
@@ -240,6 +272,9 @@ func fetchPage(ctx context.Context, hc *http.Client, u *url.URL, limit int) (cra
 	}
 	req.Header.Set("User-Agent", CrawlAgent+"/1.0 (+the 221B console's knowledge)")
 	req.Header.Set("Accept", "text/html, text/plain, text/markdown, application/pdf;q=0.8, */*;q=0.1")
+	if auth != nil {
+		auth(req)
+	}
 	resp, err := hc.Do(req)
 	if err != nil {
 		var ue *url.Error
@@ -249,6 +284,9 @@ func fetchPage(ctx context.Context, hc *http.Client, u *url.URL, limit int) (cra
 		return page, nil, err
 	}
 	defer resp.Body.Close()
+	if (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) && auth != nil {
+		return page, nil, fmt.Errorf("it refused the credential (%s)", resp.Status)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return page, nil, fmt.Errorf("it answered %s", resp.Status)
 	}
@@ -396,13 +434,16 @@ func (r robotRules) allowed(p string) bool {
 // readRobots reads the site's robots.txt. None (404 and the like) allows
 // everything; one that cannot be read (5xx, no answer) stops the crawl,
 // as RFC 9309 asks.
-func readRobots(ctx context.Context, hc *http.Client, site *url.URL) (robotRules, error) {
+func readRobots(ctx context.Context, hc *http.Client, site *url.URL, auth func(*http.Request)) (robotRules, error) {
 	u := &url.URL{Scheme: site.Scheme, Host: site.Host, Path: "/robots.txt"}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", CrawlAgent+"/1.0 (+the 221B console's knowledge)")
+	if auth != nil {
+		auth(req)
+	}
 	resp, err := hc.Do(req)
 	if err != nil {
 		var ue *url.Error

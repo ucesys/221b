@@ -374,7 +374,7 @@ func (s *Server) setupKnowledge(ctx context.Context, _ setupRecord) (bool, strin
 	for _, x := range set.Sources {
 		switch {
 		case x.Off:
-		case x.Kind == knowledge.SourceConfluence || x.Kind == knowledge.SourceGit || x.Kind == knowledge.SourceLive:
+		case x.Kind == knowledge.SourceConfluence || x.Kind == knowledge.SourceGit || x.Kind == knowledge.SourceS3 || x.Kind == knowledge.SourceWeb || x.Kind == knowledge.SourceLive:
 			sources++
 		case x.Kind == knowledge.SourceUpload:
 			docs += len(k.Documents(x.ID))

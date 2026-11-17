@@ -97,6 +97,10 @@ const (
 	ActionRetire        = "knowledge.retire"
 	ActionActivate      = "knowledge.activate"
 	ActionRetireReject  = "knowledge.retire.reject"
+	// ActionExclude and ActionInclude are an item of a source excluded,
+	// and included again (0.12.1, KN-45).
+	ActionExclude = "knowledge.exclude"
+	ActionInclude = "knowledge.include"
 )
 
 // Errors the API turns into answers.
@@ -279,6 +283,9 @@ type Service struct {
 	jobs     atomic.Pointer[jobs.Service]
 	migrated atomic.Bool
 	kindsMu  sync.Mutex
+	// webMigrated says the web pages added in Mycroft were made web
+	// sites (KN-46).
+	webMigrated atomic.Bool
 
 	// fixes are the console's fixes, from Options or SetFixes (KN-33).
 	fixes atomic.Pointer[Fixes]

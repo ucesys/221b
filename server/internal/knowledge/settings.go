@@ -23,6 +23,9 @@ const (
 	SourceConsole    = "console"
 	// SourceS3 is a bucket of documents (Phase 12, KN-25).
 	SourceS3 = "s3"
+	// SourceWeb is a web site, crawled from a start address (0.12.1,
+	// KN-44, websource.go).
+	SourceWeb = "web"
 )
 
 // ConsoleSourceID is the console's own source, there from the start.
@@ -72,6 +75,19 @@ type Source struct {
 	// and the token in the Secret as the password or API token).
 	Addresses []LiveAddress `json:"addresses,omitempty"`
 	Auth      string        `json:"auth,omitempty"`
+	// A web site (0.12.1, KN-44): its start address is URL, and Depth and
+	// Pages how many links away and how many pages a read goes; it signs
+	// in as a live source does (Auth, Username, the token in the Secret).
+	Depth int `json:"depth,omitempty"`
+	Pages int `json:"pages,omitempty"`
+	// Excluded are the items of a web site, Confluence space, repository
+	// or bucket that are never read (0.12.1, KN-45, exclude.go): set from
+	// AIOps › Mycroft › Sources, kept when the source is edited.
+	Excluded []Exclusion `json:"excluded,omitempty"`
+	// MigratedFrom are the web pages of Added in Mycroft this web site was
+	// made from at the upgrade (KN-46): their excerpts stay until its first
+	// read reads them again.
+	MigratedFrom []string `json:"migratedFrom,omitempty"`
 	// CAPEM is a private CA for the source's TLS.
 	CAPEM   string    `json:"caPEM,omitempty"`
 	Added   time.Time `json:"added,omitzero"`
@@ -131,6 +147,8 @@ type Settings struct {
 	// StaleDays is how long a page's sources may go unseen before it is
 	// marked stale (default 30).
 	StaleDays int `json:"staleDays,omitempty"`
+	// Migrated are the one-time migrations done (KN-46).
+	Migrated []string `json:"migrated,omitempty"`
 }
 
 // DefaultStaleDays is when a page is marked stale.
@@ -245,9 +263,11 @@ func (x Source) Validate() error {
 		}
 	case SourceLive:
 		return x.validateLive()
+	case SourceWeb:
+		return x.validateWeb()
 	case SourceUpload, SourceConsole, SourceFixes:
 	default:
-		return invalid("a source is confluence, git, s3, live, upload or console")
+		return invalid("a source is confluence, git, s3, web, live, upload or console")
 	}
 	return nil
 }
@@ -383,7 +403,24 @@ func (x Source) normalized() Source {
 			x.Username = ""
 		}
 	} else {
-		x.Addresses, x.Auth = nil, ""
+		x.Addresses = nil
+		if x.Kind != SourceWeb {
+			x.Auth = ""
+		}
+	}
+	if x.Kind == SourceWeb {
+		x.Username = strings.TrimSpace(x.Username)
+		if x.Auth != LiveAuthBasic {
+			x.Username = ""
+		}
+		if x.Pages == 0 {
+			x.Pages = DefaultCrawlPages
+		}
+	} else {
+		x.Depth, x.Pages, x.MigratedFrom = 0, 0, nil
+	}
+	if !excludable(x.Kind) {
+		x.Excluded = nil
 	}
 	if x.Kind == SourceS3 {
 		x.Bucket, x.Region, x.Prefix = strings.TrimSpace(x.Bucket), strings.TrimSpace(x.Region), strings.TrimSpace(x.Prefix)
@@ -439,6 +476,8 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 		}
 		if create {
 			x.Added, x.AddedBy = s.o.Now().UTC(), c.label()
+			// Exclusions are made in AIOps › Mycroft › Sources only.
+			x.Excluded, x.MigratedFrom = nil, nil
 			set.Sources = append(set.Sources, x)
 		} else {
 			old := set.Sources[i]
@@ -446,6 +485,8 @@ func (s *Service) SaveSourceWith(ctx context.Context, c Caller, x Source, ch Cre
 				return invalid("a source keeps its kind; add a new one instead")
 			}
 			x.Added, x.AddedBy = old.Added, old.AddedBy
+			// The dialog does not hold the exclusions: they stay as they are.
+			x.Excluded, x.MigratedFrom = old.Excluded, old.MigratedFrom
 			same := old
 			same.Name = x.Name
 			renamedOnly = reflect.DeepEqual(same, x) && ch.none()
