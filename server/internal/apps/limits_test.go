@@ -215,33 +215,85 @@ func TestARenderLargerThanTheLimitIsRefused(t *testing.T) {
 	}
 }
 
-func TestARenderThatDoesNotEndIsLeftBehindAndHoldsItsSlot(t *testing.T) {
-	stuck := make(chan struct{})
-	run := func(context.Context) (string, error) {
-		<-stuck
-		return "", nil
+func TestARenderPastItsMemoryIsRefusedAndTheConsoleGoesOn(t *testing.T) {
+	doubling := `{{ $s := "a" }}{{ range until 40 }}{{ $s = printf "%s%s" $s $s }}{{ end }}# {{ len $s }}`
+	_, err := apps.Render(context.Background(), templateChart(doubling), nil, "x", "default", "")
+	if !errors.Is(err, apps.ErrRenderLimit) || !strings.Contains(err.Error(), "more memory or time than allowed") {
+		t.Fatalf("%v", err)
+	}
+	if r, err := apps.Render(context.Background(), templateChart("# {{ .Release.Name }}"), nil, "after", "default", ""); err != nil || !strings.Contains(r.Manifest, "# after") {
+		t.Fatalf("a render after: %q %v", r.Manifest, err)
+	}
+}
+
+func TestARenderThatDoesNotEndIsStoppedAndGivesBackItsSlot(t *testing.T) {
+	defer apps.SetRenderTimeout(2 * time.Second)()
+	endless := templateChart(`{{ range 2000000000 }}{{ range 2000000000 }}{{ end }}{{ end }}`)
+	errs := make(chan error, 4)
+	start := time.Now()
+	for range 4 {
+		go func() {
+			_, err := apps.Render(context.Background(), endless, nil, "x", "default", "")
+			errs <- err
+		}()
 	}
 	for range 4 {
-		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		defer cancel()
-		if _, err := apps.Bounded(ctx, run); !errors.Is(err, apps.ErrRenderLimit) || !strings.Contains(err.Error(), "in time") {
+		if err := <-errs; !errors.Is(err, apps.ErrRenderLimit) || !strings.Contains(err.Error(), "in time") {
 			t.Fatalf("%v", err)
 		}
 	}
-	short, stop := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer stop()
-	if _, err := apps.Bounded(short, run); !errors.Is(err, apps.ErrRenderLimit) || !strings.Contains(err.Error(), "still rendering") {
-		t.Fatalf("with every slot held: %v", err)
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("the renders were stopped after %s", d)
 	}
-	close(stuck)
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		v, err := apps.Bounded(context.Background(), func(context.Context) (string, error) { return "done", nil })
-		if err == nil && v == "done" {
-			return
+	// Every slot is free again: a render takes one at once.
+	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	if r, err := apps.Render(ctx, templateChart("# {{ .Release.Name }}"), nil, "after", "default", ""); err != nil || !strings.Contains(r.Manifest, "# after") {
+		t.Fatalf("a render after: %q %v", r.Manifest, err)
+	}
+}
+
+func TestARenderInItsOwnProcessIsTheRenderOfBefore(t *testing.T) {
+	sub := &chart.Chart{Metadata: &chart.Metadata{APIVersion: "v2", Name: "sub", Version: "0.1.0"},
+		Values:    map[string]any{"port": int64(8080)},
+		Templates: []*common.File{{Name: "templates/svc.yaml", Data: []byte("apiVersion: v1\nkind: Service\nmetadata:\n  name: {{ .Release.Name }}-sub\nspec:\n  ports:\n  - port: {{ .Values.port }}\n")}}}
+	top := &chart.Chart{Metadata: &chart.Metadata{APIVersion: "v2", Name: "top", Version: "1.0.0", Dependencies: []*chart.Dependency{{Name: "sub", Version: "0.1.0"}}},
+		Values: map[string]any{"replicas": float64(1), "list": []any{"a", map[string]any{"b": true}}},
+		Templates: []*common.File{
+			{Name: "templates/cm.yaml", Data: []byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\ndata:\n  big: {{ .Values.big | quote }}\n  replicas: {{ .Values.replicas | quote }}\n  list: {{ toJson .Values.list | quote }}\n  upgrade: {{ .Release.IsUpgrade | quote }}\n  revision: {{ .Release.Revision | quote }}\n  kube: {{ .Capabilities.KubeVersion.Version | quote }}\n  file: {{ .Files.Get \"f.txt\" | quote }}\n")},
+			{Name: "templates/NOTES.txt", Data: []byte("installed {{ .Release.Name }}")},
+		},
+		Files: []*common.File{{Name: "f.txt", Data: []byte("from a file")}}}
+	top.SetDependencies(sub)
+	vals := map[string]any{"big": int64(12345678901), "replicas": int64(3)}
+	for _, o := range []apps.ReleaseOptions{
+		{Name: "r", Namespace: "ns", KubeVersion: "v1.31.2"},
+		{Name: "r", Namespace: "ns", Upgrade: true, Revision: 7, Previous: map[string]any{"replicas": int64(2)}},
+	} {
+		here, err := apps.RenderHere(context.Background(), top, vals, o)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the slots came back: %v", err)
+		there, err := apps.RenderRelease(context.Background(), top, vals, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if here != there {
+			t.Fatalf("in this process:\n%s\nin its own:\n%s", here.Manifest, there.Manifest)
+		}
+		for _, want := range []string{"big: \"12345678901\"", "replicas: \"3\"", "port: 8080", "file: \"from a file\"", `list: "[\"a\",{\"b\":true}]"`} {
+			if !strings.Contains(there.Manifest, want) {
+				t.Errorf("%s is not in\n%s", want, there.Manifest)
+			}
+		}
+		if o.Upgrade && !strings.Contains(there.Manifest, `upgrade: "true"`) || o.Upgrade && !strings.Contains(there.Manifest, `revision: "7"`) {
+			t.Errorf("an upgrade:\n%s", there.Manifest)
+		}
+		if !o.Upgrade && !strings.Contains(there.Manifest, `kube: "v1.31.2"`) {
+			t.Errorf("the cluster's version:\n%s", there.Manifest)
+		}
+		if there.Notes != "installed r" {
+			t.Errorf("notes %q", there.Notes)
 		}
 	}
 }

@@ -2,11 +2,14 @@ package apps
 
 import (
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
 	"github.com/pmezard/go-difflib/difflib"
 	"sigs.k8s.io/yaml"
+
+	"github.com/ucesys/221b/server/internal/kube"
 )
 
 // Diff compares two manifests, object by object (HA-17).
@@ -67,40 +70,63 @@ func Compare(from, to, fromLabel, toLabel string) Diff {
 }
 
 // objects splits a manifest into its objects, keyed "Kind name" (with the
-// namespace when one is set), each trimmed of trailing space.
+// namespace when one is set), each trimmed of trailing space. A Secret's
+// values are hidden, and every other object is masked as release values
+// are (kube.MaskObjects), so a diff shows no credential whatever kind
+// holds it.
 func objects(manifest string) map[string]string {
 	out := map[string]string{}
+	var keys, docs []string
+	var objs []map[string]any
 	for _, doc := range splitDocs(manifest) {
-		var o struct {
-			Kind     string `json:"kind"`
-			Metadata struct {
-				Name      string `json:"name"`
-				Namespace string `json:"namespace"`
-			} `json:"metadata"`
-		}
-		if yaml.Unmarshal([]byte(doc), &o) != nil || o.Kind == "" || o.Metadata.Name == "" {
+		var o map[string]any
+		if yaml.Unmarshal([]byte(doc), &o) != nil {
 			continue
 		}
-		k := o.Kind + " " + o.Metadata.Name
-		if o.Metadata.Namespace != "" {
-			k = o.Kind + " " + o.Metadata.Namespace + "/" + o.Metadata.Name
+		kind, _ := o["kind"].(string)
+		meta, _ := o["metadata"].(map[string]any)
+		name, _ := meta["name"].(string)
+		namespace, _ := meta["namespace"].(string)
+		if kind == "" || name == "" {
+			continue
 		}
-		if o.Kind == "Secret" {
-			doc = hideSecretValues(doc)
+		k := kind + " " + name
+		if namespace != "" {
+			k = kind + " " + namespace + "/" + name
 		}
-		// Helm writes "# Source: chart/templates/x.yaml" above each object;
-		// a renamed template is not a change.
-		lines := strings.Split(doc, "\n")
-		var kept []string
-		for _, l := range lines {
-			if strings.HasPrefix(l, "# Source:") {
-				continue
-			}
-			kept = append(kept, strings.TrimRight(l, " \t"))
+		if kind == "Secret" {
+			out[k] = tidy(hideSecretValues(doc))
+			continue
 		}
-		out[k] = strings.TrimSpace(strings.Join(kept, "\n"))
+		keys, docs, objs = append(keys, k), append(docs, doc), append(objs, o)
+	}
+	for i, o := range kube.MaskObjects(objs, manifest) {
+		// An object with nothing to mask keeps its text as rendered.
+		if reflect.DeepEqual(o, objs[i]) {
+			out[keys[i]] = tidy(docs[i])
+			continue
+		}
+		b, err := yaml.Marshal(o)
+		if err != nil {
+			out[keys[i]] = "# values hidden by 221B"
+			continue
+		}
+		out[keys[i]] = tidy(string(b))
 	}
 	return out
+}
+
+// tidy trims an object's text. Helm writes "# Source: chart/templates/x.yaml"
+// above each object; a renamed template is not a change.
+func tidy(doc string) string {
+	var kept []string
+	for _, l := range strings.Split(doc, "\n") {
+		if strings.HasPrefix(l, "# Source:") {
+			continue
+		}
+		kept = append(kept, strings.TrimRight(l, " \t"))
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 // hideSecretValues replaces a Secret's values in a manifest document with
