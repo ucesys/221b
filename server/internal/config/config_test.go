@@ -50,6 +50,17 @@ func TestAllowedHosts(t *testing.T) {
 	}
 }
 
+func TestAppsAllowedHosts(t *testing.T) {
+	t.Setenv("APPS_ALLOWED_HOSTS", " git.example.com, *.corp.example:8443 ,,")
+	c, err := Parse(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.AppsAllowedHosts) != 2 || c.AppsAllowedHosts[0] != "git.example.com" || c.AppsAllowedHosts[1] != "*.corp.example:8443" {
+		t.Fatalf("hosts %q", c.AppsAllowedHosts)
+	}
+}
+
 func TestValidation(t *testing.T) {
 	for _, args := range [][]string{
 		{"-cluster-name", ""},

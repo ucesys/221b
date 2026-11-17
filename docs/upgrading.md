@@ -54,6 +54,14 @@ The earlier release reads what the newer one saved: it ignores fields it does no
 
 The objects that are not the chart's (connections, accounts, Sherlock's key, sessions, and from 0.12.0 the AIOps cases, the backup key and the credentials of AI providers, knowledge sources and Helm repositories) survive `helm uninstall` too; [README.md](../README.md#1-deploy) says how to remove them.
 
+## 0.13.0 (2026-11-17)
+
+- **New chart values, both optional:** `apps.allowedHosts` (empty: no limit) limits the hosts git sources, Helm repositories and OCI registries are fetched from; the chart now also sets `SELF_RELEASE`, so the console knows the release that runs it.
+- **Behind an Ingress or another proxy**, list it under `auth.trustedProxies`; until then the log warns and Administration says so (nothing else changes).
+- **Charts render in a child process** of the console's own binary, with its own memory and CPU limits; nothing to set.
+- **Helm in Watson from git or a repository** (dry runs included) now needs the rights of managing applications in the namespace: people who could run it before without them no longer can.
+- **LDAP sign-in keeps the console's local accounts**: with `auth.mode: ldap` the accounts created in the console sign in again, also while the directory is down.
+
 ## 0.12.0 (2026-11-11)
 
 - **Helm repositories** (wave 5): a new key in the settings ConfigMap, `helm-repositories.json` (empty until a SuperAdmin adds one in Settings › Applications), and a Secret the console creates, `<release>-helm-repositories`, with their passwords and tokens (with `connections.store: secrets`, as `<release>-backup` is). A new chart value, `helmRepositories.egressCIDRs` (empty, with `egressPorts: [443]`): listed, the network policy lets the console reach the repositories there; empty, nothing changes. Applications from git are unchanged.

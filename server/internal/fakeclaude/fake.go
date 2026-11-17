@@ -539,6 +539,10 @@ func script(question string, round int, results []string) reply {
 		last = results[0]
 	}
 	switch {
+	case strings.HasPrefix(q, "suggest the command "):
+		// An answer that hands a command on, to send to Watson.
+		cmd := strings.TrimSpace(question[len("suggest the command "):])
+		return reply{text: []string{"Run this:\n\n```sh\n" + cmd + "\n```\n"}}
 	case strings.Contains(q, "slowly"):
 		var parts []string
 		for i := 1; i <= 50; i++ {

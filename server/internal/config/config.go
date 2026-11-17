@@ -156,6 +156,10 @@ type Config struct {
 	// AllowedHosts are host names the server answers to besides localhost
 	// and IP addresses, such as its Service's DNS names.
 	AllowedHosts []string
+	// AppsAllowedHosts are the hosts applications' git repositories, Helm
+	// repositories and OCI registries are fetched from (apps.allowedHosts):
+	// host names, *.domain, either with :port. Empty allows any.
+	AppsAllowedHosts []string
 
 	// AuthMode is how people sign in (P3-01): none, oidc, local or ldap.
 	AuthMode string
@@ -285,6 +289,7 @@ func Parse(args []string) (Config, error) {
 	fs.StringVar(&c.LogLevel, "log-level", env("LOG_LEVEL", "info"), "debug, info, warn or error")
 	fs.StringVar(&c.LogFormat, "log-format", env("LOG_FORMAT", "json"), "json or text")
 	hosts := fs.String("allowed-hosts", env("ALLOWED_HOSTS", ""), "comma-separated host names to answer to, besides localhost and IP addresses")
+	appHosts := fs.String("apps-allowed-hosts", env("APPS_ALLOWED_HOSTS", ""), "comma-separated hosts to fetch charts from (git, Helm repositories, OCI registries): host names or *.domain, either with :port; empty allows any")
 	fs.StringVar(&c.AuthMode, "auth-mode", env("AUTH_MODE", "none"), "how people sign in: oidc, ldap, local (accounts kept by the console) or none (no sign-in; everyone gets -anonymous-role)")
 	fs.StringVar(&c.AnonymousRole, "anonymous-role", env("ANONYMOUS_ROLE", "viewer"), "with sign-in off, the role everyone gets: viewer or admin; SSH, Automation and Secret values stay off")
 	fs.StringVar(&c.ToolboxConfigFile, "toolbox-config", env("TOOLBOX_CONFIG_FILE", ""), "a JSON file with the toolbox values: tools, images and limits (the chart renders it)")
@@ -342,6 +347,7 @@ func Parse(args []string) (Config, error) {
 			c.AllowedHosts = append(c.AllowedHosts, h)
 		}
 	}
+	c.AppsAllowedHosts = splitList(*appHosts)
 	c.OIDCScopes = splitList(*scopes)
 	c.Admins = splitList(*admins)
 	c.AdminGroups = splitList(*adminGroups)

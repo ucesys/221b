@@ -1111,7 +1111,7 @@ func (r *Repos) signIn(ctx context.Context, challenge, scope string, repo Reposi
 			return "", errors.New("the registry's token service refused the credentials")
 		}
 		if res.StatusCode/100 != 2 {
-			return "", fmt.Errorf("the registry's token service answered %s", res.Status)
+			return "", notFetchedFor(fmt.Errorf("the registry's token service answered %s", res.Status))
 		}
 		b, err := readCapped(res.Body, maxSmall)
 		if err != nil {
@@ -1171,7 +1171,7 @@ var repoTransport http.RoundTripper
 func init() {
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	base.DialContext = (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second, Control: checkConnect}).DialContext
-	repoTransport = base
+	repoTransport = allowedTransport{base}
 }
 
 // readCapped reads a body of at most limit bytes.
@@ -1199,20 +1199,25 @@ func statusError(res *http.Response, repo Repository) error {
 	case res.StatusCode == http.StatusNotFound:
 		return errors.New("not found there (404)")
 	}
-	return fmt.Errorf("the repository answered %s", res.Status)
+	where := "the repository"
+	if res.Request != nil && res.Request.URL != nil {
+		where = res.Request.URL.Host
+	}
+	return notFetchedFor(fmt.Errorf("%s answered %s", where, res.Status))
 }
 
-// describeHTTP makes a connection's errors readable.
+// describeHTTP makes a connection's errors readable: every failure on the
+// way reads the same (ErrNotFetched), its cause in the server's log.
 func describeHTTP(err error) error {
 	switch {
 	case errors.Is(err, errHostRefused):
 		return errHostRefused
-	case errors.Is(err, context.DeadlineExceeded):
-		return errors.New("the repository did not answer in time")
-	}
-	var ue *url.Error
-	if errors.As(err, &ue) {
-		return fmt.Errorf("the repository could not be reached: %v", ue.Err)
+	case errors.Is(err, errHostNotAllowed):
+		return errHostNotAllowed
+	case errors.Is(err, ErrFetchLimit), errors.Is(err, ErrNotFetched):
+		return err
+	case onTheWay(err):
+		return notFetchedFor(err)
 	}
 	return err
 }

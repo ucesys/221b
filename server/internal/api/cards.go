@@ -483,8 +483,10 @@ func (s *Server) cardCluster(ctx context.Context, id string) (watson.Cluster, bo
 }
 
 // watsonAction is a card's kubectl or helm command, run through Watson's
-// runner: read at proposal and at approval with the console's account,
-// for the fingerprint, and run as the person who approved it last.
+// runner: its targets and impact read as the person who asked for it in a
+// chat (an agent's own card, with no one to read as, with the console's
+// account), its fingerprint with the console's account at proposal and at
+// approval, and run as the person who approved it last.
 type watsonAction struct {
 	s    *Server
 	tool string
@@ -531,9 +533,37 @@ func (a watsonAction) Describe(ctx context.Context, cluster string, x cards.Acti
 	if !ok {
 		return p, fmt.Errorf("the cluster %s is not connected", cluster)
 	}
-	ins, err := a.s.opts.Watson.Inspect(ctx, cl, line)
+	var ins watson.Inspection
+	if as, ok := a.reader(ctx); ok {
+		ins, err = a.s.opts.Watson.Inspect(ctx, cl, line, as)
+	} else {
+		// Someone else rechecks the card: only its fingerprint is compared.
+		ins, err = a.s.opts.Watson.Fingerprint(ctx, cl, line)
+	}
 	p.Targets, p.Impact, p.Fingerprint = ins.Targets, ins.Impact, ins.Fingerprint
 	return p, err
+}
+
+// reader is who a card's targets and impact are read as: nil, the
+// console's account, for an agent's own card; the person who asked for it,
+// while ctx is their request. false is anyone else's request, which reads
+// no more than the fingerprint.
+func (a watsonAction) reader(ctx context.Context) (*kube.Person, bool) {
+	req := cards.RequesterFrom(ctx)
+	if req == nil {
+		return nil, true
+	}
+	r, err := http.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
+	if err != nil {
+		return nil, false
+	}
+	if a.s.opts.Auth != nil {
+		if _, ok := auth.SessionFrom(ctx); !ok || a.s.cardPerson(r).Key != req.Key {
+			return nil, false
+		}
+	}
+	p := a.s.person(r)
+	return &p, true
 }
 
 // runner is the Watson person a card's change runs as: the approver, or

@@ -29,7 +29,7 @@ const (
 	// renderMemory is how much address space a render's process may take
 	// beyond what it holds once started; the Go runtime is asked to stay
 	// within half of it.
-	renderMemory = 512 << 20
+	renderMemory = 256 << 20
 	// renderCPUSeconds is the CPU time a render's process may use.
 	renderCPUSeconds = 60
 )

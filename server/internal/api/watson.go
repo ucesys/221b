@@ -21,6 +21,7 @@ import (
 	"github.com/ucesys/221b/server/internal/kube"
 	"github.com/ucesys/221b/server/internal/roles"
 	"github.com/ucesys/221b/server/internal/settings"
+	"github.com/ucesys/221b/server/internal/sherlock"
 	"github.com/ucesys/221b/server/internal/watson"
 )
 
@@ -491,6 +492,12 @@ func (s *Server) postWatsonCommands(w http.ResponseWriter, r *http.Request) {
 		}
 		from = cards.ChatSession(pid)
 	}
+	// From Sherlock means from an answer in the person's own conversation
+	// on this cluster: anything else is a command like any typed one.
+	fromSherlock := strings.EqualFold(from, "Sherlock")
+	if fromSherlock && !s.sherlockWrote(r, c.ID, in.Command) {
+		fromSherlock, from = false, "Typed"
+	}
 	items := s.opts.Watson.Submit(r.Context(), c, who, in.Command, from, why, in.Run)
 	if fromCase {
 		s.logCaseCommands(r, caller, caseN, items)
@@ -500,7 +507,7 @@ func (s *Server) postWatsonCommands(w http.ResponseWriter, r *http.Request) {
 	}
 	// Phase 12: a change Sherlock proposed in a chat is kept as a durable
 	// card as well (ADR-99).
-	if strings.EqualFold(from, "Sherlock") {
+	if fromSherlock {
 		s.proposeFromChat(r, c, who, items, why)
 	}
 	out := make([]watsonItem, 0, len(items))
@@ -512,6 +519,16 @@ func (s *Server) postWatsonCommands(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	w.Write(b)
+}
+
+// sherlockWrote says whether the command is in one of Sherlock's answers
+// in the person's own conversation on the cluster.
+func (s *Server) sherlockWrote(r *http.Request, cluster, command string) bool {
+	if s.opts.Sherlock == nil {
+		return false
+	}
+	sess, _ := auth.SessionFrom(r.Context())
+	return s.opts.Sherlock.Wrote(sherlock.Key{Session: sess.ID, Cluster: cluster}, command)
 }
 
 // watsonAnswer turns the service's answer into a response.

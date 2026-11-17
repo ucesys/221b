@@ -600,6 +600,18 @@ helmRepositories:
   egressCIDRs: []
   egressPorts: [443]
 
+# --- Where applications' charts are fetched from ---
+apps:
+  # The hosts the console fetches git repositories, Helm repositories and
+  # OCI registries from, for applications and Watson's helm install and
+  # upgrade. Empty (the default) allows any host but the console's own pod
+  # and node and the clouds' metadata services. Listed, a source or
+  # repository on any other host is refused when it is saved and when the
+  # console connects, redirects included. An entry is a host name
+  # (git.example.com), or *.example.com for any name under example.com;
+  # either may end in :port to allow that port only (without one, any).
+  allowedHosts: []
+
 toolbox:
   # The Toolbox (Phase 9, docs/toolbox.md): the Tools menu beside each pod
   # and node opens a shell, runs one command, forwards a port, adds a

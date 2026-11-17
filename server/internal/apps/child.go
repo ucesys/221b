@@ -42,7 +42,7 @@ const (
 var renderTimeout = 60 * time.Second
 
 // renderSlots is how many renders run at once.
-var renderSlots = make(chan struct{}, 4)
+var renderSlots = make(chan struct{}, 2)
 
 func init() {
 	gob.Register(map[string]any{})

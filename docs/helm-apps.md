@@ -27,7 +27,7 @@ Out, for now:
 | What the console keeps | A record per application in a Secret of its namespace, beside the connections | Survives restarts and replicas; the release itself stays Helm's |
 | Drift | Each object of the manifest read as the person and compared with what the manifest sets; kept two minutes | Catches changes by hand without caching anything, and without showing values |
 | Comparing | Manifests rendered on the console (`helm template`-style, `lookup` finds nothing; an upgrade takes the release's next revision and the cluster's version and APIs) and diffed object by object, every object masked as release values are and a Secret's values shown as sizes | No Secret read for a comparison; the same render serves the card's impact |
-| Rendering | Every render of a chart before approval (the card's impact, a dry run, the diff, the source check on save, the check before a deploy) runs in a child process, the console's binary started again as `221b render-chart`: 512 MiB of address space over its start, 60 s of CPU, killed after 60 s, four at a time, 32 MB of output, and the loop budget as an early stop | A chart's templates are untrusted code; a render past the limits ends with "its templates used more memory or time than allowed" and the console goes on |
+| Rendering | Every render of a chart before approval (the card's impact, a dry run, the diff, the source check on save, the check before a deploy) runs in a child process, the console's binary started again as `221b render-chart`: 256 MiB of address space over its start, 60 s of CPU, killed after 60 s, two at a time, 32 MB of output, and the loop budget as an early stop | A chart's templates are untrusted code; a render past the limits ends with "its templates used more memory or time than allowed" and the console goes on |
 | Seeing a Secret's value | Only with `secrets.reveal`, one key at a time, as the person, audited | X-01 stays the default; the operator decides (ADR-69) |
 
 ## What exists today
@@ -48,6 +48,23 @@ secrets:
 ```
 
 No value is needed for the applications: they need Watson (`localCluster.mode: write` or a connection that may change things) and the egress to the repository host over HTTPS, which `sherlock.egress` (on by default) already allows. With `sherlock.egress: false` and `outboundCIDRs` narrowed, add the repository host.
+
+```yaml
+apps:
+  # The hosts charts are fetched from: git repositories, Helm repositories
+  # and OCI registries. Empty (the default) allows any host but the
+  # console's own pod and node and the clouds' metadata services.
+  allowedHosts:
+    - git.example.com
+    - "*.charts.example.com"    # any name under charts.example.com
+    - registry.example.com:5443 # that port only
+```
+
+With `apps.allowedHosts` set, a git source, a Helm repository or an OCI registry on any other host is refused when it is saved (an application's source, Settings › Applications, a restored backup) and again when the console connects, each redirect included. An entry is a host name, or `*.domain` for any name under that domain (not the domain itself); either may end in `:port` to allow that port only.
+
+Fetching a chart takes the rights of managing applications. In Watson, `helm install` and `helm upgrade` with `--git` or a repository's chart, a dry run included, are for an Admin or SuperAdmin whom Kubernetes lets manage applications in the namespace, asked before anything is fetched.
+
+When a fetch fails on the way to the repository (the host refuses the connection or does not answer, its name does not resolve, TLS fails, or it answers an unexpected HTTP status), the person is told only that the repository could not be fetched; the cause is in the console's log (`a repository could not be fetched`). A refused token or credentials, and a repository that is not there, are said as such, so the source can be fixed.
 
 ## Where the work lands
 
