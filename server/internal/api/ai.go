@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -134,20 +136,36 @@ func (s *Server) putAILimits(w http.ResponseWriter, r *http.Request) {
 	if !s.aiAdmin(w, r) {
 		return
 	}
-	var in struct {
-		DailyUSD   float64 `json:"dailyUSD"`
-		MonthlyUSD float64 `json:"monthlyUSD"`
-	}
+	var in ai.Limits
 	if !decodeAutomation(w, r, &in) {
 		return
 	}
 	before := s.opts.AI.View(r.Context())
-	if err := s.opts.AI.SetLimits(r.Context(), in.DailyUSD, in.MonthlyUSD); err != nil {
+	if err := s.opts.AI.SetLimits(r.Context(), in); err != nil {
 		s.aiFail(w, err)
 		return
 	}
-	s.record(r, audit.ActionAISettings, "limits", fmt.Sprintf("overall limits $%.2f/$%.2f → $%.2f/$%.2f a day/month", before.DailyUSD, before.MonthlyUSD, in.DailyUSD, in.MonthlyUSD))
+	s.record(r, audit.ActionAISettings, "limits", limitsChange(before, in))
 	s.getAI(w, r)
+}
+
+// limitsChange says what a change of Settings › Limits changed, for the
+// audit log (AI-36): the total always, each provider's that changed.
+func limitsChange(before ai.Overview, in ai.Limits) string {
+	parts := []string{fmt.Sprintf("total limits $%.2f/$%.2f → $%.2f/$%.2f a day/month", before.DailyUSD, before.MonthlyUSD, in.DailyUSD, in.MonthlyUSD)}
+	ids := slices.Sorted(maps.Keys(in.Providers))
+	for _, id := range ids {
+		next, was := in.Providers[id], sherlock.Caps{}
+		for _, p := range before.Providers {
+			if p.ID == id {
+				was = p.Limit
+			}
+		}
+		if next != was {
+			parts = append(parts, fmt.Sprintf("provider %s limits $%.2f/$%.2f → $%.2f/$%.2f a day/month", id, was.DailyUSD, was.MonthlyUSD, next.DailyUSD, next.MonthlyUSD))
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 // ---------- providers ----------
@@ -258,8 +276,8 @@ func (s *Server) deleteAIProviderKey(w http.ResponseWriter, r *http.Request) {
 
 // postAIProviderTest sends a provider one short request with its model, or
 // the one given, and says how it answered: the connection test of
-// Sherlock's settings, for any provider. It counts against the overall
-// limits.
+// Sherlock's settings, for any provider. It counts against the total
+// limits and the provider's.
 func (s *Server) postAIProviderTest(w http.ResponseWriter, r *http.Request) {
 	if !s.aiAdmin(w, r) {
 		return
@@ -277,7 +295,7 @@ func (s *Server) postAIProviderTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	model := firstOf(in.Model, p.Model, sherlock.DefaultModel)
-	out, err := s.providerTest(r.Context(), s.opts.AI.Client(id), model, p)
+	out, err := s.providerTest(r.Context(), s.opts.AI.Client(id), model, p, p.ID)
 	// The result is kept: a provider that answered without a credential
 	// may then be used without one (AS-04).
 	if rerr := s.opts.AI.RecordTest(context.Background(), id, model, err); rerr != nil {
@@ -293,8 +311,9 @@ func (s *Server) postAIProviderTest(w http.ResponseWriter, r *http.Request) {
 }
 
 // providerTest sends a provider one short request and says how it
-// answered. It counts against the overall limits.
-func (s *Server) providerTest(ctx context.Context, c *sherlock.Client, model string, p ai.Provider) (map[string]any, error) {
+// answered. It counts against the total limits, and the limits of the
+// saved provider charge names ("" none).
+func (s *Server) providerTest(ctx context.Context, c *sherlock.Client, model string, p ai.Provider, charge string) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	start := time.Now()
@@ -303,7 +322,7 @@ func (s *Server) providerTest(ctx context.Context, c *sherlock.Client, model str
 	resp, err := c.Stream(ctx, req, func(sherlock.Delta) {})
 	if s.opts.Sherlock != nil {
 		price := sherlock.Settings{Model: model, PriceIn: p.PriceIn, PriceOut: p.PriceOut}.Price()
-		s.opts.Sherlock.Ledger().Add(context.Background(), price.Cost(resp.Usage), false)
+		s.opts.Sherlock.Ledger().AddFor(context.Background(), "", charge, price.Cost(resp.Usage), false)
 		_ = s.opts.Sherlock.Ledger().Save(context.Background())
 	}
 	out := map[string]any{"model": model, "ms": time.Since(start).Milliseconds(), "ok": err == nil}
@@ -367,7 +386,12 @@ func (s *Server) postAIProviderTry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	model := firstOf(in.Model, in.Provider.Model, sherlock.DefaultModel)
-	out, err := s.providerTest(r.Context(), c, model, in.Provider)
+	// The spend counts as the saved provider's it edits, if any.
+	charge := ""
+	if _, saved := s.opts.AI.ProviderOf(r.Context(), in.ID); saved && in.ID != "" {
+		charge = in.ID
+	}
+	out, err := s.providerTest(r.Context(), c, model, in.Provider, charge)
 	out["keyless"] = !withKey
 	target := "provider " + firstOf(in.ID, "(not saved)")
 	if err != nil {

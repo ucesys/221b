@@ -11,13 +11,14 @@ import { SaveBar } from './SaveBar'
 import { WatsonSettings } from './WatsonSettings'
 import { AgentsSection } from './ai/AgentsSection'
 import { KnowledgeSection } from './ai/KnowledgeSection'
+import { LimitsSection } from './ai/LimitsSection' // Limits (Phase 12.1, AI-37)
 import { ProvidersSection } from './ai/ProvidersSection'
 import { JobsSettings } from './aiops/JobsSettings'
 import { GettingStartedSection } from './GettingStarted'
 import { HelmReposSettings } from './apps/HelmReposSettings' // Helm repositories (Phase 12, wave 5)
 import { leftText, useSetup } from '../api/setup'
 
-type Section = 'start' | 'general' | 'providers' | 'agents' | 'knowledge' | 'watson' | 'apps' | 'issues' | 'jobs' | 'sla' | 'cases' | 'email'
+type Section = 'start' | 'general' | 'providers' | 'agents' | 'limits' | 'knowledge' | 'watson' | 'apps' | 'issues' | 'jobs' | 'sla' | 'cases' | 'email'
 
 interface SectionInfo {
   id: Section
@@ -40,6 +41,8 @@ const GROUPS: { label?: string; sections: SectionInfo[] }[] = [
     sections: [
       { id: 'providers', label: 'Providers', hint: 'Where models come from' },
       { id: 'agents', label: 'Agents', hint: 'Sherlock and the others: models, tools, budgets' },
+      // --- Limits (Phase 12.1, AI-37): the total, each provider's, each agent's.
+      { id: 'limits', label: 'Limits', hint: 'What the agents may spend: total, providers, agents' },
       { id: 'knowledge', label: 'Knowledge', hint: 'Mycroft’s sources and storage' },
     ],
   },
@@ -148,6 +151,7 @@ export function SettingsPanel({ route, settings, refreshedAt, onToast }: Props) 
         {section === 'general' && <General settings={settings} refreshedAt={refreshedAt} />}
         {section === 'providers' && <ProvidersSection onToast={onToast} initial={route.path[2]} />}
         {section === 'agents' && <AgentsSection onToast={onToast} initial={route.path[2]} />}
+        {section === 'limits' && <LimitsSection onToast={onToast} />}
         {section === 'knowledge' && <KnowledgeSection onToast={onToast} focus={route.path[2]} />}
         {section === 'watson' && <WatsonSettings open />}
         {section === 'apps' && <HelmReposSettings onToast={onToast} />}

@@ -883,7 +883,7 @@ func (s *Service) grade(ctx context.Context, a sherlock.Agent, answer string, po
 		Messages: []sherlock.Message{{Role: "user", Content: []sherlock.Block{{Type: "text", Text: b.String()}}}}}
 	resp, err := a.Client.Stream(ctx, req, func(sherlock.Delta) {})
 	cost := a.Price.Cost(resp.Usage)
-	s.engine.Ledger().AddFor(context.Background(), a.ID, cost, false)
+	s.engine.Ledger().AddFor(context.Background(), a.ID, a.Provider, cost, false)
 	if err != nil {
 		return nil, cost, err
 	}

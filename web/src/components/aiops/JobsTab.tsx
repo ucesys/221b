@@ -515,7 +515,7 @@ function JobPanel({ job, view, onSaved, onRemoved, onAdded, onToast }: { job: Jo
               </label>
             ))}
           </div>
-          <span className="rk-fhint">A job stops when either is spent, and says so.{costs ? ` Today it has spent ${usd(job.spentToday)}.` : ''} The agent's own caps and the overall limits in Settings › Agents hold too.</span>
+          <span className="rk-fhint">A job stops when either is spent, and says so.{costs ? ` Today it has spent ${usd(job.spentToday)}.` : ''} The agent's own caps and the total and provider limits in Settings › Limits hold too.</span>
           {draft.minPriority !== null && (
             // --- A job's lowest priority (Phase 12, wave 6c, CF-33) ---
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg2)' }} data-testid="job-min-priority-field">

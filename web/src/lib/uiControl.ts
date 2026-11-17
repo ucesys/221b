@@ -815,6 +815,7 @@ export const ADMIN_VIEW_PAGES: Record<string, AdminViewPage> = {
   general: { label: 'Settings › General', area: 'settings', access: 'super', hash: settings('') },
   providers: { label: 'Settings › Providers', area: 'settings', access: 'super', hash: settings('providers'), item: true },
   agents: { label: 'Settings › Agents', area: 'settings', access: 'super', hash: settings('agents'), item: true },
+  limits: { label: 'Settings › Limits', area: 'settings', access: 'super', hash: settings('limits') },
   knowledge: { label: 'Settings › Knowledge', area: 'settings', access: 'knowledge', hash: settings('knowledge') },
   watson: { label: 'Settings › Watson', area: 'settings', access: 'super', hash: settings('watson') },
   'notification-channels': { label: 'Settings › Watson, with its notification channels', area: 'settings', access: 'super', hash: settings('watson') },

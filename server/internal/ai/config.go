@@ -108,6 +108,10 @@ type Providers struct {
 	// DefaultRemoved says the default provider (Sherlock's of before
 	// Phase 12) was removed, once another was made the default.
 	DefaultRemoved bool `json:"defaultRemoved,omitempty"`
+	// Limits are each provider's daily and monthly limits, by its id, the
+	// default provider's too (Phase 12.1, AI-36): what every agent spends
+	// on it together. None, or 0, is no limit.
+	Limits map[string]sherlock.Caps `json:"limits,omitempty"`
 }
 
 // MaxProviders bounds the providers.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"net/http"
 	"slices"
 	"sort"
@@ -612,6 +613,9 @@ func (s *Service) resolve(snap snapshot, id, cluster string, names []string, ove
 	a := sherlock.Agent{
 		ID: id, Name: info.Name, Client: s.Client(p.ID), Model: model, Price: priceOf(model, p),
 		Caps:         sherlock.Caps{DailyUSD: set.DailyUSD, MonthlyUSD: set.MonthlyUSD},
+		Provider:     p.ID,
+		ProviderName: p.Name,
+		ProviderCaps: snap.providers.Limits[p.ID],
 		Instructions: Assemble(core, roster, text),
 		Notes:        notesFor(notes, cluster),
 		Tools:        tools,
@@ -693,6 +697,10 @@ type ProviderView struct {
 	// KeylessOK says it needs no key: its last test passed without one,
 	// with its settings as they are (Phase 12, wave 5).
 	KeylessOK bool `json:"keylessOK"`
+	// Limit is its daily and monthly limits, Spend what every agent spent
+	// on it (Phase 12.1, AI-36).
+	Limit sherlock.Caps       `json:"limit"`
+	Spend sherlock.AgentSpend `json:"spend"`
 }
 
 // AgentView is an agent as Settings › Agents shows it.
@@ -781,8 +789,8 @@ type Overview struct {
 	Models    []sherlock.Model `json:"models"`
 	// DefaultModel is the default provider's model.
 	DefaultModel string `json:"defaultModel"`
-	// DailyUSD and MonthlyUSD are the overall limits, every agent's spend
-	// together.
+	// DailyUSD and MonthlyUSD are the total limits, every agent's spend
+	// on every provider together.
 	DailyUSD       float64        `json:"dailyUSD"`
 	MonthlyUSD     float64        `json:"monthlyUSD"`
 	Spend          sherlock.Spend `json:"spend"`
@@ -852,7 +860,7 @@ func (s *Service) View(ctx context.Context) Overview {
 	for _, p := range list {
 		k := s.KeysFor(p.ID)
 		r := p.Provider.Normalized(s.opts.DefaultURL)
-		o.Providers = append(o.Providers, ProviderView{Provider: p, Resolved: r, Default: p.ID == def, Locked: p.ID == DefaultProvider && s.opts.ProviderLocked, NeedsKey: r.Auth == sherlock.AuthHeader, Key: k.Info(), UsedBy: used[p.ID], KeylessOK: r.Auth == sherlock.AuthHeader && !k.Info().Set && KeylessOK(p)})
+		o.Providers = append(o.Providers, ProviderView{Provider: p, Resolved: r, Default: p.ID == def, Locked: p.ID == DefaultProvider && s.opts.ProviderLocked, NeedsKey: r.Auth == sherlock.AuthHeader, Key: k.Info(), UsedBy: used[p.ID], KeylessOK: r.Auth == sherlock.AuthHeader && !k.Info().Set && KeylessOK(p), Limit: snap.providers.Limits[p.ID], Spend: spend.Provider(p.ID)})
 	}
 	return o
 }
@@ -1001,6 +1009,7 @@ func (s *Service) DeleteProvider(ctx context.Context, id string) error {
 		return refusal(fmt.Sprintf("%s stays: the chart sets its key.", p.Name))
 	}
 	if _, err := change(ctx, s.opts.Backend, ProvidersKey, func(ps *Providers) error {
+		delete(ps.Limits, id)
 		if id == DefaultProvider {
 			ps.DefaultRemoved, ps.DefaultTested = true, nil
 			return nil
@@ -1149,12 +1158,68 @@ func mustInfo(id string) Info {
 	return info
 }
 
-// SetLimits changes the overall limits: what every agent spends together.
-func (s *Service) SetLimits(ctx context.Context, daily, monthly float64) error {
+// Limits are the spending limits Settings › Limits changes (AI-36): the
+// total, every agent's spend on every provider together, and each
+// provider's. 0 is no limit.
+type Limits struct {
+	DailyUSD   float64 `json:"dailyUSD"`
+	MonthlyUSD float64 `json:"monthlyUSD"`
+	// Providers are the providers' limits by id; nil keeps them, and a
+	// provider left out keeps its own.
+	Providers map[string]sherlock.Caps `json:"providers,omitempty"`
+}
+
+// checkCaps reports what is wrong with a pair of limits; what names them.
+func checkCaps(c sherlock.Caps, what string) error {
+	for _, v := range []float64{c.DailyUSD, c.MonthlyUSD} {
+		if v < 0 || v > MaxCapUSD || math.IsNaN(v) || math.IsInf(v, 0) {
+			return fmt.Errorf("%s must be between $0 (no limit) and $%d", what, MaxCapUSD)
+		}
+	}
+	if c.DailyUSD > 0 && c.MonthlyUSD > 0 && c.DailyUSD > c.MonthlyUSD {
+		return fmt.Errorf("%s: the daily limit is above the monthly limit", what)
+	}
+	return nil
+}
+
+// SetLimits changes the total limits and the providers' given. Each is
+// checked before any is saved; a provider's must be one there is.
+func (s *Service) SetLimits(ctx context.Context, in Limits) error {
+	defer s.forget()
 	sh := s.sherlockSettings()
-	sh.DailyUSD, sh.MonthlyUSD = daily, monthly
+	sh.DailyUSD, sh.MonthlyUSD = in.DailyUSD, in.MonthlyUSD
 	if err := sh.Validate(); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	snap := s.read(ctx)
+	for id, c := range in.Providers {
+		p, ok := s.provider(snap, id)
+		if id == "" || !ok {
+			return fmt.Errorf("%w: there is no provider %q", ErrInvalid, id)
+		}
+		if err := checkCaps(c, "the limits of "+p.Name); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+	}
+	if len(in.Providers) > 0 {
+		if _, err := change(ctx, s.opts.Backend, ProvidersKey, func(ps *Providers) error {
+			if ps.Limits == nil {
+				ps.Limits = map[string]sherlock.Caps{}
+			}
+			for id, c := range in.Providers {
+				if c == (sherlock.Caps{}) {
+					delete(ps.Limits, id)
+				} else {
+					ps.Limits[id] = c
+				}
+			}
+			if len(ps.Limits) == 0 {
+				ps.Limits = nil
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
 	}
 	_, err := s.opts.Settings.UpdateSherlock(ctx, sh)
 	return err

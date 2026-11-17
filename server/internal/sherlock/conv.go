@@ -609,7 +609,7 @@ func (s *Service) CompleteMeasured(ctx context.Context, agent string, who audit.
 		Messages: []Message{{Role: "user", Content: []Block{{Type: "text", Text: scrub.Known(scrub.Text(text), a.Secrets)}}}}}
 	resp, err := s.clientOf(&a).Stream(ctx, req, func(Delta) {})
 	cost := a.Price.Cost(resp.Usage)
-	s.opts.Ledger.AddFor(context.Background(), a.ID, cost, true)
+	s.opts.Ledger.AddFor(context.Background(), a.ID, a.Provider, cost, true)
 	if serr := s.opts.Ledger.Save(context.Background()); serr != nil {
 		s.opts.Logger.Warn("saving the Sherlock spend failed", "err", serr)
 	}
@@ -864,7 +864,7 @@ func (s *Service) answer(ctx context.Context, c *Conversation, ans *Msg, q Quest
 			s.noteNoUsage(client, a.Model)
 		}
 		if used > 0 || round == 0 {
-			s.opts.Ledger.AddFor(context.Background(), a.ID, used, round == 0)
+			s.opts.Ledger.AddFor(context.Background(), a.ID, a.Provider, used, round == 0)
 		}
 		if err != nil {
 			if ctx.Err() != nil {

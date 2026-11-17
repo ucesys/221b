@@ -341,12 +341,36 @@ test('a spending cap stops new questions with a clear message (P5-05)', async ({
   await open(page)
   expect(await put(page, '/api/v1/sherlock/config', { ...ON, dailyUSD: 0.0001 })).toBe(200)
   try {
-    await expect(page.getByTestId('sherlock-unavailable')).toContainText('overall daily limit', { timeout: 15_000 })
+    await expect(page.getByTestId('sherlock-unavailable')).toContainText('total daily limit', { timeout: 15_000 })
     const status = await page.evaluate(async () => (await fetch('/api/v1/sherlock/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"question":"Anything?"}' })).status)
     expect(status).toBe(429)
     await expect(page.getByTestId('ask-sherlock')).toHaveCount(0)
   } finally {
     expect(await put(page, '/api/v1/sherlock/config', ON)).toBe(200)
+  }
+  await expect(page.getByTestId('sherlock-input')).toBeVisible({ timeout: 15_000 })
+})
+
+test('a provider’s limit, set in Settings › Limits, stops the agents on it and says where it is changed (AI-37, AI-38)', async ({ page }) => {
+  await open(page)
+  expect(await put(page, '/api/v1/sherlock/config', ON)).toBe(200)
+  try {
+    await page.getByTestId('admin-link').click()
+    await page.locator('[data-admin-page=settings]').click()
+    // Limits comes right after Agents.
+    const sections = await page.getByTestId('settings-section').evaluateAll((els) => els.map((e) => e.getAttribute('data-section')))
+    expect(sections[sections.indexOf('agents') + 1]).toBe('limits')
+    await page.locator('[data-testid=settings-section][data-section=limits]').click()
+    await expect(page.getByTestId('limit-daily')).toHaveValue('20')
+    await expect(page.getByTestId('limits-total')).toContainText('0 means no limit.')
+    await expect(page.locator('[data-testid=limits-agent][data-agent=sherlock]')).toBeVisible()
+    await page.locator('[data-testid=provider-limit-daily][data-provider=default]').fill('0.0001')
+    await page.getByTestId('limits-save').click()
+    await expect(page.getByTestId('save-bar')).toContainText('Saved.')
+    await open(page)
+    await expect(page.getByTestId('sherlock-unavailable')).toContainText('Settings › Limits › Providers (', { timeout: 15_000 })
+  } finally {
+    expect(await put(page, '/api/v1/ai/limits', { dailyUSD: 20, monthlyUSD: 200, providers: { default: { dailyUSD: 0, monthlyUSD: 0 } } })).toBe(200)
   }
   await expect(page.getByTestId('sherlock-input')).toBeVisible({ timeout: 15_000 })
 })

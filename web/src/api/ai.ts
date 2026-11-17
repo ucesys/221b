@@ -46,6 +46,23 @@ export interface ProviderView extends AIProvider {
   tested?: ProviderTest
   /** It needs no key: its last test passed without one, with its settings as they are. */
   keylessOK?: boolean
+  /** Its daily and monthly limits, 0 none, and what every agent spent on it (Phase 12.1, AI-36). */
+  limit?: Caps
+  spend?: Spend
+}
+
+/** A daily and a monthly limit in US dollars; 0 is no limit. */
+export interface Caps {
+  dailyUSD: number
+  monthlyUSD: number
+}
+
+/** An agent's or a provider's share of the spend, today and this month (UTC). */
+export interface Spend {
+  dayUSD: number
+  monthUSD: number
+  dayAsked: number
+  monthAsked: number
 }
 
 export interface AgentSettings {
@@ -116,7 +133,7 @@ export interface AgentView {
   lastTest?: TestSummary
   baselineCheck?: TestSummary
   valuesKey: string
-  spend: { dayUSD: number; monthUSD: number; dayAsked: number; monthAsked: number }
+  spend: Spend
   unusable?: string
   testing?: boolean
   footprint?: AgentFootprint
@@ -361,7 +378,8 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 const enc = encodeURIComponent
 
 export const fetchAI = () => call<AIOverview>('GET', '/api/v1/ai')
-export const saveLimits = (dailyUSD: number, monthlyUSD: number) => call<AIOverview>('PUT', '/api/v1/ai/limits', { dailyUSD, monthlyUSD })
+/** Saves the total limits and, when given, the providers' (by id; one left out keeps its own). */
+export const saveLimits = (dailyUSD: number, monthlyUSD: number, providers?: Record<string, Caps>) => call<AIOverview>('PUT', '/api/v1/ai/limits', { dailyUSD, monthlyUSD, providers })
 export const addProvider = (p: AIProvider) => call<AIOverview>('POST', '/api/v1/ai/providers', p)
 export const saveProvider = (p: AIProvider) => call<AIOverview>('PUT', `/api/v1/ai/providers/${enc(p.id)}`, p)
 export const removeProvider = (id: string) => call<AIOverview>('DELETE', `/api/v1/ai/providers/${enc(id)}`)
