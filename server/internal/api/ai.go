@@ -556,11 +556,15 @@ func (s *Server) putAIDraft(w http.ResponseWriter, r *http.Request) {
 	if in.Parts != nil {
 		parts = *in.Parts
 	}
-	warnings, err := s.opts.AI.SaveDraftParts(r.Context(), id, in.House, in.Notes, parts, in.Parts != nil, aiBy(r))
+	saved, err := s.opts.AI.SaveDraftReplacing(r.Context(), id, in.House, in.Notes, parts, in.Parts != nil, aiBy(r))
 	if err != nil {
 		s.aiFail(w, err)
 		return
 	}
+	// The new draft discards the one before (AI-26): the approval any
+	// earlier draft waited for is withdrawn, so this one can be asked for.
+	withdrawn := s.withdrawStale(r, id, saved.Rev, fmt.Sprintf("Withdrawn: draft %d was saved, which discards the drafts before it.", saved.Rev))
+	gone := discardedOf(saved, withdrawn)
 	v, _ := s.opts.AI.Instructions(r.Context(), id)
 	edited := []string{}
 	for _, p := range v.Parts {
@@ -568,9 +572,123 @@ func (s *Server) putAIDraft(w http.ResponseWriter, r *http.Request) {
 			edited = append(edited, p.Name)
 		}
 	}
-	s.record(r, audit.ActionAIPrompt, "agent "+id, fmt.Sprintf("draft saved: %d words of house instructions, notes for %d clusters, built-in text edited [%s]", ai.Words(in.House), len(in.Notes), strings.Join(edited, ", ")))
-	v.Warnings = warnings
-	answerJSON(w, r, v)
+	detail := fmt.Sprintf("draft %d saved: %d words of house instructions, notes for %d clusters, built-in text edited [%s]", saved.Rev, ai.Words(in.House), len(in.Notes), strings.Join(edited, ", "))
+	if gone != nil {
+		detail += fmt.Sprintf("; earlier drafts discarded [%s]", joinInts(gone.Drafts, ", "))
+		if gone.PilotEnded {
+			detail += fmt.Sprintf(", the pilot of draft %d ended", saved.Discarded.Rev)
+		}
+		if len(gone.Requests) > 0 {
+			detail += fmt.Sprintf(", requests withdrawn [%s]", joinInts(gone.Requests, ", "))
+		}
+	}
+	s.record(r, audit.ActionAIPrompt, "agent "+id, detail)
+	v.Warnings = saved.Warnings
+	answerJSON(w, r, draftAnswer{InstructionsView: v, Discarded: gone})
+}
+
+// draftAnswer is the drawer's instructions after a save, with what the
+// save discarded (AI-26).
+type draftAnswer struct {
+	ai.InstructionsView
+	Discarded *draftDiscarded `json:"discarded,omitempty"`
+}
+
+// draftDiscarded is what saving a draft discarded: the earlier drafts, the
+// pilot that ended with one, the go-live requests withdrawn, and a notice
+// that says so.
+type draftDiscarded struct {
+	Drafts     []int  `json:"drafts"`
+	PilotEnded bool   `json:"pilotEnded,omitempty"`
+	Requests   []int  `json:"requests,omitempty"`
+	Notice     string `json:"notice"`
+}
+
+// discardedOf is what a save discarded, from the draft it replaced and the
+// requests withdrawn; nil for nothing.
+func discardedOf(saved ai.DraftSaved, withdrawn []twoperson.Request) *draftDiscarded {
+	revs := map[int]bool{}
+	out := &draftDiscarded{}
+	if saved.Discarded != nil {
+		revs[saved.Discarded.Rev] = true
+		out.PilotEnded = saved.Discarded.PilotEnded
+	}
+	for _, req := range withdrawn {
+		revs[req.Rev] = true
+		out.Requests = append(out.Requests, req.ID)
+	}
+	for rev := range revs {
+		if rev != saved.Rev && rev > 0 {
+			out.Drafts = append(out.Drafts, rev)
+		}
+	}
+	if len(out.Drafts) == 0 && len(out.Requests) == 0 {
+		return nil
+	}
+	sort.Ints(out.Drafts)
+	sort.Ints(out.Requests)
+	var parts []string
+	switch len(out.Drafts) {
+	case 0:
+	case 1:
+		parts = append(parts, fmt.Sprintf("Earlier draft %d was discarded", out.Drafts[0]))
+	default:
+		parts = append(parts, fmt.Sprintf("Earlier drafts %s were discarded", joinInts(out.Drafts, " and ")))
+	}
+	if out.PilotEnded {
+		parts = append(parts, fmt.Sprintf("the pilot of draft %d ended", saved.Discarded.Rev))
+	}
+	switch len(out.Requests) {
+	case 0:
+	case 1:
+		parts = append(parts, fmt.Sprintf("request %d was withdrawn", out.Requests[0]))
+	default:
+		parts = append(parts, fmt.Sprintf("requests %s were withdrawn", joinInts(out.Requests, " and ")))
+	}
+	out.Notice = upperFirst(strings.Join(parts, "; ")) + "."
+	return out
+}
+
+// joinInts lists numbers, the last after sep: "2, 3 and 4" with " and ".
+func joinInts(n []int, sep string) string {
+	s := make([]string, len(n))
+	for i, x := range n {
+		s[i] = strconv.Itoa(x)
+	}
+	if len(s) < 2 || sep != " and " {
+		return strings.Join(s, sep)
+	}
+	return strings.Join(s[:len(s)-1], ", ") + sep + s[len(s)-1]
+}
+
+// withdrawStale withdraws every go-live request of the agent's that waits
+// for a draft other than keep, its draft now (0 for none): that draft is
+// gone or took a new revision, so the request could never be approved and
+// would block one for the draft now (AI-26). Each is recorded.
+func (s *Server) withdrawStale(r *http.Request, id string, keep int, why string) []twoperson.Request {
+	if s.opts.TwoPerson == nil {
+		return nil
+	}
+	sess, _ := auth.SessionFrom(r.Context())
+	list, err := s.opts.TwoPerson.Withdraw(r.Context(), func(req twoperson.Request) bool {
+		return req.Kind == twoperson.KindPrompt && req.Agent == id && req.Rev != keep
+	}, auth.WhoOf(sess), why)
+	if err != nil {
+		s.opts.Logger.Warn("withdrawing the requests of discarded drafts failed", "agent", id, "err", err)
+		return nil
+	}
+	for _, req := range list {
+		s.writeAudit(r, "", audit.OutcomeOK, ActionTwoPerson, strconv.Itoa(req.ID), fmt.Sprintf("request %d withdrawn: %s · %s", req.ID, req.What(), why))
+	}
+	return list
+}
+
+// draftRev is the agent's draft's revision now; 0 for none.
+func (s *Server) draftRev(r *http.Request, id string) int {
+	if v, err := s.opts.AI.Instructions(r.Context(), id); err == nil && v.Draft != nil {
+		return v.Draft.Rev
+	}
+	return 0
 }
 
 func (s *Server) deleteAIDraft(w http.ResponseWriter, r *http.Request) {
@@ -583,6 +701,7 @@ func (s *Server) deleteAIDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.record(r, audit.ActionAIPrompt, "agent "+id, "draft discarded")
+	s.withdrawStale(r, id, 0, "Withdrawn: the draft was discarded.")
 	s.getAIInstructions(w, r)
 }
 
@@ -597,7 +716,9 @@ func (s *Server) postAIBackToDraft(w http.ResponseWriter, r *http.Request) {
 		s.aiFail(w, err)
 		return
 	}
-	s.record(r, audit.ActionAIPrompt, "agent "+id, "draft back to its first stage: its pilot ended, its test no longer counts")
+	rev := s.draftRev(r, id)
+	s.record(r, audit.ActionAIPrompt, "agent "+id, fmt.Sprintf("draft back to its first stage as draft %d: its pilot ended, its test no longer counts", rev))
+	s.withdrawStale(r, id, rev, fmt.Sprintf("Withdrawn: the draft went back to its first stage, as draft %d.", rev))
 	s.getAIInstructions(w, r)
 }
 
@@ -891,7 +1012,9 @@ func (s *Server) postAIRestore(w http.ResponseWriter, r *http.Request) {
 		s.aiFail(w, err)
 		return
 	}
-	s.record(r, audit.ActionAIPrompt, "agent "+id, fmt.Sprintf("version %d restored as the draft", n))
+	rev := s.draftRev(r, id)
+	s.record(r, audit.ActionAIPrompt, "agent "+id, fmt.Sprintf("version %d restored as draft %d", n, rev))
+	s.withdrawStale(r, id, rev, fmt.Sprintf("Withdrawn: version %d was restored as draft %d, which discards the drafts before it.", n, rev))
 	s.postAILive(w, r)
 }
 

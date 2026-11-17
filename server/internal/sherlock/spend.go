@@ -300,7 +300,10 @@ func (e *ErrCap) Error() string {
 	if e.Agent != "" {
 		return fmt.Sprintf("%s has reached its %s spending cap of $%.2f an administrator set. It works again %s, or when an administrator raises the cap in Settings › Agents.", e.Agent, e.Which, e.Cap, when)
 	}
-	return fmt.Sprintf("Sherlock has reached the %s spending cap of $%.2f an administrator set. It answers again %s, or when an administrator raises the cap in Settings.", e.Which, e.Cap, when)
+	// The overall limit counts every agent's spend together, and is set
+	// apart from each agent's own cap: the words say which it is and where
+	// it is changed (AI-28).
+	return fmt.Sprintf("All agents together have reached the overall %s limit of $%.2f an administrator set. Sherlock answers again %s, or when an administrator raises the overall limit in Settings › Agents › Overall limits.", e.Which, e.Cap, when)
 }
 
 // Check says whether the spend is under the caps.

@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -64,9 +66,9 @@ func crashCase(name, extra string) TestCase {
 }
 
 // While a run is in flight its progress shows, case by case, with the
-// results so far; a second start is refused. Stopped, it ends stopped at
-// the case it was on, and is kept with the draft so; the planted secrets
-// show nowhere.
+// results so far in the order of the cases; a second start is refused.
+// Stopped, it ends stopped at the case cut short, and is kept with the
+// draft so; the planted secrets show nowhere.
 func TestATestRunShowsItsProgressAndStops(t *testing.T) {
 	wrap, held, release := holdOn(t, "HOLD-HERE")
 	w := setupWith(t, nil, wrap)
@@ -101,18 +103,48 @@ func TestATestRunShowsItsProgressAndStops(t *testing.T) {
 		t.Fatalf("a second run started: %v", err)
 	}
 	waitFor(t, held, "the held case")
-	p, ok, err := w.ai.TestProgress(ctx, Troubleshooter)
-	if err != nil || !ok || p.State != RunRunning || !w.ai.testing(Troubleshooter) {
-		t.Fatalf("no run in flight: %+v %v", p, err)
+	// Every case but the held one ends; the held one runs on.
+	var p TestRun
+	for deadline := time.Now().Add(20 * time.Second); ; {
+		var ok bool
+		var err error
+		p, ok, err = w.ai.TestProgress(ctx, Troubleshooter)
+		if err != nil || !ok || p.State != RunRunning {
+			t.Fatalf("no run in flight: %+v %v", p, err)
+		}
+		if len(p.Planned) > 0 && p.Cases == len(p.Planned)-1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the other cases did not end: %+v", p.Planned)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !w.ai.testing(Troubleshooter) {
+		t.Fatal("not testing")
 	}
 	base := len(p.Planned) - 3
 	states := []string{}
 	for _, c := range p.Planned {
 		states = append(states, c.State)
 	}
-	if base < 0 || p.Cases != base+1 || len(p.Results) != base+1 || p.Planned[base].Name != "first" || (p.Planned[base].State != CasePassed && p.Planned[base].State != CaseFailed) ||
-		p.Planned[base+1].State != CaseRunning || p.Planned[base+2].State != CaseWaiting || p.Estimate <= 0 {
+	if base < 0 || len(p.Results) != base+2 || p.Planned[base].Name != "first" || p.Planned[base+1].State != CaseRunning || p.Planned[base+2].State == CaseWaiting || p.Planned[base+2].State == CaseRunning || p.Estimate <= 0 {
 		t.Fatalf("the progress: %d done, states %v", p.Cases, states)
+	}
+	// The results so far are in the order of the cases, the held one left
+	// out.
+	var names []string
+	for _, r := range p.Results {
+		names = append(names, r.Name)
+	}
+	var want []string
+	for i, c := range p.Planned {
+		if i != base+1 {
+			want = append(want, c.Name)
+		}
+	}
+	if !slices.Equal(names, want) {
+		t.Fatalf("the results so far: %q, want %q", names, want)
 	}
 	first := p.Results[base]
 	if first.Expect == nil || first.Expect.Secrets != 1 || !strings.Contains(first.Question, "[REDACTED]") {
@@ -125,7 +157,7 @@ func TestATestRunShowsItsProgressAndStops(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, ended, "the stopped run")
-	if final.State != RunStopped || final.Error != "stopped" || final.StoppedAt != base+2 || final.Planned[base+1].State != CaseFailed || final.Planned[base+2].State != CaseWaiting || final.Cases != base+2 {
+	if final.State != RunStopped || final.Error != "stopped" || final.StoppedAt != base+2 || final.Planned[base+1].State != CaseFailed || final.Cases != base+3 || len(final.Results) != base+3 || final.Results[base+1].Name != "held" {
 		t.Fatalf("the stopped run: %+v", final)
 	}
 	if w.ai.testing(Troubleshooter) {
@@ -135,7 +167,7 @@ func TestATestRunShowsItsProgressAndStops(t *testing.T) {
 	if v.Draft.Test == nil || v.Draft.Test.State != RunStopped || v.Draft.Test.StoppedAt != base+2 {
 		t.Fatalf("the run kept: %+v", v.Draft.Test)
 	}
-	p, ok, _ = w.ai.TestProgress(ctx, Troubleshooter)
+	p, ok, _ := w.ai.TestProgress(ctx, Troubleshooter)
 	if !ok || p.State != RunStopped || len(p.Planned) != base+3 {
 		t.Fatalf("the run after: %+v", p)
 	}
@@ -146,6 +178,103 @@ func TestATestRunShowsItsProgressAndStops(t *testing.T) {
 	}
 	if err := w.ai.StopTests(Troubleshooter); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("stopped again: %v", err)
+	}
+}
+
+// overlap holds every request to the fake API until want of them are in
+// flight together, or a while has passed; most is the most seen at once.
+func overlap(want int) (func(http.Handler) http.Handler, func() int) {
+	var mu sync.Mutex
+	in, most := 0, 0
+	all := make(chan struct{})
+	closed := false
+	wrap := func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			in++
+			most = max(most, in)
+			if in >= want && !closed {
+				close(all)
+				closed = true
+			}
+			mu.Unlock()
+			select {
+			case <-all:
+			case <-time.After(3 * time.Second):
+			case <-r.Context().Done():
+			}
+			mu.Lock()
+			in--
+			mu.Unlock()
+			h.ServeHTTP(w, r)
+		})
+	}
+	return wrap, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return most
+	}
+}
+
+// A run's cases run TestParallel at once (AI-25): the fake API holds each
+// request until that many are in flight, which cases run one after another
+// would never reach. The results still come in the order of the cases.
+func TestTestCasesRunInParallel(t *testing.T) {
+	wrap, most := overlap(TestParallel)
+	w := setupWith(t, nil, wrap)
+	ctx := context.Background()
+	for i := range 6 {
+		if _, err := w.ai.SaveTest(ctx, TestCase{Agent: Troubleshooter, Name: "case " + strconv.Itoa(i), Question: "What runs? " + strconv.Itoa(i)}, "ann"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := w.ai.SaveDraft(ctx, Troubleshooter, "Be brief.", nil, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	run, err := w.ai.RunTests(ctx, Troubleshooter, TestOptions{Draft: true, By: "ann"})
+	if err != nil || run.State != RunDone || run.Cases != len(run.Planned) || len(run.Results) != run.Cases {
+		t.Fatalf("%+v %v", run, err)
+	}
+	if got := most(); got < TestParallel {
+		t.Fatalf("at most %d requests in flight at once (in %s), want %d", got, time.Since(start), TestParallel)
+	}
+	for i, r := range run.Results {
+		if r.ID != run.Planned[i].ID || run.Planned[i].State == CaseWaiting || run.Planned[i].State == CaseRunning {
+			t.Fatalf("case %d: %+v against %+v", i, run.Planned[i], r)
+		}
+	}
+}
+
+// A cap reached during a run stops new cases from starting (AI-25): the
+// case stopped at it fails with the cap's words, the run fails at it, and
+// the cases after it never start.
+func TestACapReachedStopsNewCases(t *testing.T) {
+	w := setup(t, nil)
+	ctx := context.Background()
+	for i := range 10 {
+		if _, err := w.ai.SaveTest(ctx, TestCase{Agent: Troubleshooter, Name: "case " + strconv.Itoa(i), Question: "What runs? " + strconv.Itoa(i)}, "ann"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := w.ai.SaveDraft(ctx, Troubleshooter, "Be brief.", nil, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	w.set.mu.Lock()
+	w.set.sh.DailyUSD = 0.000001
+	w.set.mu.Unlock()
+	run, err := w.ai.RunTests(ctx, Troubleshooter, TestOptions{Draft: true, By: "ann"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting := 0
+	for _, c := range run.Planned {
+		if c.State == CaseWaiting {
+			waiting++
+		}
+	}
+	if run.State != RunFailed || !strings.Contains(run.Error, "overall daily limit") || run.StoppedAt == 0 || run.Planned[run.StoppedAt-1].State != CaseFailed || waiting == 0 || run.Cases+waiting != len(run.Planned) {
+		t.Fatalf("the capped run: %s %q at %d, %d ran, %d waiting", run.State, run.Error, run.StoppedAt, run.Cases, waiting)
 	}
 }
 
@@ -237,5 +366,43 @@ func TestADraftGoesLiveUntestedWithAReason(t *testing.T) {
 	}
 	if _, err := w.ai.ReadyUntested(ctx, Auditor); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("no draft, yet ready: %v", err)
+	}
+}
+
+// A new draft discards the one before (AI-26): its test no longer counts,
+// its pilot ends, and the save says which draft it discarded, whether its
+// pilot was serving, and the approval it waited for. The live version and
+// the versions once live are untouched.
+func TestANewDraftDiscardsTheEarlier(t *testing.T) {
+	w := setup(t, nil)
+	ctx := context.Background()
+	first, err := w.ai.SaveDraftReplacing(ctx, Auditor, "Weigh PCI first.", nil, nil, false, "ann")
+	if err != nil || first.Rev != 1 || first.Discarded != nil {
+		t.Fatalf("the first draft: %+v %v", first, err)
+	}
+	if _, err := w.ai.RunTests(ctx, Auditor, TestOptions{Draft: true, By: "ann"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.ai.StartPilot(ctx, Auditor, []string{"dev@corp.example"}, nil, 24*time.Hour, "ann"); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.ai.SetRequest(ctx, Auditor, 1, 7); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := w.ai.Instructions(ctx, Auditor)
+	second, err := w.ai.SaveDraftReplacing(ctx, Auditor, "Weigh PCI first, then SOC 2.", nil, nil, false, "ann")
+	if err != nil || second.Rev != 2 || second.Discarded == nil || *second.Discarded != (Discarded{Rev: 1, Request: 7, PilotEnded: true}) {
+		t.Fatalf("the second draft: %+v %v", second, err)
+	}
+	v, _ := w.ai.Instructions(ctx, Auditor)
+	if v.Draft == nil || v.Draft.Rev != 2 || v.Draft.Test != nil || v.Draft.Pilot != nil || v.Draft.Request != 0 || v.Draft.Stage != StageDraft || v.Live != before.Live || len(v.Versions) != len(before.Versions) {
+		t.Fatalf("after: %+v", v)
+	}
+	if _, err := w.ai.ReadyForLive(ctx, Auditor); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("the earlier draft's test counts: %v", err)
+	}
+	third, _ := w.ai.SaveDraftReplacing(ctx, Auditor, "Weigh PCI first.", nil, nil, false, "ann")
+	if third.Discarded == nil || *third.Discarded != (Discarded{Rev: 2}) {
+		t.Fatalf("the third draft: %+v", third)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ucesys/221b/server/internal/audit"
@@ -529,43 +530,11 @@ func (s *Service) runTests(ctx context.Context, id string, o TestOptions, run *T
 		run.Planned = append(run.Planned, CaseState{ID: c.ID, Name: c.Name, Base: c.Base, State: CaseWaiting})
 	}
 	s.publish(id, run)
-	stop := func(at int) {
-		run.State, run.Error, run.StoppedAt = RunStopped, "stopped", at
-	}
 	var defs []sherlock.ToolDef
 	if s.opts.ToolDefs != nil {
 		defs = s.opts.ToolDefs()
 	}
-	for i, c := range cases {
-		run.Planned[i].State = CaseRunning
-		s.publish(id, run)
-		cluster := c.Cluster
-		if cluster == "" {
-			cluster = "local"
-		}
-		a, err := s.resolve(snap, id, cluster, nil, over, recordedSetup(c.Recorded), false)
-		if err != nil {
-			run.Planned[i].State = CaseFailed
-			run.State, run.Error, run.StoppedAt = RunFailed, err.Error(), i+1
-			break
-		}
-		q := sherlock.Question{Key: sherlock.Key{Session: "test", Cluster: cluster}, Text: c.Question, Cluster: cluster, Tools: newRecorded(defs, c.Recorded), Who: o.Who}
-		res := s.engine.RunAgent(ctx, a, q, c.Question)
-		cr := s.check(ctx, a, c, res)
-		run.Results = append(run.Results, cr)
-		run.Cases++
-		run.CostUSD += cr.CostUSD
-		run.Planned[i].State = CaseFailed
-		if cr.Passed {
-			run.Passed++
-			run.Planned[i].State = CasePassed
-		}
-		if ctx.Err() != nil {
-			stop(i + 1)
-			break
-		}
-		s.publish(id, run)
-	}
+	s.runCases(ctx, id, o, snap, over, cases, defs, run)
 	if run.State == RunRunning {
 		for _, t := range traces {
 			if ctx.Err() != nil {
@@ -592,7 +561,7 @@ func (s *Service) runTests(ctx context.Context, id string, o TestOptions, run *T
 			s.publish(id, run)
 		}
 		if ctx.Err() != nil {
-			stop(0)
+			run.State, run.Error = RunStopped, "stopped"
 		}
 	}
 	if run.State == RunRunning {
@@ -612,6 +581,109 @@ func (s *Service) runTests(ctx context.Context, id string, o TestOptions, run *T
 		})
 	}
 	return err
+}
+
+// TestParallel is how many cases of a run are in flight at once (AI-25).
+const TestParallel = 4
+
+// runCases runs a run's cases, at most TestParallel at once. Each case
+// shows its state as it changes, so several may be running together; the
+// results are kept in the order of the cases, those finished so far. Before
+// a case starts the spending caps are checked, as RunAgent does: a case
+// stopped at a cap fails as any case that does not finish does, and no
+// case starts after it; the run fails at it with the cap's words. A Stop
+// cancels every case in flight; the run stops at the first one cut short.
+func (s *Service) runCases(ctx context.Context, id string, o TestOptions, snap snapshot, over *draftText, cases []TestCase, defs []sherlock.ToolDef, run *TestRun) {
+	var (
+		mu sync.Mutex // guards run, done, cut and halt
+		wg sync.WaitGroup
+		// done is each finished case's result; cut says it was cut short by
+		// a Stop.
+		done = make([]*TestResult, len(cases))
+		cut  = make([]bool, len(cases))
+		// halt is why no case starts any more: a cap reached, or a case
+		// that could not be set up; haltAt its case, from 1.
+		halt   error
+		haltAt int
+	)
+	// show publishes the run, its results in the order of the cases; mu is
+	// held.
+	show := func() {
+		run.Results = run.Results[:0]
+		for _, r := range done {
+			if r != nil {
+				run.Results = append(run.Results, *r)
+			}
+		}
+		s.publish(id, run)
+	}
+	slots := make(chan struct{}, TestParallel)
+	started := 0
+	for i, c := range cases {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+		}
+		mu.Lock()
+		if ctx.Err() != nil || halt != nil {
+			mu.Unlock()
+			break
+		}
+		cluster := c.Cluster
+		if cluster == "" {
+			cluster = "local"
+		}
+		a, err := s.resolve(snap, id, cluster, nil, over, recordedSetup(c.Recorded), false)
+		if err != nil {
+			run.Planned[i].State = CaseFailed
+			halt, haltAt = err, i+1
+			show()
+			mu.Unlock()
+			break
+		}
+		run.Planned[i].State = CaseRunning
+		started = i + 1
+		show()
+		mu.Unlock()
+		wg.Add(1)
+		go func(i int, c TestCase, a sherlock.Agent, cluster string) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			q := sherlock.Question{Key: sherlock.Key{Session: "test", Cluster: cluster}, Text: c.Question, Cluster: cluster, Tools: newRecorded(defs, c.Recorded), Who: o.Who}
+			res := s.engine.RunAgent(ctx, a, q, c.Question)
+			cr := s.check(ctx, a, c, res)
+			mu.Lock()
+			defer mu.Unlock()
+			done[i] = &cr
+			cut[i] = ctx.Err() != nil
+			run.Cases++
+			run.CostUSD += cr.CostUSD
+			run.Planned[i].State = CaseFailed
+			if cr.Passed {
+				run.Passed++
+				run.Planned[i].State = CasePassed
+			}
+			var capErr *sherlock.ErrCap
+			if errors.As(res.Err, &capErr) && (halt == nil || i+1 < haltAt) {
+				halt, haltAt = res.Err, i+1
+			}
+			show()
+		}(i, c, a, cluster)
+	}
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	switch {
+	case halt != nil:
+		run.State, run.Error, run.StoppedAt = RunFailed, halt.Error(), haltAt
+	case ctx.Err() != nil:
+		at := slices.Index(cut, true) + 1
+		if at == 0 && started < len(cases) {
+			at = started + 1
+		}
+		run.State, run.Error, run.StoppedAt = RunStopped, "stopped", at
+	}
+	show()
 }
 
 // TestProgress is the agent's test run for the test dialog (Phase 12.1):

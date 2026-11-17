@@ -258,11 +258,11 @@ func TestSherlockCaps(t *testing.T) {
 	askAndRead(t, srv, ops, svc, "Tell me about pod web/shop")
 	b, _ := json.Marshal(map[string]string{"question": "And now?"})
 	r, text := send(t, ops, http.MethodPost, srv.URL+"/api/v1/sherlock/ask", string(b))
-	if r.StatusCode != http.StatusTooManyRequests || !strings.Contains(text, "daily spending cap of $0.00") && !strings.Contains(text, "daily spending cap") {
+	if r.StatusCode != http.StatusTooManyRequests || !strings.Contains(text, "overall daily limit of $0.00") {
 		t.Fatalf("over the cap: %d %s", r.StatusCode, text)
 	}
 	_, text = send(t, ops, http.MethodGet, srv.URL+"/api/v1/sherlock", "")
-	if !strings.Contains(text, `"capped":"Sherlock has reached the daily spending cap`) || !strings.Contains(text, `"available":false`) {
+	if !strings.Contains(text, `"capped":"All agents together have reached the overall daily limit`) || !strings.Contains(text, `"available":false`) {
 		t.Fatalf("status: %s", text)
 	}
 	// Raising the cap lets questions in again.

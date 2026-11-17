@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentView, AIOverview, Instructions, TestRun } from '../../api/ai'
 import { AgentsSection, worksOn } from './AgentsSection'
-import { stageIndex, valuesYAML } from './AgentDrawer'
+import { overallHints, stageIndex, valuesYAML } from './AgentDrawer'
 import { Hands, agentRef } from '../Sherlock'
 
 const agent = (id: string, name: string, extra: Partial<AgentView> = {}): AgentView => ({
@@ -224,6 +224,13 @@ describe('the Agents section', () => {
 })
 
 describe('the agents’ helpers', () => {
+  it('say what the overall limits mean beside an agent’s own caps, with or without the amounts (AI-28)', () => {
+    const ov = { dailyUSD: 20, monthlyUSD: 0 }
+    expect(overallHints({}, ov, (n) => `$${n.toFixed(2)}`)).toEqual([{ which: 'daily', higher: false, text: 'The overall limit of $20.00 a day still applies to all agents together.' }])
+    expect(overallHints({ dailyUSD: 100 }, ov)).toEqual([{ which: 'daily', higher: true, text: 'Its daily cap is higher than the overall daily limit, which counts all agents together and stops it first.' }])
+    expect(overallHints({ dailyUSD: 20 }, ov)).toEqual([])
+    expect(overallHints({}, { dailyUSD: 0, monthlyUSD: 0 })).toEqual([])
+  })
   it('say where a draft stands, and how to put instructions into the chart', () => {
     expect(stageIndex(instructions())).toBe(3)
     expect(stageIndex(instructions({ draft: { rev: 2, house: '', stage: 'draft', by: 'a', at: '' } }))).toBe(0)
@@ -552,5 +559,94 @@ describe('an agent’s built-in text, stages and context', () => {
     await waitFor(() => expect(within(again).getByTestId('agent-model-picker').dataset.state).toBe('typed'))
     expect((within(again).getByTestId('agent-model') as HTMLInputElement).value).toBe('my-old-model')
     expect(within(again).getByTestId('agent-model-hint').textContent).toContain('Type the model’s name.')
+  })
+})
+
+describe('the drawer’s pilot history, discarded drafts and overall limits', () => {
+  const calls: { method: string; url: string; body?: unknown }[] = []
+  let ins = instructions()
+  let ov = overview()
+  const test = { rev: 3, at: '2026-11-05T11:00:00Z', by: 'ann', cases: 2, passed: 2, same: 0, costUSD: 0.1, estimate: 0.1 }
+  const pilot = { people: ['dev@corp.example'], started: '2026-11-05T12:00:00Z', until: '2099-01-01T00:00:00Z', by: 'ann' }
+  beforeEach(() => {
+    Element.prototype.scrollTo = () => {}
+    calls.length = 0
+    ins = instructions()
+    ov = overview()
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined
+      const u = String(url)
+      calls.push({ method, url: u, body })
+      if (u.endsWith('/instructions')) return new Response(JSON.stringify(ins))
+      if (u.endsWith('/tests/run')) return new Response(JSON.stringify({ error: 'No test of this agent has run yet.' }), { status: 404 })
+      if (u.endsWith('/pilot'))
+        return new Response(
+          JSON.stringify({ entries: [3, 2, 1].map((n) => ({ n, agent: 'troubleshooter', version: 'live', at: '2026-11-05T13:00:00Z', who: 'dev', cluster: 'local', question: `Q${n}?`, answer: `A${n}.`, model: 'm', costUSD: 0 })) }),
+        )
+      if (u.endsWith('/draft')) {
+        ins = {
+          ...ins,
+          draft: { rev: 4, house: body.house, notes: body.notes, stage: 'draft', by: 'ann', at: '2026-11-05T14:00:00Z' },
+          discarded: { drafts: [3], pilotEnded: true, requests: [1], notice: 'Earlier draft 3 was discarded; the pilot of draft 3 ended; request 1 was withdrawn.' },
+        }
+        return new Response(JSON.stringify(ins))
+      }
+      return new Response(JSON.stringify(ov))
+    })
+  })
+  afterEach(() => {
+    cleanup()
+    vi.unstubAllGlobals()
+  })
+
+  it('opens the pilot’s answers in a dialog of their own from the Pilot step, with their count (AI-27)', async () => {
+    ins = instructions({ draft: { rev: 3, house: 'x', stage: 'pilot', by: 'ann', at: '2026-11-05T10:00:00Z', test, pilot } })
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const drawer = await screen.findByTestId('agent-drawer')
+    const show = await within(drawer).findByTestId('pilot-history-show')
+    expect(show.closest('[data-stage]')?.getAttribute('data-stage')).toBe('pilot')
+    await waitFor(() => expect(show.textContent).toBe('Show pilot history (3)'))
+    // The answers are no longer listed in the drawer itself.
+    expect(within(drawer).queryByTestId('pilot-history-entry')).toBeNull()
+    fireEvent.click(show)
+    const dlg = await screen.findByTestId('pilot-history-dialog')
+    await waitFor(() => expect(within(dlg).getAllByTestId('pilot-history-entry')).toHaveLength(3))
+    fireEvent.click(within(dlg).getByTestId('pilot-history-close'))
+    expect(screen.queryByTestId('pilot-history-dialog')).toBeNull()
+  })
+
+  it('says which earlier drafts a new draft discarded, the pilot that ended and the request withdrawn (AI-26)', async () => {
+    const toasts: string[] = []
+    ins = instructions({ draft: { rev: 3, house: 'x', stage: 'pilot', by: 'ann', at: '2026-11-05T10:00:00Z', test, pilot, request: 1 } })
+    render(<AgentsSection onToast={(m) => toasts.push(m)} />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[1]!)
+    const drawer = await screen.findByTestId('agent-drawer')
+    fireEvent.change(await within(drawer).findByTestId('ins-house'), { target: { value: 'Cite our runbooks, briefly.' } })
+    fireEvent.click(within(drawer).getByTestId('ins-save-draft'))
+    await waitFor(() => expect(within(drawer).getByTestId('ins-discarded').textContent).toBe('Earlier draft 3 was discarded; the pilot of draft 3 ended; request 1 was withdrawn.'))
+    expect(toasts).toContain('Saved draft 4. Earlier draft 3 was discarded; the pilot of draft 3 ended; request 1 was withdrawn.')
+  })
+
+  it('says the overall limit still applies beside a cap of 0, warns of a cap above it, and leads to Overall limits (AI-28)', async () => {
+    ov = { ...ov, dailyUSD: 20, monthlyUSD: 200, agents: ov.agents.map((a) => (a.id === 'sherlock' ? { ...a, settings: { dailyUSD: 100 } } : a)) }
+    render(<AgentsSection />)
+    fireEvent.click((await screen.findAllByTestId('agent-open'))[0]!)
+    let drawer = await screen.findByTestId('agent-drawer')
+    let hints = within(drawer).getAllByTestId('agent-overall-hint')
+    expect(hints.map((h) => `${h.dataset.which}:${h.dataset.tone}`)).toEqual(['daily:warn', 'monthly:info'])
+    expect(hints[0]!.textContent).toContain('Its daily cap of $100.00 is higher than the overall limit of $20.00 a day, which counts all agents together and stops it first.')
+    expect(hints[1]!.textContent).toContain('The overall limit of $200.00 a month still applies to all agents together.')
+    // A cap below the overall limit needs no word; an unsaved edit must be saved before leaving.
+    fireEvent.change(within(drawer).getByTestId('agent-daily'), { target: { value: '5' } })
+    hints = within(drawer).getAllByTestId('agent-overall-hint')
+    expect(hints.map((h) => h.dataset.which)).toEqual(['monthly'])
+    expect((within(hints[0]!).getByTestId('agent-overall-link') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(within(drawer).getByTestId('agent-daily'), { target: { value: '100' } })
+    drawer = screen.getByTestId('agent-drawer')
+    fireEvent.click(within(drawer).getAllByTestId('agent-overall-link')[0]!)
+    await waitFor(() => expect(screen.queryByTestId('agent-drawer')).toBeNull())
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('limit-daily')))
   })
 })

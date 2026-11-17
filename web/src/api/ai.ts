@@ -258,11 +258,21 @@ export interface Instructions {
   versions: Version[]
   draft?: Draft
   warnings?: string[]
+  /** After a save: the earlier drafts it discarded, the pilot that ended, the requests withdrawn, and a notice saying so (AI-26). */
+  discarded?: DraftDiscarded
   maxWords: number
   baselineCheck?: TestRun
   /** The agent's built-in text by part, pre-filled and editable (Phase 12, wave 5). */
   parts: PromptPart[]
   maxPartWords: number
+}
+
+/** What saving a draft discarded (AI-26). */
+export interface DraftDiscarded {
+  drafts: number[]
+  pilotEnded?: boolean
+  requests?: number[]
+  notice: string
 }
 
 /** One editable part of an agent's built-in text. */

@@ -66,7 +66,7 @@ func TestAIMakeLiveUntestedAPI(t *testing.T) {
 }
 
 // The test dialog reads a run's progress while it is in flight and stops
-// it; the run ends stopped, kept so, and both are recorded. Only a
+// it, the cases running together (AI-25); the run ends stopped, kept so, and both are recorded. Only a
 // SuperAdmin may do either, and no planted secret shows.
 func TestAITestRunProgressAndStopAPI(t *testing.T) {
 	gate := make(chan struct{})
@@ -123,9 +123,18 @@ func TestAITestRunProgressAndStopAPI(t *testing.T) {
 			t.Fatalf("a viewer: %s %d", req[1], r.StatusCode)
 		}
 	}
-	_, text := send(t, ops, http.MethodGet, run, "")
-	p = ai.TestRun{}
-	aiJSON(t, ops, http.MethodGet, run, "", 200, &p)
+	// The cases run together (AI-25): every case but the held one ends,
+	// and the held one runs on.
+	var text string
+	for i := 0; i < 800; i++ {
+		_, text = send(t, ops, http.MethodGet, run, "")
+		p = ai.TestRun{}
+		aiJSON(t, ops, http.MethodGet, run, "", 200, &p)
+		if len(p.Planned) > 0 && p.Cases == len(p.Planned)-1 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 	last := len(p.Planned) - 1
 	if p.State != ai.RunRunning || last < 0 || p.Planned[last].Name != "held" || p.Planned[last].State != ai.CaseRunning || p.Cases != last || len(p.Results) != last {
 		t.Fatalf("the progress: %s", text)
@@ -161,5 +170,77 @@ func TestAITestRunProgressAndStopAPI(t *testing.T) {
 	}
 	if !stopped || !ended {
 		t.Fatalf("the stop is not recorded:\n%s", aud.String())
+	}
+}
+
+// Saving a new draft discards the one before (AI-26): its pilot ends, the
+// go-live request it waited for is withdrawn and recorded so, and the
+// answer says it in a notice; a request for the new draft is then taken,
+// and the withdrawn one can no longer be approved.
+func TestAINewDraftDiscardsTheEarlierAPI(t *testing.T) {
+	srv, ops, _, aiSvc, _, aud := aiSetupWith(t, nil)
+	ops2 := signIn(t, srv, "ops2@corp.example")
+	ctx := context.Background()
+	draft := srv.URL + "/api/v1/ai/agents/auditor/draft"
+	live := srv.URL + "/api/v1/ai/agents/auditor/live"
+	var first struct {
+		ai.InstructionsView
+		Discarded *struct{} `json:"discarded"`
+	}
+	aiJSON(t, ops, http.MethodPut, draft, `{"house":"Weigh PCI findings first."}`, 200, &first)
+	if first.Draft == nil || first.Draft.Rev != 1 || first.Discarded != nil {
+		t.Fatalf("the first draft: %+v", first)
+	}
+	if _, err := aiSvc.RunTests(ctx, "auditor", ai.TestOptions{Draft: true, By: "ops"}); err != nil {
+		t.Fatal(err)
+	}
+	aiJSON(t, ops, http.MethodPost, srv.URL+"/api/v1/ai/agents/auditor/pilot", `{"people":["dev@corp.example"],"hours":24}`, 200, nil)
+	var waiting struct {
+		Request twoperson.Request `json:"request"`
+	}
+	aiJSON(t, ops, http.MethodPost, live, `{}`, http.StatusAccepted, &waiting)
+	if r, text := send(t, ops, http.MethodPost, live, `{}`); r.StatusCode != http.StatusConflict || !strings.Contains(text, "already waits") {
+		t.Fatalf("a second request for the same draft: %d %s", r.StatusCode, text)
+	}
+	var second struct {
+		ai.InstructionsView
+		Discarded struct {
+			Drafts     []int  `json:"drafts"`
+			PilotEnded bool   `json:"pilotEnded"`
+			Requests   []int  `json:"requests"`
+			Notice     string `json:"notice"`
+		} `json:"discarded"`
+	}
+	aiJSON(t, ops, http.MethodPut, draft, `{"house":"Weigh PCI findings first, then SOC 2."}`, 200, &second)
+	want := "Earlier draft 1 was discarded; the pilot of draft 1 ended; request " + itoa(waiting.Request.ID) + " was withdrawn."
+	if second.Draft == nil || second.Draft.Rev != 2 || second.Draft.Test != nil || second.Draft.Pilot != nil || second.Draft.Request != 0 || second.Discarded.Notice != want ||
+		!second.Discarded.PilotEnded || len(second.Discarded.Drafts) != 1 || len(second.Discarded.Requests) != 1 {
+		t.Fatalf("the second draft: %+v", second)
+	}
+	// The new draft may be asked for at once; untested, as it is.
+	var again struct {
+		Waiting bool              `json:"waiting"`
+		Request twoperson.Request `json:"request"`
+	}
+	aiJSON(t, ops, http.MethodPost, live, `{"untested":true,"reason":"Checked by hand."}`, http.StatusAccepted, &again)
+	if !again.Waiting || again.Request.Rev != 2 || again.Request.ID == waiting.Request.ID {
+		t.Fatalf("the request for the new draft: %+v", again)
+	}
+	if r, text := send(t, ops2, http.MethodPost, srv.URL+"/api/v1/admin/requests/"+itoa(waiting.Request.ID)+"/approve", ""); r.StatusCode != http.StatusConflict || !strings.Contains(text, "withdrawn") {
+		t.Fatalf("the withdrawn request approved: %d %s", r.StatusCode, text)
+	}
+	aiJSON(t, ops2, http.MethodPost, srv.URL+"/api/v1/admin/requests/"+itoa(again.Request.ID)+"/approve", "", 200, nil)
+	v := ai.InstructionsView{}
+	aiJSON(t, ops, http.MethodGet, srv.URL+"/api/v1/ai/agents/auditor/instructions", "", 200, &v)
+	if v.Live != 1 || v.Draft != nil || len(v.Versions) != 1 || v.Versions[0].House != "Weigh PCI findings first, then SOC 2." {
+		t.Fatalf("live: %+v", v)
+	}
+	withdrawn, saved := false, false
+	for _, e := range auditEvents(t, aud.String()) {
+		withdrawn = withdrawn || e.Action == ActionTwoPerson && strings.Contains(e.Detail, "request "+itoa(waiting.Request.ID)+" withdrawn: Auditor: instructions, draft 1, go live")
+		saved = saved || e.Action == audit.ActionAIPrompt && strings.Contains(e.Detail, "draft 2 saved") && strings.Contains(e.Detail, "earlier drafts discarded [1], the pilot of draft 1 ended, requests withdrawn ["+itoa(waiting.Request.ID)+"]")
+	}
+	if !withdrawn || !saved {
+		t.Fatalf("not recorded (withdrawn %v, saved %v):\n%s", withdrawn, saved, aud.String())
 	}
 }

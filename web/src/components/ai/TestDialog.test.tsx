@@ -81,7 +81,7 @@ describe('the test dialog', () => {
     await waitFor(() => expect(within(dlg).getAllByTestId('test-case-row')).toHaveLength(4))
     const rows = within(dlg).getAllByTestId('test-case-row')
     expect(rows.map((r) => within(r).getByTestId('test-case-state').textContent)).toEqual(['✗ Failed', '✓ Passed', 'Running…', 'Waiting'])
-    expect(within(dlg).getByTestId('test-dialog-progress').textContent).toContain('2 of 4 cases · 0 of 2 real questions · $0.12 of about $0.50')
+    expect(within(dlg).getByTestId('test-dialog-progress').textContent).toContain('2 of 4 cases · 1 running · 0 of 2 real questions · $0.12 of about $0.50')
     expect(within(dlg).getByTestId('test-dialog-progress').getAttribute('aria-live')).toBe('polite')
     expect(within(dlg).getByTestId('test-dialog-state').textContent).toBe('Running')
     // The failed case is open: its question, each expected line met or not, what it did, and why.
@@ -152,7 +152,7 @@ describe('the test dialog', () => {
     render(<TestDialog agentId="troubleshooter" agentName="Troubleshooter" draftRev={3} onClose={() => {}} />)
     const dlg = await screen.findByTestId('test-dialog')
     await waitFor(() => expect(within(dlg).getByTestId('test-dialog-earlier').textContent).toContain('This run tested draft 2, an earlier draft than the one saved now (draft 3).'))
-    expect(within(dlg).getByTestId('test-dialog-stopped').textContent).toBe('Stopped at case 3 of 4; the cases after it did not run.')
+    expect(within(dlg).getByTestId('test-dialog-stopped').textContent).toBe('Stopped at case 3 of 4: the cases running then were cut short, and those still waiting did not run.')
     expect(within(dlg).queryByTestId('test-dialog-stop')).toBeNull()
     fireEvent.click(within(dlg).getByTestId('test-dialog-tab-replays'))
     const replays = within(dlg).getAllByTestId('test-replay')
@@ -163,11 +163,30 @@ describe('the test dialog', () => {
 })
 
 describe('the test dialog’s helpers', () => {
+  it('match each finished case to its result while several run at once (AI-25)', () => {
+    const r = running()
+    // The fourth finished before the third, which still runs: the results so far are the finished cases, in their order.
+    const parallel = running({
+      cases: 3,
+      planned: [r.planned![0]!, r.planned![1]!, { ...r.planned![2]!, state: 'running' }, { ...r.planned![3]!, state: 'passed' }, { id: 't5', name: 'the fifth', state: 'running' }],
+      results: [...r.results!, { id: 't4', name: 'the fourth', passed: true, answer: 'Fourth.', costUSD: 0.01 }],
+    })
+    const rows = caseRows(parallel)
+    expect(rows.map((x) => `${x.name}:${x.state}:${x.result?.answer ?? '-'}`)).toEqual([
+      'misses a point:failed:A long answer that was cut…',
+      'a crash loop:passed:It crash-loops.',
+      'the third:running:-',
+      'the fourth:passed:Fourth.',
+      'the fifth:running:-',
+    ])
+    expect(progressText(parallel)).toBe('3 of 5 cases · 2 running · 0 of 2 real questions')
+  })
+
   it('put the failed cases first and count the progress; a run kept before lists its results', () => {
     expect(caseRows(running()).map((r) => r.name)).toEqual(['misses a point', 'a crash loop', 'the third', 'the fourth'])
     const old = running({ planned: undefined, replaysPlanned: undefined, state: undefined })
     expect(caseRows(old).map((r) => `${r.name}:${r.state}`)).toEqual(['misses a point:failed', 'a crash loop:passed'])
     expect(progressText(old)).toBe('2 of 2 cases')
-    expect(progressText(running())).toBe('2 of 4 cases · 0 of 2 real questions')
+    expect(progressText(running())).toBe('2 of 4 cases · 1 running · 0 of 2 real questions')
   })
 })

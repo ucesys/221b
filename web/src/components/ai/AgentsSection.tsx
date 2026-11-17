@@ -3,7 +3,7 @@ import { currentRoute, navigate, withParams } from '../../lib/router'
 import { fetchAI, saveAgent, saveLimits, stateLabel, stateTone, type AgentView, type AIOverview } from '../../api/ai'
 import { usd } from '../../api/sherlock'
 import { useShowCosts } from '../../lib/costs'
-import { AgentDrawer } from './AgentDrawer'
+import { AgentDrawer, OVERALL_LIMITS_ID } from './AgentDrawer'
 import { ShowCostsSection } from './ShowCosts'
 
 /**
@@ -196,7 +196,7 @@ function Limits({ ov, onSaved }: { ov: AIOverview; onSaved: (o: AIOverview) => v
   const changed = daily !== ov.dailyUSD || monthly !== ov.monthlyUSD
   const costs = useShowCosts()
   return (
-    <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Overall limits">
+    <section id={OVERALL_LIMITS_ID} style={{ display: 'flex', flexDirection: 'column', gap: 8 }} aria-label="Overall limits">
       <h3 className="rk-h">Overall limits</h3>
       <div className="rk-frow" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12.5, fontWeight: 600 }}>

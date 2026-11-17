@@ -36,19 +36,33 @@ export interface CaseRow {
   result?: CaseResult
 }
 
-/** The run's cases, the failed first, the rest in the order they run. A run kept before Phase 12.1 lists only its results. */
+/**
+ * The run's cases, the failed first, the rest in the order they run. Cases
+ * run several at once (AI-25), so the results so far are those finished, in
+ * the order of the cases: each finds its case by its id. A run kept before
+ * Phase 12.1 lists only its results.
+ */
 export function caseRows(run: TestRun): CaseRow[] {
   const results = run.results ?? []
+  const used = new Set<number>()
+  const resultOf = (id: string) => {
+    const i = results.findIndex((r, j) => !used.has(j) && r.id === id)
+    if (i < 0) return undefined
+    used.add(i)
+    return results[i]
+  }
   const rows: CaseRow[] = run.planned?.length
-    ? run.planned.map((p, i) => ({ key: `${i}-${p.id}`, name: p.name, base: p.base, state: p.state, result: results[i] }))
+    ? run.planned.map((p, i) => ({ key: `${i}-${p.id}`, name: p.name, base: p.base, state: p.state, result: p.state === 'passed' || p.state === 'failed' ? resultOf(p.id) : undefined }))
     : results.map((r, i) => ({ key: `${i}-${r.id}`, name: r.name, base: r.base, state: r.passed ? 'passed' : 'failed', result: r }))
   return [...rows.filter((r) => r.state === 'failed'), ...rows.filter((r) => r.state !== 'failed')]
 }
 
-/** Where the run is, in words: "3 of 12 cases · 2 of 10 real questions". */
+/** Where the run is, in words: "3 of 12 cases · 4 running · 2 of 10 real questions". Several cases run at once (AI-25). */
 export function progressText(run: TestRun): string {
   const total = run.planned?.length ?? run.cases
   const parts = [`${run.cases} of ${total} case${total === 1 ? '' : 's'}`]
+  const inFlight = run.state === 'running' ? (run.planned ?? []).filter((p) => p.state === 'running').length : 0
+  if (inFlight) parts.push(`${inFlight} running`)
   const replays = run.replays?.length ?? 0
   if (run.replaysPlanned) parts.push(`${replays} of ${run.replaysPlanned} real question${run.replaysPlanned === 1 ? '' : 's'}`)
   else if (replays) parts.push(`${replays} real question${replays === 1 ? '' : 's'}`)
@@ -183,7 +197,7 @@ export function TestDialog({ agentId, agentName, draftRev, onClose, onEnded }: P
         )}
         {run && state === 'stopped' && (
           <p className="rk-callout" data-tone="warn" style={{ margin: 0, fontSize: 12.5 }} data-testid="test-dialog-stopped">
-            {run.stoppedAt ? `Stopped at case ${run.stoppedAt} of ${total}; the cases after it did not run.` : 'Stopped while the real questions were replayed.'}
+            {run.stoppedAt ? `Stopped at case ${run.stoppedAt} of ${total}: the cases running then were cut short, and those still waiting did not run.` : 'Stopped while the real questions were replayed.'}
           </p>
         )}
         {run && state === 'failed' && (

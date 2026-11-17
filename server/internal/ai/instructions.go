@@ -213,45 +213,78 @@ func (s *Service) builtIn(id string) func(string) string {
 // too, when given (AS-01): each part given replaces its built-in text
 // whole; one empty or equal to the built-in text is the built-in one.
 func (s *Service) SaveDraftParts(ctx context.Context, id, house string, notes, parts map[string]string, partsGiven bool, by string) ([]string, error) {
+	saved, err := s.SaveDraftReplacing(ctx, id, house, notes, parts, partsGiven, by)
+	return saved.Warnings, err
+}
+
+// DraftSaved is what saving a draft did (AI-26): the new draft's revision,
+// the warnings about facts, and the earlier draft it discarded, if any.
+type DraftSaved struct {
+	Rev       int
+	Warnings  []string
+	Discarded *Discarded
+}
+
+// Discarded is an earlier draft a new one discarded: its revision, the
+// approval it waited for, and whether its pilot was serving and ended.
+type Discarded struct {
+	Rev        int
+	Request    int
+	PilotEnded bool
+}
+
+// SaveDraftReplacing is SaveDraftParts, saying what the save discarded
+// (AI-26). An agent has one draft: a new one discards the one before, with
+// its test, which no longer counts for anything, and its pilot, which ends.
+// The live version and the versions once live are untouched. The approval
+// the earlier draft waited for is withdrawn by the caller, which keeps the
+// requests.
+func (s *Service) SaveDraftReplacing(ctx context.Context, id, house string, notes, parts map[string]string, partsGiven bool, by string) (DraftSaved, error) {
+	var out DraftSaved
 	if partsGiven {
 		for k, v := range parts {
 			if !slices.Contains(PartsOf(id), k) {
-				return nil, fmt.Errorf("%w: the %s has no part %q to edit", ErrInvalid, id, k)
+				return out, fmt.Errorf("%w: the %s has no part %q to edit", ErrInvalid, id, k)
 			}
 			if n := Words(v); n > MaxPartWords {
-				return nil, fmt.Errorf("%w: the %s has %d words; keep it to %d", ErrInvalid, strings.ToLower(partLabel(k)), n, MaxPartWords)
+				return out, fmt.Errorf("%w: the %s has %d words; keep it to %d", ErrInvalid, strings.ToLower(partLabel(k)), n, MaxPartWords)
 			}
 		}
 	}
 	house = strings.TrimSpace(house)
 	if err := CheckText("the house instructions", house); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return out, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	if len(notes) > 1000 {
-		return nil, fmt.Errorf("%w: too many clusters' notes", ErrInvalid)
+		return out, fmt.Errorf("%w: too many clusters' notes", ErrInvalid)
 	}
 	for k, n := range notes {
 		if err := CheckText("the notes for "+k, n); err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+			return out, fmt.Errorf("%w: %v", ErrInvalid, err)
 		}
 	}
 	builtIn := s.builtIn(id)
 	_, err := s.editPrompt(ctx, id, func(p *AgentPrompt, _ string) error {
+		out.Discarded = nil
+		if d := p.Draft; d != nil {
+			out.Discarded = &Discarded{Rev: d.Rev, Request: d.Request, PilotEnded: d.Stage == StagePilot && d.Pilot != nil && s.opts.Now().Before(d.Pilot.Until)}
+		}
 		p.Revs++
 		p.Draft = &Draft{Rev: p.Revs, House: house, Notes: cleanNotes(notes), Stage: StageDraft, By: by, At: s.opts.Now().UTC(), Parts: cloneParts(p.Parts)}
 		if partsGiven {
 			p.Draft.Parts = draftParts(parts, builtIn)
 		}
+		out.Rev = p.Draft.Rev
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return DraftSaved{}, err
 	}
-	warn := FactWarnings(house)
+	out.Warnings = FactWarnings(house)
 	for _, k := range sortedKeys(notes) {
-		warn = append(warn, FactWarnings(notes[k])...)
+		out.Warnings = append(out.Warnings, FactWarnings(notes[k])...)
 	}
-	return warn, nil
+	return out, nil
 }
 
 // DiscardDraft drops the agent's draft, and with it any pilot.

@@ -341,7 +341,7 @@ test('a spending cap stops new questions with a clear message (P5-05)', async ({
   await open(page)
   expect(await put(page, '/api/v1/sherlock/config', { ...ON, dailyUSD: 0.0001 })).toBe(200)
   try {
-    await expect(page.getByTestId('sherlock-unavailable')).toContainText('daily spending cap', { timeout: 15_000 })
+    await expect(page.getByTestId('sherlock-unavailable')).toContainText('overall daily limit', { timeout: 15_000 })
     const status = await page.evaluate(async () => (await fetch('/api/v1/sherlock/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"question":"Anything?"}' })).status)
     expect(status).toBe(429)
     await expect(page.getByTestId('ask-sherlock')).toHaveCount(0)
