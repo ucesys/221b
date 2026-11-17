@@ -110,7 +110,7 @@ test('an agent’s built-in text is pre-filled and edited as a draft, its stages
   const drawer = page.getByTestId('agent-drawer')
   const part = drawer.getByTestId('ins-part')
   await expect(part).toHaveValue(/^You are the Auditor/)
-  await expect(part).toHaveValue(/Rules every agent of this console keeps/)
+  await expect(part).toHaveValue(/Rules for every agent of 221B/)
   await expect(drawer.getByTestId('ins-part-state')).toHaveText('Built-in')
   // No draft: every step says why its action waits, and none before Live reads as done.
   await expect(drawer.locator('[data-testid=ins-stages] [aria-current=step] [data-testid=ins-step-name]')).toHaveText('Live')
@@ -120,7 +120,7 @@ test('an agent’s built-in text is pre-filled and edited as a draft, its stages
   await expect(drawer.locator('[data-testid=ins-stages] [data-stage=test]')).toContainText('not started')
   // An edit of the built-in text, compared and saved as a draft.
   const text = await part.inputValue()
-  await part.fill('You are the Auditor of Acme. Weigh PCI findings first.\n\n' + text.slice(text.indexOf('Rules every agent')))
+  await part.fill('You are the Auditor of Acme. Weigh PCI findings first.\n\n' + text.slice(text.indexOf('Rules for every agent')))
   await expect(drawer.getByTestId('ins-part-state')).toHaveText('Edited, not saved')
   await drawer.getByTestId('ins-part-compare').click()
   await expect(drawer.getByTestId('ins-part-diff')).toContainText('+You are the Auditor of Acme.')
