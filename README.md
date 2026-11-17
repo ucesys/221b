@@ -293,6 +293,7 @@ make dev-sim     # the console on http://127.0.0.1:8080 against a simulated clus
 make test        # Go and browser unit tests
 make lint        # gofmt, go vet, tsc and eslint
 make e2e-sim     # browser end-to-end tests against the simulator (Chromium; set E2E_BROWSERS for more)
+make e2e-sim E2E_ARGS=e2e/inbox.spec.ts   # one spec file; E2E_ARGS=--shard=2/3 for a third of them, as CI does
 make image       # the container image
 make help        # everything else
 ```
