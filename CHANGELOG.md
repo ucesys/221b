@@ -43,6 +43,11 @@ Phase 12.1: the agents' and jobs' instructions after a review against open-sourc
 - **An approval says what it approves** (AI-35): an agent's go-live request on Approvals shows the agent (a link to its drawer), the draft, tested or untested with the reason, its test's result, who asked and when, and the draft's diff against the version in force; a change of environment or a new SuperAdmin says what changes.
 - **Live knowledge sources** (KN-39 to KN-43, ADR-160): Settings › Knowledge › Add source has a **Mode**, *Ingest* (read into the wiki, as before) or *Live* (looked up when troubleshooting, not copied): a list of addresses (any https page, a Confluence page, a Confluence space search), with no sign-in, a bearer token, or a user and password or API token, kept in the Secret `<release>-knowledge`. A live source is never synced or indexed. Sherlock, the Troubleshooter and the Host doctor get **`lookup_live_sources`**: the pages are read when asked (200 KiB a page, 10 s, kept five minutes), scrubbed, and the parts that bear on the words are given as data with the source, title and address to cite; only the addresses set are read, redirects stay on the site and loopback or link-local addresses are refused. A report no known issue explains is checked against the live pages too, and a confident match is noted on the case with its link. The source's **Test** reads each address and says OK with its size, or what was wrong; the list shows each source's mode.
 - **`issues.reportURL`** (IS-34): the report page's address that other pages link to, a chart value now (`ISSUES_REPORT_URL`, `-issues-report-url`; empty is `/report`).
+- **Web site sources** (KN-44): Settings › Knowledge › Add source › *Web site*: a start address, a link depth (0 to 3) and a page limit (up to 200), read as a crawl of the same site with robots.txt and `noindex` respected, signing in with none, a bearer token or a user and password (as live sources do, the credential in the Secret), with Test, Turn off, Edit, Remove and its own Wiki sync job (nightly, off until turned on, Run now).
+- **AIOps › Mycroft › Sources** (MY-13, KN-47): every item the agents can draw on (uploaded documents, notes, web pages, Confluence pages, git files, S3 objects, the console's records, the fixes, and the live sources' addresses, looked up when asked and never copied), filtered by source, type, state and words, paged on the server (`GET /api/v1/knowledge/items`, `GET /api/v1/knowledge/items/detail`), for Admins and SuperAdmins; a row's details show its first excerpts, the wiki pages that drew on it and a link to the original.
+- **Exclusions** (KN-45): on Mycroft › Sources a SuperAdmin excludes an item of a web site, Confluence space, repository or bucket (*Exclude this*, or everything under a path, folder, prefix or Confluence page with its children), with an optional reason: its excerpts are emptied at once and every read leaves it out (a crawl neither fetches it nor follows the links found only on it). *Include again* reads it at the next read or Run now. Audited as `knowledge.exclude` and `knowledge.include`; `POST`, `DELETE /api/v1/knowledge/sources/{id}/exclusions`.
+- **Uploaded documents** (MY-12): Settings › Knowledge's section after Sources, with *Notes* (Add note: a title and a text) and *Documents* (Upload), newest first, 25 at a time, a filter, each with who added it, when, its state (reading, read, or error with why) and Remove; the notes and documents of both built-in sources together (`GET /api/v1/knowledge/uploads`, `DELETE /api/v1/knowledge/uploads/{source}/{name}`). Admins use the same section on their Administration page.
+- **What drew on it** (MY-14): removing a document or note, or excluding an item, names the wiki pages that drew on it, with *Review those pages* and *Ask Mycroft to rewrite without it* (a *This is outdated…* correction per page, waiting for review; `POST /api/v1/knowledge/rewrite`).
 
 ### Fixed
 
@@ -63,6 +68,7 @@ Phase 12.1: the agents' and jobs' instructions after a review against open-sourc
 - **A run that used every round** of reads ended with no answer (PM-C5): on its last round an agent is now told to answer from what it read.
 - **Run in Watson on a case says what it does** (CF-48): its tooltip promised "Nothing runs until you approve it there", but a read (such as a suggested fix's `kubectl get …`) runs at once while Watson's *Auto-run reads* is on, as Send to Watson does in the dock. The button and the fix's hint now say so: a change always waits on its card for your approval, a read runs at once only while Auto-run reads is on (otherwise it waits for *Run*); where the case has no Watson beside it, they say the command goes to the dock's Watson box and runs only on Enter. No path ran a change without an approval.
 - **An agent's steps with no draft** read as not started: Draft, Test and Pilot said *done* when nothing was on its way to live; only Live says *now*.
+- **A document removed and uploaded again unchanged is quoted again**: its excerpt, emptied when it was removed, was not written again because its text had not changed; the same for a source's item gone and back.
 
 ### Changed
 
@@ -84,6 +90,9 @@ Phase 12.1: the agents' and jobs' instructions after a review against open-sourc
 - **Validation rules** (PM-R1, PM-R2): ten more for the alert diagnosis, fifteen more for the nightly audit, three RBAC rules reworded. A rule added in the console under an id that now ships becomes that built-in rule, with the console's words as its edit.
 - **Automation's script rules are said once** (PM-J9), in the Automation screen's tasks and in the two agents' cores alike, with new ones: a copy before a file changes, a check after, timeouts, versions compared part by part.
 - **Settings, rearranged** (CU-15, EM-11, IS-32): SLA comes first under AIOps; **Email** is a section of Settings › General (`#/admin/settings/email` leads there); the report page's **Company or IT name** is set in General too, kept where it was; the report page's address moved to the chart (`issues.reportURL`).
+- **Settings › Knowledge's Sources hold what is read again or looked up** (KN-48): *Uploaded documents* and *Added in Mycroft* left the table; their notes and documents are under Uploaded documents.
+- **Web pages added in Mycroft are web sites** (KN-46): at the upgrade each becomes a Web site source of its own (0 links deep, 1 page, renamable), its excerpts kept until the site's first read.
+- **An Admin's Settings › Knowledge** shows Uploaded documents in place of the Added in Mycroft card.
 
 ### Removed
 
@@ -91,6 +100,7 @@ Phase 12.1: the agents' and jobs' instructions after a review against open-sourc
 - **The issue API's tokens** (IS-35): `/api/issues/v1/intake/reports`, `/api/issues/v1/tokens` and Settings › Issues' *API tokens*; the stored tokens stay in `issues-config.json`, unread. Integrations may come back later, likely through MCP.
 - **The status page** (IS-33): Settings › Issues' *All known problems* and its link on the report page.
 - **Rating the pilot's answers** (AI-29): *Good* and *Poor* are gone from the pilot history, with `POST /api/v1/ai/pilot/{n}/rate`; ratings kept before are ignored.
+- **The Added in Mycroft and Uploaded documents cards** of Settings › Knowledge, and the Wiki's *Sources* view (`#/aiops/mycroft/wiki/sources` opens Mycroft › Sources). Adding a web address in Mycroft (`POST /api/v1/knowledge/add` with `kind: url`) is refused: a SuperAdmin adds a Web site source.
 
 ## 0.12.0 (2026-11-11)
 
