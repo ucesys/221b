@@ -80,13 +80,13 @@ func TestADeployRunsTheCommitItsCardShowedAfterTheBranchMoves(t *testing.T) {
 	repo := gitChart(t)
 	serveCommits(t, repo)
 	line := "helm install hello --git " + repo + " --path charts/web --ref master -n web"
-	it := card(t, svc, cl, alice(), line)
+	it := card(t, svc, cl, manager(alice()), line)
 	if it.Status != StatusPending || !strings.Contains(strings.Join(it.Plan.Impact, " "), "at commit") {
 		t.Fatalf("%s %v %v", it.Status, it.Plan.Impact, it.Plan.DryRun)
 	}
 	commit := it.Plan.pin.commit
 	moveBranch(t, repo, "charts/web/values.yaml", "replicas: 9\nimage: nginx:bad\n")
-	if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err != nil {
+	if _, err := svc.Approve(context.Background(), cl, manager(alice()), it.ID); err != nil {
 		t.Fatal(err)
 	}
 	done := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) })
@@ -102,9 +102,9 @@ func TestADeployRunsTheCommitItsCardShowedAfterTheBranchMoves(t *testing.T) {
 func TestADeployIsRefusedWhenTheRefCannotBePinned(t *testing.T) {
 	svc, cl, store := pinSetup(t, Options{})
 	repo := gitChart(t)
-	it := card(t, svc, cl, alice(), "helm install hello --git "+repo+" --path charts/web --ref master -n web")
+	it := card(t, svc, cl, manager(alice()), "helm install hello --git "+repo+" --path charts/web --ref master -n web")
 	moveBranch(t, repo, "charts/web/values.yaml", "replicas: 9\nimage: nginx:bad\n")
-	if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err != nil {
+	if _, err := svc.Approve(context.Background(), cl, manager(alice()), it.ID); err != nil {
 		t.Fatal(err)
 	}
 	done := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) })
@@ -118,11 +118,11 @@ func TestADeployIsRefusedWhenTheRefCannotBePinned(t *testing.T) {
 
 func TestADeployWithACardThatPinnedNothingIsRefused(t *testing.T) {
 	svc, cl, _ := pinSetup(t, Options{})
-	it := card(t, svc, cl, alice(), "helm install hello --git /nothing/here --ref master -n web")
+	it := card(t, svc, cl, manager(alice()), "helm install hello --git /nothing/here --ref master -n web")
 	if it.Plan.pin.commit != "" {
 		t.Fatalf("pinned %+v", it.Plan.pin)
 	}
-	if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err != nil {
+	if _, err := svc.Approve(context.Background(), cl, manager(alice()), it.ID); err != nil {
 		t.Fatal(err)
 	}
 	wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) })
@@ -318,12 +318,39 @@ func TestADeployCardStillPinsWhenTheReleaseCannotBeRead(t *testing.T) {
 	svc, cl, _, _, _ := setup(t, Options{Apps: apps.NewMemoryStore()})
 	forbidding(t, &cl, func(r *http.Request) bool { return strings.Contains(r.URL.Path, "/secrets") })
 	repo := gitChart(t)
-	it := card(t, svc, cl, alice(), "helm upgrade hello --git "+repo+" --path charts/web --ref master -n web")
+	it := card(t, svc, cl, manager(alice()), "helm upgrade hello --git "+repo+" --path charts/web --ref master -n web")
 	text := strings.Join(it.Plan.Impact, "\n")
 	if !strings.Contains(text, "could not read the release") || !strings.Contains(text, "Deploys chart web") || strings.Contains(text, "There is no release") {
 		t.Fatalf("%s", text)
 	}
 	if it.Plan.pin.commit == "" {
 		t.Fatal("no pin")
+	}
+}
+
+// Fetching a chart through Watson, a dry run included, takes the rights of
+// managing applications: the role, and Kubernetes' answer for the
+// namespace. Nothing is fetched for a person without them.
+func TestFetchingAChartNeedsTheRightsOfManagingApplications(t *testing.T) {
+	access := func(_ context.Context, _ Cluster, _ Who, ns string) (bool, error) { return ns == "team-a", nil }
+	svc, cl, _ := pinSetup(t, Options{AppAccess: access})
+	ctx := context.Background()
+	for _, line := range []string{
+		"helm install x --git https://git.example.com/a/b --ref main --dry-run=client -n team-a",
+		"helm upgrade x --git https://git.example.com/a/b --ref main -n team-a",
+		"helm install x shop-charts/shop --dry-run=client -n team-a",
+	} {
+		it := svc.Submit(ctx, cl, alice(), line, "typed", "", true)[0]
+		if it.Status != StatusRefused || it.Rule != "apps" || !strings.Contains(it.Reason, "Only Admins and SuperAdmins") {
+			t.Errorf("%s: %s %q", line, it.Status, it.Reason)
+		}
+	}
+	it := svc.Submit(ctx, cl, manager(alice()), "helm install x --git https://git.example.com/a/b --ref main --dry-run=client -n team-b", "typed", "", true)[0]
+	if it.Status != StatusRefused || it.Rule != "apps" || !strings.Contains(it.Reason, "does not let you manage applications in team-b") {
+		t.Fatalf("another namespace: %s %q", it.Status, it.Reason)
+	}
+	// Other helm commands fetch nothing and are not asked about.
+	if it := svc.Submit(ctx, cl, alice(), "helm uninstall x -n team-b", "typed", "", false)[0]; it.Status == StatusRefused {
+		t.Fatalf("an uninstall: %q", it.Reason)
 	}
 }

@@ -265,6 +265,9 @@ spec:
             # its Service's DNS names and any set in values.
             - name: ALLOWED_HOSTS
               value: {{ include "b221.allowedHosts" . | quote }}
+            # Hosts applications' charts are fetched from (apps.allowedHosts).
+            - name: APPS_ALLOWED_HOSTS
+              value: {{ ((.Values.apps | default dict).allowedHosts | default list) | join "," | quote }}
             # Sign-in (P3-01) and roles (P3-03).
             - name: AUTH_MODE
               value: {{ .Values.auth.mode | quote }}

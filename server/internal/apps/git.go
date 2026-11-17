@@ -430,17 +430,27 @@ func fetchExact(ctx context.Context, s Source, token, commit string) (*Checkout,
 }
 
 // describe makes go-git's errors readable: a wrong credential, a
-// repository that is not there, a host that does not answer.
+// repository that is not there, a host the console does not fetch from.
+// Every failure on the way there reads the same (ErrNotFetched), its cause
+// in the server's log.
 func describe(err error) error {
+	var ux *plumbing.UnexpectedError
+	if errors.As(err, &ux) && ux.Err != nil {
+		err = ux.Err
+	}
 	switch {
 	case errors.Is(err, transport.ErrAuthenticationRequired), errors.Is(err, transport.ErrAuthorizationFailed):
 		return errors.New("the repository needs a token, or the token is wrong")
 	case errors.Is(err, transport.ErrRepositoryNotFound):
 		return errors.New("no repository at that URL (a private one needs a token)")
-	case errors.Is(err, context.DeadlineExceeded):
-		return errors.New("the repository did not answer in time")
 	case errors.Is(err, errHostRefused):
 		return errHostRefused
+	case errors.Is(err, errHostNotAllowed):
+		return errHostNotAllowed
+	case errors.Is(err, ErrFetchLimit), errors.Is(err, ErrNotFetched):
+		return err
+	case onTheWay(err):
+		return notFetchedFor(err)
 	}
 	return err
 }

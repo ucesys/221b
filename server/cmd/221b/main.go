@@ -150,6 +150,10 @@ func run(args []string) error {
 	}
 	log := newLogger(parsed)
 	slog.SetDefault(log)
+	// The hosts applications' charts are fetched from (apps.allowedHosts).
+	if err := apps.SetAllowedHosts(parsed.AppsAllowedHosts); err != nil {
+		return fmt.Errorf("apps.allowedHosts: %w", err)
+	}
 
 	// The audit log (P3-10) owns standard output; the ordinary logs go to
 	// standard error.

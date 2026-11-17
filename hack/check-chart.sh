@@ -34,7 +34,7 @@ render k8s-console --set clusterName=ci --set sherlock.existingSecret=claude --s
 render k8s-console --set clusterName=ci --set sherlock.provider.kind=bedrock --set sherlock.provider.region=eu-west-1 --set sherlock.lockProvider=true | tee "$WORK/chart-provider.yaml" | validate
 echo "--- allowed ingress peers, API server addresses, extra host names and a private registry"
 render k8s-console --set clusterName=ci --set 'networkPolicy.ingressFrom[0].namespaceSelector.matchLabels.team=platform' \
-  --set 'networkPolicy.apiServerCIDRs[0]=10.0.0.10/32' --set 'allowedHosts[0]=console.example.com' \
+  --set 'networkPolicy.apiServerCIDRs[0]=10.0.0.10/32' --set 'allowedHosts[0]=console.example.com' --set 'apps.allowedHosts[0]=*.git.example.com' \
   --set 'imagePullSecrets[0].name=ghcr' | tee "$WORK/chart-options.yaml" | validate
 echo "--- exposed with a LoadBalancer on every node"
 render k8s-console --set clusterName=ci --set service.type=LoadBalancer --set service.nodePort=30081 \

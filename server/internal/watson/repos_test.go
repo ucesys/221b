@@ -113,14 +113,14 @@ func TestHelmInstallFromARepositoryAndARegistryAgainstTheSimulator(t *testing.T)
 func TestARepositoryDeployRunsTheArchiveItsCardShowed(t *testing.T) {
 	f, repos := chartRegistry(t)
 	svc, cl, store := pinSetup(t, Options{Repos: repos})
-	it := card(t, svc, cl, alice(), "helm install hello shop-charts/shop -n web")
+	it := card(t, svc, cl, manager(alice()), "helm install hello shop-charts/shop -n web")
 	if it.Status != StatusPending || !strings.Contains(strings.Join(it.Plan.Impact, " "), "shop-charts/shop @ 1.1.0, archive sha256:") {
 		t.Fatalf("%s %v", it.Status, it.Plan.Impact)
 	}
 	digest := it.Plan.pin.commit
 	// A newer version appears: the card still deploys 1.1.0.
 	f.Add("shop", "1.2.0", map[string]string{"values.yaml": "replicas: 9\nimage: nginx:bad\n", "templates/deployment.yaml": repoDeployment})
-	if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err != nil {
+	if _, err := svc.Approve(context.Background(), cl, manager(alice()), it.ID); err != nil {
 		t.Fatal(err)
 	}
 	done := wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) })
@@ -137,10 +137,10 @@ func TestARepositoryDeployRunsTheArchiveItsCardShowed(t *testing.T) {
 		_, _, _ = repos.Save(context.Background(), "shop-charts", apps.RepositoryInput{Kind: apps.KindHelm, URL: f.URL + "/charts", Auth: apps.AuthNone}, "alice")
 	}
 	again()
-	it = card(t, svc, cl, alice(), "helm upgrade hello shop-charts/shop --version 1.2.0 -n web")
+	it = card(t, svc, cl, manager(alice()), "helm upgrade hello shop-charts/shop --version 1.2.0 -n web")
 	f.Add("shop", "1.2.0", map[string]string{"values.yaml": "replicas: 4\nimage: nginx:other\n", "templates/deployment.yaml": repoDeployment})
 	again()
-	if _, err := svc.Approve(context.Background(), cl, alice(), it.ID); err != nil {
+	if _, err := svc.Approve(context.Background(), cl, manager(alice()), it.ID); err != nil {
 		t.Fatal(err)
 	}
 	done = wait(t, svc, it.ID, func(i Item) bool { return finished(i.Status) })

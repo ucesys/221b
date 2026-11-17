@@ -827,5 +827,27 @@ func (s *Service) TraceOf(k Key, msg int) (Trace, bool) {
 	return t, ok
 }
 
+// Wrote says whether one of Sherlock's answers in a conversation that
+// exists holds text, spaces aside: what a command handed on from an answer
+// is checked against. A conversation is looked up, never made.
+func (s *Service) Wrote(k Key, text string) bool {
+	want := strings.Join(strings.Fields(text), " ")
+	if want == "" {
+		return false
+	}
+	c := s.Lookup(k)
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, m := range c.msgs {
+		if m.Role == "sherlock" && strings.Contains(strings.Join(strings.Fields(m.Text), " "), want) {
+			return true
+		}
+	}
+	return false
+}
+
 // Explain turns an API failure into words for the person asking.
 func Explain(err error) string { return explain(err) }

@@ -49,13 +49,33 @@ type Executor interface {
 	// Check validates an action as proposed: an error refuses the
 	// proposal.
 	Check(a Action) error
-	// Describe reads what the action would do now, as the console: what
-	// it does in words, its targets, impact and their fingerprint.
+	// Describe reads what the action would do now: what it does in words,
+	// its targets, impact and their fingerprint. RequesterFrom(ctx) is the
+	// person who asked for the card in a chat, nil for an agent's own: what
+	// the card shows of the cluster is read as them.
 	Describe(ctx context.Context, cluster string, a Action) (Plan, error)
 	// Apply carries out action i of an approved card, as by.
 	Apply(ctx context.Context, c Card, i int, by Approver) (Result, error)
 	// Admin says only a SuperAdmin approves it.
 	Admin() bool
+}
+
+type requesterKey struct{}
+
+// withRequester tells an Executor's Describe whose card it reads for.
+func withRequester(ctx context.Context, p *Person) context.Context {
+	if p == nil {
+		return ctx
+	}
+	q := *p
+	return context.WithValue(ctx, requesterKey{}, &q)
+}
+
+// RequesterFrom is the person a card was asked for in a chat, as Describe
+// is told it, or nil for an agent's own card.
+func RequesterFrom(ctx context.Context) *Person {
+	p, _ := ctx.Value(requesterKey{}).(*Person)
+	return p
 }
 
 // SecretStore keeps the notification channels' addresses: a Secret, one
@@ -755,7 +775,7 @@ func (s *Store) propose(ctx context.Context, p Proposal, requester *Person, wats
 	}
 	plans := make([]Plan, len(p.Actions))
 	for i, a := range p.Actions {
-		pl, err := s.executor(a.Kind).Describe(ctx, p.Cluster, a)
+		pl, err := s.executor(a.Kind).Describe(withRequester(ctx, requester), p.Cluster, a)
 		if err != nil {
 			pl.Fingerprint, pl.Unread = "", clean(err.Error(), MaxText)
 		}
@@ -1233,7 +1253,7 @@ func (s *Store) recheck(ctx context.Context, c Card) Recheck {
 			return fail("Watson could not read what action %d acts on when it was proposed (%s), so it cannot tell whether that changed since. Reject this card; the agent proposes it again.", i+1, strings.TrimSuffix(why, "."))
 		}
 		dctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		now, err := s.executor(a.Kind).Describe(dctx, c.Cluster, a)
+		now, err := s.executor(a.Kind).Describe(withRequester(dctx, c.Requester), c.Cluster, a)
 		cancel()
 		if err != nil {
 			return fail("Watson could not read what action %d acts on now: %v. Try again in a moment.", i+1, err)

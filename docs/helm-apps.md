@@ -48,6 +48,23 @@ secrets:
 
 No value is needed for the applications: they need Watson (`localCluster.mode: write` or a connection that may change things) and the egress to the repository host over HTTPS, which `sherlock.egress` (on by default) already allows. With `sherlock.egress: false` and `outboundCIDRs` narrowed, add the repository host.
 
+```yaml
+apps:
+  # The hosts charts are fetched from: git repositories, Helm repositories
+  # and OCI registries. Empty (the default) allows any host but the
+  # console's own pod and node and the clouds' metadata services.
+  allowedHosts:
+    - git.example.com
+    - "*.charts.example.com"    # any name under charts.example.com
+    - registry.example.com:5443 # that port only
+```
+
+With `apps.allowedHosts` set, a git source, a Helm repository or an OCI registry on any other host is refused when it is saved (an application's source, Settings › Applications, a restored backup) and again when the console connects, each redirect included. An entry is a host name, or `*.domain` for any name under that domain (not the domain itself); either may end in `:port` to allow that port only.
+
+Fetching a chart takes the rights of managing applications. In Watson, `helm install` and `helm upgrade` with `--git` or a repository's chart, a dry run included, are for an Admin or SuperAdmin whom Kubernetes lets manage applications in the namespace, asked before anything is fetched.
+
+When a fetch fails on the way to the repository (the host refuses the connection or does not answer, its name does not resolve, TLS fails, or it answers an unexpected HTTP status), the person is told only that the repository could not be fetched; the cause is in the console's log (`a repository could not be fetched`). A refused token or credentials, and a repository that is not there, are said as such, so the source can be fixed.
+
 ## Where the work lands
 
 - `server/internal/apps`: the source, the git fetch and chart load, the client-side render, images, diffs, drift, and the record store (Secrets or memory).

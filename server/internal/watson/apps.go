@@ -61,16 +61,36 @@ func (a *appChart) valuesDigest() string {
 	return digest(a.vals, a.rec != nil && a.rec.IgnoreDefaults)
 }
 
-// appRefusal says why a person may not use --app in the command's
-// namespace, or "": it reads a record with the console's account, so the
-// person's rights are asked here, for the role and for that namespace. The
-// answer is the same whether a record is kept there or not.
+// fetchesChart says whether a line fetches a chart from where it names:
+// a git repository (--git), a Helm repository or an OCI registry (the
+// chart after the release). A dry run fetches it too.
+func fetchesChart(c *Command) bool {
+	switch c.Name() {
+	case "helm install", "helm upgrade":
+		return c.Has("git") || len(c.Positionals) > 1
+	}
+	return false
+}
+
+// appRefusal says why a person may not use --app, or fetch a chart, in the
+// command's namespace, or "": the record is read and the chart fetched
+// with the console's account, from the console's pod, so the person's
+// rights are asked here, those of managing applications: for the role and
+// for that namespace. The answer is the same whether a record is kept
+// there or not.
 func (s *Service) appRefusal(ctx context.Context, cl Cluster, who Who, c *Command) string {
-	if c == nil || !c.Has("app") {
+	if c == nil {
+		return ""
+	}
+	app, fetch := c.Has("app"), fetchesChart(c)
+	if !app && !fetch {
 		return ""
 	}
 	if !who.ManageApps {
-		return "Only Admins and SuperAdmins use an application's saved values and token."
+		if app {
+			return "Only Admins and SuperAdmins use an application's saved values and token."
+		}
+		return "Only Admins and SuperAdmins install or upgrade a chart from a repository."
 	}
 	s.mu.Lock()
 	ask := s.opts.AppAccess
