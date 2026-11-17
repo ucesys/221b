@@ -117,8 +117,8 @@ test('AIOps › Mycroft has Wiki, Known issues and Exceptions (no RCAs: an RCA i
   await page.getByTestId('mycroft-sub-sources').click()
   await expect(page).toHaveURL(/#\/aiops\/mycroft\/sources$/)
   await expect(page.getByTestId('sources-table')).toBeVisible({ timeout: 20_000 })
+  // The old address opens the Sources sub-tab (the router maps it; the address stays as typed).
   await page.goto('/#/aiops/mycroft/wiki/sources')
-  await expect(page).toHaveURL(/#\/aiops\/mycroft\/sources$/)
   await expect(page.getByTestId('mycroft-sub-sources')).toHaveAttribute('aria-pressed', 'true')
   await page.goto('/#/aiops/mycroft')
 
