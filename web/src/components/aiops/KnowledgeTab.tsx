@@ -2,11 +2,14 @@
 // Mycroft's wiki. Pages: browse the approved pages, each with its sources
 // and their dates and whether it is stale, and search them and the
 // sources' excerpts. Drafts: the runs of changes waiting for review, with
-// every page's diff. Sources: what Mycroft reads, and what people added.
-// Each view has its address: #/aiops/mycroft/wiki[/drafts|/sources], a
-// page #/aiops/mycroft/wiki/pages/<kind>/<name>.md. Since MY-11 a note, a
-// web address or documents are added in Settings › Knowledge's Added in
-// Mycroft card only: the Add view's old address opens it there.
+// every page's diff. Each view has its address: #/aiops/mycroft/wiki[/drafts],
+// a page #/aiops/mycroft/wiki/pages/<kind>/<name>.md. Since MY-11 notes and
+// documents are added in Settings › Knowledge only (its Uploaded documents
+// section since 0.12.1): the Add view's old address opens it there. Since
+// 0.12.1 what Mycroft reads is AIOps › Mycroft › Sources, a sub-tab of its
+// own (MycroftSources.tsx); the Sources view's old address leads there.
+// ?pages=<path>,<path> shows only those pages (Review those pages, after a
+// source item was removed or excluded).
 //
 // A page's view has its own actions (KN-23, KN-24, WikiPageActions.tsx):
 // This is outdated…, Retire page… and Make active again…; retired pages
@@ -37,7 +40,9 @@ import { MycroftPage } from './MycroftPage'
 import { SourceLink } from './SourceLink'
 import { STORE_NEAR, StoreRoom } from './WikiStoreRoom'
 import { PageActions, PageNotices } from './WikiPageActions'
-import { ADD_HREF, WikiSources } from './WikiSources'
+
+/** Where notes and documents are added: Settings › Knowledge's Uploaded documents section (MY-11, 0.12.1). */
+export const ADD_HREF = adminHref('settings', ['knowledge', 'added'])
 
 export { pageHref } from '../../api/knowledge'
 
@@ -71,8 +76,8 @@ export function pagesShown(pages: WikiPage[], filter: string, staleOnly: boolean
 }
 
 /** The Wiki's views. */
-export type WikiView = 'pages' | 'drafts' | 'sources'
-const VIEWS: WikiView[] = ['pages', 'drafts', 'sources']
+export type WikiView = 'pages' | 'drafts'
+const VIEWS: WikiView[] = ['pages', 'drafts']
 
 /** What a route opens: a view, or a page (#/aiops/mycroft/wiki/pages/<kind>/<name>.md). */
 export function wikiRoute(route: Route): { view: WikiView; page: string } {
@@ -85,6 +90,8 @@ export function wikiRoute(route: Route): { view: WikiView; page: string } {
 /** The Wiki of AIOps › Mycroft. onPages hears how many approved pages there are. */
 export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToast?: (msg: string) => void; onPages?: (n: number) => void }): JSX.Element {
   const { view, page: open } = wikiRoute(route)
+  // Review those pages (0.12.1): only the pages named, until Show all.
+  const only = useMemo(() => (route.params.get('pages') ?? '').split(',').filter(Boolean), [route.params])
   const [wiki, setWiki] = useState<WikiState | null>(null)
   const [wikiError, setWikiError] = useState('')
   const [pages, setPages] = useState<WikiPage[] | null>(null)
@@ -139,7 +146,16 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
       },
     )
   }, [tick])
-  const kept = useMemo(() => pagesShown(pages ?? [], filter, staleOnly, sort), [pages, filter, staleOnly, sort])
+  const kept = useMemo(
+    () =>
+      pagesShown(
+        (pages ?? []).filter((p) => only.length === 0 || only.includes(p.path)),
+        filter,
+        staleOnly,
+        sort,
+      ),
+    [pages, filter, staleOnly, sort, only],
+  )
   const groups = useMemo(() => {
     const m = new Map<string, WikiPage[]>()
     for (const p of kept) m.set(p.kind, [...(m.get(p.kind) ?? []), p])
@@ -149,7 +165,7 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
   const stale = useMemo(() => (pages ?? []).filter((p) => p.stale).length, [pages])
   const waiting = (runs ?? []).filter((r) => r.state === 'waiting' || r.state === 'partial')
   const listRetired = showRetired && retired.length > 0
-  const filtering = filter.trim() !== '' || staleOnly
+  const filtering = filter.trim() !== '' || staleOnly || only.length > 0
   // A group is unfolded while filtering, when it holds the page open, or
   // when the wiki is small; folding it by hand wins.
   const isFolded = (kind: string, list: WikiPage[]) => folded[kind] ?? !(filtering || (pages?.length ?? 0) <= UNFOLDED_PAGES || list.some((p) => p.path === open))
@@ -169,9 +185,6 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
           <button aria-pressed={view === 'drafts'} onClick={() => show('drafts')} title="Mycroft’s changes waiting for review" data-testid="knowledge-view-drafts">
             Drafts <span className="rk-cnt">{waiting.length}</span>
           </button>
-          <button aria-pressed={view === 'sources'} onClick={() => show('sources')} title="What Mycroft reads, and what people added" data-testid="knowledge-view-sources">
-            Sources
-          </button>
         </div>
       }
     >
@@ -182,9 +195,7 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
       )}
       {noStore && <NoStore maySetup={wiki.maySetup} />}
       {wiki?.usage && wiki.usage.used >= wiki.usage.limit * STORE_NEAR && <StoreRoom usage={wiki.usage} maySetup={wiki.maySetup} />}
-      {view === 'sources' ? (
-        <WikiSources wiki={wiki} onChanged={refresh} onToast={onToast} />
-      ) : view === 'drafts' ? (
+      {view === 'drafts' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minWidth: 0 }} data-testid="knowledge-drafts">
           {runs === null && <p className="rk-fhint">Loading…</p>}
           {runsError && (
@@ -230,6 +241,15 @@ export function KnowledgeTab({ route, onToast, onPages }: { route: Route; onToas
                   </button>
                 )}
               </div>
+            )}
+            {only.length > 0 && !listRetired && (
+              <span className="rk-callout" data-tone="info" style={{ fontSize: 12, flexDirection: 'column', gap: 4 }} data-testid="knowledge-only">
+                Showing {kept.length} {kept.length === 1 ? 'page' : 'pages'} that drew on what was removed or excluded
+                {kept.length < only.length ? ` (${only.length - kept.length} not approved or gone)` : ''}.
+                <a className="rk-link" href={wikiHref('pages')} data-testid="knowledge-only-all">
+                  Show all
+                </a>
+              </span>
             )}
             {retired.length > 0 && (
               <div className="rk-seg" role="group" aria-label="Which pages" data-testid="knowledge-pages-filter">

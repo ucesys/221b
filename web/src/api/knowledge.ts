@@ -3,8 +3,23 @@
 // come back: the server says only whether each is set.
 import { call, post } from './call'
 
-/** fixes: the fixes proven in cases, offered for a runbook (KN-34); there from the start, renamed only. live: never copied, looked up when the agents troubleshoot (KN-39). */
-export type SourceKind = 'confluence' | 'git' | 's3' | 'upload' | 'console' | 'fixes' | 'live'
+/** fixes: the fixes proven in cases, offered for a runbook (KN-34); there from the start, renamed only. live: never copied, looked up when the agents troubleshoot (KN-39). web: a web site crawled from a start address (0.12.1). */
+export type SourceKind = 'confluence' | 'git' | 's3' | 'upload' | 'console' | 'fixes' | 'live' | 'web'
+
+/**
+ * An item, or items, a SuperAdmin left out of a syncable source (0.12.1):
+ * its id (a web page's path, a file's path, an object's key, a Confluence
+ * page's id), a glob with * (/blog/*), or a prefix ending in / (a folder,
+ * an S3 prefix); under, for Confluence, is the page and its children.
+ */
+export interface Exclusion {
+  pattern: string
+  under?: boolean
+  title?: string
+  reason?: string
+  by: string
+  at: string
+}
 
 export interface KnowledgeSource {
   id: string
@@ -27,9 +42,16 @@ export interface KnowledgeSource {
   pathStyle?: boolean
   credentials?: 'keys' | 'identity'
   caPEM?: string
-  /** A live source's addresses and how it signs in (KN-39): none, a bearer token, or the user (username) with a password or API token. */
+  /** A live source's addresses and how it signs in (KN-39): none, a bearer token, or the user (username) with a password or API token. A web site signs in the same way. */
   addresses?: LiveAddress[]
   auth?: '' | 'bearer' | 'basic'
+  /** A web site (0.12.1): its start address is url; how many links away it is read (0–3) and at most how many pages (1–200). */
+  depth?: number
+  pages?: number
+  /** What a SuperAdmin left out of the source, in AIOps › Mycroft › Sources; kept by the server on Edit. */
+  excluded?: Exclusion[]
+  /** The web items of Added in Mycroft this web site was made from at the upgrade. */
+  migratedFrom?: string[]
   added?: string
   addedBy?: string
 }
@@ -447,7 +469,13 @@ export interface AddResult {
 export const pageHref = (path: string) => '#/aiops/mycroft/wiki/' + path.split('/').map(encodeURIComponent).join('/')
 
 /** The Wiki's views' addresses. */
-export const wikiHref = (view: 'pages' | 'drafts' | 'sources' = 'pages') => '#/aiops/mycroft/wiki' + (view === 'pages' ? '' : '/' + view)
+export const wikiHref = (view: 'pages' | 'drafts' = 'pages') => '#/aiops/mycroft/wiki' + (view === 'pages' ? '' : '/' + view)
+
+/** The Wiki's page list showing only these pages: Review those pages, after a source item was removed or excluded. */
+export const wikiPagesHref = (paths: string[]) => '#/aiops/mycroft/wiki?pages=' + paths.map(encodeURIComponent).join(',')
+
+/** AIOps › Mycroft › Sources: every item the agents can draw on (0.12.1). */
+export const SOURCES_HREF = '#/aiops/mycroft/sources'
 
 export const fetchWiki = (background = false) => call<WikiState>(base + 'wiki', {}, background)
 export const addKnowledge = (input: AddInput) => call<AddResult>(base + 'add', post(input))
@@ -485,6 +513,7 @@ export const SOURCE_KIND_LABEL: Record<SourceKind, string> = {
   console: 'This console',
   fixes: 'Fixes',
   live: 'Live pages',
+  web: 'Web site',
 }
 
 /** A live address's Test, in words: "OK · 12 KiB · Title", or what was wrong. */
@@ -535,3 +564,157 @@ export interface FindResult {
 
 /** Searches what AIOps › Mycroft holds, as the person may read it (GET /api/v1/aiops/mycroft/search). */
 export const findInMycroft = (q: string, kinds: FindKind[] = [], limit = 30) => call<FindResult>('/api/v1/aiops/mycroft/search?q=' + enc(q) + (kinds.length > 0 ? '&kind=' + kinds.map(enc).join(',') : '') + '&limit=' + limit, {}, true)
+
+// --- Uploaded documents, Mycroft › Sources and exclusions (0.12.1) ---
+
+/** A wiki page, by its path and title. */
+export interface PageBrief {
+  path: string
+  title: string
+}
+
+/** A note or a document people uploaded: in the built-in sources 'documents' and 'added'. */
+export interface UploadItem {
+  source: string
+  id: string
+  type: 'note' | 'document'
+  title: string
+  by?: string
+  at?: string
+  state: 'reading' | 'read' | 'error'
+  error?: string
+  lastRead?: string
+  /** The wiki pages Mycroft wrote that drew on it. */
+  pages?: string[]
+  /** The page a correction (This is outdated…) is for. */
+  corrects?: string
+  reported?: string
+}
+
+export interface UploadsView {
+  items: UploadItem[]
+  limits: AddLimits
+  mayAdd: boolean
+  maySetup: boolean
+  store: string
+  model: boolean
+  /** The built-in sources of uploads switched off: nothing in them is read until a SuperAdmin turns them on. */
+  off: { id: string; name: string }[]
+}
+
+export const fetchUploads = (background = false) => call<UploadsView>(base + 'uploads', {}, background)
+export const removeUpload = (source: string, name: string) => call<{ removed: boolean; pages?: PageBrief[] }>(base + 'uploads/' + enc(source) + '/' + enc(name), { method: 'DELETE' })
+
+/** The types of a source's item. */
+export type ItemType = 'note' | 'document' | 'webPage' | 'confluencePage' | 'gitFile' | 's3Object' | 'record' | 'fix' | 'liveAddress'
+export type ItemStateName = 'reading' | 'read' | 'error' | 'skipped' | 'excluded' | 'live'
+
+export const ITEM_TYPE_LABEL: Record<ItemType, string> = {
+  note: 'Note',
+  document: 'Document',
+  webPage: 'Web page',
+  confluencePage: 'Confluence page',
+  gitFile: 'Git file',
+  s3Object: 'S3 object',
+  record: 'Console record',
+  fix: 'Fix',
+  liveAddress: 'Live address',
+}
+
+export const ITEM_STATE_LABEL: Record<ItemStateName, string> = {
+  reading: 'Reading',
+  read: 'Read',
+  error: 'Error',
+  skipped: 'Skipped',
+  excluded: 'Excluded',
+  live: 'Looked up when asked',
+}
+
+/** One item a source holds, as AIOps › Mycroft › Sources lists it. */
+export interface SourceItem {
+  source: string
+  sourceName: string
+  kind: SourceKind
+  type: ItemType
+  id: string
+  title: string
+  url?: string
+  by?: string
+  at?: string
+  lastRead?: string
+  state: ItemStateName
+  why?: string
+  /** How many wiki pages drew on it. */
+  pages?: number
+  /** The rule that leaves it out, when it is excluded. */
+  exclusion?: Exclusion
+  /** Its source is a web site, a Confluence space, a git repository or an S3 bucket. */
+  excludable?: boolean
+  /** The pattern of everything under it, and that in words, for Exclude everything under …. */
+  under?: string
+  underLabel?: string
+}
+
+/** A source as the Sources filter offers it; 'uploads' is both built-in sources of uploads. */
+export interface ItemSource {
+  id: string
+  name: string
+  kind: SourceKind | 'uploads'
+  off?: boolean
+}
+
+export interface ItemsPage {
+  items: SourceItem[]
+  total: number
+  offset: number
+  limit: number
+  sources: ItemSource[]
+  mayExclude: boolean
+  mayRemove: boolean
+}
+
+export interface ItemsQuery {
+  source?: string
+  type?: string
+  state?: string
+  q?: string
+  offset?: number
+  limit?: number
+}
+
+/** The address of a page of items: only what is set is sent. */
+export function itemsUrl(q: ItemsQuery): string {
+  const p = new URLSearchParams()
+  for (const k of ['source', 'type', 'state', 'q'] as const) if (q[k]) p.set(k, q[k])
+  if (q.offset) p.set('offset', String(q.offset))
+  if (q.limit) p.set('limit', String(q.limit))
+  const qs = p.toString()
+  return base + 'items' + (qs ? '?' + qs : '')
+}
+
+export const fetchItems = (q: ItemsQuery) => call<ItemsPage>(itemsUrl(q))
+
+export interface ItemDetail {
+  item: SourceItem
+  excerpts: string[]
+  excerptCount: number
+  pages: PageBrief[]
+  /** Whether the wiki records which pages drew on the item. */
+  provenance: boolean
+}
+
+export const fetchItemDetail = (source: string, id: string) => call<ItemDetail>(base + 'items/detail?source=' + enc(source) + '&id=' + enc(id))
+
+export interface ExcludeResult {
+  exclusion: Exclusion
+  items: number
+  pages: PageBrief[]
+  text: string
+}
+
+export const excludeItems = (source: string, input: { item?: string; pattern?: string; under?: boolean; reason?: string }) => call<ExcludeResult>(base + 'sources/' + enc(source) + '/exclusions', post(input))
+export const includeAgain = (source: string, pattern: string, under = false) =>
+  call<{ included: boolean; text: string }>(base + 'sources/' + enc(source) + '/exclusions?pattern=' + enc(pattern) + (under ? '&under=1' : ''), { method: 'DELETE' })
+
+/** Ask Mycroft to rewrite without it: one correction per page, each redraft waiting for review. */
+export const askRewrite = (pages: string[], title: string, why: 'removed' | 'excluded') => call<{ sent: number; failed?: string[]; text: string }>(base + 'rewrite', post({ pages, title, why }))

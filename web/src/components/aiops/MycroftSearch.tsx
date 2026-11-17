@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, type ReactNode } from 'react'
 import { CallError } from '../../api/call'
 import { fixHref } from '../../api/fixes'
-import { findInMycroft, pageHref, wikiHref, type FindHit, type FindKind, type FindResult } from '../../api/knowledge'
+import { findInMycroft, pageHref, SOURCES_HREF, type FindHit, type FindKind, type FindResult } from '../../api/knowledge'
 import { exceptionHref } from '../../api/lessons'
 import { navigate } from '../../lib/router'
 import { knownHref } from './FindingParts'
@@ -41,8 +41,8 @@ export function findHref(h: FindHit): string {
     case 'exception':
       return h.id ? exceptionHref(h.id) : ''
     default:
-      // An excerpt opens its source; one with no address, the Wiki's sources.
-      return h.url || wikiHref('sources')
+      // An excerpt opens its source; one with no address, Mycroft › Sources.
+      return h.url || SOURCES_HREF
   }
 }
 

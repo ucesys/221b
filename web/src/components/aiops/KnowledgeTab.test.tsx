@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WikiPage, WikiState } from '../../api/knowledge'
 import { adminHref, parseHash, type Route } from '../../lib/router'
 import { KnowledgeTab, PAGE_ROWS, pageHref, pagesShown, wikiRoute } from './KnowledgeTab'
-import { MYCROFT_TABLE_MIN } from './mycroftTable'
 
 const pages: WikiPage[] = [
   { path: 'pages/application/shop.md', title: 'Application: shop', kind: 'application', updated: '2026-10-01T00:00:00Z', stale: true },
@@ -140,7 +139,7 @@ describe('AIOps › Mycroft › Wiki', () => {
     render(<KnowledgeTab route={route(['wiki', 'drafts'])} />)
     expect((await screen.findByTestId('knowledge-drafts')).textContent).toContain('No changes from Mycroft yet.')
     expect(pageHref('pages/runbook/a b.md')).toBe('#/aiops/mycroft/wiki/pages/runbook/a%20b.md')
-    expect(wikiRoute(parseHash('#/aiops/mycroft/wiki/sources'))).toEqual({ view: 'sources', page: '' })
+    expect(wikiRoute(parseHash('#/aiops/mycroft/wiki/drafts'))).toEqual({ view: 'drafts', page: '' })
     expect(wikiRoute(parseHash('#/aiops/knowledge/pages/system/db.md'))).toEqual({ view: 'pages', page: 'pages/system/db.md' })
   })
 
@@ -167,43 +166,26 @@ describe('AIOps › Mycroft › Wiki', () => {
     expect((await screen.findByTestId('knowledge-pages-error')).textContent).toContain('Your role does not include the wiki')
   })
 
-  it('lists the sources, with no address or credential, and removes what was added', async () => {
-    stub({ added: (_u, init) => (init?.method === 'DELETE' ? { removed: true } : {}) })
-    const toast = vi.fn()
-    render(<KnowledgeTab route={route(['wiki', 'sources'])} onToast={toast} />)
-    const rows = await screen.findAllByTestId('wiki-source')
-    expect(rows.map((r) => r.getAttribute('data-source'))).toEqual(['console', 'infra', 'added'])
-    // As wide as Mycroft's other tables (build 14).
-    expect(screen.getByTestId('wiki-sources-table').style.minWidth).toBe(`${MYCROFT_TABLE_MIN}px`)
-    expect(rows[1]!.textContent).toContain('Failed: the token was refused')
-    const item = screen.getByTestId('wiki-added-item')
-    expect(item.textContent).toContain('Backups')
-    expect(within(item).getByText('practice/backup.md').getAttribute('href')).toBe('#/aiops/mycroft/wiki/pages/practice/backup.md')
-    fireEvent.click(within(item).getByTestId('wiki-added-remove'))
-    fireEvent.click(screen.getByTestId('confirm-ok'))
-    await waitFor(() => expect(calls.some((c) => c.url === '/api/v1/knowledge/added/note%20Backups.md' && c.init?.method === 'DELETE')).toBe(true))
-    await waitFor(() => expect(toast).toHaveBeenCalledWith('“Backups” removed: the agents no longer quote it.'))
-  })
-
-  // MY-11: Add is in Settings › Knowledge only.
-  it('has no Add view: Sources’ Add… and the empty wiki lead to Settings › Knowledge’s Added in Mycroft card', async () => {
-    render(<KnowledgeTab route={route(['wiki', 'sources'])} />)
-    expect((await screen.findByTestId('wiki-added-add')).getAttribute('href')).toBe(adminHref('settings', ['knowledge', 'added']))
+  // 0.12.1: Sources is Mycroft's own sub-tab; Add is in Settings › Knowledge only (MY-11).
+  it('has no Sources or Add view: the empty wiki leads to Settings › Knowledge', async () => {
+    render(<KnowledgeTab route={route(['wiki'])} />)
+    await screen.findAllByTestId('knowledge-page-link')
+    expect(screen.queryByTestId('knowledge-view-sources')).toBeNull()
     expect(screen.queryByTestId('knowledge-view-add')).toBeNull()
-    expect(screen.getAllByRole('button').map((b) => b.textContent)).not.toContain('Add')
     cleanup()
-    stub({ wiki: () => state({ added: [] }), pages: () => ({ pages: [], connected: true }) })
-    render(<KnowledgeTab route={route(['wiki', 'sources'])} />)
-    expect((await screen.findByTestId('wiki-added-empty')).querySelector('a')?.getAttribute('href')).toBe(adminHref('settings', ['knowledge', 'added']))
-    cleanup()
+    stub({ pages: () => ({ pages: [], connected: true }) })
     render(<KnowledgeTab route={route(['wiki'])} />)
     expect((await screen.findByTestId('knowledge-empty-add')).getAttribute('href')).toBe(adminHref('settings', ['knowledge', 'added']))
-    cleanup()
-    // A Viewer is told who adds, with no link.
-    stub({ wiki: () => state({ added: [], mayAdd: false }) })
-    render(<KnowledgeTab route={route(['wiki', 'sources'])} />)
-    expect((await screen.findByTestId('wiki-added-empty')).textContent).toContain('Admins and SuperAdmins add')
-    expect(screen.queryByTestId('wiki-added-add')).toBeNull()
+  })
+
+  it('shows only the pages named by Review those pages, with Show all (0.12.1)', async () => {
+    const r = { ...route(['wiki']), params: new URLSearchParams('pages=pages/practice/backup.md,pages/gone.md') } as Route
+    render(<KnowledgeTab route={r} />)
+    const only = await screen.findByTestId('knowledge-only')
+    await waitFor(() => expect(screen.getAllByTestId('knowledge-page-link').map((l) => l.textContent)).toEqual(['Backup policy']))
+    expect(only.textContent).toContain('Showing 1 page')
+    expect(only.textContent).toContain('1 not approved or gone')
+    expect(within(only).getByTestId('knowledge-only-all').getAttribute('href')).toBe('#/aiops/mycroft/wiki')
   })
 })
 

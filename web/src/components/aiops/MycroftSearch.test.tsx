@@ -107,7 +107,7 @@ describe('One search across Mycroft (KN-35)', () => {
   it('opens each kind where it lives', () => {
     expect(hits.map(findHref)).toEqual(['#/aiops/mycroft/known/KI-3', '#/aiops/mycroft/wiki/pages/runbook/checkout.md', '#/aiops/mycroft/exceptions/EX-4', 'https://wiki.example.com/shop'])
     expect(findHref({ kind: 'fix', id: 'F-2', title: '', text: '', score: 0 })).toBe('#/aiops/mycroft/fixes/F-2')
-    expect(findHref({ kind: 'excerpt', title: '', text: '', score: 0 })).toBe('#/aiops/mycroft/wiki/sources')
+    expect(findHref({ kind: 'excerpt', title: '', text: '', score: 0 })).toBe('#/aiops/mycroft/sources')
   })
 
   it('marks each word that starts with a term searched, whatever its case', () => {

@@ -197,14 +197,23 @@ export function parseHash(hash: string): Route {
       params.set('show', 'all')
       return { cluster, view: 'aiops', tab: FIRST_TAB, path: ['inbox'], params }
     }
-    // Add moved to Settings › Knowledge's Added in Mycroft card (MY-11):
-    // the Wiki's Add view's old addresses open it there.
+    // Add moved to Settings › Knowledge (MY-11), its Uploaded documents
+    // section since 0.12.1: the Wiki's Add view's old addresses open it there.
     if (((segs[1] === 'mycroft' && segs[2] === 'wiki') || segs[1] === 'knowledge') && segs[segs[1] === 'mycroft' ? 3 : 2] === 'add')
       return {
         cluster: LOCAL,
         view: 'admin',
         tab: FIRST_TAB,
         path: ['settings', 'knowledge', 'added'],
+        params: new URLSearchParams(query),
+      }
+    // The Wiki's Sources view became Mycroft's own Sources sub-tab (0.12.1).
+    if (((segs[1] === 'mycroft' && segs[2] === 'wiki') || segs[1] === 'knowledge') && segs[segs[1] === 'mycroft' ? 3 : 2] === 'sources')
+      return {
+        cluster,
+        view: 'aiops',
+        tab: FIRST_TAB,
+        path: ['mycroft', 'sources'],
         params: new URLSearchParams(query),
       }
     // The wiki's exceptions are Mycroft's tab of their own now:

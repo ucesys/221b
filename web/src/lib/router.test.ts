@@ -116,6 +116,10 @@ describe('the AIOps area (CS-01, CS-06)', () => {
     expect(parseHash('#/aiops/knowledge/exceptions/EX-3')).toMatchObject({ view: 'aiops', path: ['mycroft', 'exceptions', 'EX-3'] })
     // Add moved to Settings › Knowledge (MY-11).
     expect(parseHash('#/aiops/mycroft/wiki/add')).toMatchObject({ view: 'admin', path: ['settings', 'knowledge', 'added'] })
+    // The Wiki's Sources view is Mycroft's Sources sub-tab (0.12.1).
+    expect(parseHash('#/aiops/mycroft/wiki/sources')).toMatchObject({ view: 'aiops', path: ['mycroft', 'sources'] })
+    expect(parseHash('#/aiops/knowledge/sources')).toMatchObject({ view: 'aiops', path: ['mycroft', 'sources'] })
+    expect(parseHash('#/aiops/mycroft/sources')).toMatchObject({ view: 'aiops', path: ['mycroft', 'sources'] })
     expect(parseHash('#/c/dev/aiops/runs/run-4')).toMatchObject({ view: 'aiops', cluster: 'dev', path: ['jobs', 'runs', 'run-4'] })
     expect(parseHash('#/aiops/bogus')).toMatchObject({ view: 'aiops', path: ['inbox'] })
   })

@@ -8,7 +8,7 @@ import { UsersPage } from './UsersPage'
 import { AdminAudit } from './AdminAudit'
 import { AdminBackup } from './AdminBackup'
 import { AdminSessions, AdminToolbox } from './toolbox/AdminToolbox'
-import { AddedInMycroft } from './ai/AddedInMycroft'
+import { UploadedDocuments } from './ai/UploadedDocuments'
 import { isSuperAdmin, pagesFor } from '../lib/adminAccess'
 
 export interface AdminProps {
@@ -104,14 +104,15 @@ function Refusal({ page, signedIn }: { page: Page; signedIn: boolean }) {
 }
 
 /**
- * Settings › Knowledge for someone who is not a SuperAdmin: the Added in
- * Mycroft card alone, for an Admin (MY-11); anyone else is refused, as for
- * the rest of Settings.
+ * Settings › Knowledge for someone who is not a SuperAdmin: the Uploaded
+ * documents section alone, for an Admin (MY-11, 0.12.1): the notes and
+ * documents they add and remove; anyone else is refused, as for the rest
+ * of Settings.
  */
 function AdminKnowledge({ onToast, focus }: { onToast: (msg: string) => void; focus: boolean }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }} data-testid="admin-knowledge-added">
-      <AddedInMycroft
+      <UploadedDocuments
         onToast={onToast}
         focus={focus}
         fallback={<Refusal page="settings" signedIn />}
@@ -193,8 +194,8 @@ export function AdminPageView({ route, me, now, cluster, onToast, settings, refr
         </h2>
         {me === null && <p style={{ margin: 0, color: 'var(--fg3)' }}>Loading…</p>}
         <UntrustedProxyNotice me={me} />
-        {/* Settings › Knowledge's Added in Mycroft card is where Admins add to the wiki too (MY-04, MY-11): the rest of Settings stays closed to them. */}
-        {me && refused && page === 'settings' && route.path[1] === 'knowledge' && <AdminKnowledge onToast={onToast} focus={route.path[2] === 'added'} />}
+        {/* Settings › Knowledge's Uploaded documents section is where Admins add to the wiki too (MY-04, MY-11): the rest of Settings stays closed to them. */}
+        {me && refused && page === 'settings' && route.path[1] === 'knowledge' && <AdminKnowledge onToast={onToast} focus={route.path[2] === 'added' || route.path[2] === 'uploads'} />}
         {me && refused && !(page === 'settings' && route.path[1] === 'knowledge') && <Refusal page={page} signedIn />}
         {me && !refused && page === 'roles' && <RolesPage {...props} />}
         {me && !refused && page === 'permissions' && <PermissionsPage {...props} />}

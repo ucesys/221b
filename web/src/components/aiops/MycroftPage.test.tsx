@@ -105,7 +105,7 @@ describe('AIOps › Mycroft: one column and one page layout for every sub-tab (C
         .getAllByRole('button')
         .map((b) => b.getAttribute('data-testid'))
         .filter((t) => t?.startsWith('mycroft-sub-')),
-    ).toEqual(['mycroft-sub-wiki', 'mycroft-sub-known', 'mycroft-sub-exceptions', 'mycroft-sub-fixes'])
+    ).toEqual(['mycroft-sub-wiki', 'mycroft-sub-sources', 'mycroft-sub-known', 'mycroft-sub-exceptions', 'mycroft-sub-fixes'])
     expect(screen.queryByTestId('rules-page')).toBeNull()
   })
 

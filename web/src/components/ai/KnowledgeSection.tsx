@@ -2,11 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   addSource,
   fetchKnowledge,
-  fileBase64,
   LIVE_ADDRESS_LABEL,
   liveCheckText,
   moveStore,
-  removeDocument,
   removeSource,
   saveHookToken,
   saveSource,
@@ -19,12 +17,12 @@ import {
   syncJobId,
   testStore,
   testTypedSource,
-  uploadDocument,
   type KeysChange,
   type KnowledgeSource,
   type LiveAddress,
   type KnowledgeView,
   CONFIGMAP_STORE_LABEL,
+  SOURCES_HREF,
   type SourceTestResult,
   type StoreCheck,
   type StoreSettings,
@@ -34,7 +32,7 @@ import { adminHref } from '../../lib/router'
 import { jobHref, scheduleHref } from '../aiops/jobsRoute'
 import { Drawer } from '../Drawer'
 import { Select } from '../Select'
-import { AddedInMycroft } from './AddedInMycroft'
+import { UploadedDocuments } from './UploadedDocuments'
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -69,6 +67,7 @@ function sourceState(v: KnowledgeView, s: KnowledgeSource): { text: string; tone
   if (s.kind === 'live') return s.auth && !v.creds[s.id]?.token ? { text: 'No token', tone: 'warn' } : { text: 'Looked up when asked', tone: 'ok' }
   const st = v.status.sources?.[s.id]
   if (st?.error) return { text: st.error, tone: 'err' }
+  if (s.kind === 'web' && s.auth && !v.creds[s.id]?.token) return { text: 'No token', tone: 'warn' }
   if (s.kind === 'confluence' && !v.creds[s.id]?.token) return { text: 'No token', tone: 'warn' }
   if (s.kind === 's3' && s.credentials !== 'identity' && !v.creds[s.id]?.accessKey) return { text: 'No access key', tone: 'warn' }
   if (st?.reported) return { text: `${st.reported} ${st.reported === 1 ? 'page' : 'pages'} not followed`, tone: 'warn' }
@@ -91,8 +90,13 @@ function bucketCreds(v: KnowledgeView, s: KnowledgeSource): string {
  * schedules and reports every sync: nothing here starts one. Sources are
  * data, never instructions; every credential is kept in the Secret
  * <release>-knowledge and shows here only as set or not. A source is tested in its dialog, as
- * typed (KN-26). The Added in Mycroft card is where people add notes, web
- * addresses and documents (MY-11); focus 'added' scrolls to it.
+ * typed (KN-26). The Sources table holds only what is synced or looked up
+ * (0.12.1): a web site is a source of its own (a start address, how many
+ * links away and how many pages), and what people upload or note is not a
+ * source to sync again but the Uploaded documents section after the table
+ * (UploadedDocuments.tsx); focus 'added' or 'uploads' scrolls to it. What
+ * a source holds, and what is excluded from it, is AIOps › Mycroft ›
+ * Sources.
  */
 export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) => void; focus?: string } = {}) {
   const [v, setV] = useState<KnowledgeView | null>(null)
@@ -188,95 +192,110 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
               </tr>
             </thead>
             <tbody>
-              {v.settings.sources.map((s) => {
-                const st = sourceState(v, s)
-                const lastRead = v.status.sources?.[s.id]?.lastRead
-                return (
-                  <tr key={s.id} data-testid="knowledge-source" data-source={s.id}>
-                    <td>
-                      <strong>{s.name}</strong>
-                      {s.kind === 'confluence' && (
-                        <div className="rk-fhint rk-mono">
-                          {s.space} · {s.baseURL}
-                        </div>
-                      )}
-                      {s.kind === 'git' && (
-                        <div className="rk-fhint rk-mono">
-                          {s.url}
-                          {s.path ? ` /${s.path}` : ''} @ {s.branch}
-                        </div>
-                      )}
-                      {s.kind === 'live' && (
-                        <div className="rk-fhint rk-mono" data-testid="knowledge-source-live-line">
-                          {s.addresses?.[0]?.url}
-                          {(s.addresses?.length ?? 0) > 1 ? ` and ${(s.addresses?.length ?? 0) - 1} more` : ''}
-                        </div>
-                      )}
-                      {s.kind === 's3' && (
-                        <div className="rk-fhint rk-mono" data-testid="knowledge-source-bucket-line">
-                          s3://{s.bucket}/{s.prefix ?? ''}
-                          {s.endpoint ? ` · ${s.endpoint}` : ''}
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      {SOURCE_KIND_LABEL[s.kind]}
-                      {(s.kind === 'confluence' || s.kind === 'git') && <div className="rk-fhint">{v.creds[s.id]?.token ? 'token in a Secret' : 'no token'}</div>}
-                      {s.kind === 's3' && (
-                        <div className="rk-fhint" data-testid="knowledge-source-creds">
-                          {bucketCreds(v, s)}
-                        </div>
-                      )}
-                      {s.kind === 'console' && <div className="rk-fhint">Clusters, nodes, hosts, fleets, applications, scripts</div>}
-                      {s.kind === 'fixes' && <div className="rk-fhint">Fixes seen in 3 cases or more, offered by the housekeeping for a runbook</div>}
-                      {s.kind === 'live' && <div className="rk-fhint">{!s.auth ? 'no sign-in' : v.creds[s.id]?.token ? 'credential in a Secret' : 'no credential'}</div>}
-                    </td>
-                    <td data-testid="knowledge-source-mode" title={s.kind === 'live' ? 'Looked up when the agents troubleshoot, never copied' : 'Read into the wiki'}>
-                      {sourceMode(s)}
-                    </td>
-                    <td>{s.kind === 'console' && lastRead ? `Live · ${fmtTs(lastRead)}` : lastRead ? fmtTs(lastRead) : '—'}</td>
-                    <td style={{ maxWidth: 320 }}>
-                      {st.tone === 'err' ? (
-                        // An error is said whole, wrapped, never cut (KN-28).
-                        <span className="rk-t" data-tone="err" style={{ fontSize: 12, overflowWrap: 'anywhere' }} data-testid="knowledge-source-state">
-                          {st.text}
-                        </span>
-                      ) : (
-                        <span className="rk-pill" data-tone={st.tone} title={st.title ?? st.text} data-testid="knowledge-source-state">
-                          {st.text}
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ whiteSpace: 'nowrap' }}>
-                      {/* Test is in the source's dialog, with the values as typed (KN-26). */}
-                      {s.kind !== 'live' && (
-                        <>
-                          <a className="rk-link" href={jobHref(syncJobId(s.id))} title={`Its Wiki sync job in AIOps › Jobs: when it is read, Run now, its runs`} data-testid="knowledge-source-job">
-                            Job
-                          </a>{' '}
-                        </>
-                      )}
-                      <button className="rk-link" disabled={busy} onClick={() => void run(() => setSourceOn(s.id, !!s.off))} data-testid="knowledge-source-onoff">
-                        {s.off ? 'Turn on' : 'Turn off'}
-                      </button>{' '}
-                      <button className="rk-link" onClick={() => setEditing(s)} data-testid="knowledge-source-edit">
-                        Edit…
-                      </button>
-                    </td>
-                  </tr>
-                )
-              })}
+              {v.settings.sources
+                .filter((s) => s.kind !== 'upload')
+                .map((s) => {
+                  const st = sourceState(v, s)
+                  const lastRead = v.status.sources?.[s.id]?.lastRead
+                  return (
+                    <tr key={s.id} data-testid="knowledge-source" data-source={s.id}>
+                      <td>
+                        <strong>{s.name}</strong>
+                        {s.kind === 'confluence' && (
+                          <div className="rk-fhint rk-mono">
+                            {s.space} · {s.baseURL}
+                          </div>
+                        )}
+                        {s.kind === 'git' && (
+                          <div className="rk-fhint rk-mono">
+                            {s.url}
+                            {s.path ? ` /${s.path}` : ''} @ {s.branch}
+                          </div>
+                        )}
+                        {s.kind === 'live' && (
+                          <div className="rk-fhint rk-mono" data-testid="knowledge-source-live-line">
+                            {s.addresses?.[0]?.url}
+                            {(s.addresses?.length ?? 0) > 1 ? ` and ${(s.addresses?.length ?? 0) - 1} more` : ''}
+                          </div>
+                        )}
+                        {s.kind === 'web' && (
+                          <div className="rk-fhint" data-testid="knowledge-source-web-line">
+                            <span className="rk-mono">{s.url}</span> · {depthWords(s.depth ?? 1)} · at most {s.pages ?? 20} pages
+                            {(s.excluded?.length ?? 0) > 0 && ` · ${s.excluded!.length} excluded`}
+                          </div>
+                        )}
+                        {s.kind !== 'web' && (s.excluded?.length ?? 0) > 0 && (
+                          <div className="rk-fhint" data-testid="knowledge-source-excluded">
+                            {s.excluded!.length} excluded
+                          </div>
+                        )}
+                        {s.kind === 's3' && (
+                          <div className="rk-fhint rk-mono" data-testid="knowledge-source-bucket-line">
+                            s3://{s.bucket}/{s.prefix ?? ''}
+                            {s.endpoint ? ` · ${s.endpoint}` : ''}
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        {SOURCE_KIND_LABEL[s.kind]}
+                        {(s.kind === 'confluence' || s.kind === 'git') && <div className="rk-fhint">{v.creds[s.id]?.token ? 'token in a Secret' : 'no token'}</div>}
+                        {s.kind === 's3' && (
+                          <div className="rk-fhint" data-testid="knowledge-source-creds">
+                            {bucketCreds(v, s)}
+                          </div>
+                        )}
+                        {s.kind === 'console' && <div className="rk-fhint">Clusters, nodes, hosts, fleets, applications, scripts</div>}
+                        {s.kind === 'fixes' && <div className="rk-fhint">Fixes seen in 3 cases or more, offered by the housekeeping for a runbook</div>}
+                        {(s.kind === 'live' || s.kind === 'web') && <div className="rk-fhint">{!s.auth ? 'no sign-in' : v.creds[s.id]?.token ? 'credential in a Secret' : 'no credential'}</div>}
+                      </td>
+                      <td data-testid="knowledge-source-mode" title={s.kind === 'live' ? 'Looked up when the agents troubleshoot, never copied' : 'Read into the wiki'}>
+                        {sourceMode(s)}
+                      </td>
+                      <td>{s.kind === 'console' && lastRead ? `Live · ${fmtTs(lastRead)}` : lastRead ? fmtTs(lastRead) : '—'}</td>
+                      <td style={{ maxWidth: 320 }}>
+                        {st.tone === 'err' ? (
+                          // An error is said whole, wrapped, never cut (KN-28).
+                          <span className="rk-t" data-tone="err" style={{ fontSize: 12, overflowWrap: 'anywhere' }} data-testid="knowledge-source-state">
+                            {st.text}
+                          </span>
+                        ) : (
+                          <span className="rk-pill" data-tone={st.tone} title={st.title ?? st.text} data-testid="knowledge-source-state">
+                            {st.text}
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {/* Test is in the source's dialog, with the values as typed (KN-26). */}
+                        {s.kind !== 'live' && (
+                          <>
+                            <a className="rk-link" href={jobHref(syncJobId(s.id))} title={`Its Wiki sync job in AIOps › Jobs: when it is read, Run now, its runs`} data-testid="knowledge-source-job">
+                              Job
+                            </a>{' '}
+                          </>
+                        )}
+                        <button className="rk-link" disabled={busy} onClick={() => void run(() => setSourceOn(s.id, !!s.off))} data-testid="knowledge-source-onoff">
+                          {s.off ? 'Turn on' : 'Turn off'}
+                        </button>{' '}
+                        <button className="rk-link" onClick={() => setEditing(s)} data-testid="knowledge-source-edit">
+                          Edit…
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
             </tbody>
           </table>
         </div>
-        {v.settings.sources
-          .filter((s) => s.kind === 'upload' && s.id !== ADDED_SOURCE)
-          .map((s) => (
-            <Documents key={s.id} source={s} v={v} busy={busy} run={run} />
-          ))}
-        {/* What people add in Mycroft, and the form to add it (MY-11). */}
-        {v.settings.sources.some((s) => s.id === ADDED_SOURCE) && <AddedInMycroft onToast={onToast} focus={focus === 'added'} />}
+        <p className="rk-fhint" style={{ margin: 0 }}>
+          What each source holds, and what is excluded from it, is in{' '}
+          <a className="rk-link" href={SOURCES_HREF} data-testid="knowledge-items-link">
+            AIOps › Mycroft › Sources
+          </a>
+          .
+        </p>
       </section>
+      {/* What people upload or note: not a source to sync again (0.12.1). */}
+      <UploadedDocuments onToast={onToast} focus={focus === 'added' || focus === 'uploads'} />
       <StoreCard v={v} onSaved={() => void reload()} onToast={onToast} />
       <section aria-label="More" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
         <h3 className="rk-h" style={{ marginBottom: 4 }}>
@@ -309,52 +328,9 @@ export function KnowledgeSection({ onToast, focus }: { onToast?: (msg: string) =
   )
 }
 
-/** The source of what people add in Mycroft (the server's AddedSourceID). */
-const ADDED_SOURCE = 'added'
-
-/** The uploaded documents of a source, and an upload. */
-function Documents({ source, v, busy, run }: { source: KnowledgeSource; v: KnowledgeView; busy: boolean; run: (fn: () => Promise<unknown>, msg?: string) => Promise<void> }) {
-  const input = useRef<HTMLInputElement>(null)
-  const docs = v.documents?.[source.id] ?? []
-  return (
-    <div className="rk-card" style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }} data-testid="knowledge-documents">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <strong style={{ fontSize: 12.5 }}>{source.name}</strong>
-        <span className="rk-fhint">Markdown, text, Word (.docx), PDF and HTML, up to 20 MiB. Read once when uploaded; only the excerpts and the pages Mycroft writes are kept.</span>
-        <span style={{ flex: '1 1 auto' }} />
-        <input
-          ref={input}
-          type="file"
-          accept=".md,.markdown,.txt,.rst,.adoc,.docx,.pdf,.html,.htm,.csv"
-          style={{ display: 'none' }}
-          data-testid="knowledge-upload-input"
-          onChange={(e) => {
-            const f = e.target.files?.[0]
-            e.target.value = ''
-            if (f) void run(async () => uploadDocument(source.id, f.name, await fileBase64(f)), `Mycroft is reading ${f.name}.`)
-          }}
-        />
-        <button className="rk-btn" disabled={busy || !v.settings.store.kind} onClick={() => input.current?.click()} data-testid="knowledge-upload">
-          Upload…
-        </button>
-      </div>
-      {docs.length === 0 ? (
-        <span className="rk-fhint">No documents yet.</span>
-      ) : (
-        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }}>
-          {docs.map((d) => (
-            <li key={d.id}>
-              {d.title} <span className="rk-fhint">{d.lastRead ? `read ${fmtTs(d.lastRead)}` : 'waiting to be read'}</span>{' '}
-              <button className="rk-link" disabled={busy} onClick={() => void run(() => removeDocument(source.id, d.id), `${d.title} removed.`)}>
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
+/** A web site's link depth, in words. */
+export const DEPTH_WORDS = ['only the start page', 'and the pages it links to', 'two links away', 'three links away']
+const depthWords = (d: number) => DEPTH_WORDS[d] ?? `${d} links away`
 
 function StaleDays({ v, run, busy }: { v: KnowledgeView; run: (fn: () => Promise<unknown>, msg?: string) => Promise<void>; busy: boolean }) {
   const [days, setDays] = useState(String(v.settings.staleDays || 30))
@@ -789,10 +765,14 @@ function SourceDrawer({
               ['confluence', 'Confluence space'],
               ['git', 'Git repository of runbooks'],
               ['s3', 'S3 bucket of documents'],
+              ['web', 'Web site'],
             ]}
             onChange={(k) => {
               if (k === 's3') {
                 setS({ id: s.id, name: s.name, kind: 's3', bucket: '', prefix: '', region: '', endpoint: '', pathStyle: false, credentials: 'keys' })
+                changed()
+              } else if (k === 'web') {
+                setS({ id: s.id, name: s.name, kind: 'web', url: '', depth: 1, pages: 20, auth: '' })
                 changed()
               } else put(k === 'git' ? { kind: 'git', branch: 'main' } : { kind: 'confluence', flavor: 'cloud' })
             }}
@@ -803,7 +783,7 @@ function SourceDrawer({
           label="Name"
           value={s.name}
           onChange={(x) => put({ name: x })}
-          placeholder={s.kind === 'git' ? 'Runbooks repository' : s.kind === 's3' ? 'Runbooks bucket' : s.kind === 'live' ? 'Known problems' : 'Confluence space: Infrastructure'}
+          placeholder={s.kind === 'git' ? 'Runbooks repository' : s.kind === 's3' ? 'Runbooks bucket' : s.kind === 'live' ? 'Known problems' : s.kind === 'web' ? 'Vendor documentation' : 'Confluence space: Infrastructure'}
           testId="knowledge-source-name"
         />
         {s.kind === 'confluence' && (
@@ -884,6 +864,7 @@ function SourceDrawer({
           </>
         )}
         {s.kind === 'live' && <LiveFields s={s} put={put} />}
+        {s.kind === 'web' && <WebFields s={s} put={put} />}
         {builtIn && (
           <span className="rk-fhint" data-testid="knowledge-source-builtin">
             There from the start: only its name changes here. Its Wiki sync job is renamed with it.
@@ -891,16 +872,16 @@ function SourceDrawer({
         )}
         {!builtIn && (
           <>
-            {s.kind !== 's3' && (s.kind !== 'live' || !!s.auth) && (
+            {s.kind !== 's3' && ((s.kind !== 'live' && s.kind !== 'web') || !!s.auth) && (
               <Text
                 label={
                   tokenSet
                     ? 'Token (saved; type a new one to replace it)'
                     : s.kind === 'git'
                       ? 'Token (read access)'
-                      : s.kind === 'live' && s.auth === 'basic'
+                      : (s.kind === 'live' || s.kind === 'web') && s.auth === 'basic'
                         ? 'Password or API token'
-                        : s.kind === 'live'
+                        : s.kind === 'live' || s.kind === 'web'
                           ? 'Token'
                           : 'API token (read-only)'
                 }
@@ -914,7 +895,8 @@ function SourceDrawer({
               />
             )}
             <span className="rk-fhint">
-              Kept in the Secret &lt;release&gt;-knowledge and never shown again{s.kind === 'live' ? ', sent only to the addresses’ own sites, never to a model' : ''}. Use a read-only credential: Mycroft never writes to its sources.
+              Kept in the Secret &lt;release&gt;-knowledge and never shown again{s.kind === 'live' ? ', sent only to the addresses’ own sites, never to a model' : s.kind === 'web' ? ', sent only to the site itself, never to a model' : ''}.
+              Use a read-only credential: Mycroft never writes to its sources.
             </span>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg2)' }}>
               Private CA (optional)
@@ -923,7 +905,11 @@ function SourceDrawer({
             {/* Test's result, under the fields; its button is in the footer (KN-26). */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-start' }}>
               <span className="rk-fhint">
-                {s.kind === 'live' ? 'Test reads each address once with the values typed here, without saving them' : 'Test lists what Mycroft would read with the values typed here, without saving them'}
+                {s.kind === 'live'
+                  ? 'Test reads each address once with the values typed here, without saving them'
+                  : s.kind === 'web'
+                    ? 'Test reads the site as typed here and lists the pages Mycroft would read, without saving them'
+                    : 'Test lists what Mycroft would read with the values typed here, without saving them'}
                 {seed ? '; a credential left blank is the saved one' : ''}.
               </span>
               {test?.running && (
@@ -1009,6 +995,15 @@ function LiveFields({ s, put }: { s: KnowledgeSource; put: (p: Partial<Knowledge
           </button>
         )}
       </div>
+      <SignIn s={s} put={put} prefix="knowledge-live" />
+    </>
+  )
+}
+
+/** How a live source or a web site signs in: none, a bearer token, or a user with a password or API token; the credential is the drawer's token field. */
+function SignIn({ s, put, prefix }: { s: KnowledgeSource; put: (p: Partial<KnowledgeSource>) => void; prefix: string }) {
+  return (
+    <>
       <Select
         label="Sign-in"
         value={s.auth ?? ''}
@@ -1018,9 +1013,33 @@ function LiveFields({ s, put }: { s: KnowledgeSource; put: (p: Partial<Knowledge
           ['basic', 'User and password or API token (Confluence Cloud: email and API token)'],
         ]}
         onChange={(x) => put({ auth: x as KnowledgeSource['auth'] })}
-        testId="knowledge-live-auth"
+        testId={`${prefix}-auth`}
       />
-      {s.auth === 'basic' && <Text label="User (for Confluence Cloud, the account’s email)" value={s.username ?? ''} onChange={(x) => put({ username: x })} testId="knowledge-live-user" />}
+      {s.auth === 'basic' && <Text label="User (for Confluence Cloud, the account’s email)" value={s.username ?? ''} onChange={(x) => put({ username: x })} testId={`${prefix}-user`} />}
+    </>
+  )
+}
+
+/** The most pages a web site's read takes. */
+export const MAX_SITE_PAGES = 200
+
+/** A web site (0.12.1): its start address, how many links away and at most how many pages are read, and its sign-in. */
+function WebFields({ s, put }: { s: KnowledgeSource; put: (p: Partial<KnowledgeSource>) => void }) {
+  return (
+    <>
+      <Text label="Start address" value={s.url ?? ''} onChange={(x) => put({ url: x })} placeholder="https://docs.example.com/runbooks/" testId="knowledge-web-url" />
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--fg2)' }}>
+          Link depth
+          <Select label="Link depth" value={String(s.depth ?? 1)} options={DEPTH_WORDS.map((w, i): [string, string] => [String(i), `${i}: ${w}`])} onChange={(x) => put({ depth: Number(x) })} testId="knowledge-web-depth" />
+        </label>
+        <Text label={`Page limit (1–${MAX_SITE_PAGES})`} type="number" value={String(s.pages ?? 20)} onChange={(x) => put({ pages: Number(x) })} width={150} testId="knowledge-web-pages" />
+      </div>
+      <span className="rk-fhint">
+        Only pages of the same site are read, one at a time; robots.txt and pages that ask not to be indexed are respected, and what is excluded in AIOps › Mycroft › Sources is neither read nor followed. The console reads the site from its
+        pod: with the network policy on, its host must be listed under the chart’s knowledge.egressCIDRs.
+      </span>
+      <SignIn s={s} put={put} prefix="knowledge-web" />
     </>
   )
 }

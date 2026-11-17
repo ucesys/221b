@@ -25,7 +25,7 @@ export function pagesFor(me: Me | null): AdminPage[] {
   return ADMIN_PAGES.filter((p) => isSuperAdmin(me) || !SUPER_ONLY.has(p))
 }
 
-/** Whether this person sees Settings › Knowledge's Added in Mycroft card: an Admin does (MY-11). */
+/** Whether this person sees Settings › Knowledge's Uploaded documents section: an Admin does (MY-11, 0.12.1). */
 export function seesAddedInMycroft(me: Me | null): boolean {
   return isSuperAdmin(me) || !!me?.roles?.includes('admin')
 }
